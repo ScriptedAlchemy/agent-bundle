@@ -49,6 +49,21 @@ const status = (state: 'active' | 'missing' | 'stale' = 'active') => ({
   source: { diagnostics: [], revision: 'revision-1', state: 'ready' },
 });
 
+it('calls the default browser fetch with its global receiver', async () => {
+  const originalFetch = globalThis.fetch;
+  const browserFetch = async function (this: typeof globalThis, input: RequestInfo | URL): Promise<Response> {
+    if (this !== globalThis) throw new TypeError("Failed to execute 'fetch' on 'Window': Illegal invocation");
+    expect(String(input)).toBe('/api/project/status');
+    return Response.json({ status: status() });
+  };
+  Object.defineProperty(globalThis, 'fetch', { configurable: true, value: browserFetch });
+  try {
+    await expect(new ProjectClient().refresh()).resolves.toMatchObject({ artifact: { state: 'active' } });
+  } finally {
+    Object.defineProperty(globalThis, 'fetch', { configurable: true, value: originalFetch });
+  }
+});
+
 it('refreshes Overview state after live named events and keeps the browser EventSource transport open', async () => {
   const stream = new RecordingEventSource();
   const requests: string[] = [];

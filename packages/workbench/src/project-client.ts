@@ -87,7 +87,7 @@ export class ProjectClient {
 
   constructor(options: ProjectClientOptions = {}) {
     this.#events = options.events ?? browserEvents;
-    this.#fetch = options.fetch ?? fetch;
+    this.#fetch = options.fetch ?? globalThis.fetch.bind(globalThis);
   }
 
   get lastEventId(): number {
