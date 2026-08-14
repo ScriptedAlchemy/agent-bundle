@@ -9,6 +9,8 @@ import { describe, expect, it } from '@rstest/core';
 const execFile = promisify(executeFile);
 const workspaceRoot = process.cwd();
 const packageRoot = join(workspaceRoot, 'packages', 'agent-bundle');
+const workbenchRoot = join(workspaceRoot, 'packages', 'workbench');
+const inspectorProvenanceFiles = ['UPSTREAM.json', 'LICENSE.inspector', 'PATCHES.md'] as const;
 let built: Promise<void> | undefined;
 
 const buildPackage = async (force = false): Promise<void> => {
@@ -21,12 +23,17 @@ const buildPackage = async (force = false): Promise<void> => {
 };
 
 describe.sequential('workbench package build', () => {
-it('copies stable prebuilt workbench assets and Inspector notices into the package distribution', async () => {
+it('copies stable prebuilt workbench assets and exact Inspector provenance into the package distribution', async () => {
   await buildPackage();
 
   await expect(access(join(packageRoot, 'dist', 'workbench', 'index.html'))).resolves.toBeUndefined();
   await expect(readFile(join(packageRoot, 'dist', 'workbench', 'static', 'js', 'index.js'), 'utf8')).resolves.toContain('Project overview');
   await expect(readFile(join(packageRoot, 'dist', 'workbench', 'THIRD_PARTY_NOTICES'), 'utf8')).resolves.toContain('MCP Inspector');
+  await Promise.all(inspectorProvenanceFiles.map(async (file) => {
+    await expect(readFile(join(packageRoot, 'dist', 'workbench', 'src', 'inspector', file), 'utf8')).resolves.toBe(
+      await readFile(join(workbenchRoot, 'src', 'inspector', file), 'utf8'),
+    );
+  }));
 }, 60_000);
 
 it('prunes stale copied workbench assets without removing the package library output', async () => {
@@ -55,6 +62,9 @@ it('serves prebuilt workbench assets from an installed tarball without the repos
     const listing = await execFile('tar', ['-tf', tarball]);
     expect(listing.stdout).toContain('package/dist/workbench/index.html');
     expect(listing.stdout).toContain('package/dist/workbench/THIRD_PARTY_NOTICES');
+    for (const file of inspectorProvenanceFiles) {
+      expect(listing.stdout).toContain(`package/dist/workbench/src/inspector/${file}`);
+    }
     expect(listing.stdout).not.toMatch(/package\/dist\/workbench\/.*\.map$/mu);
     expect(listing.stdout).not.toMatch(/package\/dist\/workbench\/.*-[a-f0-9]{8,}/iu);
 
