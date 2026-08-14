@@ -1,6 +1,6 @@
-import { createHash, randomUUID } from 'node:crypto';
-import { mkdir, mkdtemp, readFile, readdir, rename, rm } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { mkdir, mkdtemp, readdir, rename, rm } from 'node:fs/promises';
+import { isAbsolute, join, relative, resolve } from 'node:path';
 
 import { build, type BuildOptions, type BuildResult } from '../build/build.ts';
 import { listArtifactFiles } from '../build/emit.ts';
@@ -9,7 +9,7 @@ import { DiagnosticError, type Diagnostic } from '../core/diagnostics.ts';
 import { digest } from '../core/digest.ts';
 import type { NormalizedPlugin } from '../core/types.ts';
 import { EpochStore, type EpochStaging } from './epoch-store.ts';
-import type { PreparedProject } from './project-service.ts';
+import { snapshotProjectSource, type PreparedProject, type ProjectSourceInput } from './project-service.ts';
 import { freezeArtifactEpoch, type ArtifactEpoch, type DiagnosticSummary } from './types.ts';
 
 export interface SucceededArtifactEpochResult {
@@ -73,9 +73,6 @@ const failureDiagnostics = (
   })]);
 };
 
-const hashFile = async (path: string): Promise<string> =>
-  createHash('sha256').update(await readFile(path)).digest('hex');
-
 const targetDigests = async (
   artifactRoot: string,
   model: NormalizedPlugin,
@@ -108,6 +105,89 @@ const moveArtifactContents = async (
 
 const requireBuildableProject = (prepared: PreparedProject): NormalizedPlugin | undefined =>
   prepared.model === undefined || hasErrors(prepared.diagnostics) ? undefined : prepared.model;
+
+const sameInputs = (left: readonly ProjectSourceInput[], right: readonly ProjectSourceInput[]): boolean =>
+  left.length === right.length && left.every((input, index) => {
+    const candidate = right[index];
+    return candidate !== undefined &&
+      input.error === candidate.error &&
+      input.path === candidate.path &&
+      input.sha256 === candidate.sha256;
+  });
+
+const projectSourceChangedDiagnostic = (configPath: string): Diagnostic => Object.freeze({
+  code: 'AB7101',
+  message: 'Project source changed while the artifact was compiling; publication was rejected.',
+  severity: 'error',
+  sourcePath: configPath,
+});
+
+const canonicalProjectPath = (root: string, value: string): string => {
+  if (!isAbsolute(value)) return value;
+  const projectRelative = relative(root, value).replaceAll('\\', '/');
+  return projectRelative === '..' || projectRelative.startsWith('../') ? value : projectRelative;
+};
+
+const canonicalProvenance = (
+  root: string,
+  provenance: NormalizedPlugin['metadata']['provenance'],
+) => Object.freeze({ ...provenance, sourcePath: canonicalProjectPath(root, provenance.sourcePath) });
+
+const canonicalModel = (model: NormalizedPlugin, root: string): unknown => Object.freeze({
+  ...model,
+  hooks: model.hooks.map((hook) => Object.freeze({
+    ...hook,
+    provenance: canonicalProvenance(root, hook.provenance),
+    source: canonicalProjectPath(root, hook.source),
+  })),
+  ...(model.mcpApps === undefined
+    ? {}
+    : {
+      mcpApps: model.mcpApps.map((app) => Object.freeze({
+        ...app,
+        provenance: canonicalProvenance(root, app.provenance),
+        source: canonicalProjectPath(root, app.source),
+        ...(app.template === undefined ? {} : { template: canonicalProjectPath(root, app.template) }),
+      })),
+    }),
+  mcpServers: model.mcpServers.map((server) => Object.freeze({
+    ...server,
+    provenance: canonicalProvenance(root, server.provenance),
+    ...(server.source === undefined ? {} : { source: canonicalProjectPath(root, server.source) }),
+  })),
+  metadata: Object.freeze({
+    ...model.metadata,
+    provenance: canonicalProvenance(root, model.metadata.provenance),
+  }),
+  ...(model.nativeHooks === undefined
+    ? {}
+    : {
+      nativeHooks: model.nativeHooks.map((hook) => Object.freeze({
+        ...hook,
+        provenance: canonicalProvenance(root, hook.provenance),
+        source: canonicalProjectPath(root, hook.source),
+      })),
+    }),
+  scripts: model.scripts.map((script) => Object.freeze({
+    ...script,
+    provenance: canonicalProvenance(root, script.provenance),
+    source: canonicalProjectPath(root, script.source),
+  })),
+  skills: model.skills.map((skill) => Object.freeze({
+    ...skill,
+    dir: canonicalProjectPath(root, skill.dir),
+    provenance: canonicalProvenance(root, skill.provenance),
+    resources: skill.resources.map((resource) => Object.freeze({
+      ...resource,
+      source: canonicalProjectPath(root, resource.source),
+    })),
+    source: canonicalProjectPath(root, skill.source),
+  })),
+  targets: model.targets.map((target) => Object.freeze({
+    ...target,
+    provenance: canonicalProvenance(root, target.provenance),
+  })),
+});
 
 /** Compiles one prepared project into an immutable, fully validated epoch. */
 export class ArtifactService {
@@ -148,6 +228,15 @@ export class ArtifactService {
         outcome: 'failed',
       });
     }
+    if (prepared.configDigest === undefined) {
+      return Object.freeze({
+        diagnostics: failureDiagnostics(
+          new Error('Prepared projects must include a configuration digest before artifact compilation.'),
+          prepared.configPath,
+        ),
+        outcome: 'failed',
+      });
+    }
 
     const attemptRoot = await this.#createAttempt(prepared.root);
     const artifactRoot = join(attemptRoot, 'artifact');
@@ -165,14 +254,19 @@ export class ArtifactService {
       const diagnostics = freezeDiagnostics([...prepared.diagnostics, ...validationDiagnostics]);
       if (hasErrors(diagnostics)) throw new DiagnosticError(diagnostics);
 
+      const currentSource = await snapshotProjectSource(prepared.root, prepared.configPath);
+      if (!sameInputs(prepared.sourceInputs, currentSource.inputs)) {
+        throw new DiagnosticError([projectSourceChangedDiagnostic(prepared.configPath)]);
+      }
+
       const epochId = this.#createEpochId();
       const epoch = freezeArtifactEpoch({
-        configDigest: await hashFile(prepared.configPath),
+        configDigest: prepared.configDigest,
         createdAt: this.#now().toISOString(),
         diagnostics: summarizeDiagnostics(diagnostics),
         id: epochId,
         manifestPath: join(prepared.root, '.agent-bundle', 'epochs', epochId, 'agent-bundle.manifest.json'),
-        modelDigest: digest(model),
+        modelDigest: digest(canonicalModel(model, prepared.root)),
         projectRevision: prepared.source.revision,
         targetDigests: await targetDigests(artifactRoot, model),
       });

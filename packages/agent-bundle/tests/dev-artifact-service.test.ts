@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { expect, it } from '@rstest/core';
 
 import { EpochStore } from '../src/dev/epoch-store.ts';
+import { build } from '../src/build/build.ts';
 import { writeManifest } from '../src/build/emit.ts';
 import { validateArtifact } from '../src/build/validate-artifact.ts';
 import { ArtifactService } from '../src/dev/index.ts';
@@ -112,6 +113,84 @@ it('allows only the epoch store marker as an extra staged artifact file', async 
     ]));
   } finally {
     await rm(root, { force: true, recursive: true });
+  }
+});
+
+it.each(['added', 'changed', 'removed'] as const)(
+  'rejects publication when an authored source is $0 after compiling',
+  async (mutation) => {
+    const root = await createProject();
+    const store = new EpochStore({ projectRoot: root });
+    const deletedSource = join(root, 'skills', 'review', 'guide.txt');
+    const attempts: string[] = [];
+    try {
+      if (mutation === 'removed') await writeFile(deletedSource, 'Guide before removal.\n');
+      const prepared = await new ProjectService({ root }).prepare('build');
+      await mkdir(join(root, '.agent-bundle'), { recursive: true });
+      const service = new ArtifactService({
+        compile: async (options) => {
+          const result = await build(options);
+          if (mutation === 'added') {
+            await mkdir(join(root, 'src'), { recursive: true });
+            await writeFile(join(root, 'src', 'added.ts'), 'export const added = true;\n');
+          } else if (mutation === 'changed') {
+            await writeFile(join(root, 'skills', 'review', 'SKILL.md'), [
+              '---',
+              'name: review',
+              'description: Reviews changed source',
+              '---',
+              'Review the changed files.',
+              '',
+            ].join('\n'));
+          } else {
+            await rm(deletedSource);
+          }
+          return result;
+        },
+        createAttempt: async () => {
+          const attempt = await mkdtemp(join(root, '.agent-bundle', 'binding-attempt-'));
+          attempts.push(attempt);
+          return attempt;
+        },
+        createEpochId: () => `epoch-binding-${mutation}`,
+        epochStore: store,
+      });
+      const result = await service.build(prepared);
+      expect(result).toMatchObject({
+        diagnostics: [expect.objectContaining({ code: 'AB7101' })],
+        outcome: 'failed',
+      });
+      await expect(store.readActiveEpoch()).resolves.toBeUndefined();
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  },
+);
+
+it('uses a root-independent digest for equivalent normalized project models', async () => {
+  const leftRoot = await createProject();
+  const rightRoot = await createProject();
+  try {
+    const [leftPrepared, rightPrepared] = await Promise.all([
+      new ProjectService({ root: leftRoot }).prepare('build'),
+      new ProjectService({ root: rightRoot }).prepare('build'),
+    ]);
+    const [left, right] = await Promise.all([
+      new ArtifactService({ createEpochId: () => 'epoch-left', epochStore: new EpochStore({ projectRoot: leftRoot }) })
+        .build(leftPrepared),
+      new ArtifactService({ createEpochId: () => 'epoch-right', epochStore: new EpochStore({ projectRoot: rightRoot }) })
+        .build(rightPrepared),
+    ]);
+
+    expect(left.outcome).toBe('succeeded');
+    expect(right.outcome).toBe('succeeded');
+    if (left.outcome !== 'succeeded' || right.outcome !== 'succeeded') throw new Error('Equivalent projects did not build.');
+    expect(left.epoch.modelDigest).toBe(right.epoch.modelDigest);
+  } finally {
+    await Promise.all([
+      rm(leftRoot, { force: true, recursive: true }),
+      rm(rightRoot, { force: true, recursive: true }),
+    ]);
   }
 });
 

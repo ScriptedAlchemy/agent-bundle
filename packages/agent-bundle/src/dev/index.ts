@@ -51,6 +51,9 @@ export {
   type ProjectCommand,
   type ProjectServiceLogger,
   type ProjectServiceOptions,
+  type ProjectSourceInput,
+  type ProjectSourceSnapshot,
+  snapshotProjectSource,
 } from './project-service.ts';
 export {
   freezeArtifactEpoch,

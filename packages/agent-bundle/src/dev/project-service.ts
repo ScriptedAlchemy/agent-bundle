@@ -28,12 +28,28 @@ export interface ProjectServiceOptions {
 }
 
 export interface PreparedProject {
+  readonly configDigest?: string;
   readonly configPath: string;
   readonly diagnostics: readonly Diagnostic[];
   readonly model?: NormalizedPlugin;
   readonly registry: TargetRegistry;
   readonly root: string;
   readonly source: SourceStatus;
+  readonly sourceInputs: readonly ProjectSourceInput[];
+}
+
+/** One deterministic, byte-addressed authored input in a prepared project. */
+export interface ProjectSourceInput {
+  readonly error?: string;
+  readonly path: string;
+  readonly sha256?: string;
+}
+
+/** Broad source snapshot carried from preparation through artifact publication. */
+export interface ProjectSourceSnapshot {
+  readonly configDigest?: string;
+  readonly inputs: readonly ProjectSourceInput[];
+  readonly revision: string;
 }
 
 const freezeDiagnostics = (diagnostics: readonly Diagnostic[]): readonly Diagnostic[] =>
@@ -63,11 +79,11 @@ const errorCode = (error: unknown): string =>
 const relativeSourcePath = (root: string, source: string): string =>
   relative(root, source).replaceAll('\\', '/');
 
-const sourceInput = async (root: string, source: string) => {
+const sourceInput = async (root: string, source: string): Promise<ProjectSourceInput> => {
   const path = relativeSourcePath(root, source);
   try {
     return Object.freeze({
-      digest: createHash('sha256').update(await readFile(source)).digest('hex'),
+      sha256: createHash('sha256').update(await readFile(source)).digest('hex'),
       path,
     });
   } catch (error) {
@@ -96,14 +112,18 @@ const sourcePaths = async (root: string): Promise<readonly string[]> => {
   return Object.freeze(paths.sort((left, right) => left.localeCompare(right)));
 };
 
-const sourceRevision = async (
+export const snapshotProjectSource = async (
   root: string,
   configPath: string,
-): Promise<string> => {
+): Promise<ProjectSourceSnapshot> => {
   const sources = new Set<string>([configPath, ...(await sourcePaths(root))]);
-  const inputs = await Promise.all([...sources].map((source) => sourceInput(root, source)));
-  return digest({
-    inputs: inputs.sort((left, right) => left.path.localeCompare(right.path)),
+  const inputs = Object.freeze((await Promise.all([...sources].map((source) => sourceInput(root, source))))
+    .sort((left, right) => left.path.localeCompare(right.path)));
+  const configInput = inputs.find((input) => input.path === relativeSourcePath(root, configPath));
+  return Object.freeze({
+    ...(configInput?.sha256 === undefined ? {} : { configDigest: configInput.sha256 }),
+    inputs,
+    revision: digest({ inputs }),
   });
 };
 
@@ -118,18 +138,21 @@ const sourceStatus = (
 
 const preparedProject = (
   configPath: string,
+  snapshot: ProjectSourceSnapshot,
   diagnostics: readonly Diagnostic[],
   registry: TargetRegistry,
   root: string,
   source: SourceStatus,
   model?: NormalizedPlugin,
 ): PreparedProject => Object.freeze({
+  ...(snapshot.configDigest === undefined ? {} : { configDigest: snapshot.configDigest }),
   configPath,
   diagnostics,
   ...(model === undefined ? {} : { model }),
   registry,
   root,
   source,
+  sourceInputs: snapshot.inputs,
 });
 
 /** Loads, discovers, validates, and normalizes source once for dev consumers. */
@@ -164,17 +187,18 @@ export class ProjectService {
         severity: 'error',
         sourcePath: configPath,
       }]);
-      const source = sourceStatus(diagnostics, await sourceRevision(root, configPath));
+      const snapshot = await snapshotProjectSource(root, configPath);
+      const source = sourceStatus(diagnostics, snapshot.revision);
       log(this.#options.logger, 'project.invalid-source', { diagnostics: diagnostics.length, root });
-      return preparedProject(configPath, diagnostics, registry, root, source);
+      return preparedProject(configPath, snapshot, diagnostics, registry, root, source);
     }
 
-    const revision = await sourceRevision(root, loaded.configPath);
+    const snapshot = await snapshotProjectSource(root, loaded.configPath);
     const sourceDiagnostics = freezeDiagnostics(validateSource(loaded, discovered));
     if (hasErrors(sourceDiagnostics)) {
-      const source = sourceStatus(sourceDiagnostics, revision);
+      const source = sourceStatus(sourceDiagnostics, snapshot.revision);
       log(this.#options.logger, 'project.invalid-source', { diagnostics: sourceDiagnostics.length, root });
-      return preparedProject(loaded.configPath, sourceDiagnostics, registry, root, source);
+      return preparedProject(loaded.configPath, snapshot, sourceDiagnostics, registry, root, source);
     }
 
     let model: NormalizedPlugin;
@@ -187,9 +211,9 @@ export class ProjectService {
         severity: 'error',
         sourcePath: loaded.configPath,
       }]);
-      const source = sourceStatus(diagnostics, revision);
+      const source = sourceStatus(diagnostics, snapshot.revision);
       log(this.#options.logger, 'project.prepared', { diagnostics: diagnostics.length, root, targets: [] });
-      return preparedProject(loaded.configPath, diagnostics, registry, root, source);
+      return preparedProject(loaded.configPath, snapshot, diagnostics, registry, root, source);
     }
 
     const diagnostics: Diagnostic[] = [...validateModel(model, registry)];
@@ -199,12 +223,12 @@ export class ProjectService {
       }
     }
     const frozenDiagnostics = freezeDiagnostics(diagnostics);
-    const source = sourceStatus(frozenDiagnostics, revision);
+    const source = sourceStatus(frozenDiagnostics, snapshot.revision);
     log(this.#options.logger, 'project.prepared', {
       diagnostics: frozenDiagnostics.length,
       root,
       targets: model.targets.map((target) => target.name),
     });
-    return preparedProject(loaded.configPath, frozenDiagnostics, registry, root, source, model);
+    return preparedProject(loaded.configPath, snapshot, frozenDiagnostics, registry, root, source, model);
   }
 }

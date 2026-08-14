@@ -1,4 +1,5 @@
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -86,6 +87,14 @@ it('retains the resolved configuration path in the prepared project', async () =
     expect(Object.getOwnPropertyDescriptor(prepared, 'configPath')?.value).toBe(
       join(root, 'agent-bundle.config.ts'),
     );
+    expect(prepared.configDigest).toBe(
+      createHash('sha256').update(await readFile(join(root, 'agent-bundle.config.ts'))).digest('hex'),
+    );
+    expect(prepared.sourceInputs).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: 'agent-bundle.config.ts' }),
+      expect.objectContaining({ path: 'skills/review/SKILL.md' }),
+    ]));
+    expect(Object.isFrozen(prepared.sourceInputs)).toBe(true);
   } finally {
     await rm(root, { force: true, recursive: true });
   }
