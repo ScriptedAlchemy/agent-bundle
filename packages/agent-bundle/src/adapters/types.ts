@@ -29,8 +29,17 @@ export interface TargetArtifactPlan {
   readonly hookEntries?: readonly TargetHookEntry[];
 }
 
+export type McpPathTokenRoot = 'pluginData' | 'pluginRoot' | 'workspaceRoot';
+
+export interface McpPathTokenCapabilities {
+  readonly args: Readonly<Record<string, McpPathTokenRoot>>;
+  readonly cwd: Readonly<Record<string, McpPathTokenRoot>>;
+  readonly env: Readonly<Record<string, McpPathTokenRoot>>;
+}
+
 export interface TargetAdapter {
   readonly capabilities: Readonly<Record<string, boolean>>;
+  readonly mcpPathTokens?: McpPathTokenCapabilities;
   readonly name: string;
   plan(model: NormalizedPlugin): TargetArtifactPlan;
   validateModel(model: NormalizedPlugin): Diagnostic[];

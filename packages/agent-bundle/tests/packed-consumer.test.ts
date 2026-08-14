@@ -22,12 +22,16 @@ const execFile = promisify(executeFile);
 const workspaceRoot = process.cwd();
 const packageRoot = join(workspaceRoot, 'packages', 'agent-bundle');
 const fixtureRoot = join(workspaceRoot, 'fixtures', 'integration', 'comprehensive');
-const agentBundleImport = /\bimport(?:\s*[\s\S]*?\s+from)?\s*['"]agent-bundle(?:\/[^'"]*)?['"]|\bimport\s*\(\s*['"]agent-bundle(?:\/[^'"]*)?['"]/;
+const agentBundleImport = /\b(?:import|export)(?:\s*[\s\S]*?\s+from)?\s*['"]agent-bundle(?:\/[^'"]*)?['"]|\bimport\s*\(\s*['"]agent-bundle(?:\/[^'"]*)?['"]|\brequire\s*\(\s*['"]agent-bundle(?:\/[^'"]*)?['"]/;
 
 interface FileDigest {
   readonly bytes: number;
   readonly path: string;
   readonly sha256: string;
+}
+
+interface ManifestDigest extends FileDigest {
+  readonly mode?: number;
 }
 
 const installedEnvironment = (): NodeJS.ProcessEnv => {
@@ -63,20 +67,30 @@ const runInstalled = async (
   env: installedEnvironment(),
 });
 
+it('recognizes agent-bundle re-exports and CommonJS requires in generated code', () => {
+  expect("export { build } from 'agent-bundle';").toMatch(agentBundleImport);
+  expect("const bundle = require('agent-bundle/api');").toMatch(agentBundleImport);
+});
+
 it('uses only an installed tarball after source deletion', async () => {
   const consumerRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-packed-consumer-'));
+  const packedPackageRoot = join(consumerRoot, 'packed-agent-bundle');
   const projectRoot = join(consumerRoot, 'project with spaces');
   const firstArtifact = join(projectRoot, 'first artifact');
   const secondArtifact = join(projectRoot, 'second artifact');
 
   try {
+    await cp(packageRoot, packedPackageRoot, { recursive: true });
+    await execFile(join(workspaceRoot, 'node_modules', '.bin', 'rslib'), [
+      'build', '--dist-path', join(packedPackageRoot, 'dist'),
+    ], { cwd: workspaceRoot, env: installedEnvironment() });
     const { stdout: packed } = await execFile('npm', [
       'pack',
       '--json',
       '--pack-destination',
       consumerRoot,
     ], {
-      cwd: packageRoot,
+      cwd: packedPackageRoot,
       env: installedEnvironment(),
     });
     const tarball = join(consumerRoot, (JSON.parse(packed) as Array<{ filename: string }>)[0]!.filename);
@@ -103,10 +117,15 @@ it('uses only an installed tarball after source deletion', async () => {
     expect(await artifactDigest(firstArtifact)).toEqual(await artifactDigest(secondArtifact));
 
     const manifest = JSON.parse(await readFile(join(firstArtifact, 'agent-bundle.manifest.json'), 'utf8')) as {
-      readonly files: readonly FileDigest[];
+      readonly files: readonly ManifestDigest[];
     };
     const files = (await artifactDigest(firstArtifact)).filter((entry) => entry.path !== 'agent-bundle.manifest.json');
-    expect([...manifest.files].sort((left, right) => left.path.localeCompare(right.path))).toEqual(files);
+    const manifestFiles = await Promise.all(files.map(async (file): Promise<ManifestDigest> => {
+      if (!/(?:^|\/)scripts\/[^/]+\.(?:sh|bash|py)$/iu.test(file.path)) return file;
+      const mode = (await stat(join(firstArtifact, file.path))).mode & 0o777;
+      return (mode & 0o111) === 0 ? file : { ...file, mode };
+    }));
+    expect([...manifest.files].sort((left, right) => left.path.localeCompare(right.path))).toEqual(manifestFiles);
     for (const file of files.filter((entry) => entry.path.endsWith('.mjs'))) {
       await expect(readFile(join(firstArtifact, file.path), 'utf8')).resolves.not.toMatch(
         agentBundleImport,
@@ -168,12 +187,23 @@ it('uses only an installed tarball after source deletion', async () => {
     const { stdout: listedTools } = await runInstalled(cli, projectRoot, [
       'mcp', 'list', '--json', '--root', projectRoot, '--artifact', firstArtifact, '--target', 'portable', '--server', 'local',
     ]);
-    expect(JSON.parse(listedTools)).toMatchObject({ tools: [{ name: 'show-dashboard' }] });
+    expect(JSON.parse(listedTools)).toMatchObject({
+      tools: [{
+        _meta: { ui: { resourceUri: 'ui://integration-fixture/dashboard-v1.html' } },
+        name: 'show-dashboard',
+      }],
+    });
     const { stdout: invokedTool } = await runInstalled(cli, projectRoot, [
       'mcp', 'invoke', '--json', '--root', projectRoot, '--artifact', firstArtifact, '--target', 'portable', '--server', 'local',
       '--tool', 'show-dashboard', '--input', '{}',
     ]);
-    expect(JSON.parse(invokedTool)).toMatchObject({ result: { structuredContent: { view: 'dashboard' } } });
+    expect(JSON.parse(invokedTool)).toMatchObject({
+      result: {
+        _meta: { ui: { resourceUri: 'ui://integration-fixture/dashboard-v1.html' } },
+        content: [{ text: 'dashboard ready: ordinary local import', type: 'text' }],
+        structuredContent: { resourceUri: 'ui://integration-fixture/dashboard-v1.html', view: 'dashboard' },
+      },
+    });
 
     const reader = join(projectRoot, 'read-resource.mjs');
     await writeFile(reader, [
@@ -190,7 +220,11 @@ it('uses only an installed tarball after source deletion', async () => {
       'ui://integration-fixture/dashboard-v1.html',
     ], { cwd: projectRoot, env: installedEnvironment() });
     expect(JSON.parse(resource)).toMatchObject({
-      contents: [{ mimeType: 'text/html;profile=mcp-app', uri: 'ui://integration-fixture/dashboard-v1.html' }],
+      contents: [{
+        mimeType: 'text/html;profile=mcp-app',
+        text: expect.stringContaining('integration dashboard'),
+        uri: 'ui://integration-fixture/dashboard-v1.html',
+      }],
     });
   } finally {
     await rm(consumerRoot, { force: true, recursive: true });

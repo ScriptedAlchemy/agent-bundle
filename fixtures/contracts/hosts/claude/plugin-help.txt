@@ -1,0 +1,8 @@
+Usage: claude plugin|plugins [options] [command]
+
+Manage Claude Code plugins
+
+Commands:
+  install|i      Install a plugin from available marketplaces
+  marketplace    Manage Claude Code marketplaces
+  validate       Validate a plugin or marketplace manifest

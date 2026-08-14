@@ -12,6 +12,10 @@ export default defineConfig({
   ],
   output: {
     cleanDistPath: true,
+    copy: [
+      { from: './packages/workbench/dist', to: 'workbench' },
+      { from: './packages/workbench/THIRD_PARTY_NOTICES', to: 'workbench/THIRD_PARTY_NOTICES', toType: 'file' },
+    ],
     filenameHash: false,
     distPath: {
       root: './packages/agent-bundle/dist',
@@ -22,10 +26,12 @@ export default defineConfig({
       '@rsbuild/core',
       '@rsbuild/plugin-react',
       '@rslib/core',
+      '@rslint/core',
       '@rstackjs/load-config',
       '@rspack/core',
       'ajv',
       'ajv/dist/2020.js',
+      'chokidar',
       'fast-glob',
       'ignore',
       'jiti',

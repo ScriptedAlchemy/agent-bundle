@@ -7,7 +7,7 @@ import { promisify } from 'node:util';
 
 import { expect, it } from '@rstest/core';
 
-import { build, inspect, listHooks, simulateHook, validate } from '../src/api.ts';
+import { build, inspect, invokeMcp, listHooks, listMcp, simulateHook, validate } from '../src/api.ts';
 
 const execFile = promisify(executeFile);
 const fixturesRoot = join(process.cwd(), 'fixtures', 'integration');
@@ -56,15 +56,80 @@ it('builds the checked-in fixture matrix from a path with spaces', async () => {
       await readFile(join(root, 'skills', 'review', 'assets', 'binary.bin')),
     );
 
-    await expect(readFile(join(output, 'codex', '.codex-plugin', 'plugin.json'), 'utf8')).resolves.toContain(
-      'integration-fixture',
-    );
-    await expect(readFile(join(output, 'claude', '.claude-plugin', 'plugin.json'), 'utf8')).resolves.toContain(
-      'integration-fixture',
-    );
-    await expect(readFile(join(output, 'portable', 'mcp.json'), 'utf8')).resolves.toContain(
-      'remote-http',
-    );
+    const [portableMcp, codexMcp, claudeMcp, codexHooks, claudeHooks, codexMarketplace, claudeMarketplace] =
+      await Promise.all([
+        readFile(join(output, 'portable', 'mcp.json'), 'utf8').then((value) => JSON.parse(value)),
+        readFile(join(output, 'codex', '.mcp.json'), 'utf8').then((value) => JSON.parse(value)),
+        readFile(join(output, 'claude', '.mcp.json'), 'utf8').then((value) => JSON.parse(value)),
+        readFile(join(output, 'codex', 'hooks', 'hooks.json'), 'utf8').then((value) => JSON.parse(value)),
+        readFile(join(output, 'claude', 'hooks', 'hooks.json'), 'utf8').then((value) => JSON.parse(value)),
+        readFile(join(output, 'codex', '.agents', 'plugins', 'marketplace.json'), 'utf8').then((value) => JSON.parse(value)),
+        readFile(join(output, 'claude', '.claude-plugin', 'marketplace.json'), 'utf8').then((value) => JSON.parse(value)),
+      ]);
+    expect(portableMcp.mcpServers['remote-http']).toEqual({
+      headers: { 'X-Fixture': 'integration' },
+      type: 'streamable-http',
+      url: 'https://mcp.example.test/stream',
+    });
+    expect(portableMcp.mcpServers['remote-sse']).toEqual({
+      headers: { 'X-Sse-Fixture': 'integration-sse' },
+      type: 'sse',
+      url: 'https://mcp.example.test/events',
+    });
+    expect(codexMcp.mcpServers['remote-http']).toEqual({
+      headers: { 'X-Fixture': 'integration' },
+      type: 'streamable-http',
+      url: 'https://mcp.example.test/stream',
+    });
+    expect(codexMcp.mcpServers['remote-sse']).toBeUndefined();
+    expect(claudeMcp.mcpServers['remote-http']).toEqual({
+      headers: { 'X-Fixture': 'integration' },
+      type: 'http',
+      url: 'https://mcp.example.test/stream',
+    });
+    expect(claudeMcp.mcpServers['remote-sse']).toEqual({
+      headers: { 'X-Sse-Fixture': 'integration-sse' },
+      type: 'sse',
+      url: 'https://mcp.example.test/events',
+    });
+    expect(codexMarketplace).toMatchObject({
+      name: 'integration-fixture-marketplace',
+      plugins: [{ name: 'integration-fixture', source: { path: './', source: 'local' } }],
+    });
+    expect(claudeMarketplace).toMatchObject({
+      name: 'integration-fixture-marketplace',
+      owner: { name: 'integration-fixture' },
+      plugins: [{ name: 'integration-fixture', source: './' }],
+    });
+    for (const [hooksDocument, description, command] of [
+      [codexHooks, 'Codex native integration hook', 'echo codex-native'],
+      [claudeHooks, 'Claude native integration hook', 'echo claude-native'],
+    ]) {
+      expect(hooksDocument).toMatchObject({ description });
+      expect(hooksDocument.hooks.SessionStart).toEqual(expect.arrayContaining([
+        expect.objectContaining({ hooks: [expect.objectContaining({ command, type: 'command' })] }),
+      ]));
+    }
+
+    const localMcpPath = portableMcp.mcpServers.local.args[0] as string;
+    await expect(readFile(join(output, 'portable', localMcpPath), 'utf8')).resolves.toContain('ordinary local import');
+    const localTools = await listMcp({ artifact: output, root, server: 'local', target: 'portable' });
+    expect(localTools.tools).toMatchObject([{
+      _meta: { ui: { resourceUri: 'ui://integration-fixture/dashboard-v1.html' } },
+      name: 'show-dashboard',
+    }]);
+    const localInvocation = await invokeMcp({
+      artifact: output,
+      input: {},
+      root,
+      server: 'local',
+      target: 'portable',
+      tool: 'show-dashboard',
+    });
+    expect(localInvocation.result).toMatchObject({
+      content: [{ text: 'dashboard ready: ordinary local import', type: 'text' }],
+      structuredContent: { resourceUri: 'ui://integration-fixture/dashboard-v1.html', view: 'dashboard' },
+    });
 
     const hooks = await listHooks({ artifact: output, root });
     expect(hooks).toHaveLength(2);
@@ -96,8 +161,14 @@ it('builds the checked-in portable skills-only fixture', async () => {
       model: { scripts: [], targets: [{ name: 'portable' }] },
     });
     await build({ output, root });
+    await expect(readFile(join(output, 'portable', 'skills', 'portable-skill', 'SKILL.md'), 'utf8')).resolves.toBe(
+      '---\nname: portable-skill\ndescription: A portable skills-only fixture.\n---\n# Portable skill\n\nRead [the guide](references/guide.txt) before using the asset.\n',
+    );
     await expect(readFile(join(output, 'portable', 'skills', 'portable-skill', 'references', 'guide.txt'), 'utf8')).resolves.toBe(
       'portable guide\n',
+    );
+    await expect(readFile(join(output, 'portable', 'skills', 'portable-skill', 'assets', 'binary.bin'))).resolves.toEqual(
+      await readFile(join(root, 'skills', 'portable-skill', 'assets', 'binary.bin')),
     );
   } finally {
     await rm(parent, { force: true, recursive: true });

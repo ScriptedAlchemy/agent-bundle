@@ -5,6 +5,12 @@
   "engines": {
     "node": ">=22.19.0"
   },
+  "files": [
+    "dist",
+    "!dist/workbench/**/*.map",
+    "!dist/workbench/**/*.LICENSE.txt",
+    "README.md"
+  ],
   "bin": {
     "agent-bundle": "./dist/cli.js"
   },
@@ -35,10 +41,12 @@
     "@rsbuild/core": "2.1.13",
     "@rsbuild/plugin-react": "2.1.0",
     "@rslib/core": "0.23.2",
+    "@rslint/core": "0.8.0",
     "@rspack/core": "2.1.10",
     "@rstackjs/load-config": "0.1.2",
     "ajv": "8.20.0",
     "ajv-formats": "3.0.1",
+    "chokidar": "5.0.0",
     "fast-glob": "3.3.3",
     "ignore": "7.0.6",
     "jiti": "2.7.0",

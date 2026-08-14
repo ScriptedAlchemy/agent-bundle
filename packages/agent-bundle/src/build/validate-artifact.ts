@@ -11,6 +11,13 @@ import {
 } from './emit.ts';
 
 const manifestName = 'agent-bundle.manifest.json';
+const epochStagingMarkerName = '.agent-bundle-epoch-stage.json';
+
+export interface ValidateArtifactOptions {
+  /** Enables the one store-owned epoch staging marker after its exact schema validates. */
+  readonly allowEpochStagingMarker?: true;
+  readonly artifactRoot: string;
+}
 
 const diagnostic = (code: string, message: string, generatedPath?: string): Diagnostic => ({
   code,
@@ -49,7 +56,10 @@ const checkJavaScriptSyntax = async (path: string): Promise<string | undefined> 
   });
 
 const sameFile = (left: ArtifactFile, right: ManifestFile): boolean =>
-  left.bytes === right.bytes && left.path === right.path && left.sha256 === right.sha256;
+  left.bytes === right.bytes &&
+  (right.mode === undefined || left.mode === right.mode) &&
+  left.path === right.path &&
+  left.sha256 === right.sha256;
 
 const localMcpArgument = (value: unknown): string | undefined => {
   if (typeof value !== 'string') return undefined;
@@ -81,6 +91,11 @@ const parseManifest = (value: string): ArtifactManifest | undefined => {
           typeof file === 'object' &&
           file !== null &&
           typeof (file as ManifestFile).bytes === 'number' &&
+          ((file as ManifestFile).mode === undefined ||
+            (typeof (file as ManifestFile).mode === 'number' &&
+              Number.isInteger((file as ManifestFile).mode) &&
+              (file as ManifestFile).mode! >= 0 &&
+              (file as ManifestFile).mode! <= 0o777)) &&
           typeof (file as ManifestFile).path === 'string' &&
           typeof (file as ManifestFile).sha256 === 'string',
       )
@@ -93,9 +108,22 @@ const parseManifest = (value: string): ArtifactManifest | undefined => {
   }
 };
 
-export const validateArtifact = async (context: {
-  readonly artifactRoot: string;
-}): Promise<readonly Diagnostic[]> => {
+const isEpochStagingMarker = (value: string): boolean => {
+  try {
+    const marker: unknown = JSON.parse(value);
+    if (typeof marker !== 'object' || marker === null || Array.isArray(marker)) return false;
+    if (!('token' in marker) || !('version' in marker)) return false;
+    const entries = Object.entries(marker);
+    return entries.length === 2 &&
+      marker.version === 1 &&
+      typeof marker.token === 'string' &&
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(marker.token);
+  } catch {
+    return false;
+  }
+};
+
+export const validateArtifact = async (context: ValidateArtifactOptions): Promise<readonly Diagnostic[]> => {
   const manifestPath = resolve(context.artifactRoot, manifestName);
   let manifest: ArtifactManifest | undefined;
   try {
@@ -105,6 +133,16 @@ export const validateArtifact = async (context: {
   }
   if (manifest === undefined) {
     return [diagnostic('AB6001', 'Artifact manifest is not valid JSON with the required shape.', manifestName)];
+  }
+  let allowedEpochStagingMarker = false;
+  if (context.allowEpochStagingMarker === true) {
+    try {
+      allowedEpochStagingMarker = isEpochStagingMarker(
+        await readFile(resolve(context.artifactRoot, epochStagingMarkerName), 'utf8'),
+      );
+    } catch {
+      allowedEpochStagingMarker = false;
+    }
   }
 
   const diagnostics: Diagnostic[] = [];
@@ -121,7 +159,8 @@ export const validateArtifact = async (context: {
   }
 
   const actualFiles = (await listArtifactFiles(context.artifactRoot)).filter(
-    (file) => file.path !== manifestName,
+    (file) => file.path !== manifestName &&
+      !(allowedEpochStagingMarker && file.path === epochStagingMarkerName),
   );
   if (
     actualFiles.length !== manifest.files.length ||

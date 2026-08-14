@@ -224,6 +224,23 @@ export const claudeAdapter: TargetAdapter = Object.freeze({
     sse: capabilityTable.mcp.sse,
     skills: capabilityTable.plugin.skills,
   }),
+  mcpPathTokens: Object.freeze({
+    args: Object.freeze({
+      '${CLAUDE_PLUGIN_DATA}': 'pluginData',
+      '${CLAUDE_PLUGIN_ROOT}': 'pluginRoot',
+      '${CLAUDE_PROJECT_DIR}': 'workspaceRoot',
+    }),
+    cwd: Object.freeze({
+      '${CLAUDE_PLUGIN_DATA}': 'pluginData',
+      '${CLAUDE_PLUGIN_ROOT}': 'pluginRoot',
+      '${CLAUDE_PROJECT_DIR}': 'workspaceRoot',
+    }),
+    env: Object.freeze({
+      '${CLAUDE_PLUGIN_DATA}': 'pluginData',
+      '${CLAUDE_PLUGIN_ROOT}': 'pluginRoot',
+      '${CLAUDE_PROJECT_DIR}': 'workspaceRoot',
+    }),
+  }),
   name: claudeName,
   plan,
   validateModel: (model: NormalizedPlugin) => [...plan(model).diagnostics],

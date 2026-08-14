@@ -1,0 +1,60 @@
+{
+  "roots": {
+    "pluginData": "/sessions/one",
+    "pluginRoot": "/artifacts/portable",
+    "workspaceRoot": "/workspace/project"
+  },
+  "cases": [
+    {
+      "expected": {
+        "args": ["--root", "/artifacts/portable/server.mjs"],
+        "command": "${PLUGIN_ROOT}/bin/unchanged",
+        "cwd": "/artifacts/portable",
+        "env": {
+          "CACHE_DIR": "/sessions/one/cache"
+        }
+      },
+      "server": {
+        "args": ["--root", "${PLUGIN_ROOT}/server.mjs"],
+        "command": "${PLUGIN_ROOT}/bin/unchanged",
+        "cwd": "${PLUGIN_ROOT}",
+        "env": {
+          "CACHE_DIR": "${PLUGIN_DATA}/cache"
+        }
+      },
+      "target": "portable"
+    },
+    {
+      "expected": {
+        "args": ["/workspace/project/tool"],
+        "command": "${CLAUDE_PLUGIN_ROOT}/bin/unchanged",
+        "cwd": "/sessions/one",
+        "env": {
+          "ROOT": "/artifacts/portable",
+          "WORKSPACE": "/workspace/project"
+        }
+      },
+      "server": {
+        "args": ["${CLAUDE_PROJECT_DIR}/tool"],
+        "command": "${CLAUDE_PLUGIN_ROOT}/bin/unchanged",
+        "cwd": "${CLAUDE_PLUGIN_DATA}",
+        "env": {
+          "ROOT": "${CLAUDE_PLUGIN_ROOT}",
+          "WORKSPACE": "${CLAUDE_PROJECT_DIR}"
+        }
+      },
+      "target": "claude"
+    }
+  ],
+  "unsupported": {
+    "diagnostic": {
+      "code": "mcp.path-token.unsupported.args",
+      "message": "MCP args cannot resolve \"${CLAUDE_PROJECT_DIR}\" for selected portable adapter."
+    },
+    "server": {
+      "args": ["${CLAUDE_PROJECT_DIR}/tool"],
+      "command": "node"
+    },
+    "target": "portable"
+  }
+}

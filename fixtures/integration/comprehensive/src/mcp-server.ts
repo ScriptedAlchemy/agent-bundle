@@ -1,4 +1,5 @@
 import apps from 'agent-bundle/mcp-apps';
+import { localMcpMessage } from './mcp-local.ts';
 
 let buffer = '';
 const app = apps[0];
@@ -32,7 +33,7 @@ process.stdin.on('data', (chunk: string) => {
     if (request.method === 'tools/call') {
       send(request.id, {
         _meta: app === undefined ? undefined : { ui: { resourceUri: app.resourceUri } },
-        content: [{ text: 'dashboard ready', type: 'text' }],
+        content: [{ text: `dashboard ready: ${localMcpMessage}`, type: 'text' }],
         structuredContent: { resourceUri: app?.resourceUri, view: app?.name },
       });
     }

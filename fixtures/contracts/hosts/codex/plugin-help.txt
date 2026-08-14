@@ -1,0 +1,6 @@
+Manage Codex plugins
+
+Commands:
+  add          Install a plugin from a configured marketplace snapshot
+  list         List plugins available from configured marketplace snapshots
+  marketplace  Add, list, upgrade, or remove configured plugin marketplaces

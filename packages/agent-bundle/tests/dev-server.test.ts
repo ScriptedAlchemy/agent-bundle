@@ -1,0 +1,763 @@
+import { createServer as createNodeServer, get as httpGet } from 'node:http';
+
+import { expect, it } from '@rstest/core';
+
+import {
+  ForegroundServer,
+  ProjectEventHub,
+  startForegroundServer,
+  type Invalidation,
+  type ProjectStatus,
+} from '../src/dev/index.ts';
+
+const status = (): ProjectStatus => ({
+  artifact: { state: 'missing' },
+  build: { state: 'idle' },
+  source: { diagnostics: [], state: 'unknown' },
+});
+
+class RecordingCoordinator {
+  readonly invalidations: Invalidation[] = [];
+  closeCalls = 0;
+  failClose = false;
+  startCalls = 0;
+
+  async close(): Promise<void> {
+    this.closeCalls += 1;
+    if (this.failClose) throw new Error('coordinator close failure');
+  }
+
+  async rebuild(invalidation: Invalidation): Promise<{ readonly diagnostics: readonly []; readonly outcome: 'failed' }> {
+    this.invalidations.push(invalidation);
+    return { diagnostics: [], outcome: 'failed' };
+  }
+
+  async start(): Promise<void> {
+    this.startCalls += 1;
+  }
+
+  status(): ProjectStatus {
+    return status();
+  }
+}
+
+class DelayedCoordinator extends RecordingCoordinator {
+  readonly #startGate: Promise<void>;
+
+  constructor(startGate: Promise<void>) {
+    super();
+    this.#startGate = startGate;
+  }
+
+  override async start(): Promise<void> {
+    this.startCalls += 1;
+    await this.#startGate;
+  }
+}
+
+class FailingStartCoordinator extends RecordingCoordinator {
+  override async close(): Promise<void> {
+    this.closeCalls += 1;
+    throw new Error('cleanup failure');
+  }
+
+  override async start(): Promise<void> {
+    this.startCalls += 1;
+    throw new Error('startup failure');
+  }
+}
+
+const readReplay = (url: string, lastEventId: string, expectedSequence = 2): Promise<string> => new Promise((resolvePromise, rejectPromise) => {
+  const request = httpGet(`${url}/api/project/events`, { headers: { 'last-event-id': lastEventId } }, (response) => {
+    let received = '';
+    response.setEncoding('utf8');
+    response.on('data', (chunk: string) => {
+      received += chunk;
+      if (received.includes(`id: ${expectedSequence}\n`)) {
+        response.destroy();
+        resolvePromise(received);
+      }
+    });
+    response.on('error', rejectPromise);
+  });
+  request.on('error', rejectPromise);
+});
+
+const readRaw = (
+  url: string,
+  path: string,
+  headers?: Readonly<Record<string, string>>,
+): Promise<Readonly<{ readonly body: string; readonly status: number }>> => {
+  const address = new URL(url);
+  return new Promise((resolvePromise, rejectPromise) => {
+    const request = httpGet({ headers, host: address.hostname, path, port: address.port }, (response) => {
+      let body = '';
+      response.setEncoding('utf8');
+      response.on('data', (chunk: string) => {
+        body += chunk;
+      });
+      response.once('end', () => resolvePromise({ body, status: response.statusCode ?? 0 }));
+      response.once('error', rejectPromise);
+    });
+    request.once('error', rejectPromise);
+  });
+};
+
+const eventually = async (predicate: () => boolean, milliseconds: number): Promise<void> => {
+  const deadline = Date.now() + milliseconds;
+  while (!predicate()) {
+    if (Date.now() >= deadline) throw new Error(`Timed out after ${milliseconds}ms.`);
+    await new Promise<void>((resolvePromise) => setTimeout(resolvePromise, 5));
+  }
+};
+
+const openLiveStream = (url: string): Readonly<{
+  readonly close: () => void;
+  readonly opened: Promise<void>;
+  readonly pause: () => void;
+  readonly until: (marker: string) => Promise<string>;
+}> => {
+  let received = '';
+  let response: import('node:http').IncomingMessage | undefined;
+  let resolveMatch: ((value: string) => void) | undefined;
+  let matched: string | undefined;
+  let rejectMatch: ((error: Error) => void) | undefined;
+  let resolveOpened: () => void = () => undefined;
+  let rejectOpened: (error: Error) => void = () => undefined;
+  const opened = new Promise<void>((resolvePromise, rejectPromise) => {
+    resolveOpened = resolvePromise;
+    rejectOpened = rejectPromise;
+  });
+  const request = httpGet(`${url}/api/project/events`, (stream) => {
+    response = stream;
+    stream.setEncoding('utf8');
+    stream.on('data', (chunk: string) => {
+      received += chunk;
+      if (matched !== undefined && received.includes(matched)) resolveMatch?.(received);
+    });
+    stream.once('error', (error: Error) => rejectMatch?.(error));
+    resolveOpened();
+  });
+  request.once('error', (error: Error) => {
+    rejectOpened(error);
+    rejectMatch?.(error);
+  });
+  return Object.freeze({
+    close: () => {
+      response?.destroy();
+      request.destroy();
+    },
+    opened,
+    pause: () => response?.pause(),
+    until: (marker) => {
+      if (received.includes(marker)) return Promise.resolve(received);
+      matched = marker;
+      return new Promise<string>((resolvePromise, rejectPromise) => {
+        resolveMatch = resolvePromise;
+        rejectMatch = rejectPromise;
+      });
+    },
+  });
+};
+
+const within = async <T>(promise: Promise<T>, milliseconds: number): Promise<T> => Promise.race([
+  promise,
+  new Promise<T>((_resolvePromise, rejectPromise) => {
+    setTimeout(() => rejectPromise(new Error(`Timed out after ${milliseconds}ms.`)), milliseconds);
+  }),
+]);
+
+it('serves typed project status and supplied prebuilt assets after starting the coordinator', async () => {
+  const coordinator = new RecordingCoordinator();
+  const server = await startForegroundServer({
+    assets: {
+      read: async (path) => path === 'index.html'
+        ? { body: '<!doctype html><title>workbench</title>', contentType: 'text/html; charset=utf-8' }
+        : undefined,
+    },
+    coordinator,
+    eventHub: new ProjectEventHub(),
+    host: '127.0.0.1',
+    port: 0,
+    sessionToken: 'test-session-token',
+  });
+
+  try {
+    expect(coordinator.startCalls).toBe(1);
+
+    const [statusResponse, assetResponse] = await Promise.all([
+      fetch(`${server.url}/api/project/status`),
+      fetch(`${server.url}/`),
+    ]);
+
+    expect(statusResponse.status).toBe(200);
+    await expect(statusResponse.json()).resolves.toEqual({ status: status() });
+    expect(new URL(server.url).hostname).toBe('127.0.0.1');
+    expect(assetResponse.headers.get('content-type')).toBe('text/html; charset=utf-8');
+    await expect(assetResponse.text()).resolves.toContain('workbench');
+  } finally {
+    await server.close();
+  }
+});
+
+it('replays project events after Last-Event-ID without re-sending the acknowledged event', async () => {
+  const coordinator = new RecordingCoordinator();
+  const eventHub = new ProjectEventHub({ now: () => new Date('2026-08-14T12:00:00.000Z') });
+  eventHub.publish({
+    payload: { occurredAt: '2026-08-14T12:00:00.000Z', paths: ['first.ts'], reason: 'source-change' },
+    type: 'invalidation',
+  });
+  eventHub.publish({
+    payload: { occurredAt: '2026-08-14T12:00:01.000Z', paths: ['second.ts'], reason: 'source-change' },
+    type: 'invalidation',
+  });
+  const server = await startForegroundServer({ coordinator, eventHub, port: 0, sessionToken: 'test-session-token' });
+
+  try {
+    const replay = await readReplay(server.url, '1');
+
+    expect(replay).toContain('id: 2\n');
+    expect(replay).toContain('"paths":["second.ts"]');
+    expect(replay).not.toContain('"paths":["first.ts"]');
+  } finally {
+    await server.close();
+  }
+});
+
+it('delivers a large replay to a healthy client and reconnects after its acknowledged cursor', async () => {
+  const eventHub = new ProjectEventHub({ now: () => new Date('2026-08-14T12:00:00.000Z') });
+  eventHub.publish({
+    payload: {
+      occurredAt: '2026-08-14T12:00:00.000Z',
+      paths: ['large.ts', 'x'.repeat(128 * 1024)],
+      reason: 'source-change',
+    },
+    type: 'invalidation',
+  });
+  const server = await startForegroundServer({ coordinator: new RecordingCoordinator(), eventHub, port: 0 });
+
+  try {
+    const first = await within(readReplay(server.url, '0', 1), 500);
+    expect(first).toContain('id: 1\n');
+    expect(first).toContain('"paths":["large.ts"');
+
+    eventHub.publish({
+      payload: { occurredAt: '2026-08-14T12:00:01.000Z', paths: ['next.ts'], reason: 'source-change' },
+      type: 'invalidation',
+    });
+    const next = await within(readReplay(server.url, '1', 2), 500);
+    expect(next).toContain('"paths":["next.ts"]');
+    expect(next).not.toContain('"paths":["large.ts"');
+  } finally {
+    await server.close();
+  }
+});
+
+it('replays many ordinary retained events to a healthy client in order', async () => {
+  const eventHub = new ProjectEventHub({ now: () => new Date('2026-08-14T12:00:00.000Z') });
+  for (const sequence of Array.from({ length: 20 }, (_, index) => index + 1)) {
+    eventHub.publish({
+      payload: {
+        occurredAt: '2026-08-14T12:00:00.000Z',
+        paths: ['replay-' + sequence + '.ts', 'x'.repeat(8 * 1024)],
+        reason: 'source-change',
+      },
+      type: 'invalidation',
+    });
+  }
+  const server = await startForegroundServer({ coordinator: new RecordingCoordinator(), eventHub, port: 0 });
+
+  try {
+    const replay = await within(readReplay(server.url, '0', 20), 500);
+    expect(Array.from(replay.matchAll(/^id: (\d+)$/gmu), (match) => Number(match[1]))).toEqual(
+      Array.from({ length: 20 }, (_, index) => index + 1),
+    );
+
+    eventHub.publish({
+      payload: { occurredAt: '2026-08-14T12:00:01.000Z', paths: ['after-cursor.ts'], reason: 'source-change' },
+      type: 'invalidation',
+    });
+    const next = await within(readReplay(server.url, '20', 21), 500);
+    expect(next).toContain('"paths":["after-cursor.ts"]');
+    expect(next).not.toContain('"paths":["replay-20.ts"');
+  } finally {
+    await server.close();
+  }
+});
+
+it('drains queued replay events in sequence after a healthy client clears backpressure', async () => {
+  const eventHub = new ProjectEventHub({ now: () => new Date('2026-08-14T12:00:00.000Z') });
+  eventHub.publish({
+    payload: {
+      occurredAt: '2026-08-14T12:00:00.000Z',
+      paths: ['first-large.ts', 'x'.repeat(128 * 1024)],
+      reason: 'source-change',
+    },
+    type: 'invalidation',
+  });
+  eventHub.publish({
+    payload: { occurredAt: '2026-08-14T12:00:01.000Z', paths: ['queued-next.ts'], reason: 'source-change' },
+    type: 'invalidation',
+  });
+  const server = await startForegroundServer({ coordinator: new RecordingCoordinator(), eventHub, port: 0 });
+
+  try {
+    const replay = await within(readReplay(server.url, '0', 2), 500);
+    expect(replay.indexOf('id: 1\n')).toBeLessThan(replay.indexOf('id: 2\n'));
+    expect(replay).toContain('"paths":["queued-next.ts"]');
+  } finally {
+    await server.close();
+  }
+});
+
+it('opens a live event stream before a later project event is published', async () => {
+  const eventHub = new ProjectEventHub({ now: () => new Date('2026-08-14T12:00:00.000Z') });
+  const server = await startForegroundServer({ coordinator: new RecordingCoordinator(), eventHub, port: 0 });
+  const stream = openLiveStream(server.url);
+
+  try {
+    await expect(within(stream.opened, 250)).resolves.toBeUndefined();
+    expect(eventHub.subscriptionCount).toBe(1);
+
+    eventHub.publish({
+      payload: { occurredAt: '2026-08-14T12:00:00.000Z', paths: ['live.ts'], reason: 'source-change' },
+      type: 'invalidation',
+    });
+
+    await expect(within(stream.until('"paths":["live.ts"]'), 250)).resolves.toContain('id: 1\n');
+  } finally {
+    stream.close();
+    await server.close();
+  }
+});
+
+it('closes an unconsumed live event stream without retaining its subscription', async () => {
+  const coordinator = new RecordingCoordinator();
+  const eventHub = new ProjectEventHub({ now: () => new Date('2026-08-14T12:00:00.000Z') });
+  const server = await startForegroundServer({ coordinator, eventHub, port: 0 });
+  const stream = openLiveStream(server.url);
+
+  try {
+    await expect(within(stream.opened, 250)).resolves.toBeUndefined();
+    stream.pause();
+    eventHub.publish({
+      payload: {
+        occurredAt: '2026-08-14T12:00:00.000Z',
+        paths: ['backpressure.ts', 'x'.repeat(128 * 1024)],
+        reason: 'source-change',
+      },
+      type: 'invalidation',
+    });
+
+    await expect(within(server.close(), 250)).resolves.toBeUndefined();
+    expect(eventHub.subscriptionCount).toBe(0);
+    expect(coordinator.closeCalls).toBe(1);
+  } finally {
+    stream.close();
+  }
+});
+
+it('rejects malformed rebuild input as a stable diagnostic without exposing an error stack', async () => {
+  const coordinator = new RecordingCoordinator();
+  const server = await startForegroundServer({
+    coordinator,
+    eventHub: new ProjectEventHub(),
+    port: 0,
+    sessionToken: 'test-session-token',
+  });
+
+  try {
+    const response = await fetch(`${server.url}/api/project/rebuild`, {
+      body: '{',
+      headers: {
+        'content-type': 'application/json',
+        origin: server.url,
+        'x-agent-bundle-session': server.sessionToken,
+      },
+      method: 'POST',
+    });
+
+    expect(response.status).toBe(400);
+    const body = await response.text();
+    expect(JSON.parse(body)).toEqual({
+      diagnostic: {
+        code: 'AB8001',
+        message: 'Request body must be valid JSON.',
+      },
+    });
+    expect(body).not.toContain('Error:');
+    expect(coordinator.invalidations).toEqual([]);
+  } finally {
+    await server.close();
+  }
+});
+
+it('allows a same-origin browser to bootstrap its token but never sends it to a foreign origin', async () => {
+  const server = await startForegroundServer({
+    coordinator: new RecordingCoordinator(),
+    eventHub: new ProjectEventHub(),
+    port: 0,
+    sessionToken: 'test-session-token',
+  });
+
+  try {
+    const foreign = await fetch(`${server.url}/api/project/session`, {
+      headers: { origin: 'http://invalid.example' },
+    });
+    expect(foreign.status).toBe(403);
+    await expect(foreign.json()).resolves.toEqual({
+      diagnostic: { code: 'AB8003', message: 'Request origin is not this foreground server.' },
+    });
+
+    const browser = await fetch(`${server.url}/api/project/session`, {
+      headers: { origin: server.url },
+    });
+    expect(browser.status).toBe(200);
+    await expect(browser.json()).resolves.toEqual({ origin: server.url, token: 'test-session-token' });
+
+    const browserWithoutOrigin = await fetch(`${server.url}/api/project/session`, {
+      headers: { 'sec-fetch-site': 'same-origin' },
+    });
+    expect(browserWithoutOrigin.status).toBe(200);
+    await expect(browserWithoutOrigin.json()).resolves.toEqual({ origin: server.url, token: 'test-session-token' });
+
+    const noBrowserProof = await fetch(`${server.url}/api/project/session`);
+    expect(noBrowserProof.status).toBe(403);
+    await expect(noBrowserProof.json()).resolves.toEqual({
+      diagnostic: { code: 'AB8003', message: 'Request origin is not this foreground server.' },
+    });
+  } finally {
+    await server.close();
+  }
+});
+
+it('requires the same origin and session token before a browser can request a rebuild', async () => {
+  const coordinator = new RecordingCoordinator();
+  const server = await startForegroundServer({
+    coordinator,
+    eventHub: new ProjectEventHub(),
+    port: 0,
+    sessionToken: 'test-session-token',
+  });
+
+  try {
+    const missingToken = await fetch(`${server.url}/api/project/rebuild`, {
+      body: '{}',
+      headers: { 'content-type': 'application/json', origin: server.url },
+      method: 'POST',
+    });
+    expect(missingToken.status).toBe(403);
+    await expect(missingToken.json()).resolves.toEqual({
+      diagnostic: { code: 'AB8004', message: 'A valid same-session token is required.' },
+    });
+
+    const wrongOrigin = await fetch(`${server.url}/api/project/rebuild`, {
+      body: '{}',
+      headers: {
+        'content-type': 'application/json',
+        origin: 'http://invalid.example',
+        'x-agent-bundle-session': server.sessionToken,
+      },
+      method: 'POST',
+    });
+    expect(wrongOrigin.status).toBe(403);
+    await expect(wrongOrigin.json()).resolves.toEqual({
+      diagnostic: { code: 'AB8003', message: 'Request origin is not this foreground server.' },
+    });
+
+    const accepted = await fetch(`${server.url}/api/project/rebuild`, {
+      body: '{"paths":["skills/review/SKILL.md"]}',
+      headers: {
+        'content-type': 'application/json',
+        origin: server.url,
+        'x-agent-bundle-session': server.sessionToken,
+      },
+      method: 'POST',
+    });
+    expect(accepted.status).toBe(200);
+    expect(coordinator.invalidations).toEqual([expect.objectContaining({
+      paths: ['skills/review/SKILL.md'],
+      reason: 'manual',
+    })]);
+  } finally {
+    await server.close();
+  }
+});
+
+it('rejects arbitrary browser command fields before delegation', async () => {
+  const coordinator = new RecordingCoordinator();
+  const server = await startForegroundServer({
+    coordinator,
+    eventHub: new ProjectEventHub(),
+    port: 0,
+    sessionToken: 'test-session-token',
+  });
+
+  try {
+    const response = await fetch(`${server.url}/api/project/rebuild`, {
+      body: '{"command":"/tmp/untrusted"}',
+      headers: {
+        'content-type': 'application/json',
+        origin: server.url,
+        'x-agent-bundle-session': server.sessionToken,
+      },
+      method: 'POST',
+    });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      diagnostic: {
+        code: 'AB8002',
+        message: 'Request body may contain only an optional paths array.',
+      },
+    });
+    expect(coordinator.invalidations).toEqual([]);
+  } finally {
+    await server.close();
+  }
+});
+
+it('rejects decoded asset traversal before consulting the asset provider', async () => {
+  const requested: string[] = [];
+  const server = await startForegroundServer({
+    assets: {
+      read: async (path) => {
+        requested.push(path);
+        return { body: 'unexpected', contentType: 'text/plain; charset=utf-8' };
+      },
+    },
+    coordinator: new RecordingCoordinator(),
+    eventHub: new ProjectEventHub(),
+    port: 0,
+  });
+
+  try {
+    const response = await readRaw(server.url, '/%2e%2e/secrets.txt');
+
+    expect(response.status).toBe(400);
+    expect(JSON.parse(response.body)).toEqual({
+      diagnostic: { code: 'AB8005', message: 'Asset path is not valid.' },
+    });
+    expect(response.body).not.toContain('Error:');
+    expect(requested).toEqual([]);
+  } finally {
+    await server.close();
+  }
+});
+
+it('refuses every non-loopback bind address before starting a coordinator', async () => {
+  const coordinator = new RecordingCoordinator();
+
+  await expect(startForegroundServer({
+    coordinator,
+    eventHub: new ProjectEventHub(),
+    host: '0.0.0.0',
+  })).rejects.toMatchObject({
+    code: 'AB8000',
+    message: 'Foreground servers may bind only to 127.0.0.1 or ::1.',
+  });
+  expect(coordinator.startCalls).toBe(0);
+});
+
+it('closes the HTTP server and coordinator once while retaining both release failures structurally', async () => {
+  const coordinator = new RecordingCoordinator();
+  coordinator.failClose = true;
+  const server = await startForegroundServer({ coordinator, eventHub: new ProjectEventHub(), port: 0 });
+
+  await expect(server.close()).rejects.toMatchObject({
+    failures: [expect.objectContaining({ resource: 'coordinator' })],
+  });
+  await expect(server.close()).rejects.toMatchObject({
+    failures: [expect.objectContaining({ resource: 'coordinator' })],
+  });
+  expect(coordinator.closeCalls).toBe(1);
+});
+
+it('never discloses a session token when Host does not identify this bound server', async () => {
+  const server = await startForegroundServer({
+    coordinator: new RecordingCoordinator(),
+    eventHub: new ProjectEventHub(),
+    port: 0,
+    sessionToken: 'test-session-token',
+  });
+
+  try {
+    const spoofed = await readRaw(server.url, '/api/project/session', {
+      host: 'attacker.example',
+      'sec-fetch-site': 'same-origin',
+    });
+    expect(spoofed.status).toBe(400);
+    expect(JSON.parse(spoofed.body)).toEqual({
+      diagnostic: { code: 'AB8008', message: 'Request host is not this foreground server.' },
+    });
+    expect(spoofed.body).not.toContain('test-session-token');
+
+    const sameServer = await readRaw(server.url, '/api/project/session', {
+      host: new URL(server.url).host,
+      'sec-fetch-site': 'same-origin',
+    });
+    expect(sameServer.status).toBe(200);
+    expect(JSON.parse(sameServer.body)).toEqual({ origin: server.url, token: 'test-session-token' });
+  } finally {
+    await server.close();
+  }
+});
+
+it('rejects non-JSON and over-limit rebuild bodies with stable drained diagnostics', async () => {
+  const coordinator = new RecordingCoordinator();
+  const server = await startForegroundServer({
+    coordinator,
+    eventHub: new ProjectEventHub(),
+    port: 0,
+    sessionToken: 'test-session-token',
+  });
+  const headers = {
+    origin: server.url,
+    'x-agent-bundle-session': server.sessionToken,
+  };
+
+  try {
+    const plain = await fetch(`${server.url}/api/project/rebuild`, {
+      body: '{}',
+      headers: { ...headers, 'content-type': 'text/plain' },
+      method: 'POST',
+    });
+    expect(plain.status).toBe(415);
+    await expect(plain.json()).resolves.toEqual({
+      diagnostic: { code: 'AB8009', message: 'Request body must use application/json.' },
+    });
+
+    const tooLarge = await fetch(`${server.url}/api/project/rebuild`, {
+      body: JSON.stringify({ paths: ['x'.repeat(64 * 1024)] }),
+      headers: { ...headers, 'content-type': 'application/json; charset=utf-8' },
+      method: 'POST',
+    });
+    const body = await tooLarge.text();
+    expect(tooLarge.status).toBe(413);
+    expect(JSON.parse(body)).toEqual({
+      diagnostic: { code: 'AB8010', message: 'Request body exceeds 64 KiB.' },
+    });
+    expect(body).not.toContain('Error:');
+    expect(coordinator.invalidations).toEqual([]);
+  } finally {
+    await server.close();
+  }
+});
+
+it('accepts only application/json with an optional UTF-8 charset parameter', async () => {
+  const coordinator = new RecordingCoordinator();
+  const server = await startForegroundServer({
+    coordinator,
+    eventHub: new ProjectEventHub(),
+    port: 0,
+    sessionToken: 'test-session-token',
+  });
+  const headers = { origin: server.url, 'x-agent-bundle-session': server.sessionToken };
+
+  try {
+    for (const contentType of [
+      'application/json',
+      'Application/Json; Charset=UTF-8',
+      'application/json; charset="utf-8"',
+    ]) {
+      const response = await fetch(`${server.url}/api/project/rebuild`, {
+        body: '{}',
+        headers: { ...headers, 'content-type': contentType },
+        method: 'POST',
+      });
+      expect(response.status).toBe(200);
+    }
+
+    for (const contentType of [
+      'application/json; charset=iso-8859-1',
+      'application/json; profile=workbench',
+      'application/json; charset=utf-8; charset=utf-8',
+      'application/json; charset=',
+    ]) {
+      const response = await fetch(`${server.url}/api/project/rebuild`, {
+        body: '{}',
+        headers: { ...headers, 'content-type': contentType },
+        method: 'POST',
+      });
+      expect(response.status).toBe(415);
+      await expect(response.json()).resolves.toEqual({
+        diagnostic: { code: 'AB8009', message: 'Request body must use application/json.' },
+      });
+    }
+    expect(coordinator.invalidations).toHaveLength(3);
+  } finally {
+    await server.close();
+  }
+});
+
+it('does not bind after close races a delayed startup', async () => {
+  const blocker = createNodeServer();
+  await new Promise<void>((resolvePromise) => blocker.listen({ host: '127.0.0.1', port: 0 }, resolvePromise));
+  const blockerAddress = blocker.address();
+  if (blockerAddress === null || typeof blockerAddress === 'string') throw new Error('Expected TCP blocker address.');
+  let releaseStart: () => void = () => undefined;
+  const startGate = new Promise<void>((resolvePromise) => {
+    releaseStart = resolvePromise;
+  });
+  const coordinator = new DelayedCoordinator(startGate);
+  const server = new ForegroundServer({ coordinator, eventHub: new ProjectEventHub(), port: blockerAddress.port });
+
+  try {
+    const starting = server.start();
+    await eventually(() => coordinator.startCalls === 1, 250);
+    const closing = server.close();
+    releaseStart();
+
+    await expect(starting).rejects.toThrow('Foreground server is closed.');
+    await expect(closing).resolves.toBeUndefined();
+    expect(coordinator.closeCalls).toBe(1);
+    expect(() => server.url).toThrow('Foreground server has not started.');
+  } finally {
+    await new Promise<void>((resolvePromise, rejectPromise) => blocker.close((error) => error === undefined ? resolvePromise() : rejectPromise(error)));
+  }
+});
+
+it('closes and releases a paused SSE client after its outstanding bytes exceed the cap', async () => {
+  const eventHub = new ProjectEventHub({ now: () => new Date('2026-08-14T12:00:00.000Z') });
+  const server = await startForegroundServer({ coordinator: new RecordingCoordinator(), eventHub, port: 0 });
+  const stream = openLiveStream(server.url);
+
+  try {
+    await expect(within(stream.opened, 250)).resolves.toBeUndefined();
+    stream.pause();
+    eventHub.publish({
+      payload: {
+        occurredAt: '2026-08-14T12:00:00.000Z',
+        paths: ['current-buffer.ts', 'x'.repeat(200 * 1024)],
+        reason: 'source-change',
+      },
+      type: 'invalidation',
+    });
+    eventHub.publish({
+      payload: {
+        occurredAt: '2026-08-14T12:00:00.000Z',
+        paths: ['queued-frame.ts', 'x'.repeat(100 * 1024)],
+        reason: 'source-change',
+      },
+      type: 'invalidation',
+    });
+
+    await expect(eventually(() => eventHub.subscriptionCount === 0, 250)).resolves.toBeUndefined();
+  } finally {
+    stream.close();
+    await server.close();
+  }
+});
+
+it('retains both startup and cleanup failures structurally', async () => {
+  const coordinator = new FailingStartCoordinator();
+  const server = new ForegroundServer({ coordinator, eventHub: new ProjectEventHub(), port: 0 });
+
+  await expect(server.start()).rejects.toMatchObject({
+    failures: [
+      expect.objectContaining({ resource: 'start' }),
+      expect.objectContaining({ resource: 'cleanup' }),
+    ],
+  });
+  expect(coordinator.closeCalls).toBe(1);
+});

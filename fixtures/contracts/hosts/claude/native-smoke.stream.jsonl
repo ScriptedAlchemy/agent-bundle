@@ -1,0 +1,3 @@
+{"type":"system","subtype":"init","session_id":"<redacted>","plugins":[{"name":"agent-bundle-native-smoke"}],"mcp_servers":[]}
+{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Skill","input":{"skill":"agent-bundle-native-smoke:agent-bundle-native-smoke"}}]}}
+{"type":"result","subtype":"success","duration_ms":0,"usage":{}}

@@ -245,6 +245,11 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
 
 export const portableAdapter: TargetAdapter = Object.freeze({
   capabilities: Object.freeze({ mcp: true, skills: true }),
+  mcpPathTokens: Object.freeze({
+    args: Object.freeze({ '${PLUGIN_DATA}': 'pluginData', '${PLUGIN_ROOT}': 'pluginRoot' }),
+    cwd: Object.freeze({ '${PLUGIN_DATA}': 'pluginData', '${PLUGIN_ROOT}': 'pluginRoot' }),
+    env: Object.freeze({ '${PLUGIN_DATA}': 'pluginData', '${PLUGIN_ROOT}': 'pluginRoot' }),
+  }),
   name: portableName,
   plan,
   validateModel: (model: NormalizedPlugin) => plan(model).diagnostics.slice(),

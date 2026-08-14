@@ -10,6 +10,7 @@ import {
   listHooks,
   listMcp,
   simulateHook,
+  startDevServer,
   validate,
   type ProjectOptions,
 } from './api.ts';
@@ -25,6 +26,17 @@ interface Output {
 export interface CliStreams {
   readonly stderr?: Output;
   readonly stdout?: Output;
+}
+
+interface CliSignalSource {
+  once(signal: NodeJS.Signals, listener: () => void): unknown;
+  removeListener(signal: NodeJS.Signals, listener: () => void): unknown;
+}
+
+export interface CliDependencies {
+  /** Injectable only to make foreground shutdown behavior deterministic in tests. */
+  readonly signals?: CliSignalSource;
+  readonly startDevServer?: typeof startDevServer;
 }
 
 interface SourceCommandOptions {
@@ -63,7 +75,20 @@ interface JsonInputOptions {
   readonly inputFile?: string;
 }
 
+interface DevCommandOptions {
+  readonly open?: boolean;
+  readonly port?: number;
+  readonly root: string;
+}
+
 const collect = (value: string, previous: string[]): string[] => [...previous, value];
+
+const port = (value: string): number => {
+  if (!/^(0|[1-9]\d{0,4})$/u.test(value)) throw new TypeError('Port must be a TCP port number.');
+  const number = Number(value);
+  if (number > 65_535) throw new TypeError('Port must be a TCP port number.');
+  return number;
+};
 
 const configureSourceOptions = (command: Command): Command => command
   .option('--root <root>', 'Project root', process.cwd())
@@ -161,7 +186,28 @@ const writeHumanValidate = (output: Output, result: Awaited<ReturnType<typeof va
     : 'Validation succeeded\n');
 };
 
-export const runCli = async (args: string[], streams: CliStreams = {}): Promise<number> => {
+const closeForegroundOnSignal = (
+  session: Pick<Awaited<ReturnType<typeof startDevServer>>, 'close'>,
+  signals: CliSignalSource,
+  stderr: Output,
+): void => {
+  const terminationSignals = ['SIGINT', 'SIGTERM'] as const;
+  let closing: Promise<void> | undefined;
+  const close = (): void => {
+    closing ??= session.close().catch((error: unknown) => {
+      writeMachine(stderr, diagnosticsFor(error));
+    }).finally(() => {
+      for (const signal of terminationSignals) signals.removeListener(signal, close);
+    });
+  };
+  for (const signal of terminationSignals) signals.once(signal, close);
+};
+
+export const runCli = async (
+  args: string[],
+  streams: CliStreams = {},
+  dependencies: CliDependencies = {},
+): Promise<number> => {
   const stdout = streams.stdout ?? process.stdout;
   const stderr = streams.stderr ?? process.stderr;
   const program = new Command();
@@ -174,6 +220,21 @@ export const runCli = async (args: string[], streams: CliStreams = {}): Promise<
       writeErr: (chunk) => stderr.write(chunk),
       writeOut: (chunk) => stdout.write(chunk),
     });
+
+  const devCommand = program.command('dev').description('Serve the packaged development workbench on loopback')
+    .option('--root <root>', 'Project root', process.cwd())
+    .option('--port <port>', 'Loopback TCP port', port)
+    .option('--open', 'Open the workbench after the foreground server starts')
+    .option('--no-open', 'Do not open the workbench after the foreground server starts');
+  devCommand.action(async (options: DevCommandOptions) => {
+    const session = await (dependencies.startDevServer ?? startDevServer)({
+      open: options.open === true,
+      ...(options.port === undefined ? {} : { port: options.port }),
+      root: options.root,
+    });
+    stdout.write(`Development workbench at ${session.url}\n`);
+    closeForegroundOnSignal(session, dependencies.signals ?? process, stderr);
+  });
 
   const buildCommand = configureSourceOptions(
     program.command('build').description('Build a validated Agent Bundle artifact'),

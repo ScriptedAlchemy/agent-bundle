@@ -2,16 +2,13 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
-import { createDefaultRegistry, type TargetRegistry } from './adapters/registry.ts';
+import { createDefaultRegistry } from './adapters/registry.ts';
 import type { TargetArtifactEntry, TargetHookEntry } from './adapters/types.ts';
 import { build as buildArtifact, type BuildResult } from './build/build.ts';
 import { validateArtifact } from './build/validate-artifact.ts';
-import { discoverProject } from './config/discover.ts';
-import { loadConfig } from './config/load.ts';
-import { normalizeProject } from './config/normalize.ts';
-import { validateModel, validateSource } from './config/validate.ts';
 import { DiagnosticError, type Diagnostic } from './core/diagnostics.ts';
 import type { NormalizedPlugin } from './core/types.ts';
+import { ProjectService, type PreparedProject } from './dev/project-service.ts';
 import {
   HookService,
   type HookListOptions,
@@ -25,6 +22,31 @@ import {
   type McpListResult,
 } from './services/mcp-service.ts';
 
+export {
+  compareInstalledHostContract,
+  compareLocalHostContract,
+  evaluateHostContract,
+  nativeHostContractComparisonEnabled,
+  parseHostContractManifest,
+  parseRedactedEventEnvelopes,
+} from './host-contracts/host-contract.ts';
+export type {
+  CompareInstalledHostContractOptions,
+  HostContractCommand,
+  HostContractCommandResult,
+  HostContractCommandRunner,
+  HostContractDiagnostic,
+  HostContractEvidence,
+  HostContractHelpProbe,
+  HostContractManifest,
+  HostContractProbe,
+  HostContractProbeKind,
+  HostContractReport,
+  HostContractStatus,
+  NativeHost,
+  RedactedEventEnvelope,
+} from './host-contracts/host-contract.ts';
+
 export { HookService } from './services/hook-service.ts';
 export type { HookListOptions, HookSimulationOptions } from './services/hook-service.ts';
 export { McpService } from './services/mcp-service.ts';
@@ -36,6 +58,8 @@ export type {
   McpListResult,
   McpOperationOptions,
 } from './services/mcp-service.ts';
+export { startDevServer } from './dev/workbench-server.ts';
+export type { DevServerSession, StartDevServerOptions } from './dev/workbench-server.ts';
 
 export interface StructuredLogger {
   log?(event: string, details: Readonly<Record<string, unknown>>): void;
@@ -115,13 +139,6 @@ export interface SimulateHookOptions extends ListHooksOptions {
   readonly target: string;
 }
 
-interface PreparedProject {
-  readonly diagnostics: readonly Diagnostic[];
-  readonly model?: NormalizedPlugin;
-  readonly registry: TargetRegistry;
-  readonly root: string;
-}
-
 const freezeDiagnostics = (diagnostics: readonly Diagnostic[]): readonly Diagnostic[] =>
   Object.freeze(diagnostics.map((diagnostic) => Object.freeze({ ...diagnostic })));
 
@@ -139,39 +156,7 @@ const log = (
 const prepareProject = async (
   options: ProjectOptions,
   command: 'build' | 'inspect' | 'validate',
-): Promise<PreparedProject> => {
-  const root = resolve(options.root);
-  const registry = createDefaultRegistry();
-  log(options.logger, 'project.load', { command, root });
-  const loaded = await loadConfig({
-    command,
-    configPath: options.configPath,
-    mode: options.mode ?? 'production',
-    root,
-    targets: options.targets,
-  });
-  const discovered = await discoverProject(root, loaded.config);
-  const sourceDiagnostics = freezeDiagnostics(validateSource(loaded, discovered));
-  if (hasErrors(sourceDiagnostics)) {
-    log(options.logger, 'project.invalid-source', { diagnostics: sourceDiagnostics.length, root });
-    return Object.freeze({ diagnostics: sourceDiagnostics, registry, root });
-  }
-
-  const model = await normalizeProject(loaded, discovered, registry);
-  const diagnostics: Diagnostic[] = [...validateModel(model, registry)];
-  for (const target of model.targets) {
-    if (registry.has(target.name)) {
-      diagnostics.push(...registry.get(target.name).plan(model).diagnostics);
-    }
-  }
-  const frozenDiagnostics = freezeDiagnostics(diagnostics);
-  log(options.logger, 'project.prepared', {
-    diagnostics: frozenDiagnostics.length,
-    root,
-    targets: model.targets.map((target) => target.name),
-  });
-  return Object.freeze({ diagnostics: frozenDiagnostics, model, registry, root });
-};
+): Promise<PreparedProject> => new ProjectService(options).prepare(command);
 
 const requirePreparedModel = (prepared: PreparedProject): NormalizedPlugin => {
   if (prepared.model !== undefined && !hasErrors(prepared.diagnostics)) return prepared.model;
