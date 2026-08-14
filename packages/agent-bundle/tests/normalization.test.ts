@@ -250,6 +250,28 @@ it('uses the first definition when validating shortcut Markdown references', () 
   expect(validateSource(loaded, { skills: [duplicateDefinition] })).toEqual([]);
 });
 
+it('does not treat definitions as uses and reserves an external first definition', () => {
+  const root = '/workspace/project';
+  const unusedDefinition = skill(root, 'unused', 'unused', {
+    body: '[unused]: references/missing.md\n',
+  });
+  const externalFirst = skill(root, 'external', 'external', {
+    body: [
+      '[guide]',
+      '',
+      '[guide]: https://example.com/guide',
+      '[guide]: references/missing.md',
+      '',
+    ].join('\n'),
+  });
+  const loaded = loadedProject({
+    plugin: { name: 'review-tools', version: '1.0.0' },
+  });
+
+  expect(validateSource(loaded, { skills: [unusedDefinition] })).toEqual([]);
+  expect(validateSource(loaded, { skills: [externalFirst] })).toEqual([]);
+});
+
 it('reports unknown targets, duplicate IDs, and portable output collisions', async () => {
   const root = '/workspace/project';
   const loaded = loadedProject({

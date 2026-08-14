@@ -80,7 +80,7 @@ const referencedResources = (body: string): string[] => {
     }
   }
 
-  const definitions = new Map<string, string>();
+  const definitions = new Map<string, string | undefined>();
   const definitionPattern = /^ {0,3}\[([^\]]+)\]:\s*(?:<([^>]+)>|(\S+))/gm;
   for (const match of markdown.matchAll(definitionPattern)) {
     const label = match[1];
@@ -89,15 +89,18 @@ const referencedResources = (body: string): string[] => {
       continue;
     }
 
-    const path = resourcePath(rawReference);
     const normalizedLabel = normalizeReferenceLabel(label);
-    if (path !== undefined && !definitions.has(normalizedLabel)) {
-      definitions.set(normalizedLabel, path);
+    if (!definitions.has(normalizedLabel)) {
+      definitions.set(normalizedLabel, resourcePath(rawReference));
     }
   }
 
+  const markdownWithoutDefinitions = markdown.replace(
+    /^ {0,3}\[[^\]]+\]:.*$/gm,
+    '',
+  );
   const referencePattern = /!?\[([^\]]+)\]\[([^\]]*)\]/g;
-  for (const match of markdown.matchAll(referencePattern)) {
+  for (const match of markdownWithoutDefinitions.matchAll(referencePattern)) {
     const text = match[1];
     const explicitLabel = match[2];
     const label = explicitLabel === '' ? text : explicitLabel;
@@ -112,7 +115,7 @@ const referencedResources = (body: string): string[] => {
   }
 
   const shortcutPattern = /!?\[([^\]]+)\](?!\[|\()/g;
-  for (const match of markdown.matchAll(shortcutPattern)) {
+  for (const match of markdownWithoutDefinitions.matchAll(shortcutPattern)) {
     const label = match[1];
     if (label === undefined) {
       continue;
