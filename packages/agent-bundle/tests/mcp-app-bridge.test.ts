@@ -158,6 +158,37 @@ it('accepts the stable parameterless initialized notification before flushing ho
   ]);
 });
 
+it('keeps blocked host traffic in FIFO order until the transport is explicitly flushed', async () => {
+  const fixture = fixtureFor();
+  let accepting = true;
+  const bridge = createMcpAppBridge({
+    binding: fixture.binding,
+    host: fixture.host,
+    operations: fixture.operations,
+    send: (message) => {
+      if (!accepting) return false;
+      fixture.sent.push(message);
+      return true;
+    },
+  });
+
+  expect(bridge.publishToolInputPartial({ city: 'Par' })).toBe(true);
+  await bridge.receive(initialize('init:backpressure'));
+  accepting = false;
+  await bridge.receive(initialized());
+  expect(bridge.publishHostContextChanged({ theme: 'dark' })).toBe(true);
+  expect(fixture.sent).toHaveLength(1);
+
+  accepting = true;
+  expect(bridge.flushHostTraffic()).toBe(true);
+  expect(fixture.sent.slice(-4)).toEqual([
+    { jsonrpc: '2.0', method: 'ui/notifications/tool-input-partial', params: { arguments: { city: 'Par' } } },
+    { jsonrpc: '2.0', method: 'ui/notifications/tool-input', params: { arguments: { city: 'Paris', units: 'metric' } } },
+    { jsonrpc: '2.0', method: 'ui/notifications/tool-result', params: { content: [{ text: 'Sunny', type: 'text' }], structuredContent: { temperature: 21 } } },
+    { jsonrpc: '2.0', method: 'ui/notifications/host-context-changed', params: { theme: 'dark' } },
+  ]);
+});
+
 it('forwards only same-binding app-visible tools and resources while retaining request ids', async () => {
   const fixture = fixtureFor();
   const bridge = createMcpAppBridge({
@@ -325,6 +356,63 @@ it('rejects malformed JSON-RPC envelopes and payloads before executing host call
   });
 });
 
+it('rejects malformed stable capability, resource, logging, and host-context shapes before they cross the bridge', async () => {
+  const fixture = fixtureFor({
+    host: {
+      onLog: async () => {
+        throw new Error('malformed logging notification reached the host callback');
+      },
+    },
+  });
+  const bridge = createMcpAppBridge({ binding: fixture.binding, host: fixture.host, operations: fixture.operations, send: (message) => (fixture.sent.push(message), true) });
+
+  expect(await bridge.receive({
+    id: 'bad-capability',
+    jsonrpc: '2.0',
+    method: 'ui/initialize',
+    params: {
+      appCapabilities: { tools: { listChanged: 'yes' } },
+      appInfo: { name: 'weather-view', version: '1.0.0' },
+      protocolVersion: '2026-01-26',
+    },
+  })).toBe(true);
+  expect(fixture.sent.at(-1)).toEqual({
+    error: { code: -32602, message: 'ui/initialize requires protocol version 2026-01-26.' },
+    id: 'bad-capability',
+    jsonrpc: '2.0',
+  });
+
+  await bridge.receive(initialize('init:schemas'));
+  await bridge.receive(initialized());
+  expect(await bridge.receive({ jsonrpc: '2.0', method: 'notifications/message', params: { level: 'info' } })).toBe(false);
+  expect(bridge.publishHostContextChanged({ availableDisplayModes: ['inline', 'sepia'] })).toBe(false);
+
+  fixture.operations.readResource = async () => ({
+    contents: [{ _meta: { ui: { csp: { connectDomains: ['https://api.weather.test', 42] } } }, text: '<main>bad</main>', uri: 'resource://weather/bad' }],
+  }) as unknown as McpAppJsonValue;
+  expect(await bridge.receive({ id: 'bad-read', jsonrpc: '2.0', method: 'resources/read', params: { uri: 'resource://weather/bad' } })).toBe(true);
+  expect(fixture.sent.at(-1)).toEqual({
+    error: { code: -32000, message: 'MCP App resource read returned an invalid result.' },
+    id: 'bad-read',
+    jsonrpc: '2.0',
+  });
+
+  const malformedResource = fixtureFor({
+    resource: {
+      contents: [{
+        _meta: { ui: { domain: 42 } },
+        mimeType: 'text/html;profile=mcp-app',
+        text: '<main>bad metadata</main>',
+        uri: 'ui://weather/forecast.html',
+      }],
+    },
+  });
+  await expect(createMcpAppBridge({ binding: malformedResource.binding, host: malformedResource.host, operations: malformedResource.operations, send: () => true }).loadResource()).resolves.toMatchObject({
+    kind: 'fallback',
+    reason: 'invalid-resource',
+  });
+});
+
 it('rejects callback-returned display modes outside the App and host declarations', async () => {
   const fixture = fixtureFor({ host: { onDisplayMode: async () => 'pip' as const } });
   const bridge = createMcpAppBridge({ binding: fixture.binding, host: fixture.host, operations: fixture.operations, send: (message) => (fixture.sent.push(message), true) });
@@ -337,6 +425,28 @@ it('rejects callback-returned display modes outside the App and host declaration
     id: 'display-response',
     jsonrpc: '2.0',
   });
+});
+
+it('suppresses an invalid display-mode error when force close wins the callback race', async () => {
+  let resolveDisplay: ((mode: 'pip') => void) | undefined;
+  const fixture = fixtureFor({
+    host: {
+      onDisplayMode: () => new Promise<'pip'>((resolve) => {
+        resolveDisplay = resolve;
+      }),
+    },
+  });
+  const bridge = createMcpAppBridge({ binding: fixture.binding, host: fixture.host, operations: fixture.operations, send: (message) => (fixture.sent.push(message), true) });
+  await bridge.receive(initialize('init:late-display'));
+  await bridge.receive(initialized());
+
+  const pending = bridge.receive({ id: 'late-display', jsonrpc: '2.0', method: 'ui/request-display-mode', params: { mode: 'fullscreen' } });
+  const closing = bridge.forceClose();
+  resolveDisplay?.('pip');
+
+  await expect(pending).resolves.toBe(false);
+  await closing;
+  expect(fixture.sent.some((message) => message.id === 'late-display')).toBe(false);
 });
 
 it('loads only the canonical HTML UI resource and returns a frozen structured fallback otherwise', async () => {

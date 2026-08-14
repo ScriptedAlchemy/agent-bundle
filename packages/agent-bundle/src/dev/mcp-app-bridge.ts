@@ -137,6 +137,7 @@ export interface McpAppBridge {
   readonly lifecycle: McpAppBridgeLifecycle;
   close(options: McpAppBridgeCloseOptions): Promise<void>;
   forceClose(): Promise<void>;
+  flushHostTraffic(): boolean;
   loadResource(): Promise<McpAppBridgeResourceResolution>;
   publishHostContextChanged(context: McpAppBridgeJsonRecord): boolean;
   publishToolCancelled(reason?: string): boolean;
@@ -160,10 +161,24 @@ interface ParsedResource {
   readonly permissions?: McpAppSandboxPermissions;
 }
 
+interface ValidResourceReadResult extends McpAppBridgeJsonRecord {
+  readonly contents: readonly McpAppJsonValue[];
+}
+
 const defaultTeardownTimeoutMs = 1_000;
 const maximumTeardownTimeoutMs = 30_000;
 const loggingLevels = new Set(['debug', 'info', 'notice', 'warning', 'error', 'critical', 'alert', 'emergency']);
 const displayModes = new Set<McpAppBridgeDisplayMode>(['inline', 'fullscreen', 'pip']);
+const hostStyleVariables = new Set([
+  '--color-background-primary', '--color-background-secondary', '--color-background-tertiary', '--color-background-inverse', '--color-background-ghost', '--color-background-info', '--color-background-danger', '--color-background-success', '--color-background-warning', '--color-background-disabled',
+  '--color-text-primary', '--color-text-secondary', '--color-text-tertiary', '--color-text-inverse', '--color-text-ghost', '--color-text-info', '--color-text-danger', '--color-text-success', '--color-text-warning', '--color-text-disabled',
+  '--color-border-primary', '--color-border-secondary', '--color-border-tertiary', '--color-border-inverse', '--color-border-ghost', '--color-border-info', '--color-border-danger', '--color-border-success', '--color-border-warning', '--color-border-disabled',
+  '--color-ring-primary', '--color-ring-secondary', '--color-ring-inverse', '--color-ring-info', '--color-ring-danger', '--color-ring-success', '--color-ring-warning',
+  '--font-sans', '--font-mono', '--font-weight-normal', '--font-weight-medium', '--font-weight-semibold', '--font-weight-bold',
+  '--font-text-xs-size', '--font-text-sm-size', '--font-text-md-size', '--font-text-lg-size', '--font-heading-xs-size', '--font-heading-sm-size', '--font-heading-md-size', '--font-heading-lg-size', '--font-heading-xl-size', '--font-heading-2xl-size', '--font-heading-3xl-size',
+  '--font-text-xs-line-height', '--font-text-sm-line-height', '--font-text-md-line-height', '--font-text-lg-line-height', '--font-heading-xs-line-height', '--font-heading-sm-line-height', '--font-heading-md-line-height', '--font-heading-lg-line-height', '--font-heading-xl-line-height', '--font-heading-2xl-line-height', '--font-heading-3xl-line-height',
+  '--border-radius-xs', '--border-radius-sm', '--border-radius-md', '--border-radius-lg', '--border-radius-xl', '--border-radius-full', '--border-width-regular', '--shadow-hairline', '--shadow-sm', '--shadow-md', '--shadow-lg',
+]);
 
 const hasOwn = (value: object, key: string): boolean => Object.hasOwn(value, key);
 
@@ -238,10 +253,12 @@ const messageOf = (value: unknown): McpAppBridgeMessage | undefined => {
   if (!hasMethod && !hasOwn(value, 'id')) return undefined;
   if (hasOwn(value, 'id') && !isRequestId(value.id)) return undefined;
   if (hasOwn(value, 'method') && !nonempty(value.method)) return undefined;
+  if (!hasMethod && hasOwn(value, 'params')) return undefined;
   if (hasOwn(value, 'params') && !isJsonValue(value.params)) return undefined;
   if (hasOwn(value, 'result') && !isJsonValue(value.result)) return undefined;
   if (hasOwn(value, 'error')) {
     if (!isRecord(value.error) || typeof value.error.code !== 'number' || !Number.isFinite(value.error.code) || !nonempty(value.error.message)) return undefined;
+    if (hasOwn(value.error, 'data') && !isJsonValue(value.error.data)) return undefined;
   }
   return Object.freeze({
     ...(hasOwn(value, 'error') ? { error: Object.freeze({ code: (value.error as Record<string, unknown>).code as number, message: (value.error as Record<string, unknown>).message as string }) } : {}),
@@ -259,14 +276,58 @@ const initializedNotification = (message: McpAppBridgeMessage): boolean =>
   message.method === 'ui/notifications/initialized' && !hasOwn(message, 'id')
   && (message.params === undefined || jsonRecord(message.params) !== undefined);
 
+const validExperimentalCapabilities = (value: unknown): boolean => {
+  const capabilities = jsonRecord(value);
+  return capabilities !== undefined && Object.values(capabilities).every((capability) => jsonRecord(capability) !== undefined);
+};
+
+const validListChangedCapability = (value: unknown): boolean => {
+  const capability = jsonRecord(value);
+  return capability !== undefined && (capability.listChanged === undefined || typeof capability.listChanged === 'boolean');
+};
+
+const validContentModalities = (value: unknown): boolean => {
+  const modalities = jsonRecord(value);
+  if (modalities === undefined) return false;
+  return ['text', 'image', 'audio', 'resource', 'resourceLink', 'structuredContent']
+    .every((key) => modalities[key] === undefined || jsonRecord(modalities[key]) !== undefined);
+};
+
+const validCsp = (value: unknown): boolean => {
+  const csp = jsonRecord(value);
+  return csp !== undefined && ['connectDomains', 'resourceDomains', 'frameDomains', 'baseUriDomains']
+    .every((key) => csp[key] === undefined || (Array.isArray(csp[key]) && csp[key].every((domain) => typeof domain === 'string')));
+};
+
+const validPermissions = (value: unknown): boolean => {
+  const permissions = jsonRecord(value);
+  return permissions !== undefined && ['camera', 'microphone', 'geolocation', 'clipboardWrite']
+    .every((key) => permissions[key] === undefined || jsonRecord(permissions[key]) !== undefined);
+};
+
+const validSandbox = (value: unknown): boolean => {
+  const sandbox = jsonRecord(value);
+  return sandbox !== undefined
+    && (sandbox.permissions === undefined || validPermissions(sandbox.permissions))
+    && (sandbox.csp === undefined || validCsp(sandbox.csp));
+};
+
+const validAppCapabilities = (value: unknown): McpAppBridgeJsonRecord | undefined => {
+  const capabilities = jsonRecord(value);
+  if (capabilities === undefined) return undefined;
+  if (capabilities.experimental !== undefined && !validExperimentalCapabilities(capabilities.experimental)) return undefined;
+  if (capabilities.tools !== undefined && !validListChangedCapability(capabilities.tools)) return undefined;
+  if (capabilities.availableDisplayModes !== undefined && validDisplayModeList(capabilities.availableDisplayModes) === undefined) return undefined;
+  return capabilities;
+};
+
 const validInitialize = (params: McpAppJsonValue | undefined): boolean => {
   const record = jsonRecord(params);
   if (record === undefined || record.protocolVersion !== MCP_APP_PROTOCOL_VERSION) return false;
   const appInfo = jsonRecord(record.appInfo);
-  const appCapabilities = jsonRecord(record.appCapabilities);
+  const appCapabilities = validAppCapabilities(record.appCapabilities);
   if (appInfo === undefined || !nonempty(appInfo.name) || !nonempty(appInfo.version) || appCapabilities === undefined) return false;
-  const requestedModes = appCapabilities.availableDisplayModes;
-  return requestedModes === undefined || (Array.isArray(requestedModes) && requestedModes.every((mode) => typeof mode === 'string' && displayModes.has(mode as McpAppBridgeDisplayMode)));
+  return true;
 };
 
 const contentBlock = (value: McpAppJsonValue): boolean => {
@@ -281,9 +342,7 @@ const contentBlock = (value: McpAppJsonValue): boolean => {
     case 'resource_link':
       return nonempty(block.name) && nonempty(block.uri);
     case 'resource': {
-      const resource = jsonRecord(block.resource);
-      return resource !== undefined && nonempty(resource.uri)
-        && (typeof resource.text === 'string' || typeof resource.blob === 'string');
+      return validResourceContent(block.resource) !== undefined;
     }
     default:
       return false;
@@ -317,20 +376,29 @@ const validDisplayModeList = (value: unknown): readonly McpAppBridgeDisplayMode[
 const validHostCapabilities = (value: unknown): McpAppBridgeJsonRecord | undefined => {
   const capabilities = jsonRecord(value);
   if (capabilities === undefined) return undefined;
-  for (const key of ['openLinks', 'serverTools', 'serverResources', 'logging'] as const) {
-    const capability = capabilities[key] === undefined ? undefined : jsonRecord(capabilities[key]);
-    if (capabilities[key] !== undefined && capability === undefined) return undefined;
-    if ((key === 'serverTools' || key === 'serverResources') && capability?.listChanged !== undefined && typeof capability.listChanged !== 'boolean') return undefined;
-  }
-  if (capabilities.sandbox !== undefined) {
-    const sandbox = jsonRecord(capabilities.sandbox);
-    const permissions = sandbox === undefined || sandbox.permissions === undefined ? undefined : jsonRecord(sandbox.permissions);
-    const csp = sandbox === undefined || sandbox.csp === undefined ? undefined : jsonRecord(sandbox.csp);
-    if (sandbox === undefined || (sandbox.permissions !== undefined && permissions === undefined) || (sandbox.csp !== undefined && csp === undefined)) return undefined;
-    if (permissions !== undefined && !['camera', 'microphone', 'geolocation', 'clipboardWrite'].every((key) => permissions[key] === undefined || jsonRecord(permissions[key]) !== undefined)) return undefined;
-    if (csp !== undefined && !['connectDomains', 'resourceDomains', 'frameDomains', 'baseUriDomains'].every((key) => csp[key] === undefined || (Array.isArray(csp[key]) && csp[key].every((domain) => typeof domain === 'string')))) return undefined;
+  if (capabilities.experimental !== undefined && !validExperimentalCapabilities(capabilities.experimental)) return undefined;
+  if (['openLinks', 'downloadFile', 'logging'].some((key) => capabilities[key] !== undefined && jsonRecord(capabilities[key]) === undefined)) return undefined;
+  if (['serverTools', 'serverResources'].some((key) => capabilities[key] !== undefined && !validListChangedCapability(capabilities[key]))) return undefined;
+  if (capabilities.sandbox !== undefined && !validSandbox(capabilities.sandbox)) return undefined;
+  if (['updateModelContext', 'message'].some((key) => capabilities[key] !== undefined && !validContentModalities(capabilities[key]))) return undefined;
+  if (capabilities.sampling !== undefined) {
+    const sampling = jsonRecord(capabilities.sampling);
+    if (sampling === undefined || (sampling.tools !== undefined && jsonRecord(sampling.tools) === undefined)) return undefined;
   }
   return capabilities;
+};
+
+const validToolDefinition = (value: unknown): boolean => {
+  const tool = jsonRecord(value);
+  if (tool === undefined || !nonempty(tool.name) || jsonRecord(tool.inputSchema) === undefined) return false;
+  if (tool.outputSchema !== undefined && jsonRecord(tool.outputSchema) === undefined) return false;
+  if (tool.annotations !== undefined) {
+    const annotations = jsonRecord(tool.annotations);
+    if (annotations === undefined
+      || (annotations.title !== undefined && !nonempty(annotations.title))
+      || ['readOnlyHint', 'destructiveHint', 'idempotentHint', 'openWorldHint'].some((key) => annotations[key] !== undefined && typeof annotations[key] !== 'boolean')) return false;
+  }
+  return true;
 };
 
 const validHostContext = (value: unknown): McpAppBridgeJsonRecord | undefined => {
@@ -345,8 +413,7 @@ const validHostContext = (value: unknown): McpAppBridgeJsonRecord | undefined =>
   if (context.platform !== undefined && context.platform !== 'web' && context.platform !== 'desktop' && context.platform !== 'mobile') return undefined;
   if (context.toolInfo !== undefined) {
     const toolInfo = jsonRecord(context.toolInfo);
-    const tool = toolInfo === undefined ? undefined : jsonRecord(toolInfo.tool);
-    if (toolInfo === undefined || tool === undefined || !nonempty(tool.name) || (toolInfo.id !== undefined && !isRequestId(toolInfo.id))) return undefined;
+    if (toolInfo === undefined || !validToolDefinition(toolInfo.tool) || (toolInfo.id !== undefined && !isRequestId(toolInfo.id))) return undefined;
   }
   if (context.deviceCapabilities !== undefined) {
     const device = jsonRecord(context.deviceCapabilities);
@@ -356,7 +423,7 @@ const validHostContext = (value: unknown): McpAppBridgeJsonRecord | undefined =>
     const styles = jsonRecord(context.styles);
     const variables = styles === undefined || styles.variables === undefined ? undefined : jsonRecord(styles.variables);
     const css = styles === undefined || styles.css === undefined ? undefined : jsonRecord(styles.css);
-    if (styles === undefined || (styles.variables !== undefined && (variables === undefined || !Object.values(variables).every((variable) => typeof variable === 'string')))
+    if (styles === undefined || (styles.variables !== undefined && (variables === undefined || !Object.entries(variables).every(([key, variable]) => hostStyleVariables.has(key) && typeof variable === 'string')))
       || (styles.css !== undefined && (css === undefined || (css.fonts !== undefined && typeof css.fonts !== 'string')))) return undefined;
   }
   if (context.containerDimensions !== undefined) {
@@ -370,11 +437,40 @@ const validHostContext = (value: unknown): McpAppBridgeJsonRecord | undefined =>
   return context;
 };
 
+const validResourceMetadata = (value: unknown): McpAppBridgeJsonRecord | undefined => {
+  const metadata = jsonRecord(value);
+  if (metadata === undefined) return undefined;
+  if (metadata.ui === undefined) return metadata;
+  const ui = jsonRecord(metadata.ui);
+  if (ui === undefined
+    || (ui.csp !== undefined && !validCsp(ui.csp))
+    || (ui.permissions !== undefined && !validPermissions(ui.permissions))
+    || (ui.domain !== undefined && !nonempty(ui.domain))
+    || (ui.prefersBorder !== undefined && typeof ui.prefersBorder !== 'boolean')) return undefined;
+  return metadata;
+};
+
+const validResourceContent = (value: unknown): McpAppBridgeJsonRecord | undefined => {
+  const content = jsonRecord(value);
+  if (content === undefined || !nonempty(content.uri) || (content.mimeType !== undefined && !nonempty(content.mimeType))) return undefined;
+  const hasText = typeof content.text === 'string';
+  const hasBlob = typeof content.blob === 'string';
+  if (hasText === hasBlob || (content._meta !== undefined && validResourceMetadata(content._meta) === undefined)) return undefined;
+  return content;
+};
+
+const validResourceReadResult = (value: unknown): ValidResourceReadResult | undefined => {
+  const result = jsonRecord(value);
+  const contents = result?.contents;
+  if (result === undefined || !Array.isArray(contents) || !contents.every((content) => validResourceContent(content) !== undefined)) return undefined;
+  return Object.freeze({ ...result, contents: Object.freeze([...contents]) }) as ValidResourceReadResult;
+};
+
 const resourceMetadata = (value: unknown): { readonly csp?: McpAppSandboxCsp; readonly permissions?: McpAppSandboxPermissions } | undefined => {
   if (value === undefined) return Object.freeze({});
-  const metadata = jsonRecord(value);
+  const metadata = validResourceMetadata(value);
   const ui = metadata === undefined ? undefined : jsonRecord(metadata.ui);
-  if (ui === undefined && metadata !== undefined && metadata.ui !== undefined) return undefined;
+  if (metadata === undefined || ui === undefined && metadata.ui !== undefined) return undefined;
   if (ui === undefined) return Object.freeze({});
   const csp = ui.csp === undefined ? undefined : jsonRecord(ui.csp);
   const permissions = ui.permissions === undefined ? undefined : jsonRecord(ui.permissions);
@@ -397,10 +493,10 @@ const htmlFromBlob = (blob: string): string | undefined => {
 };
 
 const parsedResource = (value: McpAppJsonValue, resourceUri: string): ParsedResource | undefined => {
-  const response = jsonRecord(value);
-  if (response === undefined || !Array.isArray(response.contents)) return undefined;
+  const response = validResourceReadResult(value);
+  if (response === undefined) return undefined;
   for (const candidate of response.contents) {
-    const content = jsonRecord(candidate);
+    const content = validResourceContent(candidate);
     if (content === undefined || content.uri !== resourceUri || content.mimeType !== 'text/html;profile=mcp-app') continue;
     const hasText = typeof content.text === 'string';
     const hasBlob = typeof content.blob === 'string';
@@ -464,7 +560,7 @@ const validModelContext = (params: McpAppJsonValue | undefined): McpAppBridgeMod
 
 const validLog = (params: McpAppJsonValue | undefined): McpAppBridgeLogEvent | undefined => {
   const record = jsonRecord(params);
-  if (record === undefined || typeof record.level !== 'string' || !loggingLevels.has(record.level)) return undefined;
+  if (record === undefined || record.data === undefined || typeof record.level !== 'string' || !loggingLevels.has(record.level)) return undefined;
   if (record.logger !== undefined && !nonempty(record.logger)) return undefined;
   return Object.freeze({
     ...(record.data === undefined ? {} : { data: cloneJson(record.data) }),
@@ -489,6 +585,7 @@ export const createMcpAppBridge = (options: CreateMcpAppBridgeOptions): McpAppBr
   const resourceIsCanonical = canonicalResourceUri !== undefined && canonicalResourceUri === binding.resourceUri;
   const queuedHostMessages: McpAppBridgeMessage[] = [];
   let lifecycle: McpAppBridgeLifecycle = 'created';
+  let hostTrafficBlocked = false;
   let inputQueued = false;
   let terminalQueued = false;
   let closePromise: Promise<void> | undefined;
@@ -499,6 +596,7 @@ export const createMcpAppBridge = (options: CreateMcpAppBridgeOptions): McpAppBr
   let finishTeardown: (() => void) | undefined;
   let appDisplayModes: ReadonlySet<McpAppBridgeDisplayMode> | undefined;
   const hostDisplayModes = validDisplayModeList(host.context?.availableDisplayModes);
+  const isClosed = (): boolean => lifecycle === 'closing' || lifecycle === 'closed';
 
   const send = (message: McpAppBridgeMessage): boolean => {
     try {
@@ -517,19 +615,28 @@ export const createMcpAppBridge = (options: CreateMcpAppBridgeOptions): McpAppBr
 
   const emitHost = (message: McpAppBridgeMessage): boolean => {
     if (lifecycle === 'closing' || lifecycle === 'closed') return false;
-    if (lifecycle !== 'initialized') {
+    if (lifecycle !== 'initialized' || hostTrafficBlocked) {
       queuedHostMessages.push(message);
       return true;
     }
-    return send(message);
+    if (send(message)) return true;
+    hostTrafficBlocked = true;
+    queuedHostMessages.push(message);
+    return true;
   };
 
-  const flush = (): void => {
+  const flush = (): boolean => {
+    if (lifecycle !== 'initialized') return false;
     while (lifecycle === 'initialized' && queuedHostMessages.length > 0) {
       const message = queuedHostMessages[0];
-      if (message === undefined || !send(message)) return;
+      if (message === undefined || !send(message)) {
+        hostTrafficBlocked = true;
+        return false;
+      }
       queuedHostMessages.shift();
     }
+    hostTrafficBlocked = false;
+    return true;
   };
 
   const queueInput = (argumentsValue: McpAppBridgeJsonRecord | undefined): boolean => {
@@ -608,8 +715,9 @@ export const createMcpAppBridge = (options: CreateMcpAppBridgeOptions): McpAppBr
         const request = validResourceRead(message.params);
         if (request === undefined) return fail(id, -32602, 'resources/read requires a nonempty URI.');
         try {
-          const result = await options.operations.readResource(binding.id, request);
-          return lifecycle === 'initialized' && isJsonValue(result) ? respond(id, cloneJson(result)) : false;
+          const result = validResourceReadResult(await options.operations.readResource(binding.id, request));
+          if (result === undefined) return lifecycle === 'initialized' ? fail(id, -32000, 'MCP App resource read returned an invalid result.') : false;
+          return lifecycle === 'initialized' ? respond(id, result) : false;
         } catch {
           return lifecycle === 'initialized' ? fail(id, -32000, 'MCP App resource read failed.') : false;
         }
@@ -646,10 +754,11 @@ export const createMcpAppBridge = (options: CreateMcpAppBridgeOptions): McpAppBr
         if (host.onDisplayMode === undefined) return fail(id, -32601, 'ui/request-display-mode is not supported by this host.');
         try {
           const actual = await host.onDisplayMode(mode);
+          if (lifecycle !== 'initialized') return false;
           if (!appDisplayModes.has(actual) || !hostDisplayModes.includes(actual)) {
             return fail(id, -32000, 'Host returned a display mode outside the negotiated declarations.');
           }
-          return lifecycle === 'initialized' ? respond(id, { mode: actual }) : false;
+          return respond(id, { mode: actual });
         } catch {
           return lifecycle === 'initialized' ? fail(id, -32000, 'ui/request-display-mode was denied by this host.') : false;
         }
@@ -708,6 +817,9 @@ export const createMcpAppBridge = (options: CreateMcpAppBridgeOptions): McpAppBr
       lifecycle = 'closing';
       return rememberClose(releaseBinding());
     },
+    flushHostTraffic(): boolean {
+      return flush();
+    },
     async loadResource(): Promise<McpAppBridgeResourceResolution> {
       const fallback = (reason: McpAppBridgeFallbackReason): McpAppBridgeFallback => Object.freeze({
         input: cloneJson(binding.input),
@@ -715,19 +827,19 @@ export const createMcpAppBridge = (options: CreateMcpAppBridgeOptions): McpAppBr
         reason,
         result: cloneJson(binding.result),
       });
-      if (lifecycle === 'closing' || lifecycle === 'closed') return fallback('bridge-closed');
+      if (isClosed()) return fallback('bridge-closed');
       if (!resourceIsCanonical) return fallback('missing-canonical-resource-uri');
       try {
         const response = await options.operations.readResource(binding.id, { uri: binding.resourceUri });
-        if (lifecycle === 'closing' || lifecycle === 'closed') return fallback('bridge-closed');
+        if (isClosed()) return fallback('bridge-closed');
         const resource = isJsonValue(response) ? parsedResource(response, binding.resourceUri) : undefined;
         return resource === undefined ? fallback('invalid-resource') : Object.freeze({ ...resource, kind: 'resource' as const });
       } catch {
-        return fallback('resource-read-failed');
+        return isClosed() ? fallback('bridge-closed') : fallback('resource-read-failed');
       }
     },
     publishHostContextChanged(context: McpAppBridgeJsonRecord): boolean {
-      const snapshot = jsonRecord(context);
+      const snapshot = validHostContext(context);
       return snapshot === undefined ? false : emitHost(Object.freeze({ jsonrpc: '2.0', method: 'ui/notifications/host-context-changed', params: snapshot }));
     },
     publishToolCancelled(reason?: string): boolean {
