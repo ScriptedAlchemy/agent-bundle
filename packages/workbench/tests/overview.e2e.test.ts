@@ -69,3 +69,35 @@ e2e('renders and rebuilds the complete responsive Overview against a real foregr
     await removeProjectFixture(project.root);
   }
 });
+
+e2e('retains the Overview and marks the foreground connection unavailable after an event refresh fails', { timeout: 60_000 }, async ({ page }) => {
+  await buildWorkbench();
+  const project = await createProjectFixture();
+  const server = await startDevServer({
+    assets: createWorkbenchAssetSource({ root: workbenchAssets }),
+    open: false,
+    port: 0,
+    root: project.root,
+  });
+  const pageErrors: Error[] = [];
+  page.on('pageerror', (error) => pageErrors.push(error));
+  try {
+    await page.goto(server.url);
+    await expect(page.getByRole('heading', { name: 'Project overview' })).toBeVisible({ timeout: browserTimeout });
+    await page.route('**/api/project/status', (route) => route.fulfill({
+      body: JSON.stringify({ diagnostic: { code: 'AB8007', message: 'Request could not be completed.' } }),
+      contentType: 'application/json',
+      status: 500,
+    }));
+
+    await page.getByRole('button', { name: 'Rebuild' }).click();
+
+    await expect(page.getByRole('status')).toContainText('Foreground server unavailable', { timeout: browserTimeout });
+    await expect(page.getByRole('heading', { name: 'Project overview' })).toBeVisible({ timeout: browserTimeout });
+    await expect(page.locator('.epoch-row--active')).toBeVisible({ timeout: browserTimeout });
+    expect(pageErrors).toEqual([]);
+  } finally {
+    await server.close();
+    await removeProjectFixture(project.root);
+  }
+});

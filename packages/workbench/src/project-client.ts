@@ -11,6 +11,7 @@ export interface EventSourceLike {
 }
 
 export type EventSourceFactory = (url: string) => EventSourceLike;
+export type ProjectClientErrorListener = (reason: unknown) => void;
 
 export interface ProjectClientOptions {
   readonly events?: EventSourceFactory;
@@ -79,10 +80,12 @@ export class ProjectClient {
   readonly #fetch: typeof fetch;
   #closed = false;
   #eventSource: EventSourceLike | undefined;
+  #eventRefreshPromise: Promise<void> | undefined;
+  #eventRefreshQueued = false;
   #lastEventId = 0;
+  #errorListener: ProjectClientErrorListener | undefined;
   #listener: ((status: ProjectStatus) => void) | undefined;
   #refreshPromise: Promise<ProjectStatus> | undefined;
-  #refreshQueued = false;
   #session: ProjectSessionResponse | undefined;
 
   constructor(options: ProjectClientOptions = {}) {
@@ -94,11 +97,17 @@ export class ProjectClient {
     return this.#lastEventId;
   }
 
-  async connect(listener: (status: ProjectStatus) => void): Promise<ProjectStatus> {
+  async connect(listener: (status: ProjectStatus) => void, onError?: ProjectClientErrorListener): Promise<ProjectStatus> {
     if (this.#closed) throw new ProjectClientError('Workbench client is closed.');
     this.#listener = listener;
+    this.#errorListener = onError;
     const status = await this.refresh();
+    if (this.#closed) return status;
     const eventSource = this.#events('/api/project/events');
+    if (this.#closed) {
+      eventSource.close();
+      return status;
+    }
     this.#eventSource?.close();
     this.#eventSource = eventSource;
     for (const type of projectEventTypes) eventSource.addEventListener(type, (event) => this.#onEvent(event));
@@ -106,19 +115,12 @@ export class ProjectClient {
   }
 
   async refresh(): Promise<ProjectStatus> {
-    if (this.#refreshPromise !== undefined) {
-      this.#refreshQueued = true;
-      return this.#refreshPromise;
-    }
+    if (this.#refreshPromise !== undefined) return this.#refreshPromise;
     const operation = this.#readStatus().then((status) => {
-      this.#listener?.(status);
+      if (!this.#closed) this.#listener?.(status);
       return status;
     }).finally(() => {
       this.#refreshPromise = undefined;
-      if (this.#refreshQueued && !this.#closed) {
-        this.#refreshQueued = false;
-        void this.refresh();
-      }
     });
     this.#refreshPromise = operation;
     return operation;
@@ -142,8 +144,11 @@ export class ProjectClient {
 
   close(): void {
     this.#closed = true;
+    this.#eventRefreshQueued = false;
     this.#eventSource?.close();
     this.#eventSource = undefined;
+    this.#errorListener = undefined;
+    this.#listener = undefined;
   }
 
   async #readStatus(): Promise<ProjectStatus> {
@@ -162,6 +167,39 @@ export class ProjectClient {
   #onEvent(event: EventSourceMessage): void {
     const sequence = parseSequence(event);
     if (sequence !== undefined) this.#lastEventId = Math.max(this.#lastEventId, sequence);
-    void this.refresh();
+    this.#queueEventRefresh();
+  }
+
+  #queueEventRefresh(): void {
+    if (this.#closed) return;
+    this.#eventRefreshQueued = true;
+    if (this.#eventRefreshPromise !== undefined) return;
+    const operation = this.#refreshEvents().finally(() => {
+      this.#eventRefreshPromise = undefined;
+      if (this.#eventRefreshQueued && !this.#closed) this.#queueEventRefresh();
+    });
+    this.#eventRefreshPromise = operation;
+  }
+
+  async #refreshEvents(): Promise<void> {
+    while (this.#eventRefreshQueued && !this.#closed) {
+      this.#eventRefreshQueued = false;
+      try {
+        await this.refresh();
+      } catch (error) {
+        this.#eventRefreshQueued = false;
+        this.#reportError(error);
+        return;
+      }
+    }
+  }
+
+  #reportError(reason: unknown): void {
+    if (this.#closed) return;
+    try {
+      this.#errorListener?.(reason);
+    } catch {
+      // Consumer callbacks must not reintroduce an unhandled background rejection.
+    }
   }
 }

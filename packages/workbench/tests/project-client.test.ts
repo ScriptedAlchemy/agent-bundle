@@ -11,6 +11,12 @@ interface Listener {
   readonly type: string;
 }
 
+interface Deferred<Value> {
+  readonly promise: Promise<Value>;
+  reject(reason: unknown): void;
+  resolve(value: Value): void;
+}
+
 class RecordingEventSource implements EventSourceLike {
   readonly listeners: Listener[] = [];
   closed = false;
@@ -49,6 +55,16 @@ const status = (state: 'active' | 'missing' | 'stale' = 'active') => ({
   source: { diagnostics: [], revision: 'revision-1', state: 'ready' },
 });
 
+const deferred = <Value>(): Deferred<Value> => {
+  let reject!: (reason: unknown) => void;
+  let resolve!: (value: Value) => void;
+  const promise = new Promise<Value>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, reject, resolve };
+};
+
 it('calls the default browser fetch with its global receiver', async () => {
   const originalFetch = globalThis.fetch;
   const browserFetch = async function (this: typeof globalThis, input: RequestInfo | URL): Promise<Response> {
@@ -62,6 +78,43 @@ it('calls the default browser fetch with its global receiver', async () => {
   } finally {
     Object.defineProperty(globalThis, 'fetch', { configurable: true, value: originalFetch });
   }
+});
+
+it('does not publish initial status or retain an event stream when closed during the initial fetch', async () => {
+  const response = deferred<Response>();
+  const stream = new RecordingEventSource();
+  const observed: string[] = [];
+  let eventStreams = 0;
+  const client = new ProjectClient({
+    events: () => {
+      eventStreams += 1;
+      return stream;
+    },
+    fetch: async () => response.promise,
+  });
+
+  const connecting = client.connect((next) => observed.push(next.artifact.state));
+  client.close();
+  response.resolve(Response.json({ status: status() }));
+
+  await expect(connecting).resolves.toMatchObject({ artifact: { state: 'active' } });
+  expect(observed).toEqual([]);
+  expect(eventStreams).toBe(0);
+  expect(stream.closed).toBe(false);
+});
+
+it('closes an event stream constructed concurrently with client shutdown', async () => {
+  const stream = new RecordingEventSource();
+  const client = new ProjectClient({
+    events: () => {
+      client.close();
+      return stream;
+    },
+    fetch: async () => Response.json({ status: status() }),
+  });
+
+  await expect(client.connect(() => undefined)).resolves.toMatchObject({ artifact: { state: 'active' } });
+  expect(stream.closed).toBe(true);
 });
 
 it('refreshes Overview state after live named events and keeps the browser EventSource transport open', async () => {
@@ -91,6 +144,80 @@ it('refreshes Overview state after live named events and keeps the browser Event
   expect(stream.closed).toBe(false);
   client.close();
   expect(stream.closed).toBe(true);
+});
+
+it('reports one failed event refresh without an unhandled rejection and retains the last status', async () => {
+  const stream = new RecordingEventSource();
+  const errors: unknown[] = [];
+  const observed: string[] = [];
+  const unhandled: unknown[] = [];
+  const onUnhandled = (reason: unknown): void => { unhandled.push(reason); };
+  let requests = 0;
+  process.on('unhandledRejection', onUnhandled);
+  try {
+    const client = new ProjectClient({
+      events: () => stream,
+      fetch: async () => {
+        requests += 1;
+        return requests === 1
+          ? Response.json({ status: status() })
+          : new Response(JSON.stringify({ diagnostic: { code: 'AB8007', message: 'Request could not be completed.' } }), { status: 500 });
+      },
+    });
+
+    await client.connect((next) => observed.push(next.artifact.state), (reason) => errors.push(reason));
+    stream.emit('artifact.status', {
+      data: JSON.stringify({ payload: status().artifact, sequence: 7, type: 'artifact.status' }),
+      lastEventId: '7',
+    });
+    stream.emit('source.changed', {
+      data: JSON.stringify({ payload: status().source, sequence: 8, type: 'source.changed' }),
+      lastEventId: '8',
+    });
+    await new Promise((resolvePromise) => setImmediate(resolvePromise));
+    await new Promise((resolvePromise) => setImmediate(resolvePromise));
+
+    expect(observed).toEqual(['active']);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatchObject({ message: 'Workbench request failed with HTTP 500.' });
+    expect(unhandled).toEqual([]);
+  } finally {
+    process.off('unhandledRejection', onUnhandled);
+  }
+});
+
+it('suppresses a late event-refresh error after close', async () => {
+  const stream = new RecordingEventSource();
+  const response = deferred<Response>();
+  const errors: unknown[] = [];
+  const unhandled: unknown[] = [];
+  const onUnhandled = (reason: unknown): void => { unhandled.push(reason); };
+  let requests = 0;
+  process.on('unhandledRejection', onUnhandled);
+  try {
+    const client = new ProjectClient({
+      events: () => stream,
+      fetch: async () => {
+        requests += 1;
+        return requests === 1 ? Response.json({ status: status() }) : response.promise;
+      },
+    });
+
+    await client.connect(() => undefined, (reason) => errors.push(reason));
+    stream.emit('artifact.status', {
+      data: JSON.stringify({ payload: status().artifact, sequence: 7, type: 'artifact.status' }),
+      lastEventId: '7',
+    });
+    client.close();
+    response.resolve(new Response(null, { status: 500 }));
+    await new Promise((resolvePromise) => setImmediate(resolvePromise));
+    await new Promise((resolvePromise) => setImmediate(resolvePromise));
+
+    expect(errors).toEqual([]);
+    expect(unhandled).toEqual([]);
+  } finally {
+    process.off('unhandledRejection', onUnhandled);
+  }
 });
 
 it('bootstraps a same-session token before posting an explicit rebuild through the shared typed route', async () => {

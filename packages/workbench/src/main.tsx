@@ -20,6 +20,9 @@ const stateLabel = (state: string): string => state.replaceAll('-', ' ');
 const sourceFor = (diagnostic: Diagnostic): string =>
   diagnostic.sourcePath ?? diagnostic.generatedPath ?? diagnostic.target ?? 'Project';
 
+const errorMessage = (reason: unknown): string =>
+  reason instanceof Error ? reason.message : 'Foreground project state could not be refreshed.';
+
 const StateMark = ({ state }: { readonly state: string }) => (
   <span aria-hidden="true" className={`state-mark state-mark--${state}`}>{
     state === 'active' || state === 'ready' || state === 'built' ? '✓'
@@ -28,8 +31,9 @@ const StateMark = ({ state }: { readonly state: string }) => (
   }</span>
 );
 
-const Overview = ({ client, status, onStatus }: {
+const Overview = ({ client, connectionError, status, onStatus }: {
   readonly client: ProjectClient;
+  readonly connectionError?: string;
   readonly onStatus: (status: ProjectStatus) => void;
   readonly status: ProjectStatus;
 }) => {
@@ -62,7 +66,9 @@ const Overview = ({ client, status, onStatus }: {
         <header className="topbar">
           <span className="menu-glyph" aria-hidden="true">☰</span>
           <span className="topbar-title">Project workbench</span>
-          <span className="connection"><span aria-hidden="true" />Foreground server connected</span>
+          <span className={`connection${connectionError === undefined ? '' : ' connection--error'}`} role="status">
+            <span aria-hidden="true" />{connectionError === undefined ? 'Foreground server connected' : `Foreground server unavailable: ${connectionError}`}
+          </span>
         </header>
         <div className="page-content">
           <div className="page-heading">
@@ -132,19 +138,35 @@ const Overview = ({ client, status, onStatus }: {
 
 const Workbench = () => {
   const client = useRef<ProjectClient>();
+  const [connectionError, setConnectionError] = useState<string>();
   const [error, setError] = useState<string>();
   const [status, setStatus] = useState<ProjectStatus>();
 
   useEffect(() => {
     const next = new ProjectClient();
+    let mounted = true;
     client.current = next;
-    void next.connect(setStatus).catch((reason: unknown) => {
-      setError(reason instanceof Error ? reason.message : 'Project status could not be loaded.');
+    void next.connect(
+      (nextStatus) => {
+        if (!mounted) return;
+        setConnectionError(undefined);
+        setStatus(nextStatus);
+      },
+      (reason) => {
+        if (mounted) setConnectionError(errorMessage(reason));
+      },
+    ).catch((reason: unknown) => {
+      if (mounted) setError(errorMessage(reason));
     });
-    return () => next.close();
+    return () => {
+      mounted = false;
+      next.close();
+    };
   }, []);
 
-  if (status !== undefined && client.current !== undefined) return <Overview client={client.current} onStatus={setStatus} status={status} />;
+  if (status !== undefined && client.current !== undefined) {
+    return <Overview client={client.current} connectionError={connectionError} onStatus={setStatus} status={status} />;
+  }
   return <main className="loading-state" aria-live="polite"><strong>Loading project state…</strong>{error === undefined ? undefined : <p role="alert">{error}</p>}</main>;
 };
 

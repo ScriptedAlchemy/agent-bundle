@@ -21,6 +21,8 @@ button:focus-visible, a:focus-visible { outline: 3px solid #72a6ff; outline-offs
 .topbar-title { font-size: 16px; font-weight: 650; }
 .connection { align-items: center; color: #293142; display: flex; font-size: 14px; gap: 9px; margin-left: auto; }
 .connection > span { background: #16803a; border-radius: 50%; display: block; height: 9px; width: 9px; }
+.connection--error { color: #b31b23; }
+.connection--error > span { background: #c01d26; }
 .page-content { margin: 0 auto; max-width: 1320px; padding: 35px 34px 64px; }
 .page-heading { margin-bottom: 30px; }
 h1 { font-size: clamp(31px, 4vw, 40px); letter-spacing: -0.055em; line-height: 1.08; margin: 0; }
