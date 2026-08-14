@@ -56,7 +56,7 @@ it('plans a schema-valid skills-only plugin with every discovered resource', () 
   const plan = adapter.plan(plugin());
 
   expect(registry.defaultTargetNames()).toEqual(['portable']);
-  expect(registry.names()).toEqual(['portable']);
+  expect(registry.names()).toEqual(['portable', 'codex', 'claude']);
   expect(plan.diagnostics).toEqual([]);
   expect(plan.entries).toEqual([
     {
@@ -281,7 +281,7 @@ it('rejects duplicate adapters without exposing mutable registry snapshots', () 
   expect(() => registry.register(portableAdapter)).toThrow('already registered');
   expect(() => names.push('other')).toThrow();
   expect(() => defaults.push('other')).toThrow();
-  expect(registry.names()).toEqual(['portable']);
+  expect(registry.names()).toEqual(['portable', 'codex', 'claude']);
   expect(registry.defaultTargetNames()).toEqual(['portable']);
   expect(Object.isFrozen(registry.get('portable').capabilities)).toBe(true);
   expect(new TargetRegistry().has('portable')).toBe(false);

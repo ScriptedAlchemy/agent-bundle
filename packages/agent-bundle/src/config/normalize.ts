@@ -80,6 +80,7 @@ export const normalizeProject = async (
   });
   const description = loaded.config.plugin.description;
   const model: NormalizedPlugin = {
+    ...(loaded.config.marketplace === true ? { marketplace: true as const } : {}),
     metadata: {
       ...(typeof description === 'string' ? { description } : {}),
       id: `plugin:${loaded.config.plugin.name}`,

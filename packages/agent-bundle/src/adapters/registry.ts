@@ -1,4 +1,6 @@
 import type { NormalizationTargetRegistry } from '../core/types.ts';
+import { claudeAdapter } from './claude.ts';
+import { codexAdapter } from './codex.ts';
 import { portableAdapter } from './portable.ts';
 import type { TargetAdapter } from './types.ts';
 
@@ -42,4 +44,7 @@ export class TargetRegistry implements NormalizationTargetRegistry {
 }
 
 export const createDefaultRegistry = (): TargetRegistry =>
-  new TargetRegistry().register(portableAdapter, { default: true });
+  new TargetRegistry()
+    .register(portableAdapter, { default: true })
+    .register(codexAdapter)
+    .register(claudeAdapter);

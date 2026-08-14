@@ -1,0 +1,22 @@
+{
+  "evidence": {
+    "cliHelp": "cli-help.txt",
+    "source": "https://github.com/openai/codex/blob/main/codex-rs/skills/src/assets/samples/plugin-creator/references/plugin-json-spec.md"
+  },
+  "mcp": {
+    "sse": false,
+    "stdio": true,
+    "streamableHttp": true
+  },
+  "nativePaths": {
+    "manifest": ".codex-plugin/plugin.json",
+    "marketplace": ".agents/plugins/marketplace.json",
+    "mcp": ".mcp.json"
+  },
+  "observedCliVersion": "0.147.0",
+  "pathTokens": {
+    "pluginData": "rejected",
+    "pluginRoot": "leading-only, requires cwd ./",
+    "workspaceRoot": "rejected"
+  }
+}

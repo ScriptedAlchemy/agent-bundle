@@ -6,6 +6,7 @@ export interface AgentBundlePluginConfig {
 }
 
 export interface AgentBundleConfig {
+  marketplace?: boolean;
   plugin: AgentBundlePluginConfig;
   skills?: string[];
   targets?: string[];
@@ -75,6 +76,7 @@ export interface NormalizedScript {
 }
 
 export interface NormalizedPlugin {
+  readonly marketplace?: true;
   readonly metadata: NormalizedMetadata;
   readonly mcpServers: readonly NormalizedMcpServer[];
   readonly scripts: readonly NormalizedScript[];

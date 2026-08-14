@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-bundle.dev/schemas/claude/2.1.232/marketplace.schema.json",
+  "additionalProperties": false,
+  "properties": {
+    "name": { "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$", "type": "string" },
+    "owner": {
+      "additionalProperties": false,
+      "properties": { "name": { "minLength": 1, "type": "string" } },
+      "required": ["name"],
+      "type": "object"
+    },
+    "plugins": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "description": { "minLength": 1, "type": "string" },
+          "name": { "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$", "type": "string" },
+          "source": { "pattern": "^\\./", "type": "string" },
+          "version": { "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?(?:\\+[0-9A-Za-z.-]+)?$", "type": "string" }
+        },
+        "required": ["name", "source", "description", "version"],
+        "type": "object"
+      },
+      "minItems": 1,
+      "type": "array"
+    }
+  },
+  "required": ["name", "owner", "plugins"],
+  "type": "object"
+}

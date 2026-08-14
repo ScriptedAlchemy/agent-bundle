@@ -1,0 +1,256 @@
+import { Ajv2020, type ErrorObject } from 'ajv/dist/2020.js';
+
+import { stableJson } from '../core/digest.ts';
+import type { Diagnostic } from '../core/diagnostics.ts';
+import { pathTokens, type NormalizedMcpServer, type NormalizedPlugin } from '../core/types.ts';
+import capabilityTable from './capabilities/codex-0.147.0.json' with { type: 'json' };
+import marketplaceSchema from './schemas/codex/marketplace.schema.json' with { type: 'json' };
+import mcpSchema from './schemas/codex/mcp.schema.json' with { type: 'json' };
+import pluginSchema from './schemas/codex/plugin.schema.json' with { type: 'json' };
+import type { TargetAdapter, TargetArtifactEntry, TargetArtifactPlan } from './types.ts';
+
+const codexName = 'codex';
+const validator = new Ajv2020({ allErrors: true, strict: false, validateFormats: false });
+const validatePlugin = validator.compile(pluginSchema);
+const validateMcp = validator.compile(mcpSchema);
+const validateMarketplace = validator.compile(marketplaceSchema);
+
+const errorDiagnostic = (code: string, message: string): Diagnostic => ({
+  code,
+  message,
+  severity: 'error',
+  target: codexName,
+});
+
+const schemaDiagnostics = (
+  document: 'plugin' | 'mcp' | 'marketplace',
+  valid: boolean,
+  errors: readonly ErrorObject[] | null | undefined,
+): Diagnostic[] => valid
+  ? []
+  : [errorDiagnostic(
+      `codex.schema.${document}`,
+      `Codex ${document}.json is invalid: ${(errors ?? [])
+        .map((error) => `${error.instancePath || '/'}: ${error.message ?? 'schema validation failed'}`)
+        .join('; ') || 'schema validation failed'}.`,
+    )];
+
+const selectedForCodex = (targets: readonly string[]): boolean => targets.includes(codexName);
+
+const sortedEntries = (entries: TargetArtifactEntry[]): readonly TargetArtifactEntry[] => Object.freeze(
+  entries.sort((left, right) => left.relativePath < right.relativePath ? -1 : left.relativePath > right.relativePath ? 1 : 0),
+);
+
+const hasLeadingPluginRoot = (value: string): boolean =>
+  value === pathTokens.pluginRoot || value.startsWith(`${pathTokens.pluginRoot}/`);
+
+const relativePluginPath = (value: string): string => {
+  const rest = value.slice(pathTokens.pluginRoot.length).replace(/^\/+/, '');
+  return rest.length === 0 ? './' : `./${rest}`;
+};
+
+const convertCodexValue = (
+  value: string,
+  location: string,
+  hasPluginRootCwd: boolean,
+  diagnostics: Diagnostic[],
+): string | undefined => {
+  if (value.includes(pathTokens.pluginData)) {
+    diagnostics.push(errorDiagnostic(
+      `codex.mcp.token.plugin-data.${location}`,
+      `Codex MCP ${location} cannot use the plugin-data path token.`,
+    ));
+    return undefined;
+  }
+  if (value.includes(pathTokens.workspaceRoot)) {
+    diagnostics.push(errorDiagnostic(
+      `codex.mcp.token.workspace-root.${location}`,
+      `Codex MCP ${location} cannot use the workspace-root path token.`,
+    ));
+    return undefined;
+  }
+  if (!value.includes(pathTokens.pluginRoot)) return value;
+  if (!hasLeadingPluginRoot(value)) {
+    diagnostics.push(errorDiagnostic(
+      `codex.mcp.token.plugin-root.embedded.${location}`,
+      `Codex MCP ${location} embeds the plugin-root path token and cannot represent it natively.`,
+    ));
+    return undefined;
+  }
+  if (!hasPluginRootCwd) {
+    diagnostics.push(errorDiagnostic(
+      `codex.mcp.token.plugin-root.cwd.required.${location}`,
+      `Codex MCP ${location} needs an explicit plugin-root cwd before it can be made relative.`,
+    ));
+    return undefined;
+  }
+  return relativePluginPath(value);
+};
+
+const planMcpServer = (
+  server: NormalizedMcpServer,
+): { readonly diagnostics: readonly Diagnostic[]; readonly value?: Record<string, unknown> } => {
+  const diagnostics: Diagnostic[] = [];
+  if (server.transport === 'sse') {
+    diagnostics.push(errorDiagnostic(
+      'codex.mcp.transport.sse',
+      `Codex CLI ${capabilityTable.observedCliVersion} does not support SSE MCP server "${server.name}".`,
+    ));
+    return { diagnostics };
+  }
+
+  if (server.transport === 'stdio') {
+    if (server.command === undefined) {
+      diagnostics.push(errorDiagnostic(
+        'codex.mcp.command.required',
+        `Codex MCP server "${server.name}" requires a command.`,
+      ));
+      return { diagnostics };
+    }
+
+    const hasPluginRootCwd = server.cwd === pathTokens.pluginRoot || server.cwd === './';
+    let cwd: string | undefined;
+    if (server.cwd !== undefined) {
+      if (server.cwd === pathTokens.pluginRoot) {
+        cwd = './';
+      } else {
+        cwd = convertCodexValue(server.cwd, 'cwd', false, diagnostics);
+      }
+    }
+    const command = convertCodexValue(server.command, 'command', hasPluginRootCwd, diagnostics);
+    const args = server.args?.map((argument, index) =>
+      convertCodexValue(argument, `args[${index}]`, hasPluginRootCwd, diagnostics));
+    const env = server.env === undefined
+      ? undefined
+      : Object.fromEntries(Object.entries(server.env).map(([key, value]) => {
+          if (key.includes(pathTokens.pluginRoot) || key.includes(pathTokens.pluginData) || key.includes(pathTokens.workspaceRoot)) {
+            diagnostics.push(errorDiagnostic(
+              'codex.mcp.token.env.key',
+              `Codex MCP environment key "${key}" cannot use a path token.`,
+            ));
+          }
+          return [key, convertCodexValue(value, `env.${key}`, hasPluginRootCwd, diagnostics)];
+        }));
+
+    if (diagnostics.length > 0 || command === undefined || args?.some((value) => value === undefined) || Object.values(env ?? {}).some((value) => value === undefined)) {
+      return { diagnostics };
+    }
+    return {
+      diagnostics,
+      value: {
+        ...(args === undefined ? {} : { args }),
+        command,
+        ...(cwd === undefined ? {} : { cwd }),
+        ...(env === undefined ? {} : { env }),
+        type: 'stdio',
+      },
+    };
+  }
+
+  if (server.url === undefined) {
+    diagnostics.push(errorDiagnostic('codex.mcp.url.required', `Codex MCP server "${server.name}" requires a URL.`));
+    return { diagnostics };
+  }
+  const url = convertCodexValue(server.url, 'url', false, diagnostics);
+  const headers = server.headers === undefined
+    ? undefined
+    : Object.fromEntries(Object.entries(server.headers).map(([key, value]) => {
+        if (key.includes(pathTokens.pluginRoot) || key.includes(pathTokens.pluginData) || key.includes(pathTokens.workspaceRoot)) {
+          diagnostics.push(errorDiagnostic('codex.mcp.token.headers.key', `Codex MCP header key "${key}" cannot use a path token.`));
+        }
+        return [key, convertCodexValue(value, `headers.${key}`, false, diagnostics)];
+      }));
+  if (diagnostics.length > 0 || url === undefined || Object.values(headers ?? {}).some((value) => value === undefined)) {
+    return { diagnostics };
+  }
+  return {
+    diagnostics,
+    value: {
+      ...(headers === undefined ? {} : { headers }),
+      type: 'streamable-http',
+      url,
+    },
+  };
+};
+
+const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
+  const diagnostics: Diagnostic[] = [];
+  const servers: Record<string, Record<string, unknown>> = Object.create(null) as Record<string, Record<string, unknown>>;
+  for (const server of model.mcpServers) {
+    if (!selectedForCodex(server.targets)) continue;
+    const serverPlan = planMcpServer(server);
+    diagnostics.push(...serverPlan.diagnostics);
+    if (serverPlan.value !== undefined) servers[server.name] = serverPlan.value;
+  }
+
+  const mcp = Object.keys(servers).length === 0 ? undefined : { mcpServers: servers };
+  if (mcp !== undefined) diagnostics.push(...schemaDiagnostics('mcp', validateMcp(mcp), validateMcp.errors));
+
+  const description = model.metadata.description ?? model.metadata.name;
+  const plugin = {
+    author: { name: model.metadata.name },
+    description,
+    interface: {
+      category: 'Productivity',
+      displayName: model.metadata.name,
+      longDescription: description,
+      shortDescription: description,
+    },
+    ...(mcp === undefined ? {} : { mcpServers: './.mcp.json' }),
+    name: model.metadata.name,
+    skills: './skills/',
+    version: model.metadata.version,
+  };
+  diagnostics.push(...schemaDiagnostics('plugin', validatePlugin(plugin), validatePlugin.errors));
+
+  const marketplace = model.marketplace !== true ? undefined : {
+    interface: { displayName: model.metadata.name },
+    name: `${model.metadata.name}-marketplace`,
+    plugins: [{
+      category: 'Productivity',
+      name: model.metadata.name,
+      policy: { authentication: 'ON_INSTALL', installation: 'AVAILABLE' },
+      source: { path: './', source: 'local' },
+    }],
+  };
+  if (marketplace !== undefined) {
+    diagnostics.push(...schemaDiagnostics('marketplace', validateMarketplace(marketplace), validateMarketplace.errors));
+  }
+
+  const entries: TargetArtifactEntry[] = [{
+    content: `${stableJson(plugin)}\n`,
+    kind: 'write',
+    relativePath: '.codex-plugin/plugin.json',
+  }];
+  if (mcp !== undefined && validateMcp(mcp)) {
+    entries.push({ content: `${stableJson(mcp)}\n`, kind: 'write', relativePath: '.mcp.json' });
+  }
+  if (marketplace !== undefined && validateMarketplace(marketplace)) {
+    entries.push({ content: `${stableJson(marketplace)}\n`, kind: 'write', relativePath: '.agents/plugins/marketplace.json' });
+  }
+  for (const skill of model.skills) {
+    if (!selectedForCodex(skill.targets)) continue;
+    for (const resource of skill.resources) {
+      entries.push({
+        bytes: resource.bytes,
+        kind: 'copy',
+        relativePath: `skills/${skill.name}/${resource.relativePath}`,
+        source: resource.source,
+      });
+    }
+  }
+
+  return Object.freeze({ diagnostics: Object.freeze(diagnostics), entries: sortedEntries(entries) });
+};
+
+export const codexAdapter: TargetAdapter = Object.freeze({
+  capabilities: Object.freeze({
+    marketplace: true,
+    mcp: capabilityTable.mcp.stdio && capabilityTable.mcp.streamableHttp,
+    sse: capabilityTable.mcp.sse,
+    skills: capabilityTable.plugin.skills,
+  }),
+  name: codexName,
+  plan,
+  validateModel: (model: NormalizedPlugin) => [...plan(model).diagnostics],
+});

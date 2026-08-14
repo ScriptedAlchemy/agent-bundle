@@ -1,0 +1,19 @@
+{
+  "host": "codex",
+  "mcp": {
+    "sse": false,
+    "stdio": true,
+    "streamableHttp": true
+  },
+  "observedCliVersion": "0.147.0",
+  "plugin": {
+    "manifest": ".codex-plugin/plugin.json",
+    "marketplace": ".agents/plugins/marketplace.json",
+    "skills": true
+  },
+  "tokens": {
+    "pluginData": false,
+    "pluginRoot": "relative-with-plugin-root-cwd",
+    "workspaceRoot": false
+  }
+}
