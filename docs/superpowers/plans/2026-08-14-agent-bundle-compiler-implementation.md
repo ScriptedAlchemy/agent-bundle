@@ -271,7 +271,9 @@ expect(new DiagnosticBag([error]).throwIfErrors).toThrow(DiagnosticError);
 
 - [ ] **Step 2: Run the test and confirm no build pipeline exists**
 
-- [ ] **Step 3: Implement generated entry sources and invoke `createRslib({ config })`, `rslib.build()`, and `close()`**
+- [ ] **Step 3: Implement generated entry sources and invoke `createRslib({ config })` plus the public non-watch `rslib.build()` lifecycle**
+
+  Rslib 0.23's `RslibInstance` exposes no `close()` method; non-watch `build()` owns its internal Rsbuild compiler cleanup. Do not invent a close call or reach into the private Rsbuild instance.
 
 - [ ] **Step 4: Implement staged emission, artifact validation, deterministic manifest hashing, and atomic publication**
 
