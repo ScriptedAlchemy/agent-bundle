@@ -318,12 +318,23 @@ The workbench provides:
   and logging messages;
 - invocation history, replay, config export, raw protocol frames, and promotion to a draft eval.
 
-MCP Apps/UI widgets use the same selected session and artifact binding. Tool metadata
-(`_meta.ui.resourceUri` and compatible `_meta["openai/outputTemplate"]`) selects a statically
-registered UI resource; the service performs `resources/list`/`resources/read`, serves the emitted
-client assets, and the browser renders them through the MCP Apps bridge. Structured content,
-resource links, embedded resources, result metadata, CSP, and widget hints remain byte-faithful to
-the server contract. The workbench does not reinterpret an arbitrary web URL as a widget.
+MCP Apps use the same selected session and artifact binding. Standard `_meta.ui.resourceUri`
+selects the View; `_meta["openai/outputTemplate"]` is accepted only as a compatibility alias. The
+service calls `resources/read` for the referenced `ui://` URI and requires
+`text/html;profile=mcp-app`; it does not reinterpret an arbitrary web URL or artifact file as a
+widget. The browser renders the returned HTML inside a different-origin sandbox proxy and uses the
+official MCP Apps app-bridge package for the `ui/initialize` lifecycle, tool input/results,
+`tools/call`, resource reads, model-context updates, display-mode requests, logging, and teardown.
+The bridge forwards app tool calls only through the already bound MCP session.
+
+The workbench advertises the pinned `io.modelcontextprotocol/ui` extension and supported MIME type.
+It preserves structured content, resource links, embedded resources, result metadata, CSP, widget
+hints, visibility, and host context without translating them into an Agent Bundle format. CSP is
+enforced in the sandbox proxy, with restrictive defaults when metadata is absent. Theme, container
+dimensions, display modes, and safe-area insets come from host context so the same fixture can be
+tested in desktop iframe and mobile-WebView-sized layouts. OpenAI-only `window.openai` extensions
+are outside the portable workbench bridge; fixtures may feature-detect them and must retain a
+standard fallback.
 
 The initial client advertises tools, resources, prompts, progress, and logging. Unsupported client
 features are shown as unsupported and return a defined error instead of hanging. Protocol versions
@@ -805,6 +816,13 @@ an ambient output directory from modification time.
 - generated stdio MCP initialization and catalog operations;
 - input forms and raw JSON produce identical calls;
 - process restart binds the selected epoch;
+- a generated MCP App is built as one stable, self-contained HTML resource and is returned by the
+  owning generated server through `resources/read` with `text/html;profile=mcp-app`;
+- the sandbox proxy completes `ui/initialize`, delivers the original input/result, permits one
+  allowed same-server `tools/call`, applies CSP, and tears down without leaking a session;
+- the same MCP App fixture renders through the standard bridge under ChatGPT-compatible and
+  Claude-compatible host contexts, while its ordinary text/structured fallback remains usable
+  without a renderer;
 - the vendored Inspector subset retains its selected upstream fixtures and license metadata;
 - Inspector-derived controls execute through Agent Bundle's epoch-bound MCP session service;
 - exported standalone-Inspector config contains the same resolved command and non-secret env;
@@ -861,7 +879,7 @@ Inspector source.
 2. Rsbuild React build, contributor HMR path, and published foreground server.
 3. Skill browser and Markdown renderer.
 4. Native MCP session service, integrated Inspector-derived components, and generated-hook
-   simulator.
+   simulator, including the standard MCP Apps sandbox bridge.
 5. Whole-plugin playground, ordered trace, replay, and promotion to a draft eval.
 6. Deterministic eval definitions, run store, graders, and CLI.
 7. Claude native harness.
@@ -895,6 +913,8 @@ native model trials do not precede deterministic artifact checks.
 12. JSON and JSONL files are the first run store; there is no database.
 13. The optional agent-facing MCP shares application services and lives only for the foreground
     dev session.
+14. MCP Apps use the official standard bridge and a different-origin sandbox; host-specific UI
+    APIs are optional capability-detected extensions, not compiler forks.
 
 ## Research basis
 
@@ -914,6 +934,12 @@ native model trials do not precede deterministic artifact checks.
 - [MCP Inspector](https://modelcontextprotocol.io/docs/tools/inspector)
 - [MCP Inspector source and architecture](https://github.com/modelcontextprotocol/inspector)
 - [MCP debugging guide](https://modelcontextprotocol.io/docs/tools/debugging)
+- [MCP Apps specification and SDK](https://github.com/modelcontextprotocol/ext-apps)
+- [OpenAI: Add UI to an MCP server](https://developers.openai.com/plugins/build/chatgpt-ui)
+- [Claude: Building cross-platform MCP Apps](https://claude.com/docs/connectors/building/mcp-apps/cross-compatibility)
+- [Claude MCP Apps design guidelines](https://claude.com/docs/connectors/building/mcp-apps/design-guidelines)
+- [Rsbuild inline static assets](https://rsbuild.rs/guide/optimization/inline-assets)
+- [Rsbuild filename hashing](https://rsbuild.rs/config/output/filename-hash)
 - [Anthropic: Demystifying evals for AI agents](https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents)
 - [Inspect AI](https://inspect.aisi.org.uk/)
 - [Promptfoo](https://www.promptfoo.dev/docs/intro/)
