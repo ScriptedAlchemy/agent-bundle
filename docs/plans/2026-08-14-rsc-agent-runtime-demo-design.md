@@ -1,0 +1,291 @@
+# RSC Agent Runtime Demo Design
+
+**Status:** Approved experiment
+
+**Date:** 2026-08-14
+
+## Summary
+
+Build a self-contained example that proves an agent plugin can feel like one React application even
+when lifecycle hooks are fresh operating-system processes. React Server Components provide the
+author-facing render model and the Flight stream/RPC boundary. A file-backed runtime kernel, rather
+than a JavaScript singleton, provides authoritative cross-process state.
+
+The demo is deliberately outside `packages/agent-bundle`. It explores a possible future authoring
+model without changing the compiler's public API or claiming the experiment is production-ready.
+
+The example is an edit timeline. Claude Code and Codex `PostToolUse` hooks record file edits. MCP
+tools read the same state, can render protocol-native multimodal results through RSC, and expose a
+React MCP App that visualizes the timeline and refreshes without remounting.
+
+## Product thesis
+
+The useful React analogy is request rendering, not a persistent browser reconciler:
+
+1. A host starts the compiled hook command and sends native JSON over stdin.
+2. The hook adapter normalizes that request and starts an RSC worker.
+3. The worker performs the route action, reads or writes external state, and renders a Flight stream.
+4. The adapter decodes the stream and lowers the React tree to the host's native hook JSON.
+5. The process exits. The next hook invocation starts clean and reconstructs its view from the kernel.
+
+There is no reliance on Node's module cache. React supplies composition, request context, streaming,
+and a typed result tree; storage supplies continuity.
+
+## Architecture
+
+```text
+Claude/Codex hook JSON
+          |
+          v
+  host input adapter
+          |
+          v
+  RSC worker process ---- action ----> file-backed runtime kernel
+          |
+       Flight stream
+          |
+          v
+  Node Flight decoder
+          |
+          v
+  host output adapter ---- stdout JSON ----> Claude/Codex
+
+Claude/Codex/ChatGPT MCP client
+          |
+          v
+  statically registered MCP server ---- read ----> same runtime kernel
+          |                  |
+          |                  +---- RSC result route ---- Flight ---- native MCP blocks
+          |
+          +---- ui:// resource ----> client React MCP App iframe
+```
+
+The system has four explicit planes:
+
+| Plane | Responsibility | Discovery time | Lifetime |
+| --- | --- | --- | --- |
+| Definition | Hook matchers, MCP schemas, resource URIs, annotations | Build/startup | Static |
+| Kernel | Durable edit events and snapshots | Per request/tool call | Cross-process |
+| RSC render | Hook context and optional MCP result trees | Per invocation | Request-scoped |
+| MCP App UI | Mounted timeline, refresh interaction, ephemeral selection | Resource load | UI instance |
+
+## Author-facing API
+
+Hook authors write ordinary server components and request hooks:
+
+```tsx
+import { Hook, useEdit, useRuntimeSnapshot } from '../runtime/rsc-api.js';
+
+export function AfterFileEdit() {
+  const edit = useEdit();
+  const snapshot = useRuntimeSnapshot();
+
+  return (
+    <Hook.Result>
+      <Hook.AdditionalContext>
+        Recorded {edit.path} from {edit.host}. Shared state now contains{' '}
+        {snapshot.edits.length} edits.
+      </Hook.AdditionalContext>
+    </Hook.Result>
+  );
+}
+```
+
+`useEdit()` and `useRuntimeSnapshot()` read an `AsyncLocalStorage` request context held open while
+the Flight stream is consumed. They are intentionally not `useState`: a later invocation gets a new
+render and a new snapshot.
+
+MCP result components represent protocol values rather than HTML:
+
+```tsx
+return (
+  <Mcp.Result structuredContent={timeline}>
+    <Mcp.Text>{`Showing ${timeline.edits.length} edits.`}</Mcp.Text>
+    <Mcp.Image data={STATUS_PNG_BASE64} mimeType="image/png" />
+  </Mcp.Result>
+);
+```
+
+The lowerer supports the complete result surface used by the current MCP schema:
+
+- `Mcp.Text` -> text content block;
+- `Mcp.Image` -> image content block;
+- `Mcp.Audio` -> audio content block;
+- `Mcp.ResourceLink` -> resource-link content block;
+- `Mcp.EmbeddedResource` -> text or blob resource content block;
+- `Mcp.Result` -> ordered `content`, optional `structuredContent`, and optional `isError`.
+
+An `Mcp.Image` is never an HTML `<img>`. It becomes a base64 MCP `ImageContent` block. Browser
+markup belongs to the separate widget bundle.
+
+## Static definitions
+
+MCP discovery never depends on rendering. `src/definition.ts` declares serializable descriptors and
+separate handler IDs. At build time a Rsbuild plugin emits `dist/agent-runtime.manifest.json`, with
+Zod schemas converted to JSON Schema. At server startup the complete registry is registered before
+the transport connects and remains fixed for that server lifetime.
+
+The demo exposes three tools:
+
+1. `recent_edits`: read-only data tool returning a concise snapshot with no UI.
+2. `render_edit_timeline`: read-only render tool accepting a prepared snapshot, returning it through
+   an RSC result route, and linking the timeline UI resource.
+3. `runtime_status`: read-only RSC result proving text, image, and structured content lowering.
+
+Only `render_edit_timeline` has `_meta.ui.resourceUri`, mirrored to the optional ChatGPT
+`_meta["openai/outputTemplate"]` compatibility alias. This preserves the decoupled data/render
+pattern and avoids remounting the iframe on every refresh.
+
+The resource URI is versioned as `ui://rsc-agent-runtime/edit-timeline-v1.html`. Its MIME type is
+`text/html;profile=mcp-app`. It declares an empty network/resource CSP because the build inlines its
+JavaScript and CSS.
+
+## Runtime kernel
+
+The reference kernel is an append-only JSONL event store at
+`<workspace>/.agent-runtime-demo/events.jsonl` or an explicit `AGENT_RUNTIME_STATE_FILE`.
+
+```ts
+interface EditEvent {
+  eventId: string;
+  host: 'claude' | 'codex';
+  sessionId: string;
+  toolName: string;
+  path: string;
+  recordedAt: string;
+}
+
+interface RuntimeSnapshot {
+  stateVersion: number;
+  edits: EditEvent[];
+}
+```
+
+Each append is one newline-delimited write. A snapshot parses complete valid lines, ignores one
+trailing partial line, and derives `stateVersion` from the number of valid events. This is a small
+demo storage adapter, not a proposed distributed database. A production framework would preserve
+the `RuntimeKernel` interface and offer SQLite, remote, or host-provided implementations.
+
+Hook input supplies the workspace path. MCP tools resolve an explicit state-file environment value
+first, then the first client root, then the server working directory. This lets the long-lived MCP
+process and disposable hook processes converge on one authoritative file.
+
+## RSC build and process boundary
+
+Rsbuild 2.1 and `rsbuild-plugin-rsc` compile coordinated environments:
+
+- `rsc`: Node RSC worker entry in `Layers.rsc`;
+- `hook`: Node host adapter and Flight decoder;
+- `mcp`: Node stdio and Streamable HTTP entries;
+- `widget`: browser React bundle and the RSC plugin's client environment.
+
+The RSC worker uses `renderToReadableStream` from
+`react-server-dom-rspack/server.node`. Node consumers use `createFromReadableStream` from
+`react-server-dom-rspack/client.node`. The worker writes only Flight bytes to stdout; diagnostics go
+to stderr. This makes the stream boundary observable and prevents accidental JSON shortcuts.
+
+## Native hook adapters
+
+The source plugin contains two hook files because matcher and command details are host-native:
+
+- Claude matches `Write|Edit` and reads `tool_input.file_path`.
+- Codex matches `apply_patch|Write|Edit` and extracts the first patch path from
+  `tool_input.command` when the canonical tool is `apply_patch`.
+
+Both lower the decoded RSC result to `hookSpecificOutput.hookEventName = "PostToolUse"` and
+`additionalContext`. The hook commands select the adapter with `--host claude` or `--host codex`.
+
+## MCP and MCP Apps
+
+One `createRuntimeMcpServer()` function registers tools and resources up front. It is connected by:
+
+- `StdioServerTransport` for Claude Code and Codex;
+- stateless `StreamableHTTPServerTransport` at `/mcp` for ChatGPT/MCP Apps inspection.
+
+The timeline widget is an `interactive-decoupled` React widget adapted from the official OpenAI MCP
+App Basics patterns. It uses `@modelcontextprotocol/ext-apps/react` to initialize the standard
+MCP Apps JSON-RPC bridge, listens for tool results, and calls `recent_edits` from its Refresh button.
+That wrapper maps to the standard `ui/initialize`, `ui/notifications/tool-result`, and `tools/call`
+messages. ChatGPT-specific `window.openai` APIs are not required.
+
+The widget also has a standalone development mode with deterministic sample data. Standalone state
+is only a visual fallback; authoritative edit data always belongs to the kernel.
+
+## Visual contract
+
+The accepted reference is
+`docs/assets/rsc-agent-runtime-demo/edit-timeline-concept.png`.
+
+Design tokens extracted from it:
+
+- canvas/surface: true white `#ffffff`;
+- primary text: near-black navy `#10162a`;
+- secondary text: cool gray `#667085`;
+- borders/rail: `#d9dde7`;
+- interaction/node accent: electric violet `#5b3df5`;
+- mono family: `ui-monospace, SFMono-Regular, Menlo, Consolas, monospace`;
+- one outer 12px radius; rows are open, separated by 1px rules, not nested cards;
+- desktop target: 760 x 500; mobile target: 360px wide without horizontal overflow.
+
+Visible copy is restricted to the concept strings and dynamic event values. The core interaction is
+Refresh -> `tools/call recent_edits` -> update the mounted timeline and state version.
+
+## Plugin packaging
+
+The example root is a dual-host plugin source:
+
+```text
+examples/rsc-agent-runtime/
+├── .claude-plugin/plugin.json
+├── .codex-plugin/plugin.json
+├── .mcp.claude.json
+├── .mcp.codex.json
+├── hooks/{claude,codex}.json
+├── src/
+├── tests/
+├── scripts/eval-hosts.mjs
+└── dist/
+```
+
+Claude uses `${CLAUDE_PLUGIN_ROOT}` in its MCP launch config. Codex receives a contained relative
+entry path because native `.mcp.json` does not interpolate plugin/workspace placeholders. Codex
+also sets `CLAUDE_PLUGIN_ROOT` for hook compatibility, so both command files can locate the bundle.
+
+## Verification and evaluation
+
+Automated validation must prove:
+
+- separate kernel instances observe the same append-only state;
+- the hook command spawns the RSC worker, decodes real Flight, and returns valid native JSON;
+- every MCP result element lowers to the correct protocol content block;
+- stdio and Streamable HTTP clients see the same static tool/resource registry;
+- the generated manifest contains JSON schemas and no executable functions;
+- only the render tool links the UI resource;
+- the resource serves the built widget with the MCP Apps MIME type and CSP metadata;
+- the standalone widget renders at desktop and mobile widths and Refresh updates its state;
+- Claude Code 2.1.232 and Codex CLI 0.147.0 each perform a real edit, trigger the native hook, and
+  read that event through the demo MCP server using their already-configured sessions.
+
+The ChatGPT remote Developer Mode loop is documented but not claimed unless a public HTTPS endpoint
+is actually connected. Local HTTP MCP, resource, bridge, browser, Claude, and Codex evidence are
+separate claims.
+
+## Boundaries
+
+- This is an example and architecture probe, not a new `agent-bundle` public API.
+- RSC package versions are exact pins because framework-facing RSC APIs are not semver-stable.
+- The demo does not dynamically register tools or resources.
+- It does not pretend hook processes retain React state or module caches.
+- It does not use provider API keys; native CLI evaluations inherit existing subscription/session
+  authentication.
+- It does not claim the CLI hosts render the MCP App iframe. They validate the shared tools and
+  hooks; the HTTP/browser path validates the UI surface.
+
+## Source baselines
+
+- Rsbuild RSC support and `rsbuild-plugin-rsc` 0.1.1.
+- React 19.2.8 and `react-server-dom-rspack` 0.0.3.
+- MCP TypeScript SDK 1.30.0, `@modelcontextprotocol/ext-apps` 1.7.5, Zod 4.4.3, and Express 5.2.1.
+- OpenAI Apps SDK examples commit `18cc38e78a968712c357bacdc3c79fead5bfc6b4`, specifically the
+  MCP App Basics server and React `useApp` result/tool-call patterns.
+- Claude Code 2.1.232 and Codex CLI 0.147.0 native contracts.
