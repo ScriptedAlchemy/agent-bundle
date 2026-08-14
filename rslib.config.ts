@@ -15,7 +15,7 @@ export default defineConfig({
     distPath: {
       root: './packages/agent-bundle/dist',
     },
-    externals: ['@rstackjs/load-config', 'fast-glob', 'ignore', 'jiti', 'yaml'],
+    externals: ['@rstackjs/load-config', 'ajv', 'ajv/dist/2020.js', 'fast-glob', 'ignore', 'jiti', 'yaml'],
     target: 'node',
   },
   source: {

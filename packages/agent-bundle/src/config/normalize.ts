@@ -87,6 +87,7 @@ export const normalizeProject = async (
       provenance: configProvenance,
       version: loaded.config.plugin.version,
     },
+    mcpServers: [],
     skills,
     targets: targetNames.map((name) => ({
       id: `target:${name}`,

@@ -52,8 +52,23 @@ export interface NormalizedSkill {
   readonly targets: readonly string[];
 }
 
+export interface NormalizedMcpServer {
+  readonly args?: readonly string[];
+  readonly command?: string;
+  readonly cwd?: string;
+  readonly env?: Readonly<Record<string, string>>;
+  readonly headers?: Readonly<Record<string, string>>;
+  readonly id: string;
+  readonly name: string;
+  readonly provenance: SourceProvenance;
+  readonly targets: readonly string[];
+  readonly transport: 'stdio' | 'streamable-http' | 'sse';
+  readonly url?: string;
+}
+
 export interface NormalizedPlugin {
   readonly metadata: NormalizedMetadata;
+  readonly mcpServers: readonly NormalizedMcpServer[];
   readonly skills: readonly NormalizedSkill[];
   readonly targets: readonly NormalizedTarget[];
 }
