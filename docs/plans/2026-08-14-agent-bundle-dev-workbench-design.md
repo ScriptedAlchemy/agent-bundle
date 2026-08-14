@@ -318,6 +318,13 @@ The workbench provides:
   and logging messages;
 - invocation history, replay, config export, raw protocol frames, and promotion to a draft eval.
 
+MCP Apps/UI widgets use the same selected session and artifact binding. Tool metadata
+(`_meta.ui.resourceUri` and compatible `_meta["openai/outputTemplate"]`) selects a statically
+registered UI resource; the service performs `resources/list`/`resources/read`, serves the emitted
+client assets, and the browser renders them through the MCP Apps bridge. Structured content,
+resource links, embedded resources, result metadata, CSP, and widget hints remain byte-faithful to
+the server contract. The workbench does not reinterpret an arbitrary web URL as a widget.
+
 The initial client advertises tools, resources, prompts, progress, and logging. Unsupported client
 features are shown as unsupported and return a defined error instead of hanging. Protocol versions
 and schemas come from pinned public MCP SDK packages rather than being copied into Agent Bundle.
