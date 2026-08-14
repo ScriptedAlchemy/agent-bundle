@@ -32,7 +32,7 @@ describe('MCP JSON input', () => {
     })).toBeNull();
   });
 
-  it('makes form edits into a new frozen canonical record', () => {
+  it('makes form edits into a new frozen canonical record and removes cleared optional values', () => {
     const original = { nested: { enabled: false }, name: 'Ada' };
     const edited = applyFormEdit(original, 'name', 'Grace');
 
@@ -42,6 +42,7 @@ describe('MCP JSON input', () => {
     expect(original).toEqual({ nested: { enabled: false }, name: 'Ada' });
     expect(Object.isFrozen(edited)).toBe(true);
     expect(Object.isFrozen(edited.nested)).toBe(true);
+    expect(applyFormEdit({ limit: 3 }, 'limit', undefined)).toEqual({});
   });
 
   it('updates canonical JSON only from a valid raw object and serializes it deterministically', () => {
@@ -59,14 +60,25 @@ describe('MCP JSON input', () => {
     );
   });
 
-  it('renders an accessible form/raw chooser and submits equivalent immutable payloads through one callback', () => {
+  it('blocks invalid raw JSON from submitting stale canonical input', () => {
+    const submitted: readonly Readonly<Record<string, unknown>>[] = [];
+    const submit = (value: Readonly<Record<string, unknown>>) => submitted.push(value);
+
+    expect(submitJsonRecord({ stale: true }, submit, '{"next":')).toBe(false);
+    expect(submitted).toEqual([]);
+    expect(submitJsonRecord({ stale: true }, submit, '{"next":true}')).toBe(true);
+    expect(submitted).toEqual([{ next: true }]);
+  });
+
+  it('renders an accessible mode group and submits equivalent form and raw payloads through one callback', () => {
     const submitted: readonly Readonly<Record<string, unknown>>[] = [];
     const submit = (value: Readonly<Record<string, unknown>>) => submitted.push(value);
     const formValue = applyFormEdit({}, 'count', 2);
     const rawValue = parseRawJsonRecord('{"count":2}');
 
-    submitJsonRecord(formValue, submit);
-    submitJsonRecord(rawValue!, submit);
+    expect(rawValue).toEqual(formValue);
+    expect(submitJsonRecord(formValue, submit)).toBe(true);
+    expect(submitJsonRecord({}, submit, '{"count":2}')).toBe(true);
 
     expect(submitted).toEqual([{ count: 2 }, { count: 2 }]);
     expect(submitted[0]).not.toBe(submitted[1]);
@@ -78,15 +90,18 @@ describe('MCP JSON input', () => {
       label: 'Tool arguments',
       onChange: () => undefined,
       onSubmit: submit,
-      schema: { type: 'object', properties: { count: { type: 'number' } }, required: ['count'] },
-      value: formValue,
+      schema: { type: 'object', properties: { count: { default: 3, type: 'number' } }, required: ['count'] },
+      value: {},
     }));
 
-    expect(markup).toContain('role="tablist"');
-    expect(markup).toContain('aria-controls="tool-arguments-form-panel"');
-    expect(markup).toContain('aria-controls="tool-arguments-raw-panel"');
-    expect(markup).toContain('role="tabpanel"');
+    expect(markup).toContain('<fieldset>');
+    expect(markup).toContain('<legend>Tool arguments input mode</legend>');
+    expect(markup).toContain('type="radio"');
+    expect(markup).not.toContain('role="tab"');
+    expect(markup).not.toContain('role="tabpanel"');
     expect(markup).toContain('required=""');
+    expect(markup).toContain('value=""');
+    expect(markup).not.toContain('value="3"');
     expect(markup).toContain('Call tool');
   });
 });
