@@ -189,6 +189,23 @@ export interface McpSessionServiceOptions {
   readonly projectRoot: string;
 }
 
+export interface McpSessionServiceCloseFailure {
+  readonly error: unknown;
+  readonly resource: 'opening' | 'session';
+  readonly sessionId?: McpSessionId;
+}
+
+/** Reports every session-service lifecycle failure after all tracked work settles. */
+export class McpSessionServiceCloseError extends Error {
+  readonly failures: readonly McpSessionServiceCloseFailure[];
+
+  constructor(failures: readonly McpSessionServiceCloseFailure[]) {
+    super('MCP session service could not close every lifecycle resource.');
+    this.name = 'McpSessionServiceCloseError';
+    this.failures = Object.freeze(failures.map((failure) => Object.freeze({ ...failure })));
+  }
+}
+
 interface ResolvedSessionServer {
   readonly server: ManifestServer;
   readonly target: NativeTarget;
@@ -1275,8 +1292,22 @@ export class McpSessionService {
   async #close(): Promise<void> {
     const openings = [...this.#openingSessions];
     for (const opening of openings) opening.abort.abort(new Error('MCP session service is closed.'));
-    await Promise.allSettled(openings.map((opening) => opening.done));
-    await Promise.all([...this.#sessions.values()].map((session) => session.close()));
+    const openingResults = await Promise.allSettled(openings.map((opening) => opening.done));
+    const sessions = [...this.#sessions.entries()];
+    const sessionResults = await Promise.allSettled(sessions.map(([, session]) => session.close()));
+    const failures = Object.freeze([
+      ...openingResults.flatMap((result): readonly McpSessionServiceCloseFailure[] =>
+        result.status === 'rejected'
+          ? [Object.freeze({ error: result.reason, resource: 'opening' as const })]
+          : []),
+      ...sessionResults.flatMap((result, index): readonly McpSessionServiceCloseFailure[] => {
+        const sessionId = sessions[index]?.[0];
+        return result.status === 'rejected' && sessionId !== undefined
+          ? [Object.freeze({ error: result.reason, resource: 'session' as const, sessionId })]
+          : [];
+      }),
+    ]);
+    if (failures.length > 0) throw new McpSessionServiceCloseError(failures);
   }
 
   #target(name: string): NativeTarget {
