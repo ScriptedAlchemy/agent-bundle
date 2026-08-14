@@ -3,6 +3,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { AddressInfo, Socket } from 'node:net';
 
 import type { ProjectEventHub, ProjectEventSubscription } from './events.ts';
+import { SkillDocumentError, type SkillDocumentService } from './skill-document-service.ts';
 import type { Invalidation, ProjectEventMessage, ProjectStatus } from './types.ts';
 
 const bodyLimit = 64 * 1024;
@@ -84,6 +85,8 @@ export interface ForegroundServerOptions {
   readonly host?: string;
   readonly now?: () => Date;
   readonly port?: number;
+  /** Read-only Skill document/resource service for the workbench. */
+  readonly skillDocuments?: SkillDocumentService;
   /** Injectable only to make integration contracts deterministic. */
   readonly sessionToken?: string;
 }
@@ -93,6 +96,14 @@ interface RequestDiagnostic {
   readonly message: string;
   readonly status: number;
 }
+
+type SkillRoute =
+  | Readonly<{ readonly kind: 'source-tree' }>
+  | Readonly<{ readonly kind: 'source-document'; readonly skillId: string }>
+  | Readonly<{ readonly kind: 'source-resource'; readonly skillId: string; readonly resource: readonly string[] }>
+  | Readonly<{ readonly epochId: string; readonly kind: 'generated-tree'; readonly target: string }>
+  | Readonly<{ readonly epochId: string; readonly kind: 'generated-document'; readonly skillId: string; readonly target: string }>
+  | Readonly<{ readonly epochId: string; readonly kind: 'generated-resource'; readonly resource: readonly string[]; readonly skillId: string; readonly target: string }>;
 
 const diagnostic = (code: string, message: string, status: number): RequestDiagnostic => ({ code, message, status });
 
@@ -192,6 +203,59 @@ const decodedAssetPath = (requestTarget: string | undefined): string => {
   return parts.join('/');
 };
 
+const rawPathname = (requestTarget: string | undefined): string =>
+  requestTarget?.split(/[?#]/u, 1)[0] ?? '';
+
+const decodedSkillSegment = (segment: string): string => {
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(segment);
+  } catch {
+    throw requestError(diagnostic('AB8012', 'Skill route path is not valid.', 400));
+  }
+  if (
+    decoded.length === 0 || decoded === '.' || decoded === '..' ||
+    decoded.includes('/') || decoded.includes('\\') || decoded.includes('\0')
+  ) {
+    throw requestError(diagnostic('AB8012', 'Skill route path is not valid.', 400));
+  }
+  return decoded;
+};
+
+const skillRoute = (requestTarget: string | undefined): SkillRoute | undefined => {
+  const pathname = rawPathname(requestTarget);
+  if (pathname !== '/api/skills' && !pathname.startsWith('/api/skills/')) return undefined;
+  const parts = pathname.split('/');
+  if (parts[0] !== '' || parts[1] !== 'api' || parts[2] !== 'skills') {
+    throw requestError(diagnostic('AB8012', 'Skill route path is not valid.', 400));
+  }
+  const segments = parts.slice(3).map(decodedSkillSegment);
+  if (segments.length === 1 && segments[0] === 'source') return Object.freeze({ kind: 'source-tree' });
+  if (segments[0] === 'source') {
+    const skillId = segments[1];
+    if (skillId === undefined) throw requestError(diagnostic('AB8012', 'Skill route path is not valid.', 400));
+    if (segments.length === 2) return Object.freeze({ kind: 'source-document', skillId });
+    if (segments[2] === 'resources' && segments.length > 3) {
+      return Object.freeze({ kind: 'source-resource', resource: Object.freeze(segments.slice(3)), skillId });
+    }
+    throw requestError(diagnostic('AB8012', 'Skill route path is not valid.', 400));
+  }
+  if (segments[0] !== 'epochs') {
+    throw requestError(diagnostic('AB8012', 'Skill route path is not valid.', 400));
+  }
+  const [_, epochId, target, skillId, resourceMarker, ...resource] = segments;
+  if (epochId === undefined || target === undefined) {
+    throw requestError(diagnostic('AB8012', 'Skill route path is not valid.', 400));
+  }
+  if (segments.length === 3) return Object.freeze({ epochId, kind: 'generated-tree', target });
+  if (skillId === undefined) throw requestError(diagnostic('AB8012', 'Skill route path is not valid.', 400));
+  if (segments.length === 4) return Object.freeze({ epochId, kind: 'generated-document', skillId, target });
+  if (resourceMarker === 'resources' && resource.length > 0) {
+    return Object.freeze({ epochId, kind: 'generated-resource', resource: Object.freeze(resource), skillId, target });
+  }
+  throw requestError(diagnostic('AB8012', 'Skill route path is not valid.', 400));
+};
+
 const manualInvalidation = (body: string, now: () => Date): Invalidation => {
   let value: unknown;
   try {
@@ -274,6 +338,7 @@ export class ForegroundServer {
   readonly #now: () => Date;
   readonly #port: number;
   readonly #server: Server;
+  readonly #skillDocuments: SkillDocumentService | undefined;
   readonly #sockets = new Set<Socket>();
   readonly #streamSubscriptions = new Set<ProjectEventSubscription>();
   #closePromise: Promise<void> | undefined;
@@ -299,6 +364,7 @@ export class ForegroundServer {
     this.#host = host;
     this.#now = options.now ?? (() => new Date());
     this.#port = port;
+    this.#skillDocuments = options.skillDocuments;
     this.sessionToken = options.sessionToken ?? randomUUID();
     this.#server = createServer((request, response) => {
       void this.#handle(request, response).catch((error: unknown) => {
@@ -413,6 +479,8 @@ export class ForegroundServer {
     }
     const pathname = new URL(request.url ?? '/', this.url).pathname;
     const method = request.method ?? 'GET';
+    const route = skillRoute(request.url);
+    if (route !== undefined) return this.#serveSkill(route, response, method);
     if (pathname === '/api/project/status') {
       if (method !== 'GET') return responseDiagnostic(response, diagnostic('AB8007', 'Route does not accept this method.', 405));
       return responseJson(response, { status: this.#coordinator.status() });
@@ -436,6 +504,40 @@ export class ForegroundServer {
       return this.#streamEvents(request, response);
     }
     return this.#serveAsset(request, response, method);
+  }
+
+  async #serveSkill(route: SkillRoute, response: ServerResponse, method: string): Promise<void> {
+    const service = this.#skillDocuments;
+    if (service === undefined) {
+      return responseDiagnostic(response, diagnostic('AB8011', 'Skill workbench service is not available.', 404));
+    }
+    const resource = route.kind === 'source-resource' || route.kind === 'generated-resource';
+    if (method !== 'GET' && (!resource || method !== 'HEAD')) {
+      return responseDiagnostic(response, diagnostic('AB8007', 'Route does not accept this method.', 405));
+    }
+    try {
+      if (route.kind === 'source-tree') return responseJson(response, await service.sourceTree());
+      if (route.kind === 'source-document') return responseJson(response, { document: await service.source(route.skillId) });
+      if (route.kind === 'generated-tree') {
+        return responseJson(response, await service.generatedTree(route.epochId, route.target));
+      }
+      if (route.kind === 'generated-document') {
+        return responseJson(response, { document: await service.generated(route.epochId, route.target, route.skillId) });
+      }
+      const value = route.kind === 'source-resource'
+        ? await service.sourceResource(route.skillId, route.resource)
+        : await service.generatedResource(route.epochId, route.target, route.skillId, route.resource);
+      response.writeHead(200, {
+        'content-length': String(value.body.byteLength),
+        'content-type': value.contentType,
+      });
+      response.end(method === 'HEAD' ? undefined : value.body);
+    } catch (error) {
+      if (error instanceof SkillDocumentError) {
+        return responseDiagnostic(response, diagnostic(error.code, error.message, 404));
+      }
+      throw error;
+    }
   }
 
   #assertSessionBootstrapOrigin(request: IncomingMessage): void {

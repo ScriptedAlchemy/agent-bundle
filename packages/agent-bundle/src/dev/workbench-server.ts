@@ -1,8 +1,11 @@
 import { spawn } from 'node:child_process';
 
 import { DevCoordinator } from './coordinator.ts';
+import { EpochStore } from './epoch-store.ts';
 import { ProjectEventHub } from './events.ts';
 import { startForegroundServer, type WorkbenchAssetSource } from './foreground-server.ts';
+import { ProjectService } from './project-service.ts';
+import { SkillDocumentService } from './skill-document-service.ts';
 import { createWorkbenchAssetSource } from './workbench-assets.ts';
 import type { ProjectStatus } from './types.ts';
 
@@ -42,12 +45,15 @@ const openInBrowser: OpenBrowser = (url) => new Promise((resolvePromise, rejectP
 /** Starts one loopback foreground session over the current project services. */
 export const startDevServer = async (options: StartDevServerOptions): Promise<DevServerSession> => {
   const eventHub = new ProjectEventHub();
-  const coordinator = new DevCoordinator({ eventHub, root: options.root });
+  const epochStore = new EpochStore({ projectRoot: options.root });
+  const projectService = new ProjectService({ root: options.root });
+  const coordinator = new DevCoordinator({ epochStore, eventHub, projectService, root: options.root });
   const foreground = await startForegroundServer({
     assets: options.assets ?? createWorkbenchAssetSource(),
     coordinator,
     eventHub,
     port: options.port,
+    skillDocuments: new SkillDocumentService({ epochStore, projectService, root: options.root }),
   });
   try {
     if (options.open === true) await (options.openBrowser ?? openInBrowser)(foreground.url);

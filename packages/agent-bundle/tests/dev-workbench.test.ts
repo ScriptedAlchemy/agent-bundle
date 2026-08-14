@@ -47,6 +47,13 @@ it('starts a loopback server with prebuilt assets, does not open on --no-open, a
       body: '<!doctype html><title>Agent Bundle workbench</title>',
       status: 200,
     });
+    await expect(fetch(`${server.url}/api/skills/source/skill%3Areview`).then(async (response) => ({
+      body: await response.json(),
+      status: response.status,
+    }))).resolves.toMatchObject({
+      body: { document: { id: 'skill:review', frontmatter: { name: 'review' } } },
+      status: 200,
+    });
     expect(openCalls).toBe(0);
     await expect(server.close()).resolves.toBeUndefined();
     await expect(fetch(server.url)).rejects.toThrow();

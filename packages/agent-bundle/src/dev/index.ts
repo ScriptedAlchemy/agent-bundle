@@ -77,6 +77,19 @@ export {
   snapshotProjectSource,
 } from './project-service.ts';
 export {
+  SkillDocumentError,
+  SkillDocumentService,
+  type GeneratedSkillBase,
+  type ServedSkillDocument,
+  type ServedSkillResource,
+  type SkillDocumentBase,
+  type SkillDocumentErrorCode,
+  type SkillDocumentResource,
+  type SkillDocumentServiceOptions,
+  type SkillDocumentTree,
+  type SourceSkillBase,
+} from './skill-document-service.ts';
+export {
   freezeArtifactEpoch,
   freezeInvalidation,
   freezeProjectEvent,
