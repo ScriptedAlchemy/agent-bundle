@@ -25,6 +25,14 @@ import { DiagnosticError } from '../core/diagnostics.ts';
 import { assertInside } from '../core/paths.ts';
 import { resolveMcpPathTokens } from '../services/mcp-path-tokens.ts';
 import { EpochStore, type EpochReference } from './epoch-store.ts';
+import type {
+  McpAppBridgeResource,
+  McpAppBridgeSession,
+  McpAppBridgeTool,
+  McpAppJsonValue,
+  McpAppSessionLease,
+  McpAppToolDefinition,
+} from './mcp-app-binding-service.ts';
 import { freezeJsonValue } from './types.ts';
 import type {
   McpSessionBinding,
@@ -249,6 +257,20 @@ interface TraceSubscription {
   replaying: boolean;
 }
 
+type McpAppSessionCloseListener = Parameters<McpAppSessionLease['watchSessionClosed']>[0];
+
+interface ActiveSession {
+  readonly closeWatchers: Set<McpAppSessionCloseListener>;
+  readonly session: McpSession;
+  appLeaseCount: number;
+  closed: boolean;
+}
+
+type McpAppLeaseIdentity = McpAppBridgeSession['identity'] & Readonly<{
+  readonly binding: McpSessionBinding;
+  readonly sessionId: McpSessionId;
+}>;
+
 const inspectorCommandAllowlist = new Set(['bun', 'bun.exe', 'deno', 'deno.exe', 'node', 'node.exe']);
 const inspectorRuntimeArgumentAllowlist = new Set(['--enable-source-maps']);
 const safeLocaleValue = /^[A-Za-z0-9_.@-]{1,128}$/u;
@@ -359,6 +381,65 @@ const detachedJsonSnapshot = (value: unknown): unknown => freezeJsonValue(cloneJ
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
+
+const isMcpAppJsonValue = (value: unknown): value is McpAppJsonValue => {
+  if (value === null || typeof value === 'boolean' || typeof value === 'number' || typeof value === 'string') {
+    return typeof value !== 'number' || Number.isFinite(value);
+  }
+  if (Array.isArray(value)) return value.every(isMcpAppJsonValue);
+  if (!isRecord(value) || Object.getPrototypeOf(value) !== Object.prototype) return false;
+  return Object.values(value).every(isMcpAppJsonValue);
+};
+
+const canonicalMcpAppJson = (value: unknown, label: string): McpAppJsonValue => {
+  const snapshot = detachedJsonSnapshot(value);
+  if (!isMcpAppJsonValue(snapshot)) throw new TypeError(`${label} must contain only ordinary finite JSON values.`);
+  return snapshot;
+};
+
+const appVisible = (definition: McpAppJsonValue): boolean => {
+  if (!isRecord(definition)) return true;
+  const metadata = definition._meta;
+  if (!isRecord(metadata)) return true;
+  const ui = metadata.ui;
+  if (!isRecord(ui) || !Object.hasOwn(ui, 'visibility')) return true;
+  const visibility = ui.visibility;
+  return Array.isArray(visibility) && visibility.every((capability) => typeof capability === 'string') &&
+    visibility.some((capability) => capability === 'app');
+};
+
+const canonicalMcpAppTool = (tool: Tool): McpAppBridgeTool => {
+  const definition = canonicalMcpAppJson(tool, 'MCP App tool definition');
+  if (!isRecord(definition) || typeof definition.name !== 'string' || definition.name.trim().length === 0) {
+    throw new TypeError('MCP App tool definition must have a nonempty name.');
+  }
+  return Object.freeze({
+    appVisible: appVisible(definition),
+    definition: definition as McpAppToolDefinition,
+    name: definition.name,
+  });
+};
+
+const canonicalMcpAppResource = (resource: Resource): McpAppBridgeResource => {
+  const definition = canonicalMcpAppJson(resource, 'MCP App resource definition');
+  if (!isRecord(definition) || typeof definition.uri !== 'string' || definition.uri.trim().length === 0) {
+    throw new TypeError('MCP App resource definition must have a nonempty URI.');
+  }
+  return Object.freeze({ appVisible: appVisible(definition), uri: definition.uri });
+};
+
+const mcpAppLeaseIdentity = (session: McpSession): McpAppLeaseIdentity => {
+  const identity: { readonly binding: McpSessionBinding; readonly sessionId: McpSessionId } = {
+    binding: session.binding,
+    sessionId: session.id,
+  };
+  Object.defineProperties(identity, {
+    epochId: { value: session.binding.epochId },
+    serverName: { value: session.binding.serverName },
+    target: { value: session.binding.target },
+  });
+  return Object.freeze(identity) as McpAppLeaseIdentity;
+};
 
 const stringRecord = (value: unknown): Record<string, string> | undefined => {
   if (value === undefined) return undefined;
@@ -1194,7 +1275,7 @@ export class McpSessionService {
   readonly #epochStore: EpochStore;
   readonly #projectRoot: string;
   readonly #openingSessions = new Set<OpeningSession>();
-  readonly #sessions = new Map<string, McpSession>();
+  readonly #sessions = new Map<string, ActiveSession>();
   #closePromise: Promise<void> | undefined;
   #closed = false;
 
@@ -1269,14 +1350,19 @@ export class McpSessionService {
         createStreamableHttpTransport: this.#createStreamableHttpTransport,
         epochReference,
         id: sessionId,
-        onClose: () => this.#sessions.delete(sessionId),
+        onClose: () => this.#invalidateSession(sessionId, new Error('MCP session closed.')),
         pluginData,
         resolved: { server, target, targetRoot },
         workspaceRoot: resolve(options.workspaceRoot ?? this.#projectRoot),
       });
       await session.initialize(options);
       if (this.#closed) throw new Error('MCP session service is closed.');
-      this.#sessions.set(sessionId, session);
+      this.#sessions.set(sessionId, {
+        appLeaseCount: 0,
+        closeWatchers: new Set(),
+        closed: false,
+        session,
+      });
       return session;
     } catch (error) {
       if (session !== undefined) {
@@ -1310,28 +1396,101 @@ export class McpSessionService {
   }
 
   get(id: McpSessionId): McpSession | undefined {
-    return this.#sessions.get(id);
+    const entry = this.#sessions.get(id);
+    return entry?.closed === false ? entry.session : undefined;
+  }
+
+  async acquireAppLease(sessionId: string): Promise<McpAppSessionLease> {
+    const entry = this.#sessions.get(sessionId);
+    if (entry === undefined || entry.closed) throw new Error(`Unknown MCP App session ${JSON.stringify(sessionId)}.`);
+    entry.appLeaseCount += 1;
+    const identity = mcpAppLeaseIdentity(entry.session);
+    let bridgeResources: Promise<readonly McpAppBridgeResource[]> | undefined;
+    let bridgeTools: Promise<readonly McpAppBridgeTool[]> | undefined;
+    let released = false;
+    const assertActive = (): void => {
+      if (entry.closed) throw new Error('MCP App session is closed.');
+    };
+    const bridgeSession: McpAppBridgeSession = Object.freeze({
+      callTool: async ({ arguments: toolArguments, name }: {
+        readonly arguments: McpAppJsonValue | undefined;
+        readonly name: string;
+      }) => {
+        assertActive();
+        const argumentsSnapshot = canonicalMcpAppJson(toolArguments ?? {}, 'MCP App tool arguments');
+        if (!isRecord(argumentsSnapshot)) throw new TypeError('MCP App tool arguments must be a JSON object.');
+        return canonicalMcpAppJson(
+          await entry.session.callTool({ arguments: argumentsSnapshot, name }),
+          'MCP App tool result',
+        );
+      },
+      identity,
+      listBridgeResources: async () => {
+        assertActive();
+        bridgeResources ??= entry.session.listResources().then((resources) =>
+          Object.freeze(resources.map(canonicalMcpAppResource)));
+        return bridgeResources;
+      },
+      listBridgeTools: async () => {
+        assertActive();
+        bridgeTools ??= entry.session.listTools().then((tools) => Object.freeze(tools.map(canonicalMcpAppTool)));
+        return bridgeTools;
+      },
+      readResource: async ({ uri }: { readonly uri: string }) => {
+        assertActive();
+        return canonicalMcpAppJson(await entry.session.readResource({ uri }), 'MCP App resource result');
+      },
+    });
+    return Object.freeze({
+      release: async () => {
+        if (released) return;
+        released = true;
+        entry.appLeaseCount = Math.max(0, entry.appLeaseCount - 1);
+      },
+      session: bridgeSession,
+      watchSessionClosed: (listener: McpAppSessionCloseListener) => {
+        if (typeof listener !== 'function') throw new TypeError('MCP App session close listener must be a function.');
+        if (entry.closed) return Object.freeze({ closed: true, unsubscribe: () => undefined });
+        entry.closeWatchers.add(listener);
+        if (entry.closed) {
+          entry.closeWatchers.delete(listener);
+          return Object.freeze({ closed: true, unsubscribe: () => undefined });
+        }
+        let subscribed = true;
+        return Object.freeze({
+          closed: false,
+          unsubscribe: () => {
+            if (!subscribed) return;
+            subscribed = false;
+            entry.closeWatchers.delete(listener);
+          },
+        });
+      },
+    });
   }
 
   async closeSession(id: McpSessionId): Promise<boolean> {
-    const session = this.#sessions.get(id);
-    if (session === undefined) return false;
-    await session.close();
+    const entry = this.#invalidateSession(id, new Error('MCP session control closed.'));
+    if (entry === undefined) return false;
+    await entry.session.close();
     return true;
   }
 
   async close(): Promise<void> {
     if (this.#closePromise !== undefined) return this.#closePromise;
     this.#closed = true;
-    this.#closePromise = this.#close();
+    const sessions = [...this.#sessions.entries()].flatMap(([id]) => {
+      const entry = this.#invalidateSession(id, new Error('MCP session service is closed.'));
+      return entry === undefined ? [] : [[id, entry.session] as const];
+    });
+    this.#closePromise = this.#close(sessions);
     return this.#closePromise;
   }
 
-  async #close(): Promise<void> {
+  async #close(sessions: readonly (readonly [string, McpSession])[]): Promise<void> {
     const openings = [...this.#openingSessions];
     for (const opening of openings) opening.abort.abort(new Error('MCP session service is closed.'));
     const openingResults = await Promise.allSettled(openings.map((opening) => opening.done));
-    const sessions = [...this.#sessions.entries()];
     const sessionResults = await Promise.allSettled(sessions.map(([, session]) => session.close()));
     const failures = Object.freeze([
       ...openingResults.flatMap((result): readonly McpSessionServiceCloseFailure[] =>
@@ -1346,6 +1505,23 @@ export class McpSessionService {
       }),
     ]);
     if (failures.length > 0) throw new McpSessionServiceCloseError(failures);
+  }
+
+  #invalidateSession(id: string, reason: unknown): ActiveSession | undefined {
+    const entry = this.#sessions.get(id);
+    if (entry === undefined || entry.closed) return undefined;
+    entry.closed = true;
+    this.#sessions.delete(id);
+    const watchers = [...entry.closeWatchers];
+    entry.closeWatchers.clear();
+    for (const watcher of watchers) {
+      try {
+        void Promise.resolve(watcher(reason)).catch(() => undefined);
+      } catch {
+        // App cleanup callbacks cannot interfere with the control session's shutdown.
+      }
+    }
+    return entry;
   }
 
   #target(name: string): NativeTarget {

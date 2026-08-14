@@ -12,6 +12,7 @@ import { validateArtifact } from '../src/build/validate-artifact.ts';
 import { normalizeProject } from '../src/config/normalize.ts';
 import type { LoadedConfig } from '../src/config/load.ts';
 import { EpochStore } from '../src/dev/epoch-store.ts';
+import { McpAppBindingService, type McpAppSessionAuthority } from '../src/dev/mcp-app-binding-service.ts';
 import { McpSession, McpSessionService } from '../src/dev/mcp-session-service.ts';
 import type { ArtifactEpoch } from '../src/dev/types.ts';
 import { pathTokens, type AgentBundleConfig, type NormalizationTargetRegistry } from '../src/core/types.ts';
@@ -1337,6 +1338,198 @@ it('exposes one opaque, epoch-bound session handle with a bounded ordered wire t
     } else {
       process.env[secretKey] = previousSecret;
     }
+    await rm(root, { force: true, recursive: true });
+  }
+}, 30_000);
+
+it('leases immutable canonical MCP App data without closing the control-owned session', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-mcp-app-lease-'));
+  try {
+    const epochStore = await publishFixtureEpoch(root, 'epoch-app');
+    const visibleTool = {
+      _meta: { ui: { resourceUri: 'ui://weather/forecast.html', visibility: ['app'] } },
+      inputSchema: { type: 'object' as const },
+      name: 'show-weather',
+    };
+    const hiddenTool = {
+      _meta: { ui: { resourceUri: 'ui://weather/private.html', visibility: ['model'] } },
+      inputSchema: { type: 'object' as const },
+      name: 'delete-weather',
+    };
+    const defaultTool = {
+      _meta: { ui: { resourceUri: 'ui://weather/default.html' } },
+      inputSchema: { type: 'object' as const },
+      name: 'default-weather',
+    };
+    const visibleResource = {
+      _meta: { ui: { visibility: ['app'] } },
+      mimeType: 'text/html',
+      name: 'weather-app',
+      uri: 'ui://weather/forecast.html',
+    };
+    const hiddenResource = {
+      _meta: { ui: { visibility: ['model'] } },
+      mimeType: 'text/html',
+      name: 'private-app',
+      uri: 'ui://weather/private.html',
+    };
+    const defaultResource = {
+      mimeType: 'text/html',
+      name: 'default-app',
+      uri: 'ui://weather/default.html',
+    };
+    const calls: Array<{ readonly arguments: Record<string, unknown>; readonly name: string }> = [];
+    const service = new McpSessionService({
+      createClient: () => ({
+        callTool: async ({ arguments: toolArguments, name }) => {
+          calls.push({ arguments: toolArguments, name });
+          return { content: [{ text: 'forecast', type: 'text' }], structuredContent: { name } };
+        },
+        close: async () => undefined,
+        connect: async () => undefined,
+        getPrompt: async () => ({ messages: [] }),
+        getServerCapabilities: () => undefined,
+        getServerVersion: () => undefined,
+        listPrompts: async () => ({ prompts: [] }),
+        listResources: async () => ({ resources: [visibleResource, hiddenResource, defaultResource] }),
+        listResourceTemplates: async () => ({ resourceTemplates: [] }),
+        listTools: async () => ({ tools: [visibleTool, hiddenTool, defaultTool] }),
+        readResource: async ({ uri }) => ({ contents: [{ text: uri, type: 'text' }] }),
+      }),
+      createStdioTransport: () => ({ close: async () => undefined, send: async () => undefined, start: async () => undefined, stderr: null }) as never,
+      epochStore,
+      projectRoot: root,
+    });
+    const authority: McpAppSessionAuthority = service;
+    const session = await service.open({ epochId: 'epoch-app', serverName: 'fixture', target: 'portable' });
+    const lease = await authority.acquireAppLease(session.id);
+
+    const identity = lease.session.identity as typeof lease.session.identity & { readonly binding: typeof session.binding };
+    expect(identity).toEqual({ binding: session.binding, sessionId: session.id });
+    expect(Object.isFrozen(identity)).toBe(true);
+    expect(Object.isFrozen(identity.binding)).toBe(true);
+    expect(await lease.session.listBridgeTools()).toEqual([
+      { appVisible: true, definition: visibleTool, name: 'show-weather' },
+      { appVisible: false, definition: hiddenTool, name: 'delete-weather' },
+      { appVisible: true, definition: defaultTool, name: 'default-weather' },
+    ]);
+    expect(await lease.session.listBridgeResources()).toEqual([
+      { appVisible: true, uri: 'ui://weather/forecast.html' },
+      { appVisible: false, uri: 'ui://weather/private.html' },
+      { appVisible: true, uri: 'ui://weather/default.html' },
+    ]);
+    visibleTool._meta.ui.resourceUri = 'ui://attacker/replaced.html';
+    visibleResource._meta.ui.visibility = ['model'];
+    expect(await lease.session.listBridgeTools()).toEqual([
+      {
+        appVisible: true,
+        definition: {
+          _meta: { ui: { resourceUri: 'ui://weather/forecast.html', visibility: ['app'] } },
+          inputSchema: { type: 'object' },
+          name: 'show-weather',
+        },
+        name: 'show-weather',
+      },
+      { appVisible: false, definition: hiddenTool, name: 'delete-weather' },
+      { appVisible: true, definition: defaultTool, name: 'default-weather' },
+    ]);
+    expect(await lease.session.listBridgeResources()).toEqual([
+      { appVisible: true, uri: 'ui://weather/forecast.html' },
+      { appVisible: false, uri: 'ui://weather/private.html' },
+      { appVisible: true, uri: 'ui://weather/default.html' },
+    ]);
+    await expect(lease.session.callTool({ arguments: { city: 'Paris' }, name: 'show-weather' })).resolves.toEqual({
+      content: [{ text: 'forecast', type: 'text' }],
+      structuredContent: { name: 'show-weather' },
+    });
+    await expect(lease.session.readResource({ uri: 'ui://weather/forecast.html' })).resolves.toEqual({
+      contents: [{ text: 'ui://weather/forecast.html', type: 'text' }],
+    });
+    expect(calls).toEqual([{ arguments: { city: 'Paris' }, name: 'show-weather' }]);
+
+    await lease.release();
+    await lease.release();
+    await expect(session.listTools()).resolves.toEqual([visibleTool, hiddenTool, defaultTool]);
+    await service.close();
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+}, 30_000);
+
+it('synchronously invalidates App leases when the control session closes during binding creation', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-mcp-app-close-race-'));
+  try {
+    const epochStore = await publishFixtureEpoch(root, 'epoch-app-close');
+    const appTool = {
+      _meta: { ui: { resourceUri: 'ui://weather/forecast.html', visibility: ['app'] } },
+      inputSchema: { type: 'object' as const },
+      name: 'show-weather',
+    };
+    let allowListing: (() => void) | undefined;
+    const listing = new Promise<void>((resolvePromise) => {
+      allowListing = resolvePromise;
+    });
+    let listingStarted: (() => void) | undefined;
+    const started = new Promise<void>((resolvePromise) => {
+      listingStarted = resolvePromise;
+    });
+    let clientCloses = 0;
+    const service = new McpSessionService({
+      createClient: () => ({
+        callTool: async () => ({ content: [] }),
+        close: async () => {
+          clientCloses += 1;
+        },
+        connect: async () => undefined,
+        getPrompt: async () => ({ messages: [] }),
+        getServerCapabilities: () => undefined,
+        getServerVersion: () => undefined,
+        listPrompts: async () => ({ prompts: [] }),
+        listResources: async () => ({ resources: [] }),
+        listResourceTemplates: async () => ({ resourceTemplates: [] }),
+        listTools: async () => {
+          listingStarted?.();
+          await listing;
+          return { tools: [appTool] };
+        },
+        readResource: async () => ({ contents: [] }),
+      }),
+      createStdioTransport: () => ({ close: async () => undefined, send: async () => undefined, start: async () => undefined, stderr: null }) as never,
+      epochStore,
+      projectRoot: root,
+    });
+    const session = await service.open({ epochId: 'epoch-app-close', serverName: 'fixture', target: 'portable' });
+    const bindings = new McpAppBindingService({ sessionAuthority: service });
+    const creating = bindings.createBinding({
+      input: {},
+      previewProfile: 'portable',
+      result: {},
+      sessionId: session.id,
+      tool: appTool,
+    });
+    await started;
+
+    const closing = service.closeSession(session.id);
+    expect(service.get(session.id)).toBeUndefined();
+    await expect(service.acquireAppLease(session.id)).rejects.toThrow('Unknown MCP App session');
+    allowListing?.();
+    await expect(creating).rejects.toThrow('MCP session closed before its App binding completed.');
+    await closing;
+    expect(clientCloses).toBe(1);
+
+    const serviceSession = await service.open({ epochId: 'epoch-app-close', serverName: 'fixture', target: 'portable' });
+    const serviceLease = await service.acquireAppLease(serviceSession.id);
+    const closeReasons: unknown[] = [];
+    serviceLease.watchSessionClosed((reason) => {
+      closeReasons.push(reason);
+    });
+    const serviceClosing = service.close();
+    expect(service.get(serviceSession.id)).toBeUndefined();
+    expect(closeReasons).toHaveLength(1);
+    await serviceClosing;
+    await serviceLease.release();
+    expect(clientCloses).toBe(2);
+  } finally {
     await rm(root, { force: true, recursive: true });
   }
 }, 30_000);
