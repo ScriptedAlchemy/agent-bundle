@@ -1,5 +1,10 @@
 import type { Diagnostic } from '../core/diagnostics.ts';
 
+export type JsonPrimitive = boolean | null | number | string;
+export type JsonArray = readonly JsonValue[];
+export type JsonObject = Readonly<{ readonly [key: string]: JsonValue }>;
+export type JsonValue = JsonArray | JsonObject | JsonPrimitive;
+
 export interface DiagnosticSummary {
   readonly errors: number;
   readonly infos: number;
@@ -26,34 +31,81 @@ export interface SourceStatus {
   readonly state: SourceState;
 }
 
-export type BuildAttemptOutcome = 'running' | 'succeeded' | 'failed';
-
-/** A single build attempt. Failed attempts never replace an active epoch. */
-export interface BuildAttempt {
-  readonly completedAt?: string;
+export interface RunningBuildAttempt {
+  readonly completedAt?: never;
   readonly diagnostics: readonly Diagnostic[];
   readonly id: string;
-  readonly outcome: BuildAttemptOutcome;
+  readonly outcome: 'running';
+  readonly result?: never;
   readonly sourceRevision: string;
   readonly startedAt: string;
 }
 
-export type BuildState = 'idle' | 'building' | 'failed';
-
-export interface BuildStatus {
-  readonly lastAttempt?: BuildAttempt;
-  readonly state: BuildState;
+export interface SucceededBuildAttempt {
+  readonly completedAt: string;
+  readonly diagnostics: readonly Diagnostic[];
+  readonly id: string;
+  readonly outcome: 'succeeded';
+  readonly result: Readonly<{ readonly epoch: ArtifactEpoch }>;
+  readonly sourceRevision: string;
+  readonly startedAt: string;
 }
 
-export type ArtifactState = 'missing' | 'active' | 'stale';
-
-export interface ArtifactStatus {
-  /** Last fully published epoch, including while it is stale. */
-  readonly activeEpoch?: ArtifactEpoch;
-  /** Revision of the source currently represented by the source status. */
-  readonly currentSourceRevision?: string;
-  readonly state: ArtifactState;
+export interface FailedBuildAttempt {
+  readonly completedAt: string;
+  readonly diagnostics: readonly [Diagnostic, ...Diagnostic[]];
+  readonly id: string;
+  readonly outcome: 'failed';
+  readonly result?: never;
+  readonly sourceRevision: string;
+  readonly startedAt: string;
 }
+
+export type BuildAttempt =
+  | RunningBuildAttempt
+  | SucceededBuildAttempt
+  | FailedBuildAttempt;
+export type BuildAttemptOutcome = BuildAttempt['outcome'];
+export type CompletedBuildAttempt = Exclude<BuildAttempt, RunningBuildAttempt>;
+
+export type BuildStatus =
+  | Readonly<{
+      readonly lastAttempt?: CompletedBuildAttempt;
+      readonly state: 'idle';
+    }>
+  | Readonly<{
+      readonly activeAttempt: RunningBuildAttempt;
+      readonly lastAttempt?: CompletedBuildAttempt;
+      readonly state: 'building';
+    }>
+  | Readonly<{
+      readonly lastAttempt: FailedBuildAttempt;
+      readonly state: 'failed';
+    }>;
+
+export type BuildState = BuildStatus['state'];
+
+export type ArtifactStatus =
+  | Readonly<{
+      readonly activeEpoch?: never;
+      readonly currentSourceRevision?: string;
+      readonly state: 'missing';
+    }>
+  | Readonly<{
+      readonly activeEpoch: ArtifactEpoch;
+      readonly currentSourceRevision: string;
+      readonly state: 'active';
+    }>
+  | Readonly<{
+      /** Last fully published epoch, retained while the source is newer. */
+      readonly activeEpoch: ArtifactEpoch;
+      readonly currentSourceRevision: string;
+      readonly state: 'stale';
+    }>;
+
+export type ActiveArtifactStatus = Extract<ArtifactStatus, { state: 'active' }>;
+export type StaleArtifactStatus = Extract<ArtifactStatus, { state: 'stale' }>;
+export type ArtifactState = ArtifactStatus['state'];
 
 export interface ProjectStatus {
   readonly artifact: ArtifactStatus;
@@ -71,34 +123,41 @@ export interface Invalidation {
 }
 
 export interface RuntimeEvent {
-  readonly details?: Readonly<Record<string, unknown>>;
+  readonly details?: JsonObject;
   readonly sessionId: string;
   readonly type: string;
 }
 
-export type ProjectEventType =
-  | 'source.changed'
-  | 'source.status'
-  | 'invalidation'
-  | 'build.started'
-  | 'build.failed'
-  | 'artifact.available'
-  | 'artifact.status'
-  | 'runtime.event';
-
-/**
- * Stable envelope used by every persisted-in-memory project event. Sequence IDs
- * belong only to published events; synthetic replay notices intentionally have
- * their own type so they cannot impersonate an event that has fallen out of the
- * bounded buffer.
- */
-export interface ProjectEvent<TPayload = unknown> {
-  readonly epochId?: string;
-  readonly occurredAt: string;
-  readonly payload: TPayload;
-  readonly sequence: number;
-  readonly type: ProjectEventType;
+export interface ProjectEventPayloadMap {
+  readonly 'artifact.available': ActiveArtifactStatus;
+  readonly 'artifact.status': ArtifactStatus;
+  readonly 'build.failed': FailedBuildAttempt;
+  readonly 'build.started': RunningBuildAttempt;
+  readonly invalidation: Invalidation;
+  readonly 'runtime.event': RuntimeEvent;
+  readonly 'source.changed': Invalidation;
+  readonly 'source.status': SourceStatus;
 }
+
+export type ProjectEventType = keyof ProjectEventPayloadMap;
+type EpochScopedProjectEventType = 'artifact.available' | 'runtime.event';
+
+type ProjectEventFor<TType extends ProjectEventType> = Readonly<{
+  readonly occurredAt: string;
+  readonly payload: ProjectEventPayloadMap[TType];
+  readonly sequence: number;
+  readonly type: TType;
+}> &
+  (TType extends EpochScopedProjectEventType
+    ? Readonly<{ readonly epochId: string }>
+    : Readonly<{ readonly epochId?: string }>);
+
+/** Stable envelope for each published project event. */
+export type ProjectEvent = {
+  readonly [TType in ProjectEventType]: ProjectEventFor<TType>;
+}[ProjectEventType];
+
+export type ProjectEventOf<TType extends ProjectEventType> = ProjectEventFor<TType>;
 
 export interface ProjectReplayGap {
   readonly earliestAvailableSequence: number;
@@ -108,6 +167,70 @@ export interface ProjectReplayGap {
 }
 
 export type ProjectEventMessage = ProjectEvent | ProjectReplayGap;
+
+const invalidJson = (reason: string): never => {
+  throw new TypeError(`Project event payload must be JSON: ${reason}`);
+};
+
+const freezeJson = (value: unknown, seen: WeakSet<object>): JsonValue => {
+  if (value === null || typeof value === 'boolean' || typeof value === 'string') {
+    return value;
+  }
+
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : invalidJson('numbers must be finite');
+  }
+
+  if (typeof value !== 'object') {
+    return invalidJson(`unsupported ${typeof value} value`);
+  }
+
+  if (seen.has(value)) {
+    return invalidJson('cyclic or repeated references are not supported');
+  }
+  seen.add(value);
+
+  if (Array.isArray(value)) {
+    for (const key of Reflect.ownKeys(value)) {
+      if (typeof key !== 'string' || (key !== 'length' && !/^(0|[1-9]\d*)$/.test(key))) {
+        return invalidJson('arrays cannot contain non-index properties');
+      }
+    }
+
+    for (let index = 0; index < value.length; index += 1) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+      if (descriptor === undefined || !('value' in descriptor)) {
+        return invalidJson('arrays cannot contain holes or accessors');
+      }
+      freezeJson(descriptor.value, seen);
+    }
+
+    return Object.freeze(value) as JsonArray;
+  }
+
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) {
+    return invalidJson('objects must have a plain-object prototype');
+  }
+
+  for (const key of Reflect.ownKeys(value)) {
+    if (typeof key !== 'string') {
+      return invalidJson('objects cannot contain symbol properties');
+    }
+
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (descriptor === undefined || !('value' in descriptor)) {
+      return invalidJson('objects cannot contain accessors');
+    }
+    freezeJson(descriptor.value, seen);
+  }
+
+  return Object.freeze(value) as JsonObject;
+};
+
+/** Validates a strict JSON tree and freezes every reachable array and object. */
+export const freezeJsonValue = (value: unknown): JsonValue =>
+  freezeJson(value, new WeakSet<object>());
 
 const freezeStructured = <T>(value: T, seen = new WeakSet<object>()): T => {
   if (value === null || typeof value !== 'object' || seen.has(value)) {
@@ -131,7 +254,5 @@ export const freezeProjectStatus = (status: ProjectStatus): ProjectStatus =>
 export const freezeInvalidation = (invalidation: Invalidation): Invalidation =>
   freezeStructured(invalidation);
 
-export const freezeProjectEvent = <TPayload>(
-  event: ProjectEvent<TPayload>,
-): ProjectEvent<TPayload> => freezeStructured(event);
-
+export const freezeProjectEvent = (event: ProjectEvent): ProjectEvent =>
+  freezeStructured(event);

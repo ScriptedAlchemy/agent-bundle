@@ -11,6 +11,15 @@ import {
 const isPublishedEvent = (event: ProjectEventMessage): event is ProjectEvent =>
   event.type !== 'replay.gap';
 
+const invalidation = (
+  paths: readonly string[],
+  reason: 'initial' | 'manual' | 'source-change' = 'source-change',
+) => ({
+  occurredAt: '2026-08-14T12:00:00.000Z',
+  paths,
+  reason,
+});
+
 it('retains the active artifact when a later build attempt fails', () => {
   const status = freezeProjectStatus({
     artifact: {
@@ -36,7 +45,7 @@ it('retains the active artifact when a later build attempt fails', () => {
             message: 'The compiler rejected the current source.',
             severity: 'error',
           },
-        ],
+        ] as const,
         id: 'attempt-2',
         outcome: 'failed',
         sourceRevision: 'source-2',
@@ -73,10 +82,11 @@ it('assigns monotonic sequence IDs and freezes published event payloads', () => 
   const hub = new ProjectEventHub();
 
   const first = hub.publish({
-    payload: { paths: ['skills/review/SKILL.md'] },
+    payload: invalidation(['skills/review/SKILL.md']),
     type: 'source.changed',
   });
   const second = hub.publish({
+    epochId: 'epoch-1',
     payload: { sessionId: 'run-1', type: 'mcp.connected' },
     type: 'runtime.event',
   });
@@ -89,8 +99,8 @@ it('assigns monotonic sequence IDs and freezes published event payloads', () => 
 
 it('queues live events published during replay until retained events are delivered', () => {
   const hub = new ProjectEventHub();
-  hub.publish({ payload: { paths: ['agent-bundle.config.ts'] }, type: 'source.changed' });
-  hub.publish({ payload: { reason: 'manual' }, type: 'build.started' });
+  hub.publish({ payload: invalidation(['agent-bundle.config.ts']), type: 'source.changed' });
+  hub.publish({ payload: invalidation([], 'manual'), type: 'invalidation' });
 
   const received: number[] = [];
   hub.subscribe({ afterSequence: 0 }, (event) => {
@@ -101,6 +111,7 @@ it('queues live events published during replay until retained events are deliver
     received.push(event.sequence);
     if (event.sequence === 1) {
       hub.publish({
+        epochId: 'epoch-1',
         payload: { sessionId: 'run-1', type: 'mcp.connected' },
         type: 'runtime.event',
       });
@@ -112,8 +123,8 @@ it('queues live events published during replay until retained events are deliver
 
 it('continues a reconnecting client with later live events in sequence order', () => {
   const hub = new ProjectEventHub();
-  hub.publish({ payload: { paths: ['one'] }, type: 'source.changed' });
-  hub.publish({ payload: { paths: ['two'] }, type: 'source.changed' });
+  hub.publish({ payload: invalidation(['one']), type: 'source.changed' });
+  hub.publish({ payload: invalidation(['two']), type: 'source.changed' });
 
   const received: number[] = [];
   hub.subscribe({ afterSequence: 1 }, (event) => {
@@ -121,16 +132,16 @@ it('continues a reconnecting client with later live events in sequence order', (
       received.push(event.sequence);
     }
   });
-  hub.publish({ payload: { paths: ['three'] }, type: 'source.changed' });
+  hub.publish({ payload: invalidation(['three']), type: 'source.changed' });
 
   expect(received).toEqual([2, 3]);
 });
 
 it('reports a replay gap before the retained suffix when the requested cursor has expired', () => {
   const hub = new ProjectEventHub({ replayLimit: 2 });
-  hub.publish({ payload: { paths: ['one'] }, type: 'source.changed' });
-  hub.publish({ payload: { paths: ['two'] }, type: 'source.changed' });
-  hub.publish({ payload: { paths: ['three'] }, type: 'source.changed' });
+  hub.publish({ payload: invalidation(['one']), type: 'source.changed' });
+  hub.publish({ payload: invalidation(['two']), type: 'source.changed' });
+  hub.publish({ payload: invalidation(['three']), type: 'source.changed' });
 
   const received: Array<{ readonly sequence?: number; readonly type: string }> = [];
   hub.subscribe({ afterSequence: 0 }, (event) => {
