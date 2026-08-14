@@ -11,11 +11,20 @@ export {
   DevCoordinator,
   type AffectedFileDiagnostics,
   type ArtifactBuilder,
+  type DevelopmentWatcher,
+  DevCoordinatorCloseError,
+  type DevCoordinatorCloseFailure,
   type DevCoordinatorOptions,
   type DevLockHandle,
   type DevSession,
   type ProjectPreparer,
 } from './coordinator.ts';
+export {
+  ProjectWatcher,
+  type ProjectWatcherOptions,
+  type SourceWatcher,
+  type SourceWatchEvent,
+} from './watcher.ts';
 export {
   createProjectEventHub,
   ProjectEventHub,

@@ -7,6 +7,7 @@ import { expect, it } from '@rstest/core';
 import { EpochStore } from '../src/dev/epoch-store.ts';
 import {
   DevCoordinator,
+  DevCoordinatorCloseError,
   ProjectEventHub,
   ProjectService,
   type ArtifactEpoch,
@@ -189,6 +190,117 @@ it('retains the last good epoch as stale when a later rebuild fails', async () =
     });
     expect(events).toEqual(expect.arrayContaining(['artifact.available', 'build.failed', 'artifact.status']));
     await coordinator.close();
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('waits for an in-flight build and closes watcher, diagnostics, and lock exactly once', async () => {
+  const root = await createProject();
+  let releaseBuild: (() => void) | undefined;
+  const buildReleased = new Promise<void>((resolvePromise) => {
+    releaseBuild = resolvePromise;
+  });
+  let signalBuildStarted: (() => void) | undefined;
+  const buildStarted = new Promise<void>((resolvePromise) => {
+    signalBuildStarted = resolvePromise;
+  });
+  let lockCloses = 0;
+  let diagnosticCloses = 0;
+  let watcherCloses = 0;
+
+  try {
+    const options = {
+      acquireLock: async () => ({ close: async () => { lockCloses += 1; } }),
+      artifactService: {
+        build: async (prepared: PreparedProject) => {
+          signalBuildStarted?.();
+          await buildReleased;
+          return succeeded(epochFor(root, 'epoch-close', prepared.source.revision ?? 'missing'));
+        },
+      },
+      createWatcher: () => ({
+        close: async () => { watcherCloses += 1; },
+      }),
+      diagnosticService: {
+        close: async () => { diagnosticCloses += 1; },
+        lint: async (paths: readonly string[]) => ({ diagnostics: [], paths }),
+      },
+      epochStore: new EpochStore({ projectRoot: root }),
+      projectService: new ProjectService({ root }),
+      root,
+    };
+    const coordinator = new DevCoordinator(options);
+    const starting = coordinator.start();
+    await buildStarted;
+    const firstClose = coordinator.close();
+    const secondClose = coordinator.close();
+
+    expect(firstClose).toBe(secondClose);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect([watcherCloses, diagnosticCloses, lockCloses]).toEqual([0, 0, 0]);
+    releaseBuild?.();
+    await Promise.all([starting, firstClose]);
+
+    expect([watcherCloses, diagnosticCloses, lockCloses]).toEqual([1, 1, 1]);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('reports every failed release structurally after closing the remaining resources', async () => {
+  const root = await createProject();
+  const diagnosticFailure = new Error('diagnostics release failed');
+  const lockFailure = new Error('lock release failed');
+  const watcherFailure = new Error('watcher release failed');
+  const closed: string[] = [];
+
+  try {
+    const coordinator = new DevCoordinator({
+      acquireLock: async () => ({
+        close: async () => {
+          closed.push('lock');
+          throw lockFailure;
+        },
+      }),
+      artifactService: {
+        build: async (prepared) => succeeded(epochFor(root, 'epoch-errors', prepared.source.revision ?? 'missing')),
+      },
+      createWatcher: () => ({
+        close: async () => {
+          closed.push('watcher');
+          throw watcherFailure;
+        },
+      }),
+      diagnosticService: {
+        close: async () => {
+          closed.push('diagnostics');
+          throw diagnosticFailure;
+        },
+        lint: async (paths) => ({ diagnostics: [], paths }),
+      },
+      epochStore: new EpochStore({ projectRoot: root }),
+      projectService: new ProjectService({ root }),
+      root,
+    });
+
+    await coordinator.start();
+    let closeFailure: unknown;
+    try {
+      await coordinator.close();
+    } catch (error) {
+      closeFailure = error;
+    }
+
+    expect(closed.sort()).toEqual(['diagnostics', 'lock', 'watcher']);
+    expect(closeFailure).toBeInstanceOf(DevCoordinatorCloseError);
+    if (!(closeFailure instanceof DevCoordinatorCloseError)) throw closeFailure;
+    expect(closeFailure.failures).toEqual(expect.arrayContaining([
+      { error: diagnosticFailure, resource: 'diagnostics' },
+      { error: lockFailure, resource: 'lock' },
+      { error: watcherFailure, resource: 'watcher' },
+    ]));
   } finally {
     await rm(root, { force: true, recursive: true });
   }

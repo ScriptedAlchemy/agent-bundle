@@ -27,6 +27,7 @@ export default defineConfig({
       '@rspack/core',
       'ajv',
       'ajv/dist/2020.js',
+      'chokidar',
       'fast-glob',
       'ignore',
       'jiti',

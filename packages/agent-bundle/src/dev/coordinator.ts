@@ -7,6 +7,7 @@ import { acquireDevLock, type DevLockOptions } from './dev-lock.ts';
 import { EpochStore } from './epoch-store.ts';
 import { ProjectEventHub } from './events.ts';
 import { ProjectService, type PreparedProject } from './project-service.ts';
+import { ProjectWatcher, type ProjectWatcherOptions } from './watcher.ts';
 import {
   freezeInvalidation,
   freezeProjectStatus,
@@ -38,6 +39,26 @@ export interface AffectedFileDiagnostics {
   lint(paths: readonly string[]): Promise<DiagnosticReport>;
 }
 
+export interface DevelopmentWatcher {
+  close(): Promise<void>;
+}
+
+export interface DevCoordinatorCloseFailure {
+  readonly error: unknown;
+  readonly resource: 'build' | 'diagnostics' | 'lock' | 'watcher';
+}
+
+/** Reports every resource that could not be released during coordinator shutdown. */
+export class DevCoordinatorCloseError extends Error {
+  readonly failures: readonly DevCoordinatorCloseFailure[];
+
+  constructor(failures: readonly DevCoordinatorCloseFailure[]) {
+    super('DevCoordinator could not close every resource.');
+    this.name = 'DevCoordinatorCloseError';
+    this.failures = Object.freeze([...failures]);
+  }
+}
+
 export interface DevSession {
   close(): Promise<void>;
   status(): ProjectStatus;
@@ -48,6 +69,7 @@ export interface DevCoordinatorOptions {
   readonly artifactService?: ArtifactBuilder;
   readonly createAttemptId?: () => string;
   readonly diagnosticService?: AffectedFileDiagnostics;
+  readonly createWatcher?: (options: ProjectWatcherOptions) => DevelopmentWatcher;
   readonly epochStore?: EpochStore;
   readonly eventHub?: ProjectEventHub;
   readonly now?: () => Date;
@@ -131,6 +153,7 @@ export class DevCoordinator {
   readonly #acquireLock: (options: DevLockOptions) => Promise<DevLockHandle>;
   readonly #artifactService: ArtifactBuilder;
   readonly #createAttemptId: () => string;
+  readonly #createWatcher: (options: ProjectWatcherOptions) => DevelopmentWatcher;
   readonly #diagnosticService: AffectedFileDiagnostics;
   readonly #epochStore: EpochStore;
   readonly #eventHub: ProjectEventHub;
@@ -145,6 +168,7 @@ export class DevCoordinator {
   #queued: QueuedBuild | undefined;
   #startPromise: Promise<DevSession> | undefined;
   #status: ProjectStatus = initialStatus();
+  #watcher: DevelopmentWatcher | undefined;
 
   constructor(options: DevCoordinatorOptions) {
     this.#root = resolve(options.root);
@@ -152,6 +176,7 @@ export class DevCoordinator {
     this.#epochStore = options.epochStore ?? new EpochStore({ projectRoot: this.#root });
     this.#artifactService = options.artifactService ?? new ArtifactService({ epochStore: this.#epochStore });
     this.#createAttemptId = options.createAttemptId ?? (() => crypto.randomUUID());
+    this.#createWatcher = options.createWatcher ?? ((watcherOptions) => new ProjectWatcher(watcherOptions));
     this.#diagnosticService = options.diagnosticService ?? new DiagnosticService({ root: this.#root });
     this.#eventHub = options.eventHub ?? new ProjectEventHub({ now: options.now });
     this.#now = options.now ?? (() => new Date());
@@ -196,14 +221,24 @@ export class DevCoordinator {
   async #start(): Promise<DevSession> {
     this.#lock = await this.#acquireLock({ projectRoot: this.#root });
     try {
+      if (this.#closing) throw new Error('DevCoordinator is closed.');
       await this.#epochStore.recoverStaging();
+      this.#watcher = this.#createWatcher({
+        now: this.#now,
+        onInvalidation: async (invalidation) => this.rebuild(invalidation),
+        root: this.#root,
+      });
       await this.rebuild(nowInvalidation(this.#now, 'initial', []));
       return Object.freeze({
         close: () => this.close(),
         status: () => this.status(),
       });
     } catch (error) {
-      await this.#lock.close();
+      await Promise.allSettled([
+        this.#watcher?.close() ?? Promise.resolve(),
+        this.#lock.close(),
+      ]);
+      this.#watcher = undefined;
       this.#lock = undefined;
       throw error;
     }
@@ -299,12 +334,29 @@ export class DevCoordinator {
   }
 
   async #close(): Promise<void> {
-    await this.#currentBuild;
-    const results = await Promise.allSettled([
-      this.#diagnosticService.close(),
-      this.#lock?.close() ?? Promise.resolve(),
-    ]);
-    const rejected = results.find((result) => result.status === 'rejected');
-    if (rejected !== undefined && rejected.status === 'rejected') throw rejected.reason;
+    const inFlight = this.#currentBuild ?? this.#startPromise;
+    const buildResult = await Promise.allSettled([inFlight ?? Promise.resolve()]);
+    const resources: readonly Readonly<{
+      readonly close: () => Promise<unknown>;
+      readonly resource: DevCoordinatorCloseFailure['resource'];
+    }>[] = [
+      { close: async () => this.#watcher?.close(), resource: 'watcher' },
+      { close: () => this.#diagnosticService.close(), resource: 'diagnostics' },
+      { close: async () => this.#lock?.close(), resource: 'lock' },
+    ];
+    const results = await Promise.allSettled(resources.map(async ({ close }) => close()));
+    const failures = [
+      ...buildResult.flatMap((result): readonly DevCoordinatorCloseFailure[] =>
+        result.status === 'rejected'
+          ? [Object.freeze({ error: result.reason, resource: 'build' })]
+          : [],
+      ),
+      ...results.flatMap((result, index): readonly DevCoordinatorCloseFailure[] =>
+        result.status === 'rejected'
+          ? [Object.freeze({ error: result.reason, resource: resources[index]!.resource })]
+          : [],
+      ),
+    ];
+    if (failures.length > 0) throw new DevCoordinatorCloseError(failures);
   }
 }
