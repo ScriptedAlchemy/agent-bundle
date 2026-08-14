@@ -182,6 +182,7 @@ it('omits the Claude domain for noncanonical or nonpublic MCP URLs', () => {
     'https://[fc00::1]/v1/mcp',
     'https://[ff02::1]/v1/mcp',
     'https://[2001:db8::1]/v1/mcp',
+    'https://[100:0:0:1::1]/mcp',
     'https://mcp.example.com:443/v1/mcp',
   ]) {
     const resolution = resolveMcpAppHostProfile({
