@@ -38,6 +38,11 @@ const readPackageManifest = async (): Promise<PackageManifest> =>
     await readFile(join(packageRoot, 'package.json'), 'utf8'),
   ) as PackageManifest;
 
+it('keeps package output filenames stable', async () => {
+  const config = (await import('../../../rslib.config.ts')).default;
+  expect(config).toMatchObject({ output: { filenameHash: false } });
+});
+
 it('preserves a synchronous config and exposes opaque path tokens', () => {
   const config = { plugin: { name: 'demo', version: '1.0.0' } };
   expect(defineConfig(config)).toBe(config);
