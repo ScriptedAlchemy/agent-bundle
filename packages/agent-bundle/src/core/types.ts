@@ -6,10 +6,20 @@ export interface AgentBundlePluginConfig {
 
 export interface AgentBundleConfig {
   plugin: AgentBundlePluginConfig;
+  skills?: string[];
   [key: string]: unknown;
 }
 
-export type ConfigFactory = () => AgentBundleConfig;
+export interface ConfigFactoryContext {
+  command: string;
+  mode: string;
+  projectRoot: string;
+  selectedTargets: readonly string[];
+}
+
+export type ConfigFactory = (
+  context: ConfigFactoryContext,
+) => AgentBundleConfig | Promise<AgentBundleConfig>;
 
 export const defineConfig = (
   config: AgentBundleConfig | ConfigFactory,

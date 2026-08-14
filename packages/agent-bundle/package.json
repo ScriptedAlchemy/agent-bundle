@@ -25,5 +25,11 @@
       "types": "./dist/eval/index.d.ts",
       "import": "./dist/eval.js"
     }
+  },
+  "dependencies": {
+    "fast-glob": "3.3.3",
+    "ignore": "7.0.6",
+    "jiti": "2.7.0",
+    "yaml": "2.9.0"
   }
 }
