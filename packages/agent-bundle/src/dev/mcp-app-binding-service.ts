@@ -25,6 +25,7 @@ export interface McpAppSessionIdentity {
 
 export interface McpAppBridgeTool {
   readonly appVisible: boolean;
+  readonly definition: McpAppToolDefinition;
   readonly name: string;
 }
 
@@ -44,7 +45,16 @@ export interface McpAppBridgeSession {
 export interface McpAppSessionLease {
   readonly session: McpAppBridgeSession;
   release(): Promise<void>;
-  subscribeSessionClosed(listener: (reason?: unknown) => Promise<void> | void): () => void;
+  /**
+   * Atomically registers the listener and reports whether the shared session
+   * was already closed at that registration point.
+   */
+  watchSessionClosed(listener: (reason?: unknown) => Promise<void> | void): McpAppSessionCloseObservation;
+}
+
+export interface McpAppSessionCloseObservation {
+  readonly closed: boolean;
+  readonly unsubscribe: () => void;
 }
 
 export interface McpAppSessionAuthority {
@@ -117,9 +127,7 @@ const isJsonValue = (value: unknown): value is McpAppJsonValue => {
 const cloneJson = (value: McpAppJsonValue): McpAppJsonValue => {
   if (value === null || typeof value === 'boolean' || typeof value === 'number' || typeof value === 'string') return value;
   if (Array.isArray(value)) return Object.freeze(value.map(cloneJson));
-  const copy = Object.create(null) as Record<string, McpAppJsonValue>;
-  for (const [key, child] of Object.entries(value)) copy[key] = cloneJson(child);
-  return Object.freeze(copy);
+  return Object.freeze(Object.fromEntries(Object.entries(value).map(([key, child]) => [key, cloneJson(child)])));
 };
 
 const requireJson = (value: unknown, label: string): McpAppJsonValue => {
@@ -173,11 +181,10 @@ export class McpAppBindingService {
   async createBinding(options: CreateMcpAppBindingOptions): Promise<McpAppBinding> {
     const sessionId = requireNonempty(options.sessionId, 'MCP App session id');
     const toolName = requireNonempty(options.tool.name, 'MCP App tool name');
-    const resourceUri = selectMcpAppResourceUri(options.tool);
-    if (resourceUri === undefined) {
+    const requestedResourceUri = selectMcpAppResourceUri(options.tool);
+    if (requestedResourceUri === undefined) {
       throw new Error('MCP App tool must declare a standard _meta.ui.resourceUri using ui://.');
     }
-    const toolDefinition = requireJson(options.tool, 'MCP App tool definition') as McpAppToolDefinition;
     const input = requireJson(options.input, 'MCP App tool input');
     const result = requireJson(options.result, 'MCP App tool result');
     const previewProfile = requireProfile(options.previewProfile);
@@ -187,11 +194,25 @@ export class McpAppBindingService {
 
     const lease = await this.#sessionAuthority.acquireAppLease(sessionId);
     let entry: BindingEntry | undefined;
+    let observation: McpAppSessionCloseObservation | undefined;
+    let sessionClosed = false;
     try {
       const identity = lease.session.identity;
       if (identity.sessionId !== sessionId) {
         throw new Error(`MCP App lease identity does not match requested session ${JSON.stringify(sessionId)}.`);
       }
+      observation = lease.watchSessionClosed((reason) => {
+        sessionClosed = true;
+        void reason;
+        return entry === undefined ? undefined : this.#closeEntry(entry, 'session-closed');
+      });
+      sessionClosed ||= observation.closed;
+      if (sessionClosed) throw new Error('MCP session closed before its App binding completed.');
+
+      const tool = await this.#canonicalTool(lease, toolName, requestedResourceUri);
+      if (sessionClosed) throw new Error('MCP session closed before its App binding completed.');
+      const resourceUri = selectMcpAppResourceUri(tool.definition)!;
+      const toolDefinition = requireJson(tool.definition, 'MCP App leased tool definition') as McpAppToolDefinition;
       const binding = Object.freeze({
         epochId: requireNonempty(identity.epochId, 'MCP App epoch id'),
         id: randomUUID(),
@@ -214,16 +235,16 @@ export class McpAppBindingService {
         unsubscribe: () => undefined,
       };
       this.#entries.set(binding.id, entry);
-      const unsubscribe = lease.subscribeSessionClosed((reason) => this.#closeEntry(entry!, 'session-closed', reason));
-      entry.unsubscribe = unsubscribe;
-      if (entry.closed) {
-        unsubscribe();
+      entry.unsubscribe = observation.unsubscribe;
+      if (sessionClosed || entry.closed) {
+        observation.unsubscribe();
         await entry.closePromise;
         throw new Error('MCP session closed before its App binding completed.');
       }
       return binding;
     } catch (error) {
       if (entry === undefined) {
+        observation?.unsubscribe();
         await lease.release();
       } else if (this.#entries.get(entry.binding.id) === entry) {
         await this.#closeEntry(entry, 'app-closed');
@@ -274,20 +295,20 @@ export class McpAppBindingService {
     }
   }
 
-  async #closeEntry(entry: BindingEntry, reason: 'app-closed' | 'session-closed', sessionReason?: unknown): Promise<void> {
+  async #closeEntry(entry: BindingEntry, reason: 'app-closed' | 'session-closed'): Promise<void> {
     if (entry.closePromise !== undefined) return entry.closePromise;
     entry.closed = true;
     this.#entries.delete(entry.binding.id);
     entry.unsubscribe();
     entry.closePromise = (async () => {
       const release = entry.lease.release();
-      await this.#runTeardown(entry, reason, sessionReason);
+      await this.#runTeardown(entry, reason);
       await release;
     })();
     return entry.closePromise;
   }
 
-  async #runTeardown(entry: BindingEntry, reason: 'app-closed' | 'session-closed', sessionReason: unknown): Promise<void> {
+  async #runTeardown(entry: BindingEntry, reason: 'app-closed' | 'session-closed'): Promise<void> {
     const teardown = entry.onTeardown;
     if (teardown === undefined) return;
     const event = Object.freeze({ binding: entry.binding, reason });
@@ -298,8 +319,26 @@ export class McpAppBindingService {
     const bounded = new Promise<void>((resolvePromise) => {
       timeout = setTimeout(resolvePromise, this.#teardownTimeoutMs);
     });
-    void sessionReason;
     await Promise.race([complete, bounded]);
     if (timeout !== undefined) clearTimeout(timeout);
+  }
+
+  async #canonicalTool(
+    lease: McpAppSessionLease,
+    toolName: string,
+    requestedResourceUri: string,
+  ): Promise<McpAppBridgeTool> {
+    const tool = (await lease.session.listBridgeTools()).find((candidate) => candidate.name === toolName && candidate.appVisible === true);
+    if (tool === undefined || tool.definition.name !== toolName) {
+      throw new Error(`MCP App tool ${JSON.stringify(toolName)} is not app-visible for the leased session.`);
+    }
+    const resourceUri = selectMcpAppResourceUri(tool.definition);
+    if (resourceUri === undefined) {
+      throw new Error(`MCP App tool ${JSON.stringify(toolName)} lacks a standard _meta.ui.resourceUri in the leased session.`);
+    }
+    if (resourceUri !== requestedResourceUri) {
+      throw new Error(`MCP App metadata for ${JSON.stringify(toolName)} does not match the leased session tool.`);
+    }
+    return tool;
   }
 }

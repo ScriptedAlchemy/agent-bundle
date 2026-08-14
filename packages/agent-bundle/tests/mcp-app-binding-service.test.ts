@@ -14,7 +14,12 @@ interface SessionFixture {
   readonly reads: string[];
   readonly releases: number[];
   readonly sessionCloseCalls: number[];
-  createLease(): McpAppSessionLease;
+  createLease(): McpAppSessionLease & {
+    watchSessionClosed(listener: (reason?: unknown) => Promise<void> | void): {
+      readonly closed: boolean;
+      readonly unsubscribe: () => void;
+    };
+  };
   closeSession(): Promise<void>;
 }
 
@@ -26,12 +31,13 @@ const appTool: McpAppToolDefinition = {
   name: 'show-weather',
 };
 
-const createSessionFixture = (): SessionFixture => {
+const createSessionFixture = (options: { readonly closeBeforeObservation?: boolean } = {}): SessionFixture => {
   const closeListeners = new Set<(reason?: unknown) => Promise<void> | void>();
   const calls: Array<{ readonly arguments: McpAppJsonValue | undefined; readonly name: string }> = [];
   const reads: string[] = [];
   const releases: number[] = [];
   const sessionCloseCalls: number[] = [];
+  let sessionClosed = false;
 
   return {
     calls,
@@ -48,6 +54,7 @@ const createSessionFixture = (): SessionFixture => {
         session: {
           callTool: async ({ arguments: toolArguments, name }) => {
             calls.push({ arguments: toolArguments, name });
+            if (name === 'round-trip') return toolArguments ?? null;
             return { content: [{ text: `called ${name}`, type: 'text' }] };
           },
           identity: {
@@ -61,22 +68,29 @@ const createSessionFixture = (): SessionFixture => {
             { appVisible: false, uri: 'resource://weather/private' },
           ],
           listBridgeTools: async () => [
-            { appVisible: true, name: 'refresh-weather' },
-            { appVisible: false, name: 'delete-weather' },
+            { appVisible: true, definition: appTool, name: 'show-weather' },
+            { appVisible: true, definition: { name: 'refresh-weather' }, name: 'refresh-weather' },
+            { appVisible: true, definition: { name: 'round-trip' }, name: 'round-trip' },
+            { appVisible: false, definition: { name: 'delete-weather' }, name: 'delete-weather' },
           ],
           readResource: async ({ uri }) => {
             reads.push(uri);
             return { contents: [{ text: uri, type: 'text' }] };
           },
         },
-        subscribeSessionClosed: (listener) => {
+        watchSessionClosed: (listener: (reason?: unknown) => Promise<void> | void) => {
+          if (options.closeBeforeObservation) {
+            sessionClosed = true;
+            return { closed: true, unsubscribe: () => undefined };
+          }
           closeListeners.add(listener);
-          return () => closeListeners.delete(listener);
+          return { closed: sessionClosed, unsubscribe: () => closeListeners.delete(listener) };
         },
       };
     },
     closeSession: async () => {
       sessionCloseCalls.push(1);
+      sessionClosed = true;
       await Promise.all([...closeListeners].map((listener) => listener(new Error('session control closed'))));
     },
   };
@@ -162,6 +176,57 @@ it('authorizes bridge operations from the opaque binding against only app-visibl
   await expect(service.callTool('session-weather', { arguments: {}, name: 'refresh-weather' })).rejects.toThrow('Unknown MCP App binding');
   expect(fixture.calls).toEqual([{ arguments: { force: true }, name: 'refresh-weather' }]);
   expect(fixture.reads).toEqual(['resource://weather/forecast']);
+});
+
+it('rejects forged tool metadata instead of binding a UI from another leased session', async () => {
+  const fixture = createSessionFixture();
+  const service = new McpAppBindingService({ sessionAuthority: authorityFor(fixture) });
+
+  await expect(service.createBinding({
+    input: {},
+    previewProfile: 'portable',
+    result: {},
+    sessionId: 'session-weather',
+    tool: {
+      ...appTool,
+      _meta: { ui: { resourceUri: 'ui://different-server/forged.html' } },
+    },
+  })).rejects.toThrow('does not match the leased session tool');
+  expect(fixture.releases).toEqual([1]);
+});
+
+it('does not return a live binding across the acquire-to-observe session close gap', async () => {
+  const fixture = createSessionFixture({ closeBeforeObservation: true });
+  const service = new McpAppBindingService({ sessionAuthority: authorityFor(fixture) });
+
+  await expect(service.createBinding({
+    input: {},
+    previewProfile: 'portable',
+    result: {},
+    sessionId: 'session-weather',
+    tool: appTool,
+  })).rejects.toThrow('closed before its App binding completed');
+  expect(fixture.releases).toEqual([1]);
+});
+
+it('round-trips immutable bridge JSON and rejects bridge operations after session close', async () => {
+  const fixture = createSessionFixture();
+  const service = new McpAppBindingService({ sessionAuthority: authorityFor(fixture) });
+  const binding = await service.createBinding({
+    input: {},
+    previewProfile: 'portable',
+    result: {},
+    sessionId: 'session-weather',
+    tool: appTool,
+  });
+
+  const argumentsValue: McpAppJsonValue = { nested: { value: 'round-trip' } };
+  const echoed = await service.callTool(binding.id, { arguments: argumentsValue, name: 'round-trip' });
+  expect(echoed).toEqual({ nested: { value: 'round-trip' } });
+  expect(Object.getPrototypeOf(echoed)).toBe(Object.prototype);
+  await fixture.closeSession();
+  await expect(service.callTool(binding.id, { arguments: {}, name: 'round-trip' })).rejects.toThrow('Unknown MCP App binding');
+  await expect(service.readResource(binding.id, { uri: 'resource://weather/forecast' })).rejects.toThrow('Unknown MCP App binding');
 });
 
 it('releases each app lease once while invalidating every binding on explicit session close', async () => {
