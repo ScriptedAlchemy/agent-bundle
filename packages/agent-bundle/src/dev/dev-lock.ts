@@ -1,10 +1,12 @@
-import { mkdir, open, readFile, rm, writeFile } from 'node:fs/promises';
-import { dirname, join, resolve } from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { link, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { basename, dirname, join, resolve } from 'node:path';
 
 import { stableJson } from '../core/digest.ts';
 
 export interface DevLockOwner {
   readonly createdAt: string;
+  readonly nonce: string;
   readonly pid: number;
   readonly projectRoot: string;
   readonly version: 1;
@@ -31,6 +33,7 @@ export class DevLockError extends Error {
 }
 
 const devLockName = 'dev.lock';
+const recoverySuffix = '.recovery';
 
 const isErrno = (error: unknown, code: string): boolean =>
   typeof error === 'object' && error !== null && 'code' in error && error.code === code;
@@ -51,6 +54,8 @@ const parseOwner = (value: string): DevLockOwner | undefined => {
     if (
       parsed.version !== 1 ||
       typeof parsed.createdAt !== 'string' ||
+      typeof parsed.nonce !== 'string' ||
+      parsed.nonce.length === 0 ||
       typeof pid !== 'number' ||
       !Number.isSafeInteger(pid) ||
       pid <= 0 ||
@@ -60,6 +65,7 @@ const parseOwner = (value: string): DevLockOwner | undefined => {
     }
     return Object.freeze({
       createdAt: parsed.createdAt,
+      nonce: parsed.nonce,
       pid,
       projectRoot: parsed.projectRoot,
       version: 1,
@@ -69,13 +75,45 @@ const parseOwner = (value: string): DevLockOwner | undefined => {
   }
 };
 
+const writeCompleteExclusive = async (path: string, contents: string, nonce: string): Promise<boolean> => {
+  const candidate = join(dirname(path), `.${basename(path)}.candidate-${nonce}`);
+  try {
+    await writeFile(candidate, contents, { encoding: 'utf8', flag: 'wx' });
+    try {
+      await link(candidate, path);
+      return true;
+    } catch (error) {
+      if (isErrno(error, 'EEXIST')) return false;
+      throw error;
+    }
+  } finally {
+    await rm(candidate, { force: true });
+  }
+};
+
+const removeIfOwned = async (path: string, contents: string): Promise<void> => {
+  try {
+    if (await readFile(path, 'utf8') === contents) {
+      await rm(path, { force: true });
+    }
+  } catch (error) {
+    if (!isErrno(error, 'ENOENT')) throw error;
+  }
+};
+
+const yieldToFilesystem = async (): Promise<void> => {
+  await new Promise<void>((resolvePromise) => setImmediate(resolvePromise));
+};
+
 export class DevLock {
   readonly #contents: string;
   readonly #path: string;
+  readonly #recoveryPath: string;
   #closed = false;
 
-  constructor(path: string, contents: string, owner: DevLockOwner) {
+  constructor(path: string, recoveryPath: string, contents: string, owner: DevLockOwner) {
     this.#path = path;
+    this.#recoveryPath = recoveryPath;
     this.#contents = contents;
     this.owner = owner;
   }
@@ -85,12 +123,14 @@ export class DevLock {
   async close(): Promise<void> {
     if (this.#closed) return;
     this.#closed = true;
+    const recoveryContents = `${stableJson({ owner: this.owner, version: 1 })}\n`;
+    while (!await writeCompleteExclusive(this.#recoveryPath, recoveryContents, this.owner.nonce)) {
+      await yieldToFilesystem();
+    }
     try {
-      if (await readFile(this.#path, 'utf8') === this.#contents) {
-        await rm(this.#path, { force: true });
-      }
-    } catch (error) {
-      if (!isErrno(error, 'ENOENT')) throw error;
+      await removeIfOwned(this.#path, this.#contents);
+    } finally {
+      await removeIfOwned(this.#recoveryPath, recoveryContents);
     }
   }
 }
@@ -101,25 +141,19 @@ export const acquireDevLock = async (options: DevLockOptions): Promise<DevLock> 
   const path = join(projectRoot, '.agent-bundle', devLockName);
   const owner: DevLockOwner = Object.freeze({
     createdAt: (options.now ?? (() => new Date()))().toISOString(),
+    nonce: randomUUID(),
     pid: process.pid,
     projectRoot,
     version: 1,
   });
   const contents = `${stableJson(owner)}\n`;
   const probeProcess = options.probeProcess ?? isProcessRunning;
+  const recoveryPath = `${path}${recoverySuffix}`;
   await mkdir(dirname(path), { recursive: true });
 
   for (;;) {
-    try {
-      const handle = await open(path, 'wx');
-      try {
-        await writeFile(handle, contents, 'utf8');
-      } finally {
-        await handle.close();
-      }
-      return new DevLock(path, contents, owner);
-    } catch (error) {
-      if (!isErrno(error, 'EEXIST')) throw error;
+    if (await writeCompleteExclusive(path, contents, owner.nonce)) {
+      return new DevLock(path, recoveryPath, contents, owner);
     }
 
     let currentContents: string;
@@ -144,12 +178,33 @@ export const acquireDevLock = async (options: DevLockOptions): Promise<DevLock> 
       );
     }
 
+    const recoveryContents = `${stableJson({ owner, version: 1 })}\n`;
+    if (!await writeCompleteExclusive(recoveryPath, recoveryContents, owner.nonce)) {
+      await yieldToFilesystem();
+      continue;
+    }
     try {
-      if (await readFile(path, 'utf8') !== currentContents) continue;
-      await rm(path);
+      let currentDuringRecovery: string;
+      try {
+        currentDuringRecovery = await readFile(path, 'utf8');
+      } catch (error) {
+        if (isErrno(error, 'ENOENT')) continue;
+        throw error;
+      }
+      if (currentDuringRecovery !== currentContents) continue;
+      const ownerDuringRecovery = parseOwner(currentDuringRecovery);
+      if (ownerDuringRecovery === undefined) {
+        throw new DevLockError(
+          'DEV_LOCK_INVALID',
+          'The existing development lock does not contain valid owner metadata.',
+        );
+      }
+      if (probeProcess(ownerDuringRecovery.pid)) continue;
+      await removeIfOwned(path, currentContents);
     } catch (error) {
-      if (isErrno(error, 'ENOENT')) continue;
-      throw error;
+      if (!isErrno(error, 'ENOENT')) throw error;
+    } finally {
+      await removeIfOwned(recoveryPath, recoveryContents);
     }
   }
 };

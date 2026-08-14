@@ -1,5 +1,6 @@
-import { lstat, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
-import { basename, dirname, join, resolve } from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { lstat, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, writeFile } from 'node:fs/promises';
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 
 import { stableJson } from '../core/digest.ts';
 import { freezeArtifactEpoch, type ArtifactEpoch } from './types.ts';
@@ -15,14 +16,23 @@ export interface CreateStagingEpochOptions {
 
 export type StagingValidator = (stagingRoot: string) => Promise<void>;
 
+/** Opaque, store-created staging root that can be published at most once. */
+export interface EpochStaging {
+  close(): Promise<void>;
+  publish(validate: StagingValidator): Promise<ArtifactEpoch>;
+  readonly root: string;
+}
+
 export type EpochStoreErrorCode =
   | 'EPOCH_ALREADY_EXISTS'
   | 'EPOCH_ID_INVALID'
+  | 'EPOCH_MANIFEST_INVALID'
   | 'EPOCH_METADATA_INVALID'
   | 'EPOCH_NOT_FOUND'
   | 'EPOCH_STAGING_CLOSED'
-  | 'EPOCH_STAGING_INCOMPLETE'
-  | 'EPOCH_TARGET_INVALID';
+  | 'EPOCH_STAGING_INVALID'
+  | 'EPOCH_TARGET_INVALID'
+  | 'EPOCH_TARGET_SET_INVALID';
 
 export class EpochStoreError extends Error {
   readonly code: EpochStoreErrorCode;
@@ -39,8 +49,18 @@ interface EpochMetadata {
   readonly version: 1;
 }
 
+interface StagingRecord {
+  readonly epoch: ArtifactEpoch;
+  readonly markerContents: string;
+  readonly root: string;
+  readonly rootDevice: number;
+  readonly rootInode: number;
+  readonly targets: readonly string[];
+}
+
 const activeEpochFileName = 'active-epoch.json';
 const metadataDirectoryName = '.metadata';
+const stagingMarkerFileName = '.agent-bundle-epoch-stage.json';
 const stagingPrefix = '.stage-';
 
 const isErrno = (error: unknown, code: string): boolean =>
@@ -58,6 +78,11 @@ const pathExists = async (path: string): Promise<boolean> => {
 
 const isSafePathSegment = (value: string): boolean =>
   /^[a-z0-9][a-z0-9._-]*$/iu.test(value) && value !== '.' && value !== '..';
+
+const isContained = (root: string, candidate: string): boolean => {
+  const path = relative(root, candidate);
+  return path.length > 0 && !isAbsolute(path) && path !== '..' && !path.startsWith('..\\') && !path.startsWith('../');
+};
 
 const assertSafeEpochId = (value: string): void => {
   if (!isSafePathSegment(value)) {
@@ -146,6 +171,38 @@ const compareNewestFirst = (left: ArtifactEpoch, right: ArtifactEpoch): number =
     ? right.id.localeCompare(left.id)
     : right.createdAt.localeCompare(left.createdAt);
 
+class EpochStagingHandle implements EpochStaging {
+  readonly #close: () => Promise<void>;
+  readonly #publish: (validate: StagingValidator) => Promise<ArtifactEpoch>;
+  #closed = false;
+
+  constructor(
+    root: string,
+    publish: (validate: StagingValidator) => Promise<ArtifactEpoch>,
+    close: () => Promise<void>,
+  ) {
+    this.root = root;
+    this.#publish = publish;
+    this.#close = close;
+  }
+
+  readonly root: string;
+
+  async close(): Promise<void> {
+    if (this.#closed) return;
+    this.#closed = true;
+    await this.#close();
+  }
+
+  async publish(validate: StagingValidator): Promise<ArtifactEpoch> {
+    if (this.#closed) {
+      throw new EpochStoreError('EPOCH_STAGING_CLOSED', 'Epoch staging is already closed.');
+    }
+    this.#closed = true;
+    return this.#publish(validate);
+  }
+}
+
 export class EpochReference {
   readonly #epochId: string;
   readonly #store: EpochStore;
@@ -163,68 +220,13 @@ export class EpochReference {
   }
 }
 
-export class EpochStaging {
-  readonly #epoch: ArtifactEpoch;
-  readonly #store: EpochStore;
-  readonly #targets: readonly string[];
-  #closed = false;
-
-  constructor(store: EpochStore, root: string, epoch: ArtifactEpoch, targets: readonly string[]) {
-    this.#store = store;
-    this.root = root;
-    this.#epoch = epoch;
-    this.#targets = targets;
-  }
-
-  readonly root: string;
-
-  async close(): Promise<void> {
-    if (this.#closed) return;
-    this.#closed = true;
-    await rm(this.root, { force: true, recursive: true });
-  }
-
-  async publish(validate: StagingValidator): Promise<ArtifactEpoch> {
-    if (this.#closed) {
-      throw new EpochStoreError('EPOCH_STAGING_CLOSED', 'Epoch staging is already closed.');
-    }
-
-    try {
-      await validate(this.root);
-      for (const target of this.#targets) {
-        let metadata;
-        try {
-          metadata = await stat(join(this.root, target));
-        } catch (error) {
-          if (isErrno(error, 'ENOENT')) {
-            throw new EpochStoreError(
-              'EPOCH_STAGING_INCOMPLETE',
-              `Staged epoch is missing selected target ${JSON.stringify(target)}.`,
-            );
-          }
-          throw error;
-        }
-        if (!metadata.isDirectory()) {
-          throw new EpochStoreError(
-            'EPOCH_STAGING_INCOMPLETE',
-            `Staged epoch target ${JSON.stringify(target)} is not a directory.`,
-          );
-        }
-      }
-      return await this.#store.publishStaging(this.root, this.#epoch);
-    } finally {
-      this.#closed = true;
-      await rm(this.root, { force: true, recursive: true });
-    }
-  }
-}
-
 /** Filesystem-backed store for immutable artifact epochs in one project. */
 export class EpochStore {
   readonly #activeEpochPath: string;
   readonly #epochMetadataPath: string;
   readonly #epochsPath: string;
   readonly #references = new Map<string, number>();
+  readonly #staging = new Map<symbol, StagingRecord>();
 
   constructor(options: EpochStoreOptions) {
     const agentBundlePath = join(resolve(options.projectRoot), '.agent-bundle');
@@ -236,16 +238,42 @@ export class EpochStore {
   async createStagingEpoch(options: CreateStagingEpochOptions): Promise<EpochStaging> {
     assertSafeEpochId(options.epoch.id);
     const epoch = assertEpoch(options.epoch);
-    for (const target of options.targets) assertSafeTarget(target);
+    const targets = this.#assertTargetSet(epoch, options.targets);
+    this.#manifestRelativePath(epoch);
     await mkdir(this.#epochsPath, { recursive: true });
     const root = await mkdtemp(join(this.#epochsPath, stagingPrefix));
-    return new EpochStaging(this, root, epoch, Object.freeze([...options.targets]));
+    const metadata = await lstat(root);
+    const markerContents = `${stableJson({ token: randomUUID(), version: 1 })}\n`;
+    await writeFile(join(root, stagingMarkerFileName), markerContents, 'utf8');
+    const token = Symbol('epoch-staging');
+    this.#staging.set(token, {
+      epoch,
+      markerContents,
+      root,
+      rootDevice: metadata.dev,
+      rootInode: metadata.ino,
+      targets,
+    });
+    return new EpochStagingHandle(
+      root,
+      async (validate) => this.#publishStaging(token, validate),
+      async () => this.#closeStaging(token),
+    );
   }
 
   async acquireEpochReference(epochId: string): Promise<EpochReference> {
     assertSafeEpochId(epochId);
-    if (!(await pathExists(join(this.#epochsPath, epochId)))) {
-      throw new EpochStoreError('EPOCH_NOT_FOUND', `Epoch ${JSON.stringify(epochId)} does not exist.`);
+    const epochPath = join(this.#epochsPath, epochId);
+    try {
+      const metadata = await lstat(epochPath);
+      if (!metadata.isDirectory() || metadata.isSymbolicLink()) {
+        throw new EpochStoreError('EPOCH_NOT_FOUND', `Epoch ${JSON.stringify(epochId)} does not exist.`);
+      }
+    } catch (error) {
+      if (isErrno(error, 'ENOENT')) {
+        throw new EpochStoreError('EPOCH_NOT_FOUND', `Epoch ${JSON.stringify(epochId)} does not exist.`);
+      }
+      throw error;
     }
     this.#references.set(epochId, (this.#references.get(epochId) ?? 0) + 1);
     return new EpochReference(this, epochId);
@@ -258,32 +286,6 @@ export class EpochStore {
       return;
     }
     this.#references.set(epochId, count - 1);
-  }
-
-  async publishStaging(stagingRoot: string, candidate: ArtifactEpoch): Promise<ArtifactEpoch> {
-    const epoch = assertEpoch(candidate);
-    const epochRoot = join(this.#epochsPath, epoch.id);
-    if (await pathExists(epochRoot)) {
-      throw new EpochStoreError('EPOCH_ALREADY_EXISTS', `Epoch ${JSON.stringify(epoch.id)} already exists.`);
-    }
-
-    let moved = false;
-    try {
-      await rename(stagingRoot, epochRoot);
-      moved = true;
-      await this.#writeEpochMetadata(epoch);
-      await this.#writeActiveMetadata(epoch);
-    } catch (error) {
-      if (moved) {
-        await Promise.all([
-          rm(epochRoot, { force: true, recursive: true }),
-          rm(this.#metadataPathFor(epoch.id), { force: true }),
-        ]);
-      }
-      throw error;
-    }
-    await this.cleanup();
-    return epoch;
   }
 
   async readActiveEpoch(): Promise<ArtifactEpoch | undefined> {
@@ -347,6 +349,167 @@ export class EpochStore {
     );
   }
 
+  async #closeStaging(token: symbol): Promise<void> {
+    const record = this.#staging.get(token);
+    if (record === undefined) return;
+    this.#staging.delete(token);
+    await rm(record.root, { force: true, recursive: true });
+  }
+
+  async #publishStaging(token: symbol, validate: StagingValidator): Promise<ArtifactEpoch> {
+    const record = this.#staging.get(token);
+    if (record === undefined) {
+      throw new EpochStoreError('EPOCH_STAGING_CLOSED', 'Epoch staging is already closed.');
+    }
+    this.#staging.delete(token);
+    try {
+      await validate(record.root);
+      await this.#verifyStaging(record);
+      return await this.#publishVerifiedStaging(record);
+    } finally {
+      await rm(record.root, { force: true, recursive: true });
+    }
+  }
+
+  async #publishVerifiedStaging(record: StagingRecord): Promise<ArtifactEpoch> {
+    const epochRoot = join(this.#epochsPath, record.epoch.id);
+    if (await pathExists(epochRoot)) {
+      throw new EpochStoreError('EPOCH_ALREADY_EXISTS', `Epoch ${JSON.stringify(record.epoch.id)} already exists.`);
+    }
+
+    let moved = false;
+    try {
+      await rename(record.root, epochRoot);
+      moved = true;
+      await this.#writeEpochMetadata(record.epoch);
+      await this.#writeActiveMetadata(record.epoch);
+    } catch (error) {
+      if (moved) {
+        await Promise.all([
+          rm(epochRoot, { force: true, recursive: true }),
+          rm(this.#metadataPathFor(record.epoch.id), { force: true }),
+        ]);
+      }
+      throw error;
+    }
+    await this.cleanup();
+    return record.epoch;
+  }
+
+  async #verifyStaging(record: StagingRecord): Promise<void> {
+    let rootMetadata;
+    try {
+      rootMetadata = await lstat(record.root);
+    } catch (error) {
+      if (isErrno(error, 'ENOENT')) {
+        throw new EpochStoreError('EPOCH_STAGING_INVALID', 'The store-created staging root no longer exists.');
+      }
+      throw error;
+    }
+    if (
+      !rootMetadata.isDirectory() ||
+      rootMetadata.isSymbolicLink() ||
+      rootMetadata.dev !== record.rootDevice ||
+      rootMetadata.ino !== record.rootInode
+    ) {
+      throw new EpochStoreError('EPOCH_STAGING_INVALID', 'The store-created staging root was replaced.');
+    }
+    try {
+      const markerMetadata = await lstat(join(record.root, stagingMarkerFileName));
+      if (
+        !markerMetadata.isFile() ||
+        markerMetadata.isSymbolicLink() ||
+        await readFile(join(record.root, stagingMarkerFileName), 'utf8') !== record.markerContents
+      ) {
+        throw new EpochStoreError('EPOCH_STAGING_INVALID', 'The store-created staging marker was replaced.');
+      }
+    } catch (error) {
+      if (isErrno(error, 'ENOENT')) {
+        throw new EpochStoreError('EPOCH_STAGING_INVALID', 'The store-created staging marker is missing.');
+      }
+      throw error;
+    }
+
+    const [epochsRoot, stagingRoot] = await Promise.all([
+      realpath(this.#epochsPath),
+      realpath(record.root),
+    ]);
+    if (!isContained(epochsRoot, stagingRoot)) {
+      throw new EpochStoreError('EPOCH_STAGING_INVALID', 'The staging root escapes the epoch store.');
+    }
+
+    for (const target of record.targets) {
+      const targetPath = join(record.root, target);
+      let targetMetadata;
+      try {
+        targetMetadata = await lstat(targetPath);
+      } catch (error) {
+        if (isErrno(error, 'ENOENT')) {
+          throw new EpochStoreError(
+            'EPOCH_STAGING_INVALID',
+            `Staged epoch is missing selected target ${JSON.stringify(target)}.`,
+          );
+        }
+        throw error;
+      }
+      if (!targetMetadata.isDirectory() || targetMetadata.isSymbolicLink()) {
+        throw new EpochStoreError(
+          'EPOCH_STAGING_INVALID',
+          `Staged epoch target ${JSON.stringify(target)} must be a contained non-symlink directory.`,
+        );
+      }
+      if (!isContained(stagingRoot, await realpath(targetPath))) {
+        throw new EpochStoreError(
+          'EPOCH_STAGING_INVALID',
+          `Staged epoch target ${JSON.stringify(target)} escapes the staging root.`,
+        );
+      }
+    }
+
+    const manifestPath = join(record.root, this.#manifestRelativePath(record.epoch));
+    let manifestMetadata;
+    try {
+      manifestMetadata = await lstat(manifestPath);
+    } catch (error) {
+      if (isErrno(error, 'ENOENT')) {
+        throw new EpochStoreError('EPOCH_MANIFEST_INVALID', 'Staged epoch manifest is missing.');
+      }
+      throw error;
+    }
+    if (!manifestMetadata.isFile() || manifestMetadata.isSymbolicLink() || !isContained(stagingRoot, await realpath(manifestPath))) {
+      throw new EpochStoreError('EPOCH_MANIFEST_INVALID', 'Staged epoch manifest must be a contained non-symlink file.');
+    }
+  }
+
+  #assertTargetSet(epoch: ArtifactEpoch, targets: readonly string[]): readonly string[] {
+    for (const target of targets) assertSafeTarget(target);
+    const selected = [...targets].sort();
+    const expected = Object.keys(epoch.targetDigests).sort();
+    if (
+      selected.length !== expected.length ||
+      new Set(selected).size !== selected.length ||
+      selected.some((target, index) => target !== expected[index])
+    ) {
+      throw new EpochStoreError(
+        'EPOCH_TARGET_SET_INVALID',
+        'Selected epoch targets must exactly match the artifact epoch target digests.',
+      );
+    }
+    return Object.freeze(selected);
+  }
+
+  #manifestRelativePath(epoch: ArtifactEpoch): string {
+    const epochRoot = join(this.#epochsPath, epoch.id);
+    const manifestPath = resolve(epoch.manifestPath);
+    if (!isContained(epochRoot, manifestPath)) {
+      throw new EpochStoreError(
+        'EPOCH_MANIFEST_INVALID',
+        'Artifact epoch manifestPath must be contained by its final epoch directory.',
+      );
+    }
+    return relative(epochRoot, manifestPath);
+  }
+
   #metadataPathFor(epochId: string): string {
     return join(this.#epochMetadataPath, `${epochId}.json`);
   }
@@ -388,15 +551,23 @@ export class EpochStore {
       if (isErrno(error, 'ENOENT')) return Object.freeze([]);
       throw error;
     }
-    const metadata = await Promise.all(entries
+    return Object.freeze(await Promise.all(entries
       .filter((entry) => entry.isFile() && entry.name.endsWith('.json'))
       .map(async (entry) => {
-        try {
-          return this.#parseMetadata(JSON.parse(await readFile(join(this.#epochMetadataPath, entry.name), 'utf8')));
-        } catch {
-          return undefined;
+        const epochId = entry.name.slice(0, -'.json'.length);
+        if (!isSafePathSegment(epochId)) {
+          throw new EpochStoreError('EPOCH_METADATA_INVALID', 'Epoch metadata file name is not path-safe.');
         }
-      }));
-    return Object.freeze(metadata.filter((entry): entry is EpochMetadata => entry !== undefined));
+        let metadata: EpochMetadata | undefined;
+        try {
+          metadata = this.#parseMetadata(JSON.parse(await readFile(join(this.#epochMetadataPath, entry.name), 'utf8')));
+        } catch {
+          throw new EpochStoreError('EPOCH_METADATA_INVALID', 'Epoch metadata cannot be parsed as JSON.');
+        }
+        if (metadata === undefined || metadata.epoch.id !== epochId) {
+          throw new EpochStoreError('EPOCH_METADATA_INVALID', 'Epoch metadata does not match its persisted epoch id.');
+        }
+        return metadata;
+      })));
   }
 }
