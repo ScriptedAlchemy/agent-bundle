@@ -222,6 +222,34 @@ it('validates reference-style links while ignoring Markdown code examples', () =
   ]);
 });
 
+it('uses the first definition when validating shortcut Markdown references', () => {
+  const root = '/workspace/project';
+  const missing = skill(root, 'missing', 'missing', {
+    body: '[guide]\n\n[guide]: references/missing.md\n',
+  });
+  const duplicateDefinition = skill(root, 'existing', 'existing', {
+    body: [
+      '[guide]',
+      '',
+      '[guide]: references/existing.md',
+      '[guide]: references/missing.md',
+      '',
+    ].join('\n'),
+    resources: ['SKILL.md', 'references/existing.md'],
+  });
+  const loaded = loadedProject({
+    plugin: { name: 'review-tools', version: '1.0.0' },
+  });
+
+  expect(validateSource(loaded, { skills: [missing] })).toMatchObject([
+    {
+      code: 'AB4005',
+      message: expect.stringContaining('references/missing.md'),
+    },
+  ]);
+  expect(validateSource(loaded, { skills: [duplicateDefinition] })).toEqual([]);
+});
+
 it('reports unknown targets, duplicate IDs, and portable output collisions', async () => {
   const root = '/workspace/project';
   const loaded = loadedProject({

@@ -64,6 +64,9 @@ const resourcePath = (rawReference: string): string | undefined => {
   }
 };
 
+const normalizeReferenceLabel = (label: string): string =>
+  label.trim().replace(/\s+/g, ' ').toLowerCase();
+
 const referencedResources = (body: string): string[] => {
   const markdown = withoutMarkdownCode(body);
   const references: string[] = [];
@@ -87,8 +90,9 @@ const referencedResources = (body: string): string[] => {
     }
 
     const path = resourcePath(rawReference);
-    if (path !== undefined) {
-      definitions.set(label.trim().replace(/\s+/g, ' ').toLowerCase(), path);
+    const normalizedLabel = normalizeReferenceLabel(label);
+    if (path !== undefined && !definitions.has(normalizedLabel)) {
+      definitions.set(normalizedLabel, path);
     }
   }
 
@@ -101,7 +105,20 @@ const referencedResources = (body: string): string[] => {
       continue;
     }
 
-    const path = definitions.get(label.trim().replace(/\s+/g, ' ').toLowerCase());
+    const path = definitions.get(normalizeReferenceLabel(label));
+    if (path !== undefined) {
+      references.push(path);
+    }
+  }
+
+  const shortcutPattern = /!?\[([^\]]+)\](?!\[|\()/g;
+  for (const match of markdown.matchAll(shortcutPattern)) {
+    const label = match[1];
+    if (label === undefined) {
+      continue;
+    }
+
+    const path = definitions.get(normalizeReferenceLabel(label));
     if (path !== undefined) {
       references.push(path);
     }
