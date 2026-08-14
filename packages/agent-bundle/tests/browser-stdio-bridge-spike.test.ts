@@ -15,13 +15,14 @@ import { resolveMcpPathTokens } from '../src/services/mcp-path-tokens.ts';
 
 interface BridgeFixture {
   readonly binding: { readonly serverName: string; readonly sessionId: string; readonly target: string };
-  readonly requiredFrames: readonly { readonly direction: string; readonly method: string }[];
+  readonly frames: readonly ProtocolFrame[];
   readonly stderr: string;
 }
 
 interface ProtocolFrame {
   readonly direction: 'browser-to-service' | 'service' | 'service-to-browser';
-  readonly method: string;
+  readonly envelope?: Readonly<Record<string, unknown>>;
+  readonly event?: 'close';
 }
 
 interface GeneratedStdioServer {
@@ -46,8 +47,21 @@ const loadedProject = (root: string, config: AgentBundleConfig): LoadedConfig =>
   },
 });
 
-const messageMethod = (message: JSONRPCMessage): string =>
-  'method' in message ? message.method : 'response';
+const frame = (
+  direction: ProtocolFrame['direction'],
+  message: JSONRPCMessage,
+): ProtocolFrame => ({
+  direction,
+  envelope: JSON.parse(JSON.stringify(message)) as Record<string, unknown>,
+});
+
+const waitFor = async (predicate: () => boolean): Promise<void> => {
+  const deadline = Date.now() + 1_000;
+  while (!predicate()) {
+    if (Date.now() >= deadline) throw new Error('Timed out waiting for bridge protocol frame.');
+    await new Promise<void>((resolvePromise) => setTimeout(resolvePromise, 5));
+  }
+};
 
 class BoundStdioSession {
   readonly #frames: ProtocolFrame[];
@@ -73,7 +87,7 @@ class BoundStdioSession {
 
   async start(onMessage: (message: JSONRPCMessage) => void): Promise<void> {
     this.#transport.onmessage = (message) => {
-      this.#frames.push({ direction: 'service-to-browser', method: messageMethod(message) });
+      this.#frames.push(frame('service-to-browser', message));
       onMessage(message);
     };
     this.#transport.stderr?.on('data', (chunk: Buffer | string) => this.#onStderr(String(chunk)));
@@ -81,14 +95,14 @@ class BoundStdioSession {
   }
 
   async send(message: JSONRPCMessage): Promise<void> {
-    this.#frames.push({ direction: 'browser-to-service', method: messageMethod(message) });
+    this.#frames.push(frame('browser-to-service', message));
     await this.#transport.send(message);
   }
 
   async close(): Promise<void> {
     if (this.#closed) return;
     this.#closed = true;
-    this.#frames.push({ direction: 'service', method: 'close' });
+    this.#frames.push({ direction: 'service', event: 'close' });
     await this.#transport.close();
   }
 }
@@ -198,6 +212,7 @@ it('bridges a browser-bound session to a generated stdio artifact without exposi
         '    const timer = pending.get(message.params.requestId);',
         '    if (timer !== undefined) clearTimeout(timer);',
         '    pending.delete(message.params.requestId);',
+        '    send({ error: { code: -32800, message: "Cancelled by bridge fixture" }, id: message.params.requestId, jsonrpc: "2.0" });',
         '  }',
         '};',
         'process.stdin.on("data", (chunk) => {',
@@ -250,14 +265,16 @@ it('bridges a browser-bound session to a generated stdio artifact without exposi
       const pending = client.callTool({ arguments: {}, name: 'wait' }, { signal: controller.signal });
       setTimeout(() => controller.abort(new Error('bridge cancellation probe')), 25);
       await expect(pending).rejects.toBeDefined();
+      await waitFor(() => frames.some((entry) =>
+        entry.direction === 'service-to-browser' &&
+        entry.envelope?.id === 3 &&
+        Object.hasOwn(entry.envelope, 'error')));
     } finally {
       await client.close();
     }
 
     expect(stderr.join('')).toContain(fixture.stderr);
-    for (const required of fixture.requiredFrames) {
-      expect(frames).toContainEqual(required);
-    }
+    expect(frames).toEqual(fixture.frames);
   } finally {
     await rm(root, { force: true, recursive: true });
   }
