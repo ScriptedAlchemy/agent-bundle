@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { resolve } from 'node:path';
 
 import { DevCoordinator } from './coordinator.ts';
 import { EpochStore } from './epoch-store.ts';
@@ -96,18 +97,19 @@ const openInBrowser: OpenBrowser = (url) => new Promise((resolvePromise, rejectP
 
 /** Starts one loopback foreground session over the current project services. */
 export const startDevServer = async (options: StartDevServerOptions): Promise<DevServerSession> => {
+  const root = resolve(options.root);
   const eventHub = new ProjectEventHub();
-  const epochStore = new EpochStore({ projectRoot: options.root });
-  const projectService = new ProjectService({ root: options.root });
-  const coordinator = new DevCoordinator({ epochStore, eventHub, projectService, root: options.root });
-  const mcpSessions = new McpSessionService({ epochStore, projectRoot: options.root });
+  const epochStore = new EpochStore({ projectRoot: root });
+  const projectService = new ProjectService({ root });
+  const coordinator = new DevCoordinator({ epochStore, eventHub, projectService, root });
+  const mcpSessions = new McpSessionService({ epochStore, projectRoot: root });
   const foreground = await startForegroundServer({
     assets: options.assets ?? createWorkbenchAssetSource(),
     coordinator: withMcpSessionLifecycle(coordinator, mcpSessions),
     eventHub,
     mcpSessions,
     port: options.port,
-    skillDocuments: new SkillDocumentService({ epochStore, projectService, root: options.root }),
+    skillDocuments: new SkillDocumentService({ epochStore, projectService, root }),
   });
   try {
     if (options.open === true) await (options.openBrowser ?? openInBrowser)(foreground.url);

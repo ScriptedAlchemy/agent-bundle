@@ -1,6 +1,6 @@
 import { access, mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 
 import { expect, it } from '@rstest/core';
 
@@ -113,6 +113,31 @@ it('starts a loopback server with prebuilt assets, does not open on --no-open, a
     await expect(server.close()).resolves.toBeUndefined();
     await expect(fetch(server.url)).rejects.toThrow();
   } finally {
+    await Promise.all([removeProjectFixture(project.root), rm(assetsRoot, { force: true, recursive: true })]);
+  }
+}, 30_000);
+
+it('normalizes a relative project root once before constructing every dev service', async () => {
+  const project = await createProjectFixture();
+  const assetsRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-workbench-relative-root-'));
+  const root = relative(process.cwd(), project.root);
+  let server: Awaited<ReturnType<typeof startDevServer>> | undefined;
+  await writeFile(join(assetsRoot, 'index.html'), '<!doctype html><title>Agent Bundle workbench</title>');
+  try {
+    expect(root).not.toBe(project.root);
+    server = await startDevServer({
+      assets: createWorkbenchAssetSource({ root: assetsRoot }),
+      open: false,
+      port: 0,
+      root,
+    });
+
+    expect(server.status().artifact.state).toBe('active');
+    await expect(fetch(`${server.url}/api/skills/source/skill%3Areview`).then((response) => response.json())).resolves.toMatchObject({
+      document: { id: 'skill:review' },
+    });
+  } finally {
+    await server?.close().catch(() => undefined);
     await Promise.all([removeProjectFixture(project.root), rm(assetsRoot, { force: true, recursive: true })]);
   }
 }, 30_000);
