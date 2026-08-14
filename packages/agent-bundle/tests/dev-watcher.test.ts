@@ -1,3 +1,7 @@
+import { mkdtemp, mkdir, rm, unlink, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import { expect, it } from '@rstest/core';
 
 import { ProjectWatcher, type Invalidation } from '../src/dev/index.ts';
@@ -32,6 +36,16 @@ class FakeWatcher {
     return this;
   }
 }
+
+const nextInvalidation = (
+  setListener: (listener: (invalidation: Invalidation) => void) => void,
+): Promise<Invalidation> => new Promise((resolvePromise, reject) => {
+  const timeout = setTimeout(() => reject(new Error('Timed out waiting for a watcher invalidation.')), 5_000);
+  setListener((invalidation) => {
+    clearTimeout(timeout);
+    resolvePromise(invalidation);
+  });
+});
 
 it('debounces only relevant source paths into one ordered invalidation and closes idempotently', async () => {
   const fake = new FakeWatcher();
@@ -69,4 +83,51 @@ it('debounces only relevant source paths into one ordered invalidation and close
   expect(fake.closeCalls).toBe(1);
   expect(fake.closed).toBe(true);
   expect(invalidations).toHaveLength(1);
+});
+
+it('waits for the real watcher root before reporting create, change, and delete source inputs', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-real-watcher-'));
+  await mkdir(join(root, 'src'), { recursive: true });
+  await writeFile(join(root, 'src', 'existing.ts'), 'export const value = 1;\n');
+  let listen: ((invalidation: Invalidation) => void) | undefined;
+  const received: Invalidation[] = [];
+  const watcher = new ProjectWatcher({
+    debounceMs: 20,
+    onInvalidation: async (invalidation) => {
+      received.push(invalidation);
+      listen?.(invalidation);
+      listen = undefined;
+    },
+    root,
+  });
+
+  try {
+    await watcher.ready();
+
+    const changed = nextInvalidation((listener) => { listen = listener; });
+    await writeFile(join(root, 'src', 'existing.ts'), 'export const value = 2;\n');
+    expect((await changed).paths).toContain('src/existing.ts');
+
+    const added = nextInvalidation((listener) => { listen = listener; });
+    await writeFile(join(root, 'src', 'created.ts'), 'export const created = true;\n');
+    expect((await added).paths).toContain('src/created.ts');
+
+    const deleted = nextInvalidation((listener) => { listen = listener; });
+    await unlink(join(root, 'src', 'created.ts'));
+    expect((await deleted).paths).toContain('src/created.ts');
+
+    await Promise.all([
+      mkdir(join(root, '.agent-bundle', 'output'), { recursive: true }).then(async () =>
+        writeFile(join(root, '.agent-bundle', 'output', 'generated.ts'), 'ignored\n')),
+      mkdir(join(root, '.git'), { recursive: true }).then(async () =>
+        writeFile(join(root, '.git', 'HEAD'), 'ignored\n')),
+      mkdir(join(root, 'node_modules', 'dependency'), { recursive: true }).then(async () =>
+        writeFile(join(root, 'node_modules', 'dependency', 'index.js'), 'ignored\n')),
+    ]);
+    await new Promise<void>((resolvePromise) => setTimeout(resolvePromise, 100));
+    expect(received).toHaveLength(3);
+  } finally {
+    await watcher.close();
+    await rm(root, { force: true, recursive: true });
+  }
 });

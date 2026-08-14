@@ -6,10 +6,12 @@ import { expect, it } from '@rstest/core';
 
 import { EpochStore } from '../src/dev/epoch-store.ts';
 import {
+  ArtifactService,
   DevCoordinator,
   DevCoordinatorCloseError,
   ProjectEventHub,
   ProjectService,
+  ProjectWatcher,
   type ArtifactEpoch,
   type ArtifactEpochResult,
   type DiagnosticReport,
@@ -78,6 +80,23 @@ const invalidation = (paths: readonly string[]): Invalidation => ({
   reason: 'source-change',
 });
 
+class EventSourceWatcher {
+  readonly #listeners = new Map<string, readonly ((path: string) => void)[]>();
+
+  close(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  emit(event: string, path: string): void {
+    for (const listener of this.#listeners.get(event) ?? []) listener(path);
+  }
+
+  on(event: string, listener: (path: string) => void): this {
+    this.#listeners.set(event, [...(this.#listeners.get(event) ?? []), listener]);
+    return this;
+  }
+}
+
 it('serializes a running build and coalesces all concurrent invalidations into one follow-up', async () => {
   const root = await createProject();
   let releaseFirstBuild: (() => void) | undefined;
@@ -142,6 +161,72 @@ it('serializes a running build and coalesces all concurrent invalidations into o
     expect(lintPaths).toEqual([[], ['src/first.ts', 'src/second.ts', 'src/third.ts']]);
     expect(events.filter((type) => type === 'build.started')).toHaveLength(2);
     expect(events.filter((type) => type === 'invalidation')).toHaveLength(2);
+    await coordinator.close();
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('queues watcher add, change, and delete paths as one rebuild during a running build', async () => {
+  const root = await createProject();
+  const sourceWatcher = new EventSourceWatcher();
+  let projectWatcher: ProjectWatcher | undefined;
+  let releaseFirstBuild: (() => void) | undefined;
+  const firstBuild = new Promise<void>((resolvePromise) => {
+    releaseFirstBuild = resolvePromise;
+  });
+  let signalFirstBuild: (() => void) | undefined;
+  const firstBuildStarted = new Promise<void>((resolvePromise) => {
+    signalFirstBuild = resolvePromise;
+  });
+  const lintPaths: (readonly string[])[] = [];
+  let builds = 0;
+
+  try {
+    const coordinator = new DevCoordinator({
+      acquireLock: async () => ({ close: async () => undefined }),
+      artifactService: {
+        build: async (prepared) => {
+          builds += 1;
+          if (builds === 1) {
+            signalFirstBuild?.();
+            await firstBuild;
+          }
+          return succeeded(epochFor(root, `epoch-watcher-${builds}`, prepared.source.revision ?? 'missing'));
+        },
+      },
+      createWatcher: (options) => {
+        projectWatcher = new ProjectWatcher({
+          ...options,
+          createWatcher: () => sourceWatcher,
+          debounceMs: 60_000,
+        });
+        return projectWatcher;
+      },
+      diagnosticService: {
+        close: async () => undefined,
+        lint: async (paths) => {
+          lintPaths.push(paths);
+          return { diagnostics: [], paths };
+        },
+      },
+      epochStore: new EpochStore({ projectRoot: root }),
+      projectService: new ProjectService({ root }),
+      root,
+    });
+
+    const starting = coordinator.start();
+    await firstBuildStarted;
+    if (projectWatcher === undefined) throw new Error('Coordinator did not create its watcher.');
+    sourceWatcher.emit('add', join(root, 'src', 'added.ts'));
+    sourceWatcher.emit('change', join(root, 'src', 'changed.ts'));
+    sourceWatcher.emit('unlink', join(root, 'src', 'added.ts'));
+    const followup = projectWatcher.flush();
+    releaseFirstBuild?.();
+    await Promise.all([starting, followup]);
+
+    expect(builds).toBe(2);
+    expect(lintPaths).toEqual([[], ['src/added.ts', 'src/changed.ts']]);
     await coordinator.close();
   } finally {
     await rm(root, { force: true, recursive: true });
@@ -303,5 +388,162 @@ it('reports every failed release structurally after closing the remaining resour
     ]));
   } finally {
     await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('does not build until its watcher is ready and forwards project watcher exclusions', async () => {
+  const root = await createProject();
+  await writeFile(join(root, '.gitignore'), 'ignored-by-gitignore/\n');
+  let releaseWatcherReady: (() => void) | undefined;
+  const watcherReady = new Promise<void>((resolvePromise) => {
+    releaseWatcherReady = resolvePromise;
+  });
+  let signalWatcherCreated: (() => void) | undefined;
+  const watcherCreated = new Promise<void>((resolvePromise) => {
+    signalWatcherCreated = resolvePromise;
+  });
+  let watcherOptions: unknown;
+  let buildCalls = 0;
+
+  try {
+    const coordinator = new DevCoordinator({
+      acquireLock: async () => ({ close: async () => undefined }),
+      artifactService: {
+        build: async (prepared) => {
+          buildCalls += 1;
+          return succeeded(epochFor(root, 'epoch-watcher-ready', prepared.source.revision ?? 'missing'));
+        },
+      },
+      createWatcher: (options) => {
+        watcherOptions = options;
+        signalWatcherCreated?.();
+        return {
+          close: async () => undefined,
+          ready: async () => watcherReady,
+        };
+      },
+      diagnosticService: {
+        close: async () => undefined,
+        lint: async (paths) => ({ diagnostics: [], paths }),
+      },
+      epochStore: new EpochStore({ projectRoot: root }),
+      ignoredPaths: ['private-generated'],
+      outputPaths: ['published-output'],
+      projectService: new ProjectService({ root }),
+      root,
+    });
+
+    const starting = coordinator.start();
+    await watcherCreated;
+    expect(buildCalls).toBe(0);
+    expect(watcherOptions).toMatchObject({
+      ignoredPaths: ['private-generated'],
+      outputPaths: ['published-output'],
+    });
+    const ignored = Reflect.get(watcherOptions as object, 'isIgnored');
+    expect(ignored).toBeTypeOf('function');
+    if (typeof ignored !== 'function') throw new Error('Coordinator did not pass project ignore rules to its watcher.');
+    expect(ignored(join(root, 'ignored-by-gitignore', 'file.ts'))).toBe(true);
+
+    releaseWatcherReady?.();
+    await starting;
+    expect(buildCalls).toBe(1);
+    await coordinator.close();
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('rejects public rebuild requests before startup without preparing or publishing', async () => {
+  const root = await createProject();
+  let builds = 0;
+  try {
+    const coordinator = new DevCoordinator({
+      artifactService: {
+        build: async (prepared) => {
+          builds += 1;
+          return succeeded(epochFor(root, 'unexpected', prepared.source.revision ?? 'missing'));
+        },
+      },
+      diagnosticService: { close: async () => undefined, lint: async (paths) => ({ diagnostics: [], paths }) },
+      epochStore: new EpochStore({ projectRoot: root }),
+      projectService: new ProjectService({ root }),
+      root,
+    });
+
+    const result = await coordinator.rebuild(invalidation(['src/early.ts']));
+    expect(result).toMatchObject({ diagnostics: [expect.objectContaining({ code: 'AB7200' })], outcome: 'failed' });
+    expect(builds).toBe(0);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('loads the active epoch before a failed initial build and retains it as stale', async () => {
+  const root = await createProject();
+  const store = new EpochStore({ projectRoot: root });
+  try {
+    const project = new ProjectService({ root });
+    const seeded = await new ArtifactService({ createEpochId: () => 'epoch-existing', epochStore: store })
+      .build(await project.prepare('build'));
+    expect(seeded.outcome).toBe('succeeded');
+    if (seeded.outcome !== 'succeeded') throw new Error('The seed epoch did not publish.');
+    await writeFile(join(root, 'source-changed.ts'), 'export const changed = true;\n');
+
+    const coordinator = new DevCoordinator({
+      acquireLock: async () => ({ close: async () => undefined }),
+      artifactService: { build: async () => failed() },
+      createWatcher: () => ({ close: async () => undefined }),
+      diagnosticService: { close: async () => undefined, lint: async (paths) => ({ diagnostics: [], paths }) },
+      epochStore: store,
+      projectService: project,
+      root,
+    });
+
+    const session = await coordinator.start();
+    expect(session.status()).toMatchObject({
+      artifact: { activeEpoch: { id: 'epoch-existing' }, state: 'stale' },
+      build: { lastAttempt: { outcome: 'failed' }, state: 'failed' },
+    });
+    await session.close();
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('turns prepare, lint, and artifact rejections into failed attempts and events', async () => {
+  const phases = ['prepare', 'lint', 'artifact'] as const;
+  for (const phase of phases) {
+    const root = await createProject();
+    const hub = new ProjectEventHub({ now: () => new Date('2026-08-14T12:00:00.000Z') });
+    const events: string[] = [];
+    hub.subscribe((event) => {
+      if (event.type !== 'replay.gap') events.push(event.type);
+    });
+    try {
+      const coordinator = new DevCoordinator({
+        acquireLock: async () => ({ close: async () => undefined }),
+        artifactService: phase === 'artifact'
+          ? { build: async () => { throw new Error('artifact rejection'); } }
+          : { build: async (prepared) => succeeded(epochFor(root, `epoch-${phase}`, prepared.source.revision ?? 'missing')) },
+        createWatcher: () => ({ close: async () => undefined }),
+        diagnosticService: phase === 'lint'
+          ? { close: async () => undefined, lint: async () => { throw new Error('lint rejection'); } }
+          : { close: async () => undefined, lint: async (paths) => ({ diagnostics: [], paths }) },
+        epochStore: new EpochStore({ projectRoot: root }),
+        eventHub: hub,
+        projectService: phase === 'prepare'
+          ? { prepare: async () => { throw new Error('prepare rejection'); } }
+          : new ProjectService({ root }),
+        root,
+      });
+
+      const session = await coordinator.start();
+      expect(session.status()).toMatchObject({ build: { lastAttempt: { outcome: 'failed' }, state: 'failed' } });
+      expect(events).toEqual(expect.arrayContaining(['build.failed', 'artifact.status']));
+      await session.close();
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
   }
 });

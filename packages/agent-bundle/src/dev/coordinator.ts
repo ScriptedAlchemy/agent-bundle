@@ -1,13 +1,14 @@
 import { resolve } from 'node:path';
 
 import type { Diagnostic } from '../core/diagnostics.ts';
-import { ArtifactService, type ArtifactEpochResult } from './artifact-service.ts';
+import { ArtifactService, type ArtifactEpochResult, type FailedArtifactEpochResult } from './artifact-service.ts';
 import { DiagnosticService, type DiagnosticReport } from './diagnostic-service.ts';
 import { acquireDevLock, type DevLockOptions } from './dev-lock.ts';
 import { EpochStore } from './epoch-store.ts';
 import { ProjectEventHub } from './events.ts';
 import { ProjectService, type PreparedProject } from './project-service.ts';
 import { ProjectWatcher, type ProjectWatcherOptions } from './watcher.ts';
+import { isProjectPathIgnored, readProjectIgnoreRules } from '../config/ignore.ts';
 import {
   freezeInvalidation,
   freezeProjectStatus,
@@ -41,6 +42,7 @@ export interface AffectedFileDiagnostics {
 
 export interface DevelopmentWatcher {
   close(): Promise<void>;
+  ready?(): Promise<void>;
 }
 
 export interface DevCoordinatorCloseFailure {
@@ -73,6 +75,8 @@ export interface DevCoordinatorOptions {
   readonly epochStore?: EpochStore;
   readonly eventHub?: ProjectEventHub;
   readonly now?: () => Date;
+  readonly ignoredPaths?: readonly string[];
+  readonly outputPaths?: readonly string[];
   readonly projectService?: ProjectPreparer;
   readonly root: string;
 }
@@ -125,6 +129,39 @@ const failure = (message: string): ArtifactEpochResult => {
   return Object.freeze({ diagnostics: Object.freeze(diagnostics), outcome: 'failed' });
 };
 
+const phaseDiagnostic = (phase: 'artifact' | 'lint' | 'prepare', error: unknown): Diagnostic => Object.freeze({
+  code: 'AB7201',
+  message: `${phase[0]!.toUpperCase()}${phase.slice(1)} failed during development rebuild: ${
+    error instanceof Error ? error.message : String(error)
+  }`,
+  severity: 'error',
+});
+
+const hasErrors = (diagnostics: readonly Diagnostic[]): boolean =>
+  diagnostics.some((diagnostic) => diagnostic.severity === 'error');
+
+const withDiagnostics = (
+  source: SourceStatus,
+  diagnostics: readonly Diagnostic[],
+): SourceStatus => freezeProjectStatus({
+  artifact: { state: 'missing' },
+  build: { state: 'idle' },
+  source: {
+    diagnostics: freezeDiagnostics([...source.diagnostics, ...diagnostics]),
+    ...(source.revision === undefined ? {} : { revision: source.revision }),
+    state: hasErrors([...source.diagnostics, ...diagnostics]) ? 'invalid' : source.state,
+  },
+}).source;
+
+const failedResult = (diagnostics: readonly Diagnostic[]): FailedArtifactEpochResult => {
+  const first = diagnostics[0] ?? phaseDiagnostic('artifact', new Error('Unknown rebuild failure.'));
+  const nonemptyDiagnostics: [Diagnostic, ...Diagnostic[]] = [first, ...diagnostics.slice(1)];
+  return Object.freeze({
+    diagnostics: Object.freeze(nonemptyDiagnostics),
+    outcome: 'failed',
+  });
+};
+
 const lastAttempt = (status: ProjectStatus): Exclude<BuildAttempt, RunningBuildAttempt> | undefined =>
   status.build.lastAttempt;
 
@@ -158,6 +195,8 @@ export class DevCoordinator {
   readonly #epochStore: EpochStore;
   readonly #eventHub: ProjectEventHub;
   readonly #now: () => Date;
+  readonly #ignoredPaths: readonly string[];
+  readonly #outputPaths: readonly string[];
   readonly #projectService: ProjectPreparer;
   readonly #root: string;
   #activeEpoch: ArtifactEpoch | undefined;
@@ -179,7 +218,9 @@ export class DevCoordinator {
     this.#createWatcher = options.createWatcher ?? ((watcherOptions) => new ProjectWatcher(watcherOptions));
     this.#diagnosticService = options.diagnosticService ?? new DiagnosticService({ root: this.#root });
     this.#eventHub = options.eventHub ?? new ProjectEventHub({ now: options.now });
+    this.#ignoredPaths = Object.freeze([...(options.ignoredPaths ?? [])]);
     this.#now = options.now ?? (() => new Date());
+    this.#outputPaths = Object.freeze([...(options.outputPaths ?? ['dist'])]);
     this.#projectService = options.projectService ?? new ProjectService({ root: this.#root });
   }
 
@@ -192,6 +233,7 @@ export class DevCoordinator {
 
   async rebuild(invalidation: Invalidation): Promise<ArtifactEpochResult> {
     if (this.#closing) return failure('DevCoordinator is closed.');
+    if (this.#lock === undefined) return failure('DevCoordinator must be started before rebuilding.');
     const normalized = nowInvalidation(this.#now, invalidation.reason, invalidation.paths);
     if (this.#currentBuild === undefined) return this.#startBuild(normalized);
     return new Promise<ArtifactEpochResult>((resolvePromise) => {
@@ -223,11 +265,17 @@ export class DevCoordinator {
     try {
       if (this.#closing) throw new Error('DevCoordinator is closed.');
       await this.#epochStore.recoverStaging();
+      this.#activeEpoch = await this.#epochStore.readActiveEpoch();
+      const projectIgnoreRules = await readProjectIgnoreRules(this.#root);
       this.#watcher = this.#createWatcher({
+        ignoredPaths: this.#ignoredPaths,
+        isIgnored: (source) => isProjectPathIgnored(projectIgnoreRules, this.#root, source),
         now: this.#now,
         onInvalidation: async (invalidation) => this.rebuild(invalidation),
+        outputPaths: this.#outputPaths,
         root: this.#root,
       });
+      await this.#watcher.ready?.();
       await this.rebuild(nowInvalidation(this.#now, 'initial', []));
       return Object.freeze({
         close: () => this.close(),
@@ -263,74 +311,114 @@ export class DevCoordinator {
     return current;
   }
 
-  async #performBuild(invalidation: Invalidation): Promise<ArtifactEpochResult> {
-    const prepared = await this.#projectService.prepare('build');
-    const sourceRevision = prepared.source.revision ?? 'unknown';
+  #beginBuild(invalidation: Invalidation, source: SourceStatus): RunningBuildAttempt {
     const running: RunningBuildAttempt = Object.freeze({
-      diagnostics: freezeDiagnostics(prepared.diagnostics),
+      diagnostics: freezeDiagnostics(source.diagnostics),
       id: this.#createAttemptId(),
       outcome: 'running',
-      sourceRevision,
+      sourceRevision: source.revision ?? 'unknown',
       startedAt: this.#now().toISOString(),
     });
     this.#status = freezeProjectStatus({
-      artifact: artifactStatusFor(this.#activeEpoch, prepared.source.revision),
+      artifact: artifactStatusFor(this.#activeEpoch, source.revision),
       build: {
         activeAttempt: running,
         ...(lastAttempt(this.#status) === undefined ? {} : { lastAttempt: lastAttempt(this.#status) }),
         state: 'building',
       },
-      source: prepared.source,
+      source,
     });
     this.#eventHub.publish({ payload: invalidation, type: 'source.changed' });
     this.#eventHub.publish({ payload: invalidation, type: 'invalidation' });
-    this.#eventHub.publish({ payload: prepared.source, type: 'source.status' });
+    this.#eventHub.publish({ payload: source, type: 'source.status' });
     this.#eventHub.publish({ payload: running, type: 'build.started' });
-    await this.#diagnosticService.lint(invalidation.paths);
+    return running;
+  }
 
-    const result = await this.#artifactService.build(prepared);
-    const completedAt = this.#now().toISOString();
+  #completeFailure(
+    running: RunningBuildAttempt,
+    source: SourceStatus,
+    diagnostics: readonly Diagnostic[],
+  ): FailedArtifactEpochResult {
+    const result = failedResult(diagnostics);
+    const completed: FailedBuildAttempt = Object.freeze({
+      completedAt: this.#now().toISOString(),
+      diagnostics: result.diagnostics,
+      id: running.id,
+      outcome: 'failed',
+      sourceRevision: running.sourceRevision,
+      startedAt: running.startedAt,
+    });
+    const artifact = artifactStatusFor(this.#activeEpoch, source.revision);
+    this.#status = freezeProjectStatus({
+      artifact,
+      build: { lastAttempt: completed, state: 'failed' },
+      source,
+    });
+    this.#eventHub.publish({ payload: source, type: 'source.status' });
+    this.#eventHub.publish({ payload: completed, type: 'build.failed' });
+    this.#eventHub.publish({ payload: artifact, type: 'artifact.status' });
+    return result;
+  }
+
+  async #performBuild(invalidation: Invalidation): Promise<ArtifactEpochResult> {
+    let prepared: PreparedProject;
+    try {
+      prepared = await this.#projectService.prepare('build');
+    } catch (error) {
+      const source = withDiagnostics(this.#status.source, [phaseDiagnostic('prepare', error)]);
+      return this.#completeFailure(this.#beginBuild(invalidation, source), source, source.diagnostics);
+    }
+
+    const running = this.#beginBuild(invalidation, prepared.source);
+    let lintDiagnostics: readonly Diagnostic[];
+    try {
+      const report = await this.#diagnosticService.lint(invalidation.paths);
+      lintDiagnostics = freezeDiagnostics(report.diagnostics);
+    } catch (error) {
+      const source = withDiagnostics(prepared.source, [phaseDiagnostic('lint', error)]);
+      return this.#completeFailure(running, source, source.diagnostics);
+    }
+
+    const source = withDiagnostics(prepared.source, lintDiagnostics);
+    if (hasErrors(lintDiagnostics)) {
+      return this.#completeFailure(running, source, source.diagnostics);
+    }
+
+    let result: ArtifactEpochResult;
+    try {
+      result = await this.#artifactService.build(prepared);
+    } catch (error) {
+      return this.#completeFailure(running, source, [
+        ...source.diagnostics,
+        phaseDiagnostic('artifact', error),
+      ]);
+    }
+    const diagnostics = freezeDiagnostics([...lintDiagnostics, ...result.diagnostics]);
     if (result.outcome === 'succeeded') {
       const completed: SucceededBuildAttempt = Object.freeze({
-        completedAt,
-        diagnostics: freezeDiagnostics(result.diagnostics),
+        completedAt: this.#now().toISOString(),
+        diagnostics,
         id: running.id,
         outcome: 'succeeded',
         result: Object.freeze({ epoch: result.epoch }),
-        sourceRevision,
+        sourceRevision: running.sourceRevision,
         startedAt: running.startedAt,
       });
       this.#activeEpoch = result.epoch;
-      const artifact = artifactStatusFor(this.#activeEpoch, prepared.source.revision);
+      const artifact = artifactStatusFor(this.#activeEpoch, source.revision);
       this.#status = freezeProjectStatus({
         artifact,
         build: { lastAttempt: completed, state: 'idle' },
-        source: prepared.source,
+        source,
       });
       if (artifact.state === 'active') {
         this.#eventHub.publish({ epochId: result.epoch.id, payload: artifact, type: 'artifact.available' });
       }
       this.#eventHub.publish({ payload: artifact, type: 'artifact.status' });
-      return result;
+      return Object.freeze({ diagnostics, epoch: result.epoch, outcome: 'succeeded' });
     }
-
-    const completed: FailedBuildAttempt = Object.freeze({
-      completedAt,
-      diagnostics: result.diagnostics,
-      id: running.id,
-      outcome: 'failed',
-      sourceRevision,
-      startedAt: running.startedAt,
-    });
-    const artifact = artifactStatusFor(this.#activeEpoch, prepared.source.revision);
-    this.#status = freezeProjectStatus({
-      artifact,
-      build: { lastAttempt: completed, state: 'failed' },
-      source: prepared.source,
-    });
-    this.#eventHub.publish({ payload: completed, type: 'build.failed' });
-    this.#eventHub.publish({ payload: artifact, type: 'artifact.status' });
-    return result;
+    return this.#completeFailure(running, source, diagnostics);
   }
 
   async #close(): Promise<void> {
