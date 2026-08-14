@@ -1,0 +1,385 @@
+import { Buffer } from 'node:buffer';
+
+import { expect, it } from '@rstest/core';
+
+import {
+  createMcpAppBridge,
+  type McpAppBridgeBindingOperations,
+  type McpAppBridgeHost,
+  type McpAppBridgeMessage,
+  type McpAppBridgeRequestId,
+} from '../src/dev/mcp-app-bridge.ts';
+import type { McpAppBinding, McpAppJsonValue } from '../src/dev/mcp-app-binding-service.ts';
+
+interface BridgeFixture {
+  readonly binding: McpAppBinding;
+  readonly calls: Array<{ readonly arguments: McpAppJsonValue | undefined; readonly bindingId: string; readonly name: string }>;
+  readonly closes: string[];
+  readonly reads: Array<{ readonly bindingId: string; readonly uri: string }>;
+  readonly sent: McpAppBridgeMessage[];
+  readonly host: McpAppBridgeHost;
+  readonly operations: McpAppBridgeBindingOperations;
+}
+
+const bindingFor = (overrides: Partial<McpAppBinding> = {}): McpAppBinding => ({
+  epochId: 'epoch-app',
+  id: 'binding-app',
+  input: { city: 'Paris', units: 'metric' },
+  previewProfile: 'portable',
+  resourceUri: 'ui://weather/forecast.html',
+  result: { content: [{ text: 'Sunny', type: 'text' }], structuredContent: { temperature: 21 } },
+  serverName: 'weather',
+  sessionId: 'session-weather',
+  target: 'portable',
+  toolDefinition: {
+    _meta: { ui: { resourceUri: 'ui://weather/forecast.html' } },
+    inputSchema: { type: 'object' },
+    name: 'show-weather',
+  },
+  toolName: 'show-weather',
+  ...overrides,
+});
+
+const fixtureFor = (options: {
+  readonly binding?: McpAppBinding;
+  readonly host?: Partial<McpAppBridgeHost>;
+  readonly resource?: McpAppJsonValue;
+} = {}): BridgeFixture => {
+  const calls: Array<{ arguments: McpAppJsonValue | undefined; bindingId: string; name: string }> = [];
+  const closes: string[] = [];
+  const reads: Array<{ bindingId: string; uri: string }> = [];
+  const sent: McpAppBridgeMessage[] = [];
+  const defaultResource: McpAppJsonValue = {
+    contents: [{
+      _meta: { ui: { csp: { connectDomains: ['https://api.weather.test'] }, permissions: { geolocation: {} } } },
+      mimeType: 'text/html;profile=mcp-app',
+      text: '<main>forecast</main>',
+      uri: 'ui://weather/forecast.html',
+    }],
+  };
+  const host: McpAppBridgeHost = {
+    capabilities: { openLinks: {}, serverResources: {}, serverTools: {} },
+    context: { availableDisplayModes: ['inline', 'fullscreen'], displayMode: 'inline', theme: 'light' },
+    info: { name: 'agent-bundle', version: '0.1.0' },
+    onDisplayMode: async (mode) => mode === 'fullscreen' ? 'fullscreen' : 'inline',
+    onLog: async () => undefined,
+    onMessage: async () => ({ isError: false }),
+    onModelContext: async () => undefined,
+    onOpenLink: async () => undefined,
+    onSizeChanged: async () => undefined,
+    ...options.host,
+  };
+  const operations: McpAppBridgeBindingOperations = {
+    callTool: async (bindingId, request) => {
+      calls.push({ arguments: request.arguments, bindingId, name: request.name });
+      return { content: [{ text: `called ${request.name}`, type: 'text' }] };
+    },
+    closeBinding: async (bindingId) => {
+      closes.push(bindingId);
+      return true;
+    },
+    readResource: async (bindingId, request) => {
+      reads.push({ bindingId, ...request });
+      return options.resource ?? defaultResource;
+    },
+  };
+  return { binding: options.binding ?? bindingFor(), calls, closes, host, operations, reads, sent };
+};
+
+const initialize = (id: McpAppBridgeRequestId): McpAppBridgeMessage => ({
+  id,
+  jsonrpc: '2.0',
+  method: 'ui/initialize',
+  params: {
+    appCapabilities: { availableDisplayModes: ['inline', 'fullscreen'] },
+    appInfo: { name: 'weather-view', version: '1.0.0' },
+    protocolVersion: '2026-01-26',
+  },
+});
+
+const initialized = (): McpAppBridgeMessage => ({
+  jsonrpc: '2.0',
+  method: 'ui/notifications/initialized',
+  params: {},
+});
+
+it('preserves the stable Apps handshake and delays original tool data until initialized', async () => {
+  const fixture = fixtureFor();
+  const bridge = createMcpAppBridge({
+    binding: fixture.binding,
+    host: fixture.host,
+    operations: fixture.operations,
+    send: (message) => {
+      fixture.sent.push(message);
+      return true;
+    },
+  });
+
+  expect(bridge.publishToolInputPartial({ city: 'Par' })).toBe(true);
+  expect(fixture.sent).toEqual([]);
+  expect(await bridge.receive(initialize('init:weather'))).toBe(true);
+  expect(fixture.sent).toEqual([{
+    id: 'init:weather',
+    jsonrpc: '2.0',
+    result: {
+      hostCapabilities: { openLinks: {}, serverResources: {}, serverTools: {} },
+      hostContext: { availableDisplayModes: ['inline', 'fullscreen'], displayMode: 'inline', theme: 'light' },
+      hostInfo: { name: 'agent-bundle', version: '0.1.0' },
+      protocolVersion: '2026-01-26',
+    },
+  }]);
+
+  expect(await bridge.receive(initialized())).toBe(true);
+  expect(fixture.sent).toEqual([
+    fixture.sent[0]!,
+    { jsonrpc: '2.0', method: 'ui/notifications/tool-input-partial', params: { arguments: { city: 'Par' } } },
+    { jsonrpc: '2.0', method: 'ui/notifications/tool-input', params: { arguments: { city: 'Paris', units: 'metric' } } },
+    {
+      jsonrpc: '2.0',
+      method: 'ui/notifications/tool-result',
+      params: { content: [{ text: 'Sunny', type: 'text' }], structuredContent: { temperature: 21 } },
+    },
+  ]);
+  expect(bridge.publishToolInputPartial({ city: 'Paris' })).toBe(false);
+  expect(bridge.lifecycle).toBe('initialized');
+});
+
+it('forwards only same-binding app-visible tools and resources while retaining request ids', async () => {
+  const fixture = fixtureFor();
+  const bridge = createMcpAppBridge({
+    binding: fixture.binding,
+    host: fixture.host,
+    operations: fixture.operations,
+    send: (message) => {
+      fixture.sent.push(message);
+      return true;
+    },
+  });
+  await bridge.receive(initialize('init:interactive'));
+  await bridge.receive(initialized());
+
+  expect(await bridge.receive({
+    id: null,
+    jsonrpc: '2.0',
+    method: 'tools/call',
+    params: { arguments: { city: 'Lyon' }, name: 'refresh-weather' },
+  })).toBe(true);
+  expect(await bridge.receive({
+    id: 0,
+    jsonrpc: '2.0',
+    method: 'resources/read',
+    params: { uri: 'resource://weather/forecast' },
+  })).toBe(true);
+  expect(await bridge.receive({ id: 2, jsonrpc: '2.0', method: 'ping', params: {} })).toBe(true);
+
+  expect(fixture.calls).toEqual([{ arguments: { city: 'Lyon' }, bindingId: 'binding-app', name: 'refresh-weather' }]);
+  expect(fixture.reads).toEqual([{ bindingId: 'binding-app', uri: 'resource://weather/forecast' }]);
+  expect(fixture.sent.slice(-3)).toEqual([
+    { id: null, jsonrpc: '2.0', result: { content: [{ text: 'called refresh-weather', type: 'text' }] } },
+    { id: 0, jsonrpc: '2.0', result: { contents: [{
+      _meta: { ui: { csp: { connectDomains: ['https://api.weather.test'] }, permissions: { geolocation: {} } } },
+      mimeType: 'text/html;profile=mcp-app', text: '<main>forecast</main>', uri: 'ui://weather/forecast.html',
+    }] } },
+    { id: 2, jsonrpc: '2.0', result: {} },
+  ]);
+});
+
+it('handles standard host actions and rejects malformed app requests without forwarding them', async () => {
+  const seen: string[] = [];
+  const fixture = fixtureFor({
+    host: {
+      onDisplayMode: async (mode) => {
+        seen.push(`display:${mode}`);
+        return 'fullscreen' as const;
+      },
+      onLog: async (event) => {
+        seen.push(`log:${event.level}`);
+      },
+      onMessage: async (event) => {
+        seen.push(`message:${event.role}`);
+        return { isError: false };
+      },
+      onModelContext: async () => {
+        seen.push('context');
+      },
+      onOpenLink: async (url) => {
+        seen.push(`link:${url}`);
+      },
+      onSizeChanged: async (size) => {
+        seen.push(`size:${size.width}x${size.height}`);
+      },
+    },
+  });
+  const bridge = createMcpAppBridge({ binding: fixture.binding, host: fixture.host, operations: fixture.operations, send: (message) => (fixture.sent.push(message), true) });
+  await bridge.receive(initialize('init:actions'));
+  await bridge.receive(initialized());
+
+  await bridge.receive({ id: 'link-id', jsonrpc: '2.0', method: 'ui/open-link', params: { url: 'https://weather.example.test/forecast' } });
+  await bridge.receive({ id: 'message-id', jsonrpc: '2.0', method: 'ui/message', params: { content: [{ text: 'Refresh weather', type: 'text' }], role: 'user' } });
+  await bridge.receive({ id: 'display-id', jsonrpc: '2.0', method: 'ui/request-display-mode', params: { mode: 'fullscreen' } });
+  await bridge.receive({ id: 'context-id', jsonrpc: '2.0', method: 'ui/update-model-context', params: { structuredContent: { selected: 'Paris' } } });
+  await bridge.receive({ jsonrpc: '2.0', method: 'notifications/message', params: { data: { detail: 'updated' }, level: 'info' } });
+  await bridge.receive({ jsonrpc: '2.0', method: 'ui/notifications/size-changed', params: { height: 120, width: 320 } });
+  expect(await bridge.receive({ id: 'bad-link', jsonrpc: '2.0', method: 'ui/open-link', params: { url: 'javascript:alert(1)' } })).toBe(true);
+
+  expect(seen).toEqual([
+    'link:https://weather.example.test/forecast',
+    'message:user',
+    'display:fullscreen',
+    'context',
+    'log:info',
+    'size:320x120',
+  ]);
+  expect(fixture.sent.slice(-5)).toEqual([
+    { id: 'link-id', jsonrpc: '2.0', result: {} },
+    { id: 'message-id', jsonrpc: '2.0', result: { isError: false } },
+    { id: 'display-id', jsonrpc: '2.0', result: { mode: 'fullscreen' } },
+    { id: 'context-id', jsonrpc: '2.0', result: {} },
+    { error: { code: -32602, message: 'ui/open-link requires an http: or https: URL.' }, id: 'bad-link', jsonrpc: '2.0' },
+  ]);
+  expect(fixture.calls).toEqual([]);
+});
+
+it('enforces declared App capabilities without rejecting a parameterless standard ping', async () => {
+  let displayCalls = 0;
+  const fixture = fixtureFor({
+    host: {
+      onDisplayMode: async () => {
+        displayCalls += 1;
+        return 'inline' as const;
+      },
+    },
+  });
+  const bridge = createMcpAppBridge({ binding: fixture.binding, host: fixture.host, operations: fixture.operations, send: (message) => (fixture.sent.push(message), true) });
+  await bridge.receive(initialize('init:strict'));
+  await bridge.receive(initialized());
+
+  await bridge.receive({ id: 'scalar-tool', jsonrpc: '2.0', method: 'tools/call', params: { arguments: 'Paris', name: 'refresh-weather' } });
+  await bridge.receive({ id: 'undeclared-display', jsonrpc: '2.0', method: 'ui/request-display-mode', params: { mode: 'pip' } });
+  await bridge.receive({ id: 'plain-ping', jsonrpc: '2.0', method: 'ping' });
+
+  expect(fixture.calls).toEqual([]);
+  expect(displayCalls).toBe(0);
+  expect(fixture.sent.slice(-3)).toEqual([
+    { error: { code: -32602, message: 'tools/call requires a name and finite JSON arguments.' }, id: 'scalar-tool', jsonrpc: '2.0' },
+    { error: { code: -32602, message: 'ui/request-display-mode must be declared by the App.' }, id: 'undeclared-display', jsonrpc: '2.0' },
+    { id: 'plain-ping', jsonrpc: '2.0', result: {} },
+  ]);
+});
+
+it('loads only the canonical HTML UI resource and returns a frozen structured fallback otherwise', async () => {
+  const blobFixture = fixtureFor({
+    resource: {
+      contents: [
+        { mimeType: 'text/html;profile=mcp-app', text: '<main>wrong uri</main>', uri: 'ui://weather/other.html' },
+        {
+          _meta: { ui: { csp: { resourceDomains: ['https://cdn.weather.test'] } } },
+          blob: Buffer.from('<main>from base64</main>', 'utf8').toString('base64'),
+          mimeType: 'text/html;profile=mcp-app',
+          uri: 'ui://weather/forecast.html',
+        },
+      ],
+    },
+  });
+  const bridge = createMcpAppBridge({ binding: blobFixture.binding, host: blobFixture.host, operations: blobFixture.operations, send: () => true });
+  const resource = await bridge.loadResource();
+  expect(resource).toEqual({
+    csp: { resourceDomains: ['https://cdn.weather.test'] },
+    html: '<main>from base64</main>',
+    kind: 'resource',
+  });
+  expect(Object.isFrozen(resource)).toBe(true);
+  expect(blobFixture.reads).toEqual([{ bindingId: 'binding-app', uri: 'ui://weather/forecast.html' }]);
+
+  const noncanonical = bindingFor({
+    resourceUri: 'ui://weather/flat.html',
+    toolDefinition: { _meta: { 'openai/outputTemplate': 'ui://weather/legacy.html', 'ui/resourceUri': 'ui://weather/flat.html' }, name: 'show-weather' },
+  });
+  const fallbackFixture = fixtureFor({ binding: noncanonical });
+  const fallback = await createMcpAppBridge({ binding: fallbackFixture.binding, host: fallbackFixture.host, operations: fallbackFixture.operations, send: () => true }).loadResource();
+  expect(fallback).toEqual({
+    input: { city: 'Paris', units: 'metric' },
+    kind: 'fallback',
+    reason: 'missing-canonical-resource-uri',
+    result: { content: [{ text: 'Sunny', type: 'text' }], structuredContent: { temperature: 21 } },
+  });
+  expect(Object.isFrozen(fallback)).toBe(true);
+  expect(fallbackFixture.reads).toEqual([]);
+});
+
+it('queues host context and cancellation in protocol order without also sending the original result', async () => {
+  const fixture = fixtureFor();
+  const bridge = createMcpAppBridge({ binding: fixture.binding, host: fixture.host, operations: fixture.operations, send: (message) => (fixture.sent.push(message), true) });
+
+  expect(bridge.publishHostContextChanged({ theme: 'dark' })).toBe(true);
+  expect(bridge.publishToolCancelled('user-dismissed')).toBe(true);
+  await bridge.receive(initialize('init:cancelled'));
+  await bridge.receive(initialized());
+
+  expect(fixture.sent).toEqual([
+    fixture.sent[0]!,
+    { jsonrpc: '2.0', method: 'ui/notifications/host-context-changed', params: { theme: 'dark' } },
+    { jsonrpc: '2.0', method: 'ui/notifications/tool-input', params: { arguments: { city: 'Paris', units: 'metric' } } },
+    { jsonrpc: '2.0', method: 'ui/notifications/tool-cancelled', params: { reason: 'user-dismissed' } },
+  ]);
+  expect(fixture.sent.some((message) => message.method === 'ui/notifications/tool-result')).toBe(false);
+});
+
+it('releases an uninitialized binding immediately without sending resource teardown traffic', async () => {
+  const fixture = fixtureFor();
+  const bridge = createMcpAppBridge({
+    binding: fixture.binding,
+    host: fixture.host,
+    operations: fixture.operations,
+    send: (message) => (fixture.sent.push(message), true),
+    teardownTimeoutMs: 10,
+  });
+
+  await bridge.close({ id: 'unused-before-ready' });
+  expect(fixture.sent).toEqual([]);
+  expect(fixture.closes).toEqual(['binding-app']);
+  expect(bridge.lifecycle).toBe('closed');
+});
+
+it('bounds resource teardown, releases only the binding, and suppresses in-flight replies after close', async () => {
+  let resolveTool: ((value: McpAppJsonValue) => void) | undefined;
+  const fixture = fixtureFor();
+  fixture.operations.callTool = async () => new Promise<McpAppJsonValue>((resolve) => {
+    resolveTool = resolve;
+  });
+  const bridge = createMcpAppBridge({
+    binding: fixture.binding,
+    host: fixture.host,
+    operations: fixture.operations,
+    send: (message) => (fixture.sent.push(message), true),
+    teardownTimeoutMs: 10,
+  });
+  await bridge.receive(initialize('init:close'));
+  await bridge.receive(initialized());
+  const pending = bridge.receive({ id: 'call:pending', jsonrpc: '2.0', method: 'tools/call', params: { name: 'refresh-weather' } });
+  const closing = bridge.close({ id: 'teardown:fixed', reason: 'user-dismissed' });
+  expect(bridge.close({ id: 'different-id' })).toBe(closing);
+  expect(fixture.sent.at(-1)).toEqual({ id: 'teardown:fixed', jsonrpc: '2.0', method: 'ui/resource-teardown', params: { reason: 'user-dismissed' } });
+
+  resolveTool?.({ content: [{ text: 'late', type: 'text' }] });
+  await pending;
+  await closing;
+  expect(fixture.sent.some((message) => message.id === 'call:pending')).toBe(false);
+  expect(fixture.closes).toEqual(['binding-app']);
+  expect(bridge.lifecycle).toBe('closed');
+  expect(await bridge.receive({ id: 'after-close', jsonrpc: '2.0', method: 'ping', params: {} })).toBe(false);
+});
+
+it('deep-snapshots caller-owned binding and host values before exposing them to the app', async () => {
+  const mutableInput = { city: 'Paris', nested: { day: 'today' } };
+  const mutableContext = { theme: 'light' as const, styles: { variables: { '--font-sans': 'system-ui' } } };
+  const fixture = fixtureFor({ binding: bindingFor({ input: mutableInput }), host: { context: mutableContext } });
+  const bridge = createMcpAppBridge({ binding: fixture.binding, host: fixture.host, operations: fixture.operations, send: (message) => (fixture.sent.push(message), true) });
+  mutableInput.nested.day = 'tomorrow';
+  mutableContext.styles.variables['--font-sans'] = 'unsafe';
+  await bridge.receive(initialize('init:immutable'));
+  await bridge.receive(initialized());
+
+  expect(fixture.sent).toContainEqual({ jsonrpc: '2.0', method: 'ui/notifications/tool-input', params: { arguments: { city: 'Paris', nested: { day: 'today' } } } });
+  expect(fixture.sent[0]).toMatchObject({ result: { hostContext: { styles: { variables: { '--font-sans': 'system-ui' } } } } });
+});
