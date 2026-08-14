@@ -137,7 +137,12 @@ export const applyFormEdit = (
   value: Readonly<Record<string, unknown>>,
   field: string,
   next: unknown,
-): ImmutableJsonRecord => immutableJsonRecord({ ...value, [field]: next });
+): ImmutableJsonRecord => {
+  if (next === undefined) {
+    return immutableJsonRecord(Object.fromEntries(Object.entries(value).filter(([key]) => key !== field)));
+  }
+  return immutableJsonRecord({ ...value, [field]: next });
+};
 
 export const parseRawJsonRecord = (raw: string): ImmutableJsonRecord | null => {
   try {
@@ -160,7 +165,13 @@ export const serializeJsonRecord = (value: Readonly<Record<string, unknown>>): s
 export const submitJsonRecord = (
   value: Readonly<Record<string, unknown>>,
   onSubmit: (value: ImmutableJsonRecord) => void,
-): void => onSubmit(immutableJsonRecord(value));
+  rawDraft?: string,
+): boolean => {
+  const submitted = rawDraft === undefined ? immutableJsonRecord(value) : parseRawJsonRecord(rawDraft);
+  if (submitted === null) return false;
+  onSubmit(submitted);
+  return true;
+};
 
 const FormEditor = ({
   disabled,
@@ -179,7 +190,7 @@ const FormEditor = ({
     {Object.entries(schema.properties).map(([name, field]) => {
       const fieldId = `${id}-${name}`;
       const fieldLabel = field.title ?? name;
-      const current = value[name] ?? field.default;
+      const current = value[name];
       const required = schema.required?.includes(name) ?? false;
       const change = (next: unknown): void => onChange(applyFormEdit(value, name, next));
 
@@ -225,6 +236,10 @@ const FormEditor = ({
             max={field.maximum}
             min={field.minimum}
             onChange={(event) => {
+              if (event.currentTarget.value === '') {
+                change(undefined);
+                return;
+              }
               const next = event.currentTarget.valueAsNumber;
               if (!Number.isFinite(next) || (field.type === 'integer' && !Number.isInteger(next))) return;
               change(next);
@@ -273,20 +288,20 @@ export const McpJsonInput = ({
   };
 
   const rawPanel = formSchema === null || mode === 'raw';
-  const panelId = rawPanel ? `${id}-raw-panel` : `${id}-form-panel`;
-  const tabId = rawPanel ? `${id}-raw-tab` : `${id}-form-tab`;
+  const rawSubmissionValid = !rawPanel || parseRawJsonRecord(rawDraft) !== null;
   const rawErrorId = `${id}-raw-error`;
 
   return (
     <section aria-labelledby={`${id}-label`}>
       <h3 id={`${id}-label`}>{label}</h3>
       {formSchema === null ? <p>Raw JSON is required because this schema cannot be represented without changing it.</p> : (
-        <div aria-label={`${label} input mode`} role="tablist">
-          <button aria-controls={`${id}-form-panel`} aria-selected={mode === 'form'} id={`${id}-form-tab`} onClick={() => selectMode('form')} role="tab" type="button">Form</button>
-          <button aria-controls={`${id}-raw-panel`} aria-selected={mode === 'raw'} id={`${id}-raw-tab`} onClick={() => selectMode('raw')} role="tab" type="button">Raw JSON</button>
-        </div>
+        <fieldset>
+          <legend>{label} input mode</legend>
+          <label><input checked={mode === 'form'} disabled={disabled} name={`${id}-mode`} onChange={() => selectMode('form')} type="radio" />Form</label>
+          <label><input checked={mode === 'raw'} disabled={disabled} name={`${id}-mode`} onChange={() => selectMode('raw')} type="radio" />Raw JSON</label>
+        </fieldset>
       )}
-      <div aria-labelledby={tabId} id={panelId} role="tabpanel">
+      <div>
         {rawPanel ? (
           <>
             <label htmlFor={`${id}-raw`}>Raw JSON object</label>
@@ -313,7 +328,7 @@ export const McpJsonInput = ({
           </>
         ) : <FormEditor disabled={disabled} id={id} onChange={onChange} schema={formSchema} value={value} />}
       </div>
-      <button disabled={disabled} onClick={() => submitJsonRecord(value, onSubmit)} type="button">{submitLabel}</button>
+      <button disabled={disabled || !rawSubmissionValid} onClick={() => submitJsonRecord(value, onSubmit, rawPanel ? rawDraft : undefined)} type="button">{submitLabel}</button>
     </section>
   );
 };
