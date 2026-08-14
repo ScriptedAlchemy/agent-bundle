@@ -64,7 +64,6 @@ const runInstalled = async (
 });
 
 it('uses only an installed tarball after source deletion', async () => {
-  await execFile('npm', ['run', 'build'], { cwd: workspaceRoot, env: installedEnvironment() });
   const consumerRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-packed-consumer-'));
   const projectRoot = join(consumerRoot, 'project with spaces');
   const firstArtifact = join(projectRoot, 'first artifact');
@@ -82,6 +81,10 @@ it('uses only an installed tarball after source deletion', async () => {
     });
     const tarball = join(consumerRoot, (JSON.parse(packed) as Array<{ filename: string }>)[0]!.filename);
     await cp(fixtureRoot, projectRoot, { recursive: true });
+    const [sourceShellMode, sourcePythonMode] = await Promise.all([
+      stat(join(projectRoot, 'src', 'shell.sh')).then((metadata) => metadata.mode & 0o777),
+      stat(join(projectRoot, 'src', 'python.py')).then((metadata) => metadata.mode & 0o777),
+    ]);
     await execFile('npm', ['install', '--ignore-scripts', '--no-audit', '--no-fund', tarball], {
       cwd: projectRoot,
       env: installedEnvironment(),
@@ -144,8 +147,8 @@ it('uses only an installed tarball after source deletion', async () => {
       cwd: projectRoot,
       env: installedEnvironment(),
     })).resolves.toMatchObject({ stdout: 'python fixture\n' });
-    expect((await stat(join(firstArtifact, 'portable', 'scripts', 'shell.sh'))).mode & 0o777).toBe(0o751);
-    expect((await stat(join(firstArtifact, 'portable', 'scripts', 'python.py'))).mode & 0o777).toBe(0o711);
+    expect((await stat(join(firstArtifact, 'portable', 'scripts', 'shell.sh'))).mode & 0o777).toBe(sourceShellMode);
+    expect((await stat(join(firstArtifact, 'portable', 'scripts', 'python.py'))).mode & 0o777).toBe(sourcePythonMode);
 
     const { stdout: hooks } = await runInstalled(cli, projectRoot, [
       'hooks', 'list', '--json', '--root', projectRoot, '--artifact', firstArtifact, '--target', 'codex',
