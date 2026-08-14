@@ -5,6 +5,8 @@ import { stableJson } from '../core/digest.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { pathTokens, type NormalizedMcpServer, type NormalizedPlugin } from '../core/types.ts';
 import capabilityTable from './capabilities/claude-2.1.232.json' with { type: 'json' };
+import { planHooks } from './hook-contract.ts';
+import hooksSchema from './schemas/claude/hooks.schema.json' with { type: 'json' };
 import marketplaceSchema from './schemas/claude/marketplace.schema.json' with { type: 'json' };
 import mcpSchema from './schemas/claude/mcp.schema.json' with { type: 'json' };
 import pluginSchema from './schemas/claude/plugin.schema.json' with { type: 'json' };
@@ -17,6 +19,7 @@ installFormats(validator);
 const validatePlugin = validator.compile(pluginSchema);
 const validateMcp = validator.compile(mcpSchema);
 const validateMarketplace = validator.compile(marketplaceSchema);
+const validateHooks = validator.compile(hooksSchema);
 
 const errorDiagnostic = (code: string, message: string): Diagnostic => ({
   code,
@@ -26,7 +29,7 @@ const errorDiagnostic = (code: string, message: string): Diagnostic => ({
 });
 
 const schemaDiagnostics = (
-  document: 'plugin' | 'mcp' | 'marketplace',
+  document: 'plugin' | 'mcp' | 'marketplace' | 'hooks',
   valid: boolean,
   errors: readonly ErrorObject[] | null | undefined,
 ): Diagnostic[] => valid
@@ -123,10 +126,21 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
   }
   const mcp = Object.keys(servers).length === 0 ? undefined : { mcpServers: servers };
   if (mcp !== undefined) diagnostics.push(...schemaDiagnostics('mcp', validateMcp(mcp), validateMcp.errors));
+  const hooks = planHooks(model, {
+    commandRoot: '${CLAUDE_PLUGIN_ROOT}',
+    eventNames: capabilityTable.hooks.events,
+    matchers: capabilityTable.hooks.matchers,
+    target: claudeName,
+  });
+  diagnostics.push(...hooks.diagnostics);
+  if (hooks.document !== undefined) {
+    diagnostics.push(...schemaDiagnostics('hooks', validateHooks(hooks.document), validateHooks.errors));
+  }
 
   const plugin = {
     author: { name: model.metadata.name },
     description: model.metadata.description ?? model.metadata.name,
+    ...(hooks.document === undefined ? {} : { hooks: './hooks/hooks.json' }),
     name: model.metadata.name,
     version: model.metadata.version,
   };
@@ -155,6 +169,9 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
   if (mcp !== undefined && validateMcp(mcp)) {
     entries.push({ content: `${stableJson(mcp)}\n`, kind: 'write', relativePath: '.mcp.json' });
   }
+  if (hooks.document !== undefined && validateHooks(hooks.document)) {
+    entries.push({ content: `${stableJson(hooks.document)}\n`, kind: 'write', relativePath: 'hooks/hooks.json' });
+  }
   if (marketplace !== undefined && validateMarketplace(marketplace)) {
     entries.push({ content: `${stableJson(marketplace)}\n`, kind: 'write', relativePath: '.claude-plugin/marketplace.json' });
   }
@@ -170,12 +187,19 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
     }
   }
 
-  return Object.freeze({ diagnostics: Object.freeze(diagnostics), entries: sortedEntries(entries) });
+  return Object.freeze({
+    diagnostics: Object.freeze(diagnostics),
+    entries: sortedEntries(entries),
+    hookEntries: hooks.document !== undefined && validateHooks(hooks.document)
+      ? hooks.hookEntries
+      : Object.freeze([]),
+  });
 };
 
 export const claudeAdapter: TargetAdapter = Object.freeze({
   capabilities: Object.freeze({
     marketplace: true,
+    hooks: true,
     mcp: capabilityTable.mcp.stdio && capabilityTable.mcp.streamableHttp,
     sse: capabilityTable.mcp.sse,
     skills: capabilityTable.plugin.skills,

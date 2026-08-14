@@ -117,17 +117,19 @@ it('pins host help, capabilities, and every schema snapshot to the supported CLI
   const hosts = {
     claude: {
       hashes: {
+        'hooks.schema.json': 'a122f0e3b83f8222186bfac6965795b75f8f50716c6d76b105864ac1a578306a',
         'marketplace.schema.json': 'eba6a3ab555d40926168adecf381f449d64f1b6a5635a53e67d730dd57d5faf7',
         'mcp.schema.json': '5c885bb78328a0f47e2bd769de653c6c9f4479ac79eba0dbcd4d4fdc011b4d17',
-        'plugin.schema.json': '0540eb9c110a7edf0cb3d91a2612ec525228f99620adc2b0e03b26fe107a0361',
+        'plugin.schema.json': '55f81e2b772afcdb4f9439b5ea09f0584257175d4ed953a0104261f1114d37cc',
       },
       version: '2.1.232',
     },
     codex: {
       hashes: {
+        'hooks.schema.json': 'e42eef736997b9abb8f28b2ee9262f5c7b1f7f11d8289e9c25da8cc94a504eff',
         'marketplace.schema.json': '1d43c5ed19de401fb7455c5912e4c21113f6e387aef4c28d2eca121f7554c4e8',
         'mcp.schema.json': '75bd50f9fcb85c2e8d43bc132d61c172a02f28ea8bb77389816ae77b14a4257e',
-        'plugin.schema.json': 'ec8428b492844645cc32311bc2226907cfd9bc277e69c5c2241eaa18c8781494',
+        'plugin.schema.json': 'f6e8e7d2ecb48c50ffa850d1a8190ad85ceffec705b8f0f39bb44a1d10aca0d9',
       },
       version: '0.147.0',
     },

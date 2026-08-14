@@ -1,5 +1,20 @@
 {
   "host": "claude",
+  "hooks": {
+    "config": "hooks/hooks.json",
+    "events": {
+      "afterTool": "PostToolUse",
+      "beforeTool": "PreToolUse",
+      "sessionStart": "SessionStart",
+      "stop": "Stop"
+    },
+    "matchers": {
+      "file.read": "^Read$",
+      "file.write": "^(?:Write|Edit)$",
+      "mcp": "^mcp__",
+      "shell": "^Bash$"
+    }
+  },
   "mcp": {
     "sse": true,
     "stdio": true,

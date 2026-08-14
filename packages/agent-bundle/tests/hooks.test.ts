@@ -4,9 +4,10 @@ import { join } from 'node:path';
 
 import { expect, it } from '@rstest/core';
 
+import { createDefaultRegistry } from '../src/adapters/registry.ts';
 import { normalizeProject } from '../src/config/normalize.ts';
 import type { LoadedConfig } from '../src/config/load.ts';
-import type { NormalizationTargetRegistry } from '../src/core/types.ts';
+import type { NormalizationTargetRegistry, NormalizedPlugin } from '../src/core/types.ts';
 import { validateModel, validateSource } from '../src/config/validate.ts';
 
 const registry: NormalizationTargetRegistry = {
@@ -48,6 +49,109 @@ it('normalizes a shorthand session-start hook into a frozen stable record', asyn
     ]);
     expect(Object.isFrozen(hooks)).toBe(true);
     expect(Object.isFrozen((hooks as readonly unknown[])[0]!)).toBe(true);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+const hookModel = (root: string): NormalizedPlugin => ({
+  hooks: [
+    {
+      event: 'sessionStart',
+      id: 'hook:session-start:session-start:7ab7e8a5',
+      name: 'session-start-session-start-7ab7e8a5',
+      provenance: { kind: 'config', sourcePath: join(root, 'agent-bundle.config.ts') },
+      source: join(root, 'src', 'hooks', 'session-start.ts'),
+      targets: ['claude', 'codex'],
+      tools: [],
+    },
+    {
+      event: 'beforeTool',
+      id: 'hook:before-tool:check-command:1f5b5818',
+      name: 'before-tool-check-command-1f5b5818',
+      provenance: { kind: 'config', sourcePath: join(root, 'agent-bundle.config.ts') },
+      source: join(root, 'src', 'hooks', 'check-command.ts'),
+      targets: ['claude', 'codex'],
+      timeout: 7,
+      tools: ['shell'],
+    },
+    {
+      event: 'afterTool',
+      id: 'hook:after-tool:record:87785f02',
+      name: 'after-tool-record-87785f02',
+      provenance: { kind: 'config', sourcePath: join(root, 'agent-bundle.config.ts') },
+      source: join(root, 'src', 'hooks', 'record.ts'),
+      targets: ['claude', 'codex'],
+      tools: ['file.write'],
+    },
+    {
+      event: 'stop',
+      id: 'hook:stop:stop:bb2d7935',
+      name: 'stop-stop-bb2d7935',
+      provenance: { kind: 'config', sourcePath: join(root, 'agent-bundle.config.ts') },
+      source: join(root, 'src', 'hooks', 'stop.ts'),
+      targets: ['claude', 'codex'],
+      tools: [],
+    },
+  ],
+  mcpServers: [],
+  metadata: {
+    id: 'plugin:review-tools',
+    name: 'review-tools',
+    provenance: { kind: 'config', sourcePath: join(root, 'agent-bundle.config.ts') },
+    version: '1.0.0',
+  },
+  scripts: [],
+  skills: [],
+  targets: [
+    { id: 'target:codex', name: 'codex', provenance: { kind: 'config', sourcePath: join(root, 'agent-bundle.config.ts') } },
+    { id: 'target:claude', name: 'claude', provenance: { kind: 'config', sourcePath: join(root, 'agent-bundle.config.ts') } },
+  ],
+});
+
+it('plans deterministic Codex and Claude hook configurations from the same model', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-hooks-plan-'));
+
+  try {
+    const model = hookModel(root);
+    const registry = createDefaultRegistry();
+    const codex = registry.get('codex').plan(model);
+    const claude = registry.get('claude').plan(model);
+    const writes = (entries: readonly { readonly kind: string; readonly relativePath: string; readonly content?: string }[]) =>
+      Object.fromEntries(entries.flatMap((entry) => entry.kind === 'write' ? [[entry.relativePath, entry.content]] : []));
+
+    expect(JSON.parse(writes(codex.entries)['.codex-plugin/plugin.json']!)).toMatchObject({
+      hooks: './hooks/hooks.json',
+    });
+    expect(JSON.parse(writes(claude.entries)['.claude-plugin/plugin.json']!)).toMatchObject({
+      hooks: './hooks/hooks.json',
+    });
+    expect(JSON.parse(writes(codex.entries)['hooks/hooks.json']!)).toEqual({
+      hooks: {
+        PostToolUse: [{
+          hooks: [{ command: 'node "${PLUGIN_ROOT}/hooks/after-tool-record-87785f02.mjs"', type: 'command' }],
+          matcher: '^(?:apply_patch|Edit|Write)$',
+        }],
+        PreToolUse: [{
+          hooks: [{ command: 'node "${PLUGIN_ROOT}/hooks/before-tool-check-command-1f5b5818.mjs"', timeout: 7, type: 'command' }],
+          matcher: '^Bash$',
+        }],
+        SessionStart: [{ hooks: [{ command: 'node "${PLUGIN_ROOT}/hooks/session-start-session-start-7ab7e8a5.mjs"', type: 'command' }] }],
+        Stop: [{ hooks: [{ command: 'node "${PLUGIN_ROOT}/hooks/stop-stop-bb2d7935.mjs"', type: 'command' }] }],
+      },
+    });
+    expect(JSON.parse(writes(claude.entries)['hooks/hooks.json']!)).toMatchObject({
+      hooks: {
+        PostToolUse: [{ matcher: '^(?:Write|Edit)$' }],
+        PreToolUse: [{ matcher: '^Bash$' }],
+      },
+    });
+    expect(Reflect.get(codex, 'hookEntries')).toMatchObject([
+      { relativePath: 'hooks/session-start-session-start-7ab7e8a5.mjs' },
+      { relativePath: 'hooks/before-tool-check-command-1f5b5818.mjs' },
+      { relativePath: 'hooks/after-tool-record-87785f02.mjs' },
+      { relativePath: 'hooks/stop-stop-bb2d7935.mjs' },
+    ]);
   } finally {
     await rm(root, { force: true, recursive: true });
   }
