@@ -15,6 +15,8 @@ export interface CompiledHookEntry extends CompiledEntry {
   readonly event: TargetHookEntry['event'];
   readonly id: string;
   readonly target: string;
+  /** Native hook timeout in seconds. Omit it to use the host default. */
+  readonly timeout?: number;
 }
 
 const outputName = (script: NormalizedScript): string => {
@@ -73,7 +75,7 @@ const wrapperSource = (entry: TargetHookEntry): string => {
   }[entry.event];
 
   return [
-    `import handler from ${JSON.stringify(entry.hook.source)};`,
+    `import * as handlerModule from ${JSON.stringify(entry.hook.source)};`,
     `const target = ${JSON.stringify(entry.target)};`,
     `const canonicalEvent = ${JSON.stringify(entry.event)};`,
     `const nativeEvent = ${JSON.stringify(nativeEvent)};`,
@@ -148,8 +150,10 @@ const wrapperSource = (entry: TargetHookEntry): string => {
     '  });',
     '};',
     'const run = async () => {',
+    '  const handler = Reflect.get(handlerModule, "default");',
     '  if (typeof handler !== "function") fail("default export must be a function");',
-    '  const raw = await (await import("node:fs/promises")).readFile(0, "utf8");',
+    '  let raw = "";',
+    '  for await (const chunk of process.stdin) raw += chunk;',
     '  if (raw.trim().length === 0) fail("stdin must contain exactly one JSON value");',
     '  let input;',
     '  try { input = JSON.parse(raw); } catch { fail("stdin must contain exactly one JSON value"); }',
@@ -180,6 +184,7 @@ export const planCompiledHooks = (
   output: resolveArtifactDestination(options.outDir, entry.relativePath),
   source: entry.hook.source,
   target: entry.target,
+  ...(entry.hook.timeout === undefined ? {} : { timeout: entry.hook.timeout }),
 })));
 
 export const compileHooks = async (

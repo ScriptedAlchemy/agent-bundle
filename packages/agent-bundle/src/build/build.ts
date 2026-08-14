@@ -19,6 +19,7 @@ import {
   emitPlanEntries,
   publishArtifact,
   resolveArtifactDestination,
+  writeHookIndex,
   writeManifest,
   type ArtifactManifest,
 } from './emit.ts';
@@ -113,6 +114,17 @@ export const build = async (options: BuildOptions): Promise<BuildResult> => {
         output: assertInside(outputRoot, resolve(outputRoot, relative(stageRoot, entry.output))),
       }),
     ));
+    await writeHookIndex({
+      artifactRoot: stageRoot,
+      hooks: compiledHooks.map((entry) => ({
+        event: entry.event,
+        id: entry.id,
+        name: entry.name,
+        path: relative(stageRoot, entry.output).replaceAll('\\', '/'),
+        target: entry.target,
+        ...(entry.timeout === undefined ? {} : { timeout: entry.timeout }),
+      })),
+    });
     const manifest = await writeManifest({
       artifactRoot: stageRoot,
       targets: stagedTargets.map((target) => target.name),
