@@ -1166,12 +1166,14 @@ export class McpSessionService {
   readonly #createStdioTransport: (options: StdioOptions) => StdioTransport;
   readonly #createStreamableHttpTransport: (url: URL, options: RemoteTransportOptions) => Transport;
   readonly #epochStore: EpochStore;
+  readonly #projectRoot: string;
   readonly #openingSessions = new Set<OpeningSession>();
   readonly #sessions = new Map<string, McpSession>();
   #closePromise: Promise<void> | undefined;
   #closed = false;
 
   constructor(options: McpSessionServiceOptions) {
+    if (!isAbsolute(options.projectRoot)) throw new Error('MCP session service project root must be absolute.');
     this.#createClient = options.createClient ?? (() => new Client({ name: 'agent-bundle', version: '0.1.0' }));
     this.#createSseTransport = options.createSseTransport ?? ((url, transportOptions) => new SSEClientTransport(url, {
       eventSourceInit: transportOptions.headers === undefined ? undefined : {
@@ -1188,6 +1190,7 @@ export class McpSessionService {
         requestInit: transportOptions.headers === undefined ? undefined : { headers: transportOptions.headers },
       }));
     this.#epochStore = options.epochStore;
+    this.#projectRoot = resolve(options.projectRoot);
   }
 
   async open(options: OpenMcpSessionOptions): Promise<McpSession> {
@@ -1231,7 +1234,7 @@ export class McpSessionService {
         onClose: () => this.#sessions.delete(sessionId),
         pluginData,
         resolved: { server, target, targetRoot },
-        workspaceRoot: resolve(options.workspaceRoot ?? process.cwd()),
+        workspaceRoot: resolve(options.workspaceRoot ?? this.#projectRoot),
       });
       await session.initialize(options);
       if (this.#closed) throw new Error('MCP session service is closed.');

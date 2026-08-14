@@ -14,7 +14,7 @@ import type { LoadedConfig } from '../src/config/load.ts';
 import { EpochStore } from '../src/dev/epoch-store.ts';
 import { McpSession, McpSessionService } from '../src/dev/mcp-session-service.ts';
 import type { ArtifactEpoch } from '../src/dev/types.ts';
-import type { AgentBundleConfig, NormalizationTargetRegistry } from '../src/core/types.ts';
+import { pathTokens, type AgentBundleConfig, type NormalizationTargetRegistry } from '../src/core/types.ts';
 
 const registry: NormalizationTargetRegistry = {
   defaultTargetNames: () => ['portable'],
@@ -33,7 +33,12 @@ const loadedProject = (root: string, config: AgentBundleConfig): LoadedConfig =>
   },
 });
 
-const epochFor = (root: string, id: string, createdAt = '2026-08-14T12:00:00.000Z'): ArtifactEpoch => ({
+const epochFor = (
+  root: string,
+  id: string,
+  createdAt = '2026-08-14T12:00:00.000Z',
+  targets: readonly string[] = ['portable'],
+): ArtifactEpoch => ({
   configDigest: 'config-digest',
   createdAt,
   diagnostics: { errors: 0, infos: 0, warnings: 0 },
@@ -41,7 +46,7 @@ const epochFor = (root: string, id: string, createdAt = '2026-08-14T12:00:00.000
   manifestPath: join(root, '.agent-bundle', 'epochs', id, 'agent-bundle.manifest.json'),
   modelDigest: 'model-digest',
   projectRevision: 'project-revision',
-  targetDigests: { portable: 'portable-digest' },
+  targetDigests: Object.fromEntries(targets.map((target) => [target, `${target}-digest`])),
 });
 
 const textFrom = (value: { readonly content: readonly { readonly type: string }[] }): string => {
@@ -59,7 +64,11 @@ const textFrom = (value: { readonly content: readonly { readonly type: string }[
   return content.text;
 };
 
-const publishFixtureEpoch = async (root: string, id: string): Promise<EpochStore> => {
+const publishFixtureEpoch = async (
+  root: string,
+  id: string,
+  targets: readonly ('claude' | 'portable')[] = ['portable'],
+): Promise<EpochStore> => {
   await mkdir(join(root, 'src'), { recursive: true });
   await mkdir(join(root, 'node_modules'), { recursive: true });
   await symlink(
@@ -78,7 +87,7 @@ const publishFixtureEpoch = async (root: string, id: string): Promise<EpochStore
     '  return {',
     "    _meta: { ui: { resourceUri: 'ui://fixture/result.html' }, opaque: { nested: ['exact', 42] } },",
     '    content: [',
-    "      { type: 'text', text: JSON.stringify({ data: process.env.FIXTURE_DATA, inherited: process.env.AGENT_BUNDLE_PERSISTENT_INHERITED, pid: process.pid, root: process.env.FIXTURE_ROOT }) },",
+    "      { type: 'text', text: JSON.stringify({ cwd: process.cwd(), data: process.env.FIXTURE_DATA, inherited: process.env.AGENT_BUNDLE_PERSISTENT_INHERITED, pid: process.pid, root: process.env.FIXTURE_ROOT, workspace: process.env.FIXTURE_WORKSPACE }) },",
     "      { type: 'resource_link', name: 'fixture', uri: 'ui://fixture/resource.txt' },",
     '    ],',
     "    structuredContent: { answer: 42, opaque: { exact: true } },",
@@ -102,14 +111,15 @@ const publishFixtureEpoch = async (root: string, id: string): Promise<EpochStore
           fixture: {
             entry: './src/server.ts',
             env: {
-              FIXTURE_DATA: '${PLUGIN_DATA}',
-              FIXTURE_ROOT: '${PLUGIN_ROOT}',
+              FIXTURE_DATA: targets.includes('claude') ? pathTokens.pluginData : '${PLUGIN_DATA}',
+              FIXTURE_ROOT: targets.includes('claude') ? pathTokens.pluginRoot : '${PLUGIN_ROOT}',
+              ...(targets.includes('claude') ? { FIXTURE_WORKSPACE: pathTokens.workspaceRoot } : {}),
             },
           },
         },
       },
       plugin: { name: 'persistent-mcp-fixture', version: '1.0.0' },
-      targets: ['portable'],
+      targets: [...targets],
     }),
     { skills: [] },
     registry,
@@ -118,11 +128,14 @@ const publishFixtureEpoch = async (root: string, id: string): Promise<EpochStore
   await build({ model, outputRoot: artifact, projectRoot: root, registry: createDefaultRegistry() });
 
   const store = new EpochStore({ projectRoot: root });
-  const staging = await store.createStagingEpoch({ epoch: epochFor(root, id), targets: ['portable'] });
+  const staging = await store.createStagingEpoch({
+    epoch: epochFor(root, id, undefined, targets),
+    targets,
+  });
   await Promise.all([
     cp(join(artifact, 'agent-bundle.hooks.json'), join(staging.root, 'agent-bundle.hooks.json')),
     cp(join(artifact, 'agent-bundle.manifest.json'), join(staging.root, 'agent-bundle.manifest.json')),
-    cp(join(artifact, 'portable'), join(staging.root, 'portable'), { recursive: true }),
+    ...targets.map((target) => cp(join(artifact, target), join(staging.root, target), { recursive: true })),
   ]);
   await staging.publish(async () => undefined);
   const epochRoot = join(root, '.agent-bundle', 'epochs', id);
@@ -267,6 +280,39 @@ it('keeps one generated server and plugin-data directory bound to the selected e
       process.env[inheritedKey] = previousInherited;
     }
     await rm(root, { force: true, recursive: true });
+  }
+}, 30_000);
+
+it('uses the configured project root as the default workspace from a decoy cwd', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-mcp-workspace-root-'));
+  const decoy = await mkdtemp(join(tmpdir(), 'agent-bundle-mcp-workspace-decoy-'));
+  const originalCwd = process.cwd();
+  let service: McpSessionService | undefined;
+  try {
+    const epochStore = await publishFixtureEpoch(root, 'epoch-workspace', ['claude']);
+    service = new McpSessionService({ epochStore, projectRoot: root });
+    process.chdir(decoy);
+    const session = await service.open({ epochId: 'epoch-workspace', serverName: 'fixture', target: 'claude' });
+    const first = JSON.parse(textFrom(await session.callTool({ arguments: {}, name: 'inspect' }))) as {
+      readonly cwd: string;
+      readonly workspace: string;
+    };
+    const targetRoot = join(root, '.agent-bundle', 'epochs', 'epoch-workspace', 'claude');
+    expect(first).toMatchObject({ cwd: targetRoot, workspace: root });
+
+    await session.restart();
+    const restarted = JSON.parse(textFrom(await session.callTool({ arguments: {}, name: 'inspect' }))) as {
+      readonly cwd: string;
+      readonly workspace: string;
+    };
+    expect(restarted).toMatchObject({ cwd: targetRoot, workspace: root });
+  } finally {
+    process.chdir(originalCwd);
+    await service?.close();
+    await Promise.all([
+      rm(root, { force: true, recursive: true }),
+      rm(decoy, { force: true, recursive: true }),
+    ]);
   }
 }, 30_000);
 
