@@ -36,10 +36,12 @@ it('builds the checked-in fixture matrix from a path with spaces', async () => {
 
     const generatedShell = join(output, 'portable', 'scripts', 'shell.sh');
     const generatedPython = join(output, 'portable', 'scripts', 'python.py');
+    const sourceShell = join(root, 'src', 'shell.sh');
+    const sourcePython = join(root, 'src', 'python.py');
     await expect(execFile(generatedShell, [], { cwd: root })).resolves.toMatchObject({ stdout: 'shell fixture\n' });
     await expect(execFile('python3', [generatedPython], { cwd: root })).resolves.toMatchObject({ stdout: 'python fixture\n' });
-    expect((await stat(generatedShell)).mode & 0o777).toBe(0o751);
-    expect((await stat(generatedPython)).mode & 0o777).toBe(0o711);
+    expect((await stat(generatedShell)).mode & 0o777).toBe((await stat(sourceShell)).mode & 0o777);
+    expect((await stat(generatedPython)).mode & 0o777).toBe((await stat(sourcePython)).mode & 0o777);
 
     const bundled = await import(pathToFileURL(join(output, 'portable', 'scripts', 'bundle.mjs')).href);
     expect(bundled.bundleMessage).toBe('bundled fixture');
