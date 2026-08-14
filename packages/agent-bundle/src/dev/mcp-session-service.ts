@@ -28,6 +28,8 @@ import { EpochStore, type EpochReference } from './epoch-store.ts';
 
 const defaultTimeoutMs = 5_000;
 const maxStderrBytes = 1_000_000;
+const maxRetainedEvents = 512;
+const maxRetainedFrames = 512;
 
 type NativeTarget = 'portable' | 'codex' | 'claude';
 type RawMcpFrame = Parameters<Transport['send']>[0];
@@ -141,6 +143,19 @@ export type McpSessionEvent =
   | Readonly<{ readonly sequence: number; readonly text: string; readonly type: 'stderr' }>
   | Readonly<{ readonly payload: unknown; readonly sequence: number; readonly type: 'progress' }>
   | Readonly<{ readonly payload: unknown; readonly sequence: number; readonly type: 'logging' }>;
+
+export interface McpSessionReplayOverflow {
+  /** The caller's cursor falls before data that has been evicted from retention. */
+  readonly afterSequence: number;
+  /** A subsequent replay must begin after this sequence to be complete. */
+  readonly droppedThroughSequence: number;
+}
+
+export interface McpSessionReplay {
+  readonly events: readonly McpSessionEvent[];
+  readonly frames: readonly McpSessionFrame[];
+  readonly overflow?: McpSessionReplayOverflow;
+}
 
 export interface McpSessionServiceOptions {
   readonly createClient?: () => McpClient;
@@ -283,7 +298,11 @@ const openingSession = (): OpeningSession => {
   });
 };
 
-const captureStderr = (stream: Stream | null, onText: (text: string) => void): StderrCapture => {
+const captureStderr = (
+  stream: Stream | null,
+  onText: (text: string) => void,
+  onOverflow: () => void,
+): StderrCapture => {
   if (stream === null) {
     return { exceeded: () => false, output: () => '', stop: () => undefined };
   }
@@ -293,7 +312,10 @@ const captureStderr = (stream: Stream | null, onText: (text: string) => void): S
   const onData = (chunk: Buffer | string) => {
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     if (bytes + buffer.byteLength > maxStderrBytes) {
-      overflow = true;
+      if (!overflow) {
+        overflow = true;
+        onOverflow();
+      }
       return;
     }
     bytes += buffer.byteLength;
@@ -411,8 +433,11 @@ export class McpSession {
   #closePromise: Promise<void> | undefined;
   #closed = false;
   #connection: McpSessionConnectionState | undefined;
+  #droppedThroughSequence = 0;
   #lifecycleTail: Promise<void> = Promise.resolve();
   #sequence = 0;
+  #stderrOutput = '';
+  #stderrOverflow = false;
 
   constructor(options: {
     readonly binding: McpSessionBinding;
@@ -456,8 +481,22 @@ export class McpSession {
     return Object.freeze([...this.#events]);
   }
 
+  replay(afterSequence = 0): McpSessionReplay {
+    if (!Number.isSafeInteger(afterSequence) || afterSequence < 0) {
+      throw new RangeError('MCP session replay cursor must be a nonnegative safe integer.');
+    }
+    const overflow = afterSequence < this.#droppedThroughSequence
+      ? Object.freeze({ afterSequence, droppedThroughSequence: this.#droppedThroughSequence })
+      : undefined;
+    return Object.freeze({
+      events: Object.freeze(this.#events.filter((event) => event.sequence > afterSequence)),
+      frames: Object.freeze(this.#frames.filter((frame) => frame.sequence > afterSequence)),
+      ...(overflow === undefined ? {} : { overflow }),
+    });
+  }
+
   stderr(): string {
-    return this.#capture?.output() ?? '';
+    return this.#capture?.output() ?? this.#stderrOutput;
   }
 
   async initialize(options?: McpSessionRequestOptions): Promise<McpSessionConnectionState> {
@@ -512,10 +551,12 @@ export class McpSession {
     options.signal?.addEventListener('abort', onAbort, { once: true });
     this.#requests.set(requestId, controller);
     try {
-      return await this.#clientFor(options).callTool({ arguments: options.arguments, name: options.name }, {
+      const result = await this.#clientFor(options).callTool({ arguments: options.arguments, name: options.name }, {
         signal: controller.signal,
         timeout: requestOptions(options).timeout,
       });
+      this.#throwIfStderrExceeded();
+      return result;
     } finally {
       options.signal?.removeEventListener('abort', onAbort);
       this.#requests.delete(requestId);
@@ -629,6 +670,7 @@ export class McpSession {
     try {
       await client?.close();
     } finally {
+      if (capture !== undefined) this.#stderrOutput = capture.output();
       capture?.stop();
     }
   }
@@ -639,18 +681,33 @@ export class McpSession {
 
   #recordFrame(direction: McpSessionFrame['direction'], message: RawMcpFrame): void {
     const sequence = this.#nextSequence();
-    this.#frames.push(Object.freeze({ direction, message, sequence }));
+    this.#retain(this.#frames, Object.freeze({ direction, message, sequence }), maxRetainedFrames);
     const notification: unknown = message;
     if (direction !== 'server' || !isRecord(notification) || typeof notification.method !== 'string') return;
     if (notification.method === 'notifications/progress') {
-      this.#events.push(Object.freeze({ payload: notification.params, sequence: this.#nextSequence(), type: 'progress' }));
+      this.#retain(
+        this.#events,
+        Object.freeze({ payload: notification.params, sequence: this.#nextSequence(), type: 'progress' }),
+        maxRetainedEvents,
+      );
     } else if (notification.method === 'notifications/message') {
-      this.#events.push(Object.freeze({ payload: notification.params, sequence: this.#nextSequence(), type: 'logging' }));
+      this.#retain(
+        this.#events,
+        Object.freeze({ payload: notification.params, sequence: this.#nextSequence(), type: 'logging' }),
+        maxRetainedEvents,
+      );
     }
   }
 
   #recordStderr(text: string): void {
-    this.#events.push(Object.freeze({ sequence: this.#nextSequence(), text, type: 'stderr' }));
+    this.#retain(this.#events, Object.freeze({ sequence: this.#nextSequence(), text, type: 'stderr' }), maxRetainedEvents);
+  }
+
+  #retain<Entry extends { readonly sequence: number }>(entries: Entry[], entry: Entry, maximum: number): void {
+    entries.push(entry);
+    if (entries.length <= maximum) return;
+    const dropped = entries.shift();
+    if (dropped !== undefined) this.#droppedThroughSequence = Math.max(this.#droppedThroughSequence, dropped.sequence);
   }
 
   #nextSequence(): number {
@@ -659,7 +716,7 @@ export class McpSession {
   }
 
   #throwIfStderrExceeded(capture = this.#capture): void {
-    if (capture?.exceeded()) throw new RangeError('MCP server stderr exceeds the 1 MB limit.');
+    if (this.#stderrOverflow || capture?.exceeded()) throw new RangeError('MCP server stderr exceeds the 1 MB limit.');
   }
 
   #transport(setCapture: (capture: StderrCapture) => void): Transport {
@@ -671,13 +728,22 @@ export class McpSession {
         env: { ...this.#launch.env },
         stderr: 'pipe',
       });
-      setCapture(captureStderr(transport.stderr, (text) => this.#recordStderr(text)));
+      setCapture(captureStderr(
+        transport.stderr,
+        (text) => this.#recordStderr(text),
+        () => this.#handleStderrOverflow(),
+      ));
       return transport;
     }
     const headers = this.#launch.headers === undefined ? undefined : { ...this.#launch.headers };
     return this.#launch.kind === 'streamable-http'
       ? this.#createStreamableHttpTransport(this.#launch.url, { ...(headers === undefined ? {} : { headers }) })
       : this.#createSseTransport(this.#launch.url, { ...(headers === undefined ? {} : { headers }) });
+  }
+
+  #handleStderrOverflow(): void {
+    this.#stderrOverflow = true;
+    void this.close().catch(() => undefined);
   }
 
   #resolveLaunch(): ResolvedLaunch {

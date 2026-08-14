@@ -1,6 +1,7 @@
 import { access, cp, mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { PassThrough } from 'node:stream';
 
 import { expect, it } from '@rstest/core';
 import type { Transport } from '@modelcontextprotocol/client';
@@ -426,6 +427,97 @@ it('rejects an already-aborted tool call without invoking the MCP SDK', async ()
     expect(calls).toBe(0);
 
     await session.close();
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+}, 30_000);
+
+it('bounds frame and event retention with an explicit replay overflow cursor', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-persistent-mcp-retention-'));
+  try {
+    const epochStore = await publishFixtureEpoch(root, 'epoch-1');
+    let spawned: Transport | undefined;
+    const service = new McpSessionService({
+      createClient: () => ({
+        callTool: async () => ({ content: [] }),
+        close: async () => undefined,
+        connect: async () => {
+          for (let index = 0; index < 513; index += 1) {
+            spawned?.onmessage?.({
+              jsonrpc: '2.0',
+              method: 'notifications/progress',
+              params: { progress: index, progressToken: 'retention-fixture' },
+            });
+          }
+        },
+        getPrompt: async () => ({ messages: [] }),
+        getServerCapabilities: () => undefined,
+        getServerVersion: () => undefined,
+        listPrompts: async () => ({ prompts: [] }),
+        listResources: async () => ({ resources: [] }),
+        listResourceTemplates: async () => ({ resourceTemplates: [] }),
+        listTools: async () => ({ tools: [] }),
+        readResource: async () => ({ contents: [] }),
+      }),
+      createStdioTransport: () => {
+        const transport = { close: async () => undefined, send: async () => undefined, start: async () => undefined, stderr: null };
+        spawned = transport as Transport;
+        return transport as never;
+      },
+      epochStore,
+      projectRoot: root,
+    });
+    const session = await service.open({ epochId: 'epoch-1', serverName: 'fixture', target: 'portable' });
+
+    expect(session.frames()).toHaveLength(512);
+    expect(session.events()).toHaveLength(512);
+    expect(session.replay(0)).toMatchObject({
+      overflow: { afterSequence: 0, droppedThroughSequence: 2 },
+    });
+    expect(session.replay(2).overflow).toBeUndefined();
+
+    await session.close();
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+}, 30_000);
+
+it('fails and closes the session as soon as stderr exceeds its output bound', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-persistent-mcp-stderr-limit-'));
+  try {
+    const epochStore = await publishFixtureEpoch(root, 'epoch-1');
+    const stderr = new PassThrough();
+    let clientCloses = 0;
+    const service = new McpSessionService({
+      createClient: () => ({
+        callTool: async () => {
+          stderr.write('a'.repeat(1_000_000));
+          stderr.write('!');
+          return { content: [] };
+        },
+        close: async () => {
+          clientCloses += 1;
+        },
+        connect: async () => undefined,
+        getPrompt: async () => ({ messages: [] }),
+        getServerCapabilities: () => undefined,
+        getServerVersion: () => undefined,
+        listPrompts: async () => ({ prompts: [] }),
+        listResources: async () => ({ resources: [] }),
+        listResourceTemplates: async () => ({ resourceTemplates: [] }),
+        listTools: async () => ({ tools: [] }),
+        readResource: async () => ({ contents: [] }),
+      }),
+      createStdioTransport: () => ({ close: async () => undefined, send: async () => undefined, start: async () => undefined, stderr }) as never,
+      epochStore,
+      projectRoot: root,
+    });
+    const session = await service.open({ epochId: 'epoch-1', serverName: 'fixture', target: 'portable' });
+
+    await expect(session.callTool({ arguments: {}, name: 'fixture' })).rejects.toThrow('stderr exceeds the 1 MB limit');
+    await session.close();
+    expect(clientCloses).toBe(1);
+    expect(Buffer.byteLength(session.stderr())).toBeLessThanOrEqual(1_000_000);
   } finally {
     await rm(root, { force: true, recursive: true });
   }
