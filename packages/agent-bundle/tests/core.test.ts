@@ -31,6 +31,25 @@ it('serializes integer-like object keys in lexical order', () => {
   );
 });
 
+it('matches JSON.stringify for sparse arrays', () => {
+  const oneHole = Array(1);
+  const middleHole = [1, 2, 3];
+  delete middleHole[1];
+
+  expect(stableJson(oneHole)).toBe(JSON.stringify(oneHole));
+  expect(stableJson(middleHole)).toBe(JSON.stringify(middleHole));
+});
+
+it('matches JSON.stringify for boxed primitives', () => {
+  const boxedNumber = Object(1);
+  const boxedString = Object('agent-bundle');
+  const boxedBoolean = Object(true);
+
+  expect(stableJson(boxedNumber)).toBe(JSON.stringify(boxedNumber));
+  expect(stableJson(boxedString)).toBe(JSON.stringify(boxedString));
+  expect(stableJson(boxedBoolean)).toBe(JSON.stringify(boxedBoolean));
+});
+
 it('returns resolved paths contained by the output root', () => {
   expect(assertInside('/tmp/out', '/tmp/out')).toBe('/tmp/out');
   expect(assertInside('/tmp/out', '/tmp/out/nested/file.txt')).toBe(

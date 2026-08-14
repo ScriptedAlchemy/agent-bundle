@@ -17,10 +17,19 @@ const serializeJson = (value: unknown, key = ''): string | undefined => {
       return serializeJson(toJson.call(value, key), key);
     }
 
+    if (
+      value instanceof Boolean ||
+      value instanceof Number ||
+      value instanceof String
+    ) {
+      return JSON.stringify(value);
+    }
+
     if (Array.isArray(value)) {
-      return `[${value
-        .map((item, index) => serializeJson(item, String(index)) ?? 'null')
-        .join(',')}]`;
+      const items = Array.from({ length: value.length }, (_, index) =>
+        serializeJson(value[index], String(index)) ?? 'null',
+      );
+      return `[${items.join(',')}]`;
     }
 
     const object = value as Record<string, unknown>;
