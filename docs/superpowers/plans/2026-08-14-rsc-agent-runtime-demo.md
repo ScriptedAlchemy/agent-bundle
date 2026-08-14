@@ -629,8 +629,9 @@ examples/rsc-agent-runtime/
   - create a fresh temporary Git workspace and explicit shared state file per host;
   - run Claude with `claude -p --plugin-dir <example-root> --output-format stream-json --verbose
     --include-hook-events --no-session-persistence --dangerously-skip-permissions`;
-  - run Codex with `codex exec --ephemeral --json --dangerously-bypass-hook-trust -s workspace-write
-    -a never -C <fixture>` and a temporary local marketplace/plugin installation;
+  - run Codex with `codex -a never exec --ephemeral --json --dangerously-bypass-hook-trust
+    -s workspace-write -C <fixture>` and a temporary local marketplace/plugin installation; `-a`
+    is a global Codex option and must appear before `exec` in 0.147.0;
   - for the temporary Codex home, copy `auth.json` opaquely with its original mode when it exists,
     never read or print its contents, and delete the temporary home in `finally`;
   - inherit each CLI's existing session environment without adding provider credential variables;
