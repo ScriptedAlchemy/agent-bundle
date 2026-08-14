@@ -710,7 +710,33 @@ examples/rsc-agent-runtime/
   deterministic optional resource domain and native Claude package; the Codex proof is its native
   manifest/hook/MCP artifact. Do not claim either CLI renders an iframe.
 
-- [ ] **Step 5: Implement a deterministic native-host evaluation script**
+- [ ] **Step 5: Verify and commit the host-extension slice**
+
+  Run:
+
+  ```bash
+  npm run build -w @agent-bundle/rsc-agent-runtime-demo
+  npm test -w @agent-bundle/rsc-agent-runtime-demo -- run tests/host-extensions.test.tsx tests/mcp-lowering.test.tsx tests/mcp-transports.integration.test.ts
+  npm run typecheck -w @agent-bundle/rsc-agent-runtime-demo
+  ```
+
+  Stage only the host metadata/result/widget adapter source and focused tests, leaving packaging,
+  evaluation, capture, and README work for the final task commit:
+
+  ```bash
+  git add examples/rsc-agent-runtime/src/mcp/host-metadata.ts \
+    examples/rsc-agent-runtime/src/mcp/create-server.ts \
+    examples/rsc-agent-runtime/src/runtime/contracts.ts \
+    examples/rsc-agent-runtime/src/runtime/elements.ts \
+    examples/rsc-agent-runtime/src/runtime/lower-mcp.ts \
+    examples/rsc-agent-runtime/src/widget/App.tsx \
+    examples/rsc-agent-runtime/src/widget/host-adapters.ts \
+    examples/rsc-agent-runtime/src/widget/styles.css \
+    examples/rsc-agent-runtime/tests/host-extensions.test.tsx
+  git commit -m "feat(example): add host extension adapters"
+  ```
+
+- [ ] **Step 6: Implement a deterministic native-host evaluation script**
 
   `eval-hosts.mjs` must:
 
@@ -736,7 +762,7 @@ examples/rsc-agent-runtime/
   The script must not persist raw authentication, account identifiers, prompts from user config, or
   complete native transcripts in the repository.
 
-- [ ] **Step 6: Implement browser capture and interaction verification**
+- [ ] **Step 7: Implement browser capture and interaction verification**
 
   `capture-widget.mjs` must locate Chrome, serve `dist/app/standalone.html` on an ephemeral loopback
   port, launch that installed executable through `playwright-core`, capture 760x500 and 360x640
@@ -754,7 +780,7 @@ examples/rsc-agent-runtime/
   mobile width and assert the host variables/insets apply, the Refresh target remains at least
   44x44 CSS pixels, and no horizontal or nested vertical scrolling is introduced.
 
-- [ ] **Step 7: Document the runnable demo and honest support boundaries**
+- [ ] **Step 8: Document the runnable demo and honest support boundaries**
 
   `README.md` must include:
 
@@ -779,7 +805,7 @@ examples/rsc-agent-runtime/
   - an explicit opt-in section explaining that existing Agent Bundle skills, static MCPs,
     evaluations, and normal hooks do not require or activate this runtime.
 
-- [ ] **Step 8: Validate static packaging and run all deterministic checks**
+- [ ] **Step 9: Validate static packaging and run all deterministic checks**
 
   Run diagnostics before TypeScript, then:
 
@@ -792,7 +818,7 @@ examples/rsc-agent-runtime/
 
   Expected: plugin validation, example check, browser interaction, and root check all exit 0.
 
-- [ ] **Step 9: Run installed Claude and Codex evaluations**
+- [ ] **Step 10: Run installed Claude and Codex evaluations**
 
   Run:
 
@@ -805,7 +831,7 @@ examples/rsc-agent-runtime/
   If a host session is not authenticated, record that as an environment limitation; do not request or
   add a key.
 
-- [ ] **Step 10: Compare the accepted concept and browser screenshots**
+- [ ] **Step 11: Compare the accepted concept and browser screenshots**
 
   Inspect `docs/assets/rsc-agent-runtime-demo/edit-timeline-concept.png`, the standalone desktop and
   mobile screenshots, the ChatGPT-extension screenshot, and the Claude-compatible host-context
@@ -820,7 +846,7 @@ examples/rsc-agent-runtime/
   Fix every concrete mismatch before proceeding. The allowed above-the-fold copy is only the concept
   copy plus dynamic filename, host, tool, and timestamp values.
 
-- [ ] **Step 11: Commit**
+- [ ] **Step 12: Commit the packaging, evaluation, capture, and documentation slice**
 
   ```bash
   git add examples/rsc-agent-runtime
