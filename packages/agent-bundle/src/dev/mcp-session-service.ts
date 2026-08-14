@@ -236,6 +236,10 @@ const inspectorCommandAllowlist = new Set(['bun', 'bun.exe', 'deno', 'deno.exe',
 const inspectorRuntimeArgumentAllowlist = new Set(['--enable-source-maps']);
 const safeLocaleValue = /^[A-Za-z0-9_.@-]{1,128}$/u;
 const safeTimeZoneValue = /^[A-Za-z0-9_+./-]{1,128}$/u;
+const credentialShaped = /(?:api[-_]?key|authorization|bearer|credential|cookie|password|secret|token)/iu;
+
+const hasCredentialShapedPathSegment = (path: string): boolean =>
+  path.split(/[\\/]/u).some((segment) => credentialShaped.test(segment));
 
 const inspectorCommand = (command: string): string =>
   inspectorCommandAllowlist.has(command) ? command : '[REDACTED]';
@@ -243,6 +247,7 @@ const inspectorCommand = (command: string): string =>
 const inspectorArtifactArgument = (argument: string, targetRoot: string): string => {
   if (inspectorRuntimeArgumentAllowlist.has(argument)) return argument;
   if (!isAbsolute(argument) && !argument.startsWith('./') && !argument.startsWith('../')) return '[REDACTED]';
+  if (hasCredentialShapedPathSegment(argument)) return '[REDACTED]';
   const resolved = resolve(targetRoot, argument);
   return resolved === targetRoot || resolved.startsWith(`${targetRoot}/`) ? argument : '[REDACTED]';
 };
@@ -253,7 +258,7 @@ const inspectorArguments = (args: readonly string[], targetRoot: string): readon
 const safeInspectorEnvironmentValue = (key: string, value: string): boolean => {
   if (key === 'FORCE_COLOR') return /^(0|1|2|3)$/u.test(value);
   if (key === 'NO_COLOR') return value === '0' || value === '1';
-  if (key === 'LANG' || key === 'LC_ALL') return safeLocaleValue.test(value);
+  if (key === 'LANG' || key === 'LC_ALL') return safeLocaleValue.test(value) && !credentialShaped.test(value);
   if (key === 'TZ') return safeTimeZoneValue.test(value);
   return false;
 };
@@ -272,8 +277,68 @@ const inspectorUrl = (url: URL): string => {
   sanitized.password = '';
   sanitized.search = '';
   sanitized.username = '';
+  const segments = sanitized.pathname.split('/').filter((segment) => segment.length > 0);
+  if (segments.some((segment) => {
+    try {
+      return credentialShaped.test(decodeURIComponent(segment));
+    } catch {
+      return true;
+    }
+  })) sanitized.pathname = '/';
   return sanitized.href;
 };
+
+const cloneJsonSnapshot = (value: unknown, ancestors = new WeakSet<object>()): unknown => {
+  if (value === null || typeof value === 'string' || typeof value === 'boolean') return value;
+  if (typeof value === 'number') {
+    if (Number.isFinite(value)) return value;
+    throw new TypeError('MCP protocol frames must contain only finite JSON numbers.');
+  }
+  if (typeof value !== 'object') {
+    throw new TypeError(`MCP protocol frames must contain only JSON values, not ${typeof value}.`);
+  }
+  if (ancestors.has(value)) throw new TypeError('MCP protocol frames cannot contain cyclic references.');
+
+  ancestors.add(value);
+  try {
+    if (Array.isArray(value)) {
+      for (const key of Reflect.ownKeys(value)) {
+        if (
+          typeof key !== 'string' ||
+          (key !== 'length' && (!/^(0|[1-9]\d*)$/u.test(key) || Number(key) >= value.length))
+        ) throw new TypeError('MCP protocol frame arrays cannot contain non-index properties.');
+      }
+      const copy: unknown[] = [];
+      for (let index = 0; index < value.length; index += 1) {
+        const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+        if (descriptor === undefined || !('value' in descriptor)) {
+          throw new TypeError('MCP protocol frame arrays cannot contain holes or accessors.');
+        }
+        copy.push(cloneJsonSnapshot(descriptor.value, ancestors));
+      }
+      return copy;
+    }
+
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) {
+      throw new TypeError('MCP protocol frame objects must have a plain-object prototype.');
+    }
+    const copy: Record<string, unknown> = {};
+    for (const key of Reflect.ownKeys(value)) {
+      if (typeof key !== 'string') throw new TypeError('MCP protocol frame objects cannot contain symbol properties.');
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (descriptor === undefined || !('value' in descriptor)) {
+        throw new TypeError('MCP protocol frame objects cannot contain accessors.');
+      }
+      copy[key] = cloneJsonSnapshot(descriptor.value, ancestors);
+    }
+    return copy;
+  } finally {
+    ancestors.delete(value);
+  }
+};
+
+const detachedJsonSnapshot = (value: unknown): unknown => freezeJsonValue(cloneJsonSnapshot(value));
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -883,7 +948,7 @@ export class McpSession {
   }
 
   #recordFrame(direction: McpSessionFrame['direction'], message: RawMcpFrame): void {
-    const snapshot = freezeJsonValue(structuredClone(message));
+    const snapshot = detachedJsonSnapshot(message);
     const sequence = this.#nextSequence();
     this.#retain(this.#frames, Object.freeze({ direction, message: snapshot, sequence }), maxRetainedFrames);
     this.#recordTrace(Object.freeze({

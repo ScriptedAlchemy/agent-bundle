@@ -707,11 +707,12 @@ it('retains frozen transport snapshots without caller or subscriber mutation', a
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-persistent-mcp-raw-'));
   try {
     const epochStore = await publishFixtureEpoch(root, 'epoch-raw');
+    const shared = { value: 'shared-before-mutation' };
     const outbound = {
       id: 1,
       jsonrpc: '2.0' as const,
       method: 'initialize',
-      params: { nested: { value: 'outbound-before-mutation' } },
+      params: { a: shared, b: shared, nested: { value: 'outbound-before-mutation' } },
     };
     const progress = {
       jsonrpc: '2.0' as const,
@@ -776,10 +777,20 @@ it('retains frozen transport snapshots without caller or subscriber mutation', a
     expect(session.frames()[1]!.message).not.toBe(progress);
     expect(session.frames()[2]!.message).not.toBe(logging);
     outbound.params.nested.value = 'mutated-by-caller';
+    shared.value = 'mutated-by-caller';
     progress.params.nested.value = 'mutated-by-caller';
     logging.params.data.nested[0] = 'mutated-by-caller';
     expect(session.frames().map((frame) => frame.message)).toEqual([
-      { id: 1, jsonrpc: '2.0', method: 'initialize', params: { nested: { value: 'outbound-before-mutation' } } },
+      {
+        id: 1,
+        jsonrpc: '2.0',
+        method: 'initialize',
+        params: {
+          a: { value: 'shared-before-mutation' },
+          b: { value: 'shared-before-mutation' },
+          nested: { value: 'outbound-before-mutation' },
+        },
+      },
       {
         jsonrpc: '2.0',
         method: 'notifications/progress',
@@ -805,12 +816,26 @@ it('retains frozen transport snapshots without caller or subscriber mutation', a
       id: 1,
       jsonrpc: '2.0',
       method: 'initialize',
-      params: { nested: { value: 'outbound-before-mutation' } },
+      params: {
+        a: { value: 'shared-before-mutation' },
+        b: { value: 'shared-before-mutation' },
+        nested: { value: 'outbound-before-mutation' },
+      },
     });
     if (typeof traceFrame.message !== 'object' || traceFrame.message === null) {
       throw new Error('Expected the raw frame snapshot to be an object.');
     }
     expect(Reflect.set(traceFrame.message, 'mutated', true)).toBe(false);
+    if (
+      !('params' in traceFrame.message) ||
+      typeof traceFrame.message.params !== 'object' ||
+      traceFrame.message.params === null ||
+      !('a' in traceFrame.message.params) ||
+      !('b' in traceFrame.message.params)
+    ) throw new Error('Expected detached repeated JSON values.');
+    expect(traceFrame.message.params.a).toEqual({ value: 'shared-before-mutation' });
+    expect(traceFrame.message.params.b).toEqual({ value: 'shared-before-mutation' });
+    expect(traceFrame.message.params.a).not.toBe(traceFrame.message.params.b);
 
     const afterSequence = session.trace().entries.at(-1)?.sequence;
     if (afterSequence === undefined) throw new Error('Expected a trace cursor.');
@@ -835,6 +860,12 @@ it('retains frozen transport snapshots without caller or subscriber mutation', a
     ) throw new Error('Expected a live frame snapshot.');
     expect(received.message).not.toBe(liveFrame);
     expect(Reflect.set(received.message, 'mutated', true)).toBe(false);
+    if (
+      !('params' in received.message) ||
+      typeof received.message.params !== 'object' ||
+      received.message.params === null
+    ) throw new Error('Expected a deeply frozen live frame snapshot.');
+    expect(Reflect.set(received.message.params, 'mutated', true)).toBe(false);
     liveFrame.params.nested.value = 'mutated-by-caller';
     const replayedFrame = session.trace(afterSequence).entries.find((entry) => entry.kind === 'frame');
     if (replayedFrame?.kind !== 'frame') throw new Error('Expected a replayed frame snapshot.');
@@ -843,6 +874,13 @@ it('retains frozen transport snapshots without caller or subscriber mutation', a
       method: 'notifications/progress',
       params: { nested: { value: 'live-before-mutation' }, progress: 2, progressToken: 'fixture-progress' },
     });
+    const cyclic: { readonly jsonrpc: '2.0'; readonly method: string; self?: unknown } = {
+      jsonrpc: '2.0',
+      method: 'notifications/progress',
+    };
+    cyclic.self = cyclic;
+    expect(() => spawned?.onmessage?.(cyclic)).toThrow('cyclic');
+    await expect(session.listTools()).resolves.toEqual([]);
     await expect(session.callTool({ arguments: {}, name: 'fixture' })).resolves.toBe(result);
 
     await session.close();
@@ -878,9 +916,15 @@ it('fails closed when projecting adversarial generated launch configuration for 
           '--api-key=api-key-secret',
           '--enable-source-maps',
           '/tmp/agent-bundle-inspector/portable/server.mjs',
+          '/tmp/agent-bundle-inspector/portable/token-secret/entry.mjs',
         ],
         command: 'node',
-        env: { FORCE_COLOR: '2', LANG: 'Bearer environment-secret', NO_COLOR: '1' },
+        env: {
+          FORCE_COLOR: '2',
+          LANG: 'en_US.UTF-8-token-secret',
+          LC_ALL: 'BearerLocaleSecret',
+          NO_COLOR: '1',
+        },
         kind: 'stdio',
       },
       target: 'portable',
@@ -895,6 +939,7 @@ it('fails closed when projecting adversarial generated launch configuration for 
   expect(stdioJson).not.toContain('token-secret');
   expect(stdioJson).not.toContain('api-key-secret');
   expect(stdioJson).not.toContain('environment-secret');
+  expect(stdioJson).not.toContain('BearerLocaleSecret');
   if (stdioProjection.launch.kind !== 'stdio') throw new Error('Expected a stdio Inspector projection.');
   expect(stdioProjection.launch.env).toEqual({ FORCE_COLOR: '2', NO_COLOR: '1' });
   expect(stdioProjection.launch.args).toContain('--enable-source-maps');
@@ -906,7 +951,7 @@ it('fails closed when projecting adversarial generated launch configuration for 
       server: {
         headers: { Authorization: 'Bearer header-secret', Cookie: 'session=cookie-secret' },
         kind: 'streamable-http',
-        url: 'https://user:password@mcp.example.test/tools?token=query-secret#fragment-secret',
+        url: 'https://user:password@mcp.example.test/token-secret/tools?token=query-secret#fragment-secret',
       },
       target: 'portable',
       targetRoot: '/tmp/agent-bundle-inspector/portable',
@@ -919,8 +964,9 @@ it('fails closed when projecting adversarial generated launch configuration for 
   expect(remoteJson).not.toContain('fragment-secret');
   expect(remoteJson).not.toContain('header-secret');
   expect(remoteJson).not.toContain('cookie-secret');
+  expect(remoteJson).not.toContain('token-secret');
   expect(remoteProjection).toEqual({
-    launch: { kind: 'streamable-http', url: 'https://mcp.example.test/tools' },
+    launch: { kind: 'streamable-http', url: 'https://mcp.example.test/' },
     origin: 'artifact',
   });
 });
