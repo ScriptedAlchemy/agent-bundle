@@ -1,5 +1,5 @@
 import { readFile } from 'node:fs/promises';
-import { isAbsolute, posix, resolve } from 'node:path';
+import { dirname, isAbsolute, posix, resolve } from 'node:path';
 import { spawn } from 'node:child_process';
 
 import type { Diagnostic } from '../core/diagnostics.ts';
@@ -50,6 +50,23 @@ const checkJavaScriptSyntax = async (path: string): Promise<string | undefined> 
 
 const sameFile = (left: ArtifactFile, right: ManifestFile): boolean =>
   left.bytes === right.bytes && left.path === right.path && left.sha256 === right.sha256;
+
+const localMcpArgument = (value: unknown): string | undefined => {
+  if (typeof value !== 'string') return undefined;
+  const relative = value.replace(/^\.\//, '');
+  return /^mcp\/mcp-[a-z0-9-]+-[a-f\d]{8}\.mjs$/u.test(relative) ? relative : undefined;
+};
+
+const localMcpPaths = (document: unknown): readonly string[] => {
+  if (typeof document !== 'object' || document === null || Array.isArray(document)) return [];
+  const servers = (document as { readonly mcpServers?: unknown }).mcpServers;
+  if (typeof servers !== 'object' || servers === null || Array.isArray(servers)) return [];
+  return Object.values(servers).flatMap((server) => {
+    if (typeof server !== 'object' || server === null || Array.isArray(server)) return [];
+    const args = (server as { readonly args?: unknown }).args;
+    return Array.isArray(args) ? [localMcpArgument(args[0])].filter((path): path is string => path !== undefined) : [];
+  });
+};
 
 const parseManifest = (value: string): ArtifactManifest | undefined => {
   try {
@@ -115,7 +132,18 @@ export const validateArtifact = async (context: {
 
   for (const file of actualFiles.filter((entry) => entry.path.endsWith('.json'))) {
     try {
-      JSON.parse(await readFile(resolve(context.artifactRoot, file.path), 'utf8'));
+      const document = JSON.parse(await readFile(resolve(context.artifactRoot, file.path), 'utf8')) as unknown;
+      for (const mcpPath of localMcpPaths(document)) {
+        try {
+          await readFile(resolve(context.artifactRoot, dirname(file.path), mcpPath));
+        } catch {
+          diagnostics.push(diagnostic(
+            'AB6007',
+            `MCP manifest references missing generated server ${JSON.stringify(mcpPath)}.`,
+            file.path,
+          ));
+        }
+      }
     } catch {
       diagnostics.push(diagnostic('AB6006', 'Generated JSON cannot be parsed.', file.path));
     }

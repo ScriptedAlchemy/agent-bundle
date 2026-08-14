@@ -1,9 +1,12 @@
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { expect, it } from '@rstest/core';
 
+import { createDefaultRegistry, TargetRegistry } from '../src/adapters/registry.ts';
+import { build } from '../src/build/build.ts';
+import { validateArtifact } from '../src/build/validate-artifact.ts';
 import { normalizeProject } from '../src/config/normalize.ts';
 import { validateModel, validateSource } from '../src/config/validate.ts';
 import {
@@ -227,3 +230,168 @@ it('reports source and model diagnostics before an MCP server can be compiled', 
     await rm(root, { force: true, recursive: true });
   }
 });
+
+it('bundles each local MCP entry once and maps every target manifest to that artifact', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-mcp-build-'));
+  try {
+    await mkdir(join(root, 'src'), { recursive: true });
+    await writeFile(join(root, 'src', 'message.ts'), 'export const message = "bundled";\n');
+    await writeFile(
+      join(root, 'src', 'local server.ts'),
+      [
+        'import { message } from "./message.ts";',
+        'process.stderr.write(`${message}\\n`);',
+        '',
+      ].join('\n'),
+    );
+    const model = await normalizeProject(
+      loadedProject(root, {
+        mcp: {
+          servers: {
+            'local server': {
+              args: ['--fixture'],
+              entry: './src/local server.ts',
+              env: { FIXTURE: 'local' },
+            },
+          },
+        },
+        plugin: { name: 'mcp-fixture', version: '1.0.0' },
+        targets: ['portable', 'codex', 'claude'],
+      }),
+      { skills: [] },
+      registry,
+    );
+    const outputRoot = join(root, 'artifact with spaces');
+    const outputName = 'mcp-local-server-f45eb99f.mjs';
+    const result = await build({
+      model,
+      outputRoot,
+      projectRoot: root,
+      registry: createDefaultRegistry(),
+    });
+    expect(result.compiledMcpEntries).toEqual([
+      {
+        id: 'mcp:local server',
+        name: 'mcp-local-server-f45eb99f',
+        output: join(outputRoot, 'portable', 'mcp', outputName),
+        source: join(root, 'src', 'local server.ts'),
+        target: 'portable',
+      },
+      {
+        id: 'mcp:local server',
+        name: 'mcp-local-server-f45eb99f',
+        output: join(outputRoot, 'codex', 'mcp', outputName),
+        source: join(root, 'src', 'local server.ts'),
+        target: 'codex',
+      },
+      {
+        id: 'mcp:local server',
+        name: 'mcp-local-server-f45eb99f',
+        output: join(outputRoot, 'claude', 'mcp', outputName),
+        source: join(root, 'src', 'local server.ts'),
+        target: 'claude',
+      },
+    ]);
+
+    const bundles = await Promise.all(['portable', 'codex', 'claude'].map(async (target) => {
+      const mcpRoot = join(outputRoot, target, 'mcp');
+      expect(await readdir(mcpRoot)).toEqual([outputName]);
+      const bundle = await readFile(join(mcpRoot, outputName), 'utf8');
+      expect(bundle).toContain('bundled');
+      expect(bundle).not.toContain('./message.ts');
+      expect(bundle).not.toContain('agent-bundle');
+      return bundle;
+    }));
+    expect(new Set(bundles).size).toBe(1);
+
+    const [portable, codex, claude] = await Promise.all([
+      readFile(join(outputRoot, 'portable', 'mcp.json'), 'utf8'),
+      readFile(join(outputRoot, 'codex', '.mcp.json'), 'utf8'),
+      readFile(join(outputRoot, 'claude', '.mcp.json'), 'utf8'),
+    ]);
+    expect(JSON.parse(portable)).toMatchObject({
+      mcpServers: {
+        'local server': {
+          args: [`mcp/${outputName}`, '--fixture'],
+          command: 'node',
+          cwd: '${PLUGIN_ROOT}',
+          env: { FIXTURE: 'local' },
+          type: 'stdio',
+        },
+      },
+    });
+    expect(JSON.parse(codex)).toMatchObject({
+      mcpServers: {
+        'local server': {
+          args: [`./mcp/${outputName}`, '--fixture'],
+          command: 'node',
+          cwd: './',
+          env: { FIXTURE: 'local' },
+          type: 'stdio',
+        },
+      },
+    });
+    expect(JSON.parse(claude)).toMatchObject({
+      mcpServers: {
+        'local server': {
+          args: [`mcp/${outputName}`, '--fixture'],
+          command: 'node',
+          cwd: '${CLAUDE_PLUGIN_ROOT}',
+          env: { FIXTURE: 'local' },
+          type: 'stdio',
+        },
+      },
+    });
+
+    const secondOutput = join(root, 'artifact copy');
+    await build({
+      model,
+      outputRoot: secondOutput,
+      projectRoot: root,
+      registry: createDefaultRegistry(),
+    });
+    expect(await readFile(join(secondOutput, 'portable', 'mcp', outputName), 'utf8')).toBe(
+      bundles[0],
+    );
+
+    const collisionRegistry = new TargetRegistry().register({
+      capabilities: { mcp: true },
+      name: 'portable',
+      plan: () => ({
+        diagnostics: [],
+        entries: [{
+          content: 'colliding entry\n',
+          kind: 'write' as const,
+          relativePath: `mcp/${outputName}`,
+        }],
+      }),
+      validateModel: () => [],
+    }, { default: true });
+    await expect(build({
+      model: { ...model, targets: model.targets.filter(({ name }) => name === 'portable') },
+      outputRoot: join(root, 'collision'),
+      projectRoot: root,
+      registry: collisionRegistry,
+    })).rejects.toThrow('Duplicate planned artifact destination');
+
+    await rm(join(secondOutput, 'portable', 'mcp', outputName));
+    expect(await validateArtifact({ artifactRoot: secondOutput })).toMatchObject([
+      { code: 'AB6004' },
+      { code: 'AB6007', generatedPath: 'portable/mcp.json' },
+    ]);
+
+    const previousBundle = bundles[0]!;
+    await writeFile(join(root, 'src', 'local server.ts'), 'export const = ;\n');
+    await expect(build({
+      model,
+      outputRoot,
+      projectRoot: root,
+      registry: createDefaultRegistry(),
+    })).rejects.toThrow();
+    expect(await readFile(join(outputRoot, 'portable', 'mcp', outputName), 'utf8')).toBe(
+      previousBundle,
+    );
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+}, 30_000);

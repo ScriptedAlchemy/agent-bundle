@@ -532,7 +532,7 @@ export const validateModel = (
     }
     if (server.source !== undefined) {
       const output = server.args?.[0];
-      if (typeof output !== 'string' || !/^mcp\/mcp-[a-z0-9]+-[a-f\d]{8}\.mjs$/u.test(output)) {
+      if (typeof output !== 'string' || !/^mcp\/mcp-[a-z0-9-]+-[a-f\d]{8}\.mjs$/u.test(output)) {
         diagnostics.push({
           code: 'AB4321',
           message: `MCP server ${JSON.stringify(server.name)} has an unsafe local output alias.`,
