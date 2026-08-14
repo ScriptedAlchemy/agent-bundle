@@ -77,7 +77,7 @@ export const planHooks = (
     const matcher = matcherFor(contract, hook.tools, hook.name, diagnostics);
     if (diagnostics.length > 0) continue;
     const relativePath = `hooks/${hook.name}.mjs`;
-    const command = `node \"${contract.commandRoot}/${relativePath}\"`;
+    const command = `node "${contract.commandRoot}/${relativePath}"`;
     const hookCommand = {
       command,
       ...(hook.timeout === undefined ? {} : { timeout: hook.timeout }),

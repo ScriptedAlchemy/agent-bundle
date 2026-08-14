@@ -27,8 +27,12 @@ const hookEvents: readonly CanonicalHookEvent[] = [
 
 const hookTools = new Set(['shell', 'file.read', 'file.write', 'mcp', 'agent']);
 
+const isHookEntryArray = (
+  input: AgentBundleHookInput,
+): input is readonly (string | AgentBundleHookEntry)[] => Array.isArray(input);
+
 const asHookEntries = (input: AgentBundleHookInput): readonly (string | AgentBundleHookEntry)[] =>
-  Array.isArray(input) ? input : [input];
+  isHookEntryArray(input) ? input : [input];
 
 const validateHooks = (loaded: LoadedConfig): Diagnostic[] => {
   const hooks = loaded.config.hooks;

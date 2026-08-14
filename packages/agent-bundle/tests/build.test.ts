@@ -273,6 +273,7 @@ it('rejects duplicate planned destinations before replacing an existing artifact
         { content: 'first\n', kind: 'write', relativePath: 'plugin.json' },
         { content: 'second\n', kind: 'write', relativePath: 'plugin.json' },
       ],
+      hookEntries: [],
     }),
     validateModel: () => [],
   };
@@ -305,6 +306,7 @@ it('rejects an escaped target name before it can write outside the staging artif
     plan: () => ({
       diagnostics: [],
       entries: [{ content: 'escaped\n', kind: 'write', relativePath: 'plugin.json' }],
+      hookEntries: [],
     }),
     validateModel: () => [],
   };
@@ -407,6 +409,7 @@ it('rejects canonical aliases and script-plan collisions before emission', async
         { content: 'first\n', kind: 'write', relativePath: 'same.txt' },
         { content: 'second\n', kind: 'write', relativePath: 'dir/../same.txt' },
       ],
+      hookEntries: [],
     }),
     validateModel: () => [],
   };
@@ -418,6 +421,7 @@ it('rejects canonical aliases and script-plan collisions before emission', async
       entries: [
         { content: 'adapter output\n', kind: 'write', relativePath: 'scripts/greeting.mjs' },
       ],
+      hookEntries: [],
     }),
     validateModel: () => [],
   };

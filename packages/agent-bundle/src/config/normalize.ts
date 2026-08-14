@@ -35,6 +35,10 @@ const knownHookTools = new Set<CanonicalHookTool>([
   'agent',
 ]);
 
+const isHookEntryArray = (
+  input: AgentBundleHookInput,
+): input is readonly (string | AgentBundleHookEntry)[] => Array.isArray(input);
+
 const eventSlug = (event: CanonicalHookEvent): string =>
   event.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`);
 
@@ -47,7 +51,7 @@ const slug = (value: string): string => {
 };
 
 const asEntries = (input: AgentBundleHookInput): readonly (string | AgentBundleHookEntry)[] =>
-  Array.isArray(input) ? input : [input];
+  isHookEntryArray(input) ? input : [input];
 
 const normalizeHook = (
   event: CanonicalHookEvent,
