@@ -1,6 +1,6 @@
 # Agent Bundle design
 
-**Status:** Approved architecture, implementation pending
+**Status:** Approved foundation; developer workbench extension under review
 
 **Date:** 2026-08-13
 
@@ -36,6 +36,8 @@ independent repository.
 8. Provide useful `build`, `dev`, `validate`, and `inspect` commands.
 9. Expose a programmatic API so repositories and other build tools can compose the compiler.
 10. Preserve escape hatches for host-native capabilities that have no portable equivalent.
+11. Provide a real Rsbuild-powered development workbench for inspecting and exercising bundles.
+12. Run reproducible plugin and skill evaluations through native Codex and Claude CLI harnesses.
 
 ## Non-goals for the first release
 
@@ -45,7 +47,9 @@ independent repository.
 - running a long-lived agent-bundle daemon;
 - hiding all differences between hosts;
 - inventing a portable standard for features that only one host supports;
-- evaluating skill quality or model behavior;
+- hosting a remote evaluation service;
+- replacing a full source editor or IDE;
+- claiming identical activation telemetry when a host does not expose it;
 - deploying remote MCP services;
 - requiring Turbo, Nx, or any particular monorepo orchestrator.
 
@@ -169,6 +173,8 @@ interface AgentBundleConfig {
   claude?: ClaudeExtension;
   portable?: PortableExtension;
   build?: BuildExtension;
+  dev?: DevConfig;
+  evals?: EvalConfig;
 }
 ```
 
@@ -280,8 +286,10 @@ Normalized source
       `-- Claude adapter -> Claude hooks.json + bundled Claude hook scripts
 ```
 
-For example, `beforeTool` maps to each host's `PreToolUse` event, while a normalized
-`file.write` selector maps to the host's applicable tool names or aliases.
+For example, `beforeTool` maps to the selected adapter's current native pre-invocation event or
+events, while a normalized `file.write` selector maps to that host's applicable tool names or
+aliases. The compiler takes these names from the versioned adapter capability table rather than
+assuming Codex and Claude use identical native identifiers.
 
 Identical native event names do not imply identical semantics. Adapters account for differences
 in failure events, decisions, input replacement, context injection, matchers, asynchronous
@@ -333,45 +341,53 @@ export default defineConfig({
     sessionStart: "./src/hooks/start.ts",
   },
   claude: {
-    hooks: {
-      FileChanged: "./src/hooks/file-changed.ts",
-    },
+    nativeHooks: "./src/claude/hooks.json",
   },
   codex: {
-    hooks: {
-      PostToolUse: {
-        matcher: "^apply_patch$",
-        handler: "./src/hooks/codex-edit.ts",
-      },
-    },
+    nativeHooks: "./src/codex/hooks.json",
   },
 });
 ```
 
-These declarations still receive schema and artifact validation, but agent-bundle does not
-claim they are portable.
+Native hook files are target-specific inputs. They still receive schema and artifact validation,
+and their referenced scripts can still be bundled, but Agent Bundle does not claim the native
+events are portable.
 
 ## MCP servers
 
 An MCP server may reference a prebuilt command or a TypeScript/JavaScript entry:
 
 ```ts
-mcp: {
-  servers: {
-    project: {
-      entry: './src/mcp/server.ts',
-      transport: 'stdio',
-      env: {
-        CACHE_DIR: pathToken.pluginData,
+import { defineConfig, pathTokens } from "agent-bundle";
+
+export default defineConfig({
+  // ...
+  mcp: {
+    servers: {
+      project: {
+        entry: "./src/mcp/server.ts",
+        transport: "stdio",
+        env: {
+          CACHE_DIR: pathTokens.pluginData,
+        },
       },
     },
   },
-}
+});
 ```
 
 JavaScript entries are compiled into self-contained executables. Target adapters generate the
 correct native MCP configuration and translate normalized path tokens such as plugin root,
 plugin data, and workspace root into the host's supported syntax.
+
+`pathTokens` is exported from the main package and produces opaque token strings that the
+compiler resolves per target at build time. Token availability is a per-target capability:
+Claude resolves plugin root and plugin data to `${CLAUDE_PLUGIN_ROOT}` and
+`${CLAUDE_PLUGIN_DATA}`, Codex to its equivalent plugin environment variables, while portable
+`mcp.json` (Agent Plugins 1.0.0) has no substitution syntax at all — plugin root is expressed
+through `./`-relative commands and the default `cwd`, and a token with no portable equivalent
+(for example plugin data) is a build error for the portable target unless the server is
+explicitly limited to host targets. This is the honest-portability rule applied to paths.
 
 Remote HTTP MCP definitions are copied into native manifests without bundling a local server.
 No MCP process is launched during `build` or `validate`.
@@ -395,6 +411,14 @@ only after real integrations demonstrate which hooks and model operations are st
 
 The implementation should use public Rslib/Rsbuild plugin and JavaScript APIs. It should not
 patch process globals, depend on private compiler objects, or reproduce Rslib's CLI parsing.
+
+Rslib's CLI supports `--watch`, but Agent Bundle development observes more than the JavaScript
+module graph: configuration, skill Markdown, references, copied assets, marketplace metadata,
+and generated host manifests can all invalidate an artifact. The first implementation therefore
+uses one Agent Bundle invalidation coordinator and invokes the public Rslib build API for each
+coalesced artifact epoch. It must not embed an opaque `rslib --watch` subprocess whose lifecycle
+and completion state cannot be correlated with the normalized model. A later implementation may
+adopt a public incremental Rslib lifecycle when it can preserve the same epoch contract.
 
 ## Target adapters
 
@@ -491,9 +515,14 @@ emits target artifacts, validates final output, and writes the build manifest.
 
 ### `agent-bundle dev`
 
-Watches config, skills, scripts, MCP sources, hooks, and assets. It rebuilds only affected
-targets and prints concise artifact changes. It does not attempt to restart every supported
-agent host.
+Starts a foreground development coordinator and a real Rsbuild workbench. The Rsbuild server
+provides the browser app, routes, and HMR; Agent Bundle middleware exposes project, artifact,
+MCP, hook, diagnostic, and eval APIs on the same server. The coordinator watches config,
+skills, scripts, MCP sources, hooks, and assets, then publishes immutable artifact epochs only
+after a successful Rslib-backed build and validation.
+
+The command does not attempt to restart every supported agent host. Native host trials are
+started explicitly from the workbench or `agent-bundle eval`.
 
 ### `agent-bundle validate`
 
@@ -513,6 +542,20 @@ agent-bundle inspect --target codex
 Hook inspection shows normalized event, native event, native matcher, capabilities used,
 generated handler, and whether the mapping is exact or target-specific.
 
+Additional development commands share the same application services:
+
+```bash
+agent-bundle mcp list
+agent-bundle mcp invoke <server> <tool>
+agent-bundle hooks list
+agent-bundle hooks simulate <hook>
+agent-bundle eval [suite-or-case]
+agent-bundle eval compare <baseline> <candidate>
+```
+
+The detailed workbench, renderer, MCP playground, and evaluation design is specified in
+[`2026-08-13-agent-bundle-dev-workbench-design.md`](2026-08-13-agent-bundle-dev-workbench-design.md).
+
 ## Programmatic API
 
 The package exports composition-friendly functions:
@@ -520,7 +563,13 @@ The package exports composition-friendly functions:
 ```ts
 export { defineConfig } from "agent-bundle";
 export { loadConfig, normalizeProject } from "agent-bundle/config";
-export { build, validate, inspect } from "agent-bundle/api";
+export {
+  build,
+  validate,
+  inspect,
+  startDevServer,
+  runEvals,
+} from "agent-bundle/api";
 ```
 
 APIs accept an explicit project root, config path, targets, and logger. They return structured
@@ -534,6 +583,9 @@ The repository should use Rstack tools where practical:
 - `rs test` for unit, integration, fixture, and artifact tests;
 - `rs lib`/Rslib for package output;
 - Rspack through Rslib for executable bundling;
+- Rsbuild for the React development workbench and native HMR;
+- Rstest for compiler, adapter, workbench, and harness tests;
+- one resident Rslint instance for affected-file diagnostics in development;
 - Prettier and repository spelling checks for documentation.
 
 The tool itself should remain usable outside Rstack repositories through its own executable
@@ -585,6 +637,17 @@ zero-runtime-dependency constraint.
 license-compatible fixture. Agent-bundle must not rewrite or migrate the repository as part of
 this project.
 
+### Workbench and harness tests
+
+- Rsbuild workbench startup, API middleware, HMR, and cleanup;
+- rendered Skill Markdown, GFM, frontmatter, code blocks, and relative resources;
+- MCP initialization, catalog inspection, invocation, restart, and error presentation;
+- normalized hook simulation through the generated native wrapper;
+- deterministic eval graders and clean fixture copies;
+- native Codex and Claude harness preflight, initialization evidence, and trace normalization;
+- baseline/candidate comparisons with multiple trials and unavailable telemetry represented
+  honestly.
+
 ## Release sequence
 
 1. Core types, config loading, discovery, and diagnostics.
@@ -594,7 +657,10 @@ this project.
 5. Claude adapter.
 6. Normalized hooks with compile-time host adapters.
 7. MCP entry compilation and native configuration.
-8. Dev watch, inspect UX, and clean-consumer verification.
+8. Foreground dev coordinator, Rsbuild workbench shell, and artifact epochs.
+9. Skill renderer, artifact inspector, MCP playground, and hook simulator.
+10. Deterministic eval runner and persisted JSON/JSONL run artifacts.
+11. Native Claude and Codex harnesses, comparison UI, and clean-consumer verification.
 
 Each phase should leave a usable vertical slice rather than introducing unused framework
 layers.
@@ -610,7 +676,12 @@ layers.
 7. Rslib is the executable compilation engine; a small internal Rslib plugin is allowed.
 8. Final artifacts receive the same level of validation as the source model.
 9. Host-specific escape hatches are supported and clearly labeled non-portable.
-10. The first release builds packages; it does not install, publish, deploy, or evaluate them.
+10. Rsbuild powers the browser workbench; Rslib powers generated executable artifacts.
+11. Dev mode is a foreground process with no daemon or global discovery service.
+12. Evaluations use fresh fixture copies and native host CLIs; they do not publish or install
+    into a user's normal host configuration.
+13. Skill rendering uses structured frontmatter plus CommonMark/GFM Markdown and does not
+    execute MDX.
 
 ## Open implementation questions
 
@@ -620,7 +691,8 @@ These can be resolved during planning without changing the architecture:
 - the exact mechanism for preserving executable modes in published archives;
 - whether marketplace output belongs in each target directory or an optional sibling directory;
 - which native JSON schemas are bundled versus downloaded or version-pinned;
-- whether dev mode uses Rslib watch directly or a thin invalidation coordinator around it.
+- which initial models should appear in optional example eval configuration without making a
+  model provider part of the build contract.
 
 The preferred starting point is one package with internal adapters. Package splitting should
 follow demonstrated independent versioning or dependency needs.

@@ -8,6 +8,9 @@ scripts and servers, and emit native bundles for supported agent hosts.
 
 The initial design targets the portable Agent Plugins layout, Codex, and Claude Code. See
 [`docs/plans/2026-08-13-agent-bundle-design.md`](docs/plans/2026-08-13-agent-bundle-design.md)
-for the approved architecture.
+for the approved compiler architecture and
+[`docs/plans/2026-08-13-agent-bundle-dev-workbench-design.md`](docs/plans/2026-08-13-agent-bundle-dev-workbench-design.md)
+for the Rsbuild workbench, Skill renderer, MCP playground, hook simulator, and eval harness
+design.
 
 This repository is currently at the design-foundation stage.
