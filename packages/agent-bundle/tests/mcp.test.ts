@@ -394,6 +394,49 @@ it('rejects unsafe, duplicate, and nonlocal MCP App declarations before browser 
   }
 });
 
+it('rejects non-JSON MCP App metadata before normalization', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-mcp-app-meta-'));
+  const cyclic: Record<string, unknown> = {};
+  cyclic.self = cyclic;
+  try {
+    await mkdir(join(root, 'src'), { recursive: true });
+    await mkdir(join(root, 'views'), { recursive: true });
+    await writeFile(join(root, 'src', 'server.ts'), 'export {};\n');
+    await writeFile(join(root, 'views', 'dashboard.ts'), 'document.body.textContent = "dashboard";\n');
+
+    for (const [name, value] of [
+      ['function', () => undefined],
+      ['bigint', 1n],
+      ['nonfinite', Number.POSITIVE_INFINITY],
+      ['cycle', cyclic],
+    ] as const) {
+      const config = {
+        mcp: {
+          servers: {
+            fixture: {
+              apps: {
+                dashboard: {
+                  _meta: { value },
+                  entry: './views/dashboard.ts',
+                  resourceUri: `ui://agent-bundle/${name}-v1.html`,
+                },
+              },
+              entry: './src/server.ts',
+            },
+          },
+        },
+        plugin: { name: 'mcp-app-meta', version: '1.0.0' },
+      } as unknown as AgentBundleConfig;
+
+      expect(validateSource(loadedProject(root, config), { skills: [] }).map(({ code }) => code)).toEqual([
+        'AB4338',
+      ]);
+    }
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
 it('bundles each local MCP entry once and maps every target manifest to that artifact', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-mcp-build-'));
   try {
