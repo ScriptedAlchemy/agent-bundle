@@ -6,6 +6,7 @@ import {
   type McpAppBindingTeardown,
   type McpAppJsonValue,
   type McpAppPreviewProfile,
+  type McpAppToolDefinition,
 } from './mcp-app-binding-service.ts';
 import {
   createMcpAppBridge,
@@ -39,8 +40,12 @@ export interface McpAppPreviewBindingAuthority extends McpAppBridgeBindingOperat
     readonly previewProfile: McpAppPreviewProfile;
     readonly result: McpAppJsonValue;
     readonly sessionId: string;
-    readonly toolName: string;
+    readonly tool: McpAppToolDefinition;
   }): Promise<McpAppBinding>;
+}
+
+export interface McpAppPreviewToolAuthority {
+  resolveTool(sessionId: string, toolName: string): Promise<McpAppToolDefinition>;
 }
 
 export interface CreateMcpAppPreviewOptions {
@@ -63,6 +68,7 @@ export interface McpAppPreview {
 
 export interface McpAppPreviewServiceOptions {
   readonly bindingAuthority: McpAppPreviewBindingAuthority;
+  readonly closeTimeoutMs?: number;
   readonly host?: Omit<McpAppBridgeHost, 'context' | 'info'>;
   readonly hostInfo: McpAppBridgeHostInfo;
   readonly hostOrigin: string;
@@ -71,12 +77,13 @@ export interface McpAppPreviewServiceOptions {
   readonly maxOutboundMessages?: number;
   readonly maxQueuedActions?: number;
   readonly sandboxProxy: McpAppSandboxEndpoint;
+  readonly toolAuthority: McpAppPreviewToolAuthority;
 }
 
 interface PreviewEntry {
   readonly binding: McpAppBinding;
   readonly bridge: McpAppBridge;
-  readonly preview: McpAppPreview;
+  preview?: McpAppPreview;
   readonly outbound: McpAppBridgeMessage[];
   actionCount: number;
   closePromise?: Promise<void>;
@@ -85,15 +92,36 @@ interface PreviewEntry {
   tail: Promise<void>;
 }
 
+interface CreateControl {
+  aborted: boolean;
+  binding?: McpAppBinding;
+  closed: boolean;
+  done: Promise<void>;
+  entry?: PreviewEntry;
+  finish(): void;
+  releasePromise?: Promise<void>;
+}
+
 const defaultMaximumActions = 32;
 const defaultMaximumActionBytes = 64 * 1024;
 const defaultMaximumOutboundBytes = 256 * 1024;
 const defaultMaximumOutboundMessages = 64;
+const defaultCloseTimeoutMs = 1_000;
 
 const positiveInteger = (value: number | undefined, fallback: number, name: string): number => {
   const normalized = value ?? fallback;
   if (!Number.isSafeInteger(normalized) || normalized < 1) throw new TypeError(`${name} must be a positive safe integer.`);
   return normalized;
+};
+
+const boundedTimeout = (value: number | undefined): number => positiveInteger(value, defaultCloseTimeoutMs, 'MCP App preview close timeout');
+
+const createControl = (): CreateControl => {
+  let finish: () => void = () => undefined;
+  const done = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  return { aborted: false, closed: false, done, finish };
 };
 
 const messageByteLength = (message: unknown): number | undefined => {
@@ -134,6 +162,7 @@ const resourceForProfile = (binding: McpAppBinding, resource: McpAppBridgeResour
 
 export class McpAppPreviewService {
   readonly #bindingAuthority: McpAppPreviewBindingAuthority;
+  readonly #closeTimeoutMs: number;
   readonly #host: Omit<McpAppBridgeHost, 'context' | 'info'>;
   readonly #hostInfo: McpAppBridgeHostInfo;
   readonly #hostOrigin: string;
@@ -142,10 +171,15 @@ export class McpAppPreviewService {
   readonly #maxOutboundMessages: number;
   readonly #maxQueuedActions: number;
   readonly #sandboxProxy: McpAppSandboxEndpoint;
+  readonly #toolAuthority: McpAppPreviewToolAuthority;
+  readonly #creates = new Set<CreateControl>();
   readonly #entries = new Map<string, PreviewEntry>();
+  #closing = false;
+  #closeAllPromise?: Promise<void>;
 
   constructor(options: McpAppPreviewServiceOptions) {
     this.#bindingAuthority = options.bindingAuthority;
+    this.#closeTimeoutMs = boundedTimeout(options.closeTimeoutMs);
     this.#host = options.host ?? {};
     this.#hostInfo = Object.freeze({ name: options.hostInfo.name, version: options.hostInfo.version });
     this.#hostOrigin = options.hostOrigin;
@@ -154,6 +188,7 @@ export class McpAppPreviewService {
     this.#maxOutboundMessages = positiveInteger(options.maxOutboundMessages, defaultMaximumOutboundMessages, 'MCP App maximum outbound messages');
     this.#maxQueuedActions = positiveInteger(options.maxQueuedActions, defaultMaximumActions, 'MCP App maximum queued actions');
     this.#sandboxProxy = options.sandboxProxy;
+    this.#toolAuthority = options.toolAuthority;
   }
 
   get(bindingId: string): McpAppPreview | undefined {
@@ -161,16 +196,26 @@ export class McpAppPreviewService {
   }
 
   async create(options: CreateMcpAppPreviewOptions): Promise<McpAppPreview> {
-    const binding = await this.#bindingAuthority.createBinding({
-      input: options.input,
-      onTeardown: (event) => this.#onBindingTeardown(event.binding.id),
-      previewProfile: options.previewProfile,
-      result: options.result,
-      sessionId: options.sessionId,
-      toolName: options.toolName,
-    });
+    if (this.#closing) throw new Error('MCP App preview service is closed.');
+    const control = createControl();
+    this.#creates.add(control);
     try {
+      const tool = await this.#toolAuthority.resolveTool(options.sessionId, options.toolName);
+      this.#assertCreateAvailable(control);
+      const binding = await this.#bindingAuthority.createBinding({
+        input: options.input,
+        onTeardown: (event) => {
+          control.closed = true;
+          this.#onBindingTeardown(event.binding.id);
+        },
+        previewProfile: options.previewProfile,
+        result: options.result,
+        sessionId: options.sessionId,
+        tool,
+      });
+      control.binding = binding;
       this.#assertCanonicalBinding(binding, options);
+      this.#assertCreateAvailable(control);
       const outbound: McpAppBridgeMessage[] = [];
       const entryRef: { current?: PreviewEntry } = {};
       const bridge = createMcpAppBridge({
@@ -193,7 +238,21 @@ export class McpAppPreviewService {
           return true;
         },
       });
+      const entry: PreviewEntry = {
+        actionCount: 0,
+        binding,
+        bridge,
+        closed: false,
+        outbound,
+        outboundBytes: 0,
+        tail: Promise.resolve(),
+      };
+      entryRef.current = entry;
+      control.entry = entry;
+      this.#entries.set(binding.id, entry);
+      this.#assertCreateAvailable(control);
       const resource = await bridge.loadResource();
+      this.#assertCreateAvailable(control);
       const profile = resolveMcpAppHostProfile({
         consentedCapabilities: capabilitiesOf(options.consent?.permissions),
         declaredCapabilities: capabilitiesOf(resource.kind === 'resource' ? resource.permissions : undefined),
@@ -210,22 +269,15 @@ export class McpAppPreviewService {
         })
         : undefined;
       const preview = Object.freeze({ binding, bridge, ...(frame === undefined ? {} : { frame }), profile, resource });
-      const entry: PreviewEntry = {
-        actionCount: 0,
-        binding,
-        bridge,
-        closed: false,
-        outbound,
-        outboundBytes: 0,
-        preview,
-        tail: Promise.resolve(),
-      };
-      entryRef.current = entry;
-      this.#entries.set(binding.id, entry);
+      this.#assertCreateAvailable(control);
+      entry.preview = preview;
       return preview;
     } catch (error) {
-      await this.#bindingAuthority.closeBinding(binding.id).catch(() => undefined);
+      await this.#abortCreate(control).catch(() => undefined);
       throw error;
+    } finally {
+      this.#creates.delete(control);
+      control.finish();
     }
   }
 
@@ -272,9 +324,22 @@ export class McpAppPreviewService {
   }
 
   async closeAll(): Promise<void> {
-    const results = await Promise.allSettled([...this.#entries.values()].map((entry) => this.#closeEntry(entry, () => entry.bridge.forceClose())));
-    const failures = results.flatMap((result) => result.status === 'rejected' ? [result.reason] : []);
-    if (failures.length > 0) throw new AggregateError(failures, 'MCP App preview shutdown failed.');
+    if (this.#closeAllPromise !== undefined) return this.#closeAllPromise;
+    this.#closing = true;
+    const creates = [...this.#creates];
+    for (const control of creates) control.aborted = true;
+    const operations = [
+      ...[...this.#entries.values()].map((entry) => this.#closeEntry(entry, () => entry.bridge.forceClose())),
+      ...creates.flatMap((control) => [
+        this.#abortCreate(control),
+        this.#within(control.done, 'MCP App preview creation drain'),
+      ]),
+    ];
+    this.#closeAllPromise = Promise.allSettled(operations).then((results) => {
+      const failures = results.flatMap((result) => result.status === 'rejected' ? [result.reason] : []);
+      if (failures.length > 0) throw new AggregateError(failures, 'MCP App preview shutdown failed.');
+    });
+    return this.#closeAllPromise;
   }
 
   #assertCanonicalBinding(binding: McpAppBinding, options: CreateMcpAppPreviewOptions): void {
@@ -298,7 +363,7 @@ export class McpAppPreviewService {
     entry.closed = true;
     entry.outbound.length = 0;
     entry.outboundBytes = 0;
-    const close = this.#serialize(entry, operation);
+    const close = this.#within(Promise.resolve().then(operation), 'MCP App preview binding close');
     entry.closePromise = close.finally(() => {
       if (this.#entries.get(entry.binding.id) === entry) this.#entries.delete(entry.binding.id);
     });
@@ -314,7 +379,45 @@ export class McpAppPreviewService {
     entry.outboundBytes = 0;
     this.#entries.delete(bindingId);
     if (entry.closePromise === undefined) {
-      entry.closePromise = entry.bridge.forceClose().catch(() => undefined);
+      entry.closePromise = this.#within(entry.bridge.forceClose(), 'MCP App preview session teardown').catch(() => undefined);
     }
+  }
+
+  #assertCreateAvailable(control: CreateControl): void {
+    if (this.#closing || control.aborted || control.closed) {
+      throw new Error('MCP App preview creation was closed before completion.');
+    }
+  }
+
+  #within<T>(operation: Promise<T>, label: string): Promise<T> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => reject(new Error(`${label} exceeded its bounded timeout.`)), this.#closeTimeoutMs);
+    });
+    return Promise.race([operation, timeout]).finally(() => {
+      if (timer !== undefined) clearTimeout(timer);
+    });
+  }
+
+  async #abortCreate(control: CreateControl): Promise<void> {
+    const entry = control.entry;
+    if (entry !== undefined) {
+      await this.#closeEntry(entry, () => entry.bridge.forceClose());
+      return;
+    }
+    if (control.binding !== undefined && !control.closed) await this.#releaseControl(control);
+  }
+
+  #releaseControl(control: CreateControl): Promise<void> {
+    if (control.releasePromise !== undefined) return control.releasePromise;
+    const binding = control.binding;
+    if (binding === undefined) return Promise.resolve();
+    control.releasePromise = this.#within(
+      Promise.resolve().then(async () => {
+        if (!await this.#bindingAuthority.closeBinding(binding.id)) throw new Error('MCP App preview binding release was rejected.');
+      }),
+      'MCP App preview creation release',
+    );
+    return control.releasePromise;
   }
 }
