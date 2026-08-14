@@ -208,10 +208,14 @@ export class EpochReference {
   readonly #store: EpochStore;
   #closed = false;
 
-  constructor(store: EpochStore, epochId: string) {
+  constructor(store: EpochStore, epochId: string, root: string) {
     this.#store = store;
     this.#epochId = epochId;
+    this.root = root;
   }
+
+  /** Immutable epoch directory validated before this reference was acquired. */
+  readonly root: string;
 
   async close(): Promise<void> {
     if (this.#closed) return;
@@ -280,7 +284,7 @@ export class EpochStore {
         throw error;
       }
       this.#references.set(epochId, (this.#references.get(epochId) ?? 0) + 1);
-      return new EpochReference(this, epochId);
+      return new EpochReference(this, epochId, epochPath);
     });
   }
 
