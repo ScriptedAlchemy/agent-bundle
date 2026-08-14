@@ -11,9 +11,11 @@ import {
 } from './emit.ts';
 
 const manifestName = 'agent-bundle.manifest.json';
+const epochStagingMarkerName = '.agent-bundle-epoch-stage.json';
 
 export interface ValidateArtifactOptions {
-  readonly allowedExtraPaths?: readonly string[];
+  /** Enables the one store-owned epoch staging marker after its exact schema validates. */
+  readonly allowEpochStagingMarker?: true;
   readonly artifactRoot: string;
 }
 
@@ -106,11 +108,22 @@ const parseManifest = (value: string): ArtifactManifest | undefined => {
   }
 };
 
-export const validateArtifact = async (context: ValidateArtifactOptions): Promise<readonly Diagnostic[]> => {
-  const allowedExtraPaths = new Set(context.allowedExtraPaths ?? []);
-  if ([...allowedExtraPaths].some((path) => !isSafeArtifactPath(path) || path === manifestName)) {
-    return [diagnostic('AB6008', 'Artifact validator extra paths must be safe non-manifest relative paths.')];
+const isEpochStagingMarker = (value: string): boolean => {
+  try {
+    const marker: unknown = JSON.parse(value);
+    if (typeof marker !== 'object' || marker === null || Array.isArray(marker)) return false;
+    if (!('token' in marker) || !('version' in marker)) return false;
+    const entries = Object.entries(marker);
+    return entries.length === 2 &&
+      marker.version === 1 &&
+      typeof marker.token === 'string' &&
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(marker.token);
+  } catch {
+    return false;
   }
+};
+
+export const validateArtifact = async (context: ValidateArtifactOptions): Promise<readonly Diagnostic[]> => {
   const manifestPath = resolve(context.artifactRoot, manifestName);
   let manifest: ArtifactManifest | undefined;
   try {
@@ -120,6 +133,16 @@ export const validateArtifact = async (context: ValidateArtifactOptions): Promis
   }
   if (manifest === undefined) {
     return [diagnostic('AB6001', 'Artifact manifest is not valid JSON with the required shape.', manifestName)];
+  }
+  let allowedEpochStagingMarker = false;
+  if (context.allowEpochStagingMarker === true) {
+    try {
+      allowedEpochStagingMarker = isEpochStagingMarker(
+        await readFile(resolve(context.artifactRoot, epochStagingMarkerName), 'utf8'),
+      );
+    } catch {
+      allowedEpochStagingMarker = false;
+    }
   }
 
   const diagnostics: Diagnostic[] = [];
@@ -136,7 +159,8 @@ export const validateArtifact = async (context: ValidateArtifactOptions): Promis
   }
 
   const actualFiles = (await listArtifactFiles(context.artifactRoot)).filter(
-    (file) => file.path !== manifestName && !allowedExtraPaths.has(file.path),
+    (file) => file.path !== manifestName &&
+      !(allowedEpochStagingMarker && file.path === epochStagingMarkerName),
   );
   if (
     actualFiles.length !== manifest.files.length ||

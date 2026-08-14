@@ -96,18 +96,26 @@ it('publishes one validated prepared project as an immutable epoch and removes i
   }
 });
 
-it('allows only the epoch store marker as an extra staged artifact file', async () => {
+it('allows only an exact epoch store marker as an extra staged artifact file', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-staged-artifact-validation-'));
   const marker = '.agent-bundle-epoch-stage.json';
   try {
     await writeFile(join(root, 'plugin.json'), '{"name":"valid"}\n');
     await writeManifest({ artifactRoot: root, targets: ['portable'] });
-    await writeFile(join(root, marker), '{"store":"owned"}\n');
+    await writeFile(join(root, marker), '{"token":"8f2aa8b7-bdd2-4065-8cd3-5184c6bd9f74","version":1}\n');
 
-    const allowedContext = { artifactRoot: root, allowedExtraPaths: [marker] };
+    const allowedContext: Readonly<{ readonly allowEpochStagingMarker: true; readonly artifactRoot: string }> = {
+      allowEpochStagingMarker: true,
+      artifactRoot: root,
+    };
     expect(await validateArtifact(allowedContext)).toEqual([]);
 
     await writeFile(join(root, 'unexpected.txt'), 'tampered\n');
+    expect(await validateArtifact(allowedContext)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'AB6004' }),
+    ]));
+    await rm(join(root, 'unexpected.txt'));
+    await writeFile(join(root, marker), '{"token":"not-a-uuid","version":1}\n');
     expect(await validateArtifact(allowedContext)).toEqual(expect.arrayContaining([
       expect.objectContaining({ code: 'AB6004' }),
     ]));

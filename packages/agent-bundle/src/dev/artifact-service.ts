@@ -277,7 +277,7 @@ export class ArtifactService {
       await moveArtifactContents(artifactRoot, staging.root, this.#move);
       const published = await staging.publish(async (stagingRoot) => {
         const stagedDiagnostics = freezeDiagnostics(await this.#validateArtifact({
-          allowedExtraPaths: [stagingMarkerFileName],
+          allowEpochStagingMarker: true,
           artifactRoot: stagingRoot,
         }));
         if (hasErrors(stagedDiagnostics)) throw new DiagnosticError(stagedDiagnostics);
