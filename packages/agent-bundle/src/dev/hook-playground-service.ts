@@ -88,6 +88,8 @@ export interface HookPlaygroundSimulationOptions extends HookPlaygroundBinding {
 }
 
 export interface HookPlaygroundServiceOptions {
+  /** Internal test seam; production clone population defaults to fs.cp. */
+  readonly copy?: typeof cp;
   readonly epochStore: EpochStore;
   readonly hookService?: Pick<HookService, 'list' | 'simulate'>;
 }
@@ -299,10 +301,12 @@ const assertTargetDigest = async (
  * The only executor is HookService, which invokes the generated target wrapper.
  */
 export class HookPlaygroundService {
+  readonly #copy: typeof cp;
   readonly #epochStore: EpochStore;
   readonly #hookService: Pick<HookService, 'list' | 'simulate'>;
 
   constructor(options: HookPlaygroundServiceOptions) {
+    this.#copy = options.copy ?? cp;
     this.#epochStore = options.epochStore;
     this.#hookService = options.hookService ?? new HookService();
   }
@@ -389,9 +393,10 @@ export class HookPlaygroundService {
     let artifact: string | undefined;
     try {
       artifact = await mkdtemp(join(tmpdir(), 'agent-bundle-hook-playground-'));
-      await Promise.all((await readdir(reference.root))
-        .filter((entry) => entry !== epochStagingMarkerName)
-        .map((entry) => cp(join(reference.root, entry), join(artifact!, entry), { recursive: true })));
+      for (const entry of await readdir(reference.root)) {
+        if (entry === epochStagingMarkerName) continue;
+        await this.#copy(join(reference.root, entry), join(artifact, entry), { recursive: true });
+      }
       await assertTargetDigest(artifact, target, targetDigest);
       return await action(artifact);
     } finally {

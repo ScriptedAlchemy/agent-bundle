@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { access, cp, mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 import { expect, it } from '@rstest/core';
 
@@ -55,6 +55,31 @@ interface PublishedHookEpoch {
   readonly hooks: Readonly<Record<CanonicalHookEvent, Readonly<{ readonly id: string; readonly name: string }>>>;
 }
 
+class CopyFailureEpochStore extends EpochStore {
+  readonly #copyWorkSettled: () => boolean;
+  cloneRoot: string | undefined;
+  cloneRootExistsBeforeRelease: boolean | undefined;
+  copyWorkSettledBeforeRelease: boolean | undefined;
+
+  constructor(projectRoot: string, copyWorkSettled: () => boolean) {
+    super({ projectRoot });
+    this.#copyWorkSettled = copyWorkSettled;
+  }
+
+  override async releaseEpochReference(epochId: string): Promise<void> {
+    this.copyWorkSettledBeforeRelease = this.#copyWorkSettled();
+    if (this.cloneRoot !== undefined) {
+      try {
+        await access(this.cloneRoot);
+        this.cloneRootExistsBeforeRelease = true;
+      } catch {
+        this.cloneRootExistsBeforeRelease = false;
+      }
+    }
+    await super.releaseEpochReference(epochId);
+  }
+}
+
 const runNativeHook = async (
   wrapper: string,
   input: Record<string, unknown>,
@@ -74,7 +99,12 @@ const runNativeHook = async (
     child.stdin.end(JSON.stringify(input));
   });
 
-const publishHookEpoch = async (root: string, id: string, marker: string): Promise<PublishedHookEpoch> => {
+const publishHookEpoch = async (
+  root: string,
+  id: string,
+  marker: string,
+  epochStore = new EpochStore({ projectRoot: root }),
+): Promise<PublishedHookEpoch> => {
   const sourceRoot = join(root, 'src', 'hooks');
   const artifact = join(root, `compiled-${id}`);
   await mkdir(sourceRoot, { recursive: true });
@@ -146,7 +176,7 @@ const publishHookEpoch = async (root: string, id: string, marker: string): Promi
       digest(await listArtifactFiles(join(artifact, target))),
     ]),
   )));
-  const store = new EpochStore({ projectRoot: root });
+  const store = epochStore;
   const staging = await store.createStagingEpoch({ epoch: epochFor(root, id, targetDigests), targets: ['codex', 'claude'] });
   await Promise.all((await readdir(artifact)).map((entry) => cp(join(artifact, entry), join(staging.root, entry), { recursive: true })));
   await staging.publish(async () => undefined);
@@ -375,6 +405,46 @@ it('settles route cancellation and cleans the per-simulation clone before releas
     expect(runnableArtifact).not.toBe(join(root, '.agent-bundle', 'epochs', 'epoch-1'));
     await expect(access(runnableArtifact!)).rejects.toMatchObject({ code: 'ENOENT' });
   } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+}, 30_000);
+
+it('settles clone copies before cleanup and reference release when an injected copy fails', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-hook-playground-copy-failure-'));
+  const copies = { settled: 0, started: 0 };
+  const store = new CopyFailureEpochStore(root, () => copies.started === copies.settled);
+  try {
+    const epoch = await publishHookEpoch(root, 'epoch-1', 'one', store);
+    const service = new HookPlaygroundService({
+      copy: async (_source, destination) => {
+        if (typeof destination !== 'string') throw new Error('Expected clone destination path.');
+        store.cloneRoot = dirname(destination);
+        copies.started += 1;
+        try {
+          if (copies.started === 1) throw new Error('Injected clone copy failure.');
+          await new Promise<void>((resolvePromise) => { setTimeout(resolvePromise, 50); });
+          await mkdir(dirname(destination), { recursive: true });
+          await writeFile(destination, 'late clone copy', 'utf8');
+        } finally {
+          copies.settled += 1;
+        }
+      },
+      epochStore: epoch.epochStore,
+    });
+
+    await expect(service.simulate({
+      epochId: 'epoch-1',
+      hook: epoch.hooks.beforeTool.id,
+      input: { inline: inputFor('beforeTool') },
+      target: 'codex',
+    })).rejects.toThrow('Injected clone copy failure.');
+    expect(copies).toEqual({ settled: 1, started: 1 });
+    expect(store.copyWorkSettledBeforeRelease).toBe(true);
+    expect(store.cloneRootExistsBeforeRelease).toBe(false);
+    await expect(access(store.cloneRoot!)).rejects.toMatchObject({ code: 'ENOENT' });
+  } finally {
+    await new Promise<void>((resolvePromise) => { setTimeout(resolvePromise, 75); });
+    if (store.cloneRoot !== undefined) await rm(store.cloneRoot, { force: true, recursive: true });
     await rm(root, { force: true, recursive: true });
   }
 }, 30_000);

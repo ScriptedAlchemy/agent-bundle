@@ -14,6 +14,9 @@ import { validateArtifact } from '../build/validate-artifact.ts';
 const defaultTimeoutMs = 5_000;
 const maxStreamBytes = 1_000_000;
 const terminationGraceMs = 250;
+const terminationSettlementMs = 250;
+
+type Taskkill = (arguments_: readonly string[]) => ChildProcess;
 
 export interface HookListOptions {
   /** Internal epoch callers may allow the store-owned staging marker. */
@@ -30,6 +33,22 @@ export interface HookSimulationOptions {
   readonly input: Record<string, unknown>;
   readonly signal?: AbortSignal;
   readonly target: string;
+}
+
+export interface HookServiceOptions {
+  /** Internal test seam; production uses the current host platform. */
+  readonly platform?: NodeJS.Platform;
+  /** Internal test seam; production runs Windows taskkill directly. */
+  readonly taskkill?: Taskkill;
+}
+
+class HookSimulationTerminationError extends Error {
+  readonly code = 'hook.simulation.termination.unsettled';
+
+  constructor(reason: Error) {
+    super(`${reason.message} Wrapper process tree did not settle after termination.`);
+    this.name = 'HookSimulationTerminationError';
+  }
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -66,19 +85,44 @@ const parseHookIndex = (value: string): ArtifactHookIndex | undefined => {
   }
 };
 
-const terminateProcessTree = (child: ChildProcess, signal: NodeJS.Signals): void => {
+const taskkill: Taskkill = (arguments_) => spawn('taskkill', [...arguments_], {
+  stdio: 'ignore',
+  windowsHide: true,
+});
+
+const terminateProcessTree = (
+  child: ChildProcess,
+  signal: NodeJS.Signals,
+  options: { readonly onTreeTerminationFailure: () => void; readonly platform: NodeJS.Platform; readonly taskkill: Taskkill },
+): void => {
   if (child.pid === undefined) {
     child.kill(signal);
     return;
   }
-  if (process.platform === 'win32') {
-    const taskkill = spawn('taskkill', [
+  if (options.platform === 'win32') {
+    let fallbackUsed = false;
+    const fallback = () => {
+      if (fallbackUsed) return;
+      fallbackUsed = true;
+      options.onTreeTerminationFailure();
+      child.kill(signal);
+    };
+    let taskkillProcess: ChildProcess;
+    try {
+      taskkillProcess = options.taskkill([
       '/pid',
       String(child.pid),
       '/t',
       ...(signal === 'SIGKILL' ? ['/f'] : []),
-    ], { stdio: 'ignore', windowsHide: true });
-    taskkill.once('error', () => { child.kill(signal); });
+      ]);
+    } catch {
+      fallback();
+      return;
+    }
+    taskkillProcess.once('error', fallback);
+    taskkillProcess.once('close', (code) => {
+      if (code !== 0) fallback();
+    });
     return;
   }
   try {
@@ -92,7 +136,9 @@ const terminateProcessTree = (child: ChildProcess, signal: NodeJS.Signals): void
 const runWrapper = async (options: {
   readonly cwd: string;
   readonly input: Record<string, unknown>;
+  readonly platform: NodeJS.Platform;
   readonly signal?: AbortSignal;
+  readonly taskkill: Taskkill;
   readonly timeoutMs: number;
   readonly wrapper: string;
 }): Promise<unknown> => new Promise((resolvePromise, reject) => {
@@ -114,7 +160,7 @@ const runWrapper = async (options: {
 
   const child = spawn(process.execPath, [options.wrapper], {
     cwd: options.cwd,
-    detached: process.platform !== 'win32',
+    detached: options.platform !== 'win32',
     env: { ...process.env, AGENT_BUNDLE_HOOK_SIMULATION: '1' },
     stdio: ['pipe', 'pipe', 'pipe'],
   });
@@ -124,10 +170,13 @@ const runWrapper = async (options: {
   let closed = false;
   let settled = false;
   let terminationError: Error | undefined;
+  let treeTerminationFailed = false;
   let forceKillTimer: NodeJS.Timeout | undefined;
+  let terminationSettlementTimer: NodeJS.Timeout | undefined;
   const cleanup = () => {
     clearTimeout(timeoutTimer);
     if (forceKillTimer !== undefined) clearTimeout(forceKillTimer);
+    if (terminationSettlementTimer !== undefined) clearTimeout(terminationSettlementTimer);
     options.signal?.removeEventListener('abort', onAbort);
   };
   const settle = (action: () => void) => {
@@ -139,9 +188,22 @@ const runWrapper = async (options: {
   const terminate = (error: Error) => {
     if (terminationError !== undefined || closed) return;
     terminationError = error;
-    terminateProcessTree(child, 'SIGTERM');
+    const terminateTree = (signal: NodeJS.Signals) => terminateProcessTree(child, signal, {
+      onTreeTerminationFailure: () => { treeTerminationFailed = true; },
+      platform: options.platform,
+      taskkill: options.taskkill,
+    });
+    terminateTree('SIGTERM');
     forceKillTimer = setTimeout(() => {
-      if (!closed) terminateProcessTree(child, 'SIGKILL');
+      if (closed) return;
+      terminateTree('SIGKILL');
+      terminationSettlementTimer = setTimeout(() => {
+        if (closed || terminationError === undefined) return;
+        child.stdin.destroy();
+        child.stdout.destroy();
+        child.stderr.destroy();
+        settle(() => reject(new HookSimulationTerminationError(terminationError!)));
+      }, terminationSettlementMs);
     }, terminationGraceMs);
   };
   const onAbort = () => terminate(new Error('Hook simulation aborted.'));
@@ -168,7 +230,9 @@ const runWrapper = async (options: {
   child.once('close', (code) => {
     closed = true;
     if (terminationError !== undefined) {
-      settle(() => reject(terminationError!));
+      settle(() => reject(treeTerminationFailed
+        ? new HookSimulationTerminationError(terminationError!)
+        : terminationError!));
       return;
     }
     if (streamLimitExceeded) {
@@ -193,6 +257,14 @@ const runWrapper = async (options: {
 });
 
 export class HookService {
+  readonly #platform: NodeJS.Platform;
+  readonly #taskkill: Taskkill;
+
+  constructor(options: HookServiceOptions = {}) {
+    this.#platform = options.platform ?? process.platform;
+    this.#taskkill = options.taskkill ?? taskkill;
+  }
+
   async list(options: HookListOptions): Promise<readonly ArtifactHook[]> {
     const artifact = resolve(options.artifact);
     const diagnostics = await validateArtifact({
@@ -231,7 +303,9 @@ export class HookService {
     return runWrapper({
       cwd: artifact,
       input: options.input,
+      platform: this.#platform,
       ...(options.signal === undefined ? {} : { signal: options.signal }),
+      taskkill: this.#taskkill,
       timeoutMs: hook.timeout === undefined ? defaultTimeoutMs : hook.timeout * 1_000,
       wrapper,
     });

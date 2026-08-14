@@ -1,5 +1,6 @@
 import { cp, mkdtemp, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
+import { EventEmitter } from 'node:events';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -425,6 +426,30 @@ it('escalates timed-out and aborted wrapper process trees from TERM to KILL befo
     });
     setTimeout(() => controller.abort(), 25);
     await expect(pending).rejects.toThrow('Hook simulation aborted.');
+
+    let taskkillCalls = 0;
+    const failedWindowsTaskkill = new HookService({
+      platform: 'win32',
+      taskkill: () => {
+        taskkillCalls += 1;
+        const command = new EventEmitter() as ChildProcess;
+        setImmediate(() => { command.emit('close', 1); });
+        return command;
+      },
+    });
+    await expect(failedWindowsTaskkill.simulate({
+      artifact,
+      hook: base.hooks[1]!.id,
+      input,
+      target: 'codex',
+    })).rejects.toMatchObject({ code: 'hook.simulation.termination.unsettled' });
+    expect(taskkillCalls).toBeGreaterThan(0);
+    const descendantPid = Number(await readFile(descendantPidPath, 'utf8'));
+    try {
+      process.kill(descendantPid, 'SIGKILL');
+    } catch (error) {
+      if (!(typeof error === 'object' && error !== null && 'code' in error && error.code === 'ESRCH')) throw error;
+    }
   } finally {
     if (previousDescendantPidPath === undefined) delete process.env.AGENT_BUNDLE_HOOK_TREE_TEST_PID;
     else process.env.AGENT_BUNDLE_HOOK_TREE_TEST_PID = previousDescendantPidPath;
