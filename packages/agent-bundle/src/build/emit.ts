@@ -32,6 +32,23 @@ export interface ArtifactManifest {
   readonly version: number;
 }
 
+export interface ArtifactHook {
+  readonly event: string;
+  readonly id: string;
+  readonly name: string;
+  readonly path: string;
+  readonly target: string;
+  /** Native hook timeout in seconds. Omit it to use the host default. */
+  readonly timeout?: number;
+}
+
+export interface ArtifactHookIndex {
+  readonly hooks: readonly ArtifactHook[];
+  readonly version: number;
+}
+
+export const artifactHookIndexName = 'agent-bundle.hooks.json';
+
 const normalizeRelativePath = (path: string): string => path.replaceAll('\\', '/');
 
 const isMissing = (error: unknown): boolean =>
@@ -145,6 +162,30 @@ export const writeManifest = async (options: {
     'utf8',
   );
   return Object.freeze(manifest);
+};
+
+export const writeHookIndex = async (options: {
+  readonly artifactRoot: string;
+  readonly hooks: readonly ArtifactHook[];
+}): Promise<ArtifactHookIndex> => {
+  const hooks = options.hooks
+    .slice()
+    .sort((left, right) =>
+      left.target === right.target
+        ? left.id.localeCompare(right.id)
+        : left.target.localeCompare(right.target),
+    )
+    .map((hook) => Object.freeze({ ...hook }));
+  const index: ArtifactHookIndex = {
+    hooks: Object.freeze(hooks),
+    version: 1,
+  };
+  await writeFile(
+    join(options.artifactRoot, artifactHookIndexName),
+    `${stableJson(index)}\n`,
+    'utf8',
+  );
+  return Object.freeze(index);
 };
 
 export const publishArtifact = async (options: {

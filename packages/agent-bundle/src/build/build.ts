@@ -6,12 +6,20 @@ import type { TargetArtifactEntry } from '../adapters/types.ts';
 import { DiagnosticBag, DiagnosticError, type Diagnostic } from '../core/diagnostics.ts';
 import type { NormalizedPlugin } from '../core/types.ts';
 import { assertInside } from '../core/paths.ts';
-import { compileEntries, planCompiledEntries, type CompiledEntry } from './entries.ts';
+import {
+  compileEntries,
+  compileHooks,
+  planCompiledEntries,
+  planCompiledHooks,
+  type CompiledEntry,
+  type CompiledHookEntry,
+} from './entries.ts';
 import {
   assertUniqueArtifactDestinations,
   emitPlanEntries,
   publishArtifact,
   resolveArtifactDestination,
+  writeHookIndex,
   writeManifest,
   type ArtifactManifest,
 } from './emit.ts';
@@ -19,6 +27,7 @@ import { validateArtifact } from './validate-artifact.ts';
 
 export interface BuildResult {
   readonly compiledEntries: readonly CompiledEntry[];
+  readonly compiledHooks: readonly CompiledHookEntry[];
   readonly manifest: ArtifactManifest;
   readonly outputRoot: string;
 }
@@ -32,11 +41,13 @@ export interface BuildOptions {
 
 interface PlannedTarget {
   readonly entries: readonly TargetArtifactEntry[];
+  readonly hookEntries: readonly import('../adapters/types.ts').TargetHookEntry[];
   readonly name: string;
 }
 
 interface StagedTarget extends PlannedTarget {
   readonly compiledEntries: readonly CompiledEntry[];
+  readonly compiledHooks: readonly CompiledHookEntry[];
   readonly root: string;
 }
 
@@ -48,7 +59,11 @@ const planTargets = (options: BuildOptions): readonly PlannedTarget[] => {
     const adapter = options.registry.get(target.name);
     const plan = adapter.plan(options.model);
     diagnostics.push(...plan.diagnostics);
-    planned.push({ entries: plan.entries, name: target.name });
+    planned.push({
+      entries: plan.entries,
+      hookEntries: plan.hookEntries ?? Object.freeze([]),
+      name: target.name,
+    });
   }
   new DiagnosticBag(diagnostics).throwIfErrors();
   return planned;
@@ -68,7 +83,8 @@ export const build = async (options: BuildOptions): Promise<BuildResult> => {
         options.model.scripts.filter((script) => script.targets.includes(target.name)),
         { cwd: options.projectRoot, outDir: root },
       );
-      return { ...target, compiledEntries, root };
+      const compiledHooks = planCompiledHooks(target.hookEntries, { outDir: root });
+      return { ...target, compiledEntries, compiledHooks, root };
     });
     assertUniqueArtifactDestinations(
       stagedTargets.flatMap((target) => [
@@ -76,10 +92,12 @@ export const build = async (options: BuildOptions): Promise<BuildResult> => {
           resolveArtifactDestination(target.root, entry.relativePath),
         ),
         ...target.compiledEntries.map((entry) => entry.output),
+        ...target.compiledHooks.map((entry) => entry.output),
       ]),
     );
 
     const compiledEntries: CompiledEntry[] = [];
+    const compiledHooks: CompiledHookEntry[] = [];
     for (const target of stagedTargets) {
       await emitPlanEntries({ entries: target.entries, root: target.root });
       compiledEntries.push(
@@ -88,6 +106,7 @@ export const build = async (options: BuildOptions): Promise<BuildResult> => {
           { cwd: options.projectRoot, outDir: target.root },
         )),
       );
+      compiledHooks.push(...(await compileHooks(target.hookEntries, { cwd: options.projectRoot, outDir: target.root })));
     }
     const publishedCompiledEntries = Object.freeze(compiledEntries.map((entry) =>
       Object.freeze({
@@ -95,6 +114,17 @@ export const build = async (options: BuildOptions): Promise<BuildResult> => {
         output: assertInside(outputRoot, resolve(outputRoot, relative(stageRoot, entry.output))),
       }),
     ));
+    await writeHookIndex({
+      artifactRoot: stageRoot,
+      hooks: compiledHooks.map((entry) => ({
+        event: entry.event,
+        id: entry.id,
+        name: entry.name,
+        path: relative(stageRoot, entry.output).replaceAll('\\', '/'),
+        target: entry.target,
+        ...(entry.timeout === undefined ? {} : { timeout: entry.timeout }),
+      })),
+    });
     const manifest = await writeManifest({
       artifactRoot: stageRoot,
       targets: stagedTargets.map((target) => target.name),
@@ -106,6 +136,10 @@ export const build = async (options: BuildOptions): Promise<BuildResult> => {
     await publishArtifact({ outputRoot, stageRoot });
     return Object.freeze({
       compiledEntries: publishedCompiledEntries,
+      compiledHooks: Object.freeze(compiledHooks.map((entry) => Object.freeze({
+        ...entry,
+        output: assertInside(outputRoot, resolve(outputRoot, relative(stageRoot, entry.output))),
+      }))),
       manifest,
       outputRoot,
     });

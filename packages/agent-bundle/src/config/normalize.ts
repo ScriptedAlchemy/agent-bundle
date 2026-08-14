@@ -1,3 +1,4 @@
+import { readFile } from 'node:fs/promises';
 import { basename, extname, relative, resolve } from 'node:path';
 
 import { digest } from '../core/digest.ts';
@@ -8,6 +9,7 @@ import type {
   CanonicalHookTool,
   NormalizationTargetRegistry,
   NormalizedHook,
+  NormalizedNativeHook,
   NormalizedPlugin,
   NormalizedSkill,
   SourceProvenance,
@@ -35,10 +37,6 @@ const knownHookTools = new Set<CanonicalHookTool>([
   'agent',
 ]);
 
-const isHookEntryArray = (
-  input: AgentBundleHookInput,
-): input is readonly (string | AgentBundleHookEntry)[] => Array.isArray(input);
-
 const eventSlug = (event: CanonicalHookEvent): string =>
   event.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`);
 
@@ -50,8 +48,12 @@ const slug = (value: string): string => {
   return normalized.length === 0 ? 'handler' : normalized;
 };
 
+const isHookEntryList = (
+  input: AgentBundleHookInput,
+): input is readonly (string | AgentBundleHookEntry)[] => Array.isArray(input);
+
 const asEntries = (input: AgentBundleHookInput): readonly (string | AgentBundleHookEntry)[] =>
-  isHookEntryArray(input) ? input : [input];
+  isHookEntryList(input) ? input : [input];
 
 const normalizeHook = (
   event: CanonicalHookEvent,
@@ -95,6 +97,7 @@ const normalizeHook = (
 const normalizeHooks = (
   loaded: LoadedConfig,
   targetNames: readonly string[],
+  registry: NormalizationTargetRegistry,
 ): readonly NormalizedHook[] => {
   const hooks: NormalizedHook[] = [];
   const config = loaded.config.hooks;
@@ -105,11 +108,47 @@ const normalizeHooks = (
     const input = config[event];
     if (input === undefined) continue;
     for (const entry of asEntries(input)) {
-      hooks.push(normalizeHook(event, entry, loaded.context.projectRoot, targetNames, provenance));
+      const inherited = typeof entry === 'string' || entry.targets === undefined;
+      const hookTargets = inherited
+        ? targetNames.filter((target) => registry.supports(target, 'hooks'))
+        : targetNames;
+      hooks.push(normalizeHook(event, entry, loaded.context.projectRoot, hookTargets, provenance));
     }
   }
 
   return hooks;
+};
+
+const nativeHookTargets = ['claude', 'codex'] as const;
+
+const normalizeNativeHooks = async (
+  loaded: LoadedConfig,
+  targetNames: readonly string[],
+): Promise<readonly NormalizedNativeHook[]> => {
+  const provenance: SourceProvenance = { kind: 'config', sourcePath: loaded.configPath };
+  const nativeHooks: NormalizedNativeHook[] = [];
+  for (const target of nativeHookTargets) {
+    if (!targetNames.includes(target)) continue;
+    const configured = loaded.config[target]?.nativeHooks;
+    if (typeof configured !== 'string' || configured.trim().length === 0) continue;
+    const source = resolve(loaded.context.projectRoot, configured);
+    try {
+      nativeHooks.push({
+        document: JSON.parse(await readFile(source, 'utf8')),
+        provenance: { ...provenance },
+        source,
+        target,
+      });
+    } catch (error) {
+      nativeHooks.push({
+        issue: (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'missing' : 'parse',
+        provenance: { ...provenance },
+        source,
+        target,
+      });
+    }
+  }
+  return nativeHooks;
 };
 
 const deepFreeze = <Value>(value: Value): Value => {
@@ -180,6 +219,7 @@ export const normalizeProject = async (
     };
   });
   const description = loaded.config.plugin.description;
+  const nativeHooks = await normalizeNativeHooks(loaded, targetNames);
   const model: NormalizedPlugin = {
     ...(loaded.config.marketplace === true ? { marketplace: true as const } : {}),
     metadata: {
@@ -190,7 +230,8 @@ export const normalizeProject = async (
       version: loaded.config.plugin.version,
     },
     mcpServers: [],
-    hooks: normalizeHooks(loaded, targetNames),
+    hooks: normalizeHooks(loaded, targetNames, registry),
+    ...(nativeHooks.length === 0 ? {} : { nativeHooks }),
     scripts: [],
     skills,
     targets: targetNames.map((name) => ({

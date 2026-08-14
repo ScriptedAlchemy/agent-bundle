@@ -5,7 +5,7 @@ import { stableJson } from '../core/digest.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { pathTokens, type NormalizedMcpServer, type NormalizedPlugin } from '../core/types.ts';
 import capabilityTable from './capabilities/claude-2.1.232.json' with { type: 'json' };
-import { planHooks } from './hook-contract.ts';
+import { mergeHookDocuments, nativeHooksFor, planHooks } from './hook-contract.ts';
 import hooksSchema from './schemas/claude/hooks.schema.json' with { type: 'json' };
 import marketplaceSchema from './schemas/claude/marketplace.schema.json' with { type: 'json' };
 import mcpSchema from './schemas/claude/mcp.schema.json' with { type: 'json' };
@@ -126,21 +126,41 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
   }
   const mcp = Object.keys(servers).length === 0 ? undefined : { mcpServers: servers };
   if (mcp !== undefined) diagnostics.push(...schemaDiagnostics('mcp', validateMcp(mcp), validateMcp.errors));
-  const hooks = planHooks(model, {
+  const generatedHooks = planHooks(model, {
     commandRoot: '${CLAUDE_PLUGIN_ROOT}',
     eventNames: capabilityTable.hooks.events,
     matchers: capabilityTable.hooks.matchers,
     target: claudeName,
   });
-  diagnostics.push(...hooks.diagnostics);
-  if (hooks.document !== undefined) {
-    diagnostics.push(...schemaDiagnostics('hooks', validateHooks(hooks.document), validateHooks.errors));
+  diagnostics.push(...generatedHooks.diagnostics);
+  if (generatedHooks.document !== undefined) {
+    diagnostics.push(...schemaDiagnostics('hooks', validateHooks(generatedHooks.document), validateHooks.errors));
   }
+  const nativeHooks = nativeHooksFor(model, claudeName);
+  let nativeHookDocument: Record<string, unknown> | undefined;
+  if (nativeHooks?.issue !== undefined) {
+    diagnostics.push(errorDiagnostic(
+      `claude.native-hooks.${nativeHooks.issue}`,
+      `Claude native hooks file ${JSON.stringify(nativeHooks.source)} could not be ${nativeHooks.issue === 'missing' ? 'found' : 'parsed'}.`,
+    ));
+  } else if (nativeHooks?.document !== undefined) {
+    if (!validateHooks(nativeHooks.document)) {
+      diagnostics.push(errorDiagnostic(
+        'claude.native-hooks.schema',
+        `Claude native hooks file ${JSON.stringify(nativeHooks.source)} is invalid: ${(validateHooks.errors ?? [])
+          .map((error) => `${error.instancePath || '/'}: ${error.message ?? 'schema validation failed'}`)
+          .join('; ') || 'schema validation failed'}.`,
+      ));
+    } else {
+      nativeHookDocument = nativeHooks.document as Record<string, unknown>;
+    }
+  }
+  const hookDocument = mergeHookDocuments(generatedHooks.document, nativeHookDocument);
 
   const plugin = {
     author: { name: model.metadata.name },
     description: model.metadata.description ?? model.metadata.name,
-    ...(hooks.document === undefined ? {} : { hooks: './hooks/hooks.json' }),
+    ...(hookDocument === undefined ? {} : { hooks: './hooks/hooks.json' }),
     name: model.metadata.name,
     version: model.metadata.version,
   };
@@ -169,8 +189,8 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
   if (mcp !== undefined && validateMcp(mcp)) {
     entries.push({ content: `${stableJson(mcp)}\n`, kind: 'write', relativePath: '.mcp.json' });
   }
-  if (hooks.document !== undefined && validateHooks(hooks.document)) {
-    entries.push({ content: `${stableJson(hooks.document)}\n`, kind: 'write', relativePath: 'hooks/hooks.json' });
+  if (hookDocument !== undefined && validateHooks(hookDocument)) {
+    entries.push({ content: `${stableJson(hookDocument)}\n`, kind: 'write', relativePath: 'hooks/hooks.json' });
   }
   if (marketplace !== undefined && validateMarketplace(marketplace)) {
     entries.push({ content: `${stableJson(marketplace)}\n`, kind: 'write', relativePath: '.claude-plugin/marketplace.json' });
@@ -190,8 +210,8 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
   return Object.freeze({
     diagnostics: Object.freeze(diagnostics),
     entries: sortedEntries(entries),
-    hookEntries: hooks.document !== undefined && validateHooks(hooks.document)
-      ? hooks.hookEntries
+    hookEntries: hookDocument !== undefined && validateHooks(hookDocument)
+      ? generatedHooks.hookEntries
       : Object.freeze([]),
   });
 };

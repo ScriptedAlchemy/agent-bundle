@@ -1,10 +1,15 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { cp, mkdtemp, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { expect, it } from '@rstest/core';
+import { rspack } from '@rspack/core';
+import { expect, it, rs } from '@rstest/core';
 
 import { createDefaultRegistry } from '../src/adapters/registry.ts';
+import { build } from '../src/build/build.ts';
+import { buildWithRslib } from '../src/build/rslib.ts';
+import { HookService } from '../src/services/hook-service.ts';
 import { normalizeProject } from '../src/config/normalize.ts';
 import type { LoadedConfig } from '../src/config/load.ts';
 import type { NormalizationTargetRegistry, NormalizedPlugin } from '../src/core/types.ts';
@@ -13,7 +18,61 @@ import { validateModel, validateSource } from '../src/config/validate.ts';
 const registry: NormalizationTargetRegistry = {
   defaultTargetNames: () => ['codex', 'claude'],
   has: (name) => name === 'portable' || name === 'codex' || name === 'claude',
+  supports: (name, capability) => capability === 'hooks' && name !== 'portable',
 };
+
+const runPublishedHook = async (wrapper: string, input: string): Promise<{ readonly code: number | null; readonly stderr: string }> =>
+  new Promise((resolvePromise, reject) => {
+    const child = spawn(process.execPath, [wrapper], { stdio: ['pipe', 'ignore', 'pipe'] });
+    let stderr = '';
+    child.stderr.on('data', (chunk: Buffer) => {
+      stderr += chunk.toString();
+    });
+    child.once('error', reject);
+    child.once('close', (code) => resolvePromise({ code, stderr }));
+    child.stdin.end(input);
+  });
+
+const runNativeHook = async (wrapper: string, input: Record<string, unknown>): Promise<{ readonly code: number | null; readonly stderr: string; readonly stdout: string }> =>
+  new Promise((resolvePromise, reject) => {
+    const child = spawn(process.execPath, [wrapper], { stdio: ['pipe', 'pipe', 'pipe'] });
+    let stderr = '';
+    let stdout = '';
+    child.stderr.on('data', (chunk: Buffer) => {
+      stderr += chunk.toString();
+    });
+    child.stdout.on('data', (chunk: Buffer) => {
+      stdout += chunk.toString();
+    });
+    child.once('error', reject);
+    child.once('close', (code) => resolvePromise({ code, stderr, stdout }));
+    child.stdin.end(JSON.stringify(input));
+  });
+
+it('closes the Rslib build result after building a virtual hook entry', async () => {
+  const close = rs.fn(async () => undefined);
+  const buildResult = { close };
+  const rslib = {
+    build: async () => buildResult,
+    inspectConfig: async () => ({
+      origin: {
+        bundlerConfigs: [{
+          output: { asyncChunks: false, path: '/tmp/agent-bundle-rslib-close-output' },
+          plugins: [new rspack.experiments.VirtualModulesPlugin({})],
+          target: 'node',
+        }],
+      },
+    }),
+  };
+
+  await buildWithRslib({
+    cwd: '/tmp',
+    entries: [{ name: 'close-probe', outputRelativePath: 'hooks/close-probe.mjs', source: '/tmp/hook.ts', virtualSource: 'export default undefined;' }],
+    outputRoot: '/tmp/agent-bundle-rslib-close-output',
+  }, { createRslib: async () => rslib as never });
+
+  expect(close).toHaveBeenCalledOnce();
+});
 
 it('normalizes a shorthand session-start hook into a frozen stable record', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-hooks-normalize-'));
@@ -53,6 +112,373 @@ it('normalizes a shorthand session-start hook into a frozen stable record', asyn
     await rm(root, { force: true, recursive: true });
   }
 });
+
+it('filters inherited hook targets through adapter hook capabilities', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-hooks-capabilities-'));
+  const configPath = join(root, 'agent-bundle.config.ts');
+  const targetRegistry = createDefaultRegistry();
+  const loaded: LoadedConfig = {
+    config: {
+      hooks: { sessionStart: './src/hooks/session-start.ts' },
+      plugin: { name: 'review-tools', version: '1.0.0' },
+      targets: ['portable', 'codex', 'claude'],
+    },
+    configPath,
+    context: { command: 'build', mode: 'production', projectRoot: root, selectedTargets: [] },
+  };
+
+  try {
+    const model = await normalizeProject(loaded, { skills: [] }, targetRegistry);
+
+    expect(model.hooks[0]?.targets).toEqual(['claude', 'codex']);
+    expect(validateModel(model, targetRegistry).map((diagnostic) => diagnostic.code)).not.toContain('AB4204');
+    expect(targetRegistry.get('portable').plan(model).hookEntries).toEqual([]);
+    expect(targetRegistry.get('codex').plan(model).hookEntries).toHaveLength(1);
+    expect(targetRegistry.get('claude').plan(model).hookEntries).toHaveLength(1);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('loads and deterministically merges target-native hook documents after generated groups', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-hooks-native-documents-'));
+  const configPath = join(root, 'agent-bundle.config.ts');
+  const codexNative = join(root, 'codex-hooks.json');
+  const claudeNative = join(root, 'claude-hooks.json');
+  const targetRegistry = createDefaultRegistry();
+  const loaded: LoadedConfig = {
+    config: {
+      claude: { nativeHooks: './claude-hooks.json' },
+      codex: { nativeHooks: './codex-hooks.json' },
+      hooks: { sessionStart: './src/hooks/session-start.ts' },
+      plugin: { name: 'review-tools', version: '1.0.0' },
+      targets: ['codex', 'claude'],
+    },
+    configPath,
+    context: { command: 'build', mode: 'production', projectRoot: root, selectedTargets: [] },
+  };
+
+  const nativeDocument = (description: string, command: string) => ({
+    description,
+    hooks: {
+      SessionStart: [{ hooks: [{ command, type: 'command' }] }],
+      UserPromptSubmit: [{ hooks: [{ command: `${command} user-prompt`, type: 'command' }] }],
+    },
+  });
+
+  try {
+    await Promise.all([
+      writeFile(codexNative, `${JSON.stringify(nativeDocument('Codex escape hatch', 'echo codex'))}\n`),
+      writeFile(claudeNative, `${JSON.stringify(nativeDocument('Claude escape hatch', 'echo claude'))}\n`),
+    ]);
+    const model = await normalizeProject(loaded, { skills: [] }, targetRegistry);
+    const nativeHooks = model.nativeHooks ?? [];
+
+    expect(nativeHooks).toEqual([
+      {
+        document: nativeDocument('Claude escape hatch', 'echo claude'),
+        provenance: { kind: 'config', sourcePath: configPath },
+        source: claudeNative,
+        target: 'claude',
+      },
+      {
+        document: nativeDocument('Codex escape hatch', 'echo codex'),
+        provenance: { kind: 'config', sourcePath: configPath },
+        source: codexNative,
+        target: 'codex',
+      },
+    ]);
+    expect(Object.isFrozen(nativeHooks)).toBe(true);
+    expect(Object.isFrozen(nativeHooks[0]!)).toBe(true);
+
+    for (const [target, generatedRoot, nativeCommand] of [
+      ['claude', '${CLAUDE_PLUGIN_ROOT}', 'echo claude'],
+      ['codex', '${PLUGIN_ROOT}', 'echo codex'],
+    ] as const) {
+      const plan = targetRegistry.get(target).plan(model);
+      const writes = Object.fromEntries(plan.entries.flatMap((entry) =>
+        entry.kind === 'write' ? [[entry.relativePath, entry.content]] : []));
+      expect(plan.diagnostics).toEqual([]);
+      expect(JSON.parse(writes['hooks/hooks.json']!)).toEqual({
+        description: target === 'codex' ? 'Codex escape hatch' : 'Claude escape hatch',
+        hooks: {
+          SessionStart: [
+            { hooks: [{ command: `node "${generatedRoot}/hooks/session-start-session-start-7ab7e8a5.mjs"`, type: 'command' }] },
+            { hooks: [{ command: nativeCommand, type: 'command' }] },
+          ],
+          UserPromptSubmit: [{ hooks: [{ command: `${nativeCommand} user-prompt`, type: 'command' }] }],
+        },
+      });
+    }
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('reports stable target-native hook file diagnostics before merge', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-hooks-native-invalid-'));
+  const targetRegistry = createDefaultRegistry();
+  const loaded: LoadedConfig = {
+    config: {
+      claude: { nativeHooks: './claude-broken.json' },
+      codex: { nativeHooks: './missing-codex.json' },
+      plugin: { name: 'review-tools', version: '1.0.0' },
+      targets: ['codex', 'claude'],
+    },
+    configPath: join(root, 'agent-bundle.config.ts'),
+    context: { command: 'build', mode: 'production', projectRoot: root, selectedTargets: [] },
+  };
+
+  try {
+    await writeFile(join(root, 'claude-broken.json'), '{not json\n');
+    const broken = await normalizeProject(loaded, { skills: [] }, targetRegistry);
+
+    expect(targetRegistry.get('codex').plan(broken).diagnostics.map((diagnostic) => diagnostic.code)).toEqual(['codex.native-hooks.missing']);
+    expect(targetRegistry.get('claude').plan(broken).diagnostics.map((diagnostic) => diagnostic.code)).toEqual(['claude.native-hooks.parse']);
+
+    await writeFile(join(root, 'invalid-codex.json'), '{"hooks":{"SessionStart":"invalid"}}\n');
+    const invalidSchema = await normalizeProject({
+      ...loaded,
+      config: { ...loaded.config, codex: { nativeHooks: './invalid-codex.json' } },
+    }, { skills: [] }, targetRegistry);
+    expect(targetRegistry.get('codex').plan(invalidSchema).diagnostics.map((diagnostic) => diagnostic.code)).toEqual(['codex.native-hooks.schema']);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('lists and simulates only validated wrappers from a clean copied artifact', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-hooks-service-source-'));
+  const consumer = await mkdtemp(join(tmpdir(), 'agent-bundle-hooks-service-consumer-'));
+  const sourceRoot = join(root, 'src', 'hooks');
+  const outputRoot = join(root, 'dist');
+  const artifact = join(consumer, 'installed-plugin');
+  const model = hookModel(root);
+  const service = new HookService();
+
+  try {
+    await mkdir(sourceRoot, { recursive: true });
+    await Promise.all([
+      writeFile(join(root, 'package.json'), '{"type":"module"}\n'),
+      writeFile(join(sourceRoot, 'session-start.ts'), "export default (event: { source?: string }) => ({ outcome: 'continue' as const, additionalContext: `start:${event.source}` });\n"),
+      writeFile(join(sourceRoot, 'check-command.ts'), [
+        'export default (event: { toolInput?: { command?: string } }) => event.toolInput?.command === "blocked"',
+        "  ? { outcome: 'deny' as const, reason: 'blocked command' }",
+        "  : { outcome: 'continue' as const, updatedInput: { command: 'rewritten' }, additionalContext: 'checked' };",
+        '',
+      ].join('\n')),
+      writeFile(join(sourceRoot, 'record.ts'), "export default () => ({ outcome: 'continue' as const, additionalContext: 'recorded' });\n"),
+      writeFile(join(sourceRoot, 'stop.ts'), "export default () => ({ outcome: 'continue' as const });\n"),
+    ]);
+    await build({ model, outputRoot, projectRoot: root, registry: createDefaultRegistry() });
+    await cp(outputRoot, artifact, { recursive: true });
+
+    const listed = await service.list({ artifact });
+    expect(listed).toEqual([
+      expect.objectContaining({ event: 'afterTool', target: 'claude' }),
+      expect.objectContaining({ event: 'beforeTool', target: 'claude' }),
+      expect.objectContaining({ event: 'sessionStart', target: 'claude' }),
+      expect.objectContaining({ event: 'stop', target: 'claude' }),
+      expect.objectContaining({ event: 'afterTool', target: 'codex' }),
+      expect.objectContaining({ event: 'beforeTool', target: 'codex' }),
+      expect.objectContaining({ event: 'sessionStart', target: 'codex' }),
+      expect.objectContaining({ event: 'stop', target: 'codex' }),
+    ]);
+    expect(listed.find((hook) => hook.id === 'hook:session-start:session-start:7ab7e8a5' && hook.target === 'codex')).toMatchObject({
+      path: 'codex/hooks/session-start-session-start-7ab7e8a5.mjs',
+    });
+    for (const target of ['codex', 'claude'] as const) {
+      await expect(service.simulate({
+        artifact,
+        hook: 'hook:session-start:session-start:7ab7e8a5',
+        input: { source: 'startup' },
+        target,
+      })).resolves.toEqual({ additionalContext: 'start:startup', outcome: 'continue' });
+      await expect(service.simulate({
+        artifact,
+        hook: 'hook:before-tool:check-command:1f5b5818',
+        input: { toolInput: { command: 'blocked' }, toolName: 'Bash' },
+        target,
+      })).resolves.toEqual({ outcome: 'deny', reason: 'blocked command' });
+      await expect(service.simulate({
+        artifact,
+        hook: 'hook:before-tool:check-command:1f5b5818',
+        input: { toolInput: { command: 'safe' }, toolName: 'Bash' },
+        target,
+      })).resolves.toEqual({
+        additionalContext: 'checked',
+        outcome: 'continue',
+        updatedInput: { command: 'rewritten' },
+      });
+      await expect(service.simulate({
+        artifact,
+        hook: 'hook:after-tool:record:87785f02',
+        input: { toolName: 'Write', toolResponse: 'ok' },
+        target,
+      })).resolves.toEqual({ additionalContext: 'recorded', outcome: 'continue' });
+      await expect(service.simulate({
+        artifact,
+        hook: 'hook:stop:stop:bb2d7935',
+        input: { lastAssistantMessage: 'done', stopHookActive: false },
+        target,
+      })).resolves.toBeUndefined();
+    }
+
+    await writeFile(join(artifact, 'codex', 'hooks', 'session-start-session-start-7ab7e8a5.mjs'), 'broken');
+    await expect(service.simulate({
+      artifact,
+      hook: 'hook:session-start:session-start:7ab7e8a5',
+      input: { source: 'tampered' },
+      target: 'codex',
+    })).rejects.toThrow(/artifact files do not match/i);
+  } finally {
+    await Promise.all([
+      rm(root, { force: true, recursive: true }),
+      rm(consumer, { force: true, recursive: true }),
+    ]);
+  }
+}, 15_000);
+
+it('compiles each native hook through a virtual Rslib entry without sibling chunks', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-hooks-build-'));
+  const sourceRoot = join(root, 'src', 'hooks');
+  const outputRoot = join(root, 'dist');
+  const model = hookModel(root);
+  const names = model.hooks.map((hook) => hook.name).sort();
+
+  try {
+    await mkdir(sourceRoot, { recursive: true });
+    await Promise.all([
+      writeFile(join(root, 'package.json'), '{"type":"module"}\n'),
+      writeFile(join(sourceRoot, 'shared.ts'), "export const context = 'compiled from local TypeScript';\n"),
+      ...model.hooks.map((hook) => writeFile(
+        hook.source,
+        [
+          "import { context } from './shared.ts';",
+          'export default (event: Record<string, unknown>) => ({',
+          "  additionalContext: `${context}:${String(event.hookEventName ?? '')}` ,",
+          "  outcome: 'continue' as const,",
+          '});',
+          '',
+        ].join('\n'),
+      )),
+    ]);
+
+    await build({ model, outputRoot, projectRoot: root, registry: createDefaultRegistry() });
+
+    for (const target of ['codex', 'claude']) {
+      const hooksRoot = join(outputRoot, target, 'hooks');
+      expect((await readdir(hooksRoot)).filter((name) => name.endsWith('.mjs')).sort()).toEqual(
+        names.map((name) => `${name}.mjs`),
+      );
+      for (const name of names) {
+        const wrapper = await readFile(join(hooksRoot, `${name}.mjs`), 'utf8');
+        expect(wrapper).toContain('compiled from local TypeScript');
+        expect(wrapper).not.toMatch(/from\s+['"](?:agent-bundle|@rstackjs\/|@rspack\/)[^'"]*['"]/);
+      }
+    }
+    expect(await readdir(join(root, 'src', 'hooks'))).toEqual([
+      'check-command.ts',
+      'record.ts',
+      'session-start.ts',
+      'shared.ts',
+      'stop.ts',
+    ]);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('runs the embedded Codex and Claude native codecs through their published wrappers', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-hooks-native-codecs-'));
+  const sourceRoot = join(root, 'src', 'hooks');
+  const outputRoot = join(root, 'dist');
+  const model = hookModel(root);
+
+  try {
+    await mkdir(sourceRoot, { recursive: true });
+    await Promise.all([
+      writeFile(join(root, 'package.json'), '{"type":"module"}\n'),
+      writeFile(join(sourceRoot, 'session-start.ts'), "export default (event: { sessionId?: string }) => ({ outcome: 'continue' as const, additionalContext: event.sessionId });\n"),
+      writeFile(join(sourceRoot, 'check-command.ts'), "export default (event: { toolName?: string }) => ({ outcome: event.toolName === 'Bash' ? 'deny' as const : 'continue' as const, reason: 'blocked command' });\n"),
+      writeFile(join(sourceRoot, 'record.ts'), "export default (event: { toolResponse?: string }) => ({ outcome: 'continue' as const, additionalContext: event.toolResponse });\n"),
+      writeFile(join(sourceRoot, 'stop.ts'), "export default () => ({ outcome: 'continue' as const });\n"),
+    ]);
+    await build({ model, outputRoot, projectRoot: root, registry: createDefaultRegistry() });
+
+    for (const target of ['codex', 'claude']) {
+      const hooksRoot = join(outputRoot, target, 'hooks');
+      await expect(runNativeHook(join(hooksRoot, 'session-start-session-start-7ab7e8a5.mjs'), {
+        hook_event_name: 'SessionStart', session_id: 'session-1', source: 'startup',
+      })).resolves.toEqual({
+        code: 0,
+        stderr: '',
+        stdout: '{"hookSpecificOutput":{"additionalContext":"session-1","hookEventName":"SessionStart"}}',
+      });
+      await expect(runNativeHook(join(hooksRoot, 'before-tool-check-command-1f5b5818.mjs'), {
+        hook_event_name: 'PreToolUse', tool_input: { command: 'blocked' }, tool_name: 'Bash', tool_use_id: 'use-1',
+      })).resolves.toEqual({
+        code: 0,
+        stderr: '',
+        stdout: '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"blocked command"}}',
+      });
+      await expect(runNativeHook(join(hooksRoot, 'after-tool-record-87785f02.mjs'), {
+        hook_event_name: 'PostToolUse', tool_response: 'observed', tool_name: 'Write', tool_use_id: 'use-2',
+      })).resolves.toEqual({
+        code: 0,
+        stderr: '',
+        stdout: '{"hookSpecificOutput":{"additionalContext":"observed","hookEventName":"PostToolUse"}}',
+      });
+      await expect(runNativeHook(join(hooksRoot, 'stop-stop-bb2d7935.mjs'), {
+        hook_event_name: 'Stop', last_assistant_message: 'done', stop_hook_active: false,
+      })).resolves.toEqual({ code: 0, stderr: '', stdout: '' });
+    }
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+}, 15_000);
+
+it('rejects malformed native hook input, exports, and handler results concisely', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-hooks-errors-'));
+  const sourceRoot = join(root, 'src', 'hooks');
+  const outputRoot = join(root, 'dist');
+  const base = hookModel(root);
+  const model: NormalizedPlugin = {
+    ...base,
+    hooks: [
+      { ...base.hooks[0]!, id: 'hook:session-start:valid:00000001', name: 'valid-00000001', source: join(sourceRoot, 'valid.ts'), targets: ['codex'] },
+      { ...base.hooks[0]!, id: 'hook:session-start:export:00000002', name: 'export-00000002', source: join(sourceRoot, 'no-default.ts'), targets: ['codex'] },
+      { ...base.hooks[0]!, id: 'hook:session-start:result:00000003', name: 'result-00000003', source: join(sourceRoot, 'bad-result.ts'), targets: ['codex'] },
+    ],
+    targets: [base.targets[0]!],
+  };
+
+  try {
+    await mkdir(sourceRoot, { recursive: true });
+    await Promise.all([
+      writeFile(join(root, 'package.json'), '{"type":"module"}\n'),
+      writeFile(join(sourceRoot, 'valid.ts'), 'export default () => undefined;\n'),
+      writeFile(join(sourceRoot, 'no-default.ts'), 'export const value = true;\n'),
+      writeFile(join(sourceRoot, 'bad-result.ts'), "export default () => 'not a result';\n"),
+    ]);
+    await build({ model, outputRoot, projectRoot: root, registry: createDefaultRegistry() });
+
+    await expect(runPublishedHook(join(outputRoot, 'codex', 'hooks', 'valid-00000001.mjs'), '{not json')).resolves.toEqual({
+      code: 1,
+      stderr: 'Agent Bundle hook error: stdin must contain exactly one JSON value\n',
+    });
+    await expect(runPublishedHook(join(outputRoot, 'codex', 'hooks', 'export-00000002.mjs'), '{}')).resolves.toEqual({
+      code: 1,
+      stderr: 'Agent Bundle hook error: default export must be a function\n',
+    });
+    await expect(runPublishedHook(join(outputRoot, 'codex', 'hooks', 'result-00000003.mjs'), '{}')).resolves.toEqual({
+      code: 1,
+      stderr: 'Agent Bundle hook error: handler must return void or a result object\n',
+    });
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+}, 15_000);
 
 const hookModel = (root: string): NormalizedPlugin => ({
   hooks: [
