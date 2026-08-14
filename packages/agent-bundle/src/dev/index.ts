@@ -1,4 +1,13 @@
 export {
+  ArtifactService,
+  type ArtifactCompiler,
+  type ArtifactEpochResult,
+  type ArtifactServiceOptions,
+  type ArtifactValidator,
+  type FailedArtifactEpochResult,
+  type SucceededArtifactEpochResult,
+} from './artifact-service.ts';
+export {
   createProjectEventHub,
   ProjectEventHub,
   ProjectEventHubError,

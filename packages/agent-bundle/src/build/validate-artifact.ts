@@ -12,6 +12,11 @@ import {
 
 const manifestName = 'agent-bundle.manifest.json';
 
+export interface ValidateArtifactOptions {
+  readonly allowedExtraPaths?: readonly string[];
+  readonly artifactRoot: string;
+}
+
 const diagnostic = (code: string, message: string, generatedPath?: string): Diagnostic => ({
   code,
   generatedPath,
@@ -101,9 +106,11 @@ const parseManifest = (value: string): ArtifactManifest | undefined => {
   }
 };
 
-export const validateArtifact = async (context: {
-  readonly artifactRoot: string;
-}): Promise<readonly Diagnostic[]> => {
+export const validateArtifact = async (context: ValidateArtifactOptions): Promise<readonly Diagnostic[]> => {
+  const allowedExtraPaths = new Set(context.allowedExtraPaths ?? []);
+  if ([...allowedExtraPaths].some((path) => !isSafeArtifactPath(path) || path === manifestName)) {
+    return [diagnostic('AB6008', 'Artifact validator extra paths must be safe non-manifest relative paths.')];
+  }
   const manifestPath = resolve(context.artifactRoot, manifestName);
   let manifest: ArtifactManifest | undefined;
   try {
@@ -129,7 +136,7 @@ export const validateArtifact = async (context: {
   }
 
   const actualFiles = (await listArtifactFiles(context.artifactRoot)).filter(
-    (file) => file.path !== manifestName,
+    (file) => file.path !== manifestName && !allowedExtraPaths.has(file.path),
   );
   if (
     actualFiles.length !== manifest.files.length ||

@@ -1,16 +1,16 @@
 import { createHash } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
-import { relative, resolve } from 'node:path';
+import { readFile, readdir } from 'node:fs/promises';
+import { join, relative, resolve } from 'node:path';
 
 import { createDefaultRegistry, type TargetRegistry } from '../adapters/registry.ts';
 import { discoverProject } from '../config/discover.ts';
+import { isProjectPathIgnored, readProjectIgnoreRules } from '../config/ignore.ts';
 import { loadConfig } from '../config/load.ts';
 import { normalizeProject } from '../config/normalize.ts';
 import { validateModel, validateSource } from '../config/validate.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { digest } from '../core/digest.ts';
 import type { NormalizedPlugin } from '../core/types.ts';
-import type { DiscoveredProject } from '../config/discover.ts';
 import type { SourceStatus } from './types.ts';
 
 export type ProjectCommand = 'build' | 'inspect' | 'validate';
@@ -28,6 +28,7 @@ export interface ProjectServiceOptions {
 }
 
 export interface PreparedProject {
+  readonly configPath: string;
   readonly diagnostics: readonly Diagnostic[];
   readonly model?: NormalizedPlugin;
   readonly registry: TargetRegistry;
@@ -74,19 +75,32 @@ const sourceInput = async (root: string, source: string) => {
   }
 };
 
+const sourcePaths = async (root: string): Promise<readonly string[]> => {
+  const rules = await readProjectIgnoreRules(root);
+  const paths: string[] = [];
+
+  const visit = async (directory: string): Promise<void> => {
+    const entries = await readdir(directory, { withFileTypes: true });
+    for (const entry of entries) {
+      const source = join(directory, entry.name);
+      if (isProjectPathIgnored(rules, root, source)) continue;
+      if (entry.isDirectory()) {
+        await visit(source);
+        continue;
+      }
+      if (entry.isFile()) paths.push(source);
+    }
+  };
+
+  await visit(root);
+  return Object.freeze(paths.sort((left, right) => left.localeCompare(right)));
+};
+
 const sourceRevision = async (
   root: string,
   configPath: string,
-  discovered?: DiscoveredProject,
 ): Promise<string> => {
-  const sources = new Set<string>([configPath]);
-  for (const skill of discovered?.skills ?? []) {
-    sources.add(skill.source);
-    for (const resource of skill.resources) {
-      sources.add(resource.source);
-    }
-  }
-
+  const sources = new Set<string>([configPath, ...(await sourcePaths(root))]);
   const inputs = await Promise.all([...sources].map((source) => sourceInput(root, source)));
   return digest({
     inputs: inputs.sort((left, right) => left.path.localeCompare(right.path)),
@@ -103,12 +117,14 @@ const sourceStatus = (
 });
 
 const preparedProject = (
+  configPath: string,
   diagnostics: readonly Diagnostic[],
   registry: TargetRegistry,
   root: string,
   source: SourceStatus,
   model?: NormalizedPlugin,
 ): PreparedProject => Object.freeze({
+  configPath,
   diagnostics,
   ...(model === undefined ? {} : { model }),
   registry,
@@ -150,15 +166,15 @@ export class ProjectService {
       }]);
       const source = sourceStatus(diagnostics, await sourceRevision(root, configPath));
       log(this.#options.logger, 'project.invalid-source', { diagnostics: diagnostics.length, root });
-      return preparedProject(diagnostics, registry, root, source);
+      return preparedProject(configPath, diagnostics, registry, root, source);
     }
 
-    const revision = await sourceRevision(root, loaded.configPath, discovered);
+    const revision = await sourceRevision(root, loaded.configPath);
     const sourceDiagnostics = freezeDiagnostics(validateSource(loaded, discovered));
     if (hasErrors(sourceDiagnostics)) {
       const source = sourceStatus(sourceDiagnostics, revision);
       log(this.#options.logger, 'project.invalid-source', { diagnostics: sourceDiagnostics.length, root });
-      return preparedProject(sourceDiagnostics, registry, root, source);
+      return preparedProject(loaded.configPath, sourceDiagnostics, registry, root, source);
     }
 
     let model: NormalizedPlugin;
@@ -173,7 +189,7 @@ export class ProjectService {
       }]);
       const source = sourceStatus(diagnostics, revision);
       log(this.#options.logger, 'project.prepared', { diagnostics: diagnostics.length, root, targets: [] });
-      return preparedProject(diagnostics, registry, root, source);
+      return preparedProject(loaded.configPath, diagnostics, registry, root, source);
     }
 
     const diagnostics: Diagnostic[] = [...validateModel(model, registry)];
@@ -189,6 +205,6 @@ export class ProjectService {
       root,
       targets: model.targets.map((target) => target.name),
     });
-    return preparedProject(frozenDiagnostics, registry, root, source, model);
+    return preparedProject(loaded.configPath, frozenDiagnostics, registry, root, source, model);
   }
 }

@@ -71,6 +71,26 @@ it('returns a frozen source diagnostic when configuration loading fails', async 
   }
 });
 
+it('retains the resolved configuration path in the prepared project', async () => {
+  const root = await createProject([
+    '---',
+    'name: review',
+    'description: Reviews changes',
+    '---',
+    'Review the changed files.',
+    '',
+  ].join('\n'));
+  try {
+    const prepared = await new ProjectService({ root }).prepare('build');
+
+    expect(Object.getOwnPropertyDescriptor(prepared, 'configPath')?.value).toBe(
+      join(root, 'agent-bundle.config.ts'),
+    );
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
 it('routes API validation through the project service for configuration failures', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-dev-api-config-'));
   try {
@@ -127,6 +147,50 @@ it('derives source revisions from authored bytes, including resources and invali
       rm(equivalentRoot, { force: true, recursive: true }),
       rm(invalidRoot, { force: true, recursive: true }),
     ]);
+  }
+});
+
+it('derives source revisions from the broad authored project graph while excluding generated and dependency trees', async () => {
+  const root = await createProject([
+    '---',
+    'name: review',
+    'description: Reviews changes',
+    '---',
+    'Review the changed files.',
+    '',
+  ].join('\n'));
+  try {
+    await Promise.all([
+      mkdir(join(root, 'src'), { recursive: true }),
+      mkdir(join(root, 'dist'), { recursive: true }),
+      mkdir(join(root, 'node_modules', 'dependency'), { recursive: true }),
+      mkdir(join(root, '.agent-bundle'), { recursive: true }),
+      mkdir(join(root, '.git'), { recursive: true }),
+    ]);
+    await Promise.all([
+      writeFile(join(root, 'src', 'entry.ts'), "import { value } from './shared.ts';\nexport { value };\n"),
+      writeFile(join(root, 'src', 'shared.ts'), 'export const value = 1;\n'),
+      writeFile(join(root, 'dist', 'generated.js'), 'first\n'),
+      writeFile(join(root, 'node_modules', 'dependency', 'index.js'), 'first\n'),
+      writeFile(join(root, '.agent-bundle', 'active-epoch.json'), 'first\n'),
+      writeFile(join(root, '.git', 'HEAD'), 'first\n'),
+    ]);
+
+    const initial = await new ProjectService({ root }).prepare('build');
+    await writeFile(join(root, 'src', 'shared.ts'), 'export const value = 2;\n');
+    const importedSourceChanged = await new ProjectService({ root }).prepare('build');
+    await Promise.all([
+      writeFile(join(root, 'dist', 'generated.js'), 'second\n'),
+      writeFile(join(root, 'node_modules', 'dependency', 'index.js'), 'second\n'),
+      writeFile(join(root, '.agent-bundle', 'active-epoch.json'), 'second\n'),
+      writeFile(join(root, '.git', 'HEAD'), 'second\n'),
+    ]);
+    const excludedOnlyChanged = await new ProjectService({ root }).prepare('build');
+
+    expect(importedSourceChanged.source.revision).not.toBe(initial.source.revision);
+    expect(excludedOnlyChanged.source.revision).toBe(importedSourceChanged.source.revision);
+  } finally {
+    await rm(root, { force: true, recursive: true });
   }
 });
 
