@@ -16,6 +16,11 @@ interface HeldStream {
   send(value: unknown): void;
 }
 
+interface Deferred<Value> {
+  readonly promise: Promise<Value>;
+  resolve(value: Value): void;
+}
+
 const json = (value: unknown, status = 200): Response => Response.json(value, { status });
 
 const heldStream = (): HeldStream => {
@@ -38,6 +43,26 @@ const closedStream = (...entries: readonly unknown[]): Response => new Response(
     controller.close();
   },
 }), { headers: { 'content-type': 'application/x-ndjson; charset=utf-8' } });
+
+const deferred = <Value>(): Deferred<Value> => {
+  let resolve!: (value: Value) => void;
+  const promise = new Promise<Value>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+};
+
+const cancellableStream = (): Readonly<{ readonly cancelled: () => boolean; readonly response: Response }> => {
+  let wasCancelled = false;
+  return Object.freeze({
+    cancelled: () => wasCancelled,
+    response: new Response(new ReadableStream<Uint8Array>({
+      cancel() {
+        wasCancelled = true;
+      },
+    }), { headers: { 'content-type': 'application/x-ndjson; charset=utf-8' } }),
+  });
+};
 
 const eventually = async (predicate: () => boolean, timeout = 300): Promise<void> => {
   const deadline = Date.now() + timeout;
@@ -262,4 +287,196 @@ it('reports malformed trace data and closes its bound session rather than leavin
 
   expect(errors).toEqual(['Foreground MCP trace stream contained an invalid entry.']);
   expect(fixture.requests.filter((request) => request.url === '/api/mcp/sessions/session-a')).toHaveLength(1);
+});
+
+it('forwards only raw server notification frames and never trace responses or server requests with colliding ids', async () => {
+  const stream = heldStream();
+  const fixture = routeFetch({ streams: [stream.response] });
+  const transport = new AgentBundleRemoteTransport({ binding, routes: new McpRouteClient({ fetch: fixture.fetch }) });
+  const messages: JSONRPCMessage[] = [];
+  transport.onmessage = (message) => messages.push(message);
+
+  await transport.start();
+  stream.send({ direction: 'server', kind: 'frame', message: { id: 1, jsonrpc: '2.0', result: { tools: [] } }, sequence: 1 });
+  stream.send({ direction: 'server', kind: 'frame', message: { id: 2, jsonrpc: '2.0', method: 'sampling/createMessage', params: {} }, sequence: 2 });
+  stream.send({ direction: 'server', kind: 'frame', message: { jsonrpc: '2.0', method: 'notifications/progress', params: { progress: 1 } }, sequence: 3 });
+  await eventually(() => messages.length > 0);
+
+  expect(messages).toEqual([{ jsonrpc: '2.0', method: 'notifications/progress', params: { progress: 1 } }]);
+  await transport.close();
+});
+
+it('sends MCP cancellation to its typed route while a serialized tool call remains in flight', async () => {
+  const operation = deferred<Response>();
+  const stream = heldStream();
+  const requests: RecordedRequest[] = [];
+  let operationStarted = false;
+  const transport = new AgentBundleRemoteTransport({
+    binding,
+    routes: new McpRouteClient({
+      fetch: async (input, init) => {
+        const url = String(input);
+        requests.push({ body: init?.body?.toString(), headers: new Headers(init?.headers), url });
+        if (url === '/api/project/session') return json({ origin: 'http://127.0.0.1:4100', token: 'token-a' });
+        if (url === '/api/mcp/sessions') return json({ session: { binding, connection, id: 'session-a' } });
+        if (url.includes('/stream?')) return stream.response;
+        if (url.endsWith('/operations')) {
+          operationStarted = true;
+          return operation.promise;
+        }
+        if (url.endsWith('/cancel')) return json({ cancelled: true });
+        if (url === '/api/mcp/sessions/session-a' && init?.method === 'DELETE') return json({ closed: true });
+        throw new Error(`Unexpected route request ${url}.`);
+      },
+    }),
+  });
+
+  await transport.start();
+  const call = transport.send({ id: 7, jsonrpc: '2.0', method: 'tools/call', params: { arguments: {}, name: 'forecast' } });
+  await eventually(() => operationStarted);
+  const cancelled = transport.send({ jsonrpc: '2.0', method: 'notifications/cancelled', params: { requestId: 7 } });
+  await eventually(() => requests.some((request) => request.url.endsWith('/cancel')));
+
+  operation.resolve(json({ result: { content: [] } }));
+  await Promise.all([call, cancelled]);
+  expect(requests.find((request) => request.url.endsWith('/cancel'))?.body).toBe('{"requestId":"number:7"}');
+  await transport.close();
+});
+
+it('closes a session created concurrently without re-bootstrap and notifies only after its DELETE completes', async () => {
+  const created = deferred<Response>();
+  const lifecycle: string[] = [];
+  let bootstraps = 0;
+  const transport = new AgentBundleRemoteTransport({
+    binding,
+    routes: new McpRouteClient({
+      fetch: async (input, init) => {
+        const url = String(input);
+        if (url === '/api/project/session') {
+          bootstraps += 1;
+          return json({ origin: 'http://127.0.0.1:4100', token: 'token-a' });
+        }
+        if (url === '/api/mcp/sessions') return created.promise;
+        if (url === '/api/mcp/sessions/session-a' && init?.method === 'DELETE') {
+          lifecycle.push('delete');
+          return json({ closed: true });
+        }
+        throw new Error(`Unexpected route request ${url}.`);
+      },
+    }),
+  });
+  transport.onclose = () => lifecycle.push('close');
+
+  const starting = transport.start();
+  await eventually(() => bootstraps === 1);
+  const closing = transport.close();
+  created.resolve(json({ session: { binding, connection, id: 'session-a' } }));
+  await Promise.all([starting, closing]);
+
+  expect(bootstraps).toBe(1);
+  expect(lifecycle).toEqual(['delete', 'close']);
+});
+
+it('linearizes close by aborting active work, cancelling the reader, waiting cleanup, and suppressing late results', async () => {
+  const stream = cancellableStream();
+  const requests: RecordedRequest[] = [];
+  const messages: JSONRPCMessage[] = [];
+  let operationAborted = false;
+  let operationStarted = false;
+  let resolveOperation: ((response: Response) => void) | undefined;
+  const transport = new AgentBundleRemoteTransport({
+    binding,
+    routes: new McpRouteClient({
+      fetch: async (input, init) => {
+        const url = String(input);
+        requests.push({ body: init?.body?.toString(), headers: new Headers(init?.headers), url });
+        if (url === '/api/project/session') return json({ origin: 'http://127.0.0.1:4100', token: 'token-a' });
+        if (url === '/api/mcp/sessions') return json({ session: { binding, connection, id: 'session-a' } });
+        if (url.includes('/stream?')) return stream.response;
+        if (url.endsWith('/operations')) {
+          operationStarted = true;
+          return new Promise<Response>((resolvePromise) => {
+            resolveOperation = resolvePromise;
+            init?.signal?.addEventListener('abort', () => {
+              operationAborted = true;
+              resolvePromise(json({ diagnostic: { code: 'AB8019', message: 'aborted' } }, 499));
+            }, { once: true });
+          });
+        }
+        if (url === '/api/mcp/sessions/session-a' && init?.method === 'DELETE') return json({ closed: true });
+        throw new Error(`Unexpected route request ${url}.`);
+      },
+    }),
+  });
+  transport.onmessage = (message) => messages.push(message);
+
+  await transport.start();
+  const pending = transport.send({ id: 13, jsonrpc: '2.0', method: 'tools/list', params: {} });
+  await eventually(() => operationStarted);
+  const closing = transport.close();
+  try {
+    await closing;
+    expect(operationAborted).toBe(true);
+    expect(stream.cancelled()).toBe(true);
+    expect(messages).toEqual([]);
+    expect(requests.filter((request) => request.url === '/api/mcp/sessions/session-a')).toHaveLength(1);
+  } finally {
+    resolveOperation?.(json({ result: [{ name: 'late' }] }));
+    await pending;
+  }
+});
+
+it('deletes a mismatched created session using its held foreground token before start rejects', async () => {
+  const requests: RecordedRequest[] = [];
+  const transport = new AgentBundleRemoteTransport({
+    binding,
+    routes: new McpRouteClient({
+      fetch: async (input, init) => {
+        const url = String(input);
+        requests.push({ body: init?.body?.toString(), headers: new Headers(init?.headers), url });
+        if (url === '/api/project/session') return json({ origin: 'http://127.0.0.1:4100', token: 'token-a' });
+        if (url === '/api/mcp/sessions') return json({
+          session: { binding: { ...binding, epochId: 'wrong-epoch' }, connection, id: 'session-wrong' },
+        });
+        if (url === '/api/mcp/sessions/session-wrong' && init?.method === 'DELETE') return json({ closed: true });
+        throw new Error(`Unexpected route request ${url}.`);
+      },
+    }),
+  });
+
+  await expect(transport.start()).rejects.toMatchObject({ message: 'Foreground MCP session binding does not match the requested artifact.' });
+
+  expect(requests.map((request) => request.url)).toEqual([
+    '/api/project/session',
+    '/api/mcp/sessions',
+    '/api/mcp/sessions/session-wrong',
+  ]);
+  expect(requests[2]?.headers.get('x-agent-bundle-session')).toBe('token-a');
+});
+
+it('defaults omitted modern tool arguments and gives known invalid parameters a JSON-RPC invalid-params error', async () => {
+  const stream = heldStream();
+  const fixture = routeFetch({
+    operation: () => ({ content: [] }),
+    streams: [stream.response],
+  });
+  const transport = new AgentBundleRemoteTransport({ binding, routes: new McpRouteClient({ fetch: fixture.fetch }) });
+  const messages: JSONRPCMessage[] = [];
+  transport.onmessage = (message) => messages.push(message);
+
+  await transport.start();
+  await transport.send({ id: 10, jsonrpc: '2.0', method: 'tools/call', params: { name: 'forecast' } });
+  await transport.send({ id: 11, jsonrpc: '2.0', method: 'tools/call', params: { arguments: 'invalid', name: 'forecast' } });
+  await transport.send({ id: 12, jsonrpc: '2.0', method: 'unregistered/method', params: {} });
+  await eventually(() => messages.length === 3);
+
+  expect(fixture.requests.find((request) => request.url.endsWith('/operations'))?.body).toBe(
+    '{"arguments":{},"name":"forecast","operation":"tools/call","requestId":"number:10"}',
+  );
+  expect(messages).toEqual([
+    { id: 10, jsonrpc: '2.0', result: { content: [] } },
+    { error: { code: -32602, message: 'MCP method "tools/call" has invalid parameters.' }, id: 11, jsonrpc: '2.0' },
+    { error: { code: -32601, message: 'MCP method "unregistered/method" is not supported by the Agent Bundle remote transport.' }, id: 12, jsonrpc: '2.0' },
+  ]);
+  await transport.close();
 });

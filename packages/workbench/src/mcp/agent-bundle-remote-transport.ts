@@ -16,13 +16,6 @@ interface JsonRpcRequest {
   readonly params?: unknown;
 }
 
-interface TraceFrame {
-  readonly direction: 'client' | 'server';
-  readonly kind: 'frame';
-  readonly message: unknown;
-  readonly sequence: number;
-}
-
 export interface AgentBundleRemoteTransportOptions {
   readonly binding: McpRouteSessionBinding;
   readonly routes: McpRouteClient;
@@ -52,38 +45,47 @@ const notification = (value: unknown): { readonly method: string; readonly param
 
 const requestKey = (id: number | string): string => `${typeof id}:${id}`;
 
-const isJsonRpcMessage = (value: unknown): value is JSONRPCMessage =>
-  isRecord(value) && value.jsonrpc === '2.0' &&
-  (typeof value.method === 'string' || Object.hasOwn(value, 'result') || Object.hasOwn(value, 'error'));
-
-const traceFrame = (value: unknown): TraceFrame | undefined =>
-  isRecord(value) && value.kind === 'frame' && (value.direction === 'client' || value.direction === 'server') &&
-  typeof value.sequence === 'number' && Number.isSafeInteger(value.sequence) && value.sequence > 0
-    ? { direction: value.direction, kind: 'frame', message: value.message, sequence: value.sequence }
-    : undefined;
+const isJsonRpcNotification = (value: unknown): value is JSONRPCMessage =>
+  isRecord(value) && value.jsonrpc === '2.0' && typeof value.method === 'string' &&
+  !Object.hasOwn(value, 'id') && !Object.hasOwn(value, 'result') && !Object.hasOwn(value, 'error');
 
 const asRecord = (value: unknown): Record<string, unknown> | undefined => isRecord(value) ? value : undefined;
 
-const operationFor = (message: JsonRpcRequest): McpRouteOperation | undefined => {
-  if (message.method === 'initialize') return { operation: 'initialize' };
+type OperationResolution =
+  | Readonly<{ readonly kind: 'invalid' }>
+  | Readonly<{ readonly kind: 'operation'; readonly operation: McpRouteOperation }>
+  | undefined;
+
+const operationFor = (message: JsonRpcRequest): OperationResolution => {
+  if (message.method === 'initialize') return { kind: 'operation', operation: { operation: 'initialize' } };
   if (
     message.method === 'tools/list' || message.method === 'resources/list' ||
     message.method === 'resources/templates/list' || message.method === 'prompts/list'
-  ) return { operation: message.method };
+  ) return { kind: 'operation', operation: { operation: message.method } };
   const params = asRecord(message.params);
   if (message.method === 'prompts/get' && typeof params?.name === 'string') {
-    if (params.arguments !== undefined && (!isRecord(params.arguments) || Object.values(params.arguments).some((value) => typeof value !== 'string'))) return undefined;
-    return {
+    if (params.arguments !== undefined && (!isRecord(params.arguments) || Object.values(params.arguments).some((value) => typeof value !== 'string'))) return { kind: 'invalid' };
+    return { kind: 'operation', operation: {
       ...(params.arguments === undefined ? {} : { arguments: params.arguments as Record<string, string> }),
       name: params.name,
       operation: 'prompts/get',
-    };
+    } };
   }
-  if (message.method === 'resources/read' && typeof params?.uri === 'string') return { operation: 'resources/read', uri: params.uri };
-  if (message.method === 'tools/call' && typeof params?.name === 'string' && isRecord(params.arguments)) {
-    return { arguments: params.arguments, name: params.name, operation: 'tools/call', requestId: requestKey(message.id) };
+  if (message.method === 'resources/read') {
+    return typeof params?.uri === 'string'
+      ? { kind: 'operation', operation: { operation: 'resources/read', uri: params.uri } }
+      : { kind: 'invalid' };
   }
-  return undefined;
+  if (message.method === 'tools/call') {
+    if (typeof params?.name !== 'string' || (params.arguments !== undefined && !isRecord(params.arguments))) return { kind: 'invalid' };
+    return { kind: 'operation', operation: {
+      arguments: params.arguments ?? {},
+      name: params.name,
+      operation: 'tools/call',
+      requestId: requestKey(message.id),
+    } };
+  }
+  return message.method === 'prompts/get' ? { kind: 'invalid' } : undefined;
 };
 
 const resultFor = (method: string, result: unknown): unknown => {
@@ -105,6 +107,13 @@ const resultFor = (method: string, result: unknown): unknown => {
 const errorMessage = (method: string): string =>
   `MCP method ${JSON.stringify(method)} is not supported by the Agent Bundle remote transport.`;
 
+const invalidParamsMessage = (method: string): string =>
+  `MCP method ${JSON.stringify(method)} has invalid parameters.`;
+
+const settled = async (value: Promise<unknown> | undefined): Promise<void> => {
+  await value?.catch(() => undefined);
+};
+
 /**
  * SDK Transport over the foreground's deliberately typed, epoch-bound MCP
  * routes. It is not an arbitrary browser-to-process JSON-RPC tunnel.
@@ -119,9 +128,13 @@ export class AgentBundleRemoteTransport implements Transport {
   #closed = false;
   #closePromise: Promise<void> | undefined;
   #lastSequence = 0;
+  #operationControllers = new Set<AbortController>();
+  #releasedSession: Promise<void> | undefined;
   #session: McpRouteSession | undefined;
   #startPromise: Promise<void> | undefined;
   #streamAbort: AbortController | undefined;
+  #streamPromise: Promise<void> | undefined;
+  #streamReader: ReadableStreamDefaultReader<Uint8Array> | undefined;
   #sendTail: Promise<void> = Promise.resolve();
 
   constructor(options: AgentBundleRemoteTransportOptions) {
@@ -146,6 +159,9 @@ export class AgentBundleRemoteTransport implements Transport {
 
   async send(message: JSONRPCMessage, _options?: TransportSendOptions): Promise<void> {
     await this.start();
+    if (this.#closed) throw new AgentBundleRemoteTransportError('MCP remote transport is closed.');
+    const nextNotification = notification(message);
+    if (nextNotification?.method === 'notifications/cancelled') return this.#cancel(nextNotification.params);
     const next = this.#sendTail.then(() => this.#send(message));
     this.#sendTail = next.catch(() => undefined);
     return next;
@@ -154,12 +170,19 @@ export class AgentBundleRemoteTransport implements Transport {
   async close(): Promise<void> {
     if (this.#closePromise !== undefined) return this.#closePromise;
     this.#closed = true;
-    const session = this.#session;
-    this.#session = undefined;
     this.#streamAbort?.abort();
+    for (const controller of this.#operationControllers) controller.abort();
+    const reader = this.#streamReader;
+    const readerCancellation = reader?.cancel().catch(() => undefined);
     this.#closePromise = (async () => {
       try {
-        if (session !== undefined) await this.#routes.close(session.id);
+        await settled(this.#startPromise);
+        await settled(this.#sendTail);
+        await settled(this.#streamPromise);
+        await settled(readerCancellation);
+        const session = this.#session;
+        this.#session = undefined;
+        if (session !== undefined) await this.#releaseSession(session.id);
       } catch (error) {
         this.#report(error);
       } finally {
@@ -176,19 +199,24 @@ export class AgentBundleRemoteTransport implements Transport {
       if (
         session.binding.epochId !== this.#binding.epochId || session.binding.serverName !== this.#binding.serverName ||
         session.binding.target !== this.#binding.target
-      ) throw new AgentBundleRemoteTransportError('Foreground MCP session binding does not match the requested artifact.');
+      ) {
+        await this.#releaseSession(session.id);
+        throw new AgentBundleRemoteTransportError('Foreground MCP session binding does not match the requested artifact.');
+      }
       if (this.#closed) {
-        await this.#routes.close(session.id);
+        await this.#releaseSession(session.id);
         return;
       }
       this.#session = session;
       this.#streamAbort = new AbortController();
       const stream = await this.#routes.stream(session.id, this.#lastSequence, this.#streamAbort.signal);
       if (this.#closed) return;
-      void this.#consumeStreams(stream).catch(async (error: unknown) => this.#fail(error));
+      const consuming = this.#consumeStreams(stream);
+      this.#streamPromise = consuming;
+      void consuming.catch((error: unknown) => { void this.#fail(error); });
     } catch (error) {
       this.#report(error);
-      await this.close();
+      if (!this.#closed) void this.close();
       throw error;
     }
   }
@@ -197,44 +225,52 @@ export class AgentBundleRemoteTransport implements Transport {
     if (this.#closed) throw new AgentBundleRemoteTransportError('MCP remote transport is closed.');
     const nextRequest = request(message);
     if (nextRequest !== undefined) {
-      const operation = operationFor(nextRequest);
-      if (operation === undefined) {
+      const resolved = operationFor(nextRequest);
+      if (resolved === undefined || resolved.kind === 'invalid') {
         this.#emit({
-          error: { code: -32601, message: errorMessage(nextRequest.method) },
+          error: resolved === undefined
+            ? { code: -32601, message: errorMessage(nextRequest.method) }
+            : { code: -32602, message: invalidParamsMessage(nextRequest.method) },
           id: nextRequest.id,
           jsonrpc: '2.0',
         });
         return;
       }
+      const controller = new AbortController();
+      this.#operationControllers.add(controller);
       try {
-        const result = await this.#routes.operation(this.sessionId, operation);
-        this.#emit({ id: nextRequest.id, jsonrpc: '2.0', result: resultFor(nextRequest.method, result) } as JSONRPCMessage);
+        const result = await this.#routes.operation(this.sessionId, resolved.operation, controller.signal);
+        if (!this.#closed) this.#emit({ id: nextRequest.id, jsonrpc: '2.0', result: resultFor(nextRequest.method, result) } as JSONRPCMessage);
       } catch (error) {
-        this.#report(error);
-        this.#emit({
-          error: { code: -32603, message: error instanceof Error ? error.message : 'Foreground MCP operation failed.' },
-          id: nextRequest.id,
-          jsonrpc: '2.0',
-        });
+        if (!this.#closed) {
+          this.#report(error);
+          this.#emit({
+            error: { code: -32603, message: error instanceof Error ? error.message : 'Foreground MCP operation failed.' },
+            id: nextRequest.id,
+            jsonrpc: '2.0',
+          });
+        }
+      } finally {
+        this.#operationControllers.delete(controller);
       }
       return;
     }
     const nextNotification = notification(message);
     if (nextNotification?.method === 'notifications/initialized') return;
-    if (nextNotification?.method === 'notifications/cancelled') {
-      const params = asRecord(nextNotification.params);
-      if (typeof params?.requestId !== 'number' && typeof params?.requestId !== 'string') {
-        this.#report(new AgentBundleRemoteTransportError('MCP cancellation notification has an invalid request id.'));
-        return;
-      }
-      try {
-        await this.#routes.cancel(this.sessionId, requestKey(params.requestId));
-      } catch (error) {
-        this.#report(error);
-      }
+    this.#report(new AgentBundleRemoteTransportError('MCP transport received an invalid notification.'));
+  }
+
+  async #cancel(value: unknown): Promise<void> {
+    const params = asRecord(value);
+    if (typeof params?.requestId !== 'number' && typeof params?.requestId !== 'string') {
+      this.#report(new AgentBundleRemoteTransportError('MCP cancellation notification has an invalid request id.'));
       return;
     }
-    this.#report(new AgentBundleRemoteTransportError('MCP transport received an invalid notification.'));
+    try {
+      await this.#routes.cancel(this.sessionId, requestKey(params.requestId));
+    } catch (error) {
+      if (!this.#closed) this.#report(error);
+    }
   }
 
   async #consumeStreams(first: Response): Promise<void> {
@@ -254,6 +290,7 @@ export class AgentBundleRemoteTransport implements Transport {
   async #consumeStream(response: Response): Promise<boolean> {
     if (response.body === null) throw new AgentBundleRemoteTransportError('Foreground MCP trace stream did not include a body.');
     const reader = response.body.getReader();
+    this.#streamReader = reader;
     const decoder = new TextDecoder();
     let buffered = '';
     let delivered = false;
@@ -274,6 +311,7 @@ export class AgentBundleRemoteTransport implements Transport {
       if (buffered.length > 0) this.#deliverTrace(JSON.parse(buffered));
       return delivered || buffered.length > 0;
     } finally {
+      if (this.#streamReader === reader) this.#streamReader = undefined;
       reader.releaseLock();
     }
   }
@@ -287,8 +325,7 @@ export class AgentBundleRemoteTransport implements Transport {
     }
     if (entry.sequence <= this.#lastSequence) return;
     this.#lastSequence = entry.sequence;
-    const frame = traceFrame(entry);
-    if (frame?.direction === 'server' && isJsonRpcMessage(frame.message)) this.#emit(frame.message);
+    if (entry.kind === 'frame' && entry.direction === 'server' && isJsonRpcNotification(entry.message)) this.#emit(entry.message);
   }
 
   async #fail(reason: unknown): Promise<void> {
@@ -297,7 +334,15 @@ export class AgentBundleRemoteTransport implements Transport {
     await this.close();
   }
 
+  async #releaseSession(id: string): Promise<void> {
+    if (this.#releasedSession === undefined) {
+      this.#releasedSession = this.#routes.close(id).then(() => undefined);
+    }
+    return this.#releasedSession;
+  }
+
   #emit(message: JSONRPCMessage): void {
+    if (this.#closed) return;
     try {
       this.onmessage?.(message);
     } catch (error) {

@@ -179,11 +179,12 @@ export class McpRouteClient {
     return asRecord(await this.#json(`${this.#sessionPath(id)}/config`)).config;
   }
 
-  async operation(id: string, operation: McpRouteOperation): Promise<unknown> {
+  async operation(id: string, operation: McpRouteOperation, signal?: AbortSignal): Promise<unknown> {
     return asRecord(await this.#json(`${this.#sessionPath(id)}/operations`, {
       body: JSON.stringify(operation),
       headers: { 'content-type': 'application/json' },
       method: 'POST',
+      signal,
     })).result;
   }
 
