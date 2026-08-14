@@ -1,0 +1,18 @@
+{
+  "activationEvidence": "observed",
+  "envelopes": [
+    { "fields": ["mcp_servers", "plugins", "session_id", "subtype", "type"], "subtype": "init", "type": "system" },
+    { "fields": ["message", "type"], "type": "assistant" },
+    { "fields": ["cwd", "hook_event_name", "tool_name", "type"], "type": "hook_event" },
+    { "fields": ["message", "type"], "type": "error" },
+    { "fields": ["duration_ms", "subtype", "type", "usage"], "subtype": "success", "type": "result" }
+  ],
+  "errorEnvelopes": [
+    { "fields": ["message", "type"], "type": "error" }
+  ],
+  "hookEnvelopes": [
+    { "fields": ["cwd", "hook_event_name", "tool_name", "type"], "type": "hook_event" }
+  ],
+  "mcp": { "configuredServers": 1, "toolCalls": 1 },
+  "plugins": ["agent-bundle-native-smoke"]
+}

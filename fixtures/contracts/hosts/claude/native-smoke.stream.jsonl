@@ -1,0 +1,5 @@
+{"type":"system","subtype":"init","session_id":"<redacted>","plugins":[{"name":"agent-bundle-native-smoke"}],"mcp_servers":[{"name":"candidate-status"}]}
+{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Skill","input":"<redacted>"},{"type":"tool_use","name":"mcp__candidate-status","input":"<redacted>"}]}}
+{"type":"hook_event","hook_event_name":"PreToolUse","tool_name":"Bash","cwd":"<redacted>"}
+{"type":"error","message":"<redacted>"}
+{"type":"result","subtype":"success","duration_ms":0,"usage":{}}

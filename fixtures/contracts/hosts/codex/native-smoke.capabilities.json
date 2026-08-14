@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "host": "codex",
+  "minimumVersion": "0.147.0",
+  "temporaryHome": "CODEX_HOME",
+  "authState": "opaque-copy-preserved-mode",
+  "providerApiKeys": "removed-from-child-environment",
+  "normalHomeState": ["auth", "config", "plugins"],
+  "pluginAvailability": "observed",
+  "automaticActivation": "inferred",
+  "eventEnvelopeFile": "native-smoke.stream.jsonl"
+}
