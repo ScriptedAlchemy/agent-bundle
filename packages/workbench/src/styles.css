@@ -22,9 +22,8 @@ button:focus-visible, a:focus-visible { outline: 3px solid #72a6ff; outline-offs
 .connection { align-items: center; color: #293142; display: flex; font-size: 14px; gap: 9px; margin-left: auto; }
 .connection > span { background: #16803a; border-radius: 50%; display: block; height: 9px; width: 9px; }
 .page-content { margin: 0 auto; max-width: 1320px; padding: 35px 34px 64px; }
-.page-heading { margin-bottom: 35px; }
-.eyebrow { color: #5d6777; font-size: 13px; font-weight: 700; letter-spacing: 0.075em; margin: 0 0 7px; text-transform: uppercase; }
-h1 { font-size: clamp(31px, 4vw, 43px); letter-spacing: -0.055em; line-height: 1.08; margin: 0; }
+.page-heading { margin-bottom: 30px; }
+h1 { font-size: clamp(31px, 4vw, 40px); letter-spacing: -0.055em; line-height: 1.08; margin: 0; }
 h2 { color: #4f5866; font-size: 14px; font-weight: 750; letter-spacing: 0.015em; margin: 0 0 14px; text-transform: uppercase; }
 .section { border-bottom: 1px solid #d9dee7; padding: 0 0 21px; margin: 0 0 21px; }
 .definition-row { display: grid; gap: 24px; grid-template-columns: minmax(190px, 1.2fr) minmax(210px, 1fr) minmax(150px, .7fr); margin: 0; padding: 0 19px; }

@@ -66,7 +66,6 @@ const Overview = ({ client, status, onStatus }: {
         </header>
         <div className="page-content">
           <div className="page-heading">
-            <p className="eyebrow">Overview</p>
             <h1>Project overview</h1>
           </div>
 
