@@ -106,12 +106,13 @@ export interface InvokeMcpOptions extends ListMcpOptions {
 }
 
 export interface ListHooksOptions extends ArtifactOperationOptions {
-  readonly target: string;
+  readonly target?: string;
 }
 
 export interface SimulateHookOptions extends ListHooksOptions {
   readonly hook: string;
   readonly input: Record<string, unknown>;
+  readonly target: string;
 }
 
 interface PreparedProject {
@@ -280,11 +281,15 @@ export const invokeMcp = async (options: InvokeMcpOptions): Promise<McpInvokeRes
     workspaceRoot: resolve(options.root),
   } satisfies McpInvokeOptions));
 
-export const listHooks = async (options: ListHooksOptions) =>
-  temporaryArtifact(options, async (artifact) => new HookService().list({
+export const listHooks = async (options: ListHooksOptions) => {
+  if (options.target !== undefined && !createDefaultRegistry().has(options.target)) {
+    throw new RangeError(`Unknown target ${JSON.stringify(options.target)}.`);
+  }
+  return temporaryArtifact(options, async (artifact) => new HookService().list({
     artifact,
     target: options.target,
   } satisfies HookListOptions));
+};
 
 export const simulateHook = async (options: SimulateHookOptions): Promise<unknown> =>
   temporaryArtifact(options, async (artifact) => new HookService().simulate({
