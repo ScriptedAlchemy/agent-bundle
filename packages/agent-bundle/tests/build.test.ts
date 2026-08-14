@@ -364,6 +364,37 @@ it('rejects an escaped script name before Rslib receives an unsafe output destin
   }
 });
 
+it('rejects a script name that exits its target scripts directory', async () => {
+  const project = await createProject();
+
+  try {
+    await mkdir(project.outputRoot, { recursive: true });
+    await writeFile(join(project.outputRoot, 'previous.txt'), 'previous\n');
+    const model = modelFor(project);
+
+    await expect(
+      build({
+        model: {
+          ...model,
+          scripts: [{ ...model.scripts[0]!, name: '../leaked' }],
+        },
+        outputRoot: project.outputRoot,
+        projectRoot: project.root,
+        registry: new TargetRegistry().register(
+          (await import('../src/adapters/portable.ts')).portableAdapter,
+          { default: true },
+        ),
+      }),
+    ).rejects.toThrow(/outside/i);
+    await expect(readFile(join(project.outputRoot, 'previous.txt'), 'utf8')).resolves.toBe('previous\n');
+    await expect(readFile(join(project.outputRoot, 'portable', 'leaked.mjs'), 'utf8')).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+  } finally {
+    await cleanupProject(project);
+  }
+});
+
 it('rejects canonical aliases and script-plan collisions before emission', async () => {
   const project = await createProject();
   const aliasesAdapter: TargetAdapter = {

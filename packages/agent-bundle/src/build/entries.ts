@@ -1,4 +1,4 @@
-import { extname, join } from 'node:path';
+import { extname, resolve } from 'node:path';
 
 import type { NormalizedScript } from '../core/types.ts';
 import { resolveArtifactDestination } from './emit.ts';
@@ -29,8 +29,8 @@ export const planCompiledEntries = (
     return {
       name,
       output: resolveArtifactDestination(
-        options.outDir,
-        join('scripts', `${name}.mjs`),
+        resolve(options.outDir, 'scripts'),
+        `${name}.mjs`,
       ),
       source: script.source,
     };
