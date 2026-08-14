@@ -62,6 +62,7 @@ export const buildWithRslib = async (options: {
   const rslib = await (dependencies.createRslib ?? createRslib)({
     cwd: options.cwd,
     config: {
+      logLevel: 'silent',
       lib: options.entries.map((entry) => {
         const virtualSource = entry.virtualSource;
         const virtualModules = (entry.virtualModules ?? []).map((module, index) => ({
