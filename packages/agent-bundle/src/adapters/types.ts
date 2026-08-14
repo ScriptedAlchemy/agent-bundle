@@ -1,5 +1,5 @@
 import type { Diagnostic } from '../core/diagnostics.ts';
-import type { NormalizedPlugin } from '../core/types.ts';
+import type { CanonicalHookEvent, NormalizedHook, NormalizedPlugin } from '../core/types.ts';
 
 export interface TargetArtifactWrite {
   readonly content: string;
@@ -16,9 +16,17 @@ export interface TargetArtifactCopy {
 
 export type TargetArtifactEntry = TargetArtifactWrite | TargetArtifactCopy;
 
+export interface TargetHookEntry {
+  readonly event: CanonicalHookEvent;
+  readonly hook: NormalizedHook;
+  readonly relativePath: string;
+  readonly target: string;
+}
+
 export interface TargetArtifactPlan {
   readonly diagnostics: readonly Diagnostic[];
   readonly entries: readonly TargetArtifactEntry[];
+  readonly hookEntries: readonly TargetHookEntry[];
 }
 
 export interface TargetAdapter {

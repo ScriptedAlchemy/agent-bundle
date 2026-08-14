@@ -97,6 +97,7 @@ const createProject = async (): Promise<TestProject> => {
 };
 
 const modelFor = (project: TestProject): NormalizedPlugin => ({
+  hooks: [],
   mcpServers: [],
   metadata: {
     id: 'plugin:review-tools',

@@ -1,5 +1,19 @@
 {
   "host": "codex",
+  "hooks": {
+    "config": "hooks/hooks.json",
+    "events": {
+      "afterTool": "PostToolUse",
+      "beforeTool": "PreToolUse",
+      "sessionStart": "SessionStart",
+      "stop": "Stop"
+    },
+    "matchers": {
+      "file.write": "^(?:apply_patch|Edit|Write)$",
+      "mcp": "^mcp__",
+      "shell": "^Bash$"
+    }
+  },
   "mcp": {
     "sse": false,
     "stdio": true,

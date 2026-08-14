@@ -13,15 +13,19 @@
     "interface": {
       "additionalProperties": false,
       "properties": {
+        "capabilities": { "items": { "minLength": 1, "type": "string" }, "type": "array" },
         "category": { "minLength": 1, "type": "string" },
+        "defaultPrompt": { "items": { "minLength": 1, "type": "string" }, "maxItems": 3, "minItems": 1, "type": "array" },
+        "developerName": { "minLength": 1, "type": "string" },
         "displayName": { "minLength": 1, "type": "string" },
         "longDescription": { "minLength": 1, "type": "string" },
         "shortDescription": { "minLength": 1, "type": "string" }
       },
-      "required": ["displayName", "shortDescription", "longDescription", "category"],
+      "required": ["displayName", "shortDescription", "longDescription", "developerName", "category", "capabilities", "defaultPrompt"],
       "type": "object"
     },
     "mcpServers": { "const": "./.mcp.json", "type": "string" },
+    "hooks": { "const": "./hooks/hooks.json", "type": "string" },
     "name": { "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$", "type": "string" },
     "skills": { "const": "./skills/", "type": "string" },
     "version": { "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?(?:\\+[0-9A-Za-z.-]+)?$", "type": "string" }

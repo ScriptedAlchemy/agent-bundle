@@ -239,6 +239,7 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
   return Object.freeze({
     diagnostics: Object.freeze(diagnostics),
     entries: Object.freeze(entries),
+    hookEntries: Object.freeze([]),
   });
 };
 

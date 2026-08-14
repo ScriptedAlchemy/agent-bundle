@@ -3,6 +3,7 @@
   "$id": "https://agent-bundle.dev/schemas/claude/2.1.232/marketplace.schema.json",
   "additionalProperties": false,
   "properties": {
+    "description": { "minLength": 1, "type": "string" },
     "name": { "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$", "type": "string" },
     "owner": {
       "additionalProperties": false,
@@ -26,6 +27,6 @@
       "type": "array"
     }
   },
-  "required": ["name", "owner", "plugins"],
+  "required": ["name", "description", "owner", "plugins"],
   "type": "object"
 }

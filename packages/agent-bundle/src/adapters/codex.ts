@@ -1,19 +1,26 @@
 import { Ajv2020, type ErrorObject } from 'ajv/dist/2020.js';
+import addFormats from 'ajv-formats';
+import { posix } from 'node:path';
 
 import { stableJson } from '../core/digest.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { pathTokens, type NormalizedMcpServer, type NormalizedPlugin } from '../core/types.ts';
 import capabilityTable from './capabilities/codex-0.147.0.json' with { type: 'json' };
+import { planHooks } from './hook-contract.ts';
+import hooksSchema from './schemas/codex/hooks.schema.json' with { type: 'json' };
 import marketplaceSchema from './schemas/codex/marketplace.schema.json' with { type: 'json' };
 import mcpSchema from './schemas/codex/mcp.schema.json' with { type: 'json' };
 import pluginSchema from './schemas/codex/plugin.schema.json' with { type: 'json' };
 import type { TargetAdapter, TargetArtifactEntry, TargetArtifactPlan } from './types.ts';
 
 const codexName = 'codex';
-const validator = new Ajv2020({ allErrors: true, strict: false, validateFormats: false });
+const installFormats = addFormats as unknown as (target: Ajv2020) => void;
+const validator = new Ajv2020({ allErrors: true, strict: false });
+installFormats(validator);
 const validatePlugin = validator.compile(pluginSchema);
 const validateMcp = validator.compile(mcpSchema);
 const validateMarketplace = validator.compile(marketplaceSchema);
+const validateHooks = validator.compile(hooksSchema);
 
 const errorDiagnostic = (code: string, message: string): Diagnostic => ({
   code,
@@ -23,7 +30,7 @@ const errorDiagnostic = (code: string, message: string): Diagnostic => ({
 });
 
 const schemaDiagnostics = (
-  document: 'plugin' | 'mcp' | 'marketplace',
+  document: 'plugin' | 'mcp' | 'marketplace' | 'hooks',
   valid: boolean,
   errors: readonly ErrorObject[] | null | undefined,
 ): Diagnostic[] => valid
@@ -44,9 +51,13 @@ const sortedEntries = (entries: TargetArtifactEntry[]): readonly TargetArtifactE
 const hasLeadingPluginRoot = (value: string): boolean =>
   value === pathTokens.pluginRoot || value.startsWith(`${pathTokens.pluginRoot}/`);
 
-const relativePluginPath = (value: string): string => {
+const relativePluginPath = (value: string): string | undefined => {
   const rest = value.slice(pathTokens.pluginRoot.length).replace(/^\/+/, '');
-  return rest.length === 0 ? './' : `./${rest}`;
+  const pluginRoot = '/agent-bundle-plugin-root';
+  const resolved = posix.resolve(pluginRoot, rest);
+  if (resolved !== pluginRoot && !resolved.startsWith(`${pluginRoot}/`)) return undefined;
+  const relative = posix.relative(pluginRoot, resolved);
+  return relative.length === 0 ? './' : `./${relative}`;
 };
 
 const convertCodexValue = (
@@ -84,7 +95,14 @@ const convertCodexValue = (
     ));
     return undefined;
   }
-  return relativePluginPath(value);
+  const relative = relativePluginPath(value);
+  if (relative === undefined) {
+    diagnostics.push(errorDiagnostic(
+      `codex.mcp.token.plugin-root.escape.${location}`,
+      `Codex MCP ${location} escapes the plugin-root cwd after canonical path resolution.`,
+    ));
+  }
+  return relative;
 };
 
 const planMcpServer = (
@@ -185,18 +203,39 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
 
   const mcp = Object.keys(servers).length === 0 ? undefined : { mcpServers: servers };
   if (mcp !== undefined) diagnostics.push(...schemaDiagnostics('mcp', validateMcp(mcp), validateMcp.errors));
+  const hooks = planHooks(model, {
+    commandRoot: '${PLUGIN_ROOT}',
+    eventNames: capabilityTable.hooks.events,
+    matchers: capabilityTable.hooks.matchers,
+    target: codexName,
+  });
+  diagnostics.push(...hooks.diagnostics);
+  if (hooks.document !== undefined) {
+    diagnostics.push(...schemaDiagnostics('hooks', validateHooks(hooks.document), validateHooks.errors));
+  }
 
   const description = model.metadata.description ?? model.metadata.name;
+  const interfaceMetadata = {
+    capabilities: [
+      ...(mcp === undefined ? [] : ['mcp']),
+      ...(hooks.document === undefined ? [] : ['hooks']),
+      ...(model.skills.some((skill) => selectedForCodex(skill.targets)) ? ['skills'] : []),
+    ],
+    defaultPrompt: [`Help me use ${model.metadata.name}.`],
+    developerName: model.metadata.name,
+  };
   const plugin = {
     author: { name: model.metadata.name },
     description,
     interface: {
+      ...interfaceMetadata,
       category: 'Productivity',
       displayName: model.metadata.name,
       longDescription: description,
       shortDescription: description,
     },
     ...(mcp === undefined ? {} : { mcpServers: './.mcp.json' }),
+    ...(hooks.document === undefined ? {} : { hooks: './hooks/hooks.json' }),
     name: model.metadata.name,
     skills: './skills/',
     version: model.metadata.version,
@@ -225,6 +264,9 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
   if (mcp !== undefined && validateMcp(mcp)) {
     entries.push({ content: `${stableJson(mcp)}\n`, kind: 'write', relativePath: '.mcp.json' });
   }
+  if (hooks.document !== undefined && validateHooks(hooks.document)) {
+    entries.push({ content: `${stableJson(hooks.document)}\n`, kind: 'write', relativePath: 'hooks/hooks.json' });
+  }
   if (marketplace !== undefined && validateMarketplace(marketplace)) {
     entries.push({ content: `${stableJson(marketplace)}\n`, kind: 'write', relativePath: '.agents/plugins/marketplace.json' });
   }
@@ -240,12 +282,19 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
     }
   }
 
-  return Object.freeze({ diagnostics: Object.freeze(diagnostics), entries: sortedEntries(entries) });
+  return Object.freeze({
+    diagnostics: Object.freeze(diagnostics),
+    entries: sortedEntries(entries),
+    hookEntries: hooks.document !== undefined && validateHooks(hooks.document)
+      ? hooks.hookEntries
+      : Object.freeze([]),
+  });
 };
 
 export const codexAdapter: TargetAdapter = Object.freeze({
   capabilities: Object.freeze({
     marketplace: true,
+    hooks: true,
     mcp: capabilityTable.mcp.stdio && capabilityTable.mcp.streamableHttp,
     sse: capabilityTable.mcp.sse,
     skills: capabilityTable.plugin.skills,

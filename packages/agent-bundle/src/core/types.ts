@@ -5,7 +5,25 @@ export interface AgentBundlePluginConfig {
   [key: string]: unknown;
 }
 
+export type CanonicalHookEvent = 'sessionStart' | 'beforeTool' | 'afterTool' | 'stop';
+
+export type CanonicalHookTool = 'shell' | 'file.read' | 'file.write' | 'mcp' | 'agent';
+
+export interface AgentBundleHookEntry {
+  handler: string;
+  targets?: readonly string[];
+  /** Native hook timeout in seconds. Omit it to use the selected host's default. */
+  timeout?: number;
+  tools?: readonly string[];
+}
+
+export type AgentBundleHookInput =
+  | string
+  | AgentBundleHookEntry
+  | readonly (string | AgentBundleHookEntry)[];
+
 export interface AgentBundleConfig {
+  hooks?: Partial<Record<CanonicalHookEvent, AgentBundleHookInput>>;
   marketplace?: boolean;
   plugin: AgentBundlePluginConfig;
   skills?: string[];
@@ -75,7 +93,20 @@ export interface NormalizedScript {
   readonly targets: readonly string[];
 }
 
+export interface NormalizedHook {
+  readonly event: CanonicalHookEvent;
+  readonly id: string;
+  readonly name: string;
+  readonly provenance: SourceProvenance;
+  readonly source: string;
+  readonly targets: readonly string[];
+  /** Native hook timeout in seconds. Omit it to use the selected host's default. */
+  readonly timeout?: number;
+  readonly tools: readonly CanonicalHookTool[];
+}
+
 export interface NormalizedPlugin {
+  readonly hooks: readonly NormalizedHook[];
   readonly marketplace?: true;
   readonly metadata: NormalizedMetadata;
   readonly mcpServers: readonly NormalizedMcpServer[];
