@@ -407,9 +407,12 @@ export class McpSessionRoutes {
       if (!hasOnly(body, ['requestId']) || !nonemptyString(body.requestId)) invalidShape();
       return responseJson(response, { cancelled: session.cancel(body.requestId) });
     }
-    const closed = await service.closeSession(parsed.id);
-    if (!closed) throw this.#unavailable();
-    this.#closeStreams(parsed.id);
+    try {
+      if (!await service.closeSession(parsed.id)) throw this.#unavailable();
+    } finally {
+      // A session may remove itself before surfacing a cleanup failure.
+      this.#closeStreams(parsed.id);
+    }
     return responseJson(response, { closed: true });
   }
 

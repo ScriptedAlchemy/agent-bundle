@@ -157,9 +157,11 @@ class RecordingService implements McpSessionRouteService {
   readonly session = new RecordingSession();
   readonly opens: unknown[] = [];
   closeCalls = 0;
+  closeError: Error | undefined;
 
   async closeSession(id: string): Promise<boolean> {
     this.closeCalls += 1;
+    if (this.closeError !== undefined) throw this.closeError;
     return id === this.session.id;
   }
 
@@ -372,6 +374,32 @@ it('ends an authenticated trace reader exactly once after DELETE closes its sess
     const deleted = await fetch(`${started.url}/api/mcp/sessions/session-a`, { headers: headers(), method: 'DELETE' });
     expect(deleted.status).toBe(200);
     await expect(deleted.json()).resolves.toEqual({ closed: true });
+    await expect(within(readToEnd(reader), 250)).resolves.toBe('');
+    expect(service.session.subscriptionCount).toBe(0);
+    expect(service.closeCalls).toBe(1);
+  } finally {
+    await reader?.cancel();
+    await started.close();
+  }
+});
+
+it('releases an authenticated trace reader when DELETE session cleanup rejects after removal', async () => {
+  const service = new RecordingService();
+  service.closeError = new Error('session cleanup rejected after removal');
+  const started = await startRoutes(service);
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+
+  try {
+    const stream = await fetch(`${started.url}/api/mcp/sessions/session-a/stream?after=0`, { headers: headers() });
+    reader = stream.body?.getReader();
+    if (reader === undefined) throw new Error('Expected route stream body.');
+    expect(service.session.subscriptionCount).toBe(1);
+
+    const deleted = await fetch(`${started.url}/api/mcp/sessions/session-a`, { headers: headers(), method: 'DELETE' });
+    expect(deleted.status).toBe(502);
+    await expect(deleted.json()).resolves.toEqual({
+      diagnostic: { code: 'AB8019', message: 'MCP session operation could not be completed.' },
+    });
     await expect(within(readToEnd(reader), 250)).resolves.toBe('');
     expect(service.session.subscriptionCount).toBe(0);
     expect(service.closeCalls).toBe(1);

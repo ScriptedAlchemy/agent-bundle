@@ -206,8 +206,9 @@ const parseIpv6 = (hostname: string): readonly number[] | undefined => {
   if (halves.length > 2) return undefined;
   const left = halves[0] === '' ? [] : halves[0].split(':');
   const right = halves.length === 1 || halves[1] === '' ? [] : halves[1].split(':');
-  const groups = [...left, ...right].map((group) => Number.parseInt(group, 16));
-  if (groups.some((group, index) => !/^[0-9a-f]{1,4}$/.test([...left, ...right][index]) || group < 0 || group > 0xffff)) {
+  const segments = [...left, ...right];
+  const groups = segments.map((group) => Number.parseInt(group, 16));
+  if (groups.some((group, index) => !/^[0-9a-f]{1,4}$/.test(segments[index]) || group < 0 || group > 0xffff)) {
     return undefined;
   }
   const missingGroups = 8 - groups.length;
@@ -247,7 +248,7 @@ const specialIpv6Prefixes: readonly IpPrefix[] = [
     [[32, 1], 23],
     [[32, 1, 13, 184], 32],
     [[32, 2], 16],
-    [[63, 255, 240], 20],
+    [[63, 255, 0], 20],
     [[95, 0], 16],
     [[252], 7],
     [[254, 128], 10],
@@ -327,30 +328,26 @@ export const resolveMcpAppHostProfile = (options: ResolveMcpAppHostProfileOption
   if (!validResourceUri(options.resource.uri) || options.resource.mimeType !== MCP_APP_HTML_MIME_TYPE) {
     return resourceFallback(options.profile, 'apps-resource-invalid');
   }
-  const resolution: McpAppAppsHostProfile = {
-    hostContext: createHostContext(options.host),
-    kind: 'apps',
-    permissions: Object.freeze({}),
-    profile: options.profile,
-    resourceUri: options.resource.uri,
-    warnings: Object.freeze([]),
-  };
+  const hostContext = createHostContext(options.host);
   const permissionResolution = resolvePermissions(options.declaredCapabilities, options.consentedCapabilities);
   if (permissionResolution.unsafe) {
     return resourceFallback(options.profile, 'unsafe-capability-declaration', permissionResolution.warnings);
   }
-  const permissionedResolution: McpAppAppsHostProfile = {
-    ...resolution,
+  const resolution: McpAppAppsHostProfile = {
+    hostContext,
+    kind: 'apps',
     permissions: permissionResolution.permissions,
+    profile: options.profile,
+    resourceUri: options.resource.uri,
     warnings: permissionResolution.warnings,
   };
   if (options.profile === 'chatgpt') {
-    if (options.chatgpt?.windowOpenAi?.widgetState === undefined) return Object.freeze(permissionedResolution);
+    if (options.chatgpt?.windowOpenAi?.widgetState === undefined) return Object.freeze(resolution);
     if (!isJsonValue(options.chatgpt.windowOpenAi.widgetState)) {
       throw new TypeError('ChatGPT window.openai widget state must be a finite JSON value.');
     }
     return Object.freeze({
-      ...permissionedResolution,
+      ...resolution,
       extensions: Object.freeze({
         windowOpenAi: Object.freeze({ widgetState: cloneJson(options.chatgpt.windowOpenAi.widgetState) }),
       }),
@@ -359,13 +356,13 @@ export const resolveMcpAppHostProfile = (options: ResolveMcpAppHostProfileOption
 
   if (options.profile === 'claude') {
     const publicMcpUrl = options.claude?.publicMcpUrl;
-    if (publicMcpUrl === undefined) return Object.freeze(permissionedResolution);
+    if (publicMcpUrl === undefined) return Object.freeze(resolution);
     const domain = claudeDomain(publicMcpUrl);
-    if (domain === undefined) return Object.freeze(permissionedResolution);
+    if (domain === undefined) return Object.freeze(resolution);
     return Object.freeze({
-      ...permissionedResolution,
+      ...resolution,
       extensions: Object.freeze({ claude: Object.freeze({ domain }) }),
     });
   }
-  return Object.freeze(permissionedResolution);
+  return Object.freeze(resolution);
 };
