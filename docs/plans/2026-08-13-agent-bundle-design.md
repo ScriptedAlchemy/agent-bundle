@@ -486,8 +486,10 @@ it does not run a nested compiler from a custom loader.
 The resulting HTML, URI, MIME type, and declared resource metadata are exposed to the server entry
 through a compiler-owned virtual module. Server code registers them with the official MCP Apps
 `registerAppResource()` and `registerAppTool()` helpers, so the upstream SDK remains responsible
-for cross-host metadata. Agent Bundle does not parse or rewrite tool registrations. The generated
-server remains the protocol source of truth: the workbench discovers the tool metadata, calls
+for standard MCP Apps metadata normalization. An author who needs the OpenAI compatibility alias
+declares it in the tool metadata; Agent Bundle does not synthesize it, parse registrations, or
+rewrite tool metadata. The generated server remains the protocol source of truth: the workbench
+discovers the tool metadata, calls
 `resources/read` for the exact `ui://` URI, and receives the same structured content and result
 metadata as ChatGPT or Claude. The pinned MCP Apps SDK version and its provenance are recorded and
 covered by compatibility fixtures rather than copied into private bridge or schema code.
