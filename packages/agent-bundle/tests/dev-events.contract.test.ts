@@ -7,7 +7,9 @@ import {
   type ArtifactStatus,
   type BuildAttempt,
   type BuildStatus,
+  type ProjectEventOf,
   type ProjectEventInput,
+  type ProjectEventType,
 } from '../src/dev/index.ts';
 
 const diagnostic = {
@@ -43,6 +45,33 @@ const runtimeEvent: ProjectEventInput = {
     sessionId: 'run-1',
     type: 'mcp.connected',
   },
+  type: 'runtime.event',
+};
+
+const genericRuntimeEvent: ProjectEventOf<ProjectEventType> = {
+  epochId: epoch.id,
+  occurredAt: '2026-08-14T12:00:00.000Z',
+  payload: runtimeEvent.payload,
+  sequence: 1,
+  type: 'runtime.event',
+};
+
+const runtimeEpochAndSession = (event: ProjectEventOf<ProjectEventType>): string => {
+  if (event.type === 'runtime.event') {
+    const epochId: string = event.epochId;
+    const sessionId: string = event.payload.sessionId;
+    return `${epochId}:${sessionId}`;
+  }
+
+  return event.type;
+};
+
+// @ts-expect-error a generic event union must retain the runtime payload pairing.
+const genericMismatchedPayload: ProjectEventOf<ProjectEventType> = {
+  epochId: epoch.id,
+  occurredAt: '2026-08-14T12:00:00.000Z',
+  payload: sourceChanged.payload,
+  sequence: 1,
   type: 'runtime.event',
 };
 
@@ -124,6 +153,9 @@ void activeWithoutEpoch;
 void incompleteFailure;
 void incompleteSuccess;
 void impossibleBuildingStatus;
+void genericMismatchedPayload;
+void genericRuntimeEvent;
+void runtimeEpochAndSession;
 
 it('rejects non-JSON event payloads before allocating a sequence ID', () => {
   const hub = new ProjectEventHub();
@@ -140,6 +172,26 @@ it('rejects non-JSON event payloads before allocating a sequence ID', () => {
     );
   }
 
+  expect(hub.latestSequence).toBe(0);
+  expect(hub.publish(sourceChanged).sequence).toBe(1);
+});
+
+it('rejects numeric own array keys outside the array length without consuming a sequence', () => {
+  const hub = new ProjectEventHub();
+  const paths = ['skills/review/SKILL.md'];
+  Object.defineProperty(paths, '4294967295', {
+    enumerable: true,
+    value: 'not-an-array-index',
+  });
+
+  expect(() => hub.publish({
+    payload: {
+      occurredAt: '2026-08-14T12:00:00.000Z',
+      paths,
+      reason: 'source-change',
+    },
+    type: 'source.changed',
+  })).toThrow(ProjectEventHubError);
   expect(hub.latestSequence).toBe(0);
   expect(hub.publish(sourceChanged).sequence).toBe(1);
 });

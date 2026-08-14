@@ -142,15 +142,17 @@ export interface ProjectEventPayloadMap {
 export type ProjectEventType = keyof ProjectEventPayloadMap;
 type EpochScopedProjectEventType = 'artifact.available' | 'runtime.event';
 
-type ProjectEventFor<TType extends ProjectEventType> = Readonly<{
-  readonly occurredAt: string;
-  readonly payload: ProjectEventPayloadMap[TType];
-  readonly sequence: number;
-  readonly type: TType;
-}> &
-  (TType extends EpochScopedProjectEventType
-    ? Readonly<{ readonly epochId: string }>
-    : Readonly<{ readonly epochId?: string }>);
+type ProjectEventFor<TType extends ProjectEventType> = TType extends ProjectEventType
+  ? Readonly<{
+      readonly occurredAt: string;
+      readonly payload: ProjectEventPayloadMap[TType];
+      readonly sequence: number;
+      readonly type: TType;
+    }> &
+      (TType extends EpochScopedProjectEventType
+        ? Readonly<{ readonly epochId: string }>
+        : Readonly<{ readonly epochId?: string }>)
+  : never;
 
 /** Stable envelope for each published project event. */
 export type ProjectEvent = {
@@ -192,8 +194,16 @@ const freezeJson = (value: unknown, seen: WeakSet<object>): JsonValue => {
 
   if (Array.isArray(value)) {
     for (const key of Reflect.ownKeys(value)) {
-      if (typeof key !== 'string' || (key !== 'length' && !/^(0|[1-9]\d*)$/.test(key))) {
+      if (typeof key !== 'string') {
         return invalidJson('arrays cannot contain non-index properties');
+      }
+
+      if (key === 'length') {
+        continue;
+      }
+
+      if (!/^(0|[1-9]\d*)$/.test(key) || Number(key) >= value.length) {
+        return invalidJson('arrays cannot contain out-of-range index properties');
       }
     }
 

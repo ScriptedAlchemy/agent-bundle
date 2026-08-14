@@ -158,7 +158,7 @@ export class ProjectEventHub {
 
     let payload: ProjectEventOf<TInput['type']>['payload'];
     try {
-      payload = freezeJsonValue(input.payload) as ProjectEventOf<TInput['type']>['payload'];
+      payload = freezeJsonValue(input.payload) as unknown as ProjectEventOf<TInput['type']>['payload'];
     } catch (error) {
       throw new ProjectEventHubError(
         'PROJECT_EVENT_PAYLOAD_INVALID',
