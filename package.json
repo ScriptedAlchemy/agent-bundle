@@ -6,7 +6,8 @@
     "node": ">=22.19.0"
   },
   "workspaces": [
-    "packages/*"
+    "packages/*",
+    "examples/*"
   ],
   "scripts": {
     "build": "rslib build",
