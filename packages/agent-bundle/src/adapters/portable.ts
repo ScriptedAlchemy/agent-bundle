@@ -210,7 +210,10 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
     }
   }
 
-  const servers: Record<string, Record<string, unknown>> = {};
+  const servers: Record<string, Record<string, unknown>> = Object.create(null) as Record<
+    string,
+    Record<string, unknown>
+  >;
   for (const server of model.mcpServers) {
     if (!hasPortableTarget(server.targets)) continue;
     const serverPlan = planMcpServer(server);
@@ -220,7 +223,7 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
     }
   }
 
-  if (Object.keys(servers).length > 0 && diagnostics.length === 0) {
+  if (Object.keys(servers).length > 0) {
     const mcp = { $schema: portableMcpSchema, mcpServers: servers };
     const mcpDiagnostics = schemaDiagnostics('mcp', validateMcp(mcp), validateMcp.errors);
     diagnostics.push(...mcpDiagnostics);

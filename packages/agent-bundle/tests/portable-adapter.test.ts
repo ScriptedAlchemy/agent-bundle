@@ -125,6 +125,30 @@ it('plans portable MCP server variants with tokens expanded only where portable 
   });
 });
 
+it('preserves a valid MCP server named __proto__', () => {
+  const plan = createDefaultRegistry().get('portable').plan({
+    ...plugin(),
+    mcpServers: [
+      {
+        command: 'node',
+        id: 'mcp:proto',
+        name: '__proto__',
+        provenance: { kind: 'config', sourcePath: '/workspace/agent-bundle.config.ts' },
+        targets: ['portable'],
+        transport: 'stdio',
+      },
+    ],
+  });
+
+  expect(plan.diagnostics).toEqual([]);
+  expect(plan.entries.find((entry) => entry.relativePath === 'mcp.json')).toEqual({
+    content:
+      '{"$schema":"https://agent-plugins.org/schemas/1.0.0/mcp.schema.json","mcpServers":{"__proto__":{"command":"node","type":"stdio"}}}\n',
+    kind: 'write',
+    relativePath: 'mcp.json',
+  });
+});
+
 it('reports unsupported portable token locations instead of silently preserving them', () => {
   const model = plugin();
   const mcpServers = [
@@ -148,6 +172,58 @@ it('reports unsupported portable token locations instead of silently preserving 
   ]);
 });
 
+it('reports tokens forbidden in portable URLs, headers, cwd, and environment values', () => {
+  const plan = createDefaultRegistry().get('portable').plan({
+    ...plugin(),
+    mcpServers: [
+      {
+        id: 'mcp:url',
+        name: 'url',
+        provenance: { kind: 'config', sourcePath: '/workspace/agent-bundle.config.ts' },
+        targets: ['portable'],
+        transport: 'streamable-http',
+        url: 'agent-bundle:path:plugin-root/api',
+      },
+      {
+        headers: { 'agent-bundle:path:plugin-data': 'literal' },
+        id: 'mcp:header-key',
+        name: 'header-key',
+        provenance: { kind: 'config', sourcePath: '/workspace/agent-bundle.config.ts' },
+        targets: ['portable'],
+        transport: 'streamable-http',
+        url: 'https://mcp.example.test/headers',
+      },
+      {
+        headers: { Authorization: 'agent-bundle:path:plugin-root' },
+        id: 'mcp:header-value',
+        name: 'header-value',
+        provenance: { kind: 'config', sourcePath: '/workspace/agent-bundle.config.ts' },
+        targets: ['portable'],
+        transport: 'sse',
+        url: 'https://mcp.example.test/sse',
+      },
+      {
+        command: 'node',
+        cwd: 'agent-bundle:path:workspace-root/cache',
+        env: { CACHE_DIR: 'agent-bundle:path:workspace-root/cache' },
+        id: 'mcp:workspace',
+        name: 'workspace',
+        provenance: { kind: 'config', sourcePath: '/workspace/agent-bundle.config.ts' },
+        targets: ['portable'],
+        transport: 'stdio',
+      },
+    ],
+  });
+
+  expect(plan.diagnostics.map((diagnostic) => diagnostic.code)).toEqual([
+    'portable.mcp.token.url',
+    'portable.mcp.token.headers',
+    'portable.mcp.token.headers',
+    'portable.mcp.token.workspace-root',
+    'portable.mcp.token.workspace-root',
+  ]);
+});
+
 it('validates the vendored schemas while planning manifests', () => {
   const invalidPlugin = createDefaultRegistry().get('portable').plan({
     ...plugin(),
@@ -167,6 +243,21 @@ it('validates the vendored schemas while planning manifests', () => {
       },
     ],
   });
+  const bothInvalid = createDefaultRegistry().get('portable').plan({
+    ...plugin(),
+    metadata: { ...plugin().metadata, name: 'Portable Plugin' },
+    mcpServers: [
+      {
+        command: 'node',
+        cwd: 'not-portable-relative',
+        id: 'mcp:both-invalid',
+        name: 'both-invalid',
+        provenance: { kind: 'config', sourcePath: '/workspace/agent-bundle.config.ts' },
+        targets: ['portable'],
+        transport: 'stdio',
+      },
+    ],
+  });
 
   expect(invalidPlugin.diagnostics.map((diagnostic) => diagnostic.code)).toEqual([
     'portable.schema.plugin',
@@ -175,6 +266,10 @@ it('validates the vendored schemas while planning manifests', () => {
     'portable.schema.mcp',
   ]);
   expect(invalidMcp.entries.some((entry) => entry.relativePath === 'mcp.json')).toBe(false);
+  expect(bothInvalid.diagnostics.map((diagnostic) => diagnostic.code)).toEqual([
+    'portable.schema.plugin',
+    'portable.schema.mcp',
+  ]);
 });
 
 it('rejects duplicate adapters without exposing mutable registry snapshots', () => {
