@@ -26,6 +26,11 @@ export interface ForegroundServerCloseFailure {
   readonly resource: 'coordinator' | 'server';
 }
 
+export interface ForegroundServerStartFailure {
+  readonly error: unknown;
+  readonly resource: 'cleanup' | 'start';
+}
+
 /** Reports all releases that failed after every foreground resource was asked to close. */
 export class ForegroundServerCloseError extends Error {
   readonly failures: readonly ForegroundServerCloseFailure[];
@@ -33,6 +38,17 @@ export class ForegroundServerCloseError extends Error {
   constructor(failures: readonly ForegroundServerCloseFailure[]) {
     super('Foreground server could not close every resource.');
     this.name = 'ForegroundServerCloseError';
+    this.failures = Object.freeze([...failures]);
+  }
+}
+
+/** Preserves a failed startup and every release failure needed to unwind it. */
+export class ForegroundServerStartError extends Error {
+  readonly failures: readonly ForegroundServerStartFailure[];
+
+  constructor(failures: readonly ForegroundServerStartFailure[]) {
+    super('Foreground server could not start cleanly.');
+    this.name = 'ForegroundServerStartError';
     this.failures = Object.freeze([...failures]);
   }
 }
@@ -104,19 +120,28 @@ const singleHeader = (value: string | readonly string[] | undefined): string | u
 
 const readBody = async (request: IncomingMessage): Promise<string> => new Promise((resolvePromise, rejectPromise) => {
   let size = 0;
+  let tooLarge = false;
   const chunks: Buffer[] = [];
   request.on('data', (chunk: Buffer) => {
     size += chunk.length;
     if (size > bodyLimit) {
-      rejectPromise(requestError(diagnostic('AB8001', 'Request body must be valid JSON.', 400)));
-      request.destroy();
+      tooLarge = true;
       return;
     }
-    chunks.push(chunk);
+    if (!tooLarge) chunks.push(chunk);
   });
-  request.once('end', () => resolvePromise(Buffer.concat(chunks).toString('utf8')));
+  request.once('end', () => {
+    if (tooLarge) {
+      rejectPromise(requestError(diagnostic('AB8010', 'Request body exceeds 64 KiB.', 413)));
+      return;
+    }
+    resolvePromise(Buffer.concat(chunks).toString('utf8'));
+  });
   request.once('error', rejectPromise);
 });
+
+const isJsonRequest = (request: IncomingMessage): boolean =>
+  singleHeader(request.headers['content-type'])?.split(';', 1)[0]?.trim().toLowerCase() === 'application/json';
 
 const decodedAssetPath = (requestTarget: string | undefined): string => {
   const pathname = requestTarget?.split(/[?#]/u, 1)[0];
@@ -192,8 +217,26 @@ const afterSequence = (request: IncomingMessage, latestSequence: number): number
 };
 
 const closeServer = (server: Server): Promise<void> => new Promise((resolvePromise, rejectPromise) => {
-  server.close((error) => error === undefined ? resolvePromise() : rejectPromise(error));
+  server.close((error) => error === undefined || error.code === 'ERR_SERVER_NOT_RUNNING'
+    ? resolvePromise()
+    : rejectPromise(error));
 });
+
+const closedError = (): Error => new Error('Foreground server is closed.');
+
+const requestHostMatches = (request: IncomingMessage, origin: string): boolean => {
+  const host = singleHeader(request.headers.host);
+  if (host === undefined) return false;
+  try {
+    const requested = new URL(`http://${host}`);
+    const expected = new URL(origin);
+    return requested.username.length === 0 && requested.password.length === 0 &&
+      requested.pathname === '/' && requested.search.length === 0 && requested.hash.length === 0 &&
+      requested.hostname === expected.hostname && requested.port === expected.port;
+  } catch {
+    return false;
+  }
+};
 
 /**
  * A foreground-only HTTP transport. It starts no executable selected by the
@@ -210,7 +253,9 @@ export class ForegroundServer {
   readonly #sockets = new Set<Socket>();
   readonly #streamSubscriptions = new Set<ProjectEventSubscription>();
   #closePromise: Promise<void> | undefined;
-  #listening = false;
+  #closing = false;
+  #listenStarted = false;
+  #releasePromise: Promise<readonly ForegroundServerCloseFailure[]> | undefined;
   #startPromise: Promise<void> | undefined;
   #url: string | undefined;
 
@@ -257,12 +302,14 @@ export class ForegroundServer {
 
   async start(): Promise<void> {
     if (this.#startPromise !== undefined) return this.#startPromise;
+    if (this.#closing) throw closedError();
     this.#startPromise = this.#start();
     return this.#startPromise;
   }
 
   close(): Promise<void> {
     if (this.#closePromise !== undefined) return this.#closePromise;
+    this.#closing = true;
     this.#closePromise = this.#close();
     return this.#closePromise;
   }
@@ -270,6 +317,7 @@ export class ForegroundServer {
   async #start(): Promise<void> {
     try {
       await this.#coordinator.start();
+      this.#assertOpen();
       await new Promise<void>((resolvePromise, rejectPromise) => {
         const fail = (error: Error) => {
           this.#server.off('listening', succeed);
@@ -281,38 +329,64 @@ export class ForegroundServer {
         };
         this.#server.once('error', fail);
         this.#server.once('listening', succeed);
+        this.#listenStarted = true;
         this.#server.listen({ host: this.#host, port: this.#port });
       });
+      this.#assertOpen();
       const address = this.#server.address();
       if (address === null || typeof address === 'string') {
         throw new Error('Foreground server did not report a TCP address.');
       }
-      this.#listening = true;
       this.#url = `http://${addressToHost(address)}:${address.port}`;
     } catch (error) {
-      await Promise.allSettled([this.close()]);
+      if (this.#closePromise !== undefined) throw error;
+      this.#closing = true;
+      const cleanupFailures = await this.#releaseResources();
+      if (cleanupFailures.length > 0) {
+        throw new ForegroundServerStartError([
+          Object.freeze({ error, resource: 'start' }),
+          Object.freeze({ error: new ForegroundServerCloseError(cleanupFailures), resource: 'cleanup' }),
+        ]);
+      }
       throw error;
     }
   }
 
+  #assertOpen(): void {
+    if (this.#closing) throw closedError();
+  }
+
   async #close(): Promise<void> {
-    const releaseServer = this.#listening
+    const startup = this.#startPromise;
+    const failures = await this.#releaseResources();
+    await startup?.catch(() => undefined);
+    if (failures.length > 0) throw new ForegroundServerCloseError(failures);
+  }
+
+  #releaseResources(): Promise<readonly ForegroundServerCloseFailure[]> {
+    if (this.#releasePromise !== undefined) return this.#releasePromise;
+    const releaseServer = this.#listenStarted
       ? (() => {
-          this.#listening = false;
+          this.#listenStarted = false;
           for (const subscription of this.#streamSubscriptions) subscription.unsubscribe();
           this.#streamSubscriptions.clear();
           for (const socket of this.#sockets) socket.destroy();
           return closeServer(this.#server);
         })()
       : Promise.resolve();
-    const [server, coordinator] = await Promise.allSettled([releaseServer, this.#coordinator.close()]);
-    const failures: ForegroundServerCloseFailure[] = [];
-    if (server.status === 'rejected') failures.push(Object.freeze({ error: server.reason, resource: 'server' }));
-    if (coordinator.status === 'rejected') failures.push(Object.freeze({ error: coordinator.reason, resource: 'coordinator' }));
-    if (failures.length > 0) throw new ForegroundServerCloseError(failures);
+    this.#releasePromise = Promise.allSettled([releaseServer, this.#coordinator.close()]).then(([server, coordinator]) => {
+      const failures: ForegroundServerCloseFailure[] = [];
+      if (server.status === 'rejected') failures.push(Object.freeze({ error: server.reason, resource: 'server' }));
+      if (coordinator.status === 'rejected') failures.push(Object.freeze({ error: coordinator.reason, resource: 'coordinator' }));
+      return Object.freeze(failures);
+    });
+    return this.#releasePromise;
   }
 
   async #handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
+    if (!requestHostMatches(request, this.url)) {
+      throw requestError(diagnostic('AB8008', 'Request host is not this foreground server.', 400));
+    }
     const pathname = new URL(request.url ?? '/', this.url).pathname;
     const method = request.method ?? 'GET';
     if (pathname === '/api/project/status') {
@@ -327,6 +401,9 @@ export class ForegroundServer {
     if (pathname === '/api/project/rebuild') {
       if (method !== 'POST') return responseDiagnostic(response, diagnostic('AB8007', 'Route does not accept this method.', 405));
       this.#assertMutationSession(request);
+      if (!isJsonRequest(request)) {
+        return responseDiagnostic(response, diagnostic('AB8009', 'Request body must use application/json.', 415));
+      }
       await this.#coordinator.rebuild(manualInvalidation(await readBody(request), this.#now));
       return responseJson(response, { status: this.#coordinator.status() });
     }
@@ -361,17 +438,28 @@ export class ForegroundServer {
       'content-type': 'text/event-stream; charset=utf-8',
     });
     response.flushHeaders();
+    let backpressured = false;
+    let deliveryReady = false;
     const subscription = this.#eventHub.subscribe({ afterSequence: sequence }, (event) => {
-      if (!response.writableEnded && !response.destroyed) response.write(eventFrame(event));
+      if (!response.writableEnded && !response.destroyed && !response.write(eventFrame(event))) {
+        backpressured = true;
+        if (deliveryReady) closeSlowStream();
+        else response.destroy();
+      }
     });
-    this.#streamSubscriptions.add(subscription);
     const unsubscribe = () => {
       subscription.unsubscribe();
       this.#streamSubscriptions.delete(subscription);
     };
+    const closeSlowStream = () => {
+      unsubscribe();
+      response.destroy();
+    };
+    this.#streamSubscriptions.add(subscription);
+    deliveryReady = true;
     request.once('close', unsubscribe);
     response.once('close', unsubscribe);
-    if (request.destroyed || response.destroyed) subscription.unsubscribe();
+    if (backpressured || request.destroyed || response.destroyed) closeSlowStream();
   }
 
   async #serveAsset(request: IncomingMessage, response: ServerResponse, method: string): Promise<void> {

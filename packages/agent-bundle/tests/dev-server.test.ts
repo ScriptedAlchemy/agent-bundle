@@ -1,8 +1,9 @@
-import { get as httpGet } from 'node:http';
+import { createServer as createNodeServer, get as httpGet } from 'node:http';
 
 import { expect, it } from '@rstest/core';
 
 import {
+  ForegroundServer,
   ProjectEventHub,
   startForegroundServer,
   type Invalidation,
@@ -40,6 +41,32 @@ class RecordingCoordinator {
   }
 }
 
+class DelayedCoordinator extends RecordingCoordinator {
+  readonly #startGate: Promise<void>;
+
+  constructor(startGate: Promise<void>) {
+    super();
+    this.#startGate = startGate;
+  }
+
+  override async start(): Promise<void> {
+    this.startCalls += 1;
+    await this.#startGate;
+  }
+}
+
+class FailingStartCoordinator extends RecordingCoordinator {
+  override async close(): Promise<void> {
+    this.closeCalls += 1;
+    throw new Error('cleanup failure');
+  }
+
+  override async start(): Promise<void> {
+    this.startCalls += 1;
+    throw new Error('startup failure');
+  }
+}
+
 const readReplay = (url: string, lastEventId: string): Promise<string> => new Promise((resolvePromise, rejectPromise) => {
   const request = httpGet(`${url}/api/project/events`, { headers: { 'last-event-id': lastEventId } }, (response) => {
     let received = '';
@@ -56,10 +83,14 @@ const readReplay = (url: string, lastEventId: string): Promise<string> => new Pr
   request.on('error', rejectPromise);
 });
 
-const readRaw = (url: string, path: string): Promise<Readonly<{ readonly body: string; readonly status: number }>> => {
+const readRaw = (
+  url: string,
+  path: string,
+  headers?: Readonly<Record<string, string>>,
+): Promise<Readonly<{ readonly body: string; readonly status: number }>> => {
   const address = new URL(url);
   return new Promise((resolvePromise, rejectPromise) => {
-    const request = httpGet({ host: address.hostname, path, port: address.port }, (response) => {
+    const request = httpGet({ headers, host: address.hostname, path, port: address.port }, (response) => {
       let body = '';
       response.setEncoding('utf8');
       response.on('data', (chunk: string) => {
@@ -70,6 +101,14 @@ const readRaw = (url: string, path: string): Promise<Readonly<{ readonly body: s
     });
     request.once('error', rejectPromise);
   });
+};
+
+const eventually = async (predicate: () => boolean, milliseconds: number): Promise<void> => {
+  const deadline = Date.now() + milliseconds;
+  while (!predicate()) {
+    if (Date.now() >= deadline) throw new Error(`Timed out after ${milliseconds}ms.`);
+    await new Promise<void>((resolvePromise) => setTimeout(resolvePromise, 5));
+  }
 };
 
 const openLiveStream = (url: string): Readonly<{
@@ -444,6 +483,141 @@ it('closes the HTTP server and coordinator once while retaining both release fai
   });
   await expect(server.close()).rejects.toMatchObject({
     failures: [expect.objectContaining({ resource: 'coordinator' })],
+  });
+  expect(coordinator.closeCalls).toBe(1);
+});
+
+it('never discloses a session token when Host does not identify this bound server', async () => {
+  const server = await startForegroundServer({
+    coordinator: new RecordingCoordinator(),
+    eventHub: new ProjectEventHub(),
+    port: 0,
+    sessionToken: 'test-session-token',
+  });
+
+  try {
+    const spoofed = await readRaw(server.url, '/api/project/session', {
+      host: 'attacker.example',
+      'sec-fetch-site': 'same-origin',
+    });
+    expect(spoofed.status).toBe(400);
+    expect(JSON.parse(spoofed.body)).toEqual({
+      diagnostic: { code: 'AB8008', message: 'Request host is not this foreground server.' },
+    });
+    expect(spoofed.body).not.toContain('test-session-token');
+
+    const sameServer = await readRaw(server.url, '/api/project/session', {
+      host: new URL(server.url).host,
+      'sec-fetch-site': 'same-origin',
+    });
+    expect(sameServer.status).toBe(200);
+    expect(JSON.parse(sameServer.body)).toEqual({ origin: server.url, token: 'test-session-token' });
+  } finally {
+    await server.close();
+  }
+});
+
+it('rejects non-JSON and over-limit rebuild bodies with stable drained diagnostics', async () => {
+  const coordinator = new RecordingCoordinator();
+  const server = await startForegroundServer({
+    coordinator,
+    eventHub: new ProjectEventHub(),
+    port: 0,
+    sessionToken: 'test-session-token',
+  });
+  const headers = {
+    origin: server.url,
+    'x-agent-bundle-session': server.sessionToken,
+  };
+
+  try {
+    const plain = await fetch(`${server.url}/api/project/rebuild`, {
+      body: '{}',
+      headers: { ...headers, 'content-type': 'text/plain' },
+      method: 'POST',
+    });
+    expect(plain.status).toBe(415);
+    await expect(plain.json()).resolves.toEqual({
+      diagnostic: { code: 'AB8009', message: 'Request body must use application/json.' },
+    });
+
+    const tooLarge = await fetch(`${server.url}/api/project/rebuild`, {
+      body: JSON.stringify({ paths: ['x'.repeat(64 * 1024)] }),
+      headers: { ...headers, 'content-type': 'application/json; charset=utf-8' },
+      method: 'POST',
+    });
+    const body = await tooLarge.text();
+    expect(tooLarge.status).toBe(413);
+    expect(JSON.parse(body)).toEqual({
+      diagnostic: { code: 'AB8010', message: 'Request body exceeds 64 KiB.' },
+    });
+    expect(body).not.toContain('Error:');
+    expect(coordinator.invalidations).toEqual([]);
+  } finally {
+    await server.close();
+  }
+});
+
+it('does not bind after close races a delayed startup', async () => {
+  const blocker = createNodeServer();
+  await new Promise<void>((resolvePromise) => blocker.listen({ host: '127.0.0.1', port: 0 }, resolvePromise));
+  const blockerAddress = blocker.address();
+  if (blockerAddress === null || typeof blockerAddress === 'string') throw new Error('Expected TCP blocker address.');
+  let releaseStart: () => void = () => undefined;
+  const startGate = new Promise<void>((resolvePromise) => {
+    releaseStart = resolvePromise;
+  });
+  const coordinator = new DelayedCoordinator(startGate);
+  const server = new ForegroundServer({ coordinator, eventHub: new ProjectEventHub(), port: blockerAddress.port });
+
+  try {
+    const starting = server.start();
+    await eventually(() => coordinator.startCalls === 1, 250);
+    const closing = server.close();
+    releaseStart();
+
+    await expect(starting).rejects.toThrow('Foreground server is closed.');
+    await expect(closing).resolves.toBeUndefined();
+    expect(coordinator.closeCalls).toBe(1);
+    expect(() => server.url).toThrow('Foreground server has not started.');
+  } finally {
+    await new Promise<void>((resolvePromise, rejectPromise) => blocker.close((error) => error === undefined ? resolvePromise() : rejectPromise(error)));
+  }
+});
+
+it('closes and releases a slow SSE client after write backpressure', async () => {
+  const eventHub = new ProjectEventHub({ now: () => new Date('2026-08-14T12:00:00.000Z') });
+  const server = await startForegroundServer({ coordinator: new RecordingCoordinator(), eventHub, port: 0 });
+  const stream = openLiveStream(server.url);
+
+  try {
+    await expect(within(stream.opened, 250)).resolves.toBeUndefined();
+    stream.pause();
+    eventHub.publish({
+      payload: {
+        occurredAt: '2026-08-14T12:00:00.000Z',
+        paths: ['slow.ts', 'x'.repeat(128 * 1024)],
+        reason: 'source-change',
+      },
+      type: 'invalidation',
+    });
+
+    await expect(eventually(() => eventHub.subscriptionCount === 0, 250)).resolves.toBeUndefined();
+  } finally {
+    stream.close();
+    await server.close();
+  }
+});
+
+it('retains both startup and cleanup failures structurally', async () => {
+  const coordinator = new FailingStartCoordinator();
+  const server = new ForegroundServer({ coordinator, eventHub: new ProjectEventHub(), port: 0 });
+
+  await expect(server.start()).rejects.toMatchObject({
+    failures: [
+      expect.objectContaining({ resource: 'start' }),
+      expect.objectContaining({ resource: 'cleanup' }),
+    ],
   });
   expect(coordinator.closeCalls).toBe(1);
 });

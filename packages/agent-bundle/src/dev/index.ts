@@ -41,11 +41,13 @@ export {
   ForegroundServer,
   ForegroundServerCloseError,
   ForegroundServerError,
+  ForegroundServerStartError,
   startForegroundServer,
   type ForegroundCoordinator,
   type ForegroundServerCloseFailure,
   type ForegroundServerErrorCode,
   type ForegroundServerOptions,
+  type ForegroundServerStartFailure,
   type WorkbenchAsset,
   type WorkbenchAssetSource,
 } from './foreground-server.ts';
