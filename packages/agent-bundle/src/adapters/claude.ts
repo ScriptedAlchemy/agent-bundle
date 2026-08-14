@@ -1,4 +1,5 @@
 import { Ajv2020, type ErrorObject } from 'ajv/dist/2020.js';
+import addFormats from 'ajv-formats';
 
 import { stableJson } from '../core/digest.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
@@ -10,7 +11,9 @@ import pluginSchema from './schemas/claude/plugin.schema.json' with { type: 'jso
 import type { TargetAdapter, TargetArtifactEntry, TargetArtifactPlan } from './types.ts';
 
 const claudeName = 'claude';
-const validator = new Ajv2020({ allErrors: true, strict: false, validateFormats: false });
+const installFormats = addFormats as unknown as (target: Ajv2020) => void;
+const validator = new Ajv2020({ allErrors: true, strict: false });
+installFormats(validator);
 const validatePlugin = validator.compile(pluginSchema);
 const validateMcp = validator.compile(mcpSchema);
 const validateMarketplace = validator.compile(marketplaceSchema);
@@ -46,8 +49,11 @@ const expandClaudeToken = (value: string): string => value
   .replaceAll(pathTokens.pluginData, '${CLAUDE_PLUGIN_DATA}')
   .replaceAll(pathTokens.workspaceRoot, '${CLAUDE_PROJECT_DIR}');
 
+const hasPathToken = (value: string): boolean =>
+  value.includes(pathTokens.pluginRoot) || value.includes(pathTokens.pluginData) || value.includes(pathTokens.workspaceRoot);
+
 const headerKeyDiagnostic = (key: string): Diagnostic | undefined =>
-  key.includes(pathTokens.pluginRoot) || key.includes(pathTokens.pluginData) || key.includes(pathTokens.workspaceRoot)
+  hasPathToken(key)
     ? errorDiagnostic('claude.mcp.token.headers.key', `Claude MCP header key "${key}" cannot use a path token.`)
     : undefined;
 
@@ -62,7 +68,16 @@ const planMcpServer = (
     }
     const env = server.env === undefined
       ? undefined
-      : Object.fromEntries(Object.entries(server.env).map(([key, value]) => [key, expandClaudeToken(value)]));
+      : Object.fromEntries(Object.entries(server.env).map(([key, value]) => {
+          if (hasPathToken(key)) {
+            diagnostics.push(errorDiagnostic(
+              'claude.mcp.token.env.key',
+              `Claude MCP environment key "${key}" cannot use a path token.`,
+            ));
+          }
+          return [key, expandClaudeToken(value)];
+        }));
+    if (diagnostics.length > 0) return { diagnostics };
     return {
       diagnostics,
       value: {
@@ -118,6 +133,7 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
   diagnostics.push(...schemaDiagnostics('plugin', validatePlugin(plugin), validatePlugin.errors));
 
   const marketplace = model.marketplace !== true ? undefined : {
+    description: model.metadata.description ?? model.metadata.name,
     name: `${model.metadata.name}-marketplace`,
     owner: { name: model.metadata.name },
     plugins: [{

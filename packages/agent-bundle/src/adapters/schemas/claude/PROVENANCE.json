@@ -4,8 +4,8 @@
   "schemaSource": "https://docs.anthropic.com/en/docs/claude-code/plugins",
   "schemas": {
     "marketplace.schema.json": {
-      "bytes": 1138,
-      "sha256": "39cf26a7f641e2bcd62af3129ed79e85fda0624be2f2da165a19f2a0cea909b3",
+      "bytes": 1210,
+      "sha256": "eba6a3ab555d40926168adecf381f449d64f1b6a5635a53e67d730dd57d5faf7",
       "url": "https://docs.anthropic.com/en/docs/claude-code/plugins"
     },
     "mcp.schema.json": {

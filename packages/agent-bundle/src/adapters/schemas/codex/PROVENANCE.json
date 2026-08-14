@@ -4,8 +4,8 @@
   "schemaSource": "https://github.com/openai/codex/blob/main/codex-rs/skills/src/assets/samples/plugin-creator/references/plugin-json-spec.md",
   "schemas": {
     "marketplace.schema.json": {
-      "bytes": 1671,
-      "sha256": "1d43c5ed19de401fb7455c5912e4c21113f6e387aef4c28d2eca121f7554c4e8",
+      "bytes": 2013,
+      "sha256": "e0e32c3bcc418fb1175d2502ab66303aef9d54d4f9728baeb40877d4d5d80ed6",
       "url": "https://github.com/openai/codex/blob/main/codex-rs/skills/src/assets/samples/plugin-creator/references/plugin-json-spec.md"
     },
     "mcp.schema.json": {

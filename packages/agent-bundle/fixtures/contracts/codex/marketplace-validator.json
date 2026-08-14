@@ -1,0 +1,11 @@
+{
+  "interface": {
+    "required": [
+      "displayName",
+      "developerName",
+      "capabilities",
+      "defaultPrompt"
+    ]
+  },
+  "observedCliVersion": "0.147.0"
+}

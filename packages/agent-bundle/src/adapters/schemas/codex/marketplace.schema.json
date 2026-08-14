@@ -5,8 +5,13 @@
   "properties": {
     "interface": {
       "additionalProperties": false,
-      "properties": { "displayName": { "minLength": 1, "type": "string" } },
-      "required": ["displayName"],
+      "properties": {
+        "capabilities": { "items": { "minLength": 1, "type": "string" }, "type": "array" },
+        "defaultPrompt": { "items": { "minLength": 1, "type": "string" }, "maxItems": 3, "minItems": 1, "type": "array" },
+        "developerName": { "minLength": 1, "type": "string" },
+        "displayName": { "minLength": 1, "type": "string" }
+      },
+      "required": ["displayName", "developerName", "capabilities", "defaultPrompt"],
       "type": "object"
     },
     "name": { "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$", "type": "string" },

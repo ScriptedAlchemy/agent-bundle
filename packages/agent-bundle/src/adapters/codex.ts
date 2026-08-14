@@ -1,4 +1,6 @@
 import { Ajv2020, type ErrorObject } from 'ajv/dist/2020.js';
+import addFormats from 'ajv-formats';
+import { posix } from 'node:path';
 
 import { stableJson } from '../core/digest.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
@@ -10,7 +12,9 @@ import pluginSchema from './schemas/codex/plugin.schema.json' with { type: 'json
 import type { TargetAdapter, TargetArtifactEntry, TargetArtifactPlan } from './types.ts';
 
 const codexName = 'codex';
-const validator = new Ajv2020({ allErrors: true, strict: false, validateFormats: false });
+const installFormats = addFormats as unknown as (target: Ajv2020) => void;
+const validator = new Ajv2020({ allErrors: true, strict: false });
+installFormats(validator);
 const validatePlugin = validator.compile(pluginSchema);
 const validateMcp = validator.compile(mcpSchema);
 const validateMarketplace = validator.compile(marketplaceSchema);
@@ -44,9 +48,13 @@ const sortedEntries = (entries: TargetArtifactEntry[]): readonly TargetArtifactE
 const hasLeadingPluginRoot = (value: string): boolean =>
   value === pathTokens.pluginRoot || value.startsWith(`${pathTokens.pluginRoot}/`);
 
-const relativePluginPath = (value: string): string => {
+const relativePluginPath = (value: string): string | undefined => {
   const rest = value.slice(pathTokens.pluginRoot.length).replace(/^\/+/, '');
-  return rest.length === 0 ? './' : `./${rest}`;
+  const pluginRoot = '/agent-bundle-plugin-root';
+  const resolved = posix.resolve(pluginRoot, rest);
+  if (resolved !== pluginRoot && !resolved.startsWith(`${pluginRoot}/`)) return undefined;
+  const relative = posix.relative(pluginRoot, resolved);
+  return relative.length === 0 ? './' : `./${relative}`;
 };
 
 const convertCodexValue = (
@@ -84,7 +92,14 @@ const convertCodexValue = (
     ));
     return undefined;
   }
-  return relativePluginPath(value);
+  const relative = relativePluginPath(value);
+  if (relative === undefined) {
+    diagnostics.push(errorDiagnostic(
+      `codex.mcp.token.plugin-root.escape.${location}`,
+      `Codex MCP ${location} escapes the plugin-root cwd after canonical path resolution.`,
+    ));
+  }
+  return relative;
 };
 
 const planMcpServer = (
@@ -204,7 +219,15 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
   diagnostics.push(...schemaDiagnostics('plugin', validatePlugin(plugin), validatePlugin.errors));
 
   const marketplace = model.marketplace !== true ? undefined : {
-    interface: { displayName: model.metadata.name },
+    interface: {
+      capabilities: [
+        ...(mcp === undefined ? [] : ['mcp']),
+        ...(model.skills.some((skill) => selectedForCodex(skill.targets)) ? ['skills'] : []),
+      ],
+      defaultPrompt: [`Help me use ${model.metadata.name}.`],
+      developerName: model.metadata.name,
+      displayName: model.metadata.name,
+    },
     name: `${model.metadata.name}-marketplace`,
     plugins: [{
       category: 'Productivity',
