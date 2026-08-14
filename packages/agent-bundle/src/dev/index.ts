@@ -8,6 +8,15 @@ export {
   type SucceededArtifactEpochResult,
 } from './artifact-service.ts';
 export {
+  DevCoordinator,
+  type AffectedFileDiagnostics,
+  type ArtifactBuilder,
+  type DevCoordinatorOptions,
+  type DevLockHandle,
+  type DevSession,
+  type ProjectPreparer,
+} from './coordinator.ts';
+export {
   createProjectEventHub,
   ProjectEventHub,
   ProjectEventHubError,
