@@ -211,14 +211,14 @@ const jsonBody = async (request: IncomingMessage): Promise<JsonObject> => {
     if (isRequestDiagnostic(error)) throw error;
     throw requestError(diagnostic('AB8001', 'Request body must be valid JSON.', 400));
   }
-  if (!isRecord(parsed)) invalidShape();
+  if (!isRecord(parsed)) return invalidShape();
   return parsed;
 };
 
 const createRequest = (value: JsonObject): { readonly epochId: string; readonly serverName: string; readonly target: string } => {
   if (!hasOnly(value, ['epochId', 'serverName', 'target'])) invalidShape();
   const { epochId, serverName, target } = value;
-  if (!nonemptyString(epochId) || !nonemptyString(serverName) || !nonemptyString(target)) invalidShape();
+  if (!nonemptyString(epochId) || !nonemptyString(serverName) || !nonemptyString(target)) return invalidShape();
   if (target !== 'portable' && target !== 'codex' && target !== 'claude') invalidShape();
   return Object.freeze({ epochId, serverName, target });
 };
@@ -241,8 +241,8 @@ const operationRequest = (value: JsonObject): Operation => {
     return Object.freeze({ operation });
   }
   if (operation === 'prompts/get') {
-    if (!hasOnly(value, ['arguments', 'name', 'operation']) || !nonemptyString(value.name)) invalidShape();
-    if (value.arguments !== undefined && !stringRecord(value.arguments)) invalidShape();
+    if (!hasOnly(value, ['arguments', 'name', 'operation']) || !nonemptyString(value.name)) return invalidShape();
+    if (value.arguments !== undefined && !stringRecord(value.arguments)) return invalidShape();
     return Object.freeze({
       ...(value.arguments === undefined ? {} : { arguments: value.arguments }),
       name: value.name,
@@ -250,14 +250,14 @@ const operationRequest = (value: JsonObject): Operation => {
     });
   }
   if (operation === 'resources/read') {
-    if (!hasOnly(value, ['operation', 'uri']) || !nonemptyString(value.uri)) invalidShape();
+    if (!hasOnly(value, ['operation', 'uri']) || !nonemptyString(value.uri)) return invalidShape();
     return Object.freeze({ operation, uri: value.uri });
   }
   if (operation === 'tools/call') {
     if (!hasOnly(value, ['arguments', 'name', 'operation', 'requestId']) || !nonemptyString(value.name) || !jsonRecord(value.arguments)) {
-      invalidShape();
+      return invalidShape();
     }
-    if (value.requestId !== undefined && !nonemptyString(value.requestId)) invalidShape();
+    if (value.requestId !== undefined && !nonemptyString(value.requestId)) return invalidShape();
     return Object.freeze({
       arguments: value.arguments,
       name: value.name,
@@ -404,7 +404,7 @@ export class McpSessionRoutes {
     if (parsed.kind === 'cancel') {
       if (method !== 'POST') return responseDiagnostic(response, diagnostic('AB8007', 'Route does not accept this method.', 405));
       const body = await jsonBody(request);
-      if (!hasOnly(body, ['requestId']) || !nonemptyString(body.requestId)) invalidShape();
+      if (!hasOnly(body, ['requestId']) || !nonemptyString(body.requestId)) return invalidShape();
       return responseJson(response, { cancelled: session.cancel(body.requestId) });
     }
     try {
@@ -434,6 +434,7 @@ export class McpSessionRoutes {
       return session.getPrompt({ ...(operation.arguments === undefined ? {} : { arguments: operation.arguments }), name: operation.name });
     }
     if (operation.operation === 'resources/read') return session.readResource({ uri: operation.uri });
+    if (operation.operation !== 'tools/call') return invalidShape();
     return session.callTool({
       arguments: operation.arguments,
       name: operation.name,

@@ -8,6 +8,14 @@ import {
   type McpSessionRouteService,
   type McpSessionRouteSession,
 } from '../src/dev/mcp-session-routes.ts';
+import type {
+  McpSessionConnectionState,
+  McpSessionInspectorConfig,
+  McpSessionReplayOverflow,
+  McpSessionTraceListener,
+  McpSessionTraceMessage,
+  McpSessionTraceReplay,
+} from '../src/dev/mcp-session-service.ts';
 
 interface StartedRoutes {
   readonly close: () => Promise<void>;
@@ -64,9 +72,9 @@ class RecordingSession implements McpSessionRouteSession {
   readonly connection = Object.freeze({ capabilities: { tools: {} }, protocolEra: 'modern' as const, protocolVersion: '2025-11-25', server: { name: 'fixture', version: '1.0.0' } });
   readonly id = 'session-a';
   readonly calls: unknown[] = [];
-  readonly #listeners = new Set<(entry: unknown) => void>();
-  readonly #replay: unknown[] = [];
-  #traceOverflow: unknown;
+  readonly #listeners = new Set<McpSessionTraceListener>();
+  readonly #replay: McpSessionTraceMessage[] = [];
+  #traceOverflow: McpSessionReplayOverflow | undefined;
   #sequence = 0;
 
   callTool(options: { readonly arguments: Record<string, unknown>; readonly name: string; readonly requestId?: string }): Promise<unknown> {
@@ -84,7 +92,7 @@ class RecordingSession implements McpSessionRouteSession {
     return Promise.resolve({ messages: [] });
   }
 
-  inspectorConfig(): unknown {
+  inspectorConfig(): McpSessionInspectorConfig {
     return { launch: { args: ['server.mjs'], command: 'node', env: {}, kind: 'stdio' }, origin: 'artifact' };
   }
 
@@ -109,12 +117,12 @@ class RecordingSession implements McpSessionRouteSession {
     return Promise.resolve({ contents: [{ text: 'sunny', uri: options.uri }] });
   }
 
-  restart(): Promise<unknown> {
+  restart(): Promise<McpSessionConnectionState> {
     this.calls.push({ kind: 'restart' });
     return Promise.resolve(this.connection);
   }
 
-  trace(afterSequence = 0): { readonly entries: readonly unknown[]; readonly overflow?: unknown } {
+  trace(afterSequence = 0): McpSessionTraceReplay {
     if (!Number.isSafeInteger(afterSequence) || afterSequence < 0) {
       throw new RangeError('MCP session trace cursor must be a nonnegative safe integer.');
     }
@@ -126,7 +134,7 @@ class RecordingSession implements McpSessionRouteSession {
 
   subscribeTrace(
     options: { readonly afterSequence?: number },
-    listener: (entry: unknown) => void,
+    listener: McpSessionTraceListener,
   ): { readonly unsubscribe: () => void } {
     this.trace(options.afterSequence);
     for (const entry of this.#replay) listener(entry);
@@ -134,17 +142,17 @@ class RecordingSession implements McpSessionRouteSession {
     return Object.freeze({ unsubscribe: () => this.#listeners.delete(listener) });
   }
 
-  publish(entry: unknown): void {
+  publish(entry: McpSessionTraceMessage): void {
     this.#sequence += 1;
     for (const listener of this.#listeners) listener(entry);
   }
 
-  queueReplay(entry: unknown): void {
+  queueReplay(entry: McpSessionTraceMessage): void {
     this.#sequence += 1;
     this.#replay.push(entry);
   }
 
-  setTraceOverflow(overflow: unknown): void {
+  setTraceOverflow(overflow: McpSessionReplayOverflow): void {
     this.#traceOverflow = overflow;
   }
 
