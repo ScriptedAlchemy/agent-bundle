@@ -19,6 +19,10 @@
 - Use `renderToReadableStream` from `react-server-dom-rspack/server.node` and `createFromReadableStream` from `react-server-dom-rspack/client.node`; do not substitute JSON for the Flight boundary.
 - Treat the file-backed kernel as authoritative; do not rely on module cache, process globals, or React client state for cross-process data.
 - Write only native hook JSON to the hook command's stdout and only Flight bytes to the RSC worker's stdout; send diagnostics to stderr.
+- Preserve Node dynamic imports and package their real outputs. The `rsc` environment must emit one
+  `dist/runtime` artifact root with an explicit `jsAsync` chunk lane and `runtime-assets.json`;
+  native packaging must copy and verify every declared asset rather than forcing eager imports or
+  selecting only named entry directories.
 - Support MCP text, image, audio, resource-link, embedded-resource, `structuredContent`, and `isError` lowering.
 - Link only `render_edit_timeline` to `ui://rsc-agent-runtime/edit-timeline-v1.html`, using
   `_meta.ui.resourceUri` as the primary field and `_meta["openai/outputTemplate"]` as the ChatGPT
@@ -620,6 +624,12 @@ examples/rsc-agent-runtime/
   paths plus `.agents/plugins/marketplace.json`. Assert Claude strict validation targets the separate
   Claude artifact, not the example root.
 
+  Parse the source `dist/runtime/runtime-assets.json`. Assert each materialized host artifact has an
+  exact `runtime/` copy of every listed initial, async, and source-map asset, including at least one
+  `runtime/chunks/*.js` file, plus `app/edit-timeline-v1.html`. Copy one materialized plugin to a
+  fresh temporary directory without the example's source `dist`, launch its stdio MCP executable,
+  and prove the declared async chunk resolves there.
+
   Assert the supplemental-runtime boundary: `packages/agent-bundle/package.json` has no React,
   `react-server-dom-rspack`, or `rsbuild-plugin-rsc` runtime/peer/optional dependency, and no source
   under `packages/agent-bundle/src` imports from this example or those RSC packages.
@@ -675,10 +685,11 @@ examples/rsc-agent-runtime/
   correct `--host`; Claude uses `${CLAUDE_PLUGIN_ROOT}`, while Codex hooks use `${PLUGIN_ROOT}`.
 
   Add `package-hosts.mjs`. It must delete only the exact `dist/plugins` directory, recreate each
-  plugin root, copy the appropriate template, copy only built `hook`, `rsc`, `mcp`, `app`, and
-  manifest outputs beneath `runtime/`, and create Codex's conventional `skills/` directory. It must
-  never recursively copy `dist/plugins` into itself. Add `package:hosts` and run it after
-  `rsbuild build` in the example's `build` script.
+  plugin root, copy the appropriate template, copy the complete `dist/runtime` artifact root to
+  `<plugin>/runtime`, copy `dist/app` to `<plugin>/app`, and create Codex's conventional `skills/`
+  directory. It must verify every normalized `runtime-assets.json` path stays within and exists in
+  the copied runtime root. It must never recursively copy `dist/plugins` into itself. Add
+  `package:hosts` and run it after `rsbuild build` in the example's `build` script.
 
 - [ ] **Step 4: Implement the host-extension lanes and progressive fallbacks**
 
@@ -799,6 +810,12 @@ examples/rsc-agent-runtime/
     ChatGPT UI host;
   - an extension-author guide for descriptor/resource/result `_meta` and client adapters, including
     the rule that fallback behavior remains complete and vendor APIs are feature-detected;
+  - the relationship to Agent Bundle's standard non-RSC `mcp.servers.<server>.apps` compiler: use
+    that self-contained HTML/virtual-resource lane for ordinary MCP Apps, and opt into this paired
+    runtime only when hooks or MCP tool results need RSC Flight/shared runtime behavior;
+  - the security boundary for Streamable HTTP: Host/Origin allowlists mitigate rebinding and cross-
+    origin requests but do not authenticate a public tunnel; production exposure still requires
+    the deployment's authentication and authorization layer;
   - source links for Rsbuild RSC, MCP Apps, OpenAI plugin UI, Claude MCP Apps cross-platform/design
     guidance, Codex hooks, and Claude hooks;
   - known limitations of JSONL storage and exact RSC package pins;
@@ -812,6 +829,7 @@ examples/rsc-agent-runtime/
   ```bash
   claude plugin validate --strict examples/rsc-agent-runtime/dist/plugins/claude
   npm run check -w @agent-bundle/rsc-agent-runtime-demo
+  npm test -- run packages/agent-bundle/tests/mcp.test.ts
   npm run capture:widget -w @agent-bundle/rsc-agent-runtime-demo -- --output /tmp/rsc-agent-runtime-widget.png
   npm run check
   ```
@@ -860,6 +878,10 @@ examples/rsc-agent-runtime/
 - [ ] Run root `npm run check`.
 - [ ] Confirm the published `agent-bundle` package has no dependency/import/configuration edge to the
       example or its React/RSC packages.
+- [ ] Confirm Agent Bundle's existing non-RSC MCP App compilation/resource test remains green and
+      the README distinguishes it from the optional paired RSC runtime.
+- [ ] Confirm both materialized native artifacts contain every initial and async asset declared by
+      `runtime/runtime-assets.json` and execute from an isolated copied directory.
 - [ ] Run `claude plugin validate --strict examples/rsc-agent-runtime/dist/plugins/claude`.
 - [ ] Run the stdio and Streamable HTTP integration tests with open-handle detection.
 - [ ] Run the widget capture at desktop and mobile widths and inspect both screenshots against the accepted concept.

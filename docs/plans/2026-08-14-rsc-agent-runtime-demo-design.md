@@ -194,7 +194,11 @@ sharing the exact Rspack-generated Flight manifest required by `client.node`.
 
 Only `src/flight/request-render.ts` preserves runtime `import.meta.url`, through a matched
 `module.rules[].parser = { importMeta: { url: false } }` override. Other modules retain Rspack's
-normal `import.meta` processing. The separate `app` environment uses Rsbuild's native
+normal `import.meta` processing. Node dynamic imports remain real split points: the `rsc`
+environment emits one `dist/runtime` artifact root, places asynchronous JavaScript under
+`dist/runtime/chunks`, and writes `runtime-assets.json` with each entry's initial and async assets.
+Packaging copies that artifact root as a unit rather than guessing that named entry files are the
+whole executable. The separate `app` environment uses Rsbuild's native
 `output.inlineScripts` and `output.inlineStyles` options to emit `edit-timeline-v1.html` and
 `standalone.html` as self-contained documents; no custom JavaScript/CSS concatenator is involved.
 
@@ -226,6 +230,12 @@ App Basics patterns. It uses `@modelcontextprotocol/ext-apps/react` to initializ
 MCP Apps JSON-RPC bridge, listens for tool results, and calls `recent_edits` from its Refresh button.
 That wrapper maps to the standard `ui/initialize`, `ui/notifications/tool-result`, and `tools/call`
 messages.
+
+Agent Bundle's ordinary, non-RSC MCP App lane remains the default for simpler views:
+`mcp.servers.<server>.apps` is normalized and validated, compiled to self-contained HTML, and
+injected into its owning server through `agent-bundle/mcp-apps`. This example does not replace or
+make that compiler depend on React Server Components. It adds an opt-in paired RSC build only for
+advanced hook and tool-result rendering while keeping the same static `ui://` resource contract.
 
 ## Portability and host-specific extensions
 
@@ -298,12 +308,14 @@ examples/rsc-agent-runtime/
 │   └── codex/{.agents,.codex-plugin,.mcp.json,hooks}/...
 ├── scripts/package-hosts.mjs
 └── dist/plugins/
-    ├── claude/{.claude-plugin,.mcp.json,hooks,runtime}/...
-    └── codex/{.agents,.codex-plugin,.mcp.json,hooks,skills,runtime}/...
+    ├── claude/{.claude-plugin,.mcp.json,hooks,runtime,app}/...
+    └── codex/{.agents,.codex-plugin,.mcp.json,hooks,skills,runtime,app}/...
 ```
 
-`runtime/` contains the built `hook`, `rsc`, `mcp`, and `app` outputs. Claude launches them through
-`${CLAUDE_PLUGIN_ROOT}`. Codex MCP uses a contained path relative to `cwd: "./"`, because native
+`runtime/` is an exact copy of the built Node artifact root, including `hook`, `rsc`, `mcp`,
+`chunks`, `runtime-assets.json`, and the runtime definition manifest. `app/` contains the
+self-contained MCP App documents. Claude launches the Node entries through `${CLAUDE_PLUGIN_ROOT}`.
+Codex MCP uses a contained path relative to `cwd: "./"`, because native
 Codex `.mcp.json` does not interpolate plugin/workspace placeholders; Codex hook commands use their
 native `${PLUGIN_ROOT}` token. The Codex artifact also contains the full required interface metadata,
 conventional `skills` path, and local marketplace manifest. Native evaluation always installs or
@@ -320,6 +332,8 @@ Automated validation must prove:
 - the generated manifest contains JSON schemas and no executable functions;
 - only the render tool links the UI resource;
 - the resource serves the built widget with the MCP Apps MIME type and CSP metadata;
+- the runtime manifest declares every initial and async JavaScript asset, and each copied native
+  package can resolve and execute its dynamic chunks after the source build directory is absent;
 - arbitrary serializable descriptor/resource/result metadata survives registration and lowering;
 - an explicit public MCP URL produces the documented Claude stable app domain, while the default
   resource has no unnecessary host domain;
@@ -338,6 +352,8 @@ separate claims.
 ## Boundaries
 
 - This is an example and architecture probe, not a new `agent-bundle` public API.
+- Agent Bundle's standard `mcp.servers.*.apps` compiler remains the non-RSC path for ordinary MCP
+  Apps; the example documents when the supplemental paired runtime is warranted.
 - The runtime is activated only by building/running the private example. `packages/agent-bundle`
   must not import the example or acquire React/RSC runtime, peer, or optional dependencies.
 - Existing non-RSC skills, MCP servers, evaluations, and plain hook flows remain the compatibility
