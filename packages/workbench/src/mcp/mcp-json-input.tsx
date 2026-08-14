@@ -218,18 +218,27 @@ const FormEditor = ({
       const fieldLabel = field.title ?? name;
       const current = value[name];
       const required = schema.required?.includes(name) ?? false;
+      const missing = required && (!Object.hasOwn(value, name) || current === undefined);
+      const errorId = `${fieldId}-error`;
+      const validation = {
+        'aria-describedby': missing ? errorId : undefined,
+        'aria-invalid': missing || undefined,
+        'aria-required': required || undefined,
+      };
+      const fieldError = missing ? <span id={errorId} role="alert">{fieldLabel} is required.</span> : undefined;
       const change = (next: unknown): void => onChange(applyFormEdit(value, name, next));
       const unset = !required && Object.hasOwn(value, name)
-        ? <button aria-label={`Unset ${fieldLabel}`} onClick={() => change(undefined)} type="button">Unset {fieldLabel}</button>
+        ? <button aria-label={`Unset ${fieldLabel}`} disabled={disabled} onClick={() => change(undefined)} type="button">Unset {fieldLabel}</button>
         : undefined;
 
       if (field.type === 'boolean') {
         return (
           <p key={name}>
-            <input checked={current === true} disabled={disabled} id={fieldId} onChange={(event) => change(event.currentTarget.checked)} required={required} type="checkbox" />
+            <input {...validation} checked={current === true} disabled={disabled} id={fieldId} onChange={(event) => change(event.currentTarget.checked)} type="checkbox" />
             <label htmlFor={fieldId}>{fieldLabel}</label>
             {unset}
             {field.description === undefined ? undefined : <small>{field.description}</small>}
+            {fieldError}
           </p>
         );
       }
@@ -239,11 +248,12 @@ const FormEditor = ({
         return (
           <p key={name}>
             <label htmlFor={fieldId}>{fieldLabel}</label>
-            <select disabled={disabled} id={fieldId} onChange={(event) => change(event.currentTarget.value === unsetValue ? undefined : event.currentTarget.value)} required={required} value={typeof current === 'string' ? current : unsetValue}>
+            <select {...validation} disabled={disabled} id={fieldId} onChange={(event) => change(event.currentTarget.value === unsetValue ? undefined : event.currentTarget.value)} value={typeof current === 'string' ? current : unsetValue}>
               <option disabled={required} value={unsetValue}>{required ? `Select ${fieldLabel}` : `Unset ${fieldLabel}`}</option>
               {field.enum.map((option) => <option key={option} value={option}>{option}</option>)}
             </select>
             {field.description === undefined ? undefined : <small>{field.description}</small>}
+            {fieldError}
           </p>
         );
       }
@@ -252,9 +262,10 @@ const FormEditor = ({
         return (
           <p key={name}>
             <label htmlFor={fieldId}>{fieldLabel}</label>
-            <input disabled={disabled} id={fieldId} maxLength={field.maxLength} minLength={field.minLength} onChange={(event) => change(event.currentTarget.value)} required={required} type="text" value={typeof current === 'string' ? current : ''} />
+            <input {...validation} disabled={disabled} id={fieldId} maxLength={field.maxLength} minLength={field.minLength} onChange={(event) => change(event.currentTarget.value)} type="text" value={typeof current === 'string' ? current : ''} />
             {unset}
             {field.description === undefined ? undefined : <small>{field.description}</small>}
+            {fieldError}
           </p>
         );
       }
@@ -263,6 +274,7 @@ const FormEditor = ({
         <p key={name}>
           <label htmlFor={fieldId}>{fieldLabel}</label>
           <input
+            {...validation}
             disabled={disabled}
             id={fieldId}
             max={field.maximum}
@@ -276,12 +288,12 @@ const FormEditor = ({
               if (!Number.isFinite(next) || (field.type === 'integer' && !Number.isInteger(next))) return;
               change(next);
             }}
-            required={required}
             step={field.type === 'integer' ? 1 : 'any'}
             type="number"
             value={typeof current === 'number' ? current : ''}
           />
           {field.description === undefined ? undefined : <small>{field.description}</small>}
+          {fieldError}
         </p>
       );
     })}

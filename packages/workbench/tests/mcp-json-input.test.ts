@@ -1,5 +1,6 @@
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
+import { chromium } from 'playwright';
 import { describe, expect, it } from '@rstest/core';
 
 import {
@@ -128,7 +129,8 @@ describe('MCP JSON input', () => {
     expect(markup).toContain('type="radio"');
     expect(markup).not.toContain('role="tab"');
     expect(markup).not.toContain('role="tabpanel"');
-    expect(markup).toContain('required=""');
+    expect(markup).toContain('aria-required="true"');
+    expect(markup).toContain('aria-invalid="true"');
     expect(markup).toContain('value=""');
     expect(markup).not.toContain('value="3"');
     expect(markup).toContain('Unset enabled');
@@ -136,5 +138,90 @@ describe('MCP JSON input', () => {
     expect(markup).toContain('Unset option');
     expect(markup).toContain('disabled=""');
     expect(markup).toContain('Call tool');
+  });
+
+  it('uses custom required presence validation and disables every mutation control in a browser', async () => {
+    const browser = await chromium.launch({ channel: 'chrome' });
+    const page = await browser.newPage();
+    try {
+      await page.setContent(renderToStaticMarkup(createElement(McpJsonInput, {
+        disabled: true,
+        id: 'disabled-input',
+        label: 'Disabled input',
+        onChange: () => undefined,
+        onSubmit: () => undefined,
+        schema: {
+          type: 'object',
+          properties: {
+            enabled: { type: 'boolean' },
+            name: { type: 'string' },
+            option: { enum: ['', 'named'], type: 'string' },
+          },
+        },
+        value: { enabled: false, name: '', option: '' },
+      })));
+
+      expect(await page.locator([
+        '#disabled-input-enabled',
+        '#disabled-input-name',
+        '#disabled-input-option',
+        'button[aria-label="Unset enabled"]',
+        'button[aria-label="Unset name"]',
+      ].join(', ')).evaluateAll((controls) => controls.map((control) => (control as HTMLButtonElement).disabled))).toEqual([true, true, true, true, true]);
+
+      await page.setContent(renderToStaticMarkup(createElement(McpJsonInput, {
+        id: 'required-input',
+        label: 'Required input',
+        onChange: () => undefined,
+        onSubmit: () => undefined,
+        schema: {
+          type: 'object',
+          properties: {
+            enabled: { type: 'boolean' },
+            name: { type: 'string' },
+            option: { enum: ['', 'named'], type: 'string' },
+          },
+          required: ['enabled', 'name', 'option'],
+        },
+        value: { enabled: false, name: '', option: '' },
+      })));
+
+      expect(await page.evaluate(() => ['enabled', 'name', 'option'].map((name) => {
+        const control = document.querySelector(`#required-input-${name}`) as HTMLInputElement;
+        return {
+          ariaInvalid: control.getAttribute('aria-invalid'),
+          ariaRequired: control.getAttribute('aria-required'),
+          nativeRequired: control.required,
+          valid: control.checkValidity(),
+        };
+      }))).toEqual([
+        { ariaInvalid: null, ariaRequired: 'true', nativeRequired: false, valid: true },
+        { ariaInvalid: null, ariaRequired: 'true', nativeRequired: false, valid: true },
+        { ariaInvalid: null, ariaRequired: 'true', nativeRequired: false, valid: true },
+      ]);
+      expect(await page.getByRole('button', { name: 'Call tool' }).isDisabled()).toBe(false);
+
+      await page.setContent(renderToStaticMarkup(createElement(McpJsonInput, {
+        id: 'missing-input',
+        label: 'Missing input',
+        onChange: () => undefined,
+        onSubmit: () => undefined,
+        schema: { type: 'object', properties: { count: { default: 3, type: 'number' } }, required: ['count'] },
+        value: {},
+      })));
+      expect(await page.evaluate(() => {
+        const input = document.querySelector('#missing-input-count') as HTMLInputElement;
+        return {
+          ariaInvalid: input.getAttribute('aria-invalid'),
+          ariaRequired: input.getAttribute('aria-required'),
+          nativeRequired: input.required,
+          valid: input.checkValidity(),
+        };
+      })).toEqual({ ariaInvalid: 'true', ariaRequired: 'true', nativeRequired: false, valid: true });
+      expect(await page.getByRole('alert').textContent()).toBe('count is required.');
+      expect(await page.getByRole('button', { name: 'Call tool' }).isDisabled()).toBe(true);
+    } finally {
+      await browser.close();
+    }
   });
 });

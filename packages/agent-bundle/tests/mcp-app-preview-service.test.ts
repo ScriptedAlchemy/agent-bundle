@@ -1,9 +1,16 @@
 import { expect, it } from '@rstest/core';
 
-import type { McpAppBinding, McpAppJsonValue } from '../src/dev/mcp-app-binding-service.ts';
+import {
+  McpAppBindingService,
+  type McpAppBinding,
+  type McpAppJsonValue,
+  type McpAppSessionAuthority,
+  type McpAppToolDefinition,
+} from '../src/dev/mcp-app-binding-service.ts';
 import {
   McpAppPreviewService,
   type McpAppPreviewBindingAuthority,
+  type McpAppPreviewToolAuthority,
 } from '../src/dev/mcp-app-preview-service.ts';
 
 const originalInput: McpAppJsonValue = { city: 'Paris' };
@@ -64,6 +71,14 @@ const resourceResponse = (mimeType = 'text/html;profile=mcp-app'): McpAppJsonVal
   }],
 });
 
+const deferred = <Value>() => {
+  let resolve: (value: Value) => void = () => undefined;
+  const promise = new Promise<Value>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+};
+
 const authorityFor = (options: {
   readonly closeBinding?: () => Promise<boolean>;
   readonly resource?: McpAppJsonValue;
@@ -74,18 +89,25 @@ const authorityFor = (options: {
   readResource: async () => options.resource ?? resourceResponse(),
 });
 
+const toolAuthority: McpAppPreviewToolAuthority = {
+  resolveTool: async () => binding.toolDefinition,
+};
+
 const serviceFor = (bindingAuthority: McpAppPreviewBindingAuthority, options: {
+  readonly closeTimeoutMs?: number;
   readonly host?: { readonly onMessage?: (event: unknown) => Promise<void> | void };
   readonly maxActionBytes?: number;
   readonly maxOutboundBytes?: number;
   readonly maxOutboundMessages?: number;
   readonly maxQueuedActions?: number;
+  readonly toolAuthority?: McpAppPreviewToolAuthority;
 } = {}) => new McpAppPreviewService({
   bindingAuthority,
   host: options.host,
   hostInfo: { name: 'agent-bundle', version: '0.1.0' },
   hostOrigin: 'http://127.0.0.1:43123',
   sandboxProxy: { origin: 'http://127.0.0.1:43124', relay: { maxMessageBytes: 1_024, maxQueuedMessages: 2 } },
+  toolAuthority,
   ...options,
 });
 
@@ -130,6 +152,7 @@ it('creates one canonical Apps preview from its leased binding resource', async 
     hostInfo: { name: 'agent-bundle', version: '0.1.0' },
     hostOrigin: 'http://127.0.0.1:43123',
     sandboxProxy: { origin: 'http://127.0.0.1:43124', relay: { maxMessageBytes: 1_024, maxQueuedMessages: 2 } },
+    toolAuthority,
   });
 
   const preview = await service.create({
@@ -148,7 +171,7 @@ it('creates one canonical Apps preview from its leased binding resource', async 
     previewProfile: 'portable',
     result: { content: [{ text: 'Sunny', type: 'text' }] },
     sessionId: 'session-weather',
-    toolName: 'show-weather',
+    tool: binding.toolDefinition,
   })]);
   expect(reads).toEqual([{ bindingId: 'binding-weather', uri: 'ui://weather/forecast.html' }]);
   expect(preview.binding).toBe(binding);
@@ -168,6 +191,97 @@ it('creates one canonical Apps preview from its leased binding resource', async 
     sandbox: 'allow-scripts allow-same-origin',
     targetOrigin: 'http://127.0.0.1:43124',
   });
+});
+
+it('composes with the real binding service using its canonical tool definition contract', async () => {
+  let lists = 0;
+  let releases = 0;
+  const sessionAuthority: McpAppSessionAuthority = {
+    async acquireAppLease(sessionId) {
+      expect(sessionId).toBe('session-weather');
+      return {
+        async release() {
+          releases += 1;
+        },
+        session: {
+          async callTool() {
+            return {};
+          },
+          identity: { epochId: 'epoch-weather', serverName: 'weather', sessionId: 'session-weather', target: 'portable' },
+          async listBridgeResources() {
+            return [{ appVisible: true, uri: 'ui://weather/forecast.html' }];
+          },
+          async listBridgeTools() {
+            lists += 1;
+            return [{ appVisible: true, definition: binding.toolDefinition, name: 'show-weather' }];
+          },
+          async readResource() {
+            return resourceResponse();
+          },
+        },
+        watchSessionClosed() {
+          return { closed: false, unsubscribe() {} };
+        },
+      };
+    },
+  };
+  const bindingService = new McpAppBindingService({ sessionAuthority });
+  const service = serviceFor(bindingService, { toolAuthority });
+
+  const preview = await createPreview(service);
+
+  expect(preview.binding.toolDefinition).toEqual(binding.toolDefinition);
+  expect(lists).toBe(1);
+  expect(await service.forceClose(preview.binding.id)).toBe(true);
+  expect(releases).toBe(1);
+});
+
+it('releases the real binding lease exactly once when a session closes during resource loading', async () => {
+  const load = deferred<McpAppJsonValue>();
+  const readStarted = deferred<void>();
+  let releaseCount = 0;
+  let closeSession: (() => Promise<void>) | undefined;
+  const sessionAuthority: McpAppSessionAuthority = {
+    async acquireAppLease() {
+      return {
+        async release() {
+          releaseCount += 1;
+        },
+        session: {
+          async callTool() {
+            return {};
+          },
+          identity: { epochId: 'epoch-weather', serverName: 'weather', sessionId: 'session-weather', target: 'portable' },
+          async listBridgeResources() {
+            return [{ appVisible: true, uri: 'ui://weather/forecast.html' }];
+          },
+          async listBridgeTools() {
+            return [{ appVisible: true, definition: binding.toolDefinition, name: 'show-weather' }];
+          },
+          async readResource() {
+            readStarted.resolve();
+            return load.promise;
+          },
+        },
+        watchSessionClosed(listener) {
+          closeSession = async () => {
+            await listener('session-closed');
+          };
+          return { closed: false, unsubscribe() {} };
+        },
+      };
+    },
+  };
+  const service = serviceFor(new McpAppBindingService({ sessionAuthority }), { toolAuthority });
+  const creating = createPreview(service);
+  await readStarted.promise;
+  if (closeSession === undefined) throw new Error('expected a session close listener');
+  await closeSession();
+  load.resolve(resourceResponse());
+
+  await expect(creating).rejects.toThrow('closed before completion');
+  expect(releaseCount).toBe(1);
+  expect(service.get(binding.id)).toBeUndefined();
 });
 
 it('keeps ordinary fallback usable when the canonical resource lacks the exact Apps MIME type', async () => {
@@ -253,6 +367,32 @@ it('removes a preview and rejects subsequent actions when its leased binding clo
   expect(await service.takeOutbound(binding.id)).toEqual([]);
 });
 
+it('does not publish a fallback when the leased binding closes during a resource read', async () => {
+  const load = deferred<McpAppJsonValue>();
+  const readStarted = deferred<void>();
+  let teardown: (() => void) | undefined;
+  const authority: McpAppPreviewBindingAuthority = {
+    callTool: async () => ({}),
+    closeBinding: async () => false,
+    createBinding: async (options) => {
+      teardown = () => void options.onTeardown?.({ binding, reason: 'session-closed' });
+      return binding;
+    },
+    readResource: async () => {
+      readStarted.resolve();
+      return load.promise;
+    },
+  };
+  const service = serviceFor(authority);
+  const creating = createPreview(service);
+  await readStarted.promise;
+  teardown?.();
+  load.resolve(resourceResponse());
+
+  await expect(creating).rejects.toThrow('closed before completion');
+  expect(service.get(binding.id)).toBeUndefined();
+});
+
 it('drains every preview and reports all release failures together', async () => {
   let closes = 0;
   const service = serviceFor(authorityFor({
@@ -263,7 +403,10 @@ it('drains every preview and reports all release failures together', async () =>
   }));
   await createPreview(service);
 
-  await expect(service.closeAll()).rejects.toThrow('MCP App preview shutdown failed.');
+  const firstClose = service.closeAll();
+  const secondClose = service.closeAll();
+  await expect(firstClose).rejects.toThrow('MCP App preview shutdown failed.');
+  await expect(secondClose).rejects.toThrow('MCP App preview shutdown failed.');
   expect(service.get(binding.id)).toBeUndefined();
   expect(closes).toBe(1);
 });
@@ -299,6 +442,67 @@ it('bounds queued App actions while preserving the active action', async () => {
   expect((await service.takeOutbound(binding.id)).map((outbound) => outbound.id)).toEqual(['message-active']);
 });
 
+it('force closes and releases a binding without waiting for a hung serialized action', async () => {
+  const message = deferred<void>();
+  let closes = 0;
+  const service = serviceFor(authorityFor({
+    closeBinding: async () => {
+      closes += 1;
+      return true;
+    },
+  }), {
+    host: { onMessage: () => message.promise },
+  });
+  await createPreview(service);
+  await service.receive(binding.id, initialize);
+  await service.takeOutbound(binding.id);
+  await service.receive(binding.id, initialized);
+  await service.takeOutbound(binding.id);
+  const active = service.receive(binding.id, {
+    id: 'message-hung',
+    jsonrpc: '2.0',
+    method: 'ui/message',
+    params: { content: [{ text: 'Wait', type: 'text' }], role: 'user' },
+  });
+  await Promise.resolve();
+
+  await expect(service.forceClose(binding.id)).resolves.toBe(true);
+  expect(closes).toBe(1);
+  expect(service.get(binding.id)).toBeUndefined();
+  message.resolve();
+  expect(await active).toBe(false);
+});
+
+it('closeAll releases a binding without waiting for a hung serialized action', async () => {
+  const message = deferred<void>();
+  let closes = 0;
+  const service = serviceFor(authorityFor({
+    closeBinding: async () => {
+      closes += 1;
+      return true;
+    },
+  }), {
+    host: { onMessage: () => message.promise },
+  });
+  await createPreview(service);
+  await service.receive(binding.id, initialize);
+  await service.takeOutbound(binding.id);
+  await service.receive(binding.id, initialized);
+  await service.takeOutbound(binding.id);
+  const active = service.receive(binding.id, {
+    id: 'message-hung-close-all',
+    jsonrpc: '2.0',
+    method: 'ui/message',
+    params: { content: [{ text: 'Wait', type: 'text' }], role: 'user' },
+  });
+  await Promise.resolve();
+
+  await expect(service.closeAll()).resolves.toBeUndefined();
+  expect(closes).toBe(1);
+  message.resolve();
+  expect(await active).toBe(false);
+});
+
 it('coalesces concurrent graceful and force close into one binding release', async () => {
   let closes = 0;
   const service = serviceFor(authorityFor({
@@ -314,5 +518,26 @@ it('coalesces concurrent graceful and force close into one binding release', asy
 
   await expect(Promise.all([graceful, forced])).resolves.toEqual([true, true]);
   expect(closes).toBe(1);
+  expect(service.get(binding.id)).toBeUndefined();
+});
+
+it('bounds closeAll while tracking a blocked create and prevents its later publication', async () => {
+  const resolvingTool = deferred<McpAppToolDefinition>();
+  const toolStarted = deferred<void>();
+  const service = serviceFor(authorityFor(), {
+    closeTimeoutMs: 20,
+    toolAuthority: {
+      resolveTool: async () => {
+        toolStarted.resolve();
+        return resolvingTool.promise;
+      },
+    },
+  });
+  const creating = createPreview(service);
+  await toolStarted.promise;
+
+  await expect(service.closeAll()).rejects.toThrow('MCP App preview shutdown failed.');
+  resolvingTool.resolve(binding.toolDefinition);
+  await expect(creating).rejects.toThrow('closed before completion');
   expect(service.get(binding.id)).toBeUndefined();
 });
