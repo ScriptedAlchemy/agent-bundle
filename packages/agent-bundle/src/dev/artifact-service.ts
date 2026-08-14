@@ -122,6 +122,17 @@ const projectSourceChangedDiagnostic = (configPath: string): Diagnostic => Objec
   sourcePath: configPath,
 });
 
+const cleanupDiagnostic = (
+  resource: 'build attempt' | 'staging epoch',
+  error: unknown,
+  configPath: string,
+): Diagnostic => Object.freeze({
+  code: 'AB7100',
+  message: `Unable to clean up ${resource} after artifact epoch build: ${errorMessage(error)}`,
+  severity: 'error',
+  sourcePath: configPath,
+});
+
 const canonicalProjectPath = (root: string, value: string): string => {
   if (!isAbsolute(value)) return value;
   const projectRelative = relative(root, value).replaceAll('\\', '/');
@@ -242,6 +253,7 @@ export class ArtifactService {
     const artifactRoot = join(attemptRoot, 'artifact');
     let staging: EpochStaging | undefined;
     let stagingClosed = false;
+    let result: ArtifactEpochResult;
 
     try {
       await this.#compile({
@@ -283,17 +295,40 @@ export class ArtifactService {
         if (hasErrors(stagedDiagnostics)) throw new DiagnosticError(stagedDiagnostics);
       });
       stagingClosed = true;
-      return Object.freeze({ diagnostics, epoch: published, outcome: 'succeeded' });
+      result = Object.freeze({ diagnostics, epoch: published, outcome: 'succeeded' });
     } catch (error) {
-      return Object.freeze({
+      result = Object.freeze({
         diagnostics: failureDiagnostics(error, prepared.configPath),
         outcome: 'failed',
       });
-    } finally {
-      if (staging !== undefined && !stagingClosed) {
-        await staging.close();
-      }
-      await this.#removeAttempt(attemptRoot);
     }
+
+    const cleanups: readonly Readonly<{
+      readonly close: () => Promise<void>;
+      readonly resource: 'build attempt' | 'staging epoch';
+    }>[] = [
+      ...(staging === undefined || stagingClosed
+        ? []
+        : [{ close: () => staging.close(), resource: 'staging epoch' as const }]),
+      { close: () => this.#removeAttempt(attemptRoot), resource: 'build attempt' },
+    ];
+    const cleanupResults = await Promise.allSettled(cleanups.map(({ close }) => close()));
+    const cleanupDiagnostics = cleanupResults.flatMap((cleanupResult, index): readonly Diagnostic[] => {
+      if (cleanupResult.status === 'fulfilled') return [];
+      const cleanup = cleanups[index];
+      return cleanup === undefined
+        ? []
+        : [cleanupDiagnostic(cleanup.resource, cleanupResult.reason, prepared.configPath)];
+    });
+    if (cleanupDiagnostics.length === 0) return result;
+
+    const diagnostics = [...result.diagnostics, ...cleanupDiagnostics];
+    const [firstDiagnostic, ...remainingDiagnostics] = diagnostics;
+    if (firstDiagnostic === undefined) return result;
+    const failedDiagnostics: [Diagnostic, ...Diagnostic[]] = [firstDiagnostic, ...remainingDiagnostics];
+    return Object.freeze({
+      diagnostics: Object.freeze(failedDiagnostics),
+      outcome: 'failed',
+    });
   }
 }

@@ -189,6 +189,7 @@ const artifactStatusFor = (
 export class DevCoordinator {
   readonly #acquireLock: (options: DevLockOptions) => Promise<DevLockHandle>;
   readonly #artifactService: ArtifactBuilder;
+  readonly #cancelStartup: () => void;
   readonly #createAttemptId: () => string;
   readonly #createWatcher: (options: ProjectWatcherOptions) => DevelopmentWatcher;
   readonly #diagnosticService: AffectedFileDiagnostics;
@@ -199,21 +200,31 @@ export class DevCoordinator {
   readonly #outputPaths: readonly string[];
   readonly #projectService: ProjectPreparer;
   readonly #root: string;
+  readonly #startRebuildToken = Symbol('DevCoordinator initial rebuild');
+  readonly #startupCancellation: Promise<void>;
   #activeEpoch: ArtifactEpoch | undefined;
   #closing = false;
   #closePromise: Promise<void> | undefined;
   #currentBuild: Promise<ArtifactEpochResult> | undefined;
   #lock: DevLockHandle | undefined;
+  #lockClosePromise: Promise<void> | undefined;
   #queued: QueuedBuild | undefined;
   #startPromise: Promise<DevSession> | undefined;
   #status: ProjectStatus = initialStatus();
+  #session: DevSession | undefined;
   #watcher: DevelopmentWatcher | undefined;
+  #watcherClosePromise: Promise<void> | undefined;
 
   constructor(options: DevCoordinatorOptions) {
     this.#root = resolve(options.root);
     this.#acquireLock = options.acquireLock ?? acquireDevLock;
     this.#epochStore = options.epochStore ?? new EpochStore({ projectRoot: this.#root });
     this.#artifactService = options.artifactService ?? new ArtifactService({ epochStore: this.#epochStore });
+    let cancelStartup: () => void = () => undefined;
+    this.#startupCancellation = new Promise<void>((resolvePromise) => {
+      cancelStartup = resolvePromise;
+    });
+    this.#cancelStartup = cancelStartup;
     this.#createAttemptId = options.createAttemptId ?? (() => crypto.randomUUID());
     this.#createWatcher = options.createWatcher ?? ((watcherOptions) => new ProjectWatcher(watcherOptions));
     this.#diagnosticService = options.diagnosticService ?? new DiagnosticService({ root: this.#root });
@@ -232,7 +243,17 @@ export class DevCoordinator {
   }
 
   async rebuild(invalidation: Invalidation): Promise<ArtifactEpochResult> {
+    return this.#rebuild(invalidation);
+  }
+
+  async #rebuild(
+    invalidation: Invalidation,
+    token?: symbol,
+  ): Promise<ArtifactEpochResult> {
     if (this.#closing) return failure('DevCoordinator is closed.');
+    if (token !== this.#startRebuildToken && this.#session === undefined) {
+      return failure('DevCoordinator must finish starting before rebuilding.');
+    }
     if (this.#lock === undefined) return failure('DevCoordinator must be started before rebuilding.');
     const normalized = nowInvalidation(this.#now, invalidation.reason, invalidation.paths);
     if (this.#currentBuild === undefined) return this.#startBuild(normalized);
@@ -263,10 +284,13 @@ export class DevCoordinator {
   async #start(): Promise<DevSession> {
     this.#lock = await this.#acquireLock({ projectRoot: this.#root });
     try {
-      if (this.#closing) throw new Error('DevCoordinator is closed.');
+      this.#assertOpen();
       await this.#epochStore.recoverStaging();
+      this.#assertOpen();
       this.#activeEpoch = await this.#epochStore.readActiveEpoch();
+      this.#assertOpen();
       const projectIgnoreRules = await readProjectIgnoreRules(this.#root);
+      this.#assertOpen();
       this.#watcher = this.#createWatcher({
         ignoredPaths: this.#ignoredPaths,
         isIgnored: (source) => isProjectPathIgnored(projectIgnoreRules, this.#root, source),
@@ -275,21 +299,44 @@ export class DevCoordinator {
         outputPaths: this.#outputPaths,
         root: this.#root,
       });
-      await this.#watcher.ready?.();
-      await this.rebuild(nowInvalidation(this.#now, 'initial', []));
-      return Object.freeze({
+      await Promise.race([this.#watcher.ready?.() ?? Promise.resolve(), this.#startupCancellation]);
+      this.#assertOpen();
+      await this.#rebuild(nowInvalidation(this.#now, 'initial', []), this.#startRebuildToken);
+      const session: DevSession = Object.freeze({
         close: () => this.close(),
         status: () => this.status(),
       });
+      this.#session = session;
+      return session;
     } catch (error) {
       await Promise.allSettled([
-        this.#watcher?.close() ?? Promise.resolve(),
-        this.#lock.close(),
+        this.#releaseWatcher(),
+        this.#releaseLock(),
       ]);
       this.#watcher = undefined;
       this.#lock = undefined;
       throw error;
     }
+  }
+
+  #assertOpen(): void {
+    if (this.#closing) throw new Error('DevCoordinator is closed.');
+  }
+
+  #releaseLock(): Promise<void> {
+    if (this.#lockClosePromise !== undefined) return this.#lockClosePromise;
+    const lock = this.#lock;
+    if (lock === undefined) return Promise.resolve();
+    this.#lockClosePromise = lock.close();
+    return this.#lockClosePromise;
+  }
+
+  #releaseWatcher(): Promise<void> {
+    if (this.#watcherClosePromise !== undefined) return this.#watcherClosePromise;
+    const watcher = this.#watcher;
+    if (watcher === undefined) return Promise.resolve();
+    this.#watcherClosePromise = watcher.close();
+    return this.#watcherClosePromise;
   }
 
   #startBuild(invalidation: Invalidation): Promise<ArtifactEpochResult> {
@@ -422,20 +469,28 @@ export class DevCoordinator {
   }
 
   async #close(): Promise<void> {
+    const hasBuildInFlight = this.#currentBuild !== undefined;
+    const startupBlockedBeforeBuild = !hasBuildInFlight &&
+      this.#session === undefined && this.#startPromise !== undefined;
+    if (startupBlockedBeforeBuild) {
+      this.#cancelStartup();
+      void this.#releaseWatcher().catch(() => undefined);
+      void this.#releaseLock().catch(() => undefined);
+    }
     const inFlight = this.#currentBuild ?? this.#startPromise;
     const buildResult = await Promise.allSettled([inFlight ?? Promise.resolve()]);
     const resources: readonly Readonly<{
       readonly close: () => Promise<unknown>;
       readonly resource: DevCoordinatorCloseFailure['resource'];
     }>[] = [
-      { close: async () => this.#watcher?.close(), resource: 'watcher' },
+      { close: () => this.#releaseWatcher(), resource: 'watcher' },
       { close: () => this.#diagnosticService.close(), resource: 'diagnostics' },
-      { close: async () => this.#lock?.close(), resource: 'lock' },
+      { close: () => this.#releaseLock(), resource: 'lock' },
     ];
     const results = await Promise.allSettled(resources.map(async ({ close }) => close()));
     const failures = [
       ...buildResult.flatMap((result): readonly DevCoordinatorCloseFailure[] =>
-        result.status === 'rejected'
+        hasBuildInFlight && result.status === 'rejected'
           ? [Object.freeze({ error: result.reason, resource: 'build' })]
           : [],
       ),

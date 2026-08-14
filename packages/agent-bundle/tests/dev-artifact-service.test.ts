@@ -5,7 +5,7 @@ import { join } from 'node:path';
 
 import { expect, it } from '@rstest/core';
 
-import { EpochStore } from '../src/dev/epoch-store.ts';
+import { EpochStore, type CreateStagingEpochOptions, type EpochStaging, type StagingValidator } from '../src/dev/epoch-store.ts';
 import { build } from '../src/build/build.ts';
 import { writeManifest } from '../src/build/emit.ts';
 import { validateArtifact } from '../src/build/validate-artifact.ts';
@@ -43,6 +43,20 @@ const createProject = async (): Promise<string> => {
   ]);
   return root;
 };
+
+class RejectingStagingCloseStore extends EpochStore {
+  override async createStagingEpoch(options: CreateStagingEpochOptions): Promise<EpochStaging> {
+    const staging = await super.createStagingEpoch(options);
+    return Object.freeze({
+      close: async () => {
+        await staging.close();
+        throw new Error('staging cleanup rejected');
+      },
+      publish: async (validate: StagingValidator) => staging.publish(validate),
+      root: staging.root,
+    });
+  }
+}
 
 it('publishes one validated prepared project as an immutable epoch and removes its build attempt', async () => {
   const root = await createProject();
@@ -248,6 +262,43 @@ it('rejects a tampered staging transfer, retains the last good epoch, and cleans
     expect(removedAttempts).toEqual(attempts);
     await expect(readFile(join(root, '.agent-bundle', 'epochs', 'epoch-tampered', 'portable', 'plugin.json'), 'utf8'))
       .rejects.toMatchObject({ code: 'ENOENT' });
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('settles staging and attempt cleanup failures into diagnostics without masking the build failure', async () => {
+  const root = await createProject();
+  const attemptRoot = join(root, '.agent-bundle', 'cleanup-attempt');
+  const removedAttempts: string[] = [];
+  const store = new RejectingStagingCloseStore({ projectRoot: root });
+
+  try {
+    await mkdir(join(root, '.agent-bundle'), { recursive: true });
+    const prepared = await new ProjectService({ root }).prepare('build');
+    const service = new ArtifactService({
+      createAttempt: async () => {
+        await mkdir(attemptRoot, { recursive: true });
+        return attemptRoot;
+      },
+      epochStore: store,
+      move: async () => { throw new Error('transfer failed'); },
+      removeAttempt: async (path) => {
+        removedAttempts.push(path);
+        await rm(path, { force: true, recursive: true });
+        throw new Error('attempt cleanup rejected');
+      },
+    });
+
+    const result = await service.build(prepared);
+    expect(result).toMatchObject({ outcome: 'failed' });
+    expect(result.diagnostics.map((diagnostic) => diagnostic.message)).toEqual(expect.arrayContaining([
+      expect.stringContaining('transfer failed'),
+      expect.stringContaining('staging cleanup rejected'),
+      expect.stringContaining('attempt cleanup rejected'),
+    ]));
+    expect(removedAttempts).toEqual([attemptRoot]);
+    await expect(readFile(attemptRoot, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
   } finally {
     await rm(root, { force: true, recursive: true });
   }
