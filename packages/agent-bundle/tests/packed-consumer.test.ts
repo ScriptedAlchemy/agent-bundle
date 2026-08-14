@@ -22,7 +22,7 @@ const execFile = promisify(executeFile);
 const workspaceRoot = process.cwd();
 const packageRoot = join(workspaceRoot, 'packages', 'agent-bundle');
 const fixtureRoot = join(workspaceRoot, 'fixtures', 'integration', 'comprehensive');
-const agentBundleImport = /\bimport(?:\s*[\s\S]*?\s+from)?\s*['"]agent-bundle(?:\/[^'"]*)?['"]|\bimport\s*\(\s*['"]agent-bundle(?:\/[^'"]*)?['"]/;
+const agentBundleImport = /\b(?:import|export)(?:\s*[\s\S]*?\s+from)?\s*['"]agent-bundle(?:\/[^'"]*)?['"]|\bimport\s*\(\s*['"]agent-bundle(?:\/[^'"]*)?['"]|\brequire\s*\(\s*['"]agent-bundle(?:\/[^'"]*)?['"]/;
 
 interface FileDigest {
   readonly bytes: number;
@@ -65,6 +65,11 @@ const runInstalled = async (
 ): Promise<{ readonly stderr: string; readonly stdout: string }> => execFile(cli, [...args], {
   cwd: root,
   env: installedEnvironment(),
+});
+
+it('recognizes agent-bundle re-exports and CommonJS requires in generated code', () => {
+  expect("export { build } from 'agent-bundle';").toMatch(agentBundleImport);
+  expect("const bundle = require('agent-bundle/api');").toMatch(agentBundleImport);
 });
 
 it('uses only an installed tarball after source deletion', async () => {
