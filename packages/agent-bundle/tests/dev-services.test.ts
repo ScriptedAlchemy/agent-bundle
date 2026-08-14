@@ -84,6 +84,52 @@ it('routes API validation through the project service for configuration failures
   }
 });
 
+it('derives source revisions from authored bytes, including resources and invalid Skill content', async () => {
+  const skillMarkdown = [
+    '---',
+    'name: review',
+    'description: Reviews changes',
+    '---',
+    '[Guide](guide.txt)',
+    '',
+  ].join('\n');
+  const root = await createProject(skillMarkdown);
+  const equivalentRoot = await createProject(skillMarkdown);
+  const invalidRoot = await createProject('# First invalid skill\n');
+  try {
+    await Promise.all([
+      writeFile(join(root, 'skills', 'review', 'guide.txt'), 'one'),
+      writeFile(join(equivalentRoot, 'skills', 'review', 'guide.txt'), 'one'),
+    ]);
+    const initial = await new ProjectService({ root }).prepare('build');
+    const equivalentInitial = await new ProjectService({ root: equivalentRoot }).prepare('build');
+    await writeFile(join(root, 'skills', 'review', 'guide.txt'), 'two');
+    const resourceChanged = await new ProjectService({ root }).prepare('build');
+    await writeFile(join(equivalentRoot, 'skills', 'review', 'guide.txt'), 'two');
+    const equivalentChanged = await new ProjectService({ root: equivalentRoot }).prepare('build');
+
+    const invalidInitial = await new ProjectService({ root: invalidRoot }).prepare('build');
+    await writeFile(join(invalidRoot, 'skills', 'review', 'SKILL.md'), '# Second invalid skill\n');
+    const invalidChanged = await new ProjectService({ root: invalidRoot }).prepare('build');
+
+    expect(initial.source.revision).toBe(equivalentInitial.source.revision);
+    expect(resourceChanged.source.revision).toBe(equivalentChanged.source.revision);
+    expect(resourceChanged.source.revision).not.toBe(initial.source.revision);
+    expect(invalidInitial.source.state).toBe('invalid');
+    expect(invalidChanged.source.state).toBe('invalid');
+    expect(invalidChanged.source.diagnostics.map((diagnostic) => diagnostic.code)).toEqual(
+      invalidInitial.source.diagnostics.map((diagnostic) => diagnostic.code),
+    );
+    expect(invalidChanged.source.revision).not.toBe(invalidInitial.source.revision);
+  } finally {
+    await Promise.all([
+      rm(root, { force: true, recursive: true }),
+      rm(equivalentRoot, { force: true, recursive: true }),
+      rm(invalidRoot, { force: true, recursive: true }),
+    ]);
+  }
+});
+
 it('reuses one resident Rslint engine and closes it idempotently', async () => {
   const root = '/workspace/project';
   const lintCalls: string[][] = [];
@@ -138,4 +184,40 @@ it('reuses one resident Rslint engine and closes it idempotently', async () => {
   ]);
   expect(closed).toBe(1);
   expect(second.paths).toEqual([join(root, 'src', 'other.ts')]);
+});
+
+it('shares a failed engine close with concurrent and later callers', async () => {
+  const failure = new Error('engine shutdown failed');
+  let closeCalls = 0;
+  let rejectClose: (reason: Error) => void = () => undefined;
+  const engine: RslintEngine = {
+    close: () => {
+      closeCalls += 1;
+      return new Promise<void>((_resolve, reject) => {
+        rejectClose = reject as (reason: Error) => void;
+      });
+    },
+    lintFiles: async () => [],
+  };
+  const service = new DiagnosticService({
+    createRslint: () => engine,
+    root: '/workspace/project',
+  });
+  await service.lint(['src/entry.ts']);
+
+  const first = service.close();
+  const second = service.close();
+  rejectClose(failure);
+  const observed = await Promise.all([
+    first.then(() => undefined, (error: unknown) => error),
+    second.then(() => undefined, (error: unknown) => error),
+  ]);
+  const later = service.close();
+  const laterError = await later.then(() => undefined, (error: unknown) => error);
+
+  expect(closeCalls).toBe(1);
+  expect(first).toBe(second);
+  expect(later).toBe(first);
+  expect(observed).toEqual([failure, failure]);
+  expect(laterError).toBe(failure);
 });

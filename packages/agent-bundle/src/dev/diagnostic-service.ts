@@ -70,6 +70,7 @@ const toDiagnostic = (filePath: string, message: RslintMessage): Diagnostic => (
 export class DiagnosticService {
   readonly #createRslint: (options: Readonly<{ readonly cwd: string }>) => RslintEngine;
   #closed = false;
+  #closePromise: Promise<void> | undefined;
   #engine: RslintEngine | undefined;
   readonly #root: string;
 
@@ -96,9 +97,14 @@ export class DiagnosticService {
     );
   }
 
-  async close(): Promise<void> {
-    if (this.#closed) return;
+  close(): Promise<void> {
+    if (this.#closePromise !== undefined) return this.#closePromise;
     this.#closed = true;
-    await this.#engine?.close();
+    try {
+      this.#closePromise = Promise.resolve(this.#engine?.close());
+    } catch (error) {
+      this.#closePromise = Promise.reject(error);
+    }
+    return this.#closePromise;
   }
 }

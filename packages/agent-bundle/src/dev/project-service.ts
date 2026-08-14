@@ -1,4 +1,6 @@
-import { resolve } from 'node:path';
+import { createHash } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
+import { relative, resolve } from 'node:path';
 
 import { createDefaultRegistry, type TargetRegistry } from '../adapters/registry.ts';
 import { discoverProject } from '../config/discover.ts';
@@ -8,6 +10,7 @@ import { validateModel, validateSource } from '../config/validate.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { digest } from '../core/digest.ts';
 import type { NormalizedPlugin } from '../core/types.ts';
+import type { DiscoveredProject } from '../config/discover.ts';
 import type { SourceStatus } from './types.ts';
 
 export type ProjectCommand = 'build' | 'inspect' | 'validate';
@@ -48,6 +51,47 @@ const log = (
 
 const errorMessage = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
+
+const errorCode = (error: unknown): string =>
+  typeof error === 'object' && error !== null && 'code' in error && typeof error.code === 'string'
+    ? error.code
+    : error instanceof Error
+      ? error.name
+      : typeof error;
+
+const relativeSourcePath = (root: string, source: string): string =>
+  relative(root, source).replaceAll('\\', '/');
+
+const sourceInput = async (root: string, source: string) => {
+  const path = relativeSourcePath(root, source);
+  try {
+    return Object.freeze({
+      digest: createHash('sha256').update(await readFile(source)).digest('hex'),
+      path,
+    });
+  } catch (error) {
+    return Object.freeze({ error: errorCode(error), path });
+  }
+};
+
+const sourceRevision = async (
+  root: string,
+  configPath: string,
+  discovered?: DiscoveredProject,
+): Promise<string> => {
+  const sources = new Set<string>([configPath]);
+  for (const skill of discovered?.skills ?? []) {
+    sources.add(skill.source);
+    for (const resource of skill.resources) {
+      sources.add(resource.source);
+    }
+  }
+
+  const inputs = await Promise.all([...sources].map((source) => sourceInput(root, source)));
+  return digest({
+    inputs: inputs.sort((left, right) => left.path.localeCompare(right.path)),
+  });
+};
 
 const sourceStatus = (
   diagnostics: readonly Diagnostic[],
@@ -104,14 +148,15 @@ export class ProjectService {
         severity: 'error',
         sourcePath: configPath,
       }]);
-      const source = sourceStatus(diagnostics, digest({ diagnostics, root }));
+      const source = sourceStatus(diagnostics, await sourceRevision(root, configPath));
       log(this.#options.logger, 'project.invalid-source', { diagnostics: diagnostics.length, root });
       return preparedProject(diagnostics, registry, root, source);
     }
 
+    const revision = await sourceRevision(root, loaded.configPath, discovered);
     const sourceDiagnostics = freezeDiagnostics(validateSource(loaded, discovered));
     if (hasErrors(sourceDiagnostics)) {
-      const source = sourceStatus(sourceDiagnostics, digest({ diagnostics: sourceDiagnostics, root }));
+      const source = sourceStatus(sourceDiagnostics, revision);
       log(this.#options.logger, 'project.invalid-source', { diagnostics: sourceDiagnostics.length, root });
       return preparedProject(sourceDiagnostics, registry, root, source);
     }
@@ -126,7 +171,7 @@ export class ProjectService {
         severity: 'error',
         sourcePath: loaded.configPath,
       }]);
-      const source = sourceStatus(diagnostics, digest({ diagnostics, root }));
+      const source = sourceStatus(diagnostics, revision);
       log(this.#options.logger, 'project.prepared', { diagnostics: diagnostics.length, root, targets: [] });
       return preparedProject(diagnostics, registry, root, source);
     }
@@ -138,10 +183,7 @@ export class ProjectService {
       }
     }
     const frozenDiagnostics = freezeDiagnostics(diagnostics);
-    const source = sourceStatus(
-      frozenDiagnostics,
-      digest({ diagnostics: frozenDiagnostics, model, root }),
-    );
+    const source = sourceStatus(frozenDiagnostics, revision);
     log(this.#options.logger, 'project.prepared', {
       diagnostics: frozenDiagnostics.length,
       root,
