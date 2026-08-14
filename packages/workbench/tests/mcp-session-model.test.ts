@@ -128,6 +128,10 @@ it('retains an ordered raw timeline with replay gaps and canonical invocation hi
 it('redacts credentials and request-specific URL components from remote Inspector config', () => {
   let model = createMcpBrowserSessionModel('session-weather');
   model = reduceMcpBrowserSession(model, {
+    binding: { epochId: 'epoch-a', serverName: 'weather', target: 'claude' },
+    type: 'open',
+  });
+  model = reduceMcpBrowserSession(model, {
     config: {
       launch: {
         kind: 'streamable-http',
@@ -147,12 +151,16 @@ it('redacts credentials and request-specific URL components from remote Inspecto
 it('keeps trace sequence monotonic and exposes stable diagnostics when an invalid update arrives', () => {
   let model = createMcpBrowserSessionModel('session-weather');
   model = reduceMcpBrowserSession(model, {
+    binding: { epochId: 'epoch-a', serverName: 'weather', target: 'claude' },
+    type: 'open',
+  });
+  model = reduceMcpBrowserSession(model, {
     entry: {
       direction: 'client',
       kind: 'frame',
       message: { id: 1, method: 'tools/list' },
       occurredAt: 100,
-      sequence: 4,
+      sequence: 1,
     },
     type: 'trace',
   });
@@ -162,7 +170,7 @@ it('keeps trace sequence monotonic and exposes stable diagnostics when an invali
       kind: 'frame',
       message: { id: 1, result: {} },
       occurredAt: 101,
-      sequence: 4,
+      sequence: 1,
     },
     type: 'trace',
   });
@@ -172,22 +180,22 @@ it('keeps trace sequence monotonic and exposes stable diagnostics when an invali
       kind: 'logging',
       occurredAt: 102,
       payload: { level: 'info', message: 'ready' },
-      sequence: 3,
+      sequence: 0,
     },
     type: 'trace',
   });
 
-  expect(model.timeline.lastSequence).toBe(4);
+  expect(model.timeline.lastSequence).toBe(1);
   expect(model.timeline.entries).toHaveLength(1);
   expect(model.diagnostics).toEqual([
     {
       code: 'mcp.trace.non-monotonic',
-      message: 'Ignored trace sequence 4 because the current cursor is 4.',
+      message: 'Ignored trace sequence 1 because the current cursor is 1.',
       severity: 'warning',
     },
     {
       code: 'mcp.trace.non-monotonic',
-      message: 'Ignored trace sequence 3 because the current cursor is 4.',
+      message: 'Ignored trace sequence 0 because the current cursor is 1.',
       severity: 'warning',
     },
   ]);
@@ -196,6 +204,10 @@ it('keeps trace sequence monotonic and exposes stable diagnostics when an invali
 
 it('retains raw protocol keys without allowing a __proto__ frame field to alter snapshot prototypes', () => {
   let model = createMcpBrowserSessionModel('session-weather');
+  model = reduceMcpBrowserSession(model, {
+    binding: { epochId: 'epoch-a', serverName: 'weather', target: 'claude' },
+    type: 'open',
+  });
   model = reduceMcpBrowserSession(model, {
     entry: {
       direction: 'server',
@@ -216,6 +228,10 @@ it('retains raw protocol keys without allowing a __proto__ frame field to alter 
 
 it('derives concise, logging, and progress views from the single timeline', () => {
   let model = createMcpBrowserSessionModel('session-weather');
+  model = reduceMcpBrowserSession(model, {
+    binding: { epochId: 'epoch-a', serverName: 'weather', target: 'claude' },
+    type: 'open',
+  });
   model = reduceMcpBrowserSession(model, {
     entry: { kind: 'logging', occurredAt: 1, payload: { message: 'connected' }, sequence: 1 },
     type: 'trace',
@@ -256,18 +272,27 @@ it('models each explicit browser session lifecycle phase without retaining activ
   expect(model.phase).toBe('closing');
   model = reduceMcpBrowserSession(model, { type: 'closed' });
   expect(model.phase).toBe('closed');
-  expect(model.activeRequests).toEqual({});
+  expect(Object.keys(model.activeRequests)).toEqual([]);
 
   model = reduceMcpBrowserSession(model, {
     diagnostic: { code: 'mcp.connect.failed', message: 'Connection lost.', severity: 'error' },
     type: 'failed',
   });
-  expect(model.phase).toBe('error');
-  expect(model.diagnostics).toContainEqual({ code: 'mcp.connect.failed', message: 'Connection lost.', severity: 'error' });
+  expect(model.phase).toBe('closed');
+  expect(model.diagnostics).toContainEqual({
+    code: 'mcp.lifecycle.invalid-transition',
+    message: 'Ignored failed while session phase is closed.',
+    severity: 'warning',
+  });
 });
 
 it('keeps the first active request handle and emits one stable duplicate diagnostic', () => {
   let model = createMcpBrowserSessionModel('session-weather');
+  model = reduceMcpBrowserSession(model, {
+    binding: { epochId: 'epoch-a', serverName: 'weather', target: 'claude' },
+    type: 'open',
+  });
+  model = reduceMcpBrowserSession(model, { type: 'ready' });
   model = reduceMcpBrowserSession(model, {
     request: { id: 'request-1', operation: 'listTools', request: { first: true }, startedAt: 10 },
     type: 'request.start',
@@ -289,4 +314,161 @@ it('keeps the first active request handle and emits one stable duplicate diagnos
       severity: 'warning',
     },
   ]);
+});
+
+it('treats prototype-like request IDs as normal handles and ignores unknown settlements without a phantom invocation', () => {
+  let model = createMcpBrowserSessionModel('session-weather');
+  model = reduceMcpBrowserSession(model, {
+    binding: { epochId: 'epoch-a', serverName: 'weather', target: 'claude' },
+    type: 'open',
+  });
+  model = reduceMcpBrowserSession(model, { type: 'ready' });
+  model = reduceMcpBrowserSession(model, {
+    completedAt: 4,
+    id: 'toString',
+    result: {},
+    type: 'request.settled',
+  });
+
+  expect(model.timeline.entries).toEqual([]);
+  expect(model.diagnostics).toContainEqual({
+    code: 'mcp.request.unknown',
+    message: 'Ignored settlement for unknown request toString.',
+    severity: 'warning',
+  });
+
+  for (const id of ['toString', 'constructor', '__proto__']) {
+    model = reduceMcpBrowserSession(model, {
+      request: { id, operation: 'listTools', request: { id }, startedAt: 10 },
+      type: 'request.start',
+    });
+  }
+
+  expect(Object.getPrototypeOf(model.activeRequests)).toBeNull();
+  expect(Object.keys(model.activeRequests)).toEqual(['toString', 'constructor', '__proto__']);
+  for (const id of ['toString', 'constructor', '__proto__']) {
+    model = reduceMcpBrowserSession(model, { completedAt: 11, id, result: { id }, type: 'request.settled' });
+  }
+  expect(invocationHistoryFor(model).map((entry) => entry.id)).toEqual(['toString', 'constructor', '__proto__']);
+  expect(invocationHistoryFor(model).every((entry) => Number.isFinite(entry.timing.durationMs))).toBe(true);
+});
+
+it('rejects invalid JSON snapshots without mutating the model and preserves repeated aliases', () => {
+  const cyclic: { self?: unknown } = {};
+  cyclic.self = cyclic;
+  let model = createMcpBrowserSessionModel('session-weather');
+  model = reduceMcpBrowserSession(model, {
+    binding: { epochId: 'epoch-a', serverName: 'weather', target: 'claude' },
+    type: 'open',
+  });
+
+  for (const message of [cyclic, { value: Infinity }, { value: undefined }, { value: () => 'invalid' }]) {
+    expect(() => reduceMcpBrowserSession(model, {
+      entry: { direction: 'server', kind: 'frame', message, occurredAt: 1, sequence: 1 },
+      type: 'trace',
+    })).toThrow();
+    expect(model.timeline.entries).toEqual([]);
+  }
+
+  const shared = { nested: true };
+  model = reduceMcpBrowserSession(model, {
+    entry: {
+      direction: 'server', kind: 'frame', message: { first: shared, second: shared }, occurredAt: 1, sequence: 1,
+    },
+    type: 'trace',
+  });
+  const entry = model.timeline.entries[0];
+  if (!('message' in entry) || entry.message === null || typeof entry.message !== 'object') throw new Error('Expected frame message.');
+  const message = entry.message as { first: unknown; second: unknown };
+  expect(message.first).toBe(message.second);
+  expect(message.first).not.toBe(shared);
+});
+
+it('requires ordered explicit replay gaps and never accepts a frame inside a dropped range', () => {
+  let model = createMcpBrowserSessionModel('session-weather');
+  model = reduceMcpBrowserSession(model, {
+    binding: { epochId: 'epoch-a', serverName: 'weather', target: 'claude' },
+    type: 'open',
+  });
+  model = reduceMcpBrowserSession(model, {
+    entry: { earliestAvailableSequence: 2, latestDroppedSequence: 1, requestedAfterSequence: 0, type: 'replay.gap' },
+    type: 'trace',
+  });
+
+  expect(model.timeline.lastSequence).toBe(1);
+  expect(Object.hasOwn(model.timeline, 'droppedThroughSequence')).toBe(true);
+  model = reduceMcpBrowserSession(model, {
+    entry: { direction: 'server', kind: 'frame', message: {}, occurredAt: 1, sequence: 1 },
+    type: 'trace',
+  });
+  expect(model.timeline.entries).toHaveLength(1);
+  expect(model.diagnostics).toContainEqual({
+    code: 'mcp.trace.dropped',
+    message: 'Ignored trace sequence 1 because it was dropped through 1.',
+    severity: 'warning',
+  });
+  model = reduceMcpBrowserSession(model, {
+    entry: { direction: 'server', kind: 'frame', message: {}, occurredAt: 2, sequence: 2 },
+    type: 'trace',
+  });
+  expect(model.timeline.lastSequence).toBe(2);
+
+  let missingGap = createMcpBrowserSessionModel('session-weather');
+  missingGap = reduceMcpBrowserSession(missingGap, {
+    binding: { epochId: 'epoch-a', serverName: 'weather', target: 'claude' },
+    type: 'open',
+  });
+  missingGap = reduceMcpBrowserSession(missingGap, {
+    entry: { direction: 'server', kind: 'frame', message: {}, occurredAt: 2, sequence: 2 },
+    type: 'trace',
+  });
+  expect(missingGap.timeline.entries).toEqual([]);
+  expect(missingGap.diagnostics).toContainEqual({
+    code: 'mcp.trace.gap-required',
+    message: 'Expected trace sequence 1 but received 2; an explicit replay gap is required.',
+    severity: 'warning',
+  });
+
+  model = reduceMcpBrowserSession(model, {
+    entry: { earliestAvailableSequence: 5, latestDroppedSequence: 3, requestedAfterSequence: 2, type: 'replay.gap' },
+    type: 'trace',
+  });
+  expect(model.timeline.lastSequence).toBe(2);
+  expect(model.diagnostics).toContainEqual({
+    code: 'mcp.trace.invalid-replay-gap',
+    message: 'Ignored replay gap after 2 because its retained range is invalid.',
+    severity: 'warning',
+  });
+});
+
+it('rejects all state-changing events after closing or closed phases', () => {
+  let model = createMcpBrowserSessionModel('session-weather');
+  model = reduceMcpBrowserSession(model, {
+    binding: { epochId: 'epoch-a', serverName: 'weather', target: 'claude' },
+    type: 'open',
+  });
+  model = reduceMcpBrowserSession(model, { type: 'close' });
+  model = reduceMcpBrowserSession(model, {
+    catalogs: { prompts: [], resourceTemplates: [], resources: [], tools: [{ name: 'must-not-appear' }] },
+    type: 'catalogs',
+  });
+  model = reduceMcpBrowserSession(model, { type: 'closed' });
+  model = reduceMcpBrowserSession(model, {
+    request: { id: 'late', operation: 'listTools', request: {}, startedAt: 1 },
+    type: 'request.start',
+  });
+
+  expect(model.phase).toBe('closed');
+  expect(model.catalogs.tools).toEqual([]);
+  expect(Object.keys(model.activeRequests)).toEqual([]);
+  expect(model.diagnostics).toContainEqual({
+    code: 'mcp.lifecycle.invalid-transition',
+    message: 'Ignored catalogs while session phase is closing.',
+    severity: 'warning',
+  });
+  expect(model.diagnostics).toContainEqual({
+    code: 'mcp.lifecycle.invalid-transition',
+    message: 'Ignored request.start while session phase is closed.',
+    severity: 'warning',
+  });
 });
