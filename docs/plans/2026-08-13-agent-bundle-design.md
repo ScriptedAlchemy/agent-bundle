@@ -447,10 +447,10 @@ reference an explicitly prebuilt command through the existing MCP/script input e
 compiler resolves per target at build time. Token availability is a per-target capability:
 Claude resolves plugin root and plugin data to `${CLAUDE_PLUGIN_ROOT}` and
 `${CLAUDE_PLUGIN_DATA}`, Codex to its equivalent plugin environment variables, while portable
-`mcp.json` (Agent Plugins 1.0.0) has no substitution syntax at all — plugin root is expressed
-through `./`-relative commands and the default `cwd`, and a token with no portable equivalent
-(for example plugin data) is a build error for the portable target unless the server is
-explicitly limited to host targets. This is the honest-portability rule applied to paths.
+`mcp.json` (Agent Plugins 1.0.0) resolves `${PLUGIN_ROOT}` and `${PLUGIN_DATA}` in `args`, `env`,
+and `cwd`, but not in `command`. A token with no portable equivalent, such as workspace root, is
+a build error for the portable target unless the server is explicitly limited to host targets.
+This is the honest-portability rule applied to paths.
 
 Remote HTTP MCP definitions are copied into native manifests without bundling a local server.
 No MCP process is launched during `build` or `validate`.
@@ -807,8 +807,8 @@ These can be resolved during planning without changing the architecture:
 - whether the first package ships as one package or `core` plus target adapter packages;
 - the exact mechanism for preserving executable modes in published archives;
 - whether marketplace output belongs in each target directory or an optional sibling directory;
-- which initial models should appear in optional example eval configuration without making a
-  model provider part of the build contract.
+- which initial native-CLI model aliases should appear in optional example eval configuration
+  without making direct model-provider APIs part of the build contract.
 
 Native host and portable JSON schemas are vendored as tested snapshots with their source
 revisions recorded in the build manifest, per the schema-snapshot policy above; they are never

@@ -36,7 +36,7 @@ generated plugins.
 - editing project source inside the browser;
 - running as a background daemon after the command exits;
 - auto-installing a candidate into the user's normal Codex or Claude configuration;
-- proxying or replacing model-provider APIs;
+- calling, proxying, or replacing model-provider APIs, or managing their credentials;
 - reproducing the full Codex or Claude interface;
 - claiming that inferred Skill activation was directly observed;
 - implementing a hosted eval service, team database, or marketplace;
@@ -233,7 +233,7 @@ export default defineConfig({
     include: ["evals/**/*.eval.ts"],
     runsDir: ".agent-bundle/runs",
     semanticGrader: {
-      provider: "anthropic",
+      harness: "claude",
       model: "claude-sonnet-4-5",
     },
   },
@@ -242,12 +242,13 @@ export default defineConfig({
 
 `dev.agentApi` enables an optional agent-facing Streamable HTTP MCP endpoint on the foreground
 workbench server. It is off by default because ordinary plugin development does not require an
-additional MCP server. CLI flags override config for one invocation. Credentials remain runtime
-inputs and are never materialized into config, epochs, or eval definitions.
+additional MCP server. CLI flags override config for one invocation.
 
-Host credentials, subscription state, and model-provider keys are never stored in
-`agent-bundle.config.ts`. Harness preflight reads the selected CLI's normal supported environment
-or isolated home at run time.
+Model-backed trials and semantic graders invoke the installed Claude Code or Codex CLI and reuse
+that CLI's existing signed-in subscription/session. Agent Bundle does not accept, request,
+inject, or store API keys or model-provider credentials. Harness preflight verifies that the
+selected CLI is installed, supported, and able to start an authenticated run; otherwise it
+returns an actionable CLI-authentication error.
 
 ## Workbench information architecture
 
@@ -623,29 +624,31 @@ MCP protocol behavior. It is the default in CI because it is fast and repeatable
 
 ### Claude native harness
 
-Claude supports direct plugin loading with `--plugin-dir`. The harness has two isolation levels:
+Claude supports direct plugin loading with `--plugin-dir`. The native CLI harness runs `claude -p`
+with the candidate's explicit plugin directory and the author's existing Claude Code
+subscription/session; it never supplies an API key and does not use `--bare`, which would bypass
+saved subscription authentication. A fresh fixture and explicit plugin directory isolate the
+candidate content. Inherited CLI runtime controls are recorded with the run.
 
-- `native-local`: uses the author's existing Claude authentication and records inherited runtime
-  controls; intended for manual dogfooding;
-- `native-isolated`: uses `--bare`, an explicit plugin directory, and supported API-key auth;
-  intended for reproducible automation.
-
-It runs `claude -p` with JSON or stream-JSON output and records the system initialization event,
-loaded plugin, plugin errors, MCP state, Skill tool calls, hooks when emitted, tool calls, result,
-usage, and raw stderr.
+The harness uses JSON or stream-JSON output and records the system initialization event, loaded
+plugin, plugin errors, MCP state, Skill tool calls, hooks when emitted, tool calls, result, usage,
+and raw stderr.
 
 ### Codex native harness
 
 Codex does not provide a direct `--plugin-dir` equivalent. For an isolated trial, Agent Bundle:
 
 1. creates a temporary `CODEX_HOME`;
-2. materializes a temporary local marketplace referencing the generated Codex target;
-3. installs the candidate with `codex plugin marketplace add` and `codex plugin add`;
-4. verifies it with `codex plugin list --json`;
-5. runs `codex exec --ephemeral --json` from a fresh fixture copy.
+2. copies the active CLI's existing `auth.json` into that home as opaque auth state, preserving
+   its permissions and never parsing or modifying the source file;
+3. materializes a temporary local marketplace referencing the generated Codex target;
+4. installs the candidate with `codex plugin marketplace add` and `codex plugin add`;
+5. verifies it with `codex plugin list --json`;
+6. runs `codex exec --ephemeral --json` from a fresh fixture copy.
 
-Candidate-plugin Codex trials are always `native-isolated`. Agent Bundle does not install a test
-candidate into the author's normal Codex home. Manual dogfooding of an already user-installed
+This reuses the author's already authenticated Codex subscription/session without accepting or
+supplying an API key. Candidate plugin and configuration state remain isolated from the normal
+Codex home, which Agent Bundle does not modify. Manual dogfooding of an already user-installed
 release can be recorded as an external run, but it is not comparable to an isolated candidate
 trial unless every alignment field matches.
 
@@ -704,7 +707,7 @@ Run provenance includes:
 - artifact epoch and target digests;
 - fixture digest;
 - host CLI and plugin versions;
-- selected harness isolation level and pinned model;
+- selected harness and pinned model;
 - timing, exit state, usage when reported, and raw log references;
 - grader versions and assertion evidence.
 
@@ -820,12 +823,15 @@ contracts:
    Vite-only APIs or undeclared imports, and emit the first `UPSTREAM.json`.
 2. **Browser-to-stdio bridge:** initialize, list tools, call one tool, receive stderr/progress, and
    cancel a request through `AgentBundleRemoteTransport` against a generated epoch fixture.
-3. **Claude contract:** load a handwritten plugin with the supported direct-plugin flag, observe
-   stream output and hooks, and record the minimum CLI version and capability fixture.
-4. **Codex lifecycle:** use a temporary `CODEX_HOME` and marketplace, install and verify a
-   handwritten candidate, run an ephemeral JSON trial, and prove the normal user home is unchanged.
-5. **Path tokens:** verify real Claude and Codex plugin-root/data expansion and portable relative
-   command behavior against the selected host/spec versions.
+3. **Claude contract:** load a handwritten plugin with the supported direct-plugin flag through
+   the existing signed-in subscription/session, without `--bare` or an API key; observe stream
+   output and hooks, and record the minimum CLI version and capability fixture.
+4. **Codex lifecycle:** use a temporary `CODEX_HOME` and marketplace, reuse the active CLI's
+   opaque `auth.json`, install and verify a handwritten candidate, run an ephemeral JSON trial,
+   and prove both that no API key is requested and that the normal user home is unchanged.
+5. **Path tokens:** verify real Claude and Codex plugin-root/data expansion plus portable
+   `${PLUGIN_ROOT}` and `${PLUGIN_DATA}` expansion in `args`, `env`, and `cwd` (not `command`)
+   against the selected host/spec versions.
 6. **Activation evidence:** record exactly which Claude and Codex events justify `observed`,
    `inferred`, or `unavailable` activation claims.
 7. **Epoch atomicity:** prove rename publication and dev-lock behavior, including stale-lock
@@ -871,8 +877,9 @@ native model trials do not precede deterministic artifact checks.
 8. MCP and hook tools execute generated artifacts rather than source shortcuts.
 9. Agent Bundle vendors an attributed, allowlisted MCP Inspector source snapshot behind an internal
    adapter; it does not iframe the standalone app or import unpublished npm paths.
-10. Eval harnesses distinguish deterministic execution from native-local and native-isolated
-    isolation levels.
+10. Eval harnesses distinguish deterministic execution from native CLI execution; native trials
+    use fresh fixtures and isolated candidate/plugin state while reusing the CLI's existing
+    signed-in subscription/session.
 11. Activation claims carry `observed`, `inferred`, or `unavailable` evidence.
 12. JSON and JSONL files are the first run store; there is no database.
 13. The optional agent-facing MCP shares application services and lives only for the foreground
