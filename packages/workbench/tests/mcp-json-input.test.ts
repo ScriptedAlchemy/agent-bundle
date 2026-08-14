@@ -7,6 +7,7 @@ import {
   applyFormEdit,
   formSchemaFromJsonSchema,
   parseRawJsonRecord,
+  rawJsonDraftState,
   serializeJsonRecord,
   submitJsonRecord,
 } from '../src/mcp/mcp-json-input.tsx';
@@ -32,7 +33,7 @@ describe('MCP JSON input', () => {
     })).toBeNull();
   });
 
-  it('makes form edits into a new frozen canonical record and removes cleared optional values', () => {
+  it('makes form edits into a new frozen canonical record and exactly omits cleared optional values', () => {
     const original = { nested: { enabled: false }, name: 'Ada' };
     const edited = applyFormEdit(original, 'name', 'Grace');
 
@@ -42,7 +43,18 @@ describe('MCP JSON input', () => {
     expect(original).toEqual({ nested: { enabled: false }, name: 'Ada' });
     expect(Object.isFrozen(edited)).toBe(true);
     expect(Object.isFrozen(edited.nested)).toBe(true);
-    expect(applyFormEdit({ limit: 3 }, 'limit', undefined)).toEqual({});
+    const withoutLimit = applyFormEdit({ limit: 3 }, 'limit', undefined);
+    const withoutEnabled = applyFormEdit({ enabled: false, name: '', option: '' }, 'enabled', undefined);
+    const withoutName = applyFormEdit({ enabled: false, name: '', option: '' }, 'name', undefined);
+    const withoutOption = applyFormEdit({ enabled: false, name: '', option: '' }, 'option', undefined);
+
+    expect(Object.hasOwn(withoutLimit, 'limit')).toBe(false);
+    expect(Object.hasOwn(withoutEnabled, 'enabled')).toBe(false);
+    expect(Object.hasOwn(withoutName, 'name')).toBe(false);
+    expect(Object.hasOwn(withoutOption, 'option')).toBe(false);
+    expect(withoutEnabled).toEqual({ name: '', option: '' });
+    expect(withoutName).toEqual({ enabled: false, option: '' });
+    expect(withoutOption).toEqual({ enabled: false, name: '' });
   });
 
   it('updates canonical JSON only from a valid raw object and serializes it deterministically', () => {
@@ -70,6 +82,14 @@ describe('MCP JSON input', () => {
     expect(submitted).toEqual([{ next: true }]);
   });
 
+  it('resets raw validation when replay replaces an invalid draft', () => {
+    expect(rawJsonDraftState({ stale: true }, '{"next":').error).toBe('Enter a valid JSON object.');
+    expect(rawJsonDraftState({ next: true })).toEqual({
+      draft: '{\n  "next": true\n}',
+      error: undefined,
+    });
+  });
+
   it('renders an accessible mode group and submits equivalent form and raw payloads through one callback', () => {
     const submitted: readonly Readonly<Record<string, unknown>>[] = [];
     const submit = (value: Readonly<Record<string, unknown>>) => submitted.push(value);
@@ -90,8 +110,17 @@ describe('MCP JSON input', () => {
       label: 'Tool arguments',
       onChange: () => undefined,
       onSubmit: submit,
-      schema: { type: 'object', properties: { count: { default: 3, type: 'number' } }, required: ['count'] },
-      value: {},
+      schema: {
+        type: 'object',
+        properties: {
+          count: { default: 3, type: 'number' },
+          enabled: { type: 'boolean' },
+          name: { type: 'string' },
+          option: { enum: ['', 'named'], type: 'string' },
+        },
+        required: ['count'],
+      },
+      value: { enabled: false, name: '', option: '' },
     }));
 
     expect(markup).toContain('<fieldset>');
@@ -102,6 +131,10 @@ describe('MCP JSON input', () => {
     expect(markup).toContain('required=""');
     expect(markup).toContain('value=""');
     expect(markup).not.toContain('value="3"');
+    expect(markup).toContain('Unset enabled');
+    expect(markup).toContain('Unset name');
+    expect(markup).toContain('Unset option');
+    expect(markup).toContain('disabled=""');
     expect(markup).toContain('Call tool');
   });
 });

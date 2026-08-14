@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 
 export type ImmutableJsonRecord = Readonly<Record<string, unknown>>;
 
@@ -153,6 +153,21 @@ export const parseRawJsonRecord = (raw: string): ImmutableJsonRecord | null => {
   }
 };
 
+type RawJsonDraftState = Readonly<{
+  draft: string;
+  error: string | undefined;
+}>;
+
+const rawJsonError = 'Enter a valid JSON object.';
+
+export const rawJsonDraftState = (
+  value: Readonly<Record<string, unknown>>,
+  draft = serializeJsonRecord(value),
+): RawJsonDraftState => ({
+  draft,
+  error: parseRawJsonRecord(draft) === null ? rawJsonError : undefined,
+});
+
 const sortJson = (value: unknown): unknown => {
   if (Array.isArray(value)) return value.map(sortJson);
   if (!isRecord(value)) return value;
@@ -171,6 +186,17 @@ export const submitJsonRecord = (
   if (submitted === null) return false;
   onSubmit(submitted);
   return true;
+};
+
+const hasMissingRequiredFormValue = (
+  schema: FormSchema,
+  value: Readonly<Record<string, unknown>>,
+): boolean => schema.required?.some((field) => !Object.hasOwn(value, field) || value[field] === undefined) ?? false;
+
+const enumUnsetValue = (id: string, field: string, options: readonly string[]): string => {
+  let value = `__agent_bundle_unset_${id}_${field}__`;
+  while (options.includes(value)) value = `${value}_`;
+  return value;
 };
 
 const FormEditor = ({
@@ -193,23 +219,28 @@ const FormEditor = ({
       const current = value[name];
       const required = schema.required?.includes(name) ?? false;
       const change = (next: unknown): void => onChange(applyFormEdit(value, name, next));
+      const unset = !required && Object.hasOwn(value, name)
+        ? <button aria-label={`Unset ${fieldLabel}`} onClick={() => change(undefined)} type="button">Unset {fieldLabel}</button>
+        : undefined;
 
       if (field.type === 'boolean') {
         return (
           <p key={name}>
             <input checked={current === true} disabled={disabled} id={fieldId} onChange={(event) => change(event.currentTarget.checked)} required={required} type="checkbox" />
             <label htmlFor={fieldId}>{fieldLabel}</label>
+            {unset}
             {field.description === undefined ? undefined : <small>{field.description}</small>}
           </p>
         );
       }
 
       if (field.type === 'string' && field.enum !== undefined) {
+        const unsetValue = enumUnsetValue(id, name, field.enum);
         return (
           <p key={name}>
             <label htmlFor={fieldId}>{fieldLabel}</label>
-            <select disabled={disabled} id={fieldId} onChange={(event) => change(event.currentTarget.value)} required={required} value={typeof current === 'string' ? current : ''}>
-              <option value="">Select {fieldLabel}</option>
+            <select disabled={disabled} id={fieldId} onChange={(event) => change(event.currentTarget.value === unsetValue ? undefined : event.currentTarget.value)} required={required} value={typeof current === 'string' ? current : unsetValue}>
+              <option disabled={required} value={unsetValue}>{required ? `Select ${fieldLabel}` : `Unset ${fieldLabel}`}</option>
               {field.enum.map((option) => <option key={option} value={option}>{option}</option>)}
             </select>
             {field.description === undefined ? undefined : <small>{field.description}</small>}
@@ -222,6 +253,7 @@ const FormEditor = ({
           <p key={name}>
             <label htmlFor={fieldId}>{fieldLabel}</label>
             <input disabled={disabled} id={fieldId} maxLength={field.maxLength} minLength={field.minLength} onChange={(event) => change(event.currentTarget.value)} required={required} type="text" value={typeof current === 'string' ? current : ''} />
+            {unset}
             {field.description === undefined ? undefined : <small>{field.description}</small>}
           </p>
         );
@@ -268,27 +300,21 @@ export const McpJsonInput = ({
 }: McpJsonInputProps) => {
   const formSchema = formSchemaFromJsonSchema(schema);
   const [mode, setMode] = useState<'form' | 'raw'>(formSchema === null ? 'raw' : 'form');
-  const [rawDraft, setRawDraft] = useState(() => serializeJsonRecord(value));
-  const [rawError, setRawError] = useState<string>();
-
-  useEffect(() => {
-    setRawDraft(serializeJsonRecord(value));
-  }, [value]);
-
-  useEffect(() => {
-    if (formSchema === null) setMode('raw');
-  }, [formSchema]);
+  const [rawState, setRawState] = useState(() => ({ source: value, ...rawJsonDraftState(value) }));
+  const currentRawState = rawState.source === value ? rawState : { source: value, ...rawJsonDraftState(value) };
+  if (currentRawState !== rawState) setRawState(currentRawState);
+  const { draft: rawDraft, error: rawError } = currentRawState;
 
   const selectMode = (next: 'form' | 'raw'): void => {
     setMode(next);
     if (next === 'raw') {
-      setRawDraft(serializeJsonRecord(value));
-      setRawError(undefined);
+      setRawState({ source: value, ...rawJsonDraftState(value) });
     }
   };
 
   const rawPanel = formSchema === null || mode === 'raw';
-  const rawSubmissionValid = !rawPanel || parseRawJsonRecord(rawDraft) !== null;
+  const rawSubmissionValid = !rawPanel || rawError === undefined;
+  const formSubmissionValid = formSchema === null || !hasMissingRequiredFormValue(formSchema, value);
   const rawErrorId = `${id}-raw-error`;
 
   return (
@@ -312,14 +338,10 @@ export const McpJsonInput = ({
               id={`${id}-raw`}
               onChange={(event) => {
                 const draft = event.currentTarget.value;
-                setRawDraft(draft);
+                const nextRawState = rawJsonDraftState(value, draft);
+                setRawState({ source: value, ...nextRawState });
                 const parsed = parseRawJsonRecord(draft);
-                if (parsed === null) {
-                  setRawError('Enter a valid JSON object.');
-                } else {
-                  setRawError(undefined);
-                  onChange(parsed);
-                }
+                if (parsed !== null) onChange(parsed);
               }}
               spellCheck={false}
               value={rawDraft}
@@ -328,7 +350,7 @@ export const McpJsonInput = ({
           </>
         ) : <FormEditor disabled={disabled} id={id} onChange={onChange} schema={formSchema} value={value} />}
       </div>
-      <button disabled={disabled || !rawSubmissionValid} onClick={() => submitJsonRecord(value, onSubmit, rawPanel ? rawDraft : undefined)} type="button">{submitLabel}</button>
+      <button disabled={disabled || !rawSubmissionValid || !formSubmissionValid} onClick={() => submitJsonRecord(value, onSubmit, rawPanel ? rawDraft : undefined)} type="button">{submitLabel}</button>
     </section>
   );
 };
