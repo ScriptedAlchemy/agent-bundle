@@ -1,0 +1,5 @@
+{
+  "name": "agent-bundle-integration-fixture",
+  "private": true,
+  "type": "module"
+}

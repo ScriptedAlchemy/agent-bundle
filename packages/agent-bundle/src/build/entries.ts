@@ -9,10 +9,13 @@ import type { CompiledMcpApp } from './mcp-apps.ts';
 import { buildWithRslib } from './rslib.ts';
 
 export interface CompiledEntry {
-  readonly mode: NormalizedScript['mode'];
   readonly name: string;
   readonly output: string;
   readonly source: string;
+}
+
+interface PlannedScriptEntry extends CompiledEntry {
+  readonly mode: NormalizedScript['mode'];
 }
 
 export interface CompiledHookEntry extends CompiledEntry {
@@ -34,7 +37,7 @@ const outputName = (script: NormalizedScript): string =>
 export const planCompiledEntries = (
   entries: readonly NormalizedScript[],
   options: { readonly cwd: string; readonly outDir: string },
-): readonly CompiledEntry[] => {
+): readonly PlannedScriptEntry[] => {
   const names = new Set<string>();
   return Object.freeze(entries.map((script) => {
     const filename = outputName(script);

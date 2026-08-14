@@ -210,6 +210,10 @@ const scriptExtensions = new Set([
   '.py',
 ]);
 
+const bundleScriptExtensions = new Set([
+  '.js', '.jsx', '.mjs', '.cjs', '.ts', '.tsx', '.mts', '.cts',
+]);
+
 const knownTargetNames = new Set(['portable', 'codex', 'claude']);
 
 const isSafeScriptName = (name: string): boolean =>
@@ -223,6 +227,7 @@ const validateScripts = (loaded: LoadedConfig): Diagnostic[] => {
   }
 
   const diagnostics: Diagnostic[] = [];
+  const outputSources = new Map<string, string>();
   for (const [name, rawDeclaration] of Object.entries(scripts)) {
     if (!isSafeScriptName(name)) {
       diagnostics.push(sourceDiagnostic(
@@ -264,6 +269,21 @@ const validateScripts = (loaded: LoadedConfig): Diagnostic[] => {
         `Script ${JSON.stringify(name)} entry has an unsupported extension.`,
         loaded.configPath,
       ));
+    } else {
+      const extension = extname(source).toLowerCase();
+      const output = posix.normalize(
+        `scripts/${name}${bundleScriptExtensions.has(extension) ? '.mjs' : extension}`,
+      );
+      const firstSource = outputSources.get(output);
+      if (firstSource === undefined) {
+        outputSources.set(output, source);
+      } else {
+        diagnostics.push(sourceDiagnostic(
+          'AB4408',
+          `Scripts ${JSON.stringify(firstSource)} and ${JSON.stringify(source)} share canonical output ${JSON.stringify(output)}.`,
+          loaded.configPath,
+        ));
+      }
     }
     try {
       const canonicalRoot = realpathSync(loaded.context.projectRoot);
