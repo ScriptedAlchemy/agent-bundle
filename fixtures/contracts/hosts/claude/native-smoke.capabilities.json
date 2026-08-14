@@ -1,10 +1,18 @@
 {
   "schemaVersion": 1,
   "host": "claude",
+  "fixtureProvenance": "synthetic-redacted-contract",
   "minimumVersion": "2.1.232",
   "authentication": {
     "mode": "existing-subscription-session",
-    "removedEnvironmentSuffix": "_API_KEY"
+    "removedEnvironment": [
+      "*_API_KEY",
+      "ANTHROPIC_AUTH_TOKEN",
+      "ANTHROPIC_BASE_URL",
+      "CLAUDE_CODE_USE_BEDROCK",
+      "CLAUDE_CODE_USE_FOUNDRY",
+      "CLAUDE_CODE_USE_VERTEX"
+    ]
   },
   "command": {
     "args": [
@@ -21,8 +29,9 @@
     "forbiddenArgs": ["--bare"]
   },
   "evidence": {
-    "activation": "observed-only-for-Skill-tool-use",
-    "captures": ["envelopes", "plugins", "errors", "mcp", "hooks", "usage"],
+    "activation": "requires-the-exact-agent-bundle-native-smoke-Skill-tool-use",
+    "captures": ["redacted-envelope-shapes", "candidate-plugin-name", "candidate-Skill-event", "init-auth-source"],
+    "liveRun": "not-recorded-in-this-synthetic-fixture",
     "rawLogs": "never-retained"
   }
 }

@@ -1,3 +1,5 @@
+import { spawn } from 'node:child_process';
+
 export interface NativeClaudeCommandOptions {
   readonly pluginDirectory: string;
   readonly prompt: string;
@@ -25,13 +27,24 @@ export const createNativeClaudeCommand = (options: NativeClaudeCommandOptions): 
 
 const isProviderApiKey = (name: string): boolean => /(?:^|_)API_KEY$/iu.test(name);
 
+const subscriptionBypassVariables = new Set([
+  'ANTHROPIC_AUTH_TOKEN',
+  'ANTHROPIC_BASE_URL',
+  'CLAUDE_CODE_USE_BEDROCK',
+  'CLAUDE_CODE_USE_FOUNDRY',
+  'CLAUDE_CODE_USE_VERTEX',
+]);
+
+const removesSubscriptionBypass = (name: string): boolean => subscriptionBypassVariables.has(name.toUpperCase());
+
 export const createNativeClaudeChildEnvironment = (
   environment: Readonly<NodeJS.ProcessEnv> = process.env,
 ): NodeJS.ProcessEnv => Object.fromEntries(
-  Object.entries(environment).filter(([name]) => !isProviderApiKey(name)),
+  Object.entries(environment).filter(([name]) => !isProviderApiKey(name) && !removesSubscriptionBypass(name)),
 );
 
 export type ClaudeActivationEvidence = 'observed' | 'unavailable';
+export type ClaudeInitAuthSource = 'environment-key' | 'non-environment' | 'unavailable';
 
 export interface RedactedClaudeEnvelope {
   readonly fields: readonly string[];
@@ -41,6 +54,7 @@ export interface RedactedClaudeEnvelope {
 
 export interface NativeClaudeStreamEvidence {
   readonly activationEvidence: ClaudeActivationEvidence;
+  readonly authSource: ClaudeInitAuthSource;
   readonly envelopes: readonly RedactedClaudeEnvelope[];
   readonly errorEnvelopes: readonly RedactedClaudeEnvelope[];
   readonly hookEnvelopes: readonly RedactedClaudeEnvelope[];
@@ -53,6 +67,7 @@ export interface NativeClaudeStreamEvidence {
 
 export interface NativeClaudeStreamNormalizationOptions {
   readonly allowedPluginNames?: readonly string[];
+  readonly candidateSkillEventName?: string;
 }
 
 const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
@@ -89,6 +104,23 @@ const toolUseNames = (value: Readonly<Record<string, unknown>>): readonly string
     isRecord(content) && content.type === 'tool_use' && isSafeLabel(content.name) ? [content.name] : []));
 };
 
+const hasCandidateSkillUse = (value: Readonly<Record<string, unknown>>, candidateSkillEventName: string | undefined): boolean => {
+  if (candidateSkillEventName === undefined) return false;
+  const message = value.message;
+  if (!isRecord(message) || !Array.isArray(message.content)) return false;
+  return message.content.some((content) =>
+    isRecord(content)
+    && content.type === 'tool_use'
+    && content.name === 'Skill'
+    && isRecord(content.input)
+    && content.input.skill === candidateSkillEventName);
+};
+
+const normalizeInitAuthSource = (value: unknown): ClaudeInitAuthSource => {
+  if (typeof value !== 'string') return 'unavailable';
+  return /(?:environment|env|api[ _-]?key)/iu.test(value) ? 'environment-key' : 'non-environment';
+};
+
 export const normalizeNativeClaudeStream = (
   raw: string,
   options: NativeClaudeStreamNormalizationOptions = {},
@@ -100,6 +132,7 @@ export const normalizeNativeClaudeStream = (
     : new Set(options.allowedPluginNames);
   const pluginNames = new Set<string>();
   let activationEvidence: ClaudeActivationEvidence = 'unavailable';
+  let authSource: ClaudeInitAuthSource = 'unavailable';
   let configuredServers = 0;
   let toolCalls = 0;
   const errorEnvelopes: RedactedClaudeEnvelope[] = [];
@@ -113,8 +146,10 @@ export const normalizeNativeClaudeStream = (
     }
     configuredServers += namesFromRecords(record.mcp_servers).length;
     const tools = toolUseNames(record);
-    if (tools.includes('Skill')) activationEvidence = 'observed';
+    if (hasCandidateSkillUse(record, options.candidateSkillEventName)) activationEvidence = 'observed';
     toolCalls += tools.filter((name) => name.startsWith('mcp__')).length;
+    const recordAuthSource = normalizeInitAuthSource(record.apiKeySource ?? record.authSource ?? record.auth_source);
+    if (recordAuthSource === 'environment-key' || authSource === 'unavailable') authSource = recordAuthSource;
     if (
       record.hook_event_name !== undefined
       || record.hook_event !== undefined
@@ -125,6 +160,7 @@ export const normalizeNativeClaudeStream = (
 
   return Object.freeze({
     activationEvidence,
+    authSource,
     envelopes,
     errorEnvelopes: Object.freeze(errorEnvelopes),
     hookEnvelopes: Object.freeze(hookEnvelopes),
@@ -145,12 +181,21 @@ export interface NativeClaudeProcessResult {
   readonly signal?: NodeJS.Signals | null;
   readonly stderr: string;
   readonly stdout: string;
+  readonly termination?: 'aborted' | 'output-limit' | 'timed-out';
 }
 
 export type NativeClaudeProcessRunner = (request: NativeClaudeProcessRequest) => Promise<NativeClaudeProcessResult>;
 
+export interface NativeClaudeProcessOptions {
+  readonly gracePeriodMs?: number;
+  readonly maxOutputBytes?: number;
+  readonly signal?: AbortSignal;
+  readonly timeoutMs?: number;
+}
+
 export interface NativeClaudeSmokeOptions extends NativeClaudeCommandOptions {
-  readonly candidatePluginNames?: readonly string[];
+  readonly candidatePluginName: string;
+  readonly candidateSkillName: string;
   readonly cwd: string;
   readonly enabled: boolean;
   readonly environment?: Readonly<NodeJS.ProcessEnv>;
@@ -164,6 +209,9 @@ export interface NativeClaudeSmokeDiagnostic {
 }
 
 export interface NativeClaudeSmokeEvidence {
+  readonly authentication: Readonly<{
+    readonly status: 'subscription-session';
+  }>;
   readonly command: Readonly<{
     readonly args: readonly string[];
     readonly executable: 'claude';
@@ -184,6 +232,8 @@ export interface NativeClaudeSmokeReport {
   readonly evidence?: NativeClaudeSmokeEvidence;
   readonly status: 'harness-failure' | 'passed' | 'skipped';
 }
+
+const candidateSkillEventName = (pluginName: string, skillName: string): string => `${pluginName}:${skillName}`;
 
 const nativeClaudeSmokeCommandShape = Object.freeze({
   args: Object.freeze([
@@ -209,11 +259,13 @@ const stderrEvidence = (stderr: string): NativeClaudeSmokeEvidence['stderr'] => 
 });
 
 const evidenceFor = (
+  authentication: NativeClaudeSmokeEvidence['authentication'],
   version: string,
   validation: NativeClaudeProcessResult,
   execution: NativeClaudeProcessResult,
   stream: NativeClaudeStreamEvidence,
 ): NativeClaudeSmokeEvidence => Object.freeze({
+  authentication,
   command: nativeClaudeSmokeCommandShape,
   stderr: stderrEvidence(execution.stderr),
   stream,
@@ -256,14 +308,72 @@ const isCompatibleClaudeVersion = (version: ClaudeVersion): boolean => {
   return !version.prerelease;
 };
 
+const parseSubscriptionAuthentication = (
+  output: string,
+): NativeClaudeSmokeEvidence['authentication'] | undefined => {
+  let value: unknown;
+  try {
+    value = JSON.parse(output) as unknown;
+  } catch {
+    return undefined;
+  }
+  if (!isRecord(value) || value.loggedIn !== true) return undefined;
+  const authMethod = typeof value.authMethod === 'string' ? value.authMethod.toLowerCase() : '';
+  const subscriptionType = typeof value.subscriptionType === 'string' ? value.subscriptionType.toLowerCase() : '';
+  const apiProvider = typeof value.apiProvider === 'string' ? value.apiProvider.toLowerCase() : '';
+  const usesAlternateProvider = /(?:api[ _-]?key|bedrock|vertex|foundry)/iu.test(`${authMethod}\n${apiProvider}`);
+  const supportedMethod = authMethod === 'claude.ai' || authMethod === 'oauth' || authMethod.includes('session');
+  if (usesAlternateProvider || !supportedMethod || subscriptionType.length === 0 || subscriptionType === 'none') return undefined;
+  return Object.freeze({ status: 'subscription-session' });
+};
+
+const nativeClaudeProcessDefaults = Object.freeze({
+  gracePeriodMs: 1_000,
+  maxOutputBytes: 256 * 1024,
+  timeoutMs: 60_000,
+});
+
+interface ResolvedNativeClaudeProcessOptions {
+  readonly gracePeriodMs: number;
+  readonly maxOutputBytes: number;
+  readonly signal?: AbortSignal;
+  readonly timeoutMs: number;
+}
+
+const isAbortSignal = (value: unknown): value is AbortSignal =>
+  typeof value === 'object'
+  && value !== null
+  && 'aborted' in value
+  && 'addEventListener' in value
+  && typeof value.addEventListener === 'function';
+
+const processOptionsFor = (value: AbortSignal | NativeClaudeProcessOptions | undefined): ResolvedNativeClaudeProcessOptions => {
+  const options = isAbortSignal(value) ? { signal: value } : value;
+  return Object.freeze({
+    gracePeriodMs: options?.gracePeriodMs ?? nativeClaudeProcessDefaults.gracePeriodMs,
+    maxOutputBytes: options?.maxOutputBytes ?? nativeClaudeProcessDefaults.maxOutputBytes,
+    signal: options?.signal,
+    timeoutMs: options?.timeoutMs ?? nativeClaudeProcessDefaults.timeoutMs,
+  });
+};
+
+const appendBounded = (chunks: Buffer[], chunk: Buffer, maxBytes: number, currentBytes: number): number => {
+  const remaining = maxBytes - currentBytes;
+  if (remaining <= 0) return currentBytes;
+  const retained = chunk.byteLength <= remaining ? chunk : chunk.subarray(0, remaining);
+  chunks.push(retained);
+  return currentBytes + retained.byteLength;
+};
+
 export const nativeClaudeSmokeEnabled = (
   environment: Readonly<NodeJS.ProcessEnv> = process.env,
 ): boolean => environment.AGENT_BUNDLE_NATIVE_CLAUDE_SMOKE === '1';
 
 export const runNativeClaudeProcess = (
   request: NativeClaudeProcessRequest,
-  signal?: AbortSignal,
+  signalOrOptions?: AbortSignal | NativeClaudeProcessOptions,
 ): Promise<NativeClaudeProcessResult> => new Promise((resolve, reject) => {
+  const options = processOptionsFor(signalOrOptions);
   const child = spawn(request.executable, [...request.args], {
     cwd: request.cwd,
     env: request.environment,
@@ -271,25 +381,54 @@ export const runNativeClaudeProcess = (
   });
   const stdout: Buffer[] = [];
   const stderr: Buffer[] = [];
-  const abort = () => { child.kill('SIGTERM'); };
-  const cleanup = () => signal?.removeEventListener('abort', abort);
-  child.stdout.on('data', (chunk: Buffer) => { stdout.push(chunk); });
-  child.stderr.on('data', (chunk: Buffer) => { stderr.push(chunk); });
-  child.once('error', (error) => {
+  let stdoutBytes = 0;
+  let stderrBytes = 0;
+  let settled = false;
+  let termination: NativeClaudeProcessResult['termination'];
+  let escalation: NodeJS.Timeout | undefined;
+  const cleanup = () => {
+    clearTimeout(timeout);
+    if (escalation !== undefined) clearTimeout(escalation);
+    options.signal?.removeEventListener('abort', abort);
+  };
+  const settle = (callback: () => void) => {
+    if (settled) return;
+    settled = true;
     cleanup();
-    reject(error);
+    callback();
+  };
+  const terminate = (reason: NonNullable<NativeClaudeProcessResult['termination']>) => {
+    if (termination !== undefined || settled) return;
+    termination = reason;
+    child.kill('SIGTERM');
+    escalation = setTimeout(() => {
+      if (!settled) child.kill('SIGKILL');
+    }, options.gracePeriodMs);
+  };
+  const abort = () => { terminate('aborted'); };
+  const timeout = setTimeout(() => { terminate('timed-out'); }, options.timeoutMs);
+  child.stdout.on('data', (chunk: Buffer) => {
+    stdoutBytes = appendBounded(stdout, chunk, options.maxOutputBytes, stdoutBytes);
+    if (stdoutBytes >= options.maxOutputBytes && chunk.byteLength > 0) terminate('output-limit');
+  });
+  child.stderr.on('data', (chunk: Buffer) => {
+    stderrBytes = appendBounded(stderr, chunk, options.maxOutputBytes, stderrBytes);
+    if (stderrBytes >= options.maxOutputBytes && chunk.byteLength > 0) terminate('output-limit');
+  });
+  child.once('error', (error) => {
+    settle(() => { reject(error); });
   });
   child.once('close', (exitCode, closeSignal) => {
-    cleanup();
-    resolve(Object.freeze({
+    settle(() => { resolve(Object.freeze({
       exitCode,
       signal: closeSignal,
       stderr: Buffer.concat(stderr).toString('utf8'),
       stdout: Buffer.concat(stdout).toString('utf8'),
-    }));
+      ...(termination === undefined ? {} : { termination }),
+    })); });
   });
-  if (signal?.aborted) abort();
-  else signal?.addEventListener('abort', abort, { once: true });
+  if (options.signal?.aborted) abort();
+  else options.signal?.addEventListener('abort', abort, { once: true });
 });
 
 export const runNativeClaudeSmoke = async (options: NativeClaudeSmokeOptions): Promise<NativeClaudeSmokeReport> => {
@@ -355,6 +494,46 @@ export const runNativeClaudeSmoke = async (options: NativeClaudeSmokeOptions): P
     });
   }
 
+  const authRequest: NativeClaudeProcessRequest = Object.freeze({
+    args: Object.freeze(['auth', 'status', '--json']),
+    cwd: options.cwd,
+    environment,
+    executable: 'claude',
+  });
+  let authenticationResult: NativeClaudeProcessResult;
+  try {
+    authenticationResult = await run(authRequest);
+  } catch (error) {
+    return Object.freeze({
+      diagnostics: diagnostic(
+        isMissingExecutableError(error) ? 'claude-native.cli.missing' : 'claude-native.auth.unavailable',
+        isMissingExecutableError(error)
+          ? 'Claude is not installed or is not on PATH; install Claude Code 2.1.232 or newer.'
+          : 'Claude authentication preflight could not start; inspect the local CLI without retaining its output.',
+      ),
+      status: 'harness-failure',
+    });
+  }
+  if (authenticationResult.exitCode !== 0) {
+    return Object.freeze({
+      diagnostics: diagnostic(
+        'claude-native.auth.failed',
+        'Claude authentication preflight failed; sign in with Claude Code and retry.',
+      ),
+      status: 'harness-failure',
+    });
+  }
+  const authentication = parseSubscriptionAuthentication(authenticationResult.stdout);
+  if (authentication === undefined) {
+    return Object.freeze({
+      diagnostics: diagnostic(
+        'claude-native.auth.unsupported',
+        'Claude is not signed in with a supported subscription/session; sign in with Claude Code and retry.',
+      ),
+      status: 'harness-failure',
+    });
+  }
+
   const validationRequest: NativeClaudeProcessRequest = Object.freeze({
     args: Object.freeze(['plugin', 'validate', '--strict', options.pluginDirectory]),
     cwd: options.cwd,
@@ -408,7 +587,8 @@ export const runNativeClaudeSmoke = async (options: NativeClaudeSmokeOptions): P
   let stream: NativeClaudeStreamEvidence;
   try {
     stream = normalizeNativeClaudeStream(execution.stdout, {
-      allowedPluginNames: options.candidatePluginNames,
+      allowedPluginNames: [options.candidatePluginName],
+      candidateSkillEventName: candidateSkillEventName(options.candidatePluginName, options.candidateSkillName),
     });
   } catch {
     return Object.freeze({
@@ -419,7 +599,7 @@ export const runNativeClaudeSmoke = async (options: NativeClaudeSmokeOptions): P
       status: 'harness-failure',
     });
   }
-  const evidence = evidenceFor(formattedVersion, validation, execution, stream);
+  const evidence = evidenceFor(authentication, formattedVersion, validation, execution, stream);
   if (execution.exitCode !== 0) {
     return Object.freeze({
       diagnostics: diagnostic(
@@ -429,6 +609,36 @@ export const runNativeClaudeSmoke = async (options: NativeClaudeSmokeOptions): P
         looksUnauthenticated(`${execution.stdout}\n${execution.stderr}`)
           ? 'Claude is not authenticated with a usable subscription/session; sign in with Claude Code and retry.'
           : 'Claude native execution failed; inspect the local CLI without retaining its output.',
+      ),
+      evidence,
+      status: 'harness-failure',
+    });
+  }
+  if (stream.authSource === 'environment-key') {
+    return Object.freeze({
+      diagnostics: diagnostic(
+        'claude-native.auth.environment-key',
+        'Claude reported an environment-key auth source; remove provider credentials before running the subscription smoke.',
+      ),
+      evidence,
+      status: 'harness-failure',
+    });
+  }
+  if (!stream.plugins.includes(options.candidatePluginName)) {
+    return Object.freeze({
+      diagnostics: diagnostic(
+        'claude-native.plugin.not-loaded',
+        'Claude did not report the explicit candidate plugin as loaded; inspect the local CLI without retaining its output.',
+      ),
+      evidence,
+      status: 'harness-failure',
+    });
+  }
+  if (stream.activationEvidence !== 'observed') {
+    return Object.freeze({
+      diagnostics: diagnostic(
+        'claude-native.activation.unobserved',
+        'Claude did not emit the exact candidate Skill tool event; inspect the local CLI without retaining its output.',
       ),
       evidence,
       status: 'harness-failure',
@@ -457,4 +667,3 @@ export const runNativeClaudeSmoke = async (options: NativeClaudeSmokeOptions): P
 
   return Object.freeze({ diagnostics: Object.freeze([]), evidence, status: 'passed' });
 };
-import { spawn } from 'node:child_process';
