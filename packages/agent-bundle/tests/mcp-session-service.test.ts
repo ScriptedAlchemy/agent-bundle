@@ -32,9 +32,9 @@ const loadedProject = (root: string, config: AgentBundleConfig): LoadedConfig =>
   },
 });
 
-const epochFor = (root: string, id: string): ArtifactEpoch => ({
+const epochFor = (root: string, id: string, createdAt = '2026-08-14T12:00:00.000Z'): ArtifactEpoch => ({
   configDigest: 'config-digest',
-  createdAt: '2026-08-14T12:00:00.000Z',
+  createdAt,
   diagnostics: { errors: 0, infos: 0, warnings: 0 },
   id,
   manifestPath: join(root, '.agent-bundle', 'epochs', id, 'agent-bundle.manifest.json'),
@@ -132,6 +132,26 @@ const publishFixtureEpoch = async (root: string, id: string): Promise<EpochStore
   return store;
 };
 
+const publishEpochCopy = async (
+  root: string,
+  store: EpochStore,
+  sourceEpochId: string,
+  epochId: string,
+  createdAt: string,
+): Promise<void> => {
+  const sourceRoot = join(root, '.agent-bundle', 'epochs', sourceEpochId);
+  const staging = await store.createStagingEpoch({
+    epoch: epochFor(root, epochId, createdAt),
+    targets: ['portable'],
+  });
+  await Promise.all([
+    cp(join(sourceRoot, 'agent-bundle.hooks.json'), join(staging.root, 'agent-bundle.hooks.json')),
+    cp(join(sourceRoot, 'agent-bundle.manifest.json'), join(staging.root, 'agent-bundle.manifest.json')),
+    cp(join(sourceRoot, 'portable'), join(staging.root, 'portable'), { recursive: true }),
+  ]);
+  await staging.publish(async () => undefined);
+};
+
 it('keeps one generated server and plugin-data directory bound to the selected epoch until restart or close', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-persistent-mcp-'));
   const inheritedKey = 'AGENT_BUNDLE_PERSISTENT_INHERITED';
@@ -209,6 +229,36 @@ it('keeps one generated server and plugin-data directory bound to the selected e
     } else {
       process.env[inheritedKey] = previousInherited;
     }
+    await rm(root, { force: true, recursive: true });
+  }
+}, 30_000);
+
+it('pins the selected epoch until the persistent session closes', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-persistent-mcp-reference-'));
+  try {
+    const epochStore = await publishFixtureEpoch(root, 'epoch-1');
+    const service = new McpSessionService({ epochStore, projectRoot: root });
+    const session = await service.open({ epochId: 'epoch-1', serverName: 'fixture', target: 'portable' });
+
+    for (let sequence = 2; sequence <= 8; sequence += 1) {
+      await publishEpochCopy(
+        root,
+        epochStore,
+        'epoch-1',
+        `epoch-${sequence}`,
+        `2026-08-14T12:00:0${sequence}.000Z`,
+      );
+    }
+    await epochStore.cleanup();
+    await expect(access(join(root, '.agent-bundle', 'epochs', 'epoch-1', 'portable', 'mcp.json'))).resolves.toBeUndefined();
+
+    await session.close();
+    await epochStore.cleanup();
+    await expect(access(join(root, '.agent-bundle', 'epochs', 'epoch-1', 'portable', 'mcp.json'))).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+    await service.close();
+  } finally {
     await rm(root, { force: true, recursive: true });
   }
 }, 30_000);
