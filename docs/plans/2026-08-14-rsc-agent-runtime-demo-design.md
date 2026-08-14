@@ -212,7 +212,7 @@ to stderr. This makes the stream boundary observable and prevents accidental JSO
 The source plugin contains two hook files because matcher and command details are host-native:
 
 - Claude matches `Write|Edit` and reads `tool_input.file_path`.
-- Codex matches `apply_patch|Write|Edit` and extracts the first patch path from
+- Codex matches `apply_patch` and extracts the first patch path from
   `tool_input.command` when the canonical tool is `apply_patch`.
 
 Both lower the decoded RSC result to `hookSpecificOutput.hookEventName = "PostToolUse"` and
@@ -342,8 +342,11 @@ Automated validation must prove:
 - Claude-compatible standard host context applies host style variables, dark theme, and safe-area
   insets without changing the MCP Apps bridge or requiring a Claude vendor global;
 - the standalone widget renders at desktop and mobile widths and Refresh updates its state;
-- Claude Code 2.1.232 and Codex CLI 0.147.0 each perform a real edit, trigger the native hook, and
-  read that event through the demo MCP server using their already-configured sessions.
+- Claude Code 2.1.232 performs a real edit, triggers the native hook, and reads that event through
+  the demo MCP server using its already-configured session.
+- Codex CLI 0.147.0 proves plugin installation, MCP invocation, RSC rendering, and the final marker,
+  but its `exec --ephemeral` run does not dispatch the native `PostToolUse` hook or expose shared
+  edit state; the deterministic evaluator reports that incomplete evidence and exits nonzero.
 
 The ChatGPT remote Developer Mode loop is documented but not claimed unless a public HTTPS endpoint
 is actually connected. Local HTTP MCP, resource, bridge, browser, Claude, and Codex evidence are
