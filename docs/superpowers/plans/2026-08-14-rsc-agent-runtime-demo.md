@@ -31,6 +31,9 @@
   boundaries. Support the documented Claude stable app-domain convention only when a public MCP URL
   is explicitly configured. Do not branch on product names in the widget or invent a Claude-only
   browser API.
+- Use the standard MCP Apps host context and `useHostStyles` helper for host-provided light/dark
+  variables and fonts, and apply `safeAreaInsets`. Keep the accepted concept palette as CSS
+  fallbacks so standalone and hosts without style values remain complete.
 - Use the installed Claude Code 2.1.232 and Codex CLI 0.147.0 sessions for native evaluations; never accept, request, inject, inspect, or persist an API key.
 - Preserve the accepted visual contract at `docs/assets/rsc-agent-runtime-demo/edit-timeline-concept.png` and verify desktop and 360px-wide renderings before completion.
 
@@ -633,6 +636,10 @@ examples/rsc-agent-runtime/
   namespaced metadata survives descriptor/resource and tool-result paths unchanged and never
   replaces complete model-visible `content`/`structuredContent`.
 
+  Feed a Claude-compatible standard host context with dark theme, style variables, mobile platform,
+  and nonzero safe-area insets. Assert the SDK host-style path updates document theme/variables and
+  the timeline exposes the insets without any `window.claude`, user-agent, or product-name branch.
+
 - [ ] **Step 2: Run the focused test and verify red**
 
   Run:
@@ -686,6 +693,12 @@ examples/rsc-agent-runtime/
   restores only an ID present in the current timeline and calls `setWidgetState` synchronously after
   selection. Capability detection must not inspect a user agent or host/product name.
 
+  Call the SDK's `useHostStyles(app, app?.getHostContext())` and subscribe to standard host-context
+  changes for layout values. Express structural colors and font families as MCP Apps CSS variables
+  with the accepted concept colors/fonts as fallbacks. Apply safe-area padding through scoped CSS
+  custom properties so Claude web/desktop/mobile contexts and other compliant hosts use the same
+  component. Do not hardcode Anthropic-specific variables or introduce a Claude browser global.
+
   Make timeline rows keyboard-selectable without adding visible copy or controls. The selected row
   may use the existing violet accent and an accessible state, but must preserve the accepted open
   rail/list anatomy. Keep Refresh on the standard MCP Apps `tools/call` route. Extend MCP result
@@ -736,6 +749,11 @@ examples/rsc-agent-runtime/
   additional ChatGPT-extension screenshot. The ordinary desktop/mobile captures must run with no
   vendor global and remain unchanged.
 
+  Add a Claude-compatible host-context fixture through the standard MCP Apps bridge (or a narrowly
+  equivalent host-context harness) with dark style variables and safe-area insets. Capture it at a
+  mobile width and assert the host variables/insets apply, the Refresh target remains at least
+  44x44 CSS pixels, and no horizontal or nested vertical scrolling is introduced.
+
 - [ ] **Step 7: Document the runnable demo and honest support boundaries**
 
   `README.md` must include:
@@ -750,11 +768,13 @@ examples/rsc-agent-runtime/
   - the distinction between locally validated MCP App HTTP/resource/browser behavior and an actual
     ChatGPT Developer Mode connection;
   - a host-capability matrix covering portable MCP Apps, ChatGPT/OpenAI aliases and widget state,
-    Claude's standard bridge and optional stable app domain, Claude Code native packaging, and Codex
-    native packaging; explicitly state that Codex CLI is not the ChatGPT UI host;
+    Claude's standard bridge/host styles/safe areas and optional stable app domain, Claude Code
+    native packaging, and Codex native packaging; explicitly state that Codex CLI is not the
+    ChatGPT UI host;
   - an extension-author guide for descriptor/resource/result `_meta` and client adapters, including
     the rule that fallback behavior remains complete and vendor APIs are feature-detected;
-  - source links for Rsbuild RSC, MCP Apps, OpenAI plugin UI, Codex hooks, and Claude hooks;
+  - source links for Rsbuild RSC, MCP Apps, OpenAI plugin UI, Claude MCP Apps cross-platform/design
+    guidance, Codex hooks, and Claude hooks;
   - known limitations of JSONL storage and exact RSC package pins;
   - an explicit opt-in section explaining that existing Agent Bundle skills, static MCPs,
     evaluations, and normal hooks do not require or activate this runtime.
@@ -787,8 +807,9 @@ examples/rsc-agent-runtime/
 
 - [ ] **Step 10: Compare the accepted concept and browser screenshots**
 
-  Inspect `docs/assets/rsc-agent-runtime-demo/edit-timeline-concept.png`, the desktop screenshot, and
-  the mobile screenshot with `view_image`. Record at least these five checks in the task report:
+  Inspect `docs/assets/rsc-agent-runtime-demo/edit-timeline-concept.png`, the standalone desktop and
+  mobile screenshots, the ChatGPT-extension screenshot, and the Claude-compatible host-context
+  screenshot with `view_image`. Record at least these five checks in the task report:
 
   1. exact header/support/footer copy;
   2. open rail/list anatomy and three row order;

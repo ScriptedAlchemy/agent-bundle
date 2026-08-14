@@ -236,7 +236,7 @@ Host support is progressive enhancement with four explicit extension lanes:
 | Tool descriptor | `_meta.ui.resourceUri` | ChatGPT `openai/outputTemplate` alias | Tool still returns text and structured content |
 | UI resource | `_meta.ui` MIME/CSP/border metadata | ChatGPT description aliases; optional Claude stable app domain derived from a configured public MCP URL | No host-only metadata |
 | Tool result | MCP `content`, `structuredContent`, and optional `_meta` | Serializable namespaced `_meta` passes through to the iframe without entering model-visible content | Model-visible result remains complete |
-| Widget client | MCP Apps `ui/*` bridge and host context | Feature-detected `window.openai.widgetState`/`setWidgetState` preserves selected-row UI state in ChatGPT | React instance state only |
+| Widget client | MCP Apps `ui/*` bridge and host context | Claude-provided style/safe-area context; feature-detected `window.openai.widgetState`/`setWidgetState` preserves selected-row UI state in ChatGPT | React instance state and documented fallback tokens |
 
 The browser code tests for a capability, never a product name. The OpenAI adapter is a small optional
 module: it reads a valid selected event ID from `window.openai.widgetState` and synchronously writes
@@ -248,6 +248,9 @@ Claude's current public interactive-connector contract is MCP Apps itself: `ui:/
 MCP Apps guidance also documents Claude's stable-domain convention as the first 32 hex characters
 of the public MCP URL's SHA-256 digest plus `.claudemcpcontent.com`. The demo exposes that domain
 only when an explicit public URL is configured; it does not invent a Claude-only iframe global.
+The widget uses the SDK's `useHostStyles` path and standard safe-area context, so Claude can supply
+its light/dark palette, fonts, platform, and mobile insets while standalone and other hosts receive
+the accepted concept tokens as CSS fallbacks.
 
 Codex CLI is not the ChatGPT UI host. Its host-specific proof is the native Codex plugin manifest,
 marketplace entry, MCP command, hook matcher/input adapter, and path-token behavior. Claude Code has
@@ -272,6 +275,11 @@ Design tokens extracted from it:
 - mono family: `ui-monospace, SFMono-Regular, Menlo, Consolas, monospace`;
 - one outer 12px radius; rows are open, separated by 1px rules, not nested cards;
 - desktop target: 760 x 500; mobile target: 360px wide without horizontal overflow.
+
+These are the standalone/default fallback values. Inside an MCP Apps host, structural colors and
+font families use standard host CSS variables with these values as fallbacks; violet remains the
+demo's permitted brand accent. The host-context path must preserve the same hierarchy and anatomy
+in both light and dark themes and apply `safeAreaInsets` without fixed host-name checks.
 
 Visible copy is restricted to the concept strings and dynamic event values. The core interaction is
 Refresh -> `tools/call recent_edits` -> update the mounted timeline and state version.
@@ -317,6 +325,8 @@ Automated validation must prove:
   resource has no unnecessary host domain;
 - a mocked ChatGPT capability restores and persists selected-row UI state, while the same widget
   works with no `window.openai` global;
+- Claude-compatible standard host context applies host style variables, dark theme, and safe-area
+  insets without changing the MCP Apps bridge or requiring a Claude vendor global;
 - the standalone widget renders at desktop and mobile widths and Refresh updates its state;
 - Claude Code 2.1.232 and Codex CLI 0.147.0 each perform a real edit, trigger the native hook, and
   read that event through the demo MCP server using their already-configured sessions.
@@ -352,6 +362,9 @@ separate claims.
   the standards-first MCP Apps path and optional feature-detected widget-state extension.
 - MCP Apps patterns at `https://apps.extensions.modelcontextprotocol.io/api/documents/Patterns.html`,
   including host context, resource metadata placement, and the Claude stable-domain convention.
+- Claude cross-platform MCP Apps guidance at
+  `https://claude.com/docs/connectors/building/mcp-apps/cross-compatibility` and design guidance at
+  `https://claude.com/docs/connectors/building/mcp-apps/design-guidelines`.
 - Claude interactive-connector guidance at
   `https://support.claude.com/en/articles/13454812-use-interactive-connectors-in-claude`.
 - Claude Code 2.1.232 and Codex CLI 0.147.0 native contracts.
