@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-14
 
-**Status:** Proposed for written-spec review
+**Status:** Approved
 
 ## Purpose
 
