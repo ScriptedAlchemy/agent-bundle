@@ -27,11 +27,24 @@ export interface CanonicalPostToolUse {
   path: string;
 }
 
-export type RenderRequest = {
+export interface HookRenderRequest {
   type: 'hook/after-file-edit';
   stateFile: string;
   event: CanonicalPostToolUse;
-};
+}
+
+export interface McpRenderTimelineRequest {
+  type: 'mcp/render-timeline';
+  stateFile: string;
+  snapshot: RuntimeSnapshot;
+}
+
+export interface McpRuntimeStatusRequest {
+  type: 'mcp/runtime-status';
+  stateFile: string;
+}
+
+export type RenderRequest = HookRenderRequest | McpRenderTimelineRequest | McpRuntimeStatusRequest;
 
 export type McpTimeline = RuntimeSnapshot;
 
