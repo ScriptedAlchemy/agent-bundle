@@ -1,6 +1,7 @@
-import { extname, resolve } from 'node:path';
+import { extname, join } from 'node:path';
 
 import type { NormalizedScript } from '../core/types.ts';
+import { resolveArtifactDestination } from './emit.ts';
 import { buildWithRslib } from './rslib.ts';
 
 export interface CompiledEntry {
@@ -14,12 +15,12 @@ const outputName = (script: NormalizedScript): string => {
   return extension.length > 0 ? script.name.slice(0, -extension.length) : script.name;
 };
 
-export const compileEntries = async (
+export const planCompiledEntries = (
   entries: readonly NormalizedScript[],
   options: { readonly cwd: string; readonly outDir: string },
-): Promise<readonly CompiledEntry[]> => {
+): readonly CompiledEntry[] => {
   const names = new Set<string>();
-  const compiled = entries.map((script) => {
+  return Object.freeze(entries.map((script) => {
     const name = outputName(script);
     if (name.length === 0 || names.has(name)) {
       throw new Error(`Duplicate compiled script destination ${JSON.stringify(`scripts/${name}.mjs`)}.`);
@@ -27,10 +28,20 @@ export const compileEntries = async (
     names.add(name);
     return {
       name,
-      output: resolve(options.outDir, 'scripts', `${name}.mjs`),
+      output: resolveArtifactDestination(
+        options.outDir,
+        join('scripts', `${name}.mjs`),
+      ),
       source: script.source,
     };
-  });
+  }).map((entry) => Object.freeze(entry)));
+};
+
+export const compileEntries = async (
+  entries: readonly NormalizedScript[],
+  options: { readonly cwd: string; readonly outDir: string },
+): Promise<readonly CompiledEntry[]> => {
+  const compiled = planCompiledEntries(entries, options);
 
   await buildWithRslib({
     cwd: options.cwd,
@@ -38,5 +49,5 @@ export const compileEntries = async (
     outputRoot: options.outDir,
   });
 
-  return Object.freeze(compiled.map((entry) => Object.freeze({ ...entry })));
+  return compiled;
 };

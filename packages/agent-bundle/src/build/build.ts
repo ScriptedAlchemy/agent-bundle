@@ -1,12 +1,20 @@
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
-import { basename, dirname, join } from 'node:path';
+import { basename, dirname, join, relative, resolve } from 'node:path';
 
 import type { TargetRegistry } from '../adapters/registry.ts';
 import type { TargetArtifactEntry } from '../adapters/types.ts';
 import { DiagnosticBag, DiagnosticError, type Diagnostic } from '../core/diagnostics.ts';
 import type { NormalizedPlugin } from '../core/types.ts';
-import { compileEntries, type CompiledEntry } from './entries.ts';
-import { emitPlanEntries, publishArtifact, writeManifest, type ArtifactManifest } from './emit.ts';
+import { assertInside } from '../core/paths.ts';
+import { compileEntries, planCompiledEntries, type CompiledEntry } from './entries.ts';
+import {
+  assertUniqueArtifactDestinations,
+  emitPlanEntries,
+  publishArtifact,
+  resolveArtifactDestination,
+  writeManifest,
+  type ArtifactManifest,
+} from './emit.ts';
 import { validateArtifact } from './validate-artifact.ts';
 
 export interface BuildResult {
@@ -27,6 +35,11 @@ interface PlannedTarget {
   readonly name: string;
 }
 
+interface StagedTarget extends PlannedTarget {
+  readonly compiledEntries: readonly CompiledEntry[];
+  readonly root: string;
+}
+
 const planTargets = (options: BuildOptions): readonly PlannedTarget[] => {
   const diagnostics: Diagnostic[] = [];
   const planned: PlannedTarget[] = [];
@@ -43,35 +56,58 @@ const planTargets = (options: BuildOptions): readonly PlannedTarget[] => {
 
 export const build = async (options: BuildOptions): Promise<BuildResult> => {
   const planned = planTargets(options);
-  const stageParent = dirname(options.outputRoot);
+  const outputRoot = resolve(options.outputRoot);
+  const stageParent = dirname(outputRoot);
   await mkdir(stageParent, { recursive: true });
-  const stageRoot = await mkdtemp(join(stageParent, `.${basename(options.outputRoot)}.stage-`));
+  const stageRoot = await mkdtemp(join(stageParent, `.${basename(outputRoot)}.stage-`));
 
   try {
+    const stagedTargets: StagedTarget[] = planned.map((target) => {
+      const root = assertInside(stageRoot, resolve(stageRoot, target.name));
+      const compiledEntries = planCompiledEntries(
+        options.model.scripts.filter((script) => script.targets.includes(target.name)),
+        { cwd: options.projectRoot, outDir: root },
+      );
+      return { ...target, compiledEntries, root };
+    });
+    assertUniqueArtifactDestinations(
+      stagedTargets.flatMap((target) => [
+        ...target.entries.map((entry) =>
+          resolveArtifactDestination(target.root, entry.relativePath),
+        ),
+        ...target.compiledEntries.map((entry) => entry.output),
+      ]),
+    );
+
     const compiledEntries: CompiledEntry[] = [];
-    for (const target of planned) {
-      const targetRoot = join(stageRoot, target.name);
-      await emitPlanEntries({ entries: target.entries, root: targetRoot });
+    for (const target of stagedTargets) {
+      await emitPlanEntries({ entries: target.entries, root: target.root });
       compiledEntries.push(
         ...(await compileEntries(
           options.model.scripts.filter((script) => script.targets.includes(target.name)),
-          { cwd: options.projectRoot, outDir: targetRoot },
+          { cwd: options.projectRoot, outDir: target.root },
         )),
       );
     }
+    const publishedCompiledEntries = Object.freeze(compiledEntries.map((entry) =>
+      Object.freeze({
+        ...entry,
+        output: assertInside(outputRoot, resolve(outputRoot, relative(stageRoot, entry.output))),
+      }),
+    ));
     const manifest = await writeManifest({
       artifactRoot: stageRoot,
-      targets: planned.map((target) => target.name),
+      targets: stagedTargets.map((target) => target.name),
     });
     const diagnostics = await validateArtifact({ artifactRoot: stageRoot });
     if (diagnostics.some((entry) => entry.severity === 'error')) {
       throw new DiagnosticError(diagnostics);
     }
-    await publishArtifact({ outputRoot: options.outputRoot, stageRoot });
+    await publishArtifact({ outputRoot, stageRoot });
     return Object.freeze({
-      compiledEntries: Object.freeze(compiledEntries),
+      compiledEntries: publishedCompiledEntries,
       manifest,
-      outputRoot: options.outputRoot,
+      outputRoot,
     });
   } finally {
     await rm(stageRoot, { force: true, recursive: true });

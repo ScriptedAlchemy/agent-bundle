@@ -178,7 +178,7 @@ it('builds a portable artifact from paths with spaces without repository depende
   const project = await createProject();
 
   try {
-    await build({
+    const result = await build({
       model: modelFor(project),
       outputRoot: project.outputRoot,
       projectRoot: project.root,
@@ -186,6 +186,12 @@ it('builds a portable artifact from paths with spaces without repository depende
     });
 
     const emittedScript = join(project.outputRoot, 'portable', 'scripts', 'greeting.mjs');
+    expect(result.compiledEntries).toMatchObject([
+      { name: 'greeting', output: emittedScript, source: project.scriptPath },
+    ]);
+    await expect(readFile(result.compiledEntries[0]!.output, 'utf8')).resolves.toContain(
+      'hello from bundle',
+    );
     const cleanDirectory = join(project.root, 'clean consumer');
     await mkdir(cleanDirectory);
     await expect(runModule(emittedScript, cleanDirectory)).resolves.toEqual({
@@ -281,6 +287,130 @@ it('rejects duplicate planned destinations before replacing an existing artifact
         outputRoot: project.outputRoot,
         projectRoot: project.root,
         registry,
+      }),
+    ).rejects.toThrow(/duplicate/i);
+    await expect(readFile(join(project.outputRoot, 'previous.txt'), 'utf8')).resolves.toBe('previous\n');
+  } finally {
+    await cleanupProject(project);
+  }
+});
+
+it('rejects an escaped target name before it can write outside the staging artifact', async () => {
+  const project = await createProject();
+  const targetName = '../escaped-target';
+  const adapter: TargetAdapter = {
+    capabilities: {},
+    name: targetName,
+    plan: () => ({
+      diagnostics: [],
+      entries: [{ content: 'escaped\n', kind: 'write', relativePath: 'plugin.json' }],
+    }),
+    validateModel: () => [],
+  };
+
+  try {
+    await mkdir(project.outputRoot, { recursive: true });
+    await writeFile(join(project.outputRoot, 'previous.txt'), 'previous\n');
+
+    await expect(
+      build({
+        model: {
+          ...modelFor(project),
+          scripts: [],
+          targets: [{ ...modelFor(project).targets[0]!, name: targetName }],
+        },
+        outputRoot: project.outputRoot,
+        projectRoot: project.root,
+        registry: new TargetRegistry().register(adapter, { default: true }),
+      }),
+    ).rejects.toThrow(/outside/i);
+    await expect(readFile(join(project.outputRoot, 'previous.txt'), 'utf8')).resolves.toBe('previous\n');
+    await expect(readFile(join(project.root, 'escaped-target', 'plugin.json'), 'utf8')).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+  } finally {
+    await cleanupProject(project);
+  }
+});
+
+it('rejects an escaped script name before Rslib receives an unsafe output destination', async () => {
+  const project = await createProject();
+
+  try {
+    await mkdir(project.outputRoot, { recursive: true });
+    await writeFile(join(project.outputRoot, 'previous.txt'), 'previous\n');
+    const model = modelFor(project);
+
+    await expect(
+      build({
+        model: {
+          ...model,
+          scripts: [{ ...model.scripts[0]!, name: '../../../leaked' }],
+        },
+        outputRoot: project.outputRoot,
+        projectRoot: project.root,
+        registry: new TargetRegistry().register(
+          (await import('../src/adapters/portable.ts')).portableAdapter,
+          { default: true },
+        ),
+      }),
+    ).rejects.toThrow(/outside/i);
+    await expect(readFile(join(project.outputRoot, 'previous.txt'), 'utf8')).resolves.toBe('previous\n');
+    await expect(readFile(join(project.root, 'leaked.mjs'), 'utf8')).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+  } finally {
+    await cleanupProject(project);
+  }
+});
+
+it('rejects canonical aliases and script-plan collisions before emission', async () => {
+  const project = await createProject();
+  const aliasesAdapter: TargetAdapter = {
+    capabilities: {},
+    name: 'portable',
+    plan: () => ({
+      diagnostics: [],
+      entries: [
+        { content: 'first\n', kind: 'write', relativePath: 'same.txt' },
+        { content: 'second\n', kind: 'write', relativePath: 'dir/../same.txt' },
+      ],
+    }),
+    validateModel: () => [],
+  };
+  const scriptCollisionAdapter: TargetAdapter = {
+    capabilities: {},
+    name: 'portable',
+    plan: () => ({
+      diagnostics: [],
+      entries: [
+        { content: 'adapter output\n', kind: 'write', relativePath: 'scripts/greeting.mjs' },
+      ],
+    }),
+    validateModel: () => [],
+  };
+
+  try {
+    await mkdir(project.outputRoot, { recursive: true });
+    await writeFile(join(project.outputRoot, 'previous.txt'), 'previous\n');
+    const model = modelFor(project);
+    const options = {
+      outputRoot: project.outputRoot,
+      projectRoot: project.root,
+    };
+
+    await expect(
+      build({
+        ...options,
+        model: { ...model, scripts: [] },
+        registry: new TargetRegistry().register(aliasesAdapter, { default: true }),
+      }),
+    ).rejects.toThrow(/duplicate/i);
+    await expect(
+      build({
+        ...options,
+        model,
+        registry: new TargetRegistry().register(scriptCollisionAdapter, { default: true }),
       }),
     ).rejects.toThrow(/duplicate/i);
     await expect(readFile(join(project.outputRoot, 'previous.txt'), 'utf8')).resolves.toBe('previous\n');

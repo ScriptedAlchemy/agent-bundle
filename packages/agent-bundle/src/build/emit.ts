@@ -47,8 +47,22 @@ const exists = async (path: string): Promise<boolean> => {
   }
 };
 
-const writeEntry = async (root: string, entry: TargetArtifactEntry): Promise<void> => {
-  const destination = assertInside(root, resolve(root, entry.relativePath));
+export const resolveArtifactDestination = (root: string, relativePath: string): string =>
+  assertInside(root, resolve(root, relativePath));
+
+export const assertUniqueArtifactDestinations = (
+  destinations: readonly string[],
+): void => {
+  const seen = new Set<string>();
+  for (const destination of destinations) {
+    if (seen.has(destination)) {
+      throw new Error(`Duplicate planned artifact destination ${JSON.stringify(destination)}.`);
+    }
+    seen.add(destination);
+  }
+};
+
+const writeEntry = async (destination: string, entry: TargetArtifactEntry): Promise<void> => {
   await mkdir(dirname(destination), { recursive: true });
 
   if (entry.kind === 'write') {
@@ -73,14 +87,14 @@ export const emitPlanEntries = async (options: {
   readonly entries: readonly TargetArtifactEntry[];
   readonly root: string;
 }): Promise<void> => {
-  const destinations = new Set<string>();
-  for (const entry of options.entries) {
-    const destination = normalizeRelativePath(entry.relativePath);
-    if (destinations.has(destination)) {
-      throw new Error(`Duplicate planned artifact destination ${JSON.stringify(destination)}.`);
-    }
-    destinations.add(destination);
-    await writeEntry(options.root, entry);
+  const planned = options.entries.map((entry) => ({
+    destination: resolveArtifactDestination(options.root, entry.relativePath),
+    entry,
+  }));
+  assertUniqueArtifactDestinations(planned.map(({ destination }) => destination));
+
+  for (const { destination, entry } of planned) {
+    await writeEntry(destination, entry);
   }
 };
 
