@@ -1,10 +1,11 @@
 {
   "compilerOptions": {
     "allowImportingTsExtensions": true,
+    "isolatedModules": true,
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "noEmit": true,
-    "rootDir": "./packages/agent-bundle/src",
+    "resolveJsonModule": true,
     "skipLibCheck": true,
     "strict": true,
     "target": "ES2022",
@@ -14,6 +15,8 @@
     "verbatimModuleSyntax": true
   },
   "include": [
-    "packages/agent-bundle/src/**/*.ts"
+    "*.ts",
+    "**/src/**/*.ts",
+    "**/tests/**/*.ts"
   ]
 }

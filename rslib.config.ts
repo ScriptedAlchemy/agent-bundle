@@ -18,6 +18,7 @@ export default defineConfig({
     target: 'node',
   },
   source: {
+    tsconfigPath: './tsconfig.build.json',
     define: {
       __AGENT_BUNDLE_VERSION__: JSON.stringify(packageManifest.version),
     },
