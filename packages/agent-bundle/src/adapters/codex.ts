@@ -325,6 +325,11 @@ export const codexAdapter: TargetAdapter = Object.freeze({
     sse: capabilityTable.mcp.sse,
     skills: capabilityTable.plugin.skills,
   }),
+  mcpPathTokens: Object.freeze({
+    args: Object.freeze({}),
+    cwd: Object.freeze({}),
+    env: Object.freeze({}),
+  }),
   name: codexName,
   plan,
   validateModel: (model: NormalizedPlugin) => [...plan(model).diagnostics],

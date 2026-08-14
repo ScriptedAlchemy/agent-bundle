@@ -14,9 +14,11 @@ import { tmpdir } from 'node:os';
 import { isAbsolute, posix, resolve } from 'node:path';
 import type { Stream } from 'node:stream';
 
+import { createDefaultRegistry } from '../adapters/registry.ts';
 import { validateArtifact } from '../build/validate-artifact.ts';
 import { DiagnosticError } from '../core/diagnostics.ts';
 import { assertInside } from '../core/paths.ts';
+import { resolveMcpPathTokens } from './mcp-path-tokens.ts';
 
 const defaultTimeoutMs = 5_000;
 const maxStderrBytes = 1_000_000;
@@ -180,7 +182,7 @@ const parseManifestServer = (value: unknown): ManifestServer | undefined => {
   };
 };
 
-const expandTokens = (
+const expandRemoteTokens = (
   value: string,
   target: NativeTarget,
   roots: { readonly pluginData: string; readonly pluginRoot: string; readonly workspaceRoot: string },
@@ -418,27 +420,26 @@ export class McpService {
     setCapture: (capture: StderrCapture) => void,
   ): Transport {
     if (server.kind === 'stdio') {
-      const cwd = server.cwd === undefined
-        ? undefined
-        : resolveContained(targetRoot, expandTokens(server.cwd, target, roots));
-      const args = server.args.map((argument) => {
-        const expanded = expandTokens(argument, target, roots);
-        return target === 'codex' && expanded.startsWith('./')
-          ? resolveContained(targetRoot, expanded)
-          : expanded;
+      const resolved = resolveMcpPathTokens({
+        adapter: createDefaultRegistry().get(target),
+        roots,
+        server,
       });
-      const env = server.env === undefined
+      const cwd = resolved.cwd === undefined
         ? undefined
-        : Object.fromEntries(Object.entries(server.env).map(([key, value]) => [
-            key,
-            expandTokens(value, target, roots),
-          ]));
+        : resolveContained(targetRoot, resolved.cwd);
+      const args = resolved.args.map((argument) => {
+        return target === 'codex' && argument.startsWith('./')
+          ? resolveContained(targetRoot, argument)
+          : argument;
+      });
+      const env = resolved.env;
       const inheritedEnv = Object.fromEntries(
         Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined),
       );
       const transport = this.#createStdioTransport({
         args,
-        command: expandTokens(server.command, target, roots),
+        command: resolved.command,
         ...(cwd === undefined ? {} : { cwd }),
         env: { ...inheritedEnv, ...env },
         stderr: 'pipe',
@@ -451,9 +452,9 @@ export class McpService {
       ? undefined
       : Object.fromEntries(Object.entries(server.headers).map(([key, value]) => [
           key,
-          expandTokens(value, target, roots),
+          expandRemoteTokens(value, target, roots),
         ]));
-    const url = new URL(expandTokens(server.url, target, roots));
+    const url = new URL(expandRemoteTokens(server.url, target, roots));
     return server.kind === 'streamable-http'
       ? this.#createStreamableHttpTransport(url, { ...(headers === undefined ? {} : { headers }) })
       : this.#createSseTransport(url, { ...(headers === undefined ? {} : { headers }) });
