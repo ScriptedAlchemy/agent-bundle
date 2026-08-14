@@ -24,7 +24,7 @@ interface RslibDependencies {
 
 const entryAnchor = fileURLToPath(import.meta.url);
 
-const assertVirtualConfig = (
+const assertExecutableConfig = (
   entries: readonly RslibEntry[],
   configs: readonly { readonly output?: { readonly asyncChunks?: boolean; readonly path?: string }; readonly plugins?: readonly unknown[]; readonly target?: false | string | readonly string[] }[],
   outputRoot: string,
@@ -32,7 +32,6 @@ const assertVirtualConfig = (
   const virtualEntries = entries.filter(
     (entry) => entry.virtualSource !== undefined || (entry.virtualModules?.length ?? 0) > 0,
   );
-  if (virtualEntries.length === 0) return;
   if (configs.length !== entries.length) {
     throw new Error('Rslib did not resolve one environment for every generated executable.');
   }
@@ -41,11 +40,13 @@ const assertVirtualConfig = (
     if (config.output?.asyncChunks !== false || config.output.path !== outputRoot || !target.some((value) => value === 'node')) {
       throw new Error('Rslib resolved an invalid generated executable configuration.');
     }
-    const hasVirtualModule = config.plugins?.some(
-      (plugin) => plugin instanceof rspack.experiments.VirtualModulesPlugin,
-    );
-    if (!hasVirtualModule) {
-      throw new Error('Rslib resolved a generated executable environment without its virtual module.');
+    if (virtualEntries.length > 0) {
+      const hasVirtualModule = config.plugins?.some(
+        (plugin) => plugin instanceof rspack.experiments.VirtualModulesPlugin,
+      );
+      if (!hasVirtualModule) {
+        throw new Error('Rslib resolved a generated executable environment without its virtual module.');
+      }
     }
   }
 };
@@ -93,12 +94,10 @@ export const buildWithRslib = async (options: {
               [entry.name]: virtualSource === undefined ? entry.source : entryAnchor,
             },
           },
-          ...(!hasVirtualModules
-            ? {}
-            : {
-                tools: {
-                  rspack: (config) => {
-                    config.output.asyncChunks = false;
+          tools: {
+            rspack: (config) => {
+              config.output.asyncChunks = false;
+              if (hasVirtualModules) {
                     config.resolve.alias = {
                       ...config.resolve.alias,
                       ...Object.fromEntries(virtualModules.map((module) => [module.name, module.path])),
@@ -107,16 +106,16 @@ export const buildWithRslib = async (options: {
                       ...(virtualSource === undefined ? {} : { [entryAnchor]: virtualSource }),
                       ...Object.fromEntries(virtualModules.map((module) => [module.path, module.source])),
                     }));
-                  },
-                },
-              }),
+              }
+            },
+          },
         };
       }),
     },
   });
 
   const inspection = await rslib.inspectConfig();
-  assertVirtualConfig(options.entries, inspection.origin.bundlerConfigs, options.outputRoot);
+  assertExecutableConfig(options.entries, inspection.origin.bundlerConfigs, options.outputRoot);
   let result: Awaited<ReturnType<typeof rslib.build>> | undefined;
   try {
     result = await rslib.build();

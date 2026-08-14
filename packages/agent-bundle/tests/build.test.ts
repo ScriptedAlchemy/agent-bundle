@@ -236,6 +236,39 @@ it('builds a portable artifact from paths with spaces without repository depende
   }
 });
 
+it('embeds a script dynamic import in its single planned output file', async () => {
+  const project = await createProject();
+  const registry = new TargetRegistry().register(
+    (await import('../src/adapters/portable.ts')).portableAdapter,
+    { default: true },
+  );
+
+  try {
+    await writeFile(
+      project.scriptPath,
+      [
+        "export const loadGreeting = async () => (await import('./local module.ts')).greeting;",
+        'console.log(await loadGreeting());',
+        '',
+      ].join('\n'),
+    );
+    await build({
+      model: modelFor(project),
+      outputRoot: project.outputRoot,
+      projectRoot: project.root,
+      registry,
+    });
+
+    await expect(runModule(join(project.outputRoot, 'portable', 'scripts', 'greeting.mjs'), project.root)).resolves.toEqual({
+      code: 0,
+      output: 'hello from bundle\n',
+    });
+    expect(await readdir(join(project.outputRoot, 'portable', 'scripts'))).toEqual(['greeting.mjs']);
+  } finally {
+    await cleanupProject(project);
+  }
+});
+
 it('emits deterministically and preserves the prior artifact after a failed staged rebuild', async () => {
   const project = await createProject();
   const registry = new TargetRegistry().register(
