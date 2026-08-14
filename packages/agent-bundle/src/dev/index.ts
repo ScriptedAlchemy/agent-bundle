@@ -38,6 +38,18 @@ export {
   type ProjectEventSubscriptionOptions,
 } from './events.ts';
 export {
+  ForegroundServer,
+  ForegroundServerCloseError,
+  ForegroundServerError,
+  startForegroundServer,
+  type ForegroundCoordinator,
+  type ForegroundServerCloseFailure,
+  type ForegroundServerErrorCode,
+  type ForegroundServerOptions,
+  type WorkbenchAsset,
+  type WorkbenchAssetSource,
+} from './foreground-server.ts';
+export {
   DiagnosticService,
   type DiagnosticReport,
   type DiagnosticServiceOptions,
