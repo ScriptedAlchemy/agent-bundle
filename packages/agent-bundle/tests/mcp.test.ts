@@ -473,7 +473,7 @@ it('uses the selected remote manifest with propagated cancellation and cleans da
     expect(closes).toBe(2);
     await expect(access(http[0]!.headers!['X-Data']!)).rejects.toMatchObject({ code: 'ENOENT' });
 
-    await writeFile(join(artifact, 'claude', '.mcp.json'), '{"mcpServers":{}}\n');
+    await writeFile(join(artifact, 'claude', '.claude-plugin', 'plugin.json'), '{"name":"tampered"}\n');
     await expect(service.list({ artifact, server: 'http', target: 'claude' })).rejects.toThrow();
     expect(closes).toBe(2);
   } finally {
