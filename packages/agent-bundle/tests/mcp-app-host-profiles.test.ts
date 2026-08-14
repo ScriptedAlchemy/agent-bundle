@@ -57,10 +57,12 @@ it('adds ChatGPT widget state only when the window.openai feature is supplied', 
   widgetState.selectedDay = 'mutated-after-resolution';
 
   expect(resolution.kind).toBe('apps');
-  expect(resolution.extensions).toEqual({ windowOpenAi: { widgetState: { selectedDay: '2026-08-14' } } });
-  expect(Object.isFrozen(resolution.extensions)).toBe(true);
-  expect(Object.isFrozen(resolution.extensions?.windowOpenAi)).toBe(true);
-  expect(JSON.stringify(resolution)).not.toContain('openai/widget');
+  if (resolution.kind === 'apps') {
+    expect(resolution.extensions).toEqual({ windowOpenAi: { widgetState: { selectedDay: '2026-08-14' } } });
+    expect(Object.isFrozen(resolution.extensions)).toBe(true);
+    expect(Object.isFrozen(resolution.extensions?.windowOpenAi)).toBe(true);
+    expect(JSON.stringify(resolution)).not.toContain('openai/widget');
+  }
 });
 
 it('computes the Claude Apps domain from an exact canonical public HTTPS MCP URL', () => {
@@ -72,8 +74,10 @@ it('computes the Claude Apps domain from an exact canonical public HTTPS MCP URL
   });
 
   expect(resolution.kind).toBe('apps');
-  expect(resolution.extensions?.claude?.domain).toBe('6881888a0d5873fdb447c2edb4faa4b7.claudemcpcontent.com');
-  expect(Object.isFrozen(resolution.extensions?.claude)).toBe(true);
+  if (resolution.kind === 'apps') {
+    expect(resolution.extensions?.claude?.domain).toBe('6881888a0d5873fdb447c2edb4faa4b7.claudemcpcontent.com');
+    expect(Object.isFrozen(resolution.extensions?.claude)).toBe(true);
+  }
 });
 
 it('returns an immutable structured fallback when the Apps resource is unavailable', () => {
@@ -165,8 +169,19 @@ it('omits the Claude domain for noncanonical or nonpublic MCP URLs', () => {
   for (const publicMcpUrl of [
     'http://mcp.example.com/v1/mcp',
     'https://localhost/v1/mcp',
+    'https://localhost./v1/mcp',
+    'https://foo.localhost./v1/mcp',
     'https://127.0.0.1/v1/mcp',
+    'https://100.64.0.1/v1/mcp',
+    'https://169.254.1.1/v1/mcp',
+    'https://192.0.2.1/v1/mcp',
+    'https://198.18.1.1/v1/mcp',
     'https://[::1]/v1/mcp',
+    'https://[::ffff:c0a8:101]/v1/mcp',
+    'https://[fe80::1]/v1/mcp',
+    'https://[fc00::1]/v1/mcp',
+    'https://[ff02::1]/v1/mcp',
+    'https://[2001:db8::1]/v1/mcp',
     'https://mcp.example.com:443/v1/mcp',
   ]) {
     const resolution = resolveMcpAppHostProfile({
@@ -178,6 +193,23 @@ it('omits the Claude domain for noncanonical or nonpublic MCP URLs', () => {
 
     expect(resolution.kind).toBe('apps');
     if (resolution.kind === 'apps') expect(resolution.extensions).toBeUndefined();
+  }
+});
+
+it('computes a Claude domain for a canonical public IPv6 MCP URL', () => {
+  const resolution = resolveMcpAppHostProfile({
+    claude: { publicMcpUrl: 'https://[2606:4700:4700::1111]/v1/mcp' },
+    host: standardContext,
+    profile: 'claude',
+    resource: { mimeType: 'text/html;profile=mcp-app', uri: 'ui://weather/forecast.html' },
+  });
+
+  expect(resolution).toMatchObject({
+    kind: 'apps',
+    profile: 'claude',
+  });
+  if (resolution.kind === 'apps') {
+    expect(resolution.extensions?.claude?.domain).toBe('c3470553c91881a4d8ff703680224ea5.claudemcpcontent.com');
   }
 });
 
