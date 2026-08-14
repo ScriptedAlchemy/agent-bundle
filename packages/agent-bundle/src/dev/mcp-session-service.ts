@@ -179,6 +179,12 @@ interface StderrCapture {
   readonly stop: () => void;
 }
 
+interface OpeningSession {
+  readonly abort: AbortController;
+  readonly done: Promise<void>;
+  readonly finish: () => void;
+}
+
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
@@ -263,6 +269,18 @@ const requestOptions = (options: McpSessionRequestOptions | undefined): RequestO
     throw new RangeError('MCP session timeoutMs must be a positive finite number.');
   }
   return { ...(options?.signal === undefined ? {} : { signal: options.signal }), timeout };
+};
+
+const openingSession = (): OpeningSession => {
+  let resolveDone: (() => void) | undefined;
+  const done = new Promise<void>((resolvePromise) => {
+    resolveDone = resolvePromise;
+  });
+  return Object.freeze({
+    abort: new AbortController(),
+    done,
+    finish: () => resolveDone?.(),
+  });
 };
 
 const captureStderr = (stream: Stream | null, onText: (text: string) => void): StderrCapture => {
@@ -686,6 +704,7 @@ export class McpSessionService {
   readonly #createStdioTransport: (options: StdioOptions) => StdioTransport;
   readonly #createStreamableHttpTransport: (url: URL, options: RemoteTransportOptions) => Transport;
   readonly #epochStore: EpochStore;
+  readonly #openingSessions = new Set<OpeningSession>();
   readonly #projectRoot: string;
   readonly #sessions = new Map<string, McpSession>();
   #closePromise: Promise<void> | undefined;
@@ -713,10 +732,25 @@ export class McpSessionService {
 
   async open(options: OpenMcpSessionOptions): Promise<McpSession> {
     if (this.#closed) throw new Error('MCP session service is closed.');
+    const opening = openingSession();
+    this.#openingSessions.add(opening);
+    const signal = options.signal === undefined
+      ? opening.abort.signal
+      : AbortSignal.any([options.signal, opening.abort.signal]);
+    try {
+      return await this.#open({ ...options, signal });
+    } finally {
+      this.#openingSessions.delete(opening);
+      opening.finish();
+    }
+  }
+
+  async #open(options: OpenMcpSessionOptions): Promise<McpSession> {
     const target = this.#target(options.target);
     if (options.serverName.trim().length === 0) throw new Error('MCP server name must be nonempty.');
     const epochReference = await this.#epochStore.acquireEpochReference(options.epochId);
     let pluginData: string | undefined;
+    let session: McpSession | undefined;
     try {
       const epochRoot = joinArtifact(this.#projectRoot, `.agent-bundle/epochs/${options.epochId}`);
       const diagnostics = await validateArtifact({ allowEpochStagingMarker: true, artifactRoot: epochRoot });
@@ -726,7 +760,7 @@ export class McpSessionService {
       const server = await this.#server(epochRoot, target, options.serverName);
       pluginData = await mkdtemp(resolve(tmpdir(), 'agent-bundle-mcp-'));
       const sessionId = randomUUID();
-      const session = new McpSession({
+      session = new McpSession({
         binding: { epochId: options.epochId, serverName: options.serverName, target },
         createClient: this.#createClient,
         createSseTransport: this.#createSseTransport,
@@ -739,13 +773,18 @@ export class McpSessionService {
         workspaceRoot: resolve(options.workspaceRoot ?? process.cwd()),
       });
       await session.initialize(options);
+      if (this.#closed) throw new Error('MCP session service is closed.');
       this.#sessions.set(sessionId, session);
       return session;
     } catch (error) {
-      try {
-        if (pluginData !== undefined) await rm(pluginData, { force: true, recursive: true });
-      } finally {
-        await epochReference.close();
+      if (session !== undefined) {
+        await session.close();
+      } else {
+        try {
+          if (pluginData !== undefined) await rm(pluginData, { force: true, recursive: true });
+        } finally {
+          await epochReference.close();
+        }
       }
       throw error;
     }
@@ -754,8 +793,15 @@ export class McpSessionService {
   async close(): Promise<void> {
     if (this.#closePromise !== undefined) return this.#closePromise;
     this.#closed = true;
-    this.#closePromise = Promise.all([...this.#sessions.values()].map((session) => session.close())).then(() => undefined);
+    this.#closePromise = this.#close();
     return this.#closePromise;
+  }
+
+  async #close(): Promise<void> {
+    const openings = [...this.#openingSessions];
+    for (const opening of openings) opening.abort.abort(new Error('MCP session service is closed.'));
+    await Promise.allSettled(openings.map((opening) => opening.done));
+    await Promise.all([...this.#sessions.values()].map((session) => session.close()));
   }
 
   #target(name: string): NativeTarget {

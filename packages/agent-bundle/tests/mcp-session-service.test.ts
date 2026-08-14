@@ -135,11 +135,10 @@ const publishFixtureEpoch = async (root: string, id: string): Promise<EpochStore
 const publishEpochCopy = async (
   root: string,
   store: EpochStore,
-  sourceEpochId: string,
+  sourceRoot: string,
   epochId: string,
   createdAt: string,
 ): Promise<void> => {
-  const sourceRoot = join(root, '.agent-bundle', 'epochs', sourceEpochId);
   const staging = await store.createStagingEpoch({
     epoch: epochFor(root, epochId, createdAt),
     targets: ['portable'],
@@ -244,7 +243,7 @@ it('pins the selected epoch until the persistent session closes', async () => {
       await publishEpochCopy(
         root,
         epochStore,
-        'epoch-1',
+        join(root, '.agent-bundle', 'epochs', 'epoch-1'),
         `epoch-${sequence}`,
         `2026-08-14T12:00:0${sequence}.000Z`,
       );
@@ -258,6 +257,75 @@ it('pins the selected epoch until the persistent session closes', async () => {
       code: 'ENOENT',
     });
     await service.close();
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+}, 30_000);
+
+it('closes an in-flight open instead of returning an untracked epoch-pinning session', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-persistent-mcp-open-close-'));
+  try {
+    const epochStore = await publishFixtureEpoch(root, 'epoch-1');
+    let allowConnection: (() => void) | undefined;
+    const connectionBlocked = new Promise<void>((resolvePromise) => {
+      allowConnection = resolvePromise;
+    });
+    let connectionStarted: (() => void) | undefined;
+    const connectionStartedPromise = new Promise<void>((resolvePromise) => {
+      connectionStarted = resolvePromise;
+    });
+    let clientCloses = 0;
+    const client = {
+      callTool: async () => ({ content: [] }),
+      close: async () => {
+        clientCloses += 1;
+      },
+      connect: async () => {
+        connectionStarted?.();
+        await connectionBlocked;
+      },
+      getPrompt: async () => ({ messages: [] }),
+      getServerCapabilities: () => undefined,
+      getServerVersion: () => undefined,
+      listPrompts: async () => ({ prompts: [] }),
+      listResources: async () => ({ resources: [] }),
+      listResourceTemplates: async () => ({ resourceTemplates: [] }),
+      listTools: async () => ({ tools: [] }),
+      readResource: async () => ({ contents: [] }),
+    };
+    const service = new McpSessionService({
+      createClient: () => client,
+      createStdioTransport: () => ({ close: async () => undefined, send: async () => undefined, start: async () => undefined, stderr: null }) as never,
+      epochStore,
+      projectRoot: root,
+    });
+
+    const opening = service.open({ epochId: 'epoch-1', serverName: 'fixture', target: 'portable' });
+    await connectionStartedPromise;
+    let closeCompleted = false;
+    const closing = service.close().then(() => {
+      closeCompleted = true;
+    });
+    await Promise.resolve();
+    expect(closeCompleted).toBe(false);
+    allowConnection?.();
+    await closing;
+    await expect(opening).rejects.toThrow('MCP session service is closed.');
+    expect(clientCloses).toBe(1);
+
+    for (let sequence = 2; sequence <= 8; sequence += 1) {
+      await publishEpochCopy(
+        root,
+        epochStore,
+        join(root, 'compiled'),
+        `epoch-${sequence}`,
+        `2026-08-14T12:01:0${sequence}.000Z`,
+      );
+    }
+    await epochStore.cleanup();
+    await expect(access(join(root, '.agent-bundle', 'epochs', 'epoch-1', 'portable', 'mcp.json'))).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
   } finally {
     await rm(root, { force: true, recursive: true });
   }
