@@ -34,6 +34,10 @@ export class TargetRegistry implements NormalizationTargetRegistry {
     return this.#adapters.has(name);
   }
 
+  supports(name: string, capability: string): boolean {
+    return this.#adapters.get(name)?.capabilities[capability] === true;
+  }
+
   names(): readonly string[] {
     return Object.freeze([...this.#adapters.keys()]);
   }

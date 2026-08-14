@@ -18,6 +18,7 @@ import { validateModel, validateSource } from '../src/config/validate.ts';
 const registry: NormalizationTargetRegistry = {
   defaultTargetNames: () => ['codex', 'claude'],
   has: (name) => name === 'portable' || name === 'codex' || name === 'claude',
+  supports: (name, capability) => capability === 'hooks' && name !== 'portable',
 };
 
 const runPublishedHook = async (wrapper: string, input: string): Promise<{ readonly code: number | null; readonly stderr: string }> =>
@@ -107,6 +108,140 @@ it('normalizes a shorthand session-start hook into a frozen stable record', asyn
     ]);
     expect(Object.isFrozen(hooks)).toBe(true);
     expect(Object.isFrozen((hooks as readonly unknown[])[0]!)).toBe(true);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('filters inherited hook targets through adapter hook capabilities', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-hooks-capabilities-'));
+  const configPath = join(root, 'agent-bundle.config.ts');
+  const targetRegistry = createDefaultRegistry();
+  const loaded: LoadedConfig = {
+    config: {
+      hooks: { sessionStart: './src/hooks/session-start.ts' },
+      plugin: { name: 'review-tools', version: '1.0.0' },
+      targets: ['portable', 'codex', 'claude'],
+    },
+    configPath,
+    context: { command: 'build', mode: 'production', projectRoot: root, selectedTargets: [] },
+  };
+
+  try {
+    const model = await normalizeProject(loaded, { skills: [] }, targetRegistry);
+
+    expect(model.hooks[0]?.targets).toEqual(['claude', 'codex']);
+    expect(validateModel(model, targetRegistry).map((diagnostic) => diagnostic.code)).not.toContain('AB4204');
+    expect(targetRegistry.get('portable').plan(model).hookEntries).toEqual([]);
+    expect(targetRegistry.get('codex').plan(model).hookEntries).toHaveLength(1);
+    expect(targetRegistry.get('claude').plan(model).hookEntries).toHaveLength(1);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('loads and deterministically merges target-native hook documents after generated groups', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-hooks-native-documents-'));
+  const configPath = join(root, 'agent-bundle.config.ts');
+  const codexNative = join(root, 'codex-hooks.json');
+  const claudeNative = join(root, 'claude-hooks.json');
+  const targetRegistry = createDefaultRegistry();
+  const loaded: LoadedConfig = {
+    config: {
+      claude: { nativeHooks: './claude-hooks.json' },
+      codex: { nativeHooks: './codex-hooks.json' },
+      hooks: { sessionStart: './src/hooks/session-start.ts' },
+      plugin: { name: 'review-tools', version: '1.0.0' },
+      targets: ['codex', 'claude'],
+    },
+    configPath,
+    context: { command: 'build', mode: 'production', projectRoot: root, selectedTargets: [] },
+  };
+
+  const nativeDocument = (description: string, command: string) => ({
+    description,
+    hooks: {
+      SessionStart: [{ hooks: [{ command, type: 'command' }] }],
+      UserPromptSubmit: [{ hooks: [{ command: `${command} user-prompt`, type: 'command' }] }],
+    },
+  });
+
+  try {
+    await Promise.all([
+      writeFile(codexNative, `${JSON.stringify(nativeDocument('Codex escape hatch', 'echo codex'))}\n`),
+      writeFile(claudeNative, `${JSON.stringify(nativeDocument('Claude escape hatch', 'echo claude'))}\n`),
+    ]);
+    const model = await normalizeProject(loaded, { skills: [] }, targetRegistry);
+    const nativeHooks = model.nativeHooks ?? [];
+
+    expect(nativeHooks).toEqual([
+      {
+        document: nativeDocument('Claude escape hatch', 'echo claude'),
+        provenance: { kind: 'config', sourcePath: configPath },
+        source: claudeNative,
+        target: 'claude',
+      },
+      {
+        document: nativeDocument('Codex escape hatch', 'echo codex'),
+        provenance: { kind: 'config', sourcePath: configPath },
+        source: codexNative,
+        target: 'codex',
+      },
+    ]);
+    expect(Object.isFrozen(nativeHooks)).toBe(true);
+    expect(Object.isFrozen(nativeHooks[0]!)).toBe(true);
+
+    for (const [target, generatedRoot, nativeCommand] of [
+      ['claude', '${CLAUDE_PLUGIN_ROOT}', 'echo claude'],
+      ['codex', '${PLUGIN_ROOT}', 'echo codex'],
+    ] as const) {
+      const plan = targetRegistry.get(target).plan(model);
+      const writes = Object.fromEntries(plan.entries.flatMap((entry) =>
+        entry.kind === 'write' ? [[entry.relativePath, entry.content]] : []));
+      expect(plan.diagnostics).toEqual([]);
+      expect(JSON.parse(writes['hooks/hooks.json']!)).toEqual({
+        description: target === 'codex' ? 'Codex escape hatch' : 'Claude escape hatch',
+        hooks: {
+          SessionStart: [
+            { hooks: [{ command: `node "${generatedRoot}/hooks/session-start-session-start-7ab7e8a5.mjs"`, type: 'command' }] },
+            { hooks: [{ command: nativeCommand, type: 'command' }] },
+          ],
+          UserPromptSubmit: [{ hooks: [{ command: `${nativeCommand} user-prompt`, type: 'command' }] }],
+        },
+      });
+    }
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('reports stable target-native hook file diagnostics before merge', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-hooks-native-invalid-'));
+  const targetRegistry = createDefaultRegistry();
+  const loaded: LoadedConfig = {
+    config: {
+      claude: { nativeHooks: './claude-broken.json' },
+      codex: { nativeHooks: './missing-codex.json' },
+      plugin: { name: 'review-tools', version: '1.0.0' },
+      targets: ['codex', 'claude'],
+    },
+    configPath: join(root, 'agent-bundle.config.ts'),
+    context: { command: 'build', mode: 'production', projectRoot: root, selectedTargets: [] },
+  };
+
+  try {
+    await writeFile(join(root, 'claude-broken.json'), '{not json\n');
+    const broken = await normalizeProject(loaded, { skills: [] }, targetRegistry);
+
+    expect(targetRegistry.get('codex').plan(broken).diagnostics.map((diagnostic) => diagnostic.code)).toEqual(['codex.native-hooks.missing']);
+    expect(targetRegistry.get('claude').plan(broken).diagnostics.map((diagnostic) => diagnostic.code)).toEqual(['claude.native-hooks.parse']);
+
+    await writeFile(join(root, 'invalid-codex.json'), '{"hooks":{"SessionStart":"invalid"}}\n');
+    const invalidSchema = await normalizeProject({
+      ...loaded,
+      config: { ...loaded.config, codex: { nativeHooks: './invalid-codex.json' } },
+    }, { skills: [] }, targetRegistry);
+    expect(targetRegistry.get('codex').plan(invalidSchema).diagnostics.map((diagnostic) => diagnostic.code)).toEqual(['codex.native-hooks.schema']);
   } finally {
     await rm(root, { force: true, recursive: true });
   }

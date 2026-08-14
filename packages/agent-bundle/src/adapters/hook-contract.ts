@@ -1,5 +1,10 @@
 import type { Diagnostic } from '../core/diagnostics.ts';
-import type { CanonicalHookEvent, CanonicalHookTool, NormalizedPlugin } from '../core/types.ts';
+import type {
+  CanonicalHookEvent,
+  CanonicalHookTool,
+  NormalizedNativeHook,
+  NormalizedPlugin,
+} from '../core/types.ts';
 import type { TargetHookEntry } from './types.ts';
 
 export interface HookTargetContract {
@@ -14,6 +19,35 @@ export interface HookPlan {
   readonly document?: Record<string, unknown>;
   readonly hookEntries: readonly TargetHookEntry[];
 }
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+export const nativeHooksFor = (
+  model: NormalizedPlugin,
+  target: 'codex' | 'claude',
+): NormalizedNativeHook | undefined => model.nativeHooks?.find((nativeHooks) => nativeHooks.target === target);
+
+export const mergeHookDocuments = (
+  generated: Record<string, unknown> | undefined,
+  native: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined => {
+  if (generated === undefined && native === undefined) return undefined;
+  const generatedGroups = isRecord(generated?.hooks) ? generated.hooks : {};
+  const nativeGroups = isRecord(native?.hooks) ? native.hooks : {};
+  const hooks: Record<string, unknown> = { ...generatedGroups };
+  for (const [event, nativeGroupsForEvent] of Object.entries(nativeGroups)) {
+    const generatedGroupsForEvent = hooks[event];
+    hooks[event] = Array.isArray(generatedGroupsForEvent)
+      ? [...generatedGroupsForEvent, ...(nativeGroupsForEvent as unknown[])]
+      : nativeGroupsForEvent;
+  }
+  const description = native?.description ?? generated?.description;
+  return {
+    ...(typeof description === 'string' ? { description } : {}),
+    hooks,
+  };
+};
 
 const eventOrder: readonly CanonicalHookEvent[] = [
   'sessionStart',

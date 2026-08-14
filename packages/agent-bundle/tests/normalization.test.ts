@@ -13,6 +13,7 @@ import type { LoadedConfig } from '../src/config/load.ts';
 const registry: NormalizationTargetRegistry = {
   defaultTargetNames: () => ['portable'],
   has: (name) => ['portable', 'codex', 'claude'].includes(name),
+  supports: (name, capability) => capability === 'hooks' && name !== 'portable',
 };
 
 const loadedProject = (

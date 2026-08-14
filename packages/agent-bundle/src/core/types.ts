@@ -17,12 +17,18 @@ export interface AgentBundleHookEntry {
   tools?: readonly string[];
 }
 
+export interface AgentBundleHostConfig {
+  nativeHooks?: string;
+}
+
 export type AgentBundleHookInput =
   | string
   | AgentBundleHookEntry
   | readonly (string | AgentBundleHookEntry)[];
 
 export interface AgentBundleConfig {
+  claude?: AgentBundleHostConfig;
+  codex?: AgentBundleHostConfig;
   hooks?: Partial<Record<CanonicalHookEvent, AgentBundleHookInput>>;
   marketplace?: boolean;
   plugin: AgentBundlePluginConfig;
@@ -105,11 +111,20 @@ export interface NormalizedHook {
   readonly tools: readonly CanonicalHookTool[];
 }
 
+export interface NormalizedNativeHook {
+  readonly document?: unknown;
+  readonly issue?: 'missing' | 'parse';
+  readonly provenance: SourceProvenance;
+  readonly source: string;
+  readonly target: 'codex' | 'claude';
+}
+
 export interface NormalizedPlugin {
   readonly hooks: readonly NormalizedHook[];
   readonly marketplace?: true;
   readonly metadata: NormalizedMetadata;
   readonly mcpServers: readonly NormalizedMcpServer[];
+  readonly nativeHooks?: readonly NormalizedNativeHook[];
   readonly scripts: readonly NormalizedScript[];
   readonly skills: readonly NormalizedSkill[];
   readonly targets: readonly NormalizedTarget[];
@@ -118,6 +133,7 @@ export interface NormalizedPlugin {
 export interface NormalizationTargetRegistry {
   defaultTargetNames(): readonly string[];
   has(name: string): boolean;
+  supports(name: string, capability: string): boolean;
 }
 
 export interface ConfigFactoryContext {
