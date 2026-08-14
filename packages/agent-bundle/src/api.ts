@@ -25,6 +25,26 @@ import {
   type McpListResult,
 } from './services/mcp-service.ts';
 
+export {
+  compareInstalledHostContract,
+  evaluateHostContract,
+  parseRedactedEventEnvelopes,
+} from './host-contracts/host-contract.ts';
+export type {
+  CompareInstalledHostContractOptions,
+  HostContractCommand,
+  HostContractCommandResult,
+  HostContractCommandRunner,
+  HostContractDiagnostic,
+  HostContractEvidence,
+  HostContractManifest,
+  HostContractProbeKind,
+  HostContractReport,
+  HostContractStatus,
+  NativeHost,
+  RedactedEventEnvelope,
+} from './host-contracts/host-contract.ts';
+
 export { HookService } from './services/hook-service.ts';
 export type { HookListOptions, HookSimulationOptions } from './services/hook-service.ts';
 export { McpService } from './services/mcp-service.ts';

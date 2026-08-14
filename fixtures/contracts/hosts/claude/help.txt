@@ -1,0 +1,12 @@
+Usage: claude [options] [command] [prompt]
+
+Claude Code - starts an interactive session by default, use -p/--print for non-interactive output.
+
+Options:
+  -p, --print                                   Print response and exit.
+  --no-session-persistence                      Disable session persistence (only works with --print).
+  --output-format <format>                      Output format: text, json, or stream-json.
+  --plugin-dir <path>                           Load plugins from a directory for this session only.
+
+Commands:
+  plugin|plugins                                Manage Claude Code plugins.

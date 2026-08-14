@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "host": "codex",
+  "executable": "codex",
+  "minimumVersion": "0.147.0",
+  "temporaryHomeEnvironment": "CODEX_HOME",
+  "probes": {
+    "version": ["--version"],
+    "help": ["--help"],
+    "status": ["plugin", "list", "--json"]
+  },
+  "requiredHelpTerms": [
+    "plugin",
+    "marketplace",
+    "add",
+    "list",
+    "exec",
+    "--ephemeral",
+    "--json"
+  ],
+  "commandShapes": {
+    "marketplaceAdd": ["plugin", "marketplace", "add", "<marketplace-path>"],
+    "pluginAdd": ["plugin", "add", "<plugin>@<marketplace>"],
+    "pluginList": ["plugin", "list", "--json"],
+    "ephemeralExecution": ["exec", "--ephemeral", "--json", "<task-input>"]
+  },
+  "eventEnvelopeFiles": ["stream-events.jsonl"]
+}
