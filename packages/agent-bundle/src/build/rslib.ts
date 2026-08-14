@@ -9,6 +9,12 @@ export interface RslibEntry {
   readonly virtualSource?: string;
 }
 
+type RslibInstance = Awaited<ReturnType<typeof createRslib>>;
+
+interface RslibDependencies {
+  readonly createRslib?: (options: Parameters<typeof createRslib>[0]) => Promise<Pick<RslibInstance, 'build' | 'inspectConfig'>>;
+}
+
 const entryAnchor = fileURLToPath(import.meta.url);
 
 const assertVirtualHookConfig = (
@@ -39,12 +45,12 @@ export const buildWithRslib = async (options: {
   readonly cwd: string;
   readonly entries: readonly RslibEntry[];
   readonly outputRoot: string;
-}): Promise<void> => {
+}, dependencies: RslibDependencies = {}): Promise<void> => {
   if (options.entries.length === 0) {
     return;
   }
 
-  const rslib = await createRslib({
+  const rslib = await (dependencies.createRslib ?? createRslib)({
     cwd: options.cwd,
     config: {
       lib: options.entries.map((entry) => {

@@ -3,10 +3,12 @@ import { spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { expect, it } from '@rstest/core';
+import { rspack } from '@rspack/core';
+import { expect, it, rs } from '@rstest/core';
 
 import { createDefaultRegistry } from '../src/adapters/registry.ts';
 import { build } from '../src/build/build.ts';
+import { buildWithRslib } from '../src/build/rslib.ts';
 import { HookService } from '../src/services/hook-service.ts';
 import { normalizeProject } from '../src/config/normalize.ts';
 import type { LoadedConfig } from '../src/config/load.ts';
@@ -29,6 +31,47 @@ const runPublishedHook = async (wrapper: string, input: string): Promise<{ reado
     child.once('close', (code) => resolvePromise({ code, stderr }));
     child.stdin.end(input);
   });
+
+const runNativeHook = async (wrapper: string, input: Record<string, unknown>): Promise<{ readonly code: number | null; readonly stderr: string; readonly stdout: string }> =>
+  new Promise((resolvePromise, reject) => {
+    const child = spawn(process.execPath, [wrapper], { stdio: ['pipe', 'pipe', 'pipe'] });
+    let stderr = '';
+    let stdout = '';
+    child.stderr.on('data', (chunk: Buffer) => {
+      stderr += chunk.toString();
+    });
+    child.stdout.on('data', (chunk: Buffer) => {
+      stdout += chunk.toString();
+    });
+    child.once('error', reject);
+    child.once('close', (code) => resolvePromise({ code, stderr, stdout }));
+    child.stdin.end(JSON.stringify(input));
+  });
+
+it('closes the Rslib build result after building a virtual hook entry', async () => {
+  const close = rs.fn(async () => undefined);
+  const buildResult = { close };
+  const rslib = {
+    build: async () => buildResult,
+    inspectConfig: async () => ({
+      origin: {
+        bundlerConfigs: [{
+          output: { asyncChunks: false, path: '/tmp/agent-bundle-rslib-close-output' },
+          plugins: [new rspack.experiments.VirtualModulesPlugin({})],
+          target: 'node',
+        }],
+      },
+    }),
+  };
+
+  await buildWithRslib({
+    cwd: '/tmp',
+    entries: [{ name: 'close-probe', outputRelativePath: 'hooks/close-probe.mjs', source: '/tmp/hook.ts', virtualSource: 'export default undefined;' }],
+    outputRoot: '/tmp/agent-bundle-rslib-close-output',
+  }, { createRslib: async () => rslib as never });
+
+  expect(close).toHaveBeenCalledOnce();
+});
 
 it('normalizes a shorthand session-start hook into a frozen stable record', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-hooks-normalize-'));
@@ -210,6 +253,55 @@ it('compiles each native hook through a virtual Rslib entry without sibling chun
     await rm(root, { force: true, recursive: true });
   }
 });
+
+it('runs the embedded Codex and Claude native codecs through their published wrappers', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-hooks-native-codecs-'));
+  const sourceRoot = join(root, 'src', 'hooks');
+  const outputRoot = join(root, 'dist');
+  const model = hookModel(root);
+
+  try {
+    await mkdir(sourceRoot, { recursive: true });
+    await Promise.all([
+      writeFile(join(root, 'package.json'), '{"type":"module"}\n'),
+      writeFile(join(sourceRoot, 'session-start.ts'), "export default (event: { sessionId?: string }) => ({ outcome: 'continue' as const, additionalContext: event.sessionId });\n"),
+      writeFile(join(sourceRoot, 'check-command.ts'), "export default (event: { toolName?: string }) => ({ outcome: event.toolName === 'Bash' ? 'deny' as const : 'continue' as const, reason: 'blocked command' });\n"),
+      writeFile(join(sourceRoot, 'record.ts'), "export default (event: { toolResponse?: string }) => ({ outcome: 'continue' as const, additionalContext: event.toolResponse });\n"),
+      writeFile(join(sourceRoot, 'stop.ts'), "export default () => ({ outcome: 'continue' as const });\n"),
+    ]);
+    await build({ model, outputRoot, projectRoot: root, registry: createDefaultRegistry() });
+
+    for (const target of ['codex', 'claude']) {
+      const hooksRoot = join(outputRoot, target, 'hooks');
+      await expect(runNativeHook(join(hooksRoot, 'session-start-session-start-7ab7e8a5.mjs'), {
+        hook_event_name: 'SessionStart', session_id: 'session-1', source: 'startup',
+      })).resolves.toEqual({
+        code: 0,
+        stderr: '',
+        stdout: '{"hookSpecificOutput":{"additionalContext":"session-1","hookEventName":"SessionStart"}}',
+      });
+      await expect(runNativeHook(join(hooksRoot, 'before-tool-check-command-1f5b5818.mjs'), {
+        hook_event_name: 'PreToolUse', tool_input: { command: 'blocked' }, tool_name: 'Bash', tool_use_id: 'use-1',
+      })).resolves.toEqual({
+        code: 0,
+        stderr: '',
+        stdout: '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"blocked command"}}',
+      });
+      await expect(runNativeHook(join(hooksRoot, 'after-tool-record-87785f02.mjs'), {
+        hook_event_name: 'PostToolUse', tool_response: 'observed', tool_name: 'Write', tool_use_id: 'use-2',
+      })).resolves.toEqual({
+        code: 0,
+        stderr: '',
+        stdout: '{"hookSpecificOutput":{"additionalContext":"observed","hookEventName":"PostToolUse"}}',
+      });
+      await expect(runNativeHook(join(hooksRoot, 'stop-stop-bb2d7935.mjs'), {
+        hook_event_name: 'Stop', last_assistant_message: 'done', stop_hook_active: false,
+      })).resolves.toEqual({ code: 0, stderr: '', stdout: '' });
+    }
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+}, 15_000);
 
 it('rejects malformed native hook input, exports, and handler results concisely', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-hooks-errors-'));
