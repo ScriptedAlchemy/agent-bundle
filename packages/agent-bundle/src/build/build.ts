@@ -77,42 +77,60 @@ const planTargets = (options: BuildOptions): readonly PlannedTarget[] => {
   return planned;
 };
 
+const planStagedTargets = (options: {
+  readonly artifactRoot: string;
+  readonly model: NormalizedPlugin;
+  readonly projectRoot: string;
+  readonly targets: readonly PlannedTarget[];
+}): readonly StagedTarget[] => options.targets.map((target) => {
+  const root = assertInside(options.artifactRoot, resolve(options.artifactRoot, target.name));
+  const scripts = options.model.scripts.filter((script) => script.targets.includes(target.name));
+  const compiledEntries = planCompiledEntries(scripts, { cwd: options.projectRoot, outDir: root });
+  const compiledHooks = planCompiledHooks(target.hookEntries, { outDir: root });
+  const compiledMcpApps = planCompiledMcpApps(options.model.mcpApps ?? [], {
+    outDir: root,
+    target: target.name,
+  });
+  const compiledMcpEntries = planCompiledMcpEntries(options.model.mcpServers, {
+    outDir: root,
+    target: target.name,
+  });
+  return { ...target, compiledEntries, compiledHooks, compiledMcpApps, compiledMcpEntries, root };
+});
+
+const plannedDestinations = (targets: readonly StagedTarget[]): readonly string[] =>
+  targets.flatMap((target) => [
+    ...target.entries.map((entry) =>
+      resolveArtifactDestination(target.root, entry.relativePath),
+    ),
+    ...target.compiledEntries.map((entry) => entry.output),
+    ...target.compiledHooks.map((entry) => entry.output),
+    ...target.compiledMcpApps.map((entry) => entry.output),
+    ...target.compiledMcpEntries.map((entry) => entry.output),
+  ]);
+
 export const build = async (options: BuildOptions): Promise<BuildResult> => {
   const planned = planTargets(options);
   const outputRoot = resolve(options.outputRoot);
+  const preflightTargets = planStagedTargets({
+    artifactRoot: outputRoot,
+    model: options.model,
+    projectRoot: options.projectRoot,
+    targets: planned,
+  });
+  assertUniqueArtifactDestinations(plannedDestinations(preflightTargets));
   const stageParent = dirname(outputRoot);
   await mkdir(stageParent, { recursive: true });
   const stageRoot = await mkdtemp(join(stageParent, `.${basename(outputRoot)}.stage-`));
 
   try {
-    const stagedTargets: StagedTarget[] = planned.map((target) => {
-      const root = assertInside(stageRoot, resolve(stageRoot, target.name));
-      const compiledEntries = planCompiledEntries(
-        options.model.scripts.filter((script) => script.targets.includes(target.name)),
-        { cwd: options.projectRoot, outDir: root },
-      );
-      const compiledHooks = planCompiledHooks(target.hookEntries, { outDir: root });
-      const compiledMcpApps = planCompiledMcpApps(options.model.mcpApps ?? [], {
-        outDir: root,
-        target: target.name,
-      });
-      const compiledMcpEntries = planCompiledMcpEntries(options.model.mcpServers, {
-        outDir: root,
-        target: target.name,
-      });
-      return { ...target, compiledEntries, compiledHooks, compiledMcpApps, compiledMcpEntries, root };
+    const stagedTargets = planStagedTargets({
+      artifactRoot: stageRoot,
+      model: options.model,
+      projectRoot: options.projectRoot,
+      targets: planned,
     });
-    assertUniqueArtifactDestinations(
-      stagedTargets.flatMap((target) => [
-        ...target.entries.map((entry) =>
-          resolveArtifactDestination(target.root, entry.relativePath),
-        ),
-        ...target.compiledEntries.map((entry) => entry.output),
-        ...target.compiledHooks.map((entry) => entry.output),
-        ...target.compiledMcpApps.map((entry) => entry.output),
-        ...target.compiledMcpEntries.map((entry) => entry.output),
-      ]),
-    );
+    assertUniqueArtifactDestinations(plannedDestinations(stagedTargets));
 
     const compiledEntries: CompiledEntry[] = [];
     const compiledHooks: CompiledHookEntry[] = [];

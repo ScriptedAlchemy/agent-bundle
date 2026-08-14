@@ -9,6 +9,7 @@ import type {
   AgentBundleHookInput,
   AgentBundleMcpApp,
   AgentBundleMcpServer,
+  AgentBundleScriptInput,
   CanonicalHookEvent,
   CanonicalHookTool,
   NormalizationTargetRegistry,
@@ -17,6 +18,7 @@ import type {
   NormalizedMcpServer,
   NormalizedNativeHook,
   NormalizedPlugin,
+  NormalizedScript,
   NormalizedSkill,
   SourceProvenance,
 } from '../core/types.ts';
@@ -256,6 +258,47 @@ const normalizeMcpApps = (
   return apps;
 };
 
+const bundleExtensions = new Set([
+  '.js',
+  '.jsx',
+  '.mjs',
+  '.cjs',
+  '.ts',
+  '.tsx',
+  '.mts',
+  '.cts',
+]);
+
+const copiedExtensions = new Set(['.sh', '.bash', '.py']);
+
+const scriptMode = (source: string): 'bundle' | 'copy' =>
+  bundleExtensions.has(extname(source).toLowerCase()) ? 'bundle' : 'copy';
+
+const normalizeScripts = (
+  loaded: LoadedConfig,
+  targetNames: readonly string[],
+): readonly NormalizedScript[] => {
+  const configured = loaded.config.scripts;
+  if (configured === undefined) return [];
+
+  const provenance: SourceProvenance = { kind: 'config', sourcePath: loaded.configPath };
+  return Object.entries(configured)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([name, input]) => {
+      const declaration = input as AgentBundleScriptInput;
+      const entry = typeof declaration === 'string' ? declaration : declaration.entry;
+      const source = resolve(loaded.context.projectRoot, entry);
+      return {
+        id: `script:${name}`,
+        mode: scriptMode(source),
+        name,
+        provenance: { ...provenance },
+        source,
+        targets: sortedUnique(typeof declaration === 'string' ? targetNames : (declaration.targets ?? targetNames)),
+      };
+    });
+};
+
 const deepFreeze = <Value>(value: Value): Value => {
   if (typeof value !== 'object' || value === null || Object.isFrozen(value)) {
     return value;
@@ -326,6 +369,7 @@ export const normalizeProject = async (
   const description = loaded.config.plugin.description;
   const nativeHooks = await normalizeNativeHooks(loaded, targetNames);
   const mcpServers = normalizeMcpServers(loaded, targetNames);
+  const scripts = normalizeScripts(loaded, targetNames);
   const model: NormalizedPlugin = {
     ...(loaded.config.marketplace === true ? { marketplace: true as const } : {}),
     metadata: {
@@ -339,7 +383,7 @@ export const normalizeProject = async (
     mcpServers,
     hooks: normalizeHooks(loaded, targetNames, registry),
     ...(nativeHooks.length === 0 ? {} : { nativeHooks }),
-    scripts: [],
+    scripts,
     skills,
     targets: targetNames.map((name) => ({
       id: `target:${name}`,

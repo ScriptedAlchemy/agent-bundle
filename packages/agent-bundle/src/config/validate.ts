@@ -1,5 +1,5 @@
-import { existsSync, statSync } from 'node:fs';
-import { basename, posix, resolve } from 'node:path';
+import { existsSync, realpathSync, statSync } from 'node:fs';
+import { basename, extname, isAbsolute, posix, relative, resolve, sep } from 'node:path';
 
 import type { Diagnostic } from '../core/diagnostics.ts';
 import type {
@@ -7,6 +7,7 @@ import type {
   AgentBundleHookInput,
   AgentBundleMcpApp,
   AgentBundleMcpServer,
+  AgentBundleScriptInput,
   CanonicalHookEvent,
   NormalizationTargetRegistry,
   NormalizedPlugin,
@@ -188,6 +189,146 @@ const localEntryExists = (root: string, entry: string): boolean => {
   } catch {
     return false;
   }
+};
+
+const isInside = (root: string, candidate: string): boolean => {
+  const path = relative(resolve(root), resolve(candidate));
+  return path !== '..' && !path.startsWith(`..${sep}`) && !isAbsolute(path);
+};
+
+const scriptExtensions = new Set([
+  '.js',
+  '.jsx',
+  '.mjs',
+  '.cjs',
+  '.ts',
+  '.tsx',
+  '.mts',
+  '.cts',
+  '.sh',
+  '.bash',
+  '.py',
+]);
+
+const bundleScriptExtensions = new Set([
+  '.js', '.jsx', '.mjs', '.cjs', '.ts', '.tsx', '.mts', '.cts',
+]);
+
+const knownTargetNames = new Set(['portable', 'codex', 'claude']);
+
+const isSafeScriptName = (name: string): boolean =>
+  /^[a-zA-Z0-9](?:[a-zA-Z0-9._-]*[a-zA-Z0-9])?$/u.test(name);
+
+const validateScripts = (loaded: LoadedConfig): Diagnostic[] => {
+  const scripts = loaded.config.scripts;
+  if (scripts === undefined) return [];
+  if (!isRecord(scripts)) {
+    return [sourceDiagnostic('AB4400', 'Scripts configuration must be an object.', loaded.configPath)];
+  }
+
+  const diagnostics: Diagnostic[] = [];
+  const outputSources = new Map<string, string>();
+  for (const [name, rawDeclaration] of Object.entries(scripts)) {
+    if (!isSafeScriptName(name)) {
+      diagnostics.push(sourceDiagnostic(
+        'AB4401',
+        `Script name ${JSON.stringify(name)} must be a safe stable output name.`,
+        loaded.configPath,
+      ));
+    }
+    if (typeof rawDeclaration !== 'string' && !isRecord(rawDeclaration)) {
+      diagnostics.push(sourceDiagnostic(
+        'AB4402',
+        `Script ${JSON.stringify(name)} must be an entry path or an object with an entry path.`,
+        loaded.configPath,
+      ));
+      continue;
+    }
+    const declaration = rawDeclaration as AgentBundleScriptInput;
+    const entry = typeof declaration === 'string' ? declaration : declaration.entry;
+    if (!nonemptyString(entry)) {
+      diagnostics.push(sourceDiagnostic(
+        'AB4402',
+        `Script ${JSON.stringify(name)} entry must be a nonempty path.`,
+        loaded.configPath,
+      ));
+      continue;
+    }
+    const source = resolve(loaded.context.projectRoot, entry);
+    if (!isInside(loaded.context.projectRoot, source)) {
+      diagnostics.push(sourceDiagnostic(
+        'AB4405',
+        `Script ${JSON.stringify(name)} entry must resolve inside the project root.`,
+        loaded.configPath,
+      ));
+      continue;
+    }
+    if (!scriptExtensions.has(extname(source).toLowerCase())) {
+      diagnostics.push(sourceDiagnostic(
+        'AB4403',
+        `Script ${JSON.stringify(name)} entry has an unsupported extension.`,
+        loaded.configPath,
+      ));
+    } else {
+      const extension = extname(source).toLowerCase();
+      const output = posix.normalize(
+        `scripts/${name}${bundleScriptExtensions.has(extension) ? '.mjs' : extension}`,
+      );
+      const firstSource = outputSources.get(output);
+      if (firstSource === undefined) {
+        outputSources.set(output, source);
+      } else {
+        diagnostics.push(sourceDiagnostic(
+          'AB4408',
+          `Scripts ${JSON.stringify(firstSource)} and ${JSON.stringify(source)} share canonical output ${JSON.stringify(output)}.`,
+          loaded.configPath,
+        ));
+      }
+    }
+    try {
+      const canonicalRoot = realpathSync(loaded.context.projectRoot);
+      const canonicalSource = realpathSync(source);
+      if (!isInside(canonicalRoot, canonicalSource)) {
+        diagnostics.push(sourceDiagnostic(
+          'AB4405',
+          `Script ${JSON.stringify(name)} entry must resolve inside the project root.`,
+          loaded.configPath,
+        ));
+      } else if (!statSync(canonicalSource).isFile()) {
+        diagnostics.push(sourceDiagnostic(
+          'AB4404',
+          `Script ${JSON.stringify(name)} entry must name an existing regular file.`,
+          loaded.configPath,
+        ));
+      }
+    } catch {
+      diagnostics.push(sourceDiagnostic(
+        'AB4404',
+        `Script ${JSON.stringify(name)} entry must name an existing regular file.`,
+        loaded.configPath,
+      ));
+    }
+    if (typeof declaration !== 'string' && declaration.targets !== undefined) {
+      if (!Array.isArray(declaration.targets) || declaration.targets.some((target) => !nonemptyString(target))) {
+        diagnostics.push(sourceDiagnostic(
+          'AB4407',
+          `Script ${JSON.stringify(name)} targets must be an array of nonempty strings.`,
+          loaded.configPath,
+        ));
+      } else {
+        for (const target of declaration.targets) {
+          if (!knownTargetNames.has(target)) {
+            diagnostics.push(sourceDiagnostic(
+              'AB4406',
+              `Script ${JSON.stringify(name)} selects unknown target ${JSON.stringify(target)}.`,
+              loaded.configPath,
+            ));
+          }
+        }
+      }
+    }
+  }
+  return diagnostics;
 };
 
 const validVersionedUiUri = (value: string): boolean => {
@@ -630,6 +771,7 @@ export const validateSource = (
 
   diagnostics.push(...validateHooks(loaded));
   diagnostics.push(...validateMcp(loaded));
+  diagnostics.push(...validateScripts(loaded));
 
   return diagnostics;
 };
@@ -660,6 +802,7 @@ export const validateModel = (
     ...model.hooks,
     ...model.mcpServers,
     ...(model.mcpApps ?? []),
+    ...model.scripts,
   ];
   for (const component of components) {
     const firstSource = ids.get(component.id);
@@ -691,6 +834,20 @@ export const validateModel = (
           message: `Portable target cannot emit hook ${hook.event}.`,
           severity: 'error',
           sourcePath: hook.provenance.sourcePath,
+          target,
+        });
+      }
+    }
+  }
+
+  for (const script of model.scripts) {
+    for (const target of script.targets) {
+      if (!registry.has(target)) {
+        diagnostics.push({
+          code: 'AB4406',
+          message: `Script ${JSON.stringify(script.name)} selects unknown target ${JSON.stringify(target)}.`,
+          severity: 'error',
+          sourcePath: script.provenance.sourcePath,
           target,
         });
       }

@@ -1,10 +1,10 @@
-import { readFile } from 'node:fs/promises';
-import { extname, resolve } from 'node:path';
+import { readFile, stat } from 'node:fs/promises';
+import { extname, relative, resolve } from 'node:path';
 
 import type { TargetHookEntry } from '../adapters/types.ts';
 import type { NormalizedMcpServer, NormalizedScript } from '../core/types.ts';
 import { stableJson } from '../core/digest.ts';
-import { resolveArtifactDestination } from './emit.ts';
+import { emitPlanEntries, resolveArtifactDestination } from './emit.ts';
 import type { CompiledMcpApp } from './mcp-apps.ts';
 import { buildWithRslib } from './rslib.ts';
 
@@ -12,6 +12,10 @@ export interface CompiledEntry {
   readonly name: string;
   readonly output: string;
   readonly source: string;
+}
+
+interface PlannedScriptEntry extends CompiledEntry {
+  readonly mode: NormalizedScript['mode'];
 }
 
 export interface CompiledHookEntry extends CompiledEntry {
@@ -27,27 +31,26 @@ export interface CompiledMcpEntry extends CompiledEntry {
   readonly target: string;
 }
 
-const outputName = (script: NormalizedScript): string => {
-  const extension = extname(script.name);
-  return extension.length > 0 ? script.name.slice(0, -extension.length) : script.name;
-};
+const outputName = (script: NormalizedScript): string =>
+  script.mode === 'bundle' ? `${script.name}.mjs` : `${script.name}${extname(script.source)}`;
 
 export const planCompiledEntries = (
   entries: readonly NormalizedScript[],
   options: { readonly cwd: string; readonly outDir: string },
-): readonly CompiledEntry[] => {
+): readonly PlannedScriptEntry[] => {
   const names = new Set<string>();
   return Object.freeze(entries.map((script) => {
-    const name = outputName(script);
-    if (name.length === 0 || names.has(name)) {
-      throw new Error(`Duplicate compiled script destination ${JSON.stringify(`scripts/${name}.mjs`)}.`);
+    const filename = outputName(script);
+    if (script.name.length === 0 || names.has(filename)) {
+      throw new Error(`Duplicate compiled script destination ${JSON.stringify(`scripts/${filename}`)}.`);
     }
-    names.add(name);
+    names.add(filename);
     return {
-      name,
+      mode: script.mode,
+      name: script.name,
       output: resolveArtifactDestination(
         resolve(options.outDir, 'scripts'),
-        `${name}.mjs`,
+        filename,
       ),
       source: script.source,
     };
@@ -59,15 +62,26 @@ export const compileEntries = async (
   options: { readonly cwd: string; readonly outDir: string },
 ): Promise<readonly CompiledEntry[]> => {
   const compiled = planCompiledEntries(entries, options);
-
+  const bundled = compiled.filter((entry) => entry.mode === 'bundle');
   await buildWithRslib({
     cwd: options.cwd,
-    entries: compiled.map(({ name, source }) => ({
+    entries: bundled.map(({ name, source }) => ({
       name,
       outputRelativePath: `scripts/${name}.mjs`,
       source,
     })),
     outputRoot: options.outDir,
+  });
+  await emitPlanEntries({
+    entries: await Promise.all(compiled
+      .filter((entry) => entry.mode === 'copy')
+      .map(async (entry) => ({
+        bytes: (await stat(entry.source)).size,
+        kind: 'copy' as const,
+        relativePath: relative(options.outDir, entry.output).replaceAll('\\', '/'),
+        source: entry.source,
+      }))),
+    root: options.outDir,
   });
 
   return compiled;
