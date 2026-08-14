@@ -106,6 +106,10 @@ that serves those assets, typed APIs, and a project-event stream. Plugin-source 
 events that update the normalized model, diagnostics, artifact epochs, MCP sessions, hooks, and
 eval runs; they are not workbench HMR.
 
+The production workbench build disables filename hashing. Its prebuilt assets keep stable names;
+versioning and integrity come from package/compiler manifests rather than content hashes embedded
+in chunk filenames.
+
 Both modes use the same browser application and service contracts:
 
 - contributor mode: Rsbuild dev server + HMR + API proxy;

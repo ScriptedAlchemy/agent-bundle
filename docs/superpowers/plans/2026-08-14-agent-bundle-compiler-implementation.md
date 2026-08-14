@@ -347,6 +347,10 @@ expect(new DiagnosticBag([error]).throwIfErrors).toThrow(DiagnosticError);
 - Force a single executable asset with `performance.chunkSplit.strategy: 'all-in-one'` and Rspack
   `output.asyncChunks: false`; keep dependencies bundled and verify the emitted wrapper runs in a clean
   consumer directory.
+- Set `output.filenameHash: false` for the package build and every generated executable environment.
+  Stable artifact paths are the public contract; retain SHA-256 values in `agent-bundle.manifest.json`
+  for integrity instead of embedding hashes in filenames. Apply the same rule to the later Rsbuild
+  workbench production configuration.
 - Do not add a custom loader. Loaders are the right API for reusable per-resource transformations, but
   these wrappers are generated entry modules with per-target protocol data. A virtual module expresses
   that directly without temporary source files, loader packaging, or source-map handoff.
