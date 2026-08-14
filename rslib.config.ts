@@ -1,4 +1,5 @@
 import { defineConfig } from '@rslib/core';
+import packageManifest from './packages/agent-bundle/package.json' with { type: 'json' };
 
 export default defineConfig({
   lib: [
@@ -17,6 +18,9 @@ export default defineConfig({
     target: 'node',
   },
   source: {
+    define: {
+      __AGENT_BUNDLE_VERSION__: JSON.stringify(packageManifest.version),
+    },
     entry: {
       api: './packages/agent-bundle/src/api.ts',
       cli: './packages/agent-bundle/src/cli.ts',

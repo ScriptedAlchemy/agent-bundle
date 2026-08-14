@@ -2,6 +2,9 @@
   "name": "agent-bundle",
   "version": "0.1.0",
   "type": "module",
+  "engines": {
+    "node": ">=22.19.0"
+  },
   "bin": {
     "agent-bundle": "./dist/cli.js"
   },
@@ -15,11 +18,11 @@
       "import": "./dist/api.js"
     },
     "./config": {
-      "types": "./dist/config.d.ts",
+      "types": "./dist/config/index.d.ts",
       "import": "./dist/config.js"
     },
     "./eval": {
-      "types": "./dist/eval.d.ts",
+      "types": "./dist/eval/index.d.ts",
       "import": "./dist/eval.js"
     }
   }
