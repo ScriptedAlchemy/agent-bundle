@@ -12,7 +12,7 @@ The initial design targets the portable
 [`docs/plans/2026-08-13-agent-bundle-design.md`](docs/plans/2026-08-13-agent-bundle-design.md)
 for the approved compiler architecture and
 [`docs/plans/2026-08-14-agent-bundle-dev-workbench-design.md`](docs/plans/2026-08-14-agent-bundle-dev-workbench-design.md)
-for the Rsbuild workbench, whole-plugin playground, Skill renderer, managed official MCP
-Inspector, hook simulator, and eval harness design.
+for the Rsbuild workbench, whole-plugin playground, Skill renderer, integrated Inspector-derived
+MCP workbench, hook simulator, and eval harness design.
 
 This repository is currently at the design-foundation stage.

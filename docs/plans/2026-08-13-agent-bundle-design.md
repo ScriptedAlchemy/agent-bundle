@@ -703,9 +703,9 @@ The repository should use Rstack tools where practical:
 - Prettier and repository spelling checks for documentation.
 
 The tool itself should remain usable outside Rstack repositories through its own executable
-and JavaScript API. The Agent Bundle CLI requires Node.js 22.19 or newer so its pinned official
-MCP Inspector integration has one supported runtime floor. Generated plugin executables retain
-their separately configured default target of Node.js 22.12 or newer.
+and JavaScript API. The Agent Bundle CLI requires Node.js 22.19 or newer, matching the tested
+toolchain of its initial attributed MCP Inspector source snapshot. Generated plugin executables
+retain their separately configured default target of Node.js 22.12 or newer.
 
 ## Testing strategy
 
@@ -796,8 +796,9 @@ layers.
     into a user's normal host configuration.
 13. Skill rendering uses structured frontmatter plus CommonMark/GFM Markdown and does not
     execute MDX.
-14. The official MCP Inspector may run as a pinned managed sidecar, but Agent Bundle does not
-    import its private internals or make it the owner of plugin traces and eval records.
+14. Agent Bundle vendors an attributed, allowlisted MCP Inspector source snapshot behind an
+    internal adapter. It does not iframe the standalone app, import unpublished npm paths, or make
+    Inspector code the owner of plugin traces and eval records.
 
 ## Open implementation questions
 

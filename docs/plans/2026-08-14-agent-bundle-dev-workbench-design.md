@@ -115,9 +115,9 @@ The server binds to loopback in the first release. It checks browser origins and
 session token for routes that can start a process or expose the optional agent API. There is no
 public-network binding option in the initial product.
 
-The Agent Bundle CLI and workbench require Node.js 22.19 or newer, matching the pinned Inspector
-integration. This tool runtime is separate from the configurable runtime target of emitted plugin
-executables.
+The Agent Bundle CLI and workbench require Node.js 22.19 or newer, matching the tested toolchain of
+the initial Inspector source snapshot. This tool runtime is separate from the configurable runtime
+target of emitted plugin executables.
 
 ## Development coordinator
 
@@ -210,6 +210,12 @@ remains active. Cleanup retains the active epoch, every epoch referenced by an M
 run, and the five newest unreferenced epochs. Referenced epochs are deleted only after their final
 session closes.
 
+One `agent-bundle dev` process owns the project epoch store through `.agent-bundle/dev.lock` and
+publishes an epoch by renaming a completed staging directory. A second dev process reports the
+active owner instead of becoming a concurrent writer. Standalone evals create run-owned artifact
+copies, and commands using `--artifact` are readers; neither participates in dev-epoch cleanup.
+An abandoned lock may be recovered only after its recorded process is no longer running.
+
 ## Author configuration
 
 The existing configuration gains optional development and eval sections:
@@ -290,14 +296,15 @@ and direct/indirect/negative eval coverage.
 
 ### MCP playground
 
-The MCP page combines an Agent Bundle-native session panel with a managed official MCP Inspector
-pane. Both are bound to one immutable artifact epoch.
+The MCP page is an integrated Inspector-derived protocol workbench bound to one immutable
+artifact epoch. It runs inside the Agent Bundle React tree with no iframe and no second web
+application.
 
-The native panel provides the integration points Agent Bundle owns:
+The workbench provides:
 
 - selected target, generated command, arguments, working directory, and non-secret environment;
 - Codex and Claude path-token expansion using the selected epoch as plugin root and a
-  workbench-managed per-epoch plugin-data directory;
+  workbench-managed per-session plugin-data directory;
 - explicit start, stop, restart, timeout, cancellation, and session controls;
 - negotiated protocol version and client/server capabilities;
 - tools, resources, resource templates, and prompts;
@@ -306,28 +313,81 @@ The native panel provides the integration points Agent Bundle owns:
   and logging messages;
 - invocation history, replay, config export, raw protocol frames, and promotion to a draft eval.
 
-The default client advertises tools, resources, prompts, progress, and logging. Unsupported client
-features such as sampling or elicitation are shown as unsupported and return a defined error
-instead of hanging. Protocol versions and schemas come from the pinned MCP SDK rather than being
-copied into Agent Bundle.
+The initial client advertises tools, resources, prompts, progress, and logging. Unsupported client
+features are shown as unsupported and return a defined error instead of hanging. Protocol versions
+and schemas come from pinned public MCP SDK packages rather than being copied into Agent Bundle.
+This is intentionally different from host and Agent Skills manifest schemas, which are vendored
+snapshots because they validate emitted files rather than implement a live protocol.
 
-The **Full Inspector** pane launches an exact pinned `@modelcontextprotocol/inspector` package as
-a loopback sidecar. The coordinator writes a temporary read-only `--config` containing only the
-selected generated server, disables automatic browser opening, and embeds the Inspector web UI
-when the pinned release permits framing. If framing or routing is incompatible, the same pane
-offers **Open Inspector** in a separate tab without changing the selected config.
+The browser cannot spawn a generated stdio server directly. `McpService` therefore exposes an
+Agent Bundle remote transport on the foreground server:
 
-This is a real Inspector process, not a visual imitation. It brings the official transport and
-MCP Apps debugging behavior into the workbench while Agent Bundle supplies the artifact selection
-and host-specific launch context. The package is pinned and exercised by a release contract test;
-an Inspector update is an intentional dependency upgrade rather than an unbounded `npx latest`.
+```text
+Inspector-derived React/hooks
+  -> AgentBundleRemoteTransport
+  -> authenticated workbench session stream
+  -> McpService process supervisor
+  -> generated stdio or Streamable HTTP server from the selected epoch
+```
 
-The Inspector remains an optional protocol-debugging view, not Agent Bundle's state store. Its
-current shared `@inspector/core` and React hooks are internal and are not published as supported
-embedding packages, so Agent Bundle does not import private modules, copy the UI, or fork it. The
-native session service remains responsible for plugin-wide traces, epoch provenance, replay, and
-eval promotion. If Inspector later publishes an embeddable component API, the sidecar adapter can
-be replaced without changing those contracts.
+Creating a session binds `{ epochId, target, serverName }`, resolves its generated command and
+host environment once, creates a per-session plugin-data directory, and returns the negotiated
+connection state. The bidirectional stream forwards JSON-RPC frames and separate stderr/log
+events, supports request cancellation and session shutdown, and records each frame in the shared
+plugin timeline before delivery. The browser never supplies an arbitrary executable path.
+
+The official MCP Inspector is MIT licensed, and its current v2 architecture separates MCP client
+state and React hooks from presentational web components. Because those modules are deliberately
+not published as a supported downstream package, Agent Bundle vendors an allowlisted source
+snapshot instead of importing private npm subpaths.
+
+The initial snapshot may reuse and adapt:
+
+- MCP client lifecycle, message tracking, output validation, and list state;
+- React hooks over that state;
+- tools, resources, prompts, Apps, content, protocol, network, progress, and log components;
+- JSON argument/schema utilities and the relevant upstream fixtures.
+
+It excludes the Inspector launcher, CLI, TUI, standalone Hono/Vite server shell, global server
+catalog, sample servers, and unrelated persistence. Agent Bundle supplies transport/process
+ownership, generated host environment expansion, artifact epochs, plugin-wide traces, replay, and
+eval promotion.
+
+Vendored code lives behind an internal `inspector-adapter` boundary. Its directory contains the
+upstream repository, exact commit, copied path allowlist, license, and local patch record. Files
+remain byte-identical where import aliasing and adapters suffice. Any unavoidable source edit must
+be generated by a recorded patch rather than being an unexplained hand edit.
+
+A maintainer-only sync script refreshes the snapshot from a new explicit commit; install, build,
+and dev never fetch upstream source. `UPSTREAM.json` records upstream digests, applied patch files,
+post-patch digests, the declared external dependency set, and the MCP SDK version used by that
+Inspector commit. `THIRD_PARTY_NOTICES` and the Inspector MIT license ship in both the repository
+and the published npm package containing the derived workbench assets. An upgrade must pass the
+retained upstream tests plus Agent Bundle artifact-binding and playground contract tests. A change
+to the required Node engine is treated as a semver-significant upgrade decision.
+
+```text
+packages/workbench/src/inspector/
+├── adapter/                 # Agent Bundle transport, epoch, trace, and theme bindings
+├── vendor/                  # allowlisted upstream source snapshot
+├── UPSTREAM.json            # repository, commit, copied paths, and content digests
+├── patches/                 # mechanically applied local source patches, normally empty
+├── PATCHES.md               # intentional behavioral and import adaptations
+└── LICENSE.inspector        # preserved MIT license
+```
+
+The sync command produces a reviewable diff and fails when an allowlisted upstream path moves or
+introduces a dependency outside the declared set. It never overwrites `adapter/`.
+
+The current Inspector web UI is Mantine-based. Agent Bundle declares the required Mantine and
+React packages directly, includes vendored component paths in the Rsbuild compilation, and owns a
+theme adapter rather than copying Inspector's application shell. Skill code rendering remains the
+separate Shiki pipeline described below.
+
+If Inspector later publishes an embeddable component/core API, the adapter can switch from the
+vendored snapshot without changing the rest of the workbench. Agent Bundle also exports the exact
+selected server config so an author can open the standalone official Inspector as an escape hatch,
+but that external session is not the source of Agent Bundle provenance or eval evidence.
 
 The playground always executes the generated command from the selected target. It never imports
 the MCP source module directly, because that would bypass emitted paths, bundled dependencies,
@@ -335,12 +395,13 @@ target-specific environment expansion, and process behavior.
 
 The initial integration decision is therefore:
 
-| Option                                  | Decision | Reason                                                                   |
-| --------------------------------------- | -------- | ------------------------------------------------------------------------ |
-| iframe a managed Inspector sidecar      | primary  | Reuses the complete supported UI and process without vendoring it.       |
-| open the managed Inspector in a new tab | fallback | Survives upstream framing or base-path incompatibility.                  |
-| import Inspector React/core internals   | no       | They are intentionally private and not published for downstream reuse.   |
-| copy or fork Inspector source           | no       | Creates a second protocol debugger and an expensive upstream merge path. |
+| Option                                       | Decision | Reason                                                                |
+| -------------------------------------------- | -------- | --------------------------------------------------------------------- |
+| controlled vendoring of an allowlisted set   | primary  | Produces one integrated UI while retaining exact upstream provenance. |
+| import unpublished npm subpaths              | no       | Private package paths are not a supported compatibility contract.     |
+| iframe or proxy the entire Inspector web app | no       | Creates a nested app, second lifecycle, and disconnected UX.          |
+| wholesale fork of the Inspector repository   | no       | Pulls in launcher, servers, clients, and persistence we do not need.  |
+| export config for standalone Inspector       | escape   | Preserves the complete upstream tool for unusual debugging.           |
 
 ### Hooks
 
@@ -583,8 +644,10 @@ Codex does not provide a direct `--plugin-dir` equivalent. For an isolated trial
 4. verifies it with `codex plugin list --json`;
 5. runs `codex exec --ephemeral --json` from a fresh fixture copy.
 
-`native-local` may use the author's existing Codex setup for manual dogfooding, but its inherited
-state is recorded. `native-isolated` uses the temporary home and supported API-key auth for CI.
+Candidate-plugin Codex trials are always `native-isolated`. Agent Bundle does not install a test
+candidate into the author's normal Codex home. Manual dogfooding of an already user-installed
+release can be recorded as an external run, but it is not comparable to an isolated candidate
+trial unless every alignment field matches.
 
 ### Future harness adapter
 
@@ -728,8 +791,9 @@ an ambient output directory from modification time.
 - generated stdio MCP initialization and catalog operations;
 - input forms and raw JSON produce identical calls;
 - process restart binds the selected epoch;
-- managed Inspector sidecar receives an exact read-only epoch config and closes with the session;
-- embedded Inspector framing and separate-tab fallback are tested against the pinned release;
+- the vendored Inspector subset retains its selected upstream fixtures and license metadata;
+- Inspector-derived controls execute through Agent Bundle's epoch-bound MCP session service;
+- exported standalone-Inspector config contains the same resolved command and non-secret env;
 - hook simulation executes the emitted target wrapper;
 - canonical/native input and output round-trip fixtures.
 
@@ -746,14 +810,41 @@ an ambient output directory from modification time.
 Workbench browser flows run with Rstest Browser Mode and Playwright Chromium. Native harness
 smokes remain process-level integration tests rather than browser mocks.
 
+### Phase-zero contract spikes
+
+Before shared implementation, seven disposable fixtures turn external assumptions into checked-in
+contracts:
+
+1. **Inspector allowlist:** copy the candidate paths at one commit, build them under Rsbuild,
+   retain relevant upstream tests under Rstest, wire Mantine through the theme adapter, reject
+   Vite-only APIs or undeclared imports, and emit the first `UPSTREAM.json`.
+2. **Browser-to-stdio bridge:** initialize, list tools, call one tool, receive stderr/progress, and
+   cancel a request through `AgentBundleRemoteTransport` against a generated epoch fixture.
+3. **Claude contract:** load a handwritten plugin with the supported direct-plugin flag, observe
+   stream output and hooks, and record the minimum CLI version and capability fixture.
+4. **Codex lifecycle:** use a temporary `CODEX_HOME` and marketplace, install and verify a
+   handwritten candidate, run an ephemeral JSON trial, and prove the normal user home is unchanged.
+5. **Path tokens:** verify real Claude and Codex plugin-root/data expansion and portable relative
+   command behavior against the selected host/spec versions.
+6. **Activation evidence:** record exactly which Claude and Codex events justify `observed`,
+   `inferred`, or `unavailable` activation claims.
+7. **Epoch atomicity:** prove rename publication and dev-lock behavior, including stale-lock
+   recovery and a second writer attempt, on supported operating systems.
+
+The spikes may be thrown away after their fixtures and contract notes are captured. Their purpose
+is to prevent an attractive abstraction from preceding evidence about the real hosts and upstream
+Inspector source.
+
 ## Delivery phases
 
-0. Handwritten Codex and Claude contract spikes, minimum supported CLI versions, and capability
-   fixtures for every initial adapter.
+0. Handwritten Codex and Claude contract spikes, minimum supported CLI versions, capability
+   fixtures for every initial adapter, and an Inspector vendoring spike that proves the exact
+   allowlist builds under Rsbuild without unpublished package imports.
 1. `DevCoordinator`, atomic artifact epochs, Rslib rebuilds, and structured status.
 2. Rsbuild React build, contributor HMR path, and published foreground server.
 3. Skill browser and Markdown renderer.
-4. Native MCP session service, managed official Inspector pane, and generated-hook simulator.
+4. Native MCP session service, integrated Inspector-derived components, and generated-hook
+   simulator.
 5. Whole-plugin playground, ordered trace, replay, and promotion to a draft eval.
 6. Deterministic eval definitions, run store, graders, and CLI.
 7. Claude native harness.
@@ -778,8 +869,8 @@ native model trials do not precede deterministic artifact checks.
 7. `react-markdown`, `remark-gfm`, and lazy fine-grained Shiki render Skills; core parses
    frontmatter once.
 8. MCP and hook tools execute generated artifacts rather than source shortcuts.
-9. The official MCP Inspector is a pinned managed sidecar and optional Full Inspector pane; Agent
-   Bundle does not import its private core or fork its UI.
+9. Agent Bundle vendors an attributed, allowlisted MCP Inspector source snapshot behind an internal
+   adapter; it does not iframe the standalone app or import unpublished npm paths.
 10. Eval harnesses distinguish deterministic execution from native-local and native-isolated
     isolation levels.
 11. Activation claims carry `observed`, `inferred`, or `unavailable` evidence.
