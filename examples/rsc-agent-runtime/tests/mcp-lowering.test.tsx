@@ -95,3 +95,50 @@ test('rejects malformed or nested MCP protocol result trees', () => {
     ),
   ).toThrow('mcp-result structuredContent must be JSON-serializable');
 });
+
+test('rejects non-JSON structured content instead of normalizing it', () => {
+  const cyclic: Record<string, unknown> = {};
+  cyclic.self = cyclic;
+  const sparse = new Array<unknown>(2);
+  sparse[1] = 'present';
+
+  for (const value of [
+    undefined,
+    () => undefined,
+    Symbol('value'),
+    Number.NaN,
+    Number.POSITIVE_INFINITY,
+    new Date('2026-08-14T00:00:00.000Z'),
+    new Map(),
+    sparse,
+    [undefined],
+    cyclic,
+  ]) {
+    expect(() =>
+      lowerMcpResult(
+        <Mcp.Result structuredContent={{ value }}>
+          <Mcp.Text>invalid</Mcp.Text>
+        </Mcp.Result>,
+      ),
+    ).toThrow('mcp-result structuredContent must be JSON-serializable');
+  }
+});
+
+test('clones recursively valid JSON records for structured content', () => {
+  const input = Object.assign(Object.create(null), {
+    nested: { array: [null, false, 2.5, 'value'] },
+    stateVersion: 2,
+  });
+
+  const result = lowerMcpResult(
+    <Mcp.Result structuredContent={input}>
+      <Mcp.Text>valid</Mcp.Text>
+    </Mcp.Result>,
+  );
+
+  expect(result.structuredContent).toEqual({
+    nested: { array: [null, false, 2.5, 'value'] },
+    stateVersion: 2,
+  });
+  expect(result.structuredContent).not.toBe(input);
+});

@@ -43,19 +43,107 @@ const textChild = (children: unknown, message: string): string => {
   return values[0];
 };
 
-const jsonRecord = (value: unknown, message: string): Record<string, unknown> => {
+type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
+
+const isArrayIndex = (key: string, length: number): boolean => {
+  if (key === '0') {
+    return length > 0;
+  }
+
+  if (!/^[1-9]\d*$/.test(key)) {
+    return false;
+  }
+
+  const index = Number(key);
+  return Number.isSafeInteger(index) && index < length;
+};
+
+const cloneJsonValue = (value: unknown, ancestors: Set<object>): JsonValue => {
+  if (value === null || typeof value === 'boolean' || typeof value === 'string') {
+    return value;
+  }
+
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) {
+      throw new Error('non-finite number');
+    }
+
+    return value;
+  }
+
+  if (typeof value !== 'object') {
+    throw new Error('non-JSON value');
+  }
+
+  if (ancestors.has(value)) {
+    throw new Error('cyclic value');
+  }
+
+  ancestors.add(value);
   try {
-    const encoded = JSON.stringify(value);
-    if (encoded === undefined) {
-      throw new Error('undefined');
+    if (Array.isArray(value)) {
+      const keys = Reflect.ownKeys(value);
+      if (
+        keys.length !== value.length + 1 ||
+        keys.some((key) => key !== 'length' && (typeof key !== 'string' || !isArrayIndex(key, value.length)))
+      ) {
+        throw new Error('sparse or decorated array');
+      }
+
+      const clone: JsonValue[] = [];
+      for (let index = 0; index < value.length; index += 1) {
+        if (!Object.hasOwn(value, index)) {
+          throw new Error('sparse array');
+        }
+
+        const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+        if (descriptor === undefined || !('value' in descriptor)) {
+          throw new Error('array accessor');
+        }
+
+        clone.push(cloneJsonValue(descriptor.value, ancestors));
+      }
+
+      return clone;
     }
 
-    const decoded: unknown = JSON.parse(encoded);
-    if (decoded === null || typeof decoded !== 'object' || Array.isArray(decoded)) {
-      throw new Error('not an object');
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) {
+      throw new Error('non-plain object');
     }
 
-    return decoded as Record<string, unknown>;
+    const clone: { [key: string]: JsonValue } = {};
+    for (const key of Reflect.ownKeys(value)) {
+      if (typeof key !== 'string') {
+        throw new Error('symbol key');
+      }
+
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (descriptor === undefined || !descriptor.enumerable || !('value' in descriptor)) {
+        throw new Error('non-enumerable or accessor property');
+      }
+
+      clone[key] = cloneJsonValue(descriptor.value, ancestors);
+    }
+
+    return clone;
+  } finally {
+    ancestors.delete(value);
+  }
+};
+
+const jsonRecord = (value: unknown, message: string): Record<string, JsonValue> => {
+  try {
+    if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+      throw new Error('structured content must be an object');
+    }
+
+    const clone = cloneJsonValue(value, new Set());
+    if (Array.isArray(clone) || clone === null || typeof clone !== 'object') {
+      throw new Error('structured content must be an object');
+    }
+
+    return clone;
   } catch {
     throw new Error(message);
   }

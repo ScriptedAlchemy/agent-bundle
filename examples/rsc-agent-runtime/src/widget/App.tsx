@@ -1,10 +1,10 @@
-import { useState } from 'react';
+import React, { useState } from 'react';
 import { useApp } from '@modelcontextprotocol/ext-apps/react';
 
 import type { EditEvent } from '../runtime/contracts.js';
 
 type TimelineState = { stateVersion: number; edits: EditEvent[] };
-type RefreshState = 'idle' | 'refreshing' | 'error';
+export type RefreshState = 'idle' | 'refreshing' | 'error';
 
 const standaloneTimeline: TimelineState = {
   edits: [
@@ -69,6 +69,17 @@ const displayTime = (recordedAt: string): string =>
     second: '2-digit',
   }).format(new Date(recordedAt));
 
+export const RefreshStatus = ({ refresh }: { refresh: RefreshState }) => {
+  const message =
+    refresh === 'refreshing' ? 'Refreshing timeline.' : refresh === 'error' ? 'Unable to refresh timeline.' : '';
+
+  return (
+    <p aria-live="polite" className="timeline__status" role="status">
+      {message}
+    </p>
+  );
+};
+
 export const App = () => {
   const standalone = window.parent === window;
   const [timeline, setTimeline] = useState<TimelineState>(standalone ? standaloneTimeline : { edits: [], stateVersion: 0 });
@@ -125,6 +136,7 @@ export const App = () => {
           Refresh
         </button>
       </header>
+      <RefreshStatus refresh={refresh} />
 
       {timeline.edits.length === 0 ? (
         <p className="timeline__empty">No file edits recorded yet.</p>

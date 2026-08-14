@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { request as httpRequest } from 'node:http';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { once } from 'node:events';
@@ -31,6 +32,24 @@ const createStateFile = async (): Promise<string> => {
 
 const createClient = (): Client =>
   new Client({ name: 'rsc-agent-runtime-test', version: '1.0.0' });
+
+const requestStatus = ({
+  headers,
+  path,
+  port,
+}: {
+  headers: Record<string, string>;
+  path: string;
+  port: number;
+}): Promise<number> =>
+  new Promise((resolve, reject) => {
+    const request = httpRequest({ headers, hostname: '127.0.0.1', method: 'GET', path, port }, (response) => {
+      response.resume();
+      response.once('end', () => resolve(response.statusCode ?? 0));
+    });
+    request.once('error', reject);
+    request.end();
+  });
 
 const expectStaticSurface = async (client: Client) => {
   const tools = await client.listTools();
@@ -139,12 +158,64 @@ test('built Streamable HTTP MCP reports its one JSON startup line and closes cle
     const transport = new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${startup.port}/mcp`));
     await client.connect(transport);
     await expectStaticSurface(client);
+
+    const localHost = `127.0.0.1:${startup.port}`;
+    await expect(
+      requestStatus({
+        headers: { Host: localHost, Origin: `http://${localHost}` },
+        path: '/health',
+        port: startup.port,
+      }),
+    ).resolves.toBe(200);
+    for (const path of ['/health', '/mcp']) {
+      await expect(
+        requestStatus({ headers: { Host: 'attacker.example' }, path, port: startup.port }),
+      ).resolves.toBe(403);
+      await expect(
+        requestStatus({ headers: { Host: localHost, Origin: 'https://attacker.example' }, path, port: startup.port }),
+      ).resolves.toBe(403);
+    }
   } finally {
     await client.close();
     child.kill('SIGTERM');
     const [exitCode, signal] = (await once(child, 'close')) as [number | null, NodeJS.Signals | null];
     expect(exitCode).toBe(0);
     expect(signal).toBeNull();
+    await rm(join(stateFile, '..'), { force: true, recursive: true });
+  }
+});
+
+test('built Streamable HTTP MCP accepts only explicitly allowed public tunnel origins', async () => {
+  const stateFile = await createStateFile();
+  const child = spawn(process.execPath, [join(process.cwd(), 'dist/mcp/http.js')], {
+    env: {
+      ...process.env,
+      AGENT_RUNTIME_ALLOWED_HOSTS: 'tunnel.example',
+      AGENT_RUNTIME_ALLOWED_ORIGINS: 'https://tunnel.example',
+      AGENT_RUNTIME_STATE_FILE: stateFile,
+      PORT: '0',
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let stderr = '';
+  child.stderr.setEncoding('utf8');
+  child.stderr.on('data', (chunk: string) => {
+    stderr += chunk;
+  });
+
+  try {
+    await once(child.stderr, 'data');
+    const startup = JSON.parse(stderr.trim()) as { port: number };
+    await expect(
+      requestStatus({
+        headers: { Host: 'tunnel.example', Origin: 'https://tunnel.example' },
+        path: '/health',
+        port: startup.port,
+      }),
+    ).resolves.toBe(200);
+  } finally {
+    child.kill('SIGTERM');
+    await once(child, 'close');
     await rm(join(stateFile, '..'), { force: true, recursive: true });
   }
 });
