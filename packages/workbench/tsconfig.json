@@ -1,0 +1,17 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true
+  },
+  "include": [
+    "src/main.tsx",
+    "src/inspector-closure.tsx",
+    "src/overview-model.ts",
+    "src/project-client.ts",
+    "src/workbench.d.ts",
+    "tests/overview-model.test.ts",
+    "tests/project-client.test.ts",
+    "tests/rsbuild-workbench.test.ts",
+    "tests/workbench-dev-command.test.ts"
+  ]
+}

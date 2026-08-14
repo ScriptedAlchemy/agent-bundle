@@ -6,12 +6,18 @@ import { pluginReact } from '@rsbuild/plugin-react';
 const sourceRoot = resolve(import.meta.dirname, 'src');
 const vendorRoot = resolve(sourceRoot, 'inspector', 'vendor');
 
-export default defineConfig({
+/**
+ * The contributor dev process proxies to a separately started foreground
+ * server. Production assets never proxy: they are served by that foreground
+ * server directly from the published package.
+ */
+export const createWorkbenchConfig = (apiProxyTarget = process.env.AGENT_BUNDLE_WORKBENCH_API_PROXY) => ({
   output: {
     assetPrefix: '/',
     distPath: {
       root: 'dist',
     },
+    filenameHash: false,
     filename: {
       assets: '[name][ext]',
       css: '[name].css',
@@ -29,9 +35,17 @@ export default defineConfig({
   },
   source: {
     entry: {
-      'inspector-closure': resolve(sourceRoot, 'main.tsx'),
+      'inspector-closure': resolve(sourceRoot, 'inspector-closure.tsx'),
+      index: resolve(sourceRoot, 'main.tsx'),
     },
   },
+  ...(apiProxyTarget === undefined ? {} : {
+    server: {
+      proxy: {
+        '/api': { changeOrigin: true, target: apiProxyTarget },
+      },
+    },
+  }),
   tools: {
     rspack: {
       resolve: {
@@ -43,3 +57,5 @@ export default defineConfig({
     },
   },
 });
+
+export default defineConfig(createWorkbenchConfig());

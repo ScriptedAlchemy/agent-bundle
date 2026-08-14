@@ -8,7 +8,8 @@
   },
   "scripts": {
     "build": "rsbuild build",
-    "dev": "rsbuild dev"
+    "dev": "node scripts/dev.mjs",
+    "typecheck": "tsc --project tsconfig.json"
   },
   "dependencies": {
     "@mantine/core": "9.5.1",
