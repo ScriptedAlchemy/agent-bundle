@@ -6,23 +6,3 @@ Commands:
 
 Options:
   --version  Print version information
-
-$ codex exec --help
-Usage: codex exec [OPTIONS] [PROMPT]
-
-Options:
-  --ephemeral  Do not persist the thread.
-  --json       Emit events as JSONL.
-
-$ codex plugin --help
-Manage Codex plugins
-
-Commands:
-  add          Install a plugin from a configured marketplace snapshot
-  list         List plugins available from configured marketplace snapshots
-  marketplace  Add, list, upgrade, or remove configured plugin marketplaces
-
-$ codex plugin marketplace --help
-Commands:
-  add   Add a local marketplace snapshot
-  list  List configured marketplace snapshots

@@ -1,3 +1,6 @@
+import { execFile as executeFile } from 'node:child_process';
+import { promisify } from 'node:util';
+
 // Pure parsing and opt-in probing contract for subscription-backed native host CLIs.
 export type NativeHost = 'claude' | 'codex';
 
@@ -16,16 +19,16 @@ export interface HostContractManifest {
   readonly host: NativeHost;
   readonly minimumVersion: string;
   readonly probes: Readonly<{
-    readonly help: readonly string[];
-    readonly status: readonly string[];
-    readonly version: readonly string[];
+    readonly help: readonly HostContractHelpProbe[];
+    readonly status: HostContractProbe;
+    readonly version: HostContractProbe;
   }>;
-  readonly requiredHelpTerms: readonly string[];
   readonly schemaVersion: 1;
+  readonly temporaryHomeEnvironment?: 'CODEX_HOME';
 }
 
 export interface HostContractEvidence {
-  readonly helpOutput: string;
+  readonly helpOutputs: Readonly<Record<string, string>>;
   readonly versionOutput: string;
 }
 
@@ -39,9 +42,22 @@ export interface HostContractReport {
 
 export type HostContractProbeKind = keyof HostContractManifest['probes'];
 
+export interface HostContractProbe {
+  readonly args: readonly string[];
+}
+
+export interface HostContractHelpProbe extends HostContractProbe {
+  readonly id: string;
+  readonly output: string;
+  readonly requiredCommands?: readonly string[];
+  readonly requiredLiterals?: readonly string[];
+  readonly requiredOptions?: readonly string[];
+}
+
 export interface HostContractCommand {
   readonly args: readonly string[];
   readonly executable: string;
+  readonly helpId?: string;
   readonly host: NativeHost;
   readonly kind: HostContractProbeKind;
 }
@@ -130,9 +146,32 @@ const compareSemanticVersions = (left: SemanticVersion, right: SemanticVersion):
 
 const escapeRegularExpression = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
 
-const helpIncludesTerm = (helpOutput: string, term: string): boolean => {
-  if (!term.startsWith('--')) return helpOutput.includes(term);
-  return new RegExp(`(?:^|[^A-Za-z0-9_-])${escapeRegularExpression(term)}(?![A-Za-z0-9_-])`, 'u').test(helpOutput);
+const sameStringArrays = (left: readonly string[], right: readonly string[]): boolean =>
+  left.length === right.length && left.every((entry, index) => entry === right[index]);
+
+const sameOptionalStringArrays = (left: readonly string[] | undefined, right: readonly string[] | undefined): boolean =>
+  left === undefined || right === undefined ? left === right : sameStringArrays(left, right);
+
+const declaredOptions = (helpOutput: string): ReadonlySet<string> => Object.freeze(new Set(
+  [...helpOutput.matchAll(/--[A-Za-z][A-Za-z0-9-]*/gu)].map(([option]) => option),
+));
+
+const declaredCommands = (helpOutput: string): ReadonlySet<string> => Object.freeze(new Set(
+  helpOutput
+    .split(/\r?\n/u)
+    .flatMap((line) => /^\s{2,}([A-Za-z][A-Za-z0-9-]*(?:\|[A-Za-z][A-Za-z0-9-]*)*)(?:\s+(?:\[[^\]\r\n]+\]|<[^>\r\n]+>|[A-Z][A-Z0-9_-]*))*\s{2,}/u.exec(line)?.[1].split('|') ?? []),
+));
+
+const hasExactToken = (value: string, token: string): boolean =>
+  new RegExp(`(?:^|[^A-Za-z0-9_-])${escapeRegularExpression(token)}(?![A-Za-z0-9_-])`, 'u').test(value);
+
+const missingHelpRequirement = (probe: HostContractHelpProbe, output: string): { readonly label: string; readonly values: readonly string[] } | undefined => {
+  const options = (probe.requiredOptions ?? []).filter((option) => !declaredOptions(output).has(option));
+  if (options.length > 0) return Object.freeze({ label: 'options', values: Object.freeze(options) });
+  const commands = (probe.requiredCommands ?? []).filter((command) => !declaredCommands(output).has(command));
+  if (commands.length > 0) return Object.freeze({ label: 'commands', values: Object.freeze(commands) });
+  const literals = (probe.requiredLiterals ?? []).filter((literal) => !hasExactToken(output, literal));
+  return literals.length === 0 ? undefined : Object.freeze({ label: 'literal tokens', values: Object.freeze(literals) });
 };
 
 const diagnostic = (
@@ -153,7 +192,115 @@ const report = (
   ...(options.version === undefined ? {} : { version: options.version }),
 });
 
-const parseManifest = (value: unknown): HostContractManifest | undefined => {
+interface HostContractStructure {
+  readonly commandShapes: Readonly<Record<string, readonly string[]>>;
+  readonly help: readonly HostContractHelpProbe[];
+  readonly status: readonly string[];
+  readonly temporaryHomeEnvironment?: 'CODEX_HOME';
+  readonly version: readonly string[];
+}
+
+const canonicalStructures: Readonly<Record<NativeHost, HostContractStructure>> = Object.freeze({
+  claude: Object.freeze({
+    commandShapes: Object.freeze({
+      hookEvent: Object.freeze(['hook_event_name', 'PreToolUse']),
+      nativeExecution: Object.freeze(['-p', '--plugin-dir', '<plugin-root>', '--output-format', 'stream-json', '--no-session-persistence', '<task-input>']),
+    }),
+    help: Object.freeze([
+      Object.freeze({
+        args: Object.freeze(['--help']),
+        id: 'root',
+        output: 'help.txt',
+        requiredLiterals: Object.freeze(['stream-json']),
+        requiredOptions: Object.freeze(['--plugin-dir', '--output-format', '--no-session-persistence']),
+      }),
+      Object.freeze({
+        args: Object.freeze(['plugin', '--help']),
+        id: 'plugin',
+        output: 'plugin-help.txt',
+        requiredCommands: Object.freeze(['install', 'marketplace', 'validate']),
+      }),
+    ]),
+    status: Object.freeze(['plugin', '--help']),
+    version: Object.freeze(['--version']),
+  }),
+  codex: Object.freeze({
+    commandShapes: Object.freeze({
+      ephemeralExecution: Object.freeze(['exec', '--ephemeral', '--json', '<task-input>']),
+      marketplaceAdd: Object.freeze(['plugin', 'marketplace', 'add', '<marketplace-path>']),
+      pluginAdd: Object.freeze(['plugin', 'add', '<plugin>@<marketplace>']),
+      pluginList: Object.freeze(['plugin', 'list', '--json']),
+    }),
+    help: Object.freeze([
+      Object.freeze({ args: Object.freeze(['--help']), id: 'root', output: 'help.txt', requiredCommands: Object.freeze(['exec', 'plugin']) }),
+      Object.freeze({ args: Object.freeze(['exec', '--help']), id: 'exec', output: 'exec-help.txt', requiredOptions: Object.freeze(['--ephemeral', '--json']) }),
+      Object.freeze({ args: Object.freeze(['plugin', '--help']), id: 'plugin', output: 'plugin-help.txt', requiredCommands: Object.freeze(['add', 'list', 'marketplace']) }),
+      Object.freeze({ args: Object.freeze(['plugin', 'add', '--help']), id: 'plugin-add', output: 'plugin-add-help.txt' }),
+      Object.freeze({ args: Object.freeze(['plugin', 'list', '--help']), id: 'plugin-list', output: 'plugin-list-help.txt', requiredOptions: Object.freeze(['--json']) }),
+      Object.freeze({ args: Object.freeze(['plugin', 'marketplace', '--help']), id: 'marketplace', output: 'marketplace-help.txt', requiredCommands: Object.freeze(['add', 'list']) }),
+    ]),
+    status: Object.freeze(['plugin', 'list', '--json']),
+    temporaryHomeEnvironment: 'CODEX_HOME',
+    version: Object.freeze(['--version']),
+  }),
+});
+
+const parseProbe = (value: unknown): HostContractProbe | undefined => {
+  if (!isRecord(value) || !isStringArray(value.args) || value.args.length === 0) return undefined;
+  return Object.freeze({ args: Object.freeze([...value.args]) });
+};
+
+const parseOptionalStringArray = (value: unknown): readonly string[] | undefined =>
+  value === undefined ? undefined : isStringArray(value) ? Object.freeze([...value]) : undefined;
+
+const parseHelpProbe = (value: unknown): HostContractHelpProbe | undefined => {
+  if (!isRecord(value)) return undefined;
+  const probe = parseProbe(value);
+  const id = readString(value.id);
+  const output = readString(value.output);
+  const requiredCommands = parseOptionalStringArray(value.requiredCommands);
+  const requiredLiterals = parseOptionalStringArray(value.requiredLiterals);
+  const requiredOptions = parseOptionalStringArray(value.requiredOptions);
+  if (
+    probe === undefined
+    || id === undefined
+    || output === undefined
+    || (value.requiredCommands !== undefined && requiredCommands === undefined)
+    || (value.requiredLiterals !== undefined && requiredLiterals === undefined)
+    || (value.requiredOptions !== undefined && requiredOptions === undefined)
+  ) return undefined;
+  return Object.freeze({
+    ...probe,
+    id,
+    output,
+    ...(requiredCommands === undefined ? {} : { requiredCommands }),
+    ...(requiredLiterals === undefined ? {} : { requiredLiterals }),
+    ...(requiredOptions === undefined ? {} : { requiredOptions }),
+  });
+};
+
+const sameHelpProbe = (left: HostContractHelpProbe, right: HostContractHelpProbe): boolean =>
+  left.id === right.id
+  && left.output === right.output
+  && sameStringArrays(left.args, right.args)
+  && sameOptionalStringArrays(left.requiredCommands, right.requiredCommands)
+  && sameOptionalStringArrays(left.requiredLiterals, right.requiredLiterals)
+  && sameOptionalStringArrays(left.requiredOptions, right.requiredOptions);
+
+const hasCanonicalStructure = (manifest: HostContractManifest): boolean => {
+  const structure = canonicalStructures[manifest.host];
+  const expectedCommandShapeNames = Object.keys(structure.commandShapes).sort();
+  const actualCommandShapeNames = Object.keys(manifest.commandShapes).sort();
+  return sameStringArrays(expectedCommandShapeNames, actualCommandShapeNames)
+    && expectedCommandShapeNames.every((name) => sameStringArrays(manifest.commandShapes[name]!, structure.commandShapes[name]!))
+    && sameStringArrays(manifest.probes.version.args, structure.version)
+    && sameStringArrays(manifest.probes.status.args, structure.status)
+    && manifest.probes.help.length === structure.help.length
+    && manifest.probes.help.every((probe, index) => sameHelpProbe(probe, structure.help[index]!))
+    && manifest.temporaryHomeEnvironment === structure.temporaryHomeEnvironment;
+};
+
+export const parseHostContractManifest = (value: unknown): HostContractManifest | undefined => {
   if (!isRecord(value)) return undefined;
   const probes = value.probes;
   const commandShapes = value.commandShapes;
@@ -164,40 +311,51 @@ const parseManifest = (value: unknown): HostContractManifest | undefined => {
     || !isNativeHost(host)
     || !isRecord(probes)
     || !isRecord(commandShapes)
-    || !isStringArray(probes.version)
-    || !isStringArray(probes.help)
-    || !isStringArray(probes.status)
-    || !isStringArray(value.requiredHelpTerms)
+    || !Array.isArray(probes.help)
     || !isStringArray(value.eventEnvelopeFiles)
   ) return undefined;
 
   const executable = readString(value.executable);
   const minimumVersion = readString(value.minimumVersion);
-  if (executable === undefined || minimumVersion === undefined || parseSemanticVersion(minimumVersion) === undefined) return undefined;
+  const version = parseProbe(probes.version);
+  const status = parseProbe(probes.status);
+  const help = probes.help.map(parseHelpProbe);
+  if (
+    executable === undefined
+    || minimumVersion === undefined
+    || parseSemanticVersion(minimumVersion) === undefined
+    || version === undefined
+    || status === undefined
+    || help.some((probe) => probe === undefined)
+  ) return undefined;
 
   const parsedCommandShapes: Record<string, readonly string[]> = Object.create(null) as Record<string, readonly string[]>;
   for (const [name, shape] of Object.entries(commandShapes)) {
     if (!isStringArray(shape)) return undefined;
     parsedCommandShapes[name] = Object.freeze([...shape]);
   }
-  return Object.freeze({
+  const temporaryHomeEnvironment = value.temporaryHomeEnvironment;
+  if (temporaryHomeEnvironment !== undefined && temporaryHomeEnvironment !== 'CODEX_HOME') return undefined;
+
+  const manifest = Object.freeze({
     commandShapes: Object.freeze(parsedCommandShapes),
     eventEnvelopeFiles: Object.freeze([...value.eventEnvelopeFiles]),
     executable,
     host,
     minimumVersion,
     probes: Object.freeze({
-      help: Object.freeze([...probes.help]),
-      status: Object.freeze([...probes.status]),
-      version: Object.freeze([...probes.version]),
+      help: Object.freeze(help as HostContractHelpProbe[]),
+      status,
+      version,
     }),
-    requiredHelpTerms: Object.freeze([...value.requiredHelpTerms]),
     schemaVersion,
+    ...(temporaryHomeEnvironment === undefined ? {} : { temporaryHomeEnvironment }),
   });
+  return hasCanonicalStructure(manifest) ? manifest : undefined;
 };
 
 export const evaluateHostContract = (manifestInput: unknown, evidence: HostContractEvidence): HostContractReport => {
-  const manifest = parseManifest(manifestInput);
+  const manifest = parseHostContractManifest(manifestInput);
   if (manifest === undefined) {
     return report('unknown', 'changed', {
       diagnostics: diagnostic('unknown', 'host-contract.fixture.invalid', 'The checked-in host contract fixture is invalid; refresh its contract data.'),
@@ -230,27 +388,52 @@ export const evaluateHostContract = (manifestInput: unknown, evidence: HostContr
     });
   }
 
-  const missingTerms = manifest.requiredHelpTerms.filter((term) => !helpIncludesTerm(evidence.helpOutput, term));
-  if (missingTerms.length > 0) {
-    return report(manifest.host, 'changed', {
-      diagnostics: diagnostic(
-        manifest.host,
-        'host-contract.flags.changed',
-        `${manifest.host} ${version} is missing required CLI contract terms: ${missingTerms.join(', ')}. Refresh the host fixture and harness together.`,
-      ),
-      minimumVersion: manifest.minimumVersion,
-      version,
-    });
+  for (const probe of manifest.probes.help) {
+    const output = evidence.helpOutputs[probe.id];
+    if (output === undefined) {
+      return report(manifest.host, 'changed', {
+        diagnostics: diagnostic(
+          manifest.host,
+          'host-contract.help.missing',
+          `${manifest.host} ${version} did not return output for help probe "${probe.id}". Refresh the host fixture and harness together.`,
+        ),
+        minimumVersion: manifest.minimumVersion,
+        version,
+      });
+    }
+    const missing = missingHelpRequirement(probe, output);
+    if (missing !== undefined) {
+      return report(manifest.host, 'changed', {
+        diagnostics: diagnostic(
+          manifest.host,
+          'host-contract.help.changed',
+          `${manifest.host} ${version} help probe "${probe.id}" is missing required ${missing.label}: ${missing.values.join(', ')}. Refresh the host fixture and harness together.`,
+        ),
+        minimumVersion: manifest.minimumVersion,
+        version,
+      });
+    }
   }
 
   return report(manifest.host, 'compatible', { minimumVersion: manifest.minimumVersion, version });
 };
 
-const commandFor = (manifest: HostContractManifest, kind: HostContractProbeKind): HostContractCommand => Object.freeze({
-  args: manifest.probes[kind],
+const commandFor = (
+  manifest: HostContractManifest,
+  kind: Exclude<HostContractProbeKind, 'help'>,
+): HostContractCommand => Object.freeze({
+  args: manifest.probes[kind].args,
   executable: manifest.executable,
   host: manifest.host,
   kind,
+});
+
+const helpCommandFor = (manifest: HostContractManifest, probe: HostContractHelpProbe): HostContractCommand => Object.freeze({
+  args: probe.args,
+  executable: manifest.executable,
+  helpId: probe.id,
+  host: manifest.host,
+  kind: 'help',
 });
 
 const isMissingExecutableError = (error: unknown): boolean =>
@@ -260,8 +443,8 @@ export const compareInstalledHostContract = async (
   manifestInput: unknown,
   options: CompareInstalledHostContractOptions,
 ): Promise<HostContractReport> => {
-  const manifest = parseManifest(manifestInput);
-  if (manifest === undefined) return evaluateHostContract(manifestInput, { helpOutput: '', versionOutput: '' });
+  const manifest = parseHostContractManifest(manifestInput);
+  if (manifest === undefined) return evaluateHostContract(manifestInput, { helpOutputs: {}, versionOutput: '' });
 
   if (!options.enabled) {
     return report(manifest.host, 'skipped', {
@@ -274,21 +457,28 @@ export const compareInstalledHostContract = async (
     });
   }
 
-  const outputs: Partial<Record<HostContractProbeKind, HostContractCommandResult>> = Object.create(null) as Partial<Record<HostContractProbeKind, HostContractCommandResult>>;
-  for (const kind of ['version', 'help', 'status'] as const) {
+  const helpOutputs: Record<string, string> = Object.create(null) as Record<string, string>;
+  let versionOutput = '';
+  const probes = [
+    commandFor(manifest, 'version'),
+    ...manifest.probes.help.map((probe) => helpCommandFor(manifest, probe)),
+    commandFor(manifest, 'status'),
+  ];
+  for (const command of probes) {
     try {
-      const result = await options.run(commandFor(manifest, kind));
+      const result = await options.run(command);
       if (result.exitCode !== 0) {
         return report(manifest.host, 'changed', {
           diagnostics: diagnostic(
             manifest.host,
             'host-contract.probe.failed',
-            `${manifest.host} ${kind} probe failed; inspect the local CLI without recording its output.`,
+            `${manifest.host} ${command.kind}${command.helpId === undefined ? '' : ` "${command.helpId}"`} probe failed; inspect the local CLI without recording its output.`,
           ),
           minimumVersion: manifest.minimumVersion,
         });
       }
-      outputs[kind] = result;
+      if (command.kind === 'version') versionOutput = result.stdout;
+      if (command.kind === 'help') helpOutputs[command.helpId!] = result.stdout;
     } catch (error) {
       if (isMissingExecutableError(error)) {
         return report(manifest.host, 'missing', {
@@ -304,7 +494,7 @@ export const compareInstalledHostContract = async (
         diagnostics: diagnostic(
           manifest.host,
           'host-contract.probe.failed',
-          `${manifest.host} ${kind} probe could not run; inspect the local CLI without recording its output.`,
+          `${manifest.host} ${command.kind}${command.helpId === undefined ? '' : ` "${command.helpId}"`} probe could not run; inspect the local CLI without recording its output.`,
         ),
         minimumVersion: manifest.minimumVersion,
       });
@@ -312,10 +502,44 @@ export const compareInstalledHostContract = async (
   }
 
   return evaluateHostContract(manifest, {
-    helpOutput: outputs.help!.stdout,
-    versionOutput: outputs.version!.stdout,
+    helpOutputs,
+    versionOutput,
   });
 };
+
+const executeFileAsync = promisify(executeFile);
+
+export const nativeHostContractComparisonEnabled = (
+  environment: Readonly<NodeJS.ProcessEnv> = process.env,
+): boolean => environment.AGENT_BUNDLE_NATIVE_HOST_CONTRACTS === '1';
+
+const runLocalHostContractCommand: HostContractCommandRunner = async (command) => {
+  try {
+    const result = await executeFileAsync(command.executable, [...command.args], {
+      encoding: 'utf8',
+      maxBuffer: 1024 * 1024,
+      windowsHide: true,
+    });
+    return Object.freeze({ exitCode: 0, stdout: result.stdout });
+  } catch (error) {
+    if (isMissingExecutableError(error)) throw error;
+    if (isRecord(error)) {
+      return Object.freeze({
+        exitCode: typeof error.code === 'number' ? error.code : 1,
+        stdout: typeof error.stdout === 'string' ? error.stdout : '',
+      });
+    }
+    throw error;
+  }
+};
+
+export const compareLocalHostContract = async (
+  manifestInput: unknown,
+  environment: Readonly<NodeJS.ProcessEnv> = process.env,
+): Promise<HostContractReport> => compareInstalledHostContract(manifestInput, {
+  enabled: nativeHostContractComparisonEnabled(environment),
+  run: runLocalHostContractCommand,
+});
 
 const parseEventRecords = (raw: string): readonly unknown[] => {
   const trimmed = raw.trim();

@@ -6,13 +6,59 @@ type Host = 'claude' | 'codex';
 
 const fixtureRoot = (host: Host) => new URL(`../../../fixtures/contracts/hosts/${host}/`, import.meta.url);
 
-const readContractFixture = async (host: Host) => ({
-  contract: JSON.parse(await readFile(new URL('contract.json', fixtureRoot(host)), 'utf8')) as unknown,
-  helpOutput: await readFile(new URL('help.txt', fixtureRoot(host)), 'utf8'),
-  versionOutput: await readFile(new URL('version.txt', fixtureRoot(host)), 'utf8'),
-});
+const helpOutputFiles = {
+  claude: { plugin: 'plugin-help.txt', root: 'help.txt' },
+  codex: {
+    exec: 'exec-help.txt',
+    marketplace: 'marketplace-help.txt',
+    plugin: 'plugin-help.txt',
+    'plugin-add': 'plugin-add-help.txt',
+    'plugin-list': 'plugin-list-help.txt',
+    root: 'help.txt',
+  },
+} as const;
+
+const readContractFixture = async (host: Host) => {
+  const helpOutputs = Object.freeze(Object.fromEntries(await Promise.all(
+    Object.entries(helpOutputFiles[host]).map(async ([id, file]) => [id, await readFile(new URL(file, fixtureRoot(host)), 'utf8')] as const),
+  )));
+  return {
+    contract: JSON.parse(await readFile(new URL('contract.json', fixtureRoot(host)), 'utf8')) as unknown,
+    helpOutput: Object.values(helpOutputs).join('\n'),
+    helpOutputs,
+    versionOutput: await readFile(new URL('version.txt', fixtureRoot(host)), 'utf8'),
+  };
+};
 
 const loadContractModule = async () => import('../src/host-contracts/host-contract.ts').catch(() => undefined);
+const nativeIt = process.env.AGENT_BUNDLE_NATIVE_HOST_CONTRACTS === '1' ? it : it.skip;
+
+const jsonStringValues = (value: unknown): readonly string[] => {
+  if (typeof value === 'string') return [value];
+  if (Array.isArray(value)) return value.flatMap(jsonStringValues);
+  if (typeof value === 'object' && value !== null) return Object.values(value).flatMap(jsonStringValues);
+  return [];
+};
+
+const isOfficialUrl = (value: string): boolean => {
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:' && (
+      url.hostname === 'openai.com'
+      || url.hostname.endsWith('.openai.com')
+      || url.hostname === 'anthropic.com'
+      || url.hostname.endsWith('.anthropic.com')
+    );
+  } catch {
+    return false;
+  }
+};
+
+const containsCredentialOrHomePath = (value: string): boolean => {
+  if (isOfficialUrl(value)) return false;
+  return /(?:ANTHROPIC_API_KEY|OPENAI_API_KEY|(?:^|[^A-Za-z0-9_-])sk-[A-Za-z0-9_-]{20,}(?:$|[^A-Za-z0-9_-])|(?:api[_-]?key|authorization)\s*[:=]\s*\S+)/iu.test(value)
+    || /(?:^|[\s"'(=:])(?:\/Users\/[^/\s"'<>]+(?:\/|$)|\/home\/[^/\s"'<>]+(?:\/|$)|\/root\/)/u.test(value);
+};
 
 it('accepts the checked-in Claude and Codex baselines from raw version and help fixtures', async () => {
   const contracts = await loadContractModule();
@@ -31,6 +77,34 @@ it('accepts the checked-in Claude and Codex baselines from raw version and help 
     host: 'codex',
     minimumVersion: '0.147.0',
     status: 'compatible',
+    version: '0.147.0',
+  });
+});
+
+it('requires each declared Codex help command to supply its own compatible output', async () => {
+  const contracts = await loadContractModule();
+  expect(contracts).toBeDefined();
+
+  const codex = await readContractFixture('codex');
+  const compatible = contracts!.evaluateHostContract(codex.contract, codex);
+  const changed = contracts!.evaluateHostContract(codex.contract, {
+    ...codex,
+    helpOutputs: {
+      ...codex.helpOutputs,
+      'plugin-list': 'Usage: codex plugin list [OPTIONS]\n\nOptions:\n  --json-lines  Emit installed plugin state as JSON Lines.\n',
+    },
+  });
+
+  expect(compatible).toMatchObject({ host: 'codex', status: 'compatible', version: '0.147.0' });
+  expect(changed).toEqual({
+    diagnostics: [{
+      code: 'host-contract.help.changed',
+      host: 'codex',
+      message: 'codex 0.147.0 help probe "plugin-list" is missing required options: --json. Refresh the host fixture and harness together.',
+    }],
+    host: 'codex',
+    minimumVersion: '0.147.0',
+    status: 'changed',
     version: '0.147.0',
   });
 });
@@ -66,7 +140,10 @@ it('reports one actionable diagnostic when a required flag changes name', async 
   const claude = await readContractFixture('claude');
   const result = contracts!.evaluateHostContract(claude.contract, {
     ...claude,
-    helpOutput: claude.helpOutput.replace('--plugin-dir', '--plugin-directory'),
+    helpOutputs: {
+      ...claude.helpOutputs,
+      root: claude.helpOutputs.root.replace('--plugin-dir', '--plugin-directory'),
+    },
   });
 
   expect(result).toMatchObject({
@@ -76,9 +153,9 @@ it('reports one actionable diagnostic when a required flag changes name', async 
     version: '2.1.232',
   });
   expect(result.diagnostics).toEqual([{
-    code: 'host-contract.flags.changed',
+    code: 'host-contract.help.changed',
     host: 'claude',
-    message: 'claude 2.1.232 is missing required CLI contract terms: --plugin-dir. Refresh the host fixture and harness together.',
+    message: 'claude 2.1.232 help probe "root" is missing required options: --plugin-dir. Refresh the host fixture and harness together.',
   }]);
 });
 
@@ -130,12 +207,12 @@ it('compares an installed contract only when explicitly opted in with non-model 
 
   const codex = await readContractFixture('codex');
   const calls: unknown[] = [];
-  const run = async (command: { readonly kind: 'help' | 'status' | 'version' }) => {
+  const run = async (command: { readonly helpId?: string; readonly kind: 'help' | 'status' | 'version' }) => {
     calls.push(command);
     return command.kind === 'version'
       ? { exitCode: 0, stdout: codex.versionOutput }
       : command.kind === 'help'
-        ? { exitCode: 0, stdout: codex.helpOutput }
+        ? { exitCode: 0, stdout: codex.helpOutputs[command.helpId!]! }
         : { exitCode: 0, stdout: 'this status output must not be retained' };
   };
 
@@ -162,7 +239,12 @@ it('compares an installed contract only when explicitly opted in with non-model 
   });
   expect(calls).toEqual([
     { args: ['--version'], executable: 'codex', host: 'codex', kind: 'version' },
-    { args: ['--help'], executable: 'codex', host: 'codex', kind: 'help' },
+    { args: ['--help'], executable: 'codex', helpId: 'root', host: 'codex', kind: 'help' },
+    { args: ['exec', '--help'], executable: 'codex', helpId: 'exec', host: 'codex', kind: 'help' },
+    { args: ['plugin', '--help'], executable: 'codex', helpId: 'plugin', host: 'codex', kind: 'help' },
+    { args: ['plugin', 'add', '--help'], executable: 'codex', helpId: 'plugin-add', host: 'codex', kind: 'help' },
+    { args: ['plugin', 'list', '--help'], executable: 'codex', helpId: 'plugin-list', host: 'codex', kind: 'help' },
+    { args: ['plugin', 'marketplace', '--help'], executable: 'codex', helpId: 'marketplace', host: 'codex', kind: 'help' },
     { args: ['plugin', 'list', '--json'], executable: 'codex', host: 'codex', kind: 'status' },
   ]);
   expect(JSON.stringify(compared)).not.toContain('this status output must not be retained');
@@ -232,8 +314,60 @@ it('keeps host fixtures to redacted envelopes and required command shapes', asyn
     temporaryHomeEnvironment: 'CODEX_HOME',
   });
 
-  for (const content of [...envelopeContents, claude.helpOutput, claude.versionOutput, codex.helpOutput, codex.versionOutput]) {
-    expect(content).not.toMatch(/(?:ANTHROPIC_API_KEY|OPENAI_API_KEY|api[_-]?key|\/home\/|[A-Z]:\\Users\\|sk-[A-Za-z0-9_-]+)/iu);
+  for (const content of [
+    ...envelopeContents,
+    ...jsonStringValues(claude.contract),
+    ...jsonStringValues(codex.contract),
+    claude.helpOutput,
+    claude.versionOutput,
+    codex.helpOutput,
+    codex.versionOutput,
+  ]) {
+    expect(containsCredentialOrHomePath(content)).toBe(false);
     expect(content).not.toMatch(/"(?:cwd|session_id|thread_id)":"(?!<redacted>)/u);
+  }
+  for (const sensitiveValue of [
+    'OPENAI_API_KEY=not-a-real-key',
+    '/Users/alice/.config/host',
+    '/home/alice/.config/host',
+    '/root/.config/host',
+  ]) expect(containsCredentialOrHomePath(sensitiveValue)).toBe(true);
+  expect(containsCredentialOrHomePath('https://platform.openai.com/docs/api-reference')).toBe(false);
+});
+
+it('rejects structurally bogus host command shapes and preserves the Codex temporary home environment', async () => {
+  const contracts = await loadContractModule();
+  expect(contracts).toBeDefined();
+
+  const codex = await readContractFixture('codex');
+  const malformed = JSON.parse(JSON.stringify(codex.contract)) as {
+    probes: { help: Array<{ args: string[] }> };
+  };
+  malformed.probes.help[4]!.args = ['plugin', 'lists', '--help'];
+  const parser = contracts as typeof contracts & {
+    readonly parseHostContractManifest?: (value: unknown) => unknown;
+  };
+
+  expect(contracts!.evaluateHostContract(malformed, codex)).toMatchObject({
+    diagnostics: [{ code: 'host-contract.fixture.invalid', host: 'unknown' }],
+    status: 'changed',
+  });
+  expect(parser.parseHostContractManifest).toBeDefined();
+  expect(parser.parseHostContractManifest!(codex.contract)).toMatchObject({
+    temporaryHomeEnvironment: 'CODEX_HOME',
+  });
+});
+
+nativeIt('compares installed host contracts through the opt-in non-model runner', async () => {
+  const contracts = await loadContractModule();
+  expect(contracts).toBeDefined();
+  const localRunner = contracts as typeof contracts & {
+    readonly compareLocalHostContract?: (manifest: unknown) => Promise<{ readonly status: string }>;
+  };
+
+  for (const host of ['claude', 'codex'] as const) {
+    const fixture = await readContractFixture(host);
+    const result = await localRunner.compareLocalHostContract!(fixture.contract);
+    expect(result.status, JSON.stringify(result)).toBe('compatible');
   }
 });

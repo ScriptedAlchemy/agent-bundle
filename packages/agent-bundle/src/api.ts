@@ -27,7 +27,10 @@ import {
 
 export {
   compareInstalledHostContract,
+  compareLocalHostContract,
   evaluateHostContract,
+  nativeHostContractComparisonEnabled,
+  parseHostContractManifest,
   parseRedactedEventEnvelopes,
 } from './host-contracts/host-contract.ts';
 export type {
@@ -37,7 +40,9 @@ export type {
   HostContractCommandRunner,
   HostContractDiagnostic,
   HostContractEvidence,
+  HostContractHelpProbe,
   HostContractManifest,
+  HostContractProbe,
   HostContractProbeKind,
   HostContractReport,
   HostContractStatus,

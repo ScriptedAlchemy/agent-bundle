@@ -7,6 +7,3 @@ Options:
   --no-session-persistence                      Disable session persistence (only works with --print).
   --output-format <format>                      Output format: text, json, or stream-json.
   --plugin-dir <path>                           Load plugins from a directory for this session only.
-
-Commands:
-  plugin|plugins                                Manage Claude Code plugins.
