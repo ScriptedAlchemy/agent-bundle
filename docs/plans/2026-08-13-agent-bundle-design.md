@@ -178,6 +178,10 @@ interface AgentBundleConfig {
 }
 ```
 
+The `codex`, `claude`, and `portable` keys are contributed by the bundled target adapters
+rather than being core config fields; a future adapter (for example `gemini`) contributes its
+own extension key the same way, so the core interface never changes when a host is added.
+
 The configuration loader returns an immutable normalized model. Target adapters receive that
 model rather than the original user object.
 
@@ -227,6 +231,14 @@ receive executable permissions when appropriate. Static data is copied byte-for-
 Skill validation includes frontmatter, name-directory agreement, descriptions, referenced
 resources, duplicate names, output path collisions, and target-specific restrictions.
 
+Agent Bundle vendors a tested schema snapshot for each supported Agent Skills specification and
+records its source revision in the build manifest. Adapter releases update that snapshot through
+contract fixtures instead of accepting whichever schema happens to be online during a build.
+
+Top-level `scripts` are named plugin utilities. JavaScript and TypeScript entries are bundled to
+`<target>/scripts/<name>.mjs`; copied languages retain their extension. Skills, hooks, manifests,
+and host extensions may reference those stable names without duplicating script inputs.
+
 ## Hook model
 
 ### Author-facing configuration
@@ -248,26 +260,56 @@ hooks: {
       handler: './src/hooks/record-result.ts',
     },
   ],
-  sessionEnd: './src/hooks/session-end.ts',
+  stop: './src/hooks/on-stop.ts',
 }
 ```
 
-The initial normalized names are:
+The initial portable names are deliberately small and must be confirmed by the phase-zero host
+contract fixtures before release:
 
 ```ts
 interface NormalizedHooks {
   sessionStart?: HookInput<SessionStartEvent>;
-  sessionEnd?: HookInput<SessionEndEvent>;
-  promptSubmit?: HookInput<PromptSubmitEvent>;
   beforeTool?: HookInput<BeforeToolEvent>;
   afterTool?: HookInput<AfterToolEvent>;
-  permissionRequest?: HookInput<PermissionRequestEvent>;
-  beforeCompact?: HookInput<BeforeCompactEvent>;
-  afterCompact?: HookInput<AfterCompactEvent>;
-  subagentStart?: HookInput<SubagentStartEvent>;
-  subagentStop?: HookInput<SubagentStopEvent>;
   stop?: HookInput<StopEvent>;
 }
+```
+
+Handlers use a canonical compile-time contract:
+
+```ts
+type HookHandler<Event> = (
+  event: Event,
+  context: HookContext,
+) => HookResult | void | Promise<HookResult | void>;
+
+interface HookResult {
+  outcome?: "continue" | "deny" | "stop";
+  reason?: string;
+  updatedInput?: Record<string, unknown>;
+  additionalContext?: string;
+}
+```
+
+Capability validation narrows the result fields available to each event and target. An
+observation-only hook returns `void` or `outcome: "continue"`; a hook may not request input
+replacement, denial, or context injection unless every explicitly selected target supports it.
+These types describe author intent only and are compiled into native target protocols.
+
+`HookInput` accepts the shorthand and explicit forms shown above interchangeably:
+
+```ts
+type HookInput<Event> = HookEntry<Event> | HookEntry<Event>[];
+
+type HookEntry<Event> =
+  | string // handler path with default options
+  | {
+      handler: string;
+      tools?: ToolSelector[]; // beforeTool / afterTool only
+      targets?: TargetName[]; // restrict this hook to specific targets
+      timeout?: number;
+    };
 ```
 
 Normalized tool selectors cover common semantic categories such as `shell`, `file.read`,
@@ -295,6 +337,11 @@ Identical native event names do not imply identical semantics. Adapters account 
 in failure events, decisions, input replacement, context injection, matchers, asynchronous
 execution, and supported handler types.
 
+Each adapter keeps typed capability data beside its implementation, including verified native
+event names, selector mappings, input and output features, minimum supported host CLI version,
+and the native schema revision. The adapter and table version together. Updating a host contract
+requires updating its fixture and generated-artifact tests in the same change.
+
 ### Capability validation
 
 Each target adapter publishes capabilities, including:
@@ -307,8 +354,19 @@ Each target adapter publishes capabilities, including:
 - synchronous or asynchronous execution;
 - supported native handler types.
 
-The compiler validates every normalized hook against every selected target. Unsupported exact
-behavior is an error. An explicitly target-limited hook is emitted only for those targets.
+Selecting an output target does not imply that every component kind exists on that target. By
+default, a component is emitted to the intersection of the selected outputs and adapters that
+support its kind. `inspect` shows skipped target/component pairs. Explicitly targeting a
+component at an adapter that lacks the kind is an error, as is requesting behavior that a capable
+adapter would have to weaken. An explicitly target-limited hook is emitted only for those
+targets.
+
+Agent Plugins 1.0.0 deliberately excludes hooks, commands, and agents from the portable
+format, so the `portable` adapter lacks the hook component kind entirely: under the
+intersection rule above, normalized hooks simply fall out of portable output, and the minimal
+example (hooks plus all three targets) builds. A host that supports hooks but cannot honor a
+specific requested event, selector dimension, blocking decision, or handler type remains a
+build error unless the hook is explicitly limited to capable targets.
 
 ### Zero runtime dependency
 
@@ -380,6 +438,11 @@ JavaScript entries are compiled into self-contained executables. Target adapters
 correct native MCP configuration and translate normalized path tokens such as plugin root,
 plugin data, and workspace root into the host's supported syntax.
 
+The default generated runtime target is Node.js 22.12 or newer. A project may raise the floor,
+and the selected floor is written to artifact metadata. A native addon or other runtime
+dependency that cannot be bundled is a build error in the first release; authors can instead
+reference an explicitly prebuilt command through the existing MCP/script input escape hatch.
+
 `pathTokens` is exported from the main package and produces opaque token strings that the
 compiler resolves per target at build time. Token availability is a per-target capability:
 Claude resolves plugin root and plugin data to `${CLAUDE_PLUGIN_ROOT}` and
@@ -441,8 +504,40 @@ Initial adapters:
 - `codex`: `.codex-plugin/plugin.json`, `.mcp.json`, hooks, skills, and marketplace metadata;
 - `claude`: `.claude-plugin/plugin.json`, `.mcp.json`, hooks, skills, and marketplace metadata.
 
-Portable output follows the Agent Plugins and Agent Skills specifications. Host-specific
-metadata remains in the corresponding adapter rather than leaking into the portable model.
+Portable output follows the Agent Plugins 1.0.0 and Agent Skills specifications (see
+References). Generated portable manifests carry the spec's required `$schema` identifiers, and
+`plugin.json` never contains inline component configuration — the spec fixes `skills/` and
+`mcp.json` at the plugin root and reserves everything host-specific for reverse-domain
+extension namespaces. Host-specific metadata remains in the corresponding adapter rather than
+leaking into the portable model.
+
+## Host extensibility
+
+The adapter contract is the only host boundary. Compiler core, discovery, normalization, and
+the build engine never branch on a target name; anything host-specific lives in an adapter's
+capability table, schema snapshots, contract fixtures, and emit/validate implementations.
+
+Adapters register in a target registry keyed by `TargetName`, and `targets` entries are
+validated against that registry. Adding a host is therefore additive: one new adapter module
+providing its capability table, vendored schema snapshot, fixtures, manifest emitter, artifact
+validator, and config extension key — with no changes to the normalized model or to existing
+adapters. The existing open question about one package versus `core` plus adapter packages is
+a packaging decision on top of this registry, not a different architecture.
+
+Portable output is the default growth path. Hosts that natively consume Agent Plugins 1.0
+(ChatGPT, Codex CLI, Cursor, GitHub Copilot, VS Code, and Kiro at launch) are already served
+by the `portable` target for skills and MCP; a dedicated adapter is justified only when a host
+has native-only surfaces worth compiling to, as Codex and Claude do with hooks and marketplace
+metadata. The nearest candidate is a `gemini` adapter: Gemini CLI packages MCP servers,
+commands, hooks, and skills in its own `gemini-extension.json` layout, which is a different
+manifest but the same adapter shape.
+
+Artifact validation may additionally shell out to a host's own validator when one is installed
+(`claude plugin validate`, `skills-ref validate`, the published Agent Plugins JSON schemas),
+reporting its findings as diagnostics. The build never depends on an external validator being
+present or correct — vendored schema snapshots remain authoritative, since host validators have
+known gaps (Claude's currently validates marketplace manifests without descending into each
+plugin's `plugin.json`).
 
 ## Output layout
 
@@ -462,6 +557,20 @@ own output directory for repositories that publish one host bundle per package.
 `agent-bundle.manifest.json` is build metadata for authors and CI. Hosts do not consume it. It
 records source inputs, generated files, selected targets, adapter versions, hashes, and
 validation results.
+
+Production `build` writes the documented `dist/` tree. Development attempts build in a staging
+directory and publish successful, atomic snapshots under
+`.agent-bundle/epochs/<epoch-id>/<target>/`; `dist/` is never used as mutable dev state. A failed
+target fails the whole attempt, leaving the previous epoch active for every target.
+
+### Distribution assumptions
+
+The first release produces repository-distributable artifacts rather than installing them. A
+Codex or Claude target includes the native plugin and optional marketplace metadata needed to
+reference that target from a local or Git repository marketplace. Portable output is consumed as
+an Agent Plugins directory or archive. Clean-consumer tests install each generated target through
+the host's verified local path or marketplace flow, which proves the same artifact can be used
+outside the source repository.
 
 ## Validation
 
@@ -515,11 +624,12 @@ emits target artifacts, validates final output, and writes the build manifest.
 
 ### `agent-bundle dev`
 
-Starts a foreground development coordinator and a real Rsbuild workbench. The Rsbuild server
-provides the browser app, routes, and HMR; Agent Bundle middleware exposes project, artifact,
-MCP, hook, diagnostic, and eval APIs on the same server. The coordinator watches config,
-skills, scripts, MCP sources, hooks, and assets, then publishes immutable artifact epochs only
-after a successful Rslib-backed build and validation.
+Starts a foreground development coordinator and the Rsbuild-built workbench. Agent Bundle ships
+the prebuilt browser assets and serves them with project, artifact, MCP, hook, diagnostic, and eval
+APIs plus live project events. Rsbuild's native HMR is used while developing Agent Bundle itself;
+plugin authors do not recompile the workbench UI. The coordinator watches config, skills, scripts,
+MCP sources, hooks, and assets, then publishes immutable artifact epochs only after a successful
+Rslib-backed build and validation.
 
 The command does not attempt to restart every supported agent host. Native host trials are
 started explicitly from the workbench or `agent-bundle eval`.
@@ -553,8 +663,12 @@ agent-bundle eval [suite-or-case]
 agent-bundle eval compare <baseline> <candidate>
 ```
 
+Standalone `mcp invoke` and `hooks simulate` commands build and validate a temporary current-source
+epoch by default. `--artifact <manifest>` binds them to an existing, validated manifest instead.
+They never select an ambient `dist/` directory by modification time.
+
 The detailed workbench, renderer, MCP playground, and evaluation design is specified in
-[`2026-08-13-agent-bundle-dev-workbench-design.md`](2026-08-13-agent-bundle-dev-workbench-design.md).
+[`2026-08-14-agent-bundle-dev-workbench-design.md`](2026-08-14-agent-bundle-dev-workbench-design.md).
 
 ## Programmatic API
 
@@ -583,13 +697,15 @@ The repository should use Rstack tools where practical:
 - `rs test` for unit, integration, fixture, and artifact tests;
 - `rs lib`/Rslib for package output;
 - Rspack through Rslib for executable bundling;
-- Rsbuild for the React development workbench and native HMR;
+- Rsbuild for the React workbench build and native HMR during Agent Bundle development;
 - Rstest for compiler, adapter, workbench, and harness tests;
 - one resident Rslint instance for affected-file diagnostics in development;
 - Prettier and repository spelling checks for documentation.
 
 The tool itself should remain usable outside Rstack repositories through its own executable
-and JavaScript API.
+and JavaScript API. The Agent Bundle CLI requires Node.js 22.19 or newer so its pinned official
+MCP Inspector integration has one supported runtime floor. Generated plugin executables retain
+their separately configured default target of Node.js 22.12 or newer.
 
 ## Testing strategy
 
@@ -639,7 +755,7 @@ this project.
 
 ### Workbench and harness tests
 
-- Rsbuild workbench startup, API middleware, HMR, and cleanup;
+- contributor workbench HMR, published prebuilt serving, live project events, and cleanup;
 - rendered Skill Markdown, GFM, frontmatter, code blocks, and relative resources;
 - MCP initialization, catalog inspection, invocation, restart, and error presentation;
 - normalized hook simulation through the generated native wrapper;
@@ -657,10 +773,8 @@ this project.
 5. Claude adapter.
 6. Normalized hooks with compile-time host adapters.
 7. MCP entry compilation and native configuration.
-8. Foreground dev coordinator, Rsbuild workbench shell, and artifact epochs.
-9. Skill renderer, artifact inspector, MCP playground, and hook simulator.
-10. Deterministic eval runner and persisted JSON/JSONL run artifacts.
-11. Native Claude and Codex harnesses, comparison UI, and clean-consumer verification.
+8. Complete the workbench delivery phases in
+   [`2026-08-14-agent-bundle-dev-workbench-design.md`](2026-08-14-agent-bundle-dev-workbench-design.md).
 
 Each phase should leave a usable vertical slice rather than introducing unused framework
 layers.
@@ -682,6 +796,8 @@ layers.
     into a user's normal host configuration.
 13. Skill rendering uses structured frontmatter plus CommonMark/GFM Markdown and does not
     execute MDX.
+14. The official MCP Inspector may run as a pinned managed sidecar, but Agent Bundle does not
+    import its private internals or make it the owner of plugin traces and eval records.
 
 ## Open implementation questions
 
@@ -690,9 +806,77 @@ These can be resolved during planning without changing the architecture:
 - whether the first package ships as one package or `core` plus target adapter packages;
 - the exact mechanism for preserving executable modes in published archives;
 - whether marketplace output belongs in each target directory or an optional sibling directory;
-- which native JSON schemas are bundled versus downloaded or version-pinned;
 - which initial models should appear in optional example eval configuration without making a
   model provider part of the build contract.
 
+Native host and portable JSON schemas are vendored as tested snapshots with their source
+revisions recorded in the build manifest, per the schema-snapshot policy above; they are never
+downloaded during a build.
+
 The preferred starting point is one package with internal adapters. Package splitting should
 follow demonstrated independent versioning or dependency needs.
+
+## Prior art and positioning
+
+Nothing in the current ecosystem occupies the compiler position this design targets:
+
+- The [`skills` CLI](https://github.com/vercel-labs/skills) (`npx skills add owner/repo`)
+  distributes and installs existing skills across hosts; it does not compile scripts, hooks,
+  or MCP servers, and it has no typed source model.
+- [compound-engineering-plugin](https://github.com/everyinc/compound-engineering-plugin)
+  converts Claude Code plugins to other hosts, treating the Claude format as the source of
+  truth; agent-bundle instead compiles from a host-neutral typed config so no host is
+  privileged.
+- Multi-harness collections such as [wshobson/agents](https://github.com/wshobson/agents) and
+  `rstackjs/agent-skills` itself commit hand-maintained per-host registries and manifests —
+  exactly the generated artifacts agent-bundle produces from one source.
+- [MCP Bundles](https://github.com/modelcontextprotocol/mcpb) (`.mcpb`, formerly DXT) packages
+  a single local MCP server as a zip for one-click install; it covers neither skills nor hooks
+  and is a packaging format, not a build tool.
+
+Agent-bundle's position mirrors Rslib's: authors keep a typed source model and conventional
+files; the compiler produces validated native artifacts that look handwritten.
+
+## References
+
+Specifications the adapters target:
+
+- [Agent Plugins 1.0.0 specification](https://agent-plugins.org/specification) — portable
+  `plugin.json`, root `skills/` and `mcp.json`, reverse-domain extension namespaces. Hooks,
+  commands, agents, rules, and LSP servers are explicitly outside the v1 portable format.
+- [Agent Skills specification](https://agentskills.io/specification) — `SKILL.md` frontmatter
+  (`name` and `description` required; `license`, `compatibility`, `metadata`, `allowed-tools`
+  optional), name-directory agreement, `scripts/`/`references/`/`assets/` conventions, and the
+  [skills-ref](https://github.com/agentskills/agentskills/tree/main/skills-ref) validator.
+- [Claude Code plugins](https://code.claude.com/docs/en/plugins) and
+  [hooks reference](https://code.claude.com/docs/en/hooks) — `.claude-plugin/plugin.json`,
+  `hooks/hooks.json`, native event and matcher catalog, `${CLAUDE_PLUGIN_ROOT}` and
+  `${CLAUDE_PLUGIN_DATA}` placeholders, handler types.
+- [Codex plugins and hooks](https://developers.openai.com/codex/hooks) —
+  `.codex-plugin/plugin.json`, root `.mcp.json`, plugin-bundled `hooks/hooks.json`, native
+  event catalog, plugin environment variables.
+- [rstackjs/agent-skills](https://github.com/rstackjs/agent-skills) — the reference fixture;
+  its hand-maintained `.agents/`, `.claude-plugin/`, `.codex-plugin/`, and `.gemini/`
+  directories illustrate the duplication this tool compiles away.
+
+Host adoption and future adapter candidates:
+
+- [Agent Plugins 1.0 in VS Code, Copilot CLI, and the Copilot app](https://github.blog/changelog/2026-08-12-agent-plugins-1-0-in-vs-code-copilot-cli-and-the-copilot-app/)
+  — portable-target reach beyond Codex and Claude at launch.
+- [Gemini CLI extensions](https://google-gemini.github.io/gemini-cli/docs/extensions/) —
+  `gemini-extension.json` packaging MCP servers, commands, hooks, and skills; the nearest
+  candidate for a dedicated adapter.
+
+Validators the artifact layer can integrate but must not depend on:
+
+- [`skills-ref validate`](https://github.com/agentskills/agentskills/tree/main/skills-ref) —
+  reference validator for `SKILL.md` frontmatter and naming.
+- `claude plugin validate` — validates marketplace manifests today without descending into
+  per-plugin `plugin.json`
+  ([anthropics/claude-code#60725](https://github.com/anthropics/claude-code/issues/60725)),
+  which is why vendored schema snapshots stay authoritative.
+- [Agent Plugins JSON schemas](https://agent-plugins.org/specification) — published
+  `plugin.schema.json` and `mcp.schema.json` for portable manifests.
+
+The Rstack tooling and developer-workbench research links live in
+[`2026-08-14-agent-bundle-dev-workbench-design.md`](2026-08-14-agent-bundle-dev-workbench-design.md).

@@ -11,8 +11,9 @@ evaluating agent plugins. It is not a static report and it is not a second agent
 as one foreground process with four coordinated responsibilities:
 
 1. compile plugin artifacts with Rslib/Rspack;
-2. serve a React workbench with Rsbuild and native HMR;
-3. exercise generated Skill, MCP, and hook surfaces through shared application services;
+2. serve a prebuilt Rsbuild React workbench with live project events;
+3. exercise the whole plugin or individual Skill, MCP, and hook surfaces through shared
+   application services;
 4. run deterministic and native-host evaluation trials against immutable artifact epochs.
 
 The workbench is useful to humans in a browser and to agents through the same typed service
@@ -49,7 +50,7 @@ Each Rstack tool has one job:
 | --------------------------------------- | ------------ | ------------------------------------------------------------------- |
 | Agent Bundle library and CLI output     | Rslib        | Produces the published ESM package and declarations.                |
 | Generated hook, script, and MCP entries | Rslib/Rspack | Produces self-contained target executables.                         |
-| Browser workbench                       | Rsbuild      | Provides the app build, dev server, routing, and HMR.               |
+| Browser workbench                       | Rsbuild      | Builds the app and provides HMR while developing Agent Bundle.      |
 | Source diagnostics                      | Rslint       | One resident engine lints affected files in the foreground process. |
 | Unit and integration tests              | Rstest       | Tests compiler, adapters, UI behavior, and harness normalization.   |
 | Eval trial orchestration                | Agent Bundle | Owns fixtures, host processes, traces, graders, and comparisons.    |
@@ -76,9 +77,11 @@ flowchart LR
   Coordinator --> Evals["Eval runner"]
   Coordinator --> Store["Artifact and run store"]
 
-  CLI --> Rsbuild["Rsbuild workbench server"]
-  Rsbuild --> Browser["React workbench + HMR"]
-  Rsbuild --> API["Agent Bundle API middleware"]
+  Rsbuild["Rsbuild workbench build"] --> Assets["Prebuilt workbench assets"]
+  CLI --> Server["Foreground workbench server"]
+  Assets --> Server
+  Server --> Browser["React workbench"]
+  Server --> API["Typed Agent Bundle APIs + project events"]
   API --> Coordinator
 
   Compiler --> Epoch["Validated artifact epoch"]
@@ -91,34 +94,30 @@ flowchart LR
 There is one process owner. Every child process, watcher, Rslint engine, Rsbuild server, and eval
 trial belongs to its lifecycle and closes on Ctrl-C or programmatic `close()`.
 
-## Rsbuild workbench server
+## Rsbuild workbench build and foreground server
 
-The first implementation uses Rsbuild's built-in dev server rather than a custom Express server.
-An internal Rsbuild plugin registers Agent Bundle API middleware through
-`dev.setupMiddlewares`. `startDevServer()` owns HTTP listening and native HMR.
+Rsbuild builds the React workbench. While contributing to Agent Bundle, its built-in dev server
+provides React/CSS HMR and proxies the typed Agent Bundle APIs to a coordinator process. This is
+the fast frontend-development loop.
 
-This is simpler than middleware mode because the workbench has no first-release requirement for
-a separately owned HTTP or WebSocket server. If a future integration truly needs to own the
-server, Rsbuild's `createDevServer()`, `middlewares`, `connectWebSocket()`, and `afterListen()`
-provide a supported migration path.
+The published CLI does not recompile the workbench for every plugin author. The package ships
+prebuilt Rsbuild assets, and `agent-bundle dev` starts one lightweight foreground HTTP server
+that serves those assets, typed APIs, and a project-event stream. Plugin-source changes are data
+events that update the normalized model, diagnostics, artifact epochs, MCP sessions, hooks, and
+eval runs; they are not workbench HMR.
 
-Two update channels remain distinct:
+Both modes use the same browser application and service contracts:
 
-- Rsbuild HMR updates the workbench's React and CSS modules while Agent Bundle itself is being
-  developed.
-- Agent Bundle project events update normalized models, diagnostics, artifact epochs, MCP
-  sessions, hooks, and eval runs.
+- contributor mode: Rsbuild dev server + HMR + API proxy;
+- published mode: prebuilt Rsbuild output + foreground Agent Bundle server + live project events.
 
-Project events use a custom Rsbuild hot event for the browser. The CLI and agent-facing surfaces
-read the same state through application services and HTTP/MCP APIs; they do not scrape browser
-events.
+The server binds to loopback in the first release. It checks browser origins and generates one
+session token for routes that can start a process or expose the optional agent API. There is no
+public-network binding option in the initial product.
 
-The published package includes the compiled workbench modules and their source maps as internal
-runtime entries. `agent-bundle dev` points a programmatic Rsbuild configuration at those entries,
-so the browser is still served by a real Rsbuild compilation and dev server. Plugin-author files
-are not injected into the frontend module graph; their state arrives through typed project
-events. A production build of Agent Bundle may also emit static workbench assets for screenshots
-and tests, but the `dev` command does not become a generic static-file server.
+The Agent Bundle CLI and workbench require Node.js 22.19 or newer, matching the pinned Inspector
+integration. This tool runtime is separate from the configurable runtime target of emitted plugin
+executables.
 
 ## Development coordinator
 
@@ -145,6 +144,11 @@ Internally it delegates to focused services:
 
 Services are usable from the UI, CLI, and programmatic API. HTTP handlers contain no product
 logic beyond input decoding and result encoding.
+
+Cross-platform process contracts use Node path and spawning APIs rather than shell-joined command
+strings. Generated JavaScript entries are `.mjs`; shell and Python sources are copied rather than
+transpiled. POSIX builds validate executable modes where meaningful, while Windows treats mode as
+metadata and clean-consumer tests prove that each generated command still launches correctly.
 
 ## Invalidation and artifact epochs
 
@@ -196,6 +200,16 @@ Only a fully emitted and validated build becomes active. On failure, the workben
 good epoch available and labels it stale relative to the current sources. MCP processes and eval
 trials never silently switch artifacts mid-run.
 
+If files change during a build, the running build completes and the coordinator coalesces every
+new invalidation into one queued follow-up build. It does not cancel a compiler in an unknown
+state or start overlapping publications.
+
+Epochs live under `.agent-bundle/epochs/<epoch-id>/<target>/`. Publication is atomic across the
+selected targets: if any target fails, the entire attempted epoch fails and the previous epoch
+remains active. Cleanup retains the active epoch, every epoch referenced by an MCP session or eval
+run, and the five newest unreferenced epochs. Referenced epochs are deleted only after their final
+session closes.
+
 ## Author configuration
 
 The existing configuration gains optional development and eval sections:
@@ -212,13 +226,18 @@ export default defineConfig({
   evals: {
     include: ["evals/**/*.eval.ts"],
     runsDir: ".agent-bundle/runs",
+    semanticGrader: {
+      provider: "anthropic",
+      model: "claude-sonnet-4-5",
+    },
   },
 });
 ```
 
 `dev.agentApi` enables an optional agent-facing Streamable HTTP MCP endpoint on the foreground
 workbench server. It is off by default because ordinary plugin development does not require an
-additional MCP server.
+additional MCP server. CLI flags override config for one invocation. Credentials remain runtime
+inputs and are never materialized into config, epochs, or eval definitions.
 
 Host credentials, subscription state, and model-provider keys are never stored in
 `agent-bundle.config.ts`. Harness preflight reads the selected CLI's normal supported environment
@@ -238,6 +257,26 @@ The landing page answers five questions without requiring navigation:
 
 It shows a compact target matrix and the latest changed files. Raw logs remain one click away.
 
+### Plugin playground
+
+The Plugin Playground is the primary whole-product surface. The author selects an artifact epoch,
+target host, fixture, and invocation, then either enters a natural-language prompt or directly
+invokes a Skill, MCP operation, hook, or script.
+
+One ordered timeline shows:
+
+- plugin initialization and host preflight;
+- Skill activation evidence;
+- hook inputs, mappings, handler execution, and outputs;
+- MCP connection lifecycle, requests, notifications, responses, logs, progress, and cancellation;
+- generated script execution;
+- host response and workspace changes;
+- build, source, and artifact diagnostics associated with the exact epoch.
+
+Every summarized row links to its raw event. A completed playground session can be replayed,
+exported, or promoted to a draft eval case. Promotion captures the task, fixture, target, durable
+outcome, and selected assertions; it does not bake incidental tool order into the eval.
+
 ### Skills
 
 The Skill page has a tree on the left and three synchronized tabs:
@@ -251,18 +290,57 @@ and direct/indirect/negative eval coverage.
 
 ### MCP playground
 
-The MCP page is a protocol workbench bound to one artifact epoch:
+The MCP page combines an Agent Bundle-native session panel with a managed official MCP Inspector
+pane. Both are bound to one immutable artifact epoch.
 
-- server catalog and transport configuration;
-- explicit start, stop, and restart controls;
-- initialization result and negotiated capabilities;
+The native panel provides the integration points Agent Bundle owns:
+
+- selected target, generated command, arguments, working directory, and non-secret environment;
+- Codex and Claude path-token expansion using the selected epoch as plugin root and a
+  workbench-managed per-epoch plugin-data directory;
+- explicit start, stop, restart, timeout, cancellation, and session controls;
+- negotiated protocol version and client/server capabilities;
 - tools, resources, resource templates, and prompts;
-- JSON-Schema-generated input forms with raw JSON mode;
-- result content blocks, structured content, errors, timing, and process logs;
-- invocation history with exact input, output, epoch, and duration.
+- JSON-Schema-generated forms with raw JSON mode;
+- content blocks, structured content, protocol errors, timing, stderr, notifications, progress,
+  and logging messages;
+- invocation history, replay, config export, raw protocol frames, and promotion to a draft eval.
 
-The playground invokes the generated command from the selected target. It does not import the MCP
-source module directly, because that would bypass emitted path and dependency behavior.
+The default client advertises tools, resources, prompts, progress, and logging. Unsupported client
+features such as sampling or elicitation are shown as unsupported and return a defined error
+instead of hanging. Protocol versions and schemas come from the pinned MCP SDK rather than being
+copied into Agent Bundle.
+
+The **Full Inspector** pane launches an exact pinned `@modelcontextprotocol/inspector` package as
+a loopback sidecar. The coordinator writes a temporary read-only `--config` containing only the
+selected generated server, disables automatic browser opening, and embeds the Inspector web UI
+when the pinned release permits framing. If framing or routing is incompatible, the same pane
+offers **Open Inspector** in a separate tab without changing the selected config.
+
+This is a real Inspector process, not a visual imitation. It brings the official transport and
+MCP Apps debugging behavior into the workbench while Agent Bundle supplies the artifact selection
+and host-specific launch context. The package is pinned and exercised by a release contract test;
+an Inspector update is an intentional dependency upgrade rather than an unbounded `npx latest`.
+
+The Inspector remains an optional protocol-debugging view, not Agent Bundle's state store. Its
+current shared `@inspector/core` and React hooks are internal and are not published as supported
+embedding packages, so Agent Bundle does not import private modules, copy the UI, or fork it. The
+native session service remains responsible for plugin-wide traces, epoch provenance, replay, and
+eval promotion. If Inspector later publishes an embeddable component API, the sidecar adapter can
+be replaced without changing those contracts.
+
+The playground always executes the generated command from the selected target. It never imports
+the MCP source module directly, because that would bypass emitted paths, bundled dependencies,
+target-specific environment expansion, and process behavior.
+
+The initial integration decision is therefore:
+
+| Option                                  | Decision | Reason                                                                   |
+| --------------------------------------- | -------- | ------------------------------------------------------------------------ |
+| iframe a managed Inspector sidecar      | primary  | Reuses the complete supported UI and process without vendoring it.       |
+| open the managed Inspector in a new tab | fallback | Survives upstream framing or base-path incompatibility.                  |
+| import Inspector React/core internals   | no       | They are intentionally private and not published for downstream reuse.   |
+| copy or fork Inspector source           | no       | Creates a second protocol debugger and an expensive upstream merge path. |
 
 ### Hooks
 
@@ -270,9 +348,12 @@ The Hook page shows normalized intent beside each host mapping:
 
 ```text
 beforeTool + shell
-  Codex  -> <adapter native event> / <native shell selector> / dist/codex/hooks/check-command.mjs
-  Claude -> <adapter native event> / <native shell selector> / dist/claude/hooks/check-command.mjs
+  Codex  -> <adapter native event> / <native shell selector> / codex/hooks/check-command.mjs
+  Claude -> <adapter native event> / <native shell selector> / claude/hooks/check-command.mjs
 ```
+
+Paths are relative to the selected artifact root — an epoch directory in dev, `dist/` for a
+production build.
 
 Simulation accepts canonical fields or a saved fixture, transforms them into the selected host's
 native event, runs the emitted wrapper, and decodes the native response back into a canonical
@@ -338,9 +419,14 @@ field list above the document. Local links and images resolve through the workbe
 skill source path or selected artifact epoch. Clicking a source reference can reveal it in the
 resource tree or open it in the user's editor.
 
+Rendered view resolves relative links from the authored Skill source. Generated view resolves
+them from the selected immutable epoch. Each view labels its base so a valid source link cannot be
+mistaken for a valid generated link.
+
 The initial renderer supports CommonMark and GFM, not MDX. JSX in a Skill file is shown as text
-instead of executed. Shiki languages and themes are loaded lazily so opening the workbench does
-not download the full highlighter bundle.
+instead of executed, raw HTML remains inert, and Mermaid fences render as code in the first
+release. Shiki languages and themes are loaded lazily so opening the workbench does not download
+the full highlighter bundle.
 
 ## Agent-facing development MCP
 
@@ -380,7 +466,10 @@ export default defineEvalSuite({
       id: "direct-review",
       prompt: "Review this change and report the highest-risk regression.",
       fixture: "./fixtures/review-repo",
-      hosts: ["codex", "claude"],
+      hosts: {
+        codex: { model: "gpt-5.5-codex" },
+        claude: { model: "claude-sonnet-4-5" },
+      },
       invocation: {
         mode: "automatic",
         skill: "review-change",
@@ -389,8 +478,11 @@ export default defineEvalSuite({
       assertions: [
         expectExitCode(0),
         expectOutcome({ script: "./graders/review-result.ts" }),
-        expectToolCall({ name: "project_status", atLeast: 1 }),
-        expectSkillActivation({ skill: "review-change" }),
+        expectMcpCall({ server: "project", tool: "status", atLeast: 1 }),
+        expectSkillActivation({
+          skill: "review-change",
+          minimumEvidence: "inferred",
+        }),
       ],
     },
   ],
@@ -406,6 +498,11 @@ Invocation modes are:
 A useful suite includes direct, indirect, incomplete-information, negative, and edge cases. Eval
 prompts do not include assertions, expected grader decisions, reference answers, or another
 trial's outputs.
+
+Negative assertions such as `expectNoSkillActivation()` make non-selection behavior explicit.
+Fixture materialization copies only an allowlisted file set, initializes a Git repository and
+baseline commit when the task requires repository state, and records the resulting fixture
+digest before any trial begins.
 
 ## Trial and grader model
 
@@ -430,8 +527,15 @@ Graders prefer durable outcomes over exact tool sequences. Deterministic checks 
 Optional semantic graders receive the task, assertions, final response, trace, and produced
 workspace. They do not receive condition labels such as `with_skill` or `without_skill`.
 
-Multiple trials are required before reporting reliability. The UI may display pass rate, pass@k,
-and pass^k only when enough trials exist; otherwise it labels the result a smoke trial.
+Every assertion resolves to `pass`, `fail`, or `inconclusive`. An assertion that requires stronger
+evidence than the harness provides is inconclusive, never silently passed. Evidence-sensitive
+assertions declare their minimum accepted level.
+
+One or two trials are smoke checks. Reliability comparisons require at least three trials per
+aligned condition. The UI displays the actual `k/n` beside pass@k and pass^k. Baseline and
+candidate trials are comparable only when case, host, pinned model, host CLI version, fixture
+digest, invocation, and grader versions align; mismatches are labeled non-comparable instead of
+being folded into a delta.
 
 ## Skill activation evidence
 
@@ -458,7 +562,7 @@ MCP protocol behavior. It is the default in CI because it is fast and repeatable
 
 ### Claude native harness
 
-Claude supports direct plugin loading with `--plugin-dir`. The harness has two modes:
+Claude supports direct plugin loading with `--plugin-dir`. The harness has two isolation levels:
 
 - `native-local`: uses the author's existing Claude authentication and records inherited runtime
   controls; intended for manual dogfooding;
@@ -537,9 +641,13 @@ Run provenance includes:
 - artifact epoch and target digests;
 - fixture digest;
 - host CLI and plugin versions;
-- selected harness mode and model when recorded;
+- selected harness isolation level and pinned model;
 - timing, exit state, usage when reported, and raw log references;
 - grader versions and assertion evidence.
+
+One process owns a run directory through an explicit lock and is its only writer. A second
+process creates a new run rather than appending to an active run. Readers may tail completed JSONL
+records without mutating them.
 
 ## CLI and API
 
@@ -570,11 +678,16 @@ await session.close();
 MCP, hook, and eval work uses their dedicated CLI commands instead of maintaining a second
 headless dev-server mode.
 
+Standalone `mcp invoke` and `hooks simulate` build and validate a temporary current-source epoch
+by default. `--artifact <manifest>` selects a specific validated epoch instead. They never guess
+an ambient output directory from modification time.
+
 ## Error and recovery behavior
 
 - A config or normalization error prevents a new artifact epoch and leaves the last good epoch
   visible as stale.
-- A target-specific build failure does not replace that target's active artifact.
+- A target-specific build failure fails the attempted epoch atomically and leaves the previous
+  complete epoch active.
 - MCP startup and protocol errors are attached to the selected server and epoch.
 - A malformed hook fixture is rejected before the generated command runs.
 - A host CLI that is missing, unauthenticated, or incompatible fails preflight and creates a
@@ -595,10 +708,9 @@ headless dev-server mode.
 
 ### Rsbuild workbench
 
-- server startup and route availability;
-- API middleware ordering;
-- React/CSS HMR in a browser test;
-- custom project event delivery;
+- contributor-mode API proxy and React/CSS HMR;
+- published-mode prebuilt assets, route availability, and live project events;
+- identical browser-service contracts in both modes;
 - workbench closes with the coordinator.
 
 ### Skill renderer
@@ -608,13 +720,16 @@ headless dev-server mode.
 - lazy highlighted code blocks;
 - relative source and artifact images;
 - source/rendered/generated parity;
-- MDX/JSX remains inert text.
+- raw HTML and MDX/JSX remain inert text;
+- Mermaid fences remain code in the first release.
 
 ### MCP and hooks
 
 - generated stdio MCP initialization and catalog operations;
 - input forms and raw JSON produce identical calls;
 - process restart binds the selected epoch;
+- managed Inspector sidecar receives an exact read-only epoch config and closes with the session;
+- embedded Inspector framing and separate-tab fallback are tested against the pinned release;
 - hook simulation executes the emitted target wrapper;
 - canonical/native input and output round-trip fixtures.
 
@@ -628,25 +743,32 @@ headless dev-server mode.
 - multi-trial aggregation and baseline comparison;
 - raw artifacts remain sufficient to reproduce a displayed conclusion.
 
+Workbench browser flows run with Rstest Browser Mode and Playwright Chromium. Native harness
+smokes remain process-level integration tests rather than browser mocks.
+
 ## Delivery phases
 
-1. `DevCoordinator`, artifact epochs, Rslib rebuilds, and structured status.
-2. Rsbuild React shell with Overview, Artifacts, and Logs.
+0. Handwritten Codex and Claude contract spikes, minimum supported CLI versions, and capability
+   fixtures for every initial adapter.
+1. `DevCoordinator`, atomic artifact epochs, Rslib rebuilds, and structured status.
+2. Rsbuild React build, contributor HMR path, and published foreground server.
 3. Skill browser and Markdown renderer.
-4. MCP playground and generated-hook simulator.
-5. Deterministic eval definitions, run store, graders, and CLI.
-6. Claude native harness.
-7. Codex native harness.
-8. Comparison matrix, optional agent-facing MCP, and clean-consumer dogfood.
+4. Native MCP session service, managed official Inspector pane, and generated-hook simulator.
+5. Whole-plugin playground, ordered trace, replay, and promotion to a draft eval.
+6. Deterministic eval definitions, run store, graders, and CLI.
+7. Claude native harness.
+8. Codex native harness.
+9. Comparison matrix, optional agent-facing MCP, and clean-consumer dogfood.
 
 Each phase is a usable vertical slice. The UI does not precede the services it presents, and
 native model trials do not precede deterministic artifact checks.
 
 ## Decisions
 
-1. The workbench is an Rsbuild React app with native dev-server HMR.
-2. The first release uses Rsbuild's built-in server and middleware extension points, not a custom
-   server.
+1. The workbench is an Rsbuild React app; contributors get native HMR and published consumers get
+   prebuilt assets plus live project events.
+2. `agent-bundle dev` owns one lightweight foreground server rather than recompiling the UI for
+   every plugin project.
 3. Rslib builds the Agent Bundle package and generated plugin executables.
 4. Agent Bundle owns broad source invalidation and publishes immutable artifact epochs.
 5. One resident Rslint engine supplies affected-file diagnostics; there is no invented Rslint
@@ -656,10 +778,13 @@ native model trials do not precede deterministic artifact checks.
 7. `react-markdown`, `remark-gfm`, and lazy fine-grained Shiki render Skills; core parses
    frontmatter once.
 8. MCP and hook tools execute generated artifacts rather than source shortcuts.
-9. Eval harnesses distinguish deterministic, native-local, and native-isolated modes.
-10. Activation claims carry `observed`, `inferred`, or `unavailable` evidence.
-11. JSON and JSONL files are the first run store; there is no database.
-12. The optional agent-facing MCP shares application services and lives only for the foreground
+9. The official MCP Inspector is a pinned managed sidecar and optional Full Inspector pane; Agent
+   Bundle does not import its private core or fork its UI.
+10. Eval harnesses distinguish deterministic execution from native-local and native-isolated
+    isolation levels.
+11. Activation claims carry `observed`, `inferred`, or `unavailable` evidence.
+12. JSON and JSONL files are the first run store; there is no database.
+13. The optional agent-facing MCP shares application services and lives only for the foreground
     dev session.
 
 ## Research basis
@@ -678,6 +803,8 @@ native model trials do not precede deterministic artifact checks.
 - [Claude Code plugins](https://code.claude.com/docs/en/plugins)
 - [Claude Code headless mode](https://code.claude.com/docs/en/headless)
 - [MCP Inspector](https://modelcontextprotocol.io/docs/tools/inspector)
+- [MCP Inspector source and architecture](https://github.com/modelcontextprotocol/inspector)
+- [MCP debugging guide](https://modelcontextprotocol.io/docs/tools/debugging)
 - [Anthropic: Demystifying evals for AI agents](https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents)
 - [Inspect AI](https://inspect.aisi.org.uk/)
 - [Promptfoo](https://www.promptfoo.dev/docs/intro/)
