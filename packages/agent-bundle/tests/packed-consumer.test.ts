@@ -22,6 +22,7 @@ const execFile = promisify(executeFile);
 const workspaceRoot = process.cwd();
 const packageRoot = join(workspaceRoot, 'packages', 'agent-bundle');
 const fixtureRoot = join(workspaceRoot, 'fixtures', 'integration', 'comprehensive');
+const agentBundleImport = /\bimport(?:\s*[\s\S]*?\s+from)?\s*['"]agent-bundle(?:\/[^'"]*)?['"]|\bimport\s*\(\s*['"]agent-bundle(?:\/[^'"]*)?['"]/;
 
 interface FileDigest {
   readonly bytes: number;
@@ -105,7 +106,7 @@ it('uses only an installed tarball after source deletion', async () => {
     expect([...manifest.files].sort((left, right) => left.path.localeCompare(right.path))).toEqual(files);
     for (const file of files.filter((entry) => entry.path.endsWith('.mjs'))) {
       await expect(readFile(join(firstArtifact, file.path), 'utf8')).resolves.not.toMatch(
-        /from\s+['"]agent-bundle(?:\/[^'"]*)?['"]/,
+        agentBundleImport,
       );
     }
     const localServer = JSON.parse(await readFile(join(firstArtifact, 'portable', 'mcp.json'), 'utf8')) as {
