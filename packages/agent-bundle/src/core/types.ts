@@ -17,6 +17,24 @@ export interface AgentBundleHookEntry {
   tools?: readonly string[];
 }
 
+export type McpTransport = 'stdio' | 'streamable-http' | 'sse';
+
+export interface AgentBundleMcpServer {
+  args?: readonly string[];
+  command?: string;
+  cwd?: string;
+  entry?: string;
+  env?: Readonly<Record<string, string>>;
+  headers?: Readonly<Record<string, string>>;
+  targets?: readonly string[];
+  transport?: McpTransport;
+  url?: string;
+}
+
+export interface AgentBundleMcpConfig {
+  servers: Readonly<Record<string, AgentBundleMcpServer>>;
+}
+
 export interface AgentBundleHostConfig {
   nativeHooks?: string;
 }
@@ -31,6 +49,7 @@ export interface AgentBundleConfig {
   codex?: AgentBundleHostConfig;
   hooks?: Partial<Record<CanonicalHookEvent, AgentBundleHookInput>>;
   marketplace?: boolean;
+  mcp?: AgentBundleMcpConfig;
   plugin: AgentBundlePluginConfig;
   skills?: string[];
   targets?: string[];
@@ -86,6 +105,8 @@ export interface NormalizedMcpServer {
   readonly id: string;
   readonly name: string;
   readonly provenance: SourceProvenance;
+  /** Absolute local source path for compiler-owned MCP entries only. */
+  readonly source?: string;
   readonly targets: readonly string[];
   readonly transport: 'stdio' | 'streamable-http' | 'sse';
   readonly url?: string;

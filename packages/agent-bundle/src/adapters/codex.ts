@@ -138,6 +138,12 @@ const planMcpServer = (
     const command = convertCodexValue(server.command, 'command', hasPluginRootCwd, diagnostics);
     const args = server.args?.map((argument, index) =>
       convertCodexValue(argument, `args[${index}]`, hasPluginRootCwd, diagnostics));
+    const nativeArgs = server.source === undefined
+      ? args
+      : args?.map((argument, index) =>
+          index === 0 && typeof argument === 'string' && argument.startsWith('mcp/')
+            ? `./${argument}`
+            : argument);
     const env = server.env === undefined
       ? undefined
       : Object.fromEntries(Object.entries(server.env).map(([key, value]) => {
@@ -150,13 +156,13 @@ const planMcpServer = (
           return [key, convertCodexValue(value, `env.${key}`, hasPluginRootCwd, diagnostics)];
         }));
 
-    if (diagnostics.length > 0 || command === undefined || args?.some((value) => value === undefined) || Object.values(env ?? {}).some((value) => value === undefined)) {
+    if (diagnostics.length > 0 || command === undefined || nativeArgs?.some((value) => value === undefined) || Object.values(env ?? {}).some((value) => value === undefined)) {
       return { diagnostics };
     }
     return {
       diagnostics,
       value: {
-        ...(args === undefined ? {} : { args }),
+        ...(nativeArgs === undefined ? {} : { args: nativeArgs }),
         command,
         ...(cwd === undefined ? {} : { cwd }),
         ...(env === undefined ? {} : { env }),

@@ -9,10 +9,13 @@ import { assertInside } from '../core/paths.ts';
 import {
   compileEntries,
   compileHooks,
+  compileMcpEntries,
   planCompiledEntries,
   planCompiledHooks,
+  planCompiledMcpEntries,
   type CompiledEntry,
   type CompiledHookEntry,
+  type CompiledMcpEntry,
 } from './entries.ts';
 import {
   assertUniqueArtifactDestinations,
@@ -28,6 +31,7 @@ import { validateArtifact } from './validate-artifact.ts';
 export interface BuildResult {
   readonly compiledEntries: readonly CompiledEntry[];
   readonly compiledHooks: readonly CompiledHookEntry[];
+  readonly compiledMcpEntries: readonly CompiledMcpEntry[];
   readonly manifest: ArtifactManifest;
   readonly outputRoot: string;
 }
@@ -48,6 +52,7 @@ interface PlannedTarget {
 interface StagedTarget extends PlannedTarget {
   readonly compiledEntries: readonly CompiledEntry[];
   readonly compiledHooks: readonly CompiledHookEntry[];
+  readonly compiledMcpEntries: readonly CompiledMcpEntry[];
   readonly root: string;
 }
 
@@ -84,7 +89,11 @@ export const build = async (options: BuildOptions): Promise<BuildResult> => {
         { cwd: options.projectRoot, outDir: root },
       );
       const compiledHooks = planCompiledHooks(target.hookEntries, { outDir: root });
-      return { ...target, compiledEntries, compiledHooks, root };
+      const compiledMcpEntries = planCompiledMcpEntries(options.model.mcpServers, {
+        outDir: root,
+        target: target.name,
+      });
+      return { ...target, compiledEntries, compiledHooks, compiledMcpEntries, root };
     });
     assertUniqueArtifactDestinations(
       stagedTargets.flatMap((target) => [
@@ -93,11 +102,13 @@ export const build = async (options: BuildOptions): Promise<BuildResult> => {
         ),
         ...target.compiledEntries.map((entry) => entry.output),
         ...target.compiledHooks.map((entry) => entry.output),
+        ...target.compiledMcpEntries.map((entry) => entry.output),
       ]),
     );
 
     const compiledEntries: CompiledEntry[] = [];
     const compiledHooks: CompiledHookEntry[] = [];
+    const compiledMcpEntries: CompiledMcpEntry[] = [];
     for (const target of stagedTargets) {
       await emitPlanEntries({ entries: target.entries, root: target.root });
       compiledEntries.push(
@@ -107,6 +118,11 @@ export const build = async (options: BuildOptions): Promise<BuildResult> => {
         )),
       );
       compiledHooks.push(...(await compileHooks(target.hookEntries, { cwd: options.projectRoot, outDir: target.root })));
+      compiledMcpEntries.push(...(await compileMcpEntries(options.model.mcpServers, {
+        cwd: options.projectRoot,
+        outDir: target.root,
+        target: target.name,
+      })));
     }
     const publishedCompiledEntries = Object.freeze(compiledEntries.map((entry) =>
       Object.freeze({
@@ -137,6 +153,10 @@ export const build = async (options: BuildOptions): Promise<BuildResult> => {
     return Object.freeze({
       compiledEntries: publishedCompiledEntries,
       compiledHooks: Object.freeze(compiledHooks.map((entry) => Object.freeze({
+        ...entry,
+        output: assertInside(outputRoot, resolve(outputRoot, relative(stageRoot, entry.output))),
+      }))),
+      compiledMcpEntries: Object.freeze(compiledMcpEntries.map((entry) => Object.freeze({
         ...entry,
         output: assertInside(outputRoot, resolve(outputRoot, relative(stageRoot, entry.output))),
       }))),

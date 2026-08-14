@@ -1,9 +1,11 @@
-import { basename, posix } from 'node:path';
+import { existsSync, statSync } from 'node:fs';
+import { basename, posix, resolve } from 'node:path';
 
 import type { Diagnostic } from '../core/diagnostics.ts';
 import type {
   AgentBundleHookEntry,
   AgentBundleHookInput,
+  AgentBundleMcpServer,
   CanonicalHookEvent,
   NormalizationTargetRegistry,
   NormalizedPlugin,
@@ -91,6 +93,148 @@ const validateHooks = (loaded: LoadedConfig): Diagnostic[] => {
     }
   }
   return diagnostics;
+};
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+const nonemptyString = (value: unknown): value is string =>
+  typeof value === 'string' && value.trim().length > 0;
+
+const validateStringList = (
+  value: unknown,
+  label: string,
+  code: string,
+  loaded: LoadedConfig,
+): Diagnostic[] => {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.some((item) => !nonemptyString(item))) {
+    return [sourceDiagnostic(code, `MCP ${label} must be an array of nonempty strings.`, loaded.configPath)];
+  }
+  return [];
+};
+
+const validateStringRecord = (
+  value: unknown,
+  label: string,
+  code: string,
+  loaded: LoadedConfig,
+): Diagnostic[] => {
+  if (value === undefined) return [];
+  if (!isRecord(value) || Object.entries(value).some(([key, item]) => !nonemptyString(key) || typeof item !== 'string')) {
+    return [sourceDiagnostic(code, `MCP ${label} must map nonempty string keys to string values.`, loaded.configPath)];
+  }
+  return [];
+};
+
+const validRemoteUrl = (value: string): boolean => {
+  try {
+    const url = new URL(value);
+    return url.protocol === 'http:' || url.protocol === 'https:';
+  } catch {
+    return false;
+  }
+};
+
+const localEntryExists = (root: string, entry: string): boolean => {
+  const source = resolve(root, entry);
+  try {
+    return existsSync(source) && statSync(source).isFile();
+  } catch {
+    return false;
+  }
+};
+
+const validateMcpServer = (
+  name: string,
+  value: unknown,
+  loaded: LoadedConfig,
+): Diagnostic[] => {
+  const diagnostics: Diagnostic[] = [];
+  if (!nonemptyString(name)) {
+    diagnostics.push(sourceDiagnostic('AB4302', 'MCP server names must be nonempty.', loaded.configPath));
+  }
+  if (!isRecord(value)) {
+    diagnostics.push(sourceDiagnostic('AB4303', `MCP server ${JSON.stringify(name)} must be an object.`, loaded.configPath));
+    return diagnostics;
+  }
+  const server = value as AgentBundleMcpServer;
+  const entry = server.entry;
+  const command = server.command;
+  const url = server.url;
+  const variants = [entry, command, url].filter((candidate) => candidate !== undefined);
+  if (variants.length !== 1) {
+    diagnostics.push(sourceDiagnostic(
+      'AB4304',
+      `MCP server ${JSON.stringify(name)} must define exactly one of entry, command, or url.`,
+      loaded.configPath,
+    ));
+    return diagnostics;
+  }
+  diagnostics.push(...validateStringList(server.targets, 'targets', 'AB4305', loaded));
+
+  if (entry !== undefined) {
+    if (!nonemptyString(entry)) {
+      diagnostics.push(sourceDiagnostic('AB4306', `MCP server ${JSON.stringify(name)} entry must be a nonempty path.`, loaded.configPath));
+    } else if (!localEntryExists(loaded.context.projectRoot, entry)) {
+      diagnostics.push(sourceDiagnostic('AB4307', `MCP server ${JSON.stringify(name)} entry does not exist.`, loaded.configPath));
+    }
+    if (server.transport !== undefined && server.transport !== 'stdio') {
+      diagnostics.push(sourceDiagnostic('AB4308', `MCP server ${JSON.stringify(name)} entry must use stdio transport.`, loaded.configPath));
+    }
+    if (server.cwd !== undefined) {
+      diagnostics.push(sourceDiagnostic('AB4309', `MCP server ${JSON.stringify(name)} local entry cannot set cwd.`, loaded.configPath));
+    }
+    if (server.headers !== undefined) {
+      diagnostics.push(sourceDiagnostic('AB4310', `MCP server ${JSON.stringify(name)} stdio server cannot set headers.`, loaded.configPath));
+    }
+    diagnostics.push(...validateStringList(server.args, 'args', 'AB4311', loaded));
+    diagnostics.push(...validateStringRecord(server.env, 'env', 'AB4312', loaded));
+    return diagnostics;
+  }
+
+  if (command !== undefined) {
+    if (!nonemptyString(command)) {
+      diagnostics.push(sourceDiagnostic('AB4313', `MCP server ${JSON.stringify(name)} command must be nonempty.`, loaded.configPath));
+    }
+    if (server.transport !== undefined && server.transport !== 'stdio') {
+      diagnostics.push(sourceDiagnostic('AB4314', `MCP server ${JSON.stringify(name)} command must use stdio transport.`, loaded.configPath));
+    }
+    if (server.cwd !== undefined && !nonemptyString(server.cwd)) {
+      diagnostics.push(sourceDiagnostic('AB4315', `MCP server ${JSON.stringify(name)} cwd must be a nonempty path.`, loaded.configPath));
+    }
+    if (server.headers !== undefined) {
+      diagnostics.push(sourceDiagnostic('AB4310', `MCP server ${JSON.stringify(name)} stdio server cannot set headers.`, loaded.configPath));
+    }
+    diagnostics.push(...validateStringList(server.args, 'args', 'AB4311', loaded));
+    diagnostics.push(...validateStringRecord(server.env, 'env', 'AB4312', loaded));
+    return diagnostics;
+  }
+
+  if (!nonemptyString(url) || !validRemoteUrl(url)) {
+    diagnostics.push(sourceDiagnostic('AB4316', `MCP server ${JSON.stringify(name)} URL must be a valid HTTP URL.`, loaded.configPath));
+  }
+  if (server.transport !== 'streamable-http' && server.transport !== 'sse') {
+    diagnostics.push(sourceDiagnostic('AB4317', `MCP server ${JSON.stringify(name)} URL requires streamable-http or sse transport.`, loaded.configPath));
+  }
+  if (server.args !== undefined || server.env !== undefined || server.cwd !== undefined) {
+    diagnostics.push(sourceDiagnostic('AB4318', `MCP server ${JSON.stringify(name)} remote server cannot set stdio options.`, loaded.configPath));
+  }
+  diagnostics.push(...validateStringRecord(server.headers, 'headers', 'AB4319', loaded));
+  return diagnostics;
+};
+
+const validateMcp = (loaded: LoadedConfig): Diagnostic[] => {
+  const mcp = loaded.config.mcp;
+  if (mcp === undefined) return [];
+  if (!isRecord(mcp)) {
+    return [sourceDiagnostic('AB4300', 'MCP configuration must be an object.', loaded.configPath)];
+  }
+  if (!isRecord(mcp.servers)) {
+    return [sourceDiagnostic('AB4301', 'MCP configuration must define a servers object.', loaded.configPath)];
+  }
+  return Object.entries(mcp.servers).flatMap(([name, server]) =>
+    validateMcpServer(name, server, loaded));
 };
 
 const withoutMarkdownCode = (body: string): string => {
@@ -307,6 +451,7 @@ export const validateSource = (
   }
 
   diagnostics.push(...validateHooks(loaded));
+  diagnostics.push(...validateMcp(loaded));
 
   return diagnostics;
 };
@@ -330,7 +475,13 @@ export const validateModel = (
   }
 
   const ids = new Map<string, string>();
-  const components = [model.metadata, ...model.targets, ...model.skills, ...model.hooks];
+  const components = [
+    model.metadata,
+    ...model.targets,
+    ...model.skills,
+    ...model.hooks,
+    ...model.mcpServers,
+  ];
   for (const component of components) {
     const firstSource = ids.get(component.id);
     if (firstSource === undefined) {
@@ -362,6 +513,31 @@ export const validateModel = (
           severity: 'error',
           sourcePath: hook.provenance.sourcePath,
           target,
+        });
+      }
+    }
+  }
+
+  for (const server of model.mcpServers) {
+    for (const target of server.targets) {
+      if (!registry.has(target)) {
+        diagnostics.push({
+          code: 'AB4320',
+          message: `MCP server ${JSON.stringify(server.name)} selects unknown target ${JSON.stringify(target)}.`,
+          severity: 'error',
+          sourcePath: server.provenance.sourcePath,
+          target,
+        });
+      }
+    }
+    if (server.source !== undefined) {
+      const output = server.args?.[0];
+      if (typeof output !== 'string' || !/^mcp\/mcp-[a-z0-9-]+-[a-f\d]{8}\.mjs$/u.test(output)) {
+        diagnostics.push({
+          code: 'AB4321',
+          message: `MCP server ${JSON.stringify(server.name)} has an unsafe local output alias.`,
+          severity: 'error',
+          sourcePath: server.provenance.sourcePath,
         });
       }
     }

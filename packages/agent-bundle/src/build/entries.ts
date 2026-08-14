@@ -1,7 +1,7 @@
 import { extname, resolve } from 'node:path';
 
 import type { TargetHookEntry } from '../adapters/types.ts';
-import type { NormalizedScript } from '../core/types.ts';
+import type { NormalizedMcpServer, NormalizedScript } from '../core/types.ts';
 import { resolveArtifactDestination } from './emit.ts';
 import { buildWithRslib } from './rslib.ts';
 
@@ -17,6 +17,11 @@ export interface CompiledHookEntry extends CompiledEntry {
   readonly target: string;
   /** Native hook timeout in seconds. Omit it to use the host default. */
   readonly timeout?: number;
+}
+
+export interface CompiledMcpEntry extends CompiledEntry {
+  readonly id: string;
+  readonly target: string;
 }
 
 const outputName = (script: NormalizedScript): string => {
@@ -62,6 +67,58 @@ export const compileEntries = async (
     outputRoot: options.outDir,
   });
 
+  return compiled;
+};
+
+const localMcpOutputName = (server: NormalizedMcpServer): string => {
+  const output = server.args?.[0];
+  const match = typeof output === 'string'
+    ? /^mcp\/(mcp-[a-z0-9-]+-[a-f\d]{8}\.mjs)$/u.exec(output)
+    : undefined;
+  if (server.source === undefined || match?.[1] === undefined) {
+    throw new Error(`MCP server ${JSON.stringify(server.name)} has an unsafe local output alias.`);
+  }
+  return match[1];
+};
+
+export const planCompiledMcpEntries = (
+  servers: readonly NormalizedMcpServer[],
+  options: { readonly outDir: string; readonly target: string },
+): readonly CompiledMcpEntry[] => {
+  const names = new Set<string>();
+  return Object.freeze(servers
+    .filter((server) => server.source !== undefined && server.targets.includes(options.target))
+    .map((server) => {
+      const outputName = localMcpOutputName(server);
+      const name = outputName.slice(0, -extname(outputName).length);
+      if (names.has(name)) {
+        throw new Error(`Duplicate compiled MCP destination ${JSON.stringify(`mcp/${outputName}`)}.`);
+      }
+      names.add(name);
+      return Object.freeze({
+        id: server.id,
+        name,
+        output: resolveArtifactDestination(resolve(options.outDir, 'mcp'), outputName),
+        source: server.source!,
+        target: options.target,
+      });
+    }));
+};
+
+export const compileMcpEntries = async (
+  servers: readonly NormalizedMcpServer[],
+  options: { readonly cwd: string; readonly outDir: string; readonly target: string },
+): Promise<readonly CompiledMcpEntry[]> => {
+  const compiled = planCompiledMcpEntries(servers, options);
+  await buildWithRslib({
+    cwd: options.cwd,
+    entries: compiled.map(({ name, source }) => ({
+      name,
+      outputRelativePath: `mcp/${name}.mjs`,
+      source,
+    })),
+    outputRoot: options.outDir,
+  });
   return compiled;
 };
 
