@@ -474,34 +474,37 @@ it('rejects a host frame that exceeds the configured queued-byte budget before s
   expect(fixture.sent).toEqual([]);
 });
 
-it('evicts a permanently blocked frame after bounded retries so later FIFO traffic can drain', async () => {
+it('fails closed after a permanently blocked full input so a would-succeed result cannot escape', async () => {
   const fixture = fixtureFor();
+  let inputAttempts = 0;
   const bridge = createMcpAppBridge({
     binding: fixture.binding,
     host: fixture.host,
     maxQueuedHostMessageBytes: 4_096,
     operations: fixture.operations,
     send: (message) => {
-      if (message.method === 'ui/notifications/tool-input-partial') return false;
+      if (message.method === 'ui/notifications/tool-input') {
+        inputAttempts += 1;
+        return inputAttempts > 3;
+      }
       fixture.sent.push(message);
       return true;
     },
   });
 
-  expect(bridge.publishToolInputPartial({ city: 'Par' })).toBe(true);
   await bridge.receive(initialize('init:permanent-block'));
   await bridge.receive(initialized());
-  expect(bridge.publishHostContextChanged({ theme: 'dark' })).toBe(true);
 
   expect(bridge.flushHostTraffic()).toBe(false);
   expect(bridge.flushHostTraffic()).toBe(false);
-  expect(bridge.flushHostTraffic()).toBe(true);
-  expect(fixture.sent.some((message) => message.method === 'ui/notifications/tool-input-partial')).toBe(false);
-  expect(fixture.sent.slice(-3)).toEqual([
-    { jsonrpc: '2.0', method: 'ui/notifications/tool-input', params: { arguments: { city: 'Paris', units: 'metric' } } },
-    { jsonrpc: '2.0', method: 'ui/notifications/tool-result', params: { content: [{ text: 'Sunny', type: 'text' }], structuredContent: { temperature: 21 } } },
-    { jsonrpc: '2.0', method: 'ui/notifications/host-context-changed', params: { theme: 'dark' } },
-  ]);
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, 0);
+  });
+
+  expect(bridge.lifecycle).toBe('closed');
+  expect(fixture.closes).toEqual(['binding-app']);
+  expect(bridge.flushHostTraffic()).toBe(false);
+  expect(fixture.sent.some((message) => message.method === 'ui/notifications/tool-input' || message.method === 'ui/notifications/tool-result')).toBe(false);
 });
 
 it('rejects malformed JSON-RPC envelopes and payloads before executing host callbacks', async () => {

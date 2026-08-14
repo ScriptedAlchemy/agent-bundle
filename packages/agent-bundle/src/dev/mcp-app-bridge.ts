@@ -729,7 +729,7 @@ export const createMcpAppBridge = (options: CreateMcpAppBridgeOptions): McpAppBr
       if (!send(message.message)) {
         message.failedSendAttempts += 1;
         hostTrafficBlocked = true;
-        if (message.failedSendAttempts >= maximumQueuedHostMessageSendAttempts) dequeueHostMessage();
+        if (message.failedSendAttempts >= maximumQueuedHostMessageSendAttempts) failClosedHostTraffic();
         return false;
       }
       dequeueHostMessage();
@@ -791,6 +791,14 @@ export const createMcpAppBridge = (options: CreateMcpAppBridgeOptions): McpAppBr
       if (closePromise === pending) closePromise = undefined;
     });
     return pending;
+  };
+
+  const failClosedHostTraffic = (): void => {
+    lifecycle = 'closing';
+    queuedHostMessages.length = 0;
+    queuedHostMessageBytes = 0;
+    hostTrafficBlocked = false;
+    void rememberClose(releaseBinding()).catch(() => undefined);
   };
 
   const respond = (id: McpAppBridgeRequestId, result: McpAppJsonValue): boolean => {
