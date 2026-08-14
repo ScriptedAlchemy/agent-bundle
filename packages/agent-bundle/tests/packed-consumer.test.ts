@@ -174,12 +174,23 @@ it('uses only an installed tarball after source deletion', async () => {
     const { stdout: listedTools } = await runInstalled(cli, projectRoot, [
       'mcp', 'list', '--json', '--root', projectRoot, '--artifact', firstArtifact, '--target', 'portable', '--server', 'local',
     ]);
-    expect(JSON.parse(listedTools)).toMatchObject({ tools: [{ name: 'show-dashboard' }] });
+    expect(JSON.parse(listedTools)).toMatchObject({
+      tools: [{
+        _meta: { ui: { resourceUri: 'ui://integration-fixture/dashboard-v1.html' } },
+        name: 'show-dashboard',
+      }],
+    });
     const { stdout: invokedTool } = await runInstalled(cli, projectRoot, [
       'mcp', 'invoke', '--json', '--root', projectRoot, '--artifact', firstArtifact, '--target', 'portable', '--server', 'local',
       '--tool', 'show-dashboard', '--input', '{}',
     ]);
-    expect(JSON.parse(invokedTool)).toMatchObject({ result: { structuredContent: { view: 'dashboard' } } });
+    expect(JSON.parse(invokedTool)).toMatchObject({
+      result: {
+        _meta: { ui: { resourceUri: 'ui://integration-fixture/dashboard-v1.html' } },
+        content: [{ text: 'dashboard ready: ordinary local import', type: 'text' }],
+        structuredContent: { resourceUri: 'ui://integration-fixture/dashboard-v1.html', view: 'dashboard' },
+      },
+    });
 
     const reader = join(projectRoot, 'read-resource.mjs');
     await writeFile(reader, [
@@ -196,7 +207,11 @@ it('uses only an installed tarball after source deletion', async () => {
       'ui://integration-fixture/dashboard-v1.html',
     ], { cwd: projectRoot, env: installedEnvironment() });
     expect(JSON.parse(resource)).toMatchObject({
-      contents: [{ mimeType: 'text/html;profile=mcp-app', uri: 'ui://integration-fixture/dashboard-v1.html' }],
+      contents: [{
+        mimeType: 'text/html;profile=mcp-app',
+        text: expect.stringContaining('integration dashboard'),
+        uri: 'ui://integration-fixture/dashboard-v1.html',
+      }],
     });
   } finally {
     await rm(consumerRoot, { force: true, recursive: true });
