@@ -466,12 +466,31 @@ This is the honest-portability rule applied to paths.
 Remote HTTP MCP definitions are copied into native manifests without bundling a local server.
 No MCP process is launched during `build` or `validate`.
 
-MCP Apps and host-compatible UI widgets remain ordinary MCP protocol data, not a separate server
-kind. Agent Bundle preserves tool metadata such as `_meta.ui.resourceUri` and
-`_meta["openai/outputTemplate"]`, structured tool results, resource links, embedded resources, and
-result metadata without rewriting them. UI resources and their client bundle are registered
-statically by the generated server; the workbench reads them through MCP resources, serves the
-selected artifact's browser assets, and renders them through the MCP Apps bridge.
+MCP Apps are the portable UI contract. They remain ordinary MCP tools and `ui://` resources, not a
+separate server kind. New integrations use `_meta.ui.resourceUri`,
+`text/html;profile=mcp-app`, and the `ui/*` JSON-RPC bridge over `postMessage`. The OpenAI
+`_meta["openai/outputTemplate"]` field is retained as a compatibility alias, not treated as the
+portable source of truth. Optional `window.openai` features are capability-detected by the View;
+the compiler never branches on a host product name. A tool must still return useful text or
+structured data when its host cannot render the View, including terminal clients such as Codex and
+Claude Code.
+
+An optional MCP App declaration associates a local MCP server with a browser View entry and an
+explicit, versioned `ui://` resource URI. Agent Bundle builds each View through the public Rsbuild
+JavaScript API in browser mode before compiling the owning server. The production View is one
+self-contained HTML document: scripts, styles, and imported static assets are inlined; split and
+async chunks are disabled; filename hashing is disabled; and any unexpected additional output is
+a build error. This uses Rsbuild's standard asset pipeline and React plugin when TSX is selected;
+it does not run a nested compiler from a custom loader.
+
+The resulting HTML, URI, MIME type, and declared resource metadata are exposed to the server entry
+through a compiler-owned virtual module. Server code registers them with the official MCP Apps
+`registerAppResource()` and `registerAppTool()` helpers, so the upstream SDK remains responsible
+for cross-host metadata. Agent Bundle does not parse or rewrite tool registrations. The generated
+server remains the protocol source of truth: the workbench discovers the tool metadata, calls
+`resources/read` for the exact `ui://` URI, and receives the same structured content and result
+metadata as ChatGPT or Claude. The pinned MCP Apps SDK version and its provenance are recorded and
+covered by compatibility fixtures rather than copied into private bridge or schema code.
 
 ## Build engine
 
