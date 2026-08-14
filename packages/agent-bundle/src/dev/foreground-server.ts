@@ -217,7 +217,7 @@ const afterSequence = (request: IncomingMessage, latestSequence: number): number
 };
 
 const closeServer = (server: Server): Promise<void> => new Promise((resolvePromise, rejectPromise) => {
-  server.close((error) => error === undefined || error.code === 'ERR_SERVER_NOT_RUNNING'
+  server.close((error) => error === undefined || (error as NodeJS.ErrnoException).code === 'ERR_SERVER_NOT_RUNNING'
     ? resolvePromise()
     : rejectPromise(error));
 });
