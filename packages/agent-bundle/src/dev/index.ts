@@ -53,7 +53,35 @@ export {
 } from './foreground-server.ts';
 export { createWorkbenchAssetSource, type WorkbenchAssetSourceOptions } from './workbench-assets.ts';
 export {
+  McpSession,
+  McpSessionService,
+  type McpSessionConnectionState,
+  type McpSessionPromptOptions,
+  type McpSessionRequestOptions,
+  type McpSessionResourceOptions,
+  type McpSessionServiceOptions,
+  type McpSessionToolCallOptions,
+  type OpenMcpSessionOptions,
+} from './mcp-session-service.ts';
+export type {
+  McpSessionBinding,
+  McpSessionId,
+  McpSessionInspectorConfig,
+  McpSessionOperation,
+  McpSessionReplayOverflow,
+  McpSessionTraceEntry,
+  McpSessionTraceListener,
+  McpSessionTraceMessage,
+  McpSessionTraceReplay,
+  McpSessionTraceReplayGap,
+  McpSessionTraceSubscription,
+  McpSessionTraceSubscriptionOptions,
+} from './mcp-session-protocol.ts';
+export {
   startDevServer,
+  closeDevServerLifecycle,
+  DevServerLifecycleCloseError,
+  type DevServerLifecycleCloseFailure,
   type DevServerSession,
   type OpenBrowser,
   type StartDevServerOptions,
