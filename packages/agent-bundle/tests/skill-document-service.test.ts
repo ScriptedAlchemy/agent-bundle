@@ -72,6 +72,16 @@ it('serves parsed source documents and exact source resources by a model-owned S
       body: '# Review\n\nRead [the guide](guide.md) and ![the image](assets/pixel.bin).\n',
       frontmatter: { description: 'Reviews changed files', name: 'review' },
       id: 'skill:review',
+      markdown: [
+        '---',
+        'name: review',
+        'description: Reviews changed files',
+        '---',
+        '# Review',
+        '',
+        'Read [the guide](guide.md) and ![the image](assets/pixel.bin).',
+        '',
+      ].join('\n'),
       resources: [
         { relativePath: 'SKILL.md' },
         { relativePath: 'assets/pixel.bin' },
@@ -110,6 +120,16 @@ it('serves the generated parser result and byte-identical resources while pinnin
       body: '# Review\n\nRead [the guide](guide.md) and ![the image](assets/pixel.bin).\n',
       frontmatter: { description: 'Reviews changed files', name: 'review' },
       id: 'skill:review',
+      markdown: [
+        '---',
+        'name: review',
+        'description: Reviews changed files',
+        '---',
+        '# Review',
+        '',
+        'Read [the guide](guide.md) and ![the image](assets/pixel.bin).',
+        '',
+      ].join('\n'),
     });
     expect(binary.body).toEqual(new Uint8Array([0, 255, 17, 9]));
     expect(binary.contentType).toBe('application/octet-stream');

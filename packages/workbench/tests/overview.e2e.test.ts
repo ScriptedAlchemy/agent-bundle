@@ -1,4 +1,5 @@
 import { execFile as executeFile } from 'node:child_process';
+import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 
@@ -31,6 +32,7 @@ const buildWorkbench = async (): Promise<void> => {
 e2e('renders and rebuilds the complete responsive Overview against a real foreground server', { timeout: 60_000 }, async ({ page }) => {
   await buildWorkbench();
   const project = await createProjectFixture();
+  await writeFile(project.skillSource, `${project.skillMarkdown}\n\`\`\`mermaid\ngraph TD\n\`\`\`\n`);
   const server = await startDevServer({
     assets: createWorkbenchAssetSource({ root: workbenchAssets }),
     open: false,
@@ -38,12 +40,31 @@ e2e('renders and rebuilds the complete responsive Overview against a real foregr
     root: project.root,
   });
   try {
+    const asyncScripts = new Set<string>();
+    page.on('request', (request) => {
+      if (request.resourceType() === 'script' && request.url().includes('/static/js/async/')) asyncScripts.add(request.url());
+    });
     await page.goto(server.url);
     await expect(page.getByRole('heading', { name: 'Project overview' })).toBeVisible({ timeout: browserTimeout });
     for (const name of ['Normalization summary', 'Artifact epoch', 'Generated targets', 'Diagnostics (0)', 'Next action']) {
       await expect(page.getByRole('heading', { name })).toBeVisible({ timeout: browserTimeout });
     }
     await expect(page.locator('.epoch-row--active')).toBeVisible({ timeout: browserTimeout });
+
+    await page.getByRole('link', { name: 'Skills' }).click();
+    await expect(page.locator('#skills .skills-page-heading > div > h1')).toHaveText('Skills', { timeout: browserTimeout });
+    await expect(page.getByRole('heading', { name: 'review', exact: true })).toBeVisible({ timeout: browserTimeout });
+    await expect(page.getByRole('tab', { name: 'Rendered' })).toBeVisible({ timeout: browserTimeout });
+    await page.getByRole('tab', { name: 'Source' }).click();
+    await expect(page.locator('.skill-source')).toContainText('---', { timeout: browserTimeout });
+    await page.getByRole('tab', { name: 'Generated' }).click();
+    await expect(page.getByText(/Generated base ·/)).toBeVisible({ timeout: browserTimeout });
+    expect([...asyncScripts]).toEqual([]);
+    await page.setViewportSize({ height: 844, width: 390 });
+    await expect(page.locator('#skills .skills-page-heading > div > h1')).toHaveText('Skills', { timeout: browserTimeout });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    await page.getByRole('link', { name: 'Overview' }).click();
+    await expect(page.getByRole('heading', { name: 'Project overview' })).toBeVisible({ timeout: browserTimeout });
 
     const rebuild = page.getByRole('button', { name: 'Rebuild' });
     let rebuildPosts = 0;
@@ -64,6 +85,34 @@ e2e('renders and rebuilds the complete responsive Overview against a real foregr
     await page.setViewportSize({ height: 844, width: 390 });
     await expect(page.getByRole('heading', { name: 'Project overview' })).toBeVisible({ timeout: browserTimeout });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  } finally {
+    await server.close();
+    await removeProjectFixture(project.root);
+  }
+});
+
+e2e('loads the lazy Shiki chunk only after a fenced non-Mermaid Skill is rendered', { timeout: 60_000 }, async ({ page }) => {
+  await buildWorkbench();
+  const project = await createProjectFixture();
+  await writeFile(project.skillSource, `${project.skillMarkdown}\n\`\`\`ts\nconst answer: number = 42;\n\`\`\`\n`);
+  const server = await startDevServer({
+    assets: createWorkbenchAssetSource({ root: workbenchAssets }),
+    open: false,
+    port: 0,
+    root: project.root,
+  });
+  try {
+    const asyncScripts = new Set<string>();
+    page.on('request', (request) => {
+      if (request.resourceType() === 'script' && request.url().includes('/static/js/async/')) asyncScripts.add(request.url());
+    });
+    await page.goto(server.url);
+    await expect(page.getByRole('heading', { name: 'Project overview' })).toBeVisible({ timeout: browserTimeout });
+    expect([...asyncScripts]).toEqual([]);
+    await page.getByRole('link', { name: 'Skills' }).click();
+    await expect(page.locator('.skill-code-block')).toContainText('const answer: number = 42;', { timeout: browserTimeout });
+    await expect.poll(() => asyncScripts.size, { timeout: browserTimeout }).toBeGreaterThan(0);
+    await expect(page.locator('.skill-shiki')).toContainText('const answer: number = 42;', { timeout: browserTimeout });
   } finally {
     await server.close();
     await removeProjectFixture(project.root);

@@ -6,6 +6,8 @@ import type { ProjectStatus } from '../../agent-bundle/src/dev/types.ts';
 
 import { overviewFor } from './overview-model.ts';
 import { ProjectClient } from './project-client.ts';
+import { SkillClient } from './skill-client.ts';
+import { SkillsPage } from './skills-page.tsx';
 import './styles.css';
 
 const dateTime = (value: string | undefined): string => value === undefined
@@ -31,9 +33,39 @@ const StateMark = ({ state }: { readonly state: string }) => (
   }</span>
 );
 
-const Overview = ({ client, connectionError, status, onStatus }: {
+type WorkbenchPage = 'overview' | 'skills';
+
+const pageForHash = (): WorkbenchPage => window.location.hash === '#skills' ? 'skills' : 'overview';
+
+const Navigation = ({ onNavigate, page }: {
+  readonly onNavigate: (page: WorkbenchPage) => void;
+  readonly page: WorkbenchPage;
+}) => <aside className="rail" aria-label="Workbench navigation">
+  <div className="brand">Agent Bundle</div>
+  <a
+    aria-current={page === 'overview' ? 'page' : undefined}
+    className={page === 'overview' ? 'nav-item nav-item--active' : 'nav-item'}
+    href="#overview"
+    onClick={(event) => { event.preventDefault(); onNavigate('overview'); }}
+  >
+    <span aria-hidden="true" className="nav-glyph">⊞</span>
+    Overview
+  </a>
+  <a
+    aria-current={page === 'skills' ? 'page' : undefined}
+    className={page === 'skills' ? 'nav-item nav-item--active' : 'nav-item'}
+    href="#skills"
+    onClick={(event) => { event.preventDefault(); onNavigate('skills'); }}
+  >
+    <span aria-hidden="true" className="nav-glyph">⌘</span>
+    Skills
+  </a>
+</aside>;
+
+const Overview = ({ client, connectionError, onNavigate, status, onStatus }: {
   readonly client: ProjectClient;
   readonly connectionError?: string;
+  readonly onNavigate: (page: WorkbenchPage) => void;
   readonly onStatus: (status: ProjectStatus) => void;
   readonly status: ProjectStatus;
 }) => {
@@ -55,13 +87,7 @@ const Overview = ({ client, connectionError, status, onStatus }: {
 
   return (
     <div className="workbench-shell">
-      <aside className="rail" aria-label="Workbench navigation">
-        <div className="brand">Agent Bundle</div>
-        <a aria-current="page" className="nav-item" href="#overview">
-          <span aria-hidden="true" className="nav-glyph">⊞</span>
-          Overview
-        </a>
-      </aside>
+      <Navigation onNavigate={onNavigate} page="overview" />
       <main className="canvas" id="overview">
         <header className="topbar">
           <span className="menu-glyph" aria-hidden="true">☰</span>
@@ -136,16 +162,45 @@ const Overview = ({ client, connectionError, status, onStatus }: {
   );
 };
 
+const SkillsScreen = ({ connectionError, onNavigate, skillClient, status }: {
+  readonly connectionError?: string;
+  readonly onNavigate: (page: WorkbenchPage) => void;
+  readonly skillClient: SkillClient;
+  readonly status: ProjectStatus;
+}) => <div className="workbench-shell">
+  <Navigation onNavigate={onNavigate} page="skills" />
+  <main className="canvas" id="skills">
+    <header className="topbar">
+      <span className="menu-glyph" aria-hidden="true">☰</span>
+      <span className="topbar-title">Project workbench</span>
+      <span className={`connection${connectionError === undefined ? '' : ' connection--error'}`} role="status">
+        <span aria-hidden="true" />{connectionError === undefined ? 'Foreground server connected' : `Foreground server unavailable: ${connectionError}`}
+      </span>
+    </header>
+    <SkillsPage client={skillClient} status={status} />
+  </main>
+</div>;
+
 const Workbench = () => {
   const client = useRef<ProjectClient>();
+  const skillClient = useRef<SkillClient>();
   const [connectionError, setConnectionError] = useState<string>();
   const [error, setError] = useState<string>();
+  const [page, setPage] = useState<WorkbenchPage>(pageForHash);
   const [status, setStatus] = useState<ProjectStatus>();
+
+  const navigate = (next: WorkbenchPage): void => {
+    const hash = next === 'skills' ? '#skills' : '#overview';
+    if (window.location.hash !== hash) window.history.pushState(undefined, '', hash);
+    setPage(next);
+  };
 
   useEffect(() => {
     const next = new ProjectClient();
+    const nextSkillClient = new SkillClient();
     let mounted = true;
     client.current = next;
+    skillClient.current = nextSkillClient;
     void next.connect(
       (nextStatus) => {
         if (!mounted) return;
@@ -164,8 +219,16 @@ const Workbench = () => {
     };
   }, []);
 
-  if (status !== undefined && client.current !== undefined) {
-    return <Overview client={client.current} connectionError={connectionError} onStatus={setStatus} status={status} />;
+  useEffect(() => {
+    const updatePage = () => setPage(pageForHash());
+    window.addEventListener('hashchange', updatePage);
+    return () => window.removeEventListener('hashchange', updatePage);
+  }, []);
+
+  if (status !== undefined && client.current !== undefined && skillClient.current !== undefined) {
+    return page === 'skills'
+      ? <SkillsScreen connectionError={connectionError} onNavigate={navigate} skillClient={skillClient.current} status={status} />
+      : <Overview client={client.current} connectionError={connectionError} onNavigate={navigate} onStatus={setStatus} status={status} />;
   }
   return <main className="loading-state" aria-live="polite"><strong>Loading project state…</strong>{error === undefined ? undefined : <p role="alert">{error}</p>}</main>;
 };

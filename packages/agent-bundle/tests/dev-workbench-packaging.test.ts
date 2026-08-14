@@ -1,28 +1,48 @@
 import { execFile as executeFile } from 'node:child_process';
-import { access, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 
-import { expect, it } from '@rstest/core';
+import { describe, expect, it } from '@rstest/core';
 
 const execFile = promisify(executeFile);
 const workspaceRoot = process.cwd();
 const packageRoot = join(workspaceRoot, 'packages', 'agent-bundle');
 let built: Promise<void> | undefined;
 
-const buildPackage = async (): Promise<void> => {
+const buildPackage = async (force = false): Promise<void> => {
+  if (force) {
+    await execFile('npm', ['run', 'build'], { cwd: workspaceRoot });
+    return;
+  }
   built ??= execFile('npm', ['run', 'build'], { cwd: workspaceRoot }).then(() => undefined);
   await built;
 };
 
+describe.sequential('workbench package build', () => {
 it('copies stable prebuilt workbench assets and Inspector notices into the package distribution', async () => {
   await buildPackage();
 
   await expect(access(join(packageRoot, 'dist', 'workbench', 'index.html'))).resolves.toBeUndefined();
   await expect(readFile(join(packageRoot, 'dist', 'workbench', 'static', 'js', 'index.js'), 'utf8')).resolves.toContain('Project overview');
   await expect(readFile(join(packageRoot, 'dist', 'workbench', 'THIRD_PARTY_NOTICES'), 'utf8')).resolves.toContain('MCP Inspector');
-});
+}, 60_000);
+
+it('prunes stale copied workbench assets without removing the package library output', async () => {
+  await buildPackage();
+  const workbench = join(packageRoot, 'dist', 'workbench');
+  const stale = join(workbench, 'static', 'js', 'async', 'stale-nested.js');
+  await mkdir(join(workbench, 'static', 'js', 'async'), { recursive: true });
+  await writeFile(stale, 'obsolete workbench output\n');
+  await expect(access(stale)).resolves.toBeUndefined();
+
+  await buildPackage(true);
+
+  await expect(access(stale)).rejects.toThrow();
+  await expect(access(join(packageRoot, 'dist', 'cli.js'))).resolves.toBeUndefined();
+  expect(await readdir(workbench, { recursive: true })).not.toContain('index.js.map');
+}, 60_000);
 
 it('serves prebuilt workbench assets from an installed tarball without the repository source tree', async () => {
   await buildPackage();
@@ -64,3 +84,4 @@ it('serves prebuilt workbench assets from an installed tarball without the repos
     await rm(consumer, { force: true, recursive: true });
   }
 }, 60_000);
+});

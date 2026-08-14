@@ -51,6 +51,8 @@ export interface ServedSkillDocument {
   readonly diagnostics: readonly Diagnostic[];
   readonly frontmatter: Readonly<Record<string, unknown>>;
   readonly id: string;
+  /** Exact source or emitted Markdown for the Source tab; never browser-parsed frontmatter. */
+  readonly markdown: string;
   readonly name: string;
   readonly provenance?: SourceProvenance;
   readonly resources: readonly SkillDocumentResource[];
@@ -127,13 +129,14 @@ const resourcePath = (segments: readonly string[]): string => {
   return segments.join('/');
 };
 
-const sourceSkillDocument = (skill: NormalizedSkill): ServedSkillDocument => Object.freeze({
+const sourceSkillDocument = (skill: NormalizedSkill, document: SkillDocument): ServedSkillDocument => Object.freeze({
   base: Object.freeze({ kind: 'source', skillId: skill.id }),
-  body: skill.body,
+  body: document.body,
   ...(skill.description === undefined ? {} : { description: skill.description }),
-  diagnostics: Object.freeze([]),
-  frontmatter: Object.freeze(structuredClone(skill.frontmatter)),
+  diagnostics: freezeDiagnostics(document.diagnostics),
+  frontmatter: Object.freeze(structuredClone(document.frontmatter)),
   id: skill.id,
+  markdown: document.markdown,
   name: skill.name,
   provenance: Object.freeze({ ...skill.provenance }),
   resources: Object.freeze(skill.resources.map((resource) => Object.freeze({
@@ -156,6 +159,7 @@ const generatedSkillDocument = (
     diagnostics: freezeDiagnostics(document.diagnostics),
     frontmatter: Object.freeze(structuredClone(document.frontmatter)),
     id: base.skillId,
+    markdown: document.markdown,
     name,
     resources: documentResources(document.resources),
   });
@@ -234,13 +238,13 @@ export class SkillDocumentService {
     const prepared = await this.#projectService.prepare('inspect');
     return Object.freeze({
       diagnostics: freezeDiagnostics(prepared.diagnostics),
-      skills: Object.freeze((prepared.model?.skills ?? []).map(sourceSkillDocument)),
+      skills: Object.freeze(await Promise.all((prepared.model?.skills ?? []).map((skill) => this.#sourceDocument(skill)))),
     });
   }
 
   async source(skillId: string): Promise<ServedSkillDocument> {
     const skill = await this.#sourceSkill(skillId);
-    return sourceSkillDocument(skill);
+    return this.#sourceDocument(skill);
   }
 
   async sourceResource(skillId: string, segments: readonly string[]): Promise<ServedSkillResource> {
@@ -294,6 +298,14 @@ export class SkillDocumentService {
       throw new SkillDocumentError('SKILL_DOCUMENT_UNAVAILABLE', 'Source Skill is not available from the current normalized project.');
     }
     return skill;
+  }
+
+  async #sourceDocument(skill: NormalizedSkill): Promise<ServedSkillDocument> {
+    const document = await parseSkill(skill.dir, this.#root);
+    if (document.diagnostics.some((entry) => entry.code === 'AB3000')) {
+      throw new SkillDocumentError('SKILL_DOCUMENT_UNAVAILABLE', 'Source Skill Markdown is not available.');
+    }
+    return sourceSkillDocument(skill, document);
   }
 
   async #withEpochTarget<Result>(
