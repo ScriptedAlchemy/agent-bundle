@@ -345,7 +345,7 @@ it('lists and simulates only validated wrappers from a clean copied artifact', a
   }
 }, 15_000);
 
-it('escalates timed-out and aborted generated wrappers from TERM to KILL before settling', async () => {
+it('escalates timed-out and aborted wrapper process trees from TERM to KILL before settling', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-hooks-service-termination-'));
   const consumer = await mkdtemp(join(tmpdir(), 'agent-bundle-hooks-service-termination-consumer-'));
   const sourceRoot = join(root, 'src', 'hooks');
@@ -358,6 +358,8 @@ it('escalates timed-out and aborted generated wrappers from TERM to KILL before 
     targets: [base.targets[0]!],
   };
   const service = new HookService();
+  const descendantPidPath = join(root, 'descendant.pid');
+  const previousDescendantPidPath = process.env.AGENT_BUNDLE_HOOK_TREE_TEST_PID;
   const input = {
     cwd: '/workspace',
     sessionId: 'session-1',
@@ -372,7 +374,11 @@ it('escalates timed-out and aborted generated wrappers from TERM to KILL before 
     await Promise.all([
       writeFile(join(root, 'package.json'), '{"type":"module"}\n'),
       writeFile(join(sourceRoot, 'check-command.ts'), [
+        "import { spawn } from 'node:child_process';",
+        "import { writeFile } from 'node:fs/promises';",
         "process.on('SIGTERM', () => process.stderr.write('ignored TERM\\n'));",
+        "const descendant = spawn(process.execPath, ['-e', 'setInterval(() => undefined, 1_000)'], { stdio: 'inherit' });",
+        "if (process.env.AGENT_BUNDLE_HOOK_TREE_TEST_PID !== undefined) await writeFile(process.env.AGENT_BUNDLE_HOOK_TREE_TEST_PID, String(descendant.pid), 'utf8');",
         'setInterval(() => undefined, 1_000);',
         'export default () => new Promise(() => undefined);',
         '',
@@ -380,13 +386,34 @@ it('escalates timed-out and aborted generated wrappers from TERM to KILL before 
     ]);
     await build({ model, outputRoot, projectRoot: root, registry: createDefaultRegistry() });
     await cp(outputRoot, artifact, { recursive: true });
+    process.env.AGENT_BUNDLE_HOOK_TREE_TEST_PID = descendantPidPath;
 
-    await expect(service.simulate({
+    const timedOut = service.simulate({
       artifact,
       hook: base.hooks[1]!.id,
       input,
       target: 'codex',
-    })).rejects.toThrow('Hook simulation timed out.');
+    });
+    const settlement = await Promise.race([
+      timedOut.then(
+        () => ({ status: 'resolved' as const }),
+        (error: unknown) => ({ error, status: 'rejected' as const }),
+      ),
+      new Promise<{ readonly status: 'overdue' }>((resolvePromise) => {
+        setTimeout(() => resolvePromise({ status: 'overdue' }), 2_000);
+      }),
+    ]);
+    if (settlement.status === 'overdue') {
+      if (process.platform !== 'win32') {
+        const descendantPid = Number(await readFile(descendantPidPath, 'utf8'));
+        process.kill(descendantPid, 'SIGKILL');
+      }
+      await timedOut.catch(() => undefined);
+      throw new Error('Hook simulation did not settle after its wrapper was terminated because a descendant retained its pipes.');
+    }
+    if (settlement.status === 'resolved') throw new Error('Expected timed-out hook simulation to reject.');
+    expect(settlement.error).toBeInstanceOf(Error);
+    expect((settlement.error as Error).message).toBe('Hook simulation timed out.');
 
     const controller = new AbortController();
     const pending = service.simulate({
@@ -399,6 +426,8 @@ it('escalates timed-out and aborted generated wrappers from TERM to KILL before 
     setTimeout(() => controller.abort(), 25);
     await expect(pending).rejects.toThrow('Hook simulation aborted.');
   } finally {
+    if (previousDescendantPidPath === undefined) delete process.env.AGENT_BUNDLE_HOOK_TREE_TEST_PID;
+    else process.env.AGENT_BUNDLE_HOOK_TREE_TEST_PID = previousDescendantPidPath;
     await Promise.all([
       rm(root, { force: true, recursive: true }),
       rm(consumer, { force: true, recursive: true }),

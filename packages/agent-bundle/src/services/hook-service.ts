@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { isAbsolute, posix, resolve } from 'node:path';
 
@@ -66,6 +66,29 @@ const parseHookIndex = (value: string): ArtifactHookIndex | undefined => {
   }
 };
 
+const terminateProcessTree = (child: ChildProcess, signal: NodeJS.Signals): void => {
+  if (child.pid === undefined) {
+    child.kill(signal);
+    return;
+  }
+  if (process.platform === 'win32') {
+    const taskkill = spawn('taskkill', [
+      '/pid',
+      String(child.pid),
+      '/t',
+      ...(signal === 'SIGKILL' ? ['/f'] : []),
+    ], { stdio: 'ignore', windowsHide: true });
+    taskkill.once('error', () => { child.kill(signal); });
+    return;
+  }
+  try {
+    process.kill(-child.pid, signal);
+  } catch (error) {
+    if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ESRCH') return;
+    child.kill(signal);
+  }
+};
+
 const runWrapper = async (options: {
   readonly cwd: string;
   readonly input: Record<string, unknown>;
@@ -91,6 +114,7 @@ const runWrapper = async (options: {
 
   const child = spawn(process.execPath, [options.wrapper], {
     cwd: options.cwd,
+    detached: process.platform !== 'win32',
     env: { ...process.env, AGENT_BUNDLE_HOOK_SIMULATION: '1' },
     stdio: ['pipe', 'pipe', 'pipe'],
   });
@@ -115,9 +139,9 @@ const runWrapper = async (options: {
   const terminate = (error: Error) => {
     if (terminationError !== undefined || closed) return;
     terminationError = error;
-    child.kill('SIGTERM');
+    terminateProcessTree(child, 'SIGTERM');
     forceKillTimer = setTimeout(() => {
-      if (!closed) child.kill('SIGKILL');
+      if (!closed) terminateProcessTree(child, 'SIGKILL');
     }, terminationGraceMs);
   };
   const onAbort = () => terminate(new Error('Hook simulation aborted.'));

@@ -1,10 +1,13 @@
-import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { cp, mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { basename, dirname, join } from 'node:path';
 
 import claudeCapabilityTable from '../adapters/capabilities/claude-2.1.232.json' with { type: 'json' };
 import codexCapabilityTable from '../adapters/capabilities/codex-0.147.0.json' with { type: 'json' };
 import type { ArtifactHook } from '../build/emit.ts';
+import { listArtifactFiles } from '../build/emit.ts';
 import type { CanonicalHookEvent } from '../core/types.ts';
+import { digest } from '../core/digest.ts';
 import { HookService } from '../services/hook-service.ts';
 import { EpochStore, type EpochReference } from './epoch-store.ts';
 
@@ -100,6 +103,7 @@ const canonicalEvents: readonly CanonicalHookEvent[] = [
   'afterTool',
   'stop',
 ];
+const epochStagingMarkerName = '.agent-bundle-epoch-stage.json';
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -253,6 +257,43 @@ const canonicalResultFor = (value: unknown): CanonicalHookResult | undefined => 
   return cloneRecord(value);
 };
 
+const storedTargetDigestFor = async (
+  reference: EpochReference,
+  target: HookPlaygroundTarget,
+): Promise<string> => {
+  const epochId = basename(reference.root);
+  let document: unknown;
+  try {
+    document = JSON.parse(await readFile(join(dirname(reference.root), '.metadata', `${epochId}.json`), 'utf8'));
+  } catch {
+    throw new Error(`Referenced epoch ${JSON.stringify(epochId)} has unreadable persisted metadata.`);
+  }
+  if (!isRecord(document) || !isRecord(document.epoch) || document.epoch.id !== epochId || !isRecord(document.epoch.targetDigests)) {
+    throw new Error(`Referenced epoch ${JSON.stringify(epochId)} has invalid persisted metadata.`);
+  }
+  const targetDigest = document.epoch.targetDigests[target];
+  if (typeof targetDigest !== 'string') {
+    throw new Error(`Referenced epoch ${JSON.stringify(epochId)} has no stored digest for target ${JSON.stringify(target)}.`);
+  }
+  return targetDigest;
+};
+
+const assertTargetDigest = async (
+  artifact: string,
+  target: HookPlaygroundTarget,
+  expected: string,
+): Promise<void> => {
+  let actual: string;
+  try {
+    actual = digest(await listArtifactFiles(join(artifact, target)));
+  } catch {
+    throw new Error(`Hook playground target ${JSON.stringify(target)} cannot be verified against its stored digest.`);
+  }
+  if (actual !== expected) {
+    throw new Error(`Hook playground target ${JSON.stringify(target)} does not match its stored digest.`);
+  }
+};
+
 /**
  * Runs emitted hook wrappers from immutable epochs and records their canonical/native codec trace.
  * The only executor is HookService, which invokes the generated target wrapper.
@@ -285,7 +326,7 @@ export class HookPlaygroundService {
   ): Promise<HookPlaygroundSimulation>;
   async simulate(options: HookPlaygroundSimulationOptions): Promise<HookPlaygroundSimulation | HookPlaygroundDiagnosticResult>;
   async simulate(options: HookPlaygroundSimulationOptions): Promise<HookPlaygroundSimulation | HookPlaygroundDiagnosticResult> {
-    return this.#withEpoch(options.epochId, async (artifact) => {
+    return this.#withEpoch(options.epochId, async (artifact, reference) => {
       const hooks = await this.#hookService.list({ allowEpochStagingMarker: true, artifact });
       const matching = hooks.filter((hook) => hook.id === options.hook || hook.name === options.hook);
       if (matching.length === 0) throw new Error(`Expected one hook matching ${JSON.stringify(options.hook)}.`);
@@ -293,28 +334,34 @@ export class HookPlaygroundService {
       const example = matching[0]!;
       if (options.target !== 'claude' && options.target !== 'codex') return unsupportedTarget(options.target, example.event);
       if (selected.length !== 1) return unsupportedTarget(options.target, example.event);
-      const hook = selected[0]!;
-      const mapping = await hostMappingFor(artifact, hook);
-      if ('diagnostics' in mapping) return mapping;
-
+      const target: HookPlaygroundTarget = options.target;
       const canonicalInput = inputFor(options.input);
-      const canonicalResult = canonicalResultFor(await this.#hookService.simulate({
-        allowEpochStagingMarker: true,
-        artifact,
-        hook: options.hook,
-        input: canonicalInput,
-        ...(options.signal === undefined ? {} : { signal: options.signal }),
-        target: options.target,
-      }));
-      const binding = Object.freeze({ epochId: options.epochId, hook: options.hook, target: options.target });
-      return Object.freeze({
-        binding,
-        canonicalIntent: Object.freeze({ event: mapping.canonicalEvent, hook: options.hook, input: cloneRecord(canonicalInput) }),
-        canonicalResult,
-        hostMapping: mapping,
-        nativeInput: encodeNativeInput(canonicalInput, mapping),
-        nativeOutput: encodeNativeOutput(canonicalResult, mapping),
-        replay: Object.freeze({ binding: Object.freeze({ ...binding }), input: cloneRecord(canonicalInput) }),
+      return this.#withSimulationArtifact(reference, target, async (simulationArtifact) => {
+        const clonedHooks = await this.#hookService.list({ artifact: simulationArtifact, target });
+        const clonedMatches = clonedHooks.filter((hook) => hook.id === options.hook || hook.name === options.hook);
+        if (clonedMatches.length !== 1) {
+          throw new Error(`Expected exactly one ${target} hook matching ${JSON.stringify(options.hook)} in the simulation clone.`);
+        }
+        const mapping = await hostMappingFor(simulationArtifact, clonedMatches[0]!);
+        if ('diagnostics' in mapping) return mapping;
+
+        const canonicalResult = canonicalResultFor(await this.#hookService.simulate({
+          artifact: simulationArtifact,
+          hook: options.hook,
+          input: canonicalInput,
+          ...(options.signal === undefined ? {} : { signal: options.signal }),
+          target,
+        }));
+        const binding = Object.freeze({ epochId: options.epochId, hook: options.hook, target });
+        return Object.freeze({
+          binding,
+          canonicalIntent: Object.freeze({ event: mapping.canonicalEvent, hook: options.hook, input: cloneRecord(canonicalInput) }),
+          canonicalResult,
+          hostMapping: mapping,
+          nativeInput: encodeNativeInput(canonicalInput, mapping),
+          nativeOutput: encodeNativeOutput(canonicalResult, mapping),
+          replay: Object.freeze({ binding: Object.freeze({ ...binding }), input: cloneRecord(canonicalInput) }),
+        });
       });
     });
   }
@@ -329,6 +376,26 @@ export class HookPlaygroundService {
       return await action(reference.root, reference);
     } finally {
       await reference.close();
+    }
+  }
+
+  async #withSimulationArtifact<T>(
+    reference: EpochReference,
+    target: HookPlaygroundTarget,
+    action: (artifact: string) => Promise<T>,
+  ): Promise<T> {
+    const targetDigest = await storedTargetDigestFor(reference, target);
+    await assertTargetDigest(reference.root, target, targetDigest);
+    let artifact: string | undefined;
+    try {
+      artifact = await mkdtemp(join(tmpdir(), 'agent-bundle-hook-playground-'));
+      await Promise.all((await readdir(reference.root))
+        .filter((entry) => entry !== epochStagingMarkerName)
+        .map((entry) => cp(join(reference.root, entry), join(artifact!, entry), { recursive: true })));
+      await assertTargetDigest(artifact, target, targetDigest);
+      return await action(artifact);
+    } finally {
+      if (artifact !== undefined) await rm(artifact, { force: true, recursive: true });
     }
   }
 }

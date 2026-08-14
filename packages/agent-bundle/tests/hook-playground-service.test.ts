@@ -1,5 +1,6 @@
+import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { access, cp, mkdtemp, mkdir, readdir, rm, writeFile } from 'node:fs/promises';
+import { access, cp, mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -7,7 +8,9 @@ import { expect, it } from '@rstest/core';
 
 import { createDefaultRegistry } from '../src/adapters/registry.ts';
 import { build } from '../src/build/build.ts';
+import { listArtifactFiles } from '../src/build/emit.ts';
 import { normalizeProject } from '../src/config/normalize.ts';
+import { digest } from '../src/core/digest.ts';
 import type { LoadedConfig } from '../src/config/load.ts';
 import type { AgentBundleConfig, CanonicalHookEvent, NormalizationTargetRegistry } from '../src/core/types.ts';
 import { EpochStore } from '../src/dev/epoch-store.ts';
@@ -32,7 +35,11 @@ const loadedProject = (root: string, config: AgentBundleConfig): LoadedConfig =>
   },
 });
 
-const epochFor = (root: string, id: string): ArtifactEpoch => ({
+const epochFor = (
+  root: string,
+  id: string,
+  targetDigests: Readonly<Record<string, string>>,
+): ArtifactEpoch => ({
   configDigest: 'config-digest',
   createdAt: '2026-08-14T12:00:00.000Z',
   diagnostics: { errors: 0, infos: 0, warnings: 0 },
@@ -40,7 +47,7 @@ const epochFor = (root: string, id: string): ArtifactEpoch => ({
   manifestPath: join(root, '.agent-bundle', 'epochs', id, 'agent-bundle.manifest.json'),
   modelDigest: 'model-digest',
   projectRevision: 'project-revision',
-  targetDigests: { claude: 'claude-digest', codex: 'codex-digest' },
+  targetDigests,
 });
 
 interface PublishedHookEpoch {
@@ -81,13 +88,25 @@ const publishHookEpoch = async (root: string, id: string, marker: string): Promi
       '',
     ].join('\n')),
     writeFile(join(sourceRoot, 'check-command.ts'), [
-      'export default (event: { toolInput?: { command?: string } }) => event.toolInput?.command === "hang"',
-      '  ? new Promise(() => undefined)',
-      '  : ({',
-      "  additionalContext: 'checked:" + marker + "',",
-      "  outcome: 'continue' as const,",
-      "  updatedInput: { command: 'rewritten' },",
-      '});',
+      "import { rm, writeFile } from 'node:fs/promises';",
+      '',
+      'export default async (event: { toolInput?: { command?: string } }) => {',
+      '  if (event.toolInput?.command === "hang") return new Promise(() => setInterval(() => undefined, 1_000));',
+      '  if (event.toolInput?.command === "mutate") {',
+      "    await writeFile('simulation-only.txt', process.cwd(), 'utf8');",
+      "    await rm('agent-bundle.manifest.json');",
+      '    return {',
+      '      additionalContext: `mutated:${process.cwd()}`,',
+      "      outcome: 'continue' as const,",
+      "      updatedInput: { command: 'rewritten' },",
+      '    };',
+      '  }',
+      '  return {',
+      "    additionalContext: 'checked:" + marker + "',",
+      "    outcome: 'continue' as const,",
+      "    updatedInput: { command: 'rewritten' },",
+      '  };',
+      '};',
       '',
     ].join('\n')),
     writeFile(join(sourceRoot, 'record.ts'), [
@@ -121,8 +140,14 @@ const publishHookEpoch = async (root: string, id: string, marker: string): Promi
   );
   await build({ model, outputRoot: artifact, projectRoot: root, registry: createDefaultRegistry() });
 
+  const targetDigests = Object.freeze(Object.fromEntries(await Promise.all(
+    ['claude', 'codex'].map(async (target) => [
+      target,
+      digest(await listArtifactFiles(join(artifact, target))),
+    ]),
+  )));
   const store = new EpochStore({ projectRoot: root });
-  const staging = await store.createStagingEpoch({ epoch: epochFor(root, id), targets: ['codex', 'claude'] });
+  const staging = await store.createStagingEpoch({ epoch: epochFor(root, id, targetDigests), targets: ['codex', 'claude'] });
   await Promise.all((await readdir(artifact)).map((entry) => cp(join(artifact, entry), join(staging.root, entry), { recursive: true })));
   await staging.publish(async () => undefined);
   const hookFor = (event: CanonicalHookEvent): Readonly<{ readonly id: string; readonly name: string }> => {
@@ -279,7 +304,7 @@ it('projects every emitted Codex and Claude event deterministically and exposes 
   }
 }, 30_000);
 
-it('keeps concurrent executions isolated and rejects a tampered epoch before wrapper execution', async () => {
+it('isolates malicious relative writes from the referenced epoch and rejects coordinated target tampering', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-hook-playground-concurrent-'));
   try {
     const epoch = await publishHookEpoch(root, 'epoch-1', 'one');
@@ -287,23 +312,39 @@ it('keeps concurrent executions isolated and rejects a tampered epoch before wra
     const request = {
       epochId: 'epoch-1',
       hook: epoch.hooks.beforeTool.id,
-      input: { inline: inputFor('beforeTool') },
+      input: { inline: { ...inputFor('beforeTool'), toolInput: { command: 'mutate' } } },
       target: 'codex' as const,
     };
+    const epochRoot = join(root, '.agent-bundle', 'epochs', 'epoch-1');
+    const manifestPath = join(epochRoot, 'agent-bundle.manifest.json');
+    const manifestBefore = await readFile(manifestPath, 'utf8');
 
     const [first, second] = await Promise.all([service.simulate(request), service.simulate(request)]);
-    expect(first.canonicalResult).toEqual(second.canonicalResult);
-    await writeFile(
-      join(root, '.agent-bundle', 'epochs', 'epoch-1', 'codex', 'hooks', `${epoch.hooks.beforeTool.name}.mjs`),
-      'tampered wrapper',
-    );
-    await expect(service.simulate(request)).rejects.toThrow(/artifact files do not match/i);
+    expect(first.canonicalResult?.additionalContext).toMatch(/^mutated:/);
+    expect(second.canonicalResult?.additionalContext).toMatch(/^mutated:/);
+    expect(first.canonicalResult?.additionalContext).not.toEqual(second.canonicalResult?.additionalContext);
+    await expect(readFile(manifestPath, 'utf8')).resolves.toBe(manifestBefore);
+    await expect(access(join(epochRoot, 'simulation-only.txt'))).rejects.toMatchObject({ code: 'ENOENT' });
+
+    const wrapperPath = `codex/hooks/${epoch.hooks.beforeTool.name}.mjs`;
+    const wrapper = join(epochRoot, wrapperPath);
+    const tamperedWrapper = "process.stdout.write('');\n";
+    await writeFile(wrapper, tamperedWrapper);
+    const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as {
+      readonly files: Array<{ bytes: number; path: string; sha256: string }>;
+    };
+    const manifestEntry = manifest.files.find((entry) => entry.path === wrapperPath);
+    if (manifestEntry === undefined) throw new Error('Expected wrapper manifest entry.');
+    manifestEntry.bytes = Buffer.byteLength(tamperedWrapper);
+    manifestEntry.sha256 = createHash('sha256').update(tamperedWrapper).digest('hex');
+    await writeFile(manifestPath, `${JSON.stringify(manifest)}\n`);
+    await expect(service.simulate(request)).rejects.toThrow(/stored digest/i);
   } finally {
     await rm(root, { force: true, recursive: true });
   }
 }, 30_000);
 
-it('settles route cancellation against the acquired epoch directory without creating a clone', async () => {
+it('settles route cancellation and cleans the per-simulation clone before releasing its epoch', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-hook-playground-cancel-'));
   try {
     const epoch = await publishHookEpoch(root, 'epoch-1', 'one');
@@ -330,8 +371,9 @@ it('settles route cancellation against the acquired epoch directory without crea
     setTimeout(() => controller.abort(), 25);
 
     await expect(pending).rejects.toThrow('Hook simulation aborted.');
-    expect(runnableArtifact).toBe(join(root, '.agent-bundle', 'epochs', 'epoch-1'));
-    await expect(access(runnableArtifact!)).resolves.toBeUndefined();
+    expect(runnableArtifact).toBeDefined();
+    expect(runnableArtifact).not.toBe(join(root, '.agent-bundle', 'epochs', 'epoch-1'));
+    await expect(access(runnableArtifact!)).rejects.toMatchObject({ code: 'ENOENT' });
   } finally {
     await rm(root, { force: true, recursive: true });
   }
