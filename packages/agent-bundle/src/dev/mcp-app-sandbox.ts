@@ -73,6 +73,53 @@ export interface McpAppSandboxProxy {
   close(): Promise<void>;
 }
 
+export const MCP_APP_SANDBOX_NOTIFICATION_TYPES = Object.freeze([
+  'sandbox/ready',
+  'sandbox/resource-ready',
+  'sandbox/initialized',
+  'sandbox/close',
+] as const);
+
+type McpAppSandboxNotificationType = typeof MCP_APP_SANDBOX_NOTIFICATION_TYPES[number];
+
+export type McpAppSandboxLifecycle = 'created' | 'ready' | 'resource-pending' | 'resource-ready' | 'initialized' | 'closed';
+
+export interface McpAppSandboxMessage {
+  readonly type: string;
+  readonly [key: string]: unknown;
+}
+
+export interface McpAppSandboxMessageEvent {
+  readonly data: unknown;
+  readonly origin: string;
+  readonly source: unknown;
+}
+
+export interface McpAppSandboxWindow {
+  postMessage(message: unknown, targetOrigin: string): void;
+}
+
+export interface McpAppSandboxResource {
+  readonly declaration?: McpAppSandboxDeclaration;
+  readonly html: string;
+}
+
+export interface CreateMcpAppSandboxBridgeOptions {
+  readonly maxMessageBytes?: number;
+  readonly maxQueuedMessages?: number;
+  readonly onMessage?: (message: McpAppSandboxMessage) => void;
+  readonly proxyOrigin: string;
+  readonly proxyWindow: McpAppSandboxWindow;
+}
+
+export interface McpAppSandboxBridge {
+  readonly lifecycle: McpAppSandboxLifecycle;
+  close(): void;
+  provideResource(resource: McpAppSandboxResource): boolean;
+  receive(event: McpAppSandboxMessageEvent): boolean;
+  send(message: McpAppSandboxMessage): boolean;
+}
+
 const cspSources = (sources: readonly string[] | undefined): readonly string[] => {
   const accepted = new Set<string>();
   for (const source of sources ?? []) {
@@ -100,6 +147,16 @@ const permissionPolicy = (permissions: McpAppSandboxPermissions | undefined): st
     ['microphone', 'microphone'],
   ];
   return entries.map(([key, directive]) => `${directive}=(${permissions?.[key] === true ? 'self' : ''})`).join(', ');
+};
+
+const iframeAllow = (permissions: McpAppSandboxPermissions | undefined): string => {
+  const entries: readonly [keyof McpAppSandboxPermissions, string][] = [
+    ['camera', 'camera'],
+    ['clipboardWrite', 'clipboard-write'],
+    ['geolocation', 'geolocation'],
+    ['microphone', 'microphone'],
+  ];
+  return entries.filter(([key]) => permissions?.[key] === true).map(([, directive]) => directive).join('; ');
 };
 
 export const deriveMcpAppSandboxPolicy = (declaration: McpAppSandboxDeclaration): McpAppSandboxPolicy => {
@@ -132,6 +189,123 @@ const originOf = (value: string): string => {
     throw new TypeError('hostOrigin must not include a path, query, or fragment');
   }
   return parsed.origin;
+};
+
+const maximum = (value: number | undefined, fallback: number, name: string): number => {
+  const resolved = value ?? fallback;
+  if (!Number.isSafeInteger(resolved) || resolved <= 0) {
+    throw new RangeError(`${name} must be a positive safe integer`);
+  }
+  return resolved;
+};
+
+const messageSize = (message: unknown): number | undefined => {
+  try {
+    const serialized = JSON.stringify(message);
+    return typeof serialized === 'string' ? Buffer.byteLength(serialized) : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+const isMessage = (value: unknown, maxMessageBytes: number): value is McpAppSandboxMessage => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const type = (value as { type?: unknown }).type;
+  const size = messageSize(value);
+  return typeof type === 'string' && type.length > 0 && size !== undefined && size <= maxMessageBytes;
+};
+
+const isReservedNotification = (type: string): type is McpAppSandboxNotificationType => (
+  MCP_APP_SANDBOX_NOTIFICATION_TYPES.some((notification) => notification === type)
+);
+
+export const createMcpAppSandboxBridge = (
+  options: CreateMcpAppSandboxBridgeOptions,
+): McpAppSandboxBridge => {
+  const proxyOrigin = originOf(options.proxyOrigin);
+  const maxMessageBytes = maximum(options.maxMessageBytes, 256 * 1024, 'maxMessageBytes');
+  const maxQueuedMessages = maximum(options.maxQueuedMessages, 32, 'maxQueuedMessages');
+  const queuedMessages: McpAppSandboxMessage[] = [];
+  let lifecycle: McpAppSandboxLifecycle = 'created';
+
+  const post = (message: McpAppSandboxMessage): void => {
+    options.proxyWindow.postMessage(message, proxyOrigin);
+  };
+
+  const flush = (): void => {
+    while (queuedMessages.length > 0) {
+      const message = queuedMessages.shift();
+      if (message) post(message);
+    }
+  };
+
+  const close = (): void => {
+    if (lifecycle === 'closed') return;
+    lifecycle = 'closed';
+    queuedMessages.length = 0;
+    post({ type: 'sandbox/close' });
+  };
+
+  return Object.freeze({
+    get lifecycle(): McpAppSandboxLifecycle {
+      return lifecycle;
+    },
+    close,
+    provideResource(resource: McpAppSandboxResource): boolean {
+      if (lifecycle !== 'ready' || typeof resource.html !== 'string' || resource.html.length > maxMessageBytes) return false;
+      const policy = deriveMcpAppSandboxPolicy(resource.declaration ?? {});
+      const message: McpAppSandboxMessage = {
+        allow: iframeAllow(resource.declaration?.permissions),
+        contentSecurityPolicy: policy.contentSecurityPolicy,
+        html: resource.html,
+        type: 'sandbox/resource-ready',
+      };
+      if (!isMessage(message, maxMessageBytes)) return false;
+      lifecycle = 'resource-pending';
+      post(message);
+      return true;
+    },
+    receive(event: McpAppSandboxMessageEvent): boolean {
+      if (lifecycle === 'closed' || event.source !== options.proxyWindow || event.origin !== proxyOrigin) return false;
+      if (!isMessage(event.data, maxMessageBytes)) return false;
+      const message = event.data;
+      switch (message.type) {
+        case 'sandbox/ready':
+          if (lifecycle !== 'created') return false;
+          lifecycle = 'ready';
+          return true;
+        case 'sandbox/resource-ready':
+          if (lifecycle !== 'resource-pending') return false;
+          lifecycle = 'resource-ready';
+          return true;
+        case 'sandbox/initialized':
+          if (lifecycle !== 'resource-ready') return false;
+          lifecycle = 'initialized';
+          flush();
+          return true;
+        case 'sandbox/close':
+          lifecycle = 'closed';
+          queuedMessages.length = 0;
+          return true;
+        default:
+          if (isReservedNotification(message.type) || lifecycle !== 'initialized') return false;
+          options.onMessage?.(message);
+          return true;
+      }
+    },
+    send(message: McpAppSandboxMessage): boolean {
+      if (lifecycle === 'closed' || !isMessage(message, maxMessageBytes) || isReservedNotification(message.type)) return false;
+      if (lifecycle === 'initialized') {
+        post(message);
+        return true;
+      }
+      if ((lifecycle !== 'resource-pending' && lifecycle !== 'resource-ready') || queuedMessages.length >= maxQueuedMessages) {
+        return false;
+      }
+      queuedMessages.push(message);
+      return true;
+    },
+  });
 };
 
 const listen = async (server: Server, port: number): Promise<number> => new Promise((resolve, reject) => {
