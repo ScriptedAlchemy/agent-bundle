@@ -67,13 +67,13 @@ class FailingStartCoordinator extends RecordingCoordinator {
   }
 }
 
-const readReplay = (url: string, lastEventId: string): Promise<string> => new Promise((resolvePromise, rejectPromise) => {
+const readReplay = (url: string, lastEventId: string, expectedSequence = 2): Promise<string> => new Promise((resolvePromise, rejectPromise) => {
   const request = httpGet(`${url}/api/project/events`, { headers: { 'last-event-id': lastEventId } }, (response) => {
     let received = '';
     response.setEncoding('utf8');
     response.on('data', (chunk: string) => {
       received += chunk;
-      if (received.includes('id: 2\n')) {
+      if (received.includes(`id: ${expectedSequence}\n`)) {
         response.destroy();
         resolvePromise(received);
       }
@@ -219,6 +219,60 @@ it('replays project events after Last-Event-ID without re-sending the acknowledg
     expect(replay).toContain('id: 2\n');
     expect(replay).toContain('"paths":["second.ts"]');
     expect(replay).not.toContain('"paths":["first.ts"]');
+  } finally {
+    await server.close();
+  }
+});
+
+it('delivers a large replay to a healthy client and reconnects after its acknowledged cursor', async () => {
+  const eventHub = new ProjectEventHub({ now: () => new Date('2026-08-14T12:00:00.000Z') });
+  eventHub.publish({
+    payload: {
+      occurredAt: '2026-08-14T12:00:00.000Z',
+      paths: ['large.ts', 'x'.repeat(128 * 1024)],
+      reason: 'source-change',
+    },
+    type: 'invalidation',
+  });
+  const server = await startForegroundServer({ coordinator: new RecordingCoordinator(), eventHub, port: 0 });
+
+  try {
+    const first = await within(readReplay(server.url, '0', 1), 500);
+    expect(first).toContain('id: 1\n');
+    expect(first).toContain('"paths":["large.ts"');
+
+    eventHub.publish({
+      payload: { occurredAt: '2026-08-14T12:00:01.000Z', paths: ['next.ts'], reason: 'source-change' },
+      type: 'invalidation',
+    });
+    const next = await within(readReplay(server.url, '1', 2), 500);
+    expect(next).toContain('"paths":["next.ts"]');
+    expect(next).not.toContain('"paths":["large.ts"');
+  } finally {
+    await server.close();
+  }
+});
+
+it('drains queued replay events in sequence after a healthy client clears backpressure', async () => {
+  const eventHub = new ProjectEventHub({ now: () => new Date('2026-08-14T12:00:00.000Z') });
+  eventHub.publish({
+    payload: {
+      occurredAt: '2026-08-14T12:00:00.000Z',
+      paths: ['first-large.ts', 'x'.repeat(128 * 1024)],
+      reason: 'source-change',
+    },
+    type: 'invalidation',
+  });
+  eventHub.publish({
+    payload: { occurredAt: '2026-08-14T12:00:01.000Z', paths: ['queued-next.ts'], reason: 'source-change' },
+    type: 'invalidation',
+  });
+  const server = await startForegroundServer({ coordinator: new RecordingCoordinator(), eventHub, port: 0 });
+
+  try {
+    const replay = await within(readReplay(server.url, '0', 2), 500);
+    expect(replay.indexOf('id: 1\n')).toBeLessThan(replay.indexOf('id: 2\n'));
+    expect(replay).toContain('"paths":["queued-next.ts"]');
   } finally {
     await server.close();
   }
@@ -558,6 +612,52 @@ it('rejects non-JSON and over-limit rebuild bodies with stable drained diagnosti
   }
 });
 
+it('accepts only application/json with an optional UTF-8 charset parameter', async () => {
+  const coordinator = new RecordingCoordinator();
+  const server = await startForegroundServer({
+    coordinator,
+    eventHub: new ProjectEventHub(),
+    port: 0,
+    sessionToken: 'test-session-token',
+  });
+  const headers = { origin: server.url, 'x-agent-bundle-session': server.sessionToken };
+
+  try {
+    for (const contentType of [
+      'application/json',
+      'Application/Json; Charset=UTF-8',
+      'application/json; charset="utf-8"',
+    ]) {
+      const response = await fetch(`${server.url}/api/project/rebuild`, {
+        body: '{}',
+        headers: { ...headers, 'content-type': contentType },
+        method: 'POST',
+      });
+      expect(response.status).toBe(200);
+    }
+
+    for (const contentType of [
+      'application/json; charset=iso-8859-1',
+      'application/json; profile=workbench',
+      'application/json; charset=utf-8; charset=utf-8',
+      'application/json; charset=',
+    ]) {
+      const response = await fetch(`${server.url}/api/project/rebuild`, {
+        body: '{}',
+        headers: { ...headers, 'content-type': contentType },
+        method: 'POST',
+      });
+      expect(response.status).toBe(415);
+      await expect(response.json()).resolves.toEqual({
+        diagnostic: { code: 'AB8009', message: 'Request body must use application/json.' },
+      });
+    }
+    expect(coordinator.invalidations).toHaveLength(3);
+  } finally {
+    await server.close();
+  }
+});
+
 it('does not bind after close races a delayed startup', async () => {
   const blocker = createNodeServer();
   await new Promise<void>((resolvePromise) => blocker.listen({ host: '127.0.0.1', port: 0 }, resolvePromise));
@@ -585,7 +685,7 @@ it('does not bind after close races a delayed startup', async () => {
   }
 });
 
-it('closes and releases a slow SSE client after write backpressure', async () => {
+it('closes and releases a slow SSE client after sustained write backpressure', async () => {
   const eventHub = new ProjectEventHub({ now: () => new Date('2026-08-14T12:00:00.000Z') });
   const server = await startForegroundServer({ coordinator: new RecordingCoordinator(), eventHub, port: 0 });
   const stream = openLiveStream(server.url);
@@ -593,14 +693,16 @@ it('closes and releases a slow SSE client after write backpressure', async () =>
   try {
     await expect(within(stream.opened, 250)).resolves.toBeUndefined();
     stream.pause();
-    eventHub.publish({
-      payload: {
-        occurredAt: '2026-08-14T12:00:00.000Z',
-        paths: ['slow.ts', 'x'.repeat(128 * 1024)],
-        reason: 'source-change',
-      },
-      type: 'invalidation',
-    });
+    for (const index of [0, 1, 2, 3]) {
+      eventHub.publish({
+        payload: {
+          occurredAt: '2026-08-14T12:00:00.000Z',
+          paths: [`slow-${index}.ts`, 'x'.repeat(128 * 1024)],
+          reason: 'source-change',
+        },
+        type: 'invalidation',
+      });
+    }
 
     await expect(eventually(() => eventHub.subscriptionCount === 0, 250)).resolves.toBeUndefined();
   } finally {

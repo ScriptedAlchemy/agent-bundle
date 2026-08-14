@@ -7,6 +7,13 @@ import type { Invalidation, ProjectEventMessage, ProjectStatus } from './types.t
 
 const bodyLimit = 64 * 1024;
 const loopbackHosts = new Set(['127.0.0.1', '::1']);
+const sseQueueByteLimit = 256 * 1024;
+const sseQueueEventLimit = 8;
+
+interface QueuedSseFrame {
+  readonly bytes: number;
+  readonly frame: string;
+}
 
 export type ForegroundServerErrorCode = 'AB8000';
 
@@ -140,8 +147,26 @@ const readBody = async (request: IncomingMessage): Promise<string> => new Promis
   request.once('error', rejectPromise);
 });
 
-const isJsonRequest = (request: IncomingMessage): boolean =>
-  singleHeader(request.headers['content-type'])?.split(';', 1)[0]?.trim().toLowerCase() === 'application/json';
+const isJsonRequest = (request: IncomingMessage): boolean => {
+  const contentType = singleHeader(request.headers['content-type']);
+  if (contentType === undefined) return false;
+  const parts = contentType.split(';').map((part) => part.trim());
+  if (parts.shift()?.toLowerCase() !== 'application/json') return false;
+  if (parts.length === 0) return true;
+  if (parts.length !== 1) return false;
+  const parameter = parts[0]!;
+  const equals = parameter.indexOf('=');
+  if (equals < 1 || parameter.slice(0, equals).trim().toLowerCase() !== 'charset') return false;
+  const rawValue = parameter.slice(equals + 1).trim();
+  const value = unquoteHeaderValue(rawValue);
+  return value?.toLowerCase() === 'utf-8';
+};
+
+const unquoteHeaderValue = (value: string): string | undefined => {
+  if (/^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/u.test(value)) return value;
+  if (!/^"(?:[^"\\\r\n]|\\[\t !-~])*"$/u.test(value)) return undefined;
+  return value.slice(1, -1).replace(/\\([\t !-~])/gu, '$1');
+};
 
 const decodedAssetPath = (requestTarget: string | undefined): string => {
   const pathname = requestTarget?.split(/[?#]/u, 1)[0];
@@ -439,27 +464,65 @@ export class ForegroundServer {
     });
     response.flushHeaders();
     let backpressured = false;
-    let deliveryReady = false;
-    const subscription = this.#eventHub.subscribe({ afterSequence: sequence }, (event) => {
-      if (!response.writableEnded && !response.destroyed && !response.write(eventFrame(event))) {
-        backpressured = true;
-        if (deliveryReady) closeSlowStream();
-        else response.destroy();
-      }
-    });
+    let closed = false;
+    let queuedBytes = 0;
+    const queued: QueuedSseFrame[] = [];
+    const stream = { subscription: undefined as ProjectEventSubscription | undefined };
     const unsubscribe = () => {
-      subscription.unsubscribe();
-      this.#streamSubscriptions.delete(subscription);
+      stream.subscription?.unsubscribe();
+      if (stream.subscription !== undefined) this.#streamSubscriptions.delete(stream.subscription);
+      queued.length = 0;
+      queuedBytes = 0;
+    };
+    const closeStream = () => {
+      closed = true;
+      unsubscribe();
     };
     const closeSlowStream = () => {
-      unsubscribe();
+      closeStream();
       response.destroy();
     };
+    const drain = () => {
+      if (closed || response.writableEnded || response.destroyed) return;
+      backpressured = false;
+      while (queued.length > 0) {
+        const next = queued.shift()!;
+        queuedBytes -= next.bytes;
+        if (!response.write(next.frame)) {
+          backpressured = true;
+          response.once('drain', drain);
+          return;
+        }
+      }
+    };
+    const deliver = (frame: string) => {
+      if (closed || response.writableEnded || response.destroyed) return;
+      if (!backpressured) {
+        if (!response.write(frame)) {
+          backpressured = true;
+          response.once('drain', drain);
+        }
+        return;
+      }
+      const bytes = Buffer.byteLength(frame);
+      if (queued.length >= sseQueueEventLimit || queuedBytes + bytes > sseQueueByteLimit) {
+        closeSlowStream();
+        return;
+      }
+      queued.push({ bytes, frame });
+      queuedBytes += bytes;
+    };
+    const subscription = this.#eventHub.subscribe({ afterSequence: sequence }, (event) => {
+      deliver(eventFrame(event));
+    });
+    stream.subscription = subscription;
+    if (closed || request.destroyed || response.destroyed) {
+      closeStream();
+      return;
+    }
     this.#streamSubscriptions.add(subscription);
-    deliveryReady = true;
-    request.once('close', unsubscribe);
-    response.once('close', unsubscribe);
-    if (backpressured || request.destroyed || response.destroyed) closeSlowStream();
+    request.once('close', closeStream);
+    response.once('close', closeStream);
   }
 
   async #serveAsset(request: IncomingMessage, response: ServerResponse, method: string): Promise<void> {
