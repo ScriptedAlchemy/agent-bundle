@@ -107,22 +107,20 @@ const terminateProcessTree = (
       options.onTreeTerminationFailure();
       child.kill(signal);
     };
-    let taskkillProcess: ChildProcess;
     try {
-      taskkillProcess = options.taskkill([
-      '/pid',
-      String(child.pid),
-      '/t',
-      ...(signal === 'SIGKILL' ? ['/f'] : []),
+      const taskkillProcess = options.taskkill([
+        '/pid',
+        String(child.pid),
+        '/t',
+        ...(signal === 'SIGKILL' ? ['/f'] : []),
       ]);
+      taskkillProcess.once('error', fallback);
+      taskkillProcess.once('close', (code) => {
+        if (code !== 0) fallback();
+      });
     } catch {
       fallback();
-      return;
     }
-    taskkillProcess.once('error', fallback);
-    taskkillProcess.once('close', (code) => {
-      if (code !== 0) fallback();
-    });
     return;
   }
   try {
@@ -198,11 +196,12 @@ const runWrapper = async (options: {
       if (closed) return;
       terminateTree('SIGKILL');
       terminationSettlementTimer = setTimeout(() => {
-        if (closed || terminationError === undefined) return;
+        const errorToReport = terminationError;
+        if (closed || errorToReport === undefined) return;
         child.stdin.destroy();
         child.stdout.destroy();
         child.stderr.destroy();
-        settle(() => reject(new HookSimulationTerminationError(terminationError!)));
+        settle(() => reject(new HookSimulationTerminationError(errorToReport)));
       }, terminationSettlementMs);
     }, terminationGraceMs);
   };
@@ -229,10 +228,11 @@ const runWrapper = async (options: {
   });
   child.once('close', (code) => {
     closed = true;
-    if (terminationError !== undefined) {
+    const errorToReport = terminationError;
+    if (errorToReport !== undefined) {
       settle(() => reject(treeTerminationFailed
-        ? new HookSimulationTerminationError(terminationError!)
-        : terminationError!));
+        ? new HookSimulationTerminationError(errorToReport)
+        : errorToReport));
       return;
     }
     if (streamLimitExceeded) {

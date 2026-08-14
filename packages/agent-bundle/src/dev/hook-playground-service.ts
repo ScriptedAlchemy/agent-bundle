@@ -118,13 +118,19 @@ const cloneAndFreeze = (value: unknown, seen = new WeakSet<object>()): unknown =
   if (typeof value !== 'object') throw new TypeError('Hook playground values must be JSON-compatible.');
   if (seen.has(value)) throw new TypeError('Hook playground values must not contain cycles.');
   seen.add(value);
-  const cloned = Array.isArray(value)
-    ? Object.freeze(value.map((item) => cloneAndFreeze(item, seen)))
-    : isRecord(value)
-      ? Object.freeze(Object.fromEntries(Object.entries(value).map(([key, item]) => [key, cloneAndFreeze(item, seen)])))
-      : undefined;
+  if (Array.isArray(value)) {
+    const cloned = Object.freeze(value.map((item) => cloneAndFreeze(item, seen)));
+    seen.delete(value);
+    return cloned;
+  }
+  if (!isRecord(value)) {
+    seen.delete(value);
+    throw new TypeError('Hook playground values must be plain JSON objects.');
+  }
+  const cloned = Object.freeze(Object.fromEntries(
+    Object.entries(value).map(([key, item]) => [key, cloneAndFreeze(item, seen)]),
+  ));
   seen.delete(value);
-  if (cloned === undefined) throw new TypeError('Hook playground values must be plain JSON objects.');
   return cloned;
 };
 
@@ -235,18 +241,14 @@ const encodeNativeOutput = (
       ? cloneRecord(defined({ decision: 'block', reason: result.reason }))
       : undefined;
   }
+  const beforeTool = mapping.canonicalEvent === 'beforeTool';
+  const denied = result.outcome === 'deny';
   const output = defined({
     additionalContext: result.additionalContext,
     hookEventName: mapping.nativeEvent,
-    permissionDecision: mapping.canonicalEvent === 'beforeTool'
-      ? result.outcome === 'deny' ? 'deny' : 'allow'
-      : undefined,
-    permissionDecisionReason: mapping.canonicalEvent === 'beforeTool' && result.outcome === 'deny'
-      ? result.reason
-      : undefined,
-    updatedInput: mapping.canonicalEvent === 'beforeTool' && result.outcome !== 'deny'
-      ? result.updatedInput
-      : undefined,
+    permissionDecision: beforeTool ? (denied ? 'deny' : 'allow') : undefined,
+    permissionDecisionReason: beforeTool && denied ? result.reason : undefined,
+    updatedInput: beforeTool && !denied ? result.updatedInput : undefined,
   });
   return Object.keys(output).length === 1 && output.hookEventName !== undefined
     ? undefined
@@ -390,9 +392,8 @@ export class HookPlaygroundService {
   ): Promise<T> {
     const targetDigest = await storedTargetDigestFor(reference, target);
     await assertTargetDigest(reference.root, target, targetDigest);
-    let artifact: string | undefined;
+    const artifact = await mkdtemp(join(tmpdir(), 'agent-bundle-hook-playground-'));
     try {
-      artifact = await mkdtemp(join(tmpdir(), 'agent-bundle-hook-playground-'));
       for (const entry of await readdir(reference.root)) {
         if (entry === epochStagingMarkerName) continue;
         await this.#copy(join(reference.root, entry), join(artifact, entry), { recursive: true });
@@ -400,7 +401,7 @@ export class HookPlaygroundService {
       await assertTargetDigest(artifact, target, targetDigest);
       return await action(artifact);
     } finally {
-      if (artifact !== undefined) await rm(artifact, { force: true, recursive: true });
+      await rm(artifact, { force: true, recursive: true });
     }
   }
 }
