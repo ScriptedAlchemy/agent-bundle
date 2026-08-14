@@ -9,7 +9,8 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "rslib build",
+    "build": "npm run build:workbench && rslib build",
+    "build:workbench": "npm run build --workspace agent-bundle-workbench",
     "test": "rstest --config rstest.config.ts",
     "test:watch": "rstest --config rstest.config.ts --watch",
     "lint": "rslint .",

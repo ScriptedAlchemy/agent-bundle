@@ -12,6 +12,10 @@ export default defineConfig({
   ],
   output: {
     cleanDistPath: true,
+    copy: [
+      { from: './packages/workbench/dist', to: 'workbench' },
+      { from: './packages/workbench/THIRD_PARTY_NOTICES', to: 'workbench/THIRD_PARTY_NOTICES', toType: 'file' },
+    ],
     filenameHash: false,
     distPath: {
       root: './packages/agent-bundle/dist',

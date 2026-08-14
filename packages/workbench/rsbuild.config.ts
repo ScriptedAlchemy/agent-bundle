@@ -12,12 +12,16 @@ const vendorRoot = resolve(sourceRoot, 'inspector', 'vendor');
  * server directly from the published package.
  */
 export const createWorkbenchConfig = (apiProxyTarget = process.env.AGENT_BUNDLE_WORKBENCH_API_PROXY) => ({
+  html: {
+    template: resolve(import.meta.dirname, 'index.html'),
+  },
   output: {
     assetPrefix: '/',
     distPath: {
       root: 'dist',
     },
     filenameHash: false,
+    legalComments: 'none' as const,
     filename: {
       assets: '[name][ext]',
       css: '[name].css',

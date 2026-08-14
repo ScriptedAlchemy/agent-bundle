@@ -51,6 +51,13 @@ export {
   type WorkbenchAsset,
   type WorkbenchAssetSource,
 } from './foreground-server.ts';
+export { createWorkbenchAssetSource, type WorkbenchAssetSourceOptions } from './workbench-assets.ts';
+export {
+  startDevServer,
+  type DevServerSession,
+  type OpenBrowser,
+  type StartDevServerOptions,
+} from './workbench-server.ts';
 export {
   DiagnosticService,
   type DiagnosticReport,

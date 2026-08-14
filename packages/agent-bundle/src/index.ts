@@ -1,4 +1,6 @@
 export { defineConfig, pathTokens } from './core/types.ts';
+export { startDevServer } from './api.ts';
+export type { DevServerSession, StartDevServerOptions } from './api.ts';
 export type {
   AgentBundleConfig,
   AgentBundleMcpApp,

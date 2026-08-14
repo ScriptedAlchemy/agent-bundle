@@ -5,6 +5,12 @@
   "engines": {
     "node": ">=22.19.0"
   },
+  "files": [
+    "dist",
+    "!dist/workbench/**/*.map",
+    "!dist/workbench/**/*.LICENSE.txt",
+    "README.md"
+  ],
   "bin": {
     "agent-bundle": "./dist/cli.js"
   },

@@ -58,6 +58,8 @@ export type {
   McpListResult,
   McpOperationOptions,
 } from './services/mcp-service.ts';
+export { startDevServer } from './dev/workbench-server.ts';
+export type { DevServerSession, StartDevServerOptions } from './dev/workbench-server.ts';
 
 export interface StructuredLogger {
   log?(event: string, details: Readonly<Record<string, unknown>>): void;
