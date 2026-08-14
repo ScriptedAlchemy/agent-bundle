@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
-import { access, mkdtemp, readFile, rm } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { once } from 'node:events';
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -158,5 +158,38 @@ test('built widget HTML is self-contained without external app bundle assets', a
     expect(html).toContain('<style');
     expect(html).not.toMatch(/(?:src|href)=["'][^"']*\.js["']/);
     expect(html).not.toMatch(/(?:src|href)=["'][^"']*\.css["']/);
+  }
+});
+
+test('built Node runtime entries do not require emitted chunks outside their packaged roots', async () => {
+  const entries = ['hook/index.js', 'rsc/index.js', 'mcp/stdio.js', 'mcp/http.js'];
+  const externalChunkDependencies = (
+    await Promise.all(
+      entries.map(async (entry) => {
+        const source = await readFile(join(process.cwd(), 'dist', entry), 'utf8');
+        return [...source.matchAll(/__webpack_require__\.e\(\/\* import\(\) \*\/\s*(\d+)\)/g)].map((match) => ({
+          chunkId: match[1],
+          entry,
+        }));
+      }),
+    )
+  ).flat();
+
+  expect(externalChunkDependencies).toEqual([]);
+});
+
+test('a fresh multi-environment build removes stale app chunks', async () => {
+  const staleAsset = join(process.cwd(), 'dist/app/static/js/async/stale.js');
+  await mkdir(dirname(staleAsset), { recursive: true });
+  await writeFile(staleAsset, 'stale artifact', 'utf8');
+
+  try {
+    const child = spawn('npm', ['run', 'build'], { cwd: process.cwd(), stdio: 'ignore' });
+    const [exitCode, signal] = (await once(child, 'close')) as [number | null, NodeJS.Signals | null];
+    expect(exitCode).toBe(0);
+    expect(signal).toBeNull();
+    await expect(access(staleAsset)).rejects.toThrow();
+  } finally {
+    await rm(staleAsset, { force: true });
   }
 });
