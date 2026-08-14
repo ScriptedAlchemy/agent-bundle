@@ -269,8 +269,6 @@ const bundleExtensions = new Set([
   '.cts',
 ]);
 
-const copiedExtensions = new Set(['.sh', '.bash', '.py']);
-
 const scriptMode = (source: string): 'bundle' | 'copy' =>
   bundleExtensions.has(extname(source).toLowerCase()) ? 'bundle' : 'copy';
 
