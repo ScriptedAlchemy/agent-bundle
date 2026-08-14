@@ -292,12 +292,49 @@ it('settles staging and attempt cleanup failures into diagnostics without maskin
 
     const result = await service.build(prepared);
     expect(result).toMatchObject({ outcome: 'failed' });
-    expect(result.diagnostics.map((diagnostic) => diagnostic.message)).toEqual(expect.arrayContaining([
-      expect.stringContaining('transfer failed'),
-      expect.stringContaining('staging cleanup rejected'),
-      expect.stringContaining('attempt cleanup rejected'),
+    expect(result.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ message: expect.stringContaining('transfer failed') }),
+      expect.objectContaining({ message: expect.stringContaining('staging cleanup rejected'), severity: 'error' }),
+      expect.objectContaining({ message: expect.stringContaining('attempt cleanup rejected'), severity: 'error' }),
     ]));
     expect(removedAttempts).toEqual([attemptRoot]);
+    await expect(readFile(attemptRoot, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('retains a published epoch and reports attempt cleanup failure as a warning', async () => {
+  const root = await createProject();
+  const attemptRoot = join(root, '.agent-bundle', 'published-cleanup-attempt');
+  const store = new EpochStore({ projectRoot: root });
+
+  try {
+    await mkdir(join(root, '.agent-bundle'), { recursive: true });
+    const prepared = await new ProjectService({ root }).prepare('build');
+    const service = new ArtifactService({
+      createAttempt: async () => {
+        await mkdir(attemptRoot, { recursive: true });
+        return attemptRoot;
+      },
+      createEpochId: () => 'epoch-cleanup-warning',
+      epochStore: store,
+      removeAttempt: async (path) => {
+        await rm(path, { force: true, recursive: true });
+        throw new Error('published attempt cleanup rejected');
+      },
+    });
+
+    const result = await service.build(prepared);
+    expect(result.outcome).toBe('succeeded');
+    if (result.outcome !== 'succeeded') throw new Error('Published epoch was reported as failed.');
+    expect(await store.readActiveEpoch()).toEqual(result.epoch);
+    expect(result.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        message: expect.stringContaining('published attempt cleanup rejected'),
+        severity: 'warning',
+      }),
+    ]));
     await expect(readFile(attemptRoot, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
   } finally {
     await rm(root, { force: true, recursive: true });

@@ -126,10 +126,11 @@ const cleanupDiagnostic = (
   resource: 'build attempt' | 'staging epoch',
   error: unknown,
   configPath: string,
+  severity: Diagnostic['severity'],
 ): Diagnostic => Object.freeze({
   code: 'AB7100',
   message: `Unable to clean up ${resource} after artifact epoch build: ${errorMessage(error)}`,
-  severity: 'error',
+  severity,
   sourcePath: configPath,
 });
 
@@ -318,11 +319,20 @@ export class ArtifactService {
       const cleanup = cleanups[index];
       return cleanup === undefined
         ? []
-        : [cleanupDiagnostic(cleanup.resource, cleanupResult.reason, prepared.configPath)];
+        : [cleanupDiagnostic(
+          cleanup.resource,
+          cleanupResult.reason,
+          prepared.configPath,
+          result.outcome === 'succeeded' ? 'warning' : 'error',
+        )];
     });
     if (cleanupDiagnostics.length === 0) return result;
 
-    const diagnostics = [...result.diagnostics, ...cleanupDiagnostics];
+    const diagnostics = freezeDiagnostics([...result.diagnostics, ...cleanupDiagnostics]);
+    if (result.outcome === 'succeeded') {
+      return Object.freeze({ diagnostics, epoch: result.epoch, outcome: 'succeeded' });
+    }
+
     const [firstDiagnostic, ...remainingDiagnostics] = diagnostics;
     if (firstDiagnostic === undefined) return result;
     const failedDiagnostics: [Diagnostic, ...Diagnostic[]] = [firstDiagnostic, ...remainingDiagnostics];

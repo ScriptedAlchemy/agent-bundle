@@ -97,6 +97,40 @@ class EventSourceWatcher {
   }
 }
 
+class BlockingRecoveryEpochStore extends EpochStore {
+  readonly #gate: Promise<void>;
+  readonly #onBlocked: () => void;
+
+  constructor(options: { readonly gate: Promise<void>; readonly onBlocked: () => void; readonly projectRoot: string }) {
+    super({ projectRoot: options.projectRoot });
+    this.#gate = options.gate;
+    this.#onBlocked = options.onBlocked;
+  }
+
+  override async recoverStaging(): Promise<void> {
+    this.#onBlocked();
+    await this.#gate;
+    await super.recoverStaging();
+  }
+}
+
+class BlockingActiveEpochStore extends EpochStore {
+  readonly #gate: Promise<void>;
+  readonly #onBlocked: () => void;
+
+  constructor(options: { readonly gate: Promise<void>; readonly onBlocked: () => void; readonly projectRoot: string }) {
+    super({ projectRoot: options.projectRoot });
+    this.#gate = options.gate;
+    this.#onBlocked = options.onBlocked;
+  }
+
+  override async readActiveEpoch() {
+    this.#onBlocked();
+    await this.#gate;
+    return super.readActiveEpoch();
+  }
+}
+
 it('serializes a running build and coalesces all concurrent invalidations into one follow-up', async () => {
   const root = await createProject();
   let releaseFirstBuild: (() => void) | undefined;
@@ -606,6 +640,116 @@ it('cancels blocked startup readiness and releases its watcher and lock before c
     await expect(starting).rejects.toThrow('DevCoordinator is closed.');
   } finally {
     releaseWatcherReady?.();
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('cancels blocked startup recovery without creating later watcher or build state', async () => {
+  const root = await createProject();
+  let releaseRecovery: (() => void) | undefined;
+  const recovery = new Promise<void>((resolvePromise) => {
+    releaseRecovery = resolvePromise;
+  });
+  let signalRecoveryBlocked: (() => void) | undefined;
+  const recoveryBlocked = new Promise<void>((resolvePromise) => {
+    signalRecoveryBlocked = resolvePromise;
+  });
+  let builds = 0;
+  let lockCloses = 0;
+  let watcherCreates = 0;
+  const events: string[] = [];
+
+  try {
+    const hub = new ProjectEventHub({ now: () => new Date('2026-08-14T12:00:00.000Z') });
+    hub.subscribe((event) => {
+      if (event.type !== 'replay.gap') events.push(event.type);
+    });
+    const coordinator = new DevCoordinator({
+      acquireLock: async () => ({ close: async () => { lockCloses += 1; } }),
+      artifactService: { build: async (prepared) => {
+        builds += 1;
+        return succeeded(epochFor(root, 'unexpected-recovery', prepared.source.revision ?? 'missing'));
+      } },
+      createWatcher: () => {
+        watcherCreates += 1;
+        return { close: async () => undefined };
+      },
+      diagnosticService: { close: async () => undefined, lint: async (paths) => ({ diagnostics: [], paths }) },
+      epochStore: new BlockingRecoveryEpochStore({
+        gate: recovery,
+        onBlocked: () => signalRecoveryBlocked?.(),
+        projectRoot: root,
+      }),
+      eventHub: hub,
+      projectService: new ProjectService({ root }),
+      root,
+    });
+
+    const starting = coordinator.start();
+    await recoveryBlocked;
+    await coordinator.close();
+    expect([lockCloses, watcherCreates, builds]).toEqual([1, 0, 0]);
+    await expect(starting).rejects.toThrow('DevCoordinator is closed.');
+    releaseRecovery?.();
+    await Promise.resolve();
+    expect([watcherCreates, builds, events]).toEqual([0, 0, []]);
+  } finally {
+    releaseRecovery?.();
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('cancels blocked active epoch recovery without creating later watcher or build state', async () => {
+  const root = await createProject();
+  let releaseActiveRead: (() => void) | undefined;
+  const activeRead = new Promise<void>((resolvePromise) => {
+    releaseActiveRead = resolvePromise;
+  });
+  let signalActiveReadBlocked: (() => void) | undefined;
+  const activeReadBlocked = new Promise<void>((resolvePromise) => {
+    signalActiveReadBlocked = resolvePromise;
+  });
+  let builds = 0;
+  let lockCloses = 0;
+  let watcherCreates = 0;
+  const events: string[] = [];
+
+  try {
+    const hub = new ProjectEventHub({ now: () => new Date('2026-08-14T12:00:00.000Z') });
+    hub.subscribe((event) => {
+      if (event.type !== 'replay.gap') events.push(event.type);
+    });
+    const coordinator = new DevCoordinator({
+      acquireLock: async () => ({ close: async () => { lockCloses += 1; } }),
+      artifactService: { build: async (prepared) => {
+        builds += 1;
+        return succeeded(epochFor(root, 'unexpected-active-read', prepared.source.revision ?? 'missing'));
+      } },
+      createWatcher: () => {
+        watcherCreates += 1;
+        return { close: async () => undefined };
+      },
+      diagnosticService: { close: async () => undefined, lint: async (paths) => ({ diagnostics: [], paths }) },
+      epochStore: new BlockingActiveEpochStore({
+        gate: activeRead,
+        onBlocked: () => signalActiveReadBlocked?.(),
+        projectRoot: root,
+      }),
+      eventHub: hub,
+      projectService: new ProjectService({ root }),
+      root,
+    });
+
+    const starting = coordinator.start();
+    await activeReadBlocked;
+    await coordinator.close();
+    expect([lockCloses, watcherCreates, builds]).toEqual([1, 0, 0]);
+    await expect(starting).rejects.toThrow('DevCoordinator is closed.');
+    releaseActiveRead?.();
+    await Promise.resolve();
+    expect([watcherCreates, builds, events]).toEqual([0, 0, []]);
+  } finally {
+    releaseActiveRead?.();
     await rm(root, { force: true, recursive: true });
   }
 });

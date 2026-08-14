@@ -282,14 +282,14 @@ export class DevCoordinator {
   }
 
   async #start(): Promise<DevSession> {
-    this.#lock = await this.#acquireLock({ projectRoot: this.#root });
     try {
+      await this.#acquireStartupLock();
       this.#assertOpen();
-      await this.#epochStore.recoverStaging();
+      await this.#awaitStartup(this.#epochStore.recoverStaging());
       this.#assertOpen();
-      this.#activeEpoch = await this.#epochStore.readActiveEpoch();
+      this.#activeEpoch = await this.#awaitStartup(this.#epochStore.readActiveEpoch());
       this.#assertOpen();
-      const projectIgnoreRules = await readProjectIgnoreRules(this.#root);
+      const projectIgnoreRules = await this.#awaitStartup(readProjectIgnoreRules(this.#root));
       this.#assertOpen();
       this.#watcher = this.#createWatcher({
         ignoredPaths: this.#ignoredPaths,
@@ -299,7 +299,7 @@ export class DevCoordinator {
         outputPaths: this.#outputPaths,
         root: this.#root,
       });
-      await Promise.race([this.#watcher.ready?.() ?? Promise.resolve(), this.#startupCancellation]);
+      await this.#awaitStartup(this.#watcher.ready?.() ?? Promise.resolve());
       this.#assertOpen();
       await this.#rebuild(nowInvalidation(this.#now, 'initial', []), this.#startRebuildToken);
       const session: DevSession = Object.freeze({
@@ -321,6 +321,28 @@ export class DevCoordinator {
 
   #assertOpen(): void {
     if (this.#closing) throw new Error('DevCoordinator is closed.');
+  }
+
+  async #acquireStartupLock(): Promise<void> {
+    const acquisition = this.#acquireLock({ projectRoot: this.#root });
+    try {
+      this.#lock = await this.#awaitStartup(acquisition);
+    } catch (error) {
+      void acquisition.then(
+        (lock) => lock.close().catch(() => undefined),
+        () => undefined,
+      );
+      throw error;
+    }
+  }
+
+  async #awaitStartup<T>(operation: Promise<T>): Promise<T> {
+    return Promise.race([
+      operation,
+      this.#startupCancellation.then(() => {
+        throw new Error('DevCoordinator is closed.');
+      }),
+    ]);
   }
 
   #releaseLock(): Promise<void> {
