@@ -189,6 +189,34 @@ it('keeps blocked host traffic in FIFO order until the transport is explicitly f
   ]);
 });
 
+it('does not let later host notifications overtake a blocked app request response', async () => {
+  const fixture = fixtureFor();
+  let accepting = true;
+  const bridge = createMcpAppBridge({
+    binding: fixture.binding,
+    host: fixture.host,
+    operations: fixture.operations,
+    send: (message) => {
+      if (!accepting) return false;
+      fixture.sent.push(message);
+      return true;
+    },
+  });
+  await bridge.receive(initialize('init:response-backpressure'));
+  await bridge.receive(initialized());
+
+  accepting = false;
+  expect(await bridge.receive({ id: 'blocked-ping', jsonrpc: '2.0', method: 'ping' })).toBe(true);
+  expect(bridge.publishHostContextChanged({ theme: 'dark' })).toBe(true);
+  accepting = true;
+
+  expect(bridge.flushHostTraffic()).toBe(true);
+  expect(fixture.sent.slice(-2)).toEqual([
+    { id: 'blocked-ping', jsonrpc: '2.0', result: {} },
+    { jsonrpc: '2.0', method: 'ui/notifications/host-context-changed', params: { theme: 'dark' } },
+  ]);
+});
+
 it('forwards only same-binding app-visible tools and resources while retaining request ids', async () => {
   const fixture = fixtureFor();
   const bridge = createMcpAppBridge({

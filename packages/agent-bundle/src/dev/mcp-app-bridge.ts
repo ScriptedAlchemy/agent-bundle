@@ -691,8 +691,14 @@ export const createMcpAppBridge = (options: CreateMcpAppBridgeOptions): McpAppBr
     return pending;
   };
 
-  const respond = (id: McpAppBridgeRequestId, result: McpAppJsonValue): boolean => send({ id, jsonrpc: '2.0', result });
-  const fail = (id: McpAppBridgeRequestId, code: number, message: string): boolean => send({ error: { code, message }, id, jsonrpc: '2.0' });
+  const respond = (id: McpAppBridgeRequestId, result: McpAppJsonValue): boolean => {
+    const message = { id, jsonrpc: '2.0' as const, result };
+    return lifecycle === 'initialized' ? emitHost(message) : send(message);
+  };
+  const fail = (id: McpAppBridgeRequestId, code: number, message: string): boolean => {
+    const response = { error: { code, message }, id, jsonrpc: '2.0' as const };
+    return lifecycle === 'initialized' ? emitHost(response) : send(response);
+  };
 
   const receiveRequest = async (message: McpAppBridgeMessage): Promise<boolean> => {
     const id = message.id!;
