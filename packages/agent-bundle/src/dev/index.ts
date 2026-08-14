@@ -11,6 +11,21 @@ export {
   type ProjectEventSubscriptionOptions,
 } from './events.ts';
 export {
+  DiagnosticService,
+  type DiagnosticReport,
+  type DiagnosticServiceOptions,
+  type RslintEngine,
+  type RslintLintResult,
+  type RslintMessage,
+} from './diagnostic-service.ts';
+export {
+  ProjectService,
+  type PreparedProject,
+  type ProjectCommand,
+  type ProjectServiceLogger,
+  type ProjectServiceOptions,
+} from './project-service.ts';
+export {
   freezeArtifactEpoch,
   freezeInvalidation,
   freezeProjectEvent,

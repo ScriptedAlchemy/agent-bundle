@@ -22,6 +22,7 @@ export default defineConfig({
       '@rsbuild/core',
       '@rsbuild/plugin-react',
       '@rslib/core',
+      '@rslint/core',
       '@rstackjs/load-config',
       '@rspack/core',
       'ajv',
