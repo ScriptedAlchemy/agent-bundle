@@ -238,7 +238,7 @@ interface StderrCapture {
 interface OpeningSession {
   readonly abort: AbortController;
   readonly done: Promise<void>;
-  readonly finish: () => void;
+  readonly finish: (result: PromiseSettledResult<void>) => void;
 }
 
 interface TraceSubscription {
@@ -445,13 +445,22 @@ const requestOptions = (options: McpSessionRequestOptions | undefined): RequestO
 
 const openingSession = (): OpeningSession => {
   let resolveDone: (() => void) | undefined;
-  const done = new Promise<void>((resolvePromise) => {
+  let rejectDone: ((reason?: unknown) => void) | undefined;
+  const done = new Promise<void>((resolvePromise, rejectPromise) => {
     resolveDone = resolvePromise;
+    rejectDone = rejectPromise;
   });
+  void done.catch(() => undefined);
   return Object.freeze({
     abort: new AbortController(),
     done,
-    finish: () => resolveDone?.(),
+    finish: (result: PromiseSettledResult<void>) => {
+      if (result.status === 'rejected') {
+        rejectDone?.(result.reason);
+      } else {
+        resolveDone?.();
+      }
+    },
   });
 };
 
@@ -1217,11 +1226,15 @@ export class McpSessionService {
     const signal = options.signal === undefined
       ? opening.abort.signal
       : AbortSignal.any([options.signal, opening.abort.signal]);
+    let result: PromiseSettledResult<void> = { status: 'fulfilled', value: undefined };
     try {
       return await this.#open({ ...options, signal });
+    } catch (error) {
+      result = { reason: error, status: 'rejected' };
+      throw error;
     } finally {
       this.#openingSessions.delete(opening);
-      opening.finish();
+      opening.finish(result);
     }
   }
 

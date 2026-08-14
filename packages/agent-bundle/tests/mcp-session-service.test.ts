@@ -409,17 +409,105 @@ it('closes an in-flight open instead of returning an untracked epoch-pinning ses
     });
 
     const opening = service.open({ epochId: 'epoch-1', serverName: 'fixture', target: 'portable' });
+    const openingFailure = opening.then(
+      () => { throw new Error('Expected the aborted opening to fail.'); },
+      (error: unknown) => error,
+    );
     await connectionStartedPromise;
     let closeCompleted = false;
-    const closing = service.close().then(() => {
-      closeCompleted = true;
-    });
+    const closing = service.close().then(
+      () => { closeCompleted = true; return undefined; },
+      (error: unknown) => { closeCompleted = true; return error; },
+    );
     await Promise.resolve();
     expect(closeCompleted).toBe(false);
     allowConnection?.();
-    await closing;
-    await expect(opening).rejects.toThrow('MCP session service is closed.');
+    const closeFailure = await closing;
+    const openFailure = await openingFailure;
+    expect(openFailure).toEqual(expect.objectContaining({ message: 'MCP session service is closed.' }));
+    expect(closeFailure).toEqual(expect.objectContaining({
+      failures: [{ error: openFailure, resource: 'opening' }],
+      message: 'MCP session service could not close every lifecycle resource.',
+      name: 'McpSessionServiceCloseError',
+    }));
     expect(clientCloses).toBe(1);
+
+    for (let sequence = 2; sequence <= 8; sequence += 1) {
+      await publishEpochCopy(
+        root,
+        epochStore,
+        join(root, 'compiled'),
+        `epoch-${sequence}`,
+        `2026-08-14T12:01:0${sequence}.000Z`,
+      );
+    }
+    await epochStore.cleanup();
+    await expect(access(join(root, '.agent-bundle', 'epochs', 'epoch-1', 'portable', 'mcp.json'))).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+}, 30_000);
+
+it('retains a rejected cleanup from an opening drained during service close', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-persistent-mcp-opening-close-failure-'));
+  try {
+    const epochStore = await publishFixtureEpoch(root, 'epoch-1');
+    const cleanupFailure = new Error('opening cleanup failed');
+    let allowConnection: (() => void) | undefined;
+    const connectionBlocked = new Promise<void>((resolvePromise) => {
+      allowConnection = resolvePromise;
+    });
+    let connectionStarted: (() => void) | undefined;
+    const connectionStartedPromise = new Promise<void>((resolvePromise) => {
+      connectionStarted = resolvePromise;
+    });
+    let clientCloses = 0;
+    const service = new McpSessionService({
+      createClient: () => ({
+        callTool: async () => ({ content: [] }),
+        close: async () => {
+          clientCloses += 1;
+          throw cleanupFailure;
+        },
+        connect: async () => {
+          connectionStarted?.();
+          await connectionBlocked;
+        },
+        getPrompt: async () => ({ messages: [] }),
+        getServerCapabilities: () => undefined,
+        getServerVersion: () => undefined,
+        listPrompts: async () => ({ prompts: [] }),
+        listResources: async () => ({ resources: [] }),
+        listResourceTemplates: async () => ({ resourceTemplates: [] }),
+        listTools: async () => ({ tools: [] }),
+        readResource: async () => ({ contents: [] }),
+      }),
+      createStdioTransport: () => ({ close: async () => undefined, send: async () => undefined, start: async () => undefined, stderr: null }) as never,
+      epochStore,
+      projectRoot: root,
+    });
+
+    const opening = service.open({ epochId: 'epoch-1', serverName: 'fixture', target: 'portable' });
+    await connectionStartedPromise;
+    const closing = service.close();
+    allowConnection?.();
+    await expect(opening).rejects.toBe(cleanupFailure);
+    const failure = await closing.then(
+      () => { throw new Error('Expected service close to retain the opening cleanup failure.'); },
+      (error: unknown) => error,
+    );
+    expect(failure).toEqual(expect.objectContaining({
+      failures: [{ error: cleanupFailure, resource: 'opening' }],
+      message: 'MCP session service could not close every lifecycle resource.',
+      name: 'McpSessionServiceCloseError',
+    }));
+    expect(clientCloses).toBe(1);
+    await expect(service.close()).rejects.toBe(failure);
+    await expect(service.open({ epochId: 'epoch-1', serverName: 'fixture', target: 'portable' })).rejects.toThrow(
+      'MCP session service is closed.',
+    );
 
     for (let sequence = 2; sequence <= 8; sequence += 1) {
       await publishEpochCopy(
