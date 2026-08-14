@@ -25,11 +25,36 @@ import { DiagnosticError } from '../core/diagnostics.ts';
 import { assertInside } from '../core/paths.ts';
 import { resolveMcpPathTokens } from '../services/mcp-path-tokens.ts';
 import { EpochStore, type EpochReference } from './epoch-store.ts';
+import type {
+  McpSessionBinding,
+  McpSessionId,
+  McpSessionInspectorConfig,
+  McpSessionOperation,
+  McpSessionReplayOverflow,
+  McpSessionTraceEntry,
+  McpSessionTraceListener,
+  McpSessionTraceReplay,
+  McpSessionTraceSubscription,
+} from './mcp-session-protocol.ts';
+
+export type {
+  McpSessionBinding,
+  McpSessionId,
+  McpSessionInspectorConfig,
+  McpSessionOperation,
+  McpSessionReplayOverflow,
+  McpSessionTraceEntry,
+  McpSessionTraceListener,
+  McpSessionTraceReplay,
+  McpSessionTraceSubscription,
+} from './mcp-session-protocol.ts';
 
 const defaultTimeoutMs = 5_000;
 const maxStderrBytes = 1_000_000;
 const maxRetainedEvents = 512;
 const maxRetainedFrames = 512;
+const maxRetainedTraceEntries = 512;
+const inspectorEnvironmentAllowlist = new Set(['FORCE_COLOR', 'LANG', 'LC_ALL', 'NO_COLOR', 'TZ']);
 
 type NativeTarget = 'portable' | 'codex' | 'claude';
 type RawMcpFrame = Parameters<Transport['send']>[0];
@@ -52,6 +77,8 @@ interface McpClient {
   ): Promise<GetPromptResult>;
   getServerCapabilities(): ServerCapabilities | undefined;
   getServerVersion(): Implementation | undefined;
+  getNegotiatedProtocolVersion?(): string | undefined;
+  getProtocolEra?(): 'legacy' | 'modern' | undefined;
   listPrompts(params?: undefined, options?: RequestOptions): Promise<{ readonly prompts: readonly Prompt[] }>;
   listResources(params?: undefined, options?: RequestOptions): Promise<{ readonly resources: readonly Resource[] }>;
   listResourceTemplates(
@@ -94,12 +121,6 @@ interface RemoteManifestServer {
 
 type ManifestServer = StdioManifestServer | RemoteManifestServer;
 
-export interface McpSessionBinding {
-  readonly epochId: string;
-  readonly serverName: string;
-  readonly target: string;
-}
-
 export interface OpenMcpSessionOptions extends McpSessionBinding {
   readonly signal?: AbortSignal;
   readonly timeoutMs?: number;
@@ -129,6 +150,8 @@ export interface McpSessionResourceOptions extends McpSessionRequestOptions {
 
 export interface McpSessionConnectionState {
   readonly capabilities: ServerCapabilities | undefined;
+  readonly protocolEra: 'legacy' | 'modern' | undefined;
+  readonly protocolVersion: string | undefined;
   readonly server: Implementation | undefined;
 }
 
@@ -143,13 +166,6 @@ export type McpSessionEvent =
   | Readonly<{ readonly sequence: number; readonly text: string; readonly type: 'stderr' }>
   | Readonly<{ readonly payload: unknown; readonly sequence: number; readonly type: 'progress' }>
   | Readonly<{ readonly payload: unknown; readonly sequence: number; readonly type: 'logging' }>;
-
-export interface McpSessionReplayOverflow {
-  /** The caller's cursor falls before data that has been evicted from retention. */
-  readonly afterSequence: number;
-  /** A subsequent replay must begin after this sequence to be complete. */
-  readonly droppedThroughSequence: number;
-}
 
 export interface McpSessionReplay {
   readonly events: readonly McpSessionEvent[];
@@ -177,6 +193,7 @@ interface ResolvedStdioLaunch {
   readonly command: string;
   readonly cwd?: string;
   readonly env: Readonly<Record<string, string>>;
+  readonly inspectorEnv: Readonly<Record<string, string>>;
   readonly kind: 'stdio';
 }
 
@@ -199,6 +216,41 @@ interface OpeningSession {
   readonly done: Promise<void>;
   readonly finish: () => void;
 }
+
+const sensitiveLaunchValue = /(?:api[-_]?key|authorization|credential|cookie|password|secret|token)/iu;
+
+const inspectorArgument = (argument: string): string => {
+  if (!sensitiveLaunchValue.test(argument)) return argument;
+  if (argument.includes('=')) {
+    const separator = argument.indexOf('=');
+    return `${argument.slice(0, separator + 1)}[REDACTED]`;
+  }
+  return argument;
+};
+
+const inspectorArguments = (args: readonly string[]): readonly string[] => Object.freeze(args.map((argument, index) => {
+  const previous = args[index - 1];
+  if (
+    previous !== undefined &&
+    sensitiveLaunchValue.test(previous) &&
+    !previous.includes('=') &&
+    !argument.startsWith('-')
+  ) return '[REDACTED]';
+  return inspectorArgument(argument);
+}));
+
+const inspectorEnvironment = (env: Readonly<Record<string, string>> | undefined): Readonly<Record<string, string>> => Object.freeze(
+  Object.fromEntries(Object.entries(env ?? {}).filter(([key]) => inspectorEnvironmentAllowlist.has(key))),
+);
+
+const inspectorUrl = (url: URL): string => {
+  const sanitized = new URL(url);
+  sanitized.hash = '';
+  sanitized.password = '';
+  sanitized.search = '';
+  sanitized.username = '';
+  return sanitized.href;
+};
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -420,6 +472,7 @@ export class McpSession {
   readonly #createStdioTransport: (options: StdioOptions) => StdioTransport;
   readonly #createStreamableHttpTransport: (url: URL, options: RemoteTransportOptions) => Transport;
   readonly #epochReference: EpochReference;
+  readonly #id: McpSessionId;
   readonly #onClose: () => void;
   readonly #pluginData: string;
   readonly #resolved: ResolvedSessionServer;
@@ -428,6 +481,8 @@ export class McpSession {
   readonly #frames: McpSessionFrame[] = [];
   readonly #events: McpSessionEvent[] = [];
   readonly #requests = new Map<string, AbortController>();
+  readonly #trace: McpSessionTraceEntry[] = [];
+  readonly #traceListeners = new Set<McpSessionTraceListener>();
   #capture: StderrCapture | undefined;
   #client: McpClient | undefined;
   #closePromise: Promise<void> | undefined;
@@ -438,6 +493,8 @@ export class McpSession {
   #sequence = 0;
   #stderrOutput = '';
   #stderrOverflow = false;
+  #traceDroppedThroughSequence = 0;
+  #traceSequence = 0;
 
   constructor(options: {
     readonly binding: McpSessionBinding;
@@ -446,6 +503,7 @@ export class McpSession {
     readonly createStdioTransport: (options: StdioOptions) => StdioTransport;
     readonly createStreamableHttpTransport: (url: URL, options: RemoteTransportOptions) => Transport;
     readonly epochReference: EpochReference;
+    readonly id: McpSessionId;
     readonly onClose: () => void;
     readonly pluginData: string;
     readonly resolved: ResolvedSessionServer;
@@ -457,6 +515,7 @@ export class McpSession {
     this.#createStdioTransport = options.createStdioTransport;
     this.#createStreamableHttpTransport = options.createStreamableHttpTransport;
     this.#epochReference = options.epochReference;
+    this.#id = options.id;
     this.#onClose = options.onClose;
     this.#pluginData = options.pluginData;
     this.#resolved = options.resolved;
@@ -466,6 +525,10 @@ export class McpSession {
 
   get binding(): McpSessionBinding {
     return this.#binding;
+  }
+
+  get id(): McpSessionId {
+    return this.#id;
   }
 
   get connection(): McpSessionConnectionState {
@@ -495,83 +558,138 @@ export class McpSession {
     });
   }
 
+  trace(afterSequence = 0): McpSessionTraceReplay {
+    if (!Number.isSafeInteger(afterSequence) || afterSequence < 0) {
+      throw new RangeError('MCP session trace cursor must be a nonnegative safe integer.');
+    }
+    const overflow = afterSequence < this.#traceDroppedThroughSequence
+      ? Object.freeze({ afterSequence, droppedThroughSequence: this.#traceDroppedThroughSequence })
+      : undefined;
+    return Object.freeze({
+      entries: Object.freeze(this.#trace.filter((entry) => entry.sequence > afterSequence)),
+      ...(overflow === undefined ? {} : { overflow }),
+    });
+  }
+
+  subscribeTrace(listener: McpSessionTraceListener): McpSessionTraceSubscription {
+    this.#traceListeners.add(listener);
+    return Object.freeze({
+      unsubscribe: () => this.#traceListeners.delete(listener),
+    });
+  }
+
+  inspectorConfig(): McpSessionInspectorConfig {
+    if (this.#launch.kind === 'stdio') {
+      return Object.freeze({
+        launch: Object.freeze({
+          args: inspectorArguments(this.#launch.args),
+          command: this.#launch.command,
+          ...(this.#launch.cwd === undefined ? {} : { cwd: this.#launch.cwd }),
+          env: this.#launch.inspectorEnv,
+          kind: 'stdio',
+        }),
+        origin: 'artifact',
+      });
+    }
+    return Object.freeze({
+      launch: Object.freeze({ kind: this.#launch.kind, url: inspectorUrl(this.#launch.url) }),
+      origin: 'artifact',
+    });
+  }
+
   stderr(): string {
     return this.#capture?.output() ?? this.#stderrOutput;
   }
 
   async initialize(options?: McpSessionRequestOptions): Promise<McpSessionConnectionState> {
-    return this.#withLifecycle(async () => {
+    return this.#operation('initialize', () => this.#withLifecycle(async () => {
       this.#assertOpen();
       if (this.#connection === undefined) await this.#connect(options);
       this.#assertOpen();
       return this.connection;
-    });
+    }));
   }
 
   async listTools(options?: McpSessionRequestOptions): Promise<readonly Tool[]> {
-    const listed = await this.#clientFor(options).listTools(undefined, requestOptions(options));
-    return Object.freeze([...listed.tools]);
+    return this.#operation('listTools', async () => {
+      const listed = await this.#clientFor(options).listTools(undefined, requestOptions(options));
+      return Object.freeze([...listed.tools]);
+    });
   }
 
   async listResources(options?: McpSessionRequestOptions): Promise<readonly Resource[]> {
-    const listed = await this.#clientFor(options).listResources(undefined, requestOptions(options));
-    return Object.freeze([...listed.resources]);
+    return this.#operation('listResources', async () => {
+      const listed = await this.#clientFor(options).listResources(undefined, requestOptions(options));
+      return Object.freeze([...listed.resources]);
+    });
   }
 
   async listResourceTemplates(options?: McpSessionRequestOptions): Promise<readonly ResourceTemplateType[]> {
-    const listed = await this.#clientFor(options).listResourceTemplates(undefined, requestOptions(options));
-    return Object.freeze([...listed.resourceTemplates]);
+    return this.#operation('listResourceTemplates', async () => {
+      const listed = await this.#clientFor(options).listResourceTemplates(undefined, requestOptions(options));
+      return Object.freeze([...listed.resourceTemplates]);
+    });
   }
 
   async listPrompts(options?: McpSessionRequestOptions): Promise<readonly Prompt[]> {
-    const listed = await this.#clientFor(options).listPrompts(undefined, requestOptions(options));
-    return Object.freeze([...listed.prompts]);
+    return this.#operation('listPrompts', async () => {
+      const listed = await this.#clientFor(options).listPrompts(undefined, requestOptions(options));
+      return Object.freeze([...listed.prompts]);
+    });
   }
 
   async getPrompt(options: McpSessionPromptOptions): Promise<GetPromptResult> {
-    return this.#clientFor(options).getPrompt({
+    return this.#operation('getPrompt', () => this.#clientFor(options).getPrompt({
       ...(options.arguments === undefined ? {} : { arguments: options.arguments }),
       name: options.name,
-    }, requestOptions(options));
+    }, requestOptions(options)));
   }
 
   async readResource(options: McpSessionResourceOptions): Promise<{ readonly contents: readonly unknown[] }> {
-    return this.#clientFor(options).readResource({ uri: options.uri }, requestOptions(options));
+    return this.#operation('readResource', () =>
+      this.#clientFor(options).readResource({ uri: options.uri }, requestOptions(options)));
   }
 
   async callTool(options: McpSessionToolCallOptions): Promise<CallToolResult> {
     if (options.signal?.aborted) {
       throw options.signal.reason ?? new Error('MCP session tool call was aborted.');
     }
-    const requestId = options.requestId ?? randomUUID();
-    if (requestId.trim().length === 0) throw new Error('MCP session requestId must be nonempty.');
-    if (this.#requests.has(requestId)) throw new Error(`MCP session request ${JSON.stringify(requestId)} is already active.`);
-    const controller = new AbortController();
-    const onAbort = () => controller.abort(options.signal?.reason);
-    options.signal?.addEventListener('abort', onAbort, { once: true });
-    this.#requests.set(requestId, controller);
-    try {
-      const result = await this.#clientFor(options).callTool({ arguments: options.arguments, name: options.name }, {
-        signal: controller.signal,
-        timeout: requestOptions(options).timeout,
-      });
-      this.#throwIfStderrExceeded();
-      return result;
-    } finally {
-      options.signal?.removeEventListener('abort', onAbort);
-      this.#requests.delete(requestId);
-    }
+    return this.#operation('callTool', async () => {
+      const requestId = options.requestId ?? randomUUID();
+      if (requestId.trim().length === 0) throw new Error('MCP session requestId must be nonempty.');
+      if (this.#requests.has(requestId)) throw new Error(`MCP session request ${JSON.stringify(requestId)} is already active.`);
+      const controller = new AbortController();
+      const onAbort = () => controller.abort(options.signal?.reason);
+      options.signal?.addEventListener('abort', onAbort, { once: true });
+      this.#requests.set(requestId, controller);
+      try {
+        const result = await this.#clientFor(options).callTool({ arguments: options.arguments, name: options.name }, {
+          signal: controller.signal,
+          timeout: requestOptions(options).timeout,
+        });
+        this.#throwIfStderrExceeded();
+        return result;
+      } finally {
+        options.signal?.removeEventListener('abort', onAbort);
+        this.#requests.delete(requestId);
+      }
+    });
   }
 
   cancel(requestId: string): boolean {
+    this.#recordOperation('cancel', 'started');
     const controller = this.#requests.get(requestId);
-    if (controller === undefined) return false;
+    if (controller === undefined) {
+      this.#recordOperation('cancel', 'failed');
+      return false;
+    }
     controller.abort(new Error(`MCP session request ${JSON.stringify(requestId)} was cancelled.`));
+    this.#recordOperation('cancel', 'succeeded');
     return true;
   }
 
   async restart(options?: McpSessionRequestOptions): Promise<McpSessionConnectionState> {
-    return this.#withLifecycle(async () => {
+    return this.#operation('restart', () => this.#withLifecycle(async () => {
       this.#assertOpen();
       this.#cancelAll('MCP session restarted.');
       await this.#closeClient();
@@ -580,13 +698,13 @@ export class McpSession {
       await this.#connect(options);
       this.#assertOpen();
       return this.connection;
-    });
+    }));
   }
 
   async close(): Promise<void> {
     if (this.#closePromise !== undefined) return this.#closePromise;
     this.#closed = true;
-    this.#closePromise = this.#withLifecycle(() => this.#close());
+    this.#closePromise = this.#operation('close', () => this.#withLifecycle(() => this.#close()));
     return this.#closePromise;
   }
 
@@ -625,6 +743,18 @@ export class McpSession {
     }
   }
 
+  async #operation<Result>(operation: McpSessionOperation, run: () => Promise<Result>): Promise<Result> {
+    this.#recordOperation(operation, 'started');
+    try {
+      const result = await run();
+      this.#recordOperation(operation, 'succeeded');
+      return result;
+    } catch (error) {
+      this.#recordOperation(operation, 'failed');
+      throw error;
+    }
+  }
+
   #clientFor(options?: McpSessionRequestOptions): McpClient {
     this.#assertOpen();
     if (this.#connection === undefined) {
@@ -650,6 +780,8 @@ export class McpSession {
       this.#capture = capture;
       this.#connection = Object.freeze({
         capabilities: client.getServerCapabilities(),
+        protocolEra: client.getProtocolEra?.(),
+        protocolVersion: client.getNegotiatedProtocolVersion?.(),
         server: client.getServerVersion(),
       });
     } catch (error) {
@@ -682,25 +814,73 @@ export class McpSession {
   #recordFrame(direction: McpSessionFrame['direction'], message: RawMcpFrame): void {
     const sequence = this.#nextSequence();
     this.#retain(this.#frames, Object.freeze({ direction, message, sequence }), maxRetainedFrames);
+    this.#recordTrace(Object.freeze({
+      direction,
+      kind: 'frame',
+      message,
+      occurredAt: Date.now(),
+      sequence: this.#nextTraceSequence(),
+    }));
     const notification: unknown = message;
     if (direction !== 'server' || !isRecord(notification) || typeof notification.method !== 'string') return;
     if (notification.method === 'notifications/progress') {
+      const event = Object.freeze({ payload: notification.params, sequence: this.#nextSequence(), type: 'progress' as const });
       this.#retain(
         this.#events,
-        Object.freeze({ payload: notification.params, sequence: this.#nextSequence(), type: 'progress' }),
+        event,
         maxRetainedEvents,
       );
+      this.#recordTrace(Object.freeze({
+        kind: 'progress',
+        occurredAt: Date.now(),
+        payload: notification.params,
+        sequence: this.#nextTraceSequence(),
+      }));
     } else if (notification.method === 'notifications/message') {
+      const event = Object.freeze({ payload: notification.params, sequence: this.#nextSequence(), type: 'logging' as const });
       this.#retain(
         this.#events,
-        Object.freeze({ payload: notification.params, sequence: this.#nextSequence(), type: 'logging' }),
+        event,
         maxRetainedEvents,
       );
+      this.#recordTrace(Object.freeze({
+        kind: 'logging',
+        occurredAt: Date.now(),
+        payload: notification.params,
+        sequence: this.#nextTraceSequence(),
+      }));
     }
   }
 
   #recordStderr(text: string): void {
-    this.#retain(this.#events, Object.freeze({ sequence: this.#nextSequence(), text, type: 'stderr' }), maxRetainedEvents);
+    const event = Object.freeze({ sequence: this.#nextSequence(), text, type: 'stderr' as const });
+    this.#retain(this.#events, event, maxRetainedEvents);
+    this.#recordTrace(Object.freeze({ kind: 'stderr', occurredAt: Date.now(), text, sequence: this.#nextTraceSequence() }));
+  }
+
+  #recordOperation(operation: McpSessionOperation, phase: 'started' | 'succeeded' | 'failed'): void {
+    this.#recordTrace(Object.freeze({
+      kind: 'operation',
+      occurredAt: Date.now(),
+      operation,
+      phase,
+      sequence: this.#nextTraceSequence(),
+    }));
+  }
+
+  #recordTrace(entry: McpSessionTraceEntry): void {
+    this.#trace.push(entry);
+    if (this.#trace.length > maxRetainedTraceEntries) {
+      const dropped = this.#trace.shift();
+      if (dropped !== undefined) this.#traceDroppedThroughSequence = dropped.sequence;
+    }
+    for (const listener of this.#traceListeners) {
+      try {
+        listener(entry);
+      } catch {
+        // Subscribers are observers and cannot interfere with session lifecycle work.
+      }
+    }
   }
 
   #retain<Entry extends { readonly sequence: number }>(entries: Entry[], entry: Entry, maximum: number): void {
@@ -713,6 +893,11 @@ export class McpSession {
   #nextSequence(): number {
     this.#sequence += 1;
     return this.#sequence;
+  }
+
+  #nextTraceSequence(): number {
+    this.#traceSequence += 1;
+    return this.#traceSequence;
   }
 
   #throwIfStderrExceeded(capture = this.#capture): void {
@@ -771,6 +956,7 @@ export class McpSession {
         command: resolved.command,
         ...(cwd === undefined ? {} : { cwd }),
         env: Object.freeze({ ...inheritedEnv, ...(resolved.env ?? {}) }),
+        inspectorEnv: inspectorEnvironment(resolved.env),
         kind: 'stdio',
       });
     }
@@ -857,6 +1043,7 @@ export class McpSessionService {
         createStdioTransport: this.#createStdioTransport,
         createStreamableHttpTransport: this.#createStreamableHttpTransport,
         epochReference,
+        id: sessionId,
         onClose: () => this.#sessions.delete(sessionId),
         pluginData,
         resolved: { server, target, targetRoot },
@@ -878,6 +1065,17 @@ export class McpSessionService {
       }
       throw error;
     }
+  }
+
+  get(id: McpSessionId): McpSession | undefined {
+    return this.#sessions.get(id);
+  }
+
+  async closeSession(id: McpSessionId): Promise<boolean> {
+    const session = this.#sessions.get(id);
+    if (session === undefined) return false;
+    await session.close();
+    return true;
   }
 
   async close(): Promise<void> {

@@ -537,6 +537,16 @@ it('bounds frame and event retention with an explicit replay overflow cursor', a
     });
     expect(session.replay(2).overflow).toBeUndefined();
 
+    const trace = session.trace(0);
+    const earliestRetainedSequence = trace.entries[0]?.sequence;
+    if (earliestRetainedSequence === undefined) throw new Error('Expected the trace to retain entries.');
+    expect(trace.entries).toHaveLength(512);
+    expect(trace.overflow).toEqual({ afterSequence: 0, droppedThroughSequence: earliestRetainedSequence - 1 });
+    expect(session.trace(earliestRetainedSequence - 1).overflow).toBeUndefined();
+    expect(Object.isFrozen(trace.entries)).toBe(true);
+    expect(Object.isFrozen(trace.entries[0]!)).toBe(true);
+    expect(Reflect.set(trace.entries[0]!, 'sequence', 0)).toBe(false);
+
     await session.close();
   } finally {
     await rm(root, { force: true, recursive: true });
@@ -701,11 +711,105 @@ it('retains raw protocol frame identities and exposes progress and logging witho
       { payload: progress.params, sequence: 3, type: 'progress' },
       { payload: logging.params, sequence: 5, type: 'logging' },
     ]);
+    const traceFrame = session.trace().entries.find((entry) => entry.kind === 'frame' && entry.message === outbound);
+    if (traceFrame?.kind !== 'frame') throw new Error('Expected the raw outbound frame in the wire trace.');
+    expect(traceFrame.message).toBe(outbound);
     await expect(session.callTool({ arguments: {}, name: 'fixture' })).resolves.toBe(result);
 
     await session.close();
     expect(closed).toBe(true);
   } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+}, 30_000);
+
+it('exposes one opaque, epoch-bound session handle with a bounded ordered wire trace and a secret-free Inspector projection', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-persistent-mcp-wire-'));
+  const secretKey = 'AGENT_BUNDLE_MCP_SESSION_WIRE_SECRET';
+  const previousSecret = process.env[secretKey];
+  try {
+    process.env[secretKey] = 'must-not-reach-the-browser';
+    const epochStore = await publishFixtureEpoch(root, 'epoch-wire');
+    const clientFrame = { id: 1, jsonrpc: '2.0' as const, method: 'initialize', params: {} };
+    const progressFrame = {
+      jsonrpc: '2.0' as const,
+      method: 'notifications/progress',
+      params: { progress: 1, progressToken: 'wire-fixture' },
+    };
+    let transport: Transport | undefined;
+    const service = new McpSessionService({
+      createClient: () => ({
+        callTool: async () => ({ content: [] }),
+        close: async () => undefined,
+        connect: async (nextTransport: Transport) => {
+          transport = nextTransport;
+          await nextTransport.start();
+          await nextTransport.send(clientFrame);
+          transport.onmessage?.(progressFrame);
+        },
+        getNegotiatedProtocolVersion: () => '2026-07-28',
+        getProtocolEra: () => 'modern' as const,
+        getPrompt: async () => ({ messages: [] }),
+        getServerCapabilities: () => ({ logging: {} }),
+        getServerVersion: () => ({ name: 'wire-fixture', version: '1.0.0' }),
+        listPrompts: async () => ({ prompts: [] }),
+        listResources: async () => ({ resources: [] }),
+        listResourceTemplates: async () => ({ resourceTemplates: [] }),
+        listTools: async () => ({ tools: [] }),
+        readResource: async () => ({ contents: [] }),
+      }),
+      createStdioTransport: () => ({ close: async () => undefined, send: async () => undefined, start: async () => undefined, stderr: null }) as never,
+      epochStore,
+      projectRoot: root,
+    });
+    const session = await service.open({ epochId: 'epoch-wire', serverName: 'fixture', target: 'portable' });
+
+    expect(session.id).toMatch(/^[0-9a-f-]{36}$/u);
+    const id = session.id;
+    expect(service.get(session.id)).toBe(session);
+    expect(session.binding).toEqual({ epochId: 'epoch-wire', serverName: 'fixture', target: 'portable' });
+    expect(Object.isFrozen(session.binding)).toBe(true);
+    expect(session.connection).toMatchObject({
+      protocolEra: 'modern',
+      protocolVersion: '2026-07-28',
+      server: { name: 'wire-fixture', version: '1.0.0' },
+    });
+
+    const received: unknown[] = [];
+    const subscription = session.subscribeTrace((entry) => received.push(entry));
+    await session.callTool({ arguments: {}, name: 'fixture' });
+    subscription.unsubscribe();
+    const replay = session.trace(0);
+    expect(replay.entries.map((entry) => entry.sequence)).toEqual([...replay.entries]
+      .sort((left, right) => left.sequence - right.sequence)
+      .map((entry) => entry.sequence));
+    expect(replay.entries.every((entry) => Number.isSafeInteger(entry.sequence) && entry.occurredAt > 0)).toBe(true);
+    expect(replay.entries.some((entry) => entry.kind === 'operation')).toBe(true);
+    const frame = replay.entries.find((entry) => entry.kind === 'frame' && entry.message === clientFrame);
+    if (frame?.kind !== 'frame') throw new Error('Expected the raw client frame in the wire trace.');
+    expect(frame.message).toBe(clientFrame);
+    expect(received.length).toBeGreaterThan(0);
+
+    const inspector = session.inspectorConfig();
+    expect(inspector.origin).toBe('artifact');
+    expect(JSON.stringify(inspector)).not.toContain('must-not-reach-the-browser');
+    expect(JSON.stringify(inspector)).not.toContain(secretKey);
+    expect('headers' in inspector).toBe(false);
+
+    const bindingBeforeRestart = session.binding;
+    await session.restart();
+    expect(session.id).toBe(id);
+    expect(session.binding).toBe(bindingBeforeRestart);
+    expect(session.binding).toEqual({ epochId: 'epoch-wire', serverName: 'fixture', target: 'portable' });
+    expect(await service.closeSession(id)).toBe(true);
+    expect(await service.closeSession(id)).toBe(false);
+    expect(service.get(id)).toBeUndefined();
+  } finally {
+    if (previousSecret === undefined) {
+      delete process.env[secretKey];
+    } else {
+      process.env[secretKey] = previousSecret;
+    }
     await rm(root, { force: true, recursive: true });
   }
 }, 30_000);
