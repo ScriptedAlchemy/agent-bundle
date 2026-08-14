@@ -108,6 +108,7 @@ const modelFor = (project: TestProject): NormalizedPlugin => ({
   scripts: [
     {
       id: 'script:greeting',
+      mode: 'bundle',
       name: 'greeting',
       provenance: { kind: 'explicit', sourcePath: project.scriptPath },
       source: project.scriptPath,

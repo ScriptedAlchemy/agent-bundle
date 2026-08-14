@@ -48,6 +48,13 @@ export interface AgentBundleHostConfig {
   nativeHooks?: string;
 }
 
+export interface AgentBundleScriptEntry {
+  entry: string;
+  targets?: readonly string[];
+}
+
+export type AgentBundleScriptInput = string | AgentBundleScriptEntry;
+
 export type AgentBundleHookInput =
   | string
   | AgentBundleHookEntry
@@ -60,6 +67,7 @@ export interface AgentBundleConfig {
   marketplace?: boolean;
   mcp?: AgentBundleMcpConfig;
   plugin: AgentBundlePluginConfig;
+  scripts?: Readonly<Record<string, AgentBundleScriptInput>>;
   skills?: string[];
   targets?: string[];
   [key: string]: unknown;
@@ -138,6 +146,7 @@ export interface NormalizedMcpApp {
 
 export interface NormalizedScript {
   readonly id: string;
+  readonly mode: 'bundle' | 'copy';
   readonly name: string;
   readonly provenance: SourceProvenance;
   readonly source: string;
