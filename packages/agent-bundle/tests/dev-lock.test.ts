@@ -7,6 +7,7 @@ import { expect, it } from '@rstest/core';
 import { acquireDevLock } from '../src/dev/dev-lock.ts';
 
 const lockPathFor = (root: string): string => join(root, '.agent-bundle', 'dev.lock');
+const recoveryPathFor = (root: string): string => `${lockPathFor(root)}.recovery`;
 
 it('rejects a second writer with stable metadata for the live owning process', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent bundle dev lock with spaces '));
@@ -84,22 +85,31 @@ it('recovers a dead lock only after probing its recorded pid', async () => {
   }
 });
 
-it('serializes eight stale-lock recoveries into one complete owner record', async () => {
+it('recovers an abandoned recovery gate and serializes eight stale-lock contenders into one owner', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent bundle dev lock recovery race '));
-  const stalePid = 2_147_483_647;
+  const staleLockPid = 2_147_483_647;
+  const staleRecoveryPid = 2_147_483_646;
+  const observedPids: number[] = [];
 
   try {
     await mkdir(join(root, '.agent-bundle'), { recursive: true });
     await writeFile(
       lockPathFor(root),
-      `{"createdAt":"2026-08-14T11:59:00.000Z","nonce":"stale-owner","pid":${stalePid},"projectRoot":${JSON.stringify(root)},"version":1}\n`,
+      `{"createdAt":"2026-08-14T11:59:00.000Z","nonce":"stale-owner","pid":${staleLockPid},"projectRoot":${JSON.stringify(root)},"version":1}\n`,
+    );
+    await writeFile(
+      recoveryPathFor(root),
+      `{"owner":{"createdAt":"2026-08-14T11:59:30.000Z","nonce":"stale-recovery","pid":${staleRecoveryPid},"projectRoot":${JSON.stringify(root)},"version":1},"version":1}\n`,
     );
 
     const attempts = await Promise.all(Array.from({ length: 8 }, async () => {
       try {
         return { lock: await acquireDevLock({
           now: () => new Date('2026-08-14T12:00:00.000Z'),
-          probeProcess: (pid) => pid !== stalePid,
+          probeProcess: (pid) => {
+            observedPids.push(pid);
+            return pid !== staleLockPid && pid !== staleRecoveryPid;
+          },
           projectRoot: root,
         }) } as const;
       } catch (error) {
@@ -122,6 +132,9 @@ it('serializes eight stale-lock recoveries into one complete owner record', asyn
     const published = JSON.parse(await readFile(lockPathFor(root), 'utf8')) as { readonly nonce?: unknown };
     expect(typeof published.nonce).toBe('string');
     expect(published.nonce).not.toBe('');
+    expect(observedPids).toContain(staleLockPid);
+    expect(observedPids).toContain(staleRecoveryPid);
+    await expect(readFile(recoveryPathFor(root), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
 
     await acquired[0]!.lock.close();
   } finally {

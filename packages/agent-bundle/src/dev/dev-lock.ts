@@ -35,6 +35,11 @@ export class DevLockError extends Error {
 const devLockName = 'dev.lock';
 const recoverySuffix = '.recovery';
 
+interface RecoveryRecord {
+  readonly owner: DevLockOwner;
+  readonly version: 1;
+}
+
 const isErrno = (error: unknown, code: string): boolean =>
   typeof error === 'object' && error !== null && 'code' in error && error.code === code;
 
@@ -47,9 +52,9 @@ const isProcessRunning = (pid: number): boolean => {
   }
 };
 
-const parseOwner = (value: string): DevLockOwner | undefined => {
+const parseOwnerValue = (value: unknown): DevLockOwner | undefined => {
   try {
-    const parsed = JSON.parse(value) as Partial<DevLockOwner>;
+    const parsed = value as Partial<DevLockOwner>;
     const pid = parsed.pid;
     if (
       parsed.version !== 1 ||
@@ -70,6 +75,24 @@ const parseOwner = (value: string): DevLockOwner | undefined => {
       projectRoot: parsed.projectRoot,
       version: 1,
     });
+  } catch {
+    return undefined;
+  }
+};
+
+const parseOwner = (value: string): DevLockOwner | undefined => {
+  try {
+    return parseOwnerValue(JSON.parse(value));
+  } catch {
+    return undefined;
+  }
+};
+
+const parseRecoveryRecord = (value: string): RecoveryRecord | undefined => {
+  try {
+    const parsed = JSON.parse(value) as Partial<RecoveryRecord>;
+    const owner = parseOwnerValue(parsed.owner);
+    return parsed.version === 1 && owner !== undefined ? Object.freeze({ owner, version: 1 }) : undefined;
   } catch {
     return undefined;
   }
@@ -105,14 +128,55 @@ const yieldToFilesystem = async (): Promise<void> => {
   await new Promise<void>((resolvePromise) => setImmediate(resolvePromise));
 };
 
+const recoveryContentsFor = (owner: DevLockOwner): string => `${stableJson({ owner, version: 1 })}\n`;
+
+const acquireRecoveryGate = async (
+  recoveryPath: string,
+  owner: DevLockOwner,
+  probeProcess: (pid: number) => boolean,
+): Promise<string> => {
+  const contents = recoveryContentsFor(owner);
+  for (;;) {
+    if (await writeCompleteExclusive(recoveryPath, contents, owner.nonce)) return contents;
+
+    let currentContents: string;
+    try {
+      currentContents = await readFile(recoveryPath, 'utf8');
+    } catch (error) {
+      if (isErrno(error, 'ENOENT')) continue;
+      throw error;
+    }
+    const recovery = parseRecoveryRecord(currentContents);
+    if (recovery === undefined) {
+      throw new DevLockError(
+        'DEV_LOCK_INVALID',
+        'The development lock recovery gate does not contain valid owner metadata.',
+      );
+    }
+    if (probeProcess(recovery.owner.pid)) {
+      await yieldToFilesystem();
+      continue;
+    }
+    await removeIfOwned(recoveryPath, currentContents);
+  }
+};
+
 export class DevLock {
   readonly #contents: string;
   readonly #path: string;
+  readonly #probeProcess: (pid: number) => boolean;
   readonly #recoveryPath: string;
   #closed = false;
 
-  constructor(path: string, recoveryPath: string, contents: string, owner: DevLockOwner) {
+  constructor(
+    path: string,
+    recoveryPath: string,
+    contents: string,
+    owner: DevLockOwner,
+    probeProcess: (pid: number) => boolean,
+  ) {
     this.#path = path;
+    this.#probeProcess = probeProcess;
     this.#recoveryPath = recoveryPath;
     this.#contents = contents;
     this.owner = owner;
@@ -123,10 +187,7 @@ export class DevLock {
   async close(): Promise<void> {
     if (this.#closed) return;
     this.#closed = true;
-    const recoveryContents = `${stableJson({ owner: this.owner, version: 1 })}\n`;
-    while (!await writeCompleteExclusive(this.#recoveryPath, recoveryContents, this.owner.nonce)) {
-      await yieldToFilesystem();
-    }
+    const recoveryContents = await acquireRecoveryGate(this.#recoveryPath, this.owner, this.#probeProcess);
     try {
       await removeIfOwned(this.#path, this.#contents);
     } finally {
@@ -153,7 +214,7 @@ export const acquireDevLock = async (options: DevLockOptions): Promise<DevLock> 
 
   for (;;) {
     if (await writeCompleteExclusive(path, contents, owner.nonce)) {
-      return new DevLock(path, recoveryPath, contents, owner);
+      return new DevLock(path, recoveryPath, contents, owner, probeProcess);
     }
 
     let currentContents: string;
@@ -178,11 +239,7 @@ export const acquireDevLock = async (options: DevLockOptions): Promise<DevLock> 
       );
     }
 
-    const recoveryContents = `${stableJson({ owner, version: 1 })}\n`;
-    if (!await writeCompleteExclusive(recoveryPath, recoveryContents, owner.nonce)) {
-      await yieldToFilesystem();
-      continue;
-    }
+    const recoveryContents = await acquireRecoveryGate(recoveryPath, owner, probeProcess);
     try {
       let currentDuringRecovery: string;
       try {
