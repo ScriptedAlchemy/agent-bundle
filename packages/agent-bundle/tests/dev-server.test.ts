@@ -72,6 +72,62 @@ const readRaw = (url: string, path: string): Promise<Readonly<{ readonly body: s
   });
 };
 
+const openLiveStream = (url: string): Readonly<{
+  readonly close: () => void;
+  readonly opened: Promise<void>;
+  readonly pause: () => void;
+  readonly until: (marker: string) => Promise<string>;
+}> => {
+  let received = '';
+  let response: import('node:http').IncomingMessage | undefined;
+  let resolveMatch: ((value: string) => void) | undefined;
+  let matched: string | undefined;
+  let rejectMatch: ((error: Error) => void) | undefined;
+  let resolveOpened: () => void = () => undefined;
+  let rejectOpened: (error: Error) => void = () => undefined;
+  const opened = new Promise<void>((resolvePromise, rejectPromise) => {
+    resolveOpened = resolvePromise;
+    rejectOpened = rejectPromise;
+  });
+  const request = httpGet(`${url}/api/project/events`, (stream) => {
+    response = stream;
+    stream.setEncoding('utf8');
+    stream.on('data', (chunk: string) => {
+      received += chunk;
+      if (matched !== undefined && received.includes(matched)) resolveMatch?.(received);
+    });
+    stream.once('error', (error: Error) => rejectMatch?.(error));
+    resolveOpened();
+  });
+  request.once('error', (error: Error) => {
+    rejectOpened(error);
+    rejectMatch?.(error);
+  });
+  return Object.freeze({
+    close: () => {
+      response?.destroy();
+      request.destroy();
+    },
+    opened,
+    pause: () => response?.pause(),
+    until: (marker) => {
+      if (received.includes(marker)) return Promise.resolve(received);
+      matched = marker;
+      return new Promise<string>((resolvePromise, rejectPromise) => {
+        resolveMatch = resolvePromise;
+        rejectMatch = rejectPromise;
+      });
+    },
+  });
+};
+
+const within = async <T>(promise: Promise<T>, milliseconds: number): Promise<T> => Promise.race([
+  promise,
+  new Promise<T>((_resolvePromise, rejectPromise) => {
+    setTimeout(() => rejectPromise(new Error(`Timed out after ${milliseconds}ms.`)), milliseconds);
+  }),
+]);
+
 it('serves typed project status and supplied prebuilt assets after starting the coordinator', async () => {
   const coordinator = new RecordingCoordinator();
   const server = await startForegroundServer({
@@ -126,6 +182,53 @@ it('replays project events after Last-Event-ID without re-sending the acknowledg
     expect(replay).not.toContain('"paths":["first.ts"]');
   } finally {
     await server.close();
+  }
+});
+
+it('opens a live event stream before a later project event is published', async () => {
+  const eventHub = new ProjectEventHub({ now: () => new Date('2026-08-14T12:00:00.000Z') });
+  const server = await startForegroundServer({ coordinator: new RecordingCoordinator(), eventHub, port: 0 });
+  const stream = openLiveStream(server.url);
+
+  try {
+    await expect(within(stream.opened, 250)).resolves.toBeUndefined();
+    expect(eventHub.subscriptionCount).toBe(1);
+
+    eventHub.publish({
+      payload: { occurredAt: '2026-08-14T12:00:00.000Z', paths: ['live.ts'], reason: 'source-change' },
+      type: 'invalidation',
+    });
+
+    await expect(within(stream.until('"paths":["live.ts"]'), 250)).resolves.toContain('id: 1\n');
+  } finally {
+    stream.close();
+    await server.close();
+  }
+});
+
+it('closes an unconsumed live event stream without retaining its subscription', async () => {
+  const coordinator = new RecordingCoordinator();
+  const eventHub = new ProjectEventHub({ now: () => new Date('2026-08-14T12:00:00.000Z') });
+  const server = await startForegroundServer({ coordinator, eventHub, port: 0 });
+  const stream = openLiveStream(server.url);
+
+  try {
+    await expect(within(stream.opened, 250)).resolves.toBeUndefined();
+    stream.pause();
+    eventHub.publish({
+      payload: {
+        occurredAt: '2026-08-14T12:00:00.000Z',
+        paths: ['backpressure.ts', 'x'.repeat(128 * 1024)],
+        reason: 'source-change',
+      },
+      type: 'invalidation',
+    });
+
+    await expect(within(server.close(), 250)).resolves.toBeUndefined();
+    expect(eventHub.subscriptionCount).toBe(0);
+    expect(coordinator.closeCalls).toBe(1);
+  } finally {
+    stream.close();
   }
 });
 

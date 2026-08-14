@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo, Socket } from 'node:net';
 
-import type { ProjectEventHub } from './events.ts';
+import type { ProjectEventHub, ProjectEventSubscription } from './events.ts';
 import type { Invalidation, ProjectEventMessage, ProjectStatus } from './types.ts';
 
 const bodyLimit = 64 * 1024;
@@ -208,6 +208,7 @@ export class ForegroundServer {
   readonly #port: number;
   readonly #server: Server;
   readonly #sockets = new Set<Socket>();
+  readonly #streamSubscriptions = new Set<ProjectEventSubscription>();
   #closePromise: Promise<void> | undefined;
   #listening = false;
   #startPromise: Promise<void> | undefined;
@@ -298,6 +299,8 @@ export class ForegroundServer {
     const releaseServer = this.#listening
       ? (() => {
           this.#listening = false;
+          for (const subscription of this.#streamSubscriptions) subscription.unsubscribe();
+          this.#streamSubscriptions.clear();
           for (const socket of this.#sockets) socket.destroy();
           return closeServer(this.#server);
         })()
@@ -357,10 +360,15 @@ export class ForegroundServer {
       connection: 'keep-alive',
       'content-type': 'text/event-stream; charset=utf-8',
     });
+    response.flushHeaders();
     const subscription = this.#eventHub.subscribe({ afterSequence: sequence }, (event) => {
       if (!response.writableEnded && !response.destroyed) response.write(eventFrame(event));
     });
-    const unsubscribe = () => subscription.unsubscribe();
+    this.#streamSubscriptions.add(subscription);
+    const unsubscribe = () => {
+      subscription.unsubscribe();
+      this.#streamSubscriptions.delete(subscription);
+    };
     request.once('close', unsubscribe);
     response.once('close', unsubscribe);
     if (request.destroyed || response.destroyed) subscription.unsubscribe();
