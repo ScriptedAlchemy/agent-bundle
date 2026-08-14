@@ -9,6 +9,7 @@ const AdditionalContext = ({ children }: PropsWithChildren): ReactElement =>
 export const Hook = { AdditionalContext, Result };
 
 interface McpResultProps extends PropsWithChildren {
+  _meta?: unknown;
   structuredContent?: unknown;
   isError?: boolean;
 }
@@ -31,8 +32,8 @@ interface McpEmbeddedResourceProps extends PropsWithChildren {
   blob?: string;
 }
 
-const McpResult = ({ children, isError, structuredContent }: McpResultProps): ReactElement =>
-  createElement('mcp-result', { isError, structuredContent }, children);
+const McpResult = ({ _meta, children, isError, structuredContent }: McpResultProps): ReactElement =>
+  createElement('mcp-result', { _meta, isError, structuredContent }, children);
 
 const McpText = ({ children }: PropsWithChildren): ReactElement => createElement('mcp-text', null, children);
 

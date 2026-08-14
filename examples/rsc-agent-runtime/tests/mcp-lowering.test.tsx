@@ -143,6 +143,20 @@ test('clones recursively valid JSON records for structured content', () => {
   expect(result.structuredContent).not.toBe(input);
 });
 
+test('preserves serializable extension metadata alongside complete portable results', () => {
+  const result = lowerMcpResult(
+    <Mcp.Result _meta={{ 'example.acme/trace': { attempt: 2 } }} structuredContent={{ stateVersion: 2 }}>
+      <Mcp.Text>two edits</Mcp.Text>
+    </Mcp.Result>,
+  );
+
+  expect(result).toEqual({
+    _meta: { 'example.acme/trace': { attempt: 2 } },
+    content: [{ text: 'two edits', type: 'text' }],
+    structuredContent: { stateVersion: 2 },
+  });
+});
+
 test('preserves an own __proto__ key in valid structured content', () => {
   const input = Object.create(null) as Record<string, unknown>;
   Object.defineProperty(input, '__proto__', {

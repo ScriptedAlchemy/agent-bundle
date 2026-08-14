@@ -62,10 +62,7 @@ export interface RuntimeToolDefinition {
   outputSchema: ZodType;
   annotations: ToolAnnotations;
   handlerId: string;
-  _meta: {
-    ui?: { resourceUri: string };
-    'openai/outputTemplate'?: string;
-  };
+  _meta: Record<string, unknown>;
 }
 
 export interface NativeHookDefinition {
@@ -79,7 +76,7 @@ export interface RuntimeResourceDefinition {
   name: string;
   uri: string;
   mimeType: string;
-  _meta: {
+  _meta: Record<string, unknown> & {
     'ui.prefersBorder': true;
     'ui.csp': {
       connectDomains: [];

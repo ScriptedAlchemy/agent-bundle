@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
-import { useApp } from '@modelcontextprotocol/ext-apps/react';
+import React, { useEffect, useMemo, useState } from 'react';
+import { useApp, useHostStyles } from '@modelcontextprotocol/ext-apps/react';
 
 import type { EditEvent } from '../runtime/contracts.js';
+import { createWidgetStateAdapter, safeAreaCustomProperties, type HostContext } from './host-adapters.js';
 
 type TimelineState = { stateVersion: number; edits: EditEvent[] };
 export type RefreshState = 'idle' | 'refreshing' | 'error';
@@ -84,6 +85,9 @@ export const App = () => {
   const standalone = window.parent === window;
   const [timeline, setTimeline] = useState<TimelineState>(standalone ? standaloneTimeline : { edits: [], stateVersion: 0 });
   const [refresh, setRefresh] = useState<RefreshState>('idle');
+  const [hostContext, setHostContext] = useState<HostContext>();
+  const [selectedEventId, setSelectedEventId] = useState<string>();
+  const widgetState = useMemo(() => createWidgetStateAdapter(window), []);
   const { app } = useApp({
     appInfo: { name: 'rsc-agent-runtime-timeline', version: '1.0.0' },
     capabilities: {},
@@ -95,8 +99,29 @@ export const App = () => {
           setRefresh('idle');
         }
       };
+      createdApp.onhostcontextchanged = (context) => {
+        setHostContext((previous) => ({ ...previous, ...context }));
+      };
     },
   });
+  const initialHostContext = app?.getHostContext();
+  useHostStyles(app, initialHostContext);
+
+  const activeHostContext = hostContext ?? initialHostContext;
+  useEffect(() => {
+    const validIds = timeline.edits.map((edit) => edit.eventId);
+    setSelectedEventId((selected) => {
+      if (selected !== undefined && validIds.includes(selected)) {
+        return selected;
+      }
+      return widgetState.restore(validIds);
+    });
+  }, [timeline.edits, widgetState]);
+
+  const selectEvent = (eventId: string): void => {
+    setSelectedEventId(eventId);
+    widgetState.persist(eventId);
+  };
 
   const refreshTimeline = async (): Promise<void> => {
     setRefresh('refreshing');
@@ -126,7 +151,7 @@ export const App = () => {
   };
 
   return (
-    <main className="timeline" aria-live="polite">
+    <main className="timeline" style={safeAreaCustomProperties(activeHostContext)}>
       <header className="timeline__header">
         <div>
           <h1>Runtime edit timeline</h1>
@@ -143,7 +168,20 @@ export const App = () => {
       ) : (
         <ol className="timeline__events">
           {timeline.edits.map((edit) => (
-            <li key={edit.eventId} className="timeline__event">
+            <li
+              key={edit.eventId}
+              aria-pressed={selectedEventId === edit.eventId}
+              className={`timeline__event${selectedEventId === edit.eventId ? ' timeline__event--selected' : ''}`}
+              onClick={() => selectEvent(edit.eventId)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault();
+                  selectEvent(edit.eventId);
+                }
+              }}
+              role="button"
+              tabIndex={0}
+            >
               <div className="timeline__node" aria-hidden="true" />
               <p className="timeline__path">{edit.path}</p>
               <div className="timeline__details">

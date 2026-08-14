@@ -26,7 +26,7 @@ app.get('/health', (_request, response) => {
 });
 
 app.post('/mcp', async (request, response) => {
-  const server = createRuntimeMcpServer();
+  const server = createRuntimeMcpServer({ publicMcpUrl: process.env.AGENT_RUNTIME_PUBLIC_MCP_URL });
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
 
   try {

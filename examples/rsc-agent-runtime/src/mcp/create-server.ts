@@ -7,19 +7,13 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { runtimeDefinition } from '../definition.js';
 import type { RuntimeResourceDefinition } from '../runtime/contracts.js';
 import { createMcpHandlers } from './handlers.js';
+import { resourceMetadata } from './host-metadata.js';
 import type { McpRequestExtra, ResolveStateOptions } from './resolve-state.js';
 
 export interface CreateRuntimeMcpServerOptions extends ResolveStateOptions {
+  publicMcpUrl?: string;
   widgetHtml?: string;
 }
-
-const resourceMeta = (resource: RuntimeResourceDefinition) => ({
-  'openai/widgetDescription': resource._meta['openai/widgetDescription'],
-  ui: {
-    csp: resource._meta['ui.csp'],
-    prefersBorder: resource._meta['ui.prefersBorder'],
-  },
-});
 
 const defaultWidgetPath = (): string =>
   join(dirname(process.argv[1] ?? process.cwd()), '../../app/edit-timeline-v1.html');
@@ -59,16 +53,17 @@ export const createRuntimeMcpServer = (options: CreateRuntimeMcpServerOptions = 
   }
 
   for (const resource of runtimeDefinition.resources) {
-    const metadata = resourceMeta(resource);
+    const registrationMetadata = resourceMetadata(resource);
+    const contentMetadata = resourceMetadata(resource, options.publicMcpUrl);
     registerAppResource(
       server,
       resource.name,
       resource.uri,
-      { _meta: metadata, mimeType: RESOURCE_MIME_TYPE },
+      { _meta: registrationMetadata, mimeType: RESOURCE_MIME_TYPE },
       async () => ({
         contents: [
           {
-            _meta: metadata,
+            _meta: contentMetadata,
             mimeType: RESOURCE_MIME_TYPE,
             text: options.widgetHtml ?? (await defaultWidgetHtml()),
             uri: resource.uri,

@@ -226,8 +226,10 @@ export const lowerMcpResult = (node: ReactNode): CallToolResult => {
   }
 
   const structuredContent = root.props.structuredContent;
+  const metadata = root.props._meta;
   return {
     content: Children.toArray(root.props.children as ReactNode).map(lowerContent),
+    ...(metadata === undefined ? {} : { _meta: jsonRecord(metadata, 'mcp-result _meta must be JSON-serializable') }),
     ...(structuredContent === undefined
       ? {}
       : { structuredContent: jsonRecord(structuredContent, 'mcp-result structuredContent must be JSON-serializable') }),
