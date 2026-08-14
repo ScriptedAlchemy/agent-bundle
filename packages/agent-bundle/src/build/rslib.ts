@@ -13,7 +13,7 @@ const entryAnchor = fileURLToPath(import.meta.url);
 
 const assertVirtualHookConfig = (
   entries: readonly RslibEntry[],
-  configs: readonly { readonly output?: { readonly asyncChunks?: boolean; readonly path?: string }; readonly plugins?: readonly unknown[]; readonly target?: string | readonly string[] }[],
+  configs: readonly { readonly output?: { readonly asyncChunks?: boolean; readonly path?: string }; readonly plugins?: readonly unknown[]; readonly target?: false | string | readonly string[] }[],
   outputRoot: string,
 ): void => {
   const virtualEntries = entries.filter((entry) => entry.virtualSource !== undefined);
@@ -23,7 +23,7 @@ const assertVirtualHookConfig = (
   }
   for (const config of configs) {
     const target = Array.isArray(config.target) ? config.target : [config.target];
-    if (config.output?.asyncChunks !== false || config.output.path !== outputRoot || !target.includes('node')) {
+    if (config.output?.asyncChunks !== false || config.output.path !== outputRoot || !target.some((value) => value === 'node')) {
       throw new Error('Rslib resolved an invalid generated-hook executable configuration.');
     }
     const hasVirtualModule = config.plugins?.some(
@@ -47,7 +47,9 @@ export const buildWithRslib = async (options: {
   const rslib = await createRslib({
     cwd: options.cwd,
     config: {
-      lib: options.entries.map((entry) => ({
+      lib: options.entries.map((entry) => {
+        const virtualSource = entry.virtualSource;
+        return {
           id: `agent-bundle-${entry.name}`,
           autoExternal: false,
           bundle: true,
@@ -67,22 +69,23 @@ export const buildWithRslib = async (options: {
           },
           source: {
             entry: {
-              [entry.name]: entry.virtualSource === undefined ? entry.source : entryAnchor,
+              [entry.name]: virtualSource === undefined ? entry.source : entryAnchor,
             },
           },
-          ...(entry.virtualSource === undefined
+          ...(virtualSource === undefined
             ? {}
             : {
                 tools: {
                   rspack: (config) => {
                     config.output.asyncChunks = false;
                     config.plugins.push(new rspack.experiments.VirtualModulesPlugin({
-                      [entryAnchor]: entry.virtualSource,
+                      [entryAnchor]: virtualSource,
                     }));
                   },
                 },
               }),
-        })),
+        };
+      }),
     },
   });
 

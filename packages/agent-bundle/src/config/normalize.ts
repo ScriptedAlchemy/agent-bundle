@@ -46,8 +46,12 @@ const slug = (value: string): string => {
   return normalized.length === 0 ? 'handler' : normalized;
 };
 
+const isHookEntryList = (
+  input: AgentBundleHookInput,
+): input is readonly (string | AgentBundleHookEntry)[] => Array.isArray(input);
+
 const asEntries = (input: AgentBundleHookInput): readonly (string | AgentBundleHookEntry)[] =>
-  Array.isArray(input) ? input : [input];
+  isHookEntryList(input) ? input : [input];
 
 const normalizeHook = (
   event: CanonicalHookEvent,
