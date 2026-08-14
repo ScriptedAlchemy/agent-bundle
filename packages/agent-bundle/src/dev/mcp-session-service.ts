@@ -797,7 +797,6 @@ export class McpSessionService {
   readonly #createStreamableHttpTransport: (url: URL, options: RemoteTransportOptions) => Transport;
   readonly #epochStore: EpochStore;
   readonly #openingSessions = new Set<OpeningSession>();
-  readonly #projectRoot: string;
   readonly #sessions = new Map<string, McpSession>();
   #closePromise: Promise<void> | undefined;
   #closed = false;
@@ -819,7 +818,6 @@ export class McpSessionService {
         requestInit: transportOptions.headers === undefined ? undefined : { headers: transportOptions.headers },
       }));
     this.#epochStore = options.epochStore;
-    this.#projectRoot = resolve(options.projectRoot);
   }
 
   async open(options: OpenMcpSessionOptions): Promise<McpSession> {
@@ -844,7 +842,7 @@ export class McpSessionService {
     let pluginData: string | undefined;
     let session: McpSession | undefined;
     try {
-      const epochRoot = joinArtifact(this.#projectRoot, `.agent-bundle/epochs/${options.epochId}`);
+      const epochRoot = epochReference.root;
       const diagnostics = await validateArtifact({ allowEpochStagingMarker: true, artifactRoot: epochRoot });
       const errors = diagnostics.filter((diagnostic) => diagnostic.severity === 'error');
       if (errors.length > 0) throw new DiagnosticError(errors);

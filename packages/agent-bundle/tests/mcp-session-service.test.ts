@@ -300,6 +300,30 @@ it('pins the selected epoch until the persistent session closes', async () => {
   }
 }, 30_000);
 
+it('executes only the acquired epoch reference root when service and store roots differ', async () => {
+  const serviceRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-persistent-mcp-service-root-'));
+  const storeRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-persistent-mcp-store-root-'));
+  try {
+    await publishFixtureEpoch(serviceRoot, 'epoch-1');
+    const epochStore = await publishFixtureEpoch(storeRoot, 'epoch-1');
+    const service = new McpSessionService({ epochStore, projectRoot: serviceRoot });
+
+    const session = await service.open({ epochId: 'epoch-1', serverName: 'fixture', target: 'portable' });
+    const result = await session.callTool({ arguments: {}, name: 'inspect' });
+    const state = JSON.parse(textFrom(result)) as { readonly root: string };
+
+    expect(state.root).toBe(join(storeRoot, '.agent-bundle', 'epochs', 'epoch-1', 'portable'));
+    await session.close();
+    await expect(access(join(serviceRoot, '.agent-bundle', 'epochs', 'epoch-1', 'portable', 'mcp.json'))).resolves.toBeUndefined();
+    await service.close();
+  } finally {
+    await Promise.all([
+      rm(serviceRoot, { force: true, recursive: true }),
+      rm(storeRoot, { force: true, recursive: true }),
+    ]);
+  }
+}, 30_000);
+
 it('closes an in-flight open instead of returning an untracked epoch-pinning session', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-persistent-mcp-open-close-'));
   try {
