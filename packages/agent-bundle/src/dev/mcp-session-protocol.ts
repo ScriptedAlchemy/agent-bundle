@@ -78,12 +78,26 @@ export interface McpSessionTraceReplay {
   readonly overflow?: McpSessionReplayOverflow;
 }
 
-/** A live-only subscription. Replay first, then subscribe, to resume from a cursor. */
+export interface McpSessionTraceReplayGap {
+  readonly earliestAvailableSequence: number;
+  readonly latestDroppedSequence: number;
+  readonly requestedAfterSequence: number;
+  readonly type: 'replay.gap';
+}
+
+export interface McpSessionTraceSubscriptionOptions {
+  /** Resume after this trace entry. Omit to replay the retained trace history. */
+  readonly afterSequence?: number;
+}
+
+/** An atomic replay-plus-live subscription that resumes from a trace cursor. */
 export interface McpSessionTraceSubscription {
   readonly unsubscribe: () => void;
 }
 
-export type McpSessionTraceListener = (entry: McpSessionTraceEntry) => void;
+export type McpSessionTraceMessage = McpSessionTraceEntry | McpSessionTraceReplayGap;
+
+export type McpSessionTraceListener = (entry: McpSessionTraceMessage) => void;
 
 /**
  * A display-only configuration derived from the validated generated artifact.

@@ -25,6 +25,7 @@ import { DiagnosticError } from '../core/diagnostics.ts';
 import { assertInside } from '../core/paths.ts';
 import { resolveMcpPathTokens } from '../services/mcp-path-tokens.ts';
 import { EpochStore, type EpochReference } from './epoch-store.ts';
+import { freezeJsonValue } from './types.ts';
 import type {
   McpSessionBinding,
   McpSessionId,
@@ -33,8 +34,11 @@ import type {
   McpSessionReplayOverflow,
   McpSessionTraceEntry,
   McpSessionTraceListener,
+  McpSessionTraceMessage,
   McpSessionTraceReplay,
+  McpSessionTraceReplayGap,
   McpSessionTraceSubscription,
+  McpSessionTraceSubscriptionOptions,
 } from './mcp-session-protocol.ts';
 
 export type {
@@ -45,8 +49,11 @@ export type {
   McpSessionReplayOverflow,
   McpSessionTraceEntry,
   McpSessionTraceListener,
+  McpSessionTraceMessage,
   McpSessionTraceReplay,
+  McpSessionTraceReplayGap,
   McpSessionTraceSubscription,
+  McpSessionTraceSubscriptionOptions,
 } from './mcp-session-protocol.ts';
 
 const defaultTimeoutMs = 5_000;
@@ -157,8 +164,8 @@ export interface McpSessionConnectionState {
 
 export interface McpSessionFrame {
   readonly direction: 'client' | 'server';
-  /** The exact JSON-RPC object received from or sent to the SDK transport. */
-  readonly message: RawMcpFrame;
+  /** A deep-frozen snapshot of the JSON-RPC object received from or sent to the SDK transport. */
+  readonly message: unknown;
   readonly sequence: number;
 }
 
@@ -217,31 +224,47 @@ interface OpeningSession {
   readonly finish: () => void;
 }
 
-const sensitiveLaunchValue = /(?:api[-_]?key|authorization|credential|cookie|password|secret|token)/iu;
+interface TraceSubscription {
+  closed: boolean;
+  lastDeliveredSequence: number;
+  listener: McpSessionTraceListener;
+  pending: McpSessionTraceEntry[];
+  replaying: boolean;
+}
 
-const inspectorArgument = (argument: string): string => {
-  if (!sensitiveLaunchValue.test(argument)) return argument;
-  if (argument.includes('=')) {
-    const separator = argument.indexOf('=');
-    return `${argument.slice(0, separator + 1)}[REDACTED]`;
-  }
-  return argument;
+const inspectorCommandAllowlist = new Set(['bun', 'bun.exe', 'deno', 'deno.exe', 'node', 'node.exe']);
+const inspectorRuntimeArgumentAllowlist = new Set(['--enable-source-maps']);
+const safeLocaleValue = /^[A-Za-z0-9_.@-]{1,128}$/u;
+const safeTimeZoneValue = /^[A-Za-z0-9_+./-]{1,128}$/u;
+
+const inspectorCommand = (command: string): string =>
+  inspectorCommandAllowlist.has(command) ? command : '[REDACTED]';
+
+const inspectorArtifactArgument = (argument: string, targetRoot: string): string => {
+  if (inspectorRuntimeArgumentAllowlist.has(argument)) return argument;
+  if (!isAbsolute(argument) && !argument.startsWith('./') && !argument.startsWith('../')) return '[REDACTED]';
+  const resolved = resolve(targetRoot, argument);
+  return resolved === targetRoot || resolved.startsWith(`${targetRoot}/`) ? argument : '[REDACTED]';
 };
 
-const inspectorArguments = (args: readonly string[]): readonly string[] => Object.freeze(args.map((argument, index) => {
-  const previous = args[index - 1];
-  if (
-    previous !== undefined &&
-    sensitiveLaunchValue.test(previous) &&
-    !previous.includes('=') &&
-    !argument.startsWith('-')
-  ) return '[REDACTED]';
-  return inspectorArgument(argument);
-}));
+const inspectorArguments = (args: readonly string[], targetRoot: string): readonly string[] =>
+  Object.freeze(args.map((argument) => inspectorArtifactArgument(argument, targetRoot)));
 
-const inspectorEnvironment = (env: Readonly<Record<string, string>> | undefined): Readonly<Record<string, string>> => Object.freeze(
-  Object.fromEntries(Object.entries(env ?? {}).filter(([key]) => inspectorEnvironmentAllowlist.has(key))),
-);
+const safeInspectorEnvironmentValue = (key: string, value: string): boolean => {
+  if (key === 'FORCE_COLOR') return /^(0|1|2|3)$/u.test(value);
+  if (key === 'NO_COLOR') return value === '0' || value === '1';
+  if (key === 'LANG' || key === 'LC_ALL') return safeLocaleValue.test(value);
+  if (key === 'TZ') return safeTimeZoneValue.test(value);
+  return false;
+};
+
+const inspectorEnvironment = (env: Readonly<Record<string, string>> | undefined): Readonly<Record<string, string>> => {
+  const projected: Record<string, string> = {};
+  for (const [key, value] of Object.entries(env ?? {})) {
+    if (inspectorEnvironmentAllowlist.has(key) && safeInspectorEnvironmentValue(key, value)) projected[key] = value;
+  }
+  return Object.freeze(projected);
+};
 
 const inspectorUrl = (url: URL): string => {
   const sanitized = new URL(url);
@@ -482,7 +505,8 @@ export class McpSession {
   readonly #events: McpSessionEvent[] = [];
   readonly #requests = new Map<string, AbortController>();
   readonly #trace: McpSessionTraceEntry[] = [];
-  readonly #traceListeners = new Set<McpSessionTraceListener>();
+  readonly #traceSubscriptions = new Set<TraceSubscription>();
+  readonly #undeliveredTraceEntries: McpSessionTraceEntry[] = [];
   #capture: StderrCapture | undefined;
   #client: McpClient | undefined;
   #closePromise: Promise<void> | undefined;
@@ -493,6 +517,7 @@ export class McpSession {
   #sequence = 0;
   #stderrOutput = '';
   #stderrOverflow = false;
+  #traceDispatching = false;
   #traceDroppedThroughSequence = 0;
   #traceSequence = 0;
 
@@ -559,9 +584,7 @@ export class McpSession {
   }
 
   trace(afterSequence = 0): McpSessionTraceReplay {
-    if (!Number.isSafeInteger(afterSequence) || afterSequence < 0) {
-      throw new RangeError('MCP session trace cursor must be a nonnegative safe integer.');
-    }
+    this.#assertTraceCursor(afterSequence);
     const overflow = afterSequence < this.#traceDroppedThroughSequence
       ? Object.freeze({ afterSequence, droppedThroughSequence: this.#traceDroppedThroughSequence })
       : undefined;
@@ -571,10 +594,58 @@ export class McpSession {
     });
   }
 
-  subscribeTrace(listener: McpSessionTraceListener): McpSessionTraceSubscription {
-    this.#traceListeners.add(listener);
+  subscribeTrace(
+    options: McpSessionTraceSubscriptionOptions,
+    listener: McpSessionTraceListener,
+  ): McpSessionTraceSubscription;
+  subscribeTrace(
+    listener: McpSessionTraceListener,
+    options?: McpSessionTraceSubscriptionOptions,
+  ): McpSessionTraceSubscription;
+  subscribeTrace(
+    first: McpSessionTraceSubscriptionOptions | McpSessionTraceListener,
+    second?: McpSessionTraceListener | McpSessionTraceSubscriptionOptions,
+  ): McpSessionTraceSubscription {
+    const listener = typeof first === 'function'
+      ? first
+      : typeof second === 'function'
+        ? second
+        : undefined;
+    const options = typeof first === 'function'
+      ? typeof second === 'function' ? undefined : second
+      : first;
+    if (typeof listener !== 'function') throw new TypeError('An MCP session trace listener is required.');
+    const afterSequence = options?.afterSequence ?? 0;
+    this.#assertTraceCursor(afterSequence);
+    const boundary = this.#traceSequence;
+    const subscription: TraceSubscription = {
+      closed: false,
+      lastDeliveredSequence: afterSequence,
+      listener,
+      pending: [],
+      replaying: true,
+    };
+    this.#traceSubscriptions.add(subscription);
+
+    const firstRetained = this.#trace[0]?.sequence;
+    const replayEntries = this.#trace.filter((entry) => entry.sequence > afterSequence && entry.sequence <= boundary);
+    if (firstRetained !== undefined && afterSequence < firstRetained - 1) {
+      this.#deliverTraceGap(subscription, Object.freeze({
+        earliestAvailableSequence: firstRetained,
+        latestDroppedSequence: firstRetained - 1,
+        requestedAfterSequence: afterSequence,
+        type: 'replay.gap',
+      }));
+    }
+    for (const entry of replayEntries) this.#deliverTraceEntry(subscription, entry);
+    while (!subscription.closed && subscription.pending.length > 0) {
+      const entry = subscription.pending.shift();
+      if (entry !== undefined) this.#deliverTraceEntry(subscription, entry);
+    }
+    subscription.replaying = false;
+
     return Object.freeze({
-      unsubscribe: () => this.#traceListeners.delete(listener),
+      unsubscribe: () => this.#removeTraceSubscription(subscription),
     });
   }
 
@@ -582,8 +653,8 @@ export class McpSession {
     if (this.#launch.kind === 'stdio') {
       return Object.freeze({
         launch: Object.freeze({
-          args: inspectorArguments(this.#launch.args),
-          command: this.#launch.command,
+          args: inspectorArguments(this.#launch.args, this.#resolved.targetRoot),
+          command: inspectorCommand(this.#launch.command),
           ...(this.#launch.cwd === undefined ? {} : { cwd: this.#launch.cwd }),
           env: this.#launch.inspectorEnv,
           kind: 'stdio',
@@ -812,16 +883,17 @@ export class McpSession {
   }
 
   #recordFrame(direction: McpSessionFrame['direction'], message: RawMcpFrame): void {
+    const snapshot = freezeJsonValue(structuredClone(message));
     const sequence = this.#nextSequence();
-    this.#retain(this.#frames, Object.freeze({ direction, message, sequence }), maxRetainedFrames);
+    this.#retain(this.#frames, Object.freeze({ direction, message: snapshot, sequence }), maxRetainedFrames);
     this.#recordTrace(Object.freeze({
       direction,
       kind: 'frame',
-      message,
+      message: snapshot,
       occurredAt: Date.now(),
       sequence: this.#nextTraceSequence(),
     }));
-    const notification: unknown = message;
+    const notification: unknown = snapshot;
     if (direction !== 'server' || !isRecord(notification) || typeof notification.method !== 'string') return;
     if (notification.method === 'notifications/progress') {
       const event = Object.freeze({ payload: notification.params, sequence: this.#nextSequence(), type: 'progress' as const });
@@ -874,12 +946,59 @@ export class McpSession {
       const dropped = this.#trace.shift();
       if (dropped !== undefined) this.#traceDroppedThroughSequence = dropped.sequence;
     }
-    for (const listener of this.#traceListeners) {
-      try {
-        listener(entry);
-      } catch {
-        // Subscribers are observers and cannot interfere with session lifecycle work.
+    for (const subscription of this.#traceSubscriptions) {
+      if (subscription.replaying) subscription.pending.push(entry);
+    }
+    this.#undeliveredTraceEntries.push(entry);
+    this.#drainLiveTraceEntries();
+  }
+
+  #assertTraceCursor(afterSequence: number): void {
+    if (!Number.isSafeInteger(afterSequence) || afterSequence < 0) {
+      throw new RangeError('MCP session trace cursor must be a nonnegative safe integer.');
+    }
+    if (afterSequence > this.#traceSequence) {
+      throw new RangeError('MCP session trace cursor cannot be ahead of the current trace.');
+    }
+  }
+
+  #removeTraceSubscription(subscription: TraceSubscription): void {
+    subscription.closed = true;
+    this.#traceSubscriptions.delete(subscription);
+  }
+
+  #notifyTrace(subscription: TraceSubscription, message: McpSessionTraceMessage): void {
+    try {
+      subscription.listener(message);
+    } catch {
+      // Observers that throw cannot interfere with lifecycle or later subscribers.
+      this.#removeTraceSubscription(subscription);
+    }
+  }
+
+  #deliverTraceGap(subscription: TraceSubscription, gap: McpSessionTraceReplayGap): void {
+    if (!subscription.closed) this.#notifyTrace(subscription, gap);
+  }
+
+  #deliverTraceEntry(subscription: TraceSubscription, entry: McpSessionTraceEntry): void {
+    if (subscription.closed || entry.sequence <= subscription.lastDeliveredSequence) return;
+    subscription.lastDeliveredSequence = entry.sequence;
+    this.#notifyTrace(subscription, entry);
+  }
+
+  #drainLiveTraceEntries(): void {
+    if (this.#traceDispatching) return;
+    this.#traceDispatching = true;
+    try {
+      while (this.#undeliveredTraceEntries.length > 0) {
+        const entry = this.#undeliveredTraceEntries.shift();
+        if (entry === undefined) continue;
+        for (const subscription of this.#traceSubscriptions) {
+          if (!subscription.replaying) this.#deliverTraceEntry(subscription, entry);
+        }
       }
+    } finally {
+      this.#traceDispatching = false;
     }
   }
 

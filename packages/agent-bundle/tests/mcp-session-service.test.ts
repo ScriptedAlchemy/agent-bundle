@@ -12,7 +12,7 @@ import { validateArtifact } from '../src/build/validate-artifact.ts';
 import { normalizeProject } from '../src/config/normalize.ts';
 import type { LoadedConfig } from '../src/config/load.ts';
 import { EpochStore } from '../src/dev/epoch-store.ts';
-import { McpSessionService } from '../src/dev/mcp-session-service.ts';
+import { McpSession, McpSessionService } from '../src/dev/mcp-session-service.ts';
 import type { ArtifactEpoch } from '../src/dev/types.ts';
 import type { AgentBundleConfig, NormalizationTargetRegistry } from '../src/core/types.ts';
 
@@ -547,6 +547,69 @@ it('bounds frame and event retention with an explicit replay overflow cursor', a
     expect(Object.isFrozen(trace.entries[0]!)).toBe(true);
     expect(Reflect.set(trace.entries[0]!, 'sequence', 0)).toBe(false);
 
+    const replayed: Array<{ readonly sequence?: number; readonly type?: string }> = [];
+    session.subscribeTrace({ afterSequence: 0 }, (entry) => {
+      replayed.push('sequence' in entry
+        ? { sequence: entry.sequence, type: entry.kind }
+        : { type: entry.type });
+    });
+    expect(replayed[0]).toEqual({ type: 'replay.gap' });
+    expect(replayed.slice(1).map((entry) => entry.sequence)).toEqual(trace.entries.map((entry) => entry.sequence));
+    const latestSequence = trace.entries.at(-1)?.sequence;
+    if (latestSequence === undefined) throw new Error('Expected a trace cursor.');
+    expect(() => session.subscribeTrace({ afterSequence: latestSequence + 1 }, () => undefined)).toThrow(
+      'cannot be ahead',
+    );
+
+    await session.close();
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+}, 30_000);
+
+it('delivers replay and reentrant live trace entries in one monotonic order', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-persistent-mcp-trace-order-'));
+  try {
+    const epochStore = await publishFixtureEpoch(root, 'epoch-trace-order');
+    const service = new McpSessionService({
+      createClient: () => ({
+        callTool: async () => ({ content: [] }),
+        close: async () => undefined,
+        connect: async () => undefined,
+        getPrompt: async () => ({ messages: [] }),
+        getServerCapabilities: () => undefined,
+        getServerVersion: () => undefined,
+        listPrompts: async () => ({ prompts: [] }),
+        listResources: async () => ({ resources: [] }),
+        listResourceTemplates: async () => ({ resourceTemplates: [] }),
+        listTools: async () => ({ tools: [] }),
+        readResource: async () => ({ contents: [] }),
+      }),
+      createStdioTransport: () => ({ close: async () => undefined, send: async () => undefined, start: async () => undefined, stderr: null }) as never,
+      epochStore,
+      projectRoot: root,
+    });
+    const session = await service.open({ epochId: 'epoch-trace-order', serverName: 'fixture', target: 'portable' });
+    const first: number[] = [];
+    const second: number[] = [];
+    let nested = false;
+
+    session.subscribeTrace({ afterSequence: 0 }, (entry) => {
+      if (!('sequence' in entry)) return;
+      first.push(entry.sequence);
+      if (!nested) {
+        nested = true;
+        for (let index = 0; index < 300; index += 1) {
+          expect(session.cancel(`not-running-${index}`)).toBe(false);
+        }
+        session.subscribeTrace({ afterSequence: 0 }, (later) => {
+          if ('sequence' in later) second.push(later.sequence);
+        });
+      }
+    });
+
+    expect(first).toEqual(Array.from({ length: 602 }, (_, index) => index + 1));
+    expect(second).toEqual(Array.from({ length: 512 }, (_, index) => index + 91));
     await session.close();
   } finally {
     await rm(root, { force: true, recursive: true });
@@ -640,20 +703,25 @@ it('opens generated streamable HTTP and SSE servers through their dedicated tran
   }
 }, 30_000);
 
-it('retains raw protocol frame identities and exposes progress and logging without translating SDK results', async () => {
+it('retains frozen transport snapshots without caller or subscriber mutation', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-persistent-mcp-raw-'));
   try {
     const epochStore = await publishFixtureEpoch(root, 'epoch-raw');
-    const outbound = { id: 1, jsonrpc: '2.0' as const, method: 'initialize', params: {} };
+    const outbound = {
+      id: 1,
+      jsonrpc: '2.0' as const,
+      method: 'initialize',
+      params: { nested: { value: 'outbound-before-mutation' } },
+    };
     const progress = {
       jsonrpc: '2.0' as const,
       method: 'notifications/progress',
-      params: { progress: 1, progressToken: 'fixture-progress', total: 2 },
+      params: { nested: { value: 'progress-before-mutation' }, progress: 1, progressToken: 'fixture-progress', total: 2 },
     };
     const logging = {
       jsonrpc: '2.0' as const,
       method: 'notifications/message',
-      params: { data: { nested: ['exact'] }, level: 'info', logger: 'fixture' },
+      params: { data: { nested: ['logging-before-mutation'] }, level: 'info', logger: 'fixture' },
     };
     const result = {
       _meta: { opaque: { nested: ['exact', 42] } },
@@ -704,16 +772,77 @@ it('retains raw protocol frame identities and exposes progress and logging witho
     const session = await service.open({ epochId: 'epoch-raw', serverName: 'fixture', target: 'portable' });
 
     expect(session.frames().map((frame) => frame.message)).toEqual([outbound, progress, logging]);
-    expect(session.frames()[0]!.message).toBe(outbound);
-    expect(session.frames()[1]!.message).toBe(progress);
-    expect(session.frames()[2]!.message).toBe(logging);
-    expect(session.events()).toEqual([
-      { payload: progress.params, sequence: 3, type: 'progress' },
-      { payload: logging.params, sequence: 5, type: 'logging' },
+    expect(session.frames()[0]!.message).not.toBe(outbound);
+    expect(session.frames()[1]!.message).not.toBe(progress);
+    expect(session.frames()[2]!.message).not.toBe(logging);
+    outbound.params.nested.value = 'mutated-by-caller';
+    progress.params.nested.value = 'mutated-by-caller';
+    logging.params.data.nested[0] = 'mutated-by-caller';
+    expect(session.frames().map((frame) => frame.message)).toEqual([
+      { id: 1, jsonrpc: '2.0', method: 'initialize', params: { nested: { value: 'outbound-before-mutation' } } },
+      {
+        jsonrpc: '2.0',
+        method: 'notifications/progress',
+        params: { nested: { value: 'progress-before-mutation' }, progress: 1, progressToken: 'fixture-progress', total: 2 },
+      },
+      {
+        jsonrpc: '2.0',
+        method: 'notifications/message',
+        params: { data: { nested: ['logging-before-mutation'] }, level: 'info', logger: 'fixture' },
+      },
     ]);
-    const traceFrame = session.trace().entries.find((entry) => entry.kind === 'frame' && entry.message === outbound);
+    expect(session.events()).toEqual([
+      {
+        payload: { nested: { value: 'progress-before-mutation' }, progress: 1, progressToken: 'fixture-progress', total: 2 },
+        sequence: 3,
+        type: 'progress',
+      },
+      { payload: { data: { nested: ['logging-before-mutation'] }, level: 'info', logger: 'fixture' }, sequence: 5, type: 'logging' },
+    ]);
+    const traceFrame = session.trace().entries.find((entry) => entry.kind === 'frame');
     if (traceFrame?.kind !== 'frame') throw new Error('Expected the raw outbound frame in the wire trace.');
-    expect(traceFrame.message).toBe(outbound);
+    expect(traceFrame.message).toEqual({
+      id: 1,
+      jsonrpc: '2.0',
+      method: 'initialize',
+      params: { nested: { value: 'outbound-before-mutation' } },
+    });
+    if (typeof traceFrame.message !== 'object' || traceFrame.message === null) {
+      throw new Error('Expected the raw frame snapshot to be an object.');
+    }
+    expect(Reflect.set(traceFrame.message, 'mutated', true)).toBe(false);
+
+    const afterSequence = session.trace().entries.at(-1)?.sequence;
+    if (afterSequence === undefined) throw new Error('Expected a trace cursor.');
+    const subscriberSnapshots: unknown[] = [];
+    const subscription = session.subscribeTrace({ afterSequence }, (entry) => subscriberSnapshots.push(entry));
+    const liveFrame = {
+      jsonrpc: '2.0' as const,
+      method: 'notifications/progress',
+      params: { nested: { value: 'live-before-mutation' }, progress: 2, progressToken: 'fixture-progress' },
+    };
+    spawned?.onmessage?.(liveFrame);
+    subscription.unsubscribe();
+    const received = subscriberSnapshots[0];
+    if (
+      typeof received !== 'object' ||
+      received === null ||
+      !('kind' in received) ||
+      received.kind !== 'frame' ||
+      !('message' in received) ||
+      typeof received.message !== 'object' ||
+      received.message === null
+    ) throw new Error('Expected a live frame snapshot.');
+    expect(received.message).not.toBe(liveFrame);
+    expect(Reflect.set(received.message, 'mutated', true)).toBe(false);
+    liveFrame.params.nested.value = 'mutated-by-caller';
+    const replayedFrame = session.trace(afterSequence).entries.find((entry) => entry.kind === 'frame');
+    if (replayedFrame?.kind !== 'frame') throw new Error('Expected a replayed frame snapshot.');
+    expect(replayedFrame.message).toEqual({
+      jsonrpc: '2.0',
+      method: 'notifications/progress',
+      params: { nested: { value: 'live-before-mutation' }, progress: 2, progressToken: 'fixture-progress' },
+    });
     await expect(session.callTool({ arguments: {}, name: 'fixture' })).resolves.toBe(result);
 
     await session.close();
@@ -722,6 +851,79 @@ it('retains raw protocol frame identities and exposes progress and logging witho
     await rm(root, { force: true, recursive: true });
   }
 }, 30_000);
+
+it('fails closed when projecting adversarial generated launch configuration for the Inspector', () => {
+  const shared = {
+    binding: { epochId: 'epoch-inspector', serverName: 'fixture', target: 'portable' },
+    createClient: () => ({}) as never,
+    createSseTransport: () => ({}) as never,
+    createStdioTransport: () => ({}) as never,
+    createStreamableHttpTransport: () => ({}) as never,
+    epochReference: { close: async () => undefined, root: '/tmp/agent-bundle-inspector' } as never,
+    id: 'session-inspector',
+    onClose: () => undefined,
+    pluginData: '/tmp/agent-bundle-inspector-data',
+    workspaceRoot: '/tmp/agent-bundle-inspector-workspace',
+  };
+  const stdio = new McpSession({
+    ...shared,
+    resolved: {
+      server: {
+        args: [
+          '--header',
+          'Authorization: Bearer header-secret',
+          '--header=Cookie: session=cookie-secret',
+          '--token',
+          '-token-secret',
+          '--api-key=api-key-secret',
+          '--enable-source-maps',
+          '/tmp/agent-bundle-inspector/portable/server.mjs',
+        ],
+        command: 'node',
+        env: { FORCE_COLOR: '2', LANG: 'Bearer environment-secret', NO_COLOR: '1' },
+        kind: 'stdio',
+      },
+      target: 'portable',
+      targetRoot: '/tmp/agent-bundle-inspector/portable',
+    },
+  });
+  const stdioProjection = stdio.inspectorConfig();
+  const stdioJson = JSON.stringify(stdioProjection);
+    
+  expect(stdioJson).not.toContain('header-secret');
+  expect(stdioJson).not.toContain('cookie-secret');
+  expect(stdioJson).not.toContain('token-secret');
+  expect(stdioJson).not.toContain('api-key-secret');
+  expect(stdioJson).not.toContain('environment-secret');
+  if (stdioProjection.launch.kind !== 'stdio') throw new Error('Expected a stdio Inspector projection.');
+  expect(stdioProjection.launch.env).toEqual({ FORCE_COLOR: '2', NO_COLOR: '1' });
+  expect(stdioProjection.launch.args).toContain('--enable-source-maps');
+
+  const remote = new McpSession({
+    ...shared,
+    id: 'session-inspector-remote',
+    resolved: {
+      server: {
+        headers: { Authorization: 'Bearer header-secret', Cookie: 'session=cookie-secret' },
+        kind: 'streamable-http',
+        url: 'https://user:password@mcp.example.test/tools?token=query-secret#fragment-secret',
+      },
+      target: 'portable',
+      targetRoot: '/tmp/agent-bundle-inspector/portable',
+    },
+  });
+  const remoteProjection = remote.inspectorConfig();
+  const remoteJson = JSON.stringify(remoteProjection);
+  expect(remoteJson).not.toContain('password');
+  expect(remoteJson).not.toContain('query-secret');
+  expect(remoteJson).not.toContain('fragment-secret');
+  expect(remoteJson).not.toContain('header-secret');
+  expect(remoteJson).not.toContain('cookie-secret');
+  expect(remoteProjection).toEqual({
+    launch: { kind: 'streamable-http', url: 'https://mcp.example.test/tools' },
+    origin: 'artifact',
+  });
+});
 
 it('exposes one opaque, epoch-bound session handle with a bounded ordered wire trace and a secret-free Inspector projection', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-persistent-mcp-wire-'));
@@ -785,9 +987,10 @@ it('exposes one opaque, epoch-bound session handle with a bounded ordered wire t
       .map((entry) => entry.sequence));
     expect(replay.entries.every((entry) => Number.isSafeInteger(entry.sequence) && entry.occurredAt > 0)).toBe(true);
     expect(replay.entries.some((entry) => entry.kind === 'operation')).toBe(true);
-    const frame = replay.entries.find((entry) => entry.kind === 'frame' && entry.message === clientFrame);
+    const frame = replay.entries.find((entry) => entry.kind === 'frame');
     if (frame?.kind !== 'frame') throw new Error('Expected the raw client frame in the wire trace.');
-    expect(frame.message).toBe(clientFrame);
+    expect(frame.message).toEqual(clientFrame);
+    expect(frame.message).not.toBe(clientFrame);
     expect(received.length).toBeGreaterThan(0);
 
     const inspector = session.inspectorConfig();
