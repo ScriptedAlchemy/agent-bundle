@@ -128,6 +128,7 @@ export interface McpAppBridgeCloseOptions {
 export interface CreateMcpAppBridgeOptions {
   readonly binding: McpAppBinding;
   readonly host: McpAppBridgeHost;
+  readonly maxQueuedHostMessageBytes?: number;
   readonly operations: McpAppBridgeBindingOperations;
   readonly send: (message: McpAppBridgeMessage) => boolean;
   readonly teardownTimeoutMs?: number;
@@ -165,8 +166,17 @@ interface ValidResourceReadResult extends McpAppBridgeJsonRecord {
   readonly contents: readonly McpAppJsonValue[];
 }
 
+interface QueuedHostMessage {
+  byteLength: number;
+  failedSendAttempts: number;
+  readonly message: McpAppBridgeMessage;
+}
+
 const defaultTeardownTimeoutMs = 1_000;
 const maximumTeardownTimeoutMs = 30_000;
+const defaultMaximumQueuedHostMessageBytes = 1_048_576;
+const maximumQueuedHostMessageBytes = 16_777_216;
+const maximumQueuedHostMessageSendAttempts = 3;
 const loggingLevels = new Set(['debug', 'info', 'notice', 'warning', 'error', 'critical', 'alert', 'emergency']);
 const displayModes = new Set<McpAppBridgeDisplayMode>(['inline', 'fullscreen', 'pip']);
 const hostStyleVariables = new Set([
@@ -214,6 +224,14 @@ const normalizedTimeout = (value: number | undefined): number => {
     throw new RangeError(`MCP App bridge teardown timeout must be an integer from 1 to ${maximumTeardownTimeoutMs} ms.`);
   }
   return timeout;
+};
+
+const normalizedQueuedHostMessageBytes = (value: number | undefined): number => {
+  const maximum = value ?? defaultMaximumQueuedHostMessageBytes;
+  if (!Number.isSafeInteger(maximum) || maximum < 1 || maximum > maximumQueuedHostMessageBytes) {
+    throw new RangeError(`MCP App bridge queued host-message limit must be an integer from 1 to ${maximumQueuedHostMessageBytes} bytes.`);
+  }
+  return maximum;
 };
 
 const snapshotBinding = (value: McpAppBinding): BridgeBindingSnapshot => {
@@ -321,18 +339,57 @@ const validAppCapabilities = (value: unknown): McpAppBridgeJsonRecord | undefine
   return capabilities;
 };
 
+const validIcon = (value: unknown): boolean => {
+  const icon = jsonRecord(value);
+  return icon !== undefined && nonempty(icon.src)
+    && (icon.mimeType === undefined || nonempty(icon.mimeType))
+    && (icon.sizes === undefined || (Array.isArray(icon.sizes) && icon.sizes.every(nonempty)))
+    && (icon.theme === undefined || icon.theme === 'light' || icon.theme === 'dark');
+};
+
+const validIcons = (value: unknown): boolean => Array.isArray(value) && value.every(validIcon);
+
+const validIsoDateTimeWithOffset = (value: unknown): boolean => {
+  if (typeof value !== 'string') return false;
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/u.exec(value);
+  if (match === null) return false;
+  const [year, month, day, hour, minute, second] = match.slice(1, 7).map(Number);
+  if (year === undefined || month === undefined || day === undefined || hour === undefined || minute === undefined || second === undefined
+    || month < 1 || month > 12 || hour > 23 || minute > 59 || second > 59) return false;
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day && !Number.isNaN(Date.parse(value));
+};
+
+const validAnnotations = (value: unknown): boolean => {
+  const annotations = jsonRecord(value);
+  if (annotations === undefined) return false;
+  if (annotations.audience !== undefined && (!Array.isArray(annotations.audience) || !annotations.audience.every((role) => role === 'user' || role === 'assistant'))) return false;
+  if (annotations.priority !== undefined && (typeof annotations.priority !== 'number' || annotations.priority < 0 || annotations.priority > 1)) return false;
+  if (annotations.lastModified !== undefined && !validIsoDateTimeWithOffset(annotations.lastModified)) return false;
+  return true;
+};
+
+const validImplementation = (value: unknown): McpAppBridgeJsonRecord | undefined => {
+  const implementation = jsonRecord(value);
+  if (implementation === undefined || !nonempty(implementation.name) || !nonempty(implementation.version)) return undefined;
+  if (['title', 'websiteUrl', 'description'].some((key) => implementation[key] !== undefined && typeof implementation[key] !== 'string')) return undefined;
+  if (implementation.icons !== undefined && !validIcons(implementation.icons)) return undefined;
+  return implementation;
+};
+
 const validInitialize = (params: McpAppJsonValue | undefined): boolean => {
   const record = jsonRecord(params);
   if (record === undefined || record.protocolVersion !== MCP_APP_PROTOCOL_VERSION) return false;
-  const appInfo = jsonRecord(record.appInfo);
+  const appInfo = validImplementation(record.appInfo);
   const appCapabilities = validAppCapabilities(record.appCapabilities);
-  if (appInfo === undefined || !nonempty(appInfo.name) || !nonempty(appInfo.version) || appCapabilities === undefined) return false;
+  if (appInfo === undefined || appCapabilities === undefined) return false;
   return true;
 };
 
 const contentBlock = (value: McpAppJsonValue): boolean => {
   const block = jsonRecord(value);
   if (block === undefined || !nonempty(block.type)) return false;
+  if (block.annotations !== undefined && !validAnnotations(block.annotations)) return false;
   switch (block.type) {
     case 'text':
       return typeof block.text === 'string';
@@ -340,7 +397,12 @@ const contentBlock = (value: McpAppJsonValue): boolean => {
     case 'audio':
       return typeof block.data === 'string' && nonempty(block.mimeType);
     case 'resource_link':
-      return nonempty(block.name) && nonempty(block.uri);
+      return nonempty(block.name) && nonempty(block.uri)
+        && (block.title === undefined || typeof block.title === 'string')
+        && (block.description === undefined || typeof block.description === 'string')
+        && (block.mimeType === undefined || typeof block.mimeType === 'string')
+        && (block.size === undefined || typeof block.size === 'number')
+        && (block.icons === undefined || validIcons(block.icons));
     case 'resource': {
       return validResourceContent(block.resource) !== undefined;
     }
@@ -388,15 +450,32 @@ const validHostCapabilities = (value: unknown): McpAppBridgeJsonRecord | undefin
   return capabilities;
 };
 
+const validObjectJsonSchema = (value: unknown): boolean => {
+  const schema = jsonRecord(value);
+  if (schema === undefined || schema.type !== 'object') return false;
+  if (schema.properties !== undefined) {
+    const properties = jsonRecord(schema.properties);
+    if (properties === undefined || !Object.values(properties).every((property) => jsonRecord(property) !== undefined)) return false;
+  }
+  return schema.required === undefined || (Array.isArray(schema.required) && schema.required.every((required) => typeof required === 'string'));
+};
+
 const validToolDefinition = (value: unknown): boolean => {
   const tool = jsonRecord(value);
-  if (tool === undefined || !nonempty(tool.name) || jsonRecord(tool.inputSchema) === undefined) return false;
-  if (tool.outputSchema !== undefined && jsonRecord(tool.outputSchema) === undefined) return false;
+  if (tool === undefined || !nonempty(tool.name) || !validObjectJsonSchema(tool.inputSchema)) return false;
+  if (tool.outputSchema !== undefined && !validObjectJsonSchema(tool.outputSchema)) return false;
+  if (tool.icons !== undefined && !validIcons(tool.icons)) return false;
+  if (tool.title !== undefined && typeof tool.title !== 'string') return false;
+  if (tool.description !== undefined && typeof tool.description !== 'string') return false;
   if (tool.annotations !== undefined) {
     const annotations = jsonRecord(tool.annotations);
     if (annotations === undefined
       || (annotations.title !== undefined && !nonempty(annotations.title))
       || ['readOnlyHint', 'destructiveHint', 'idempotentHint', 'openWorldHint'].some((key) => annotations[key] !== undefined && typeof annotations[key] !== 'boolean')) return false;
+  }
+  if (tool.execution !== undefined) {
+    const execution = jsonRecord(tool.execution);
+    if (execution === undefined || (execution.taskSupport !== undefined && execution.taskSupport !== 'required' && execution.taskSupport !== 'optional' && execution.taskSupport !== 'forbidden')) return false;
   }
   return true;
 };
@@ -581,9 +660,11 @@ export const createMcpAppBridge = (options: CreateMcpAppBridgeOptions): McpAppBr
   const binding = snapshotBinding(options.binding);
   const host = snapshotHost(options.host);
   const timeoutMs = normalizedTimeout(options.teardownTimeoutMs);
+  const queuedHostMessageByteLimit = normalizedQueuedHostMessageBytes(options.maxQueuedHostMessageBytes);
   const canonicalResourceUri = selectMcpAppResourceUri(binding.toolDefinition);
   const resourceIsCanonical = canonicalResourceUri !== undefined && canonicalResourceUri === binding.resourceUri;
-  const queuedHostMessages: McpAppBridgeMessage[] = [];
+  const queuedHostMessages: QueuedHostMessage[] = [];
+  let queuedHostMessageBytes = 0;
   let lifecycle: McpAppBridgeLifecycle = 'created';
   let hostTrafficBlocked = false;
   let inputQueued = false;
@@ -595,8 +676,24 @@ export const createMcpAppBridge = (options: CreateMcpAppBridgeOptions): McpAppBr
   let closeTimer: ReturnType<typeof setTimeout> | undefined;
   let finishTeardown: (() => void) | undefined;
   let appDisplayModes: ReadonlySet<McpAppBridgeDisplayMode> | undefined;
-  const hostDisplayModes = validDisplayModeList(host.context?.availableDisplayModes);
+  let hostDisplayModes = validDisplayModeList(host.context?.availableDisplayModes);
   const isClosed = (): boolean => lifecycle === 'closing' || lifecycle === 'closed';
+
+  const hostMessageByteLength = (message: McpAppBridgeMessage): number => Buffer.byteLength(JSON.stringify(message), 'utf8');
+
+  const enqueueHostMessage = (message: McpAppBridgeMessage): boolean => {
+    const byteLength = hostMessageByteLength(message);
+    if (byteLength > queuedHostMessageByteLimit || queuedHostMessageBytes + byteLength > queuedHostMessageByteLimit) return false;
+    queuedHostMessages.push({ byteLength, failedSendAttempts: 0, message });
+    queuedHostMessageBytes += byteLength;
+    return true;
+  };
+
+  const dequeueHostMessage = (): QueuedHostMessage | undefined => {
+    const message = queuedHostMessages.shift();
+    if (message !== undefined) queuedHostMessageBytes -= message.byteLength;
+    return message;
+  };
 
   const send = (message: McpAppBridgeMessage): boolean => {
     try {
@@ -615,25 +712,27 @@ export const createMcpAppBridge = (options: CreateMcpAppBridgeOptions): McpAppBr
 
   const emitHost = (message: McpAppBridgeMessage): boolean => {
     if (lifecycle === 'closing' || lifecycle === 'closed') return false;
+    if (hostMessageByteLength(message) > queuedHostMessageByteLimit) return false;
     if (lifecycle !== 'initialized' || hostTrafficBlocked) {
-      queuedHostMessages.push(message);
-      return true;
+      return enqueueHostMessage(message);
     }
     if (send(message)) return true;
     hostTrafficBlocked = true;
-    queuedHostMessages.push(message);
-    return true;
+    return enqueueHostMessage(message);
   };
 
   const flush = (): boolean => {
     if (lifecycle !== 'initialized') return false;
     while (lifecycle === 'initialized' && queuedHostMessages.length > 0) {
       const message = queuedHostMessages[0];
-      if (message === undefined || !send(message)) {
+      if (message === undefined) return false;
+      if (!send(message.message)) {
+        message.failedSendAttempts += 1;
         hostTrafficBlocked = true;
+        if (message.failedSendAttempts >= maximumQueuedHostMessageSendAttempts) dequeueHostMessage();
         return false;
       }
-      queuedHostMessages.shift();
+      dequeueHostMessage();
     }
     hostTrafficBlocked = false;
     return true;
@@ -641,13 +740,14 @@ export const createMcpAppBridge = (options: CreateMcpAppBridgeOptions): McpAppBr
 
   const queueInput = (argumentsValue: McpAppBridgeJsonRecord | undefined): boolean => {
     if (inputQueued || lifecycle === 'closing' || lifecycle === 'closed') return false;
-    inputQueued = true;
     const params: McpAppBridgeJsonRecord = argumentsValue === undefined ? {} : { arguments: cloneJson(argumentsValue) };
-    return emitHost(Object.freeze({
+    const queued = emitHost(Object.freeze({
       jsonrpc: '2.0',
       method: 'ui/notifications/tool-input',
       params: Object.freeze(params),
     }));
+    if (queued) inputQueued = true;
+    return queued;
   };
 
   const queueResult = (result: McpAppJsonValue): boolean => {
@@ -656,8 +756,9 @@ export const createMcpAppBridge = (options: CreateMcpAppBridgeOptions): McpAppBr
       const originalInput = jsonRecord(binding.input);
       if (originalInput === undefined || !queueInput(originalInput)) return false;
     }
-    terminalQueued = true;
-    return emitHost(Object.freeze({ jsonrpc: '2.0', method: 'ui/notifications/tool-result', params: cloneJson(result) }));
+    const queued = emitHost(Object.freeze({ jsonrpc: '2.0', method: 'ui/notifications/tool-result', params: cloneJson(result) }));
+    if (queued) terminalQueued = true;
+    return queued;
   };
 
   const releaseBinding = (): Promise<void> => {
@@ -668,6 +769,7 @@ export const createMcpAppBridge = (options: CreateMcpAppBridgeOptions): McpAppBr
         if (!released) throw new McpAppBridgeCloseError('binding-close-rejected');
         lifecycle = 'closed';
         queuedHostMessages.length = 0;
+        queuedHostMessageBytes = 0;
         if (closeTimer !== undefined) clearTimeout(closeTimer);
         finishTeardown = undefined;
       },
@@ -846,7 +948,11 @@ export const createMcpAppBridge = (options: CreateMcpAppBridgeOptions): McpAppBr
     },
     publishHostContextChanged(context: McpAppBridgeJsonRecord): boolean {
       const snapshot = validHostContext(context);
-      return snapshot === undefined ? false : emitHost(Object.freeze({ jsonrpc: '2.0', method: 'ui/notifications/host-context-changed', params: snapshot }));
+      if (snapshot === undefined) return false;
+      const availableDisplayModes = snapshot.availableDisplayModes === undefined ? undefined : validDisplayModeList(snapshot.availableDisplayModes);
+      const published = emitHost(Object.freeze({ jsonrpc: '2.0', method: 'ui/notifications/host-context-changed', params: snapshot }));
+      if (published && availableDisplayModes !== undefined) hostDisplayModes = availableDisplayModes;
+      return published;
     },
     publishToolCancelled(reason?: string): boolean {
       if (terminalQueued || (reason !== undefined && !nonempty(reason))) return false;
@@ -854,13 +960,14 @@ export const createMcpAppBridge = (options: CreateMcpAppBridgeOptions): McpAppBr
         const originalInput = jsonRecord(binding.input);
         if (originalInput === undefined || !queueInput(originalInput)) return false;
       }
-      terminalQueued = true;
       const params: McpAppBridgeJsonRecord = reason === undefined ? {} : { reason };
-      return emitHost(Object.freeze({
+      const queued = emitHost(Object.freeze({
         jsonrpc: '2.0',
         method: 'ui/notifications/tool-cancelled',
         params: Object.freeze(params),
       }));
+      if (queued) terminalQueued = true;
+      return queued;
     },
     publishToolInput(argumentsValue?: McpAppBridgeJsonRecord): boolean {
       const snapshot = argumentsValue === undefined ? undefined : jsonRecord(argumentsValue);
@@ -922,20 +1029,30 @@ export const createMcpAppBridge = (options: CreateMcpAppBridgeOptions): McpAppBr
           return false;
         }
         if (!inputQueued) {
-          inputQueued = true;
-          queuedHostMessages.push(Object.freeze({
+          const inputMessage = Object.freeze({
             jsonrpc: '2.0',
             method: 'ui/notifications/tool-input',
             params: Object.freeze({ arguments: originalInput }),
-          }));
+          });
+          if (!enqueueHostMessage(inputMessage)) {
+            lifecycle = 'closing';
+            void releaseBinding().catch(() => undefined);
+            return false;
+          }
+          inputQueued = true;
         }
         if (!terminalQueued) {
-          terminalQueued = true;
-          queuedHostMessages.push(Object.freeze({
+          const resultMessage = Object.freeze({
             jsonrpc: '2.0',
             method: 'ui/notifications/tool-result',
             params: cloneJson(binding.result),
-          }));
+          });
+          if (!enqueueHostMessage(resultMessage)) {
+            lifecycle = 'closing';
+            void releaseBinding().catch(() => undefined);
+            return false;
+          }
+          terminalQueued = true;
         }
         flush();
         return true;
