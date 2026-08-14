@@ -8,3 +8,23 @@ export type {
   ConfigFactoryContext,
   McpTransport,
 } from './core/types.ts';
+export type {
+  ArtifactEpoch,
+  ArtifactState,
+  ArtifactStatus,
+  BuildAttempt,
+  BuildAttemptOutcome,
+  BuildState,
+  BuildStatus,
+  DiagnosticSummary,
+  Invalidation,
+  InvalidationReason,
+  ProjectEvent,
+  ProjectEventMessage,
+  ProjectEventType,
+  ProjectReplayGap,
+  ProjectStatus,
+  RuntimeEvent,
+  SourceState,
+  SourceStatus,
+} from './dev/types.ts';
