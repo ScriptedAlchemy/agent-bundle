@@ -444,12 +444,14 @@ dependency that cannot be bundled is a build error in the first release; authors
 reference an explicitly prebuilt command through the existing MCP/script input escape hatch.
 
 `pathTokens` is exported from the main package and produces opaque token strings that the
-compiler resolves per target at build time. Token availability is a per-target capability:
-Claude resolves plugin root and plugin data to `${CLAUDE_PLUGIN_ROOT}` and
-`${CLAUDE_PLUGIN_DATA}`, Codex to its equivalent plugin environment variables, while portable
-`mcp.json` (Agent Plugins 1.0.0) resolves `${PLUGIN_ROOT}` and `${PLUGIN_DATA}` in `args`, `env`,
-and `cwd`, but not in `command`. A token with no portable equivalent, such as workspace root, is
-a build error for the portable target unless the server is explicitly limited to host targets.
+compiler resolves per target at build time. Token availability is a per-target and per-component
+capability. Claude resolves `${CLAUDE_PLUGIN_ROOT}`, `${CLAUDE_PLUGIN_DATA}`, and
+`${CLAUDE_PROJECT_DIR}` in its documented MCP fields. Portable `mcp.json` (Agent Plugins 1.0.0)
+resolves `${PLUGIN_ROOT}` and `${PLUGIN_DATA}` in `args`, `env`, and `cwd`, but not in `command`.
+Codex exposes `PLUGIN_ROOT` and `PLUGIN_DATA` to plugin hook processes, but Codex CLI 0.147.0's
+native `.mcp.json` loader does not interpolate those variables; native Codex MCP output therefore
+uses contained relative paths where possible and rejects token uses that cannot be represented
+honestly. An unavailable token is a build error unless the server is limited to capable targets.
 This is the honest-portability rule applied to paths.
 
 Remote HTTP MCP definitions are copied into native manifests without bundling a local server.

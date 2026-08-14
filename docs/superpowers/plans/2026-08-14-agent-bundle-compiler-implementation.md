@@ -299,6 +299,12 @@ expect(new DiagnosticBag([error]).throwIfErrors).toThrow(DiagnosticError);
 
 - [ ] **Step 1: Capture CLI versions/help and checked-in capability fixtures for installed Codex and Claude Code**
 
+  Pin the observed contracts to Codex CLI 0.147.0 and Claude Code 2.1.232. Record path-token
+  support per component: Codex plugin hooks receive `PLUGIN_ROOT`/`PLUGIN_DATA`, but its native
+  `.mcp.json` loader does not interpolate them; Claude MCP fields support
+  `${CLAUDE_PLUGIN_ROOT}`, `${CLAUDE_PLUGIN_DATA}`, and `${CLAUDE_PROJECT_DIR}`. Reject native
+  MCP token uses that the selected host cannot represent instead of preserving inert strings.
+
 - [ ] **Step 2: Write failing adapter contract tests using the same normalized fixture for both hosts**
 
   Assert exact native paths, path-token syntax, marketplace references, capability diagnostics, and schema-valid JSON.
