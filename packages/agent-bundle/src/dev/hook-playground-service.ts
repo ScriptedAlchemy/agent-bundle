@@ -26,6 +26,12 @@ export interface HookPlaygroundHostMapping {
   readonly target: HookPlaygroundTarget;
 }
 
+export interface HookPlaygroundCanonicalIntent {
+  readonly event: CanonicalHookEvent;
+  readonly hook: string;
+  readonly input: CanonicalHookInput;
+}
+
 export interface HookPlaygroundReplay {
   readonly binding: Readonly<HookPlaygroundBinding & { readonly target: HookPlaygroundTarget }>;
   readonly input: CanonicalHookInput;
@@ -33,6 +39,7 @@ export interface HookPlaygroundReplay {
 
 export interface HookPlaygroundSimulation {
   readonly binding: Readonly<HookPlaygroundBinding & { readonly target: HookPlaygroundTarget }>;
+  readonly canonicalIntent: HookPlaygroundCanonicalIntent;
   readonly canonicalResult: CanonicalHookResult | undefined;
   readonly hostMapping: HookPlaygroundHostMapping;
   readonly nativeInput: NativeHookInput;
@@ -234,6 +241,7 @@ export class HookPlaygroundService {
       const binding = Object.freeze({ epochId: options.epochId, hook: options.hook, target: options.target });
       return Object.freeze({
         binding,
+        canonicalIntent: Object.freeze({ event: mapping.canonicalEvent, hook: options.hook, input: canonicalInput }),
         canonicalResult,
         hostMapping: mapping,
         nativeInput: encodeNativeInput(canonicalInput, mapping),

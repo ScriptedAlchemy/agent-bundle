@@ -104,6 +104,11 @@ it('runs fixture and inline canonical input through the epoch-bound wrapper and 
 
     expect(inline).toEqual({
       binding: options,
+      canonicalIntent: {
+        event: 'beforeTool',
+        hook: epochOne.hookId,
+        input,
+      },
       canonicalResult: {
         additionalContext: 'checked:one',
         outcome: 'continue',
