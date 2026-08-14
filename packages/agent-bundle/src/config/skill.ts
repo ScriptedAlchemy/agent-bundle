@@ -1,22 +1,16 @@
 import { access, readFile, stat } from 'node:fs/promises';
-import { dirname, join, relative, resolve, sep } from 'node:path';
+import { dirname, join, relative, resolve } from 'node:path';
 
 import fastGlob from 'fast-glob';
-import ignore, { type Ignore } from 'ignore';
+import type { Ignore } from 'ignore';
 import { parse as parseYaml } from 'yaml';
 
 import type { Diagnostic } from '../core/diagnostics.ts';
-
-const builtInIgnorePatterns = [
-  '.git',
-  '.git/**',
-  'node_modules',
-  'node_modules/**',
-  'dist',
-  'dist/**',
-  '.agent-bundle',
-  '.agent-bundle/**',
-];
+import {
+  isProjectPathIgnored,
+  readProjectIgnoreRules,
+  toPosixPath,
+} from './ignore.ts';
 
 export interface SkillResource {
   bytes: number;
@@ -32,22 +26,6 @@ export interface SkillDocument {
   resources: SkillResource[];
   source: string;
 }
-
-const toPosixPath = (path: string): string => path.split(sep).join('/');
-
-const readIgnoreRules = async (root: string): Promise<Ignore> => {
-  const rules = ignore().add(builtInIgnorePatterns);
-
-  try {
-    rules.add(await readFile(join(root, '.gitignore'), 'utf8'));
-  } catch (error: unknown) {
-    if (!(error instanceof Error) || !('code' in error) || error.code !== 'ENOENT') {
-      throw error;
-    }
-  }
-
-  return rules;
-};
 
 const findProjectRoot = async (skillDir: string): Promise<string> => {
   let current = resolve(skillDir);
@@ -70,11 +48,6 @@ const findProjectRoot = async (skillDir: string): Promise<string> => {
   }
 };
 
-const isIgnored = (rules: Ignore, root: string, source: string): boolean => {
-  const relativePath = toPosixPath(relative(root, source));
-  return relativePath.length > 0 && !relativePath.startsWith('../') && rules.ignores(relativePath);
-};
-
 const resourceList = async (
   skillDir: string,
   root: string,
@@ -87,7 +60,9 @@ const resourceList = async (
     followSymbolicLinks: false,
     onlyFiles: true,
   });
-  const includedSources = sources.filter((source) => !isIgnored(rules, root, source));
+  const includedSources = sources.filter(
+    (source) => !isProjectPathIgnored(rules, root, source),
+  );
 
   return Promise.all(
     includedSources
@@ -125,7 +100,7 @@ export const parseSkill = async (
   const dir = resolve(skillDir);
   const source = join(dir, 'SKILL.md');
   const root = projectRoot === undefined ? await findProjectRoot(dir) : resolve(projectRoot);
-  const rules = await readIgnoreRules(root);
+  const rules = await readProjectIgnoreRules(root);
   const resources = await resourceList(dir, root, rules);
 
   let markdown: string;

@@ -1,5 +1,6 @@
 import { execFile as executeFile } from 'node:child_process';
-import { access, readFile } from 'node:fs/promises';
+import { access, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 
@@ -20,7 +21,16 @@ interface PackageManifest {
 }
 
 const execFile = promisify(executeFile);
-const packageRoot = join(process.cwd(), 'packages/agent-bundle');
+const workspaceRoot = process.cwd();
+const packageRoot = join(workspaceRoot, 'packages/agent-bundle');
+let buildPromise: Promise<void> | undefined;
+
+const buildPackage = async (): Promise<void> => {
+  buildPromise ??= execFile('npm', ['run', 'build'], {
+    cwd: workspaceRoot,
+  }).then(() => undefined);
+  await buildPromise;
+};
 
 const readPackageManifest = async (): Promise<PackageManifest> =>
   JSON.parse(
@@ -45,7 +55,7 @@ it('loads every public subpath and reports the package version', async () => {
 });
 
 it('publishes directly executable built entrypoints with declarations', async () => {
-  await execFile('npm', ['run', 'build']);
+  await buildPackage();
 
   const manifest = await readPackageManifest();
   expect(manifest.engines?.node).toBe('>=22.19.0');
@@ -67,3 +77,38 @@ it('publishes directly executable built entrypoints with declarations', async ()
   const { stdout } = await execFile(binPath, ['--version']);
   expect(stdout).toBe(`${manifest.version}\n`);
 });
+
+it('imports the externalized config entry from a packed npm consumer', async () => {
+  await buildPackage();
+
+  const consumerRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-consumer-'));
+  try {
+    const { stdout: packedOutput } = await execFile(
+      'npm',
+      ['pack', '--json', '--pack-destination', consumerRoot],
+      { cwd: packageRoot },
+    );
+    const [packed] = JSON.parse(packedOutput) as Array<{ filename: string }>;
+    const tarball = join(consumerRoot, packed.filename);
+
+    await writeFile(join(consumerRoot, 'package.json'), '{"type":"module"}\n');
+    await execFile(
+      'npm',
+      ['install', '--ignore-scripts', '--no-audit', '--no-fund', tarball],
+      { cwd: consumerRoot },
+    );
+
+    expect((await stat(join(packageRoot, 'dist/config.js'))).size).toBeLessThan(
+      100_000,
+    );
+    await expect(
+      execFile(process.execPath, [
+        '--input-type=module',
+        '--eval',
+        "await import('agent-bundle/config');",
+      ], { cwd: consumerRoot }),
+    ).resolves.toMatchObject({ stderr: '', stdout: '' });
+  } finally {
+    await rm(consumerRoot, { force: true, recursive: true });
+  }
+}, 15_000);
