@@ -336,15 +336,39 @@ expect(new DiagnosticBag([error]).throwIfErrors).toThrow(DiagnosticError);
 **Interfaces:**
 - Produces: `HookService.list()`, `HookService.simulate({ artifact, target, hook, input })`
 
+**Rstack implementation decision:**
+- Keep `createRslib()` as the public build lifecycle owner and close every non-watch build result in
+  `finally` so Rsbuild cleanup hooks run.
+- Build each emitted executable as its own Rslib `lib` environment. Point `source.entry` at a real,
+  packaged entry anchor so Rslib's pre-Rspack entry validation remains effective, then register a
+  lib-scoped Rspack `VirtualModulesPlugin` containing the generated host wrapper. The virtual wrapper
+  imports the author's real TypeScript/JavaScript handler, and Rsbuild's built-in SWC pipeline compiles
+  both together.
+- Force a single executable asset with `performance.chunkSplit.strategy: 'all-in-one'` and Rspack
+  `output.asyncChunks: false`; keep dependencies bundled and verify the emitted wrapper runs in a clean
+  consumer directory.
+- Do not add a custom loader. Loaders are the right API for reusable per-resource transformations, but
+  these wrappers are generated entry modules with per-target protocol data. A virtual module expresses
+  that directly without temporary source files, loader packaging, or source-map handoff.
+- Keep config discovery, Skill Markdown/YAML parsing, schema validation, byte/mode accounting,
+  collision checks, manifests, and atomic publication outside Rspack. Those are compiler/artifact
+  responsibilities and must retain their current deterministic staging semantics.
+- Pin and validate native hook configuration/wire contracts beside each host capability snapshot. Host
+  upgrades update capability data, schema/provenance, fixtures, and native CLI harnesses together.
+
 - [ ] **Step 1: Write failing round-trip tests for sessionStart, beforeTool denial, afterTool observation, and host-only native hooks**
 
 - [ ] **Step 2: Verify the tests fail before wrapper generation exists**
 
-- [ ] **Step 3: Generate one self-contained target wrapper per hook and map canonical/native stdin/stdout through adapter codecs**
+- [ ] **Step 3: Generate one self-contained target wrapper per hook through lib-scoped virtual modules and map canonical/native stdin/stdout through adapter codecs**
 
 - [ ] **Step 4: Implement simulation by spawning only the emitted wrapper from a validated artifact**
 
-- [ ] **Step 5: Run hook tests in a clean directory without repository `node_modules`**
+  Exercise the exact embedded codec: canonical simulation input is converted to the host-native input
+  inside the wrapper, then the wrapper's native output is decoded back to the canonical result before
+  returning it to the service.
+
+- [ ] **Step 5: Inspect the resolved Rslib/Rspack configuration and run hook tests in a clean directory without repository `node_modules`**
 
 - [ ] **Step 6: Commit**
 

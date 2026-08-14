@@ -389,6 +389,15 @@ dist/
 There is no runtime framework, daemon, shared adapter package, or dependency on the
 `agent-bundle` executable in the generated plugin.
 
+Under the hood, each executable is its own Rslib library environment. Rslib receives a real packaged
+entry anchor, while a lib-scoped Rspack `VirtualModulesPlugin` supplies the generated host wrapper that
+imports the author's handler. This works with Rslib's entry validation, lets the built-in SWC pipeline
+compile TypeScript and JavaScript, and avoids temporary generated source files. Chunk splitting and
+async chunks are disabled for these environments, so every hook remains one self-contained `.mjs`
+asset. Agent Bundle still owns resource discovery, schema validation, collision checks, executable
+modes, manifest hashing, and atomic publication; those artifact semantics are intentionally not
+delegated to bundler copy plugins or loaders.
+
 ### Host-specific hooks
 
 Host-native escape hatches remain explicit:
