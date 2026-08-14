@@ -112,7 +112,7 @@ const cloneJsonValue = (value: unknown, ancestors: Set<object>): JsonValue => {
       throw new Error('non-plain object');
     }
 
-    const clone: { [key: string]: JsonValue } = {};
+    const clone: { [key: string]: JsonValue } = Object.create(null) as { [key: string]: JsonValue };
     for (const key of Reflect.ownKeys(value)) {
       if (typeof key !== 'string') {
         throw new Error('symbol key');

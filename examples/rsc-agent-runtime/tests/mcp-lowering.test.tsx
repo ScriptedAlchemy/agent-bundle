@@ -142,3 +142,21 @@ test('clones recursively valid JSON records for structured content', () => {
   });
   expect(result.structuredContent).not.toBe(input);
 });
+
+test('preserves an own __proto__ key in valid structured content', () => {
+  const input = Object.create(null) as Record<string, unknown>;
+  Object.defineProperty(input, '__proto__', {
+    enumerable: true,
+    value: { value: 'preserved' },
+  });
+
+  const result = lowerMcpResult(
+    <Mcp.Result structuredContent={input}>
+      <Mcp.Text>valid</Mcp.Text>
+    </Mcp.Result>,
+  );
+
+  expect(Object.getOwnPropertyDescriptor(result.structuredContent as object, '__proto__')?.value).toEqual({
+    value: 'preserved',
+  });
+});
