@@ -3,6 +3,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { expect, it } from '@rstest/core';
+import { Client } from '@modelcontextprotocol/client';
+import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 
 import { createDefaultRegistry, TargetRegistry } from '../src/adapters/registry.ts';
 import { build } from '../src/build/build.ts';
@@ -811,6 +813,131 @@ it('creates session state only after setup succeeds and always inherits the stdi
       process.env[inheritedKey] = previousInherited;
     }
     await rm(root, { force: true, recursive: true });
+  }
+}, 30_000);
+
+it('serves compiler-bundled MCP App resources from a copied artifact without project source', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-mcp-app-resource-'));
+  const consumer = await mkdtemp(join(tmpdir(), 'agent-bundle-mcp-app-consumer-'));
+  try {
+    await mkdir(join(root, 'src'), { recursive: true });
+    await mkdir(join(root, 'views'), { recursive: true });
+    await mkdir(join(root, 'node_modules'), { recursive: true });
+    await symlink(
+      join(process.cwd(), 'node_modules', '@modelcontextprotocol'),
+      join(root, 'node_modules', '@modelcontextprotocol'),
+      'dir',
+    );
+    await writeFile(join(root, 'package.json'), '{"type":"module"}\n');
+    await writeFile(join(root, 'views', 'dashboard.ts'), "document.body.dataset.fixture = 'app-resource';\n");
+    await writeFile(join(root, 'views', 'shell.html'), '<!doctype html><html><body><main id="view"></main></body></html>\n');
+    await writeFile(
+      join(root, 'src', 'server.ts'),
+      [
+        "import { McpServer } from '@modelcontextprotocol/server';",
+        "import { StdioServerTransport } from '@modelcontextprotocol/server/stdio';",
+        "import apps from 'agent-bundle/mcp-apps';",
+        '',
+        "const server = new McpServer({ name: 'app-resource-fixture', version: '1.0.0' });",
+        'for (const app of apps) {',
+        '  server.registerResource(app.name, app.resourceUri, {',
+        '    mimeType: app.mimeType,',
+        '    _meta: app._meta,',
+        '  }, async (uri) => ({',
+        '    contents: [{ mimeType: app.mimeType, text: app.html, uri: uri.href }],',
+        '  }));',
+        '}',
+        'const [app] = apps;',
+        "if (app === undefined) throw new Error('Expected bundled MCP App.');",
+        "server.registerTool('show-dashboard', {",
+        "  description: 'Open the bundled dashboard.',",
+        '  _meta: { ui: { resourceUri: app.resourceUri } },',
+        '}, async () => ({',
+        '  _meta: { ui: { resourceUri: app.resourceUri } },',
+        "  content: [{ type: 'text', text: 'dashboard ready' }],",
+        '  structuredContent: { resourceUri: app.resourceUri, view: app.name },',
+        '}));',
+        'await server.connect(new StdioServerTransport());',
+        '',
+      ].join('\n'),
+    );
+    const model = await normalizeProject(
+      loadedProject(root, {
+        mcp: {
+          servers: {
+            fixture: {
+              apps: {
+                dashboard: {
+                  _meta: { ui: { prefersBorder: true }, 'x-fixture': { app: 'dashboard' } },
+                  entry: './views/dashboard.ts',
+                  resourceUri: 'ui://agent-bundle/dashboard-v1.html',
+                  template: './views/shell.html',
+                },
+              },
+              entry: './src/server.ts',
+            },
+          },
+        },
+        plugin: { name: 'mcp-app-resource', version: '1.0.0' },
+        targets: ['portable'],
+      }),
+      { skills: [] },
+      registry,
+    );
+    const outputRoot = join(root, 'dist');
+    const artifact = join(consumer, 'installed-plugin');
+    await build({ model, outputRoot, projectRoot: root, registry: createDefaultRegistry() });
+    const expectedHtml = await readFile(join(outputRoot, 'portable', 'mcp-apps', 'dashboard.html'), 'utf8');
+    await cp(outputRoot, artifact, { recursive: true });
+    await rm(join(root, 'src'), { force: true, recursive: true });
+    await rm(join(root, 'views'), { force: true, recursive: true });
+    expect(await validateArtifact({ artifactRoot: artifact })).toEqual([]);
+
+    const client = new Client({ name: 'app-resource-consumer', version: '1.0.0' });
+    await client.connect(new StdioClientTransport({
+      args: [join(artifact, 'portable', 'mcp', 'mcp-fixture-f16d05ec.mjs')],
+      command: process.execPath,
+      stderr: 'pipe',
+    }));
+    try {
+      const tools = await client.listTools();
+      expect(tools.tools).toMatchObject([
+        {
+          _meta: { ui: { resourceUri: 'ui://agent-bundle/dashboard-v1.html' } },
+          name: 'show-dashboard',
+        },
+      ]);
+      const resources = await client.listResources();
+      expect(resources.resources).toMatchObject([
+        {
+          _meta: { ui: { prefersBorder: true }, 'x-fixture': { app: 'dashboard' } },
+          mimeType: 'text/html;profile=mcp-app',
+          name: 'dashboard',
+          uri: 'ui://agent-bundle/dashboard-v1.html',
+        },
+      ]);
+      const resource = await client.readResource({ uri: 'ui://agent-bundle/dashboard-v1.html' });
+      expect(resource.contents).toEqual([
+        {
+          mimeType: 'text/html;profile=mcp-app',
+          text: expectedHtml,
+          uri: 'ui://agent-bundle/dashboard-v1.html',
+        },
+      ]);
+      const result = await client.callTool({ arguments: {}, name: 'show-dashboard' });
+      expect(result).toMatchObject({
+        _meta: { ui: { resourceUri: 'ui://agent-bundle/dashboard-v1.html' } },
+        content: [{ text: 'dashboard ready', type: 'text' }],
+        structuredContent: { resourceUri: 'ui://agent-bundle/dashboard-v1.html', view: 'dashboard' },
+      });
+    } finally {
+      await client.close();
+    }
+  } finally {
+    await Promise.all([
+      rm(root, { force: true, recursive: true }),
+      rm(consumer, { force: true, recursive: true }),
+    ]);
   }
 }, 30_000);
 
