@@ -287,23 +287,24 @@ it('lists and simulates only validated wrappers from a clean copied artifact', a
     expect(listed.find((hook) => hook.id === 'hook:session-start:session-start:7ab7e8a5' && hook.target === 'codex')).toMatchObject({
       path: 'codex/hooks/session-start-session-start-7ab7e8a5.mjs',
     });
+    const commonInput = { cwd: '/workspace', sessionId: 'session-1', transcriptPath: '/workspace/transcript.json' };
     for (const target of ['codex', 'claude'] as const) {
       await expect(service.simulate({
         artifact,
         hook: 'hook:session-start:session-start:7ab7e8a5',
-        input: { source: 'startup' },
+        input: { ...commonInput, source: 'startup' },
         target,
       })).resolves.toEqual({ additionalContext: 'start:startup', outcome: 'continue' });
       await expect(service.simulate({
         artifact,
         hook: 'hook:before-tool:check-command:1f5b5818',
-        input: { toolInput: { command: 'blocked' }, toolName: 'Bash' },
+        input: { ...commonInput, toolInput: { command: 'blocked' }, toolName: 'Bash', toolUseId: 'use-1' },
         target,
       })).resolves.toEqual({ outcome: 'deny', reason: 'blocked command' });
       await expect(service.simulate({
         artifact,
         hook: 'hook:before-tool:check-command:1f5b5818',
-        input: { toolInput: { command: 'safe' }, toolName: 'Bash' },
+        input: { ...commonInput, toolInput: { command: 'safe' }, toolName: 'Bash', toolUseId: 'use-2' },
         target,
       })).resolves.toEqual({
         additionalContext: 'checked',
@@ -313,13 +314,13 @@ it('lists and simulates only validated wrappers from a clean copied artifact', a
       await expect(service.simulate({
         artifact,
         hook: 'hook:after-tool:record:87785f02',
-        input: { toolName: 'Write', toolResponse: 'ok' },
+        input: { ...commonInput, toolInput: {}, toolName: 'Write', toolResponse: { value: 'ok' }, toolUseId: 'use-3' },
         target,
       })).resolves.toEqual({ additionalContext: 'recorded', outcome: 'continue' });
       await expect(service.simulate({
         artifact,
         hook: 'hook:stop:stop:bb2d7935',
-        input: { lastAssistantMessage: 'done', stopHookActive: false },
+        input: { ...commonInput, lastAssistantMessage: 'done', stopHookActive: false },
         target,
       })).resolves.toBeUndefined();
     }
@@ -328,7 +329,7 @@ it('lists and simulates only validated wrappers from a clean copied artifact', a
     await expect(service.simulate({
       artifact,
       hook: 'hook:session-start:session-start:7ab7e8a5',
-      input: { source: 'tampered' },
+      input: { ...commonInput, source: 'tampered' },
       target: 'codex',
     })).rejects.toThrow(/artifact files do not match/i);
   } finally {
@@ -401,7 +402,7 @@ it('runs the embedded Codex and Claude native codecs through their published wra
       writeFile(join(root, 'package.json'), '{"type":"module"}\n'),
       writeFile(join(sourceRoot, 'session-start.ts'), "export default (event: { sessionId?: string }) => ({ outcome: 'continue' as const, additionalContext: event.sessionId });\n"),
       writeFile(join(sourceRoot, 'check-command.ts'), "export default (event: { toolName?: string }) => ({ outcome: event.toolName === 'Bash' ? 'deny' as const : 'continue' as const, reason: 'blocked command' });\n"),
-      writeFile(join(sourceRoot, 'record.ts'), "export default (event: { toolResponse?: string }) => ({ outcome: 'continue' as const, additionalContext: event.toolResponse });\n"),
+      writeFile(join(sourceRoot, 'record.ts'), "export default (event: { toolResponse?: unknown }) => ({ outcome: 'continue' as const, additionalContext: String(event.toolResponse) });\n"),
       writeFile(join(sourceRoot, 'stop.ts'), "export default () => ({ outcome: 'continue' as const });\n"),
     ]);
     await build({ model, outputRoot, projectRoot: root, registry: createDefaultRegistry() });
@@ -409,29 +410,136 @@ it('runs the embedded Codex and Claude native codecs through their published wra
     for (const target of ['codex', 'claude']) {
       const hooksRoot = join(outputRoot, target, 'hooks');
       await expect(runNativeHook(join(hooksRoot, 'session-start-session-start-7ab7e8a5.mjs'), {
-        hook_event_name: 'SessionStart', session_id: 'session-1', source: 'startup',
+        cwd: '/workspace', hook_event_name: 'SessionStart', session_id: 'session-1', source: 'startup', transcript_path: '/workspace/transcript.json',
       })).resolves.toEqual({
         code: 0,
         stderr: '',
         stdout: '{"hookSpecificOutput":{"additionalContext":"session-1","hookEventName":"SessionStart"}}',
       });
       await expect(runNativeHook(join(hooksRoot, 'before-tool-check-command-1f5b5818.mjs'), {
-        hook_event_name: 'PreToolUse', tool_input: { command: 'blocked' }, tool_name: 'Bash', tool_use_id: 'use-1',
+        cwd: '/workspace', hook_event_name: 'PreToolUse', session_id: 'session-1', tool_input: { command: 'blocked' }, tool_name: 'Bash', tool_use_id: 'use-1', transcript_path: '/workspace/transcript.json',
       })).resolves.toEqual({
         code: 0,
         stderr: '',
         stdout: '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"blocked command"}}',
       });
       await expect(runNativeHook(join(hooksRoot, 'after-tool-record-87785f02.mjs'), {
-        hook_event_name: 'PostToolUse', tool_response: 'observed', tool_name: 'Write', tool_use_id: 'use-2',
+        cwd: '/workspace', hook_event_name: 'PostToolUse', session_id: 'session-1', tool_input: {}, tool_response: { value: 'observed' }, tool_name: 'Write', tool_use_id: 'use-2', transcript_path: '/workspace/transcript.json',
       })).resolves.toEqual({
         code: 0,
         stderr: '',
-        stdout: '{"hookSpecificOutput":{"additionalContext":"observed","hookEventName":"PostToolUse"}}',
+        stdout: '{"hookSpecificOutput":{"additionalContext":"[object Object]","hookEventName":"PostToolUse"}}',
       });
       await expect(runNativeHook(join(hooksRoot, 'stop-stop-bb2d7935.mjs'), {
-        hook_event_name: 'Stop', last_assistant_message: 'done', stop_hook_active: false,
+        cwd: '/workspace', hook_event_name: 'Stop', last_assistant_message: 'done', session_id: 'session-1', stop_hook_active: false, transcript_path: '/workspace/transcript.json',
       })).resolves.toEqual({ code: 0, stderr: '', stdout: '' });
+    }
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+}, 15_000);
+
+it('rejects malformed event-specific native input before calling generated Codex and Claude hooks', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-hooks-native-input-'));
+  const sourceRoot = join(root, 'src', 'hooks');
+  const outputRoot = join(root, 'dist');
+  const model = hookModel(root);
+  const common = { cwd: '/workspace', session_id: 'session-1', transcript_path: '/workspace/transcript.json' };
+
+  try {
+    await mkdir(sourceRoot, { recursive: true });
+    await Promise.all([
+      writeFile(join(root, 'package.json'), '{"type":"module"}\n'),
+      ...model.hooks.map((hook) => writeFile(hook.source, 'export default () => undefined;\n')),
+    ]);
+    await build({ model, outputRoot, projectRoot: root, registry: createDefaultRegistry() });
+
+    for (const target of ['codex', 'claude']) {
+      const hooksRoot = join(outputRoot, target, 'hooks');
+      await expect(runNativeHook(join(hooksRoot, 'session-start-session-start-7ab7e8a5.mjs'), {})).resolves.toEqual({
+        code: 1,
+        stderr: 'Agent Bundle hook error: native session_id must be a string\n',
+        stdout: '',
+      });
+      await expect(runNativeHook(join(hooksRoot, 'session-start-session-start-7ab7e8a5.mjs'), {
+        ...common, hook_event_name: 'SessionStart',
+      })).resolves.toEqual({
+        code: 1,
+        stderr: 'Agent Bundle hook error: native source must be a string\n',
+        stdout: '',
+      });
+      await expect(runNativeHook(join(hooksRoot, 'before-tool-check-command-1f5b5818.mjs'), {
+        ...common, hook_event_name: 'PreToolUse', tool_input: [], tool_name: 'Bash', tool_use_id: 'use-1',
+      })).resolves.toEqual({
+        code: 1,
+        stderr: 'Agent Bundle hook error: native PreToolUse tool_input must be an object\n',
+        stdout: '',
+      });
+      await expect(runNativeHook(join(hooksRoot, 'after-tool-record-87785f02.mjs'), {
+        ...common, hook_event_name: 'PostToolUse', tool_input: {}, tool_name: 'Write', tool_response: 'observed', tool_use_id: 'use-2',
+      })).resolves.toEqual({
+        code: 1,
+        stderr: 'Agent Bundle hook error: native PostToolUse tool_response must be an object\n',
+        stdout: '',
+      });
+      await expect(runNativeHook(join(hooksRoot, 'stop-stop-bb2d7935.mjs'), {
+        ...common, hook_event_name: 'Stop', last_assistant_message: 'done', stop_hook_active: 'false',
+      })).resolves.toEqual({
+        code: 1,
+        stderr: 'Agent Bundle hook error: native Stop stop_hook_active must be a boolean\n',
+        stdout: '',
+      });
+    }
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+}, 15_000);
+
+it('rejects canonical reason combinations whose selected native hook cannot represent them', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-hooks-result-fields-'));
+  const sourceRoot = join(root, 'src', 'hooks');
+  const outputRoot = join(root, 'dist');
+  const base = hookModel(root);
+  const model: NormalizedPlugin = {
+    ...base,
+    hooks: [
+      { ...base.hooks[0]!, id: 'hook:session-start:reason:00000001', name: 'session-reason-00000001', source: join(sourceRoot, 'session.ts'), targets: ['codex'] },
+      { ...base.hooks[1]!, id: 'hook:before-tool:allow-reason:00000002', name: 'before-allow-reason-00000002', source: join(sourceRoot, 'before-allow.ts'), targets: ['codex'] },
+      { ...base.hooks[1]!, id: 'hook:before-tool:deny-reason:00000003', name: 'before-deny-reason-00000003', source: join(sourceRoot, 'before-deny.ts'), targets: ['codex'] },
+      { ...base.hooks[2]!, id: 'hook:after-tool:reason:00000004', name: 'after-reason-00000004', source: join(sourceRoot, 'after.ts'), targets: ['codex'] },
+      { ...base.hooks[3]!, id: 'hook:stop:continue-reason:00000005', name: 'stop-continue-reason-00000005', source: join(sourceRoot, 'stop-continue.ts'), targets: ['codex'] },
+      { ...base.hooks[3]!, id: 'hook:stop:deny-reason:00000006', name: 'stop-deny-reason-00000006', source: join(sourceRoot, 'stop-deny.ts'), targets: ['codex'] },
+    ],
+  };
+  const common = { cwd: '/workspace', session_id: 'session-1', transcript_path: '/workspace/transcript.json' };
+
+  try {
+    await mkdir(sourceRoot, { recursive: true });
+    await Promise.all([
+      writeFile(join(root, 'package.json'), '{"type":"module"}\n'),
+      writeFile(join(sourceRoot, 'session.ts'), "export default () => ({ outcome: 'continue' as const, reason: 'ignored' });\n"),
+      writeFile(join(sourceRoot, 'before-allow.ts'), "export default () => ({ outcome: 'continue' as const, reason: 'ignored' });\n"),
+      writeFile(join(sourceRoot, 'before-deny.ts'), "export default () => ({ outcome: 'deny' as const });\n"),
+      writeFile(join(sourceRoot, 'after.ts'), "export default () => ({ outcome: 'continue' as const, reason: 'ignored' });\n"),
+      writeFile(join(sourceRoot, 'stop-continue.ts'), "export default () => ({ outcome: 'continue' as const, reason: 'ignored' });\n"),
+      writeFile(join(sourceRoot, 'stop-deny.ts'), "export default () => ({ outcome: 'deny' as const, reason: '' });\n"),
+    ]);
+    await build({ model, outputRoot, projectRoot: root, registry: createDefaultRegistry() });
+    const hooksRoot = join(outputRoot, 'codex', 'hooks');
+    const assertions: readonly [string, Record<string, unknown>, string][] = [
+      ['session-reason-00000001.mjs', { ...common, hook_event_name: 'SessionStart', source: 'startup' }, 'reason is only valid for a denied beforeTool or stop hook'],
+      ['before-allow-reason-00000002.mjs', { ...common, hook_event_name: 'PreToolUse', tool_input: {}, tool_name: 'Bash', tool_use_id: 'use-1' }, 'reason is only valid for a denied beforeTool or stop hook'],
+      ['before-deny-reason-00000003.mjs', { ...common, hook_event_name: 'PreToolUse', tool_input: {}, tool_name: 'Bash', tool_use_id: 'use-2' }, 'denied beforeTool hook requires a nonempty reason'],
+      ['after-reason-00000004.mjs', { ...common, hook_event_name: 'PostToolUse', tool_input: {}, tool_name: 'Write', tool_response: {}, tool_use_id: 'use-3' }, 'reason is only valid for a denied beforeTool or stop hook'],
+      ['stop-continue-reason-00000005.mjs', { ...common, hook_event_name: 'Stop', last_assistant_message: 'done', stop_hook_active: false }, 'reason is only valid for a denied beforeTool or stop hook'],
+      ['stop-deny-reason-00000006.mjs', { ...common, hook_event_name: 'Stop', last_assistant_message: 'done', stop_hook_active: false }, 'denied stop hook requires a nonempty reason'],
+    ];
+    for (const [name, input, message] of assertions) {
+      await expect(runNativeHook(join(hooksRoot, name), input)).resolves.toEqual({
+        code: 1,
+        stderr: `Agent Bundle hook error: ${message}\n`,
+        stdout: '',
+      });
     }
   } finally {
     await rm(root, { force: true, recursive: true });
@@ -471,7 +579,9 @@ it('rejects malformed native hook input, exports, and handler results concisely'
       code: 1,
       stderr: 'Agent Bundle hook error: default export must be a function\n',
     });
-    await expect(runPublishedHook(join(outputRoot, 'codex', 'hooks', 'result-00000003.mjs'), '{}')).resolves.toEqual({
+    await expect(runPublishedHook(join(outputRoot, 'codex', 'hooks', 'result-00000003.mjs'), JSON.stringify({
+      cwd: '/workspace', hook_event_name: 'SessionStart', session_id: 'session-1', source: 'startup', transcript_path: '/workspace/transcript.json',
+    }))).resolves.toEqual({
       code: 1,
       stderr: 'Agent Bundle hook error: handler must return void or a result object\n',
     });
