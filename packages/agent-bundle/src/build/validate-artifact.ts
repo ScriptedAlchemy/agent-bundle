@@ -49,7 +49,10 @@ const checkJavaScriptSyntax = async (path: string): Promise<string | undefined> 
   });
 
 const sameFile = (left: ArtifactFile, right: ManifestFile): boolean =>
-  left.bytes === right.bytes && left.path === right.path && left.sha256 === right.sha256;
+  left.bytes === right.bytes &&
+  (right.mode === undefined || left.mode === right.mode) &&
+  left.path === right.path &&
+  left.sha256 === right.sha256;
 
 const localMcpArgument = (value: unknown): string | undefined => {
   if (typeof value !== 'string') return undefined;
@@ -81,6 +84,11 @@ const parseManifest = (value: string): ArtifactManifest | undefined => {
           typeof file === 'object' &&
           file !== null &&
           typeof (file as ManifestFile).bytes === 'number' &&
+          ((file as ManifestFile).mode === undefined ||
+            (typeof (file as ManifestFile).mode === 'number' &&
+              Number.isInteger((file as ManifestFile).mode) &&
+              (file as ManifestFile).mode! >= 0 &&
+              (file as ManifestFile).mode! <= 0o777)) &&
           typeof (file as ManifestFile).path === 'string' &&
           typeof (file as ManifestFile).sha256 === 'string',
       )

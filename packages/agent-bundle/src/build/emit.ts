@@ -18,6 +18,8 @@ import type { TargetArtifactEntry } from '../adapters/types.ts';
 
 export interface ManifestFile {
   readonly bytes: number;
+  /** POSIX permission bits for executable copied shell or Python scripts only. */
+  readonly mode?: number;
   readonly path: string;
   readonly sha256: string;
 }
@@ -50,6 +52,11 @@ export interface ArtifactHookIndex {
 export const artifactHookIndexName = 'agent-bundle.hooks.json';
 
 const normalizeRelativePath = (path: string): string => path.replaceAll('\\', '/');
+
+const executableCopiedScriptMode = (file: ArtifactFile): number | undefined =>
+  /(?:^|\/)scripts\/[^/]+\.(?:sh|bash|py)$/iu.test(file.path) && (file.mode & 0o111) !== 0
+    ? file.mode
+    : undefined;
 
 const isMissing = (error: unknown): boolean =>
   typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT';
@@ -152,7 +159,15 @@ export const writeManifest = async (options: {
 }): Promise<ArtifactManifest> => {
   const files = await listArtifactFiles(options.artifactRoot);
   const manifest: ArtifactManifest = {
-    files: Object.freeze(files.map(({ bytes, path, sha256 }) => ({ bytes, path, sha256 }))),
+    files: Object.freeze(files.map((file) => {
+      const mode = executableCopiedScriptMode(file);
+      return {
+        bytes: file.bytes,
+        ...(mode === undefined ? {} : { mode }),
+        path: file.path,
+        sha256: file.sha256,
+      };
+    })),
     targets: Object.freeze([...options.targets].sort()),
     version: 1,
   };

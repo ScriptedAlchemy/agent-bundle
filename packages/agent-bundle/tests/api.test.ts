@@ -166,6 +166,20 @@ it('copies named shell and Python scripts byte-for-byte with source modes', asyn
       expect(check.generatedContents).toEqual(check.sourceContents);
       expect(check.generatedMode).toBe(check.sourceMode);
     }
+
+    const manifest = JSON.parse(await readFile(join(output, 'agent-bundle.manifest.json'), 'utf8')) as {
+      readonly files: readonly { readonly mode?: number; readonly path: string }[];
+    };
+    expect(manifest.files).toEqual(expect.arrayContaining([
+      expect.objectContaining({ mode: 0o751, path: 'portable/scripts/shell.sh' }),
+      expect.objectContaining({ mode: 0o711, path: 'portable/scripts/python.py' }),
+    ]));
+    await expect(validate({ artifact: output, root })).resolves.toEqual({ diagnostics: [] });
+
+    await chmod(join(output, 'portable', 'scripts', 'shell.sh'), 0o644);
+    await expect(validate({ artifact: output, root })).resolves.toMatchObject({
+      diagnostics: [{ code: 'AB6004', generatedPath: 'agent-bundle.manifest.json' }],
+    });
   } finally {
     await rm(parent, { force: true, recursive: true });
   }

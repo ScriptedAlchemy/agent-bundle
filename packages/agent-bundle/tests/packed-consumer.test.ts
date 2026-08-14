@@ -30,6 +30,10 @@ interface FileDigest {
   readonly sha256: string;
 }
 
+interface ManifestDigest extends FileDigest {
+  readonly mode?: number;
+}
+
 const installedEnvironment = (): NodeJS.ProcessEnv => {
   const { NODE_PATH: _nodePath, ...environment } = process.env;
   return environment;
@@ -100,10 +104,15 @@ it('uses only an installed tarball after source deletion', async () => {
     expect(await artifactDigest(firstArtifact)).toEqual(await artifactDigest(secondArtifact));
 
     const manifest = JSON.parse(await readFile(join(firstArtifact, 'agent-bundle.manifest.json'), 'utf8')) as {
-      readonly files: readonly FileDigest[];
+      readonly files: readonly ManifestDigest[];
     };
     const files = (await artifactDigest(firstArtifact)).filter((entry) => entry.path !== 'agent-bundle.manifest.json');
-    expect([...manifest.files].sort((left, right) => left.path.localeCompare(right.path))).toEqual(files);
+    const manifestFiles = await Promise.all(files.map(async (file): Promise<ManifestDigest> => {
+      if (!/(?:^|\/)scripts\/[^/]+\.(?:sh|bash|py)$/iu.test(file.path)) return file;
+      const mode = (await stat(join(firstArtifact, file.path))).mode & 0o777;
+      return (mode & 0o111) === 0 ? file : { ...file, mode };
+    }));
+    expect([...manifest.files].sort((left, right) => left.path.localeCompare(right.path))).toEqual(manifestFiles);
     for (const file of files.filter((entry) => entry.path.endsWith('.mjs'))) {
       await expect(readFile(join(firstArtifact, file.path), 'utf8')).resolves.not.toMatch(
         agentBundleImport,
