@@ -6,7 +6,7 @@
 
 **Architecture:** A single published `agent-bundle` package owns config loading, discovery, normalization, validation, target adapters, Rslib-backed executable compilation, and structured APIs. Host-specific behavior lives behind `TargetAdapter`; generated targets have no Agent Bundle runtime dependency. Tests exercise public behavior and generated artifacts from temporary fixture projects.
 
-**Tech Stack:** Node.js 22.19+, TypeScript ESM, npm workspaces, Rslib 0.23, Rstest 0.11, Rslint 0.8, Ajv 8, Jiti 2, fast-glob 3, YAML, Commander 15.
+**Tech Stack:** Node.js 22.19+, TypeScript ESM, npm workspaces, Rslib 0.23, Rstest 0.11, Rslint 0.8, Ajv 8, `@rstackjs/load-config` 0.1 with Jiti 2 fallback, fast-glob 3, YAML, Commander 15.
 
 ## Global Constraints
 
@@ -185,7 +185,7 @@ expect(new DiagnosticBag([error]).throwIfErrors).toThrow(DiagnosticError);
 
 - [ ] **Step 2: Run the test and confirm config/discovery symbols are missing**
 
-- [ ] **Step 3: Implement Jiti-based async config loading and conventional discovery with explicit config overrides**
+- [ ] **Step 3: Implement Rstack's native-first async config loading with Jiti fallback, conventional discovery, and explicit config overrides**
 
 - [ ] **Step 4: Implement YAML frontmatter/resource parsing without rewriting Markdown**
 
