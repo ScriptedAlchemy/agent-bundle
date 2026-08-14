@@ -27,6 +27,7 @@
     }
   },
   "dependencies": {
+    "@rstackjs/load-config": "0.1.2",
     "fast-glob": "3.3.3",
     "ignore": "7.0.6",
     "jiti": "2.7.0",

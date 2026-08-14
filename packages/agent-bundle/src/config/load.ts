@@ -1,10 +1,9 @@
 import { resolve } from 'node:path';
 
-import { createJiti } from 'jiti';
+import { loadConfig as loadRstackConfig } from '@rstackjs/load-config';
 
 import type {
   AgentBundleConfig,
-  ConfigFactory,
   ConfigFactoryContext,
 } from '../core/types.ts';
 
@@ -27,14 +26,6 @@ export interface LoadedConfig {
 const isConfig = (value: unknown): value is AgentBundleConfig =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
-const resolveConfigExport = (module: unknown): unknown => {
-  if (typeof module !== 'object' || module === null || !('default' in module)) {
-    return module;
-  }
-
-  return module.default;
-};
-
 export const loadConfig = async ({
   root,
   configPath,
@@ -50,12 +41,15 @@ export const loadConfig = async ({
     projectRoot,
     selectedTargets: [...targets],
   };
-  const jiti = createJiti(resolvedConfigPath);
-  const exported = resolveConfigExport(await jiti.import(resolvedConfigPath));
-  const config =
-    typeof exported === 'function'
-      ? await (exported as ConfigFactory)(context)
-      : exported;
+  const { content: config } = await loadRstackConfig<
+    AgentBundleConfig,
+    [ConfigFactoryContext]
+  >({
+    configParams: [context],
+    fresh: true,
+    loader: 'auto',
+    path: resolvedConfigPath,
+  });
 
   if (!isConfig(config)) {
     throw new TypeError(

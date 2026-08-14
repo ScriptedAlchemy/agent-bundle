@@ -128,6 +128,44 @@ it('loads sync config objects from relative and absolute explicit paths', async 
   }
 });
 
+it('reloads an edited native ESM config on each load', async () => {
+  const fixture = await createProjectFixture();
+  const relativeConfigPath = 'configs/fresh.config.mjs';
+  const configPath = join(fixture.root, relativeConfigPath);
+  const options = {
+    command: 'inspect',
+    configPath: relativeConfigPath,
+    mode: 'development',
+    root: fixture.root,
+    targets: [],
+  };
+
+  try {
+    await mkdir(join(fixture.root, 'configs'), { recursive: true });
+    await writeFile(
+      configPath,
+      "export default { plugin: { name: 'fresh', version: '1.0.0' } };\n",
+    );
+
+    expect((await loadConfig(options)).config.plugin).toEqual({
+      name: 'fresh',
+      version: '1.0.0',
+    });
+
+    await writeFile(
+      configPath,
+      "export default { plugin: { name: 'fresh', version: '2.0.0' } };\n",
+    );
+
+    await expect(loadConfig(options)).resolves.toMatchObject({
+      config: { plugin: { name: 'fresh', version: '2.0.0' } },
+      configPath,
+    });
+  } finally {
+    await removeProjectFixture(fixture.root);
+  }
+});
+
 it('discovers an explicit non-conventional skill path relative to the project root', async () => {
   const fixture = await createProjectFixture();
   const selectedSkillDir = join(fixture.root, 'custom/selected');
