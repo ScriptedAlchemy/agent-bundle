@@ -4,7 +4,7 @@
 
 **Goal:** Build a runnable, strictly opt-in dual-host plugin example in which Claude Code and Codex lifecycle hooks render through a real Rsbuild RSC Flight boundary, share external state with a static MCP server, and expose that state through a React MCP App, without changing how ordinary Agent Bundle skills, MCPs, evaluations, or plain hooks work.
 
-**Architecture:** Disposable hook commands normalize native input, ask a Node RSC worker to mutate/read a file-backed kernel and render a Flight stream, decode that stream, and lower its React result tree to native host JSON. A separately registered MCP server reads the same kernel, optionally renders protocol-native MCP results through the same RSC worker, and serves a statically built client React timeline over the MCP Apps resource contract.
+**Architecture:** Disposable hook commands normalize native input, ask a Node RSC worker to mutate/read a file-backed kernel and render a Flight stream, decode that stream, and lower its React result tree to native host JSON. A separately registered MCP server reads the same kernel, optionally renders protocol-native MCP results through the same RSC worker, and serves a statically built client React timeline over the MCP Apps resource contract. Serializable metadata and feature-detected client adapters provide optional host-specific lanes around that portable core.
 
 **Tech Stack:** Node.js 22.19+, TypeScript 7.0.2 ESM, Rsbuild 2.1.13, `rsbuild-plugin-rsc` 0.1.1, React/React DOM 19.2.8, `react-server-dom-rspack` 0.0.3, MCP TypeScript SDK 1.30.0, MCP Ext Apps 1.7.5, Zod 4.4.3, Express 5.2.1, Rstest 0.11.8, Playwright Core 1.62.1 with installed Chrome.
 
@@ -23,7 +23,14 @@
 - Link only `render_edit_timeline` to `ui://rsc-agent-runtime/edit-timeline-v1.html`, using
   `_meta.ui.resourceUri` as the primary field and `_meta["openai/outputTemplate"]` as the ChatGPT
   compatibility alias.
-- Build the widget on the MCP Apps bridge and use ChatGPT-specific `window.openai` APIs only as optional feature-detected additions; this demo needs none.
+- Build the widget on the MCP Apps bridge. Add one real, optional ChatGPT enhancement by
+  feature-detecting `window.openai.widgetState`/`setWidgetState` for selected-row UI state; the
+  standards-only path must behave fully without it, and authoritative edit data must remain in the
+  kernel.
+- Preserve arbitrary serializable namespaced `_meta` at static descriptor/resource and tool-result
+  boundaries. Support the documented Claude stable app-domain convention only when a public MCP URL
+  is explicitly configured. Do not branch on product names in the widget or invent a Claude-only
+  browser API.
 - Use the installed Claude Code 2.1.232 and Codex CLI 0.147.0 sessions for native evaluations; never accept, request, inject, inspect, or persist an API key.
 - Preserve the accepted visual contract at `docs/assets/rsc-agent-runtime-demo/edit-timeline-concept.png` and verify desktop and 360px-wide renderings before completion.
 
@@ -71,11 +78,13 @@ examples/rsc-agent-runtime/
 │   ├── mcp/
 │   │   ├── create-server.ts
 │   │   ├── handlers.ts
+│   │   ├── host-metadata.ts
 │   │   ├── resolve-state.ts
 │   │   ├── stdio.ts
 │   │   └── http.ts
 │   ├── widget/
 │   │   ├── App.tsx
+│   │   ├── host-adapters.ts
 │   │   ├── index.tsx
 │   │   └── styles.css
 │   └── build/
@@ -90,6 +99,7 @@ examples/rsc-agent-runtime/
 │   ├── rsc-hook.integration.test.ts
 │   ├── mcp-lowering.test.tsx
 │   ├── mcp-transports.integration.test.ts
+│   ├── host-extensions.test.tsx
 │   └── host-artifacts.test.ts
 └── README.md
 ```
@@ -178,7 +188,7 @@ examples/rsc-agent-runtime/
   Run:
 
   ```bash
-  npm test -w @agent-bundle/rsc-agent-runtime-demo -- --run tests/state-and-definition.test.ts
+  npm test -w @agent-bundle/rsc-agent-runtime-demo -- run tests/state-and-definition.test.ts
   ```
 
   Expected: failure because `state-file.ts`, `definition.ts`, and their exports do not exist.
@@ -238,7 +248,7 @@ examples/rsc-agent-runtime/
   Run:
 
   ```bash
-  npm test -w @agent-bundle/rsc-agent-runtime-demo -- --run tests/state-and-definition.test.ts
+  npm test -w @agent-bundle/rsc-agent-runtime-demo -- run tests/state-and-definition.test.ts
   npm run typecheck -w @agent-bundle/rsc-agent-runtime-demo
   ```
 
@@ -309,7 +319,7 @@ examples/rsc-agent-runtime/
 
   ```bash
   npm run build -w @agent-bundle/rsc-agent-runtime-demo
-  npm test -w @agent-bundle/rsc-agent-runtime-demo -- --run tests/rsc-hook.integration.test.ts
+  npm test -w @agent-bundle/rsc-agent-runtime-demo -- run tests/rsc-hook.integration.test.ts
   ```
 
   Expected: build failure because `rsbuild.config.ts` and the RSC entries are absent.
@@ -377,8 +387,8 @@ examples/rsc-agent-runtime/
 
   ```bash
   npm run build -w @agent-bundle/rsc-agent-runtime-demo
-  npm test -w @agent-bundle/rsc-agent-runtime-demo -- --run tests/rsc-hook.integration.test.ts
-  npm test -w @agent-bundle/rsc-agent-runtime-demo -- --run tests/rsc-hook.integration.test.ts
+  npm test -w @agent-bundle/rsc-agent-runtime-demo -- run tests/rsc-hook.integration.test.ts
+  npm test -w @agent-bundle/rsc-agent-runtime-demo -- run tests/rsc-hook.integration.test.ts
   npm run typecheck -w @agent-bundle/rsc-agent-runtime-demo
   ```
 
@@ -463,7 +473,7 @@ examples/rsc-agent-runtime/
 
   ```bash
   npm run build -w @agent-bundle/rsc-agent-runtime-demo
-  npm test -w @agent-bundle/rsc-agent-runtime-demo -- --run tests/mcp-lowering.test.tsx tests/mcp-transports.integration.test.ts
+  npm test -w @agent-bundle/rsc-agent-runtime-demo -- run tests/mcp-lowering.test.tsx tests/mcp-transports.integration.test.ts
   ```
 
   Expected: failure because MCP elements, transports, and widget artifacts do not exist.
@@ -541,7 +551,7 @@ examples/rsc-agent-runtime/
 
   ```bash
   npm run build -w @agent-bundle/rsc-agent-runtime-demo
-  npm test -w @agent-bundle/rsc-agent-runtime-demo -- --run tests/mcp-lowering.test.tsx tests/mcp-transports.integration.test.ts
+  npm test -w @agent-bundle/rsc-agent-runtime-demo -- run tests/mcp-lowering.test.tsx tests/mcp-transports.integration.test.ts
   npm run typecheck -w @agent-bundle/rsc-agent-runtime-demo
   ```
 
@@ -554,7 +564,7 @@ examples/rsc-agent-runtime/
   git commit -m "feat(example): add RSC MCP server and timeline app"
   ```
 
-### Task 4: Dual-host packaging, native evaluations, browser evidence, and documentation
+### Task 4: Host extensions, dual-host packaging, native evaluations, browser evidence, and documentation
 
 **Files:**
 - Modify: `examples/rsc-agent-runtime/package.json`
@@ -565,10 +575,14 @@ examples/rsc-agent-runtime/
 - Create: `examples/rsc-agent-runtime/packaging/codex/.codex-plugin/plugin.json`
 - Create: `examples/rsc-agent-runtime/packaging/codex/.mcp.json`
 - Create: `examples/rsc-agent-runtime/packaging/codex/hooks/hooks.json`
+- Create: `examples/rsc-agent-runtime/src/mcp/host-metadata.ts`
+- Create: `examples/rsc-agent-runtime/src/widget/host-adapters.ts`
+- Modify: `examples/rsc-agent-runtime/src/widget/App.tsx`
 - Create: `examples/rsc-agent-runtime/scripts/package-hosts.mjs`
 - Create: `examples/rsc-agent-runtime/scripts/eval-hosts.mjs`
 - Create: `examples/rsc-agent-runtime/scripts/capture-widget.mjs`
 - Create: `examples/rsc-agent-runtime/README.md`
+- Test: `examples/rsc-agent-runtime/tests/host-extensions.test.tsx`
 - Test: `examples/rsc-agent-runtime/tests/host-artifacts.test.ts`
 
 **Interfaces:**
@@ -607,12 +621,24 @@ examples/rsc-agent-runtime/
   `react-server-dom-rspack`, or `rsbuild-plugin-rsc` runtime/peer/optional dependency, and no source
   under `packages/agent-bundle/src` imports from this example or those RSC packages.
 
+  In `host-extensions.test.tsx`, first assert the portable failure boundary: with no
+  `window.openai` and no public MCP URL, the widget still initializes through MCP Apps, row
+  selection remains local, and the resource contains no host domain. Then mock only the documented
+  `widgetState` and `setWidgetState` capabilities and assert a valid selected event ID is restored
+  and the next selection is synchronously persisted. Assert malformed host state is ignored.
+
+  Given `https://example.com/mcp`, assert the Claude resource-domain helper returns exactly the
+  first 32 hex characters of SHA-256 of that URL plus `.claudemcpcontent.com`; assert it is applied
+  at resource-content `_meta.ui.domain`, not tool registration. Assert arbitrary serializable
+  namespaced metadata survives descriptor/resource and tool-result paths unchanged and never
+  replaces complete model-visible `content`/`structuredContent`.
+
 - [ ] **Step 2: Run the focused test and verify red**
 
   Run:
 
   ```bash
-  npm test -w @agent-bundle/rsc-agent-runtime-demo -- --run tests/host-artifacts.test.ts
+  npm test -w @agent-bundle/rsc-agent-runtime-demo -- run tests/host-extensions.test.tsx tests/host-artifacts.test.ts
   ```
 
   Expected: failure because manifests and hook configs are absent.
@@ -647,7 +673,31 @@ examples/rsc-agent-runtime/
   never recursively copy `dist/plugins` into itself. Add `package:hosts` and run it after
   `rsbuild build` in the example's `build` script.
 
-- [ ] **Step 4: Implement a deterministic native-host evaluation script**
+- [ ] **Step 4: Implement the host-extension lanes and progressive fallbacks**
+
+  Add `host-metadata.ts` with pure functions that merge serializable namespaced metadata without
+  interpreting vendor keys and compute the documented Claude stable app domain only from an
+  explicitly supplied public MCP URL. Wire the optional domain into the resource content returned
+  by `resources/read`; do not add it to the registration descriptor and do not set it by default.
+
+  Add a small widget adapter interface for recoverable presentation state. Its portable adapter
+  keeps `selectedEventId` in the mounted React instance. Its OpenAI adapter exists only when both
+  `window.openai.widgetState` and `window.openai.setWidgetState` have the documented shapes; it
+  restores only an ID present in the current timeline and calls `setWidgetState` synchronously after
+  selection. Capability detection must not inspect a user agent or host/product name.
+
+  Make timeline rows keyboard-selectable without adding visible copy or controls. The selected row
+  may use the existing violet accent and an accessible state, but must preserve the accepted open
+  rail/list anatomy. Keep Refresh on the standard MCP Apps `tools/call` route. Extend MCP result
+  lowering to preserve optional serializable `_meta`, while keeping `content` and
+  `structuredContent` sufficient for text-only hosts.
+
+  Run the focused extension and transport tests in both modes: no vendor globals and a minimal
+  mocked OpenAI capability object. The Claude proof is the standards-only bridge plus the
+  deterministic optional resource domain and native Claude package; the Codex proof is its native
+  manifest/hook/MCP artifact. Do not claim either CLI renders an iframe.
+
+- [ ] **Step 5: Implement a deterministic native-host evaluation script**
 
   `eval-hosts.mjs` must:
 
@@ -673,7 +723,7 @@ examples/rsc-agent-runtime/
   The script must not persist raw authentication, account identifiers, prompts from user config, or
   complete native transcripts in the repository.
 
-- [ ] **Step 5: Implement browser capture and interaction verification**
+- [ ] **Step 6: Implement browser capture and interaction verification**
 
   `capture-widget.mjs` must locate Chrome, serve `dist/app/standalone.html` on an ephemeral loopback
   port, launch that installed executable through `playwright-core`, capture 760x500 and 360x640
@@ -681,7 +731,12 @@ examples/rsc-agent-runtime/
   `--output <desktop.png>` and writes the mobile sibling as `<stem>-mobile.png`. It must close the
   browser and server in `finally`.
 
-- [ ] **Step 6: Document the runnable demo and honest support boundaries**
+  Add a second browser fixture that installs a minimal mocked `window.openai` before the app mounts,
+  selects one timeline row, reloads, and proves the selection is restored. Capture this state as an
+  additional ChatGPT-extension screenshot. The ordinary desktop/mobile captures must run with no
+  vendor global and remain unchanged.
+
+- [ ] **Step 7: Document the runnable demo and honest support boundaries**
 
   `README.md` must include:
 
@@ -694,12 +749,17 @@ examples/rsc-agent-runtime/
     descriptor changes;
   - the distinction between locally validated MCP App HTTP/resource/browser behavior and an actual
     ChatGPT Developer Mode connection;
+  - a host-capability matrix covering portable MCP Apps, ChatGPT/OpenAI aliases and widget state,
+    Claude's standard bridge and optional stable app domain, Claude Code native packaging, and Codex
+    native packaging; explicitly state that Codex CLI is not the ChatGPT UI host;
+  - an extension-author guide for descriptor/resource/result `_meta` and client adapters, including
+    the rule that fallback behavior remains complete and vendor APIs are feature-detected;
   - source links for Rsbuild RSC, MCP Apps, OpenAI plugin UI, Codex hooks, and Claude hooks;
   - known limitations of JSONL storage and exact RSC package pins;
   - an explicit opt-in section explaining that existing Agent Bundle skills, static MCPs,
     evaluations, and normal hooks do not require or activate this runtime.
 
-- [ ] **Step 7: Validate static packaging and run all deterministic checks**
+- [ ] **Step 8: Validate static packaging and run all deterministic checks**
 
   Run diagnostics before TypeScript, then:
 
@@ -712,7 +772,7 @@ examples/rsc-agent-runtime/
 
   Expected: plugin validation, example check, browser interaction, and root check all exit 0.
 
-- [ ] **Step 8: Run installed Claude and Codex evaluations**
+- [ ] **Step 9: Run installed Claude and Codex evaluations**
 
   Run:
 
@@ -725,7 +785,7 @@ examples/rsc-agent-runtime/
   If a host session is not authenticated, record that as an environment limitation; do not request or
   add a key.
 
-- [ ] **Step 9: Compare the accepted concept and browser screenshots**
+- [ ] **Step 10: Compare the accepted concept and browser screenshots**
 
   Inspect `docs/assets/rsc-agent-runtime-demo/edit-timeline-concept.png`, the desktop screenshot, and
   the mobile screenshot with `view_image`. Record at least these five checks in the task report:
@@ -739,7 +799,7 @@ examples/rsc-agent-runtime/
   Fix every concrete mismatch before proceeding. The allowed above-the-fold copy is only the concept
   copy plus dynamic filename, host, tool, and timestamp values.
 
-- [ ] **Step 10: Commit**
+- [ ] **Step 11: Commit**
 
   ```bash
   git add examples/rsc-agent-runtime

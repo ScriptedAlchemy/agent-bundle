@@ -53,7 +53,7 @@ Claude/Codex hook JSON
           v
   host output adapter ---- stdout JSON ----> Claude/Codex
 
-Claude/Codex/ChatGPT MCP client
+MCP Apps-capable host or text-only MCP client
           |
           v
   statically registered MCP server ---- read ----> same runtime kernel
@@ -139,6 +139,11 @@ Only `render_edit_timeline` has `_meta.ui.resourceUri`, mirrored to the optional
 `_meta["openai/outputTemplate"]` compatibility alias. This preserves the decoupled data/render
 pattern and avoids remounting the iframe on every refresh.
 
+Static tool, resource, and result metadata remain open to serializable namespaced extensions. The
+runtime preserves those values but does not make the portable core understand every vendor key.
+This is how a plugin can opt into a host capability without forcing that capability, React, or RSC
+onto unrelated Agent Bundle plugins.
+
 The resource URI is versioned as `ui://rsc-agent-runtime/edit-timeline-v1.html`. Its MIME type is
 `text/html;profile=mcp-app`. It declares an empty network/resource CSP because the build inlines its
 JavaScript and CSS.
@@ -220,7 +225,34 @@ The timeline widget is an `interactive-decoupled` React widget adapted from the 
 App Basics patterns. It uses `@modelcontextprotocol/ext-apps/react` to initialize the standard
 MCP Apps JSON-RPC bridge, listens for tool results, and calls `recent_edits` from its Refresh button.
 That wrapper maps to the standard `ui/initialize`, `ui/notifications/tool-result`, and `tools/call`
-messages. ChatGPT-specific `window.openai` APIs are not required.
+messages.
+
+## Portability and host-specific extensions
+
+Host support is progressive enhancement with four explicit extension lanes:
+
+| Lane | Portable baseline | Demo-specific host behavior | Fallback |
+| --- | --- | --- | --- |
+| Tool descriptor | `_meta.ui.resourceUri` | ChatGPT `openai/outputTemplate` alias | Tool still returns text and structured content |
+| UI resource | `_meta.ui` MIME/CSP/border metadata | ChatGPT description aliases; optional Claude stable app domain derived from a configured public MCP URL | No host-only metadata |
+| Tool result | MCP `content`, `structuredContent`, and optional `_meta` | Serializable namespaced `_meta` passes through to the iframe without entering model-visible content | Model-visible result remains complete |
+| Widget client | MCP Apps `ui/*` bridge and host context | Feature-detected `window.openai.widgetState`/`setWidgetState` preserves selected-row UI state in ChatGPT | React instance state only |
+
+The browser code tests for a capability, never a product name. The OpenAI adapter is a small optional
+module: it reads a valid selected event ID from `window.openai.widgetState` and synchronously writes
+the next selection with `setWidgetState`. It never stores authoritative edit data there. Without
+that global, the same UI continues through the standard MCP Apps bridge.
+
+Claude's current public interactive-connector contract is MCP Apps itself: `ui://` resources,
+`text/html;profile=mcp-app`, sandboxed iframes, JSON-RPC, resource CSP, and host context. The public
+MCP Apps guidance also documents Claude's stable-domain convention as the first 32 hex characters
+of the public MCP URL's SHA-256 digest plus `.claudemcpcontent.com`. The demo exposes that domain
+only when an explicit public URL is configured; it does not invent a Claude-only iframe global.
+
+Codex CLI is not the ChatGPT UI host. Its host-specific proof is the native Codex plugin manifest,
+marketplace entry, MCP command, hook matcher/input adapter, and path-token behavior. Claude Code has
+the corresponding Claude-native package and hook adapter. Both CLI artifacts exercise tools and
+shared state; UI rendering is validated separately through the standards-based HTTP/browser path.
 
 The widget also has a standalone development mode with deterministic sample data. Standalone state
 is only a visual fallback; authoritative edit data always belongs to the kernel.
@@ -280,6 +312,11 @@ Automated validation must prove:
 - the generated manifest contains JSON schemas and no executable functions;
 - only the render tool links the UI resource;
 - the resource serves the built widget with the MCP Apps MIME type and CSP metadata;
+- arbitrary serializable descriptor/resource/result metadata survives registration and lowering;
+- an explicit public MCP URL produces the documented Claude stable app domain, while the default
+  resource has no unnecessary host domain;
+- a mocked ChatGPT capability restores and persists selected-row UI state, while the same widget
+  works with no `window.openai` global;
 - the standalone widget renders at desktop and mobile widths and Refresh updates its state;
 - Claude Code 2.1.232 and Codex CLI 0.147.0 each perform a real edit, trigger the native hook, and
   read that event through the demo MCP server using their already-configured sessions.
@@ -302,6 +339,7 @@ separate claims.
   authentication.
 - It does not claim the CLI hosts render the MCP App iframe. They validate the shared tools and
   hooks; the HTTP/browser path validates the UI surface.
+- It does not branch on host names in widget code or fabricate a proprietary Claude browser API.
 
 ## Source baselines
 
@@ -310,4 +348,10 @@ separate claims.
 - MCP TypeScript SDK 1.30.0, `@modelcontextprotocol/ext-apps` 1.7.5, Zod 4.4.3, and Express 5.2.1.
 - OpenAI Apps SDK examples commit `18cc38e78a968712c357bacdc3c79fead5bfc6b4`, specifically the
   MCP App Basics server and React `useApp` result/tool-call patterns.
+- OpenAI plugin UI guidance at `https://developers.openai.com/plugins/build/chatgpt-ui`, including
+  the standards-first MCP Apps path and optional feature-detected widget-state extension.
+- MCP Apps patterns at `https://apps.extensions.modelcontextprotocol.io/api/documents/Patterns.html`,
+  including host context, resource metadata placement, and the Claude stable-domain convention.
+- Claude interactive-connector guidance at
+  `https://support.claude.com/en/articles/13454812-use-interactive-connectors-in-claude`.
 - Claude Code 2.1.232 and Codex CLI 0.147.0 native contracts.
