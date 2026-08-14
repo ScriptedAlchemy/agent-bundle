@@ -99,6 +99,50 @@ const validateHooks = (loaded: LoadedConfig): Diagnostic[] => {
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
+const isPlainRecord = (value: object): value is Record<string, unknown> => {
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+};
+
+const isProtocolJsonValue = (value: unknown, ancestors = new Set<object>()): boolean => {
+  if (value === null || typeof value === 'boolean' || typeof value === 'string') return true;
+  if (typeof value === 'number') return Number.isFinite(value);
+  if (typeof value !== 'object' || ancestors.has(value)) return false;
+
+  ancestors.add(value);
+  try {
+    if (Array.isArray(value)) {
+      for (let index = 0; index < value.length; index += 1) {
+        const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+        if (descriptor === undefined || !descriptor.enumerable || !('value' in descriptor) || !isProtocolJsonValue(descriptor.value, ancestors)) {
+          return false;
+        }
+      }
+      for (const key of Reflect.ownKeys(value)) {
+        if (key === 'length') continue;
+        if (typeof key !== 'string' || !/^(?:0|[1-9]\d*)$/u.test(key)) return false;
+        const index = Number(key);
+        if (index >= value.length) {
+          return false;
+        }
+      }
+      return true;
+    }
+
+    if (!isPlainRecord(value)) return false;
+    for (const key of Reflect.ownKeys(value)) {
+      if (typeof key !== 'string') return false;
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (descriptor === undefined || !('value' in descriptor) || !isProtocolJsonValue(descriptor.value, ancestors)) {
+        return false;
+      }
+    }
+    return true;
+  } finally {
+    ancestors.delete(value);
+  }
+};
+
 const nonemptyString = (value: unknown): value is string =>
   typeof value === 'string' && value.trim().length > 0;
 
@@ -260,6 +304,12 @@ const validateMcpApps = (
       diagnostics.push(sourceDiagnostic(
         'AB4335',
         `MCP App ${JSON.stringify(appName)} _meta must be an object.`,
+        loaded.configPath,
+      ));
+    } else if (app._meta !== undefined && !isProtocolJsonValue(app._meta)) {
+      diagnostics.push(sourceDiagnostic(
+        'AB4338',
+        `MCP App ${JSON.stringify(appName)} _meta must contain only JSON data.`,
         loaded.configPath,
       ));
     }
