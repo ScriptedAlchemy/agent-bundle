@@ -4,21 +4,44 @@ import { connect } from 'node:net';
 import { expect, it } from '@rstest/core';
 
 import {
-  createMcpAppSandboxFrame,
   createMcpAppSandboxBridge,
+  createMcpAppSandboxFrame,
   createMcpAppSandboxProxy,
   deriveMcpAppSandboxPolicy,
 } from '../src/dev/mcp-app-sandbox.ts';
 
+const relay = Object.freeze({ maxMessageBytes: 1_024, maxQueuedMessages: 1 });
+const proxyEndpoint = Object.freeze({ origin: 'http://127.0.0.1:43124', relay });
+const declaration = Object.freeze({
+  permissions: Object.freeze({ camera: Object.freeze({}), microphone: Object.freeze({}) }),
+});
+const consent = Object.freeze({ permissions: Object.freeze({ camera: Object.freeze({}) }) });
+
+const frameFor = () => createMcpAppSandboxFrame({
+  consent,
+  declaration,
+  hostOrigin: 'http://127.0.0.1:43123',
+  proxy: proxyEndpoint,
+});
+
+const rpcNotification = (method: string, params: Record<string, unknown> = {}) => ({
+  jsonrpc: '2.0' as const,
+  method,
+  params,
+});
+
 it('serves one immutable, different-origin shell and no MCP or session route', async () => {
   const proxy = await createMcpAppSandboxProxy({
     hostOrigin: 'http://127.0.0.1:43123',
+    maxMessageBytes: 1_024,
+    maxQueuedMessages: 1,
     port: 0,
   });
 
   try {
     expect(proxy.origin).not.toBe('http://127.0.0.1:43123');
     expect(proxy.url).toBe(`${proxy.origin}/`);
+    expect(proxy.relay).toEqual(relay);
 
     const [root, query, forbidden] = await Promise.all([
       fetch(proxy.url),
@@ -29,137 +52,129 @@ it('serves one immutable, different-origin shell and no MCP or session route', a
     expect(root.status).toBe(200);
     expect(await root.text()).toBe(await query.text());
     expect(root.headers.get('content-security-policy')).toContain("default-src 'none'");
-    expect(root.headers.get('permissions-policy')).toContain('camera=()');
+    expect(root.headers.get('permissions-policy')).toBeNull();
     expect(forbidden.status).toBe(404);
   } finally {
     await proxy.close();
   }
 });
 
-it('derives app policy from validated declarations without granting extra sources or permissions', () => {
+it('derives outer permissions from the declared and explicitly consented capability objects', () => {
   expect(deriveMcpAppSandboxPolicy({
     csp: {
       connectDomains: ['https://api.example.test', 'javascript:alert(1)', 'https://api.example.test'],
-      resourceDomains: ['https://cdn.example.test', '*'],
       frameDomains: ['https://frames.example.test'],
+      resourceDomains: ['https://cdn.example.test', '*'],
     },
-    permissions: {
-      camera: true,
-      clipboardWrite: false,
-      microphone: true,
-    },
+    permissions: { camera: {}, microphone: {} },
+  }, {
+    permissions: { camera: {}, clipboardWrite: {} },
   })).toEqual({
     contentSecurityPolicy: "default-src 'none'; base-uri 'none'; connect-src https://api.example.test; frame-src https://frames.example.test; img-src data: https://cdn.example.test; media-src https://cdn.example.test; font-src https://cdn.example.test; style-src 'unsafe-inline' https://cdn.example.test; script-src 'unsafe-inline' https://cdn.example.test",
-    permissionsPolicy: 'camera=(self), clipboard-write=(), geolocation=(), microphone=(self)',
+    iframeAllow: 'camera',
+    permissionsPolicy: 'camera=(self), clipboard-write=(), geolocation=(), microphone=()',
   });
 });
 
-it('accepts only its proxy source and origin through the ordered sandbox lifecycle', () => {
+it('uses one proxy relay configuration in the fixed outer frame contract', () => {
+  const frame = frameFor();
+  expect(frame).toMatchObject({
+    allow: 'camera',
+    referrerPolicy: 'no-referrer',
+    sandbox: 'allow-scripts allow-same-origin',
+    targetOrigin: 'http://127.0.0.1:43124',
+  });
+  expect(frame.relay).toBe(relay);
+  expect(JSON.parse(decodeURIComponent(new URL(frame.src).hash.slice(1)))).toEqual({
+    hostOrigin: 'http://127.0.0.1:43123',
+    maxMessageBytes: 1_024,
+  });
+});
+
+it('enforces the JSON-RPC proxy lifecycle and holds host traffic until initialized', () => {
   const sent: { message: unknown; targetOrigin: string }[] = [];
+  const forwarded: unknown[] = [];
   const proxyWindow = {
     postMessage(message: unknown, targetOrigin: string) {
       sent.push({ message, targetOrigin });
     },
   };
   const bridge = createMcpAppSandboxBridge({
-    maxMessageBytes: 1_024,
-    maxQueuedMessages: 1,
-    proxyOrigin: 'http://127.0.0.1:43124',
+    frame: frameFor(),
+    onMessage: (message) => forwarded.push(message),
     proxyWindow,
   });
+  const event = (data: unknown, source: unknown = proxyWindow, origin = 'http://127.0.0.1:43124') => ({ data, origin, source });
 
-  expect(bridge.provideResource({
-    declaration: { permissions: { camera: true } },
-    html: '<p>Hello</p>',
-  })).toBe(false);
-  expect(bridge.receive({
-    data: { type: 'sandbox/ready' },
-    origin: 'http://127.0.0.1:43124',
-    source: {},
-  })).toBe(false);
-  expect(bridge.receive({
-    data: { type: 'sandbox/initialized' },
-    origin: 'http://127.0.0.1:43124',
-    source: proxyWindow,
-  })).toBe(false);
-  expect(bridge.receive({
-    data: { type: 'sandbox/ready' },
-    origin: 'http://127.0.0.1:43124',
-    source: proxyWindow,
-  })).toBe(true);
-  expect(bridge.lifecycle).toBe('ready');
+  expect(bridge.provideResource({ html: '<p>Hello</p>' })).toBe(false);
+  expect(bridge.receive(event(rpcNotification('ui/notifications/sandbox-proxy-ready'), {}))).toBe(false);
+  expect(bridge.receive(event(rpcNotification('ui/notifications/sandbox-proxy-ready'), proxyWindow, 'http://127.0.0.1:43124'))).toBe(true);
+  expect(bridge.lifecycle).toBe('proxy-ready');
 
-  expect(bridge.provideResource({
-    declaration: { permissions: { camera: true } },
-    html: '<p>Hello</p>',
-  })).toBe(true);
-  expect(bridge.send({ type: 'app/ping' })).toBe(true);
-  expect(bridge.send({ type: 'app/second-ping' })).toBe(false);
-  expect(bridge.send({ type: 'sandbox/close' })).toBe(false);
+  expect(bridge.provideResource({ html: '<p>Hello</p>' })).toBe(true);
+  expect(bridge.send(rpcNotification('app/too-large', { value: 'x'.repeat(1_024) }))).toBe(false);
+  expect(bridge.send(rpcNotification('app/ping'))).toBe(true);
+  expect(bridge.send(rpcNotification('app/second-ping'))).toBe(false);
+  expect(bridge.send(rpcNotification('ui/notifications/sandbox-invented'))).toBe(false);
   expect(sent).toEqual([{
-    message: {
+    message: rpcNotification('ui/notifications/sandbox-resource-ready', {
       allow: 'camera',
       contentSecurityPolicy: "default-src 'none'; base-uri 'none'; connect-src 'none'; frame-src 'none'; img-src data:; media-src 'none'; font-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'",
       html: '<p>Hello</p>',
-      type: 'sandbox/resource-ready',
-    },
+    }),
     targetOrigin: 'http://127.0.0.1:43124',
   }]);
 
-  expect(bridge.receive({
-    data: { type: 'sandbox/resource-ready' },
-    origin: 'http://127.0.0.1:43124',
-    source: proxyWindow,
-  })).toBe(true);
-  expect(bridge.receive({
-    data: { type: 'sandbox/initialized' },
-    origin: 'http://127.0.0.1:43124',
-    source: proxyWindow,
-  })).toBe(true);
+  expect(bridge.receive(event(rpcNotification('ui/notifications/sandbox-resource-ready')))).toBe(true);
+  expect(bridge.receive(event({ id: 'init-1', jsonrpc: '2.0', method: 'ui/initialize', params: {} }))).toBe(true);
+  expect(bridge.lifecycle).toBe('initializing');
+  expect(forwarded).toEqual([{ id: 'init-1', jsonrpc: '2.0', method: 'ui/initialize', params: {} }]);
+  expect(bridge.receive(event(rpcNotification('ui/notifications/initialized')))).toBe(false);
+  expect(bridge.send({ id: 'wrong', jsonrpc: '2.0', result: {} })).toBe(false);
+  expect(bridge.send({ id: 'init-1', jsonrpc: '2.0', result: { protocolVersion: '2025-06-18' } })).toBe(true);
+  expect(bridge.lifecycle).toBe('initialize-responded');
+  expect(bridge.receive(event(rpcNotification('ui/notifications/initialized')))).toBe(true);
   expect(bridge.lifecycle).toBe('initialized');
   expect(sent).toEqual([
+    sent[0],
     {
-      message: {
-        allow: 'camera',
-        contentSecurityPolicy: "default-src 'none'; base-uri 'none'; connect-src 'none'; frame-src 'none'; img-src data:; media-src 'none'; font-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'",
-        html: '<p>Hello</p>',
-        type: 'sandbox/resource-ready',
-      },
+      message: { id: 'init-1', jsonrpc: '2.0', result: { protocolVersion: '2025-06-18' } },
       targetOrigin: 'http://127.0.0.1:43124',
     },
     {
-      message: { type: 'app/ping' },
+      message: rpcNotification('app/ping'),
       targetOrigin: 'http://127.0.0.1:43124',
     },
   ]);
+  expect(bridge.receive(event(rpcNotification('ui/notifications/sandbox-unknown')))).toBe(false);
+  expect(bridge.receive(event(rpcNotification('app/pong')))).toBe(true);
+  expect(forwarded.at(-1)).toEqual(rpcNotification('app/pong'));
 
   bridge.close();
   expect(bridge.lifecycle).toBe('closed');
-  expect(bridge.send({ type: 'app/after-close' })).toBe(false);
-  expect(sent.at(-1)).toEqual({
-    message: { type: 'sandbox/close' },
-    targetOrigin: 'http://127.0.0.1:43124',
-  });
+  expect(bridge.send(rpcNotification('app/after-close'))).toBe(false);
 });
 
-it('uses a fixed outer frame contract and an opaque child relay shell', async () => {
-  const frame = createMcpAppSandboxFrame({
+it('uses an opaque child relay shell with real MCP Apps JSON-RPC notification methods', async () => {
+  const proxy = await createMcpAppSandboxProxy({
     hostOrigin: 'http://127.0.0.1:43123',
-    proxyOrigin: 'http://127.0.0.1:43124',
+    maxMessageBytes: 1_024,
+    port: 0,
   });
-  expect(frame).toEqual({
-    referrerPolicy: 'no-referrer',
-    sandbox: 'allow-scripts allow-same-origin',
-    src: 'http://127.0.0.1:43124/#http%3A%2F%2F127.0.0.1%3A43123',
-    targetOrigin: 'http://127.0.0.1:43124',
+  const frame = createMcpAppSandboxFrame({
+    consent,
+    declaration,
+    hostOrigin: 'http://127.0.0.1:43123',
+    proxy,
   });
-
-  const proxy = await createMcpAppSandboxProxy({ hostOrigin: frame.targetOrigin, port: 0 });
   try {
     const shell = await fetch(proxy.url).then((response) => response.text());
     expect(shell).toContain('sandbox="allow-scripts"');
     expect(shell).toContain("event.origin !== 'null'");
-    expect(shell).toContain('reserved.has(inbound.type)');
+    expect(shell).toContain('ui/notifications/sandbox-proxy-ready');
+    expect(shell).toContain("method.startsWith('ui/notifications/sandbox-')");
+    expect(shell).toContain('configuration.maxMessageBytes');
+    expect(new URL(frame.src).hash).toContain('maxMessageBytes');
   } finally {
     await proxy.close();
   }
