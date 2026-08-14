@@ -185,6 +185,41 @@ it('copies named shell and Python scripts byte-for-byte with source modes', asyn
   }
 }, 30_000);
 
+it('documents a versioned MCP App resource URI accepted by source validation', async () => {
+  const parent = await mkdtemp(join(tmpdir(), 'agent-bundle-readme-uri-parent-'));
+  const root = join(parent, 'project');
+  const readme = await readFile(join(process.cwd(), 'README.md'), 'utf8');
+  const resourceUri = /resourceUri: '([^']+)'/u.exec(readme)?.[1];
+  await mkdir(join(root, 'src'), { recursive: true });
+  await mkdir(join(root, 'views'), { recursive: true });
+  await Promise.all([
+    writeFile(
+      join(root, 'agent-bundle.config.ts'),
+      [
+        'export default {',
+        "  plugin: { name: 'readme-uri-fixture', version: '1.0.0' },",
+        "  targets: ['portable'],",
+        '  mcp: { servers: { local: {',
+        "    entry: './src/server.ts',",
+        `    apps: { dashboard: { entry: './views/dashboard.ts', resourceUri: ${JSON.stringify(resourceUri)} } },`,
+        '  } } },',
+        '};',
+        '',
+      ].join('\n'),
+    ),
+    writeFile(join(root, 'src', 'server.ts'), 'export {}\n'),
+    writeFile(join(root, 'views', 'dashboard.ts'), 'export {}\n'),
+  ]);
+
+  try {
+    const result = await validate({ root });
+
+    expect(result.diagnostics.map((diagnostic) => diagnostic.code)).not.toContain('AB4329');
+  } finally {
+    await rm(parent, { force: true, recursive: true });
+  }
+});
+
 it('rejects unsafe, unsupported, missing, non-file, and unknown-target named scripts', async () => {
   const parent = await mkdtemp(join(tmpdir(), 'agent-bundle-invalid-scripts-parent-'));
   const root = join(parent, 'project');
