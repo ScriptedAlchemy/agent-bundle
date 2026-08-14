@@ -71,3 +71,28 @@ it('passes --no-open and the requested port from the CLI to the public dev API',
   expect(received).toEqual([expect.objectContaining({ open: false, port: 4100, root: '/project' })]);
   expect(stdout.join('')).toBe('Development workbench at http://127.0.0.1:4100\n');
 });
+
+it('closes the foreground session once when the dev CLI receives a termination signal', async () => {
+  const handlers = new Map<NodeJS.Signals, () => void>();
+  const removed: NodeJS.Signals[] = [];
+  let closeCalls = 0;
+
+  await expect(runCli(['dev', '--root', '/project', '--no-open'], {}, {
+    signals: {
+      once: (signal, listener) => { handlers.set(signal, listener); },
+      removeListener: (signal) => { removed.push(signal); },
+    },
+    startDevServer: async () => ({
+      close: async () => { closeCalls += 1; },
+      status: () => ({}) as never,
+      url: 'http://127.0.0.1:4100',
+    }),
+  })).resolves.toBe(0);
+
+  handlers.get('SIGINT')?.();
+  handlers.get('SIGTERM')?.();
+  await new Promise((resolvePromise) => setImmediate(resolvePromise));
+
+  expect(closeCalls).toBe(1);
+  expect(removed).toEqual(expect.arrayContaining(['SIGINT', 'SIGTERM']));
+});

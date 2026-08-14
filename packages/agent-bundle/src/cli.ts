@@ -28,7 +28,14 @@ export interface CliStreams {
   readonly stdout?: Output;
 }
 
+interface CliSignalSource {
+  once(signal: NodeJS.Signals, listener: () => void): unknown;
+  removeListener(signal: NodeJS.Signals, listener: () => void): unknown;
+}
+
 export interface CliDependencies {
+  /** Injectable only to make foreground shutdown behavior deterministic in tests. */
+  readonly signals?: CliSignalSource;
   readonly startDevServer?: typeof startDevServer;
 }
 
@@ -179,6 +186,23 @@ const writeHumanValidate = (output: Output, result: Awaited<ReturnType<typeof va
     : 'Validation succeeded\n');
 };
 
+const closeForegroundOnSignal = (
+  session: Pick<Awaited<ReturnType<typeof startDevServer>>, 'close'>,
+  signals: CliSignalSource,
+  stderr: Output,
+): void => {
+  const terminationSignals = ['SIGINT', 'SIGTERM'] as const;
+  let closing: Promise<void> | undefined;
+  const close = (): void => {
+    closing ??= session.close().catch((error: unknown) => {
+      writeMachine(stderr, diagnosticsFor(error));
+    }).finally(() => {
+      for (const signal of terminationSignals) signals.removeListener(signal, close);
+    });
+  };
+  for (const signal of terminationSignals) signals.once(signal, close);
+};
+
 export const runCli = async (
   args: string[],
   streams: CliStreams = {},
@@ -209,6 +233,7 @@ export const runCli = async (
       root: options.root,
     });
     stdout.write(`Development workbench at ${session.url}\n`);
+    closeForegroundOnSignal(session, dependencies.signals ?? process, stderr);
   });
 
   const buildCommand = configureSourceOptions(
