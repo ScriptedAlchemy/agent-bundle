@@ -1,0 +1,17 @@
+{
+  "binding": {
+    "serverName": "fixture",
+    "sessionId": "selected-artifact",
+    "target": "portable"
+  },
+  "requiredFrames": [
+    { "direction": "browser-to-service", "method": "initialize" },
+    { "direction": "service-to-browser", "method": "response" },
+    { "direction": "browser-to-service", "method": "tools/list" },
+    { "direction": "browser-to-service", "method": "tools/call" },
+    { "direction": "service-to-browser", "method": "notifications/progress" },
+    { "direction": "browser-to-service", "method": "notifications/cancelled" },
+    { "direction": "service", "method": "close" }
+  ],
+  "stderr": "bridge fixture stderr\n"
+}

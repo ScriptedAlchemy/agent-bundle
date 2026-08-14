@@ -1,0 +1,19 @@
+{
+  "deadPidRecovery": {
+    "recovered": true,
+    "staleOwnerDead": true,
+    "stalePid": 2147483647
+  },
+  "failedPublication": {
+    "activeEpochId": "epoch-1",
+    "failed": true,
+    "retained": true
+  },
+  "lockOwnership": {
+    "firstWriterAcquired": true,
+    "secondWriterOwnerMatchesFirst": true,
+    "secondWriterRejected": true
+  },
+  "platform": "linux",
+  "publicationMechanism": "stage-write then atomic rename"
+}
