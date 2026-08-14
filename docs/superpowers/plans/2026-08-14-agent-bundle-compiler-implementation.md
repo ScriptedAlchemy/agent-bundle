@@ -305,6 +305,13 @@ expect(new DiagnosticBag([error]).throwIfErrors).toThrow(DiagnosticError);
   `${CLAUDE_PLUGIN_ROOT}`, `${CLAUDE_PLUGIN_DATA}`, and `${CLAUDE_PROJECT_DIR}`. Reject native
   MCP token uses that the selected host cannot represent instead of preserving inert strings.
 
+  Do not package or download Codex's internal Python `plugin-creator` validator. It is research
+  evidence, not a stable host API. Normal builds remain offline and reproducible: the package
+  ships pinned schema/capability snapshots for its declared supported CLI versions, verifies
+  their recorded provenance and hashes locally, and exercises generated fixtures through the
+  actual installed host CLIs in the native integration tasks. A supported-version bump updates
+  the capability table, schema snapshot, provenance, and fixtures together.
+
 - [ ] **Step 2: Write failing adapter contract tests using the same normalized fixture for both hosts**
 
   Assert exact native paths, path-token syntax, marketplace references, capability diagnostics, and schema-valid JSON.
