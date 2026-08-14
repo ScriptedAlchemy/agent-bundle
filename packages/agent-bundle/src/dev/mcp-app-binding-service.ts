@@ -201,9 +201,8 @@ export class McpAppBindingService {
       if (identity.sessionId !== sessionId) {
         throw new Error(`MCP App lease identity does not match requested session ${JSON.stringify(sessionId)}.`);
       }
-      observation = lease.watchSessionClosed((reason) => {
+      observation = lease.watchSessionClosed(() => {
         sessionClosed = true;
-        void reason;
         return entry === undefined ? undefined : this.#closeEntry(entry, 'session-closed');
       });
       sessionClosed ||= observation.closed;
