@@ -70,7 +70,7 @@ it('derives outer permissions from the declared and explicitly consented capabil
   }, {
     permissions: { camera: {}, clipboardWrite: {} },
   })).toEqual({
-    contentSecurityPolicy: "default-src 'none'; base-uri 'none'; connect-src https://api.example.test; frame-src https://frames.example.test; img-src data: https://cdn.example.test; media-src https://cdn.example.test; font-src https://cdn.example.test; style-src 'unsafe-inline' https://cdn.example.test; script-src 'unsafe-inline' https://cdn.example.test",
+    contentSecurityPolicy: "default-src 'none'; base-uri 'self'; connect-src https://api.example.test; frame-src https://frames.example.test; img-src data: https://cdn.example.test; media-src https://cdn.example.test; font-src https://cdn.example.test; style-src 'unsafe-inline' https://cdn.example.test; script-src 'unsafe-inline' https://cdn.example.test",
     iframeAllow: 'camera',
     permissionsPolicy: 'camera=(self), clipboard-write=(), geolocation=(), microphone=()',
   });
@@ -84,11 +84,26 @@ it('uses one proxy relay configuration in the fixed outer frame contract', () =>
     sandbox: 'allow-scripts allow-same-origin',
     targetOrigin: 'http://127.0.0.1:43124',
   });
-  expect(frame.relay).toBe(relay);
+  expect(frame.relay).toEqual(relay);
+  expect(Object.isFrozen(frame.relay)).toBe(true);
   expect(JSON.parse(decodeURIComponent(new URL(frame.src).hash.slice(1)))).toEqual({
     hostOrigin: 'http://127.0.0.1:43123',
     maxMessageBytes: 1_024,
   });
+});
+
+it('freezes a validated relay configuration instead of retaining a caller-owned object', () => {
+  const mutableRelay = { maxMessageBytes: 1_024, maxQueuedMessages: 1 };
+  const frame = createMcpAppSandboxFrame({
+    hostOrigin: 'http://127.0.0.1:43123',
+    proxy: { origin: 'http://127.0.0.1:43124', relay: mutableRelay },
+  });
+
+  mutableRelay.maxMessageBytes = 2;
+  mutableRelay.maxQueuedMessages = 2;
+  expect(frame.relay).toEqual({ maxMessageBytes: 1_024, maxQueuedMessages: 1 });
+  expect(frame.relay).not.toBe(mutableRelay);
+  expect(Object.isFrozen(frame.relay)).toBe(true);
 });
 
 it('enforces the JSON-RPC proxy lifecycle and holds host traffic until initialized', () => {
@@ -111,21 +126,28 @@ it('enforces the JSON-RPC proxy lifecycle and holds host traffic until initializ
   expect(bridge.receive(event(rpcNotification('ui/notifications/sandbox-proxy-ready'), proxyWindow, 'http://127.0.0.1:43124'))).toBe(true);
   expect(bridge.lifecycle).toBe('proxy-ready');
 
-  expect(bridge.provideResource({ html: '<p>Hello</p>' })).toBe(true);
+  expect(bridge.provideResource({
+    csp: { connectDomains: ['https://api.example.test'] },
+    html: '<p>Hello</p>',
+    permissions: { camera: {} },
+    sandbox: {},
+  })).toBe(true);
+  expect(bridge.lifecycle).toBe('resource-ready');
   expect(bridge.send(rpcNotification('app/too-large', { value: 'x'.repeat(1_024) }))).toBe(false);
   expect(bridge.send(rpcNotification('app/ping'))).toBe(true);
   expect(bridge.send(rpcNotification('app/second-ping'))).toBe(false);
   expect(bridge.send(rpcNotification('ui/notifications/sandbox-invented'))).toBe(false);
   expect(sent).toEqual([{
     message: rpcNotification('ui/notifications/sandbox-resource-ready', {
-      allow: 'camera',
-      contentSecurityPolicy: "default-src 'none'; base-uri 'none'; connect-src 'none'; frame-src 'none'; img-src data:; media-src 'none'; font-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'",
+      csp: { connectDomains: ['https://api.example.test'] },
       html: '<p>Hello</p>',
+      permissions: { camera: {} },
+      sandbox: {},
     }),
     targetOrigin: 'http://127.0.0.1:43124',
   }]);
 
-  expect(bridge.receive(event(rpcNotification('ui/notifications/sandbox-resource-ready')))).toBe(true);
+  expect(bridge.receive(event(rpcNotification('ui/notifications/sandbox-resource-ready')))).toBe(false);
   expect(bridge.receive(event({ id: 'init-1', jsonrpc: '2.0', method: 'ui/initialize', params: {} }))).toBe(true);
   expect(bridge.lifecycle).toBe('initializing');
   expect(forwarded).toEqual([{ id: 'init-1', jsonrpc: '2.0', method: 'ui/initialize', params: {} }]);

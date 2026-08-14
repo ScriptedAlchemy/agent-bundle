@@ -52,6 +52,29 @@ const SHELL = `<!doctype html>
     const isRpc = (value) => isRecord(value) && value.jsonrpc === '${JSON_RPC_VERSION}' && byteLength(value) <= maxMessageBytes && (typeof value.method === 'string' || Object.hasOwn(value, 'id'));
     const isNotification = (value, method) => isRpc(value) && value.method === method && !Object.hasOwn(value, 'id');
     const isSandboxMethod = (method) => typeof method === 'string' && method.startsWith('ui/notifications/sandbox-');
+    const cspSources = (sources) => {
+      if (!Array.isArray(sources)) return [];
+      const accepted = new Set();
+      for (const source of sources) {
+        try {
+          const parsed = new URL(source);
+          if (typeof source === 'string' && parsed.protocol === 'https:' && !parsed.username && !parsed.password && !parsed.search && !parsed.hash && parsed.pathname === '/') accepted.add(parsed.origin);
+        } catch {}
+      }
+      return [...accepted];
+    };
+    const cspSourceList = (sources, fallback) => sources.length > 0 ? sources.join(' ') : fallback;
+    const buildCsp = (csp) => {
+      const connect = cspSources(csp && csp.connectDomains);
+      const resources = cspSources(csp && csp.resourceDomains);
+      const frames = cspSources(csp && csp.frameDomains);
+      const baseUri = cspSources(csp && csp.baseUriDomains);
+      return ["default-src 'none'", 'base-uri ' + cspSourceList(baseUri, "'self'"), 'connect-src ' + cspSourceList(connect, "'none'"), 'frame-src ' + cspSourceList(frames, "'none'"), 'img-src ' + ['data:', ...resources].join(' '), 'media-src ' + cspSourceList(resources, "'none'"), 'font-src ' + cspSourceList(resources, "'none'"), 'style-src ' + ["'unsafe-inline'", ...resources].join(' '), 'script-src ' + ["'unsafe-inline'", ...resources].join(' ')].join('; ');
+    };
+    const permissionsAllow = (permissions) => {
+      if (!isRecord(permissions)) return '';
+      return [['camera', 'camera'], ['clipboardWrite', 'clipboard-write'], ['geolocation', 'geolocation'], ['microphone', 'microphone']].filter(([key]) => isRecord(permissions[key])).map(([, directive]) => directive).join('; ');
+    };
     const escapeHtmlAttribute = (value) => value.replace(/[&<>"]/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[character]);
     const postNotification = (method, params = {}) => parent.postMessage({ jsonrpc: '${JSON_RPC_VERSION}', method, params }, configuration.hostOrigin);
     const postToApp = (value) => { if (app.contentWindow) app.contentWindow.postMessage(value, '*'); };
@@ -62,13 +85,11 @@ const SHELL = `<!doctype html>
         const message = event.data;
         if (isNotification(message, resourceReadyMethod)) {
           const params = message.params;
-          if (lifecycle !== 'proxy-ready' || !isRecord(params) || typeof params.html !== 'string' || typeof params.contentSecurityPolicy !== 'string' || typeof params.allow !== 'string') return;
-          if (byteLength(message) > maxMessageBytes || params.contentSecurityPolicy.length > 16384) return;
-          lifecycle = 'resource-pending';
-          app.allow = params.allow;
-          app.srcdoc = '<!doctype html><meta http-equiv="Content-Security-Policy" content="' + escapeHtmlAttribute(params.contentSecurityPolicy) + '">' + params.html;
+          if (lifecycle !== 'proxy-ready' || !isRecord(params) || typeof params.html !== 'string') return;
+          if (byteLength(message) > maxMessageBytes || (Object.hasOwn(params, 'sandbox') && !isRecord(params.sandbox)) || (Object.hasOwn(params, 'csp') && !isRecord(params.csp)) || (Object.hasOwn(params, 'permissions') && !isRecord(params.permissions))) return;
+          app.allow = permissionsAllow(params.permissions);
+          app.srcdoc = '<!doctype html><meta http-equiv="Content-Security-Policy" content="' + escapeHtmlAttribute(buildCsp(params.csp)) + '">' + params.html;
           lifecycle = 'resource-ready';
-          postNotification(resourceReadyMethod);
           return;
         }
         if (isSandboxMethod(message.method)) return;
@@ -174,7 +195,7 @@ export interface McpAppSandboxFrame {
   readonly targetOrigin: string;
 }
 
-export type McpAppSandboxLifecycle = 'created' | 'proxy-ready' | 'resource-pending' | 'resource-ready' | 'initializing' | 'initialize-responded' | 'initialized' | 'closed';
+export type McpAppSandboxLifecycle = 'created' | 'proxy-ready' | 'resource-ready' | 'initializing' | 'initialize-responded' | 'initialized' | 'closed';
 
 export type McpAppSandboxRequestId = string | number | null;
 
@@ -198,7 +219,10 @@ export interface McpAppSandboxWindow {
 }
 
 export interface McpAppSandboxResource {
+  readonly csp?: McpAppSandboxCsp;
   readonly html: string;
+  readonly permissions?: McpAppSandboxPermissions;
+  readonly sandbox?: Readonly<Record<string, unknown>>;
 }
 
 export interface CreateMcpAppSandboxBridgeOptions {
@@ -269,7 +293,7 @@ export const deriveMcpAppSandboxPolicy = (
   return {
     contentSecurityPolicy: [
       "default-src 'none'",
-      `base-uri ${sourceList(baseUri, "'none'")}`,
+      `base-uri ${sourceList(baseUri, "'self'")}`,
       `connect-src ${sourceList(connect, "'none'")}`,
       `frame-src ${sourceList(frames, "'none'")}`,
       `img-src ${['data:', ...resources].join(' ')}`,
@@ -360,7 +384,7 @@ export const createMcpAppSandboxFrame = (
     allow: policy.iframeAllow,
     policy,
     referrerPolicy: 'no-referrer',
-    relay: options.proxy.relay,
+    relay,
     sandbox: 'allow-scripts allow-same-origin',
     src: `${proxyOrigin}/#${configuration}`,
     targetOrigin: proxyOrigin,
@@ -397,12 +421,13 @@ export const createMcpAppSandboxBridge = (
     provideResource(resource: McpAppSandboxResource): boolean {
       if (lifecycle !== 'proxy-ready' || typeof resource.html !== 'string') return false;
       const message = notification(RESOURCE_READY_METHOD, {
-        allow: options.frame.allow,
-        contentSecurityPolicy: options.frame.policy.contentSecurityPolicy,
         html: resource.html,
+        ...(resource.sandbox === undefined ? {} : { sandbox: resource.sandbox }),
+        ...(resource.csp === undefined ? {} : { csp: resource.csp }),
+        ...(resource.permissions === undefined ? {} : { permissions: resource.permissions }),
       });
       if (!isMessage(message, relay.maxMessageBytes)) return false;
-      lifecycle = 'resource-pending';
+      lifecycle = 'resource-ready';
       post(message);
       return true;
     },
@@ -413,11 +438,6 @@ export const createMcpAppSandboxBridge = (
       if (isNotification(message, PROXY_READY_METHOD)) {
         if (lifecycle !== 'created') return false;
         lifecycle = 'proxy-ready';
-        return true;
-      }
-      if (isNotification(message, RESOURCE_READY_METHOD)) {
-        if (lifecycle !== 'resource-pending') return false;
-        lifecycle = 'resource-ready';
         return true;
       }
       if (isNotification(message, INITIALIZED_METHOD)) {
@@ -450,7 +470,7 @@ export const createMcpAppSandboxBridge = (
         post(message);
         return true;
       }
-      if ((lifecycle !== 'resource-pending' && lifecycle !== 'resource-ready') || queuedMessages.length >= relay.maxQueuedMessages) {
+      if (lifecycle !== 'resource-ready' || queuedMessages.length >= relay.maxQueuedMessages) {
         return false;
       }
       queuedMessages.push(message);
