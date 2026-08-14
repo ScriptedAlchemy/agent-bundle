@@ -1,0 +1,26 @@
+{
+  "name": "agent-bundle",
+  "version": "0.1.0",
+  "type": "module",
+  "bin": {
+    "agent-bundle": "./dist/cli.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./api": {
+      "types": "./dist/api.d.ts",
+      "import": "./dist/api.js"
+    },
+    "./config": {
+      "types": "./dist/config.d.ts",
+      "import": "./dist/config.js"
+    },
+    "./eval": {
+      "types": "./dist/eval.d.ts",
+      "import": "./dist/eval.js"
+    }
+  }
+}
