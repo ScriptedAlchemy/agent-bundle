@@ -9,20 +9,39 @@ const isPlainObject = (value: unknown): value is Record<string, unknown> => {
   return prototype === Object.prototype || prototype === null;
 };
 
-const sortPlainObjectKeys = (_key: string, value: unknown): unknown => {
-  if (!isPlainObject(value)) {
-    return value;
+const serializeJson = (value: unknown, key = ''): string | undefined => {
+  if (value !== null && typeof value === 'object') {
+    const toJson = (value as { toJSON?: unknown }).toJSON;
+
+    if (typeof toJson === 'function') {
+      return serializeJson(toJson.call(value, key), key);
+    }
+
+    if (Array.isArray(value)) {
+      return `[${value
+        .map((item, index) => serializeJson(item, String(index)) ?? 'null')
+        .join(',')}]`;
+    }
+
+    const object = value as Record<string, unknown>;
+    const keys = Object.keys(object);
+    const orderedKeys = isPlainObject(object) ? keys.sort() : keys;
+    const entries = orderedKeys.flatMap((objectKey) => {
+      const serialized = serializeJson(object[objectKey], objectKey);
+      return serialized === undefined
+        ? []
+        : [`${JSON.stringify(objectKey)}:${serialized}`];
+    });
+
+    return `{${entries.join(',')}}`;
   }
 
-  return Object.fromEntries(
-    Object.keys(value)
-      .sort()
-      .map((key) => [key, value[key]]),
-  );
+  const serialized = JSON.stringify(value);
+  return typeof serialized === 'string' ? serialized : undefined;
 };
 
 export const stableJson = (value: unknown): string => {
-  const serialized = JSON.stringify(value, sortPlainObjectKeys);
+  const serialized = serializeJson(value);
 
   if (serialized === undefined) {
     throw new TypeError('Cannot serialize a top-level non-JSON value.');

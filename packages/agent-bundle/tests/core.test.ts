@@ -25,6 +25,12 @@ it('serializes plain-object keys deterministically without changing JSON values'
   );
 });
 
+it('serializes integer-like object keys in lexical order', () => {
+  expect(stableJson({ '2': 'two', '10': 'ten' })).toBe(
+    '{"10":"ten","2":"two"}',
+  );
+});
+
 it('returns resolved paths contained by the output root', () => {
   expect(assertInside('/tmp/out', '/tmp/out')).toBe('/tmp/out');
   expect(assertInside('/tmp/out', '/tmp/out/nested/file.txt')).toBe(
