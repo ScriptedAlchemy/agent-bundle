@@ -176,7 +176,6 @@ it('keeps trace sequence monotonic and exposes stable diagnostics when an invali
   });
   model = reduceMcpBrowserSession(model, {
     entry: {
-      direction: 'server',
       kind: 'logging',
       occurredAt: 102,
       payload: { level: 'info', message: 'ready' },

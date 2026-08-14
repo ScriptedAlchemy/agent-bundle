@@ -93,8 +93,8 @@ const isSupportedFieldSchema = (value: unknown): value is FormFieldSchema => {
 
   if (value.minimum !== undefined && !isFiniteNumber(value.minimum)) return false;
   if (value.maximum !== undefined && !isFiniteNumber(value.maximum)) return false;
-  if (value.minLength !== undefined && (!Number.isInteger(value.minLength) || value.minLength < 0)) return false;
-  if (value.maxLength !== undefined && (!Number.isInteger(value.maxLength) || value.maxLength < 0)) return false;
+  if (value.minLength !== undefined && (!isFiniteNumber(value.minLength) || !Number.isInteger(value.minLength) || value.minLength < 0)) return false;
+  if (value.maxLength !== undefined && (!isFiniteNumber(value.maxLength) || !Number.isInteger(value.maxLength) || value.maxLength < 0)) return false;
   return true;
 };
 
