@@ -19,6 +19,7 @@ test('documents the native Codex matcher and evidence boundary truthfully', asyn
   expect(source).toContain('`apply_patch` hook');
   expect(source).toContain('`dist/runtime/agent-runtime.manifest.json`');
   expect(source).toContain('Claude fully proves hook→MCP/RSC shared behavior');
+  expect(source).toContain('value-free hook launch probe');
   expect(source).toContain('native PostToolUse/shared state is unproven under pinned `codex exec --ephemeral`');
   expect(source).not.toContain('A non-authenticated session is reported as an environment limitation');
 });

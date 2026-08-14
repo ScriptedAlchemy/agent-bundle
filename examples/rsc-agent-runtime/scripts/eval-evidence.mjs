@@ -12,36 +12,74 @@ const jsonEvents = (output) => output.split('\n').flatMap((line) => {
 const markerOnOwnLine = (value, marker) =>
   typeof value === 'string' && value.split(/\r?\n/).some((line) => line.trim() === marker);
 
-const isClaudeToolUse = (event, toolName) =>
-  event.type === 'assistant' &&
-  isRecord(event.message) &&
-  event.message.role === 'assistant' &&
-  Array.isArray(event.message.content) &&
-  event.message.content.some(
+const claudeToolUses = (event) => {
+  if (event.type !== 'assistant' || !isRecord(event.message) || event.message.role !== 'assistant' || !Array.isArray(event.message.content)) {
+    return [];
+  }
+  return event.message.content.flatMap(
     (content) =>
       isRecord(content) &&
       content.type === 'tool_use' &&
+      typeof content.id === 'string' &&
       typeof content.name === 'string' &&
-      (content.name === toolName || content.name.endsWith(`__${toolName}`)),
+      [content],
   );
+};
+
+const successfulClaudeToolResults = (event) => {
+  if (event.type !== 'user' || !isRecord(event.message) || event.message.role !== 'user' || !Array.isArray(event.message.content)) {
+    return [];
+  }
+  return event.message.content.flatMap(
+    (content) =>
+      isRecord(content) &&
+      content.type === 'tool_result' &&
+      typeof content.tool_use_id === 'string' &&
+      content.is_error !== true &&
+      [content.tool_use_id],
+  );
+};
+
+const isRequestedClaudeTool = (name, toolName) => name === toolName || name.endsWith(`__${toolName}`);
 
 const claudeEvidence = (events, marker) => {
-  const recentEdits = events.filter((event) => isClaudeToolUse(event, 'recent_edits')).length;
-  const renderTimeline = events.filter((event) => isClaudeToolUse(event, 'render_edit_timeline')).length;
-  const hookEvents = events.filter(
-    (event) => event.type === 'system' && event.subtype === 'hook_callback' && event.hook_event_name === 'PostToolUse',
-  ).length;
+  const successfulResults = new Set(events.flatMap(successfulClaudeToolResults));
+  const completedToolUses = events.flatMap(claudeToolUses).filter((toolUse) => successfulResults.has(toolUse.id));
+  const recentEdits = completedToolUses.filter((toolUse) => isRequestedClaudeTool(toolUse.name, 'recent_edits')).length;
+  const renderTimeline = completedToolUses.filter((toolUse) => isRequestedClaudeTool(toolUse.name, 'render_edit_timeline')).length;
   const finalMarkerObserved = events.some(
     (event) => event.type === 'result' && event.is_error === false && markerOnOwnLine(event.result, marker),
   );
 
   return {
-    eventCounts: { hook: hookEvents, json: events.length, mcp: recentEdits, rscRender: renderTimeline },
+    eventCounts: { hook: 0, json: events.length, mcp: recentEdits, rscRender: renderTimeline },
     finalMarkerObserved,
     mcpReadObserved: recentEdits > 0,
     rscRenderToolObserved: renderTimeline > 0,
   };
 };
+
+const distinct = (values) => [...new Set(values)].sort();
+
+/** Reduces hook probe records to key/type/exit-status evidence without returning input values. */
+export const summarizeHookProbe = (records) => {
+  const probeRecords = Array.isArray(records) ? records.filter(isRecord) : [];
+  return {
+    commandLaunched: probeRecords.some((record) => record.commandLaunched === true),
+    exitStatuses: distinct(probeRecords.map((record) => record.exitStatus).filter((value) => Number.isInteger(value))),
+    launches: probeRecords.filter((record) => record.commandLaunched === true).length,
+    toolInputKeySets: distinct(probeRecords.map((record) => JSON.stringify(record.toolInputKeys ?? []))),
+    toolNames: distinct(probeRecords.map((record) => record.toolName).filter((value) => typeof value === 'string')),
+    topLevelKeySets: distinct(probeRecords.map((record) => JSON.stringify(record.topLevelKeys ?? []))),
+    valueTypeSets: distinct(probeRecords.map((record) => JSON.stringify({
+      toolInput: record.toolInputValueTypes ?? {},
+      topLevel: record.topLevelValueTypes ?? {},
+    }))),
+  };
+};
+
+export const hookEvidenceFromProbe = (summary) =>
+  isRecord(summary) && summary.commandLaunched === true && Array.isArray(summary.exitStatuses) && summary.exitStatuses.includes(0);
 
 const isCodexMcpCall = (event, toolName) =>
   event.type === 'item.completed' &&

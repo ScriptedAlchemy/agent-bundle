@@ -7,7 +7,7 @@ import { homedir, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { evidenceFromTranscript } from './eval-evidence.mjs';
+import { evidenceFromTranscript, hookEvidenceFromProbe, summarizeHookProbe } from './eval-evidence.mjs';
 
 const exampleRoot = resolve(new URL('..', import.meta.url).pathname);
 const expectedVersions = { claude: '2.1.232', codex: '0.147.0' };
@@ -60,18 +60,7 @@ const hookProbeSummary = async (probeFile) => {
   const records = await readFile(probeFile, 'utf8')
     .then((contents) => contents.split('\n').filter(Boolean).map((line) => JSON.parse(line)))
     .catch(() => []);
-  const distinct = (values) => [...new Set(values)].sort();
-  return {
-    commandLaunched: records.some((record) => record.commandLaunched === true),
-    exitStatuses: distinct(records.map((record) => record.exitStatus).filter((value) => Number.isInteger(value))),
-    toolInputKeySets: distinct(records.map((record) => JSON.stringify(record.toolInputKeys ?? []))),
-    toolNames: distinct(records.map((record) => record.toolName).filter((value) => typeof value === 'string')),
-    topLevelKeySets: distinct(records.map((record) => JSON.stringify(record.topLevelKeys ?? []))),
-    valueTypeSets: distinct(records.map((record) => JSON.stringify({
-      toolInput: record.toolInputValueTypes ?? {},
-      topLevel: record.topLevelValueTypes ?? {},
-    }))),
-  };
+  return summarizeHookProbe(records);
 };
 
 const evidenceFrom = async (host, fixture, stateFile, probeFile, transcript) => {
@@ -83,13 +72,9 @@ const evidenceFrom = async (host, fixture, stateFile, probeFile, transcript) => 
   const editObserved = await stat(join(fixture, 'host-created.txt')).then(() => true).catch(() => false);
   const hookProbe = await hookProbeSummary(probeFile);
   return {
-    editObservedByHook: editObserved && stateRecorded && (
-      host === 'claude'
-        ? transcriptEvidence.eventCounts.hook > 0
-        : hookProbe.commandLaunched && hookProbe.exitStatuses.includes(0)
-    ),
+    editObservedByHook: editObserved && stateRecorded && hookEvidenceFromProbe(hookProbe),
     editObservedByMcp: transcriptEvidence.mcpReadObserved && stateRecorded,
-    eventCounts: { ...transcriptEvidence.eventCounts, state: stateRecords.length },
+    eventCounts: { ...transcriptEvidence.eventCounts, hook: hookProbe.launches, state: stateRecords.length },
     finalMarkerObserved: transcriptEvidence.finalMarkerObserved,
     hookProbe,
     rscRenderToolObserved: transcriptEvidence.rscRenderToolObserved,
@@ -111,7 +96,11 @@ const evaluateHost = async (host) => {
   const fixture = await mkdtemp(join(tmpdir(), `rsc-agent-runtime-${host}-fixture-`));
   const stateFile = join(fixture, '.agent-runtime-demo', 'events.jsonl');
   const probeFile = join(fixture, 'hook-probe.jsonl');
-  const sharedEnv = { ...process.env, AGENT_RUNTIME_STATE_FILE: stateFile };
+  const sharedEnv = {
+    ...process.env,
+    AGENT_RUNTIME_HOOK_PROBE_FILE: probeFile,
+    AGENT_RUNTIME_STATE_FILE: stateFile,
+  };
   let temporaryCodexHome;
   try {
     await runProcess('git', ['init', '--quiet'], { cwd: fixture, env: sharedEnv });
