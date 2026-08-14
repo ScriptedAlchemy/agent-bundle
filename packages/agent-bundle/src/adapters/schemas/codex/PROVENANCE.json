@@ -4,8 +4,8 @@
   "schemaSource": "https://github.com/openai/codex/blob/main/codex-rs/skills/src/assets/samples/plugin-creator/references/plugin-json-spec.md",
   "schemas": {
     "marketplace.schema.json": {
-      "bytes": 2013,
-      "sha256": "e0e32c3bcc418fb1175d2502ab66303aef9d54d4f9728baeb40877d4d5d80ed6",
+      "bytes": 1671,
+      "sha256": "1d43c5ed19de401fb7455c5912e4c21113f6e387aef4c28d2eca121f7554c4e8",
       "url": "https://github.com/openai/codex/blob/main/codex-rs/skills/src/assets/samples/plugin-creator/references/plugin-json-spec.md"
     },
     "mcp.schema.json": {
@@ -14,8 +14,8 @@
       "url": "https://github.com/openai/codex/blob/main/codex-rs/core/config.schema.json"
     },
     "plugin.schema.json": {
-      "bytes": 1334,
-      "sha256": "39b25e929fc3bdd8f069c5c0efd62d1071e4589df3679d4661006df2ac8db3be",
+      "bytes": 1662,
+      "sha256": "ec8428b492844645cc32311bc2226907cfd9bc277e69c5c2241eaa18c8781494",
       "url": "https://github.com/openai/codex/blob/main/codex-rs/skills/src/assets/samples/plugin-creator/references/plugin-json-spec.md"
     }
   },

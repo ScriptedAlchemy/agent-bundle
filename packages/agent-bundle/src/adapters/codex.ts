@@ -202,10 +202,19 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
   if (mcp !== undefined) diagnostics.push(...schemaDiagnostics('mcp', validateMcp(mcp), validateMcp.errors));
 
   const description = model.metadata.description ?? model.metadata.name;
+  const interfaceMetadata = {
+    capabilities: [
+      ...(mcp === undefined ? [] : ['mcp']),
+      ...(model.skills.some((skill) => selectedForCodex(skill.targets)) ? ['skills'] : []),
+    ],
+    defaultPrompt: [`Help me use ${model.metadata.name}.`],
+    developerName: model.metadata.name,
+  };
   const plugin = {
     author: { name: model.metadata.name },
     description,
     interface: {
+      ...interfaceMetadata,
       category: 'Productivity',
       displayName: model.metadata.name,
       longDescription: description,
@@ -219,15 +228,7 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
   diagnostics.push(...schemaDiagnostics('plugin', validatePlugin(plugin), validatePlugin.errors));
 
   const marketplace = model.marketplace !== true ? undefined : {
-    interface: {
-      capabilities: [
-        ...(mcp === undefined ? [] : ['mcp']),
-        ...(model.skills.some((skill) => selectedForCodex(skill.targets)) ? ['skills'] : []),
-      ],
-      defaultPrompt: [`Help me use ${model.metadata.name}.`],
-      developerName: model.metadata.name,
-      displayName: model.metadata.name,
-    },
+    interface: { displayName: model.metadata.name },
     name: `${model.metadata.name}-marketplace`,
     plugins: [{
       category: 'Productivity',

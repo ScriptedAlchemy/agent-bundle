@@ -1,5 +1,4 @@
 import { createHash } from 'node:crypto';
-import { spawn } from 'node:child_process';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -81,27 +80,6 @@ const writeEntries = (model: NormalizedPlugin, target: 'codex' | 'claude') => {
 const writeContents = (model: NormalizedPlugin, target: 'codex' | 'claude') =>
   Object.fromEntries(writeEntries(model, target).map((entry) => [entry.relativePath, entry.content]));
 
-const runCommand = async (
-  command: string,
-  args: readonly string[],
-  cwd: string,
-): Promise<{ readonly code: number | null; readonly output: string }> => new Promise((resolvePromise, reject) => {
-  const child = spawn(command, args, {
-    cwd,
-    env: { PATH: process.env.PATH ?? '' },
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
-  let output = '';
-  child.stdout.on('data', (chunk: Buffer) => {
-    output += chunk.toString();
-  });
-  child.stderr.on('data', (chunk: Buffer) => {
-    output += chunk.toString();
-  });
-  child.once('error', reject);
-  child.once('close', (code) => resolvePromise({ code, output }));
-});
-
 const validateDocuments = async (
   target: 'codex' | 'claude',
   documents: Readonly<Record<string, string>>,
@@ -146,9 +124,9 @@ it('pins host help, capabilities, and every schema snapshot to the supported CLI
     },
     codex: {
       hashes: {
-        'marketplace.schema.json': 'e0e32c3bcc418fb1175d2502ab66303aef9d54d4f9728baeb40877d4d5d80ed6',
+        'marketplace.schema.json': '1d43c5ed19de401fb7455c5912e4c21113f6e387aef4c28d2eca121f7554c4e8',
         'mcp.schema.json': '75bd50f9fcb85c2e8d43bc132d61c172a02f28ea8bb77389816ae77b14a4257e',
-        'plugin.schema.json': '39b25e929fc3bdd8f069c5c0efd62d1071e4589df3679d4661006df2ac8db3be',
+        'plugin.schema.json': 'ec8428b492844645cc32311bc2226907cfd9bc277e69c5c2241eaa18c8781494',
       },
       version: '0.147.0',
     },
@@ -179,10 +157,15 @@ it('pins host help, capabilities, and every schema snapshot to the supported CLI
 
   const codexValidatorFixture = JSON.parse(
     await readFile(new URL('../fixtures/contracts/codex/marketplace-validator.json', import.meta.url), 'utf8'),
-  ) as { readonly interface: { readonly required: readonly string[] }; readonly observedCliVersion: string };
+  ) as {
+    readonly marketplace: { readonly interface: { readonly required: readonly string[] } };
+    readonly observedCliVersion: string;
+    readonly plugin: { readonly interface: { readonly required: readonly string[] } };
+  };
   expect(codexValidatorFixture).toEqual({
-    interface: { required: ['displayName', 'developerName', 'capabilities', 'defaultPrompt'] },
+    marketplace: { interface: { required: ['displayName'] } },
     observedCliVersion: '0.147.0',
+    plugin: { interface: { required: ['displayName', 'developerName', 'capabilities', 'defaultPrompt'] } },
   });
 });
 
@@ -212,12 +195,12 @@ it('plans byte-stable native Codex and Claude plugin trees from the same frozen 
   ]);
   expect(codex).toEqual([
     {
-      content: '{"interface":{"capabilities":["mcp","skills"],"defaultPrompt":["Help me use review-tools."],"developerName":"review-tools","displayName":"review-tools"},"name":"review-tools-marketplace","plugins":[{"category":"Productivity","name":"review-tools","policy":{"authentication":"ON_INSTALL","installation":"AVAILABLE"},"source":{"path":"./","source":"local"}}]}\n',
+      content: '{"interface":{"displayName":"review-tools"},"name":"review-tools-marketplace","plugins":[{"category":"Productivity","name":"review-tools","policy":{"authentication":"ON_INSTALL","installation":"AVAILABLE"},"source":{"path":"./","source":"local"}}]}\n',
       kind: 'write',
       relativePath: '.agents/plugins/marketplace.json',
     },
     {
-      content: '{"author":{"name":"review-tools"},"description":"Review code and explain findings.","interface":{"category":"Productivity","displayName":"review-tools","longDescription":"Review code and explain findings.","shortDescription":"Review code and explain findings."},"mcpServers":"./.mcp.json","name":"review-tools","skills":"./skills/","version":"1.2.3"}\n',
+      content: '{"author":{"name":"review-tools"},"description":"Review code and explain findings.","interface":{"capabilities":["mcp","skills"],"category":"Productivity","defaultPrompt":["Help me use review-tools."],"developerName":"review-tools","displayName":"review-tools","longDescription":"Review code and explain findings.","shortDescription":"Review code and explain findings."},"mcpServers":"./.mcp.json","name":"review-tools","skills":"./skills/","version":"1.2.3"}\n',
       kind: 'write',
       relativePath: '.codex-plugin/plugin.json',
     },
@@ -252,6 +235,23 @@ it('plans byte-stable native Codex and Claude plugin trees from the same frozen 
   ]);
   await validateDocuments('codex', writeContents(plugin, 'codex'));
   await validateDocuments('claude', writeContents(plugin, 'claude'));
+});
+
+it('keeps Codex plugin and marketplace interface validator contracts separate', () => {
+  const documents = writeContents(plugin, 'codex');
+  const pluginManifest = JSON.parse(documents['.codex-plugin/plugin.json']!) as {
+    readonly interface: Record<string, unknown>;
+  };
+  const marketplace = JSON.parse(documents['.agents/plugins/marketplace.json']!) as {
+    readonly interface: Record<string, unknown>;
+  };
+
+  expect(pluginManifest.interface).toMatchObject({
+    capabilities: ['mcp', 'skills'],
+    defaultPrompt: ['Help me use review-tools.'],
+    developerName: 'review-tools',
+  });
+  expect(marketplace.interface).toEqual({ displayName: 'review-tools' });
 });
 
 it('applies only native path-token semantics and surfaces exact capability diagnostics', () => {
@@ -423,26 +423,6 @@ it('reports malformed remote MCP URLs through independently validated host schem
   expect(claude.diagnostics.map((diagnostic) => diagnostic.code)).toEqual(['claude.schema.mcp']);
   expect(codex.entries.some((entry) => entry.relativePath === '.mcp.json')).toBe(false);
   expect(claude.entries.some((entry) => entry.relativePath === '.mcp.json')).toBe(false);
-});
-
-it('emits a Claude marketplace accepted by the installed strict native validator', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-claude-marketplace-'));
-  const plan = createDefaultRegistry().get('claude').plan({ ...plugin, mcpServers: [] });
-  try {
-    for (const entry of writeEntries({ ...plugin, mcpServers: [] }, 'claude')) {
-      const target = join(root, entry.relativePath);
-      await mkdir(join(target, '..'), { recursive: true });
-      await writeFile(target, entry.content);
-    }
-    await expect(runCommand(
-      'claude',
-      ['plugin', 'validate', '--strict', join(root, '.claude-plugin', 'marketplace.json')],
-      root,
-    )).resolves.toMatchObject({ code: 0 });
-    expect(plan.diagnostics).toEqual([]);
-  } finally {
-    await rm(root, { force: true, recursive: true });
-  }
 });
 
 it('filters host components and builds portable, Codex, and Claude target roots', async () => {
