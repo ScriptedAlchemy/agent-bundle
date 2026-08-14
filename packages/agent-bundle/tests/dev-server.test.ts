@@ -9,6 +9,7 @@ import {
   type Invalidation,
   type ProjectStatus,
 } from '../src/dev/index.ts';
+import type { McpSessionService } from '../src/dev/mcp-session-service.ts';
 
 const status = (): ProjectStatus => ({
   artifact: { state: 'missing' },
@@ -479,6 +480,62 @@ it('requires the same origin and session token before a browser can request a re
       paths: ['skills/review/SKILL.md'],
       reason: 'manual',
     })]);
+  } finally {
+    await server.close();
+  }
+});
+
+it('applies the established foreground origin and token guard to MCP session creation', async () => {
+  const opens: unknown[] = [];
+  const mcpSessions = {
+    open: async (options: unknown) => {
+      opens.push(options);
+      return {
+        binding: { epochId: 'epoch-a', serverName: 'weather', target: 'portable' },
+        connection: { capabilities: {}, protocolEra: 'modern', protocolVersion: '2025-11-25', server: { name: 'fixture', version: '1.0.0' } },
+        id: 'session-a',
+      };
+    },
+  } as unknown as McpSessionService;
+  const server = await startForegroundServer({
+    coordinator: new RecordingCoordinator(),
+    eventHub: new ProjectEventHub(),
+    mcpSessions,
+    port: 0,
+    sessionToken: 'test-session-token',
+  });
+  const body = JSON.stringify({ epochId: 'epoch-a', serverName: 'weather', target: 'portable' });
+
+  try {
+    const denied = await fetch(`${server.url}/api/mcp/sessions`, {
+      body,
+      headers: { 'content-type': 'application/json', origin: server.url },
+      method: 'POST',
+    });
+    expect(denied.status).toBe(403);
+    await expect(denied.json()).resolves.toEqual({
+      diagnostic: { code: 'AB8004', message: 'A valid same-session token is required.' },
+    });
+    expect(opens).toEqual([]);
+
+    const accepted = await fetch(`${server.url}/api/mcp/sessions`, {
+      body,
+      headers: {
+        'content-type': 'application/json',
+        origin: server.url,
+        'x-agent-bundle-session': server.sessionToken,
+      },
+      method: 'POST',
+    });
+    expect(accepted.status).toBe(200);
+    await expect(accepted.json()).resolves.toEqual({
+      session: {
+        binding: { epochId: 'epoch-a', serverName: 'weather', target: 'portable' },
+        connection: { capabilities: {}, protocolEra: 'modern', protocolVersion: '2025-11-25', server: { name: 'fixture', version: '1.0.0' } },
+        id: 'session-a',
+      },
+    });
+    expect(opens).toEqual([{ epochId: 'epoch-a', serverName: 'weather', target: 'portable' }]);
   } finally {
     await server.close();
   }
