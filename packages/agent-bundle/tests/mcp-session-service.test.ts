@@ -439,6 +439,85 @@ it('closes an in-flight open instead of returning an untracked epoch-pinning ses
   }
 }, 30_000);
 
+it('waits for every session cleanup and retains every close failure', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-persistent-mcp-close-all-'));
+  try {
+    const epochStore = await publishFixtureEpoch(root, 'epoch-1');
+    const fastFailure = new Error('fast session cleanup failed');
+    const delayedFailure = new Error('delayed session cleanup failed');
+    let releaseDelayedClose: (() => void) | undefined;
+    const delayedClose = new Promise<void>((resolvePromise) => {
+      releaseDelayedClose = resolvePromise;
+    });
+    let delayedCloseStarted: (() => void) | undefined;
+    const delayedCloseStartedPromise = new Promise<void>((resolvePromise) => {
+      delayedCloseStarted = resolvePromise;
+    });
+    let clientIndex = 0;
+    const service = new McpSessionService({
+      createClient: () => {
+        const index = clientIndex;
+        clientIndex += 1;
+        return {
+          callTool: async () => ({ content: [] }),
+          close: async () => {
+            if (index === 0) throw fastFailure;
+            delayedCloseStarted?.();
+            await delayedClose;
+            throw delayedFailure;
+          },
+          connect: async () => undefined,
+          getPrompt: async () => ({ messages: [] }),
+          getServerCapabilities: () => undefined,
+          getServerVersion: () => undefined,
+          listPrompts: async () => ({ prompts: [] }),
+          listResources: async () => ({ resources: [] }),
+          listResourceTemplates: async () => ({ resourceTemplates: [] }),
+          listTools: async () => ({ tools: [] }),
+          readResource: async () => ({ contents: [] }),
+        };
+      },
+      createStdioTransport: () => ({ close: async () => undefined, send: async () => undefined, start: async () => undefined, stderr: null }) as never,
+      epochStore,
+      projectRoot: root,
+    });
+    const first = await service.open({ epochId: 'epoch-1', serverName: 'fixture', target: 'portable' });
+    const second = await service.open({ epochId: 'epoch-1', serverName: 'fixture', target: 'portable' });
+
+    let closeSettled = false;
+    const closing = service.close();
+    void closing.then(
+      () => { closeSettled = true; },
+      () => { closeSettled = true; },
+    );
+    await delayedCloseStartedPromise;
+    await new Promise<void>((resolvePromise) => setImmediate(resolvePromise));
+    expect(closeSettled).toBe(false);
+    releaseDelayedClose?.();
+
+    const failure = await closing.then(
+      () => { throw new Error('Expected service close to retain cleanup failures.'); },
+      (error: unknown) => error,
+    );
+    expect(failure).toEqual(expect.objectContaining({
+      failures: [
+        { error: fastFailure, resource: 'session', sessionId: first.id },
+        { error: delayedFailure, resource: 'session', sessionId: second.id },
+      ],
+      message: 'MCP session service could not close every lifecycle resource.',
+      name: 'McpSessionServiceCloseError',
+    }));
+    expect(service.get(first.id)).toBeUndefined();
+    expect(service.get(second.id)).toBeUndefined();
+    await expect(service.close()).rejects.toBe(failure);
+    await expect(service.open({ epochId: 'epoch-1', serverName: 'fixture', target: 'portable' })).rejects.toThrow(
+      'MCP session service is closed.',
+    );
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+}, 30_000);
+
 it('closes a replacement client when restart races with session shutdown', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-persistent-mcp-restart-close-'));
   try {
