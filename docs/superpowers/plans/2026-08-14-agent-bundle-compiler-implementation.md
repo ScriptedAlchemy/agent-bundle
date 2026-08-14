@@ -83,12 +83,17 @@ fixtures/integration/                # source projects and expected artifact tre
 - Create: `package.json`, `tsconfig.json`, `rslib.config.ts`, `rstest.config.ts`, `rslint.config.ts`
 - Create: `packages/agent-bundle/package.json`
 - Create: `packages/agent-bundle/src/index.ts`
+- Create: `packages/agent-bundle/src/api.ts`
+- Create: `packages/agent-bundle/src/cli.ts`
+- Create: `packages/agent-bundle/src/config/index.ts`
+- Create: `packages/agent-bundle/src/eval/index.ts`
 - Create: `packages/agent-bundle/src/core/types.ts`
 - Test: `packages/agent-bundle/tests/public-api.test.ts`
 
 **Interfaces:**
 - Produces: `defineConfig(config: AgentBundleConfig | ConfigFactory): AgentBundleConfig | ConfigFactory`
 - Produces: `pathTokens: { pluginRoot; pluginData; workspaceRoot }` using opaque `agent-bundle:path:*` strings
+- Produces: importable public subpaths and a minimal `agent-bundle --version` executable; later tasks add their domain APIs to these established entries.
 
 - [ ] **Step 1: Add workspace/tool configuration and install the pinned dependencies**
 
@@ -105,6 +110,13 @@ it('preserves a synchronous config and exposes opaque path tokens', () => {
     pluginData: 'agent-bundle:path:plugin-data',
     workspaceRoot: 'agent-bundle:path:workspace-root',
   });
+});
+
+it('loads every public subpath and reports the package version', async () => {
+  await expect(import('../src/api.ts')).resolves.toBeDefined();
+  await expect(import('../src/config/index.ts')).resolves.toBeDefined();
+  await expect(import('../src/eval/index.ts')).resolves.toBeDefined();
+  await expect(runCli(['--version'])).resolves.toBe(0);
 });
 ```
 
