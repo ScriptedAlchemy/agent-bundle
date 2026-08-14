@@ -6,4 +6,13 @@ export { normalizeProject } from './normalize.ts';
 export { parseSkill } from './skill.ts';
 export type { SkillDocument, SkillResource } from './skill.ts';
 export { validateModel, validateSource } from './validate.ts';
-export type { NormalizationTargetRegistry } from '../core/types.ts';
+export type {
+  NormalizationTargetRegistry,
+  NormalizedMetadata,
+  NormalizedPlugin,
+  NormalizedSkill,
+  NormalizedSkillResource,
+  NormalizedTarget,
+  ProvenanceKind,
+  SourceProvenance,
+} from '../core/types.ts';

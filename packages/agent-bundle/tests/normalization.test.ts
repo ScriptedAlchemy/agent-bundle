@@ -181,6 +181,47 @@ it('reports stable source diagnostics for malformed and conflicting Skills', () 
   });
 });
 
+it('diagnoses a missing plugin object instead of throwing', () => {
+  const loaded = loadedProject({} as AgentBundleConfig);
+
+  expect(validateSource(loaded, { skills: [] })).toMatchObject([
+    { code: 'AB4000', sourcePath: loaded.configPath },
+    { code: 'AB4001', sourcePath: loaded.configPath },
+  ]);
+});
+
+it('validates reference-style links while ignoring Markdown code examples', () => {
+  const root = '/workspace/project';
+  const document = skill(root, 'review', 'review', {
+    body: [
+      '# Review',
+      '',
+      '[guide][missing-guide]',
+      '[missing-guide]: references/missing.md',
+      '',
+      '`[inline example](references/inline-example.md)`',
+      '',
+      '```md',
+      '[fenced example](references/fenced-example.md)',
+      '```',
+      '',
+    ].join('\n'),
+  });
+
+  const diagnostics = validateSource(
+    loadedProject({ plugin: { name: 'review-tools', version: '1.0.0' } }),
+    { skills: [document] },
+  );
+
+  expect(diagnostics).toMatchObject([
+    {
+      code: 'AB4005',
+      message: expect.stringContaining('references/missing.md'),
+      sourcePath: document.source,
+    },
+  ]);
+});
+
 it('reports unknown targets, duplicate IDs, and portable output collisions', async () => {
   const root = '/workspace/project';
   const loaded = loadedProject({

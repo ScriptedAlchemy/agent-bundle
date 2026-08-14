@@ -15,34 +15,99 @@ const sourceDiagnostic = (
   sourcePath: string,
 ): Diagnostic => ({ code, message, severity: 'error', sourcePath });
 
+const withoutMarkdownCode = (body: string): string => {
+  let fence: { character: string; length: number } | undefined;
+
+  return body
+    .split('\n')
+    .map((line) => {
+      const marker = /^ {0,3}(`{3,}|~{3,})/.exec(line)?.[1];
+      if (fence !== undefined) {
+        if (
+          marker !== undefined &&
+          marker[0] === fence.character &&
+          marker.length >= fence.length
+        ) {
+          fence = undefined;
+        }
+        return '';
+      }
+
+      if (marker !== undefined) {
+        fence = { character: marker[0] ?? '', length: marker.length };
+        return '';
+      }
+
+      return line.replace(/`+[^`\n]*`+/g, '');
+    })
+    .join('\n');
+};
+
+const resourcePath = (rawReference: string): string | undefined => {
+  if (
+    rawReference.startsWith('#') ||
+    rawReference.startsWith('/') ||
+    /^[a-z][a-z\d+.-]*:/i.test(rawReference)
+  ) {
+    return undefined;
+  }
+
+  const pathOnly = rawReference.split(/[?#]/, 1)[0];
+  if (pathOnly === undefined || pathOnly.length === 0) {
+    return undefined;
+  }
+
+  try {
+    return posix.normalize(decodeURIComponent(pathOnly));
+  } catch {
+    return posix.normalize(pathOnly);
+  }
+};
+
 const referencedResources = (body: string): string[] => {
+  const markdown = withoutMarkdownCode(body);
   const references: string[] = [];
   const linkPattern = /!?\[[^\]]*\]\(\s*(?:<([^>]+)>|([^\s)]+))/g;
 
-  for (const match of body.matchAll(linkPattern)) {
+  for (const match of markdown.matchAll(linkPattern)) {
     const rawReference = match[1] ?? match[2];
-    if (
-      rawReference === undefined ||
-      rawReference.startsWith('#') ||
-      rawReference.startsWith('/') ||
-      /^[a-z][a-z\d+.-]*:/i.test(rawReference)
-    ) {
-      continue;
-    }
-
-    const pathOnly = rawReference.split(/[?#]/, 1)[0];
-    if (pathOnly === undefined || pathOnly.length === 0) {
-      continue;
-    }
-
-    try {
-      references.push(posix.normalize(decodeURIComponent(pathOnly)));
-    } catch {
-      references.push(posix.normalize(pathOnly));
+    const path = rawReference === undefined ? undefined : resourcePath(rawReference);
+    if (path !== undefined) {
+      references.push(path);
     }
   }
 
-  return references;
+  const definitions = new Map<string, string>();
+  const definitionPattern = /^ {0,3}\[([^\]]+)\]:\s*(?:<([^>]+)>|(\S+))/gm;
+  for (const match of markdown.matchAll(definitionPattern)) {
+    const label = match[1];
+    const rawReference = match[2] ?? match[3];
+    if (label === undefined || rawReference === undefined) {
+      continue;
+    }
+
+    const path = resourcePath(rawReference);
+    if (path !== undefined) {
+      definitions.set(label.trim().replace(/\s+/g, ' ').toLowerCase(), path);
+    }
+  }
+
+  const referencePattern = /!?\[([^\]]+)\]\[([^\]]*)\]/g;
+  for (const match of markdown.matchAll(referencePattern)) {
+    const text = match[1];
+    const explicitLabel = match[2];
+    const label = explicitLabel === '' ? text : explicitLabel;
+    if (label === undefined) {
+      continue;
+    }
+
+    const path = definitions.get(label.trim().replace(/\s+/g, ' ').toLowerCase());
+    if (path !== undefined) {
+      references.push(path);
+    }
+  }
+
+  return [...new Set(references)];
 };
 
 const validateSkill = (skill: SkillDocument): Diagnostic[] => {
@@ -97,14 +162,20 @@ export const validateSource = (
   discovered: DiscoveredProject,
 ): Diagnostic[] => {
   const diagnostics: Diagnostic[] = [];
-  const plugin = loaded.config.plugin;
+  const plugin = loaded.config.plugin as unknown;
+  const pluginRecord =
+    typeof plugin === 'object' && plugin !== null && !Array.isArray(plugin)
+      ? (plugin as Record<string, unknown>)
+      : undefined;
+  const pluginName = pluginRecord?.name;
+  const pluginVersion = pluginRecord?.version;
 
-  if (typeof plugin.name !== 'string' || plugin.name.trim().length === 0) {
+  if (typeof pluginName !== 'string' || pluginName.trim().length === 0) {
     diagnostics.push(
       sourceDiagnostic('AB4000', 'Plugin metadata must define a nonempty name.', loaded.configPath),
     );
   }
-  if (typeof plugin.version !== 'string' || plugin.version.trim().length === 0) {
+  if (typeof pluginVersion !== 'string' || pluginVersion.trim().length === 0) {
     diagnostics.push(
       sourceDiagnostic(
         'AB4001',
