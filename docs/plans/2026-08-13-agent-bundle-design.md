@@ -486,6 +486,11 @@ only after real integrations demonstrate which hooks and model operations are st
 The implementation should use public Rslib/Rsbuild plugin and JavaScript APIs. It should not
 patch process globals, depend on private compiler objects, or reproduce Rslib's CLI parsing.
 
+All shipped production outputs use stable, unhashed filenames. Rslib/Rsbuild/Rspack filename
+hashing is disabled for the package, generated executables, and prebuilt workbench assets; content
+integrity and rebuild identity remain represented by the compiler manifest's SHA-256 values rather
+than being duplicated in filenames.
+
 Rslib's CLI supports `--watch`, but Agent Bundle development observes more than the JavaScript
 module graph: configuration, skill Markdown, references, copied assets, marketplace metadata,
 and generated host manifests can all invalidate an artifact. The first implementation therefore
