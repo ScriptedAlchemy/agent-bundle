@@ -641,6 +641,89 @@ it('uses the selected remote manifest with propagated cancellation and cleans da
   }
 });
 
+it('creates session state only after setup succeeds and always inherits the stdio environment', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-mcp-stdio-options-'));
+  const inheritedKey = 'AGENT_BUNDLE_TEST_MCP_INHERITED';
+  const previousInherited = process.env[inheritedKey];
+  const sessionDirectories = async (): Promise<readonly string[]> =>
+    (await readdir(tmpdir())).filter((name) => name.startsWith('agent-bundle-mcp-')).sort();
+  try {
+    process.env[inheritedKey] = 'inherited-sentinel';
+    await mkdir(join(root, 'src'), { recursive: true });
+    await writeFile(join(root, 'src', 'server.ts'), 'export {};\n');
+    const model = await normalizeProject(
+      loadedProject(root, {
+        mcp: {
+          servers: {
+            configured: {
+              entry: './src/server.ts',
+              env: { AGENT_BUNDLE_TEST_MCP_OVERRIDE: 'configured' },
+            },
+            inherited: { entry: './src/server.ts' },
+          },
+        },
+        plugin: { name: 'mcp-stdio-options', version: '1.0.0' },
+        targets: ['portable'],
+      }),
+      { skills: [] },
+      registry,
+    );
+    const artifact = join(root, 'dist');
+    await build({ model, outputRoot: artifact, projectRoot: root, registry: createDefaultRegistry() });
+
+    const beforeInvalidTimeout = await sessionDirectories();
+    await expect(new McpService().list({
+      artifact,
+      server: 'configured',
+      target: 'portable',
+      timeoutMs: 0,
+    })).rejects.toThrow('timeoutMs must be a positive finite number');
+    expect(await sessionDirectories()).toEqual(beforeInvalidTimeout);
+
+    const beforeFactoryFailure = await sessionDirectories();
+    await expect(new McpService({
+      createClient: () => {
+        throw new Error('fixture client factory failure');
+      },
+    }).list({ artifact, server: 'configured', target: 'portable' })).rejects.toThrow(
+      'fixture client factory failure',
+    );
+    expect(await sessionDirectories()).toEqual(beforeFactoryFailure);
+
+    const stdio: Array<{ readonly env?: Record<string, string> }> = [];
+    const service = new McpService({
+      createClient: () => ({
+        callTool: async () => ({ content: [] }) as never,
+        close: async () => undefined,
+        connect: async () => undefined,
+        getServerCapabilities: () => undefined,
+        getServerVersion: () => undefined,
+        listTools: async () => ({ tools: [] }),
+      }),
+      createStdioTransport: (options) => {
+        stdio.push(options);
+        return { close: async () => undefined, stderr: null } as never;
+      },
+    });
+    await service.list({ artifact, server: 'configured', target: 'portable' });
+    await service.list({ artifact, server: 'inherited', target: 'portable' });
+
+    expect(stdio).toHaveLength(2);
+    expect(stdio[0]?.env).toMatchObject({
+      [inheritedKey]: 'inherited-sentinel',
+      AGENT_BUNDLE_TEST_MCP_OVERRIDE: 'configured',
+    });
+    expect(stdio[1]?.env).toMatchObject({ [inheritedKey]: 'inherited-sentinel' });
+  } finally {
+    if (previousInherited === undefined) {
+      delete process.env[inheritedKey];
+    } else {
+      process.env[inheritedKey] = previousInherited;
+    }
+    await rm(root, { force: true, recursive: true });
+  }
+}, 30_000);
+
 it('lists tools from a validated copied artifact without reading project source', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-mcp-service-source-'));
   const consumer = await mkdtemp(join(tmpdir(), 'agent-bundle-mcp-service-consumer-'));
