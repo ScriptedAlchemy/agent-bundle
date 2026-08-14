@@ -134,6 +134,22 @@ it('rejects wildcard capability declarations with a conservative fallback warnin
   });
 });
 
+it('rejects wildcard capability patterns with the same conservative fallback', () => {
+  const resolution = resolveMcpAppHostProfile({
+    consentedCapabilities: ['camera'],
+    declaredCapabilities: ['camera:*'],
+    host: standardContext,
+    profile: 'portable',
+    resource: { mimeType: 'text/html;profile=mcp-app', uri: 'ui://weather/forecast.html' },
+  });
+
+  expect(resolution).toMatchObject({
+    kind: 'fallback',
+    reason: 'unsafe-capability-declaration',
+    warnings: ['Wildcard MCP App capability declarations are rejected.'],
+  });
+});
+
 it('keeps the Claude profile standard-only when no public MCP URL is supplied', () => {
   const resolution = resolveMcpAppHostProfile({
     host: standardContext,

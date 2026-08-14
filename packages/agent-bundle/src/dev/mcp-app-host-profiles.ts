@@ -234,7 +234,7 @@ const resolvePermissions = (
   declaredCapabilities: readonly string[] | undefined,
   consentedCapabilities: readonly string[] | undefined,
 ): Readonly<{ readonly permissions: McpAppHostPermissions; readonly unsafe: boolean; readonly warnings: readonly string[] }> => {
-  if ((declaredCapabilities ?? []).includes('*')) {
+  if ((declaredCapabilities ?? []).some((capability) => capability.includes('*'))) {
     return Object.freeze({
       permissions: Object.freeze({}),
       unsafe: true,
