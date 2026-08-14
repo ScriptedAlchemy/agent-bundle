@@ -21,7 +21,13 @@ import { useEdit, useRuntimeSnapshot } from '../runtime/request-context.js';
 export function AfterFileEdit() {
   const edit = useEdit();
   const snapshot = useRuntimeSnapshot();
-  return <Hook.Result>Recorded {edit.path}; {snapshot.edits.length} edits exist.</Hook.Result>;
+  return (
+    <Hook.Result>
+      <Hook.AdditionalContext>
+        Recorded {edit.path}; {snapshot.edits.length} edits exist.
+      </Hook.AdditionalContext>
+    </Hook.Result>
+  );
 }
 ```
 
@@ -49,7 +55,7 @@ npm run typecheck -w @agent-bundle/rsc-agent-runtime-demo
 npm run capture:widget -w @agent-bundle/rsc-agent-runtime-demo -- --output /tmp/rsc-agent-runtime-widget.png
 ```
 
-The build emits `dist/runtime`, self-contained `dist/app` MCP App documents, and two self-contained native plugin artifacts under `dist/plugins`. It runs `package:hosts` automatically; it can also be run directly:
+The build emits `dist/runtime` (including `dist/runtime/agent-runtime.manifest.json`), self-contained `dist/app` MCP App documents, and two self-contained native plugin artifacts under `dist/plugins`. It runs `package:hosts` automatically; it can also be run directly:
 
 ```bash
 npm run package:hosts -w @agent-bundle/rsc-agent-runtime-demo
@@ -59,7 +65,7 @@ To exercise one hook manually, give it an explicit state file and native Claude-
 
 ```bash
 AGENT_RUNTIME_STATE_FILE=/tmp/rsc-events.jsonl \
-  node examples/rsc-agent-runtime/dist/runtime/hook/index.js --host claude <<'JSON'
+  node examples/rsc-agent-runtime/dist/runtime/hook/index.js --host claude <<JSON
 {"hook_event_name":"PostToolUse","session_id":"manual","cwd":"$PWD","tool_name":"Write","tool_input":{"file_path":"README.md"}}
 JSON
 ```
@@ -98,15 +104,15 @@ claude -p "Create host-created.txt, then use recent_edits and render_edit_timeli
   --no-session-persistence --dangerously-skip-permissions
 ```
 
-Codex uses a separate native manifest, marketplace entry, `cwd: "./"` MCP path, and `apply_patch|Write|Edit` hook. The deterministic evaluator adds that marketplace to a temporary Codex home, copies an existing `auth.json` only opaquely when present, and removes the temporary home afterwards:
+Codex uses a separate native manifest, marketplace entry, `cwd: "./"` MCP path, and `apply_patch` hook. The deterministic evaluator adds that marketplace to a temporary Codex home, copies an existing `auth.json` only opaquely when present, and removes the temporary home afterwards:
 
 ```bash
 npm run eval:hosts -w @agent-bundle/rsc-agent-runtime-demo -- --host all
 ```
 
-It requires exactly Claude Code `2.1.232` and Codex CLI `0.147.0`, creates a temporary Git workspace, and emits sanitized JSON only: version, required-evidence booleans, event counts, and elapsed time. It inherits existing CLI sessions and never adds provider credential variables, stores raw transcripts, or prints authentication content. A non-authenticated session is reported as an environment limitation and makes the selected evaluation exit nonzero.
+It requires exactly Claude Code `2.1.232` and Codex CLI `0.147.0`, creates a temporary Git workspace, and emits sanitized JSON only: version, required-evidence booleans, event counts, and elapsed time. It inherits existing CLI sessions and never adds provider credential variables, stores raw transcripts, or prints authentication content. Any unavailable or incomplete selected native run exits nonzero with incomplete evidence; the evaluator does not classify authentication failures separately.
 
-Codex CLI is not the ChatGPT UI host. Claude Code and Codex native artifacts prove hook/MCP packaging and shared runtime behavior; neither claim means that either CLI renders the timeline iframe.
+Codex CLI is not the ChatGPT UI host. Claude fully proves hook→MCP/RSC shared behavior. Codex proves package installation, MCP invocation, RSC render, and the final marker only: native PostToolUse/shared state is unproven under pinned `codex exec --ephemeral`, so its evaluator intentionally exits nonzero. The pinned host emits `apply_patch` command-shaped hook payloads, but the observed run did not dispatch the native hook; [the upstream Codex issue is analogous evidence](https://github.com/openai/codex/issues/26729), not proof of the exact cause. Neither CLI claim means that it renders the timeline iframe.
 
 ## ChatGPT Developer Mode and local browser evidence
 
@@ -132,7 +138,7 @@ Host/Origin allowlists mitigate DNS rebinding and cross-origin requests, but the
 | ChatGPT/OpenAI aliases | `openai/outputTemplate` descriptor alias and feature-detected `window.openai.widgetState` / `setWidgetState` | Selection stays React-instance-local without both documented capabilities |
 | Claude MCP Apps | Standard bridge, `useHostStyles`, standard dark/light variables, font CSS, safe-area insets, optional deterministic resource domain | No `window.claude`, user-agent, or product-name branch |
 | Claude Code | Native plugin, `${CLAUDE_PLUGIN_ROOT}` MCP/hook paths, `Write|Edit` hook | CLI tool/hook proof only; not an iframe renderer |
-| Codex CLI | Native plugin/marketplace, relative MCP path, `${PLUGIN_ROOT}` hook, `apply_patch|Write|Edit` matcher | Codex CLI is not the ChatGPT UI host and does not render this iframe |
+| Codex CLI | Native plugin/marketplace, relative MCP path, `${PLUGIN_ROOT}` hook, `apply_patch` matcher | MCP/RSC/final-marker evidence only; native PostToolUse/shared state is unproven under `exec --ephemeral` |
 
 ## Extension-author guide
 
@@ -156,3 +162,4 @@ Existing Agent Bundle skills, static MCPs, evaluations, and normal hooks neither
 - [Claude MCP Apps cross-compatibility](https://claude.com/docs/connectors/building/mcp-apps/cross-compatibility) and [design guidance](https://claude.com/docs/connectors/building/mcp-apps/design-guidelines)
 - [Claude Code hooks](https://code.claude.com/docs/en/hooks)
 - [Codex CLI documentation](https://developers.openai.com/codex/cli)
+- [Codex 0.147.0 `apply_patch` PostToolUse payload](https://github.com/openai/codex/blob/rust-v0.147.0/codex-rs/core/src/tools/handlers/apply_patch.rs#L2237-L2264) and [analogous hook issue #26729](https://github.com/openai/codex/issues/26729)

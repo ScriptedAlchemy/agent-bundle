@@ -7,6 +7,8 @@ import { homedir, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { evidenceFromTranscript } from './eval-evidence.mjs';
+
 const exampleRoot = resolve(new URL('..', import.meta.url).pathname);
 const expectedVersions = { claude: '2.1.232', codex: '0.147.0' };
 
@@ -39,12 +41,6 @@ const cliVersion = async (host) => {
   }
   return expectedVersions[host];
 };
-
-const jsonEvents = (output) => output.split('\n').flatMap((line) => {
-  try { return [JSON.parse(line)]; } catch { return []; }
-});
-
-const contains = (value, needle) => JSON.stringify(value).includes(needle);
 
 const opaqueCodexAuthCopy = async (temporaryCodexHome) => {
   const sourceHome = process.env.CODEX_HOME ?? join(homedir(), '.codex');
@@ -79,24 +75,24 @@ const hookProbeSummary = async (probeFile) => {
 };
 
 const evidenceFrom = async (host, fixture, stateFile, probeFile, transcript) => {
-  const events = jsonEvents(transcript);
   const stateRecords = await readFile(stateFile, 'utf8')
     .then((contents) => contents.split('\n').filter(Boolean).map((line) => JSON.parse(line)))
     .catch(() => []);
-  const marker = `HOST_EVAL_FINAL host=${host} path=host-created.txt`;
-  const toolEvents = events.filter((event) => contains(event, 'recent_edits')).length;
-  const renderEvents = events.filter((event) => contains(event, 'render_edit_timeline')).length;
-  const hookEvents = events.filter((event) => contains(event, 'PostToolUse')).length;
+  const transcriptEvidence = evidenceFromTranscript(host, transcript);
   const stateRecorded = stateRecords.some((record) => record.host === host && String(record.path).endsWith('host-created.txt'));
   const editObserved = await stat(join(fixture, 'host-created.txt')).then(() => true).catch(() => false);
   const hookProbe = await hookProbeSummary(probeFile);
   return {
-    editObservedByHook: editObserved && stateRecorded && (hookEvents > 0 || stateRecorded),
-    editObservedByMcp: toolEvents > 0 && stateRecorded,
-    eventCounts: { hook: hookEvents, json: events.length, mcp: toolEvents, rscRender: renderEvents, state: stateRecords.length },
-    finalMarkerObserved: transcript.includes(marker),
+    editObservedByHook: editObserved && stateRecorded && (
+      host === 'claude'
+        ? transcriptEvidence.eventCounts.hook > 0
+        : hookProbe.commandLaunched && hookProbe.exitStatuses.includes(0)
+    ),
+    editObservedByMcp: transcriptEvidence.mcpReadObserved && stateRecorded,
+    eventCounts: { ...transcriptEvidence.eventCounts, state: stateRecords.length },
+    finalMarkerObserved: transcriptEvidence.finalMarkerObserved,
     hookProbe,
-    rscRenderToolObserved: renderEvents > 0,
+    rscRenderToolObserved: transcriptEvidence.rscRenderToolObserved,
   };
 };
 

@@ -62,7 +62,7 @@ test('materializes self-contained Claude and Codex native plugin artifacts', asy
   expect(claudeHooks.hooks.PostToolUse[0]).toMatchObject({ matcher: 'Write|Edit' });
   expect(claudeHooks.hooks.PostToolUse[0].hooks[0].command).toContain('${CLAUDE_PLUGIN_ROOT}');
   expect(claudeHooks.hooks.PostToolUse[0].hooks[0].command).toContain('--host claude');
-  expect(codexHooks.hooks.PostToolUse[0]).toMatchObject({ matcher: 'apply_patch|Write|Edit' });
+  expect(codexHooks.hooks.PostToolUse[0]).toMatchObject({ matcher: 'apply_patch' });
   expect(codexHooks.hooks.PostToolUse[0].hooks[0].command).toContain('${PLUGIN_ROOT}');
   expect(codexHooks.hooks.PostToolUse[0].hooks[0].command).toContain('--host codex');
   expect(JSON.stringify({ claudeMcp, claudeHooks, codexMcp, codexHooks })).not.toMatch(/api[ _-]?key/i);

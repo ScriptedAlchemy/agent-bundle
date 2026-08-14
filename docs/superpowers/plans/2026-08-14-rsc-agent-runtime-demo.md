@@ -434,7 +434,7 @@ examples/rsc-agent-runtime/
 - Produces: `lowerMcpResult(node: React.ReactNode): CallToolResult`.
 - Produces: `createRuntimeMcpServer(options?: { stateFile?: string; widgetHtml?: string }): McpServer`.
 - Produces executables: `dist/mcp/stdio.js` and `dist/mcp/http.js`.
-- Produces artifacts: `dist/agent-runtime.manifest.json`, `dist/app/edit-timeline-v1.html`, and `dist/app/standalone.html`.
+- Produces artifacts: `dist/runtime/agent-runtime.manifest.json`, `dist/app/edit-timeline-v1.html`, and `dist/app/standalone.html`.
 
 - [ ] **Step 1: Write failing tests for every MCP result element**
 
@@ -547,7 +547,7 @@ examples/rsc-agent-runtime/
   concatenate, or rewrite emitted JavaScript or CSS by hand.
 
   Add a build plugin only to serialize `runtimeDefinition` to
-  `dist/agent-runtime.manifest.json`; it must not manufacture the app HTML.
+  `dist/runtime/agent-runtime.manifest.json`; it must not manufacture the app HTML.
 
   The generated manifest must record each executable relative path, exact tool JSON schemas, hook
   matchers, resource MIME/URI/metadata, and `schemaVersion: 1`.

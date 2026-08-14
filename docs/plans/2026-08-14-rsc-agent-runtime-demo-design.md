@@ -124,7 +124,7 @@ markup belongs to the separate widget bundle.
 ## Static definitions
 
 MCP discovery never depends on rendering. `src/definition.ts` declares serializable descriptors and
-separate handler IDs. At build time a Rsbuild plugin emits `dist/agent-runtime.manifest.json`, with
+separate handler IDs. At build time a Rsbuild plugin emits `dist/runtime/agent-runtime.manifest.json`, with
 Zod schemas converted to JSON Schema. At server startup the complete registry is registered before
 the transport connects and remains fixed for that server lifetime.
 

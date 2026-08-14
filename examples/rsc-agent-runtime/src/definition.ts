@@ -41,7 +41,7 @@ export const runtimeDefinition: RuntimeDefinition = {
       event: 'after_tool_use',
       handlerId: 'record_post_tool_use',
       host: 'codex',
-      matcher: 'apply_patch|Write|Edit',
+      matcher: 'apply_patch',
     },
   ],
   resources: [

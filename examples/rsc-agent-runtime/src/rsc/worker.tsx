@@ -41,11 +41,18 @@ const parseEvent = (value: unknown): CanonicalPostToolUse => {
 
 const parseSnapshot = (value: unknown): RuntimeSnapshot => {
   const snapshot = asRecord(value);
-  if (snapshot === undefined || !Number.isInteger(snapshot.stateVersion) || snapshot.stateVersion < 0 || !Array.isArray(snapshot.edits)) {
+  const stateVersion = snapshot?.stateVersion;
+  if (
+    snapshot === undefined ||
+    typeof stateVersion !== 'number' ||
+    !Number.isInteger(stateVersion) ||
+    stateVersion < 0 ||
+    !Array.isArray(snapshot.edits)
+  ) {
     throw new Error('RSC worker received an invalid runtime snapshot');
   }
 
-  return { edits: snapshot.edits as RuntimeSnapshot['edits'], stateVersion: snapshot.stateVersion as number };
+  return { edits: snapshot.edits as RuntimeSnapshot['edits'], stateVersion };
 };
 
 const parseRequest = (value: unknown): RenderRequest => {
@@ -109,7 +116,7 @@ const render = async (): Promise<void> => {
 
   const renderFlight = async (): Promise<void> => {
     const flight = renderToReadableStream(renderRoute(request, snapshot));
-    const output = Readable.fromWeb(flight);
+    const output = Readable.from(flight);
     output.pipe(process.stdout, { end: false });
     await finished(output);
   };

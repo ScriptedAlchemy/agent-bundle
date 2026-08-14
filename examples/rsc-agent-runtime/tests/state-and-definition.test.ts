@@ -108,7 +108,7 @@ test('exposes the static MCP tools, native hooks, and app resource contract', ()
   ]);
   expect(runtimeDefinition.nativeHooks.map((hook) => hook.matcher)).toEqual([
     'Write|Edit',
-    'apply_patch|Write|Edit',
+    'apply_patch',
   ]);
   expect(runtimeDefinition.resources).toMatchObject([
     {

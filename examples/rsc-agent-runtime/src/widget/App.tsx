@@ -75,7 +75,7 @@ export const RefreshStatus = ({ refresh }: { refresh: RefreshState }) => {
     refresh === 'refreshing' ? 'Refreshing timeline.' : refresh === 'error' ? 'Unable to refresh timeline.' : '';
 
   return (
-    <p aria-live="polite" className="timeline__status" role="status">
+    <p className="timeline__status" role="status">
       {message}
     </p>
   );
@@ -87,7 +87,7 @@ export const App = () => {
   const [refresh, setRefresh] = useState<RefreshState>('idle');
   const [hostContext, setHostContext] = useState<HostContext>();
   const [selectedEventId, setSelectedEventId] = useState<string>();
-  const widgetState = useMemo(() => createWidgetStateAdapter(window), []);
+  const widgetState = useMemo(() => createWidgetStateAdapter(window as Window & { openai?: unknown }), []);
   const { app } = useApp({
     appInfo: { name: 'rsc-agent-runtime-timeline', version: '1.0.0' },
     capabilities: {},
