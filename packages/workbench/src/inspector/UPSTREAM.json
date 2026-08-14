@@ -446,7 +446,7 @@
     },
     {
       "path": "clients/web/src/utils/inspectorTabs.test.ts",
-      "sha256": "fa716dc85b09ba39b64ae0017a28ff74b9cfe395eae6191cfbbbccd6a74700d2",
+      "sha256": "9e1093cdc193798a63e2ad1587bb2621f244de35806506fee86c9c8e8fa87191",
       "upstreamSha256": "fa716dc85b09ba39b64ae0017a28ff74b9cfe395eae6191cfbbbccd6a74700d2"
     },
     {
@@ -540,7 +540,12 @@
     "sha256": "fcf5eb4c9424e8cc443554f22e0dbf42a5a6a5dbfcf07b5e7f742efdf2ff280a"
   },
   "mcpSdkVersion": "2.0.0",
-  "patches": [],
+  "patches": [
+    {
+      "path": "patches/001-rstest-inspector-tabs-import.patch",
+      "sha256": "eb679e8e02a5d89f631c99a9a6857be14a0a08fd5944cd0fa87e5dffbaf22574"
+    }
+  ],
   "publicImports": [
     "@modelcontextprotocol/ext-apps/app-bridge",
     "react-icons/md",
@@ -561,7 +566,7 @@
   ],
   "schemaVersion": 1,
   "testDependencies": [
-    "vitest"
+    "@rstest/core"
   ],
   "version": "2.2.0"
 }

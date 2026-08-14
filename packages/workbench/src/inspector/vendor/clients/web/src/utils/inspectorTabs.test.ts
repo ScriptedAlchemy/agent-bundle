@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect } from "@rstest/core";
 import {
   INSPECTOR_SERVERS_TAB,
   INSPECTOR_TAB_IDS,

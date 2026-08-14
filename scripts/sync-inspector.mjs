@@ -267,8 +267,18 @@ const patchRecords = async (patchRoot) => {
 };
 
 const applyPatches = async ({ output, patches }) => {
+  if (patches.length === 0) return;
+  const { stdout } = await execFile('git', ['-C', output, 'rev-parse', '--show-toplevel']);
+  const repositoryRoot = stdout.trim();
+  const vendorDirectory = relative(repositoryRoot, join(output, 'vendor'));
+  if (!vendorDirectory || vendorDirectory.split('/').includes('..')) {
+    fail(`Inspector patch output must stay inside its Git worktree: ${output}`);
+  }
   for (const patch of patches) {
-    await execFile('git', ['apply', '--whitespace=nowarn', '--directory', join(output, 'vendor'), join(output, patch.path)]);
+    await execFile(
+      'git',
+      ['-C', repositoryRoot, 'apply', '--whitespace=nowarn', '--directory', vendorDirectory, join(output, patch.path)],
+    );
   }
 };
 
@@ -276,11 +286,12 @@ const checkoutSource = async ({ commit, repository, source }) => {
   if (source) {
     const root = resolve(source);
     if (!(await exists(root))) fail(`--source does not exist: ${root}`);
-    if (await exists(join(root, '.git'))) {
-      const { stdout } = await execFile('git', ['-C', root, 'rev-parse', 'HEAD']);
-      if (stdout.trim() !== commit) {
-        fail(`--source is at ${stdout.trim()}, not the required explicit commit ${commit}`);
-      }
+    if (!(await exists(join(root, '.git')))) {
+      fail(`--source must be a Git checkout so its commit can be verified: ${root}`);
+    }
+    const { stdout } = await execFile('git', ['-C', root, 'rev-parse', 'HEAD']);
+    if (stdout.trim() !== commit) {
+      fail(`--source is at ${stdout.trim()}, not the required explicit commit ${commit}`);
     }
     return { cleanup: undefined, root };
   }
@@ -293,6 +304,26 @@ const checkoutSource = async ({ commit, repository, source }) => {
     throw error;
   }
   return { cleanup: () => rm(root, { force: true, recursive: true }), root };
+};
+
+const readUpstreamMetadata = async (root) => {
+  const packagePath = join(root, 'package.json');
+  if (!(await exists(packagePath))) fail(`Missing upstream package metadata: ${packagePath}`);
+  let packageJson;
+  try {
+    packageJson = JSON.parse(await readFile(packagePath, 'utf8'));
+  } catch {
+    fail(`Unable to parse upstream package metadata: ${packagePath}`);
+  }
+  const version = packageJson?.version;
+  const mcpSdkVersion = packageJson?.dependencies?.['@modelcontextprotocol/client'];
+  if (typeof version !== 'string' || !version) {
+    fail(`Upstream package metadata is missing a release version: ${packagePath}`);
+  }
+  if (typeof mcpSdkVersion !== 'string' || !mcpSdkVersion) {
+    fail(`Upstream package metadata is missing @modelcontextprotocol/client: ${packagePath}`);
+  }
+  return { mcpSdkVersion, version };
 };
 
 const validateManifestImports = async ({ manifest, output }) => {
@@ -357,6 +388,13 @@ const syncSnapshot = async (options) => {
   const output = resolve(options.out);
   const source = await checkoutSource(options);
   try {
+    const upstreamMetadata = await readUpstreamMetadata(source.root);
+    if (upstreamMetadata.version !== options.version) {
+      fail(`upstream package version ${upstreamMetadata.version} does not match --version ${options.version}`);
+    }
+    if (upstreamMetadata.mcpSdkVersion !== options.mcpSdkVersion) {
+      fail(`upstream @modelcontextprotocol/client version ${upstreamMetadata.mcpSdkVersion} does not match --mcp-sdk-version ${options.mcpSdkVersion}`);
+    }
     const roots = [...options.entries, ...options.tests];
     const allowedDependencies = [...new Set([...options.dependencies, ...options.testDependencies])].sort();
     const closure = await collectClosure({
@@ -385,6 +423,19 @@ const syncSnapshot = async (options) => {
     }
     await applyPatches({ output, patches });
 
+    const patchedClosure = await collectClosure({
+      aliases: options.aliases,
+      dependencies: allowedDependencies,
+      entries: roots,
+      publicImports: [...new Set(options.publicImports)].sort(),
+      root: join(output, 'vendor'),
+    });
+    const upstreamPaths = [...closure.files.keys()].sort();
+    const patchedPaths = [...patchedClosure.files.keys()].sort();
+    if (JSON.stringify(patchedPaths) !== JSON.stringify(upstreamPaths)) {
+      fail('Inspector patch imports outside the declared source closure');
+    }
+
     const files = await Promise.all([...closure.files.keys()].sort().map(async (path) => {
       const upstream = closure.files.get(path);
       const copied = await readFile(join(output, 'vendor', path));
@@ -394,7 +445,7 @@ const syncSnapshot = async (options) => {
         upstreamSha256: sha256(upstream),
       };
     }));
-    const usedPackages = [...new Set([...closure.externalImports].map(asPackageName))].sort();
+    const usedPackages = [...new Set([...patchedClosure.externalImports].map(asPackageName))].sort();
     const testDependencyNames = new Set(options.testDependencies);
     const manifest = {
       aliases: [...options.aliases].sort(([left], [right]) => left.localeCompare(right)),
@@ -405,14 +456,14 @@ const syncSnapshot = async (options) => {
         path: hasUpstreamLicense ? licensePath : 'repository:LICENSE.inspector',
         sha256: sha256(license),
       },
-      mcpSdkVersion: options.mcpSdkVersion,
+      mcpSdkVersion: upstreamMetadata.mcpSdkVersion,
       patches,
-      publicImports: [...closure.externalImports].filter((specifier) => specifier !== asPackageName(specifier)).sort(),
+      publicImports: [...patchedClosure.externalImports].filter((specifier) => specifier !== asPackageName(specifier)).sort(),
       repository: options.repository,
       retainedTests: [...new Set(options.tests.map((path) => normalizeRelativePath(path, '--test')))].sort(),
       schemaVersion: 1,
       testDependencies: usedPackages.filter((dependency) => testDependencyNames.has(dependency)),
-      version: options.version,
+      version: upstreamMetadata.version,
     };
     await writeFile(join(output, 'LICENSE.inspector'), license);
     await writeFile(join(output, 'UPSTREAM.json'), `${JSON.stringify(manifest, null, 2)}\n`);
