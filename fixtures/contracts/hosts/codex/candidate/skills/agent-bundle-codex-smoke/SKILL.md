@@ -1,6 +1,10 @@
 ---
 name: agent-bundle-codex-smoke
-description: Bounded native-contract smoke skill.
+description: Bounded native-contract smoke Skill.
 ---
 
-This Skill exists only to prove that a local Codex marketplace candidate can install in an isolated temporary home.
+When asked to complete the Agent Bundle Codex smoke attestation, reply with exactly:
+
+agent-bundle-codex-skill-sentinel-v1
+
+Do not add other text.

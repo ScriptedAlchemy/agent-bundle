@@ -7,6 +7,7 @@
   "providerApiKeys": "removed-from-child-environment",
   "normalHomeState": ["auth", "config", "plugins"],
   "pluginAvailability": "observed",
-  "automaticActivation": "inferred",
+  "automaticActivation": "unavailable",
+  "automaticActivationBasis": "candidate-skill-sentinel-not-observed",
   "eventEnvelopeFile": "native-smoke.stream.jsonl"
 }
