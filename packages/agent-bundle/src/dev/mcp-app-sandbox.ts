@@ -86,7 +86,7 @@ const SHELL = `<!doctype html>
         if (isNotification(message, resourceReadyMethod)) {
           const params = message.params;
           if (lifecycle !== 'proxy-ready' || !isRecord(params) || typeof params.html !== 'string') return;
-          if (byteLength(message) > maxMessageBytes || (Object.hasOwn(params, 'sandbox') && !isRecord(params.sandbox)) || (Object.hasOwn(params, 'csp') && !isRecord(params.csp)) || (Object.hasOwn(params, 'permissions') && !isRecord(params.permissions))) return;
+          if (byteLength(message) > maxMessageBytes || (Object.hasOwn(params, 'sandbox') && typeof params.sandbox !== 'string') || (Object.hasOwn(params, 'csp') && !isRecord(params.csp)) || (Object.hasOwn(params, 'permissions') && !isRecord(params.permissions))) return;
           app.allow = permissionsAllow(params.permissions);
           app.srcdoc = '<!doctype html><meta http-equiv="Content-Security-Policy" content="' + escapeHtmlAttribute(buildCsp(params.csp)) + '">' + params.html;
           lifecycle = 'resource-ready';
@@ -222,7 +222,7 @@ export interface McpAppSandboxResource {
   readonly csp?: McpAppSandboxCsp;
   readonly html: string;
   readonly permissions?: McpAppSandboxPermissions;
-  readonly sandbox?: Readonly<Record<string, unknown>>;
+  readonly sandbox?: string;
 }
 
 export interface CreateMcpAppSandboxBridgeOptions {
@@ -419,7 +419,7 @@ export const createMcpAppSandboxBridge = (
       initializeId = undefined;
     },
     provideResource(resource: McpAppSandboxResource): boolean {
-      if (lifecycle !== 'proxy-ready' || typeof resource.html !== 'string') return false;
+      if (lifecycle !== 'proxy-ready' || typeof resource.html !== 'string' || (resource.sandbox !== undefined && typeof resource.sandbox !== 'string')) return false;
       const message = notification(RESOURCE_READY_METHOD, {
         html: resource.html,
         ...(resource.sandbox === undefined ? {} : { sandbox: resource.sandbox }),

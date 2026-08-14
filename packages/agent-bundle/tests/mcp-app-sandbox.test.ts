@@ -126,11 +126,12 @@ it('enforces the JSON-RPC proxy lifecycle and holds host traffic until initializ
   expect(bridge.receive(event(rpcNotification('ui/notifications/sandbox-proxy-ready'), proxyWindow, 'http://127.0.0.1:43124'))).toBe(true);
   expect(bridge.lifecycle).toBe('proxy-ready');
 
+  expect(bridge.provideResource({ html: '<p>Rejected</p>', sandbox: {} as unknown as string })).toBe(false);
   expect(bridge.provideResource({
     csp: { connectDomains: ['https://api.example.test'] },
     html: '<p>Hello</p>',
     permissions: { camera: {} },
-    sandbox: {},
+    sandbox: 'allow-scripts',
   })).toBe(true);
   expect(bridge.lifecycle).toBe('resource-ready');
   expect(bridge.send(rpcNotification('app/too-large', { value: 'x'.repeat(1_024) }))).toBe(false);
@@ -142,7 +143,7 @@ it('enforces the JSON-RPC proxy lifecycle and holds host traffic until initializ
       csp: { connectDomains: ['https://api.example.test'] },
       html: '<p>Hello</p>',
       permissions: { camera: {} },
-      sandbox: {},
+      sandbox: 'allow-scripts',
     }),
     targetOrigin: 'http://127.0.0.1:43124',
   }]);
@@ -196,6 +197,7 @@ it('uses an opaque child relay shell with real MCP Apps JSON-RPC notification me
     expect(shell).toContain('ui/notifications/sandbox-proxy-ready');
     expect(shell).toContain("method.startsWith('ui/notifications/sandbox-')");
     expect(shell).toContain('configuration.maxMessageBytes');
+    expect(shell).toContain("Object.hasOwn(params, 'sandbox') && typeof params.sandbox !== 'string'");
     expect(new URL(frame.src).hash).toContain('maxMessageBytes');
   } finally {
     await proxy.close();
