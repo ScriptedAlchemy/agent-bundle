@@ -183,6 +183,7 @@ it('omits the Claude domain for noncanonical or nonpublic MCP URLs', () => {
     'https://[ff02::1]/v1/mcp',
     'https://[2001:db8::1]/v1/mcp',
     'https://[100:0:0:1::1]/mcp',
+    'https://[3fff::1]/mcp',
     'https://mcp.example.com:443/v1/mcp',
   ]) {
     const resolution = resolveMcpAppHostProfile({
@@ -211,6 +212,20 @@ it('computes a Claude domain for a canonical public IPv6 MCP URL', () => {
   });
   if (resolution.kind === 'apps') {
     expect(resolution.extensions?.claude?.domain).toBe('c3470553c91881a4d8ff703680224ea5.claudemcpcontent.com');
+  }
+});
+
+it('accepts the IPv6 address immediately outside the 3fff::/20 registry prefix', () => {
+  const resolution = resolveMcpAppHostProfile({
+    claude: { publicMcpUrl: 'https://[3fff:1000::1]/mcp' },
+    host: standardContext,
+    profile: 'claude',
+    resource: { mimeType: 'text/html;profile=mcp-app', uri: 'ui://weather/forecast.html' },
+  });
+
+  expect(resolution).toMatchObject({ kind: 'apps', profile: 'claude' });
+  if (resolution.kind === 'apps') {
+    expect(resolution.extensions?.claude?.domain).toBe('bd16cd0c446692b4b10444e43896d08c.claudemcpcontent.com');
   }
 });
 
