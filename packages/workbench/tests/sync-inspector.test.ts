@@ -205,6 +205,55 @@ it('rejects unverified Inspector source bytes and metadata mismatches', async ()
   });
 });
 
+it('rejects dirty tracked and untracked explicit Inspector source worktrees', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-inspector-dirty-source-'));
+  const trackedSource = join(root, 'tracked-source');
+  const untrackedSource = join(root, 'untracked-source');
+  const writeFixture = async (source: string): Promise<string> => {
+    await mkdir(join(source, 'src'), { recursive: true });
+    await Promise.all([
+      writeFile(join(source, 'LICENSE'), 'MIT fixture license\n'),
+      writeFile(join(source, 'package.json'), JSON.stringify({
+        dependencies: { '@modelcontextprotocol/client': '2.0.0' },
+        name: 'inspector-fixture',
+        version: '2.2.0',
+      }, null, 2)),
+      writeFile(join(source, 'src', 'entry.ts'), "import 'react';\nexport const ready = true;\n"),
+    ]);
+    return commitFixtureSource(source);
+  };
+  const commonArguments = [
+    '--repository', 'https://github.com/modelcontextprotocol/inspector.git',
+    '--license', 'LICENSE',
+    '--entry', 'src/entry.ts',
+    '--dependency', 'react',
+    '--version', '2.2.0',
+    '--mcp-sdk-version', '2.0.0',
+  ];
+
+  const trackedCommit = await writeFixture(trackedSource);
+  await appendFile(join(trackedSource, 'src', 'entry.ts'), '// tracked mutation\n');
+  await expect(sync([
+    '--source', trackedSource,
+    '--out', join(root, 'tracked-inspector'),
+    '--commit', trackedCommit,
+    ...commonArguments,
+  ])).rejects.toMatchObject({
+    stderr: expect.stringContaining('--source worktree must be clean'),
+  });
+
+  const untrackedCommit = await writeFixture(untrackedSource);
+  await writeFile(join(untrackedSource, 'untracked.ts'), 'export const untracked = true;\n');
+  await expect(sync([
+    '--source', untrackedSource,
+    '--out', join(root, 'untracked-inspector'),
+    '--commit', untrackedCommit,
+    ...commonArguments,
+  ])).rejects.toMatchObject({
+    stderr: expect.stringContaining('--source worktree must be clean'),
+  });
+});
+
 it('runs the retained upstream inspectorTabs test directly under Rstest', async () => {
   const testPath = 'packages/workbench/src/inspector/vendor/clients/web/src/utils/inspectorTabs.test.ts';
   const { stdout } = await execFile('npx', ['--no-install', 'rstest', '--config', 'rstest.config.ts', testPath], {

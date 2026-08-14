@@ -293,6 +293,10 @@ const checkoutSource = async ({ commit, repository, source }) => {
     if (stdout.trim() !== commit) {
       fail(`--source is at ${stdout.trim()}, not the required explicit commit ${commit}`);
     }
+    const { stdout: status } = await execFile('git', ['-C', root, 'status', '--porcelain', '--untracked-files=all']);
+    if (status) {
+      fail('--source worktree must be clean before syncing an official Inspector snapshot');
+    }
     return { cleanup: undefined, root };
   }
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-inspector-sync-'));
