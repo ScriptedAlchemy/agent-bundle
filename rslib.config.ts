@@ -12,10 +12,21 @@ export default defineConfig({
   ],
   output: {
     cleanDistPath: true,
+    filenameHash: false,
     distPath: {
       root: './packages/agent-bundle/dist',
     },
-    externals: ['@rstackjs/load-config', 'ajv', 'ajv/dist/2020.js', 'fast-glob', 'ignore', 'jiti', 'yaml'],
+    externals: [
+      '@modelcontextprotocol/client',
+      '@modelcontextprotocol/client/stdio',
+      '@rstackjs/load-config',
+      'ajv',
+      'ajv/dist/2020.js',
+      'fast-glob',
+      'ignore',
+      'jiti',
+      'yaml',
+    ],
     target: 'node',
   },
   source: {

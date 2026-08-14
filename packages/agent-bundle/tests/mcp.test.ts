@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { access, cp, mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -9,6 +9,7 @@ import { build } from '../src/build/build.ts';
 import { validateArtifact } from '../src/build/validate-artifact.ts';
 import { normalizeProject } from '../src/config/normalize.ts';
 import { validateModel, validateSource } from '../src/config/validate.ts';
+import { McpService } from '../src/services/mcp-service.ts';
 import {
   pathTokens,
   type AgentBundleConfig,
@@ -393,5 +394,291 @@ it('bundles each local MCP entry once and maps every target manifest to that art
     );
   } finally {
     await rm(root, { force: true, recursive: true });
+  }
+}, 30_000);
+
+it('uses the selected remote manifest with propagated cancellation and cleans data before rejecting tampering', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-mcp-remote-'));
+  try {
+    const model = await normalizeProject(
+      loadedProject(root, {
+        mcp: {
+          servers: {
+            events: {
+              headers: { 'X-Mode': 'events' },
+              transport: 'sse',
+              url: 'https://mcp.example.test/events',
+            },
+            http: {
+              headers: { 'X-Data': pathTokens.pluginData },
+              transport: 'streamable-http',
+              url: 'https://mcp.example.test/tools',
+            },
+          },
+        },
+        plugin: { name: 'mcp-remote-fixture', version: '1.0.0' },
+        targets: ['claude'],
+      }),
+      { skills: [] },
+      registry,
+    );
+    const artifact = join(root, 'dist');
+    await build({ model, outputRoot: artifact, projectRoot: root, registry: createDefaultRegistry() });
+
+    const connected: Array<{ readonly options: { readonly signal?: AbortSignal; readonly timeout: number }; readonly transport: unknown }> = [];
+    const requested: Array<{ readonly signal?: AbortSignal; readonly timeout: number }> = [];
+    const http: Array<{ readonly headers?: Record<string, string>; readonly url: string }> = [];
+    const sse: Array<{ readonly headers?: Record<string, string>; readonly url: string }> = [];
+    let closes = 0;
+    const service = new McpService({
+      createClient: () => ({
+        callTool: async () => ({ content: [] }) as never,
+        close: async () => {
+          closes += 1;
+        },
+        connect: async (transport, options) => {
+          connected.push({ options: options!, transport });
+        },
+        getServerCapabilities: () => undefined,
+        getServerVersion: () => undefined,
+        listTools: async (_params, options) => {
+          requested.push(options!);
+          return { tools: [] };
+        },
+      }),
+      createSseTransport: (url, options) => {
+        sse.push({ ...options, url: url.href });
+        return {} as never;
+      },
+      createStreamableHttpTransport: (url, options) => {
+        http.push({ ...options, url: url.href });
+        return {} as never;
+      },
+    });
+    const controller = new AbortController();
+    await service.list({
+      artifact,
+      server: 'http',
+      signal: controller.signal,
+      target: 'claude',
+      timeoutMs: 321,
+      workspaceRoot: join(root, 'workspace'),
+    });
+    await service.list({ artifact, server: 'events', target: 'claude' });
+
+    expect(http).toEqual([{ headers: { 'X-Data': expect.any(String) }, url: 'https://mcp.example.test/tools' }]);
+    expect(sse).toEqual([{ headers: { 'X-Mode': 'events' }, url: 'https://mcp.example.test/events' }]);
+    expect(connected[0]?.options).toEqual({ signal: controller.signal, timeout: 321 });
+    expect(requested[0]).toEqual({ signal: controller.signal, timeout: 321 });
+    expect(closes).toBe(2);
+    await expect(access(http[0]!.headers!['X-Data']!)).rejects.toMatchObject({ code: 'ENOENT' });
+
+    await writeFile(join(artifact, 'claude', '.claude-plugin', 'plugin.json'), '{"name":"tampered"}\n');
+    await expect(service.list({ artifact, server: 'http', target: 'claude' })).rejects.toThrow();
+    expect(closes).toBe(2);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('lists tools from a validated copied artifact without reading project source', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-mcp-service-source-'));
+  const consumer = await mkdtemp(join(tmpdir(), 'agent-bundle-mcp-service-consumer-'));
+  try {
+    await mkdir(join(root, 'src'), { recursive: true });
+    await mkdir(join(root, 'node_modules'), { recursive: true });
+    await symlink(
+      join(process.cwd(), 'node_modules', '@modelcontextprotocol'),
+      join(root, 'node_modules', '@modelcontextprotocol'),
+      'dir',
+    );
+    await writeFile(join(root, 'package.json'), '{"type":"module"}\n');
+    await writeFile(
+      join(root, 'src', 'server.ts'),
+      [
+        "import { McpServer } from '@modelcontextprotocol/server';",
+        "import { StdioServerTransport } from '@modelcontextprotocol/server/stdio';",
+        '',
+        "const server = new McpServer({ name: 'fixture-server', version: '1.0.0' });",
+        "server.registerTool('inspect', { description: 'Inspect the launched artifact.' }, async () => {",
+        "  process.stderr.write('fixture stderr\\n');",
+        '  return {',
+        "    content: [{ type: 'text' as const, text: JSON.stringify({",
+        '      args: process.argv.slice(2),',
+        '      data: process.env.FIXTURE_DATA,',
+        '      root: process.env.FIXTURE_ROOT,',
+        '    }) }],',
+        '  };',
+        '});',
+        "server.registerTool('tool-error', { description: 'Return a tool-level error.' }, async () => ({",
+        "  content: [{ type: 'text' as const, text: 'expected failure' }],",
+        '  isError: true,',
+        '}));',
+        "server.registerTool('noisy', { description: 'Exceed the stderr limit.' }, async () => {",
+        "  process.stderr.write('x'.repeat(1_000_001));",
+        "  return { content: [{ type: 'text' as const, text: 'too noisy' }] };",
+        '});',
+        "server.registerTool('hang', { description: 'Wait for cancellation.' }, async () => new Promise(() => {}));",
+        "server.registerTool('rich', {",
+        "  _meta: { 'openai/outputTemplate': 'ui://fixture/tool.html', ui: { resourceUri: 'ui://fixture/tool.html' } },",
+        "  description: 'Return an Apps-compatible result.',",
+        "}, async () => ({",
+        '  _meta: { ui: { resourceUri: \'ui://fixture/result.html\' } },',
+        '  content: [',
+        "    { type: 'resource_link' as const, name: 'fixture', uri: 'ui://fixture/tool.html' },",
+        "    { type: 'resource' as const, resource: { mimeType: 'text/plain', text: 'embedded fixture', uri: 'ui://fixture/embedded.txt' } },",
+        '  ],',
+        "  structuredContent: { view: 'fixture', value: 42 },",
+        '}));',
+        'await server.connect(new StdioServerTransport());',
+        '',
+      ].join('\n'),
+    );
+    const model = await normalizeProject(
+      loadedProject(root, {
+        mcp: {
+          servers: {
+            fixture: {
+              args: ['--fixture-argument'],
+              entry: './src/server.ts',
+              env: {
+                FIXTURE_DATA: pathTokens.pluginData,
+                FIXTURE_ROOT: pathTokens.pluginRoot,
+              },
+            },
+          },
+        },
+        plugin: { name: 'mcp-service-fixture', version: '1.0.0' },
+        targets: ['portable'],
+      }),
+      { skills: [] },
+      registry,
+    );
+    const outputRoot = join(root, 'dist');
+    const artifact = join(consumer, 'installed-plugin');
+    await build({ model, outputRoot, projectRoot: root, registry: createDefaultRegistry() });
+    await cp(outputRoot, artifact, { recursive: true });
+    await rm(join(root, 'src'), { force: true, recursive: true });
+
+    const api = await import('../src/api.ts') as {
+      readonly McpService?: new () => {
+        invoke(options: {
+          readonly artifact: string;
+          readonly input: Record<string, unknown>;
+          readonly server: string;
+          readonly signal?: AbortSignal;
+          readonly target: string;
+          readonly timeoutMs?: number;
+          readonly tool: string;
+        }): Promise<unknown>;
+        list(options: { readonly artifact: string; readonly server: string; readonly target: string }): Promise<unknown>;
+      };
+    };
+    expect(api.McpService).toBeTypeOf('function');
+    const result = await new api.McpService!().list({ artifact, server: 'fixture', target: 'portable' });
+    expect(result).toMatchObject({
+      server: { name: 'fixture-server', version: '1.0.0' },
+      stderr: '',
+      tools: [
+        { name: 'inspect' },
+        { name: 'tool-error' },
+        { name: 'noisy' },
+        { name: 'hang' },
+        {
+          _meta: {
+            'openai/outputTemplate': 'ui://fixture/tool.html',
+            ui: { resourceUri: 'ui://fixture/tool.html' },
+          },
+          name: 'rich',
+        },
+      ],
+    });
+    const invoked = await new api.McpService!().invoke({
+      artifact,
+      input: {},
+      server: 'fixture',
+      target: 'portable',
+      tool: 'inspect',
+    });
+    expect(invoked).toMatchObject({
+      result: { content: [{ text: expect.any(String), type: 'text' }] },
+      stderr: 'fixture stderr\n',
+    });
+    const inspected = invoked as {
+      readonly result: { readonly content: readonly [{ readonly text: string }] };
+    };
+    const firstSession = JSON.parse(inspected.result.content[0].text) as {
+      readonly data: string;
+      readonly root: string;
+    };
+    expect(firstSession.root).toBe(join(artifact, 'portable'));
+    await expect(access(firstSession.data)).rejects.toMatchObject({ code: 'ENOENT' });
+
+    const nextInvocation = await new api.McpService!().invoke({
+      artifact,
+      input: {},
+      server: 'fixture',
+      target: 'portable',
+      tool: 'inspect',
+    }) as { readonly result: { readonly content: readonly [{ readonly text: string }] } };
+    const secondSession = JSON.parse(nextInvocation.result.content[0].text) as { readonly data: string };
+    expect(secondSession.data).not.toBe(firstSession.data);
+    await expect(access(secondSession.data)).rejects.toMatchObject({ code: 'ENOENT' });
+
+    await expect(new api.McpService!().invoke({
+      artifact,
+      input: {},
+      server: 'fixture',
+      target: 'portable',
+      tool: 'tool-error',
+    })).resolves.toMatchObject({ result: { isError: true } });
+    await expect(new api.McpService!().invoke({
+      artifact,
+      input: {},
+      server: 'fixture',
+      target: 'portable',
+      tool: 'rich',
+    })).resolves.toMatchObject({
+      result: {
+        _meta: { ui: { resourceUri: 'ui://fixture/result.html' } },
+        content: [
+          { name: 'fixture', type: 'resource_link', uri: 'ui://fixture/tool.html' },
+          {
+            resource: {
+              mimeType: 'text/plain',
+              text: 'embedded fixture',
+              uri: 'ui://fixture/embedded.txt',
+            },
+            type: 'resource',
+          },
+        ],
+        structuredContent: { value: 42, view: 'fixture' },
+      },
+    });
+    await expect(new api.McpService!().invoke({
+      artifact,
+      input: {},
+      server: 'fixture',
+      target: 'portable',
+      tool: 'noisy',
+    })).rejects.toThrow('stderr exceeds the 1 MB limit');
+
+    const controller = new AbortController();
+    const pending = new api.McpService!().invoke({
+      artifact,
+      input: {},
+      server: 'fixture',
+      signal: controller.signal,
+      target: 'portable',
+      timeoutMs: 1_000,
+      tool: 'hang',
+    });
+    setTimeout(() => controller.abort(new Error('test cancellation')), 25);
+    await expect(pending).rejects.toBeDefined();
+  } finally {
+    await Promise.all([
+      rm(root, { force: true, recursive: true }),
+      rm(consumer, { force: true, recursive: true }),
+    ]);
   }
 }, 30_000);

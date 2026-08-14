@@ -466,6 +466,13 @@ This is the honest-portability rule applied to paths.
 Remote HTTP MCP definitions are copied into native manifests without bundling a local server.
 No MCP process is launched during `build` or `validate`.
 
+MCP Apps and host-compatible UI widgets remain ordinary MCP protocol data, not a separate server
+kind. Agent Bundle preserves tool metadata such as `_meta.ui.resourceUri` and
+`_meta["openai/outputTemplate"]`, structured tool results, resource links, embedded resources, and
+result metadata without rewriting them. UI resources and their client bundle are registered
+statically by the generated server; the workbench reads them through MCP resources, serves the
+selected artifact's browser assets, and renders them through the MCP Apps bridge.
+
 ## Build engine
 
 Rslib is the JavaScript/TypeScript compilation engine. Agent-bundle owns the higher-level
