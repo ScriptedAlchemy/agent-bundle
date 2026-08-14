@@ -1226,19 +1226,27 @@ export class McpSessionService {
     const signal = options.signal === undefined
       ? opening.abort.signal
       : AbortSignal.any([options.signal, opening.abort.signal]);
-    let result: PromiseSettledResult<void> = { status: 'fulfilled', value: undefined };
+    let cleanupFailed = false;
+    let cleanupFailure: unknown;
     try {
-      return await this.#open({ ...options, signal });
-    } catch (error) {
-      result = { reason: error, status: 'rejected' };
-      throw error;
+      return await this.#open({ ...options, signal }, (error) => {
+        if (!cleanupFailed) {
+          cleanupFailed = true;
+          cleanupFailure = error;
+        }
+      });
     } finally {
       this.#openingSessions.delete(opening);
-      opening.finish(result);
+      opening.finish(cleanupFailed
+        ? { reason: cleanupFailure, status: 'rejected' }
+        : { status: 'fulfilled', value: undefined });
     }
   }
 
-  async #open(options: OpenMcpSessionOptions): Promise<McpSession> {
+  async #open(
+    options: OpenMcpSessionOptions,
+    reportCleanupFailure: (error: unknown) => void,
+  ): Promise<McpSession> {
     const target = this.#target(options.target);
     if (options.serverName.trim().length === 0) throw new Error('MCP server name must be nonempty.');
     const epochReference = await this.#epochStore.acquireEpochReference(options.epochId);
@@ -1272,13 +1280,30 @@ export class McpSessionService {
       return session;
     } catch (error) {
       if (session !== undefined) {
-        await session.close();
+        try {
+          await session.close();
+        } catch (cleanupError) {
+          reportCleanupFailure(cleanupError);
+          throw cleanupError;
+        }
       } else {
+        let cleanupFailed = false;
+        let cleanupFailure: unknown;
         try {
           if (pluginData !== undefined) await rm(pluginData, { force: true, recursive: true });
-        } finally {
-          await epochReference.close();
+        } catch (cleanupError) {
+          reportCleanupFailure(cleanupError);
+          cleanupFailed = true;
+          cleanupFailure = cleanupError;
         }
+        try {
+          await epochReference.close();
+        } catch (cleanupError) {
+          reportCleanupFailure(cleanupError);
+          cleanupFailed = true;
+          cleanupFailure = cleanupError;
+        }
+        if (cleanupFailed) throw cleanupFailure;
       }
       throw error;
     }

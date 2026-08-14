@@ -568,7 +568,8 @@ export class ForegroundServer {
   }
 
   #assertMutationSession(request: IncomingMessage): void {
-    if (singleHeader(request.headers.origin) !== this.url) {
+    const origin = singleHeader(request.headers.origin);
+    if (origin !== this.url && (origin !== undefined || singleHeader(request.headers['sec-fetch-site']) !== 'same-origin')) {
       throw requestError(diagnostic('AB8003', 'Request origin is not this foreground server.', 403));
     }
     if (singleHeader(request.headers['x-agent-bundle-session']) !== this.sessionToken) {

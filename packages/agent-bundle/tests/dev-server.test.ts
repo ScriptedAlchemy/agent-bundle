@@ -551,6 +551,96 @@ it('applies the established foreground origin and token guard to MCP session cre
   }
 });
 
+it('accepts headerless browser same-origin fetch provenance with the exact token for rebuild and MCP reads, streams, and creation', async () => {
+  const coordinator = new RecordingCoordinator();
+  let streamSubscriptions = 0;
+  const session = {
+    binding: { epochId: 'epoch-a', serverName: 'weather', target: 'portable' },
+    connection: { capabilities: {}, protocolEra: 'modern', protocolVersion: '2025-11-25', server: { name: 'fixture', version: '1.0.0' } },
+    id: 'session-a',
+    subscribeTrace: () => {
+      streamSubscriptions += 1;
+      return { unsubscribe: () => { streamSubscriptions -= 1; } };
+    },
+    trace: () => ({ entries: [] }),
+  };
+  const mcpSessions = {
+    get: (id: string) => id === session.id ? session : undefined,
+    open: async () => session,
+  } as unknown as McpSessionService;
+  const server = await startForegroundServer({
+    coordinator,
+    eventHub: new ProjectEventHub(),
+    mcpSessions,
+    port: 0,
+    sessionToken: 'test-session-token',
+  });
+  const headers = { 'sec-fetch-site': 'same-origin', 'x-agent-bundle-session': server.sessionToken };
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+
+  try {
+    const rebuild = await fetch(`${server.url}/api/project/rebuild`, {
+      body: '{}',
+      headers: { ...headers, 'content-type': 'application/json' },
+      method: 'POST',
+    });
+    expect(rebuild.status).toBe(200);
+    expect(coordinator.invalidations).toHaveLength(1);
+
+    const created = await fetch(`${server.url}/api/mcp/sessions`, {
+      body: JSON.stringify({ epochId: 'epoch-a', serverName: 'weather', target: 'portable' }),
+      headers: { ...headers, 'content-type': 'application/json' },
+      method: 'POST',
+    });
+    expect(created.status).toBe(200);
+    await expect(created.json()).resolves.toMatchObject({ session: { id: 'session-a' } });
+
+    const read = await fetch(`${server.url}/api/mcp/sessions/session-a`, { headers });
+    expect(read.status).toBe(200);
+    await expect(read.json()).resolves.toMatchObject({ session: { id: 'session-a' } });
+
+    const stream = await fetch(`${server.url}/api/mcp/sessions/session-a/stream?after=0`, { headers });
+    expect(stream.status).toBe(200);
+    reader = stream.body?.getReader();
+    if (reader === undefined) throw new Error('Expected MCP stream body.');
+    expect(streamSubscriptions).toBe(1);
+  } finally {
+    await reader?.cancel();
+    await server.close();
+  }
+});
+
+it('rejects non-browser provenance and wrong tokens even when a canonical Host targets the foreground server', async () => {
+  const coordinator = new RecordingCoordinator();
+  const server = await startForegroundServer({
+    coordinator,
+    eventHub: new ProjectEventHub(),
+    port: 0,
+    sessionToken: 'test-session-token',
+  });
+  const request = (headers: Readonly<Record<string, string>>) => fetch(`${server.url}/api/project/rebuild`, {
+    body: '{}',
+    headers: { ...headers, 'content-type': 'application/json' },
+    method: 'POST',
+  });
+
+  try {
+    for (const headers of [
+      { 'sec-fetch-site': 'cross-site', 'x-agent-bundle-session': server.sessionToken },
+      { 'sec-fetch-site': 'none', 'x-agent-bundle-session': server.sessionToken },
+      { 'x-agent-bundle-session': server.sessionToken },
+      { 'sec-fetch-site': 'same-origin', 'x-agent-bundle-session': 'wrong-token' },
+      { origin: 'http://invalid.example', 'sec-fetch-site': 'same-origin', 'x-agent-bundle-session': server.sessionToken },
+    ]) {
+      const response = await request(headers);
+      expect(response.status).toBe(403);
+    }
+    expect(coordinator.invalidations).toEqual([]);
+  } finally {
+    await server.close();
+  }
+});
+
 it('ends active authenticated MCP trace readers before foreground shutdown destroys remaining sockets', async () => {
   let subscriptions = 0;
   const session = {
