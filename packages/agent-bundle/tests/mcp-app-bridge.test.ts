@@ -217,6 +217,95 @@ it('does not let later host notifications overtake a blocked app request respons
   ]);
 });
 
+it('rejects malformed stable app-info icons before starting the handshake', async () => {
+  const fixture = fixtureFor();
+  const bridge = createMcpAppBridge({ binding: fixture.binding, host: fixture.host, operations: fixture.operations, send: (message) => (fixture.sent.push(message), true) });
+
+  expect(await bridge.receive({
+    id: 'bad-app-icon',
+    jsonrpc: '2.0',
+    method: 'ui/initialize',
+    params: {
+      appCapabilities: {},
+      appInfo: { icons: [{ sizes: ['64x64'], src: 42 }], name: 'weather-view', version: '1.0.0' },
+      protocolVersion: '2026-01-26',
+    },
+  })).toBe(true);
+  expect(fixture.sent.at(-1)).toEqual({
+    error: { code: -32602, message: 'ui/initialize requires protocol version 2026-01-26.' },
+    id: 'bad-app-icon',
+    jsonrpc: '2.0',
+  });
+  expect(bridge.lifecycle).toBe('created');
+});
+
+it('rejects malformed content annotations and resource-link icons before invoking the message callback', async () => {
+  let messages = 0;
+  const fixture = fixtureFor({ host: { onMessage: async () => { messages += 1; } } });
+  const bridge = createMcpAppBridge({ binding: fixture.binding, host: fixture.host, operations: fixture.operations, send: (message) => (fixture.sent.push(message), true) });
+  await bridge.receive(initialize('init:nested-content'));
+  await bridge.receive(initialized());
+
+  expect(await bridge.receive({
+    id: 'bad-content-nesting',
+    jsonrpc: '2.0',
+    method: 'ui/message',
+    params: {
+      content: [{
+        annotations: { audience: ['user'], priority: 2 },
+        icons: [{ src: 'https://weather.example.test/icon.svg', theme: 'neon' }],
+        name: 'forecast',
+        type: 'resource_link',
+        uri: 'resource://weather/forecast',
+      }],
+      role: 'user',
+    },
+  })).toBe(true);
+  expect(messages).toBe(0);
+  expect(fixture.sent.at(-1)).toEqual({
+    error: { code: -32602, message: 'ui/message requires a user role and valid MCP content blocks.' },
+    id: 'bad-content-nesting',
+    jsonrpc: '2.0',
+  });
+});
+
+it('requires stable annotation timestamps to include an ISO offset', async () => {
+  let messages = 0;
+  const fixture = fixtureFor({ host: { onMessage: async () => { messages += 1; } } });
+  const bridge = createMcpAppBridge({ binding: fixture.binding, host: fixture.host, operations: fixture.operations, send: (message) => (fixture.sent.push(message), true) });
+  await bridge.receive(initialize('init:annotation-offset'));
+  await bridge.receive(initialized());
+
+  await bridge.receive({
+    id: 'bad-annotation-offset',
+    jsonrpc: '2.0',
+    method: 'ui/message',
+    params: { content: [{ annotations: { lastModified: '2026-01-01T00:00:00' }, text: 'Forecast', type: 'text' }], role: 'user' },
+  });
+
+  expect(messages).toBe(0);
+  expect(fixture.sent.at(-1)).toEqual({
+    error: { code: -32602, message: 'ui/message requires a user role and valid MCP content blocks.' },
+    id: 'bad-annotation-offset',
+    jsonrpc: '2.0',
+  });
+});
+
+it('rejects host tool metadata whose JSON Schemas are not object-rooted', () => {
+  const fixture = fixtureFor({
+    host: {
+      context: {
+        toolInfo: {
+          id: 'call:weather',
+          tool: { inputSchema: { type: 'array' }, name: 'show-weather', outputSchema: { type: 'string' } },
+        },
+      },
+    },
+  });
+
+  expect(() => createMcpAppBridge({ binding: fixture.binding, host: fixture.host, operations: fixture.operations, send: () => true })).toThrow('MCP App host context must use stable MCP Apps field values.');
+});
+
 it('forwards only same-binding app-visible tools and resources while retaining request ids', async () => {
   const fixture = fixtureFor();
   const bridge = createMcpAppBridge({
@@ -337,6 +426,81 @@ it('enforces declared App capabilities without rejecting a parameterless standar
     { error: { code: -32602, message: 'tools/call requires a name and finite JSON arguments.' }, id: 'scalar-tool', jsonrpc: '2.0' },
     { error: { code: -32602, message: 'ui/request-display-mode must be declared by the App.' }, id: 'undeclared-display', jsonrpc: '2.0' },
     { id: 'plain-ping', jsonrpc: '2.0', result: {} },
+  ]);
+});
+
+it('updates host display-mode negotiation only after publishing a valid host-context change', async () => {
+  const requested: string[] = [];
+  const fixture = fixtureFor({
+    host: {
+      onDisplayMode: async (mode) => {
+        requested.push(mode);
+        return mode;
+      },
+    },
+  });
+  const bridge = createMcpAppBridge({ binding: fixture.binding, host: fixture.host, operations: fixture.operations, send: (message) => (fixture.sent.push(message), true) });
+  await bridge.receive(initialize('init:display-negotiation'));
+  await bridge.receive(initialized());
+
+  expect(bridge.publishHostContextChanged({ availableDisplayModes: ['inline'] })).toBe(true);
+  await bridge.receive({ id: 'removed-fullscreen', jsonrpc: '2.0', method: 'ui/request-display-mode', params: { mode: 'fullscreen' } });
+  await bridge.receive({ id: 'never-app-pip', jsonrpc: '2.0', method: 'ui/request-display-mode', params: { mode: 'pip' } });
+  expect(bridge.publishHostContextChanged({ availableDisplayModes: ['inline', 'fullscreen'] })).toBe(true);
+  await bridge.receive({ id: 'restored-fullscreen', jsonrpc: '2.0', method: 'ui/request-display-mode', params: { mode: 'fullscreen' } });
+
+  expect(requested).toEqual(['fullscreen']);
+  expect(fixture.sent).toContainEqual(
+    { error: { code: -32602, message: 'ui/request-display-mode is not available from this host.' }, id: 'removed-fullscreen', jsonrpc: '2.0' },
+  );
+  expect(fixture.sent.slice(-3)).toEqual([
+    { error: { code: -32602, message: 'ui/request-display-mode must be declared by the App.' }, id: 'never-app-pip', jsonrpc: '2.0' },
+    { jsonrpc: '2.0', method: 'ui/notifications/host-context-changed', params: { availableDisplayModes: ['inline', 'fullscreen'] } },
+    { id: 'restored-fullscreen', jsonrpc: '2.0', result: { mode: 'fullscreen' } },
+  ]);
+});
+
+it('rejects a host frame that exceeds the configured queued-byte budget before sending it', () => {
+  const fixture = fixtureFor();
+  const bridge = createMcpAppBridge({
+    binding: fixture.binding,
+    host: fixture.host,
+    maxQueuedHostMessageBytes: 256,
+    operations: fixture.operations,
+    send: (message) => (fixture.sent.push(message), true),
+  });
+
+  expect(bridge.publishToolInputPartial({ payload: 'x'.repeat(2_048) })).toBe(false);
+  expect(fixture.sent).toEqual([]);
+});
+
+it('evicts a permanently blocked frame after bounded retries so later FIFO traffic can drain', async () => {
+  const fixture = fixtureFor();
+  const bridge = createMcpAppBridge({
+    binding: fixture.binding,
+    host: fixture.host,
+    maxQueuedHostMessageBytes: 4_096,
+    operations: fixture.operations,
+    send: (message) => {
+      if (message.method === 'ui/notifications/tool-input-partial') return false;
+      fixture.sent.push(message);
+      return true;
+    },
+  });
+
+  expect(bridge.publishToolInputPartial({ city: 'Par' })).toBe(true);
+  await bridge.receive(initialize('init:permanent-block'));
+  await bridge.receive(initialized());
+  expect(bridge.publishHostContextChanged({ theme: 'dark' })).toBe(true);
+
+  expect(bridge.flushHostTraffic()).toBe(false);
+  expect(bridge.flushHostTraffic()).toBe(false);
+  expect(bridge.flushHostTraffic()).toBe(true);
+  expect(fixture.sent.some((message) => message.method === 'ui/notifications/tool-input-partial')).toBe(false);
+  expect(fixture.sent.slice(-3)).toEqual([
+    { jsonrpc: '2.0', method: 'ui/notifications/tool-input', params: { arguments: { city: 'Paris', units: 'metric' } } },
+    { jsonrpc: '2.0', method: 'ui/notifications/tool-result', params: { content: [{ text: 'Sunny', type: 'text' }], structuredContent: { temperature: 21 } } },
+    { jsonrpc: '2.0', method: 'ui/notifications/host-context-changed', params: { theme: 'dark' } },
   ]);
 });
 
