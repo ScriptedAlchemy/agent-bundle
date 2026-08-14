@@ -1,5 +1,5 @@
 import { execFile as executeFile } from 'node:child_process';
-import { access, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { access, mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -8,6 +8,7 @@ import { expect, it } from '@rstest/core';
 
 import { defineConfig, pathTokens } from '../src/index.ts';
 import { runCli } from '../src/cli.ts';
+import { writeManifest } from '../src/build/emit.ts';
 
 interface PackageManifest {
   bin: {
@@ -65,6 +66,9 @@ it('publishes directly executable built entrypoints with declarations', async ()
     await expect(access(join(packageRoot, entrypoint.types))).resolves.toBeUndefined();
   }
 
+  const distFiles = await readdir(join(packageRoot, 'dist'));
+  expect(distFiles.filter((file) => file.endsWith('.js')).every((file) => !/-[a-f0-9]{8,}\.js$/i.test(file))).toBe(true);
+
   await expect(import('agent-bundle')).resolves.toBeDefined();
   await expect(import('agent-bundle/api')).resolves.toBeDefined();
   await expect(import('agent-bundle/config')).resolves.toBeDefined();
@@ -112,3 +116,80 @@ it('imports the externalized config entry from a packed npm consumer', async () 
     await rm(consumerRoot, { force: true, recursive: true });
   }
 }, 15_000);
+
+it('invokes a prebuilt MCP server from a clean packed consumer', async () => {
+  await buildPackage();
+
+  const consumerRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-mcp-consumer-'));
+  try {
+    const artifact = join(consumerRoot, 'artifact');
+    await mkdir(join(artifact, 'portable'), { recursive: true });
+    await writeFile(
+      join(artifact, 'server.mjs'),
+      [
+        "let buffer = '';",
+        'const send = (id, result) => process.stdout.write(`${JSON.stringify({ jsonrpc: \'2.0\', id, result })}\\n`);',
+        "process.stdin.setEncoding('utf8');",
+        "process.stdin.on('data', (chunk) => {",
+        '  buffer += chunk;',
+        "  for (let newline; (newline = buffer.indexOf('\\n')) >= 0;) {",
+        '    const line = buffer.slice(0, newline).trim();',
+        '    buffer = buffer.slice(newline + 1);',
+        '    if (!line) continue;',
+        '    const request = JSON.parse(line);',
+        "    if (request.method === 'initialize') send(request.id, { capabilities: { tools: {} }, protocolVersion: request.params.protocolVersion, serverInfo: { name: 'packed-fixture', version: '1.0.0' } });",
+        "    if (request.method === 'tools/list') send(request.id, { tools: [{ description: 'Packed fixture', inputSchema: { properties: {}, type: 'object' }, name: 'inspect' }] });",
+        "    if (request.method === 'tools/call') send(request.id, { content: [{ text: 'packed result', type: 'text' }], structuredContent: { packed: true } });",
+        '  }',
+        '});',
+        '',
+      ].join('\n'),
+    );
+    await writeFile(join(artifact, 'portable', 'plugin.json'), '{"name":"packed-fixture","version":"1.0.0"}\n');
+    await writeFile(
+      join(artifact, 'portable', 'mcp.json'),
+      `${JSON.stringify({
+        mcpServers: {
+          fixture: {
+            args: ['../server.mjs'],
+            command: process.execPath,
+            cwd: '${PLUGIN_ROOT}',
+            type: 'stdio',
+          },
+        },
+      })}\n`,
+    );
+    await writeManifest({ artifactRoot: artifact, targets: ['portable'] });
+
+    const { stdout: packedOutput } = await execFile(
+      'npm',
+      ['pack', '--json', '--pack-destination', consumerRoot],
+      { cwd: packageRoot },
+    );
+    const [packed] = JSON.parse(packedOutput) as Array<{ filename: string }>;
+    await writeFile(join(consumerRoot, 'package.json'), '{"type":"module"}\n');
+    await execFile(
+      'npm',
+      ['install', '--ignore-scripts', '--no-audit', '--no-fund', join(consumerRoot, packed.filename)],
+      { cwd: consumerRoot },
+    );
+    const { stdout } = await execFile(process.execPath, [
+      '--input-type=module',
+      '--eval',
+      [
+        "import { McpService } from 'agent-bundle/api';",
+        "const result = await new McpService().invoke({ artifact: './artifact', input: {}, server: 'fixture', target: 'portable', tool: 'inspect' });",
+        'console.log(JSON.stringify(result));',
+      ].join('\n'),
+    ], { cwd: consumerRoot });
+    expect(JSON.parse(stdout)).toMatchObject({
+      result: {
+        content: [{ text: 'packed result', type: 'text' }],
+        structuredContent: { packed: true },
+      },
+      server: { name: 'packed-fixture', version: '1.0.0' },
+    });
+  } finally {
+    await rm(consumerRoot, { force: true, recursive: true });
+  }
+}, 30_000);
