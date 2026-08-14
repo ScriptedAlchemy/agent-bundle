@@ -8,7 +8,6 @@ import type { Invalidation, ProjectEventMessage, ProjectStatus } from './types.t
 const bodyLimit = 64 * 1024;
 const loopbackHosts = new Set(['127.0.0.1', '::1']);
 const sseQueueByteLimit = 256 * 1024;
-const sseQueueEventLimit = 8;
 
 interface QueuedSseFrame {
   readonly bytes: number;
@@ -465,12 +464,14 @@ export class ForegroundServer {
     response.flushHeaders();
     let backpressured = false;
     let closed = false;
+    let bufferedBytes = 0;
     let queuedBytes = 0;
     const queued: QueuedSseFrame[] = [];
     const stream = { subscription: undefined as ProjectEventSubscription | undefined };
     const unsubscribe = () => {
       stream.subscription?.unsubscribe();
       if (stream.subscription !== undefined) this.#streamSubscriptions.delete(stream.subscription);
+      bufferedBytes = 0;
       queued.length = 0;
       queuedBytes = 0;
     };
@@ -485,11 +486,13 @@ export class ForegroundServer {
     const drain = () => {
       if (closed || response.writableEnded || response.destroyed) return;
       backpressured = false;
+      bufferedBytes = 0;
       while (queued.length > 0) {
         const next = queued.shift()!;
         queuedBytes -= next.bytes;
         if (!response.write(next.frame)) {
           backpressured = true;
+          bufferedBytes = next.bytes;
           response.once('drain', drain);
           return;
         }
@@ -497,15 +500,16 @@ export class ForegroundServer {
     };
     const deliver = (frame: string) => {
       if (closed || response.writableEnded || response.destroyed) return;
+      const bytes = Buffer.byteLength(frame);
       if (!backpressured) {
         if (!response.write(frame)) {
           backpressured = true;
+          bufferedBytes = bytes;
           response.once('drain', drain);
         }
         return;
       }
-      const bytes = Buffer.byteLength(frame);
-      if (queued.length >= sseQueueEventLimit || queuedBytes + bytes > sseQueueByteLimit) {
+      if (bufferedBytes + queuedBytes + bytes > sseQueueByteLimit) {
         closeSlowStream();
         return;
       }

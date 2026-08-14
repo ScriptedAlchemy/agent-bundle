@@ -253,6 +253,38 @@ it('delivers a large replay to a healthy client and reconnects after its acknowl
   }
 });
 
+it('replays many ordinary retained events to a healthy client in order', async () => {
+  const eventHub = new ProjectEventHub({ now: () => new Date('2026-08-14T12:00:00.000Z') });
+  for (const sequence of Array.from({ length: 20 }, (_, index) => index + 1)) {
+    eventHub.publish({
+      payload: {
+        occurredAt: '2026-08-14T12:00:00.000Z',
+        paths: ['replay-' + sequence + '.ts', 'x'.repeat(8 * 1024)],
+        reason: 'source-change',
+      },
+      type: 'invalidation',
+    });
+  }
+  const server = await startForegroundServer({ coordinator: new RecordingCoordinator(), eventHub, port: 0 });
+
+  try {
+    const replay = await within(readReplay(server.url, '0', 20), 500);
+    expect(Array.from(replay.matchAll(/^id: (\d+)$/gmu), (match) => Number(match[1]))).toEqual(
+      Array.from({ length: 20 }, (_, index) => index + 1),
+    );
+
+    eventHub.publish({
+      payload: { occurredAt: '2026-08-14T12:00:01.000Z', paths: ['after-cursor.ts'], reason: 'source-change' },
+      type: 'invalidation',
+    });
+    const next = await within(readReplay(server.url, '20', 21), 500);
+    expect(next).toContain('"paths":["after-cursor.ts"]');
+    expect(next).not.toContain('"paths":["replay-20.ts"');
+  } finally {
+    await server.close();
+  }
+});
+
 it('drains queued replay events in sequence after a healthy client clears backpressure', async () => {
   const eventHub = new ProjectEventHub({ now: () => new Date('2026-08-14T12:00:00.000Z') });
   eventHub.publish({
@@ -685,7 +717,7 @@ it('does not bind after close races a delayed startup', async () => {
   }
 });
 
-it('closes and releases a slow SSE client after sustained write backpressure', async () => {
+it('closes and releases a paused SSE client after its outstanding bytes exceed the cap', async () => {
   const eventHub = new ProjectEventHub({ now: () => new Date('2026-08-14T12:00:00.000Z') });
   const server = await startForegroundServer({ coordinator: new RecordingCoordinator(), eventHub, port: 0 });
   const stream = openLiveStream(server.url);
@@ -693,16 +725,22 @@ it('closes and releases a slow SSE client after sustained write backpressure', a
   try {
     await expect(within(stream.opened, 250)).resolves.toBeUndefined();
     stream.pause();
-    for (const index of [0, 1, 2, 3]) {
-      eventHub.publish({
-        payload: {
-          occurredAt: '2026-08-14T12:00:00.000Z',
-          paths: [`slow-${index}.ts`, 'x'.repeat(128 * 1024)],
-          reason: 'source-change',
-        },
-        type: 'invalidation',
-      });
-    }
+    eventHub.publish({
+      payload: {
+        occurredAt: '2026-08-14T12:00:00.000Z',
+        paths: ['current-buffer.ts', 'x'.repeat(200 * 1024)],
+        reason: 'source-change',
+      },
+      type: 'invalidation',
+    });
+    eventHub.publish({
+      payload: {
+        occurredAt: '2026-08-14T12:00:00.000Z',
+        paths: ['queued-frame.ts', 'x'.repeat(100 * 1024)],
+        reason: 'source-change',
+      },
+      type: 'invalidation',
+    });
 
     await expect(eventually(() => eventHub.subscriptionCount === 0, 250)).resolves.toBeUndefined();
   } finally {
