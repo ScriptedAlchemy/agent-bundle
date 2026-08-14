@@ -1,8 +1,11 @@
+import { readFile } from 'node:fs/promises';
 import { extname, resolve } from 'node:path';
 
 import type { TargetHookEntry } from '../adapters/types.ts';
 import type { NormalizedMcpServer, NormalizedScript } from '../core/types.ts';
+import { stableJson } from '../core/digest.ts';
 import { resolveArtifactDestination } from './emit.ts';
+import type { CompiledMcpApp } from './mcp-apps.ts';
 import { buildWithRslib } from './rslib.ts';
 
 export interface CompiledEntry {
@@ -107,15 +110,41 @@ export const planCompiledMcpEntries = (
 
 export const compileMcpEntries = async (
   servers: readonly NormalizedMcpServer[],
-  options: { readonly cwd: string; readonly outDir: string; readonly target: string },
+  options: {
+    readonly apps?: readonly CompiledMcpApp[];
+    readonly cwd: string;
+    readonly outDir: string;
+    readonly target: string;
+  },
 ): Promise<readonly CompiledMcpEntry[]> => {
   const compiled = planCompiledMcpEntries(servers, options);
+  const virtualSources = await Promise.all(compiled.map(async (entry) => {
+    const records = await Promise.all((options.apps ?? [])
+      .filter((app) => app.serverId === entry.id)
+      .map(async (app) => ({
+        ...(app._meta === undefined ? {} : { _meta: app._meta }),
+        html: await readFile(app.output, 'utf8'),
+        mimeType: app.mimeType,
+        name: app.name,
+        resourceUri: app.resourceUri,
+      })));
+    return [
+      `const mcpApps = Object.freeze(${stableJson(records)});`,
+      'export { mcpApps };',
+      'export default mcpApps;',
+      '',
+    ].join('\n');
+  }));
   await buildWithRslib({
     cwd: options.cwd,
-    entries: compiled.map(({ name, source }) => ({
+    entries: compiled.map(({ name, source }, index) => ({
       name,
       outputRelativePath: `mcp/${name}.mjs`,
       source,
+      virtualModules: [{
+        name: 'agent-bundle/mcp-apps',
+        source: virtualSources[index]!,
+      }],
     })),
     outputRoot: options.outDir,
   });

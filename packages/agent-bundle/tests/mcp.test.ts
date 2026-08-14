@@ -557,6 +557,96 @@ it('bundles each local MCP entry once and maps every target manifest to that art
   }
 }, 30_000);
 
+it('builds one deterministic self-contained MCP App view and injects it through the virtual module', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-mcp-app-build-'));
+  try {
+    await mkdir(join(root, 'src'), { recursive: true });
+    await mkdir(join(root, 'views'), { recursive: true });
+    await writeFile(join(root, 'src', 'server.ts'), [
+      "import apps from 'agent-bundle/mcp-apps';",
+      'export const bundledApps = apps;',
+      '',
+    ].join('\n'));
+    await writeFile(join(root, 'views', 'dashboard.ts'), [
+      "import './dashboard.css';",
+      "document.querySelector('#view')!.textContent = 'dashboard-ready';",
+      '',
+    ].join('\n'));
+    await writeFile(join(root, 'views', 'dashboard.css'), '#view { color: rebeccapurple; }\n');
+    await writeFile(join(root, 'views', 'shell.html'), '<!doctype html><html><body><main id="view"></main></body></html>\n');
+    const model = await normalizeProject(
+      loadedProject(root, {
+        mcp: {
+          servers: {
+            fixture: {
+              apps: {
+                dashboard: {
+                  _meta: { ui: { prefersBorder: true } },
+                  entry: './views/dashboard.ts',
+                  resourceUri: 'ui://agent-bundle/dashboard-v1.html',
+                  template: './views/shell.html',
+                },
+              },
+              entry: './src/server.ts',
+            },
+          },
+        },
+        plugin: { name: 'mcp-app-build', version: '1.0.0' },
+        targets: ['portable'],
+      }),
+      { skills: [] },
+      registry,
+    );
+    const outputRoot = join(root, 'dist');
+    const result = await build({
+      model,
+      outputRoot,
+      projectRoot: root,
+      registry: createDefaultRegistry(),
+    });
+    const compiled = (result as unknown as {
+      readonly compiledMcpApps: readonly {
+        readonly id: string;
+        readonly name: string;
+        readonly output: string;
+        readonly resourceUri: string;
+        readonly target: string;
+      }[];
+    }).compiledMcpApps;
+    expect(compiled).toMatchObject([
+      {
+        _meta: { ui: { prefersBorder: true } },
+        id: 'mcp-app:fixture:dashboard',
+        mimeType: 'text/html;profile=mcp-app',
+        name: 'dashboard',
+        output: join(outputRoot, 'portable', 'mcp-apps', 'dashboard.html'),
+        resourceUri: 'ui://agent-bundle/dashboard-v1.html',
+        serverId: 'mcp:fixture',
+        source: join(root, 'views', 'dashboard.ts'),
+        target: 'portable',
+      },
+    ]);
+    const html = await readFile(join(outputRoot, 'portable', 'mcp-apps', 'dashboard.html'), 'utf8');
+    expect(html).toContain('dashboard-ready');
+    expect(html).toContain('<script');
+    expect(html).toContain('<style');
+    expect(html).not.toMatch(/<(?:script|link)\b[^>]+(?:src|href)=/iu);
+    expect(await readdir(join(outputRoot, 'portable', 'mcp-apps'))).toEqual(['dashboard.html']);
+    const serverBundle = await readFile(join(outputRoot, 'portable', 'mcp', 'mcp-fixture-f16d05ec.mjs'), 'utf8');
+    expect(serverBundle).toContain('ui://agent-bundle/dashboard-v1.html');
+    expect(serverBundle).toContain('text/html;profile=mcp-app');
+    expect(serverBundle).toContain('prefersBorder');
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+}, 30_000);
+
+it('rejects the MCP Apps virtual module outside Agent Bundle compilation', async () => {
+  await expect(import('../src/mcp-apps.ts')).rejects.toThrow(
+    'agent-bundle/mcp-apps is available only while Agent Bundle compiles a local MCP server.',
+  );
+});
+
 it('uses the selected remote manifest with propagated cancellation and cleans data before rejecting tampering', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-mcp-remote-'));
   try {

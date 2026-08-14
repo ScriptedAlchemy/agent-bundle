@@ -24,10 +24,18 @@
     "./eval": {
       "types": "./dist/eval/index.d.ts",
       "import": "./dist/eval.js"
+    },
+    "./mcp-apps": {
+      "types": "./dist/mcp-apps.d.ts",
+      "import": "./dist/mcp-apps.js"
     }
   },
   "dependencies": {
     "@modelcontextprotocol/client": "2.0.0",
+    "@rsbuild/core": "2.1.13",
+    "@rsbuild/plugin-react": "2.1.0",
+    "@rslib/core": "0.23.2",
+    "@rspack/core": "2.1.10",
     "@rstackjs/load-config": "0.1.2",
     "ajv": "8.20.0",
     "ajv-formats": "3.0.1",
