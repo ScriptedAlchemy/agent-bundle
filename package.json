@@ -26,8 +26,10 @@
     "@rspack/core": "2.1.10",
     "@rstest/adapter-rslib": "0.11.8",
     "@rstest/core": "0.11.8",
+    "@rstest/playwright": "0.11.8",
     "@types/node": "26.2.0",
     "commander": "15.0.0",
+    "playwright": "1.62.1",
     "typescript": "7.0.2"
   }
 }

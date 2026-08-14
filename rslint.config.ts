@@ -8,9 +8,10 @@ export default defineConfig([
   js.configs.recommended,
   ts.configs.recommended,
   {
-    files: ['scripts/**/*.mjs'],
+    files: ['scripts/**/*.mjs', 'packages/workbench/scripts/**/*.mjs'],
     languageOptions: {
       globals: {
+        console: 'readonly',
         process: 'readonly',
       },
     },
