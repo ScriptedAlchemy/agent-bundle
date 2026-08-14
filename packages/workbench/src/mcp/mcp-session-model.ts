@@ -71,6 +71,7 @@ export type McpBrowserSessionTimelineEntry =
   | McpBrowserSessionInvocationTimelineEntry;
 
 export interface McpBrowserSessionTimeline {
+  readonly droppedThroughSequence: number;
   readonly entries: readonly McpBrowserSessionTimelineEntry[];
   readonly lastSequence: number;
 }
@@ -107,6 +108,8 @@ export type McpBrowserSessionEvent =
   | Readonly<{ readonly diagnostic: McpBrowserSessionDiagnostic; readonly type: 'failed' }>
   | Readonly<{ readonly type: 'ready' | 'restart' | 'close' | 'closed' }>;
 
+type McpBrowserSessionEventType = McpBrowserSessionEvent['type'];
+
 const emptyCatalogs = Object.freeze({
   prompts: Object.freeze([]),
   resourceTemplates: Object.freeze([]),
@@ -114,35 +117,55 @@ const emptyCatalogs = Object.freeze({
   tools: Object.freeze([]),
 });
 
+const emptyActiveRequests: Readonly<Record<string, McpBrowserSessionActiveRequest>> = Object.freeze(Object.create(null));
+
 const secretName = /(?:api[_-]?key|authorization|cookie|credential|password|private[_-]?key|secret|token)/iu;
 
-const snapshot = <Value>(value: Value, seen = new Map<object, unknown>()): Value => {
-  if (value === null || typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean' || typeof value === 'undefined') {
+const snapshot = <Value>(
+  value: Value,
+  seen = new Map<object, unknown>(),
+  visiting = new Set<object>(),
+): Value => {
+  if (value === null || typeof value === 'string' || typeof value === 'boolean') {
     return value;
   }
-  if (typeof value !== 'object') throw new TypeError('MCP session model snapshots must be JSON-like values.');
+  if (typeof value === 'number') {
+    if (Number.isFinite(value)) return value;
+    throw new TypeError('MCP session model snapshots must contain finite JSON numbers.');
+  }
+  if (typeof value !== 'object') throw new TypeError('MCP session model snapshots must contain JSON values.');
+  if (visiting.has(value)) throw new TypeError('MCP session model snapshots must not contain cycles.');
   const known = seen.get(value);
   if (known !== undefined) return known as Value;
+  visiting.add(value);
   if (Array.isArray(value)) {
     const copy: unknown[] = [];
     seen.set(value, copy);
-    for (const item of value) copy.push(snapshot(item, seen));
-    return Object.freeze(copy) as Value;
+    try {
+      for (const item of value) copy.push(snapshot(item, seen, visiting));
+      return Object.freeze(copy) as Value;
+    } finally {
+      visiting.delete(value);
+    }
   }
   if (Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null) {
     throw new TypeError('MCP session model snapshots must be plain objects.');
   }
   const copy: Record<string, unknown> = {};
   seen.set(value, copy);
-  for (const [key, item] of Object.entries(value)) {
-    Object.defineProperty(copy, key, {
-      configurable: true,
-      enumerable: true,
-      value: snapshot(item, seen),
-      writable: true,
-    });
+  try {
+    for (const [key, item] of Object.entries(value)) {
+      Object.defineProperty(copy, key, {
+        configurable: true,
+        enumerable: true,
+        value: snapshot(item, seen, visiting),
+        writable: true,
+      });
+    }
+    return Object.freeze(copy) as Value;
+  } finally {
+    visiting.delete(value);
   }
-  return Object.freeze(copy) as Value;
 };
 
 const isReplayGap = (entry: McpSessionTraceEntry | McpSessionTraceReplayGap): entry is McpSessionTraceReplayGap =>
@@ -172,6 +195,37 @@ const update = (
   change: Partial<Omit<McpBrowserSessionModel, 'conciseTrace' | 'logs' | 'progress'>>,
 ): McpBrowserSessionModel => withViews({ ...model, ...change });
 
+const allowedEventsByPhase: Readonly<Record<McpBrowserSessionPhase, readonly McpBrowserSessionEventType[]>> = {
+  closed: [],
+  closing: ['closed'],
+  error: ['close'],
+  idle: ['open', 'close', 'failed'],
+  opening: ['connection', 'catalogs', 'config', 'trace', 'request.start', 'request.settled', 'ready', 'close', 'failed'],
+  ready: ['connection', 'catalogs', 'config', 'trace', 'request.start', 'request.settled', 'restart', 'close', 'failed'],
+  restarting: ['connection', 'catalogs', 'config', 'trace', 'request.start', 'request.settled', 'ready', 'close', 'failed'],
+};
+
+const activeRequestsWith = (
+  requests: Readonly<Record<string, McpBrowserSessionActiveRequest>>,
+  active: McpBrowserSessionActiveRequest,
+): Readonly<Record<string, McpBrowserSessionActiveRequest>> => {
+  const copy = Object.create(null) as Record<string, McpBrowserSessionActiveRequest>;
+  for (const [id, request] of Object.entries(requests)) Object.defineProperty(copy, id, { enumerable: true, value: request });
+  Object.defineProperty(copy, active.id, { enumerable: true, value: active });
+  return Object.freeze(copy);
+};
+
+const activeRequestsWithout = (
+  requests: Readonly<Record<string, McpBrowserSessionActiveRequest>>,
+  id: string,
+): Readonly<Record<string, McpBrowserSessionActiveRequest>> => {
+  const copy = Object.create(null) as Record<string, McpBrowserSessionActiveRequest>;
+  for (const [currentId, request] of Object.entries(requests)) {
+    if (currentId !== id) Object.defineProperty(copy, currentId, { enumerable: true, value: request });
+  }
+  return Object.freeze(copy);
+};
+
 const diagnosticKey = (diagnostic: McpBrowserSessionDiagnostic): string =>
   `${diagnostic.severity}\u0000${diagnostic.code}\u0000${diagnostic.message}`;
 
@@ -183,6 +237,13 @@ const withDiagnostic = (
   if (model.diagnostics.some((current) => diagnosticKey(current) === diagnosticKey(frozen))) return model;
   return update(model, { diagnostics: Object.freeze([...model.diagnostics, frozen]) });
 };
+
+const invalidTransition = (model: McpBrowserSessionModel, type: McpBrowserSessionEventType): McpBrowserSessionModel =>
+  withDiagnostic(model, {
+    code: 'mcp.lifecycle.invalid-transition',
+    message: `Ignored ${type} while session phase is ${model.phase}.`,
+    severity: 'warning',
+  });
 
 const sanitizeConfig = (config: McpSessionInspectorConfig): McpSessionInspectorConfig => {
   if (config.launch.kind !== 'stdio') {
@@ -228,18 +289,19 @@ const settledInvocation = (
 });
 
 export const createMcpBrowserSessionModel = (sessionId: string): McpBrowserSessionModel => withViews({
-  activeRequests: Object.freeze({}),
+  activeRequests: emptyActiveRequests,
   catalogs: emptyCatalogs,
   diagnostics: Object.freeze([]),
   phase: 'idle',
   sessionId,
-  timeline: Object.freeze({ entries: Object.freeze([]), lastSequence: 0 }),
+  timeline: Object.freeze({ droppedThroughSequence: 0, entries: Object.freeze([]), lastSequence: 0 }),
 });
 
 export const reduceMcpBrowserSession = (
   model: McpBrowserSessionModel,
   event: McpBrowserSessionEvent,
 ): McpBrowserSessionModel => {
+  if (!allowedEventsByPhase[model.phase].includes(event.type)) return invalidTransition(model, event.type);
   switch (event.type) {
     case 'open':
       return update(model, { binding: snapshot(event.binding), phase: 'opening' });
@@ -256,65 +318,110 @@ export const reduceMcpBrowserSession = (
     case 'close':
       return update(model, { phase: 'closing' });
     case 'closed':
-      return update(model, { activeRequests: Object.freeze({}), phase: 'closed' });
+      return update(model, { activeRequests: emptyActiveRequests, phase: 'closed' });
     case 'failed':
       return update(withDiagnostic(model, event.diagnostic), { phase: 'error' });
     case 'trace': {
       if (isReplayGap(event.entry)) {
+        const gap = snapshot(event.entry);
+        const rangeIsValid =
+          Number.isSafeInteger(gap.requestedAfterSequence)
+          && Number.isSafeInteger(gap.latestDroppedSequence)
+          && Number.isSafeInteger(gap.earliestAvailableSequence)
+          && gap.requestedAfterSequence === model.timeline.lastSequence
+          && gap.latestDroppedSequence > gap.requestedAfterSequence
+          && gap.earliestAvailableSequence === gap.latestDroppedSequence + 1;
+        if (!rangeIsValid) {
+          return withDiagnostic(model, {
+            code: 'mcp.trace.invalid-replay-gap',
+            message: `Ignored replay gap after ${gap.requestedAfterSequence} because its retained range is invalid.`,
+            severity: 'warning',
+          });
+        }
         return update(model, {
           timeline: Object.freeze({
-            entries: Object.freeze([...model.timeline.entries, snapshot(event.entry)]),
-            lastSequence: model.timeline.lastSequence,
+            droppedThroughSequence: gap.latestDroppedSequence,
+            entries: Object.freeze([...model.timeline.entries, gap]),
+            lastSequence: gap.latestDroppedSequence,
           }),
         });
       }
-      if (!Number.isSafeInteger(event.entry.sequence) || event.entry.sequence <= model.timeline.lastSequence) {
+      const entry = snapshot(event.entry);
+      if (!Number.isSafeInteger(entry.sequence) || entry.sequence <= 0) {
         return withDiagnostic(model, {
           code: 'mcp.trace.non-monotonic',
-          message: `Ignored trace sequence ${event.entry.sequence} because the current cursor is ${model.timeline.lastSequence}.`,
+          message: `Ignored trace sequence ${entry.sequence} because the current cursor is ${model.timeline.lastSequence}.`,
+          severity: 'warning',
+        });
+      }
+      if (model.timeline.droppedThroughSequence > 0 && entry.sequence <= model.timeline.droppedThroughSequence) {
+        return withDiagnostic(model, {
+          code: 'mcp.trace.dropped',
+          message: `Ignored trace sequence ${entry.sequence} because it was dropped through ${model.timeline.droppedThroughSequence}.`,
+          severity: 'warning',
+        });
+      }
+      if (entry.sequence <= model.timeline.lastSequence) {
+        return withDiagnostic(model, {
+          code: 'mcp.trace.non-monotonic',
+          message: `Ignored trace sequence ${entry.sequence} because the current cursor is ${model.timeline.lastSequence}.`,
+          severity: 'warning',
+        });
+      }
+      const expectedSequence = model.timeline.lastSequence + 1;
+      if (entry.sequence !== expectedSequence) {
+        return withDiagnostic(model, {
+          code: 'mcp.trace.gap-required',
+          message: `Expected trace sequence ${expectedSequence} but received ${entry.sequence}; an explicit replay gap is required.`,
           severity: 'warning',
         });
       }
       return update(model, {
         timeline: Object.freeze({
-          entries: Object.freeze([...model.timeline.entries, snapshot(event.entry)]),
-          lastSequence: event.entry.sequence,
+          droppedThroughSequence: model.timeline.droppedThroughSequence,
+          entries: Object.freeze([...model.timeline.entries, entry]),
+          lastSequence: entry.sequence,
         }),
       });
     }
     case 'request.start': {
-      if (model.activeRequests[event.request.id] !== undefined) {
+      if (Object.hasOwn(model.activeRequests, event.request.id)) {
         return withDiagnostic(model, {
           code: 'mcp.request.duplicate',
           message: `Ignored duplicate active request ${event.request.id}.`,
           severity: 'warning',
         });
       }
+      const binding = event.request.binding ?? model.binding;
       const active = snapshot({
-        ...event.request,
-        ...(event.request.binding === undefined && model.binding !== undefined ? { binding: model.binding } : {}),
+        ...(binding === undefined ? {} : { binding }),
+        id: event.request.id,
+        operation: event.request.operation,
+        ...(event.request.replayOf === undefined ? {} : { replayOf: event.request.replayOf }),
+        request: event.request.request,
+        startedAt: event.request.startedAt,
       });
       return update(model, {
-        activeRequests: Object.freeze({ ...model.activeRequests, [active.id]: active }),
+        activeRequests: activeRequestsWith(model.activeRequests, active),
       });
     }
     case 'request.settled': {
-      const active = model.activeRequests[event.id];
-      if (active === undefined) {
+      if (!Object.hasOwn(model.activeRequests, event.id)) {
         return withDiagnostic(model, {
           code: 'mcp.request.unknown',
           message: `Ignored settlement for unknown request ${event.id}.`,
           severity: 'warning',
         });
       }
-      const { [event.id]: _settled, ...remaining } = model.activeRequests;
+      const active = model.activeRequests[event.id];
       const invocation: McpBrowserSessionInvocationTimelineEntry = snapshot({
         invocation: settledInvocation(active, event),
         type: 'invocation' as const,
       });
       return update(model, {
-        activeRequests: Object.freeze(remaining),
+        activeRequests: activeRequestsWithout(model.activeRequests, event.id),
         timeline: Object.freeze({
+          droppedThroughSequence: model.timeline.droppedThroughSequence,
           entries: Object.freeze([...model.timeline.entries, invocation]),
           lastSequence: model.timeline.lastSequence,
         }),
