@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build a runnable dual-host plugin example in which Claude Code and Codex lifecycle hooks render through a real Rsbuild RSC Flight boundary, share external state with a static MCP server, and expose that state through a React MCP App.
+**Goal:** Build a runnable, strictly opt-in dual-host plugin example in which Claude Code and Codex lifecycle hooks render through a real Rsbuild RSC Flight boundary, share external state with a static MCP server, and expose that state through a React MCP App, without changing how ordinary Agent Bundle skills, MCPs, evaluations, or plain hooks work.
 
 **Architecture:** Disposable hook commands normalize native input, ask a Node RSC worker to mutate/read a file-backed kernel and render a Flight stream, decode that stream, and lower its React result tree to native host JSON. A separately registered MCP server reads the same kernel, optionally renders protocol-native MCP results through the same RSC worker, and serves a statically built client React timeline over the MCP Apps resource contract.
 
@@ -11,6 +11,9 @@
 ## Global Constraints
 
 - Keep the experiment under `examples/rsc-agent-runtime`; do not change the `agent-bundle` public API or compiler behavior.
+- Keep the runtime supplemental and explicitly opt-in. No source under `packages/agent-bundle` may
+  import the example or require React/RSC packages or runtime configuration for existing skills,
+  static MCPs, evaluations, or normal hook builds.
 - Pin `react`, `react-dom`, `react-server-dom-rspack`, and `rsbuild-plugin-rsc` to exact versions.
 - Register every MCP tool and resource before connecting a transport; rendering must never discover or add tools.
 - Use `renderToReadableStream` from `react-server-dom-rspack/server.node` and `createFromReadableStream` from `react-server-dom-rspack/client.node`; do not substitute JSON for the Flight boundary.
@@ -352,10 +355,17 @@ examples/rsc-agent-runtime/
 - [ ] **Step 5: Configure Rsbuild's real RSC and Node decoder environments**
 
   Use `pluginReact()` and `pluginRSC({ environments: { server: 'rsc', client: 'widget' } })`.
-  Configure `rsc` with `worker.tsx` in `Layers.rsc`, Node target, and `dist/rsc`. Configure `hook`
-  as a separate Node target at `dist/hook`. Configure a temporary browser `widget` client anchor at
-  `dist/widget`; Task 3 replaces that anchor with the real app entry. Use stable, unhashed entry
-  filenames for process launches.
+  Configure one paired Node server compiler named `rsc` with separate `rsc/index` and `hook/index`
+  entries; put only `worker.tsx` in `Layers.rsc`. Configure the paired browser compiler named
+  `widget` with matching inert `rsc/index` and `hook/index` client anchors so the emitted Node hook
+  receives the generated `serverConsumerModuleMap`. Keep this paired client compiler as manifest
+  machinery; Task 3 must not replace it with the visible app. Use stable, unhashed entry filenames
+  so the result is still two independent Node executables at `dist/rsc/index.js` and
+  `dist/hook/index.js`.
+
+  Under `tools.rspack.module.rules`, add exactly one rule matching
+  `src/flight/request-render.ts` with `parser: { importMeta: { url: false } }`. Do not use a global
+  parser override: runtime-relative worker launching needs preservation only in that launcher.
 
 - [ ] **Step 6: Run the focused test twice and typecheck**
 
@@ -440,6 +450,9 @@ examples/rsc-agent-runtime/
   `StreamableHTTPClientTransport` to `/mcp`, and repeat the tool/resource list assertions. Close the
   client and server and assert the child exits cleanly.
 
+  Also assert `dist/app/edit-timeline-v1.html` and `dist/app/standalone.html` each contain their
+  JavaScript and CSS inline and do not reference external app bundle assets.
+
 - [ ] **Step 3: Run focused tests and verify red**
 
   Run:
@@ -500,13 +513,20 @@ examples/rsc-agent-runtime/
 
 - [ ] **Step 7: Emit the static manifest and self-contained widget resources from Rsbuild**
 
-  Point the `widget` environment at `src/widget/index.tsx`. Add Node `mcp-stdio` and `mcp-http`
-  environments. Add an Rsbuild `onAfterBuild` plugin that:
+  Add `mcp/stdio` and `mcp/http` as separate Node entries in the existing `rsc` server compiler so
+  both Flight decoders receive the generated RSC consumer manifest. Add matching inert entries to
+  the paired `widget` client compiler. Keep the worker launcher's module-rule parser override scoped
+  to `src/flight/request-render.ts`.
 
-  1. serializes `runtimeDefinition` to `dist/agent-runtime.manifest.json`;
-  2. reads the stable widget JS/CSS filenames;
-  3. emits `dist/app/edit-timeline-v1.html` with one root, inline CSS, and inline module script;
-  4. emits `dist/app/standalone.html` with the same bundle and standalone marker.
+  Create a separate ordinary browser environment named `app`; it is not the RSC plugin client
+  environment. Give it `edit-timeline-v1` and `standalone` entries pointing to
+  `src/widget/index.tsx`, target `web`, and output root `dist/app`. Use Rsbuild's native production
+  settings `output.inlineScripts: true`, `output.inlineStyles: true`, and `html.inject: 'body'` so
+  Rsbuild directly emits self-contained `edit-timeline-v1.html` and `standalone.html`. Do not read,
+  concatenate, or rewrite emitted JavaScript or CSS by hand.
+
+  Add a build plugin only to serialize `runtimeDefinition` to
+  `dist/agent-runtime.manifest.json`; it must not manufacture the app HTML.
 
   The generated manifest must record each executable relative path, exact tool JSON schemas, hook
   matchers, resource MIME/URI/metadata, and `schemaVersion: 1`.
@@ -566,6 +586,10 @@ examples/rsc-agent-runtime/
 
   Reject `PLUGIN_ROOT`, `PLUGIN_DATA`, or workspace placeholders anywhere in `.mcp.codex.json`.
   Assert hook commands select the correct `--host` and neither config mentions an API key.
+
+  Assert the supplemental-runtime boundary: `packages/agent-bundle/package.json` has no React,
+  `react-server-dom-rspack`, or `rsbuild-plugin-rsc` runtime/peer/optional dependency, and no source
+  under `packages/agent-bundle/src` imports from this example or those RSC packages.
 
 - [ ] **Step 2: Run the focused test and verify red**
 
@@ -642,7 +666,9 @@ examples/rsc-agent-runtime/
   - the distinction between locally validated MCP App HTTP/resource/browser behavior and an actual
     ChatGPT Developer Mode connection;
   - source links for Rsbuild RSC, MCP Apps, OpenAI plugin UI, Codex hooks, and Claude hooks;
-  - known limitations of JSONL storage and exact RSC package pins.
+  - known limitations of JSONL storage and exact RSC package pins;
+  - an explicit opt-in section explaining that existing Agent Bundle skills, static MCPs,
+    evaluations, and normal hooks do not require or activate this runtime.
 
 - [ ] **Step 7: Validate static packaging and run all deterministic checks**
 
@@ -696,6 +722,8 @@ examples/rsc-agent-runtime/
 - [ ] Run fresh TraceDecay diagnostics for the worktree.
 - [ ] Run `npm run check -w @agent-bundle/rsc-agent-runtime-demo`.
 - [ ] Run root `npm run check`.
+- [ ] Confirm the published `agent-bundle` package has no dependency/import/configuration edge to the
+      example or its React/RSC packages.
 - [ ] Run `claude plugin validate --strict examples/rsc-agent-runtime`.
 - [ ] Run the stdio and Streamable HTTP integration tests with open-handle detection.
 - [ ] Run the widget capture at desktop and mobile widths and inspect both screenshots against the accepted concept.

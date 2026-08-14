@@ -13,6 +13,9 @@ than a JavaScript singleton, provides authoritative cross-process state.
 
 The demo is deliberately outside `packages/agent-bundle`. It explores a possible future authoring
 model without changing the compiler's public API or claiming the experiment is production-ready.
+It is an opt-in supplement, not a replacement execution model: ordinary skills, static MCPs,
+evaluations, and native hooks continue to work without React, RSC, this example, or any runtime
+configuration.
 
 The example is an edit timeline. Claude Code and Codex `PostToolUse` hooks record file edits. MCP
 tools read the same state, can render protocol-native multimodal results through RSC, and expose a
@@ -174,10 +177,21 @@ process and disposable hook processes converge on one authoritative file.
 
 Rsbuild 2.1 and `rsbuild-plugin-rsc` compile coordinated environments:
 
-- `rsc`: Node RSC worker entry in `Layers.rsc`;
-- `hook`: Node host adapter and Flight decoder;
-- `mcp`: Node stdio and Streamable HTTP entries;
-- `widget`: browser React bundle and the RSC plugin's client environment.
+- `rsc`: the RSC plugin's Node server compiler, containing separate stable entries for the worker,
+  hook adapter, and later the stdio/HTTP MCP consumers;
+- `widget`: the RSC plugin's paired browser client compiler, containing matching inert anchors so
+  Rspack can generate the consumer manifests needed by each Node Flight decoder;
+- `app`: an ordinary, unpaired browser environment for the visible React MCP App.
+
+The paired `rsc`/`widget` environments are protocol build machinery; the visible app never replaces
+the paired anchors. The hook, worker, and MCP entries therefore remain separately executable while
+sharing the exact Rspack-generated Flight manifest required by `client.node`.
+
+Only `src/flight/request-render.ts` preserves runtime `import.meta.url`, through a matched
+`module.rules[].parser = { importMeta: { url: false } }` override. Other modules retain Rspack's
+normal `import.meta` processing. The separate `app` environment uses Rsbuild's native
+`output.inlineScripts` and `output.inlineStyles` options to emit `edit-timeline-v1.html` and
+`standalone.html` as self-contained documents; no custom JavaScript/CSS concatenator is involved.
 
 The RSC worker uses `renderToReadableStream` from
 `react-server-dom-rspack/server.node`. Node consumers use `createFromReadableStream` from
@@ -273,6 +287,10 @@ separate claims.
 ## Boundaries
 
 - This is an example and architecture probe, not a new `agent-bundle` public API.
+- The runtime is activated only by building/running the private example. `packages/agent-bundle`
+  must not import the example or acquire React/RSC runtime, peer, or optional dependencies.
+- Existing non-RSC skills, MCP servers, evaluations, and plain hook flows remain the compatibility
+  baseline and must pass the root package checks unchanged.
 - RSC package versions are exact pins because framework-facing RSC APIs are not semver-stable.
 - The demo does not dynamically register tools or resources.
 - It does not pretend hook processes retain React state or module caches.
