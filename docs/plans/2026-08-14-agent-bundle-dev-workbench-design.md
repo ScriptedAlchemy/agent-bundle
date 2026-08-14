@@ -318,9 +318,10 @@ The workbench provides:
   and logging messages;
 - invocation history, replay, config export, raw protocol frames, and promotion to a draft eval.
 
-MCP Apps use the same selected session and artifact binding. Standard `_meta.ui.resourceUri`
-selects the View; `_meta["openai/outputTemplate"]` is accepted only as a compatibility alias. The
-service calls `resources/read` for the referenced `ui://` URI and requires
+MCP Apps use the same selected session and artifact binding. Only standard
+`_meta.ui.resourceUri` selects the View. Other host metadata, including
+`_meta["openai/outputTemplate"]`, remains visible in raw protocol data but is not synthesized or
+used as a fallback selector. The service calls `resources/read` for the referenced `ui://` URI and requires
 `text/html;profile=mcp-app`; it does not reinterpret an arbitrary web URL or artifact file as a
 widget. The browser renders the returned HTML inside a different-origin sandbox proxy and uses the
 official MCP Apps app-bridge package for the `ui/initialize` lifecycle, tool input/results,

@@ -19,7 +19,11 @@ export default defineConfig({
     externals: [
       '@modelcontextprotocol/client',
       '@modelcontextprotocol/client/stdio',
+      '@rsbuild/core',
+      '@rsbuild/plugin-react',
+      '@rslib/core',
       '@rstackjs/load-config',
+      '@rspack/core',
       'ajv',
       'ajv/dist/2020.js',
       'fast-glob',
@@ -40,6 +44,7 @@ export default defineConfig({
       config: './packages/agent-bundle/src/config/index.ts',
       eval: './packages/agent-bundle/src/eval/index.ts',
       index: './packages/agent-bundle/src/index.ts',
+      'mcp-apps': './packages/agent-bundle/src/mcp-apps.ts',
     },
   },
 });

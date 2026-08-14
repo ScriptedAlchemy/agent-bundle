@@ -51,7 +51,7 @@ interface StdioOptions {
   readonly args: string[];
   readonly command: string;
   readonly cwd?: string;
-  readonly env?: Record<string, string>;
+  readonly env: Record<string, string>;
   readonly stderr: 'pipe';
 }
 
@@ -330,18 +330,18 @@ export class McpService {
 
     const targetRoot = joinArtifact(artifact, target);
     const server = await this.#server(artifact, target, options.server);
-    const pluginData = await mkdtemp(resolve(tmpdir(), 'agent-bundle-mcp-'));
-    const roots = {
-      pluginData,
-      pluginRoot: targetRoot,
-      workspaceRoot: resolve(options.workspaceRoot ?? process.cwd()),
-    };
     const requestOptions: RequestOptions = { signal: options.signal, timeout: timeoutFor(options) };
     const client = this.#createClient();
     let capture: StderrCapture | undefined;
     let closed = false;
+    const pluginData = await mkdtemp(resolve(tmpdir(), 'agent-bundle-mcp-'));
 
     try {
+      const roots = {
+        pluginData,
+        pluginRoot: targetRoot,
+        workspaceRoot: resolve(options.workspaceRoot ?? process.cwd()),
+      };
       const transport = this.#transport(server, target, targetRoot, roots, (nextCapture) => {
         capture = nextCapture;
       });
@@ -440,7 +440,7 @@ export class McpService {
         args,
         command: expandTokens(server.command, target, roots),
         ...(cwd === undefined ? {} : { cwd }),
-        ...(env === undefined ? {} : { env: { ...inheritedEnv, ...env } }),
+        env: { ...inheritedEnv, ...env },
         stderr: 'pipe',
       });
       setCapture(captureStderr(transport.stderr, () => transport.close()));

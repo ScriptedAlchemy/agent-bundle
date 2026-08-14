@@ -1,11 +1,18 @@
 import { createRslib } from '@rslib/core';
 import { rspack } from '@rspack/core';
+import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+export interface RslibVirtualModule {
+  readonly name: string;
+  readonly source: string;
+}
 
 export interface RslibEntry {
   readonly name: string;
   readonly outputRelativePath: string;
   readonly source: string;
+  readonly virtualModules?: readonly RslibVirtualModule[];
   readonly virtualSource?: string;
 }
 
@@ -17,12 +24,14 @@ interface RslibDependencies {
 
 const entryAnchor = fileURLToPath(import.meta.url);
 
-const assertVirtualHookConfig = (
+const assertVirtualConfig = (
   entries: readonly RslibEntry[],
   configs: readonly { readonly output?: { readonly asyncChunks?: boolean; readonly path?: string }; readonly plugins?: readonly unknown[]; readonly target?: false | string | readonly string[] }[],
   outputRoot: string,
 ): void => {
-  const virtualEntries = entries.filter((entry) => entry.virtualSource !== undefined);
+  const virtualEntries = entries.filter(
+    (entry) => entry.virtualSource !== undefined || (entry.virtualModules?.length ?? 0) > 0,
+  );
   if (virtualEntries.length === 0) return;
   if (configs.length !== entries.length) {
     throw new Error('Rslib did not resolve one environment for every generated executable.');
@@ -30,13 +39,13 @@ const assertVirtualHookConfig = (
   for (const config of configs) {
     const target = Array.isArray(config.target) ? config.target : [config.target];
     if (config.output?.asyncChunks !== false || config.output.path !== outputRoot || !target.some((value) => value === 'node')) {
-      throw new Error('Rslib resolved an invalid generated-hook executable configuration.');
+      throw new Error('Rslib resolved an invalid generated executable configuration.');
     }
     const hasVirtualModule = config.plugins?.some(
       (plugin) => plugin instanceof rspack.experiments.VirtualModulesPlugin,
     );
     if (!hasVirtualModule) {
-      throw new Error('Rslib resolved a generated-hook environment without its virtual module.');
+      throw new Error('Rslib resolved a generated executable environment without its virtual module.');
     }
   }
 };
@@ -55,6 +64,11 @@ export const buildWithRslib = async (options: {
     config: {
       lib: options.entries.map((entry) => {
         const virtualSource = entry.virtualSource;
+        const virtualModules = (entry.virtualModules ?? []).map((module, index) => ({
+          ...module,
+          path: resolve(options.outputRoot, '.agent-bundle-virtual', `${entry.name}-${index}.mjs`),
+        }));
+        const hasVirtualModules = virtualSource !== undefined || virtualModules.length > 0;
         return {
           id: `agent-bundle-${entry.name}`,
           autoExternal: false,
@@ -78,14 +92,19 @@ export const buildWithRslib = async (options: {
               [entry.name]: virtualSource === undefined ? entry.source : entryAnchor,
             },
           },
-          ...(virtualSource === undefined
+          ...(!hasVirtualModules
             ? {}
             : {
                 tools: {
                   rspack: (config) => {
                     config.output.asyncChunks = false;
+                    config.resolve.alias = {
+                      ...config.resolve.alias,
+                      ...Object.fromEntries(virtualModules.map((module) => [module.name, module.path])),
+                    };
                     config.plugins.push(new rspack.experiments.VirtualModulesPlugin({
-                      [entryAnchor]: virtualSource,
+                      ...(virtualSource === undefined ? {} : { [entryAnchor]: virtualSource }),
+                      ...Object.fromEntries(virtualModules.map((module) => [module.path, module.source])),
                     }));
                   },
                 },
@@ -96,7 +115,7 @@ export const buildWithRslib = async (options: {
   });
 
   const inspection = await rslib.inspectConfig();
-  assertVirtualHookConfig(options.entries, inspection.origin.bundlerConfigs, options.outputRoot);
+  assertVirtualConfig(options.entries, inspection.origin.bundlerConfigs, options.outputRoot);
   let result: Awaited<ReturnType<typeof rslib.build>> | undefined;
   try {
     result = await rslib.build();

@@ -19,7 +19,16 @@ export interface AgentBundleHookEntry {
 
 export type McpTransport = 'stdio' | 'streamable-http' | 'sse';
 
+export interface AgentBundleMcpApp {
+  _meta?: Readonly<Record<string, unknown>>;
+  entry: string;
+  resourceUri: string;
+  targets?: readonly string[];
+  template?: string;
+}
+
 export interface AgentBundleMcpServer {
+  apps?: Readonly<Record<string, AgentBundleMcpApp>>;
   args?: readonly string[];
   command?: string;
   cwd?: string;
@@ -112,6 +121,21 @@ export interface NormalizedMcpServer {
   readonly url?: string;
 }
 
+export interface NormalizedMcpApp {
+  readonly _meta?: Readonly<Record<string, unknown>>;
+  readonly id: string;
+  readonly name: string;
+  readonly provenance: SourceProvenance;
+  readonly resourceUri: string;
+  readonly serverId: string;
+  readonly serverName: string;
+  /** Absolute browser entry source path. */
+  readonly source: string;
+  readonly targets: readonly string[];
+  /** Absolute optional HTML shell template path. */
+  readonly template?: string;
+}
+
 export interface NormalizedScript {
   readonly id: string;
   readonly name: string;
@@ -145,6 +169,12 @@ export interface NormalizedPlugin {
   readonly marketplace?: true;
   readonly metadata: NormalizedMetadata;
   readonly mcpServers: readonly NormalizedMcpServer[];
+  /**
+   * Compiler-owned local MCP Apps. Normalizers always provide this collection;
+   * it remains optional so pre-Apps consumers can continue to provide a
+   * hand-constructed normalized model.
+   */
+  readonly mcpApps?: readonly NormalizedMcpApp[];
   readonly nativeHooks?: readonly NormalizedNativeHook[];
   readonly scripts: readonly NormalizedScript[];
   readonly skills: readonly NormalizedSkill[];

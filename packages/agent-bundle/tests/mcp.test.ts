@@ -3,6 +3,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { expect, it } from '@rstest/core';
+import { Client } from '@modelcontextprotocol/client';
+import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 
 import { createDefaultRegistry, TargetRegistry } from '../src/adapters/registry.ts';
 import { build } from '../src/build/build.ts';
@@ -142,6 +144,73 @@ it('normalizes local, prebuilt, HTTP, and SSE MCP server declarations', async ()
   }
 });
 
+it('normalizes deeply frozen local MCP App declarations independently of the project root', async () => {
+  const firstRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-mcp-app-first-'));
+  const secondRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-mcp-app-second-'));
+  const config = {
+    mcp: {
+      servers: {
+        fixture: {
+          apps: {
+            dashboard: {
+              _meta: { ui: { prefersBorder: true }, 'x-fixture': { stable: true } },
+              entry: './views/dashboard.ts',
+              resourceUri: 'ui://agent-bundle/dashboard-v1.html',
+              targets: ['claude'],
+              template: './views/shell.html',
+            },
+          },
+          entry: './src/server.ts',
+          targets: ['portable', 'claude'],
+        },
+      },
+    },
+    plugin: { name: 'mcp-app-fixture', version: '1.0.0' },
+    targets: ['portable', 'claude'],
+  } as unknown as AgentBundleConfig;
+  try {
+    for (const root of [firstRoot, secondRoot]) {
+      await mkdir(join(root, 'src'), { recursive: true });
+      await mkdir(join(root, 'views'), { recursive: true });
+      await writeFile(join(root, 'src', 'server.ts'), 'export {};\n');
+      await writeFile(join(root, 'views', 'dashboard.ts'), 'document.body.textContent = "dashboard";\n');
+      await writeFile(join(root, 'views', 'shell.html'), '<!doctype html><html><body><div id="root"></div></body></html>\n');
+    }
+    const [first, second] = await Promise.all([
+      normalizeProject(loadedProject(firstRoot, config), { skills: [] }, registry),
+      normalizeProject(loadedProject(secondRoot, config), { skills: [] }, registry),
+    ]);
+    const firstApp = (first as unknown as { readonly mcpApps: readonly Record<string, unknown>[] }).mcpApps[0]!;
+    const secondApp = (second as unknown as { readonly mcpApps: readonly Record<string, unknown>[] }).mcpApps[0]!;
+    expect(firstApp).toMatchObject({
+      _meta: { ui: { prefersBorder: true }, 'x-fixture': { stable: true } },
+      id: 'mcp-app:fixture:dashboard',
+      name: 'dashboard',
+      resourceUri: 'ui://agent-bundle/dashboard-v1.html',
+      serverId: 'mcp:fixture',
+      serverName: 'fixture',
+      source: join(firstRoot, 'views', 'dashboard.ts'),
+      targets: ['claude'],
+      template: join(firstRoot, 'views', 'shell.html'),
+    });
+    expect(Object.isFrozen(firstApp)).toBe(true);
+    expect(Object.isFrozen(firstApp._meta)).toBe(true);
+    expect(Object.isFrozen((firstApp._meta as { readonly ui: unknown }).ui)).toBe(true);
+    const portableIdentity = (app: Record<string, unknown>) => ({
+      ...app,
+      provenance: { ...(app.provenance as Record<string, unknown>), sourcePath: '<root>' },
+      source: '<root>',
+      template: '<root>',
+    });
+    expect(portableIdentity(firstApp)).toEqual(portableIdentity(secondApp));
+  } finally {
+    await Promise.all([
+      rm(firstRoot, { force: true, recursive: true }),
+      rm(secondRoot, { force: true, recursive: true }),
+    ]);
+  }
+});
+
 it('keeps local MCP server identities and output aliases independent of the project root', async () => {
   const left = await mkdtemp(join(tmpdir(), 'agent-bundle-mcp-left-'));
   const right = await mkdtemp(join(tmpdir(), 'agent-bundle-mcp-right-'));
@@ -226,6 +295,99 @@ it('reports source and model diagnostics before an MCP server can be compiled', 
     expect(validateModel(unsafe, registry)).toMatchObject([
       { code: 'AB4320', target: 'unknown' },
       { code: 'AB4321' },
+    ]);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('rejects unsafe, duplicate, and nonlocal MCP App declarations before browser compilation', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-mcp-app-invalid-'));
+  try {
+    await mkdir(join(root, 'src'), { recursive: true });
+    await mkdir(join(root, 'views'), { recursive: true });
+    await writeFile(join(root, 'src', 'server.ts'), 'export {};\n');
+    await writeFile(join(root, 'src', 'other.ts'), 'export {};\n');
+    await writeFile(join(root, 'views', 'dashboard.ts'), 'document.body.textContent = "dashboard";\n');
+
+    const malformed = {
+      mcp: {
+        servers: {
+          fixture: {
+            apps: {
+              dashboard: {
+                entry: './views/dashboard.ts',
+                resourceUri: 'ui://agent-bundle/dashboard-v1.html',
+                targets: ['portable'],
+              },
+              'not_stable': {
+                _meta: [],
+                entry: './views/missing.ts',
+                resourceUri: 'https://example.test/not-ui',
+                template: './views/missing.txt',
+              },
+              malformed: [],
+            },
+            entry: './src/server.ts',
+            targets: ['claude'],
+          },
+          other: {
+            apps: {
+              dashboard: {
+                entry: './views/dashboard.ts',
+                resourceUri: 'ui://agent-bundle/dashboard-v1.html',
+              },
+            },
+            entry: './src/other.ts',
+          },
+          prebuilt: {
+            apps: {},
+            command: 'fixture-server',
+          },
+        },
+      },
+      plugin: { name: 'mcp-app-invalid', version: '1.0.0' },
+    } as unknown as AgentBundleConfig;
+
+    expect(validateSource(loadedProject(root, malformed), { skills: [] }).map(({ code }) => code)).toEqual(
+      expect.arrayContaining([
+        'AB4322',
+        'AB4324',
+        'AB4325',
+        'AB4326',
+        'AB4328',
+        'AB4329',
+        'AB4330',
+        'AB4332',
+        'AB4334',
+        'AB4335',
+      ]),
+    );
+
+    const normalized = await normalizeProject(
+      loadedProject(root, {
+        mcp: {
+          servers: {
+            fixture: {
+              apps: {
+                dashboard: {
+                  entry: './views/dashboard.ts',
+                  resourceUri: 'ui://agent-bundle/dashboard-v1.html',
+                },
+              },
+              entry: './src/server.ts',
+              targets: ['unknown'],
+            },
+          },
+        },
+        plugin: { name: 'mcp-app-invalid', version: '1.0.0' },
+      }),
+      { skills: [] },
+      registry,
+    );
+    expect(validateModel(normalized, registry)).toMatchObject([
+      { code: 'AB4320', target: 'unknown' },
+      { code: 'AB4336', target: 'unknown' },
     ]);
   } finally {
     await rm(root, { force: true, recursive: true });
@@ -397,6 +559,96 @@ it('bundles each local MCP entry once and maps every target manifest to that art
   }
 }, 30_000);
 
+it('builds one deterministic self-contained MCP App view and injects it through the virtual module', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-mcp-app-build-'));
+  try {
+    await mkdir(join(root, 'src'), { recursive: true });
+    await mkdir(join(root, 'views'), { recursive: true });
+    await writeFile(join(root, 'src', 'server.ts'), [
+      "import apps from 'agent-bundle/mcp-apps';",
+      'export const bundledApps = apps;',
+      '',
+    ].join('\n'));
+    await writeFile(join(root, 'views', 'dashboard.ts'), [
+      "import './dashboard.css';",
+      "document.querySelector('#view')!.textContent = 'dashboard-ready';",
+      '',
+    ].join('\n'));
+    await writeFile(join(root, 'views', 'dashboard.css'), '#view { color: rebeccapurple; }\n');
+    await writeFile(join(root, 'views', 'shell.html'), '<!doctype html><html><body><main id="view"></main></body></html>\n');
+    const model = await normalizeProject(
+      loadedProject(root, {
+        mcp: {
+          servers: {
+            fixture: {
+              apps: {
+                dashboard: {
+                  _meta: { ui: { prefersBorder: true } },
+                  entry: './views/dashboard.ts',
+                  resourceUri: 'ui://agent-bundle/dashboard-v1.html',
+                  template: './views/shell.html',
+                },
+              },
+              entry: './src/server.ts',
+            },
+          },
+        },
+        plugin: { name: 'mcp-app-build', version: '1.0.0' },
+        targets: ['portable'],
+      }),
+      { skills: [] },
+      registry,
+    );
+    const outputRoot = join(root, 'dist');
+    const result = await build({
+      model,
+      outputRoot,
+      projectRoot: root,
+      registry: createDefaultRegistry(),
+    });
+    const compiled = (result as unknown as {
+      readonly compiledMcpApps: readonly {
+        readonly id: string;
+        readonly name: string;
+        readonly output: string;
+        readonly resourceUri: string;
+        readonly target: string;
+      }[];
+    }).compiledMcpApps;
+    expect(compiled).toMatchObject([
+      {
+        _meta: { ui: { prefersBorder: true } },
+        id: 'mcp-app:fixture:dashboard',
+        mimeType: 'text/html;profile=mcp-app',
+        name: 'dashboard',
+        output: join(outputRoot, 'portable', 'mcp-apps', 'dashboard.html'),
+        resourceUri: 'ui://agent-bundle/dashboard-v1.html',
+        serverId: 'mcp:fixture',
+        source: join(root, 'views', 'dashboard.ts'),
+        target: 'portable',
+      },
+    ]);
+    const html = await readFile(join(outputRoot, 'portable', 'mcp-apps', 'dashboard.html'), 'utf8');
+    expect(html).toContain('dashboard-ready');
+    expect(html).toContain('<script');
+    expect(html).toContain('<style');
+    expect(html).not.toMatch(/<(?:script|link)\b[^>]+(?:src|href)=/iu);
+    expect(await readdir(join(outputRoot, 'portable', 'mcp-apps'))).toEqual(['dashboard.html']);
+    const serverBundle = await readFile(join(outputRoot, 'portable', 'mcp', 'mcp-fixture-f16d05ec.mjs'), 'utf8');
+    expect(serverBundle).toContain('ui://agent-bundle/dashboard-v1.html');
+    expect(serverBundle).toContain('text/html;profile=mcp-app');
+    expect(serverBundle).toContain('prefersBorder');
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+}, 30_000);
+
+it('rejects the MCP Apps virtual module outside Agent Bundle compilation', async () => {
+  await expect(import('../src/mcp-apps.ts')).rejects.toThrow(
+    'agent-bundle/mcp-apps is available only while Agent Bundle compiles a local MCP server.',
+  );
+});
+
 it('uses the selected remote manifest with propagated cancellation and cleans data before rejecting tampering', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-mcp-remote-'));
   try {
@@ -480,6 +732,214 @@ it('uses the selected remote manifest with propagated cancellation and cleans da
     await rm(root, { force: true, recursive: true });
   }
 });
+
+it('creates session state only after setup succeeds and always inherits the stdio environment', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-mcp-stdio-options-'));
+  const inheritedKey = 'AGENT_BUNDLE_TEST_MCP_INHERITED';
+  const previousInherited = process.env[inheritedKey];
+  const sessionDirectories = async (): Promise<readonly string[]> =>
+    (await readdir(tmpdir())).filter((name) => name.startsWith('agent-bundle-mcp-')).sort();
+  try {
+    process.env[inheritedKey] = 'inherited-sentinel';
+    await mkdir(join(root, 'src'), { recursive: true });
+    await writeFile(join(root, 'src', 'server.ts'), 'export {};\n');
+    const model = await normalizeProject(
+      loadedProject(root, {
+        mcp: {
+          servers: {
+            configured: {
+              entry: './src/server.ts',
+              env: { AGENT_BUNDLE_TEST_MCP_OVERRIDE: 'configured' },
+            },
+            inherited: { entry: './src/server.ts' },
+          },
+        },
+        plugin: { name: 'mcp-stdio-options', version: '1.0.0' },
+        targets: ['portable'],
+      }),
+      { skills: [] },
+      registry,
+    );
+    const artifact = join(root, 'dist');
+    await build({ model, outputRoot: artifact, projectRoot: root, registry: createDefaultRegistry() });
+
+    const beforeInvalidTimeout = await sessionDirectories();
+    await expect(new McpService().list({
+      artifact,
+      server: 'configured',
+      target: 'portable',
+      timeoutMs: 0,
+    })).rejects.toThrow('timeoutMs must be a positive finite number');
+    expect(await sessionDirectories()).toEqual(beforeInvalidTimeout);
+
+    const beforeFactoryFailure = await sessionDirectories();
+    await expect(new McpService({
+      createClient: () => {
+        throw new Error('fixture client factory failure');
+      },
+    }).list({ artifact, server: 'configured', target: 'portable' })).rejects.toThrow(
+      'fixture client factory failure',
+    );
+    expect(await sessionDirectories()).toEqual(beforeFactoryFailure);
+
+    const stdio: Array<{ readonly env?: Record<string, string> }> = [];
+    const service = new McpService({
+      createClient: () => ({
+        callTool: async () => ({ content: [] }) as never,
+        close: async () => undefined,
+        connect: async () => undefined,
+        getServerCapabilities: () => undefined,
+        getServerVersion: () => undefined,
+        listTools: async () => ({ tools: [] }),
+      }),
+      createStdioTransport: (options) => {
+        stdio.push(options);
+        return { close: async () => undefined, stderr: null } as never;
+      },
+    });
+    await service.list({ artifact, server: 'configured', target: 'portable' });
+    await service.list({ artifact, server: 'inherited', target: 'portable' });
+
+    expect(stdio).toHaveLength(2);
+    expect(stdio[0]?.env).toMatchObject({
+      [inheritedKey]: 'inherited-sentinel',
+      AGENT_BUNDLE_TEST_MCP_OVERRIDE: 'configured',
+    });
+    expect(stdio[1]?.env).toMatchObject({ [inheritedKey]: 'inherited-sentinel' });
+  } finally {
+    if (previousInherited === undefined) {
+      delete process.env[inheritedKey];
+    } else {
+      process.env[inheritedKey] = previousInherited;
+    }
+    await rm(root, { force: true, recursive: true });
+  }
+}, 30_000);
+
+it('serves compiler-bundled MCP App resources from a copied artifact without project source', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-mcp-app-resource-'));
+  const consumer = await mkdtemp(join(tmpdir(), 'agent-bundle-mcp-app-consumer-'));
+  try {
+    await mkdir(join(root, 'src'), { recursive: true });
+    await mkdir(join(root, 'views'), { recursive: true });
+    await mkdir(join(root, 'node_modules'), { recursive: true });
+    await symlink(
+      join(process.cwd(), 'node_modules', '@modelcontextprotocol'),
+      join(root, 'node_modules', '@modelcontextprotocol'),
+      'dir',
+    );
+    await writeFile(join(root, 'package.json'), '{"type":"module"}\n');
+    await writeFile(join(root, 'views', 'dashboard.ts'), "document.body.dataset.fixture = 'app-resource';\n");
+    await writeFile(join(root, 'views', 'shell.html'), '<!doctype html><html><body><main id="view"></main></body></html>\n');
+    await writeFile(
+      join(root, 'src', 'server.ts'),
+      [
+        "import { McpServer } from '@modelcontextprotocol/server';",
+        "import { StdioServerTransport } from '@modelcontextprotocol/server/stdio';",
+        "import apps from 'agent-bundle/mcp-apps';",
+        '',
+        "const server = new McpServer({ name: 'app-resource-fixture', version: '1.0.0' });",
+        'for (const app of apps) {',
+        '  server.registerResource(app.name, app.resourceUri, {',
+        '    mimeType: app.mimeType,',
+        '    _meta: app._meta,',
+        '  }, async (uri) => ({',
+        '    contents: [{ mimeType: app.mimeType, text: app.html, uri: uri.href }],',
+        '  }));',
+        '}',
+        'const [app] = apps;',
+        "if (app === undefined) throw new Error('Expected bundled MCP App.');",
+        "server.registerTool('show-dashboard', {",
+        "  description: 'Open the bundled dashboard.',",
+        '  _meta: { ui: { resourceUri: app.resourceUri } },',
+        '}, async () => ({',
+        '  _meta: { ui: { resourceUri: app.resourceUri } },',
+        "  content: [{ type: 'text', text: 'dashboard ready' }],",
+        '  structuredContent: { resourceUri: app.resourceUri, view: app.name },',
+        '}));',
+        'await server.connect(new StdioServerTransport());',
+        '',
+      ].join('\n'),
+    );
+    const model = await normalizeProject(
+      loadedProject(root, {
+        mcp: {
+          servers: {
+            fixture: {
+              apps: {
+                dashboard: {
+                  _meta: { ui: { prefersBorder: true }, 'x-fixture': { app: 'dashboard' } },
+                  entry: './views/dashboard.ts',
+                  resourceUri: 'ui://agent-bundle/dashboard-v1.html',
+                  template: './views/shell.html',
+                },
+              },
+              entry: './src/server.ts',
+            },
+          },
+        },
+        plugin: { name: 'mcp-app-resource', version: '1.0.0' },
+        targets: ['portable'],
+      }),
+      { skills: [] },
+      registry,
+    );
+    const outputRoot = join(root, 'dist');
+    const artifact = join(consumer, 'installed-plugin');
+    await build({ model, outputRoot, projectRoot: root, registry: createDefaultRegistry() });
+    const expectedHtml = await readFile(join(outputRoot, 'portable', 'mcp-apps', 'dashboard.html'), 'utf8');
+    await cp(outputRoot, artifact, { recursive: true });
+    await rm(join(root, 'src'), { force: true, recursive: true });
+    await rm(join(root, 'views'), { force: true, recursive: true });
+    expect(await validateArtifact({ artifactRoot: artifact })).toEqual([]);
+
+    const client = new Client({ name: 'app-resource-consumer', version: '1.0.0' });
+    await client.connect(new StdioClientTransport({
+      args: [join(artifact, 'portable', 'mcp', 'mcp-fixture-f16d05ec.mjs')],
+      command: process.execPath,
+      stderr: 'pipe',
+    }));
+    try {
+      const tools = await client.listTools();
+      expect(tools.tools).toMatchObject([
+        {
+          _meta: { ui: { resourceUri: 'ui://agent-bundle/dashboard-v1.html' } },
+          name: 'show-dashboard',
+        },
+      ]);
+      const resources = await client.listResources();
+      expect(resources.resources).toMatchObject([
+        {
+          _meta: { ui: { prefersBorder: true }, 'x-fixture': { app: 'dashboard' } },
+          mimeType: 'text/html;profile=mcp-app',
+          name: 'dashboard',
+          uri: 'ui://agent-bundle/dashboard-v1.html',
+        },
+      ]);
+      const resource = await client.readResource({ uri: 'ui://agent-bundle/dashboard-v1.html' });
+      expect(resource.contents).toEqual([
+        {
+          mimeType: 'text/html;profile=mcp-app',
+          text: expectedHtml,
+          uri: 'ui://agent-bundle/dashboard-v1.html',
+        },
+      ]);
+      const result = await client.callTool({ arguments: {}, name: 'show-dashboard' });
+      expect(result).toMatchObject({
+        _meta: { ui: { resourceUri: 'ui://agent-bundle/dashboard-v1.html' } },
+        content: [{ text: 'dashboard ready', type: 'text' }],
+        structuredContent: { resourceUri: 'ui://agent-bundle/dashboard-v1.html', view: 'dashboard' },
+      });
+    } finally {
+      await client.close();
+    }
+  } finally {
+    await Promise.all([
+      rm(root, { force: true, recursive: true }),
+      rm(consumer, { force: true, recursive: true }),
+    ]);
+  }
+}, 30_000);
 
 it('lists tools from a validated copied artifact without reading project source', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-mcp-service-source-'));

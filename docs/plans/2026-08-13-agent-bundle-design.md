@@ -469,9 +469,10 @@ No MCP process is launched during `build` or `validate`.
 MCP Apps are the portable UI contract. They remain ordinary MCP tools and `ui://` resources, not a
 separate server kind. New integrations use `_meta.ui.resourceUri`,
 `text/html;profile=mcp-app`, and the `ui/*` JSON-RPC bridge over `postMessage`. The OpenAI
-`_meta["openai/outputTemplate"]` field is retained as a compatibility alias, not treated as the
-portable source of truth. Optional `window.openai` features are capability-detected by the View;
-the compiler never branches on a host product name. A tool must still return useful text or
+`_meta["openai/outputTemplate"]` field remains transparent author-owned protocol data, but Agent
+Bundle neither synthesizes it nor uses it as the portable source of truth. Optional `window.openai`
+features are capability-detected by the View; the compiler never branches on a host product name.
+A tool must still return useful text or
 structured data when its host cannot render the View, including terminal clients such as Codex and
 Claude Code.
 
@@ -484,11 +485,10 @@ a build error. This uses Rsbuild's standard asset pipeline and React plugin when
 it does not run a nested compiler from a custom loader.
 
 The resulting HTML, URI, MIME type, and declared resource metadata are exposed to the server entry
-through a compiler-owned virtual module. Server code registers them with the official MCP Apps
-`registerAppResource()` and `registerAppTool()` helpers, so the upstream SDK remains responsible
-for standard MCP Apps metadata normalization. An author who needs the OpenAI compatibility alias
-declares it in the tool metadata; Agent Bundle does not synthesize it, parse registrations, or
-rewrite tool metadata. The generated server remains the protocol source of truth: the workbench
+through a compiler-owned virtual module. Server code registers them directly with the current
+split MCP v2 server API. Agent Bundle does not add the legacy monolithic SDK merely to call helper
+functions that normalize deprecated metadata, and it does not parse registrations or rewrite tool
+metadata. The generated server remains the protocol source of truth: the workbench
 discovers the tool metadata, calls
 `resources/read` for the exact `ui://` URI, and receives the same structured content and result
 metadata as ChatGPT or Claude. The pinned MCP Apps SDK version and its provenance are recorded and

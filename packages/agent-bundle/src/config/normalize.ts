@@ -7,11 +7,13 @@ import { pathTokens } from '../core/types.ts';
 import type {
   AgentBundleHookEntry,
   AgentBundleHookInput,
+  AgentBundleMcpApp,
   AgentBundleMcpServer,
   CanonicalHookEvent,
   CanonicalHookTool,
   NormalizationTargetRegistry,
   NormalizedHook,
+  NormalizedMcpApp,
   NormalizedMcpServer,
   NormalizedNativeHook,
   NormalizedPlugin,
@@ -221,6 +223,39 @@ const normalizeMcpServers = (
       normalizeMcpServer(name, server, loaded.context.projectRoot, targetNames, provenance));
 };
 
+const normalizeMcpApps = (
+  loaded: LoadedConfig,
+  servers: readonly NormalizedMcpServer[],
+): readonly NormalizedMcpApp[] => {
+  const configured = loaded.config.mcp?.servers;
+  if (configured === undefined) return [];
+  const provenance: SourceProvenance = { kind: 'config', sourcePath: loaded.configPath };
+  const serverByName = new Map(servers.map((server) => [server.name, server]));
+  const apps: NormalizedMcpApp[] = [];
+
+  for (const [serverName, rawServer] of Object.entries(configured).sort(([left], [right]) => left.localeCompare(right))) {
+    const server = serverByName.get(serverName);
+    if (server?.source === undefined || rawServer.apps === undefined) continue;
+    for (const [name, app] of Object.entries(rawServer.apps).sort(([left], [right]) => left.localeCompare(right))) {
+      const declaration = app as AgentBundleMcpApp;
+      apps.push({
+        ...(declaration._meta === undefined ? {} : { _meta: structuredClone(declaration._meta) }),
+        id: `mcp-app:${serverName}:${name}`,
+        name,
+        provenance: { ...provenance },
+        resourceUri: declaration.resourceUri,
+        serverId: server.id,
+        serverName,
+        source: resolve(loaded.context.projectRoot, declaration.entry),
+        targets: sortedUnique(declaration.targets ?? server.targets),
+        ...(declaration.template === undefined ? {} : { template: resolve(loaded.context.projectRoot, declaration.template) }),
+      });
+    }
+  }
+
+  return apps;
+};
+
 const deepFreeze = <Value>(value: Value): Value => {
   if (typeof value !== 'object' || value === null || Object.isFrozen(value)) {
     return value;
@@ -290,6 +325,7 @@ export const normalizeProject = async (
   });
   const description = loaded.config.plugin.description;
   const nativeHooks = await normalizeNativeHooks(loaded, targetNames);
+  const mcpServers = normalizeMcpServers(loaded, targetNames);
   const model: NormalizedPlugin = {
     ...(loaded.config.marketplace === true ? { marketplace: true as const } : {}),
     metadata: {
@@ -299,7 +335,8 @@ export const normalizeProject = async (
       provenance: configProvenance,
       version: loaded.config.plugin.version,
     },
-    mcpServers: normalizeMcpServers(loaded, targetNames),
+    mcpApps: normalizeMcpApps(loaded, mcpServers),
+    mcpServers,
     hooks: normalizeHooks(loaded, targetNames, registry),
     ...(nativeHooks.length === 0 ? {} : { nativeHooks }),
     scripts: [],
