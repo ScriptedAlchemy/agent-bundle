@@ -168,6 +168,16 @@ const within = async <T>(promise: Promise<T>, milliseconds: number): Promise<T> 
   }),
 ]);
 
+const readToEnd = async (reader: ReadableStreamDefaultReader<Uint8Array>): Promise<string> => {
+  const decoder = new TextDecoder();
+  let output = '';
+  while (true) {
+    const next = await reader.read();
+    if (next.done) return output;
+    output += decoder.decode(next.value, { stream: true });
+  }
+};
+
 it('serves typed project status and supplied prebuilt assets after starting the coordinator', async () => {
   const coordinator = new RecordingCoordinator();
   const server = await startForegroundServer({
@@ -537,6 +547,48 @@ it('applies the established foreground origin and token guard to MCP session cre
     });
     expect(opens).toEqual([{ epochId: 'epoch-a', serverName: 'weather', target: 'portable' }]);
   } finally {
+    await server.close();
+  }
+});
+
+it('ends active authenticated MCP trace readers before foreground shutdown destroys remaining sockets', async () => {
+  let subscriptions = 0;
+  const session = {
+    binding: { epochId: 'epoch-a', serverName: 'weather', target: 'portable' },
+    connection: { capabilities: {}, protocolEra: 'modern', protocolVersion: '2025-11-25', server: { name: 'fixture', version: '1.0.0' } },
+    id: 'session-a',
+    subscribeTrace: () => {
+      subscriptions += 1;
+      return { unsubscribe: () => { subscriptions -= 1; } };
+    },
+    trace: () => ({ entries: [] }),
+  };
+  const mcpSessions = {
+    get: (id: string) => id === 'session-a' ? session : undefined,
+  } as unknown as McpSessionService;
+  const server = await startForegroundServer({
+    coordinator: new RecordingCoordinator(),
+    eventHub: new ProjectEventHub(),
+    mcpSessions,
+    port: 0,
+    sessionToken: 'test-session-token',
+  });
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+
+  try {
+    const stream = await fetch(`${server.url}/api/mcp/sessions/session-a/stream?after=0`, {
+      headers: { origin: server.url, 'x-agent-bundle-session': server.sessionToken },
+    });
+    reader = stream.body?.getReader();
+    if (reader === undefined) throw new Error('Expected MCP trace stream body.');
+    expect(subscriptions).toBe(1);
+
+    const closing = server.close();
+    await expect(within(readToEnd(reader), 250)).resolves.toBe('');
+    await expect(closing).resolves.toBeUndefined();
+    expect(subscriptions).toBe(0);
+  } finally {
+    await reader?.cancel();
     await server.close();
   }
 });

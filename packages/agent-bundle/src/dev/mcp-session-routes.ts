@@ -28,7 +28,7 @@ interface CreateRoute {
 
 interface SessionRoute {
   readonly id: string;
-  readonly kind: 'session' | 'connection' | 'catalog' | 'config' | 'operations' | 'trace' | 'stream' | 'restart' | 'cancel' | 'close';
+  readonly kind: 'session' | 'connection' | 'catalog' | 'config' | 'operations' | 'trace' | 'stream' | 'restart' | 'cancel';
 }
 
 type Route = CreateRoute | SessionRoute;
@@ -176,7 +176,7 @@ const route = (requestTarget: string | undefined): Route | undefined => {
   const kind = segments[2];
   if (
     kind !== 'connection' && kind !== 'catalog' && kind !== 'config' && kind !== 'operations' && kind !== 'trace' &&
-    kind !== 'stream' && kind !== 'restart' && kind !== 'cancel' && kind !== 'close'
+    kind !== 'stream' && kind !== 'restart' && kind !== 'cancel'
   ) {
     throw requestError(diagnostic('AB8013', 'MCP session route path is not valid.', 400));
   }
@@ -363,8 +363,8 @@ export class McpSessionRoutes {
 
     const session = this.#session(service, parsed.id);
     if (parsed.kind === 'session') {
-      if (method !== 'GET') return responseDiagnostic(response, diagnostic('AB8007', 'Route does not accept this method.', 405));
-      return responseJson(response, { session: sessionSnapshot(session) });
+      if (method === 'GET') return responseJson(response, { session: sessionSnapshot(session) });
+      if (method !== 'DELETE') return responseDiagnostic(response, diagnostic('AB8007', 'Route does not accept this method.', 405));
     }
     if (parsed.kind === 'connection') {
       if (method !== 'GET') return responseDiagnostic(response, diagnostic('AB8007', 'Route does not accept this method.', 405));
@@ -407,7 +407,6 @@ export class McpSessionRoutes {
       if (!hasOnly(body, ['requestId']) || !nonemptyString(body.requestId)) invalidShape();
       return responseJson(response, { cancelled: session.cancel(body.requestId) });
     }
-    if (method !== 'DELETE') return responseDiagnostic(response, diagnostic('AB8007', 'Route does not accept this method.', 405));
     const closed = await service.closeSession(parsed.id);
     if (!closed) throw this.#unavailable();
     this.#closeStreams(parsed.id);
@@ -461,7 +460,12 @@ export class McpSessionRoutes {
     let queuedBytes = 0;
     const stream = { subscription: undefined as McpSessionTraceSubscription | undefined };
     const queued: QueuedFrame[] = [];
-    let close = (): void => undefined;
+    let cleanup = (): void => undefined;
+    const finishStream = (): void => {
+      if (closed) return;
+      cleanup();
+      if (!response.writableEnded && !response.destroyed) response.end();
+    };
     const drain = (): void => {
       if (closed || response.writableEnded || response.destroyed) return;
       backpressured = false;
@@ -477,14 +481,19 @@ export class McpSessionRoutes {
         }
       }
     };
-    const closeSlowStream = (): void => {
-      close();
+    const abortStream = (): void => {
+      if (closed) return;
+      cleanup();
       response.destroy();
     };
     const deliver = (entry: unknown): void => {
       if (closed || response.writableEnded || response.destroyed) return;
       const frame = `${JSON.stringify(entry)}\n`;
       const bytes = Buffer.byteLength(frame);
+      if (bytes > streamQueueByteLimit) {
+        abortStream();
+        return;
+      }
       if (!backpressured) {
         if (!response.write(frame)) {
           backpressured = true;
@@ -494,30 +503,30 @@ export class McpSessionRoutes {
         return;
       }
       if (bufferedBytes + queuedBytes + bytes > streamQueueByteLimit) {
-        closeSlowStream();
+        abortStream();
         return;
       }
       queued.push({ bytes, frame });
       queuedBytes += bytes;
     };
-    close = (): void => {
+    cleanup = (): void => {
       if (closed) return;
       closed = true;
       stream.subscription?.unsubscribe();
       queued.length = 0;
       queuedBytes = 0;
       bufferedBytes = 0;
-      this.#removeStream(id, close);
+      this.#removeStream(id, finishStream);
     };
     stream.subscription = session.subscribeTrace({ afterSequence }, deliver);
     if (closed || request.destroyed || response.destroyed) {
       stream.subscription.unsubscribe();
-      close();
+      cleanup();
       return;
     }
-    this.#addStream(id, close);
-    request.once('close', close);
-    response.once('close', close);
+    this.#addStream(id, finishStream);
+    request.once('close', cleanup);
+    response.once('close', cleanup);
   }
 
   #addStream(id: string, close: () => void): void {

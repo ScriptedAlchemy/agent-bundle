@@ -66,6 +66,7 @@ class RecordingSession implements McpSessionRouteSession {
   readonly calls: unknown[] = [];
   readonly #listeners = new Set<(entry: unknown) => void>();
   readonly #replay: unknown[] = [];
+  #traceOverflow: unknown;
   #sequence = 0;
 
   callTool(options: { readonly arguments: Record<string, unknown>; readonly name: string; readonly requestId?: string }): Promise<unknown> {
@@ -120,7 +121,7 @@ class RecordingSession implements McpSessionRouteSession {
     if (afterSequence > this.#sequence) {
       throw new RangeError('MCP session trace cursor cannot be ahead of the current trace.');
     }
-    return { entries: [] };
+    return { entries: [], ...(this.#traceOverflow === undefined ? {} : { overflow: this.#traceOverflow }) };
   }
 
   subscribeTrace(
@@ -141,6 +142,10 @@ class RecordingSession implements McpSessionRouteSession {
   queueReplay(entry: unknown): void {
     this.#sequence += 1;
     this.#replay.push(entry);
+  }
+
+  setTraceOverflow(overflow: unknown): void {
+    this.#traceOverflow = overflow;
   }
 
   get subscriptionCount(): number {
@@ -198,6 +203,36 @@ const eventually = async (predicate: () => boolean, milliseconds: number): Promi
     await new Promise<void>((resolvePromise) => setTimeout(resolvePromise, 5));
   }
 };
+
+const within = async <T>(promise: Promise<T>, milliseconds: number): Promise<T> => Promise.race([
+  promise,
+  new Promise<T>((_resolvePromise, rejectPromise) => {
+    setTimeout(() => rejectPromise(new Error(`Timed out after ${milliseconds}ms.`)), milliseconds);
+  }),
+]);
+
+const readToEnd = async (reader: ReadableStreamDefaultReader<Uint8Array>): Promise<string> => {
+  const decoder = new TextDecoder();
+  let output = '';
+  while (true) {
+    const next = await reader.read();
+    if (next.done) return output;
+    output += decoder.decode(next.value, { stream: true });
+  }
+};
+
+const readAbortedStream = async (url: string): Promise<string> => new Promise((resolvePromise) => {
+  let output = '';
+  const request = httpGet(url, { headers: headers() }, (response) => {
+    response.setEncoding('utf8');
+    response.on('data', (chunk: string) => {
+      output += chunk;
+    });
+    response.once('close', () => resolvePromise(output));
+    response.once('error', () => resolvePromise(output));
+  });
+  request.once('error', () => resolvePromise(output));
+});
 
 it('accepts only an epoch target and server name when creating a session', async () => {
   const service = new RecordingService();
@@ -323,6 +358,61 @@ it('streams an atomic trace through authenticated fetch and releases its subscri
   }
 });
 
+it('ends an authenticated trace reader exactly once after DELETE closes its session', async () => {
+  const service = new RecordingService();
+  const started = await startRoutes(service);
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+
+  try {
+    const stream = await fetch(`${started.url}/api/mcp/sessions/session-a/stream?after=0`, { headers: headers() });
+    reader = stream.body?.getReader();
+    if (reader === undefined) throw new Error('Expected route stream body.');
+    expect(service.session.subscriptionCount).toBe(1);
+
+    const deleted = await fetch(`${started.url}/api/mcp/sessions/session-a`, { headers: headers(), method: 'DELETE' });
+    expect(deleted.status).toBe(200);
+    await expect(deleted.json()).resolves.toEqual({ closed: true });
+    await expect(within(readToEnd(reader), 250)).resolves.toBe('');
+    expect(service.session.subscriptionCount).toBe(0);
+    expect(service.closeCalls).toBe(1);
+  } finally {
+    await reader?.cancel();
+    await started.close();
+  }
+});
+
+it('keeps an authenticated trace reader open while cancel and restart preserve the session', async () => {
+  const service = new RecordingService();
+  const started = await startRoutes(service);
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+
+  try {
+    const stream = await fetch(`${started.url}/api/mcp/sessions/session-a/stream?after=0`, { headers: headers() });
+    reader = stream.body?.getReader();
+    if (reader === undefined) throw new Error('Expected route stream body.');
+    const [cancel, restart] = await Promise.all([
+      fetch(`${started.url}/api/mcp/sessions/session-a/cancel`, {
+        body: JSON.stringify({ requestId: 'request-a' }),
+        headers: { ...headers(), 'content-type': 'application/json' },
+        method: 'POST',
+      }),
+      fetch(`${started.url}/api/mcp/sessions/session-a/restart`, {
+        body: '{}',
+        headers: { ...headers(), 'content-type': 'application/json' },
+        method: 'POST',
+      }),
+    ]);
+    await expect(cancel.json()).resolves.toEqual({ cancelled: true });
+    await expect(restart.json()).resolves.toEqual({ connection: service.session.connection });
+    expect(service.session.subscriptionCount).toBe(1);
+    expect(service.session.calls).toContainEqual({ kind: 'cancel', requestId: 'request-a' });
+    expect(service.session.calls).toContainEqual({ kind: 'restart' });
+  } finally {
+    await reader?.cancel();
+    await started.close();
+  }
+});
+
 it('unsubscribes a synchronous replay stream when bounded backpressure closes it before subscription assignment', async () => {
   const service = new RecordingService();
   const oversized = 'x'.repeat(512 * 1024);
@@ -344,15 +434,39 @@ it('unsubscribes a synchronous replay stream when bounded backpressure closes it
   }
 });
 
-it('reports an ahead trace cursor and an unknown session with stable diagnostics', async () => {
+it('closes an oversized first replay frame before any NDJSON bytes reach the reader', async () => {
+  const service = new RecordingService();
+  service.session.queueReplay({ kind: 'logging', occurredAt: 1, payload: 'x'.repeat(512 * 1024), sequence: 1 });
+  const started = await startRoutes(service);
+
+  try {
+    await expect(within(readAbortedStream(`${started.url}/api/mcp/sessions/session-a/stream?after=0`), 250)).resolves.toBe('');
+    expect(service.session.subscriptionCount).toBe(0);
+  } finally {
+    await started.close();
+  }
+});
+
+it('reports malformed, gap, and ahead trace cursors plus an unknown session with stable diagnostics', async () => {
   const service = new RecordingService();
   const started = await startRoutes(service);
 
   try {
-    const [ahead, missing] = await Promise.all([
+    service.session.setTraceOverflow({ afterSequence: 0, droppedThroughSequence: 7 });
+    const [malformed, gap, ahead, missing] = await Promise.all([
+      fetch(`${started.url}/api/mcp/sessions/session-a/trace?after=bad`, { headers: headers() }),
+      fetch(`${started.url}/api/mcp/sessions/session-a/trace?after=0`, { headers: headers() }),
       fetch(`${started.url}/api/mcp/sessions/session-a/trace?after=1`, { headers: headers() }),
       fetch(`${started.url}/api/mcp/sessions/missing`, { headers: headers() }),
     ]);
+    expect(malformed.status).toBe(400);
+    await expect(malformed.json()).resolves.toEqual({
+      diagnostic: { code: 'AB8017', message: 'MCP session trace cursor is not valid.' },
+    });
+    expect(gap.status).toBe(200);
+    await expect(gap.json()).resolves.toEqual({
+      trace: { entries: [], overflow: { afterSequence: 0, droppedThroughSequence: 7 } },
+    });
     expect(ahead.status).toBe(409);
     await expect(ahead.json()).resolves.toEqual({
       diagnostic: { code: 'AB8017', message: 'MCP session trace cursor is ahead of the current trace.' },
@@ -361,6 +475,36 @@ it('reports an ahead trace cursor and an unknown session with stable diagnostics
     await expect(missing.json()).resolves.toEqual({
       diagnostic: { code: 'AB8015', message: 'MCP session is not available.' },
     });
+  } finally {
+    await started.close();
+  }
+});
+
+it('enforces the shared JSON media and body-size limits on MCP session creation', async () => {
+  const service = new RecordingService();
+  const started = await startRoutes(service);
+
+  try {
+    const plain = await fetch(`${started.url}/api/mcp/sessions`, {
+      body: '{}',
+      headers: { ...headers(), 'content-type': 'text/plain' },
+      method: 'POST',
+    });
+    expect(plain.status).toBe(415);
+    await expect(plain.json()).resolves.toEqual({
+      diagnostic: { code: 'AB8009', message: 'Request body must use application/json.' },
+    });
+
+    const oversized = await fetch(`${started.url}/api/mcp/sessions`, {
+      body: JSON.stringify({ epochId: 'epoch-a', serverName: 'x'.repeat(64 * 1024), target: 'portable' }),
+      headers: { ...headers(), 'content-type': 'application/json; charset=utf-8' },
+      method: 'POST',
+    });
+    expect(oversized.status).toBe(413);
+    await expect(oversized.json()).resolves.toEqual({
+      diagnostic: { code: 'AB8010', message: 'Request body exceeds 64 KiB.' },
+    });
+    expect(service.opens).toEqual([]);
   } finally {
     await started.close();
   }
