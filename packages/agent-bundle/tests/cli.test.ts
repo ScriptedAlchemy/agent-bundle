@@ -39,7 +39,7 @@ const createCliProject = async (): Promise<{ readonly output: string; readonly r
       [
         'export default ({ command, mode, projectRoot, selectedTargets }) => ({',
         "  plugin: { name: 'cli-fixture', version: '1.0.0' },",
-        '  targets: selectedTargets.length === 0 ? [\'portable\'] : selectedTargets,',
+        "  targets: selectedTargets.length === 0 ? ['portable', 'codex'] : selectedTargets,",
         '  fixtureContext: { command, mode, projectRoot, selectedTargets },',
         '});',
         '',
@@ -64,7 +64,7 @@ const createServiceProject = async (): Promise<string> => {
       [
         'export default ({ selectedTargets }) => ({',
         "  plugin: { name: 'service-fixture', version: '1.0.0' },",
-        "  targets: selectedTargets.length === 0 ? ['codex'] : selectedTargets,",
+        "  targets: selectedTargets.length === 0 ? ['codex', 'claude'] : selectedTargets,",
         "  hooks: { sessionStart: { handler: './src/hook.ts' } },",
         "  mcp: { servers: { fixture: { entry: './src/server.ts' } } },",
         '});',
@@ -73,7 +73,7 @@ const createServiceProject = async (): Promise<string> => {
     ),
     writeFile(
       join(root, 'src', 'hook.ts'),
-      "export default (event: { source?: string }) => ({ additionalContext: `hook:${event.source}`, outcome: 'continue' as const });\n",
+      "export default (event: { source?: string }) => event.source === 'void' ? undefined : ({ additionalContext: `hook:${event.source}`, outcome: 'continue' as const });\n",
     ),
     writeFile(
       join(root, 'src', 'server.ts'),
@@ -149,7 +149,7 @@ it('runs MCP and hook operations from a packed consumer with explicit and tempor
   const artifact = join(source, 'artifact');
   try {
     const built = await runExecutable(consumer.cli, consumer.root, [
-      'build', '--root', source, '--output', artifact, '--target', 'codex', '--json',
+      'build', '--root', source, '--output', artifact, '--json',
     ]);
     expect(built).toMatchObject({ code: 0, stderr: '' });
 
@@ -197,6 +197,22 @@ it('runs MCP and hook operations from a packed consumer with explicit and tempor
     expect(listedHooks).toMatchObject({ code: 0, stderr: '' });
     const [hook] = JSON.parse(listedHooks.stdout) as Array<{ readonly id: string }>;
 
+    const listedAllHooks = await runExecutable(consumer.cli, consumer.root, [
+      'hooks', 'list', '--artifact', artifact, '--json',
+    ]);
+    expect(JSON.parse(listedAllHooks.stdout)).toMatchObject([
+      { target: 'claude' },
+      { target: 'codex' },
+    ]);
+    expect((JSON.parse(listedAllHooks.stdout) as readonly unknown[])).toHaveLength(2);
+
+    const unsupportedHookTarget = await runExecutable(consumer.cli, consumer.root, [
+      'hooks', 'list', '--artifact', artifact, '--target', 'unsupported', '--json',
+    ]);
+    expect(unsupportedHookTarget.code).toBe(1);
+    expect(unsupportedHookTarget.stdout).toBe('');
+    expect(JSON.parse(unsupportedHookTarget.stderr)).toMatchObject([{ code: 'AB5000', severity: 'error' }]);
+
     const simulatedHook = await runExecutable(consumer.cli, consumer.root, [
       'hooks', 'simulate', '--artifact', artifact, '--target', 'codex', '--hook', hook!.id,
       '--input', '{"cwd":"/workspace","sessionId":"session-packed","source":"packed","transcriptPath":"/workspace/transcript.json"}', '--json',
@@ -206,6 +222,12 @@ it('runs MCP and hook operations from a packed consumer with explicit and tempor
       stderr: '',
       stdout: '{"additionalContext":"hook:packed","outcome":"continue"}\n',
     });
+
+    const voidHook = await runExecutable(consumer.cli, consumer.root, [
+      'hooks', 'simulate', '--artifact', artifact, '--target', 'codex', '--hook', hook!.id,
+      '--input', '{"cwd":"/workspace","sessionId":"session-packed","source":"void","transcriptPath":"/workspace/transcript.json"}', '--json',
+    ]);
+    expect(voidHook).toEqual({ code: 0, stderr: '', stdout: 'null\n' });
 
     const before = new Set((await (await import('node:fs/promises')).readdir(tmpdir())).filter((name) => name.startsWith('agent-bundle-artifact-')));
     const temporary = await runExecutable(consumer.cli, consumer.root, [
@@ -261,10 +283,27 @@ it('keeps inspect JSON stable and validates only the supplied artifact', async (
     ]);
     expect(firstInspection).toEqual(secondInspection);
     expect(firstInspection).toMatchObject({ code: 0, stderr: '' });
-    expect(JSON.parse(firstInspection.stdout)).toMatchObject({
-      model: { metadata: { name: 'cli-fixture' } },
+    const firstInspectionDocument = JSON.parse(firstInspection.stdout) as {
+      readonly plans: readonly unknown[];
+    };
+    expect(firstInspectionDocument).toMatchObject({
+      model: {
+        metadata: { name: 'cli-fixture' },
+        targets: [{ name: 'portable' }, { name: 'codex' }],
+      },
+      plans: [{ target: 'portable' }, { target: 'codex' }],
+    });
+    expect(firstInspectionDocument.plans).toHaveLength(2);
+
+    const filteredInspection = await runCli(project.root, [
+      'inspect', '--root', project.root, '--target', 'portable', '--json',
+    ]);
+    expect(filteredInspection).toMatchObject({ code: 0, stderr: '' });
+    expect(JSON.parse(filteredInspection.stdout)).toMatchObject({
+      model: { targets: [{ name: 'portable' }, { name: 'codex' }] },
       plans: [{ target: 'portable' }],
     });
+    expect((JSON.parse(filteredInspection.stdout) as { readonly plans: readonly unknown[] }).plans).toHaveLength(1);
 
     const built = await runCli(project.root, [
       'build', '--root', project.root, '--output', project.output, '--json',

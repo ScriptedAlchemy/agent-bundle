@@ -4,19 +4,21 @@ import { join } from 'node:path';
 
 import { expect, it } from '@rstest/core';
 
-import { build, inspect, validate } from '../src/api.ts';
+import { build, inspect, listHooks, validate } from '../src/api.ts';
 
 const createProject = async (): Promise<string> => {
   const parent = await mkdtemp(join(tmpdir(), 'agent-bundle-api-parent-'));
   const root = join(parent, 'project with spaces');
   await mkdir(join(root, 'skills', 'review'), { recursive: true });
+  await mkdir(join(root, 'src'), { recursive: true });
   await Promise.all([
     writeFile(
       join(root, 'agent-bundle.config.ts'),
       [
         'export default ({ command, mode, projectRoot, selectedTargets }) => ({',
         "  plugin: { name: 'api-fixture', version: '1.0.0' },",
-        '  targets: selectedTargets.length === 0 ? [\'portable\'] : selectedTargets,',
+        '  targets: selectedTargets.length === 0 ? [\'codex\', \'claude\'] : selectedTargets,',
+        "  hooks: { sessionStart: { handler: './src/hook.ts' } },",
         '  fixtureContext: { command, mode, projectRoot, selectedTargets },',
         '});',
         '',
@@ -26,6 +28,7 @@ const createProject = async (): Promise<string> => {
       join(root, 'skills', 'review', 'SKILL.md'),
       '---\nname: review\ndescription: Reviews changes\n---\n# Review\n',
     ),
+    writeFile(join(root, 'src', 'hook.ts'), 'export default () => undefined;\n'),
   ]);
   return root;
 };
@@ -47,6 +50,22 @@ it('prepares a factory-configured project into a frozen inspection and build res
       build: { outputRoot: join(root, 'artifact') },
       model: { metadata: { name: 'api-fixture' } },
     });
+  } finally {
+    await rm(join(root, '..'), { force: true, recursive: true });
+  }
+}, 30_000);
+
+it('lists hooks across artifact targets and rejects an explicit unknown target', async () => {
+  const root = await createProject();
+  try {
+    const artifact = join(root, 'artifact');
+    await build({ output: artifact, root });
+
+    await expect(listHooks({ artifact, root })).resolves.toMatchObject([
+      { event: 'sessionStart', target: 'claude' },
+      { event: 'sessionStart', target: 'codex' },
+    ]);
+    await expect(listHooks({ artifact, root, target: 'unsupported' })).rejects.toThrow('Unknown target');
   } finally {
     await rm(join(root, '..'), { force: true, recursive: true });
   }
