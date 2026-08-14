@@ -259,7 +259,7 @@ const safeInspectorEnvironmentValue = (key: string, value: string): boolean => {
   if (key === 'FORCE_COLOR') return /^(0|1|2|3)$/u.test(value);
   if (key === 'NO_COLOR') return value === '0' || value === '1';
   if (key === 'LANG' || key === 'LC_ALL') return safeLocaleValue.test(value) && !credentialShaped.test(value);
-  if (key === 'TZ') return safeTimeZoneValue.test(value);
+  if (key === 'TZ') return safeTimeZoneValue.test(value) && !credentialShaped.test(value);
   return false;
 };
 

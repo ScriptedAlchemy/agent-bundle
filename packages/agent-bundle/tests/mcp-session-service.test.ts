@@ -924,6 +924,7 @@ it('fails closed when projecting adversarial generated launch configuration for 
           LANG: 'en_US.UTF-8-token-secret',
           LC_ALL: 'BearerLocaleSecret',
           NO_COLOR: '1',
+          TZ: 'token-timezone-secret',
         },
         kind: 'stdio',
       },
@@ -940,6 +941,7 @@ it('fails closed when projecting adversarial generated launch configuration for 
   expect(stdioJson).not.toContain('api-key-secret');
   expect(stdioJson).not.toContain('environment-secret');
   expect(stdioJson).not.toContain('BearerLocaleSecret');
+  expect(stdioJson).not.toContain('token-timezone-secret');
   if (stdioProjection.launch.kind !== 'stdio') throw new Error('Expected a stdio Inspector projection.');
   expect(stdioProjection.launch.env).toEqual({ FORCE_COLOR: '2', NO_COLOR: '1' });
   expect(stdioProjection.launch.args).toContain('--enable-source-maps');
