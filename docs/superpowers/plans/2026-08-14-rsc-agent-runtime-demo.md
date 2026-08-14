@@ -33,17 +33,20 @@
 
 ```text
 examples/rsc-agent-runtime/
-├── .claude-plugin/plugin.json
-├── .codex-plugin/plugin.json
-├── .mcp.claude.json
-├── .mcp.codex.json
-├── hooks/
-│   ├── claude.json
-│   └── codex.json
 ├── package.json
 ├── rsbuild.config.ts
 ├── rstest.config.ts
 ├── tsconfig.json
+├── packaging/
+│   ├── claude/
+│   │   ├── .claude-plugin/plugin.json
+│   │   ├── .mcp.json
+│   │   └── hooks/hooks.json
+│   └── codex/
+│       ├── .agents/plugins/marketplace.json
+│       ├── .codex-plugin/plugin.json
+│       ├── .mcp.json
+│       └── hooks/hooks.json
 ├── src/
 │   ├── definition.ts
 │   ├── runtime/
@@ -79,6 +82,7 @@ examples/rsc-agent-runtime/
 │       ├── serialize-definition.ts
 │       └── emit-artifacts.ts
 ├── scripts/
+│   ├── package-hosts.mjs
 │   ├── eval-hosts.mjs
 │   └── capture-widget.mjs
 ├── tests/
@@ -553,12 +557,15 @@ examples/rsc-agent-runtime/
 ### Task 4: Dual-host packaging, native evaluations, browser evidence, and documentation
 
 **Files:**
-- Create: `examples/rsc-agent-runtime/.claude-plugin/plugin.json`
-- Create: `examples/rsc-agent-runtime/.codex-plugin/plugin.json`
-- Create: `examples/rsc-agent-runtime/.mcp.claude.json`
-- Create: `examples/rsc-agent-runtime/.mcp.codex.json`
-- Create: `examples/rsc-agent-runtime/hooks/claude.json`
-- Create: `examples/rsc-agent-runtime/hooks/codex.json`
+- Modify: `examples/rsc-agent-runtime/package.json`
+- Create: `examples/rsc-agent-runtime/packaging/claude/.claude-plugin/plugin.json`
+- Create: `examples/rsc-agent-runtime/packaging/claude/.mcp.json`
+- Create: `examples/rsc-agent-runtime/packaging/claude/hooks/hooks.json`
+- Create: `examples/rsc-agent-runtime/packaging/codex/.agents/plugins/marketplace.json`
+- Create: `examples/rsc-agent-runtime/packaging/codex/.codex-plugin/plugin.json`
+- Create: `examples/rsc-agent-runtime/packaging/codex/.mcp.json`
+- Create: `examples/rsc-agent-runtime/packaging/codex/hooks/hooks.json`
+- Create: `examples/rsc-agent-runtime/scripts/package-hosts.mjs`
 - Create: `examples/rsc-agent-runtime/scripts/eval-hosts.mjs`
 - Create: `examples/rsc-agent-runtime/scripts/capture-widget.mjs`
 - Create: `examples/rsc-agent-runtime/README.md`
@@ -566,26 +573,35 @@ examples/rsc-agent-runtime/
 
 **Interfaces:**
 - Consumes: Task 2 hook executable and Task 3 MCP executables/widget resource.
-- Produces: an installable source plugin for Claude Code 2.1.232 and Codex CLI 0.147.0.
+- Produces: self-contained `dist/plugins/claude` and `dist/plugins/codex` artifacts for Claude Code
+  2.1.232 and Codex CLI 0.147.0.
 - Produces: `npm run eval:hosts -w @agent-bundle/rsc-agent-runtime-demo -- --host all` JSON summary.
 - Produces: `npm run capture:widget -w @agent-bundle/rsc-agent-runtime-demo -- --output <png>` visual evidence.
 
 - [ ] **Step 1: Write failing host-artifact contract tests**
 
-  Assert both manifests identify `rsc-agent-runtime`, use strict semver `0.1.0`, point to their
-  matching MCP and hook files, and reference only existing contained paths. Assert:
+  Run the host packager over a built runtime. Assert both materialized manifests identify
+  `rsc-agent-runtime`, use strict semver `0.1.0`, use native conventional MCP/hook paths, and
+  reference only files contained in their own artifact. Assert:
 
   ```json
   {
-    "claudeMcpArg": "${CLAUDE_PLUGIN_ROOT}/dist/mcp/stdio.js",
-    "codexMcpArg": "./dist/mcp/stdio.js",
+    "claudeMcpArg": "${CLAUDE_PLUGIN_ROOT}/runtime/mcp/stdio.js",
+    "codexMcpArg": "./runtime/mcp/stdio.js",
     "claudeHookMatcher": "Write|Edit",
     "codexHookMatcher": "apply_patch|Write|Edit"
   }
   ```
 
-  Reject `PLUGIN_ROOT`, `PLUGIN_DATA`, or workspace placeholders anywhere in `.mcp.codex.json`.
-  Assert hook commands select the correct `--host` and neither config mentions an API key.
+  Reject `PLUGIN_ROOT`, `PLUGIN_DATA`, or workspace placeholders anywhere in the materialized Codex
+  `.mcp.json`. Assert its `cwd` is `./`; its hook command uses native `${PLUGIN_ROOT}` and selects
+  `--host codex`. Assert Claude uses `${CLAUDE_PLUGIN_ROOT}` and `--host claude`. Neither config may
+  mention an API key.
+
+  Assert the Codex manifest has its required `interface`, `skills: "./skills/"`,
+  `mcpServers: "./.mcp.json"`, and `hooks: "./hooks/hooks.json"`; the artifact must contain all four
+  paths plus `.agents/plugins/marketplace.json`. Assert Claude strict validation targets the separate
+  Claude artifact, not the example root.
 
   Assert the supplemental-runtime boundary: `packages/agent-bundle/package.json` has no React,
   `react-server-dom-rspack`, or `rsbuild-plugin-rsc` runtime/peer/optional dependency, and no source
@@ -601,9 +617,12 @@ examples/rsc-agent-runtime/
 
   Expected: failure because manifests and hook configs are absent.
 
-- [ ] **Step 3: Create native manifests and launch configs**
+- [ ] **Step 3: Create host templates and materialize self-contained native artifacts**
 
-  Give both manifests the same identity and metadata, with host-specific component paths:
+  Give both manifests the same identity and description. Claude uses its native compact manifest.
+  Codex must additionally include its schema-required `interface` object with display/short/long
+  descriptions, developer name, `Productivity` category, `mcp`/`hooks` capabilities, and one default
+  prompt, plus these conventional fields:
 
   ```json
   {
@@ -611,14 +630,22 @@ examples/rsc-agent-runtime/
     "version": "0.1.0",
     "description": "RSC hooks, shared state, MCP tools, and an MCP App in one runtime demo.",
     "author": { "name": "Agent Bundle" },
-    "mcpServers": "./.mcp.HOST.json",
-    "hooks": "./hooks/HOST.json"
+    "mcpServers": "./.mcp.json",
+    "hooks": "./hooks/hooks.json",
+    "skills": "./skills/"
   }
   ```
 
-  Claude's MCP file uses a wrapped `mcpServers` object and `${CLAUDE_PLUGIN_ROOT}`. Codex's MCP file
-  uses a direct server map and the contained relative bundle path. Both hook configs use synchronous
-  `PostToolUse` command handlers; write `statusMessage` values that identify the RSC render.
+  Both MCP files use their native wrapped `mcpServers` object. Claude launches
+  `${CLAUDE_PLUGIN_ROOT}/runtime/mcp/stdio.js`; Codex uses `cwd: "./"` and
+  `./runtime/mcp/stdio.js`. Both hook configs use synchronous `PostToolUse` handlers and select the
+  correct `--host`; Claude uses `${CLAUDE_PLUGIN_ROOT}`, while Codex hooks use `${PLUGIN_ROOT}`.
+
+  Add `package-hosts.mjs`. It must delete only the exact `dist/plugins` directory, recreate each
+  plugin root, copy the appropriate template, copy only built `hook`, `rsc`, `mcp`, `app`, and
+  manifest outputs beneath `runtime/`, and create Codex's conventional `skills/` directory. It must
+  never recursively copy `dist/plugins` into itself. Add `package:hosts` and run it after
+  `rsbuild build` in the example's `build` script.
 
 - [ ] **Step 4: Implement a deterministic native-host evaluation script**
 
@@ -626,8 +653,9 @@ examples/rsc-agent-runtime/
 
   - parse `--host claude|codex|all`, defaulting to `all`;
   - verify exact installed versions before running;
-  - create a fresh temporary Git workspace and explicit shared state file per host;
-  - run Claude with `claude -p --plugin-dir <example-root> --output-format stream-json --verbose
+  - require the appropriate built `dist/plugins/<host>` artifact, create a fresh temporary Git
+    workspace, and use an explicit shared state file per host;
+  - run Claude with `claude -p --plugin-dir <dist/plugins/claude> --output-format stream-json --verbose
     --include-hook-events --no-session-persistence --dangerously-skip-permissions`;
   - run Codex with `codex -a never exec --ephemeral --json --dangerously-bypass-hook-trust
     -s workspace-write -C <fixture>` and a temporary local marketplace/plugin installation; `-a`
@@ -676,7 +704,7 @@ examples/rsc-agent-runtime/
   Run diagnostics before TypeScript, then:
 
   ```bash
-  claude plugin validate --strict examples/rsc-agent-runtime
+  claude plugin validate --strict examples/rsc-agent-runtime/dist/plugins/claude
   npm run check -w @agent-bundle/rsc-agent-runtime-demo
   npm run capture:widget -w @agent-bundle/rsc-agent-runtime-demo -- --output /tmp/rsc-agent-runtime-widget.png
   npm run check
@@ -725,7 +753,7 @@ examples/rsc-agent-runtime/
 - [ ] Run root `npm run check`.
 - [ ] Confirm the published `agent-bundle` package has no dependency/import/configuration edge to the
       example or its React/RSC packages.
-- [ ] Run `claude plugin validate --strict examples/rsc-agent-runtime`.
+- [ ] Run `claude plugin validate --strict examples/rsc-agent-runtime/dist/plugins/claude`.
 - [ ] Run the stdio and Streamable HTTP integration tests with open-handle detection.
 - [ ] Run the widget capture at desktop and mobile widths and inspect both screenshots against the accepted concept.
 - [ ] Run `npm run eval:hosts -w @agent-bundle/rsc-agent-runtime-demo -- --host all` using installed sessions.

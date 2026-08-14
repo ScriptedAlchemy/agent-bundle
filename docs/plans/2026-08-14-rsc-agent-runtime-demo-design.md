@@ -246,24 +246,28 @@ Refresh -> `tools/call recent_edits` -> update the mounted timeline and state ve
 
 ## Plugin packaging
 
-The example root is a dual-host plugin source:
+Claude and Codex both reserve conventional root names such as `.mcp.json` and
+`hooks/hooks.json`, but their path-token and manifest contracts differ. One physical plugin root
+therefore cannot honestly carry both native configurations. The example keeps host templates apart
+and materializes two self-contained build artifacts:
 
 ```text
 examples/rsc-agent-runtime/
-├── .claude-plugin/plugin.json
-├── .codex-plugin/plugin.json
-├── .mcp.claude.json
-├── .mcp.codex.json
-├── hooks/{claude,codex}.json
-├── src/
-├── tests/
-├── scripts/eval-hosts.mjs
-└── dist/
+├── packaging/
+│   ├── claude/{.claude-plugin,.mcp.json,hooks}/...
+│   └── codex/{.agents,.codex-plugin,.mcp.json,hooks}/...
+├── scripts/package-hosts.mjs
+└── dist/plugins/
+    ├── claude/{.claude-plugin,.mcp.json,hooks,runtime}/...
+    └── codex/{.agents,.codex-plugin,.mcp.json,hooks,skills,runtime}/...
 ```
 
-Claude uses `${CLAUDE_PLUGIN_ROOT}` in its MCP launch config. Codex receives a contained relative
-entry path because native `.mcp.json` does not interpolate plugin/workspace placeholders. Codex
-also sets `CLAUDE_PLUGIN_ROOT` for hook compatibility, so both command files can locate the bundle.
+`runtime/` contains the built `hook`, `rsc`, `mcp`, and `app` outputs. Claude launches them through
+`${CLAUDE_PLUGIN_ROOT}`. Codex MCP uses a contained path relative to `cwd: "./"`, because native
+Codex `.mcp.json` does not interpolate plugin/workspace placeholders; Codex hook commands use their
+native `${PLUGIN_ROOT}` token. The Codex artifact also contains the full required interface metadata,
+conventional `skills` path, and local marketplace manifest. Native evaluation always installs or
+loads these materialized artifacts, never the ambiguous example source root.
 
 ## Verification and evaluation
 
