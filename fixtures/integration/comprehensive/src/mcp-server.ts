@@ -11,7 +11,12 @@ if (app === undefined) throw new Error('Expected an integration MCP App.');
 const server = new McpServer({ name: 'integration-mcp', version: '1.0.0' });
 
 server.registerResource(app.name, app.resourceUri, {
-  _meta: { ui: { resourceUri: app.resourceUri } },
+  _meta: {
+    ui: {
+      ...(typeof app._meta?.ui === 'object' && app._meta.ui !== null ? app._meta.ui : {}),
+      resourceUri: app.resourceUri,
+    },
+  },
   mimeType: app.mimeType,
 }, async (uri) => ({
   contents: [{

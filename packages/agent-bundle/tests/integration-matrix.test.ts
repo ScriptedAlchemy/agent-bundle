@@ -136,6 +136,7 @@ it('builds the checked-in fixture matrix from a path with spaces', async () => {
       tool: 'show-dashboard',
     });
     expect(localInvocation.result).toMatchObject({
+      _meta: { ui: { resourceUri: 'ui://integration-fixture/dashboard-v1.html' } },
       content: [{ text: 'dashboard ready: ordinary local import', type: 'text' }],
       structuredContent: { resourceUri: 'ui://integration-fixture/dashboard-v1.html', view: 'dashboard' },
     });
@@ -149,7 +150,7 @@ it('builds the checked-in fixture matrix from a path with spaces', async () => {
     try {
       await expect(client.listResources()).resolves.toMatchObject({
         resources: [{
-          _meta: { ui: { resourceUri: 'ui://integration-fixture/dashboard-v1.html' } },
+          _meta: { ui: { prefersBorder: true, resourceUri: 'ui://integration-fixture/dashboard-v1.html' } },
           mimeType: 'text/html;profile=mcp-app',
           name: 'dashboard',
           uri: 'ui://integration-fixture/dashboard-v1.html',
