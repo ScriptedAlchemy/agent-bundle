@@ -1,14 +1,18 @@
+import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { basename, extname, relative, resolve } from 'node:path';
 
 import { digest } from '../core/digest.ts';
+import { pathTokens } from '../core/types.ts';
 import type {
   AgentBundleHookEntry,
   AgentBundleHookInput,
+  AgentBundleMcpServer,
   CanonicalHookEvent,
   CanonicalHookTool,
   NormalizationTargetRegistry,
   NormalizedHook,
+  NormalizedMcpServer,
   NormalizedNativeHook,
   NormalizedPlugin,
   NormalizedSkill,
@@ -46,6 +50,11 @@ const slug = (value: string): string => {
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '');
   return normalized.length === 0 ? 'handler' : normalized;
+};
+
+const mcpEntryName = (name: string): string => {
+  const hash = createHash('sha256').update(name).digest('hex').slice(0, 8);
+  return `mcp-${slug(name)}-${hash}.mjs`;
 };
 
 const isHookEntryList = (
@@ -151,6 +160,67 @@ const normalizeNativeHooks = async (
   return nativeHooks;
 };
 
+const normalizeMcpServer = (
+  name: string,
+  server: AgentBundleMcpServer,
+  root: string,
+  defaultTargets: readonly string[],
+  provenance: SourceProvenance,
+): NormalizedMcpServer => {
+  const targets = sortedUnique(server.targets ?? defaultTargets);
+  const common = {
+    id: `mcp:${name}`,
+    name,
+    provenance: { ...provenance },
+    targets,
+  };
+
+  if (server.entry !== undefined) {
+    const entryName = mcpEntryName(name);
+    return {
+      ...common,
+      ...(server.env === undefined ? {} : { env: { ...server.env } }),
+      args: [`mcp/${entryName}`, ...(server.args ?? [])],
+      command: 'node',
+      cwd: pathTokens.pluginRoot,
+      source: resolve(root, server.entry),
+      transport: 'stdio',
+    };
+  }
+
+  if (server.command !== undefined) {
+    return {
+      ...common,
+      ...(server.args === undefined ? {} : { args: [...server.args] }),
+      command: server.command,
+      ...(server.cwd === undefined ? {} : { cwd: server.cwd }),
+      ...(server.env === undefined ? {} : { env: { ...server.env } }),
+      transport: 'stdio',
+    };
+  }
+
+  return {
+    ...common,
+    ...(server.headers === undefined ? {} : { headers: { ...server.headers } }),
+    transport: server.transport!,
+    url: server.url!,
+  };
+};
+
+const normalizeMcpServers = (
+  loaded: LoadedConfig,
+  targetNames: readonly string[],
+): readonly NormalizedMcpServer[] => {
+  const servers = loaded.config.mcp?.servers;
+  if (servers === undefined) return [];
+
+  const provenance: SourceProvenance = { kind: 'config', sourcePath: loaded.configPath };
+  return Object.entries(servers)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([name, server]) =>
+      normalizeMcpServer(name, server, loaded.context.projectRoot, targetNames, provenance));
+};
+
 const deepFreeze = <Value>(value: Value): Value => {
   if (typeof value !== 'object' || value === null || Object.isFrozen(value)) {
     return value;
@@ -229,7 +299,7 @@ export const normalizeProject = async (
       provenance: configProvenance,
       version: loaded.config.plugin.version,
     },
-    mcpServers: [],
+    mcpServers: normalizeMcpServers(loaded, targetNames),
     hooks: normalizeHooks(loaded, targetNames, registry),
     ...(nativeHooks.length === 0 ? {} : { nativeHooks }),
     scripts: [],
