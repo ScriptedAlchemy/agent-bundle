@@ -152,9 +152,24 @@ const sameStringArrays = (left: readonly string[], right: readonly string[]): bo
 const sameOptionalStringArrays = (left: readonly string[] | undefined, right: readonly string[] | undefined): boolean =>
   left === undefined || right === undefined ? left === right : sameStringArrays(left, right);
 
-const declaredOptions = (helpOutput: string): ReadonlySet<string> => Object.freeze(new Set(
-  [...helpOutput.matchAll(/--[A-Za-z][A-Za-z0-9-]*/gu)].map(([option]) => option),
-));
+const declaredOptions = (helpOutput: string): ReadonlySet<string> => {
+  const options = new Set<string>();
+  let inOptionsSection = false;
+  for (const line of helpOutput.split(/\r?\n/u)) {
+    if (/^\s*Options:\s*$/iu.test(line)) {
+      inOptionsSection = true;
+      continue;
+    }
+    if (!inOptionsSection) continue;
+    if (/^\S.*:\s*$/u.test(line)) {
+      inOptionsSection = false;
+      continue;
+    }
+    const definition = /^\s+(?:-[A-Za-z0-9],\s+)?(--[A-Za-z][A-Za-z0-9-]*)(?:\s+(?:<[^>\r\n]+>|\[[^\]\r\n]+\]|[A-Z][A-Z0-9_-]*))*(?:\s{2,}|$)/u.exec(line);
+    if (definition !== null) options.add(definition[1]!);
+  }
+  return Object.freeze(options);
+};
 
 const declaredCommands = (helpOutput: string): ReadonlySet<string> => Object.freeze(new Set(
   helpOutput

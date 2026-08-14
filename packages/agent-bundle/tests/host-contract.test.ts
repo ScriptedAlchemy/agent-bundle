@@ -57,7 +57,7 @@ const isOfficialUrl = (value: string): boolean => {
 const containsCredentialOrHomePath = (value: string): boolean => {
   if (isOfficialUrl(value)) return false;
   return /(?:ANTHROPIC_API_KEY|OPENAI_API_KEY|(?:^|[^A-Za-z0-9_-])sk-[A-Za-z0-9_-]{20,}(?:$|[^A-Za-z0-9_-])|(?:api[_-]?key|authorization)\s*[:=]\s*\S+)/iu.test(value)
-    || /(?:^|[\s"'(=:])(?:\/Users\/[^/\s"'<>]+(?:\/|$)|\/home\/[^/\s"'<>]+(?:\/|$)|\/root\/)/u.test(value);
+    || /(?:^|[\s"'(=:])(?:\/Users\/[^/\s"'<>]+(?:\/|$)|\/home\/[^/\s"'<>]+(?:\/|$)|\/root\/|[A-Za-z]:\\Users\\[^\\\s"'<>]+(?:\\|$))/u.test(value);
 };
 
 it('accepts the checked-in Claude and Codex baselines from raw version and help fixtures', async () => {
@@ -109,6 +109,22 @@ it('requires each declared Codex help command to supply its own compatible outpu
   });
 });
 
+it('recognizes long options defined on their own lines in an Options section', async () => {
+  const contracts = await loadContractModule();
+  expect(contracts).toBeDefined();
+
+  const codex = await readContractFixture('codex');
+  const result = contracts!.evaluateHostContract(codex.contract, {
+    ...codex,
+    helpOutputs: {
+      ...codex.helpOutputs,
+      exec: 'Usage: codex exec [OPTIONS] [PROMPT]\n\nOptions:\n      --ephemeral\n          Run without persisting session files to disk\n\n      --json\n          Print events to stdout as JSONL\n',
+    },
+  });
+
+  expect(result).toMatchObject({ host: 'codex', status: 'compatible', version: '0.147.0' });
+});
+
 it('parses the checked-in redacted stream and hook event envelopes', async () => {
   const contracts = await loadContractModule();
   expect(contracts).toBeDefined();
@@ -142,7 +158,9 @@ it('reports one actionable diagnostic when a required flag changes name', async 
     ...claude,
     helpOutputs: {
       ...claude.helpOutputs,
-      root: claude.helpOutputs.root.replace('--plugin-dir', '--plugin-directory'),
+      root: claude.helpOutputs.root
+        .replace('--plugin-dir <path>', '--plugin-directory <path>')
+        .concat('\nFor legacy scripts, see --plugin-dir in the migration guide.\n'),
     },
   });
 
@@ -331,6 +349,7 @@ it('keeps host fixtures to redacted envelopes and required command shapes', asyn
     '/Users/alice/.config/host',
     '/home/alice/.config/host',
     '/root/.config/host',
+    'C:\\Users\\alice\\.config\\host',
   ]) expect(containsCredentialOrHomePath(sensitiveValue)).toBe(true);
   expect(containsCredentialOrHomePath('https://platform.openai.com/docs/api-reference')).toBe(false);
 });
