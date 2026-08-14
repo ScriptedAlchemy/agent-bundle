@@ -73,20 +73,24 @@ it('recognizes agent-bundle re-exports and CommonJS requires in generated code',
 });
 
 it('uses only an installed tarball after source deletion', async () => {
-  await execFile('npm', ['run', 'build'], { cwd: workspaceRoot, env: installedEnvironment() });
   const consumerRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-packed-consumer-'));
+  const packedPackageRoot = join(consumerRoot, 'packed-agent-bundle');
   const projectRoot = join(consumerRoot, 'project with spaces');
   const firstArtifact = join(projectRoot, 'first artifact');
   const secondArtifact = join(projectRoot, 'second artifact');
 
   try {
+    await cp(packageRoot, packedPackageRoot, { recursive: true });
+    await execFile(join(workspaceRoot, 'node_modules', '.bin', 'rslib'), [
+      'build', '--dist-path', join(packedPackageRoot, 'dist'),
+    ], { cwd: workspaceRoot, env: installedEnvironment() });
     const { stdout: packed } = await execFile('npm', [
       'pack',
       '--json',
       '--pack-destination',
       consumerRoot,
     ], {
-      cwd: packageRoot,
+      cwd: packedPackageRoot,
       env: installedEnvironment(),
     });
     const tarball = join(consumerRoot, (JSON.parse(packed) as Array<{ filename: string }>)[0]!.filename);
