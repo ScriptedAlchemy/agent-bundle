@@ -133,6 +133,43 @@ const publishFixtureEpoch = async (root: string, id: string): Promise<EpochStore
   return store;
 };
 
+const publishRemoteEpoch = async (root: string, id: string): Promise<EpochStore> => {
+  const model = await normalizeProject(
+    loadedProject(root, {
+      mcp: {
+        servers: {
+          events: {
+            headers: { 'X-Mode': 'events' },
+            transport: 'sse',
+            url: 'https://mcp.example.test/events',
+          },
+          http: {
+            headers: { Authorization: 'Bearer ${PLUGIN_DATA}' },
+            transport: 'streamable-http',
+            url: 'https://mcp.example.test/tools',
+          },
+        },
+      },
+      plugin: { name: 'persistent-mcp-remote-fixture', version: '1.0.0' },
+      targets: ['portable'],
+    }),
+    { skills: [] },
+    registry,
+  );
+  const artifact = join(root, 'compiled');
+  await build({ model, outputRoot: artifact, projectRoot: root, registry: createDefaultRegistry() });
+
+  const store = new EpochStore({ projectRoot: root });
+  const staging = await store.createStagingEpoch({ epoch: epochFor(root, id), targets: ['portable'] });
+  await Promise.all([
+    cp(join(artifact, 'agent-bundle.hooks.json'), join(staging.root, 'agent-bundle.hooks.json')),
+    cp(join(artifact, 'agent-bundle.manifest.json'), join(staging.root, 'agent-bundle.manifest.json')),
+    cp(join(artifact, 'portable'), join(staging.root, 'portable'), { recursive: true }),
+  ]);
+  await staging.publish(async () => undefined);
+  return store;
+};
+
 const publishEpochCopy = async (
   root: string,
   store: EpochStore,
@@ -518,6 +555,52 @@ it('fails and closes the session as soon as stderr exceeds its output bound', as
     await session.close();
     expect(clientCloses).toBe(1);
     expect(Buffer.byteLength(session.stderr())).toBeLessThanOrEqual(1_000_000);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+}, 30_000);
+
+it('opens generated streamable HTTP and SSE servers through their dedicated transports', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-persistent-mcp-remote-'));
+  try {
+    const epochStore = await publishRemoteEpoch(root, 'epoch-remote');
+    const http: Array<{ readonly headers?: Readonly<Record<string, string>>; readonly url: string }> = [];
+    const sse: Array<{ readonly headers?: Readonly<Record<string, string>>; readonly url: string }> = [];
+    const service = new McpSessionService({
+      createClient: () => ({
+        callTool: async () => ({ content: [] }),
+        close: async () => undefined,
+        connect: async () => undefined,
+        getPrompt: async () => ({ messages: [] }),
+        getServerCapabilities: () => undefined,
+        getServerVersion: () => undefined,
+        listPrompts: async () => ({ prompts: [] }),
+        listResources: async () => ({ resources: [] }),
+        listResourceTemplates: async () => ({ resourceTemplates: [] }),
+        listTools: async () => ({ tools: [] }),
+        readResource: async () => ({ contents: [] }),
+      }),
+      createSseTransport: (url, options) => {
+        sse.push({ ...options, url: url.href });
+        return { close: async () => undefined, send: async () => undefined, start: async () => undefined } as never;
+      },
+      createStreamableHttpTransport: (url, options) => {
+        http.push({ ...options, url: url.href });
+        return { close: async () => undefined, send: async () => undefined, start: async () => undefined } as never;
+      },
+      epochStore,
+      projectRoot: root,
+    });
+
+    const httpSession = await service.open({ epochId: 'epoch-remote', serverName: 'http', target: 'portable' });
+    const sseSession = await service.open({ epochId: 'epoch-remote', serverName: 'events', target: 'portable' });
+
+    expect(http[0]?.url).toBe('https://mcp.example.test/tools');
+    expect(http[0]?.headers?.Authorization).toMatch(/^Bearer \/.+/u);
+    expect(http[0]?.headers?.Authorization).not.toContain('${PLUGIN_DATA}');
+    expect(sse).toEqual([{ headers: { 'X-Mode': 'events' }, url: 'https://mcp.example.test/events' }]);
+
+    await Promise.all([httpSession.close(), sseSession.close(), service.close()]);
   } finally {
     await rm(root, { force: true, recursive: true });
   }
