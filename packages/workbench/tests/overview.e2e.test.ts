@@ -96,7 +96,7 @@ e2e('renders and rebuilds the complete responsive Overview against a real foregr
     await page.keyboard.press('End');
     await expect.poll(() => generatedTab.evaluate((element) => document.activeElement === element), { timeout: browserTimeout }).toBe(true);
     await expect(generatedTab).toHaveAttribute('aria-selected', 'true');
-    await expect(generatedTab).toHaveAttribute('aria-controls', /-panel-generated$/u);
+    await expect(generatedTab).toHaveAttribute('aria-controls', 'skill-review-panel');
     await expect(page.getByRole('tabpanel')).toHaveAttribute('aria-labelledby', /-tab-generated$/u);
     await page.keyboard.press('Home');
     await expect.poll(() => renderedTab.evaluate((element) => document.activeElement === element), { timeout: browserTimeout }).toBe(true);

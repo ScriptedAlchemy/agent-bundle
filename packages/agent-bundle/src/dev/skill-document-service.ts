@@ -343,14 +343,13 @@ export class SkillDocumentService {
       throw error;
     }
     try {
-      const epochRoot = join(this.#root, '.agent-bundle', 'epochs', epochId);
-      const realEpochRoot = await assertedDirectory(epochRoot).catch((error: unknown) => {
+      const realEpochRoot = await assertedDirectory(reference.root).catch((error: unknown) => {
         if (error instanceof SkillDocumentError) {
           throw new SkillDocumentError('SKILL_EPOCH_UNAVAILABLE', 'Artifact epoch is not available.');
         }
         throw error;
       });
-      const targetRoot = join(epochRoot, target);
+      const targetRoot = join(realEpochRoot, target);
       const realTargetRoot = await assertedDirectory(targetRoot).catch((error: unknown) => {
         if (error instanceof SkillDocumentError) {
           throw new SkillDocumentError('SKILL_TARGET_UNAVAILABLE', 'Artifact target is not available in this epoch.');

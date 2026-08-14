@@ -25,7 +25,7 @@ const tabKey = (skillId: string): string => `skill-${skillId.replace(/^skill:/u,
 
 const tabIdFor = (skillId: string, tab: SkillTab): string => `${tabKey(skillId)}-tab-${tab}`;
 
-const panelIdFor = (skillId: string, tab: SkillTab): string => `${tabKey(skillId)}-panel-${tab}`;
+const panelIdFor = (skillId: string): string => `${tabKey(skillId)}-panel`;
 
 export interface SkillDocumentPanelProps {
   readonly generated: GeneratedDocumentState;
@@ -99,7 +99,7 @@ export const SkillDocumentPanel = ({ generated, onTabChange, selected, tab }: Sk
     selectTab(next);
   };
   const tabId = tabIdFor(selected.id, tab);
-  const panelId = panelIdFor(selected.id, tab);
+  const panelId = panelIdFor(selected.id);
 
   return <section aria-label={`${selected.name} Skill`} className="skill-detail">
     <div className="skill-detail-heading">
@@ -123,7 +123,7 @@ export const SkillDocumentPanel = ({ generated, onTabChange, selected, tab }: Sk
     <div aria-label="Skill document views" className="skill-tabs" role="tablist">
       {skillTabs.map((candidate) => (
         <button
-          aria-controls={panelIdFor(selected.id, candidate)}
+          aria-controls={panelIdFor(selected.id)}
           aria-selected={tab === candidate}
           className={tab === candidate ? 'skill-tab skill-tab--active' : 'skill-tab'}
           id={tabIdFor(selected.id, candidate)}

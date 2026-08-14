@@ -44,11 +44,28 @@ it('gives each Skill view a complete roving-tab and labelled-tabpanel contract',
 
   expect(markup).toContain('role="tablist"');
   expect(markup).toContain('role="tab"');
-  expect(markup).toContain('aria-controls="skill-review-panel-rendered"');
+  expect(markup).toContain('aria-controls="skill-review-panel"');
   expect(markup).toContain('id="skill-review-tab-rendered"');
   expect(markup).toContain('tabindex="0"');
   expect(markup).toContain('tabindex="-1"');
   expect(markup).toContain('role="tabpanel"');
-  expect(markup).toContain('id="skill-review-panel-rendered"');
+  expect(markup).toContain('id="skill-review-panel"');
   expect(markup).toContain('aria-labelledby="skill-review-tab-rendered"');
+});
+
+it('keeps inactive tabs connected to the rendered tabpanel', () => {
+  const markup = renderToStaticMarkup(createElement(SkillDocumentPanel, {
+    generated: { state: 'unavailable', summary: 'No artifact epoch is active.' },
+    onTabChange: () => undefined,
+    selected: document,
+    tab: 'rendered',
+  }));
+  const controls = [...markup.matchAll(/aria-controls="([^"]+)"/gu)].map((match) => match[1]);
+
+  expect(controls).toEqual([
+    'skill-review-panel',
+    'skill-review-panel',
+    'skill-review-panel',
+  ]);
+  expect(markup).toContain('id="skill-review-panel"');
 });

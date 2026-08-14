@@ -162,6 +162,42 @@ it('serves the generated parser result and byte-identical resources while pinnin
   }
 });
 
+it('reads generated documents from the acquired epoch reference root, never a similarly named alternate root', async () => {
+  const protectedRoot = await createProject();
+  const alternateRoot = await createProject();
+  try {
+    const protectedProject = new ProjectService({ root: protectedRoot });
+    const epochStore = new EpochStore({ projectRoot: protectedRoot });
+    const built = await new ArtifactService({ epochStore }).build(await protectedProject.prepare('build'));
+    expect(built.outcome).toBe('succeeded');
+    if (built.outcome !== 'succeeded') throw new Error('Fixture artifact did not build.');
+    const alternateSkill = join(alternateRoot, '.agent-bundle', 'epochs', built.epoch.id, 'portable', 'skills', 'review');
+    await mkdir(join(alternateSkill, 'assets'), { recursive: true });
+    await Promise.all([
+      writeFile(join(alternateSkill, 'SKILL.md'), '---\nname: review\n---\n# Alternate\n'),
+      writeFile(join(alternateSkill, 'assets', 'pixel.bin'), 'alternate'),
+    ]);
+    const service = new SkillDocumentService({
+      epochStore,
+      projectService: new ProjectService({ root: alternateRoot }),
+      root: alternateRoot,
+    });
+
+    const document = await service.generated(built.epoch.id, 'portable', 'skill:review');
+    const resource = await service.generatedResource(built.epoch.id, 'portable', 'skill:review', ['assets', 'pixel.bin']);
+
+    expect(document.body).toContain('# Review');
+    expect(document.body).not.toContain('# Alternate');
+    expect(resource.body).toEqual(new Uint8Array([0, 255, 17, 9]));
+    await expect(readFile(join(alternateSkill, 'SKILL.md'), 'utf8')).resolves.toContain('# Alternate');
+  } finally {
+    await Promise.all([
+      rm(protectedRoot, { force: true, recursive: true }),
+      rm(alternateRoot, { force: true, recursive: true }),
+    ]);
+  }
+});
+
 it('serves only typed source Skill routes and rejects encoded resource separators before lookup', async () => {
   const root = await createProject();
   try {
