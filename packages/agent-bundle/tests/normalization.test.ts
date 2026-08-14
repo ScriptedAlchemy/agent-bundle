@@ -54,6 +54,7 @@ const skill = (
       description: options.description ?? `Use ${name}`,
       name,
     },
+    markdown: options.body ?? '# Skill\n',
     resources: (options.resources ?? ['SKILL.md']).map((relativePath) => ({
       bytes: 1,
       relativePath,

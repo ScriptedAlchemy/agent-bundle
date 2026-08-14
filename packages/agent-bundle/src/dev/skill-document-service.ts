@@ -51,6 +51,8 @@ export interface ServedSkillDocument {
   readonly diagnostics: readonly Diagnostic[];
   readonly frontmatter: Readonly<Record<string, unknown>>;
   readonly id: string;
+  /** Exact source or emitted Markdown for the Source tab; never browser-parsed frontmatter. */
+  readonly markdown: string;
   readonly name: string;
   readonly provenance?: SourceProvenance;
   readonly resources: readonly SkillDocumentResource[];
@@ -59,6 +61,8 @@ export interface ServedSkillDocument {
 
 export interface ServedSkillResource {
   readonly body: Uint8Array;
+  /** Active web formats are downloaded instead of rendered under the foreground origin. */
+  readonly contentDisposition?: 'attachment';
   readonly contentType: string;
   readonly relativePath: string;
 }
@@ -120,6 +124,16 @@ const documentResources = (resources: readonly SkillResource[]): readonly SkillD
 const contentTypeFor = (path: string): string =>
   contentTypes[extname(path).toLowerCase()] ?? 'application/octet-stream';
 
+const activeWebContentTypes = new Set([
+  'image/svg+xml',
+  'text/html',
+  'text/javascript',
+  'text/typescript',
+]);
+
+const contentDispositionFor = (contentType: string): 'attachment' | undefined =>
+  activeWebContentTypes.has(contentType.split(';', 1)[0]!) ? 'attachment' : undefined;
+
 const resourcePath = (segments: readonly string[]): string => {
   if (segments.length === 0 || segments.some((segment) => !safeSegment(segment))) {
     throw new SkillDocumentError('SKILL_RESOURCE_UNAVAILABLE', 'Skill resource path is not valid.');
@@ -127,13 +141,14 @@ const resourcePath = (segments: readonly string[]): string => {
   return segments.join('/');
 };
 
-const sourceSkillDocument = (skill: NormalizedSkill): ServedSkillDocument => Object.freeze({
+const sourceSkillDocument = (skill: NormalizedSkill, document: SkillDocument): ServedSkillDocument => Object.freeze({
   base: Object.freeze({ kind: 'source', skillId: skill.id }),
-  body: skill.body,
+  body: document.body,
   ...(skill.description === undefined ? {} : { description: skill.description }),
-  diagnostics: Object.freeze([]),
-  frontmatter: Object.freeze(structuredClone(skill.frontmatter)),
+  diagnostics: freezeDiagnostics(document.diagnostics),
+  frontmatter: Object.freeze(structuredClone(document.frontmatter)),
   id: skill.id,
+  markdown: document.markdown,
   name: skill.name,
   provenance: Object.freeze({ ...skill.provenance }),
   resources: Object.freeze(skill.resources.map((resource) => Object.freeze({
@@ -156,6 +171,7 @@ const generatedSkillDocument = (
     diagnostics: freezeDiagnostics(document.diagnostics),
     frontmatter: Object.freeze(structuredClone(document.frontmatter)),
     id: base.skillId,
+    markdown: document.markdown,
     name,
     resources: documentResources(document.resources),
   });
@@ -208,9 +224,11 @@ const readAllowedResource = async (
   if (!isContained(realRoot, realCandidate)) {
     throw new SkillDocumentError('SKILL_RESOURCE_UNAVAILABLE', 'Skill resource escapes its document base.');
   }
+  const contentType = contentTypeFor(resource.relativePath);
   return Object.freeze({
     body: new Uint8Array(await readFile(realCandidate)),
-    contentType: contentTypeFor(resource.relativePath),
+    ...(contentDispositionFor(contentType) === undefined ? {} : { contentDisposition: 'attachment' as const }),
+    contentType,
     relativePath: resource.relativePath,
   });
 };
@@ -234,13 +252,13 @@ export class SkillDocumentService {
     const prepared = await this.#projectService.prepare('inspect');
     return Object.freeze({
       diagnostics: freezeDiagnostics(prepared.diagnostics),
-      skills: Object.freeze((prepared.model?.skills ?? []).map(sourceSkillDocument)),
+      skills: Object.freeze(await Promise.all((prepared.model?.skills ?? []).map((skill) => this.#sourceDocument(skill)))),
     });
   }
 
   async source(skillId: string): Promise<ServedSkillDocument> {
     const skill = await this.#sourceSkill(skillId);
-    return sourceSkillDocument(skill);
+    return this.#sourceDocument(skill);
   }
 
   async sourceResource(skillId: string, segments: readonly string[]): Promise<ServedSkillResource> {
@@ -296,6 +314,14 @@ export class SkillDocumentService {
     return skill;
   }
 
+  async #sourceDocument(skill: NormalizedSkill): Promise<ServedSkillDocument> {
+    const document = await parseSkill(skill.dir, this.#root);
+    if (document.diagnostics.some((entry) => entry.code === 'AB3000')) {
+      throw new SkillDocumentError('SKILL_DOCUMENT_UNAVAILABLE', 'Source Skill Markdown is not available.');
+    }
+    return sourceSkillDocument(skill, document);
+  }
+
   async #withEpochTarget<Result>(
     epochId: string,
     target: string,
@@ -317,14 +343,13 @@ export class SkillDocumentService {
       throw error;
     }
     try {
-      const epochRoot = join(this.#root, '.agent-bundle', 'epochs', epochId);
-      const realEpochRoot = await assertedDirectory(epochRoot).catch((error: unknown) => {
+      const realEpochRoot = await assertedDirectory(reference.root).catch((error: unknown) => {
         if (error instanceof SkillDocumentError) {
           throw new SkillDocumentError('SKILL_EPOCH_UNAVAILABLE', 'Artifact epoch is not available.');
         }
         throw error;
       });
-      const targetRoot = join(epochRoot, target);
+      const targetRoot = join(realEpochRoot, target);
       const realTargetRoot = await assertedDirectory(targetRoot).catch((error: unknown) => {
         if (error instanceof SkillDocumentError) {
           throw new SkillDocumentError('SKILL_TARGET_UNAVAILABLE', 'Artifact target is not available in this epoch.');

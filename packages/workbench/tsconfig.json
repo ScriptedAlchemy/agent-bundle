@@ -8,10 +8,19 @@
     "src/inspector-closure.tsx",
     "src/overview-model.ts",
     "src/project-client.ts",
+    "src/shiki-code.tsx",
+    "src/skill-client.ts",
+    "src/skill-markdown.tsx",
+    "src/skills-model.ts",
+    "src/skills-page.tsx",
     "src/workbench.d.ts",
     "tests/overview-model.test.ts",
     "tests/project-client.test.ts",
     "tests/rsbuild-workbench.test.ts",
+    "tests/skill-client.test.ts",
+    "tests/skill-markdown.test.ts",
+    "tests/skills-model.test.ts",
+    "tests/skills-page.test.ts",
     "tests/workbench-dev-command.test.ts"
   ]
 }

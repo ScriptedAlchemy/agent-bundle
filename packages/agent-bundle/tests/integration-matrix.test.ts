@@ -1,11 +1,13 @@
 import { execFile as executeFile } from 'node:child_process';
-import { cp, mkdtemp, readFile, rm, stat } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, rm, stat, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 
 import { expect, it } from '@rstest/core';
+import { Client } from '@modelcontextprotocol/client';
+import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 
 import { build, inspect, invokeMcp, listHooks, listMcp, simulateHook, validate } from '../src/api.ts';
 
@@ -18,8 +20,17 @@ it('builds the checked-in fixture matrix from a path with spaces', async () => {
   const root = join(parent, 'project with spaces');
   const output = join(root, 'artifact');
   await cp(fixtureRoot, root, { recursive: true });
+  await mkdir(join(root, 'node_modules'), { recursive: true });
+  await symlink(
+    join(process.cwd(), 'node_modules', '@modelcontextprotocol'),
+    join(root, 'node_modules', '@modelcontextprotocol'),
+    'dir',
+  );
 
   try {
+    await expect(readFile(join(root, 'package.json'), 'utf8').then(JSON.parse)).resolves.toMatchObject({
+      devDependencies: { '@modelcontextprotocol/server': '2.0.0' },
+    });
     const inspection = await inspect({ root });
     expect(inspection.model).toMatchObject({
       metadata: { name: 'integration-fixture' },
@@ -127,9 +138,36 @@ it('builds the checked-in fixture matrix from a path with spaces', async () => {
       tool: 'show-dashboard',
     });
     expect(localInvocation.result).toMatchObject({
+      _meta: { ui: { resourceUri: 'ui://integration-fixture/dashboard-v1.html' } },
       content: [{ text: 'dashboard ready: ordinary local import', type: 'text' }],
       structuredContent: { resourceUri: 'ui://integration-fixture/dashboard-v1.html', view: 'dashboard' },
     });
+
+    const client = new Client({ name: 'integration-matrix', version: '1.0.0' });
+    await client.connect(new StdioClientTransport({
+      args: [join(output, 'portable', localMcpPath)],
+      command: process.execPath,
+      stderr: 'pipe',
+    }));
+    try {
+      await expect(client.listResources()).resolves.toMatchObject({
+        resources: [{
+          _meta: { ui: { prefersBorder: true, resourceUri: 'ui://integration-fixture/dashboard-v1.html' } },
+          mimeType: 'text/html;profile=mcp-app',
+          name: 'dashboard',
+          uri: 'ui://integration-fixture/dashboard-v1.html',
+        }],
+      });
+      await expect(client.readResource({ uri: 'ui://integration-fixture/dashboard-v1.html' })).resolves.toMatchObject({
+        contents: [{
+          mimeType: 'text/html;profile=mcp-app',
+          text: expect.stringContaining('integration dashboard'),
+          uri: 'ui://integration-fixture/dashboard-v1.html',
+        }],
+      });
+    } finally {
+      await client.close();
+    }
 
     const hooks = await listHooks({ artifact: output, root });
     expect(hooks).toHaveLength(2);

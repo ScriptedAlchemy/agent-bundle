@@ -74,6 +74,20 @@ it('publishes a validated staging directory as the active immutable epoch', asyn
   }
 });
 
+it('exposes the validated immutable epoch directory on an acquired reference', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent bundle epoch reference root '));
+  try {
+    const store = new EpochStore({ projectRoot: root });
+    await publishEpoch(store, epochFor(root, 'epoch-1'));
+    const reference = await store.acquireEpochReference('epoch-1');
+
+    expect(reference.root).toBe(join(root, '.agent-bundle', 'epochs', 'epoch-1'));
+    await reference.close();
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
 it('rejects an unsafe epoch id before it can create a staging directory', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent bundle unsafe epoch id '));
 

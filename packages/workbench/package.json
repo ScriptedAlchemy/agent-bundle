@@ -23,10 +23,13 @@
     "react-markdown": "10.1.0",
     "react-syntax-highlighter": "16.1.1",
     "remark-gfm": "4.0.1",
+    "shiki": "4.4.3",
     "zod": "4.4.3"
   },
   "devDependencies": {
     "@rsbuild/core": "2.1.13",
-    "@rsbuild/plugin-react": "2.1.0"
+    "@rsbuild/plugin-react": "2.1.0",
+    "@types/react": "19.2.18",
+    "@types/react-dom": "19.2.4"
   }
 }

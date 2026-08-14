@@ -1,8 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo, Socket } from 'node:net';
+import { basename } from 'node:path';
 
 import type { ProjectEventHub, ProjectEventSubscription } from './events.ts';
+import { McpSessionRoutes } from './mcp-session-routes.ts';
+import type { McpSessionService } from './mcp-session-service.ts';
 import { SkillDocumentError, type SkillDocumentService } from './skill-document-service.ts';
 import type { Invalidation, ProjectEventMessage, ProjectStatus } from './types.ts';
 
@@ -83,6 +86,8 @@ export interface ForegroundServerOptions {
   readonly coordinator: ForegroundCoordinator;
   readonly eventHub: ProjectEventHub;
   readonly host?: string;
+  /** Persistent MCP sessions are supplied by the workbench service, never by browser input. */
+  readonly mcpSessions?: McpSessionService;
   readonly now?: () => Date;
   readonly port?: number;
   /** Read-only Skill document/resource service for the workbench. */
@@ -131,6 +136,9 @@ const responseJson = (response: ServerResponse, body: unknown): void => {
   response.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
   response.end(JSON.stringify(body));
 };
+
+const attachmentHeader = (relativePath: string): string =>
+  `attachment; filename*=UTF-8''${encodeURIComponent(basename(relativePath)).replaceAll("'", '%27')}`;
 
 const singleHeader = (value: string | readonly string[] | undefined): string | undefined =>
   typeof value === 'string' ? value : undefined;
@@ -335,6 +343,7 @@ export class ForegroundServer {
   readonly #coordinator: ForegroundCoordinator;
   readonly #eventHub: ProjectEventHub;
   readonly #host: string;
+  readonly #mcpSessionRoutes: McpSessionRoutes;
   readonly #now: () => Date;
   readonly #port: number;
   readonly #server: Server;
@@ -366,6 +375,10 @@ export class ForegroundServer {
     this.#port = port;
     this.#skillDocuments = options.skillDocuments;
     this.sessionToken = options.sessionToken ?? randomUUID();
+    this.#mcpSessionRoutes = new McpSessionRoutes({
+      authorize: (request) => this.#assertMutationSession(request),
+      ...(options.mcpSessions === undefined ? {} : { service: options.mcpSessions }),
+    });
     this.#server = createServer((request, response) => {
       void this.#handle(request, response).catch((error: unknown) => {
         responseDiagnostic(
@@ -455,6 +468,7 @@ export class ForegroundServer {
 
   #releaseResources(): Promise<readonly ForegroundServerCloseFailure[]> {
     if (this.#releasePromise !== undefined) return this.#releasePromise;
+    this.#mcpSessionRoutes.close();
     const releaseServer = this.#listenStarted
       ? (() => {
           this.#listenStarted = false;
@@ -479,6 +493,7 @@ export class ForegroundServer {
     }
     const pathname = new URL(request.url ?? '/', this.url).pathname;
     const method = request.method ?? 'GET';
+    if (await this.#mcpSessionRoutes.handle(request, response)) return;
     const route = skillRoute(request.url);
     if (route !== undefined) return this.#serveSkill(route, response, method);
     if (pathname === '/api/project/status') {
@@ -527,10 +542,15 @@ export class ForegroundServer {
       const value = route.kind === 'source-resource'
         ? await service.sourceResource(route.skillId, route.resource)
         : await service.generatedResource(route.epochId, route.target, route.skillId, route.resource);
-      response.writeHead(200, {
+      const headers: Record<string, string> = {
         'content-length': String(value.body.byteLength),
         'content-type': value.contentType,
-      });
+        'x-content-type-options': 'nosniff',
+      };
+      if (value.contentDisposition === 'attachment') {
+        headers['content-disposition'] = attachmentHeader(value.relativePath);
+      }
+      response.writeHead(200, headers);
       response.end(method === 'HEAD' ? undefined : value.body);
     } catch (error) {
       if (error instanceof SkillDocumentError) {

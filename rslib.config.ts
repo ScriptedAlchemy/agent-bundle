@@ -15,6 +15,9 @@ export default defineConfig({
     copy: [
       { from: './packages/workbench/dist', to: 'workbench' },
       { from: './packages/workbench/THIRD_PARTY_NOTICES', to: 'workbench/THIRD_PARTY_NOTICES', toType: 'file' },
+      { from: './packages/workbench/src/inspector/UPSTREAM.json', to: 'workbench/src/inspector/UPSTREAM.json', toType: 'file' },
+      { from: './packages/workbench/src/inspector/LICENSE.inspector', to: 'workbench/src/inspector/LICENSE.inspector', toType: 'file' },
+      { from: './packages/workbench/src/inspector/PATCHES.md', to: 'workbench/src/inspector/PATCHES.md', toType: 'file' },
     ],
     filenameHash: false,
     distPath: {

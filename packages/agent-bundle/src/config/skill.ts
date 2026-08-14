@@ -23,6 +23,8 @@ export interface SkillDocument {
   diagnostics: Diagnostic[];
   dir: string;
   frontmatter: Record<string, unknown>;
+  /** Exact authored/emitted Markdown; splitting remains server-owned. */
+  markdown: string;
   resources: SkillResource[];
   source: string;
 }
@@ -119,6 +121,7 @@ export const parseSkill = async (
       ],
       dir,
       frontmatter: {},
+      markdown: '',
       resources,
       source,
     };
@@ -131,6 +134,7 @@ export const parseSkill = async (
       diagnostics: [missingFrontmatter(source)],
       dir,
       frontmatter: {},
+      markdown,
       resources,
       source,
     };
@@ -151,6 +155,7 @@ export const parseSkill = async (
       diagnostics: [],
       dir,
       frontmatter,
+      markdown,
       resources,
       source,
     };
@@ -160,6 +165,7 @@ export const parseSkill = async (
       diagnostics: [malformedFrontmatter(source, error)],
       dir,
       frontmatter: {},
+      markdown,
       resources,
       source,
     };

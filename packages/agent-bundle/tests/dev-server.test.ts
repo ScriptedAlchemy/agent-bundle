@@ -9,6 +9,7 @@ import {
   type Invalidation,
   type ProjectStatus,
 } from '../src/dev/index.ts';
+import type { McpSessionService } from '../src/dev/mcp-session-service.ts';
 
 const status = (): ProjectStatus => ({
   artifact: { state: 'missing' },
@@ -166,6 +167,16 @@ const within = async <T>(promise: Promise<T>, milliseconds: number): Promise<T> 
     setTimeout(() => rejectPromise(new Error(`Timed out after ${milliseconds}ms.`)), milliseconds);
   }),
 ]);
+
+const readToEnd = async (reader: ReadableStreamDefaultReader<Uint8Array>): Promise<string> => {
+  const decoder = new TextDecoder();
+  let output = '';
+  while (true) {
+    const next = await reader.read();
+    if (next.done) return output;
+    output += decoder.decode(next.value, { stream: true });
+  }
+};
 
 it('serves typed project status and supplied prebuilt assets after starting the coordinator', async () => {
   const coordinator = new RecordingCoordinator();
@@ -480,6 +491,104 @@ it('requires the same origin and session token before a browser can request a re
       reason: 'manual',
     })]);
   } finally {
+    await server.close();
+  }
+});
+
+it('applies the established foreground origin and token guard to MCP session creation', async () => {
+  const opens: unknown[] = [];
+  const mcpSessions = {
+    open: async (options: unknown) => {
+      opens.push(options);
+      return {
+        binding: { epochId: 'epoch-a', serverName: 'weather', target: 'portable' },
+        connection: { capabilities: {}, protocolEra: 'modern', protocolVersion: '2025-11-25', server: { name: 'fixture', version: '1.0.0' } },
+        id: 'session-a',
+      };
+    },
+  } as unknown as McpSessionService;
+  const server = await startForegroundServer({
+    coordinator: new RecordingCoordinator(),
+    eventHub: new ProjectEventHub(),
+    mcpSessions,
+    port: 0,
+    sessionToken: 'test-session-token',
+  });
+  const body = JSON.stringify({ epochId: 'epoch-a', serverName: 'weather', target: 'portable' });
+
+  try {
+    const denied = await fetch(`${server.url}/api/mcp/sessions`, {
+      body,
+      headers: { 'content-type': 'application/json', origin: server.url },
+      method: 'POST',
+    });
+    expect(denied.status).toBe(403);
+    await expect(denied.json()).resolves.toEqual({
+      diagnostic: { code: 'AB8004', message: 'A valid same-session token is required.' },
+    });
+    expect(opens).toEqual([]);
+
+    const accepted = await fetch(`${server.url}/api/mcp/sessions`, {
+      body,
+      headers: {
+        'content-type': 'application/json',
+        origin: server.url,
+        'x-agent-bundle-session': server.sessionToken,
+      },
+      method: 'POST',
+    });
+    expect(accepted.status).toBe(200);
+    await expect(accepted.json()).resolves.toEqual({
+      session: {
+        binding: { epochId: 'epoch-a', serverName: 'weather', target: 'portable' },
+        connection: { capabilities: {}, protocolEra: 'modern', protocolVersion: '2025-11-25', server: { name: 'fixture', version: '1.0.0' } },
+        id: 'session-a',
+      },
+    });
+    expect(opens).toEqual([{ epochId: 'epoch-a', serverName: 'weather', target: 'portable' }]);
+  } finally {
+    await server.close();
+  }
+});
+
+it('ends active authenticated MCP trace readers before foreground shutdown destroys remaining sockets', async () => {
+  let subscriptions = 0;
+  const session = {
+    binding: { epochId: 'epoch-a', serverName: 'weather', target: 'portable' },
+    connection: { capabilities: {}, protocolEra: 'modern', protocolVersion: '2025-11-25', server: { name: 'fixture', version: '1.0.0' } },
+    id: 'session-a',
+    subscribeTrace: () => {
+      subscriptions += 1;
+      return { unsubscribe: () => { subscriptions -= 1; } };
+    },
+    trace: () => ({ entries: [] }),
+  };
+  const mcpSessions = {
+    get: (id: string) => id === 'session-a' ? session : undefined,
+  } as unknown as McpSessionService;
+  const server = await startForegroundServer({
+    coordinator: new RecordingCoordinator(),
+    eventHub: new ProjectEventHub(),
+    mcpSessions,
+    port: 0,
+    sessionToken: 'test-session-token',
+  });
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+
+  try {
+    const stream = await fetch(`${server.url}/api/mcp/sessions/session-a/stream?after=0`, {
+      headers: { origin: server.url, 'x-agent-bundle-session': server.sessionToken },
+    });
+    reader = stream.body?.getReader();
+    if (reader === undefined) throw new Error('Expected MCP trace stream body.');
+    expect(subscriptions).toBe(1);
+
+    const closing = server.close();
+    await expect(within(readToEnd(reader), 250)).resolves.toBe('');
+    await expect(closing).resolves.toBeUndefined();
+    expect(subscriptions).toBe(0);
+  } finally {
+    await reader?.cancel();
     await server.close();
   }
 });
