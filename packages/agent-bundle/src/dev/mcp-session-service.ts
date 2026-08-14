@@ -501,6 +501,9 @@ export class McpSession {
   }
 
   async callTool(options: McpSessionToolCallOptions): Promise<CallToolResult> {
+    if (options.signal?.aborted) {
+      throw options.signal.reason ?? new Error('MCP session tool call was aborted.');
+    }
     const requestId = options.requestId ?? randomUUID();
     if (requestId.trim().length === 0) throw new Error('MCP session requestId must be nonempty.');
     if (this.#requests.has(requestId)) throw new Error(`MCP session request ${JSON.stringify(requestId)} is already active.`);

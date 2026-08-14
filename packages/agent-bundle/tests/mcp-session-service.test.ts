@@ -391,6 +391,46 @@ it('closes a replacement client when restart races with session shutdown', async
   }
 }, 30_000);
 
+it('rejects an already-aborted tool call without invoking the MCP SDK', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-persistent-mcp-pre-abort-'));
+  try {
+    const epochStore = await publishFixtureEpoch(root, 'epoch-1');
+    let calls = 0;
+    const service = new McpSessionService({
+      createClient: () => ({
+        callTool: async () => {
+          calls += 1;
+          return { content: [] };
+        },
+        close: async () => undefined,
+        connect: async () => undefined,
+        getPrompt: async () => ({ messages: [] }),
+        getServerCapabilities: () => undefined,
+        getServerVersion: () => undefined,
+        listPrompts: async () => ({ prompts: [] }),
+        listResources: async () => ({ resources: [] }),
+        listResourceTemplates: async () => ({ resourceTemplates: [] }),
+        listTools: async () => ({ tools: [] }),
+        readResource: async () => ({ contents: [] }),
+      }),
+      createStdioTransport: () => ({ close: async () => undefined, send: async () => undefined, start: async () => undefined, stderr: null }) as never,
+      epochStore,
+      projectRoot: root,
+    });
+    const session = await service.open({ epochId: 'epoch-1', serverName: 'fixture', target: 'portable' });
+    const aborted = new AbortController();
+    const reason = new Error('already cancelled');
+    aborted.abort(reason);
+
+    await expect(session.callTool({ arguments: {}, name: 'fixture', signal: aborted.signal })).rejects.toBe(reason);
+    expect(calls).toBe(0);
+
+    await session.close();
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+}, 30_000);
+
 it('retains raw protocol frame identities and exposes progress and logging without translating SDK results', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-persistent-mcp-raw-'));
   try {
