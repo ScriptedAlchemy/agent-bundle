@@ -15,6 +15,7 @@ const plugin = (): NormalizedPlugin => ({
     version: '1.2.3',
   },
   mcpServers: [],
+  scripts: [],
   skills: [
     {
       body: 'Use the included resource.\n',

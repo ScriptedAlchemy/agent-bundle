@@ -66,9 +66,18 @@ export interface NormalizedMcpServer {
   readonly url?: string;
 }
 
+export interface NormalizedScript {
+  readonly id: string;
+  readonly name: string;
+  readonly provenance: SourceProvenance;
+  readonly source: string;
+  readonly targets: readonly string[];
+}
+
 export interface NormalizedPlugin {
   readonly metadata: NormalizedMetadata;
   readonly mcpServers: readonly NormalizedMcpServer[];
+  readonly scripts: readonly NormalizedScript[];
   readonly skills: readonly NormalizedSkill[];
   readonly targets: readonly NormalizedTarget[];
 }

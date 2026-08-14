@@ -10,6 +10,7 @@ export type {
   NormalizationTargetRegistry,
   NormalizedMetadata,
   NormalizedPlugin,
+  NormalizedScript,
   NormalizedSkill,
   NormalizedSkillResource,
   NormalizedTarget,
