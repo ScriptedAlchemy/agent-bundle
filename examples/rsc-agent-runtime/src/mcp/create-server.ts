@@ -5,7 +5,6 @@ import { RESOURCE_MIME_TYPE, registerAppResource, registerAppTool } from '@model
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
 import { runtimeDefinition } from '../definition.js';
-import type { RuntimeResourceDefinition } from '../runtime/contracts.js';
 import { createMcpHandlers } from './handlers.js';
 import { resourceMetadata } from './host-metadata.js';
 import type { McpRequestExtra, ResolveStateOptions } from './resolve-state.js';

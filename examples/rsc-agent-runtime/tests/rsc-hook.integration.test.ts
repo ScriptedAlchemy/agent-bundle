@@ -12,9 +12,18 @@ const createTemporaryDirectory = async (): Promise<string> => {
   return directory;
 };
 
-const runHook = async (host: 'claude' | 'codex', input: Record<string, unknown>, stateFile: string) => {
+const runHook = async (
+  host: 'claude' | 'codex',
+  input: Record<string, unknown>,
+  stateFile: string | undefined,
+  additionalEnvironment: Record<string, string> = {},
+) => {
   const child = spawn(process.execPath, [join(process.cwd(), 'dist/runtime/hook/index.js'), '--host', host], {
-    env: { ...process.env, AGENT_RUNTIME_STATE_FILE: stateFile },
+    env: {
+      ...process.env,
+      ...(stateFile === undefined ? {} : { AGENT_RUNTIME_STATE_FILE: stateFile }),
+      ...additionalEnvironment,
+    },
     stdio: ['pipe', 'pipe', 'pipe'],
   });
 
@@ -121,5 +130,54 @@ describe('built RSC hook entry', () => {
 
     expect(result.exitCode).not.toBe(0);
     expect(result.stdout).toBe('');
+  });
+
+  it('falls back to the workspace state file when a native host omits the configured environment', async () => {
+    const workspace = await createTemporaryDirectory();
+    const result = await runHook(
+      'codex',
+      {
+        session_id: 'codex-session',
+        cwd: workspace,
+        hook_event_name: 'PostToolUse',
+        tool_name: 'apply_patch',
+        tool_input: { command: '*** Begin Patch\n*** Add File: fallback.txt\n+fallback\n*** End Patch' },
+      },
+      undefined,
+    );
+
+    expect(result.exitCode).toBe(0);
+    const stateFile = join(workspace, '.agent-runtime-demo', 'events.jsonl');
+    expect((await readFile(stateFile, 'utf8')).trim()).toContain('fallback.txt');
+  });
+
+  it('emits only a value-free optional eval hook probe', async () => {
+    const workspace = await createTemporaryDirectory();
+    const probeFile = join(workspace, 'hook-probe.jsonl');
+    const result = await runHook(
+      'codex',
+      {
+        session_id: 'codex-session',
+        cwd: workspace,
+        hook_event_name: 'PostToolUse',
+        tool_name: 'apply_patch',
+        tool_input: { command: '*** Begin Patch\n*** Add File: secret.txt\n+do-not-persist-this-value\n*** End Patch' },
+      },
+      join(workspace, 'state.jsonl'),
+      { AGENT_RUNTIME_HOOK_PROBE_FILE: probeFile },
+    );
+
+    expect(result.exitCode).toBe(0);
+    const probe = JSON.parse(await readFile(probeFile, 'utf8'));
+    expect(probe).toEqual({
+      commandLaunched: true,
+      exitStatus: 0,
+      toolInputKeys: ['command'],
+      toolInputValueTypes: { command: 'string' },
+      toolName: 'apply_patch',
+      topLevelKeys: ['cwd', 'hook_event_name', 'session_id', 'tool_input', 'tool_name'],
+      topLevelValueTypes: { cwd: 'string', hook_event_name: 'string', session_id: 'string', tool_input: 'object', tool_name: 'string' },
+    });
+    expect(await readFile(probeFile, 'utf8')).not.toContain('do-not-persist-this-value');
   });
 });

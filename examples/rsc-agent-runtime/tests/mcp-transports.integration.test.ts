@@ -220,6 +220,41 @@ test('built Streamable HTTP MCP accepts only explicitly allowed public tunnel or
   }
 });
 
+test('adds an explicit public MCP URL domain only to returned resource content', async () => {
+  const stateFile = await createStateFile();
+  const child = spawn(process.execPath, [join(process.cwd(), 'dist/runtime/mcp/http.js')], {
+    env: {
+      ...process.env,
+      AGENT_RUNTIME_PUBLIC_MCP_URL: 'https://example.com/mcp',
+      AGENT_RUNTIME_STATE_FILE: stateFile,
+      PORT: '0',
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let stderr = '';
+  child.stderr.setEncoding('utf8');
+  child.stderr.on('data', (chunk: string) => {
+    stderr += chunk;
+  });
+  const client = createClient();
+
+  try {
+    await once(child.stderr, 'data');
+    const startup = JSON.parse(stderr.trim()) as { port: number };
+    await client.connect(new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${startup.port}/mcp`)));
+    const resources = await client.listResources();
+    expect(resources.resources[0]._meta?.ui).not.toHaveProperty('domain');
+    await expect(client.readResource({ uri: 'ui://rsc-agent-runtime/edit-timeline-v1.html' })).resolves.toMatchObject({
+      contents: [{ _meta: { ui: { domain: 'c3d80a4ed901ee05b21755a88273b4a4.claudemcpcontent.com' } } }],
+    });
+  } finally {
+    await client.close();
+    child.kill('SIGTERM');
+    await once(child, 'close');
+    await rm(join(stateFile, '..'), { force: true, recursive: true });
+  }
+});
+
 test('built widget HTML is self-contained without external app bundle assets', async () => {
   for (const name of ['edit-timeline-v1', 'standalone']) {
     const artifact = join(process.cwd(), 'dist/app', `${name}.html`);
@@ -272,6 +307,11 @@ test('a second multi-environment build removes stale app chunks', async () => {
     expect(exitCode).toBe(0);
     expect(signal).toBeNull();
     await expect(access(staleAsset)).rejects.toThrow();
+    for (const name of ['edit-timeline-v1', 'standalone']) {
+      const html = await readFile(join(process.cwd(), 'dist/app', `${name}.html`), 'utf8');
+      expect(html).toContain('<style');
+      expect(html).not.toMatch(/(?:src|href)=["'][^"']*\.(?:js|css)["']/);
+    }
   } finally {
     await rm(staleAsset, { force: true });
   }
