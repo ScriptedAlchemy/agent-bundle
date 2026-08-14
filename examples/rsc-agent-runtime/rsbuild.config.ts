@@ -2,6 +2,7 @@ import { defineConfig, type RsbuildPlugin } from '@rsbuild/core';
 import { pluginReact } from '@rsbuild/plugin-react';
 import { Layers, pluginRSC } from 'rsbuild-plugin-rsc';
 import { rm } from 'node:fs/promises';
+import { dirname } from 'node:path';
 
 import { emitRuntimeArtifacts } from './src/build/emit-artifacts.js';
 
@@ -10,7 +11,7 @@ const emitRuntimeManifest = (): RsbuildPlugin => ({
   name: 'emit-rsc-agent-runtime-manifest',
   setup(api) {
     api.onBeforeBuild(async ({ environments }) => {
-      await rm(environments.rsc.distPath, { force: true, recursive: true });
+      await rm(dirname(environments.rsc.distPath), { force: true, recursive: true });
     });
     api.onAfterBuild(async ({ environments }) => {
       await emitRuntimeArtifacts(environments.rsc.distPath);
@@ -42,11 +43,6 @@ export default defineConfig({
       tools: {
         rspack: {
           module: {
-            parser: {
-              javascript: {
-                dynamicImportMode: 'eager',
-              },
-            },
             rules: [
               {
                 parser: { importMeta: { url: false } },
@@ -58,8 +54,9 @@ export default defineConfig({
       },
       output: {
         cleanDistPath: false,
-        distPath: { root: 'dist' },
+        distPath: { js: './', jsAsync: 'chunks', root: 'dist/runtime' },
         filename: { js: '[name].js' },
+        manifest: 'runtime-assets.json',
         target: 'node',
       },
     },

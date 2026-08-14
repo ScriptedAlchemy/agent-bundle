@@ -22,7 +22,7 @@ const resourceMeta = (resource: RuntimeResourceDefinition) => ({
 });
 
 const defaultWidgetPath = (): string =>
-  join(dirname(process.argv[1] ?? process.cwd()), '../app/edit-timeline-v1.html');
+  join(dirname(process.argv[1] ?? process.cwd()), '../../app/edit-timeline-v1.html');
 
 const defaultWidgetHtml = async (): Promise<string> => readFile(defaultWidgetPath(), 'utf8');
 

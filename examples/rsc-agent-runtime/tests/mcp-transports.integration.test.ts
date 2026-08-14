@@ -91,7 +91,7 @@ test('built stdio MCP serves static tools, file-backed data, Flight results, and
   const client = createClient();
   const transport = new StdioClientTransport({
     command: process.execPath,
-    args: [join(process.cwd(), 'dist/mcp/stdio.js')],
+    args: [join(process.cwd(), 'dist/runtime/mcp/stdio.js')],
     env: { ...process.env, AGENT_RUNTIME_STATE_FILE: stateFile },
     stderr: 'pipe',
   });
@@ -141,7 +141,7 @@ test('built stdio MCP serves static tools, file-backed data, Flight results, and
 
 test('built Streamable HTTP MCP reports its one JSON startup line and closes cleanly', async () => {
   const stateFile = await createStateFile();
-  const child = spawn(process.execPath, [join(process.cwd(), 'dist/mcp/http.js')], {
+  const child = spawn(process.execPath, [join(process.cwd(), 'dist/runtime/mcp/http.js')], {
     env: { ...process.env, AGENT_RUNTIME_STATE_FILE: stateFile, PORT: '0' },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -187,7 +187,7 @@ test('built Streamable HTTP MCP reports its one JSON startup line and closes cle
 
 test('built Streamable HTTP MCP accepts only explicitly allowed public tunnel origins', async () => {
   const stateFile = await createStateFile();
-  const child = spawn(process.execPath, [join(process.cwd(), 'dist/mcp/http.js')], {
+  const child = spawn(process.execPath, [join(process.cwd(), 'dist/runtime/mcp/http.js')], {
     env: {
       ...process.env,
       AGENT_RUNTIME_ALLOWED_HOSTS: 'tunnel.example',
@@ -232,12 +232,17 @@ test('built widget HTML is self-contained without external app bundle assets', a
   }
 });
 
-test('built Node runtime entries do not require emitted chunks outside their packaged roots', async () => {
+test('runtime manifest declares every Node entry and dynamic chunk in its artifact root', async () => {
   const entries = ['hook/index.js', 'rsc/index.js', 'mcp/stdio.js', 'mcp/http.js'];
-  const externalChunkDependencies = (
+  const runtimeRoot = join(process.cwd(), 'dist/runtime');
+  const manifest = JSON.parse(await readFile(join(runtimeRoot, 'runtime-assets.json'), 'utf8')) as {
+    allFiles: string[];
+  };
+  const manifestFiles = manifest.allFiles.map((file) => file.replace(/^\//, ''));
+  const dynamicChunkDependencies = (
     await Promise.all(
       entries.map(async (entry) => {
-        const source = await readFile(join(process.cwd(), 'dist', entry), 'utf8');
+        const source = await readFile(join(runtimeRoot, entry), 'utf8');
         return [...source.matchAll(/__webpack_require__\.e\(\/\* import\(\) \*\/\s*(\d+)\)/g)].map((match) => ({
           chunkId: match[1],
           entry,
@@ -246,10 +251,17 @@ test('built Node runtime entries do not require emitted chunks outside their pac
     )
   ).flat();
 
-  expect(externalChunkDependencies).toEqual([]);
+  expect(manifestFiles).toEqual(expect.arrayContaining(entries));
+  expect(manifestFiles.some((file) => file.startsWith('chunks/'))).toBe(true);
+  for (const file of manifestFiles) {
+    await access(join(runtimeRoot, file));
+  }
+  for (const { chunkId } of dynamicChunkDependencies) {
+    expect(manifestFiles).toContain(`chunks/${chunkId}.js`);
+  }
 });
 
-test('a fresh multi-environment build removes stale app chunks', async () => {
+test('a second multi-environment build removes stale app chunks', async () => {
   const staleAsset = join(process.cwd(), 'dist/app/static/js/async/stale.js');
   await mkdir(dirname(staleAsset), { recursive: true });
   await writeFile(staleAsset, 'stale artifact', 'utf8');

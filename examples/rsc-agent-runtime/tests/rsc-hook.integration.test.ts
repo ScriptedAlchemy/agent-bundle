@@ -13,7 +13,7 @@ const createTemporaryDirectory = async (): Promise<string> => {
 };
 
 const runHook = async (host: 'claude' | 'codex', input: Record<string, unknown>, stateFile: string) => {
-  const child = spawn(process.execPath, [join(process.cwd(), 'dist/hook/index.js'), '--host', host], {
+  const child = spawn(process.execPath, [join(process.cwd(), 'dist/runtime/hook/index.js'), '--host', host], {
     env: { ...process.env, AGENT_RUNTIME_STATE_FILE: stateFile },
     stdio: ['pipe', 'pipe', 'pipe'],
   });
