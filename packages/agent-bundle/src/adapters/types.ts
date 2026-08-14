@@ -26,7 +26,7 @@ export interface TargetHookEntry {
 export interface TargetArtifactPlan {
   readonly diagnostics: readonly Diagnostic[];
   readonly entries: readonly TargetArtifactEntry[];
-  readonly hookEntries: readonly TargetHookEntry[];
+  readonly hookEntries?: readonly TargetHookEntry[];
 }
 
 export interface TargetAdapter {

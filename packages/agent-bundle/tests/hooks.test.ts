@@ -1,10 +1,11 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { expect, it } from '@rstest/core';
 
 import { createDefaultRegistry } from '../src/adapters/registry.ts';
+import { build } from '../src/build/build.ts';
 import { normalizeProject } from '../src/config/normalize.ts';
 import type { LoadedConfig } from '../src/config/load.ts';
 import type { NormalizationTargetRegistry, NormalizedPlugin } from '../src/core/types.ts';
@@ -49,6 +50,56 @@ it('normalizes a shorthand session-start hook into a frozen stable record', asyn
     ]);
     expect(Object.isFrozen(hooks)).toBe(true);
     expect(Object.isFrozen((hooks as readonly unknown[])[0]!)).toBe(true);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('compiles each native hook through a virtual Rslib entry without sibling chunks', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-hooks-build-'));
+  const sourceRoot = join(root, 'src', 'hooks');
+  const outputRoot = join(root, 'dist');
+  const model = hookModel(root);
+  const names = model.hooks.map((hook) => hook.name).sort();
+
+  try {
+    await mkdir(sourceRoot, { recursive: true });
+    await Promise.all([
+      writeFile(join(root, 'package.json'), '{"type":"module"}\n'),
+      writeFile(join(sourceRoot, 'shared.ts'), "export const context = 'compiled from local TypeScript';\n"),
+      ...model.hooks.map((hook) => writeFile(
+        hook.source,
+        [
+          "import { context } from './shared.ts';",
+          'export default (event: Record<string, unknown>) => ({',
+          "  additionalContext: `${context}:${String(event.hookEventName ?? '')}` ,",
+          "  outcome: 'continue' as const,",
+          '});',
+          '',
+        ].join('\n'),
+      )),
+    ]);
+
+    await build({ model, outputRoot, projectRoot: root, registry: createDefaultRegistry() });
+
+    for (const target of ['codex', 'claude']) {
+      const hooksRoot = join(outputRoot, target, 'hooks');
+      expect((await readdir(hooksRoot)).filter((name) => name.endsWith('.mjs')).sort()).toEqual(
+        names.map((name) => `${name}.mjs`),
+      );
+      for (const name of names) {
+        const wrapper = await readFile(join(hooksRoot, `${name}.mjs`), 'utf8');
+        expect(wrapper).toContain('compiled from local TypeScript');
+        expect(wrapper).not.toMatch(/from\s+['"](?:agent-bundle|@rstackjs\/|@rspack\/)[^'"]*['"]/);
+      }
+    }
+    expect(await readdir(join(root, 'src', 'hooks'))).toEqual([
+      'check-command.ts',
+      'record.ts',
+      'session-start.ts',
+      'shared.ts',
+      'stop.ts',
+    ]);
   } finally {
     await rm(root, { force: true, recursive: true });
   }
