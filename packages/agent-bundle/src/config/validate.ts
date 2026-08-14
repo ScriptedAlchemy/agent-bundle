@@ -5,6 +5,7 @@ import type { Diagnostic } from '../core/diagnostics.ts';
 import type {
   AgentBundleHookEntry,
   AgentBundleHookInput,
+  AgentBundleMcpApp,
   AgentBundleMcpServer,
   CanonicalHookEvent,
   NormalizationTargetRegistry,
@@ -145,6 +146,127 @@ const localEntryExists = (root: string, entry: string): boolean => {
   }
 };
 
+const validVersionedUiUri = (value: string): boolean => {
+  try {
+    const uri = new URL(value);
+    return uri.protocol === 'ui:' && /(?:^|[/-])v\d+(?:[./-]|$)/u.test(`${uri.hostname}${uri.pathname}`);
+  } catch {
+    return false;
+  }
+};
+
+const validateMcpApps = (
+  name: string,
+  server: AgentBundleMcpServer,
+  loaded: LoadedConfig,
+  seenNames: Set<string>,
+  seenUris: Set<string>,
+): Diagnostic[] => {
+  if (server.apps === undefined) return [];
+  const diagnostics: Diagnostic[] = [];
+  if (server.entry === undefined) {
+    diagnostics.push(sourceDiagnostic(
+      'AB4322',
+      `MCP server ${JSON.stringify(name)} can declare Apps only with a local entry.`,
+      loaded.configPath,
+    ));
+    return diagnostics;
+  }
+  if (!isRecord(server.apps)) {
+    diagnostics.push(sourceDiagnostic(
+      'AB4323',
+      `MCP server ${JSON.stringify(name)} Apps must be an object.`,
+      loaded.configPath,
+    ));
+    return diagnostics;
+  }
+  for (const [appName, value] of Object.entries(server.apps)) {
+    if (!/^[a-z][a-z0-9-]*$/u.test(appName)) {
+      diagnostics.push(sourceDiagnostic(
+        'AB4324',
+        `MCP App name ${JSON.stringify(appName)} must use stable lowercase kebab-case.`,
+        loaded.configPath,
+      ));
+    } else if (seenNames.has(appName)) {
+      diagnostics.push(sourceDiagnostic(
+        'AB4325',
+        `MCP App name ${JSON.stringify(appName)} is duplicated.`,
+        loaded.configPath,
+      ));
+    }
+    seenNames.add(appName);
+    if (!isRecord(value)) {
+      diagnostics.push(sourceDiagnostic(
+        'AB4326',
+        `MCP App ${JSON.stringify(appName)} must be an object.`,
+        loaded.configPath,
+      ));
+      continue;
+    }
+    const app = value as AgentBundleMcpApp;
+    if (!nonemptyString(app.entry)) {
+      diagnostics.push(sourceDiagnostic(
+        'AB4327',
+        `MCP App ${JSON.stringify(appName)} entry must be a nonempty path.`,
+        loaded.configPath,
+      ));
+    } else if (!localEntryExists(loaded.context.projectRoot, app.entry)) {
+      diagnostics.push(sourceDiagnostic(
+        'AB4328',
+        `MCP App ${JSON.stringify(appName)} entry does not exist.`,
+        loaded.configPath,
+      ));
+    }
+    if (!nonemptyString(app.resourceUri) || !validVersionedUiUri(app.resourceUri)) {
+      diagnostics.push(sourceDiagnostic(
+        'AB4329',
+        `MCP App ${JSON.stringify(appName)} resourceUri must be a versioned ui:// URI.`,
+        loaded.configPath,
+      ));
+    } else if (seenUris.has(app.resourceUri)) {
+      diagnostics.push(sourceDiagnostic(
+        'AB4330',
+        `MCP App resourceUri ${JSON.stringify(app.resourceUri)} is duplicated.`,
+        loaded.configPath,
+      ));
+    }
+    if (typeof app.resourceUri === 'string') seenUris.add(app.resourceUri);
+    if (app.template !== undefined) {
+      if (!nonemptyString(app.template)) {
+        diagnostics.push(sourceDiagnostic(
+          'AB4331',
+          `MCP App ${JSON.stringify(appName)} template must be a nonempty HTML path.`,
+          loaded.configPath,
+        ));
+      } else if (!/\.html?$/iu.test(app.template) || !localEntryExists(loaded.context.projectRoot, app.template)) {
+        diagnostics.push(sourceDiagnostic(
+          'AB4332',
+          `MCP App ${JSON.stringify(appName)} template must name an existing HTML file.`,
+          loaded.configPath,
+        ));
+      }
+    }
+    diagnostics.push(...validateStringList(app.targets, 'App targets', 'AB4333', loaded));
+    for (const target of app.targets ?? []) {
+      if (server.targets !== undefined && !server.targets.includes(target)) {
+        diagnostics.push(sourceDiagnostic(
+          'AB4334',
+          `MCP App ${JSON.stringify(appName)} selects target ${JSON.stringify(target)} outside its owning server.`,
+          loaded.configPath,
+        ));
+      }
+    }
+    if (app._meta !== undefined && !isRecord(app._meta)) {
+      diagnostics.push(sourceDiagnostic(
+        'AB4335',
+        `MCP App ${JSON.stringify(appName)} _meta must be an object.`,
+        loaded.configPath,
+      ));
+    }
+  }
+  return diagnostics;
+};
+
 const validateMcpServer = (
   name: string,
   value: unknown,
@@ -233,8 +355,14 @@ const validateMcp = (loaded: LoadedConfig): Diagnostic[] => {
   if (!isRecord(mcp.servers)) {
     return [sourceDiagnostic('AB4301', 'MCP configuration must define a servers object.', loaded.configPath)];
   }
-  return Object.entries(mcp.servers).flatMap(([name, server]) =>
-    validateMcpServer(name, server, loaded));
+  const names = new Set<string>();
+  const uris = new Set<string>();
+  return Object.entries(mcp.servers).flatMap(([name, server]) => {
+    const diagnostics = validateMcpServer(name, server, loaded);
+    return isRecord(server)
+      ? [...diagnostics, ...validateMcpApps(name, server as AgentBundleMcpServer, loaded, names, uris)]
+      : diagnostics;
+  });
 };
 
 const withoutMarkdownCode = (body: string): string => {
@@ -481,6 +609,7 @@ export const validateModel = (
     ...model.skills,
     ...model.hooks,
     ...model.mcpServers,
+    ...(model.mcpApps ?? []),
   ];
   for (const component of components) {
     const firstSource = ids.get(component.id);
@@ -538,6 +667,29 @@ export const validateModel = (
           message: `MCP server ${JSON.stringify(server.name)} has an unsafe local output alias.`,
           severity: 'error',
           sourcePath: server.provenance.sourcePath,
+        });
+      }
+    }
+  }
+
+  for (const app of model.mcpApps ?? []) {
+    const server = model.mcpServers.find((candidate) => candidate.id === app.serverId);
+    for (const target of app.targets) {
+      if (!registry.has(target)) {
+        diagnostics.push({
+          code: 'AB4336',
+          message: `MCP App ${JSON.stringify(app.name)} selects unknown target ${JSON.stringify(target)}.`,
+          severity: 'error',
+          sourcePath: app.provenance.sourcePath,
+          target,
+        });
+      } else if (server === undefined || !server.targets.includes(target)) {
+        diagnostics.push({
+          code: 'AB4337',
+          message: `MCP App ${JSON.stringify(app.name)} selects target ${JSON.stringify(target)} outside its owning server.`,
+          severity: 'error',
+          sourcePath: app.provenance.sourcePath,
+          target,
         });
       }
     }

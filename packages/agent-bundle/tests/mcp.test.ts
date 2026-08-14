@@ -142,6 +142,73 @@ it('normalizes local, prebuilt, HTTP, and SSE MCP server declarations', async ()
   }
 });
 
+it('normalizes deeply frozen local MCP App declarations independently of the project root', async () => {
+  const firstRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-mcp-app-first-'));
+  const secondRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-mcp-app-second-'));
+  const config = {
+    mcp: {
+      servers: {
+        fixture: {
+          apps: {
+            dashboard: {
+              _meta: { ui: { prefersBorder: true }, 'x-fixture': { stable: true } },
+              entry: './views/dashboard.ts',
+              resourceUri: 'ui://agent-bundle/dashboard-v1.html',
+              targets: ['claude'],
+              template: './views/shell.html',
+            },
+          },
+          entry: './src/server.ts',
+          targets: ['portable', 'claude'],
+        },
+      },
+    },
+    plugin: { name: 'mcp-app-fixture', version: '1.0.0' },
+    targets: ['portable', 'claude'],
+  } as unknown as AgentBundleConfig;
+  try {
+    for (const root of [firstRoot, secondRoot]) {
+      await mkdir(join(root, 'src'), { recursive: true });
+      await mkdir(join(root, 'views'), { recursive: true });
+      await writeFile(join(root, 'src', 'server.ts'), 'export {};\n');
+      await writeFile(join(root, 'views', 'dashboard.ts'), 'document.body.textContent = "dashboard";\n');
+      await writeFile(join(root, 'views', 'shell.html'), '<!doctype html><html><body><div id="root"></div></body></html>\n');
+    }
+    const [first, second] = await Promise.all([
+      normalizeProject(loadedProject(firstRoot, config), { skills: [] }, registry),
+      normalizeProject(loadedProject(secondRoot, config), { skills: [] }, registry),
+    ]);
+    const firstApp = (first as unknown as { readonly mcpApps: readonly Record<string, unknown>[] }).mcpApps[0]!;
+    const secondApp = (second as unknown as { readonly mcpApps: readonly Record<string, unknown>[] }).mcpApps[0]!;
+    expect(firstApp).toMatchObject({
+      _meta: { ui: { prefersBorder: true }, 'x-fixture': { stable: true } },
+      id: 'mcp-app:fixture:dashboard',
+      name: 'dashboard',
+      resourceUri: 'ui://agent-bundle/dashboard-v1.html',
+      serverId: 'mcp:fixture',
+      serverName: 'fixture',
+      source: join(firstRoot, 'views', 'dashboard.ts'),
+      targets: ['claude'],
+      template: join(firstRoot, 'views', 'shell.html'),
+    });
+    expect(Object.isFrozen(firstApp)).toBe(true);
+    expect(Object.isFrozen(firstApp._meta)).toBe(true);
+    expect(Object.isFrozen((firstApp._meta as { readonly ui: unknown }).ui)).toBe(true);
+    const portableIdentity = (app: Record<string, unknown>) => ({
+      ...app,
+      provenance: { ...(app.provenance as Record<string, unknown>), sourcePath: '<root>' },
+      source: '<root>',
+      template: '<root>',
+    });
+    expect(portableIdentity(firstApp)).toEqual(portableIdentity(secondApp));
+  } finally {
+    await Promise.all([
+      rm(firstRoot, { force: true, recursive: true }),
+      rm(secondRoot, { force: true, recursive: true }),
+    ]);
+  }
+});
+
 it('keeps local MCP server identities and output aliases independent of the project root', async () => {
   const left = await mkdtemp(join(tmpdir(), 'agent-bundle-mcp-left-'));
   const right = await mkdtemp(join(tmpdir(), 'agent-bundle-mcp-right-'));
@@ -226,6 +293,99 @@ it('reports source and model diagnostics before an MCP server can be compiled', 
     expect(validateModel(unsafe, registry)).toMatchObject([
       { code: 'AB4320', target: 'unknown' },
       { code: 'AB4321' },
+    ]);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('rejects unsafe, duplicate, and nonlocal MCP App declarations before browser compilation', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-mcp-app-invalid-'));
+  try {
+    await mkdir(join(root, 'src'), { recursive: true });
+    await mkdir(join(root, 'views'), { recursive: true });
+    await writeFile(join(root, 'src', 'server.ts'), 'export {};\n');
+    await writeFile(join(root, 'src', 'other.ts'), 'export {};\n');
+    await writeFile(join(root, 'views', 'dashboard.ts'), 'document.body.textContent = "dashboard";\n');
+
+    const malformed = {
+      mcp: {
+        servers: {
+          fixture: {
+            apps: {
+              dashboard: {
+                entry: './views/dashboard.ts',
+                resourceUri: 'ui://agent-bundle/dashboard-v1.html',
+                targets: ['portable'],
+              },
+              'not_stable': {
+                _meta: [],
+                entry: './views/missing.ts',
+                resourceUri: 'https://example.test/not-ui',
+                template: './views/missing.txt',
+              },
+              malformed: [],
+            },
+            entry: './src/server.ts',
+            targets: ['claude'],
+          },
+          other: {
+            apps: {
+              dashboard: {
+                entry: './views/dashboard.ts',
+                resourceUri: 'ui://agent-bundle/dashboard-v1.html',
+              },
+            },
+            entry: './src/other.ts',
+          },
+          prebuilt: {
+            apps: {},
+            command: 'fixture-server',
+          },
+        },
+      },
+      plugin: { name: 'mcp-app-invalid', version: '1.0.0' },
+    } as unknown as AgentBundleConfig;
+
+    expect(validateSource(loadedProject(root, malformed), { skills: [] }).map(({ code }) => code)).toEqual(
+      expect.arrayContaining([
+        'AB4322',
+        'AB4324',
+        'AB4325',
+        'AB4326',
+        'AB4328',
+        'AB4329',
+        'AB4330',
+        'AB4332',
+        'AB4334',
+        'AB4335',
+      ]),
+    );
+
+    const normalized = await normalizeProject(
+      loadedProject(root, {
+        mcp: {
+          servers: {
+            fixture: {
+              apps: {
+                dashboard: {
+                  entry: './views/dashboard.ts',
+                  resourceUri: 'ui://agent-bundle/dashboard-v1.html',
+                },
+              },
+              entry: './src/server.ts',
+              targets: ['unknown'],
+            },
+          },
+        },
+        plugin: { name: 'mcp-app-invalid', version: '1.0.0' },
+      }),
+      { skills: [] },
+      registry,
+    );
+    expect(validateModel(normalized, registry)).toMatchObject([
+      { code: 'AB4320', target: 'unknown' },
+      { code: 'AB4336', target: 'unknown' },
     ]);
   } finally {
     await rm(root, { force: true, recursive: true });
