@@ -1,4 +1,5 @@
 import { createServer, type Server } from 'node:http';
+import type { Socket } from 'node:net';
 
 const PROXY_CONTENT_SECURITY_POLICY = [
   "default-src 'none'",
@@ -21,20 +22,49 @@ const SHELL = `<!doctype html>
 <script>
   'use strict';
   const app = document.getElementById('app');
-  const parentOrigin = new URL(location.hash.slice(1), location.href).origin;
   const reserved = new Set(['sandbox/ready', 'sandbox/resource-ready', 'sandbox/initialized', 'sandbox/close']);
-  const byteLength = (value) => new TextEncoder().encode(JSON.stringify(value)).byteLength;
-  const post = (message) => parent.postMessage(message, parentOrigin);
+  const maxMessageBytes = 262144;
+  let lifecycle = 'created';
+  let parentOrigin = 'null';
+  try { parentOrigin = new URL(decodeURIComponent(location.hash.slice(1))).origin; } catch {}
+  const byteLength = (value) => {
+    try { const serialized = JSON.stringify(value); return typeof serialized === 'string' ? new TextEncoder().encode(serialized).byteLength : Infinity; } catch { return Infinity; }
+  };
+  const message = (value) => value && typeof value === 'object' && !Array.isArray(value) && typeof value.type === 'string' && byteLength(value) <= maxMessageBytes;
+  const escapeHtmlAttribute = (value) => value.replace(/[&<>"]/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[character]);
+  const post = (value) => parent.postMessage(value, parentOrigin);
   window.addEventListener('message', (event) => {
-    if (event.source !== parent || event.origin !== parentOrigin || byteLength(event.data) > 262144) return;
-    const message = event.data;
-    if (!message || typeof message !== 'object' || message.type !== 'sandbox/resource-ready') return;
-    if (typeof message.html !== 'string' || message.html.length > 262144) return;
-    app.allow = typeof message.allow === 'string' ? message.allow : '';
-    app.srcdoc = message.html;
-    post({ type: 'sandbox/resource-ready' });
+    if (event.source === parent) {
+      if (event.origin !== parentOrigin || !message(event.data)) return;
+      const inbound = event.data;
+      if (inbound.type === 'sandbox/resource-ready') {
+        if (lifecycle !== 'ready' || typeof inbound.html !== 'string' || typeof inbound.contentSecurityPolicy !== 'string' || typeof inbound.allow !== 'string') return;
+        if (inbound.html.length > maxMessageBytes || inbound.contentSecurityPolicy.length > 16384) return;
+        lifecycle = 'resource-pending';
+        app.allow = inbound.allow;
+        app.srcdoc = '<!doctype html><meta http-equiv="Content-Security-Policy" content="' + escapeHtmlAttribute(inbound.contentSecurityPolicy) + '">' + inbound.html;
+        post({ type: 'sandbox/resource-ready' });
+        return;
+      }
+      if (inbound.type === 'sandbox/close') {
+        lifecycle = 'closed';
+        app.removeAttribute('srcdoc');
+        return;
+      }
+      if (reserved.has(inbound.type) || lifecycle !== 'initialized') return;
+      app.contentWindow.postMessage(inbound, '*');
+      return;
+    }
+    if (event.source !== app.contentWindow || event.origin !== 'null' || lifecycle !== 'initialized' || !message(event.data)) return;
+    if (reserved.has(event.data.type)) return;
+    post(event.data);
   });
-  app.addEventListener('load', () => post({ type: 'sandbox/initialized' }));
+  app.addEventListener('load', () => {
+    if (lifecycle !== 'resource-pending') return;
+    lifecycle = 'initialized';
+    post({ type: 'sandbox/initialized' });
+  });
+  lifecycle = 'ready';
   post({ type: 'sandbox/ready' });
 </script>`;
 
@@ -63,6 +93,7 @@ export interface McpAppSandboxPolicy {
 }
 
 export interface CreateMcpAppSandboxProxyOptions {
+  readonly closeTimeoutMs?: number;
   readonly hostOrigin: string;
   readonly port?: number;
 }
@@ -71,6 +102,18 @@ export interface McpAppSandboxProxy {
   readonly origin: string;
   readonly url: string;
   close(): Promise<void>;
+}
+
+export interface CreateMcpAppSandboxFrameOptions {
+  readonly hostOrigin: string;
+  readonly proxyOrigin: string;
+}
+
+export interface McpAppSandboxFrame {
+  readonly referrerPolicy: 'no-referrer';
+  readonly sandbox: 'allow-scripts allow-same-origin';
+  readonly src: string;
+  readonly targetOrigin: string;
 }
 
 export const MCP_APP_SANDBOX_NOTIFICATION_TYPES = Object.freeze([
@@ -189,6 +232,26 @@ const originOf = (value: string): string => {
     throw new TypeError('hostOrigin must not include a path, query, or fragment');
   }
   return parsed.origin;
+};
+
+export const createMcpAppSandboxFrame = (
+  options: CreateMcpAppSandboxFrameOptions,
+): McpAppSandboxFrame => {
+  const hostOrigin = originOf(options.hostOrigin);
+  const proxyOrigin = originOf(options.proxyOrigin);
+  if (hostOrigin === proxyOrigin) {
+    throw new Error('MCP App sandbox frame must use a different origin from its host');
+  }
+  const proxyUrl = new URL(proxyOrigin);
+  if (proxyUrl.protocol !== 'http:' || !['127.0.0.1', '[::1]', 'localhost'].includes(proxyUrl.hostname)) {
+    throw new TypeError('MCP App sandbox frame must target a loopback HTTP proxy');
+  }
+  return Object.freeze({
+    referrerPolicy: 'no-referrer',
+    sandbox: 'allow-scripts allow-same-origin',
+    src: `${proxyOrigin}/#${encodeURIComponent(hostOrigin)}`,
+    targetOrigin: proxyOrigin,
+  });
 };
 
 const maximum = (value: number | undefined, fallback: number, name: string): number => {
@@ -321,14 +384,27 @@ const listen = async (server: Server, port: number): Promise<number> => new Prom
   });
 });
 
-const closeServer = async (server: Server): Promise<void> => new Promise((resolve, reject) => {
-  server.close((error) => error ? reject(error) : resolve());
+const closeServer = async (server: Server, sockets: ReadonlySet<Socket>, timeoutMs: number): Promise<void> => new Promise((resolve, reject) => {
+  let settled = false;
+  const settle = (error?: Error): void => {
+    if (settled) return;
+    settled = true;
+    clearTimeout(deadline);
+    if (error) reject(error);
+    else resolve();
+  };
+  const deadline = setTimeout(() => {
+    for (const socket of sockets) socket.destroy();
+  }, timeoutMs);
+  server.close((error) => settle(error ?? undefined));
 });
 
 export const createMcpAppSandboxProxy = async (
   options: CreateMcpAppSandboxProxyOptions,
 ): Promise<McpAppSandboxProxy> => {
   const hostOrigin = originOf(options.hostOrigin);
+  const closeTimeoutMs = maximum(options.closeTimeoutMs, 1_000, 'closeTimeoutMs');
+  const sockets = new Set<Socket>();
   const server = createServer((request, response) => {
     const requestUrl = new URL(request.url ?? '/', 'http://sandbox.invalid');
     if (request.method !== 'GET' || (requestUrl.pathname !== '/' && requestUrl.pathname !== '/index.html')) {
@@ -346,10 +422,14 @@ export const createMcpAppSandboxProxy = async (
     });
     response.end(SHELL);
   });
+  server.on('connection', (socket) => {
+    sockets.add(socket);
+    socket.once('close', () => sockets.delete(socket));
+  });
   const port = await listen(server, options.port ?? 0);
   const origin = `http://127.0.0.1:${port}`;
   if (origin === hostOrigin) {
-    await closeServer(server);
+    await closeServer(server, sockets, closeTimeoutMs);
     throw new Error('MCP App sandbox proxy must use a different origin from its host');
   }
   let closePromise: Promise<void> | undefined;
@@ -357,7 +437,7 @@ export const createMcpAppSandboxProxy = async (
     origin,
     url: `${origin}/`,
     close: () => {
-      closePromise ??= closeServer(server);
+      closePromise ??= closeServer(server, sockets, closeTimeoutMs);
       return closePromise;
     },
   });

@@ -1,6 +1,10 @@
+import { once } from 'node:events';
+import { connect } from 'node:net';
+
 import { expect, it } from '@rstest/core';
 
 import {
+  createMcpAppSandboxFrame,
   createMcpAppSandboxBridge,
   createMcpAppSandboxProxy,
   deriveMcpAppSandboxPolicy,
@@ -136,4 +140,51 @@ it('accepts only its proxy source and origin through the ordered sandbox lifecyc
     message: { type: 'sandbox/close' },
     targetOrigin: 'http://127.0.0.1:43124',
   });
+});
+
+it('uses a fixed outer frame contract and an opaque child relay shell', async () => {
+  const frame = createMcpAppSandboxFrame({
+    hostOrigin: 'http://127.0.0.1:43123',
+    proxyOrigin: 'http://127.0.0.1:43124',
+  });
+  expect(frame).toEqual({
+    referrerPolicy: 'no-referrer',
+    sandbox: 'allow-scripts allow-same-origin',
+    src: 'http://127.0.0.1:43124/#http%3A%2F%2F127.0.0.1%3A43123',
+    targetOrigin: 'http://127.0.0.1:43124',
+  });
+
+  const proxy = await createMcpAppSandboxProxy({ hostOrigin: frame.targetOrigin, port: 0 });
+  try {
+    const shell = await fetch(proxy.url).then((response) => response.text());
+    expect(shell).toContain('sandbox="allow-scripts"');
+    expect(shell).toContain("event.origin !== 'null'");
+    expect(shell).toContain('reserved.has(inbound.type)');
+  } finally {
+    await proxy.close();
+  }
+});
+
+it('bounds proxy shutdown when an idle client holds a connection open', async () => {
+  const proxy = await createMcpAppSandboxProxy({
+    closeTimeoutMs: 25,
+    hostOrigin: 'http://127.0.0.1:43123',
+    port: 0,
+  });
+  const socket = connect(Number(new URL(proxy.url).port), '127.0.0.1');
+  await once(socket, 'connect');
+  const socketClosed = once(socket, 'close');
+
+  try {
+    const closed = await Promise.race([
+      proxy.close().then(() => true),
+      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 500)),
+    ]);
+    expect(closed).toBe(true);
+    await socketClosed;
+    expect(socket.destroyed).toBe(true);
+  } finally {
+    socket.destroy();
+    await proxy.close();
+  }
 });
