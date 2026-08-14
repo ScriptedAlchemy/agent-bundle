@@ -1,10 +1,16 @@
 import { execFile as executeFile } from 'node:child_process';
-import { writeFile } from 'node:fs/promises';
+import { rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 
 import { expect, test, type PlaywrightOptions } from '@rstest/playwright';
 
+import { ArtifactService } from '../../agent-bundle/src/dev/artifact-service.ts';
+import { EpochStore } from '../../agent-bundle/src/dev/epoch-store.ts';
+import { ProjectEventHub, startForegroundServer } from '../../agent-bundle/src/dev/index.ts';
+import { ProjectService } from '../../agent-bundle/src/dev/project-service.ts';
+import { SkillDocumentService } from '../../agent-bundle/src/dev/skill-document-service.ts';
+import type { ProjectStatus } from '../../agent-bundle/src/dev/types.ts';
 import { createWorkbenchAssetSource } from '../../agent-bundle/src/dev/workbench-assets.ts';
 import { startDevServer } from '../../agent-bundle/src/dev/workbench-server.ts';
 import { createProjectFixture, removeProjectFixture } from '../../agent-bundle/tests/helpers/project-fixture.ts';
@@ -29,10 +35,38 @@ const buildWorkbench = async (): Promise<void> => {
   });
 };
 
+const startFrozenEpochServer = async (root: string) => {
+  const epochStore = new EpochStore({ projectRoot: root });
+  const projectService = new ProjectService({ root });
+  const built = await new ArtifactService({ epochStore }).build(await projectService.prepare('build'));
+  if (built.outcome !== 'succeeded') throw new Error('Fixture artifact did not build.');
+  const status: ProjectStatus = {
+    artifact: {
+      activeEpoch: built.epoch,
+      currentSourceRevision: built.epoch.projectRevision,
+      state: 'active',
+    },
+    build: { state: 'idle' },
+    source: { diagnostics: [], revision: built.epoch.projectRevision, state: 'ready' },
+  };
+  return startForegroundServer({
+    assets: createWorkbenchAssetSource({ root: workbenchAssets }),
+    coordinator: {
+      close: async () => undefined,
+      rebuild: async () => undefined,
+      start: async () => undefined,
+      status: () => status,
+    },
+    eventHub: new ProjectEventHub(),
+    port: 0,
+    skillDocuments: new SkillDocumentService({ epochStore, projectService, root }),
+  });
+};
+
 e2e('renders and rebuilds the complete responsive Overview against a real foreground server', { timeout: 60_000 }, async ({ page }) => {
   await buildWorkbench();
   const project = await createProjectFixture();
-  await writeFile(project.skillSource, `${project.skillMarkdown}\n\`\`\`mermaid\ngraph TD\n\`\`\`\n`);
+  await writeFile(project.skillSource, `${project.skillMarkdown}\n\`\`\`mermaid\ngraph TD\n\`\`\`\n\n\`\`\`not-a-shiki-language\nplain fallback\n\`\`\`\n`);
   const server = await startDevServer({
     assets: createWorkbenchAssetSource({ root: workbenchAssets }),
     open: false,
@@ -54,10 +88,22 @@ e2e('renders and rebuilds the complete responsive Overview against a real foregr
     await page.getByRole('link', { name: 'Skills' }).click();
     await expect(page.locator('#skills .skills-page-heading > div > h1')).toHaveText('Skills', { timeout: browserTimeout });
     await expect(page.getByRole('heading', { name: 'review', exact: true })).toBeVisible({ timeout: browserTimeout });
-    await expect(page.getByRole('tab', { name: 'Rendered' })).toBeVisible({ timeout: browserTimeout });
-    await page.getByRole('tab', { name: 'Source' }).click();
+    const renderedTab = page.getByRole('tab', { name: 'Rendered' });
+    const sourceTab = page.getByRole('tab', { name: 'Source' });
+    const generatedTab = page.getByRole('tab', { name: 'Generated' });
+    await expect(renderedTab).toBeVisible({ timeout: browserTimeout });
+    await renderedTab.focus();
+    await page.keyboard.press('End');
+    await expect.poll(() => generatedTab.evaluate((element) => document.activeElement === element), { timeout: browserTimeout }).toBe(true);
+    await expect(generatedTab).toHaveAttribute('aria-selected', 'true');
+    await expect(generatedTab).toHaveAttribute('aria-controls', /-panel-generated$/u);
+    await expect(page.getByRole('tabpanel')).toHaveAttribute('aria-labelledby', /-tab-generated$/u);
+    await page.keyboard.press('Home');
+    await expect.poll(() => renderedTab.evaluate((element) => document.activeElement === element), { timeout: browserTimeout }).toBe(true);
+    await page.keyboard.press('ArrowRight');
+    await expect.poll(() => sourceTab.evaluate((element) => document.activeElement === element), { timeout: browserTimeout }).toBe(true);
     await expect(page.locator('.skill-source')).toContainText('---', { timeout: browserTimeout });
-    await page.getByRole('tab', { name: 'Generated' }).click();
+    await generatedTab.click();
     await expect(page.getByText(/Generated base ·/)).toBeVisible({ timeout: browserTimeout });
     expect([...asyncScripts]).toEqual([]);
     await page.setViewportSize({ height: 844, width: 390 });
@@ -113,6 +159,65 @@ e2e('loads the lazy Shiki chunk only after a fenced non-Mermaid Skill is rendere
     await expect(page.locator('.skill-code-block')).toContainText('const answer: number = 42;', { timeout: browserTimeout });
     await expect.poll(() => asyncScripts.size, { timeout: browserTimeout }).toBeGreaterThan(0);
     await expect(page.locator('.skill-shiki')).toContainText('const answer: number = 42;', { timeout: browserTimeout });
+  } finally {
+    await server.close();
+    await removeProjectFixture(project.root);
+  }
+});
+
+e2e('delivers active Skill resources as downloads without letting their page script access the foreground session', { timeout: 60_000 }, async ({ page }) => {
+  await buildWorkbench();
+  const project = await createProjectFixture();
+  await writeFile(join(project.skillDir, 'assets', 'probe.html'), [
+    '<script>',
+    'window.__skillResourceExecuted = true;',
+    "fetch('/api/project/session');",
+    '</script>',
+    '',
+  ].join('\n'));
+  const server = await startDevServer({
+    assets: createWorkbenchAssetSource({ root: workbenchAssets }),
+    open: false,
+    port: 0,
+    root: project.root,
+  });
+  try {
+    await page.goto(server.url);
+    await expect(page.getByRole('heading', { name: 'Project overview' })).toBeVisible({ timeout: browserTimeout });
+    let protectedRequests = 0;
+    page.on('request', (request) => {
+      if (/\/api\/project\/(?:session|rebuild)$/u.test(request.url())) protectedRequests += 1;
+    });
+    const download = page.waitForEvent('download');
+    await page.goto(`${server.url}/api/skills/source/skill%3Areview/resources/assets/probe.html`).catch(() => undefined);
+    const attachment = await download;
+
+    expect(attachment.suggestedFilename()).toBe('probe.html');
+    expect(protectedRequests).toBe(0);
+    expect(await page.evaluate(() => (globalThis as { readonly __skillResourceExecuted?: boolean }).__skillResourceExecuted)).toBeUndefined();
+  } finally {
+    await server.close();
+    await removeProjectFixture(project.root);
+  }
+});
+
+e2e('lists an immutable epoch Skill tree even after the current source Skill is renamed', { timeout: 60_000 }, async ({ page }) => {
+  await buildWorkbench();
+  const project = await createProjectFixture();
+  const server = await startFrozenEpochServer(project.root);
+  try {
+    const renamed = join(project.root, 'skills', 'revised');
+    await rename(project.skillDir, renamed);
+    await writeFile(join(renamed, 'SKILL.md'), project.skillMarkdown.replace('name: review', 'name: revised'));
+
+    await page.goto(server.url);
+    await expect(page.getByRole('heading', { name: 'Project overview' })).toBeVisible({ timeout: browserTimeout });
+    await page.getByRole('link', { name: 'Skills' }).click();
+    await expect(page.locator('.skill-tree-item')).toContainText('revised', { timeout: browserTimeout });
+    await page.getByRole('tab', { name: 'Generated' }).click();
+    await expect(page.locator('.skill-tree-item')).toContainText('review', { timeout: browserTimeout });
+    await expect(page.getByText(/Generated base ·/)).toBeVisible({ timeout: browserTimeout });
+    await expect(page.getByRole('heading', { name: 'review', exact: true })).toBeVisible({ timeout: browserTimeout });
   } finally {
     await server.close();
     await removeProjectFixture(project.root);

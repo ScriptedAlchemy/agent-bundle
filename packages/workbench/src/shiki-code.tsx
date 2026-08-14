@@ -2,6 +2,8 @@ import { createHighlighterCore, type HighlighterCore } from 'shiki/core';
 import { createJavaScriptRegexEngine } from 'shiki/engine/javascript';
 import React, { useEffect, useState } from 'react';
 
+import { supportedShikiLanguage, type SupportedShikiLanguage } from './shiki-languages.ts';
+
 export interface ShikiCodeProps {
   readonly language: string;
   readonly value: string;
@@ -23,39 +25,13 @@ const languageLoaders = {
   yaml: () => import('shiki/dist/langs/yaml.mjs'),
 } as const;
 
-type SupportedLanguage = keyof typeof languageLoaders;
-
-const aliases: Readonly<Record<string, SupportedLanguage>> = Object.freeze({
-  bash: 'bash',
-  css: 'css',
-  html: 'html',
-  js: 'javascript',
-  javascript: 'javascript',
-  json: 'json',
-  jsx: 'jsx',
-  md: 'markdown',
-  markdown: 'markdown',
-  py: 'python',
-  python: 'python',
-  sh: 'bash',
-  shell: 'bash',
-  sql: 'sql',
-  toml: 'toml',
-  ts: 'typescript',
-  tsx: 'tsx',
-  typescript: 'typescript',
-  xml: 'html',
-  yaml: 'yaml',
-  yml: 'yaml',
-});
+type SupportedLanguage = SupportedShikiLanguage;
 
 let highlighter: Promise<HighlighterCore> | undefined;
 const loadedLanguages = new Map<SupportedLanguage, Promise<void>>();
 
-const supportedLanguage = (language: string): SupportedLanguage | undefined => aliases[language.toLowerCase()];
-
 const highlighterFor = async (language: string): Promise<Readonly<{ readonly highlighter: HighlighterCore; readonly lang: SupportedLanguage }> | undefined> => {
-  const lang = supportedLanguage(language);
+  const lang = supportedShikiLanguage(language);
   if (lang === undefined) return undefined;
   highlighter ??= createHighlighterCore({
     engine: createJavaScriptRegexEngine(),

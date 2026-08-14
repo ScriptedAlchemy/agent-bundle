@@ -51,6 +51,7 @@ const createProject = async (): Promise<string> => {
     ].join('\n')),
     writeFile(join(skill, 'guide.md'), '# Guide\n'),
     writeFile(join(skill, 'assets', 'pixel.bin'), new Uint8Array([0, 255, 17, 9])),
+    writeFile(join(skill, 'assets', 'probe.html'), '<script>window.__skillResourceExecuted = true</script>\n'),
   ]);
   return root;
 };
@@ -85,12 +86,35 @@ it('serves parsed source documents and exact source resources by a model-owned S
       resources: [
         { relativePath: 'SKILL.md' },
         { relativePath: 'assets/pixel.bin' },
+        { relativePath: 'assets/probe.html' },
         { relativePath: 'guide.md' },
       ],
     });
     expect(binary.contentType).toBe('application/octet-stream');
     expect(binary.body).toEqual(new Uint8Array([0, 255, 17, 9]));
     expect([...await readFile(join(root, 'skills', 'review', 'assets', 'pixel.bin'))]).toEqual([...binary.body]);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('marks active Skill resources for download while preserving their exact bytes and MIME', async () => {
+  const root = await createProject();
+  try {
+    const service = new SkillDocumentService({
+      epochStore: new EpochStore({ projectRoot: root }),
+      projectService: new ProjectService({ root }),
+      root,
+    });
+
+    const resource = await service.sourceResource('skill:review', ['assets', 'probe.html']);
+
+    expect(resource).toMatchObject({
+      contentDisposition: 'attachment',
+      contentType: 'text/html; charset=utf-8',
+      relativePath: 'assets/probe.html',
+    });
+    expect(new TextDecoder().decode(resource.body)).toBe('<script>window.__skillResourceExecuted = true</script>\n');
   } finally {
     await rm(root, { force: true, recursive: true });
   }
@@ -162,9 +186,10 @@ it('serves only typed source Skill routes and rejects encoded resource separator
       skillDocuments: service,
     });
     try {
-      const [document, binary, malformed] = await Promise.all([
+      const [document, binary, active, malformed] = await Promise.all([
         fetch(`${server.url}/api/skills/source/skill%3Areview`),
         fetch(`${server.url}/api/skills/source/skill%3Areview/resources/assets/pixel.bin`),
+        fetch(`${server.url}/api/skills/source/skill%3Areview/resources/assets/probe.html`),
         fetch(`${server.url}/api/skills/source/skill%3Areview/resources/assets%2Fpixel.bin`),
       ]);
 
@@ -174,6 +199,10 @@ it('serves only typed source Skill routes and rejects encoded resource separator
       });
       expect(binary.headers.get('content-type')).toBe('application/octet-stream');
       expect([...new Uint8Array(await binary.arrayBuffer())]).toEqual([0, 255, 17, 9]);
+      expect(active.headers.get('content-type')).toBe('text/html; charset=utf-8');
+      expect(active.headers.get('content-disposition')).toContain('attachment');
+      expect(active.headers.get('x-content-type-options')).toBe('nosniff');
+      expect(await active.text()).toBe('<script>window.__skillResourceExecuted = true</script>\n');
       expect(malformed.status).toBe(400);
       await expect(malformed.json()).resolves.toEqual({
         diagnostic: { code: 'AB8012', message: 'Skill route path is not valid.' },

@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo, Socket } from 'node:net';
+import { basename } from 'node:path';
 
 import type { ProjectEventHub, ProjectEventSubscription } from './events.ts';
 import { SkillDocumentError, type SkillDocumentService } from './skill-document-service.ts';
@@ -131,6 +132,9 @@ const responseJson = (response: ServerResponse, body: unknown): void => {
   response.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
   response.end(JSON.stringify(body));
 };
+
+const attachmentHeader = (relativePath: string): string =>
+  `attachment; filename*=UTF-8''${encodeURIComponent(basename(relativePath)).replaceAll("'", '%27')}`;
 
 const singleHeader = (value: string | readonly string[] | undefined): string | undefined =>
   typeof value === 'string' ? value : undefined;
@@ -527,10 +531,15 @@ export class ForegroundServer {
       const value = route.kind === 'source-resource'
         ? await service.sourceResource(route.skillId, route.resource)
         : await service.generatedResource(route.epochId, route.target, route.skillId, route.resource);
-      response.writeHead(200, {
+      const headers: Record<string, string> = {
         'content-length': String(value.body.byteLength),
         'content-type': value.contentType,
-      });
+        'x-content-type-options': 'nosniff',
+      };
+      if (value.contentDisposition === 'attachment') {
+        headers['content-disposition'] = attachmentHeader(value.relativePath);
+      }
+      response.writeHead(200, headers);
       response.end(method === 'HEAD' ? undefined : value.body);
     } catch (error) {
       if (error instanceof SkillDocumentError) {

@@ -33,3 +33,22 @@ it('renders a selected Skill with explicit Rendered, Source, and unavailable Gen
   expect(markup).toContain('Reviews changes');
   expect(markup).toContain('/api/skills/source/skill%3Areview/resources/guide.md');
 });
+
+it('gives each Skill view a complete roving-tab and labelled-tabpanel contract', () => {
+  const markup = renderToStaticMarkup(createElement(SkillDocumentPanel, {
+    generated: { state: 'unavailable', summary: 'No artifact epoch is active.' },
+    onTabChange: () => undefined,
+    selected: document,
+    tab: 'rendered',
+  }));
+
+  expect(markup).toContain('role="tablist"');
+  expect(markup).toContain('role="tab"');
+  expect(markup).toContain('aria-controls="skill-review-panel-rendered"');
+  expect(markup).toContain('id="skill-review-tab-rendered"');
+  expect(markup).toContain('tabindex="0"');
+  expect(markup).toContain('tabindex="-1"');
+  expect(markup).toContain('role="tabpanel"');
+  expect(markup).toContain('id="skill-review-panel-rendered"');
+  expect(markup).toContain('aria-labelledby="skill-review-tab-rendered"');
+});

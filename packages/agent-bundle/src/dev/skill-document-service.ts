@@ -61,6 +61,8 @@ export interface ServedSkillDocument {
 
 export interface ServedSkillResource {
   readonly body: Uint8Array;
+  /** Active web formats are downloaded instead of rendered under the foreground origin. */
+  readonly contentDisposition?: 'attachment';
   readonly contentType: string;
   readonly relativePath: string;
 }
@@ -121,6 +123,16 @@ const documentResources = (resources: readonly SkillResource[]): readonly SkillD
 
 const contentTypeFor = (path: string): string =>
   contentTypes[extname(path).toLowerCase()] ?? 'application/octet-stream';
+
+const activeWebContentTypes = new Set([
+  'image/svg+xml',
+  'text/html',
+  'text/javascript',
+  'text/typescript',
+]);
+
+const contentDispositionFor = (contentType: string): 'attachment' | undefined =>
+  activeWebContentTypes.has(contentType.split(';', 1)[0]!) ? 'attachment' : undefined;
 
 const resourcePath = (segments: readonly string[]): string => {
   if (segments.length === 0 || segments.some((segment) => !safeSegment(segment))) {
@@ -212,9 +224,11 @@ const readAllowedResource = async (
   if (!isContained(realRoot, realCandidate)) {
     throw new SkillDocumentError('SKILL_RESOURCE_UNAVAILABLE', 'Skill resource escapes its document base.');
   }
+  const contentType = contentTypeFor(resource.relativePath);
   return Object.freeze({
     body: new Uint8Array(await readFile(realCandidate)),
-    contentType: contentTypeFor(resource.relativePath),
+    ...(contentDispositionFor(contentType) === undefined ? {} : { contentDisposition: 'attachment' as const }),
+    contentType,
     relativePath: resource.relativePath,
   });
 };

@@ -5,6 +5,7 @@ import remarkGfm from 'remark-gfm';
 import type { SkillDocumentBase } from '../../agent-bundle/src/dev/skill-document-service.ts';
 
 import { resourceUrlFor } from './skills-model.ts';
+import { supportedShikiLanguage } from './shiki-languages.ts';
 
 const LazyShikiCode = lazy(async () => {
   const module = await import('./shiki-code.tsx');
@@ -55,8 +56,10 @@ const SkillCode = ({ children, className }: ComponentPropsWithoutRef<'code'>) =>
   if (language.toLowerCase() === 'mermaid') {
     return <pre className="skill-mermaid-code"><code className={className}>{value}</code></pre>;
   }
+  const supported = supportedShikiLanguage(language);
+  if (supported === undefined) return <PlainCode className={className} value={value} />;
   return <Suspense fallback={<PlainCode className={className} value={value} />}>
-    <LazyShikiCode language={language} value={value} />
+    <LazyShikiCode language={supported} value={value} />
   </Suspense>;
 };
 
