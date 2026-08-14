@@ -23,6 +23,7 @@ const runClaudeValidation = async (cwd: string, marketplace: string): Promise<nu
 nativeIt('accepts the emitted Claude marketplace under strict native validation', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-claude-marketplace-'));
   const model: NormalizedPlugin = {
+    hooks: [],
     marketplace: true,
     mcpServers: [],
     metadata: {

@@ -7,6 +7,7 @@ import { portableAdapter } from '../src/adapters/portable.ts';
 import type { NormalizedPlugin } from '../src/core/types.ts';
 
 const plugin = (): NormalizedPlugin => ({
+  hooks: [],
   metadata: {
     description: 'A portable test plugin',
     id: 'plugin:portable-test',

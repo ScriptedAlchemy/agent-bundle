@@ -2,6 +2,9 @@ import { basename, posix } from 'node:path';
 
 import type { Diagnostic } from '../core/diagnostics.ts';
 import type {
+  AgentBundleHookEntry,
+  AgentBundleHookInput,
+  CanonicalHookEvent,
   NormalizationTargetRegistry,
   NormalizedPlugin,
 } from '../core/types.ts';
@@ -14,6 +17,77 @@ const sourceDiagnostic = (
   message: string,
   sourcePath: string,
 ): Diagnostic => ({ code, message, severity: 'error', sourcePath });
+
+const hookEvents: readonly CanonicalHookEvent[] = [
+  'sessionStart',
+  'beforeTool',
+  'afterTool',
+  'stop',
+];
+
+const hookTools = new Set(['shell', 'file.read', 'file.write', 'mcp', 'agent']);
+
+const asHookEntries = (input: AgentBundleHookInput): readonly (string | AgentBundleHookEntry)[] =>
+  Array.isArray(input) ? input : [input];
+
+const validateHooks = (loaded: LoadedConfig): Diagnostic[] => {
+  const hooks = loaded.config.hooks;
+  if (hooks === undefined) return [];
+
+  const diagnostics: Diagnostic[] = [];
+  for (const event of hookEvents) {
+    const input = hooks[event];
+    if (input === undefined) continue;
+    for (const rawEntry of asHookEntries(input)) {
+      const entry = typeof rawEntry === 'string' ? { handler: rawEntry } : rawEntry;
+      if (typeof entry.handler !== 'string' || entry.handler.trim().length === 0) {
+        diagnostics.push(sourceDiagnostic(
+          'AB4200',
+          `Hook ${event} requires a nonempty handler path.`,
+          loaded.configPath,
+        ));
+      }
+      if (entry.tools !== undefined && event !== 'beforeTool' && event !== 'afterTool') {
+        diagnostics.push(sourceDiagnostic(
+          'AB4201',
+          `Hook ${event} cannot select tools.`,
+          loaded.configPath,
+        ));
+      }
+      for (const tool of entry.tools ?? []) {
+        if (!hookTools.has(tool)) {
+          diagnostics.push(sourceDiagnostic(
+            'AB4202',
+            `Hook ${event} selects unknown tool ${JSON.stringify(tool)}.`,
+            loaded.configPath,
+          ));
+        }
+      }
+      for (const target of entry.targets ?? []) {
+        if (typeof target !== 'string' || target.trim().length === 0) {
+          diagnostics.push(sourceDiagnostic('AB4203', `Hook ${event} has an invalid target.`, loaded.configPath));
+        } else if (target === 'portable') {
+          diagnostics.push(sourceDiagnostic(
+            'AB4204',
+            `Portable target cannot emit hook ${event}.`,
+            loaded.configPath,
+          ));
+        }
+      }
+      if (
+        entry.timeout !== undefined &&
+        (!Number.isFinite(entry.timeout) || !Number.isInteger(entry.timeout) || entry.timeout <= 0)
+      ) {
+        diagnostics.push(sourceDiagnostic(
+          'AB4205',
+          `Hook ${event} timeout must be a positive whole number of seconds.`,
+          loaded.configPath,
+        ));
+      }
+    }
+  }
+  return diagnostics;
+};
 
 const withoutMarkdownCode = (body: string): string => {
   let fence: { character: string; length: number } | undefined;
@@ -228,6 +302,8 @@ export const validateSource = (
     }
   }
 
+  diagnostics.push(...validateHooks(loaded));
+
   return diagnostics;
 };
 
@@ -250,7 +326,7 @@ export const validateModel = (
   }
 
   const ids = new Map<string, string>();
-  const components = [model.metadata, ...model.targets, ...model.skills];
+  const components = [model.metadata, ...model.targets, ...model.skills, ...model.hooks];
   for (const component of components) {
     const firstSource = ids.get(component.id);
     if (firstSource === undefined) {
@@ -262,6 +338,28 @@ export const validateModel = (
         severity: 'error',
         sourcePath: component.provenance.sourcePath,
       });
+    }
+  }
+
+  for (const hook of model.hooks) {
+    for (const target of hook.targets) {
+      if (!registry.has(target)) {
+        diagnostics.push({
+          code: 'AB4203',
+          message: `Hook ${hook.event} selects unknown target ${JSON.stringify(target)}.`,
+          severity: 'error',
+          sourcePath: hook.provenance.sourcePath,
+          target,
+        });
+      } else if (target === 'portable') {
+        diagnostics.push({
+          code: 'AB4204',
+          message: `Portable target cannot emit hook ${hook.event}.`,
+          severity: 'error',
+          sourcePath: hook.provenance.sourcePath,
+          target,
+        });
+      }
     }
   }
 

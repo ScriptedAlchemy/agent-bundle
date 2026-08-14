@@ -14,6 +14,7 @@ import { pathTokens, type NormalizedPlugin } from '../src/core/types.ts';
 const installFormats = addFormats as unknown as (target: Ajv2020) => void;
 
 const plugin = Object.freeze({
+  hooks: Object.freeze([]),
   marketplace: true as const,
   mcpServers: Object.freeze([
     Object.freeze({
@@ -448,6 +449,7 @@ it('filters host components and builds portable, Codex, and Claude target roots'
   ]);
   const model: NormalizedPlugin = {
     ...plugin,
+    hooks: [],
     skills: [{
       ...plugin.skills[0]!,
       dir: skillRoot,
