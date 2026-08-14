@@ -331,6 +331,66 @@ it('closes an in-flight open instead of returning an untracked epoch-pinning ses
   }
 }, 30_000);
 
+it('closes a replacement client when restart races with session shutdown', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-persistent-mcp-restart-close-'));
+  try {
+    const epochStore = await publishFixtureEpoch(root, 'epoch-1');
+    let allowReplacement: (() => void) | undefined;
+    const replacementBlocked = new Promise<void>((resolvePromise) => {
+      allowReplacement = resolvePromise;
+    });
+    let replacementStarted: (() => void) | undefined;
+    const replacementStartedPromise = new Promise<void>((resolvePromise) => {
+      replacementStarted = resolvePromise;
+    });
+    const clients: Array<{ readonly close: () => Promise<void>; readonly closes: () => number }> = [];
+    const service = new McpSessionService({
+      createClient: () => {
+        const index = clients.length;
+        let closes = 0;
+        const client = {
+          callTool: async () => ({ content: [] }),
+          close: async () => {
+            closes += 1;
+          },
+          connect: async () => {
+            if (index === 1) {
+              replacementStarted?.();
+              await replacementBlocked;
+            }
+          },
+          getPrompt: async () => ({ messages: [] }),
+          getServerCapabilities: () => undefined,
+          getServerVersion: () => undefined,
+          listPrompts: async () => ({ prompts: [] }),
+          listResources: async () => ({ resources: [] }),
+          listResourceTemplates: async () => ({ resourceTemplates: [] }),
+          listTools: async () => ({ tools: [] }),
+          readResource: async () => ({ contents: [] }),
+        };
+        clients.push({ close: client.close, closes: () => closes });
+        return client;
+      },
+      createStdioTransport: () => ({ close: async () => undefined, send: async () => undefined, start: async () => undefined, stderr: null }) as never,
+      epochStore,
+      projectRoot: root,
+    });
+    const session = await service.open({ epochId: 'epoch-1', serverName: 'fixture', target: 'portable' });
+
+    const restarting = session.restart();
+    const restartRejected = expect(restarting).rejects.toThrow('MCP session is closed.');
+    await replacementStartedPromise;
+    const closing = session.close();
+    allowReplacement?.();
+    await closing;
+    await restartRejected;
+    expect(clients).toHaveLength(2);
+    expect(clients[1]!.closes()).toBe(1);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+}, 30_000);
+
 it('retains raw protocol frame identities and exposes progress and logging without translating SDK results', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-persistent-mcp-raw-'));
   try {

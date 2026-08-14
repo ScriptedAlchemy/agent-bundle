@@ -411,6 +411,7 @@ export class McpSession {
   #closePromise: Promise<void> | undefined;
   #closed = false;
   #connection: McpSessionConnectionState | undefined;
+  #lifecycleTail: Promise<void> = Promise.resolve();
   #sequence = 0;
 
   constructor(options: {
@@ -460,9 +461,12 @@ export class McpSession {
   }
 
   async initialize(options?: McpSessionRequestOptions): Promise<McpSessionConnectionState> {
-    this.#assertOpen();
-    if (this.#connection === undefined) await this.#connect(options);
-    return this.connection;
+    return this.#withLifecycle(async () => {
+      this.#assertOpen();
+      if (this.#connection === undefined) await this.#connect(options);
+      this.#assertOpen();
+      return this.connection;
+    });
   }
 
   async listTools(options?: McpSessionRequestOptions): Promise<readonly Tool[]> {
@@ -523,18 +527,22 @@ export class McpSession {
   }
 
   async restart(options?: McpSessionRequestOptions): Promise<McpSessionConnectionState> {
-    this.#assertOpen();
-    this.#cancelAll('MCP session restarted.');
-    await this.#closeClient();
-    this.#connection = undefined;
-    await this.#connect(options);
-    return this.connection;
+    return this.#withLifecycle(async () => {
+      this.#assertOpen();
+      this.#cancelAll('MCP session restarted.');
+      await this.#closeClient();
+      this.#assertOpen();
+      this.#connection = undefined;
+      await this.#connect(options);
+      this.#assertOpen();
+      return this.connection;
+    });
   }
 
   async close(): Promise<void> {
     if (this.#closePromise !== undefined) return this.#closePromise;
     this.#closed = true;
-    this.#closePromise = this.#close();
+    this.#closePromise = this.#withLifecycle(() => this.#close());
     return this.#closePromise;
   }
 
@@ -559,6 +567,20 @@ export class McpSession {
     if (this.#closed) throw new Error('MCP session is closed.');
   }
 
+  async #withLifecycle<Result>(operation: () => Promise<Result>): Promise<Result> {
+    const previous = this.#lifecycleTail;
+    let release: (() => void) | undefined;
+    this.#lifecycleTail = new Promise<void>((resolvePromise) => {
+      release = resolvePromise;
+    });
+    await previous;
+    try {
+      return await operation();
+    } finally {
+      release?.();
+    }
+  }
+
   #clientFor(options?: McpSessionRequestOptions): McpClient {
     this.#assertOpen();
     if (this.#connection === undefined) {
@@ -579,6 +601,7 @@ export class McpSession {
       const recording = new RecordingTransport(transport, (direction, message) => this.#recordFrame(direction, message));
       await client.connect(recording, requestOptions(options));
       this.#throwIfStderrExceeded(capture);
+      this.#assertOpen();
       this.#client = client;
       this.#capture = capture;
       this.#connection = Object.freeze({
