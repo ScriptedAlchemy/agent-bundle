@@ -144,6 +144,20 @@ it('preserves the stable Apps handshake and delays original tool data until init
   expect(bridge.lifecycle).toBe('initialized');
 });
 
+it('accepts the stable parameterless initialized notification before flushing host traffic', async () => {
+  const fixture = fixtureFor();
+  const bridge = createMcpAppBridge({ binding: fixture.binding, host: fixture.host, operations: fixture.operations, send: (message) => (fixture.sent.push(message), true) });
+
+  expect(bridge.publishToolInputPartial({ city: 'Par' })).toBe(true);
+  await bridge.receive(initialize('init:no-params'));
+  expect(await bridge.receive({ jsonrpc: '2.0', method: 'ui/notifications/initialized' })).toBe(true);
+  expect(fixture.sent.slice(-3)).toEqual([
+    { jsonrpc: '2.0', method: 'ui/notifications/tool-input-partial', params: { arguments: { city: 'Par' } } },
+    { jsonrpc: '2.0', method: 'ui/notifications/tool-input', params: { arguments: { city: 'Paris', units: 'metric' } } },
+    { jsonrpc: '2.0', method: 'ui/notifications/tool-result', params: { content: [{ text: 'Sunny', type: 'text' }], structuredContent: { temperature: 21 } } },
+  ]);
+});
+
 it('forwards only same-binding app-visible tools and resources while retaining request ids', async () => {
   const fixture = fixtureFor();
   const bridge = createMcpAppBridge({
@@ -267,6 +281,64 @@ it('enforces declared App capabilities without rejecting a parameterless standar
   ]);
 });
 
+it('rejects malformed JSON-RPC envelopes and payloads before executing host callbacks', async () => {
+  let openLinkCalls = 0;
+  const fixture = fixtureFor({ host: { onOpenLink: async () => { openLinkCalls += 1; } } });
+  const bridge = createMcpAppBridge({ binding: fixture.binding, host: fixture.host, operations: fixture.operations, send: (message) => (fixture.sent.push(message), true) });
+  await bridge.receive(initialize('init:envelope'));
+  await bridge.receive(initialized());
+
+  expect(await bridge.receive({ id: 'mixed', jsonrpc: '2.0', method: 'ui/open-link', params: { url: 'https://weather.example.test' }, result: {} })).toBe(false);
+  expect(await bridge.receive({ id: 'bad-content', jsonrpc: '2.0', method: 'ui/message', params: { content: [{ text: 42, type: 'text' }], role: 'user' } })).toBe(true);
+
+  expect(openLinkCalls).toBe(0);
+  expect(fixture.sent.at(-1)).toEqual({
+    error: { code: -32602, message: 'ui/message requires a user role and valid MCP content blocks.' },
+    id: 'bad-content',
+    jsonrpc: '2.0',
+  });
+  expect(() => createMcpAppBridge({
+    binding: fixture.binding,
+    host: { ...fixture.host, context: { theme: 'sepia' } },
+    operations: fixture.operations,
+    send: () => true,
+  })).toThrow('MCP App host context must use stable MCP Apps field values.');
+  expect(() => createMcpAppBridge({
+    binding: fixture.binding,
+    host: { ...fixture.host, capabilities: { serverTools: { listChanged: 'yes' } } },
+    operations: fixture.operations,
+    send: () => true,
+  })).toThrow('MCP App host context must use stable MCP Apps field values.');
+  expect(() => createMcpAppBridge({
+    binding: fixture.binding,
+    host: { ...fixture.host, context: { toolInfo: { id: {}, tool: { name: 'show-weather' } } } },
+    operations: fixture.operations,
+    send: () => true,
+  })).toThrow('MCP App host context must use stable MCP Apps field values.');
+
+  fixture.operations.callTool = async () => ({ content: [{ text: 42, type: 'text' }] }) as unknown as McpAppJsonValue;
+  await bridge.receive({ id: 'bad-result', jsonrpc: '2.0', method: 'tools/call', params: { name: 'refresh-weather' } });
+  expect(fixture.sent.at(-1)).toEqual({
+    error: { code: -32000, message: 'MCP App tool call returned an invalid result.' },
+    id: 'bad-result',
+    jsonrpc: '2.0',
+  });
+});
+
+it('rejects callback-returned display modes outside the App and host declarations', async () => {
+  const fixture = fixtureFor({ host: { onDisplayMode: async () => 'pip' as const } });
+  const bridge = createMcpAppBridge({ binding: fixture.binding, host: fixture.host, operations: fixture.operations, send: (message) => (fixture.sent.push(message), true) });
+  await bridge.receive(initialize('init:display-response'));
+  await bridge.receive(initialized());
+
+  await bridge.receive({ id: 'display-response', jsonrpc: '2.0', method: 'ui/request-display-mode', params: { mode: 'fullscreen' } });
+  expect(fixture.sent.at(-1)).toEqual({
+    error: { code: -32000, message: 'Host returned a display mode outside the negotiated declarations.' },
+    id: 'display-response',
+    jsonrpc: '2.0',
+  });
+});
+
 it('loads only the canonical HTML UI resource and returns a frozen structured fallback otherwise', async () => {
   const blobFixture = fixtureFor({
     resource: {
@@ -339,6 +411,44 @@ it('releases an uninitialized binding immediately without sending resource teard
   expect(fixture.sent).toEqual([]);
   expect(fixture.closes).toEqual(['binding-app']);
   expect(bridge.lifecycle).toBe('closed');
+});
+
+it('retains a retryable closing state and surfaces a structured binding-release failure', async () => {
+  let attempts = 0;
+  const fixture = fixtureFor();
+  fixture.operations.closeBinding = async () => {
+    attempts += 1;
+    if (attempts === 1) throw new Error('transient binding release failure');
+    return true;
+  };
+  const bridge = createMcpAppBridge({ binding: fixture.binding, host: fixture.host, operations: fixture.operations, send: () => true });
+
+  await expect(bridge.forceClose()).rejects.toMatchObject({ code: 'binding-close-failed', operation: 'closeBinding' });
+  expect(bridge.lifecycle).toBe('closing');
+  expect(attempts).toBe(1);
+  await bridge.forceClose();
+  expect(bridge.lifecycle).toBe('closed');
+  expect(attempts).toBe(2);
+});
+
+it('invalidates resource resolution that races with force close', async () => {
+  let resolveRead: ((value: McpAppJsonValue) => void) | undefined;
+  const fixture = fixtureFor();
+  const defaultRead = fixture.operations.readResource;
+  fixture.operations.readResource = async () => new Promise<McpAppJsonValue>((resolve) => {
+    resolveRead = resolve;
+  });
+  const bridge = createMcpAppBridge({ binding: fixture.binding, host: fixture.host, operations: fixture.operations, send: () => true });
+  const pending = bridge.loadResource();
+  await bridge.forceClose();
+  resolveRead?.(await defaultRead('binding-app', { uri: 'ui://weather/forecast.html' }));
+
+  await expect(pending).resolves.toEqual({
+    input: { city: 'Paris', units: 'metric' },
+    kind: 'fallback',
+    reason: 'bridge-closed',
+    result: { content: [{ text: 'Sunny', type: 'text' }], structuredContent: { temperature: 21 } },
+  });
 });
 
 it('bounds resource teardown, releases only the binding, and suppresses in-flight replies after close', async () => {
