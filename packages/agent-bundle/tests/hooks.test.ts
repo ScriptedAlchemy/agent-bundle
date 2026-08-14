@@ -287,6 +287,11 @@ it('lists and simulates only validated wrappers from a clean copied artifact', a
     expect(listed.find((hook) => hook.id === 'hook:session-start:session-start:7ab7e8a5' && hook.target === 'codex')).toMatchObject({
       path: 'codex/hooks/session-start-session-start-7ab7e8a5.mjs',
     });
+    const epochMarker = join(artifact, '.agent-bundle-epoch-stage.json');
+    await writeFile(epochMarker, '{"token":"00000000-0000-4000-8000-000000000000","version":1}\n');
+    await expect(service.list({ artifact })).rejects.toThrow(/artifact files do not match/i);
+    await expect(service.list({ allowEpochStagingMarker: true, artifact })).resolves.toHaveLength(8);
+    await rm(epochMarker, { force: true });
     const commonInput = { cwd: '/workspace', sessionId: 'session-1', transcriptPath: '/workspace/transcript.json' };
     for (const target of ['codex', 'claude'] as const) {
       await expect(service.simulate({
@@ -339,6 +344,67 @@ it('lists and simulates only validated wrappers from a clean copied artifact', a
     ]);
   }
 }, 15_000);
+
+it('escalates timed-out and aborted generated wrappers from TERM to KILL before settling', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-hooks-service-termination-'));
+  const consumer = await mkdtemp(join(tmpdir(), 'agent-bundle-hooks-service-termination-consumer-'));
+  const sourceRoot = join(root, 'src', 'hooks');
+  const outputRoot = join(root, 'dist');
+  const artifact = join(consumer, 'installed-plugin');
+  const base = hookModel(root);
+  const model: NormalizedPlugin = {
+    ...base,
+    hooks: [{ ...base.hooks[1]!, targets: ['codex'], timeout: 1 }],
+    targets: [base.targets[0]!],
+  };
+  const service = new HookService();
+  const input = {
+    cwd: '/workspace',
+    sessionId: 'session-1',
+    toolInput: { command: 'hang' },
+    toolName: 'Bash',
+    toolUseId: 'use-1',
+    transcriptPath: '/workspace/transcript.json',
+  };
+
+  try {
+    await mkdir(sourceRoot, { recursive: true });
+    await Promise.all([
+      writeFile(join(root, 'package.json'), '{"type":"module"}\n'),
+      writeFile(join(sourceRoot, 'check-command.ts'), [
+        "process.on('SIGTERM', () => process.stderr.write('ignored TERM\\n'));",
+        'setInterval(() => undefined, 1_000);',
+        'export default () => new Promise(() => undefined);',
+        '',
+      ].join('\n')),
+    ]);
+    await build({ model, outputRoot, projectRoot: root, registry: createDefaultRegistry() });
+    await cp(outputRoot, artifact, { recursive: true });
+
+    await expect(service.simulate({
+      artifact,
+      hook: base.hooks[1]!.id,
+      input,
+      target: 'codex',
+    })).rejects.toThrow('Hook simulation timed out.');
+
+    const controller = new AbortController();
+    const pending = service.simulate({
+      artifact,
+      hook: base.hooks[1]!.id,
+      input,
+      signal: controller.signal,
+      target: 'codex',
+    });
+    setTimeout(() => controller.abort(), 25);
+    await expect(pending).rejects.toThrow('Hook simulation aborted.');
+  } finally {
+    await Promise.all([
+      rm(root, { force: true, recursive: true }),
+      rm(consumer, { force: true, recursive: true }),
+    ]);
+  }
+}, 10_000);
 
 it('compiles each native hook through a virtual Rslib entry without sibling chunks', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-hooks-build-'));

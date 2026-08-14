@@ -13,16 +13,22 @@ import { validateArtifact } from '../build/validate-artifact.ts';
 
 const defaultTimeoutMs = 5_000;
 const maxStreamBytes = 1_000_000;
+const terminationGraceMs = 250;
 
 export interface HookListOptions {
+  /** Internal epoch callers may allow the store-owned staging marker. */
+  readonly allowEpochStagingMarker?: true;
   readonly artifact: string;
   readonly target?: string;
 }
 
 export interface HookSimulationOptions {
+  /** Internal epoch callers may allow the store-owned staging marker. */
+  readonly allowEpochStagingMarker?: true;
   readonly artifact: string;
   readonly hook: string;
   readonly input: Record<string, unknown>;
+  readonly signal?: AbortSignal;
   readonly target: string;
 }
 
@@ -63,6 +69,7 @@ const parseHookIndex = (value: string): ArtifactHookIndex | undefined => {
 const runWrapper = async (options: {
   readonly cwd: string;
   readonly input: Record<string, unknown>;
+  readonly signal?: AbortSignal;
   readonly timeoutMs: number;
   readonly wrapper: string;
 }): Promise<unknown> => new Promise((resolvePromise, reject) => {
@@ -77,6 +84,10 @@ const runWrapper = async (options: {
     reject(new RangeError('Hook simulation input exceeds the 1 MB limit.'));
     return;
   }
+  if (options.signal?.aborted) {
+    reject(new Error('Hook simulation aborted.'));
+    return;
+  }
 
   const child = spawn(process.execPath, [options.wrapper], {
     cwd: options.cwd,
@@ -86,14 +97,37 @@ const runWrapper = async (options: {
   let stdout = '';
   let stderr = '';
   let streamLimitExceeded = false;
-  const timer = setTimeout(() => {
-    child.kill();
-  }, options.timeoutMs);
+  let closed = false;
+  let settled = false;
+  let terminationError: Error | undefined;
+  let forceKillTimer: NodeJS.Timeout | undefined;
+  const cleanup = () => {
+    clearTimeout(timeoutTimer);
+    if (forceKillTimer !== undefined) clearTimeout(forceKillTimer);
+    options.signal?.removeEventListener('abort', onAbort);
+  };
+  const settle = (action: () => void) => {
+    if (settled) return;
+    settled = true;
+    cleanup();
+    action();
+  };
+  const terminate = (error: Error) => {
+    if (terminationError !== undefined || closed) return;
+    terminationError = error;
+    child.kill('SIGTERM');
+    forceKillTimer = setTimeout(() => {
+      if (!closed) child.kill('SIGKILL');
+    }, terminationGraceMs);
+  };
+  const onAbort = () => terminate(new Error('Hook simulation aborted.'));
+  const timeoutTimer = setTimeout(() => terminate(new Error('Hook simulation timed out.')), options.timeoutMs);
+  options.signal?.addEventListener('abort', onAbort, { once: true });
   const append = (current: string, chunk: Buffer): string => {
     const next = `${current}${chunk.toString()}`;
     if (Buffer.byteLength(next) > maxStreamBytes) {
       streamLimitExceeded = true;
-      child.kill();
+      terminate(new RangeError('Hook simulation output exceeds the 1 MB limit.'));
     }
     return next;
   };
@@ -105,27 +139,30 @@ const runWrapper = async (options: {
     stderr = append(stderr, chunk);
   });
   child.once('error', (error) => {
-    clearTimeout(timer);
-    reject(error);
+    settle(() => reject(error));
   });
   child.once('close', (code) => {
-    clearTimeout(timer);
+    closed = true;
+    if (terminationError !== undefined) {
+      settle(() => reject(terminationError!));
+      return;
+    }
     if (streamLimitExceeded) {
-      reject(new RangeError('Hook simulation output exceeds the 1 MB limit.'));
+      settle(() => reject(new RangeError('Hook simulation output exceeds the 1 MB limit.')));
       return;
     }
     if (code !== 0) {
-      reject(new Error(stderr.trim() || 'Generated hook wrapper failed.'));
+      settle(() => reject(new Error(stderr.trim() || 'Generated hook wrapper failed.')));
       return;
     }
     if (stdout.trim().length === 0) {
-      resolvePromise(undefined);
+      settle(() => resolvePromise(undefined));
       return;
     }
     try {
-      resolvePromise(JSON.parse(stdout));
+      settle(() => resolvePromise(JSON.parse(stdout)));
     } catch {
-      reject(new Error('Generated hook wrapper produced invalid JSON.'));
+      settle(() => reject(new Error('Generated hook wrapper produced invalid JSON.')));
     }
   });
   child.stdin.end(encoded);
@@ -134,7 +171,10 @@ const runWrapper = async (options: {
 export class HookService {
   async list(options: HookListOptions): Promise<readonly ArtifactHook[]> {
     const artifact = resolve(options.artifact);
-    const diagnostics = await validateArtifact({ artifactRoot: artifact });
+    const diagnostics = await validateArtifact({
+      ...(options.allowEpochStagingMarker === true ? { allowEpochStagingMarker: true } : {}),
+      artifactRoot: artifact,
+    });
     const errors = diagnostics.filter((diagnostic) => diagnostic.severity === 'error');
     if (errors.length > 0) throw new DiagnosticError(errors);
 
@@ -153,7 +193,11 @@ export class HookService {
 
   async simulate(options: HookSimulationOptions): Promise<unknown> {
     const artifact = resolve(options.artifact);
-    const hooks = await this.list({ artifact, target: options.target });
+    const hooks = await this.list({
+      ...(options.allowEpochStagingMarker === true ? { allowEpochStagingMarker: true } : {}),
+      artifact,
+      target: options.target,
+    });
     const matches = hooks.filter((hook) => hook.id === options.hook || hook.name === options.hook);
     if (matches.length !== 1) {
       throw new Error(`Expected exactly one ${options.target} hook matching ${JSON.stringify(options.hook)}.`);
@@ -163,6 +207,7 @@ export class HookService {
     return runWrapper({
       cwd: artifact,
       input: options.input,
+      ...(options.signal === undefined ? {} : { signal: options.signal }),
       timeoutMs: hook.timeout === undefined ? defaultTimeoutMs : hook.timeout * 1_000,
       wrapper,
     });
