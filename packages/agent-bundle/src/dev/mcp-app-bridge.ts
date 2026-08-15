@@ -6,9 +6,12 @@ import {
   type McpAppJsonValue,
 } from './mcp-app-binding-service.ts';
 import type {
+  McpAppConsentAuthority,
+  McpAppConsentCapability,
   McpAppSandboxCsp,
   McpAppSandboxPermissions,
 } from './mcp-app-sandbox.ts';
+import { createMcpAppConsentActionDigest } from './mcp-app-sandbox.ts';
 
 export const MCP_APP_PROTOCOL_VERSION = '2026-01-26';
 
@@ -97,6 +100,7 @@ export interface McpAppBridgeHost {
   readonly context?: McpAppBridgeJsonRecord;
   readonly info: McpAppBridgeHostInfo;
   onDisplayMode?(mode: McpAppBridgeDisplayMode): Promise<McpAppBridgeDisplayMode> | McpAppBridgeDisplayMode;
+  onDownload?(download: McpAppValidatedDownload): Promise<void> | void;
   onLog?(event: McpAppBridgeLogEvent): Promise<void> | void;
   onMessage?(event: McpAppBridgeMessageEvent): Promise<McpAppJsonValue | void> | McpAppJsonValue | void;
   onModelContext?(context: McpAppBridgeModelContext): Promise<void> | void;
@@ -124,6 +128,11 @@ export interface McpAppFailClosedSender<Message> {
   send(message: Message): Promise<boolean>;
 }
 
+interface McpAppFailClosedSenderInternal<Message> extends McpAppFailClosedSender<Message> {
+  attempt(message: Message): boolean | undefined;
+  block(): false;
+}
+
 export interface McpAppBridgeFallback {
   readonly input: McpAppJsonValue;
   readonly kind: 'fallback';
@@ -140,9 +149,11 @@ export interface McpAppBridgeCloseOptions {
 
 export interface CreateMcpAppBridgeOptions {
   readonly binding: McpAppBinding;
+  readonly consentAuthority?: McpAppConsentAuthority;
   readonly host: McpAppBridgeHost;
   readonly maxQueuedHostMessageBytes?: number;
   readonly operations: McpAppBridgeBindingOperations;
+  readonly profile?: string;
   readonly send: (message: McpAppBridgeMessage) => boolean;
   readonly teardownTimeoutMs?: number;
 }
@@ -190,6 +201,7 @@ const maximumTeardownTimeoutMs = 30_000;
 const defaultMaximumQueuedHostMessageBytes = 1_048_576;
 const maximumQueuedHostMessageBytes = 16_777_216;
 const maximumQueuedHostMessageSendAttempts = 3;
+export const MAX_APP_HTML_BYTES = 2_097_152;
 const loggingLevels = new Set(['debug', 'info', 'notice', 'warning', 'error', 'critical', 'alert', 'emergency']);
 const displayModes = new Set<McpAppBridgeDisplayMode>(['inline', 'fullscreen', 'pip']);
 const hostStyleVariables = new Set([
@@ -595,7 +607,7 @@ export const parseMcpAppResource = (value: McpAppJsonValue, resourceUri: string)
     if (hasText === hasBlob) return undefined;
     const html = hasText ? content.text as string : htmlFromBlob(content.blob as string);
     const metadata = resourceMetadata(content._meta);
-    if (html === undefined || metadata === undefined) return undefined;
+    if (html === undefined || Buffer.byteLength(html, 'utf8') > MAX_APP_HTML_BYTES || metadata === undefined) return undefined;
     return Object.freeze({ ...metadata, html });
   }
   return undefined;
@@ -608,6 +620,11 @@ const validToolCall = (params: McpAppJsonValue | undefined): McpAppBridgeToolCal
   if (record === undefined || !nonempty(record.name)) return undefined;
   if (record.arguments !== undefined && jsonRecord(record.arguments) === undefined) return undefined;
   return Object.freeze({ ...(record.arguments === undefined ? {} : { arguments: cloneJson(record.arguments) }), name: record.name });
+};
+
+const authorizationId = (params: McpAppJsonValue | undefined): string | undefined => {
+  const record = jsonRecord(params);
+  return record === undefined || record.authorizationId === undefined || !nonempty(record.authorizationId) ? undefined : record.authorizationId;
 };
 
 const validResourceRead = (params: McpAppJsonValue | undefined): McpAppBridgeResourceRead | undefined => {
@@ -671,10 +688,11 @@ export const validateMcpAppDownloadRequest = (value: McpAppJsonValue | undefined
   return Object.freeze({ contents, embeddedBytes, itemCount: contents.length });
 };
 
-export const createMcpAppFailClosedSender = <Message>(options: Readonly<{
+const createMcpAppFailClosedSenderInternal = <Message>(options: Readonly<{
   readonly onClose?: () => void;
   readonly send: (message: Message) => boolean | Promise<boolean>;
-}>): McpAppFailClosedSender<Message> => {
+  readonly synchronous?: boolean;
+}>): McpAppFailClosedSenderInternal<Message> => {
   let blockedAttempts = 0;
   let closed = false;
   let closeCalled = false;
@@ -686,12 +704,36 @@ export const createMcpAppFailClosedSender = <Message>(options: Readonly<{
       options.onClose?.();
     }
   };
+  const blocked = (): false => {
+    blockedAttempts += 1;
+    if (blockedAttempts >= maximumQueuedHostMessageSendAttempts) close();
+    return false;
+  };
+  const attempt = (message: Message): boolean | undefined => {
+    if (closed) return false;
+    if (!options.synchronous) return undefined;
+    try {
+      const result = options.send(message);
+      if (typeof (result as Promise<boolean>).then === 'function') return undefined;
+      if (result) {
+        blockedAttempts = 0;
+        return true;
+      }
+    } catch {
+      // A transport failure is intentionally indistinguishable from a blocked send.
+    }
+    return blocked();
+  };
   return Object.freeze({
     get blockedAttempts(): number { return blockedAttempts; },
     get closed(): boolean { return closed; },
+    attempt,
+    block: blocked,
     close,
     async send(message: Message): Promise<boolean> {
       if (closed) return false;
+      const immediate = attempt(message);
+      if (immediate !== undefined) return immediate;
       try {
         if (await options.send(message)) {
           blockedAttempts = 0;
@@ -700,12 +742,15 @@ export const createMcpAppFailClosedSender = <Message>(options: Readonly<{
       } catch {
         // A transport failure is intentionally indistinguishable from a blocked send.
       }
-      blockedAttempts += 1;
-      if (blockedAttempts >= maximumQueuedHostMessageSendAttempts) close();
-      return false;
+      return blocked();
     },
   });
 };
+
+export const createMcpAppFailClosedSender = <Message>(options: Readonly<{
+  readonly onClose?: () => void;
+  readonly send: (message: Message) => boolean | Promise<boolean>;
+}>): McpAppFailClosedSender<Message> => createMcpAppFailClosedSenderInternal(options);
 
 const validModelContext = (params: McpAppJsonValue | undefined): McpAppBridgeModelContext | undefined => {
   const record = jsonRecord(params);
@@ -760,6 +805,14 @@ export const createMcpAppBridge = (options: CreateMcpAppBridgeOptions): McpAppBr
   let appDisplayModes: ReadonlySet<McpAppBridgeDisplayMode> | undefined;
   let hostDisplayModes = validDisplayModeList(host.context?.availableDisplayModes);
   const isClosed = (): boolean => lifecycle === 'closing' || lifecycle === 'closed';
+  const authorized = (capability: McpAppConsentCapability, details: McpAppJsonValue, params: McpAppJsonValue | undefined): boolean => {
+    if (options.consentAuthority === undefined) return true;
+    const id = authorizationId(params);
+    return id !== undefined && options.profile !== undefined && options.consentAuthority.consume({
+      actionDigest: createMcpAppConsentActionDigest(capability, details), authorizationId: id,
+      bindingId: binding.id, capability, profile: options.profile,
+    });
+  };
 
   const hostMessageByteLength = (message: McpAppBridgeMessage): number => Buffer.byteLength(JSON.stringify(message), 'utf8');
 
@@ -792,6 +845,12 @@ export const createMcpAppBridge = (options: CreateMcpAppBridgeOptions): McpAppBr
     }
   };
 
+  const hostFailureSender = createMcpAppFailClosedSenderInternal({
+    onClose: () => failClosedHostTraffic(),
+    send,
+    synchronous: true,
+  });
+
   const emitHost = (message: McpAppBridgeMessage): boolean => {
     if (lifecycle === 'closing' || lifecycle === 'closed') return false;
     if (hostMessageByteLength(message) > queuedHostMessageByteLimit) return false;
@@ -799,6 +858,8 @@ export const createMcpAppBridge = (options: CreateMcpAppBridgeOptions): McpAppBr
       return enqueueHostMessage(message);
     }
     if (send(message)) return true;
+    hostFailureSender.block();
+    if (hostFailureSender.closed) return false;
     hostTrafficBlocked = true;
     return enqueueHostMessage(message);
   };
@@ -808,10 +869,9 @@ export const createMcpAppBridge = (options: CreateMcpAppBridgeOptions): McpAppBr
     while (lifecycle === 'initialized' && queuedHostMessages.length > 0) {
       const message = queuedHostMessages[0];
       if (message === undefined) return false;
-      if (!send(message.message)) {
-        message.failedSendAttempts += 1;
+      if (!hostFailureSender.attempt(message.message)) {
+        message.failedSendAttempts = hostFailureSender.blockedAttempts;
         hostTrafficBlocked = true;
-        if (message.failedSendAttempts >= maximumQueuedHostMessageSendAttempts) failClosedHostTraffic();
         return false;
       }
       dequeueHostMessage();
@@ -901,6 +961,8 @@ export const createMcpAppBridge = (options: CreateMcpAppBridgeOptions): McpAppBr
       case 'tools/call': {
         const request = validToolCall(message.params);
         if (request === undefined) return fail(id, -32602, 'tools/call requires a name and finite JSON arguments.');
+        const details = Object.freeze({ ...(request.arguments === undefined ? {} : { arguments: request.arguments }), name: request.name });
+        if (!authorized('call-tool', details, message.params)) return fail(id, -32001, 'tools/call requires an approved consent grant.');
         try {
           const result = validToolResult(await options.operations.callTool(binding.id, request));
           if (result === undefined) return lifecycle === 'initialized' ? fail(id, -32000, 'MCP App tool call returned an invalid result.') : false;
@@ -923,12 +985,25 @@ export const createMcpAppBridge = (options: CreateMcpAppBridgeOptions): McpAppBr
       case 'ui/open-link': {
         const url = validOpenLink(message.params);
         if (url === undefined) return fail(id, -32602, 'ui/open-link requires an http: or https: URL.');
+        if (!authorized('open-external-link', Object.freeze({ url }), message.params)) return fail(id, -32001, 'ui/open-link requires an approved consent grant.');
         if (host.onOpenLink === undefined) return fail(id, -32601, 'ui/open-link is not supported by this host.');
         try {
           await host.onOpenLink(url);
           return lifecycle === 'initialized' ? respond(id, {}) : false;
         } catch {
           return lifecycle === 'initialized' ? fail(id, -32000, 'ui/open-link was denied by this host.') : false;
+        }
+      }
+      case 'ui/download-file': {
+        const download = validateMcpAppDownloadRequest(message.params);
+        if (download === undefined) return fail(id, -32602, 'ui/download-file requires bounded valid MCP content blocks.');
+        if (!authorized('download-file', Object.freeze({ contents: download.contents }), message.params)) return fail(id, -32001, 'ui/download-file requires an approved consent grant.');
+        if (host.onDownload === undefined) return fail(id, -32601, 'ui/download-file is not supported by this host.');
+        try {
+          await host.onDownload(download);
+          return lifecycle === 'initialized' ? respond(id, {}) : false;
+        } catch {
+          return lifecycle === 'initialized' ? fail(id, -32000, 'ui/download-file was denied by this host.') : false;
         }
       }
       case 'ui/message': {
@@ -950,6 +1025,7 @@ export const createMcpAppBridge = (options: CreateMcpAppBridgeOptions): McpAppBr
         if (appDisplayModes === undefined || !appDisplayModes.has(mode)) return fail(id, -32602, 'ui/request-display-mode must be declared by the App.');
         if (hostDisplayModes === undefined || !hostDisplayModes.includes(mode)) return fail(id, -32602, 'ui/request-display-mode is not available from this host.');
         if (host.onDisplayMode === undefined) return fail(id, -32601, 'ui/request-display-mode is not supported by this host.');
+        if (!authorized('request-display-mode', Object.freeze({ mode }), message.params)) return fail(id, -32001, 'ui/request-display-mode requires an approved consent grant.');
         try {
           const actual = await host.onDisplayMode(mode);
           if (lifecycle !== 'initialized') return false;

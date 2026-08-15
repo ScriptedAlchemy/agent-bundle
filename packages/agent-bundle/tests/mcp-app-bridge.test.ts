@@ -3,6 +3,10 @@ import { Buffer } from 'node:buffer';
 import { expect, it } from '@rstest/core';
 
 import {
+  createMcpAppConsentActionDigest,
+  createMcpAppConsentAuthority,
+} from '../src/dev/mcp-app-sandbox.ts';
+import {
   createMcpAppBridge,
   createMcpAppFailClosedSender,
   parseMcpAppResource,
@@ -831,6 +835,17 @@ it('strictly validates external actions, bounded downloads, and exact MCP App re
   }, 'ui://weather/forecast.html')).toBeUndefined();
 });
 
+it('bounds canonical App HTML by UTF-8 bytes for text and decoded blobs', () => {
+  const exact = 'x'.repeat(2_097_152);
+  const response = (content: Record<string, unknown>) => ({
+    contents: [{ mimeType: 'text/html;profile=mcp-app', uri: 'ui://weather/forecast.html', ...content }],
+  });
+  expect(parseMcpAppResource(response({ text: exact }), 'ui://weather/forecast.html')).toMatchObject({ html: exact });
+  expect(parseMcpAppResource(response({ text: `${exact}x` }), 'ui://weather/forecast.html')).toBeUndefined();
+  expect(parseMcpAppResource(response({ blob: Buffer.from(exact).toString('base64') }), 'ui://weather/forecast.html')).toMatchObject({ html: exact });
+  expect(parseMcpAppResource(response({ blob: Buffer.from(`${exact}x`).toString('base64') }), 'ui://weather/forecast.html')).toBeUndefined();
+});
+
 it('closes a bounded asynchronous sender once after consecutive transport errors and clears queued traffic', async () => {
   const delivered: string[] = [];
   let attempts = 0;
@@ -854,4 +869,56 @@ it('closes a bounded asynchronous sender once after consecutive transport errors
   expect(delivered).toEqual([]);
   await expect(sender.send('after-close')).resolves.toBe(false);
   expect(closes).toBe(1);
+});
+
+it('requires an exact one-use server grant before a privileged tool operation', async () => {
+  const fixture = fixtureFor();
+  const authority = createMcpAppConsentAuthority({ now: () => 1_000 });
+  const bridge = createMcpAppBridge({
+    binding: fixture.binding,
+    consentAuthority: authority,
+    host: fixture.host,
+    operations: fixture.operations,
+    profile: 'portable',
+    send: (message) => (fixture.sent.push(message), true),
+  });
+  await bridge.receive(initialize('init:consent'));
+  await bridge.receive(initialized());
+  const details = { arguments: { city: 'Paris' }, name: 'refresh-weather' } as const;
+  const challenge = authority.challenge({
+    actionDigest: createMcpAppConsentActionDigest('call-tool', details),
+    bindingId: 'binding-app',
+    capability: 'call-tool',
+    details,
+    profile: 'portable',
+  });
+  expect(challenge?.request).toMatchObject({ capability: 'call-tool', scope: 'action' });
+  const grant = authority.grant(challenge?.id ?? '', true);
+  expect(grant).toBeDefined();
+
+  await bridge.receive({
+    id: 'tool:approved', jsonrpc: '2.0', method: 'tools/call',
+    params: { ...details, authorizationId: grant?.authorizationId },
+  });
+  await bridge.receive({
+    id: 'tool:replay', jsonrpc: '2.0', method: 'tools/call',
+    params: { ...details, authorizationId: grant?.authorizationId },
+  });
+  expect(fixture.calls).toEqual([{ arguments: { city: 'Paris' }, bindingId: 'binding-app', name: 'refresh-weather' }]);
+  expect(fixture.sent.at(-1)).toMatchObject({ error: { code: -32001 }, id: 'tool:replay' });
+});
+
+it('does not invoke a download handler until its matching action grant is consumed', async () => {
+  const downloads: unknown[] = [];
+  const fixture = fixtureFor({ host: { onDownload: (download) => { downloads.push(download); } } });
+  const authority = createMcpAppConsentAuthority({ now: () => 1_000 });
+  const bridge = createMcpAppBridge({ binding: fixture.binding, consentAuthority: authority, host: fixture.host, operations: fixture.operations, profile: 'portable', send: (message) => (fixture.sent.push(message), true) });
+  await bridge.receive(initialize('init:download-consent'));
+  await bridge.receive(initialized());
+  const details = { contents: [{ text: 'forecast', type: 'text' }] } as const;
+  await bridge.receive({ id: 'download:denied', jsonrpc: '2.0', method: 'ui/download-file', params: details });
+  const challenge = authority.challenge({ actionDigest: createMcpAppConsentActionDigest('download-file', details), bindingId: 'binding-app', capability: 'download-file', details, profile: 'portable' });
+  const grant = authority.grant(challenge?.id ?? '', true);
+  await bridge.receive({ id: 'download:approved', jsonrpc: '2.0', method: 'ui/download-file', params: { ...details, authorizationId: grant?.authorizationId } });
+  expect(downloads).toEqual([{ ...details, embeddedBytes: 0, itemCount: 1 }]);
 });

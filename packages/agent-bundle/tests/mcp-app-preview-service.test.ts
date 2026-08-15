@@ -369,6 +369,8 @@ it('preserves input-result FIFO order across one bounded outbound slot', async (
   const service = serviceFor(authorityFor(), { maxOutboundMessages: 1 });
   const preview = await createPreview(service);
 
+  expect(preview.consent).toBeDefined();
+
   expect(await service.receive(binding.id, initialize)).toBe(true);
   expect((await service.takeOutbound(binding.id)).map((message) => message.id)).toEqual(['initialize-weather']);
   expect(await service.receive(binding.id, initialized)).toBe(true);

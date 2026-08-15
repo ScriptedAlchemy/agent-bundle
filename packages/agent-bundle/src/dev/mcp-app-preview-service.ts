@@ -26,7 +26,9 @@ import {
   type McpAppHostProfileResolution,
 } from './mcp-app-host-profiles.ts';
 import {
+  createMcpAppConsentAuthority,
   createMcpAppSandboxFrame,
+  type McpAppConsentAuthority,
   type McpAppSandboxConsent,
   type McpAppSandboxEndpoint,
   type McpAppSandboxFrame,
@@ -63,6 +65,8 @@ export interface CreateMcpAppPreviewOptions {
 export interface McpAppPreview {
   readonly binding: McpAppBinding;
   readonly bridge: McpAppBridge;
+  /** Server-only authority; never serialize this object into App data. */
+  readonly consent: McpAppConsentAuthority;
   readonly frame?: McpAppSandboxFrame;
   readonly profile: McpAppHostProfileResolution;
   readonly resource: McpAppBridgeResourceResolution;
@@ -236,6 +240,7 @@ export class McpAppPreviewService {
       this.#assertCanonicalBinding(binding, options);
       this.#assertCreateAvailable(control);
       const toolDefinition = canonicalTool(binding.toolDefinition);
+      const consentAuthority = createMcpAppConsentAuthority();
       const host: McpAppHostContextInput = {
         ...options.host,
         toolInfo: { tool: toolDefinition },
@@ -244,12 +249,14 @@ export class McpAppPreviewService {
       const entryRef: { current?: PreviewEntry } = {};
       const bridge = createMcpAppBridge({
         binding,
+        consentAuthority,
         host: {
           ...this.#host,
           context: hostContextRecord(options.host, toolDefinition),
           info: this.#hostInfo,
         },
         operations: this.#bindingAuthority,
+        profile: options.previewProfile,
         send: (message) => {
           const entry = entryRef.current;
           const bytes = messageByteLength(message);
@@ -300,7 +307,7 @@ export class McpAppPreviewService {
           proxy: this.#sandboxProxy,
         })
         : undefined;
-      const preview = Object.freeze({ binding, bridge, ...(frame === undefined ? {} : { frame }), profile, resource });
+      const preview = Object.freeze({ binding, bridge, consent: consentAuthority, ...(frame === undefined ? {} : { frame }), profile, resource });
       this.#assertCreateAvailable(control);
       entry.preview = preview;
       return preview;

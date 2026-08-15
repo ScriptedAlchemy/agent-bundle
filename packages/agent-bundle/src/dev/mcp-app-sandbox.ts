@@ -1,5 +1,7 @@
 import { createServer, type Server } from 'node:http';
-import type { Socket } from 'node:net';
+import { isIP, type Socket } from 'node:net';
+
+import type { McpAppJsonValue } from './mcp-app-binding-service.ts';
 
 const JSON_RPC_VERSION = '2.0';
 const SANDBOX_NOTIFICATION_PREFIX = 'ui/notifications/sandbox-';
@@ -52,29 +54,6 @@ const SHELL = `<!doctype html>
     const isRpc = (value) => isRecord(value) && value.jsonrpc === '${JSON_RPC_VERSION}' && byteLength(value) <= maxMessageBytes && (typeof value.method === 'string' || Object.hasOwn(value, 'id'));
     const isNotification = (value, method) => isRpc(value) && value.method === method && !Object.hasOwn(value, 'id');
     const isSandboxMethod = (method) => typeof method === 'string' && method.startsWith('ui/notifications/sandbox-');
-    const cspSources = (sources) => {
-      if (!Array.isArray(sources)) return [];
-      const accepted = new Set();
-      for (const source of sources) {
-        try {
-          const parsed = new URL(source);
-          if (typeof source === 'string' && parsed.protocol === 'https:' && !parsed.username && !parsed.password && !parsed.search && !parsed.hash && parsed.pathname === '/') accepted.add(parsed.origin);
-        } catch {}
-      }
-      return [...accepted];
-    };
-    const cspSourceList = (sources, fallback) => sources.length > 0 ? sources.join(' ') : fallback;
-    const buildCsp = (csp) => {
-      const connect = cspSources(csp && csp.connectDomains);
-      const resources = cspSources(csp && csp.resourceDomains);
-      const frames = cspSources(csp && csp.frameDomains);
-      const baseUri = cspSources(csp && csp.baseUriDomains);
-      return ["default-src 'none'", 'base-uri ' + cspSourceList(baseUri, "'self'"), 'connect-src ' + cspSourceList(connect, "'none'"), 'frame-src ' + cspSourceList(frames, "'none'"), 'img-src ' + ['data:', ...resources].join(' '), 'media-src ' + cspSourceList(resources, "'none'"), 'font-src ' + cspSourceList(resources, "'none'"), 'style-src ' + ["'unsafe-inline'", ...resources].join(' '), 'script-src ' + ["'unsafe-inline'", ...resources].join(' ')].join('; ');
-    };
-    const permissionsAllow = (permissions) => {
-      if (!isRecord(permissions)) return '';
-      return [['camera', 'camera'], ['clipboardWrite', 'clipboard-write'], ['geolocation', 'geolocation'], ['microphone', 'microphone']].filter(([key]) => isRecord(permissions[key])).map(([, directive]) => directive).join('; ');
-    };
     const escapeHtmlAttribute = (value) => value.replace(/[&<>"]/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[character]);
     const postNotification = (method, params = {}) => parent.postMessage({ jsonrpc: '${JSON_RPC_VERSION}', method, params }, configuration.hostOrigin);
     const postToApp = (value) => { if (app.contentWindow) app.contentWindow.postMessage(value, '*'); };
@@ -86,9 +65,9 @@ const SHELL = `<!doctype html>
         if (isNotification(message, resourceReadyMethod)) {
           const params = message.params;
           if (lifecycle !== 'proxy-ready' || !isRecord(params) || typeof params.html !== 'string') return;
-          if (byteLength(message) > maxMessageBytes || (Object.hasOwn(params, 'sandbox') && typeof params.sandbox !== 'string') || (Object.hasOwn(params, 'csp') && !isRecord(params.csp)) || (Object.hasOwn(params, 'permissions') && !isRecord(params.permissions))) return;
-          app.allow = permissionsAllow(params.permissions);
-          app.srcdoc = '<!doctype html><meta http-equiv="Content-Security-Policy" content="' + escapeHtmlAttribute(buildCsp(params.csp)) + '">' + params.html;
+          if (byteLength(message) > maxMessageBytes || (Object.hasOwn(params, 'sandbox') && typeof params.sandbox !== 'string') || typeof params.allow !== 'string' || typeof params.contentSecurityPolicy !== 'string') return;
+          app.allow = params.allow;
+          app.srcdoc = '<!doctype html><meta http-equiv="Content-Security-Policy" content="' + escapeHtmlAttribute(params.contentSecurityPolicy) + '">' + params.html;
           lifecycle = 'resource-ready';
           return;
         }
@@ -166,9 +145,46 @@ export interface McpAppConsentGrant {
   readonly scope: 'action' | 'document';
 }
 
+export interface McpAppConsentRequest {
+  readonly capability: McpAppConsentCapability;
+  readonly details: McpAppJsonValue;
+  readonly scope: 'action' | 'document';
+  readonly summary: string;
+}
+
+export interface McpAppConsentChallenge {
+  readonly expiresAt: number;
+  readonly id: string;
+  readonly request: McpAppConsentRequest;
+}
+
+export interface McpAppConsentAuthority {
+  challenge(options: Readonly<{
+    readonly actionDigest: string;
+    readonly bindingId: string;
+    readonly capability: McpAppConsentCapability;
+    readonly details: McpAppJsonValue;
+    readonly profile: string;
+  }>): McpAppConsentChallenge | undefined;
+  consume(options: Readonly<{
+    readonly actionDigest: string;
+    readonly authorizationId: string;
+    readonly bindingId: string;
+    readonly capability: McpAppConsentCapability;
+    readonly profile: string;
+  }>): boolean;
+  grant(challengeId: string, approved: boolean): McpAppConsentGrant | undefined;
+}
+
 export interface McpAppSandboxWarning {
   readonly code: 'csp-source-rejected' | 'csp-wildcard-rejected' | 'permission-not-consented';
   readonly value: string;
+}
+
+export interface McpAppSandboxInternalSources {
+  readonly origin: string;
+  readonly provenance: 'compiler-internal';
+  readonly webSocketPath: '/rsbuild-hmr';
 }
 
 export interface McpAppDocumentPolicySnapshot {
@@ -264,7 +280,74 @@ export interface McpAppSandboxBridge {
 
 const isRecord = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value);
 
+const finiteJson = (value: unknown): value is McpAppJsonValue => value === null || typeof value === 'string' || typeof value === 'boolean'
+  || typeof value === 'number' && Number.isFinite(value)
+  || Array.isArray(value) && value.every(finiteJson)
+  || isRecord(value) && Object.values(value).every(finiteJson);
+
+const consentScope = (capability: McpAppConsentCapability): 'action' | 'document' => (
+  capability === 'camera' || capability === 'microphone' || capability === 'geolocation' || capability === 'clipboard-write' ? 'document' : 'action'
+);
+
+const consentSummary = (capability: McpAppConsentCapability): string => `Allow MCP App ${capability.replaceAll('-', ' ')}?`;
+
+export const createMcpAppConsentActionDigest = (capability: McpAppConsentCapability, details: McpAppJsonValue): string => `${capability}:${JSON.stringify(details)}`;
+
+export const createMcpAppConsentAuthority = (options: Readonly<{ readonly now?: () => number }> = {}): McpAppConsentAuthority => {
+  const now = options.now ?? Date.now;
+  const challenges = new Map<string, Readonly<{ actionDigest: string; bindingId: string; capability: McpAppConsentCapability; details: McpAppJsonValue; expiresAt: number; profile: string }>>();
+  const grants = new Map<string, Readonly<{ actionDigest: string; bindingId: string; capability: McpAppConsentCapability; expiresAt: number; profile: string; scope: 'action' | 'document' }>>();
+  let nextId = 1;
+  return Object.freeze({
+    challenge(input: Readonly<{ actionDigest: string; bindingId: string; capability: McpAppConsentCapability; details: McpAppJsonValue; profile: string }>) {
+      if (!finiteJson(input.details) || !input.bindingId || !input.profile || !input.actionDigest || challenges.size >= 8) return undefined;
+      const id = `consent-${nextId++}`;
+      const expiresAt = now() + 30_000;
+      const request = Object.freeze({ capability: input.capability, details: input.details, scope: consentScope(input.capability), summary: consentSummary(input.capability) });
+      challenges.set(id, Object.freeze({ ...input, expiresAt }));
+      return Object.freeze({ expiresAt, id, request });
+    },
+    consume(input: Readonly<{ actionDigest: string; authorizationId: string; bindingId: string; capability: McpAppConsentCapability; profile: string }>) {
+      const grant = grants.get(input.authorizationId);
+      if (grant === undefined || grant.scope !== 'action' || grant.expiresAt < now() || grant.actionDigest !== input.actionDigest || grant.bindingId !== input.bindingId || grant.capability !== input.capability || grant.profile !== input.profile) return false;
+      grants.delete(input.authorizationId);
+      return true;
+    },
+    grant(challengeId: string, approved: boolean) {
+      const challenge = challenges.get(challengeId);
+      challenges.delete(challengeId);
+      if (!approved || challenge === undefined || challenge.expiresAt < now()) return undefined;
+      const authorizationId = `grant-${nextId++}`;
+      grants.set(authorizationId, Object.freeze({
+        actionDigest: challenge.actionDigest, bindingId: challenge.bindingId, capability: challenge.capability,
+        expiresAt: challenge.expiresAt, profile: challenge.profile, scope: consentScope(challenge.capability),
+      }));
+      return Object.freeze({ authorizationId, bindingId: challenge.bindingId, capability: challenge.capability, challengeId, scope: consentScope(challenge.capability) });
+    },
+  });
+};
+
 const isCapability = (value: unknown): value is McpAppSandboxCapability => isRecord(value);
+
+const specialIpv4 = (host: string): boolean => {
+  const octets = host.split('.').map(Number);
+  if (octets.length !== 4 || octets.some((octet) => !Number.isInteger(octet) || octet < 0 || octet > 255)) return false;
+  const [a, b, c] = octets as [number, number, number, number];
+  return a === 0 || a === 10 || a === 127 || a >= 224 || (a === 100 && b >= 64 && b <= 127)
+    || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31)
+    || (a === 192 && (b === 0 || b === 168)) || (a === 198 && (b === 18 || b === 19 || b === 51))
+    || (a === 203 && b === 0 && c === 113);
+};
+
+const prohibitedHost = (value: string): boolean => {
+  const host = value.toLowerCase().replace(/^\[|\]$/gu, '');
+  if (host === 'localhost' || host.endsWith('.localhost')) return true;
+  if (isIP(host) === 4) return specialIpv4(host);
+  if (isIP(host) !== 6) return false;
+  return host === '::' || host === '::1' || host.startsWith('fe8') || host.startsWith('fe9')
+    || host.startsWith('fea') || host.startsWith('feb') || host.startsWith('fc') || host.startsWith('fd')
+    || host.startsWith('::ffff:');
+};
 
 const cspSources = (sources: readonly string[] | undefined): Readonly<{ accepted: readonly string[]; warnings: readonly McpAppSandboxWarning[] }> => {
   const accepted = new Set<string>();
@@ -276,7 +359,7 @@ const cspSources = (sources: readonly string[] | undefined): Readonly<{ accepted
     }
     try {
       const parsed = new URL(source);
-      if (parsed.protocol !== 'https:' || parsed.username || parsed.password || parsed.search || parsed.hash || parsed.pathname !== '/' || parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1' || parsed.hostname === '[::1]' || /^10\.|^192\.168\.|^172\.(?:1[6-9]|2\d|3[01])\./u.test(parsed.hostname) || source !== parsed.origin) {
+      if (parsed.protocol !== 'https:' || parsed.username || parsed.password || parsed.search || parsed.hash || parsed.pathname !== '/' || prohibitedHost(parsed.hostname) || source !== parsed.origin) {
         warnings.push(Object.freeze({ code: 'csp-source-rejected', value: source }));
         continue;
       }
@@ -316,6 +399,7 @@ const iframeAllow = (declaration: McpAppSandboxPermissions | undefined, consent:
 export const deriveMcpAppSandboxPolicy = (
   declaration: McpAppSandboxDeclaration,
   consent: McpAppSandboxConsent = {},
+  internalSources?: McpAppSandboxInternalSources,
 ): McpAppSandboxPolicy => {
   const connect = cspSources(declaration.csp?.connectDomains);
   const resources = cspSources(declaration.csp?.resourceDomains);
@@ -325,7 +409,7 @@ export const deriveMcpAppSandboxPolicy = (
     contentSecurityPolicy: [
       "default-src 'none'",
       `base-uri ${sourceList(baseUri.accepted, "'self'")}`,
-      `connect-src ${sourceList(connect.accepted, "'none'")}`,
+      `connect-src ${sourceList(Object.freeze([...connect.accepted, ...(internalSources?.provenance === 'compiler-internal' && internalSources.webSocketPath === '/rsbuild-hmr' ? [originOf(internalSources.origin)] : [])]), "'none'")}`,
       `frame-src ${sourceList(frames.accepted, "'none'")}`,
       `img-src ${['data:', ...resources.accepted].join(' ')}`,
       `media-src ${sourceList(resources.accepted, "'none'")}`,
@@ -427,7 +511,11 @@ export const createMcpAppSandboxFrame = (
     throw new TypeError('MCP App sandbox frame must target a loopback HTTP proxy');
   }
   const relay = relayOf(options.proxy.relay.maxMessageBytes, options.proxy.relay.maxQueuedMessages);
-  const policy = deriveMcpAppSandboxPolicy(options.declaration ?? {}, options.consent);
+  const policy = deriveMcpAppSandboxPolicy(options.declaration ?? {}, options.consent, {
+    origin: proxyOrigin,
+    provenance: 'compiler-internal',
+    webSocketPath: '/rsbuild-hmr',
+  });
   const configuration = encodeURIComponent(JSON.stringify({ hostOrigin, maxMessageBytes: relay.maxMessageBytes }));
   return Object.freeze({
     allow: policy.iframeAllow,
@@ -470,10 +558,10 @@ export const createMcpAppSandboxBridge = (
     provideResource(resource: McpAppSandboxResource): boolean {
       if (lifecycle !== 'proxy-ready' || typeof resource.html !== 'string' || (resource.sandbox !== undefined && typeof resource.sandbox !== 'string')) return false;
       const message = notification(RESOURCE_READY_METHOD, {
+        allow: options.frame.policy.iframeAllow,
+        contentSecurityPolicy: options.frame.policy.contentSecurityPolicy,
         html: resource.html,
         ...(resource.sandbox === undefined ? {} : { sandbox: resource.sandbox }),
-        ...(resource.csp === undefined ? {} : { csp: resource.csp }),
-        ...(resource.permissions === undefined ? {} : { permissions: resource.permissions }),
       });
       if (!isMessage(message, relay.maxMessageBytes)) return false;
       lifecycle = 'resource-ready';
