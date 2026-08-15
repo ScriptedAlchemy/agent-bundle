@@ -1,4 +1,8 @@
-export type McpAppJsonValue = null | boolean | number | string | readonly McpAppJsonValue[] | Readonly<Record<string, McpAppJsonValue>>;
+export interface McpAppJsonObject {
+  readonly [key: string]: McpAppJsonValue;
+}
+
+export type McpAppJsonValue = null | boolean | number | string | readonly McpAppJsonValue[] | McpAppJsonObject;
 
 export type McpAppPreviewProfile = 'chatgpt' | 'claude' | 'portable';
 export type McpAppBridgeLifecycle = 'created' | 'initializing' | 'initialized' | 'closing' | 'closed';
@@ -125,7 +129,8 @@ const lifecycle = (value: unknown): McpAppBridgeLifecycle => {
   throw new McpAppClientError('AB8019', 'Foreground MCP App route returned an invalid lifecycle.');
 };
 
-const positiveInteger = (value: unknown): value is number => Number.isSafeInteger(value) && value > 0;
+const positiveInteger = (value: unknown): value is number =>
+  typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
 
 const origin = (value: unknown): string => {
   if (typeof value !== 'string') throw new McpAppClientError('AB8019', 'Foreground MCP App route returned an invalid frame origin.');
