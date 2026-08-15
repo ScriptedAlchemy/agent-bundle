@@ -1,6 +1,10 @@
-import { readFile } from 'node:fs/promises';
-import { dirname, posix, resolve } from 'node:path';
-import { spawn } from 'node:child_process';
+import { lstat, readFile, realpath } from 'node:fs/promises';
+import { isBuiltin } from 'node:module';
+import { dirname, isAbsolute, posix, relative, resolve } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+
+import { parse as parseJavaScript } from 'acorn';
+import { init, parse } from 'es-module-lexer';
 
 import { createDefaultRegistry, type TargetRegistry } from '../adapters/registry.ts';
 import type {
@@ -47,27 +51,155 @@ const diagnostic = (
   ...(target === undefined ? {} : { target }),
 });
 
-const checkJavaScriptSyntax = async (path: string): Promise<string | undefined> =>
-  new Promise((resolvePromise) => {
-    const child = spawn(process.execPath, ['--check', path], {
-      stdio: ['ignore', 'ignore', 'pipe'],
-    });
-    let stderr = '';
-    const timeout = setTimeout(() => {
-      child.kill();
-    }, 5_000);
-    child.stderr.on('data', (chunk: Buffer) => {
-      stderr += chunk.toString();
-    });
-    child.once('error', (error) => {
-      clearTimeout(timeout);
-      resolvePromise(error.message);
-    });
-    child.once('close', (code) => {
-      clearTimeout(timeout);
-      resolvePromise(code === 0 ? undefined : stderr.trim() || 'Node rejected generated JavaScript.');
-    });
-  });
+const javaScriptModuleSuffix = /\.(?:m?js)$/u;
+const generatedJavaScriptRecovery = 'Bundle every JavaScript dependency into the artifact, then rebuild it.';
+
+const jsonModuleSuffix = /\.json$/u;
+
+const artifactPathFor = (root: string, path: string): string | undefined => {
+  const artifactPath = relative(root, path).replaceAll('\\', '/');
+  return artifactPath === '' || artifactPath === '..' || artifactPath.startsWith('../') || isAbsolute(artifactPath)
+    ? undefined
+    : artifactPath;
+};
+
+const graphDiagnostic = (importer: string, message: string): Diagnostic => diagnostic(
+  'AB6005',
+  `Generated JavaScript import from ${JSON.stringify(importer)} ${message}`,
+  importer,
+  undefined,
+  generatedJavaScriptRecovery,
+);
+
+const resolveJavaScriptImport = async (options: {
+  readonly artifactRoot: string;
+  readonly files: ReadonlyMap<string, ArtifactFile>;
+  readonly importer: string;
+  readonly specifier: string;
+  readonly validJson: ReadonlySet<string>;
+}): Promise<{ readonly diagnostic?: Diagnostic; readonly module?: string }> => {
+  if (isBuiltin(options.specifier)) return {};
+  if (!options.specifier.startsWith('.') && !options.specifier.startsWith('file:')) {
+    return { diagnostic: graphDiagnostic(options.importer, `uses unsupported specifier ${JSON.stringify(options.specifier)}.`) };
+  }
+
+  let url: URL;
+  try {
+    url = new URL(options.specifier, pathToFileURL(resolve(options.artifactRoot, options.importer)));
+  } catch {
+    return { diagnostic: graphDiagnostic(options.importer, `uses invalid specifier ${JSON.stringify(options.specifier)}.`) };
+  }
+  if (url.protocol !== 'file:' || url.search.length > 0 || url.hash.length > 0) {
+    return { diagnostic: graphDiagnostic(options.importer, `uses unsupported specifier ${JSON.stringify(options.specifier)}.`) };
+  }
+
+  let path: string;
+  try {
+    path = fileURLToPath(url);
+  } catch {
+    return { diagnostic: graphDiagnostic(options.importer, `uses invalid file URL ${JSON.stringify(options.specifier)}.`) };
+  }
+  if (artifactPathFor(options.artifactRoot, path) === undefined) {
+    return { diagnostic: graphDiagnostic(options.importer, `resolves outside the artifact root: ${JSON.stringify(options.specifier)}.`) };
+  }
+
+  let metadata: Awaited<ReturnType<typeof lstat>>;
+  try {
+    metadata = await lstat(path);
+  } catch {
+    return { diagnostic: graphDiagnostic(options.importer, `is missing ${JSON.stringify(options.specifier)}.`) };
+  }
+  if (!metadata.isFile()) {
+    return { diagnostic: graphDiagnostic(options.importer, `does not resolve to a regular file: ${JSON.stringify(options.specifier)}.`) };
+  }
+
+  let canonicalPath: string;
+  try {
+    canonicalPath = await realpath(path);
+  } catch {
+    return { diagnostic: graphDiagnostic(options.importer, `is missing ${JSON.stringify(options.specifier)}.`) };
+  }
+  const artifactPath = artifactPathFor(options.artifactRoot, canonicalPath);
+  if (artifactPath === undefined) {
+    return { diagnostic: graphDiagnostic(options.importer, `resolves outside the artifact root: ${JSON.stringify(options.specifier)}.`) };
+  }
+  if (!options.files.has(artifactPath)) {
+    return { diagnostic: graphDiagnostic(options.importer, `is not listed in the artifact manifest: ${JSON.stringify(options.specifier)}.`) };
+  }
+  if (jsonModuleSuffix.test(artifactPath)) {
+    return options.validJson.has(artifactPath)
+      ? {}
+      : { diagnostic: graphDiagnostic(options.importer, `references invalid JSON ${JSON.stringify(options.specifier)}.`) };
+  }
+  if (!javaScriptModuleSuffix.test(artifactPath)) {
+    return { diagnostic: graphDiagnostic(options.importer, `uses unsupported target ${JSON.stringify(options.specifier)}.`) };
+  }
+  return { module: artifactPath };
+};
+
+const validateJavaScriptModules = async (options: {
+  readonly artifactRoot: string;
+  readonly files: readonly ArtifactFile[];
+  readonly manifestFiles?: ReadonlySet<string>;
+  readonly validJson: ReadonlySet<string>;
+}): Promise<readonly Diagnostic[]> => {
+  await init;
+  const artifactRoot = await realpath(options.artifactRoot);
+  const files = new Map(options.files
+    .filter((file) => options.manifestFiles === undefined || options.manifestFiles.has(file.path))
+    .map((file) => [file.path, file]));
+  const diagnostics: Diagnostic[] = [];
+  const visited = new Set<string>();
+  const visiting = new Set<string>();
+
+  const validateModule = async (path: string): Promise<void> => {
+    if (visited.has(path) || visiting.has(path)) return;
+    visiting.add(path);
+    let source: string;
+    try {
+      source = await readFile(resolve(artifactRoot, path), 'utf8');
+    } catch {
+      diagnostics.push(graphDiagnostic(path, 'cannot be read.'));
+      visiting.delete(path);
+      visited.add(path);
+      return;
+    }
+
+    let imports: ReturnType<typeof parse>[0];
+    try {
+      parseJavaScript(source, { ecmaVersion: 'latest', sourceType: 'module' });
+      [imports] = parse(source);
+    } catch {
+      diagnostics.push(graphDiagnostic(path, 'has invalid syntax.'));
+      visiting.delete(path);
+      visited.add(path);
+      return;
+    }
+    for (const imported of imports) {
+      if (imported.d === -2) continue;
+      if (imported.n === undefined) {
+        diagnostics.push(graphDiagnostic(path, 'has a non-literal dynamic import.'));
+        continue;
+      }
+      const resolved = await resolveJavaScriptImport({
+        artifactRoot,
+        files,
+        importer: path,
+        specifier: imported.n,
+        validJson: options.validJson,
+      });
+      if (resolved.diagnostic !== undefined) diagnostics.push(resolved.diagnostic);
+      else if (resolved.module !== undefined) await validateModule(resolved.module);
+    }
+    visiting.delete(path);
+    visited.add(path);
+  };
+
+  for (const path of [...files.keys()].filter((path) => javaScriptModuleSuffix.test(path)).sort((left, right) => left.localeCompare(right))) {
+    await validateModule(path);
+  }
+  return Object.freeze(diagnostics);
+};
 
 const sameFile = (left: ArtifactFile, right: ManifestFile): boolean =>
   left.bytes === right.bytes &&
@@ -85,6 +217,27 @@ const matchesManifestFileTable = (
     const manifestFile = manifestFilesByPath.get(file.path);
     return manifestFile !== undefined && sameFile(file, manifestFile);
   });
+};
+
+const sameArtifactFile = (left: ArtifactFile, right: ArtifactFile): boolean =>
+  left.bytes === right.bytes &&
+  left.mode === right.mode &&
+  left.path === right.path &&
+  left.sha256 === right.sha256;
+
+const changedArtifactPaths = (
+  initialFiles: readonly ArtifactFile[],
+  finalFiles: readonly ArtifactFile[],
+): readonly string[] => {
+  const initialFilesByPath = new Map(initialFiles.map((file) => [file.path, file]));
+  const finalFilesByPath = new Map(finalFiles.map((file) => [file.path, file]));
+  return [...new Set([...initialFilesByPath.keys(), ...finalFilesByPath.keys()])]
+    .filter((path) => {
+      const initialFile = initialFilesByPath.get(path);
+      const finalFile = finalFilesByPath.get(path);
+      return initialFile === undefined || finalFile === undefined || !sameArtifactFile(initialFile, finalFile);
+    })
+    .sort((left, right) => left.localeCompare(right));
 };
 
 const localMcpArgument = (value: unknown): string | undefined => {
@@ -123,6 +276,32 @@ interface ArtifactInspection {
   readonly filesystem: ArtifactFilesystemSnapshot;
   readonly files: readonly ArtifactFile[];
 }
+
+interface ManifestSnapshot {
+  readonly bytes: Buffer;
+  readonly device: number;
+  readonly inode: number;
+}
+
+const sameManifestSnapshot = (left: ManifestSnapshot, right: ManifestSnapshot): boolean =>
+  left.device === right.device &&
+  left.inode === right.inode &&
+  left.bytes.equals(right.bytes);
+
+const snapshotManifest = async (path: string): Promise<ManifestSnapshot> => {
+  const initialMetadata = await lstat(path);
+  if (!initialMetadata.isFile()) throw new Error('Artifact manifest is not a regular file.');
+  const bytes = await readFile(path);
+  const finalMetadata = await lstat(path);
+  if (
+    !finalMetadata.isFile() ||
+    initialMetadata.dev !== finalMetadata.dev ||
+    initialMetadata.ino !== finalMetadata.ino
+  ) {
+    throw new Error('Artifact manifest changed while being read.');
+  }
+  return Object.freeze({ bytes, device: initialMetadata.dev, inode: initialMetadata.ino });
+};
 
 const inspectArtifact = async (context: ValidateArtifactOptions): Promise<ArtifactInspection> => {
   const filesystem = await inspectArtifactFilesystem(context.artifactRoot);
@@ -594,13 +773,16 @@ const validateEmittedSkills = async (options: {
 const validateGeneratedFiles = async (options: {
   readonly artifactRoot: string;
   readonly files: readonly ArtifactFile[];
+  readonly manifestFiles?: readonly ManifestFile[];
 }): Promise<readonly Diagnostic[]> => {
   const diagnostics: Diagnostic[] = [];
   const generatedFiles = new Set(options.files.map((file) => file.path));
+  const validJson = new Set<string>();
 
   for (const file of options.files.filter((entry) => entry.path.endsWith('.json'))) {
     try {
       const document = JSON.parse(await readFile(resolve(options.artifactRoot, file.path), 'utf8')) as unknown;
+      validJson.add(file.path);
       for (const mcpPath of localMcpPaths(document)) {
         const generatedPath = posix.join(dirname(file.path), mcpPath);
         if (!generatedFiles.has(generatedPath)) {
@@ -616,12 +798,14 @@ const validateGeneratedFiles = async (options: {
     }
   }
 
-  for (const file of options.files.filter((entry) => /\.(?:[cm]?js)$/u.test(entry.path))) {
-    const syntaxError = await checkJavaScriptSyntax(resolve(options.artifactRoot, file.path));
-    if (syntaxError !== undefined) {
-      diagnostics.push(diagnostic('AB6005', `Generated JavaScript has invalid syntax: ${syntaxError}`, file.path));
-    }
-  }
+  diagnostics.push(...await validateJavaScriptModules({
+    artifactRoot: options.artifactRoot,
+    files: options.files,
+    ...(options.manifestFiles === undefined
+      ? {}
+      : { manifestFiles: new Set(options.manifestFiles.map((file) => file.path)) }),
+    validJson,
+  }));
 
   return Object.freeze(diagnostics);
 };
@@ -661,15 +845,17 @@ export const validateArtifact = async (context: ValidateArtifactOptions): Promis
   }
 
   const manifestPath = resolve(context.artifactRoot, artifactManifestName);
+  let manifestSnapshot: ManifestSnapshot;
+  try {
+    manifestSnapshot = await snapshotManifest(manifestPath);
+  } catch {
+    return [diagnostic('AB6000', 'Artifact manifest is missing or cannot be read.', artifactManifestName)];
+  }
+
   let manifest: ArtifactManifestV2;
   try {
-    manifest = parseArtifactManifest(await readFile(manifestPath, 'utf8'));
+    manifest = parseArtifactManifest(manifestSnapshot.bytes.toString('utf8'));
   } catch {
-    try {
-      await readFile(manifestPath, 'utf8');
-    } catch {
-      return [diagnostic('AB6000', 'Artifact manifest is missing or cannot be read.', artifactManifestName)];
-    }
     return [diagnostic('AB6001', 'Artifact manifest is not a strict canonical v2 manifest.', artifactManifestName)];
   }
 
@@ -712,6 +898,29 @@ export const validateArtifact = async (context: ValidateArtifactOptions): Promis
   diagnostics.push(...await validateGeneratedFiles({
     artifactRoot: context.artifactRoot,
     files: inspection.files,
+    manifestFiles: manifest.files,
   }));
+
+  let finalInspection: ArtifactInspection | undefined;
+  try {
+    finalInspection = await inspectArtifact(context);
+  } catch {
+    diagnostics.push(diagnostic('AB6004', 'Artifact file table changed during validation.', artifactManifestName));
+  }
+
+  let finalManifestSnapshot: ManifestSnapshot | undefined;
+  try {
+    finalManifestSnapshot = await snapshotManifest(manifestPath);
+  } catch {
+    diagnostics.push(diagnostic('AB6001', 'Artifact manifest changed during validation.', artifactManifestName));
+  }
+  if (finalManifestSnapshot !== undefined && !sameManifestSnapshot(manifestSnapshot, finalManifestSnapshot)) {
+    diagnostics.push(diagnostic('AB6001', 'Artifact manifest changed during validation.', artifactManifestName));
+  }
+  if (finalInspection !== undefined) {
+    for (const path of changedArtifactPaths(inspection.files, finalInspection.files)) {
+      diagnostics.push(diagnostic('AB6004', `Artifact file changed during validation: ${JSON.stringify(path)}.`, path));
+    }
+  }
   return Object.freeze(diagnostics);
 };
