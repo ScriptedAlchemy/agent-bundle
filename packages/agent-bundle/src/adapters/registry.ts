@@ -142,9 +142,15 @@ export class TargetRegistry implements NormalizationTargetRegistry {
     for (const target of [...this.#nativeHookSources.keys()].sort((left, right) => left.localeCompare(right))) {
       if (!targetNames.includes(target)) continue;
       const adapter = this.#adapters.get(target)!;
-      const source = this.#nativeHookSources.get(target)!.call(adapter, config);
-      if (typeof source === 'string' && source.trim().length > 0) {
-        sources.push(Object.freeze({ source, target }));
+      try {
+        const source = this.#nativeHookSources.get(target)!.call(adapter, config);
+        if (typeof source === 'string' && source.trim().length > 0) {
+          sources.push(Object.freeze({ source, target }));
+        } else if (source !== undefined) {
+          sources.push(Object.freeze({ issue: 'invalid', target }));
+        }
+      } catch {
+        sources.push(Object.freeze({ issue: 'error', target }));
       }
     }
     return Object.freeze(sources);

@@ -140,7 +140,17 @@ const normalizeNativeHooks = async (
 ): Promise<readonly NormalizedNativeHook[]> => {
   const provenance: SourceProvenance = { kind: 'config', sourcePath: loaded.configPath };
   const nativeHooks: NormalizedNativeHook[] = [];
-  for (const { source: configured, target } of registry.nativeHookSources?.(loaded.config, targetNames) ?? []) {
+  for (const nativeHookSource of registry.nativeHookSources?.(loaded.config, targetNames) ?? []) {
+    if ('issue' in nativeHookSource) {
+      nativeHooks.push({
+        issue: `source-${nativeHookSource.issue}`,
+        provenance: { ...provenance },
+        source: loaded.configPath,
+        target: nativeHookSource.target,
+      });
+      continue;
+    }
+    const { source: configured, target } = nativeHookSource;
     const source = resolve(loaded.context.projectRoot, configured);
     try {
       nativeHooks.push({

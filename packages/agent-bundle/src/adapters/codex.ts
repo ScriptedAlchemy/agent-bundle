@@ -6,6 +6,7 @@ import { stableJson } from '../core/digest.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
 import {
   pathTokens,
+  type AgentBundleConfig,
   type AgentBundleHostConfig,
   type NormalizedMcpServer,
   type NormalizedPlugin,
@@ -255,7 +256,7 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
   }
   const nativeHooks = nativeHooksFor(model, codexName);
   let nativeHookDocument: Record<string, unknown> | undefined;
-  if (nativeHooks?.issue !== undefined) {
+  if (nativeHooks?.issue === 'missing' || nativeHooks?.issue === 'parse') {
     diagnostics.push(errorDiagnostic(
       `codex.native-hooks.${nativeHooks.issue}`,
       `Codex native hooks file ${JSON.stringify(nativeHooks.source)} could not be ${nativeHooks.issue === 'missing' ? 'found' : 'parsed'}.`,
@@ -411,7 +412,7 @@ export const codexAdapter: TargetAdapter = Object.freeze({
     env: Object.freeze({}),
   }),
   name: codexName,
-  nativeHookSource: (config) => config.codex?.nativeHooks,
+  nativeHookSource: (config: Readonly<AgentBundleConfig>) => config.codex?.nativeHooks,
   plan,
   validateModel: (model: NormalizedPlugin) => [...plan(model).diagnostics],
 });

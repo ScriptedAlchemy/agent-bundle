@@ -5,6 +5,7 @@ import { stableJson } from '../core/digest.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
 import {
   pathTokens,
+  type AgentBundleConfig,
   type AgentBundleHostConfig,
   type NormalizedMcpServer,
   type NormalizedPlugin,
@@ -172,7 +173,7 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
   }
   const nativeHooks = nativeHooksFor(model, claudeName);
   let nativeHookDocument: Record<string, unknown> | undefined;
-  if (nativeHooks?.issue !== undefined) {
+  if (nativeHooks?.issue === 'missing' || nativeHooks?.issue === 'parse') {
     diagnostics.push(errorDiagnostic(
       `claude.native-hooks.${nativeHooks.issue}`,
       `Claude native hooks file ${JSON.stringify(nativeHooks.source)} could not be ${nativeHooks.issue === 'missing' ? 'found' : 'parsed'}.`,
@@ -322,7 +323,7 @@ export const claudeAdapter: TargetAdapter = Object.freeze({
     }),
   }),
   name: claudeName,
-  nativeHookSource: (config) => config.claude?.nativeHooks,
+  nativeHookSource: (config: Readonly<AgentBundleConfig>) => config.claude?.nativeHooks,
   plan,
   validateModel: (model: NormalizedPlugin) => [...plan(model).diagnostics],
 });

@@ -174,7 +174,7 @@ export interface NormalizedHook {
 
 export interface NormalizedNativeHook {
   readonly document?: unknown;
-  readonly issue?: 'missing' | 'parse';
+  readonly issue?: 'missing' | 'parse' | 'source-error' | 'source-invalid';
   readonly provenance: SourceProvenance;
   readonly source: string;
   readonly target: string;
@@ -211,10 +211,19 @@ export interface NormalizationConfigExtension {
   readonly target: string;
 }
 
-export interface NormalizationNativeHookSource {
+export interface NormalizationNativeHookDocument {
   readonly source: string;
   readonly target: string;
 }
+
+export interface NormalizationNativeHookSourceError {
+  readonly issue: 'error' | 'invalid';
+  readonly target: string;
+}
+
+export type NormalizationNativeHookSource =
+  | NormalizationNativeHookDocument
+  | NormalizationNativeHookSourceError;
 
 export interface NormalizationTargetRegistry {
   configExtensions(): readonly NormalizationConfigExtension[];
