@@ -86,8 +86,7 @@ it('assigns monotonic sequence IDs and freezes published event payloads', () => 
     type: 'source.changed',
   });
   const second = hub.publish({
-    epochId: 'epoch-1',
-    payload: { sessionId: 'run-1', type: 'mcp.connected' },
+    payload: { providerSessionId: 'provider-a', type: 'runtime.mcp.ready' },
     type: 'runtime.event',
   });
 
@@ -111,8 +110,7 @@ it('queues live events published during replay until retained events are deliver
     received.push(event.sequence);
     if (event.sequence === 1) {
       hub.publish({
-        epochId: 'epoch-1',
-        payload: { sessionId: 'run-1', type: 'mcp.connected' },
+        payload: { providerSessionId: 'provider-a', type: 'runtime.mcp.ready' },
         type: 'runtime.event',
       });
     }

@@ -123,9 +123,15 @@ export interface Invalidation {
 }
 
 export interface RuntimeEvent {
+  readonly correlationId?: string;
   readonly details?: JsonObject;
-  readonly sessionId: string;
-  readonly type: string;
+  readonly mcpRegistryRevision?: number;
+  readonly mcpSessionId?: string;
+  readonly mcpSessionRevision?: number;
+  readonly providerSessionId: string;
+  readonly runId?: string;
+  readonly runtimeGenerationId?: string;
+  readonly type: import('./runtime-provider.ts').DevRuntimeEventInput['type'];
 }
 
 export interface ProjectEventPayloadMap {
@@ -140,7 +146,7 @@ export interface ProjectEventPayloadMap {
 }
 
 export type ProjectEventType = keyof ProjectEventPayloadMap;
-type EpochScopedProjectEventType = 'artifact.available' | 'runtime.event';
+type EpochScopedProjectEventType = 'artifact.available';
 
 type ProjectEventFor<TType extends ProjectEventType> = TType extends ProjectEventType
   ? Readonly<{

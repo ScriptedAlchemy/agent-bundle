@@ -53,6 +53,11 @@ export {
 } from './foreground-server.ts';
 export { createWorkbenchAssetSource, type WorkbenchAssetSourceOptions } from './workbench-assets.ts';
 export {
+  RuntimeClientSurfaceProxy,
+  type RuntimeClientSurfaceConnectionEvent,
+} from './runtime-client-surface-proxy.ts';
+export { RuntimeRoutes, type RuntimeRoutesOptions } from './runtime-routes.ts';
+export {
   McpSession,
   McpSessionService,
   type McpSessionConnectionState,

@@ -50,9 +50,11 @@
     "fast-glob": "3.3.3",
     "ignore": "7.0.6",
     "jiti": "2.7.0",
+    "ws": "8.21.3",
     "yaml": "2.9.0"
   },
   "devDependencies": {
-    "@modelcontextprotocol/server": "2.0.0"
+    "@modelcontextprotocol/server": "2.0.0",
+    "@types/ws": "8.18.1"
   }
 }
