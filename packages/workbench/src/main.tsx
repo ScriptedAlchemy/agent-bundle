@@ -48,6 +48,9 @@ const runtimeProfiles = [{
   version: 'agent-bundle:mcp-apps:2026-01-26',
 }] satisfies readonly RuntimeProfileOption[];
 
+const maximumRuntimeBootstrapRetries = 2;
+const runtimeBootstrapRetryDelay = (retry: number): number => 250 * 2 ** retry;
+
 /** The Workbench, rather than an individual MCP transport, owns this shared foreground credential. */
 class WorkbenchMcpRouteClient extends McpRouteClient {
   override forgetAuthentication(): void {}
@@ -84,10 +87,11 @@ const pageForHash = (runtimeAvailable = false): WorkbenchPage => {
   return window.location.hash === '#skills' ? 'skills' : 'overview';
 };
 
-const Navigation = ({ onNavigate, page, runtimeAvailable = false }: {
+const Navigation = ({ onNavigate, page, runtimeAvailable = false, runtimeDiagnostic }: {
   readonly onNavigate: (page: WorkbenchPage) => void;
   readonly page: WorkbenchPage;
   readonly runtimeAvailable?: boolean;
+  readonly runtimeDiagnostic?: string;
 }) => <aside className="rail" aria-label="Workbench navigation">
   <div className="brand">Agent Bundle</div>
   <a
@@ -135,14 +139,16 @@ const Navigation = ({ onNavigate, page, runtimeAvailable = false }: {
     <span aria-hidden="true" className="nav-glyph">◫</span>
     Runtime
   </a> : undefined}
+  {runtimeDiagnostic === undefined ? undefined : <p className="runtime-capability-error" role="status">Runtime capability issue: {runtimeDiagnostic}</p>}
 </aside>;
 
-const Overview = ({ client, connectionError, onNavigate, runtimeAvailable = false, status, onStatus }: {
+const Overview = ({ client, connectionError, onNavigate, runtimeAvailable = false, runtimeDiagnostic, status, onStatus }: {
   readonly client: ProjectClient;
   readonly connectionError?: string;
   readonly onNavigate: (page: WorkbenchPage) => void;
   readonly onStatus: (status: ProjectStatus) => void;
   readonly runtimeAvailable?: boolean;
+  readonly runtimeDiagnostic?: string;
   readonly status: ProjectStatus;
 }) => {
   const overview = overviewFor(status);
@@ -163,7 +169,7 @@ const Overview = ({ client, connectionError, onNavigate, runtimeAvailable = fals
 
   return (
     <div className="workbench-shell">
-      <Navigation onNavigate={onNavigate} page="overview" runtimeAvailable={runtimeAvailable} />
+      <Navigation onNavigate={onNavigate} page="overview" runtimeAvailable={runtimeAvailable} runtimeDiagnostic={runtimeDiagnostic} />
       <main className="canvas" id="overview">
         <header className="topbar">
           <span className="menu-glyph" aria-hidden="true">☰</span>
@@ -238,14 +244,15 @@ const Overview = ({ client, connectionError, onNavigate, runtimeAvailable = fals
   );
 };
 
-const SkillsScreen = ({ connectionError, onNavigate, runtimeAvailable = false, skillClient, status }: {
+const SkillsScreen = ({ connectionError, onNavigate, runtimeAvailable = false, runtimeDiagnostic, skillClient, status }: {
   readonly connectionError?: string;
   readonly onNavigate: (page: WorkbenchPage) => void;
   readonly runtimeAvailable?: boolean;
+  readonly runtimeDiagnostic?: string;
   readonly skillClient: SkillClient;
   readonly status: ProjectStatus;
 }) => <div className="workbench-shell">
-  <Navigation onNavigate={onNavigate} page="skills" runtimeAvailable={runtimeAvailable} />
+  <Navigation onNavigate={onNavigate} page="skills" runtimeAvailable={runtimeAvailable} runtimeDiagnostic={runtimeDiagnostic} />
   <main className="canvas" id="skills">
     <header className="topbar">
       <span className="menu-glyph" aria-hidden="true">☰</span>
@@ -258,14 +265,15 @@ const SkillsScreen = ({ connectionError, onNavigate, runtimeAvailable = false, s
   </main>
 </div>;
 
-const WorkbenchScreen = ({ children, connectionError, onNavigate, page, runtimeAvailable = false }: {
+const WorkbenchScreen = ({ children, connectionError, onNavigate, page, runtimeAvailable = false, runtimeDiagnostic }: {
   readonly children: ReactNode;
   readonly connectionError?: string;
   readonly onNavigate: (page: WorkbenchPage) => void;
   readonly page: WorkbenchPage;
   readonly runtimeAvailable?: boolean;
+  readonly runtimeDiagnostic?: string;
 }) => <div className="workbench-shell">
-  <Navigation onNavigate={onNavigate} page={page} runtimeAvailable={runtimeAvailable} />
+  <Navigation onNavigate={onNavigate} page={page} runtimeAvailable={runtimeAvailable} runtimeDiagnostic={runtimeDiagnostic} />
   <div className="canvas" id={page}>
     <header className="topbar">
       <span className="menu-glyph" aria-hidden="true">☰</span>
@@ -278,18 +286,19 @@ const WorkbenchScreen = ({ children, connectionError, onNavigate, page, runtimeA
   </div>
 </div>;
 
-const McpScreen = ({ appPreviewClient, connectionError, controller, onNavigate, onResetSession, runtimeAvailable = false, status }: {
+const McpScreen = ({ appPreviewClient, connectionError, controller, onNavigate, onResetSession, runtimeAvailable = false, runtimeDiagnostic, status }: {
   readonly appPreviewClient: McpAppClient;
   readonly connectionError?: string;
   readonly controller: ReturnType<typeof createMcpController>;
   readonly onNavigate: (page: WorkbenchPage) => void;
   readonly onResetSession: () => void;
   readonly runtimeAvailable?: boolean;
+  readonly runtimeDiagnostic?: string;
   readonly status: ProjectStatus;
 }) => {
   const activeEpoch = status.artifact.state === 'missing' ? undefined : status.artifact.activeEpoch;
   const targetOptions = mcpTargets.filter((target) => activeEpoch !== undefined && target in activeEpoch.targetDigests);
-  return <WorkbenchScreen connectionError={connectionError} onNavigate={onNavigate} page="mcp" runtimeAvailable={runtimeAvailable}>
+  return <WorkbenchScreen connectionError={connectionError} onNavigate={onNavigate} page="mcp" runtimeAvailable={runtimeAvailable} runtimeDiagnostic={runtimeDiagnostic}>
     <div className="mcp-content">
       <McpPage
         appPreviewClient={appPreviewClient}
@@ -304,23 +313,25 @@ const McpScreen = ({ appPreviewClient, connectionError, controller, onNavigate, 
   </WorkbenchScreen>;
 };
 
-const InspectorScreen = ({ connectionError, controller, model, onNavigate, runtimeAvailable = false }: {
+const InspectorScreen = ({ connectionError, controller, model, onNavigate, runtimeAvailable = false, runtimeDiagnostic }: {
   readonly connectionError?: string;
   readonly controller: ReturnType<typeof createMcpController>;
   readonly model: ReturnType<typeof createMcpController>['model'];
   readonly onNavigate: (page: WorkbenchPage) => void;
   readonly runtimeAvailable?: boolean;
-}) => <WorkbenchScreen connectionError={connectionError} onNavigate={onNavigate} page="inspector" runtimeAvailable={runtimeAvailable}>
+  readonly runtimeDiagnostic?: string;
+}) => <WorkbenchScreen connectionError={connectionError} onNavigate={onNavigate} page="inspector" runtimeAvailable={runtimeAvailable} runtimeDiagnostic={runtimeDiagnostic}>
   <div className="inspector-content">
     <InspectorSessionAdapter controller={controller} model={model} />
   </div>
 </WorkbenchScreen>;
 
-const RuntimeScreen = ({ connectionError, controller, onNavigate }: {
+const RuntimeScreen = ({ connectionError, controller, onNavigate, runtimeDiagnostic }: {
   readonly connectionError?: string;
   readonly controller: RuntimePlaygroundController;
   readonly onNavigate: (page: WorkbenchPage) => void;
-}) => <WorkbenchScreen connectionError={connectionError} onNavigate={onNavigate} page="runtime" runtimeAvailable>
+  readonly runtimeDiagnostic?: string;
+}) => <WorkbenchScreen connectionError={connectionError} onNavigate={onNavigate} page="runtime" runtimeAvailable runtimeDiagnostic={runtimeDiagnostic}>
   <div className="runtime-content"><RuntimePlayground controller={controller} /></div>
 </WorkbenchScreen>;
 
@@ -367,12 +378,15 @@ const Workbench = () => {
     const runtimeEvents = createRuntimeEventBuffer();
     let mounted = true;
     let runtimeRetry: ReturnType<typeof setTimeout> | undefined;
+    let runtimeRetryCount = 0;
     client.current = next;
     skillClient.current = nextSkillClient;
     const resolveRuntimeCapability = (bootstrap: RuntimeBootstrap): void => {
       if (!mounted) return;
       if (bootstrap.kind === 'unavailable') {
         runtimeEvents.close();
+        runtimeRetryCount = 0;
+        setRuntimeError(undefined);
         setRuntimeCapability('unavailable');
         if (window.location.hash === '#runtime') {
           window.history.replaceState(undefined, '', '#overview');
@@ -393,15 +407,25 @@ const Workbench = () => {
       setRuntimeError(undefined);
       if (window.location.hash === '#runtime') setPage('runtime');
       if (bootstrap.status.activeVector === undefined && bootstrap.status.state !== 'failed' && bootstrap.status.state !== 'closed') {
-        if (runtimeRetry !== undefined) clearTimeout(runtimeRetry);
-        runtimeRetry = setTimeout(bootstrapRuntime, 250);
+        scheduleRuntimeBootstrap();
+      } else {
+        runtimeRetryCount = 0;
       }
+    };
+    const scheduleRuntimeBootstrap = (): void => {
+      if (!mounted || runtimeRetry !== undefined || runtimeRetryCount >= maximumRuntimeBootstrapRetries) return;
+      const delay = runtimeBootstrapRetryDelay(runtimeRetryCount);
+      runtimeRetryCount += 1;
+      runtimeRetry = setTimeout(() => {
+        runtimeRetry = undefined;
+        bootstrapRuntime();
+      }, delay);
     };
     const bootstrapRuntime = (): void => {
       void nextRuntimeClient.bootstrap().then(resolveRuntimeCapability).catch((reason: unknown) => {
         if (!mounted) return;
         setRuntimeError(errorMessage(reason));
-        runtimeRetry = setTimeout(bootstrapRuntime, 250);
+        scheduleRuntimeBootstrap();
       });
     };
     void next.connect(
@@ -453,18 +477,21 @@ const Workbench = () => {
         onNavigate={navigate}
         onResetSession={resetMcpSession}
         runtimeAvailable={runtimeAvailable}
+        runtimeDiagnostic={runtimeError}
         status={status}
       />;
     }
     if (page === 'inspector') {
-      return <InspectorScreen connectionError={connectionError} controller={mcpController} model={mcpModel} onNavigate={navigate} runtimeAvailable={runtimeAvailable} />;
+      return <InspectorScreen connectionError={connectionError} controller={mcpController} model={mcpModel} onNavigate={navigate} runtimeAvailable={runtimeAvailable} runtimeDiagnostic={runtimeError} />;
     }
-    if (page === 'runtime' && runtimeControllerState !== undefined) return <RuntimeScreen connectionError={connectionError} controller={runtimeControllerState} onNavigate={navigate} />;
+    if (page === 'runtime' && runtimeControllerState !== undefined) {
+      return <RuntimeScreen connectionError={connectionError} controller={runtimeControllerState} onNavigate={navigate} runtimeDiagnostic={runtimeError} />;
+    }
     return page === 'skills'
-      ? <SkillsScreen connectionError={connectionError} onNavigate={navigate} runtimeAvailable={runtimeAvailable} skillClient={skillClient.current} status={status} />
-      : <Overview client={client.current} connectionError={connectionError} onNavigate={navigate} onStatus={setStatus} runtimeAvailable={runtimeAvailable} status={status} />;
+      ? <SkillsScreen connectionError={connectionError} onNavigate={navigate} runtimeAvailable={runtimeAvailable} runtimeDiagnostic={runtimeError} skillClient={skillClient.current} status={status} />
+      : <Overview client={client.current} connectionError={connectionError} onNavigate={navigate} onStatus={setStatus} runtimeAvailable={runtimeAvailable} runtimeDiagnostic={runtimeError} status={status} />;
   }
-  return <main className="loading-state" aria-live="polite"><strong>Loading project state…</strong>{error === undefined ? undefined : <p role="alert">{error}</p>}{runtimeError === undefined ? undefined : <p className="runtime-capability-error">Runtime capability unavailable: {runtimeError}</p>}</main>;
+  return <main className="loading-state" aria-live="polite"><strong>Loading project state…</strong>{error === undefined ? undefined : <p role="alert">{error}</p>}{runtimeError === undefined ? undefined : <p className="runtime-capability-error">Runtime capability issue: {runtimeError}</p>}</main>;
 };
 
 createRoot(document.getElementById('root')!).render(<Workbench />);

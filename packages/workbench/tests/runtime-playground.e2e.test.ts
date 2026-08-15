@@ -191,3 +191,28 @@ e2e('renders the capability-gated Runtime sibling in the real RSC workbench', { 
     await fixture.close();
   }
 });
+
+e2e('keeps Project usable while a bounded Runtime bootstrap recovery reports its latest diagnostic', { timeout: 120_000 }, async ({ page }) => {
+  const fixture = await startRuntimePlaygroundFixture();
+  let runtimeBootstrapAttempts = 0;
+  try {
+    await page.route('**/api/runtime/status', async (route) => {
+      runtimeBootstrapAttempts += 1;
+      await route.fulfill({
+        body: JSON.stringify({ diagnostic: { code: 'AB8206', message: `Runtime bootstrap attempt ${runtimeBootstrapAttempts}`, phase: 'provider-lifecycle' } }),
+        contentType: 'application/json',
+        status: 503,
+      });
+    });
+    await page.goto(`${fixture.url}#overview`);
+    await expect(page.getByRole('heading', { name: 'Project overview' })).toBeVisible({ timeout: browserTimeout });
+    await expect(page.getByRole('link', { name: 'MCP playground' })).toBeVisible();
+    await expect(page.getByRole('link', { name: 'Inspector' })).toBeVisible();
+    await expect.poll(() => runtimeBootstrapAttempts, { timeout: browserTimeout }).toBe(3);
+    await expect(page.getByText('Runtime capability issue: Runtime bootstrap attempt 3')).toHaveCount(1);
+    await page.waitForTimeout(1_000);
+    expect(runtimeBootstrapAttempts).toBe(3);
+  } finally {
+    await fixture.close();
+  }
+});
