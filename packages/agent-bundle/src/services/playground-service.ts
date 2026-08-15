@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { appendFile, lstat, mkdir, open, readFile, realpath, rename, rm, unlink, writeFile } from 'node:fs/promises';
+import { lstatSync, mkdirSync } from 'node:fs';
+import { appendFile, lstat, mkdir, open, readdir, readFile, realpath, rename, rm, unlink, writeFile } from 'node:fs/promises';
 import { basename, isAbsolute, join, relative, resolve } from 'node:path';
 
 export type PlaygroundJsonPrimitive = boolean | null | number | string;
@@ -79,7 +80,7 @@ export interface PlaygroundTraceEvent extends PlaygroundEventInput {
 
 export interface PlaygroundCleanupFailure {
   readonly message: string;
-  readonly operation: 'subscriber';
+  readonly operation: 'admission' | 'subscriber';
 }
 
 export interface PlaygroundSession {
@@ -207,6 +208,7 @@ interface SubscriptionRecord {
 }
 
 interface SessionRecord {
+  readonly admissionRootIdentity: DirectoryIdentity | undefined;
   readonly cleanupFailures: PlaygroundCleanupFailure[];
   readonly createdAt: string;
   readonly events: PlaygroundTraceEvent[];
@@ -237,6 +239,11 @@ interface OwnerLock {
   readonly pid: number;
   readonly token: string;
   readonly version: 1;
+}
+
+interface DirectoryIdentity {
+  readonly device: number;
+  readonly inode: number;
 }
 
 const schemaVersion = 1 as const;
@@ -463,6 +470,7 @@ const normalizeAssertion = (value: PlaygroundSelectedAssertion): PlaygroundSelec
 };
 
 export class PlaygroundService {
+  readonly #admissionFailures: PlaygroundServiceCloseFailure[] = [];
   readonly #admissions = new Set<Promise<void>>();
   readonly #maxSubscriberQueue: number;
   readonly #now: () => Date;
@@ -501,11 +509,19 @@ export class PlaygroundService {
       }
       const root = this.#sessionRoot(id);
       let createdRoot = false;
+      let createdRootIdentity: DirectoryIdentity | undefined;
+      let provisionalOwnerToken: string | undefined;
       let record: SessionRecord | undefined;
       try {
         try {
-          await mkdir(root);
+          // Do not yield between creating the directory and recording its filesystem identity.
+          mkdirSync(root);
           createdRoot = true;
+          const createdStat = lstatSync(root);
+          if (!createdStat.isDirectory() || createdStat.isSymbolicLink()) {
+            throw serviceError('PLAYGROUND_ROOT_INVALID', `Playground session ${JSON.stringify(id)} must be a real contained directory.`);
+          }
+          createdRootIdentity = Object.freeze({ device: createdStat.dev, inode: createdStat.ino });
         } catch (error) {
           if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'EEXIST') {
             throw serviceError('PLAYGROUND_SESSION_CONFLICT', `Playground session ${JSON.stringify(id)} already exists.`);
@@ -514,8 +530,10 @@ export class PlaygroundService {
         }
         await this.#assertSessionDirectory(root, id);
         this.#assertAvailable();
-        const ownerToken = await this.#acquireOwner(root, id);
+        provisionalOwnerToken = await this.#acquireOwner(root, id);
+        const admissionRootIdentity = await this.#ownedDirectoryIdentity(root, id, createdRootIdentity, provisionalOwnerToken);
         record = {
+          admissionRootIdentity,
           cleanupFailures: [],
           createdAt: this.#timestamp(),
           events: [],
@@ -527,16 +545,42 @@ export class PlaygroundService {
           state: 'open',
           subscribers: new Set(),
           tail: Promise.resolve(),
-          ownerToken,
+          ownerToken: provisionalOwnerToken,
         };
+        provisionalOwnerToken = undefined;
         await writeFile(join(root, eventDocumentName), '', { encoding: 'utf8', flag: 'wx' });
         await this.#persistSession(record);
         this.#assertAvailable();
         this.#sessions.set(id, record);
         return snapshotSession(record);
       } catch (error) {
-        if (record !== undefined) await this.#discardUnadmittedSession(record).catch(() => undefined);
-        else if (createdRoot) await this.#removeSessionRoot(root, id).catch(() => undefined);
+        let cleanupError: PlaygroundSessionCloseError | undefined;
+        try {
+          if (record !== undefined) await this.#discardUnadmittedSession(record);
+          else if (createdRoot) {
+            if (createdRootIdentity === undefined) {
+              throw new Error('Created session directory identity was not recorded.', { cause: error });
+            }
+            const settled = await Promise.allSettled([
+              ...(provisionalOwnerToken === undefined ? [] : [this.#releaseOwner(root, provisionalOwnerToken)]),
+              this.#removeCreatedSessionRoot(id, createdRootIdentity),
+            ]);
+            const failures = settled.flatMap((result) => result.status === 'rejected' ? [result.reason] : []);
+            if (failures.length > 0) {
+              throw new AggregateError(failures, 'Playground admission rollback failed.', { cause: error });
+            }
+          }
+        } catch (failure) {
+          cleanupError = this.#admissionCleanupError(id, failure);
+          this.#admissionFailures.push(Object.freeze({ error: cleanupError, sessionId: id }));
+        }
+        if (cleanupError !== undefined) {
+          throw new AggregateError(
+            [error, cleanupError],
+            `Playground session ${JSON.stringify(id)} admission and cleanup both failed.`,
+            { cause: error },
+          );
+        }
         throw error;
       }
     });
@@ -569,6 +613,7 @@ export class PlaygroundService {
         throw error;
       }
       const record: SessionRecord = {
+        admissionRootIdentity: undefined,
         cleanupFailures: [...document.cleanupFailures],
         createdAt: document.createdAt,
         events: [...events],
@@ -731,10 +776,13 @@ export class PlaygroundService {
       const settled = await Promise.allSettled(sessions.map(async ([, record]) => {
         await this.#closeRecord(record);
       }));
-      const failures = settled.flatMap((result, index): PlaygroundServiceCloseFailure[] =>
-        result.status === 'rejected'
-          ? [Object.freeze({ error: result.reason, sessionId: sessions[index]![0] })]
-          : []);
+      const failures = [
+        ...this.#admissionFailures,
+        ...settled.flatMap((result, index): PlaygroundServiceCloseFailure[] =>
+          result.status === 'rejected'
+            ? [Object.freeze({ error: result.reason, sessionId: sessions[index]![0] })]
+            : []),
+      ];
       if (failures.length > 0) throw new PlaygroundServiceCloseError(Object.freeze(failures));
     })();
     return this.#closePromise;
@@ -786,20 +834,23 @@ export class PlaygroundService {
 
   async #discardUnadmittedSession(record: SessionRecord): Promise<void> {
     this.#sessions.delete(record.id);
-    try {
-      if (record.ownerToken !== undefined) {
-        const token = record.ownerToken;
-        record.ownerToken = undefined;
-        await this.#releaseOwner(record.root, token);
-      }
-    } finally {
-      await this.#removeSessionRoot(record.root, record.id);
+    const identity = record.admissionRootIdentity;
+    const token = record.ownerToken;
+    if (identity === undefined || token === undefined) {
+      throw this.#admissionCleanupError(record.id, new Error('Admission ownership evidence is incomplete.'));
     }
+    const ownedRoot = await this.#findOwnedAdmissionRoot(record.id, identity, token);
+    if (ownedRoot === undefined) {
+      throw this.#admissionCleanupError(record.id, new Error('Owned admission directory could not be located safely.'));
+    }
+    await this.#quarantineAndRemoveAdmissionRoot(ownedRoot, record.id, identity, token);
+    record.ownerToken = undefined;
   }
 
-  async #removeSessionRoot(root: string, sessionId: string): Promise<void> {
-    await this.#assertSessionDirectory(root, sessionId);
-    await rm(root, { force: true, recursive: true });
+  async #removeCreatedSessionRoot(sessionId: string, identity: DirectoryIdentity): Promise<void> {
+    const root = await this.#findAdmissionRootByIdentity(sessionId, identity);
+    if (root === undefined) throw new Error('Created session directory could not be located safely.');
+    await this.#quarantineAndRemoveAdmissionRoot(root, sessionId, identity);
   }
 
   #requireSession(sessionId: string): SessionRecord {
@@ -874,6 +925,115 @@ export class PlaygroundService {
     if (sessionsRoot === undefined || !contained(sessionsRoot, resolved) || basename(resolved) !== sessionId) {
       throw serviceError('PLAYGROUND_ROOT_INVALID', `Playground session ${JSON.stringify(sessionId)} resolves outside configured storage.`);
     }
+  }
+
+  async #directoryIdentity(root: string, sessionId: string): Promise<DirectoryIdentity> {
+    await this.#assertSessionDirectory(root, sessionId);
+    const stat = await lstat(root);
+    return Object.freeze({ device: stat.dev, inode: stat.ino });
+  }
+
+  async #ownedDirectoryIdentity(
+    root: string,
+    sessionId: string,
+    createdIdentity: DirectoryIdentity,
+    token: string,
+  ): Promise<DirectoryIdentity> {
+    const identity = await this.#directoryIdentity(root, sessionId);
+    if (identity.device !== createdIdentity.device || identity.inode !== createdIdentity.inode) {
+      throw serviceError('PLAYGROUND_SESSION_OWNED', `Playground session ${JSON.stringify(sessionId)} directory changed before ownership was established.`);
+    }
+    const owner = await this.#readOwnerLock(root);
+    if (owner.token !== token) {
+      throw serviceError('PLAYGROUND_SESSION_OWNED', `Playground session ${JSON.stringify(sessionId)} ownership changed during admission.`);
+    }
+    return identity;
+  }
+
+  async #assertImmediateDirectoryIdentity(root: string, sessionId: string, identity: DirectoryIdentity): Promise<void> {
+    const sessionsRoot = this.#resolvedSessionsRoot;
+    if (sessionsRoot === undefined) throw serviceError('PLAYGROUND_ROOT_INVALID', 'Playground storage has not initialized.');
+    const stat = await lstat(root);
+    if (!stat.isDirectory() || stat.isSymbolicLink() || stat.dev !== identity.device || stat.ino !== identity.inode) {
+      throw serviceError('PLAYGROUND_SESSION_OWNED', `Playground session ${JSON.stringify(sessionId)} cleanup ownership could not be proven.`);
+    }
+    const resolved = await realpath(root);
+    const child = relative(sessionsRoot, resolved);
+    if (!contained(sessionsRoot, resolved) || child.length === 0 || basename(child) !== child) {
+      throw serviceError('PLAYGROUND_ROOT_INVALID', `Playground session ${JSON.stringify(sessionId)} cleanup path is not an immediate session directory.`);
+    }
+  }
+
+  async #assertOwnedDirectory(
+    root: string,
+    sessionId: string,
+    identity: DirectoryIdentity,
+    token: string,
+  ): Promise<void> {
+    await this.#assertImmediateDirectoryIdentity(root, sessionId, identity);
+    const owner = await this.#readOwnerLock(root);
+    if (owner.token !== token) {
+      throw serviceError('PLAYGROUND_SESSION_OWNED', `Playground session ${JSON.stringify(sessionId)} cleanup ownership changed.`);
+    }
+  }
+
+  async #findOwnedAdmissionRoot(
+    sessionId: string,
+    identity: DirectoryIdentity,
+    token: string,
+  ): Promise<string | undefined> {
+    const sessionsRoot = this.#resolvedSessionsRoot;
+    if (sessionsRoot === undefined) throw serviceError('PLAYGROUND_ROOT_INVALID', 'Playground storage has not initialized.');
+    for (const name of await readdir(sessionsRoot)) {
+      const candidate = join(sessionsRoot, name);
+      try {
+        await this.#assertOwnedDirectory(candidate, sessionId, identity, token);
+        return candidate;
+      } catch {
+        // Every candidate is independently proven; unrelated or replaced roots are left untouched.
+      }
+    }
+    return undefined;
+  }
+
+  async #findAdmissionRootByIdentity(
+    sessionId: string,
+    identity: DirectoryIdentity,
+  ): Promise<string | undefined> {
+    const sessionsRoot = this.#resolvedSessionsRoot;
+    if (sessionsRoot === undefined) throw serviceError('PLAYGROUND_ROOT_INVALID', 'Playground storage has not initialized.');
+    for (const name of await readdir(sessionsRoot)) {
+      const candidate = join(sessionsRoot, name);
+      try {
+        await this.#assertImmediateDirectoryIdentity(candidate, sessionId, identity);
+        return candidate;
+      } catch {
+        // Directory identity is the ownership proof before an owner lock exists.
+      }
+    }
+    return undefined;
+  }
+
+  async #quarantineAndRemoveAdmissionRoot(
+    root: string,
+    sessionId: string,
+    identity: DirectoryIdentity,
+    token?: string,
+  ): Promise<void> {
+    const sessionsRoot = this.#resolvedSessionsRoot;
+    if (sessionsRoot === undefined) throw serviceError('PLAYGROUND_ROOT_INVALID', 'Playground storage has not initialized.');
+    const quarantine = join(sessionsRoot, `.cleanup-${randomUUID()}`);
+    await rename(root, quarantine);
+    if (token === undefined) await this.#assertImmediateDirectoryIdentity(quarantine, sessionId, identity);
+    else await this.#assertOwnedDirectory(quarantine, sessionId, identity, token);
+    await rm(quarantine, { force: true, recursive: true });
+  }
+
+  #admissionCleanupError(sessionId: string, error: unknown): PlaygroundSessionCloseError {
+    if (error instanceof PlaygroundSessionCloseError) return error;
+    return new PlaygroundSessionCloseError(sessionId, Object.freeze([
+      Object.freeze({ message: 'Admission-owned session directory could not be safely removed.', operation: 'admission' }),
+    ]));
   }
 
   async #assertSessionDocumentPath(root: string, missingAllowed = false): Promise<void> {
