@@ -244,3 +244,45 @@ it('requires a complete, uniquely owned artifact schema and document contract at
   })).toThrow(/document path.*already declared/i);
   expect(registry.names()).toEqual(['existing']);
 });
+
+it('rejects accessor, inherited, and prototype-backed artifact contract records atomically', () => {
+  const registry = new TargetRegistry().register(adapter('existing'));
+  const prototypeBackedSchema = Object.assign(Object.create({}), {
+    name: 'mcp',
+    validate: () => [],
+  });
+  const accessorSchema = Object.defineProperties({ validate: () => [] }, {
+    name: {
+      enumerable: true,
+      get: () => {
+        throw new Error('schema accessor must not be read');
+      },
+    },
+  });
+  const accessorDocument = Object.defineProperties({ path: 'mcp.json', schema: 'mcp' }, {
+    required: {
+      enumerable: true,
+      get: () => {
+        throw new Error('document accessor must not be read');
+      },
+    },
+  });
+  const inheritedRequiredDocument = Object.assign(Object.create({ required: true }), {
+    path: 'mcp.json',
+    schema: 'mcp',
+  });
+  const contract = (schemas: readonly unknown[], documents: readonly unknown[]) => ({
+    documents: documents as never,
+    schemas: schemas as never,
+  });
+
+  for (const [name, artifactValidation] of [
+    ['prototype-schema', contract([prototypeBackedSchema, validArtifactValidation().schemas[1]!], validArtifactValidation().documents)],
+    ['accessor-schema', contract([accessorSchema, validArtifactValidation().schemas[1]!], validArtifactValidation().documents)],
+    ['accessor-document', contract(validArtifactValidation().schemas, [accessorDocument, validArtifactValidation().documents[1]!])],
+    ['inherited-required-document', contract(validArtifactValidation().schemas, [inheritedRequiredDocument, validArtifactValidation().documents[1]!])],
+  ] as const) {
+    expect(() => registry.register({ ...adapter(name), artifactValidation })).toThrow(/artifact (schema contracts|documents) must contain records/i);
+    expect(registry.names()).toEqual(['existing']);
+  }
+});

@@ -3,6 +3,7 @@ import { dirname, resolve } from 'node:path';
 import { spawn } from 'node:child_process';
 
 import { createDefaultRegistry, type TargetRegistry } from '../adapters/registry.ts';
+import type { TargetArtifactDocumentIssue, TargetArtifactDocumentValidator } from '../adapters/types.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { agentSkillsSchemaRevision } from '../schemas/agent-skills/contract.ts';
 import {
@@ -152,6 +153,63 @@ const matchesTargetMetadata = (
 
 const targetRecovery = 'Rebuild the artifact with the current target registry.';
 
+const schemaValidationFailure = (): readonly TargetArtifactDocumentIssue[] => Object.freeze([
+  Object.freeze({ instancePath: '/', message: 'schema validation failed' }),
+]);
+
+const snapshotSchemaIssue = (value: unknown): TargetArtifactDocumentIssue | undefined => {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) return undefined;
+  const descriptors = Object.getOwnPropertyDescriptors(value);
+  if (Object.values(descriptors).some((descriptor) => !('value' in descriptor))) return undefined;
+  const instancePath = descriptors.instancePath;
+  const message = descriptors.message;
+  if (
+    instancePath === undefined ||
+    message === undefined ||
+    !('value' in instancePath) ||
+    !('value' in message) ||
+    typeof instancePath.value !== 'string' ||
+    typeof message.value !== 'string' ||
+    Object.hasOwn(descriptors, 'then')
+  ) {
+    return undefined;
+  }
+  return Object.freeze({ instancePath: instancePath.value, message: message.value });
+};
+
+const snapshotSchemaIssues = (value: unknown): readonly TargetArtifactDocumentIssue[] => {
+  if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype || Object.hasOwn(value, 'then')) {
+    return schemaValidationFailure();
+  }
+  const descriptors = Object.getOwnPropertyDescriptors(value);
+  const length = descriptors.length;
+  if (length === undefined || !('value' in length) || typeof length.value !== 'number') {
+    return schemaValidationFailure();
+  }
+  const issues: TargetArtifactDocumentIssue[] = [];
+  for (let index = 0; index < length.value; index += 1) {
+    const entry = descriptors[index];
+    if (entry === undefined || !('value' in entry)) return schemaValidationFailure();
+    const issue = snapshotSchemaIssue(entry.value);
+    if (issue === undefined) return schemaValidationFailure();
+    issues.push(issue);
+  }
+  return Object.freeze(issues);
+};
+
+const validateSchemaDocument = (
+  validator: TargetArtifactDocumentValidator,
+  document: unknown,
+): readonly TargetArtifactDocumentIssue[] => {
+  try {
+    return snapshotSchemaIssues(validator(document));
+  } catch {
+    return schemaValidationFailure();
+  }
+};
+
 const validateTargetContracts = async (options: {
   readonly artifactRoot: string;
   readonly files: readonly ArtifactFile[];
@@ -207,12 +265,7 @@ const validateTargetContracts = async (options: {
       }
       const validate = validators.get(document.schema);
       if (validate === undefined) continue;
-      let issues;
-      try {
-        issues = validate(parsed);
-      } catch {
-        issues = Object.freeze([{ instancePath: '/', message: 'schema validation failed' }]);
-      }
+      const issues = validateSchemaDocument(validate, parsed);
       const issue = issues[0];
       if (issue !== undefined) {
         diagnostics.push(diagnostic(

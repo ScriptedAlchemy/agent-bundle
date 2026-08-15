@@ -117,7 +117,11 @@ it('allows only an exact epoch store marker as an extra staged artifact file', a
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-staged-artifact-validation-'));
   const marker = '.agent-bundle-epoch-stage.json';
   try {
-    await writeFile(join(root, 'plugin.json'), '{"name":"valid"}\n');
+    await mkdir(join(root, 'portable'), { recursive: true });
+    await writeFile(
+      join(root, 'portable', 'plugin.json'),
+      '{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","description":"Valid staged plugin.","name":"valid","version":"1.0.0"}\n',
+    );
     await writeFixtureManifest({ artifactRoot: root, targets: ['portable'] });
     await writeFile(join(root, marker), '{"token":"8f2aa8b7-bdd2-4065-8cd3-5184c6bd9f74","version":1}\n');
 

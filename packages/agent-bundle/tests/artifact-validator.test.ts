@@ -4,8 +4,8 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { expect, it } from '@rstest/core';
 
-import { TargetRegistry } from '../src/adapters/registry.ts';
-import type { TargetAdapter } from '../src/adapters/types.ts';
+import { createDefaultRegistry, TargetRegistry } from '../src/adapters/registry.ts';
+import type { TargetAdapter, TargetArtifactDocumentValidator } from '../src/adapters/types.ts';
 import { assembleArtifactManifest, type ArtifactManifestV2 } from '../src/build/manifest.ts';
 import { validateArtifact } from '../src/build/validate-artifact.ts';
 import { digest } from '../src/core/digest.ts';
@@ -94,16 +94,15 @@ const customManifestTarget = Object.freeze({
   name: customTarget,
 });
 
-const customRegistry = (): TargetRegistry => new TargetRegistry().register({
+const validateCustomDocument: TargetArtifactDocumentValidator = (document) =>
+  typeof document === 'object' && document !== null && (document as { readonly kind?: unknown }).kind === 'custom'
+    ? []
+    : [{ instancePath: '/kind', message: 'must equal "custom"' }];
+
+const customRegistry = (validate = validateCustomDocument): TargetRegistry => new TargetRegistry().register({
   artifactValidation: {
     documents: [{ path: 'document.json', required: true, schema: 'document' }],
-    schemas: [{
-      name: 'document',
-      validate: (document: unknown) =>
-        typeof document === 'object' && document !== null && (document as { readonly kind?: unknown }).kind === 'custom'
-          ? []
-          : [{ instancePath: '/kind', message: 'must equal "custom"' }],
-    }],
+    schemas: [{ name: 'document', validate }],
   },
   capabilities: {},
   metadata: customMetadata,
@@ -111,6 +110,15 @@ const customRegistry = (): TargetRegistry => new TargetRegistry().register({
   plan: () => ({ diagnostics: [], entries: [] }),
   validateModel: () => [],
 } satisfies TargetAdapter);
+
+const targetFromRegistry = (registry: TargetRegistry, name: string): ArtifactManifestV2['targets'][number] => {
+  const metadata = registry.metadata(name);
+  return {
+    ...metadata,
+    name,
+    schemas: [...metadata.schemas].sort((left, right) => left.name.localeCompare(right.name)),
+  };
+};
 
 it('rejects legacy, noncanonical, and duplicate-key manifests as strict v2 parse failures', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-v1-validator-'));
@@ -263,6 +271,134 @@ it('requires registered target-native documents and validates their pinned schem
     );
     await expect(validateArtifact({ artifactRoot: root, registry: customRegistry() })).resolves.toEqual(expect.arrayContaining([
       expect.objectContaining({ code: 'AB6012', generatedPath: 'custom/document.json', target: customTarget }),
+    ]));
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('validates a canonically rehashed Codex marketplace at its emitted path', async () => {
+  const registry = createDefaultRegistry();
+  const target = targetFromRegistry(registry, 'codex');
+  const plugin = {
+    author: { name: 'Codex test' },
+    description: 'Valid Codex plugin.',
+    interface: {
+      capabilities: [],
+      category: 'Productivity',
+      defaultPrompt: ['Help with this test.'],
+      developerName: 'Agent Bundle',
+      displayName: 'Codex test',
+      longDescription: 'A valid plugin document for artifact validation.',
+      shortDescription: 'Valid artifact test plugin.',
+    },
+    name: 'codex-test',
+    skills: './skills/',
+    version: '1.0.0',
+  };
+  const marketplace = {
+    interface: { displayName: 'Codex test marketplace' },
+    name: 'codex-test-marketplace',
+    plugins: [{
+      category: 'Productivity',
+      name: 'codex-test',
+      policy: { authentication: 'ON_INSTALL', installation: 'AVAILABLE' },
+      source: { path: './', source: 'local' },
+    }],
+  };
+  const validFiles = [
+    { contents: `${JSON.stringify(plugin)}\n`, kind: 'generated' as const, path: 'codex/.codex-plugin/plugin.json' },
+    { contents: `${JSON.stringify(marketplace)}\n`, kind: 'generated' as const, path: 'codex/.agents/plugins/marketplace.json' },
+  ];
+  const root = await writeArtifact(validFiles, true, [target]);
+
+  try {
+    expect(await validateArtifact({ artifactRoot: root, registry })).toEqual([]);
+
+    const invalidFiles = [
+      validFiles[0]!,
+      { contents: '{}\n', kind: 'generated' as const, path: 'codex/.agents/plugins/marketplace.json' },
+    ];
+    await writeFile(join(root, 'codex', '.agents', 'plugins', 'marketplace.json'), '{}\n');
+    await writeFile(
+      join(root, 'agent-bundle.manifest.json'),
+      assembleArtifactManifest(manifestFor(invalidFiles, true, [target])).bytes,
+    );
+
+    const diagnostics = await validateArtifact({ artifactRoot: root, registry });
+    expect(diagnostics).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'AB6004' }),
+    ]));
+    expect(diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        code: 'AB6012',
+        generatedPath: 'codex/.agents/plugins/marketplace.json',
+        target: 'codex',
+      }),
+    ]));
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+const malformedValidator = (callback: () => unknown): TargetArtifactDocumentValidator => callback as never;
+
+const throwingArrayElement = (): readonly unknown[] => {
+  const issues: unknown[] = [];
+  Object.defineProperty(issues, '0', {
+    enumerable: true,
+    get: () => {
+      throw new Error('issue element getter must not escape validation');
+    },
+  });
+  issues.length = 1;
+  return issues;
+};
+
+const throwingIssueProperty = (): object => Object.defineProperties({}, {
+  instancePath: {
+    enumerable: true,
+    get: () => {
+      throw new Error('instance path getter must not escape validation');
+    },
+  },
+  message: {
+    enumerable: true,
+    get: () => {
+      throw new Error('message getter must not escape validation');
+    },
+  },
+});
+
+const thenableArray = (): readonly unknown[] => Object.assign([], { then: () => undefined });
+
+it.each([
+  ['a null callback result', () => null],
+  ['an array-like callback result', () => ({ 0: {}, length: 1 })],
+  ['a thenable callback result', () => ({ then: () => undefined })],
+  ['a thenable array callback result', thenableArray],
+  ['a prototype-backed issue', () => [Object.assign(Object.create({}), { instancePath: '/', message: 'invalid' })]],
+  ['an inherited issue field', () => [Object.create({ instancePath: '/', message: 'invalid' })]],
+  ['an accessor issue field', () => [throwingIssueProperty()]],
+  ['a throwing issue array element', throwingArrayElement],
+  ['a throwing callback', () => {
+    throw new Error('validator callback must not escape artifact validation');
+  }],
+] as const)('reports $0 through the stable schema diagnostic', async (_name, callback) => {
+  const files = [{ contents: '{"kind":"custom"}\n', kind: 'generated' as const, path: 'custom/document.json' }];
+  const root = await writeArtifact(files, true, [customManifestTarget]);
+
+  try {
+    await expect(validateArtifact({
+      artifactRoot: root,
+      registry: customRegistry(malformedValidator(callback)),
+    })).resolves.toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        code: 'AB6012',
+        generatedPath: 'custom/document.json',
+        message: expect.stringContaining('schema validation failed.'),
+        target: customTarget,
+      }),
     ]));
   } finally {
     await rm(root, { force: true, recursive: true });
