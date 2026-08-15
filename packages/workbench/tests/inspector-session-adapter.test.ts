@@ -22,20 +22,14 @@ const screens = rs.hoisted(() => ({
   tools: undefined as undefined | Record<string, unknown>,
 }));
 
-rs.mock('../src/inspector/vendor/clients/web/src/components/screens/ToolsScreen/ToolsScreen.tsx', () => ({
-  ToolsScreen: (props: Record<string, unknown>) => { screens.tools = props; return 'tools-screen'; },
-}));
-rs.mock('../src/inspector/vendor/clients/web/src/components/screens/ResourcesScreen/ResourcesScreen.tsx', () => ({
-  ResourcesScreen: (props: Record<string, unknown>) => { screens.resources = props; return 'resources-screen'; },
-}));
-rs.mock('../src/inspector/vendor/clients/web/src/components/screens/PromptsScreen/PromptsScreen.tsx', () => ({
-  PromptsScreen: (props: Record<string, unknown>) => { screens.prompts = props; return 'prompts-screen'; },
-}));
-rs.mock('../src/inspector/vendor/clients/web/src/components/screens/ProtocolScreen/ProtocolScreen.tsx', () => ({
-  ProtocolScreen: (props: Record<string, unknown>) => { screens.protocol = props; return 'protocol-screen'; },
-}));
-rs.mock('../src/inspector/vendor/clients/web/src/components/screens/LoggingScreen/LoggingScreen.tsx', () => ({
+rs.mock('../src/inspector/adapter/inspector-session-adapter-vendor.js', () => ({
+  ALL_LEVELS_VISIBLE: { alert: true, critical: true, debug: true, emergency: true, error: true, info: true, notice: true, warning: true },
+  clearScrollMemory: () => undefined,
   LoggingScreen: (props: Record<string, unknown>) => { screens.logging = props; return 'logging-screen'; },
+  PromptsScreen: (props: Record<string, unknown>) => { screens.prompts = props; return 'prompts-screen'; },
+  ProtocolScreen: (props: Record<string, unknown>) => { screens.protocol = props; return 'protocol-screen'; },
+  ResourcesScreen: (props: Record<string, unknown>) => { screens.resources = props; return 'resources-screen'; },
+  ToolsScreen: (props: Record<string, unknown>) => { screens.tools = props; return 'tools-screen'; },
 }));
 
 const model = {
@@ -60,14 +54,14 @@ const model = {
       {
         direction: 'server',
         kind: 'frame',
-        message: { id: 1, jsonrpc: '2.0', method: 'tools/list' },
+        message: { id: 1, jsonrpc: '2.0', method: 'initialize' },
         occurredAt: 1_700_000_000_001,
         sequence: 7,
       },
       {
         direction: 'client',
         kind: 'frame',
-        message: { id: 1, jsonrpc: '2.0', result: { tools: [] } },
+        message: { id: 1, jsonrpc: '2.0', result: { capabilities: {} } },
         occurredAt: 1_700_000_000_002,
         sequence: 8,
       },
@@ -84,8 +78,15 @@ const model = {
         payload: { data: 'Connected', level: 'info' },
         sequence: 10,
       },
+      {
+        direction: 'client',
+        kind: 'frame',
+        message: { id: 2, jsonrpc: '2.0', method: 'tools/call' },
+        occurredAt: 1_700_000_000_005,
+        sequence: 11,
+      },
     ],
-    lastSequence: 10,
+    lastSequence: 11,
   },
 } as unknown as McpBrowserSessionModel;
 
@@ -148,6 +149,8 @@ describe('Inspector session adapter', () => {
 
     renderToStaticMarkup(createElement(InspectorSessionAdapter, { controller, initialTab: 'protocol', model }));
     expect(screens.protocol).toBeDefined();
-    expect(() => (screens.protocol!.onReplay as () => void)()).toThrow('Raw JSON-RPC frame replay is unavailable');
+    expect(screens.protocol!.entries).toHaveLength(3);
+    expect(screens.logging!.embedded).toBe(true);
+    expect(markup).not.toContain('Set Active Level');
   });
 });

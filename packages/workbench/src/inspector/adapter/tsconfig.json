@@ -1,0 +1,15 @@
+{
+  "extends": "../../../../../tsconfig.json",
+  "include": [
+    "../../workbench.d.ts",
+    "./inspector-session-adapter-entry.ts",
+    "./inspector-session-adapter-fixture.tsx",
+    "./inspector-session-adapter-model.ts",
+    "./inspector-session-adapter.tsx",
+    "./vendor-react-runtime.d.ts",
+    "./vendor-screens.d.ts",
+    "../../../tests/inspector-session-adapter.test.ts",
+    "../../../tests/inspector-session-adapter-fixture.test.ts"
+  ],
+  "exclude": []
+}

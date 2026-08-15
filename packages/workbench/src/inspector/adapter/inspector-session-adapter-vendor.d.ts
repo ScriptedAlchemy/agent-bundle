@@ -142,6 +142,7 @@ export const ProtocolScreen: ComponentType<{
 }>;
 export const LoggingScreen: ComponentType<{
   readonly currentLevel: LoggingLevel;
+  readonly embedded?: boolean;
   readonly entries: LogEntryData[];
   readonly onClear: () => void;
   readonly onExport: () => void;
