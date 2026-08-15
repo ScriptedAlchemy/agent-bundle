@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 
 import { createWorkbenchAssetSource } from '../../../agent-bundle/src/dev/workbench-assets.ts';
+import type { DevRuntimeClientSurfaceProxyBinding } from '../../../agent-bundle/src/dev/runtime-provider.ts';
 import { startDevServer } from '../../../agent-bundle/src/dev/workbench-server.ts';
 
 const execFile = promisify(executeFile);
@@ -13,6 +14,7 @@ const workbenchAssets = join(workspaceRoot, 'packages', 'workbench', 'dist');
 
 export interface RuntimePlaygroundFixture {
   close(): Promise<void>;
+  openRuntimeClientSurface(surfaceId: string): Promise<DevRuntimeClientSurfaceProxyBinding | undefined>;
   readonly appStyles: string;
   readonly closed: Promise<void>;
   readonly root: string;
@@ -59,21 +61,44 @@ export const startRuntimePlaygroundFixture = async (): Promise<RuntimePlayground
   let closed = false;
   let resolveClosed!: () => void;
   const closedPromise = new Promise<void>((resolve) => { resolveClosed = resolve; });
+  const clientSurfaces = new Set<DevRuntimeClientSurfaceProxyBinding>();
+  const openRuntimeClientSurface = async (surfaceId: string): Promise<DevRuntimeClientSurfaceProxyBinding | undefined> => {
+    const binding = await server.openRuntimeClientSurface(surfaceId);
+    if (binding === undefined) return undefined;
+    const managed: DevRuntimeClientSurfaceProxyBinding = Object.freeze({
+      ...binding,
+      close: async (): Promise<void> => {
+        try {
+          await binding.close();
+        } finally {
+          clientSurfaces.delete(managed);
+        }
+      },
+    });
+    clientSurfaces.add(managed);
+    return managed;
+  };
   const close = async (): Promise<void> => {
     if (closed) return closedPromise;
     closed = true;
+    let clientSurfaceFailure: unknown;
     try {
+      const results = await Promise.allSettled([...clientSurfaces].map((binding) => binding.close()));
+      const failed = results.find((result): result is PromiseRejectedResult => result.status === 'rejected');
+      clientSurfaceFailure = failed?.reason;
       await server.close();
     } finally {
       await rm(fixtureWorkspace, { force: true, recursive: true });
       resolveClosed();
     }
+    if (clientSurfaceFailure !== undefined) throw clientSurfaceFailure;
     return closedPromise;
   };
   return Object.freeze({
     appStyles: join(root, 'src', 'widget', 'styles.css'),
     close,
     closed: closedPromise,
+    openRuntimeClientSurface,
     root,
     serverComponentSource: join(root, 'src', 'rsc', 'components.tsx'),
     url: server.url,

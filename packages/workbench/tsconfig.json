@@ -35,6 +35,7 @@
     "tests/runtime-model.test.ts",
     "tests/runtime-playground.test.ts",
     "tests/runtime-playground.e2e.test.ts",
+    "tests/runtime-playground-hmr.e2e.test.ts",
     "tests/helpers/runtime-playground-fixture.ts",
     "tests/runtime-stage.test.ts",
     "tests/rsbuild-workbench.test.ts",
