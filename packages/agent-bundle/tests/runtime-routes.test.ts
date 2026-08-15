@@ -119,6 +119,10 @@ class StartingRuntime extends MemoryRuntime {
 class ForeignRunRuntime extends MemoryRuntime {
   readonly providerSessionId = 'provider-a';
 
+  override runs(): readonly DevRuntimeRun[] {
+    return [{ ...succeededRun, vector: { ...vector, providerSessionId: 'foreign-provider' } }];
+  }
+
   override async invoke(): Promise<DevRuntimeRun> {
     return { ...succeededRun, vector: { ...vector, providerSessionId: 'foreign-provider' } };
   }
@@ -277,12 +281,22 @@ it('rejects provider responses that cross a stable provider boundary or replay a
     });
     expect(invocation.status).toBe(500);
 
+    const history = await fetch(`${server.url}/api/runtime/runs`, { headers: authenticated(server) });
+    expect(history.status).toBe(500);
+
     const replay = await fetch(`${server.url}/api/runtime/runs/run-a/replay`, {
+      body: JSON.stringify({ mode: 'exact', runId: 'run-a' }),
+      headers,
+      method: 'POST',
+    });
+    expect(replay.status).toBe(500);
+
+    const replayPathMismatch = await fetch(`${server.url}/api/runtime/runs/run-a/replay`, {
       body: JSON.stringify({ mode: 'exact', runId: 'run-b' }),
       headers,
       method: 'POST',
     });
-    expect(replay.status).toBe(400);
+    expect(replayPathMismatch.status).toBe(400);
   } finally {
     await server.close();
   }
