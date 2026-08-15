@@ -677,16 +677,22 @@ export class RuntimeGenerationStore<TMetadata = unknown> {
     if (expectedDigest !== diskManifest.manifestDigest) throw invalid('Runtime generation manifest digest did not match its contents.');
 
     await this.#validateAssetTree(root, diskManifest.assets, true);
-    const manifest = this.#manifestFromDisk(diskManifest, diskManifest.metadata);
+    const decodedManifest = this.#manifestFromDisk(diskManifest, diskManifest.metadata);
+    const validatedMetadata = freezeMetadata(await this.#validateMetadata(Object.freeze({
+      assets: diskManifest.assets,
+      metadata: decodedManifest.metadata,
+      root,
+    })));
     let encoded: JsonValue;
     try {
-      encoded = freezeJsonValue(this.#metadataCodec.encode(manifest.metadata));
+      encoded = freezeJsonValue(this.#metadataCodec.encode(validatedMetadata));
     } catch {
       throw invalid('Runtime generation manifest metadata could not be re-encoded.');
     }
     if (stableJson(encoded) !== stableJson(diskManifest.metadata)) {
       throw invalid('Runtime generation manifest metadata codec did not round-trip canonical bytes.');
     }
+    const manifest = this.#manifestFromDisk(diskManifest, encoded);
 
     return Object.freeze({
       id: manifest.id,

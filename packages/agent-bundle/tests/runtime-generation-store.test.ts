@@ -14,6 +14,7 @@ import { join } from 'node:path';
 
 import { expect, it } from '@rstest/core';
 
+import { digest, stableJson } from '../src/core/digest.ts';
 import {
   RuntimeGenerationStore,
   type DevRuntimeMcpServerDescriptor,
@@ -33,6 +34,17 @@ interface TestMetadata {
   }>;
 }
 
+interface CapturedMetadata {
+  readonly descriptors: readonly (Readonly<{
+    readonly name: string;
+    readonly path: string;
+    readonly sha256: string;
+  }>)[];
+  readonly entries: Readonly<{
+    readonly primary: string;
+  }>;
+}
+
 type Fixture = Readonly<{
   readonly files: Readonly<Record<string, Uint8Array>>;
   readonly manifest: RuntimeGenerationManifestInput<TestMetadata>;
@@ -41,7 +53,7 @@ type Fixture = Readonly<{
 const sha256 = (value: Uint8Array): string =>
   createHash('sha256').update(value).digest('hex');
 
-const isJsonObject = (value: JsonValue): value is JsonObject =>
+const isJsonObject = (value: unknown): value is JsonObject =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
 const fixture = (id: string): Fixture => {
@@ -107,6 +119,64 @@ const metadataCodec: RuntimeGenerationMetadataCodec<TestMetadata> = {
   },
 };
 
+const capturedMetadataCodec: RuntimeGenerationMetadataCodec<CapturedMetadata> = Object.freeze({
+  decode(value: JsonValue): CapturedMetadata {
+    if (!isJsonObject(value) || !isJsonObject(value.entries) || !Array.isArray(value.descriptors)) {
+      throw new TypeError('Captured metadata is malformed.');
+    }
+    if (typeof value.entries.primary !== 'string') throw new TypeError('Captured metadata is malformed.');
+
+    const descriptors = value.descriptors.map((descriptor) => {
+      if (!isJsonObject(descriptor) ||
+        typeof descriptor.name !== 'string' ||
+        typeof descriptor.path !== 'string' ||
+        typeof descriptor.sha256 !== 'string') {
+        throw new TypeError('Captured metadata is malformed.');
+      }
+      return Object.freeze({ name: descriptor.name, path: descriptor.path, sha256: descriptor.sha256 });
+    });
+    return Object.freeze({
+      descriptors: Object.freeze(descriptors),
+      entries: Object.freeze({ primary: value.entries.primary }),
+    });
+  },
+  encode(value: CapturedMetadata): JsonValue {
+    return {
+      descriptors: value.descriptors.map((descriptor) => ({
+        name: descriptor.name,
+        path: descriptor.path,
+        sha256: descriptor.sha256,
+      })),
+      entries: { primary: value.entries.primary },
+    };
+  },
+});
+
+const validateCapturedMetadata = (
+  input: RuntimeGenerationValidationInput<CapturedMetadata>,
+): CapturedMetadata => {
+  const primary = input.metadata.entries.primary;
+  if (primary !== 'server/main.bin') throw new Error('Primary entry did not reference the required server asset.');
+  const asset = input.assets.find((candidate) => candidate.path === primary);
+  if (asset === undefined) throw new Error('Primary entry did not reference a captured asset.');
+  if (input.metadata.descriptors.length !== 1) throw new Error('Primary entry did not have exactly one descriptor.');
+  const descriptor = input.metadata.descriptors[0];
+  if (descriptor === undefined ||
+    descriptor.name !== 'primary' ||
+    descriptor.path !== primary ||
+    descriptor.sha256 !== asset.sha256) {
+    throw new Error('Primary entry descriptor did not match its captured asset.');
+  }
+  return Object.freeze({
+    descriptors: Object.freeze([Object.freeze({
+      name: descriptor.name,
+      path: descriptor.path,
+      sha256: descriptor.sha256,
+    })]),
+    entries: Object.freeze({ primary }),
+  });
+};
+
 const nestedDescriptorCodec: RuntimeGenerationMetadataCodec<Readonly<{
   readonly servers: readonly DevRuntimeMcpServerDescriptor[];
 }>> = {
@@ -155,6 +225,26 @@ const commitFixture = async (
 
 const expectMissing = async (path: string): Promise<void> => {
   await expect(access(path)).rejects.toMatchObject({ code: 'ENOENT' });
+};
+
+const mutateManifestBeforeReopen = async (
+  root: string,
+  mutateMetadata: (metadata: JsonObject) => JsonValue,
+): Promise<void> => {
+  const manifestPath = join(root, 'generation.manifest.json');
+  const parsed: unknown = JSON.parse(await readFile(manifestPath, 'utf8'));
+  if (!isJsonObject(parsed) || !isJsonObject(parsed.metadata)) {
+    throw new TypeError('Test generation manifest was malformed.');
+  }
+  const { manifestDigest: _manifestDigest, ...withoutDigest } = parsed;
+  const updated = Object.freeze({
+    ...withoutDigest,
+    metadata: mutateMetadata(parsed.metadata),
+  });
+  await writeFile(manifestPath, stableJson({
+    ...updated,
+    manifestDigest: digest(updated),
+  }), 'utf8');
 };
 
 const deferred = <T = void>(): Readonly<{
@@ -297,6 +387,110 @@ it('rejects a provider metadata validator failure without publishing the candida
     const candidate = await store.begin({ id: 'invalid-metadata', sourceRevision: 'source-invalid-metadata' });
     await writeGeneration(candidate.root, value);
     await expect(store.prepare(candidate, value.manifest)).rejects.toMatchObject({ code: 'RUNTIME_GENERATION_INVALID' });
+    expect(store.active()).toBeUndefined();
+  } finally {
+    await store.close().catch(() => undefined);
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('revalidates reopened metadata before accepting a required entry redirected to another captured asset', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-runtime-generations-reopen-entry-'));
+  let validationCalls = 0;
+  const store = new RuntimeGenerationStore<CapturedMetadata>({
+    metadataCodec: capturedMetadataCodec,
+    now: () => new Date('2026-08-15T00:00:00.000Z'),
+    storageRoot: root,
+    validateMetadata: (input) => {
+      validationCalls += 1;
+      return validateCapturedMetadata(input);
+    },
+  });
+  const value = fixture('reopen-entry');
+  const serverAsset = value.manifest.assets.find((asset) => asset.path === 'server/main.bin');
+  const clientAsset = value.manifest.assets.find((asset) => asset.path === 'client/ref.json');
+  if (serverAsset === undefined || clientAsset === undefined) throw new Error('Fixture assets were missing.');
+  const metadata: CapturedMetadata = Object.freeze({
+    descriptors: Object.freeze([Object.freeze({
+      name: 'primary',
+      path: 'server/main.bin',
+      sha256: serverAsset.sha256,
+    })]),
+    entries: Object.freeze({ primary: 'server/main.bin' }),
+  });
+  try {
+    const candidate = await store.begin({ id: 'reopen-entry', sourceRevision: 'source-reopen-entry' });
+    await writeGeneration(candidate.root, value);
+    let waits = 0;
+    await expect(store.prepare(candidate, {
+      assets: value.manifest.assets,
+      metadata,
+    }, {
+      guard: {
+        check: () => true,
+        wait: async () => {
+          waits += 1;
+          if (waits !== 1) return;
+          await mutateManifestBeforeReopen(candidate.root, () => ({
+            descriptors: [{ name: 'primary', path: 'client/ref.json', sha256: clientAsset.sha256 }],
+            entries: { primary: 'client/ref.json' },
+          }));
+        },
+      },
+    })).rejects.toMatchObject({ code: 'RUNTIME_GENERATION_INVALID' });
+    expect(validationCalls).toBe(2);
+    expect(store.active()).toBeUndefined();
+  } finally {
+    await store.close().catch(() => undefined);
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('revalidates reopened metadata before accepting internally inconsistent descriptors', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-runtime-generations-reopen-descriptor-'));
+  let validationCalls = 0;
+  const store = new RuntimeGenerationStore<CapturedMetadata>({
+    metadataCodec: capturedMetadataCodec,
+    now: () => new Date('2026-08-15T00:00:00.000Z'),
+    storageRoot: root,
+    validateMetadata: (input) => {
+      validationCalls += 1;
+      return validateCapturedMetadata(input);
+    },
+  });
+  const value = fixture('reopen-descriptor');
+  const serverAsset = value.manifest.assets.find((asset) => asset.path === 'server/main.bin');
+  const clientAsset = value.manifest.assets.find((asset) => asset.path === 'client/ref.json');
+  if (serverAsset === undefined || clientAsset === undefined) throw new Error('Fixture assets were missing.');
+  const metadata: CapturedMetadata = Object.freeze({
+    descriptors: Object.freeze([Object.freeze({
+      name: 'primary',
+      path: serverAsset.path,
+      sha256: serverAsset.sha256,
+    })]),
+    entries: Object.freeze({ primary: serverAsset.path }),
+  });
+  try {
+    const candidate = await store.begin({ id: 'reopen-descriptor', sourceRevision: 'source-reopen-descriptor' });
+    await writeGeneration(candidate.root, value);
+    let waits = 0;
+    await expect(store.prepare(candidate, {
+      assets: value.manifest.assets,
+      metadata,
+    }, {
+      guard: {
+        check: () => true,
+        wait: async () => {
+          waits += 1;
+          if (waits !== 1) return;
+          await mutateManifestBeforeReopen(candidate.root, () => ({
+            descriptors: [{ name: 'primary', path: serverAsset.path, sha256: clientAsset.sha256 }],
+            entries: { primary: serverAsset.path },
+          }));
+        },
+      },
+    })).rejects.toMatchObject({ code: 'RUNTIME_GENERATION_INVALID' });
+    expect(validationCalls).toBe(2);
     expect(store.active()).toBeUndefined();
   } finally {
     await store.close().catch(() => undefined);
