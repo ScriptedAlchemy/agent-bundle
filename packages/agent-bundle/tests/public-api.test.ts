@@ -341,6 +341,7 @@ it('keeps bundled config extension types in emitted root declarations', async ()
       '--module', 'nodenext',
       '--moduleResolution', 'nodenext',
       '--noCheck',
+      '--rootDir', join(packageRoot, 'src'),
       '--outDir', join(emittedPackageRoot, 'dist'),
       '--target', 'es2022',
       join(packageRoot, 'src', 'index.ts'),
