@@ -79,6 +79,7 @@ const planTargets = (options: BuildOptions): readonly PlannedTarget[] => {
 
   for (const target of options.model.targets) {
     const adapter = options.registry.get(target.name);
+    diagnostics.push(...adapter.validateModel(options.model));
     const plan = adapter.plan(options.model);
     diagnostics.push(...plan.diagnostics);
     planned.push({

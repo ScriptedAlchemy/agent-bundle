@@ -486,6 +486,47 @@ it('rejects an adapter artifact with no provenance inputs before replacing a pri
   }
 });
 
+it('rejects target validation errors before writing a passed manifest or replacing a prior artifact', async () => {
+  const project = await createProject();
+  const adapter: TargetAdapter = {
+    capabilities: {},
+    metadata: testAdapterMetadata,
+    name: 'portable',
+    plan: () => ({
+      diagnostics: [],
+      entries: [{
+        content: '{"target":"portable"}\n',
+        kind: 'write',
+        relativePath: 'plugin.json',
+        sourceInputs: [join(project.root, 'agent-bundle.config.ts')],
+      }],
+    }),
+    validateModel: () => [{
+      code: 'AB9999',
+      message: 'Target validation rejected this model.',
+      severity: 'error',
+    }],
+  };
+
+  try {
+    await mkdir(project.outputRoot, { recursive: true });
+    await writeFile(join(project.outputRoot, 'previous.txt'), 'previous\n');
+
+    await expect(build({
+      model: { ...modelFor(project), scripts: [] },
+      outputRoot: project.outputRoot,
+      projectRoot: project.root,
+      registry: new TargetRegistry().register(adapter, { default: true }),
+    })).rejects.toThrow(/Target validation rejected this model/i);
+    await expect(readFile(join(project.outputRoot, 'previous.txt'), 'utf8')).resolves.toBe('previous\n');
+    await expect(readFile(join(project.outputRoot, 'agent-bundle.manifest.json'), 'utf8')).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+  } finally {
+    await cleanupProject(project);
+  }
+});
+
 it('rejects an authored bundled dependency outside the project and preserves the prior artifact', async () => {
   const project = await createProject();
   const outside = join(dirname(project.root), 'agent-bundle-provenance-outside.ts');

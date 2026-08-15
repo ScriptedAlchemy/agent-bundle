@@ -50,9 +50,21 @@ const checkJavaScriptSyntax = async (path: string): Promise<string | undefined> 
 
 const sameFile = (left: ArtifactFile, right: ManifestFile): boolean =>
   left.bytes === right.bytes &&
-  (right.mode === undefined || left.mode === right.mode) &&
+  (right.mode === undefined ? (left.mode & 0o111) === 0 : left.mode === right.mode) &&
   left.path === right.path &&
   left.sha256 === right.sha256;
+
+const matchesManifestFileTable = (
+  files: readonly ArtifactFile[],
+  manifestFiles: readonly ManifestFile[],
+): boolean => {
+  if (files.length !== manifestFiles.length) return false;
+  const manifestFilesByPath = new Map(manifestFiles.map((file) => [file.path, file]));
+  return files.every((file) => {
+    const manifestFile = manifestFilesByPath.get(file.path);
+    return manifestFile !== undefined && sameFile(file, manifestFile);
+  });
+};
 
 const localMcpArgument = (value: unknown): string | undefined => {
   if (typeof value !== 'string') return undefined;
@@ -154,10 +166,7 @@ export const validateArtifact = async (context: ValidateArtifactOptions): Promis
 
   const actualFiles = await artifactFiles(context);
   const diagnostics: Diagnostic[] = [];
-  if (
-    actualFiles.length !== manifest.files.length ||
-    actualFiles.some((file, index) => !sameFile(file, manifest.files[index]!))
-  ) {
+  if (!matchesManifestFileTable(actualFiles, manifest.files)) {
     diagnostics.push(diagnostic('AB6004', 'Artifact files do not match the manifest.', artifactManifestName));
   }
   diagnostics.push(...await validateArtifactFiles(context));

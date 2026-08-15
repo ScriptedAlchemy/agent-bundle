@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { expect, it } from '@rstest/core';
 
 import { assembleArtifactManifest, type ArtifactManifestV2 } from '../src/build/manifest.ts';
@@ -10,7 +10,17 @@ import { digest } from '../src/core/digest.ts';
 
 const hash = (value: string): string => createHash('sha256').update(value).digest('hex');
 
-const manifestFor = (files: readonly { readonly contents: string; readonly kind: 'bundle' | 'copy' | 'generated'; readonly path: string }[]): ArtifactManifestV2 => {
+interface ArtifactFixtureFile {
+  readonly contents: string;
+  readonly kind: 'bundle' | 'copy' | 'generated';
+  readonly mode?: number;
+  readonly path: string;
+}
+
+const manifestFor = (
+  files: readonly ArtifactFixtureFile[],
+  includeModes = true,
+): ArtifactManifestV2 => {
   const configHash = hash('export default {};\n');
   const sourceInputs = [{ path: 'agent-bundle.config.ts', sha256: configHash }];
   return {
@@ -19,13 +29,16 @@ const manifestFor = (files: readonly { readonly contents: string; readonly kind:
       sourceRevision: '69ef37e9424c0a7ea9dd2293b559e43ec8176379',
       specification: 'https://raw.githubusercontent.com/agentskills/agentskills/69ef37e9424c0a7ea9dd2293b559e43ec8176379/docs/specification.mdx',
     },
-    files: files.map((file) => ({
-      bytes: Buffer.byteLength(file.contents),
-      kind: file.kind,
-      path: file.path,
-      sha256: hash(file.contents),
-      sourceInputs: ['agent-bundle.config.ts'],
-    })),
+    files: files
+      .map((file) => ({
+        bytes: Buffer.byteLength(file.contents),
+        kind: file.kind,
+        ...(includeModes && file.mode !== undefined ? { mode: file.mode } : {}),
+        path: file.path,
+        sha256: hash(file.contents),
+        sourceInputs: ['agent-bundle.config.ts'],
+      }))
+      .sort((left, right) => left.path.localeCompare(right.path)),
     producer: { name: 'agent-bundle', version: '0.1.0' },
     project: {
       configDigest: configHash,
@@ -45,15 +58,19 @@ const manifestFor = (files: readonly { readonly contents: string; readonly kind:
 };
 
 const writeArtifact = async (
-  files: readonly { readonly contents: string; readonly kind: 'bundle' | 'copy' | 'generated'; readonly path: string }[],
+  files: readonly ArtifactFixtureFile[],
+  includeModes = true,
 ): Promise<string> => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-artifact-validator-'));
   for (const file of files) {
-    await writeFile(join(root, file.path), file.contents);
+    const path = join(root, file.path);
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, file.contents);
+    if (file.mode !== undefined) await chmod(path, file.mode);
   }
   await writeFile(
     join(root, 'agent-bundle.manifest.json'),
-    assembleArtifactManifest(manifestFor(files)).bytes,
+    assembleArtifactManifest(manifestFor(files, includeModes)).bytes,
   );
   return root;
 };
@@ -74,6 +91,33 @@ it('rejects legacy, noncanonical, and duplicate-key manifests as strict v2 parse
         expect.objectContaining({ code: 'AB6001', generatedPath: 'agent-bundle.manifest.json' }),
       ]);
     }
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('matches a canonical nested manifest file table by path instead of directory traversal position', async () => {
+  const root = await writeArtifact([
+    { contents: '{}\n', kind: 'generated', path: 'nested/entry.json' },
+    { contents: '{}\n', kind: 'generated', path: 'nested.json' },
+  ]);
+
+  try {
+    expect(await validateArtifact({ artifactRoot: root })).toEqual([]);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('rejects a canonical manifest that omits an executable file mode', async () => {
+  const root = await writeArtifact([
+    { contents: 'export const executable = true;\n', kind: 'bundle', mode: 0o755, path: 'bin/tool.mjs' },
+  ], false);
+
+  try {
+    expect(await validateArtifact({ artifactRoot: root })).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'AB6004', generatedPath: 'agent-bundle.manifest.json' }),
+    ]));
   } finally {
     await rm(root, { force: true, recursive: true });
   }
