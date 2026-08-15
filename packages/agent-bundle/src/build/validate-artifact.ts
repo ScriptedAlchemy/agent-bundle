@@ -455,6 +455,59 @@ const filesystemDiagnostics = (filesystem: ArtifactFilesystemSnapshot): readonly
       filesystemRecovery,
     ));
 
+const filesystemDriftDiagnostics = (
+  initial: ArtifactFilesystemSnapshot,
+  final: ArtifactFilesystemSnapshot,
+): readonly Diagnostic[] => {
+  const initialKinds = new Map(initial.entries.map((entry) => [entry.path, entry.kind]));
+  const finalKinds = new Map(final.entries.map((entry) => [entry.path, entry.kind]));
+  const changedEntries = new Set([...new Set([...initialKinds.keys(), ...finalKinds.keys()])]
+    .filter((path) => initialKinds.get(path) !== finalKinds.get(path)));
+  const changedFiles = changedArtifactPaths(initial.files, final.files);
+  const unsupportedDiagnostics = filesystemDiagnostics(final)
+    .filter((entry) => entry.generatedPath !== undefined && changedEntries.has(entry.generatedPath));
+  const unsupportedPaths = new Set(unsupportedDiagnostics
+    .map((entry) => entry.generatedPath)
+    .filter((path): path is string => path !== undefined));
+  const fileDiagnostics = changedFiles
+    .filter((path) => path !== artifactManifestName && !unsupportedPaths.has(path))
+    .map((path) => diagnostic('AB6004', `Artifact file changed during validation: ${JSON.stringify(path)}.`, path));
+  const coveredPaths = [...changedFiles, ...unsupportedPaths];
+  const directoryDiagnostics = [...changedEntries]
+    .sort((left, right) => left.localeCompare(right))
+    .filter((path) => initialKinds.get(path) === 'directory' || finalKinds.get(path) === 'directory')
+    .filter((path) => !coveredPaths.some((covered) => covered === path || covered.startsWith(`${path}/`)))
+    .map((path) => diagnostic(
+      'AB6014',
+      `Artifact directory changed during validation: ${JSON.stringify(path)}.`,
+      path,
+      undefined,
+      ownershipRecovery,
+    ));
+  return Object.freeze([...unsupportedDiagnostics, ...fileDiagnostics, ...directoryDiagnostics]);
+};
+
+const finalEvidenceDiagnostics = (options: {
+  readonly finalFilesystem?: ArtifactFilesystemSnapshot;
+  readonly finalManifest?: ManifestSnapshot;
+  readonly initialFilesystem: ArtifactFilesystemSnapshot;
+  readonly initialManifest: ManifestSnapshot;
+}): readonly Diagnostic[] => {
+  const diagnostics = options.finalFilesystem === undefined
+    ? [diagnostic('AB6004', 'Artifact file table changed during validation.', artifactManifestName)]
+    : [...filesystemDriftDiagnostics(options.initialFilesystem, options.finalFilesystem)];
+  const manifestChangedInFilesystem = options.finalFilesystem !== undefined &&
+    changedArtifactPaths(options.initialFilesystem.files, options.finalFilesystem.files).includes(artifactManifestName);
+  if (
+    options.finalManifest === undefined ||
+    manifestChangedInFilesystem ||
+    !sameManifestSnapshot(options.initialManifest, options.finalManifest)
+  ) {
+    diagnostics.push(diagnostic('AB6001', 'Artifact manifest changed during validation.', artifactManifestName));
+  }
+  return Object.freeze(diagnostics);
+};
+
 const sameSchemas = (
   manifest: ArtifactManifestV2['targets'][number]['schemas'],
   registered: ReturnType<TargetRegistry['metadata']>['schemas'],
@@ -1433,9 +1486,15 @@ const validArtifactSnapshot = (
 export const validateArtifactWithSnapshot = async (
   context: ValidateArtifactOptions,
 ): Promise<ValidateArtifactSnapshotResult> => {
+  const artifactRoot = context.artifactRoot;
+  const allowEpochStagingMarker = context.allowEpochStagingMarker === true;
+  const registry = context.registry ?? createDefaultRegistry();
+  const inspectionOptions: ValidateArtifactOptions = allowEpochStagingMarker
+    ? { allowEpochStagingMarker: true, artifactRoot }
+    : { artifactRoot };
   let inspection: ArtifactInspection;
   try {
-    inspection = await inspectArtifact(context);
+    inspection = await inspectArtifact(inspectionOptions);
   } catch {
     return invalidArtifactSnapshot([diagnostic('AB6000', 'Artifact manifest is missing or cannot be read.', artifactManifestName)]);
   }
@@ -1456,7 +1515,7 @@ export const validateArtifactWithSnapshot = async (
     ]);
   }
 
-  const manifestPath = resolve(context.artifactRoot, artifactManifestName);
+  const manifestPath = resolve(artifactRoot, artifactManifestName);
   let manifestSnapshot: ManifestSnapshot;
   try {
     manifestSnapshot = await snapshotManifest(manifestPath);
@@ -1471,7 +1530,6 @@ export const validateArtifactWithSnapshot = async (
     return invalidArtifactSnapshot([diagnostic('AB6001', 'Artifact manifest is not a strict canonical v2 manifest.', artifactManifestName)]);
   }
 
-  const registry = context.registry ?? createDefaultRegistry();
   const runtimeEvidence = runtimeEvidenceBuilder();
   const initialStructuralDiagnostics = validateArtifactStructure({ inspection, manifest, registry });
   const diagnostics: Diagnostic[] = [...initialStructuralDiagnostics];
@@ -1489,64 +1547,56 @@ export const validateArtifactWithSnapshot = async (
     ));
   }
   diagnostics.push(...await validateTargetContracts({
-    artifactRoot: context.artifactRoot,
+    artifactRoot,
     files: inspection.files,
     manifest,
     registry,
   }));
   diagnostics.push(...await validateMcpCoherence({
-    artifactRoot: context.artifactRoot,
+    artifactRoot,
     files: inspection.files,
     manifest,
     registry,
     runtimeEvidence,
   }));
   diagnostics.push(...await validateHookCoherence({
-    artifactRoot: context.artifactRoot,
+    artifactRoot,
     files: inspection.files,
     manifest,
     registry,
     runtimeEvidence,
   }));
   diagnostics.push(...await validateEmittedSkills({
-    artifactRoot: context.artifactRoot,
+    artifactRoot,
     files: inspection.files,
     manifest,
     registry,
   }));
   diagnostics.push(...await validateGeneratedFiles({
-    artifactRoot: context.artifactRoot,
+    artifactRoot,
     files: inspection.files,
     manifestFiles: manifest.files,
   }));
 
   let finalInspection: ArtifactInspection | undefined;
   try {
-    finalInspection = await inspectArtifact(context);
+    finalInspection = await inspectArtifact(inspectionOptions);
   } catch {
-    diagnostics.push(diagnostic('AB6004', 'Artifact file table changed during validation.', artifactManifestName));
+    finalInspection = undefined;
   }
 
   let finalManifestSnapshot: ManifestSnapshot | undefined;
   try {
     finalManifestSnapshot = await snapshotManifest(manifestPath);
   } catch {
-    diagnostics.push(diagnostic('AB6001', 'Artifact manifest changed during validation.', artifactManifestName));
+    finalManifestSnapshot = undefined;
   }
-  if (finalManifestSnapshot !== undefined && !sameManifestSnapshot(manifestSnapshot, finalManifestSnapshot)) {
-    diagnostics.push(diagnostic('AB6001', 'Artifact manifest changed during validation.', artifactManifestName));
-  }
-  if (finalInspection !== undefined) {
-    const finalStructuralDiagnostics = validateArtifactStructure({
-      changedFrom: inspection.files,
-      inspection: finalInspection,
-      manifest,
-      registry,
-    }).filter((entry) =>
-      !initialStructuralDiagnostics.some((initial) =>
-        initial.code === entry.code && initial.generatedPath === entry.generatedPath));
-    diagnostics.push(...finalStructuralDiagnostics);
-  }
+  diagnostics.push(...finalEvidenceDiagnostics({
+    ...(finalInspection === undefined ? {} : { finalFilesystem: finalInspection.filesystem }),
+    ...(finalManifestSnapshot === undefined ? {} : { finalManifest: finalManifestSnapshot }),
+    initialFilesystem: inspection.filesystem,
+    initialManifest: manifestSnapshot,
+  }));
   return diagnostics.length === 0
     ? validArtifactSnapshot(manifest, runtimeEvidence)
     : invalidArtifactSnapshot(diagnostics);

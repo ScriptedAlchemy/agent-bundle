@@ -6,6 +6,8 @@ import { stableJson } from '../core/digest.ts';
 import { freezeArtifactEpoch, type ArtifactEpoch } from './types.ts';
 
 export interface EpochStoreOptions {
+  /** @internal Deterministic cleanup-failure seam. */
+  readonly cleanupRemove?: typeof rm;
   readonly projectRoot: string;
 }
 
@@ -33,6 +35,25 @@ export type EpochStoreErrorCode =
   | 'EPOCH_STAGING_INVALID'
   | 'EPOCH_TARGET_INVALID'
   | 'EPOCH_TARGET_SET_INVALID';
+
+export type EpochCleanupResource = 'directory' | 'metadata';
+
+export interface EpochCleanupFailure {
+  readonly epochId: string;
+  readonly reason: unknown;
+  readonly resource: EpochCleanupResource;
+}
+
+export class EpochCleanupError extends Error {
+  readonly failures: readonly EpochCleanupFailure[];
+
+  constructor(failures: readonly EpochCleanupFailure[]) {
+    super('One or more epoch cleanup operations failed.');
+    this.name = 'EpochCleanupError';
+    this.failures = Object.freeze(failures.map((failure) => Object.freeze({ ...failure })));
+    Object.freeze(this);
+  }
+}
 
 export class EpochStoreError extends Error {
   readonly code: EpochStoreErrorCode;
@@ -171,6 +192,12 @@ const compareNewestFirst = (left: ArtifactEpoch, right: ArtifactEpoch): number =
     ? right.id.localeCompare(left.id)
     : right.createdAt.localeCompare(left.createdAt);
 
+const cleanupFailure = (
+  epochId: string,
+  resource: EpochCleanupResource,
+  reason: unknown,
+): EpochCleanupFailure => Object.freeze({ epochId, reason, resource });
+
 class EpochStagingHandle implements EpochStaging {
   readonly #close: () => Promise<void>;
   readonly #publish: (validate: StagingValidator) => Promise<ArtifactEpoch>;
@@ -206,7 +233,7 @@ class EpochStagingHandle implements EpochStaging {
 export class EpochReference {
   readonly #epochId: string;
   readonly #store: EpochStore;
-  #closed = false;
+  #close: Promise<void> | undefined;
 
   constructor(store: EpochStore, epochId: string, root: string) {
     this.#store = store;
@@ -217,16 +244,16 @@ export class EpochReference {
   /** Immutable epoch directory validated before this reference was acquired. */
   readonly root: string;
 
-  async close(): Promise<void> {
-    if (this.#closed) return;
-    this.#closed = true;
-    await this.#store.releaseEpochReference(this.#epochId);
+  close(): Promise<void> {
+    this.#close ??= this.#store.releaseEpochReference(this.#epochId);
+    return this.#close;
   }
 }
 
 /** Filesystem-backed store for immutable artifact epochs in one project. */
 export class EpochStore {
   readonly #activeEpochPath: string;
+  readonly #cleanupRemove: typeof rm;
   readonly #epochMetadataPath: string;
   readonly #epochsPath: string;
   readonly #references = new Map<string, number>();
@@ -236,6 +263,7 @@ export class EpochStore {
   constructor(options: EpochStoreOptions) {
     const agentBundlePath = join(resolve(options.projectRoot), '.agent-bundle');
     this.#activeEpochPath = join(agentBundlePath, activeEpochFileName);
+    this.#cleanupRemove = options.cleanupRemove ?? rm;
     this.#epochsPath = join(agentBundlePath, 'epochs');
     this.#epochMetadataPath = join(this.#epochsPath, metadataDirectoryName);
   }
@@ -291,11 +319,12 @@ export class EpochStore {
   async releaseEpochReference(epochId: string): Promise<void> {
     await this.#withTransition(async () => {
       const count = this.#references.get(epochId) ?? 0;
-      if (count <= 1) {
+      if (count === 1) {
         this.#references.delete(epochId);
+        await this.#cleanup();
         return;
       }
-      this.#references.set(epochId, count - 1);
+      if (count > 1) this.#references.set(epochId, count - 1);
     });
   }
 
@@ -359,16 +388,26 @@ export class EpochStore {
       .map((entry) => entry.epoch.id);
     for (const epochId of retainedUnreferenced) protectedIds.add(epochId);
 
-    await Promise.all(
+    const attempts = await Promise.allSettled(
       metadata
         .filter((entry) => !protectedIds.has(entry.epoch.id))
         .map(async (entry) => {
-          await Promise.all([
-            rm(join(this.#epochsPath, entry.epoch.id), { force: true, recursive: true }),
-            rm(this.#metadataPathFor(entry.epoch.id), { force: true }),
-          ]);
+          let resource: EpochCleanupResource = 'directory';
+          try {
+            await this.#cleanupRemove(join(this.#epochsPath, entry.epoch.id), { force: true, recursive: true });
+            resource = 'metadata';
+            await this.#cleanupRemove(this.#metadataPathFor(entry.epoch.id), { force: true });
+          } catch (reason) {
+            throw cleanupFailure(entry.epoch.id, resource, reason);
+          }
         }),
     );
+    const failures = attempts
+      .flatMap((attempt): EpochCleanupFailure[] =>
+        attempt.status === 'rejected' ? [attempt.reason as EpochCleanupFailure] : [])
+      .sort((left, right) =>
+        left.epochId.localeCompare(right.epochId) || left.resource.localeCompare(right.resource));
+    if (failures.length > 0) throw new EpochCleanupError(failures);
   }
 
   async #closeStaging(token: symbol): Promise<void> {
