@@ -2,6 +2,7 @@ import { access, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { isAbsolute, join, normalize, relative, resolve } from 'node:path';
 
 import { serializeRuntimeDefinition } from './serialize-definition.js';
+import type { SerializedRuntimeDefinition } from '../runtime/contracts.js';
 
 const executableAssets = [
   { name: 'hook', path: 'hook/index.js' },
@@ -43,7 +44,10 @@ const readRuntimeAssets = async (distPath: string): Promise<string[]> => {
   return assets;
 };
 
-export const emitRuntimeArtifacts = async (distPath: string): Promise<void> => {
+export const emitRuntimeArtifacts = async (
+  distPath: string,
+  definition: SerializedRuntimeDefinition = serializeRuntimeDefinition(),
+): Promise<void> => {
   const runtimeAssets = await readRuntimeAssets(distPath);
   for (const executable of executableAssets) {
     if (!runtimeAssets.includes(executable.path)) {
@@ -52,7 +56,7 @@ export const emitRuntimeArtifacts = async (distPath: string): Promise<void> => {
   }
 
   const manifest = {
-    ...serializeRuntimeDefinition(),
+    ...definition,
     executables: executableAssets,
     runtimeAssets,
     schemaVersion: 1,
