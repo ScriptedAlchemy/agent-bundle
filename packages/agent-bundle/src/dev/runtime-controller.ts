@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { resolve } from 'node:path';
 
-import type { ArtifactStatus, RuntimeEvent } from './types.ts';
+import type { ArtifactStatus, JsonObject, JsonValue, RuntimeEvent } from './types.ts';
 import {
   DevRuntimeUnavailableError,
   type DevRuntimeClientSurfaceEndpoint,
@@ -82,33 +82,215 @@ const runtimeEvent = (
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
-const validDescriptor = (value: unknown): value is DevRuntimeDescriptor => isRecord(value) &&
-  typeof value.id === 'string' && typeof value.label === 'string' && value.schemaVersion === 1 &&
-  Array.isArray(value.environmentVariables) && value.environmentVariables.every((entry) => typeof entry === 'string');
+const snapshotInvalid = (): never => {
+  throw new TypeError('Development runtime provider returned an invalid browser snapshot.');
+};
+
+const isEnumerableDataDescriptor = (
+  descriptor: PropertyDescriptor | undefined,
+): descriptor is PropertyDescriptor & Readonly<{ readonly value: unknown }> =>
+  descriptor !== undefined && descriptor.enumerable === true && Object.hasOwn(descriptor, 'value');
+
+const ownDataValue = (value: Record<string, unknown>, key: string): unknown => {
+  const descriptor = Object.getOwnPropertyDescriptor(value, key);
+  if (!isEnumerableDataDescriptor(descriptor)) return snapshotInvalid();
+  return descriptor.value;
+};
+
+const exactRecord = (
+  value: unknown,
+  required: readonly string[],
+  optional: readonly string[] = [],
+): Record<string, unknown> => {
+  if (!isRecord(value)) return snapshotInvalid();
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) return snapshotInvalid();
+  const allowed = new Set([...required, ...optional]);
+  for (const key of Reflect.ownKeys(value)) {
+    if (typeof key !== 'string' || !allowed.has(key)) return snapshotInvalid();
+    ownDataValue(value, key);
+  }
+  for (const key of required) ownDataValue(value, key);
+  return value;
+};
+
+const snapshotString = (value: unknown): string =>
+  typeof value === 'string' ? value : snapshotInvalid();
+
+const snapshotArray = (value: unknown): readonly unknown[] => {
+  if (!Array.isArray(value)) return snapshotInvalid();
+  if (Object.getPrototypeOf(value) !== Array.prototype) return snapshotInvalid();
+  for (const key of Reflect.ownKeys(value)) {
+    if (typeof key !== 'string') return snapshotInvalid();
+    if (key === 'length') continue;
+    if (!/^(0|[1-9]\d*)$/u.test(key) || Number(key) >= value.length) return snapshotInvalid();
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (!isEnumerableDataDescriptor(descriptor)) return snapshotInvalid();
+  }
+  return Object.freeze(Array.from({ length: value.length }, (_unused, index) => {
+    const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+    if (!isEnumerableDataDescriptor(descriptor)) return snapshotInvalid();
+    return descriptor.value;
+  }));
+};
+
+const snapshotStrings = (value: unknown): readonly string[] =>
+  Object.freeze(snapshotArray(value).map(snapshotString));
+
+const snapshotJson = (value: unknown, seen = new WeakSet<object>()): JsonValue => {
+  if (value === null || typeof value === 'boolean' || typeof value === 'string') return value;
+  if (typeof value === 'number') return Number.isFinite(value) ? value : snapshotInvalid();
+  if (typeof value !== 'object' || value === null) return snapshotInvalid();
+  if (seen.has(value)) return snapshotInvalid();
+  seen.add(value);
+  if (Array.isArray(value)) return Object.freeze(snapshotArray(value).map((entry) => snapshotJson(entry, seen)));
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) return snapshotInvalid();
+  const copied = Object.create(null) as Record<string, JsonValue>;
+  for (const key of Reflect.ownKeys(value)) {
+    if (typeof key !== 'string') return snapshotInvalid();
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (!isEnumerableDataDescriptor(descriptor)) return snapshotInvalid();
+    Object.defineProperty(copied, key, {
+      configurable: false,
+      enumerable: true,
+      value: snapshotJson(descriptor.value, seen),
+      writable: false,
+    });
+  }
+  return Object.freeze(copied) as JsonObject;
+};
+
+const snapshotDescriptor = (value: unknown): DevRuntimeDescriptor => {
+  const descriptor = exactRecord(value, ['environmentVariables', 'id', 'label', 'schemaVersion']);
+  if (ownDataValue(descriptor, 'schemaVersion') !== 1) snapshotInvalid();
+  return Object.freeze({
+    environmentVariables: snapshotStrings(ownDataValue(descriptor, 'environmentVariables')),
+    id: snapshotString(ownDataValue(descriptor, 'id')),
+    label: snapshotString(ownDataValue(descriptor, 'label')),
+    schemaVersion: 1,
+  });
+};
+
+const snapshotVector = (value: unknown): RuntimeVector => {
+  const vector = exactRecord(
+    value,
+    ['providerSessionId', 'runtimeGenerationId', 'sourceRevision', 'stateStoreId', 'stateVersion'],
+    ['artifactEpochId'],
+  );
+  const stateVersion = ownDataValue(vector, 'stateVersion');
+  if (typeof stateVersion !== 'number' || !Number.isSafeInteger(stateVersion) || stateVersion < 0) return snapshotInvalid();
+  const artifactEpochId = Object.hasOwn(vector, 'artifactEpochId')
+    ? snapshotString(ownDataValue(vector, 'artifactEpochId'))
+    : undefined;
+  return Object.freeze({
+    ...(artifactEpochId === undefined ? {} : { artifactEpochId }),
+    providerSessionId: snapshotString(ownDataValue(vector, 'providerSessionId')),
+    runtimeGenerationId: snapshotString(ownDataValue(vector, 'runtimeGenerationId')),
+    sourceRevision: snapshotString(ownDataValue(vector, 'sourceRevision')),
+    stateStoreId: snapshotString(ownDataValue(vector, 'stateStoreId')),
+    stateVersion,
+  });
+};
+
+const diagnosticPhases = new Set<DevRuntimeDiagnostic['phase']>([
+  'source/build',
+  'fixture-validation',
+  'hook-wrapper',
+  'rsc-render',
+  'flight-decode',
+  'lowering-contract',
+  'mcp-protocol',
+  'resource-selection',
+  'sandbox/csp',
+  'app-bridge',
+  'provider-lifecycle',
+]);
+
+const diagnosticSeverities = new Set<DevRuntimeDiagnostic['severity']>(['error', 'warning', 'info']);
+
+const snapshotDiagnostic = (value: unknown): DevRuntimeDiagnostic => {
+  const diagnostic = exactRecord(value, ['code', 'message', 'phase', 'severity']);
+  const phase = ownDataValue(diagnostic, 'phase');
+  const severity = ownDataValue(diagnostic, 'severity');
+  if (typeof phase !== 'string' || !diagnosticPhases.has(phase as DevRuntimeDiagnostic['phase']) ||
+    typeof severity !== 'string' || !diagnosticSeverities.has(severity as DevRuntimeDiagnostic['severity'])) return snapshotInvalid();
+  return Object.freeze({
+    code: snapshotString(ownDataValue(diagnostic, 'code')),
+    message: snapshotString(ownDataValue(diagnostic, 'message')),
+    phase: phase as DevRuntimeDiagnostic['phase'],
+    severity: severity as DevRuntimeDiagnostic['severity'],
+  });
+};
 
 const states = new Set<DevRuntimeStatus['state']>([
   'starting', 'compiling', 'active', 'degraded', 'failed', 'closed',
 ]);
 
-const validStatus = (value: unknown): value is DevRuntimeStatus => isRecord(value) &&
-  validDescriptor(value.descriptor) && Array.isArray(value.diagnostics) &&
-  typeof value.hmrReady === 'boolean' && typeof value.state === 'string' && states.has(value.state as DevRuntimeStatus['state']);
+const snapshotStatus = (value: unknown): DevRuntimeStatus => {
+  const status = exactRecord(value, ['descriptor', 'diagnostics', 'hmrReady', 'state'], ['activeVector', 'lastGoodVector']);
+  const state = ownDataValue(status, 'state');
+  const hmrReady = ownDataValue(status, 'hmrReady');
+  if (typeof state !== 'string' || !states.has(state as DevRuntimeStatus['state']) || typeof hmrReady !== 'boolean') return snapshotInvalid();
+  const activeVector = Object.hasOwn(status, 'activeVector')
+    ? snapshotVector(ownDataValue(status, 'activeVector'))
+    : undefined;
+  const lastGoodVector = Object.hasOwn(status, 'lastGoodVector')
+    ? snapshotVector(ownDataValue(status, 'lastGoodVector'))
+    : undefined;
+  return Object.freeze({
+    ...(activeVector === undefined ? {} : { activeVector }),
+    descriptor: snapshotDescriptor(ownDataValue(status, 'descriptor')),
+    diagnostics: Object.freeze(snapshotArray(ownDataValue(status, 'diagnostics')).map(snapshotDiagnostic)),
+    hmrReady,
+    ...(lastGoodVector === undefined ? {} : { lastGoodVector }),
+    state: state as DevRuntimeStatus['state'],
+  });
+};
 
-const frozenVector = (vector: RuntimeVector): RuntimeVector => Object.freeze({ ...vector });
+const surfaceKinds = new Set<DevRuntimeSurface['kind']>(['hook', 'mcp-tool', 'mcp-resource', 'mcp-app']);
 
-const frozenStatus = (status: DevRuntimeStatus): DevRuntimeStatus => Object.freeze({
-  ...(status.activeVector === undefined ? {} : { activeVector: frozenVector(status.activeVector) }),
-  descriptor: Object.freeze({
-    environmentVariables: Object.freeze([...status.descriptor.environmentVariables]),
-    id: status.descriptor.id,
-    label: status.descriptor.label,
-    schemaVersion: 1,
-  }),
-  diagnostics: Object.freeze(status.diagnostics.map((diagnostic) => Object.freeze({ ...diagnostic }))),
-  hmrReady: status.hmrReady,
-  ...(status.lastGoodVector === undefined ? {} : { lastGoodVector: frozenVector(status.lastGoodVector) }),
-  state: status.state,
-});
+const snapshotFixture = (value: unknown): DevRuntimeSurface['fixtures'][number] => {
+  const fixture = exactRecord(value, ['id', 'label'], ['seed']);
+  const seed = Object.hasOwn(fixture, 'seed') ? snapshotJson(ownDataValue(fixture, 'seed')) : undefined;
+  return Object.freeze({
+    id: snapshotString(ownDataValue(fixture, 'id')),
+    label: snapshotString(ownDataValue(fixture, 'label')),
+    ...(seed === undefined ? {} : { seed }),
+  });
+};
+
+const snapshotSurface = (value: unknown): DevRuntimeSurface => {
+  const surface = exactRecord(
+    value,
+    ['fixtures', 'id', 'kind', 'label', 'readOnly', 'targets'],
+    ['defaultTarget', 'inputSchema'],
+  );
+  const kind = ownDataValue(surface, 'kind');
+  const readOnly = ownDataValue(surface, 'readOnly');
+  if (typeof kind !== 'string' || !surfaceKinds.has(kind as DevRuntimeSurface['kind']) || typeof readOnly !== 'boolean') return snapshotInvalid();
+  const defaultTarget = Object.hasOwn(surface, 'defaultTarget')
+    ? snapshotString(ownDataValue(surface, 'defaultTarget'))
+    : undefined;
+  const inputSchemaValue = Object.hasOwn(surface, 'inputSchema')
+    ? snapshotJson(ownDataValue(surface, 'inputSchema'))
+    : undefined;
+  if (inputSchemaValue !== undefined && !isRecord(inputSchemaValue)) return snapshotInvalid();
+  const inputSchema = inputSchemaValue as JsonObject | undefined;
+  return Object.freeze({
+    ...(defaultTarget === undefined ? {} : { defaultTarget }),
+    fixtures: Object.freeze(snapshotArray(ownDataValue(surface, 'fixtures')).map(snapshotFixture)),
+    id: snapshotString(ownDataValue(surface, 'id')),
+    ...(inputSchema === undefined ? {} : { inputSchema }),
+    kind: kind as DevRuntimeSurface['kind'],
+    label: snapshotString(ownDataValue(surface, 'label')),
+    readOnly,
+    targets: snapshotStrings(ownDataValue(surface, 'targets')),
+  });
+};
+
+const snapshotSurfaces = (value: unknown): readonly DevRuntimeSurface[] =>
+  Object.freeze(snapshotArray(value).map(snapshotSurface));
 
 const call = <TResult>(owner: object, key: PropertyKey, args: readonly unknown[] = []): TResult => {
   const candidate = (owner as Record<PropertyKey, unknown>)[key];
@@ -147,6 +329,7 @@ export class DevRuntimeController implements DevRuntimeSession {
   readonly #startupTimeoutMs: number;
   readonly #storageRoot: string;
   #bufferedPrepared: DevRuntimePreparedProject;
+  #bufferedStartupActivation: DevRuntimeEventInput | undefined;
   #closePromise: Promise<void> | undefined;
   #closed = false;
   #lastAcceptedSourceRevision: string;
@@ -226,6 +409,7 @@ export class DevRuntimeController implements DevRuntimeSession {
     if (prepared === undefined || diagnostic !== undefined || prepared.provider !== this.#initialProviderPath) {
       if (!this.#topologyFailed) {
         this.#topologyFailed = true;
+        this.#bufferedStartupActivation = undefined;
         this.#failLifecycle('failed', true);
       }
       return Promise.resolve();
@@ -345,9 +529,7 @@ export class DevRuntimeController implements DevRuntimeSession {
     if (!isRecord(session) || typeof session.status !== 'function' || typeof session.close !== 'function') {
       throw new DevRuntimeUnavailableError();
     }
-    const status = session.status();
-    if (!validStatus(status)) throw new DevRuntimeUnavailableError();
-    return frozenStatus(status);
+    return snapshotStatus(session.status());
   }
 
   #adoptStatus(status: DevRuntimeStatus): void {
@@ -357,8 +539,8 @@ export class DevRuntimeController implements DevRuntimeSession {
 
   #snapshotSurfaces(session: DevRuntimeSession, tolerateFailure = true): readonly DevRuntimeSurface[] {
     try {
-      const surfaces = session.surfaces();
-      return Array.isArray(surfaces) ? Object.freeze([...surfaces]) : Object.freeze([]);
+      if (!isRecord(session) || typeof session.surfaces !== 'function') throw new DevRuntimeUnavailableError();
+      return snapshotSurfaces(session.surfaces());
     } catch (error) {
       if (!tolerateFailure) throw error;
       return Object.freeze([]);
@@ -444,10 +626,12 @@ export class DevRuntimeController implements DevRuntimeSession {
       this.#session = session;
       this.#adoptStatus(status);
       this.#surfaces = surfaces;
+      this.#flushStartupActivation();
       if (this.#bufferedPrepared.sourceRevision !== startedPrepared.sourceRevision) {
         await this.#enqueueReconcile(this.#bufferedPrepared);
       }
     } catch {
+      this.#bufferedStartupActivation = undefined;
       if (!this.#topologyFailed) this.#failLifecycle();
       this.#observeLateStart(providerStart);
     } finally {
@@ -477,9 +661,31 @@ export class DevRuntimeController implements DevRuntimeSession {
   }
 
   #publish(event: DevRuntimeEventInput): void {
-    if (event.type === 'runtime.generation.activated') this.#refreshSnapshot();
+    if (event.type === 'runtime.generation.activated') {
+      if (this.#closed || this.#topologyFailed) return;
+      if (this.#session === undefined) {
+        if (this.#startPromise === undefined || this.#status.state !== 'starting') return;
+        this.#bufferedStartupActivation = event;
+        return;
+      }
+      this.#refreshSnapshot();
+    }
     try {
       this.#emit(runtimeEvent(this.#providerSessionId, event));
+    } catch {
+      // Provider health must not depend on a failed observer.
+    }
+  }
+
+  /** Coalesces early provider activation until browser-visible snapshots are installed. */
+  #flushStartupActivation(): void {
+    const activation = this.#bufferedStartupActivation;
+    this.#bufferedStartupActivation = undefined;
+    if (activation === undefined || this.#closed || this.#topologyFailed || this.#session === undefined) return;
+    this.#refreshSnapshot();
+    if (this.#closed || this.#topologyFailed || this.#session === undefined) return;
+    try {
+      this.#emit(runtimeEvent(this.#providerSessionId, activation));
     } catch {
       // Provider health must not depend on a failed observer.
     }
@@ -522,6 +728,7 @@ export class DevRuntimeController implements DevRuntimeSession {
 
   async #close(): Promise<void> {
     this.#closed = true;
+    this.#bufferedStartupActivation = undefined;
     this.#startAbort.abort();
     await this.#startPromise;
     await this.#reconcileTail;

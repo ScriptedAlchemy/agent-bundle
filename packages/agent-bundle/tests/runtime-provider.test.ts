@@ -288,6 +288,256 @@ it('refreshes controller endpoint snapshots before publishing a later runtime ac
   expect(controller.status()).toMatchObject({ state: 'closed' });
 });
 
+it('detaches and freezes complete activation status and surface snapshots', async () => {
+  const mutableDescriptor = {
+    environmentVariables: ['RUNTIME_TOKEN'],
+    id: 'fixture-runtime',
+    label: 'Fixture runtime',
+    schemaVersion: 1 as const,
+  };
+  const mutableVector = { ...vector } as {
+    providerSessionId: string;
+    runtimeGenerationId: string;
+    sourceRevision: string;
+    stateStoreId: string;
+    stateVersion: number;
+  };
+  const mutableDiagnostic = {
+    code: 'AB9000',
+    message: 'Runtime compiled.',
+    phase: 'source/build' as const,
+    severity: 'info' as const,
+  };
+  const mutableSurface = {
+    ...surface,
+    fixtures: [{ id: 'after-edit', label: 'After file edit', seed: { nested: ['initial'] } }],
+    inputSchema: { properties: { title: { type: 'string' } }, type: 'object' },
+    targets: ['claude', 'codex'],
+  } satisfies DevRuntimeSurface;
+  let activated = false;
+  let emit: Parameters<DevRuntimeProvider['start']>[0]['emit'] | undefined;
+  const controller = new DevRuntimeController({
+    artifactStatus: () => ({ state: 'missing' }),
+    emit: () => undefined,
+    environment: {},
+    preparedRuntime: { apps: [], provider: './src/dev/provider.ts', servers: [], sourceRevision: 'source-1' },
+    projectRoot: '/workspace/project',
+    provider: {
+      descriptor: mutableDescriptor,
+      start: async (context) => {
+        emit = context.emit;
+        return {
+          close: async () => undefined,
+          mcpRegistry: {},
+          reconcilePreparedRuntime: async () => undefined,
+          status: () => activated
+            ? {
+                activeVector: mutableVector,
+                descriptor: mutableDescriptor,
+                diagnostics: [mutableDiagnostic],
+                hmrReady: true,
+                lastGoodVector: mutableVector,
+                state: 'active' as const,
+              }
+            : { descriptor: mutableDescriptor, diagnostics: [], hmrReady: false, state: 'compiling' as const },
+          surfaces: () => activated ? [mutableSurface] : [],
+        } as unknown as DevRuntimeSession;
+      },
+    },
+    storageRoot: '/workspace/project/.agent-bundle/runtime',
+  });
+
+  await controller.start();
+  activated = true;
+  emit?.({ type: 'runtime.generation.activated' });
+
+  mutableDescriptor.environmentVariables[0] = 'MUTATED_TOKEN';
+  mutableVector.runtimeGenerationId = 'mutated-generation';
+  mutableDiagnostic.message = 'Mutated diagnostic.';
+  mutableSurface.targets[0] = 'mutated-target';
+  mutableSurface.fixtures[0].label = 'Mutated fixture.';
+  (mutableSurface.fixtures[0].seed as { nested: string[] }).nested[0] = 'mutated';
+  ((mutableSurface.inputSchema as { properties: { title: { type: string } } }).properties.title).type = 'number';
+
+  const status = controller.status();
+  const snapshot = controller.surfaces()[0];
+  expect(status).toMatchObject({
+    activeVector: vector,
+    descriptor: { environmentVariables: ['RUNTIME_TOKEN'] },
+    diagnostics: [{ message: 'Runtime compiled.' }],
+  });
+  expect(snapshot).toMatchObject({
+    fixtures: [{ label: 'After file edit', seed: { nested: ['initial'] } }],
+    inputSchema: { properties: { title: { type: 'string' } } },
+    targets: ['claude', 'codex'],
+  });
+  expect(Object.isFrozen(status.activeVector)).toBe(true);
+  expect(Object.isFrozen(status.descriptor.environmentVariables)).toBe(true);
+  expect(Object.isFrozen(status.diagnostics[0])).toBe(true);
+  expect(Object.isFrozen(snapshot)).toBe(true);
+  expect(Object.isFrozen(snapshot.targets)).toBe(true);
+  expect(Object.isFrozen(snapshot.fixtures[0].seed)).toBe(true);
+  expect(Object.isFrozen(snapshot.inputSchema)).toBe(true);
+  await controller.close();
+});
+
+it('degrades instead of publishing malformed activation snapshots', async () => {
+  const descriptor = { environmentVariables: [], id: 'fixture-runtime', label: 'Fixture runtime', schemaVersion: 1 } as const;
+  const cyclicSchema: Record<string, unknown> = { type: 'object' };
+  cyclicSchema.self = cyclicSchema;
+  const malformed = [
+    {
+      name: 'partial vector',
+      status: { activeVector: { runtimeGenerationId: 7 }, descriptor, diagnostics: [], hmrReady: true, state: 'active' },
+      surfaces: [],
+    },
+    {
+      name: 'malformed surface',
+      status: { activeVector: vector, descriptor, diagnostics: [], hmrReady: true, state: 'active' },
+      surfaces: [{}],
+    },
+    {
+      name: 'cyclic schema',
+      status: { activeVector: vector, descriptor, diagnostics: [], hmrReady: true, state: 'active' },
+      surfaces: [{ ...surface, inputSchema: cyclicSchema }],
+    },
+    {
+      name: 'BigInt fixture seed',
+      status: { activeVector: vector, descriptor, diagnostics: [], hmrReady: true, state: 'active' },
+      surfaces: [{ ...surface, fixtures: [{ id: 'after-edit', label: 'After file edit', seed: 1n }] }],
+    },
+  ] as const;
+
+  for (const invalid of malformed) {
+    let activated = false;
+    let emit: Parameters<DevRuntimeProvider['start']>[0]['emit'] | undefined;
+    const published: string[] = [];
+    const controller = new DevRuntimeController({
+      artifactStatus: () => ({ state: 'missing' }),
+      emit: (event) => { published.push(event.type); },
+      environment: {},
+      preparedRuntime: { apps: [], provider: './src/dev/provider.ts', servers: [], sourceRevision: 'source-1' },
+      projectRoot: '/workspace/project',
+      provider: {
+        descriptor,
+        start: async (context) => {
+          emit = context.emit;
+          return {
+            close: async () => undefined,
+            mcpRegistry: {},
+            reconcilePreparedRuntime: async () => undefined,
+            status: () => activated
+              ? invalid.status
+              : { descriptor, diagnostics: [], hmrReady: false, state: 'compiling' as const },
+            surfaces: () => activated ? invalid.surfaces : [],
+          } as unknown as DevRuntimeSession;
+        },
+      },
+      storageRoot: '/workspace/project/.agent-bundle/runtime',
+    });
+
+    await controller.start();
+    activated = true;
+    emit?.({ type: 'runtime.generation.activated' });
+
+    expect(controller.status(), invalid.name).toMatchObject({
+      diagnostics: [{ code: 'AB8200', phase: 'provider-lifecycle' }],
+      state: 'degraded',
+    });
+    expect(controller.surfaces(), invalid.name).toEqual([]);
+    expect(published, invalid.name).toEqual(['runtime.status', 'runtime.generation.activated']);
+    await controller.close();
+  }
+});
+
+it('buffers synchronous startup activation until controller snapshots install', async () => {
+  const descriptor = { environmentVariables: [], id: 'fixture-runtime', label: 'Fixture runtime', schemaVersion: 1 } as const;
+  const seen: Array<Readonly<{ readonly generation?: string; readonly state: string; readonly surfaceCount: number; readonly type: string }>> = [];
+  const controller = new DevRuntimeController({
+    artifactStatus: () => ({ state: 'missing' }),
+    emit: (event) => {
+      seen.push({
+        ...(event.runtimeGenerationId === undefined ? {} : { generation: event.runtimeGenerationId }),
+        state: controller.status().state,
+        surfaceCount: controller.surfaces().length,
+        type: event.type,
+      });
+    },
+    environment: {},
+    preparedRuntime: { apps: [], provider: './src/dev/provider.ts', servers: [], sourceRevision: 'source-1' },
+    projectRoot: '/workspace/project',
+    provider: {
+      descriptor,
+      start: async (context) => {
+        context.emit({ type: 'runtime.generation.compiling' });
+        context.emit({ runtimeGenerationId: 'superseded-generation', type: 'runtime.generation.activated' });
+        context.emit({ runtimeGenerationId: vector.runtimeGenerationId, type: 'runtime.generation.activated' });
+        return {
+          close: async () => undefined,
+          mcpRegistry: {},
+          reconcilePreparedRuntime: async () => undefined,
+          status: () => ({ activeVector: vector, descriptor, diagnostics: [], hmrReady: true, lastGoodVector: vector, state: 'active' as const }),
+          surfaces: () => [surface],
+        } as unknown as DevRuntimeSession;
+      },
+    },
+    storageRoot: '/workspace/project/.agent-bundle/runtime',
+  });
+
+  await controller.start();
+
+  expect(seen).toEqual([
+    { state: 'starting', surfaceCount: 0, type: 'runtime.generation.compiling' },
+    { generation: vector.runtimeGenerationId, state: 'active', surfaceCount: 1, type: 'runtime.generation.activated' },
+  ]);
+  await controller.close();
+});
+
+it('drops buffered startup activation after close or topology failure', async () => {
+  const descriptor = { environmentVariables: [], id: 'fixture-runtime', label: 'Fixture runtime', schemaVersion: 1 } as const;
+  const prepared = { apps: [], provider: './src/dev/provider.ts', servers: [], sourceRevision: 'source-1' } as const;
+  for (const transition of ['close', 'topology'] as const) {
+    let closeCalls = 0;
+    let resolveSession: ((session: DevRuntimeSession) => void) | undefined;
+    const pendingSession = new Promise<DevRuntimeSession>((resolvePromise) => { resolveSession = resolvePromise; });
+    const published: string[] = [];
+    const controller = new DevRuntimeController({
+      artifactStatus: () => ({ state: 'missing' }),
+      emit: (event) => { published.push(event.type); },
+      environment: {},
+      preparedRuntime: prepared,
+      projectRoot: '/workspace/project',
+      provider: {
+        descriptor,
+        start: async (context) => {
+          context.emit({ runtimeGenerationId: vector.runtimeGenerationId, type: 'runtime.generation.activated' });
+          return pendingSession;
+        },
+      },
+      storageRoot: '/workspace/project/.agent-bundle/runtime',
+    });
+    const starting = controller.start();
+    await new Promise((resolvePromise) => setImmediate(resolvePromise));
+    const closing = transition === 'close'
+      ? controller.close()
+      : controller.reconcileDeclaration(undefined);
+    resolveSession?.({
+      close: async () => { closeCalls += 1; },
+      mcpRegistry: {},
+      reconcilePreparedRuntime: async () => undefined,
+      status: () => ({ activeVector: vector, descriptor, diagnostics: [], hmrReady: true, state: 'active' }),
+      surfaces: () => [surface],
+    } as unknown as DevRuntimeSession);
+    await starting;
+    await closing;
+
+    expect(published, transition).toEqual(['runtime.status']);
+    expect(published, transition).not.toContain('runtime.generation.activated');
+    expect(closeCalls, transition).toBe(1);
+    if (transition === 'topology') await controller.close();
+  }
+});
+
 it('sanitizes a failed activation refresh without recursively publishing runtime events', async () => {
   const descriptor = { environmentVariables: [], id: 'fixture-runtime', label: 'Fixture runtime', schemaVersion: 1 } as const;
   const published: string[] = [];
