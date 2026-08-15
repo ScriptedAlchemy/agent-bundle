@@ -1,5 +1,5 @@
 import { createDefaultRegistry } from '../../src/adapters/registry.ts';
-import { listArtifactFiles, writeManifest } from '../../src/build/emit.ts';
+import { listArtifactFiles, writeHookIndex, writeManifest } from '../../src/build/emit.ts';
 import type { ArtifactManifestV2 } from '../../src/build/manifest.ts';
 import { digest } from '../../src/core/digest.ts';
 import { agentSkillsSchemaRevision } from '../../src/schemas/agent-skills/contract.ts';
@@ -14,6 +14,7 @@ export const writeFixtureManifest = async (options: {
   readonly artifactRoot: string;
   readonly targets: readonly string[];
 }): Promise<ArtifactManifestV2> => {
+  await writeHookIndex({ artifactRoot: options.artifactRoot, hooks: [] });
   const registry = createDefaultRegistry();
   const targets = options.targets
     .map((name) => {
