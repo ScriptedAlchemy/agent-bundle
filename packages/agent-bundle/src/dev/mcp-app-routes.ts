@@ -3,7 +3,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 
 import type { McpAppJsonValue, McpAppPreviewProfile } from './mcp-app-binding-service.ts';
 import type { McpAppBridgeCloseOptions, McpAppBridgeJsonRecord, McpAppBridgeLifecycle } from './mcp-app-bridge.ts';
-import type { McpAppHostContextInput } from './mcp-app-host-profiles.ts';
+import type { McpAppPreviewHostContext } from './mcp-app-preview-service.ts';
 import type { McpAppSandboxConsent } from './mcp-app-sandbox.ts';
 
 const bodyLimit = 64 * 1024;
@@ -43,7 +43,7 @@ export interface McpAppRoutePreviewService {
   close(bindingId: string, options: McpAppBridgeCloseOptions): Promise<boolean>;
   create(options: {
     readonly consent?: McpAppSandboxConsent;
-    readonly host: McpAppHostContextInput;
+    readonly host: McpAppPreviewHostContext;
     readonly input: McpAppJsonValue;
     readonly previewProfile: McpAppPreviewProfile;
     readonly result: McpAppJsonValue;
@@ -220,10 +220,10 @@ const finiteNonnegative = (value: unknown): value is number => typeof value === 
 const stringList = (value: unknown): readonly string[] | undefined =>
   Array.isArray(value) && value.every(nonemptyString) ? Object.freeze([...value]) : undefined;
 
-const hostContext = (value: unknown): McpAppHostContextInput => {
+const hostContext = (value: unknown): McpAppPreviewHostContext => {
   const record = exactRecord(value, [
     'availableDisplayModes', 'containerDimensions', 'deviceCapabilities', 'displayMode', 'locale', 'platform',
-    'safeAreaInsets', 'styles', 'theme', 'timeZone', 'toolInfo', 'userAgent',
+    'safeAreaInsets', 'styles', 'theme', 'timeZone', 'userAgent',
   ]);
   if (record === undefined || !nonemptyString(record.displayMode) || !nonemptyString(record.locale) || !nonemptyString(record.platform)
     || !nonemptyString(record.timeZone) || !nonemptyString(record.userAgent) || (record.theme !== 'dark' && record.theme !== 'light')) {
@@ -234,13 +234,12 @@ const hostContext = (value: unknown): McpAppHostContextInput => {
   const safeAreaInsets = exactRecord(record.safeAreaInsets, ['bottom', 'left', 'right', 'top']);
   const deviceCapabilities = jsonRecord(record.deviceCapabilities);
   const styles = jsonRecord(record.styles);
-  const toolInfo = jsonRecord(record.toolInfo);
   if (
     availableDisplayModes === undefined || !availableDisplayModes.includes(record.displayMode) || containerDimensions === undefined || safeAreaInsets === undefined ||
     !finiteNonnegative(containerDimensions.height) || !finiteNonnegative(containerDimensions.width) ||
     !finiteNonnegative(safeAreaInsets.bottom) || !finiteNonnegative(safeAreaInsets.left) ||
     !finiteNonnegative(safeAreaInsets.right) || !finiteNonnegative(safeAreaInsets.top) ||
-    deviceCapabilities === undefined || styles === undefined || toolInfo === undefined
+    deviceCapabilities === undefined || styles === undefined
   ) {
     return invalidShape();
   }
@@ -260,7 +259,6 @@ const hostContext = (value: unknown): McpAppHostContextInput => {
     styles,
     theme: record.theme,
     timeZone: record.timeZone,
-    toolInfo,
     userAgent: record.userAgent,
   });
 };
@@ -313,7 +311,7 @@ const previewSnapshot = (preview: McpAppRoutePreview): Readonly<Record<string, u
   resource: preview.resource,
 });
 
-const bridgeHostContext = (host: McpAppHostContextInput): McpAppBridgeJsonRecord => Object.freeze({
+const bridgeHostContext = (host: McpAppPreviewHostContext): McpAppBridgeJsonRecord => Object.freeze({
   availableDisplayModes: host.availableDisplayModes,
   containerDimensions: host.containerDimensions,
   deviceCapabilities: host.deviceCapabilities,
@@ -324,7 +322,6 @@ const bridgeHostContext = (host: McpAppHostContextInput): McpAppBridgeJsonRecord
   styles: host.styles,
   theme: host.theme,
   timeZone: host.timeZone,
-  toolInfo: host.toolInfo,
   userAgent: host.userAgent,
 });
 

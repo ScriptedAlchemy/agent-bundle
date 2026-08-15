@@ -480,3 +480,55 @@ it('defaults omitted modern tool arguments and gives known invalid parameters a 
   ]);
   await transport.close();
 });
+
+it('aborts and waits for a bypassed cancellation before releasing its session', async () => {
+  const stream = cancellableStream();
+  const errors: string[] = [];
+  const lifecycle: string[] = [];
+  let cancellationAborted = false;
+  let cancellationStarted = false;
+  let resolveCancellation: ((response: Response) => void) | undefined;
+  const transport = new AgentBundleRemoteTransport({
+    binding,
+    routes: new McpRouteClient({
+      fetch: async (input, init) => {
+        const url = String(input);
+        if (url === '/api/project/session') return json({ origin: 'http://127.0.0.1:4100', token: 'token-a' });
+        if (url === '/api/mcp/sessions') return json({ session: { binding, connection, id: 'session-a' } });
+        if (url.includes('/stream?')) return stream.response;
+        if (url.endsWith('/cancel')) {
+          cancellationStarted = true;
+          return new Promise<Response>((resolvePromise) => {
+            resolveCancellation = resolvePromise;
+            init?.signal?.addEventListener('abort', () => {
+              cancellationAborted = true;
+              lifecycle.push('cancel-abort');
+              resolvePromise(json({ diagnostic: { code: 'AB8019', message: 'aborted' } }, 499));
+            }, { once: true });
+          });
+        }
+        if (url === '/api/mcp/sessions/session-a' && init?.method === 'DELETE') {
+          lifecycle.push('delete');
+          return json({ closed: true });
+        }
+        throw new Error(`Unexpected route request ${url}.`);
+      },
+    }),
+  });
+  transport.onerror = (error) => errors.push(error.message);
+  transport.onclose = () => lifecycle.push('close');
+
+  await transport.start();
+  const cancelling = transport.send({ jsonrpc: '2.0', method: 'notifications/cancelled', params: { requestId: 17 } });
+  await eventually(() => cancellationStarted);
+  const closing = transport.close();
+  try {
+    await closing;
+    expect(cancellationAborted).toBe(true);
+    expect(lifecycle).toEqual(['cancel-abort', 'delete', 'close']);
+    expect(errors).toEqual([]);
+  } finally {
+    resolveCancellation?.(json({ cancelled: true }));
+    await cancelling;
+  }
+});

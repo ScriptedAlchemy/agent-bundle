@@ -669,6 +669,7 @@ export class McpSession {
   readonly #epochReference: EpochReference;
   readonly #id: McpSessionId;
   readonly #onClose: () => void;
+  readonly #onClosing: () => void;
   readonly #pluginData: string;
   readonly #resolved: ResolvedSessionServer;
   readonly #launch: ResolvedLaunch;
@@ -702,6 +703,7 @@ export class McpSession {
     readonly epochReference: EpochReference;
     readonly id: McpSessionId;
     readonly onClose: () => void;
+    readonly onClosing?: () => void;
     readonly pluginData: string;
     readonly resolved: ResolvedSessionServer;
     readonly workspaceRoot: string;
@@ -714,6 +716,7 @@ export class McpSession {
     this.#epochReference = options.epochReference;
     this.#id = options.id;
     this.#onClose = options.onClose;
+    this.#onClosing = options.onClosing ?? (() => undefined);
     this.#pluginData = options.pluginData;
     this.#resolved = options.resolved;
     this.#workspaceRoot = options.workspaceRoot;
@@ -947,6 +950,11 @@ export class McpSession {
   async close(): Promise<void> {
     if (this.#closePromise !== undefined) return this.#closePromise;
     this.#closed = true;
+    try {
+      this.#onClosing();
+    } catch {
+      // Lifecycle observers cannot prevent client, temporary-data, or epoch cleanup.
+    }
     this.#closePromise = this.#operation('close', () => this.#withLifecycle(() => this.#close()));
     return this.#closePromise;
   }
@@ -1351,6 +1359,7 @@ export class McpSessionService {
         epochReference,
         id: sessionId,
         onClose: () => this.#invalidateSession(sessionId, new Error('MCP session closed.')),
+        onClosing: () => this.#invalidateSession(sessionId, new Error('MCP session is closing.')),
         pluginData,
         resolved: { server, target, targetRoot },
         workspaceRoot: resolve(options.workspaceRoot ?? this.#projectRoot),
@@ -1419,8 +1428,10 @@ export class McpSessionService {
         assertActive();
         const argumentsSnapshot = canonicalMcpAppJson(toolArguments ?? {}, 'MCP App tool arguments');
         if (!isRecord(argumentsSnapshot)) throw new TypeError('MCP App tool arguments must be a JSON object.');
+        const result = await entry.session.callTool({ arguments: argumentsSnapshot, name });
+        assertActive();
         return canonicalMcpAppJson(
-          await entry.session.callTool({ arguments: argumentsSnapshot, name }),
+          result,
           'MCP App tool result',
         );
       },
@@ -1429,16 +1440,22 @@ export class McpSessionService {
         assertActive();
         bridgeResources ??= entry.session.listResources().then((resources) =>
           Object.freeze(resources.map(canonicalMcpAppResource)));
-        return bridgeResources;
+        const resources = await bridgeResources;
+        assertActive();
+        return resources;
       },
       listBridgeTools: async () => {
         assertActive();
         bridgeTools ??= entry.session.listTools().then((tools) => Object.freeze(tools.map(canonicalMcpAppTool)));
-        return bridgeTools;
+        const tools = await bridgeTools;
+        assertActive();
+        return tools;
       },
       readResource: async ({ uri }: { readonly uri: string }) => {
         assertActive();
-        return canonicalMcpAppJson(await entry.session.readResource({ uri }), 'MCP App resource result');
+        const result = await entry.session.readResource({ uri });
+        assertActive();
+        return canonicalMcpAppJson(result, 'MCP App resource result');
       },
     });
     return Object.freeze({

@@ -1513,7 +1513,7 @@ it('synchronously invalidates App leases when the control session closes during 
     expect(service.get(session.id)).toBeUndefined();
     await expect(service.acquireAppLease(session.id)).rejects.toThrow('Unknown MCP App session');
     allowListing?.();
-    await expect(creating).rejects.toThrow('MCP session closed before its App binding completed.');
+    await expect(creating).rejects.toThrow('MCP App session is closed.');
     await closing;
     expect(clientCloses).toBe(1);
 
@@ -1529,6 +1529,98 @@ it('synchronously invalidates App leases when the control session closes during 
     await serviceClosing;
     await serviceLease.release();
     expect(clientCloses).toBe(2);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+}, 30_000);
+
+it('revokes App authority before a direct session close drains its client and in-flight lists', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-mcp-app-direct-close-'));
+  try {
+    const epochStore = await publishFixtureEpoch(root, 'epoch-app-direct-close');
+    const appTool = {
+      _meta: { ui: { resourceUri: 'ui://weather/forecast.html', visibility: ['app'] } },
+      inputSchema: { type: 'object' as const },
+      name: 'show-weather',
+    };
+    let allowClientClose: (() => void) | undefined;
+    const clientCloseBlocked = new Promise<void>((resolvePromise) => {
+      allowClientClose = resolvePromise;
+    });
+    let clientCloseStarted: (() => void) | undefined;
+    const clientClosing = new Promise<void>((resolvePromise) => {
+      clientCloseStarted = resolvePromise;
+    });
+    let allowListing: (() => void) | undefined;
+    const listingBlocked = new Promise<void>((resolvePromise) => {
+      allowListing = resolvePromise;
+    });
+    let listCalls = 0;
+    let bothListsStarted: (() => void) | undefined;
+    const listsStarted = new Promise<void>((resolvePromise) => {
+      bothListsStarted = resolvePromise;
+    });
+    let clientCloses = 0;
+    const service = new McpSessionService({
+      createClient: () => ({
+        callTool: async () => ({ content: [] }),
+        close: async () => {
+          clientCloses += 1;
+          clientCloseStarted?.();
+          await clientCloseBlocked;
+        },
+        connect: async () => undefined,
+        getPrompt: async () => ({ messages: [] }),
+        getServerCapabilities: () => undefined,
+        getServerVersion: () => undefined,
+        listPrompts: async () => ({ prompts: [] }),
+        listResources: async () => ({ resources: [] }),
+        listResourceTemplates: async () => ({ resourceTemplates: [] }),
+        listTools: async () => {
+          listCalls += 1;
+          if (listCalls === 2) bothListsStarted?.();
+          await listingBlocked;
+          return { tools: [appTool] };
+        },
+        readResource: async () => ({ contents: [] }),
+      }),
+      createStdioTransport: () => ({ close: async () => undefined, send: async () => undefined, start: async () => undefined, stderr: null }) as never,
+      epochStore,
+      projectRoot: root,
+    });
+    const session = await service.open({ epochId: 'epoch-app-direct-close', serverName: 'fixture', target: 'portable' });
+    const lease = await service.acquireAppLease(session.id);
+    const bindings = new McpAppBindingService({ sessionAuthority: service });
+    const listed = lease.session.listBridgeTools();
+    const creating = bindings.createBinding({
+      input: {},
+      previewProfile: 'portable',
+      result: {},
+      sessionId: session.id,
+      tool: appTool,
+    });
+    await listsStarted;
+
+    const closeReasons: unknown[] = [];
+    lease.watchSessionClosed((reason) => {
+      closeReasons.push(reason);
+    });
+    const closing = session.close();
+    await clientClosing;
+    expect(service.get(session.id)).toBeUndefined();
+    await expect(service.acquireAppLease(session.id)).rejects.toThrow('Unknown MCP App session');
+    expect(closeReasons).toHaveLength(1);
+
+    allowListing?.();
+    await expect(listed).rejects.toThrow('MCP App session is closed.');
+    await expect(creating).rejects.toThrow('MCP App session is closed.');
+    allowClientClose?.();
+    await closing;
+    await session.close();
+    expect(clientCloses).toBe(1);
+    expect(closeReasons).toHaveLength(1);
+    await lease.release();
+    await service.close();
   } finally {
     await rm(root, { force: true, recursive: true });
   }

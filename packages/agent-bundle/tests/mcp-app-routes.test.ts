@@ -68,6 +68,10 @@ class RecordingPreviewService implements McpAppRoutePreviewService {
         this.#releaseFirstReceive = resolvePromise;
       });
     }
+    if (this.bridge.lifecycle === 'closing' && (action as { readonly id?: unknown }).id === 'close-a') {
+      this.bridge.lifecycle = 'closed';
+      return true;
+    }
     this.bridge.lifecycle = 'initialized';
     this.outbound.push({ id: (action as { readonly id?: unknown }).id, jsonrpc: '2.0', result: { accepted: true } });
     return true;
@@ -138,7 +142,6 @@ const host = Object.freeze({
   styles: {},
   theme: 'light',
   timeZone: 'UTC',
-  toolInfo: { name: 'weather' },
   userAgent: 'agent-bundle-test/1.0',
 });
 
@@ -243,6 +246,26 @@ it('rejects unauthenticated, non-JSON, oversized, and forged App requests before
       diagnostic: { code: 'AB8021', message: 'MCP App request has an invalid shape.' },
     });
 
+    const forgedTool = await fetch(`${started.url}/api/mcp/sessions/session-a/apps`, {
+      body: JSON.stringify({ ...createBody(), host: { ...host, toolInfo: { name: 'forged-tool' } } }),
+      headers: { ...headers(), 'content-type': 'application/json' },
+      method: 'POST',
+    });
+    expect(forgedTool.status).toBe(400);
+    await expect(forgedTool.json()).resolves.toEqual({
+      diagnostic: { code: 'AB8021', message: 'MCP App request has an invalid shape.' },
+    });
+
+    const forgedMetadata = await fetch(`${started.url}/api/mcp/sessions/session-a/apps`, {
+      body: JSON.stringify({ ...createBody(), toolDefinition: { _meta: { ui: { resourceUri: 'ui://forged/app.html' } } } }),
+      headers: { ...headers(), 'content-type': 'application/json' },
+      method: 'POST',
+    });
+    expect(forgedMetadata.status).toBe(400);
+    await expect(forgedMetadata.json()).resolves.toEqual({
+      diagnostic: { code: 'AB8021', message: 'MCP App request has an invalid shape.' },
+    });
+
     const oversized = await fetch(`${started.url}/api/mcp/sessions/session-a/apps`, {
       body: JSON.stringify({ ...createBody(), input: 'x'.repeat(65_536) }),
       headers: { ...headers(), 'content-type': 'application/json' },
@@ -332,7 +355,7 @@ it('publishes a complete host context and rejects forged context fields', async 
   }
 });
 
-it('starts graceful teardown without waiting for an App acknowledgement and force closes on DELETE', async () => {
+it('keeps the App acknowledgement route claimed while graceful teardown is pending', async () => {
   const started = await startRoutes();
   try {
     const closing = await fetch(`${started.url}/api/mcp/apps/binding-a/close`, {
@@ -357,6 +380,26 @@ it('starts graceful teardown without waiting for an App acknowledgement and forc
       options: { id: 'close-a', reason: 'pane closed' },
     });
 
+    const acknowledgement = await fetch(`${started.url}/api/mcp/apps/binding-a/messages`, {
+      body: JSON.stringify({ message: { id: 'close-a', jsonrpc: '2.0', result: {} } }),
+      headers: { ...headers(), 'content-type': 'application/json' },
+      method: 'POST',
+    });
+    expect(acknowledgement.status).toBe(200);
+    await expect(acknowledgement.json()).resolves.toEqual({
+      accepted: true,
+      actions: [],
+      lifecycle: 'closed',
+      messages: [],
+    });
+  } finally {
+    await started.close();
+  }
+});
+
+it('force closes an App preview on DELETE', async () => {
+  const started = await startRoutes();
+  try {
     const closed = await fetch(`${started.url}/api/mcp/apps/binding-a`, {
       headers: headers(),
       method: 'DELETE',
