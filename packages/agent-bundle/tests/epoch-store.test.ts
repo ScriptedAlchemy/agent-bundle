@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -264,6 +264,47 @@ it('shares final-release cleanup failure with concurrent close callers without r
     await store.cleanup();
     await expect(
       readFile(join(root, '.agent-bundle', 'epochs', 'epoch-1', 'claude', 'plugin.json'), 'utf8'),
+    ).rejects.toMatchObject({ code: 'ENOENT' });
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('preserves epoch metadata when final-reference cleanup cannot remove its directory', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent bundle epoch cleanup retry '));
+
+  try {
+    const store = new EpochStore({ projectRoot: root });
+    await publishEpoch(store, epochFor(root, 'epoch-1', '2026-08-14T12:00:01.000Z'));
+    const reference = await store.acquireEpochReference('epoch-1');
+    for (let sequence = 2; sequence <= 7; sequence += 1) {
+      await publishEpoch(
+        store,
+        epochFor(root, `epoch-${sequence}`, `2026-08-14T12:00:0${sequence}.000Z`),
+      );
+    }
+    const active = epochFor(root, 'epoch-8', '2026-08-14T12:00:08.000Z');
+    await publishEpoch(store, active);
+    const epochsRoot = join(root, '.agent-bundle', 'epochs');
+
+    await chmod(epochsRoot, 0o555);
+    const outcomes = await Promise.allSettled([reference.close(), reference.close()]);
+    await chmod(epochsRoot, 0o755);
+
+    expect(outcomes).toEqual([
+      expect.objectContaining({ status: 'rejected' }),
+      expect.objectContaining({ status: 'rejected' }),
+    ]);
+    await expect(readFile(epochMetadataPathFor(root, 'epoch-1'), 'utf8')).resolves.toContain('epoch-1');
+    await expect(
+      readFile(join(epochsRoot, 'epoch-1', 'claude', 'plugin.json'), 'utf8'),
+    ).resolves.toBe('epoch-1\n');
+    await expect(store.readActiveEpoch()).resolves.toEqual(active);
+
+    await store.cleanup();
+    await expect(readFile(epochMetadataPathFor(root, 'epoch-1'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(
+      readFile(join(epochsRoot, 'epoch-1', 'claude', 'plugin.json'), 'utf8'),
     ).rejects.toMatchObject({ code: 'ENOENT' });
   } finally {
     await rm(root, { force: true, recursive: true });

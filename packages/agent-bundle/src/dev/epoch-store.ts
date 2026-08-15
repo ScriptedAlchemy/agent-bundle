@@ -363,10 +363,8 @@ export class EpochStore {
       metadata
         .filter((entry) => !protectedIds.has(entry.epoch.id))
         .map(async (entry) => {
-          await Promise.all([
-            rm(join(this.#epochsPath, entry.epoch.id), { force: true, recursive: true }),
-            rm(this.#metadataPathFor(entry.epoch.id), { force: true }),
-          ]);
+          await rm(join(this.#epochsPath, entry.epoch.id), { force: true, recursive: true });
+          await rm(this.#metadataPathFor(entry.epoch.id), { force: true });
         }),
     );
   }
