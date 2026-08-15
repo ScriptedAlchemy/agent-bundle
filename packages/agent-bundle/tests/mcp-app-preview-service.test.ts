@@ -712,6 +712,83 @@ it('reports a real failed one-slot teardown release as retryable before force cl
   expect(service.get(preview.binding.id)).toBeUndefined();
 });
 
+it('waits afresh for a late acknowledgment after graceful close has timed out', async () => {
+  const releaseStarted = deferred<void>();
+  const releaseComplete = deferred<void>();
+  const service = serviceFor(actualBindingAuthorityFor(async () => {
+    releaseStarted.resolve();
+    await releaseComplete.promise;
+  }), { closeTimeoutMs: 20, maxOutboundMessages: 1 });
+  const preview = await createPreview(service);
+  await service.receive(preview.binding.id, initialize);
+  await service.takeOutbound(preview.binding.id);
+  await service.receive(preview.binding.id, initialized);
+  await service.takeOutbound(preview.binding.id);
+  await service.takeOutbound(preview.binding.id);
+  expect(await service.close(preview.binding.id, { id: 'teardown-late-ack' })).toMatchObject({
+    id: 'teardown-late-ack',
+    method: 'ui/resource-teardown',
+  });
+  await new Promise<void>((resolve) => setTimeout(resolve, 40));
+
+  const acknowledgment = service.receive(preview.binding.id, { id: 'teardown-late-ack', jsonrpc: '2.0', result: {} });
+  const duplicateAcknowledgment = service.receive(preview.binding.id, { id: 'teardown-late-ack', jsonrpc: '2.0', result: {} });
+  let acknowledged = false;
+  void acknowledgment.then(() => {
+    acknowledged = true;
+  });
+  await releaseStarted.promise;
+  await new Promise<void>((resolve) => setTimeout(resolve, 5));
+
+  expect(acknowledged).toBe(false);
+  expect(service.get(preview.binding.id)).toBe(preview);
+  releaseComplete.resolve();
+  await expect(acknowledgment).resolves.toBe(true);
+  await expect(duplicateAcknowledgment).resolves.toBe(false);
+  expect(preview.bridge.lifecycle).toBe('closed');
+  expect(service.get(preview.binding.id)).toBeUndefined();
+});
+
+it('bounds a late acknowledgment release while keeping force close retryable', async () => {
+  const releaseStarted = deferred<void>();
+  const releaseComplete = deferred<void>();
+  const service = serviceFor(actualBindingAuthorityFor(async () => {
+    releaseStarted.resolve();
+    await releaseComplete.promise;
+  }), { closeTimeoutMs: 20, maxOutboundMessages: 1 });
+  const preview = await createPreview(service);
+  await service.receive(preview.binding.id, initialize);
+  await service.takeOutbound(preview.binding.id);
+  await service.receive(preview.binding.id, initialized);
+  await service.takeOutbound(preview.binding.id);
+  await service.takeOutbound(preview.binding.id);
+  expect(await service.close(preview.binding.id, { id: 'teardown-bounded-late-ack' })).toMatchObject({
+    id: 'teardown-bounded-late-ack',
+    method: 'ui/resource-teardown',
+  });
+  await new Promise<void>((resolve) => setTimeout(resolve, 40));
+
+  const acknowledgment = service.receive(preview.binding.id, { id: 'teardown-bounded-late-ack', jsonrpc: '2.0', result: {} });
+  const duplicateAcknowledgment = service.receive(preview.binding.id, { id: 'teardown-bounded-late-ack', jsonrpc: '2.0', result: {} });
+  let acknowledged = false;
+  void acknowledgment.then(() => {
+    acknowledged = true;
+  });
+  await releaseStarted.promise;
+  await new Promise<void>((resolve) => setTimeout(resolve, 5));
+  expect(acknowledged).toBe(false);
+  await expect(acknowledgment).resolves.toBe(true);
+  await expect(duplicateAcknowledgment).resolves.toBe(false);
+
+  expect(preview.bridge.lifecycle).toBe('closing');
+  expect(service.get(preview.binding.id)).toBe(preview);
+  const forced = service.forceClose(preview.binding.id);
+  releaseComplete.resolve();
+  await expect(forced).resolves.toBe(true);
+  expect(preview.bridge.lifecycle).toBe('closed');
+  expect(service.get(preview.binding.id)).toBeUndefined();
+});
+
 it('keeps a timed out graceful close retryable for an authoritative force close', async () => {
   let closes = 0;
   const service = serviceFor(authorityFor({
