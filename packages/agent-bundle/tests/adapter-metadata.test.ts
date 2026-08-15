@@ -57,11 +57,10 @@ const registryMetadata = (registry: TargetRegistry, name: string) =>
 it('records exact immutable metadata for every built-in target', () => {
   const registry = createDefaultRegistry();
 
-  expect(registry.supports('portable', 'sse')).toBe(true);
   expect(registryMetadata(registry, 'portable')).toEqual({
     adapterRevision: '1.0.0',
     capabilityRevision: '1.0.0',
-    capabilitySha256: '84d75e50296ed0acf393742bd3934f90ff756bbd4fe5684a01b3fb4a284ee819',
+    capabilitySha256: '642da9f921374a4d0143da21ed4b4b2260a2375a5eb33c4cbb4ef531f2bb7352',
     observedVersion: '1.0.0',
     schemas: [
       {
@@ -79,7 +78,7 @@ it('records exact immutable metadata for every built-in target', () => {
   expect(registryMetadata(registry, 'codex')).toEqual({
     adapterRevision: '1.0.0',
     capabilityRevision: '0.147.0',
-    capabilitySha256: '1110ec8e35904d69f86ad8b9d5b886fa9fb4f0647876e6b79d4287aa4513e484',
+    capabilitySha256: '4b08c8820ace59ca068677dcb1863a9fd4cb730b7e00733b994b0076958beaf0',
     observedVersion: '0.147.0',
     schemas: [
       {
@@ -107,7 +106,7 @@ it('records exact immutable metadata for every built-in target', () => {
   expect(registryMetadata(registry, 'claude')).toEqual({
     adapterRevision: '1.0.0',
     capabilityRevision: '2.1.232',
-    capabilitySha256: 'fcc2626922c9b65e971c42e1485a1970b55804832fafceac65b1ee1be057ed0b',
+    capabilitySha256: 'ebab02950c9b5b82f9eed7210b8b12b0ba11dc6271d1e93155bd25a2b42377c3',
     observedVersion: '2.1.232',
     schemas: [
       {
@@ -149,6 +148,7 @@ it('rehashes every declared capability and schema snapshot against its pinned pr
       readFile(new URL(`../src/adapters/schemas/${provenanceFile}`, import.meta.url), 'utf8'),
     ]);
     const capabilityTable = JSON.parse(capability.toString()) as Record<string, unknown>;
+    expect((capabilityTable.mcp as Record<string, unknown>).sse).toBeUndefined();
     const provenance = JSON.parse(provenanceText) as {
       readonly schemas: Record<string, { readonly sha256: string }>;
       readonly [key: string]: unknown;

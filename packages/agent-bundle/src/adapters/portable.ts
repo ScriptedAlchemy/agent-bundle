@@ -20,6 +20,7 @@ import mcpSchema from './schemas/portable/mcp.schema.json' with { type: 'json' }
 import pluginSchema from './schemas/portable/plugin.schema.json' with { type: 'json' };
 import {
   validateJsonSchemaDocument,
+  validateModernMcpDocument,
   type TargetAdapter,
   type TargetArtifactEntry,
   type TargetArtifactPlan,
@@ -45,7 +46,7 @@ const validateMcp = schemaValidator.compile(mcpSchema);
 const metadata = Object.freeze({
   adapterRevision: '1.0.0',
   capabilityRevision: capabilityTable.observedSpecificationVersion,
-  capabilitySha256: '84d75e50296ed0acf393742bd3934f90ff756bbd4fe5684a01b3fb4a284ee819',
+  capabilitySha256: '642da9f921374a4d0143da21ed4b4b2260a2375a5eb33c4cbb4ef531f2bb7352',
   observedVersion: capabilityTable.observedSpecificationVersion,
   schemas: Object.freeze(
     Object.entries(schemaProvenance.schemas)
@@ -64,7 +65,7 @@ const artifactValidation = Object.freeze({
     Object.freeze({ path: 'plugin.json', required: true, schema: 'plugin' }),
   ]),
   schemas: Object.freeze([
-    Object.freeze({ name: 'mcp', validate: validateJsonSchemaDocument(validateMcp) }),
+    Object.freeze({ name: 'mcp', validate: validateModernMcpDocument(validateJsonSchemaDocument(validateMcp)) }),
     Object.freeze({ name: 'plugin', validate: validateJsonSchemaDocument(validatePlugin) }),
   ]),
 });
@@ -236,7 +237,7 @@ const planMcpServer = (
     diagnostics,
     value: {
       ...(server.headers === undefined ? {} : { headers: server.headers }),
-      type: server.transport,
+      type: 'streamable-http',
       url: server.url,
     },
   };
@@ -324,7 +325,6 @@ export const portableAdapter: TargetAdapter = Object.freeze({
   }),
   capabilities: Object.freeze({
     mcp: capabilityTable.mcp.stdio && capabilityTable.mcp.streamableHttp,
-    sse: capabilityTable.mcp.sse,
     skills: capabilityTable.plugin.skills,
   }),
   configExtension: Object.freeze({ key: portableName }),

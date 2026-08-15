@@ -17,7 +17,7 @@ export interface AgentBundleHookEntry {
   tools?: readonly string[];
 }
 
-export type McpTransport = 'stdio' | 'streamable-http' | 'sse';
+export type McpTransport = 'stdio' | 'streamable-http';
 
 export interface AgentBundleMcpApp {
   _meta?: Readonly<Record<string, unknown>>;
@@ -141,7 +141,7 @@ export interface NormalizedMcpServer {
   /** Absolute local source path for compiler-owned MCP entries only. */
   readonly source?: string;
   readonly targets: readonly string[];
-  readonly transport: 'stdio' | 'streamable-http' | 'sse';
+  readonly transport: McpTransport;
   readonly url?: string;
 }
 

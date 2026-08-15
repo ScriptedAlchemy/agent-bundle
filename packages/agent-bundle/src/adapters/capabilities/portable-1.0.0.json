@@ -15,7 +15,6 @@
         "${PLUGIN_ROOT}"
       ]
     },
-    "sse": true,
     "stdio": true,
     "streamableHttp": true
   },

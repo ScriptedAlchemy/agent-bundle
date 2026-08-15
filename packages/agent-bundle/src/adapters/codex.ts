@@ -68,7 +68,7 @@ const hookContract = Object.freeze({
 const metadata = Object.freeze({
   adapterRevision: '1.0.0',
   capabilityRevision: capabilityTable.observedCliVersion,
-  capabilitySha256: '1110ec8e35904d69f86ad8b9d5b886fa9fb4f0647876e6b79d4287aa4513e484',
+  capabilitySha256: '4b08c8820ace59ca068677dcb1863a9fd4cb730b7e00733b994b0076958beaf0',
   observedVersion: capabilityTable.observedCliVersion,
   schemas: Object.freeze(
     Object.entries(schemaProvenance.schemas)
@@ -197,14 +197,6 @@ const planMcpServer = (
   server: NormalizedMcpServer,
 ): { readonly diagnostics: readonly Diagnostic[]; readonly value?: Record<string, unknown> } => {
   const diagnostics: Diagnostic[] = [];
-  if (server.transport === 'sse') {
-    diagnostics.push(errorDiagnostic(
-      'codex.mcp.transport.sse',
-      `Codex CLI ${capabilityTable.observedCliVersion} does not support SSE MCP server "${server.name}".`,
-    ));
-    return { diagnostics };
-  }
-
   if (server.transport === 'stdio') {
     if (server.command === undefined) {
       diagnostics.push(errorDiagnostic(
@@ -457,7 +449,6 @@ export const codexAdapter: TargetAdapter = Object.freeze({
     marketplace: true,
     hooks: true,
     mcp: capabilityTable.mcp.stdio && capabilityTable.mcp.streamableHttp,
-    sse: capabilityTable.mcp.sse,
     skills: capabilityTable.plugin.skills,
   }),
   configExtension: Object.freeze({ key: codexName }),

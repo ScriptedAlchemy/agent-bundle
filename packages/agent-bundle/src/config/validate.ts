@@ -539,8 +539,8 @@ const validateMcpServer = (
   if (!nonemptyString(url) || !validRemoteUrl(url)) {
     diagnostics.push(sourceDiagnostic('AB4316', `MCP server ${JSON.stringify(name)} URL must be a valid HTTP URL.`, loaded.configPath));
   }
-  if (server.transport !== 'streamable-http' && server.transport !== 'sse') {
-    diagnostics.push(sourceDiagnostic('AB4317', `MCP server ${JSON.stringify(name)} URL requires streamable-http or sse transport.`, loaded.configPath));
+  if (server.transport !== 'streamable-http') {
+    diagnostics.push(sourceDiagnostic('AB4317', `MCP server ${JSON.stringify(name)} URL requires streamable-http transport.`, loaded.configPath));
   }
   if (server.args !== undefined || server.env !== undefined || server.cwd !== undefined) {
     diagnostics.push(sourceDiagnostic('AB4318', `MCP server ${JSON.stringify(name)} remote server cannot set stdio options.`, loaded.configPath));

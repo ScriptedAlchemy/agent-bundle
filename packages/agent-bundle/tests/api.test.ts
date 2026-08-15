@@ -214,7 +214,7 @@ it('attaches a specific recovery to every invalid inspection diagnostic', async 
   }
 });
 
-it('keeps the built-in Codex SSE diagnostic exactly once across validation and planning', async () => {
+it('reports one modern-MCP source diagnostic for a legacy SSE declaration', async () => {
   const root = await createProject();
   try {
     await writeFile(join(root, 'agent-bundle.config.ts'), [
@@ -227,11 +227,11 @@ it('keeps the built-in Codex SSE diagnostic exactly once across validation and p
     ].join('\n'));
 
     const result = await inspect({ root });
-    const diagnostics = result.diagnostics.filter((diagnostic) => diagnostic.code === 'codex.mcp.transport.sse');
+    const diagnostics = result.diagnostics.filter((diagnostic) => diagnostic.code === 'AB4317');
 
     expect(result.state).toBe('invalid');
     expect(diagnostics).toEqual([expect.objectContaining({
-      code: 'codex.mcp.transport.sse',
+      code: 'AB4317',
       recovery: expect.any(String),
       severity: 'error',
     })]);

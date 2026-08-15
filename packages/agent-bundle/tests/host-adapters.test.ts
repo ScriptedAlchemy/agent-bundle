@@ -352,20 +352,11 @@ it('applies only native path-token semantics and surfaces exact capability diagn
         targets: ['codex'],
         transport: 'stdio',
       },
-      {
-        id: 'mcp:sse',
-        name: 'sse',
-        provenance: { kind: 'config', sourcePath: '/workspace/agent-bundle.config.ts' },
-        targets: ['codex'],
-        transport: 'sse',
-        url: 'https://mcp.example.test/sse',
-      },
     ],
   });
   expect(codex.diagnostics.map((diagnostic) => diagnostic.code)).toEqual([
     'codex.mcp.token.plugin-root.embedded.command',
     'codex.mcp.token.plugin-data.env.DATA',
-    'codex.mcp.transport.sse',
   ]);
 
   const claude = createDefaultRegistry().get('claude').plan({
@@ -388,7 +379,7 @@ it('applies only native path-token semantics and surfaces exact capability diagn
         name: 'header-key',
         provenance: { kind: 'config', sourcePath: '/workspace/agent-bundle.config.ts' },
         targets: ['claude'],
-        transport: 'sse',
+        transport: 'streamable-http',
         url: `https://mcp.example.test/${pathTokens.workspaceRoot}`,
       },
     ],

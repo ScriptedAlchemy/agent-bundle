@@ -84,26 +84,15 @@ it('builds the checked-in fixture matrix from a path with spaces', async () => {
       type: 'streamable-http',
       url: 'https://mcp.example.test/stream',
     });
-    expect(portableMcp.mcpServers['remote-sse']).toEqual({
-      headers: { 'X-Sse-Fixture': 'integration-sse' },
-      type: 'sse',
-      url: 'https://mcp.example.test/events',
-    });
     expect(codexMcp.mcpServers['remote-http']).toEqual({
       headers: { 'X-Fixture': 'integration' },
       type: 'streamable-http',
       url: 'https://mcp.example.test/stream',
     });
-    expect(codexMcp.mcpServers['remote-sse']).toBeUndefined();
     expect(claudeMcp.mcpServers['remote-http']).toEqual({
       headers: { 'X-Fixture': 'integration' },
       type: 'http',
       url: 'https://mcp.example.test/stream',
-    });
-    expect(claudeMcp.mcpServers['remote-sse']).toEqual({
-      headers: { 'X-Sse-Fixture': 'integration-sse' },
-      type: 'sse',
-      url: 'https://mcp.example.test/events',
     });
     expect(codexMarketplace).toMatchObject({
       name: 'integration-fixture-marketplace',

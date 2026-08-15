@@ -122,6 +122,35 @@ export const validateJsonSchemaDocument = (
   })));
 };
 
+const legacySseMcpIssue = (document: unknown): TargetArtifactDocumentIssue | undefined => {
+  if (document === null || typeof document !== 'object' || Array.isArray(document)) return undefined;
+  const servers = (document as { readonly mcpServers?: unknown }).mcpServers;
+  if (servers === null || typeof servers !== 'object' || Array.isArray(servers)) return undefined;
+  for (const [name, server] of Object.entries(servers)) {
+    if (
+      server !== null &&
+      typeof server === 'object' &&
+      !Array.isArray(server) &&
+      (server as { readonly type?: unknown }).type === 'sse'
+    ) {
+      return Object.freeze({
+        instancePath: `/mcpServers/${name}/type`,
+        message: 'legacy SSE MCP transport is not supported',
+      });
+    }
+  }
+  return undefined;
+};
+
+/** Adds Agent Bundle's modern-only MCP transport policy to a pinned schema validator. */
+export const validateModernMcpDocument = (
+  validateSchema: TargetArtifactDocumentValidator,
+): TargetArtifactDocumentValidator => (document) => {
+  const legacyIssue = legacySseMcpIssue(document);
+  if (legacyIssue !== undefined) return Object.freeze([legacyIssue]);
+  return validateSchema(document);
+};
+
 export interface TargetAdapter {
   /** Validates target-native JSON documents against schemas pinned in metadata. */
   readonly artifactValidation?: TargetArtifactValidationContract;

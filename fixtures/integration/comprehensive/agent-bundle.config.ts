@@ -24,12 +24,6 @@ export default {
         transport: 'streamable-http',
         url: 'https://mcp.example.test/stream',
       },
-      'remote-sse': {
-        headers: { 'X-Sse-Fixture': 'integration-sse' },
-        targets: ['portable', 'claude'],
-        transport: 'sse',
-        url: 'https://mcp.example.test/events',
-      },
     },
   },
   plugin: {

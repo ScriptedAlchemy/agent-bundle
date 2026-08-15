@@ -5,7 +5,6 @@
     "source": "https://github.com/openai/codex/blob/main/codex-rs/skills/src/assets/samples/plugin-creator/references/plugin-json-spec.md"
   },
   "mcp": {
-    "sse": false,
     "stdio": true,
     "streamableHttp": true
   },

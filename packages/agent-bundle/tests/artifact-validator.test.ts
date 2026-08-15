@@ -1317,6 +1317,51 @@ it('requires registered target-native documents and validates their pinned schem
   }
 });
 
+it.each([
+  {
+    mcp: {
+      $schema: 'https://agent-plugins.org/schemas/1.0.0/mcp.schema.json',
+      mcpServers: { events: { type: 'sse', url: 'https://mcp.example.test/events' } },
+    },
+    plugin: {
+      $schema: 'https://agent-plugins.org/schemas/1.0.0/plugin.schema.json',
+      name: 'portable-sse-artifact',
+      version: '1.0.0',
+    },
+    target: 'portable' as const,
+    mcpPath: 'portable/mcp.json',
+    pluginPath: 'portable/plugin.json',
+  },
+  {
+    mcp: { mcpServers: { events: { type: 'sse', url: 'https://mcp.example.test/events' } } },
+    plugin: {
+      author: { name: 'Agent Bundle' },
+      description: 'Artifact validation fixture.',
+      name: 'claude-sse-artifact',
+      version: '1.0.0',
+    },
+    target: 'claude' as const,
+    mcpPath: 'claude/.mcp.json',
+    pluginPath: 'claude/.claude-plugin/plugin.json',
+  },
+])('rejects a self-consistent $target artifact containing an SSE MCP document', async ({ mcp, mcpPath, plugin, pluginPath, target }) => {
+  const registry = createDefaultRegistry();
+  const manifestTarget = targetFromRegistry(registry, target);
+  const files = [
+    { contents: `${JSON.stringify(mcp)}\n`, kind: 'generated' as const, path: mcpPath },
+    { contents: `${JSON.stringify(plugin)}\n`, kind: 'generated' as const, path: pluginPath },
+  ];
+  const root = await writeArtifact(files, true, [manifestTarget]);
+
+  try {
+    await expect(validateArtifact({ artifactRoot: root, registry })).resolves.toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'AB6012', generatedPath: mcpPath, target }),
+    ]));
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
 it('validates a canonically rehashed Codex marketplace at its emitted path', async () => {
   const registry = createDefaultRegistry();
   const target = targetFromRegistry(registry, 'codex');

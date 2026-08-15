@@ -139,14 +139,6 @@ it('plans portable MCP server variants with tokens expanded only where portable 
         transport: 'streamable-http' as const,
         url: 'https://mcp.example.test/stream',
     },
-    {
-        id: 'mcp:sse',
-        name: 'sse',
-        provenance: { kind: 'config' as const, sourcePath: '/workspace/agent-bundle.config.ts' },
-        targets: ['portable'],
-        transport: 'sse' as const,
-        url: 'https://mcp.example.test/sse',
-    },
   ];
   const plan = createDefaultRegistry().get('portable').plan({ ...model, mcpServers });
   const mcp = plan.entries.find(
@@ -156,7 +148,7 @@ it('plans portable MCP server variants with tokens expanded only where portable 
   expect(plan.diagnostics).toEqual([]);
   expect(mcp).toEqual({
     content:
-      '{"$schema":"https://agent-plugins.org/schemas/1.0.0/mcp.schema.json","mcpServers":{"http":{"headers":{"Authorization":"Bearer literal"},"type":"streamable-http","url":"https://mcp.example.test/stream"},"sse":{"type":"sse","url":"https://mcp.example.test/sse"},"stdio":{"args":["--root","${PLUGIN_ROOT}/tool"],"command":"node","cwd":"${PLUGIN_DATA}/cache","env":{"CACHE_DIR":"${PLUGIN_DATA}/cache"},"type":"stdio"}}}\n',
+      '{"$schema":"https://agent-plugins.org/schemas/1.0.0/mcp.schema.json","mcpServers":{"http":{"headers":{"Authorization":"Bearer literal"},"type":"streamable-http","url":"https://mcp.example.test/stream"},"stdio":{"args":["--root","${PLUGIN_ROOT}/tool"],"command":"node","cwd":"${PLUGIN_DATA}/cache","env":{"CACHE_DIR":"${PLUGIN_DATA}/cache"},"type":"stdio"}}}\n',
     kind: 'write',
     relativePath: 'mcp.json',
     sourceInputs: ['/workspace/agent-bundle.config.ts'],
@@ -238,8 +230,8 @@ it('reports tokens forbidden in portable URLs, headers, cwd, and environment val
         name: 'header-value',
         provenance: { kind: 'config', sourcePath: '/workspace/agent-bundle.config.ts' },
         targets: ['portable'],
-        transport: 'sse',
-        url: 'https://mcp.example.test/sse',
+        transport: 'streamable-http',
+        url: 'https://mcp.example.test/headers',
       },
       {
         command: 'node',

@@ -7,6 +7,16 @@ import {
 } from '../src/core/diagnostics.ts';
 import { digest, stableJson } from '../src/core/digest.ts';
 import { assertInside } from '../src/core/paths.ts';
+import type { McpTransport } from '../src/index.ts';
+
+it('exposes only modern MCP transports', () => {
+  const transport: McpTransport = 'streamable-http';
+  // @ts-expect-error Legacy HTTP+SSE is not part of the public MCP transport contract.
+  const legacyTransport: McpTransport = 'sse';
+
+  expect(transport).toBe('streamable-http');
+  expect(legacyTransport).toBe('sse');
+});
 
 it('serializes plain-object keys deterministically without changing JSON values', () => {
   const value = {

@@ -34,6 +34,7 @@ import mcpSchema from './schemas/claude/mcp.schema.json' with { type: 'json' };
 import pluginSchema from './schemas/claude/plugin.schema.json' with { type: 'json' };
 import {
   validateJsonSchemaDocument,
+  validateModernMcpDocument,
   type TargetAdapter,
   type TargetArtifactEntry,
   type TargetArtifactPlan,
@@ -71,7 +72,7 @@ const hookContract = Object.freeze({
 const metadata = Object.freeze({
   adapterRevision: '1.0.0',
   capabilityRevision: capabilityTable.observedCliVersion,
-  capabilitySha256: 'fcc2626922c9b65e971c42e1485a1970b55804832fafceac65b1ee1be057ed0b',
+  capabilitySha256: 'ebab02950c9b5b82f9eed7210b8b12b0ba11dc6271d1e93155bd25a2b42377c3',
   observedVersion: capabilityTable.observedCliVersion,
   schemas: Object.freeze(
     Object.entries(schemaProvenance.schemas)
@@ -94,7 +95,7 @@ const artifactValidation = Object.freeze({
   schemas: Object.freeze([
     Object.freeze({ name: 'hooks', validate: validateJsonSchemaDocument(validateHooks) }),
     Object.freeze({ name: 'marketplace', validate: validateJsonSchemaDocument(validateMarketplace) }),
-    Object.freeze({ name: 'mcp', validate: validateJsonSchemaDocument(validateMcp) }),
+    Object.freeze({ name: 'mcp', validate: validateModernMcpDocument(validateJsonSchemaDocument(validateMcp)) }),
     Object.freeze({ name: 'plugin', validate: validateJsonSchemaDocument(validatePlugin) }),
   ]),
 });
@@ -205,7 +206,7 @@ const planMcpServer = (
     diagnostics,
     value: {
       ...(headers === undefined ? {} : { headers }),
-      type: server.transport === 'streamable-http' ? 'http' : 'sse',
+      type: 'http',
       url: expandClaudeToken(server.url),
     },
   };
@@ -364,7 +365,6 @@ export const claudeAdapter: TargetAdapter = Object.freeze({
     marketplace: true,
     hooks: true,
     mcp: capabilityTable.mcp.stdio && capabilityTable.mcp.streamableHttp,
-    sse: capabilityTable.mcp.sse,
     skills: capabilityTable.plugin.skills,
   }),
   configExtension: Object.freeze({ key: claudeName }),
