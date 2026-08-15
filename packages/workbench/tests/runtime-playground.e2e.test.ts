@@ -336,7 +336,7 @@ e2e('retains real MCP runtime history across reload and isolates a fresh provide
   const pageErrors: Error[] = [];
   const forbiddenPrefixes = ['/api/mcp/sessions', '/api/runtime/mcp/sessions', '/api/mcp/apps', '/api/runtime/apps'];
   const expectedContent = [
-    { text: 'Runtime state contains 0 edits.', type: 'text' },
+    { text: 'Runtime state contains 1 edit.', type: 'text' },
     {
       data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADElEQVR42mP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC',
       mimeType: 'image/png',
@@ -379,6 +379,20 @@ e2e('retains real MCP runtime history across reload and isolates a fresh provide
     const run = page.getByRole('button', { name: 'Run', exact: true });
     const history = page.getByRole('region', { name: 'Runtime run history' }).locator('ol > li');
 
+    await surface.selectOption('hook.claude');
+    await target.selectOption('claude');
+    await input.fill(JSON.stringify({
+      cwd: '/tmp',
+      hook_event_name: 'PostToolUse',
+      session_id: 'runtime-history-hydration',
+      tool_input: { file_path: 'runtime-history-hydration.txt' },
+      tool_name: 'Write',
+      tool_use_id: 'runtime-history-hydration-tool',
+    }));
+    await run.click();
+    await page.getByRole('dialog').getByRole('button', { name: 'Confirm' }).click();
+    await expect.poll(async () => history.count(), { timeout: browserTimeout }).toBe(1);
+
     await surface.selectOption('mcp.runtime_status');
     await target.selectOption('portable');
     await page.getByRole('radio', { name: 'Raw JSON' }).check();
@@ -387,16 +401,17 @@ e2e('retains real MCP runtime history across reload and isolates a fresh provide
     await expect(target).toHaveValue('portable');
     await expect(input).toHaveValue('{}');
     await run.click();
-    await expect.poll(async () => history.count(), { timeout: browserTimeout }).toBe(1);
-    expect(runtimeRunPosts).toEqual(['/api/runtime/runs']);
+    await expect.poll(async () => history.count(), { timeout: browserTimeout }).toBe(2);
+    expect(runtimeRunPosts).toEqual(['/api/runtime/runs', '/api/runtime/runs']);
 
     const firstHistory = await runtimeJson('/api/runtime/runs?limit=50') as Readonly<{
       readonly providerSessionId: string;
       readonly runs: readonly Readonly<{
         readonly id: string;
         readonly result: Readonly<{
-          readonly modelVisible: unknown;
-          readonly protocol: unknown;
+          readonly agentVisible?: unknown;
+          readonly modelVisible?: unknown;
+          readonly protocol?: unknown;
           readonly trace: readonly Readonly<{ readonly id: string; readonly status: string }> [];
         }>;
         readonly status: string;
@@ -413,29 +428,46 @@ e2e('retains real MCP runtime history across reload and isolates a fresh provide
     const firstStatus = await runtimeJson('/api/runtime/status') as Readonly<{
       readonly status: Readonly<{ readonly activeVector: unknown }>;
     }>;
-    expect(firstHistory.runs).toHaveLength(1);
-    const firstRun = firstHistory.runs[0]!;
+    expect(firstHistory.runs).toHaveLength(2);
     const firstRunIds = firstHistory.runs.map((entry) => entry.id);
-    expect(firstRun).toMatchObject({ status: 'succeeded', surfaceId: 'mcp.runtime_status', target: 'portable' });
-    expect(firstRun.vector).toEqual(firstStatus.status.activeVector);
-    expect(firstRun.vector.providerSessionId).toBe(firstHistory.providerSessionId);
-    expect(firstRun.result.modelVisible).toEqual(expectedContent);
-    expect(firstRun.result.protocol).toEqual({
+    const statusRun = firstHistory.runs.find((entry) => entry.surfaceId === 'mcp.runtime_status');
+    const hookRun = firstHistory.runs.find((entry) => entry.surfaceId === 'hook.claude');
+    if (statusRun === undefined || hookRun === undefined) throw new Error('Expected distinguishable hook and Runtime status history entries.');
+    const expectedSelectedId = statusRun.id;
+    const expectedSelectedProtocol = {
       content: expectedContent,
-      structuredContent: { editCount: 0, stateVersion: 0 },
+      structuredContent: { editCount: 1, stateVersion: 1 },
+    };
+    expect(firstRunIds).toEqual([statusRun.id, hookRun.id]);
+    expect(statusRun).toMatchObject({ status: 'succeeded', surfaceId: 'mcp.runtime_status', target: 'portable' });
+    expect(statusRun.vector).toEqual(firstStatus.status.activeVector);
+    expect(statusRun.vector.providerSessionId).toBe(firstHistory.providerSessionId);
+    expect(statusRun.result.modelVisible).toEqual(expectedContent);
+    expect(statusRun.result.protocol).toEqual(expectedSelectedProtocol);
+    expect(statusRun.result.trace.map((entry) => entry.id)).toEqual(['normalize', 'worker', 'flight', 'decode', 'lower']);
+    expect(statusRun.result.trace.map((entry) => entry.status)).toEqual(['succeeded', 'succeeded', 'succeeded', 'succeeded', 'succeeded']);
+    expect(hookRun).toMatchObject({
+      result: { agentVisible: 'Recorded runtime-history-hydration.txt from claude. Shared state now contains 1 edit.' },
+      status: 'succeeded',
+      surfaceId: 'hook.claude',
+      target: 'claude',
+      vector: { stateStoreId: statusRun.vector.stateStoreId, stateVersion: 1 },
     });
-    expect(firstRun.result.trace.map((entry) => entry.id)).toEqual(['normalize', 'worker', 'flight', 'decode', 'lower']);
-    expect(firstRun.result.trace.map((entry) => entry.status)).toEqual(['succeeded', 'succeeded', 'succeeded', 'succeeded', 'succeeded']);
     const historyRunIds = async (): Promise<readonly string[]> => history.evaluateAll((items) => items.map((item) => {
       const id = item.getAttribute('data-runtime-run-id');
       if (id === null) throw new Error('Runtime history item is missing its stable run ID.');
       return id;
     }));
     expect(await historyRunIds()).toEqual(firstRunIds);
-    await expect(history.locator('button[aria-pressed="true"]')).toHaveCount(1);
-    await expect(page.locator('[aria-label="Runtime output stage"]')).toContainText(
-      `All outputs are from the current runtime generation (${firstRun.vector.runtimeGenerationId}). No stale views.`,
-    );
+    await page.locator(`[data-runtime-run-id="${expectedSelectedId}"]`).getByRole('button').first().click();
+    await expect(history.locator('button[aria-pressed="true"]')).toHaveCount(1, { timeout: browserTimeout });
+    await expect(page.locator(`[data-runtime-run-id="${expectedSelectedId}"] button[aria-pressed="true"]`)).toHaveCount(1, { timeout: browserTimeout });
+    await expect(page.locator('[aria-label="Runtime output stage"] .runtime-stage-output--model code'))
+      .toHaveText(JSON.stringify(expectedContent, null, 2), { timeout: browserTimeout });
+    const protocol = page.getByRole('tab', { name: 'Protocol', exact: true });
+    await protocol.click();
+    await expect(page.getByLabel('Runtime protocol evidence').getByLabel('Provider MCP protocol').locator('details pre code'))
+      .toHaveText(JSON.stringify(expectedSelectedProtocol, null, 2), { timeout: browserTimeout });
 
     await page.reload();
     await expect(page.getByRole('heading', { name: 'Runtime Playground' })).toBeVisible({ timeout: browserTimeout });
@@ -450,11 +482,13 @@ e2e('retains real MCP runtime history across reload and isolates a fresh provide
     expect(reloadedHistory.runs.length).toBeLessThanOrEqual(50);
     await expect.poll(historyRunIds, { timeout: browserTimeout }).toEqual(firstRunIds);
     const selectedReloadedHistory = history.filter({ has: page.locator('button[aria-pressed="true"]') });
-    await expect(selectedReloadedHistory).toHaveCount(1);
-    expect(await selectedReloadedHistory.getAttribute('data-runtime-run-id')).toBe(firstRunIds[0]);
-    await expect(page.locator('[aria-label="Runtime output stage"]')).toContainText(
-      `All outputs are from the current runtime generation (${firstRun.vector.runtimeGenerationId}). No stale views.`,
-    );
+    await expect(selectedReloadedHistory).toHaveCount(1, { timeout: browserTimeout });
+    expect(await selectedReloadedHistory.getAttribute('data-runtime-run-id')).toBe(expectedSelectedId);
+    await expect(page.locator('[aria-label="Runtime output stage"] .runtime-stage-output--model code'))
+      .toHaveText(JSON.stringify(expectedContent, null, 2), { timeout: browserTimeout });
+    await protocol.click();
+    await expect(page.getByLabel('Runtime protocol evidence').getByLabel('Provider MCP protocol').locator('details pre code'))
+      .toHaveText(JSON.stringify(expectedSelectedProtocol, null, 2), { timeout: browserTimeout });
 
     await firstFixture.close();
     secondFixture = await startRuntimePlaygroundFixture();

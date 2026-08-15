@@ -396,6 +396,7 @@ export const RuntimePlayground = ({ controller }: RuntimePlaygroundProps): React
   const [confirmationPending, setConfirmationPending] = useState(false);
   const surface = selectedSurface(model);
   const run = selectedRun(model);
+  const evidenceSurface = run === undefined ? surface : model.surfaces.find((entry) => entry.id === run.surfaceId) ?? surface;
   const lastGoodRun = selectedLastGoodRun(model);
   const profile = selectedProfile(model);
   const attributes = runtimeDataAttributesFor(model);
@@ -568,7 +569,7 @@ export const RuntimePlayground = ({ controller }: RuntimePlaygroundProps): React
       <div className="runtime-evidence">
         <React.Suspense fallback={<p>Loading runtime evidence…</p>}>
           <RuntimeStage lastGoodRun={lastGoodRun} profile={profile} profileId={model.selectedProfileId} run={run} status={model.status} surface={surface} />
-          <RuntimeInspector onTabChange={(tab) => controller.dispatch({ tab, type: 'selection.tab' })} run={run} status={model.status} surface={surface} tab={model.selectedTab} />
+          <RuntimeInspector onTabChange={(tab) => controller.dispatch({ tab, type: 'selection.tab' })} run={run} status={model.status} surface={evidenceSurface} tab={model.selectedTab} />
         </React.Suspense>
       </div>
     </div>
