@@ -6,9 +6,17 @@ import { promisify } from 'node:util';
 
 import { expect, it } from '@rstest/core';
 
-import { defineConfig, pathTokens } from '../src/index.ts';
+import { defineConfig, pathTokens, type AgentBundleConfig } from '../src/index.ts';
 import { runCli } from '../src/cli.ts';
 import { writeManifest } from '../src/build/emit.ts';
+import type {
+  AgentBundleDevConfig,
+  AgentBundleDevRuntimeConfig,
+} from '../src/config/index.ts';
+import type {
+  CreateDevRuntimeProvider,
+  DevRuntimeProvider,
+} from '../src/api.ts';
 
 interface PackageManifest {
   bin: {
@@ -43,6 +51,25 @@ it('preserves a synchronous config and exposes opaque path tokens', () => {
     pluginData: 'agent-bundle:path:plugin-data',
     workspaceRoot: 'agent-bundle:path:workspace-root',
   });
+});
+
+it('exposes an optional author-facing development runtime declaration', () => {
+  const runtime = {
+    provider: './src/dev/provider.ts',
+  } satisfies AgentBundleDevRuntimeConfig;
+  const dev = { runtime } satisfies AgentBundleDevConfig;
+  const config = {
+    dev,
+    plugin: { name: 'runtime-contract', version: '1.0.0' },
+  } satisfies AgentBundleConfig;
+
+  const providerFactory: CreateDevRuntimeProvider | undefined = undefined;
+  const provider: DevRuntimeProvider | undefined = undefined;
+
+  expect(defineConfig(config)).toBe(config);
+  expect(config.dev?.runtime?.provider).toBe('./src/dev/provider.ts');
+  expect(providerFactory).toBeUndefined();
+  expect(provider).toBeUndefined();
 });
 
 it('loads every public subpath and reports the package version', async () => {

@@ -7,6 +7,9 @@ export { parseSkill } from './skill.ts';
 export type { SkillDocument, SkillResource } from './skill.ts';
 export { validateModel, validateSource } from './validate.ts';
 export type {
+  AgentBundleConfig,
+  AgentBundleDevConfig,
+  AgentBundleDevRuntimeConfig,
   NormalizationTargetRegistry,
   AgentBundleMcpApp,
   AgentBundleMcpConfig,

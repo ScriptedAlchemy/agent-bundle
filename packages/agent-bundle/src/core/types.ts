@@ -60,9 +60,18 @@ export type AgentBundleHookInput =
   | AgentBundleHookEntry
   | readonly (string | AgentBundleHookEntry)[];
 
+export interface AgentBundleDevRuntimeConfig {
+  readonly provider: string;
+}
+
+export interface AgentBundleDevConfig {
+  readonly runtime?: AgentBundleDevRuntimeConfig;
+}
+
 export interface AgentBundleConfig {
   claude?: AgentBundleHostConfig;
   codex?: AgentBundleHostConfig;
+  dev?: AgentBundleDevConfig;
   hooks?: Partial<Record<CanonicalHookEvent, AgentBundleHookInput>>;
   marketplace?: boolean;
   mcp?: AgentBundleMcpConfig;
