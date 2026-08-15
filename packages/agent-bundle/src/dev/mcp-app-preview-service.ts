@@ -93,6 +93,7 @@ interface PreviewEntry {
   pendingTeardown?: McpAppBridgeMessage;
   teardownAckAccepted: boolean;
   actionCount: number;
+  closeAttempt?: Promise<void>;
   closePromise?: Promise<void>;
   closing: boolean;
   closed: boolean;
@@ -328,8 +329,8 @@ export class McpAppPreviewService {
       const accepted = await entry.bridge.receive(action);
       const acknowledged = accepted && entry.closing;
       if (acknowledged) entry.teardownAckAccepted = true;
-      const close = acknowledged ? entry.closePromise : undefined;
-      if (close !== undefined) await close.catch(() => undefined);
+      const attempt = acknowledged ? entry.closeAttempt : undefined;
+      if (attempt !== undefined) await this.#within(attempt, 'MCP App preview teardown acknowledgment').catch(() => undefined);
       return accepted;
     }).finally(() => {
       entry.actionCount -= 1;
@@ -410,16 +411,14 @@ export class McpAppPreviewService {
     } catch (error) {
       operationResult = Promise.reject(error);
     }
+    entry.closeAttempt = operationResult;
+    void operationResult.then(
+      () => this.#completeClose(entry, operationResult),
+      () => undefined,
+    );
     const close = this.#within(operationResult, 'MCP App preview binding close');
     const pending = close.then(
-      () => {
-        if (entry.closePromise !== pending) return;
-        entry.closed = true;
-        entry.outbound.length = 0;
-        entry.outboundBytes = 0;
-        entry.pendingTeardown = undefined;
-        if (this.#entries.get(entry.binding.id) === entry) this.#entries.delete(entry.binding.id);
-      },
+      () => this.#completeClose(entry, operationResult),
       (error: unknown) => {
         if (entry.closePromise === pending) entry.closePromise = undefined;
         throw error;
@@ -427,6 +426,15 @@ export class McpAppPreviewService {
     );
     entry.closePromise = pending;
     return pending;
+  }
+
+  #completeClose(entry: PreviewEntry, attempt: Promise<void>): void {
+    if (entry.closed || entry.closeAttempt !== attempt) return;
+    entry.closed = true;
+    entry.outbound.length = 0;
+    entry.outboundBytes = 0;
+    entry.pendingTeardown = undefined;
+    if (this.#entries.get(entry.binding.id) === entry) this.#entries.delete(entry.binding.id);
   }
 
   #takeTeardown(entry: PreviewEntry, id: McpAppBridgeCloseOptions['id']): McpAppBridgeMessage | undefined {
