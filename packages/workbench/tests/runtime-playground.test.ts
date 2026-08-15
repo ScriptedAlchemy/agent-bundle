@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { expect, it } from '@rstest/core';
-import { createElement } from 'react';
+import React, { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 
 import type {
@@ -22,6 +22,7 @@ import {
   runtimeDataAttributesFor,
   runtimePlaygroundLiveMcpPageAdapter,
   RuntimePlayground,
+  type RuntimePlaygroundController,
   type RuntimePlaygroundClient,
 } from '../src/runtime-playground.tsx';
 import type { RuntimeProfileOption } from '../src/runtime-model.ts';
@@ -122,6 +123,163 @@ const clientFor = (overrides: Partial<RuntimePlaygroundClient> = {}): RuntimePla
     requests,
     resetState: async (request) => { requests.push(request); return Object.freeze({ stateStoreId: 'state-a', stateVersion: 2 }); },
     ...overrides,
+  };
+};
+
+type ElementProps = Readonly<Record<string, unknown>>;
+
+type FakeFocusTarget = Readonly<{
+  focus(): void;
+  readonly label: string;
+}>;
+
+type EffectSlot = {
+  cleanup: (() => void) | undefined;
+  dependencies: readonly unknown[] | undefined;
+};
+
+const childText = (value: unknown): string => {
+  if (typeof value === 'string' || typeof value === 'number') return String(value);
+  if (Array.isArray(value)) return value.map(childText).join('');
+  if (React.isValidElement(value)) return childText((value.props as ElementProps).children);
+  return '';
+};
+
+const findElement = (
+  tree: unknown,
+  predicate: (element: React.ReactElement<ElementProps>) => boolean,
+): React.ReactElement<ElementProps> => {
+  if (React.isValidElement(tree)) {
+    const element = tree as React.ReactElement<ElementProps>;
+    if (predicate(element)) return element;
+    const children = (element.props as ElementProps).children;
+    if (Array.isArray(children)) {
+      for (const child of children) {
+        try {
+          return findElement(child, predicate);
+        } catch (error) {
+          if (!(error instanceof Error) || error.message !== 'Runtime element was not found.') throw error;
+        }
+      }
+    } else if (children !== undefined) return findElement(children, predicate);
+  }
+  throw new Error('Runtime element was not found.');
+};
+
+/**
+ * Exercises the client-only hook boundary under Node coverage without adding a
+ * second DOM runtime. The real Chrome journey remains the end-to-end check;
+ * this tiny dispatcher only commits the component's own effects and refs.
+ */
+const mountRuntimePlayground = (controller: RuntimePlaygroundController) => {
+  const internals = React as unknown as {
+    __CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE: { H: unknown };
+  };
+  const reactInternals = internals.__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE;
+  const originalDispatcher = reactInternals.H;
+  const originalWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
+  const originalDocument = Object.getOwnPropertyDescriptor(globalThis, 'document');
+  const keydown = new Set<(event: KeyboardEvent) => void>();
+  const fakeDocument: { activeElement: FakeFocusTarget | null } = { activeElement: null };
+  const fakeWindow = {
+    addEventListener(type: string, listener: EventListenerOrEventListenerObject): void {
+      if (type === 'keydown' && typeof listener === 'function') keydown.add(listener as (event: KeyboardEvent) => void);
+    },
+    removeEventListener(type: string, listener: EventListenerOrEventListenerObject): void {
+      if (type === 'keydown' && typeof listener === 'function') keydown.delete(listener as (event: KeyboardEvent) => void);
+    },
+  };
+  const slots: unknown[] = [];
+  const effects = new Map<number, EffectSlot>();
+  const pendingEffects: Array<Readonly<{ create: () => void | (() => void); index: number }>> = [];
+  let cursor = 0;
+  let tree: React.ReactNode;
+
+  Object.defineProperty(globalThis, 'window', { configurable: true, value: fakeWindow });
+  Object.defineProperty(globalThis, 'document', { configurable: true, value: fakeDocument });
+
+  const sameDependencies = (previous: readonly unknown[] | undefined, next: readonly unknown[] | undefined): boolean =>
+    previous !== undefined && next !== undefined && previous.length === next.length && previous.every((value, index) => Object.is(value, next[index]));
+
+  const dispatcher = {
+    useEffect(create: () => void | (() => void), dependencies: readonly unknown[] | undefined): void {
+      const index = cursor++;
+      const prior = effects.get(index);
+      if (prior === undefined || !sameDependencies(prior.dependencies, dependencies)) {
+        pendingEffects.push({ create, index });
+        effects.set(index, { cleanup: prior?.cleanup, dependencies });
+      }
+    },
+    useRef<Value>(initial: Value): { current: Value } {
+      const index = cursor++;
+      const slot = slots[index] as { current: Value } | undefined;
+      if (slot !== undefined) return slot;
+      const next = { current: initial };
+      slots[index] = next;
+      return next;
+    },
+    useState<Value>(initial: Value | (() => Value)): readonly [Value, (next: Value | ((prior: Value) => Value)) => void] {
+      const index = cursor++;
+      if (slots[index] === undefined) slots[index] = typeof initial === 'function' ? (initial as () => Value)() : initial;
+      const setState = (next: Value | ((prior: Value) => Value)): void => {
+        slots[index] = typeof next === 'function' ? (next as (prior: Value) => Value)(slots[index] as Value) : next;
+      };
+      return [slots[index] as Value, setState];
+    },
+  };
+
+  const attachRefs = (node: unknown): void => {
+    if (!React.isValidElement(node)) return;
+    const element = node as React.ReactElement<ElementProps>;
+    const props = element.props as ElementProps;
+    const ref = props.ref;
+    if (ref !== undefined && ref !== null) {
+      const target: FakeFocusTarget = {
+        focus: () => { fakeDocument.activeElement = target; },
+        label: childText(props.children),
+      };
+      if (typeof ref === 'function') ref(target);
+      else (ref as { current: FakeFocusTarget | null }).current = target;
+    }
+    const children = props.children;
+    if (Array.isArray(children)) children.forEach(attachRefs);
+    else attachRefs(children);
+  };
+
+  const render = (): React.ReactNode => {
+    cursor = 0;
+    reactInternals.H = dispatcher;
+    try {
+      tree = RuntimePlayground({ controller });
+    } finally {
+      reactInternals.H = originalDispatcher;
+    }
+    attachRefs(tree);
+    for (const effect of pendingEffects.splice(0)) {
+      const slot = effects.get(effect.index);
+      slot?.cleanup?.();
+      const cleanup = effect.create();
+      if (slot !== undefined) slot.cleanup = typeof cleanup === 'function' ? cleanup : undefined;
+    }
+    return tree;
+  };
+
+  return {
+    dispose: (): void => {
+      for (const slot of effects.values()) slot.cleanup?.();
+      if (originalWindow === undefined) Reflect.deleteProperty(globalThis, 'window');
+      else Object.defineProperty(globalThis, 'window', originalWindow);
+      if (originalDocument === undefined) Reflect.deleteProperty(globalThis, 'document');
+      else Object.defineProperty(globalThis, 'document', originalDocument);
+    },
+    emitKeydown: (key: string, shiftKey = false): boolean => {
+      let prevented = false;
+      const event = { key, preventDefault: () => { prevented = true; }, shiftKey } as KeyboardEvent;
+      for (const listener of keydown) listener(event);
+      return prevented;
+    },
+    focusedLabel: (): string | undefined => fakeDocument.activeElement?.label,
+    render,
   };
 };
 
@@ -304,6 +462,59 @@ it('initializes all provider history items without truncating the server-owned f
 
   expect(controller.model.history).toHaveLength(50);
   expect(controller.model.history.map((entry) => entry.id)).toEqual(history.map((entry) => entry.id));
+});
+
+it('commits controlled Runtime input and reset dialog effects through the client interaction boundary', async () => {
+  const reset = deferred<DevRuntimeStateIdentity>();
+  const controller = createRuntimePlaygroundController({
+    bootstrap: bootstrap(),
+    client: clientFor({ createRun: async () => run('02'), resetState: async () => reset.promise }),
+    profiles,
+  });
+  const mounted = mountRuntimePlayground(controller);
+  try {
+    let tree = mounted.render();
+    const input = findElement(tree, (element) => element.props.id === 'runtime-input');
+    (input.props.onRawDraftChange as (raw: string) => void)('{"city":');
+    expect(controller.model.draft.raw).toBe('{"city":');
+
+    tree = mounted.render();
+    const repairedInput = findElement(tree, (element) => element.props.id === 'runtime-input');
+    (repairedInput.props.onSubmit as (value: Readonly<Record<string, unknown>>) => void)(Object.freeze({ city: 'Paris' }));
+    await controller.whenIdle();
+    expect(controller.model.history.map((entry) => entry.id)).toContain('02');
+
+    tree = mounted.render();
+    const resetButton = findElement(tree, (element) => element.type === 'button' && childText(element.props.children) === 'Reset fixture state');
+    (resetButton.props.onClick as () => void)();
+    expect(controller.model.confirmation?.kind).toBe('reset');
+
+    tree = mounted.render();
+    expect(mounted.focusedLabel()).toBe('Cancel');
+    expect(mounted.emitKeydown('Tab')).toBe(true);
+    expect(mounted.focusedLabel()).toBe('Confirm');
+    expect(mounted.emitKeydown('Tab', true)).toBe(true);
+    expect(mounted.focusedLabel()).toBe('Cancel');
+    expect(mounted.emitKeydown('Escape')).toBe(true);
+    expect(controller.model.confirmation).toBeUndefined();
+
+    tree = mounted.render();
+    expect(mounted.focusedLabel()).toBe('Reset fixture state');
+    const confirmedReset = findElement(tree, (element) => element.type === 'button' && childText(element.props.children) === 'Reset fixture state');
+    (confirmedReset.props.onClick as () => void)();
+    tree = mounted.render();
+    const confirmButton = findElement(tree, (element) => element.type === 'button' && childText(element.props.children) === 'Confirm');
+    (confirmButton.props.onClick as () => void)();
+    reset.resolve(Object.freeze({ stateStoreId: 'state-a', stateVersion: 2 }));
+    await controller.whenIdle();
+
+    mounted.render();
+    expect(mounted.focusedLabel()).toContain('HMR endpoint ready');
+    expect(controller.model.stateIdentity).toEqual({ stateStoreId: 'state-a', stateVersion: 2 });
+  } finally {
+    mounted.dispose();
+    controller.close();
+  }
 });
 
 it('executes a read-only run exactly once', async () => {
