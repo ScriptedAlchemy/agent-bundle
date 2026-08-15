@@ -6,6 +6,7 @@
     "./inspector-session-adapter-fixture.tsx",
     "./inspector-session-adapter-model.ts",
     "./inspector-session-adapter.tsx",
+    "./protocol-screen-without-replay.tsx",
     "./vendor-react-runtime.d.ts",
     "./vendor-screens.d.ts",
     "../../../tests/inspector-session-adapter.test.ts",

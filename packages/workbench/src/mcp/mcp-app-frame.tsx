@@ -9,6 +9,7 @@ import type {
 
 const proxyReadyMethod = 'ui/notifications/sandbox-proxy-ready';
 const resourceReadyMethod = 'ui/notifications/sandbox-resource-ready';
+const closedRelay = Promise.resolve();
 
 export interface McpAppFrameMessageEvent {
   readonly data: unknown;
@@ -158,6 +159,7 @@ export class McpAppFrameRelay {
   #closePromise: Promise<void> | undefined;
   #closeTimer: ReturnType<typeof setTimeout> | undefined;
   #finishClose: (() => void) | undefined;
+  #forceClosePromise: Promise<void> | undefined;
   #listening = false;
   #processing = false;
   #resourceProvided = false;
@@ -206,9 +208,11 @@ export class McpAppFrameRelay {
   }
 
   close(): Promise<void> {
+    if (this.#state === 'closed') return closedRelay;
     if (this.#closePromise !== undefined) return this.#closePromise;
     this.#state = 'closing';
     this.#closePromise = new Promise<void>((resolve) => { this.#finishClose = resolve; });
+    this.#closeTimer = setTimeout(() => { void this.#forceClose(); }, this.#closeTimeoutMs);
     this.#enqueue(() => this.#beginClose(), true);
     return this.#closePromise;
   }
@@ -246,6 +250,7 @@ export class McpAppFrameRelay {
 
   async #deliver(message: RpcMessage): Promise<void> {
     const response = await this.#routes.message(this.#bindingId, message as McpAppJsonValue);
+    if (this.#state === 'closed') return;
     this.#postAll(response.messages);
     if (response.lifecycle === 'closed') this.#completeClose();
   }
@@ -256,27 +261,34 @@ export class McpAppFrameRelay {
         id: this.#teardownId(),
         reason: 'MCP App frame unmounted.',
       });
+      if (this.#state === 'closed') return;
       if (response.message !== undefined) this.#postOne(response.message);
       if (response.lifecycle === 'closed') {
         this.#completeClose();
         return;
       }
-      this.#closeTimer = setTimeout(() => { void this.#forceClose(); }, this.#closeTimeoutMs);
     } catch (cause) {
+      if (this.#state === 'closed') return;
       this.#report(new McpAppFrameRelayError('MCP App graceful close failed.', cause));
       await this.#forceClose();
     }
   }
 
-  async #forceClose(): Promise<void> {
-    if (this.#state === 'closed') return;
-    try {
-      await this.#routes.forceClose(this.#bindingId);
-    } catch (cause) {
-      this.#report(new McpAppFrameRelayError('MCP App force close failed.', cause));
-    } finally {
-      this.#completeClose();
-    }
+  #forceClose(): Promise<void> {
+    if (this.#state === 'closed') return closedRelay;
+    if (this.#forceClosePromise !== undefined) return this.#forceClosePromise;
+    if (this.#closeTimer !== undefined) clearTimeout(this.#closeTimer);
+    this.#closeTimer = undefined;
+    this.#forceClosePromise = Promise.resolve().then(async () => {
+      try {
+        await this.#routes.forceClose(this.#bindingId);
+      } catch (cause) {
+        this.#report(new McpAppFrameRelayError('MCP App force close failed.', cause));
+      } finally {
+        this.#completeClose();
+      }
+    });
+    return this.#forceClosePromise;
   }
 
   #postAll(messages: readonly McpAppJsonValue[]): void {
