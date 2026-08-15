@@ -26,6 +26,7 @@ button:focus-visible, a:focus-visible { outline: 3px solid #72a6ff; outline-offs
 .connection--error { color: #b31b23; }
 .connection--error > span { background: #c01d26; }
 .page-content { margin: 0 auto; max-width: 1320px; padding: 35px 34px 64px; }
+.mcp-content { background: #0d141e; min-height: calc(100vh - 78px); padding: 35px 34px 64px; }
 .page-heading { margin-bottom: 30px; }
 h1 { font-size: clamp(31px, 4vw, 40px); letter-spacing: -0.055em; line-height: 1.08; margin: 0; }
 h2 { color: #4f5866; font-size: 14px; font-weight: 750; letter-spacing: 0.015em; margin: 0 0 14px; text-transform: uppercase; }
@@ -129,6 +130,7 @@ td { border-top: 1px solid #d9dee7; font-size: 14px; padding: 12px 10px; vertica
   .menu-glyph { display: none; }
   .connection { font-size: 12px; }
   .page-content { padding: 27px 20px 45px; }
+  .mcp-content { min-height: calc(100vh - 58px); padding: 27px 20px 45px; }
   .definition-row { gap: 19px; grid-template-columns: 1fr; padding: 0 10px; }
   .epoch-row { grid-template-columns: 1fr 1fr; }
   .epoch-row > div:nth-child(2) { border-right: 0; }

@@ -4,6 +4,9 @@ import { createRoot } from 'react-dom/client';
 import type { Diagnostic } from '../../agent-bundle/src/core/diagnostics.ts';
 import type { ProjectStatus } from '../../agent-bundle/src/dev/types.ts';
 
+import { McpPage, type McpConfigDownload } from './mcp/mcp-page.tsx';
+import { McpRouteClient } from './mcp/mcp-route-client.ts';
+import { createMcpSessionController } from './mcp/mcp-session-controller.ts';
 import { overviewFor } from './overview-model.ts';
 import { ProjectClient } from './project-client.ts';
 import { SkillClient } from './skill-client.ts';
@@ -25,6 +28,19 @@ const sourceFor = (diagnostic: Diagnostic): string =>
 const errorMessage = (reason: unknown): string =>
   reason instanceof Error ? reason.message : 'Foreground project state could not be refreshed.';
 
+const mcpTargets = ['portable', 'claude', 'codex'] as const;
+
+const createMcpController = () => createMcpSessionController({ routes: new McpRouteClient() });
+
+const downloadMcpConfig = ({ blob, filename }: McpConfigDownload): void => {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.download = filename;
+  link.href = url;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+};
+
 const StateMark = ({ state }: { readonly state: string }) => (
   <span aria-hidden="true" className={`state-mark state-mark--${state}`}>{
     state === 'active' || state === 'ready' || state === 'built' ? '✓'
@@ -33,9 +49,12 @@ const StateMark = ({ state }: { readonly state: string }) => (
   }</span>
 );
 
-type WorkbenchPage = 'overview' | 'skills';
+type WorkbenchPage = 'mcp' | 'overview' | 'skills';
 
-const pageForHash = (): WorkbenchPage => window.location.hash === '#skills' ? 'skills' : 'overview';
+const pageForHash = (): WorkbenchPage => {
+  if (window.location.hash === '#mcp') return 'mcp';
+  return window.location.hash === '#skills' ? 'skills' : 'overview';
+};
 
 const Navigation = ({ onNavigate, page }: {
   readonly onNavigate: (page: WorkbenchPage) => void;
@@ -59,6 +78,15 @@ const Navigation = ({ onNavigate, page }: {
   >
     <span aria-hidden="true" className="nav-glyph">⌘</span>
     Skills
+  </a>
+  <a
+    aria-current={page === 'mcp' ? 'page' : undefined}
+    className={page === 'mcp' ? 'nav-item nav-item--active' : 'nav-item'}
+    href="#mcp"
+    onClick={(event) => { event.preventDefault(); onNavigate('mcp'); }}
+  >
+    <span aria-hidden="true" className="nav-glyph">⌁</span>
+    MCP playground
   </a>
 </aside>;
 
@@ -181,16 +209,50 @@ const SkillsScreen = ({ connectionError, onNavigate, skillClient, status }: {
   </main>
 </div>;
 
+const McpScreen = ({ connectionError, controller, onNavigate, onResetSession, status }: {
+  readonly connectionError?: string;
+  readonly controller: ReturnType<typeof createMcpController>;
+  readonly onNavigate: (page: WorkbenchPage) => void;
+  readonly onResetSession: () => void;
+  readonly status: ProjectStatus;
+}) => {
+  const activeEpoch = status.artifact.state === 'missing' ? undefined : status.artifact.activeEpoch;
+  const targetOptions = mcpTargets.filter((target) => activeEpoch !== undefined && target in activeEpoch.targetDigests);
+  return <div className="workbench-shell">
+    <Navigation onNavigate={onNavigate} page="mcp" />
+    <div className="canvas" id="mcp">
+      <header className="topbar">
+        <span className="menu-glyph" aria-hidden="true">☰</span>
+        <span className="topbar-title">Project workbench</span>
+        <span className={`connection${connectionError === undefined ? '' : ' connection--error'}`} role="status">
+          <span aria-hidden="true" />{connectionError === undefined ? 'Foreground server connected' : `Foreground server unavailable: ${connectionError}`}
+        </span>
+      </header>
+      <div className="mcp-content">
+        <McpPage
+          controller={controller}
+          epochOptions={activeEpoch === undefined ? [] : [activeEpoch.id]}
+          initialBinding={activeEpoch === undefined ? undefined : { epochId: activeEpoch.id }}
+          onDownloadConfig={downloadMcpConfig}
+          onResetSession={onResetSession}
+          targetOptions={targetOptions}
+        />
+      </div>
+    </div>
+  </div>;
+};
+
 const Workbench = () => {
   const client = useRef<ProjectClient>();
   const skillClient = useRef<SkillClient>();
   const [connectionError, setConnectionError] = useState<string>();
   const [error, setError] = useState<string>();
+  const [mcpController, setMcpController] = useState(createMcpController);
   const [page, setPage] = useState<WorkbenchPage>(pageForHash);
   const [status, setStatus] = useState<ProjectStatus>();
 
   const navigate = (next: WorkbenchPage): void => {
-    const hash = next === 'skills' ? '#skills' : '#overview';
+    const hash = next === 'mcp' ? '#mcp' : next === 'skills' ? '#skills' : '#overview';
     if (window.location.hash !== hash) window.history.pushState(undefined, '', hash);
     setPage(next);
   };
@@ -225,7 +287,18 @@ const Workbench = () => {
     return () => window.removeEventListener('hashchange', updatePage);
   }, []);
 
+  useEffect(() => () => { void mcpController.close().catch(() => undefined); }, [mcpController]);
+
   if (status !== undefined && client.current !== undefined && skillClient.current !== undefined) {
+    if (page === 'mcp') {
+      return <McpScreen
+        connectionError={connectionError}
+        controller={mcpController}
+        onNavigate={navigate}
+        onResetSession={() => setMcpController(createMcpController)}
+        status={status}
+      />;
+    }
     return page === 'skills'
       ? <SkillsScreen connectionError={connectionError} onNavigate={navigate} skillClient={skillClient.current} status={status} />
       : <Overview client={client.current} connectionError={connectionError} onNavigate={navigate} onStatus={setStatus} status={status} />;
