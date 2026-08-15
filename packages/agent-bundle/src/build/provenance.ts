@@ -1,4 +1,4 @@
-import { relative, resolve } from 'node:path';
+import { isAbsolute, relative, resolve, win32 } from 'node:path';
 
 import { assertInside } from '../core/paths.ts';
 
@@ -91,13 +91,34 @@ const flattenCompilations = (compilation: JsonRecord): readonly JsonRecord[] => 
   ...recordsAt(compilation.children).flatMap(flattenCompilations),
 ];
 
+const isWindowsPath = (path: string): boolean => /^[a-z]:[\\/]/iu.test(path) || path.startsWith('\\\\');
+
+const isLexicallyInside = (root: string, path: string): boolean => {
+  const useWindowsPaths = isWindowsPath(root) || isWindowsPath(path);
+  const resolvedRoot = useWindowsPaths ? win32.resolve(root) : resolve(root);
+  const resolvedPath = useWindowsPaths ? win32.resolve(path) : resolve(path);
+  const relativePath = useWindowsPaths
+    ? win32.relative(resolvedRoot, resolvedPath)
+    : relative(resolvedRoot, resolvedPath);
+  const relativeIsAbsolute = useWindowsPaths ? win32.isAbsolute(relativePath) : isAbsolute(relativePath);
+  return relativePath === '' || (!relativeIsAbsolute && relativePath !== '..' && !relativePath.startsWith(`..${useWindowsPaths ? '\\' : '/'}`));
+};
+
 const isIgnoredModule = (path: string, ignoredSourcePaths: readonly string[]): boolean =>
   path.replaceAll('\\', '/').split('/').includes('node_modules') ||
-  ignoredSourcePaths.some((ignored) => {
-    const resolvedIgnored = resolve(ignored);
-    const resolvedPath = resolve(path);
-    return resolvedPath === resolvedIgnored || resolvedPath.startsWith(`${resolvedIgnored}/`);
-  });
+  ignoredSourcePaths.some((ignored) => isLexicallyInside(ignored, path));
+
+const isKnownNoAuthorSourceModule = (module: JsonRecord): boolean => {
+  const type = stringAt(module, 'type');
+  const moduleType = stringAt(module, 'moduleType');
+  const name = stringAt(module, 'name');
+  return recordsAt(module.modules).length > 0 ||
+    type === 'runtime' ||
+    type === 'external' ||
+    moduleType === 'runtime' ||
+    moduleType === 'external' ||
+    name?.startsWith('external ') === true;
+};
 
 const assertProjectInput = (projectRoot: string, source: string): string =>
   assertInside(projectRoot, source);
@@ -120,7 +141,11 @@ const sourcesForAsset = (options: {
     ...modules.flatMap((module) => {
       if (!canUseAllModules && !hasSharedChunk(assetChunks, chunksAt(module))) return [];
       const source = stringAt(module, 'nameForCondition');
-      if (source === undefined || isIgnoredModule(source, options.ignoredSourcePaths)) return [];
+      if (source === undefined) {
+        if (isKnownNoAuthorSourceModule(module)) return [];
+        throw new Error('Bundler stats selected a module without an authored source path.');
+      }
+      if (isIgnoredModule(source, options.ignoredSourcePaths)) return [];
       return [assertProjectInput(options.projectRoot, source)];
     }),
   ];
@@ -176,9 +201,15 @@ export const createOutputProvenance = (options: {
   readonly outputs: readonly ArtifactOutputCandidate[];
   readonly projectRoot: string;
 }): readonly ArtifactOutputProvenance[] => Object.freeze(options.outputs
-  .map((output) => Object.freeze({
-    kind: output.kind,
-    path: toPosixRelative(options.artifactRoot, output.path),
-    sourceInputs: sourceInputsFor(options.projectRoot, output.sourceInputs),
-  }))
+  .map((output) => {
+    const sourceInputs = sourceInputsFor(options.projectRoot, output.sourceInputs);
+    if (sourceInputs.length === 0) {
+      throw new Error(`Artifact output ${JSON.stringify(output.path)} must declare source inputs.`);
+    }
+    return Object.freeze({
+      kind: output.kind,
+      path: toPosixRelative(options.artifactRoot, output.path),
+      sourceInputs,
+    });
+  })
   .sort((left, right) => left.path.localeCompare(right.path)));

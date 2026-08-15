@@ -316,13 +316,33 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
     diagnostics.push(...schemaDiagnostics('marketplace', validateMarketplace(marketplace), validateMarketplace.errors));
   }
 
+  const targetSourceInputs = model.targets
+    .filter((target) => target.name === codexName)
+    .map((target) => target.provenance.sourcePath);
+  const mcpSourceInputs = model.mcpServers
+    .filter((server) => selectedForCodex(server.targets))
+    .map((server) => server.provenance.sourcePath);
+  const hookSourceInputs = model.hooks
+    .filter((hook) => selectedForCodex(hook.targets))
+    .map((hook) => hook.provenance.sourcePath);
+  const nativeHookSourceInputs = model.nativeHooks
+    ?.filter((hook) => hook.target === codexName)
+    .flatMap((hook) => [hook.provenance.sourcePath, hook.source]) ?? [];
+  const skillSourceInputs = model.skills
+    .filter((skill) => selectedForCodex(skill.targets))
+    .map((skill) => skill.source);
+
   const entries: TargetArtifactEntry[] = [{
     content: `${stableJson(plugin)}\n`,
     kind: 'write',
     relativePath: '.codex-plugin/plugin.json',
     sourceInputs: sourceInputs(
       model.metadata.provenance.sourcePath,
-      ...model.targets.filter((target) => target.name === codexName).map((target) => target.provenance.sourcePath),
+      ...targetSourceInputs,
+      ...mcpSourceInputs,
+      ...hookSourceInputs,
+      ...nativeHookSourceInputs,
+      ...skillSourceInputs,
     ),
   }];
   if (mcp !== undefined && validateMcp(mcp)) {
@@ -330,9 +350,7 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
       content: `${stableJson(mcp)}\n`,
       kind: 'write',
       relativePath: '.mcp.json',
-      sourceInputs: sourceInputs(...model.mcpServers
-        .filter((server) => selectedForCodex(server.targets))
-        .map((server) => server.provenance.sourcePath)),
+      sourceInputs: sourceInputs(...targetSourceInputs, ...mcpSourceInputs),
     });
   }
   if (hookDocument !== undefined && validateHooks(hookDocument)) {
@@ -341,10 +359,9 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
       kind: 'write',
       relativePath: 'hooks/hooks.json',
       sourceInputs: sourceInputs(
-        ...model.hooks.filter((hook) => selectedForCodex(hook.targets)).map((hook) => hook.provenance.sourcePath),
-        ...model.nativeHooks
-          ?.filter((hook) => hook.target === codexName)
-          .flatMap((hook) => [hook.provenance.sourcePath, hook.source]) ?? [],
+        ...targetSourceInputs,
+        ...hookSourceInputs,
+        ...nativeHookSourceInputs,
       ),
     });
   }
@@ -353,7 +370,7 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
       content: `${stableJson(marketplace)}\n`,
       kind: 'write',
       relativePath: '.agents/plugins/marketplace.json',
-      sourceInputs: sourceInputs(model.metadata.provenance.sourcePath),
+      sourceInputs: sourceInputs(model.metadata.provenance.sourcePath, ...targetSourceInputs),
     });
   }
   for (const skill of model.skills) {

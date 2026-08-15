@@ -239,7 +239,7 @@ it('plans byte-stable native Codex and Claude plugin trees from the same frozen 
   ]);
   expect(codex.map((entry) => entry.sourceInputs)).toEqual([
     ['/workspace/agent-bundle.config.ts'],
-    ['/workspace/agent-bundle.config.ts'],
+    ['/workspace/agent-bundle.config.ts', '/workspace/skills/review/SKILL.md'],
     ['/workspace/agent-bundle.config.ts'],
     ['/workspace/skills/review/SKILL.md'],
     ['/workspace/skills/review/SKILL.md', '/workspace/skills/review/assets/icon.bin'],
@@ -247,7 +247,7 @@ it('plans byte-stable native Codex and Claude plugin trees from the same frozen 
   ]);
   expect(claude.map((entry) => entry.sourceInputs)).toEqual([
     ['/workspace/agent-bundle.config.ts'],
-    ['/workspace/agent-bundle.config.ts'],
+    ['/workspace/agent-bundle.config.ts', '/workspace/skills/review/SKILL.md'],
     ['/workspace/agent-bundle.config.ts'],
     ['/workspace/skills/review/SKILL.md'],
     ['/workspace/skills/review/SKILL.md', '/workspace/skills/review/assets/icon.bin'],
@@ -272,6 +272,62 @@ it('keeps Codex plugin and marketplace interface validator contracts separate', 
     developerName: 'review-tools',
   });
   expect(marketplace.interface).toEqual({ displayName: 'review-tools' });
+});
+
+it('records every selected component provenance for generated host documents', () => {
+  const model = {
+    ...plugin,
+    hooks: [{
+      event: 'sessionStart' as const,
+      id: 'hook:session-start',
+      name: 'session-start',
+      provenance: { kind: 'config' as const, sourcePath: '/inputs/hook.config.ts' },
+      source: '/inputs/hook-handler.ts',
+      targets: ['codex', 'claude'],
+      tools: [],
+    }],
+    mcpServers: plugin.mcpServers.map((server) => ({
+      ...server,
+      provenance: { kind: 'config' as const, sourcePath: '/inputs/mcp.config.ts' },
+    })),
+    metadata: {
+      ...plugin.metadata,
+      provenance: { kind: 'config' as const, sourcePath: '/inputs/plugin.config.ts' },
+    },
+    skills: plugin.skills.map((skill) => ({
+      ...skill,
+      provenance: { kind: 'conventional' as const, sourcePath: '/inputs/skills/review/SKILL.md' },
+      source: '/inputs/skills/review/SKILL.md',
+    })),
+    targets: plugin.targets.map((target) => ({
+      ...target,
+      provenance: { kind: 'config' as const, sourcePath: `/inputs/${target.name}.target.ts` },
+    })),
+  } satisfies NormalizedPlugin;
+
+  for (const target of ['codex', 'claude'] as const) {
+    const byPath = Object.fromEntries(planEntries(model, target).map((entry) => [entry.relativePath, entry]));
+    const common = [
+      '/inputs/plugin.config.ts',
+      `/inputs/${target}.target.ts`,
+      '/inputs/mcp.config.ts',
+      '/inputs/hook.config.ts',
+      '/inputs/skills/review/SKILL.md',
+    ];
+    expect(byPath[target === 'codex' ? '.codex-plugin/plugin.json' : '.claude-plugin/plugin.json']?.sourceInputs).toEqual(common);
+    expect(byPath['.mcp.json']?.sourceInputs).toEqual([
+      `/inputs/${target}.target.ts`,
+      '/inputs/mcp.config.ts',
+    ]);
+    expect(byPath['hooks/hooks.json']?.sourceInputs).toEqual([
+      `/inputs/${target}.target.ts`,
+      '/inputs/hook.config.ts',
+    ]);
+    expect(byPath[target === 'codex' ? '.agents/plugins/marketplace.json' : '.claude-plugin/marketplace.json']?.sourceInputs).toEqual([
+      '/inputs/plugin.config.ts',
+      `/inputs/${target}.target.ts`,
+    ]);
+  }
 });
 
 it('applies only native path-token semantics and surfaces exact capability diagnostics', () => {
