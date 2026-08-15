@@ -209,11 +209,12 @@ export class McpRouteClient {
     return routeConnection(response.connection);
   }
 
-  async cancel(id: string, requestId: string): Promise<boolean> {
+  async cancel(id: string, requestId: string, signal?: AbortSignal): Promise<boolean> {
     const response = asRecord(await this.#json(`${this.#sessionPath(id)}/cancel`, {
       body: JSON.stringify({ requestId }),
       headers: { 'content-type': 'application/json' },
       method: 'POST',
+      signal,
     }));
     if (typeof response.cancelled !== 'boolean') throw new McpRouteClientError('AB8019', 'Foreground MCP route returned an invalid cancellation response.');
     return response.cancelled;

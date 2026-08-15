@@ -126,6 +126,7 @@ export class AgentBundleRemoteTransport implements Transport {
   readonly #binding: McpRouteSessionBinding;
   readonly #routes: McpRouteClient;
   #closed = false;
+  #cancellations = new Map<AbortController, Promise<void>>();
   #closePromise: Promise<void> | undefined;
   #lastSequence = 0;
   #operationControllers = new Set<AbortController>();
@@ -172,12 +173,14 @@ export class AgentBundleRemoteTransport implements Transport {
     this.#closed = true;
     this.#streamAbort?.abort();
     for (const controller of this.#operationControllers) controller.abort();
+    for (const controller of this.#cancellations.keys()) controller.abort();
     const reader = this.#streamReader;
     const readerCancellation = reader?.cancel().catch(() => undefined);
     this.#closePromise = (async () => {
       try {
         await settled(this.#startPromise);
         await settled(this.#sendTail);
+        await Promise.all([...this.#cancellations.values()].map(settled));
         await settled(this.#streamPromise);
         await settled(readerCancellation);
         const session = this.#session;
@@ -260,17 +263,24 @@ export class AgentBundleRemoteTransport implements Transport {
     this.#report(new AgentBundleRemoteTransportError('MCP transport received an invalid notification.'));
   }
 
-  async #cancel(value: unknown): Promise<void> {
+  #cancel(value: unknown): Promise<void> {
     const params = asRecord(value);
-    if (typeof params?.requestId !== 'number' && typeof params?.requestId !== 'string') {
+    const requestId = params?.requestId;
+    if (typeof requestId !== 'number' && typeof requestId !== 'string') {
       this.#report(new AgentBundleRemoteTransportError('MCP cancellation notification has an invalid request id.'));
-      return;
+      return Promise.resolve();
     }
-    try {
-      await this.#routes.cancel(this.sessionId, requestKey(params.requestId));
-    } catch (error) {
-      if (!this.#closed) this.#report(error);
-    }
+    const controller = new AbortController();
+    const cancellation = (async () => {
+      try {
+        await this.#routes.cancel(this.sessionId, requestKey(requestId), controller.signal);
+      } catch (error) {
+        if (!this.#closed) this.#report(error);
+      }
+    })();
+    this.#cancellations.set(controller, cancellation);
+    void cancellation.then(() => this.#cancellations.delete(controller));
+    return cancellation;
   }
 
   async #consumeStreams(first: Response): Promise<void> {
