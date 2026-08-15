@@ -1,14 +1,24 @@
+import type {} from './adapters/claude.ts';
+import type {} from './adapters/codex.ts';
+import type {} from './adapters/portable.ts';
+
 export { defineConfig, pathTokens } from './core/types.ts';
 export { startDevServer } from './api.ts';
 export type { DevServerSession, StartDevServerOptions } from './api.ts';
 export type {
   AgentBundleConfig,
+  AgentBundleConfigExtensions,
+  AgentBundleHostConfig,
   AgentBundleMcpApp,
   AgentBundleMcpConfig,
   AgentBundleMcpServer,
   ConfigFactory,
   ConfigFactoryContext,
   McpTransport,
+  NormalizationConfigExtension,
+  NormalizationTargetRegistry,
+  NormalizedConfigExtension,
+  NormalizedPlugin,
 } from './core/types.ts';
 export type {
   ActiveArtifactStatus,

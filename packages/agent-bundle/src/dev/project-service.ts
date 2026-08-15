@@ -399,7 +399,7 @@ export class ProjectService {
     const preparedLoaded = runtimeMetadata.config === loaded.config
       ? loaded
       : { ...loaded, config: runtimeMetadata.config as AgentBundleConfig };
-    const sourceDiagnostics = freezeDiagnostics(validateSource(preparedLoaded, discovered));
+    const sourceDiagnostics = freezeDiagnostics(validateSource(preparedLoaded, discovered, registry));
     const supplementalMetadataFailure = runtimeMetadata.changed;
     if (hasErrors(sourceDiagnostics)) {
       const source = sourceStatus(sourceDiagnostics, snapshot.revision);

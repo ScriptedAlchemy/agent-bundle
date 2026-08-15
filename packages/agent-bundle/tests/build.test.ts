@@ -97,6 +97,7 @@ const createProject = async (): Promise<TestProject> => {
 };
 
 const modelFor = (project: TestProject): NormalizedPlugin => ({
+  extensions: {},
   hooks: [],
   mcpServers: [],
   metadata: {

@@ -18,6 +18,7 @@ import type { ArtifactEpoch } from '../src/dev/types.ts';
 import { pathTokens, type AgentBundleConfig, type NormalizationTargetRegistry } from '../src/core/types.ts';
 
 const registry: NormalizationTargetRegistry = {
+  configExtensions: () => [],
   defaultTargetNames: () => ['portable'],
   has: (name) => ['portable', 'codex', 'claude'].includes(name),
   supports: () => true,

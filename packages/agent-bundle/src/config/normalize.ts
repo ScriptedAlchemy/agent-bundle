@@ -13,6 +13,7 @@ import type {
   CanonicalHookEvent,
   CanonicalHookTool,
   NormalizationTargetRegistry,
+  NormalizedConfigExtension,
   NormalizedHook,
   NormalizedMcpApp,
   NormalizedMcpServer,
@@ -309,6 +310,30 @@ const deepFreeze = <Value>(value: Value): Value => {
   return Object.freeze(value);
 };
 
+const normalizeExtensions = (
+  loaded: LoadedConfig,
+  registry: NormalizationTargetRegistry,
+  provenance: SourceProvenance,
+): Readonly<Record<string, NormalizedConfigExtension>> => {
+  const extensions = Object.create(null) as Record<string, NormalizedConfigExtension>;
+  const descriptors = registry.configExtensions();
+
+  for (const descriptor of [...descriptors].sort((left, right) => left.key.localeCompare(right.key))) {
+    if (!Object.hasOwn(loaded.config, descriptor.key)) continue;
+    const value = loaded.config[descriptor.key];
+    if (value === undefined) continue;
+    extensions[descriptor.key] = {
+      id: `extension:${descriptor.key}`,
+      key: descriptor.key,
+      provenance: { ...provenance },
+      target: descriptor.target,
+      value: structuredClone(value),
+    };
+  }
+
+  return deepFreeze(extensions);
+};
+
 const selectedTargetNames = (
   loaded: LoadedConfig,
   registry: NormalizationTargetRegistry,
@@ -370,6 +395,7 @@ export const normalizeProject = async (
   const scripts = normalizeScripts(loaded, targetNames);
   const model: NormalizedPlugin = {
     ...(loaded.config.marketplace === true ? { marketplace: true as const } : {}),
+    extensions: normalizeExtensions(loaded, registry, configProvenance),
     metadata: {
       ...(typeof description === 'string' ? { description } : {}),
       id: `plugin:${loaded.config.plugin.name}`,

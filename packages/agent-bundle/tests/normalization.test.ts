@@ -7,10 +7,12 @@ import {
   type NormalizationTargetRegistry,
 } from '../src/config/index.ts';
 import type { AgentBundleConfig } from '../src/core/types.ts';
+import type { Diagnostic } from '../src/core/diagnostics.ts';
 import type { DiscoveredProject } from '../src/config/discover.ts';
 import type { LoadedConfig } from '../src/config/load.ts';
 
 const registry: NormalizationTargetRegistry = {
+  configExtensions: () => [],
   defaultTargetNames: () => ['portable'],
   has: (name) => ['portable', 'codex', 'claude'].includes(name),
   supports: (name, capability) => capability === 'hooks' && name !== 'portable',
@@ -100,6 +102,93 @@ it.each([
   );
 });
 
+it('normalizes registered extensions and validates registered script and hook targets', async () => {
+  const extensionRegistry = {
+    configExtensions: () => Object.freeze([
+      Object.freeze({ key: 'example', target: 'example' }),
+    ]),
+    defaultTargetNames: () => ['example'],
+    has: (name: string) => name === 'example',
+    supports: (name: string, capability: string) =>
+      name === 'example' && capability === 'hooks',
+  } as NormalizationTargetRegistry & {
+    configExtensions(): readonly Readonly<{ key: string; target: string }>[];
+  };
+  const config: AgentBundleConfig = {
+    example: { nested: { enabled: true } },
+    hooks: { sessionStart: { handler: './hooks/start.ts', targets: ['example'] } },
+    ignored: { mustNotReachTheModel: true },
+    plugin: { name: 'extension-fixture', version: '1.0.0' },
+    scripts: {
+      run: {
+        entry: './packages/agent-bundle/src/config/normalize.ts',
+        targets: ['example'],
+      },
+    },
+  };
+  const loaded = loadedProject(config, { root: process.cwd() });
+  const sourceValidator = validateSource as unknown as (
+    loaded: LoadedConfig,
+    discovered: DiscoveredProject,
+    targetRegistry: NormalizationTargetRegistry,
+  ) => Diagnostic[];
+
+  expect(sourceValidator(loaded, { skills: [] }, extensionRegistry)).toEqual([]);
+
+  const model = await normalizeProject(loaded, { skills: [] }, extensionRegistry);
+  const extensions = (model as unknown as {
+    extensions: Readonly<Record<string, {
+      id: string;
+      key: string;
+      provenance: { kind: string; sourcePath: string };
+      target: string;
+      value: { nested: { enabled: boolean } };
+    }>>;
+  }).extensions;
+
+  expect(extensions).toEqual({
+    example: {
+      id: 'extension:example',
+      key: 'example',
+      provenance: { kind: 'config', sourcePath: loaded.configPath },
+      target: 'example',
+      value: { nested: { enabled: true } },
+    },
+  });
+  expect(Object.isFrozen(extensions)).toBe(true);
+  expect(Object.isFrozen(extensions.example?.value)).toBe(true);
+  expect(Object.isFrozen(extensions.example?.value.nested)).toBe(true);
+});
+
+it('reports unknown hook and script targets through the target registry', () => {
+  const targetRegistry: NormalizationTargetRegistry = {
+    configExtensions: () => [],
+    defaultTargetNames: () => ['example'],
+    has: (name) => name === 'example',
+    supports: () => false,
+  };
+  const loaded = loadedProject({
+    hooks: { stop: { handler: './hooks/stop.ts', targets: ['unknown'] } },
+    plugin: { name: 'registry-validation', version: '1.0.0' },
+    scripts: {
+      run: {
+        entry: './packages/agent-bundle/src/config/normalize.ts',
+        targets: ['unknown'],
+      },
+    },
+  }, { root: process.cwd() });
+  const sourceValidator = validateSource as unknown as (
+    config: LoadedConfig,
+    discovered: DiscoveredProject,
+    registry: NormalizationTargetRegistry,
+  ) => Diagnostic[];
+
+  expect(sourceValidator(loaded, { skills: [] }, targetRegistry).map(({ code }) => code)).toEqual([
+    'AB4203',
+    'AB4406',
+  ]);
+});
+
 it('produces root-independent IDs, complete provenance, and deeply immutable output', async () => {
   const leftRoot = '/workspace/left';
   const rightRoot = '/different/right';
@@ -169,7 +258,7 @@ it('reports stable source diagnostics for malformed and conflicting Skills', () 
     plugin: { name: 'review-tools', version: '1.0.0' },
   });
 
-  const diagnostics = validateSource(loaded, { skills: [first, duplicate] });
+  const diagnostics = validateSource(loaded, { skills: [first, duplicate] }, registry);
 
   expect(diagnostics.map(({ code }) => code)).toEqual([
     'AB4005',
@@ -186,7 +275,7 @@ it('reports stable source diagnostics for malformed and conflicting Skills', () 
 it('diagnoses a missing plugin object instead of throwing', () => {
   const loaded = loadedProject({} as AgentBundleConfig);
 
-  expect(validateSource(loaded, { skills: [] })).toMatchObject([
+  expect(validateSource(loaded, { skills: [] }, registry)).toMatchObject([
     { code: 'AB4000', sourcePath: loaded.configPath },
     { code: 'AB4001', sourcePath: loaded.configPath },
   ]);
@@ -213,6 +302,7 @@ it('validates reference-style links while ignoring Markdown code examples', () =
   const diagnostics = validateSource(
     loadedProject({ plugin: { name: 'review-tools', version: '1.0.0' } }),
     { skills: [document] },
+    registry,
   );
 
   expect(diagnostics).toMatchObject([
@@ -243,13 +333,13 @@ it('uses the first definition when validating shortcut Markdown references', () 
     plugin: { name: 'review-tools', version: '1.0.0' },
   });
 
-  expect(validateSource(loaded, { skills: [missing] })).toMatchObject([
+  expect(validateSource(loaded, { skills: [missing] }, registry)).toMatchObject([
     {
       code: 'AB4005',
       message: expect.stringContaining('references/missing.md'),
     },
   ]);
-  expect(validateSource(loaded, { skills: [duplicateDefinition] })).toEqual([]);
+  expect(validateSource(loaded, { skills: [duplicateDefinition] }, registry)).toEqual([]);
 });
 
 it('does not treat definitions as uses and reserves an external first definition', () => {
@@ -270,8 +360,8 @@ it('does not treat definitions as uses and reserves an external first definition
     plugin: { name: 'review-tools', version: '1.0.0' },
   });
 
-  expect(validateSource(loaded, { skills: [unusedDefinition] })).toEqual([]);
-  expect(validateSource(loaded, { skills: [externalFirst] })).toEqual([]);
+  expect(validateSource(loaded, { skills: [unusedDefinition] }, registry)).toEqual([]);
+  expect(validateSource(loaded, { skills: [externalFirst] }, registry)).toEqual([]);
 });
 
 it('reports unknown targets, duplicate IDs, and portable output collisions', async () => {

@@ -8,13 +8,18 @@ export type { SkillDocument, SkillResource } from './skill.ts';
 export { validateModel, validateSource } from './validate.ts';
 export type {
   AgentBundleConfig,
+  AgentBundleConfigExtensions,
   AgentBundleDevConfig,
   AgentBundleDevRuntimeConfig,
+  AgentBundleHostConfig,
+  AgentBundlePortableConfig,
+  NormalizationConfigExtension,
   NormalizationTargetRegistry,
   AgentBundleMcpApp,
   AgentBundleMcpConfig,
   AgentBundleMcpServer,
   McpTransport,
+  NormalizedConfigExtension,
   NormalizedMetadata,
   NormalizedMcpApp,
   NormalizedMcpServer,

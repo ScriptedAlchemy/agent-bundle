@@ -216,6 +216,51 @@ it('uses a root-independent digest for equivalent normalized project models', as
   }
 });
 
+it('changes the canonical model digest when a registered extension changes', async () => {
+  const leftRoot = await createProject();
+  const rightRoot = await createProject();
+  try {
+    await Promise.all([
+      writeFile(join(leftRoot, 'agent-bundle.config.ts'), [
+        'export default {',
+        "  plugin: { name: 'extension-identity', version: '1.0.0' },",
+        "  targets: ['portable'],",
+        "  portable: { compatibility: 'v1' },",
+        '};',
+        '',
+      ].join('\n')),
+      writeFile(join(rightRoot, 'agent-bundle.config.ts'), [
+        'export default {',
+        "  plugin: { name: 'extension-identity', version: '1.0.0' },",
+        "  targets: ['portable'],",
+        "  portable: { compatibility: 'v2' },",
+        '};',
+        '',
+      ].join('\n')),
+    ]);
+    const [leftPrepared, rightPrepared] = await Promise.all([
+      new ProjectService({ root: leftRoot }).prepare('build'),
+      new ProjectService({ root: rightRoot }).prepare('build'),
+    ]);
+    const [left, right] = await Promise.all([
+      new ArtifactService({ createEpochId: () => 'epoch-left-extension', epochStore: new EpochStore({ projectRoot: leftRoot }) })
+        .build(leftPrepared),
+      new ArtifactService({ createEpochId: () => 'epoch-right-extension', epochStore: new EpochStore({ projectRoot: rightRoot }) })
+        .build(rightPrepared),
+    ]);
+
+    expect(left.outcome).toBe('succeeded');
+    expect(right.outcome).toBe('succeeded');
+    if (left.outcome !== 'succeeded' || right.outcome !== 'succeeded') throw new Error('Extension fixtures did not build.');
+    expect(left.epoch.modelDigest).not.toBe(right.epoch.modelDigest);
+  } finally {
+    await Promise.all([
+      rm(leftRoot, { force: true, recursive: true }),
+      rm(rightRoot, { force: true, recursive: true }),
+    ]);
+  }
+});
+
 it('rejects a tampered staging transfer, retains the last good epoch, and cleans the failed attempt', async () => {
   const root = await createProject();
   const store = new EpochStore({ projectRoot: root });

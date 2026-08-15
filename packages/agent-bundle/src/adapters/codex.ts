@@ -4,7 +4,12 @@ import { posix } from 'node:path';
 
 import { stableJson } from '../core/digest.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
-import { pathTokens, type NormalizedMcpServer, type NormalizedPlugin } from '../core/types.ts';
+import {
+  pathTokens,
+  type AgentBundleHostConfig,
+  type NormalizedMcpServer,
+  type NormalizedPlugin,
+} from '../core/types.ts';
 import capabilityTable from './capabilities/codex-0.147.0.json' with { type: 'json' };
 import { mergeHookDocuments, nativeHooksFor, planHooks } from './hook-contract.ts';
 import hooksSchema from './schemas/codex/hooks.schema.json' with { type: 'json' };
@@ -12,6 +17,12 @@ import marketplaceSchema from './schemas/codex/marketplace.schema.json' with { t
 import mcpSchema from './schemas/codex/mcp.schema.json' with { type: 'json' };
 import pluginSchema from './schemas/codex/plugin.schema.json' with { type: 'json' };
 import type { TargetAdapter, TargetArtifactEntry, TargetArtifactPlan } from './types.ts';
+
+declare module '../core/types.ts' {
+  interface AgentBundleConfigExtensions {
+    codex?: AgentBundleHostConfig;
+  }
+}
 
 const codexName = 'codex';
 const installFormats = addFormats as unknown as (target: Ajv2020) => void;
@@ -325,6 +336,7 @@ export const codexAdapter: TargetAdapter = Object.freeze({
     sse: capabilityTable.mcp.sse,
     skills: capabilityTable.plugin.skills,
   }),
+  configExtension: Object.freeze({ key: codexName }),
   mcpPathTokens: Object.freeze({
     args: Object.freeze({}),
     cwd: Object.freeze({}),

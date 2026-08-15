@@ -147,6 +147,12 @@ const canonicalProvenance = (
 
 const canonicalModel = (model: NormalizedPlugin, root: string): unknown => Object.freeze({
   ...model,
+  extensions: Object.freeze(Object.fromEntries(Object.entries(model.extensions)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, extension]) => [key, Object.freeze({
+      ...extension,
+      provenance: canonicalProvenance(root, extension.provenance),
+    })]))),
   hooks: model.hooks.map((hook) => Object.freeze({
     ...hook,
     provenance: canonicalProvenance(root, hook.provenance),

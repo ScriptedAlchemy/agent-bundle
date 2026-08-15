@@ -5,8 +5,10 @@ import { expect, it } from '@rstest/core';
 import { TargetRegistry, createDefaultRegistry } from '../src/adapters/registry.ts';
 import { portableAdapter } from '../src/adapters/portable.ts';
 import type { NormalizedPlugin } from '../src/core/types.ts';
+import type { TargetAdapter } from '../src/adapters/types.ts';
 
 const plugin = (): NormalizedPlugin => ({
+  extensions: {},
   hooks: [],
   metadata: {
     description: 'A portable test plugin',
@@ -49,6 +51,25 @@ const plugin = (): NormalizedPlugin => ({
       provenance: { kind: 'config', sourcePath: '/workspace/agent-bundle.config.ts' },
     },
   ],
+});
+
+it('rejects duplicate adapter config-extension keys and freezes the registry snapshot', () => {
+  const adapter = (name: string): TargetAdapter => ({
+    capabilities: {},
+    configExtension: { key: 'example' },
+    name,
+    plan: () => ({ diagnostics: [], entries: [] }),
+    validateModel: () => [],
+  });
+  const registry = new TargetRegistry().register(adapter('first'));
+  const extensions = (registry as unknown as {
+    configExtensions(): readonly Readonly<{ key: string; target: string }>[];
+  }).configExtensions();
+
+  expect(extensions).toEqual([{ key: 'example', target: 'first' }]);
+  expect(Object.isFrozen(extensions)).toBe(true);
+  expect(Object.isFrozen(extensions[0])).toBe(true);
+  expect(() => registry.register(adapter('second'))).toThrow('example');
 });
 
 it('plans a schema-valid skills-only plugin with every discovered resource', () => {

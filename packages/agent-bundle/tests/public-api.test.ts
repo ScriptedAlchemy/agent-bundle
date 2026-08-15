@@ -6,7 +6,13 @@ import { promisify } from 'node:util';
 
 import { expect, it } from '@rstest/core';
 
-import { defineConfig, pathTokens, type AgentBundleConfig } from '../src/index.ts';
+import {
+  defineConfig,
+  pathTokens,
+  type AgentBundleConfig,
+  type NormalizedConfigExtension,
+  type NormalizedPlugin,
+} from '../src/index.ts';
 import { runCli } from '../src/cli.ts';
 import { writeManifest } from '../src/build/emit.ts';
 import type {
@@ -70,6 +76,27 @@ it('exposes an optional author-facing development runtime declaration', () => {
   expect(config.dev?.runtime?.provider).toBe('./src/dev/provider.ts');
   expect(providerFactory).toBeUndefined();
   expect(provider).toBeUndefined();
+});
+
+it('exposes bundled adapter extension and normalized-extension types from the root import', () => {
+  const config = {
+    claude: { nativeHooks: './claude-hooks.json' },
+    codex: { nativeHooks: './codex-hooks.json' },
+    plugin: { name: 'typed-extension-fixture', version: '1.0.0' },
+    portable: { compatibility: 'portable-v1' },
+  } satisfies AgentBundleConfig;
+  const extension: NormalizedConfigExtension = {
+    id: 'extension:portable',
+    key: 'portable',
+    provenance: { kind: 'config', sourcePath: '/workspace/agent-bundle.config.ts' },
+    target: 'portable',
+    value: config.portable,
+  };
+  const model = {
+    extensions: { portable: extension },
+  } satisfies Pick<NormalizedPlugin, 'extensions'>;
+
+  expect(model.extensions.portable.key).toBe('portable');
 });
 
 it('loads every public subpath and reports the package version', async () => {
