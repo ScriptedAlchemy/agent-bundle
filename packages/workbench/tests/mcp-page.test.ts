@@ -3,13 +3,16 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from '@rstest/core';
 
 import type { McpBrowserSessionModel } from '../src/mcp/mcp-session-model.ts';
+import type { McpAppPreviewClient } from '../src/mcp/mcp-app-preview.tsx';
 import {
   McpPage,
   createMcpPageActionTracker,
   createMcpPageActionSession,
   mcpConfigDownload,
+  mcpAppPreviewSourceFor,
   mcpPageControllerReplacementState,
   mcpPageSessionControls,
+  supportedMcpAppPreviewProfiles,
   type McpPageController,
 } from '../src/mcp/mcp-page.tsx';
 
@@ -79,6 +82,17 @@ const controller = (): McpPageController => ({
   },
 });
 
+const appPreviewClient: McpAppPreviewClient = {
+  close: async () => ({ lifecycle: 'closed' }),
+  create: async () => ({
+    bindingId: 'binding-weather',
+    profile: { kind: 'apps', profile: 'portable', resourceUri: 'ui://weather/forecast.html' },
+    resource: { html: '<main>Forecast</main>', kind: 'resource' },
+  }),
+  forceClose: async () => true,
+  message: async () => ({ accepted: true, lifecycle: 'initialized', messages: [] }),
+};
+
 describe('MCP page', () => {
   it('renders the epoch-bound lifecycle, ordered catalog, operations, history, and one accessible trace view', () => {
     const markup = renderToStaticMarkup(createElement(McpPage, {
@@ -120,6 +134,44 @@ describe('MCP page', () => {
     expect(download.filename).toBe('mcp-session-1-inspector.json');
     expect(download.blob.type).toBe('application/json');
     await expect(download.blob.text()).resolves.toContain('"command": "node"');
+  });
+
+  it('derives an App preview only from the current successful tool invocation', () => {
+    const invocation = controller().history[0]!;
+
+    expect(supportedMcpAppPreviewProfiles).toEqual(['portable', 'chatgpt', 'claude']);
+    expect(mcpAppPreviewSourceFor({ phase: 'ready', sessionId: 'session-1' }, invocation)).toEqual({
+      input: { city: 'Oslo' },
+      invocationId: 'previous-tool-call',
+      result: { content: [{ text: 'Cloudy', type: 'text' }] },
+      sessionId: 'session-1',
+      toolName: 'weather',
+    });
+    expect(mcpAppPreviewSourceFor({ phase: 'closed', sessionId: 'session-1' }, invocation)).toBeUndefined();
+    expect(mcpAppPreviewSourceFor({ phase: 'ready', sessionId: 'session-2' }, {
+      ...invocation,
+      operation: 'readResource',
+    })).toBeUndefined();
+    expect(mcpAppPreviewSourceFor({ phase: 'ready', sessionId: 'session-2' }, {
+      ...invocation,
+      error: { message: 'tool failure' },
+    })).toBeUndefined();
+  });
+
+  it('renders an explicit supported-profile picker and history preview entry point', () => {
+    const markup = renderToStaticMarkup(createElement(McpPage, {
+      appPreviewClient,
+      controller: { ...controller(), model: { ...model, phase: 'ready' } },
+      epochOptions: ['epoch-1'],
+      targetOptions: ['codex'],
+    }));
+
+    expect(markup).toContain('aria-label="MCP App preview controls"');
+    expect(markup).toContain('id="mcp-app-profile"');
+    expect(markup).toContain('<option value="portable" selected="">portable</option>');
+    expect(markup).toContain('<option value="chatgpt">chatgpt</option>');
+    expect(markup).toContain('<option value="claude">claude</option>');
+    expect(markup).toContain('Open App preview for previous-tool-call');
   });
 
   it('tracks interactions independently so cancellation and close recovery remain available', () => {
