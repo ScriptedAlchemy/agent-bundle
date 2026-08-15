@@ -5,6 +5,7 @@ import type { Diagnostic } from '../../agent-bundle/src/core/diagnostics.ts';
 import type { ProjectStatus } from '../../agent-bundle/src/dev/types.ts';
 
 import { InspectorSessionAdapter } from './inspector/adapter/inspector-session-adapter-entry.ts';
+import { McpAppClient } from './mcp/mcp-app-client.ts';
 import { McpPage, type McpConfigDownload } from './mcp/mcp-page.tsx';
 import { McpRouteClient } from './mcp/mcp-route-client.ts';
 import { createMcpSessionController } from './mcp/mcp-session-controller.ts';
@@ -239,7 +240,8 @@ const WorkbenchScreen = ({ children, connectionError, onNavigate, page }: {
   </div>
 </div>;
 
-const McpScreen = ({ connectionError, controller, onNavigate, onResetSession, status }: {
+const McpScreen = ({ appPreviewClient, connectionError, controller, onNavigate, onResetSession, status }: {
+  readonly appPreviewClient: McpAppClient;
   readonly connectionError?: string;
   readonly controller: ReturnType<typeof createMcpController>;
   readonly onNavigate: (page: WorkbenchPage) => void;
@@ -251,6 +253,7 @@ const McpScreen = ({ connectionError, controller, onNavigate, onResetSession, st
   return <WorkbenchScreen connectionError={connectionError} onNavigate={onNavigate} page="mcp">
     <div className="mcp-content">
       <McpPage
+        appPreviewClient={appPreviewClient}
         controller={controller}
         epochOptions={activeEpoch === undefined ? [] : [activeEpoch.id]}
         initialBinding={activeEpoch === undefined ? undefined : { epochId: activeEpoch.id }}
@@ -275,6 +278,7 @@ const InspectorScreen = ({ connectionError, controller, model, onNavigate }: {
 
 const Workbench = () => {
   const client = useRef<ProjectClient>();
+  const mcpAppClient = useRef<McpAppClient>();
   const skillClient = useRef<SkillClient>();
   const [connectionError, setConnectionError] = useState<string>();
   const [error, setError] = useState<string>();
@@ -282,6 +286,8 @@ const Workbench = () => {
   const [mcpModel, setMcpModel] = useState(() => mcpController.model);
   const [page, setPage] = useState<WorkbenchPage>(pageForHash);
   const [status, setStatus] = useState<ProjectStatus>();
+
+  if (mcpAppClient.current === undefined) mcpAppClient.current = new McpAppClient();
 
   const navigate = (next: WorkbenchPage): void => {
     const hash = next === 'mcp' ? '#mcp' : next === 'inspector' ? '#inspector' : next === 'skills' ? '#skills' : '#overview';
@@ -331,6 +337,7 @@ const Workbench = () => {
   if (status !== undefined && client.current !== undefined && skillClient.current !== undefined) {
     if (page === 'mcp') {
       return <McpScreen
+        appPreviewClient={mcpAppClient.current}
         connectionError={connectionError}
         controller={mcpController}
         onNavigate={navigate}

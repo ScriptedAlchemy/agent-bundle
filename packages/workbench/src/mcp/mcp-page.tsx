@@ -1,8 +1,20 @@
-import React, { useEffect, useRef, useState, type KeyboardEvent } from 'react';
+import React, { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react';
 
 import type { McpSessionBinding, McpSessionInspectorConfig, McpSessionOperation } from '../../../agent-bundle/src/dev/mcp-session-protocol.ts';
 
 import { McpJsonInput, type ImmutableJsonRecord } from './mcp-json-input.tsx';
+import {
+  createMcpAppPreviewController,
+  McpAppPreviewFrame,
+  type McpAppPreviewClient,
+  type McpAppPreviewController,
+  type McpAppPreviewState,
+} from './mcp-app-preview.tsx';
+import type {
+  McpAppHostContext,
+  McpAppJsonValue,
+  McpAppPreviewProfile,
+} from './mcp-app-client.ts';
 import type {
   McpBrowserSessionInvocation,
   McpBrowserSessionModel,
@@ -25,6 +37,8 @@ export interface McpPageController {
 }
 
 export interface McpPageProps {
+  /** Credential-owning foreground client; it is never passed to the sandbox frame. */
+  readonly appPreviewClient?: McpAppPreviewClient;
   readonly controller: McpPageController;
   readonly epochOptions: readonly string[];
   readonly initialBinding?: Partial<McpSessionBinding>;
@@ -40,6 +54,20 @@ export interface McpConfigDownload {
 }
 
 type TraceTab = 'raw' | 'logs' | 'progress';
+
+export interface McpPageAppPreviewSource {
+  readonly input: McpAppJsonValue;
+  readonly invocationId: string;
+  readonly result: McpAppJsonValue;
+  readonly sessionId: string;
+  readonly toolName: string;
+}
+
+export const supportedMcpAppPreviewProfiles: readonly McpAppPreviewProfile[] = Object.freeze([
+  'portable',
+  'chatgpt',
+  'claude',
+]);
 
 export interface McpPageActionTracker {
   readonly pending: readonly string[];
@@ -153,6 +181,44 @@ const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
 
 const text = (value: unknown): string | undefined => typeof value === 'string' && value.length > 0 ? value : undefined;
 
+const browserMcpAppHost = (): McpAppHostContext => {
+  const browser = typeof window === 'undefined' ? undefined : window;
+  const locale = browser?.navigator.language;
+  const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  return Object.freeze({
+    availableDisplayModes: Object.freeze(['inline']),
+    containerDimensions: Object.freeze({ height: Math.max(0, browser?.innerHeight ?? 0), width: Math.max(0, browser?.innerWidth ?? 0) }),
+    deviceCapabilities: Object.freeze({}),
+    displayMode: 'inline',
+    locale: typeof locale === 'string' && locale.length > 0 ? locale : 'en',
+    platform: 'web',
+    safeAreaInsets: Object.freeze({ bottom: 0, left: 0, right: 0, top: 0 }),
+    styles: Object.freeze({}),
+    theme: browser?.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light',
+    timeZone: typeof timeZone === 'string' && timeZone.length > 0 ? timeZone : 'UTC',
+    userAgent: browser?.navigator.userAgent ?? 'unknown',
+  });
+};
+
+export const mcpAppPreviewSourceFor = (
+  session: Pick<McpBrowserSessionModel, 'phase' | 'sessionId'>,
+  invocation: McpBrowserSessionInvocation,
+): McpPageAppPreviewSource | undefined => {
+  if (session.phase !== 'ready' || invocation.operation !== 'callTool' || invocation.error !== undefined || invocation.result === undefined) {
+    return undefined;
+  }
+  const request = isRecord(invocation.request) ? invocation.request : undefined;
+  const toolName = request === undefined ? undefined : text(request.name);
+  if (toolName === undefined || request === undefined || !Object.hasOwn(request, 'arguments')) return undefined;
+  return Object.freeze({
+    input: request.arguments as McpAppJsonValue,
+    invocationId: invocation.id,
+    result: invocation.result as McpAppJsonValue,
+    sessionId: session.sessionId,
+    toolName,
+  });
+};
+
 const catalogItems = (catalog: readonly unknown[], fallback: string): readonly CatalogItem[] =>
   catalog.map((entry, index) => {
     const record = isRecord(entry) ? entry : {};
@@ -209,7 +275,73 @@ const traceValue = (entry: McpBrowserSessionTimelineEntry): unknown => {
   return entry;
 };
 
-export const McpPage = ({ controller, epochOptions, initialBinding, onDownloadConfig, onResetSession, targetOptions }: McpPageProps) => {
+interface McpPageAppPreviewProps {
+  readonly client: McpAppPreviewClient;
+  readonly host: McpAppHostContext;
+  readonly onControllerChange: (controller: McpAppPreviewController | undefined) => void;
+  readonly previewProfile: McpAppPreviewProfile;
+  readonly source: McpPageAppPreviewSource;
+}
+
+const previewProfileName = (state: McpAppPreviewState, fallback: McpAppPreviewProfile): string => {
+  if (state.phase !== 'ready' && state.phase !== 'fallback') return fallback;
+  const profile = isRecord(state.preview.profile) ? text(state.preview.profile.profile) : undefined;
+  return profile ?? fallback;
+};
+
+/** Page-owned composition keeps the approved preview close promise ahead of session teardown. */
+const McpPageAppPreview = ({ client, host, onControllerChange, previewProfile, source }: McpPageAppPreviewProps) => {
+  const [state, setState] = useState<McpAppPreviewState>(() => Object.freeze({ phase: 'loading' }));
+  const controller = useRef<McpAppPreviewController>();
+  const iframe = useRef<HTMLIFrameElement>(null);
+
+  useEffect(() => {
+    const current = createMcpAppPreviewController({
+      client,
+      host,
+      input: source.input,
+      previewProfile,
+      result: source.result,
+      sessionId: source.sessionId,
+      toolName: source.toolName,
+    });
+    controller.current = current;
+    onControllerChange(current);
+    const unsubscribe = current.subscribe(setState);
+    void current.start();
+    return () => {
+      unsubscribe();
+      if (controller.current === current) controller.current = undefined;
+      onControllerChange(undefined);
+      void current.close();
+    };
+  }, [client, host, onControllerChange, previewProfile, source]);
+
+  useEffect(() => {
+    if (state.phase !== 'ready' || iframe.current === null || typeof window === 'undefined') return;
+    controller.current?.attachFrame(iframe.current, window);
+  }, [state]);
+
+  const fallback = state.phase === 'fallback' || state.phase === 'error' ? state.fallback : undefined;
+  return <section aria-busy={state.phase === 'loading'} aria-label="MCP App preview" className="mcp-page-app-preview">
+    <header>
+      <h3>MCP App preview</h3>
+      <dl><div><dt>Profile</dt><dd>{previewProfileName(state, previewProfile)}</dd></div></dl>
+    </header>
+    {state.phase === 'loading' ? <p role="status">Creating MCP App preview…</p> : undefined}
+    {state.phase === 'error' ? <p role="alert">{state.message}</p> : undefined}
+    {fallback === undefined ? undefined : <section aria-label="MCP App fallback" className="mcp-page-app-fallback">
+      <p role="status">Interactive App rendering is unavailable ({fallback.reason}). Showing the ordinary tool result instead.</p>
+      <details open><summary>Tool input</summary><pre><code>{display(fallback.input)}</code></pre></details>
+      <details open><summary>Tool result</summary><pre><code>{display(fallback.result)}</code></pre></details>
+    </section>}
+    {state.phase === 'ready' && state.preview.frame !== undefined
+      ? <McpAppPreviewFrame frame={state.preview.frame} iframeRef={iframe} title={`MCP App preview: ${source.toolName}`} />
+      : undefined}
+  </section>;
+};
+
+export const McpPage = ({ appPreviewClient, controller, epochOptions, initialBinding, onDownloadConfig, onResetSession, targetOptions }: McpPageProps) => {
   const [model, setModel] = useState(() => controller.model);
   const [epochId, setEpochId] = useState(initialBinding?.epochId ?? '');
   const [target, setTarget] = useState(initialBinding?.target ?? '');
@@ -222,7 +354,13 @@ export const McpPage = ({ controller, epochOptions, initialBinding, onDownloadCo
   const [cancelledRequests, setCancelledRequests] = useState<readonly string[]>([]);
   const [pendingActions, setPendingActions] = useState<readonly string[]>([]);
   const [traceTab, setTraceTab] = useState<TraceTab>('raw');
+  const [appPreview, setAppPreview] = useState<McpPageAppPreviewSource>();
+  const [appPreviewBusy, setAppPreviewBusy] = useState(false);
+  const [appPreviewProfile, setAppPreviewProfile] = useState<McpAppPreviewProfile>('portable');
+  const [appHost] = useState(browserMcpAppHost);
   const actionSession = useRef(createMcpPageActionSession());
+  const appPreviewController = useRef<McpAppPreviewController>();
+  const appPreviewGeneration = useRef(0);
   const controllerIdentity = useRef(controller);
   const requestNumber = useRef(0);
   const traceTabsByName = useRef<Partial<Record<TraceTab, HTMLButtonElement | null>>>({});
@@ -240,6 +378,44 @@ export const McpPage = ({ controller, epochOptions, initialBinding, onDownloadCo
   useEffect(() => {
     setCancelledRequests((current) => current.filter((id) => Object.hasOwn(model.activeRequests, id)));
   }, [model.activeRequests]);
+  useEffect(() => () => { void appPreviewController.current?.close(); }, []);
+
+  const setActiveAppPreviewController = useCallback((next: McpAppPreviewController | undefined): void => {
+    appPreviewController.current = next;
+  }, []);
+  const closeAppPreview = async (): Promise<void> => {
+    const generation = ++appPreviewGeneration.current;
+    const current = appPreviewController.current;
+    appPreviewController.current = undefined;
+    setAppPreview(undefined);
+    setAppPreviewBusy(true);
+    try {
+      await current?.close();
+    } finally {
+      if (appPreviewGeneration.current === generation) setAppPreviewBusy(false);
+    }
+  };
+  const openAppPreview = (source: McpPageAppPreviewSource, profile = appPreviewProfile): void => {
+    const generation = ++appPreviewGeneration.current;
+    const current = appPreviewController.current;
+    appPreviewController.current = undefined;
+    setAppPreview(undefined);
+    setAppPreviewBusy(true);
+    void current?.close().catch(() => undefined).finally(() => {
+      if (appPreviewGeneration.current !== generation) return;
+      setAppPreviewProfile(profile);
+      setAppPreview(source);
+      setAppPreviewBusy(false);
+    });
+    if (current === undefined) {
+      setAppPreviewProfile(profile);
+      setAppPreview(source);
+      setAppPreviewBusy(false);
+    }
+  };
+  useEffect(() => {
+    if (appPreview !== undefined && appPreview.sessionId !== model.sessionId) void closeAppPreview();
+  }, [appPreview?.sessionId, model.sessionId]);
 
   const nextRequestId = (): string => {
     requestNumber.current += 1;
@@ -310,7 +486,10 @@ export const McpPage = ({ controller, epochOptions, initialBinding, onDownloadCo
       {controls.recovery !== 'none' ? <div className="mcp-page-recovery" role="status">
         <p>This controller is terminal. Supply a new controller before opening another MCP session.</p>
         {controls.recovery === 'available'
-          ? <button onClick={onResetSession} type="button">Reset MCP session</button>
+          ? <button onClick={() => run('reset', async () => {
+            await closeAppPreview();
+            onResetSession?.();
+          })} type="button">Reset MCP session</button>
           : <button disabled type="button">New MCP session unavailable</button>}
       </div> : <form className="mcp-page-binding" onSubmit={(event) => {
         event.preventDefault();
@@ -335,8 +514,14 @@ export const McpPage = ({ controller, epochOptions, initialBinding, onDownloadCo
         </label>
         <div className="mcp-page-actions">
           {controls.open ? <button type="submit">Open MCP session</button> : undefined}
-          <button disabled={!controls.restart} onClick={() => run('restart', () => controller.restart())} type="button">Restart MCP session</button>
-          <button disabled={!controls.close} onClick={() => run('close', () => controller.close())} type="button">Close MCP session</button>
+          <button disabled={!controls.restart} onClick={() => run('restart', async () => {
+            await closeAppPreview();
+            return controller.restart();
+          })} type="button">Restart MCP session</button>
+          <button disabled={!controls.close} onClick={() => run('close', async () => {
+            await closeAppPreview();
+            return controller.close();
+          })} type="button">Close MCP session</button>
         </div>
       </form>}
       <div className="mcp-page-connection" aria-label="Negotiated connection">
@@ -413,13 +598,45 @@ export const McpPage = ({ controller, epochOptions, initialBinding, onDownloadCo
         <button disabled={model.phase !== 'ready' || isPending('invoke:listResourceTemplates')} onClick={() => invoke('listResourceTemplates', {})} type="button">List resource templates</button>
         <button disabled={model.phase !== 'ready' || isPending('invoke:listPrompts')} onClick={() => invoke('listPrompts', {})} type="button">List prompts</button>
       </div>
+      {appPreviewClient === undefined ? undefined : <section aria-label="MCP App preview controls" className="mcp-page-app-controls">
+        <div>
+          <h3>App preview</h3>
+          <p>Open a sandboxed preview from a successful tool call using the selected supported host profile.</p>
+        </div>
+        <label htmlFor="mcp-app-profile">Preview profile
+          <select disabled={appPreviewBusy} id="mcp-app-profile" onChange={(event) => {
+            const profile = event.currentTarget.value as McpAppPreviewProfile;
+            if (!supportedMcpAppPreviewProfiles.includes(profile)) return;
+            if (appPreview === undefined) {
+              setAppPreviewProfile(profile);
+              return;
+            }
+            openAppPreview(appPreview, profile);
+          }} value={appPreviewProfile}>
+            {supportedMcpAppPreviewProfiles.map((profile) => <option key={profile} value={profile}>{profile}</option>)}
+          </select>
+        </label>
+        {appPreview === undefined ? <p className="mcp-page-empty">Select a completed tool call below to create an App preview.</p> : <button disabled={appPreviewBusy} onClick={() => { void closeAppPreview(); }} type="button">Close App preview</button>}
+      </section>}
+      {appPreviewClient === undefined || appPreview === undefined ? undefined : <McpPageAppPreview
+        client={appPreviewClient}
+        host={appHost}
+        key={`${appPreview.invocationId}-${appPreviewProfile}`}
+        onControllerChange={setActiveAppPreviewController}
+        previewProfile={appPreviewProfile}
+        source={appPreview}
+      />}
       <section aria-label="Invocation history" className="mcp-page-history">
         <h3>Invocation history</h3>
-        {controller.history.length === 0 ? <p className="mcp-page-empty">No completed invocations yet.</p> : <ol>{controller.history.map((invocation) => <li key={invocation.id}>
+        {controller.history.length === 0 ? <p className="mcp-page-empty">No completed invocations yet.</p> : <ol>{controller.history.map((invocation) => {
+          const previewSource = mcpAppPreviewSourceFor(model, invocation);
+          return <li key={invocation.id}>
           <div><strong>{invocation.operation}</strong><span>{invocation.id}</span>{invocation.replayOf === undefined ? undefined : <span>Replay of {invocation.replayOf}</span>}</div>
           <pre><code>{display({ error: invocation.error, request: invocation.request, result: invocation.result, timing: invocation.timing })}</code></pre>
           <button disabled={model.phase !== 'ready' || isPending('replay')} onClick={() => run('replay', () => controller.replay({ id: nextRequestId(), invocationId: invocation.id }))} type="button">Replay {invocation.id}</button>
-        </li>)}</ol>}
+          {appPreviewClient === undefined || previewSource === undefined ? undefined : <button disabled={appPreviewBusy} onClick={() => openAppPreview(previewSource)} type="button">Open App preview for {invocation.id}</button>}
+        </li>;
+        })}</ol>}
       </section>
     </section>
 

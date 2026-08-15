@@ -21,7 +21,9 @@
 .mcp-page-history,
 .mcp-page-trace,
 .mcp-page-recovery,
-.mcp-page-diagnostics {
+.mcp-page-diagnostics,
+.mcp-page-app-controls,
+.mcp-page-app-preview {
   background: #16202e;
   border: 1px solid #34465d;
   border-radius: 0.75rem;
@@ -155,7 +157,10 @@
 .mcp-page-history,
 .mcp-page-trace,
 .mcp-page-recovery,
-.mcp-page-diagnostics {
+.mcp-page-diagnostics,
+.mcp-page-app-controls,
+.mcp-page-app-preview,
+.mcp-page-app-fallback {
   display: grid;
   gap: 0.65rem;
 }
@@ -191,6 +196,53 @@
   color: #c5d7ea;
 }
 
+.mcp-page-app-controls {
+  align-items: end;
+  display: grid;
+  gap: 0.65rem;
+  grid-template-columns: minmax(0, 1fr) minmax(10rem, 14rem) auto;
+}
+
+.mcp-page-app-controls > div,
+.mcp-page-app-controls label {
+  display: grid;
+  gap: 0.4rem;
+  min-width: 0;
+}
+
+.mcp-page-app-controls > p {
+  grid-column: 1 / -1;
+}
+
+.mcp-page-app-preview > header {
+  align-items: baseline;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+  justify-content: space-between;
+}
+
+.mcp-page-app-preview dl {
+  display: flex;
+  gap: 0.4rem;
+  margin: 0;
+}
+
+.mcp-page-app-preview dl div {
+  display: flex;
+  gap: 0.35rem;
+}
+
+.mcp-page-app-preview dd {
+  margin: 0;
+}
+
+.mcp-page-app-fallback {
+  display: grid;
+  gap: 0.65rem;
+  min-width: 0;
+}
+
 .mcp-page-tabs {
   display: flex;
   flex-wrap: wrap;
@@ -220,7 +272,8 @@
 @media (max-width: 42rem) {
   .mcp-page-heading,
   .mcp-page-catalog li,
-  .mcp-page-active li {
+  .mcp-page-active li,
+  .mcp-page-app-preview > header {
     align-items: stretch;
     flex-direction: column;
   }
@@ -231,5 +284,10 @@
 
   .mcp-page-actions > button {
     flex: 1 1 100%;
+  }
+
+  .mcp-page-app-controls {
+    align-items: stretch;
+    grid-template-columns: minmax(0, 1fr);
   }
 }
