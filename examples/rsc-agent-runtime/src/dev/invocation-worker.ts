@@ -1,10 +1,10 @@
-import { createFileRuntimeKernel } from '../runtime/state-file.js';
 import { requestFlightRenderWithFlight } from '../flight/request-render.js';
 import { lowerHookResult } from '../runtime/lower-hook.js';
 import { lowerMcpResult } from '../runtime/lower-mcp.js';
 import type {
   DevRuntimeInspectionRequest,
   DevRuntimeInspectionResponse,
+  EditEvent,
   RenderRequest,
   RuntimeSnapshot,
 } from '../runtime/contracts.js';
@@ -14,6 +14,13 @@ import { serializeInspection } from './serialize-inspection.js';
 
 const maximumInvocationRequestBytes = 1024 * 1024;
 const maximumInvocationFlightBytes = 2 * 1024 * 1024;
+const credentialShaped = /(?:api[-_]?key|authorization|bearer|credential|cookie|password|secret|token)/iu;
+const credentialValuePatterns = Object.freeze([
+  /\bsk-(?:proj-|ant-|live-)?[a-z0-9_-]{16,}\b/iu,
+  /\b(?:gh[pousr]_[a-z0-9]{20,}|github_pat_[a-z0-9_]{20,}|xox[baprs]-[a-z0-9-]{16,}|akia[a-z0-9]{16})\b/iu,
+  /\bbearer\s+[^\s,;]+/iu,
+  /(?:api[-_]?key|authorization|credential|cookie|password|secret|token)\s*[:=]\s*[^\s,;]+/iu,
+]);
 
 const asRecord = (value: unknown): Record<string, unknown> | undefined =>
   value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
@@ -26,9 +33,34 @@ const readRequiredString = (value: Record<string, unknown>, key: string): string
 
 const assertExactKeys = (value: Record<string, unknown>, keys: readonly string[]): void => {
   const unexpected = Object.keys(value).filter((key) => !keys.includes(key));
-  if (unexpected.length > 0) throw new Error(`Invocation request has unsupported fields: ${unexpected.sort().join(', ')}`);
+  if (unexpected.length > 0) throw new Error('Invocation request contains unsupported fields');
   const missing = keys.filter((key) => !(key in value));
-  if (missing.length > 0) throw new Error(`Invocation request requires ${missing.join(', ')}`);
+  if (missing.length > 0) throw new Error('Invocation request is missing required fields');
+};
+
+const assertNoSnapshotCredentials = (value: Record<string, unknown>): void => {
+  for (const [key, item] of Object.entries(value)) {
+    if (credentialShaped.test(key) || (typeof item === 'string' && credentialValuePatterns.some((pattern) => pattern.test(item)))) {
+      throw new Error('Runtime snapshot contains sensitive data');
+    }
+  }
+};
+
+const parseEdit = (value: unknown): EditEvent => {
+  const event = asRecord(value);
+  if (event === undefined) throw new Error('Runtime snapshot contains an invalid edit');
+  assertNoSnapshotCredentials(event);
+  assertExactKeys(event, ['eventId', 'host', 'path', 'recordedAt', 'sessionId', 'toolName']);
+  const host = readRequiredString(event, 'host');
+  if (host !== 'claude' && host !== 'codex') throw new Error('Runtime snapshot contains an invalid edit host');
+  return {
+    eventId: readRequiredString(event, 'eventId'),
+    host,
+    path: readRequiredString(event, 'path'),
+    recordedAt: readRequiredString(event, 'recordedAt'),
+    sessionId: readRequiredString(event, 'sessionId'),
+    toolName: readRequiredString(event, 'toolName'),
+  };
 };
 
 const parseSnapshot = (value: unknown): RuntimeSnapshot => {
@@ -36,14 +68,16 @@ const parseSnapshot = (value: unknown): RuntimeSnapshot => {
   const stateVersion = snapshot?.stateVersion;
   if (
     snapshot === undefined ||
-    !Array.isArray(snapshot.edits) ||
     typeof stateVersion !== 'number' ||
     !Number.isSafeInteger(stateVersion) ||
     stateVersion < 0
   ) {
     throw new Error('Invocation request requires a valid runtime snapshot');
   }
-  return { edits: snapshot.edits as RuntimeSnapshot['edits'], stateVersion };
+  assertNoSnapshotCredentials(snapshot);
+  assertExactKeys(snapshot, ['edits', 'stateVersion']);
+  if (!Array.isArray(snapshot.edits)) throw new Error('Invocation request requires a valid runtime snapshot');
+  return { edits: snapshot.edits.map(parseEdit), stateVersion };
 };
 
 const parseRequest = (value: unknown): DevRuntimeInspectionRequest => {
@@ -124,12 +158,34 @@ const renderRequestFor = (request: DevRuntimeInspectionRequest): RenderRequest =
   return { stateFile: request.stateFile, type: request.type };
 };
 
-const invoke = async (): Promise<DevRuntimeInspectionResponse> => {
+const hookStateVersion = (native: ReturnType<typeof lowerHookResult>): number => {
+  const match = /\bShared state now contains (\d+) edits?\./u.exec(native.hookSpecificOutput.additionalContext);
+  if (match === null) throw new Error('Rendered hook result did not contain a state version');
+  const stateVersion = Number(match[1]);
+  if (!Number.isSafeInteger(stateVersion) || stateVersion < 0) {
+    throw new Error('Rendered hook result contained an invalid state version');
+  }
+  return stateVersion;
+};
+
+const statusStateVersion = (protocol: ReturnType<typeof lowerMcpResult>): number => {
+  const structuredContent = protocol.structuredContent;
+  if (structuredContent === null || typeof structuredContent !== 'object' || Array.isArray(structuredContent)) {
+    throw new Error('Rendered MCP result did not contain a state version');
+  }
+  const stateVersion = (structuredContent as Record<string, unknown>).stateVersion;
+  if (typeof stateVersion !== 'number' || !Number.isSafeInteger(stateVersion) || stateVersion < 0) {
+    throw new Error('Rendered MCP result contained an invalid state version');
+  }
+  return stateVersion;
+};
+
+const invoke = async (signal?: AbortSignal): Promise<DevRuntimeInspectionResponse> => {
   const request = await readRequest();
   const rendered = await requestFlightRenderWithFlight(renderRequestFor(request), {
     maximumFlightBytes: maximumInvocationFlightBytes,
+    signal,
   });
-  const snapshot = await createFileRuntimeKernel({ stateFile: request.stateFile }).readSnapshot();
 
   if (request.type === 'hook/after-file-edit') {
     const native = lowerHookResult(rendered.node);
@@ -141,12 +197,13 @@ const invoke = async (): Promise<DevRuntimeInspectionResponse> => {
         native,
         node: rendered.node,
         stateStoreId: request.stateStoreId,
-        stateVersion: snapshot.stateVersion,
+        stateVersion: hookStateVersion(native),
       }),
     });
   }
 
   const protocol = lowerMcpResult(rendered.node);
+  const stateVersion = request.type === 'mcp/render-timeline' ? request.snapshot.stateVersion : statusStateVersion(protocol);
   return Object.freeze({
     flightBase64: Buffer.from(rendered.flight).toString('base64'),
     inspection: serializeInspection({
@@ -155,16 +212,24 @@ const invoke = async (): Promise<DevRuntimeInspectionResponse> => {
       node: rendered.node,
       protocol,
       stateStoreId: request.stateStoreId,
-      stateVersion: snapshot.stateVersion,
+      stateVersion,
     }),
   });
 };
 
-invoke().then(
+const controller = new AbortController();
+const abort = (): void => controller.abort();
+process.once('SIGINT', abort);
+process.once('SIGTERM', abort);
+
+void invoke(controller.signal).then(
   (response) => process.stdout.write(`${JSON.stringify(response)}\n`),
   (error: unknown) => {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = error instanceof Error ? error.message : 'Invocation failed';
     process.stderr.write(`${message}\n`);
     process.exitCode = 1;
   },
-);
+).finally(() => {
+  process.removeListener('SIGINT', abort);
+  process.removeListener('SIGTERM', abort);
+});

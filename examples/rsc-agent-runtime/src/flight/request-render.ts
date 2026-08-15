@@ -9,101 +9,139 @@ import type { ReactNode } from 'react';
 import type { RenderRequest } from '../runtime/contracts.js';
 
 export const maximumFlightRenderBytes = 4 * 1024 * 1024;
+export const maximumFlightRenderStderrBytes = 256 * 1024;
+
+const defaultTerminationGraceMs = 100;
+const diagnosticPreviewBytes = 16 * 1024;
 
 export interface FlightRenderResult {
   readonly flight: Uint8Array;
   readonly node: ReactNode;
 }
 
-const collectStderr = (stream: Readable): Promise<string> =>
-  new Promise((resolve, reject) => {
-    let output = '';
-    stream.setEncoding('utf8');
-    stream.on('data', (chunk: string) => {
-      output += chunk;
-    });
-    stream.on('error', reject);
-    stream.on('end', () => resolve(output));
-  });
+export interface FlightRenderOptions {
+  readonly maximumFlightBytes?: number;
+  readonly maximumStderrBytes?: number;
+  readonly signal?: AbortSignal;
+  readonly terminationGraceMs?: number;
+}
 
-const waitForExit = (child: ReturnType<typeof spawn>): Promise<number | null> =>
-  new Promise((resolve, reject) => {
-    child.once('error', reject);
-    child.once('close', resolve);
-  });
+const positiveSafeInteger = (value: number, name: string): number => {
+  if (!Number.isSafeInteger(value) || value < 1) throw new RangeError(`${name} must be a positive safe integer`);
+  return value;
+};
 
-const collectFlight = (
-  child: ReturnType<typeof spawn>,
-  stream: Readable,
-  maximumBytes: number,
-): Promise<Uint8Array> =>
-  new Promise((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    let bytes = 0;
-    let settled = false;
-    stream.on('data', (chunk: Buffer | string) => {
-      if (settled) return;
-      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-      bytes += buffer.byteLength;
-      if (bytes > maximumBytes) {
-        settled = true;
-        child.kill();
-        reject(new Error(`RSC worker Flight exceeded ${maximumBytes} bytes`));
-        return;
-      }
-      chunks.push(buffer);
-    });
-    stream.once('error', (error) => {
-      if (!settled) {
-        settled = true;
-        reject(error);
-      }
-    });
-    stream.once('end', () => {
-      if (!settled) {
-        settled = true;
-        resolve(Buffer.concat(chunks));
-      }
-    });
-  });
+const redactDiagnostics = (value: string): string => value
+  .slice(0, diagnosticPreviewBytes)
+  .replace(/((?:api[-_]?key|authorization|password|secret|token)\s*[:=]\s*)(?:bearer\s+)?[^\s,;]+/giu, '$1[REDACTED]')
+  .replace(/\bbearer\s+[^\s,;]+/giu, 'Bearer [REDACTED]');
+
+const workerFailure = (message: string, diagnostics: string): Error =>
+  new Error(`${message}${diagnostics.length === 0 ? '' : `: ${diagnostics}`}`);
 
 export const requestFlightRenderWithFlight = async (
   request: RenderRequest,
-  options: Readonly<{ maximumFlightBytes?: number }> = {},
+  options: FlightRenderOptions = {},
 ): Promise<FlightRenderResult> => {
-  const maximumFlightBytes = options.maximumFlightBytes ?? maximumFlightRenderBytes;
-  if (!Number.isSafeInteger(maximumFlightBytes) || maximumFlightBytes < 1) {
-    throw new RangeError('maximumFlightBytes must be a positive safe integer');
-  }
+  const maximumFlightBytes = positiveSafeInteger(options.maximumFlightBytes ?? maximumFlightRenderBytes, 'maximumFlightBytes');
+  const maximumStderrBytes = positiveSafeInteger(options.maximumStderrBytes ?? maximumFlightRenderStderrBytes, 'maximumStderrBytes');
+  const terminationGraceMs = positiveSafeInteger(options.terminationGraceMs ?? defaultTerminationGraceMs, 'terminationGraceMs');
 
-  const currentDirectory = dirname(fileURLToPath(import.meta.url));
-  const workerPath = join(currentDirectory, '../rsc/index.js');
-  const child = spawn(process.execPath, [workerPath], { stdio: ['pipe', 'pipe', 'pipe'] });
-  const stdout = child.stdout;
-  if (stdout === null) throw new Error('RSC worker stdout is unavailable');
-  const stderr = collectStderr(child.stderr);
-  const exited = waitForExit(child);
-  const flight = collectFlight(child, stdout, maximumFlightBytes);
+  return new Promise<FlightRenderResult>((resolveRender, rejectRender) => {
+    const currentDirectory = dirname(fileURLToPath(import.meta.url));
+    const workerPath = join(currentDirectory, '../rsc/index.js');
+    const child = spawn(process.execPath, [workerPath], { stdio: ['pipe', 'pipe', 'pipe'] });
+    const stdout = child.stdout;
+    const stderr = child.stderr;
+    const flight: Buffer[] = [];
+    const diagnostics: Buffer[] = [];
+    let flightBytes = 0;
+    let stderrBytes = 0;
+    let termination: Error | undefined;
+    let terminationGrace: ReturnType<typeof setTimeout> | undefined;
+    let closed = false;
 
-  child.stdin.end(JSON.stringify(request));
+    const cleanup = (): void => {
+      if (terminationGrace !== undefined) clearTimeout(terminationGrace);
+      options.signal?.removeEventListener('abort', abort);
+    };
 
-  const [flightResult, exitResult, stderrResult] = await Promise.allSettled([flight, exited, stderr]);
-  if (flightResult.status === 'rejected') throw flightResult.reason;
-  if (exitResult.status === 'rejected') throw exitResult.reason;
-  if (stderrResult.status === 'rejected') throw stderrResult.reason;
+    const terminate = (error: Error): void => {
+      if (termination !== undefined || closed) return;
+      termination = error;
+      child.stdin.destroy();
+      child.kill('SIGTERM');
+      terminationGrace = setTimeout(() => {
+        if (!closed) child.kill('SIGKILL');
+      }, terminationGraceMs);
+    };
 
-  const exitCode = exitResult.value;
-  const diagnostics = stderrResult.value;
-  if (exitCode !== 0) {
-    throw new Error(`RSC worker exited with code ${String(exitCode)}: ${diagnostics}`);
-  }
+    const abort = (): void => terminate(new Error('RSC worker render was aborted.'));
 
-  const rawFlight = flightResult.value;
-  const node = await createFromReadableStream<ReactNode>(
-    Readable.toWeb(Readable.from([rawFlight])) as ReadableStream<Uint8Array>,
-  );
+    if (stdout === null || stderr === null) {
+      terminate(new Error('RSC worker streams are unavailable.'));
+    } else {
+      stdout.on('data', (chunk: Buffer | string) => {
+        if (termination !== undefined) return;
+        const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+        flightBytes += buffer.byteLength;
+        if (flightBytes > maximumFlightBytes) {
+          terminate(new Error(`RSC worker Flight exceeded ${maximumFlightBytes} bytes.`));
+          return;
+        }
+        flight.push(buffer);
+      });
+      stdout.once('error', () => terminate(new Error('RSC worker Flight stream failed.')));
+      stderr.on('data', (chunk: Buffer | string) => {
+        const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+        const retained = Math.min(buffer.byteLength, Math.max(0, maximumStderrBytes - stderrBytes));
+        if (retained > 0) diagnostics.push(buffer.subarray(0, retained));
+        stderrBytes += buffer.byteLength;
+        if (stderrBytes > maximumStderrBytes) {
+          terminate(new Error(`RSC worker stderr exceeded ${maximumStderrBytes} bytes.`));
+        }
+      });
+      stderr.once('error', () => terminate(new Error('RSC worker stderr stream failed.')));
+    }
 
-  return Object.freeze({ flight: rawFlight, node });
+    child.stdin.once('error', () => terminate(new Error('RSC worker request stream failed.')));
+    child.once('error', () => terminate(new Error('RSC worker could not be started.')));
+    child.once('close', (code) => {
+      closed = true;
+      cleanup();
+      const output = redactDiagnostics(Buffer.concat(diagnostics).toString('utf8'));
+      if (termination !== undefined) {
+        rejectRender(workerFailure(termination.message, output));
+        return;
+      }
+      if (code !== 0) {
+        rejectRender(workerFailure(`RSC worker exited with code ${String(code)}`, output));
+        return;
+      }
+      void (async () => {
+        try {
+          const rawFlight = Buffer.concat(flight);
+          const node = await createFromReadableStream<ReactNode>(
+            Readable.toWeb(Readable.from([rawFlight])) as ReadableStream<Uint8Array>,
+          );
+          resolveRender(Object.freeze({ flight: rawFlight, node }));
+        } catch {
+          rejectRender(new Error('RSC worker emitted invalid Flight data.'));
+        }
+      })();
+    });
+
+    options.signal?.addEventListener('abort', abort, { once: true });
+    if (options.signal?.aborted) {
+      abort();
+      return;
+    }
+    try {
+      child.stdin.end(JSON.stringify(request));
+    } catch {
+      terminate(new Error('RSC worker request could not be encoded.'));
+    }
+  });
 };
 
 export const requestFlightRender = async (request: RenderRequest): Promise<ReactNode> =>
