@@ -45,18 +45,24 @@ const writeTree = async (root: string, files: Readonly<Record<string, string>>):
   }));
 };
 
-const writeCompilerCohort = async (compilerRoot: string): Promise<void> => {
+const writeCompilerCohort = async (
+  compilerRoot: string,
+  options: Readonly<{
+    readonly rscFiles?: Readonly<Record<string, string>>;
+    readonly widgetFiles?: Readonly<Record<string, string>>;
+  }> = {},
+): Promise<void> => {
   const rscRoot = join(compilerRoot, 'rsc');
-  await writeTree(rscRoot, runtimeFiles);
-  await writeTree(join(compilerRoot, 'widget'), widgetFiles);
+  await writeTree(rscRoot, { ...runtimeFiles, ...options.rscFiles });
+  await writeTree(join(compilerRoot, 'widget'), { ...widgetFiles, ...options.widgetFiles });
   await writeFile(join(rscRoot, 'runtime-assets.json'), JSON.stringify({
     allFiles: Object.keys(runtimeFiles).map((path) => `/${path}`),
     entries: {
       'dev/definition': { initial: { js: ['/dev/definition.js'] } },
       'dev/invoke': { initial: { js: ['/dev/invoke.js'] } },
       'hook/index': { initial: { js: ['/hook/index.js'] } },
-      'mcp/http': { initial: { js: ['/mcp/http.js'] } },
-      'mcp/stdio': { initial: { js: ['/mcp/stdio.js'] } },
+      'mcp/http': { async: { js: ['/chunks/101.js'] }, initial: { js: ['/mcp/http.js'] } },
+      'mcp/stdio': { async: { js: ['/chunks/101.js'] }, initial: { js: ['/mcp/stdio.js'] } },
       'rsc/index': { async: { js: ['/chunks/101.js'] }, initial: { js: ['/rsc/index.js'] } },
     },
   }), 'utf8');
@@ -76,6 +82,65 @@ const createStore = (storageRoot: string): RuntimeGenerationStore<RscRuntimeGene
     storageRoot,
     validateMetadata: validateRscRuntimeGenerationMetadata,
   });
+
+const isProcessAlive = (pid: number): boolean => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ESRCH') return false;
+    throw error;
+  }
+};
+
+const compilerObserver = (input: Readonly<{
+  readonly capture: Array<Readonly<Record<string, unknown>>>;
+  readonly enqueued: string[];
+  readonly failed: unknown[];
+}>) => {
+  const config = createRscRuntimeRsbuildConfig({
+    compilerRoot: join(tmpdir(), 'rsc-agent-runtime-observer'),
+    mode: 'development',
+    onCompile: {
+      beforeAttempt: () => 'attempt-1',
+      capture: async (value) => {
+        input.capture.push(value);
+        return {
+          attemptId: value.attemptId,
+          candidateId: 'candidate-1',
+          preparedRevision: 'prepared-1',
+          rscCohortRevision: 1,
+          sourceRevision: value.sourceRevision,
+        };
+      },
+      enqueue: (snapshot) => input.enqueued.push(snapshot.attemptId),
+      failAttempt: (_attemptId, error) => input.failed.push(error),
+    },
+  });
+  const plugin = (config.plugins as readonly unknown[]).find((value): value is Readonly<{
+    readonly name: string;
+    setup(api: unknown): void;
+  }> => typeof value === 'object' && value !== null && 'name' in value && (value as { name?: unknown }).name === 'agent-bundle:rsc-runtime-compile-observer');
+  if (plugin === undefined) throw new Error('Compile observer plugin was not configured.');
+
+  let before: (() => void) | undefined;
+  let after: ((input: unknown) => Promise<void>) | undefined;
+  plugin.setup({
+    onAfterDevCompile: (callback: unknown) => { after = callback as (input: unknown) => Promise<void>; },
+    onBeforeDevCompile: (callback: unknown) => { before = callback as () => void; },
+  });
+  return Object.freeze({
+    async compile(children: readonly Readonly<{ readonly hash?: string; readonly name?: string }>[]): Promise<void> {
+      before?.();
+      await after?.({
+        stats: {
+          hasErrors: () => false,
+          toJson: () => ({ children }),
+        },
+      });
+    },
+  });
+};
 
 test('resolves the coherent development compiler configuration through Rsbuild', async () => {
   const compilerRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-compiler-'));
@@ -188,6 +253,131 @@ test('rejects a removed or replaced paired compiler asset after capture', async 
     });
     await writeFile(join(replacedCandidate.root, 'widget', 'static', 'js', 'rsc', 'index.js'), 'replaced-client-reference', 'utf8');
     await expect(materializeRuntimeGeneration({ snapshot: replacedSnapshot, store })).rejects.toThrow('captured cohort');
+  } finally {
+    await store.close().catch(() => undefined);
+    await rm(storageRoot, { force: true, recursive: true });
+  }
+});
+
+test('bounds and redacts a definition executable stderr flood', async () => {
+  const storageRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-generations-'));
+  const compilerRoot = join(storageRoot, 'compiler');
+  const store = createStore(storageRoot);
+  try {
+    await writeCompilerCohort(compilerRoot, {
+      rscFiles: {
+        'dev/definition.js': "process.stderr.write('token=supersecret ' + 'x'.repeat(1024 * 1024)); process.exitCode = 1;\n",
+      },
+    });
+    const candidate = await store.begin({ id: 'stderr', sourceRevision: 'source-stderr' });
+    const error = await captureRuntimeGenerationSnapshot({
+      attemptId: 'attempt-stderr', candidate, compilerRoot, preparedRuntime, rscCohortRevision: 1, sourceRevision: 'source-stderr',
+    }).then(
+      () => new Error('Definition stderr flood unexpectedly captured.'),
+      (error: unknown) => error,
+    );
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain('stderr');
+    expect((error as Error).message).not.toContain('supersecret');
+  } finally {
+    await store.close().catch(() => undefined);
+    await rm(storageRoot, { force: true, recursive: true });
+  }
+});
+
+test('waits for grace-to-SIGKILL termination of a SIGTERM-ignoring definition child', async () => {
+  const storageRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-generations-'));
+  const compilerRoot = join(storageRoot, 'compiler');
+  const marker = join(storageRoot, 'definition-child.pid');
+  const store = createStore(storageRoot);
+  let childPid: number | undefined;
+  try {
+    await writeCompilerCohort(compilerRoot, {
+      rscFiles: {
+        'dev/definition.js': `require('node:fs').writeFileSync(${JSON.stringify(marker)}, String(process.pid)); process.on('SIGTERM', () => undefined); setInterval(() => undefined, 1_000);\n`,
+      },
+    });
+    const candidate = await store.begin({ id: 'ignores-term', sourceRevision: 'source-ignores-term' });
+    await expect(captureRuntimeGenerationSnapshot({
+      attemptId: 'attempt-ignores-term', candidate, compilerRoot, preparedRuntime, rscCohortRevision: 1, sourceRevision: 'source-ignores-term',
+    })).rejects.toThrow('exceeded 5 seconds');
+    childPid = Number(await readFile(marker, 'utf8'));
+    expect(Number.isSafeInteger(childPid)).toBe(true);
+    expect(isProcessAlive(childPid)).toBe(false);
+  } finally {
+    if (childPid !== undefined && isProcessAlive(childPid)) process.kill(childPid, 'SIGKILL');
+    await store.close().catch(() => undefined);
+    await rm(storageRoot, { force: true, recursive: true });
+  }
+}, 10_000);
+
+test('fails compile attempts unless stats contain one nonempty RSC and widget hash', async () => {
+  for (const children of [
+    [{ name: 'rsc', hash: 'rsc-hash' }],
+    [{ name: 'rsc', hash: 'rsc-hash' }, { name: 'rsc', hash: 'second-rsc-hash' }, { name: 'widget', hash: 'widget-hash' }],
+    [{ name: 'rsc', hash: 'rsc-hash' }, { name: 'widget' }],
+  ]) {
+    const capture: Array<Readonly<Record<string, unknown>>> = [];
+    const enqueued: string[] = [];
+    const failed: unknown[] = [];
+    await compilerObserver({ capture, enqueued, failed }).compile(children);
+    expect(capture).toEqual([]);
+    expect(enqueued).toEqual([]);
+    expect(failed).toHaveLength(1);
+  }
+});
+
+test('requires every executable entry to declare its async cohort assets', async () => {
+  const storageRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-generations-'));
+  const compilerRoot = join(storageRoot, 'compiler');
+  const store = createStore(storageRoot);
+  try {
+    await writeCompilerCohort(compilerRoot);
+    const manifestPath = join(compilerRoot, 'rsc', 'runtime-assets.json');
+    const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as { entries: Record<string, { async?: unknown }> };
+    delete manifest.entries['mcp/http']?.async;
+    await writeFile(manifestPath, JSON.stringify(manifest), 'utf8');
+    const candidate = await store.begin({ id: 'missing-async', sourceRevision: 'source-missing-async' });
+    const snapshot = await captureRuntimeGenerationSnapshot({
+      attemptId: 'attempt-missing-async', candidate, compilerRoot, preparedRuntime, rscCohortRevision: 1, sourceRevision: 'source-missing-async',
+    });
+    await expect(materializeRuntimeGeneration({ snapshot, store })).rejects.toThrow('async');
+  } finally {
+    await store.close().catch(() => undefined);
+    await rm(storageRoot, { force: true, recursive: true });
+  }
+});
+
+test('rejects an RSC file outside the declared runtime asset cohort', async () => {
+  const storageRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-generations-'));
+  const compilerRoot = join(storageRoot, 'compiler');
+  const store = createStore(storageRoot);
+  try {
+    await writeCompilerCohort(compilerRoot, { rscFiles: { 'undeclared.js': 'not-in-runtime-assets' } });
+    const candidate = await store.begin({ id: 'undeclared', sourceRevision: 'source-undeclared' });
+    const snapshot = await captureRuntimeGenerationSnapshot({
+      attemptId: 'attempt-undeclared', candidate, compilerRoot, preparedRuntime, rscCohortRevision: 1, sourceRevision: 'source-undeclared',
+    });
+    await expect(materializeRuntimeGeneration({ snapshot, store })).rejects.toThrow('coverage');
+  } finally {
+    await store.close().catch(() => undefined);
+    await rm(storageRoot, { force: true, recursive: true });
+  }
+});
+
+test('rejects a client entry document that points at a different client-reference asset', async () => {
+  const storageRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-generations-'));
+  const compilerRoot = join(storageRoot, 'compiler');
+  const store = createStore(storageRoot);
+  try {
+    await writeCompilerCohort(compilerRoot, {
+      widgetFiles: { 'rsc/index.html': '<!doctype html><script src="/static/js/rsc/not-rsc-index.js"></script>' },
+    });
+    const candidate = await store.begin({ id: 'mismatched-client', sourceRevision: 'source-mismatched-client' });
+    const snapshot = await captureRuntimeGenerationSnapshot({
+      attemptId: 'attempt-mismatched-client', candidate, compilerRoot, preparedRuntime, rscCohortRevision: 1, sourceRevision: 'source-mismatched-client',
+    });
+    await expect(materializeRuntimeGeneration({ snapshot, store })).rejects.toThrow('client reference relationship');
   } finally {
     await store.close().catch(() => undefined);
     await rm(storageRoot, { force: true, recursive: true });

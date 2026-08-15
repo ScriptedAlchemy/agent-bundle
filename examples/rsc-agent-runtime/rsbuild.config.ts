@@ -62,16 +62,30 @@ const runtimeCompileObserverPlugin = (
           throw new Error('RSC runtime compile completed without a matching attempt.');
         }
         try {
+          if (stats.hasErrors()) {
+            throw new Error('RSC runtime compile reported errors.');
+          }
           const json = stats.toJson({ all: false, children: true, hash: true });
-          const hashes = (json.children ?? [])
-            .filter((child) => child.name === 'rsc' || child.name === 'widget')
-            .map((child) => [child.name === 'rsc' ? 'rsc' : 'widget', child.hash ?? ''] as const)
-            .sort(([left], [right]) => left.localeCompare(right));
+          const cohortHashes = new Map<'rsc' | 'widget', string>();
+          for (const child of json.children ?? []) {
+            if (child.name !== 'rsc' && child.name !== 'widget') continue;
+            if (typeof child.hash !== 'string' || child.hash.length === 0) {
+              throw new Error(`RSC runtime ${child.name} compilation has no hash.`);
+            }
+            if (cohortHashes.has(child.name)) {
+              throw new Error(`RSC runtime compile contains duplicate ${child.name} stats.`);
+            }
+            cohortHashes.set(child.name, child.hash);
+          }
+          if (cohortHashes.size !== 2 || !cohortHashes.has('rsc') || !cohortHashes.has('widget')) {
+            throw new Error('RSC runtime compile requires exactly one RSC and widget stats child.');
+          }
+          const hashes = (['rsc', 'widget'] as const).map((name) => [name, cohortHashes.get(name) as string]);
           const sourceRevision = createHash('sha256').update(JSON.stringify(hashes)).digest('hex');
           const snapshot = await observer.capture({
             attemptId,
             cohortChanged: sourceRevision !== previousCapturedCohortHash,
-            hasErrors: stats.hasErrors(),
+            hasErrors: false,
             sourceRevision,
           });
           if (snapshot !== undefined) {

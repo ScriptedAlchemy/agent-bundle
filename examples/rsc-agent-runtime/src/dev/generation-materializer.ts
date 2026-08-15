@@ -33,8 +33,11 @@ const requiredEntries = Object.freeze([
   'mcp/stdio',
   'rsc/index',
 ] as const);
+const executableAsyncEntries = Object.freeze(['mcp/http', 'mcp/stdio'] as const);
 const maximumDefinitionStdout = 1024 * 1024;
+const maximumDefinitionStderr = 64 * 1024;
 const definitionTimeoutMs = 5_000;
+const definitionTerminationGraceMs = 100;
 const sha256Expression = /^[a-f0-9]{64}$/u;
 
 interface RuntimeAssetsManifest {
@@ -232,7 +235,7 @@ const equalAssets = (left: readonly RuntimeGenerationAsset[], right: readonly Ru
 
 const redact = (value: string): string => value
   .slice(0, 16 * 1024)
-  .replace(/((?:authorization|password|secret|token)\s*[:=]\s*)[^\s,;]+/giu, '$1[REDACTED]');
+  .replace(/((?:authorization|password|secret|token)\s*[:=]\s*)(?:bearer\s+)?[^\s,;]+/giu, '$1[REDACTED]');
 
 const runDefinitionExecutable = async (entry: string): Promise<SerializedRuntimeDefinition> =>
   new Promise<SerializedRuntimeDefinition>((resolveDefinition, rejectDefinition) => {
@@ -240,31 +243,52 @@ const runDefinitionExecutable = async (entry: string): Promise<SerializedRuntime
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
     let stdoutBytes = 0;
+    let stderrBytes = 0;
     let settled = false;
+    let termination: Error | undefined;
+    let terminationGrace: ReturnType<typeof setTimeout> | undefined;
     const settle = (callback: () => void): void => {
       if (settled) return;
       settled = true;
       clearTimeout(timeout);
+      if (terminationGrace !== undefined) clearTimeout(terminationGrace);
       callback();
     };
-    const fail = (error: Error): void => {
-      child.kill();
-      settle(() => rejectDefinition(error));
+    const terminate = (error: Error): void => {
+      if (termination !== undefined) return;
+      termination = error;
+      child.kill('SIGTERM');
+      terminationGrace = setTimeout(() => {
+        child.kill('SIGKILL');
+      }, definitionTerminationGraceMs);
     };
-    const timeout = setTimeout(() => fail(new Error('Runtime definition executable exceeded 5 seconds.')), definitionTimeoutMs);
+    const timeout = setTimeout(() => terminate(new Error('Runtime definition executable exceeded 5 seconds.')), definitionTimeoutMs);
 
     child.stdout.on('data', (chunk: Buffer) => {
+      if (termination !== undefined) return;
       stdoutBytes += chunk.byteLength;
       if (stdoutBytes > maximumDefinitionStdout) {
-        fail(new Error('Runtime definition executable exceeded 1 MiB stdout.'));
+        terminate(new Error('Runtime definition executable exceeded 1 MiB stdout.'));
       } else {
         stdout.push(chunk);
       }
     });
-    child.stderr.on('data', (chunk: Buffer) => stderr.push(chunk));
-    child.once('error', (error) => settle(() => rejectDefinition(error)));
+    child.stderr.on('data', (chunk: Buffer) => {
+      if (termination !== undefined) return;
+      const retained = Math.min(chunk.byteLength, maximumDefinitionStderr - stderrBytes);
+      if (retained > 0) stderr.push(chunk.subarray(0, retained));
+      stderrBytes += chunk.byteLength;
+      if (stderrBytes > maximumDefinitionStderr) {
+        terminate(new Error('Runtime definition executable exceeded 64 KiB stderr.'));
+      }
+    });
+    child.once('error', (error) => terminate(error));
     child.once('close', (code) => {
       if (settled) return;
+      if (termination !== undefined) {
+        settle(() => rejectDefinition(termination as Error));
+        return;
+      }
       const errorOutput = redact(Buffer.concat(stderr).toString('utf8'));
       if (code !== 0) {
         settle(() => rejectDefinition(new Error(`Runtime definition executable failed with exit code ${String(code)}${errorOutput.length === 0 ? '' : `: ${errorOutput}`}`)));
@@ -375,6 +399,59 @@ const parseRuntimeAssets = async (root: string): Promise<RuntimeAssetsManifest> 
 const clientReferencePaths = (assets: readonly RuntimeGenerationAsset[]): readonly string[] =>
   assets.filter((asset) => asset.path.startsWith('widget/')).map((asset) => asset.path);
 
+const validateRuntimeAssetCoverage = (
+  runtimeAssets: RuntimeAssetsManifest,
+  assets: readonly RuntimeGenerationAsset[],
+): void => {
+  const assetPaths = new Set(assets.map((asset) => asset.path));
+  for (const asset of runtimeAssets.allFiles) {
+    if (!assetPaths.has(`rsc/${asset}`)) throw new Error(`runtime-assets.json references missing asset ${JSON.stringify(asset)}.`);
+  }
+  for (const entry of requiredEntries) {
+    const declared = runtimeAssets.entries[entry];
+    if (declared === undefined) throw new Error(`runtime-assets.json is missing required entry ${JSON.stringify(entry)}.`);
+    const files = [...(declared.initial?.js ?? []), ...(declared.async?.js ?? [])];
+    if (files.length === 0 || files.some((asset) => !runtimeAssets.allFiles.includes(asset))) {
+      throw new Error(`runtime-assets.json entry ${JSON.stringify(entry)} has incomplete asset coverage.`);
+    }
+  }
+  for (const entry of executableAsyncEntries) {
+    const asyncAssets = runtimeAssets.entries[entry]?.async?.js;
+    if (asyncAssets === undefined || asyncAssets.length === 0 || asyncAssets.some((asset) => !runtimeAssets.allFiles.includes(asset))) {
+      throw new Error(`runtime-assets.json executable ${JSON.stringify(entry)} is missing async asset coverage.`);
+    }
+  }
+  if (!runtimeAssets.allFiles.some((path) => path.startsWith('chunks/'))) {
+    throw new Error('runtime-assets.json must declare an async chunks/ asset.');
+  }
+  const expectedRscAssets = new Set([
+    ...runtimeAssets.allFiles.map((path) => `rsc/${path}`),
+    'rsc/runtime-assets.json',
+    'rsc/runtime-definition.json',
+    'rsc/agent-runtime.manifest.json',
+  ]);
+  const capturedRscAssets = assets.filter((asset) => asset.path.startsWith('rsc/')).map((asset) => asset.path);
+  if (capturedRscAssets.length !== expectedRscAssets.size || capturedRscAssets.some((path) => !expectedRscAssets.has(path))) {
+    throw new Error('Captured RSC runtime asset coverage is incomplete.');
+  }
+};
+
+const validateClientReferenceRelationship = async (
+  root: string,
+  assets: readonly RuntimeGenerationAsset[],
+): Promise<void> => {
+  const clientReferences = clientReferencePaths(assets);
+  const expectedClientAsset = 'widget/static/js/rsc/index.js';
+  if (!clientReferences.includes('widget/rsc/index.html') || !clientReferences.includes(expectedClientAsset)) {
+    throw new Error('Captured generation is missing paired client reference assets.');
+  }
+  const document = await readFile(join(root, 'widget', 'rsc', 'index.html'), 'utf8');
+  const references = Array.from(document.matchAll(/(?:src|href)\s*=\s*["']([^"']+)["']/giu), (match) => match[1]?.split(/[?#]/u, 1)[0]);
+  if (!references.includes('/static/js/rsc/index.js') && !references.includes('static/js/rsc/index.js')) {
+    throw new Error('Captured generation has an invalid client reference relationship.');
+  }
+};
+
 const contentTypeFor = (path: string): RscRuntimeSurfaceAsset['contentType'] | undefined => {
   if (path.endsWith('.js')) return 'application/javascript';
   if (path.endsWith('.json')) return 'application/json';
@@ -446,25 +523,8 @@ const metadataFromSnapshot = async (
 ): Promise<RscRuntimeGenerationMetadata> => {
   const root = snapshot.candidate.root;
   const runtimeAssets = await parseRuntimeAssets(join(root, 'rsc'));
-  const assetPaths = new Set(assets.map((asset) => asset.path));
-  for (const asset of runtimeAssets.allFiles) {
-    if (!assetPaths.has(`rsc/${asset}`)) throw new Error(`runtime-assets.json references missing asset ${JSON.stringify(asset)}.`);
-  }
-  for (const entry of requiredEntries) {
-    const declared = runtimeAssets.entries[entry];
-    if (declared === undefined) throw new Error(`runtime-assets.json is missing required entry ${JSON.stringify(entry)}.`);
-    const files = [...(declared.initial?.js ?? []), ...(declared.async?.js ?? [])];
-    if (files.length === 0 || files.some((asset) => !runtimeAssets.allFiles.includes(asset))) {
-      throw new Error(`runtime-assets.json entry ${JSON.stringify(entry)} has incomplete asset coverage.`);
-    }
-  }
-  if (!runtimeAssets.allFiles.some((path) => path.startsWith('chunks/'))) {
-    throw new Error('runtime-assets.json must declare an async chunks/ asset.');
-  }
-  const clientReferences = clientReferencePaths(assets);
-  if (!clientReferences.includes('widget/rsc/index.html') || !clientReferences.some((path) => path.endsWith('/rsc/index.js'))) {
-    throw new Error('Captured generation is missing paired client reference assets.');
-  }
+  validateRuntimeAssetCoverage(runtimeAssets, assets);
+  await validateClientReferenceRelationship(root, assets);
   const definitionBytes = await readFile(join(root, ...definitionFile.split('/')));
   const parsedDefinition = parseDefinition(JSON.parse(definitionBytes.toString('utf8')));
   if (canonicalJson(parsedDefinition) !== definitionBytes.toString('utf8')) {
@@ -626,19 +686,13 @@ export const validateRscRuntimeGenerationMetadata = async (
     throw new TypeError('Runtime generation is missing captured definition assets.');
   }
   const runtimeAssets = await parseRuntimeAssets(join(input.root, 'rsc'));
-  if (!runtimeAssets.allFiles.some((path) => path.startsWith('chunks/')) ||
-    runtimeAssets.allFiles.some((path) => !assets.has(`rsc/${path}`))) {
-    throw new TypeError('Runtime generation runtime asset coverage is incomplete.');
-  }
+  validateRuntimeAssetCoverage(runtimeAssets, input.assets);
   const definitionBytes = await readFile(join(input.root, ...definitionFile.split('/')));
   const definition = parseDefinition(JSON.parse(definitionBytes.toString('utf8')));
   if (canonicalJson(definition) !== definitionBytes.toString('utf8') || digestBytes(definitionBytes) !== metadata.definitionDigest) {
     throw new TypeError('Runtime generation definition digest is inconsistent.');
   }
-  const referenceAssets = clientReferencePaths(input.assets);
-  if (!referenceAssets.includes('widget/rsc/index.html') || !referenceAssets.some((path) => path.endsWith('/rsc/index.js'))) {
-    throw new TypeError('Runtime generation is missing paired client references.');
-  }
+  await validateClientReferenceRelationship(input.root, input.assets);
   const expectedEnvironmentHashes = Object.freeze({
     rsc: digestValue(input.assets.filter((asset) => asset.path.startsWith('rsc/'))),
     widget: digestValue(input.assets.filter((asset) => asset.path.startsWith('widget/'))),
