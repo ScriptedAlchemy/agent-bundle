@@ -161,6 +161,14 @@ describe('Inspector session adapter', () => {
     renderToStaticMarkup(createElement(InspectorSessionAdapter, { controller, initialTab: 'protocol', model }));
     expect(screens.protocol).toBeDefined();
     expect(screens.protocol!.entries).toHaveLength(5);
+    expect(screens.protocol!.onClearSection).toBeTypeOf('function');
+    expect(screens.protocol!.onExportSection).toBeTypeOf('function');
+    expect(screens.protocol!.onReplay).toBeTypeOf('function');
+    (screens.protocol!.onReplay as (id: string) => void)('trace-7');
+    expect(controller.invoke).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      operation: 'callTool',
+      request: { arguments: { city: 'Berlin' }, name: 'weather' },
+    }));
     expect(screens.logging!.embedded).toBe(true);
     expect(markup).not.toContain('Set Active Level');
   });
