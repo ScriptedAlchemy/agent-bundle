@@ -74,6 +74,9 @@ const schemaDiagnostics = (
 
 const selectedForClaude = (targets: readonly string[]): boolean => targets.includes(claudeName);
 
+const sourceInputs = (...sources: readonly (string | undefined)[]): readonly string[] =>
+  Object.freeze([...new Set(sources.filter((source): source is string => source !== undefined))]);
+
 const sortedEntries = (entries: TargetArtifactEntry[]): readonly TargetArtifactEntry[] => Object.freeze(
   entries.sort((left, right) => left.relativePath < right.relativePath ? -1 : left.relativePath > right.relativePath ? 1 : 0),
 );
@@ -216,15 +219,41 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
     content: `${stableJson(plugin)}\n`,
     kind: 'write',
     relativePath: '.claude-plugin/plugin.json',
+    sourceInputs: sourceInputs(
+      model.metadata.provenance.sourcePath,
+      ...model.targets.filter((target) => target.name === claudeName).map((target) => target.provenance.sourcePath),
+    ),
   }];
   if (mcp !== undefined && validateMcp(mcp)) {
-    entries.push({ content: `${stableJson(mcp)}\n`, kind: 'write', relativePath: '.mcp.json' });
+    entries.push({
+      content: `${stableJson(mcp)}\n`,
+      kind: 'write',
+      relativePath: '.mcp.json',
+      sourceInputs: sourceInputs(...model.mcpServers
+        .filter((server) => selectedForClaude(server.targets))
+        .map((server) => server.provenance.sourcePath)),
+    });
   }
   if (hookDocument !== undefined && validateHooks(hookDocument)) {
-    entries.push({ content: `${stableJson(hookDocument)}\n`, kind: 'write', relativePath: 'hooks/hooks.json' });
+    entries.push({
+      content: `${stableJson(hookDocument)}\n`,
+      kind: 'write',
+      relativePath: 'hooks/hooks.json',
+      sourceInputs: sourceInputs(
+        ...model.hooks.filter((hook) => selectedForClaude(hook.targets)).map((hook) => hook.provenance.sourcePath),
+        ...model.nativeHooks
+          ?.filter((hook) => hook.target === claudeName)
+          .flatMap((hook) => [hook.provenance.sourcePath, hook.source]) ?? [],
+      ),
+    });
   }
   if (marketplace !== undefined && validateMarketplace(marketplace)) {
-    entries.push({ content: `${stableJson(marketplace)}\n`, kind: 'write', relativePath: '.claude-plugin/marketplace.json' });
+    entries.push({
+      content: `${stableJson(marketplace)}\n`,
+      kind: 'write',
+      relativePath: '.claude-plugin/marketplace.json',
+      sourceInputs: sourceInputs(model.metadata.provenance.sourcePath),
+    });
   }
   for (const skill of model.skills) {
     if (!selectedForClaude(skill.targets)) continue;
@@ -234,6 +263,7 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
         kind: 'copy',
         relativePath: `skills/${skill.name}/${resource.relativePath}`,
         source: resource.source,
+        sourceInputs: sourceInputs(skill.source, resource.source),
       });
     }
   }

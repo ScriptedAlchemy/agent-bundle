@@ -489,21 +489,39 @@ it('bundles each local MCP entry once and maps every target manifest to that art
         id: 'mcp:local server',
         name: 'mcp-local-server-f45eb99f',
         output: join(outputRoot, 'portable', 'mcp', outputName),
+        outputKind: 'bundle',
         source: join(root, 'src', 'local server.ts'),
+        sourceInputs: [
+          join(root, 'agent-bundle.config.ts'),
+          join(root, 'src', 'local server.ts'),
+          join(root, 'src', 'message.ts'),
+        ],
         target: 'portable',
       },
       {
         id: 'mcp:local server',
         name: 'mcp-local-server-f45eb99f',
         output: join(outputRoot, 'codex', 'mcp', outputName),
+        outputKind: 'bundle',
         source: join(root, 'src', 'local server.ts'),
+        sourceInputs: [
+          join(root, 'agent-bundle.config.ts'),
+          join(root, 'src', 'local server.ts'),
+          join(root, 'src', 'message.ts'),
+        ],
         target: 'codex',
       },
       {
         id: 'mcp:local server',
         name: 'mcp-local-server-f45eb99f',
         output: join(outputRoot, 'claude', 'mcp', outputName),
+        outputKind: 'bundle',
         source: join(root, 'src', 'local server.ts'),
+        sourceInputs: [
+          join(root, 'agent-bundle.config.ts'),
+          join(root, 'src', 'local server.ts'),
+          join(root, 'src', 'message.ts'),
+        ],
         target: 'claude',
       },
     ]);
@@ -579,6 +597,7 @@ it('bundles each local MCP entry once and maps every target manifest to that art
           content: 'colliding entry\n',
           kind: 'write' as const,
           relativePath: `mcp/${outputName}`,
+          sourceInputs: [],
         }],
       }),
       validateModel: () => [],
@@ -691,6 +710,27 @@ it('builds one deterministic self-contained MCP App view and injects it through 
     expect(serverBundle).toContain('ui://agent-bundle/dashboard-v1.html');
     expect(serverBundle).toContain('text/html;profile=mcp-app');
     expect(serverBundle).toContain('prefersBorder');
+    expect(result.outputProvenance).toContainEqual({
+      kind: 'bundle',
+      path: 'portable/mcp-apps/dashboard.html',
+      sourceInputs: [
+        'agent-bundle.config.ts',
+        'views/dashboard.css',
+        'views/dashboard.ts',
+        'views/shell.html',
+      ],
+    });
+    expect(result.outputProvenance).toContainEqual({
+      kind: 'bundle',
+      path: 'portable/mcp/mcp-fixture-f16d05ec.mjs',
+      sourceInputs: [
+        'agent-bundle.config.ts',
+        'src/server.ts',
+        'views/dashboard.css',
+        'views/dashboard.ts',
+        'views/shell.html',
+      ],
+    });
   } finally {
     await rm(root, { force: true, recursive: true });
   }

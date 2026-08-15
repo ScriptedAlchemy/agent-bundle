@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { chmod, mkdtemp, mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join, relative } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { expect, it } from '@rstest/core';
 import { spawn } from 'node:child_process';
@@ -365,6 +365,97 @@ it('embeds a script dynamic import in its single planned output file', async () 
   }
 });
 
+it('reports complete immutable output provenance for a Skill copy and bundled script', async () => {
+  const project = await createProject();
+  const model = modelFor(project);
+
+  try {
+    const result = await build({
+      model,
+      outputRoot: project.outputRoot,
+      projectRoot: project.root,
+      registry: new TargetRegistry().register((await import('../src/adapters/portable.ts')).portableAdapter, { default: true }),
+    });
+    const provenance = result.outputProvenance;
+    const artifactPaths = (await treeDigest(project.outputRoot))
+      .map((entry) => entry.path)
+      .filter((path) => path !== 'agent-bundle.manifest.json');
+
+    expect(provenance.map((record) => record.path)).toEqual(artifactPaths);
+    expect(provenance).toContainEqual({
+      kind: 'bundle',
+      path: 'portable/scripts/greeting.mjs',
+      sourceInputs: [
+        'skills/review/scripts/greeting script.ts',
+        'skills/review/scripts/local greeting module.ts',
+      ],
+    });
+    expect(provenance).toContainEqual({
+      kind: 'copy',
+      path: 'portable/skills/review/scripts/review helper.sh',
+      sourceInputs: [
+        'skills/review/scripts/review helper.sh',
+        'skills/review/SKILL.md',
+      ],
+    });
+    expect(provenance).toContainEqual({
+      kind: 'generated',
+      path: 'agent-bundle.hooks.json',
+      sourceInputs: ['agent-bundle.config.ts'],
+    });
+    expect(provenance.every((record) => !record.path.includes(project.outputRoot))).toBe(true);
+    expect(provenance.every((record) => record.sourceInputs.every((input) => !input.startsWith('/')))).toBe(true);
+    expect(Object.isFrozen(provenance)).toBe(true);
+    expect(provenance.every((record) => Object.isFrozen(record) && Object.isFrozen(record.sourceInputs))).toBe(true);
+  } finally {
+    await cleanupProject(project);
+  }
+});
+
+it('rejects an authored bundled dependency outside the project and preserves the prior artifact', async () => {
+  const project = await createProject();
+  const outside = join(dirname(project.root), 'agent-bundle-provenance-outside.ts');
+  const registry = new TargetRegistry().register(
+    (await import('../src/adapters/portable.ts')).portableAdapter,
+    { default: true },
+  );
+
+  try {
+    const model = modelFor(project);
+    const options = {
+      model,
+      outputRoot: project.outputRoot,
+      projectRoot: project.root,
+      registry,
+    };
+    await build(options);
+    const prior = await treeDigest(project.outputRoot);
+    await writeFile(outside, "export const outside = 'outside';\n");
+    const importPath = relative(dirname(project.scriptPath), outside).replaceAll('\\', '/');
+    const changedSource = [
+      `import { outside } from ${JSON.stringify(importPath)};`,
+      'console.log(outside);',
+      '',
+    ].join('\n');
+    await writeFile(project.scriptPath, changedSource);
+    const changedModel: NormalizedPlugin = {
+      ...model,
+      skills: model.skills.map((skill) => ({
+        ...skill,
+        resources: skill.resources.map((resource) => resource.source === project.scriptPath
+          ? { ...resource, bytes: Buffer.byteLength(changedSource) }
+          : resource),
+      })),
+    };
+
+    await expect(build({ ...options, model: changedModel })).rejects.toThrow(/outside/i);
+    expect(await treeDigest(project.outputRoot)).toEqual(prior);
+  } finally {
+    await rm(outside, { force: true });
+    await cleanupProject(project);
+  }
+});
+
 it('emits a configured Skill script deterministically and preserves the prior artifact after a failed staged rebuild', async () => {
   const project = await createProject();
   const registry = new TargetRegistry().register(
@@ -417,8 +508,8 @@ it('rejects duplicate planned destinations before replacing an existing artifact
     plan: () => ({
       diagnostics: [],
       entries: [
-        { content: 'first\n', kind: 'write', relativePath: 'plugin.json' },
-        { content: 'second\n', kind: 'write', relativePath: 'plugin.json' },
+        { content: 'first\n', kind: 'write', relativePath: 'plugin.json', sourceInputs: [] },
+        { content: 'second\n', kind: 'write', relativePath: 'plugin.json', sourceInputs: [] },
       ],
     }),
     validateModel: () => [],
@@ -452,7 +543,7 @@ it('rejects an escaped target name before it can write outside the staging artif
     name: targetName,
     plan: () => ({
       diagnostics: [],
-      entries: [{ content: 'escaped\n', kind: 'write', relativePath: 'plugin.json' }],
+      entries: [{ content: 'escaped\n', kind: 'write', relativePath: 'plugin.json', sourceInputs: [] }],
     }),
     validateModel: () => [],
   };
@@ -553,8 +644,8 @@ it('rejects canonical aliases and adapter/root-script collisions before emission
     plan: () => ({
       diagnostics: [],
       entries: [
-        { content: 'first\n', kind: 'write', relativePath: 'same.txt' },
-        { content: 'second\n', kind: 'write', relativePath: 'dir/../same.txt' },
+        { content: 'first\n', kind: 'write', relativePath: 'same.txt', sourceInputs: [] },
+        { content: 'second\n', kind: 'write', relativePath: 'dir/../same.txt', sourceInputs: [] },
       ],
     }),
     validateModel: () => [],
@@ -566,7 +657,7 @@ it('rejects canonical aliases and adapter/root-script collisions before emission
     plan: () => ({
       diagnostics: [],
       entries: [
-        { content: 'adapter output\n', kind: 'write', relativePath: 'scripts/greeting.mjs' },
+        { content: 'adapter output\n', kind: 'write', relativePath: 'scripts/greeting.mjs', sourceInputs: [] },
       ],
     }),
     validateModel: () => [],

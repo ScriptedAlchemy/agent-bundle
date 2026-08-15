@@ -109,6 +109,9 @@ const schemaDiagnostics = (
 const hasPortableTarget = (targets: readonly string[]): boolean =>
   targets.includes(portableName);
 
+const sourceInputs = (...sources: readonly (string | undefined)[]): readonly string[] =>
+  Object.freeze([...new Set(sources.filter((source): source is string => source !== undefined))]);
+
 const planMcpServer = (
   server: NormalizedMcpServer,
 ): { readonly diagnostics: readonly Diagnostic[]; readonly value?: Record<string, unknown> } => {
@@ -222,6 +225,10 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
       content: `${stableJson(plugin)}\n`,
       kind: 'write',
       relativePath: 'plugin.json',
+      sourceInputs: sourceInputs(
+        model.metadata.provenance.sourcePath,
+        ...model.targets.filter((target) => target.name === portableName).map((target) => target.provenance.sourcePath),
+      ),
     },
   ];
   diagnostics.push(...schemaDiagnostics('plugin', validatePlugin(plugin), validatePlugin.errors));
@@ -234,6 +241,7 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
         kind: 'copy',
         relativePath: `skills/${skill.name}/${resource.relativePath}`,
         source: resource.source,
+        sourceInputs: sourceInputs(skill.source, resource.source),
       });
     }
   }
@@ -260,6 +268,9 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
         content: `${stableJson(mcp)}\n`,
         kind: 'write',
         relativePath: 'mcp.json',
+        sourceInputs: sourceInputs(...model.mcpServers
+          .filter((server) => hasPortableTarget(server.targets))
+          .map((server) => server.provenance.sourcePath)),
       });
     }
   }

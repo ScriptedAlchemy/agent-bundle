@@ -5,6 +5,8 @@ export interface TargetArtifactWrite {
   readonly content: string;
   readonly kind: 'write';
   readonly relativePath: string;
+  /** Absolute authored inputs that selected this generated artifact. */
+  readonly sourceInputs: readonly string[];
 }
 
 export interface TargetArtifactCopy {
@@ -12,6 +14,8 @@ export interface TargetArtifactCopy {
   readonly kind: 'copy';
   readonly relativePath: string;
   readonly source: string;
+  /** Absolute authored inputs for this copied artifact. */
+  readonly sourceInputs: readonly string[];
 }
 
 export type TargetArtifactEntry = TargetArtifactWrite | TargetArtifactCopy;

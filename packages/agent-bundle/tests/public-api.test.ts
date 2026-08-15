@@ -10,6 +10,7 @@ import {
   defineConfig,
   pathTokens,
   type AgentBundleConfig,
+  type ArtifactOutputProvenance,
   type NormalizedConfigExtension,
   type NormalizedPlugin,
 } from '../src/index.ts';
@@ -78,6 +79,16 @@ it('exposes bundled adapter extension and normalized-extension types from the ro
   } satisfies Pick<NormalizedPlugin, 'extensions'>;
 
   expect(model.extensions.portable.key).toBe('portable');
+});
+
+it('exposes immutable output provenance types from the root import', () => {
+  const output: ArtifactOutputProvenance = {
+    kind: 'bundle',
+    path: 'portable/scripts/greeting.mjs',
+    sourceInputs: ['skills/review/scripts/greeting.ts'],
+  };
+
+  expect(output.kind).toBe('bundle');
 });
 
 it('loads every public subpath and reports the package version', async () => {

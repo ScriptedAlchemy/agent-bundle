@@ -89,7 +89,7 @@ it('plans a schema-valid skills-only plugin with every discovered resource', () 
   expect(registry.defaultTargetNames()).toEqual(['portable']);
   expect(registry.names()).toEqual(['portable', 'codex', 'claude']);
   expect(plan.diagnostics).toEqual([]);
-  expect(plan.entries).toEqual([
+  expect(plan.entries).toMatchObject([
     {
       content:
         '{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","description":"A portable test plugin","name":"portable-test","version":"1.2.3"}\n',
@@ -108,6 +108,11 @@ it('plans a schema-valid skills-only plugin with every discovered resource', () 
       relativePath: 'skills/reporter/references/guide.md',
       source: '/workspace/skills/reporter/references/guide.md',
     },
+  ]);
+  expect(plan.entries.map((entry) => entry.sourceInputs)).toEqual([
+    ['/workspace/agent-bundle.config.ts'],
+    ['/workspace/skills/reporter/SKILL.md'],
+    ['/workspace/skills/reporter/SKILL.md', '/workspace/skills/reporter/references/guide.md'],
   ]);
 });
 
@@ -154,6 +159,7 @@ it('plans portable MCP server variants with tokens expanded only where portable 
       '{"$schema":"https://agent-plugins.org/schemas/1.0.0/mcp.schema.json","mcpServers":{"http":{"headers":{"Authorization":"Bearer literal"},"type":"streamable-http","url":"https://mcp.example.test/stream"},"sse":{"type":"sse","url":"https://mcp.example.test/sse"},"stdio":{"args":["--root","${PLUGIN_ROOT}/tool"],"command":"node","cwd":"${PLUGIN_DATA}/cache","env":{"CACHE_DIR":"${PLUGIN_DATA}/cache"},"type":"stdio"}}}\n',
     kind: 'write',
     relativePath: 'mcp.json',
+    sourceInputs: ['/workspace/agent-bundle.config.ts'],
   });
 });
 
@@ -178,6 +184,7 @@ it('preserves a valid MCP server named __proto__', () => {
       '{"$schema":"https://agent-plugins.org/schemas/1.0.0/mcp.schema.json","mcpServers":{"__proto__":{"command":"node","type":"stdio"}}}\n',
     kind: 'write',
     relativePath: 'mcp.json',
+    sourceInputs: ['/workspace/agent-bundle.config.ts'],
   });
 });
 
