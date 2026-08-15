@@ -133,6 +133,8 @@ td { border-top: 1px solid #d9dee7; font-size: 14px; padding: 12px 10px; vertica
   .page-content { padding: 27px 20px 45px; }
   .mcp-content { min-height: calc(100vh - 58px); padding: 27px 20px 45px; }
   .inspector-content { min-height: calc(100vh - 58px); padding: 27px 20px 45px; }
+  .inspector-session-adapter > .mantine-Flex-root { flex-direction: column !important; height: auto !important; padding: 16px !important; }
+  .inspector-session-adapter > .mantine-Flex-root > .mantine-Stack-root { flex: 0 1 auto !important; width: 100% !important; }
   .definition-row { gap: 19px; grid-template-columns: 1fr; padding: 0 10px; }
   .epoch-row { grid-template-columns: 1fr 1fr; }
   .epoch-row > div:nth-child(2) { border-right: 0; }
