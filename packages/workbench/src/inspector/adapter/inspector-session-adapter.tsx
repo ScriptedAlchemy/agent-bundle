@@ -1,4 +1,4 @@
-import { MantineProvider } from '@mantine/core';
+import { createTheme, MantineProvider } from '@mantine/core';
 import type {
   CallToolResult,
   GetPromptResult,
@@ -8,10 +8,10 @@ import type {
   ResourceTemplateType as ResourceTemplate,
   Tool,
 } from '@modelcontextprotocol/client';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 
 import type { McpBrowserSessionModel, McpBrowserSessionTimelineEntry } from '../../mcp/mcp-session-model.ts';
-import type { McpSessionControllerReplay, McpSessionControllerRequest } from '../../mcp/mcp-session-controller.ts';
+import type { McpSessionControllerRequest } from '../../mcp/mcp-session-controller.ts';
 import type { LogEntryData } from '../vendor/clients/web/src/components/elements/LogEntry/LogEntry.tsx';
 import type { SortDirection } from '../vendor/clients/web/src/components/elements/SortToggle/SortToggle.tsx';
 import { LoggingScreen, type LogsUiState } from '../vendor/clients/web/src/components/screens/LoggingScreen/LoggingScreen.tsx';
@@ -40,11 +40,11 @@ export {
 export interface InspectorSessionAdapterController {
   cancel(id: string): boolean;
   invoke(input: McpSessionControllerRequest): Promise<unknown>;
-  replay(input: McpSessionControllerReplay): Promise<unknown>;
 }
 
 export interface InspectorSessionAdapterProps {
   readonly controller: InspectorSessionAdapterController;
+  readonly initialTab?: InspectorTab;
   readonly model: McpBrowserSessionModel;
   readonly onExportTrace?: (entries: readonly McpBrowserSessionTimelineEntry[]) => void;
 }
@@ -66,14 +66,24 @@ const initialProtocolUi: ProtocolUiState = {
 };
 const initialLogsUi: LogsUiState = { filterText: '', visibleLevels: ALL_LEVELS_VISIBLE };
 
+export const agentBundleInspectorTheme = createTheme({
+  defaultRadius: 'sm',
+  fontFamily: 'Inter, ui-sans-serif, system-ui, sans-serif',
+  primaryColor: 'violet',
+});
+
 const operationError = (reason: unknown): string => reason instanceof Error ? reason.message : 'The Inspector operation failed.';
 
-export const InspectorSessionAdapter = ({ controller, model, onExportTrace }: InspectorSessionAdapterProps) => {
+const unavailableRawFrameReplay = (): never => {
+  throw new Error('Raw JSON-RPC frame replay is unavailable because W13 only replays artifact-bound controller invocations.');
+};
+
+export const InspectorSessionAdapter = ({ controller, initialTab = 'tools', model, onExportTrace }: InspectorSessionAdapterProps) => {
   const bindingKey = inspectorSessionBindingKey(model.binding);
   const previousBindingKey = useRef(bindingKey);
   const requestNumber = useRef(0);
   const actionGeneration = useRef(0);
-  const [tab, setTab] = useState<InspectorTab>('tools');
+  const [tab, setTab] = useState<InspectorTab>(initialTab);
   const [toolsUi, setToolsUi] = useState<ToolsUiState>(initialToolsUi);
   const [resourcesUi, setResourcesUi] = useState<ResourcesUiState>(initialResourcesUi);
   const [promptsUi, setPromptsUi] = useState<PromptsUiState>(initialPromptsUi);
@@ -86,6 +96,7 @@ export const InspectorSessionAdapter = ({ controller, model, onExportTrace }: In
   const [pinnedIds, setPinnedIds] = useState<Set<string>>(() => new Set());
   const [protocolCleared, setProtocolCleared] = useState(false);
   const [loggingCleared, setLoggingCleared] = useState(false);
+  const [loggingLevel, setLoggingLevel] = useState<LoggingLevel>('info');
   const [sortDirection, setSortDirection] = useState<SortDirection>('oldest-first');
   const [compact, setCompact] = useState(false);
 
@@ -106,6 +117,7 @@ export const InspectorSessionAdapter = ({ controller, model, onExportTrace }: In
     setPinnedIds(new Set());
     setProtocolCleared(false);
     setLoggingCleared(false);
+    setLoggingLevel('info');
   }, [bindingKey]);
 
   const protocolEntries = useMemo(() => inspectorProtocolEntries(model.timeline.entries), [model.timeline.entries]);
@@ -160,8 +172,8 @@ export const InspectorSessionAdapter = ({ controller, model, onExportTrace }: In
   const refresh = (operation: McpSessionControllerRequest['operation']): void => { void run(operation, {}); };
   const negotiatedProtocol = model.connection?.protocolVersion ?? 'Not negotiated';
 
-  return <MantineProvider>
-    <section aria-label="MCP Inspector presentation">
+  return <MantineProvider theme={agentBundleInspectorTheme}>
+    <section aria-label="MCP Inspector presentation" className="inspector-session-adapter">
       <header>
         <h2>Inspector</h2>
         <p>Negotiated protocol: {negotiatedProtocol}</p>
@@ -223,7 +235,7 @@ export const InspectorSessionAdapter = ({ controller, model, onExportTrace }: In
         onClearSection={(section) => section === 'history' ? setProtocolCleared(true) : setPinnedIds(new Set())}
         onExport={() => onExportTrace?.(model.timeline.entries)}
         onExportSection={() => onExportTrace?.(model.timeline.entries)}
-        onReplay={() => undefined}
+        onReplay={unavailableRawFrameReplay}
         onSortChange={setSortDirection}
         onToggleCompact={() => setCompact((value) => !value)}
         onTogglePin={(id) => setPinnedIds((current) => {
@@ -237,11 +249,11 @@ export const InspectorSessionAdapter = ({ controller, model, onExportTrace }: In
         ui={protocolUi}
       /> : undefined}
       {tab === 'logging' ? <LoggingScreen
-        currentLevel={'info' as LoggingLevel}
+        currentLevel={loggingLevel}
         entries={displayedLogs as unknown as LogEntryData[]}
         onClear={() => setLoggingCleared(true)}
         onExport={() => onExportTrace?.(model.timeline.entries)}
-        onSetLevel={() => undefined}
+        onSetLevel={setLoggingLevel}
         onSortChange={setSortDirection}
         onUiChange={setLogsUi}
         sortDirection={sortDirection}

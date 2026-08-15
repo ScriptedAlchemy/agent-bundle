@@ -46,6 +46,15 @@ const isFrame = (entry: McpBrowserSessionTimelineEntry): entry is FrameTraceEntr
 const isLogging = (entry: McpBrowserSessionTimelineEntry): entry is LoggingTraceEntry =>
   'kind' in entry && entry.kind === 'logging';
 
+const jsonRpcDirection = (message: Readonly<Record<string, unknown>>): InspectorProtocolEntry['direction'] | undefined => {
+  const hasId = Object.hasOwn(message, 'id');
+  const hasMethod = typeof message.method === 'string';
+  if (hasId && hasMethod) return 'request';
+  if (!hasId && hasMethod) return 'notification';
+  if (hasId && (Object.hasOwn(message, 'result') || Object.hasOwn(message, 'error'))) return 'response';
+  return undefined;
+};
+
 const logParams = (payload: unknown): InspectorLogEntry['params'] | undefined => {
   if (!isRecord(payload) || typeof payload.level !== 'string' || !Object.hasOwn(payload, 'data')) return undefined;
   return payload as InspectorLogEntry['params'];
@@ -58,8 +67,10 @@ export const inspectorProtocolEntries = (
   timeline: readonly McpBrowserSessionTimelineEntry[],
 ): InspectorProtocolEntry[] => timeline.flatMap((entry) => {
   if (!isFrame(entry) || !isRecord(entry.message)) return [];
+  const direction = jsonRpcDirection(entry.message);
+  if (direction === undefined) return [];
   return [{
-    direction: entry.direction === 'client' ? 'request' : 'response',
+    direction,
     id: `trace-${entry.sequence}`,
     message: entry.message,
     origin: entry.direction,
