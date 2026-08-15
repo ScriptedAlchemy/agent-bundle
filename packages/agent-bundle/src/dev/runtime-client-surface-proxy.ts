@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import {
+  type ClientRequest,
   createServer,
   request as requestUpstream,
   type IncomingMessage,
@@ -29,6 +30,7 @@ export interface RuntimeClientSurfaceConnectionEvent {
 
 interface ValidatedEndpoint {
   readonly entryPath: string;
+  readonly host: string;
   readonly httpOrigin: URL;
   readonly httpPathPrefixes: readonly string[];
   readonly surfaceId: string;
@@ -40,6 +42,7 @@ const invalidEndpoint = (message: string): never => {
 };
 
 const response = (target: ServerResponse, status: number): void => {
+  if (target.destroyed || target.writableEnded) return;
   target.writeHead(status, { 'content-type': 'text/plain; charset=utf-8', 'x-content-type-options': 'nosniff' });
   target.end(status === 403 ? 'Forbidden' : status === 413 ? 'Payload Too Large' : 'Not Found');
 };
@@ -61,10 +64,15 @@ const rawDataBytes = (data: WebSocket.RawData): number => typeof data === 'strin
     ? data.reduce((total, part) => total + part.byteLength, 0)
     : data.byteLength;
 
-const decodedPath = (path: string, allowRoot = false): string => {
+interface CanonicalPath {
+  readonly normalized: string;
+  readonly upstream: string;
+}
+
+const canonicalPath = (path: string, allowRoot = false): CanonicalPath => {
   if (!path.startsWith('/')) invalidEndpoint('an absolute entry path');
   if (path === '/') {
-    if (allowRoot) return '/';
+    if (allowRoot) return Object.freeze({ normalized: '/', upstream: '/' });
     invalidEndpoint('a non-root entry path');
   }
   const segments = path.slice(1).split('/').map((segment) => {
@@ -76,20 +84,28 @@ const decodedPath = (path: string, allowRoot = false): string => {
     }
     if (
       decoded.length === 0 || decoded === '.' || decoded === '..' ||
-      decoded.includes('/') || decoded.includes('\\') || decoded.includes('\0')
+      decoded.includes('/') || decoded.includes('\\') || decoded.includes('\0') ||
+      decoded.includes('?') || decoded.includes('#') || decoded.includes('%')
     ) invalidEndpoint('a containment-safe path');
     return decoded;
   });
-  return `/${segments.join('/')}`;
+  return Object.freeze({
+    normalized: `/${segments.join('/')}`,
+    upstream: `/${segments.map((segment) => encodeURIComponent(segment)).join('/')}`,
+  });
 };
 
 const prefix = (value: string): string => {
-  const path = decodedPath(value.length > 1 && value.endsWith('/') ? value.slice(0, -1) : value, true);
+  const path = canonicalPath(value.length > 1 && value.endsWith('/') ? value.slice(0, -1) : value, true).normalized;
   return path === '/' ? '/' : `${path}/`;
 };
 
 const matchesPrefix = (path: string, prefixes: readonly string[]): boolean => prefixes.some((candidate) =>
   candidate === '/' || path === candidate.slice(0, -1) || path.startsWith(candidate));
+
+const literalHost = (value: URL): string => value.hostname.startsWith('[') && value.hostname.endsWith(']')
+  ? value.hostname.slice(1, -1)
+  : value.hostname;
 
 const origin = (value: string, protocol: 'http:' | 'ws:'): URL => {
   let parsed: URL;
@@ -99,7 +115,7 @@ const origin = (value: string, protocol: 'http:' | 'ws:'): URL => {
     return invalidEndpoint(`a literal loopback ${protocol === 'http:' ? 'HTTP' : 'WebSocket'} origin`);
   }
   if (
-    parsed.protocol !== protocol || !loopbackHosts.has(parsed.hostname) ||
+    parsed.protocol !== protocol || !loopbackHosts.has(literalHost(parsed)) ||
     parsed.username.length > 0 || parsed.password.length > 0 || parsed.pathname !== '/' ||
     parsed.search.length > 0 || parsed.hash.length > 0
   ) {
@@ -114,17 +130,18 @@ const endpoint = (input: DevRuntimeClientSurfaceEndpoint): ValidatedEndpoint => 
   }
   const httpOrigin = origin(input.httpOrigin, 'http:');
   const webSocketOrigin = origin(input.webSocketOrigin, 'ws:');
-  if (httpOrigin.hostname !== webSocketOrigin.hostname || httpOrigin.port !== webSocketOrigin.port) {
+  const host = literalHost(httpOrigin);
+  if (host !== literalHost(webSocketOrigin) || httpOrigin.port !== webSocketOrigin.port) {
     invalidEndpoint('matching host and port for HTTP and WebSocket origins');
   }
   if (!Array.isArray(input.httpPathPrefixes) || input.httpPathPrefixes.length === 0) {
     invalidEndpoint('at least one declared HTTP path prefix');
   }
   const httpPathPrefixes = Object.freeze([...new Set(input.httpPathPrefixes.map(prefix))]);
-  const entryPath = decodedPath(input.entryPath);
+  const entryPath = canonicalPath(input.entryPath).normalized;
   if (!matchesPrefix(entryPath, httpPathPrefixes)) invalidEndpoint('an entry path within a declared HTTP prefix');
   if (input.webSocketPath !== '/rsbuild-hmr') invalidEndpoint('the exact /rsbuild-hmr WebSocket path');
-  return Object.freeze({ entryPath, httpOrigin, httpPathPrefixes, surfaceId: input.surfaceId, webSocketOrigin });
+  return Object.freeze({ entryPath, host, httpOrigin, httpPathPrefixes, surfaceId: input.surfaceId, webSocketOrigin });
 };
 
 const cookieValue = (request: IncomingMessage, name: string): string | undefined => {
@@ -154,19 +171,33 @@ const responseChunks = async (source: IncomingMessage): Promise<Uint8Array> => n
     return;
   }
   let bytes = 0;
+  let settled = false;
   const chunks: Buffer[] = [];
+  const finish = (callback: () => void): void => {
+    if (settled) return;
+    settled = true;
+    clearTimeout(timeout);
+    callback();
+  };
+  const fail = (error: Error): void => finish(() => {
+    source.destroy();
+    rejectPromise(error);
+  });
+  const timeout = setTimeout(() => fail(new Error('Runtime client asset timed out.')), 15_000);
   source.on('data', (chunk: Buffer) => {
     bytes += chunk.length;
     if (bytes > appAssetLimit) {
-      source.destroy();
+      fail(new RangeError('Runtime client asset exceeds the allowed size.'));
       return;
     }
     chunks.push(chunk);
   });
-  source.once('end', () => bytes > appAssetLimit
-    ? rejectPromise(new RangeError('Runtime client asset exceeds the allowed size.'))
-    : resolvePromise(Buffer.concat(chunks)));
-  source.once('error', rejectPromise);
+  source.once('end', () => finish(() => resolvePromise(Buffer.concat(chunks))));
+  source.once('error', (error) => fail(error));
+  source.once('aborted', () => fail(new Error('Runtime client asset was aborted.')));
+  source.once('close', () => {
+    if (!source.complete) fail(new Error('Runtime client asset closed early.'));
+  });
 });
 
 const sameOriginRedirect = (location: string, upstream: URL): string | undefined => {
@@ -178,7 +209,7 @@ const sameOriginRedirect = (location: string, upstream: URL): string | undefined
   }
   if (redirect.origin !== upstream.origin) return undefined;
   try {
-    return `${decodedPath(redirect.pathname, true)}${redirect.search}`;
+    return `${canonicalPath(redirect.pathname, true).upstream}${redirect.search}`;
   } catch {
     return undefined;
   }
@@ -203,8 +234,10 @@ export class RuntimeClientSurfaceProxy {
     const bootstrapCapability = randomBytes(32).toString('base64url');
     const sessionCapability = randomBytes(32).toString('base64url');
     const bootstrapPath = `/__agent_bundle_runtime/bootstrap/${bootstrapCapability}`;
-    const cookieName = 'agent_bundle_runtime';
+    const cookieName = `agent_bundle_runtime_${randomBytes(16).toString('hex')}`;
     const sockets = new Set<Socket>();
+    const upstreamRequests = new Set<ClientRequest>();
+    const upstreamSockets = new Set<Socket>();
     const webSockets = new Set<WebSocket>();
     const webSocketServer = new WebSocketServer({ maxPayload: webSocketMessageLimit, noServer: true });
     let activeConnections = 0;
@@ -253,14 +286,14 @@ export class RuntimeClientSurfaceProxy {
           response(target, closed ? 404 : 405);
           return;
         }
-        let path: string;
+        let path: CanonicalPath;
         try {
-          path = decodedPath(requestUrl.pathname, true);
+          path = canonicalPath(requestUrl.pathname, true);
         } catch {
           response(target, 404);
           return;
         }
-        if (!matchesPrefix(path, trusted.httpPathPrefixes)) {
+        if (!matchesPrefix(path.normalized, trusted.httpPathPrefixes)) {
           response(target, 404);
           return;
         }
@@ -269,17 +302,24 @@ export class RuntimeClientSurfaceProxy {
             ...(typeof request.headers.accept === 'string' ? { accept: request.headers.accept } : {}),
             ...(typeof request.headers['accept-encoding'] === 'string' ? { 'accept-encoding': request.headers['accept-encoding'] } : {}),
           },
-          host: trusted.httpOrigin.hostname,
+          host: trusted.host,
           method: request.method,
-          path: `${path}${requestUrl.search}`,
+          path: `${path.upstream}${requestUrl.search}`,
           port: trusted.httpOrigin.port,
           protocol: trusted.httpOrigin.protocol,
         }, async (upstream) => {
+          const release = (): void => {
+            upstreamRequests.delete(upstreamRequest);
+            target.off('close', abort);
+            request.off('aborted', abort);
+            request.off('error', abort);
+          };
           const status = upstream.statusCode ?? 502;
           const headers = copyResponseHeaders(upstream.headers);
           if (status >= 300 && status < 400 && typeof upstream.headers.location === 'string') {
             const location = sameOriginRedirect(upstream.headers.location, trusted.httpOrigin);
             upstream.resume();
+            release();
             if (location === undefined) {
               response(target, 502);
               return;
@@ -290,6 +330,7 @@ export class RuntimeClientSurfaceProxy {
           }
           try {
             const body = request.method === 'HEAD' ? new Uint8Array() : await responseChunks(upstream);
+            if (target.destroyed || target.writableEnded) return;
             target.writeHead(status, {
               ...headers,
               'content-length': String(body.byteLength),
@@ -299,12 +340,29 @@ export class RuntimeClientSurfaceProxy {
           } catch {
             if (!target.headersSent) response(target, 413);
             else target.destroy();
+          } finally {
+            release();
           }
         });
+        const abort = (): void => {
+          if (!upstreamRequest.destroyed) upstreamRequest.destroy();
+        };
+        upstreamRequests.add(upstreamRequest);
+        upstreamRequest.once('socket', (socket) => {
+          upstreamSockets.add(socket);
+          socket.once('close', () => upstreamSockets.delete(socket));
+        });
         upstreamRequest.once('error', () => {
+          upstreamRequests.delete(upstreamRequest);
+          target.off('close', abort);
+          request.off('aborted', abort);
+          request.off('error', abort);
           if (!target.headersSent) response(target, 502);
           else target.destroy();
         });
+        target.once('close', abort);
+        request.once('aborted', abort);
+        request.once('error', abort);
         upstreamRequest.end();
       })().catch(() => response(target, 502));
     });
@@ -413,6 +471,8 @@ export class RuntimeClientSurfaceProxy {
       if (closePromise !== undefined) return closePromise;
       closed = true;
       closePromise = (async () => {
+        for (const request of upstreamRequests) request.destroy();
+        for (const socket of upstreamSockets) socket.destroy();
         for (const socket of webSockets) socket.terminate();
         for (const socket of sockets) socket.destroy();
         webSocketServer.close();
