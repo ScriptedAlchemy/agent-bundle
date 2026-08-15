@@ -94,6 +94,20 @@ it('accepts only the MCP content-block union and object-shaped structuredContent
   expect(() => projectMcpAppResult({ content: [], structuredContent: [] })).toThrow('structuredContent');
 });
 
+it('accepts empty protocol strings and sanctioned _meta while rejecting malformed optional content fields', () => {
+  expect(projectMcpAppResult({
+    _meta: { 'com.example/result': { retained: true } },
+    content: [{ _meta: { 'com.example/content': { retained: true } }, text: '', type: 'text' }],
+  })).toMatchObject({
+    appVisible: { content: [{ text: '', type: 'text' }] },
+    modelVisible: { content: [{ text: '', type: 'text' }] },
+  });
+  expect(() => projectMcpAppResult({ content: [{ name: '', size: 'wrong', type: 'resource_link', uri: '' }] })).toThrow('content');
+  expect(() => projectMcpAppResult({ content: [{ icons: [{ src: 1 }], name: '', type: 'resource_link', uri: '' }] })).toThrow('content');
+  expect(() => projectMcpAppResult({ content: [{ annotations: { audience: [1] }, data: '', mimeType: '', type: 'image' }] })).toThrow('content');
+  expect(() => projectMcpAppResult({ content: [{ resource: { text: '', title: 1, uri: '' }, type: 'resource' }] })).toThrow('content');
+});
+
 it('preserves own __proto__ JSON properties without prototype mutation', () => {
   const source = JSON.parse('{"__proto__":{"root":true},"nested":{"__proto__":{"nested":true}}}') as unknown;
   const cloned = cloneMcpAppFiniteJson(source) as Record<string, unknown>;

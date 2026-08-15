@@ -295,6 +295,14 @@ export class McpAppRuntimeBindingService {
       if (failure !== undefined) throw failure.reason;
     })();
     this.#closeAttempt = close;
+    void close.then(
+      () => {
+        if (this.#closeAttempt === close) this.#closeAttempt = undefined;
+      },
+      () => {
+        if (this.#closeAttempt === close) this.#closeAttempt = undefined;
+      },
+    );
     return close;
   }
 
@@ -349,7 +357,9 @@ export class McpAppRuntimeBindingService {
       () => {
         if (this.#pendingReleases.get(entry.snapshot.id) === entry) this.#pendingReleases.delete(entry.snapshot.id);
       },
-      () => undefined,
+      () => {
+        if (this.#pendingReleases.get(entry.snapshot.id) === entry) this.#pendingReleases.delete(entry.snapshot.id);
+      },
     );
     return release;
   }

@@ -1,3 +1,5 @@
+import { isCallToolResult } from '@modelcontextprotocol/client';
+
 import type { McpAppJsonValue, McpAppToolDefinition } from './mcp-app-binding-service.ts';
 
 export interface McpAppResultInspection {
@@ -200,44 +202,42 @@ export const selectMcpAppResourceReference = (metadata: unknown): McpAppResource
   });
 };
 
-const nonemptyStringField = (value: Readonly<Record<string, unknown>>, key: string): boolean =>
-  hasOwn(value, key) && typeof value[key] === 'string' && value[key].length > 0;
+const onlyOwnKeys = (value: unknown, allowed: readonly string[]): boolean =>
+  isPlainRecord(value) && Object.keys(value).every((key) => allowed.includes(key));
 
-const optionalStringField = (value: Readonly<Record<string, unknown>>, key: string): boolean =>
-  !hasOwn(value, key) || typeof value[key] === 'string';
-
-const validEmbeddedResource = (value: unknown): boolean => {
-  if (!isPlainRecord(value) || !nonemptyStringField(value, 'uri') || !optionalStringField(value, 'mimeType')) return false;
-  const hasText = hasOwn(value, 'text') && typeof value.text === 'string';
-  const hasBlob = hasOwn(value, 'blob') && typeof value.blob === 'string';
-  return hasText !== hasBlob;
-};
-
-const validContentBlock = (value: McpAppJsonValue): boolean => {
-  if (!isPlainRecord(value) || !nonemptyStringField(value, 'type')) return false;
+/**
+ * The SDK validator checks the protocol discriminants and field types. Its
+ * objects intentionally tolerate unknown fields for broad wire compatibility,
+ * but an App transcript must admit only the protocol fields and `_meta`.
+ */
+const hasExactProtocolContentFields = (value: McpAppJsonValue): boolean => {
+  if (!isPlainRecord(value) || typeof value.type !== 'string') return false;
   switch (value.type) {
     case 'text':
-      return nonemptyStringField(value, 'text');
+      return onlyOwnKeys(value, ['type', 'text', 'annotations', '_meta']);
     case 'image':
     case 'audio':
-      return nonemptyStringField(value, 'data') && nonemptyStringField(value, 'mimeType');
+      return onlyOwnKeys(value, ['type', 'data', 'mimeType', 'annotations', '_meta']);
     case 'resource_link':
-      return nonemptyStringField(value, 'name') && nonemptyStringField(value, 'uri')
-        && optionalStringField(value, 'description') && optionalStringField(value, 'mimeType');
+      return onlyOwnKeys(value, ['type', 'name', 'title', 'icons', 'uri', 'description', 'mimeType', 'size', 'annotations', '_meta']);
     case 'resource':
-      return hasOwn(value, 'resource') && validEmbeddedResource(value.resource);
+      return onlyOwnKeys(value, ['type', 'resource', 'annotations', '_meta'])
+        && onlyOwnKeys(value.resource, ['uri', 'mimeType', 'text', 'blob', '_meta']);
     default:
       return false;
   }
 };
 
-const validContent = (value: McpAppJsonValue): value is readonly McpAppJsonValue[] =>
-  Array.isArray(value) && value.every(validContentBlock);
+const hasExactProtocolContent = (value: McpAppJsonValue): boolean =>
+  Array.isArray(value) && value.every(hasExactProtocolContentFields);
+
+/** Keep SDK validation runtime-only; its rich SDK type is not our frozen finite-JSON representation. */
+const hasProtocolCallToolResult = (value: unknown): boolean => isCallToolResult(value);
 
 export const projectMcpAppResult = (value: unknown): McpAppResultInspection => {
   const appVisible = jsonRecord(value, 'MCP CallToolResult');
-  if (!hasOwn(appVisible, 'content') || !validContent(appVisible.content)) {
-    throw new TypeError('MCP CallToolResult must contain a finite JSON content array.');
+  if (!hasProtocolCallToolResult(appVisible) || !hasExactProtocolContent(appVisible.content)) {
+    throw new TypeError('MCP CallToolResult content must use valid protocol content blocks.');
   }
   if (hasOwn(appVisible, 'isError') && typeof appVisible.isError !== 'boolean') {
     throw new TypeError('MCP CallToolResult isError must be a boolean.');

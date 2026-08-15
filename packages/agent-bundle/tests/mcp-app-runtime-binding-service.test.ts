@@ -306,4 +306,22 @@ it('joins concurrent session-close, invalidation, and service-close releases thr
   await expect(sessionClose).rejects.toThrow('teardown failed');
   await expect(invalidation).rejects.toThrow('teardown failed');
   await expect(shutdown).rejects.toThrow('teardown failed');
+  await expect(service.closeBinding('missing-binding')).resolves.toBe(false);
+});
+
+it('forgets failed release entries after concurrent joiners settle', async () => {
+  const fixture = createSessionFixture();
+  const service = new McpAppRuntimeBindingService();
+  const binding = await service.createBinding(optionsFor(fixture, {
+    onTeardown: () => {
+      throw new Error('teardown failed');
+    },
+  }));
+
+  const first = service.closeBinding(binding.id);
+  const second = service.invalidateBindings({ sessionId: 'mcp-1', sessionRevision: 3 });
+  await expect(first).rejects.toThrow('teardown failed');
+  await expect(second).rejects.toThrow('teardown failed');
+  await expect(service.closeBinding(binding.id)).resolves.toBe(false);
+  await expect(service.invalidateBindings({ sessionId: 'mcp-1', sessionRevision: 3 })).resolves.toBeUndefined();
 });
