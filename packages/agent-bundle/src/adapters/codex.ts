@@ -12,6 +12,7 @@ import {
 } from '../core/types.ts';
 import capabilityTable from './capabilities/codex-0.147.0.json' with { type: 'json' };
 import { mergeHookDocuments, nativeHooksFor, planHooks } from './hook-contract.ts';
+import schemaProvenance from './schemas/codex/PROVENANCE.json' with { type: 'json' };
 import hooksSchema from './schemas/codex/hooks.schema.json' with { type: 'json' };
 import marketplaceSchema from './schemas/codex/marketplace.schema.json' with { type: 'json' };
 import mcpSchema from './schemas/codex/mcp.schema.json' with { type: 'json' };
@@ -36,6 +37,21 @@ const validatePlugin = validator.compile(pluginSchema);
 const validateMcp = validator.compile(mcpSchema);
 const validateMarketplace = validator.compile(marketplaceSchema);
 const validateHooks = validator.compile(hooksSchema);
+const metadata = Object.freeze({
+  adapterRevision: '1.0.0',
+  capabilityRevision: capabilityTable.observedCliVersion,
+  capabilitySha256: '1110ec8e35904d69f86ad8b9d5b886fa9fb4f0647876e6b79d4287aa4513e484',
+  observedVersion: capabilityTable.observedCliVersion,
+  schemas: Object.freeze(
+    Object.entries(schemaProvenance.schemas)
+      .map(([fileName, schema]) => Object.freeze({
+        name: fileName.replace(/\.schema\.json$/, ''),
+        revision: schemaProvenance.observedCliVersion,
+        sha256: schema.sha256,
+      }))
+      .sort((left, right) => left.name.localeCompare(right.name)),
+  ),
+});
 
 const errorDiagnostic = (code: string, message: string): Diagnostic => ({
   code,
@@ -341,6 +357,7 @@ export const codexAdapter: TargetAdapter = Object.freeze({
     skills: capabilityTable.plugin.skills,
   }),
   configExtension: Object.freeze({ key: codexName }),
+  metadata,
   mcpPathTokens: Object.freeze({
     args: Object.freeze({}),
     cwd: Object.freeze({}),

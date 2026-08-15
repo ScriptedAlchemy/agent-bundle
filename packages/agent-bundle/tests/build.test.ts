@@ -31,6 +31,14 @@ interface FileDigest {
 const sha256 = (contents: Uint8Array): string =>
   createHash('sha256').update(contents).digest('hex');
 
+const testAdapterMetadata = Object.freeze({
+  adapterRevision: 'test',
+  capabilityRevision: 'test',
+  capabilitySha256: '0'.repeat(64),
+  observedVersion: 'test',
+  schemas: Object.freeze([]),
+});
+
 const skillFixture = {
   markdown: '---\nname: review\ndescription: Review changes\n---\n# Review\n\nSee [guide](references/guide.md).\n',
   module: "export const greeting = 'hello from skill bundle';\n",
@@ -404,6 +412,7 @@ it('rejects duplicate planned destinations before replacing an existing artifact
   const project = await createProject();
   const duplicateAdapter: TargetAdapter = {
     capabilities: {},
+    metadata: testAdapterMetadata,
     name: 'portable',
     plan: () => ({
       diagnostics: [],
@@ -440,6 +449,7 @@ it('rejects an escaped target name before it can write outside the staging artif
   const targetName = '../escaped-target';
   const adapter: TargetAdapter = {
     capabilities: {},
+    metadata: testAdapterMetadata,
     name: targetName,
     plan: () => ({
       diagnostics: [],
@@ -540,6 +550,7 @@ it('rejects canonical aliases and adapter/root-script collisions before emission
   const project = await createProject();
   const aliasesAdapter: TargetAdapter = {
     capabilities: {},
+    metadata: testAdapterMetadata,
     name: 'portable',
     plan: () => ({
       diagnostics: [],
@@ -553,6 +564,7 @@ it('rejects canonical aliases and adapter/root-script collisions before emission
   };
   const scriptCollisionAdapter: TargetAdapter = {
     capabilities: {},
+    metadata: testAdapterMetadata,
     name: 'portable',
     plan: () => ({
       diagnostics: [],

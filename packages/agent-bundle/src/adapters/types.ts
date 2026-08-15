@@ -41,9 +41,24 @@ export interface TargetConfigExtension {
   readonly key: string;
 }
 
+export interface TargetSchemaDescriptor {
+  readonly name: string;
+  readonly revision: string;
+  readonly sha256: string;
+}
+
+export interface TargetAdapterMetadata {
+  readonly adapterRevision: string;
+  readonly capabilityRevision: string;
+  readonly capabilitySha256: string;
+  readonly observedVersion: string;
+  readonly schemas: readonly TargetSchemaDescriptor[];
+}
+
 export interface TargetAdapter {
   readonly capabilities: Readonly<Record<string, boolean>>;
   readonly configExtension?: TargetConfigExtension;
+  readonly metadata: TargetAdapterMetadata;
   readonly mcpPathTokens?: McpPathTokenCapabilities;
   readonly name: string;
   plan(model: NormalizedPlugin): TargetArtifactPlan;
