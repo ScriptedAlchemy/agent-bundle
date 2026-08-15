@@ -150,6 +150,8 @@ export interface DevRuntimeMcpRegistry {
 
 export interface DevRuntimeSession {
   readonly mcpRegistry: DevRuntimeMcpRegistry;
+  /** Server-only controller identity; it does not depend on an active generation. */
+  readonly providerSessionId: string;
   clientSurface(surfaceId: string): DevRuntimeClientSurfaceEndpoint | undefined;
   close(): Promise<void>;
   invoke(request: DevRuntimeInvocationRequest): Promise<DevRuntimeRun>;

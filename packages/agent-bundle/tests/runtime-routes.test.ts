@@ -68,6 +68,7 @@ const runtimeStatus = Object.freeze({
 class MemoryRuntime implements DevRuntimeSession {
   readonly mcpRegistry = {} as DevRuntimeSession['mcpRegistry'];
   readonly invocations: unknown[] = [];
+  readonly providerSessionId: string = 'provider-a';
   #run: DevRuntimeRun = succeededRun;
 
   clientSurface(): undefined { return undefined; }
@@ -98,6 +99,33 @@ class MemoryRuntime implements DevRuntimeSession {
   runs(limit: number): readonly DevRuntimeRun[] { return [this.#run].slice(0, limit); }
   status(): DevRuntimeStatus { return runtimeStatus; }
   surfaces(): readonly DevRuntimeSurface[] { return [surface]; }
+}
+
+class StartingRuntime extends MemoryRuntime {
+  readonly providerSessionId = 'provider-starting';
+
+  override runs(): readonly DevRuntimeRun[] { return []; }
+
+  override status(): DevRuntimeStatus {
+    return {
+      descriptor: runtimeStatus.descriptor,
+      diagnostics: [],
+      hmrReady: false,
+      state: 'starting',
+    };
+  }
+}
+
+class ForeignRunRuntime extends MemoryRuntime {
+  readonly providerSessionId = 'provider-a';
+
+  override async invoke(): Promise<DevRuntimeRun> {
+    return { ...succeededRun, vector: { ...vector, providerSessionId: 'foreign-provider' } };
+  }
+
+  override async replay(): Promise<DevRuntimeRun> {
+    return { ...succeededRun, vector: { ...vector, providerSessionId: 'foreign-provider' } };
+  }
 }
 
 const coordinator = Object.freeze({
@@ -222,6 +250,39 @@ it('rejects malformed, stale, undeclared, and excessive runtime inputs at the fi
 
     const traversal = await fetch(`${server.url}/api/runtime/assets/hook.after-edit/%2e%2e/main.js?generation=g1`, { headers });
     expect(traversal.status).toBe(400);
+  } finally {
+    await server.close();
+  }
+});
+
+it('keeps a controller-owned provider identity available before the first generation exists', async () => {
+  const server = await start(new StartingRuntime());
+  try {
+    const response = await fetch(`${server.url}/api/runtime/runs`, { headers: authenticated(server) });
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ providerSessionId: 'provider-starting', runs: [] });
+  } finally {
+    await server.close();
+  }
+});
+
+it('rejects provider responses that cross a stable provider boundary or replay a different path run', async () => {
+  const server = await start(new ForeignRunRuntime());
+  try {
+    const headers = { ...authenticated(server), 'content-type': 'application/json' };
+    const invocation = await fetch(`${server.url}/api/runtime/runs`, {
+      body: JSON.stringify({ input: {}, surfaceId: 'hook.after-edit', target: 'claude' }),
+      headers,
+      method: 'POST',
+    });
+    expect(invocation.status).toBe(500);
+
+    const replay = await fetch(`${server.url}/api/runtime/runs/run-a/replay`, {
+      body: JSON.stringify({ mode: 'exact', runId: 'run-b' }),
+      headers,
+      method: 'POST',
+    });
+    expect(replay.status).toBe(400);
   } finally {
     await server.close();
   }

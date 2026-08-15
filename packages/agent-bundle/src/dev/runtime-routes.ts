@@ -251,15 +251,20 @@ const historyLimit = (requestTarget: string | undefined): number => {
   return Number(values[0]);
 };
 
-const providerSessionId = (session: DevRuntimeSession): string | undefined => {
-  const status = session.status();
-  return status.activeVector?.providerSessionId ?? status.lastGoodVector?.providerSessionId;
+const providerSessionId = (session: DevRuntimeSession): string => {
+  if (!nonemptyString(session.providerSessionId)) {
+    throw requestError(diagnostic('AB8205', 'Runtime request could not be completed.', 500));
+  }
+  return session.providerSessionId;
 };
 
 const assertRunOwned = (session: DevRuntimeSession, run: DevRuntimeRun | undefined): DevRuntimeRun => {
   const provider = providerSessionId(session);
-  if (run === undefined || provider === undefined || run.vector.providerSessionId !== provider) {
+  if (run === undefined) {
     throw new DevRuntimeUnavailableError('Runtime run is not available.');
+  }
+  if (run.vector.providerSessionId !== provider) {
+    throw requestError(diagnostic('AB8205', 'Runtime request could not be completed.', 500));
   }
   return run;
 };
@@ -329,11 +334,12 @@ export class RuntimeRoutes {
     }
     const session = this.#session();
     if (parsed.kind === 'runs') {
-      if (method === 'POST') return responseJson(response, { run: await session.invoke(invocation(await jsonBody(request), session.surfaces())) });
+      if (method === 'POST') return responseJson(response, {
+        run: assertRunOwned(session, await session.invoke(invocation(await jsonBody(request), session.surfaces()))),
+      });
       if (method !== 'GET') return responseDiagnostic(response, diagnostic('AB8007', 'Route does not accept this method.', 405));
       const limit = historyLimit(request.url);
       const provider = providerSessionId(session);
-      if (provider === undefined) throw new DevRuntimeUnavailableError();
       const runs = [...session.runs(limit)].sort((left, right) =>
         right.startedAt.localeCompare(left.startedAt) || right.id.localeCompare(left.id));
       if (runs.some((run) => run.vector.providerSessionId !== provider)) {
@@ -358,7 +364,9 @@ export class RuntimeRoutes {
     if (parsed.kind === 'replay') {
       onlyQuery(request.url, undefined);
       if (method !== 'POST') return responseDiagnostic(response, diagnostic('AB8007', 'Route does not accept this method.', 405));
-      return responseJson(response, { run: await session.replay(replay(await jsonBody(request))) });
+      const replayRequest = replay(await jsonBody(request));
+      if (replayRequest.runId !== parsed.id) return invalidShape();
+      return responseJson(response, { run: assertRunOwned(session, await session.replay(replayRequest)) });
     }
     if (parsed.kind === 'state-reset') {
       onlyQuery(request.url, undefined);
