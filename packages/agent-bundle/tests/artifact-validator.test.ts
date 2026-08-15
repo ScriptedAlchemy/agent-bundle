@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { expect, it } from '@rstest/core';
@@ -120,6 +120,174 @@ const targetFromRegistry = (registry: TargetRegistry, name: string): ArtifactMan
   };
 };
 
+const skillMarkdown = (name: string, body: string): string => [
+  '---',
+  `name: ${name}`,
+  'description: Validate an emitted Artifact Skill.',
+  '---',
+  body,
+  '',
+].join('\n');
+
+const customSkillFiles = (body: string, resources: readonly ArtifactFixtureFile[] = []): readonly ArtifactFixtureFile[] => [
+  { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'custom/document.json' },
+  {
+    contents: skillMarkdown('artifact-skill', body),
+    kind: 'copy',
+    path: 'custom/skills/artifact-skill/SKILL.md',
+  },
+  ...resources,
+];
+
+it('validates an emitted Skill and copied resources from the artifact only', async () => {
+  const files = customSkillFiles(
+    '[inline resource](resources/with%20space.md?download=1#section)\n\n[unescaped space resource](resources/with space.md)\n\n[reference resource][guide]\n\n[guide]: <resources/with space.md>\n\n[shortcut]\n\n[shortcut]: resources/with space.md\n',
+    [{
+      contents: '# Resource\n',
+      kind: 'copy',
+      path: 'custom/skills/artifact-skill/resources/with space.md',
+    }],
+  );
+  const root = await writeArtifact(files, true, [customManifestTarget]);
+
+  try {
+    expect(await validateArtifact({ artifactRoot: root, registry: customRegistry() })).toEqual([]);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('rejects a rehashed top-level artifact file outside declared target namespaces', async () => {
+  const files = [
+    { contents: '{"kind":"custom"}\n', kind: 'generated' as const, path: 'custom/document.json' },
+    { contents: 'not compiler metadata\n', kind: 'generated' as const, path: 'top-level.txt' },
+  ];
+  const root = await writeArtifact(files, true, [customManifestTarget]);
+
+  try {
+    const diagnostics = await validateArtifact({ artifactRoot: root, registry: customRegistry() });
+    expect(diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'AB6014', generatedPath: 'top-level.txt' }),
+    ]));
+    expect(diagnostics).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'AB6004' }),
+    ]));
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('rejects a rehashed file outside a declared target emitted layout', async () => {
+  const files = [
+    { contents: '{"kind":"custom"}\n', kind: 'generated' as const, path: 'custom/document.json' },
+    { contents: 'not a compiler output\n', kind: 'generated' as const, path: 'custom/unexpected.txt' },
+  ];
+  const root = await writeArtifact(files, true, [customManifestTarget]);
+
+  try {
+    const diagnostics = await validateArtifact({ artifactRoot: root, registry: customRegistry() });
+    expect(diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'AB6014', generatedPath: 'custom/unexpected.txt', target: customTarget }),
+    ]));
+    expect(diagnostics).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'AB6004' }),
+    ]));
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('rejects an artifact symlink even when the manifest remains self-consistent', async () => {
+  const files = [{ contents: '{"kind":"custom"}\n', kind: 'generated' as const, path: 'custom/document.json' }];
+  const root = await writeArtifact(files, true, [customManifestTarget]);
+
+  try {
+    await symlink(join(root, 'custom', 'document.json'), join(root, 'custom', 'unexpected-link.json'));
+    const diagnostics = await validateArtifact({ artifactRoot: root, registry: customRegistry() });
+    expect(diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'AB6013', generatedPath: 'custom/unexpected-link.json' }),
+    ]));
+    expect(diagnostics).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'AB6004' }),
+    ]));
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('rejects empty declared and undeclared target directories independently of manifest hashes', async () => {
+  const emptyRoot = await writeArtifact([], true, [customManifestTarget]);
+  const declaredRoot = await writeArtifact([
+    { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'custom/document.json' },
+  ], true, [customManifestTarget]);
+
+  try {
+    await mkdir(join(emptyRoot, customTarget));
+    await mkdir(join(declaredRoot, 'undeclared'));
+
+    const [emptyDiagnostics, undeclaredDiagnostics] = await Promise.all([
+      validateArtifact({ artifactRoot: emptyRoot, registry: customRegistry() }),
+      validateArtifact({ artifactRoot: declaredRoot, registry: customRegistry() }),
+    ]);
+
+    expect(emptyDiagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'AB6014', generatedPath: customTarget, target: customTarget }),
+    ]));
+    expect(undeclaredDiagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'AB6014', generatedPath: 'undeclared' }),
+    ]));
+    expect([...emptyDiagnostics, ...undeclaredDiagnostics]).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'AB6004' }),
+    ]));
+  } finally {
+    await rm(emptyRoot, { force: true, recursive: true });
+    await rm(declaredRoot, { force: true, recursive: true });
+  }
+});
+
+it.each([
+  ['a missing copied resource', '[missing resource](references/missing.md)'],
+  ['a percent-encoded path that escapes the Skill root', '[escape resource](..%2Fdocument.json)'],
+])('rejects emitted Skill Markdown with %s', async (_name, body) => {
+  const root = await writeArtifact(customSkillFiles(body), true, [customManifestTarget]);
+
+  try {
+    const diagnostics = await validateArtifact({ artifactRoot: root, registry: customRegistry() });
+    expect(diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'AB6016', generatedPath: 'custom/skills/artifact-skill/SKILL.md', target: customTarget }),
+    ]));
+    expect(diagnostics).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'AB6004' }),
+    ]));
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('validates emitted Skill frontmatter against the pinned contract and directory name', async () => {
+  const files = [
+    { contents: '{"kind":"custom"}\n', kind: 'generated' as const, path: 'custom/document.json' },
+    {
+      contents: skillMarkdown('wrong-name', ''),
+      kind: 'copy' as const,
+      path: 'custom/skills/artifact-skill/SKILL.md',
+    },
+  ];
+  const root = await writeArtifact(files, true, [customManifestTarget]);
+
+  try {
+    const diagnostics = await validateArtifact({ artifactRoot: root, registry: customRegistry() });
+    expect(diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'AB6015', generatedPath: 'custom/skills/artifact-skill/SKILL.md', target: customTarget }),
+    ]));
+    expect(diagnostics).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'AB6004' }),
+    ]));
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
 it('rejects legacy, noncanonical, and duplicate-key manifests as strict v2 parse failures', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-v1-validator-'));
 
@@ -143,12 +311,13 @@ it('rejects legacy, noncanonical, and duplicate-key manifests as strict v2 parse
 
 it('matches a canonical nested manifest file table by path instead of directory traversal position', async () => {
   const root = await writeArtifact([
-    { contents: '{}\n', kind: 'generated', path: 'nested/entry.json' },
-    { contents: '{}\n', kind: 'generated', path: 'nested.json' },
-  ]);
+    { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'custom/document.json' },
+    { contents: skillMarkdown('table', ''), kind: 'copy', path: 'custom/skills/table/SKILL.md' },
+    { contents: '{}\n', kind: 'copy', path: 'custom/skills/table/resources/entry.json' },
+  ], true, [customManifestTarget]);
 
   try {
-    expect(await validateArtifact({ artifactRoot: root })).toEqual([]);
+    expect(await validateArtifact({ artifactRoot: root, registry: customRegistry() })).toEqual([]);
   } finally {
     await rm(root, { force: true, recursive: true });
   }
