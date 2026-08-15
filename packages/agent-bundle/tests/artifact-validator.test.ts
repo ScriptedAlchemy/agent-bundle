@@ -10,7 +10,11 @@ import { expect, it } from '@rstest/core';
 
 import { createDefaultRegistry, TargetRegistry } from '../src/adapters/registry.ts';
 import { readStandardNativeHookCommands, type TargetHookContract } from '../src/adapters/hook-contract.ts';
-import type { TargetAdapter, TargetArtifactDocumentValidator } from '../src/adapters/types.ts';
+import {
+  validateModernMcpDocument,
+  type TargetAdapter,
+  type TargetArtifactDocumentValidator,
+} from '../src/adapters/types.ts';
 import { assembleArtifactManifest, type ArtifactManifestV2 } from '../src/build/manifest.ts';
 import { artifactDiagnosticRecoveries, validateArtifact, validateArtifactWithSnapshot } from '../src/build/validate-artifact.ts';
 import { digest } from '../src/core/digest.ts';
@@ -221,6 +225,60 @@ const customSkillFiles = (body: string, resources: readonly ArtifactFixtureFile[
   },
   ...resources,
 ];
+
+it('reports every legacy SSE MCP issue in lexical order with escaped JSON Pointer paths', () => {
+  let schemaCalls = 0;
+  const validate = validateModernMcpDocument(() => {
+    schemaCalls += 1;
+    return [];
+  });
+  const unordered = validate({
+    mcpServers: {
+      zebra: { type: 'sse' },
+      'a/b~c': { type: 'sse' },
+      modern: { type: 'streamable-http' },
+    },
+  });
+  const reordered = validate({
+    mcpServers: {
+      modern: { type: 'streamable-http' },
+      'a/b~c': { type: 'sse' },
+      zebra: { type: 'sse' },
+    },
+  });
+  const expected = [
+    {
+      instancePath: '/mcpServers/a~1b~0c/type',
+      message: 'legacy SSE MCP transport is not supported',
+    },
+    {
+      instancePath: '/mcpServers/zebra/type',
+      message: 'legacy SSE MCP transport is not supported',
+    },
+  ];
+
+  expect(unordered).toEqual(expected);
+  expect(reordered).toEqual(expected);
+  expect(schemaCalls).toBe(0);
+  expect(Object.isFrozen(unordered)).toBe(true);
+  expect(Object.isFrozen(unordered[0])).toBe(true);
+  expect(Object.isFrozen(unordered[1])).toBe(true);
+});
+
+it.each([
+  { document: { mcpServers: null }, label: 'malformed MCP server collection' },
+  { document: { mcpServers: { modern: { type: 'streamable-http' } } }, label: 'modern-only MCP document' },
+])('delegates a $label to its pinned schema validator exactly once', ({ document }) => {
+  const schemaIssues = Object.freeze([Object.freeze({ instancePath: '/schema', message: 'pinned schema result' })]);
+  let schemaCalls = 0;
+  const validate = validateModernMcpDocument(() => {
+    schemaCalls += 1;
+    return schemaIssues;
+  });
+
+  expect(validate(document)).toBe(schemaIssues);
+  expect(schemaCalls).toBe(1);
+});
 
 it('validates an emitted Skill and copied resources from the artifact only', async () => {
   const files = customSkillFiles(

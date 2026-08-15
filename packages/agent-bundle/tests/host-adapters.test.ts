@@ -257,6 +257,34 @@ it('plans byte-stable native Codex and Claude plugin trees from the same frozen 
   await validateDocuments('claude', writeContents(plugin, 'claude'));
 });
 
+it.each(['codex', 'claude'] as const)(
+  'rejects a hostile normalized legacy MCP transport without emitting %s MCP configuration',
+  (target) => {
+    const model = {
+      ...plugin,
+      mcpServers: [{
+        id: 'mcp:events',
+        name: 'events',
+        provenance: { kind: 'config' as const, sourcePath: '/workspace/agent-bundle.config.ts' },
+        targets: [target],
+        transport: 'sse' as unknown as 'streamable-http',
+        url: 'https://mcp.example.test/events',
+      }],
+    } satisfies NormalizedPlugin;
+    const adapter = createDefaultRegistry().get(target);
+    const plan = adapter.plan(model);
+
+    expect(adapter.validateModel(model)).toEqual([{
+      code: 'AB4339',
+      message: 'MCP server "events" uses unsupported transport "sse".',
+      severity: 'error',
+      sourcePath: '/workspace/agent-bundle.config.ts',
+    }]);
+    expect(plan.diagnostics).toEqual(adapter.validateModel(model));
+    expect(plan.entries.some((entry) => entry.relativePath === '.mcp.json')).toBe(false);
+  },
+);
+
 it('keeps Codex plugin and marketplace interface validator contracts separate', () => {
   const documents = writeContents(plugin, 'codex');
   const pluginManifest = JSON.parse(documents['.codex-plugin/plugin.json']!) as {

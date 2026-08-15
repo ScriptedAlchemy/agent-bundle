@@ -317,6 +317,41 @@ it('reports source and model diagnostics before an MCP server can be compiled', 
   }
 });
 
+it('rejects a hostile normalized legacy SSE transport before adapters can plan it', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-mcp-hostile-model-'));
+  try {
+    const normalized = await normalizeProject(
+      loadedProject(root, {
+        mcp: {
+          servers: {
+            events: {
+              targets: ['portable'],
+              transport: 'streamable-http',
+              url: 'https://mcp.example.test/events',
+            },
+          },
+        },
+        plugin: { name: 'hostile-model', version: '1.0.0' },
+      }),
+      { skills: [] },
+      registry,
+    );
+    const hostile = {
+      ...normalized,
+      mcpServers: [{ ...normalized.mcpServers[0]!, transport: 'sse' as unknown as 'streamable-http' }],
+    };
+
+    expect(validateModel(hostile, registry)).toEqual([{
+      code: 'AB4339',
+      message: 'MCP server "events" uses unsupported transport "sse".',
+      severity: 'error',
+      sourcePath: join(root, 'agent-bundle.config.ts'),
+    }]);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
 it('rejects unsafe, duplicate, and nonlocal MCP App declarations before browser compilation', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-mcp-app-invalid-'));
   try {

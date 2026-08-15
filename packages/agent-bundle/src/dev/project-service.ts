@@ -8,7 +8,7 @@ import { isProjectPathIgnored, readProjectIgnoreRules } from '../config/ignore.t
 import { loadConfig } from '../config/load.ts';
 import { normalizeProject } from '../config/normalize.ts';
 import { validateModel, validateSource } from '../config/validate.ts';
-import { type Diagnostic, withDiagnosticRecovery } from '../core/diagnostics.ts';
+import { deduplicateDiagnostics, type Diagnostic, withDiagnosticRecovery } from '../core/diagnostics.ts';
 import { digest } from '../core/digest.ts';
 import {
   createProjectContext,
@@ -53,28 +53,10 @@ export interface ProjectSourceSnapshot {
   readonly revision: string;
 }
 
-const diagnosticIdentity = (diagnostic: Diagnostic): string => JSON.stringify([
-  diagnostic.code,
-  diagnostic.message,
-  diagnostic.severity,
-  diagnostic.sourcePath,
-  diagnostic.generatedPath,
-  diagnostic.target,
-  diagnostic.recovery,
-]);
-
-const freezeDiagnostics = (diagnostics: readonly Diagnostic[]): readonly Diagnostic[] => {
-  const identities = new Set<string>();
-  const frozen: Diagnostic[] = [];
-  for (const input of diagnostics) {
-    const diagnostic = withDiagnosticRecovery(input);
-    const identity = diagnosticIdentity(diagnostic);
-    if (identities.has(identity)) continue;
-    identities.add(identity);
-    frozen.push(Object.freeze({ ...diagnostic }));
-  }
-  return Object.freeze(frozen);
-};
+const freezeDiagnostics = (diagnostics: readonly Diagnostic[]): readonly Diagnostic[] => Object.freeze(
+  deduplicateDiagnostics(diagnostics.map(withDiagnosticRecovery))
+    .map((diagnostic) => Object.freeze({ ...diagnostic })),
+);
 
 const hasErrors = (diagnostics: readonly Diagnostic[]): boolean =>
   diagnostics.some((diagnostic) => diagnostic.severity === 'error');
