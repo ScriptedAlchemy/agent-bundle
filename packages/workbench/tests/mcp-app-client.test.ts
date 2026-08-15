@@ -6,6 +6,7 @@ import {
 } from '../src/mcp/mcp-app-client.ts';
 
 const request: McpAppPreviewCreateRequest = Object.freeze({
+  consent: Object.freeze({ permissions: Object.freeze({ camera: Object.freeze({}) }) }),
   host: Object.freeze({
     availableDisplayModes: Object.freeze(['inline']),
     containerDimensions: Object.freeze({ height: 400, width: 640 }),
@@ -69,7 +70,9 @@ describe('MCP App browser client', () => {
     expect(headers.get('x-agent-bundle-session')).toBe('foreground-secret');
     expect(String(calls[1]?.[0])).not.toContain('foreground-secret');
     expect(String(calls[1]?.[1]?.body)).not.toContain('foreground-secret');
-    expect(JSON.parse(String(calls[1]?.[1]?.body))).toEqual(request);
+    expect(JSON.parse(String(calls[1]?.[1]?.body))).toEqual({
+      host: request.host, input: request.input, previewProfile: request.previewProfile, result: request.result, toolName: request.toolName,
+    });
   });
 
   it('forwards one binding message through the authenticated route and exposes only the returned frames', async () => {

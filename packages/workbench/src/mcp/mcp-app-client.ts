@@ -249,8 +249,9 @@ export class McpAppClient {
 
   async create(sessionId: string, request: McpAppPreviewCreateRequest): Promise<McpAppPreview> {
     const foreground = await this.#authenticate();
+    const { consent: _ignoredBrowserConsent, ...serverRequest } = request;
     return preview(asRecord(await this.#json(`/api/mcp/sessions/${opaqueSegment(sessionId, 'MCP session')}/apps`, {
-      body: JSON.stringify(detachedJson(request)),
+      body: JSON.stringify(detachedJson(serverRequest)),
       headers: { 'content-type': 'application/json' },
       method: 'POST',
     })).preview, foreground.origin);
