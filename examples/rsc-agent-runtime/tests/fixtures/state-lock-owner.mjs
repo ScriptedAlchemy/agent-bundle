@@ -1,4 +1,4 @@
-import { open } from 'node:fs/promises';
+import { open, rm, writeFile } from 'node:fs/promises';
 import process from 'node:process';
 import { setInterval } from 'node:timers';
 
@@ -11,16 +11,21 @@ if (stateFile === undefined) {
 
 const handle = await open(stateFile, 'a');
 await handle.close();
+const stale = Number(process.argv[3] ?? '2000');
+const update = Number(process.argv[4] ?? '1000');
 const release = await lockfile.lock(stateFile, {
   realpath: true,
   retries: 0,
-  stale: 2_000,
-  update: 1_000,
+  stale,
+  update,
 });
+const metadataFile = `${stateFile}.agent-runtime-lock.json`;
+await writeFile(metadataFile, JSON.stringify({ stale }));
 process.stdout.write('{"ready":true}\n');
 
 process.once('SIGTERM', async () => {
   await release();
+  await rm(metadataFile, { force: true });
   process.exit(0);
 });
 setInterval(() => undefined, 1_000);

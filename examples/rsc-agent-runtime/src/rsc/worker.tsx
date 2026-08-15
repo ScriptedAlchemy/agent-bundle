@@ -15,6 +15,14 @@ const asRecord = (value: unknown): Record<string, unknown> | undefined =>
 const readString = (value: Record<string, unknown>, key: string): string | undefined =>
   typeof value[key] === 'string' ? value[key] : undefined;
 
+const readRequiredString = (value: Record<string, unknown>, key: string): string => {
+  const result = readString(value, key);
+  if (result === undefined || result.trim() === '') {
+    throw new Error(`RSC worker requires a nonempty ${key}`);
+  }
+  return result;
+};
+
 const parseEvent = (value: unknown): CanonicalPostToolUse => {
   const event = asRecord(value);
   if (event === undefined) {
@@ -22,24 +30,17 @@ const parseEvent = (value: unknown): CanonicalPostToolUse => {
   }
 
   const host = readString(event, 'host');
-  const sessionId = readString(event, 'sessionId');
-  const cwd = readString(event, 'cwd');
-  const idempotencyKey = readString(event, 'idempotencyKey');
-  const toolName = readString(event, 'toolName');
-  const path = readString(event, 'path');
-  if (
-    (host !== 'claude' && host !== 'codex') ||
-    sessionId === undefined ||
-    cwd === undefined ||
-    idempotencyKey === undefined ||
-    idempotencyKey.trim() === '' ||
-    toolName === undefined ||
-    path === undefined
-  ) {
+  if (host !== 'claude' && host !== 'codex') {
     throw new Error('RSC worker received an invalid event');
   }
-
-  return { host, sessionId, cwd, idempotencyKey, toolName, path };
+  return {
+    cwd: readRequiredString(event, 'cwd'),
+    host,
+    idempotencyKey: readRequiredString(event, 'idempotencyKey'),
+    path: readRequiredString(event, 'path'),
+    sessionId: readRequiredString(event, 'sessionId'),
+    toolName: readRequiredString(event, 'toolName'),
+  };
 };
 
 const parseSnapshot = (value: unknown): RuntimeSnapshot => {
@@ -64,10 +65,7 @@ const parseRequest = (value: unknown): RenderRequest => {
     throw new Error('RSC worker received an unsupported render request');
   }
 
-  const stateFile = readString(request, 'stateFile');
-  if (stateFile === undefined || stateFile.trim() === '') {
-    throw new Error('RSC worker requires a state file');
-  }
+  const stateFile = readRequiredString(request, 'stateFile');
 
   if (request.type === 'hook/after-file-edit') {
     return {
@@ -104,7 +102,12 @@ const readRequest = async (): Promise<RenderRequest> => {
 
 const render = async (): Promise<void> => {
   const request = await readRequest();
-  const runtime = createFileRuntimeKernel({ stateFile: request.stateFile });
+  const workspaceFallbackRoot =
+    request.type === 'hook/after-file-edit' &&
+    request.stateFile === resolve(request.event.cwd, '.agent-runtime-demo', 'events.jsonl')
+      ? request.event.cwd
+      : undefined;
+  const runtime = createFileRuntimeKernel({ stateFile: request.stateFile, workspaceFallbackRoot });
   const snapshot =
     request.type === 'hook/after-file-edit'
       ? await runtime.recordEdit({

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from '@rstest/core';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
@@ -59,6 +59,29 @@ const runHook = async (
   return { exitCode, stderr, stdout };
 };
 
+const runRscWorker = async (request: Record<string, unknown>) => {
+  const child = spawn(process.execPath, [join(process.cwd(), 'dist/runtime/rsc/index.js')], {
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+  child.stdin.end(JSON.stringify(request));
+  const [stdout, exitCode] = await Promise.all([
+    new Promise<string>((resolve, reject) => {
+      let output = '';
+      child.stdout.setEncoding('utf8');
+      child.stdout.on('data', (chunk: string) => {
+        output += chunk;
+      });
+      child.stdout.on('error', reject);
+      child.stdout.on('end', () => resolve(output));
+    }),
+    new Promise<number | null>((resolve, reject) => {
+      child.on('error', reject);
+      child.on('close', resolve);
+    }),
+  ]);
+  return { exitCode, stdout };
+};
+
 afterEach(async () => {
   await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, { force: true, recursive: true })));
 });
@@ -95,6 +118,26 @@ describe('built RSC hook entry', () => {
         tool_name: 'Write',
       }),
     ).toThrow('tool_use_id or event_id');
+  });
+
+  it('rejects every empty RSC mutation field before creating state', async () => {
+    const workspace = await createTemporaryDirectory();
+    for (const emptyField of ['cwd', 'idempotencyKey', 'path', 'sessionId', 'toolName']) {
+      const stateFile = join(workspace, `${emptyField}.jsonl`);
+      const event = {
+        cwd: workspace,
+        host: 'claude',
+        idempotencyKey: 'claude:tool:worker-fields',
+        path: join(workspace, 'demo.txt'),
+        sessionId: 'session-1',
+        toolName: 'Write',
+        [emptyField]: '',
+      };
+      const result = await runRscWorker({ event, stateFile, type: 'hook/after-file-edit' });
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stdout).toBe('');
+      await expect(readFile(stateFile, 'utf8')).rejects.toThrow();
+    }
   });
 
   it('renders native Claude and Codex outputs through Flight while retaining file-backed state', async () => {
@@ -207,6 +250,31 @@ describe('built RSC hook entry', () => {
     expect(result.exitCode).toBe(0);
     const stateFile = join(workspace, '.agent-runtime-demo', 'events.jsonl');
     expect((await readFile(stateFile, 'utf8')).trim()).toContain('fallback.txt');
+  });
+
+  it('rejects a symlinked workspace fallback path without modifying its external target', async () => {
+    const workspace = await createTemporaryDirectory();
+    const external = await createTemporaryDirectory();
+    const externalState = join(external, 'events.jsonl');
+    await writeFile(externalState, '', 'utf8');
+    await symlink(external, join(workspace, '.agent-runtime-demo'), 'dir');
+
+    const result = await runHook(
+      'codex',
+      {
+        session_id: 'codex-session',
+        cwd: workspace,
+        event_id: 'symlink-fallback-event',
+        hook_event_name: 'PostToolUse',
+        tool_name: 'apply_patch',
+        tool_input: { command: '*** Begin Patch\n*** Add File: protected.txt\n+protected\n*** End Patch' },
+      },
+      undefined,
+    );
+
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stdout).toBe('');
+    await expect(readFile(externalState, 'utf8')).resolves.toBe('');
   });
 
   it('emits only a value-free optional eval hook probe', async () => {

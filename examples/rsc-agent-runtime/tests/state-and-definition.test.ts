@@ -1,4 +1,4 @@
-import { appendFile, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { access, appendFile, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -8,6 +8,7 @@ import { expect, test } from '@rstest/core';
 import { serializeRuntimeDefinition } from '../src/build/serialize-definition.js';
 import { runtimeDefinition } from '../src/definition.js';
 import { createFileRuntimeKernel } from '../src/runtime/state-file.js';
+import { createTestFileRuntimeKernel } from '../src/runtime/state-file-test-support.js';
 
 const readOnlyAnnotations = {
   destructiveHint: false,
@@ -23,8 +24,13 @@ const wait = async (milliseconds: number): Promise<void> =>
     setTimeout(resolve, milliseconds);
   });
 
-const startLockOwner = async (stateFile: string) => {
-  const child = spawn(process.execPath, [join(process.cwd(), 'tests/fixtures/state-lock-owner.mjs'), stateFile], {
+const startLockOwner = async (stateFile: string, timing: { stale: number; update: number } = { stale: 2_000, update: 1_000 }) => {
+  const child = spawn(process.execPath, [
+    join(process.cwd(), 'tests/fixtures/state-lock-owner.mjs'),
+    stateFile,
+    String(timing.stale),
+    String(timing.update),
+  ], {
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   await new Promise<void>((resolve, reject) => {
@@ -279,10 +285,7 @@ test('excludes a live heartbeat owner and recovers its stale lock only after SIG
     const aborted = new AbortController();
     setTimeout(() => aborted.abort(new Error('test abort')), 50);
     await expect(
-      createFileRuntimeKernel({
-        stateFile,
-        testOnlyLockTiming: { staleMs: 2_000, updateMs: 1_000 },
-      }).recordEdit(
+      createTestFileRuntimeKernel({ stateFile }).recordEdit(
         {
           host: 'claude',
           idempotencyKey: 'test:state:live-owner',
@@ -298,7 +301,7 @@ test('excludes a live heartbeat owner and recovers its stale lock only after SIG
     await new Promise<void>((resolve) => owner.once('close', () => resolve()));
     await wait(2_100);
     await expect(
-      createFileRuntimeKernel({ stateFile, testOnlyLockTiming: { staleMs: 2_000, updateMs: 1_000 } }).recordEdit({
+      createTestFileRuntimeKernel({ stateFile }).recordEdit({
         host: 'codex',
         idempotencyKey: 'test:state:stale-recovery',
         path: 'recovered.ts',
@@ -311,6 +314,128 @@ test('excludes a live heartbeat owner and recovers its stale lock only after SIG
   }
 });
 
+test('a non-production short-timing contender cannot steal a production lease', async () => {
+  const stateFile = join(await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-')), 'state.jsonl');
+  await writeFile(stateFile, '', 'utf8');
+  const owner = await startLockOwner(stateFile, { stale: 30_000, update: 5_000 });
+  try {
+    const cancelled = new AbortController();
+    setTimeout(() => cancelled.abort(new Error('short contender aborted')), 2_100);
+    await expect(
+      createTestFileRuntimeKernel({ stateFile }).recordEdit(
+        {
+          host: 'claude',
+          idempotencyKey: 'test:state:short-contender',
+          path: 'must-not-write.ts',
+          sessionId: 'session-1',
+          toolName: 'Write',
+        },
+        { lockAcquireTimeoutMs: 30_000, signal: cancelled.signal },
+      ),
+    ).rejects.toThrow('short contender aborted');
+    await expect(readFile(stateFile, 'utf8')).resolves.toBe('');
+  } finally {
+    owner.kill('SIGTERM');
+    await new Promise<void>((resolve) => owner.once('close', () => resolve()));
+  }
+});
+
+test('releases a lease acquired after an expired absolute acquisition deadline', async () => {
+  const stateFile = join(await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-')), 'state.jsonl');
+  let releases = 0;
+  const kernel = createTestFileRuntimeKernel({
+    stateFile,
+    adapter: {
+      prepareStateFile: async ({ stateFile: preparedStateFile }) => preparedStateFile,
+      acquireLock: async () =>
+        new Promise((resolve) => {
+          setTimeout(() => resolve(async () => {
+            releases += 1;
+          }), 10);
+        }),
+    },
+  });
+
+  await expect(
+    kernel.recordEdit(
+      {
+        host: 'claude',
+        idempotencyKey: 'test:state:late-lock',
+        path: 'late-lock.ts',
+        sessionId: 'session-1',
+        toolName: 'Write',
+      },
+      { lockAcquireTimeoutMs: 1 },
+    ),
+  ).rejects.toThrow('Timed out acquiring runtime state lease');
+  await wait(25);
+  expect(releases).toBe(1);
+});
+
+test('cancels a never-settling active phase at the hard critical-section deadline', async () => {
+  const stateFile = join(await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-')), 'state.jsonl');
+  const kernel = createTestFileRuntimeKernel({
+    stateFile,
+    adapter: {
+      beforeAppend: () => new Promise<void>(() => undefined),
+      criticalSectionMs: 10,
+    },
+  });
+
+  await expect(
+    kernel.recordEdit({
+      host: 'claude',
+      idempotencyKey: 'test:state:never-settles',
+      path: 'never-settles.ts',
+      sessionId: 'session-1',
+      toolName: 'Write',
+    }),
+  ).rejects.toThrow('exceeded 10 ms critical-section limit');
+  await expect(readFile(stateFile, 'utf8')).resolves.toBe('');
+});
+
+test('accepts Windows parent-fsync limitations when creating a new state file', async () => {
+  const stateFile = join(await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-')), 'state.jsonl');
+  const kernel = createTestFileRuntimeKernel({
+    stateFile,
+    adapter: {
+      platform: 'win32',
+      syncParent: async () => {
+        throw Object.assign(new Error('Windows directory sync unsupported'), { code: 'EPERM' });
+      },
+    },
+  });
+  await expect(
+    kernel.recordEdit({
+      host: 'claude',
+      idempotencyKey: 'test:state:windows-parent-sync',
+      path: 'windows.ts',
+      sessionId: 'session-1',
+      toolName: 'Write',
+    }),
+  ).resolves.toMatchObject({ stateVersion: 1 });
+});
+
+test('rejects oversized snapshots before parsing or allocating their full file size', async () => {
+  const stateFile = join(await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-')), 'oversized.jsonl');
+  await writeFile(stateFile, Buffer.alloc(16 * 1024 * 1024 + 1));
+  await expect(createFileRuntimeKernel({ stateFile }).readSnapshot()).rejects.toThrow('exceeds 16777216 byte limit');
+});
+
+test('rejects invalid writes before creating their state file', async () => {
+  const stateFile = join(await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-')), 'state.jsonl');
+  await expect(
+    createFileRuntimeKernel({ stateFile }).recordEdit({
+      host: 'claude',
+      idempotencyKey: 'test:state:invalid-write',
+      path: '',
+      sessionId: 'session-1',
+      toolName: 'Write',
+    }),
+  ).rejects.toThrow('every event field');
+  await expect(access(stateFile)).rejects.toThrow();
+});
+
 test('poisons a kernel after lease compromise before it can append or mutate again', async () => {
   const stateFile = join(await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-')), 'state.jsonl');
   let entered!: () => void;
@@ -321,13 +446,12 @@ test('poisons a kernel after lease compromise before it can append or mutate aga
   const allowAppend = new Promise<void>((resolve) => {
     continueAppend = resolve;
   });
-  const kernel = createFileRuntimeKernel({
+  const kernel = createTestFileRuntimeKernel({
     stateFile,
-    testOnlyBeforeAppend: async () => {
+    adapter: { beforeAppend: async () => {
       entered();
       await allowAppend;
-    },
-    testOnlyLockTiming: { staleMs: 2_000, updateMs: 1_000 },
+    } },
   });
   const pending = kernel.recordEdit({
     host: 'claude',
@@ -336,6 +460,7 @@ test('poisons a kernel after lease compromise before it can append or mutate aga
     sessionId: 'session-1',
     toolName: 'Write',
   });
+  void pending.catch(() => undefined);
   await Promise.race([
     enteredBeforeAppend,
     wait(100).then(() => Promise.reject(new Error('test-only append barrier was not reached'))),
@@ -343,7 +468,7 @@ test('poisons a kernel after lease compromise before it can append or mutate aga
   await rm(`${stateFile}.lock`, { force: true, recursive: true });
   await wait(1_100);
   continueAppend();
-  await expect(pending).rejects.toThrow('permanently poisoned');
+  await expect(pending).rejects.toThrow('lease release failed');
   await expect(
     kernel.recordEdit({
       host: 'claude',
