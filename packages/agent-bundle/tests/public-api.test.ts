@@ -110,7 +110,7 @@ it('exposes advanced adapter registry and contract types only from the advanced 
   } satisfies TargetHookContract;
   const mcpRuntime = {
     manifestPath: 'mcp.json',
-    readModernServer: () => ({ status: 'missing' as const }),
+    readModernServers: () => ({ servers: [], status: 'found' as const }),
     resolveStdioArgument: (value) => value,
     resolveValue: (_field, _roots, value) => ({ diagnostics: [], value }),
   } satisfies TargetMcpRuntimeContract;

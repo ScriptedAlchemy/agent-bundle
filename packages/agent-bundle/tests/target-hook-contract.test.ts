@@ -5,7 +5,12 @@ import { join } from 'node:path';
 
 import { expect, it } from '@rstest/core';
 
-import { planHooks, type TargetHookContract } from '../src/adapters/hook-contract.ts';
+import {
+  planHooks,
+  readStandardNativeHookCommands,
+  readTargetNativeHookCommands,
+  type TargetHookContract,
+} from '../src/adapters/hook-contract.ts';
 import { TargetRegistry } from '../src/adapters/registry.ts';
 import type { TargetAdapter } from '../src/adapters/types.ts';
 import type { NormalizedHook, NormalizedPlugin } from '../src/core/types.ts';
@@ -70,6 +75,36 @@ const runWrapper = async (wrapper: string): Promise<string> =>
     });
   });
 
+it('snapshots target-native hook commands through the contract gateway', () => {
+  const contract = {
+    commandRoot: '${SYNTHETIC_PLUGIN_ROOT}',
+    ...playgroundCodec,
+    eventNames: {
+      afterTool: 'SyntheticAfterTool',
+      beforeTool: 'SyntheticBeforeTool',
+      sessionStart: 'SyntheticSessionStart',
+      stop: 'SyntheticStop',
+    },
+    manifestPath: 'native-events/registration.json',
+    matchers: {},
+    readNativeCommands: () => ({
+      commands: [{ command: 'echo native' }, { command: 'node "${SYNTHETIC_PLUGIN_ROOT}/hooks/start.mjs"' }],
+      status: 'found' as const,
+    }),
+    wrapperPath: (hook: NormalizedHook) => `hooks/${hook.name}.mjs`,
+    wrapperSource: () => 'export default undefined;\n',
+  } satisfies TargetHookContract;
+
+  const result = readTargetNativeHookCommands(contract, { nonstandard: true });
+  expect(result).toEqual({
+    commands: [{ command: 'echo native' }, { command: 'node "${SYNTHETIC_PLUGIN_ROOT}/hooks/start.mjs"' }],
+    status: 'found',
+  });
+  expect(Object.isFrozen(result)).toBe(true);
+  expect(result.status === 'found' && Object.isFrozen(result.commands)).toBe(true);
+  expect(readTargetNativeHookCommands({ ...contract, readNativeCommands: () => null as never }, {})).toEqual({ status: 'invalid' });
+});
+
 it('builds adapter-owned native hook event, layout, and wrapper source', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-target-hook-contract-'));
   const outputRoot = join(root, 'dist');
@@ -113,7 +148,8 @@ it('builds adapter-owned native hook event, layout, and wrapper source', async (
     },
     manifestPath: 'native-events/registration.json',
     matchers: { 'file.write': '^SyntheticWrite$' },
-    wrapperPath: (selectedHook) => `runtime/native/${selectedHook.name}.mjs`,
+    readNativeCommands: readStandardNativeHookCommands,
+    wrapperPath: (selectedHook) => `runtime/${selectedHook.name}.mjs`,
     wrapperSource: (entry) => [
       `import handler from ${JSON.stringify(entry.hook.source)};`,
       `const result = await handler({ nativeEvent: ${JSON.stringify(entry.nativeEvent)} });`,
@@ -123,6 +159,7 @@ it('builds adapter-owned native hook event, layout, and wrapper source', async (
   } satisfies TargetHookContract;
   const staleTargetContract = { ...contract, target: 'contract-target' };
   const adapter: TargetAdapter = {
+    artifactLayout: { hookWrappers: { allowedSuffixes: ['.mjs'], directory: 'runtime' } },
     capabilities: { hooks: true },
     hookContract: contract,
     metadata,
@@ -159,7 +196,7 @@ it('builds adapter-owned native hook event, layout, and wrapper source', async (
     });
 
     expect(result.compiledHooks[0]).toMatchObject({ target: 'synthetic' });
-    const wrapper = join(outputRoot, 'synthetic', 'runtime', 'native', 'synthetic-before-tool.mjs');
+    const wrapper = join(outputRoot, 'synthetic', 'runtime', 'synthetic-before-tool.mjs');
     await expect(readFile(wrapper, 'utf8')).resolves.toContain('synthetic-wrapper-marker');
     await expect(runWrapper(wrapper)).resolves.toBe('synthetic-wrapper-marker:{"nativeEvent":"SyntheticBeforeWrite"}');
     await expect(readFile(join(outputRoot, 'synthetic', 'native-events', 'registration.json'), 'utf8')
@@ -167,7 +204,7 @@ it('builds adapter-owned native hook event, layout, and wrapper source', async (
       hooks: {
         SyntheticBeforeWrite: [{
           hooks: [{
-            command: 'node "${SYNTHETIC_PLUGIN_ROOT}/runtime/native/synthetic-before-tool.mjs"',
+            command: 'node "${SYNTHETIC_PLUGIN_ROOT}/runtime/synthetic-before-tool.mjs"',
             type: 'command',
           }],
           matcher: '^SyntheticWrite$',
@@ -204,6 +241,7 @@ it('rejects missing and blank native event mappings before creating hook entries
       eventNames,
       manifestPath: 'native-events/registration.json',
       matchers: {},
+      readNativeCommands: () => ({ commands: [], status: 'found' as const }),
       wrapperPath: (hook) => `hooks/${hook.name}.mjs`,
       wrapperSource: () => 'export default undefined;\n',
     });
@@ -234,6 +272,7 @@ it('continues planning valid hooks after a prior hook mapping error', () => {
     },
     manifestPath: 'native-events/registration.json',
     matchers: {},
+    readNativeCommands: () => ({ commands: [], status: 'found' as const }),
     wrapperPath: (hook) => `hooks/${hook.name}.mjs`,
     wrapperSource: () => 'export default undefined;\n',
   });

@@ -27,6 +27,15 @@ export interface ModernMcpStreamableHttpServer {
 
 export type ModernMcpServer = ModernMcpStdioServer | ModernMcpStreamableHttpServer;
 
+export interface ModernMcpServerEntry {
+  readonly name: string;
+  readonly server: ModernMcpServer;
+}
+
+export type ModernMcpServersReadResult =
+  | Readonly<{ readonly servers: readonly ModernMcpServerEntry[]; readonly status: 'found' }>
+  | Readonly<{ readonly status: 'invalid' }>;
+
 export type ModernMcpServerReadResult =
   | Readonly<{ readonly server: ModernMcpServer; readonly status: 'found' }>
   | Readonly<{ readonly status: 'invalid' }>
@@ -39,7 +48,7 @@ export interface McpRuntimeValueResolution {
 
 export interface TargetMcpRuntimeContract {
   readonly manifestPath: string;
-  readModernServer(document: unknown, name: string): ModernMcpServerReadResult;
+  readModernServers(document: unknown): ModernMcpServersReadResult;
   resolveStdioArgument(value: string, roots: McpRuntimeRoots): string;
   resolveValue(
     field: McpRuntimeValueField,
@@ -162,27 +171,26 @@ const streamableHttpServer = (
   });
 };
 
-const readModernMcpServer = (
+const readModernMcpServers = (
   document: unknown,
-  name: string,
   remoteTypes: ReadonlySet<string>,
-): ModernMcpServerReadResult => {
+): ModernMcpServersReadResult => {
   if (!plainDataRecord(document)) return { status: 'invalid' };
   const servers = ownDataValue(document, 'mcpServers');
   if (servers === undefined || !servers.found || !plainDataRecord(servers.value)) return { status: 'invalid' };
-  if (!Object.hasOwn(servers.value, name)) return { status: 'missing' };
-  const value = servers.value[name];
-  if (!plainDataRecord(value)) return { status: 'invalid' };
-  const type = ownDataValue(value, 'type');
-  if (type === undefined || !type.found || typeof type.value !== 'string') return { status: 'invalid' };
-
-  if (type.value === 'stdio') {
-    const server = stdioServer(value);
-    return server === undefined ? { status: 'invalid' } : { server, status: 'found' };
+  const entries: ModernMcpServerEntry[] = [];
+  for (const name of Object.keys(servers.value).sort((left, right) => left.localeCompare(right))) {
+    const value = servers.value[name];
+    if (!plainDataRecord(value)) return { status: 'invalid' };
+    const type = ownDataValue(value, 'type');
+    if (type === undefined || !type.found || typeof type.value !== 'string') return { status: 'invalid' };
+    const server = type.value === 'stdio'
+      ? stdioServer(value)
+      : streamableHttpServer(value, remoteTypes);
+    if (server === undefined) return { status: 'invalid' };
+    entries.push(Object.freeze({ name, server }));
   }
-
-  const server = streamableHttpServer(value, remoteTypes);
-  return server === undefined ? { status: 'invalid' } : { server, status: 'found' };
+  return Object.freeze({ servers: Object.freeze(entries), status: 'found' });
 };
 
 const snapshotModernServer = (value: unknown): ModernMcpServer | undefined => {
@@ -234,28 +242,76 @@ const snapshotModernServer = (value: unknown): ModernMcpServer | undefined => {
   });
 };
 
+const snapshotModernServers = (value: unknown): readonly ModernMcpServerEntry[] | undefined => {
+  if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype || Object.hasOwn(value, 'then')) {
+    return undefined;
+  }
+  const descriptors = Object.getOwnPropertyDescriptors(value);
+  const length = Object.getOwnPropertyDescriptor(value, 'length');
+  if (
+    length === undefined ||
+    !('value' in length) ||
+    typeof length.value !== 'number' ||
+    Object.keys(descriptors).length !== length.value + 1
+  ) {
+    return undefined;
+  }
+  const names = new Set<string>();
+  const servers: ModernMcpServerEntry[] = [];
+  for (let index = 0; index < length.value; index += 1) {
+    const descriptor = descriptors[index];
+    if (descriptor === undefined || !('value' in descriptor) || !plainDataRecord(descriptor.value)) return undefined;
+    const name = ownDataValue(descriptor.value, 'name');
+    const server = ownDataValue(descriptor.value, 'server');
+    if (
+      name === undefined || !name.found || typeof name.value !== 'string' || name.value.length === 0 ||
+      server === undefined || !server.found || names.has(name.value)
+    ) return undefined;
+    const snapshot = snapshotModernServer(server.value);
+    if (snapshot === undefined) return undefined;
+    names.add(name.value);
+    servers.push(Object.freeze({ name: name.value, server: snapshot }));
+  }
+  servers.sort((left, right) => left.name.localeCompare(right.name));
+  return Object.freeze(servers);
+};
+
+const snapshotModernServersResult = (value: unknown): ModernMcpServersReadResult | undefined => {
+  if (!plainDataRecord(value)) return undefined;
+  const status = ownDataValue(value, 'status');
+  if (status === undefined || !status.found || typeof status.value !== 'string') return undefined;
+  if (status.value === 'invalid') return Object.freeze({ status: 'invalid' });
+  if (status.value !== 'found') return undefined;
+  const servers = ownDataValue(value, 'servers');
+  if (servers === undefined || !servers.found) return undefined;
+  const snapshot = snapshotModernServers(servers.value);
+  return snapshot === undefined ? undefined : Object.freeze({ servers: snapshot, status: 'found' });
+};
+
+/** Safely invokes and snapshots a target-provided modern MCP manifest reader. */
+export const readTargetMcpServers = (
+  runtime: TargetMcpRuntimeContract,
+  document: unknown,
+): ModernMcpServersReadResult => {
+  try {
+    return snapshotModernServersResult(runtime.readModernServers(document)) ?? Object.freeze({ status: 'invalid' });
+  } catch {
+    return Object.freeze({ status: 'invalid' });
+  }
+};
+
 /** Safely invokes and validates a target-provided modern MCP manifest reader. */
 export const readTargetMcpServer = (
   runtime: TargetMcpRuntimeContract,
   document: unknown,
   name: string,
 ): ModernMcpServerReadResult => {
-  try {
-    const result: unknown = runtime.readModernServer(document, name);
-    if (!plainDataRecord(result)) return Object.freeze({ status: 'invalid' });
-    const status = ownDataValue(result, 'status');
-    if (status === undefined || !status.found || typeof status.value !== 'string') return Object.freeze({ status: 'invalid' });
-    if (status.value === 'missing' || status.value === 'invalid') return Object.freeze({ status: status.value });
-    if (status.value !== 'found') return Object.freeze({ status: 'invalid' });
-    const server = ownDataValue(result, 'server');
-    if (server === undefined || !server.found) return Object.freeze({ status: 'invalid' });
-    const snapshot = snapshotModernServer(server.value);
-    return snapshot === undefined
-      ? Object.freeze({ status: 'invalid' })
-      : Object.freeze({ server: snapshot, status: 'found' });
-  } catch {
-    return Object.freeze({ status: 'invalid' });
-  }
+  const result = readTargetMcpServers(runtime, document);
+  if (result.status === 'invalid') return Object.freeze({ status: 'invalid' });
+  const found = result.servers.find((entry) => entry.name === name);
+  return found === undefined
+    ? Object.freeze({ status: 'missing' })
+    : Object.freeze({ server: found.server, status: 'found' });
 };
 
 export const createTargetMcpRuntime = ({
@@ -267,7 +323,7 @@ export const createTargetMcpRuntime = ({
   const nativeRemoteTypes = new Set(remoteTypes);
   return Object.freeze({
     manifestPath,
-    readModernServer: (document: unknown, name: string) => readModernMcpServer(document, name, nativeRemoteTypes),
+    readModernServers: (document: unknown) => readModernMcpServers(document, nativeRemoteTypes),
     resolveStdioArgument,
     resolveValue,
   });

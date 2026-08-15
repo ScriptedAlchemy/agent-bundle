@@ -9,11 +9,14 @@ import { pathToFileURL } from 'node:url';
 import { expect, it } from '@rstest/core';
 
 import { createDefaultRegistry, TargetRegistry } from '../src/adapters/registry.ts';
+import { readStandardNativeHookCommands, type TargetHookContract } from '../src/adapters/hook-contract.ts';
 import type { TargetAdapter, TargetArtifactDocumentValidator } from '../src/adapters/types.ts';
 import { assembleArtifactManifest, type ArtifactManifestV2 } from '../src/build/manifest.ts';
 import { validateArtifact } from '../src/build/validate-artifact.ts';
 import { digest } from '../src/core/digest.ts';
 import { agentSkillsSchemaRevision } from '../src/schemas/agent-skills/contract.ts';
+import { createMcpPathTokenResolver } from '../src/services/mcp-path-tokens.ts';
+import { createTargetMcpRuntime } from '../src/services/mcp-runtime.ts';
 
 const hash = (value: string): string => createHash('sha256').update(value).digest('hex');
 
@@ -104,6 +107,64 @@ const customManifestTarget = Object.freeze({
   ...customMetadata,
   name: customTarget,
 });
+
+const coherenceTarget = 'coherent';
+const coherenceMetadata = Object.freeze({
+  adapterRevision: 'coherence-adapter-v1',
+  capabilityRevision: 'coherence-capabilities-v1',
+  capabilitySha256: 'c'.repeat(64),
+  observedVersion: 'coherence-observed-v1',
+  schemas: Object.freeze([]),
+});
+
+const coherenceManifestTarget = Object.freeze({ ...coherenceMetadata, name: coherenceTarget });
+
+const coherenceRegistry = (): TargetRegistry => new TargetRegistry().register({
+  artifactLayout: { mcpEntries: { allowedSuffixes: ['.mjs'], directory: 'mcp' } },
+  capabilities: { mcp: true },
+  mcpRuntime: createTargetMcpRuntime({
+    manifestPath: 'native/servers.json',
+    remoteTypes: ['streamable-http'],
+    resolveValue: createMcpPathTokenResolver({ target: coherenceTarget, tokens: {} }),
+  }),
+  metadata: coherenceMetadata,
+  name: coherenceTarget,
+  plan: () => ({ diagnostics: [], entries: [] }),
+  validateModel: () => [],
+} satisfies TargetAdapter);
+
+const hookCoherenceTarget = 'hooked';
+const hookCoherenceMetadata = Object.freeze({
+  adapterRevision: 'hook-coherence-adapter-v1',
+  capabilityRevision: 'hook-coherence-capabilities-v1',
+  capabilitySha256: 'd'.repeat(64),
+  observedVersion: 'hook-coherence-observed-v1',
+  schemas: Object.freeze([]),
+});
+
+const hookCoherenceManifestTarget = Object.freeze({ ...hookCoherenceMetadata, name: hookCoherenceTarget });
+
+const hookCoherenceContract = {
+  commandRoot: '${HOOK_ROOT}',
+  encodePlaygroundInput: (input: Readonly<Record<string, unknown>>) => input,
+  encodePlaygroundOutput: (output: Readonly<Record<string, unknown>> | undefined) => output,
+  eventNames: { afterTool: 'After', beforeTool: 'Before', sessionStart: 'Start', stop: 'Stop' },
+  manifestPath: 'hooks/hooks.json',
+  matchers: {},
+  readNativeCommands: readStandardNativeHookCommands,
+  wrapperPath: () => 'hooks/start.mjs',
+  wrapperSource: () => 'export default undefined;\n',
+} satisfies TargetHookContract;
+
+const hookCoherenceRegistry = (): TargetRegistry => new TargetRegistry().register({
+  artifactLayout: { hookWrappers: { allowedSuffixes: ['.mjs'], directory: 'hooks' } },
+  capabilities: { hooks: true },
+  hookContract: hookCoherenceContract,
+  metadata: hookCoherenceMetadata,
+  name: hookCoherenceTarget,
+  plan: () => ({ diagnostics: [], entries: [] }),
+  validateModel: () => [],
+} satisfies TargetAdapter);
 
 const validateCustomDocument: TargetArtifactDocumentValidator = (document) =>
   typeof document === 'object' && document !== null && (document as { readonly kind?: unknown }).kind === 'custom'
@@ -485,6 +546,58 @@ it('preserves structural artifact diagnostics after a strict v2 manifest passes'
     await writeFile(join(root, 'broken.mjs'), 'export const repaired = true;\n');
     expect(await validateArtifact({ artifactRoot: root })).toEqual(expect.arrayContaining([
       expect.objectContaining({ code: 'AB6004', generatedPath: 'agent-bundle.manifest.json' }),
+    ]));
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('reports an orphan compiler MCP output after the artifact is rehashed', async () => {
+  const files = [
+    {
+      contents: '{"mcpServers":{"server":{"args":["mcp/mcp-server-deadbeef.mjs"],"command":"node","type":"stdio"}}}\n',
+      kind: 'generated' as const,
+      path: 'coherent/native/servers.json',
+    },
+    { contents: 'export const server = true;\n', kind: 'bundle' as const, path: 'coherent/mcp/mcp-server-deadbeef.mjs' },
+    { contents: 'export const orphan = true;\n', kind: 'bundle' as const, path: 'coherent/mcp/mcp-junk-deadbeef.mjs' },
+  ];
+  const root = await writeArtifact(files, true, [coherenceManifestTarget]);
+
+  try {
+    const diagnostics = await validateArtifact({ artifactRoot: root, registry: coherenceRegistry() });
+    expect(diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'AB6017', generatedPath: 'coherent/mcp/mcp-junk-deadbeef.mjs', target: coherenceTarget }),
+    ]));
+    expect(diagnostics).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'AB6004' }),
+    ]));
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('reports a compiler-pattern native hook command that is not indexed', async () => {
+  const files = [
+    { contents: '{"hooks":[],"version":1}\n', kind: 'generated' as const, path: 'agent-bundle.hooks.json' },
+    {
+      contents: `${JSON.stringify({
+        hooks: { Start: [{ hooks: [{ command: 'node "${HOOK_ROOT}/hooks/start.mjs"', type: 'command' }] }] },
+      })}\n`,
+      kind: 'generated' as const,
+      path: 'hooked/hooks/hooks.json',
+    },
+    { contents: 'export const start = true;\n', kind: 'bundle' as const, path: 'hooked/hooks/start.mjs' },
+  ];
+  const root = await writeArtifact(files, true, [hookCoherenceManifestTarget]);
+
+  try {
+    const diagnostics = await validateArtifact({ artifactRoot: root, registry: hookCoherenceRegistry() });
+    expect(diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'AB6018', generatedPath: 'hooked/hooks/hooks.json', target: hookCoherenceTarget }),
+    ]));
+    expect(diagnostics).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'AB6004' }),
     ]));
   } finally {
     await rm(root, { force: true, recursive: true });

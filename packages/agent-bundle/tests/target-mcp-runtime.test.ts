@@ -13,6 +13,7 @@ import type { ArtifactEpoch } from '../src/dev/types.ts';
 import type { TargetMcpRuntimeContract } from '../src/services/mcp-runtime.ts';
 import {
   createTargetMcpRuntime,
+  readTargetMcpServers,
   readTargetMcpServer,
   resolveTargetRelativeStdioArgument,
 } from '../src/services/mcp-runtime.ts';
@@ -60,42 +61,47 @@ const epoch = (root: string): ArtifactEpoch => ({
 
 const runtime: TargetMcpRuntimeContract = {
   manifestPath: 'native/registry.json',
-  readModernServer: (document, name) => {
+  readModernServers: (document) => {
     const servers = document !== null && typeof document === 'object'
       ? (document as { readonly nativeServers?: Record<string, unknown> }).nativeServers
       : undefined;
-    const server = servers?.[name];
-    if (server === undefined || server === null || typeof server !== 'object') return { status: 'missing' };
-    const native = server as Record<string, unknown>;
-    if (native.kind === 'native-stdio' && typeof native.exec === 'string') {
-      return {
-        server: {
-          args: Array.isArray(native.argv) && native.argv.every((value) => typeof value === 'string')
-            ? native.argv
-            : [],
-          command: native.exec,
-          cwd: typeof native.directory === 'string' ? native.directory : undefined,
-          env: native.environment !== null && typeof native.environment === 'object'
-            ? native.environment as Record<string, string>
-            : undefined,
-          kind: 'stdio',
-        },
-        status: 'found',
-      };
-    }
-    if (native.kind === 'native-http' && typeof native.endpoint === 'string') {
-      return {
-        server: {
-          headers: native.requestHeaders !== null && typeof native.requestHeaders === 'object'
-            ? native.requestHeaders as Record<string, string>
-            : undefined,
-          kind: 'streamable-http',
-          url: native.endpoint,
-        },
-        status: 'found',
-      };
-    }
-    return { status: 'missing' };
+    if (servers === undefined) return { status: 'invalid' };
+    const entries = Object.entries(servers).map(([name, server]) => {
+      if (server === null || typeof server !== 'object') return undefined;
+      const native = server as Record<string, unknown>;
+      if (native.kind === 'native-stdio' && typeof native.exec === 'string') {
+        return {
+          name,
+          server: {
+            args: Array.isArray(native.argv) && native.argv.every((value) => typeof value === 'string')
+              ? native.argv
+              : [],
+            command: native.exec,
+            cwd: typeof native.directory === 'string' ? native.directory : undefined,
+            env: native.environment !== null && typeof native.environment === 'object'
+              ? native.environment as Record<string, string>
+              : undefined,
+            kind: 'stdio' as const,
+          },
+        };
+      }
+      if (native.kind === 'native-http' && typeof native.endpoint === 'string') {
+        return {
+          name,
+          server: {
+            headers: native.requestHeaders !== null && typeof native.requestHeaders === 'object'
+              ? native.requestHeaders as Record<string, string>
+              : undefined,
+            kind: 'streamable-http' as const,
+            url: native.endpoint,
+          },
+        };
+      }
+      return undefined;
+    });
+    return entries.some((entry) => entry === undefined)
+      ? { status: 'invalid' as const }
+      : { servers: entries as Exclude<typeof entries[number], undefined>[], status: 'found' as const };
   },
   resolveStdioArgument: resolveTargetRelativeStdioArgument,
   resolveValue: createMcpPathTokenResolver({
@@ -111,11 +117,39 @@ const runtime: TargetMcpRuntimeContract = {
 };
 
 it('converts malformed or throwing target reader callbacks into invalid results', () => {
-  const malformed = { ...runtime, readModernServer: () => null as never };
-  const throwing = { ...runtime, readModernServer: () => { throw new Error('reader failure'); } };
+  const malformed = { ...runtime, readModernServers: () => null as never };
+  const throwing = { ...runtime, readModernServers: () => { throw new Error('reader failure'); } };
 
   expect(readTargetMcpServer(malformed, { nativeServers: {} }, 'fixture')).toEqual({ status: 'invalid' });
   expect(readTargetMcpServer(throwing, { nativeServers: {} }, 'fixture')).toEqual({ status: 'invalid' });
+});
+
+it('reads and freezes every modern server before delegating per-name lookups', () => {
+  const parser = createTargetMcpRuntime({
+    manifestPath: 'native/registry.json',
+    remoteTypes: ['native-http'],
+    resolveValue: (_field, _roots, value) => ({ diagnostics: [], value }),
+  });
+  const document = {
+    mcpServers: {
+      http: { headers: { Authorization: 'Bearer token' }, type: 'native-http', url: 'https://mcp.example.test' },
+      stdio: { args: ['mcp/server.mjs'], command: 'node', type: 'stdio' },
+    },
+  };
+
+  const all = readTargetMcpServers(parser, document);
+  expect(all.status).toBe('found');
+  if (all.status !== 'found') throw new Error('Expected modern servers.');
+  expect(Object.isFrozen(all)).toBe(true);
+  expect(Object.isFrozen(all.servers)).toBe(true);
+  expect(all.servers).toEqual([
+    { name: 'http', server: { headers: { Authorization: 'Bearer token' }, kind: 'streamable-http', url: 'https://mcp.example.test' } },
+    { name: 'stdio', server: { args: ['mcp/server.mjs'], command: 'node', kind: 'stdio' } },
+  ]);
+  expect(readTargetMcpServer(parser, document, 'stdio')).toEqual({
+    server: { args: ['mcp/server.mjs'], command: 'node', kind: 'stdio' },
+    status: 'found',
+  });
 });
 
 it('detaches and freezes reader servers before delayed mutation can change a launch', async () => {
@@ -128,8 +162,11 @@ it('detaches and freezes reader servers before delayed mutation can change a lau
   const httpServer = { headers: sharedFields, kind: 'streamable-http' as const, url: 'https://mcp.example.test/original' };
   const mutatingRuntime: TargetMcpRuntimeContract = {
     manifestPath: 'native/registry.json',
-    readModernServer: (_document, name) => ({
-      server: name === 'stdio' ? stdioServer : httpServer,
+    readModernServers: () => ({
+      servers: [
+        { name: 'http', server: httpServer },
+        { name: 'stdio', server: stdioServer },
+      ],
       status: 'found',
     }),
     resolveStdioArgument: (value) => value,
@@ -227,33 +264,38 @@ it('delegates one-shot and persistent MCP operations to an injected target runti
   const http: Array<{ readonly headers?: Record<string, string>; readonly url: string }> = [];
   const calls: string[] = [];
   const adapter: TargetAdapter = {
+    artifactLayout: { scripts: { allowedSuffixes: ['.mjs'], directory: 'scripts' } },
     capabilities: { mcp: true },
     mcpRuntime: runtime,
     metadata,
     name: 'synthetic-mcp',
     plan: () => ({
       diagnostics: [],
-      entries: [{
-        content: `${JSON.stringify({
-          nativeServers: {
-            http: {
-              endpoint: 'https://mcp.example.test/$SYNTHETIC_ROOT',
-              kind: 'native-http',
-              requestHeaders: { Authorization: 'Bearer $SYNTHETIC_DATA' },
+      entries: [
+        {
+          content: `${JSON.stringify({
+            nativeServers: {
+              http: {
+                endpoint: 'https://mcp.example.test/$SYNTHETIC_ROOT',
+                kind: 'native-http',
+                requestHeaders: { Authorization: 'Bearer $SYNTHETIC_DATA' },
+              },
+              stdio: {
+                argv: ['./scripts/server.mjs', '$SYNTHETIC_ROOT/scripts/resource.mjs'],
+                directory: '$SYNTHETIC_ROOT',
+                environment: { SESSION: '$SYNTHETIC_DATA' },
+                exec: 'runner-$SYNTHETIC_ROOT',
+                kind: 'native-stdio',
+              },
             },
-            stdio: {
-              argv: ['./runtime/server.mjs', '$SYNTHETIC_ROOT/bin'],
-              directory: '$SYNTHETIC_ROOT',
-              environment: { SESSION: '$SYNTHETIC_DATA' },
-              exec: 'runner-$SYNTHETIC_ROOT',
-              kind: 'native-stdio',
-            },
-          },
-        })}\n`,
-        kind: 'write',
-        relativePath: runtime.manifestPath,
-        sourceInputs: [configPath],
-      }],
+          })}\n`,
+          kind: 'write',
+          relativePath: runtime.manifestPath,
+          sourceInputs: [configPath],
+        },
+        { content: 'export {};\n', kind: 'write', relativePath: 'scripts/server.mjs', sourceInputs: [configPath] },
+        { content: 'export {};\n', kind: 'write', relativePath: 'scripts/resource.mjs', sourceInputs: [configPath] },
+      ],
     }),
     validateModel: () => [],
   };
@@ -296,7 +338,10 @@ it('delegates one-shot and persistent MCP operations to an injected target runti
     expect(calls).toEqual(['list', 'native-tool']);
     expect(stdio).toHaveLength(1);
     expect(stdio[0]).toMatchObject({
-      args: [join(artifact, 'synthetic-mcp', 'runtime', 'server.mjs'), join(artifact, 'synthetic-mcp', 'bin')],
+      args: [
+        join(artifact, 'synthetic-mcp', 'scripts', 'server.mjs'),
+        join(artifact, 'synthetic-mcp', 'scripts', 'resource.mjs'),
+      ],
       command: 'runner-$SYNTHETIC_ROOT',
       cwd: join(artifact, 'synthetic-mcp'),
       env: { SESSION: expect.any(String) },
@@ -353,8 +398,8 @@ it('delegates one-shot and persistent MCP operations to an injected target runti
     expect(persistentStdio).toHaveLength(1);
     expect(persistentStdio[0]).toMatchObject({
       args: [
-        join(root, '.agent-bundle', 'epochs', 'synthetic-epoch', 'synthetic-mcp', 'runtime', 'server.mjs'),
-        join(root, '.agent-bundle', 'epochs', 'synthetic-epoch', 'synthetic-mcp', 'bin'),
+        join(root, '.agent-bundle', 'epochs', 'synthetic-epoch', 'synthetic-mcp', 'scripts', 'server.mjs'),
+        join(root, '.agent-bundle', 'epochs', 'synthetic-epoch', 'synthetic-mcp', 'scripts', 'resource.mjs'),
       ],
       command: stdio[0]!.command,
       cwd: join(root, '.agent-bundle', 'epochs', 'synthetic-epoch', 'synthetic-mcp'),
