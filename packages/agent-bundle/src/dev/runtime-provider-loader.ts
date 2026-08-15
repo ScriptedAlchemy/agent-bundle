@@ -33,6 +33,43 @@ const contained = (root: string, candidate: string): boolean => {
 const nonemptyString = (value: unknown): value is string =>
   typeof value === 'string' && value.trim().length > 0;
 
+const environmentVariableNames = (value: unknown): readonly string[] => {
+  if (!Array.isArray(value)) {
+    throw new DevRuntimeProviderLoadError('Development runtime provider descriptor is invalid.');
+  }
+  const lengthDescriptor = Object.getOwnPropertyDescriptor(value, 'length');
+  if (
+    lengthDescriptor === undefined || !('value' in lengthDescriptor) ||
+    typeof lengthDescriptor.value !== 'number' || !Number.isSafeInteger(lengthDescriptor.value) ||
+    lengthDescriptor.value < 0
+  ) {
+    throw new DevRuntimeProviderLoadError('Development runtime provider descriptor environment variable names are invalid.');
+  }
+  const length = lengthDescriptor.value;
+
+  for (const key of Reflect.ownKeys(value)) {
+    if (typeof key !== 'string' || (key !== 'length' && (!/^(0|[1-9]\d*)$/u.test(key) || Number(key) >= length))) {
+      throw new DevRuntimeProviderLoadError('Development runtime provider descriptor environment variable names are invalid.');
+    }
+  }
+
+  const names: string[] = [];
+  for (let index = 0; index < length; index += 1) {
+    const entry = Object.getOwnPropertyDescriptor(value, String(index));
+    if (entry === undefined || !entry.enumerable || !('value' in entry) || typeof entry.value !== 'string') {
+      throw new DevRuntimeProviderLoadError('Development runtime provider descriptor environment variable names are invalid.');
+    }
+    names.push(entry.value);
+  }
+  if (
+    names.some((name) => !/^[A-Z_][A-Z0-9_]*$/u.test(name)) ||
+    new Set(names).size !== names.length
+  ) {
+    throw new DevRuntimeProviderLoadError('Development runtime provider descriptor environment variable names are invalid.');
+  }
+  return Object.freeze(names);
+};
+
 const descriptor = (value: unknown): DevRuntimeDescriptor => {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     throw new DevRuntimeProviderLoadError('Development runtime provider descriptor must be an object.');
@@ -43,22 +80,27 @@ const descriptor = (value: unknown): DevRuntimeDescriptor => {
   const label = record.label;
   const schemaVersion = record.schemaVersion;
   const environmentVariables = record.environmentVariables;
-  if (!nonemptyString(id) || !nonemptyString(label) || schemaVersion !== 1 || !Array.isArray(environmentVariables)) {
+  if (!nonemptyString(id) || !nonemptyString(label) || schemaVersion !== 1) {
     throw new DevRuntimeProviderLoadError('Development runtime provider descriptor is invalid.');
-  }
-  if (
-    environmentVariables.some((name) => typeof name !== 'string' || !/^[A-Z_][A-Z0-9_]*$/u.test(name)) ||
-    new Set(environmentVariables).size !== environmentVariables.length
-  ) {
-    throw new DevRuntimeProviderLoadError('Development runtime provider descriptor environment variable names are invalid.');
   }
 
   return Object.freeze({
-    environmentVariables: Object.freeze([...environmentVariables]),
+    environmentVariables: environmentVariableNames(environmentVariables),
     id,
     label,
     schemaVersion: 1,
   });
+};
+
+const namedProviderFactory = (module: ProviderModule): (() => unknown) => {
+  if (typeof module !== 'object' || module === null || Array.isArray(module)) {
+    throw new DevRuntimeProviderLoadError('Development runtime provider must export createDevRuntimeProvider.');
+  }
+  const entry = Object.getOwnPropertyDescriptor(module, 'createDevRuntimeProvider');
+  if (entry === undefined || !('value' in entry) || typeof entry.value !== 'function') {
+    throw new DevRuntimeProviderLoadError('Development runtime provider must export createDevRuntimeProvider.');
+  }
+  return entry.value as () => unknown;
 };
 
 const containedProviderPath = async (projectRoot: string, declaration: AgentBundleDevRuntimeConfig): Promise<string> => {
@@ -111,13 +153,16 @@ export const resolveDevRuntimeProvider = async (
     throw new DevRuntimeProviderLoadError('Development runtime provider module could not be loaded.');
   }
 
-  if (typeof loaded.createDevRuntimeProvider !== 'function') {
+  let createProvider: () => unknown;
+  try {
+    createProvider = namedProviderFactory(loaded);
+  } catch (error) {
+    if (error instanceof DevRuntimeProviderLoadError) throw error;
     throw new DevRuntimeProviderLoadError('Development runtime provider must export createDevRuntimeProvider.');
   }
-
   let candidate: unknown;
   try {
-    candidate = await loaded.createDevRuntimeProvider();
+    candidate = await Reflect.apply(createProvider, loaded, []);
   } catch {
     throw new DevRuntimeProviderLoadError('Development runtime provider factory failed.');
   }
@@ -140,6 +185,6 @@ export const resolveDevRuntimeProvider = async (
   }
   return Object.freeze({
     descriptor: frozenDescriptor,
-    start: start as DevRuntimeProvider['start'],
+    start: ((context) => Reflect.apply(start, candidate, [context])) as DevRuntimeProvider['start'],
   });
 };

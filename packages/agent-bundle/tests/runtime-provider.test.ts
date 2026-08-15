@@ -265,3 +265,130 @@ it('normalizes provider property accessor failures to the stable load error', as
     await rm(root, { force: true, recursive: true });
   }
 });
+
+it('retains the factory provider as the start method receiver', async () => {
+  const { root } = await createProviderFixture();
+  try {
+    class StatefulProvider {
+      #starts = 0;
+
+      readonly descriptor = {
+        environmentVariables: [],
+        id: 'stateful-runtime',
+        label: 'Stateful runtime',
+        schemaVersion: 1,
+      } as const;
+
+      async start(): Promise<number> {
+        this.#starts += 1;
+        return this.#starts;
+      }
+    }
+
+    const candidate = new StatefulProvider();
+    const provider = await resolveDevRuntimeProvider(root, { provider: './src/dev/provider.ts' }, async () => ({
+      createDevRuntimeProvider: () => candidate,
+    }));
+
+    await expect((provider.start as unknown as () => Promise<number>)()).resolves.toBe(1);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('captures a named factory export only from an own data property', async () => {
+  const { root } = await createProviderFixture();
+  let factoryCalls = 0;
+  let getterCalls = 0;
+  const secret = 'provider-export-secret';
+  try {
+    const ownModule = {
+      createDevRuntimeProvider: () => {
+        factoryCalls += 1;
+        return fixtureProvider();
+      },
+    };
+    await expect(resolveDevRuntimeProvider(root, { provider: './src/dev/provider.ts' }, async () => ownModule))
+      .resolves.toMatchObject({ descriptor: { id: 'fixture-runtime' } });
+    expect(factoryCalls).toBe(1);
+
+    const accessorModule = Object.defineProperty({}, 'createDevRuntimeProvider', {
+      enumerable: true,
+      get: () => {
+        getterCalls += 1;
+        throw new Error(secret);
+      },
+    });
+    const accessorError = await resolveDevRuntimeProvider(
+      root,
+      { provider: './src/dev/provider.ts' },
+      async () => accessorModule,
+    ).then(() => undefined, (reason: unknown) => reason);
+    expect(accessorError).toMatchObject({ code: 'AB8200' });
+    expect((accessorError as Error).message).not.toContain(secret);
+    expect(getterCalls).toBe(0);
+
+    const inheritedModule = Object.create({ createDevRuntimeProvider: () => fixtureProvider() });
+    await expect(resolveDevRuntimeProvider(root, { provider: './src/dev/provider.ts' }, async () => inheritedModule))
+      .rejects.toMatchObject({ code: 'AB8200' });
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('rejects sparse, accessor-backed, and extended descriptor environment lists without reading accessors', async () => {
+  const { root } = await createProviderFixture();
+  let getterCalls = 0;
+  try {
+    const sparse = ['RUNTIME_TOKEN'];
+    sparse.length = 2;
+    const extended = ['RUNTIME_TOKEN'];
+    Object.defineProperty(extended, 'extra', { enumerable: true, value: 'unexpected' });
+    const accessorBacked = ['RUNTIME_TOKEN'];
+    Object.defineProperty(accessorBacked, '0', {
+      configurable: true,
+      enumerable: true,
+      get: () => {
+        getterCalls += 1;
+        return 'RUNTIME_TOKEN';
+      },
+    });
+
+    for (const environmentVariables of [sparse, extended, accessorBacked]) {
+      await expect(resolveDevRuntimeProvider(root, { provider: './src/dev/provider.ts' }, async () => ({
+        createDevRuntimeProvider: () => fixtureProvider({
+          descriptor: { environmentVariables, id: 'fixture-runtime', label: 'Fixture runtime', schemaVersion: 1 },
+        }),
+      }))).rejects.toMatchObject({ code: 'AB8200' });
+    }
+    expect(getterCalls).toBe(0);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('snapshots a dense environment list without reading its indexed values or length', async () => {
+  const { root } = await createProviderFixture();
+  let lengthReads = 0;
+  const environmentVariables = new Proxy(['RUNTIME_TOKEN'], {
+    get: (target, key, receiver) => {
+      if (key === 'length') {
+        lengthReads += 1;
+        throw new Error('environment-length-secret');
+      }
+      return Reflect.get(target, key, receiver);
+    },
+  });
+  try {
+    const provider = await resolveDevRuntimeProvider(root, { provider: './src/dev/provider.ts' }, async () => ({
+      createDevRuntimeProvider: () => fixtureProvider({
+        descriptor: { environmentVariables, id: 'fixture-runtime', label: 'Fixture runtime', schemaVersion: 1 },
+      }),
+    }));
+
+    expect(provider.descriptor.environmentVariables).toEqual(['RUNTIME_TOKEN']);
+    expect(lengthReads).toBe(0);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});

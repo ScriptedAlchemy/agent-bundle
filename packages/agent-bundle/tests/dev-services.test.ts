@@ -33,13 +33,21 @@ const createProject = async (skillMarkdown: string): Promise<string> => {
 
 const createRuntimeProject = async (options: Readonly<{
   readonly appMeta?: string;
+  readonly appDeclaration?: string;
+  readonly configSetup?: (metadataSentinel: string) => string;
   readonly provider?: string;
 }> = {}): Promise<{
+  readonly metadataSentinel: string;
   readonly root: string;
   readonly sentinel: string;
 }> => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-dev-runtime-'));
+  const metadataSentinel = join(root, 'metadata-accessed');
   const sentinel = join(root, 'provider-imported');
+  const appDeclaration = options.appDeclaration ?? (
+    '{ _meta: ' + (options.appMeta ?? "{ ui: { preferred: 'compact' }, labels: ['one', 'two'] }") +
+    ", entry: './src/app.ts', resourceUri: 'ui://timeline/v1/dashboard', targets: ['portable'], template: './src/shell.html' }"
+  );
   await mkdir(join(root, 'skills', 'review'), { recursive: true });
   await mkdir(join(root, 'src', 'dev'), { recursive: true });
   await Promise.all([
@@ -61,16 +69,17 @@ const createRuntimeProject = async (options: Readonly<{
       '',
     ].join('\n')),
     writeFile(join(root, 'agent-bundle.config.ts'), [
+      options.configSetup?.(metadataSentinel) ?? '',
       'export default {',
       "  dev: { runtime: { provider: " + JSON.stringify(options.provider ?? './src/dev/provider.ts') + ' } },',
-      "  mcp: { servers: { timeline: { apps: { dashboard: { _meta: " + (options.appMeta ?? "{ ui: { preferred: 'compact' }, labels: ['one', 'two'] }") + ", entry: './src/app.ts', resourceUri: 'ui://timeline/v1/dashboard', targets: ['portable'], template: './src/shell.html' } }, entry: './src/server.ts', targets: ['portable'] } } },",
+      "  mcp: { servers: { timeline: { apps: { dashboard: " + appDeclaration + " }, entry: './src/server.ts', targets: ['portable'] } } },",
       "  plugin: { name: 'dev-runtime-fixture', version: '1.0.0' },",
       "  targets: ['portable'],",
       '};',
       '',
     ].join('\n')),
   ]);
-  return { root, sentinel };
+  return { metadataSentinel, root, sentinel };
 };
 
 it('prepares a frozen server-only runtime declaration only for development callers', async () => {
@@ -132,6 +141,56 @@ it('keeps supplemental runtime declaration and App metadata failures out of the 
       rm(malformedDeclaration.root, { force: true, recursive: true }),
       rm(nonfiniteMetadata.root, { force: true, recursive: true }),
     ]);
+  }
+});
+
+it('sanitizes top-level MCP App metadata accessors before source validation without evaluating them', async () => {
+  const accessorProject = (behavior: 'return' | 'throw') => createRuntimeProject({
+    appDeclaration: 'dashboard',
+    configSetup: (metadataSentinel) => [
+      "import { writeFileSync } from 'node:fs';",
+      "const dashboard = { entry: './src/app.ts', resourceUri: 'ui://timeline/v1/dashboard', targets: ['portable'], template: './src/shell.html' };",
+      "Object.defineProperty(dashboard, '_meta', { enumerable: true, get: () => {",
+      `  writeFileSync(${JSON.stringify(metadataSentinel)}, 'evaluated');`,
+      behavior === 'return'
+        ? "  return { token: 'metadata-accessor-secret' };"
+        : "  throw new Error('metadata-accessor-secret');",
+      '} });',
+      '',
+    ].join('\n'),
+  });
+  const returned = await accessorProject('return');
+  const thrown = await accessorProject('throw');
+  try {
+    for (const project of [returned, thrown]) {
+      const prepared = await new ProjectService({ includeDevRuntime: true, mode: 'development', root: project.root }).prepare('build');
+      expect(prepared.source.state).toBe('ready');
+      expect(prepared.devRuntime).toBeUndefined();
+      expect(prepared.devRuntimeDiagnostic).toMatchObject({ code: 'AB8200' });
+      expect(prepared.devRuntimeDiagnostic?.message).not.toContain('metadata-accessor-secret');
+      await expect(readFile(project.metadataSentinel, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    }
+  } finally {
+    await Promise.all([
+      rm(returned.root, { force: true, recursive: true }),
+      rm(thrown.root, { force: true, recursive: true }),
+    ]);
+  }
+});
+
+it('does not let supplemental metadata sanitization suppress unrelated source diagnostics', async () => {
+  const project = await createRuntimeProject({ appMeta: '{ count: Number.NaN }' });
+  try {
+    await writeFile(join(project.root, 'skills', 'review', 'SKILL.md'), '# Missing frontmatter\n');
+    const prepared = await new ProjectService({ includeDevRuntime: true, mode: 'development', root: project.root }).prepare('build');
+
+    expect(prepared.source).toMatchObject({
+      diagnostics: expect.arrayContaining([expect.objectContaining({ code: 'AB3001' })]),
+      state: 'invalid',
+    });
+    expect(prepared.model).toBeUndefined();
+  } finally {
+    await rm(project.root, { force: true, recursive: true });
   }
 });
 

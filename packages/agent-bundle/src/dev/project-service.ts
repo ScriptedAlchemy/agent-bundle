@@ -267,15 +267,21 @@ const preparedRuntime = (
   sourceRevision: revision,
 });
 
-const runtimeMetadataDiagnostics = new Set(['AB4335', 'AB4338']);
-
-const configWithRuntimeMetadataRemoved = (config: Record<string, unknown>): Record<string, unknown> => {
+const configWithRuntimeMetadataRemoved = (config: Record<string, unknown>): Readonly<{
+  changed: boolean;
+  config: Record<string, unknown>;
+}> => {
   const mcp = Object.getOwnPropertyDescriptor(config, 'mcp');
-  if (mcp === undefined || !('value' in mcp) || typeof mcp.value !== 'object' || mcp.value === null || Array.isArray(mcp.value)) return config;
+  if (mcp === undefined || !('value' in mcp) || typeof mcp.value !== 'object' || mcp.value === null || Array.isArray(mcp.value)) {
+    return Object.freeze({ changed: false, config });
+  }
   const servers = Object.getOwnPropertyDescriptor(mcp.value, 'servers');
-  if (servers === undefined || !('value' in servers) || typeof servers.value !== 'object' || servers.value === null || Array.isArray(servers.value)) return config;
+  if (servers === undefined || !('value' in servers) || typeof servers.value !== 'object' || servers.value === null || Array.isArray(servers.value)) {
+    return Object.freeze({ changed: false, config });
+  }
 
   const sanitizedServers: Record<string, unknown> = {};
+  let changed = false;
   for (const [name, server] of Object.entries(servers.value)) {
     if (typeof server !== 'object' || server === null || Array.isArray(server)) {
       sanitizedServers[name] = server;
@@ -307,16 +313,21 @@ const configWithRuntimeMetadataRemoved = (config: Record<string, unknown>): Reco
       const descriptors = Object.getOwnPropertyDescriptors(app);
       delete descriptors._meta;
       sanitizedApps[appName] = Object.defineProperties({}, descriptors);
+      changed = true;
     }
     const descriptors = Object.getOwnPropertyDescriptors(server);
     descriptors.apps = { configurable: true, enumerable: true, value: sanitizedApps, writable: true };
     sanitizedServers[name] = Object.defineProperties({}, descriptors);
   }
+  if (!changed) return Object.freeze({ changed: false, config });
   const mcpDescriptors = Object.getOwnPropertyDescriptors(mcp.value);
   mcpDescriptors.servers = { configurable: true, enumerable: true, value: sanitizedServers, writable: true };
   const configDescriptors = Object.getOwnPropertyDescriptors(config);
   configDescriptors.mcp = { configurable: true, enumerable: true, value: Object.defineProperties({}, mcpDescriptors), writable: true };
-  return Object.defineProperties({}, configDescriptors);
+  return Object.freeze({
+    changed: true,
+    config: Object.defineProperties({}, configDescriptors),
+  });
 };
 
 const preparedProject = (
@@ -382,10 +393,15 @@ export class ProjectService {
 
     const snapshot = await snapshotProjectSource(root, loaded.configPath);
     const runtime = runtimeDeclaration(this.#options.includeDevRuntime === true, loaded.config, loaded.configPath);
-    const sourceDiagnostics = freezeDiagnostics(validateSource(loaded, discovered));
-    const supplementalMetadataFailure = runtime.declaration !== undefined &&
-      sourceDiagnostics.length > 0 && sourceDiagnostics.every((diagnostic) => runtimeMetadataDiagnostics.has(diagnostic.code));
-    if (hasErrors(sourceDiagnostics) && !supplementalMetadataFailure) {
+    const runtimeMetadata = runtime.declaration === undefined
+      ? Object.freeze({ changed: false, config: loaded.config })
+      : configWithRuntimeMetadataRemoved(loaded.config as Record<string, unknown>);
+    const preparedLoaded = runtimeMetadata.config === loaded.config
+      ? loaded
+      : { ...loaded, config: runtimeMetadata.config as AgentBundleConfig };
+    const sourceDiagnostics = freezeDiagnostics(validateSource(preparedLoaded, discovered));
+    const supplementalMetadataFailure = runtimeMetadata.changed;
+    if (hasErrors(sourceDiagnostics)) {
       const source = sourceStatus(sourceDiagnostics, snapshot.revision);
       log(this.#options.logger, 'project.invalid-source', { diagnostics: sourceDiagnostics.length, root });
       return preparedProject(loaded.configPath, snapshot, sourceDiagnostics, registry, root, source);
@@ -394,12 +410,7 @@ export class ProjectService {
     let model: NormalizedPlugin;
     try {
       model = await normalizeProject(
-        supplementalMetadataFailure
-          ? {
-            ...loaded,
-            config: configWithRuntimeMetadataRemoved(loaded.config as Record<string, unknown>) as AgentBundleConfig,
-          }
-          : loaded,
+        preparedLoaded,
         discovered,
         registry,
       );
