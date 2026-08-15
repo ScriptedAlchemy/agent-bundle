@@ -193,6 +193,29 @@ it('creates one canonical Apps preview from its leased binding resource', async 
   });
 });
 
+it('replaces browser toolInfo with the canonical leased tool definition', async () => {
+  const service = serviceFor(authorityFor());
+  const forgedHost = {
+    ...host,
+    toolInfo: { tool: { inputSchema: { type: 'object' }, name: 'browser-forged-tool' } },
+  };
+  await service.create({
+    consent: { permissions: { geolocation: {} } },
+    host: forgedHost,
+    input: originalInput,
+    previewProfile: 'portable',
+    result: originalResult,
+    sessionId: 'session-weather',
+    toolName: 'show-weather',
+  });
+
+  await service.receive(binding.id, initialize);
+  expect(await service.takeOutbound(binding.id)).toMatchObject([{
+    id: 'initialize-weather',
+    result: { hostContext: { toolInfo: { tool: binding.toolDefinition } } },
+  }]);
+});
+
 it('composes with the real binding service using its canonical tool definition contract', async () => {
   let lists = 0;
   let releases = 0;
@@ -521,6 +544,34 @@ it('coalesces concurrent graceful and force close into one binding release', asy
   expect(service.get(binding.id)).toBeUndefined();
 });
 
+it('keeps a graceful close routable until its resource-teardown acknowledgment releases the binding', async () => {
+  let closes = 0;
+  const service = serviceFor(authorityFor({
+    closeBinding: async () => {
+      closes += 1;
+      return true;
+    },
+  }));
+  const preview = await createPreview(service);
+  await service.receive(binding.id, initialize);
+  await service.takeOutbound(binding.id);
+  await service.receive(binding.id, initialized);
+  await service.takeOutbound(binding.id);
+
+  expect(await service.close(binding.id, { id: 'teardown-weather' })).toBe(true);
+  expect(service.get(binding.id)).toBe(preview);
+  expect(await service.takeOutbound(binding.id)).toMatchObject([{
+    id: 'teardown-weather',
+    jsonrpc: '2.0',
+    method: 'ui/resource-teardown',
+  }]);
+  expect(await service.receive(binding.id, { id: 'teardown-weather', jsonrpc: '2.0', result: {} })).toBe(true);
+  await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+  expect(closes).toBe(1);
+  expect(service.get(binding.id)).toBeUndefined();
+});
+
 it('bounds closeAll while tracking a blocked create and prevents its later publication', async () => {
   const resolvingTool = deferred<McpAppToolDefinition>();
   const toolStarted = deferred<void>();
@@ -540,4 +591,39 @@ it('bounds closeAll while tracking a blocked create and prevents its later publi
   resolvingTool.resolve(binding.toolDefinition);
   await expect(creating).rejects.toThrow('closed before completion');
   expect(service.get(binding.id)).toBeUndefined();
+});
+
+it('aggregates a late binding release failure after closeAll has already aborted creation', async () => {
+  for (const releaseFailure of [false, new Error('release rejected')]) {
+    const bindingStarted = deferred<void>();
+    const delayedBinding = deferred<McpAppBinding>();
+    let releases = 0;
+    const authority: McpAppPreviewBindingAuthority = {
+      callTool: async () => ({}),
+      closeBinding: async () => {
+        releases += 1;
+        if (releaseFailure instanceof Error) throw releaseFailure;
+        return releaseFailure;
+      },
+      createBinding: async () => {
+        bindingStarted.resolve();
+        return delayedBinding.promise;
+      },
+      readResource: async () => resourceResponse(),
+    };
+    const service = serviceFor(authority, { closeTimeoutMs: 100 });
+    const creating = createPreview(service);
+    await bindingStarted.promise;
+    const closing = service.closeAll();
+    delayedBinding.resolve(binding);
+
+    const closeFailure = await closing.catch((error: unknown) => error);
+    expect(closeFailure).toBeInstanceOf(AggregateError);
+    expect((closeFailure as AggregateError).errors).toEqual([
+      expect.objectContaining({ message: 'MCP App preview creation release failed for binding "binding-weather".' }),
+    ]);
+    await expect(creating).rejects.toThrow('closed before completion');
+    expect(releases).toBe(1);
+    expect(service.get(binding.id)).toBeUndefined();
+  }
 });

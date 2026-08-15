@@ -48,9 +48,11 @@ export interface McpAppPreviewToolAuthority {
   resolveTool(sessionId: string, toolName: string): Promise<McpAppToolDefinition>;
 }
 
+export type McpAppPreviewHostContext = Omit<McpAppHostContextInput, 'toolInfo'>;
+
 export interface CreateMcpAppPreviewOptions {
   readonly consent?: McpAppSandboxConsent;
-  readonly host: McpAppHostContextInput;
+  readonly host: McpAppPreviewHostContext;
   readonly input: McpAppJsonValue;
   readonly previewProfile: McpAppPreviewProfile;
   readonly result: McpAppJsonValue;
@@ -87,6 +89,7 @@ interface PreviewEntry {
   readonly outbound: McpAppBridgeMessage[];
   actionCount: number;
   closePromise?: Promise<void>;
+  closing: boolean;
   closed: boolean;
   outboundBytes: number;
   tail: Promise<void>;
@@ -98,7 +101,7 @@ interface CreateControl {
   closed: boolean;
   done: Promise<void>;
   entry?: PreviewEntry;
-  finish(): void;
+  finish(failure?: unknown): void;
   releasePromise?: Promise<void>;
 }
 
@@ -117,10 +120,11 @@ const positiveInteger = (value: number | undefined, fallback: number, name: stri
 const boundedTimeout = (value: number | undefined): number => positiveInteger(value, defaultCloseTimeoutMs, 'MCP App preview close timeout');
 
 const createControl = (): CreateControl => {
-  let finish: () => void = () => undefined;
-  const done = new Promise<void>((resolve) => {
-    finish = resolve;
+  let finish: (failure?: unknown) => void = () => undefined;
+  const done = new Promise<void>((resolve, reject) => {
+    finish = (failure) => failure === undefined ? resolve() : reject(failure);
   });
+  void done.catch(() => undefined);
   return { aborted: false, closed: false, done, finish };
 };
 
@@ -132,7 +136,15 @@ const messageByteLength = (message: unknown): number | undefined => {
   }
 };
 
-const hostContextRecord = (host: McpAppHostContextInput): McpAppBridgeJsonRecord => Object.freeze({
+const canonicalTool = (tool: McpAppToolDefinition): McpAppBridgeJsonRecord => {
+  const snapshot: Record<string, McpAppJsonValue> = {};
+  for (const [key, value] of Object.entries(tool)) {
+    if (value !== undefined) snapshot[key] = value;
+  }
+  return Object.freeze(snapshot);
+};
+
+const hostContextRecord = (host: McpAppPreviewHostContext, tool: McpAppBridgeJsonRecord): McpAppBridgeJsonRecord => Object.freeze({
   availableDisplayModes: [...host.availableDisplayModes],
   containerDimensions: { ...host.containerDimensions },
   deviceCapabilities: { ...host.deviceCapabilities },
@@ -143,7 +155,7 @@ const hostContextRecord = (host: McpAppHostContextInput): McpAppBridgeJsonRecord
   styles: { ...host.styles },
   theme: host.theme,
   timeZone: host.timeZone,
-  toolInfo: { ...host.toolInfo },
+  toolInfo: { tool },
   userAgent: host.userAgent,
 });
 
@@ -199,6 +211,7 @@ export class McpAppPreviewService {
     if (this.#closing) throw new Error('MCP App preview service is closed.');
     const control = createControl();
     this.#creates.add(control);
+    let cleanupFailure: unknown;
     try {
       const tool = await this.#toolAuthority.resolveTool(options.sessionId, options.toolName);
       this.#assertCreateAvailable(control);
@@ -216,13 +229,18 @@ export class McpAppPreviewService {
       control.binding = binding;
       this.#assertCanonicalBinding(binding, options);
       this.#assertCreateAvailable(control);
+      const toolDefinition = canonicalTool(binding.toolDefinition);
+      const host: McpAppHostContextInput = {
+        ...options.host,
+        toolInfo: { tool: toolDefinition },
+      };
       const outbound: McpAppBridgeMessage[] = [];
       const entryRef: { current?: PreviewEntry } = {};
       const bridge = createMcpAppBridge({
         binding,
         host: {
           ...this.#host,
-          context: hostContextRecord(options.host),
+          context: hostContextRecord(options.host, toolDefinition),
           info: this.#hostInfo,
         },
         operations: this.#bindingAuthority,
@@ -242,6 +260,7 @@ export class McpAppPreviewService {
         actionCount: 0,
         binding,
         bridge,
+        closing: false,
         closed: false,
         outbound,
         outboundBytes: 0,
@@ -256,7 +275,7 @@ export class McpAppPreviewService {
       const profile = resolveMcpAppHostProfile({
         consentedCapabilities: capabilitiesOf(options.consent?.permissions),
         declaredCapabilities: capabilitiesOf(resource.kind === 'resource' ? resource.permissions : undefined),
-        host: options.host,
+        host,
         profile: options.previewProfile,
         resource: resourceForProfile(binding, resource),
       });
@@ -273,11 +292,15 @@ export class McpAppPreviewService {
       entry.preview = preview;
       return preview;
     } catch (error) {
-      await this.#abortCreate(control).catch(() => undefined);
+      try {
+        await this.#abortCreate(control);
+      } catch (cleanupError) {
+        cleanupFailure = cleanupError;
+      }
       throw error;
     } finally {
       this.#creates.delete(control);
-      control.finish();
+      control.finish(cleanupFailure);
     }
   }
 
@@ -307,19 +330,14 @@ export class McpAppPreviewService {
   async close(bindingId: string, options: McpAppBridgeCloseOptions): Promise<boolean> {
     const entry = this.#entries.get(bindingId);
     if (entry === undefined) return false;
-    await this.#closeEntry(entry, () => entry.bridge.close(options));
+    void this.#closeEntry(entry, () => entry.bridge.close(options), false).catch(() => undefined);
     return true;
   }
 
   async forceClose(bindingId: string): Promise<boolean> {
     const entry = this.#entries.get(bindingId);
     if (entry === undefined) return false;
-    if (entry.closePromise !== undefined) {
-      void entry.bridge.forceClose().catch(() => undefined);
-      await entry.closePromise;
-      return true;
-    }
-    await this.#closeEntry(entry, () => entry.bridge.forceClose());
+    await this.#forceCloseEntry(entry);
     return true;
   }
 
@@ -329,7 +347,7 @@ export class McpAppPreviewService {
     const creates = [...this.#creates];
     for (const control of creates) control.aborted = true;
     const operations = [
-      ...[...this.#entries.values()].map((entry) => this.#closeEntry(entry, () => entry.bridge.forceClose())),
+      ...[...this.#entries.values()].map((entry) => this.#forceCloseEntry(entry)),
       ...creates.flatMap((control) => [
         this.#abortCreate(control),
         this.#within(control.done, 'MCP App preview creation drain'),
@@ -358,13 +376,18 @@ export class McpAppPreviewService {
     return result;
   }
 
-  #closeEntry(entry: PreviewEntry, operation: () => Promise<void>): Promise<void> {
+  #closeEntry(entry: PreviewEntry, operation: () => Promise<void>, discardOutbound: boolean): Promise<void> {
     if (entry.closePromise !== undefined) return entry.closePromise;
-    entry.closed = true;
-    entry.outbound.length = 0;
-    entry.outboundBytes = 0;
+    entry.closing = true;
+    if (discardOutbound) {
+      entry.outbound.length = 0;
+      entry.outboundBytes = 0;
+    }
     const close = this.#within(Promise.resolve().then(operation), 'MCP App preview binding close');
     entry.closePromise = close.finally(() => {
+      entry.closed = true;
+      entry.outbound.length = 0;
+      entry.outboundBytes = 0;
       if (this.#entries.get(entry.binding.id) === entry) this.#entries.delete(entry.binding.id);
     });
     return entry.closePromise;
@@ -378,9 +401,7 @@ export class McpAppPreviewService {
     entry.outbound.length = 0;
     entry.outboundBytes = 0;
     this.#entries.delete(bindingId);
-    if (entry.closePromise === undefined) {
-      entry.closePromise = this.#within(entry.bridge.forceClose(), 'MCP App preview session teardown').catch(() => undefined);
-    }
+    void this.#forceCloseEntry(entry).catch(() => undefined);
   }
 
   #assertCreateAvailable(control: CreateControl): void {
@@ -402,7 +423,7 @@ export class McpAppPreviewService {
   async #abortCreate(control: CreateControl): Promise<void> {
     const entry = control.entry;
     if (entry !== undefined) {
-      await this.#closeEntry(entry, () => entry.bridge.forceClose());
+      await this.#forceCloseEntry(entry);
       return;
     }
     if (control.binding !== undefined && !control.closed) await this.#releaseControl(control);
@@ -412,12 +433,23 @@ export class McpAppPreviewService {
     if (control.releasePromise !== undefined) return control.releasePromise;
     const binding = control.binding;
     if (binding === undefined) return Promise.resolve();
-    control.releasePromise = this.#within(
+    const release = this.#within(
       Promise.resolve().then(async () => {
         if (!await this.#bindingAuthority.closeBinding(binding.id)) throw new Error('MCP App preview binding release was rejected.');
       }),
       'MCP App preview creation release',
     );
+    control.releasePromise = release.catch((error: unknown) => {
+      throw new Error(`MCP App preview creation release failed for binding ${JSON.stringify(binding.id)}.`, { cause: error });
+    });
     return control.releasePromise;
+  }
+
+  #forceCloseEntry(entry: PreviewEntry): Promise<void> {
+    if (entry.closePromise !== undefined) {
+      void entry.bridge.forceClose().catch(() => undefined);
+      return entry.closePromise;
+    }
+    return this.#closeEntry(entry, () => entry.bridge.forceClose(), true);
   }
 }
