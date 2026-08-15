@@ -6,6 +6,7 @@ import type {
   NormalizedPlugin,
 } from '../core/types.ts';
 import type { TargetHookContract } from './hook-contract.ts';
+import type { TargetMcpRuntimeContract } from '../services/mcp-runtime.ts';
 
 export interface TargetArtifactWrite {
   readonly content: string;
@@ -44,14 +45,6 @@ export interface TargetArtifactPlan {
   readonly hookEntries?: readonly TargetHookEntry[];
 }
 
-export type McpPathTokenRoot = 'pluginData' | 'pluginRoot' | 'workspaceRoot';
-
-export interface McpPathTokenCapabilities {
-  readonly args: Readonly<Record<string, McpPathTokenRoot>>;
-  readonly cwd: Readonly<Record<string, McpPathTokenRoot>>;
-  readonly env: Readonly<Record<string, McpPathTokenRoot>>;
-}
-
 export interface TargetConfigExtension {
   readonly key: string;
 }
@@ -75,7 +68,7 @@ export interface TargetAdapter {
   readonly configExtension?: TargetConfigExtension;
   readonly hookContract?: TargetHookContract;
   readonly metadata: TargetAdapterMetadata;
-  readonly mcpPathTokens?: McpPathTokenCapabilities;
+  readonly mcpRuntime?: TargetMcpRuntimeContract;
   readonly name: string;
   nativeHookSource?(config: Readonly<AgentBundleConfig>): string | undefined;
   plan(model: NormalizedPlugin): TargetArtifactPlan;

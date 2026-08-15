@@ -1,6 +1,5 @@
 import {
   Client,
-  SSEClientTransport,
   StreamableHTTPClientTransport,
   type CallToolResult,
   type Implementation,
@@ -14,16 +13,15 @@ import { tmpdir } from 'node:os';
 import { isAbsolute, posix, resolve } from 'node:path';
 import type { Stream } from 'node:stream';
 
-import { createDefaultRegistry } from '../adapters/registry.ts';
+import { createDefaultRegistry, TargetRegistry } from '../adapters/registry.ts';
 import { validateArtifact } from '../build/validate-artifact.ts';
 import { DiagnosticError } from '../core/diagnostics.ts';
 import { assertInside } from '../core/paths.ts';
 import { resolveMcpPathTokens } from './mcp-path-tokens.ts';
+import type { ModernMcpServer, TargetMcpRuntimeContract } from './mcp-runtime.ts';
 
 const defaultTimeoutMs = 5_000;
 const maxStderrBytes = 1_000_000;
-
-type NativeTarget = 'portable' | 'codex' | 'claude';
 
 interface RequestOptions {
   readonly signal?: AbortSignal;
@@ -63,12 +61,12 @@ interface RemoteTransportOptions {
 
 interface McpServiceDependencies {
   readonly createClient?: () => McpClient;
-  readonly createSseTransport?: (url: URL, options: RemoteTransportOptions) => Transport;
   readonly createStdioTransport?: (options: StdioOptions) => StdioTransport;
   readonly createStreamableHttpTransport?: (
     url: URL,
     options: RemoteTransportOptions,
   ) => Transport;
+  readonly registry?: TargetRegistry;
 }
 
 export interface McpOperationOptions {
@@ -101,22 +99,6 @@ export interface McpInvokeResult extends McpConnectionState {
   readonly result: CallToolResult;
 }
 
-interface StdioManifestServer {
-  readonly args: readonly string[];
-  readonly command: string;
-  readonly cwd?: string;
-  readonly env?: Readonly<Record<string, string>>;
-  readonly kind: 'stdio';
-}
-
-interface RemoteManifestServer {
-  readonly headers?: Readonly<Record<string, string>>;
-  readonly kind: 'streamable-http' | 'sse';
-  readonly url: string;
-}
-
-type ManifestServer = StdioManifestServer | RemoteManifestServer;
-
 interface StderrCapture {
   readonly exceeded: () => boolean;
   readonly output: () => string;
@@ -124,82 +106,12 @@ interface StderrCapture {
   readonly waitForEnd: (timeoutMs: number) => Promise<void>;
 }
 
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value);
-
-const stringRecord = (value: unknown): Record<string, string> | undefined => {
-  if (value === undefined) return undefined;
-  if (!isRecord(value) || Object.entries(value).some(([key, item]) => typeof key !== 'string' || typeof item !== 'string')) {
-    return undefined;
-  }
-  return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, item as string]));
-};
-
 const safeArtifactPath = (path: string): boolean =>
   path.length > 0 &&
   !isAbsolute(path) &&
   path === posix.normalize(path) &&
   path !== '..' &&
   !path.startsWith('../');
-
-const manifestPath = (target: NativeTarget): string =>
-  target === 'portable' ? 'mcp.json' : '.mcp.json';
-
-const parseManifestServer = (value: unknown): ManifestServer | undefined => {
-  if (!isRecord(value) || typeof value.type !== 'string') return undefined;
-  if (value.type === 'stdio') {
-    const env = stringRecord(value.env);
-    if (
-      typeof value.command !== 'string' ||
-      (value.args !== undefined && (!Array.isArray(value.args) || value.args.some((argument) => typeof argument !== 'string'))) ||
-      (value.cwd !== undefined && typeof value.cwd !== 'string') ||
-      (value.env !== undefined && env === undefined)
-    ) {
-      return undefined;
-    }
-    return {
-      args: value.args === undefined ? [] : [...value.args],
-      command: value.command,
-      ...(value.cwd === undefined ? {} : { cwd: value.cwd }),
-      ...(env === undefined ? {} : { env }),
-      kind: 'stdio',
-    };
-  }
-
-  const kind = value.type === 'http' ? 'streamable-http' : value.type;
-  const headers = stringRecord(value.headers);
-  if (
-    (kind !== 'streamable-http' && kind !== 'sse') ||
-    typeof value.url !== 'string' ||
-    (value.headers !== undefined && headers === undefined)
-  ) {
-    return undefined;
-  }
-  return {
-    ...(headers === undefined ? {} : { headers }),
-    kind,
-    url: value.url,
-  };
-};
-
-const expandRemoteTokens = (
-  value: string,
-  target: NativeTarget,
-  roots: { readonly pluginData: string; readonly pluginRoot: string; readonly workspaceRoot: string },
-): string => {
-  if (target === 'portable') {
-    return value
-      .replaceAll('${PLUGIN_ROOT}', roots.pluginRoot)
-      .replaceAll('${PLUGIN_DATA}', roots.pluginData);
-  }
-  if (target === 'claude') {
-    return value
-      .replaceAll('${CLAUDE_PLUGIN_ROOT}', roots.pluginRoot)
-      .replaceAll('${CLAUDE_PLUGIN_DATA}', roots.pluginData)
-      .replaceAll('${CLAUDE_PROJECT_DIR}', roots.workspaceRoot);
-  }
-  return value;
-};
 
 const resolveContained = (root: string, path: string): string =>
   isAbsolute(path) ? path : assertInside(root, resolve(root, path));
@@ -271,34 +183,25 @@ const timeoutFor = (options: McpOperationOptions): number => {
 
 export class McpService {
   readonly #createClient: () => McpClient;
-  readonly #createSseTransport: (url: URL, options: RemoteTransportOptions) => Transport;
   readonly #createStdioTransport: (options: StdioOptions) => StdioTransport;
   readonly #createStreamableHttpTransport: (
     url: URL,
     options: RemoteTransportOptions,
   ) => Transport;
+  readonly #registry: TargetRegistry;
 
   constructor(dependencies: McpServiceDependencies = {}) {
     this.#createClient = dependencies.createClient ?? (() => new Client({
       name: 'agent-bundle',
       version: '0.1.0',
     }));
-    this.#createSseTransport = dependencies.createSseTransport ?? ((url, options) =>
-      new SSEClientTransport(url, {
-        eventSourceInit: options.headers === undefined ? undefined : {
-          fetch: (input, init) => fetch(input, {
-            ...init,
-            headers: new Headers({ ...Object.fromEntries(new Headers(init?.headers)), ...options.headers }),
-          }),
-        },
-        requestInit: options.headers === undefined ? undefined : { headers: options.headers },
-      }));
     this.#createStdioTransport = dependencies.createStdioTransport ?? ((options) =>
       new StdioClientTransport(options));
     this.#createStreamableHttpTransport = dependencies.createStreamableHttpTransport ?? ((url, options) =>
       new StreamableHTTPClientTransport(url, {
         requestInit: options.headers === undefined ? undefined : { headers: options.headers },
       }));
+    this.#registry = dependencies.registry ?? createDefaultRegistry();
   }
 
   async list(options: McpListOptions): Promise<McpListResult> {
@@ -325,13 +228,13 @@ export class McpService {
     ) => Promise<Result>,
   ): Promise<{ readonly connection: McpConnectionState; readonly value: Result }> {
     const artifact = resolve(options.artifact);
-    const target = this.#target(options.target);
+    const runtime = this.#runtime(options.target);
     const diagnostics = await validateArtifact({ artifactRoot: artifact });
     const errors = diagnostics.filter((diagnostic) => diagnostic.severity === 'error');
     if (errors.length > 0) throw new DiagnosticError(errors);
 
-    const targetRoot = joinArtifact(artifact, target);
-    const server = await this.#server(artifact, target, options.server);
+    const targetRoot = joinArtifact(artifact, options.target);
+    const server = await this.#server(targetRoot, options.target, runtime, options.server);
     const requestOptions: RequestOptions = { signal: options.signal, timeout: timeoutFor(options) };
     const client = this.#createClient();
     let capture: StderrCapture | undefined;
@@ -344,7 +247,7 @@ export class McpService {
         pluginRoot: targetRoot,
         workspaceRoot: resolve(options.workspaceRoot ?? process.cwd()),
       };
-      const transport = this.#transport(server, target, targetRoot, roots, (nextCapture) => {
+      const transport = this.#transport(server, runtime, targetRoot, roots, (nextCapture) => {
         capture = nextCapture;
       });
       await client.connect(transport, requestOptions);
@@ -378,11 +281,16 @@ export class McpService {
     }
   }
 
-  #server(artifact: string, target: NativeTarget, name: string): Promise<ManifestServer> {
+  #server(
+    targetRoot: string,
+    target: string,
+    runtime: TargetMcpRuntimeContract,
+    name: string,
+  ): Promise<ModernMcpServer> {
     if (name.trim().length === 0) {
       return Promise.reject(new Error('MCP server name must be nonempty.'));
     }
-    const path = joinArtifact(artifact, `${target}/${manifestPath(target)}`);
+    const path = joinArtifact(targetRoot, runtime.manifestPath);
     return readFile(path, 'utf8').then((contents) => {
       let document: unknown;
       try {
@@ -390,10 +298,7 @@ export class McpService {
       } catch {
         throw new Error(`MCP manifest for target ${JSON.stringify(target)} is not valid JSON.`);
       }
-      if (!isRecord(document) || !isRecord(document.mcpServers) || !Object.hasOwn(document.mcpServers, name)) {
-        throw new Error(`Expected exactly one ${target} MCP server matching ${JSON.stringify(name)}.`);
-      }
-      const server = parseManifestServer(document.mcpServers[name]);
+      const server = runtime.readModernServer(document, name);
       if (server === undefined) {
         throw new Error(`MCP server ${JSON.stringify(name)} in target ${JSON.stringify(target)} is invalid.`);
       }
@@ -401,9 +306,15 @@ export class McpService {
     });
   }
 
-  #target(name: string): NativeTarget {
-    if (name === 'portable' || name === 'codex' || name === 'claude') return name;
-    throw new Error(`Unsupported MCP target ${JSON.stringify(name)}.`);
+  #runtime(name: string): TargetMcpRuntimeContract {
+    if (!this.#registry.has(name) || !this.#registry.supports(name, 'mcp')) {
+      throw new Error(`Unsupported MCP target ${JSON.stringify(name)}.`);
+    }
+    const runtime = this.#registry.mcpRuntime(name);
+    if (runtime === undefined) {
+      throw new Error(`Unsupported MCP target ${JSON.stringify(name)}.`);
+    }
+    return runtime;
   }
 
   #throwIfStderrExceeded(capture: StderrCapture | undefined): void {
@@ -413,32 +324,23 @@ export class McpService {
   }
 
   #transport(
-    server: ManifestServer,
-    target: NativeTarget,
+    server: ModernMcpServer,
+    runtime: TargetMcpRuntimeContract,
     targetRoot: string,
     roots: { readonly pluginData: string; readonly pluginRoot: string; readonly workspaceRoot: string },
     setCapture: (capture: StderrCapture) => void,
   ): Transport {
-    if (server.kind === 'stdio') {
-      const resolved = resolveMcpPathTokens({
-        adapter: createDefaultRegistry().get(target),
-        roots,
-        server,
-      });
+    const resolved = resolveMcpPathTokens({ roots, runtime, server });
+    if (resolved.kind === 'stdio') {
       const cwd = resolved.cwd === undefined
         ? undefined
         : resolveContained(targetRoot, resolved.cwd);
-      const args = resolved.args.map((argument) => {
-        return target === 'codex' && argument.startsWith('./')
-          ? resolveContained(targetRoot, argument)
-          : argument;
-      });
       const env = resolved.env;
       const inheritedEnv = Object.fromEntries(
         Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined),
       );
       const transport = this.#createStdioTransport({
-        args,
+        args: [...resolved.args],
         command: resolved.command,
         ...(cwd === undefined ? {} : { cwd }),
         env: { ...inheritedEnv, ...env },
@@ -448,16 +350,11 @@ export class McpService {
       return transport;
     }
 
-    const headers = server.headers === undefined
-      ? undefined
-      : Object.fromEntries(Object.entries(server.headers).map(([key, value]) => [
-          key,
-          expandRemoteTokens(value, target, roots),
-        ]));
-    const url = new URL(expandRemoteTokens(server.url, target, roots));
-    return server.kind === 'streamable-http'
-      ? this.#createStreamableHttpTransport(url, { ...(headers === undefined ? {} : { headers }) })
-      : this.#createSseTransport(url, { ...(headers === undefined ? {} : { headers }) });
+    const url = new URL(resolved.url);
+    return this.#createStreamableHttpTransport(
+      url,
+      { ...(resolved.headers === undefined ? {} : { headers: { ...resolved.headers } }) },
+    );
   }
 }
 

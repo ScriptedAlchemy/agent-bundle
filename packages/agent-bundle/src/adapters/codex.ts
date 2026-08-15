@@ -11,6 +11,8 @@ import {
   type NormalizedMcpServer,
   type NormalizedPlugin,
 } from '../core/types.ts';
+import { createMcpPathTokenResolver, standardMcpPathTokens } from '../services/mcp-path-tokens.ts';
+import { createTargetMcpRuntime, resolveTargetRelativeStdioArgument } from '../services/mcp-runtime.ts';
 import capabilityTable from './capabilities/codex-0.147.0.json' with { type: 'json' };
 import {
   mergeHookDocuments,
@@ -70,6 +72,17 @@ const metadata = Object.freeze({
       }))
       .sort((left, right) => left.name.localeCompare(right.name)),
   ),
+});
+
+const mcpRuntime = createTargetMcpRuntime({
+  manifestPath: '.mcp.json',
+  remoteTypes: ['streamable-http'],
+  resolveStdioArgument: resolveTargetRelativeStdioArgument,
+  resolveValue: createMcpPathTokenResolver({
+    knownTokens: standardMcpPathTokens,
+    target: codexName,
+    tokens: {},
+  }),
 });
 
 const errorDiagnostic = (code: string, message: string): Diagnostic => ({
@@ -420,11 +433,7 @@ export const codexAdapter: TargetAdapter = Object.freeze({
   configExtension: Object.freeze({ key: codexName }),
   hookContract,
   metadata,
-  mcpPathTokens: Object.freeze({
-    args: Object.freeze({}),
-    cwd: Object.freeze({}),
-    env: Object.freeze({}),
-  }),
+  mcpRuntime,
   name: codexName,
   nativeHookSource: (config: Readonly<AgentBundleConfig>) => config.codex?.nativeHooks,
   plan,

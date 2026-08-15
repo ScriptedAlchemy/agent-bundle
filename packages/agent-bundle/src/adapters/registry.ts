@@ -8,7 +8,12 @@ import { claudeAdapter } from './claude.ts';
 import { codexAdapter } from './codex.ts';
 import type { TargetHookContract } from './hook-contract.ts';
 import { portableAdapter } from './portable.ts';
-import type { TargetAdapter, TargetAdapterMetadata, TargetSchemaDescriptor } from './types.ts';
+import type {
+  TargetAdapter,
+  TargetAdapterMetadata,
+  TargetSchemaDescriptor,
+} from './types.ts';
+import type { TargetMcpRuntimeContract } from '../services/mcp-runtime.ts';
 
 const sha256Pattern = /^[0-9a-f]{64}$/;
 type NativeHookSource = NonNullable<TargetAdapter['nativeHookSource']>;
@@ -90,12 +95,40 @@ const snapshotHookContract = (adapter: TargetAdapter): TargetHookContract | unde
   });
 };
 
+const snapshotMcpRuntime = (adapter: TargetAdapter): TargetMcpRuntimeContract | undefined => {
+  const mcpRuntime = adapter.mcpRuntime;
+  if (adapter.capabilities.mcp === true && mcpRuntime === undefined) {
+    throw new Error(`Target adapter "${adapter.name}" declares mcp capability without an MCP runtime contract.`);
+  }
+  if (adapter.capabilities.mcp !== true && mcpRuntime !== undefined) {
+    throw new Error(`Target adapter "${adapter.name}" declares an MCP runtime contract without mcp capability.`);
+  }
+  if (mcpRuntime === undefined) return undefined;
+  if (typeof mcpRuntime.manifestPath !== 'string' || mcpRuntime.manifestPath.trim().length === 0) {
+    throw new Error('Target adapter MCP runtime manifest path must be a nonempty string.');
+  }
+  if (
+    typeof mcpRuntime.readModernServer !== 'function' ||
+    typeof mcpRuntime.resolveStdioArgument !== 'function' ||
+    typeof mcpRuntime.resolveValue !== 'function'
+  ) {
+    throw new Error('Target adapter MCP runtime contract methods must be functions.');
+  }
+  return Object.freeze({
+    manifestPath: mcpRuntime.manifestPath,
+    readModernServer: mcpRuntime.readModernServer,
+    resolveStdioArgument: mcpRuntime.resolveStdioArgument,
+    resolveValue: mcpRuntime.resolveValue,
+  });
+};
+
 export class TargetRegistry implements NormalizationTargetRegistry {
   readonly #adapters = new Map<string, TargetAdapter>();
   readonly #defaults: string[] = [];
   readonly #extensions = new Map<string, NormalizationConfigExtension>();
   readonly #hookContracts = new Map<string, TargetHookContract>();
   readonly #metadata = new Map<string, TargetAdapterMetadata>();
+  readonly #mcpRuntimes = new Map<string, TargetMcpRuntimeContract>();
   readonly #nativeHookSources = new Map<string, NativeHookSource>();
 
   register(adapter: TargetAdapter, options: { readonly default?: boolean } = {}): this {
@@ -109,6 +142,7 @@ export class TargetRegistry implements NormalizationTargetRegistry {
     const metadata = snapshotMetadata(adapter.metadata);
     const nativeHookSource = snapshotNativeHookSource(adapter);
     const hookContract = snapshotHookContract(adapter);
+    const mcpRuntime = snapshotMcpRuntime(adapter);
 
     this.#adapters.set(adapter.name, adapter);
     this.#metadata.set(adapter.name, metadata);
@@ -123,6 +157,9 @@ export class TargetRegistry implements NormalizationTargetRegistry {
     }
     if (hookContract !== undefined) {
       this.#hookContracts.set(adapter.name, hookContract);
+    }
+    if (mcpRuntime !== undefined) {
+      this.#mcpRuntimes.set(adapter.name, mcpRuntime);
     }
     if (options.default === true) {
       this.#defaults.push(adapter.name);
@@ -157,6 +194,13 @@ export class TargetRegistry implements NormalizationTargetRegistry {
       throw new Error(`Unknown target adapter "${name}".`);
     }
     return this.#hookContracts.get(name);
+  }
+
+  mcpRuntime(name: string): TargetMcpRuntimeContract | undefined {
+    if (!this.#adapters.has(name)) {
+      throw new Error(`Unknown target adapter "${name}".`);
+    }
+    return this.#mcpRuntimes.get(name);
   }
 
   configExtensions(): readonly NormalizationConfigExtension[] {

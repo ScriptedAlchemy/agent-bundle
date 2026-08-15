@@ -8,6 +8,12 @@ import {
   type NormalizedMcpServer,
   type NormalizedPlugin,
 } from '../core/types.ts';
+import {
+  allMcpPathTokenFields,
+  createMcpPathTokenResolver,
+  standardMcpPathTokens,
+} from '../services/mcp-path-tokens.ts';
+import { createTargetMcpRuntime } from '../services/mcp-runtime.ts';
 import capabilityTable from './capabilities/portable-1.0.0.json' with { type: 'json' };
 import schemaProvenance from './schemas/portable/PROVENANCE.json' with { type: 'json' };
 import mcpSchema from './schemas/portable/mcp.schema.json' with { type: 'json' };
@@ -49,6 +55,19 @@ const metadata = Object.freeze({
       }))
       .sort((left, right) => left.name.localeCompare(right.name)),
   ),
+});
+
+const mcpRuntime = createTargetMcpRuntime({
+  manifestPath: 'mcp.json',
+  remoteTypes: ['streamable-http'],
+  resolveValue: createMcpPathTokenResolver({
+    knownTokens: standardMcpPathTokens,
+    target: portableName,
+    tokens: allMcpPathTokenFields(Object.freeze({
+      '${PLUGIN_DATA}': 'pluginData',
+      '${PLUGIN_ROOT}': 'pluginRoot',
+    })),
+  }),
 });
 
 const errorDiagnostic = (code: string, message: string): Diagnostic => ({
@@ -290,11 +309,7 @@ export const portableAdapter: TargetAdapter = Object.freeze({
   }),
   configExtension: Object.freeze({ key: portableName }),
   metadata,
-  mcpPathTokens: Object.freeze({
-    args: Object.freeze({ '${PLUGIN_DATA}': 'pluginData', '${PLUGIN_ROOT}': 'pluginRoot' }),
-    cwd: Object.freeze({ '${PLUGIN_DATA}': 'pluginData', '${PLUGIN_ROOT}': 'pluginRoot' }),
-    env: Object.freeze({ '${PLUGIN_DATA}': 'pluginData', '${PLUGIN_ROOT}': 'pluginRoot' }),
-  }),
+  mcpRuntime,
   name: portableName,
   plan,
   validateModel: (model: NormalizedPlugin) => plan(model).diagnostics.slice(),

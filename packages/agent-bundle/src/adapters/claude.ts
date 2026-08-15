@@ -10,6 +10,12 @@ import {
   type NormalizedMcpServer,
   type NormalizedPlugin,
 } from '../core/types.ts';
+import {
+  allMcpPathTokenFields,
+  createMcpPathTokenResolver,
+  standardMcpPathTokens,
+} from '../services/mcp-path-tokens.ts';
+import { createTargetMcpRuntime } from '../services/mcp-runtime.ts';
 import capabilityTable from './capabilities/claude-2.1.232.json' with { type: 'json' };
 import {
   mergeHookDocuments,
@@ -69,6 +75,20 @@ const metadata = Object.freeze({
       }))
       .sort((left, right) => left.name.localeCompare(right.name)),
   ),
+});
+
+const mcpRuntime = createTargetMcpRuntime({
+  manifestPath: '.mcp.json',
+  remoteTypes: ['http'],
+  resolveValue: createMcpPathTokenResolver({
+    knownTokens: standardMcpPathTokens,
+    target: claudeName,
+    tokens: allMcpPathTokenFields(Object.freeze({
+      '${CLAUDE_PLUGIN_DATA}': 'pluginData',
+      '${CLAUDE_PLUGIN_ROOT}': 'pluginRoot',
+      '${CLAUDE_PROJECT_DIR}': 'workspaceRoot',
+    })),
+  }),
 });
 
 const errorDiagnostic = (code: string, message: string): Diagnostic => ({
@@ -319,23 +339,7 @@ export const claudeAdapter: TargetAdapter = Object.freeze({
   configExtension: Object.freeze({ key: claudeName }),
   hookContract,
   metadata,
-  mcpPathTokens: Object.freeze({
-    args: Object.freeze({
-      '${CLAUDE_PLUGIN_DATA}': 'pluginData',
-      '${CLAUDE_PLUGIN_ROOT}': 'pluginRoot',
-      '${CLAUDE_PROJECT_DIR}': 'workspaceRoot',
-    }),
-    cwd: Object.freeze({
-      '${CLAUDE_PLUGIN_DATA}': 'pluginData',
-      '${CLAUDE_PLUGIN_ROOT}': 'pluginRoot',
-      '${CLAUDE_PROJECT_DIR}': 'workspaceRoot',
-    }),
-    env: Object.freeze({
-      '${CLAUDE_PLUGIN_DATA}': 'pluginData',
-      '${CLAUDE_PLUGIN_ROOT}': 'pluginRoot',
-      '${CLAUDE_PROJECT_DIR}': 'workspaceRoot',
-    }),
-  }),
+  mcpRuntime,
   name: claudeName,
   nativeHookSource: (config: Readonly<AgentBundleConfig>) => config.claude?.nativeHooks,
   plan,
