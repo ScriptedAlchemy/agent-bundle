@@ -6,6 +6,7 @@ import type { McpBrowserSessionModel } from '../src/mcp/mcp-session-model.ts';
 import {
   McpPage,
   createMcpPageActionTracker,
+  createMcpPageActionSession,
   mcpConfigDownload,
   mcpPageSessionControls,
   type McpPageController,
@@ -141,5 +142,20 @@ describe('MCP page', () => {
     expect(mcpPageSessionControls('idle', [], false)).toMatchObject({ open: true, recovery: 'none' });
     expect(mcpPageSessionControls('closed', [], false)).toMatchObject({ open: false, recovery: 'unavailable' });
     expect(mcpPageSessionControls('error', [], true)).toMatchObject({ open: false, recovery: 'available' });
+  });
+
+  it('keeps a new stuck open pending after terminal reset ignores delayed old open cleanup', () => {
+    const actions = createMcpPageActionSession();
+    const oldOpen = actions.start('open');
+
+    expect(oldOpen).toBeDefined();
+    actions.reset();
+    const newOpen = actions.start('open');
+
+    expect(actions.isCurrent(oldOpen!)).toBe(false);
+    expect(actions.finish(oldOpen!)).toBeUndefined();
+    expect(actions.pending).toEqual(['open']);
+    expect(actions.isCurrent(newOpen!)).toBe(true);
+    expect(mcpPageSessionControls('idle', actions.pending, false)).toMatchObject({ close: true, open: false });
   });
 });
