@@ -37,9 +37,11 @@ export type McpRouteOperation =
   | Readonly<{ readonly operation: 'resources/read'; readonly uri: string }>
   | Readonly<{ readonly arguments: Readonly<Record<string, unknown>>; readonly name: string; readonly operation: 'tools/call'; readonly requestId?: string }>;
 
-export interface McpRouteClientOptions {
+export interface ForegroundRouteClientOptions {
   readonly fetch?: typeof fetch;
 }
+
+export type McpRouteClientOptions = ForegroundRouteClientOptions;
 
 interface ForegroundSession {
   readonly origin: string;
@@ -48,7 +50,9 @@ interface ForegroundSession {
 
 interface Diagnostic {
   readonly code: string;
+  readonly details?: unknown;
   readonly message: string;
+  readonly phase?: string;
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -92,9 +96,14 @@ const asArray = (value: unknown): readonly unknown[] => {
 
 const diagnostic = (value: unknown, status: number): Diagnostic => {
   if (isRecord(value) && isRecord(value.diagnostic) && typeof value.diagnostic.code === 'string' && typeof value.diagnostic.message === 'string') {
-    return { code: value.diagnostic.code, message: value.diagnostic.message };
+    return Object.freeze({
+      code: value.diagnostic.code,
+      ...(value.diagnostic.details === undefined ? {} : { details: detachedJson(value.diagnostic.details) }),
+      message: value.diagnostic.message,
+      ...(typeof value.diagnostic.phase === 'string' ? { phase: value.diagnostic.phase } : {}),
+    });
   }
-  return { code: 'AB8019', message: `Foreground MCP request failed with HTTP ${status}.` };
+  return Object.freeze({ code: 'AB8019', message: `Foreground MCP request failed with HTTP ${status}.` });
 };
 
 const routeConnection = (value: unknown): McpRouteConnection => {
@@ -140,13 +149,107 @@ const routeSession = (value: unknown): McpRouteSession => {
 
 const encode = (value: string): string => encodeURIComponent(value);
 
-/** A typed, credential-memory-only browser client for the foreground MCP routes. */
-export class McpRouteClient {
+/** Memory-only authentication shared by foreground browser route clients. */
+export class ForegroundRouteClient {
   readonly #fetch: typeof fetch;
   #authentication: Promise<ForegroundSession> | undefined;
 
-  constructor(options: McpRouteClientOptions = {}) {
+  constructor(options: ForegroundRouteClientOptions = {}) {
     this.#fetch = options.fetch ?? globalThis.fetch.bind(globalThis);
+  }
+
+  async publicJson(path: string, init: RequestInit = {}): Promise<unknown> {
+    return this.#json(await this.#fetch(path, init));
+  }
+
+  async protectedJson(path: string, init: RequestInit = {}): Promise<unknown> {
+    return this.#json(await this.protectedResponse(path, init));
+  }
+
+  async protectedResponse(path: string, init: RequestInit = {}): Promise<Response> {
+    const authentication = await this.#authenticate();
+    const headers = new Headers(init.headers);
+    headers.set('x-agent-bundle-session', authentication.token);
+    const response = await this.#fetch(path, { ...init, headers });
+    if (!response.ok) throw ForegroundRouteClientError.fromResponse(await response.clone().json().catch(() => undefined), response.status);
+    return response;
+  }
+
+  /** Erases the short-lived foreground token once its owning transport closes. */
+  forgetAuthentication(): void {
+    this.#authentication = undefined;
+  }
+
+  async #json(response: Response): Promise<unknown> {
+    const body: unknown = await response.json().catch(() => undefined);
+    if (!response.ok) throw ForegroundRouteClientError.fromResponse(body, response.status);
+    try {
+      return detachedJson(body);
+    } catch (error) {
+      if (error instanceof McpRouteClientError) throw new ForegroundRouteClientError(error.code, error.message, response.status);
+      throw error;
+    }
+  }
+
+  async #authenticate(): Promise<ForegroundSession> {
+    if (this.#authentication === undefined) this.#authentication = this.#bootstrap();
+    try {
+      return await this.#authentication;
+    } catch (error) {
+      this.#authentication = undefined;
+      throw error;
+    }
+  }
+
+  async #bootstrap(): Promise<ForegroundSession> {
+    const response = await this.#fetch('/api/project/session', { credentials: 'same-origin' });
+    const body: unknown = await response.json().catch(() => undefined);
+    if (!response.ok) throw ForegroundRouteClientError.fromResponse(body, response.status);
+    if (!isRecord(body) || typeof body.origin !== 'string' || typeof body.token !== 'string' || body.token.length === 0) {
+      throw new ForegroundRouteClientError('AB8019', 'Foreground session bootstrap returned an invalid response.', response.status);
+    }
+    let origin: URL;
+    try {
+      origin = new URL(body.origin);
+    } catch {
+      throw new ForegroundRouteClientError('AB8019', 'Foreground session bootstrap returned an invalid origin.', response.status);
+    }
+    if (origin.origin !== body.origin) throw new ForegroundRouteClientError('AB8019', 'Foreground session bootstrap returned an invalid origin.', response.status);
+    const browserOrigin = globalThis.location?.origin;
+    if (browserOrigin !== undefined && browserOrigin !== 'null' && browserOrigin !== body.origin) {
+      throw new ForegroundRouteClientError('AB8003', 'Foreground session bootstrap origin does not match this browser.', response.status);
+    }
+    return Object.freeze({ origin: body.origin, token: body.token });
+  }
+}
+
+export class ForegroundRouteClientError extends Error {
+  readonly code: string;
+  readonly details: unknown | undefined;
+  readonly phase: string | undefined;
+  readonly status: number;
+
+  constructor(code: string, message: string, status: number, options: Readonly<{ readonly details?: unknown; readonly phase?: string }> = {}) {
+    super(message);
+    this.name = 'ForegroundRouteClientError';
+    this.code = code;
+    this.details = options.details;
+    this.phase = options.phase;
+    this.status = status;
+  }
+
+  static fromResponse(body: unknown, status: number): ForegroundRouteClientError {
+    const detail = diagnostic(body, status);
+    return new ForegroundRouteClientError(detail.code, detail.message, status, detail);
+  }
+}
+
+/** A typed, credential-memory-only browser client for the foreground MCP routes. */
+export class McpRouteClient {
+  readonly #foreground: ForegroundRouteClient;
+
+  constructor(options: McpRouteClientOptions = {}) {
+    this.#foreground = new ForegroundRouteClient(options);
   }
 
   async create(binding: McpRouteSessionBinding): Promise<McpRouteSession> {
@@ -226,67 +329,30 @@ export class McpRouteClient {
     return response.closed;
   }
 
-  /** Erases the short-lived foreground token once its owning transport closes. */
   forgetAuthentication(): void {
-    this.#authentication = undefined;
+    this.#foreground.forgetAuthentication();
   }
 
   async #json(path: string, init: RequestInit = {}): Promise<unknown> {
-    const response = await this.#request(path, init);
-    const body: unknown = await response.json().catch(() => undefined);
-    if (!response.ok) {
-      const detail = diagnostic(body, response.status);
-      throw new McpRouteClientError(detail.code, detail.message);
+    try {
+      return await this.#foreground.protectedJson(path, init);
+    } catch (error) {
+      throw this.#mcpError(error);
     }
-    return detachedJson(body);
   }
 
   async #request(path: string, init: RequestInit = {}): Promise<Response> {
-    const authentication = await this.#authenticate();
-    const headers = new Headers(init.headers);
-    headers.set('x-agent-bundle-session', authentication.token);
-    const response = await this.#fetch(path, { ...init, headers });
-    if (!response.ok) {
-      const body: unknown = await response.clone().json().catch(() => undefined);
-      const detail = diagnostic(body, response.status);
-      throw new McpRouteClientError(detail.code, detail.message);
-    }
-    return response;
-  }
-
-  async #authenticate(): Promise<ForegroundSession> {
-    if (this.#authentication === undefined) this.#authentication = this.#bootstrap();
     try {
-      return await this.#authentication;
+      return await this.#foreground.protectedResponse(path, init);
     } catch (error) {
-      this.#authentication = undefined;
-      throw error;
+      throw this.#mcpError(error);
     }
   }
 
-  async #bootstrap(): Promise<ForegroundSession> {
-    const response = await this.#fetch('/api/project/session', { credentials: 'same-origin' });
-    const body: unknown = await response.json().catch(() => undefined);
-    if (!response.ok) {
-      const detail = diagnostic(body, response.status);
-      throw new McpRouteClientError(detail.code, detail.message);
-    }
-    const session = asRecord(body);
-    if (typeof session.origin !== 'string' || typeof session.token !== 'string' || session.token.length === 0) {
-      throw new McpRouteClientError('AB8019', 'Foreground session bootstrap returned an invalid response.');
-    }
-    let origin: URL;
-    try {
-      origin = new URL(session.origin);
-    } catch {
-      throw new McpRouteClientError('AB8019', 'Foreground session bootstrap returned an invalid origin.');
-    }
-    if (origin.origin !== session.origin) throw new McpRouteClientError('AB8019', 'Foreground session bootstrap returned an invalid origin.');
-    const browserOrigin = globalThis.location?.origin;
-    if (browserOrigin !== undefined && browserOrigin !== 'null' && browserOrigin !== session.origin) {
-      throw new McpRouteClientError('AB8003', 'Foreground session bootstrap origin does not match this browser.');
-    }
-    return Object.freeze({ origin: session.origin, token: session.token });
+  #mcpError(error: unknown): McpRouteClientError | unknown {
+    if (error instanceof McpRouteClientError) return error;
+    if (error instanceof ForegroundRouteClientError) return new McpRouteClientError(error.code, error.message);
+    return error;
   }
 
   #cursor(value: number): string {
