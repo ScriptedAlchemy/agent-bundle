@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { execFile } from 'node:child_process';
 import { chmod, mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -12,6 +13,13 @@ import { digest } from '../src/core/digest.ts';
 import { agentSkillsSchemaRevision } from '../src/schemas/agent-skills/contract.ts';
 
 const hash = (value: string): string => createHash('sha256').update(value).digest('hex');
+
+const createFifo = async (path: string): Promise<void> => new Promise((resolvePromise, reject) => {
+  execFile('mkfifo', [path], (error) => {
+    if (error === null) resolvePromise();
+    else reject(error);
+  });
+});
 
 interface ArtifactFixtureFile {
   readonly contents: string;
@@ -104,7 +112,8 @@ const customRegistry = (validate = validateCustomDocument): TargetRegistry => ne
     documents: [{ path: 'document.json', required: true, schema: 'document' }],
     schemas: [{ name: 'document', validate }],
   },
-  capabilities: {},
+  artifactLayout: { skills: 'skills' },
+  capabilities: { skills: true },
   metadata: customMetadata,
   name: customTarget,
   plan: () => ({ diagnostics: [], entries: [] }),
@@ -215,6 +224,52 @@ it('rejects an artifact symlink even when the manifest remains self-consistent',
   }
 });
 
+it('rejects a special manifest without following its symlink target', async () => {
+  const root = await writeArtifact([
+    { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'custom/document.json' },
+  ], true, [customManifestTarget]);
+  const outside = await mkdtemp(join(tmpdir(), 'agent-bundle-outside-manifest-'));
+
+  try {
+    await writeFile(join(outside, 'forged.json'), '{');
+    await rm(join(root, 'agent-bundle.manifest.json'));
+    await symlink(join(outside, 'forged.json'), join(root, 'agent-bundle.manifest.json'));
+
+    const diagnostics = await validateArtifact({ artifactRoot: root, registry: customRegistry() });
+    expect(diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'AB6013', generatedPath: 'agent-bundle.manifest.json' }),
+    ]));
+    expect(diagnostics).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'AB6001' }),
+    ]));
+  } finally {
+    await rm(root, { force: true, recursive: true });
+    await rm(outside, { force: true, recursive: true });
+  }
+});
+
+it('settles promptly when the artifact manifest is a FIFO', async () => {
+  const root = await writeArtifact([
+    { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'custom/document.json' },
+  ], true, [customManifestTarget]);
+
+  try {
+    await rm(join(root, 'agent-bundle.manifest.json'));
+    await createFifo(join(root, 'agent-bundle.manifest.json'));
+    const result = await Promise.race([
+      validateArtifact({ artifactRoot: root, registry: customRegistry() }),
+      new Promise<readonly unknown[]>((resolvePromise) => {
+        setTimeout(() => resolvePromise([]), 500);
+      }),
+    ]);
+    expect(result).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'AB6013', generatedPath: 'agent-bundle.manifest.json' }),
+    ]));
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
 it('rejects empty declared and undeclared target directories independently of manifest hashes', async () => {
   const emptyRoot = await writeArtifact([], true, [customManifestTarget]);
   const declaredRoot = await writeArtifact([
@@ -242,6 +297,45 @@ it('rejects empty declared and undeclared target directories independently of ma
   } finally {
     await rm(emptyRoot, { force: true, recursive: true });
     await rm(declaredRoot, { force: true, recursive: true });
+  }
+});
+
+it('rejects a nested empty directory under an otherwise valid target namespace', async () => {
+  const files = [{ contents: '{"kind":"custom"}\n', kind: 'generated' as const, path: 'custom/document.json' }];
+  const root = await writeArtifact(files, true, [customManifestTarget]);
+
+  try {
+    await mkdir(join(root, 'custom', 'skills', 'orphan'), { recursive: true });
+
+    await expect(validateArtifact({ artifactRoot: root, registry: customRegistry() })).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: 'AB6014', generatedPath: 'custom/skills/orphan', target: customTarget }),
+      ]),
+    );
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('rejects forged hook output for a target without a hook contract', async () => {
+  const registry = createDefaultRegistry();
+  const portable = targetFromRegistry(registry, 'portable');
+  const files = [
+    {
+      contents: '{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","description":"Valid portable plugin.","name":"portable-test","version":"1.0.0"}\n',
+      kind: 'generated' as const,
+      path: 'portable/plugin.json',
+    },
+    { contents: 'forged hook\n', kind: 'generated' as const, path: 'portable/hooks/junk.txt' },
+  ];
+  const root = await writeArtifact(files, true, [portable]);
+
+  try {
+    await expect(validateArtifact({ artifactRoot: root, registry })).resolves.toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'AB6014', generatedPath: 'portable/hooks/junk.txt', target: 'portable' }),
+    ]));
+  } finally {
+    await rm(root, { force: true, recursive: true });
   }
 });
 
@@ -512,7 +606,7 @@ it('validates a canonically rehashed Codex marketplace at its emitted path', asy
 
 const malformedValidator = (callback: () => unknown): TargetArtifactDocumentValidator => callback as never;
 
-const throwingArrayElement = (): readonly unknown[] => {
+const throwingArrayElement = (): unknown => {
   const issues: unknown[] = [];
   Object.defineProperty(issues, '0', {
     enumerable: true,
@@ -539,9 +633,9 @@ const throwingIssueProperty = (): object => Object.defineProperties({}, {
   },
 });
 
-const thenableArray = (): readonly unknown[] => Object.assign([], { then: () => undefined });
+const thenableArray = (): unknown => Object.assign([], { then: () => undefined });
 
-it.each([
+const malformedValidatorCases: readonly (readonly [string, () => unknown])[] = [
   ['a null callback result', () => null],
   ['an array-like callback result', () => ({ 0: {}, length: 1 })],
   ['a thenable callback result', () => ({ then: () => undefined })],
@@ -553,7 +647,9 @@ it.each([
   ['a throwing callback', () => {
     throw new Error('validator callback must not escape artifact validation');
   }],
-] as const)('reports $0 through the stable schema diagnostic', async (_name, callback) => {
+];
+
+it.each(malformedValidatorCases)('reports $0 through the stable schema diagnostic', async (_name, callback) => {
   const files = [{ contents: '{"kind":"custom"}\n', kind: 'generated' as const, path: 'custom/document.json' }];
   const root = await writeArtifact(files, true, [customManifestTarget]);
 

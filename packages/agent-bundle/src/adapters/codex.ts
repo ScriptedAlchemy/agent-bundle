@@ -444,6 +444,13 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
 
 export const codexAdapter: TargetAdapter = Object.freeze({
   artifactValidation,
+  artifactLayout: Object.freeze({
+    hookWrappers: Object.freeze({ directory: 'hooks', fileSuffix: '.mjs' }),
+    mcpApps: Object.freeze({ directory: 'mcp-apps', fileSuffix: '.html' }),
+    mcpEntries: Object.freeze({ directory: 'mcp', fileSuffix: '.mjs' }),
+    scripts: Object.freeze({ directory: 'scripts' }),
+    skills: 'skills',
+  }),
   capabilities: Object.freeze({
     marketplace: true,
     hooks: true,

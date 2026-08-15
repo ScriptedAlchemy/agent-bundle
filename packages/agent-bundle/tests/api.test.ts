@@ -11,6 +11,7 @@ import {
   type TargetHookContract,
 } from '../src/adapters/hook-contract.ts';
 import type { TargetAdapter } from '../src/adapters/types.ts';
+import { inspectArtifactFilesystem } from '../src/build/emit.ts';
 import { pathTokens, type NormalizedPlugin } from '../src/core/types.ts';
 import {
   createTargetMcpRuntime,
@@ -104,6 +105,10 @@ const syntheticPlan = (model: NormalizedPlugin) => {
 };
 
 const syntheticAdapter: TargetAdapter = Object.freeze({
+  artifactLayout: Object.freeze({
+    hookWrappers: Object.freeze({ directory: 'hooks', fileSuffix: '.mjs' }),
+    mcpEntries: Object.freeze({ directory: 'mcp', fileSuffix: '.mjs' }),
+  }),
   capabilities: Object.freeze({ hooks: true, mcp: true }),
   configExtension: Object.freeze({ key: 'synthetic' }),
   hookContract: syntheticHookContract,
@@ -185,6 +190,14 @@ it('keeps one supplied registry through advanced artifact, hook, and MCP operati
       target: syntheticTarget,
     })]);
     expect(built.build.manifest.targets).toEqual([expect.objectContaining({ name: syntheticTarget })]);
+    expect(built.build.manifest.files).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: 'synthetic/synthetic-mcp.json' }),
+    ]));
+    const filesystem = await inspectArtifactFilesystem(artifact);
+    expect(filesystem.entries
+      .filter((entry) => entry.kind === 'directory')
+      .every((directory) => filesystem.files.some((file) => file.path.startsWith(`${directory.path}/`))))
+      .toBe(true);
     await expect(validate({ artifact, registry, root })).resolves.toEqual({ diagnostics: [] });
     await expect(validate({ artifact, root })).resolves.toMatchObject({
       diagnostics: [expect.objectContaining({ code: 'AB6009', target: syntheticTarget })],

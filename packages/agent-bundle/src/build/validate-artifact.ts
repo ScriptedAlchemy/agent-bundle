@@ -1,9 +1,13 @@
 import { readFile } from 'node:fs/promises';
-import { dirname, resolve } from 'node:path';
+import { dirname, posix, resolve } from 'node:path';
 import { spawn } from 'node:child_process';
 
 import { createDefaultRegistry, type TargetRegistry } from '../adapters/registry.ts';
-import type { TargetArtifactDocumentIssue, TargetArtifactDocumentValidator } from '../adapters/types.ts';
+import type {
+  TargetArtifactDocumentIssue,
+  TargetArtifactDocumentValidator,
+  TargetArtifactOutputLayout,
+} from '../adapters/types.ts';
 import { parseSkillMarkdown, referencedResources } from '../config/skill-references.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { agentSkillsSchemaRevision, validateAgentSkillsFrontmatter } from '../schemas/agent-skills/contract.ts';
@@ -18,7 +22,7 @@ import {
 import { parseArtifactManifest, type ArtifactManifestV2 } from './manifest.ts';
 
 const epochStagingMarkerName = '.agent-bundle-epoch-stage.json';
-const artifactRootMetadata = new Set([artifactHookIndexName, artifactManifestName]);
+const artifactRootMetadata = new Set([artifactHookIndexName]);
 
 export interface ValidateArtifactOptions {
   /** Enables the one store-owned epoch staging marker after its exact schema validates. */
@@ -213,12 +217,16 @@ const snapshotSchemaIssues = (value: unknown): readonly TargetArtifactDocumentIs
     return schemaValidationFailure();
   }
   const descriptors = Object.getOwnPropertyDescriptors(value);
-  const length = descriptors.length;
-  if (length === undefined || !('value' in length) || typeof length.value !== 'number') {
+  const lengthDescriptor = Object.getOwnPropertyDescriptor(value, 'length');
+  if (
+    lengthDescriptor === undefined ||
+    !('value' in lengthDescriptor) ||
+    typeof lengthDescriptor.value !== 'number'
+  ) {
     return schemaValidationFailure();
   }
   const issues: TargetArtifactDocumentIssue[] = [];
-  for (let index = 0; index < length.value; index += 1) {
+  for (let index = 0; index < lengthDescriptor.value; index += 1) {
     const entry = descriptors[index];
     if (entry === undefined || !('value' in entry)) return schemaValidationFailure();
     const issue = snapshotSchemaIssue(entry.value);
@@ -320,16 +328,19 @@ const pathTarget = (path: string, targets: ReadonlySet<string>): string | undefi
   return target !== undefined && targets.has(target) ? target : undefined;
 };
 
-const compiledTargetDirectories = new Set(['hooks', 'mcp', 'mcp-apps', 'scripts']);
-
-const isCompiledTargetPath = (relativePath: string): boolean => {
+const isDirectLayoutPath = (relativePath: string, layout: TargetArtifactOutputLayout | undefined): boolean => {
+  if (layout === undefined) return false;
   const [directory, file, ...nested] = relativePath.split('/');
-  return directory !== undefined && file !== undefined && nested.length === 0 && compiledTargetDirectories.has(directory);
+  return directory === layout.directory &&
+    file !== undefined &&
+    nested.length === 0 &&
+    (layout.fileSuffix === undefined || file.endsWith(layout.fileSuffix));
 };
 
-const isSkillArtifactPath = (relativePath: string): boolean => {
+const isSkillArtifactPath = (relativePath: string, skills: string | undefined): boolean => {
+  if (skills === undefined) return false;
   const [layout, name, resource] = relativePath.split('/');
-  return layout === 'skills' && name !== undefined && resource !== undefined;
+  return layout === skills && name !== undefined && resource !== undefined;
 };
 
 const isTargetArtifactPath = (
@@ -338,11 +349,20 @@ const isTargetArtifactPath = (
   registry: TargetRegistry,
 ): boolean => {
   const relativePath = path.slice(target.length + 1);
-  return isCompiledTargetPath(relativePath) ||
-    isSkillArtifactPath(relativePath) ||
-    (registry.has(target) && registry.artifactValidation(target).documents.some(
-      (document) => document.path === relativePath,
-    ));
+  // Unknown targets are diagnosed by the target-contract validator; without their
+  // registry contract there is no trustworthy layout against which to classify files.
+  if (!registry.has(target)) return true;
+  const layout = registry.artifactLayout(target);
+  const hookContract = registry.hookContract(target);
+  const mcpRuntime = registry.mcpRuntime(target);
+  return isDirectLayoutPath(relativePath, layout.hookWrappers) ||
+    isDirectLayoutPath(relativePath, layout.mcpApps) ||
+    isDirectLayoutPath(relativePath, layout.mcpEntries) ||
+    isDirectLayoutPath(relativePath, layout.scripts) ||
+    isSkillArtifactPath(relativePath, layout.skills) ||
+    relativePath === hookContract?.manifestPath ||
+    relativePath === mcpRuntime?.manifestPath ||
+    registry.artifactValidation(target).documents.some((document) => document.path === relativePath);
 };
 
 const validateArtifactOwnership = (options: {
@@ -368,8 +388,9 @@ const validateArtifactOwnership = (options: {
   }
 
   for (const entry of options.filesystem.entries) {
-    if (entry.kind !== 'directory' || entry.path.includes('/')) continue;
-    if (!targets.has(entry.path)) {
+    if (entry.kind !== 'directory' || entry.path === '.') continue;
+    const target = pathTarget(entry.path, targets);
+    if (!entry.path.includes('/') && !targets.has(entry.path)) {
       diagnostics.push(diagnostic(
         'AB6014',
         `Artifact directory ${JSON.stringify(entry.path)} does not name a declared target namespace.`,
@@ -382,9 +403,9 @@ const validateArtifactOwnership = (options: {
     if (!options.files.some((file) => file.path.startsWith(`${entry.path}/`))) {
       diagnostics.push(diagnostic(
         'AB6014',
-        `Declared target namespace ${JSON.stringify(entry.path)} is empty.`,
+        `Artifact directory ${JSON.stringify(entry.path)} is empty.`,
         entry.path,
-        entry.path,
+        target,
         ownershipRecovery,
       ));
     }
@@ -412,23 +433,28 @@ interface EmittedSkill {
   readonly target: string;
 }
 
-const emittedSkillFor = (file: ArtifactFile, targets: ReadonlySet<string>): EmittedSkill | undefined => {
+const emittedSkillFor = (
+  file: ArtifactFile,
+  targets: ReadonlySet<string>,
+  registry: TargetRegistry,
+): EmittedSkill | undefined => {
   const segments = file.path.split('/');
   const [target, layout, name, document] = segments;
+  if (target === undefined || !targets.has(target) || !registry.has(target)) return undefined;
+  const skillLayout = registry.artifactLayout(target).skills;
   if (
-    target === undefined ||
-    layout !== 'skills' ||
+    layout !== skillLayout ||
     name === undefined ||
     document !== 'SKILL.md' ||
-    segments.length !== 4 ||
-    !targets.has(target)
+    segments.length !== 4
   ) {
     return undefined;
   }
+  if (skillLayout === undefined) return undefined;
   return {
     name,
     path: file.path,
-    root: `${target}/skills/${name}`,
+    root: `${target}/${skillLayout}/${name}`,
     target,
   };
 };
@@ -442,16 +468,17 @@ const validateEmittedSkills = async (options: {
   readonly artifactRoot: string;
   readonly files: readonly ArtifactFile[];
   readonly manifest: ArtifactManifestV2;
+  readonly registry: TargetRegistry;
 }): Promise<readonly Diagnostic[]> => {
   const diagnostics: Diagnostic[] = [];
   const targets = targetNamespaces(options.manifest);
   const skills = options.files
-    .map((file) => emittedSkillFor(file, targets))
+    .map((file) => emittedSkillFor(file, targets, options.registry))
     .filter((skill): skill is EmittedSkill => skill !== undefined);
   const skillsByRoot = new Map(skills.map((skill) => [skill.root, skill]));
 
   for (const file of options.files) {
-    if (!file.path.endsWith('/SKILL.md') || emittedSkillFor(file, targets) !== undefined) continue;
+    if (!file.path.endsWith('/SKILL.md') || emittedSkillFor(file, targets, options.registry) !== undefined) continue;
     const target = pathTarget(file.path, targets);
     diagnostics.push(diagnostic(
       'AB6015',
@@ -465,8 +492,9 @@ const validateEmittedSkills = async (options: {
   const resourceFilesBySkill = new Map<string, readonly ArtifactFile[]>();
   for (const file of options.files) {
     const [target, layout, name] = file.path.split('/');
-    if (target === undefined || layout !== 'skills' || name === undefined || !targets.has(target)) continue;
-    const root = `${target}/skills/${name}`;
+    if (target === undefined || name === undefined || !targets.has(target) || !options.registry.has(target)) continue;
+    if (layout !== options.registry.artifactLayout(target).skills) continue;
+    const root = `${target}/${layout}/${name}`;
     const existing = resourceFilesBySkill.get(root) ?? [];
     resourceFilesBySkill.set(root, [...existing, file]);
   }
@@ -572,14 +600,14 @@ const validateGeneratedFiles = async (options: {
   readonly files: readonly ArtifactFile[];
 }): Promise<readonly Diagnostic[]> => {
   const diagnostics: Diagnostic[] = [];
+  const generatedFiles = new Set(options.files.map((file) => file.path));
 
   for (const file of options.files.filter((entry) => entry.path.endsWith('.json'))) {
     try {
       const document = JSON.parse(await readFile(resolve(options.artifactRoot, file.path), 'utf8')) as unknown;
       for (const mcpPath of localMcpPaths(document)) {
-        try {
-          await readFile(resolve(options.artifactRoot, dirname(file.path), mcpPath));
-        } catch {
+        const generatedPath = posix.join(dirname(file.path), mcpPath);
+        if (!generatedFiles.has(generatedPath)) {
           diagnostics.push(diagnostic(
             'AB6007',
             `MCP manifest references missing generated server ${JSON.stringify(mcpPath)}.`,
@@ -620,8 +648,20 @@ export const validateArtifact = async (context: ValidateArtifactOptions): Promis
     return [diagnostic('AB6000', 'Artifact manifest is missing or cannot be read.', artifactManifestName)];
   }
   const structuralDiagnostics = filesystemDiagnostics(inspection.filesystem);
-  if (inspection.filesystem.entries.some((entry) => entry.path === '.')) {
-    return structuralDiagnostics;
+  const rootEntry = inspection.filesystem.entries.find((entry) => entry.path === '.');
+  if (rootEntry !== undefined) {
+    return Object.freeze([
+      ...structuralDiagnostics,
+      diagnostic('AB6000', 'Artifact root is not a readable directory.', artifactManifestName),
+    ]);
+  }
+
+  const manifestEntry = inspection.filesystem.entries.find((entry) => entry.path === artifactManifestName);
+  if (manifestEntry !== undefined && manifestEntry.kind !== 'file') {
+    return Object.freeze([
+      ...structuralDiagnostics,
+      diagnostic('AB6000', 'Artifact manifest is missing or cannot be read.', artifactManifestName),
+    ]);
   }
 
   const manifestPath = resolve(context.artifactRoot, artifactManifestName);
@@ -637,6 +677,7 @@ export const validateArtifact = async (context: ValidateArtifactOptions): Promis
     return [diagnostic('AB6001', 'Artifact manifest is not a strict canonical v2 manifest.', artifactManifestName)];
   }
 
+  const registry = context.registry ?? createDefaultRegistry();
   const diagnostics: Diagnostic[] = [...structuralDiagnostics];
   if (
     manifest.agentSkills.schemaSha256 !== agentSkillsSchemaRevision.schemaSha256 ||
@@ -658,18 +699,19 @@ export const validateArtifact = async (context: ValidateArtifactOptions): Promis
     filesystem: inspection.filesystem,
     files: inspection.files,
     manifest,
-    registry: context.registry ?? createDefaultRegistry(),
+    registry,
   }));
   diagnostics.push(...await validateTargetContracts({
     artifactRoot: context.artifactRoot,
     files: inspection.files,
     manifest,
-    registry: context.registry ?? createDefaultRegistry(),
+    registry,
   }));
   diagnostics.push(...await validateEmittedSkills({
     artifactRoot: context.artifactRoot,
     files: inspection.files,
     manifest,
+    registry,
   }));
   diagnostics.push(...await validateGeneratedFiles({
     artifactRoot: context.artifactRoot,

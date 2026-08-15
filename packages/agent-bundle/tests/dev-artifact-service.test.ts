@@ -329,10 +329,11 @@ it('rejects a tampered staging transfer, retains the last good epoch, and cleans
     const failed = await service.build(prepared);
 
     expect(first.outcome).toBe('succeeded');
-    expect(failed).toMatchObject({
-      diagnostics: [expect.objectContaining({ code: 'AB6004' })],
-      outcome: 'failed',
-    });
+    expect(failed).toMatchObject({ outcome: 'failed' });
+    expect(failed.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'AB6004' }),
+      expect.objectContaining({ code: 'AB6014', generatedPath: 'unexpected.txt' }),
+    ]));
     if (first.outcome === 'succeeded') {
       expect(await store.readActiveEpoch()).toEqual(first.epoch);
     }
