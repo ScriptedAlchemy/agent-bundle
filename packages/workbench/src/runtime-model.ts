@@ -63,6 +63,7 @@ export interface RuntimeModel {
   readonly activeEffect?: RuntimeQueuedEffect;
   readonly announcements: readonly string[];
   readonly confirmation?: RuntimeConfirmation;
+  readonly deferredOperation?: RuntimeModelEffect;
   readonly draft: RuntimeDraft;
   readonly expandedTraceSpanIds: readonly string[];
   readonly history: readonly DevRuntimeRun[];
@@ -196,23 +197,46 @@ const runOrder = (left: DevRuntimeRun, right: DevRuntimeRun): number => {
   return started === 0 ? left.id.localeCompare(right.id) : started;
 };
 
-const sameVector = (left: RuntimeVector, right: RuntimeVector): boolean =>
+const sameStableVector = (left: RuntimeVector, right: RuntimeVector): boolean =>
   left.artifactEpochId === right.artifactEpochId &&
   left.providerSessionId === right.providerSessionId &&
   left.runtimeGenerationId === right.runtimeGenerationId &&
   left.sourceRevision === right.sourceRevision &&
-  left.stateStoreId === right.stateStoreId &&
-  left.stateVersion === right.stateVersion;
+  left.stateStoreId === right.stateStoreId;
+
+const isJsonRecord = (value: JsonValue): value is Readonly<Record<string, JsonValue>> =>
+  value !== null && typeof value === 'object' && !Array.isArray(value);
+
+const sameJson = (left: JsonValue, right: JsonValue): boolean => {
+  if (left === right) return true;
+  if (left === null || right === null || typeof left !== 'object' || typeof right !== 'object') return false;
+  if (Array.isArray(left) || Array.isArray(right)) {
+    if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) return false;
+    return left.every((entry, index) => sameJson(entry, right[index]!));
+  }
+  if (!isJsonRecord(left) || !isJsonRecord(right)) return false;
+  const leftKeys = Object.keys(left);
+  const rightKeys = Object.keys(right);
+  return leftKeys.length === rightKeys.length && leftKeys.every((key) =>
+    Object.hasOwn(right, key) && sameJson(left[key]!, right[key]!));
+};
 
 const sameRunIdentity = (left: DevRuntimeRun, right: DevRuntimeRun): boolean =>
   left.fixtureId === right.fixtureId &&
   left.id === right.id &&
+  sameJson(left.input, right.input) &&
   left.startedAt === right.startedAt &&
   left.surfaceId === right.surfaceId &&
   left.target === right.target &&
-  sameVector(left.vector, right.vector);
+  sameStableVector(left.vector, right.vector);
 
 const terminalRun = (run: DevRuntimeRun): boolean => run.status === 'succeeded' || run.status === 'failed';
+
+const terminalResultStateMatchesVector = (run: DevRuntimeRun): boolean =>
+  run.status !== 'succeeded' || (
+    run.result.state.identity.stateStoreId === run.vector.stateStoreId &&
+    run.result.state.identity.stateVersion === run.vector.stateVersion
+  );
 
 const historyFor = (runs: readonly DevRuntimeRun[], providerSessionId: string): readonly DevRuntimeRun[] => {
   const byId = new Map<string, DevRuntimeRun>();
@@ -221,13 +245,21 @@ const historyFor = (runs: readonly DevRuntimeRun[], providerSessionId: string): 
     if (entry.vector.providerSessionId !== providerSessionId) {
       throw new TypeError('Runtime history must belong to the active provider session.');
     }
+    if (!terminalResultStateMatchesVector(entry)) {
+      throw new TypeError(`Runtime history terminal result state must match the vector for run ID ${entry.id}.`);
+    }
     const previous = byId.get(entry.id);
     if (previous === undefined) {
       byId.set(entry.id, entry);
       continue;
     }
     if (!sameRunIdentity(previous, entry)) throw new TypeError(`Runtime history cannot merge incompatible records for run ID ${entry.id}.`);
-    if (previous.status === 'running' && terminalRun(entry)) byId.set(entry.id, entry);
+    if (previous.status === 'running' && terminalRun(entry)) {
+      if (entry.vector.stateVersion < previous.vector.stateVersion) {
+        throw new TypeError(`Runtime history cannot move state backwards for run ID ${entry.id}.`);
+      }
+      byId.set(entry.id, entry);
+    }
     else if (terminalRun(previous) && entry.status === 'running') continue;
     else if (previous.status !== entry.status) throw new TypeError(`Runtime history cannot replace terminal run ID ${entry.id}.`);
     else if (runOrder(entry, previous) < 0) byId.set(entry.id, entry);
@@ -303,9 +335,16 @@ const deferHistoryBootstrap = (model: RuntimeModel, triggerSequence?: number): R
   });
 };
 
+const deferForegroundOperation = (model: RuntimeModel, operation: RuntimeModelEffect): RuntimeModel => {
+  if (model.deferredOperation !== undefined) {
+    return announced(model, 'A foreground runtime operation is already queued; wait for it to drain.');
+  }
+  return update(model, { deferredOperation: snapshot(operation) });
+};
+
 const queueOperation = (model: RuntimeModel, operation: RuntimeModelEffect): RuntimeModel => {
   if (model.activeEffect !== undefined && model.pendingEffect !== undefined) {
-    return operation.kind === 'read-run' ? deferHistoryBootstrap(model) : model;
+    return operation.kind === 'read-run' ? deferHistoryBootstrap(model) : deferForegroundOperation(model, operation);
   }
   const [advanced, queued] = createQueuedEffect(model, operation);
   return advanced.activeEffect === undefined
@@ -334,12 +373,18 @@ const flushDeferredHistoryBootstrap = (model: RuntimeModel): RuntimeModel => {
   return queueBootstrap(cleared, model.historyBootstrapTriggerSequence);
 };
 
+const flushDeferredForegroundOperation = (model: RuntimeModel): RuntimeModel => {
+  const operation = model.deferredOperation;
+  if (operation === undefined || (model.activeEffect !== undefined && model.pendingEffect !== undefined)) return model;
+  return queueOperation(update(model, { deferredOperation: undefined }), operation);
+};
+
 const settleEffect = (model: RuntimeModel, id: string): RuntimeModel => {
   if (model.activeEffect?.id !== id) return model;
   const settled = model.pendingEffect === undefined
     ? update(model, { activeEffect: undefined })
     : update(model, { activeEffect: model.pendingEffect, pendingEffect: undefined });
-  return flushDeferredHistoryBootstrap(settled);
+  return flushDeferredForegroundOperation(flushDeferredHistoryBootstrap(settled));
 };
 
 const settleEffectKind = (model: RuntimeModel, kind: RuntimePendingEffect['kind']): RuntimeModel =>
@@ -487,7 +532,8 @@ const receivedEvent = (model: RuntimeModel, message: ProjectEventMessage): Runti
       replayDroppedThroughSequence: message.latestDroppedSequence,
     }), message.latestDroppedSequence);
   }
-  if (message.type !== 'runtime.event' || message.sequence <= model.lastConsumedEventSequence) return model;
+  const consumedThrough = Math.max(model.lastConsumedEventSequence, model.replayDroppedThroughSequence ?? -1);
+  if (message.type !== 'runtime.event' || message.sequence <= consumedThrough) return model;
   const advanced = update(model, { lastConsumedEventSequence: message.sequence });
   const event = message.payload;
   if (advanced.providerSessionId !== undefined && event.providerSessionId !== advanced.providerSessionId) {

@@ -616,3 +616,109 @@ it('clears malformed HMR evidence by named surface or globally while ignoring lo
   expect(malformedGlobal.hmrClientCountKnownSurfaces).toEqual([]);
   expect(lower).toBe(twoKnown);
 });
+
+it('admits terminal state-version progress only for stable same-run evidence', () => {
+  const input = { city: 'London', filters: ['today'] } as const;
+  const running = {
+    ...run('evolving-terminal', { input }),
+    completedAt: undefined,
+    result: undefined,
+    status: 'running',
+  } as DevRuntimeRun;
+  const succeeded = run('evolving-terminal', { input, vector: vector({ stateVersion: 2 }) });
+  if (succeeded.status !== 'succeeded') throw new Error('Expected succeeded terminal fixture.');
+  const terminal = {
+    ...succeeded,
+    result: {
+      ...succeeded.result,
+      state: {
+        ...succeeded.result.state,
+        identity: { ...succeeded.result.state.identity, stateVersion: 2 },
+      },
+    },
+  } satisfies DevRuntimeRun;
+  const state = model({ history: [running] });
+  const merged = reduce(state, { run: terminal, type: 'run.received' });
+
+  expect(merged.history[0]?.vector.stateVersion).toBe(2);
+  expect(() => reduce(state, {
+    run: { ...terminal, input: { city: 'Paris', filters: ['today'] } },
+    type: 'run.received',
+  })).toThrow(/run ID/i);
+  expect(() => reduce(state, {
+    run: { ...terminal, vector: vector({ runtimeGenerationId: 'generation-b', stateVersion: 2 }) },
+    type: 'run.received',
+  })).toThrow(/run ID/i);
+  expect(() => reduce(state, {
+    run: { ...terminal, startedAt: '2026-08-15T12:00:02.000Z' },
+    type: 'run.received',
+  })).toThrow(/run ID/i);
+  expect(() => reduce(state, {
+    run: {
+      ...terminal,
+      result: {
+        ...terminal.result,
+        state: { ...terminal.result.state, identity: { stateStoreId: 'state-a', stateVersion: 1 } },
+      },
+    },
+    type: 'run.received',
+  })).toThrow(/terminal result state/i);
+});
+
+it('never applies runtime events at or below the replay-gap recovery watermark', () => {
+  const gap = { earliestAvailableSequence: 9, latestDroppedSequence: 8, requestedAfterSequence: 1, type: 'replay.gap' } as const;
+  const recovered = reduce(model(), { event: gap, type: 'event.received' });
+  const stale = reduce(recovered, {
+    event: event(7, 'runtime.hmr.client-connected', { connectionCount: 2, surfaceId: 'weather' }),
+    type: 'event.received',
+  });
+  const next = reduce(stale, {
+    event: event(9, 'runtime.hmr.client-connected', { connectionCount: 3, surfaceId: 'weather' }),
+    type: 'event.received',
+  });
+
+  expect(stale).toBe(recovered);
+  expect(next.lastConsumedEventSequence).toBe(9);
+  expect(next.hmrClientCountBySurface.weather).toBe(3);
+});
+
+it('preserves one direct read-only or replay operation through a full effect queue', () => {
+  const queuedBase = (): RuntimeModel => reduce(model({
+    history: [run('run-old', { vector: vector({ runtimeGenerationId: 'generation-old' }) })],
+    status: status({ activeVector: vector({ runtimeGenerationId: 'generation-new' }) }),
+    surfaces: [surface({ readOnly: true })],
+  }), {
+    event: {
+      occurredAt: '2026-08-15T12:00:00.000Z',
+      payload: { providerSessionId: 'provider-a', runId: 'run-a', runtimeGenerationId: 'generation-new', type: 'runtime.run.completed' },
+      sequence: 1,
+      type: 'runtime.event',
+    },
+    type: 'event.received',
+  }, { event: event(2, 'runtime.generation.activated', undefined, 'provider-a', 'generation-new'), type: 'event.received' });
+  const promoteExactlyOnce = (state: RuntimeModel): RuntimeModel => {
+    const read = effectFor(state);
+    if (read === undefined) throw new Error('Expected an active read effect.');
+    const afterRead = reduce(state, { id: read.id, type: 'effect.settled' });
+    const bootstrap = effectFor(afterRead);
+    if (bootstrap === undefined) throw new Error('Expected an active bootstrap effect.');
+    const afterBootstrap = reduce(afterRead, { id: bootstrap.id, type: 'effect.settled' });
+    const deferred = effectFor(afterBootstrap);
+    if (deferred === undefined) throw new Error('Expected the deferred foreground effect.');
+    const drained = reduce(afterBootstrap, { id: deferred.id, type: 'effect.settled' });
+    expect(drained.activeEffect).toBeUndefined();
+    expect(drained.pendingEffect).toBeUndefined();
+    return afterBootstrap;
+  };
+
+  const direct = reduce(queuedBase(), { type: 'run.request' });
+  const exact = reduce(queuedBase(), { mode: 'exact', runId: 'run-old', type: 'replay.request' });
+  const latest = reduce(queuedBase(), { mode: 'latest', runId: 'run-old', type: 'replay.request' });
+
+  expect(direct.deferredOperation).toMatchObject({ cause: 'manual', kind: 'create-run', request: { expectedGenerationId: 'generation-new' } });
+  expect(exact.deferredOperation).toMatchObject({ kind: 'replay-run', request: { expectedGenerationId: 'generation-old', mode: 'exact', runId: 'run-old' } });
+  expect(latest.deferredOperation).toMatchObject({ kind: 'replay-run', request: { expectedGenerationId: 'generation-new', mode: 'latest', runId: 'run-old' } });
+  expect(promoteExactlyOnce(direct).activeEffect).toMatchObject({ cause: 'manual', kind: 'create-run' });
+  expect(promoteExactlyOnce(exact).activeEffect).toMatchObject({ kind: 'replay-run', request: { mode: 'exact', runId: 'run-old' } });
+  expect(promoteExactlyOnce(latest).activeEffect).toMatchObject({ kind: 'replay-run', request: { mode: 'latest', runId: 'run-old' } });
+});
