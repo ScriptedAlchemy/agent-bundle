@@ -53,8 +53,28 @@ export interface ProjectSourceSnapshot {
   readonly revision: string;
 }
 
-const freezeDiagnostics = (diagnostics: readonly Diagnostic[]): readonly Diagnostic[] =>
-  Object.freeze(diagnostics.map((diagnostic) => Object.freeze({ ...withDiagnosticRecovery(diagnostic) })));
+const diagnosticIdentity = (diagnostic: Diagnostic): string => JSON.stringify([
+  diagnostic.code,
+  diagnostic.message,
+  diagnostic.severity,
+  diagnostic.sourcePath,
+  diagnostic.generatedPath,
+  diagnostic.target,
+  diagnostic.recovery,
+]);
+
+const freezeDiagnostics = (diagnostics: readonly Diagnostic[]): readonly Diagnostic[] => {
+  const identities = new Set<string>();
+  const frozen: Diagnostic[] = [];
+  for (const input of diagnostics) {
+    const diagnostic = withDiagnosticRecovery(input);
+    const identity = diagnosticIdentity(diagnostic);
+    if (identities.has(identity)) continue;
+    identities.add(identity);
+    frozen.push(Object.freeze({ ...diagnostic }));
+  }
+  return Object.freeze(frozen);
+};
 
 const hasErrors = (diagnostics: readonly Diagnostic[]): boolean =>
   diagnostics.some((diagnostic) => diagnostic.severity === 'error');

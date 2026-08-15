@@ -13,6 +13,7 @@ import {
 } from '../src/adapters/hook-contract.ts';
 import type { TargetAdapter } from '../src/adapters/types.ts';
 import { inspectArtifactFilesystem } from '../src/build/emit.ts';
+import type { Diagnostic } from '../src/core/diagnostics.ts';
 import { pathTokens, type NormalizedPlugin } from '../src/core/types.ts';
 import { ProjectService } from '../src/dev/project-service.ts';
 import {
@@ -206,6 +207,116 @@ it('attaches a specific recovery to every invalid inspection diagnostic', async 
         recovery: 'Correct the project configuration field named by this diagnostic, then inspect again.',
       }),
     ]));
+  } finally {
+    await rm(join(root, '..'), { force: true, recursive: true });
+  }
+});
+
+it('keeps the built-in Codex SSE diagnostic exactly once across validation and planning', async () => {
+  const root = await createProject();
+  try {
+    await writeFile(join(root, 'agent-bundle.config.ts'), [
+      'export default {',
+      "  plugin: { name: 'codex-sse', version: '1.0.0' },",
+      "  targets: ['codex'],",
+      "  mcp: { servers: { events: { transport: 'sse', url: 'https://mcp.example.test/events' } } },",
+      '};',
+      '',
+    ].join('\n'));
+
+    const result = await inspect({ root });
+    const diagnostics = result.diagnostics.filter((diagnostic) => diagnostic.code === 'codex.mcp.transport.sse');
+
+    expect(result.state).toBe('invalid');
+    expect(diagnostics).toEqual([expect.objectContaining({
+      code: 'codex.mcp.transport.sse',
+      recovery: expect.any(String),
+      severity: 'error',
+    })]);
+    expect(Object.isFrozen(result.diagnostics)).toBe(true);
+    expect(Object.isFrozen(diagnostics[0])).toBe(true);
+  } finally {
+    await rm(join(root, '..'), { force: true, recursive: true });
+  }
+});
+
+it('deduplicates identical adapter diagnostics without collapsing distinct stable identities', async () => {
+  const root = await createProject();
+  const diagnostic = (code: string, overrides: Partial<Diagnostic> = {}): Diagnostic => ({
+    code,
+    generatedPath: 'generated/a.json',
+    message: 'Adapter diagnostic.',
+    recovery: 'Fix this adapter diagnostic.',
+    severity: 'error',
+    sourcePath: 'agent-bundle.config.ts',
+    target: syntheticTarget,
+    ...overrides,
+  });
+  const pairs = [
+    { expected: 1, name: 'identical', plan: diagnostic('custom.adapter.identical'), validate: diagnostic('custom.adapter.identical') },
+    {
+      expected: 2,
+      name: 'source path',
+      plan: diagnostic('custom.adapter.source-path', { sourcePath: 'generated.config.ts' }),
+      validate: diagnostic('custom.adapter.source-path'),
+    },
+    {
+      expected: 2,
+      name: 'generated path',
+      plan: diagnostic('custom.adapter.generated-path', { generatedPath: 'generated/b.json' }),
+      validate: diagnostic('custom.adapter.generated-path'),
+    },
+    {
+      expected: 2,
+      name: 'severity',
+      plan: diagnostic('custom.adapter.severity', { severity: 'warning' }),
+      validate: diagnostic('custom.adapter.severity'),
+    },
+    {
+      expected: 2,
+      name: 'target',
+      plan: diagnostic('custom.adapter.target', { target: 'synthetic-plan' }),
+      validate: diagnostic('custom.adapter.target'),
+    },
+    {
+      expected: 2,
+      name: 'recovery',
+      plan: diagnostic('custom.adapter.recovery', { recovery: 'Repair this plan-specific diagnostic.' }),
+      validate: diagnostic('custom.adapter.recovery'),
+    },
+  ] as const;
+  const validationOnly = diagnostic('custom.adapter.validation-only');
+  const planOnly = diagnostic('custom.adapter.plan-only');
+  const adapter: TargetAdapter = Object.freeze({
+    ...syntheticAdapter,
+    plan: () => Object.freeze({
+      diagnostics: Object.freeze([planOnly, ...pairs.map((pair) => pair.plan)]),
+      entries: Object.freeze([]),
+    }),
+    validateModel: () => [validationOnly, ...pairs.map((pair) => pair.validate)],
+  });
+  const registry = new TargetRegistry().register(adapter, { default: true });
+  try {
+    await writeFile(join(root, 'agent-bundle.config.ts'), [
+      'export default {',
+      "  plugin: { name: 'adapter-diagnostic-identity', version: '1.0.0' },",
+      "  synthetic: { enabled: true },",
+      "  targets: ['synthetic'],",
+      '};',
+      '',
+    ].join('\n'));
+
+    const prepared = await new ProjectService({ registry, root }).prepare('inspect');
+    const expected = [
+      validationOnly,
+      ...pairs.map((pair) => pair.validate),
+      planOnly,
+      ...pairs.filter((pair) => pair.expected === 2).map((pair) => pair.plan),
+    ];
+
+    expect(prepared.diagnostics).toEqual(expected);
+    expect(Object.isFrozen(prepared.diagnostics)).toBe(true);
+    expect(prepared.diagnostics.every((entry) => Object.isFrozen(entry))).toBe(true);
   } finally {
     await rm(join(root, '..'), { force: true, recursive: true });
   }
