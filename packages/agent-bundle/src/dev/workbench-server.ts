@@ -190,6 +190,14 @@ class DeferredMcpAppPreviewService implements McpAppRoutePreviewService {
     return this.#active().close(bindingId, options);
   }
 
+  consentChallenges(bindingId: string) {
+    return this.#active().consentChallenges?.(bindingId);
+  }
+
+  decideConsent(bindingId: string, challengeId: string, approved: boolean) {
+    return this.#active().decideConsent?.(bindingId, challengeId, approved) ?? false;
+  }
+
   #active(): McpAppRoutePreviewService {
     if (this.#service === undefined) throw new Error('MCP App preview service is not ready.');
     return this.#service;
@@ -361,6 +369,7 @@ const openInBrowser: OpenBrowser = (url) => new Promise((resolvePromise, rejectP
 /** Starts one loopback foreground session over the current project services. */
 export const startDevServer = async (options: StartDevServerOptions): Promise<DevServerSession> => {
   const root = resolve(options.root);
+  const openBrowser = options.openBrowser ?? openInBrowser;
   const eventHub = new ProjectEventHub();
   const epochStore = new EpochStore({ projectRoot: root });
   const projectService = new ProjectService({ includeDevRuntime: true, mode: 'development', root });
@@ -456,6 +465,15 @@ export const startDevServer = async (options: StartDevServerOptions): Promise<De
     const bindings = new McpAppBindingService({ sessionAuthority: mcpSessions });
     const previews = new McpAppPreviewService({
       bindingAuthority: bindings,
+      host: {
+        onDisplayMode: (mode) => mode,
+        onDownload: async (download) => {
+          // This is a host-created opaque data URL; App-controlled content is
+          // encoded before it crosses the browser-launch boundary.
+          await openBrowser(`data:application/json;charset=utf-8,${encodeURIComponent(JSON.stringify(download.contents))}`);
+        },
+        onOpenLink: async (url) => { await openBrowser(url); },
+      },
       hostInfo: { name: 'agent-bundle', version: '0.1.0' },
       hostOrigin: foreground.url,
       sandboxProxy: sandbox,
@@ -481,7 +499,7 @@ export const startDevServer = async (options: StartDevServerOptions): Promise<De
     });
     mcpApps.attach(previews);
     appPreviews.attach(previews);
-    if (options.open === true) await (options.openBrowser ?? openInBrowser)(foreground.url);
+    if (options.open === true) await openBrowser(foreground.url);
   } catch (error) {
     const [cleanup] = await Promise.allSettled([foreground.close()]);
     if (cleanup?.status === 'rejected') {

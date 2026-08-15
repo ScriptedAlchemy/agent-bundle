@@ -309,10 +309,9 @@ const McpPageAppPreview = ({ client, host, onControllerChange, previewProfile, s
   const [state, setState] = useState<McpAppPreviewState>(() => Object.freeze({ phase: 'loading' }));
   const [consentChallenges, setConsentChallenges] = useState<readonly McpAppConsentChallenge[]>(Object.freeze([]));
   const [consentPending, setConsentPending] = useState<string>();
-  const [blankBarrier, setBlankBarrier] = useState(false);
+  const [blankBarrier, setBlankBarrier] = useState<number>();
   const controller = useRef<McpAppPreviewController | undefined>(undefined);
   const iframe = useRef<HTMLIFrameElement>(null);
-  const blankBarrierTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   useEffect(() => {
     const current = createMcpAppPreviewController({
@@ -342,7 +341,6 @@ const McpPageAppPreview = ({ client, host, onControllerChange, previewProfile, s
     return () => {
       active = false;
       clearInterval(poll);
-      if (blankBarrierTimer.current !== undefined) clearTimeout(blankBarrierTimer.current);
       unsubscribe();
       if (controller.current === current) controller.current = undefined;
       onControllerChange(undefined);
@@ -351,9 +349,15 @@ const McpPageAppPreview = ({ client, host, onControllerChange, previewProfile, s
   }, [client, host, onControllerChange, previewProfile, source]);
 
   useEffect(() => {
-    if (blankBarrier || state.phase !== 'ready' || iframe.current === null || typeof window === 'undefined') return;
+    if (blankBarrier !== undefined || state.phase !== 'ready' || iframe.current === null || typeof window === 'undefined') return;
     controller.current?.attachFrame(iframe.current, window);
   }, [blankBarrier, state]);
+
+  useEffect(() => {
+    if (blankBarrier === undefined) return;
+    controller.current?.commitDocumentRemount(blankBarrier);
+    setBlankBarrier(undefined);
+  }, [blankBarrier]);
 
   const decideConsent = (challenge: McpAppConsentChallenge, approved: boolean): void => {
     const current = controller.current;
@@ -362,14 +366,9 @@ const McpPageAppPreview = ({ client, host, onControllerChange, previewProfile, s
     setConsentPending(challenge.id);
     void current.decideConsent(challenge.id, approved).then(async (accepted) => {
       if (!accepted) return;
-      const nextRevision = current.state.phase === 'ready' ? current.state.preview.frame?.documentPolicy?.revision : undefined;
+      const nextRevision = current.pendingDocumentPolicyRevision;
       if (previousRevision !== nextRevision) {
-        setBlankBarrier(true);
-        if (blankBarrierTimer.current !== undefined) clearTimeout(blankBarrierTimer.current);
-        blankBarrierTimer.current = setTimeout(() => {
-          blankBarrierTimer.current = undefined;
-          setBlankBarrier(false);
-        }, 0);
+        if (nextRevision !== undefined) setBlankBarrier(nextRevision);
       }
       try {
         setConsentChallenges(await current.consentChallenges());
@@ -403,8 +402,8 @@ const McpPageAppPreview = ({ client, host, onControllerChange, previewProfile, s
       </li>)}</ol>
     </section>}
     {state.phase === 'ready' && state.preview.frame !== undefined
-      ? blankBarrier
-        ? <iframe key={`blank:${state.preview.frame.documentPolicy?.revision ?? 0}`} ref={iframe} sandbox="" src="about:blank" title={`MCP App preview reload barrier: ${source.toolName}`} />
+      ? blankBarrier !== undefined
+        ? <iframe data-mcp-app-document-revision={blankBarrier} key={`blank:${blankBarrier}`} ref={iframe} sandbox="" src="about:blank" title={`MCP App preview reload barrier: ${source.toolName}`} />
         : <McpAppPreviewFrame key={state.preview.frame.documentPolicy?.revision ?? 0} frame={state.preview.frame} iframeRef={iframe} title={`MCP App preview: ${source.toolName}`} />
       : undefined}
   </section>;

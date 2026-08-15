@@ -56,6 +56,7 @@ class RecordingPreviewService implements McpAppRoutePreviewService {
     params: Object.freeze({ canonical: true }),
   });
   closeResult: McpAppBridgeMessage | true = this.closeFrame;
+  expiredConsentConsumed = false;
   previewAvailable = true;
   #releaseFirstReceive: (() => void) | undefined;
 
@@ -68,6 +69,11 @@ class RecordingPreviewService implements McpAppRoutePreviewService {
   }
 
   decideConsent(bindingId: string, challengeId: string, approved: boolean) {
+    if (bindingId === 'binding-a' && challengeId === 'expired-consent' && approved && !this.expiredConsentConsumed) {
+      this.expiredConsentConsumed = true;
+      this.outbound.push({ error: { code: -32001, message: 'ui/open-link requires an approved consent grant.' }, id: 'expired-link', jsonrpc: '2.0' });
+      return false;
+    }
     if (bindingId !== 'binding-a' || challengeId !== 'consent-1' || !approved) return false;
     return true;
   }
@@ -213,6 +219,27 @@ it('exposes only server-created consent challenges and accepts a decision by opa
       headers: { ...headers(), 'content-type': 'application/json' }, method: 'POST',
     });
     await expect(approved.json()).resolves.toMatchObject({ approved: true, lifecycle: 'created', messages: [], preview: { bindingId: 'binding-a' } });
+  } finally {
+    await started.close();
+  }
+});
+
+it('returns the one terminal bridge denial from an exact expired action decision without answering replays', async () => {
+  const started = await startRoutes();
+  try {
+    const expired = await fetch(`${started.url}/api/mcp/apps/binding-a/consent`, {
+      body: JSON.stringify({ approved: true, challengeId: 'expired-consent' }),
+      headers: { ...headers(), 'content-type': 'application/json' }, method: 'POST',
+    });
+    await expect(expired.json()).resolves.toMatchObject({
+      approved: false,
+      messages: [{ error: { code: -32001 }, id: 'expired-link' }],
+    });
+    const replay = await fetch(`${started.url}/api/mcp/apps/binding-a/consent`, {
+      body: JSON.stringify({ approved: true, challengeId: 'expired-consent' }),
+      headers: { ...headers(), 'content-type': 'application/json' }, method: 'POST',
+    });
+    await expect(replay.json()).resolves.toMatchObject({ approved: false, messages: [] });
   } finally {
     await started.close();
   }

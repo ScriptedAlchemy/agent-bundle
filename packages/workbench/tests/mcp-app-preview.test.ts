@@ -63,6 +63,17 @@ const preview = (overrides: Partial<Preview> = {}): Preview => Object.freeze({
   ...overrides,
 });
 
+const documentFrame = (revision: number): McpAppRelayFrame => Object.freeze({
+  ...frame,
+  allow: 'geolocation',
+  documentPolicy: Object.freeze({
+    allow: 'geolocation',
+    approvedPermissions: Object.freeze({ geolocation: Object.freeze({}) }),
+    revision,
+    warnings: Object.freeze([]),
+  }),
+});
+
 const closed = (): McpAppRouteClose => Object.freeze({ lifecycle: 'closed' });
 const messages = (): McpAppRouteMessages => Object.freeze({ accepted: true, lifecycle: 'initialized', messages: Object.freeze([]) });
 
@@ -258,6 +269,41 @@ describe('MCP App preview', () => {
       toolName: 'show-weather',
     })).toThrow('JSON');
     expect(creates).toHaveLength(1);
+  });
+
+  it('commits a document-policy refresh only after the page has committed its keyed blank barrier', async () => {
+    const first = preview({ frame: documentFrame(1) });
+    const second = preview({ frame: documentFrame(2) });
+    const { client } = fakeClient(Promise.resolve(first));
+    client.decideConsent = async () => Object.freeze({ approved: true, messages: Object.freeze([]), preview: second });
+    let detached = 0;
+    let relayCreates = 0;
+    const controller = createMcpAppPreviewController({
+      client,
+      frameRelayFactory: () => {
+        relayCreates += 1;
+        return { async close() {}, detach() { detached += 1; }, start: () => true };
+      },
+      host,
+      input: Object.freeze({ city: 'Paris' }),
+      result: Object.freeze({ text: 'Sunny' }),
+      sessionId: 'session-weather',
+      toolName: 'show-weather',
+    });
+
+    await controller.start();
+    expect(controller.attachFrame(iframe(), browserWindow)).toBe(true);
+    expect(relayCreates).toBe(1);
+    await expect(controller.decideConsent('document-geolocation', true)).resolves.toBe(true);
+    expect(detached).toBe(1);
+    expect(controller.state).toMatchObject({ phase: 'ready', preview: { frame: { documentPolicy: { revision: 1 } } } });
+    expect(controller.pendingDocumentPolicyRevision).toBe(2);
+    expect(controller.commitDocumentRemount(1)).toBe(false);
+    expect(controller.commitDocumentRemount(2)).toBe(true);
+    expect(controller.state).toMatchObject({ phase: 'ready', preview: { frame: { documentPolicy: { revision: 2 } } } });
+    expect(controller.attachFrame(iframe(), browserWindow)).toBe(true);
+    expect(relayCreates).toBe(2);
+    await controller.close();
   });
 
   it('waits for a late preview create before force-closing its binding during unmount', async () => {

@@ -63,7 +63,9 @@ const proxyDocument = `<!doctype html>
 
 const mountedPageFixture = async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-mcp-page-app-'));
-  const sandbox = createServer((_request, response) => {
+  const sandboxRequests: string[] = [];
+  const sandbox = createServer((request, response) => {
+    sandboxRequests.push(request.url ?? '');
     response.writeHead(200, { 'content-type': 'text/html' }).end(proxyDocument);
   });
   const sandboxOrigin = await listen(sandbox);
@@ -76,7 +78,7 @@ const mountedPageFixture = async () => {
     '',
     `const sandboxOrigin = ${JSON.stringify(sandboxOrigin)};`,
     "const resource = { csp: {}, html: '<main>Weather resource</main>', kind: 'resource', permissions: {} };",
-    "const frame = { allow: '', policy: { contentSecurityPolicy: \"default-src 'none'\", iframeAllow: '', permissionsPolicy: 'camera=()' }, referrerPolicy: 'no-referrer', relay: { maxMessageBytes: 4096, maxQueuedMessages: 16 }, sandbox: 'allow-scripts allow-same-origin', src: `${sandboxOrigin}/#mcp-app-preview`, targetOrigin: sandboxOrigin };",
+    "const frame = (revision = 1) => ({ allow: '', documentPolicy: { allow: '', approvedPermissions: {}, revision, warnings: [] }, policy: { contentSecurityPolicy: \"default-src 'none'\", iframeAllow: '', permissionsPolicy: 'camera=()' }, referrerPolicy: 'no-referrer', relay: { maxMessageBytes: 4096, maxQueuedMessages: 16 }, sandbox: 'allow-scripts allow-same-origin', src: `${sandboxOrigin}/#mcp-app-preview`, targetOrigin: sandboxOrigin });",
     "const history = [",
     "  { id: 'weather-call', operation: 'callTool', request: { arguments: { city: 'Paris', partial: true }, name: 'weather' }, result: { content: [{ text: 'Sunny', type: 'text' }], structuredContent: { temperature: 22 } }, timing: { completedAt: 2, durationMs: 1, startedAt: 1 } },",
     "  { id: 'wrong-mime-call', operation: 'callTool', request: { arguments: { city: 'Paris' }, name: 'wrong-mime' }, result: { content: [{ text: 'ordinary wrong MIME result', type: 'text' }] }, timing: { completedAt: 4, durationMs: 1, startedAt: 3 } },",
@@ -85,6 +87,7 @@ const mountedPageFixture = async () => {
     "let model = { activeRequests: {}, catalogs: { prompts: [], resourceTemplates: [], resources: [], tools: [{ name: 'weather' }] }, conciseTrace: [], diagnostics: [], logs: [], phase: 'ready', progress: [], sessionId: 'session-weather', timeline: { droppedThroughSequence: 0, entries: [], lastSequence: 0 } };",
     'const listeners = new Set();',
     'const creates = []; const messages = []; const closes = []; const controllerEvents = [];',
+    'let documentRevision = 1;',
     'const emit = () => { for (const listener of listeners) listener(model); };',
     "const profile = (name) => ({ kind: 'apps', profile: name, resourceUri: 'ui://fixture/weather.html', ...(name === 'chatgpt' ? { extensions: { openai: {} } } : {}) });",
     'const appClient = {',
@@ -92,8 +95,10 @@ const mountedPageFixture = async () => {
     '    creates.push({ request, sessionId });',
     "    const bindingId = `binding-${creates.length}`;",
     "    if (request.toolName === 'wrong-mime' || request.toolName === 'legacy-output-template') return { bindingId, profile: { kind: 'fallback', profile: request.previewProfile }, resource: { input: request.input, kind: 'fallback', reason: request.toolName === 'wrong-mime' ? 'unsupported-media-type' : 'legacy-output-template', result: request.result } };",
-    '    return { bindingId, frame, profile: profile(request.previewProfile), resource };',
+    '    return { bindingId, frame: frame(), profile: profile(request.previewProfile), resource };',
     '  },',
+    "  async consentChallenges(bindingId) { return bindingId === 'binding-1' && documentRevision === 1 ? [{ expiresAt: Date.now() + 30000, id: 'document-geolocation', request: { capability: 'geolocation', details: {}, scope: 'document', summary: 'Allow MCP App geolocation?' } }] : []; },",
+    "  async decideConsent(bindingId, challengeId, approved) { if (bindingId !== 'binding-1' || challengeId !== 'document-geolocation' || !approved || documentRevision !== 1) return { approved: false, messages: [], preview: { bindingId, frame: frame(documentRevision), profile: profile('portable'), resource } }; documentRevision = 2; return { approved: true, messages: [], preview: { bindingId, frame: frame(2), profile: profile('portable'), resource } }; },",
     '  async message(bindingId, message) {',
     '    messages.push({ bindingId, message });',
     "    if (typeof message.id === 'string' && message.id.startsWith('mcp-app-frame-close:')) return { accepted: true, lifecycle: 'closed', messages: [] };",
@@ -165,6 +170,7 @@ const mountedPageFixture = async () => {
     },
     outerOrigin,
     root,
+    sandboxRequests: () => [...sandboxRequests],
   };
 };
 
@@ -207,6 +213,28 @@ describe('MCP App page browser integration', () => {
       expect(first.messages.map(({ message }) => message.method)).toEqual(expect.arrayContaining([
         'ui/initialize', 'ui/notifications/initialized', 'tools/call', 'resources/read', 'ui/request-display-mode', 'notifications/message',
       ]));
+
+      const sandboxRequestsBeforeRemount = fixture.sandboxRequests().length;
+      await page.evaluate(() => {
+        const trace: string[] = [];
+        const snapshot = (): string => {
+          const current = document.querySelector('iframe[title^="MCP App preview"]');
+          return current === null ? 'none' : `${current.getAttribute('title')}|${current.getAttribute('src')}|${current.getAttribute('data-mcp-app-document-revision')}`;
+        };
+        const observer = new MutationObserver(() => { trace.push(snapshot()); });
+        observer.observe(document.body, { attributes: true, attributeFilter: ['data-mcp-app-document-revision', 'src', 'title'], childList: true, subtree: true });
+        trace.push(snapshot());
+        Object.assign(globalThis, { __mcpPageRemountTrace: { stop: () => observer.disconnect(), values: () => [...trace] } });
+      });
+      await page.getByRole('button', { name: 'Allow geolocation' }).click();
+      await page.locator('iframe[title="MCP App preview: weather"][data-mcp-app-document-revision="2"]').waitFor();
+      const remountTrace = await page.evaluate(() => (globalThis as typeof globalThis & { __mcpPageRemountTrace: { readonly stop: () => void; readonly values: () => readonly string[] } }).__mcpPageRemountTrace.values());
+      await page.evaluate(() => (globalThis as typeof globalThis & { __mcpPageRemountTrace: { readonly stop: () => void } }).__mcpPageRemountTrace.stop());
+      const blank = remountTrace.findIndex((value) => value.startsWith('MCP App preview reload barrier: weather|about:blank|2'));
+      const refreshed = remountTrace.findIndex((value, index) => index > blank && value.startsWith('MCP App preview: weather|') && value.endsWith('|2'));
+      expect(blank).toBeGreaterThanOrEqual(0);
+      expect(refreshed).toBeGreaterThan(blank);
+      expect(fixture.sandboxRequests().slice(sandboxRequestsBeforeRemount)).toEqual(['/']);
 
       await page.selectOption('#mcp-app-profile', 'chatgpt');
       await page.waitForFunction(() => {

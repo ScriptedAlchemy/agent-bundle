@@ -1207,8 +1207,12 @@ export const createMcpAppBridge = (options: CreateMcpAppBridgeOptions): McpAppBr
       const pending = pendingConsentActions.get(challengeId);
       if (pending === undefined || options.consentAuthority === undefined || options.profile === undefined) return false;
       pendingConsentActions.delete(challengeId);
-      const grant = options.consentAuthority.grant(challengeId, approved);
-      if (grant === undefined) return approved ? false : pending.deny();
+      const resolution = options.consentAuthority.resolve(challengeId, approved);
+      // A known action challenge always gets one terminal response.  In
+      // particular, expiry is observable only by its own queued RPC; a forged
+      // or replayed id never produces browser-visible traffic.
+      if (resolution.status !== 'approved') return resolution.status === 'unknown' ? false : pending.deny();
+      const { grant } = resolution;
       if (grant.scope !== 'action' || grant.bindingId !== binding.id || grant.capability !== pending.capability
         || !options.consentAuthority.consume({
           actionDigest: pending.actionDigest,

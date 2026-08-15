@@ -40,6 +40,8 @@ const appFixtureHtml = [
   "  state.sentActions = true;",
   "  post({ id: 'app-tool', jsonrpc: '2.0', method: 'tools/call', params: { arguments: { message: 'from-real-sandbox' }, name: 'inner-echo' } });",
   "  post({ id: 'resource-read', jsonrpc: '2.0', method: 'resources/read', params: { uri: 'ui://fixture/app.html' } });",
+  "  post({ id: 'open-link', jsonrpc: '2.0', method: 'ui/open-link', params: { url: 'https://example.test/real-app-link' } });",
+  "  post({ id: 'download-file', jsonrpc: '2.0', method: 'ui/download-file', params: { contents: [{ text: 'real-app-download', type: 'text' }] } });",
   "  post({ id: 'display-mode', jsonrpc: '2.0', method: 'ui/request-display-mode', params: { mode: 'inline' } });",
   "  post({ jsonrpc: '2.0', method: 'notifications/message', params: { data: { event: 'real-app-ready' }, level: 'info', logger: 'fixture-app' } });",
   "};",
@@ -54,6 +56,8 @@ const appFixtureHtml = [
   "  if (message.method === 'ui/notifications/tool-result') { state.originalResult = message.params; callHost(); }",
   "  if (message.id === 'app-tool' && message.method === undefined) state.toolReply = message.result;",
   "  if (message.id === 'resource-read' && message.method === undefined) state.resourceReply = message.result;",
+  "  if (message.id === 'open-link' && message.method === undefined) state.linkReply = message.result ?? { error: message.error };",
+  "  if (message.id === 'download-file' && message.method === undefined) state.downloadReply = message.result ?? { error: message.error };",
   "  if (message.id === 'display-mode' && message.method === undefined) state.displayReply = message.result ?? { error: message.error };",
   "  if (message.method === 'ui/resource-teardown' && typeof message.id === 'string') {",
   "    state.teardown = message.id;",
@@ -131,6 +135,7 @@ e2e('runs a generated SDK-v2 App through the real foreground session and separat
   let server: Awaited<ReturnType<typeof startDevServer>> | undefined;
   let testFailure: unknown;
   let cleanupFailure: unknown;
+  const browserOpens: string[] = [];
   try {
     await buildWorkbench();
     project = await createProjectFixture();
@@ -138,6 +143,7 @@ e2e('runs a generated SDK-v2 App through the real foreground session and separat
     server = await startDevServer({
       assets: createWorkbenchAssetSource({ root: workbenchAssets }),
       open: false,
+      openBrowser: async (url) => { browserOpens.push(url); },
       port: 0,
       root: project.root,
     });
@@ -209,6 +215,9 @@ e2e('runs a generated SDK-v2 App through the real foreground session and separat
     await expect(outerFrame).toHaveAttribute('sandbox', 'allow-scripts allow-same-origin');
     await expect(outerFrame).toHaveAttribute('referrerpolicy', 'no-referrer');
     await page.getByRole('button', { name: 'Allow call tool' }).click();
+    await page.getByRole('button', { name: 'Allow open external link' }).click();
+    await page.getByRole('button', { name: 'Allow download file' }).click();
+    await page.getByRole('button', { name: 'Allow request display mode' }).click();
     await expect.poll(() => page.frames().filter((frame) => frame.url() === 'about:blank').length, { timeout: browserTimeout }).toBe(1);
     const appFrame = page.frames().find((frame) => frame.url() === 'about:blank');
     if (appFrame === undefined) throw new Error('Expected the sandbox proxy to create the App srcdoc frame.');
@@ -220,12 +229,22 @@ e2e('runs a generated SDK-v2 App through the real foreground session and separat
     expect(appSnapshot.originalResult).toEqual(originalResult);
     expect(appSnapshot.toolReply).toEqual({ content: [{ text: 'Inner echo: from-real-sandbox', type: 'text' }] });
     expect(appSnapshot.resourceReply).toMatchObject({ contents: [{ mimeType: 'text/html;profile=mcp-app', uri: 'ui://fixture/app.html' }] });
-    await expect.poll(async () => JSON.parse(await appState.textContent() ?? 'null').displayReply, { timeout: browserTimeout }).toMatchObject({
-      error: { code: -32601 },
-    });
+    await expect.poll(async () => JSON.parse(await appState.textContent() ?? 'null').linkReply, { timeout: browserTimeout }).toEqual({});
+    await expect.poll(async () => JSON.parse(await appState.textContent() ?? 'null').downloadReply, { timeout: browserTimeout }).toEqual({});
+    await expect.poll(async () => JSON.parse(await appState.textContent() ?? 'null').displayReply, { timeout: browserTimeout }).toEqual({ mode: 'inline' });
+    expect(browserOpens).toContain('https://example.test/real-app-link');
+    expect(browserOpens.some((url) => url.startsWith('data:application/json;charset=utf-8,'))).toBe(true);
     await expect.poll(() => appRequests.some((request) => {
       const message = (request.body as { readonly message?: { readonly method?: string } } | undefined)?.message;
       return request.path.endsWith('/messages') && message?.method === 'tools/call';
+    }), { timeout: browserTimeout }).toBe(true);
+    await expect.poll(() => appRequests.some((request) => {
+      const message = (request.body as { readonly message?: { readonly method?: string } } | undefined)?.message;
+      return request.path.endsWith('/messages') && message?.method === 'ui/open-link';
+    }), { timeout: browserTimeout }).toBe(true);
+    await expect.poll(() => appRequests.some((request) => {
+      const message = (request.body as { readonly message?: { readonly method?: string } } | undefined)?.message;
+      return request.path.endsWith('/messages') && message?.method === 'ui/download-file';
     }), { timeout: browserTimeout }).toBe(true);
     await expect.poll(() => appRequests.some((request) => {
       const message = (request.body as { readonly message?: { readonly method?: string } } | undefined)?.message;

@@ -129,13 +129,16 @@ it('rejects every noncanonical, local, and special CSP authority before the prox
     '*', 'https://*.weather.example', 'https://127.0.0.2', 'https://100.64.0.1', 'https://169.254.1.1', 'https://192.0.2.1',
     'https://192.88.99.1', 'https://198.51.100.1', 'https://0.0.0.0', 'https://[::1]', 'https://[::ffff:7f00:1]',
     'https://[64:ff9b::c000:201]', 'https://[2002:c000:0201::]', 'https://[2001:2::]', 'https://[2001:10::]',
-    'https://[fc00::1]', 'https://[fe80::1]', 'https://[ff00::1]', 'https://[2001:db8::1]', 'https://api.localhost',
+    'https://[3fff::1]', 'https://[5f00::1]', 'https://[fc00::1]', 'https://[fec0::1]', 'https://[fe80::1]', 'https://[ff00::1]',
+    'https://[2001:db8::1]', 'https://api.localhost',
     'https://user:secret@api.example', 'https://api.example/path', 'https://api.example?query=1',
   ];
   const policy = deriveMcpAppSandboxPolicy({
-    csp: { connectDomains: ['https://api.example', ...rejected] },
+    // A known global-unicast address proves the table permits usable public
+    // IPv6 while every non-global and special range above remains denied.
+    csp: { connectDomains: ['https://api.example', 'https://[2606:4700:4700::1111]', ...rejected] },
   });
-  expect(policy.contentSecurityPolicy).toContain('connect-src https://api.example');
+  expect(policy.contentSecurityPolicy).toContain('connect-src https://api.example https://[2606:4700:4700::1111]');
   expect(policy.warnings).toEqual([
     { code: 'csp-wildcard-rejected', value: '*' },
     { code: 'csp-wildcard-rejected', value: 'https://*.weather.example' },

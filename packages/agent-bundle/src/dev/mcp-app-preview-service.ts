@@ -232,7 +232,7 @@ export class McpAppPreviewService {
     const entry = this.#entries.get(bindingId);
     if (entry === undefined || entry.closed) return false;
     return this.#serialize(entry, async () => {
-      const challenge = entry.consent.pending().find((candidate) => candidate.id === challengeId);
+      const challenge = entry.consent.inspect(challengeId);
       if (challenge === undefined) return false;
       if (challenge.request.scope === 'action') return entry.bridge.decideConsent(challengeId, approved);
       const grant = entry.consent.grant(challengeId, approved);

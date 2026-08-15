@@ -200,6 +200,7 @@ export class McpAppPreviewController {
   #closePromise: Promise<void> | undefined;
   #closed = false;
   #preview: McpAppPreviewResponse | undefined;
+  #pendingDocumentPreview: McpAppPreviewResponse | undefined;
   #relay: McpAppFrameRelayLike | undefined;
   #started = false;
   #startPromise: Promise<void> | undefined;
@@ -219,6 +220,10 @@ export class McpAppPreviewController {
     return this.#state;
   }
 
+  get pendingDocumentPolicyRevision(): number | undefined {
+    return this.#pendingDocumentPreview?.frame?.documentPolicy?.revision;
+  }
+
   async consentChallenges(): Promise<readonly McpAppConsentChallenge[]> {
     const bindingId = this.#preview?.bindingId;
     const list = this.#client.consentChallenges;
@@ -230,16 +235,29 @@ export class McpAppPreviewController {
     const decide = this.#client.decideConsent;
     if (previous === undefined || this.#closed || decide === undefined) return false;
     const decision = await decide(previous.bindingId, challengeId, approved);
-    if (!decision.approved || this.#closed) return false;
+    if (this.#closed) return false;
+    if (!decision.approved) return decision.messages.length > 0 && this.#relay?.deliverHostMessages?.(decision.messages) === true;
     const documentChanged = previous.frame?.documentPolicy?.revision !== decision.preview.frame?.documentPolicy?.revision;
     if (documentChanged) {
       this.#relay?.detach?.();
       this.#relay = undefined;
+      this.#pendingDocumentPreview = decision.preview;
+      return true;
     } else if (!this.#relay?.deliverHostMessages?.(decision.messages)) {
       return false;
     }
     this.#preview = decision.preview;
     this.#setState(stateFor(decision.preview, this.#input, this.#result));
+    return true;
+  }
+
+  /** Publishes a refreshed document only after the browser committed its blank barrier. */
+  commitDocumentRemount(revision: number): boolean {
+    const preview = this.#pendingDocumentPreview;
+    if (preview === undefined || preview.frame?.documentPolicy?.revision !== revision || this.#closed) return false;
+    this.#pendingDocumentPreview = undefined;
+    this.#preview = preview;
+    this.#setState(stateFor(preview, this.#input, this.#result));
     return true;
   }
 
@@ -369,6 +387,7 @@ export const McpAppPreviewFrame = ({ frame, iframeRef, title = 'MCP App preview'
   <iframe
     allow={frame.allow}
     className="mcp-app-preview__frame"
+    data-mcp-app-document-revision={frame.documentPolicy?.revision ?? 0}
     ref={iframeRef}
     referrerPolicy="no-referrer"
     sandbox="allow-scripts allow-same-origin"

@@ -159,6 +159,10 @@ export interface McpAppConsentChallenge {
   readonly request: McpAppConsentRequest;
 }
 
+export type McpAppConsentResolution =
+  | Readonly<{ readonly grant: McpAppConsentGrant; readonly status: 'approved' }>
+  | Readonly<{ readonly status: 'denied' | 'expired' | 'unknown' }>;
+
 export interface McpAppConsentAuthority {
   challenge(options: Readonly<{
     readonly actionDigest: string;
@@ -175,8 +179,12 @@ export interface McpAppConsentAuthority {
     readonly profile: string;
   }>): boolean;
   grant(challengeId: string, approved: boolean): McpAppConsentGrant | undefined;
+  /** Server-only lookup; expired entries are deliberately retained long enough to deny their original continuation. */
+  inspect(challengeId: string): McpAppConsentChallenge | undefined;
   documentGrants(bindingId: string, profile: string): readonly McpAppConsentGrant[];
   pending(): readonly McpAppConsentChallenge[];
+  /** Atomically consumes a decision and distinguishes an expired exact challenge from a forged one. */
+  resolve(challengeId: string, approved: boolean): McpAppConsentResolution;
 }
 
 export interface McpAppSandboxWarning {
@@ -302,10 +310,54 @@ export const createMcpAppConsentActionDigest = (capability: McpAppConsentCapabil
 export const createMcpAppConsentAuthority = (options: Readonly<{ readonly now?: () => number }> = {}): McpAppConsentAuthority => {
   const now = options.now ?? Date.now;
   const challenges = new Map<string, Readonly<{ actionDigest: string; bindingId: string; capability: McpAppConsentCapability; details: McpAppJsonValue; expiresAt: number; profile: string }>>();
+  const expiredChallenges = new Map<string, Readonly<{ actionDigest: string; bindingId: string; capability: McpAppConsentCapability; details: McpAppJsonValue; expiresAt: number; profile: string }>>();
   const grants = new Map<string, Readonly<{ actionDigest: string; bindingId: string; capability: McpAppConsentCapability; challengeId: string; expiresAt: number; profile: string; scope: 'action' | 'document' }>>();
   let nextId = 1;
+  const challengeSnapshot = (id: string, challenge: Readonly<{ capability: McpAppConsentCapability; details: McpAppJsonValue; expiresAt: number }>): McpAppConsentChallenge => Object.freeze({
+    expiresAt: challenge.expiresAt,
+    id,
+    request: Object.freeze({ capability: challenge.capability, details: challenge.details, scope: consentScope(challenge.capability), summary: consentSummary(challenge.capability) }),
+  });
+  const expireChallenges = (): void => {
+    const instant = now();
+    for (const [id, challenge] of challenges) {
+      if (challenge.expiresAt >= instant) continue;
+      challenges.delete(id);
+      expiredChallenges.set(id, challenge);
+    }
+    // Expired tombstones only exist to deny a contemporaneous, exact decision.
+    // Keep this bounded so abandoned browser tabs cannot retain authority state.
+    while (expiredChallenges.size > 8) expiredChallenges.delete(expiredChallenges.keys().next().value as string);
+  };
+  const resolutionFor = (id: string, challenge: Readonly<{ actionDigest: string; bindingId: string; capability: McpAppConsentCapability; expiresAt: number; profile: string }>, approved: boolean): McpAppConsentResolution => {
+    if (challenge.expiresAt < now()) return Object.freeze({ status: 'expired' });
+    if (!approved) return Object.freeze({ status: 'denied' });
+    const authorizationId = `grant-${nextId++}`;
+    const scope = consentScope(challenge.capability);
+    grants.set(authorizationId, Object.freeze({
+      actionDigest: challenge.actionDigest, bindingId: challenge.bindingId, capability: challenge.capability, challengeId: id,
+      expiresAt: challenge.expiresAt, profile: challenge.profile, scope,
+    }));
+    return Object.freeze({
+      grant: Object.freeze({ authorizationId, bindingId: challenge.bindingId, capability: challenge.capability, challengeId: id, scope }),
+      status: 'approved',
+    });
+  };
+  const resolve = (challengeId: string, approved: boolean): McpAppConsentResolution => {
+    expireChallenges();
+    const challenge = challenges.get(challengeId);
+    if (challenge !== undefined) {
+      challenges.delete(challengeId);
+      return resolutionFor(challengeId, challenge, approved);
+    }
+    const expired = expiredChallenges.get(challengeId);
+    if (expired === undefined) return Object.freeze({ status: 'unknown' });
+    expiredChallenges.delete(challengeId);
+    return Object.freeze({ status: 'expired' });
+  };
   return Object.freeze({
     challenge(input: Readonly<{ actionDigest: string; bindingId: string; capability: McpAppConsentCapability; details: McpAppJsonValue; profile: string }>) {
+      expireChallenges();
       if (!finiteJson(input.details) || !input.bindingId || !input.profile || !input.actionDigest || challenges.size >= 8) return undefined;
       const id = `consent-${nextId++}`;
       const expiresAt = now() + 30_000;
@@ -320,15 +372,13 @@ export const createMcpAppConsentAuthority = (options: Readonly<{ readonly now?: 
       return true;
     },
     grant(challengeId: string, approved: boolean) {
-      const challenge = challenges.get(challengeId);
-      challenges.delete(challengeId);
-      if (!approved || challenge === undefined || challenge.expiresAt < now()) return undefined;
-      const authorizationId = `grant-${nextId++}`;
-      grants.set(authorizationId, Object.freeze({
-        actionDigest: challenge.actionDigest, bindingId: challenge.bindingId, capability: challenge.capability, challengeId,
-        expiresAt: challenge.expiresAt, profile: challenge.profile, scope: consentScope(challenge.capability),
-      }));
-      return Object.freeze({ authorizationId, bindingId: challenge.bindingId, capability: challenge.capability, challengeId, scope: consentScope(challenge.capability) });
+      const resolution = resolve(challengeId, approved);
+      return resolution.status === 'approved' ? resolution.grant : undefined;
+    },
+    inspect(challengeId: string) {
+      expireChallenges();
+      const challenge = challenges.get(challengeId) ?? expiredChallenges.get(challengeId);
+      return challenge === undefined ? undefined : challengeSnapshot(challengeId, challenge);
     },
     documentGrants(bindingId: string, profile: string) {
       const instant = now();
@@ -345,13 +395,11 @@ export const createMcpAppConsentAuthority = (options: Readonly<{ readonly now?: 
       return Object.freeze(result);
     },
     pending() {
-      const instant = now();
-      for (const [id, challenge] of challenges) if (challenge.expiresAt < instant) challenges.delete(id);
-      return Object.freeze([...challenges.entries()].map(([id, challenge]) => Object.freeze({
-        expiresAt: challenge.expiresAt,
-        id,
-        request: Object.freeze({ capability: challenge.capability, details: challenge.details, scope: consentScope(challenge.capability), summary: consentSummary(challenge.capability) }),
-      })));
+      expireChallenges();
+      return Object.freeze([...challenges.entries()].map(([id, challenge]) => challengeSnapshot(id, challenge)));
+    },
+    resolve(challengeId: string, approved: boolean) {
+      return resolve(challengeId, approved);
     },
   });
 };
@@ -395,25 +443,16 @@ const inIpv6Prefix = (value: bigint, prefix: bigint, bits: number): boolean => {
 const specialIpv6 = (host: string): boolean => {
   const value = ipv6Number(host);
   if (value === undefined) return false;
-  // IANA special-purpose ranges, including representations that can conceal
-  // IPv4 addresses (mapped/compatible, NAT64, and 6to4), are never CSP hosts.
+  // CSP network authority is fail-closed: only IANA global-unicast 2000::/3
+  // can pass.  Everything else (site-local, ULA, NAT64, mapped IPv4, etc.)
+  // remains a special-purpose address even when a parser accepts its syntax.
+  if (!inIpv6Prefix(value, 0x2000n << 112n, 3)) return true;
+  // Deny the special-purpose ranges that live inside global-unicast space.
   const ranges: readonly (readonly [bigint, number])[] = [
-    [0n, 128], // unspecified
-    [1n, 128], // loopback
-    [0n, 96], // IPv4-compatible (includes mapped after a dedicated check)
-    [0xffffn << 32n, 96], // ::ffff:0:0/96
-    [0x64ff9bn << 96n, 96], // well-known NAT64
-    [0x64ff9b0001n << 80n, 48], // local-use NAT64
-    [0x100n << 64n, 64], // discard-only
-    [0x20010000n << 96n, 32], // Teredo
-    [0x20010002n << 96n, 48], // benchmarking
+    [0x20010000n << 96n, 23], // IANA 2001::/23 special-purpose block
     [0x20010db8n << 96n, 32], // documentation
-    [0x20010010n << 96n, 28], // ORCHID
-    [0x20010020n << 96n, 28], // ORCHIDv2
     [0x2002n << 112n, 16], // 6to4
-    [0xfc00n << 112n, 7], // ULA
-    [0xfe80n << 112n, 10], // link-local
-    [0xff00n << 112n, 8], // multicast
+    [0x3fffn << 112n, 20], // RFC 9637 documentation
   ];
   return ranges.some(([prefix, bits]) => inIpv6Prefix(value, prefix, bits));
 };

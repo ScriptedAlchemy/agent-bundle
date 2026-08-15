@@ -998,6 +998,9 @@ it('resumes each privileged effect at most once and expires queued continuations
   await bridge.receive({ id: 'expired-link', jsonrpc: '2.0', method: 'ui/open-link', params: { url: 'https://weather.example.test/expired' } });
   const expired = authority.pending().find((challenge) => challenge.request.capability === 'open-external-link');
   now += 30_001;
-  await expect(bridge.decideConsent(expired?.id ?? '', true)).resolves.toBe(false);
+  await expect(Promise.all([bridge.decideConsent(expired?.id ?? '', true), bridge.decideConsent(expired?.id ?? '', true)])).resolves.toEqual([true, false]);
   expect(links).toEqual(['https://weather.example.test/forecast']);
+  expect(fixture.sent.filter((message) => message.id === 'expired-link')).toEqual([expect.objectContaining({
+    error: expect.objectContaining({ code: -32001 }), id: 'expired-link',
+  })]);
 });

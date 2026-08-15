@@ -385,7 +385,9 @@ export class McpAppRoutes {
       const approved = await service.decideConsent?.(parsed.bindingId, decision.challengeId, decision.approved) ?? false;
       const refreshed = service.get(parsed.bindingId);
       if (refreshed === undefined) this.#unavailable();
-      const messages = approved ? await service.takeOutbound(parsed.bindingId) : Object.freeze([]);
+      // A rejected-but-recognized action decision may carry the bridge's
+      // terminal -32001 response. Forged/replayed decisions drain nothing.
+      const messages = await service.takeOutbound(parsed.bindingId);
       return responseJson(response, { approved, lifecycle: refreshed.bridge.lifecycle, messages, preview: previewSnapshot(refreshed) });
     }
     if (method !== 'POST') return responseDiagnostic(response, diagnostic('AB8007', 'Route does not accept this method.', 405));
