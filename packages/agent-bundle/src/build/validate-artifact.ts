@@ -374,40 +374,6 @@ interface RuntimeEvidenceBuilder {
 
 const runtimeEvidenceBuilder = (): RuntimeEvidenceBuilder => ({ hooks: [], mcpServers: [] });
 
-const snapshotValidatedManifest = (manifest: ArtifactManifestV2): ArtifactManifestV2 => Object.freeze({
-  agentSkills: Object.freeze({ ...manifest.agentSkills }),
-  files: Object.freeze(manifest.files.map((file) => Object.freeze({
-    bytes: file.bytes,
-    kind: file.kind,
-    ...(file.mode === undefined ? {} : { mode: file.mode }),
-    path: file.path,
-    sha256: file.sha256,
-    sourceInputs: Object.freeze([...file.sourceInputs]),
-  }))),
-  producer: Object.freeze({ ...manifest.producer }),
-  project: Object.freeze({
-    configDigest: manifest.project.configDigest,
-    configPath: manifest.project.configPath,
-    modelDigest: manifest.project.modelDigest,
-    revision: manifest.project.revision,
-    sourceInputs: Object.freeze(manifest.project.sourceInputs.map((input) => Object.freeze({ ...input }))),
-  }),
-  targets: Object.freeze(manifest.targets.map((target) => Object.freeze({
-    adapterRevision: target.adapterRevision,
-    capabilityRevision: target.capabilityRevision,
-    capabilitySha256: target.capabilitySha256,
-    name: target.name,
-    observedVersion: target.observedVersion,
-    schemas: Object.freeze(target.schemas.map((schema) => Object.freeze({ ...schema }))),
-  }))),
-  validation: Object.freeze({
-    artifact: Object.freeze({ ...manifest.validation.artifact }),
-    source: Object.freeze({ ...manifest.validation.source }),
-    targets: Object.freeze(manifest.validation.targets.map((target) => Object.freeze({ ...target }))),
-  }),
-  version: 2,
-});
-
 const snapshotRuntimeEvidence = (evidence: RuntimeEvidenceBuilder): ValidatedArtifactRuntimeEvidence => Object.freeze({
   hooks: Object.freeze(evidence.hooks.map((hook) => Object.freeze({
     event: hook.event,
@@ -1432,7 +1398,7 @@ const validArtifactSnapshot = (
 ): ValidateArtifactSnapshotResult => Object.freeze({
   diagnostics: Object.freeze([]),
   snapshot: Object.freeze({
-    manifest: snapshotValidatedManifest(manifest),
+    manifest,
     runtime: snapshotRuntimeEvidence(runtimeEvidence),
   }),
 });
@@ -1556,6 +1522,10 @@ export const validateArtifactWithSnapshot = async (
     diagnostics.push(diagnostic('AB6001', 'Artifact manifest changed during validation.', artifactManifestName));
   }
   if (finalInspection !== undefined) {
+    const finalFilesystemDiagnostics = filesystemDiagnostics(finalInspection.filesystem).filter((entry) =>
+      !structuralDiagnostics.some((initial) =>
+        initial.code === entry.code && initial.generatedPath === entry.generatedPath));
+    diagnostics.push(...finalFilesystemDiagnostics);
     for (const path of changedArtifactPaths(inspection.files, finalInspection.files)) {
       diagnostics.push(diagnostic('AB6004', `Artifact file changed during validation: ${JSON.stringify(path)}.`, path));
     }

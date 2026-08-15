@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { execFile } from 'node:child_process';
-import { chmodSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { access, chmod, mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -255,7 +255,23 @@ it('returns frozen validated evidence without changing the diagnostics-only vali
     expect(result.snapshot!.runtime).toEqual({ hooks: [], mcpServers: [] });
     expect(Object.isFrozen(result.snapshot)).toBe(true);
     expect(Object.isFrozen(result.snapshot!.manifest)).toBe(true);
+    expect(Object.isFrozen(result.snapshot!.manifest.agentSkills)).toBe(true);
+    expect(Object.isFrozen(result.snapshot!.manifest.files)).toBe(true);
     expect(Object.isFrozen(result.snapshot!.manifest.files[0]!)).toBe(true);
+    expect(Object.isFrozen(result.snapshot!.manifest.files[0]!.sourceInputs)).toBe(true);
+    expect(Object.isFrozen(result.snapshot!.manifest.producer)).toBe(true);
+    expect(Object.isFrozen(result.snapshot!.manifest.project)).toBe(true);
+    expect(Object.isFrozen(result.snapshot!.manifest.project.sourceInputs)).toBe(true);
+    expect(Object.isFrozen(result.snapshot!.manifest.project.sourceInputs[0]!)).toBe(true);
+    expect(Object.isFrozen(result.snapshot!.manifest.targets)).toBe(true);
+    expect(Object.isFrozen(result.snapshot!.manifest.targets[0]!)).toBe(true);
+    expect(Object.isFrozen(result.snapshot!.manifest.targets[0]!.schemas)).toBe(true);
+    expect(Object.isFrozen(result.snapshot!.manifest.targets[0]!.schemas[0]!)).toBe(true);
+    expect(Object.isFrozen(result.snapshot!.manifest.validation)).toBe(true);
+    expect(Object.isFrozen(result.snapshot!.manifest.validation.artifact)).toBe(true);
+    expect(Object.isFrozen(result.snapshot!.manifest.validation.source)).toBe(true);
+    expect(Object.isFrozen(result.snapshot!.manifest.validation.targets)).toBe(true);
+    expect(Object.isFrozen(result.snapshot!.manifest.validation.targets[0]!)).toBe(true);
     expect(await validateArtifact({ artifactRoot: root, registry: customRegistry() })).toEqual([]);
   } finally {
     await rm(root, { force: true, recursive: true });
@@ -312,6 +328,7 @@ it('rejects an artifact symlink even when the manifest remains self-consistent',
     expect(diagnostics).toEqual(expect.arrayContaining([
       expect.objectContaining({ code: 'AB6013', generatedPath: 'custom/unexpected-link.json' }),
     ]));
+    expect(diagnostics.filter((entry) => entry.code === 'AB6013' && entry.generatedPath === 'custom/unexpected-link.json')).toHaveLength(1);
     expect(diagnostics).not.toEqual(expect.arrayContaining([
       expect.objectContaining({ code: 'AB6004' }),
     ]));
@@ -1061,6 +1078,26 @@ it('reports one structural change for a file mutation during validation', async 
     const diagnostics = await validateArtifact({ artifactRoot: root, registry });
     expect(diagnostics.filter((entry) => entry.code === 'AB6004' && entry.generatedPath === 'custom/scripts/mutable.mjs')).toHaveLength(1);
     expect(mutated).toBe(true);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('rejects a special entry added during validation without returning a snapshot', async () => {
+  const root = await writeArtifact([
+    { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'custom/document.json' },
+  ], true, [customManifestTarget]);
+  const linkPath = join(root, 'custom', 'late-link.json');
+  const registry = customRegistry(() => {
+    symlinkSync(join(root, 'custom', 'document.json'), linkPath);
+    return [];
+  });
+
+  try {
+    const result = await validateArtifactWithSnapshot({ artifactRoot: root, registry });
+
+    expect(result.diagnostics.filter((entry) => entry.code === 'AB6013' && entry.generatedPath === 'custom/late-link.json')).toHaveLength(1);
+    expect(result.snapshot).toBeUndefined();
   } finally {
     await rm(root, { force: true, recursive: true });
   }
