@@ -24,19 +24,22 @@ const parseEvent = (value: unknown): CanonicalPostToolUse => {
   const host = readString(event, 'host');
   const sessionId = readString(event, 'sessionId');
   const cwd = readString(event, 'cwd');
+  const idempotencyKey = readString(event, 'idempotencyKey');
   const toolName = readString(event, 'toolName');
   const path = readString(event, 'path');
   if (
     (host !== 'claude' && host !== 'codex') ||
     sessionId === undefined ||
     cwd === undefined ||
+    idempotencyKey === undefined ||
+    idempotencyKey.trim() === '' ||
     toolName === undefined ||
     path === undefined
   ) {
     throw new Error('RSC worker received an invalid event');
   }
 
-  return { host, sessionId, cwd, toolName, path };
+  return { host, sessionId, cwd, idempotencyKey, toolName, path };
 };
 
 const parseSnapshot = (value: unknown): RuntimeSnapshot => {
@@ -106,6 +109,7 @@ const render = async (): Promise<void> => {
     request.type === 'hook/after-file-edit'
       ? await runtime.recordEdit({
           host: request.event.host,
+          idempotencyKey: request.event.idempotencyKey,
           path: request.event.path,
           sessionId: request.event.sessionId,
           toolName: request.event.toolName,

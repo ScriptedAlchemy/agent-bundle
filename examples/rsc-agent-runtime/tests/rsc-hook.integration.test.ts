@@ -4,6 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 
+import { normalizeClaudeHook, normalizeCodexHook } from '../src/hook/normalize.js';
+
 const temporaryDirectories: string[] = [];
 
 const createTemporaryDirectory = async (): Promise<string> => {
@@ -62,6 +64,39 @@ afterEach(async () => {
 });
 
 describe('built RSC hook entry', () => {
+  it('uses native tool ids before host event ids for durable mutation idempotency', () => {
+    expect(
+      normalizeClaudeHook({
+        cwd: '/workspace',
+        event_id: 'event-1',
+        hook_event_name: 'PostToolUse',
+        session_id: 'session-1',
+        tool_input: { file_path: 'demo.txt' },
+        tool_name: 'Write',
+        tool_use_id: 'tool-1',
+      }),
+    ).toMatchObject({ idempotencyKey: 'claude:tool:tool-1' });
+    expect(
+      normalizeCodexHook({
+        cwd: '/workspace',
+        event_id: 'event-2',
+        hook_event_name: 'PostToolUse',
+        session_id: 'session-1',
+        tool_input: { command: '*** Begin Patch\n*** Add File: demo.txt\n+demo\n*** End Patch' },
+        tool_name: 'apply_patch',
+      }),
+    ).toMatchObject({ idempotencyKey: 'codex:event:event-2' });
+    expect(() =>
+      normalizeClaudeHook({
+        cwd: '/workspace',
+        hook_event_name: 'PostToolUse',
+        session_id: 'session-1',
+        tool_input: { file_path: 'demo.txt' },
+        tool_name: 'Write',
+      }),
+    ).toThrow('tool_use_id or event_id');
+  });
+
   it('renders native Claude and Codex outputs through Flight while retaining file-backed state', async () => {
     const workspace = await createTemporaryDirectory();
     const stateFile = join(workspace, 'state.jsonl');
@@ -82,6 +117,27 @@ describe('built RSC hook entry', () => {
 
     expect(first.exitCode).toBe(0);
     expect(JSON.parse(first.stdout)).toEqual({
+      hookSpecificOutput: {
+        hookEventName: 'PostToolUse',
+        additionalContext: 'Recorded demo.txt from claude. Shared state now contains 1 edit.',
+      },
+    });
+
+    const replay = await runHook(
+      'claude',
+      {
+        session_id: 'claude-session',
+        cwd: workspace,
+        hook_event_name: 'PostToolUse',
+        tool_name: 'Write',
+        tool_input: { file_path: `${workspace}/demo.txt`, content: 'hello\n' },
+        tool_response: { success: true },
+        tool_use_id: 'tool-1',
+      },
+      stateFile,
+    );
+    expect(replay.exitCode).toBe(0);
+    expect(JSON.parse(replay.stdout)).toEqual({
       hookSpecificOutput: {
         hookEventName: 'PostToolUse',
         additionalContext: 'Recorded demo.txt from claude. Shared state now contains 1 edit.',
@@ -110,8 +166,9 @@ describe('built RSC hook entry', () => {
       },
     });
 
-    const events = (await readFile(stateFile, 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
-    expect(events.map((event) => event.host)).toEqual(['claude', 'codex']);
+    const records = (await readFile(stateFile, 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
+    expect(records.map((record) => record.event.host)).toEqual(['claude', 'codex']);
+    expect(records.map((record) => record.idempotencyKey)).toEqual(['claude:tool:tool-1', 'codex:tool:tool-2']);
   });
 
   it('rejects unsupported native hook input without writing stdout', async () => {
@@ -142,6 +199,7 @@ describe('built RSC hook entry', () => {
         hook_event_name: 'PostToolUse',
         tool_name: 'apply_patch',
         tool_input: { command: '*** Begin Patch\n*** Add File: fallback.txt\n+fallback\n*** End Patch' },
+        event_id: 'fallback-event-1',
       },
       undefined,
     );
@@ -162,6 +220,7 @@ describe('built RSC hook entry', () => {
         hook_event_name: 'PostToolUse',
         tool_name: 'apply_patch',
         tool_input: { command: '*** Begin Patch\n*** Add File: secret.txt\n+do-not-persist-this-value\n*** End Patch' },
+        event_id: 'probe-event-1',
       },
       join(workspace, 'state.jsonl'),
       { AGENT_RUNTIME_HOOK_PROBE_FILE: probeFile },
@@ -175,8 +234,8 @@ describe('built RSC hook entry', () => {
       toolInputKeys: ['command'],
       toolInputValueTypes: { command: 'string' },
       toolName: 'apply_patch',
-      topLevelKeys: ['cwd', 'hook_event_name', 'session_id', 'tool_input', 'tool_name'],
-      topLevelValueTypes: { cwd: 'string', hook_event_name: 'string', session_id: 'string', tool_input: 'object', tool_name: 'string' },
+      topLevelKeys: ['cwd', 'event_id', 'hook_event_name', 'session_id', 'tool_input', 'tool_name'],
+      topLevelValueTypes: { cwd: 'string', event_id: 'string', hook_event_name: 'string', session_id: 'string', tool_input: 'object', tool_name: 'string' },
     });
     expect(await readFile(probeFile, 'utf8')).not.toContain('do-not-persist-this-value');
   });

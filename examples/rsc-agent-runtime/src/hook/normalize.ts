@@ -19,6 +19,20 @@ const readRequiredString = (input: NativeHookInput, key: string): string => {
   return value;
 };
 
+const readIdempotencyKey = (host: CanonicalPostToolUse['host'], input: NativeHookInput): string => {
+  const toolUseId = readString(input, 'tool_use_id')?.trim();
+  if (toolUseId !== undefined && toolUseId !== '') {
+    return `${host}:tool:${toolUseId}`;
+  }
+
+  const eventId = readString(input, 'event_id')?.trim();
+  if (eventId !== undefined && eventId !== '') {
+    return `${host}:event:${eventId}`;
+  }
+
+  throw new Error('Mutating native hook input requires a nonempty tool_use_id or event_id');
+};
+
 const readBaseEvent = (host: CanonicalPostToolUse['host'], input: NativeHookInput) => {
   if (readRequiredString(input, 'hook_event_name') !== 'PostToolUse') {
     throw new Error('Only PostToolUse events are supported');
@@ -27,6 +41,7 @@ const readBaseEvent = (host: CanonicalPostToolUse['host'], input: NativeHookInpu
   return {
     cwd: readRequiredString(input, 'cwd'),
     host,
+    idempotencyKey: readIdempotencyKey(host, input),
     sessionId: readRequiredString(input, 'session_id'),
     toolName: readRequiredString(input, 'tool_name'),
   };

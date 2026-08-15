@@ -23,6 +23,7 @@ const createStateFile = async (): Promise<string> => {
 
   await kernel.recordEdit({
     host: 'claude',
+    idempotencyKey: 'test:mcp-transport:seed-1',
     path: 'src/runtime/state.ts',
     sessionId: 'seed-session',
     toolName: 'Write',

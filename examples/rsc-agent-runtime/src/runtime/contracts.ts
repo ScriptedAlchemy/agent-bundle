@@ -14,18 +14,54 @@ export interface EditEvent {
   recordedAt: string;
 }
 
+export type JsonValue =
+  | null
+  | boolean
+  | number
+  | string
+  | readonly JsonValue[]
+  | Readonly<{ [key: string]: JsonValue }>;
+
+export type RuntimeStateRecord =
+  | Readonly<{
+      event: EditEvent;
+      idempotencyKey: string;
+      kind: 'edit';
+      stateVersion: number;
+    }>
+  | Readonly<{
+      idempotencyKey: string;
+      kind: 'reset';
+      seed?: JsonValue;
+      stateVersion: number;
+    }>;
+
 export interface RuntimeSnapshot {
   stateVersion: number;
   edits: EditEvent[];
 }
 
 export interface RuntimeKernel {
-  recordEdit(input: Omit<EditEvent, 'eventId' | 'recordedAt'>): Promise<RuntimeSnapshot>;
+  recordEdit(
+    input: Omit<EditEvent, 'eventId' | 'recordedAt'> & Readonly<{ idempotencyKey: string }>,
+    options?: RuntimeMutationOptions,
+  ): Promise<RuntimeSnapshot>;
+  resetState(
+    input: Readonly<{ idempotencyKey: string; seed?: JsonValue }>,
+    options?: RuntimeMutationOptions,
+  ): Promise<RuntimeSnapshot>;
   readSnapshot(options?: { limit?: number }): Promise<RuntimeSnapshot>;
+}
+
+export interface RuntimeMutationOptions {
+  /** Bounded caller wait for an existing owner; lock timing itself is never caller-configurable. */
+  lockAcquireTimeoutMs?: number;
+  signal?: AbortSignal;
 }
 
 export interface CanonicalPostToolUse {
   host: 'claude' | 'codex';
+  idempotencyKey: string;
   sessionId: string;
   cwd: string;
   toolName: string;
