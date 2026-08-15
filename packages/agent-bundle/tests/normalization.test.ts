@@ -254,6 +254,41 @@ it('reports unknown hook and script targets through the target registry', () => 
   ]);
 });
 
+it('validates native hook targets through the target registry', async () => {
+  const targetRegistry: NormalizationTargetRegistry = {
+    configExtensions: () => [],
+    defaultTargetNames: () => ['example'],
+    has: (name) => name === 'example' || name === 'portable',
+    supports: (name, capability) => name === 'example' && capability === 'hooks',
+  };
+  const loaded = loadedProject({
+    plugin: { name: 'native-hook-targets', version: '1.0.0' },
+  });
+  const model = await normalizeProject(loaded, { skills: [] }, targetRegistry);
+  const nativeHooks = [
+    { document: {}, provenance: model.metadata.provenance, source: '/workspace/ghost.json', target: 'ghost' },
+    { document: {}, provenance: model.metadata.provenance, source: '/workspace/portable.json', target: 'portable' },
+    { document: {}, provenance: model.metadata.provenance, source: '/workspace/example.json', target: 'example' },
+  ];
+
+  expect(validateModel({ ...model, nativeHooks }, targetRegistry)).toEqual([
+    {
+      code: 'AB4206',
+      message: 'Native hook selects unknown target "ghost".',
+      severity: 'error',
+      sourcePath: loaded.configPath,
+      target: 'ghost',
+    },
+    {
+      code: 'AB4207',
+      message: 'Target "portable" cannot emit native hooks.',
+      severity: 'error',
+      sourcePath: loaded.configPath,
+      target: 'portable',
+    },
+  ]);
+});
+
 it('produces root-independent IDs, complete provenance, and deeply immutable output', async () => {
   const leftRoot = '/workspace/left';
   const rightRoot = '/different/right';

@@ -183,10 +183,10 @@ export interface NormalizedHook {
 
 export interface NormalizedNativeHook {
   readonly document?: unknown;
-  readonly issue?: 'missing' | 'parse';
+  readonly issue?: 'missing' | 'parse' | 'source-error' | 'source-invalid';
   readonly provenance: SourceProvenance;
   readonly source: string;
-  readonly target: 'codex' | 'claude';
+  readonly target: string;
 }
 
 export interface NormalizedConfigExtension {
@@ -220,10 +220,28 @@ export interface NormalizationConfigExtension {
   readonly target: string;
 }
 
+export interface NormalizationNativeHookDocument {
+  readonly source: string;
+  readonly target: string;
+}
+
+export interface NormalizationNativeHookSourceError {
+  readonly issue: 'error' | 'invalid';
+  readonly target: string;
+}
+
+export type NormalizationNativeHookSource =
+  | NormalizationNativeHookDocument
+  | NormalizationNativeHookSourceError;
+
 export interface NormalizationTargetRegistry {
   configExtensions(): readonly NormalizationConfigExtension[];
   defaultTargetNames(): readonly string[];
   has(name: string): boolean;
+  nativeHookSources?(
+    config: Readonly<AgentBundleConfig>,
+    targetNames: readonly string[],
+  ): readonly NormalizationNativeHookSource[];
   supports(name: string, capability: string): boolean;
 }
 

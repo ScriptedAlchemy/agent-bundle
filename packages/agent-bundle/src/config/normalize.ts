@@ -133,18 +133,24 @@ const normalizeHooks = (
   return hooks;
 };
 
-const nativeHookTargets = ['claude', 'codex'] as const;
-
 const normalizeNativeHooks = async (
   loaded: LoadedConfig,
   targetNames: readonly string[],
+  registry: NormalizationTargetRegistry,
 ): Promise<readonly NormalizedNativeHook[]> => {
   const provenance: SourceProvenance = { kind: 'config', sourcePath: loaded.configPath };
   const nativeHooks: NormalizedNativeHook[] = [];
-  for (const target of nativeHookTargets) {
-    if (!targetNames.includes(target)) continue;
-    const configured = loaded.config[target]?.nativeHooks;
-    if (typeof configured !== 'string' || configured.trim().length === 0) continue;
+  for (const nativeHookSource of registry.nativeHookSources?.(loaded.config, targetNames) ?? []) {
+    if ('issue' in nativeHookSource) {
+      nativeHooks.push({
+        issue: `source-${nativeHookSource.issue}`,
+        provenance: { ...provenance },
+        source: loaded.configPath,
+        target: nativeHookSource.target,
+      });
+      continue;
+    }
+    const { source: configured, target } = nativeHookSource;
     const source = resolve(loaded.context.projectRoot, configured);
     try {
       nativeHooks.push({
@@ -447,7 +453,7 @@ export const normalizeProject = async (
     };
   });
   const description = loaded.config.plugin.description;
-  const nativeHooks = await normalizeNativeHooks(loaded, targetNames);
+  const nativeHooks = await normalizeNativeHooks(loaded, targetNames, registry);
   const mcpServers = normalizeMcpServers(loaded, targetNames);
   const scripts = normalizeScripts(loaded, targetNames);
   const model: NormalizedPlugin = {

@@ -845,6 +845,43 @@ export const validateModel = (
     }
   }
 
+  for (const nativeHook of model.nativeHooks ?? []) {
+    if (!registry.has(nativeHook.target)) {
+      diagnostics.push({
+        code: 'AB4206',
+        message: `Native hook selects unknown target ${JSON.stringify(nativeHook.target)}.`,
+        severity: 'error',
+        sourcePath: nativeHook.provenance.sourcePath,
+        target: nativeHook.target,
+      });
+    } else if (!registry.supports(nativeHook.target, 'hooks')) {
+      diagnostics.push({
+        code: 'AB4207',
+        message: `Target ${JSON.stringify(nativeHook.target)} cannot emit native hooks.`,
+        severity: 'error',
+        sourcePath: nativeHook.provenance.sourcePath,
+        target: nativeHook.target,
+      });
+    }
+    if (nativeHook.issue === 'source-invalid') {
+      diagnostics.push({
+        code: 'AB4208',
+        message: `Native hook source for target ${JSON.stringify(nativeHook.target)} must return a string or undefined.`,
+        severity: 'error',
+        sourcePath: nativeHook.provenance.sourcePath,
+        target: nativeHook.target,
+      });
+    } else if (nativeHook.issue === 'source-error') {
+      diagnostics.push({
+        code: 'AB4209',
+        message: `Native hook source for target ${JSON.stringify(nativeHook.target)} failed.`,
+        severity: 'error',
+        sourcePath: nativeHook.provenance.sourcePath,
+        target: nativeHook.target,
+      });
+    }
+  }
+
   for (const script of model.scripts) {
     for (const target of script.targets) {
       if (!registry.has(target)) {

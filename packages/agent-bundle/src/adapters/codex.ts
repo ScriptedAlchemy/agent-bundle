@@ -6,12 +6,19 @@ import { stableJson } from '../core/digest.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
 import {
   pathTokens,
+  type AgentBundleConfig,
   type AgentBundleHostConfig,
   type NormalizedMcpServer,
   type NormalizedPlugin,
 } from '../core/types.ts';
 import capabilityTable from './capabilities/codex-0.147.0.json' with { type: 'json' };
-import { mergeHookDocuments, nativeHooksFor, planHooks } from './hook-contract.ts';
+import {
+  mergeHookDocuments,
+  nativeHookWrapperSource,
+  nativeHooksFor,
+  planHooks,
+  type TargetHookContract,
+} from './hook-contract.ts';
 import schemaProvenance from './schemas/codex/PROVENANCE.json' with { type: 'json' };
 import hooksSchema from './schemas/codex/hooks.schema.json' with { type: 'json' };
 import marketplaceSchema from './schemas/codex/marketplace.schema.json' with { type: 'json' };
@@ -37,6 +44,14 @@ const validatePlugin = validator.compile(pluginSchema);
 const validateMcp = validator.compile(mcpSchema);
 const validateMarketplace = validator.compile(marketplaceSchema);
 const validateHooks = validator.compile(hooksSchema);
+const hookContract = Object.freeze({
+  commandRoot: '${PLUGIN_ROOT}',
+  eventNames: capabilityTable.hooks.events,
+  manifestPath: 'hooks/hooks.json',
+  matchers: capabilityTable.hooks.matchers,
+  wrapperPath: (hook: NormalizedPlugin['hooks'][number]) => `hooks/${hook.name}.mjs`,
+  wrapperSource: (entry) => nativeHookWrapperSource(entry, 'Codex'),
+} satisfies TargetHookContract);
 const metadata = Object.freeze({
   adapterRevision: '1.0.0',
   capabilityRevision: capabilityTable.observedCliVersion,
@@ -243,19 +258,14 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
 
   const mcp = Object.keys(servers).length === 0 ? undefined : { mcpServers: servers };
   if (mcp !== undefined) diagnostics.push(...schemaDiagnostics('mcp', validateMcp(mcp), validateMcp.errors));
-  const generatedHooks = planHooks(model, {
-    commandRoot: '${PLUGIN_ROOT}',
-    eventNames: capabilityTable.hooks.events,
-    matchers: capabilityTable.hooks.matchers,
-    target: codexName,
-  });
+  const generatedHooks = planHooks(model, codexName, hookContract);
   diagnostics.push(...generatedHooks.diagnostics);
   if (generatedHooks.document !== undefined) {
     diagnostics.push(...schemaDiagnostics('hooks', validateHooks(generatedHooks.document), validateHooks.errors));
   }
   const nativeHooks = nativeHooksFor(model, codexName);
   let nativeHookDocument: Record<string, unknown> | undefined;
-  if (nativeHooks?.issue !== undefined) {
+  if (nativeHooks?.issue === 'missing' || nativeHooks?.issue === 'parse') {
     diagnostics.push(errorDiagnostic(
       `codex.native-hooks.${nativeHooks.issue}`,
       `Codex native hooks file ${JSON.stringify(nativeHooks.source)} could not be ${nativeHooks.issue === 'missing' ? 'found' : 'parsed'}.`,
@@ -295,7 +305,7 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
       shortDescription: description,
     },
     ...(mcp === undefined ? {} : { mcpServers: './.mcp.json' }),
-    ...(hookDocument === undefined ? {} : { hooks: './hooks/hooks.json' }),
+    ...(hookDocument === undefined ? {} : { hooks: `./${hookContract.manifestPath}` }),
     name: model.metadata.name,
     skills: './skills/',
     version: model.metadata.version,
@@ -357,7 +367,7 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
     entries.push({
       content: `${stableJson(hookDocument)}\n`,
       kind: 'write',
-      relativePath: 'hooks/hooks.json',
+      relativePath: hookContract.manifestPath,
       sourceInputs: sourceInputs(
         ...targetSourceInputs,
         ...hookSourceInputs,
@@ -411,6 +421,7 @@ export const codexAdapter: TargetAdapter = Object.freeze({
     env: Object.freeze({}),
   }),
   name: codexName,
+  nativeHookSource: (config: Readonly<AgentBundleConfig>) => config.codex?.nativeHooks,
   plan,
   validateModel: (model: NormalizedPlugin) => [...plan(model).diagnostics],
 });

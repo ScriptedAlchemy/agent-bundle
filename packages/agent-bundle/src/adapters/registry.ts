@@ -1,5 +1,7 @@
 import type {
+  AgentBundleConfig,
   NormalizationConfigExtension,
+  NormalizationNativeHookSource,
   NormalizationTargetRegistry,
 } from '../core/types.ts';
 import { claudeAdapter } from './claude.ts';
@@ -8,6 +10,7 @@ import { portableAdapter } from './portable.ts';
 import type { TargetAdapter, TargetAdapterMetadata, TargetSchemaDescriptor } from './types.ts';
 
 const sha256Pattern = /^[0-9a-f]{64}$/;
+type NativeHookSource = NonNullable<TargetAdapter['nativeHookSource']>;
 
 const requireNonempty = (value: unknown, field: string): string => {
   if (typeof value !== 'string' || value.trim().length === 0) {
@@ -62,11 +65,20 @@ const snapshotMetadata = (metadata: unknown): TargetAdapterMetadata => {
   });
 };
 
+const snapshotNativeHookSource = (adapter: TargetAdapter): NativeHookSource | undefined => {
+  const source = adapter.nativeHookSource;
+  if (source !== undefined && typeof source !== 'function') {
+    throw new Error('Target adapter native hook source must be a function.');
+  }
+  return source;
+};
+
 export class TargetRegistry implements NormalizationTargetRegistry {
   readonly #adapters = new Map<string, TargetAdapter>();
   readonly #defaults: string[] = [];
   readonly #extensions = new Map<string, NormalizationConfigExtension>();
   readonly #metadata = new Map<string, TargetAdapterMetadata>();
+  readonly #nativeHookSources = new Map<string, NativeHookSource>();
 
   register(adapter: TargetAdapter, options: { readonly default?: boolean } = {}): this {
     if (this.#adapters.has(adapter.name)) {
@@ -77,6 +89,7 @@ export class TargetRegistry implements NormalizationTargetRegistry {
       throw new Error(`Config extension key "${extension.key}" is already registered.`);
     }
     const metadata = snapshotMetadata(adapter.metadata);
+    const nativeHookSource = snapshotNativeHookSource(adapter);
 
     this.#adapters.set(adapter.name, adapter);
     this.#metadata.set(adapter.name, metadata);
@@ -85,6 +98,9 @@ export class TargetRegistry implements NormalizationTargetRegistry {
         key: extension.key,
         target: adapter.name,
       }));
+    }
+    if (nativeHookSource !== undefined) {
+      this.#nativeHookSources.set(adapter.name, nativeHookSource);
     }
     if (options.default === true) {
       this.#defaults.push(adapter.name);
@@ -116,6 +132,28 @@ export class TargetRegistry implements NormalizationTargetRegistry {
 
   configExtensions(): readonly NormalizationConfigExtension[] {
     return Object.freeze([...this.#extensions.values()]);
+  }
+
+  nativeHookSources(
+    config: Readonly<AgentBundleConfig>,
+    targetNames: readonly string[],
+  ): readonly NormalizationNativeHookSource[] {
+    const sources: NormalizationNativeHookSource[] = [];
+    for (const target of [...this.#nativeHookSources.keys()].sort((left, right) => left.localeCompare(right))) {
+      if (!targetNames.includes(target)) continue;
+      const adapter = this.#adapters.get(target)!;
+      try {
+        const source = this.#nativeHookSources.get(target)!.call(adapter, config);
+        if (typeof source === 'string' && source.trim().length > 0) {
+          sources.push(Object.freeze({ source, target }));
+        } else if (source !== undefined) {
+          sources.push(Object.freeze({ issue: 'invalid', target }));
+        }
+      } catch {
+        sources.push(Object.freeze({ issue: 'error', target }));
+      }
+    }
+    return Object.freeze(sources);
   }
 
   supports(name: string, capability: string): boolean {

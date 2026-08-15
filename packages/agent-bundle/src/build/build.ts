@@ -82,9 +82,20 @@ const planTargets = (options: BuildOptions): readonly PlannedTarget[] => {
     diagnostics.push(...adapter.validateModel(options.model));
     const plan = adapter.plan(options.model);
     diagnostics.push(...plan.diagnostics);
+    const hookEntries = plan.hookEntries ?? Object.freeze([]);
+    for (const hookEntry of hookEntries) {
+      if (hookEntry.target !== target.name) {
+        diagnostics.push({
+          code: 'AB5000',
+          message: `Target adapter ${JSON.stringify(target.name)} planned hook ${JSON.stringify(hookEntry.hook.id)} for target ${JSON.stringify(hookEntry.target)}, expected ${JSON.stringify(target.name)}.`,
+          severity: 'error',
+          target: target.name,
+        });
+      }
+    }
     planned.push({
       entries: plan.entries,
-      hookEntries: plan.hookEntries ?? Object.freeze([]),
+      hookEntries,
       name: target.name,
     });
   }

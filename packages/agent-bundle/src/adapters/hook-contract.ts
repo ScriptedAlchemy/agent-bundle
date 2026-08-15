@@ -2,16 +2,19 @@ import type { Diagnostic } from '../core/diagnostics.ts';
 import type {
   CanonicalHookEvent,
   CanonicalHookTool,
+  NormalizedHook,
   NormalizedNativeHook,
   NormalizedPlugin,
 } from '../core/types.ts';
-import type { TargetHookEntry } from './types.ts';
+import type { TargetHookEntry, TargetHookWrapper } from './types.ts';
 
-export interface HookTargetContract {
+export interface TargetHookContract {
   readonly commandRoot: string;
   readonly eventNames: Readonly<Record<CanonicalHookEvent, string>>;
+  readonly manifestPath: string;
   readonly matchers: Readonly<Partial<Record<CanonicalHookTool, string>>>;
-  readonly target: string;
+  readonly wrapperPath: (hook: NormalizedHook) => string;
+  readonly wrapperSource: (entry: TargetHookWrapper) => string;
 }
 
 export interface HookPlan {
@@ -66,7 +69,8 @@ const error = (target: string, code: string, message: string): Diagnostic => ({
 });
 
 const matcherFor = (
-  contract: HookTargetContract,
+  target: string,
+  contract: TargetHookContract,
   tools: readonly CanonicalHookTool[],
   hookName: string,
   diagnostics: Diagnostic[],
@@ -76,9 +80,9 @@ const matcherFor = (
     const matcher = contract.matchers[tool];
     if (matcher === undefined) {
       diagnostics.push(error(
-        contract.target,
-        `${contract.target}.hook.tool.${tool.replaceAll('.', '-')}`,
-        `${contract.target} cannot map canonical hook tool ${JSON.stringify(tool)} for ${JSON.stringify(hookName)}.`,
+        target,
+        `${target}.hook.tool.${tool.replaceAll('.', '-')}`,
+        `${target} cannot map canonical hook tool ${JSON.stringify(tool)} for ${JSON.stringify(hookName)}.`,
       ));
       continue;
     }
@@ -90,11 +94,12 @@ const matcherFor = (
 
 export const planHooks = (
   model: NormalizedPlugin,
-  contract: HookTargetContract,
+  target: string,
+  contract: TargetHookContract,
 ): HookPlan => {
   const diagnostics: Diagnostic[] = [];
   const selected = model.hooks
-    .filter((hook) => hook.targets.includes(contract.target))
+    .filter((hook) => hook.targets.includes(target))
     .slice()
     .sort((left, right) => {
       const eventComparison = (eventIndex.get(left.event) ?? 0) - (eventIndex.get(right.event) ?? 0);
@@ -108,9 +113,18 @@ export const planHooks = (
   const hookEntries: TargetHookEntry[] = [];
   for (const hook of selected) {
     const nativeEvent = contract.eventNames[hook.event];
-    const matcher = matcherFor(contract, hook.tools, hook.name, diagnostics);
-    if (diagnostics.length > 0) continue;
-    const relativePath = `hooks/${hook.name}.mjs`;
+    if (typeof nativeEvent !== 'string' || nativeEvent.trim().length === 0) {
+      diagnostics.push(error(
+        target,
+        `${target}.hook.event.${hook.event.replaceAll(/[A-Z]/gu, (letter) => `-${letter.toLowerCase()}`)}`,
+        `${target} cannot map canonical hook event ${JSON.stringify(hook.event)}.`,
+      ));
+      continue;
+    }
+    const diagnosticCount = diagnostics.length;
+    const matcher = matcherFor(target, contract, hook.tools, hook.name, diagnostics);
+    if (diagnostics.length > diagnosticCount) continue;
+    const relativePath = contract.wrapperPath(hook);
     const command = `node "${contract.commandRoot}/${relativePath}"`;
     const hookCommand = {
       command,
@@ -122,7 +136,8 @@ export const planHooks = (
       ...(matcher === undefined ? {} : { matcher }),
     };
     (groups[nativeEvent] ??= []).push(group);
-    hookEntries.push({ event: hook.event, hook, relativePath, target: contract.target });
+    const wrapper: TargetHookWrapper = { event: hook.event, hook, nativeEvent, relativePath, target };
+    hookEntries.push({ ...wrapper, virtualSource: contract.wrapperSource(wrapper) });
   }
 
   return Object.freeze({
@@ -130,4 +145,132 @@ export const planHooks = (
     ...(Object.keys(groups).length === 0 ? {} : { document: { hooks: groups } }),
     hookEntries: Object.freeze(hookEntries),
   });
+};
+
+export const nativeHookWrapperSource = (
+  entry: TargetHookWrapper,
+  codecName: 'Claude' | 'Codex',
+): string => {
+  const nativeEvent = entry.nativeEvent;
+
+  return [
+    `import * as handlerModule from ${JSON.stringify(entry.hook.source)};`,
+    `const target = ${JSON.stringify(entry.target)};`,
+    `const canonicalEvent = ${JSON.stringify(entry.event)};`,
+    `const nativeEvent = ${JSON.stringify(nativeEvent)};`,
+    '',
+    'const isRecord = (value) => typeof value === "object" && value !== null && !Array.isArray(value);',
+    'const defined = (value) => Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined));',
+    `const decode${codecName}Native = (nativeInput) => ({`,
+    '  cwd: nativeInput.cwd,',
+    '  hookEventName: nativeInput.hook_event_name,',
+    '  lastAssistantMessage: nativeInput.last_assistant_message,',
+    '  sessionId: nativeInput.session_id,',
+    '  source: nativeInput.source,',
+    '  stopHookActive: nativeInput.stop_hook_active,',
+    '  toolInput: nativeInput.tool_input,',
+    '  toolName: nativeInput.tool_name,',
+    '  toolResponse: nativeInput.tool_response,',
+    '  toolUseId: nativeInput.tool_use_id,',
+    '  transcriptPath: nativeInput.transcript_path,',
+    '});',
+    `const encode${codecName}Native = (canonicalInput) => defined({`,
+    '  cwd: canonicalInput.cwd,',
+    '  hook_event_name: nativeEvent,',
+    '  last_assistant_message: canonicalInput.lastAssistantMessage,',
+    '  session_id: canonicalInput.sessionId,',
+    '  source: canonicalInput.source,',
+    '  stop_hook_active: canonicalInput.stopHookActive,',
+    '  tool_input: canonicalInput.toolInput,',
+    '  tool_name: canonicalInput.toolName,',
+    '  tool_response: canonicalInput.toolResponse,',
+    '  tool_use_id: canonicalInput.toolUseId,',
+    '  transcript_path: canonicalInput.transcriptPath,',
+    '});',
+    `const decodeNative = decode${codecName}Native;`,
+    `const encodeNative = encode${codecName}Native;`,
+    'const fail = (message) => { throw new Error(`Agent Bundle hook error: ${message}`); };',
+    'const validateResult = (result) => {',
+    '  if (result === undefined) return undefined;',
+    '  if (!isRecord(result)) fail("handler must return void or a result object");',
+    '  const allowed = new Set(["outcome", "reason", "updatedInput", "additionalContext"]);',
+    '  for (const key of Object.keys(result)) if (!allowed.has(key)) fail(`handler result has unsupported field ${key}`);',
+    '  if (result.outcome !== undefined && !["continue", "deny", "stop"].includes(result.outcome)) fail("handler result outcome is invalid");',
+    '  if (result.reason !== undefined && typeof result.reason !== "string") fail("handler result reason must be a string");',
+    '  if (result.additionalContext !== undefined && typeof result.additionalContext !== "string") fail("handler result additionalContext must be a string");',
+    '  if (result.updatedInput !== undefined && !isRecord(result.updatedInput)) fail("handler result updatedInput must be an object");',
+    '  if (result.reason !== undefined && !(result.outcome === "deny" && (canonicalEvent === "beforeTool" || canonicalEvent === "stop"))) fail("reason is only valid for a denied beforeTool or stop hook");',
+    '  if (result.outcome === "deny" && (canonicalEvent === "beforeTool" || canonicalEvent === "stop") && (typeof result.reason !== "string" || result.reason.trim().length === 0)) fail(`denied ${canonicalEvent} hook requires a nonempty reason`);',
+    '  if ((canonicalEvent === "sessionStart" || canonicalEvent === "afterTool") && (result.outcome === "deny" || result.outcome === "stop" || result.updatedInput !== undefined)) fail(`${canonicalEvent} cannot deny, stop, or replace input`);',
+    '  if (canonicalEvent === "beforeTool" && (result.outcome === "stop" || (result.outcome === "deny" && result.updatedInput !== undefined))) fail("beforeTool cannot stop or replace input while denying");',
+    '  if (canonicalEvent === "stop" && (result.outcome === "stop" || result.updatedInput !== undefined || result.additionalContext !== undefined)) fail("stop only accepts continue or deny with a reason");',
+    '  return result;',
+    '};',
+    'const encodeOutput = (result) => {',
+    '  if (result === undefined) return undefined;',
+    '  if (canonicalEvent === "stop") return result.outcome === "deny" ? defined({ decision: "block", reason: result.reason }) : undefined;',
+    '  const output = defined({',
+    '    additionalContext: result.additionalContext,',
+    '    hookEventName: nativeEvent,',
+    '    permissionDecision: canonicalEvent === "beforeTool" ? (result.outcome === "deny" ? "deny" : "allow") : undefined,',
+    '    permissionDecisionReason: canonicalEvent === "beforeTool" && result.outcome === "deny" ? result.reason : undefined,',
+    '    updatedInput: canonicalEvent === "beforeTool" && result.outcome !== "deny" ? result.updatedInput : undefined,',
+    '  });',
+    '  return Object.keys(output).length === 1 && output.hookEventName !== undefined ? undefined : { hookSpecificOutput: output };',
+    '};',
+    'const decodeOutput = (nativeOutput) => {',
+    '  if (nativeOutput === undefined) return undefined;',
+    '  if (canonicalEvent === "stop") return nativeOutput.decision === "block" ? defined({ outcome: "deny", reason: nativeOutput.reason }) : undefined;',
+    '  const output = nativeOutput.hookSpecificOutput;',
+    '  if (!isRecord(output)) fail("native hook output is malformed");',
+    '  return defined({',
+    '    additionalContext: output.additionalContext,',
+    '    outcome: output.permissionDecision === "deny" ? "deny" : "continue",',
+    '    reason: output.permissionDecisionReason,',
+    '    updatedInput: output.updatedInput,',
+    '  });',
+    '};',
+    'const requireString = (input, field) => {',
+    '  if (typeof input[field] !== "string") fail(`native ${field} must be a string`);',
+    '};',
+    'const validateNativeInput = (input) => {',
+    '  requireString(input, "session_id");',
+    '  requireString(input, "transcript_path");',
+    '  requireString(input, "cwd");',
+    '  if (input.hook_event_name !== nativeEvent) fail(`native hook_event_name must equal ${nativeEvent}`);',
+    '  if (canonicalEvent === "sessionStart") { requireString(input, "source"); return; }',
+    '  if (canonicalEvent === "beforeTool" || canonicalEvent === "afterTool") {',
+    '    requireString(input, "tool_name");',
+    '    if (!isRecord(input.tool_input)) fail(`native ${nativeEvent} tool_input must be an object`);',
+    '    requireString(input, "tool_use_id");',
+    '    if (canonicalEvent === "afterTool" && !isRecord(input.tool_response)) fail("native PostToolUse tool_response must be an object");',
+    '    return;',
+    '  }',
+    '  if (typeof input.stop_hook_active !== "boolean") fail("native Stop stop_hook_active must be a boolean");',
+    '  requireString(input, "last_assistant_message");',
+    '};',
+    'const run = async () => {',
+    '  const handler = Reflect.get(handlerModule, "default");',
+    '  if (typeof handler !== "function") fail("default export must be a function");',
+    '  let raw = "";',
+    '  for await (const chunk of process.stdin) raw += chunk;',
+    '  if (raw.trim().length === 0) fail("stdin must contain exactly one JSON value");',
+    '  let input;',
+    '  try { input = JSON.parse(raw); } catch { fail("stdin must contain exactly one JSON value"); }',
+    '  if (!isRecord(input)) fail("stdin JSON value must be an object");',
+    '  const simulation = process.env.AGENT_BUNDLE_HOOK_SIMULATION === "1";',
+    '  const nativeInput = simulation ? encodeNative(input) : input;',
+    '  validateNativeInput(nativeInput);',
+    '  const event = decodeNative(nativeInput);',
+    '  const result = validateResult(await handler(event, { nativeEvent, nativeInput, target }));',
+    '  const nativeOutput = encodeOutput(result);',
+    '  const output = simulation ? decodeOutput(nativeOutput) : nativeOutput;',
+    '  if (output !== undefined) process.stdout.write(JSON.stringify(output));',
+    '};',
+    'await run().catch((error) => {',
+    '  process.stderr.write(`${error instanceof Error ? error.message : String(error)}\\n`);',
+    '  process.exitCode = 1;',
+    '});',
+    '',
+  ].join('\n');
 };
