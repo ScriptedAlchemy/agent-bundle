@@ -339,6 +339,32 @@ it('rejects forged hook output for a target without a hook contract', async () =
   }
 });
 
+it('rejects a canonically rehashed script with an unsupported extension', async () => {
+  const registry = createDefaultRegistry();
+  const portable = targetFromRegistry(registry, 'portable');
+  const files = [
+    {
+      contents: '{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","description":"Valid portable plugin.","name":"portable-test","version":"1.0.0"}\n',
+      kind: 'generated' as const,
+      path: 'portable/plugin.json',
+    },
+    { contents: 'forged script\n', kind: 'copy' as const, path: 'portable/scripts/junk.exe' },
+  ];
+  const root = await writeArtifact(files, true, [portable]);
+
+  try {
+    const diagnostics = await validateArtifact({ artifactRoot: root, registry });
+    expect(diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'AB6014', generatedPath: 'portable/scripts/junk.exe', target: 'portable' }),
+    ]));
+    expect(diagnostics).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'AB6004' }),
+    ]));
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
 it.each([
   ['a missing copied resource', '[missing resource](references/missing.md)'],
   ['a percent-encoded path that escapes the Skill root', '[escape resource](..%2Fdocument.json)'],

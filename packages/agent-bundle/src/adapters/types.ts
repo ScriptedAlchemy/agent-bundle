@@ -90,8 +90,8 @@ export interface TargetArtifactValidationContract {
 
 /** A direct-file namespace emitted by a target's compiler plan. */
 export interface TargetArtifactOutputLayout {
+  readonly allowedSuffixes: readonly string[];
   readonly directory: string;
-  readonly fileSuffix?: string;
 }
 
 /**

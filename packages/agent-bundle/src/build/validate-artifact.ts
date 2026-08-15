@@ -334,7 +334,7 @@ const isDirectLayoutPath = (relativePath: string, layout: TargetArtifactOutputLa
   return directory === layout.directory &&
     file !== undefined &&
     nested.length === 0 &&
-    (layout.fileSuffix === undefined || file.endsWith(layout.fileSuffix));
+    layout.allowedSuffixes.some((suffix) => file.length > suffix.length && file.endsWith(suffix));
 };
 
 const isSkillArtifactPath = (relativePath: string, skills: string | undefined): boolean => {

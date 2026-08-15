@@ -112,6 +112,44 @@ const isSafeArtifactDocumentPath = (value: string): boolean => {
 const isSafeArtifactDirectory = (value: string): boolean =>
   isSafeArtifactDocumentPath(value) && !value.includes('/');
 
+const artifactSuffixPattern = /^\.[a-z\d]+$/u;
+
+const snapshotArtifactSuffixes = (value: unknown, field: string): readonly string[] => {
+  if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype || Object.hasOwn(value, 'then')) {
+    throw new Error(`Target adapter artifact layout ${field} allowed suffixes must be a plain array.`);
+  }
+  const descriptors = Object.getOwnPropertyDescriptors(value);
+  const lengthDescriptor = Object.getOwnPropertyDescriptor(value, 'length');
+  if (
+    lengthDescriptor === undefined ||
+    !('value' in lengthDescriptor) ||
+    typeof lengthDescriptor.value !== 'number' ||
+    lengthDescriptor.value === 0 ||
+    Object.keys(descriptors).length !== lengthDescriptor.value + 1
+  ) {
+    throw new Error(`Target adapter artifact layout ${field} allowed suffixes must be a nonempty plain array.`);
+  }
+
+  const suffixes: string[] = [];
+  for (let index = 0; index < lengthDescriptor.value; index += 1) {
+    const descriptor = descriptors[index];
+    if (
+      descriptor === undefined ||
+      !('value' in descriptor) ||
+      typeof descriptor.value !== 'string' ||
+      !artifactSuffixPattern.test(descriptor.value)
+    ) {
+      throw new Error(`Target adapter artifact layout ${field} allowed suffixes must contain canonical suffixes.`);
+    }
+    const previous = suffixes.at(-1);
+    if (previous !== undefined && previous.localeCompare(descriptor.value) >= 0) {
+      throw new Error(`Target adapter artifact layout ${field} allowed suffixes must be unique and sorted.`);
+    }
+    suffixes.push(descriptor.value);
+  }
+  return Object.freeze(suffixes);
+};
+
 const snapshotOutputLayout = (value: unknown, field: string): TargetArtifactOutputLayout => {
   const candidate = record(value);
   if (candidate === undefined) {
@@ -121,12 +159,9 @@ const snapshotOutputLayout = (value: unknown, field: string): TargetArtifactOutp
   if (!isSafeArtifactDirectory(directory)) {
     throw new Error(`Target adapter artifact layout ${field} directory must be a safe single namespace.`);
   }
-  if (candidate.fileSuffix !== undefined && typeof candidate.fileSuffix !== 'string') {
-    throw new Error(`Target adapter artifact layout ${field} file suffix must be a string.`);
-  }
   return Object.freeze({
+    allowedSuffixes: snapshotArtifactSuffixes(candidate.allowedSuffixes, field),
     directory,
-    ...(candidate.fileSuffix === undefined ? {} : { fileSuffix: candidate.fileSuffix }),
   });
 };
 

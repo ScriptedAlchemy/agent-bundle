@@ -106,8 +106,8 @@ const syntheticPlan = (model: NormalizedPlugin) => {
 
 const syntheticAdapter: TargetAdapter = Object.freeze({
   artifactLayout: Object.freeze({
-    hookWrappers: Object.freeze({ directory: 'hooks', fileSuffix: '.mjs' }),
-    mcpEntries: Object.freeze({ directory: 'mcp', fileSuffix: '.mjs' }),
+    hookWrappers: Object.freeze({ allowedSuffixes: Object.freeze(['.mjs']), directory: 'hooks' }),
+    mcpEntries: Object.freeze({ allowedSuffixes: Object.freeze(['.mjs']), directory: 'mcp' }),
   }),
   capabilities: Object.freeze({ hooks: true, mcp: true }),
   configExtension: Object.freeze({ key: 'synthetic' }),
@@ -248,6 +248,15 @@ it('prepares a factory-configured project into a frozen inspection and build res
       build: { outputRoot: join(root, 'artifact') },
       model: { metadata: { name: 'api-fixture' } },
     });
+
+    const hookArtifact = join(root, 'hooks-artifact');
+    const hooks = await build({ output: hookArtifact, root });
+    for (const target of ['claude', 'codex']) {
+      expect(hooks.build.manifest.files).toEqual(expect.arrayContaining([
+        expect.objectContaining({ path: expect.stringMatching(new RegExp(`^${target}/hooks/.+\\.mjs$`, 'u')) }),
+      ]));
+    }
+    await expect(validate({ artifact: hookArtifact, root })).resolves.toEqual({ diagnostics: [] });
   } finally {
     await rm(join(root, '..'), { force: true, recursive: true });
   }
@@ -459,9 +468,11 @@ it('normalizes named top-level scripts with stable IDs, modes, and sorted target
   }
 });
 
-it('copies named shell and Python scripts byte-for-byte with source modes', async () => {
+it('copies every supported top-level script output suffix byte-for-byte with source modes', async () => {
   const parent = await mkdtemp(join(tmpdir(), 'agent-bundle-copy-scripts-parent-'));
   const root = join(parent, 'project with spaces');
+  const sourceBash = join(root, 'src', 'run.bash');
+  const sourceBundle = join(root, 'src', 'bundle.ts');
   const sourceShell = join(root, 'src', 'run.sh');
   const sourcePython = join(root, 'src', 'run.py');
   const output = join(root, 'artifact');
@@ -472,8 +483,10 @@ it('copies named shell and Python scripts byte-for-byte with source modes', asyn
       [
         'export default {',
         "  plugin: { name: 'copy-script-fixture', version: '1.0.0' },",
-        "  targets: ['portable'],",
+        "  targets: ['portable', 'codex', 'claude'],",
         '  scripts: {',
+        "    bash: './src/run.bash',",
+        "    bundle: { entry: './src/bundle.ts' },",
         "    shell: './src/run.sh',",
         "    python: './src/run.py',",
         '  },',
@@ -481,18 +494,24 @@ it('copies named shell and Python scripts byte-for-byte with source modes', asyn
         '',
       ].join('\n'),
     ),
+    writeFile(sourceBash, '#!/usr/bin/env bash\nprintf "bash\\n"\r\n'),
+    writeFile(sourceBundle, "export const output = 'bundle';\n"),
     writeFile(sourceShell, '#!/usr/bin/env sh\nprintf "shell\\n"\r\n'),
     writeFile(sourcePython, '#!/usr/bin/env python3\r\nprint("python")\r\n'),
   ]);
-  await Promise.all([chmod(sourceShell, 0o751), chmod(sourcePython, 0o711)]);
+  await Promise.all([chmod(sourceBash, 0o741), chmod(sourceShell, 0o751), chmod(sourcePython, 0o711)]);
 
   try {
     await build({ output, root });
 
-    const checks = await Promise.all([
-      [sourceShell, join(output, 'portable', 'scripts', 'shell.sh')],
-      [sourcePython, join(output, 'portable', 'scripts', 'python.py')],
-    ].map(async ([source, generated]) => {
+    const copyOutputs = [
+      [sourceBash, 'bash.bash'],
+      [sourceShell, 'shell.sh'],
+      [sourcePython, 'python.py'],
+    ] as const;
+    const checks = await Promise.all(['claude', 'codex', 'portable'].flatMap((target) =>
+      copyOutputs.map(([source, name]) => [source, join(output, target, 'scripts', name)] as const),
+    ).map(async ([source, generated]) => {
       const [sourceContents, generatedContents, sourceMetadata, generatedMetadata] = await Promise.all([
         readFile(source!),
         readFile(generated!),
@@ -521,6 +540,17 @@ it('copies named shell and Python scripts byte-for-byte with source modes', asyn
       }[];
     };
     expect(manifest.files).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'copy',
+        mode: 0o741,
+        path: 'portable/scripts/bash.bash',
+        sourceInputs: ['agent-bundle.config.ts', 'src/run.bash'],
+      }),
+      expect.objectContaining({
+        kind: 'bundle',
+        path: 'portable/scripts/bundle.mjs',
+        sourceInputs: ['agent-bundle.config.ts', 'src/bundle.ts'],
+      }),
       expect.objectContaining({
         kind: 'copy',
         mode: 0o751,
