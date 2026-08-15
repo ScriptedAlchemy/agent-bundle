@@ -7,9 +7,9 @@ import type {
   DevRuntimeStateIdentity,
   DevRuntimeStateResetRequest,
 } from '../../agent-bundle/src/dev/runtime-protocol.ts';
-import type { JsonValue, ProjectEventMessage } from '../../agent-bundle/src/dev/types.ts';
+import type { ProjectEventMessage } from '../../agent-bundle/src/dev/types.ts';
 import { RuntimeClientError, type RuntimeBootstrap } from './runtime-client.ts';
-import { McpJsonInput, serializeJsonRecord, type ImmutableJsonRecord } from './mcp/mcp-json-input.tsx';
+import { McpJsonInput, serializeJsonValue, type ImmutableJsonValue } from './mcp/mcp-json-input.tsx';
 import {
   createRuntimeModel,
   effectFor,
@@ -51,6 +51,27 @@ export interface RuntimeEventBuffer {
   receive(event: ProjectEventMessage): void;
   whenIdle(): Promise<void>;
 }
+
+export interface RuntimeEventBufferOptions {
+  /** Bounded until the Runtime controller is available; ordinary Project events are never retained. */
+  readonly maximumPendingEvents?: number;
+}
+
+export type RuntimeBootstrapRetryPlan = Readonly<{
+  readonly closePreControllerIngress: boolean;
+  readonly delay: number | undefined;
+  readonly retryCount: number;
+}>;
+
+/** Keeps bootstrap retries bounded without ever severing an already-installed Runtime receiver. */
+export const runtimeBootstrapRetryPlan = (
+  retryCount: number,
+  receiverInstalled: boolean,
+): RuntimeBootstrapRetryPlan => {
+  if (!Number.isSafeInteger(retryCount) || retryCount < 0) throw new TypeError('Runtime bootstrap retry count must be a non-negative safe integer.');
+  if (retryCount >= 2) return Object.freeze({ closePreControllerIngress: !receiverInstalled, delay: undefined, retryCount });
+  return Object.freeze({ closePreControllerIngress: false, delay: 250 * 2 ** retryCount, retryCount: retryCount + 1 });
+};
 
 export interface RuntimePlaygroundControllerOptions {
   readonly bootstrap: RuntimeBootstrap;
@@ -189,24 +210,38 @@ export const createRuntimePlaygroundController = (options: RuntimePlaygroundCont
 
 class RuntimeEventBufferImpl implements RuntimeEventBuffer {
   #closed = false;
+  #installing = false;
+  readonly #maximumPendingEvents: number;
   #pending: ProjectEventMessage[] = [];
   #receiver: RuntimeEventReceiver | undefined;
   #tail: Promise<void> = Promise.resolve();
 
+  constructor({ maximumPendingEvents = 64 }: RuntimeEventBufferOptions = {}) {
+    if (!Number.isSafeInteger(maximumPendingEvents) || maximumPendingEvents < 1) {
+      throw new TypeError('Runtime event buffer capacity must be a positive safe integer.');
+    }
+    this.#maximumPendingEvents = maximumPendingEvents;
+  }
+
   close(): void {
     this.#closed = true;
     this.#pending = [];
+    this.#receiver = undefined;
   }
 
   install(receiver: RuntimeEventReceiver): void {
-    if (this.#closed || this.#receiver !== undefined) return;
-    this.#receiver = receiver;
+    if (this.#closed || this.#installing || this.#receiver !== undefined) return;
+    this.#installing = true;
     this.#tail = this.#tail.then(async () => {
       if (this.#closed) return;
       const pending = this.#pending;
       this.#pending = [];
       for (const event of pending) await receiver.receive(event);
-    }).catch(() => undefined);
+      if (!this.#closed) this.#receiver = receiver;
+    }).then(
+      () => { this.#installing = false; },
+      () => { this.#installing = false; },
+    );
   }
 
   receive(event: ProjectEventMessage): void {
@@ -214,7 +249,7 @@ class RuntimeEventBufferImpl implements RuntimeEventBuffer {
       if (this.#closed) return;
       const receiver = this.#receiver;
       if (receiver === undefined) {
-        this.#pending.push(event);
+        if (event.type === 'runtime.event' || event.type === 'replay.gap') this.#queue(event);
         return;
       }
       await receiver.receive(event);
@@ -224,9 +259,26 @@ class RuntimeEventBufferImpl implements RuntimeEventBuffer {
   whenIdle(): Promise<void> {
     return this.#tail;
   }
+
+  #queue(event: ProjectEventMessage): void {
+    this.#pending.push(event);
+    let latestGap = -1;
+    for (let index = this.#pending.length - 1; index >= 0; index -= 1) {
+      if (this.#pending[index]?.type === 'replay.gap') {
+        latestGap = index;
+        break;
+      }
+    }
+    if (latestGap > 0) this.#pending = this.#pending.slice(latestGap);
+    if (this.#pending.length <= this.#maximumPendingEvents) return;
+    const gap = this.#pending[0]?.type === 'replay.gap' ? this.#pending[0] : undefined;
+    this.#pending = gap === undefined
+      ? this.#pending.slice(-this.#maximumPendingEvents)
+      : [gap, ...this.#pending.slice(-(this.#maximumPendingEvents - 1))];
+  }
 }
 
-export const createRuntimeEventBuffer = (): RuntimeEventBuffer => new RuntimeEventBufferImpl();
+export const createRuntimeEventBuffer = (options?: RuntimeEventBufferOptions): RuntimeEventBuffer => new RuntimeEventBufferImpl(options);
 
 export interface RuntimePlaygroundProps {
   readonly controller: RuntimePlaygroundController;
@@ -241,13 +293,6 @@ const selectedLastGoodRun = (model: RuntimeModel): DevRuntimeRun | undefined =>
 const selectedSurface = (model: RuntimeModel) => model.surfaces.find((entry) => entry.id === model.selectedSurfaceId);
 
 const selectedProfile = (model: RuntimeModel) => model.profiles.find((entry) => entry.id === model.selectedProfileId);
-
-const runtimeInputRecord = (value: unknown): ImmutableJsonRecord =>
-  value !== null && typeof value === 'object' && !Array.isArray(value)
-    ? value as ImmutableJsonRecord
-    : Object.freeze({});
-
-const runtimeJsonRecord = (value: ImmutableJsonRecord): JsonValue => value as unknown as JsonValue;
 
 type RuntimeDisplayIdentity = Readonly<{
   readonly hmrClientCount: number | 'Unknown';
@@ -300,15 +345,13 @@ const resetSeedLabel = (request: DevRuntimeStateResetRequest): string =>
 export const RuntimePlayground = ({ controller }: RuntimePlaygroundProps): React.ReactNode => {
   const [model, setModel] = useState(controller.model);
   const cancelRef = useRef<HTMLButtonElement>(null);
-  const confirmationRef = useRef<HTMLDivElement>(null);
   const confirmRef = useRef<HTMLButtonElement>(null);
   const invokingRef = useRef<HTMLButtonElement>(null);
   const resetRef = useRef<HTMLButtonElement>(null);
   const resetStatusRef = useRef<HTMLParagraphElement>(null);
   const confirmationOutcome = useRef<'cancelled' | 'confirmed' | undefined>(undefined);
-  const confirmedReset = useRef(false);
+  const resetEffectId = useRef<string | undefined>(undefined);
   const priorConfirmation = useRef(model.confirmation);
-  const priorStateIdentity = useRef(model.stateIdentity);
   const [confirmationPending, setConfirmationPending] = useState(false);
   const surface = selectedSurface(model);
   const run = selectedRun(model);
@@ -317,11 +360,11 @@ export const RuntimePlayground = ({ controller }: RuntimePlaygroundProps): React
   const attributes = runtimeDataAttributesFor(model);
   const activeVector = model.status?.activeVector;
   const displayIdentity = runtimeDisplayIdentityFor(model);
-  const input = runtimeInputRecord(model.draft.input);
-  const resetDisabled = model.activeEffect !== undefined || model.confirmation !== undefined || model.stateIdentity === undefined;
+  const interactionLocked = model.activeEffect !== undefined || model.confirmation !== undefined;
+  const resetDisabled = interactionLocked || model.stateIdentity === undefined;
 
-  const replaceDraft = (next: ImmutableJsonRecord): void => {
-    controller.dispatch({ input: runtimeJsonRecord(next), raw: serializeJsonRecord(next), type: 'draft.replace' });
+  const replaceDraft = (next: ImmutableJsonValue): void => {
+    controller.dispatch({ input: next, raw: serializeJsonValue(next), type: 'draft.replace' });
   };
 
   const cancelConfirmation = (): void => {
@@ -330,12 +373,19 @@ export const RuntimePlayground = ({ controller }: RuntimePlaygroundProps): React
     controller.dispatch({ type: 'confirmation.cancel' });
   };
 
+  const requestReset = (): void => {
+    if (interactionLocked) return;
+    setConfirmationPending(false);
+    controller.dispatch({ type: 'reset.request' });
+  };
+
   const confirmConfirmation = (): void => {
-    if (confirmationPending) return;
+    if (confirmationPending || model.confirmation === undefined) return;
     confirmationOutcome.current = 'confirmed';
-    if (model.confirmation?.kind === 'reset') confirmedReset.current = true;
     setConfirmationPending(true);
     controller.dispatch({ type: 'confirmation.confirm' });
+    const effect = controller.model.activeEffect;
+    resetEffectId.current = effect?.kind === 'reset-state' ? effect.id : undefined;
   };
 
   useEffect(() => {
@@ -343,7 +393,7 @@ export const RuntimePlayground = ({ controller }: RuntimePlaygroundProps): React
     return controller.subscribe(setModel);
   }, [controller]);
   useEffect(() => {
-    if (model.confirmation !== undefined) {
+    if (model.confirmation !== undefined && priorConfirmation.current === undefined) {
       setConfirmationPending(false);
       cancelRef.current?.focus();
     } else if (priorConfirmation.current?.kind === 'run' && confirmationOutcome.current === 'cancelled') {
@@ -351,16 +401,21 @@ export const RuntimePlayground = ({ controller }: RuntimePlaygroundProps): React
     } else if (priorConfirmation.current?.kind === 'reset' && confirmationOutcome.current === 'cancelled') {
       resetRef.current?.focus();
     }
-    if (model.confirmation === undefined) confirmationOutcome.current = undefined;
+    if (model.confirmation === undefined) {
+      confirmationOutcome.current = undefined;
+      setConfirmationPending(false);
+    }
     priorConfirmation.current = model.confirmation;
   }, [model.confirmation]);
   useEffect(() => {
-    if (confirmedReset.current && model.stateIdentity !== priorStateIdentity.current) {
-      confirmedReset.current = false;
+    const resetCompleted = resetEffectId.current !== undefined && model.resetCompletion?.effectId === resetEffectId.current;
+    if (resetCompleted && model.activeEffect === undefined) {
+      resetEffectId.current = undefined;
       resetStatusRef.current?.focus();
+    } else if (resetEffectId.current !== undefined && model.activeEffect === undefined) {
+      resetEffectId.current = undefined;
     }
-    priorStateIdentity.current = model.stateIdentity;
-  }, [model.stateIdentity]);
+  }, [model.activeEffect, model.resetCompletion]);
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
       if (model.confirmation === undefined) return;
@@ -385,6 +440,7 @@ export const RuntimePlayground = ({ controller }: RuntimePlaygroundProps): React
 
   if (model.status === undefined) return null;
   return <section aria-labelledby="runtime-playground-heading" className="runtime-playground" {...attributes}>
+    <div inert={interactionLocked || undefined}>
     <header className="runtime-playground-heading">
       <div><p className="runtime-eyebrow">Optional development capability</p><h1 id="runtime-playground-heading">Runtime Playground</h1><p>Provider-owned React Server Component inspection and replay evidence.</p></div>
       <p aria-live="polite" className="runtime-status" ref={resetStatusRef} tabIndex={-1}>
@@ -409,22 +465,24 @@ export const RuntimePlayground = ({ controller }: RuntimePlaygroundProps): React
     {model.replayGap === undefined ? undefined : <p className="runtime-gap" role="alert">Events {model.replayGap.requestedAfterSequence + 1}–{model.replayGap.latestDroppedSequence} were unavailable.</p>}
     {model.announcements.map((message, index) => <p aria-live="polite" className="runtime-announcement" key={`${message}-${index}`}>{message}</p>)}
     <div className="runtime-controls">
-      <label>Surface<select aria-label="Runtime surface" onChange={(event) => controller.dispatch({ surfaceId: event.currentTarget.value, type: 'selection.surface' })} value={surface?.id ?? ''}>
+      <label>Surface<select aria-label="Runtime surface" disabled={interactionLocked} onChange={(event) => controller.dispatch({ surfaceId: event.currentTarget.value, type: 'selection.surface' })} value={surface?.id ?? ''}>
         {model.surfaces.map((entry) => <option key={entry.id} value={entry.id}>{entry.label}</option>)}
       </select></label>
-      <label>Fixture<select aria-label="Runtime fixture" onChange={(event) => controller.dispatch({ fixtureId: event.currentTarget.value, type: 'selection.fixture' })} value={model.selectedFixtureId ?? ''}>
+      <label>Fixture<select aria-label="Runtime fixture" disabled={interactionLocked} onChange={(event) => controller.dispatch({ fixtureId: event.currentTarget.value, type: 'selection.fixture' })} value={model.selectedFixtureId ?? ''}>
         {(surface?.fixtures ?? []).map((fixture) => <option key={fixture.id} value={fixture.id}>{fixture.label}</option>)}
       </select></label>
-      <label>Target<select aria-label="Runtime target" onChange={(event) => controller.dispatch({ target: event.currentTarget.value, type: 'selection.target' })} value={model.selectedTarget ?? ''}>
+      <label>Target<select aria-label="Runtime target" disabled={interactionLocked} onChange={(event) => controller.dispatch({ target: event.currentTarget.value, type: 'selection.target' })} value={model.selectedTarget ?? ''}>
         {(surface?.targets ?? []).map((target) => <option key={target} value={target}>{target}</option>)}
       </select></label>
-      <label>Profile<select aria-label="Runtime profile" onChange={(event) => controller.dispatch({ profileId: event.currentTarget.value, type: 'selection.profile' })} value={model.selectedProfileId ?? ''}>
+      <label>Profile<select aria-label="Runtime profile" disabled={interactionLocked} onChange={(event) => controller.dispatch({ profileId: event.currentTarget.value, type: 'selection.profile' })} value={model.selectedProfileId ?? ''}>
         {model.profiles.map((entry) => <option key={entry.id} value={entry.id}>{entry.label}</option>)}
       </select></label>
       <p className="runtime-profile-disclaimer">Profile simulation is evidence-only and does not claim real host parity.</p>
     </div>
     <div className="runtime-input">
       <McpJsonInput
+        allowNonObjectJson
+        disabled={interactionLocked}
         formLabel="Schema form"
         id="runtime-input"
         invalidJsonLabel="Draft JSON is invalid. Repair the raw input before running."
@@ -439,13 +497,14 @@ export const RuntimePlayground = ({ controller }: RuntimePlaygroundProps): React
         schema={surface?.inputSchema}
         submitLabel="Run"
         submitRef={invokingRef}
-        value={input}
+        value={model.draft.input}
       />
     </div>
     <div className="runtime-actions">
-      <button disabled={resetDisabled} onClick={controller.dispatch.bind(controller, { type: 'reset.request' })} ref={resetRef} type="button">Reset fixture state</button>
+      <button disabled={resetDisabled} onClick={requestReset} ref={resetRef} type="button">Reset fixture state</button>
     </div>
-    {model.confirmation === undefined ? undefined : <div aria-describedby="runtime-confirmation-copy" aria-modal="true" className="runtime-confirmation" ref={confirmationRef} role="dialog">
+    </div>
+    {model.confirmation === undefined ? undefined : <div aria-describedby="runtime-confirmation-copy" aria-modal="true" className="runtime-confirmation" role="dialog">
       <h2>{model.confirmation.kind === 'reset' ? 'Reset fixture state?' : 'Run mutable runtime surface?'}</h2>
       {model.confirmation.kind === 'reset' ? <>
         <p id="runtime-confirmation-copy">This resets the selected provider-owned state store and then queues one follow-up runtime run.</p>
@@ -454,19 +513,17 @@ export const RuntimePlayground = ({ controller }: RuntimePlaygroundProps): React
           <div><dt>Fixture seed</dt><dd><code>{resetSeedLabel(model.confirmation.request)}</code></dd></div>
         </dl>
       </> : <p id="runtime-confirmation-copy">This sends one provider-owned runtime request.</p>}
-      <button disabled={confirmationPending} onClick={cancelConfirmation} ref={(element) => {
-        cancelRef.current = element;
-        if (element !== null) element.focus();
-      }} type="button">Cancel</button>
+      <button disabled={confirmationPending} onClick={cancelConfirmation} ref={cancelRef} type="button">Cancel</button>
       <button disabled={confirmationPending} onClick={confirmConfirmation} ref={confirmRef} type="button">Confirm</button>
     </div>}
+    <div inert={interactionLocked || undefined}>
     {controller.error === undefined ? undefined : <p className="runtime-request-error" role="alert">{controller.error}</p>}
     <div className="runtime-layout">
       <section aria-label="Runtime run history" className="runtime-history"><h2>Run history</h2><ol>{model.history.map((entry) => <li key={entry.id}>
-        <button aria-pressed={entry.id === model.selectedRunId} onClick={controller.dispatch.bind(controller, { runId: entry.id, type: 'selection.run' })} type="button">{historyLabel(entry)}</button>
-        <button onClick={controller.dispatch.bind(controller, { runId: entry.id, type: 'draft.from-run' })} type="button">Edit as new draft</button>
-        <button onClick={controller.dispatch.bind(controller, { mode: 'exact', runId: entry.id, type: 'replay.request' })} type="button">Replay exact</button>
-        <button onClick={controller.dispatch.bind(controller, { mode: 'latest', runId: entry.id, type: 'replay.request' })} type="button">Replay latest</button>
+        <button aria-pressed={entry.id === model.selectedRunId} disabled={interactionLocked} onClick={controller.dispatch.bind(controller, { runId: entry.id, type: 'selection.run' })} type="button">{historyLabel(entry)}</button>
+        <button disabled={interactionLocked} onClick={controller.dispatch.bind(controller, { runId: entry.id, type: 'draft.from-run' })} type="button">Edit as new draft</button>
+        <button disabled={interactionLocked} onClick={controller.dispatch.bind(controller, { mode: 'exact', runId: entry.id, type: 'replay.request' })} type="button">Replay exact</button>
+        <button disabled={interactionLocked} onClick={controller.dispatch.bind(controller, { mode: 'latest', runId: entry.id, type: 'replay.request' })} type="button">Replay latest</button>
       </li>)}</ol></section>
       <div className="runtime-evidence">
         <React.Suspense fallback={<p>Loading runtime evidence…</p>}>
@@ -474,6 +531,7 @@ export const RuntimePlayground = ({ controller }: RuntimePlaygroundProps): React
           <RuntimeInspector onTabChange={(tab) => controller.dispatch({ tab, type: 'selection.tab' })} run={run} status={model.status} surface={surface} tab={model.selectedTab} />
         </React.Suspense>
       </div>
+    </div>
     </div>
   </section>;
 };

@@ -1,0 +1,33 @@
+import { pluginReact } from '@rsbuild/plugin-react';
+import { withRslibConfig } from '@rstest/adapter-rslib';
+import { defineConfig } from '@rstest/core';
+
+export default defineConfig({
+  browser: {
+    enabled: true,
+    headless: true,
+    provider: 'playwright',
+    providerOptions: { launch: { channel: 'chrome' } },
+    viewport: { height: 900, width: 1440 },
+  },
+  extends: withRslibConfig(),
+  include: ['packages/workbench/tests/runtime-playground.browser.test.tsx'],
+  plugins: [pluginReact()],
+  pool: { maxWorkers: 1 },
+  resolve: {
+    alias: {
+      '@inspector/core/json/xMcpHeader.js': resolve('packages/workbench/src/inspector/vendor/core/json/xMcpHeader.ts'),
+      '@inspector/core/mcp/fetchTracking.js': resolve('packages/workbench/src/inspector/vendor/core/mcp/fetchTracking.ts'),
+      '@inspector/core/mcp/types.js': resolve('packages/workbench/src/inspector/vendor/core/mcp/types.ts'),
+      '@inspector/core': resolve('packages/workbench/src/inspector/vendor/core'),
+    },
+  },
+  tools: {
+    rspack: {
+      resolve: {
+        extensionAlias: { '.js': ['.js', '.ts', '.tsx'], '.jsx': ['.jsx', '.tsx'] },
+      },
+    },
+  },
+});
+import { resolve } from 'node:path';

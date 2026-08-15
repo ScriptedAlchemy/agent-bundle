@@ -17,6 +17,7 @@ import { RuntimeClient, type RuntimeBootstrap } from './runtime-client.ts';
 import {
   createRuntimeEventBuffer,
   createRuntimePlaygroundController,
+  runtimeBootstrapRetryPlan,
   RuntimePlayground,
   type RuntimePlaygroundController,
 } from './runtime-playground.tsx';
@@ -47,9 +48,6 @@ const runtimeProfiles = [{
   label: 'Portable MCP Apps',
   version: 'agent-bundle:mcp-apps:2026-01-26',
 }] satisfies readonly RuntimeProfileOption[];
-
-const maximumRuntimeBootstrapRetries = 2;
-const runtimeBootstrapRetryDelay = (retry: number): number => 250 * 2 ** retry;
 
 /** The Workbench, rather than an individual MCP transport, owns this shared foreground credential. */
 class WorkbenchMcpRouteClient extends McpRouteClient {
@@ -413,13 +411,15 @@ const Workbench = () => {
       }
     };
     const scheduleRuntimeBootstrap = (): void => {
-      if (!mounted || runtimeRetry !== undefined || runtimeRetryCount >= maximumRuntimeBootstrapRetries) return;
-      const delay = runtimeBootstrapRetryDelay(runtimeRetryCount);
-      runtimeRetryCount += 1;
+      if (!mounted || runtimeRetry !== undefined) return;
+      const retry = runtimeBootstrapRetryPlan(runtimeRetryCount, runtimeController.current !== undefined);
+      runtimeRetryCount = retry.retryCount;
+      if (retry.closePreControllerIngress) runtimeEvents.close();
+      if (retry.delay === undefined) return;
       runtimeRetry = setTimeout(() => {
         runtimeRetry = undefined;
         bootstrapRuntime();
-      }, delay);
+      }, retry.delay);
     };
     const bootstrapRuntime = (): void => {
       void nextRuntimeClient.bootstrap().then(resolveRuntimeCapability).catch((reason: unknown) => {

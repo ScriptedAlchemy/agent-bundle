@@ -44,6 +44,11 @@ export interface RuntimePreviousProviderLastGood {
   readonly run: DevRuntimeRun;
 }
 
+export interface RuntimeResetCompletion {
+  readonly effectId: string;
+  readonly state: DevRuntimeStateIdentity;
+}
+
 export type RuntimeModelEffect =
   | Readonly<{ readonly kind: 'bootstrap'; readonly triggerSequence?: number }>
   | Readonly<{ readonly cause: 'manual' | 'reset'; readonly kind: 'create-run'; readonly request: DevRuntimeInvocationRequest }>
@@ -91,6 +96,8 @@ export interface RuntimeModel {
   readonly providerSessionId?: string;
   readonly replayGap?: ProjectReplayGap;
   readonly replayDroppedThroughSequence?: number;
+  /** Reducer-owned proof that this exact reset effect, not an unrelated refresh, succeeded. */
+  readonly resetCompletion?: RuntimeResetCompletion;
   readonly selectedFixtureId?: string;
   readonly selectedProfileId?: string;
   readonly selectedRunId?: string;
@@ -720,7 +727,13 @@ export const reduceRuntimeModel = (model: RuntimeModel, action: RuntimeModelActi
     }
     case 'reset.received': {
       if (model.activeEffect?.id !== action.id || model.activeEffect.kind !== 'reset-state') return model;
-      const cleared = settleEffect(update(model, { confirmation: undefined, staleIdentity: undefined, stateIdentity: snapshot(action.state) }), action.id);
+      const state = snapshot(action.state);
+      const cleared = settleEffect(update(model, {
+        confirmation: undefined,
+        resetCompletion: Object.freeze({ effectId: action.id, state }),
+        staleIdentity: undefined,
+        stateIdentity: state,
+      }), action.id);
       const request = invocationFor(cleared);
       return request === undefined ? cleared : queueOperation(cleared, Object.freeze({ cause: 'reset' as const, kind: 'create-run' as const, request }));
     }

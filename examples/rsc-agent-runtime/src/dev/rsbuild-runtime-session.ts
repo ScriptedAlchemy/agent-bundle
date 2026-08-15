@@ -303,6 +303,17 @@ const cloneJson = (value: unknown, ancestors = new WeakSet<object>()): JsonValue
   }
 };
 
+const isJsonObject = (value: JsonValue): value is JsonObject =>
+  value !== null && typeof value === 'object' && !Array.isArray(value);
+
+const cloneJsonObject = (value: unknown): JsonObject => {
+  const cloned = cloneJson(value);
+  if (!isJsonObject(cloned)) {
+    throw new TypeError('Runtime surface input schema must be a JSON object.');
+  }
+  return cloned;
+};
+
 const invocationDiagnostic = (error: unknown): DevRuntimeDiagnostic => Object.freeze({
   code: 'AB8203',
   message: error instanceof Error ? redactInspectionDiagnostics(error.message) : 'RSC runtime invocation failed.',
@@ -2086,6 +2097,7 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
     }
     for (const tool of snapshot.definition.tools) {
       this.#surfaces.set(`mcp.${tool.name}`, Object.freeze({
+        inputSchema: cloneJsonObject(tool.inputSchema),
         id: `mcp.${tool.name}`,
         kind: 'mcp-tool',
         label: tool.description,

@@ -25,22 +25,6 @@ e2e('renders the capability-gated Runtime sibling in the real RSC workbench', { 
     }
   });
   try {
-    await page.route('**/api/runtime/surfaces', async (route) => {
-      const response = await route.fetch();
-      const body = await response.json() as Readonly<{ readonly surfaces: readonly Readonly<Record<string, unknown>>[] }>;
-      await route.fulfill({
-        body: JSON.stringify({
-          surfaces: body.surfaces.map((surface) => ({
-            ...surface,
-            inputSchema: {
-              properties: { city: { title: 'City', type: 'string' } },
-              type: 'object',
-            },
-          })),
-        }),
-        contentType: 'application/json',
-      });
-    });
     await page.goto(`${fixture.url}#overview`);
     await expect(page.getByRole('link', { name: 'MCP playground' })).toBeVisible({ timeout: browserTimeout });
     await expect(page.getByRole('link', { name: 'Inspector' })).toBeVisible({ timeout: browserTimeout });
@@ -109,20 +93,35 @@ e2e('renders the capability-gated Runtime sibling in the real RSC workbench', { 
     await page.goto(`${fixture.url}#runtime`);
     await expect(page.getByRole('heading', { name: 'Runtime Playground' })).toBeVisible({ timeout: browserTimeout });
 
+    await page.getByLabel('Runtime surface').selectOption('mcp.recent_edits');
+    await page.getByLabel('Schema form').check();
     await expect(page.getByLabel('Schema form')).toBeChecked();
-    await page.getByLabel('City').fill('Paris');
+    await page.getByLabel('limit').fill('2');
     await page.getByLabel('Raw JSON').check();
     const input = page.locator('#runtime-input-raw');
-    await expect(input).toHaveValue(/"city": "Paris"/);
+    await expect(input).toHaveValue(/"limit": 2/);
     await input.fill('{"broken":');
-    await expect(page.getByText('Draft JSON is invalid. Repair the raw input before running.')).toBeVisible();
+    await expect(page.locator('#runtime-input-raw-error')).toBeVisible();
     await page.goto(`${fixture.url}#inspector`);
     await expect(page.getByRole('heading', { name: 'Inspector' })).toBeVisible({ timeout: browserTimeout });
     await page.goto(`${fixture.url}#runtime`);
     await expect(input).toHaveValue('{"broken":');
-    await expect(page.getByText('Draft JSON is invalid. Repair the raw input before running.')).toBeVisible();
+    await expect(page.locator('#runtime-input-raw-error')).toBeVisible();
 
-    await input.fill('{}');
+    const history = page.getByRole('region', { name: 'Runtime run history' }).locator('ol > li');
+    await page.getByLabel('Runtime surface').selectOption('mcp.runtime_status');
+    await page.getByRole('button', { name: 'Run', exact: true }).click();
+    await expect.poll(async () => history.count(), { timeout: browserTimeout }).toBeGreaterThan(0);
+
+    await page.getByLabel('Runtime surface').selectOption('hook.claude');
+    await input.fill(JSON.stringify({
+      cwd: '/tmp',
+      hook_event_name: 'PostToolUse',
+      session_id: 'runtime-playground',
+      tool_input: { file_path: 'runtime-playground.txt' },
+      tool_name: 'Write',
+      tool_use_id: 'runtime-playground-tool',
+    }));
     const run = page.getByRole('button', { name: 'Run', exact: true });
     await expect(run).toBeEnabled({ timeout: browserTimeout });
     await run.focus();
@@ -131,16 +130,20 @@ e2e('renders the capability-gated Runtime sibling in the real RSC workbench', { 
     await expect(confirmation).toContainText('Run mutable runtime surface?');
     const cancel = confirmation.getByRole('button', { name: 'Cancel' });
     await expect(cancel).toBeFocused({ timeout: browserTimeout });
+    await expect(run).toBeDisabled();
+    await expect(input).toBeDisabled();
+    await expect(page.locator('.runtime-history button').first()).toBeDisabled();
+    await expect(page.getByRole('button', { name: 'Replay exact' }).first()).toBeDisabled();
+    await expect(page.getByLabel('Runtime surface')).toBeDisabled();
     await page.keyboard.press('Escape');
     await expect(confirmation).toBeHidden();
     await expect(run).toBeFocused({ timeout: browserTimeout });
 
-    const history = page.getByRole('region', { name: 'Runtime run history' }).locator('ol > li');
     const historyBeforeRun = await history.count();
     await page.keyboard.press('Enter');
     await expect(confirmation).toContainText('Run mutable runtime surface?');
     await confirmation.getByRole('button', { name: 'Confirm' }).click();
-    await expect(page.getByRole('alert')).toBeVisible({ timeout: browserTimeout });
+    await expect.poll(async () => history.count(), { timeout: browserTimeout }).toBeGreaterThan(historyBeforeRun);
 
     await page.getByLabel('Runtime surface').selectOption('mcp.runtime_status');
     await input.fill('{}');
@@ -187,31 +190,6 @@ e2e('renders the capability-gated Runtime sibling in the real RSC workbench', { 
     await page.goto(`${fixture.url}#mcp`);
     await expect(page.getByLabel('MCP App preview controls')).toHaveCount(1);
     expect(pageErrors).toEqual([]);
-  } finally {
-    await fixture.close();
-  }
-});
-
-e2e('keeps Project usable while a bounded Runtime bootstrap recovery reports its latest diagnostic', { timeout: 120_000 }, async ({ page }) => {
-  const fixture = await startRuntimePlaygroundFixture();
-  let runtimeBootstrapAttempts = 0;
-  try {
-    await page.route('**/api/runtime/status', async (route) => {
-      runtimeBootstrapAttempts += 1;
-      await route.fulfill({
-        body: JSON.stringify({ diagnostic: { code: 'AB8206', message: `Runtime bootstrap attempt ${runtimeBootstrapAttempts}`, phase: 'provider-lifecycle' } }),
-        contentType: 'application/json',
-        status: 503,
-      });
-    });
-    await page.goto(`${fixture.url}#overview`);
-    await expect(page.getByRole('heading', { name: 'Project overview' })).toBeVisible({ timeout: browserTimeout });
-    await expect(page.getByRole('link', { name: 'MCP playground' })).toBeVisible();
-    await expect(page.getByRole('link', { name: 'Inspector' })).toBeVisible();
-    await expect.poll(() => runtimeBootstrapAttempts, { timeout: browserTimeout }).toBe(3);
-    await expect(page.getByText('Runtime capability issue: Runtime bootstrap attempt 3')).toHaveCount(1);
-    await page.waitForTimeout(1_000);
-    expect(runtimeBootstrapAttempts).toBe(3);
   } finally {
     await fixture.close();
   }

@@ -10,14 +10,18 @@ import { createRsbuild } from '@rsbuild/core';
 import { pluginReact } from '@rsbuild/plugin-react';
 import { chromium } from 'playwright';
 import { describe, expect, it } from '@rstest/core';
+import type { JsonValue } from '../../agent-bundle/src/dev/types.ts';
 
 import {
   McpJsonInput,
   applyFormEdit,
   formSchemaFromJsonSchema,
+  parseRawJsonValue,
   parseRawJsonRecord,
   rawJsonDraftState,
+  serializeJsonValue,
   serializeJsonRecord,
+  submitJsonValue,
   submitJsonRecord,
 } from '../src/mcp/mcp-json-input.tsx';
 
@@ -106,6 +110,11 @@ describe('MCP JSON input', () => {
       required: ['name'],
     })).not.toBeNull();
     expect(formSchemaFromJsonSchema({
+      additionalProperties: false,
+      type: 'object',
+      properties: { limit: { maximum: 50, minimum: 1, type: 'integer' } },
+    })).not.toBeNull();
+    expect(formSchemaFromJsonSchema({
       type: 'array',
       items: { type: 'string' },
     })).toBeNull();
@@ -156,6 +165,27 @@ describe('MCP JSON input', () => {
     expect(serializeJsonRecord({ z: 1, a: { later: true, first: false } })).toBe(
       '{\n  "a": {\n    "first": false,\n    "later": true\n  },\n  "z": 1\n}',
     );
+  });
+
+  it('preserves full JSON values in explicit raw-value mode without coercing them to objects', () => {
+    const submitted: JsonValue[] = [];
+    const fixture = Object.freeze(['one', Object.freeze({ enabled: true })]) satisfies JsonValue;
+    const markup = renderToStaticMarkup(createElement(McpJsonInput, {
+      allowNonObjectJson: true,
+      id: 'runtime-value',
+      label: 'Runtime value',
+      onChange: (value) => submitted.push(value),
+      onSubmit: (value) => submitted.push(value),
+      value: fixture,
+    }));
+
+    expect(parseRawJsonValue('["two",false]')).toEqual(['two', false]);
+    expect(serializeJsonValue(fixture)).toBe('[\n  "one",\n  {\n    "enabled": true\n  }\n]');
+    expect(submitJsonValue(fixture, (value) => submitted.push(value), 'null')).toBe(true);
+    expect(submitted).toEqual([null]);
+    expect(markup).toContain('Raw JSON is required because this schema cannot be represented without changing it.');
+    expect(markup).toContain('[\n  &quot;one&quot;');
+    expect(markup).not.toContain('Schema form');
   });
 
   it('blocks invalid raw JSON from submitting stale canonical input', () => {
