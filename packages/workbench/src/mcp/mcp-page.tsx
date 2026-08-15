@@ -15,6 +15,7 @@ import type {
   McpAppJsonValue,
   McpAppPreviewProfile,
 } from './mcp-app-client.ts';
+import { createMcpAppFrameRelay } from './mcp-app-frame.tsx';
 import type {
   McpBrowserSessionInvocation,
   McpBrowserSessionModel,
@@ -298,6 +299,7 @@ const McpPageAppPreview = ({ client, host, onControllerChange, previewProfile, s
   useEffect(() => {
     const current = createMcpAppPreviewController({
       client,
+      frameRelayFactory: createMcpAppFrameRelay,
       host,
       input: source.input,
       previewProfile,
