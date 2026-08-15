@@ -106,8 +106,10 @@ interface BindingEntry {
   readonly binding: McpAppBinding;
   readonly lease: McpAppSessionLease;
   readonly onTeardown: McpAppBindingTeardown | undefined;
-  closePromise: Promise<void> | undefined;
-  closed: boolean;
+  closeAttempt: Promise<void> | undefined;
+  closeFailure: Error | undefined;
+  closeReason: 'app-closed' | 'session-closed' | undefined;
+  closing: boolean;
   unsubscribe: () => void;
 }
 
@@ -227,17 +229,19 @@ export class McpAppBindingService {
       });
       entry = {
         binding,
-        closePromise: undefined,
-        closed: false,
+        closeAttempt: undefined,
+        closeFailure: undefined,
+        closeReason: undefined,
+        closing: false,
         lease,
         onTeardown: options.onTeardown,
         unsubscribe: () => undefined,
       };
       this.#entries.set(binding.id, entry);
       entry.unsubscribe = observation.unsubscribe;
-      if (sessionClosed || entry.closed) {
+      if (sessionClosed || entry.closing) {
         observation.unsubscribe();
-        await entry.closePromise;
+        await this.#closeEntry(entry, 'session-closed');
         throw new Error('MCP session closed before its App binding completed.');
       }
       return binding;
@@ -277,34 +281,57 @@ export class McpAppBindingService {
 
   async closeBinding(bindingId: string): Promise<boolean> {
     const entry = this.#entries.get(bindingId);
-    if (entry === undefined) return false;
+    if (entry === undefined || entry.closeAttempt !== undefined) return false;
     await this.#closeEntry(entry, 'app-closed');
     return true;
   }
 
   #entry(bindingId: string): BindingEntry {
     const entry = this.#entries.get(bindingId);
-    if (entry === undefined || entry.closed) throw new Error(`Unknown MCP App binding ${JSON.stringify(bindingId)}.`);
+    if (entry === undefined || entry.closing) throw new Error(`Unknown MCP App binding ${JSON.stringify(bindingId)}.`);
     return entry;
   }
 
   #assertActive(entry: BindingEntry): void {
-    if (entry.closed || this.#entries.get(entry.binding.id) !== entry) {
+    if (entry.closing || this.#entries.get(entry.binding.id) !== entry) {
       throw new Error(`MCP App binding ${JSON.stringify(entry.binding.id)} is closed.`);
     }
   }
 
   async #closeEntry(entry: BindingEntry, reason: 'app-closed' | 'session-closed'): Promise<void> {
-    if (entry.closePromise !== undefined) return entry.closePromise;
-    entry.closed = true;
+    if (!entry.closing) {
+      entry.closing = true;
+      entry.closeReason = reason;
+      entry.unsubscribe();
+    }
+    if (entry.closeAttempt !== undefined) return entry.closeAttempt;
+
+    let resolveAttempt: (() => void) | undefined;
+    let rejectAttempt: ((error: Error) => void) | undefined;
+    const attempt = new Promise<void>((resolvePromise, rejectPromise) => {
+      resolveAttempt = resolvePromise;
+      rejectAttempt = rejectPromise;
+    });
+    entry.closeAttempt = attempt;
+    void this.#releaseEntry(entry).then(
+      () => resolveAttempt?.(),
+      (error: unknown) => rejectAttempt?.(this.#closeFailure(entry, error)),
+    ).finally(() => {
+      if (entry.closeAttempt === attempt) entry.closeAttempt = undefined;
+    });
+    return attempt;
+  }
+
+  async #releaseEntry(entry: BindingEntry): Promise<void> {
+    await entry.lease.release();
     this.#entries.delete(entry.binding.id);
-    entry.unsubscribe();
-    entry.closePromise = (async () => {
-      const release = entry.lease.release();
-      await this.#runTeardown(entry, reason);
-      await release;
-    })();
-    return entry.closePromise;
+    await this.#runTeardown(entry, entry.closeReason!);
+  }
+
+  #closeFailure(entry: BindingEntry, cause: unknown): Error {
+    if (entry.closeFailure !== undefined) return entry.closeFailure;
+    entry.closeFailure = new Error(`MCP App lease release failed for binding ${JSON.stringify(entry.binding.id)}.`, { cause });
+    return entry.closeFailure;
   }
 
   async #runTeardown(entry: BindingEntry, reason: 'app-closed' | 'session-closed'): Promise<void> {

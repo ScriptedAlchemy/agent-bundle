@@ -14,6 +14,7 @@ interface SessionFixture {
   readonly reads: string[];
   readonly releases: number[];
   readonly sessionCloseCalls: number[];
+  readonly watcherOrder: string[];
   createLease(): McpAppSessionLease & {
     watchSessionClosed(listener: (reason?: unknown) => Promise<void> | void): {
       readonly closed: boolean;
@@ -31,12 +32,16 @@ const appTool: McpAppToolDefinition = {
   name: 'show-weather',
 };
 
-const createSessionFixture = (options: { readonly closeBeforeObservation?: boolean } = {}): SessionFixture => {
+const createSessionFixture = (
+  options: { readonly closeBeforeObservation?: boolean; readonly releaseFailures?: number } = {},
+): SessionFixture => {
   const closeListeners = new Set<(reason?: unknown) => Promise<void> | void>();
   const calls: Array<{ readonly arguments: McpAppJsonValue | undefined; readonly name: string }> = [];
   const reads: string[] = [];
   const releases: number[] = [];
   const sessionCloseCalls: number[] = [];
+  const watcherOrder: string[] = [];
+  let remainingReleaseFailures = options.releaseFailures ?? 0;
   let sessionClosed = false;
 
   return {
@@ -44,12 +49,18 @@ const createSessionFixture = (options: { readonly closeBeforeObservation?: boole
     reads,
     releases,
     sessionCloseCalls,
+    watcherOrder,
     createLease: () => {
       const leaseIndex = releases.length;
       releases.push(0);
       return {
         release: async () => {
+          watcherOrder.push('release');
           releases[leaseIndex] += 1;
+          if (remainingReleaseFailures > 0) {
+            remainingReleaseFailures -= 1;
+            throw new Error('fixture lease release failed');
+          }
         },
         session: {
           callTool: async ({ arguments: toolArguments, name }) => {
@@ -79,12 +90,19 @@ const createSessionFixture = (options: { readonly closeBeforeObservation?: boole
           },
         },
         watchSessionClosed: (listener: (reason?: unknown) => Promise<void> | void) => {
+          watcherOrder.push('watch');
           if (options.closeBeforeObservation) {
             sessionClosed = true;
             return { closed: true, unsubscribe: () => undefined };
           }
           closeListeners.add(listener);
-          return { closed: sessionClosed, unsubscribe: () => closeListeners.delete(listener) };
+          return {
+            closed: sessionClosed,
+            unsubscribe: () => {
+              watcherOrder.push('unsubscribe');
+              closeListeners.delete(listener);
+            },
+          };
         },
       };
     },
@@ -264,4 +282,33 @@ it('releases each app lease once while invalidating every binding on explicit se
   expect(fixture.releases).toEqual([1, 1]);
   expect(fixture.sessionCloseCalls).toEqual([1]);
   expect(teardownCalls).toEqual(['first']);
+});
+
+it('keeps a failed session-close release retryable while bridge calls stay invalidated', async () => {
+  const fixture = createSessionFixture({ releaseFailures: 1 });
+  const teardownEvents: Array<{ readonly bindingPresent: boolean; readonly reason: string }> = [];
+  const service = new McpAppBindingService({ sessionAuthority: authorityFor(fixture) });
+  const binding = await service.createBinding({
+    input: {},
+    onTeardown: ({ binding: closingBinding, reason }) => {
+      teardownEvents.push({ bindingPresent: service.get(closingBinding.id) !== undefined, reason });
+    },
+    previewProfile: 'portable',
+    result: {},
+    sessionId: 'session-weather',
+    tool: appTool,
+  });
+
+  await expect(fixture.closeSession()).rejects.toThrow('MCP App lease release failed');
+  expect(service.get(binding.id)).toBe(binding);
+  await expect(service.callTool(binding.id, { arguments: {}, name: 'refresh-weather' })).rejects.toThrow('Unknown MCP App binding');
+  expect(teardownEvents).toEqual([]);
+  expect(fixture.releases).toEqual([1]);
+  expect(fixture.watcherOrder).toEqual(['watch', 'unsubscribe', 'release']);
+
+  await expect(service.closeBinding(binding.id)).resolves.toBe(true);
+  expect(fixture.releases).toEqual([2]);
+  expect(service.get(binding.id)).toBeUndefined();
+  expect(teardownEvents).toEqual([{ bindingPresent: false, reason: 'session-closed' }]);
+  expect(fixture.watcherOrder).toEqual(['watch', 'unsubscribe', 'release', 'release']);
 });
