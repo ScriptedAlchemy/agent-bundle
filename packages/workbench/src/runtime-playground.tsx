@@ -559,7 +559,7 @@ export const RuntimePlayground = ({ controller }: RuntimePlaygroundProps): React
     <div inert={interactionLocked || undefined}>
     {requestError === undefined ? undefined : <p className="runtime-request-error" ref={requestErrorRef} role="alert" tabIndex={-1}>{requestError}</p>}
     <div className="runtime-layout">
-      <section aria-label="Runtime run history" className="runtime-history"><h2>Run history</h2><ol>{model.history.map((entry) => <li key={entry.id}>
+      <section aria-label="Runtime run history" className="runtime-history"><h2>Run history</h2><ol>{model.history.map((entry) => <li data-runtime-run-id={entry.id} key={entry.id}>
         <button aria-pressed={entry.id === model.selectedRunId} disabled={interactionLocked} onClick={controller.dispatch.bind(controller, { runId: entry.id, type: 'selection.run' })} type="button">{historyLabel(entry)}</button>
         <button disabled={interactionLocked} onClick={controller.dispatch.bind(controller, { runId: entry.id, type: 'draft.from-run' })} type="button">Edit as new draft</button>
         <button disabled={interactionLocked} onClick={controller.dispatch.bind(controller, { mode: 'exact', runId: entry.id, type: 'replay.request' })} type="button">Replay exact</button>

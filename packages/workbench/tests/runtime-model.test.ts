@@ -391,6 +391,24 @@ it('rejects non-JSON snapshots and validates foreign history and run provider id
   expect(() => createRuntimeModel({ bootstrap: bootstrap(), profiles: [...profiles, profiles[0]!] })).toThrow(/unique simulated/i);
 });
 
+it('rejects a stale provider run injected into a fresh-provider bootstrap', () => {
+  const freshProviderSessionId = 'provider-fresh';
+  const freshVector = vector({
+    providerSessionId: freshProviderSessionId,
+    runtimeGenerationId: 'generation-fresh',
+    stateStoreId: 'state-fresh',
+  });
+
+  expect(() => createRuntimeModel({
+    bootstrap: bootstrap({
+      history: [run('stale-provider-a-run')],
+      providerSessionId: freshProviderSessionId,
+      status: status({ activeVector: freshVector, lastGoodVector: freshVector }),
+    }),
+    profiles,
+  })).toThrow(/provider session/i);
+});
+
 it('handles foreign and run lifecycle events through browser-only effects without fabricating HMR counts', () => {
   const foreign = reduce(model(), { event: event(1, 'runtime.status', undefined, 'provider-b', 'generation-b'), type: 'event.received' });
   const started = reduce(model(), { event: event(1, 'runtime.run.started', undefined, 'provider-a', 'generation-a'), type: 'event.received' });

@@ -104,6 +104,7 @@ test('mounts Runtime controls in a supported browser and fences reset interactio
   try {
     await render(<RuntimePlayground controller={controller} />);
     await expect.element(page.getByRole('heading', { name: 'Runtime Playground' })).toBeVisible();
+    await expect.element(page.locator('[data-runtime-run-id="initial"]')).toBeVisible();
 
     await page.getByRole('radio', { name: 'Raw JSON' }).click();
     const raw = page.locator('#runtime-input-raw');

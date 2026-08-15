@@ -426,6 +426,16 @@ e2e('retains real MCP runtime history across reload and isolates a fresh provide
     });
     expect(firstRun.result.trace.map((entry) => entry.id)).toEqual(['normalize', 'worker', 'flight', 'decode', 'lower']);
     expect(firstRun.result.trace.map((entry) => entry.status)).toEqual(['succeeded', 'succeeded', 'succeeded', 'succeeded', 'succeeded']);
+    const historyRunIds = async (): Promise<readonly string[]> => history.evaluateAll((items) => items.map((item) => {
+      const id = item.getAttribute('data-runtime-run-id');
+      if (id === null) throw new Error('Runtime history item is missing its stable run ID.');
+      return id;
+    }));
+    expect(await historyRunIds()).toEqual(firstRunIds);
+    await expect(history.locator('button[aria-pressed="true"]')).toHaveCount(1);
+    await expect(page.locator('[aria-label="Runtime output stage"]')).toContainText(
+      `All outputs are from the current runtime generation (${firstRun.vector.runtimeGenerationId}). No stale views.`,
+    );
 
     await page.reload();
     await expect(page.getByRole('heading', { name: 'Runtime Playground' })).toBeVisible({ timeout: browserTimeout });
@@ -438,6 +448,13 @@ e2e('retains real MCP runtime history across reload and isolates a fresh provide
     expect(reloadedHistory.runs.map((entry) => entry.id)).toEqual(firstRunIds);
     expect(reloadedHistory.runs).toHaveLength(firstRunIds.length);
     expect(reloadedHistory.runs.length).toBeLessThanOrEqual(50);
+    await expect.poll(historyRunIds, { timeout: browserTimeout }).toEqual(firstRunIds);
+    const selectedReloadedHistory = history.filter({ has: page.locator('button[aria-pressed="true"]') });
+    await expect(selectedReloadedHistory).toHaveCount(1);
+    expect(await selectedReloadedHistory.getAttribute('data-runtime-run-id')).toBe(firstRunIds[0]);
+    await expect(page.locator('[aria-label="Runtime output stage"]')).toContainText(
+      `All outputs are from the current runtime generation (${firstRun.vector.runtimeGenerationId}). No stale views.`,
+    );
 
     await firstFixture.close();
     secondFixture = await startRuntimePlaygroundFixture();
@@ -462,10 +479,22 @@ e2e('retains real MCP runtime history across reload and isolates a fresh provide
     }, { route: path, token: freshSessionToken });
     const freshHistory = await freshRuntimeJson('/api/runtime/runs?limit=50') as Readonly<{
       readonly providerSessionId: string;
-      readonly runs: readonly Readonly<{ readonly id: string }> [];
+      readonly runs: readonly Readonly<{
+        readonly id: string;
+        readonly vector: Readonly<{ readonly providerSessionId: string }>;
+      }> [];
+    }>;
+    const freshStatus = await freshRuntimeJson('/api/runtime/status') as Readonly<{
+      readonly status: Readonly<{ readonly activeVector?: Readonly<{ readonly providerSessionId: string }> }>;
     }>;
     expect(freshHistory.providerSessionId).not.toBe(firstHistory.providerSessionId);
     expect(freshHistory.runs.filter((entry) => firstRunIds.includes(entry.id))).toEqual([]);
+    expect(freshHistory.runs.every((entry) => entry.vector.providerSessionId === freshHistory.providerSessionId)).toBe(true);
+    expect(freshStatus.status.activeVector?.providerSessionId).toBe(freshHistory.providerSessionId);
+    await expect.poll(async () => history.count(), { timeout: browserTimeout }).toBe(0);
+    await expect(page.locator('[data-runtime-run-id]')).toHaveCount(0);
+    await expect(history.locator('button[aria-pressed="true"]')).toHaveCount(0);
+    await expect(page.locator('[aria-label="Runtime output stage"]')).toContainText('No runtime output selected.');
     expect(forbiddenRequests).toEqual([]);
     expect(pageErrors).toEqual([]);
   } finally {

@@ -166,6 +166,18 @@ it('renders the available Runtime playground controls, identity, and optional ca
   expect(markup).toContain('Loading runtime evidence…');
 });
 
+it('renders each ordered Runtime history item with its stable run ID', () => {
+  const controller = createRuntimePlaygroundController({
+    bootstrap: bootstrap({ history: Object.freeze([run('02'), run('01')]) }),
+    client: clientFor(),
+    profiles,
+  });
+
+  const markup = renderToStaticMarkup(createElement(RuntimePlayground, { controller }));
+
+  expect(markup).toMatch(/data-runtime-run-id="02"[\s\S]*data-runtime-run-id="01"/u);
+});
+
 it('renders validation, confirmation, replay-gap, and unavailable-identity states without hiding the Runtime shell', async () => {
   const initial = bootstrap({ status: Object.freeze({ ...status, hmrReady: false, state: 'degraded' }) });
   const controller = createRuntimePlaygroundController({
