@@ -348,17 +348,54 @@ test('requires every executable entry to declare its async cohort assets', async
   }
 });
 
-test('rejects an RSC file outside the declared runtime asset cohort', async () => {
+test('rejects a genuinely undeclared RSC file outside the known compiler cohort', async () => {
   const storageRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-generations-'));
   const compilerRoot = join(storageRoot, 'compiler');
   const store = createStore(storageRoot);
   try {
     await writeCompilerCohort(compilerRoot, { rscFiles: { 'undeclared.js': 'not-in-runtime-assets' } });
     const candidate = await store.begin({ id: 'undeclared', sourceRevision: 'source-undeclared' });
-    const snapshot = await captureRuntimeGenerationSnapshot({
+    await expect(captureRuntimeGenerationSnapshot({
       attemptId: 'attempt-undeclared', candidate, compilerRoot, preparedRuntime, rscCohortRevision: 1, sourceRevision: 'source-undeclared',
+    })).rejects.toThrow('undeclared');
+  } finally {
+    await store.close().catch(() => undefined);
+    await rm(storageRoot, { force: true, recursive: true });
+  }
+});
+
+test('reconciles a stale known async chunk from a prior incremental compiler cohort', async () => {
+  const storageRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-generations-'));
+  const compilerRoot = join(storageRoot, 'compiler');
+  const store = createStore(storageRoot);
+  try {
+    await writeCompilerCohort(compilerRoot);
+    const firstCandidate = await store.begin({ id: 'first', sourceRevision: 'source-first' });
+    const firstSnapshot = await captureRuntimeGenerationSnapshot({
+      attemptId: 'attempt-first', candidate: firstCandidate, compilerRoot, preparedRuntime, rscCohortRevision: 1, sourceRevision: 'source-first',
     });
-    await expect(materializeRuntimeGeneration({ snapshot, store })).rejects.toThrow('coverage');
+    const firstPrepared = await materializeRuntimeGeneration({ snapshot: firstSnapshot, store });
+    await store.abort(firstPrepared);
+
+    const rscRoot = join(compilerRoot, 'rsc');
+    await writeFile(join(rscRoot, 'chunks', '202.js'), 'replacement-async-chunk', 'utf8');
+    const manifestPath = join(rscRoot, 'runtime-assets.json');
+    const manifest = await readFile(manifestPath, 'utf8');
+    await writeFile(manifestPath, manifest.replaceAll('/chunks/101.js', '/chunks/202.js'), 'utf8');
+    expect(await readFile(join(rscRoot, 'chunks', '101.js'), 'utf8')).toBe('async-chunk');
+
+    const secondCandidate = await store.begin({ id: 'second', sourceRevision: 'source-second' });
+    const snapshot = await captureRuntimeGenerationSnapshot({
+      attemptId: 'attempt-second', candidate: secondCandidate, compilerRoot, preparedRuntime, rscCohortRevision: 2, sourceRevision: 'source-second',
+    });
+    const prepared = await materializeRuntimeGeneration({ snapshot, store });
+
+    expect(prepared.generation.manifest.assets.map((asset) => asset.path)).toEqual(expect.arrayContaining([
+      'rsc/chunks/202.js',
+    ]));
+    expect(prepared.generation.manifest.assets.map((asset) => asset.path)).not.toContain('rsc/chunks/101.js');
+    expect(await readFile(join(prepared.generation.root, 'rsc', 'chunks', '202.js'), 'utf8')).toBe('replacement-async-chunk');
+    await expect(readFile(join(prepared.generation.root, 'rsc', 'chunks', '101.js'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
   } finally {
     await store.close().catch(() => undefined);
     await rm(storageRoot, { force: true, recursive: true });

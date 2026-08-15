@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { open, lstat, mkdir, readdir, readFile, unlink, writeFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
-import { isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 import { emitRuntimeArtifacts } from '../build/emit-artifacts.js';
 import type {
@@ -39,6 +39,16 @@ const maximumDefinitionStderr = 64 * 1024;
 const definitionTimeoutMs = 5_000;
 const definitionTerminationGraceMs = 100;
 const sha256Expression = /^[a-f0-9]{64}$/u;
+const generatedRscAssetPaths = Object.freeze([
+  'agent-runtime.manifest.json',
+  'runtime-assets.json',
+  'runtime-definition.json',
+] as const);
+
+// Rsbuild writes incremental compilations into a persistent directory. Remember the
+// last compiler-managed asset bytes so a removed chunk can be recognized as stale
+// output, without accepting a newly injected undeclared file.
+const priorCompilerAssetDigests = new Map<string, ReadonlyMap<string, string>>();
 
 interface RuntimeAssetsManifest {
   readonly allFiles: readonly string[];
@@ -196,6 +206,75 @@ const copyTree = async (sourceRoot: string, destinationRoot: string): Promise<vo
   };
 
   await copyDirectory(sourceRoot, destinationRoot);
+};
+
+const copyCurrentRscAssets = async (
+  sourceRoot: string,
+  destinationRoot: string,
+  runtimeAssets: RuntimeAssetsManifest,
+  priorAssets: ReadonlyMap<string, string> | undefined,
+): Promise<void> => {
+  const sourceStatus = await lstat(sourceRoot);
+  if (!sourceStatus.isDirectory() || sourceStatus.isSymbolicLink()) {
+    throw new Error(`Compiler environment ${JSON.stringify(sourceRoot)} must be a regular directory.`);
+  }
+  const currentAssets = new Set<string>([
+    ...runtimeAssets.allFiles,
+    ...generatedRscAssetPaths,
+  ]);
+  const sourceFiles = new Map<string, string>();
+  const inspectDirectory = async (source: string, prefix: string): Promise<void> => {
+    assertInside(sourceRoot, source);
+    const entries = await readdir(source, { withFileTypes: true });
+    for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
+      if (!isSafeSegment(entry.name)) throw new Error('Compiler output contains an unsafe path segment.');
+      const sourcePath = join(source, entry.name);
+      assertInside(sourceRoot, sourcePath);
+      const status = await lstat(sourcePath);
+      if (status.isSymbolicLink()) throw new Error('Compiler output cannot contain symbolic links.');
+      const path = prefix.length === 0 ? entry.name : `${prefix}/${entry.name}`;
+      if (status.isDirectory()) {
+        await inspectDirectory(sourcePath, path);
+      } else if (status.isFile()) {
+        if (currentAssets.has(path)) {
+          sourceFiles.set(path, sourcePath);
+          continue;
+        }
+        const priorDigest = priorAssets?.get(path);
+        if (priorDigest === undefined || digestBytes(await readFile(sourcePath)) !== priorDigest) {
+          throw new Error(`Compiler output contains an undeclared file ${JSON.stringify(path)}.`);
+        }
+      } else {
+        throw new Error('Compiler output can contain only regular files and directories.');
+      }
+    }
+  };
+
+  await inspectDirectory(sourceRoot, '');
+  await mkdir(destinationRoot, { recursive: false });
+  const destinationDirectories = new Set<string>([destinationRoot]);
+  const rememberDirectories = (directory: string): void => {
+    let current = directory;
+    while (true) {
+      assertInside(destinationRoot, current);
+      destinationDirectories.add(current);
+      if (current === destinationRoot) return;
+      current = dirname(current);
+    }
+  };
+  for (const path of [...currentAssets].sort((left, right) => left.localeCompare(right))) {
+    const source = sourceFiles.get(path);
+    if (source === undefined) throw new Error(`runtime-assets.json references missing asset ${JSON.stringify(path)}.`);
+    const destination = join(destinationRoot, ...path.split('/'));
+    const directory = dirname(destination);
+    assertInside(destinationRoot, destination);
+    await mkdir(directory, { recursive: true });
+    rememberDirectories(directory);
+    await copyFileExclusive(source, destination);
+  }
+  for (const directory of [...destinationDirectories].sort((left, right) => right.length - left.length)) {
+    await fsync(directory);
+  }
 };
 
 const walkRegularFiles = async (root: string): Promise<readonly RuntimeGenerationAsset[]> => {
@@ -574,10 +653,22 @@ export const captureRuntimeGenerationSnapshot = async (
   await fsync(join(rscRoot, 'runtime-definition.json'));
   await emitRuntimeArtifacts(rscRoot, definition);
   await fsync(rscRoot);
-  await copyTree(rscRoot, join(input.candidate.root, 'rsc'));
+  const runtimeAssets = await parseRuntimeAssets(rscRoot);
+  await copyCurrentRscAssets(
+    rscRoot,
+    join(input.candidate.root, 'rsc'),
+    runtimeAssets,
+    priorCompilerAssetDigests.get(compilerRoot),
+  );
   await copyTree(join(compilerRoot, 'widget'), join(input.candidate.root, 'widget'));
   await fsync(input.candidate.root);
   const assets = await walkRegularFiles(input.candidate.root);
+  const capturedAssets = new Map(assets.map((asset) => [asset.path, asset]));
+  priorCompilerAssetDigests.set(compilerRoot, new Map(runtimeAssets.allFiles.map((path) => {
+    const asset = capturedAssets.get(`rsc/${path}`);
+    if (asset === undefined) throw new Error(`runtime-assets.json references missing asset ${JSON.stringify(path)}.`);
+    return [path, asset.sha256] as const;
+  })));
   return Object.freeze({
     assets,
     attemptId: input.attemptId,
