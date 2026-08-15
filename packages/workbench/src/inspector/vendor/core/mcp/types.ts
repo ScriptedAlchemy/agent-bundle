@@ -46,14 +46,6 @@ export interface StdioServerConfig {
   cwd?: string;
 }
 
-// SSE transport config
-export interface SseServerConfig {
-  type: "sse";
-  url: string;
-  eventSourceInit?: Record<string, unknown>;
-  requestInit?: Record<string, unknown>;
-}
-
 // StreamableHTTP transport config
 export interface StreamableHttpServerConfig {
   type: "streamable-http";
@@ -63,10 +55,9 @@ export interface StreamableHttpServerConfig {
 
 export type MCPServerConfig =
   | StdioServerConfig
-  | SseServerConfig
   | StreamableHttpServerConfig;
 
-export type ServerType = "stdio" | "sse" | "streamable-http";
+export type ServerType = "stdio" | "streamable-http";
 
 /**
  * On-disk shape for a single `mcp.json` server entry (post-#1358). The base
