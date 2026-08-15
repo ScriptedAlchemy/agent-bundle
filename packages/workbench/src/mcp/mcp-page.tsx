@@ -391,18 +391,17 @@ export const McpPage = ({ appPreviewClient, controller, epochOptions, initialBin
     const current = appPreviewController.current;
     appPreviewController.current = undefined;
     setAppPreviewBusy(true);
-    let close: Promise<void> | undefined;
-    close = (async (): Promise<void> => {
-      try {
-        await current?.close();
-      } finally {
-        if (close !== undefined && appPreviewClosePromise.current === close) {
+    const closeReference: { promise: Promise<void> | undefined } = { promise: undefined };
+    const close = Promise.resolve().then(async (): Promise<void> => {
+      await current?.close();
+    }).finally(() => {
+      if (appPreviewClosePromise.current === closeReference.promise) {
           appPreviewClosePromise.current = undefined;
           setAppPreview(undefined);
           setAppPreviewBusy(false);
-        }
       }
-    })();
+    });
+    closeReference.promise = close;
     appPreviewClosePromise.current = close;
     return close;
   };

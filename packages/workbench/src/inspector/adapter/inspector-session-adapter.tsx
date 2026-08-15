@@ -23,7 +23,6 @@ import {
   type GetPromptState,
   type LogEntryData,
   type LogsUiState,
-  type MessageEntry,
   type PromptsUiState,
   type ProtocolUiState,
   type ReadResourceState,
