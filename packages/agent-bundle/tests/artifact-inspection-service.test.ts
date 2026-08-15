@@ -432,7 +432,7 @@ it('diffs exact epochs by artifact facts with stable lexical records', async () 
   const store = new TrackingEpochStore({ projectRoot: root });
 
   try {
-    await publish({ files: diffFiles('base').reverse(), id: 'epoch-base', registry, root, store });
+    await publish({ files: [...diffFiles('base')].reverse(), id: 'epoch-base', registry, root, store });
     await publish({ files: diffFiles('candidate'), id: 'epoch-candidate', registry, root, store });
     const service = new (inspectionService())(store, registry);
     const diff = await service.diff('epoch-base', 'epoch-candidate');
