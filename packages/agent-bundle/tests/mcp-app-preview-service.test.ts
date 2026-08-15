@@ -378,12 +378,14 @@ it('creates document permission challenges server-side and remounts only after a
   const service = serviceFor(authorityFor());
   const preview = await createPreview(service);
   expect(preview.frame?.allow).toBe('');
+  expect(preview.frame?.documentPolicy?.revision).toBe(1);
   const challenge = service.consentChallenges(binding.id)?.find((candidate) => candidate.request.capability === 'geolocation');
   expect(challenge).toBeDefined();
-  expect(service.decideConsent(binding.id, 'forged-camera', true)).toBeUndefined();
+  await expect(service.decideConsent(binding.id, 'forged-camera', true)).resolves.toBe(false);
   expect(service.get(binding.id)?.frame?.allow).toBe('');
-  expect(service.decideConsent(binding.id, challenge?.id ?? '', true)).toMatchObject({ capability: 'geolocation', scope: 'document' });
+  await expect(service.decideConsent(binding.id, challenge?.id ?? '', true)).resolves.toBe(true);
   expect(service.get(binding.id)?.frame?.allow).toBe('geolocation');
+  expect(service.get(binding.id)?.frame?.documentPolicy?.revision).toBe(2);
 });
 
 it('reuses outbound byte capacity after each drain', async () => {

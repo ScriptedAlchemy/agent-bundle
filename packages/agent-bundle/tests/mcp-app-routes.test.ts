@@ -68,8 +68,8 @@ class RecordingPreviewService implements McpAppRoutePreviewService {
   }
 
   decideConsent(bindingId: string, challengeId: string, approved: boolean) {
-    if (bindingId !== 'binding-a' || challengeId !== 'consent-1' || !approved) return undefined;
-    return { authorizationId: 'grant-1', bindingId, capability: 'call-tool' as const, challengeId, scope: 'action' as const };
+    if (bindingId !== 'binding-a' || challengeId !== 'consent-1' || !approved) return false;
+    return true;
   }
 
   get(bindingId: string) {
@@ -168,7 +168,6 @@ const host = Object.freeze({
 });
 
 const createBody = () => ({
-  consent: { permissions: { geolocation: {} } },
   host,
   input: { city: 'Paris' },
   previewProfile: 'portable',
@@ -208,12 +207,12 @@ it('exposes only server-created consent challenges and accepts a decision by opa
       body: JSON.stringify({ approved: true, challengeId: 'camera-from-browser' }),
       headers: { ...headers(), 'content-type': 'application/json' }, method: 'POST',
     });
-    await expect(forged.json()).resolves.toEqual({ approved: false, lifecycle: 'created' });
+    await expect(forged.json()).resolves.toMatchObject({ approved: false, lifecycle: 'created', messages: [], preview: { bindingId: 'binding-a' } });
     const approved = await fetch(`${started.url}/api/mcp/apps/binding-a/consent`, {
       body: JSON.stringify({ approved: true, challengeId: 'consent-1' }),
       headers: { ...headers(), 'content-type': 'application/json' }, method: 'POST',
     });
-    await expect(approved.json()).resolves.toEqual({ approved: true, lifecycle: 'created' });
+    await expect(approved.json()).resolves.toMatchObject({ approved: true, lifecycle: 'created', messages: [], preview: { bindingId: 'binding-a' } });
   } finally {
     await started.close();
   }
@@ -249,6 +248,22 @@ it('creates an App preview from only session-scoped JSON data', async () => {
         toolName: 'show-weather',
       },
     }]);
+  } finally {
+    await started.close();
+  }
+});
+
+it('rejects obsolete browser-created document consent on preview creation', async () => {
+  const started = await startRoutes();
+  try {
+    const response = await fetch(`${started.url}/api/mcp/sessions/session-a/apps`, {
+      body: JSON.stringify({ ...createBody(), consent: { permissions: { camera: {} } } }),
+      headers: { ...headers(), 'content-type': 'application/json' },
+      method: 'POST',
+    });
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({ diagnostic: { code: 'AB8021' } });
+    expect(started.service.calls).toEqual([]);
   } finally {
     await started.close();
   }

@@ -1,6 +1,8 @@
 import React, { useEffect, useRef, useState, type Ref } from 'react';
 
 import {
+  type McpAppConsentChallenge,
+  type McpAppConsentDecision,
   type McpAppHostContext,
   type McpAppJsonObject,
   type McpAppJsonValue,
@@ -23,13 +25,17 @@ import './mcp-app-preview.css';
 /** The small browser contract the preview needs; foreground credentials remain client-owned. */
 export interface McpAppPreviewClient {
   close(bindingId: string, options: Readonly<{ readonly id: string; readonly reason?: string }>): Promise<McpAppRouteClose>;
+  consentChallenges?(bindingId: string): Promise<readonly McpAppConsentChallenge[]>;
   create(sessionId: string, request: McpAppPreviewCreateRequest): Promise<McpAppPreviewResponse>;
+  decideConsent?(bindingId: string, challengeId: string, approved: boolean): Promise<McpAppConsentDecision>;
   forceClose(bindingId: string): Promise<boolean>;
   message(bindingId: string, message: McpAppJsonValue, signal?: AbortSignal): Promise<McpAppRouteMessages>;
 }
 
 export interface McpAppFrameRelayLike {
   close(): Promise<void>;
+  detach?(): void;
+  deliverHostMessages?(messages: readonly McpAppJsonValue[]): boolean;
   start(): boolean;
 }
 
@@ -39,7 +45,6 @@ export type McpAppFrameRelayFactory = (options: McpAppFrameRelayOptions) => McpA
 export interface McpAppPreviewControllerOptions {
   readonly client: McpAppPreviewClient;
   readonly closeTimeoutMs?: number;
-  readonly consent?: McpAppJsonValue;
   readonly frameRelayFactory: McpAppFrameRelayFactory;
   readonly host: McpAppHostContext;
   readonly input: McpAppJsonValue;
@@ -171,7 +176,6 @@ const createRequest = (
   input: McpAppJsonValue,
   result: McpAppJsonValue,
 ): McpAppPreviewCreateRequest => Object.freeze({
-  ...(options.consent === undefined ? {} : { consent: options.consent }),
   host: options.host,
   input,
   previewProfile: options.previewProfile ?? 'portable',
@@ -213,6 +217,30 @@ export class McpAppPreviewController {
 
   get state(): McpAppPreviewState {
     return this.#state;
+  }
+
+  async consentChallenges(): Promise<readonly McpAppConsentChallenge[]> {
+    const bindingId = this.#preview?.bindingId;
+    const list = this.#client.consentChallenges;
+    return bindingId === undefined || this.#closed || list === undefined ? Object.freeze([]) : list(bindingId);
+  }
+
+  async decideConsent(challengeId: string, approved: boolean): Promise<boolean> {
+    const previous = this.#preview;
+    const decide = this.#client.decideConsent;
+    if (previous === undefined || this.#closed || decide === undefined) return false;
+    const decision = await decide(previous.bindingId, challengeId, approved);
+    if (!decision.approved || this.#closed) return false;
+    const documentChanged = previous.frame?.documentPolicy?.revision !== decision.preview.frame?.documentPolicy?.revision;
+    if (documentChanged) {
+      this.#relay?.detach?.();
+      this.#relay = undefined;
+    } else if (!this.#relay?.deliverHostMessages?.(decision.messages)) {
+      return false;
+    }
+    this.#preview = decision.preview;
+    this.#setState(stateFor(decision.preview, this.#input, this.#result));
+    return true;
   }
 
   subscribe(listener: (state: McpAppPreviewState) => void): () => void {
@@ -383,7 +411,7 @@ export const McpAppPreview = ({
       if (controller.current === current) controller.current = undefined;
       void current.close();
     };
-  }, [frameRelayFactory, options.client, options.closeTimeoutMs, options.consent, options.host, options.input, options.previewProfile, options.result, options.sessionId, options.toolName]);
+  }, [frameRelayFactory, options.client, options.closeTimeoutMs, options.host, options.input, options.previewProfile, options.result, options.sessionId, options.toolName]);
 
   useEffect(() => {
     if (state.phase !== 'ready' || browserWindow === undefined || iframe.current === null) return;
@@ -404,7 +432,9 @@ export const McpAppPreview = ({
           <details open><summary>Tool result</summary><pre>{json(fallback.result)}</pre></details>
         </section>
       )}
-      {state.phase === 'ready' && state.preview.frame !== undefined ? <McpAppPreviewFrame frame={state.preview.frame} iframeRef={iframe} title={title} /> : null}
+      {state.phase === 'ready' && state.preview.frame !== undefined
+        ? <McpAppPreviewFrame key={state.preview.frame.documentPolicy?.revision ?? 0} frame={state.preview.frame} iframeRef={iframe} title={title} />
+        : null}
     </section>
   );
 };

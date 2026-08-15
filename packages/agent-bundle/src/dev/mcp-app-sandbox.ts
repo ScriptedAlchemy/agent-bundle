@@ -223,12 +223,15 @@ export interface McpAppSandboxProxy extends McpAppSandboxEndpoint {
 export interface CreateMcpAppSandboxFrameOptions {
   readonly consent?: McpAppSandboxConsent;
   readonly declaration?: McpAppSandboxDeclaration;
+  /** A server-created, revisioned document permission snapshot. */
+  readonly documentPolicy?: McpAppDocumentPolicySnapshot;
   readonly hostOrigin: string;
   readonly proxy: McpAppSandboxEndpoint;
 }
 
 export interface McpAppSandboxFrame {
   readonly allow: string;
+  readonly documentPolicy?: McpAppDocumentPolicySnapshot;
   readonly policy: McpAppSandboxPolicy;
   readonly referrerPolicy: 'no-referrer';
   readonly relay: McpAppSandboxRelay;
@@ -361,8 +364,58 @@ const specialIpv4 = (host: string): boolean => {
   const [a, b, c] = octets as [number, number, number, number];
   return a === 0 || a === 10 || a === 127 || a >= 224 || (a === 100 && b >= 64 && b <= 127)
     || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31)
-    || (a === 192 && (b === 0 || b === 168)) || (a === 198 && (b === 18 || b === 19 || b === 51))
+    || (a === 192 && (b === 0 || b === 2 || b === 88 || b === 168)) || (a === 198 && (b === 18 || b === 19 || b === 51))
     || (a === 203 && b === 0 && c === 113);
+};
+
+const ipv6Number = (host: string): bigint | undefined => {
+  const source = host.toLowerCase().replace(/^\[|\]$/gu, '');
+  if (isIP(source) !== 6) return undefined;
+  const [left, right] = source.split('::', 2);
+  const leftParts = left === undefined || left.length === 0 ? [] : left.split(':');
+  const rightParts = right === undefined || right.length === 0 ? [] : right.split(':');
+  if (source.includes('::') ? leftParts.length + rightParts.length >= 8 : leftParts.length !== 8) return undefined;
+  const parts = source.includes('::')
+    ? [...leftParts, ...Array.from({ length: 8 - leftParts.length - rightParts.length }, () => '0'), ...rightParts]
+    : leftParts;
+  let value = 0n;
+  for (const part of parts) {
+    if (!/^[0-9a-f]{1,4}$/u.test(part)) return undefined;
+    value = (value << 16n) | BigInt(`0x${part}`);
+  }
+  return value;
+};
+
+const inIpv6Prefix = (value: bigint, prefix: bigint, bits: number): boolean => {
+  const width = 128n;
+  const mask = ((1n << BigInt(bits)) - 1n) << (width - BigInt(bits));
+  return (value & mask) === prefix;
+};
+
+const specialIpv6 = (host: string): boolean => {
+  const value = ipv6Number(host);
+  if (value === undefined) return false;
+  // IANA special-purpose ranges, including representations that can conceal
+  // IPv4 addresses (mapped/compatible, NAT64, and 6to4), are never CSP hosts.
+  const ranges: readonly (readonly [bigint, number])[] = [
+    [0n, 128], // unspecified
+    [1n, 128], // loopback
+    [0n, 96], // IPv4-compatible (includes mapped after a dedicated check)
+    [0xffffn << 32n, 96], // ::ffff:0:0/96
+    [0x64ff9bn << 96n, 96], // well-known NAT64
+    [0x64ff9b0001n << 80n, 48], // local-use NAT64
+    [0x100n << 64n, 64], // discard-only
+    [0x20010000n << 96n, 32], // Teredo
+    [0x20010002n << 96n, 48], // benchmarking
+    [0x20010db8n << 96n, 32], // documentation
+    [0x20010010n << 96n, 28], // ORCHID
+    [0x20010020n << 96n, 28], // ORCHIDv2
+    [0x2002n << 112n, 16], // 6to4
+    [0xfc00n << 112n, 7], // ULA
+    [0xfe80n << 112n, 10], // link-local
+    [0xff00n << 112n, 8], // multicast
+  ];
+  return ranges.some(([prefix, bits]) => inIpv6Prefix(value, prefix, bits));
 };
 
 const prohibitedHost = (value: string): boolean => {
@@ -370,9 +423,7 @@ const prohibitedHost = (value: string): boolean => {
   if (host === 'localhost' || host.endsWith('.localhost')) return true;
   if (isIP(host) === 4) return specialIpv4(host);
   if (isIP(host) !== 6) return false;
-  return host === '::' || host === '::1' || host.startsWith('fe8') || host.startsWith('fe9')
-    || host.startsWith('fea') || host.startsWith('feb') || host.startsWith('fc') || host.startsWith('fd')
-    || host.startsWith('ff') || host.startsWith('2001:db8') || host.startsWith('::ffff:');
+  return specialIpv6(host);
 };
 
 const cspSources = (sources: readonly string[] | undefined): Readonly<{ accepted: readonly string[]; warnings: readonly McpAppSandboxWarning[] }> => {
@@ -438,7 +489,7 @@ export const deriveMcpAppSandboxPolicy = (
     contentSecurityPolicy: [
       "default-src 'none'",
       `base-uri ${sourceList(baseUri.accepted, "'self'")}`,
-      `connect-src ${sourceList(Object.freeze([...connect.accepted, ...(internalOrigin === undefined ? [] : [internalOrigin])]), "'none'")}`,
+      `connect-src ${sourceList(Object.freeze([...connect.accepted, ...(internalWebSocketUrl === undefined ? [] : [internalWebSocketUrl])]), "'none'")}`,
       `frame-src ${sourceList(frames.accepted, "'none'")}`,
       `img-src ${['data:', ...resources.accepted].join(' ')}`,
       `media-src ${sourceList(resources.accepted, "'none'")}`,
@@ -545,6 +596,7 @@ export const createMcpAppSandboxFrame = (
   const configuration = encodeURIComponent(JSON.stringify({ hostOrigin, maxMessageBytes: relay.maxMessageBytes }));
   return Object.freeze({
     allow: policy.iframeAllow,
+    ...(options.documentPolicy === undefined ? {} : { documentPolicy: options.documentPolicy }),
     policy,
     referrerPolicy: 'no-referrer',
     relay,

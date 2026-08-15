@@ -27,7 +27,6 @@ export interface McpAppHostContext {
 }
 
 export interface McpAppPreviewCreateRequest {
-  readonly consent?: McpAppJsonValue;
   readonly host: McpAppHostContext;
   readonly input: McpAppJsonValue;
   readonly previewProfile: McpAppPreviewProfile;
@@ -37,6 +36,12 @@ export interface McpAppPreviewCreateRequest {
 
 export interface McpAppRelayFrame {
   readonly allow: string;
+  readonly documentPolicy?: Readonly<{
+    readonly allow: string;
+    readonly approvedPermissions: McpAppJsonValue;
+    readonly revision: number;
+    readonly warnings: readonly McpAppJsonValue[];
+  }>;
   readonly policy: Readonly<{
     readonly contentSecurityPolicy: string;
     readonly iframeAllow: string;
@@ -65,6 +70,19 @@ export interface McpAppRouteMessages {
 export interface McpAppRouteClose {
   readonly lifecycle: McpAppBridgeLifecycle;
   readonly message?: McpAppJsonValue;
+}
+
+export interface McpAppConsentChallenge {
+  readonly expiresAt: number;
+  readonly id: string;
+  readonly request: McpAppJsonValue;
+}
+
+export interface McpAppConsentDecision {
+  readonly approved: boolean;
+  readonly messages: readonly McpAppJsonValue[];
+  /** Fresh server snapshot; document-policy changes require a new iframe. */
+  readonly preview: McpAppPreview;
 }
 
 export interface McpAppClientOptions {
@@ -167,6 +185,21 @@ const frame = (value: unknown, foregroundOrigin: string): McpAppRelayFrame => {
   const snapshot = asRecord(value);
   const policy = asRecord(snapshot.policy);
   const relay = asRecord(snapshot.relay);
+  const documentPolicy = snapshot.documentPolicy === undefined ? undefined : asRecord(snapshot.documentPolicy);
+  const documentPolicyAllow = documentPolicy?.allow;
+  const documentPolicyRevision = documentPolicy?.revision;
+  const parsedDocumentPolicy: McpAppRelayFrame['documentPolicy'] = documentPolicy === undefined ? undefined : (() => {
+    if (
+      typeof documentPolicyAllow !== 'string' || documentPolicyAllow !== snapshot.allow || !positiveInteger(documentPolicyRevision) ||
+      !isRecord(documentPolicy.approvedPermissions) || !Array.isArray(documentPolicy.warnings)
+    ) throw new McpAppClientError('AB8019', 'Foreground MCP App route returned an invalid document policy.');
+    return Object.freeze({
+      allow: documentPolicyAllow,
+      approvedPermissions: documentPolicy.approvedPermissions,
+      revision: documentPolicyRevision,
+      warnings: asArray(documentPolicy.warnings),
+    });
+  })();
   if (
     typeof snapshot.allow !== 'string' || typeof policy.contentSecurityPolicy !== 'string' || typeof policy.iframeAllow !== 'string' ||
     typeof policy.permissionsPolicy !== 'string' || snapshot.referrerPolicy !== 'no-referrer' ||
@@ -186,6 +219,7 @@ const frame = (value: unknown, foregroundOrigin: string): McpAppRelayFrame => {
   if (source.origin !== targetOrigin) throw new McpAppClientError('AB8019', 'Foreground MCP App frame must use its declared target origin.');
   return Object.freeze({
     allow: snapshot.allow,
+    ...(parsedDocumentPolicy === undefined ? {} : { documentPolicy: parsedDocumentPolicy }),
     policy: Object.freeze({
       contentSecurityPolicy: policy.contentSecurityPolicy,
       iframeAllow: policy.iframeAllow,
@@ -249,9 +283,8 @@ export class McpAppClient {
 
   async create(sessionId: string, request: McpAppPreviewCreateRequest): Promise<McpAppPreview> {
     const foreground = await this.#authenticate();
-    const { consent: _ignoredBrowserConsent, ...serverRequest } = request;
     return preview(asRecord(await this.#json(`/api/mcp/sessions/${opaqueSegment(sessionId, 'MCP session')}/apps`, {
-      body: JSON.stringify(detachedJson(serverRequest)),
+      body: JSON.stringify(detachedJson(request)),
       headers: { 'content-type': 'application/json' },
       method: 'POST',
     })).preview, foreground.origin);
@@ -264,6 +297,30 @@ export class McpAppClient {
       method: 'POST',
       signal,
     }));
+  }
+
+  async consentChallenges(bindingId: string): Promise<readonly McpAppConsentChallenge[]> {
+    const body = asRecord(await this.#json(`${this.#bindingPath(bindingId)}/consent`));
+    const values = asArray(body.challenges);
+    const challenges = values.map((value) => {
+      const challenge = asRecord(value);
+      if (typeof challenge.id !== 'string' || !positiveInteger(challenge.expiresAt) || challenge.request === undefined) {
+        throw new McpAppClientError('AB8019', 'Foreground MCP App route returned an invalid consent challenge.');
+      }
+      return Object.freeze({ expiresAt: challenge.expiresAt, id: challenge.id, request: challenge.request });
+    });
+    return Object.freeze(challenges);
+  }
+
+  async decideConsent(bindingId: string, challengeId: string, approved: boolean): Promise<McpAppConsentDecision> {
+    const foreground = await this.#authenticate();
+    opaqueSegment(challengeId, 'MCP App consent challenge');
+    if (typeof approved !== 'boolean') throw new McpAppClientError('AB8016', 'MCP App consent decision is not valid.');
+    const body = asRecord(await this.#json(`${this.#bindingPath(bindingId)}/consent`, {
+      body: JSON.stringify({ approved, challengeId }), headers: { 'content-type': 'application/json' }, method: 'POST',
+    }));
+    if (typeof body.approved !== 'boolean') throw new McpAppClientError('AB8019', 'Foreground MCP App route returned an invalid consent decision.');
+    return Object.freeze({ approved: body.approved, messages: asArray(body.messages), preview: preview(body.preview, foreground.origin) });
   }
 
   async close(bindingId: string, options: Readonly<{ readonly id: McpAppRequestId; readonly reason?: string }>): Promise<McpAppRouteClose> {

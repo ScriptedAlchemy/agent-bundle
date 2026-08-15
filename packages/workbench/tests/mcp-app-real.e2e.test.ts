@@ -208,6 +208,7 @@ e2e('runs a generated SDK-v2 App through the real foreground session and separat
     expect(sandboxOrigin).not.toBe(foregroundOrigin);
     await expect(outerFrame).toHaveAttribute('sandbox', 'allow-scripts allow-same-origin');
     await expect(outerFrame).toHaveAttribute('referrerpolicy', 'no-referrer');
+    await page.getByRole('button', { name: 'Allow call tool' }).click();
     await expect.poll(() => page.frames().filter((frame) => frame.url() === 'about:blank').length, { timeout: browserTimeout }).toBe(1);
     const appFrame = page.frames().find((frame) => frame.url() === 'about:blank');
     if (appFrame === undefined) throw new Error('Expected the sandbox proxy to create the App srcdoc frame.');

@@ -126,8 +126,10 @@ it('fails closed for unsafe CSP sources and freezes document grants into a revis
 
 it('rejects every noncanonical, local, and special CSP authority before the proxy receives it', () => {
   const rejected = [
-    '*', 'https://*.weather.example', 'https://127.0.0.2', 'https://169.254.1.1', 'https://0.0.0.0',
-    'https://[::1]', 'https://[fc00::1]', 'https://[2001:db8::1]', 'https://api.localhost',
+    '*', 'https://*.weather.example', 'https://127.0.0.2', 'https://100.64.0.1', 'https://169.254.1.1', 'https://192.0.2.1',
+    'https://192.88.99.1', 'https://198.51.100.1', 'https://0.0.0.0', 'https://[::1]', 'https://[::ffff:7f00:1]',
+    'https://[64:ff9b::c000:201]', 'https://[2002:c000:0201::]', 'https://[2001:2::]', 'https://[2001:10::]',
+    'https://[fc00::1]', 'https://[fe80::1]', 'https://[ff00::1]', 'https://[2001:db8::1]', 'https://api.localhost',
     'https://user:secret@api.example', 'https://api.example/path', 'https://api.example?query=1',
   ];
   const policy = deriveMcpAppSandboxPolicy({
@@ -146,7 +148,8 @@ it('retains only the exact server-authored HMR websocket path', () => {
     origin: 'https://surface.example', provenance: 'compiler-internal', webSocketPath: '/rsbuild-hmr',
   });
   expect(policy.internalWebSocketUrl).toBe('wss://surface.example/rsbuild-hmr');
-  expect(policy.contentSecurityPolicy).toContain('connect-src https://surface.example');
+  expect(policy.contentSecurityPolicy).toContain('connect-src wss://surface.example/rsbuild-hmr');
+  expect(policy.contentSecurityPolicy).not.toContain('wss://surface.example/other-hmr');
 });
 
 it('uses one proxy relay configuration in the fixed outer frame contract', () => {

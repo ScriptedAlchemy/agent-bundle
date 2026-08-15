@@ -28,10 +28,11 @@ import {
 import {
   createMcpAppConsentAuthority,
   createMcpAppConsentActionDigest,
+  createMcpAppDocumentPolicySnapshot,
   createMcpAppSandboxFrame,
   type McpAppConsentAuthority,
   type McpAppConsentChallenge,
-  type McpAppConsentGrant,
+  type McpAppDocumentPolicySnapshot,
   type McpAppSandboxEndpoint,
   type McpAppSandboxFrame,
   type McpAppSandboxPermissions,
@@ -94,6 +95,8 @@ interface PreviewEntry {
   readonly consent: McpAppConsentAuthority;
   readonly host: McpAppHostContextInput;
   readonly previewProfile: McpAppPreviewProfile;
+  documentPolicy?: McpAppDocumentPolicySnapshot;
+  documentPolicyRevision: number;
   resource?: McpAppBridgeResourceResolution;
   preview?: McpAppPreview;
   readonly outbound: McpAppBridgeMessage[];
@@ -175,13 +178,6 @@ const hostContextRecord = (host: McpAppPreviewHostContext, tool: McpAppBridgeJso
 const capabilitiesOf = (permissions: McpAppSandboxPermissions | undefined): readonly string[] =>
   Object.freeze(permissions === undefined ? [] : Object.keys(permissions));
 
-const documentPermissions = (grants: readonly { readonly capability: string }[]): McpAppSandboxPermissions => Object.freeze({
-  ...(grants.some((grant) => grant.capability === 'camera') ? { camera: Object.freeze({}) } : {}),
-  ...(grants.some((grant) => grant.capability === 'clipboard-write') ? { clipboardWrite: Object.freeze({}) } : {}),
-  ...(grants.some((grant) => grant.capability === 'geolocation') ? { geolocation: Object.freeze({}) } : {}),
-  ...(grants.some((grant) => grant.capability === 'microphone') ? { microphone: Object.freeze({}) } : {}),
-});
-
 const resourceForProfile = (binding: McpAppBinding, resource: McpAppBridgeResourceResolution):
   | { readonly available: false }
   | { readonly mimeType: string; readonly uri: string } => {
@@ -232,22 +228,18 @@ export class McpAppPreviewService {
     return entry === undefined || entry.closed ? undefined : entry.consent.pending();
   }
 
-  decideConsent(bindingId: string, challengeId: string, approved: boolean): McpAppConsentGrant | undefined {
+  async decideConsent(bindingId: string, challengeId: string, approved: boolean): Promise<boolean> {
     const entry = this.#entries.get(bindingId);
-    const grant = entry === undefined || entry.closed ? undefined : entry.consent.grant(challengeId, approved);
-    if (grant?.scope === 'document' && entry?.resource?.kind === 'resource') {
-      const permissions = documentPermissions(entry.consent.documentGrants(entry.binding.id, entry.previewProfile));
-      const profile = resolveMcpAppHostProfile({
-        consentedCapabilities: capabilitiesOf(permissions), declaredCapabilities: capabilitiesOf(entry.resource.permissions),
-        host: entry.host, profile: entry.previewProfile, resource: resourceForProfile(entry.binding, entry.resource),
-      });
-      const frame = profile.kind === 'apps' ? createMcpAppSandboxFrame({
-        consent: Object.freeze({ permissions }), declaration: { csp: entry.resource.csp, permissions: entry.resource.permissions },
-        hostOrigin: this.#hostOrigin, proxy: this.#sandboxProxy,
-      }) : undefined;
-      entry.preview = Object.freeze({ binding: entry.binding, bridge: entry.bridge, ...(frame === undefined ? {} : { frame }), profile, resource: entry.resource });
-    }
-    return grant;
+    if (entry === undefined || entry.closed) return false;
+    return this.#serialize(entry, async () => {
+      const challenge = entry.consent.pending().find((candidate) => candidate.id === challengeId);
+      if (challenge === undefined) return false;
+      if (challenge.request.scope === 'action') return entry.bridge.decideConsent(challengeId, approved);
+      const grant = entry.consent.grant(challengeId, approved);
+      if (grant === undefined || grant.scope !== 'document' || entry.resource?.kind !== 'resource') return false;
+      this.#refreshDocumentPreview(entry);
+      return true;
+    });
   }
 
   async create(options: CreateMcpAppPreviewOptions): Promise<McpAppPreview> {
@@ -315,6 +307,7 @@ export class McpAppPreviewService {
         consent: consentAuthority,
         host,
         previewProfile: options.previewProfile,
+        documentPolicyRevision: 0,
         closing: false,
         closed: false,
         outbound,
@@ -335,16 +328,22 @@ export class McpAppPreviewService {
         profile: options.previewProfile,
         resource: resourceForProfile(binding, resource),
       });
+      const documentPolicy = resource.kind === 'resource'
+        ? createMcpAppDocumentPolicySnapshot(1, { csp: resource.csp, permissions: resource.permissions }, [])
+        : undefined;
       const frame = resource.kind === 'resource' && profile.kind === 'apps'
         ? createMcpAppSandboxFrame({
           consent: Object.freeze({}),
           declaration: { csp: resource.csp, permissions: resource.permissions },
+          ...(documentPolicy === undefined ? {} : { documentPolicy }),
           hostOrigin: this.#hostOrigin,
           proxy: this.#sandboxProxy,
         })
         : undefined;
       const preview = Object.freeze({ binding, bridge, ...(frame === undefined ? {} : { frame }), profile, resource });
       entry.resource = resource;
+      entry.documentPolicy = documentPolicy;
+      entry.documentPolicyRevision = documentPolicy?.revision ?? 0;
       if (resource.kind === 'resource') {
         for (const [capability, permission] of [
           ['camera', resource.permissions?.camera], ['clipboard-write', resource.permissions?.clipboardWrite],
@@ -444,6 +443,36 @@ export class McpAppPreviewService {
     if (resourceUri === undefined || resourceUri !== binding.resourceUri) {
       throw new Error('MCP App preview binding must retain one canonical standard _meta.ui.resourceUri.');
     }
+  }
+
+  #refreshDocumentPreview(entry: PreviewEntry): void {
+    const resource = entry.resource;
+    if (resource?.kind !== 'resource') return;
+    const documentPolicy = createMcpAppDocumentPolicySnapshot(
+      Math.max(1, entry.documentPolicyRevision + 1),
+      { csp: resource.csp, permissions: resource.permissions },
+      entry.consent.documentGrants(entry.binding.id, entry.previewProfile),
+    );
+    const profile = resolveMcpAppHostProfile({
+      consentedCapabilities: capabilitiesOf(documentPolicy.approvedPermissions), declaredCapabilities: capabilitiesOf(resource.permissions),
+      host: entry.host, profile: entry.previewProfile, resource: resourceForProfile(entry.binding, resource),
+    });
+    const frame = profile.kind === 'apps' ? createMcpAppSandboxFrame({
+      consent: Object.freeze({ permissions: documentPolicy.approvedPermissions }),
+      declaration: { csp: resource.csp, permissions: resource.permissions },
+      documentPolicy,
+      hostOrigin: this.#hostOrigin,
+      proxy: this.#sandboxProxy,
+    }) : undefined;
+    entry.documentPolicy = documentPolicy;
+    entry.documentPolicyRevision = documentPolicy.revision;
+    entry.preview = Object.freeze({
+      binding: entry.binding,
+      bridge: entry.bridge,
+      ...(frame === undefined ? {} : { frame }),
+      profile,
+      resource,
+    });
   }
 
   #serialize<T>(entry: PreviewEntry, operation: () => Promise<T> | T): Promise<T> {

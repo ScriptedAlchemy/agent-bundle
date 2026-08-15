@@ -2,10 +2,7 @@ import { Buffer } from 'node:buffer';
 
 import { expect, it } from '@rstest/core';
 
-import {
-  createMcpAppConsentActionDigest,
-  createMcpAppConsentAuthority,
-} from '../src/dev/mcp-app-sandbox.ts';
+import { createMcpAppConsentAuthority } from '../src/dev/mcp-app-sandbox.ts';
 import {
   createMcpAppBridge,
   createMcpAppFailClosedSender,
@@ -918,7 +915,7 @@ it('fails closed on a bounded shared-sender flood and never sends mutable queued
   await expect(sender.send({ id: 'late' })).resolves.toBe(false);
 });
 
-it('requires an exact one-use server grant before a privileged tool operation', async () => {
+it('keeps a privileged tool continuation host-private and consumes it exactly once', async () => {
   const fixture = fixtureFor();
   const authority = createMcpAppConsentAuthority({ now: () => 1_000 });
   const bridge = createMcpAppBridge({
@@ -932,30 +929,19 @@ it('requires an exact one-use server grant before a privileged tool operation', 
   await bridge.receive(initialize('init:consent'));
   await bridge.receive(initialized());
   const details = { arguments: { city: 'Paris' }, name: 'refresh-weather' } as const;
-  const challenge = authority.challenge({
-    actionDigest: createMcpAppConsentActionDigest('call-tool', details),
-    bindingId: 'binding-app',
-    capability: 'call-tool',
-    details,
-    profile: 'portable',
-  });
+  await bridge.receive({ id: 'tool:approved', jsonrpc: '2.0', method: 'tools/call', params: details });
+  const challenge = authority.pending().find((candidate) => candidate.request.capability === 'call-tool');
   expect(challenge?.request).toMatchObject({ capability: 'call-tool', scope: 'action' });
-  const grant = authority.grant(challenge?.id ?? '', true);
-  expect(grant).toBeDefined();
-
-  await bridge.receive({
-    id: 'tool:approved', jsonrpc: '2.0', method: 'tools/call',
-    params: { ...details, authorizationId: grant?.authorizationId },
-  });
-  await bridge.receive({
-    id: 'tool:replay', jsonrpc: '2.0', method: 'tools/call',
-    params: { ...details, authorizationId: grant?.authorizationId },
-  });
+  expect(fixture.calls).toEqual([]);
+  expect(await bridge.decideConsent('forged-challenge', true)).toBe(false);
+  expect(await bridge.decideConsent(challenge?.id ?? '', true)).toBe(true);
+  expect(await bridge.decideConsent(challenge?.id ?? '', true)).toBe(false);
   expect(fixture.calls).toEqual([{ arguments: { city: 'Paris' }, bindingId: 'binding-app', name: 'refresh-weather' }]);
-  expect(fixture.sent.at(-1)).toMatchObject({ error: { code: -32001 }, id: 'tool:replay' });
+  expect(JSON.stringify(fixture.sent)).not.toContain('grant-');
+  expect(fixture.sent.at(-1)).toMatchObject({ id: 'tool:approved', result: {} });
 });
 
-it('does not invoke a download handler until its matching action grant is consumed', async () => {
+it('does not invoke a download handler until its route-owned challenge decision resumes it', async () => {
   const downloads: unknown[] = [];
   const fixture = fixtureFor({ host: { onDownload: (download) => { downloads.push(download); } } });
   const authority = createMcpAppConsentAuthority({ now: () => 1_000 });
@@ -964,8 +950,54 @@ it('does not invoke a download handler until its matching action grant is consum
   await bridge.receive(initialized());
   const details = { contents: [{ text: 'forecast', type: 'text' }] } as const;
   await bridge.receive({ id: 'download:denied', jsonrpc: '2.0', method: 'ui/download-file', params: details });
-  const challenge = authority.challenge({ actionDigest: createMcpAppConsentActionDigest('download-file', details), bindingId: 'binding-app', capability: 'download-file', details, profile: 'portable' });
-  const grant = authority.grant(challenge?.id ?? '', true);
-  await bridge.receive({ id: 'download:approved', jsonrpc: '2.0', method: 'ui/download-file', params: { ...details, authorizationId: grant?.authorizationId } });
+  const challenge = authority.pending().find((candidate) => candidate.request.capability === 'download-file');
+  expect(downloads).toEqual([]);
+  expect(await bridge.decideConsent(challenge?.id ?? '', false)).toBe(true);
+  expect(downloads).toEqual([]);
+  await bridge.receive({ id: 'download:approved', jsonrpc: '2.0', method: 'ui/download-file', params: details });
+  const approved = authority.pending().find((candidate) => candidate.request.capability === 'download-file');
+  expect(await bridge.decideConsent(approved?.id ?? '', true)).toBe(true);
   expect(downloads).toEqual([{ ...details, embeddedBytes: 0, itemCount: 1 }]);
+});
+
+it('resumes each privileged effect at most once and expires queued continuations before effects', async () => {
+  let now = 1_000;
+  const links: string[] = [];
+  const downloads: unknown[] = [];
+  const modes: string[] = [];
+  const fixture = fixtureFor({
+    host: {
+      onDisplayMode: async (mode) => (modes.push(mode), mode),
+      onDownload: (download) => { downloads.push(download); },
+      onOpenLink: (url) => { links.push(url); },
+    },
+  });
+  const authority = createMcpAppConsentAuthority({ now: () => now });
+  const bridge = createMcpAppBridge({
+    binding: fixture.binding, consentAuthority: authority, host: fixture.host, operations: fixture.operations, profile: 'portable',
+    send: (message) => (fixture.sent.push(message), true),
+  });
+  await bridge.receive(initialize('init:all-consents'));
+  await bridge.receive(initialized());
+  await bridge.receive({ id: 'tool', jsonrpc: '2.0', method: 'tools/call', params: { name: 'refresh-weather' } });
+  await bridge.receive({ id: 'link', jsonrpc: '2.0', method: 'ui/open-link', params: { url: 'https://weather.example.test/forecast' } });
+  await bridge.receive({ id: 'download', jsonrpc: '2.0', method: 'ui/download-file', params: { contents: [{ text: 'forecast', type: 'text' }] } });
+  await bridge.receive({ id: 'display', jsonrpc: '2.0', method: 'ui/request-display-mode', params: { mode: 'fullscreen' } });
+  const challenges = authority.pending();
+  const idFor = (capability: string): string => challenges.find((challenge) => challenge.request.capability === capability)?.id ?? '';
+  const tool = idFor('call-tool');
+  expect(await Promise.all([bridge.decideConsent(tool, true), bridge.decideConsent(tool, true)])).toEqual([true, false]);
+  await expect(bridge.decideConsent(idFor('open-external-link'), true)).resolves.toBe(true);
+  await expect(bridge.decideConsent(idFor('download-file'), true)).resolves.toBe(true);
+  await expect(bridge.decideConsent(idFor('request-display-mode'), true)).resolves.toBe(true);
+  expect(fixture.calls).toHaveLength(1);
+  expect(links).toEqual(['https://weather.example.test/forecast']);
+  expect(downloads).toHaveLength(1);
+  expect(modes).toEqual(['fullscreen']);
+
+  await bridge.receive({ id: 'expired-link', jsonrpc: '2.0', method: 'ui/open-link', params: { url: 'https://weather.example.test/expired' } });
+  const expired = authority.pending().find((challenge) => challenge.request.capability === 'open-external-link');
+  now += 30_001;
+  await expect(bridge.decideConsent(expired?.id ?? '', true)).resolves.toBe(false);
+  expect(links).toEqual(['https://weather.example.test/forecast']);
 });

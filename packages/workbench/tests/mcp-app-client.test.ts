@@ -6,7 +6,6 @@ import {
 } from '../src/mcp/mcp-app-client.ts';
 
 const request: McpAppPreviewCreateRequest = Object.freeze({
-  consent: Object.freeze({ permissions: Object.freeze({ camera: Object.freeze({}) }) }),
   host: Object.freeze({
     availableDisplayModes: Object.freeze(['inline']),
     containerDimensions: Object.freeze({ height: 400, width: 640 }),
@@ -99,6 +98,43 @@ describe('MCP App browser client', () => {
     expect(calls).toHaveLength(2);
     expect(calls[1]?.[0]).toBe('/api/mcp/apps/binding-weather/messages');
     expect(JSON.parse(String(calls[1]?.[1]?.body))).toEqual({ message });
+  });
+
+  it('lists server-created consent challenges and returns a fresh server snapshot without a grant', async () => {
+    const calls: readonly [string, RequestInit | undefined][] = [];
+    const refreshed = Object.freeze({
+      ...preview,
+      frame: Object.freeze({
+        ...preview.frame,
+        allow: 'geolocation',
+        documentPolicy: Object.freeze({
+          allow: 'geolocation',
+          approvedPermissions: Object.freeze({ geolocation: Object.freeze({}) }),
+          revision: 2,
+          warnings: Object.freeze([]),
+        }),
+      }),
+    });
+    const fetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+      (calls as [string, RequestInit | undefined][]).push([String(input), init]);
+      if (String(input) === '/api/project/session') return json({ origin: 'http://127.0.0.1:43123', token: 'foreground-secret' });
+      if (init?.method === 'POST') return json({ approved: true, lifecycle: 'initialized', messages: [], preview: refreshed });
+      return json({ challenges: [{ expiresAt: 31_000, id: 'consent-1', request: { capability: 'geolocation', scope: 'document' } }], lifecycle: 'initialized' });
+    };
+    const client = new McpAppClient({ fetch: fetch as typeof globalThis.fetch });
+
+    await expect(client.consentChallenges('binding-weather')).resolves.toEqual([{
+      expiresAt: 31_000,
+      id: 'consent-1',
+      request: { capability: 'geolocation', scope: 'document' },
+    }]);
+    await expect(client.decideConsent('binding-weather', 'consent-1', true)).resolves.toMatchObject({
+      approved: true,
+      messages: [],
+      preview: { frame: { allow: 'geolocation', documentPolicy: { revision: 2 } } },
+    });
+    expect(JSON.parse(String(calls[2]?.[1]?.body))).toEqual({ approved: true, challengeId: 'consent-1' });
+    expect(String(calls[2]?.[1]?.body)).not.toContain('grant-');
   });
 
   it('closes with a teardown frame then forgets the memory credential before its force-delete fallback', async () => {

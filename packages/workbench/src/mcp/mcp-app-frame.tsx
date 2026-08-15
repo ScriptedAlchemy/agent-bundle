@@ -113,13 +113,15 @@ const resource = (value: McpAppJsonValue): CanonicalResource => {
   });
 };
 
-const messageForResource = (value: CanonicalResource): RpcMessage => Object.freeze({
+const messageForResource = (frame: McpAppRelayFrame, value: CanonicalResource): RpcMessage => Object.freeze({
   jsonrpc: '2.0',
   method: resourceReadyMethod,
   params: Object.freeze({
-    ...(value.csp === undefined ? {} : { csp: value.csp }),
+    // The proxy accepts its policy only from this server-issued frame.  The
+    // resource declaration is intentionally never relayed as an authority.
+    allow: frame.allow,
+    contentSecurityPolicy: frame.policy.contentSecurityPolicy,
     html: value.html,
-    ...(value.permissions === undefined ? {} : { permissions: value.permissions }),
   }),
 });
 
@@ -201,7 +203,7 @@ export class McpAppFrameRelay {
     if (isProxyReady(message)) {
       if (this.#resourceProvided) return false;
       this.#resourceProvided = true;
-      return this.#post(messageForResource(this.#resource));
+      return this.#post(messageForResource(this.#frame, this.#resource));
     }
     if (!this.#resourceProvided) return false;
     return this.#enqueue(() => this.#deliver(message));
@@ -215,6 +217,26 @@ export class McpAppFrameRelay {
     this.#closeTimer = setTimeout(() => { void this.#forceClose(); }, this.#closeTimeoutMs);
     this.#enqueue(() => this.#beginClose(), true);
     return this.#closePromise;
+  }
+
+  /** Detaches one remounted document without closing the server binding. */
+  detach(): void {
+    if (!this.#listening || this.#state === 'closed') return;
+    this.#window.removeEventListener('message', this.#listener);
+    this.#listening = false;
+    this.#queue.length = 0;
+  }
+
+  /** Delivers authenticated route continuations to the exact current proxy. */
+  deliverHostMessages(messages: readonly McpAppJsonValue[]): boolean {
+    if (this.#state !== 'open' || !this.#listening) return false;
+    try {
+      this.#postAll(messages);
+      return true;
+    } catch (cause) {
+      this.#report(new McpAppFrameRelayError('MCP App consent continuation delivery failed.', cause));
+      return false;
+    }
   }
 
   #enqueue(operation: () => Promise<void>, essential = false): boolean {

@@ -11,6 +11,7 @@ import {
   type McpAppPreviewState,
 } from './mcp-app-preview.tsx';
 import type {
+  McpAppConsentChallenge,
   McpAppHostContext,
   McpAppJsonValue,
   McpAppPreviewProfile,
@@ -306,8 +307,12 @@ const previewProfileName = (state: McpAppPreviewState, fallback: McpAppPreviewPr
 /** Page-owned composition keeps the approved preview close promise ahead of session teardown. */
 const McpPageAppPreview = ({ client, host, onControllerChange, previewProfile, source }: McpPageAppPreviewProps) => {
   const [state, setState] = useState<McpAppPreviewState>(() => Object.freeze({ phase: 'loading' }));
+  const [consentChallenges, setConsentChallenges] = useState<readonly McpAppConsentChallenge[]>(Object.freeze([]));
+  const [consentPending, setConsentPending] = useState<string>();
+  const [blankBarrier, setBlankBarrier] = useState(false);
   const controller = useRef<McpAppPreviewController | undefined>(undefined);
   const iframe = useRef<HTMLIFrameElement>(null);
+  const blankBarrierTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   useEffect(() => {
     const current = createMcpAppPreviewController({
@@ -323,8 +328,21 @@ const McpPageAppPreview = ({ client, host, onControllerChange, previewProfile, s
     controller.current = current;
     onControllerChange(current);
     const unsubscribe = current.subscribe(setState);
-    void current.start();
+    let active = true;
+    const refreshConsent = async (): Promise<void> => {
+      try {
+        const challenges = await current.consentChallenges();
+        if (active) setConsentChallenges(challenges);
+      } catch {
+        if (active) setConsentChallenges(Object.freeze([]));
+      }
+    };
+    void current.start().then(refreshConsent);
+    const poll = setInterval(() => { void refreshConsent(); }, 250);
     return () => {
+      active = false;
+      clearInterval(poll);
+      if (blankBarrierTimer.current !== undefined) clearTimeout(blankBarrierTimer.current);
       unsubscribe();
       if (controller.current === current) controller.current = undefined;
       onControllerChange(undefined);
@@ -333,9 +351,33 @@ const McpPageAppPreview = ({ client, host, onControllerChange, previewProfile, s
   }, [client, host, onControllerChange, previewProfile, source]);
 
   useEffect(() => {
-    if (state.phase !== 'ready' || iframe.current === null || typeof window === 'undefined') return;
+    if (blankBarrier || state.phase !== 'ready' || iframe.current === null || typeof window === 'undefined') return;
     controller.current?.attachFrame(iframe.current, window);
-  }, [state]);
+  }, [blankBarrier, state]);
+
+  const decideConsent = (challenge: McpAppConsentChallenge, approved: boolean): void => {
+    const current = controller.current;
+    if (current === undefined || consentPending !== undefined) return;
+    const previousRevision = current.state.phase === 'ready' ? current.state.preview.frame?.documentPolicy?.revision : undefined;
+    setConsentPending(challenge.id);
+    void current.decideConsent(challenge.id, approved).then(async (accepted) => {
+      if (!accepted) return;
+      const nextRevision = current.state.phase === 'ready' ? current.state.preview.frame?.documentPolicy?.revision : undefined;
+      if (previousRevision !== nextRevision) {
+        setBlankBarrier(true);
+        if (blankBarrierTimer.current !== undefined) clearTimeout(blankBarrierTimer.current);
+        blankBarrierTimer.current = setTimeout(() => {
+          blankBarrierTimer.current = undefined;
+          setBlankBarrier(false);
+        }, 0);
+      }
+      try {
+        setConsentChallenges(await current.consentChallenges());
+      } catch {
+        setConsentChallenges(Object.freeze([]));
+      }
+    }).catch(() => undefined).finally(() => { setConsentPending(undefined); });
+  };
 
   const fallback = state.phase === 'fallback' || state.phase === 'error' ? state.fallback : undefined;
   return <section aria-busy={state.phase === 'loading'} aria-label="MCP App preview" className="mcp-page-app-preview">
@@ -350,8 +392,20 @@ const McpPageAppPreview = ({ client, host, onControllerChange, previewProfile, s
       <details open><summary>Tool input</summary><pre><code>{display(fallback.input)}</code></pre></details>
       <details open><summary>Tool result</summary><pre><code>{display(fallback.result)}</code></pre></details>
     </section>}
+    {consentChallenges.length === 0 ? undefined : <section aria-label="MCP App consent">
+      <h4>App permission requests</h4>
+      <ol>{consentChallenges.map((challenge) => <li key={challenge.id}>
+        <p>{isRecord(challenge.request) && typeof challenge.request.summary === 'string'
+          ? challenge.request.summary
+          : 'Allow this MCP App action?'}</p>
+        <button disabled={consentPending !== undefined} onClick={() => { decideConsent(challenge, true); }} type="button">Allow {isRecord(challenge.request) && typeof challenge.request.capability === 'string' ? challenge.request.capability.replaceAll('-', ' ') : 'action'}</button>
+        <button disabled={consentPending !== undefined} onClick={() => { decideConsent(challenge, false); }} type="button">Deny</button>
+      </li>)}</ol>
+    </section>}
     {state.phase === 'ready' && state.preview.frame !== undefined
-      ? <McpAppPreviewFrame frame={state.preview.frame} iframeRef={iframe} title={`MCP App preview: ${source.toolName}`} />
+      ? blankBarrier
+        ? <iframe key={`blank:${state.preview.frame.documentPolicy?.revision ?? 0}`} ref={iframe} sandbox="" src="about:blank" title={`MCP App preview reload barrier: ${source.toolName}`} />
+        : <McpAppPreviewFrame key={state.preview.frame.documentPolicy?.revision ?? 0} frame={state.preview.frame} iframeRef={iframe} title={`MCP App preview: ${source.toolName}`} />
       : undefined}
   </section>;
 };

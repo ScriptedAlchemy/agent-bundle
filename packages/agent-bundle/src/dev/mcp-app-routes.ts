@@ -4,7 +4,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { McpAppJsonValue, McpAppPreviewProfile } from './mcp-app-binding-service.ts';
 import type { McpAppBridgeCloseOptions, McpAppBridgeJsonRecord, McpAppBridgeLifecycle } from './mcp-app-bridge.ts';
 import type { McpAppPreviewCloseResult, McpAppPreviewHostContext } from './mcp-app-preview-service.ts';
-import type { McpAppConsentChallenge, McpAppConsentGrant } from './mcp-app-sandbox.ts';
+import type { McpAppConsentChallenge } from './mcp-app-sandbox.ts';
 
 const bodyLimit = 64 * 1024;
 
@@ -50,7 +50,7 @@ export interface McpAppRoutePreviewService {
     readonly toolName: string;
   }): Promise<McpAppRoutePreview>;
   consentChallenges?(bindingId: string): readonly McpAppConsentChallenge[] | undefined;
-  decideConsent?(bindingId: string, challengeId: string, approved: boolean): McpAppConsentGrant | undefined;
+  decideConsent?(bindingId: string, challengeId: string, approved: boolean): boolean | Promise<boolean>;
   forceClose(bindingId: string): Promise<boolean>;
   get(bindingId: string): McpAppRoutePreview | undefined;
   receive(bindingId: string, action: unknown): Promise<boolean>;
@@ -265,7 +265,7 @@ const hostContext = (value: unknown): McpAppPreviewHostContext => {
 };
 
 const createRequest = (value: JsonObject, sessionId: string): Parameters<McpAppRoutePreviewService['create']>[0] => {
-  if (!hasOnly(value, ['consent', 'host', 'input', 'previewProfile', 'result', 'toolName']) || !nonemptyString(value.toolName)
+  if (!hasOnly(value, ['host', 'input', 'previewProfile', 'result', 'toolName']) || !nonemptyString(value.toolName)
     || !isJsonValue(value.input) || !isJsonValue(value.result) || (value.previewProfile !== 'portable' && value.previewProfile !== 'chatgpt' && value.previewProfile !== 'claude')) {
     return invalidShape();
   }
@@ -382,8 +382,11 @@ export class McpAppRoutes {
       }
       if (method !== 'POST') return responseDiagnostic(response, diagnostic('AB8007', 'Route does not accept this method.', 405));
       const decision = consentDecision(await jsonBody(request));
-      const grant = service.decideConsent?.(parsed.bindingId, decision.challengeId, decision.approved);
-      return responseJson(response, { approved: grant !== undefined, lifecycle: preview.bridge.lifecycle });
+      const approved = await service.decideConsent?.(parsed.bindingId, decision.challengeId, decision.approved) ?? false;
+      const refreshed = service.get(parsed.bindingId);
+      if (refreshed === undefined) this.#unavailable();
+      const messages = approved ? await service.takeOutbound(parsed.bindingId) : Object.freeze([]);
+      return responseJson(response, { approved, lifecycle: refreshed.bridge.lifecycle, messages, preview: previewSnapshot(refreshed) });
     }
     if (method !== 'POST') return responseDiagnostic(response, diagnostic('AB8007', 'Route does not accept this method.', 405));
     if (parsed.kind === 'close') {

@@ -166,6 +166,8 @@ export interface CreateMcpAppBridgeOptions {
 }
 
 export interface McpAppBridge {
+  /** Completes one server-owned action-consent challenge without exposing its grant to the App. */
+  decideConsent(challengeId: string, approved: boolean): Promise<boolean>;
   readonly lifecycle: McpAppBridgeLifecycle;
   close(options: McpAppBridgeCloseOptions): Promise<void>;
   forceClose(): Promise<void>;
@@ -201,6 +203,13 @@ interface QueuedHostMessage {
   byteLength: number;
   failedSendAttempts: number;
   readonly message: McpAppBridgeMessage;
+}
+
+interface PendingConsentAction {
+  readonly actionDigest: string;
+  readonly capability: McpAppConsentCapability;
+  deny(): boolean;
+  run(): Promise<boolean>;
 }
 
 const defaultTeardownTimeoutMs = 1_000;
@@ -631,11 +640,6 @@ const validToolCall = (params: McpAppJsonValue | undefined): McpAppBridgeToolCal
   return Object.freeze({ ...(record.arguments === undefined ? {} : { arguments: cloneJson(record.arguments) }), name: record.name });
 };
 
-const authorizationId = (params: McpAppJsonValue | undefined): string | undefined => {
-  const record = jsonRecord(params);
-  return record === undefined || record.authorizationId === undefined || !nonempty(record.authorizationId) ? undefined : record.authorizationId;
-};
-
 const validResourceRead = (params: McpAppJsonValue | undefined): McpAppBridgeResourceRead | undefined => {
   const record = jsonRecord(params);
   return record === undefined || !nonempty(record.uri) ? undefined : Object.freeze({ uri: record.uri });
@@ -919,20 +923,8 @@ export const createMcpAppBridge = (options: CreateMcpAppBridgeOptions): McpAppBr
   let finishTeardown: (() => void) | undefined;
   let appDisplayModes: ReadonlySet<McpAppBridgeDisplayMode> | undefined;
   let hostDisplayModes = validDisplayModeList(host.context?.availableDisplayModes);
+  const pendingConsentActions = new Map<string, PendingConsentAction>();
   const isClosed = (): boolean => lifecycle === 'closing' || lifecycle === 'closed';
-  const authorized = (capability: McpAppConsentCapability, details: McpAppJsonValue, params: McpAppJsonValue | undefined): boolean => {
-    if (options.consentAuthority === undefined) return true;
-    const id = authorizationId(params);
-    if (id !== undefined && options.profile !== undefined && options.consentAuthority.consume({
-      actionDigest: createMcpAppConsentActionDigest(capability, details), authorizationId: id,
-      bindingId: binding.id, capability, profile: options.profile,
-    })) return true;
-    if (options.profile !== undefined) options.consentAuthority.challenge({
-      actionDigest: createMcpAppConsentActionDigest(capability, details), bindingId: binding.id,
-      capability, details, profile: options.profile,
-    });
-    return false;
-  };
 
   const hostMessageByteLength = (message: McpAppBridgeMessage): number => Buffer.byteLength(JSON.stringify(message), 'utf8');
 
@@ -1030,6 +1022,7 @@ export const createMcpAppBridge = (options: CreateMcpAppBridgeOptions): McpAppBr
       (released) => {
         if (!released) throw new McpAppBridgeCloseError('binding-close-rejected');
         lifecycle = 'closed';
+        pendingConsentActions.clear();
         queuedHostMessages.length = 0;
         queuedHostMessageBytes = 0;
         if (closeTimer !== undefined) clearTimeout(closeTimer);
@@ -1057,6 +1050,7 @@ export const createMcpAppBridge = (options: CreateMcpAppBridgeOptions): McpAppBr
 
   const failClosedHostTraffic = (): void => {
     lifecycle = 'closing';
+    pendingConsentActions.clear();
     queuedHostMessages.length = 0;
     queuedHostMessageBytes = 0;
     hostTrafficBlocked = false;
@@ -1072,6 +1066,20 @@ export const createMcpAppBridge = (options: CreateMcpAppBridgeOptions): McpAppBr
     return lifecycle === 'initialized' ? emitHost(response) : send(response);
   };
 
+  const requestActionConsent = (
+    capability: McpAppConsentCapability,
+    details: McpAppJsonValue,
+    pending: Omit<PendingConsentAction, 'actionDigest' | 'capability'>,
+  ): Promise<boolean> | boolean => {
+    if (options.consentAuthority === undefined) return pending.run();
+    if (options.profile === undefined) return pending.deny();
+    const actionDigest = createMcpAppConsentActionDigest(capability, details);
+    const challenge = options.consentAuthority.challenge({ actionDigest, bindingId: binding.id, capability, details, profile: options.profile });
+    if (challenge === undefined) return pending.deny();
+    pendingConsentActions.set(challenge.id, Object.freeze({ ...pending, actionDigest, capability }));
+    return true;
+  };
+
   const receiveRequest = async (message: McpAppBridgeMessage): Promise<boolean> => {
     const id = message.id!;
     switch (message.method) {
@@ -1082,14 +1090,18 @@ export const createMcpAppBridge = (options: CreateMcpAppBridgeOptions): McpAppBr
         const request = validToolCall(message.params);
         if (request === undefined) return fail(id, -32602, 'tools/call requires a name and finite JSON arguments.');
         const details = Object.freeze({ ...(request.arguments === undefined ? {} : { arguments: request.arguments }), name: request.name });
-        if (!authorized('call-tool', details, message.params)) return fail(id, -32001, 'tools/call requires an approved consent grant.');
-        try {
-          const result = validToolResult(await options.operations.callTool(binding.id, request));
-          if (result === undefined) return lifecycle === 'initialized' ? fail(id, -32000, 'MCP App tool call returned an invalid result.') : false;
-          return lifecycle === 'initialized' ? respond(id, result) : false;
-        } catch {
-          return lifecycle === 'initialized' ? fail(id, -32000, 'MCP App tool call failed.') : false;
-        }
+        return requestActionConsent('call-tool', details, {
+          deny: () => lifecycle === 'initialized' ? fail(id, -32001, 'tools/call requires an approved consent grant.') : false,
+          run: async () => {
+            try {
+              const result = validToolResult(await options.operations.callTool(binding.id, request));
+              if (result === undefined) return lifecycle === 'initialized' ? fail(id, -32000, 'MCP App tool call returned an invalid result.') : false;
+              return lifecycle === 'initialized' ? respond(id, result) : false;
+            } catch {
+              return lifecycle === 'initialized' ? fail(id, -32000, 'MCP App tool call failed.') : false;
+            }
+          },
+        });
       }
       case 'resources/read': {
         const request = validResourceRead(message.params);
@@ -1105,26 +1117,36 @@ export const createMcpAppBridge = (options: CreateMcpAppBridgeOptions): McpAppBr
       case 'ui/open-link': {
         const url = validOpenLink(message.params);
         if (url === undefined) return fail(id, -32602, 'ui/open-link requires an http: or https: URL.');
-        if (!authorized('open-external-link', Object.freeze({ url }), message.params)) return fail(id, -32001, 'ui/open-link requires an approved consent grant.');
-        if (host.onOpenLink === undefined) return fail(id, -32601, 'ui/open-link is not supported by this host.');
-        try {
-          await host.onOpenLink(url);
-          return lifecycle === 'initialized' ? respond(id, {}) : false;
-        } catch {
-          return lifecycle === 'initialized' ? fail(id, -32000, 'ui/open-link was denied by this host.') : false;
-        }
+        const onOpenLink = host.onOpenLink;
+        if (onOpenLink === undefined) return fail(id, -32601, 'ui/open-link is not supported by this host.');
+        return requestActionConsent('open-external-link', Object.freeze({ url }), {
+          deny: () => lifecycle === 'initialized' ? fail(id, -32001, 'ui/open-link requires an approved consent grant.') : false,
+          run: async () => {
+            try {
+              await onOpenLink(url);
+              return lifecycle === 'initialized' ? respond(id, {}) : false;
+            } catch {
+              return lifecycle === 'initialized' ? fail(id, -32000, 'ui/open-link was denied by this host.') : false;
+            }
+          },
+        });
       }
       case 'ui/download-file': {
         const download = validateMcpAppDownloadRequest(message.params);
         if (download === undefined) return fail(id, -32602, 'ui/download-file requires bounded valid MCP content blocks.');
-        if (!authorized('download-file', Object.freeze({ contents: download.contents }), message.params)) return fail(id, -32001, 'ui/download-file requires an approved consent grant.');
-        if (host.onDownload === undefined) return fail(id, -32601, 'ui/download-file is not supported by this host.');
-        try {
-          await host.onDownload(download);
-          return lifecycle === 'initialized' ? respond(id, {}) : false;
-        } catch {
-          return lifecycle === 'initialized' ? fail(id, -32000, 'ui/download-file was denied by this host.') : false;
-        }
+        const onDownload = host.onDownload;
+        if (onDownload === undefined) return fail(id, -32601, 'ui/download-file is not supported by this host.');
+        return requestActionConsent('download-file', Object.freeze({ contents: download.contents }), {
+          deny: () => lifecycle === 'initialized' ? fail(id, -32001, 'ui/download-file requires an approved consent grant.') : false,
+          run: async () => {
+            try {
+              await onDownload(download);
+              return lifecycle === 'initialized' ? respond(id, {}) : false;
+            } catch {
+              return lifecycle === 'initialized' ? fail(id, -32000, 'ui/download-file was denied by this host.') : false;
+            }
+          },
+        });
       }
       case 'ui/message': {
         const event = validMessage(message.params);
@@ -1142,20 +1164,27 @@ export const createMcpAppBridge = (options: CreateMcpAppBridgeOptions): McpAppBr
       case 'ui/request-display-mode': {
         const mode = validDisplayMode(message.params);
         if (mode === undefined) return fail(id, -32602, 'ui/request-display-mode requires a supported display mode.');
-        if (appDisplayModes === undefined || !appDisplayModes.has(mode)) return fail(id, -32602, 'ui/request-display-mode must be declared by the App.');
-        if (hostDisplayModes === undefined || !hostDisplayModes.includes(mode)) return fail(id, -32602, 'ui/request-display-mode is not available from this host.');
-        if (host.onDisplayMode === undefined) return fail(id, -32601, 'ui/request-display-mode is not supported by this host.');
-        if (!authorized('request-display-mode', Object.freeze({ mode }), message.params)) return fail(id, -32001, 'ui/request-display-mode requires an approved consent grant.');
-        try {
-          const actual = await host.onDisplayMode(mode);
-          if (lifecycle !== 'initialized') return false;
-          if (!appDisplayModes.has(actual) || !hostDisplayModes.includes(actual)) {
-            return fail(id, -32000, 'Host returned a display mode outside the negotiated declarations.');
-          }
-          return respond(id, { mode: actual });
-        } catch {
-          return lifecycle === 'initialized' ? fail(id, -32000, 'ui/request-display-mode was denied by this host.') : false;
-        }
+        const supportedByApp = appDisplayModes;
+        const supportedByHost = hostDisplayModes;
+        const onDisplayMode = host.onDisplayMode;
+        if (supportedByApp === undefined || !supportedByApp.has(mode)) return fail(id, -32602, 'ui/request-display-mode must be declared by the App.');
+        if (supportedByHost === undefined || !supportedByHost.includes(mode)) return fail(id, -32602, 'ui/request-display-mode is not available from this host.');
+        if (onDisplayMode === undefined) return fail(id, -32601, 'ui/request-display-mode is not supported by this host.');
+        return requestActionConsent('request-display-mode', Object.freeze({ mode }), {
+          deny: () => lifecycle === 'initialized' ? fail(id, -32001, 'ui/request-display-mode requires an approved consent grant.') : false,
+          run: async () => {
+            try {
+              const actual = await onDisplayMode(mode);
+              if (lifecycle !== 'initialized') return false;
+              if (!supportedByApp.has(actual) || !supportedByHost.includes(actual)) {
+                return fail(id, -32000, 'Host returned a display mode outside the negotiated declarations.');
+              }
+              return respond(id, { mode: actual });
+            } catch {
+              return lifecycle === 'initialized' ? fail(id, -32000, 'ui/request-display-mode was denied by this host.') : false;
+            }
+          },
+        });
       }
       case 'ui/update-model-context': {
         const context = validModelContext(message.params);
@@ -1174,6 +1203,22 @@ export const createMcpAppBridge = (options: CreateMcpAppBridgeOptions): McpAppBr
   };
 
   return Object.freeze({
+    async decideConsent(challengeId: string, approved: boolean): Promise<boolean> {
+      const pending = pendingConsentActions.get(challengeId);
+      if (pending === undefined || options.consentAuthority === undefined || options.profile === undefined) return false;
+      pendingConsentActions.delete(challengeId);
+      const grant = options.consentAuthority.grant(challengeId, approved);
+      if (grant === undefined) return approved ? false : pending.deny();
+      if (grant.scope !== 'action' || grant.bindingId !== binding.id || grant.capability !== pending.capability
+        || !options.consentAuthority.consume({
+          actionDigest: pending.actionDigest,
+          authorizationId: grant.authorizationId,
+          bindingId: binding.id,
+          capability: pending.capability,
+          profile: options.profile,
+        })) return false;
+      return pending.run();
+    },
     get lifecycle(): McpAppBridgeLifecycle {
       return lifecycle;
     },
@@ -1184,9 +1229,11 @@ export const createMcpAppBridge = (options: CreateMcpAppBridgeOptions): McpAppBr
       }
       if (lifecycle !== 'initialized') {
         lifecycle = 'closing';
+        pendingConsentActions.clear();
         return rememberClose(releaseBinding());
       }
       lifecycle = 'closing';
+      pendingConsentActions.clear();
       hasTeardownId = true;
       teardownId = closeOptions.id;
       const complete = (): void => finishTeardown?.();
@@ -1209,6 +1256,7 @@ export const createMcpAppBridge = (options: CreateMcpAppBridgeOptions): McpAppBr
         return closePromise;
       }
       lifecycle = 'closing';
+      pendingConsentActions.clear();
       return rememberClose(releaseBinding());
     },
     flushHostTraffic(): boolean {
@@ -1341,6 +1389,30 @@ export const createMcpAppBridge = (options: CreateMcpAppBridgeOptions): McpAppBr
           terminalQueued = true;
         }
         flush();
+        return true;
+      }
+      if (isInitialize(message)) {
+        if (!validInitialize(message.params)) return fail(message.id!, -32602, `ui/initialize requires protocol version ${MCP_APP_PROTOCOL_VERSION}.`);
+        const sent = respond(message.id!, {
+          hostCapabilities: host.capabilities!,
+          hostContext: host.context!,
+          hostInfo: { name: host.info.name, version: host.info.version },
+          protocolVersion: MCP_APP_PROTOCOL_VERSION,
+        });
+        if (!sent) return false;
+        const initializedParams = jsonRecord(message.params)!;
+        const capabilities = jsonRecord(initializedParams.appCapabilities)!;
+        appDisplayModes = Array.isArray(capabilities.availableDisplayModes)
+          ? new Set(capabilities.availableDisplayModes as readonly McpAppBridgeDisplayMode[])
+          : undefined;
+        // A document-policy revision replaces the sandbox document.  Its
+        // first data frames must belong solely to that newly initialized App.
+        queuedHostMessages.length = 0;
+        queuedHostMessageBytes = 0;
+        hostTrafficBlocked = false;
+        inputQueued = false;
+        terminalQueued = false;
+        lifecycle = 'initializing';
         return true;
       }
       if (message.method === 'notifications/message') {

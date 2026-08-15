@@ -110,9 +110,9 @@ describe('MCP App frame relay', () => {
         jsonrpc: '2.0',
         method: 'ui/notifications/sandbox-resource-ready',
         params: {
-          csp: { connectDomains: ['https://api.example.test'] },
+          allow: '',
+          contentSecurityPolicy: "default-src 'none'",
           html: '<main>Weather</main>',
-          permissions: { clipboardWrite: {} },
         },
       },
       targetOrigin: 'http://127.0.0.1:43124',
@@ -153,6 +153,22 @@ describe('MCP App frame relay', () => {
       { message: { id: 'one', jsonrpc: '2.0', result: { ready: 1 } }, targetOrigin: frame.targetOrigin },
       { message: { id: 'two', jsonrpc: '2.0', result: { ready: 2 } }, targetOrigin: frame.targetOrigin },
     ]);
+  });
+
+  it('delivers an authenticated consent continuation only to its current proxy window', () => {
+    const browser = fakeBrowser();
+    const relay = createMcpAppFrameRelay({
+      bindingId: 'binding-weather', frame, iframe: browser.iframe, resource,
+      routes: { close: async () => closeResult(), forceClose: async () => true, message: async () => messageResult() },
+      window: browser.window,
+    });
+    relay.start();
+    expect(relay.deliverHostMessages([{ id: 'action-1', jsonrpc: '2.0', result: { continued: true } }])).toBe(true);
+    expect(browser.child.posts).toEqual([{
+      message: { id: 'action-1', jsonrpc: '2.0', result: { continued: true } }, targetOrigin: frame.targetOrigin,
+    }]);
+    relay.detach();
+    expect(relay.deliverHostMessages([{ id: 'late', jsonrpc: '2.0', result: {} }])).toBe(false);
   });
 
   it('waits for the trusted teardown acknowledgement before releasing the route and never processes further frames', async () => {
