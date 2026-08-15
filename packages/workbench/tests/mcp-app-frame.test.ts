@@ -292,4 +292,91 @@ describe('MCP App frame relay', () => {
 
     expect(closeCalls).toBe(1);
   });
+
+  it('makes repeated unmount cleanup a resolved no-op after the route has already closed the binding', async () => {
+    const browser = fakeBrowser();
+    let closeCalls = 0;
+    let forceCloseCalls = 0;
+    const routes: McpAppFrameRelayRoutes = {
+      close: async () => {
+        closeCalls += 1;
+        return closeResult(undefined, 'closed');
+      },
+      forceClose: async () => {
+        forceCloseCalls += 1;
+        return true;
+      },
+      message: async () => messageResult([], 'closed'),
+    };
+    const relay = createMcpAppFrameRelay({ bindingId: 'binding-weather', frame, iframe: browser.iframe, resource, routes, window: browser.window });
+    relay.start();
+    relay.receive({ data: proxyReady(), origin: frame.targetOrigin, source: browser.child });
+    expect(relay.receive({ data: { id: 'route-closed', jsonrpc: '2.0', method: 'ping' }, origin: frame.targetOrigin, source: browser.child })).toBe(true);
+    await eventually(() => relay.state === 'closed');
+
+    await relay.close();
+    await relay.close();
+
+    expect(closeCalls).toBe(0);
+    expect(forceCloseCalls).toBe(0);
+  });
+
+  it('force-deletes a binding when already accepted relay traffic never settles during unmount cleanup', async () => {
+    const browser = fakeBrowser();
+    const hung = deferred<McpAppRouteMessages>();
+    let closeCalls = 0;
+    let forceCloseCalls = 0;
+    const routes: McpAppFrameRelayRoutes = {
+      close: async () => {
+        closeCalls += 1;
+        return closeResult(undefined, 'closed');
+      },
+      forceClose: async () => {
+        forceCloseCalls += 1;
+        return true;
+      },
+      message: async () => hung.promise,
+    };
+    const relay = createMcpAppFrameRelay({ bindingId: 'binding-weather', closeTimeoutMs: 5, frame, iframe: browser.iframe, resource, routes, window: browser.window });
+    relay.start();
+    relay.receive({ data: proxyReady(), origin: frame.targetOrigin, source: browser.child });
+    expect(relay.receive({ data: { id: 'hung', jsonrpc: '2.0', method: 'ping' }, origin: frame.targetOrigin, source: browser.child })).toBe(true);
+    const closing = relay.close();
+
+    await eventually(() => forceCloseCalls === 1);
+    await closing;
+
+    expect(closeCalls).toBe(0);
+  });
+
+  it('collapses delivery-failure and timeout fallback into one force-delete attempt', async () => {
+    const browser = fakeBrowser();
+    const forced = deferred<boolean>();
+    let closeCalls = 0;
+    let forceCloseCalls = 0;
+    const routes: McpAppFrameRelayRoutes = {
+      close: async (_bindingId, options) => {
+        closeCalls += 1;
+        return closeResult({ id: options.id, jsonrpc: '2.0', method: 'ui/resource-teardown', params: {} });
+      },
+      forceClose: async () => {
+        forceCloseCalls += 1;
+        return forced.promise;
+      },
+      message: async () => { throw new Error('teardown acknowledgement was not delivered'); },
+    };
+    const relay = createMcpAppFrameRelay({ bindingId: 'binding-weather', closeTimeoutMs: 20, frame, iframe: browser.iframe, resource, routes, window: browser.window });
+    relay.start();
+    relay.receive({ data: proxyReady(), origin: frame.targetOrigin, source: browser.child });
+    const closing = relay.close();
+    await eventually(() => closeCalls === 1);
+    const id = 'mcp-app-frame-close:binding-weather';
+    browser.emit({ data: { id, jsonrpc: '2.0', result: {} }, origin: frame.targetOrigin, source: browser.child });
+    await eventually(() => forceCloseCalls === 1);
+    await new Promise<void>((resolve) => setTimeout(resolve, 30));
+    expect(forceCloseCalls).toBe(1);
+
+    forced.resolve(true);
+    await closing;
+  });
 });
