@@ -1,5 +1,10 @@
 import type { Diagnostic } from '../core/diagnostics.ts';
-import type { CanonicalHookEvent, NormalizedHook, NormalizedPlugin } from '../core/types.ts';
+import type {
+  AgentBundleConfig,
+  CanonicalHookEvent,
+  NormalizedHook,
+  NormalizedPlugin,
+} from '../core/types.ts';
 
 export interface TargetArtifactWrite {
   readonly content: string;
@@ -65,6 +70,7 @@ export interface TargetAdapter {
   readonly metadata: TargetAdapterMetadata;
   readonly mcpPathTokens?: McpPathTokenCapabilities;
   readonly name: string;
+  nativeHookSource?(config: Readonly<AgentBundleConfig>): string | undefined;
   plan(model: NormalizedPlugin): TargetArtifactPlan;
   validateModel(model: NormalizedPlugin): Diagnostic[];
 }

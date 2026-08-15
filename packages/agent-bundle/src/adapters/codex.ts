@@ -411,6 +411,7 @@ export const codexAdapter: TargetAdapter = Object.freeze({
     env: Object.freeze({}),
   }),
   name: codexName,
+  nativeHookSource: (config) => config.codex?.nativeHooks,
   plan,
   validateModel: (model: NormalizedPlugin) => [...plan(model).diagnostics],
 });

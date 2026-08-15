@@ -322,6 +322,7 @@ export const claudeAdapter: TargetAdapter = Object.freeze({
     }),
   }),
   name: claudeName,
+  nativeHookSource: (config) => config.claude?.nativeHooks,
   plan,
   validateModel: (model: NormalizedPlugin) => [...plan(model).diagnostics],
 });
