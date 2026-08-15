@@ -11,16 +11,6 @@ import type {
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 
 import type { McpBrowserSessionModel, McpBrowserSessionTimelineEntry } from '../../mcp/mcp-session-model.ts';
-import type { McpSessionControllerRequest } from '../../mcp/mcp-session-controller.ts';
-import type { LogEntryData } from '../vendor/clients/web/src/components/elements/LogEntry/LogEntry.tsx';
-import type { SortDirection } from '../vendor/clients/web/src/components/elements/SortToggle/SortToggle.tsx';
-import { LoggingScreen, type LogsUiState } from '../vendor/clients/web/src/components/screens/LoggingScreen/LoggingScreen.tsx';
-import { ALL_LEVELS_VISIBLE } from '../vendor/clients/web/src/components/screens/LoggingScreen/logLevels.ts';
-import { PromptsScreen, type GetPromptState, type PromptsUiState } from '../vendor/clients/web/src/components/screens/PromptsScreen/PromptsScreen.tsx';
-import { ProtocolScreen, type ProtocolUiState } from '../vendor/clients/web/src/components/screens/ProtocolScreen/ProtocolScreen.tsx';
-import { ResourcesScreen, type ReadResourceState, type ResourcesUiState } from '../vendor/clients/web/src/components/screens/ResourcesScreen/ResourcesScreen.tsx';
-import { ToolsScreen, type ToolCallState, type ToolsUiState } from '../vendor/clients/web/src/components/screens/ToolsScreen/ToolsScreen.tsx';
-import type { MessageEntry } from '../vendor/core/mcp/types.ts';
 import { clearScrollMemory } from '../vendor/clients/web/src/hooks/useScrollMemory.ts';
 import {
   inspectorLogEntries,
@@ -29,6 +19,7 @@ import {
   inspectorSessionTabs,
   type InspectorTab,
 } from './inspector-session-adapter-model.ts';
+import { LoggingScreen, PromptsScreen, ProtocolScreen, ResourcesScreen, ToolsScreen } from './vendor-screens.jsx';
 
 export {
   inspectorLogEntries,
@@ -39,7 +30,7 @@ export {
 
 export interface InspectorSessionAdapterController {
   cancel(id: string): boolean;
-  invoke(input: McpSessionControllerRequest): Promise<unknown>;
+  invoke(input: InspectorSessionControllerRequest): Promise<unknown>;
 }
 
 export interface InspectorSessionAdapterProps {
@@ -47,6 +38,65 @@ export interface InspectorSessionAdapterProps {
   readonly initialTab?: InspectorTab;
   readonly model: McpBrowserSessionModel;
   readonly onExportTrace?: (entries: readonly McpBrowserSessionTimelineEntry[]) => void;
+}
+
+type SortDirection = 'oldest-first' | 'newest-first';
+
+type InspectorSessionOperation = 'callTool' | 'getPrompt' | 'listPrompts' | 'listResources' | 'listTools' | 'readResource';
+
+interface InspectorSessionControllerRequest {
+  readonly id: string;
+  readonly operation: InspectorSessionOperation;
+  readonly request: Readonly<Record<string, unknown>>;
+}
+
+interface ToolsUiState {
+  readonly formValues: Record<string, unknown>;
+  readonly runAsTask: boolean;
+  readonly search: string;
+  readonly selectedToolName?: string;
+}
+
+interface ResourcesUiState {
+  readonly search: string;
+  readonly selectedResourceUri?: string;
+  readonly selectedTemplateUri?: string;
+}
+
+interface PromptsUiState {
+  readonly argumentValues: Record<string, string>;
+  readonly search: string;
+  readonly selectedPromptName?: string;
+}
+
+interface ProtocolUiState {
+  readonly search: string;
+  readonly visibleDirections: Readonly<Record<'client' | 'server', boolean>>;
+}
+
+interface LogsUiState {
+  readonly filterText: string;
+  readonly visibleLevels: Readonly<Record<LoggingLevel, boolean>>;
+}
+
+interface ToolCallState {
+  readonly error?: string;
+  readonly result?: CallToolResult;
+  readonly status: 'idle' | 'pending' | 'ok' | 'error';
+}
+
+interface ReadResourceState {
+  readonly error?: string;
+  readonly result?: unknown;
+  readonly status: 'idle' | 'pending' | 'ok' | 'error';
+  readonly uri?: string;
+}
+
+interface GetPromptState {
+  readonly error?: string;
+  readonly promptName?: string;
+  readonly result?: GetPromptResult;
+  readonly status: 'idle' | 'pending' | 'ok' | 'error';
 }
 
 const emptyPagination = {
@@ -64,7 +114,10 @@ const initialProtocolUi: ProtocolUiState = {
   search: '',
   visibleDirections: { client: true, server: true },
 };
-const initialLogsUi: LogsUiState = { filterText: '', visibleLevels: ALL_LEVELS_VISIBLE };
+const initialLogsUi: LogsUiState = {
+  filterText: '',
+  visibleLevels: { alert: true, critical: true, debug: true, emergency: true, error: true, info: true, notice: true, warning: true },
+};
 
 export const agentBundleInspectorTheme = createTheme({
   defaultRadius: 'sm',
@@ -73,10 +126,6 @@ export const agentBundleInspectorTheme = createTheme({
 });
 
 const operationError = (reason: unknown): string => reason instanceof Error ? reason.message : 'The Inspector operation failed.';
-
-const unavailableRawFrameReplay = (): never => {
-  throw new Error('Raw JSON-RPC frame replay is unavailable because W13 only replays artifact-bound controller invocations.');
-};
 
 export const InspectorSessionAdapter = ({ controller, initialTab = 'tools', model, onExportTrace }: InspectorSessionAdapterProps) => {
   const bindingKey = inspectorSessionBindingKey(model.binding);
@@ -96,9 +145,10 @@ export const InspectorSessionAdapter = ({ controller, initialTab = 'tools', mode
   const [pinnedIds, setPinnedIds] = useState<Set<string>>(() => new Set());
   const [protocolCleared, setProtocolCleared] = useState(false);
   const [loggingCleared, setLoggingCleared] = useState(false);
-  const [loggingLevel, setLoggingLevel] = useState<LoggingLevel>('info');
+  const [loggingDiagnostic, setLoggingDiagnostic] = useState('Log-level changes are unavailable because this W13 session does not expose logging/setLevel.');
   const [sortDirection, setSortDirection] = useState<SortDirection>('oldest-first');
   const [compact, setCompact] = useState(false);
+  const [protocolReplayUnavailable, setProtocolReplayUnavailable] = useState(false);
 
   useEffect(() => {
     if (previousBindingKey.current === bindingKey) return;
@@ -117,7 +167,8 @@ export const InspectorSessionAdapter = ({ controller, initialTab = 'tools', mode
     setPinnedIds(new Set());
     setProtocolCleared(false);
     setLoggingCleared(false);
-    setLoggingLevel('info');
+    setLoggingDiagnostic('Log-level changes are unavailable because this W13 session does not expose logging/setLevel.');
+    setProtocolReplayUnavailable(false);
   }, [bindingKey]);
 
   const protocolEntries = useMemo(() => inspectorProtocolEntries(model.timeline.entries), [model.timeline.entries]);
@@ -129,12 +180,12 @@ export const InspectorSessionAdapter = ({ controller, initialTab = 'tools', mode
   const displayedProtocol = protocolCleared ? [] : protocolEntries;
   const displayedLogs = loggingCleared ? [] : loggingEntries;
 
-  const nextRequest = (operation: McpSessionControllerRequest['operation'], request: Readonly<Record<string, unknown>>): McpSessionControllerRequest => {
+  const nextRequest = (operation: InspectorSessionOperation, request: Readonly<Record<string, unknown>>): InspectorSessionControllerRequest => {
     requestNumber.current += 1;
     return { id: `inspector-${model.sessionId}-${requestNumber.current}`, operation, request };
   };
 
-  const run = (operation: McpSessionControllerRequest['operation'], request: Readonly<Record<string, unknown>>): Promise<unknown> =>
+  const run = (operation: InspectorSessionOperation, request: Readonly<Record<string, unknown>>): Promise<unknown> =>
     controller.invoke(nextRequest(operation, request));
 
   const runTool = (name: string, args: Record<string, unknown>): void => {
@@ -169,7 +220,7 @@ export const InspectorSessionAdapter = ({ controller, initialTab = 'tools', mode
     });
   };
 
-  const refresh = (operation: McpSessionControllerRequest['operation']): void => { void run(operation, {}); };
+  const refresh = (operation: InspectorSessionOperation): void => { void run(operation, {}); };
   const negotiatedProtocol = model.connection?.protocolVersion ?? 'Not negotiated';
 
   return <MantineProvider theme={agentBundleInspectorTheme}>
@@ -230,15 +281,15 @@ export const InspectorSessionAdapter = ({ controller, initialTab = 'tools', mode
       /> : undefined}
       {tab === 'protocol' ? <ProtocolScreen
         compact={compact}
-        entries={displayedProtocol as unknown as MessageEntry[]}
+        entries={displayedProtocol}
         onClearAll={() => setProtocolCleared(true)}
-        onClearSection={(section) => section === 'history' ? setProtocolCleared(true) : setPinnedIds(new Set())}
+        onClearSection={(section: 'history' | 'pinned') => section === 'history' ? setProtocolCleared(true) : setPinnedIds(new Set())}
         onExport={() => onExportTrace?.(model.timeline.entries)}
         onExportSection={() => onExportTrace?.(model.timeline.entries)}
-        onReplay={unavailableRawFrameReplay}
+        onReplay={() => setProtocolReplayUnavailable(true)}
         onSortChange={setSortDirection}
         onToggleCompact={() => setCompact((value) => !value)}
-        onTogglePin={(id) => setPinnedIds((current) => {
+        onTogglePin={(id: string) => setPinnedIds((current) => {
           const next = new Set(current);
           if (next.has(id)) next.delete(id); else next.add(id);
           return next;
@@ -248,17 +299,22 @@ export const InspectorSessionAdapter = ({ controller, initialTab = 'tools', mode
         sortDirection={sortDirection}
         ui={protocolUi}
       /> : undefined}
-      {tab === 'logging' ? <LoggingScreen
-        currentLevel={loggingLevel}
-        entries={displayedLogs as unknown as LogEntryData[]}
-        onClear={() => setLoggingCleared(true)}
-        onExport={() => onExportTrace?.(model.timeline.entries)}
-        onSetLevel={setLoggingLevel}
-        onSortChange={setSortDirection}
-        onUiChange={setLogsUi}
-        sortDirection={sortDirection}
-        ui={logsUi}
-      /> : undefined}
+      {protocolReplayUnavailable ? <p role="status">Replay is unavailable for raw W13 trace frames.</p> : undefined}
+      {tab === 'logging' ? <section aria-label="Logging inspector">
+        <p role="note">{loggingDiagnostic}</p>
+        <LoggingScreen
+          currentLevel={'info' as LoggingLevel}
+          embedded
+          entries={displayedLogs}
+          onClear={() => setLoggingCleared(true)}
+          onExport={() => onExportTrace?.(model.timeline.entries)}
+          onSetLevel={() => setLoggingDiagnostic('Log-level changes remain unavailable because this W13 session does not expose logging/setLevel.')}
+          onSortChange={setSortDirection}
+          onUiChange={setLogsUi}
+          sortDirection={sortDirection}
+          ui={logsUi}
+        />
+      </section> : undefined}
     </section>
   </MantineProvider>;
 };

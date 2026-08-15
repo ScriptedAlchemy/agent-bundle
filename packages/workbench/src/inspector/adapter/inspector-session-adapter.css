@@ -1,8 +1,3 @@
 .inspector-session-adapter {
   min-width: 0;
 }
-
-/* W13 can replay recorded controller invocations, never arbitrary raw frames. */
-.inspector-session-adapter [aria-label='Replay'] {
-  display: none;
-}
