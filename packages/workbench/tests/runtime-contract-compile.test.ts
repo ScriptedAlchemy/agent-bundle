@@ -22,6 +22,14 @@ import type {
 } from '../../agent-bundle/src/dev/runtime-protocol.ts';
 import { ForegroundRouteClient } from '../src/mcp/mcp-route-client.ts';
 import { RuntimeClient, RuntimeClientError, type RuntimeBootstrap } from '../src/runtime-client.ts';
+import {
+  createRuntimeModel,
+  effectFor,
+  reduceRuntimeModel,
+  type RuntimeModel,
+  type RuntimePendingEffect,
+  type RuntimeProfileOption,
+} from '../src/runtime-model.ts';
 
 const vector = {
   artifactEpochId: 'epoch-a',
@@ -147,11 +155,31 @@ const runResponse = { run } satisfies DevRuntimeRunResponse;
 const runsResponse = { providerSessionId: 'provider-a', runs: [run] } satisfies DevRuntimeRunsResponse;
 const stateResponse = { state } satisfies DevRuntimeStateResponse;
 
+const profiles = [{
+  claimsRealHostParity: false,
+  evidence: 'simulated',
+  id: 'portable',
+  label: 'Portable',
+  version: '1',
+}] satisfies readonly RuntimeProfileOption[];
+
+const runtimeBootstrap = {
+  history: [run],
+  kind: 'available',
+  providerSessionId: 'provider-a',
+  status,
+  surfaces: [surface],
+} satisfies RuntimeBootstrap;
+
 it('compiles RuntimeClient against the exact provider wire contract', () => {
   const foreground = new ForegroundRouteClient({ fetch: async () => Response.json(statusResponse) });
   const client: RuntimeClient = new RuntimeClient(foreground);
   const bootstrap: Promise<RuntimeBootstrap> = client.bootstrap();
   const error: RuntimeClientError = new RuntimeClientError({ code: 'AB8204', message: 'Generation changed.', phase: 'provider-lifecycle' });
+  const runtimeModel: RuntimeModel = createRuntimeModel({ bootstrap: runtimeBootstrap, profiles });
+  const requested = reduceRuntimeModel(runtimeModel, { type: 'run.request' });
+  const confirmed = reduceRuntimeModel(requested, { type: 'confirmation.confirm' });
+  const effect: RuntimePendingEffect | undefined = effectFor(confirmed);
 
   expect({
     asset,
@@ -160,10 +188,12 @@ it('compiles RuntimeClient against the exact provider wire contract', () => {
     invocation,
     replay,
     reset,
+    runtimeModel,
     runResponse,
     runsResponse,
     stateResponse,
     statusResponse,
     surfacesResponse,
+    effect,
   }).toBeDefined();
 });
