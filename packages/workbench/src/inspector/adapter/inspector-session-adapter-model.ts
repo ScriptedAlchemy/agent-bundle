@@ -1,4 +1,5 @@
 import type { McpSessionTraceEntry } from '../../../../agent-bundle/src/dev/mcp-session-protocol.ts';
+import type { DevRuntimeDiagnostic, DevRuntimeInspectionEnvelope, DevRuntimeTraceSpan } from '../../../../agent-bundle/src/dev/runtime-protocol.ts';
 import type { McpBrowserSessionModel, McpBrowserSessionTimelineEntry } from '../../mcp/mcp-session-model.ts';
 
 export type InspectorTab = 'tools' | 'resources' | 'prompts' | 'protocol' | 'logging';
@@ -17,6 +18,11 @@ export interface InspectorLogEntry {
   readonly receivedAt: Date;
   readonly sequence: number;
 }
+
+export type InspectorRuntimeEvidenceInput =
+  | Readonly<{ readonly kind: 'protocol'; readonly protocol?: DevRuntimeInspectionEnvelope['protocol']; readonly trace: readonly DevRuntimeTraceSpan[] }>
+  | Readonly<{ readonly diagnostics: readonly DevRuntimeDiagnostic[]; readonly kind: 'diagnostics' }>
+  | Readonly<{ readonly kind: 'trace'; readonly trace: readonly DevRuntimeTraceSpan[] }>;
 
 type FrameTraceEntry = McpSessionTraceEntry & Readonly<{
   readonly direction: 'client' | 'server';

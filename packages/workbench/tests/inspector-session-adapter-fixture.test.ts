@@ -59,6 +59,7 @@ describe('Inspector session adapter production fixture', () => {
       expect(errors).toEqual([]);
 
       await page.getByText('fixture-tool', { exact: true }).waitFor({ timeout: 5_000 });
+      await page.getByText('Render trace', { exact: true }).waitFor({ timeout: 5_000 });
       for (const [label, expected] of [
         ['Resources', 'fixture-resource'],
         ['Prompts', 'fixture-prompt'],
@@ -76,6 +77,8 @@ describe('Inspector session adapter production fixture', () => {
       expect(await page.locator('link[rel="stylesheet"]').count()).toBeGreaterThan(0);
       expect(await page.locator('[aria-label="Replay"]').count()).toBe(0);
       expect(await page.getByText('Set Active Level', { exact: true }).count()).toBe(0);
+      const runtimeTrace = await page.locator('[aria-label="Runtime render trace"]').textContent();
+      expect(runtimeTrace!.indexOf('rsc-render')).toBeLessThan(runtimeTrace!.indexOf('flight-decode'));
       expect(errors).toEqual([]);
     } finally {
       await browser.close();

@@ -1,3 +1,4 @@
+import { createElement } from 'react';
 import { expect, it } from '@rstest/core';
 
 import type {
@@ -21,7 +22,12 @@ import type {
   RuntimeVector,
 } from '../../agent-bundle/src/dev/runtime-protocol.ts';
 import { ForegroundRouteClient } from '../src/mcp/mcp-route-client.ts';
+import { McpAppPreview, type McpAppPreviewClient, type McpAppPreviewProps } from '../src/mcp/mcp-app-preview.tsx';
+import type { McpJsonInputProps } from '../src/mcp/mcp-json-input.tsx';
+import { McpProtocolEvidence, type McpProtocolEvidenceProps } from '../src/mcp/mcp-page.tsx';
+import type { InspectorRuntimeEvidenceProps } from '../src/inspector/adapter/inspector-session-adapter-entry.ts';
 import { RuntimeClient, RuntimeClientError, type RuntimeBootstrap } from '../src/runtime-client.ts';
+import type { RuntimeInspectorProps } from '../src/runtime-inspector.tsx';
 import {
   createRuntimeModel,
   effectFor,
@@ -30,6 +36,7 @@ import {
   type RuntimePendingEffect,
   type RuntimeProfileOption,
 } from '../src/runtime-model.ts';
+import type { RuntimeAppPreviewRenderer, RuntimeStageProps } from '../src/runtime-stage.tsx';
 
 const vector = {
   artifactEpochId: 'epoch-a',
@@ -163,6 +170,34 @@ const profiles = [{
   version: '1',
 }] satisfies readonly RuntimeProfileOption[];
 
+const appClient = {
+  close: async () => ({ lifecycle: 'closed' as const }),
+  create: async () => ({ bindingId: 'binding-a', profile: { kind: 'apps', profile: 'portable', resourceUri: 'ui://weather/app.html' }, resource: { html: '<main>Weather</main>', kind: 'resource' } }),
+  forceClose: async () => true,
+  message: async () => ({ accepted: true, lifecycle: 'initialized' as const, messages: [] }),
+} satisfies McpAppPreviewClient;
+
+const appPreviewFixture = Object.freeze({
+  client: appClient,
+  host: {
+    availableDisplayModes: ['inline'], containerDimensions: { height: 0, width: 0 }, deviceCapabilities: {}, displayMode: 'inline', locale: 'en', platform: 'web', safeAreaInsets: { bottom: 0, left: 0, right: 0, top: 0 }, styles: {}, theme: 'light' as const, timeZone: 'UTC', userAgent: 'contract-test',
+  },
+  input: Object.freeze({ city: 'London' }),
+  previewProfile: 'portable' as const,
+  result: Object.freeze({ content: [] }),
+  sessionId: 'session-a',
+  toolName: 'weather',
+}) satisfies McpAppPreviewProps;
+
+const appPreviewRenderer: RuntimeAppPreviewRenderer = () => createElement(McpAppPreview, appPreviewFixture);
+const controlledInput: McpJsonInputProps = {
+  id: 'runtime-input', label: 'Runtime input', onChange: () => undefined, onRawDraftChange: () => undefined, onSubmit: () => undefined, rawDraft: '{"city":', value: { city: 'London' },
+};
+const protocolEvidence: McpProtocolEvidenceProps = { ariaLabel: 'Provider protocol', protocol: inspection.protocol, trace: [trace] };
+const inspectorEvidence: InspectorRuntimeEvidenceProps = { evidence: { kind: 'protocol', protocol: inspection.protocol, trace: [trace] } };
+const stageProps: RuntimeStageProps = { profile: profiles[0], profileId: 'portable', renderAppPreview: appPreviewRenderer, run, surface };
+const inspectorProps: RuntimeInspectorProps = { run, surface, tab: 'tree' };
+
 const runtimeBootstrap = {
   history: [run],
   kind: 'available',
@@ -183,9 +218,16 @@ it('compiles RuntimeClient against the exact provider wire contract', () => {
 
   expect({
     asset,
+    appPreviewFixture,
+    appPreviewRenderer,
     bootstrap,
+    controlledInput,
     error,
     invocation,
+    inspectorEvidence,
+    inspectorProps,
+    McpProtocolEvidence,
+    protocolEvidence,
     replay,
     reset,
     runtimeModel,
@@ -193,6 +235,7 @@ it('compiles RuntimeClient against the exact provider wire contract', () => {
     runsResponse,
     stateResponse,
     statusResponse,
+    stageProps,
     surfacesResponse,
     effect,
   }).toBeDefined();

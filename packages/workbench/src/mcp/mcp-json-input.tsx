@@ -26,12 +26,18 @@ type FormSchema = Readonly<{
 
 export type McpJsonInputProps = Readonly<{
   disabled?: boolean;
+  formLabel?: string;
   id: string;
+  invalidJsonLabel?: string;
   label: string;
   onChange: (value: ImmutableJsonRecord) => void;
+  onRawDraftChange?: (draft: string) => void;
   onSubmit: (value: ImmutableJsonRecord) => void;
+  rawDraft?: string;
+  rawLabel?: string;
   schema?: unknown;
   submitLabel?: string;
+  submitShortcut?: string;
   value: Readonly<Record<string, unknown>>;
 }>;
 
@@ -302,24 +308,37 @@ const FormEditor = ({
 
 export const McpJsonInput = ({
   disabled = false,
+  formLabel = 'Form',
   id,
+  invalidJsonLabel = rawJsonError,
   label,
   onChange,
+  onRawDraftChange,
   onSubmit,
+  rawDraft: controlledRawDraft,
+  rawLabel = 'Raw JSON',
   schema,
   submitLabel = 'Call tool',
+  submitShortcut,
   value,
 }: McpJsonInputProps) => {
+  if ((controlledRawDraft === undefined) !== (onRawDraftChange === undefined)) {
+    throw new Error('McpJsonInput rawDraft and onRawDraftChange must be provided together.');
+  }
+  const controlled = controlledRawDraft !== undefined;
   const formSchema = formSchemaFromJsonSchema(schema);
   const [mode, setMode] = useState<'form' | 'raw'>(formSchema === null ? 'raw' : 'form');
   const [rawState, setRawState] = useState(() => ({ source: value, ...rawJsonDraftState(value) }));
-  const currentRawState = rawState.source === value ? rawState : { source: value, ...rawJsonDraftState(value) };
-  if (currentRawState !== rawState) setRawState(currentRawState);
+  const uncontrolledRawState = rawState.source === value ? rawState : { source: value, ...rawJsonDraftState(value) };
+  if (!controlled && uncontrolledRawState !== rawState) setRawState(uncontrolledRawState);
+  const currentRawState = controlled
+    ? rawJsonDraftState(value, controlledRawDraft)
+    : uncontrolledRawState;
   const { draft: rawDraft, error: rawError } = currentRawState;
 
   const selectMode = (next: 'form' | 'raw'): void => {
     setMode(next);
-    if (next === 'raw') {
+    if (next === 'raw' && !controlled) {
       setRawState({ source: value, ...rawJsonDraftState(value) });
     }
   };
@@ -335,14 +354,14 @@ export const McpJsonInput = ({
       {formSchema === null ? <p>Raw JSON is required because this schema cannot be represented without changing it.</p> : (
         <fieldset>
           <legend>{label} input mode</legend>
-          <label><input checked={mode === 'form'} disabled={disabled} name={`${id}-mode`} onChange={() => selectMode('form')} type="radio" />Form</label>
-          <label><input checked={mode === 'raw'} disabled={disabled} name={`${id}-mode`} onChange={() => selectMode('raw')} type="radio" />Raw JSON</label>
+          <label><input checked={mode === 'form'} disabled={disabled} name={`${id}-mode`} onChange={() => selectMode('form')} type="radio" />{formLabel}</label>
+          <label><input checked={mode === 'raw'} disabled={disabled} name={`${id}-mode`} onChange={() => selectMode('raw')} type="radio" />{rawLabel}</label>
         </fieldset>
       )}
       <div>
         {rawPanel ? (
           <>
-            <label htmlFor={`${id}-raw`}>Raw JSON object</label>
+            <label htmlFor={`${id}-raw`}>{rawLabel} object</label>
             <textarea
               aria-describedby={rawError === undefined ? undefined : rawErrorId}
               aria-invalid={rawError === undefined ? undefined : true}
@@ -350,19 +369,19 @@ export const McpJsonInput = ({
               id={`${id}-raw`}
               onChange={(event) => {
                 const draft = event.currentTarget.value;
-                const nextRawState = rawJsonDraftState(value, draft);
-                setRawState({ source: value, ...nextRawState });
+                if (controlled) onRawDraftChange!(draft);
+                else setRawState({ source: value, ...rawJsonDraftState(value, draft) });
                 const parsed = parseRawJsonRecord(draft);
                 if (parsed !== null) onChange(parsed);
               }}
               spellCheck={false}
               value={rawDraft}
             />
-            {rawError === undefined ? undefined : <p id={rawErrorId} role="alert">{rawError}</p>}
+            {rawError === undefined ? undefined : <p id={rawErrorId} role="alert">{invalidJsonLabel}</p>}
           </>
         ) : <FormEditor disabled={disabled} id={id} onChange={onChange} schema={formSchema} value={value} />}
       </div>
-      <button disabled={disabled || !rawSubmissionValid || !formSubmissionValid} onClick={() => submitJsonRecord(value, onSubmit, rawPanel ? rawDraft : undefined)} type="button">{submitLabel}</button>
+      <button aria-keyshortcuts={submitShortcut} disabled={disabled || !rawSubmissionValid || !formSubmissionValid} onClick={() => submitJsonRecord(value, onSubmit, rawPanel ? rawDraft : undefined)} type="button">{submitLabel}</button>
     </section>
   );
 };

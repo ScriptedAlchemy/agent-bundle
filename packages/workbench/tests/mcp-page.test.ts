@@ -6,6 +6,7 @@ import type { McpBrowserSessionModel } from '../src/mcp/mcp-session-model.ts';
 import type { McpAppPreviewClient } from '../src/mcp/mcp-app-preview.tsx';
 import {
   McpPage,
+  McpProtocolEvidence,
   createMcpPageActionTracker,
   createMcpPageActionSession,
   mcpConfigDownload,
@@ -94,6 +95,25 @@ const appPreviewClient: McpAppPreviewClient = {
 };
 
 describe('MCP page', () => {
+  it('renders provider protocol evidence without adding live session controls', () => {
+    const markup = renderToStaticMarkup(createElement(McpProtocolEvidence, {
+      ariaLabel: 'Provider MCP protocol evidence',
+      protocol: { jsonrpc: '2.0', method: 'tools/call' },
+      trace: [
+        { id: 'render', phase: 'mcp-protocol', status: 'succeeded' },
+        { id: 'resource', parentId: 'render', phase: 'resource-selection', status: 'succeeded' },
+      ],
+    }));
+
+    expect(markup).toContain('aria-label="Provider MCP protocol evidence"');
+    expect(markup).toContain('tools/call');
+    expect(markup.indexOf('mcp-protocol')).toBeLessThan(markup.indexOf('resource-selection'));
+    expect(markup).not.toContain('Open MCP session');
+    expect(markup).not.toContain('Restart MCP session');
+    expect(markup).not.toContain('Close MCP session');
+    expect(markup).not.toContain('Replay');
+  });
+
   it('renders the epoch-bound lifecycle, ordered catalog, operations, history, and one accessible trace view', () => {
     const markup = renderToStaticMarkup(createElement(McpPage, {
       controller: controller(),

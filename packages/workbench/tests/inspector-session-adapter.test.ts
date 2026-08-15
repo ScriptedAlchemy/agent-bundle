@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, rs } from '@rstest/core';
 
 import type { McpBrowserSessionModel } from '../src/mcp/mcp-session-model.ts';
+import type { DevRuntimeDiagnostic, DevRuntimeTraceSpan } from '../../agent-bundle/src/dev/runtime-protocol.ts';
 import {
   inspectorLogEntries,
   inspectorProtocolEntries,
@@ -11,6 +12,7 @@ import {
 } from '../src/inspector/adapter/inspector-session-adapter-model.ts';
 import {
   InspectorSessionAdapter,
+  InspectorRuntimeEvidence,
   agentBundleInspectorTheme,
 } from '../src/inspector/adapter/inspector-session-adapter.tsx';
 
@@ -98,6 +100,32 @@ const model = {
 } as unknown as McpBrowserSessionModel;
 
 describe('Inspector session adapter', () => {
+  it('renders immutable runtime evidence in provider order without a controller action', () => {
+    const trace = [
+      { id: 'render', phase: 'rsc-render', startedAt: '2026-08-15T12:00:00.000Z', status: 'succeeded' },
+      { id: 'lowering', parentId: 'render', phase: 'lowering-contract', startedAt: '2026-08-15T12:00:01.000Z', status: 'succeeded' },
+    ] satisfies readonly DevRuntimeTraceSpan[];
+    const diagnostics = [{ code: 'RSC001', message: 'Runtime is ready.', phase: 'provider-lifecycle', severity: 'info' }] satisfies readonly DevRuntimeDiagnostic[];
+    const markup = renderToStaticMarkup(createElement(InspectorRuntimeEvidence, {
+      evidence: { kind: 'trace', trace },
+    }));
+    const diagnosticMarkup = renderToStaticMarkup(createElement(InspectorRuntimeEvidence, {
+      evidence: { diagnostics, kind: 'diagnostics' },
+    }));
+    const protocolMarkup = renderToStaticMarkup(createElement(InspectorRuntimeEvidence, {
+      evidence: { kind: 'protocol', protocol: { jsonrpc: '2.0', method: 'tools/call' }, trace },
+    }));
+
+    expect(markup).toContain('Render trace');
+    expect(markup.indexOf('rsc-render')).toBeLessThan(markup.indexOf('lowering-contract'));
+    expect(diagnosticMarkup).toContain('provider-lifecycle');
+    expect(diagnosticMarkup).toContain('Runtime is ready.');
+    expect(protocolMarkup).toContain('tools/call');
+    expect(`${markup}${diagnosticMarkup}${protocolMarkup}`).not.toContain('Open MCP session');
+    expect(`${markup}${diagnosticMarkup}${protocolMarkup}`).not.toContain('Set Active Level');
+    expect(`${markup}${diagnosticMarkup}${protocolMarkup}`).not.toContain('Replay');
+  });
+
   it('presents the immutable raw trace with its original sequence and timestamp', () => {
     const entries = inspectorProtocolEntries(model.timeline.entries);
     const logs = inspectorLogEntries(model.timeline.entries);

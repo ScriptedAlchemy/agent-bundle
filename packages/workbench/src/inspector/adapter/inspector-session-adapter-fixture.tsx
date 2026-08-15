@@ -2,7 +2,7 @@ import { createRoot } from 'react-dom/client';
 
 import type { McpBrowserSessionModel } from '../../mcp/mcp-session-model.ts';
 
-import { InspectorSessionAdapter } from './inspector-session-adapter-entry.ts';
+import { InspectorRuntimeEvidence, InspectorSessionAdapter } from './inspector-session-adapter-entry.ts';
 
 const model = {
   activeRequests: {},
@@ -38,4 +38,13 @@ const controller = {
   invoke: async () => ({ content: [] }),
 };
 
-createRoot(document.getElementById('root')!).render(<InspectorSessionAdapter controller={controller} model={model} />);
+createRoot(document.getElementById('root')!).render(<>
+  <InspectorSessionAdapter controller={controller} model={model} />
+  <InspectorRuntimeEvidence evidence={{
+    kind: 'trace',
+    trace: [
+      { id: 'fixture-render', phase: 'rsc-render', startedAt: '2026-08-15T12:00:00.000Z', status: 'succeeded' },
+      { id: 'fixture-decode', parentId: 'fixture-render', phase: 'flight-decode', startedAt: '2026-08-15T12:00:01.000Z', status: 'succeeded' },
+    ],
+  }} />
+</>);

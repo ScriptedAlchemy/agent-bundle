@@ -54,6 +54,12 @@ export interface McpConfigDownload {
   readonly filename: string;
 }
 
+export interface McpProtocolEvidenceProps {
+  readonly ariaLabel: string;
+  readonly protocol?: unknown;
+  readonly trace: readonly unknown[];
+}
+
 type TraceTab = 'raw' | 'logs' | 'progress';
 
 export interface McpPageAppPreviewSource {
@@ -239,6 +245,13 @@ const display = (value: unknown): string => {
     return '[Unserializable protocol value]';
   }
 };
+
+/** Read-only provider evidence shared by the live MCP page and Runtime Inspector. */
+export const McpProtocolEvidence = ({ ariaLabel, protocol, trace }: McpProtocolEvidenceProps): React.ReactNode => <section aria-label={ariaLabel} className="mcp-page-trace">
+  <h3>{ariaLabel}</h3>
+  {protocol === undefined ? undefined : <details open><summary>Protocol</summary><pre><code>{display(protocol)}</code></pre></details>}
+  {trace.length === 0 ? <p className="mcp-page-empty">No protocol evidence yet.</p> : <ol>{trace.map((entry, index) => <li key={index}><pre><code>{display(entry)}</code></pre></li>)}</ol>}
+</section>;
 
 const errorMessage = (reason: unknown): string => reason instanceof Error ? reason.message : 'The MCP session action failed.';
 
@@ -667,10 +680,11 @@ export const McpPage = ({ appPreviewClient, controller, epochOptions, initialBin
         </button>)}
       </div>
       <section aria-labelledby={`mcp-trace-tab-${traceTab}`} className="mcp-page-trace" id={tracePanelId} role="tabpanel" tabIndex={0}>
-        <h3>{traceLabel}</h3>
-        {traceEntries.length === 0 ? <p className="mcp-page-empty">No {traceLabel.toLowerCase()} entries yet.</p> : <ol>{traceEntries.map((entry, index) => <li key={'sequence' in entry ? entry.sequence : index}>
-          <pre><code>{display(traceValue(entry))}</code></pre>
-        </li>)}</ol>}
+        {traceTab === 'raw'
+          ? <McpProtocolEvidence ariaLabel={traceLabel} trace={rawTrace.map(traceValue)} />
+          : <><h3>{traceLabel}</h3>{traceEntries.length === 0 ? <p className="mcp-page-empty">No {traceLabel.toLowerCase()} entries yet.</p> : <ol>{traceEntries.map((entry, index) => <li key={'sequence' in entry ? entry.sequence : index}>
+            <pre><code>{display(traceValue(entry))}</code></pre>
+          </li>)}</ol>}</>}
       </section>
     </section>
 

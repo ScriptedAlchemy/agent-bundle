@@ -1,5 +1,13 @@
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
+import { createServer, type Server } from 'node:http';
+import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { once } from 'node:events';
+import { join, relative } from 'node:path';
+import { tmpdir } from 'node:os';
+
+import { createRsbuild } from '@rsbuild/core';
+import { pluginReact } from '@rsbuild/plugin-react';
 import { chromium } from 'playwright';
 import { describe, expect, it } from '@rstest/core';
 
@@ -12,6 +20,83 @@ import {
   serializeJsonRecord,
   submitJsonRecord,
 } from '../src/mcp/mcp-json-input.tsx';
+
+const workspaceRoot = join(import.meta.dirname, '..', '..', '..');
+const inputComponent = join(workspaceRoot, 'packages', 'workbench', 'src', 'mcp', 'mcp-json-input.tsx');
+
+const listen = async (server: Server): Promise<string> => {
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const address = server.address();
+  if (address === null || typeof address === 'string') throw new Error('MCP JSON input fixture did not receive a TCP address.');
+  return `http://127.0.0.1:${address.port}`;
+};
+
+const mountedControlledInputFixture = async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-mcp-json-input-'));
+  const entry = join(root, 'input.tsx');
+  const dist = join(root, 'dist');
+  await writeFile(entry, [
+    "import React, { useState } from 'react';",
+    "import { createRoot } from 'react-dom/client';",
+    `import { McpJsonInput } from ${JSON.stringify(inputComponent)};`,
+    '',
+    'const edits = [];',
+    'const App = () => {',
+    "  const [rawDraft, setRawDraft] = useState('{\\\"name\\\":');",
+    "  const [value, setValue] = useState({ name: 'initial' });",
+    "  return <><McpJsonInput id=\"controlled-input\" label=\"Controlled input\" onChange={setValue} onRawDraftChange={(draft) => { edits.push(draft); setRawDraft(draft); }} onSubmit={() => undefined} rawDraft={rawDraft} value={value} /><button onClick={() => setValue({ name: 'canonical replacement' })} type=\"button\">Replace canonical</button><button onClick={() => setRawDraft('{\\\"intentional\\\":true}')} type=\"button\">Replace draft</button></>;",
+    '};',
+    "createRoot(document.getElementById('root')).render(<App />);",
+    'globalThis.__mcpJsonInputFixture = { edits: () => [...edits] };',
+  ].join('\n'));
+  const rsbuild = await createRsbuild({
+    config: {
+      output: {
+        cleanDistPath: false,
+        distPath: { css: 'assets', js: 'assets', root: dist },
+        filename: { css: '[name].css', js: '[name].js' },
+        filenameHash: false,
+      },
+      plugins: [pluginReact()],
+      resolve: {
+        alias: {
+          react: join(workspaceRoot, 'node_modules', 'react'),
+          'react-dom/client': join(workspaceRoot, 'node_modules', 'react-dom', 'client.js'),
+        },
+      },
+      source: {
+        define: { 'process.env.NODE_ENV': JSON.stringify('production') },
+        entry: { input: entry },
+      },
+    },
+    cwd: workspaceRoot,
+  });
+  const build = await rsbuild.build();
+  await build.close();
+  const assets = await readdir(dist, { recursive: true });
+  if (!assets.includes('input.html')) throw new Error('MCP JSON input fixture did not produce its browser document.');
+  const server = createServer(async (request, response) => {
+    const pathname = new URL(request.url ?? '/', 'http://127.0.0.1').pathname;
+    const asset = pathname === '/' ? 'input.html' : pathname.slice(1);
+    const file = join(dist, asset);
+    if (relative(dist, file).startsWith('..')) return response.writeHead(404).end();
+    try {
+      const body = await readFile(file);
+      response.writeHead(200, { 'content-type': asset.endsWith('.js') ? 'text/javascript' : 'text/html' }).end(body);
+    } catch {
+      response.writeHead(404).end();
+    }
+  });
+  const origin = await listen(server);
+  return {
+    close: async () => {
+      await new Promise<void>((resolve, reject) => server.close((error) => error === undefined ? resolve() : reject(error)));
+      await rm(root, { force: true, recursive: true });
+    },
+    url: `${origin}/input.html`,
+  };
+};
 
 describe('MCP JSON input', () => {
   it('falls back to raw input for unsupported schema shapes and keywords', () => {
@@ -90,6 +175,52 @@ describe('MCP JSON input', () => {
       error: undefined,
     });
   });
+
+  it('preserves a controlled invalid raw draft across canonical input changes and rejects half-controlled usage', () => {
+    const controlled = renderToStaticMarkup(createElement(McpJsonInput, {
+      id: 'controlled-input',
+      label: 'Controlled input',
+      onChange: () => undefined,
+      onRawDraftChange: () => undefined,
+      onSubmit: () => undefined,
+      rawDraft: '{"name":',
+      value: { name: 'canonical replacement' },
+    }));
+
+    expect(controlled).toContain('{&quot;name&quot;:');
+    expect(controlled).toContain('Enter a valid JSON object.');
+    expect(() => renderToStaticMarkup(createElement(McpJsonInput, {
+      id: 'half-controlled-input',
+      label: 'Half controlled input',
+      onChange: () => undefined,
+      onSubmit: () => undefined,
+      rawDraft: '{"name":',
+      value: {},
+    }))).toThrow('McpJsonInput rawDraft and onRawDraftChange must be provided together.');
+  });
+
+  it('reports each controlled raw edit while canonical replacements leave the repair draft untouched', async () => {
+    const fixture = await mountedControlledInputFixture();
+    const browser = await chromium.launch({ channel: 'chrome' });
+    try {
+      const page = await browser.newPage();
+      await page.goto(fixture.url);
+      const raw = page.locator('#controlled-input-raw');
+      await raw.fill('{"name":"edited"');
+      expect(await raw.inputValue()).toBe('{"name":"edited"');
+      expect(await page.getByRole('alert').textContent()).toBe('Enter a valid JSON object.');
+      await page.getByRole('button', { name: 'Replace canonical' }).click();
+      expect(await raw.inputValue()).toBe('{"name":"edited"');
+      expect(await page.evaluate(() => (globalThis as typeof globalThis & {
+        __mcpJsonInputFixture: { edits(): readonly string[] };
+      }).__mcpJsonInputFixture.edits())).toContain('{"name":"edited"');
+      await page.getByRole('button', { name: 'Replace draft' }).click();
+      expect(await raw.inputValue()).toBe('{"intentional":true}');
+    } finally {
+      await browser.close();
+      await fixture.close();
+    }
+  }, 30_000);
 
   it('renders an accessible mode group and submits equivalent form and raw payloads through one callback', () => {
     const submitted: Readonly<Record<string, unknown>>[] = [];
