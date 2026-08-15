@@ -91,13 +91,35 @@ export interface McpSessionControllerCloseFailure {
   readonly resource: McpSessionControllerCloseResource;
 }
 
+const reasonMessage = (reason: unknown): string => reason instanceof Error ? reason.message : String(reason);
+
+const frozenCloseFailures = (
+  failures: readonly McpSessionControllerCloseFailure[],
+): readonly McpSessionControllerCloseFailure[] => Object.freeze(failures.map(({ reason, resource }) => Object.freeze({ reason, resource })));
+
 export class McpSessionControllerCloseError extends McpSessionControllerError {
   readonly failures: readonly McpSessionControllerCloseFailure[];
 
   constructor(failures: readonly McpSessionControllerCloseFailure[]) {
     super(`MCP session controller close failed for ${failures.map(({ resource }) => resource).join(', ')}.`);
     this.name = 'McpSessionControllerCloseError';
-    this.failures = Object.freeze([...failures]);
+    this.failures = frozenCloseFailures(failures);
+    Object.freeze(this);
+  }
+}
+
+export class McpSessionControllerFailureError extends McpSessionControllerError {
+  readonly failures: readonly McpSessionControllerCloseFailure[];
+  readonly primary: unknown;
+
+  constructor(primary: unknown, failures: readonly McpSessionControllerCloseFailure[]) {
+    super(failures.length === 0
+      ? `MCP session controller failed: ${reasonMessage(primary)}.`
+      : `MCP session controller failed: ${reasonMessage(primary)}. Cleanup failed for ${failures.map(({ resource }) => resource).join(', ')}.`);
+    this.name = 'McpSessionControllerFailureError';
+    this.failures = frozenCloseFailures(failures);
+    this.primary = primary;
+    Object.freeze(this);
   }
 }
 
@@ -229,7 +251,7 @@ const requestFor = (
 
 const diagnosticFor = (code: string, reason: unknown): McpBrowserSessionDiagnostic => ({
   code,
-  message: reason instanceof Error ? reason.message : String(reason),
+  message: reasonMessage(reason),
   severity: 'error',
 });
 
@@ -317,7 +339,7 @@ export class McpSessionController {
       await this.#refresh(session.connection, generation);
       return this.#model;
     } catch (reason) {
-      if (this.#current(generation)) await this.#failSession(generation, client, transport, 'mcp.connect.failed', reason);
+      if (this.#current(generation)) throw await this.#failSession(generation, client, transport, 'mcp.connect.failed', reason);
       throw reason;
     }
   }
@@ -334,7 +356,7 @@ export class McpSessionController {
       await this.#refresh(connection, generation);
       return this.#model;
     } catch (reason) {
-      if (this.#current(generation)) await this.#failSession(generation, this.#client, this.#transport, 'mcp.restart.failed', reason);
+      if (this.#current(generation)) throw await this.#failSession(generation, this.#client, this.#transport, 'mcp.restart.failed', reason);
       throw reason;
     }
   }
@@ -384,7 +406,7 @@ export class McpSessionController {
       if (failures.length > 0) {
         this.#state = 'failed';
         const error = new McpSessionControllerCloseError(failures);
-        this.#publishCloseFailure(error);
+        this.#publishTerminalFailure('mcp.close.failed', error);
         throw error;
       }
       this.#state = 'closed';
@@ -527,13 +549,20 @@ export class McpSessionController {
     transport: McpSessionControllerTransport | undefined,
     code: string,
     reason: unknown,
-  ): Promise<void> {
-    if (!this.#current(generation)) return;
+  ): Promise<McpSessionControllerFailureError> {
+    if (!this.#current(generation)) return new McpSessionControllerFailureError(reason, []);
     this.#state = 'failed';
     this.#generation += 1;
-    this.#publish({ diagnostic: diagnosticFor(code, reason), type: 'failed' });
-    await this.#drainResources(client, transport);
+    let rejectClose: (reason: unknown) => void = () => undefined;
+    const closing = new Promise<void>((_resolve, reject) => { rejectClose = reject; });
+    this.#closePromise = closing;
+    void closing.catch(() => undefined);
+    const failures = await this.#drainResources(client, transport);
     this.#clearResources(client, transport);
+    const error = new McpSessionControllerFailureError(reason, failures);
+    this.#publishTerminalFailure(code, error);
+    rejectClose(error);
+    return error;
   }
 
   async #drainResources(
@@ -583,8 +612,8 @@ export class McpSessionController {
     this.#replaceModel(next);
   }
 
-  #publishCloseFailure(error: McpSessionControllerCloseError): void {
-    const diagnostic = diagnosticFor('mcp.close.failed', error);
+  #publishTerminalFailure(code: string, reason: Error): void {
+    const diagnostic = diagnosticFor(code, reason);
     if (this.#model.phase !== 'error') {
       this.#publish({ diagnostic, type: 'failed' });
       return;

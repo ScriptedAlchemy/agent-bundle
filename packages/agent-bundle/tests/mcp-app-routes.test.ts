@@ -7,7 +7,7 @@ import {
   McpAppRoutes,
   type McpAppRoutePreviewService,
 } from '../src/dev/mcp-app-routes.ts';
-import type { McpAppBridgeLifecycle } from '../src/dev/mcp-app-bridge.ts';
+import type { McpAppBridgeLifecycle, McpAppBridgeMessage } from '../src/dev/mcp-app-bridge.ts';
 
 interface StartedRoutes {
   readonly close: () => Promise<void>;
@@ -49,6 +49,13 @@ class RecordingPreviewService implements McpAppRoutePreviewService {
   });
   readonly outbound: unknown[] = [];
   blockFirstReceive = false;
+  readonly closeFrame: McpAppBridgeMessage = Object.freeze({
+    id: 'service-close-a',
+    jsonrpc: '2.0',
+    method: 'ui/resource-teardown',
+    params: Object.freeze({ canonical: true }),
+  });
+  closeResult: McpAppBridgeMessage | true = this.closeFrame;
   previewAvailable = true;
   #releaseFirstReceive: (() => void) | undefined;
 
@@ -88,10 +95,10 @@ class RecordingPreviewService implements McpAppRoutePreviewService {
     return this.outbound.splice(0);
   }
 
-  async close(bindingId: string, options: { readonly id: string | number | null; readonly reason?: string }): Promise<boolean> {
+  async close(bindingId: string, options: { readonly id: string | number | null; readonly reason?: string }): Promise<McpAppBridgeMessage | true> {
     this.calls.push({ bindingId, kind: 'close', options });
     this.bridge.lifecycle = 'closing';
-    return true;
+    return this.closeResult;
   }
 
   async forceClose(bindingId: string): Promise<boolean> {
@@ -370,10 +377,10 @@ it('keeps the App acknowledgement route claimed while graceful teardown is pendi
       actions: [],
       lifecycle: 'closing',
       message: {
-        id: 'close-a',
+        id: 'service-close-a',
         jsonrpc: '2.0',
         method: 'ui/resource-teardown',
-        params: { reason: 'pane closed' },
+        params: { canonical: true },
       },
     });
     expect(started.service.calls).toContainEqual({
@@ -413,6 +420,22 @@ it('keeps the App acknowledgement route claimed while graceful teardown is pendi
     await expect(duplicateAcknowledgement.json()).resolves.toEqual({
       diagnostic: { code: 'AB8022', message: 'MCP App preview is not available.' },
     });
+  } finally {
+    await started.close();
+  }
+});
+
+it('does not synthesize a teardown message when the preview closes before initialization', async () => {
+  const started = await startRoutes();
+  started.service.closeResult = true;
+  try {
+    const closing = await fetch(`${started.url}/api/mcp/apps/binding-a/close`, {
+      body: JSON.stringify({ id: 'close-uninitialized' }),
+      headers: { ...headers(), 'content-type': 'application/json' },
+      method: 'POST',
+    });
+    expect(closing.status).toBe(200);
+    await expect(closing.json()).resolves.toEqual({ actions: [], lifecycle: 'closing' });
   } finally {
     await started.close();
   }

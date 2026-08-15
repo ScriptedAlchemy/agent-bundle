@@ -3,7 +3,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 
 import type { McpAppJsonValue, McpAppPreviewProfile } from './mcp-app-binding-service.ts';
 import type { McpAppBridgeCloseOptions, McpAppBridgeJsonRecord, McpAppBridgeLifecycle } from './mcp-app-bridge.ts';
-import type { McpAppPreviewHostContext } from './mcp-app-preview-service.ts';
+import type { McpAppPreviewCloseResult, McpAppPreviewHostContext } from './mcp-app-preview-service.ts';
 import type { McpAppSandboxConsent } from './mcp-app-sandbox.ts';
 
 const bodyLimit = 64 * 1024;
@@ -40,7 +40,7 @@ export interface McpAppRoutePreview {
 }
 
 export interface McpAppRoutePreviewService {
-  close(bindingId: string, options: McpAppBridgeCloseOptions): Promise<boolean>;
+  close(bindingId: string, options: McpAppBridgeCloseOptions): Promise<McpAppPreviewCloseResult>;
   create(options: {
     readonly consent?: McpAppSandboxConsent;
     readonly host: McpAppPreviewHostContext;
@@ -325,13 +325,6 @@ const bridgeHostContext = (host: McpAppPreviewHostContext): McpAppBridgeJsonReco
   userAgent: host.userAgent,
 });
 
-const teardownMessage = (options: McpAppBridgeCloseOptions): Readonly<Record<string, unknown>> => Object.freeze({
-  id: options.id,
-  jsonrpc: '2.0',
-  method: 'ui/resource-teardown',
-  params: Object.freeze(options.reason === undefined ? {} : { reason: options.reason }),
-});
-
 /** Authenticated HTTP boundary for already-bound MCP App previews. */
 export class McpAppRoutes {
   readonly #authorize: (request: IncomingMessage) => void;
@@ -393,9 +386,14 @@ export class McpAppRoutes {
       const result = await this.#serialize(parsed.bindingId, async () => {
         const preview = this.#preview(service, parsed.bindingId);
         if (this.#teardowns.has(parsed.bindingId)) return Object.freeze({ lifecycle: preview.bridge.lifecycle, started: false });
-        if (!await service.close(parsed.bindingId, options)) this.#unavailable();
+        const close = await service.close(parsed.bindingId, options);
+        if (close === false) this.#unavailable();
         this.#teardowns.add(parsed.bindingId);
-        return Object.freeze({ lifecycle: preview.bridge.lifecycle === 'closed' ? 'closed' : 'closing', message: teardownMessage(options), started: true });
+        return Object.freeze({
+          lifecycle: preview.bridge.lifecycle === 'closed' ? 'closed' : 'closing',
+          ...(close === true ? {} : { message: close }),
+          started: true,
+        });
       });
       return responseJson(response, {
         actions: [],
