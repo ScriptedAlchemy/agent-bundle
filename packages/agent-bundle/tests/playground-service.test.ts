@@ -1,4 +1,4 @@
-import { appendFile, mkdtemp, mkdir, readFile, rm, symlink } from 'node:fs/promises';
+import { appendFile, mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -347,6 +347,136 @@ it('drains session cleanup and service close with structural failures while othe
     await expect(fixture.service.close()).rejects.toBeInstanceOf(PlaygroundServiceCloseError);
     expect(fixture.service.session('healthy')?.state).toBe('closed');
     await expect(fixture.service.closeSession('broken')).rejects.toBeInstanceOf(PlaygroundSessionCloseError);
+  } finally {
+    await fixture.close();
+  }
+});
+
+it('gives exactly one service instance the durable writer claim for an open session', async () => {
+  const fixture = await createFixture();
+  const contender = new PlaygroundService({
+    projectId: 'project-1',
+    projectRoot: fixture.projectRoot,
+    storageRoot: fixture.storageRoot,
+  });
+  try {
+    await fixture.service.openSession({ ...sessionInput(), sessionId: 'owned' });
+    await expect(contender.reopen('owned')).rejects.toMatchObject({ code: 'PLAYGROUND_SESSION_OWNED' });
+    await expect(fixture.service.append('owned', event('project', 'loaded', 'Project loaded.', { revision: 'a' }))).resolves.toMatchObject({ sequence: 1 });
+    await fixture.service.finalize('owned', { status: 'passed' });
+    await fixture.service.closeSession('owned');
+    await expect(contender.reopen('owned')).resolves.toMatchObject({ state: 'closed' });
+    await expect(contender.replay('owned')).resolves.toMatchObject({ events: [{ sequence: 1 }] });
+  } finally {
+    await Promise.allSettled([fixture.close(), contender.close()]);
+  }
+});
+
+it('fails closed on bounded provider credential values before identity, raw events, outcomes, or drafts persist them', async () => {
+  const fixture = await createFixture();
+  const credential = 'sk-proj-abcdefghijklmnopqrstuvwxyz0123456789';
+  try {
+    await expect(fixture.service.openSession({
+      ...sessionInput(),
+      invocation: { intent: { note: credential }, kind: 'script' },
+      sessionId: 'credential-identity',
+    })).rejects.toThrow('credential');
+    await fixture.service.openSession({ ...sessionInput(), sessionId: 'credential-event' });
+    await expect(fixture.service.append('credential-event', event('mcp', 'response', 'MCP responded.', { note: credential }))).rejects.toThrow('credential');
+    await expect(fixture.service.finalize('credential-event', { response: credential, status: 'passed' })).rejects.toThrow('credential');
+    await expect(fixture.service.promoteToDraftEval('credential-event', [])).rejects.toThrow('durable');
+    const sessionDocument = await readFile(join(fixture.storageRoot, 'sessions', 'credential-event', 'session.json'), 'utf8');
+    const eventDocument = await readFile(join(fixture.storageRoot, 'sessions', 'credential-event', 'events.jsonl'), 'utf8');
+    expect(sessionDocument).not.toContain(credential);
+    expect(eventDocument).not.toContain(credential);
+  } finally {
+    await fixture.close();
+  }
+});
+
+it('shuts down open sessions into a durable aborted terminal state, drains subscribers, and releases their owner claim', async () => {
+  const fixture = await createFixture();
+  const contender = new PlaygroundService({
+    projectId: 'project-1',
+    projectRoot: fixture.projectRoot,
+    storageRoot: fixture.storageRoot,
+  });
+  try {
+    await fixture.service.openSession({ ...sessionInput(), sessionId: 'aborted' });
+    const delivered = deferred<void>();
+    const subscription = await fixture.service.subscribe('aborted', { onEvent: () => delivered.promise });
+    await fixture.service.append('aborted', event('response', 'completed', 'Response completed.', { text: 'interrupted' }));
+    const closing = fixture.service.close();
+    await new Promise<void>((resolve) => setTimeout(resolve, 5));
+    expect(subscription.closed).toBe(false);
+    delivered.resolve(undefined);
+    await expect(closing).resolves.toBeUndefined();
+    expect(subscription.closed).toBe(true);
+    expect(fixture.service.session('aborted')).toMatchObject({ outcome: { status: 'aborted' }, state: 'closed' });
+    await expect(contender.reopen('aborted')).resolves.toMatchObject({ outcome: { status: 'aborted' }, state: 'closed' });
+  } finally {
+    await Promise.allSettled([fixture.close(), contender.close()]);
+  }
+});
+
+it('rolls back a failed finalization metadata commit so promotion cannot observe a non-durable outcome and retry succeeds', async () => {
+  const fixture = await createFixture();
+  try {
+    await fixture.service.openSession({ ...sessionInput(), sessionId: 'transactional' });
+    const metadataPath = join(fixture.storageRoot, 'sessions', 'transactional', 'session.json');
+    const original = await readFile(metadataPath, 'utf8');
+    await rm(metadataPath);
+    await mkdir(metadataPath);
+    await expect(fixture.service.finalize('transactional', { status: 'passed' })).rejects.toBeDefined();
+    expect(fixture.service.session('transactional')).toMatchObject({ state: 'open' });
+    expect(fixture.service.session('transactional')).not.toHaveProperty('outcome');
+    await expect(fixture.service.promoteToDraftEval('transactional', [])).rejects.toThrow('durable');
+    await rm(metadataPath, { recursive: true });
+    await writeFile(metadataPath, original, 'utf8');
+    await expect(fixture.service.finalize('transactional', { status: 'passed' })).resolves.toMatchObject({ state: 'finalized' });
+    await expect(fixture.service.promoteToDraftEval('transactional', [])).resolves.toMatchObject({ outcome: { status: 'passed' } });
+  } finally {
+    await fixture.close();
+  }
+});
+
+it('rejects a session metadata symlink during reopen without following its contents', async () => {
+  const fixture = await createFixture();
+  try {
+    await fixture.service.openSession({ ...sessionInput(), sessionId: 'metadata-link' });
+    await fixture.service.finalize('metadata-link', { status: 'passed' });
+    await fixture.service.close();
+    const metadataPath = join(fixture.storageRoot, 'sessions', 'metadata-link', 'session.json');
+    const outsidePath = join(fixture.projectRoot, 'outside-session.json');
+    await writeFile(outsidePath, await readFile(metadataPath, 'utf8'), 'utf8');
+    await rm(metadataPath);
+    await symlink(outsidePath, metadataPath, 'file');
+    const reopened = new PlaygroundService({ projectId: 'project-1', projectRoot: fixture.projectRoot, storageRoot: fixture.storageRoot });
+    try {
+      await expect(reopened.reopen('metadata-link')).rejects.toThrow('metadata');
+    } finally {
+      await reopened.close().catch(() => undefined);
+    }
+  } finally {
+    await fixture.close();
+  }
+});
+
+it('fails closed deterministically when a replay backlog exceeds the subscriber queue limit while persisted replay remains complete', async () => {
+  const fixture = await createFixture({ maxSubscriberQueue: 1 });
+  try {
+    await fixture.service.openSession({ ...sessionInput(), sessionId: 'backlog' });
+    await fixture.service.append('backlog', event('project', 'loaded', 'Project loaded.', { revision: 'a' }));
+    await fixture.service.append('backlog', event('build', 'completed', 'Build completed.', { epoch: 'epoch-7' }));
+    await fixture.service.append('backlog', event('mcp', 'response', 'MCP responded.', { tool: 'status' }));
+    const received: number[] = [];
+    const subscription = await fixture.service.subscribe('backlog', {
+      afterSequence: 0,
+      onEvent: (item) => { received.push(item.sequence); },
+    });
+    expect(subscription.closed).toBe(true);
+    expect(received).toEqual([]);
+    await expect(fixture.service.replay('backlog')).resolves.toMatchObject({ events: [{ sequence: 1 }, { sequence: 2 }, { sequence: 3 }] });
   } finally {
     await fixture.close();
   }
