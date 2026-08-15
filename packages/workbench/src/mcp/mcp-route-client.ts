@@ -47,6 +47,7 @@ export interface McpRouteClientOptions extends ForegroundRouteClientOptions {
 }
 
 interface ForegroundSession {
+  readonly cookieName: string;
   readonly origin: string;
   readonly token: string;
 }
@@ -259,7 +260,11 @@ export class ForegroundRouteClient {
     const response = await this.#fetch('/api/project/session', { credentials: 'same-origin' });
     const body: unknown = await response.json().catch(() => undefined);
     if (!response.ok) throw ForegroundRouteClientError.fromResponse(body, response.status);
-    if (!isRecord(body) || typeof body.origin !== 'string' || typeof body.token !== 'string' || body.token.length === 0) {
+    if (
+      !isRecord(body) || typeof body.cookieName !== 'string' ||
+      !/^agent-bundle-foreground-session-[a-f0-9]{32}$/u.test(body.cookieName) ||
+      typeof body.origin !== 'string' || typeof body.token !== 'string' || body.token.length === 0
+    ) {
       throw new ForegroundRouteClientError('AB8019', 'Foreground session bootstrap returned an invalid response.', response.status);
     }
     let origin: URL;
@@ -273,7 +278,7 @@ export class ForegroundRouteClient {
     if (browserOrigin !== undefined && browserOrigin !== 'null' && browserOrigin !== body.origin) {
       throw new ForegroundRouteClientError('AB8003', 'Foreground session bootstrap origin does not match this browser.', response.status);
     }
-    return Object.freeze({ origin: body.origin, token: body.token });
+    return Object.freeze({ cookieName: body.cookieName, origin: body.origin, token: body.token });
   }
 }
 

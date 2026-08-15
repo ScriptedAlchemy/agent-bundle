@@ -360,6 +360,34 @@ it('opens a live event stream before a later project event is published', async 
   }
 });
 
+it('publishes runtime App shutdown invalidation before tearing down authenticated SSE streams', async () => {
+  const eventHub = new ProjectEventHub({ now: () => new Date('2026-08-15T00:00:00.000Z') });
+  const prepared: string[] = [];
+  const previews = {
+    prepareClose: async () => {
+      prepared.push('runtime-apps');
+      eventHub.publish({
+        payload: { occurredAt: '2026-08-15T00:00:00.000Z', paths: ['runtime-shutdown'], reason: 'source-change' },
+        type: 'invalidation',
+      });
+    },
+  } as never;
+  const server = await startForegroundServer({
+    coordinator: new RecordingCoordinator(), eventHub, mcpAppPreviews: previews, port: 0,
+  });
+  const stream = openLiveStream(server.url);
+  try {
+    await expect(within(stream.opened, 250)).resolves.toBeUndefined();
+    const published = stream.until('runtime-shutdown');
+    await expect(within(server.close(), 250)).resolves.toBeUndefined();
+    await expect(within(published, 250)).resolves.toContain('runtime-shutdown');
+    expect(prepared).toEqual(['runtime-apps']);
+  } finally {
+    stream.close();
+    await server.close().catch(() => undefined);
+  }
+});
+
 it('authenticates project events before it parses a cursor or subscribes to the hub', async () => {
   const eventHub = new ProjectEventHub();
   const server = await startForegroundServer({ coordinator: new RecordingCoordinator(), eventHub, port: 0, sessionToken: 'event-token' });
@@ -372,7 +400,7 @@ it('authenticates project events before it parses a cursor or subscribes to the 
     });
     expect(wrongOrigin.status).toBe(403);
     const wrongCookie = await readRaw(server.url, '/api/project/events?after=not-a-cursor', {
-      cookie: 'agent-bundle-foreground-session=wrong', origin: server.url,
+      cookie: `${(await foregroundCookie(server.url)).split('=', 1)[0]}=wrong`, origin: server.url,
     });
     expect(wrongCookie.status).toBe(403);
     expect(eventHub.subscriptionCount).toBe(0);
@@ -390,6 +418,40 @@ it('authenticates project events before it parses a cursor or subscribes to the 
     expect(headers['cache-control']).toBe('no-store');
   } finally {
     await server.close();
+  }
+});
+
+it('isolates foreground event cookies across simultaneous loopback listeners', async () => {
+  const first = await startForegroundServer({
+    coordinator: new RecordingCoordinator(), eventHub: new ProjectEventHub(), port: 0, sessionToken: 'first-token',
+  });
+  const second = await startForegroundServer({
+    coordinator: new RecordingCoordinator(), eventHub: new ProjectEventHub(), port: 0, sessionToken: 'second-token',
+  });
+  const eventStatus = async (url: string, cookie: string): Promise<number> => new Promise((resolvePromise, rejectPromise) => {
+    const request = httpGet(`${url}/api/project/events`, { headers: { cookie, origin: url } }, (response) => {
+      response.destroy();
+      resolvePromise(response.statusCode ?? 0);
+    });
+    request.once('error', rejectPromise);
+  });
+  try {
+    const firstBootstrap = await fetch(`${first.url}/api/project/session`, { headers: { origin: first.url } });
+    const secondBootstrap = await fetch(`${second.url}/api/project/session`, { headers: { origin: second.url } });
+    const firstBody = await firstBootstrap.json() as Readonly<{ readonly cookieName?: unknown }>;
+    const secondBody = await secondBootstrap.json() as Readonly<{ readonly cookieName?: unknown }>;
+    const firstCookie = firstBootstrap.headers.get('set-cookie')?.split(';', 1)[0];
+    const secondCookie = secondBootstrap.headers.get('set-cookie')?.split(';', 1)[0];
+    expect(typeof firstBody.cookieName).toBe('string');
+    expect(typeof secondBody.cookieName).toBe('string');
+    expect(firstBody.cookieName).not.toBe(secondBody.cookieName);
+    expect(firstCookie).toContain(`${firstBody.cookieName}=`);
+    expect(secondCookie).toContain(`${secondBody.cookieName}=`);
+    const browserCookieJar = `${firstCookie}; ${secondCookie}`;
+    await expect(eventStatus(first.url, browserCookieJar)).resolves.toBe(200);
+    await expect(eventStatus(second.url, browserCookieJar)).resolves.toBe(200);
+  } finally {
+    await Promise.all([first.close(), second.close()]);
   }
 });
 
@@ -475,13 +537,17 @@ it('allows a same-origin browser to bootstrap its token but never sends it to a 
       headers: { origin: server.url },
     });
     expect(browser.status).toBe(200);
-    await expect(browser.json()).resolves.toEqual({ origin: server.url, token: 'test-session-token' });
+    await expect(browser.json()).resolves.toMatchObject({
+      cookieName: expect.stringMatching(/^agent-bundle-foreground-session-[a-f0-9]{32}$/u), origin: server.url, token: 'test-session-token',
+    });
 
     const browserWithoutOrigin = await fetch(`${server.url}/api/project/session`, {
       headers: { 'sec-fetch-site': 'same-origin' },
     });
     expect(browserWithoutOrigin.status).toBe(200);
-    await expect(browserWithoutOrigin.json()).resolves.toEqual({ origin: server.url, token: 'test-session-token' });
+    await expect(browserWithoutOrigin.json()).resolves.toMatchObject({
+      cookieName: expect.stringMatching(/^agent-bundle-foreground-session-[a-f0-9]{32}$/u), origin: server.url, token: 'test-session-token',
+    });
 
     const noBrowserProof = await fetch(`${server.url}/api/project/session`);
     expect(noBrowserProof.status).toBe(403);
@@ -848,7 +914,9 @@ it('never discloses a session token when Host does not identify this bound serve
       'sec-fetch-site': 'same-origin',
     });
     expect(sameServer.status).toBe(200);
-    expect(JSON.parse(sameServer.body)).toEqual({ origin: server.url, token: 'test-session-token' });
+    expect(JSON.parse(sameServer.body)).toMatchObject({
+      cookieName: expect.stringMatching(/^agent-bundle-foreground-session-[a-f0-9]{32}$/u), origin: server.url, token: 'test-session-token',
+    });
   } finally {
     await server.close();
   }

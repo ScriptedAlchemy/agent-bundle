@@ -37,7 +37,7 @@ export class ForegroundServerError extends Error {
 
 export interface ForegroundServerCloseFailure {
   readonly error: unknown;
-  readonly resource: 'coordinator' | 'server';
+  readonly resource: 'coordinator' | 'mcp-apps' | 'server';
 }
 
 export interface ForegroundServerStartFailure {
@@ -150,8 +150,6 @@ const attachmentHeader = (relativePath: string): string =>
 
 const singleHeader = (value: string | readonly string[] | undefined): string | undefined =>
   typeof value === 'string' ? value : undefined;
-
-const sessionCookieName = 'agent-bundle-foreground-session';
 
 const cookieValue = (request: IncomingMessage, name: string): string | undefined => {
   const header = singleHeader(request.headers.cookie);
@@ -364,12 +362,15 @@ export class ForegroundServer {
   readonly #coordinator: ForegroundCoordinator;
   readonly #eventHub: ProjectEventHub;
   readonly #host: string;
+  readonly #mcpAppPreviews: McpAppRoutePreviewService | undefined;
   readonly #mcpAppRoutes: McpAppRoutes;
   readonly #runtimeMcpRoutes: RuntimeMcpRoutes;
   readonly #mcpSessionRoutes: McpSessionRoutes;
   readonly #runtimeRoutes: RuntimeRoutes;
   readonly #now: () => Date;
   readonly #port: number;
+  /** Per-listener cookie names prevent two loopback workbenches sharing a host cookie jar. */
+  readonly #sessionCookieName: string;
   readonly #server: Server;
   readonly #skillDocuments: SkillDocumentService | undefined;
   readonly #sockets = new Set<Socket>();
@@ -395,8 +396,10 @@ export class ForegroundServer {
     this.#coordinator = options.coordinator;
     this.#eventHub = options.eventHub;
     this.#host = host;
+    this.#mcpAppPreviews = options.mcpAppPreviews;
     this.#now = options.now ?? (() => new Date());
     this.#port = port;
+    this.#sessionCookieName = `agent-bundle-foreground-session-${randomUUID().replaceAll('-', '')}`;
     this.#skillDocuments = options.skillDocuments;
     this.sessionToken = options.sessionToken ?? randomUUID();
     this.#mcpAppRoutes = new McpAppRoutes({
@@ -411,7 +414,12 @@ export class ForegroundServer {
       authorize: (request) => this.#assertMutationSession(request),
       ...(options.mcpAppPreviews === undefined
         ? {}
-        : { awaitRegistryMutation: async () => { await options.mcpAppPreviews?.runtime?.flushRegistry?.(); } }),
+        : {
+            awaitRegistryMutation: async () => { await options.mcpAppPreviews?.runtime?.flushRegistry?.(); },
+            awaitSessionClose: async ({ expectedSessionRevision, sessionId }) => {
+              await options.mcpAppPreviews?.runtime?.closeSession?.(sessionId, expectedSessionRevision);
+            },
+          }),
       ...(options.runtime === undefined ? {} : { runtime: options.runtime }),
     });
     this.#runtimeRoutes = new RuntimeRoutes({
@@ -511,21 +519,31 @@ export class ForegroundServer {
     this.#mcpSessionRoutes.close();
     this.#runtimeMcpRoutes.close();
     this.#runtimeRoutes.close();
-    const releaseServer = this.#listenStarted
-      ? (() => {
-          this.#listenStarted = false;
-          for (const subscription of this.#streamSubscriptions) subscription.unsubscribe();
-          this.#streamSubscriptions.clear();
-          for (const socket of this.#sockets) socket.destroy();
-          return closeServer(this.#server);
-        })()
-      : Promise.resolve();
-    this.#releasePromise = Promise.allSettled([releaseServer, this.#coordinator.close()]).then(([server, coordinator]) => {
+    this.#releasePromise = (async () => {
+      // Publish runtime App tombstones while authenticated event streams are
+      // still subscribed. Lifecycle close below owns proxies and sandboxes.
+      const appPreparation = await Promise.allSettled([this.#mcpAppPreviews?.prepareClose?.() ?? Promise.resolve()]);
+      // EventHub delivery is synchronous, while a socket write may need one
+      // turn to leave Node's stream buffer before shutdown destroys sockets.
+      await new Promise<void>((resolvePromise) => setImmediate(resolvePromise));
+      const releaseServer = this.#listenStarted
+        ? (() => {
+            this.#listenStarted = false;
+            for (const subscription of this.#streamSubscriptions) subscription.unsubscribe();
+            this.#streamSubscriptions.clear();
+            for (const socket of this.#sockets) socket.destroy();
+            return closeServer(this.#server);
+          })()
+        : Promise.resolve();
+      const [server, coordinator] = await Promise.allSettled([releaseServer, this.#coordinator.close()]);
       const failures: ForegroundServerCloseFailure[] = [];
+      for (const result of appPreparation) {
+        if (result.status === 'rejected') failures.push(Object.freeze({ error: result.reason, resource: 'mcp-apps' }));
+      }
       if (server.status === 'rejected') failures.push(Object.freeze({ error: server.reason, resource: 'server' }));
       if (coordinator.status === 'rejected') failures.push(Object.freeze({ error: coordinator.reason, resource: 'coordinator' }));
       return Object.freeze(failures);
-    });
+    })();
     return this.#releasePromise;
   }
 
@@ -551,10 +569,10 @@ export class ForegroundServer {
       response.writeHead(200, {
         'cache-control': 'no-store',
         'content-type': 'application/json; charset=utf-8',
-        'set-cookie': `${sessionCookieName}=${this.sessionToken}; HttpOnly; SameSite=Strict; Path=/api`,
+        'set-cookie': `${this.#sessionCookieName}=${this.sessionToken}; HttpOnly; SameSite=Strict; Path=/api`,
         'x-content-type-options': 'nosniff',
       });
-      response.end(JSON.stringify({ origin: this.url, token: this.sessionToken }));
+      response.end(JSON.stringify({ cookieName: this.#sessionCookieName, origin: this.url, token: this.sessionToken }));
       return;
     }
     if (pathname === '/api/project/rebuild') {
@@ -634,7 +652,7 @@ export class ForegroundServer {
     if (origin !== this.url && (origin !== undefined || singleHeader(request.headers['sec-fetch-site']) !== 'same-origin')) {
       throw requestError(diagnostic('AB8003', 'Request origin is not this foreground server.', 403));
     }
-    if (cookieValue(request, sessionCookieName) !== this.sessionToken) {
+    if (cookieValue(request, this.#sessionCookieName) !== this.sessionToken) {
       throw requestError(diagnostic('AB8004', 'A valid foreground session cookie is required.', 403));
     }
   }

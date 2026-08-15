@@ -15,6 +15,8 @@ export interface RuntimeMcpRoutesOptions {
   readonly authorize: (request: IncomingMessage) => void;
   /** Drains provider-owned App invalidations after a manual registry mutation. */
   readonly awaitRegistryMutation?: () => Promise<void>;
+  /** Waits for a matching run-bound App logical revoke and cleanup attempt after session close. */
+  readonly awaitSessionClose?: (request: DevRuntimeMcpSessionControlRequest) => Promise<void>;
   readonly runtime?: DevRuntimeSession;
 }
 
@@ -121,12 +123,14 @@ const rpcRequest = (body: Record<string, unknown>, sessionId: string): DevRuntim
 export class RuntimeMcpRoutes {
   readonly #authorize: RuntimeMcpRoutesOptions['authorize'];
   readonly #awaitRegistryMutation: RuntimeMcpRoutesOptions['awaitRegistryMutation'];
+  readonly #awaitSessionClose: RuntimeMcpRoutesOptions['awaitSessionClose'];
   readonly #runtime: DevRuntimeSession | undefined;
   #closed = false;
 
   constructor(options: RuntimeMcpRoutesOptions) {
     this.#authorize = options.authorize;
     this.#awaitRegistryMutation = options.awaitRegistryMutation;
+    this.#awaitSessionClose = options.awaitSessionClose;
     this.#runtime = options.runtime;
   }
   close(): void { this.#closed = true; }
@@ -157,7 +161,9 @@ export class RuntimeMcpRoutes {
       }
       if (parsed.kind === 'close') {
         if (method !== 'DELETE') return responseDiagnostic(response, diagnostic('AB8007', 'Route does not accept this method.', 405)), true;
-        await registry.closeSession(controlRequest(await readBody(request), parsed.sessionId));
+        const control = controlRequest(await readBody(request), parsed.sessionId);
+        await registry.closeSession(control);
+        await this.#awaitSessionClose?.(control);
         await this.#awaitRegistryMutation?.();
         responseJson(response, { closed: true });
         return true;

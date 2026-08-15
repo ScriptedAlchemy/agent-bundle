@@ -54,7 +54,10 @@ const snapshot = (): DevRuntimeMcpSessionSnapshot => Object.freeze({
   state: 'ready' as const,
 });
 
-const createSessionView = (requests: DevRuntimeMcpOperationRequest[]): DevRuntimeMcpSessionView => ({
+const createSessionView = (
+  requests: DevRuntimeMcpOperationRequest[],
+  options: Readonly<{ readonly permissions?: JsonValue }> = {},
+): DevRuntimeMcpSessionView => ({
   execute: async (request) => {
     requests.push(request);
     const value: JsonValue = request.kind === 'list-tools'
@@ -66,7 +69,7 @@ const createSessionView = (requests: DevRuntimeMcpOperationRequest[]): DevRuntim
       : request.kind === 'list-resources'
         ? { resources: [{ _meta: { ui: { resourceUri: 'ui://weather/forecast.html' } }, mimeType: 'text/html;profile=mcp-app', uri: 'ui://weather/forecast.html' }] }
         : request.kind === 'read-resource'
-          ? { contents: [{ _meta: { ui: {} }, mimeType: 'text/html;profile=mcp-app', text: '<main>Weather</main>', uri: request.uri }] }
+          ? { contents: [{ _meta: { ui: options.permissions === undefined ? {} : { permissions: options.permissions } }, mimeType: 'text/html;profile=mcp-app', text: '<main>Weather</main>', uri: request.uri }] }
           : { content: [{ text: 'called', type: 'text' }] };
     return Object.freeze({ operationId: `op-${requests.length}`, sessionId: 'session-a', sessionRevision: 2, value, vector });
   },
@@ -74,12 +77,17 @@ const createSessionView = (requests: DevRuntimeMcpOperationRequest[]): DevRuntim
   watchClosed: () => Object.freeze({ closed: false, unsubscribe: () => undefined }),
 });
 
-const createRuntimeFixture = (options: Readonly<{ readonly closeProxy?: () => Promise<void> }> = {}) => {
+const createRuntimeFixture = (options: Readonly<{
+  readonly closeBinding?: () => Promise<void>;
+  readonly closeProxy?: () => Promise<void>;
+  readonly failProxyOpen?: boolean;
+  readonly permissions?: JsonValue;
+}> = {}) => {
   const requests: DevRuntimeMcpOperationRequest[] = [];
   const controls: string[] = [];
   const emitted: unknown[] = [];
   let listener: ((message: DevRuntimeMcpRegistryMessage) => void) | undefined;
-  const view = createSessionView(requests);
+  const view = createSessionView(requests, options);
   const runtime = {
     clientSurface: () => undefined,
     close: async () => { controls.push('close'); },
@@ -108,11 +116,22 @@ const createRuntimeFixture = (options: Readonly<{ readonly closeProxy?: () => Pr
     status: () => ({ descriptor: { environmentVariables: [], id: 'fixture', label: 'Fixture', schemaVersion: 1 }, diagnostics: [], hmrReady: true, state: 'active' as const }),
     surfaces: () => [],
   } satisfies DevRuntimeSession;
+  const bindingAuthority = new McpAppRuntimeBindingService();
+  if (options.closeBinding !== undefined) {
+    const closeBinding = bindingAuthority.closeBinding.bind(bindingAuthority);
+    bindingAuthority.closeBinding = async (bindingId) => {
+      await options.closeBinding?.();
+      return closeBinding(bindingId);
+    };
+  }
   const service = new McpAppRuntimePreviewService({
-    bindingAuthority: new McpAppRuntimeBindingService(),
+    bindingAuthority,
     configExtensions: () => Object.freeze({ descriptors: [], extensions: Object.freeze({}), projectRoot: '/project', sourceRevision: 'source-a' }),
     emit: (details) => { emitted.push(details); },
-    openRuntimeClientSurface: async (surfaceId) => Object.freeze({ bootstrapUrl: `http://proxy.test/${surfaceId}`, close: options.closeProxy ?? (async () => undefined), origin: 'http://proxy.test', surfaceId, webSocketPath: '/rsbuild-hmr' }),
+    openRuntimeClientSurface: async (surfaceId) => {
+      if (options.failProxyOpen === true) throw new Error('proxy open failed');
+      return Object.freeze({ bootstrapUrl: `http://proxy.test/${surfaceId}`, close: options.closeProxy ?? (async () => undefined), origin: 'http://proxy.test', surfaceId, webSocketPath: '/rsbuild-hmr' });
+    },
     runtime,
   });
   return Object.freeze({
@@ -210,7 +229,73 @@ it('binds a call-tool consent grant to one exact operation and rejects a browser
   expect(requests.at(-1)).toEqual({ arguments: {}, expectedSessionRevision: 2, kind: 'call-tool', name: 'show-weather' });
 });
 
-it('retains a failed runtime preview cleanup for an explicit retry and emits one revocation', async () => {
+it('retains only the frozen App-visible catalog and rejects hidden actions before provider execution', async () => {
+  const { requests, service } = createRuntimeFixture();
+  const preview = await service.create({ expectedGenerationId: 'generation-a', profileId: 'portable', runId: 'run-a' });
+
+  await expect(service.operate(preview.binding.id, { kind: 'tools/list' })).resolves.toMatchObject({
+    result: { value: { tools: [{ name: 'show-weather' }] } },
+  });
+  await expect(service.operate(preview.binding.id, { kind: 'resources/list' })).resolves.toMatchObject({
+    result: { value: { resources: [{ uri: 'ui://weather/forecast.html' }] } },
+  });
+  await expect(service.operate(preview.binding.id, {
+    kind: 'resources/read', uri: 'ui://weather/other.html',
+  })).rejects.toThrow('not in the binding catalog');
+
+  const challenge = await service.createConsent(preview.binding.id, {
+    actionFingerprint: 'server-fingerprint', capability: 'call-tool', details: { arguments: {}, name: 'foreign-app' }, scope: 'action', summary: 'foreign App tool',
+  });
+  const decision = await service.decideConsent(preview.binding.id, challenge.challenge.id, 'allow-once');
+  await expect(service.operate(preview.binding.id, {
+    consentId: decision.grant?.authorizationId,
+    kind: 'tools/call',
+    name: 'foreign-app',
+  })).rejects.toThrow('not in the binding catalog');
+  expect(requests).toHaveLength(3);
+});
+
+it('persists only effective declared document policy approvals in the binding snapshot', async () => {
+  const undeclared = createRuntimeFixture();
+  const undeclaredPreview = await undeclared.service.create({ expectedGenerationId: 'generation-a', profileId: 'portable', runId: 'run-a' });
+  const ignored = await undeclared.service.createConsent(undeclaredPreview.binding.id, {
+    actionFingerprint: 'ignored-camera', capability: 'camera', details: {}, scope: 'document', summary: 'undeclared camera',
+  });
+  const ignoredDecision = await undeclared.service.decideConsent(undeclaredPreview.binding.id, ignored.challenge.id, 'allow-once');
+  expect(ignoredDecision.documentPolicy.revision).toBe(1);
+  expect(undeclared.service.get(undeclaredPreview.binding.id)).toMatchObject({ documentPolicy: { revision: 1 } });
+
+  const declared = createRuntimeFixture({ permissions: { camera: {} } });
+  const declaredPreview = await declared.service.create({ expectedGenerationId: 'generation-a', profileId: 'portable', runId: 'run-a' });
+  const accepted = await declared.service.createConsent(declaredPreview.binding.id, {
+    actionFingerprint: 'accepted-camera', capability: 'camera', details: {}, scope: 'document', summary: 'declared camera',
+  });
+  const acceptedDecision = await declared.service.decideConsent(declaredPreview.binding.id, accepted.challenge.id, 'allow-once');
+  expect(acceptedDecision.documentPolicy).toMatchObject({ revision: 2 });
+  expect(declared.service.get(declaredPreview.binding.id)).toMatchObject({ documentPolicy: { revision: 2 } });
+});
+
+it('awaits matching session-close App cleanup after publishing its terminal invalidation', async () => {
+  let releaseProxy: (() => void) | undefined;
+  const { emitted, service } = createRuntimeFixture({
+    closeProxy: async () => {
+      await new Promise<void>((resolvePromise) => { releaseProxy = resolvePromise; });
+    },
+  });
+  const preview = await service.create({ expectedGenerationId: 'generation-a', profileId: 'portable', runId: 'run-a' });
+
+  let settled = false;
+  const closing = service.closeSession('session-a', 2).then(() => { settled = true; });
+  await eventually(() => releaseProxy !== undefined);
+  expect(settled).toBe(false);
+  expect(service.get(preview.binding.id)).toBeUndefined();
+  expect(emitted).toEqual([expect.objectContaining({ bindingId: preview.binding.id, reason: 'session-closed', state: 'revoked' })]);
+  releaseProxy?.();
+  await closing;
+  expect(settled).toBe(true);
+});
+
+it('logically revokes before retaining failed runtime preview cleanup for an explicit retry', async () => {
   let closeAttempts = 0;
   const { emitted, service } = createRuntimeFixture({
     closeProxy: async () => {
@@ -219,10 +304,82 @@ it('retains a failed runtime preview cleanup for an explicit retry and emits one
     },
   });
   const preview = await service.create({ expectedGenerationId: 'generation-a', profileId: 'portable', runId: 'run-a' });
-  await expect(service.close(preview.binding.id)).rejects.toThrow('proxy close failed');
-  expect(service.get(preview.binding.id)).toBeDefined();
+  await expect(service.close(preview.binding.id)).rejects.toBeInstanceOf(AggregateError);
+  expect(service.get(preview.binding.id)).toBeUndefined();
+  expect(service.isRevoked(preview.binding.id)).toBe(true);
+  expect(emitted).toEqual([expect.objectContaining({ bindingId: preview.binding.id, reason: 'manual-close', state: 'revoked' })]);
   await expect(service.close(preview.binding.id)).resolves.toBeUndefined();
   expect(closeAttempts).toBe(2);
   expect(service.get(preview.binding.id)).toBeUndefined();
-  expect(emitted).toEqual([expect.objectContaining({ bindingId: preview.binding.id, reason: 'manual-close', state: 'revoked' })]);
+  expect(emitted).toHaveLength(1);
+});
+
+it('aggregates binding and proxy cleanup failures while retaining both for retry', async () => {
+  let bindingAttempts = 0;
+  let proxyAttempts = 0;
+  const { service } = createRuntimeFixture({
+    closeBinding: async () => {
+      bindingAttempts += 1;
+      if (bindingAttempts === 1) throw new Error('binding close failed');
+    },
+    closeProxy: async () => {
+      proxyAttempts += 1;
+      if (proxyAttempts === 1) throw new Error('proxy close failed');
+    },
+  });
+  const preview = await service.create({ expectedGenerationId: 'generation-a', profileId: 'portable', runId: 'run-a' });
+
+  let failure: unknown;
+  try {
+    await service.close(preview.binding.id);
+  } catch (error) {
+    failure = error;
+  }
+  expect(failure).toBeInstanceOf(AggregateError);
+  expect((failure as AggregateError).errors).toEqual([
+    expect.objectContaining({ message: 'binding close failed' }),
+    expect.objectContaining({ message: 'proxy close failed' }),
+  ]);
+  await expect(service.close(preview.binding.id)).resolves.toBeUndefined();
+  expect({ bindingAttempts, proxyAttempts }).toEqual({ bindingAttempts: 2, proxyAttempts: 2 });
+});
+
+it('retains a provisional create cleanup after both creation and release fail', async () => {
+  let closeAttempts = 0;
+  const { service } = createRuntimeFixture({
+    closeBinding: async () => {
+      closeAttempts += 1;
+      if (closeAttempts === 1) throw new Error('binding cleanup failed');
+    },
+    failProxyOpen: true,
+  });
+
+  await expect(service.create({ expectedGenerationId: 'generation-a', profileId: 'portable', runId: 'run-a' }))
+    .rejects.toBeInstanceOf(AggregateError);
+  await expect(service.closeAll()).resolves.toBeUndefined();
+  expect(closeAttempts).toBe(2);
+});
+
+it('closeAll retains every runtime preview cleanup cause instead of the first rejection', async () => {
+  let closeAttempts = 0;
+  const { service } = createRuntimeFixture({
+    closeProxy: async () => {
+      closeAttempts += 1;
+      throw new Error(`proxy cleanup ${closeAttempts}`);
+    },
+  });
+  await service.create({ expectedGenerationId: 'generation-a', profileId: 'portable', runId: 'run-a' });
+  await service.create({ expectedGenerationId: 'generation-a', profileId: 'portable', runId: 'run-a' });
+
+  let failure: unknown;
+  try {
+    await service.closeAll();
+  } catch (error) {
+    failure = error;
+  }
+  expect(failure).toBeInstanceOf(AggregateError);
+  expect((failure as AggregateError).errors).toEqual([
+    expect.objectContaining({ message: 'proxy cleanup 1' }),
+    expect.objectContaining({ message: 'proxy cleanup 2' }),
+  ]);
 });

@@ -129,6 +129,7 @@ class McpAppLifecycleCloseError extends Error {
 class McpAppLifecycle implements Closeable {
   readonly #sandbox: McpAppSandboxProxy;
   #closePromise: Promise<void> | undefined;
+  #prepareClosePromise: Promise<void> | undefined;
   #previews: McpAppPreviewService | undefined;
   #runtimePreviews: McpAppRuntimePreviewService | undefined;
 
@@ -147,7 +148,13 @@ class McpAppLifecycle implements Closeable {
     return this.#closePromise;
   }
 
+  prepareClose(): Promise<void> {
+    this.#prepareClosePromise ??= this.#runtimePreviews?.prepareClose() ?? Promise.resolve();
+    return this.#prepareClosePromise;
+  }
+
   async #close(): Promise<void> {
+    await this.prepareClose();
     const preview = this.#previews === undefined
       ? undefined
       : await Promise.allSettled([this.#previews.closeAll()]);
@@ -174,14 +181,18 @@ class McpAppLifecycle implements Closeable {
 class DeferredMcpAppPreviewService implements McpAppRoutePreviewService {
   #service: McpAppRoutePreviewService | undefined;
   #runtime: McpAppRuntimePreviewService | undefined;
+  #prepareClose: (() => Promise<void>) | undefined;
 
-  attach(service: McpAppRoutePreviewService, runtime?: McpAppRuntimePreviewService): void {
+  attach(service: McpAppRoutePreviewService, runtime?: McpAppRuntimePreviewService, lifecycle?: McpAppLifecycle): void {
     if (this.#service !== undefined) throw new Error('MCP App preview route service is already attached.');
     this.#service = service;
     this.#runtime = runtime;
+    this.#prepareClose = lifecycle === undefined ? undefined : () => lifecycle.prepareClose();
   }
 
   get runtime(): McpAppRuntimePreviewService | undefined { return this.#runtime; }
+
+  prepareClose(): Promise<void> { return this.#prepareClose?.() ?? Promise.resolve(); }
 
   get(bindingId: string) {
     return this.#service?.get(bindingId);
@@ -559,7 +570,7 @@ export const startDevServer = async (options: StartDevServerOptions): Promise<De
       }
     }
     mcpApps.attach(previews, runtimePreviews);
-    appPreviews.attach(previews, runtimePreviews);
+    appPreviews.attach(previews, runtimePreviews, mcpApps);
     if (options.open === true) await openBrowser(foreground.url);
   } catch (error) {
     const [cleanup] = await Promise.allSettled([foreground.close()]);

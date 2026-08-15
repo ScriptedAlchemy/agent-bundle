@@ -336,6 +336,31 @@ it('classifies unavailable runtime App operations as unknown or revoked before d
   }
 });
 
+it('permits an authenticated DELETE retry for a revoked runtime App cleanup but never for an unknown id', async () => {
+  const closes: string[] = [];
+  const runtime: McpAppRuntimeRoutePreviewService = {
+    close: async (bindingId) => { closes.push(bindingId); },
+    create: async () => { throw new Error('unused'); },
+    createConsent: async () => { throw new Error('unused'); },
+    decideConsent: async () => { throw new Error('unused'); },
+    get: () => undefined,
+    isRevoked: (bindingId) => bindingId === 'revoked-a',
+    operate: async () => { throw new Error('unused'); },
+  };
+  const started = await startRoutes(Object.assign(new RecordingPreviewService(), { runtime }));
+  try {
+    const retry = await fetch(`${started.url}/api/runtime/apps/revoked-a`, { headers: headers(), method: 'DELETE' });
+    expect(retry.status).toBe(200);
+    await expect(retry.json()).resolves.toEqual({ closed: true });
+
+    const unknown = await fetch(`${started.url}/api/runtime/apps/unknown-a`, { headers: headers(), method: 'DELETE' });
+    expect(unknown.status).toBe(404);
+    expect(closes).toEqual(['revoked-a']);
+  } finally {
+    await started.close();
+  }
+});
+
 it('returns a phase-safe 409 when a runtime App create request names a stale run generation', async () => {
   const runtime: McpAppRuntimeRoutePreviewService = {
     close: async () => undefined,

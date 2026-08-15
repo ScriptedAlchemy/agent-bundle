@@ -185,3 +185,54 @@ it('maps manual registry conflicts to 409 and waits for restart invalidation bef
     await new Promise<void>((resolvePromise, rejectPromise) => server.close((error) => error === undefined ? resolvePromise() : rejectPromise(error)));
   }
 });
+
+it('does not return manual session DELETE until its matching App cleanup barrier settles', async () => {
+  let releaseBarrier: (() => void) | undefined;
+  let barrierCalls = 0;
+  const runtime = {
+    mcpRegistry: {
+      closeSession: async () => undefined,
+    },
+  } as unknown as DevRuntimeSession;
+  const routes = new RuntimeMcpRoutes({
+    authorize,
+    awaitSessionClose: async (request) => {
+      barrierCalls += 1;
+      expect(request).toEqual({ expectedSessionRevision: 2, sessionId: 'session-a' });
+      await new Promise<void>((resolvePromise) => { releaseBarrier = resolvePromise; });
+    },
+    runtime,
+  });
+  const server = createServer((request, response) => {
+    void routes.handle(request, response).then((handled) => {
+      if (!handled) response.writeHead(404).end();
+    }).catch((error: unknown) => {
+      const failure = error as Partial<{ readonly code: string; readonly status: number }>;
+      response.writeHead(failure.status ?? 500, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ diagnostic: { code: failure.code ?? 'AB8007' } }));
+    });
+  });
+  await new Promise<void>((resolvePromise) => server.listen({ host: '127.0.0.1', port: 0 }, resolvePromise));
+  const address = server.address() as AddressInfo;
+  try {
+    let settled = false;
+    const pending = fetch(`http://127.0.0.1:${address.port}/api/runtime/mcp/sessions/session-a`, {
+      body: JSON.stringify({ expectedSessionRevision: 2, sessionId: 'session-a' }),
+      headers: { 'content-type': 'application/json', origin: 'http://127.0.0.1:4567', 'x-agent-bundle-session': 'runtime-token' },
+      method: 'DELETE',
+    }).then((response) => {
+      settled = true;
+      return response;
+    });
+    for (let attempt = 0; attempt < 20 && releaseBarrier === undefined; attempt += 1) await new Promise<void>((resolvePromise) => setImmediate(resolvePromise));
+    expect(releaseBarrier).toBeDefined();
+    expect(settled).toBe(false);
+    releaseBarrier?.();
+    const response = await pending;
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ closed: true });
+    expect(barrierCalls).toBe(1);
+  } finally {
+    await new Promise<void>((resolvePromise, rejectPromise) => server.close((error) => error === undefined ? resolvePromise() : rejectPromise(error)));
+  }
+});

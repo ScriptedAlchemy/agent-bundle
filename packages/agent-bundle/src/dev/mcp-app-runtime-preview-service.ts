@@ -107,6 +107,8 @@ export interface McpAppRuntimeInvalidationDetails {
 
 export interface McpAppRuntimeRoutePreviewService {
   close(bindingId: string): Promise<void>;
+  /** Awaits every run-bound App revoke/cleanup attempt for one manually closed session revision. */
+  closeSession?(sessionId: string, sessionRevision: number): Promise<void>;
   create(request: CreateMcpAppPreviewRequest): Promise<McpAppPreviewSnapshot>;
   createConsent(bindingId: string, request: McpAppConsentRequest): Promise<McpAppConsentCreatedResponse>;
   decideConsent(bindingId: string, consentId: string, decision: 'allow-once' | 'deny'): Promise<McpAppConsentDecisionResponse>;
@@ -142,15 +144,32 @@ export interface McpAppRuntimePreviewServiceOptions {
 
 interface PreviewEntry {
   readonly binding: McpAppRuntimeBindingSnapshot;
+  readonly catalog: Readonly<{
+    readonly resources: McpAppBoundOperationResult;
+    readonly resourceUris: readonly string[];
+    readonly toolNames: readonly string[];
+    readonly tools: McpAppBoundOperationResult;
+  }>;
+  readonly cleanup: PreviewCleanup;
   readonly consent: McpAppConsentAuthority;
-  readonly proxy?: DevRuntimeClientSurfaceProxyBinding;
   readonly runBinding: DevRuntimeMcpAppRunBinding;
   readonly session: DevRuntimeMcpSessionView;
-  readonly snapshot: McpAppPreviewSnapshot;
+  snapshot: McpAppPreviewSnapshot;
   activeOperations: number;
-  closed: boolean;
+  documentGrants: readonly McpAppConsentGrant[];
+  documentPolicy: McpAppDocumentPolicySnapshot;
+  revoked: boolean;
+}
+
+interface PreviewCleanup {
+  readonly bindingId: string;
+  readonly sessionId: string;
+  readonly sessionRevision: number;
+  bindingReleased: boolean;
+  bindingReleaseInFlight: boolean;
   closeAttempt?: Promise<void>;
-  documentPolicyRevision: number;
+  proxy?: DevRuntimeClientSurfaceProxyBinding;
+  proxyClosed: boolean;
 }
 
 const maxConcurrentOperations = 4;
@@ -204,10 +223,34 @@ const listItems = (value: McpAppJsonValue, key: 'tools' | 'resources'): readonly
 
 const metadataOf = (value: McpAppJsonValue): unknown => isRecord(value) ? value._meta : undefined;
 
+const catalogOperation = (
+  value: McpAppBoundOperationResult,
+  key: 'resources' | 'tools',
+  items: readonly McpAppJsonValue[],
+): McpAppBoundOperationResult => Object.freeze({
+  ...value,
+  value: Object.freeze({ [key]: Object.freeze([...items]) }),
+});
+
+const aggregateFailures = (message: string, failures: readonly unknown[]): never => {
+  throw new AggregateError(failures, message);
+};
+
+const flattenFailures = (failures: readonly unknown[]): readonly unknown[] => failures.flatMap((failure) =>
+  failure instanceof AggregateError ? flattenFailures(failure.errors) : [failure],
+);
+
+const sameDocumentPolicy = (left: McpAppDocumentPolicySnapshot, right: McpAppDocumentPolicySnapshot): boolean =>
+  left.allow === right.allow &&
+  JSON.stringify(left.approvedPermissions) === JSON.stringify(right.approvedPermissions) &&
+  JSON.stringify(left.warnings) === JSON.stringify(right.warnings);
+
 /** Provider-owned preview lane for an already-succeeded runtime App run. */
 export class McpAppRuntimePreviewService implements McpAppRuntimeRoutePreviewService {
   readonly #bindingAuthority: McpAppRuntimeBindingService;
   readonly #configExtensions: () => McpAppConfigExtensionInspectionOptions;
+  /** Retained until every fallible proxy and lease release has succeeded. */
+  readonly #cleanups = new Map<string, PreviewCleanup>();
   readonly #emit: ((details: McpAppRuntimeInvalidationDetails) => void) | undefined;
   readonly #entries = new Map<string, PreviewEntry>();
   readonly #invalidationReasons = new Map<string, McpAppRuntimeInvalidationDetails['reason']>();
@@ -269,7 +312,10 @@ export class McpAppRuntimePreviewService implements McpAppRuntimeRoutePreviewSer
     if (live.binding.providerSessionId !== run.vector.providerSessionId || live.binding.stateStoreId !== run.vector.stateStoreId) {
       throw new Error('Runtime MCP App stable session has foreign provider/state authority.');
     }
-    if (live.connection.protocolEra === undefined || live.connection.protocolVersion === undefined || live.connection.capabilities === undefined) {
+    if (
+      live.connection.protocolEra === undefined || live.connection.protocolVersion === undefined ||
+      live.connection.capabilities === undefined || live.connection.server === undefined
+    ) {
       throw new Error('Runtime MCP App stable session has incomplete negotiation.');
     }
     const result = projectMcpAppResult(run.result.protocol);
@@ -287,6 +333,18 @@ export class McpAppRuntimePreviewService implements McpAppRuntimeRoutePreviewSer
       session,
     });
     createdBinding.id = binding.id;
+    // Retain cleanup ownership before any subsequent provider/proxy operation
+    // can fail.  A failed create has no public binding, but shutdown must still
+    // be able to retry every lease and proxy release.
+    const cleanup: PreviewCleanup = {
+      bindingId: binding.id,
+      bindingReleased: false,
+      bindingReleaseInFlight: false,
+      proxyClosed: false,
+      sessionId: runBinding.sessionId,
+      sessionRevision: runBinding.sessionRevision,
+    };
+    this.#cleanups.set(binding.id, cleanup);
     let proxy: DevRuntimeClientSurfaceProxyBinding | undefined;
     try {
       await this.#registryTail;
@@ -301,27 +359,36 @@ export class McpAppRuntimePreviewService implements McpAppRuntimeRoutePreviewSer
       );
       if (appTools.length !== 1) throw new Error('Stored Runtime MCP App tool is not uniquely App-visible in the stable session.');
       const appTool = appTools[0]!;
+      if (!isRecord(appTool)) throw new Error('Stored Runtime MCP App tool is invalid.');
+      const appToolName = nonempty(appTool.name, 'Stored Runtime MCP App tool name');
       const resource = listItems(resources.value, 'resources').find((candidate) => isRecord(candidate) && candidate.uri === run.result.app!.resourceUri);
-      if (resource === undefined) throw new Error('Stored Runtime MCP App resource is not visible in the stable session.');
+      if (!isRecord(resource) || resource.mimeType !== 'text/html;profile=mcp-app') {
+        throw new Error('Stored Runtime MCP App resource is not visible in the stable session.');
+      }
       const read = await this.#bindingAuthority.execute(binding.id, { kind: 'read-resource', uri: run.result.app.resourceUri });
       this.#assertCreateStillValid(binding.id, runBinding, run.vector, session);
       const parsed = parseMcpAppResource(read.value, run.result.app.resourceUri);
       if (parsed === undefined) throw new Error('Stored Runtime MCP App resource is not canonical Apps HTML.');
       const listedMetadata = metadataOf(resource);
       const contents = isRecord(read.value) && Array.isArray(read.value.contents) ? read.value.contents : [];
-      const readContent = contents.find((candidate) => isRecord(candidate) && candidate.uri === run.result.app!.resourceUri);
+      const readContent = contents.find((candidate) =>
+        isRecord(candidate) && candidate.uri === run.result.app!.resourceUri && candidate.mimeType === 'text/html;profile=mcp-app');
+      if (readContent === undefined) throw new Error('Stored Runtime MCP App resource read is not canonical Apps HTML.');
       const resourceMetadata = mergeMcpAppResourceMetadata(listedMetadata, metadataOf(readContent as McpAppJsonValue));
+      const configExtensions = this.#configExtensions();
       const profile = resolveMcpAppHostProfile({
-        configExtensions: this.#configExtensions(),
+        configExtensions,
         host: defaultHost(frozenJson(appTool, 'Runtime MCP App tool')),
         profile: request.profileId,
         // The immutable merged inspection is exposed separately below. Profile
         // metadata is tool-owned here so duplicate standard `ui` keys never
         // become an authority-merging input.
-        resource: { mimeType: 'text/html;profile=mcp-app', uri: run.result.app.resourceUri },
+        declaredCapabilities: Object.keys(parsed.permissions ?? {}),
+        resource: { metadata: resourceMetadata.merged, mimeType: 'text/html;profile=mcp-app', uri: run.result.app.resourceUri },
         toolMetadata: metadataOf(appTool),
       });
       proxy = profile.kind === 'apps' ? await this.#openRuntimeClientSurface(run.result.app.surfaceId) : undefined;
+      cleanup.proxy = proxy;
       this.#assertCreateStillValid(binding.id, runBinding, run.vector, session);
       const documentPolicy = createMcpAppDocumentPolicySnapshot(1, { permissions: parsed.permissions }, []);
       const base = Object.freeze({
@@ -345,7 +412,7 @@ export class McpAppRuntimePreviewService implements McpAppRuntimeRoutePreviewSer
         const fallback = profile.kind === 'fallback'
           ? profile
           : resolveMcpAppHostProfile({
-            configExtensions: this.#configExtensions(),
+            configExtensions,
             host: defaultHost(frozenJson(appTool, 'Runtime MCP App tool')),
             profile: request.profileId,
           });
@@ -354,10 +421,32 @@ export class McpAppRuntimePreviewService implements McpAppRuntimeRoutePreviewSer
       }
       await this.#registryTail;
       this.#assertCreateStillValid(binding.id, runBinding, run.vector, session);
-      this.#entries.set(binding.id, { activeOperations: 0, binding, consent: createMcpAppConsentAuthority(), documentPolicyRevision: 1, proxy, runBinding, session, snapshot, closed: false });
+      this.#entries.set(binding.id, {
+        activeOperations: 0,
+        binding,
+        catalog: Object.freeze({
+          resources: catalogOperation(resources, 'resources', [resource]),
+          resourceUris: Object.freeze([run.result.app.resourceUri]),
+          toolNames: Object.freeze([appToolName]),
+          tools: catalogOperation(tools, 'tools', [appTool]),
+        }),
+        cleanup,
+        consent: createMcpAppConsentAuthority(),
+        documentGrants: Object.freeze([]),
+        documentPolicy,
+        revoked: false,
+        runBinding,
+        session,
+        snapshot,
+      });
       return snapshot;
     } catch (error) {
-      await Promise.allSettled([proxy?.close() ?? Promise.resolve(), this.#bindingAuthority.closeBinding(binding.id)]);
+      cleanup.proxy = proxy;
+      const release = await Promise.allSettled([this.#cleanup(cleanup)]);
+      const failures = release.flatMap((result) => result.status === 'rejected'
+        ? [error, ...flattenFailures([result.reason])]
+        : [error]);
+      if (failures.length > 1) aggregateFailures('Runtime MCP App preview creation and cleanup failed.', failures);
       throw error;
     }
   }
@@ -368,11 +457,16 @@ export class McpAppRuntimePreviewService implements McpAppRuntimeRoutePreviewSer
     entry.activeOperations += 1;
     try {
       let result: McpAppBoundOperationResult;
-      if (request.kind === 'tools/list') result = await this.#bindingAuthority.execute(bindingId, { kind: 'list-tools' });
-      else if (request.kind === 'resources/list') result = await this.#bindingAuthority.execute(bindingId, { kind: 'list-resources' });
-      else if (request.kind === 'resources/read') result = await this.#bindingAuthority.execute(bindingId, { kind: 'read-resource', uri: nonempty(request.uri, 'Runtime MCP App resource URI') });
+      if (request.kind === 'tools/list') result = entry.catalog.tools;
+      else if (request.kind === 'resources/list') result = entry.catalog.resources;
+      else if (request.kind === 'resources/read') {
+        const uri = nonempty(request.uri, 'Runtime MCP App resource URI');
+        if (!entry.catalog.resourceUris.includes(uri)) throw new Error('Runtime MCP App resource is not in the binding catalog.');
+        result = await this.#bindingAuthority.execute(bindingId, { kind: 'read-resource', uri });
+      }
       else {
         const name = nonempty(request.name, 'Runtime MCP App tool name');
+        if (!entry.catalog.toolNames.includes(name)) throw new Error('Runtime MCP App tool is not in the binding catalog.');
         if (request.consentId === undefined || !entry.consent.consume({ actionDigest: createMcpAppConsentActionDigest('call-tool', Object.freeze({ arguments: request.arguments ?? {}, name })), authorizationId: request.consentId, bindingId, capability: 'call-tool', profile: entry.binding.profileId })) {
           throw new Error('Runtime MCP App tool call requires an approved consent grant.');
         }
@@ -409,31 +503,57 @@ export class McpAppRuntimePreviewService implements McpAppRuntimeRoutePreviewSer
     if (decision !== 'allow-once' && decision !== 'deny') throw new TypeError('Runtime MCP App consent decision is invalid.');
     const resolution = entry.consent.resolve(nonempty(consentId, 'Runtime MCP App consent id'), decision === 'allow-once');
     const grant = resolution.status === 'approved' ? resolution.grant : undefined;
-    if (grant?.scope === 'document') entry.documentPolicyRevision += 1;
+    if (grant?.scope === 'document') {
+      const documentGrants = Object.freeze([...entry.documentGrants, grant]);
+      const candidate = createMcpAppDocumentPolicySnapshot(entry.documentPolicy.revision + 1, {
+        permissions: entry.snapshot.kind === 'apps' ? entry.snapshot.resource.permissions : undefined,
+      }, documentGrants);
+      if (!sameDocumentPolicy(entry.documentPolicy, candidate)) {
+        entry.documentGrants = documentGrants;
+        this.#replaceDocumentPolicy(entry, candidate);
+      }
+    }
     return Object.freeze({ documentPolicy: this.#documentPolicy(entry), grant });
   }
 
   async close(bindingId: string): Promise<void> { await this.#closeEntry(bindingId, 'manual-close'); }
 
-  async closeAll(): Promise<void> {
+  /** Emits all terminal invalidations before foreground SSE/proxy teardown. */
+  async prepareClose(): Promise<void> {
     if (!this.#closed) {
       this.#closed = true;
       this.#subscription.unsubscribe();
     }
-    const results = await Promise.allSettled([...this.#entries.keys()].map(async (id) => this.#closeEntry(id, 'runtime-shutdown')));
-    const rejected = results.find((result): result is PromiseRejectedResult => result.status === 'rejected');
-    if (rejected !== undefined) throw rejected.reason;
+    for (const entry of [...this.#entries.values()]) this.#revoke(entry, 'runtime-shutdown');
+  }
+
+  async closeSession(sessionId: string, sessionRevision: number): Promise<void> {
+    await this.#registryTail;
+    const matching = [...this.#cleanups.values()]
+      .filter((cleanup) => cleanup.sessionId === sessionId && cleanup.sessionRevision === sessionRevision);
+    const results = await Promise.allSettled(matching.map(async (cleanup) => this.#closeEntry(cleanup.bindingId, 'session-closed')));
+    const failures = flattenFailures(results.flatMap((result) => result.status === 'rejected' ? [result.reason] : []));
+    if (failures.length > 0) aggregateFailures('Runtime MCP App session cleanup failed.', failures);
+  }
+
+  async closeAll(): Promise<void> {
+    await this.prepareClose();
+    const results = await Promise.allSettled([...this.#cleanups.keys()].map(async (id) => this.#closeEntry(id, 'runtime-shutdown')));
+    const failures = flattenFailures(results.flatMap((result) => result.status === 'rejected' ? [result.reason] : []));
+    if (failures.length > 0) aggregateFailures('Runtime MCP App previews could not close every resource.', failures);
   }
 
   #entry(bindingId: string): PreviewEntry {
     const entry = this.#entries.get(bindingId);
-    if (entry === undefined || entry.closed) throw new Error('Runtime MCP App preview is not available.');
+    if (entry === undefined || entry.revoked) throw new Error('Runtime MCP App preview is not available.');
     return entry;
   }
 
-  #documentPolicy(entry: PreviewEntry): McpAppDocumentPolicySnapshot {
-    const permissions = entry.snapshot.kind === 'apps' ? entry.snapshot.resource.permissions : undefined;
-    return createMcpAppDocumentPolicySnapshot(entry.documentPolicyRevision, { permissions }, entry.consent.documentGrants(entry.binding.id, entry.binding.profileId));
+  #documentPolicy(entry: PreviewEntry): McpAppDocumentPolicySnapshot { return entry.documentPolicy; }
+
+  #replaceDocumentPolicy(entry: PreviewEntry, documentPolicy: McpAppDocumentPolicySnapshot): void {
+    entry.documentPolicy = documentPolicy;
+    if (entry.snapshot.kind === 'apps') entry.snapshot = Object.freeze({ ...entry.snapshot, documentPolicy });
   }
 
   async #onRegistry(message: DevRuntimeMcpRegistryMessage): Promise<void> {
@@ -476,39 +596,27 @@ export class McpAppRuntimePreviewService implements McpAppRuntimeRoutePreviewSer
 
   async #closeEntry(bindingId: string, reason: McpAppRuntimeInvalidationDetails['reason']): Promise<void> {
     const entry = this.#entries.get(bindingId);
-    if (entry === undefined || entry.closed) return;
-    if (entry.closeAttempt !== undefined) return entry.closeAttempt;
-    const attempt = (async () => {
-      await this.#bindingAuthority.closeBinding(bindingId);
-      await entry.proxy?.close();
-      this.#revoke(entry, reason);
-    })();
-    entry.closeAttempt = attempt;
-    void attempt.then(
-      () => undefined,
-      () => { if (entry.closeAttempt === attempt) entry.closeAttempt = undefined; },
-    );
-    return attempt;
+    if (entry !== undefined) this.#revoke(entry, reason);
+    const cleanup = this.#cleanups.get(bindingId);
+    if (cleanup === undefined) return;
+    await this.#cleanup(cleanup);
   }
 
   async #bindingReleased(bindingId: string, reason: McpAppRuntimeInvalidationDetails['reason']): Promise<void> {
     const entry = this.#entries.get(bindingId);
-    if (entry === undefined || entry.closed || entry.closeAttempt !== undefined) return;
-    const attempt = (async () => {
-      await entry.proxy?.close();
-      this.#revoke(entry, reason);
-    })();
-    entry.closeAttempt = attempt;
-    void attempt.then(
-      () => undefined,
-      () => { if (entry.closeAttempt === attempt) entry.closeAttempt = undefined; },
-    );
-    return attempt;
+    if (entry !== undefined) this.#revoke(entry, reason);
+    const cleanup = this.#cleanups.get(bindingId);
+    if (cleanup === undefined) return;
+    cleanup.bindingReleased = true;
+    // The binding authority awaits its teardown callback. Joining its current
+    // release attempt here would recurse into that same promise forever.
+    if (cleanup.bindingReleaseInFlight) return;
+    await this.#cleanup(cleanup);
   }
 
   #revoke(entry: PreviewEntry, reason: McpAppRuntimeInvalidationDetails['reason']): void {
-    if (entry.closed) return;
-    entry.closed = true;
+    if (entry.revoked) return;
+    entry.revoked = true;
     this.#invalidationReasons.delete(entry.binding.id);
     this.#revokedBindings.add(entry.binding.id);
     while (this.#revokedBindings.size > 128) this.#revokedBindings.delete(this.#revokedBindings.values().next().value as string);
@@ -516,5 +624,39 @@ export class McpAppRuntimePreviewService implements McpAppRuntimeRoutePreviewSer
     // subscriber may tear down its bridge before the lookup disappears.
     this.#emit?.(Object.freeze({ bindingId: entry.binding.id, reason, sessionId: entry.binding.sessionId, sessionRevision: entry.binding.sessionRevision, state: 'revoked' }));
     this.#entries.delete(entry.binding.id);
+  }
+
+  async #cleanup(cleanup: PreviewCleanup): Promise<void> {
+    if (cleanup.closeAttempt !== undefined) return cleanup.closeAttempt;
+    const attempt = (async () => {
+      const failures: unknown[] = [];
+      if (!cleanup.bindingReleased) {
+        cleanup.bindingReleaseInFlight = true;
+        try {
+          await this.#bindingAuthority.closeBinding(cleanup.bindingId);
+          cleanup.bindingReleased = true;
+        } catch (error) {
+          failures.push(error);
+        } finally {
+          cleanup.bindingReleaseInFlight = false;
+        }
+      }
+      if (!cleanup.proxyClosed) {
+        try {
+          await cleanup.proxy?.close();
+          cleanup.proxyClosed = true;
+        } catch (error) {
+          failures.push(error);
+        }
+      }
+      if (failures.length > 0) aggregateFailures('Runtime MCP App preview cleanup failed.', failures);
+      this.#cleanups.delete(cleanup.bindingId);
+    })();
+    cleanup.closeAttempt = attempt;
+    void attempt.then(
+      () => undefined,
+      () => { if (cleanup.closeAttempt === attempt) cleanup.closeAttempt = undefined; },
+    );
+    return attempt;
   }
 }

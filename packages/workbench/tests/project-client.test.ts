@@ -157,7 +157,7 @@ it('completes the shared foreground session bootstrap before constructing its so
     await new Promise<void>((resolvePromise) => setImmediate(resolvePromise));
     expect(requests).toEqual(['/api/project/session']);
     expect(stream.listeners).toEqual([]);
-    session.resolve(Response.json({ origin: 'http://127.0.0.1:3100', token: 'token-1' }));
+    session.resolve(Response.json({ cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef', origin: 'http://127.0.0.1:3100', token: 'token-1' }));
 
     await expect(connecting).resolves.toMatchObject({ artifact: { state: 'active' } });
     expect(requests).toEqual(['/api/project/session', '/api/project/status']);
@@ -429,7 +429,7 @@ it('bootstraps a same-session token before posting an explicit rebuild through t
   const client = new ProjectClient({
     fetch: async (input, init) => {
       requests.push({ body: init?.body?.toString(), headers: init?.headers, input: String(input) });
-      if (String(input) === '/api/project/session') return Response.json({ origin: 'http://127.0.0.1:3100', token: 'token-1' });
+      if (String(input) === '/api/project/session') return Response.json({ cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef', origin: 'http://127.0.0.1:3100', token: 'token-1' });
       return Response.json({ status: status('stale') });
     },
   });

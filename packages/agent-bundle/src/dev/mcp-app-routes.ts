@@ -60,6 +60,8 @@ export interface McpAppRoutePreview {
 
 export interface McpAppRoutePreviewService {
   close(bindingId: string, options: McpAppBridgeCloseOptions): Promise<McpAppPreviewCloseResult>;
+  /** Foreground shutdown barrier: publish invalidations while authenticated SSE is still live. */
+  prepareClose?(): Promise<void>;
   create(options: {
     readonly host: McpAppPreviewHostContext;
     readonly input: McpAppJsonValue;
@@ -529,7 +531,9 @@ export class McpAppRoutes {
     }
     if (parsed.kind === 'runtime-get') {
       if (method === 'DELETE') {
-        if (runtime.get(parsed.bindingId) === undefined) this.#runtimeUnavailable(runtime, parsed.bindingId);
+        if (runtime.get(parsed.bindingId) === undefined && runtime.isRevoked?.(parsed.bindingId) !== true) {
+          this.#runtimeUnavailable(runtime, parsed.bindingId);
+        }
         await runtime.close(parsed.bindingId);
         return responseJson(response, { closed: true });
       }
