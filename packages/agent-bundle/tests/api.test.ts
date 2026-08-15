@@ -185,6 +185,10 @@ it('keeps one supplied registry through advanced artifact, hook, and MCP operati
       target: syntheticTarget,
     })]);
     expect(built.build.manifest.targets).toEqual([expect.objectContaining({ name: syntheticTarget })]);
+    await expect(validate({ artifact, registry, root })).resolves.toEqual({ diagnostics: [] });
+    await expect(validate({ artifact, root })).resolves.toMatchObject({
+      diagnostics: [expect.objectContaining({ code: 'AB6009', target: syntheticTarget })],
+    });
     const hooks = await listHooks({ artifact, registry, root, target: syntheticTarget });
     expect(hooks).toEqual([expect.objectContaining({ target: syntheticTarget })]);
     await expect(simulateHook({

@@ -277,8 +277,8 @@ export class HookPlaygroundService {
   constructor(options: HookPlaygroundServiceOptions) {
     this.#copy = options.copy ?? cp;
     this.#epochStore = options.epochStore;
-    this.#hookService = options.hookService ?? new HookService();
     this.#registry = options.registry ?? createDefaultRegistry();
+    this.#hookService = options.hookService ?? new HookService({ registry: this.#registry });
   }
 
   async list(options: HookPlaygroundListOptions): Promise<readonly HookPlaygroundHook[]> {

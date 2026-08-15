@@ -78,8 +78,13 @@ export type {
   TargetAdapter,
   TargetAdapterMetadata,
   TargetArtifactCopy,
+  TargetArtifactDocumentContract,
+  TargetArtifactDocumentIssue,
+  TargetArtifactDocumentValidator,
   TargetArtifactEntry,
   TargetArtifactPlan,
+  TargetArtifactSchemaContract,
+  TargetArtifactValidationContract,
   TargetArtifactWrite,
   TargetConfigExtension,
   TargetHookEntry,
@@ -247,7 +252,9 @@ export const validate = async (options: ValidateOptions): Promise<ValidateResult
   if (options.artifact !== undefined) {
     const artifact = resolve(options.artifact);
     log(options.logger, 'artifact.validate', { artifact });
-    return Object.freeze({ diagnostics: freezeDiagnostics(await validateArtifact({ artifactRoot: artifact })) });
+    return Object.freeze({
+      diagnostics: freezeDiagnostics(await validateArtifact({ artifactRoot: artifact, registry: registryFor(options) })),
+    });
   }
 
   const prepared = await prepareProject(options, 'validate');
@@ -334,7 +341,7 @@ export const listHooks = async (options: ListHooksOptions) => {
   if (options.target !== undefined && !registry.has(options.target)) {
     throw new RangeError(`Unknown target ${JSON.stringify(options.target)}.`);
   }
-  return temporaryArtifact({ ...options, registry }, async (artifact) => new HookService().list({
+  return temporaryArtifact({ ...options, registry }, async (artifact) => new HookService({ registry }).list({
     artifact,
     target: options.target,
   } satisfies HookListOptions));
@@ -342,7 +349,7 @@ export const listHooks = async (options: ListHooksOptions) => {
 
 export const simulateHook = async (options: SimulateHookOptions): Promise<unknown> => {
   const registry = registryFor(options);
-  return temporaryArtifact({ ...options, registry }, async (artifact) => new HookService().simulate({
+  return temporaryArtifact({ ...options, registry }, async (artifact) => new HookService({ registry }).simulate({
     artifact,
     hook: options.hook,
     input: options.input,

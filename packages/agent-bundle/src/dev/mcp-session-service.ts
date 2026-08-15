@@ -1256,7 +1256,11 @@ export class McpSessionService {
     let session: McpSession | undefined;
     try {
       const epochRoot = epochReference.root;
-      const diagnostics = await validateArtifact({ allowEpochStagingMarker: true, artifactRoot: epochRoot });
+      const diagnostics = await validateArtifact({
+        allowEpochStagingMarker: true,
+        artifactRoot: epochRoot,
+        registry: this.#registry,
+      });
       const errors = diagnostics.filter((diagnostic) => diagnostic.severity === 'error');
       if (errors.length > 0) throw new DiagnosticError(errors);
       const targetRoot = joinArtifact(epochRoot, target);

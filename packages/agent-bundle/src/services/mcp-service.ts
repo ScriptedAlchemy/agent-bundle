@@ -229,7 +229,7 @@ export class McpService {
   ): Promise<{ readonly connection: McpConnectionState; readonly value: Result }> {
     const artifact = resolve(options.artifact);
     const runtime = this.#runtime(options.target);
-    const diagnostics = await validateArtifact({ artifactRoot: artifact });
+    const diagnostics = await validateArtifact({ artifactRoot: artifact, registry: this.#registry });
     const errors = diagnostics.filter((diagnostic) => diagnostic.severity === 'error');
     if (errors.length > 0) throw new DiagnosticError(errors);
 

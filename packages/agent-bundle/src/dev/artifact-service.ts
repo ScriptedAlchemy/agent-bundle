@@ -190,7 +190,10 @@ export class ArtifactService {
         projectRoot: prepared.root,
         registry: prepared.registry,
       });
-      const validationDiagnostics = freezeDiagnostics(await this.#validateArtifact({ artifactRoot }));
+      const validationDiagnostics = freezeDiagnostics(await this.#validateArtifact({
+        artifactRoot,
+        registry: prepared.registry,
+      }));
       const diagnostics = freezeDiagnostics([...prepared.diagnostics, ...validationDiagnostics]);
       if (hasErrors(diagnostics)) throw new DiagnosticError(diagnostics);
 
@@ -223,6 +226,7 @@ export class ArtifactService {
         const stagedDiagnostics = freezeDiagnostics(await this.#validateArtifact({
           allowEpochStagingMarker: true,
           artifactRoot: stagingRoot,
+          registry: prepared.registry,
         }));
         if (hasErrors(stagedDiagnostics)) throw new DiagnosticError(stagedDiagnostics);
       });

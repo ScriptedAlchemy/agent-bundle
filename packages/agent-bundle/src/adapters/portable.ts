@@ -18,10 +18,11 @@ import capabilityTable from './capabilities/portable-1.0.0.json' with { type: 'j
 import schemaProvenance from './schemas/portable/PROVENANCE.json' with { type: 'json' };
 import mcpSchema from './schemas/portable/mcp.schema.json' with { type: 'json' };
 import pluginSchema from './schemas/portable/plugin.schema.json' with { type: 'json' };
-import type {
-  TargetAdapter,
-  TargetArtifactEntry,
-  TargetArtifactPlan,
+import {
+  validateJsonSchemaDocument,
+  type TargetAdapter,
+  type TargetArtifactEntry,
+  type TargetArtifactPlan,
 } from './types.ts';
 
 export interface PortableConfigExtension {
@@ -55,6 +56,17 @@ const metadata = Object.freeze({
       }))
       .sort((left, right) => left.name.localeCompare(right.name)),
   ),
+});
+
+const artifactValidation = Object.freeze({
+  documents: Object.freeze([
+    Object.freeze({ path: 'mcp.json', required: false, schema: 'mcp' }),
+    Object.freeze({ path: 'plugin.json', required: true, schema: 'plugin' }),
+  ]),
+  schemas: Object.freeze([
+    Object.freeze({ name: 'mcp', validate: validateJsonSchemaDocument(validateMcp) }),
+    Object.freeze({ name: 'plugin', validate: validateJsonSchemaDocument(validatePlugin) }),
+  ]),
 });
 
 const mcpRuntime = createTargetMcpRuntime({
@@ -302,6 +314,7 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
 };
 
 export const portableAdapter: TargetAdapter = Object.freeze({
+  artifactValidation,
   capabilities: Object.freeze({
     mcp: capabilityTable.mcp.stdio && capabilityTable.mcp.streamableHttp,
     sse: capabilityTable.mcp.sse,
