@@ -197,6 +197,15 @@ export class ForegroundRouteClient {
     return this.#json(await this.protectedResponse(path, init));
   }
 
+  /** Establishes the same-origin cookie/session bootstrap before EventSource opens. */
+  async ensureSession(): Promise<void> {
+    const authentication = this.#authenticate();
+    await authentication.promise;
+    if (!this.#isAuthenticationCurrent(authentication)) {
+      throw new ForegroundRouteClientError('AB8019', 'Foreground authentication was invalidated.', 401);
+    }
+  }
+
   async protectedResponse(path: string, init: RequestInit = {}): Promise<Response> {
     const route = foregroundRoute(path);
     const authentication = this.#authenticate();

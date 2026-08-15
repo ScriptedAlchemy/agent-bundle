@@ -7,6 +7,7 @@ import type { ProjectEventHub, ProjectEventSubscription } from './events.ts';
 import { McpAppRoutes, type McpAppRoutePreviewService } from './mcp-app-routes.ts';
 import { McpSessionRoutes } from './mcp-session-routes.ts';
 import type { McpSessionService } from './mcp-session-service.ts';
+import { RuntimeMcpRoutes } from './runtime-mcp-routes.ts';
 import { RuntimeRoutes } from './runtime-routes.ts';
 import type { DevRuntimeSession } from './runtime-provider.ts';
 import { SkillDocumentError, type SkillDocumentService } from './skill-document-service.ts';
@@ -149,6 +150,19 @@ const attachmentHeader = (relativePath: string): string =>
 
 const singleHeader = (value: string | readonly string[] | undefined): string | undefined =>
   typeof value === 'string' ? value : undefined;
+
+const sessionCookieName = 'agent-bundle-foreground-session';
+
+const cookieValue = (request: IncomingMessage, name: string): string | undefined => {
+  const header = singleHeader(request.headers.cookie);
+  if (header === undefined) return undefined;
+  for (const pair of header.split(';')) {
+    const index = pair.indexOf('=');
+    if (index < 1) continue;
+    if (pair.slice(0, index).trim() === name) return pair.slice(index + 1).trim();
+  }
+  return undefined;
+};
 
 const readBody = async (request: IncomingMessage): Promise<string> => new Promise((resolvePromise, rejectPromise) => {
   let size = 0;
@@ -351,6 +365,7 @@ export class ForegroundServer {
   readonly #eventHub: ProjectEventHub;
   readonly #host: string;
   readonly #mcpAppRoutes: McpAppRoutes;
+  readonly #runtimeMcpRoutes: RuntimeMcpRoutes;
   readonly #mcpSessionRoutes: McpSessionRoutes;
   readonly #runtimeRoutes: RuntimeRoutes;
   readonly #now: () => Date;
@@ -391,6 +406,13 @@ export class ForegroundServer {
     this.#mcpSessionRoutes = new McpSessionRoutes({
       authorize: (request) => this.#assertMutationSession(request),
       ...(options.mcpSessions === undefined ? {} : { service: options.mcpSessions }),
+    });
+    this.#runtimeMcpRoutes = new RuntimeMcpRoutes({
+      authorize: (request) => this.#assertMutationSession(request),
+      ...(options.mcpAppPreviews === undefined
+        ? {}
+        : { awaitRegistryMutation: async () => { await options.mcpAppPreviews?.runtime?.flushRegistry?.(); } }),
+      ...(options.runtime === undefined ? {} : { runtime: options.runtime }),
     });
     this.#runtimeRoutes = new RuntimeRoutes({
       authorize: (request) => this.#assertMutationSession(request),
@@ -487,6 +509,7 @@ export class ForegroundServer {
     if (this.#releasePromise !== undefined) return this.#releasePromise;
     this.#mcpAppRoutes.close();
     this.#mcpSessionRoutes.close();
+    this.#runtimeMcpRoutes.close();
     this.#runtimeRoutes.close();
     const releaseServer = this.#listenStarted
       ? (() => {
@@ -514,6 +537,7 @@ export class ForegroundServer {
     const method = request.method ?? 'GET';
     if (await this.#mcpAppRoutes.handle(request, response)) return;
     if (await this.#mcpSessionRoutes.handle(request, response)) return;
+    if (await this.#runtimeMcpRoutes.handle(request, response)) return;
     if (await this.#runtimeRoutes.handle(request, response)) return;
     const route = skillRoute(request.url);
     if (route !== undefined) return this.#serveSkill(route, response, method);
@@ -524,7 +548,14 @@ export class ForegroundServer {
     if (pathname === '/api/project/session') {
       if (method !== 'GET') return responseDiagnostic(response, diagnostic('AB8007', 'Route does not accept this method.', 405));
       this.#assertSessionBootstrapOrigin(request);
-      return responseJson(response, { origin: this.url, token: this.sessionToken });
+      response.writeHead(200, {
+        'cache-control': 'no-store',
+        'content-type': 'application/json; charset=utf-8',
+        'set-cookie': `${sessionCookieName}=${this.sessionToken}; HttpOnly; SameSite=Strict; Path=/api`,
+        'x-content-type-options': 'nosniff',
+      });
+      response.end(JSON.stringify({ origin: this.url, token: this.sessionToken }));
+      return;
     }
     if (pathname === '/api/project/rebuild') {
       if (method !== 'POST') return responseDiagnostic(response, diagnostic('AB8007', 'Route does not accept this method.', 405));
@@ -598,10 +629,34 @@ export class ForegroundServer {
     }
   }
 
+  #assertEventSession(request: IncomingMessage): void {
+    const origin = singleHeader(request.headers.origin);
+    if (origin !== this.url && (origin !== undefined || singleHeader(request.headers['sec-fetch-site']) !== 'same-origin')) {
+      throw requestError(diagnostic('AB8003', 'Request origin is not this foreground server.', 403));
+    }
+    if (cookieValue(request, sessionCookieName) !== this.sessionToken) {
+      throw requestError(diagnostic('AB8004', 'A valid foreground session cookie is required.', 403));
+    }
+  }
+
   #streamEvents(request: IncomingMessage, response: ServerResponse): void {
+    try {
+      this.#assertEventSession(request);
+    } catch (error) {
+      const failure = isRequestDiagnostic(error)
+        ? error
+        : diagnostic('AB8007', 'Request could not be completed.', 500);
+      response.writeHead(failure.status, {
+        'cache-control': 'no-store',
+        'content-type': 'application/json; charset=utf-8',
+        'x-content-type-options': 'nosniff',
+      });
+      response.end(JSON.stringify({ diagnostic: { code: failure.code, message: failure.message } }));
+      return;
+    }
     const sequence = afterSequence(request, this.#eventHub.latestSequence);
     response.writeHead(200, {
-      'cache-control': 'no-cache',
+      'cache-control': 'no-store',
       connection: 'keep-alive',
       'content-type': 'text/event-stream; charset=utf-8',
     });

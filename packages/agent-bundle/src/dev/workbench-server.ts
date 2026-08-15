@@ -15,6 +15,8 @@ import {
 import { McpAppBindingService, type McpAppToolDefinition } from './mcp-app-binding-service.ts';
 import type { McpAppRoutePreviewService } from './mcp-app-routes.ts';
 import { McpAppPreviewService } from './mcp-app-preview-service.ts';
+import { McpAppRuntimeBindingService } from './mcp-app-runtime-binding-service.ts';
+import { McpAppRuntimePreviewService } from './mcp-app-runtime-preview-service.ts';
 import {
   createMcpAppSandboxProxy,
   type CreateMcpAppSandboxProxyOptions,
@@ -111,7 +113,7 @@ export class DevServerStartError extends Error {
 
 interface McpAppLifecycleCloseFailure {
   readonly error: unknown;
-  readonly resource: 'previews' | 'sandbox';
+  readonly resource: 'previews' | 'runtime-previews' | 'sandbox';
 }
 
 class McpAppLifecycleCloseError extends Error {
@@ -128,14 +130,16 @@ class McpAppLifecycle implements Closeable {
   readonly #sandbox: McpAppSandboxProxy;
   #closePromise: Promise<void> | undefined;
   #previews: McpAppPreviewService | undefined;
+  #runtimePreviews: McpAppRuntimePreviewService | undefined;
 
   constructor(sandbox: McpAppSandboxProxy) {
     this.#sandbox = sandbox;
   }
 
-  attach(previews: McpAppPreviewService): void {
+  attach(previews: McpAppPreviewService, runtimePreviews?: McpAppRuntimePreviewService): void {
     if (this.#previews !== undefined) throw new Error('MCP App previews are already attached.');
     this.#previews = previews;
+    this.#runtimePreviews = runtimePreviews;
   }
 
   close(): Promise<void> {
@@ -147,10 +151,16 @@ class McpAppLifecycle implements Closeable {
     const preview = this.#previews === undefined
       ? undefined
       : await Promise.allSettled([this.#previews.closeAll()]);
+    const runtimePreview = this.#runtimePreviews === undefined
+      ? undefined
+      : await Promise.allSettled([this.#runtimePreviews.closeAll()]);
     const sandbox = await Promise.allSettled([this.#sandbox.close()]);
     const failures: McpAppLifecycleCloseFailure[] = [
       ...(preview?.flatMap((result) => result.status === 'rejected'
         ? [Object.freeze({ error: result.reason, resource: 'previews' as const })]
+        : []) ?? []),
+      ...(runtimePreview?.flatMap((result) => result.status === 'rejected'
+        ? [Object.freeze({ error: result.reason, resource: 'runtime-previews' as const })]
         : []) ?? []),
       ...sandbox.flatMap((result) => result.status === 'rejected'
         ? [Object.freeze({ error: result.reason, resource: 'sandbox' as const })]
@@ -163,11 +173,15 @@ class McpAppLifecycle implements Closeable {
 /** Connects foreground-owned App routes after the listener reveals its loopback origin. */
 class DeferredMcpAppPreviewService implements McpAppRoutePreviewService {
   #service: McpAppRoutePreviewService | undefined;
+  #runtime: McpAppRuntimePreviewService | undefined;
 
-  attach(service: McpAppRoutePreviewService): void {
+  attach(service: McpAppRoutePreviewService, runtime?: McpAppRuntimePreviewService): void {
     if (this.#service !== undefined) throw new Error('MCP App preview route service is already attached.');
     this.#service = service;
+    this.#runtime = runtime;
   }
+
+  get runtime(): McpAppRuntimePreviewService | undefined { return this.#runtime; }
 
   get(bindingId: string) {
     return this.#service?.get(bindingId);
@@ -270,6 +284,9 @@ class RuntimeClientSurfaceBindings implements Closeable {
     return opening;
   }
 
+  /** Fences new proxy acquisition before the App lanes begin their ordered drain. */
+  beginClose(): void { this.#closing = true; }
+
   close(): Promise<void> {
     this.#closePromise ??= this.#close();
     return this.#closePromise;
@@ -300,24 +317,24 @@ export const closeDevServerLifecycle = async (
   mcpApps?: Closeable,
   runtimeResources?: DevServerRuntimeLifecycleResources,
 ): Promise<void> => {
+  const appResults = mcpApps === undefined ? [] : await Promise.allSettled([mcpApps.close()]);
   const clientSurfaceResults = runtimeResources?.clientSurfaces === undefined
     ? []
     : await Promise.allSettled([runtimeResources.clientSurfaces.close()]);
-  const appResults = mcpApps === undefined ? [] : await Promise.allSettled([mcpApps.close()]);
   const runtimeResults = runtimeResources?.runtime === undefined
     ? []
     : await Promise.allSettled([runtimeResources.runtime.close()]);
   const sessionResults = await Promise.allSettled([mcpSessions.close()]);
   const coordinatorResults = await Promise.allSettled([coordinator.close()]);
   const failures = [
-    ...clientSurfaceResults.flatMap((result): readonly DevServerLifecycleCloseFailure[] =>
-      result.status === 'rejected'
-        ? [Object.freeze({ error: result.reason, resource: 'runtime-client-surfaces' as const })]
-        : [],
-    ),
     ...appResults.flatMap((result): readonly DevServerLifecycleCloseFailure[] =>
       result.status === 'rejected'
         ? [Object.freeze({ error: result.reason, resource: 'mcp-apps' as const })]
+        : [],
+    ),
+    ...clientSurfaceResults.flatMap((result): readonly DevServerLifecycleCloseFailure[] =>
+      result.status === 'rejected'
+        ? [Object.freeze({ error: result.reason, resource: 'runtime-client-surfaces' as const })]
         : [],
     ),
     ...runtimeResults.flatMap((result): readonly DevServerLifecycleCloseFailure[] =>
@@ -344,9 +361,12 @@ const withMcpSessionLifecycle = (
   mcpSessions: McpSessionService,
   mcpApps: () => Closeable | undefined,
   runtime: DevRuntimeController | undefined,
-  clientSurfaces: Closeable,
+  clientSurfaces: RuntimeClientSurfaceBindings,
 ): ForegroundCoordinator => Object.freeze({
-  close: () => closeDevServerLifecycle(mcpSessions, coordinator, mcpApps(), { clientSurfaces, runtime }),
+  close: () => {
+    clientSurfaces.beginClose();
+    return closeDevServerLifecycle(mcpSessions, coordinator, mcpApps(), { clientSurfaces, runtime });
+  },
   rebuild: (invalidation: Invalidation) => coordinator.rebuild(invalidation),
   start: async () => {
     await coordinator.start();
@@ -378,6 +398,9 @@ export const startDevServer = async (options: StartDevServerOptions): Promise<De
   const epochStore = new EpochStore({ projectRoot: root });
   const projectService = new ProjectService({ includeDevRuntime: true, mode: 'development', registry, root });
   const initialPreparedProject = await projectService.prepare('dev');
+  let latestValidPreparedProject = initialPreparedProject.source.state === 'ready' && initialPreparedProject.model !== undefined
+    ? initialPreparedProject
+    : undefined;
   const topologyProviderSessionId = randomUUID();
   let runtimeTopologyChanged = false;
   let status: () => ProjectStatus = () => Object.freeze({
@@ -427,6 +450,7 @@ export const startDevServer = async (options: StartDevServerOptions): Promise<De
     eventHub,
     initialPreparedProject,
     onPreparedProject: async (prepared) => {
+      if (prepared.source.state === 'ready' && prepared.model !== undefined) latestValidPreparedProject = prepared;
       if (runtime !== undefined) {
         await runtime.reconcileDeclaration(prepared.devRuntime, prepared.devRuntimeDiagnostic);
         return;
@@ -501,8 +525,41 @@ export const startDevServer = async (options: StartDevServerOptions): Promise<De
         },
       },
     });
-    mcpApps.attach(previews);
-    appPreviews.attach(previews);
+    let runtimePreviews: McpAppRuntimePreviewService | undefined;
+    if (runtime !== undefined && latestValidPreparedProject !== undefined && (runtime.status().state === 'active' || runtime.status().state === 'degraded')) {
+      try {
+        // Reading this getter proves that the provider has exposed the stable
+        // broker surface; a merely constructed controller is not enough.
+        const registry = runtime.mcpRegistry;
+        if (typeof registry.session === 'function' && typeof registry.subscribe === 'function') runtimePreviews = new McpAppRuntimePreviewService({
+        bindingAuthority: new McpAppRuntimeBindingService(),
+        configExtensions: () => {
+          const prepared = latestValidPreparedProject;
+          if (prepared === undefined || prepared.source.state !== 'ready' || prepared.source.revision === undefined || prepared.model === undefined) {
+            throw new Error('No valid prepared project is available for Runtime MCP App inspection.');
+          }
+          return Object.freeze({
+            descriptors: prepared.registry.configExtensions(),
+            extensions: prepared.model.extensions,
+            projectRoot: prepared.root,
+            sourceRevision: prepared.source.revision,
+          });
+        },
+        emit: (details) => runtime.emit(Object.freeze({
+          details: Object.freeze({ ...details }),
+          mcpSessionId: details.sessionId,
+          mcpSessionRevision: details.sessionRevision,
+          type: 'runtime.app.updated',
+        })),
+        openRuntimeClientSurface: (surfaceId) => clientSurfaces.open(surfaceId),
+        runtime,
+        });
+      } catch (error) {
+        if (!(error instanceof DevRuntimeUnavailableError)) throw error;
+      }
+    }
+    mcpApps.attach(previews, runtimePreviews);
+    appPreviews.attach(previews, runtimePreviews);
     if (options.open === true) await openBrowser(foreground.url);
   } catch (error) {
     const [cleanup] = await Promise.allSettled([foreground.close()]);

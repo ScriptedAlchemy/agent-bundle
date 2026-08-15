@@ -141,6 +141,7 @@ const normalizePaths = (paths: readonly string[]): readonly string[] => Object.f
 export class ProjectClient {
   readonly #events: EventSourceFactory;
   readonly #foreground: ForegroundRouteClient;
+  readonly #usesNativeEvents: boolean;
   #closed = false;
   #eventDrainPromise: Promise<void> | undefined;
   #eventListener: ProjectEventListener | undefined;
@@ -157,6 +158,7 @@ export class ProjectClient {
   constructor(options: ProjectClientOptions = {}) {
     this.#events = options.events ?? browserEvents;
     this.#foreground = options.foreground ?? new ForegroundRouteClient({ fetch: options.fetch });
+    this.#usesNativeEvents = options.events === undefined;
   }
 
   get lastEventId(): number {
@@ -172,6 +174,14 @@ export class ProjectClient {
     this.#listener = listener;
     this.#errorListener = onError;
     this.#eventListener = onEvent;
+    if (this.#usesNativeEvents) {
+      try {
+        await this.#foreground.ensureSession();
+      } catch (error) {
+        throw projectError(error);
+      }
+    }
+    if (this.#closed) throw new ProjectClientError('Workbench client is closed.');
     const status = await this.refresh();
     if (this.#closed) return status;
     const eventSource = this.#events('/api/project/events');

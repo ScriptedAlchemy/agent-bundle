@@ -35,7 +35,7 @@ const within = async <Value>(promise: Promise<Value>, milliseconds: number): Pro
   }),
 ]);
 
-const openProjectEventStream = (url: string): Readonly<{
+const openProjectEventStream = (url: string, cookie: string): Readonly<{
   readonly close: () => void;
   readonly opened: Promise<void>;
   readonly until: (marker: string) => Promise<string>;
@@ -51,7 +51,7 @@ const openProjectEventStream = (url: string): Readonly<{
     resolveOpened = resolvePromise;
     rejectOpened = rejectPromise;
   });
-  const request = httpGet(`${url}/api/project/events`, (stream) => {
+  const request = httpGet(`${url}/api/project/events`, { headers: { cookie, origin: url } }, (stream) => {
     response = stream;
     stream.setEncoding('utf8');
     stream.on('data', (chunk: string) => {
@@ -158,7 +158,9 @@ const workbenchSyntheticAdapter: TargetAdapter = Object.freeze({
     entries: Object.freeze([{
       content: 'synthetic workbench target\n',
       kind: 'write' as const,
-      relativePath: 'synthetic.txt',
+      // Custom target plans use the same declared compiled-script namespace
+      // as production adapters; root files are deliberately rejected.
+      relativePath: 'scripts/synthetic.txt',
       sourceInputs: [model.metadata.provenance.sourcePath],
     }]),
   }),
@@ -257,10 +259,12 @@ it('latches a runtime declaration added to an ordinary Workbench session as rest
       root: project.root,
     });
     await expect(fetch(`${server.url}/api/runtime/status`).then((response) => response.json())).resolves.toEqual({ status: null });
-    events = openProjectEventStream(server.url);
-    await events.opened;
     const bootstrap = await fetch(`${server.url}/api/project/session`, { headers: { 'sec-fetch-site': 'same-origin' } });
     const { token } = await bootstrap.json() as { readonly token: string };
+    const cookie = bootstrap.headers.get('set-cookie');
+    if (cookie === null) throw new Error('Expected foreground session bootstrap cookie.');
+    events = openProjectEventStream(server.url, cookie);
+    await events.opened;
     await writeFile(project.configPath, [
       "import { defineConfig } from 'agent-bundle';",
       '',
@@ -653,7 +657,7 @@ it('closes MCP Apps before sessions and the coordinator while retaining every cl
   expect(closeOrder).toEqual(['mcp-apps', 'mcp-sessions', 'coordinator']);
 });
 
-it('closes runtime client surfaces before every other lifecycle resource without losing failures', async () => {
+it('closes both App lanes before runtime client surfaces without losing failures', async () => {
   const clientFailure = new Error('Runtime client surface cleanup failed.');
   const appFailure = new Error('MCP App cleanup failed.');
   const runtimeFailure = new Error('Runtime cleanup failed.');
@@ -671,8 +675,8 @@ it('closes runtime client surfaces before every other lifecycle resource without
     },
   )).rejects.toEqual(expect.objectContaining({
     failures: [
-      { error: clientFailure, resource: 'runtime-client-surfaces' },
       { error: appFailure, resource: 'mcp-apps' },
+      { error: clientFailure, resource: 'runtime-client-surfaces' },
       { error: runtimeFailure, resource: 'runtime' },
       { error: mcpFailure, resource: 'mcp-sessions' },
       { error: coordinatorFailure, resource: 'coordinator' },
@@ -680,8 +684,8 @@ it('closes runtime client surfaces before every other lifecycle resource without
     name: DevServerLifecycleCloseError.name,
   }));
   expect(closeOrder).toEqual([
-    'runtime-client-surfaces',
     'mcp-apps',
+    'runtime-client-surfaces',
     'runtime',
     'mcp-sessions',
     'coordinator',

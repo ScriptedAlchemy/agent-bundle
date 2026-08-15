@@ -4,7 +4,14 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { McpAppJsonValue, McpAppPreviewProfile } from './mcp-app-binding-service.ts';
 import type { McpAppBridgeCloseOptions, McpAppBridgeJsonRecord, McpAppBridgeLifecycle } from './mcp-app-bridge.ts';
 import type { McpAppPreviewCloseResult, McpAppPreviewHostContext } from './mcp-app-preview-service.ts';
+import { McpAppRuntimePreviewError } from './mcp-app-runtime-preview-service.ts';
+import type {
+  CreateMcpAppPreviewRequest,
+  McpAppBindingOperation,
+  McpAppRuntimeRoutePreviewService,
+} from './mcp-app-runtime-preview-service.ts';
 import type { McpAppConsentChallenge } from './mcp-app-sandbox.ts';
+import type { McpAppConsentRequest } from './mcp-app-sandbox.ts';
 
 const bodyLimit = 64 * 1024;
 
@@ -24,7 +31,19 @@ interface BindingRoute {
   readonly kind: 'messages' | 'host-context' | 'close' | 'force-close' | 'consent';
 }
 
-type Route = CreateRoute | BindingRoute;
+interface RuntimeCreateRoute { readonly kind: 'runtime-create'; }
+interface RuntimeBindingRoute {
+  readonly bindingId: string;
+  readonly kind: 'runtime-get' | 'runtime-close' | 'runtime-operation' | 'runtime-consent-create';
+}
+interface RuntimeConsentRoute {
+  readonly bindingId: string;
+  readonly consentId: string;
+  readonly kind: 'runtime-consent-decide';
+}
+
+type Route = CreateRoute | BindingRoute | RuntimeCreateRoute | RuntimeBindingRoute | RuntimeConsentRoute;
+type RuntimeRoute = RuntimeCreateRoute | RuntimeBindingRoute | RuntimeConsentRoute;
 type JsonObject = Record<string, unknown>;
 type JsonRequestId = string | number | null;
 
@@ -55,6 +74,8 @@ export interface McpAppRoutePreviewService {
   get(bindingId: string): McpAppRoutePreview | undefined;
   receive(bindingId: string, action: unknown): Promise<boolean>;
   takeOutbound(bindingId: string): Promise<readonly unknown[]>;
+  /** Optional provider-owned run preview lane; artifact methods above remain independent. */
+  readonly runtime?: McpAppRuntimeRoutePreviewService;
 }
 
 export interface McpAppRoutesOptions {
@@ -153,6 +174,21 @@ const opaqueSegment = (value: string): string => {
 
 const route = (requestTarget: string | undefined): Route | undefined => {
   const pathname = rawPathname(requestTarget);
+  if (pathname === '/api/runtime/apps') return Object.freeze({ kind: 'runtime-create' });
+  if (pathname.startsWith('/api/runtime/apps/')) {
+    const parts = pathname.split('/');
+    if (parts.length < 5 || parts[0] !== '' || parts[1] !== 'api' || parts[2] !== 'runtime' || parts[3] !== 'apps') {
+      throw requestError(diagnostic('AB8020', 'MCP App route path is not valid.', 400));
+    }
+    const bindingId = opaqueSegment(parts[4]!);
+    if (parts.length === 5) return Object.freeze({ bindingId, kind: 'runtime-get' });
+    if (parts.length === 6 && parts[5] === 'operations') return Object.freeze({ bindingId, kind: 'runtime-operation' });
+    if (parts.length === 6 && parts[5] === 'consents') return Object.freeze({ bindingId, kind: 'runtime-consent-create' });
+    if (parts.length === 7 && parts[5] === 'consents') {
+      return Object.freeze({ bindingId, consentId: opaqueSegment(parts[6]!), kind: 'runtime-consent-decide' });
+    }
+    throw requestError(diagnostic('AB8020', 'MCP App route path is not valid.', 400));
+  }
   if (pathname !== '/api/mcp' && !pathname.startsWith('/api/mcp/')) return undefined;
   const parts = pathname.split('/');
   if (parts[0] !== '' || parts[1] !== 'api' || parts[2] !== 'mcp') return undefined;
@@ -168,6 +204,8 @@ const route = (requestTarget: string | undefined): Route | undefined => {
   if (kind === undefined || kind.length === 0) throw requestError(diagnostic('AB8020', 'MCP App route path is not valid.', 400));
   throw requestError(diagnostic('AB8020', 'MCP App route path is not valid.', 400));
 };
+
+const isRuntimeRoute = (value: Route): value is RuntimeRoute => value.kind.startsWith('runtime-');
 
 const isRecord = (value: unknown): value is JsonObject =>
   typeof value === 'object' && value !== null && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype;
@@ -297,6 +335,41 @@ const consentDecision = (value: JsonObject): Readonly<{ approved: boolean; chall
   return Object.freeze({ approved: value.approved, challengeId: value.challengeId });
 };
 
+const runtimeCreateRequest = (value: JsonObject): CreateMcpAppPreviewRequest => {
+  if (!hasOnly(value, ['expectedGenerationId', 'profileId', 'runId']) || !nonemptyString(value.expectedGenerationId) || !nonemptyString(value.runId)
+    || (value.profileId !== 'portable' && value.profileId !== 'chatgpt' && value.profileId !== 'claude')) return invalidShape();
+  return Object.freeze({ expectedGenerationId: value.expectedGenerationId, profileId: value.profileId, runId: value.runId });
+};
+
+const runtimeOperation = (value: JsonObject): McpAppBindingOperation => {
+  if (value.kind === 'tools/list' && hasOnly(value, ['kind'])) return Object.freeze({ kind: 'tools/list' });
+  if (value.kind === 'resources/list' && hasOnly(value, ['kind'])) return Object.freeze({ kind: 'resources/list' });
+  if (value.kind === 'resources/read' && hasOnly(value, ['kind', 'uri']) && nonemptyString(value.uri)) {
+    return Object.freeze({ kind: 'resources/read', uri: value.uri });
+  }
+  if (value.kind === 'tools/call' && hasOnly(value, ['arguments', 'consentId', 'kind', 'name']) && nonemptyString(value.name)
+    && (value.arguments === undefined || isJsonValue(value.arguments)) && (value.consentId === undefined || nonemptyString(value.consentId))) {
+    return Object.freeze({
+      ...(value.arguments === undefined ? {} : { arguments: cloneJson(value.arguments) }),
+      ...(value.consentId === undefined ? {} : { consentId: value.consentId }),
+      kind: 'tools/call', name: value.name,
+    });
+  }
+  return invalidShape();
+};
+
+const runtimeConsentRequest = (value: JsonObject): McpAppConsentRequest => {
+  if (!hasOnly(value, ['actionFingerprint', 'capability', 'details', 'scope', 'summary']) || !nonemptyString(value.actionFingerprint)
+    || !nonemptyString(value.summary) || !isJsonValue(value.details) || (value.scope !== 'action' && value.scope !== 'document')
+    || !['call-tool', 'download-file', 'open-external-link', 'clipboard-write', 'camera', 'microphone', 'geolocation', 'request-display-mode'].includes(value.capability as string)) return invalidShape();
+  return Object.freeze({ actionFingerprint: value.actionFingerprint, capability: value.capability as McpAppConsentRequest['capability'], details: cloneJson(value.details), scope: value.scope, summary: value.summary });
+};
+
+const runtimeConsentDecision = (value: JsonObject): 'allow-once' | 'deny' => {
+  if (!hasOnly(value, ['decision']) || (value.decision !== 'allow-once' && value.decision !== 'deny')) return invalidShape();
+  return value.decision;
+};
+
 const previewSnapshot = (preview: McpAppRoutePreview): Readonly<Record<string, unknown>> => Object.freeze({
   bindingId: preview.binding.id,
   ...(preview.frame === undefined ? {} : { frame: preview.frame }),
@@ -348,6 +421,9 @@ export class McpAppRoutes {
       await this.#dispatch(parsed, request, response, service);
     } catch (error) {
       if (isRequestDiagnostic(error)) throw error;
+      if (error instanceof McpAppRuntimePreviewError) {
+        throw requestError(diagnostic(error.code, error.message, error.status));
+      }
       throw requestError(diagnostic('AB8023', 'MCP App operation could not be completed.', 502));
     }
     return true;
@@ -360,6 +436,7 @@ export class McpAppRoutes {
     service: McpAppRoutePreviewService,
   ): Promise<void> {
     const method = request.method ?? 'GET';
+    if (isRuntimeRoute(parsed)) return this.#dispatchRuntime(parsed, request, response, service.runtime);
     if (parsed.kind === 'create') {
       if (method !== 'POST') return responseDiagnostic(response, diagnostic('AB8007', 'Route does not accept this method.', 405));
       const preview = await service.create(createRequest(await jsonBody(request), parsed.sessionId));
@@ -432,12 +509,62 @@ export class McpAppRoutes {
     return responseJson(response, result);
   }
 
+  async #dispatchRuntime(
+    parsed: RuntimeCreateRoute | RuntimeBindingRoute | RuntimeConsentRoute,
+    request: IncomingMessage,
+    response: ServerResponse,
+    runtime: McpAppRuntimeRoutePreviewService | undefined,
+  ): Promise<void> {
+    if (runtime === undefined) return this.#unavailable();
+    const method = request.method ?? 'GET';
+    if (parsed.kind === 'runtime-create') {
+      if (method !== 'POST') return responseDiagnostic(response, diagnostic('AB8007', 'Route does not accept this method.', 405));
+      return responseJson(response, { preview: await runtime.create(runtimeCreateRequest(await jsonBody(request))) });
+    }
+    if (parsed.kind === 'runtime-get') {
+      if (method === 'DELETE') {
+        if (runtime.get(parsed.bindingId) === undefined) this.#runtimeUnavailable(runtime, parsed.bindingId);
+        await runtime.close(parsed.bindingId);
+        return responseJson(response, { closed: true });
+      }
+      if (method !== 'GET') return responseDiagnostic(response, diagnostic('AB8007', 'Route does not accept this method.', 405));
+      const preview = runtime.get(parsed.bindingId);
+      if (preview === undefined) this.#runtimeUnavailable(runtime, parsed.bindingId);
+      response.writeHead(200, { 'cache-control': 'no-store', 'content-type': 'application/json; charset=utf-8', 'x-content-type-options': 'nosniff' });
+      response.end(JSON.stringify({ preview }));
+      return;
+    }
+    if (parsed.kind === 'runtime-close') {
+      if (method !== 'DELETE') return responseDiagnostic(response, diagnostic('AB8007', 'Route does not accept this method.', 405));
+      await runtime.close(parsed.bindingId);
+      return responseJson(response, { closed: true });
+    }
+    if (parsed.kind === 'runtime-operation') {
+      if (method !== 'POST') return responseDiagnostic(response, diagnostic('AB8007', 'Route does not accept this method.', 405));
+      return responseJson(response, await runtime.operate(parsed.bindingId, runtimeOperation(await jsonBody(request))));
+    }
+    if (parsed.kind === 'runtime-consent-create') {
+      if (method !== 'POST') return responseDiagnostic(response, diagnostic('AB8007', 'Route does not accept this method.', 405));
+      return responseJson(response, await runtime.createConsent(parsed.bindingId, runtimeConsentRequest(await jsonBody(request))));
+    }
+    if (parsed.kind !== 'runtime-consent-decide') throw new Error('Runtime MCP App route is not valid.');
+    if (method !== 'POST') return responseDiagnostic(response, diagnostic('AB8007', 'Route does not accept this method.', 405));
+    return responseJson(response, await runtime.decideConsent(parsed.bindingId, parsed.consentId, runtimeConsentDecision(await jsonBody(request))));
+  }
+
   #preview(service: McpAppRoutePreviewService, bindingId: string): McpAppRoutePreview {
     return service.get(bindingId) ?? this.#unavailable();
   }
 
   #unavailable(): never {
     throw requestError(diagnostic('AB8022', 'MCP App preview is not available.', 404));
+  }
+
+  #runtimeUnavailable(runtime: McpAppRuntimeRoutePreviewService, bindingId: string): never {
+    if (runtime.isRevoked?.(bindingId) === true) {
+      throw requestError(diagnostic('AB8022', 'Runtime MCP App preview was revoked.', 410));
+    }
+    return this.#unavailable();
   }
 
   #serialize<T>(bindingId: string, operation: () => Promise<T>): Promise<T> {

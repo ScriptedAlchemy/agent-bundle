@@ -68,8 +68,18 @@ class FailingStartCoordinator extends RecordingCoordinator {
   }
 }
 
-const readReplay = (url: string, lastEventId: string, expectedSequence = 2): Promise<string> => new Promise((resolvePromise, rejectPromise) => {
-  const request = httpGet(`${url}/api/project/events`, { headers: { 'last-event-id': lastEventId } }, (response) => {
+const foregroundCookie = async (url: string): Promise<string> => {
+  const response = await fetch(`${url}/api/project/session`, { headers: { origin: url } });
+  if (!response.ok) throw new Error(`Foreground session bootstrap failed with HTTP ${response.status}.`);
+  const cookie = response.headers.get('set-cookie')?.split(';', 1)[0];
+  if (cookie === undefined || cookie.length === 0) throw new Error('Foreground session bootstrap did not return a cookie.');
+  return cookie;
+};
+
+const readReplay = async (url: string, lastEventId: string, expectedSequence = 2): Promise<string> => {
+  const cookie = await foregroundCookie(url);
+  return new Promise((resolvePromise, rejectPromise) => {
+  const request = httpGet(`${url}/api/project/events`, { headers: { cookie, 'last-event-id': lastEventId, origin: url } }, (response) => {
     let received = '';
     response.setEncoding('utf8');
     response.on('data', (chunk: string) => {
@@ -82,13 +92,14 @@ const readReplay = (url: string, lastEventId: string, expectedSequence = 2): Pro
     response.on('error', rejectPromise);
   });
   request.on('error', rejectPromise);
-});
+  });
+};
 
 const readRaw = (
   url: string,
   path: string,
   headers?: Readonly<Record<string, string>>,
-): Promise<Readonly<{ readonly body: string; readonly status: number }>> => {
+): Promise<Readonly<{ readonly body: string; readonly headers: import('node:http').IncomingHttpHeaders; readonly status: number }>> => {
   const address = new URL(url);
   return new Promise((resolvePromise, rejectPromise) => {
     const request = httpGet({ headers, host: address.hostname, path, port: address.port }, (response) => {
@@ -97,7 +108,7 @@ const readRaw = (
       response.on('data', (chunk: string) => {
         body += chunk;
       });
-      response.once('end', () => resolvePromise({ body, status: response.statusCode ?? 0 }));
+      response.once('end', () => resolvePromise({ body, headers: response.headers, status: response.statusCode ?? 0 }));
       response.once('error', rejectPromise);
     });
     request.once('error', rejectPromise);
@@ -129,24 +140,31 @@ const openLiveStream = (url: string): Readonly<{
     resolveOpened = resolvePromise;
     rejectOpened = rejectPromise;
   });
-  const request = httpGet(`${url}/api/project/events`, (stream) => {
-    response = stream;
-    stream.setEncoding('utf8');
-    stream.on('data', (chunk: string) => {
-      received += chunk;
-      if (matched !== undefined && received.includes(matched)) resolveMatch?.(received);
+  let request: import('node:http').ClientRequest | undefined;
+  void foregroundCookie(url).then((cookie) => {
+    request = httpGet(`${url}/api/project/events`, { headers: { cookie, origin: url } }, (stream) => {
+      response = stream;
+      stream.setEncoding('utf8');
+      stream.on('data', (chunk: string) => {
+        received += chunk;
+        if (matched !== undefined && received.includes(matched)) resolveMatch?.(received);
+      });
+      stream.once('error', (error: Error) => rejectMatch?.(error));
+      resolveOpened();
     });
-    stream.once('error', (error: Error) => rejectMatch?.(error));
-    resolveOpened();
-  });
-  request.once('error', (error: Error) => {
-    rejectOpened(error);
-    rejectMatch?.(error);
+    request.once('error', (error: Error) => {
+      rejectOpened(error);
+      rejectMatch?.(error);
+    });
+  }, (error: unknown) => {
+    const failure = error instanceof Error ? error : new Error('Foreground session bootstrap failed.');
+    rejectOpened(failure);
+    rejectMatch?.(failure);
   });
   return Object.freeze({
     close: () => {
       response?.destroy();
-      request.destroy();
+      request?.destroy();
     },
     opened,
     pause: () => response?.pause(),
@@ -338,6 +356,39 @@ it('opens a live event stream before a later project event is published', async 
     await expect(within(stream.until('"paths":["live.ts"]'), 250)).resolves.toContain('id: 1\n');
   } finally {
     stream.close();
+    await server.close();
+  }
+});
+
+it('authenticates project events before it parses a cursor or subscribes to the hub', async () => {
+  const eventHub = new ProjectEventHub();
+  const server = await startForegroundServer({ coordinator: new RecordingCoordinator(), eventHub, port: 0, sessionToken: 'event-token' });
+  try {
+    const missingCookie = await readRaw(server.url, '/api/project/events?after=not-a-cursor', { origin: server.url });
+    expect(missingCookie.status).toBe(403);
+    expect(missingCookie.headers['cache-control']).toBe('no-store');
+    const wrongOrigin = await readRaw(server.url, '/api/project/events?after=not-a-cursor', {
+      cookie: await foregroundCookie(server.url), origin: 'http://invalid.example',
+    });
+    expect(wrongOrigin.status).toBe(403);
+    const wrongCookie = await readRaw(server.url, '/api/project/events?after=not-a-cursor', {
+      cookie: 'agent-bundle-foreground-session=wrong', origin: server.url,
+    });
+    expect(wrongCookie.status).toBe(403);
+    expect(eventHub.subscriptionCount).toBe(0);
+
+    const cookie = await foregroundCookie(server.url);
+    const headers = await new Promise<import('node:http').IncomingHttpHeaders>((resolvePromise, rejectPromise) => {
+      const request = httpGet(`${server.url}/api/project/events`, {
+        headers: { cookie, origin: server.url },
+      }, (response) => {
+        response.destroy();
+        resolvePromise(response.headers);
+      });
+      request.once('error', rejectPromise);
+    });
+    expect(headers['cache-control']).toBe('no-store');
+  } finally {
     await server.close();
   }
 });

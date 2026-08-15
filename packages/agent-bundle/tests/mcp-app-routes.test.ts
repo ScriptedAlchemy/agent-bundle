@@ -7,6 +7,8 @@ import {
   McpAppRoutes,
   type McpAppRoutePreviewService,
 } from '../src/dev/mcp-app-routes.ts';
+import { McpAppRuntimePreviewError } from '../src/dev/mcp-app-runtime-preview-service.ts';
+import type { McpAppRuntimeRoutePreviewService } from '../src/dev/mcp-app-runtime-preview-service.ts';
 import type { McpAppBridgeLifecycle, McpAppBridgeMessage } from '../src/dev/mcp-app-bridge.ts';
 
 interface StartedRoutes {
@@ -127,8 +129,7 @@ class RecordingPreviewService implements McpAppRoutePreviewService {
   }
 }
 
-const startRoutes = async (): Promise<StartedRoutes> => {
-  const service = new RecordingPreviewService();
+const startRoutes = async (service = new RecordingPreviewService()): Promise<StartedRoutes> => {
   const routes = new McpAppRoutes({ authorize, service });
   const server = createServer((request, response) => {
     void routes.handle(request, response).then((handled) => {
@@ -199,6 +200,106 @@ it('leaves unrelated MCP paths for the session route handler', async () => {
 
     expect(response.status).toBe(404);
     expect(started.service.calls).toEqual([]);
+  } finally {
+    await started.close();
+  }
+});
+
+it('dispatches only the fixed authenticated runtime App create route to the optional runtime lane', async () => {
+  const calls: unknown[] = [];
+  const runtime: McpAppRuntimeRoutePreviewService = {
+    close: async () => undefined,
+    create: async (request) => {
+      calls.push(request);
+      return Object.freeze({ binding: Object.freeze({ id: 'runtime-binding' }), kind: 'fallback' }) as never;
+    },
+    createConsent: async () => { throw new Error('unused'); },
+    decideConsent: async () => { throw new Error('unused'); },
+    get: () => undefined,
+    operate: async () => { throw new Error('unused'); },
+  };
+  const service = Object.assign(new RecordingPreviewService(), { runtime });
+  const started = await startRoutes(service);
+  try {
+    const response = await fetch(`${started.url}/api/runtime/apps`, {
+      body: JSON.stringify({ expectedGenerationId: 'generation-a', profileId: 'portable', runId: 'run-a' }),
+      headers: { ...headers(), 'content-type': 'application/json' },
+      method: 'POST',
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ preview: { binding: { id: 'runtime-binding' }, kind: 'fallback' } });
+    expect(calls).toEqual([{ expectedGenerationId: 'generation-a', profileId: 'portable', runId: 'run-a' }]);
+    expect(started.service.calls).toEqual([]);
+  } finally {
+    await started.close();
+  }
+});
+
+it('authenticates runtime App snapshots before lookup and distinguishes a revoked binding from an unknown id', async () => {
+  const lookups: string[] = [];
+  const runtime: McpAppRuntimeRoutePreviewService = {
+    close: async () => undefined,
+    create: async () => { throw new Error('unused'); },
+    createConsent: async () => { throw new Error('unused'); },
+    decideConsent: async () => { throw new Error('unused'); },
+    get: (bindingId) => {
+      lookups.push(bindingId);
+      return bindingId === 'binding-a'
+        ? Object.freeze({ binding: Object.freeze({ id: bindingId }), kind: 'fallback' }) as never
+        : undefined;
+    },
+    isRevoked: (bindingId) => bindingId === 'revoked-a',
+    operate: async () => { throw new Error('unused'); },
+  };
+  const started = await startRoutes(Object.assign(new RecordingPreviewService(), { runtime }));
+  try {
+    const missingToken = await fetch(`${started.url}/api/runtime/apps/binding-a`, {
+      headers: { origin: 'http://127.0.0.1:4567' },
+    });
+    expect(missingToken.status).toBe(403);
+    const wrongOrigin = await fetch(`${started.url}/api/runtime/apps/binding-a`, {
+      headers: { 'x-agent-bundle-session': 'test-session-token' },
+    });
+    expect(wrongOrigin.status).toBe(403);
+    expect(lookups).toEqual([]);
+
+    const available = await fetch(`${started.url}/api/runtime/apps/binding-a`, { headers: headers() });
+    expect(available.status).toBe(200);
+    expect(available.headers.get('cache-control')).toBe('no-store');
+    expect(available.headers.get('x-content-type-options')).toBe('nosniff');
+    await expect(available.json()).resolves.toEqual({ preview: { binding: { id: 'binding-a' }, kind: 'fallback' } });
+    expect(lookups).toEqual(['binding-a']);
+
+    const revoked = await fetch(`${started.url}/api/runtime/apps/revoked-a`, { headers: headers() });
+    expect(revoked.status).toBe(410);
+    const unknown = await fetch(`${started.url}/api/runtime/apps/unknown-a`, { headers: headers() });
+    expect(unknown.status).toBe(404);
+  } finally {
+    await started.close();
+  }
+});
+
+it('returns a phase-safe 409 when a runtime App create request names a stale run generation', async () => {
+  const runtime: McpAppRuntimeRoutePreviewService = {
+    close: async () => undefined,
+    create: async () => { throw new McpAppRuntimePreviewError('AB8204', 'Runtime MCP App run generation does not match the expected generation.', 409); },
+    createConsent: async () => { throw new Error('unused'); },
+    decideConsent: async () => { throw new Error('unused'); },
+    get: () => undefined,
+    operate: async () => { throw new Error('unused'); },
+  };
+  const started = await startRoutes(Object.assign(new RecordingPreviewService(), { runtime }));
+  try {
+    const response = await fetch(`${started.url}/api/runtime/apps`, {
+      body: JSON.stringify({ expectedGenerationId: 'stale-generation', profileId: 'portable', runId: 'run-a' }),
+      headers: { ...headers(), 'content-type': 'application/json' },
+      method: 'POST',
+    });
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toEqual({
+      diagnostic: { code: 'AB8204', message: 'Runtime MCP App run generation does not match the expected generation.' },
+    });
   } finally {
     await started.close();
   }

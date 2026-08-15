@@ -136,6 +136,37 @@ it('closes an event stream constructed concurrently with client shutdown', async
   expect(stream.closed).toBe(true);
 });
 
+it('completes the shared foreground session bootstrap before constructing its sole EventSource', async () => {
+  const session = deferred<Response>();
+  const stream = new RecordingEventSource();
+  const requests: string[] = [];
+  const originalEventSource = globalThis.EventSource;
+  Object.defineProperty(globalThis, 'EventSource', { configurable: true, value: class {
+    addEventListener = stream.addEventListener.bind(stream);
+    close = stream.close.bind(stream);
+  } });
+  try {
+    const client = new ProjectClient({
+    fetch: async (input) => {
+      requests.push(String(input));
+      return String(input) === '/api/project/session' ? session.promise : Response.json({ status: status() });
+    },
+    });
+
+    const connecting = client.connect(() => undefined);
+    await new Promise<void>((resolvePromise) => setImmediate(resolvePromise));
+    expect(requests).toEqual(['/api/project/session']);
+    expect(stream.listeners).toEqual([]);
+    session.resolve(Response.json({ origin: 'http://127.0.0.1:3100', token: 'token-1' }));
+
+    await expect(connecting).resolves.toMatchObject({ artifact: { state: 'active' } });
+    expect(requests).toEqual(['/api/project/session', '/api/project/status']);
+    expect(stream.listeners).not.toEqual([]);
+  } finally {
+    Object.defineProperty(globalThis, 'EventSource', { configurable: true, value: originalEventSource });
+  }
+});
+
 it('refreshes Overview state after live named events and keeps the browser EventSource transport open', async () => {
   const stream = new RecordingEventSource();
   const requests: string[] = [];
