@@ -54,9 +54,8 @@ const runtimeCompileObserverPlugin = (
   observer: NonNullable<RscRuntimeRsbuildConfigOptions['onCompile']>,
 ): RsbuildPlugin => {
   const pendingAttemptIds: string[] = [];
-  let newestSuccessfulActivationSequence = 0;
+  let capturedCohort: Readonly<{ readonly activationSequence: number; readonly sourceRevision: string }> | undefined;
   let nextActivationSequence = 0;
-  let previousCapturedCohortHash: string | undefined;
   return {
     name: 'agent-bundle:rsc-runtime-compile-observer',
     setup(api) {
@@ -92,23 +91,30 @@ const runtimeCompileObserverPlugin = (
           const sourceRevision = createHash('sha256').update(JSON.stringify(hashes)).digest('hex');
           snapshot = await observer.capture({
             attemptId,
-            cohortChanged: sourceRevision !== previousCapturedCohortHash,
+            cohortChanged: sourceRevision !== capturedCohort?.sourceRevision,
             hasErrors: false,
             sourceRevision,
           });
           if (snapshot !== undefined) {
             const activationSequence = ++nextActivationSequence;
-            const queued = observer.enqueue(snapshot);
+            capturedCohort = Object.freeze({ activationSequence, sourceRevision });
+            let queued: unknown;
+            try {
+              queued = observer.enqueue(snapshot);
+            } catch (error) {
+              if (capturedCohort?.activationSequence === activationSequence) capturedCohort = undefined;
+              throw error;
+            }
             const completion = queued instanceof Promise
               ? queued as Promise<RscRuntimeActivationOutcome>
               : Promise.resolve(undefined);
             snapshot.acceptCompilerAssetCheckpoint?.();
             void completion.then((outcome) => {
-              if (outcome !== undefined && outcome !== 'activated') return;
-              if (activationSequence < newestSuccessfulActivationSequence) return;
-              newestSuccessfulActivationSequence = activationSequence;
-              previousCapturedCohortHash = sourceRevision;
-            }, () => undefined);
+              if (outcome === 'activated' || outcome === undefined) return;
+              if (capturedCohort?.activationSequence === activationSequence) capturedCohort = undefined;
+            }, () => {
+              if (capturedCohort?.activationSequence === activationSequence) capturedCohort = undefined;
+            });
           }
         } catch (error) {
           try {

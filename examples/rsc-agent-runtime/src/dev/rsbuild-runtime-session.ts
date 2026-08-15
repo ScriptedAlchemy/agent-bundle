@@ -218,6 +218,7 @@ const abortReason = (signal: AbortSignal): unknown => signal.reason ?? new Error
 
 export interface RsbuildRuntimeSessionStartTesting {
   readonly createRsbuild?: typeof createRsbuild;
+  readonly beforeGenerationCapture?: () => Promise<void> | void;
   readonly afterActivationPrepare?: (input: Readonly<{
     readonly phase: 'store' | 'registry';
     readonly session: RsbuildRuntimeSession;
@@ -236,11 +237,13 @@ export interface RsbuildRuntimeSessionStartTesting {
 export class RsbuildRuntimeSession implements DevRuntimeSession {
   readonly #checkpointTracker: RscCompilerAssetCheckpointTracker;
   readonly #candidatesByAttempt = new Map<string, RuntimeGenerationCandidate>();
+  readonly #captureTasks = new Set<Promise<void>>();
   readonly #context: DevRuntimeStartContext;
   readonly #generationStore: RuntimeGenerationStore<RscRuntimeGenerationMetadata>;
   readonly #mcpRegistry: RuntimeMcpRegistry;
   readonly #preparedRevisions = new Set<string>();
   readonly #runs = new Map<string, DevRuntimeRun>();
+  readonly #surfaceAssetBindings = new Map<string, string>();
   readonly #surfaces = new Map<string, DevRuntimeSurface>();
   readonly #testing: RsbuildRuntimeSessionStartTesting;
   readonly #attempts = new Map<string, AttemptBarrier>();
@@ -433,7 +436,9 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
         request,
         runtimeGenerationId: lease.generation.id,
       }));
-      const descriptor = lease.generation.manifest.metadata.surfaceAssets[request.surfaceId]
+      const boundSurfaceId = this.#surfaceAssetBindings.get(request.surfaceId);
+      if (boundSurfaceId === undefined) return undefined;
+      const descriptor = lease.generation.manifest.metadata.surfaceAssets[boundSurfaceId]
         ?.find((asset) => asset.requestPath === requestPath);
       if (descriptor === undefined || descriptor.bytes > maximumAssetBytes) return undefined;
       const assetSegments = descriptor.generationPath.split('/');
@@ -513,10 +518,23 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
   #compileObserver(): NonNullable<Parameters<typeof createRscRuntimeRsbuildConfig>[0]['onCompile']> {
     return Object.freeze({
       beforeAttempt: () => this.#beforeAttempt(),
-      capture: async (input) => this.#capture(input),
+      capture: async (input) => this.#trackCapture(input),
       enqueue: (snapshot) => this.#enqueue(snapshot),
       failAttempt: (attemptId, error) => { void this.#failAttempt(attemptId, error); },
     });
+  }
+
+  #trackCapture(input: Readonly<{
+    readonly attemptId: string;
+    readonly cohortChanged: boolean;
+    readonly hasErrors: boolean;
+    readonly sourceRevision: string;
+  }>): Promise<RscRuntimeCompileSnapshot | undefined> {
+    const capture = this.#capture(input);
+    const tracked = capture.then(() => undefined, () => undefined);
+    this.#captureTasks.add(tracked);
+    void tracked.then(() => { this.#captureTasks.delete(tracked); });
+    return capture;
   }
 
   #beforeAttempt(): string {
@@ -566,6 +584,8 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
       });
       barrier.candidate = candidate;
       this.#candidatesByAttempt.set(input.attemptId, candidate);
+      await this.#testing.beforeGenerationCapture?.();
+      if (this.#closed) throw new Error('RSC runtime session is closed.');
       const snapshot = await captureRuntimeGenerationSnapshot({
         attemptId: input.attemptId,
         candidate,
@@ -575,6 +595,7 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
         rscCohortRevision: cohortRevision,
         sourceRevision: input.sourceRevision,
       });
+      if (this.#closed) throw new Error('RSC runtime session is closed.');
       return Object.freeze({
         acceptCompilerAssetCheckpoint: snapshot.acceptCompilerAssetCheckpoint,
         attemptId: snapshot.attemptId,
@@ -594,6 +615,10 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
   #enqueue(snapshot: RscRuntimeCompileSnapshot): Promise<'activated' | 'failed'> {
     const captured = (snapshot as RscRuntimeCompileSnapshot & Readonly<{ readonly snapshot?: RscRuntimeCapturedGenerationSnapshot }>).snapshot;
     if (captured === undefined) throw new Error('RSC runtime compile snapshot was not captured by this session.');
+    if (this.#closed) {
+      snapshot.discardCompilerAssetCheckpoint?.();
+      return this.#failAttempt(snapshot.attemptId, new Error('RSC runtime session is closed.')).then(() => 'failed');
+    }
     return this.#append(async () => this.#activate(captured));
   }
 
@@ -666,6 +691,7 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
       preparedRegistry = undefined;
       this.#active = generation;
       this.#updateSurfaces(snapshot, snapshot.preparedRuntime);
+      this.#updateSurfaceAssetBindings(snapshot.preparedRuntime, metadata);
       this.#setStatus('active');
       this.#emit(Object.freeze({
         mcpRegistryRevision: this.#mcpRegistry.snapshot()?.registryRevision,
@@ -717,6 +743,7 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
     try {
       await this.#mcpRegistry.reconcile(input);
       this.#updateSurfaces({ definition }, prepared);
+      this.#updateSurfaceAssetBindings(prepared, metadata);
       this.#setStatus('active');
     } catch (error) {
       this.#setStatus('degraded', [lifecycleDiagnostic(error)]);
@@ -736,6 +763,7 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
     this.#checkpointTracker.close();
     this.#setStatus('closed');
     const mcpRegistryClose = this.#mcpRegistry.close();
+    while (this.#captureTasks.size > 0) await Promise.all([...this.#captureTasks]);
     await Promise.all([this.#providerTail.catch(() => undefined), this.#failureTail]);
     const results = await Promise.allSettled([
       this.#server?.close() ?? Promise.resolve(),
@@ -753,6 +781,7 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
   }
 
   #emit(event: DevRuntimeEventInput): void {
+    if (this.#closed) return;
     try {
       this.#context.emit(event);
     } catch {
@@ -821,6 +850,26 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
         targets: Object.freeze([...app.targets]),
         fixtures: Object.freeze([]),
       }));
+    }
+  }
+
+  #updateSurfaceAssetBindings(
+    prepared: Pick<DevRuntimePreparedProject, 'apps'>,
+    metadata: Pick<RscRuntimeGenerationMetadata, 'appDefinitions' | 'surfaceAssets'>,
+  ): void {
+    this.#surfaceAssetBindings.clear();
+    const byIdentity = new Map<string, string>();
+    const byResourceUri = new Map<string, string | undefined>();
+    for (const app of metadata.appDefinitions) {
+      const surfaceId = `mcp.${app.name}`;
+      if (metadata.surfaceAssets[surfaceId] === undefined) continue;
+      byIdentity.set(`${app.id}\0${app.resourceUri}`, surfaceId);
+      byResourceUri.set(app.resourceUri, byResourceUri.has(app.resourceUri) ? undefined : surfaceId);
+    }
+    for (const app of prepared.apps) {
+      const surfaceId = `mcp.${app.name}`;
+      const binding = byIdentity.get(`${app.id}\0${app.resourceUri}`) ?? byResourceUri.get(app.resourceUri);
+      if (binding !== undefined) this.#surfaceAssetBindings.set(surfaceId, binding);
     }
   }
 

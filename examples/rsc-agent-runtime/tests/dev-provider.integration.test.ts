@@ -365,6 +365,32 @@ test('retries an identical compiler cohort after an asynchronous provider activa
   expect(enqueueCount).toBe(2);
 });
 
+test('classifies a same-hash compiler cohort as unchanged while its activation is pending', async () => {
+  const activation = deferred<RscRuntimeActivationOutcome>();
+  const captures: boolean[] = [];
+  let attempts = 0;
+  let enqueueCount = 0;
+  const observer = compileObserver({
+    beforeAttempt: () => `attempt-${String(++attempts)}`,
+    capture: async (input) => {
+      captures.push(input.cohortChanged);
+      return input.cohortChanged ? snapshotFor(input.attemptId, input.sourceRevision) : undefined;
+    },
+    enqueue: () => {
+      enqueueCount += 1;
+      return activation.promise;
+    },
+    failAttempt: () => undefined,
+  });
+
+  await observer.compile();
+  await observer.compile();
+
+  expect(captures).toEqual([true, false]);
+  expect(enqueueCount).toBe(1);
+  activation.resolve('activated');
+});
+
 test('aggregates owned resource closer failures', async () => {
   const ledger = new ResourceLedger();
   const first = new Error('first closer failed');
@@ -398,6 +424,108 @@ test('records one failed event when capture and observer finalization both fail 
       await waitFor(() => session.status().state === 'degraded');
       expect(events.filter((event) => event.type === 'runtime.generation.failed')).toHaveLength(1);
       await expect(readdir(join(copied.projectRoot, '.agent-bundle', 'runtime-double-failure', 'generation-store', 'staging'))).resolves.toEqual([]);
+    } finally {
+      await session.close();
+    }
+  } finally {
+    await rm(copied.workspaceRoot, { force: true, recursive: true });
+  }
+}, 30_000);
+
+test('drains a deferred generation pipeline before close without publishing late lifecycle events', async () => {
+  const copied = await copyExample();
+  try {
+    const prepared = await new ProjectService({ includeDevRuntime: true, mode: 'development', root: copied.projectRoot }).prepare('dev');
+    const reached = deferred<void>();
+    const release = deferred<void>();
+    const events: Array<{ readonly type: string }> = [];
+    let deferActivation = false;
+    let held = false;
+    const storageRoot = join(copied.projectRoot, '.agent-bundle', 'runtime-close-deferred-generation');
+    const session = await RsbuildRuntimeSession.start({
+      ...startContext({
+        projectRoot: copied.projectRoot,
+        preparedRuntime: prepared.devRuntime!,
+        providerSessionId: 'provider-close-deferred-generation',
+        signal: new AbortController().signal,
+        storageRoot,
+      }),
+      emit: (event) => { events.push(event); },
+    }, {
+      beforeGenerationCapture: async () => {
+        if (!deferActivation || held) return;
+        held = true;
+        reached.resolve();
+        await release.promise;
+      },
+    });
+    try {
+      await waitFor(() => session.status().state === 'active');
+      deferActivation = true;
+      await changeWorkerImplementation(copied.projectRoot, 'close-deferred-generation');
+      const captureReached = await Promise.race([
+        reached.promise.then(() => true),
+        new Promise<boolean>((resolve) => { setTimeout(() => { resolve(false); }, 5_000); }),
+      ]);
+      expect(captureReached).toBe(true);
+      const eventCountBeforeClose = events.length;
+      const closing = session.close();
+      let closed = false;
+      void closing.then(() => { closed = true; });
+      await new Promise<void>((resolve) => { setTimeout(resolve, 0); });
+      expect(closed).toBe(false);
+      release.resolve();
+      await closing;
+      expect(events).toHaveLength(eventCountBeforeClose);
+      await expect(lstat(join(storageRoot, 'generation-store', 'staging'))).rejects.toThrow();
+    } finally {
+      release.resolve();
+      await session.close();
+    }
+  } finally {
+    await rm(copied.workspaceRoot, { force: true, recursive: true });
+  }
+}, 30_000);
+
+test('binds renamed and added App surfaces to the active generation assets without restoring removed surfaces', async () => {
+  const copied = await copyExample();
+  try {
+    const prepared = await new ProjectService({ includeDevRuntime: true, mode: 'development', root: copied.projectRoot }).prepare('dev');
+    const session = await RsbuildRuntimeSession.start(startContext({
+      projectRoot: copied.projectRoot,
+      preparedRuntime: prepared.devRuntime!,
+      providerSessionId: 'provider-reconciled-app-assets',
+      signal: new AbortController().signal,
+      storageRoot: join(copied.projectRoot, '.agent-bundle', 'runtime-reconciled-app-assets'),
+    }));
+    try {
+      await waitFor(() => session.status().state === 'active');
+      const runtimeGenerationId = session.mcpRegistry.snapshot()!.runtimeGenerationId;
+      const original = prepared.devRuntime!.apps[0]!;
+      await session.reconcilePreparedRuntime({
+        ...prepared.devRuntime!,
+        apps: [
+          { ...original, name: 'timeline-renamed' },
+          { ...original, id: `${original.id}-added`, name: 'timeline-added' },
+        ],
+        sourceRevision: `${prepared.devRuntime!.sourceRevision}-reconciled-app-assets`,
+      });
+
+      await expect(session.readAsset({
+        path: ['rsc', 'index.html'],
+        runtimeGenerationId,
+        surfaceId: 'mcp.timeline-renamed',
+      })).resolves.toMatchObject({ contentType: 'text/html' });
+      await expect(session.readAsset({
+        path: ['rsc', 'index.html'],
+        runtimeGenerationId,
+        surfaceId: 'mcp.timeline-added',
+      })).resolves.toMatchObject({ contentType: 'text/html' });
+      await expect(session.readAsset({
+        path: ['rsc', 'index.html'],
+        runtimeGenerationId,
+        surfaceId: 'mcp.timeline',
+      })).resolves.toBeUndefined();
     } finally {
       await session.close();
     }
