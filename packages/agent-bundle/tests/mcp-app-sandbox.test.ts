@@ -4,6 +4,7 @@ import { connect } from 'node:net';
 import { expect, it } from '@rstest/core';
 
 import {
+  createMcpAppDocumentPolicySnapshot,
   createMcpAppSandboxBridge,
   createMcpAppSandboxFrame,
   createMcpAppSandboxProxy,
@@ -73,7 +74,54 @@ it('derives outer permissions from the declared and explicitly consented capabil
     contentSecurityPolicy: "default-src 'none'; base-uri 'self'; connect-src https://api.example.test; frame-src https://frames.example.test; img-src data: https://cdn.example.test; media-src https://cdn.example.test; font-src https://cdn.example.test; style-src 'unsafe-inline' https://cdn.example.test; script-src 'unsafe-inline' https://cdn.example.test",
     iframeAllow: 'camera',
     permissionsPolicy: 'camera=(self), clipboard-write=(), geolocation=(), microphone=()',
+    warnings: [
+      { code: 'csp-source-rejected', value: 'javascript:alert(1)' },
+      { code: 'csp-wildcard-rejected', value: '*' },
+    ],
   });
+});
+
+it('fails closed for unsafe CSP sources and freezes document grants into a revisioned policy', () => {
+  const csp = {
+    connectDomains: ['https://api.weather.example', '*', 'http://127.0.0.1:9000'],
+    frameDomains: [],
+    redirectDomains: [],
+    resourceDomains: [],
+  } as const;
+  const permissions = {
+    camera: {},
+    clipboardWrite: {},
+    geolocation: {},
+    microphone: {},
+  } as const;
+  const policy = deriveMcpAppSandboxPolicy({ csp, permissions }, {
+    permissions: { clipboardWrite: {} },
+  });
+
+  expect(policy.contentSecurityPolicy).toContain('connect-src https://api.weather.example');
+  expect(policy.permissionsPolicy).toBe(
+    'camera=(), clipboard-write=(self), geolocation=(), microphone=()',
+  );
+  expect(policy.warnings).toEqual([
+    { code: 'csp-wildcard-rejected', value: '*' },
+    { code: 'csp-source-rejected', value: 'http://127.0.0.1:9000' },
+  ]);
+
+  const snapshot = createMcpAppDocumentPolicySnapshot(2, { csp, permissions }, [{
+    authorizationId: 'authorization-1',
+    bindingId: 'binding-1',
+    capability: 'clipboard-write',
+    challengeId: 'challenge-1',
+    scope: 'document',
+  }]);
+  expect(snapshot).toEqual({
+    allow: 'clipboard-write',
+    approvedPermissions: { clipboardWrite: {} },
+    revision: 2,
+    warnings: policy.warnings,
+  });
+  expect(Object.isFrozen(snapshot)).toBe(true);
+  expect(Object.isFrozen(snapshot.approvedPermissions)).toBe(true);
 });
 
 it('uses one proxy relay configuration in the fixed outer frame contract', () => {

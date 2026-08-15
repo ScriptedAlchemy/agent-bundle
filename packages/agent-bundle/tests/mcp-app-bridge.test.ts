@@ -4,10 +4,15 @@ import { expect, it } from '@rstest/core';
 
 import {
   createMcpAppBridge,
+  createMcpAppFailClosedSender,
+  parseMcpAppResource,
   type McpAppBridgeBindingOperations,
   type McpAppBridgeHost,
   type McpAppBridgeMessage,
   type McpAppBridgeRequestId,
+  validateMcpAppDisplayModeRequest,
+  validateMcpAppDownloadRequest,
+  validateMcpAppExternalLink,
 } from '../src/dev/mcp-app-bridge.ts';
 import type { McpAppBinding, McpAppJsonValue } from '../src/dev/mcp-app-binding-service.ts';
 
@@ -797,4 +802,56 @@ it('deep-snapshots caller-owned binding and host values before exposing them to 
 
   expect(fixture.sent).toContainEqual({ jsonrpc: '2.0', method: 'ui/notifications/tool-input', params: { arguments: { city: 'Paris', nested: { day: 'today' } } } });
   expect(fixture.sent[0]).toMatchObject({ result: { hostContext: { styles: { variables: { '--font-sans': 'system-ui' } } } } });
+});
+
+it('strictly validates external actions, bounded downloads, and exact MCP App resources', () => {
+  expect(validateMcpAppExternalLink({ url: 'https://weather.example/forecast?day=today' })).toEqual({
+    url: 'https://weather.example/forecast?day=today',
+  });
+  expect(validateMcpAppExternalLink({ url: 'https://weather.example:443/' })).toBeUndefined();
+  expect(validateMcpAppExternalLink({ url: 'https://weather.example/#fragment' })).toBeUndefined();
+  expect(validateMcpAppDisplayModeRequest({ mode: 'fullscreen' })).toEqual({ mode: 'fullscreen' });
+  expect(validateMcpAppDisplayModeRequest({ mode: 'windowed' })).toBeUndefined();
+
+  expect(validateMcpAppDownloadRequest({
+    contents: [{ text: '', type: 'text' }],
+  })).toEqual({ contents: [{ text: '', type: 'text' }], embeddedBytes: 0, itemCount: 1 });
+  expect(validateMcpAppDownloadRequest({
+    contents: Array.from({ length: 21 }, () => ({ text: 'x', type: 'text' })),
+  })).toBeUndefined();
+  expect(validateMcpAppDownloadRequest({
+    contents: [{ data: Buffer.alloc(10 * 1024 * 1024 + 1).toString('base64'), mimeType: 'image/png', type: 'image' }],
+  })).toBeUndefined();
+
+  expect(parseMcpAppResource({
+    contents: [{ mimeType: 'text/html;profile=mcp-app', text: '<main>weather</main>', uri: 'ui://weather/forecast.html' }],
+  }, 'ui://weather/forecast.html')).toMatchObject({ html: '<main>weather</main>' });
+  expect(parseMcpAppResource({
+    contents: [{ mimeType: 'text/html', text: '<main>weather</main>', uri: 'ui://weather/forecast.html' }],
+  }, 'ui://weather/forecast.html')).toBeUndefined();
+});
+
+it('closes a bounded asynchronous sender once after consecutive transport errors and clears queued traffic', async () => {
+  const delivered: string[] = [];
+  let attempts = 0;
+  let closes = 0;
+  const sender = createMcpAppFailClosedSender({
+    onClose: () => { closes += 1; },
+    send: async (message: string) => {
+      attempts += 1;
+      if (attempts <= 3) throw new Error(`blocked ${message}`);
+      delivered.push(message);
+      return true;
+    },
+  });
+
+  await expect(sender.send('input')).resolves.toBe(false);
+  await expect(sender.send('result')).resolves.toBe(false);
+  await expect(sender.send('late')).resolves.toBe(false);
+  expect(sender.closed).toBe(true);
+  expect(sender.blockedAttempts).toBe(3);
+  expect(closes).toBe(1);
+  expect(delivered).toEqual([]);
+  await expect(sender.send('after-close')).resolves.toBe(false);
+  expect(closes).toBe(1);
 });

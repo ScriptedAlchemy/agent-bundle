@@ -111,6 +111,19 @@ export interface McpAppBridgeResource {
   readonly permissions?: McpAppSandboxPermissions;
 }
 
+export interface McpAppValidatedDownload {
+  readonly contents: readonly McpAppJsonValue[];
+  readonly embeddedBytes: number;
+  readonly itemCount: number;
+}
+
+export interface McpAppFailClosedSender<Message> {
+  readonly blockedAttempts: number;
+  readonly closed: boolean;
+  close(): void;
+  send(message: Message): Promise<boolean>;
+}
+
 export interface McpAppBridgeFallback {
   readonly input: McpAppJsonValue;
   readonly kind: 'fallback';
@@ -156,7 +169,7 @@ interface BridgeBindingSnapshot {
   readonly toolDefinition: McpAppBinding['toolDefinition'];
 }
 
-interface ParsedResource {
+export interface McpAppParsedResource {
   readonly csp?: McpAppSandboxCsp;
   readonly html: string;
   readonly permissions?: McpAppSandboxPermissions;
@@ -571,7 +584,7 @@ const htmlFromBlob = (blob: string): string | undefined => {
   }
 };
 
-const parsedResource = (value: McpAppJsonValue, resourceUri: string): ParsedResource | undefined => {
+export const parseMcpAppResource = (value: McpAppJsonValue, resourceUri: string): McpAppParsedResource | undefined => {
   const response = validResourceReadResult(value);
   if (response === undefined) return undefined;
   for (const candidate of response.contents) {
@@ -588,6 +601,8 @@ const parsedResource = (value: McpAppJsonValue, resourceUri: string): ParsedReso
   return undefined;
 };
 
+const parsedResource = parseMcpAppResource;
+
 const validToolCall = (params: McpAppJsonValue | undefined): McpAppBridgeToolCall | undefined => {
   const record = jsonRecord(params);
   if (record === undefined || !nonempty(record.name)) return undefined;
@@ -600,16 +615,20 @@ const validResourceRead = (params: McpAppJsonValue | undefined): McpAppBridgeRes
   return record === undefined || !nonempty(record.uri) ? undefined : Object.freeze({ uri: record.uri });
 };
 
-const validOpenLink = (params: McpAppJsonValue | undefined): string | undefined => {
+export const validateMcpAppExternalLink = (params: McpAppJsonValue | undefined): Readonly<{ readonly url: string }> | undefined => {
   const record = jsonRecord(params);
   if (record === undefined || !nonempty(record.url)) return undefined;
   try {
     const url = new URL(record.url);
-    return url.protocol === 'http:' || url.protocol === 'https:' ? url.href : undefined;
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return undefined;
+    if (url.username || url.password || url.hash || url.href !== record.url) return undefined;
+    return Object.freeze({ url: url.href });
   } catch {
     return undefined;
   }
 };
+
+const validOpenLink = (params: McpAppJsonValue | undefined): string | undefined => validateMcpAppExternalLink(params)?.url;
 
 const validMessage = (params: McpAppJsonValue | undefined): McpAppBridgeMessageEvent | undefined => {
   const record = jsonRecord(params);
@@ -618,11 +637,74 @@ const validMessage = (params: McpAppJsonValue | undefined): McpAppBridgeMessageE
   return Object.freeze({ content, role: 'user' });
 };
 
-const validDisplayMode = (params: McpAppJsonValue | undefined): McpAppBridgeDisplayMode | undefined => {
+export const validateMcpAppDisplayModeRequest = (params: McpAppJsonValue | undefined): Readonly<{ readonly mode: McpAppBridgeDisplayMode }> | undefined => {
   const record = jsonRecord(params);
   return record === undefined || typeof record.mode !== 'string' || !displayModes.has(record.mode as McpAppBridgeDisplayMode)
     ? undefined
-    : record.mode as McpAppBridgeDisplayMode;
+    : Object.freeze({ mode: record.mode as McpAppBridgeDisplayMode });
+};
+
+const validDisplayMode = (params: McpAppJsonValue | undefined): McpAppBridgeDisplayMode | undefined => validateMcpAppDisplayModeRequest(params)?.mode;
+
+const decodedEmbeddedBytes = (block: McpAppJsonValue): number | undefined => {
+  const record = jsonRecord(block);
+  if (record === undefined) return undefined;
+  if (record.type === 'text') return 0;
+  const encoded = record.type === 'image' || record.type === 'audio' ? record.data : record.type === 'resource' ? jsonRecord(record.resource)?.blob : undefined;
+  if (encoded === undefined) return 0;
+  if (typeof encoded !== 'string' || encoded.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/u.test(encoded)) return undefined;
+  const bytes = Buffer.from(encoded, 'base64');
+  return bytes.toString('base64') === encoded ? bytes.length : undefined;
+};
+
+export const validateMcpAppDownloadRequest = (value: McpAppJsonValue | undefined): McpAppValidatedDownload | undefined => {
+  const record = jsonRecord(value);
+  const contents = record === undefined ? undefined : validContentBlocks(record.contents);
+  if (contents === undefined || contents.length === 0 || contents.length > 20) return undefined;
+  let embeddedBytes = 0;
+  for (const content of contents) {
+    const bytes = decodedEmbeddedBytes(content);
+    if (bytes === undefined) return undefined;
+    embeddedBytes += bytes;
+    if (embeddedBytes > 10 * 1024 * 1024) return undefined;
+  }
+  return Object.freeze({ contents, embeddedBytes, itemCount: contents.length });
+};
+
+export const createMcpAppFailClosedSender = <Message>(options: Readonly<{
+  readonly onClose?: () => void;
+  readonly send: (message: Message) => boolean | Promise<boolean>;
+}>): McpAppFailClosedSender<Message> => {
+  let blockedAttempts = 0;
+  let closed = false;
+  let closeCalled = false;
+  const close = (): void => {
+    if (closed) return;
+    closed = true;
+    if (!closeCalled) {
+      closeCalled = true;
+      options.onClose?.();
+    }
+  };
+  return Object.freeze({
+    get blockedAttempts(): number { return blockedAttempts; },
+    get closed(): boolean { return closed; },
+    close,
+    async send(message: Message): Promise<boolean> {
+      if (closed) return false;
+      try {
+        if (await options.send(message)) {
+          blockedAttempts = 0;
+          return true;
+        }
+      } catch {
+        // A transport failure is intentionally indistinguishable from a blocked send.
+      }
+      blockedAttempts += 1;
+      if (blockedAttempts >= maximumQueuedHostMessageSendAttempts) close();
+      return false;
+    },
+  });
 };
 
 const validModelContext = (params: McpAppJsonValue | undefined): McpAppBridgeModelContext | undefined => {

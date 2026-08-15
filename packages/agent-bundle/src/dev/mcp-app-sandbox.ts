@@ -9,7 +9,7 @@ const INITIALIZED_METHOD = 'ui/notifications/initialized';
 const INITIALIZE_METHOD = 'ui/initialize';
 const DEFAULT_MAX_MESSAGE_BYTES = 256 * 1024;
 const DEFAULT_MAX_QUEUED_MESSAGES = 32;
-const MAX_RELAY_MESSAGE_BYTES = 1024 * 1024;
+const MAX_RELAY_MESSAGE_BYTES = 256 * 1024;
 
 const PROXY_CONTENT_SECURITY_POLICY = [
   "default-src 'none'",
@@ -153,6 +153,29 @@ export interface McpAppSandboxPolicy {
   readonly contentSecurityPolicy: string;
   readonly iframeAllow: string;
   readonly permissionsPolicy: string;
+  readonly warnings: readonly McpAppSandboxWarning[];
+}
+
+export type McpAppConsentCapability = 'call-tool' | 'download-file' | 'open-external-link' | 'clipboard-write' | 'camera' | 'microphone' | 'geolocation' | 'request-display-mode';
+
+export interface McpAppConsentGrant {
+  readonly authorizationId: string;
+  readonly bindingId: string;
+  readonly capability: McpAppConsentCapability;
+  readonly challengeId: string;
+  readonly scope: 'action' | 'document';
+}
+
+export interface McpAppSandboxWarning {
+  readonly code: 'csp-source-rejected' | 'csp-wildcard-rejected' | 'permission-not-consented';
+  readonly value: string;
+}
+
+export interface McpAppDocumentPolicySnapshot {
+  readonly allow: string;
+  readonly approvedPermissions: McpAppSandboxPermissions;
+  readonly revision: number;
+  readonly warnings: readonly McpAppSandboxWarning[];
 }
 
 export interface McpAppSandboxRelay {
@@ -243,18 +266,26 @@ const isRecord = (value: unknown): value is Record<string, unknown> => value !==
 
 const isCapability = (value: unknown): value is McpAppSandboxCapability => isRecord(value);
 
-const cspSources = (sources: readonly string[] | undefined): readonly string[] => {
+const cspSources = (sources: readonly string[] | undefined): Readonly<{ accepted: readonly string[]; warnings: readonly McpAppSandboxWarning[] }> => {
   const accepted = new Set<string>();
+  const warnings: McpAppSandboxWarning[] = [];
   for (const source of sources ?? []) {
+    if (source === '*') {
+      warnings.push(Object.freeze({ code: 'csp-wildcard-rejected', value: source }));
+      continue;
+    }
     try {
       const parsed = new URL(source);
-      if (parsed.protocol !== 'https:' || parsed.username || parsed.password || parsed.search || parsed.hash || parsed.pathname !== '/') continue;
+      if (parsed.protocol !== 'https:' || parsed.username || parsed.password || parsed.search || parsed.hash || parsed.pathname !== '/' || parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1' || parsed.hostname === '[::1]' || /^10\.|^192\.168\.|^172\.(?:1[6-9]|2\d|3[01])\./u.test(parsed.hostname) || source !== parsed.origin) {
+        warnings.push(Object.freeze({ code: 'csp-source-rejected', value: source }));
+        continue;
+      }
       accepted.add(parsed.origin);
     } catch {
-      // Untrusted declarations never become policy sources.
+      warnings.push(Object.freeze({ code: 'csp-source-rejected', value: source }));
     }
   }
-  return [...accepted];
+  return Object.freeze({ accepted: Object.freeze([...accepted].slice(0, 32)), warnings: Object.freeze(warnings) });
 };
 
 const sourceList = (sources: readonly string[], fallback: string): string => sources.length > 0 ? sources.join(' ') : fallback;
@@ -290,21 +321,39 @@ export const deriveMcpAppSandboxPolicy = (
   const resources = cspSources(declaration.csp?.resourceDomains);
   const frames = cspSources(declaration.csp?.frameDomains);
   const baseUri = cspSources(declaration.csp?.baseUriDomains);
-  return {
+  return Object.freeze({
     contentSecurityPolicy: [
       "default-src 'none'",
-      `base-uri ${sourceList(baseUri, "'self'")}`,
-      `connect-src ${sourceList(connect, "'none'")}`,
-      `frame-src ${sourceList(frames, "'none'")}`,
-      `img-src ${['data:', ...resources].join(' ')}`,
-      `media-src ${sourceList(resources, "'none'")}`,
-      `font-src ${sourceList(resources, "'none'")}`,
-      `style-src ${withInline(resources)}`,
-      `script-src ${withInline(resources)}`,
+      `base-uri ${sourceList(baseUri.accepted, "'self'")}`,
+      `connect-src ${sourceList(connect.accepted, "'none'")}`,
+      `frame-src ${sourceList(frames.accepted, "'none'")}`,
+      `img-src ${['data:', ...resources.accepted].join(' ')}`,
+      `media-src ${sourceList(resources.accepted, "'none'")}`,
+      `font-src ${sourceList(resources.accepted, "'none'")}`,
+      `style-src ${withInline(resources.accepted)}`,
+      `script-src ${withInline(resources.accepted)}`,
     ].join('; '),
     iframeAllow: iframeAllow(declaration.permissions, consent.permissions),
     permissionsPolicy: permissionPolicy(declaration.permissions, consent.permissions),
-  };
+    warnings: Object.freeze([...connect.warnings, ...resources.warnings, ...frames.warnings, ...baseUri.warnings]),
+  });
+};
+
+export const createMcpAppDocumentPolicySnapshot = (
+  revision: number,
+  declaration: McpAppSandboxDeclaration,
+  grants: readonly McpAppConsentGrant[],
+): McpAppDocumentPolicySnapshot => {
+  if (!Number.isSafeInteger(revision) || revision < 1) throw new RangeError('MCP App document policy revision must be a positive safe integer');
+  const granted = new Set(grants.filter((grant) => grant.scope === 'document').map((grant) => grant.capability));
+  const permissions = Object.freeze({
+    ...(granted.has('camera') && isCapability(declaration.permissions?.camera) ? { camera: Object.freeze({}) } : {}),
+    ...(granted.has('clipboard-write') && isCapability(declaration.permissions?.clipboardWrite) ? { clipboardWrite: Object.freeze({}) } : {}),
+    ...(granted.has('geolocation') && isCapability(declaration.permissions?.geolocation) ? { geolocation: Object.freeze({}) } : {}),
+    ...(granted.has('microphone') && isCapability(declaration.permissions?.microphone) ? { microphone: Object.freeze({}) } : {}),
+  });
+  const policy = deriveMcpAppSandboxPolicy(declaration, { permissions });
+  return Object.freeze({ allow: policy.iframeAllow, approvedPermissions: permissions, revision, warnings: policy.warnings });
 };
 
 const originOf = (value: string): string => {
