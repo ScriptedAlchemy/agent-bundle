@@ -340,7 +340,9 @@ export class DevRuntimeController implements DevRuntimeSession {
   #lastGoodStatus: DevRuntimeStatus | undefined;
   #lateFailures: unknown[] = [];
   #lateStartup: Promise<void> | undefined;
+  #publishingLifecycleStatus = false;
   #reconcileTail: Promise<void> = Promise.resolve();
+  #refreshingSnapshot = false;
   #session: DevRuntimeSession | undefined;
   #startAbort = new AbortController();
   #startPromise: Promise<void> | undefined;
@@ -673,6 +675,11 @@ export class DevRuntimeController implements DevRuntimeSession {
         return;
       }
       this.#refreshSnapshot();
+    } else if (
+      (event.type === 'runtime.generation.failed' || event.type === 'runtime.status') &&
+      !this.#refreshingSnapshot && !this.#publishingLifecycleStatus
+    ) {
+      this.#refreshSnapshot();
     }
     try {
       this.#emit(runtimeEvent(this.#providerSessionId, event));
@@ -695,11 +702,12 @@ export class DevRuntimeController implements DevRuntimeSession {
     }
   }
 
-  /** Refreshes browser-visible snapshots before activation reaches event consumers. */
+  /** Refreshes browser-visible snapshots before an authoritative lifecycle event reaches consumers. */
   #refreshSnapshot(): void {
-    if (this.#closed || this.#topologyFailed) return;
+    if (this.#closed || this.#topologyFailed || this.#refreshingSnapshot) return;
     const session = this.#session;
     if (session === undefined) return;
+    this.#refreshingSnapshot = true;
     try {
       const status = this.#captureStatus(session);
       const surfaces = this.#snapshotSurfaces(session, false);
@@ -708,6 +716,8 @@ export class DevRuntimeController implements DevRuntimeSession {
       this.#surfaces = surfaces;
     } catch {
       if (!this.#topologyFailed) this.#failLifecycle('degraded');
+    } finally {
+      this.#refreshingSnapshot = false;
     }
   }
 
@@ -724,10 +734,15 @@ export class DevRuntimeController implements DevRuntimeSession {
       ...(prior.lastGoodVector === undefined ? {} : { lastGoodVector: prior.lastGoodVector }),
       state,
     });
-    this.#publish(Object.freeze({
-      details: Object.freeze({ ...(restartRequired ? { restartRequired: true } : {}), state }),
-      type: 'runtime.status',
-    }));
+    this.#publishingLifecycleStatus = true;
+    try {
+      this.#publish(Object.freeze({
+        details: Object.freeze({ ...(restartRequired ? { restartRequired: true } : {}), state }),
+        type: 'runtime.status',
+      }));
+    } finally {
+      this.#publishingLifecycleStatus = false;
+    }
   }
 
   async #close(): Promise<void> {

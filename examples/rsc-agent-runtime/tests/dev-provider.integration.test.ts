@@ -54,12 +54,15 @@ const compileObserver = (onCompile: NonNullable<Parameters<typeof createRscRunti
     onBeforeDevCompile: (callback: unknown) => { before = callback as () => void; },
   });
   return Object.freeze({
-    async compile(): Promise<void> {
+    async compile(input: Readonly<{
+      readonly children?: readonly unknown[];
+      readonly hasErrors?: boolean;
+    }> = {}): Promise<void> {
       before?.();
       await after?.({
         stats: {
-          hasErrors: () => false,
-          toJson: () => ({ children: [{ hash: 'rsc-hash', name: 'rsc' }, { hash: 'widget-hash', name: 'widget' }] }),
+          hasErrors: () => input.hasErrors ?? false,
+          toJson: () => ({ children: input.children ?? [{ hash: 'rsc-hash', name: 'rsc' }, { hash: 'widget-hash', name: 'widget' }] }),
         },
       });
     },
@@ -121,6 +124,12 @@ const changeWorkerImplementation = async (projectRoot: string, marker: string): 
     /RSC worker received an invalid event(?: [^']*)?/u,
     `RSC worker received an invalid event ${marker}`,
   ));
+};
+
+const introduceWorkerSyntaxError = async (projectRoot: string): Promise<void> => {
+  const path = join(projectRoot, 'src', 'rsc', 'worker.tsx');
+  const source = await readFile(path, 'utf8');
+  await writeFile(path, `${source}\nconst = ;\n`);
 };
 
 test('declares an optional runtime while keeping Claude and Codex artifacts buildable', async () => {
@@ -392,6 +401,67 @@ test('classifies a same-hash compiler cohort as unchanged while its activation i
   activation.resolve('activated');
 });
 
+test('classifies direct compiler errors as source build failures without capture or enqueue', async () => {
+  const captured: string[] = [];
+  const enqueued: string[] = [];
+  const failures: unknown[][] = [];
+  const observer = compileObserver({
+    beforeAttempt: () => 'attempt-source-build',
+    capture: async (input) => {
+      captured.push(input.attemptId);
+      return snapshotFor(input.attemptId, input.sourceRevision);
+    },
+    enqueue: (snapshot) => {
+      enqueued.push(snapshot.attemptId);
+      return 'activated';
+    },
+    failAttempt: (...input: unknown[]) => { failures.push(input); },
+  });
+
+  await observer.compile({ hasErrors: true });
+
+  expect(captured).toEqual([]);
+  expect(enqueued).toEqual([]);
+  expect(failures).toHaveLength(1);
+  expect(failures[0]?.[0]).toBe('attempt-source-build');
+  expect(failures[0]?.[2]).toBe('source-build');
+});
+
+test('recaptures an unchanged successful cohort after a source build failure', async () => {
+  const captured: boolean[] = [];
+  const observer = compileObserver({
+    beforeAttempt: () => `attempt-${String(captured.length + 1)}`,
+    capture: async (input) => {
+      captured.push(input.cohortChanged);
+      return snapshotFor(input.attemptId, input.sourceRevision);
+    },
+    enqueue: () => 'activated',
+    failAttempt: () => undefined,
+  });
+
+  await observer.compile();
+  await observer.compile({ hasErrors: true });
+  await observer.compile();
+
+  expect(captured).toEqual([true, true]);
+});
+
+test('keeps malformed compiler stats in the provider lifecycle failure lane', async () => {
+  const failures: unknown[][] = [];
+  const observer = compileObserver({
+    beforeAttempt: () => 'attempt-malformed-stats',
+    capture: async (input) => snapshotFor(input.attemptId, input.sourceRevision),
+    enqueue: () => 'activated',
+    failAttempt: (...input: unknown[]) => { failures.push(input); },
+  });
+
+  await observer.compile({ children: [] });
+
+  expect(failures).toHaveLength(1);
+  expect(failures[0]?.[0]).toBe('attempt-malformed-stats');
+  expect(failures[0]?.[2]).toBe('provider-lifecycle');
+});
+
 test('aggregates owned resource closer failures', async () => {
   const ledger = new ResourceLedger();
   const first = new Error('first closer failed');
@@ -423,6 +493,12 @@ test('records one failed event when capture and observer finalization both fail 
     });
     try {
       await waitFor(() => session.status().state === 'degraded');
+      expect(session.status().diagnostics).toEqual([{
+        code: 'AB8200',
+        message: expect.any(String),
+        phase: 'provider-lifecycle',
+        severity: 'error',
+      }]);
       expect(events.filter((event) => event.type === 'runtime.generation.failed')).toHaveLength(1);
       await expect(readdir(join(copied.projectRoot, '.agent-bundle', 'runtime-double-failure', 'generation-store', 'staging'))).resolves.toEqual([]);
     } finally {
@@ -432,6 +508,55 @@ test('records one failed event when capture and observer finalization both fail 
     await rm(copied.workspaceRoot, { force: true, recursive: true });
   }
 }, 30_000);
+
+test('keeps the active generation while publishing a source build diagnostic before its failed event', async () => {
+  const copied = await copyExample();
+  let session: RsbuildRuntimeSession | undefined;
+  try {
+    const prepared = await new ProjectService({ includeDevRuntime: true, mode: 'development', root: copied.projectRoot }).prepare('dev');
+    const events: Array<{ readonly type: string }> = [];
+    const failedStatuses: Array<ReturnType<RsbuildRuntimeSession['status']>> = [];
+    session = await RsbuildRuntimeSession.start({
+      ...startContext({
+        projectRoot: copied.projectRoot,
+        preparedRuntime: prepared.devRuntime!,
+        providerSessionId: 'provider-source-build-retention',
+        signal: new AbortController().signal,
+        storageRoot: join(copied.projectRoot, '.agent-bundle', 'runtime-source-build-retention'),
+      }),
+      emit: (event) => {
+        events.push(event);
+        if (event.type === 'runtime.generation.failed' && session !== undefined) failedStatuses.push(session.status());
+      },
+    });
+    await waitFor(() => session?.status().state === 'active');
+    const beforeStatus = session.status();
+    const beforeSurfaces = session.surfaces();
+    const beforeRuns = session.runs(50);
+
+    await introduceWorkerSyntaxError(copied.projectRoot);
+    await waitFor(() => events.filter((event) => event.type === 'runtime.generation.failed').length === 1);
+
+    expect(failedStatuses).toHaveLength(1);
+    expect(failedStatuses[0]).toMatchObject({
+      activeVector: beforeStatus.activeVector,
+      diagnostics: [{
+        code: 'AB8206',
+        message: 'RSC runtime source build failed.',
+        phase: 'source/build',
+        severity: 'error',
+      }],
+      lastGoodVector: beforeStatus.lastGoodVector,
+      state: 'active',
+    });
+    expect(session.status()).toEqual(failedStatuses[0]);
+    expect(session.surfaces()).toEqual(beforeSurfaces);
+    expect(session.runs(50)).toEqual(beforeRuns);
+  } finally {
+    await session?.close();
+    await rm(copied.workspaceRoot, { force: true, recursive: true });
+  }
+}, 60_000);
 
 test('drains a deferred generation pipeline before close without publishing late lifecycle events', async () => {
   const copied = await copyExample();

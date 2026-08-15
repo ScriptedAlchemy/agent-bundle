@@ -19,6 +19,7 @@ export interface RscRuntimeCompileSnapshot {
 }
 
 export type RscRuntimeActivationOutcome = 'activated' | 'failed';
+export type RscRuntimeCompileFailureKind = 'provider-lifecycle' | 'source-build';
 
 export interface RscRuntimeRsbuildConfigOptions {
   readonly compilerRoot?: string;
@@ -33,7 +34,7 @@ export interface RscRuntimeRsbuildConfigOptions {
     }): Promise<RscRuntimeCompileSnapshot | undefined>;
     /** Queues provider activation but never blocks the Rsbuild compile hook. */
     enqueue(snapshot: RscRuntimeCompileSnapshot): unknown;
-    failAttempt(attemptId: string, error: unknown): void;
+    failAttempt(attemptId: string, error: unknown, kind: RscRuntimeCompileFailureKind): void;
   }>;
 }
 
@@ -70,7 +71,9 @@ const runtimeCompileObserverPlugin = (
         let snapshot: RscRuntimeCompileSnapshot | undefined;
         try {
           if (stats.hasErrors()) {
-            throw new Error('RSC runtime compile reported errors.');
+            capturedCohort = undefined;
+            observer.failAttempt(attemptId, new Error('RSC runtime compile reported errors.'), 'source-build');
+            return;
           }
           const json = stats.toJson({ all: false, children: true, hash: true });
           const cohortHashes = new Map<'rsc' | 'widget', string>();
@@ -122,7 +125,7 @@ const runtimeCompileObserverPlugin = (
           } catch {
             // The original capture/enqueue error remains the attempted failure cause.
           }
-          observer.failAttempt(attemptId, error);
+          observer.failAttempt(attemptId, error, 'provider-lifecycle');
         }
       });
     },

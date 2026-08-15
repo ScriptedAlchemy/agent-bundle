@@ -288,6 +288,123 @@ it('refreshes controller endpoint snapshots before publishing a later runtime ac
   expect(controller.status()).toMatchObject({ state: 'closed' });
 });
 
+it('refreshes authoritative failed and status snapshots before forwarding their runtime events', async () => {
+  const descriptor = { environmentVariables: [], id: 'fixture-runtime', label: 'Fixture runtime', schemaVersion: 1 } as const;
+  const sourceBuildDiagnostic = {
+    code: 'AB8206',
+    message: 'RSC runtime source build failed.',
+    phase: 'source/build' as const,
+    severity: 'error' as const,
+  };
+  let failed = false;
+  let malformed = false;
+  let emit: Parameters<DevRuntimeProvider['start']>[0]['emit'] | undefined;
+  const observed: Array<Readonly<{
+    readonly diagnostics: readonly Readonly<{ readonly code: string; readonly phase: string }> [];
+    readonly surfaceCount: number;
+    readonly type: string;
+  }>> = [];
+  const session = {
+    close: async () => undefined,
+    mcpRegistry: {},
+    reconcilePreparedRuntime: async () => undefined,
+    status: () => malformed
+      ? { activeVector: { runtimeGenerationId: 7 }, descriptor, diagnostics: [], hmrReady: true, state: 'active' as const }
+      : {
+          activeVector: vector,
+          descriptor,
+          diagnostics: failed ? [sourceBuildDiagnostic] : [],
+          hmrReady: true,
+          lastGoodVector: vector,
+          state: 'active' as const,
+        },
+    surfaces: () => [surface],
+  } as unknown as DevRuntimeSession;
+  const controller = new DevRuntimeController({
+    artifactStatus: () => ({ state: 'missing' }),
+    emit: (event) => {
+      observed.push({
+        diagnostics: controller.status().diagnostics.map((diagnostic) => ({ code: diagnostic.code, phase: diagnostic.phase })),
+        surfaceCount: controller.surfaces().length,
+        type: event.type,
+      });
+    },
+    environment: {},
+    preparedRuntime: { apps: [], provider: './src/dev/provider.ts', servers: [], sourceRevision: 'source-1' },
+    projectRoot: '/workspace/project',
+    provider: {
+      descriptor,
+      start: async (context) => {
+        emit = context.emit;
+        return session;
+      },
+    },
+    storageRoot: '/workspace/project/.agent-bundle/runtime',
+  });
+
+  await controller.start();
+  expect(controller.status()).toMatchObject({ activeVector: vector, diagnostics: [], state: 'active' });
+  expect(controller.surfaces()).toEqual([surface]);
+
+  failed = true;
+  emit?.({ type: 'runtime.generation.failed' });
+  expect(observed.at(-1)).toEqual({
+    diagnostics: [{ code: 'AB8206', phase: 'source/build' }],
+    surfaceCount: 1,
+    type: 'runtime.generation.failed',
+  });
+  expect(controller.status()).toMatchObject({ activeVector: vector, lastGoodVector: vector, state: 'active' });
+  expect(Object.isFrozen(controller.status().diagnostics[0])).toBe(true);
+
+  failed = false;
+  emit?.({ type: 'runtime.status' });
+  expect(observed.at(-1)).toEqual({ diagnostics: [], surfaceCount: 1, type: 'runtime.status' });
+
+  malformed = true;
+  emit?.({ type: 'runtime.generation.failed' });
+  expect(controller.status()).toMatchObject({
+    activeVector: vector,
+    diagnostics: [{ code: 'AB8200', phase: 'provider-lifecycle' }],
+    lastGoodVector: vector,
+    state: 'degraded',
+  });
+  expect(observed.slice(-2).map((event) => event.type)).toEqual(['runtime.status', 'runtime.generation.failed']);
+  await controller.close();
+});
+
+it('does not overwrite a controller-owned lifecycle failure while publishing its status event', async () => {
+  const descriptor = { environmentVariables: [], id: 'fixture-runtime', label: 'Fixture runtime', schemaVersion: 1 } as const;
+  const controller = new DevRuntimeController({
+    artifactStatus: () => ({ state: 'missing' }),
+    emit: () => undefined,
+    environment: {},
+    preparedRuntime: { apps: [], provider: './src/dev/provider.ts', servers: [], sourceRevision: 'source-1' },
+    projectRoot: '/workspace/project',
+    provider: {
+      descriptor,
+      start: async () => ({
+        close: async () => undefined,
+        mcpRegistry: {},
+        reconcilePreparedRuntime: async () => { throw new Error('Reconcile failed.'); },
+        status: () => ({ activeVector: vector, descriptor, diagnostics: [], hmrReady: true, lastGoodVector: vector, state: 'active' as const }),
+        surfaces: () => [surface],
+      } as unknown as DevRuntimeSession),
+    },
+    storageRoot: '/workspace/project/.agent-bundle/runtime',
+  });
+
+  await controller.start();
+  await controller.reconcileDeclaration({ apps: [], provider: './src/dev/provider.ts', servers: [], sourceRevision: 'source-2' });
+
+  expect(controller.status()).toMatchObject({
+    activeVector: vector,
+    diagnostics: [{ code: 'AB8200', phase: 'provider-lifecycle' }],
+    lastGoodVector: vector,
+    state: 'degraded',
+  });
+  await controller.close();
+});
+
 it('detaches and freezes complete activation status and surface snapshots', async () => {
   const mutableDescriptor = {
     environmentVariables: ['RUNTIME_TOKEN'],

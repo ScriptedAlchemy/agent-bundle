@@ -8,6 +8,7 @@ import { createRsbuild, type StartDevServerResult } from '@rsbuild/core';
 
 import {
   createRscRuntimeRsbuildConfig,
+  type RscRuntimeCompileFailureKind,
   type RscRuntimeCompileSnapshot,
 } from '../../rsbuild.config.js';
 import {
@@ -501,6 +502,13 @@ const lifecycleDiagnostic = (error: unknown): DevRuntimeDiagnostic => Object.fre
   code: 'AB8200',
   message: error instanceof Error ? error.message : 'RSC runtime provider failed.',
   phase: 'provider-lifecycle',
+  severity: 'error',
+});
+
+const sourceBuildDiagnostic = (): DevRuntimeDiagnostic => Object.freeze({
+  code: 'AB8206',
+  message: 'RSC runtime source build failed.',
+  phase: 'source/build',
   severity: 'error',
 });
 
@@ -1808,7 +1816,7 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
       beforeAttempt: () => this.#beforeAttempt(),
       capture: async (input) => this.#trackCapture(input),
       enqueue: (snapshot) => this.#enqueue(snapshot),
-      failAttempt: (attemptId, error) => { void this.#failAttempt(attemptId, error); },
+      failAttempt: (attemptId, error, kind) => { void this.#failAttempt(attemptId, error, kind); },
     });
   }
 
@@ -1853,8 +1861,12 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
   }>): Promise<RscRuntimeCompileSnapshot | undefined> {
     const barrier = this.#attempts.get(input.attemptId);
     if (barrier === undefined) throw new Error('RSC runtime compile capture has no live attempt barrier.');
-    if (input.hasErrors || input.sourceRevision.length === 0) {
-      await this.#failAttempt(input.attemptId, new Error('RSC runtime compilation failed.'));
+    if (input.hasErrors) {
+      await this.#failAttempt(input.attemptId, new Error('RSC runtime compilation failed.'), 'source-build');
+      return undefined;
+    }
+    if (input.sourceRevision.length === 0) {
+      await this.#failAttempt(input.attemptId, new Error('RSC runtime compilation has no source revision.'));
       return undefined;
     }
     if (!input.cohortChanged) {
@@ -1910,7 +1922,11 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
     return this.#append(async () => this.#activate(captured));
   }
 
-  async #failAttempt(attemptId: string, error: unknown): Promise<void> {
+  async #failAttempt(
+    attemptId: string,
+    error: unknown,
+    kind: RscRuntimeCompileFailureKind = 'provider-lifecycle',
+  ): Promise<void> {
     if (this.#failedAttempts.has(attemptId)) return;
     this.#failedAttempts.add(attemptId);
     const barrier = this.#attempts.get(attemptId);
@@ -1922,8 +1938,11 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
       this.#failureTail = cleanup.catch(() => undefined);
       await cleanup.catch(() => undefined);
     }
+    if (!this.#closed) this.#setStatus(
+      this.#active === undefined ? 'degraded' : 'active',
+      [kind === 'source-build' ? sourceBuildDiagnostic() : lifecycleDiagnostic(error)],
+    );
     this.#emit(Object.freeze({ type: 'runtime.generation.failed' }));
-    if (!this.#closed) this.#setStatus(this.#active === undefined ? 'degraded' : 'active', [lifecycleDiagnostic(error)]);
   }
 
   #activationGuard(snapshot: RscRuntimeCapturedGenerationSnapshot): RuntimeGenerationActivationGuard<RscRuntimeGenerationMetadata> {

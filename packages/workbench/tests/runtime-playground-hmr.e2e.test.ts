@@ -104,6 +104,39 @@ e2e('activates an edited RSC generation and replays the selected hook without re
     await expect(automaticReplay).toHaveCount(1);
     await automaticReplay.click();
     await expect(page.locator('[aria-label="Runtime output stage"] .runtime-stage-output--agent code')).toContainText(/Live runtime state now contains \d+ edits?\./u, { timeout: browserTimeout });
+
+    const sourceBuildDiagnostic = page.getByLabel('Runtime diagnostics evidence');
+    const sourceBuildFailed = await identity.evaluate((element) => Object.fromEntries([...element.attributes]
+      .filter((attribute) => attribute.name.startsWith('data-runtime-'))
+      .map((attribute) => [attribute.name, attribute.value])));
+    const historyBeforeSourceBuildFailure = await history.count();
+    await writeFile(fixture.serverComponentSource, `${editedSource}\nconst = ;\n`);
+    await expect.poll(async () => identity.getAttribute('data-runtime-event-sequence'), { timeout: browserTimeout })
+      .toBe(String(Number(sourceBuildFailed['data-runtime-event-sequence']) + 1));
+    await expect(sourceBuildDiagnostic).toContainText('source/build');
+    await expect(sourceBuildDiagnostic).toContainText('AB8206');
+    await expect(sourceBuildDiagnostic).toContainText('RSC runtime source build failed.');
+    const afterSourceBuildFailure = await identity.evaluate((element) => Object.fromEntries([...element.attributes]
+      .filter((attribute) => attribute.name.startsWith('data-runtime-'))
+      .map((attribute) => [attribute.name, attribute.value])));
+    expect(afterSourceBuildFailure['data-runtime-artifact-epoch']).toBe(sourceBuildFailed['data-runtime-artifact-epoch']);
+    expect(afterSourceBuildFailure['data-runtime-generation']).toBe(sourceBuildFailed['data-runtime-generation']);
+    expect(afterSourceBuildFailure['data-runtime-hmr-client-count']).toBe(sourceBuildFailed['data-runtime-hmr-client-count']);
+    expect(afterSourceBuildFailure['data-runtime-hmr-ready']).toBe(sourceBuildFailed['data-runtime-hmr-ready']);
+    expect(afterSourceBuildFailure['data-runtime-provider-session']).toBe(sourceBuildFailed['data-runtime-provider-session']);
+    expect(afterSourceBuildFailure['data-runtime-source-revision']).toBe(sourceBuildFailed['data-runtime-source-revision']);
+    expect(afterSourceBuildFailure['data-runtime-state-version']).toBe(sourceBuildFailed['data-runtime-state-version']);
+    await expect.poll(async () => history.count(), { timeout: browserTimeout }).toBe(historyBeforeSourceBuildFailure);
+    await expect(page.locator('[aria-label="Runtime output stage"] .runtime-stage-output--agent code')).toContainText(/Live runtime state now contains \d+ edits?\./u);
+    await expect(selectedHistory).toHaveAttribute('aria-pressed', 'true');
+
+    await writeFile(fixture.serverComponentSource, editedSource);
+    await expect.poll(async () => identity.getAttribute('data-runtime-generation'), { timeout: browserTimeout })
+      .not.toBe(sourceBuildFailed['data-runtime-generation']);
+    await expect.poll(async () => history.count(), { timeout: browserTimeout }).toBe(historyBeforeSourceBuildFailure + 1);
+    await expect(sourceBuildDiagnostic).toContainText('No provider diagnostics.');
+    await history.locator('button[aria-pressed="false"]').first().click();
+    await expect(page.locator('[aria-label="Runtime output stage"] .runtime-stage-output--agent code')).toContainText(/Live runtime state now contains \d+ edits?\./u);
     await expect(surface).toHaveValue('hook.claude');
     await expect(raw).toHaveValue('{"repair":');
     await expect(page.locator('#runtime-input-raw-error')).toBeVisible();
