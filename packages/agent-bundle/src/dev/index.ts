@@ -100,6 +100,26 @@ export {
   DevRuntimeGenerationConflictError,
   DevRuntimeUnavailableError,
 } from './runtime-provider.ts';
+export {
+  RuntimeGenerationStore,
+  RuntimeGenerationStoreCloseError,
+  RuntimeGenerationStoreError,
+  type RuntimeGenerationActivationGuard,
+  type RuntimeGenerationAsset,
+  type RuntimeGenerationCandidate,
+  type RuntimeGenerationCloseFailure,
+  type RuntimeGenerationLease,
+  type RuntimeGenerationManifest,
+  type RuntimeGenerationManifestInput,
+  type RuntimeGenerationMetadataCodec,
+  type RuntimeGenerationPrepareOptions,
+  type RuntimeGenerationPreparedActivation,
+  type RuntimeGeneration,
+  type RuntimeGenerationStoreErrorCode,
+  type RuntimeGenerationStoreOptions,
+  type RuntimeGenerationValidationInput,
+  type RuntimeGenerationValidator,
+} from './runtime-generation-store.ts';
 export type {
   CreateDevRuntimeProvider,
   DevRuntimeClientSurfaceEndpoint,
