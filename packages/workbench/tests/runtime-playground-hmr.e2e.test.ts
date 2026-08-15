@@ -22,6 +22,78 @@ const hookInput = Object.freeze({
   tool_use_id: 'runtime-playground-hmr-tool',
 });
 
+const runtimeStatusImage = Object.freeze({
+  data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADElEQVR42mP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC',
+  mimeType: 'image/png',
+  type: 'image',
+});
+
+type RuntimeVector = Readonly<{
+  readonly providerSessionId: string;
+  readonly runtimeGenerationId: string;
+  readonly sourceRevision: string;
+  readonly stateStoreId: string;
+  readonly stateVersion: number;
+}>;
+
+type RuntimeStatusRun = Readonly<{
+  readonly id: string;
+  readonly result: Readonly<{
+    readonly modelVisible: unknown;
+    readonly protocol: unknown;
+    readonly trace: readonly Readonly<{
+      readonly id: string;
+      readonly phase: string;
+      readonly startedAt: string;
+      readonly status: string;
+    }>[];
+  }>;
+  readonly status: string;
+  readonly surfaceId: string;
+  readonly target: string;
+  readonly vector: RuntimeVector;
+}>;
+
+const expectRuntimeStatusEvidence = (run: RuntimeStatusRun, expected: Readonly<{
+  readonly providerSessionId: string;
+  readonly runtimeGenerationId: string;
+  readonly sourceRevision: string;
+  readonly stateStoreId: string;
+  readonly stateVersion: number;
+}>): void => {
+  const editCount = expected.stateVersion;
+  const editNoun = editCount === 1 ? 'edit' : 'edits';
+  const content = [
+    { text: `Runtime state contains ${editCount} ${editNoun}.`, type: 'text' },
+    runtimeStatusImage,
+  ];
+  expect(run).toMatchObject({ status: 'succeeded', surfaceId: 'mcp.runtime_status' });
+  expect(run.vector).toEqual(expected);
+  expect(run.result.modelVisible).toEqual(content);
+  expect(run.result.protocol).toEqual({
+    content,
+    structuredContent: { editCount, stateVersion: expected.stateVersion },
+  });
+  const trace = run.result.trace;
+  expect(trace.map((span) => ({ id: span.id, phase: span.phase, status: span.status }))).toEqual([
+    { id: 'normalize', phase: 'normalize', status: 'succeeded' },
+    { id: 'worker', phase: 'worker', status: 'succeeded' },
+    { id: 'flight', phase: 'flight', status: 'succeeded' },
+    { id: 'decode', phase: 'decode', status: 'succeeded' },
+    { id: 'lower', phase: 'lower', status: 'succeeded' },
+  ]);
+  const startedAt = trace[0]?.startedAt;
+  expect(startedAt).toBeDefined();
+  for (const span of trace) {
+    expect(Object.keys(span).sort()).toEqual(['id', 'phase', 'startedAt', 'status']);
+    expect(Date.parse(span.startedAt)).toBeGreaterThanOrEqual(0);
+    expect(span.startedAt).toBe(startedAt);
+    expect('details' in span).toBe(false);
+    expect('durationMs' in span).toBe(false);
+    expect('parentId' in span).toBe(false);
+  }
+};
+
 e2e('activates an edited RSC generation and replays the selected hook without replacing the document', { timeout: 180_000 }, async ({ page }) => {
   const fixture = await startRuntimePlaygroundFixture();
   const source = await readFile(fixture.serverComponentSource, 'utf8');
@@ -29,10 +101,15 @@ e2e('activates an edited RSC generation and replays the selected hook without re
   page.on('pageerror', (error) => pageErrors.push(error));
   const context = page.context();
   const forbiddenRequests: string[] = [];
+  const runtimeRunPosts: string[] = [];
   const forbiddenPrefixes = ['/api/mcp/sessions', '/api/runtime/mcp/sessions', '/api/mcp/apps', '/api/runtime/apps'];
-  const recordRequest = (request: { url(): string }): void => {
-    const pathname = new URL(request.url()).pathname;
+  const recordRequest = (request: { method(): string; url(): string }): void => {
+    const requestUrl = new URL(request.url());
+    const pathname = requestUrl.pathname;
     if (forbiddenPrefixes.some((prefix) => pathname.startsWith(prefix))) forbiddenRequests.push(pathname);
+    if (requestUrl.origin === fixture.url && pathname === '/api/runtime/runs' && request.method() === 'POST') {
+      runtimeRunPosts.push(pathname);
+    }
   };
   context.on('request', recordRequest);
   let clientPage: Awaited<ReturnType<typeof context.newPage>> | undefined;
@@ -40,6 +117,22 @@ e2e('activates an edited RSC generation and replays the selected hook without re
   try {
     await page.goto(`${fixture.url}#runtime`);
     await expect(page.getByRole('heading', { name: 'Runtime Playground' })).toBeVisible({ timeout: browserTimeout });
+    const runtimeSessionToken = await page.evaluate(async () => {
+      const response = await fetch('/api/project/session', { credentials: 'same-origin' });
+      const body: unknown = await response.json();
+      if (!response.ok || typeof body !== 'object' || body === null || typeof (body as { readonly token?: unknown }).token !== 'string') {
+        throw new Error(`Runtime session bootstrap failed with ${response.status}.`);
+      }
+      return (body as { readonly token: string }).token;
+    });
+    const runtimeJson = async (path: string): Promise<unknown> => page.evaluate(async ({ route, token }) => {
+      const response = await fetch(route, {
+        credentials: 'same-origin',
+        headers: { 'x-agent-bundle-session': token },
+      });
+      if (!response.ok) throw new Error(`Runtime request ${route} failed with ${response.status}.`);
+      return response.json();
+    }, { route: path, token: runtimeSessionToken });
     const identity = page.locator('[data-runtime-provider-session]');
     await expect(identity).toHaveAttribute('data-runtime-hmr-ready', 'true', { timeout: browserTimeout });
     const hmrClientCount = page.locator('[aria-label="Runtime identity"] > div').filter({ has: page.locator('dt', { hasText: 'Browser HMR clients' }) }).locator('dd');
@@ -66,6 +159,36 @@ e2e('activates an edited RSC generation and replays the selected hook without re
     await page.getByRole('dialog').getByRole('button', { name: 'Confirm' }).click();
     await expect.poll(async () => history.count(), { timeout: browserTimeout }).toBe(1);
 
+    await surface.selectOption('mcp.runtime_status');
+    await page.getByRole('radio', { name: 'Raw JSON' }).check();
+    await raw.fill('{}');
+    await page.getByRole('button', { name: 'Run', exact: true }).click();
+    await expect.poll(async () => history.count(), { timeout: browserTimeout }).toBe(2);
+    expect(runtimeRunPosts).toEqual(['/api/runtime/runs', '/api/runtime/runs']);
+    const historyBeforeHmr = await runtimeJson('/api/runtime/runs?limit=50') as Readonly<{
+      readonly providerSessionId: string;
+      readonly runs: readonly RuntimeStatusRun[];
+    }>;
+    const statusBeforeHmr = historyBeforeHmr.runs.find((run) => run.surfaceId === 'mcp.runtime_status');
+    const hookBeforeHmr = historyBeforeHmr.runs.find((run) => run.surfaceId === 'hook.claude');
+    if (statusBeforeHmr === undefined || hookBeforeHmr === undefined) {
+      throw new Error('Expected the hook mutation and Runtime status runs before HMR.');
+    }
+    const providerStatusBeforeHmr = await runtimeJson('/api/runtime/status') as Readonly<{
+      readonly status: Readonly<{ readonly activeVector: RuntimeVector }>;
+    }>;
+    expect(statusBeforeHmr.vector).toEqual(providerStatusBeforeHmr.status.activeVector);
+    expect(statusBeforeHmr.vector.providerSessionId).toBe(historyBeforeHmr.providerSessionId);
+    expect(statusBeforeHmr.vector.stateStoreId).toBe(hookBeforeHmr.vector.stateStoreId);
+    expect(statusBeforeHmr.vector.stateVersion).toBe(hookBeforeHmr.vector.stateVersion);
+    expectRuntimeStatusEvidence(statusBeforeHmr, providerStatusBeforeHmr.status.activeVector);
+    const statusBeforeHmrDetail = await runtimeJson(`/api/runtime/runs/${encodeURIComponent(statusBeforeHmr.id)}`) as Readonly<{
+      readonly run: RuntimeStatusRun;
+    }>;
+    const immutableStatusBeforeHmr = JSON.parse(JSON.stringify(statusBeforeHmrDetail.run)) as RuntimeStatusRun;
+
+    await surface.selectOption('hook.claude');
+
     await raw.fill('{"repair":');
     await expect(page.locator('#runtime-input-raw-error')).toBeVisible();
     const diagnostics = page.getByRole('tab', { name: 'Diagnostics', exact: true });
@@ -81,12 +204,14 @@ e2e('activates an edited RSC generation and replays the selected hook without re
     }));
     const marker = `runtime-hmr-${Math.random().toString(36).slice(2)}`;
     await page.evaluate((value) => { document.documentElement.dataset.runtimeMarker = value; }, marker);
+    const historyCountBeforeActivation = await history.count();
+    const automaticReplayCountBeforeActivation = await history.locator('button[aria-pressed="false"]').count();
 
     const editedSource = source.replace('Shared state now contains', 'Live runtime state now contains');
     expect(editedSource).not.toBe(source);
     await writeFile(fixture.serverComponentSource, editedSource);
     await expect.poll(async () => identity.getAttribute('data-runtime-generation'), { timeout: browserTimeout }).not.toBe(before.attributes['data-runtime-generation']);
-    await expect.poll(async () => history.count(), { timeout: browserTimeout }).toBe(2);
+    await expect.poll(async () => history.count(), { timeout: browserTimeout }).toBe(historyCountBeforeActivation + 1);
     const after = await identity.evaluate((element) => Object.fromEntries([...element.attributes]
       .filter((attribute) => attribute.name.startsWith('data-runtime-'))
       .map((attribute) => [attribute.name, attribute.value])));
@@ -101,8 +226,9 @@ e2e('activates an edited RSC generation and replays the selected hook without re
     await expect(selectedHistory).toHaveText(selectedHistoryLabel ?? '');
     await expect(selectedHistory).toHaveAttribute('aria-pressed', 'true');
     const automaticReplay = history.locator('button[aria-pressed="false"]');
-    await expect(automaticReplay).toHaveCount(1);
-    await automaticReplay.click();
+    await expect(automaticReplay).toHaveCount(automaticReplayCountBeforeActivation + 1);
+    await expect(automaticReplay.first()).toContainText(`generation ${after['data-runtime-generation']?.slice(-8) ?? ''}`);
+    await automaticReplay.first().click();
     await expect(page.locator('[aria-label="Runtime output stage"] .runtime-stage-output--agent code')).toContainText(/Live runtime state now contains \d+ edits?\./u, { timeout: browserTimeout });
 
     const sourceBuildDiagnostic = page.getByLabel('Runtime diagnostics evidence');
@@ -143,6 +269,39 @@ e2e('activates an edited RSC generation and replays the selected hook without re
     await expect(diagnostics).toHaveAttribute('aria-selected', 'true');
     await expect(profile).toHaveValue('portable');
     await expect.poll(() => page.evaluate(() => ({ marker: document.documentElement.dataset.runtimeMarker, timeOrigin: performance.timeOrigin }))).toEqual({ marker, timeOrigin: before.timeOrigin });
+    await surface.selectOption('mcp.runtime_status');
+    await page.getByRole('radio', { name: 'Raw JSON' }).check();
+    await raw.fill('{}');
+    await page.getByRole('button', { name: 'Run', exact: true }).click();
+    await expect.poll(async () => history.count(), { timeout: browserTimeout }).toBe(historyBeforeSourceBuildFailure + 2);
+    expect(runtimeRunPosts).toEqual(['/api/runtime/runs', '/api/runtime/runs', '/api/runtime/runs']);
+    const historyAfterHmr = await runtimeJson('/api/runtime/runs?limit=50') as Readonly<{
+      readonly providerSessionId: string;
+      readonly runs: readonly RuntimeStatusRun[];
+    }>;
+    const statusAfterHmr = historyAfterHmr.runs.find((run) => run.surfaceId === 'mcp.runtime_status' && run.id !== statusBeforeHmr.id);
+    if (statusAfterHmr === undefined) throw new Error('Expected a new Runtime status run after HMR recovery.');
+    const providerStatusAfterHmr = await runtimeJson('/api/runtime/status') as Readonly<{
+      readonly status: Readonly<{ readonly activeVector: RuntimeVector }>;
+    }>;
+    expect(statusAfterHmr.vector).toEqual(providerStatusAfterHmr.status.activeVector);
+    expect(statusAfterHmr.vector.providerSessionId).toBe(historyAfterHmr.providerSessionId);
+    expect(statusAfterHmr.vector.providerSessionId).toBe(statusBeforeHmr.vector.providerSessionId);
+    expect(statusAfterHmr.vector.runtimeGenerationId).not.toBe(statusBeforeHmr.vector.runtimeGenerationId);
+    expect(statusAfterHmr.vector.sourceRevision).not.toBe(statusBeforeHmr.vector.sourceRevision);
+    await expect(identity).toHaveAttribute('data-runtime-generation', statusAfterHmr.vector.runtimeGenerationId);
+    await expect(identity).toHaveAttribute('data-runtime-source-revision', statusAfterHmr.vector.sourceRevision);
+    expect(statusAfterHmr.vector.stateStoreId).toBe(statusBeforeHmr.vector.stateStoreId);
+    expect(statusAfterHmr.vector.stateVersion).toBe(statusBeforeHmr.vector.stateVersion);
+    expectRuntimeStatusEvidence(statusAfterHmr, providerStatusAfterHmr.status.activeVector);
+    const persistedStatusBeforeHmr = await runtimeJson(`/api/runtime/runs/${encodeURIComponent(statusBeforeHmr.id)}`) as Readonly<{
+      readonly run: RuntimeStatusRun;
+    }>;
+    expect(persistedStatusBeforeHmr.run).toEqual(immutableStatusBeforeHmr);
+
+    await surface.selectOption('hook.claude');
+    await raw.fill('{"repair":');
+    await expect(page.locator('#runtime-input-raw-error')).toBeVisible();
     await surface.selectOption('mcp.edit-timeline');
     await expect(identity).toHaveAttribute('data-runtime-hmr-client-count', '1');
     await expect(hmrClientCount).toHaveText('1');

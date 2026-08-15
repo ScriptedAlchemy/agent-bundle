@@ -372,6 +372,69 @@ it('refreshes authoritative failed and status snapshots before forwarding their 
   await controller.close();
 });
 
+it('refreshes terminal run snapshots before completed or failed events without refreshing started runs', async () => {
+  const descriptor = { environmentVariables: [], id: 'fixture-runtime', label: 'Fixture runtime', schemaVersion: 1 } as const;
+  let stateVersion = 0;
+  let emit: Parameters<DevRuntimeProvider['start']>[0]['emit'] | undefined;
+  const observed: Array<Readonly<{ readonly stateVersion: number | undefined; readonly type: string }>> = [];
+  const session = {
+    close: async () => undefined,
+    mcpRegistry: {},
+    reconcilePreparedRuntime: async () => undefined,
+    status: () => {
+      const current = Object.freeze({ ...vector, stateVersion });
+      return Object.freeze({
+        activeVector: current,
+        descriptor,
+        diagnostics: Object.freeze([]),
+        hmrReady: true,
+        lastGoodVector: current,
+        state: 'active' as const,
+      });
+    },
+    surfaces: () => [surface],
+  } as unknown as DevRuntimeSession;
+  const controller = new DevRuntimeController({
+    artifactStatus: () => ({ state: 'missing' }),
+    emit: (event) => {
+      observed.push(Object.freeze({
+        stateVersion: controller.status().activeVector?.stateVersion,
+        type: event.type,
+      }));
+    },
+    environment: {},
+    preparedRuntime: { apps: [], provider: './src/dev/provider.ts', servers: [], sourceRevision: 'source-1' },
+    projectRoot: '/workspace/project',
+    provider: {
+      descriptor,
+      start: async (context) => {
+        emit = context.emit;
+        return session;
+      },
+    },
+    storageRoot: '/workspace/project/.agent-bundle/runtime',
+  });
+
+  await controller.start();
+  expect(controller.status().activeVector?.stateVersion).toBe(0);
+
+  stateVersion = 1;
+  emit?.({ runId: 'completed-after-mutation', type: 'runtime.run.completed' });
+  expect(observed.at(-1)).toEqual({ stateVersion: 1, type: 'runtime.run.completed' });
+  expect(controller.status().activeVector?.stateVersion).toBe(1);
+
+  stateVersion = 2;
+  emit?.({ runId: 'failed-after-mutation', type: 'runtime.run.failed' });
+  expect(observed.at(-1)).toEqual({ stateVersion: 2, type: 'runtime.run.failed' });
+  expect(controller.status().activeVector?.stateVersion).toBe(2);
+
+  stateVersion = 3;
+  emit?.({ runId: 'started-without-mutation', type: 'runtime.run.started' });
+  expect(observed.at(-1)).toEqual({ stateVersion: 2, type: 'runtime.run.started' });
+  expect(controller.status().activeVector?.stateVersion).toBe(2);
+  await controller.close();
+});
+
 it('does not overwrite a controller-owned lifecycle failure while publishing its status event', async () => {
   const descriptor = { environmentVariables: [], id: 'fixture-runtime', label: 'Fixture runtime', schemaVersion: 1 } as const;
   const controller = new DevRuntimeController({

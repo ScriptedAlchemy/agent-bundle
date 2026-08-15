@@ -999,7 +999,9 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
         await this.#testing.afterInvocationWorkerResponse?.(Object.freeze({ runId, surfaceId: invocation.surface.id }));
         this.#assertInvocationOpen();
         const flight = response.flight;
-        const stateAfter = await this.#stateKernel.readSnapshot({ stateVersion: response.inspection.state.identity.stateVersion });
+        const inspectedStateVersion = response.inspection.state.identity.stateVersion;
+        const stateAfter = await this.#stateKernel.readSnapshot({ stateVersion: inspectedStateVersion });
+        if (stateAfter.stateVersion !== inspectedStateVersion) throw new Error('RSC invocation inspection state version is not durable.');
         this.#assertInvocationOpen();
         const result = this.#inspectionResult(response.inspection, flight, stateAfter, runId);
         if (artifact === undefined) throw new Error('RSC runtime Flight artifact is unavailable.');
@@ -1014,10 +1016,11 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
           status: 'succeeded' as const,
           surfaceId: invocation.surface.id,
           target: invocation.request.target,
-          vector: this.#vector(generationLease.generation, stateAfter.stateVersion),
+          vector: this.#vector(generationLease.generation, inspectedStateVersion),
         });
         this.#activeRuns.delete(runId);
         await this.#recordTerminal(completed);
+        this.#publishActiveStateVersion(generationLease.generation, inspectedStateVersion);
         this.#emit(Object.freeze({ runId, runtimeGenerationId: generationLease.generation.id, type: 'runtime.run.completed' }));
         return completed;
       } catch (error) {
@@ -2119,9 +2122,20 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
     return match === null ? Number.MAX_SAFE_INTEGER : Number(match[1]);
   }
 
-  #setStatus(state: DevRuntimeStatus['state'], diagnostics: readonly DevRuntimeDiagnostic[] = []): void {
+  #publishActiveStateVersion(generation: RuntimeGeneration<RscRuntimeGenerationMetadata>, stateVersion: number): void {
+    if (this.#active?.id !== generation.id) return;
+    const current = this.#status.activeVector;
+    if (current?.runtimeGenerationId === generation.id && current.stateVersion > stateVersion) return;
+    this.#setStatus(this.#status.state, this.#status.diagnostics, stateVersion);
+  }
+
+  #setStatus(
+    state: DevRuntimeStatus['state'],
+    diagnostics: readonly DevRuntimeDiagnostic[] = [],
+    stateVersion = 0,
+  ): void {
     const active = this.#active;
-    const vector = active === undefined ? undefined : this.#vector(active);
+    const vector = active === undefined ? undefined : this.#vector(active, stateVersion);
     this.#status = Object.freeze({
       ...(vector === undefined ? {} : { activeVector: vector, lastGoodVector: vector }),
       descriptor,

@@ -668,7 +668,8 @@ export class DevRuntimeController implements DevRuntimeSession {
 
   #publish(event: DevRuntimeEventInput): void {
     const authoritative = event.type === 'runtime.generation.activated' ||
-      event.type === 'runtime.generation.failed' || event.type === 'runtime.status';
+      event.type === 'runtime.generation.failed' || event.type === 'runtime.status' ||
+      event.type === 'runtime.run.completed' || event.type === 'runtime.run.failed';
     const controllerLifecycleStatus = event.type === 'runtime.status' && this.#publishingLifecycleStatus;
     if (authoritative && !controllerLifecycleStatus) {
       if (this.#closed || this.#topologyFailed) return;

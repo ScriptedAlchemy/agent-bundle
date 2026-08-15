@@ -911,6 +911,8 @@ test('preserves the Claude fixture seed in post-state while exact replay stays v
       seed: { authorization: 'Bearer sk-live-abcdefghijklmnopqrstuvwxyz' },
       stateStoreId: 'playground',
     })).rejects.toThrow('sensitive fields');
+    const stateBeforeStatus = session.status().activeVector;
+    expect(stateBeforeStatus).toEqual(run.vector);
     const status = await session.invoke({
       expectedGenerationId: generationId,
       input: {},
@@ -922,6 +924,11 @@ test('preserves the Claude fixture seed in post-state while exact replay stays v
       status: 'succeeded',
       vector: { stateVersion: 2 },
     });
+    if (status.status !== 'succeeded') throw new Error('Runtime status did not succeed.');
+    expect(status.vector).toMatchObject(status.result.state.identity);
+    expect(status.vector).toEqual(stateBeforeStatus);
+    expect(session.status().activeVector).toEqual(stateBeforeStatus);
+    expect(session.run(status.id)).toEqual(status);
   } finally {
     await session.close().catch(() => undefined);
     await rm(storageRoot, { force: true, recursive: true });
