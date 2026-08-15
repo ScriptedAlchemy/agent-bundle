@@ -142,7 +142,7 @@ export const createRscRuntimeRsbuildConfig = (
   return {
     ...(development ? {
       dev: { writeToDisk: true },
-      server: { host: '127.0.0.1', port: 0, printUrls: false },
+      server: { host: '127.0.0.1', printUrls: false },
     } : {}),
     plugins: [
       pluginReact(),

@@ -677,7 +677,7 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
       const started = await rsbuild.startDevServer({ getPortSilently: true });
       await ledger.add(() => started.server.close());
       context.signal.throwIfAborted();
-      session.#attachServer(started);
+      session.#attachServer(started, rsbuild.context.devServer);
       await session.#providerTail;
       context.signal.throwIfAborted();
       context.signal.removeEventListener('abort', abort);
@@ -1760,10 +1760,16 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
     return response;
   }
 
-  #attachServer(started: StartDevServerResult): void {
+  #attachServer(
+    started: StartDevServerResult,
+    devServer: Readonly<{ readonly hostname: string; readonly https: boolean; readonly port: number }> | undefined,
+  ): void {
     if (this.#closed) return;
-    const url = started.urls.find((candidate) => candidate.startsWith('http://127.0.0.1:')) ?? `http://127.0.0.1:${String(started.port)}`;
-    const origin = new URL(url).origin;
+    if (
+      devServer === undefined || devServer.hostname !== '127.0.0.1' || devServer.https ||
+      !Number.isSafeInteger(devServer.port) || devServer.port < 1 || devServer.port > 65_535
+    ) throw new Error('RSC runtime dev server did not expose a valid loopback HTTP origin.');
+    const origin = new URL(`http://${devServer.hostname}:${String(devServer.port)}`).origin;
     this.#server = started.server;
     this.#clientSurface = Object.freeze({
       entryPath: clientSurfaceEntry,

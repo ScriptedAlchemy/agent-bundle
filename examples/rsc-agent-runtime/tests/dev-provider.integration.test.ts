@@ -165,9 +165,10 @@ test('declares an optional runtime while keeping Claude and Codex artifacts buil
       expect(session.status()).toMatchObject({ hmrReady: true, state: 'active' });
       expect(session.clientSurface('mcp.edit-timeline')).toMatchObject({
         entryPath: '/edit-timeline-v1.html',
+        httpOrigin: expect.stringMatching(/^http:\/\/127\.0\.0\.1:[1-9]\d*$/u),
         httpPathPrefixes: ['/'],
         surfaceId: 'mcp.edit-timeline',
-        webSocketOrigin: expect.stringMatching(/^ws:\/\/127\.0\.0\.1:/u),
+        webSocketOrigin: expect.stringMatching(/^ws:\/\/127\.0\.0\.1:[1-9]\d*$/u),
         webSocketPath: '/rsbuild-hmr',
       });
       expect(session.status()).not.toHaveProperty('clientSurface');
@@ -904,6 +905,42 @@ test('aborts a deferred Rsbuild creation before starting its dev server', async 
 
     await expect(starting).rejects.toBe(reason);
     expect(devServerStarts).toBe(0);
+  } finally {
+    await rm(copied.workspaceRoot, { force: true, recursive: true });
+  }
+});
+
+test('uses the bound Rsbuild dev-server context instead of a stale port-zero start result', async () => {
+  const copied = await copyExample();
+  try {
+    const prepared = await new ProjectService({ includeDevRuntime: true, mode: 'development', root: copied.projectRoot }).prepare('dev');
+    let closeCalls = 0;
+    const create = async () => Object.freeze({
+      context: Object.freeze({
+        devServer: Object.freeze({ hostname: '127.0.0.1', https: false, port: 41_103 }),
+      }),
+      startDevServer: async () => Object.freeze({
+        port: 0,
+        server: Object.freeze({ close: async () => { closeCalls += 1; } }),
+        urls: Object.freeze(['http://127.0.0.1:0']),
+      }) as unknown as StartDevServerResult,
+    }) as unknown as Awaited<ReturnType<typeof createRsbuild>>;
+    const session = await RsbuildRuntimeSession.start(startContext({
+      projectRoot: copied.projectRoot,
+      preparedRuntime: prepared.devRuntime!,
+      providerSessionId: 'provider-bound-dev-server-context',
+      signal: new AbortController().signal,
+      storageRoot: join(copied.projectRoot, '.agent-bundle', 'runtime-bound-dev-server-context'),
+    }), { createRsbuild: create as typeof createRsbuild });
+    try {
+      expect(session.clientSurface('mcp.edit-timeline')).toMatchObject({
+        httpOrigin: 'http://127.0.0.1:41103',
+        webSocketOrigin: 'ws://127.0.0.1:41103',
+      });
+    } finally {
+      await session.close();
+    }
+    expect(closeCalls).toBe(1);
   } finally {
     await rm(copied.workspaceRoot, { force: true, recursive: true });
   }
