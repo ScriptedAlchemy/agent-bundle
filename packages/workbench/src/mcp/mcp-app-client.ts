@@ -1,8 +1,12 @@
+export type McpAppJsonPrimitive = null | boolean | number | string;
+
+export type McpAppJsonArray = readonly McpAppJsonValue[];
+
 export interface McpAppJsonObject {
   readonly [key: string]: McpAppJsonValue;
 }
 
-export type McpAppJsonValue = null | boolean | number | string | readonly McpAppJsonValue[] | McpAppJsonObject;
+export type McpAppJsonValue = McpAppJsonArray | McpAppJsonObject | McpAppJsonPrimitive;
 
 export type McpAppPreviewProfile = 'chatgpt' | 'claude' | 'portable';
 export type McpAppBridgeLifecycle = 'created' | 'initializing' | 'initialized' | 'closing' | 'closed';
@@ -54,6 +58,11 @@ export interface McpAppPreview {
 
 export interface McpAppRouteMessages {
   readonly accepted: boolean;
+  readonly lifecycle: McpAppBridgeLifecycle;
+  readonly messages: readonly McpAppJsonValue[];
+}
+
+export interface McpAppRouteClose {
   readonly lifecycle: McpAppBridgeLifecycle;
   readonly messages: readonly McpAppJsonValue[];
 }
@@ -156,7 +165,7 @@ const frame = (value: unknown): McpAppRelayFrame => {
     !positiveInteger(relay.maxMessageBytes) || !positiveInteger(relay.maxQueuedMessages) ||
     snapshot.sandbox !== 'allow-scripts allow-same-origin' || typeof snapshot.src !== 'string'
   ) throw new McpAppClientError('AB8019', 'Foreground MCP App route returned an invalid frame.');
-  const targetOrigin = origin(snapshot.targetOrigin);
+  const targetOrigin = origin(snapshot['targetOrigin']);
   let source: URL;
   try {
     source = new URL(snapshot.src);
@@ -200,6 +209,21 @@ const messages = (value: unknown): McpAppRouteMessages => {
   return Object.freeze({ accepted: snapshot.accepted, lifecycle: lifecycle(snapshot.lifecycle), messages: asArray(snapshot.messages) });
 };
 
+const close = (value: unknown): McpAppRouteClose => {
+  const snapshot = asRecord(value);
+  return Object.freeze({ lifecycle: lifecycle(snapshot.lifecycle), messages: asArray(snapshot.messages) });
+};
+
+const closeOptions = (value: Readonly<{ readonly id: McpAppRequestId; readonly reason?: string }>): Readonly<{ readonly id: McpAppRequestId; readonly reason?: string }> => {
+  if (!validRequestId(value.id) || (value.reason !== undefined && (typeof value.reason !== 'string' || value.reason.trim().length === 0))) {
+    throw new McpAppClientError('AB8016', 'MCP App close options are not valid.');
+  }
+  return Object.freeze({ id: value.id, ...(value.reason === undefined ? {} : { reason: value.reason }) });
+};
+
+const validRequestId = (value: unknown): value is McpAppRequestId =>
+  value === null || typeof value === 'string' || (typeof value === 'number' && Number.isFinite(value));
+
 /** Credential-memory-only browser client for binding-scoped MCP App routes. */
 export class McpAppClient {
   readonly #fetch: typeof fetch;
@@ -224,6 +248,30 @@ export class McpAppClient {
       method: 'POST',
       signal,
     }));
+  }
+
+  async close(bindingId: string, options: Readonly<{ readonly id: McpAppRequestId; readonly reason?: string }>): Promise<McpAppRouteClose> {
+    try {
+      return close(await this.#json(`${this.#bindingPath(bindingId)}/close`, {
+        body: JSON.stringify(detachedJson(closeOptions(options))),
+        headers: { 'content-type': 'application/json' },
+        method: 'POST',
+      }));
+    } finally {
+      this.forgetAuthentication();
+    }
+  }
+
+  async forceClose(bindingId: string): Promise<boolean> {
+    try {
+      const response = asRecord(await this.#json(this.#bindingPath(bindingId), { method: 'DELETE' }));
+      if (response.closed !== true || response.lifecycle !== 'closed') {
+        throw new McpAppClientError('AB8019', 'Foreground MCP App route returned an invalid close response.');
+      }
+      return true;
+    } finally {
+      this.forgetAuthentication();
+    }
   }
 
   /** Erases the memory-only foreground credential once this relay closes. */

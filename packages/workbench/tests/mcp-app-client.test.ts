@@ -97,4 +97,34 @@ describe('MCP App browser client', () => {
     expect(calls[1]?.[0]).toBe('/api/mcp/apps/binding-weather/messages');
     expect(JSON.parse(String(calls[1]?.[1]?.body))).toEqual({ message });
   });
+
+  it('closes with a teardown frame then forgets the memory credential before its force-delete fallback', async () => {
+    const calls: readonly [string, RequestInit | undefined][] = [];
+    const fetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+      (calls as [string, RequestInit | undefined][]).push([String(input), init]);
+      if (String(input) === '/api/project/session') return json({ origin: 'http://127.0.0.1:43123', token: 'foreground-secret' });
+      if (init?.method === 'DELETE') return json({ closed: true, lifecycle: 'closed' });
+      return json({
+        actions: [],
+        lifecycle: 'closing',
+        messages: [{ id: 'close-1', jsonrpc: '2.0', method: 'ui/resource-teardown', params: {} }],
+      });
+    };
+    const client = new McpAppClient({ fetch: fetch as typeof globalThis.fetch });
+
+    await expect(client.close('binding-weather', { id: 'close-1', reason: 'MCP App frame unmounted.' })).resolves.toEqual({
+      lifecycle: 'closing',
+      messages: [{ id: 'close-1', jsonrpc: '2.0', method: 'ui/resource-teardown', params: {} }],
+    });
+    await expect(client.forceClose('binding-weather')).resolves.toBe(true);
+
+    expect(calls.map(([path]) => path)).toEqual([
+      '/api/project/session',
+      '/api/mcp/apps/binding-weather/close',
+      '/api/project/session',
+      '/api/mcp/apps/binding-weather',
+    ]);
+    expect(JSON.parse(String(calls[1]?.[1]?.body))).toEqual({ id: 'close-1', reason: 'MCP App frame unmounted.' });
+    expect(calls[3]?.[1]?.method).toBe('DELETE');
+  });
 });
