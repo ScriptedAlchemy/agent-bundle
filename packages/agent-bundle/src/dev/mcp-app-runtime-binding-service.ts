@@ -23,12 +23,20 @@ export interface McpAppStableSessionIdentity {
   readonly transportDigest: string;
 }
 
+/** The complete browser-safe RuntimeVector projection; private authority fields are intentionally absent. */
+export interface McpAppPublicRuntimeVector {
+  readonly artifactEpochId?: string;
+  readonly runtimeGenerationId: string;
+  readonly sourceRevision: string;
+  readonly stateVersion: number;
+}
+
 export interface McpAppPreviewBindingVector extends McpAppStableSessionIdentity {
   readonly evidence: 'simulated';
   readonly profileId: McpAppProfileId;
   readonly profileVersion: string;
   /** Serializable projection: provider/state authority remains private to the service. */
-  readonly runVector: RuntimeVector;
+  readonly runVector: McpAppPublicRuntimeVector;
 }
 
 export interface McpAppRuntimeBindingSnapshot extends McpAppPreviewBindingVector {
@@ -41,7 +49,7 @@ export interface McpAppBoundOperationResult {
   readonly sessionRevision: number;
   readonly value: McpAppJsonValue;
   /** Serializable projection of the leased current implementation vector. */
-  readonly vector: RuntimeVector;
+  readonly vector: McpAppPublicRuntimeVector;
 }
 
 export interface McpAppRuntimeBindingTeardown {
@@ -75,6 +83,7 @@ interface McpAppRuntimeBinding {
   closing: boolean;
   readonly operations: Set<Promise<void>>;
   readonly privateRunVector: RuntimeVector;
+  releaseAttempt: Promise<void> | undefined;
   readonly session: DevRuntimeMcpSessionView;
   readonly snapshot: McpAppRuntimeBindingSnapshot;
   readonly teardown: McpAppRuntimeBindingTeardown | undefined;
@@ -102,22 +111,29 @@ const revision = (value: unknown, label: string): number => {
   return value;
 };
 
+const stateVersion = (value: unknown, label: string): number => {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
+    throw new TypeError(`${label} must be a nonnegative safe integer.`);
+  }
+  return value;
+};
+
 const cloneVector = (value: RuntimeVector, label: string): RuntimeVector => Object.freeze({
   ...(value.artifactEpochId === undefined ? {} : { artifactEpochId: nonempty(value.artifactEpochId, `${label} artifact epoch`) }),
   providerSessionId: nonempty(value.providerSessionId, `${label} provider session id`),
   runtimeGenerationId: nonempty(value.runtimeGenerationId, `${label} generation id`),
   sourceRevision: nonempty(value.sourceRevision, `${label} source revision`),
   stateStoreId: nonempty(value.stateStoreId, `${label} state store id`),
-  stateVersion: revision(value.stateVersion, `${label} state version`),
+  stateVersion: stateVersion(value.stateVersion, `${label} state version`),
 });
 
 /** Redacts trusted provider/state authority before any value is serializable to the browser. */
-const publicVector = (value: RuntimeVector): RuntimeVector => Object.freeze({
+const publicVector = (value: RuntimeVector): McpAppPublicRuntimeVector => Object.freeze({
   ...(value.artifactEpochId === undefined ? {} : { artifactEpochId: value.artifactEpochId }),
   runtimeGenerationId: value.runtimeGenerationId,
   sourceRevision: value.sourceRevision,
   stateVersion: value.stateVersion,
-}) as RuntimeVector;
+});
 
 const profile = (value: McpAppProfileId): McpAppProfileId => {
   if (value === 'portable' || value === 'chatgpt' || value === 'claude') return value;
@@ -170,6 +186,8 @@ const canonicalOperation = (request: McpAppRuntimeOperationRequest, expectedSess
 
 export class McpAppRuntimeBindingService {
   readonly #entries = new Map<string, McpAppRuntimeBinding>();
+  readonly #pendingReleases = new Map<string, McpAppRuntimeBinding>();
+  #closeAttempt: Promise<void> | undefined;
   #closing = false;
 
   get(bindingId: string): McpAppRuntimeBindingSnapshot | undefined {
@@ -213,6 +231,7 @@ export class McpAppRuntimeBindingService {
         closing: false,
         operations: new Set(),
         privateRunVector,
+        releaseAttempt: undefined,
         session: options.session,
         snapshot,
         teardown: options.onTeardown,
@@ -249,8 +268,8 @@ export class McpAppRuntimeBindingService {
   }
 
   async closeBinding(bindingId: string): Promise<boolean> {
-    const entry = this.#entries.get(bindingId);
-    if (entry === undefined || entry.closing) return false;
+    const entry = this.#entries.get(bindingId) ?? this.#pendingReleases.get(bindingId);
+    if (entry === undefined) return false;
     await this.#releaseEntry(entry, 'app-closed');
     return true;
   }
@@ -258,7 +277,7 @@ export class McpAppRuntimeBindingService {
   async invalidateBindings(invalidation: McpAppRuntimeBindingInvalidation): Promise<void> {
     const sessionId = nonempty(invalidation.sessionId, 'Runtime MCP App invalidation session id');
     const sessionRevision = revision(invalidation.sessionRevision, 'Runtime MCP App invalidation session revision');
-    const entries = [...this.#entries.values()].filter((entry) =>
+    const entries = [...new Set([...this.#entries.values(), ...this.#pendingReleases.values()])].filter((entry) =>
       entry.snapshot.sessionId === sessionId && entry.snapshot.sessionRevision === sessionRevision,
     );
     const outcomes = await Promise.allSettled(entries.map(async (entry) => this.#releaseEntry(entry, 'session-invalidated')));
@@ -267,11 +286,16 @@ export class McpAppRuntimeBindingService {
   }
 
   async close(): Promise<void> {
-    if (this.#closing) return;
+    if (this.#closeAttempt !== undefined) return this.#closeAttempt;
     this.#closing = true;
-    const outcomes = await Promise.allSettled([...this.#entries.values()].map(async (entry) => this.#releaseEntry(entry, 'runtime-shutdown')));
-    const failure = outcomes.find((outcome): outcome is PromiseRejectedResult => outcome.status === 'rejected');
-    if (failure !== undefined) throw failure.reason;
+    const close = (async () => {
+      const entries = [...new Set([...this.#entries.values(), ...this.#pendingReleases.values()])];
+      const outcomes = await Promise.allSettled(entries.map(async (entry) => this.#releaseEntry(entry, 'runtime-shutdown')));
+      const failure = outcomes.find((outcome): outcome is PromiseRejectedResult => outcome.status === 'rejected');
+      if (failure !== undefined) throw failure.reason;
+    })();
+    this.#closeAttempt = close;
+    return close;
   }
 
   #entry(bindingId: string): McpAppRuntimeBinding {
@@ -293,24 +317,40 @@ export class McpAppRuntimeBindingService {
     if (operation.sessionRevision !== entry.snapshot.sessionRevision) {
       throw new Error('Runtime MCP operation returned another session revision.');
     }
+    const privateVector = cloneVector(operation.vector, 'Runtime MCP operation vector');
+    if (privateVector.providerSessionId !== entry.privateRunVector.providerSessionId
+      || privateVector.stateStoreId !== entry.privateRunVector.stateStoreId) {
+      throw new Error('Runtime MCP operation returned a foreign provider/state authority.');
+    }
     return Object.freeze({
       operationId: nonempty(operation.operationId, 'Runtime MCP operation id'),
       sessionId: entry.snapshot.sessionId,
       sessionRevision: entry.snapshot.sessionRevision,
       value: cloneMcpAppFiniteJson(operation.value, 'Runtime MCP operation result'),
-      vector: publicVector(cloneVector(operation.vector, 'Runtime MCP operation vector')),
+      vector: publicVector(privateVector),
     });
   }
 
-  async #releaseEntry(
+  #releaseEntry(
     entry: McpAppRuntimeBinding,
     reason: 'app-closed' | 'runtime-shutdown' | 'session-closed' | 'session-invalidated',
   ): Promise<void> {
-    if (entry.closing) return;
+    if (entry.releaseAttempt !== undefined) return entry.releaseAttempt;
     entry.closing = true;
     entry.unsubscribe();
     this.#entries.delete(entry.snapshot.id);
-    await Promise.allSettled([...entry.operations]);
-    if (entry.teardown !== undefined) await entry.teardown(Object.freeze({ binding: entry.snapshot, reason }));
+    const release = (async () => {
+      await Promise.allSettled([...entry.operations]);
+      if (entry.teardown !== undefined) await entry.teardown(Object.freeze({ binding: entry.snapshot, reason }));
+    })();
+    entry.releaseAttempt = release;
+    this.#pendingReleases.set(entry.snapshot.id, entry);
+    void release.then(
+      () => {
+        if (this.#pendingReleases.get(entry.snapshot.id) === entry) this.#pendingReleases.delete(entry.snapshot.id);
+      },
+      () => undefined,
+    );
+    return release;
   }
 }

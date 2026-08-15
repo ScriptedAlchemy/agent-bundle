@@ -1,6 +1,7 @@
 import { expect, it } from '@rstest/core';
 
 import {
+  cloneMcpAppFiniteJson,
   inspectMcpAppMetadata,
   isMcpAppToolVisible,
   mergeMcpAppResourceMetadata,
@@ -61,6 +62,48 @@ it('rejects malformed or non-finite tool results before projection', () => {
   const cyclic: { content: unknown[]; self?: unknown } = { content: [] };
   cyclic.self = cyclic;
   expect(() => projectMcpAppResult(cyclic)).toThrow('finite JSON');
+});
+
+it('accepts only the MCP content-block union and object-shaped structuredContent', () => {
+  const inspection = projectMcpAppResult({
+    _meta: { private: true },
+    content: [
+      { text: 'text', type: 'text' },
+      { data: 'AA==', mimeType: 'image/png', type: 'image' },
+      { data: 'AA==', mimeType: 'audio/mpeg', type: 'audio' },
+      { name: 'timeline', type: 'resource_link', uri: 'ui://rsc-agent-runtime/timeline.json' },
+      { resource: { mimeType: 'application/json', text: '{}', uri: 'ui://rsc-agent-runtime/timeline.json' }, type: 'resource' },
+    ],
+    structuredContent: { revisions: 8 },
+    unknownRoot: { retainedForApp: true },
+  });
+
+  expect(inspection.appVisible).toMatchObject({ _meta: { private: true }, unknownRoot: { retainedForApp: true } });
+  expect(inspection.modelVisible).toEqual({
+    content: [
+      { text: 'text', type: 'text' },
+      { data: 'AA==', mimeType: 'image/png', type: 'image' },
+      { data: 'AA==', mimeType: 'audio/mpeg', type: 'audio' },
+      { name: 'timeline', type: 'resource_link', uri: 'ui://rsc-agent-runtime/timeline.json' },
+      { resource: { mimeType: 'application/json', text: '{}', uri: 'ui://rsc-agent-runtime/timeline.json' }, type: 'resource' },
+    ],
+    structuredContent: { revisions: 8 },
+  });
+  expect(() => projectMcpAppResult({ content: [{ type: 'image' }] })).toThrow('content');
+  expect(() => projectMcpAppResult({ content: [{ text: 'unknown', type: 'vendor' }] })).toThrow('content');
+  expect(() => projectMcpAppResult({ content: [], structuredContent: [] })).toThrow('structuredContent');
+});
+
+it('preserves own __proto__ JSON properties without prototype mutation', () => {
+  const source = JSON.parse('{"__proto__":{"root":true},"nested":{"__proto__":{"nested":true}}}') as unknown;
+  const cloned = cloneMcpAppFiniteJson(source) as Record<string, unknown>;
+
+  expect(Object.getPrototypeOf(cloned)).toBe(Object.prototype);
+  expect(Object.hasOwn(cloned, '__proto__')).toBe(true);
+  expect(cloned.__proto__).toEqual({ root: true });
+  expect(Object.getPrototypeOf(cloned.nested as object)).toBe(Object.prototype);
+  expect(Object.hasOwn(cloned.nested as object, '__proto__')).toBe(true);
+  expect(JSON.stringify(cloned)).toBe('{"__proto__":{"root":true},"nested":{"__proto__":{"nested":true}}}');
 });
 
 it('partitions standard, vendor, and unclassified metadata without rewriting it', () => {

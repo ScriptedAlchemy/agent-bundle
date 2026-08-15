@@ -30,6 +30,15 @@ export interface McpAppResourceReference {
 
 type JsonRecord = Readonly<Record<string, McpAppJsonValue>>;
 
+const setOwnData = <Value>(target: Record<string, Value>, key: string, value: Value): void => {
+  Object.defineProperty(target, key, {
+    configurable: false,
+    enumerable: true,
+    value,
+    writable: false,
+  });
+};
+
 const isPlainRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype;
 
@@ -69,7 +78,7 @@ const cloneFiniteJson = (value: unknown, seen = new WeakSet<object>()): McpAppJs
   seen.add(value);
   try {
     const copied: Record<string, McpAppJsonValue> = {};
-    for (const key of Object.keys(value).sort()) copied[key] = cloneFiniteJson(ownData(value, key), seen);
+    for (const key of Object.keys(value).sort()) setOwnData(copied, key, cloneFiniteJson(ownData(value, key), seen));
     return Object.freeze(copied);
   } finally {
     seen.delete(value);
@@ -129,13 +138,13 @@ export const inspectMcpAppMetadata = (value: unknown): McpAppMetadataInspection 
       standard.ui = child;
       provenance[key] = 'standard';
     } else if (isVendorKey(key, 'openai')) {
-      openai[key] = child;
+      setOwnData(openai, key, child);
       provenance[key] = 'openai-extension';
     } else if (isVendorKey(key, 'claude')) {
-      claude[key] = child;
+      setOwnData(claude, key, child);
       provenance[key] = 'claude-extension';
     } else {
-      provenance[key] = 'unclassified';
+      setOwnData(provenance, key, 'unclassified');
     }
   }
   return Object.freeze({
@@ -156,17 +165,17 @@ export const mergeMcpAppResourceMetadata = (listed: unknown, read: unknown): Mcp
     const listedValue = listedMetadata[key];
     const readValue = readMetadata[key];
     if (listedValue === undefined) {
-      merged[key] = readValue!;
-      provenance[key] = 'read';
+      setOwnData(merged, key, readValue!);
+      setOwnData(provenance, key, 'read');
     } else if (readValue === undefined) {
-      merged[key] = listedValue;
-      provenance[key] = 'listed';
+      setOwnData(merged, key, listedValue);
+      setOwnData(provenance, key, 'listed');
     } else if (deepEqual(listedValue, readValue)) {
-      merged[key] = readValue;
-      provenance[key] = 'both-identical';
+      setOwnData(merged, key, readValue);
+      setOwnData(provenance, key, 'both-identical');
     } else {
-      merged[key] = readValue;
-      provenance[key] = 'read-overrode-listed';
+      setOwnData(merged, key, readValue);
+      setOwnData(provenance, key, 'read-overrode-listed');
     }
   }
   return Object.freeze({
@@ -191,8 +200,39 @@ export const selectMcpAppResourceReference = (metadata: unknown): McpAppResource
   });
 };
 
+const nonemptyStringField = (value: Readonly<Record<string, unknown>>, key: string): boolean =>
+  hasOwn(value, key) && typeof value[key] === 'string' && value[key].length > 0;
+
+const optionalStringField = (value: Readonly<Record<string, unknown>>, key: string): boolean =>
+  !hasOwn(value, key) || typeof value[key] === 'string';
+
+const validEmbeddedResource = (value: unknown): boolean => {
+  if (!isPlainRecord(value) || !nonemptyStringField(value, 'uri') || !optionalStringField(value, 'mimeType')) return false;
+  const hasText = hasOwn(value, 'text') && typeof value.text === 'string';
+  const hasBlob = hasOwn(value, 'blob') && typeof value.blob === 'string';
+  return hasText !== hasBlob;
+};
+
+const validContentBlock = (value: McpAppJsonValue): boolean => {
+  if (!isPlainRecord(value) || !nonemptyStringField(value, 'type')) return false;
+  switch (value.type) {
+    case 'text':
+      return nonemptyStringField(value, 'text');
+    case 'image':
+    case 'audio':
+      return nonemptyStringField(value, 'data') && nonemptyStringField(value, 'mimeType');
+    case 'resource_link':
+      return nonemptyStringField(value, 'name') && nonemptyStringField(value, 'uri')
+        && optionalStringField(value, 'description') && optionalStringField(value, 'mimeType');
+    case 'resource':
+      return hasOwn(value, 'resource') && validEmbeddedResource(value.resource);
+    default:
+      return false;
+  }
+};
+
 const validContent = (value: McpAppJsonValue): value is readonly McpAppJsonValue[] =>
-  Array.isArray(value) && value.every((block) => isPlainRecord(block) && typeof block.type === 'string' && block.type.length > 0);
+  Array.isArray(value) && value.every(validContentBlock);
 
 export const projectMcpAppResult = (value: unknown): McpAppResultInspection => {
   const appVisible = jsonRecord(value, 'MCP CallToolResult');
@@ -201,6 +241,9 @@ export const projectMcpAppResult = (value: unknown): McpAppResultInspection => {
   }
   if (hasOwn(appVisible, 'isError') && typeof appVisible.isError !== 'boolean') {
     throw new TypeError('MCP CallToolResult isError must be a boolean.');
+  }
+  if (hasOwn(appVisible, 'structuredContent') && !isPlainRecord(appVisible.structuredContent)) {
+    throw new TypeError('MCP CallToolResult structuredContent must be a finite JSON object.');
   }
   const modelVisible: Record<string, McpAppJsonValue> = { content: appVisible.content };
   if (hasOwn(appVisible, 'structuredContent')) modelVisible.structuredContent = appVisible.structuredContent!;

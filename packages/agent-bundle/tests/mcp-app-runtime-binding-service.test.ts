@@ -13,7 +13,9 @@ interface SessionFixture {
   readonly watcherOrder: string[];
   readonly view: DevRuntimeMcpSessionView;
   close(reason?: unknown): Promise<void>;
+  setReturnedAuthority(authority: Readonly<{ readonly providerSessionId: string; readonly stateStoreId: string }>): void;
   setReturnedRevision(revision: number): void;
+  setReturnedStateVersion(version: number): void;
 }
 
 const runBinding: DevRuntimeMcpAppRunBinding = Object.freeze({
@@ -46,7 +48,10 @@ const createSessionFixture = (options: { readonly closeAtObservation?: boolean }
   const executeRequests: DevRuntimeMcpOperationRequest[] = [];
   const watcherOrder: string[] = [];
   let closed = false;
+  let returnedProviderSessionId = 'provider-private';
   let returnedRevision = 3;
+  let returnedStateStoreId = 'state-private';
+  let returnedStateVersion = 4;
   return {
     executeRequests,
     watcherOrder,
@@ -61,7 +66,13 @@ const createSessionFixture = (options: { readonly closeAtObservation?: boolean }
           sessionId: 'mcp-1',
           sessionRevision: returnedRevision,
           value,
-          vector: Object.freeze({ ...runVector, runtimeGenerationId: request.kind === 'read-resource' ? 'g7' : 'g8' }),
+          vector: Object.freeze({
+            ...runVector,
+            providerSessionId: returnedProviderSessionId,
+            runtimeGenerationId: request.kind === 'read-resource' ? 'g7' : 'g8',
+            stateStoreId: returnedStateStoreId,
+            stateVersion: returnedStateVersion,
+          }),
         });
       },
       snapshot: sessionSnapshot,
@@ -87,6 +98,13 @@ const createSessionFixture = (options: { readonly closeAtObservation?: boolean }
     },
     setReturnedRevision: (revision) => {
       returnedRevision = revision;
+    },
+    setReturnedAuthority: (authority) => {
+      returnedProviderSessionId = authority.providerSessionId;
+      returnedStateStoreId = authority.stateStoreId;
+    },
+    setReturnedStateVersion: (version) => {
+      returnedStateVersion = version;
     },
   };
 };
@@ -152,6 +170,19 @@ it('rejects an operation that returns another session revision', async () => {
   fixture.setReturnedRevision(4);
 
   await expect(service.execute(binding.id, { kind: 'list-tools' })).rejects.toThrow('session revision');
+});
+
+it('allows a list operation to report initial state version zero but rejects a foreign provider/state authority', async () => {
+  const fixture = createSessionFixture();
+  const service = new McpAppRuntimeBindingService();
+  const binding = await service.createBinding(optionsFor(fixture));
+  fixture.setReturnedStateVersion(0);
+
+  await expect(service.execute(binding.id, { kind: 'list-tools' })).resolves.toMatchObject({
+    vector: { stateVersion: 0 },
+  });
+  fixture.setReturnedAuthority({ providerSessionId: 'provider-other', stateStoreId: 'state-other' });
+  await expect(service.execute(binding.id, { kind: 'list-resources' })).rejects.toThrow('provider/state authority');
 });
 
 it('does not publish a binding when atomic watchClosed observes a closed session', async () => {
@@ -243,4 +274,36 @@ it('waits for an in-flight operation before invalidation delivers teardown and r
   await expect(operation).rejects.toThrow('closed');
   await invalidation;
   expect(teardownDelivered).toBe(true);
+});
+
+it('joins concurrent session-close, invalidation, and service-close releases through one teardown failure', async () => {
+  const fixture = createSessionFixture();
+  let rejectTeardown: ((error: Error) => void) | undefined;
+  let teardownStarted = false;
+  const service = new McpAppRuntimeBindingService();
+  await service.createBinding(optionsFor(fixture, {
+    onTeardown: () => new Promise<void>((_resolve, reject) => {
+      teardownStarted = true;
+      rejectTeardown = reject;
+    }),
+  }));
+
+  const sessionClose = fixture.close();
+  await Promise.resolve();
+  expect(teardownStarted).toBe(true);
+  let invalidationSettled = false;
+  let shutdownSettled = false;
+  const invalidation = service.invalidateBindings({ sessionId: 'mcp-1', sessionRevision: 3 }).finally(() => {
+    invalidationSettled = true;
+  });
+  const shutdown = service.close().finally(() => {
+    shutdownSettled = true;
+  });
+  await Promise.resolve();
+  expect(invalidationSettled).toBe(false);
+  expect(shutdownSettled).toBe(false);
+  rejectTeardown?.(new Error('teardown failed'));
+  await expect(sessionClose).rejects.toThrow('teardown failed');
+  await expect(invalidation).rejects.toThrow('teardown failed');
+  await expect(shutdown).rejects.toThrow('teardown failed');
 });
