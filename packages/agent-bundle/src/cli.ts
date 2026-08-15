@@ -177,6 +177,12 @@ const writeHumanBuild = (output: Output, result: Awaited<ReturnType<typeof build
 };
 
 const writeHumanInspect = (output: Output, result: Awaited<ReturnType<typeof inspect>>): void => {
+  if (result.state === 'invalid') {
+    for (const diagnostic of result.diagnostics) {
+      output.write(`${diagnostic.code}: ${diagnostic.message}\nRecovery: ${diagnostic.recovery}\n`);
+    }
+    return;
+  }
   output.write(`Inspected ${result.model.metadata.name}: ${result.plans.map((plan) => plan.target).join(', ')}\n`);
 };
 
@@ -210,6 +216,7 @@ export const runCli = async (
 ): Promise<number> => {
   const stdout = streams.stdout ?? process.stdout;
   const stderr = streams.stderr ?? process.stderr;
+  let exitCode = 0;
   const program = new Command();
   program
     .name('agent-bundle')
@@ -274,6 +281,7 @@ export const runCli = async (
     });
     if (options.json === true) writeMachine(stdout, result);
     else writeHumanInspect(stdout, result);
+    if (result.state === 'invalid') exitCode = 1;
   });
 
   const mcpCommand = program.command('mcp').description('Operate an MCP server from an artifact');
@@ -346,7 +354,7 @@ export const runCli = async (
 
   try {
     await program.parseAsync(args, { from: 'user' });
-    return 0;
+    return exitCode;
   } catch (error) {
     if (error instanceof CommanderError) {
       return error.exitCode === 0 ? 0 : 2;

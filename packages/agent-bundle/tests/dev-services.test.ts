@@ -299,7 +299,7 @@ it('prepares a symlinked project root from its canonical filesystem identity', a
   }
 });
 
-it('excludes configured output trees from project identity and rejects unsafe snapshot roots', async () => {
+it('excludes configured output trees from project identity and reports unsafe output roots', async () => {
   const root = await createProject([
     '---',
     'name: review',
@@ -322,10 +322,93 @@ it('excludes configured output trees from project identity and rejects unsafe sn
     );
     await expect(snapshotProjectSource(root, join(root, '..', 'outside.ts')))
       .rejects.toThrow(/outside project root/i);
-    await expect(new ProjectService({ outputRoots: [root], root }).prepare('build'))
-      .rejects.toThrow(/must not be the project root/i);
+    const invalid = await new ProjectService({ outputRoots: [root], root }).prepare('build');
+    expect(invalid).toMatchObject({
+      diagnostics: [expect.objectContaining({ code: 'AB7002', recovery: expect.any(String) })],
+      source: { state: 'invalid' },
+    });
+    expect(invalid.model).toBeUndefined();
+    expect(invalid.projectContext).toBeUndefined();
   } finally {
     await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('reports external configuration symlinks without exposing the underlying path error', async () => {
+  const root = await createProject([
+    '---',
+    'name: review',
+    'description: Reviews changes',
+    '---',
+    'Review the changed files.',
+    '',
+  ].join('\n'));
+  const externalConfig = join(root, '..', 'external-agent-bundle.config.ts');
+  const configPath = join(root, 'agent-bundle.config.ts');
+  try {
+    await writeFile(externalConfig, [
+      'export default {',
+      "  plugin: { name: 'external-config', version: '1.0.0' },",
+      "  targets: ['portable'],",
+      '};',
+      '',
+    ].join('\n'));
+    await rm(configPath);
+    await symlink(externalConfig, configPath);
+
+    const prepared = await new ProjectService({ root }).prepare('inspect');
+
+    expect(prepared).toMatchObject({
+      diagnostics: [expect.objectContaining({ code: 'AB7000', recovery: expect.any(String) })],
+      source: { state: 'invalid' },
+    });
+    expect(JSON.stringify(prepared)).not.toContain('outside project root');
+    expect(prepared.model).toBeUndefined();
+    expect(prepared.projectContext).toBeUndefined();
+  } finally {
+    await rm(root, { force: true, recursive: true });
+    await rm(externalConfig, { force: true });
+  }
+});
+
+it('reports snapshot failures as frozen preparation diagnostics', async () => {
+  const root = await createProject([
+    '---',
+    'name: review',
+    'description: Reviews changes',
+    '---',
+    'Review the changed files.',
+    '',
+  ].join('\n'));
+  const output = join(root, 'snapshot-output');
+  const externalOutput = join(root, '..', 'snapshot-output-external');
+  try {
+    await mkdir(externalOutput);
+    await writeFile(join(root, 'agent-bundle.config.ts'), [
+      "import { symlinkSync } from 'node:fs';",
+      'export default ({ projectRoot }) => {',
+      `  symlinkSync(${JSON.stringify(externalOutput)}, \`${'${projectRoot}'}/snapshot-output\`);`,
+      '  return {',
+      "    plugin: { name: 'snapshot-failure', version: '1.0.0' },",
+      "    targets: ['portable'],",
+      '  };',
+      '};',
+      '',
+    ].join('\n'));
+
+    const prepared = await new ProjectService({ outputRoots: [output], root }).prepare('inspect');
+
+    expect(prepared).toMatchObject({
+      diagnostics: [expect.objectContaining({ code: 'AB7003', recovery: expect.any(String) })],
+      source: { state: 'invalid' },
+    });
+    expect(prepared.model).toBeUndefined();
+    expect(prepared.projectContext).toBeUndefined();
+    expect(Object.isFrozen(prepared)).toBe(true);
+    expect(Object.isFrozen(prepared.diagnostics[0])).toBe(true);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+    await rm(externalOutput, { force: true, recursive: true });
   }
 });
 

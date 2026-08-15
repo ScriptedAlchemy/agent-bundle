@@ -1304,3 +1304,15 @@ it.each(malformedValidatorCases)('reports $0 through the stable schema diagnosti
     await rm(root, { force: true, recursive: true });
   }
 });
+
+it('attaches actionable recovery to every artifact validation diagnostic', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-artifact-recovery-'));
+  try {
+    const diagnostics = await validateArtifact({ artifactRoot: root });
+
+    expect(diagnostics).toEqual([expect.objectContaining({ code: 'AB6000' })]);
+    expect(diagnostics.every((diagnostic) => diagnostic.recovery?.trim().length > 0)).toBe(true);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});

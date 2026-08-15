@@ -154,6 +154,54 @@ it('prepares and inspects a target owned only by the supplied advanced registry'
   }
 });
 
+it('returns a frozen invalid inspection for opaque source failures', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-api-invalid-inspection-'));
+  try {
+    await writeFile(join(root, 'agent-bundle.config.ts'), "throw new Error('opaque inspect sentinel');\n");
+
+    const result = await inspect({ root });
+
+    expect(result).toMatchObject({
+      diagnostics: [expect.objectContaining({
+        code: 'AB7000',
+        recovery: expect.any(String),
+        severity: 'error',
+      })],
+      plans: [],
+      state: 'invalid',
+    });
+    expect(JSON.stringify(result)).not.toContain('opaque inspect sentinel');
+    expect('model' in result).toBe(false);
+    expect('projectContext' in result).toBe(false);
+    expect(Object.isFrozen(result)).toBe(true);
+    expect(Object.isFrozen(result.diagnostics)).toBe(true);
+    expect(Object.isFrozen(result.plans)).toBe(true);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('attaches a specific recovery to every invalid inspection diagnostic', async () => {
+  const root = await createProject();
+  try {
+    await writeFile(join(root, 'agent-bundle.config.ts'), "export default { plugin: { version: '1.0.0' } };\n");
+
+    const result = await inspect({ root });
+
+    expect(result.state).toBe('invalid');
+    expect(result.diagnostics).not.toEqual([]);
+    expect(result.diagnostics.every((diagnostic) => diagnostic.recovery?.trim().length > 0)).toBe(true);
+    expect(result.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        code: 'AB4000',
+        recovery: 'Correct the project configuration field named by this diagnostic, then inspect again.',
+      }),
+    ]));
+  } finally {
+    await rm(join(root, '..'), { force: true, recursive: true });
+  }
+});
+
 it('keeps one supplied registry through advanced artifact, hook, and MCP operations', async () => {
   const root = await createProject();
   const registry = new TargetRegistry().register(syntheticAdapter, { default: true });
@@ -234,7 +282,11 @@ it('keeps one supplied registry through advanced artifact, hook, and MCP operati
       target: syntheticTarget,
       tool: 'synthetic-tool',
     })).resolves.toMatchObject({ result: { structuredContent: { synthetic: true } } });
-    await expect(inspect({ root })).rejects.toThrow(/Unknown target/);
+    await expect(inspect({ root })).resolves.toMatchObject({
+      diagnostics: expect.arrayContaining([expect.objectContaining({ code: 'AB4100', recovery: expect.any(String) })]),
+      plans: [],
+      state: 'invalid',
+    });
     expect(registry.names()).toEqual([syntheticTarget]);
   } finally {
     await rm(join(root, '..'), { force: true, recursive: true });
@@ -251,7 +303,10 @@ it('prepares a factory-configured project into a frozen inspection and build res
       targets: [{ name: 'portable' }],
     });
     expect(inspection.plans).toHaveLength(1);
+    expect(inspection.state).toBe('ready');
+    expect(inspection.projectContext).toEqual(expect.objectContaining({ revision: expect.any(String) }));
     expect(Object.isFrozen(inspection.model)).toBe(true);
+    expect(Object.isFrozen(inspection.projectContext)).toBe(true);
 
     const result = await build({ output: join(root, 'artifact'), root, targets: ['portable'] });
     expect(result).toMatchObject({
@@ -318,7 +373,9 @@ it('rejects an output beneath an escaping symlink before loading source or writi
       '',
     ].join('\n'));
 
-    await expect(build({ output: 'escape/artifact', root })).rejects.toThrow(/outside project root/i);
+    await expect(build({ output: 'escape/artifact', root })).rejects.toMatchObject({
+      diagnostics: [expect.objectContaining({ code: 'AB7002', recovery: expect.any(String) })],
+    });
     await expect(readFile(marker, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
     await expect(stat(join(external, 'artifact'))).rejects.toMatchObject({ code: 'ENOENT' });
   } finally {
@@ -341,7 +398,9 @@ it('rejects a dangling output symlink before loading source', async () => {
       '',
     ].join('\n'));
 
-    await expect(build({ output: 'escape/artifact', root })).rejects.toThrow(/output root|symlink/i);
+    await expect(build({ output: 'escape/artifact', root })).rejects.toMatchObject({
+      diagnostics: [expect.objectContaining({ code: 'AB7002', recovery: expect.any(String) })],
+    });
     await expect(readFile(marker, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
   } finally {
     await rm(join(root, '..'), { force: true, recursive: true });
@@ -363,7 +422,9 @@ it('rejects an output symlink to the project root before loading source', async 
       '',
     ].join('\n'));
 
-    await expect(build({ output: 'alias', root })).rejects.toThrow(/project root/i);
+    await expect(build({ output: 'alias', root })).rejects.toMatchObject({
+      diagnostics: [expect.objectContaining({ code: 'AB7002', recovery: expect.any(String) })],
+    });
     await expect(readFile(marker, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
   } finally {
     await rm(join(root, '..'), { force: true, recursive: true });

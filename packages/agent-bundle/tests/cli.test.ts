@@ -6,6 +6,8 @@ import { promisify } from 'node:util';
 
 import { expect, it } from '@rstest/core';
 
+import { runCli as runSourceCli } from '../src/cli.ts';
+
 const execFile = promisify(executeFile);
 const workspaceRoot = process.cwd();
 const packageRoot = join(workspaceRoot, 'packages/agent-bundle');
@@ -32,6 +34,17 @@ const runExecutable = async (executable: string, root: string, args: readonly st
 };
 
 const runCli = (root: string, args: readonly string[]) => runExecutable(cliPath, root, args);
+
+const runSourceCliWithOutput = async (args: string[]): Promise<{ readonly code: number; readonly stderr: string; readonly stdout: string }> => {
+  const stderr: string[] = [];
+  const stdout: string[] = [];
+  Object.defineProperty(globalThis, '__AGENT_BUNDLE_VERSION__', { configurable: true, value: 'test' });
+  const code = await runSourceCli(args, {
+    stderr: { write: (chunk: string) => stderr.push(chunk) },
+    stdout: { write: (chunk: string) => stdout.push(chunk) },
+  });
+  return { code, stderr: stderr.join(''), stdout: stdout.join('') };
+};
 
 const createCliProject = async (): Promise<{ readonly output: string; readonly root: string }> => {
   const parent = await mkdtemp(join(tmpdir(), 'agent bundle cli parent-'));
@@ -301,6 +314,7 @@ it('keeps inspect JSON stable and validates only the supplied artifact', async (
         targets: [{ name: 'portable' }, { name: 'codex' }],
       },
       plans: [{ target: 'portable' }, { target: 'codex' }],
+      state: 'ready',
     });
     expect(firstInspectionDocument.plans).toHaveLength(2);
 
@@ -333,6 +347,35 @@ it('keeps inspect JSON stable and validates only the supplied artifact', async (
       'validate', '--root', project.root, '--artifact', project.output,
     ]);
     expect(humanValidation).toEqual({ code: 0, stderr: '', stdout: 'Validation succeeded\n' });
+  } finally {
+    await rm(resolve(project.root, '..'), { force: true, recursive: true });
+  }
+}, 30_000);
+
+it('prints a complete invalid inspection on JSON and human output', async () => {
+  const project = await createCliProject();
+  try {
+    const ready = await runSourceCliWithOutput(['inspect', '--root', project.root, '--json']);
+    expect(ready).toMatchObject({ code: 0, stderr: '' });
+    expect(JSON.parse(ready.stdout)).toMatchObject({ state: 'ready' });
+
+    await writeFile(join(project.root, 'agent-bundle.config.ts'), "throw new Error('opaque cli inspect sentinel');\n");
+
+    const json = await runSourceCliWithOutput(['inspect', '--root', project.root, '--json']);
+    expect(json).toMatchObject({ code: 1, stderr: '' });
+    expect(JSON.parse(json.stdout)).toMatchObject({
+      diagnostics: [expect.objectContaining({ code: 'AB7000', recovery: expect.any(String) })],
+      plans: [],
+      state: 'invalid',
+    });
+    expect(json.stdout).not.toContain('opaque cli inspect sentinel');
+
+    const human = await runSourceCliWithOutput(['inspect', '--root', project.root]);
+    expect(human).toMatchObject({ code: 1, stderr: '' });
+    expect(human.stdout).toContain('AB7000');
+    expect(human.stdout).toContain('Unable to load project source.');
+    expect(human.stdout).toContain('Recovery:');
+    expect(human.stdout).not.toContain('opaque cli inspect sentinel');
   } finally {
     await rm(resolve(project.root, '..'), { force: true, recursive: true });
   }

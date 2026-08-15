@@ -8,7 +8,7 @@ import { isProjectPathIgnored, readProjectIgnoreRules } from '../config/ignore.t
 import { loadConfig } from '../config/load.ts';
 import { normalizeProject } from '../config/normalize.ts';
 import { validateModel, validateSource } from '../config/validate.ts';
-import type { Diagnostic } from '../core/diagnostics.ts';
+import { type Diagnostic, withDiagnosticRecovery } from '../core/diagnostics.ts';
 import { digest } from '../core/digest.ts';
 import {
   createProjectContext,
@@ -54,7 +54,7 @@ export interface ProjectSourceSnapshot {
 }
 
 const freezeDiagnostics = (diagnostics: readonly Diagnostic[]): readonly Diagnostic[] =>
-  Object.freeze(diagnostics.map((diagnostic) => Object.freeze({ ...diagnostic })));
+  Object.freeze(diagnostics.map((diagnostic) => Object.freeze({ ...withDiagnosticRecovery(diagnostic) })));
 
 const hasErrors = (diagnostics: readonly Diagnostic[]): boolean =>
   diagnostics.some((diagnostic) => diagnostic.severity === 'error');
@@ -66,9 +66,6 @@ const log = (
 ): void => {
   logger?.log?.(event, Object.freeze({ ...details }));
 };
-
-const errorMessage = (error: unknown): string =>
-  error instanceof Error ? error.message : String(error);
 
 const errorCode = (error: unknown): string =>
   typeof error === 'object' && error !== null && 'code' in error && typeof error.code === 'string'
@@ -279,6 +276,48 @@ const preparedProject = (
   source,
 });
 
+type PreparationDiagnosticCode = 'AB7000' | 'AB7001' | 'AB7002' | 'AB7003';
+
+const preparationRecoveries: Readonly<Record<PreparationDiagnosticCode, string>> = Object.freeze({
+  AB7000: 'Fix the Agent Bundle configuration and source files, then inspect again.',
+  AB7001: 'Fix normalized project configuration and source references, then inspect again.',
+  AB7002: 'Ensure the project root and configured output roots are readable and remain inside the project root, then inspect again.',
+  AB7003: 'Ensure project source files and ignore rules are readable and remain inside the project root, then inspect again.',
+});
+
+const preparationDiagnostic = (
+  code: PreparationDiagnosticCode,
+  message: string,
+  sourcePath: string,
+): Diagnostic => ({
+  code,
+  message,
+  recovery: preparationRecoveries[code],
+  severity: 'error',
+  sourcePath,
+});
+
+const invalidPreparedProject = (options: {
+  readonly configPath: string;
+  readonly diagnostics: readonly Diagnostic[];
+  readonly outputRoots: readonly string[];
+  readonly registry: TargetRegistry;
+  readonly root: string;
+  readonly snapshot?: ProjectSourceSnapshot;
+}): PreparedProject => {
+  const snapshot = options.snapshot ?? emptySnapshot();
+  return preparedProject(
+    options.configPath,
+    snapshot,
+    options.diagnostics,
+    options.outputRoots,
+    undefined,
+    options.registry,
+    options.root,
+    sourceStatus(options.diagnostics, snapshot.revision),
+  );
+};
+
 /** Loads, discovers, validates, and normalizes source once for dev consumers. */
 export class ProjectService {
   readonly #options: ProjectServiceOptions;
@@ -291,9 +330,27 @@ export class ProjectService {
 
   async prepare(command: ProjectCommand): Promise<PreparedProject> {
     const requestedRoot = resolve(this.#options.root);
-    const root = await realpath(requestedRoot);
-    const outputRoots = await resolveOutputRoots(requestedRoot, root, this.#options.outputRoots);
     const registry = this.#registry;
+    const requestedConfigPath = resolve(requestedRoot, this.#options.configPath ?? 'agent-bundle.config.ts');
+    let root: string;
+    let outputRoots: readonly string[];
+    try {
+      root = await realpath(requestedRoot);
+      outputRoots = await resolveOutputRoots(requestedRoot, root, this.#options.outputRoots);
+    } catch {
+      const diagnostics = freezeDiagnostics([
+        preparationDiagnostic('AB7002', 'Unable to prepare project paths.', requestedConfigPath),
+      ]);
+      const prepared = invalidPreparedProject({
+        configPath: requestedConfigPath,
+        diagnostics,
+        outputRoots: Object.freeze([]),
+        registry,
+        root: requestedRoot,
+      });
+      log(this.#options.logger, 'project.invalid-source', { diagnostics: diagnostics.length, root: requestedRoot });
+      return prepared;
+    }
     const configPath = resolve(root, this.#options.configPath ?? 'agent-bundle.config.ts');
     log(this.#options.logger, 'project.load', { command, root });
 
@@ -308,20 +365,25 @@ export class ProjectService {
         targets: this.#options.targets,
       });
       discovered = await discoverProject(root, loaded.config);
-    } catch (error) {
-      const diagnostics = freezeDiagnostics([{
-        code: 'AB7000',
-        message: `Unable to load project source: ${errorMessage(error)}`,
-        severity: 'error',
-        sourcePath: configPath,
-      }]);
+    } catch {
+      const diagnostics = freezeDiagnostics([
+        preparationDiagnostic('AB7000', 'Unable to load project source.', configPath),
+      ]);
       const snapshot = await snapshotForLoadFailure(root, configPath, outputRoots);
-      const source = sourceStatus(diagnostics, snapshot.revision);
       log(this.#options.logger, 'project.invalid-source', { diagnostics: diagnostics.length, root });
-      return preparedProject(configPath, snapshot, diagnostics, outputRoots, undefined, registry, root, source);
+      return invalidPreparedProject({ configPath, diagnostics, outputRoots, registry, root, snapshot });
     }
 
-    const snapshot = await snapshotProjectSource(root, loaded.configPath, outputRoots);
+    let snapshot: ProjectSourceSnapshot;
+    try {
+      snapshot = await snapshotProjectSource(root, loaded.configPath, outputRoots);
+    } catch {
+      const diagnostics = freezeDiagnostics([
+        preparationDiagnostic('AB7003', 'Unable to snapshot project source.', loaded.configPath),
+      ]);
+      log(this.#options.logger, 'project.invalid-source', { diagnostics: diagnostics.length, root });
+      return invalidPreparedProject({ configPath: loaded.configPath, diagnostics, outputRoots, registry, root });
+    }
     const sourceDiagnostics = freezeDiagnostics(validateSource(loaded, discovered, registry));
     if (hasErrors(sourceDiagnostics)) {
       const source = sourceStatus(sourceDiagnostics, snapshot.revision);
@@ -332,16 +394,12 @@ export class ProjectService {
     let model: NormalizedPlugin;
     try {
       model = await normalizeProject(loaded, discovered, registry);
-    } catch (error) {
-      const diagnostics = freezeDiagnostics([{
-        code: 'AB7001',
-        message: `Unable to normalize project source: ${errorMessage(error)}`,
-        severity: 'error',
-        sourcePath: loaded.configPath,
-      }]);
-      const source = sourceStatus(diagnostics, snapshot.revision);
+    } catch {
+      const diagnostics = freezeDiagnostics([
+        preparationDiagnostic('AB7001', 'Unable to normalize project source.', loaded.configPath),
+      ]);
       log(this.#options.logger, 'project.prepared', { diagnostics: diagnostics.length, root, targets: [] });
-      return preparedProject(loaded.configPath, snapshot, diagnostics, outputRoots, undefined, registry, root, source);
+      return invalidPreparedProject({ configPath: loaded.configPath, diagnostics, outputRoots, registry, root, snapshot });
     }
 
     const diagnostics: Diagnostic[] = [...validateModel(model, registry)];
@@ -358,13 +416,8 @@ export class ProjectService {
         root,
         sourceInputs: snapshot.inputs,
       });
-    } catch (error) {
-      diagnostics.push({
-        code: 'AB7001',
-        message: `Unable to create project context: ${errorMessage(error)}`,
-        severity: 'error',
-        sourcePath: loaded.configPath,
-      });
+    } catch {
+      diagnostics.push(preparationDiagnostic('AB7001', 'Unable to create project context.', loaded.configPath));
     }
     const frozenDiagnostics = freezeDiagnostics(diagnostics);
     const source = sourceStatus(frozenDiagnostics, snapshot.revision);
