@@ -80,24 +80,47 @@ interface AttemptBarrier {
   settle(): void;
 }
 
-class ResourceLedger {
+export class ResourceLedger {
   readonly #closers: Array<() => Promise<void>> = [];
+  readonly #failures: unknown[] = [];
+  readonly #running = new Set<Promise<void>>();
   #closed = false;
+  #closePromise: Promise<void> | undefined;
 
-  add(close: () => Promise<void>): void {
-    if (this.#closed) {
-      void close();
-      return;
+  add(close: () => Promise<void>): Promise<void> | undefined {
+    if (!this.#closed) {
+      this.#closers.push(close);
+      return undefined;
     }
-    this.#closers.push(close);
+    return this.#run(close);
   }
 
-  async close(): Promise<void> {
-    if (this.#closed) return;
+  #run(close: () => Promise<void>): Promise<void> {
+    const task = Promise.resolve().then(close);
+    this.#running.add(task);
+    void task.then(
+      () => undefined,
+      (error: unknown) => { this.#failures.push(error); },
+    ).finally(() => { this.#running.delete(task); });
+    return task;
+  }
+
+  async #drain(): Promise<void> {
+    while (this.#closers.length > 0) this.#run(this.#closers.shift()!);
+    while (this.#running.size > 0) {
+      await Promise.allSettled([...this.#running]);
+      while (this.#closers.length > 0) this.#run(this.#closers.shift()!);
+    }
+    if (this.#failures.length > 0) {
+      throw new AggregateError([...this.#failures], 'RSC runtime startup cleanup failed.');
+    }
+  }
+
+  close(): Promise<void> {
+    if (this.#closePromise !== undefined) return this.#closePromise;
     this.#closed = true;
-    const results = await Promise.allSettled(this.#closers.splice(0).reverse().map((close) => close()));
-    const failures = results.flatMap((result) => result.status === 'rejected' ? [result.reason] : []);
-    if (failures.length > 0) throw new AggregateError(failures, 'RSC runtime startup cleanup failed.');
+    this.#closePromise = this.#drain();
+    return this.#closePromise;
   }
 }
 
@@ -193,6 +216,19 @@ const lifecycleDiagnostic = (error: unknown): DevRuntimeDiagnostic => Object.fre
 
 const abortReason = (signal: AbortSignal): unknown => signal.reason ?? new Error('RSC runtime provider startup was aborted.');
 
+export interface RsbuildRuntimeSessionStartTesting {
+  readonly createRsbuild?: typeof createRsbuild;
+  readonly afterActivationPrepare?: (input: Readonly<{
+    readonly phase: 'store' | 'registry';
+    readonly session: RsbuildRuntimeSession;
+  }>) => Promise<void> | void;
+  readonly beforeAssetRead?: (input: Readonly<{
+    readonly request: DevRuntimeAssetRequest;
+    readonly runtimeGenerationId: string;
+  }>) => Promise<void> | void;
+  readonly beforeMcpRelist?: () => Promise<void> | void;
+}
+
 /**
  * One provider-owned compiler, generation store, and runtime MCP registry.
  * The private compiler URL is exposed only through `clientSurface`.
@@ -206,12 +242,15 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
   readonly #preparedRevisions = new Set<string>();
   readonly #runs = new Map<string, DevRuntimeRun>();
   readonly #surfaces = new Map<string, DevRuntimeSurface>();
+  readonly #testing: RsbuildRuntimeSessionStartTesting;
   readonly #attempts = new Map<string, AttemptBarrier>();
+  readonly #failedAttempts = new Set<string>();
   #active: RuntimeGeneration<RscRuntimeGenerationMetadata> | undefined;
   #clientSurface: DevRuntimeClientSurfaceEndpoint | undefined;
   #closePromise: Promise<void> | undefined;
   #closed = false;
   #generationSequence = 0;
+  #failureTail: Promise<void> = Promise.resolve();
   #hmrReady = false;
   #latestAttemptSequence = 0;
   #latestPreparedRuntime: DevRuntimePreparedProject;
@@ -226,12 +265,14 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
     readonly generationStore: RuntimeGenerationStore<RscRuntimeGenerationMetadata>;
     readonly mcpRegistry: RuntimeMcpRegistry;
     readonly preparedRuntime: DevRuntimePreparedProject;
+    readonly testing: RsbuildRuntimeSessionStartTesting;
   }>) {
     this.#context = input.context;
     this.#checkpointTracker = input.checkpointTracker;
     this.#generationStore = input.generationStore;
     this.#mcpRegistry = input.mcpRegistry;
     this.#latestPreparedRuntime = input.preparedRuntime;
+    this.#testing = input.testing;
     this.#preparedRevisions.add(input.preparedRuntime.sourceRevision);
     this.#status = Object.freeze({
       descriptor,
@@ -241,7 +282,10 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
     });
   }
 
-  static async start(context: DevRuntimeStartContext): Promise<RsbuildRuntimeSession> {
+  static async start(
+    context: DevRuntimeStartContext,
+    testing: RsbuildRuntimeSessionStartTesting = {},
+  ): Promise<RsbuildRuntimeSession> {
     context.signal.throwIfAborted();
     const preparedRuntime = clonePrepared(context.preparedRuntime);
     RsbuildRuntimeSession.#validateStartContext(context, preparedRuntime);
@@ -286,6 +330,8 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
             close: async () => undefined,
             relist: async () => {
               signal.throwIfAborted();
+              await testing.beforeMcpRelist?.();
+              signal.throwIfAborted();
               return connectionState;
             },
             state: connectionState,
@@ -316,11 +362,12 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
         generationStore,
         mcpRegistry,
         preparedRuntime,
+        testing,
       });
       sessionReference.current = session;
       context.signal.throwIfAborted();
 
-      const rsbuild = await createRsbuild({
+      const rsbuild = await (testing.createRsbuild ?? createRsbuild)({
         callerName: 'agent-bundle-rsc-runtime',
         config: createRscRuntimeRsbuildConfig({
           compilerRoot: join(storageRoot, 'compiler'),
@@ -331,7 +378,7 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
       });
       context.signal.throwIfAborted();
       const started = await rsbuild.startDevServer({ getPortSilently: true });
-      ledger.add(() => started.server.close());
+      await ledger.add(() => started.server.close());
       context.signal.throwIfAborted();
       session.#attachServer(started);
       await session.#providerTail;
@@ -382,6 +429,10 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
     let lease;
     try {
       lease = await this.#generationStore.lease(request.runtimeGenerationId);
+      await this.#testing.beforeAssetRead?.(Object.freeze({
+        request,
+        runtimeGenerationId: lease.generation.id,
+      }));
       const descriptor = lease.generation.manifest.metadata.surfaceAssets[request.surfaceId]
         ?.find((asset) => asset.requestPath === requestPath);
       if (descriptor === undefined || descriptor.bytes > maximumAssetBytes) return undefined;
@@ -464,7 +515,7 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
       beforeAttempt: () => this.#beforeAttempt(),
       capture: async (input) => this.#capture(input),
       enqueue: (snapshot) => this.#enqueue(snapshot),
-      failAttempt: (attemptId, error) => this.#failAttempt(attemptId, error),
+      failAttempt: (attemptId, error) => { void this.#failAttempt(attemptId, error); },
     });
   }
 
@@ -497,7 +548,7 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
     const barrier = this.#attempts.get(input.attemptId);
     if (barrier === undefined) throw new Error('RSC runtime compile capture has no live attempt barrier.');
     if (input.hasErrors || input.sourceRevision.length === 0) {
-      this.#failAttempt(input.attemptId, new Error('RSC runtime compilation failed.'));
+      await this.#failAttempt(input.attemptId, new Error('RSC runtime compilation failed.'));
       return undefined;
     }
     if (!input.cohortChanged) {
@@ -535,24 +586,28 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
         snapshot,
       } as RscRuntimeCompileSnapshot & Readonly<{ readonly snapshot: RscRuntimeCapturedGenerationSnapshot }>);
     } catch (error) {
-      this.#failAttempt(input.attemptId, error);
+      await this.#failAttempt(input.attemptId, error);
       throw error;
     }
   }
 
-  #enqueue(snapshot: RscRuntimeCompileSnapshot): void {
+  #enqueue(snapshot: RscRuntimeCompileSnapshot): Promise<'activated' | 'failed'> {
     const captured = (snapshot as RscRuntimeCompileSnapshot & Readonly<{ readonly snapshot?: RscRuntimeCapturedGenerationSnapshot }>).snapshot;
     if (captured === undefined) throw new Error('RSC runtime compile snapshot was not captured by this session.');
-    void this.#append(async () => this.#activate(captured));
+    return this.#append(async () => this.#activate(captured));
   }
 
-  #failAttempt(attemptId: string, error: unknown): void {
+  async #failAttempt(attemptId: string, error: unknown): Promise<void> {
+    if (this.#failedAttempts.has(attemptId)) return;
+    this.#failedAttempts.add(attemptId);
     const barrier = this.#attempts.get(attemptId);
     barrier?.settle();
     const candidate = barrier?.candidate ?? this.#candidatesByAttempt.get(attemptId);
     this.#candidatesByAttempt.delete(attemptId);
     if (candidate !== undefined) {
-      void this.#generationStore.fail(candidate).catch(() => undefined);
+      const cleanup = this.#failureTail.then(() => this.#generationStore.fail(candidate));
+      this.#failureTail = cleanup.catch(() => undefined);
+      await cleanup.catch(() => undefined);
     }
     this.#emit(Object.freeze({ type: 'runtime.generation.failed' }));
     if (!this.#closed) this.#setStatus(this.#active === undefined ? 'degraded' : 'active', [lifecycleDiagnostic(error)]);
@@ -581,7 +636,7 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
     });
   }
 
-  async #activate(snapshot: RscRuntimeCapturedGenerationSnapshot): Promise<void> {
+  async #activate(snapshot: RscRuntimeCapturedGenerationSnapshot): Promise<'activated' | 'failed'> {
     const guard = this.#activationGuard(snapshot);
     let preparedGeneration: RuntimeGenerationPreparedActivation<RscRuntimeGenerationMetadata> | undefined;
     let preparedRegistry: RuntimeMcpPreparedActivationReconcile | undefined;
@@ -592,6 +647,7 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
         stateStoreId,
         store: this.#generationStore,
       });
+      await this.#testing.afterActivationPrepare?.(Object.freeze({ phase: 'store', session: this }));
       const metadata = preparedGeneration.generation.manifest.metadata;
       preparedRegistry = await this.#mcpRegistry.prepareActivationReconcile({
         definitionDigest: metadata.definitionDigest,
@@ -599,6 +655,7 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
         servers: metadata.servers,
         transportDigest: metadata.transportDigest,
       });
+      await this.#testing.afterActivationPrepare?.(Object.freeze({ phase: 'registry', session: this }));
       await guard.wait(preparedGeneration.generation.manifest);
       if (!guard.check(preparedGeneration.generation.manifest) || !this.#generationStore.canCommit(preparedGeneration)) {
         throw new Error('RSC runtime generation activation was superseded.');
@@ -616,7 +673,12 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
         type: 'runtime.generation.activated',
       }));
       committed.publish();
-      await committed.finalize();
+      try {
+        await committed.finalize();
+      } catch (error) {
+        if (!this.#closed) this.#setStatus('degraded', [lifecycleDiagnostic(error)]);
+      }
+      return 'activated';
     } catch (error) {
       if (preparedGeneration !== undefined || preparedRegistry !== undefined) {
         await Promise.allSettled([
@@ -625,7 +687,8 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
         ]);
       }
       snapshot.discardCompilerAssetCheckpoint?.();
-      this.#failAttempt(snapshot.attemptId, error);
+      await this.#failAttempt(snapshot.attemptId, error);
+      return 'failed';
     } finally {
       this.#candidatesByAttempt.delete(snapshot.attemptId);
     }
@@ -638,7 +701,12 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
     const definition = JSON.parse(await readFile(join(active.root, 'rsc', 'runtime-definition.json'), 'utf8')) as SerializedRuntimeDefinition;
     const nextDefinitionDigest = runtimeDefinitionDigest(definition, prepared);
     const nextTransportDigest = transportDigest(prepared);
-    if (nextDefinitionDigest === metadata.definitionDigest && nextTransportDigest === metadata.transportDigest) return;
+    const current = this.#mcpRegistry.snapshot();
+    if (
+      current?.runtimeGenerationId === active.id &&
+      current.definitionDigest === nextDefinitionDigest &&
+      current.transportDigest === nextTransportDigest
+    ) return;
     const input: DevRuntimeMcpRegistryReconcileInput = Object.freeze({
       definitionDigest: nextDefinitionDigest,
       runtimeGenerationId: active.id,
@@ -668,7 +736,7 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
     this.#checkpointTracker.close();
     this.#setStatus('closed');
     const mcpRegistryClose = this.#mcpRegistry.close();
-    await this.#providerTail.catch(() => undefined);
+    await Promise.all([this.#providerTail.catch(() => undefined), this.#failureTail]);
     const results = await Promise.allSettled([
       this.#server?.close() ?? Promise.resolve(),
       mcpRegistryClose,
@@ -678,9 +746,9 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
     if (failures.length > 0) throw new AggregateError(failures, 'RSC runtime session close failed.');
   }
 
-  #append(work: () => Promise<void>): Promise<void> {
+  #append<T>(work: () => Promise<T>): Promise<T> {
     const next = this.#providerTail.then(work, work);
-    this.#providerTail = next.catch(() => undefined);
+    this.#providerTail = next.then(() => undefined, () => undefined);
     return next;
   }
 

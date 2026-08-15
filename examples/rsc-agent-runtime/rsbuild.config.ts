@@ -18,6 +18,8 @@ export interface RscRuntimeCompileSnapshot {
   readonly sourceRevision: string;
 }
 
+export type RscRuntimeActivationOutcome = 'activated' | 'failed';
+
 export interface RscRuntimeRsbuildConfigOptions {
   readonly compilerRoot?: string;
   readonly mode: 'development' | 'production';
@@ -29,7 +31,8 @@ export interface RscRuntimeRsbuildConfigOptions {
       readonly hasErrors: boolean;
       readonly sourceRevision: string;
     }): Promise<RscRuntimeCompileSnapshot | undefined>;
-    enqueue(snapshot: RscRuntimeCompileSnapshot): void;
+    /** Queues provider activation but never blocks the Rsbuild compile hook. */
+    enqueue(snapshot: RscRuntimeCompileSnapshot): unknown;
     failAttempt(attemptId: string, error: unknown): void;
   }>;
 }
@@ -51,6 +54,8 @@ const runtimeCompileObserverPlugin = (
   observer: NonNullable<RscRuntimeRsbuildConfigOptions['onCompile']>,
 ): RsbuildPlugin => {
   const pendingAttemptIds: string[] = [];
+  let newestSuccessfulActivationSequence = 0;
+  let nextActivationSequence = 0;
   let previousCapturedCohortHash: string | undefined;
   return {
     name: 'agent-bundle:rsc-runtime-compile-observer',
@@ -92,9 +97,18 @@ const runtimeCompileObserverPlugin = (
             sourceRevision,
           });
           if (snapshot !== undefined) {
-            observer.enqueue(snapshot);
+            const activationSequence = ++nextActivationSequence;
+            const queued = observer.enqueue(snapshot);
+            const completion = queued instanceof Promise
+              ? queued as Promise<RscRuntimeActivationOutcome>
+              : Promise.resolve(undefined);
             snapshot.acceptCompilerAssetCheckpoint?.();
-            previousCapturedCohortHash = sourceRevision;
+            void completion.then((outcome) => {
+              if (outcome !== undefined && outcome !== 'activated') return;
+              if (activationSequence < newestSuccessfulActivationSequence) return;
+              newestSuccessfulActivationSequence = activationSequence;
+              previousCapturedCohortHash = sourceRevision;
+            }, () => undefined);
           }
         } catch (error) {
           try {
