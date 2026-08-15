@@ -3,14 +3,21 @@
   border-radius: var(--mantine-radius-sm);
   display: grid;
   gap: var(--mantine-spacing-sm);
+  min-width: 0;
   padding: var(--mantine-spacing-sm);
 }
 
 .mcp-app-preview__header {
   align-items: baseline;
   display: flex;
+  flex-wrap: wrap;
   gap: var(--mantine-spacing-md);
   justify-content: space-between;
+  min-width: 0;
+}
+
+.mcp-app-preview__header > * {
+  min-width: 0;
 }
 
 .mcp-app-preview__header h2 {
@@ -20,13 +27,17 @@
 
 .mcp-app-preview__profile {
   display: flex;
+  flex-wrap: wrap;
   gap: var(--mantine-spacing-sm);
   margin: 0;
+  min-width: 0;
 }
 
 .mcp-app-preview__profile div {
   display: flex;
+  flex-wrap: wrap;
   gap: var(--mantine-spacing-xs);
+  min-width: 0;
 }
 
 .mcp-app-preview__profile dt {
@@ -35,21 +46,29 @@
 
 .mcp-app-preview__profile dd {
   margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .mcp-app-preview__frame {
   border: 0;
+  max-width: 100%;
   min-height: 22rem;
+  min-width: 0;
   width: 100%;
 }
 
 .mcp-app-preview__fallback {
   display: grid;
   gap: var(--mantine-spacing-xs);
+  min-width: 0;
 }
 
 .mcp-app-preview__fallback pre {
   max-height: 16rem;
+  max-width: 100%;
+  min-width: 0;
   overflow: auto;
+  overflow-wrap: anywhere;
   white-space: pre-wrap;
 }
