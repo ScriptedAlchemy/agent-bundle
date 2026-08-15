@@ -93,10 +93,10 @@ const validStatus = (value: unknown): value is DevRuntimeStatus => isRecord(valu
   validDescriptor(value.descriptor) && Array.isArray(value.diagnostics) &&
   typeof value.hmrReady === 'boolean' && typeof value.state === 'string' && states.has(value.state as DevRuntimeStatus['state']);
 
-const method = <T extends object, TKey extends keyof T>(value: T, key: TKey): T[TKey] => {
-  const candidate = value[key];
+const call = <TResult>(owner: object, key: PropertyKey, args: readonly unknown[] = []): TResult => {
+  const candidate = (owner as Record<PropertyKey, unknown>)[key];
   if (typeof candidate !== 'function') throw new DevRuntimeUnavailableError();
-  return candidate;
+  return Reflect.apply(candidate, owner, args) as TResult;
 };
 
 export interface DevRuntimeControllerOptions {
@@ -142,6 +142,7 @@ export class DevRuntimeController implements DevRuntimeSession {
   #startPromise: Promise<void> | undefined;
   #status: DevRuntimeStatus;
   #surfaces: readonly DevRuntimeSurface[] = Object.freeze([]);
+  #topologyFailed = false;
 
   constructor(options: DevRuntimeControllerOptions) {
     this.#artifactStatus = options.artifactStatus;
@@ -206,9 +207,13 @@ export class DevRuntimeController implements DevRuntimeSession {
   ): Promise<void> {
     if (this.#closed) return Promise.resolve();
     if (prepared === undefined || diagnostic !== undefined || prepared.provider !== this.#initialProviderPath) {
-      this.#failLifecycle('failed', true);
+      if (!this.#topologyFailed) {
+        this.#topologyFailed = true;
+        this.#failLifecycle('failed', true);
+      }
       return Promise.resolve();
     }
+    if (this.#topologyFailed) return Promise.resolve();
     if (prepared.sourceRevision === this.#lastAcceptedSourceRevision) return Promise.resolve();
     this.#lastAcceptedSourceRevision = prepared.sourceRevision;
     this.#bufferedPrepared = prepared;
@@ -269,9 +274,11 @@ export class DevRuntimeController implements DevRuntimeSession {
       return view;
     };
     return Object.freeze({
-      execute: async (request: DevRuntimeMcpOperationRequest) => method(current(), 'execute')(request),
-      snapshot: () => method(current(), 'snapshot')(),
-      watchClosed: (listener: (reason?: unknown) => Promise<void> | void) => method(current(), 'watchClosed')(listener),
+      execute: async (request: DevRuntimeMcpOperationRequest) =>
+        call<Promise<Awaited<ReturnType<DevRuntimeMcpSessionView['execute']>>>>(current(), 'execute', [request]),
+      snapshot: () => call<ReturnType<DevRuntimeMcpSessionView['snapshot']>>(current(), 'snapshot'),
+      watchClosed: (listener: (reason?: unknown) => Promise<void> | void) =>
+        call<ReturnType<DevRuntimeMcpSessionView['watchClosed']>>(current(), 'watchClosed', [listener]),
     });
   }
 
@@ -281,34 +288,39 @@ export class DevRuntimeController implements DevRuntimeSession {
       ...view,
       close: async () => {
         this.#rawRegistry();
-        return method(resolveSession() ?? this.#activeSession(), 'close')();
+        return call<Promise<void>>(resolveSession() ?? this.#activeSession(), 'close');
       },
     });
   }
 
   #createMcpRegistry(): DevRuntimeMcpRegistry {
     return Object.freeze({
-      close: async () => method(this.#rawRegistry(), 'close')(),
-      closeSession: async (request: DevRuntimeMcpSessionControlRequest) => method(this.#rawRegistry(), 'closeSession')(request),
+      close: async () => call<Promise<void>>(this.#rawRegistry(), 'close'),
+      closeSession: async (request: DevRuntimeMcpSessionControlRequest) =>
+        call<Promise<void>>(this.#rawRegistry(), 'closeSession', [request]),
       open: async (request: DevRuntimeMcpSessionRequest) => {
-        const opened = await method(this.#rawRegistry(), 'open')(request);
+        const opened = await call<Promise<DevRuntimeMcpSession>>(this.#rawRegistry(), 'open', [request]);
         return this.#createMcpSession(() => opened);
       },
       reconcile: async (input: DevRuntimeMcpRegistryReconcileInput): Promise<DevRuntimeMcpRegistryReconcileResult> =>
-        method(this.#rawRegistry(), 'reconcile')(input),
+        call<Promise<DevRuntimeMcpRegistryReconcileResult>>(this.#rawRegistry(), 'reconcile', [input]),
       restart: async (request: DevRuntimeMcpSessionControlRequest): Promise<DevRuntimeMcpRegistryReconcileResult> =>
-        method(this.#rawRegistry(), 'restart')(request),
+        call<Promise<DevRuntimeMcpRegistryReconcileResult>>(this.#rawRegistry(), 'restart', [request]),
       session: (sessionId: string): DevRuntimeMcpSessionView | undefined => {
-        const existing = method(this.#rawRegistry(), 'session')(sessionId);
+        const existing = call<DevRuntimeMcpSessionView | undefined>(this.#rawRegistry(), 'session', [sessionId]);
         return existing === undefined
           ? undefined
-          : this.#createMcpView(() => method(this.#rawRegistry(), 'session')(sessionId));
+          : this.#createMcpView(() => call<DevRuntimeMcpSessionView | undefined>(this.#rawRegistry(), 'session', [sessionId]));
       },
-      snapshot: () => method(this.#rawRegistry(), 'snapshot')(),
+      snapshot: () => call<ReturnType<DevRuntimeMcpRegistry['snapshot']>>(this.#rawRegistry(), 'snapshot'),
       subscribe: (
         options: Readonly<{ readonly afterSequence?: number }>,
         listener: DevRuntimeMcpRegistryListener,
-      ): DevRuntimeMcpRegistrySubscription => method(this.#rawRegistry(), 'subscribe')(options, listener),
+      ): DevRuntimeMcpRegistrySubscription => call<DevRuntimeMcpRegistrySubscription>(
+        this.#rawRegistry(),
+        'subscribe',
+        [options, listener],
+      ),
     });
   }
 
@@ -393,9 +405,21 @@ export class DevRuntimeController implements DevRuntimeSession {
     });
     try {
       const session = await Promise.race([providerStart, deadline, aborted]);
+      if (this.#closed || this.#topologyFailed) {
+        try {
+          await this.#closeSessionOnce(session);
+        } catch (error) {
+          this.#lateFailures.push(error);
+        }
+        return;
+      }
       const status = this.#captureStatus(session);
-      if (this.#closed) {
-        await this.#closeSessionOnce(session);
+      if (this.#closed || this.#topologyFailed) {
+        try {
+          await this.#closeSessionOnce(session);
+        } catch (error) {
+          this.#lateFailures.push(error);
+        }
         return;
       }
       this.#session = session;
@@ -405,7 +429,7 @@ export class DevRuntimeController implements DevRuntimeSession {
         await this.#enqueueReconcile(this.#bufferedPrepared);
       }
     } catch {
-      this.#failLifecycle();
+      if (!this.#topologyFailed) this.#failLifecycle();
       this.#observeLateStart(providerStart);
     } finally {
       if (timer !== undefined) clearTimeout(timer);
@@ -414,15 +438,16 @@ export class DevRuntimeController implements DevRuntimeSession {
 
   #enqueueReconcile(prepared: DevRuntimePreparedProject): Promise<void> {
     const reconcile = this.#reconcileTail.then(async () => {
-      if (this.#closed) return;
+      if (this.#closed || this.#topologyFailed) return;
       const session = this.#session;
       if (session === undefined) return;
       try {
         await session.reconcilePreparedRuntime(prepared);
+        if (this.#closed || this.#topologyFailed) return;
         this.#adoptStatus(this.#captureStatus(session));
         this.#captureSurfaces(session);
       } catch {
-        this.#failLifecycle('degraded');
+        if (!this.#topologyFailed) this.#failLifecycle('degraded');
       }
     });
     this.#reconcileTail = reconcile;
@@ -438,6 +463,7 @@ export class DevRuntimeController implements DevRuntimeSession {
   }
 
   #failLifecycle(state: 'degraded' | 'failed' = 'failed', restartRequired = false): void {
+    if (this.#topologyFailed && !restartRequired) return;
     const prior = this.#lastGoodStatus ?? this.#status;
     this.#status = Object.freeze({
       ...(prior.activeVector === undefined ? {} : { activeVector: prior.activeVector }),

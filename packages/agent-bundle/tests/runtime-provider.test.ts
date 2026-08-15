@@ -7,12 +7,14 @@ import { expect, it } from '@rstest/core';
 import {
   DevRuntimeController,
   DevRuntimeGenerationConflictError,
+  RuntimeMcpRegistry,
   DevRuntimeUnavailableError,
   type DevRuntimeControllerOptions,
   type DevRuntimeProvider,
   type DevRuntimePreparedProject,
   type DevRuntimeSession,
   type DevRuntimeMcpSessionBinding,
+  type DevRuntimeMcpRegistry,
   type DevRuntimeRun,
   type DevRuntimeSurface,
 } from '../src/dev/index.ts';
@@ -384,6 +386,208 @@ it('latches declaration topology failures and revokes registry capabilities capt
   await expect(capturedSession.close()).rejects.toMatchObject({ code: 'AB8201' });
   expect(() => capturedView.snapshot()).toThrow(DevRuntimeUnavailableError);
   await controller.close();
+});
+
+it('preserves private registry and session receivers through the stable MCP facade', async () => {
+  const descriptor = { environmentVariables: [], id: 'fixture-runtime', label: 'Fixture runtime', schemaVersion: 1 } as const;
+  const prepared = { apps: [], provider: './src/dev/provider.ts', servers: [], sourceRevision: 'source-1' } as const;
+  const status = () => ({ descriptor, diagnostics: [], hmrReady: true, state: 'active' as const });
+  const controllerFor = (mcpRegistry: DevRuntimeMcpRegistry): DevRuntimeController => new DevRuntimeController({
+    artifactStatus: () => ({ state: 'missing' }),
+    emit: () => undefined,
+    environment: {},
+    preparedRuntime: prepared,
+    projectRoot: '/workspace/project',
+    provider: {
+      descriptor,
+      start: async () => ({
+        close: async () => undefined,
+        mcpRegistry,
+        status,
+        surfaces: () => [],
+      }) as unknown as DevRuntimeSession,
+    },
+    storageRoot: '/workspace/project/.agent-bundle/runtime',
+  });
+  const actualRegistry = new RuntimeMcpRegistry({
+    artifactEpochId: () => undefined,
+    connector: { connect: async () => { throw new Error('Connection is not needed by this receiver test.'); } } as never,
+    emit: () => undefined,
+    executor: async () => ({}) as never,
+    generationStore: {} as never,
+    initialRegistry: { definitionDigest: 'definition-1', runtimeGenerationId: 'generation-1', servers: [], transportDigest: 'transport-1' },
+    providerSessionId: 'provider-1',
+    stateStoreId: 'state-1',
+  });
+  const actualController = controllerFor(actualRegistry);
+  await actualController.start();
+  expect(actualController.mcpRegistry.snapshot()).toMatchObject({
+    providerSessionId: 'provider-1',
+    registryRevision: 1,
+  });
+  await actualController.close();
+
+  class PrivateSession {
+    #closed = false;
+    #executions = 0;
+
+    async close(): Promise<void> {
+      this.#closed = true;
+    }
+
+    async execute(): Promise<unknown> {
+      if (this.#closed) throw new Error('Private MCP session is closed.');
+      this.#executions += 1;
+      return { executions: this.#executions };
+    }
+
+    snapshot(): unknown {
+      return { closed: this.#closed, executions: this.#executions };
+    }
+
+    watchClosed(): unknown {
+      return { closed: this.#closed, unsubscribe: () => undefined };
+    }
+  }
+
+  class PrivateRegistry {
+    #calls: string[] = [];
+    #session = new PrivateSession();
+
+    get calls(): readonly string[] {
+      return this.#calls;
+    }
+
+    async close(): Promise<void> { this.#calls.push('close'); }
+    async closeSession(): Promise<void> { this.#calls.push('closeSession'); }
+    async open(): Promise<PrivateSession> { this.#calls.push('open'); return this.#session; }
+    async reconcile(): Promise<unknown> { this.#calls.push('reconcile'); return {}; }
+    async restart(): Promise<unknown> { this.#calls.push('restart'); return {}; }
+    session(): PrivateSession { this.#calls.push('session'); return this.#session; }
+    snapshot(): unknown { this.#calls.push('snapshot'); return { registry: 'private' }; }
+    subscribe(): unknown { this.#calls.push('subscribe'); return { unsubscribe: () => undefined }; }
+  }
+
+  const privateRegistry = new PrivateRegistry();
+  const controller = controllerFor(privateRegistry as unknown as DevRuntimeMcpRegistry);
+  await controller.start();
+  const facade = controller.mcpRegistry;
+  expect(facade.snapshot()).toEqual({ registry: 'private' });
+  expect(facade.subscribe({}, () => undefined)).toEqual({ unsubscribe: expect.any(Function) });
+  const view = facade.session('class-session');
+  if (view === undefined) throw new Error('Expected private MCP session view.');
+  await expect(view.execute({ expectedSessionRevision: 1, kind: 'list-tools' })).resolves.toEqual({ executions: 1 });
+  expect(view.snapshot()).toEqual({ closed: false, executions: 1 });
+  expect(view.watchClosed(() => undefined)).toEqual({ closed: false, unsubscribe: expect.any(Function) });
+  const opened = await facade.open({ serverName: 'timeline', target: 'portable' });
+  await expect(opened.execute({ expectedSessionRevision: 1, kind: 'list-tools' })).resolves.toEqual({ executions: 2 });
+  await expect(opened.close()).resolves.toBeUndefined();
+  await expect(facade.closeSession({ expectedSessionRevision: 1, sessionId: 'class-session' })).resolves.toBeUndefined();
+  await expect(facade.reconcile({ definitionDigest: 'definition-2', runtimeGenerationId: 'generation-2', servers: [], transportDigest: 'transport-2' })).resolves.toEqual({});
+  await expect(facade.restart({ expectedSessionRevision: 1, sessionId: 'class-session' })).resolves.toEqual({});
+  await expect(facade.close()).resolves.toBeUndefined();
+  expect(privateRegistry.calls).toEqual([
+    'snapshot',
+    'subscribe',
+    'session',
+    'session',
+    'session',
+    'session',
+    'open',
+    'closeSession',
+    'reconcile',
+    'restart',
+    'close',
+  ]);
+
+  await controller.reconcileDeclaration({ ...prepared, provider: './src/dev/replaced-provider.ts', sourceRevision: 'source-2' });
+  await expect(facade.open({ serverName: 'timeline', target: 'portable' })).rejects.toMatchObject({ code: 'AB8201' });
+  await expect(view.execute({ expectedSessionRevision: 1, kind: 'list-tools' })).rejects.toMatchObject({ code: 'AB8201' });
+  await expect(opened.close()).rejects.toMatchObject({ code: 'AB8201' });
+  await controller.close();
+});
+
+it('latches every topology failure across a pending runtime start', async () => {
+  const descriptor = { environmentVariables: [], id: 'fixture-runtime', label: 'Fixture runtime', schemaVersion: 1 } as const;
+  const prepared = { apps: [], provider: './src/dev/provider.ts', servers: [], sourceRevision: 'source-1' } as const;
+  const topologyChanges: readonly Readonly<{
+    readonly apply: (controller: DevRuntimeController) => Promise<void>;
+    readonly name: string;
+  }>[] = [
+    { apply: (controller) => controller.reconcileDeclaration(undefined), name: 'removal' },
+    { apply: (controller) => controller.reconcileDeclaration({ ...prepared, sourceRevision: 'source-2' }, { code: 'AB8200' }), name: 'diagnostic' },
+    { apply: (controller) => controller.reconcileDeclaration({ ...prepared, provider: './src/dev/replaced-provider.ts', sourceRevision: 'source-2' }), name: 'provider path' },
+  ];
+
+  for (const topology of topologyChanges) {
+    let closeCalls = 0;
+    let resolveSession: ((session: DevRuntimeSession) => void) | undefined;
+    const pendingSession = new Promise<DevRuntimeSession>((resolvePromise) => { resolveSession = resolvePromise; });
+    const controller = new DevRuntimeController({
+      artifactStatus: () => ({ state: 'missing' }),
+      emit: () => undefined,
+      environment: {},
+      preparedRuntime: prepared,
+      projectRoot: '/workspace/project',
+      provider: { descriptor, start: async () => pendingSession },
+      storageRoot: '/workspace/project/.agent-bundle/runtime',
+    });
+    const starting = controller.start();
+    await new Promise((resolvePromise) => setImmediate(resolvePromise));
+    await topology.apply(controller);
+    await controller.reconcilePreparedRuntime({ ...prepared, sourceRevision: 'source-3' });
+    resolveSession?.({
+      close: async () => { closeCalls += 1; },
+      mcpRegistry: {},
+      reconcilePreparedRuntime: async () => undefined,
+      status: () => ({ descriptor, diagnostics: [], hmrReady: true, state: 'active' }),
+      surfaces: () => [],
+    } as unknown as DevRuntimeSession);
+    await starting;
+
+    expect(controller.status(), topology.name).toMatchObject({ state: 'failed' });
+    await expect(controller.mcpRegistry.open({ serverName: 'timeline', target: 'portable' }), topology.name).rejects.toMatchObject({ code: 'AB8201' });
+    await controller.close();
+    expect(closeCalls, topology.name).toBe(1);
+  }
+});
+
+it('retains a topology failure when it races an accepted runtime reconcile', async () => {
+  const descriptor = { environmentVariables: [], id: 'fixture-runtime', label: 'Fixture runtime', schemaVersion: 1 } as const;
+  const prepared = { apps: [], provider: './src/dev/provider.ts', servers: [], sourceRevision: 'source-1' } as const;
+  let closeCalls = 0;
+  let resolveReconcile: (() => void) | undefined;
+  const reconcileGate = new Promise<void>((resolvePromise) => { resolveReconcile = resolvePromise; });
+  const controller = new DevRuntimeController({
+    artifactStatus: () => ({ state: 'missing' }),
+    emit: () => undefined,
+    environment: {},
+    preparedRuntime: prepared,
+    projectRoot: '/workspace/project',
+    provider: {
+      descriptor,
+      start: async () => ({
+        close: async () => { closeCalls += 1; },
+        mcpRegistry: {},
+        reconcilePreparedRuntime: async () => reconcileGate,
+        status: () => ({ descriptor, diagnostics: [], hmrReady: true, state: 'active' }),
+        surfaces: () => [],
+      }) as unknown as DevRuntimeSession,
+    },
+    storageRoot: '/workspace/project/.agent-bundle/runtime',
+  });
+  await controller.start();
+  const capturedRegistry = controller.mcpRegistry;
+  const reconciling = controller.reconcilePreparedRuntime({ ...prepared, sourceRevision: 'source-2' });
+  await new Promise((resolvePromise) => setImmediate(resolvePromise));
+  await controller.reconcileDeclaration(undefined);
+  resolveReconcile?.();
+  await reconciling;
+
+  expect(controller.status()).toMatchObject({ state: 'failed' });
+  await expect(capturedRegistry.open({ serverName: 'timeline', target: 'portable' })).rejects.toMatchObject({ code: 'AB8201' });
+  await controller.close();
+  expect(closeCalls).toBe(1);
 });
 
 it('latches runtime removal and diagnostics as restart-required failures', async () => {
