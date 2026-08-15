@@ -243,7 +243,7 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
   readonly #mcpRegistry: RuntimeMcpRegistry;
   readonly #preparedRevisions = new Set<string>();
   readonly #runs = new Map<string, DevRuntimeRun>();
-  readonly #surfaceAssetBindings = new Map<string, string>();
+  readonly #surfaceAssetBindings = new WeakMap<RuntimeGeneration<RscRuntimeGenerationMetadata>, ReadonlyMap<string, string>>();
   readonly #surfaces = new Map<string, DevRuntimeSurface>();
   readonly #testing: RsbuildRuntimeSessionStartTesting;
   readonly #attempts = new Map<string, AttemptBarrier>();
@@ -436,7 +436,7 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
         request,
         runtimeGenerationId: lease.generation.id,
       }));
-      const boundSurfaceId = this.#surfaceAssetBindings.get(request.surfaceId);
+      const boundSurfaceId = this.#surfaceAssetBindings.get(lease.generation)?.get(request.surfaceId);
       if (boundSurfaceId === undefined) return undefined;
       const descriptor = lease.generation.manifest.metadata.surfaceAssets[boundSurfaceId]
         ?.find((asset) => asset.requestPath === requestPath);
@@ -691,7 +691,7 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
       preparedRegistry = undefined;
       this.#active = generation;
       this.#updateSurfaces(snapshot, snapshot.preparedRuntime);
-      this.#updateSurfaceAssetBindings(snapshot.preparedRuntime, metadata);
+      this.#updateSurfaceAssetBindings(generation, snapshot.preparedRuntime, metadata);
       this.#setStatus('active');
       this.#emit(Object.freeze({
         mcpRegistryRevision: this.#mcpRegistry.snapshot()?.registryRevision,
@@ -743,7 +743,7 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
     try {
       await this.#mcpRegistry.reconcile(input);
       this.#updateSurfaces({ definition }, prepared);
-      this.#updateSurfaceAssetBindings(prepared, metadata);
+      this.#updateSurfaceAssetBindings(active, prepared, metadata);
       this.#setStatus('active');
     } catch (error) {
       this.#setStatus('degraded', [lifecycleDiagnostic(error)]);
@@ -762,6 +762,8 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
     for (const attempt of [...this.#attempts.values()]) attempt.settle();
     this.#checkpointTracker.close();
     this.#setStatus('closed');
+    this.#active = undefined;
+    this.#surfaces.clear();
     const mcpRegistryClose = this.#mcpRegistry.close();
     while (this.#captureTasks.size > 0) await Promise.all([...this.#captureTasks]);
     await Promise.all([this.#providerTail.catch(() => undefined), this.#failureTail]);
@@ -854,10 +856,11 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
   }
 
   #updateSurfaceAssetBindings(
+    generation: RuntimeGeneration<RscRuntimeGenerationMetadata>,
     prepared: Pick<DevRuntimePreparedProject, 'apps'>,
     metadata: Pick<RscRuntimeGenerationMetadata, 'appDefinitions' | 'surfaceAssets'>,
   ): void {
-    this.#surfaceAssetBindings.clear();
+    const bindings = new Map<string, string>();
     const byIdentity = new Map<string, string>();
     const byResourceUri = new Map<string, string | undefined>();
     for (const app of metadata.appDefinitions) {
@@ -869,8 +872,9 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
     for (const app of prepared.apps) {
       const surfaceId = `mcp.${app.name}`;
       const binding = byIdentity.get(`${app.id}\0${app.resourceUri}`) ?? byResourceUri.get(app.resourceUri);
-      if (binding !== undefined) this.#surfaceAssetBindings.set(surfaceId, binding);
+      if (binding !== undefined) bindings.set(surfaceId, binding);
     }
+    this.#surfaceAssetBindings.set(generation, bindings);
   }
 
   #vector(generation: RuntimeGeneration<RscRuntimeGenerationMetadata>): RuntimeVector {

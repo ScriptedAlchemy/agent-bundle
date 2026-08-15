@@ -526,6 +526,27 @@ test('binds renamed and added App surfaces to the active generation assets witho
         runtimeGenerationId,
         surfaceId: 'mcp.timeline',
       })).resolves.toBeUndefined();
+
+      await changeWorkerImplementation(copied.projectRoot, 'reconciled-app-assets-generation-two');
+      await waitFor(() => session.status().activeVector?.runtimeGenerationId !== runtimeGenerationId);
+      const nextRuntimeGenerationId = session.status().activeVector!.runtimeGenerationId;
+      for (const generationId of [runtimeGenerationId, nextRuntimeGenerationId]) {
+        await expect(session.readAsset({
+          path: ['rsc', 'index.html'],
+          runtimeGenerationId: generationId,
+          surfaceId: 'mcp.timeline-renamed',
+        })).resolves.toMatchObject({ contentType: 'text/html' });
+        await expect(session.readAsset({
+          path: ['rsc', 'index.html'],
+          runtimeGenerationId: generationId,
+          surfaceId: 'mcp.timeline-added',
+        })).resolves.toMatchObject({ contentType: 'text/html' });
+        await expect(session.readAsset({
+          path: ['rsc', 'index.html'],
+          runtimeGenerationId: generationId,
+          surfaceId: 'mcp.timeline',
+        })).resolves.toBeUndefined();
+      }
     } finally {
       await session.close();
     }
