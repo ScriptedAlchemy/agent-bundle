@@ -3,7 +3,6 @@ import { dirname, join, relative, resolve } from 'node:path';
 
 import fastGlob from 'fast-glob';
 import type { Ignore } from 'ignore';
-import { parse as parseYaml } from 'yaml';
 
 import type { Diagnostic } from '../core/diagnostics.ts';
 import {
@@ -11,6 +10,7 @@ import {
   readProjectIgnoreRules,
   toPosixPath,
 } from './ignore.ts';
+import { parseSkillMarkdown } from './skill-references.ts';
 
 export interface SkillResource {
   bytes: number;
@@ -127,10 +127,10 @@ export const parseSkill = async (
     };
   }
 
-  const match = /^(?:\uFEFF)?---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(markdown);
-  if (match === null) {
+  const parsed = parseSkillMarkdown(markdown);
+  if (parsed.status === 'missing-frontmatter') {
     return {
-      body: markdown,
+      body: parsed.body,
       diagnostics: [missingFrontmatter(source)],
       dir,
       frontmatter: {},
@@ -140,34 +140,25 @@ export const parseSkill = async (
     };
   }
 
-  try {
-    const frontmatter = parseYaml(match[1]);
-    if (
-      typeof frontmatter !== 'object' ||
-      frontmatter === null ||
-      Array.isArray(frontmatter)
-    ) {
-      throw new TypeError('YAML frontmatter must define an object.');
-    }
-
+  if (parsed.status === 'valid') {
     return {
-      body: markdown.slice(match[0].length),
+      body: parsed.body,
       diagnostics: [],
       dir,
-      frontmatter,
-      markdown,
-      resources,
-      source,
-    };
-  } catch (error) {
-    return {
-      body: markdown.slice(match[0].length),
-      diagnostics: [malformedFrontmatter(source, error)],
-      dir,
-      frontmatter: {},
+      frontmatter: parsed.frontmatter,
       markdown,
       resources,
       source,
     };
   }
+
+  return {
+    body: parsed.body,
+    diagnostics: [malformedFrontmatter(source, parsed.message)],
+    dir,
+    frontmatter: {},
+    markdown,
+    resources,
+    source,
+  };
 };

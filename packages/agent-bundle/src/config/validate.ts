@@ -15,6 +15,7 @@ import type {
 import type { DiscoveredProject } from './discover.ts';
 import type { LoadedConfig } from './load.ts';
 import type { SkillDocument } from './skill.ts';
+import { referencedResources } from './skill-references.ts';
 import { validateAgentSkillsFrontmatter } from '../schemas/agent-skills/contract.ts';
 
 const sourceDiagnostic = (
@@ -565,121 +566,6 @@ const validateMcp = (loaded: LoadedConfig): Diagnostic[] => {
       ? [...diagnostics, ...validateMcpApps(name, server as AgentBundleMcpServer, loaded, names, uris)]
       : diagnostics;
   });
-};
-
-const withoutMarkdownCode = (body: string): string => {
-  let fence: { character: string; length: number } | undefined;
-
-  return body
-    .split('\n')
-    .map((line) => {
-      const marker = /^ {0,3}(`{3,}|~{3,})/.exec(line)?.[1];
-      if (fence !== undefined) {
-        if (
-          marker !== undefined &&
-          marker[0] === fence.character &&
-          marker.length >= fence.length
-        ) {
-          fence = undefined;
-        }
-        return '';
-      }
-
-      if (marker !== undefined) {
-        fence = { character: marker[0] ?? '', length: marker.length };
-        return '';
-      }
-
-      return line.replace(/`+[^`\n]*`+/g, '');
-    })
-    .join('\n');
-};
-
-const resourcePath = (rawReference: string): string | undefined => {
-  if (
-    rawReference.startsWith('#') ||
-    rawReference.startsWith('/') ||
-    /^[a-z][a-z\d+.-]*:/i.test(rawReference)
-  ) {
-    return undefined;
-  }
-
-  const pathOnly = rawReference.split(/[?#]/, 1)[0];
-  if (pathOnly === undefined || pathOnly.length === 0) {
-    return undefined;
-  }
-
-  try {
-    return posix.normalize(decodeURIComponent(pathOnly));
-  } catch {
-    return posix.normalize(pathOnly);
-  }
-};
-
-const normalizeReferenceLabel = (label: string): string =>
-  label.trim().replace(/\s+/g, ' ').toLowerCase();
-
-const referencedResources = (body: string): string[] => {
-  const markdown = withoutMarkdownCode(body);
-  const references: string[] = [];
-  const linkPattern = /!?\[[^\]]*\]\(\s*(?:<([^>]+)>|([^\s)]+))/g;
-
-  for (const match of markdown.matchAll(linkPattern)) {
-    const rawReference = match[1] ?? match[2];
-    const path = rawReference === undefined ? undefined : resourcePath(rawReference);
-    if (path !== undefined) {
-      references.push(path);
-    }
-  }
-
-  const definitions = new Map<string, string | undefined>();
-  const definitionPattern = /^ {0,3}\[([^\]]+)\]:\s*(?:<([^>]+)>|(\S+))/gm;
-  for (const match of markdown.matchAll(definitionPattern)) {
-    const label = match[1];
-    const rawReference = match[2] ?? match[3];
-    if (label === undefined || rawReference === undefined) {
-      continue;
-    }
-
-    const normalizedLabel = normalizeReferenceLabel(label);
-    if (!definitions.has(normalizedLabel)) {
-      definitions.set(normalizedLabel, resourcePath(rawReference));
-    }
-  }
-
-  const markdownWithoutDefinitions = markdown.replace(
-    /^ {0,3}\[[^\]]+\]:.*$/gm,
-    '',
-  );
-  const referencePattern = /!?\[([^\]]+)\]\[([^\]]*)\]/g;
-  for (const match of markdownWithoutDefinitions.matchAll(referencePattern)) {
-    const text = match[1];
-    const explicitLabel = match[2];
-    const label = explicitLabel === '' ? text : explicitLabel;
-    if (label === undefined) {
-      continue;
-    }
-
-    const path = definitions.get(normalizeReferenceLabel(label));
-    if (path !== undefined) {
-      references.push(path);
-    }
-  }
-
-  const shortcutPattern = /!?\[([^\]]+)\](?!\[|\()/g;
-  for (const match of markdownWithoutDefinitions.matchAll(shortcutPattern)) {
-    const label = match[1];
-    if (label === undefined) {
-      continue;
-    }
-
-    const path = definitions.get(normalizeReferenceLabel(label));
-    if (path !== undefined) {
-      references.push(path);
-    }
-  }
-
-  return [...new Set(references)];
 };
 
 const validateSkill = (skill: SkillDocument): Diagnostic[] => {

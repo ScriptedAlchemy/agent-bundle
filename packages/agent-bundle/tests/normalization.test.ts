@@ -453,6 +453,20 @@ it('validates reference-style links while ignoring Markdown code examples', () =
   ]);
 });
 
+it('accepts decoded inline Skill resource paths that contain spaces', () => {
+  const root = '/workspace/project';
+  const document = skill(root, 'review', 'review', {
+    body: '[encoded](references/with%20space.md#section)\n\n[unescaped](references/with space.md)\n',
+    resources: ['SKILL.md', 'references/with space.md'],
+  });
+
+  expect(validateSource(
+    loadedProject({ plugin: { name: 'review-tools', version: '1.0.0' } }),
+    { skills: [document] },
+    registry,
+  )).toEqual([]);
+});
+
 it('uses the first definition when validating shortcut Markdown references', () => {
   const root = '/workspace/project';
   const missing = skill(root, 'missing', 'missing', {

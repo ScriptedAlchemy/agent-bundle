@@ -32,6 +32,18 @@ export interface ArtifactFile {
   readonly sha256: string;
 }
 
+export type ArtifactFilesystemEntryKind = 'directory' | 'file' | 'other' | 'symlink';
+
+export interface ArtifactFilesystemEntry {
+  readonly kind: ArtifactFilesystemEntryKind;
+  readonly path: string;
+}
+
+export interface ArtifactFilesystemSnapshot {
+  readonly entries: readonly ArtifactFilesystemEntry[];
+  readonly files: readonly ArtifactFile[];
+}
+
 export interface ArtifactHook {
   readonly event: string;
   readonly id: string;
@@ -119,36 +131,70 @@ export const emitPlanEntries = async (options: {
   }
 };
 
-export const listArtifactFiles = async (
-  root: string,
-  prefix = '',
-): Promise<readonly ArtifactFile[]> => {
-  const directory = await readdir(join(root, prefix), { withFileTypes: true });
-  const files: ArtifactFile[] = [];
+const filesystemEntryKind = (metadata: Awaited<ReturnType<typeof lstat>>): ArtifactFilesystemEntryKind => {
+  if (metadata.isDirectory()) return 'directory';
+  if (metadata.isFile()) return 'file';
+  return metadata.isSymbolicLink() ? 'symlink' : 'other';
+};
 
-  for (const entry of directory.sort((left, right) => left.name.localeCompare(right.name))) {
-    const path = join(prefix, entry.name);
-    if (entry.isDirectory()) {
-      files.push(...(await listArtifactFiles(root, path)));
+const inspectArtifactDirectory = async (
+  root: string,
+  prefix: string,
+): Promise<ArtifactFilesystemSnapshot> => {
+  const directoryPath = join(root, prefix);
+  const directoryMetadata = await lstat(directoryPath);
+  if (!directoryMetadata.isDirectory()) {
+    return {
+      entries: Object.freeze([Object.freeze({
+        kind: filesystemEntryKind(directoryMetadata),
+        path: prefix === '' ? '.' : normalizeRelativePath(prefix),
+      })]),
+      files: Object.freeze([]),
+    };
+  }
+
+  const directory = await readdir(directoryPath);
+  const files: ArtifactFile[] = [];
+  const entries: ArtifactFilesystemEntry[] = [];
+
+  for (const name of directory.sort((left, right) => left.localeCompare(right))) {
+    const path = join(prefix, name);
+    const normalizedPath = normalizeRelativePath(path);
+    const absolutePath = join(root, path);
+    const metadata = await lstat(absolutePath);
+    const kind = filesystemEntryKind(metadata);
+    entries.push({ kind, path: normalizedPath });
+
+    if (kind === 'directory') {
+      const nested = await inspectArtifactDirectory(root, path);
+      entries.push(...nested.entries);
+      files.push(...nested.files);
       continue;
     }
-    if (!entry.isFile()) continue;
+    if (kind !== 'file') continue;
 
-    const absolutePath = join(root, path);
-    const [contents, metadata] = await Promise.all([
-      readFile(absolutePath),
-      stat(absolutePath),
-    ]);
+    const contents = await readFile(absolutePath);
     files.push({
       bytes: contents.byteLength,
       mode: metadata.mode & 0o777,
-      path: normalizeRelativePath(path),
+      path: normalizedPath,
       sha256: createHash('sha256').update(contents).digest('hex'),
     });
   }
 
-  return files;
+  return {
+    entries: Object.freeze(entries),
+    files: Object.freeze(files),
+  };
 };
+
+export const inspectArtifactFilesystem = async (root: string): Promise<ArtifactFilesystemSnapshot> =>
+  inspectArtifactDirectory(root, '');
+
+export const listArtifactFiles = async (
+  root: string,
+  prefix = '',
+): Promise<readonly ArtifactFile[]> => (await inspectArtifactDirectory(root, prefix)).files;
 
 export const createArtifactManifestFiles = (options: {
   readonly files: readonly ArtifactFile[];

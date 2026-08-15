@@ -4,17 +4,21 @@ import { spawn } from 'node:child_process';
 
 import { createDefaultRegistry, type TargetRegistry } from '../adapters/registry.ts';
 import type { TargetArtifactDocumentIssue, TargetArtifactDocumentValidator } from '../adapters/types.ts';
+import { parseSkillMarkdown, referencedResources } from '../config/skill-references.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
-import { agentSkillsSchemaRevision } from '../schemas/agent-skills/contract.ts';
+import { agentSkillsSchemaRevision, validateAgentSkillsFrontmatter } from '../schemas/agent-skills/contract.ts';
 import {
+  artifactHookIndexName,
   artifactManifestName,
-  listArtifactFiles,
+  inspectArtifactFilesystem,
   type ArtifactFile,
+  type ArtifactFilesystemSnapshot,
   type ManifestFile,
 } from './emit.ts';
 import { parseArtifactManifest, type ArtifactManifestV2 } from './manifest.ts';
 
 const epochStagingMarkerName = '.agent-bundle-epoch-stage.json';
+const artifactRootMetadata = new Set([artifactHookIndexName, artifactManifestName]);
 
 export interface ValidateArtifactOptions {
   /** Enables the one store-owned epoch staging marker after its exact schema validates. */
@@ -111,9 +115,18 @@ const isEpochStagingMarker = (value: string): boolean => {
   }
 };
 
-const artifactFiles = async (context: ValidateArtifactOptions): Promise<readonly ArtifactFile[]> => {
+interface ArtifactInspection {
+  readonly filesystem: ArtifactFilesystemSnapshot;
+  readonly files: readonly ArtifactFile[];
+}
+
+const inspectArtifact = async (context: ValidateArtifactOptions): Promise<ArtifactInspection> => {
+  const filesystem = await inspectArtifactFilesystem(context.artifactRoot);
   let allowedEpochStagingMarker = false;
-  if (context.allowEpochStagingMarker === true) {
+  if (
+    context.allowEpochStagingMarker === true &&
+    filesystem.files.some((file) => file.path === epochStagingMarkerName)
+  ) {
     try {
       allowedEpochStagingMarker = isEpochStagingMarker(
         await readFile(resolve(context.artifactRoot, epochStagingMarkerName), 'utf8'),
@@ -122,11 +135,27 @@ const artifactFiles = async (context: ValidateArtifactOptions): Promise<readonly
       allowedEpochStagingMarker = false;
     }
   }
-  return (await listArtifactFiles(context.artifactRoot)).filter(
-    (file) => file.path !== artifactManifestName &&
-      !(allowedEpochStagingMarker && file.path === epochStagingMarkerName),
-  );
+  return {
+    filesystem,
+    files: filesystem.files.filter(
+      (file) => file.path !== artifactManifestName &&
+        !(allowedEpochStagingMarker && file.path === epochStagingMarkerName),
+    ),
+  };
 };
+
+const filesystemRecovery = 'Remove unsupported filesystem entries and rebuild the artifact.';
+
+const filesystemDiagnostics = (filesystem: ArtifactFilesystemSnapshot): readonly Diagnostic[] =>
+  filesystem.entries
+    .filter((entry) => entry.kind !== 'directory' && entry.kind !== 'file')
+    .map((entry) => diagnostic(
+      'AB6013',
+      `Artifact contains unsupported ${entry.kind} filesystem entry ${JSON.stringify(entry.path)}.`,
+      entry.path,
+      undefined,
+      filesystemRecovery,
+    ));
 
 const sameSchemas = (
   manifest: ArtifactManifestV2['targets'][number]['schemas'],
@@ -281,18 +310,275 @@ const validateTargetContracts = async (options: {
   return Object.freeze(diagnostics);
 };
 
-export const validateArtifactFiles = async (
-  context: ValidateArtifactOptions,
-): Promise<readonly Diagnostic[]> => {
-  const files = await artifactFiles(context);
+const ownershipRecovery = 'Rebuild the artifact with files only in declared target namespaces.';
+
+const targetNamespaces = (manifest: ArtifactManifestV2): ReadonlySet<string> =>
+  new Set(manifest.targets.map((target) => target.name));
+
+const pathTarget = (path: string, targets: ReadonlySet<string>): string | undefined => {
+  const [target] = path.split('/');
+  return target !== undefined && targets.has(target) ? target : undefined;
+};
+
+const compiledTargetDirectories = new Set(['hooks', 'mcp', 'mcp-apps', 'scripts']);
+
+const isCompiledTargetPath = (relativePath: string): boolean => {
+  const [directory, file, ...nested] = relativePath.split('/');
+  return directory !== undefined && file !== undefined && nested.length === 0 && compiledTargetDirectories.has(directory);
+};
+
+const isSkillArtifactPath = (relativePath: string): boolean => {
+  const [layout, name, resource] = relativePath.split('/');
+  return layout === 'skills' && name !== undefined && resource !== undefined;
+};
+
+const isTargetArtifactPath = (
+  path: string,
+  target: string,
+  registry: TargetRegistry,
+): boolean => {
+  const relativePath = path.slice(target.length + 1);
+  return isCompiledTargetPath(relativePath) ||
+    isSkillArtifactPath(relativePath) ||
+    (registry.has(target) && registry.artifactValidation(target).documents.some(
+      (document) => document.path === relativePath,
+    ));
+};
+
+const validateArtifactOwnership = (options: {
+  readonly filesystem: ArtifactFilesystemSnapshot;
+  readonly files: readonly ArtifactFile[];
+  readonly manifest: ArtifactManifestV2;
+  readonly registry: TargetRegistry;
+}): readonly Diagnostic[] => {
+  const diagnostics: Diagnostic[] = [];
+  const targets = targetNamespaces(options.manifest);
+
+  for (const file of options.files) {
+    if (artifactRootMetadata.has(file.path)) continue;
+    const target = pathTarget(file.path, targets);
+    if (target !== undefined && isTargetArtifactPath(file.path, target, options.registry)) continue;
+    diagnostics.push(diagnostic(
+      'AB6014',
+      `Artifact file ${JSON.stringify(file.path)} is outside declared target emitted layouts.`,
+      file.path,
+      target,
+      ownershipRecovery,
+    ));
+  }
+
+  for (const entry of options.filesystem.entries) {
+    if (entry.kind !== 'directory' || entry.path.includes('/')) continue;
+    if (!targets.has(entry.path)) {
+      diagnostics.push(diagnostic(
+        'AB6014',
+        `Artifact directory ${JSON.stringify(entry.path)} does not name a declared target namespace.`,
+        entry.path,
+        undefined,
+        ownershipRecovery,
+      ));
+      continue;
+    }
+    if (!options.files.some((file) => file.path.startsWith(`${entry.path}/`))) {
+      diagnostics.push(diagnostic(
+        'AB6014',
+        `Declared target namespace ${JSON.stringify(entry.path)} is empty.`,
+        entry.path,
+        entry.path,
+        ownershipRecovery,
+      ));
+    }
+  }
+
+  for (const target of options.manifest.targets) {
+    if (!options.files.some((file) => file.path.startsWith(`${target.name}/`))) {
+      diagnostics.push(diagnostic(
+        'AB6014',
+        `Declared target ${JSON.stringify(target.name)} has no emitted namespace.`,
+        target.name,
+        target.name,
+        ownershipRecovery,
+      ));
+    }
+  }
+
+  return Object.freeze(diagnostics);
+};
+
+interface EmittedSkill {
+  readonly name: string;
+  readonly path: string;
+  readonly root: string;
+  readonly target: string;
+}
+
+const emittedSkillFor = (file: ArtifactFile, targets: ReadonlySet<string>): EmittedSkill | undefined => {
+  const segments = file.path.split('/');
+  const [target, layout, name, document] = segments;
+  if (
+    target === undefined ||
+    layout !== 'skills' ||
+    name === undefined ||
+    document !== 'SKILL.md' ||
+    segments.length !== 4 ||
+    !targets.has(target)
+  ) {
+    return undefined;
+  }
+  return {
+    name,
+    path: file.path,
+    root: `${target}/skills/${name}`,
+    target,
+  };
+};
+
+const isSkillRootEscape = (reference: string): boolean =>
+  reference === '..' || reference.startsWith('../') || reference.startsWith('/');
+
+const skillRecovery = 'Restore canonical Skill Markdown and copied resources, then rebuild the artifact.';
+
+const validateEmittedSkills = async (options: {
+  readonly artifactRoot: string;
+  readonly files: readonly ArtifactFile[];
+  readonly manifest: ArtifactManifestV2;
+}): Promise<readonly Diagnostic[]> => {
+  const diagnostics: Diagnostic[] = [];
+  const targets = targetNamespaces(options.manifest);
+  const skills = options.files
+    .map((file) => emittedSkillFor(file, targets))
+    .filter((skill): skill is EmittedSkill => skill !== undefined);
+  const skillsByRoot = new Map(skills.map((skill) => [skill.root, skill]));
+
+  for (const file of options.files) {
+    if (!file.path.endsWith('/SKILL.md') || emittedSkillFor(file, targets) !== undefined) continue;
+    const target = pathTarget(file.path, targets);
+    diagnostics.push(diagnostic(
+      'AB6015',
+      `Emitted Skill document ${JSON.stringify(file.path)} does not use the canonical skills/<name>/SKILL.md layout.`,
+      file.path,
+      target,
+      skillRecovery,
+    ));
+  }
+
+  const resourceFilesBySkill = new Map<string, readonly ArtifactFile[]>();
+  for (const file of options.files) {
+    const [target, layout, name] = file.path.split('/');
+    if (target === undefined || layout !== 'skills' || name === undefined || !targets.has(target)) continue;
+    const root = `${target}/skills/${name}`;
+    const existing = resourceFilesBySkill.get(root) ?? [];
+    resourceFilesBySkill.set(root, [...existing, file]);
+  }
+
+  for (const [root, files] of resourceFilesBySkill) {
+    if (skillsByRoot.has(root)) continue;
+    const [target] = root.split('/');
+    diagnostics.push(diagnostic(
+      'AB6015',
+      `Emitted Skill resource directory ${JSON.stringify(root)} is missing its SKILL.md document.`,
+      files[0]?.path,
+      target,
+      skillRecovery,
+    ));
+  }
+
+  for (const skill of skills) {
+    let markdown: string;
+    try {
+      markdown = await readFile(resolve(options.artifactRoot, skill.path), 'utf8');
+    } catch {
+      diagnostics.push(diagnostic(
+        'AB6015',
+        'Emitted Skill Markdown cannot be read.',
+        skill.path,
+        skill.target,
+        skillRecovery,
+      ));
+      continue;
+    }
+
+    const parsed = parseSkillMarkdown(markdown);
+    if (parsed.status === 'missing-frontmatter') {
+      diagnostics.push(diagnostic(
+        'AB6015',
+        'Emitted Skill Markdown must start with YAML frontmatter.',
+        skill.path,
+        skill.target,
+        skillRecovery,
+      ));
+      continue;
+    }
+    if (parsed.status === 'malformed-frontmatter') {
+      diagnostics.push(diagnostic(
+        'AB6015',
+        `Emitted Skill YAML frontmatter is invalid: ${parsed.message}`,
+        skill.path,
+        skill.target,
+        skillRecovery,
+      ));
+      continue;
+    }
+
+    for (const issue of validateAgentSkillsFrontmatter(parsed.frontmatter)) {
+      const location = issue.field ?? (issue.instancePath === '' ? 'root' : issue.instancePath);
+      diagnostics.push(diagnostic(
+        'AB6015',
+        `Emitted Skill frontmatter ${location} ${issue.message}.`,
+        skill.path,
+        skill.target,
+        skillRecovery,
+      ));
+    }
+    if (typeof parsed.frontmatter.name === 'string' && parsed.frontmatter.name !== skill.name) {
+      diagnostics.push(diagnostic(
+        'AB6015',
+        `Emitted Skill name ${JSON.stringify(parsed.frontmatter.name)} must match directory ${JSON.stringify(skill.name)}.`,
+        skill.path,
+        skill.target,
+        skillRecovery,
+      ));
+    }
+
+    const resources = new Set(
+      (resourceFilesBySkill.get(skill.root) ?? []).map((file) => file.path.slice(skill.root.length + 1)),
+    );
+    for (const reference of referencedResources(parsed.body)) {
+      if (isSkillRootEscape(reference)) {
+        diagnostics.push(diagnostic(
+          'AB6016',
+          `Emitted Skill reference ${JSON.stringify(reference)} escapes its Skill root.`,
+          skill.path,
+          skill.target,
+          skillRecovery,
+        ));
+      } else if (!resources.has(reference)) {
+        diagnostics.push(diagnostic(
+          'AB6016',
+          `Emitted Skill references missing regular resource ${JSON.stringify(reference)}.`,
+          skill.path,
+          skill.target,
+          skillRecovery,
+        ));
+      }
+    }
+  }
+
+  return Object.freeze(diagnostics);
+};
+
+const validateGeneratedFiles = async (options: {
+  readonly artifactRoot: string;
+  readonly files: readonly ArtifactFile[];
+}): Promise<readonly Diagnostic[]> => {
   const diagnostics: Diagnostic[] = [];
 
-  for (const file of files.filter((entry) => entry.path.endsWith('.json'))) {
+  for (const file of options.files.filter((entry) => entry.path.endsWith('.json'))) {
     try {
-      const document = JSON.parse(await readFile(resolve(context.artifactRoot, file.path), 'utf8')) as unknown;
+      const document = JSON.parse(await readFile(resolve(options.artifactRoot, file.path), 'utf8')) as unknown;
       for (const mcpPath of localMcpPaths(document)) {
         try {
-          await readFile(resolve(context.artifactRoot, dirname(file.path), mcpPath));
+          await readFile(resolve(options.artifactRoot, dirname(file.path), mcpPath));
         } catch {
           diagnostics.push(diagnostic(
             'AB6007',
@@ -306,8 +592,8 @@ export const validateArtifactFiles = async (
     }
   }
 
-  for (const file of files.filter((entry) => /\.(?:[cm]?js)$/u.test(entry.path))) {
-    const syntaxError = await checkJavaScriptSyntax(resolve(context.artifactRoot, file.path));
+  for (const file of options.files.filter((entry) => /\.(?:[cm]?js)$/u.test(entry.path))) {
+    const syntaxError = await checkJavaScriptSyntax(resolve(options.artifactRoot, file.path));
     if (syntaxError !== undefined) {
       diagnostics.push(diagnostic('AB6005', `Generated JavaScript has invalid syntax: ${syntaxError}`, file.path));
     }
@@ -316,7 +602,28 @@ export const validateArtifactFiles = async (
   return Object.freeze(diagnostics);
 };
 
+export const validateArtifactFiles = async (
+  context: ValidateArtifactOptions,
+): Promise<readonly Diagnostic[]> => {
+  const inspection = await inspectArtifact(context);
+  return Object.freeze([
+    ...filesystemDiagnostics(inspection.filesystem),
+    ...await validateGeneratedFiles({ artifactRoot: context.artifactRoot, files: inspection.files }),
+  ]);
+};
+
 export const validateArtifact = async (context: ValidateArtifactOptions): Promise<readonly Diagnostic[]> => {
+  let inspection: ArtifactInspection;
+  try {
+    inspection = await inspectArtifact(context);
+  } catch {
+    return [diagnostic('AB6000', 'Artifact manifest is missing or cannot be read.', artifactManifestName)];
+  }
+  const structuralDiagnostics = filesystemDiagnostics(inspection.filesystem);
+  if (inspection.filesystem.entries.some((entry) => entry.path === '.')) {
+    return structuralDiagnostics;
+  }
+
   const manifestPath = resolve(context.artifactRoot, artifactManifestName);
   let manifest: ArtifactManifestV2;
   try {
@@ -330,8 +637,7 @@ export const validateArtifact = async (context: ValidateArtifactOptions): Promis
     return [diagnostic('AB6001', 'Artifact manifest is not a strict canonical v2 manifest.', artifactManifestName)];
   }
 
-  const actualFiles = await artifactFiles(context);
-  const diagnostics: Diagnostic[] = [];
+  const diagnostics: Diagnostic[] = [...structuralDiagnostics];
   if (
     manifest.agentSkills.schemaSha256 !== agentSkillsSchemaRevision.schemaSha256 ||
     manifest.agentSkills.sourceRevision !== agentSkillsSchemaRevision.sourceRevision ||
@@ -345,15 +651,29 @@ export const validateArtifact = async (context: ValidateArtifactOptions): Promis
       'Rebuild the artifact with the pinned Agent Skills contract.',
     ));
   }
-  if (!matchesManifestFileTable(actualFiles, manifest.files)) {
+  if (!matchesManifestFileTable(inspection.files, manifest.files)) {
     diagnostics.push(diagnostic('AB6004', 'Artifact files do not match the manifest.', artifactManifestName));
   }
-  diagnostics.push(...await validateTargetContracts({
-    artifactRoot: context.artifactRoot,
-    files: actualFiles,
+  diagnostics.push(...validateArtifactOwnership({
+    filesystem: inspection.filesystem,
+    files: inspection.files,
     manifest,
     registry: context.registry ?? createDefaultRegistry(),
   }));
-  diagnostics.push(...await validateArtifactFiles(context));
+  diagnostics.push(...await validateTargetContracts({
+    artifactRoot: context.artifactRoot,
+    files: inspection.files,
+    manifest,
+    registry: context.registry ?? createDefaultRegistry(),
+  }));
+  diagnostics.push(...await validateEmittedSkills({
+    artifactRoot: context.artifactRoot,
+    files: inspection.files,
+    manifest,
+  }));
+  diagnostics.push(...await validateGeneratedFiles({
+    artifactRoot: context.artifactRoot,
+    files: inspection.files,
+  }));
   return Object.freeze(diagnostics);
 };
