@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { appendFile, mkdtemp, rename, rm, writeFile } from 'node:fs/promises';
+import { appendFile, mkdtemp, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -8,7 +8,9 @@ import { createRsbuild } from '@rsbuild/core';
 import { expect, test } from '@rstest/core';
 import { createElement, type ReactNode } from 'react';
 
+import { ProjectService } from '../../../packages/agent-bundle/src/dev/index.ts';
 import { createRscRuntimeRsbuildConfig } from '../rsbuild.config.js';
+import { createDevRuntimeProvider } from '../src/dev/provider.js';
 import { serializeInspection } from '../src/dev/serialize-inspection.js';
 
 const readChildOutput = (stream: NodeJS.ReadableStream): Promise<Buffer> =>
@@ -127,6 +129,7 @@ test('builds a generation-contained inspection entry for Claude, Codex, and MCP 
       session_id: 'claude-session',
       tool_input: { file_path: 'demo.txt' },
       tool_name: 'Write',
+      tool_use_id: 'claude-fixture-1',
     },
     stateStoreId: 'fixture-state',
     type: 'hook/after-file-edit',
@@ -193,6 +196,7 @@ test('builds a generation-contained inspection entry for Claude, Codex, and MCP 
         session_id: 'codex-session',
         tool_input: { command: '*** Begin Patch\n*** Add File: codex.txt\n+content\n*** End Patch' },
         tool_name: 'apply_patch',
+        tool_use_id: 'codex-fixture-1',
       },
       stateFile: join(compilerRoot, 'codex.jsonl'),
       stateStoreId: 'fixture-state',
@@ -493,3 +497,279 @@ test('forwards dev invocation termination through a SIGKILL cleanup of its RSC c
     await rm(compilerRoot, { force: true, recursive: true });
   }
 }, 6_000);
+
+test('runs an exact generation-contained hook invocation and retains its immutable Flight asset', async () => {
+  const storageRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-session-'));
+  const controller = new AbortController();
+  const projectRoot = process.cwd();
+  const prepared = await new ProjectService({ includeDevRuntime: true, mode: 'development', root: projectRoot }).prepare('dev');
+  const session = await createDevRuntimeProvider().start({
+    artifactStatus: () => Object.freeze({ state: 'missing' as const }),
+    emit: () => undefined,
+    environment: Object.freeze({}),
+    projectRoot,
+    preparedRuntime: prepared.devRuntime!,
+    providerSessionId: 'session-invocation-test',
+    signal: controller.signal,
+    storageRoot,
+  });
+
+  try {
+    await waitFor(() => session.status().activeVector !== undefined, 'Timed out waiting for an active runtime generation', 15_000);
+    const generationId = session.status().activeVector!.runtimeGenerationId;
+    await expect(session.invoke({
+      expectedGenerationId: 'generation-that-does-not-exist',
+      input: {},
+      surfaceId: 'hook.claude',
+      target: 'claude',
+    })).rejects.toThrow('generation-that-does-not-exist');
+    expect(session.runs(50)).toEqual([]);
+
+    const run = await session.invoke({
+      expectedGenerationId: generationId,
+      input: {
+        cwd: projectRoot,
+        hook_event_name: 'PostToolUse',
+        session_id: 'session-invocation-test',
+        tool_input: { file_path: 'timeline.ts' },
+        tool_name: 'Write',
+        tool_use_id: 'native-event-1',
+      },
+      surfaceId: 'hook.claude',
+      target: 'claude',
+    });
+
+    expect(run).toMatchObject({
+      result: {
+        flight: { downloadPath: `/api/runtime/runs/${encodeURIComponent(run.id)}/flight` },
+        state: { identity: { stateStoreId: 'playground', stateVersion: 1 } },
+      },
+      status: 'succeeded',
+      vector: { runtimeGenerationId: generationId, stateVersion: 1 },
+    });
+    const flight = await session.readRunFlight(run.id);
+    expect(flight?.body.byteLength).toBeGreaterThan(0);
+    expect(session.run(run.id)).toEqual(run);
+    expect(session.runs(1)).toEqual([run]);
+  } finally {
+    await session.close();
+    await rm(storageRoot, { force: true, recursive: true });
+  }
+}, 30_000);
+
+test('closes the provider-owned invocation process group without orphaning its RSC grandchild', async () => {
+  const storageRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-session-close-'));
+  const controller = new AbortController();
+  const projectRoot = process.cwd();
+  const prepared = await new ProjectService({ includeDevRuntime: true, mode: 'development', root: projectRoot }).prepare('dev');
+  const session = await createDevRuntimeProvider().start({
+    artifactStatus: () => Object.freeze({ state: 'missing' as const }),
+    emit: () => undefined,
+    environment: Object.freeze({}),
+    projectRoot,
+    preparedRuntime: prepared.devRuntime!,
+    providerSessionId: 'session-close-test',
+    signal: controller.signal,
+    storageRoot,
+  });
+  let grandchildPid: number | undefined;
+
+  try {
+    await waitFor(() => session.status().activeVector !== undefined, 'Timed out waiting for an active runtime generation', 15_000);
+    const generationId = session.status().activeVector!.runtimeGenerationId;
+    const marker = join(storageRoot, 'rsc-invocation-grandchild.pid');
+    const worker = join(storageRoot, 'generation-store', 'generations', generationId, 'rsc', 'rsc', 'index.js');
+    await writeFile(worker, `
+const { spawn } = require('node:child_process');
+const { writeFileSync } = require('node:fs');
+const child = spawn(process.execPath, ['-e', 'process.on("SIGTERM", () => undefined); setInterval(() => undefined, 1000)']);
+writeFileSync(${JSON.stringify(marker)}, String(child.pid));
+process.on('SIGTERM', () => undefined);
+setInterval(() => undefined, 1000);
+`);
+
+    const invocation = session.invoke({
+      expectedGenerationId: generationId,
+      input: {
+        cwd: projectRoot,
+        hook_event_name: 'PostToolUse',
+        session_id: 'session-close-test',
+        tool_input: { file_path: 'timeline.ts' },
+        tool_name: 'Write',
+        tool_use_id: 'native-event-close',
+      },
+      surfaceId: 'hook.claude',
+      target: 'claude',
+    });
+    grandchildPid = Number(await readWhenPresent(marker));
+    expect(Number.isSafeInteger(grandchildPid)).toBe(true);
+    await session.close();
+    await expect(invocation).resolves.toMatchObject({ status: 'failed' });
+    await waitFor(() => !isProcessAlive(grandchildPid as number), 'RSC invocation grandchild remained alive after provider close');
+    expect(session.run('any-run')).toBeUndefined();
+    expect(session.runs(1)).toEqual([]);
+    await expect(session.readRunFlight('any-run')).resolves.toBeUndefined();
+    expect(() => readFileSync(join(storageRoot, 'runs'))).toThrow();
+  } finally {
+    if (grandchildPid !== undefined && isProcessAlive(grandchildPid)) process.kill(grandchildPid, 'SIGKILL');
+    await session.close().catch(() => undefined);
+    await rm(storageRoot, { force: true, recursive: true });
+  }
+}, 30_000);
+
+test('keeps the newest fifty immutable run artifacts and evicts the oldest completed Flight', async () => {
+  const storageRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-session-history-'));
+  const projectRoot = process.cwd();
+  const prepared = await new ProjectService({ includeDevRuntime: true, mode: 'development', root: projectRoot }).prepare('dev');
+  const session = await createDevRuntimeProvider().start({
+    artifactStatus: () => Object.freeze({ state: 'missing' as const }),
+    emit: () => undefined,
+    environment: Object.freeze({}),
+    projectRoot,
+    preparedRuntime: prepared.devRuntime!,
+    providerSessionId: 'session-history-test',
+    signal: new AbortController().signal,
+    storageRoot,
+  });
+
+  try {
+    await waitFor(() => session.status().activeVector !== undefined, 'Timed out waiting for an active runtime generation', 15_000);
+    const generationId = session.status().activeVector!.runtimeGenerationId;
+    const target = session.surfaces().find((surface) => surface.id === 'mcp.runtime_status')!.targets[0]!;
+    const first = await session.invoke({
+      expectedGenerationId: generationId,
+      input: {},
+      surfaceId: 'mcp.runtime_status',
+      target,
+    });
+    if (first.status !== 'succeeded') throw new Error(JSON.stringify(first.diagnostics));
+    const firstFlight = await session.readRunFlight(first.id);
+    expect(firstFlight?.body.byteLength).toBeGreaterThan(0);
+    await session.resetState({ expectedGenerationId: generationId, stateStoreId: 'playground' });
+    expect(session.run(first.id)).toEqual(first);
+
+    for (let index = 0; index < 50; index += 1) {
+      const run = await session.invoke({
+        expectedGenerationId: generationId,
+        input: {},
+        surfaceId: 'mcp.runtime_status',
+        target,
+      });
+      expect(run.status).toBe('succeeded');
+    }
+
+    expect(session.run(first.id)).toBeUndefined();
+    await expect(session.readRunFlight(first.id)).resolves.toBeUndefined();
+    await expect(session.readRunFlight('../flight.bin')).resolves.toBeUndefined();
+    expect(session.runs(50)).toHaveLength(50);
+    expect(session.runs(50)[0]!.id).not.toBe(first.id);
+    expect(await readdir(join(storageRoot, 'runs'))).toHaveLength(50);
+  } finally {
+    await session.close().catch(() => undefined);
+    await rm(storageRoot, { force: true, recursive: true });
+  }
+}, 45_000);
+
+test('rejects a fifth blocked generation worker and settles every leased worker on close', async () => {
+  const storageRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-session-bound-'));
+  const projectRoot = process.cwd();
+  const prepared = await new ProjectService({ includeDevRuntime: true, mode: 'development', root: projectRoot }).prepare('dev');
+  const session = await createDevRuntimeProvider().start({
+    artifactStatus: () => Object.freeze({ state: 'missing' as const }),
+    emit: () => undefined,
+    environment: Object.freeze({}),
+    projectRoot,
+    preparedRuntime: prepared.devRuntime!,
+    providerSessionId: 'session-bound-test',
+    signal: new AbortController().signal,
+    storageRoot,
+  });
+
+  try {
+    await waitFor(() => session.status().activeVector !== undefined, 'Timed out waiting for an active runtime generation', 15_000);
+    const generationId = session.status().activeVector!.runtimeGenerationId;
+    const marker = join(storageRoot, 'blocked-workers.txt');
+    const worker = join(storageRoot, 'generation-store', 'generations', generationId, 'rsc', 'rsc', 'index.js');
+    await writeFile(worker, `
+const { appendFileSync } = require('node:fs');
+appendFileSync(${JSON.stringify(marker)}, 'ready\\n');
+process.on('SIGTERM', () => undefined);
+setInterval(() => undefined, 1000);
+`);
+    const request = (id: string) => ({
+      expectedGenerationId: generationId,
+      input: {
+        cwd: projectRoot,
+        hook_event_name: 'PostToolUse',
+        session_id: 'session-bound-test',
+        tool_input: { file_path: 'timeline.ts' },
+        tool_name: 'Write',
+        tool_use_id: id,
+      },
+      surfaceId: 'hook.claude',
+      target: 'claude',
+    });
+    const workers = ['one', 'two', 'three', 'four'].map((id) => session.invoke(request(id)));
+    await waitFor(() => {
+      try {
+        return readFileSync(marker, 'utf8').trim().split('\n').length === 4;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+        throw error;
+      }
+    }, 'Timed out waiting for four blocked invocation workers');
+    await expect(session.invoke(request('five'))).rejects.toThrow('limit of 4 concurrent workers');
+    await session.close();
+    await expect(Promise.all(workers)).resolves.toEqual(expect.arrayContaining([
+      expect.objectContaining({ status: 'failed' }),
+    ]));
+    expect(session.runs(1)).toEqual([]);
+    expect(() => readFileSync(join(storageRoot, 'runs'))).toThrow();
+  } finally {
+    await session.close().catch(() => undefined);
+    await rm(storageRoot, { force: true, recursive: true });
+  }
+}, 30_000);
+
+test('contains invocation stdout, stderr, and timeout failures without retaining partial run artifacts', async () => {
+  const storageRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-session-output-'));
+  const projectRoot = process.cwd();
+  const prepared = await new ProjectService({ includeDevRuntime: true, mode: 'development', root: projectRoot }).prepare('dev');
+  const session = await createDevRuntimeProvider().start({
+    artifactStatus: () => Object.freeze({ state: 'missing' as const }),
+    emit: () => undefined,
+    environment: Object.freeze({}),
+    projectRoot,
+    preparedRuntime: prepared.devRuntime!,
+    providerSessionId: 'session-output-test',
+    signal: new AbortController().signal,
+    storageRoot,
+  });
+
+  try {
+    await waitFor(() => session.status().activeVector !== undefined, 'Timed out waiting for an active runtime generation', 15_000);
+    const generationId = session.status().activeVector!.runtimeGenerationId;
+    const target = session.surfaces().find((surface) => surface.id === 'mcp.runtime_status')!.targets[0]!;
+    const entry = join(storageRoot, 'generation-store', 'generations', generationId, 'rsc', 'dev', 'invoke.js');
+    const request = { expectedGenerationId: generationId, input: {}, surfaceId: 'mcp.runtime_status', target } as const;
+
+    await writeFile(entry, `process.stdout.write('x'.repeat(${(4 * 1024 * 1024) + 1}));`);
+    const stdout = await session.invoke(request);
+    expect(stdout).toMatchObject({ diagnostics: [expect.objectContaining({ message: expect.stringContaining('stdout exceeded') })], status: 'failed' });
+
+    await writeFile(entry, "process.stderr.write('credential=fixture-credential '.repeat(30000));");
+    const stderr = await session.invoke(request);
+    expect(stderr).toMatchObject({ diagnostics: [expect.objectContaining({ message: expect.stringContaining('stderr exceeded') })], status: 'failed' });
+    if (stderr.status === 'failed') expect(stderr.diagnostics[0]!.message).not.toContain('fixture-credential');
+
+    await writeFile(entry, "process.on('SIGTERM', () => undefined); setInterval(() => undefined, 1000);");
+    const startedAt = Date.now();
+    const timeout = await session.invoke(request);
+    expect(timeout).toMatchObject({ diagnostics: [expect.objectContaining({ message: expect.stringContaining('exceeded 10000 ms') })], status: 'failed' });
+    expect(Date.now() - startedAt).toBeGreaterThanOrEqual(9_000);
+    expect(await readdir(join(storageRoot, 'runs'))).toEqual([]);
+  } finally {
+    await session.close().catch(() => undefined);
+    await rm(storageRoot, { force: true, recursive: true });
+  }
+}, 45_000);
