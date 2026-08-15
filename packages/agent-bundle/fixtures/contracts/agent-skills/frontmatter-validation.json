@@ -1,0 +1,278 @@
+{
+  "revision": "69ef37e9424c0a7ea9dd2293b559e43ec8176379",
+  "cases": [
+    {
+      "name": "accepts the minimal required frontmatter",
+      "frontmatter": {
+        "name": "review-tools",
+        "description": "Review a change set for correctness."
+      },
+      "issues": []
+    },
+    {
+      "name": "accepts every optional frontmatter field without imposing extra syntax",
+      "frontmatter": {
+        "name": "review-tools",
+        "description": "Review a change set for correctness.",
+        "license": "LicenseRef-Internal",
+        "compatibility": "Use when a repository has source control.",
+        "metadata": {
+          "owner": "platform",
+          "tier": "critical"
+        },
+        "allowed-tools": "Bash(git:*) Read"
+      },
+      "issues": []
+    },
+    {
+      "name": "reports missing required fields in deterministic order",
+      "frontmatter": {},
+      "issues": [
+        {
+          "field": "description",
+          "instancePath": "",
+          "keyword": "required",
+          "message": "must have required property 'description'"
+        },
+        {
+          "field": "name",
+          "instancePath": "",
+          "keyword": "required",
+          "message": "must have required property 'name'"
+        }
+      ]
+    },
+    {
+      "name": "rejects uppercase names",
+      "frontmatter": {
+        "name": "Review-tools",
+        "description": "Review a change set."
+      },
+      "issues": [
+        {
+          "field": "name",
+          "instancePath": "/name",
+          "keyword": "pattern",
+          "message": "must match pattern \"^[a-z0-9]+(?:-[a-z0-9]+)*$\""
+        }
+      ]
+    },
+    {
+      "name": "rejects leading hyphens",
+      "frontmatter": {
+        "name": "-review-tools",
+        "description": "Review a change set."
+      },
+      "issues": [
+        {
+          "field": "name",
+          "instancePath": "/name",
+          "keyword": "pattern",
+          "message": "must match pattern \"^[a-z0-9]+(?:-[a-z0-9]+)*$\""
+        }
+      ]
+    },
+    {
+      "name": "rejects trailing hyphens",
+      "frontmatter": {
+        "name": "review-tools-",
+        "description": "Review a change set."
+      },
+      "issues": [
+        {
+          "field": "name",
+          "instancePath": "/name",
+          "keyword": "pattern",
+          "message": "must match pattern \"^[a-z0-9]+(?:-[a-z0-9]+)*$\""
+        }
+      ]
+    },
+    {
+      "name": "rejects consecutive hyphens",
+      "frontmatter": {
+        "name": "review--tools",
+        "description": "Review a change set."
+      },
+      "issues": [
+        {
+          "field": "name",
+          "instancePath": "/name",
+          "keyword": "pattern",
+          "message": "must match pattern \"^[a-z0-9]+(?:-[a-z0-9]+)*$\""
+        }
+      ]
+    },
+    {
+      "name": "rejects names longer than 64 characters",
+      "frontmatter": {
+        "name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "description": "Review a change set."
+      },
+      "issues": [
+        {
+          "field": "name",
+          "instancePath": "/name",
+          "keyword": "maxLength",
+          "message": "must NOT have more than 64 characters"
+        }
+      ]
+    },
+    {
+      "name": "rejects unicode names outside the normative ASCII rule",
+      "frontmatter": {
+        "name": "réview-tools",
+        "description": "Review a change set."
+      },
+      "issues": [
+        {
+          "field": "name",
+          "instancePath": "/name",
+          "keyword": "pattern",
+          "message": "must match pattern \"^[a-z0-9]+(?:-[a-z0-9]+)*$\""
+        }
+      ]
+    },
+    {
+      "name": "rejects whitespace-only descriptions",
+      "frontmatter": {
+        "name": "review-tools",
+        "description": " \n\t "
+      },
+      "issues": [
+        {
+          "field": "description",
+          "instancePath": "/description",
+          "keyword": "pattern",
+          "message": "must match pattern \"\\S\""
+        }
+      ]
+    },
+    {
+      "name": "rejects descriptions longer than 1024 characters",
+      "frontmatter": {
+        "name": "review-tools",
+        "description": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "issues": [
+        {
+          "field": "description",
+          "instancePath": "/description",
+          "keyword": "maxLength",
+          "message": "must NOT have more than 1024 characters"
+        }
+      ]
+    },
+    {
+      "name": "rejects empty compatibility strings",
+      "frontmatter": {
+        "name": "review-tools",
+        "description": "Review a change set.",
+        "compatibility": ""
+      },
+      "issues": [
+        {
+          "field": "compatibility",
+          "instancePath": "/compatibility",
+          "keyword": "minLength",
+          "message": "must NOT have fewer than 1 characters"
+        }
+      ]
+    },
+    {
+      "name": "rejects compatibility strings longer than 500 characters",
+      "frontmatter": {
+        "name": "review-tools",
+        "description": "Review a change set.",
+        "compatibility": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "issues": [
+        {
+          "field": "compatibility",
+          "instancePath": "/compatibility",
+          "keyword": "maxLength",
+          "message": "must NOT have more than 500 characters"
+        }
+      ]
+    },
+    {
+      "name": "rejects non-object metadata",
+      "frontmatter": {
+        "name": "review-tools",
+        "description": "Review a change set.",
+        "metadata": "platform"
+      },
+      "issues": [
+        {
+          "field": "metadata",
+          "instancePath": "/metadata",
+          "keyword": "type",
+          "message": "must be object"
+        }
+      ]
+    },
+    {
+      "name": "rejects non-string metadata values",
+      "frontmatter": {
+        "name": "review-tools",
+        "description": "Review a change set.",
+        "metadata": {
+          "owner": 7
+        }
+      },
+      "issues": [
+        {
+          "field": "metadata",
+          "instancePath": "/metadata/owner",
+          "keyword": "type",
+          "message": "must be string"
+        }
+      ]
+    },
+    {
+      "name": "rejects wrong optional value types in stable path order",
+      "frontmatter": {
+        "name": "review-tools",
+        "description": "Review a change set.",
+        "allowed-tools": false,
+        "compatibility": false,
+        "license": false
+      },
+      "issues": [
+        {
+          "field": "allowed-tools",
+          "instancePath": "/allowed-tools",
+          "keyword": "type",
+          "message": "must be string"
+        },
+        {
+          "field": "compatibility",
+          "instancePath": "/compatibility",
+          "keyword": "type",
+          "message": "must be string"
+        },
+        {
+          "field": "license",
+          "instancePath": "/license",
+          "keyword": "type",
+          "message": "must be string"
+        }
+      ]
+    },
+    {
+      "name": "rejects unknown fields",
+      "frontmatter": {
+        "name": "review-tools",
+        "description": "Review a change set.",
+        "unknown": true
+      },
+      "issues": [
+        {
+          "field": "unknown",
+          "instancePath": "",
+          "keyword": "additionalProperties",
+          "message": "must NOT have additional properties"
+        }
+      ]
+    }
+  ]
+}
