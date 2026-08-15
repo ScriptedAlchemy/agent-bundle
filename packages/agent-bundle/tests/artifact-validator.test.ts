@@ -280,23 +280,57 @@ it.each([
   expect(schemaCalls).toBe(1);
 });
 
-it('uses one detached snapshot for both legacy-SSE policy and pinned schema validation', () => {
-  const document = { mcpServers: { events: { type: 'streamable-http' } } };
+it('passes one deeply frozen detached snapshot to the pinned schema', () => {
+  const document = {
+    mcpServers: { events: { headers: { accepted: ['application/json'] }, type: 'streamable-http' } },
+  };
   let schemaCalls = 0;
-  let schemaDocument: unknown;
+  let retainedSnapshot: unknown;
   const validate = validateModernMcpDocument((value) => {
     schemaCalls += 1;
-    schemaDocument = value;
-    return (value as { readonly mcpServers: { readonly events: { readonly type: string } } })
-      .mcpServers.events.type === 'streamable-http'
-      ? []
-      : [{ instancePath: '/mcpServers/events/type', message: 'pinned schema saw legacy SSE' }];
+    const snapshot = value as {
+      mcpServers: { events: { headers: { accepted: string[] }; type: string } };
+    };
+    retainedSnapshot = snapshot;
+    expect(() => { snapshot.mcpServers.events.type = 'sse'; }).toThrow(TypeError);
+    expect(() => { snapshot.mcpServers.events.headers.accepted.push('text/event-stream'); }).toThrow(TypeError);
+    return [];
   });
 
   expect(validate(document)).toEqual([]);
   expect(schemaCalls).toBe(1);
-  expect(schemaDocument).not.toBe(document);
-  expect(schemaDocument).toEqual({ mcpServers: { events: { type: 'streamable-http' } } });
+  const snapshot = retainedSnapshot as {
+    readonly mcpServers: { readonly events: { readonly headers: { readonly accepted: readonly string[] }; readonly type: string } };
+  };
+  expect(snapshot).not.toBe(document);
+  expect(snapshot).toEqual(document);
+  expect(Object.isFrozen(snapshot)).toBe(true);
+  expect(Object.isFrozen(snapshot.mcpServers)).toBe(true);
+  expect(Object.isFrozen(snapshot.mcpServers.events)).toBe(true);
+  expect(Object.isFrozen(snapshot.mcpServers.events.headers)).toBe(true);
+  expect(Object.isFrozen(snapshot.mcpServers.events.headers.accepted)).toBe(true);
+});
+
+it('freezes detached branches independently when an MCP document repeats an object alias', () => {
+  const server = { headers: { accepted: ['application/json'] }, type: 'streamable-http' };
+  let retainedSnapshot: unknown;
+  const validate = validateModernMcpDocument((value) => {
+    retainedSnapshot = value;
+    return [];
+  });
+
+  expect(validate({ mcpServers: { first: server, second: server } })).toEqual([]);
+  const snapshot = retainedSnapshot as {
+    readonly mcpServers: {
+      readonly first: { readonly headers: { readonly accepted: readonly string[] } };
+      readonly second: { readonly headers: { readonly accepted: readonly string[] } };
+    };
+  };
+  expect(snapshot.mcpServers.first).not.toBe(snapshot.mcpServers.second);
+  expect(Object.isFrozen(snapshot.mcpServers.first)).toBe(true);
+  expect(Object.isFrozen(snapshot.mcpServers.first.headers.accepted)).toBe(true);
+  expect(Object.isFrozen(snapshot.mcpServers.second)).toBe(true);
+  expect(Object.isFrozen(snapshot.mcpServers.second.headers.accepted)).toBe(true);
 });
 
 it('returns one frozen policy issue for unsupported MCP document values without invoking the schema', () => {
@@ -344,6 +378,10 @@ it('delegates one safe snapshot of null-prototype MCP objects with an own __prot
     enumerable: true,
     value: Object.assign(Object.create(null), { type: 'streamable-http' }),
   });
+  Object.defineProperty(servers, 'constructor', {
+    enumerable: true,
+    value: Object.assign(Object.create(null), { type: 'streamable-http' }),
+  });
   const document = Object.assign(Object.create(null), { mcpServers: servers });
   let schemaCalls = 0;
   let schemaDocument: unknown;
@@ -361,6 +399,12 @@ it('delegates one safe snapshot of null-prototype MCP objects with an own __prot
   expect(Object.getPrototypeOf(snapshot.mcpServers)).toBe(Object.prototype);
   expect(Object.prototype.hasOwnProperty.call(snapshot.mcpServers, '__proto__')).toBe(true);
   expect(snapshot.mcpServers.__proto__).toEqual({ type: 'streamable-http' });
+  expect(Object.prototype.hasOwnProperty.call(snapshot.mcpServers, 'constructor')).toBe(true);
+  expect(snapshot.mcpServers.constructor).toEqual({ type: 'streamable-http' });
+  expect(Object.isFrozen(snapshot)).toBe(true);
+  expect(Object.isFrozen(snapshot.mcpServers)).toBe(true);
+  expect(Object.isFrozen(snapshot.mcpServers.__proto__)).toBe(true);
+  expect(Object.isFrozen(snapshot.mcpServers.constructor)).toBe(true);
 });
 
 it('validates an emitted Skill and copied resources from the artifact only', async () => {

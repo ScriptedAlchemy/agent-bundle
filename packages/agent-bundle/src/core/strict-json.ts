@@ -56,7 +56,7 @@ const scanJsonValue = (bytes: string, index: number): number => {
   return cursor;
 };
 
-export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
+export type JsonValue = null | boolean | number | string | readonly JsonValue[] | Readonly<Record<string, JsonValue>>;
 
 const snapshotJsonValue = (value: unknown, ancestors: Set<object>): JsonValue => {
   if (value === null || typeof value === 'boolean' || typeof value === 'string') return value;
@@ -90,13 +90,13 @@ const snapshotJsonValue = (value: unknown, ancestors: Set<object>): JsonValue =>
         ))) {
         throw new TypeError('JSON arrays must not have extra properties.');
       }
-      return values;
+      return Object.freeze(values);
     }
     const prototype = Object.getPrototypeOf(value);
     if (prototype !== Object.prototype && prototype !== null) {
       throw new TypeError('JSON objects must be plain objects.');
     }
-    return Object.fromEntries(Reflect.ownKeys(descriptors).map((key) => {
+    const snapshot = Object.fromEntries(Reflect.ownKeys(descriptors).map((key) => {
       if (typeof key !== 'string') throw new TypeError('JSON objects must not use symbol keys.');
       const descriptor = descriptors[key];
       if (descriptor === undefined || !descriptor.enumerable || !('value' in descriptor)) {
@@ -104,6 +104,7 @@ const snapshotJsonValue = (value: unknown, ancestors: Set<object>): JsonValue =>
       }
       return [key, snapshotJsonValue(descriptor.value, ancestors)];
     }));
+    return Object.freeze(snapshot);
   } finally {
     ancestors.delete(value);
   }
