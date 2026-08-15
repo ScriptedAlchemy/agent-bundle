@@ -197,6 +197,111 @@ it('activates the fixed ChatGPT bootstrap only over its closed binding channel a
   });
 });
 
+it('ignores unauthenticated persisted replies and recomputes overlapping optimistic widget states', () => {
+  const launch = () => {
+    const bootstrap = apps(resolveMcpAppHostProfile({ host: standardContext, profile: 'chatgpt', resource })).bootstrap.script;
+    if (bootstrap === undefined) throw new Error('expected ChatGPT bootstrap script');
+    const listeners: ((event: unknown) => void)[] = [];
+    const outbound: { readonly message: Record<string, unknown>; readonly targetOrigin: string }[] = [];
+    const parent = Object.freeze({
+      postMessage(message: Record<string, unknown>, targetOrigin: string): void {
+        outbound.push(Object.freeze({ message, targetOrigin }));
+      },
+    });
+    const sandbox: Record<string, unknown> = {
+      addEventListener(type: string, listener: (event: unknown) => void): void {
+        if (type === 'message') listeners.push(listener);
+      },
+      parent,
+    };
+    sandbox.globalThis = sandbox;
+    runInNewContext(bootstrap, sandbox);
+    const deliver = (
+      data: Record<string, unknown>,
+      options: { isTrusted?: boolean; origin?: string; source?: unknown } = {},
+    ): void => {
+      for (const listener of listeners) {
+        listener(Object.freeze({
+          data,
+          isTrusted: options.isTrusted ?? true,
+          origin: options.origin ?? 'https://host.example',
+          source: options.source ?? parent,
+        }));
+      }
+    };
+    deliver(Object.freeze({
+      bindingId: 'binding-race',
+      capability: 'closed-capability-race',
+      initialState: Object.freeze({ phase: 'base' }),
+      type: 'agent-bundle:mcp-app:chatgpt-widget-state-v1/activate',
+    }));
+    const openai = sandbox.openai as {
+      readonly widgetState: unknown;
+      readonly setWidgetState: (next: unknown) => void;
+    };
+    const update = (state: Record<string, unknown>): Record<string, unknown> => {
+      openai.setWidgetState(state);
+      return outbound.at(-1)!.message;
+    };
+    const reply = (
+      request: Record<string, unknown>,
+      accepted: boolean,
+      options: { bindingId?: string; capability?: string; isTrusted?: boolean; origin?: string; source?: unknown } = {},
+    ): void => {
+      deliver(Object.freeze({
+        accepted,
+        bindingId: options.bindingId ?? 'binding-race',
+        capability: options.capability ?? 'closed-capability-race',
+        requestId: request.requestId,
+        type: 'agent-bundle:mcp-app:chatgpt-widget-state-v1/persisted',
+      }), options);
+    };
+    return { openai, outbound, parent, reply, update };
+  };
+
+  const provenance = launch();
+  const request = provenance.update({ phase: 'pending' });
+  for (const options of [
+    { origin: 'https://wrong.example' },
+    { source: Object.freeze({}) },
+    { bindingId: 'wrong-binding' },
+    { capability: 'wrong-capability' },
+    { isTrusted: false },
+  ]) {
+    provenance.reply(request, false, options);
+    expect(provenance.openai.widgetState).toEqual({ phase: 'pending' });
+    expect(provenance.outbound).toHaveLength(1);
+  }
+  provenance.reply(request, false);
+  expect(provenance.openai.widgetState).toEqual({ phase: 'base' });
+  expect(provenance.outbound).toHaveLength(2);
+
+  const rejectFirst = launch();
+  const aFirst = rejectFirst.update({ phase: 'A' });
+  const bFirst = rejectFirst.update({ phase: 'B' });
+  rejectFirst.reply(aFirst, false);
+  expect(rejectFirst.openai.widgetState).toEqual({ phase: 'B' });
+  rejectFirst.reply(bFirst, false);
+  expect(rejectFirst.openai.widgetState).toEqual({ phase: 'base' });
+
+  const rejectSecond = launch();
+  const aSecond = rejectSecond.update({ phase: 'A' });
+  const bSecond = rejectSecond.update({ phase: 'B' });
+  rejectSecond.reply(bSecond, false);
+  expect(rejectSecond.openai.widgetState).toEqual({ phase: 'A' });
+  rejectSecond.reply(aSecond, false);
+  expect(rejectSecond.openai.widgetState).toEqual({ phase: 'base' });
+
+  const staleReject = launch();
+  const staleA = staleReject.update({ phase: 'A' });
+  const staleB = staleReject.update({ phase: 'B' });
+  staleReject.reply(staleB, true);
+  expect(staleReject.openai.widgetState).toEqual({ phase: 'B' });
+  staleReject.reply(staleA, false);
+  expect(staleReject.openai.widgetState).toEqual({ phase: 'B' });
+  expect(staleReject.outbound.filter(({ message }) => message.type === 'agent-bundle:mcp-app:chatgpt-widget-state-v1/diagnostic')).toHaveLength(1);
+});
+
 it('keeps profile behavior independent of user agent and registered config presence', () => {
   const withoutConfig = resolveMcpAppHostProfile({ host: standardContext, profile: 'chatgpt', resource });
   const withCodexConfig = resolveMcpAppHostProfile({

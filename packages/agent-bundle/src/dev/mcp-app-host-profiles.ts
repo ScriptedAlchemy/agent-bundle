@@ -271,9 +271,20 @@ const fixedDormantChatGptBootstrap = String.raw`(() => {
   let capability;
   let hostOrigin;
   let widgetState;
+  let acceptedState;
+  let acceptedRevision = 0;
   let nextRequestId = 0;
   const pending = new Map();
   const send = (message) => parentWindow.postMessage(message, hostOrigin);
+  const recomputeWidgetState = () => {
+    let latest;
+    for (const request of pending.values()) {
+      if (request.revision > acceptedRevision && (latest === undefined || request.revision > latest.revision)) {
+        latest = request;
+      }
+    }
+    widgetState = latest === undefined ? acceptedState : latest.state;
+  };
   const report = (code) => {
     try {
       send(Object.freeze({ bindingId, capability, code, type: diagnosticType }));
@@ -306,16 +317,15 @@ const fixedDormantChatGptBootstrap = String.raw`(() => {
     Object.defineProperty(api, "setWidgetState", {
       enumerable: true,
       value: (next) => {
-        const previous = widgetState;
         const replacement = cloneFiniteJson(next);
         const requestId = ++nextRequestId;
         widgetState = replacement;
-        pending.set(requestId, Object.freeze({ next: replacement, previous }));
+        pending.set(requestId, Object.freeze({ revision: requestId, state: replacement }));
         try {
           send(Object.freeze({ bindingId, capability, requestId, state: replacement, type: persistType }));
         } catch {
           pending.delete(requestId);
-          if (widgetState === replacement) widgetState = previous;
+          recomputeWidgetState();
           report("widget-state-persistence-unavailable");
         }
       },
@@ -329,6 +339,7 @@ const fixedDormantChatGptBootstrap = String.raw`(() => {
         writable: false,
       });
       widgetState = initial;
+      acceptedState = initial;
       hostOrigin = origin;
       active = true;
     } catch {
@@ -336,7 +347,7 @@ const fixedDormantChatGptBootstrap = String.raw`(() => {
     }
   };
   root.addEventListener("message", (event) => {
-    if (event === null || event.isTrusted !== true || event.source !== parentWindow) return;
+    if (event === null || event.isTrusted !== true || event.source !== parentWindow || event.origin !== hostOrigin && active) return;
     const message = event.data;
     if (!plainRecord(message)) return;
     const type = ownValue(message, "type");
@@ -355,10 +366,15 @@ const fixedDormantChatGptBootstrap = String.raw`(() => {
     const request = typeof requestId === "number" ? pending.get(requestId) : undefined;
     if (request === undefined) return;
     pending.delete(requestId);
-    if (ownValue(message, "accepted") !== true) {
-      if (widgetState === request.next) widgetState = request.previous;
+    if (ownValue(message, "accepted") === true) {
+      if (request.revision > acceptedRevision) {
+        acceptedRevision = request.revision;
+        acceptedState = request.state;
+      }
+    } else {
       report("widget-state-persistence-rejected");
     }
+    recomputeWidgetState();
   });
 })();`;
 
