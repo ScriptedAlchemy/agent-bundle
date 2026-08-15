@@ -1,4 +1,5 @@
-import { appendFile, mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { appendFile, mkdtemp, mkdir, readdir, readFile, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -49,6 +50,10 @@ const event = (
   summary: string,
   raw: Record<string, unknown>,
 ): PlaygroundEventInput => Object.freeze({ kind, raw, source, summary });
+
+const snapshotDirectory = async (root: string): Promise<Readonly<Record<string, string>>> => Object.freeze(
+  Object.fromEntries(await Promise.all((await readdir(root)).sort().map(async (name) => [name, await readFile(join(root, name), 'utf8')]))),
+);
 
 const createFixture = async (input: Readonly<{
   readonly maxSubscriberQueue?: number;
@@ -757,6 +762,180 @@ it('preserves pre-existing finalized and open session roots when a conflicting o
       await contender?.close().catch(() => undefined);
       await fixture.close();
     }
+  }
+});
+
+it('removes only its displaced admission root when a finalized or open session replaces its path during close', async () => {
+  for (const state of ['finalized', 'open'] as const) {
+    const fixture = await createFixture();
+    const victimId = `swap-victim-${state}`;
+    const targetId = `swap-target-${state}`;
+    const sessionsRoot = join(fixture.storageRoot, 'sessions');
+    const victimRoot = join(sessionsRoot, victimId);
+    const targetRoot = join(sessionsRoot, targetId);
+    const displacedRoot = join(sessionsRoot, `displaced-${state}`);
+    let contender: PlaygroundService | undefined;
+    let closing: Promise<void> | undefined;
+    try {
+      await fixture.service.openSession({ ...sessionInput(), sessionId: victimId });
+      if (state === 'finalized') await fixture.service.finalize(victimId, { status: 'passed' });
+      const victimBefore = await snapshotDirectory(victimRoot);
+      let swapped = false;
+      contender = new PlaygroundService({
+        now: () => {
+          if (!swapped) {
+            swapped = true;
+            renameSync(targetRoot, displacedRoot);
+            renameSync(victimRoot, targetRoot);
+            closing = contender!.close();
+          }
+          return new Date('2026-08-15T00:00:00.000Z');
+        },
+        projectId: 'project-1',
+        projectRoot: fixture.projectRoot,
+        storageRoot: fixture.storageRoot,
+      });
+
+      await expect(contender.openSession({ ...sessionInput(), sessionId: targetId })).rejects.toBeDefined();
+      await expect(closing).resolves.toBeUndefined();
+      await expect(snapshotDirectory(targetRoot)).resolves.toEqual(victimBefore);
+      await expect(readdir(displacedRoot)).rejects.toBeDefined();
+      await rename(targetRoot, victimRoot);
+    } finally {
+      await contender?.close().catch(() => undefined);
+      await fixture.close();
+    }
+  }
+});
+
+it('uses directory identity in addition to the owner token before deleting a displaced admission root', async () => {
+  const fixture = await createFixture();
+  const victimId = 'same-token-victim';
+  const targetId = 'same-token-target';
+  const sessionsRoot = join(fixture.storageRoot, 'sessions');
+  const victimRoot = join(sessionsRoot, victimId);
+  const targetRoot = join(sessionsRoot, targetId);
+  const displacedRoot = join(sessionsRoot, 'same-token-displaced');
+  let contender: PlaygroundService | undefined;
+  let closing: Promise<void> | undefined;
+  try {
+    await fixture.service.openSession({ ...sessionInput(), sessionId: victimId });
+    let victimAfterImitation: Readonly<Record<string, string>> | undefined;
+    contender = new PlaygroundService({
+      now: () => {
+        renameSync(targetRoot, displacedRoot);
+        writeFileSync(join(victimRoot, '.owner.lock'), readFileSync(join(displacedRoot, '.owner.lock')));
+        victimAfterImitation = Object.freeze({
+          '.owner.lock': readFileSync(join(victimRoot, '.owner.lock'), 'utf8'),
+          'events.jsonl': readFileSync(join(victimRoot, 'events.jsonl'), 'utf8'),
+          'session.json': readFileSync(join(victimRoot, 'session.json'), 'utf8'),
+        });
+        renameSync(victimRoot, targetRoot);
+        closing = contender!.close();
+        return new Date('2026-08-15T00:00:00.000Z');
+      },
+      projectId: 'project-1',
+      projectRoot: fixture.projectRoot,
+      storageRoot: fixture.storageRoot,
+    });
+
+    await expect(contender.openSession({ ...sessionInput(), sessionId: targetId })).rejects.toBeDefined();
+    await expect(closing).resolves.toBeUndefined();
+    await expect(snapshotDirectory(targetRoot)).resolves.toEqual(victimAfterImitation);
+    await expect(readdir(displacedRoot)).rejects.toBeDefined();
+    await rename(targetRoot, victimRoot);
+  } finally {
+    await contender?.close().catch(() => undefined);
+    await fixture.close();
+  }
+});
+
+it('rolls back its owner token and displaced created root when substitution happens before ownership is established', async () => {
+  const fixture = await createFixture();
+  const victimId = 'pre-owner-victim';
+  const targetId = 'pre-owner-target';
+  const sessionsRoot = join(fixture.storageRoot, 'sessions');
+  const victimRoot = join(sessionsRoot, victimId);
+  const targetRoot = join(sessionsRoot, targetId);
+  const displacedRoot = join(sessionsRoot, 'pre-owner-displaced');
+  let contender: PlaygroundService | undefined;
+  try {
+    await fixture.service.openSession({ ...sessionInput(), sessionId: victimId });
+    await fixture.service.finalize(victimId, { status: 'passed' });
+    await rm(join(victimRoot, '.owner.lock'));
+    const victimBefore = await snapshotDirectory(victimRoot);
+    contender = new PlaygroundService({
+      projectId: 'project-1',
+      projectRoot: fixture.projectRoot,
+      storageRoot: fixture.storageRoot,
+    });
+    let scheduled = false;
+    const opening = contender.openSession({
+      ...sessionInput(),
+      get sessionId() {
+        if (!scheduled) {
+          scheduled = true;
+          queueMicrotask(() => {
+            renameSync(targetRoot, displacedRoot);
+            renameSync(victimRoot, targetRoot);
+          });
+        }
+        return targetId;
+      },
+    });
+
+    await expect(opening).rejects.toMatchObject({ code: 'PLAYGROUND_SESSION_OWNED' });
+    await expect(snapshotDirectory(targetRoot)).resolves.toEqual(victimBefore);
+    await expect(readdir(displacedRoot)).rejects.toBeDefined();
+    await expect(contender.close()).resolves.toBeUndefined();
+    await rename(targetRoot, victimRoot);
+  } finally {
+    await contender?.close().catch(() => undefined);
+    await fixture.close();
+  }
+});
+
+it('aggregates an admission cleanup failure when its owned root is displaced beyond the sessions directory', async () => {
+  const fixture = await createFixture();
+  const victimId = 'cleanup-failure-victim';
+  const targetId = 'cleanup-failure-target';
+  const sessionsRoot = join(fixture.storageRoot, 'sessions');
+  const victimRoot = join(sessionsRoot, victimId);
+  const targetRoot = join(sessionsRoot, targetId);
+  const strandedRoot = join(fixture.storageRoot, 'stranded-admission');
+  let contender: PlaygroundService | undefined;
+  let closing: Promise<void> | undefined;
+  try {
+    await fixture.service.openSession({ ...sessionInput(), sessionId: victimId });
+    await fixture.service.finalize(victimId, { status: 'passed' });
+    const victimBefore = await snapshotDirectory(victimRoot);
+    contender = new PlaygroundService({
+      now: () => {
+        renameSync(targetRoot, strandedRoot);
+        renameSync(victimRoot, targetRoot);
+        closing = contender!.close();
+        return new Date('2026-08-15T00:00:00.000Z');
+      },
+      projectId: 'project-1',
+      projectRoot: fixture.projectRoot,
+      storageRoot: fixture.storageRoot,
+    });
+
+    const openingFailure = await contender.openSession({ ...sessionInput(), sessionId: targetId }).catch((error: unknown) => error);
+    expect(openingFailure).toBeInstanceOf(AggregateError);
+    expect((openingFailure as AggregateError).errors).toEqual(expect.arrayContaining([
+      expect.objectContaining({ sessionId: targetId }),
+    ]));
+    const closeFailure = await closing!.catch((error: unknown) => error);
+    expect(closeFailure).toBeInstanceOf(PlaygroundServiceCloseError);
+    expect(closeFailure).toMatchObject({ failures: [{ sessionId: targetId }] });
+    await expect(contender.close()).rejects.toBe(closeFailure);
+    await expect(snapshotDirectory(targetRoot)).resolves.toEqual(victimBefore);
+    await expect(readFile(join(strandedRoot, '.owner.lock'), 'utf8')).resolves.toContain('token');
+    await rename(targetRoot, victimRoot);
+  } finally {
+    await contender?.close().catch(() => undefined);
+    await fixture.close();
   }
 });
 
