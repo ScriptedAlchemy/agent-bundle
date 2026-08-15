@@ -429,7 +429,7 @@ it('delivers pre-bootstrap runtime gap, activation, and terminal events before l
   buffer.install({
     receive: async (event) => {
       received.push(event);
-      if (event === gap) await gate.promise;
+      if (event.type === 'replay.gap') await gate.promise;
     },
   });
   buffer.receive(live);
@@ -465,7 +465,7 @@ it('bounds pre-controller ingress, retains replay repair, and publishes its rece
   buffer.install({
     receive: async (event) => {
       received.push(event);
-      if (event === gap) await gate.promise;
+      if (event.type === 'replay.gap') await gate.promise;
     },
   });
   buffer.install({ receive: async (event) => { replacement.push(event); } });
@@ -482,6 +482,54 @@ it('bounds pre-controller ingress, retains replay repair, and publishes its rece
   buffer.receive(runtimeEvent(14, 'runtime.run.completed', 'dropped-after-close'));
   await buffer.whenIdle();
   expect(received).toEqual([gap, second, third]);
+});
+
+it('repairs local pre-controller eviction before advancing the runtime cursor through retained events', async () => {
+  let observedCursor: number | undefined;
+  const controller = createRuntimePlaygroundController({
+    bootstrap: bootstrap(),
+    client: clientFor({
+      bootstrap: async () => {
+        observedCursor = controller.model.lastConsumedEventSequence;
+        return bootstrap();
+      },
+    }),
+    profiles,
+  });
+  const buffer = createRuntimeEventBuffer({ maximumPendingEvents: 2 });
+
+  buffer.receive(runtimeEvent(10, 'runtime.hmr.client-connected'));
+  buffer.receive(runtimeEvent(11, 'runtime.hmr.client-connected'));
+  buffer.receive(runtimeEvent(12, 'runtime.hmr.client-connected'));
+  buffer.install(controller);
+  await buffer.whenIdle();
+  await controller.whenIdle();
+
+  expect(observedCursor).toBe(0);
+  expect(controller.model.replayGap).toEqual({ earliestAvailableSequence: 11, latestDroppedSequence: 10, requestedAfterSequence: 9, type: 'replay.gap' });
+  expect(controller.model.lastConsumedEventSequence).toBe(12);
+});
+
+it('expands a provider replay gap when bounded ingress later evicts another event', async () => {
+  const received: ProjectEventMessage[] = [];
+  const buffer = createRuntimeEventBuffer({ maximumPendingEvents: 2 });
+  const gap = Object.freeze({ earliestAvailableSequence: 12, latestDroppedSequence: 11, requestedAfterSequence: 9, type: 'replay.gap' as const });
+  const twelve = runtimeEvent(12, 'runtime.hmr.client-connected');
+  const thirteen = runtimeEvent(13, 'runtime.hmr.client-connected');
+  const fourteen = runtimeEvent(14, 'runtime.hmr.client-connected');
+
+  buffer.receive(gap);
+  buffer.receive(twelve);
+  buffer.receive(thirteen);
+  buffer.receive(fourteen);
+  buffer.install({ receive: async (event) => { received.push(event); } });
+  await buffer.whenIdle();
+
+  expect(received).toEqual([
+    { earliestAvailableSequence: 13, latestDroppedSequence: 12, requestedAfterSequence: 9, type: 'replay.gap' },
+    thirteen,
+    fourteen,
+  ]);
 });
 
 it('closes pre-controller Runtime ingress after the third failed bootstrap without closing an installed receiver', async () => {

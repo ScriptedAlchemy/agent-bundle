@@ -7,7 +7,7 @@ import type {
   DevRuntimeStateIdentity,
   DevRuntimeStateResetRequest,
 } from '../../agent-bundle/src/dev/runtime-protocol.ts';
-import type { ProjectEventMessage } from '../../agent-bundle/src/dev/types.ts';
+import type { ProjectEventMessage, ProjectReplayGap } from '../../agent-bundle/src/dev/types.ts';
 import { RuntimeClientError, type RuntimeBootstrap } from './runtime-client.ts';
 import { McpJsonInput, serializeJsonValue, type ImmutableJsonValue } from './mcp/mcp-json-input.tsx';
 import {
@@ -53,7 +53,7 @@ export interface RuntimeEventBuffer {
 }
 
 export interface RuntimeEventBufferOptions {
-  /** Bounded until the Runtime controller is available; ordinary Project events are never retained. */
+  /** Bounded Runtime events until the controller is available; replay repair is retained separately. */
   readonly maximumPendingEvents?: number;
 }
 
@@ -85,6 +85,20 @@ const errorMessage = (reason: unknown): string => reason instanceof Error
   ? reason.message
   : 'Runtime request could not be completed.';
 
+const isForegroundEffect = (effect: RuntimeModel['activeEffect'] | RuntimeModel['pendingEffect']): boolean =>
+  effect?.kind === 'create-run' || effect?.kind === 'replay-run' || effect?.kind === 'reset-state';
+
+const hasAcceptedForegroundEffect = (previous: RuntimeModel, next: RuntimeModel): boolean => {
+  const existing = new Set([previous.activeEffect, previous.pendingEffect].flatMap((effect) =>
+    effect === undefined || !isForegroundEffect(effect) ? [] : [effect.id]));
+  return [next.activeEffect, next.pendingEffect].some((effect) =>
+    effect !== undefined && isForegroundEffect(effect) && !existing.has(effect.id));
+};
+
+const isCorrelatedForegroundSuccess = (previous: RuntimeModel, action: RuntimeModelAction): boolean =>
+  (action.type === 'reset.received' && previous.activeEffect?.kind === 'reset-state' && previous.activeEffect.id === action.id) ||
+  (action.type === 'run.received' && (previous.activeEffect?.kind === 'create-run' || previous.activeEffect?.kind === 'replay-run'));
+
 class RuntimePlaygroundControllerImpl implements RuntimePlaygroundController {
   readonly #client: RuntimePlaygroundClient;
   readonly #listeners = new Set<(model: RuntimeModel) => void>();
@@ -114,7 +128,11 @@ class RuntimePlaygroundControllerImpl implements RuntimePlaygroundController {
 
   dispatch(action: RuntimeModelAction): void {
     if (!this.#mounted) return;
+    const previous = this.#model;
     this.#model = reduceRuntimeModel(this.#model, action);
+    if (this.#error !== undefined && (hasAcceptedForegroundEffect(previous, this.#model) || isCorrelatedForegroundSuccess(previous, action))) {
+      this.#error = undefined;
+    }
     this.#notify();
     this.#scheduleEffects();
   }
@@ -213,6 +231,7 @@ class RuntimeEventBufferImpl implements RuntimeEventBuffer {
   #installing = false;
   readonly #maximumPendingEvents: number;
   #pending: ProjectEventMessage[] = [];
+  #replayGap: ProjectReplayGap | undefined;
   #receiver: RuntimeEventReceiver | undefined;
   #tail: Promise<void> = Promise.resolve();
 
@@ -226,6 +245,7 @@ class RuntimeEventBufferImpl implements RuntimeEventBuffer {
   close(): void {
     this.#closed = true;
     this.#pending = [];
+    this.#replayGap = undefined;
     this.#receiver = undefined;
   }
 
@@ -234,8 +254,9 @@ class RuntimeEventBufferImpl implements RuntimeEventBuffer {
     this.#installing = true;
     this.#tail = this.#tail.then(async () => {
       if (this.#closed) return;
-      const pending = this.#pending;
+      const pending = this.#replayGap === undefined ? this.#pending : [this.#replayGap, ...this.#pending];
       this.#pending = [];
+      this.#replayGap = undefined;
       for (const event of pending) await receiver.receive(event);
       if (!this.#closed) this.#receiver = receiver;
     }).then(
@@ -261,20 +282,39 @@ class RuntimeEventBufferImpl implements RuntimeEventBuffer {
   }
 
   #queue(event: ProjectEventMessage): void {
-    this.#pending.push(event);
-    let latestGap = -1;
-    for (let index = this.#pending.length - 1; index >= 0; index -= 1) {
-      if (this.#pending[index]?.type === 'replay.gap') {
-        latestGap = index;
-        break;
-      }
+    if (event.type === 'replay.gap') {
+      this.#pending = [];
+      this.#mergeReplayGap(event);
+      return;
     }
-    if (latestGap > 0) this.#pending = this.#pending.slice(latestGap);
+    this.#pending.push(event);
     if (this.#pending.length <= this.#maximumPendingEvents) return;
-    const gap = this.#pending[0]?.type === 'replay.gap' ? this.#pending[0] : undefined;
-    this.#pending = gap === undefined
-      ? this.#pending.slice(-this.#maximumPendingEvents)
-      : [gap, ...this.#pending.slice(-(this.#maximumPendingEvents - 1))];
+    const dropped = this.#pending.splice(0, this.#pending.length - this.#maximumPendingEvents);
+    const sequences = dropped.flatMap((message) => message.type === 'runtime.event' ? [message.sequence] : []);
+    if (sequences.length === 0) return;
+    const earliestDroppedSequence = Math.min(...sequences);
+    const latestDroppedSequence = Math.max(...sequences);
+    this.#mergeReplayGap(Object.freeze({
+      earliestAvailableSequence: latestDroppedSequence + 1,
+      latestDroppedSequence,
+      requestedAfterSequence: earliestDroppedSequence - 1,
+      type: 'replay.gap' as const,
+    }));
+  }
+
+  #mergeReplayGap(next: ProjectReplayGap): void {
+    const previous = this.#replayGap;
+    if (previous === undefined) {
+      this.#replayGap = Object.freeze({ ...next });
+      return;
+    }
+    const latestDroppedSequence = Math.max(previous.latestDroppedSequence, next.latestDroppedSequence);
+    this.#replayGap = Object.freeze({
+      earliestAvailableSequence: Math.max(previous.earliestAvailableSequence, next.earliestAvailableSequence, latestDroppedSequence + 1),
+      latestDroppedSequence,
+      requestedAfterSequence: Math.min(previous.requestedAfterSequence, next.requestedAfterSequence),
+      type: 'replay.gap',
+    });
   }
 }
 
@@ -348,6 +388,7 @@ export const RuntimePlayground = ({ controller }: RuntimePlaygroundProps): React
   const confirmRef = useRef<HTMLButtonElement>(null);
   const invokingRef = useRef<HTMLButtonElement>(null);
   const resetRef = useRef<HTMLButtonElement>(null);
+  const requestErrorRef = useRef<HTMLParagraphElement>(null);
   const resetStatusRef = useRef<HTMLParagraphElement>(null);
   const confirmationOutcome = useRef<'cancelled' | 'confirmed' | undefined>(undefined);
   const resetEffectId = useRef<string | undefined>(undefined);
@@ -358,6 +399,7 @@ export const RuntimePlayground = ({ controller }: RuntimePlaygroundProps): React
   const lastGoodRun = selectedLastGoodRun(model);
   const profile = selectedProfile(model);
   const attributes = runtimeDataAttributesFor(model);
+  const requestError = controller.error;
   const activeVector = model.status?.activeVector;
   const displayIdentity = runtimeDisplayIdentityFor(model);
   const interactionLocked = model.activeEffect !== undefined || model.confirmation !== undefined;
@@ -409,13 +451,11 @@ export const RuntimePlayground = ({ controller }: RuntimePlaygroundProps): React
   }, [model.confirmation]);
   useEffect(() => {
     const resetCompleted = resetEffectId.current !== undefined && model.resetCompletion?.effectId === resetEffectId.current;
-    if (resetCompleted && model.activeEffect === undefined) {
-      resetEffectId.current = undefined;
-      resetStatusRef.current?.focus();
-    } else if (resetEffectId.current !== undefined && model.activeEffect === undefined) {
-      resetEffectId.current = undefined;
-    }
-  }, [model.activeEffect, model.resetCompletion]);
+    if (model.activeEffect !== undefined || resetEffectId.current === undefined) return;
+    resetEffectId.current = undefined;
+    if (resetCompleted) resetStatusRef.current?.focus();
+    else if (requestError !== undefined) requestErrorRef.current?.focus();
+  }, [model.activeEffect, model.resetCompletion, requestError]);
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
       if (model.confirmation === undefined) return;
@@ -517,7 +557,7 @@ export const RuntimePlayground = ({ controller }: RuntimePlaygroundProps): React
       <button disabled={confirmationPending} onClick={confirmConfirmation} ref={confirmRef} type="button">Confirm</button>
     </div>}
     <div inert={interactionLocked || undefined}>
-    {controller.error === undefined ? undefined : <p className="runtime-request-error" role="alert">{controller.error}</p>}
+    {requestError === undefined ? undefined : <p className="runtime-request-error" ref={requestErrorRef} role="alert" tabIndex={-1}>{requestError}</p>}
     <div className="runtime-layout">
       <section aria-label="Runtime run history" className="runtime-history"><h2>Run history</h2><ol>{model.history.map((entry) => <li key={entry.id}>
         <button aria-pressed={entry.id === model.selectedRunId} disabled={interactionLocked} onClick={controller.dispatch.bind(controller, { runId: entry.id, type: 'selection.run' })} type="button">{historyLabel(entry)}</button>

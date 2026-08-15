@@ -123,16 +123,23 @@ test('mounts Runtime controls in a supported browser and fences reset interactio
     await expect.element(page.getByRole('button', { name: 'Reset fixture state' })).toBeDisabled();
     await expect.element(page.getByLabel('Runtime surface')).toBeDisabled();
     await page.getByRole('button', { name: 'Confirm' }).click();
-    await expect.element(page.getByRole('alert')).toHaveText('The provider rejected this reset.');
+    const failure = page.getByRole('alert');
+    await expect.element(failure).toHaveText('The provider rejected this reset.');
+    await expect.element(failure).toBeFocused();
     await expect.element(page.locator('.runtime-status')).not.toBeFocused();
     await expect.element(page.getByRole('button', { name: 'Run', exact: true })).toBeEnabled();
+    controller.dispatch({ tab: 'tree', type: 'selection.tab' });
+    await expect.element(failure).toBeFocused();
 
     await page.getByRole('button', { name: 'Reset fixture state' }).click();
     await page.getByRole('button', { name: 'Confirm' }).click();
+    await expect.element(failure).not.toBeVisible();
     await expect.element(page.getByText('2', { exact: true })).toBeVisible();
     expect(controller.model.resetCompletion?.state).toEqual({ stateStoreId: 'browser-state', stateVersion: 2 });
     expect(controller.model.activeEffect).toBeUndefined();
     expect((document.activeElement as HTMLElement | null)?.className).toBe('runtime-status');
+    await expect.element(page.locator('.runtime-status')).toBeFocused();
+    controller.dispatch({ tab: 'diagnostics', type: 'selection.tab' });
     await expect.element(page.locator('.runtime-status')).toBeFocused();
   } finally {
     controller.close();
