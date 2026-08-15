@@ -8,7 +8,7 @@ import { expect, it } from '@rstest/core';
 import { TargetRegistry } from '../src/adapters/registry.ts';
 import type { TargetAdapter, TargetAdapterMetadata } from '../src/adapters/types.ts';
 import { assembleArtifactManifest, type ArtifactManifestFileKind, type ArtifactManifestV2 } from '../src/build/manifest.ts';
-import { validateArtifact } from '../src/build/validate-artifact.ts';
+import { validateArtifact, validateArtifactWithSnapshot } from '../src/build/validate-artifact.ts';
 import { digest } from '../src/core/digest.ts';
 import { ArtifactInspectionService } from '../src/dev/index.ts';
 import { EpochStore } from '../src/dev/epoch-store.ts';
@@ -118,6 +118,29 @@ const mutatingRuntimeRegistry = (calls: { reads: number; resolutions: number }):
     return Object.freeze({
       diagnostics: Object.freeze([]),
       value: calls.resolutions === 1 ? value : './mcp/not-manifested.mjs',
+    });
+  },
+} satisfies TargetMcpRuntimeContract));
+
+const statefulResolverRuntimeRegistry = (calls: string[]): TargetRegistry => runtimeRegistry(Object.freeze({
+  manifestPath: 'mcp.json',
+  readModernServers: () => Object.freeze({
+    servers: Object.freeze([Object.freeze({
+      name: 'runner',
+      server: Object.freeze({
+        args: Object.freeze(['./mcp/runner.mjs', './mcp/runner.mjs']),
+        command: 'node',
+        kind: 'stdio' as const,
+      }),
+    })]),
+    status: 'found' as const,
+  }),
+  resolveStdioArgument: (value: string) => value,
+  resolveValue: (_field, _roots, value) => {
+    calls.push(value);
+    return Object.freeze({
+      diagnostics: Object.freeze([]),
+      value: calls.length === 1 ? value : 'probe.second-call',
     });
   },
 } satisfies TargetMcpRuntimeContract));
@@ -405,6 +428,103 @@ it('uses callback facts captured during validation and excludes unmanifested mut
       target: fixtureTarget,
     }]);
     expect(JSON.stringify(inspection.runtime)).not.toContain('not-manifested.mjs');
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('preserves the supplied runtime resolver call sequence while inspecting validated MCP facts', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-artifact-inspection-resolver-sequence-'));
+  const publishingRegistry = runtimeRegistry();
+  const validatorCalls: string[] = [];
+  const inspectionCalls: string[] = [];
+  const store = new EpochStore({ projectRoot: root });
+
+  try {
+    await publish({ files: runtimeFiles(), id: 'epoch-resolver-sequence', registry: publishingRegistry, root, store });
+    await expect(validateArtifact({
+      allowEpochStagingMarker: true,
+      artifactRoot: join(root, '.agent-bundle', 'epochs', 'epoch-resolver-sequence'),
+      registry: statefulResolverRuntimeRegistry(validatorCalls),
+    })).resolves.toEqual([]);
+    expect(validatorCalls).toEqual(['./mcp/runner.mjs', './mcp/runner.mjs']);
+
+    const inspection = await new ArtifactInspectionService(store, statefulResolverRuntimeRegistry(inspectionCalls))
+      .inspect('epoch-resolver-sequence');
+
+    expect(inspectionCalls).toEqual(['./mcp/runner.mjs', './mcp/runner.mjs']);
+    expect(inspection.runtime.mcpServers).toEqual([expect.objectContaining({
+      entryPaths: ['synthetic/mcp/runner.mjs'],
+      name: 'runner',
+    })]);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('accepts an exact registry with a non-configurable own method', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-artifact-inspection-registry-identity-'));
+  const registry = runtimeRegistry();
+  const store = new EpochStore({ projectRoot: root });
+  Object.defineProperty(registry, 'has', {
+    configurable: false,
+    enumerable: true,
+    value: registry.has.bind(registry),
+    writable: false,
+  });
+
+  try {
+    await publish({ files: runtimeFiles(), id: 'epoch-registry-identity', registry, root, store });
+    await expect(new ArtifactInspectionService(store, registry).inspect('epoch-registry-identity')).resolves.toMatchObject({
+      epochId: 'epoch-registry-identity',
+    });
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('retains immutable inspection evidence when manifest and hook bytes are replaced after validation', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-artifact-inspection-manifest-snapshot-'));
+  const registry = runtimeRegistry();
+  const store = new EpochStore({ projectRoot: root });
+  const epochId = 'epoch-manifest-snapshot';
+
+  try {
+    await publish({ files: runtimeFiles(), id: epochId, registry, root, store });
+    const artifactRoot = join(root, '.agent-bundle', 'epochs', epochId);
+    const result = await validateArtifactWithSnapshot({
+      allowEpochStagingMarker: true,
+      artifactRoot,
+      registry,
+    });
+    expect(result.diagnostics).toEqual([]);
+    expect(result.snapshot).toBeDefined();
+
+    const replacementFiles = [
+      hookIndex([{
+        event: 'beforeTool',
+        id: 'replacement-hook',
+        name: 'Replacement hook',
+        path: 'synthetic/hooks/replacement.mjs',
+        target: fixtureTarget,
+      }]),
+      ...runtimeFiles().filter((file) => file.path !== 'agent-bundle.hooks.json'),
+      { contents: 'export const replacement = true;\n', kind: 'bundle' as const, mode: 0o755, path: 'synthetic/hooks/replacement.mjs' },
+    ];
+    await writeFile(join(artifactRoot, 'agent-bundle.hooks.json'), replacementFiles[0]!.contents);
+    await writeFile(join(artifactRoot, 'synthetic', 'hooks', 'replacement.mjs'), replacementFiles.at(-1)!.contents);
+    await writeFile(
+      join(artifactRoot, 'agent-bundle.manifest.json'),
+      assembleArtifactManifest(manifestFor(registry, replacementFiles)).bytes,
+    );
+
+    expect(result.snapshot).toMatchObject({
+      manifest: { files: expect.not.arrayContaining([expect.objectContaining({ path: 'synthetic/hooks/replacement.mjs' })]) },
+      runtime: { hooks: [expect.objectContaining({ id: 'hook-1' })] },
+    });
+    expect(Object.isFrozen(result.snapshot)).toBe(true);
+    expect(Object.isFrozen(result.snapshot!.manifest.files)).toBe(true);
+    expect(Object.isFrozen(result.snapshot!.runtime.hooks)).toBe(true);
   } finally {
     await rm(root, { force: true, recursive: true });
   }

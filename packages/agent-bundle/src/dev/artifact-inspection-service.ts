@@ -1,24 +1,12 @@
-import { createHash } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
-import { dirname, posix, resolve, win32 } from 'node:path';
-
 import { createDefaultRegistry, type TargetRegistry } from '../adapters/registry.ts';
-import { artifactHookIndexName, artifactManifestName } from '../build/emit.ts';
-import { parseArtifactManifest, type ArtifactManifestV2 } from '../build/manifest.ts';
-import { validateArtifact } from '../build/validate-artifact.ts';
+import { artifactManifestName } from '../build/emit.ts';
+import type { ArtifactManifestV2 } from '../build/manifest.ts';
+import {
+  validateArtifactWithSnapshot,
+  type ValidatedArtifactSnapshot,
+} from '../build/validate-artifact.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
 import type { ProjectContext } from '../core/project-context.ts';
-import { classifyMcpArtifactArgument } from '../services/mcp-artifact-reference.ts';
-import { parseArtifactHookIndex } from '../services/hook-index.ts';
-import { resolveMcpPathTokens } from '../services/mcp-path-tokens.ts';
-import {
-  readTargetMcpServers,
-  type McpRuntimeRoots,
-  type McpRuntimeValueField,
-  type McpRuntimeValueResolution,
-  type ModernMcpServersReadResult,
-  type TargetMcpRuntimeContract,
-} from '../services/mcp-runtime.ts';
 import { EpochReference, EpochStore } from './epoch-store.ts';
 import type {
   ArtifactEpochAddedFile,
@@ -84,22 +72,6 @@ interface TreeBuildDirectory {
   readonly files: Map<string, ArtifactInspectionFile>;
 }
 
-const mcpArtifactPathApi = process.platform === 'win32'
-  ? Object.freeze({
-    isAbsolute: win32.isAbsolute,
-    normalize: win32.normalize,
-    relative: win32.relative,
-    resolve: win32.resolve,
-    sep: '\\' as const,
-  })
-  : Object.freeze({
-    isAbsolute: posix.isAbsolute,
-    normalize: posix.normalize,
-    relative: posix.relative,
-    resolve: posix.resolve,
-    sep: '/' as const,
-  });
-
 const comparePaths = (left: { readonly path: string }, right: { readonly path: string }): number =>
   left.path.localeCompare(right.path);
 
@@ -153,198 +125,6 @@ const inspectionError = (
   diagnostic: Diagnostic,
 ): ArtifactInspectionServiceError => new ArtifactInspectionServiceError(code, message, [diagnostic]);
 
-const dataRecord = (value: unknown): value is object => {
-  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
-  try {
-    const prototype = Object.getPrototypeOf(value);
-    return (prototype === Object.prototype || prototype === null) &&
-      Object.values(Object.getOwnPropertyDescriptors(value)).every((descriptor) => 'value' in descriptor);
-  } catch {
-    return false;
-  }
-};
-
-const dataValue = (value: object, key: string): unknown => {
-  const descriptor = Object.getOwnPropertyDescriptor(value, key);
-  return descriptor !== undefined && 'value' in descriptor ? descriptor.value : undefined;
-};
-
-const dataArray = (value: unknown): readonly unknown[] | undefined => {
-  if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype) return undefined;
-  try {
-    const length = Object.getOwnPropertyDescriptor(value, 'length');
-    if (
-      length === undefined || !('value' in length) ||
-      !Number.isSafeInteger(length.value) || length.value < 0 ||
-      Reflect.ownKeys(value).length !== length.value + 1
-    ) return undefined;
-    const entries: unknown[] = [];
-    for (let index = 0; index < length.value; index += 1) {
-      const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
-      if (descriptor === undefined || !('value' in descriptor)) return undefined;
-      entries.push(descriptor.value);
-    }
-    return Object.freeze(entries);
-  } catch {
-    return undefined;
-  }
-};
-
-const snapshotRuntimeDiagnostic = (value: unknown): Diagnostic | undefined => {
-  if (!dataRecord(value)) return undefined;
-  const code = dataValue(value, 'code');
-  const generatedPath = dataValue(value, 'generatedPath');
-  const message = dataValue(value, 'message');
-  const recovery = dataValue(value, 'recovery');
-  const severity = dataValue(value, 'severity');
-  const sourcePath = dataValue(value, 'sourcePath');
-  const target = dataValue(value, 'target');
-  if (
-    typeof code !== 'string' || typeof message !== 'string' ||
-    (generatedPath !== undefined && typeof generatedPath !== 'string') ||
-    (recovery !== undefined && typeof recovery !== 'string') ||
-    (sourcePath !== undefined && typeof sourcePath !== 'string') ||
-    (target !== undefined && typeof target !== 'string') ||
-    (severity !== 'error' && severity !== 'info' && severity !== 'warning')
-  ) return undefined;
-  return Object.freeze({
-    code,
-    ...(generatedPath === undefined ? {} : { generatedPath }),
-    message,
-    ...(recovery === undefined ? {} : { recovery }),
-    severity,
-    ...(sourcePath === undefined ? {} : { sourcePath }),
-    ...(target === undefined ? {} : { target }),
-  });
-};
-
-const snapshotMcpValueResolution = (value: unknown): McpRuntimeValueResolution | undefined => {
-  if (!dataRecord(value)) return undefined;
-  const diagnostics = dataArray(dataValue(value, 'diagnostics'));
-  const resolved = dataValue(value, 'value');
-  if (diagnostics === undefined || typeof resolved !== 'string') return undefined;
-  const snapshots = diagnostics.map(snapshotRuntimeDiagnostic);
-  if (snapshots.some((diagnostic) => diagnostic === undefined)) return undefined;
-  return Object.freeze({ diagnostics: Object.freeze(snapshots as Diagnostic[]), value: resolved });
-};
-
-const mcpResolutionKey = (
-  field: McpRuntimeValueField,
-  roots: McpRuntimeRoots,
-  value: string,
-): string => JSON.stringify([field, roots.pluginData, roots.pluginRoot, roots.workspaceRoot, value]);
-
-class ValidatedMcpRuntime {
-  readonly #capturedValueResolutions = new Map<string, McpRuntimeValueResolution>();
-  readonly #capturedStdioArguments = new Map<string, string>();
-  readonly #runtime: TargetMcpRuntimeContract;
-  readonly #validationRuntime: TargetMcpRuntimeContract;
-  #servers: ModernMcpServersReadResult | undefined;
-  #sealed = false;
-
-  constructor(runtime: TargetMcpRuntimeContract) {
-    this.#runtime = runtime;
-    this.#validationRuntime = Object.freeze({
-      manifestPath: runtime.manifestPath,
-      readModernServers: (document: unknown) => this.#readModernServers(document),
-      resolveStdioArgument: (value: string, roots: McpRuntimeRoots) => this.#resolveStdioArgument(value, roots),
-      resolveValue: (field: McpRuntimeValueField, roots: McpRuntimeRoots, value: string) =>
-        this.#resolveValue(field, roots, value),
-    });
-  }
-
-  get manifestPath(): string {
-    return this.#validationRuntime.manifestPath;
-  }
-
-  get runtime(): TargetMcpRuntimeContract {
-    return this.#validationRuntime;
-  }
-
-  get servers(): ModernMcpServersReadResult | undefined {
-    return this.#servers;
-  }
-
-  seal(): void {
-    this.#sealed = true;
-  }
-
-  #readModernServers(document: unknown): ModernMcpServersReadResult {
-    if (this.#servers !== undefined) return this.#servers;
-    if (this.#sealed) return Object.freeze({ status: 'invalid' });
-    this.#servers = readTargetMcpServers(this.#runtime, document);
-    return this.#servers;
-  }
-
-  #resolveStdioArgument(value: string, roots: McpRuntimeRoots): string {
-    const key = mcpResolutionKey('args', roots, value);
-    const captured = this.#capturedStdioArguments.get(key);
-    if (captured !== undefined) return captured;
-    if (this.#sealed) throw new Error('MCP stdio argument was not resolved during validation.');
-    const resolved = this.#runtime.resolveStdioArgument(value, roots);
-    if (typeof resolved !== 'string') throw new Error('MCP stdio argument resolver returned an invalid value.');
-    this.#capturedStdioArguments.set(key, resolved);
-    return resolved;
-  }
-
-  #resolveValue(
-    field: McpRuntimeValueField,
-    roots: McpRuntimeRoots,
-    value: string,
-  ): McpRuntimeValueResolution {
-    const key = mcpResolutionKey(field, roots, value);
-    const captured = this.#capturedValueResolutions.get(key);
-    if (captured !== undefined) return captured;
-    if (this.#sealed) throw new Error('MCP runtime value was not resolved during validation.');
-    const resolved = snapshotMcpValueResolution(this.#runtime.resolveValue(field, roots, value));
-    if (resolved === undefined) throw new Error('MCP runtime value resolver returned an invalid value.');
-    this.#capturedValueResolutions.set(key, resolved);
-    return resolved;
-  }
-}
-
-class RuntimeFactCapture {
-  readonly #mcpRuntimes = new Map<string, ValidatedMcpRuntime>();
-  readonly #registry: TargetRegistry;
-
-  constructor(registry: TargetRegistry) {
-    this.#registry = registry;
-  }
-
-  validationRegistry(): TargetRegistry {
-    return new Proxy(this.#registry, {
-      get: (target, property) => {
-        if (property === 'mcpRuntime') return this.#mcpRuntime.bind(this);
-        const value = Reflect.get(target, property, target);
-        return typeof value === 'function' ? value.bind(target) : value;
-      },
-    }) as TargetRegistry;
-  }
-
-  mcpRuntime(target: string): ValidatedMcpRuntime | undefined {
-    return this.#mcpRuntimes.get(target);
-  }
-
-  seal(): void {
-    for (const runtime of this.#mcpRuntimes.values()) runtime.seal();
-  }
-
-  #mcpRuntime(target: string): TargetMcpRuntimeContract | undefined {
-    const captured = this.#mcpRuntimes.get(target);
-    if (captured !== undefined) return captured.runtime;
-    const runtime = this.#registry.mcpRuntime(target);
-    if (runtime === undefined) return undefined;
-    const snapshot = new ValidatedMcpRuntime(runtime);
-    this.#mcpRuntimes.set(target, snapshot);
-    return snapshot.runtime;
-  }
-}
-
-interface ValidatedArtifact {
-  readonly manifest: ArtifactManifestV2;
-  readonly runtimeFacts: RuntimeFactCapture;
-}
-
 export class ArtifactInspectionService {
   readonly #registry: TargetRegistry;
   readonly #store: EpochStore;
@@ -395,7 +175,7 @@ export class ArtifactInspectionService {
       .sort(comparePaths));
     const filesByPath = new Map(files.map((file) => [file.path, file]));
     const project = this.#project(manifest.project, sourceInputs);
-    const runtime = await this.#runtime(reference.root, manifest, filesByPath, validated.runtimeFacts);
+    const runtime = this.#runtime(filesByPath, validated.runtime);
 
     return Object.freeze({
       epochId,
@@ -410,14 +190,13 @@ export class ArtifactInspectionService {
     });
   }
 
-  async #validatedManifest(artifactRoot: string): Promise<ValidatedArtifact> {
-    let diagnostics: readonly Diagnostic[];
-    const runtimeFacts = new RuntimeFactCapture(this.#registry);
+  async #validatedManifest(artifactRoot: string): Promise<ValidatedArtifactSnapshot> {
+    let validation;
     try {
-      diagnostics = await validateArtifact({
+      validation = await validateArtifactWithSnapshot({
         allowEpochStagingMarker: true,
         artifactRoot,
-        registry: runtimeFacts.validationRegistry(),
+        registry: this.#registry,
       });
     } catch {
       throw inspectionError(
@@ -425,28 +204,15 @@ export class ArtifactInspectionService {
         'Artifact inspection requires a readable strictly validated artifact.',
         inspectionDiagnostic('AB6200', 'Artifact inspection could not validate the published artifact.', artifactManifestName),
       );
-    } finally {
-      runtimeFacts.seal();
     }
-    if (diagnostics.length > 0) {
+    if (validation.diagnostics.length > 0 || validation.snapshot === undefined) {
       throw new ArtifactInspectionServiceError(
         'ARTIFACT_INSPECTION_INVALID',
         'Artifact inspection requires an artifact with no validation diagnostics.',
-        diagnostics,
+        validation.diagnostics,
       );
     }
-    try {
-      return Object.freeze({
-        manifest: parseArtifactManifest(await readFile(resolve(artifactRoot, artifactManifestName), 'utf8')),
-        runtimeFacts,
-      });
-    } catch {
-      throw inspectionError(
-        'ARTIFACT_INSPECTION_INVALID',
-        'Artifact inspection requires a strict canonical Artifact Manifest v2.',
-        inspectionDiagnostic('AB6001', 'Artifact manifest is not a strict canonical v2 manifest.', artifactManifestName),
-      );
-    }
+    return validation.snapshot;
   }
 
   #file(
@@ -519,42 +285,27 @@ export class ArtifactInspectionService {
     }));
   }
 
-  async #runtime(
-    artifactRoot: string,
-    manifest: ArtifactManifestV2,
+  #runtime(
     filesByPath: ReadonlyMap<string, ArtifactInspectionFile>,
-    runtimeFacts: RuntimeFactCapture,
-  ): Promise<ArtifactInspectionRuntime> {
-    const hooks = await this.#hooks(artifactRoot, filesByPath);
-    const mcpServers = this.#mcpServers(artifactRoot, manifest, filesByPath, runtimeFacts);
+    runtime: ValidatedArtifactSnapshot['runtime'],
+  ): ArtifactInspectionRuntime {
+    const hooks = this.#hooks(filesByPath, runtime);
+    const mcpServers = this.#mcpServers(filesByPath, runtime);
     const executables = Object.freeze([...filesByPath.values()]
       .filter((file) => file.mode !== undefined && (file.mode & 0o111) !== 0)
       .sort(comparePaths));
     return Object.freeze({ executables, hooks, mcpServers });
   }
 
-  async #hooks(
-    artifactRoot: string,
+  #hooks(
     filesByPath: ReadonlyMap<string, ArtifactInspectionFile>,
-  ): Promise<readonly ArtifactInspectionHook[]> {
-    const indexFile = filesByPath.get(artifactHookIndexName);
-    if (indexFile === undefined) {
-      throw this.#runtimeError('Artifact hook index is missing from the declared artifact files.', artifactHookIndexName);
-    }
-    let index;
-    try {
-      index = parseArtifactHookIndex(await this.#readManifestedFile(artifactRoot, indexFile));
-    } catch {
-      index = undefined;
-    }
-    if (index === undefined) {
-      throw this.#runtimeError('Artifact hook index is not strict canonical metadata.', artifactHookIndexName);
-    }
+    runtime: ValidatedArtifactSnapshot['runtime'],
+  ): readonly ArtifactInspectionHook[] {
     const hooks: ArtifactInspectionHook[] = [];
-    for (const hook of index.hooks) {
+    for (const hook of runtime.hooks) {
       const file = filesByPath.get(hook.path);
       if (file === undefined || !hook.path.startsWith(`${hook.target}/`)) {
-        throw this.#runtimeError('Artifact hook index references an unmanifested wrapper.', hook.path, hook.target);
+        throw this.#runtimeError('Validated hook evidence references an unmanifested wrapper.', hook.path, hook.target);
       }
       hooks.push(Object.freeze({
         event: hook.event,
@@ -572,103 +323,32 @@ export class ArtifactInspectionService {
     return Object.freeze(hooks);
   }
 
-  async #readManifestedFile(artifactRoot: string, file: ArtifactInspectionFile): Promise<string> {
-    let bytes: Buffer;
-    try {
-      bytes = await readFile(resolve(artifactRoot, file.path));
-    } catch {
-      throw this.#runtimeError('Artifact runtime metadata file could not be read.', file.path);
-    }
-    if (bytes.byteLength !== file.bytes || createHash('sha256').update(bytes).digest('hex') !== file.sha256) {
-      throw this.#runtimeError('Artifact runtime metadata file no longer matches its manifest entry.', file.path);
-    }
-    return bytes.toString('utf8');
-  }
-
   #mcpServers(
-    artifactRoot: string,
-    manifest: ArtifactManifestV2,
     filesByPath: ReadonlyMap<string, ArtifactInspectionFile>,
-    runtimeFacts: RuntimeFactCapture,
+    runtime: ValidatedArtifactSnapshot['runtime'],
   ): readonly ArtifactInspectionMcpServer[] {
     const servers: ArtifactInspectionMcpServer[] = [];
-    for (const target of manifest.targets) {
-      const runtimeFact = runtimeFacts.mcpRuntime(target.name);
-      if (runtimeFact === undefined) continue;
-      const manifestPath = `${target.name}/${runtimeFact.manifestPath}`;
-      if (!filesByPath.has(manifestPath)) continue;
-      const result = runtimeFact.servers;
-      if (result === undefined || result.status === 'invalid') {
-        throw this.#runtimeError('Artifact MCP manifest is invalid for its target runtime contract.', manifestPath, target.name);
+    for (const server of runtime.mcpServers) {
+      if (!server.manifestPath.startsWith(`${server.target}/`) || !filesByPath.has(server.manifestPath)) {
+        throw this.#runtimeError('Validated MCP evidence references an unmanifested target manifest.', server.manifestPath, server.target);
       }
-      for (const entry of result.servers) {
-        const server = this.#resolvedMcpServer(artifactRoot, target.name, runtimeFact.runtime, entry.server, manifestPath);
-        const entryPaths = server.kind === 'stdio'
-          ? this.#mcpEntryPaths(artifactRoot, target.name, server.command, server.args, filesByPath)
-          : Object.freeze([]);
-        servers.push(Object.freeze({
-          entryPaths,
-          kind: server.kind,
-          manifestPath,
-          name: entry.name,
-          target: target.name,
-        }));
+      for (const path of server.entryPaths) {
+        if (!path.startsWith(`${server.target}/`) || !filesByPath.has(path)) {
+          throw this.#runtimeError('Validated MCP evidence references an unmanifested target file.', path, server.target);
+        }
       }
+      servers.push(Object.freeze({
+        entryPaths: Object.freeze([...server.entryPaths]),
+        kind: server.kind,
+        manifestPath: server.manifestPath,
+        name: server.name,
+        target: server.target,
+      }));
     }
     servers.sort((left, right) => left.target === right.target
       ? left.name.localeCompare(right.name)
       : left.target.localeCompare(right.target));
     return Object.freeze(servers);
-  }
-
-  #resolvedMcpServer(
-    artifactRoot: string,
-    target: string,
-    runtime: NonNullable<ReturnType<TargetRegistry['mcpRuntime']>>,
-    server: Parameters<typeof resolveMcpPathTokens>[0]['server'],
-    manifestPath: string,
-  ): ReturnType<typeof resolveMcpPathTokens> {
-    try {
-      return resolveMcpPathTokens({
-        roots: {
-          pluginData: resolve(artifactRoot, target),
-          pluginRoot: resolve(artifactRoot, target),
-          workspaceRoot: dirname(resolve(artifactRoot)),
-        },
-        runtime,
-        server,
-        target,
-      });
-    } catch {
-      throw this.#runtimeError('Artifact MCP runtime values could not be resolved.', manifestPath, target);
-    }
-  }
-
-  #mcpEntryPaths(
-    artifactRoot: string,
-    target: string,
-    command: string,
-    arguments_: readonly string[],
-    filesByPath: ReadonlyMap<string, ArtifactInspectionFile>,
-  ): readonly string[] {
-    const paths = new Set<string>();
-    for (const value of [command, ...arguments_]) {
-      const reference = classifyMcpArtifactArgument({
-        path: mcpArtifactPathApi,
-        roots: {
-          artifactRoot: resolve(artifactRoot),
-          targetRoot: resolve(artifactRoot, target),
-        },
-        value,
-      });
-      if (reference.status !== 'artifact-local') continue;
-      const path = `${target}/${reference.path}`;
-      if (!path.startsWith(`${target}/`) || !filesByPath.has(path)) {
-        throw this.#runtimeError('Artifact MCP runtime references an unmanifested target file.', path, target);
-      }
-      paths.add(path);
-    }
-    return Object.freeze([...paths].sort((left, right) => left.localeCompare(right)));
   }
 
   #runtimeError(message: string, generatedPath: string, target?: string): ArtifactInspectionServiceError {

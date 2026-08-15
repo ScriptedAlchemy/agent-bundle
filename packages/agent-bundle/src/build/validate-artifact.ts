@@ -31,6 +31,7 @@ import {
   inspectArtifactFilesystem,
   type ArtifactFile,
   type ArtifactFilesystemSnapshot,
+  type ArtifactHook,
   type ArtifactHookIndex,
   type ManifestFile,
 } from './emit.ts';
@@ -45,6 +46,33 @@ export interface ValidateArtifactOptions {
   readonly artifactRoot: string;
   /** Target contracts that produced and must validate this artifact. */
   readonly registry?: TargetRegistry;
+}
+
+/** Safe runtime facts derived during the same validation pass as the manifest. */
+export interface ValidatedArtifactRuntimeEvidence {
+  readonly hooks: readonly ArtifactHook[];
+  readonly mcpServers: readonly ValidatedArtifactMcpServerEvidence[];
+}
+
+/** One non-secret modern MCP server fact validated against manifested target files. */
+export interface ValidatedArtifactMcpServerEvidence {
+  readonly entryPaths: readonly string[];
+  readonly kind: 'stdio' | 'streamable-http';
+  readonly manifestPath: string;
+  readonly name: string;
+  readonly target: string;
+}
+
+/** Deeply frozen artifact evidence that passed one complete validation pass. */
+export interface ValidatedArtifactSnapshot {
+  readonly manifest: ArtifactManifestV2;
+  readonly runtime: ValidatedArtifactRuntimeEvidence;
+}
+
+/** Validation diagnostics plus immutable evidence only when no diagnostics were found. */
+export interface ValidateArtifactSnapshotResult {
+  readonly diagnostics: readonly Diagnostic[];
+  readonly snapshot?: ValidatedArtifactSnapshot;
 }
 
 export type ArtifactDiagnosticCode =
@@ -338,6 +366,31 @@ interface ArtifactInspection {
   readonly filesystem: ArtifactFilesystemSnapshot;
   readonly files: readonly ArtifactFile[];
 }
+
+interface RuntimeEvidenceBuilder {
+  readonly hooks: ArtifactHook[];
+  readonly mcpServers: ValidatedArtifactMcpServerEvidence[];
+}
+
+const runtimeEvidenceBuilder = (): RuntimeEvidenceBuilder => ({ hooks: [], mcpServers: [] });
+
+const snapshotRuntimeEvidence = (evidence: RuntimeEvidenceBuilder): ValidatedArtifactRuntimeEvidence => Object.freeze({
+  hooks: Object.freeze(evidence.hooks.map((hook) => Object.freeze({
+    event: hook.event,
+    id: hook.id,
+    name: hook.name,
+    path: hook.path,
+    target: hook.target,
+    ...(hook.timeout === undefined ? {} : { timeout: hook.timeout }),
+  }))),
+  mcpServers: Object.freeze(evidence.mcpServers.map((server) => Object.freeze({
+    entryPaths: Object.freeze([...server.entryPaths]),
+    kind: server.kind,
+    manifestPath: server.manifestPath,
+    name: server.name,
+    target: server.target,
+  }))),
+});
 
 interface ManifestSnapshot {
   readonly bytes: Buffer;
@@ -676,6 +729,7 @@ const validateMcpCoherence = async (options: {
   readonly files: readonly ArtifactFile[];
   readonly manifest: ArtifactManifestV2;
   readonly registry: TargetRegistry;
+  readonly runtimeEvidence: RuntimeEvidenceBuilder;
 }): Promise<readonly Diagnostic[]> => {
   const diagnostics: Diagnostic[] = [];
   const files = new Map(options.files.map((file) => [file.path, file]));
@@ -752,7 +806,17 @@ const validateMcpCoherence = async (options: {
               }
               continue;
             }
-            if (server.kind !== 'stdio') continue;
+            const entryPaths = new Set<string>();
+            if (server.kind !== 'stdio') {
+              options.runtimeEvidence.mcpServers.push(Object.freeze({
+                entryPaths: Object.freeze([]),
+                kind: server.kind,
+                manifestPath,
+                name: entry.name,
+                target: target.name,
+              }));
+              continue;
+            }
 
             if (server.cwd !== undefined) {
               if (!isTargetContainedCwd(artifactRoot, targetRoot, server.cwd)) {
@@ -786,6 +850,7 @@ const validateMcpCoherence = async (options: {
               if (commandReference.status === 'artifact-local') {
                 const path = targetArtifactPath(target.name, commandReference.path);
                 recordMcpReference(referenceCounts, path, { field: 'command', server: entry.name });
+                entryPaths.add(path);
               }
             }
 
@@ -809,8 +874,16 @@ const validateMcpCoherence = async (options: {
               if (argumentReference.status === 'artifact-local') {
                 const path = targetArtifactPath(target.name, argumentReference.path);
                 recordMcpReference(referenceCounts, path, { field: 'argument', server: entry.name });
+                entryPaths.add(path);
               }
             }
+            options.runtimeEvidence.mcpServers.push(Object.freeze({
+              entryPaths: Object.freeze([...entryPaths].sort((left, right) => left.localeCompare(right))),
+              kind: server.kind,
+              manifestPath,
+              name: entry.name,
+              target: target.name,
+            }));
           }
         }
       }
@@ -845,6 +918,7 @@ const validateHookCoherence = async (options: {
   readonly files: readonly ArtifactFile[];
   readonly manifest: ArtifactManifestV2;
   readonly registry: TargetRegistry;
+  readonly runtimeEvidence: RuntimeEvidenceBuilder;
 }): Promise<readonly Diagnostic[]> => {
   const indexFile = options.files.find((file) => file.path === artifactHookIndexName);
   const index = indexFile === undefined ? undefined : await readArtifactHookIndex(options.artifactRoot);
@@ -857,6 +931,8 @@ const validateHookCoherence = async (options: {
       hookCoherenceRecovery,
     )]);
   }
+
+  options.runtimeEvidence.hooks.push(...index.hooks);
 
   const diagnostics: Diagnostic[] = [];
   const files = new Map(options.files.map((file) => [file.path, file]));
@@ -1308,17 +1384,38 @@ export const validateArtifactFiles = async (
   ]);
 };
 
-export const validateArtifact = async (context: ValidateArtifactOptions): Promise<readonly Diagnostic[]> => {
+const invalidArtifactSnapshot = (diagnostics: readonly Diagnostic[]): ValidateArtifactSnapshotResult => Object.freeze({
+  diagnostics: Object.freeze([...diagnostics]),
+});
+
+const validArtifactSnapshot = (
+  manifest: ArtifactManifestV2,
+  runtimeEvidence: RuntimeEvidenceBuilder,
+): ValidateArtifactSnapshotResult => Object.freeze({
+  diagnostics: Object.freeze([]),
+  snapshot: Object.freeze({
+    manifest,
+    runtime: snapshotRuntimeEvidence(runtimeEvidence),
+  }),
+});
+
+/**
+ * Validates once and returns immutable manifest/runtime evidence only after all
+ * structural and target-contract checks pass against that same artifact snapshot.
+ */
+export const validateArtifactWithSnapshot = async (
+  context: ValidateArtifactOptions,
+): Promise<ValidateArtifactSnapshotResult> => {
   let inspection: ArtifactInspection;
   try {
     inspection = await inspectArtifact(context);
   } catch {
-    return [diagnostic('AB6000', 'Artifact manifest is missing or cannot be read.', artifactManifestName)];
+    return invalidArtifactSnapshot([diagnostic('AB6000', 'Artifact manifest is missing or cannot be read.', artifactManifestName)]);
   }
   const structuralDiagnostics = filesystemDiagnostics(inspection.filesystem);
   const rootEntry = inspection.filesystem.entries.find((entry) => entry.path === '.');
   if (rootEntry !== undefined) {
-    return Object.freeze([
+    return invalidArtifactSnapshot([
       ...structuralDiagnostics,
       diagnostic('AB6000', 'Artifact root is not a readable directory.', artifactManifestName),
     ]);
@@ -1326,7 +1423,7 @@ export const validateArtifact = async (context: ValidateArtifactOptions): Promis
 
   const manifestEntry = inspection.filesystem.entries.find((entry) => entry.path === artifactManifestName);
   if (manifestEntry !== undefined && manifestEntry.kind !== 'file') {
-    return Object.freeze([
+    return invalidArtifactSnapshot([
       ...structuralDiagnostics,
       diagnostic('AB6000', 'Artifact manifest is missing or cannot be read.', artifactManifestName),
     ]);
@@ -1337,17 +1434,18 @@ export const validateArtifact = async (context: ValidateArtifactOptions): Promis
   try {
     manifestSnapshot = await snapshotManifest(manifestPath);
   } catch {
-    return [diagnostic('AB6000', 'Artifact manifest is missing or cannot be read.', artifactManifestName)];
+    return invalidArtifactSnapshot([diagnostic('AB6000', 'Artifact manifest is missing or cannot be read.', artifactManifestName)]);
   }
 
   let manifest: ArtifactManifestV2;
   try {
     manifest = parseArtifactManifest(manifestSnapshot.bytes.toString('utf8'));
   } catch {
-    return [diagnostic('AB6001', 'Artifact manifest is not a strict canonical v2 manifest.', artifactManifestName)];
+    return invalidArtifactSnapshot([diagnostic('AB6001', 'Artifact manifest is not a strict canonical v2 manifest.', artifactManifestName)]);
   }
 
   const registry = context.registry ?? createDefaultRegistry();
+  const runtimeEvidence = runtimeEvidenceBuilder();
   const diagnostics: Diagnostic[] = [...structuralDiagnostics];
   if (
     manifest.agentSkills.schemaSha256 !== agentSkillsSchemaRevision.schemaSha256 ||
@@ -1382,12 +1480,14 @@ export const validateArtifact = async (context: ValidateArtifactOptions): Promis
     files: inspection.files,
     manifest,
     registry,
+    runtimeEvidence,
   }));
   diagnostics.push(...await validateHookCoherence({
     artifactRoot: context.artifactRoot,
     files: inspection.files,
     manifest,
     registry,
+    runtimeEvidence,
   }));
   diagnostics.push(...await validateEmittedSkills({
     artifactRoot: context.artifactRoot,
@@ -1418,9 +1518,20 @@ export const validateArtifact = async (context: ValidateArtifactOptions): Promis
     diagnostics.push(diagnostic('AB6001', 'Artifact manifest changed during validation.', artifactManifestName));
   }
   if (finalInspection !== undefined) {
+    const finalFilesystemDiagnostics = filesystemDiagnostics(finalInspection.filesystem).filter((entry) =>
+      !structuralDiagnostics.some((initial) =>
+        initial.code === entry.code && initial.generatedPath === entry.generatedPath));
+    diagnostics.push(...finalFilesystemDiagnostics);
     for (const path of changedArtifactPaths(inspection.files, finalInspection.files)) {
       diagnostics.push(diagnostic('AB6004', `Artifact file changed during validation: ${JSON.stringify(path)}.`, path));
     }
   }
-  return Object.freeze(diagnostics);
+  return diagnostics.length === 0
+    ? validArtifactSnapshot(manifest, runtimeEvidence)
+    : invalidArtifactSnapshot(diagnostics);
 };
+
+/** Preserves the established diagnostics-only validation API. */
+export const validateArtifact = async (
+  context: ValidateArtifactOptions,
+): Promise<readonly Diagnostic[]> => (await validateArtifactWithSnapshot(context)).diagnostics;
