@@ -103,15 +103,14 @@ it('collects nested authored module inputs from public stats without using ident
   expect(Object.isFrozen(evidence[0]!.sourceInputs)).toBe(true);
 });
 
-it('uses declared inputs for an explicitly authorized final HTML asset without chunk association', () => {
+it('uses only declared inputs for an explicitly authorized final HTML asset without chunk association', () => {
+  const configInput = '/work/project/agent-bundle.config.ts';
+  const sourceA = '/work/project/views/dashboard.ts';
+  const unrelatedModuleB = '/work/project/views/unrelated.ts';
   const finalHtml = {
     allowUnassociatedHtml: true as const,
     path: 'mcp-apps/dashboard.html',
-    sourceInputs: [
-      '/work/project/agent-bundle.config.ts',
-      '/work/project/views/dashboard.ts',
-      '/work/project/views/shell.html',
-    ],
+    sourceInputs: [configInput, sourceA],
   };
   const evidence = collectBundledOutputEvidence({
     expectedAssets: [finalHtml],
@@ -124,7 +123,7 @@ it('uses declared inputs for an explicitly authorized final HTML asset without c
         ],
         modules: [{
           chunks: [7],
-          nameForCondition: '/work/project/views/dashboard.ts',
+          nameForCondition: unrelatedModuleB,
         }],
       }),
     },
@@ -132,12 +131,9 @@ it('uses declared inputs for an explicitly authorized final HTML asset without c
 
   expect(evidence).toEqual([{
     path: 'mcp-apps/dashboard.html',
-    sourceInputs: [
-      '/work/project/agent-bundle.config.ts',
-      '/work/project/views/dashboard.ts',
-      '/work/project/views/shell.html',
-    ],
+    sourceInputs: [configInput, sourceA],
   }]);
+  expect(evidence[0]!.sourceInputs).not.toContain(unrelatedModuleB);
   expect(Object.isFrozen(evidence[0]!.sourceInputs)).toBe(true);
 });
 
@@ -147,6 +143,7 @@ it('keeps unassociated assets strict when final HTML authorization is absent or 
       assets: [
         { name: 'mcp-apps/dashboard.html' },
         { chunks: [7], name: 'mcp-apps/dashboard.js' },
+        { chunks: [8], name: 'mcp-apps/dashboard.css' },
       ],
       modules: [{
         chunks: [7],
@@ -174,6 +171,12 @@ it('keeps unassociated assets strict when final HTML authorization is absent or 
     sourceInputs: ['/work/project/views/dashboard.ts'],
   };
   expect(() => collect([authorizedScript])).toThrow(/HTML/i);
+  const authorizedStylesheet = {
+    allowUnassociatedHtml: true as const,
+    path: 'mcp-apps/dashboard.css',
+    sourceInputs: ['/work/project/views/dashboard.css'],
+  };
+  expect(() => collect([authorizedStylesheet])).toThrow(/HTML/i);
   expect(() => collectBundledOutputEvidence({
     expectedAssets: [authorizedHtml(['/work/project/views/dashboard.ts'])],
     projectRoot,
