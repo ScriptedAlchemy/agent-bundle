@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
-import { readFile, readdir } from 'node:fs/promises';
-import { join, relative, resolve } from 'node:path';
+import { readFile, readdir, realpath } from 'node:fs/promises';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 
 import { createDefaultRegistry, type TargetRegistry } from '../adapters/registry.ts';
 import { discoverProject } from '../config/discover.ts';
@@ -90,35 +90,69 @@ const relativeSourcePath = (root: string, source: string): string => {
 };
 
 const sourceInput = async (root: string, source: string): Promise<ProjectSourceSnapshotInput> => {
-  const path = relativeSourcePath(root, source);
   try {
+    const resolvedSource = await realpath(source);
+    const path = relativeSourcePath(root, resolvedSource);
     return Object.freeze({
-      sha256: createHash('sha256').update(await readFile(source)).digest('hex'),
+      sha256: createHash('sha256').update(await readFile(resolvedSource)).digest('hex'),
       path,
     });
   } catch (error) {
+    if (error instanceof RangeError) throw error;
+    const path = relativeSourcePath(root, source);
     return Object.freeze({ error: errorCode(error), path });
   }
 };
 
 const isWithinOutputRoot = (source: string, outputRoot: string): boolean => {
   const path = relative(outputRoot, source);
-  return path.length === 0 || (path !== '..' && !path.startsWith('../'));
+  return path.length === 0 || (path !== '..' && !path.startsWith('../') && !isAbsolute(path));
 };
 
-const resolveOutputRoots = (root: string, outputRoots: readonly string[] | undefined): readonly string[] => {
-  const resolvedRoot = resolve(root);
-  const roots = [...new Set((outputRoots ?? []).map((outputRoot) => resolve(resolvedRoot, outputRoot)))];
-  for (const outputRoot of roots) {
-    const projectRelative = relative(resolvedRoot, outputRoot);
-    if (projectRelative === '') {
-      throw new RangeError('Configured output root must not be the project root.');
-    }
-    if (projectRelative === '..' || projectRelative.startsWith('../')) {
-      throw new RangeError(`Configured output root ${JSON.stringify(outputRoot)} is outside project root ${JSON.stringify(resolvedRoot)}.`);
+const nearestExistingAncestor = async (path: string): Promise<string> => {
+  let candidate = path;
+  for (;;) {
+    try {
+      return await realpath(candidate);
+    } catch (error: unknown) {
+      if (!(typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT')) {
+        throw error;
+      }
+      const parent = dirname(candidate);
+      if (parent === candidate) throw error;
+      candidate = parent;
     }
   }
-  return Object.freeze(roots.sort((left, right) => left.localeCompare(right)));
+};
+
+const resolveOutputRoots = async (
+  requestedRoot: string,
+  root: string,
+  outputRoots: readonly string[] | undefined,
+): Promise<readonly string[]> => {
+  const requestedProjectRoot = resolve(requestedRoot);
+  const canonicalRoot = resolve(root);
+  const resolveOutputRoot = async (outputRoot: string): Promise<string> => {
+    const requestedOutputRoot = resolve(requestedProjectRoot, outputRoot);
+    let canonicalOutputRoot: string;
+    if (isWithinOutputRoot(requestedOutputRoot, requestedProjectRoot)) {
+      canonicalOutputRoot = resolve(canonicalRoot, relative(requestedProjectRoot, requestedOutputRoot));
+    } else if (isAbsolute(outputRoot) && isWithinOutputRoot(requestedOutputRoot, canonicalRoot)) {
+      canonicalOutputRoot = requestedOutputRoot;
+    } else {
+      throw new RangeError(`Configured output root ${JSON.stringify(requestedOutputRoot)} is outside project root ${JSON.stringify(canonicalRoot)}.`);
+    }
+    if (canonicalOutputRoot === canonicalRoot) {
+      throw new RangeError('Configured output root must not be the project root.');
+    }
+    const ancestor = await nearestExistingAncestor(canonicalOutputRoot);
+    if (!isWithinOutputRoot(ancestor, canonicalRoot)) {
+      throw new RangeError(`Configured output root ${JSON.stringify(requestedOutputRoot)} is outside project root ${JSON.stringify(canonicalRoot)}.`);
+    }
+    return canonicalOutputRoot;
+  };
+  const roots = await Promise.all((outputRoots ?? []).map(resolveOutputRoot));
+  return Object.freeze([...new Set(roots)].sort((left, right) => left.localeCompare(right)));
 };
 
 const sourcePaths = async (root: string, outputRoots: readonly string[]): Promise<readonly string[]> => {
@@ -148,12 +182,15 @@ export const snapshotProjectSource = async (
   configPath: string,
   outputRoots: readonly string[] = [],
 ): Promise<ProjectSourceSnapshot> => {
-  const resolvedRoot = resolve(root);
-  const resolvedOutputRoots = resolveOutputRoots(resolvedRoot, outputRoots);
-  const resolvedConfigPath = resolve(resolvedRoot, configPath);
+  const requestedRoot = resolve(root);
+  const resolvedRoot = await realpath(requestedRoot);
+  const resolvedOutputRoots = await resolveOutputRoots(requestedRoot, resolvedRoot, outputRoots);
+  const requestedConfigPath = resolve(requestedRoot, configPath);
+  relativeSourcePath(requestedRoot, requestedConfigPath);
+  const resolvedConfigPath = await realpath(requestedConfigPath);
   relativeSourcePath(resolvedRoot, resolvedConfigPath);
   const sources = new Set<string>([resolvedConfigPath, ...(await sourcePaths(resolvedRoot, resolvedOutputRoots))]);
-  const inputs = Object.freeze((await Promise.all([...sources].map((source) => sourceInput(root, source))))
+  const inputs = Object.freeze((await Promise.all([...sources].map((source) => sourceInput(resolvedRoot, source))))
     .sort((left, right) => left.path.localeCompare(right.path)));
   return Object.freeze({
     inputs,
@@ -217,8 +254,9 @@ export class ProjectService {
   }
 
   async prepare(command: ProjectCommand): Promise<PreparedProject> {
-    const root = resolve(this.#options.root);
-    const outputRoots = resolveOutputRoots(root, this.#options.outputRoots);
+    const requestedRoot = resolve(this.#options.root);
+    const root = await realpath(requestedRoot);
+    const outputRoots = await resolveOutputRoots(requestedRoot, root, this.#options.outputRoots);
     const registry = createDefaultRegistry();
     const configPath = resolve(root, this.#options.configPath ?? 'agent-bundle.config.ts');
     log(this.#options.logger, 'project.load', { command, root });
@@ -230,7 +268,7 @@ export class ProjectService {
         command,
         configPath: this.#options.configPath,
         mode: this.#options.mode ?? 'production',
-        root,
+        root: requestedRoot,
         targets: this.#options.targets,
       });
       discovered = await discoverProject(root, loaded.config);

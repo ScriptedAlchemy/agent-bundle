@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -158,6 +158,31 @@ it('creates an exact deeply frozen root-independent project context', async () =
       root: leftRoot,
       sourceInputs: [{ error: 'EACCES', path: 'agent-bundle.config.ts' }],
     }))).rejects.toThrow(/SHA-256 digest/i);
+    for (const sourceInput of [
+      { path: 'skills\\review\\SKILL.md', sha256: 'a'.repeat(64) },
+      { path: 'scratch/../source.ts', sha256: 'a'.repeat(64) },
+      { path: 'source.txt', sha256: 'A'.repeat(64) },
+    ]) {
+      expect(() => createProjectContext({
+        configPath: left.configPath,
+        model,
+        root: leftRoot,
+        sourceInputs: [...(left.projectContext?.sourceInputs ?? []), sourceInput],
+      })).toThrow(/(?:canonical POSIX path|lowercase SHA-256)/i);
+    }
+    const externalSource = `${leftRoot}-external-source.ts`;
+    const escapedSourceLink = join(leftRoot, 'escaped-source.ts');
+    await writeFile(externalSource, 'export const outside = true;\n');
+    await symlink(externalSource, escapedSourceLink);
+    expect(() => createProjectContext({
+      configPath: left.configPath,
+      model,
+      root: leftRoot,
+      sourceInputs: [
+        ...(left.projectContext?.sourceInputs ?? []),
+        { path: 'escaped-source.ts', sha256: 'a'.repeat(64) },
+      ],
+    })).toThrow(/outside project root/i);
     expect(() => createProjectContext({
       configPath: left.configPath,
       model: {
@@ -170,10 +195,90 @@ it('creates an exact deeply frozen root-independent project context', async () =
       root: leftRoot,
       sourceInputs: left.projectContext?.sourceInputs ?? [],
     })).toThrow(/outside project root/i);
+
+    const extensionValue = { nested: { enabled: true } };
+    const frontmatter = { ...model.skills[0]!.frontmatter, custom: { enabled: true } };
+    const modelTargets = [...model.targets];
+    const skillTargets = [...model.skills[0]!.targets];
+    const mutableModel = {
+      ...model,
+      extensions: {
+        fixture: {
+          id: 'extension:fixture',
+          key: 'fixture',
+          provenance: { ...model.metadata.provenance },
+          target: 'portable',
+          value: extensionValue,
+        },
+      },
+      skills: model.skills.map((skill) => ({ ...skill, frontmatter, targets: skillTargets })),
+      targets: modelTargets,
+    };
+    const mutableContext = createProjectContext({
+      configPath: left.configPath,
+      model: mutableModel,
+      root: leftRoot,
+      sourceInputs: left.projectContext?.sourceInputs ?? [],
+    });
+    expect(Object.isFrozen(extensionValue)).toBe(false);
+    expect(Object.isFrozen(extensionValue.nested)).toBe(false);
+    expect(Object.isFrozen(frontmatter)).toBe(false);
+    expect(Object.isFrozen(modelTargets)).toBe(false);
+    expect(Object.isFrozen(skillTargets)).toBe(false);
+    extensionValue.nested.enabled = false;
+    expect(createProjectContext({
+      configPath: left.configPath,
+      model: mutableModel,
+      root: leftRoot,
+      sourceInputs: left.projectContext?.sourceInputs ?? [],
+    }).modelDigest).not.toBe(mutableContext.modelDigest);
+    const cyclicValue: { self?: unknown } = {};
+    cyclicValue.self = cyclicValue;
+    for (const value of [new Date(), cyclicValue]) {
+      expect(() => createProjectContext({
+        configPath: left.configPath,
+        model: {
+          ...mutableModel,
+          extensions: {
+            fixture: { ...mutableModel.extensions.fixture, value },
+          },
+        },
+        root: leftRoot,
+        sourceInputs: left.projectContext?.sourceInputs ?? [],
+      })).toThrow(/(?:JSON values|cyclic values|plain JSON objects)/i);
+    }
   } finally {
     await Promise.all([
       rm(leftRoot, { force: true, recursive: true }),
       rm(rightRoot, { force: true, recursive: true }),
+      rm(`${leftRoot}-external-source.ts`, { force: true }),
+    ]);
+  }
+});
+
+it('prepares a symlinked project root from its canonical filesystem identity', async () => {
+  const root = await createProject([
+    '---',
+    'name: review',
+    'description: Reviews changes',
+    '---',
+    'Review the changed files.',
+    '',
+  ].join('\n'));
+  const linkedRoot = `${root}-link`;
+  try {
+    await symlink(root, linkedRoot, 'dir');
+    const prepared = await new ProjectService({ root: linkedRoot }).prepare('build');
+
+    expect(prepared.source.state).toBe('ready');
+    expect(prepared.projectContext).toBeDefined();
+    expect(prepared.configPath).toBe(join(root, 'agent-bundle.config.ts'));
+    expect(JSON.stringify(prepared.projectContext)).not.toContain(linkedRoot);
+    expect(JSON.stringify(prepared.projectContext)).not.toContain(root);
+  } finally {
+    await Promise.all([
+      rm(linkedRoot, { force: true, recursive: true }),
+      rm(root, { force: true, recursive: true }),
     ]);
   }
 });

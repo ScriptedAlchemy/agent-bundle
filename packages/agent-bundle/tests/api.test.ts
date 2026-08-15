@@ -1,4 +1,4 @@
-import { chmod, mkdtemp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, mkdir, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -81,6 +81,31 @@ it('returns an output-independent project context without absolute project paths
       rm(join(leftRoot, '..'), { force: true, recursive: true }),
       rm(join(rightRoot, '..'), { force: true, recursive: true }),
     ]);
+  }
+}, 30_000);
+
+it('rejects an output beneath an escaping symlink before loading source or writing outside the project', async () => {
+  const root = await createProject();
+  const external = join(root, '..', 'external-output');
+  const marker = join(external, 'config-evaluated.txt');
+  try {
+    await mkdir(external, { recursive: true });
+    await symlink(external, join(root, 'escape'), 'dir');
+    await writeFile(join(root, 'agent-bundle.config.ts'), [
+      "import { writeFileSync } from 'node:fs';",
+      `writeFileSync(${JSON.stringify(marker)}, 'evaluated\\n');`,
+      'export default {',
+      "  plugin: { name: 'escaping-output', version: '1.0.0' },",
+      "  targets: ['portable'],",
+      '};',
+      '',
+    ].join('\n'));
+
+    await expect(build({ output: 'escape/artifact', root })).rejects.toThrow(/outside project root/i);
+    await expect(readFile(marker, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(stat(join(external, 'artifact'))).rejects.toMatchObject({ code: 'ENOENT' });
+  } finally {
+    await rm(join(root, '..'), { force: true, recursive: true });
   }
 }, 30_000);
 

@@ -63,7 +63,7 @@ export const loadConfig = async ({
   const context: ConfigFactoryContext = {
     command,
     mode,
-    projectRoot,
+    projectRoot: realProjectRoot,
     selectedTargets: [...targets],
   };
   const { content: config } = await loadRstackConfig<
