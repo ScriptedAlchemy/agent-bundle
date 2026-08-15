@@ -19,6 +19,7 @@ import type {
 } from '../adapters/types.ts';
 import { parseSkillMarkdown, referencedResources } from '../config/skill-references.ts';
 import { DiagnosticError, type Diagnostic } from '../core/diagnostics.ts';
+import { parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
 import { agentSkillsSchemaRevision, validateAgentSkillsFrontmatter } from '../schemas/agent-skills/contract.ts';
 import { parseArtifactHookIndex } from '../services/hook-index.ts';
 import { resolveMcpPathTokens } from '../services/mcp-path-tokens.ts';
@@ -508,7 +509,6 @@ const validateTargetContracts = async (options: {
 
 const mcpCoherenceRecovery = 'Rebuild the artifact so every target MCP manifest references its exact compiler outputs.';
 const hookCoherenceRecovery = 'Rebuild the artifact so native hook commands and hook metadata agree.';
-const emptyArtifactHookIndex: ArtifactHookIndex = Object.freeze({ hooks: Object.freeze([]), version: 1 });
 
 const coherenceDiagnostic = (
   code: 'AB6017' | 'AB6018',
@@ -517,6 +517,19 @@ const coherenceDiagnostic = (
   target: string,
   recovery: string,
 ): Diagnostic => diagnostic(code, message, generatedPath, target, recovery);
+
+const windowsDrivePath = /^[a-z]:[\\/]/iu;
+const uncPath = /^(?:\\\\|\/\/)/u;
+const urlValue = /^[a-z][a-z\d+.-]*:/iu;
+
+const argumentValue = (value: string): string => {
+  const assignment = value.startsWith('-') ? value.indexOf('=') : -1;
+  return assignment < 0 ? value : value.slice(assignment + 1);
+};
+
+const normalizedLocalPath = (value: string): string => value.replaceAll('\\', '/');
+
+const isWindowsAbsolutePath = (value: string): boolean => windowsDrivePath.test(value) || uncPath.test(value);
 
 const isCanonicalRelativeReference = (value: string): boolean => {
   const relative = value.startsWith('./') ? value.slice(2) : value;
@@ -546,24 +559,28 @@ const artifactReference = (options: {
   readonly targetRoot: string;
   readonly value: string;
 }): ArtifactReference => {
-  const { artifactRoot, targetRoot, value } = options;
-  if (isAbsolute(value)) {
-    const resolved = resolve(value);
+  const { artifactRoot, targetRoot } = options;
+  const value = argumentValue(options.value);
+  if (isWindowsAbsolutePath(value)) return { status: 'escaped' };
+  if (urlValue.test(value)) return { status: 'external' };
+  const localPath = normalizedLocalPath(value);
+  if (isAbsolute(localPath)) {
+    const resolved = resolve(localPath);
     const artifactPath = artifactPathFor(artifactRoot, resolved);
     if (artifactPath === undefined) {
-      return value === artifactRoot || value.startsWith(`${artifactRoot}/`)
+      return localPath === artifactRoot || localPath.startsWith(`${artifactRoot}/`)
         ? { status: 'escaped' }
         : { status: 'external' };
     }
     const targetPath = artifactPathFor(targetRoot, resolved);
-    return targetPath === undefined || value !== resolved
+    return targetPath === undefined || localPath !== resolved
       ? { status: 'escaped' }
       : { path: targetPath, status: 'artifact-local' };
   }
 
-  if (!value.startsWith('.') && !value.includes('/')) return { status: 'external' };
-  if (!isCanonicalRelativeReference(value)) return { status: 'escaped' };
-  const resolved = resolve(targetRoot, value);
+  if (!localPath.startsWith('.') && !localPath.includes('/')) return { status: 'external' };
+  if (!isCanonicalRelativeReference(localPath)) return { status: 'escaped' };
+  const resolved = resolve(targetRoot, localPath);
   const targetPath = artifactPathFor(targetRoot, resolved);
   return targetPath === undefined
     ? { status: 'escaped' }
@@ -573,9 +590,25 @@ const artifactReference = (options: {
 const targetArtifactPath = (target: string, path: string): string => `${target}/${path}`;
 
 const isTargetContainedCwd = (targetRoot: string, value: string): boolean => {
-  if (!isAbsolute(value) && value !== '.' && value !== './' && !isCanonicalRelativeReference(value)) return false;
-  const resolved = resolve(targetRoot, value);
+  if (urlValue.test(value) || isWindowsAbsolutePath(value)) return false;
+  const localPath = normalizedLocalPath(value);
+  if (!isAbsolute(localPath) && localPath !== '.' && localPath !== './' && !isCanonicalRelativeReference(localPath)) return false;
+  const resolved = resolve(targetRoot, localPath);
   return resolved === targetRoot || artifactPathFor(targetRoot, resolved) !== undefined;
+};
+
+interface McpReferenceOccurrence {
+  readonly field: 'argument' | 'command';
+  readonly server: string;
+}
+
+const recordMcpReference = (
+  references: Map<string, McpReferenceOccurrence[]>,
+  path: string,
+  occurrence: McpReferenceOccurrence,
+): void => {
+  const occurrences = references.get(path);
+  if (occurrences !== undefined) occurrences.push(occurrence);
 };
 
 const pathInOutputLayout = (
@@ -658,16 +691,23 @@ const validateMcpCoherence = async (options: {
     const manifestPath = targetArtifactPath(target.name, runtime.manifestPath);
     const targetRoot = resolve(artifactRoot, target.name);
     const mcpLayout = options.registry.artifactLayout(target.name).mcpEntries;
-    const referenceCounts = new Map<string, Set<string>>();
+    const referenceCounts = new Map<string, McpReferenceOccurrence[]>();
     const mcpEntries = options.files.filter((file) => pathInOutputLayout(file.path, target.name, mcpLayout));
-    for (const file of mcpEntries) referenceCounts.set(file.path, new Set());
+    for (const file of mcpEntries) referenceCounts.set(file.path, []);
 
     const manifestFile = files.get(manifestPath);
     if (manifestFile !== undefined) {
       let document: unknown;
       try {
-        document = JSON.parse(await readFile(resolve(artifactRoot, manifestPath), 'utf8'));
+        document = parseJsonWithoutDuplicateKeys(await readFile(resolve(artifactRoot, manifestPath), 'utf8'));
       } catch {
+        diagnostics.push(coherenceDiagnostic(
+          'AB6017',
+          `MCP manifest for target ${JSON.stringify(target.name)} is not valid strict JSON.`,
+          manifestPath,
+          target.name,
+          mcpCoherenceRecovery,
+        ));
         document = undefined;
       }
       if (document !== undefined) {
@@ -743,7 +783,7 @@ const validateMcpCoherence = async (options: {
               const commandReference = artifactReference({ artifactRoot, targetRoot, value: server.command });
               if (commandReference.status === 'artifact-local') {
                 const path = targetArtifactPath(target.name, commandReference.path);
-                referenceCounts.get(path)?.add(entry.name);
+                recordMcpReference(referenceCounts, path, { field: 'command', server: entry.name });
               }
             }
 
@@ -762,7 +802,7 @@ const validateMcpCoherence = async (options: {
               const argumentReference = artifactReference({ artifactRoot, targetRoot, value: argument });
               if (argumentReference.status === 'artifact-local') {
                 const path = targetArtifactPath(target.name, argumentReference.path);
-                referenceCounts.get(path)?.add(entry.name);
+                recordMcpReference(referenceCounts, path, { field: 'argument', server: entry.name });
               }
             }
           }
@@ -770,13 +810,13 @@ const validateMcpCoherence = async (options: {
       }
     }
 
-    for (const [path, servers] of referenceCounts) {
-      if (servers.size === 1) continue;
+    for (const [path, occurrences] of referenceCounts) {
+      if (occurrences.length === 1) continue;
       diagnostics.push(coherenceDiagnostic(
         'AB6017',
-        servers.size === 0
+        occurrences.length === 0
           ? `Compiler MCP entry ${JSON.stringify(path)} is not referenced by a server in target ${JSON.stringify(target.name)}.`
-          : `Compiler MCP entry ${JSON.stringify(path)} is referenced by multiple servers in target ${JSON.stringify(target.name)}.`,
+          : `Compiler MCP entry ${JSON.stringify(path)} is referenced ${occurrences.length} times in target ${JSON.stringify(target.name)}.`,
         path,
         target.name,
         mcpCoherenceRecovery,
@@ -801,9 +841,7 @@ const validateHookCoherence = async (options: {
   readonly registry: TargetRegistry;
 }): Promise<readonly Diagnostic[]> => {
   const indexFile = options.files.find((file) => file.path === artifactHookIndexName);
-  const index = indexFile === undefined
-    ? emptyArtifactHookIndex
-    : await readArtifactHookIndex(options.artifactRoot);
+  const index = indexFile === undefined ? undefined : await readArtifactHookIndex(options.artifactRoot);
   if (index === undefined) {
     return Object.freeze([coherenceDiagnostic(
       'AB6018',

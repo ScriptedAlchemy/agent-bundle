@@ -2,6 +2,15 @@ import { posix } from 'node:path';
 
 import type { ArtifactHook, ArtifactHookIndex } from '../build/emit.ts';
 import { stableJson } from '../core/digest.ts';
+import { parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
+
+/** Orders hook metadata by its explicit `(target, id)` tuple. */
+export const compareArtifactHooks = (
+  left: Pick<ArtifactHook, 'id' | 'target'>,
+  right: Pick<ArtifactHook, 'id' | 'target'>,
+): number => left.target === right.target
+  ? left.id.localeCompare(right.id)
+  : left.target.localeCompare(right.target);
 
 const isPlainRecord = (value: unknown): value is Record<string, unknown> => {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
@@ -57,7 +66,7 @@ const parseHook = (value: unknown): ArtifactHook | undefined => {
 export const parseArtifactHookIndex = (bytes: string): ArtifactHookIndex | undefined => {
   let value: unknown;
   try {
-    value = JSON.parse(bytes);
+    value = parseJsonWithoutDuplicateKeys(bytes);
   } catch {
     return undefined;
   }
@@ -66,13 +75,12 @@ export const parseArtifactHookIndex = (bytes: string): ArtifactHookIndex | undef
   }
 
   const hooks: ArtifactHook[] = [];
-  let previous: string | undefined;
+  let previous: ArtifactHook | undefined;
   for (const candidate of value.hooks) {
     const hook = parseHook(candidate);
     if (hook === undefined) return undefined;
-    const key = `${hook.target}\u0000${hook.id}`;
-    if (previous !== undefined && previous.localeCompare(key) >= 0) return undefined;
-    previous = key;
+    if (previous !== undefined && compareArtifactHooks(previous, hook) >= 0) return undefined;
+    previous = hook;
     hooks.push(hook);
   }
   const index: ArtifactHookIndex = Object.freeze({ hooks: Object.freeze(hooks), version: 1 });

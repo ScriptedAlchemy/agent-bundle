@@ -34,6 +34,11 @@ interface ArtifactFixtureFile {
   readonly path: string;
 }
 
+const withHookIndex = (files: readonly ArtifactFixtureFile[]): readonly ArtifactFixtureFile[] =>
+  files.some((file) => file.path === 'agent-bundle.hooks.json')
+    ? files
+    : [{ contents: '{"hooks":[],"version":1}\n', kind: 'generated', path: 'agent-bundle.hooks.json' }, ...files];
+
 const manifestFor = (
   files: readonly ArtifactFixtureFile[],
   includeModes = true,
@@ -75,9 +80,11 @@ const writeArtifact = async (
   files: readonly ArtifactFixtureFile[],
   includeModes = true,
   targets: readonly ArtifactManifestV2['targets'][number][] = [],
+  includeHookIndex = true,
 ): Promise<string> => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-artifact-validator-'));
-  for (const file of files) {
+  const artifactFiles = includeHookIndex ? withHookIndex(files) : files;
+  for (const file of artifactFiles) {
     const path = join(root, file.path);
     await mkdir(dirname(path), { recursive: true });
     await writeFile(path, file.contents);
@@ -85,7 +92,7 @@ const writeArtifact = async (
   }
   await writeFile(
     join(root, 'agent-bundle.manifest.json'),
-    assembleArtifactManifest(manifestFor(files, includeModes, targets)).bytes,
+    assembleArtifactManifest(manifestFor(artifactFiles, includeModes, targets)).bytes,
   );
   return root;
 };
@@ -484,7 +491,7 @@ it('rejects legacy, noncanonical, and duplicate-key manifests as strict v2 parse
       expect.objectContaining({ code: 'AB6001', generatedPath: 'agent-bundle.manifest.json' }),
     ]);
 
-    const canonical = assembleArtifactManifest(manifestFor([])).bytes;
+    const canonical = assembleArtifactManifest(manifestFor(withHookIndex([]))).bytes;
     for (const bytes of [JSON.stringify(JSON.parse(canonical), null, 2), canonical.replace(',"version":2', ',"version":2,"version":2')]) {
       await writeFile(join(root, 'agent-bundle.manifest.json'), bytes);
       expect(await validateArtifact({ artifactRoot: root })).toEqual([
@@ -571,6 +578,100 @@ it('reports an orphan compiler MCP output after the artifact is rehashed', async
     ]));
     expect(diagnostics).not.toEqual(expect.arrayContaining([
       expect.objectContaining({ code: 'AB6004' }),
+    ]));
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it.each([
+  ['backslash local path', 'scripts\\missing.mjs', true],
+  ['local option assignment', '--config=./scripts/missing.mjs', true],
+  ['HTTPS URL', 'https://mcp.example.test/resource?query=value#fragment', false],
+  ['URL option assignment', '--url=https://mcp.example.test/resource?query=value#fragment', false],
+  ['Windows drive escape', 'C:\\outside\\tool.mjs', true],
+  ['UNC escape', '\\\\server\\share\\tool.mjs', true],
+])('classifies MCP %s deterministically', async (_name, argument, expectsDiagnostic) => {
+  const root = await writeArtifact([{
+    contents: `${JSON.stringify({
+      mcpServers: { server: { args: [argument], command: 'node', type: 'stdio' } },
+    })}\n`,
+    kind: 'generated',
+    path: 'coherent/native/servers.json',
+  }], true, [coherenceManifestTarget]);
+
+  try {
+    const diagnostics = await validateArtifact({ artifactRoot: root, registry: coherenceRegistry() });
+    const matching = diagnostics.some((entry) => entry.code === 'AB6017' && entry.generatedPath === 'coherent/native/servers.json');
+    expect(matching).toBe(expectsDiagnostic);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it.each([
+  ['one server twice', {
+    server: { args: ['mcp/mcp-server-deadbeef.mjs', 'mcp/mcp-server-deadbeef.mjs'], command: 'node', type: 'stdio' },
+  }],
+  ['two servers once each', {
+    first: { args: ['mcp/mcp-server-deadbeef.mjs'], command: 'node', type: 'stdio' },
+    second: { args: ['mcp/mcp-server-deadbeef.mjs'], command: 'node', type: 'stdio' },
+  }],
+])('counts exact MCP reference occurrences for %s', async (_name, mcpServers) => {
+  const root = await writeArtifact([
+    {
+      contents: `${JSON.stringify({ mcpServers })}\n`,
+      kind: 'generated',
+      path: 'coherent/native/servers.json',
+    },
+    { contents: 'export const server = true;\n', kind: 'bundle', path: 'coherent/mcp/mcp-server-deadbeef.mjs' },
+  ], true, [coherenceManifestTarget]);
+
+  try {
+    expect(await validateArtifact({ artifactRoot: root, registry: coherenceRegistry() })).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'AB6017', generatedPath: 'coherent/mcp/mcp-server-deadbeef.mjs', target: coherenceTarget }),
+    ]));
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('rejects duplicate keys in a canonically manifested native MCP document', async () => {
+  const server = '{"args":[],"command":"node","type":"stdio"}';
+  const root = await writeArtifact([{
+    contents: `{"mcpServers":{"server":${server},"server":${server}}}\n`,
+    kind: 'generated',
+    path: 'coherent/native/servers.json',
+  }], true, [coherenceManifestTarget]);
+
+  try {
+    const diagnostics = await validateArtifact({ artifactRoot: root, registry: coherenceRegistry() });
+    expect(diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'AB6017', generatedPath: 'coherent/native/servers.json', target: coherenceTarget }),
+    ]));
+    expect(diagnostics).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'AB6004' }),
+    ]));
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('requires the canonical hook index when native hook metadata is present', async () => {
+  const root = await writeArtifact([
+    {
+      contents: `${JSON.stringify({
+        hooks: { Start: [{ hooks: [{ command: 'node "${HOOK_ROOT}/hooks/start.mjs"', type: 'command' }] }] },
+      })}\n`,
+      kind: 'generated',
+      path: 'hooked/hooks/hooks.json',
+    },
+    { contents: 'export const start = true;\n', kind: 'bundle', path: 'hooked/hooks/start.mjs' },
+  ], true, [hookCoherenceManifestTarget], false);
+
+  try {
+    expect(await validateArtifact({ artifactRoot: root, registry: hookCoherenceRegistry() })).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'AB6018', generatedPath: 'agent-bundle.hooks.json', target: 'artifact' }),
     ]));
   } finally {
     await rm(root, { force: true, recursive: true });
@@ -861,7 +962,7 @@ it('does not execute artifact JavaScript while validating deferred imports', asy
       await mkdir(dirname(path), { recursive: true });
       await writeFile(path, file.contents);
     }
-    await writeFile(join(root, 'agent-bundle.manifest.json'), assembleArtifactManifest(manifestFor(files, true, [customManifestTarget])).bytes);
+    await writeFile(join(root, 'agent-bundle.manifest.json'), assembleArtifactManifest(manifestFor(withHookIndex(files), true, [customManifestTarget])).bytes);
 
     await expect(validateArtifact({ artifactRoot: root, registry: customRegistry() })).resolves.toEqual(expect.arrayContaining([
       expect.objectContaining({ code: 'AB6005', generatedPath: 'custom/scripts/process-exit.mjs' }),
@@ -1013,7 +1114,7 @@ it('requires manifest target metadata to match the supplied registry exactly', a
         ],
       },
     ]) {
-      await writeFile(join(root, 'agent-bundle.manifest.json'), assembleArtifactManifest(manifestFor(files, true, [target])).bytes);
+      await writeFile(join(root, 'agent-bundle.manifest.json'), assembleArtifactManifest(manifestFor(withHookIndex(files), true, [target])).bytes);
       await expect(validateArtifact({ artifactRoot: root, registry: customRegistry() })).resolves.toEqual(expect.arrayContaining([
         expect.objectContaining({ code: 'AB6010', target: customTarget }),
       ]));
@@ -1036,7 +1137,7 @@ it('requires registered target-native documents and validates their pinned schem
     await writeFile(join(root, 'custom', 'document.json'), invalidFiles[0]!.contents);
     await writeFile(
       join(root, 'agent-bundle.manifest.json'),
-      assembleArtifactManifest(manifestFor(invalidFiles, true, [customManifestTarget])).bytes,
+      assembleArtifactManifest(manifestFor(withHookIndex(invalidFiles), true, [customManifestTarget])).bytes,
     );
     await expect(validateArtifact({ artifactRoot: root, registry: customRegistry() })).resolves.toEqual(expect.arrayContaining([
       expect.objectContaining({ code: 'AB6012', generatedPath: 'custom/document.json', target: customTarget }),
@@ -1091,7 +1192,7 @@ it('validates a canonically rehashed Codex marketplace at its emitted path', asy
     await writeFile(join(root, 'codex', '.agents', 'plugins', 'marketplace.json'), '{}\n');
     await writeFile(
       join(root, 'agent-bundle.manifest.json'),
-      assembleArtifactManifest(manifestFor(invalidFiles, true, [target])).bytes,
+      assembleArtifactManifest(manifestFor(withHookIndex(invalidFiles), true, [target])).bytes,
     );
 
     const diagnostics = await validateArtifact({ artifactRoot: root, registry });

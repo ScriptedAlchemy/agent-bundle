@@ -10,6 +10,7 @@ import { expect, it, rs } from '@rstest/core';
 
 import { createDefaultRegistry } from '../src/adapters/registry.ts';
 import { build } from './support/build.ts';
+import { writeHookIndex } from '../src/build/emit.ts';
 import { buildWithRslib } from '../src/build/rslib.ts';
 import { HookService } from '../src/services/hook-service.ts';
 import { parseArtifactHookIndex } from '../src/services/hook-index.ts';
@@ -38,6 +39,31 @@ it('accepts only canonical frozen hook index metadata', () => {
   expect(parseArtifactHookIndex('{"version":1,"hooks":[]}\n')).toBeUndefined();
   expect(parseArtifactHookIndex('{"hooks":[],"version":1,"version":1}\n')).toBeUndefined();
   expect(parseArtifactHookIndex('{"hooks":[{"event":"sessionStart","id":"hook:start","name":"start","path":"../start.mjs","target":"codex"}],"version":1}\n')).toBeUndefined();
+  const crossTargetOrder = '{"hooks":[{"event":"sessionStart","id":"z","name":"first","path":"a/hooks/first.mjs","target":"a"},{"event":"sessionStart","id":"a","name":"second","path":"aa/hooks/second.mjs","target":"aa"}],"version":1}\n';
+  expect(parseArtifactHookIndex(crossTargetOrder)).toEqual({
+    hooks: [
+      { event: 'sessionStart', id: 'z', name: 'first', path: 'a/hooks/first.mjs', target: 'a' },
+      { event: 'sessionStart', id: 'a', name: 'second', path: 'aa/hooks/second.mjs', target: 'aa' },
+    ],
+    version: 1,
+  });
+});
+
+it('serializes hook index targets by tuple order without sentinel concatenation', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-hook-index-order-'));
+  const hooks = [
+    { event: 'sessionStart', id: 'a', name: 'second', path: 'aa/hooks/second.mjs', target: 'aa' },
+    { event: 'sessionStart', id: 'z', name: 'first', path: 'a/hooks/first.mjs', target: 'a' },
+  ] as const;
+
+  try {
+    await writeHookIndex({ artifactRoot: root, hooks });
+    expect(await readFile(join(root, 'agent-bundle.hooks.json'), 'utf8')).toBe(
+      '{"hooks":[{"event":"sessionStart","id":"z","name":"first","path":"a/hooks/first.mjs","target":"a"},{"event":"sessionStart","id":"a","name":"second","path":"aa/hooks/second.mjs","target":"aa"}],"version":1}\n',
+    );
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
 });
 
 const runPublishedHook = async (wrapper: string, input: string): Promise<{ readonly code: number | null; readonly stderr: string }> =>
@@ -552,6 +578,7 @@ it('compiles each native hook through a virtual Rslib entry without sibling chun
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-hooks-build-'));
   const sourceRoot = join(root, 'src', 'hooks');
   const outputRoot = join(root, 'dist');
+  const repeatedOutputRoot = join(root, 'dist-repeat');
   const model = hookModel(root);
   const names = model.hooks.map((hook) => hook.name).sort();
 
@@ -575,6 +602,10 @@ it('compiles each native hook through a virtual Rslib entry without sibling chun
     ]);
 
     await build({ model, outputRoot, projectRoot: root, registry: createDefaultRegistry() });
+    await build({ model, outputRoot: repeatedOutputRoot, projectRoot: root, registry: createDefaultRegistry() });
+
+    const hookIndex = await readFile(join(outputRoot, 'agent-bundle.hooks.json'), 'utf8');
+    expect(await readFile(join(repeatedOutputRoot, 'agent-bundle.hooks.json'), 'utf8')).toBe(hookIndex);
 
     for (const target of ['codex', 'claude']) {
       const hooksRoot = join(outputRoot, target, 'hooks');
