@@ -107,7 +107,7 @@ it('rejects an unsafe epoch id before it can create a staging directory', async 
   }
 });
 
-it('retains active, referenced, and five newest unreferenced epochs until their references close', async () => {
+it('retains active, referenced, and five newest unreferenced epochs until the final reference closes', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent bundle epoch retention '));
 
   try {
@@ -133,13 +133,138 @@ it('retains active, referenced, and five newest unreferenced epochs until their 
 
     await reference.close();
     await reference.close();
-    await store.cleanup();
     expect(
       (await readdir(epochsRoot, { withFileTypes: true }))
         .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'))
         .map((entry) => entry.name)
         .sort(),
     ).toEqual(['epoch-3', 'epoch-4', 'epoch-5', 'epoch-6', 'epoch-7', 'epoch-8']);
+    await expect(readFile(epochMetadataPathFor(root, 'epoch-1'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('keeps a retired epoch until the final of multiple references closes', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent bundle epoch final reference '));
+
+  try {
+    const store = new EpochStore({ projectRoot: root });
+    await publishEpoch(store, epochFor(root, 'epoch-1', '2026-08-14T12:00:01.000Z'));
+    const first = await store.acquireEpochReference('epoch-1');
+    const final = await store.acquireEpochReference('epoch-1');
+    for (let sequence = 2; sequence <= 8; sequence += 1) {
+      await publishEpoch(
+        store,
+        epochFor(root, `epoch-${sequence}`, `2026-08-14T12:00:0${sequence}.000Z`),
+      );
+    }
+
+    await first.close();
+    await expect(
+      readFile(join(root, '.agent-bundle', 'epochs', 'epoch-1', 'claude', 'plugin.json'), 'utf8'),
+    ).resolves.toBe('epoch-1\n');
+
+    await final.close();
+    await expect(
+      readFile(join(root, '.agent-bundle', 'epochs', 'epoch-1', 'claude', 'plugin.json'), 'utf8'),
+    ).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(readFile(epochMetadataPathFor(root, 'epoch-1'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('does not duplicate concurrent close calls before the final reference closes', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent bundle epoch concurrent close '));
+
+  try {
+    const store = new EpochStore({ projectRoot: root });
+    await publishEpoch(store, epochFor(root, 'epoch-1', '2026-08-14T12:00:01.000Z'));
+    const repeated = await store.acquireEpochReference('epoch-1');
+    const final = await store.acquireEpochReference('epoch-1');
+    for (let sequence = 2; sequence <= 8; sequence += 1) {
+      await publishEpoch(
+        store,
+        epochFor(root, `epoch-${sequence}`, `2026-08-14T12:00:0${sequence}.000Z`),
+      );
+    }
+
+    await Promise.all([repeated.close(), repeated.close(), repeated.close()]);
+    await expect(
+      readFile(join(root, '.agent-bundle', 'epochs', 'epoch-1', 'claude', 'plugin.json'), 'utf8'),
+    ).resolves.toBe('epoch-1\n');
+
+    await Promise.all([final.close(), final.close(), final.close()]);
+    await expect(
+      readFile(join(root, '.agent-bundle', 'epochs', 'epoch-1', 'claude', 'plugin.json'), 'utf8'),
+    ).rejects.toMatchObject({ code: 'ENOENT' });
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('retains an epoch when reference acquisition is serialized before its final close', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent bundle epoch acquire before close '));
+
+  try {
+    const store = new EpochStore({ projectRoot: root });
+    await publishEpoch(store, epochFor(root, 'epoch-1', '2026-08-14T12:00:01.000Z'));
+    const initial = await store.acquireEpochReference('epoch-1');
+    for (let sequence = 2; sequence <= 8; sequence += 1) {
+      await publishEpoch(
+        store,
+        epochFor(root, `epoch-${sequence}`, `2026-08-14T12:00:0${sequence}.000Z`),
+      );
+    }
+
+    const successor = store.acquireEpochReference('epoch-1');
+    await initial.close();
+    const reference = await successor;
+    await expect(
+      readFile(join(root, '.agent-bundle', 'epochs', 'epoch-1', 'claude', 'plugin.json'), 'utf8'),
+    ).resolves.toBe('epoch-1\n');
+
+    await reference.close();
+    await expect(
+      readFile(join(root, '.agent-bundle', 'epochs', 'epoch-1', 'claude', 'plugin.json'), 'utf8'),
+    ).rejects.toMatchObject({ code: 'ENOENT' });
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('shares final-release cleanup failure with concurrent close callers without restoring the reference', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent bundle epoch close cleanup failure '));
+
+  try {
+    const store = new EpochStore({ projectRoot: root });
+    await publishEpoch(store, epochFor(root, 'epoch-1', '2026-08-14T12:00:01.000Z'));
+    const reference = await store.acquireEpochReference('epoch-1');
+    for (let sequence = 2; sequence <= 7; sequence += 1) {
+      await publishEpoch(
+        store,
+        epochFor(root, `epoch-${sequence}`, `2026-08-14T12:00:0${sequence}.000Z`),
+      );
+    }
+    const active = epochFor(root, 'epoch-8', '2026-08-14T12:00:08.000Z');
+    await publishEpoch(store, active);
+    await writeFile(
+      activeMetadataPathFor(root),
+      `${JSON.stringify({ epoch: epochFor(root, 'epoch-ghost'), version: 1 })}\n`,
+    );
+
+    const outcomes = await Promise.allSettled([reference.close(), reference.close()]);
+    expect(outcomes).toEqual([
+      expect.objectContaining({ status: 'rejected' }),
+      expect.objectContaining({ status: 'rejected' }),
+    ]);
+
+    await writeFile(activeMetadataPathFor(root), `${JSON.stringify({ epoch: active, version: 1 })}\n`);
+    await store.cleanup();
+    await expect(
+      readFile(join(root, '.agent-bundle', 'epochs', 'epoch-1', 'claude', 'plugin.json'), 'utf8'),
+    ).rejects.toMatchObject({ code: 'ENOENT' });
   } finally {
     await rm(root, { force: true, recursive: true });
   }
@@ -300,7 +425,7 @@ it('surfaces corrupt per-epoch metadata instead of silently excluding it from cl
   }
 });
 
-it('does not return a reference to an epoch concurrently selected for cleanup', async () => {
+it('does not remove an epoch when concurrent references are admitted before its final close', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent bundle epoch reference cleanup race '));
 
   try {
@@ -310,11 +435,10 @@ it('does not return a reference to an epoch concurrently selected for cleanup', 
     for (let sequence = 2; sequence <= 8; sequence += 1) {
       await publishEpoch(store, epochFor(root, `epoch-${sequence}`, `2026-08-14T12:00:0${sequence}.000Z`));
     }
-    await retained.close();
 
     const outcomes = await Promise.allSettled([
       ...Array.from({ length: 16 }, () => store.acquireEpochReference('epoch-1')),
-      store.cleanup(),
+      retained.close(),
     ]);
     const references = outcomes
       .filter((outcome): outcome is PromiseFulfilledResult<Awaited<ReturnType<typeof store.acquireEpochReference>>> =>

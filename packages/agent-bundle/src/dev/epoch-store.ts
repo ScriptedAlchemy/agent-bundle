@@ -206,7 +206,7 @@ class EpochStagingHandle implements EpochStaging {
 export class EpochReference {
   readonly #epochId: string;
   readonly #store: EpochStore;
-  #closed = false;
+  #close: Promise<void> | undefined;
 
   constructor(store: EpochStore, epochId: string, root: string) {
     this.#store = store;
@@ -217,10 +217,9 @@ export class EpochReference {
   /** Immutable epoch directory validated before this reference was acquired. */
   readonly root: string;
 
-  async close(): Promise<void> {
-    if (this.#closed) return;
-    this.#closed = true;
-    await this.#store.releaseEpochReference(this.#epochId);
+  close(): Promise<void> {
+    this.#close ??= this.#store.releaseEpochReference(this.#epochId);
+    return this.#close;
   }
 }
 
@@ -291,11 +290,12 @@ export class EpochStore {
   async releaseEpochReference(epochId: string): Promise<void> {
     await this.#withTransition(async () => {
       const count = this.#references.get(epochId) ?? 0;
-      if (count <= 1) {
+      if (count === 1) {
         this.#references.delete(epochId);
+        await this.#cleanup();
         return;
       }
-      this.#references.set(epochId, count - 1);
+      if (count > 1) this.#references.set(epochId, count - 1);
     });
   }
 
