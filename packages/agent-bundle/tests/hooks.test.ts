@@ -17,6 +17,7 @@ import type { NormalizationTargetRegistry, NormalizedPlugin } from '../src/core/
 import { validateModel, validateSource } from '../src/config/validate.ts';
 
 const registry: NormalizationTargetRegistry = {
+  configExtensions: () => [],
   defaultTargetNames: () => ['codex', 'claude'],
   has: (name) => name === 'portable' || name === 'codex' || name === 'claude',
   supports: (name, capability) => capability === 'hooks' && name !== 'portable',
@@ -711,6 +712,7 @@ it('rejects malformed native hook input, exports, and handler results concisely'
 }, 15_000);
 
 const hookModel = (root: string): NormalizedPlugin => ({
+  extensions: {},
   hooks: [
     {
       event: 'sessionStart',
@@ -894,7 +896,7 @@ it('normalizes a mixed hook fixture and reports malformed hook declarations', as
       },
     ]);
     expect(validateModel(model, registry).map((diagnostic) => diagnostic.code)).toContain('AB4101');
-    expect(validateSource(invalid, { skills: [] }).map((diagnostic) => diagnostic.code)).toEqual([
+    expect(validateSource(invalid, { skills: [] }, registry).map((diagnostic) => diagnostic.code)).toEqual([
       'AB4200',
       'AB4201',
       'AB4204',

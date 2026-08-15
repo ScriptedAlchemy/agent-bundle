@@ -14,6 +14,7 @@ import { pathTokens, type NormalizedPlugin } from '../src/core/types.ts';
 const installFormats = addFormats as unknown as (target: Ajv2020) => void;
 
 const plugin = Object.freeze({
+  extensions: Object.freeze({}),
   hooks: Object.freeze([]),
   marketplace: true as const,
   mcpServers: Object.freeze([

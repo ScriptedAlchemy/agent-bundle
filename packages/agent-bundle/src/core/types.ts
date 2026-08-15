@@ -48,6 +48,15 @@ export interface AgentBundleHostConfig {
   nativeHooks?: string;
 }
 
+/** Adapter-owned config is contributed by declaration merging, not compiler core. */
+// rslint-disable-next-line @typescript-eslint/no-empty-object-type -- declaration-merge extension point
+export interface AgentBundleConfigExtensions {}
+
+/** The portable adapter currently reserves an empty extension envelope. */
+export interface AgentBundlePortableConfig {
+  readonly [key: string]: unknown;
+}
+
 export interface AgentBundleScriptEntry {
   entry: string;
   targets?: readonly string[];
@@ -60,9 +69,7 @@ export type AgentBundleHookInput =
   | AgentBundleHookEntry
   | readonly (string | AgentBundleHookEntry)[];
 
-export interface AgentBundleConfig {
-  claude?: AgentBundleHostConfig;
-  codex?: AgentBundleHostConfig;
+export interface AgentBundleConfig extends AgentBundleConfigExtensions {
   hooks?: Partial<Record<CanonicalHookEvent, AgentBundleHookInput>>;
   marketplace?: boolean;
   mcp?: AgentBundleMcpConfig;
@@ -173,7 +180,16 @@ export interface NormalizedNativeHook {
   readonly target: 'codex' | 'claude';
 }
 
+export interface NormalizedConfigExtension {
+  readonly id: string;
+  readonly key: string;
+  readonly provenance: SourceProvenance;
+  readonly target: string;
+  readonly value: unknown;
+}
+
 export interface NormalizedPlugin {
+  readonly extensions: Readonly<Record<string, NormalizedConfigExtension>>;
   readonly hooks: readonly NormalizedHook[];
   readonly marketplace?: true;
   readonly metadata: NormalizedMetadata;
@@ -190,7 +206,13 @@ export interface NormalizedPlugin {
   readonly targets: readonly NormalizedTarget[];
 }
 
+export interface NormalizationConfigExtension {
+  readonly key: string;
+  readonly target: string;
+}
+
 export interface NormalizationTargetRegistry {
+  configExtensions(): readonly NormalizationConfigExtension[];
   defaultTargetNames(): readonly string[];
   has(name: string): boolean;
   supports(name: string, capability: string): boolean;

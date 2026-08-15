@@ -38,7 +38,10 @@ const isHookEntryList = (
 const asHookEntries = (input: AgentBundleHookInput): readonly (string | AgentBundleHookEntry)[] =>
   isHookEntryList(input) ? input : [input];
 
-const validateHooks = (loaded: LoadedConfig): Diagnostic[] => {
+const validateHooks = (
+  loaded: LoadedConfig,
+  registry: NormalizationTargetRegistry,
+): Diagnostic[] => {
   const hooks = loaded.config.hooks;
   if (hooks === undefined) return [];
 
@@ -74,10 +77,16 @@ const validateHooks = (loaded: LoadedConfig): Diagnostic[] => {
       for (const target of entry.targets ?? []) {
         if (typeof target !== 'string' || target.trim().length === 0) {
           diagnostics.push(sourceDiagnostic('AB4203', `Hook ${event} has an invalid target.`, loaded.configPath));
-        } else if (target === 'portable') {
+        } else if (!registry.has(target)) {
+          diagnostics.push(sourceDiagnostic(
+            'AB4203',
+            `Hook ${event} selects unknown target ${JSON.stringify(target)}.`,
+            loaded.configPath,
+          ));
+        } else if (!registry.supports(target, 'hooks')) {
           diagnostics.push(sourceDiagnostic(
             'AB4204',
-            `Portable target cannot emit hook ${event}.`,
+            `Target ${JSON.stringify(target)} cannot emit hook ${event}.`,
             loaded.configPath,
           ));
         }
@@ -214,12 +223,13 @@ const bundleScriptExtensions = new Set([
   '.js', '.jsx', '.mjs', '.cjs', '.ts', '.tsx', '.mts', '.cts',
 ]);
 
-const knownTargetNames = new Set(['portable', 'codex', 'claude']);
-
 const isSafeScriptName = (name: string): boolean =>
   /^[a-zA-Z0-9](?:[a-zA-Z0-9._-]*[a-zA-Z0-9])?$/u.test(name);
 
-const validateScripts = (loaded: LoadedConfig): Diagnostic[] => {
+const validateScripts = (
+  loaded: LoadedConfig,
+  registry: NormalizationTargetRegistry,
+): Diagnostic[] => {
   const scripts = loaded.config.scripts;
   if (scripts === undefined) return [];
   if (!isRecord(scripts)) {
@@ -317,7 +327,7 @@ const validateScripts = (loaded: LoadedConfig): Diagnostic[] => {
         ));
       } else {
         for (const target of declaration.targets) {
-          if (!knownTargetNames.has(target)) {
+          if (!registry.has(target)) {
             diagnostics.push(sourceDiagnostic(
               'AB4406',
               `Script ${JSON.stringify(name)} selects unknown target ${JSON.stringify(target)}.`,
@@ -721,6 +731,7 @@ const validateSkill = (skill: SkillDocument): Diagnostic[] => {
 export const validateSource = (
   loaded: LoadedConfig,
   discovered: DiscoveredProject,
+  registry: NormalizationTargetRegistry,
 ): Diagnostic[] => {
   const diagnostics: Diagnostic[] = [];
   const plugin = loaded.config.plugin as unknown;
@@ -769,9 +780,9 @@ export const validateSource = (
     }
   }
 
-  diagnostics.push(...validateHooks(loaded));
+  diagnostics.push(...validateHooks(loaded, registry));
   diagnostics.push(...validateMcp(loaded));
-  diagnostics.push(...validateScripts(loaded));
+  diagnostics.push(...validateScripts(loaded, registry));
 
   return diagnostics;
 };
@@ -797,6 +808,7 @@ export const validateModel = (
   const ids = new Map<string, string>();
   const components = [
     model.metadata,
+    ...Object.values(model.extensions),
     ...model.targets,
     ...model.skills,
     ...model.hooks,
@@ -828,10 +840,10 @@ export const validateModel = (
           sourcePath: hook.provenance.sourcePath,
           target,
         });
-      } else if (target === 'portable') {
+      } else if (!registry.supports(target, 'hooks')) {
         diagnostics.push({
           code: 'AB4204',
-          message: `Portable target cannot emit hook ${hook.event}.`,
+          message: `Target ${JSON.stringify(target)} cannot emit hook ${hook.event}.`,
           severity: 'error',
           sourcePath: hook.provenance.sourcePath,
           target,

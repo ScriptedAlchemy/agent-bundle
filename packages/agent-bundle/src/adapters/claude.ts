@@ -3,7 +3,12 @@ import addFormats from 'ajv-formats';
 
 import { stableJson } from '../core/digest.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
-import { pathTokens, type NormalizedMcpServer, type NormalizedPlugin } from '../core/types.ts';
+import {
+  pathTokens,
+  type AgentBundleHostConfig,
+  type NormalizedMcpServer,
+  type NormalizedPlugin,
+} from '../core/types.ts';
 import capabilityTable from './capabilities/claude-2.1.232.json' with { type: 'json' };
 import { mergeHookDocuments, nativeHooksFor, planHooks } from './hook-contract.ts';
 import hooksSchema from './schemas/claude/hooks.schema.json' with { type: 'json' };
@@ -11,6 +16,12 @@ import marketplaceSchema from './schemas/claude/marketplace.schema.json' with { 
 import mcpSchema from './schemas/claude/mcp.schema.json' with { type: 'json' };
 import pluginSchema from './schemas/claude/plugin.schema.json' with { type: 'json' };
 import type { TargetAdapter, TargetArtifactEntry, TargetArtifactPlan } from './types.ts';
+
+declare module '../core/types.ts' {
+  interface AgentBundleConfigExtensions {
+    claude?: AgentBundleHostConfig;
+  }
+}
 
 const claudeName = 'claude';
 const installFormats = addFormats as unknown as (target: Ajv2020) => void;
@@ -224,6 +235,7 @@ export const claudeAdapter: TargetAdapter = Object.freeze({
     sse: capabilityTable.mcp.sse,
     skills: capabilityTable.plugin.skills,
   }),
+  configExtension: Object.freeze({ key: claudeName }),
   mcpPathTokens: Object.freeze({
     args: Object.freeze({
       '${CLAUDE_PLUGIN_DATA}': 'pluginData',

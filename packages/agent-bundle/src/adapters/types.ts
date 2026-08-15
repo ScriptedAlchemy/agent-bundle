@@ -37,8 +37,13 @@ export interface McpPathTokenCapabilities {
   readonly env: Readonly<Record<string, McpPathTokenRoot>>;
 }
 
+export interface TargetConfigExtension {
+  readonly key: string;
+}
+
 export interface TargetAdapter {
   readonly capabilities: Readonly<Record<string, boolean>>;
+  readonly configExtension?: TargetConfigExtension;
   readonly mcpPathTokens?: McpPathTokenCapabilities;
   readonly name: string;
   plan(model: NormalizedPlugin): TargetArtifactPlan;

@@ -19,6 +19,7 @@ import { HookService } from '../src/services/hook-service.ts';
 import type { ArtifactEpoch } from '../src/dev/types.ts';
 
 const registry: NormalizationTargetRegistry = {
+  configExtensions: () => [],
   defaultTargetNames: () => ['codex', 'claude'],
   has: (name) => ['portable', 'codex', 'claude'].includes(name),
   supports: (name, capability) => capability === 'hooks' && name !== 'portable',

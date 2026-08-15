@@ -4,6 +4,7 @@ import { stableJson } from '../core/digest.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
 import {
   pathTokens,
+  type AgentBundlePortableConfig,
   type NormalizedMcpServer,
   type NormalizedPlugin,
 } from '../core/types.ts';
@@ -14,6 +15,12 @@ import type {
   TargetArtifactEntry,
   TargetArtifactPlan,
 } from './types.ts';
+
+declare module '../core/types.ts' {
+  interface AgentBundleConfigExtensions {
+    portable?: AgentBundlePortableConfig;
+  }
+}
 
 const portablePluginSchema =
   'https://agent-plugins.org/schemas/1.0.0/plugin.schema.json';
@@ -245,6 +252,7 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
 
 export const portableAdapter: TargetAdapter = Object.freeze({
   capabilities: Object.freeze({ mcp: true, skills: true }),
+  configExtension: Object.freeze({ key: portableName }),
   mcpPathTokens: Object.freeze({
     args: Object.freeze({ '${PLUGIN_DATA}': 'pluginData', '${PLUGIN_ROOT}': 'pluginRoot' }),
     cwd: Object.freeze({ '${PLUGIN_DATA}': 'pluginData', '${PLUGIN_ROOT}': 'pluginRoot' }),

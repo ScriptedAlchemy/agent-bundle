@@ -194,7 +194,7 @@ export class ProjectService {
     }
 
     const snapshot = await snapshotProjectSource(root, loaded.configPath);
-    const sourceDiagnostics = freezeDiagnostics(validateSource(loaded, discovered));
+    const sourceDiagnostics = freezeDiagnostics(validateSource(loaded, discovered, registry));
     if (hasErrors(sourceDiagnostics)) {
       const source = sourceStatus(sourceDiagnostics, snapshot.revision);
       log(this.#options.logger, 'project.invalid-source', { diagnostics: sourceDiagnostics.length, root });

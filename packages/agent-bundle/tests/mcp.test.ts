@@ -21,6 +21,7 @@ import {
 import type { LoadedConfig } from '../src/config/load.ts';
 
 const registry: NormalizationTargetRegistry = {
+  configExtensions: () => [],
   defaultTargetNames: () => ['portable'],
   has: (name) => ['portable', 'codex', 'claude'].includes(name),
   supports: () => true,
@@ -264,7 +265,7 @@ it('reports source and model diagnostics before an MCP server can be compiled', 
     } satisfies AgentBundleConfig;
     const loaded = loadedProject(root, config);
 
-    expect(validateSource(loaded, { skills: [] }).map(({ code }) => code)).toEqual([
+    expect(validateSource(loaded, { skills: [] }, registry).map(({ code }) => code)).toEqual([
       'AB4302',
       'AB4304',
       'AB4313',
@@ -349,7 +350,7 @@ it('rejects unsafe, duplicate, and nonlocal MCP App declarations before browser 
       plugin: { name: 'mcp-app-invalid', version: '1.0.0' },
     } as unknown as AgentBundleConfig;
 
-    expect(validateSource(loadedProject(root, malformed), { skills: [] }).map(({ code }) => code)).toEqual(
+    expect(validateSource(loadedProject(root, malformed), { skills: [] }, registry).map(({ code }) => code)).toEqual(
       expect.arrayContaining([
         'AB4322',
         'AB4324',
@@ -428,7 +429,7 @@ it('rejects non-JSON MCP App metadata before normalization', async () => {
         plugin: { name: 'mcp-app-meta', version: '1.0.0' },
       } as unknown as AgentBundleConfig;
 
-      expect(validateSource(loadedProject(root, config), { skills: [] }).map(({ code }) => code)).toEqual([
+      expect(validateSource(loadedProject(root, config), { skills: [] }, registry).map(({ code }) => code)).toEqual([
         'AB4338',
       ]);
     }
