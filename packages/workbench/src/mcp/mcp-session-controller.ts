@@ -84,10 +84,32 @@ export class McpSessionControllerError extends Error {
   }
 }
 
+export type McpSessionControllerCloseResource = 'client' | 'trace' | 'transport' | `request:${string}`;
+
+export interface McpSessionControllerCloseFailure {
+  readonly reason: unknown;
+  readonly resource: McpSessionControllerCloseResource;
+}
+
+export class McpSessionControllerCloseError extends McpSessionControllerError {
+  readonly failures: readonly McpSessionControllerCloseFailure[];
+
+  constructor(failures: readonly McpSessionControllerCloseFailure[]) {
+    super(`MCP session controller close failed for ${failures.map(({ resource }) => resource).join(', ')}.`);
+    this.name = 'McpSessionControllerCloseError';
+    this.failures = Object.freeze([...failures]);
+  }
+}
+
 interface ActiveRequest {
   readonly abort: AbortController;
   readonly settled: Promise<void>;
   settle(): void;
+}
+
+interface CleanupTask {
+  readonly resource: McpSessionControllerCloseResource;
+  run(): unknown;
 }
 
 type ControllerState = 'closed' | 'closing' | 'failed' | 'idle' | 'opening' | 'ready' | 'restarting';
@@ -350,18 +372,23 @@ export class McpSessionController {
     return true;
   }
 
-  async close(): Promise<void> {
+  close(): Promise<void> {
     if (this.#closePromise !== undefined) return this.#closePromise;
     this.#state = 'closing';
     this.#closing = true;
     this.#generation += 1;
-    this.#publish({ type: 'close' });
     const client = this.#client;
     const transport = this.#transport;
-    this.#closePromise = this.#drainResources(client, transport).then(() => {
+    this.#closePromise = this.#drainResources(client, transport).then((failures) => {
       this.#clearResources(client, transport);
+      if (failures.length > 0) {
+        this.#state = 'failed';
+        const error = new McpSessionControllerCloseError(failures);
+        this.#publishCloseFailure(error);
+        throw error;
+      }
       this.#state = 'closed';
-      this.#publish({ type: 'closed' });
+      this.#publish({ type: 'close' }, { type: 'closed' });
     });
     return this.#closePromise;
   }
@@ -512,15 +539,27 @@ export class McpSessionController {
   async #drainResources(
     client: McpSessionControllerClient | undefined,
     transport: McpSessionControllerTransport | undefined,
-  ): Promise<void> {
+  ): Promise<readonly McpSessionControllerCloseFailure[]> {
     this.#traceAbort?.abort();
-    const active = [...this.#requests.values()];
-    for (const request of active) request.abort.abort();
-    await Promise.allSettled([
-      ...active.map((request) => request.settled),
-      ...(this.#traceTask === undefined ? [] : [this.#traceTask]),
+    const active = [...this.#requests.entries()];
+    const traceTask = this.#traceTask;
+    for (const [, request] of active) request.abort.abort();
+    const settled = await this.#settleCleanup([
+      ...active.map(([id, request]) => ({ resource: `request:${id}` as const, run: () => request.settled })),
+      ...(traceTask === undefined ? [] : [{ resource: 'trace' as const, run: () => traceTask }]),
     ]);
-    await Promise.allSettled([client?.close(), transport?.close()]);
+    const closed = await this.#settleCleanup([
+      ...(client === undefined ? [] : [{ resource: 'client' as const, run: () => client.close() }]),
+      ...(transport === undefined ? [] : [{ resource: 'transport' as const, run: () => transport.close() }]),
+    ]);
+    return Object.freeze([...settled, ...closed]);
+  }
+
+  async #settleCleanup(tasks: readonly CleanupTask[]): Promise<readonly McpSessionControllerCloseFailure[]> {
+    const results = await Promise.allSettled(tasks.map(({ run }) => Promise.resolve().then(run)));
+    return Object.freeze(results.flatMap((result, index) => result.status === 'rejected'
+      ? [{ reason: result.reason, resource: tasks[index]!.resource }]
+      : []));
   }
 
   #clearResources(
@@ -541,6 +580,25 @@ export class McpSessionController {
   #publish(...events: readonly McpBrowserSessionEvent[]): void {
     let next = this.#model;
     for (const event of events) next = reduceMcpBrowserSession(next, event);
+    this.#replaceModel(next);
+  }
+
+  #publishCloseFailure(error: McpSessionControllerCloseError): void {
+    const diagnostic = diagnosticFor('mcp.close.failed', error);
+    if (this.#model.phase !== 'error') {
+      this.#publish({ diagnostic, type: 'failed' });
+      return;
+    }
+    if (this.#model.diagnostics.some((current) => (
+      current.code === diagnostic.code && current.message === diagnostic.message && current.severity === diagnostic.severity
+    ))) return;
+    this.#replaceModel(Object.freeze({
+      ...this.#model,
+      diagnostics: Object.freeze([...this.#model.diagnostics, Object.freeze(diagnostic)]),
+    }));
+  }
+
+  #replaceModel(next: McpBrowserSessionModel): void {
     this.#model = next;
     for (const listener of this.#listeners) {
       try {

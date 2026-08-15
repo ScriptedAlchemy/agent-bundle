@@ -577,3 +577,96 @@ it('buffers live trace frames until a delayed restart snapshot supplies the miss
   stream.close();
   await controller.close();
 });
+
+it('rejects one shared close outcome after every delayed resource cleanup is attempted', async () => {
+  const releaseRequest = deferred<void>();
+  const releaseClient = deferred<void>();
+  const releaseTransport = deferred<void>();
+  const stream = traceStream();
+  const events: string[] = [];
+  const clientCloseFailure = new Error('client DELETE failed');
+  const transportCloseFailure = new Error('transport DELETE failed');
+  const routes: McpSessionControllerRoutes = {
+    catalog: async () => ({ prompts: [], resourceTemplates: [], resources: [], tools: [] }),
+    config: async () => ({ launch: { args: [], command: 'node', env: {}, kind: 'stdio' }, origin: 'artifact' }),
+    restart: async () => connection,
+    stream: async (_id, _after, signal) => {
+      signal?.addEventListener('abort', () => {
+        events.push('trace.abort');
+        stream.close();
+      }, { once: true });
+      return stream.response;
+    },
+    trace: async () => ({ entries: [] }),
+  };
+  const transport: McpSessionControllerTransport = {
+    close: async () => {
+      events.push('transport.close.start');
+      await releaseTransport.promise;
+      events.push('transport.close.reject');
+      throw transportCloseFailure;
+    },
+    session: Object.freeze({ binding, connection, id: 'session-weather' }),
+    start: async () => undefined,
+  };
+  const client: McpSessionControllerClient = {
+    close: async () => {
+      events.push('client.close.start');
+      await releaseClient.promise;
+      events.push('client.close.reject');
+      throw clientCloseFailure;
+    },
+    connect: async (next) => next.start(),
+    request: async (_request, options) => new Promise<unknown>((_resolve, reject) => {
+      options?.signal?.addEventListener('abort', () => {
+        events.push('request.abort');
+        void releaseRequest.promise.then(() => reject(new DOMException('Aborted', 'AbortError')));
+      }, { once: true });
+    }),
+  };
+  const controller = createMcpSessionController({ clientFactory: () => client, routes, transportFactory: () => transport });
+  await controller.open(binding);
+  const active = controller.invoke({ id: 'active-close', operation: 'listTools', request: {} });
+  await eventually(() => controller.model.activeRequests['active-close'] !== undefined);
+
+  const firstClose = controller.close();
+  const repeatedClose = controller.close();
+  await eventually(() => events.includes('trace.abort') && events.includes('request.abort'));
+  expect(events).toEqual(['trace.abort', 'request.abort']);
+
+  releaseRequest.resolve();
+  await expect(active).rejects.toMatchObject({ name: 'AbortError' });
+  await eventually(() => events.includes('client.close.start') && events.includes('transport.close.start'));
+  releaseClient.resolve();
+  releaseTransport.resolve();
+
+  const [firstResult, repeatedResult] = await Promise.allSettled([firstClose, repeatedClose]);
+  expect(firstResult.status).toBe('rejected');
+  expect(repeatedResult.status).toBe('rejected');
+  if (firstResult.status !== 'rejected' || repeatedResult.status !== 'rejected') throw new Error('Expected both close calls to reject.');
+  expect(repeatedResult.reason).toBe(firstResult.reason);
+  expect(firstResult.reason).toMatchObject({
+    failures: [
+      { reason: clientCloseFailure, resource: 'client' },
+      { reason: transportCloseFailure, resource: 'transport' },
+    ],
+    message: 'MCP session controller close failed for client, transport.',
+    name: 'McpSessionControllerCloseError',
+  });
+  expect(events).toEqual([
+    'trace.abort',
+    'request.abort',
+    'client.close.start',
+    'transport.close.start',
+    'client.close.reject',
+    'transport.close.reject',
+  ]);
+  expect(controller.model).toMatchObject({
+    diagnostics: [{
+      code: 'mcp.close.failed',
+      message: 'MCP session controller close failed for client, transport.',
+      severity: 'error',
+    }],
+    phase: 'error',
+  });
+});
