@@ -11,6 +11,7 @@ import {
   type TargetHookContract,
 } from '../src/adapters/hook-contract.ts';
 import type { TargetAdapter } from '../src/adapters/types.ts';
+import { inspectArtifactFilesystem } from '../src/build/emit.ts';
 import { pathTokens, type NormalizedPlugin } from '../src/core/types.ts';
 import {
   createTargetMcpRuntime,
@@ -104,6 +105,10 @@ const syntheticPlan = (model: NormalizedPlugin) => {
 };
 
 const syntheticAdapter: TargetAdapter = Object.freeze({
+  artifactLayout: Object.freeze({
+    hookWrappers: Object.freeze({ allowedSuffixes: Object.freeze(['.mjs']), directory: 'hooks' }),
+    mcpEntries: Object.freeze({ allowedSuffixes: Object.freeze(['.mjs']), directory: 'mcp' }),
+  }),
   capabilities: Object.freeze({ hooks: true, mcp: true }),
   configExtension: Object.freeze({ key: 'synthetic' }),
   hookContract: syntheticHookContract,
@@ -185,6 +190,14 @@ it('keeps one supplied registry through advanced artifact, hook, and MCP operati
       target: syntheticTarget,
     })]);
     expect(built.build.manifest.targets).toEqual([expect.objectContaining({ name: syntheticTarget })]);
+    expect(built.build.manifest.files).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: 'synthetic/synthetic-mcp.json' }),
+    ]));
+    const filesystem = await inspectArtifactFilesystem(artifact);
+    expect(filesystem.entries
+      .filter((entry) => entry.kind === 'directory')
+      .every((directory) => filesystem.files.some((file) => file.path.startsWith(`${directory.path}/`))))
+      .toBe(true);
     await expect(validate({ artifact, registry, root })).resolves.toEqual({ diagnostics: [] });
     await expect(validate({ artifact, root })).resolves.toMatchObject({
       diagnostics: [expect.objectContaining({ code: 'AB6009', target: syntheticTarget })],
@@ -235,6 +248,15 @@ it('prepares a factory-configured project into a frozen inspection and build res
       build: { outputRoot: join(root, 'artifact') },
       model: { metadata: { name: 'api-fixture' } },
     });
+
+    const hookArtifact = join(root, 'hooks-artifact');
+    const hooks = await build({ output: hookArtifact, root });
+    for (const target of ['claude', 'codex']) {
+      expect(hooks.build.manifest.files).toEqual(expect.arrayContaining([
+        expect.objectContaining({ path: expect.stringMatching(new RegExp(`^${target}/hooks/.+\\.mjs$`, 'u')) }),
+      ]));
+    }
+    await expect(validate({ artifact: hookArtifact, root })).resolves.toEqual({ diagnostics: [] });
   } finally {
     await rm(join(root, '..'), { force: true, recursive: true });
   }
@@ -446,11 +468,13 @@ it('normalizes named top-level scripts with stable IDs, modes, and sorted target
   }
 });
 
-it('copies named shell and Python scripts byte-for-byte with source modes', async () => {
+it('copies every supported top-level script output suffix byte-for-byte with source modes', async () => {
   const parent = await mkdtemp(join(tmpdir(), 'agent-bundle-copy-scripts-parent-'));
   const root = join(parent, 'project with spaces');
-  const sourceShell = join(root, 'src', 'run.sh');
-  const sourcePython = join(root, 'src', 'run.py');
+  const sourceBash = join(root, 'src', 'run.BASH');
+  const sourceBundle = join(root, 'src', 'bundle.ts');
+  const sourceShell = join(root, 'src', 'run.SH');
+  const sourcePython = join(root, 'src', 'run.Py');
   const output = join(root, 'artifact');
   await mkdir(join(root, 'src'), { recursive: true });
   await Promise.all([
@@ -459,27 +483,35 @@ it('copies named shell and Python scripts byte-for-byte with source modes', asyn
       [
         'export default {',
         "  plugin: { name: 'copy-script-fixture', version: '1.0.0' },",
-        "  targets: ['portable'],",
+        "  targets: ['portable', 'codex', 'claude'],",
         '  scripts: {',
-        "    shell: './src/run.sh',",
-        "    python: './src/run.py',",
+        "    bash: './src/run.BASH',",
+        "    bundle: { entry: './src/bundle.ts' },",
+        "    shell: './src/run.SH',",
+        "    python: './src/run.Py',",
         '  },',
         '};',
         '',
       ].join('\n'),
     ),
+    writeFile(sourceBash, '#!/usr/bin/env bash\nprintf "bash\\n"\r\n'),
+    writeFile(sourceBundle, "export const output = 'bundle';\n"),
     writeFile(sourceShell, '#!/usr/bin/env sh\nprintf "shell\\n"\r\n'),
     writeFile(sourcePython, '#!/usr/bin/env python3\r\nprint("python")\r\n'),
   ]);
-  await Promise.all([chmod(sourceShell, 0o751), chmod(sourcePython, 0o711)]);
+  await Promise.all([chmod(sourceBash, 0o741), chmod(sourceShell, 0o751), chmod(sourcePython, 0o711)]);
 
   try {
     await build({ output, root });
 
-    const checks = await Promise.all([
-      [sourceShell, join(output, 'portable', 'scripts', 'shell.sh')],
-      [sourcePython, join(output, 'portable', 'scripts', 'python.py')],
-    ].map(async ([source, generated]) => {
+    const copyOutputs = [
+      [sourceBash, 'bash.bash'],
+      [sourceShell, 'shell.sh'],
+      [sourcePython, 'python.py'],
+    ] as const;
+    const checks = await Promise.all(['claude', 'codex', 'portable'].flatMap((target) =>
+      copyOutputs.map(([source, name]) => [source, join(output, target, 'scripts', name)] as const),
+    ).map(async ([source, generated]) => {
       const [sourceContents, generatedContents, sourceMetadata, generatedMetadata] = await Promise.all([
         readFile(source!),
         readFile(generated!),
@@ -510,15 +542,26 @@ it('copies named shell and Python scripts byte-for-byte with source modes', asyn
     expect(manifest.files).toEqual(expect.arrayContaining([
       expect.objectContaining({
         kind: 'copy',
+        mode: 0o741,
+        path: 'portable/scripts/bash.bash',
+        sourceInputs: ['agent-bundle.config.ts', 'src/run.BASH'],
+      }),
+      expect.objectContaining({
+        kind: 'bundle',
+        path: 'portable/scripts/bundle.mjs',
+        sourceInputs: ['agent-bundle.config.ts', 'src/bundle.ts'],
+      }),
+      expect.objectContaining({
+        kind: 'copy',
         mode: 0o751,
         path: 'portable/scripts/shell.sh',
-        sourceInputs: ['agent-bundle.config.ts', 'src/run.sh'],
+        sourceInputs: ['agent-bundle.config.ts', 'src/run.SH'],
       }),
       expect.objectContaining({
         kind: 'copy',
         mode: 0o711,
         path: 'portable/scripts/python.py',
-        sourceInputs: ['agent-bundle.config.ts', 'src/run.py'],
+        sourceInputs: ['agent-bundle.config.ts', 'src/run.Py'],
       }),
     ]));
     await expect(validate({ artifact: output, root })).resolves.toEqual({ diagnostics: [] });
@@ -531,6 +574,52 @@ it('copies named shell and Python scripts byte-for-byte with source modes', asyn
     await rm(parent, { force: true, recursive: true });
   }
 }, 30_000);
+
+it('canonicalizes copied script extensions in emitted artifact paths', async () => {
+  const parent = await mkdtemp(join(tmpdir(), 'agent-bundle-uppercase-script-parent-'));
+  const root = join(parent, 'project');
+  const source = join(root, 'src', 'run.SH');
+  const output = join(root, 'artifact');
+  await mkdir(join(root, 'src'), { recursive: true });
+  await Promise.all([
+    writeFile(join(root, 'agent-bundle.config.ts'), [
+      'export default {',
+      "  plugin: { name: 'uppercase-script-fixture', version: '1.0.0' },",
+      "  targets: ['portable'],",
+      "  scripts: { upper: './src/run.SH' },",
+      '};',
+      '',
+    ].join('\n')),
+    writeFile(source, '#!/usr/bin/env sh\nprintf "uppercase\\n"\n'),
+  ]);
+
+  try {
+    const result = await build({ output, root });
+    const generated = join(output, 'portable', 'scripts', 'upper.sh');
+
+    await expect(readFile(generated, 'utf8')).resolves.toBe(await readFile(source, 'utf8'));
+    await expect(readFile(join(output, 'portable', 'scripts', 'upper.SH'), 'utf8')).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+    expect(result.build.manifest.files).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'copy',
+        path: 'portable/scripts/upper.sh',
+        sourceInputs: ['agent-bundle.config.ts', 'src/run.SH'],
+      }),
+    ]));
+    expect(result.build.outputProvenance).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'copy',
+        path: 'portable/scripts/upper.sh',
+        sourceInputs: ['agent-bundle.config.ts', 'src/run.SH'],
+      }),
+    ]));
+    await expect(validate({ artifact: output, root })).resolves.toEqual({ diagnostics: [] });
+  } finally {
+    await rm(parent, { force: true, recursive: true });
+  }
+});
 
 it('documents a versioned MCP App resource URI accepted by source validation', async () => {
   const parent = await mkdtemp(join(tmpdir(), 'agent-bundle-readme-uri-parent-'));

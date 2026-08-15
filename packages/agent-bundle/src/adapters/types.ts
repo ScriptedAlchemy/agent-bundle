@@ -88,6 +88,24 @@ export interface TargetArtifactValidationContract {
   readonly schemas: readonly TargetArtifactSchemaContract[];
 }
 
+/** A direct-file namespace emitted by a target's compiler plan. */
+export interface TargetArtifactOutputLayout {
+  readonly allowedSuffixes: readonly string[];
+  readonly directory: string;
+}
+
+/**
+ * Target-owned compiler namespaces, separate from target-native schema documents.
+ * Every field is an emitted-layout fact rather than a target-name convention.
+ */
+export interface TargetArtifactLayout {
+  readonly hookWrappers?: TargetArtifactOutputLayout;
+  readonly mcpApps?: TargetArtifactOutputLayout;
+  readonly mcpEntries?: TargetArtifactOutputLayout;
+  readonly scripts?: TargetArtifactOutputLayout;
+  readonly skills?: string;
+}
+
 interface JsonSchemaValidator {
   (document: unknown): boolean;
   readonly errors?: readonly { readonly instancePath: string; readonly message?: string }[] | null;
@@ -107,6 +125,8 @@ export const validateJsonSchemaDocument = (
 export interface TargetAdapter {
   /** Validates target-native JSON documents against schemas pinned in metadata. */
   readonly artifactValidation?: TargetArtifactValidationContract;
+  /** Declares compiler-owned artifact layouts beyond target-native documents. */
+  readonly artifactLayout?: TargetArtifactLayout;
   readonly capabilities: Readonly<Record<string, boolean>>;
   readonly configExtension?: TargetConfigExtension;
   readonly hookContract?: TargetHookContract;

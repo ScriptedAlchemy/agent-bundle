@@ -485,6 +485,7 @@ it('bundles each local MCP entry once and maps every target manifest to that art
       projectRoot: root,
       registry: createDefaultRegistry(),
     });
+    expect(await validateArtifact({ artifactRoot: outputRoot })).toEqual([]);
     expect(result.compiledMcpEntries).toEqual([
       {
         id: 'mcp:local server',
@@ -614,6 +615,7 @@ it('bundles each local MCP entry once and maps every target manifest to that art
     await rm(join(secondOutput, 'portable', 'mcp', outputName));
     expect(await validateArtifact({ artifactRoot: secondOutput })).toMatchObject([
       { code: 'AB6004' },
+      { code: 'AB6014', generatedPath: 'portable/mcp', target: 'portable' },
       { code: 'AB6007', generatedPath: 'portable/mcp.json' },
     ]);
 
@@ -672,7 +674,7 @@ it('builds one deterministic self-contained MCP App view and injects it through 
           },
         },
         plugin: { name: 'mcp-app-build', version: '1.0.0' },
-        targets: ['portable'],
+        targets: ['portable', 'codex', 'claude'],
       }),
       { skills: [] },
       registry,
@@ -694,32 +696,35 @@ it('builds one deterministic self-contained MCP App view and injects it through 
         readonly target: string;
       }[];
     }).compiledMcpApps;
-    expect(compiled).toMatchObject([
-      {
-        _meta: { ui: { prefersBorder: true } },
-        id: 'mcp-app:fixture:dashboard',
-        mimeType: 'text/html;profile=mcp-app',
-        name: 'dashboard',
-        output: join(outputRoot, 'portable', 'mcp-apps', 'dashboard.html'),
-        resourceUri: 'ui://agent-bundle/dashboard-v1.html',
-        serverId: 'mcp:fixture',
-        source: join(root, 'views', 'dashboard.ts'),
-        sourceInputs: [
-          join(root, 'agent-bundle.config.ts'),
-          join(root, 'views', 'dashboard.css'),
-          join(root, 'views', 'dashboard.ts'),
-          join(root, 'views', 'shell.html'),
-        ],
-        target: 'portable',
-      },
-    ]);
-    expect(Object.isFrozen(compiled[0]!.sourceInputs)).toBe(true);
+    const sourceInputs = [
+      join(root, 'agent-bundle.config.ts'),
+      join(root, 'views', 'dashboard.css'),
+      join(root, 'views', 'dashboard.ts'),
+      join(root, 'views', 'shell.html'),
+    ];
+    expect(compiled).toEqual(expect.arrayContaining(['claude', 'codex', 'portable'].map((target) => expect.objectContaining({
+      _meta: { ui: { prefersBorder: true } },
+      id: 'mcp-app:fixture:dashboard',
+      mimeType: 'text/html;profile=mcp-app',
+      name: 'dashboard',
+      output: join(outputRoot, target, 'mcp-apps', 'dashboard.html'),
+      resourceUri: 'ui://agent-bundle/dashboard-v1.html',
+      serverId: 'mcp:fixture',
+      source: join(root, 'views', 'dashboard.ts'),
+      sourceInputs,
+      target,
+    }))));
+    expect(compiled).toHaveLength(3);
+    expect(compiled.every((entry) => Object.isFrozen(entry.sourceInputs))).toBe(true);
     const html = await readFile(join(outputRoot, 'portable', 'mcp-apps', 'dashboard.html'), 'utf8');
     expect(html).toContain('dashboard-ready');
     expect(html).toContain('<script');
     expect(html).toContain('<style');
     expect(html).not.toMatch(/<(?:script|link)\b[^>]+(?:src|href)=/iu);
     expect(await readdir(join(outputRoot, 'portable', 'mcp-apps'))).toEqual(['dashboard.html']);
+    for (const target of ['claude', 'codex']) {
+      expect(await readdir(join(outputRoot, target, 'mcp-apps'))).toEqual(['dashboard.html']);
+    }
     const serverBundle = await readFile(join(outputRoot, 'portable', 'mcp', 'mcp-fixture-f16d05ec.mjs'), 'utf8');
     expect(serverBundle).toContain('ui://agent-bundle/dashboard-v1.html');
     expect(serverBundle).toContain('text/html;profile=mcp-app');
@@ -734,6 +739,7 @@ it('builds one deterministic self-contained MCP App view and injects it through 
         'views/shell.html',
       ],
     });
+    expect(await validateArtifact({ artifactRoot: outputRoot })).toEqual([]);
     expect(result.outputProvenance).toContainEqual({
       kind: 'bundle',
       path: 'portable/mcp/mcp-fixture-f16d05ec.mjs',

@@ -189,6 +189,45 @@ it('returns frozen, detached metadata snapshots while retaining the original ada
   expect(() => (snapshot.schemas[0] as { name: string }).name = 'changed').toThrow();
 });
 
+it('snapshots canonical immutable artifact output suffixes and rejects malformed layouts', () => {
+  const allowedSuffixes = ['.mjs', '.sh'];
+  const registered = adapter('custom');
+  const registry = new TargetRegistry().register({
+    ...registered,
+    artifactLayout: { scripts: { allowedSuffixes, directory: 'scripts' } },
+  });
+  const layout = registry.artifactLayout('custom');
+
+  allowedSuffixes.push('.py');
+  expect(layout).toEqual({ scripts: { allowedSuffixes: ['.mjs', '.sh'], directory: 'scripts' } });
+  expect(Object.isFrozen(layout)).toBe(true);
+  expect(Object.isFrozen(layout.scripts)).toBe(true);
+  expect(Object.isFrozen(layout.scripts?.allowedSuffixes)).toBe(true);
+
+  const accessorSuffixes = ['.mjs'];
+  Object.defineProperty(accessorSuffixes, '0', {
+    enumerable: true,
+    get: () => {
+      throw new Error('suffix accessor must not be read');
+    },
+  });
+  const malformedLayouts = [
+    { scripts: { allowedSuffixes: [], directory: 'scripts' } },
+    { scripts: { allowedSuffixes: ['mjs'], directory: 'scripts' } },
+    { scripts: { allowedSuffixes: ['.sh', '.mjs'], directory: 'scripts' } },
+    { scripts: { allowedSuffixes: ['.mjs', '.mjs'], directory: 'scripts' } },
+    { scripts: { allowedSuffixes: accessorSuffixes, directory: 'scripts' } },
+    { scripts: { allowedSuffixes: Object.setPrototypeOf(['.mjs'], null), directory: 'scripts' } },
+  ];
+  for (const [index, artifactLayout] of malformedLayouts.entries()) {
+    expect(() => registry.register({
+      ...adapter(`invalid-layout-${index}`),
+      artifactLayout,
+    })).toThrow(/allowed suffixes/i);
+    expect(registry.names()).toEqual(['custom']);
+  }
+});
+
 it('rejects malformed metadata atomically and preserves existing collision behavior', () => {
   const malformed = [
     { ...validMetadata(), adapterRevision: '' },

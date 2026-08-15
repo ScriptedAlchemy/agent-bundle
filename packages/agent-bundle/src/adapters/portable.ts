@@ -315,6 +315,12 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
 
 export const portableAdapter: TargetAdapter = Object.freeze({
   artifactValidation,
+  artifactLayout: Object.freeze({
+    mcpApps: Object.freeze({ allowedSuffixes: Object.freeze(['.html']), directory: 'mcp-apps' }),
+    mcpEntries: Object.freeze({ allowedSuffixes: Object.freeze(['.mjs']), directory: 'mcp' }),
+    scripts: Object.freeze({ allowedSuffixes: Object.freeze(['.bash', '.mjs', '.py', '.sh']), directory: 'scripts' }),
+    skills: 'skills',
+  }),
   capabilities: Object.freeze({
     mcp: capabilityTable.mcp.stdio && capabilityTable.mcp.streamableHttp,
     sse: capabilityTable.mcp.sse,

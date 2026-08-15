@@ -12,6 +12,8 @@ import type {
   TargetAdapter,
   TargetArtifactDocumentContract,
   TargetArtifactDocumentValidator,
+  TargetArtifactLayout,
+  TargetArtifactOutputLayout,
   TargetArtifactSchemaContract,
   TargetArtifactValidationContract,
   TargetAdapterMetadata,
@@ -26,6 +28,8 @@ const emptyArtifactValidation: TargetArtifactValidationContract = Object.freeze(
   documents: Object.freeze([]),
   schemas: Object.freeze([]),
 });
+
+const emptyArtifactLayout: TargetArtifactLayout = Object.freeze({});
 
 const requireNonempty = (value: unknown, field: string): string => {
   if (typeof value !== 'string' || value.trim().length === 0) {
@@ -103,6 +107,105 @@ const isSafeArtifactDocumentPath = (value: string): boolean => {
     !value.includes('\\') &&
     !value.includes('\0') &&
     segments.every((segment) => segment.length > 0 && segment !== '.' && segment !== '..');
+};
+
+const isSafeArtifactDirectory = (value: string): boolean =>
+  isSafeArtifactDocumentPath(value) && !value.includes('/');
+
+const artifactSuffixPattern = /^\.[a-z\d]+$/u;
+
+const snapshotArtifactSuffixes = (value: unknown, field: string): readonly string[] => {
+  if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype || Object.hasOwn(value, 'then')) {
+    throw new Error(`Target adapter artifact layout ${field} allowed suffixes must be a plain array.`);
+  }
+  const descriptors = Object.getOwnPropertyDescriptors(value);
+  const lengthDescriptor = Object.getOwnPropertyDescriptor(value, 'length');
+  if (
+    lengthDescriptor === undefined ||
+    !('value' in lengthDescriptor) ||
+    typeof lengthDescriptor.value !== 'number' ||
+    lengthDescriptor.value === 0 ||
+    Object.keys(descriptors).length !== lengthDescriptor.value + 1
+  ) {
+    throw new Error(`Target adapter artifact layout ${field} allowed suffixes must be a nonempty plain array.`);
+  }
+
+  const suffixes: string[] = [];
+  for (let index = 0; index < lengthDescriptor.value; index += 1) {
+    const descriptor = descriptors[index];
+    if (
+      descriptor === undefined ||
+      !('value' in descriptor) ||
+      typeof descriptor.value !== 'string' ||
+      !artifactSuffixPattern.test(descriptor.value)
+    ) {
+      throw new Error(`Target adapter artifact layout ${field} allowed suffixes must contain canonical suffixes.`);
+    }
+    const previous = suffixes.at(-1);
+    if (previous !== undefined && previous.localeCompare(descriptor.value) >= 0) {
+      throw new Error(`Target adapter artifact layout ${field} allowed suffixes must be unique and sorted.`);
+    }
+    suffixes.push(descriptor.value);
+  }
+  return Object.freeze(suffixes);
+};
+
+const snapshotOutputLayout = (value: unknown, field: string): TargetArtifactOutputLayout => {
+  const candidate = record(value);
+  if (candidate === undefined) {
+    throw new Error(`Target adapter artifact layout ${field} must be a record.`);
+  }
+  const directory = requireNonempty(candidate.directory, `artifact layout ${field} directory`);
+  if (!isSafeArtifactDirectory(directory)) {
+    throw new Error(`Target adapter artifact layout ${field} directory must be a safe single namespace.`);
+  }
+  return Object.freeze({
+    allowedSuffixes: snapshotArtifactSuffixes(candidate.allowedSuffixes, field),
+    directory,
+  });
+};
+
+const snapshotArtifactLayout = (
+  adapter: TargetAdapter,
+  hookContract: TargetHookContract | undefined,
+  mcpRuntime: TargetMcpRuntimeContract | undefined,
+): TargetArtifactLayout => {
+  const declaredLayout = adapter.artifactLayout;
+  if (declaredLayout === undefined) return emptyArtifactLayout;
+  const layout = record(declaredLayout);
+  if (layout === undefined) throw new Error('Target adapter artifact layout must be a record.');
+
+  const hookWrappers = layout.hookWrappers === undefined
+    ? undefined
+    : snapshotOutputLayout(layout.hookWrappers, 'hook wrappers');
+  const mcpApps = layout.mcpApps === undefined ? undefined : snapshotOutputLayout(layout.mcpApps, 'MCP apps');
+  const mcpEntries = layout.mcpEntries === undefined
+    ? undefined
+    : snapshotOutputLayout(layout.mcpEntries, 'MCP entries');
+  const scripts = layout.scripts === undefined ? undefined : snapshotOutputLayout(layout.scripts, 'scripts');
+  const skills = layout.skills === undefined
+    ? undefined
+    : requireNonempty(layout.skills, 'artifact layout skills namespace');
+
+  if (skills !== undefined && !isSafeArtifactDirectory(skills)) {
+    throw new Error('Target adapter artifact layout skills namespace must be a safe single namespace.');
+  }
+  if (hookWrappers !== undefined && hookContract === undefined) {
+    throw new Error(`Target adapter "${adapter.name}" declares hook wrapper layout without a hook contract.`);
+  }
+  if ((mcpApps !== undefined || mcpEntries !== undefined) && mcpRuntime === undefined) {
+    throw new Error(`Target adapter "${adapter.name}" declares MCP output layout without an MCP runtime contract.`);
+  }
+  if (skills !== undefined && adapter.capabilities.skills !== true) {
+    throw new Error(`Target adapter "${adapter.name}" declares Skill layout without skills capability.`);
+  }
+  return Object.freeze({
+    ...(hookWrappers === undefined ? {} : { hookWrappers }),
+    ...(mcpApps === undefined ? {} : { mcpApps }),
+    ...(mcpEntries === undefined ? {} : { mcpEntries }),
+    ...(scripts === undefined ? {} : { scripts }),
+    ...(skills === undefined ? {} : { skills }),
+  });
 };
 
 const snapshotArtifactValidation = (
@@ -214,8 +317,8 @@ const snapshotMcpRuntime = (adapter: TargetAdapter): TargetMcpRuntimeContract | 
     throw new Error(`Target adapter "${adapter.name}" declares an MCP runtime contract without mcp capability.`);
   }
   if (mcpRuntime === undefined) return undefined;
-  if (typeof mcpRuntime.manifestPath !== 'string' || mcpRuntime.manifestPath.trim().length === 0) {
-    throw new Error('Target adapter MCP runtime manifest path must be a nonempty string.');
+  if (typeof mcpRuntime.manifestPath !== 'string' || !isSafeArtifactDocumentPath(mcpRuntime.manifestPath)) {
+    throw new Error('Target adapter MCP runtime manifest path must be a safe relative POSIX path.');
   }
   if (
     typeof mcpRuntime.readModernServer !== 'function' ||
@@ -234,6 +337,7 @@ const snapshotMcpRuntime = (adapter: TargetAdapter): TargetMcpRuntimeContract | 
 
 export class TargetRegistry implements NormalizationTargetRegistry {
   readonly #adapters = new Map<string, TargetAdapter>();
+  readonly #artifactLayouts = new Map<string, TargetArtifactLayout>();
   readonly #artifactValidations = new Map<string, TargetArtifactValidationContract>();
   readonly #defaults: string[] = [];
   readonly #extensions = new Map<string, NormalizationConfigExtension>();
@@ -255,9 +359,11 @@ export class TargetRegistry implements NormalizationTargetRegistry {
     const nativeHookSource = snapshotNativeHookSource(adapter);
     const hookContract = snapshotHookContract(adapter);
     const mcpRuntime = snapshotMcpRuntime(adapter);
+    const artifactLayout = snapshotArtifactLayout(adapter, hookContract, mcpRuntime);
 
     this.#adapters.set(adapter.name, adapter);
     this.#artifactValidations.set(adapter.name, artifactValidation);
+    this.#artifactLayouts.set(adapter.name, artifactLayout);
     this.#metadata.set(adapter.name, metadata);
     if (extension !== undefined) {
       this.#extensions.set(extension.key, Object.freeze({
@@ -304,6 +410,14 @@ export class TargetRegistry implements NormalizationTargetRegistry {
       throw new Error(`Unknown target adapter "${name}".`);
     }
     return validation;
+  }
+
+  artifactLayout(name: string): TargetArtifactLayout {
+    const layout = this.#artifactLayouts.get(name);
+    if (layout === undefined) {
+      throw new Error(`Unknown target adapter "${name}".`);
+    }
+    return layout;
   }
 
   has(name: string): boolean {
