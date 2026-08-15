@@ -7,7 +7,7 @@ import { dirname, join } from 'node:path';
 import { expect, it } from '@rstest/core';
 
 import { createDefaultRegistry } from '../src/adapters/registry.ts';
-import { build } from '../src/build/build.ts';
+import { build } from './support/build.ts';
 import { listArtifactFiles } from '../src/build/emit.ts';
 import { normalizeProject } from '../src/config/normalize.ts';
 import { digest } from '../src/core/digest.ts';
@@ -110,6 +110,7 @@ const publishHookEpoch = async (
   const artifact = join(root, `compiled-${id}`);
   await mkdir(sourceRoot, { recursive: true });
   await Promise.all([
+    writeFile(join(root, 'agent-bundle.config.ts'), 'export default {};\n'),
     writeFile(join(root, 'package.json'), '{"type":"module"}\n'),
     writeFile(join(sourceRoot, 'session-start.ts'), [
       'export default (event: { source?: string }) => ({',

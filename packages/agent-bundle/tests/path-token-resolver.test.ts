@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { expect, it } from '@rstest/core';
 
 import { createDefaultRegistry } from '../src/adapters/registry.ts';
-import { build } from '../src/build/build.ts';
+import { build } from './support/build.ts';
 import type { LoadedConfig } from '../src/config/load.ts';
 import { normalizeProject } from '../src/config/normalize.ts';
 import { DiagnosticError } from '../src/core/diagnostics.ts';
@@ -94,6 +94,7 @@ it('reports the selected adapter capability diagnostic for an unsupported path t
 it('resolves Claude path tokens outside command when launching a generated artifact', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-path-tokens-'));
   try {
+    await writeFile(join(root, 'agent-bundle.config.ts'), 'export default {};\n');
     const model = await normalizeProject(
       loadedProject(root, {
         mcp: {

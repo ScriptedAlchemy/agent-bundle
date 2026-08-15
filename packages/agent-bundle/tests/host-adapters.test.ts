@@ -8,7 +8,7 @@ import addFormats from 'ajv-formats';
 import { expect, it } from '@rstest/core';
 
 import { createDefaultRegistry } from '../src/adapters/registry.ts';
-import { build } from '../src/build/build.ts';
+import { build } from './support/build.ts';
 import { pathTokens, type NormalizedPlugin } from '../src/core/types.ts';
 
 const installFormats = addFormats as unknown as (target: Ajv2020) => void;
@@ -521,6 +521,7 @@ it('filters host components and builds portable, Codex, and Claude target roots'
   const skillRoot = join(root, 'skills', 'review');
   await mkdir(join(skillRoot, 'references'), { recursive: true });
   await Promise.all([
+    writeFile(join(root, 'agent-bundle.config.ts'), 'export default {};\n'),
     writeFile(join(skillRoot, 'SKILL.md'), '# Review\n'),
     writeFile(join(skillRoot, 'references', 'guide.md'), '# Guide\n'),
   ]);
@@ -557,9 +558,9 @@ it('filters host components and builds portable, Codex, and Claude target roots'
     await expect(readFile(join(outputRoot, 'claude', '.claude-plugin', 'plugin.json'), 'utf8')).resolves.toContain('review-tools');
     const manifest = JSON.parse(await readFile(join(outputRoot, 'agent-bundle.manifest.json'), 'utf8')) as {
       readonly files: readonly { readonly path: string }[];
-      readonly targets: readonly string[];
+      readonly targets: readonly { readonly name: string }[];
     };
-    expect(manifest.targets).toEqual(['claude', 'codex', 'portable']);
+    expect(manifest.targets.map(({ name }) => name)).toEqual(['claude', 'codex', 'portable']);
     expect(manifest.files.map((file) => file.path)).toEqual(expect.arrayContaining([
       'portable/plugin.json',
       'codex/.codex-plugin/plugin.json',

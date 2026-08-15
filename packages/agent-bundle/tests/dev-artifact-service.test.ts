@@ -7,10 +7,10 @@ import { expect, it } from '@rstest/core';
 
 import { EpochStore, type CreateStagingEpochOptions, type EpochStaging, type StagingValidator } from '../src/dev/epoch-store.ts';
 import { build } from '../src/build/build.ts';
-import { writeManifest } from '../src/build/emit.ts';
 import { validateArtifact } from '../src/build/validate-artifact.ts';
 import { ArtifactService } from '../src/dev/index.ts';
 import { ProjectService } from '../src/dev/project-service.ts';
+import { writeFixtureManifest } from './support/manifest.ts';
 
 const sha256 = (value: string | Uint8Array): string =>
   createHash('sha256').update(value).digest('hex');
@@ -118,7 +118,7 @@ it('allows only an exact epoch store marker as an extra staged artifact file', a
   const marker = '.agent-bundle-epoch-stage.json';
   try {
     await writeFile(join(root, 'plugin.json'), '{"name":"valid"}\n');
-    await writeManifest({ artifactRoot: root, targets: ['portable'] });
+    await writeFixtureManifest({ artifactRoot: root, targets: ['portable'] });
     await writeFile(join(root, marker), '{"token":"8f2aa8b7-bdd2-4065-8cd3-5184c6bd9f74","version":1}\n');
 
     const allowedContext: Readonly<{ readonly allowEpochStagingMarker: true; readonly artifactRoot: string }> = {
