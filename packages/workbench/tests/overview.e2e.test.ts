@@ -1,5 +1,5 @@
 import { execFile as executeFile } from 'node:child_process';
-import { mkdir, rename, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 
@@ -94,7 +94,7 @@ const writeMcpPlaygroundProject = async (root: string): Promise<void> => {
       "import { defineConfig } from 'agent-bundle';",
       '',
       'export default defineConfig({',
-      "  mcp: { servers: { fixture: { entry: './src/server.ts' } } },",
+      "  mcp: { servers: { fixture: { entry: './src/server.ts', env: { NO_COLOR: '1', SECRET_TOKEN: 'fixture-secret' } } } },",
       "  plugin: { name: 'workbench-mcp-fixture', version: '1.0.0' },",
       "  skills: ['skills/review'],",
       "  targets: ['portable'],",
@@ -106,43 +106,111 @@ const writeMcpPlaygroundProject = async (root: string): Promise<void> => {
 
 e2e('opens one real epoch MCP session and keeps its playground operations responsive', { timeout: 90_000 }, async ({ page }) => {
   await buildWorkbench();
-  const project = await createProjectFixture();
-  await writeMcpPlaygroundProject(project.root);
-  const server = await startDevServer({
-    assets: createWorkbenchAssetSource({ root: workbenchAssets }),
-    open: false,
-    port: 0,
-    root: project.root,
-  });
-  const pageErrors: Error[] = [];
-  page.on('pageerror', (error) => pageErrors.push(error));
+  let project: Awaited<ReturnType<typeof createProjectFixture>> | undefined;
+  let server: Awaited<ReturnType<typeof startDevServer>> | undefined;
+  let cleanupFailure: unknown;
+  let testFailure: unknown;
   try {
+    project = await createProjectFixture();
+    await writeMcpPlaygroundProject(project.root);
+    server = await startDevServer({
+      assets: createWorkbenchAssetSource({ root: workbenchAssets }),
+      open: false,
+      port: 0,
+      root: project.root,
+    });
+    const artifact = server.status().artifact;
+    if (artifact.state === 'missing') throw new Error('Expected an active fixture artifact epoch.');
+    const epochId = artifact.activeEpoch.id;
+    const manifest = JSON.parse(await readFile(join(project.root, '.agent-bundle', 'epochs', epochId, 'portable', 'mcp.json'), 'utf8')) as {
+      readonly mcpServers: Readonly<{
+        readonly fixture: Readonly<{ readonly args?: readonly string[]; readonly command: string }>;
+      }>;
+    };
+    const compiledEntry = manifest.mcpServers.fixture.args?.[0];
+    if (compiledEntry === undefined) throw new Error('Expected the fixture MCP manifest to include its compiled entry.');
+    const pageErrors: Error[] = [];
+    page.on('pageerror', (error) => pageErrors.push(error));
     await page.goto(`${server.url}#mcp`);
     await expect(page.getByRole('heading', { name: 'MCP playground' })).toBeVisible({ timeout: browserTimeout });
     await page.locator('#mcp-target').selectOption('portable');
     await page.locator('#mcp-server-name').fill('fixture');
+    const opened = page.waitForResponse((response) =>
+      response.url() === `${server.url}/api/mcp/sessions` && response.request().method() === 'POST');
     await page.getByRole('button', { name: 'Open MCP session' }).click();
+    const openedSession = await (await opened).json() as { readonly session: Readonly<{
+      readonly binding: Readonly<{ readonly epochId: string; readonly serverName: string; readonly target: string }>;
+      readonly id: string;
+    }> };
+    expect(openedSession.session.binding).toEqual({ epochId, serverName: 'fixture', target: 'portable' });
     await expect(page.locator('.mcp-page-phase')).toContainText('Session ready', { timeout: browserTimeout });
     await expect(page.getByRole('heading', { name: 'Tools' })).toBeVisible({ timeout: browserTimeout });
     await expect(page.getByRole('button', { name: 'echo', exact: true })).toBeVisible({ timeout: browserTimeout });
-    await expect(page.getByRole('heading', { name: 'Prompts' })).toBeVisible({ timeout: browserTimeout });
-    await expect(page.getByRole('heading', { name: 'Resources' })).toBeVisible({ timeout: browserTimeout });
+    const prompts = page.locator('[aria-label="Prompts"]');
+    const resources = page.locator('[aria-label="Resources"]');
+    await expect(prompts.getByRole('button', { name: 'fixture', exact: true })).toBeVisible({ timeout: browserTimeout });
+    await expect(resources.getByText('fixture', { exact: true })).toBeVisible({ timeout: browserTimeout });
+    await expect(resources.getByRole('button', { name: 'Read ui://fixture/resource.txt' })).toBeVisible({ timeout: browserTimeout });
 
     await expect(page.getByRole('radio', { name: 'Form' })).toBeVisible({ timeout: browserTimeout });
-    await page.locator('#mcp-tool-arguments-message').fill('form');
+    await page.locator('#mcp-tool-arguments-message').fill('equivalent');
     await page.getByRole('button', { name: 'Call echo' }).click();
-    await expect(page.getByRole('region', { name: 'Invocation history' })).toContainText('Echo: form', { timeout: browserTimeout });
+    const history = page.getByRole('region', { name: 'Invocation history' });
+    await expect(history).toContainText('Echo: equivalent', { timeout: browserTimeout });
     await page.getByRole('radio', { name: 'Raw JSON' }).check();
-    await page.locator('#mcp-tool-arguments-raw').fill('{"message":"raw"}');
+    await page.locator('#mcp-tool-arguments-raw').fill('{"message":"equivalent"}');
     await page.getByRole('button', { name: 'Call echo' }).click();
-    await expect(page.getByRole('region', { name: 'Invocation history' })).toContainText('Echo: raw', { timeout: browserTimeout });
+    const historyEntries = history.locator('ol > li');
+    await expect(historyEntries).toHaveCount(2, { timeout: browserTimeout });
+    const [formInvocation, rawInvocation] = (await historyEntries.locator('pre > code').allTextContents()).map((entry) => JSON.parse(entry));
+    const expectedInvocation = {
+      request: { arguments: { message: 'equivalent' }, name: 'echo' },
+      result: { content: [{ text: 'Echo: equivalent', type: 'text' }] },
+    };
+    expect({ request: formInvocation.request, result: formInvocation.result }).toEqual(expectedInvocation);
+    expect({ request: rawInvocation.request, result: rawInvocation.result }).toEqual(expectedInvocation);
     await page.getByRole('button', { name: /Replay mcp-page-1/u }).click();
-    await expect(page.getByRole('region', { name: 'Invocation history' })).toContainText('Replay of mcp-page-1', { timeout: browserTimeout });
-    await expect(page.getByRole('tabpanel')).toContainText('callTool', { timeout: browserTimeout });
+    await expect(historyEntries).toHaveCount(3, { timeout: browserTimeout });
+    const replayEntry = historyEntries.nth(2);
+    await expect(replayEntry).toContainText('Replay of mcp-page-1', { timeout: browserTimeout });
+    const replayInvocation = JSON.parse(await replayEntry.locator('pre > code').textContent() ?? 'null');
+    expect({ request: replayInvocation.request, result: replayInvocation.result }).toEqual(expectedInvocation);
+    const rawTrace = page.getByRole('tabpanel').locator('ol > li > pre > code');
+    await expect.poll(async () => (await rawTrace.allTextContents()).some((entry) => {
+      const trace = JSON.parse(entry) as Readonly<{
+        readonly direction?: string;
+        readonly kind?: string;
+        readonly message?: Readonly<{ readonly jsonrpc?: string; readonly method?: string; readonly params?: Readonly<{
+          readonly arguments?: Readonly<{ readonly message?: string }>;
+          readonly name?: string;
+        }> }>;
+        readonly sequence?: number;
+      }>;
+      return trace.direction === 'client' && trace.kind === 'frame' && trace.message?.jsonrpc === '2.0' &&
+        trace.message.method === 'tools/call' && trace.message.params?.name === 'echo' &&
+        trace.message.params.arguments?.message === 'equivalent' && Number.isSafeInteger(trace.sequence) && trace.sequence > 0;
+    }), { timeout: browserTimeout }).toBe(true);
 
     const download = page.waitForEvent('download');
     await page.getByRole('button', { name: 'Download Inspector config' }).click();
-    expect((await download).suggestedFilename()).toMatch(/^mcp-.+-inspector\.json$/u);
+    const inspectorDownload = await download;
+    expect(inspectorDownload.suggestedFilename()).toBe(`mcp-${openedSession.session.id}-inspector.json`);
+    const downloadPath = await inspectorDownload.path();
+    if (downloadPath === null) throw new Error('Expected the Inspector config download to persist to disk.');
+    const inspectorConfig = JSON.parse(await readFile(downloadPath, 'utf8'));
+    expect(inspectorConfig).toEqual({
+      launch: {
+        args: ['[REDACTED]'],
+        command: manifest.mcpServers.fixture.command,
+        cwd: join(project.root, '.agent-bundle', 'epochs', epochId, 'portable'),
+        env: { NO_COLOR: '1' },
+        kind: 'stdio',
+      },
+      origin: 'artifact',
+    });
+    expect(JSON.stringify(inspectorConfig)).not.toContain(compiledEntry);
+    expect(JSON.stringify(inspectorConfig)).not.toContain('SECRET_TOKEN');
+    expect(JSON.stringify(inspectorConfig)).not.toContain('fixture-secret');
 
     await page.getByRole('button', { name: 'wait', exact: true }).click();
     await page.getByRole('button', { name: 'Call wait' }).click();
@@ -153,14 +221,29 @@ e2e('opens one real epoch MCP session and keeps its playground operations respon
 
     await page.getByRole('button', { name: 'Close MCP session' }).click();
     await expect(page.locator('.mcp-page-phase')).toContainText('Session closed', { timeout: browserTimeout });
-    await expect(page.getByRole('button', { name: 'Reset MCP session' })).toBeVisible({ timeout: browserTimeout });
+    await page.getByRole('button', { name: 'Reset MCP session' }).click();
+    await expect(page.locator('.mcp-page-phase')).toContainText('Session idle', { timeout: browserTimeout });
+    await expect(page.getByRole('button', { name: 'Open MCP session' })).toBeEnabled({ timeout: browserTimeout });
+    await expect(history).toContainText('No completed invocations yet.', { timeout: browserTimeout });
+    const reopened = page.waitForResponse((response) =>
+      response.url() === `${server.url}/api/mcp/sessions` && response.request().method() === 'POST');
+    await page.getByRole('button', { name: 'Open MCP session' }).click();
+    const reopenedSession = await (await reopened).json() as { readonly session: Readonly<{ readonly id: string }> };
+    expect(reopenedSession.session.id).not.toBe(openedSession.session.id);
+    await expect(page.locator('.mcp-page-phase')).toContainText('Session ready', { timeout: browserTimeout });
     await page.setViewportSize({ height: 844, width: 390 });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     expect(pageErrors).toEqual([]);
+  } catch (error) {
+    testFailure = error;
   } finally {
-    await server.close();
-    await removeProjectFixture(project.root);
+    const serverCleanup = await Promise.allSettled(server === undefined ? [] : [server.close()]);
+    const projectCleanup = await Promise.allSettled(project === undefined ? [] : [removeProjectFixture(project.root)]);
+    const failedCleanup = [...serverCleanup, ...projectCleanup].find((result) => result.status === 'rejected');
+    if (failedCleanup?.status === 'rejected') cleanupFailure = failedCleanup.reason;
   }
+  if (testFailure !== undefined) throw testFailure;
+  if (cleanupFailure !== undefined) throw cleanupFailure;
 });
 
 e2e('renders and rebuilds the complete responsive Overview against a real foreground server', { timeout: 60_000 }, async ({ page }) => {
