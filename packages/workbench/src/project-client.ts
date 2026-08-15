@@ -5,6 +5,7 @@ import {
   type ProjectReplayGap,
   type ProjectStatus,
 } from '../../agent-bundle/src/dev/types.ts';
+import { ForegroundRouteClient, ForegroundRouteClientError } from './mcp/mcp-route-client.ts';
 
 export interface EventSourceMessage {
   readonly data: string;
@@ -23,15 +24,12 @@ export type ProjectEventListener = (event: ProjectEventMessage) => void;
 export interface ProjectClientOptions {
   readonly events?: EventSourceFactory;
   readonly fetch?: typeof fetch;
+  /** Reuses Workbench's memory-only foreground authentication authority. */
+  readonly foreground?: ForegroundRouteClient;
 }
 
 interface ProjectStatusResponse {
   readonly status: ProjectStatus;
-}
-
-interface ProjectSessionResponse {
-  readonly origin: string;
-  readonly token: string;
 }
 
 interface QueuedProjectEvent {
@@ -60,13 +58,22 @@ const projectEventTypes = [
 
 const browserEvents: EventSourceFactory = (url) => new EventSource(url);
 
-const readResponse = async <Result>(response: Response): Promise<Result> => {
-  if (!response.ok) throw new ProjectClientError(`Workbench request failed with HTTP ${response.status}.`);
-  return response.json() as Promise<Result>;
-};
-
 const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
   value !== null && typeof value === 'object' && !Array.isArray(value);
+
+const isProjectStatus = (value: unknown): value is ProjectStatus => isRecord(value);
+
+const projectStatusResponse = (value: unknown): ProjectStatusResponse => {
+  if (!isRecord(value) || !Object.hasOwn(value, 'status') || !isProjectStatus(value.status)) {
+    throw new ProjectClientError('Workbench request returned an invalid response.');
+  }
+  return Object.freeze({ status: value.status });
+};
+
+const projectError = (error: unknown): ProjectClientError | unknown =>
+  error instanceof ForegroundRouteClientError
+    ? new ProjectClientError(`Workbench request failed with HTTP ${error.status}.`)
+    : error;
 
 const isSequence = (value: unknown): value is number =>
   typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
@@ -133,7 +140,7 @@ const normalizePaths = (paths: readonly string[]): readonly string[] => Object.f
  */
 export class ProjectClient {
   readonly #events: EventSourceFactory;
-  readonly #fetch: typeof fetch;
+  readonly #foreground: ForegroundRouteClient;
   #closed = false;
   #eventDrainPromise: Promise<void> | undefined;
   #eventListener: ProjectEventListener | undefined;
@@ -146,11 +153,10 @@ export class ProjectClient {
   #errorListener: ProjectClientErrorListener | undefined;
   #listener: ((status: ProjectStatus) => void) | undefined;
   #refreshPromise: Promise<ProjectStatus> | undefined;
-  #session: ProjectSessionResponse | undefined;
 
   constructor(options: ProjectClientOptions = {}) {
     this.#events = options.events ?? browserEvents;
-    this.#fetch = options.fetch ?? globalThis.fetch.bind(globalThis);
+    this.#foreground = options.foreground ?? new ForegroundRouteClient({ fetch: options.fetch });
   }
 
   get lastEventId(): number {
@@ -195,21 +201,22 @@ export class ProjectClient {
 
   async rebuild(paths: readonly string[] = []): Promise<ProjectStatus> {
     if (this.#closed) throw new ProjectClientError('Workbench client is closed.');
-    const session = await this.#sessionForMutation();
-    const response = await this.#fetch('/api/project/rebuild', {
-      body: JSON.stringify({ paths: normalizePaths(paths) }),
-      headers: {
-        'content-type': 'application/json',
-        'x-agent-bundle-session': session.token,
-      },
-      method: 'POST',
-    });
-    const result = await readResponse<ProjectStatusResponse>(response);
+    let result: ProjectStatusResponse;
+    try {
+      result = projectStatusResponse(await this.#foreground.protectedJson('/api/project/rebuild', {
+        body: JSON.stringify({ paths: normalizePaths(paths) }),
+        headers: { 'content-type': 'application/json' },
+        method: 'POST',
+      }));
+    } catch (error) {
+      throw projectError(error);
+    }
     this.#listener?.(result.status);
     return result.status;
   }
 
   close(): void {
+    if (this.#closed) return;
     this.#closed = true;
     this.#eventQueue.length = 0;
     this.#eventRefreshQueued = false;
@@ -218,19 +225,15 @@ export class ProjectClient {
     this.#errorListener = undefined;
     this.#eventListener = undefined;
     this.#listener = undefined;
+    this.#foreground.forgetAuthentication();
   }
 
   async #readStatus(): Promise<ProjectStatus> {
-    const response = await this.#fetch('/api/project/status');
-    return (await readResponse<ProjectStatusResponse>(response)).status;
-  }
-
-  async #sessionForMutation(): Promise<ProjectSessionResponse> {
-    if (this.#session !== undefined) return this.#session;
-    const response = await this.#fetch('/api/project/session');
-    const session = await readResponse<ProjectSessionResponse>(response);
-    this.#session = Object.freeze({ origin: session.origin, token: session.token });
-    return this.#session;
+    try {
+      return projectStatusResponse(await this.#foreground.publicJson('/api/project/status')).status;
+    } catch (error) {
+      throw projectError(error);
+    }
   }
 
   #onEvent(

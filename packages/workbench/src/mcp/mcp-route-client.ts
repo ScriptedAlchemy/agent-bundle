@@ -41,7 +41,10 @@ export interface ForegroundRouteClientOptions {
   readonly fetch?: typeof fetch;
 }
 
-export type McpRouteClientOptions = ForegroundRouteClientOptions;
+export interface McpRouteClientOptions extends ForegroundRouteClientOptions {
+  /** Reuses Workbench's memory-only foreground authentication authority. */
+  readonly foreground?: ForegroundRouteClient;
+}
 
 interface ForegroundSession {
   readonly origin: string;
@@ -272,7 +275,7 @@ export class McpRouteClient {
   readonly #foreground: ForegroundRouteClient;
 
   constructor(options: McpRouteClientOptions = {}) {
-    this.#foreground = new ForegroundRouteClient(options);
+    this.#foreground = options.foreground ?? new ForegroundRouteClient({ fetch: options.fetch });
   }
 
   async create(binding: McpRouteSessionBinding): Promise<McpRouteSession> {

@@ -5,7 +5,8 @@ import type {
   DevRuntimeStatus,
   DevRuntimeSurface,
 } from '../../agent-bundle/src/dev/runtime-protocol.ts';
-import { ForegroundRouteClient, ForegroundRouteClientError } from '../src/mcp/mcp-route-client.ts';
+import { ForegroundRouteClient, ForegroundRouteClientError, McpRouteClient } from '../src/mcp/mcp-route-client.ts';
+import { ProjectClient } from '../src/project-client.ts';
 import { RuntimeClient, RuntimeClientError } from '../src/runtime-client.ts';
 
 interface RecordedRequest {
@@ -134,6 +135,46 @@ it('bootstraps available runtime history through one shared foreground authentic
   )).toBe(true);
   expect(Object.isFrozen((left as Extract<typeof left, { readonly kind: 'available' }>).history)).toBe(true);
   expect(Object.isFrozen((left as Extract<typeof left, { readonly kind: 'available' }>).history[0]!)).toBe(true);
+});
+
+it('shares one injected foreground bootstrap across MCP, Runtime, and Project clients and invalidates it without stale holders', async () => {
+  const requests: RecordedRequest[] = [];
+  const foreground = new ForegroundRouteClient({
+    fetch: async (input, init) => {
+      const url = String(input);
+      requests.push({ body: init?.body?.toString(), headers: new Headers(init?.headers), url });
+      if (url === '/api/project/session') return json({ origin: 'http://localhost', token: 'foreground-token' });
+      if (url === '/api/mcp/sessions/session-a') {
+        return json({
+          session: {
+            binding: { epochId: 'epoch-a', serverName: 'weather', target: 'portable' },
+            connection: {},
+            id: 'session-a',
+          },
+        });
+      }
+      if (url === '/api/runtime/status') return json({ status });
+      if (url === '/api/runtime/surfaces') return json({ surfaces: [surface] });
+      if (url === '/api/runtime/runs?limit=50') return json({ providerSessionId: 'provider-a', runs: [run()] });
+      if (url === '/api/project/rebuild') return json({ status });
+      throw new Error(`Unexpected route request ${url}.`);
+    },
+  });
+  const mcp = new McpRouteClient({ foreground });
+  const runtime = new RuntimeClient(foreground);
+  const project = new ProjectClient({ foreground });
+
+  await Promise.all([mcp.session('session-a'), runtime.bootstrap(), project.rebuild(['skills/review/SKILL.md'])]);
+  expect(requests.filter((request) => request.url === '/api/project/session')).toHaveLength(1);
+
+  mcp.forgetAuthentication();
+  await project.rebuild(['skills/review/SKILL.md']);
+  expect(requests.filter((request) => request.url === '/api/project/session')).toHaveLength(2);
+
+  project.close();
+  project.close();
+  await new ProjectClient({ foreground }).rebuild(['skills/review/SKILL.md']);
+  expect(requests.filter((request) => request.url === '/api/project/session')).toHaveLength(3);
 });
 
 it('rejects every runtime mutation and protected read before an available bootstrap without sending a request', async () => {
