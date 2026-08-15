@@ -87,6 +87,11 @@ interface OrphanedConnection {
   finalization: Promise<void> | undefined;
 }
 
+interface CombinedAbortSignal {
+  readonly dispose: () => void;
+  readonly signal: AbortSignal;
+}
+
 interface Subscription {
   closed: boolean;
   lastDeliveredSequence: number;
@@ -791,7 +796,8 @@ export class RuntimeMcpRegistry implements DevRuntimeMcpRegistry {
       throw sessionAbort.signal.reason ?? registryConflict('Runtime MCP session is restarting.');
     }
     const controller = new AbortController();
-    const signal = combineSignals([this.#closeAbort.signal, sessionAbort.signal, controller.signal]);
+    const combined = combineSignals([this.#closeAbort.signal, sessionAbort.signal, controller.signal]);
+    const signal = combined.signal;
     let resolveDone!: () => void;
     const done = new Promise<void>((resolve) => { resolveDone = resolve; });
     const operation: OperationRecord = Object.freeze({ controller, done, sessionAbort });
@@ -817,6 +823,7 @@ export class RuntimeMcpRegistry implements DevRuntimeMcpRegistry {
         vector,
       });
     } finally {
+      combined.dispose();
       record.operations.delete(operation);
       resolveDone();
       await lease.release();
@@ -897,14 +904,15 @@ export class RuntimeMcpRegistry implements DevRuntimeMcpRegistry {
     if (oldConnection !== undefined) await this.#closeOrRetain(oldConnection);
     const nextAbort = new AbortController();
     record.abort = nextAbort;
-    const connected = await this.#connectAndRelist(
-      record.descriptor,
-      record.id,
-      combineSignals([this.#closeAbort.signal, nextAbort.signal]),
-    );
-    record.connection = connected.connection;
-    record.connectionState = connected.state;
-    record.state = 'ready';
+    const combined = combineSignals([this.#closeAbort.signal, nextAbort.signal]);
+    try {
+      const connected = await this.#connectAndRelist(record.descriptor, record.id, combined.signal);
+      record.connection = connected.connection;
+      record.connectionState = connected.state;
+      record.state = 'ready';
+    } finally {
+      combined.dispose();
+    }
   }
 
   #finalizeRetirement(retirement: RetiredConnectionBatch): Promise<void> {
@@ -1177,16 +1185,30 @@ const bindingCopy = (binding: DevRuntimeMcpSessionBinding): DevRuntimeMcpInvalid
   sessionRevision: binding.sessionRevision,
 });
 
-const combineSignals = (signals: readonly AbortSignal[]): AbortSignal => {
+const combineSignals = (signals: readonly AbortSignal[]): CombinedAbortSignal => {
   const controller = new AbortController();
+  const registrations: Array<readonly [AbortSignal, () => void]> = [];
+  let disposed = false;
+  const dispose = (): void => {
+    if (disposed) return;
+    disposed = true;
+    for (const [signal, listener] of registrations) signal.removeEventListener('abort', listener);
+    registrations.length = 0;
+  };
   const abort = (signal: AbortSignal): void => {
     if (!controller.signal.aborted) controller.abort(signal.reason);
+    dispose();
   };
   for (const signal of signals) {
-    if (signal.aborted) abort(signal);
-    else signal.addEventListener('abort', () => abort(signal), { once: true });
+    if (signal.aborted) {
+      abort(signal);
+      break;
+    }
+    const listener = (): void => abort(signal);
+    registrations.push([signal, listener]);
+    signal.addEventListener('abort', listener, { once: true });
   }
-  return controller.signal;
+  return Object.freeze({ dispose, signal: controller.signal });
 };
 
 const finiteConnectionState = (input: DevRuntimeMcpConnectionState): DevRuntimeMcpConnectionState => Object.freeze({

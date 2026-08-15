@@ -160,6 +160,61 @@ const scriptedConnector = (...steps: readonly (Error | RuntimeMcpConnection)[]):
   });
 };
 
+const trackAbortSignalListeners = (): Readonly<{
+  readonly residual: () => readonly number[];
+  readonly restore: () => void;
+}> => {
+  type AddListener = (
+    type: string,
+    listener: EventListenerOrEventListenerObject | null,
+    options?: boolean | AddEventListenerOptions,
+  ) => void;
+  type RemoveListener = (
+    type: string,
+    listener: EventListenerOrEventListenerObject | null,
+    options?: boolean | EventListenerOptions,
+  ) => void;
+  const prototype = Object.getPrototypeOf(new AbortController().signal) as AbortSignal;
+  const ownAdd = Object.getOwnPropertyDescriptor(prototype, 'addEventListener');
+  const ownRemove = Object.getOwnPropertyDescriptor(prototype, 'removeEventListener');
+  const add = prototype.addEventListener as AddListener;
+  const remove = prototype.removeEventListener as RemoveListener;
+  const counts = new Map<AbortSignal, number>();
+  Object.defineProperty(prototype, 'addEventListener', {
+    configurable: true,
+    value: function addListener(
+      this: AbortSignal,
+      type: string,
+      listener: EventListenerOrEventListenerObject | null,
+      options?: boolean | AddEventListenerOptions,
+    ): void {
+      if (type === 'abort') counts.set(this, (counts.get(this) ?? 0) + 1);
+      add.call(this, type, listener, options);
+    },
+  });
+  Object.defineProperty(prototype, 'removeEventListener', {
+    configurable: true,
+    value: function removeListener(
+      this: AbortSignal,
+      type: string,
+      listener: EventListenerOrEventListenerObject | null,
+      options?: boolean | EventListenerOptions,
+    ): void {
+      if (type === 'abort') counts.set(this, (counts.get(this) ?? 0) - 1);
+      remove.call(this, type, listener, options);
+    },
+  });
+  return Object.freeze({
+    residual: () => Object.freeze([...counts.values()].filter((count) => count !== 0)),
+    restore: () => {
+      if (ownAdd === undefined) delete (prototype as { addEventListener?: unknown }).addEventListener;
+      else Object.defineProperty(prototype, 'addEventListener', ownAdd);
+      if (ownRemove === undefined) delete (prototype as { removeEventListener?: unknown }).removeEventListener;
+      else Object.defineProperty(prototype, 'removeEventListener', ownRemove);
+    },
+  });
+};
+
 const createGenerationStore = async (retainInactive?: number): Promise<Readonly<{
   readonly close: () => Promise<void>;
   readonly commit: (id: string) => Promise<RuntimeGeneration>;
@@ -1004,6 +1059,56 @@ it('synchronously aborts deferred public reconcile and restart replacement setup
 
   await run('reconcile');
   await run('restart');
+});
+
+it('disposes successful composite signal listeners and propagates close abort once', async () => {
+  const fixture = await createGenerationStore();
+  const listeners = trackAbortSignalListeners();
+  const registry = createRegistry({ store: fixture.store });
+  try {
+    await fixture.commit('g1');
+    const session = await registry.open({ serverName: 'timeline', target: 'portable' });
+    for (let index = 0; index < 12; index += 1) {
+      const revision = session.snapshot().binding.sessionRevision;
+      await session.execute(request('list-tools', revision));
+      await registry.restart({ expectedSessionRevision: revision, sessionId: session.snapshot().binding.sessionId });
+    }
+    expect(listeners.residual()).toEqual([]);
+  } finally {
+    listeners.restore();
+    await registry.close().catch(() => undefined);
+    await fixture.close();
+  }
+
+  const abortFixture = await createGenerationStore();
+  const entered = deferred<void>();
+  let aborts = 0;
+  const abortRegistry = createRegistry({
+    executor: async (context) => {
+      entered.resolve();
+      return new Promise<RuntimeMcpExecutionValue>((_resolve, reject) => {
+        context.signal.addEventListener('abort', () => {
+          aborts += 1;
+          reject(context.signal.reason);
+        }, { once: true });
+      });
+    },
+    store: abortFixture.store,
+  });
+  try {
+    await abortFixture.commit('g1');
+    const session = await abortRegistry.open({ serverName: 'timeline', target: 'portable' });
+    const running = session.execute(request('call-tool', session.snapshot().binding.sessionRevision));
+    await entered.promise;
+    const firstClose = abortRegistry.close();
+    expect(abortRegistry.close()).toBe(firstClose);
+    await expect(running).rejects.toThrow('closed');
+    await expect(firstClose).resolves.toBeUndefined();
+    expect(aborts).toBe(1);
+  } finally {
+    await abortRegistry.close().catch(() => undefined);
+    await abortFixture.close();
+  }
 });
 
 it('prepares private activation without public visibility, commits synchronously with buffered publish, and aborts without changes', async () => {
