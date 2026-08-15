@@ -15,7 +15,6 @@ import {
   type NormalizedPlugin,
 } from '../src/index.ts';
 import { runCli } from '../src/cli.ts';
-import { writeManifest } from '../src/build/emit.ts';
 import type {
   AgentBundleConfig as ConfigEntryAgentBundleConfig,
   AgentBundleDevConfig,
@@ -26,6 +25,7 @@ import type {
   CreateDevRuntimeProvider,
   DevRuntimeProvider,
 } from '../src/api.ts';
+import { writeFixtureManifest } from './support/manifest.ts';
 
 interface PackageManifest {
   bin: {
@@ -401,7 +401,7 @@ it('invokes a prebuilt MCP server from a clean packed consumer', async () => {
         },
       })}\n`,
     );
-    await writeManifest({ artifactRoot: artifact, targets: ['portable'] });
+    await writeFixtureManifest({ artifactRoot: artifact, targets: ['portable'] });
 
     const { stdout: packedOutput } = await execFile(
       'npm',

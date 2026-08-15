@@ -8,7 +8,7 @@ import addFormats from 'ajv-formats';
 import { expect, it } from '@rstest/core';
 
 import { createDefaultRegistry } from '../src/adapters/registry.ts';
-import { build } from '../src/build/build.ts';
+import { build } from './support/build.ts';
 import { pathTokens, type NormalizedPlugin } from '../src/core/types.ts';
 
 const installFormats = addFormats as unknown as (target: Ajv2020) => void;
@@ -521,6 +521,7 @@ it('filters host components and builds portable, Codex, and Claude target roots'
   const skillRoot = join(root, 'skills', 'review');
   await mkdir(join(skillRoot, 'references'), { recursive: true });
   await Promise.all([
+    writeFile(join(root, 'agent-bundle.config.ts'), 'export default {};\n'),
     writeFile(join(skillRoot, 'SKILL.md'), '# Review\n'),
     writeFile(join(skillRoot, 'references', 'guide.md'), '# Guide\n'),
   ]);

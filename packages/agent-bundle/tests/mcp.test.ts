@@ -7,7 +7,7 @@ import { Client } from '@modelcontextprotocol/client';
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 
 import { createDefaultRegistry, TargetRegistry } from '../src/adapters/registry.ts';
-import { build } from '../src/build/build.ts';
+import { build } from './support/build.ts';
 import { validateArtifact } from '../src/build/validate-artifact.ts';
 import { normalizeProject } from '../src/config/normalize.ts';
 import { validateModel, validateSource } from '../src/config/validate.ts';
@@ -450,6 +450,7 @@ it('bundles each local MCP entry once and maps every target manifest to that art
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-mcp-build-'));
   try {
     await mkdir(join(root, 'src'), { recursive: true });
+    await writeFile(join(root, 'agent-bundle.config.ts'), 'export default {};\n');
     await writeFile(join(root, 'src', 'message.ts'), 'export const message = "bundled";\n');
     await writeFile(
       join(root, 'src', 'local server.ts'),
@@ -636,6 +637,7 @@ it('builds one deterministic self-contained MCP App view and injects it through 
   try {
     await mkdir(join(root, 'src'), { recursive: true });
     await mkdir(join(root, 'views'), { recursive: true });
+    await writeFile(join(root, 'agent-bundle.config.ts'), 'export default {};\n');
     await symlink(join(process.cwd(), 'node_modules'), join(root, 'node_modules'), 'dir');
     await writeFile(join(root, 'src', 'server.ts'), [
       "import apps from 'agent-bundle/mcp-apps';",
@@ -756,6 +758,7 @@ it('rejects the MCP Apps virtual module outside Agent Bundle compilation', async
 it('uses the selected remote manifest with propagated cancellation and cleans data before rejecting tampering', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-mcp-remote-'));
   try {
+    await writeFile(join(root, 'agent-bundle.config.ts'), 'export default {};\n');
     const model = await normalizeProject(
       loadedProject(root, {
         mcp: {
@@ -846,6 +849,7 @@ it('creates session state only after setup succeeds and always inherits the stdi
   try {
     process.env[inheritedKey] = 'inherited-sentinel';
     await mkdir(join(root, 'src'), { recursive: true });
+    await writeFile(join(root, 'agent-bundle.config.ts'), 'export default {};\n');
     await writeFile(join(root, 'src', 'server.ts'), 'export {};\n');
     const model = await normalizeProject(
       loadedProject(root, {
@@ -932,6 +936,7 @@ it('serves compiler-bundled MCP App resources from a copied artifact without pro
       join(root, 'node_modules', '@modelcontextprotocol'),
       'dir',
     );
+    await writeFile(join(root, 'agent-bundle.config.ts'), 'export default {};\n');
     await writeFile(join(root, 'package.json'), '{"type":"module"}\n');
     await writeFile(join(root, 'views', 'dashboard.ts'), "document.body.dataset.fixture = 'app-resource';\n");
     await writeFile(join(root, 'views', 'shell.html'), '<!doctype html><html><body><main id="view"></main></body></html>\n');
@@ -1056,6 +1061,7 @@ it('lists tools from a validated copied artifact without reading project source'
       join(root, 'node_modules', '@modelcontextprotocol'),
       'dir',
     );
+    await writeFile(join(root, 'agent-bundle.config.ts'), 'export default {};\n');
     await writeFile(join(root, 'package.json'), '{"type":"module"}\n');
     await writeFile(
       join(root, 'src', 'server.ts'),

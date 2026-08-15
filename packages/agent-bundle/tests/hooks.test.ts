@@ -8,7 +8,7 @@ import { rspack } from '@rspack/core';
 import { expect, it, rs } from '@rstest/core';
 
 import { createDefaultRegistry } from '../src/adapters/registry.ts';
-import { build } from '../src/build/build.ts';
+import { build } from './support/build.ts';
 import { buildWithRslib } from '../src/build/rslib.ts';
 import { HookService } from '../src/services/hook-service.ts';
 import { normalizeProject } from '../src/config/normalize.ts';
@@ -303,6 +303,7 @@ it('lists and simulates only validated wrappers from a clean copied artifact', a
   try {
     await mkdir(sourceRoot, { recursive: true });
     await Promise.all([
+      writeFile(join(root, 'agent-bundle.config.ts'), 'export default {};\n'),
       writeFile(join(root, 'package.json'), '{"type":"module"}\n'),
       writeFile(join(sourceRoot, 'session-start.ts'), "export default (event: { source?: string }) => ({ outcome: 'continue' as const, additionalContext: `start:${event.source}` });\n"),
       writeFile(join(sourceRoot, 'check-command.ts'), [
@@ -416,6 +417,7 @@ it('escalates timed-out and aborted wrapper process trees from TERM to KILL befo
   try {
     await mkdir(sourceRoot, { recursive: true });
     await Promise.all([
+      writeFile(join(root, 'agent-bundle.config.ts'), 'export default {};\n'),
       writeFile(join(root, 'package.json'), '{"type":"module"}\n'),
       writeFile(join(sourceRoot, 'check-command.ts'), [
         "import { spawn } from 'node:child_process';",
@@ -513,6 +515,7 @@ it('compiles each native hook through a virtual Rslib entry without sibling chun
   try {
     await mkdir(sourceRoot, { recursive: true });
     await Promise.all([
+      writeFile(join(root, 'agent-bundle.config.ts'), 'export default {};\n'),
       writeFile(join(root, 'package.json'), '{"type":"module"}\n'),
       writeFile(join(sourceRoot, 'shared.ts'), "export const context = 'compiled from local TypeScript';\n"),
       ...model.hooks.map((hook) => writeFile(
@@ -562,6 +565,7 @@ it('runs the embedded Codex and Claude native codecs through their published wra
   try {
     await mkdir(sourceRoot, { recursive: true });
     await Promise.all([
+      writeFile(join(root, 'agent-bundle.config.ts'), 'export default {};\n'),
       writeFile(join(root, 'package.json'), '{"type":"module"}\n'),
       writeFile(join(sourceRoot, 'session-start.ts'), "export default (event: { sessionId?: string }) => ({ outcome: 'continue' as const, additionalContext: event.sessionId });\n"),
       writeFile(join(sourceRoot, 'check-command.ts'), "export default (event: { toolName?: string }) => ({ outcome: event.toolName === 'Bash' ? 'deny' as const : 'continue' as const, reason: 'blocked command' });\n"),
@@ -612,6 +616,7 @@ it('rejects malformed event-specific native input before calling generated Codex
   try {
     await mkdir(sourceRoot, { recursive: true });
     await Promise.all([
+      writeFile(join(root, 'agent-bundle.config.ts'), 'export default {};\n'),
       writeFile(join(root, 'package.json'), '{"type":"module"}\n'),
       ...model.hooks.map((hook) => writeFile(hook.source, 'export default () => undefined;\n')),
     ]);
@@ -679,6 +684,7 @@ it('rejects canonical reason combinations whose selected native hook cannot repr
   try {
     await mkdir(sourceRoot, { recursive: true });
     await Promise.all([
+      writeFile(join(root, 'agent-bundle.config.ts'), 'export default {};\n'),
       writeFile(join(root, 'package.json'), '{"type":"module"}\n'),
       writeFile(join(sourceRoot, 'session.ts'), "export default () => ({ outcome: 'continue' as const, reason: 'ignored' });\n"),
       writeFile(join(sourceRoot, 'before-allow.ts'), "export default () => ({ outcome: 'continue' as const, reason: 'ignored' });\n"),
@@ -727,6 +733,7 @@ it('rejects malformed native hook input, exports, and handler results concisely'
   try {
     await mkdir(sourceRoot, { recursive: true });
     await Promise.all([
+      writeFile(join(root, 'agent-bundle.config.ts'), 'export default {};\n'),
       writeFile(join(root, 'package.json'), '{"type":"module"}\n'),
       writeFile(join(sourceRoot, 'valid.ts'), 'export default () => undefined;\n'),
       writeFile(join(sourceRoot, 'no-default.ts'), 'export const value = true;\n'),

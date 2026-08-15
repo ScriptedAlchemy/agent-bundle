@@ -7,7 +7,7 @@ import { expect, it } from '@rstest/core';
 import type { Transport } from '@modelcontextprotocol/client';
 
 import { createDefaultRegistry } from '../src/adapters/registry.ts';
-import { build } from '../src/build/build.ts';
+import { build } from './support/build.ts';
 import { validateArtifact } from '../src/build/validate-artifact.ts';
 import { normalizeProject } from '../src/config/normalize.ts';
 import type { LoadedConfig } from '../src/config/load.ts';
@@ -79,6 +79,7 @@ const publishFixtureEpoch = async (
     'dir',
   );
   await writeFile(join(root, 'package.json'), '{"type":"module"}\n');
+  await writeFile(join(root, 'agent-bundle.config.ts'), 'export default {};\n');
   await writeFile(join(root, 'src', 'server.ts'), [
     "import { McpServer } from '@modelcontextprotocol/server';",
     "import { StdioServerTransport } from '@modelcontextprotocol/server/stdio';",
@@ -149,6 +150,7 @@ const publishFixtureEpoch = async (
 };
 
 const publishRemoteEpoch = async (root: string, id: string): Promise<EpochStore> => {
+  await writeFile(join(root, 'agent-bundle.config.ts'), 'export default {};\n');
   const model = await normalizeProject(
     loadedProject(root, {
       mcp: {

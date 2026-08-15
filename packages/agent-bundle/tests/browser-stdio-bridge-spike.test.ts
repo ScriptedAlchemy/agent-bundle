@@ -7,7 +7,7 @@ import { Client, type JSONRPCMessage, type Transport } from '@modelcontextprotoc
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 
 import { createDefaultRegistry } from '../src/adapters/registry.ts';
-import { build } from '../src/build/build.ts';
+import { build } from './support/build.ts';
 import type { LoadedConfig } from '../src/config/load.ts';
 import { normalizeProject } from '../src/config/normalize.ts';
 import type { AgentBundleConfig } from '../src/core/types.ts';
@@ -182,6 +182,7 @@ it('bridges a browser-bound session to a generated stdio artifact without exposi
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-browser-bridge-'));
   try {
     await mkdir(join(root, 'src'), { recursive: true });
+    await writeFile(join(root, 'agent-bundle.config.ts'), 'export default {};\n');
     await writeFile(
       join(root, 'src', 'server.ts'),
       [
