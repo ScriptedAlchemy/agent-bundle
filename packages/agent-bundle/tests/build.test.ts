@@ -412,6 +412,40 @@ it('reports complete immutable output provenance for a Skill copy and bundled sc
   }
 });
 
+it('rejects an adapter artifact with no provenance inputs before replacing a prior artifact', async () => {
+  const project = await createProject();
+  const adapter: TargetAdapter = {
+    capabilities: {},
+    metadata: testAdapterMetadata,
+    name: 'portable',
+    plan: () => ({
+      diagnostics: [],
+      entries: [{
+        content: '{"provenance":"missing"}\n',
+        kind: 'write',
+        relativePath: 'plugin.json',
+        sourceInputs: [],
+      }],
+    }),
+    validateModel: () => [],
+  };
+
+  try {
+    await mkdir(project.outputRoot, { recursive: true });
+    await writeFile(join(project.outputRoot, 'previous.txt'), 'previous\n');
+
+    await expect(build({
+      model: { ...modelFor(project), scripts: [] },
+      outputRoot: project.outputRoot,
+      projectRoot: project.root,
+      registry: new TargetRegistry().register(adapter, { default: true }),
+    })).rejects.toThrow(/source inputs/i);
+    await expect(readFile(join(project.outputRoot, 'previous.txt'), 'utf8')).resolves.toBe('previous\n');
+  } finally {
+    await cleanupProject(project);
+  }
+});
+
 it('rejects an authored bundled dependency outside the project and preserves the prior artifact', async () => {
   const project = await createProject();
   const outside = join(dirname(project.root), 'agent-bundle-provenance-outside.ts');

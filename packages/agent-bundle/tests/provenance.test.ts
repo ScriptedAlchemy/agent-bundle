@@ -136,3 +136,53 @@ it('rejects incomplete, ambiguous, filtered, and outside-root public stats', () 
     }),
   })).toThrow(/outside/i);
 });
+
+it('ignores a Windows virtual-module descendant through lexical containment', () => {
+  const evidence = collectBundledOutputEvidence({
+    expectedAssets: [{
+      path: 'portable/hooks/entry.mjs',
+      sourceInputs: ['/work/project/src/entry.ts'],
+    }],
+    ignoredSourcePaths: ['C:\\stage\\.agent-bundle-virtual'],
+    projectRoot,
+    stats: {
+      toJson: () => ({
+        assets: [{ name: 'portable/hooks/entry.mjs' }],
+        modules: [{ nameForCondition: 'C:\\stage\\.agent-bundle-virtual\\entry.mjs' }],
+      }),
+    },
+  });
+
+  expect(evidence).toEqual([{
+    path: 'portable/hooks/entry.mjs',
+    sourceInputs: ['/work/project/src/entry.ts'],
+  }]);
+});
+
+it('permits classified no-source modules and rejects anonymous or unknown selected modules', () => {
+  const expectedAssets = [{
+    path: 'portable/scripts/greeting.mjs',
+    sourceInputs: ['/work/project/src/greeting.ts'],
+  }];
+  const collect = (modules: readonly Record<string, unknown>[]) => collectBundledOutputEvidence({
+    expectedAssets,
+    projectRoot,
+    stats: {
+      toJson: () => ({
+        assets: [{ name: 'portable/scripts/greeting.mjs' }],
+        modules,
+      }),
+    },
+  });
+
+  expect(collect([
+    { moduleType: 'runtime' },
+    { moduleType: 'external', name: 'external "node:fs"' },
+    { modules: [{ nameForCondition: '/work/project/src/greeting.ts' }] },
+  ])).toEqual([{
+    path: 'portable/scripts/greeting.mjs',
+    sourceInputs: ['/work/project/src/greeting.ts'],
+  }]);
+  expect(() => collect([{}])).toThrow(/source/i);
+  expect(() => collect([{ name: 'unknown generated module' }])).toThrow(/source/i);
+});
