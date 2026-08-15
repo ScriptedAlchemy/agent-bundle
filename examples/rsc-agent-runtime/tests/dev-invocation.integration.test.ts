@@ -709,6 +709,126 @@ test('runs an exact generation-contained hook invocation and retains its immutab
   }
 }, 30_000);
 
+test('preserves the Claude fixture seed in post-state while exact replay stays valid', async () => {
+  const storageRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-session-fixture-seed-'));
+  const projectRoot = process.cwd();
+  const prepared = await new ProjectService({ includeDevRuntime: true, mode: 'development', root: projectRoot }).prepare('dev');
+  const session = await createDevRuntimeProvider().start({
+    artifactStatus: () => Object.freeze({ state: 'missing' as const }),
+    emit: () => undefined,
+    environment: Object.freeze({}),
+    projectRoot,
+    preparedRuntime: prepared.devRuntime!,
+    providerSessionId: 'session-fixture-seed-test',
+    signal: new AbortController().signal,
+    storageRoot,
+  });
+
+  try {
+    await waitFor(() => session.status().activeVector !== undefined, 'Timed out waiting for an active runtime generation', 15_000);
+    const generationId = session.status().activeVector!.runtimeGenerationId;
+    const hook = session.surfaces().find((surface) => surface.id === 'hook.claude');
+    const fixture = hook?.fixtures.find((candidate) => candidate.id === 'claude-post-tool-use-write');
+    expect(fixture).toMatchObject({
+      id: 'claude-post-tool-use-write',
+      seed: {
+        cwd: '/tmp',
+        hook_event_name: 'PostToolUse',
+        session_id: 'fixture-claude-post-tool-use',
+        tool_input: { file_path: 'fixture-claude-post-tool-use.txt' },
+        tool_name: 'Write',
+        tool_use_id: 'fixture-claude-post-tool-use-write',
+      },
+    });
+    if (fixture?.seed === undefined) throw new Error('Claude fixture seed was unavailable.');
+
+    await expect(session.resetState({
+      expectedGenerationId: generationId,
+      seed: fixture.seed,
+      stateStoreId: 'playground',
+    })).resolves.toEqual({ stateStoreId: 'playground', stateVersion: 1 });
+    const run = await session.invoke({
+      expectedGenerationId: generationId,
+      fixtureId: fixture.id,
+      input: fixture.seed,
+      surfaceId: 'hook.claude',
+      target: 'claude',
+    });
+    expect(run).toMatchObject({
+      fixtureId: fixture.id,
+      result: {
+        state: {
+          identity: { stateStoreId: 'playground', stateVersion: 2 },
+          snapshot: {
+            edits: [expect.objectContaining({ path: '/tmp/fixture-claude-post-tool-use.txt' })],
+            seed: fixture.seed,
+            stateVersion: 2,
+          },
+        },
+      },
+      status: 'succeeded',
+      vector: { runtimeGenerationId: generationId, stateVersion: 2 },
+    });
+    if (run.status !== 'succeeded') throw new Error('Fixture invocation did not succeed.');
+    const postState = run.result.state.snapshot;
+    if (postState === null || typeof postState !== 'object' || Array.isArray(postState)) throw new Error('Fixture post-state snapshot was unavailable.');
+    const postStateSeed = Object.getOwnPropertyDescriptor(postState, 'seed')?.value;
+    expect(Object.isFrozen(postState)).toBe(true);
+    expect(postStateSeed).not.toBe(fixture.seed);
+    expect(Object.isFrozen(postStateSeed)).toBe(true);
+
+    const replay = await session.replay({ mode: 'exact', runId: run.id });
+    expect(replay).toMatchObject({
+      fixtureId: fixture.id,
+      result: { state: { snapshot: { seed: fixture.seed, stateVersion: 2 } } },
+      status: 'succeeded',
+      vector: { runtimeGenerationId: generationId, stateVersion: 2 },
+    });
+
+    const timeline = await session.invoke({
+      expectedGenerationId: generationId,
+      input: {},
+      surfaceId: 'mcp.render_edit_timeline',
+      target: session.surfaces().find((surface) => surface.id === 'mcp.render_edit_timeline')!.targets[0]!,
+    });
+    expect(timeline).toMatchObject({
+      result: {
+        protocol: {
+          structuredContent: {
+            edits: [expect.objectContaining({ path: '/tmp/fixture-claude-post-tool-use.txt' })],
+            stateVersion: 2,
+          },
+        },
+      },
+      status: 'succeeded',
+    });
+    if (timeline.status !== 'succeeded' || timeline.result.protocol === null || typeof timeline.result.protocol !== 'object' || Array.isArray(timeline.result.protocol)) {
+      throw new Error('Timeline protocol was unavailable.');
+    }
+    expect((timeline.result.protocol as Record<string, unknown>).structuredContent).not.toHaveProperty('seed');
+
+    await expect(session.resetState({
+      expectedGenerationId: generationId,
+      seed: { authorization: 'Bearer sk-live-abcdefghijklmnopqrstuvwxyz' },
+      stateStoreId: 'playground',
+    })).rejects.toThrow('sensitive fields');
+    const status = await session.invoke({
+      expectedGenerationId: generationId,
+      input: {},
+      surfaceId: 'mcp.runtime_status',
+      target: session.surfaces().find((surface) => surface.id === 'mcp.runtime_status')!.targets[0]!,
+    });
+    expect(status).toMatchObject({
+      result: { state: { snapshot: { seed: fixture.seed, stateVersion: 2 } } },
+      status: 'succeeded',
+      vector: { stateVersion: 2 },
+    });
+  } finally {
+    await session.close().catch(() => undefined);
+    await rm(storageRoot, { force: true, recursive: true });
+  }
+}, 30_000);
+
 test('does not spawn an invocation worker when runtime.run.started closes the session', async () => {
   const storageRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-session-started-close-'));
   const projectRoot = process.cwd();

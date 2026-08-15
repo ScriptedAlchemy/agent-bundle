@@ -56,7 +56,9 @@ const parseSnapshot = (value: unknown): RuntimeSnapshot => {
     throw new Error('RSC worker received an invalid runtime snapshot');
   }
 
-  return { edits: snapshot.edits as RuntimeSnapshot['edits'], stateVersion };
+  return snapshot.seed === undefined
+    ? { edits: snapshot.edits as RuntimeSnapshot['edits'], stateVersion }
+    : { edits: snapshot.edits as RuntimeSnapshot['edits'], seed: snapshot.seed as RuntimeSnapshot['seed'], stateVersion };
 };
 
 const parseRequest = (value: unknown): RenderRequest => {

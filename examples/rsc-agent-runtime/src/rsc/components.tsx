@@ -21,7 +21,7 @@ export const AfterFileEdit = () => {
 };
 
 export const RenderEditTimeline = ({ snapshot }: { snapshot: RuntimeSnapshot }) => (
-  <Mcp.Result structuredContent={snapshot}>
+  <Mcp.Result structuredContent={{ edits: snapshot.edits, stateVersion: snapshot.stateVersion }}>
     <Mcp.Text>{`Showing ${snapshot.edits.length} recorded edits.`}</Mcp.Text>
   </Mcp.Result>
 );

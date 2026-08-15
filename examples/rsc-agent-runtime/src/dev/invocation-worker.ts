@@ -71,9 +71,12 @@ const parseSnapshot = (value: unknown): RuntimeSnapshot => {
     throw new Error('Invocation request requires a valid runtime snapshot');
   }
   assertNoSnapshotCredentials(snapshot);
-  assertExactKeys(snapshot, ['edits', 'stateVersion']);
+  const seed = snapshot.seed;
+  assertExactKeys(snapshot, seed === undefined ? ['edits', 'stateVersion'] : ['edits', 'seed', 'stateVersion']);
   if (!Array.isArray(snapshot.edits)) throw new Error('Invocation request requires a valid runtime snapshot');
-  return { edits: snapshot.edits.map(parseEdit), stateVersion };
+  return seed === undefined
+    ? { edits: snapshot.edits.map(parseEdit), stateVersion }
+    : { edits: snapshot.edits.map(parseEdit), seed: seed as RuntimeSnapshot['seed'], stateVersion };
 };
 
 const parseRequest = (value: unknown): DevRuntimeInspectionRequest => {

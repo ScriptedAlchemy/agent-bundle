@@ -39,6 +39,7 @@ export type RuntimeStateRecord =
 export interface RuntimeSnapshot {
   stateVersion: number;
   edits: EditEvent[];
+  readonly seed?: JsonValue;
 }
 
 export interface RuntimeKernel {

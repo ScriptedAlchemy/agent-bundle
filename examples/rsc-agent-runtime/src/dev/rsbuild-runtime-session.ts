@@ -22,6 +22,7 @@ import {
 } from './generation-materializer.js';
 import type {
   RscRuntimeGenerationMetadata,
+  RuntimeSnapshot,
   SerializedRuntimeDefinition,
 } from '../runtime/contracts.js';
 import { createFileRuntimeKernel } from '../runtime/state-file.js';
@@ -59,6 +60,7 @@ import {
   type DevRuntimeAssetRequest,
   type DevRuntimeDescriptor,
   type DevRuntimeDiagnostic,
+  type DevRuntimeFixture,
   type DevRuntimeInspectionEnvelope,
   type DevRuntimeInvocationRequest,
   type DevRuntimeMcpConnectionState,
@@ -92,6 +94,21 @@ const invocationTimeoutMs = 10_000;
 const invocationTerminationGraceMs = 100;
 const flightPreviewBytes = 32 * 1024;
 const windowsJobOwnerPhaseDeadlineMs = 2_000;
+const noFixtures: readonly DevRuntimeFixture[] = Object.freeze([]);
+const claudePostToolUseFixture: DevRuntimeFixture = Object.freeze({
+  id: 'claude-post-tool-use-write',
+  label: 'Claude PostToolUse Write',
+  seed: Object.freeze({
+    cwd: '/tmp',
+    hook_event_name: 'PostToolUse',
+    session_id: 'fixture-claude-post-tool-use',
+    tool_input: Object.freeze({ file_path: 'fixture-claude-post-tool-use.txt' }),
+    tool_name: 'Write',
+    tool_use_id: 'fixture-claude-post-tool-use-write',
+  }),
+});
+const claudeFixtures: readonly DevRuntimeFixture[] = Object.freeze([claudePostToolUseFixture]);
+const fixturesForHook = (host: 'claude' | 'codex'): readonly DevRuntimeFixture[] => host === 'claude' ? claudeFixtures : noFixtures;
 
 const withinDeadline = <T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> =>
   new Promise<T>((resolve, reject) => {
@@ -872,9 +889,11 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
     }
     try {
       if (this.#closed) throw new DevRuntimeUnavailableError('RSC runtime session is closed.');
+      const seed = request.seed === undefined ? undefined : cloneJson(request.seed);
+      if (seed !== undefined) assertCredentialSafeJson(seed);
       const snapshot = await this.#stateKernel.resetState({
         idempotencyKey: `runtime:reset:${randomUUID()}`,
-        ...(request.seed === undefined ? {} : { seed: cloneJson(request.seed) }),
+        ...(seed === undefined ? {} : { seed }),
       });
       return Object.freeze({ stateStoreId, stateVersion: snapshot.stateVersion });
     } finally {
@@ -968,7 +987,7 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
         const flight = response.flight;
         const stateAfter = await this.#stateKernel.readSnapshot();
         this.#assertInvocationOpen();
-        const result = this.#inspectionResult(response.inspection, flight, stateAfter.stateVersion, runId);
+        const result = this.#inspectionResult(response.inspection, flight, stateAfter, runId);
         if (artifact === undefined) throw new Error('RSC runtime Flight artifact is unavailable.');
         await this.#writeRunFlight(artifact, flight);
         const completed = Object.freeze({
@@ -1130,7 +1149,7 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
       if ((host !== 'claude' && host !== 'codex') || !definition.nativeHooks?.some((hook) => hook.host === host)) {
         throw new Error(`Historical runtime surface ${JSON.stringify(surfaceId)} does not exist.`);
       }
-      return Object.freeze({ fixtures: Object.freeze([]), id: surfaceId, kind: 'hook', label: `After tool hook (${host})`, readOnly: false, targets: Object.freeze([host]) });
+      return Object.freeze({ fixtures: fixturesForHook(host), id: surfaceId, kind: 'hook', label: `After tool hook (${host})`, readOnly: false, targets: Object.freeze([host]) });
     }
     const name = surfaceId.startsWith('mcp.') ? surfaceId.slice('mcp.'.length) : '';
     if (definition.tools?.some((tool) => tool.name === name)) {
@@ -1243,7 +1262,7 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
   #inspectionResult(
     inspection: DevRuntimeInspectionEnvelope,
     flight: Buffer,
-    stateVersion: number,
+    snapshot: RuntimeSnapshot,
     runId: string,
   ): DevRuntimeInspectionEnvelope {
     return Object.freeze({
@@ -1256,7 +1275,8 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
       }),
       state: Object.freeze({
         ...inspection.state,
-        identity: Object.freeze({ stateStoreId, stateVersion }),
+        identity: Object.freeze({ stateStoreId, stateVersion: snapshot.stateVersion }),
+        snapshot: cloneJson(snapshot),
       }),
     });
   }
@@ -2098,7 +2118,7 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
         label: `After tool hook (${hook.host})`,
         readOnly: false,
         targets: Object.freeze([hook.host]),
-        fixtures: Object.freeze([]),
+        fixtures: fixturesForHook(hook.host),
       }));
     }
     for (const tool of snapshot.definition.tools) {

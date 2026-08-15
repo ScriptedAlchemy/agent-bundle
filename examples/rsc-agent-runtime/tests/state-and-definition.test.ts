@@ -220,13 +220,70 @@ test('appends reset records without resetting the monotonic durable version', as
   });
   const reset = await kernel.resetState({ idempotencyKey: 'test:state:reset-1', seed: { reason: 'test' } });
 
-  expect(reset).toEqual({ edits: [], stateVersion: 2 });
+  expect(reset).toEqual({ edits: [], seed: { reason: 'test' }, stateVersion: 2 });
   const records = (await readFile(stateFile, 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
   expect(records).toMatchObject([
     { kind: 'edit', stateVersion: 1 },
     { idempotencyKey: 'test:state:reset-1', kind: 'reset', seed: { reason: 'test' }, stateVersion: 2 },
   ]);
-  expect(await createFileRuntimeKernel({ stateFile }).readSnapshot()).toEqual({ edits: [], stateVersion: 2 });
+  expect(await createFileRuntimeKernel({ stateFile }).readSnapshot()).toEqual({ edits: [], seed: { reason: 'test' }, stateVersion: 2 });
+});
+
+test('preserves reset seeds across immediate, idempotent, reopened, limited, and follow-up snapshots', async () => {
+  const stateFile = join(await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-')), 'state.jsonl');
+  const seed = Object.freeze({
+    cwd: '/tmp',
+    hook_event_name: 'PostToolUse',
+    session_id: 'fixture-seed-session',
+    tool_input: Object.freeze({ file_path: 'fixture-seed.txt' }),
+    tool_name: 'Write',
+    tool_use_id: 'fixture-seed-tool',
+  });
+  const first = createFileRuntimeKernel({
+    stateFile,
+    createId: () => 'seed-follow-up-edit',
+    now: () => new Date('2026-08-15T00:00:00.000Z'),
+  });
+
+  await first.recordEdit({
+    host: 'claude',
+    idempotencyKey: 'test:state:seed-before-reset',
+    path: 'before-reset.ts',
+    sessionId: 'fixture-seed-session',
+    toolName: 'Write',
+  });
+  const reset = await first.resetState({ idempotencyKey: 'test:state:seed-reset', seed });
+  expect(reset).toEqual({ edits: [], seed, stateVersion: 2 });
+  await expect(first.resetState({ idempotencyKey: 'test:state:seed-reset', seed })).resolves.toEqual(reset);
+
+  const reopened = createFileRuntimeKernel({
+    stateFile,
+    createId: () => 'seed-follow-up-edit',
+    now: () => new Date('2026-08-15T00:00:01.000Z'),
+  });
+  await expect(reopened.readSnapshot({ limit: 1 })).resolves.toEqual(reset);
+  await expect(reopened.recordEdit({
+    host: 'claude',
+    idempotencyKey: 'test:state:seed-follow-up',
+    path: 'after-reset.ts',
+    sessionId: 'fixture-seed-session',
+    toolName: 'Write',
+  })).resolves.toEqual({
+    edits: [expect.objectContaining({ eventId: 'seed-follow-up-edit', path: 'after-reset.ts' })],
+    seed,
+    stateVersion: 3,
+  });
+  await expect(reopened.readSnapshot({ limit: 1 })).resolves.toEqual({
+    edits: [expect.objectContaining({ eventId: 'seed-follow-up-edit', path: 'after-reset.ts' })],
+    seed,
+    stateVersion: 3,
+  });
+  await expect(reopened.resetState({
+    idempotencyKey: 'test:state:seed-reset',
+    seed: { ...seed, session_id: 'conflicting-seed-session' },
+  })).rejects.toThrow('idempotency key test:state:seed-reset');
+  await expect(reopened.resetState({ idempotencyKey: 'test:state:seed-clear' })).resolves.toEqual({ edits: [], stateVersion: 4 });
+  await expect(createFileRuntimeKernel({ stateFile }).readSnapshot()).resolves.toEqual({ edits: [], stateVersion: 4 });
 });
 
 test('rejects terminated JSONL corruption while preserving only an incomplete final tail for recovery', async () => {

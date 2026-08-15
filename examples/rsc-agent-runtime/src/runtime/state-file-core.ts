@@ -175,6 +175,23 @@ const parseStateRecord = ({ line, offset, value }: { line: number; offset: numbe
   throw new RuntimeStateCorruptionError({ line, message: 'record kind is invalid', offset });
 };
 
+const snapshotForRecords = (records: readonly RuntimeStateRecord[], limit?: number): RuntimeSnapshot => {
+  let edits: EditEvent[] = [];
+  let seed: JsonValue | undefined;
+  for (const record of records) {
+    if (record.kind === 'edit') {
+      edits = [...edits, record.event];
+    } else {
+      edits = [];
+      seed = record.seed;
+    }
+  }
+  const visibleEdits = limit === undefined ? edits : edits.slice(-limit);
+  return seed === undefined
+    ? { edits: visibleEdits, stateVersion: records.length }
+    : { edits: visibleEdits, seed, stateVersion: records.length };
+};
+
 const parseSnapshot = (contents: Buffer): ParsedState => {
   if (contents.byteLength > MAX_STATE_BYTES) {
     throw new RuntimeStateCorruptionError({ line: 1, message: `state file exceeds ${MAX_STATE_BYTES} byte limit`, offset: 0 });
@@ -186,7 +203,6 @@ const parseSnapshot = (contents: Buffer): ParsedState => {
   }
   const records: RuntimeStateRecord[] = [];
   const idempotencyKeys = new Set<string>();
-  let edits: EditEvent[] = [];
   let offset = 0;
   let line = 1;
   while (offset < completeBytes) {
@@ -212,11 +228,10 @@ const parseSnapshot = (contents: Buffer): ParsedState => {
     }
     idempotencyKeys.add(record.idempotencyKey);
     records.push(record);
-    edits = record.kind === 'edit' ? [...edits, record.event] : [];
     offset = end + 1;
     line += 1;
   }
-  return { completeBytes, records, snapshot: { edits, stateVersion: records.length } };
+  return { completeBytes, records, snapshot: snapshotForRecords(records) };
 };
 
 const abortError = (signal: AbortSignal): Error =>
@@ -527,10 +542,7 @@ export const createRuntimeStateKernel = ({
     assertHealthy();
     const controller = new AbortController();
     const parsed = parseSnapshot(await storage.read(stateFile, controller.signal));
-    return {
-      edits: limit === undefined ? parsed.snapshot.edits : parsed.snapshot.edits.slice(-limit),
-      stateVersion: parsed.snapshot.stateVersion,
-    };
+    return snapshotForRecords(parsed.records, limit);
   };
 
   const mutate = async (record: RuntimeStateRecord, options: RuntimeMutationOptions | undefined): Promise<RuntimeSnapshot> => {
@@ -593,10 +605,7 @@ export const createRuntimeStateKernel = ({
           storage.append(lease.canonicalStateFile, serialized, lease.owner.controller.signal),
           timeoutError,
         );
-        result = {
-          edits: nextRecord.kind === 'edit' ? [...parsed.snapshot.edits, nextRecord.event] : [],
-          stateVersion: nextRecord.stateVersion,
-        };
+        result = snapshotForRecords([...parsed.records, nextRecord]);
       }
     } catch (error) {
       failure = error;
