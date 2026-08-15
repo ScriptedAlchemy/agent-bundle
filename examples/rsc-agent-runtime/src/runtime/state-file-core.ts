@@ -402,12 +402,17 @@ export const createRuntimeStateKernel = ({
     const settlementTimeout = new RuntimeStateLockError(
       `Runtime state phase did not settle within ${policy.ownerSettlementMs} ms after cancellation`,
     );
+    let settlementTimer: ReturnType<typeof setTimeout> | undefined;
     const settlement = await Promise.race([
       phase,
       new Promise<Readonly<{ type: 'settlement-timeout'; error: RuntimeStateLockError }>>((resolve) => {
-        setTimeout(() => resolve({ type: 'settlement-timeout', error: settlementTimeout }), policy.ownerSettlementMs);
+        settlementTimer = setTimeout(
+          () => resolve({ type: 'settlement-timeout', error: settlementTimeout }),
+          policy.ownerSettlementMs,
+        );
       }),
     ]);
+    clearTimeout(settlementTimer);
     if (settlement.type === 'settlement-timeout') {
       owner.unsafeToRelease = true;
       throw poison(

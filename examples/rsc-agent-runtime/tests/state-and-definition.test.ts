@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { expect, test } from '@rstest/core';
+import { createRsbuild } from '@rsbuild/core';
 
 import { serializeRuntimeDefinition } from '../src/build/serialize-definition.js';
 import { runtimeDefinition } from '../src/definition.js';
@@ -401,6 +402,47 @@ test('cancels a never-settling active phase at the hard critical-section deadlin
     }),
   ).rejects.toThrow('did not settle within 100 ms after cancellation');
   await expect(readFile(stateFile, 'utf8')).resolves.toBe('');
+});
+
+test('exits promptly after a timed-out phase settles before its owner-settlement deadline', async () => {
+  const buildRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-state-exit-build-'));
+  const stateFile = join(await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-state-exit-')), 'state.jsonl');
+  const rsbuild = await createRsbuild({
+    config: {
+      output: {
+        distPath: { root: buildRoot },
+        filename: { js: '[name].js' },
+        target: 'node',
+      },
+      source: { entry: { fixture: './tests/fixtures/state-settlement-exit.ts' } },
+    },
+    cwd: process.cwd(),
+  });
+  const build = await rsbuild.build();
+  const startedAt = Date.now();
+  const child = spawn(process.execPath, [join(buildRoot, 'fixture.js'), stateFile], {
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let stdout = '';
+  child.stdout.setEncoding('utf8');
+  child.stdout.on('data', (chunk: string) => {
+    stdout += chunk;
+  });
+  const outcome = await Promise.race([
+    new Promise<Readonly<{ exitCode: number | null; type: 'closed' }>>((resolve, reject) => {
+      child.once('error', reject);
+      child.once('close', (exitCode) => resolve({ exitCode, type: 'closed' }));
+    }),
+    wait(500).then(() => ({ type: 'timeout' as const })),
+  ]);
+  if (outcome.type === 'timeout') child.kill('SIGKILL');
+  await build.close();
+  await rm(buildRoot, { force: true, recursive: true });
+
+  expect(outcome.type).toBe('closed');
+  if (outcome.type === 'closed') expect(outcome.exitCode).toBe(0);
+  expect(stdout).toBe('phase-settled\n');
+  expect(Date.now() - startedAt).toBeLessThan(500);
 });
 
 test('retains the lease until a timed-out mutation phase actually settles', async () => {
