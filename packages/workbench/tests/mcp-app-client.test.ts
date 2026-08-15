@@ -107,14 +107,14 @@ describe('MCP App browser client', () => {
       return json({
         actions: [],
         lifecycle: 'closing',
-        messages: [{ id: 'close-1', jsonrpc: '2.0', method: 'ui/resource-teardown', params: {} }],
+        message: { id: 'close-1', jsonrpc: '2.0', method: 'ui/resource-teardown', params: {} },
       });
     };
     const client = new McpAppClient({ fetch: fetch as typeof globalThis.fetch });
 
     await expect(client.close('binding-weather', { id: 'close-1', reason: 'MCP App frame unmounted.' })).resolves.toEqual({
       lifecycle: 'closing',
-      messages: [{ id: 'close-1', jsonrpc: '2.0', method: 'ui/resource-teardown', params: {} }],
+      message: { id: 'close-1', jsonrpc: '2.0', method: 'ui/resource-teardown', params: {} },
     });
     await expect(client.forceClose('binding-weather')).resolves.toBe(true);
 
@@ -126,5 +126,57 @@ describe('MCP App browser client', () => {
     ]);
     expect(JSON.parse(String(calls[1]?.[1]?.body))).toEqual({ id: 'close-1', reason: 'MCP App frame unmounted.' });
     expect(calls[3]?.[1]?.method).toBe('DELETE');
+  });
+
+  it('preserves a raw App frame that contains an own __proto__ JSON property', async () => {
+    const rawFrame = JSON.parse('{"id":"proto-1","jsonrpc":"2.0","result":{"__proto__":{"ordinary":true}}}') as unknown;
+    const fetch = async (input: string | URL | Request): Promise<Response> => {
+      if (String(input) === '/api/project/session') return json({ origin: 'http://127.0.0.1:43123', token: 'foreground-secret' });
+      return json({ accepted: true, actions: [], lifecycle: 'initialized', messages: [rawFrame] });
+    };
+    const client = new McpAppClient({ fetch: fetch as typeof globalThis.fetch });
+
+    const result = await client.message('binding-weather', { id: 'proto-1', jsonrpc: '2.0', method: 'ping' });
+    const frame = result.messages[0] as Readonly<Record<string, unknown>>;
+    const payload = frame.result as Readonly<Record<string, unknown>>;
+
+    expect(Object.hasOwn(payload, '__proto__')).toBe(true);
+    expect(payload['__proto__']).toEqual({ ordinary: true });
+    expect(Object.getPrototypeOf(payload)).toBeNull();
+  });
+
+  it('rejects a preview frame whose proxy target origin is the authenticated foreground origin', async () => {
+    const fetch = async (input: string | URL | Request): Promise<Response> => {
+      if (String(input) === '/api/project/session') return json({ origin: preview.frame!.targetOrigin, token: 'foreground-secret' });
+      return json({ lifecycle: 'created', preview });
+    };
+    const client = new McpAppClient({ fetch: fetch as typeof globalThis.fetch });
+
+    await expect(client.create('session-weather', request)).rejects.toThrow(
+      'Foreground MCP App frame must use a distinct proxy origin.',
+    );
+  });
+
+  it('classifies a malformed successful route body as an invalid route response', async () => {
+    const fetch = async (input: string | URL | Request): Promise<Response> => {
+      if (String(input) === '/api/project/session') return json({ origin: 'http://127.0.0.1:43123', token: 'foreground-secret' });
+      return new Response('{', { headers: { 'content-type': 'application/json' }, status: 200 });
+    };
+    const client = new McpAppClient({ fetch: fetch as typeof globalThis.fetch });
+
+    await expect(client.message('binding-weather', { id: 'bad-body', jsonrpc: '2.0', method: 'ping' })).rejects.toMatchObject({ code: 'AB8019' });
+  });
+
+  it('surfaces a structured non-2xx diagnostic without reclassifying it as a route-shape error', async () => {
+    const fetch = async (input: string | URL | Request): Promise<Response> => {
+      if (String(input) === '/api/project/session') return json({ origin: 'http://127.0.0.1:43123', token: 'foreground-secret' });
+      return json({ diagnostic: { code: 'AB8022', message: 'MCP App preview is not available.' } }, 404);
+    };
+    const client = new McpAppClient({ fetch: fetch as typeof globalThis.fetch });
+
+    await expect(client.message('binding-weather', { id: 'not-found', jsonrpc: '2.0', method: 'ping' })).rejects.toMatchObject({
+      code: 'AB8022',
+      message: 'MCP App preview is not available.',
+    });
   });
 });
