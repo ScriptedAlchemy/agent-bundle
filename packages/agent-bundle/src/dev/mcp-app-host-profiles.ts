@@ -186,13 +186,181 @@ export const MCP_APP_PROFILE_DESCRIPTORS: Readonly<Record<McpAppProfileId, McpAp
   }),
 });
 
-const fixedDormantChatGptBootstrap = [
-  '(() => {',
-  '  "use strict";',
-  '  const protocol = "agent-bundle:mcp-app:chatgpt-widget-state-v1";',
-  '  void protocol;',
-  '})();',
-].join('\n');
+/**
+ * Fixed framework code, installed before untrusted App code. It has no global
+ * API until the parent window sends a binding capability over this closed
+ * channel; activation data is never interpolated into this source string.
+ */
+const fixedDormantChatGptBootstrap = String.raw`(() => {
+  "use strict";
+  const channel = "agent-bundle:mcp-app:chatgpt-widget-state-v1";
+  const activateType = channel + "/activate";
+  const persistType = channel + "/persist";
+  const persistedType = channel + "/persisted";
+  const diagnosticType = channel + "/diagnostic";
+  const root = globalThis;
+  const parentWindow = root.parent;
+  const hasOwn = (value, key) => Object.prototype.hasOwnProperty.call(value, key);
+  const ownValue = (value, key) => {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    return descriptor === undefined || descriptor.get !== undefined || descriptor.set !== undefined ? undefined : descriptor.value;
+  };
+  const plainRecord = (value) => {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype === null) return true;
+    const constructor = ownValue(prototype, "constructor");
+    return typeof constructor === "function" && Function.prototype.toString.call(constructor) === Function.prototype.toString.call(Object);
+  };
+  const denseArray = (value) => {
+    if (!Array.isArray(value)) return false;
+    const prototype = Object.getPrototypeOf(value);
+    const constructor = prototype === null ? undefined : ownValue(prototype, "constructor");
+    return typeof constructor === "function" && Function.prototype.toString.call(constructor) === Function.prototype.toString.call(Array);
+  };
+  const cloneFiniteJson = (value, ancestors = new WeakSet()) => {
+    if (value === null || typeof value === "boolean" || typeof value === "string") return value;
+    if (typeof value === "number") {
+      if (Number.isFinite(value)) return value;
+      throw new TypeError("ChatGPT widget state must be finite JSON.");
+    }
+    if (denseArray(value)) {
+      if (ancestors.has(value)) throw new TypeError("ChatGPT widget state must be finite JSON.");
+      const keys = Reflect.ownKeys(value).filter((key) => key !== "length");
+      if (keys.length !== value.length || keys.some((key, index) => key !== String(index))) {
+        throw new TypeError("ChatGPT widget state must be a dense JSON array.");
+      }
+      ancestors.add(value);
+      try {
+        return Object.freeze(value.map((item, index) => {
+          const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+          if (descriptor === undefined || descriptor.get !== undefined || descriptor.set !== undefined) {
+            throw new TypeError("ChatGPT widget state must be finite JSON.");
+          }
+          return cloneFiniteJson(descriptor.value, ancestors);
+        }));
+      } finally {
+        ancestors.delete(value);
+      }
+    }
+    if (!plainRecord(value) || ancestors.has(value) || Object.getOwnPropertySymbols(value).length > 0) {
+      throw new TypeError("ChatGPT widget state must be finite JSON.");
+    }
+    ancestors.add(value);
+    try {
+      const clone = Object.create(Object.getPrototypeOf(value) === null ? null : Object.prototype);
+      for (const key of Object.keys(value).sort()) {
+        const descriptor = Object.getOwnPropertyDescriptor(value, key);
+        if (descriptor === undefined || descriptor.get !== undefined || descriptor.set !== undefined) {
+          throw new TypeError("ChatGPT widget state must be finite JSON.");
+        }
+        Object.defineProperty(clone, key, {
+          configurable: false,
+          enumerable: true,
+          value: cloneFiniteJson(descriptor.value, ancestors),
+          writable: false,
+        });
+      }
+      return Object.freeze(clone);
+    } finally {
+      ancestors.delete(value);
+    }
+  };
+  let active = false;
+  let bindingId;
+  let capability;
+  let hostOrigin;
+  let widgetState;
+  let nextRequestId = 0;
+  const pending = new Map();
+  const send = (message) => parentWindow.postMessage(message, hostOrigin);
+  const report = (code) => {
+    try {
+      send(Object.freeze({ bindingId, capability, code, type: diagnosticType }));
+    } catch {
+      // A detached parent cannot receive a diagnostic; the local rollback still happened.
+    }
+  };
+  const authenticated = (message) =>
+    plainRecord(message)
+    && ownValue(message, "bindingId") === bindingId
+    && ownValue(message, "capability") === capability;
+  const activate = (message, origin) => {
+    if (active || !authenticated(message)) return;
+    const initialState = ownValue(message, "initialState");
+    if (typeof bindingId !== "string" || bindingId.length === 0
+      || typeof capability !== "string" || capability.length === 0
+      || typeof origin !== "string" || origin.length === 0
+      || hasOwn(root, "openai")) return;
+    let initial;
+    try {
+      initial = cloneFiniteJson(initialState);
+    } catch {
+      return;
+    }
+    const api = {};
+    Object.defineProperty(api, "widgetState", {
+      enumerable: true,
+      get: () => widgetState,
+    });
+    Object.defineProperty(api, "setWidgetState", {
+      enumerable: true,
+      value: (next) => {
+        const previous = widgetState;
+        const replacement = cloneFiniteJson(next);
+        const requestId = ++nextRequestId;
+        widgetState = replacement;
+        pending.set(requestId, Object.freeze({ next: replacement, previous }));
+        try {
+          send(Object.freeze({ bindingId, capability, requestId, state: replacement, type: persistType }));
+        } catch {
+          pending.delete(requestId);
+          if (widgetState === replacement) widgetState = previous;
+          report("widget-state-persistence-unavailable");
+        }
+      },
+      writable: false,
+    });
+    try {
+      Object.defineProperty(root, "openai", {
+        configurable: false,
+        enumerable: false,
+        value: Object.freeze(api),
+        writable: false,
+      });
+      widgetState = initial;
+      hostOrigin = origin;
+      active = true;
+    } catch {
+      report("widget-state-activation-failed");
+    }
+  };
+  root.addEventListener("message", (event) => {
+    if (event === null || event.isTrusted !== true || event.source !== parentWindow) return;
+    const message = event.data;
+    if (!plainRecord(message)) return;
+    const type = ownValue(message, "type");
+    if (!active && type === activateType) {
+      bindingId = ownValue(message, "bindingId");
+      capability = ownValue(message, "capability");
+      activate(message, event.origin);
+      if (!active) {
+        bindingId = undefined;
+        capability = undefined;
+      }
+      return;
+    }
+    if (!active || type !== persistedType || !authenticated(message)) return;
+    const requestId = ownValue(message, "requestId");
+    const request = typeof requestId === "number" ? pending.get(requestId) : undefined;
+    if (request === undefined) return;
+    pending.delete(requestId);
+    if (ownValue(message, "accepted") !== true) {
+      if (widgetState === request.next) widgetState = request.previous;
+      report("widget-state-persistence-rejected");
+    }
+  });
+})();`;
 
 const noBootstrap = Object.freeze({ kind: 'none' as const, script: undefined });
 
@@ -210,6 +378,12 @@ const capabilities = new Set<McpAppCapability>(['camera', 'clipboardWrite', 'geo
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype;
+
+const isConfigExtensionRecord = (value: unknown): value is Record<string, unknown> => {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+};
 
 const cloneRecord = (value: unknown, label: string): { readonly [key: string]: McpAppJsonValue } => {
   const cloned = cloneMcpAppFiniteJson(value, label);
@@ -267,7 +441,9 @@ export const inspectMcpAppConfigExtensions = (
     if (descriptorTargetByKey.has(key)) throw new TypeError(`MCP App config descriptor has duplicate key ${key}.`);
     descriptorTargetByKey.set(key, target);
   }
-  if (!isRecord(options.extensions)) throw new TypeError('MCP App normalized extensions must be a plain record.');
+  if (!isConfigExtensionRecord(options.extensions)) {
+    throw new TypeError('MCP App normalized extensions must have an ordinary or null prototype.');
+  }
   for (const key of Object.keys(options.extensions)) {
     if (!descriptorTargetByKey.has(key)) throw new TypeError(`MCP App config extension ${key} is not registered.`);
   }

@@ -1,6 +1,8 @@
 import { expect, it } from '@rstest/core';
+import { runInNewContext } from 'node:vm';
 
 import { createDefaultRegistry } from '../src/adapters/registry.ts';
+import { normalizeProject } from '../src/config/index.ts';
 import type { NormalizedPlugin } from '../src/core/types.ts';
 import {
   inspectMcpAppConfigExtensions,
@@ -64,6 +66,21 @@ const config = (extensions: NormalizedPlugin['extensions']) => Object.freeze({
   sourceRevision: 'project-r42',
 });
 
+const normalizedExtensions = async (extensions: Readonly<Record<string, unknown>>) =>
+  (await normalizeProject({
+    config: {
+      ...extensions,
+      plugin: { name: 'host-profile-normalized-config', version: '1.0.0' },
+    },
+    configPath: `${projectRoot}/agent-bundle.config.ts`,
+    context: {
+      command: 'build',
+      mode: 'production',
+      projectRoot,
+      selectedTargets: [],
+    },
+  }, { skills: [] }, createDefaultRegistry())).extensions;
+
 it('publishes frozen, versioned simulated descriptors and a fixed profile matrix', () => {
   const cases = [
     ['portable', undefined, 'none', undefined],
@@ -102,6 +119,82 @@ it('uses a fixed dormant ChatGPT bootstrap without creating vendor globals', () 
   expect(first.bootstrap.script).not.toContain('window.openai =');
   expect(first.metadata.extensions.openai).toEqual({});
   expect(second.metadata.extensions.openai).toEqual({ 'openai/widgetDescription': 'raw metadata cannot activate the simulation' });
+});
+
+it('activates the fixed ChatGPT bootstrap only over its closed binding channel and rolls back rejected persistence', () => {
+  const bootstrap = apps(resolveMcpAppHostProfile({ host: standardContext, profile: 'chatgpt', resource })).bootstrap.script;
+  if (bootstrap === undefined) throw new Error('expected ChatGPT bootstrap script');
+  const listeners: ((event: unknown) => void)[] = [];
+  const outbound: { readonly message: unknown; readonly targetOrigin: string }[] = [];
+  const parent = Object.freeze({
+    postMessage(message: unknown, targetOrigin: string): void {
+      outbound.push(Object.freeze({ message, targetOrigin }));
+    },
+  });
+  const sandbox: Record<string, unknown> = {
+    addEventListener(type: string, listener: (event: unknown) => void): void {
+      if (type === 'message') listeners.push(listener);
+    },
+    parent,
+  };
+  sandbox.globalThis = sandbox;
+  runInNewContext(bootstrap, sandbox);
+
+  expect(Object.hasOwn(sandbox, 'openai')).toBe(false);
+  const deliver = (data: unknown, isTrusted = true): void => {
+    for (const listener of listeners) {
+      listener(Object.freeze({ data, isTrusted, origin: 'https://host.example', source: parent }));
+    }
+  };
+  const activation = Object.freeze({
+    bindingId: 'binding-7',
+    capability: 'closed-capability-7',
+    initialState: Object.freeze({ day: 'monday' }),
+    type: 'agent-bundle:mcp-app:chatgpt-widget-state-v1/activate',
+  });
+  deliver(activation, false);
+  expect(Object.hasOwn(sandbox, 'openai')).toBe(false);
+  deliver(activation);
+
+  const openai = sandbox.openai as {
+    readonly widgetState: unknown;
+    readonly setWidgetState: (next: unknown) => void;
+  };
+  expect(openai.widgetState).toEqual({ day: 'monday' });
+  const hostile = { text: '</script><script>globalThis.compromised = true</script>' };
+  expect(openai.setWidgetState(hostile)).toBeUndefined();
+  hostile.text = 'mutated-after-set';
+  expect(openai.widgetState).toEqual({ text: '</script><script>globalThis.compromised = true</script>' });
+  expect(sandbox.compromised).toBeUndefined();
+  expect(outbound).toHaveLength(1);
+  expect(outbound[0]).toMatchObject({
+    message: {
+      bindingId: 'binding-7',
+      capability: 'closed-capability-7',
+      state: { text: '</script><script>globalThis.compromised = true</script>' },
+      type: 'agent-bundle:mcp-app:chatgpt-widget-state-v1/persist',
+    },
+    targetOrigin: 'https://host.example',
+  });
+
+  const request = outbound[0]!.message as { readonly requestId: string | number };
+  deliver(Object.freeze({
+    accepted: false,
+    bindingId: 'binding-7',
+    capability: 'closed-capability-7',
+    requestId: request.requestId,
+    type: 'agent-bundle:mcp-app:chatgpt-widget-state-v1/persisted',
+  }));
+  expect(openai.widgetState).toEqual({ day: 'monday' });
+  expect(outbound).toHaveLength(2);
+  expect(outbound[1]).toMatchObject({
+    message: {
+      bindingId: 'binding-7',
+      code: 'widget-state-persistence-rejected',
+      type: 'agent-bundle:mcp-app:chatgpt-widget-state-v1/diagnostic',
+    },
+    targetOrigin: 'https://host.example',
+  });
 });
 
 it('keeps profile behavior independent of user agent and registered config presence', () => {
@@ -256,6 +349,18 @@ it('projects only sorted frozen registered config identities and redacts adapter
   expect(JSON.stringify(inspection)).not.toContain('nativeHooks');
   expect(JSON.stringify(inspection)).not.toContain('private/adapter-owned-value');
   expect(JSON.stringify(inspection)).not.toContain(projectRoot);
+});
+
+it('accepts the normalizer’s deeply frozen null-prototype extension containers', async () => {
+  const empty = await normalizedExtensions({});
+  const configured = await normalizedExtensions({ claude: {}, codex: {} });
+
+  expect(Object.getPrototypeOf(empty)).toBeNull();
+  expect(Object.isFrozen(empty)).toBe(true);
+  expect(inspectMcpAppConfigExtensions(config(empty)).entries).toEqual([]);
+  expect(Object.getPrototypeOf(configured)).toBeNull();
+  expect(Object.isFrozen(configured)).toBe(true);
+  expect(inspectMcpAppConfigExtensions(config(configured)).entries.map((entry) => entry.key)).toEqual(['claude', 'codex']);
 });
 
 it('keeps empty configuration inert and rejects forged, unregistered, duplicate, or mismatched extension records', () => {
