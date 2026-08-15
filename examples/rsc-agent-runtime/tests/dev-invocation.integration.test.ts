@@ -11,6 +11,7 @@ import { createElement, type ReactNode } from 'react';
 import { ProjectService } from '../../../packages/agent-bundle/src/dev/index.ts';
 import { createRscRuntimeRsbuildConfig } from '../rsbuild.config.js';
 import { createDevRuntimeProvider } from '../src/dev/provider.js';
+import { RsbuildRuntimeSession } from '../src/dev/rsbuild-runtime-session.js';
 import { serializeInspection } from '../src/dev/serialize-inspection.js';
 
 const readChildOutput = (stream: NodeJS.ReadableStream): Promise<Buffer> =>
@@ -135,6 +136,30 @@ const isProcessAlive = (pid: number): boolean => {
     if ((error as NodeJS.ErrnoException).code === 'ESRCH') return false;
     throw error;
   }
+};
+
+const startWindowsJobOwnerSession = async (
+  storageRoot: string,
+  mode: 'close-control' | 'hang-ready' | 'ignore-stop' | 'nonzero-after-drain' | 'normal',
+) => {
+  const projectRoot = process.cwd();
+  const prepared = await new ProjectService({ includeDevRuntime: true, mode: 'development', root: projectRoot }).prepare('dev');
+  const session = await RsbuildRuntimeSession.start({
+    artifactStatus: () => Object.freeze({ state: 'missing' as const }),
+    emit: () => undefined,
+    environment: Object.freeze({}),
+    projectRoot,
+    preparedRuntime: prepared.devRuntime!,
+    providerSessionId: `session-windows-owner-${mode}`,
+    signal: new AbortController().signal,
+    storageRoot,
+  }, { windowsJobOwnerMode: mode });
+  await waitFor(() => session.status().activeVector !== undefined, 'Timed out waiting for an active runtime generation', 15_000);
+  return Object.freeze({
+    generationId: session.status().activeVector!.runtimeGenerationId,
+    session,
+    storageRoot,
+  });
 };
 
 const event = (eventId: string) => ({
@@ -1131,6 +1156,159 @@ process.stdout.end(JSON.stringify({
     if (grandchildPid !== undefined && isProcessAlive(grandchildPid)) process.kill(grandchildPid, 'SIGKILL');
     await session.close().catch(() => undefined);
     await rm(storageRoot, { force: true, recursive: true });
+  }
+}, 30_000);
+
+windowsTest('bounds a hung Windows Job owner before it can arm the invocation wrapper', async () => {
+  const storageRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-session-windows-owner-hang-'));
+  const marker = join(storageRoot, 'wrapper-ran');
+  const startedAt = Date.now();
+  const { generationId, session } = await startWindowsJobOwnerSession(storageRoot, 'hang-ready');
+
+  try {
+    const entry = join(storageRoot, 'generation-store', 'generations', generationId, 'rsc', 'dev', 'invoke.js');
+    await writeFile(entry, `require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'ran');`);
+    const target = session.surfaces().find((surface) => surface.id === 'mcp.runtime_status')!.targets[0]!;
+
+    await expect(session.invoke({ expectedGenerationId: generationId, input: {}, surfaceId: 'mcp.runtime_status', target }))
+      .resolves.toMatchObject({ status: 'failed' });
+    expect(Date.now() - startedAt).toBeLessThan(5_000);
+    expect(existsSync(marker)).toBe(false);
+  } finally {
+    await session.close().catch(() => undefined);
+    await rm(storageRoot, { force: true, recursive: true });
+  }
+}, 30_000);
+
+windowsTest('bounds a broken Windows Job owner control pipe and drains its assigned wrapper', async () => {
+  const storageRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-session-windows-owner-pipe-'));
+  const marker = join(storageRoot, 'wrapper-ran');
+  const { generationId, session } = await startWindowsJobOwnerSession(storageRoot, 'close-control');
+
+  try {
+    const entry = join(storageRoot, 'generation-store', 'generations', generationId, 'rsc', 'dev', 'invoke.js');
+    await writeFile(entry, `
+require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'ran');
+setInterval(() => undefined, 1000);
+`);
+    const target = session.surfaces().find((surface) => surface.id === 'mcp.runtime_status')!.targets[0]!;
+    const invocation = session.invoke({ expectedGenerationId: generationId, input: {}, surfaceId: 'mcp.runtime_status', target });
+    await readWhenPresent(marker);
+    const startedAt = Date.now();
+
+    await session.close();
+    await expect(invocation).resolves.toMatchObject({ status: 'failed' });
+    expect(Date.now() - startedAt).toBeLessThan(5_000);
+  } finally {
+    await session.close().catch(() => undefined);
+    await rm(storageRoot, { force: true, recursive: true });
+  }
+}, 30_000);
+
+windowsTest('forces an ignored Windows Job owner STOP without leaving its wrapper alive', async () => {
+  const storageRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-session-windows-owner-stop-'));
+  const marker = join(storageRoot, 'wrapper.pid');
+  const { generationId, session } = await startWindowsJobOwnerSession(storageRoot, 'ignore-stop');
+  let wrapperPid: number | undefined;
+
+  try {
+    const entry = join(storageRoot, 'generation-store', 'generations', generationId, 'rsc', 'dev', 'invoke.js');
+    await writeFile(entry, `
+require('node:fs').writeFileSync(${JSON.stringify(marker)}, String(process.pid));
+setInterval(() => undefined, 1000);
+`);
+    const target = session.surfaces().find((surface) => surface.id === 'mcp.runtime_status')!.targets[0]!;
+    const invocation = session.invoke({ expectedGenerationId: generationId, input: {}, surfaceId: 'mcp.runtime_status', target });
+    wrapperPid = Number(await readWhenPresent(marker));
+    const startedAt = Date.now();
+
+    await session.close();
+    await expect(invocation).resolves.toMatchObject({ status: 'failed' });
+    expect(Date.now() - startedAt).toBeLessThan(5_000);
+    expect(isProcessAlive(wrapperPid)).toBe(false);
+  } finally {
+    if (wrapperPid !== undefined && isProcessAlive(wrapperPid)) process.kill(wrapperPid, 'SIGKILL');
+    await session.close().catch(() => undefined);
+    await rm(storageRoot, { force: true, recursive: true });
+  }
+}, 30_000);
+
+windowsTest('fails a nonzero Windows Job owner only after its resistant descendant is drained', async () => {
+  const storageRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-session-windows-owner-nonzero-'));
+  const marker = join(storageRoot, 'rsc-invocation-windows-owner-nonzero-grandchild.pid');
+  const { generationId, session } = await startWindowsJobOwnerSession(storageRoot, 'nonzero-after-drain');
+  let grandchildPid: number | undefined;
+
+  try {
+    const entry = join(storageRoot, 'generation-store', 'generations', generationId, 'rsc', 'dev', 'invoke.js');
+    await writeFile(entry, `
+const { spawn } = require('node:child_process');
+const { writeFileSync, writeSync } = require('node:fs');
+const child = spawn(process.execPath, ['-e', 'process.on("SIGTERM", () => undefined); setInterval(() => undefined, 1000)'], { detached: true, stdio: 'ignore' });
+child.unref();
+writeFileSync(${JSON.stringify(marker)}, String(child.pid));
+writeSync(3, Buffer.from('x'));
+process.stdout.end(JSON.stringify({
+  flightBytes: 1,
+  inspection: {
+    flight: { bytes: 1, preview: 'eA==', truncated: false },
+    modelVisible: [],
+    protocol: [],
+    state: { identity: { stateStoreId: 'playground', stateVersion: 0 } },
+    trace: [],
+    tree: [],
+  },
+}) + '\\n');
+`);
+    const target = session.surfaces().find((surface) => surface.id === 'mcp.runtime_status')!.targets[0]!;
+    const run = await session.invoke({ expectedGenerationId: generationId, input: {}, surfaceId: 'mcp.runtime_status', target });
+    grandchildPid = Number(await readWhenPresent(marker));
+
+    expect(run).toMatchObject({ status: 'failed' });
+    await waitFor(() => !isProcessAlive(grandchildPid as number), 'Windows Job owner reported failure before draining its descendant');
+  } finally {
+    if (grandchildPid !== undefined && isProcessAlive(grandchildPid)) process.kill(grandchildPid, 'SIGKILL');
+    await session.close().catch(() => undefined);
+    await rm(storageRoot, { force: true, recursive: true });
+  }
+}, 30_000);
+
+windowsTest('never invokes taskkill after a Windows Job has owned and drained the wrapper', async () => {
+  const storageRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-session-windows-no-taskkill-'));
+  const commandRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-fake-taskkill-'));
+  const taskkillMarker = join(commandRoot, 'taskkill-invoked');
+  const pathBefore = process.env.PATH;
+  const { generationId, session } = await startWindowsJobOwnerSession(storageRoot, 'normal');
+
+  try {
+    await writeFile(join(commandRoot, 'taskkill.cmd'), `@echo invoked>"${taskkillMarker}"\r\n@exit /b 0\r\n`);
+    process.env.PATH = `${commandRoot};${pathBefore ?? ''}`;
+    const entry = join(storageRoot, 'generation-store', 'generations', generationId, 'rsc', 'dev', 'invoke.js');
+    await writeFile(entry, `
+const { writeSync } = require('node:fs');
+writeSync(3, Buffer.from('x'));
+process.stdout.end(JSON.stringify({
+  flightBytes: 1,
+  inspection: {
+    flight: { bytes: 1, preview: 'eA==', truncated: false },
+    modelVisible: [],
+    protocol: [],
+    state: { identity: { stateStoreId: 'playground', stateVersion: 0 } },
+    trace: [],
+    tree: [],
+  },
+}) + '\\n');
+`);
+    const target = session.surfaces().find((surface) => surface.id === 'mcp.runtime_status')!.targets[0]!;
+    await expect(session.invoke({ expectedGenerationId: generationId, input: {}, surfaceId: 'mcp.runtime_status', target }))
+      .resolves.toMatchObject({ status: 'succeeded' });
+    await session.close();
+    expect(existsSync(taskkillMarker)).toBe(false);
+  } finally {
+    process.env.PATH = pathBefore;
+    await session.close().catch(() => undefined);
+    await rm(storageRoot, { force: true, recursive: true });
+    await rm(commandRoot, { force: true, recursive: true });
   }
 }, 30_000);
 

@@ -91,6 +91,22 @@ const maximumRunHistory = 50;
 const invocationTimeoutMs = 10_000;
 const invocationTerminationGraceMs = 100;
 const flightPreviewBytes = 32 * 1024;
+const windowsJobOwnerPhaseDeadlineMs = 2_000;
+
+const withinDeadline = <T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> =>
+  new Promise<T>((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error(message)), timeoutMs);
+    void promise.then(
+      (value) => {
+        clearTimeout(timeout);
+        resolve(value);
+      },
+      (error: unknown) => {
+        clearTimeout(timeout);
+        reject(error);
+      },
+    );
+  });
 
 // The wrapper is a normal Node child, so its inherited fd 3 remains a libuv
 // Flight pipe. It imports the generation entry only after the Job owner
@@ -141,22 +157,35 @@ public static class AgentBundleWindowsJobOwner {
  [DllImport("kernel32.dll",SetLastError=true)] static extern bool CloseHandle(IntPtr a);
  static void Ok(bool value) { if(!value) throw new Win32Exception(Marshal.GetLastWin32Error()); }
  static void Stop(IntPtr job) { IntPtr accounting=Marshal.AllocHGlobal(Marshal.SizeOf(typeof(BA))); try { Ok(TerminateJobObject(job,0)); for(int attempt=0;attempt<1000;attempt++) { Ok(QueryInformationJobObject(job,A,accounting,(uint)Marshal.SizeOf(typeof(BA)),IntPtr.Zero)); if(((BA)Marshal.PtrToStructure(accounting,typeof(BA))).g==0) return; Thread.Sleep(10); } throw new TimeoutException("Windows Job Object did not terminate every descendant."); } finally { Marshal.FreeHGlobal(accounting); } }
- public static int Own(int pid) { IntPtr job=IntPtr.Zero,process=IntPtr.Zero,info=IntPtr.Zero; try {
+ static void Drained() { Console.Out.WriteLine("DRAINED"); Console.Out.Flush(); }
+ public static int Own(int pid,string mode) { IntPtr job=IntPtr.Zero,process=IntPtr.Zero,info=IntPtr.Zero; bool assigned=false,drained=false; try {
+  if(mode=="hang-ready") { Thread.Sleep(60000); return 1; }
   job=CreateJobObject(IntPtr.Zero,null); if(job==IntPtr.Zero) throw new Win32Exception(Marshal.GetLastWin32Error());
   EL limits=new EL(); limits.b.flags=K; info=Marshal.AllocHGlobal(Marshal.SizeOf(typeof(EL))); Marshal.StructureToPtr(limits,info,false); Ok(SetInformationJobObject(job,J,info,(uint)Marshal.SizeOf(typeof(EL))));
-  process=OpenProcess(Access,false,pid); if(process==IntPtr.Zero) throw new Win32Exception(Marshal.GetLastWin32Error()); Ok(AssignProcessToJobObject(job,process));
-  Console.Out.WriteLine("READY"); Console.Out.Flush(); ManualResetEvent stop=new ManualResetEvent(false); Thread control=new Thread(() => { try { Console.In.ReadLine(); } finally { stop.Set(); } }); control.IsBackground=true; control.Start(); while(true) { uint result=WaitForSingleObject(process,20); if(result==0) break; if(result==I) throw new Win32Exception(Marshal.GetLastWin32Error()); if(stop.WaitOne(0)) break; } Stop(job); return 0;
- } catch { if(job!=IntPtr.Zero) TerminateJobObject(job,1); throw; } finally { if(info!=IntPtr.Zero) Marshal.FreeHGlobal(info); if(process!=IntPtr.Zero) CloseHandle(process); if(job!=IntPtr.Zero) CloseHandle(job); } }
+  process=OpenProcess(Access,false,pid); if(process==IntPtr.Zero) throw new Win32Exception(Marshal.GetLastWin32Error()); Ok(AssignProcessToJobObject(job,process)); assigned=true;
+  Console.Out.WriteLine("READY"); Console.Out.Flush(); if(mode=="close-control") { Console.In.Close(); while(true) Thread.Sleep(1000); } if(mode=="ignore-stop") { while(true) Thread.Sleep(1000); } ManualResetEvent stop=new ManualResetEvent(false); Thread control=new Thread(() => { try { Console.In.ReadLine(); } finally { stop.Set(); } }); control.IsBackground=true; control.Start(); while(true) { uint result=WaitForSingleObject(process,20); if(result==0) break; if(result==I) throw new Win32Exception(Marshal.GetLastWin32Error()); if(stop.WaitOne(0)) break; } Stop(job); Drained(); drained=true; if(mode=="nonzero-after-drain") throw new InvalidOperationException("Windows Job owner test failure after drain."); return 0;
+ } catch(Exception error) { if(job!=IntPtr.Zero && assigned && !drained) { try { Stop(job); Drained(); drained=true; } catch(Exception drainError) { throw new AggregateException(error,drainError); } } else if(job!=IntPtr.Zero && !assigned) TerminateJobObject(job,1); throw; } finally { if(info!=IntPtr.Zero) Marshal.FreeHGlobal(info); if(process!=IntPtr.Zero) CloseHandle(process); if(job!=IntPtr.Zero) CloseHandle(job); } }
 }
 '@
 Add-Type -TypeDefinition $typeDefinition -ErrorAction Stop
-exit [AgentBundleWindowsJobOwner]::Own([int]$args[0])
+exit [AgentBundleWindowsJobOwner]::Own([int]$args[0], [string]$args[1])
 `;
 
 
 interface InvocationWorker {
   readonly done: Promise<void>;
   terminate(reason: Error): void;
+}
+
+interface WindowsJobOwner {
+  readonly closed: Promise<void>;
+  readonly done: Promise<void>;
+  readonly drained: Promise<void>;
+  readonly ready: Promise<void>;
+  isAssigned(): boolean;
+  isClosed(): boolean;
+  forceTerminate(): void;
+  terminate(): void;
 }
 
 interface OwnedRunsRoot {
@@ -461,6 +490,8 @@ export interface RsbuildRuntimeSessionStartTesting {
     readonly runtimeGenerationId: string;
   }>) => Promise<void> | void;
   readonly beforeMcpRelist?: () => Promise<void> | void;
+  /** Windows-only Job owner fault injection; never used by the public provider. */
+  readonly windowsJobOwnerMode?: 'close-control' | 'hang-ready' | 'ignore-stop' | 'nonzero-after-drain' | 'normal';
 }
 
 /**
@@ -1298,6 +1329,7 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
         '-Command',
         windowsJobOwnerSource,
         String(processGroupId),
+        this.#testing.windowsJobOwnerMode ?? 'normal',
       ], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
       const ownerControl = owner.stdin;
       const ownerStdout = owner.stdout;
@@ -1305,14 +1337,19 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
       if (ownerControl === null || ownerStdout === null || ownerStderr === null) {
         owner.kill('SIGKILL');
         return Object.freeze({
+          closed: Promise.resolve(),
           done: Promise.reject(new Error('RSC invocation Windows Job Object owner streams are unavailable.')),
+          drained: Promise.reject(new Error('RSC invocation Windows Job Object owner streams are unavailable.')),
           ready: Promise.reject(new Error('RSC invocation Windows Job Object owner streams are unavailable.')),
-          closed: () => true,
+          isAssigned: () => false,
+          isClosed: () => true,
+          forceTerminate: () => undefined,
           terminate: () => undefined,
-        });
+        } satisfies WindowsJobOwner);
       }
       const ownerStderrChunks: Buffer[] = [];
       let ownerStderrBytes = 0;
+      let assigned = false;
       let readySettled = false;
       let resolveReady!: () => void;
       let rejectReady!: (error: Error) => void;
@@ -1320,53 +1357,107 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
         resolveReady = resolve;
         rejectReady = reject;
       });
+      let drainedSettled = false;
+      let resolveDrained!: () => void;
+      let rejectDrained!: (error: Error) => void;
+      const drained = new Promise<void>((resolve, reject) => {
+        resolveDrained = resolve;
+        rejectDrained = reject;
+      });
+      let doneSettled = false;
       let resolveDone!: () => void;
       let rejectDone!: (error: Error) => void;
       const done = new Promise<void>((resolve, reject) => {
         resolveDone = resolve;
         rejectDone = reject;
       });
+      let resolveClosed!: () => void;
+      const closed = new Promise<void>((resolve) => {
+        resolveClosed = resolve;
+      });
       const ownerFailure = (message: string): Error => {
         const diagnostics = redactInspectionDiagnostics(Buffer.concat(ownerStderrChunks).toString('utf8'));
         return new Error(message + (diagnostics.length === 0 ? '' : ': ' + diagnostics));
       };
-      let readyBytes = 0;
-      const readyChunks: Buffer[] = [];
-      ownerStdout.on('data', (chunk: Buffer | string) => {
-        const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-        readyBytes += bytes.byteLength;
-        if (readyBytes > 16 || readySettled) {
-          if (!readySettled) {
-            readySettled = true;
-            rejectReady(ownerFailure('RSC invocation Windows Job Object owner emitted an invalid readiness response.'));
-          }
-          try { owner.kill('SIGKILL'); } catch { /* Owner already exited. */ }
-          return;
-        }
-        readyChunks.push(bytes);
-        const value = Buffer.concat(readyChunks).toString('utf8');
-        if (value === 'READY\\n' || value === 'READY\\r\\n') {
-          readySettled = true;
-          resolveReady();
-        } else if (!'READY\\r\\n'.startsWith(value) && !'READY\\n'.startsWith(value)) {
-          readySettled = true;
-          rejectReady(ownerFailure('RSC invocation Windows Job Object owner emitted an invalid readiness response.'));
-          try { owner.kill('SIGKILL'); } catch { /* Owner already exited. */ }
-        }
-      });
-      ownerControl.once('error', () => {
-        const failure = ownerFailure('RSC invocation Windows Job Object owner control stream failed.');
+      const failReady = (failure: Error): void => {
         if (!readySettled) {
           readySettled = true;
           rejectReady(failure);
         }
-        rejectDone(failure);
+      };
+      const failDrained = (failure: Error): void => {
+        if (!drainedSettled) {
+          drainedSettled = true;
+          rejectDrained(failure);
+        }
+      };
+      const failDone = (failure: Error): void => {
+        if (!doneSettled) {
+          doneSettled = true;
+          rejectDone(failure);
+        }
+      };
+      const protocolFailure = (message: string): void => {
+        const failure = ownerFailure(message);
+        failReady(failure);
+        failDrained(failure);
+        failDone(failure);
+      };
+      let protocolBytes = 0;
+      let protocolOffset = 0;
+      const protocolChunks: Buffer[] = [];
+      const consumeOwnerProtocol = (): void => {
+        const protocol = Buffer.concat(protocolChunks).toString('utf8');
+        let remainder = protocol.slice(protocolOffset);
+        if (!readySettled) {
+          const readyLine = ['READY\n', 'READY\r\n'].find((line) => remainder.startsWith(line));
+          if (readyLine !== undefined) {
+            readySettled = true;
+            assigned = true;
+            resolveReady();
+            protocolOffset += readyLine.length;
+            remainder = protocol.slice(protocolOffset);
+          } else if (!['READY\n', 'READY\r\n'].some((line) => line.startsWith(remainder))) {
+            protocolFailure('RSC invocation Windows Job Object owner emitted an invalid readiness response.');
+            return;
+          } else {
+            return;
+          }
+        }
+        if (!drainedSettled) {
+          const drainedLine = ['DRAINED\n', 'DRAINED\r\n'].find((line) => remainder.startsWith(line));
+          if (drainedLine !== undefined) {
+            drainedSettled = true;
+            resolveDrained();
+            protocolOffset += drainedLine.length;
+            remainder = protocol.slice(protocolOffset);
+          } else if (!['DRAINED\n', 'DRAINED\r\n'].some((line) => line.startsWith(remainder))) {
+            protocolFailure('RSC invocation Windows Job Object owner did not confirm descendant drain.');
+            return;
+          } else {
+            return;
+          }
+        }
+        if (remainder.length > 0) protocolFailure('RSC invocation Windows Job Object owner emitted extra protocol output.');
+      };
+      ownerStdout.on('data', (chunk: Buffer | string) => {
+        const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+        protocolBytes += bytes.byteLength;
+        if (protocolBytes > 32 || doneSettled) {
+          protocolFailure('RSC invocation Windows Job Object owner emitted oversized or late protocol output.');
+          return;
+        }
+        protocolChunks.push(bytes);
+        consumeOwnerProtocol();
+      });
+      ownerControl.once('error', () => {
+        const failure = ownerFailure('RSC invocation Windows Job Object owner control stream failed.');
+        failReady(failure);
+        failDrained(failure);
+        failDone(failure);
       });
       ownerStdout.once('error', () => {
-        if (!readySettled) {
-          readySettled = true;
-          rejectReady(ownerFailure('RSC invocation Windows Job Object owner readiness stream failed.'));
-        }
+        protocolFailure('RSC invocation Windows Job Object owner protocol stream failed.');
       });
       ownerStderr.on('data', (chunk: Buffer | string) => {
         const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
@@ -1374,32 +1465,43 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
         if (retained > 0) ownerStderrChunks.push(bytes.subarray(0, retained));
         ownerStderrBytes += bytes.byteLength;
       });
-      ownerStderr.once('error', () => undefined);
+      ownerStderr.once('error', () => {
+        protocolFailure('RSC invocation Windows Job Object owner diagnostics stream failed.');
+      });
       owner.once('error', (error) => {
         const failure = ownerFailure('RSC invocation Windows Job Object owner could not be started: ' + error.message);
-        if (!readySettled) {
-          readySettled = true;
-          rejectReady(failure);
-        }
-        rejectDone(failure);
+        failReady(failure);
+        failDrained(failure);
+        failDone(failure);
       });
       owner.once('close', (code) => {
+        resolveClosed();
         const failure = ownerFailure('RSC invocation Windows Job Object owner exited with code ' + String(code) + '.');
-        if (!readySettled) {
-          readySettled = true;
-          rejectReady(failure);
+        if (!readySettled) failReady(failure);
+        if (!drainedSettled) failDrained(failure);
+        if (code === 0 && readySettled && drainedSettled) {
+          if (!doneSettled) {
+            doneSettled = true;
+            resolveDone();
+          }
+        } else {
+          failDone(failure);
         }
-        if (code === 0) resolveDone();
-        else rejectDone(failure);
       });
       return Object.freeze({
+        closed,
         done,
+        drained,
         ready,
-        closed: () => owner.exitCode !== null || owner.signalCode !== null,
+        isAssigned: () => assigned,
+        isClosed: () => owner.exitCode !== null || owner.signalCode !== null,
+        forceTerminate: () => {
+          try { owner.kill('SIGKILL'); } catch { /* Owner already exited. */ }
+        },
         terminate: () => {
           if (!ownerControl.destroyed) ownerControl.end('STOP\n');
         },
-      });
+      } satisfies WindowsJobOwner);
     })() : undefined;
     let termination: Error | undefined;
     let timeout: ReturnType<typeof setTimeout> | undefined;
@@ -1410,19 +1512,23 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
     const stdoutChunks: Buffer[] = [];
     const stderrChunks: Buffer[] = [];
     const flightChunks: Buffer[] = [];
+    const childClosed = new Promise<void>((resolve) => {
+      if (child.exitCode !== null || child.signalCode !== null) {
+        resolve();
+        return;
+      }
+      child.once('close', () => resolve());
+    });
+    const cleanupFailure = (error: unknown): void => {
+      const failure = error instanceof Error ? error : new Error('RSC invocation worker teardown failed.');
+      termination = termination === undefined
+        ? failure
+        : new AggregateError([termination, failure], 'RSC invocation worker teardown failed.');
+    };
     const signalGroup = async (signal: NodeJS.Signals): Promise<void> => {
+      if (windowsSupervised) return;
       try {
-        if (process.platform !== 'win32') {
-          process.kill(-processGroupId, signal);
-          return;
-        }
-        await new Promise<void>((resolve) => {
-          const terminator = spawn('taskkill', [
-            '/PID', String(processGroupId), '/T', ...(signal === 'SIGKILL' ? ['/F'] : []),
-          ], { stdio: 'ignore', windowsHide: true });
-          terminator.once('error', () => resolve());
-          terminator.once('close', () => resolve());
-        });
+        process.kill(-processGroupId, signal);
       } catch {
         try { child.kill(signal); } catch { /* Child already exited. */ }
       }
@@ -1430,11 +1536,84 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
     let treeCleanup: Promise<void> | undefined;
     const teardownTree = (): Promise<void> => {
       treeCleanup ??= (async () => {
-        jobOwner?.terminate();
+        if (jobOwner !== undefined) {
+          let forcedOwnerTermination = false;
+          const forceOwnerTermination = (): void => {
+            if (forcedOwnerTermination) return;
+            forcedOwnerTermination = true;
+            jobOwner.forceTerminate();
+          };
+          if (!jobOwner.isAssigned()) {
+            // READY was never observed, so wrapper code is still blocked on GO.
+            // The retained ChildProcess handle is safe only in this pre-assignment
+            // phase; all assigned trees are owned exclusively through the Job.
+            forceOwnerTermination();
+            try { child.kill('SIGKILL'); } catch { /* Wrapper already exited. */ }
+          } else {
+            jobOwner.terminate();
+            try {
+              await withinDeadline(
+                jobOwner.drained,
+                windowsJobOwnerPhaseDeadlineMs,
+                'RSC invocation Windows Job Object owner did not confirm descendant drain.',
+              );
+            } catch (error) {
+              cleanupFailure(error);
+              forceOwnerTermination();
+            }
+          }
+          try {
+            await withinDeadline(
+              childClosed,
+              windowsJobOwnerPhaseDeadlineMs,
+              'RSC invocation Windows Job Object did not terminate its wrapper.',
+            );
+          } catch (error) {
+            cleanupFailure(error);
+            forceOwnerTermination();
+            try {
+              await withinDeadline(
+                childClosed,
+                windowsJobOwnerPhaseDeadlineMs,
+                'RSC invocation Windows Job Object did not terminate its wrapper after forced owner shutdown.',
+              );
+            } catch (forcedError) {
+              cleanupFailure(forcedError);
+            }
+          }
+          try {
+            await withinDeadline(
+              jobOwner.closed,
+              windowsJobOwnerPhaseDeadlineMs,
+              'RSC invocation Windows Job Object owner did not exit after cleanup.',
+            );
+          } catch (error) {
+            cleanupFailure(error);
+            forceOwnerTermination();
+            try {
+              await withinDeadline(
+                jobOwner.closed,
+                windowsJobOwnerPhaseDeadlineMs,
+                'RSC invocation Windows Job Object owner did not exit after forced shutdown.',
+              );
+            } catch (forcedError) {
+              cleanupFailure(forcedError);
+            }
+          }
+          try {
+            await withinDeadline(
+              jobOwner.done,
+              windowsJobOwnerPhaseDeadlineMs,
+              'RSC invocation Windows Job Object owner did not complete its verified drain protocol.',
+            );
+          } catch (error) {
+            cleanupFailure(error);
+          }
+          return;
+        }
         await signalGroup('SIGTERM');
         await new Promise<void>((resolve) => setTimeout(resolve, invocationTerminationGraceMs));
         await signalGroup('SIGKILL');
-        await jobOwner?.done.catch(() => undefined);
       })();
       return treeCleanup;
     };
@@ -1507,51 +1686,48 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
       child.once('error', (error) => terminate(new Error(`RSC invocation worker could not be started: ${error.message}`)));
       child.once('close', (code) => {
         void (async () => {
-          try {
-            await jobOwner?.done;
-          } catch (error) {
-            if (termination === undefined) {
-              terminate(error instanceof Error ? error : new Error('RSC invocation Windows Job Object owner failed.'));
-            }
+          const diagnostics = redactInspectionDiagnostics(Buffer.concat(stderrChunks).toString('utf8'));
+          if (termination !== undefined) {
+            const message = termination.message;
+            void finish(() => rejectResponse(new Error(`${message}${diagnostics.length === 0 ? '' : `: ${diagnostics}`}`)));
+            return;
           }
-        const diagnostics = redactInspectionDiagnostics(Buffer.concat(stderrChunks).toString('utf8'));
-        if (termination !== undefined) {
-          const message = termination.message;
-          void finish(() => rejectResponse(new Error(`${message}${diagnostics.length === 0 ? '' : `: ${diagnostics}`}`)));
-          return;
-        }
-        if (code !== 0) {
-          const failure = new Error(`RSC invocation worker exited with code ${String(code)}${diagnostics.length === 0 ? '' : `: ${diagnostics}`}`);
-          terminate(failure);
-          void finish(() => rejectResponse(failure));
-          return;
-        }
-        try {
-          const parsed = parseWorkerResponse();
-          void (async () => {
-            await teardownTree();
-            const terminationAfterCleanup = termination as Error | undefined;
-            if (terminationAfterCleanup !== undefined) {
-              const message = terminationAfterCleanup.message;
-              await finish(() => rejectResponse(new Error(`${message}${diagnostics.length === 0 ? '' : `: ${diagnostics}`}`)));
-              return;
-            }
-            await finish(() => resolveResponse(parsed));
-          })();
-        } catch (error) {
-          const failure = error instanceof Error ? error : new Error('RSC invocation worker emitted invalid JSON.');
-          terminate(failure);
-          void finish(() => rejectResponse(failure));
-        }
+          if (code !== 0) {
+            const failure = new Error(`RSC invocation worker exited with code ${String(code)}${diagnostics.length === 0 ? '' : `: ${diagnostics}`}`);
+            terminate(failure);
+            void finish(() => rejectResponse(failure));
+            return;
+          }
+          try {
+            const parsed = parseWorkerResponse();
+            void (async () => {
+              await teardownTree();
+              const terminationAfterCleanup = termination as Error | undefined;
+              if (terminationAfterCleanup !== undefined) {
+                const message = terminationAfterCleanup.message;
+                await finish(() => rejectResponse(new Error(`${message}${diagnostics.length === 0 ? '' : `: ${diagnostics}`}`)));
+                return;
+              }
+              await finish(() => resolveResponse(parsed));
+            })();
+          } catch (error) {
+            const failure = error instanceof Error ? error : new Error('RSC invocation worker emitted invalid JSON.');
+            terminate(failure);
+            void finish(() => rejectResponse(failure));
+          }
         })();
       });
       timeout = setTimeout(() => terminate(new Error(`RSC invocation worker exceeded ${invocationTimeoutMs} ms.`)), invocationTimeoutMs);
       void (async () => {
         try {
           if (jobOwner !== undefined) {
-            await jobOwner.ready;
+            await withinDeadline(
+              jobOwner.ready,
+              windowsJobOwnerPhaseDeadlineMs,
+              'RSC invocation Windows Job Object owner did not confirm assignment readiness.',
+            );
             this.#assertInvocationOpen();
-            if (jobOwner.closed()) throw new Error('RSC invocation Windows Job Object owner closed before the worker was armed.');
+            if (jobOwner.isClosed()) throw new Error('RSC invocation Windows Job Object owner closed before the worker was armed.');
             invocationControl!.end('GO\\n');
           }
           this.#assertInvocationOpen();
