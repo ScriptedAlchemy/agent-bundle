@@ -29,6 +29,7 @@ export interface ProjectServiceOptions {
   readonly logger?: ProjectServiceLogger;
   readonly mode?: string;
   readonly outputRoots?: readonly string[];
+  readonly registry?: TargetRegistry;
   readonly root: string;
   readonly targets?: readonly string[];
 }
@@ -281,16 +282,18 @@ const preparedProject = (
 /** Loads, discovers, validates, and normalizes source once for dev consumers. */
 export class ProjectService {
   readonly #options: ProjectServiceOptions;
+  readonly #registry: TargetRegistry;
 
   constructor(options: ProjectServiceOptions) {
     this.#options = Object.freeze({ ...options });
+    this.#registry = options.registry ?? createDefaultRegistry();
   }
 
   async prepare(command: ProjectCommand): Promise<PreparedProject> {
     const requestedRoot = resolve(this.#options.root);
     const root = await realpath(requestedRoot);
     const outputRoots = await resolveOutputRoots(requestedRoot, root, this.#options.outputRoots);
-    const registry = createDefaultRegistry();
+    const registry = this.#registry;
     const configPath = resolve(root, this.#options.configPath ?? 'agent-bundle.config.ts');
     log(this.#options.logger, 'project.load', { command, root });
 

@@ -4,6 +4,9 @@ import { join, relative } from 'node:path';
 
 import { expect, it } from '@rstest/core';
 
+import { TargetRegistry } from '../src/adapters/registry.ts';
+import type { TargetAdapter } from '../src/adapters/types.ts';
+import type { NormalizedPlugin } from '../src/core/types.ts';
 import { runCli } from '../src/cli.ts';
 import { createWorkbenchAssetSource } from '../src/dev/workbench-assets.ts';
 import {
@@ -91,6 +94,29 @@ const appPreviewBody = () => ({
   toolName: 'show-app',
 });
 
+const workbenchSyntheticAdapter: TargetAdapter = Object.freeze({
+  capabilities: Object.freeze({}),
+  configExtension: Object.freeze({ key: 'workbenchSynthetic' }),
+  metadata: Object.freeze({
+    adapterRevision: 'test',
+    capabilityRevision: 'test',
+    capabilitySha256: '0'.repeat(64),
+    observedVersion: 'test',
+    schemas: Object.freeze([]),
+  }),
+  name: 'workbench-synthetic',
+  plan: (model: NormalizedPlugin) => Object.freeze({
+    diagnostics: Object.freeze([]),
+    entries: Object.freeze([{
+      content: 'synthetic workbench target\n',
+      kind: 'write' as const,
+      relativePath: 'synthetic.txt',
+      sourceInputs: [model.metadata.provenance.sourcePath],
+    }]),
+  }),
+  validateModel: () => [],
+});
+
 it('contains prebuilt workbench asset reads to their declared root', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-workbench-assets-'));
   try {
@@ -163,6 +189,42 @@ it('normalizes a relative project root once before constructing every dev servic
     await expect(fetch(`${server.url}/api/skills/source/skill%3Areview`).then((response) => response.json())).resolves.toMatchObject({
       document: { id: 'skill:review' },
     });
+  } finally {
+    await server?.close().catch(() => undefined);
+    await Promise.all([removeProjectFixture(project.root), rm(assetsRoot, { force: true, recursive: true })]);
+  }
+}, 30_000);
+
+it('builds and serves a target owned only by the workbench registry', async () => {
+  const project = await createProjectFixture();
+  const assetsRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-workbench-custom-registry-'));
+  const registry = new TargetRegistry().register(workbenchSyntheticAdapter, { default: true });
+  let server: Awaited<ReturnType<typeof startDevServer>> | undefined;
+  try {
+    await Promise.all([
+      writeFile(join(assetsRoot, 'index.html'), '<!doctype html><title>Agent Bundle workbench</title>'),
+      writeFile(join(project.root, 'agent-bundle.config.ts'), [
+        'export default {',
+        "  plugin: { name: 'workbench-custom-registry', version: '1.0.0' },",
+        "  targets: ['workbench-synthetic'],",
+        '  workbenchSynthetic: { enabled: true },',
+        '};',
+        '',
+      ].join('\n')),
+    ]);
+
+    server = await startDevServer({
+      assets: createWorkbenchAssetSource({ root: assetsRoot }),
+      open: false,
+      port: 0,
+      registry,
+      root: project.root,
+    });
+    const status = server.status().artifact;
+    if (status.state !== 'active') throw new Error('Expected the custom target to produce an active artifact.');
+    expect(status.activeEpoch.targetDigests).toHaveProperty('workbench-synthetic');
+    await expect(fetch(`${server.url}/api/project/status`).then((response) => response.status)).resolves.toBe(200);
+    expect(registry.names()).toEqual(['workbench-synthetic']);
   } finally {
     await server?.close().catch(() => undefined);
     await Promise.all([removeProjectFixture(project.root), rm(assetsRoot, { force: true, recursive: true })]);

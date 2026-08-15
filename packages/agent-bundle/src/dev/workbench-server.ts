@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { resolve } from 'node:path';
 
+import { createDefaultRegistry, type TargetRegistry } from '../adapters/registry.ts';
 import { DevCoordinator } from './coordinator.ts';
 import { EpochStore } from './epoch-store.ts';
 import { ProjectEventHub } from './events.ts';
@@ -60,6 +61,8 @@ export interface StartDevServerOptions {
   /** Injectable browser launcher for embedding and deterministic tests. */
   readonly openBrowser?: OpenBrowser;
   readonly port?: number;
+  /** Advanced adapter registry shared by all development project and runtime services. */
+  readonly registry?: TargetRegistry;
   readonly root: string;
   /** Test-only listener and sandbox factories; production always uses the built-in loopback services. */
   readonly testing?: DevServerTesting;
@@ -238,11 +241,12 @@ const openInBrowser: OpenBrowser = (url) => new Promise((resolvePromise, rejectP
 /** Starts one loopback foreground session over the current project services. */
 export const startDevServer = async (options: StartDevServerOptions): Promise<DevServerSession> => {
   const root = resolve(options.root);
+  const registry = options.registry ?? createDefaultRegistry();
   const eventHub = new ProjectEventHub();
   const epochStore = new EpochStore({ projectRoot: root });
-  const projectService = new ProjectService({ root });
+  const projectService = new ProjectService({ registry, root });
   const coordinator = new DevCoordinator({ epochStore, eventHub, projectService, root });
-  const mcpSessions = new McpSessionService({ epochStore, projectRoot: root });
+  const mcpSessions = new McpSessionService({ epochStore, projectRoot: root, registry });
   const appPreviews = new DeferredMcpAppPreviewService();
   let mcpApps: McpAppLifecycle | undefined;
   const foreground = await (options.testing?.startForegroundServer ?? startForegroundServer)({
