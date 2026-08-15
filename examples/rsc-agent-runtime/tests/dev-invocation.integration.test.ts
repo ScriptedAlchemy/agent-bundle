@@ -633,11 +633,52 @@ test('runs an exact generation-contained hook invocation and retains its immutab
     const replacedRunDirectory = join(storageRoot, 'replaced-run-directory');
     await mkdir(replacedRunDirectory);
     await writeFile(join(replacedRunDirectory, 'flight.bin'), 'untrusted Flight');
+    const trustedFlight = flight!.body;
     await rm(join(storageRoot, 'runs', run.id), { force: true, recursive: true });
     await symlink(replacedRunDirectory, join(storageRoot, 'runs', run.id), 'dir');
-    await expect(session.readRunFlight(run.id)).resolves.toBeUndefined();
+    const afterSwap = await session.readRunFlight(run.id);
+    expect(afterSwap?.body).toEqual(trustedFlight);
+    expect(afterSwap?.body).not.toEqual(Buffer.from('untrusted Flight'));
   } finally {
     await session.close();
+    await rm(storageRoot, { force: true, recursive: true });
+  }
+}, 30_000);
+
+test('does not spawn an invocation worker when runtime.run.started closes the session', async () => {
+  const storageRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-session-started-close-'));
+  const projectRoot = process.cwd();
+  const prepared = await new ProjectService({ includeDevRuntime: true, mode: 'development', root: projectRoot }).prepare('dev');
+  let close: Promise<void> | undefined;
+  const startedAt = Date.now();
+  const session = await createDevRuntimeProvider().start({
+    artifactStatus: () => Object.freeze({ state: 'missing' as const }),
+    emit: (event) => {
+      if (event.type === 'runtime.run.started') close ??= session.close();
+    },
+    environment: Object.freeze({}),
+    projectRoot,
+    preparedRuntime: prepared.devRuntime!,
+    providerSessionId: 'session-started-close-test',
+    signal: new AbortController().signal,
+    storageRoot,
+  });
+
+  try {
+    await waitFor(() => session.status().activeVector !== undefined, 'Timed out waiting for an active runtime generation', 15_000);
+    const generationId = session.status().activeVector!.runtimeGenerationId;
+    const marker = join(storageRoot, 'worker-spawned-after-close');
+    const entry = join(storageRoot, 'generation-store', 'generations', generationId, 'rsc', 'dev', 'invoke.js');
+    await writeFile(entry, `require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'spawned');`);
+    const target = session.surfaces().find((surface) => surface.id === 'mcp.runtime_status')!.targets[0]!;
+
+    await expect(session.invoke({ expectedGenerationId: generationId, input: {}, surfaceId: 'mcp.runtime_status', target }))
+      .resolves.toMatchObject({ status: 'failed' });
+    await close;
+    expect(Date.now() - startedAt).toBeLessThan(2_000);
+    expect(() => readFileSync(marker)).toThrow();
+  } finally {
+    await session.close().catch(() => undefined);
     await rm(storageRoot, { force: true, recursive: true });
   }
 }, 30_000);
@@ -762,6 +803,55 @@ setInterval(() => undefined, 1_000);
   } finally {
     await session.close().catch(() => undefined);
     await blocked?.catch(() => undefined);
+    await rm(copied.workspaceRoot, { force: true, recursive: true });
+  }
+}, 60_000);
+
+test('replays an exact historical surface after generation two removes it', async () => {
+  const copied = await copyExample();
+  const storageRoot = join(copied.workspaceRoot, 'runtime-storage');
+  const prepared = await new ProjectService({ includeDevRuntime: true, mode: 'development', root: copied.projectRoot }).prepare('dev');
+  const session = await createDevRuntimeProvider().start({
+    artifactStatus: () => Object.freeze({ state: 'missing' as const }),
+    emit: () => undefined,
+    environment: Object.freeze({}),
+    projectRoot: copied.projectRoot,
+    preparedRuntime: prepared.devRuntime!,
+    providerSessionId: 'session-historical-surface-test',
+    signal: new AbortController().signal,
+    storageRoot,
+  });
+
+  try {
+    await waitFor(() => session.status().activeVector !== undefined, 'Timed out waiting for an active runtime generation', 15_000);
+    const g1 = session.status().activeVector!.runtimeGenerationId;
+    const run = await session.invoke({
+      expectedGenerationId: g1,
+      input: {
+        cwd: copied.projectRoot,
+        hook_event_name: 'PostToolUse',
+        session_id: 'session-historical-surface-test',
+        tool_input: { file_path: 'g1.ts' },
+        tool_name: 'Write',
+        tool_use_id: 'historical-surface',
+      },
+      surfaceId: 'hook.claude',
+      target: 'claude',
+    });
+    expect(run).toMatchObject({ status: 'succeeded', vector: { runtimeGenerationId: g1 } });
+
+    const definition = join(copied.projectRoot, 'src', 'definition.ts');
+    const source = await readFile(definition, 'utf8');
+    await writeFile(definition, source.replace("      host: 'claude',", "      host: 'codex',"));
+    await waitFor(() => session.status().activeVector?.runtimeGenerationId !== g1, 'Timed out waiting for generation two');
+    const g2 = session.status().activeVector!.runtimeGenerationId;
+
+    await expect(session.replay({ expectedGenerationId: g1, mode: 'exact', runId: run.id }))
+      .resolves.toMatchObject({ status: 'succeeded', vector: { runtimeGenerationId: g1 } });
+    await expect(session.replay({ expectedGenerationId: g2, mode: 'latest', runId: run.id }))
+      .rejects.toThrow('does not exist');
+  } finally {
+    await session.close().catch(() => undefined);
     await rm(copied.workspaceRoot, { force: true, recursive: true });
   }
 }, 60_000);
@@ -1025,8 +1115,9 @@ require('node:fs').writeSync(3, Buffer.from('x'));
 process.stdout.end(JSON.stringify({
   flightBytes: 1,
   inspection: {
-    agentVisible: 'token=worker-response-secret',
     flight: { bytes: 1, preview: 'eA==', truncated: false },
+    modelVisible: 'token=worker-response-secret',
+    protocol: [],
     state: { identity: { stateStoreId: 'playground', stateVersion: 0 } },
     trace: [],
     tree: [],
@@ -1036,6 +1127,27 @@ process.stdout.end(JSON.stringify({
     const credential = await session.invoke(request);
     expect(credential).toMatchObject({ diagnostics: [expect.objectContaining({ message: expect.stringContaining('credentials') })], status: 'failed' });
     if (credential.status === 'failed') expect(credential.diagnostics[0]!.message).not.toContain('worker-response-secret');
+
+    const malformed = async (inspection: Record<string, unknown>) => {
+      await writeFile(entry, `
+require('node:fs').writeSync(3, Buffer.from('x'));
+process.stdout.end(${JSON.stringify(`${JSON.stringify({ flightBytes: 1, inspection })}\n`)});
+`);
+      const run = await session.invoke(request);
+      expect(run).toMatchObject({ status: 'failed' });
+      await expect(session.readRunFlight(run.id)).resolves.toBeUndefined();
+    };
+    const validInspection = {
+      flight: { bytes: 1, preview: 'eA==', truncated: false },
+      modelVisible: [],
+      protocol: [],
+      state: { identity: { stateStoreId: 'playground', stateVersion: 0 } },
+      trace: [],
+      tree: [],
+    };
+    await malformed({ ...validInspection, tree: [{ children: {}, id: 'node', kind: 'element', label: 'bad' }] });
+    await malformed({ ...validInspection, trace: [{ id: '', phase: 'render', startedAt: 'not-a-date', status: 'unknown' }] });
+    await malformed({ ...validInspection, app: { mcpBinding: {}, resourceUri: 'ui://unsafe', surfaceId: 'mcp.timeline' } });
     expect(await readdir(join(storageRoot, 'runs'))).toEqual(['.agent-bundle-runtime-owner']);
   } finally {
     await session.close().catch(() => undefined);

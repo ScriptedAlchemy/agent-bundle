@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { constants } from 'node:fs';
-import { lstat, mkdir, open, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, open, readFile, realpath, rm, writeFile, type FileHandle } from 'node:fs/promises';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 import { createRsbuild, type StartDevServerResult } from '@rsbuild/core';
@@ -103,6 +103,15 @@ interface OwnedRunsRoot {
   readonly marker: string;
   readonly root: string;
   readonly token: string;
+}
+
+interface RunArtifact {
+  readonly file: FileHandle;
+  readonly runId: string;
+  dev?: number;
+  digest?: string;
+  ino?: number;
+  size?: number;
 }
 
 interface ValidatedInvocation {
@@ -252,6 +261,57 @@ const assertCredentialSafeJson = (value: unknown): void => {
   }
 };
 
+const optionalExactKeys = (value: Record<string, unknown>, required: readonly string[], optional: readonly string[], message: string): void => {
+  const keys = Object.keys(value);
+  if (keys.some((key) => !required.includes(key) && !optional.includes(key)) || required.some((key) => !(key in value))) {
+    throw new Error(message);
+  }
+};
+
+const validateTrace = (value: unknown): void => {
+  if (!Array.isArray(value)) throw new Error('RSC invocation worker trace is invalid.');
+  for (const item of value) {
+    const span = plainRecord(item, 'RSC invocation worker trace is invalid.');
+    optionalExactKeys(span, ['id', 'phase', 'startedAt', 'status'], ['details', 'durationMs', 'parentId'], 'RSC invocation worker trace is invalid.');
+    if (typeof span.id !== 'string' || span.id.length === 0 || typeof span.phase !== 'string' || span.phase.length === 0 ||
+      typeof span.startedAt !== 'string' || !['running', 'succeeded', 'failed'].includes(span.status as string) ||
+      ('parentId' in span && (typeof span.parentId !== 'string' || span.parentId.length === 0)) ||
+      ('durationMs' in span && (typeof span.durationMs !== 'number' || !Number.isFinite(span.durationMs) || span.durationMs < 0))) {
+      throw new Error('RSC invocation worker trace is invalid.');
+    }
+    if ('details' in span) assertCredentialSafeJson(span.details);
+  }
+};
+
+const validateTree = (value: unknown): void => {
+  if (!Array.isArray(value)) throw new Error('RSC invocation worker tree is invalid.');
+  for (const item of value) {
+    const node = plainRecord(item, 'RSC invocation worker tree is invalid.');
+    optionalExactKeys(node, ['children', 'id', 'kind', 'label'], ['props'], 'RSC invocation worker tree is invalid.');
+    if (typeof node.id !== 'string' || node.id.length === 0 || typeof node.label !== 'string' ||
+      !['component', 'element', 'text', 'value'].includes(node.kind as string)) {
+      throw new Error('RSC invocation worker tree is invalid.');
+    }
+    if ('props' in node) assertCredentialSafeJson(node.props);
+    validateTree(node.children);
+  }
+};
+
+const validateAppBinding = (value: unknown): void => {
+  const app = plainRecord(value, 'RSC invocation worker App binding is invalid.');
+  assertExactKeys(app, ['mcpBinding', 'resourceUri', 'surfaceId'], 'RSC invocation worker App binding is invalid.');
+  if (typeof app.resourceUri !== 'string' || app.resourceUri.length === 0 || typeof app.surfaceId !== 'string' || app.surfaceId.length === 0) {
+    throw new Error('RSC invocation worker App binding is invalid.');
+  }
+  const binding = plainRecord(app.mcpBinding, 'RSC invocation worker App binding is invalid.');
+  assertExactKeys(binding, ['definitionDigest', 'registryRevision', 'serverDigest', 'serverName', 'sessionId', 'sessionRevision', 'target', 'transportDigest'], 'RSC invocation worker App binding is invalid.');
+  if (typeof binding.definitionDigest !== 'string' || typeof binding.serverDigest !== 'string' || typeof binding.serverName !== 'string' ||
+    typeof binding.sessionId !== 'string' || typeof binding.target !== 'string' || typeof binding.transportDigest !== 'string' ||
+    !Number.isSafeInteger(binding.registryRevision) || !Number.isSafeInteger(binding.sessionRevision)) {
+    throw new Error('RSC invocation worker App binding is invalid.');
+  }
+};
+
 const clonePrepared = (prepared: DevRuntimePreparedProject): DevRuntimePreparedProject =>
   deepFreeze(structuredClone(prepared));
 
@@ -352,6 +412,7 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
   readonly #invocations = new Set<Promise<DevRuntimeRun>>();
   readonly #invocationAbort = new AbortController();
   readonly #runReadTasks = new Map<string, Set<Promise<unknown>>>();
+  readonly #runArtifacts = new Map<string, RunArtifact>();
   readonly #runRoot: string;
   readonly #ownedRunsRoot: OwnedRunsRoot;
   readonly #stateFile: string;
@@ -592,29 +653,21 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
     if (this.#closed || !safeSegment(runId)) return undefined;
     const run = this.#terminalRuns.get(runId);
     if (run?.status !== 'succeeded' || run.vector.providerSessionId !== this.providerSessionId) return undefined;
+    const artifact = this.#runArtifacts.get(runId);
+    if (artifact?.digest === undefined || artifact.size === undefined || artifact.dev === undefined || artifact.ino === undefined) return undefined;
     const task = (async (): Promise<DevRuntimeAsset | undefined> => {
       try {
         await this.#assertCurrentOwnedRunsRoot();
-        const runDirectory = join(this.#runRoot, runId);
-        if (!isInside(this.#runRoot, runDirectory)) return undefined;
-        const directoryDetails = await lstat(runDirectory);
-        if (!directoryDetails.isDirectory() || directoryDetails.isSymbolicLink()) return undefined;
-        const canonicalDirectory = await realpath(runDirectory);
-        if (!isInside(this.#runRoot, canonicalDirectory) || canonicalDirectory === this.#runRoot) return undefined;
-        const flightPath = join(canonicalDirectory, 'flight.bin');
-        if (!isInside(canonicalDirectory, flightPath)) return undefined;
-        const details = await lstat(flightPath);
-        if (!details.isFile() || details.isSymbolicLink() || details.size > maximumInvocationFlightBytes) return undefined;
-        const file = await open(flightPath, constants.O_RDONLY | constants.O_NOFOLLOW);
-        let body: Buffer;
-        try {
-          const opened = await file.stat();
-          if (!opened.isFile() || opened.size !== details.size || opened.size > maximumInvocationFlightBytes) return undefined;
-          body = await file.readFile();
-        } finally {
-          await file.close();
+        const details = await artifact.file.stat();
+        if (!details.isFile() || details.size !== artifact.size || details.dev !== artifact.dev || details.ino !== artifact.ino) return undefined;
+        const body = Buffer.alloc(artifact.size);
+        let offset = 0;
+        while (offset < body.byteLength) {
+          const read = await artifact.file.read(body, offset, body.byteLength - offset, offset);
+          if (read.bytesRead === 0) return undefined;
+          offset += read.bytesRead;
         }
-        if (body.byteLength !== details.size || body.byteLength > maximumInvocationFlightBytes) return undefined;
+        if (createHash('sha256').update(body).digest('hex') !== artifact.digest) return undefined;
         await this.#assertCurrentOwnedRunsRoot();
         return Object.freeze({ body, contentType: 'application/octet-stream' });
       } catch {
@@ -663,9 +716,19 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
     const expectedGenerationId = request.mode === 'exact' ? historicalGenerationId : activeGenerationId;
     if (expectedGenerationId === undefined) throw new DevRuntimeUnavailableError('RSC runtime has no active generation.');
     if (request.mode === 'exact') {
-      let retained;
+      let retained: Awaited<ReturnType<RuntimeGenerationStore<RscRuntimeGenerationMetadata>['lease']>> | undefined;
       try {
         retained = await this.#generationStore.lease(historicalGenerationId);
+        const surface = await this.#historicalSurface(retained.generation, historical.surfaceId);
+        const replay = this.#invoke({
+          expectedGenerationId,
+          ...(historical.fixtureId === undefined ? {} : { fixtureId: historical.fixtureId }),
+          input: historical.input,
+          surfaceId: historical.surfaceId,
+          target: historical.target,
+        }, retained, surface);
+        retained = undefined;
+        return await replay;
       } catch {
         throw new DevRuntimeGenerationConflictError(historicalGenerationId, this.#active?.id);
       } finally {
@@ -724,22 +787,39 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
     return Object.freeze([...this.#surfaces.values()]);
   }
 
-  async #invoke(request: DevRuntimeInvocationRequest): Promise<DevRuntimeRun> {
-    const invocation = this.#validateInvocation(request);
-    const generationId = invocation.request.expectedGenerationId ?? this.#active?.id;
+  async #invoke(
+    request: DevRuntimeInvocationRequest,
+    suppliedLease?: Awaited<ReturnType<RuntimeGenerationStore<RscRuntimeGenerationMetadata>['lease']>>,
+    historicalSurface?: DevRuntimeSurface,
+  ): Promise<DevRuntimeRun> {
+    let invocation: ValidatedInvocation;
+    try {
+      invocation = this.#validateInvocation(request, historicalSurface);
+    } catch (error) {
+      await suppliedLease?.release();
+      throw error;
+    }
+    const generationId = invocation.request.expectedGenerationId ?? suppliedLease?.generation.id ?? this.#active?.id;
     if (generationId === undefined) throw new DevRuntimeUnavailableError('RSC runtime has no active generation.');
+    if (suppliedLease !== undefined && suppliedLease.generation.id !== generationId) {
+      await suppliedLease.release();
+      throw new DevRuntimeGenerationConflictError(generationId, suppliedLease.generation.id);
+    }
     const releaseReservation = this.#reserveInvocation();
 
-    let lease;
-    try {
-      lease = await this.#generationStore.lease(generationId);
-    } catch {
-      releaseReservation();
-      throw new DevRuntimeGenerationConflictError(generationId, this.#active?.id);
+    let lease = suppliedLease;
+    if (lease === undefined) {
+      try {
+        lease = await this.#generationStore.lease(generationId);
+      } catch {
+        releaseReservation();
+        throw new DevRuntimeGenerationConflictError(generationId, this.#active?.id);
+      }
     }
 
     let runDirectory: string | undefined;
     let running: DevRuntimeRun | undefined;
+    let artifact: RunArtifact | undefined;
     try {
       this.#assertInvocationOpen();
       const stateBefore = await this.#stateKernel.readSnapshot();
@@ -763,23 +843,24 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
       }
       await this.#assertCurrentOwnedRunsRoot();
       await mkdir(runDirectory, { recursive: false });
+      artifact = await this.#openRunArtifact(runId);
       this.#assertInvocationOpen();
       this.#emit(Object.freeze({ runId, runtimeGenerationId: lease.generation.id, type: 'runtime.run.started' }));
-
+      const workerInput = await this.#workerRequest(invocation);
+      this.#assertInvocationOpen();
       const response = await this.#runInvocationWorker({
         generation: lease.generation,
-        input: await this.#workerRequest(invocation),
+        input: workerInput,
         runId,
+        surfaceId: invocation.surface.id,
       });
       this.#assertInvocationOpen();
       const flight = response.flight;
       const stateAfter = await this.#stateKernel.readSnapshot();
       this.#assertInvocationOpen();
       const result = this.#inspectionResult(response.inspection, flight, stateAfter.stateVersion, runId);
-      const flightPath = join(runDirectory, 'flight.bin');
-      if (!isInside(runDirectory, flightPath)) throw new Error('RSC runtime Flight path escaped its run directory.');
-      await this.#assertCurrentOwnedRunsRoot();
-      await writeFile(flightPath, flight, { flag: 'wx' });
+      if (artifact === undefined) throw new Error('RSC runtime Flight artifact is unavailable.');
+      await this.#writeRunFlight(artifact, flight);
       const completed = Object.freeze({
         ...(invocation.fixtureId === undefined ? {} : { fixtureId: invocation.fixtureId }),
         completedAt: new Date().toISOString(),
@@ -797,6 +878,7 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
       this.#emit(Object.freeze({ runId, runtimeGenerationId: lease.generation.id, type: 'runtime.run.completed' }));
       return completed;
     } catch (error) {
+      if (artifact !== undefined) await this.#releaseRunArtifact(artifact.runId).catch(() => undefined);
       if (runDirectory !== undefined) await this.#removeRunDirectory(running?.id).catch(() => undefined);
       if (running === undefined) throw error;
       this.#activeRuns.delete(running.id);
@@ -842,7 +924,7 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
     };
   }
 
-  #validateInvocation(request: DevRuntimeInvocationRequest): ValidatedInvocation {
+  #validateInvocation(request: DevRuntimeInvocationRequest, historicalSurface?: DevRuntimeSurface): ValidatedInvocation {
     if (this.#closed) throw new DevRuntimeUnavailableError('RSC runtime session is closed.');
     if (request === null || typeof request !== 'object') throw new TypeError('Runtime invocation request must be an object.');
     if (typeof request.surfaceId !== 'string' || request.surfaceId.length === 0) {
@@ -854,7 +936,7 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
     if (request.expectedGenerationId !== undefined && (typeof request.expectedGenerationId !== 'string' || request.expectedGenerationId.length === 0)) {
       throw new TypeError('Runtime invocation expectedGenerationId must be nonempty when provided.');
     }
-    const surface = this.#surfaces.get(request.surfaceId);
+    const surface = historicalSurface ?? this.#surfaces.get(request.surfaceId);
     if (surface === undefined) throw new Error(`Runtime surface ${JSON.stringify(request.surfaceId)} does not exist.`);
     if (!surface.targets.includes(request.target)) {
       throw new Error(`Runtime surface ${JSON.stringify(request.surfaceId)} does not support target ${JSON.stringify(request.target)}.`);
@@ -919,6 +1001,40 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
     return Object.freeze({ stateFile: this.#stateFile, stateStoreId, type: 'mcp/runtime-status' });
   }
 
+  async #historicalSurface(
+    generation: RuntimeGeneration<RscRuntimeGenerationMetadata>,
+    surfaceId: string,
+  ): Promise<DevRuntimeSurface> {
+    const definitionPath = join(generation.root, 'rsc', 'runtime-definition.json');
+    const asset = generation.manifest.assets.find((candidate) => candidate.path === 'rsc/runtime-definition.json');
+    if (asset === undefined || !isInside(generation.root, definitionPath)) throw new Error('Historical runtime generation has no definition asset.');
+    const details = await lstat(definitionPath);
+    if (!details.isFile() || details.isSymbolicLink() || details.size !== asset.bytes) throw new Error('Historical runtime definition is unsafe.');
+    const bytes = await readFile(definitionPath);
+    if (createHash('sha256').update(bytes).digest('hex') !== asset.sha256) throw new Error('Historical runtime definition changed.');
+    const definition = JSON.parse(bytes.toString('utf8')) as Partial<SerializedRuntimeDefinition>;
+    const targets = Object.freeze([...new Set(generation.manifest.metadata.servers.map((server) => server.target))]);
+    if (surfaceId.startsWith('hook.')) {
+      const host = surfaceId.slice('hook.'.length);
+      if ((host !== 'claude' && host !== 'codex') || !definition.nativeHooks?.some((hook) => hook.host === host)) {
+        throw new Error(`Historical runtime surface ${JSON.stringify(surfaceId)} does not exist.`);
+      }
+      return Object.freeze({ fixtures: Object.freeze([]), id: surfaceId, kind: 'hook', label: `After tool hook (${host})`, readOnly: false, targets: Object.freeze([host]) });
+    }
+    const name = surfaceId.startsWith('mcp.') ? surfaceId.slice('mcp.'.length) : '';
+    if (definition.tools?.some((tool) => tool.name === name)) {
+      return Object.freeze({ fixtures: Object.freeze([]), id: surfaceId, kind: 'mcp-tool', label: name, readOnly: true, targets });
+    }
+    if (definition.resources?.some((resource) => resource.name === name)) {
+      return Object.freeze({ fixtures: Object.freeze([]), id: surfaceId, kind: 'mcp-resource', label: name, readOnly: true, targets });
+    }
+    const app = generation.manifest.metadata.appDefinitions.find((candidate) => candidate.name === name);
+    if (app !== undefined) {
+      return Object.freeze({ fixtures: Object.freeze([]), id: surfaceId, kind: 'mcp-app', label: name, readOnly: true, targets: app.targets });
+    }
+    throw new Error(`Historical runtime surface ${JSON.stringify(surfaceId)} does not exist.`);
+  }
+
   async #readTerminalStateVersion(fallback: number): Promise<number> {
     try {
       return (await this.#stateKernel.readSnapshot()).stateVersion;
@@ -941,6 +1057,7 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
       this.#terminalRuns.delete(oldestId);
       const reads = this.#runReadTasks.get(oldestId);
       if (reads !== undefined) await Promise.allSettled([...reads]);
+      await this.#releaseRunArtifact(oldestId);
       await this.#removeRunDirectory(oldestId);
     }
   }
@@ -960,6 +1077,56 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
       throw new Error('RSC runtime run directory is not a contained non-symbolic directory.');
     }
     await rm(directory, { force: true, recursive: true });
+  }
+
+  async #openRunArtifact(runId: string): Promise<RunArtifact> {
+    await this.#assertCurrentOwnedRunsRoot();
+    const directory = join(this.#runRoot, runId);
+    if (!safeSegment(runId) || !isInside(this.#runRoot, directory)) throw new Error('RSC runtime run directory escaped its provider storage root.');
+    const details = await lstat(directory);
+    if (!details.isDirectory() || details.isSymbolicLink()) throw new Error('RSC runtime run directory is unsafe.');
+    const directoryHandle = await open(directory, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+    try {
+      const openedDirectory = await directoryHandle.stat();
+      if (!openedDirectory.isDirectory() || openedDirectory.dev !== details.dev || openedDirectory.ino !== details.ino) {
+        throw new Error('RSC runtime run directory changed while opening its Flight artifact.');
+      }
+      const flightPath = process.platform === 'linux'
+        ? `/proc/self/fd/${String(directoryHandle.fd)}/flight.bin`
+        : join(directory, 'flight.bin');
+      const file = await open(flightPath, constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW | constants.O_RDWR, 0o600);
+      const artifact: RunArtifact = { file, runId };
+      this.#runArtifacts.set(runId, artifact);
+      return artifact;
+    } finally {
+      await directoryHandle.close();
+    }
+  }
+
+  async #writeRunFlight(artifact: RunArtifact, flight: Buffer): Promise<void> {
+    if (flight.byteLength > maximumInvocationFlightBytes) throw new Error(`RSC invocation Flight exceeded ${maximumInvocationFlightBytes} bytes.`);
+    let offset = 0;
+    while (offset < flight.byteLength) {
+      const written = await artifact.file.write(flight, offset, flight.byteLength - offset, offset);
+      if (written.bytesWritten === 0) throw new Error('RSC runtime Flight artifact could not be written.');
+      offset += written.bytesWritten;
+    }
+    await artifact.file.sync();
+    const details = await artifact.file.stat();
+    if (!details.isFile() || details.size !== flight.byteLength || details.size > maximumInvocationFlightBytes) {
+      throw new Error('RSC runtime Flight artifact has an invalid identity.');
+    }
+    artifact.dev = details.dev;
+    artifact.digest = createHash('sha256').update(flight).digest('hex');
+    artifact.ino = details.ino;
+    artifact.size = details.size;
+  }
+
+  async #releaseRunArtifact(runId: string): Promise<void> {
+    const artifact = this.#runArtifacts.get(runId);
+    if (artifact === undefined) return;
+    this.#runArtifacts.delete(runId);
+    await artifact.file.close();
   }
 
   #inspectionResult(
@@ -983,7 +1150,7 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
     });
   }
 
-  #validateWorkerResponse(value: unknown, flightBytes: number): DevRuntimeInspectionEnvelope {
+  #validateWorkerResponse(value: unknown, flightBytes: number, surfaceId: string): DevRuntimeInspectionEnvelope {
     const response = plainRecord(value, 'RSC invocation worker emitted an invalid response.');
     assertExactKeys(response, ['flightBytes', 'inspection'], 'RSC invocation worker response has unsupported fields.');
     if (
@@ -993,28 +1160,28 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
       throw new Error('RSC invocation worker Flight framing is invalid.');
     }
     const inspection = plainRecord(response.inspection, 'RSC invocation worker inspection is invalid.');
-    const allowed = new Set(['agentVisible', 'app', 'flight', 'modelVisible', 'native', 'protocol', 'state', 'trace', 'tree']);
-    if (Object.keys(inspection).some((key) => !allowed.has(key))) {
-      throw new Error('RSC invocation worker inspection has unsupported fields.');
-    }
+    const hook = surfaceId === 'hook.claude' || surfaceId === 'hook.codex';
+    if ('app' in inspection) validateAppBinding(inspection.app);
+    optionalExactKeys(
+      inspection,
+      hook ? ['agentVisible', 'flight', 'native', 'state', 'trace', 'tree'] : ['flight', 'modelVisible', 'protocol', 'state', 'trace', 'tree'],
+      hook ? [] : [],
+      'RSC invocation worker inspection has unsupported fields.',
+    );
     const flight = plainRecord(inspection.flight, 'RSC invocation worker inspection is missing Flight metadata.');
     assertExactKeys(flight, ['bytes', 'preview', 'truncated'], 'RSC invocation worker Flight metadata is invalid.');
     if (flight.bytes !== flightBytes || typeof flight.preview !== 'string' || typeof flight.truncated !== 'boolean') {
       throw new Error('RSC invocation worker Flight metadata does not match its raw Flight stream.');
     }
     const state = plainRecord(inspection.state, 'RSC invocation worker inspection is missing state metadata.');
-    const stateKeys = Object.keys(state).sort();
-    if (stateKeys.length < 1 || stateKeys.length > 2 || stateKeys[0] !== 'identity' || (stateKeys.length === 2 && stateKeys[1] !== 'snapshot')) {
-      throw new Error('RSC invocation worker state metadata is invalid.');
-    }
+    optionalExactKeys(state, ['identity'], ['snapshot'], 'RSC invocation worker state metadata is invalid.');
     const identity = plainRecord(state.identity, 'RSC invocation worker state identity is invalid.');
     assertExactKeys(identity, ['stateStoreId', 'stateVersion'], 'RSC invocation worker state identity is invalid.');
     if (identity.stateStoreId !== stateStoreId || !Number.isSafeInteger(identity.stateVersion) || (identity.stateVersion as number) < 0) {
       throw new Error('RSC invocation worker state identity is invalid.');
     }
-    if (!Array.isArray(inspection.trace) || !Array.isArray(inspection.tree)) {
-      throw new Error('RSC invocation worker inspection is missing trace or tree output.');
-    }
+    validateTrace(inspection.trace);
+    validateTree(inspection.tree);
     assertCredentialSafeJson(inspection);
     return deepFreeze(inspection as unknown as DevRuntimeInspectionEnvelope);
   }
@@ -1023,7 +1190,9 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
     readonly generation: RuntimeGeneration<RscRuntimeGenerationMetadata>;
     readonly input: JsonObject;
     readonly runId: string;
+    readonly surfaceId: string;
   }>): Promise<Readonly<{ readonly flight: Buffer; readonly inspection: DevRuntimeInspectionEnvelope }>> {
+    this.#assertInvocationOpen();
     const entry = join(input.generation.root, 'rsc', 'dev', 'invoke.js');
     if (!isInside(input.generation.root, entry)) return Promise.reject(new Error('RSC invocation entry escaped its generation root.'));
     const child = spawn(process.execPath, [entry], {
@@ -1083,6 +1252,8 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
         await signalGroup('SIGKILL');
       })();
     };
+    const abort = (): void => terminate(new DevRuntimeUnavailableError('RSC runtime session is closed.'));
+    this.#invocationAbort.signal.addEventListener('abort', abort, { once: true });
 
     const response = new Promise<Readonly<{ readonly flight: Buffer; readonly inspection: DevRuntimeInspectionEnvelope }>>((resolveResponse, rejectResponse) => {
       const finish = async (callback: () => void): Promise<void> => {
@@ -1144,7 +1315,7 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
           if (!output.endsWith('\n') || output.indexOf('\n') !== output.length - 1) {
             throw new Error('RSC invocation worker did not emit exactly one JSON response line.');
           }
-          const parsed = this.#validateWorkerResponse(JSON.parse(output), flightBytes);
+          const parsed = this.#validateWorkerResponse(JSON.parse(output), flightBytes, input.surfaceId);
           void finish(() => resolveResponse(Object.freeze({
             flight: Buffer.concat(flightChunks),
             inspection: parsed,
@@ -1169,6 +1340,7 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
     this.#workers.set(input.runId, worker);
     void worker.done.finally(() => {
       if (this.#workers.get(input.runId) === worker) this.#workers.delete(input.runId);
+      this.#invocationAbort.signal.removeEventListener('abort', abort);
     });
     return response;
   }
@@ -1449,6 +1621,7 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
       await Promise.allSettled([...this.#runReadTasks.values()].flatMap((reads) => [...reads]));
     }
     await this.#evictionTail;
+    await Promise.all([...this.#runArtifacts.keys()].map((runId) => this.#releaseRunArtifact(runId)));
     await RsbuildRuntimeSession.#removeOwnedRunsRoot(this.#ownedRunsRoot);
     await Promise.all([this.#providerTail.catch(() => undefined), this.#failureTail]);
     const results = await Promise.allSettled([
