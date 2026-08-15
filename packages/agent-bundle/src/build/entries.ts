@@ -6,12 +6,15 @@ import type { NormalizedMcpServer, NormalizedScript } from '../core/types.ts';
 import { stableJson } from '../core/digest.ts';
 import { emitPlanEntries, resolveArtifactDestination } from './emit.ts';
 import type { CompiledMcpApp } from './mcp-apps.ts';
+import type { ArtifactOutputKind } from './provenance.ts';
 import { buildWithRslib } from './rslib.ts';
 
 export interface CompiledEntry {
   readonly name: string;
   readonly output: string;
+  readonly outputKind: ArtifactOutputKind;
   readonly source: string;
+  readonly sourceInputs: readonly string[];
 }
 
 interface PlannedScriptEntry extends CompiledEntry {
@@ -52,7 +55,9 @@ export const planCompiledEntries = (
         resolve(options.outDir, 'scripts'),
         filename,
       ),
+      outputKind: script.mode === 'copy' ? 'copy' as const : 'bundle' as const,
       source: script.source,
+      sourceInputs: Object.freeze([script.provenance.sourcePath, script.source]),
     };
   }).map((entry) => Object.freeze(entry)));
 };
@@ -63,12 +68,13 @@ export const compileEntries = async (
 ): Promise<readonly CompiledEntry[]> => {
   const compiled = planCompiledEntries(entries, options);
   const bundled = compiled.filter((entry) => entry.mode === 'bundle');
-  await buildWithRslib({
+  const evidence = await buildWithRslib({
     cwd: options.cwd,
-    entries: bundled.map(({ name, source }) => ({
+    entries: bundled.map(({ name, source, sourceInputs }) => ({
       name,
       outputRelativePath: `scripts/${name}.mjs`,
       source,
+      sourceInputs,
     })),
     outputRoot: options.outDir,
   });
@@ -80,11 +86,18 @@ export const compileEntries = async (
         kind: 'copy' as const,
         relativePath: relative(options.outDir, entry.output).replaceAll('\\', '/'),
         source: entry.source,
+        sourceInputs: entry.sourceInputs,
       }))),
     root: options.outDir,
   });
 
-  return compiled;
+  const evidenceByPath = new Map(evidence.map((entry) => [entry.path, entry.sourceInputs]));
+  return Object.freeze(compiled.map((entry) => Object.freeze({
+    ...entry,
+    sourceInputs: entry.mode === 'bundle'
+      ? evidenceByPath.get(`scripts/${entry.name}.mjs`) ?? (() => { throw new Error(`Missing bundled script evidence for ${JSON.stringify(entry.name)}.`); })()
+      : entry.sourceInputs,
+  })));
 };
 
 const localMcpOutputName = (server: NormalizedMcpServer): string => {
@@ -116,7 +129,9 @@ export const planCompiledMcpEntries = (
         id: server.id,
         name,
         output: resolveArtifactDestination(resolve(options.outDir, 'mcp'), outputName),
+        outputKind: 'bundle',
         source: server.source!,
+        sourceInputs: Object.freeze([server.provenance.sourcePath, server.source!]),
         target: options.target,
       });
     }));
@@ -149,12 +164,18 @@ export const compileMcpEntries = async (
       '',
     ].join('\n');
   }));
-  await buildWithRslib({
+  const evidence = await buildWithRslib({
     cwd: options.cwd,
-    entries: compiled.map(({ name, source }, index) => ({
+    entries: compiled.map(({ id, name, source, sourceInputs }, index) => ({
       name,
       outputRelativePath: `mcp/${name}.mjs`,
       source,
+      sourceInputs: Object.freeze([
+        ...sourceInputs,
+        ...(options.apps ?? [])
+          .filter((app) => app.serverId === id)
+          .flatMap((app) => app.sourceInputs),
+      ]),
       virtualModules: [{
         name: 'agent-bundle/mcp-apps',
         source: virtualSources[index]!,
@@ -162,7 +183,11 @@ export const compileMcpEntries = async (
     })),
     outputRoot: options.outDir,
   });
-  return compiled;
+  const evidenceByPath = new Map(evidence.map((entry) => [entry.path, entry.sourceInputs]));
+  return Object.freeze(compiled.map((entry) => Object.freeze({
+    ...entry,
+    sourceInputs: evidenceByPath.get(`mcp/${entry.name}.mjs`) ?? (() => { throw new Error(`Missing bundled MCP evidence for ${JSON.stringify(entry.name)}.`); })(),
+  })));
 };
 
 const wrapperSource = (entry: TargetHookEntry): string => {
@@ -304,7 +329,9 @@ export const planCompiledHooks = (
   id: entry.hook.id,
   name: entry.hook.name,
   output: resolveArtifactDestination(options.outDir, entry.relativePath),
+  outputKind: 'bundle',
   source: entry.hook.source,
+  sourceInputs: Object.freeze([entry.hook.provenance.sourcePath, entry.hook.source]),
   target: entry.target,
   ...(entry.hook.timeout === undefined ? {} : { timeout: entry.hook.timeout }),
 })));
@@ -314,15 +341,20 @@ export const compileHooks = async (
   options: { readonly cwd: string; readonly outDir: string },
 ): Promise<readonly CompiledHookEntry[]> => {
   const compiled = planCompiledHooks(entries, options);
-  await buildWithRslib({
+  const evidence = await buildWithRslib({
     cwd: options.cwd,
     entries: compiled.map((entry) => ({
       name: entry.name,
       outputRelativePath: `hooks/${entry.name}.mjs`,
       source: entry.source,
+      sourceInputs: entry.sourceInputs,
       virtualSource: wrapperSource(entries.find((candidate) => candidate.hook.id === entry.id)!),
     })),
     outputRoot: options.outDir,
   });
-  return compiled;
+  const evidenceByPath = new Map(evidence.map((entry) => [entry.path, entry.sourceInputs]));
+  return Object.freeze(compiled.map((entry) => Object.freeze({
+    ...entry,
+    sourceInputs: evidenceByPath.get(`hooks/${entry.name}.mjs`) ?? (() => { throw new Error(`Missing bundled hook evidence for ${JSON.stringify(entry.name)}.`); })(),
+  })));
 };

@@ -5,7 +5,13 @@ import type { AgentBundleConfig as CoreAgentBundleConfig } from './core/types.ts
 
 export { defineConfig, pathTokens } from './core/types.ts';
 export { startDevServer } from './api.ts';
-export type { DevServerSession, StartDevServerOptions } from './api.ts';
+export type {
+  ArtifactOutputKind,
+  ArtifactOutputProvenance,
+  BuildResult,
+  DevServerSession,
+  StartDevServerOptions,
+} from './api.ts';
 
 export type AgentBundleConfig = CoreAgentBundleConfig
   & ClaudeConfigExtension

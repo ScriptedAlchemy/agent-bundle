@@ -5,6 +5,8 @@ import { join, resolve } from 'node:path';
 import { createDefaultRegistry } from './adapters/registry.ts';
 import type { TargetArtifactEntry, TargetHookEntry } from './adapters/types.ts';
 import { build as buildArtifact, type BuildResult } from './build/build.ts';
+export type { BuildResult } from './build/build.ts';
+export type { ArtifactOutputKind, ArtifactOutputProvenance } from './build/provenance.ts';
 import { validateArtifact } from './build/validate-artifact.ts';
 import { DiagnosticError, type Diagnostic } from './core/diagnostics.ts';
 import type { NormalizedPlugin } from './core/types.ts';

@@ -197,7 +197,7 @@ it('plans byte-stable native Codex and Claude plugin trees from the same frozen 
     'skills/review/assets/icon.bin',
     'skills/review/references/guide.md',
   ]);
-  expect(codex).toEqual([
+  expect(codex).toMatchObject([
     {
       content: '{"interface":{"displayName":"review-tools"},"name":"review-tools-marketplace","plugins":[{"category":"Productivity","name":"review-tools","policy":{"authentication":"ON_INSTALL","installation":"AVAILABLE"},"source":{"path":"./","source":"local"}}]}\n',
       kind: 'write',
@@ -217,7 +217,7 @@ it('plans byte-stable native Codex and Claude plugin trees from the same frozen 
     { bytes: 3, kind: 'copy', relativePath: 'skills/review/assets/icon.bin', source: '/workspace/skills/review/assets/icon.bin' },
     { bytes: 8, kind: 'copy', relativePath: 'skills/review/references/guide.md', source: '/workspace/skills/review/references/guide.md' },
   ]);
-  expect(claude).toEqual([
+  expect(claude).toMatchObject([
     {
       content: '{"description":"Review code and explain findings.","name":"review-tools-marketplace","owner":{"name":"review-tools"},"plugins":[{"description":"Review code and explain findings.","name":"review-tools","source":"./","version":"1.2.3"}]}\n',
       kind: 'write',
@@ -236,6 +236,22 @@ it('plans byte-stable native Codex and Claude plugin trees from the same frozen 
     { bytes: 9, kind: 'copy', relativePath: 'skills/review/SKILL.md', source: '/workspace/skills/review/SKILL.md' },
     { bytes: 3, kind: 'copy', relativePath: 'skills/review/assets/icon.bin', source: '/workspace/skills/review/assets/icon.bin' },
     { bytes: 8, kind: 'copy', relativePath: 'skills/review/references/guide.md', source: '/workspace/skills/review/references/guide.md' },
+  ]);
+  expect(codex.map((entry) => entry.sourceInputs)).toEqual([
+    ['/workspace/agent-bundle.config.ts'],
+    ['/workspace/agent-bundle.config.ts'],
+    ['/workspace/agent-bundle.config.ts'],
+    ['/workspace/skills/review/SKILL.md'],
+    ['/workspace/skills/review/SKILL.md', '/workspace/skills/review/assets/icon.bin'],
+    ['/workspace/skills/review/SKILL.md', '/workspace/skills/review/references/guide.md'],
+  ]);
+  expect(claude.map((entry) => entry.sourceInputs)).toEqual([
+    ['/workspace/agent-bundle.config.ts'],
+    ['/workspace/agent-bundle.config.ts'],
+    ['/workspace/agent-bundle.config.ts'],
+    ['/workspace/skills/review/SKILL.md'],
+    ['/workspace/skills/review/SKILL.md', '/workspace/skills/review/assets/icon.bin'],
+    ['/workspace/skills/review/SKILL.md', '/workspace/skills/review/references/guide.md'],
   ]);
   await validateDocuments('codex', writeContents(plugin, 'codex'));
   await validateDocuments('claude', writeContents(plugin, 'claude'));
@@ -328,6 +344,7 @@ it('applies only native path-token semantics and surfaces exact capability diagn
     content: '{"mcpServers":{"workspace":{"args":["${CLAUDE_PROJECT_DIR}/tool"],"command":"${CLAUDE_PLUGIN_ROOT}","cwd":"${CLAUDE_PLUGIN_DATA}","env":{"WORKSPACE":"${CLAUDE_PROJECT_DIR}"},"type":"stdio"}}}\n',
     kind: 'write',
     relativePath: '.mcp.json',
+    sourceInputs: ['/workspace/agent-bundle.config.ts'],
   });
 });
 
@@ -408,6 +425,7 @@ it('rejects Claude path tokens in environment keys while expanding values in a v
     content: '{"mcpServers":{"valid-env":{"command":"node","env":{"DATA":"${CLAUDE_PLUGIN_DATA}","ROOT":"${CLAUDE_PLUGIN_ROOT}","WORKSPACE":"${CLAUDE_PROJECT_DIR}"},"type":"stdio"}}}\n',
     kind: 'write',
     relativePath: '.mcp.json',
+    sourceInputs: ['/workspace/agent-bundle.config.ts'],
   });
 });
 
@@ -453,9 +471,14 @@ it('filters host components and builds portable, Codex, and Claude target roots'
   const model: NormalizedPlugin = {
     ...plugin,
     hooks: [],
+    metadata: {
+      ...plugin.metadata,
+      provenance: { kind: 'config', sourcePath: join(root, 'agent-bundle.config.ts') },
+    },
     skills: [{
       ...plugin.skills[0]!,
       dir: skillRoot,
+      provenance: { kind: 'conventional', sourcePath: join(skillRoot, 'SKILL.md') },
       resources: [
         { bytes: 9, relativePath: 'SKILL.md', source: join(skillRoot, 'SKILL.md') },
         { bytes: 8, relativePath: 'references/guide.md', source: join(skillRoot, 'references', 'guide.md') },

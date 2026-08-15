@@ -20,13 +20,20 @@ import {
 import { compileMcpApps, planCompiledMcpApps, type CompiledMcpApp } from './mcp-apps.ts';
 import {
   assertUniqueArtifactDestinations,
+  artifactHookIndexName,
   emitPlanEntries,
+  listArtifactFiles,
   publishArtifact,
   resolveArtifactDestination,
   writeHookIndex,
   writeManifest,
   type ArtifactManifest,
 } from './emit.ts';
+import {
+  createOutputProvenance,
+  type ArtifactOutputCandidate,
+  type ArtifactOutputProvenance,
+} from './provenance.ts';
 import { validateArtifact } from './validate-artifact.ts';
 
 export interface BuildResult {
@@ -35,6 +42,7 @@ export interface BuildResult {
   readonly compiledMcpApps: readonly CompiledMcpApp[];
   readonly compiledMcpEntries: readonly CompiledMcpEntry[];
   readonly manifest: ArtifactManifest;
+  readonly outputProvenance: readonly ArtifactOutputProvenance[];
   readonly outputRoot: string;
 }
 
@@ -109,6 +117,73 @@ const plannedDestinations = (targets: readonly StagedTarget[]): readonly string[
     ...target.compiledMcpEntries.map((entry) => entry.output),
   ]);
 
+const hookIndexSourceInputs = (
+  model: NormalizedPlugin,
+  compiledHooks: readonly CompiledHookEntry[],
+): readonly string[] => {
+  const hookIds = new Set(compiledHooks.map((hook) => hook.id));
+  const inputs = model.hooks
+    .filter((hook) => hookIds.has(hook.id))
+    .map((hook) => hook.provenance.sourcePath);
+  return inputs.length === 0 ? [model.metadata.provenance.sourcePath] : inputs;
+};
+
+const outputCandidatesFor = (options: {
+  readonly artifactRoot: string;
+  readonly compiledEntries: readonly CompiledEntry[];
+  readonly compiledHooks: readonly CompiledHookEntry[];
+  readonly compiledMcpApps: readonly CompiledMcpApp[];
+  readonly compiledMcpEntries: readonly CompiledMcpEntry[];
+  readonly model: NormalizedPlugin;
+  readonly targets: readonly StagedTarget[];
+}): readonly ArtifactOutputCandidate[] => [
+  ...options.targets.flatMap((target) => target.entries.map((entry) => ({
+    kind: entry.kind === 'copy' ? 'copy' as const : 'generated' as const,
+    path: resolveArtifactDestination(target.root, entry.relativePath),
+    sourceInputs: entry.sourceInputs,
+  }))),
+  ...options.compiledEntries.map((entry) => ({
+    kind: entry.outputKind,
+    path: entry.output,
+    sourceInputs: entry.sourceInputs,
+  })),
+  ...options.compiledHooks.map((entry) => ({
+    kind: 'bundle' as const,
+    path: entry.output,
+    sourceInputs: entry.sourceInputs,
+  })),
+  ...options.compiledMcpApps.map((entry) => ({
+    kind: 'bundle' as const,
+    path: entry.output,
+    sourceInputs: entry.sourceInputs,
+  })),
+  ...options.compiledMcpEntries.map((entry) => ({
+    kind: 'bundle' as const,
+    path: entry.output,
+    sourceInputs: entry.sourceInputs,
+  })),
+  {
+    kind: 'generated' as const,
+    path: resolveArtifactDestination(options.artifactRoot, artifactHookIndexName),
+    sourceInputs: hookIndexSourceInputs(options.model, options.compiledHooks),
+  },
+];
+
+const assertCompleteOutputProvenance = async (options: {
+  readonly artifactRoot: string;
+  readonly outputProvenance: readonly ArtifactOutputProvenance[];
+}): Promise<void> => {
+  const files = await listArtifactFiles(options.artifactRoot);
+  const filePaths = new Set(files.map((file) => file.path));
+  const provenancePaths = options.outputProvenance.map((record) => record.path);
+  const provenancePathSet = new Set(provenancePaths);
+  const missing = files.filter((file) => !provenancePathSet.has(file.path)).map((file) => file.path);
+  const extra = provenancePaths.filter((path) => !filePaths.has(path));
+  if (missing.length > 0 || extra.length > 0 || provenancePathSet.size !== provenancePaths.length) {
+    throw new Error('Output provenance must contain exactly one record for every pre-manifest artifact file.');
+  }
+};
+
 export const build = async (options: BuildOptions): Promise<BuildResult> => {
   const planned = planTargets(options);
   const outputRoot = resolve(options.outputRoot);
@@ -175,6 +250,20 @@ export const build = async (options: BuildOptions): Promise<BuildResult> => {
         ...(entry.timeout === undefined ? {} : { timeout: entry.timeout }),
       })),
     });
+    const outputProvenance = createOutputProvenance({
+      artifactRoot: stageRoot,
+      outputs: outputCandidatesFor({
+        artifactRoot: stageRoot,
+        compiledEntries,
+        compiledHooks,
+        compiledMcpApps,
+        compiledMcpEntries,
+        model: options.model,
+        targets: stagedTargets,
+      }),
+      projectRoot: options.projectRoot,
+    });
+    await assertCompleteOutputProvenance({ artifactRoot: stageRoot, outputProvenance });
     const manifest = await writeManifest({
       artifactRoot: stageRoot,
       targets: stagedTargets.map((target) => target.name),
@@ -199,6 +288,7 @@ export const build = async (options: BuildOptions): Promise<BuildResult> => {
         output: assertInside(outputRoot, resolve(outputRoot, relative(stageRoot, entry.output))),
       }))),
       manifest,
+      outputProvenance,
       outputRoot,
     });
   } finally {

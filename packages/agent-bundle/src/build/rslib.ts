@@ -3,6 +3,8 @@ import { rspack } from '@rspack/core';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { collectBundledOutputEvidence, type BundledOutputEvidence } from './provenance.ts';
+
 export interface RslibVirtualModule {
   readonly name: string;
   readonly source: string;
@@ -12,6 +14,7 @@ export interface RslibEntry {
   readonly name: string;
   readonly outputRelativePath: string;
   readonly source: string;
+  readonly sourceInputs: readonly string[];
   readonly virtualModules?: readonly RslibVirtualModule[];
   readonly virtualSource?: string;
 }
@@ -55,9 +58,9 @@ export const buildWithRslib = async (options: {
   readonly cwd: string;
   readonly entries: readonly RslibEntry[];
   readonly outputRoot: string;
-}, dependencies: RslibDependencies = {}): Promise<void> => {
+}, dependencies: RslibDependencies = {}): Promise<readonly BundledOutputEvidence[]> => {
   if (options.entries.length === 0) {
-    return;
+    return Object.freeze([]);
   }
 
   const rslib = await (dependencies.createRslib ?? createRslib)({
@@ -119,6 +122,15 @@ export const buildWithRslib = async (options: {
   let result: Awaited<ReturnType<typeof rslib.build>> | undefined;
   try {
     result = await rslib.build();
+    return collectBundledOutputEvidence({
+      expectedAssets: options.entries.map((entry) => ({
+        path: entry.outputRelativePath,
+        sourceInputs: entry.sourceInputs,
+      })),
+      ignoredSourcePaths: [entryAnchor, resolve(options.outputRoot, '.agent-bundle-virtual')],
+      projectRoot: options.cwd,
+      stats: result.stats,
+    });
   } finally {
     await result?.close();
   }

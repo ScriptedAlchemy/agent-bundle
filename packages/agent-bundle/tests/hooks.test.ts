@@ -53,7 +53,15 @@ const runNativeHook = async (wrapper: string, input: Record<string, unknown>): P
 
 it('closes the Rslib build result after building a virtual hook entry', async () => {
   const close = rs.fn(async () => undefined);
-  const buildResult = { close };
+  const buildResult = {
+    close,
+    stats: {
+      toJson: () => ({
+        assets: [{ name: 'hooks/close-probe.mjs' }],
+        modules: [],
+      }),
+    },
+  };
   const rslib = {
     build: async () => buildResult,
     inspectConfig: async () => ({
@@ -69,9 +77,43 @@ it('closes the Rslib build result after building a virtual hook entry', async ()
 
   await buildWithRslib({
     cwd: '/tmp',
-    entries: [{ name: 'close-probe', outputRelativePath: 'hooks/close-probe.mjs', source: '/tmp/hook.ts', virtualSource: 'export default undefined;' }],
+    entries: [{
+      name: 'close-probe',
+      outputRelativePath: 'hooks/close-probe.mjs',
+      source: '/tmp/hook.ts',
+      sourceInputs: ['/tmp/hook.ts'],
+      virtualSource: 'export default undefined;',
+    }],
     outputRoot: '/tmp/agent-bundle-rslib-close-output',
   }, { createRslib: async () => rslib as never });
+
+  expect(close).toHaveBeenCalledOnce();
+});
+
+it('closes the Rslib build result when provenance stats are unavailable', async () => {
+  const close = rs.fn(async () => undefined);
+  const rslib = {
+    build: async () => ({ close }),
+    inspectConfig: async () => ({
+      origin: {
+        bundlerConfigs: [{
+          output: { asyncChunks: false, path: '/tmp/agent-bundle-rslib-close-error-output' },
+          target: 'node',
+        }],
+      },
+    }),
+  };
+
+  await expect(buildWithRslib({
+    cwd: '/tmp',
+    entries: [{
+      name: 'close-error-probe',
+      outputRelativePath: 'hooks/close-error-probe.mjs',
+      source: '/tmp/hook.ts',
+      sourceInputs: ['/tmp/hook.ts'],
+    }],
+    outputRoot: '/tmp/agent-bundle-rslib-close-error-output',
+  }, { createRslib: async () => rslib as never })).rejects.toThrow(/stats/i);
 
   expect(close).toHaveBeenCalledOnce();
 });
