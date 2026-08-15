@@ -558,10 +558,49 @@ it('keeps a graceful close routable until its resource-teardown acknowledgment r
   await service.receive(binding.id, initialized);
   await service.takeOutbound(binding.id);
 
-  expect(await service.close(binding.id, { id: 'teardown-weather' })).toBe(true);
+  expect(await service.close(binding.id, { id: 'teardown-weather' })).toMatchObject({
+    id: 'teardown-weather',
+    method: 'ui/resource-teardown',
+  });
   expect(service.get(binding.id)).toBe(preview);
   expect(await service.takeOutbound(binding.id)).toEqual([]);
   expect(await service.receive(binding.id, { id: 'teardown-weather', jsonrpc: '2.0', result: {} })).toBe(true);
+  await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+  expect(closes).toBe(1);
+  expect(service.get(binding.id)).toBeUndefined();
+});
+
+it('reserves one route-owned teardown frame when ordinary outbound traffic has filled its queue', async () => {
+  let closes = 0;
+  const service = serviceFor(authorityFor({
+    closeBinding: async () => {
+      closes += 1;
+      return true;
+    },
+  }), { maxOutboundMessages: 1 });
+  const preview = await createPreview(service);
+  await service.receive(binding.id, initialize);
+  await service.takeOutbound(binding.id);
+  await service.receive(binding.id, initialized);
+  await service.takeOutbound(binding.id);
+  await service.takeOutbound(binding.id);
+  await service.receive(binding.id, { id: 'queued-ping', jsonrpc: '2.0', method: 'ping' });
+
+  const teardown = await service.close(binding.id, { id: 'teardown-reserved' });
+
+  expect(teardown).toMatchObject({
+    id: 'teardown-reserved',
+    jsonrpc: '2.0',
+    method: 'ui/resource-teardown',
+  });
+  expect(service.get(binding.id)).toBe(preview);
+  expect(await service.takeOutbound(binding.id)).toEqual([{
+    id: 'queued-ping',
+    jsonrpc: '2.0',
+    result: {},
+  }]);
+  expect(await service.receive(binding.id, { id: 'teardown-reserved', jsonrpc: '2.0', result: {} })).toBe(true);
   await new Promise<void>((resolve) => setTimeout(resolve, 0));
 
   expect(closes).toBe(1);
@@ -582,7 +621,10 @@ it('keeps a timed out graceful close retryable for an authoritative force close'
   await service.receive(binding.id, initialized);
   await service.takeOutbound(binding.id);
 
-  expect(await service.close(binding.id, { id: 'teardown-timeout' })).toBe(true);
+  expect(await service.close(binding.id, { id: 'teardown-timeout' })).toMatchObject({
+    id: 'teardown-timeout',
+    method: 'ui/resource-teardown',
+  });
   await new Promise<void>((resolve) => setTimeout(resolve, 40));
 
   expect(service.get(binding.id)).toBe(preview);
@@ -605,7 +647,10 @@ it('keeps a rejected graceful release retryable for an authoritative force close
   await service.receive(binding.id, initialized);
   await service.takeOutbound(binding.id);
 
-  expect(await service.close(binding.id, { id: 'teardown-release-failure' })).toBe(true);
+  expect(await service.close(binding.id, { id: 'teardown-release-failure' })).toMatchObject({
+    id: 'teardown-release-failure',
+    method: 'ui/resource-teardown',
+  });
   expect(await service.receive(binding.id, { id: 'teardown-release-failure', jsonrpc: '2.0', result: {} })).toBe(true);
   await new Promise<void>((resolve) => setTimeout(resolve, 0));
 
