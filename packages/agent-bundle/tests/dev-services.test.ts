@@ -1,10 +1,11 @@
 import { createHash } from 'node:crypto';
 import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, win32 } from 'node:path';
 
 import { expect, it } from '@rstest/core';
 
+import { containedPathComponents } from '../src/dev/project-service.ts';
 import { validate } from '../src/api.ts';
 import { digest } from '../src/core/digest.ts';
 import {
@@ -14,6 +15,21 @@ import {
   snapshotProjectSource,
   type RslintEngine,
 } from '../src/dev/index.ts';
+
+it('rejects an absolute Windows path outside its project', () => {
+  expect(containedPathComponents('C:\\project', 'C:\\outside', win32)).toBeUndefined();
+});
+
+it('splits a nested Windows path inside its project', () => {
+  expect(containedPathComponents('C:\\project', 'C:\\project\\output\\artifact', win32)).toEqual([
+    'output',
+    'artifact',
+  ]);
+});
+
+it('rejects a Windows path on a different drive', () => {
+  expect(containedPathComponents('C:\\project', 'D:\\project\\artifact', win32)).toBeUndefined();
+});
 
 const createProject = async (skillMarkdown: string): Promise<string> => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-dev-service-'));
