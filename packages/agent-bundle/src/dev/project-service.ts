@@ -137,6 +137,9 @@ const physicalOutputRoot = async (
     } else {
       physical = candidate;
     }
+    if (physical === root) {
+      throw new RangeError('Configured output root must not be the project root.');
+    }
     if (!isWithinOutputRoot(physical, root)) {
       throw new RangeError(`Configured output root ${JSON.stringify(requestedOutputRoot)} is outside project root ${JSON.stringify(root)}.`);
     }
