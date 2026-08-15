@@ -105,6 +105,23 @@ it('snapshots target-native hook commands through the contract gateway', () => {
   expect(readTargetNativeHookCommands({ ...contract, readNativeCommands: () => null as never }, {})).toEqual({ status: 'invalid' });
 });
 
+it('rejects malformed custom native hook command results', () => {
+  const commands = [{ command: 'echo native' }];
+  Object.defineProperty(commands, Symbol('extra'), { value: true });
+  const contract = {
+    commandRoot: '${SYNTHETIC_PLUGIN_ROOT}',
+    ...playgroundCodec,
+    eventNames: { afterTool: 'After', beforeTool: 'Before', sessionStart: 'Start', stop: 'Stop' },
+    manifestPath: 'native-events/registration.json',
+    matchers: {},
+    readNativeCommands: () => ({ commands, status: 'found' as const }),
+    wrapperPath: (hook: NormalizedHook) => `hooks/${hook.name}.mjs`,
+    wrapperSource: () => 'export default undefined;\n',
+  } satisfies TargetHookContract;
+
+  expect(readTargetNativeHookCommands(contract, {})).toEqual({ status: 'invalid' });
+});
+
 it('builds adapter-owned native hook event, layout, and wrapper source', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-target-hook-contract-'));
   const outputRoot = join(root, 'dist');

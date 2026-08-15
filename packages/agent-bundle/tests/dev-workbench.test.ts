@@ -143,6 +143,12 @@ const appPreviewBody = () => ({
 });
 
 const workbenchSyntheticAdapter: TargetAdapter = Object.freeze({
+  artifactLayout: Object.freeze({
+    scripts: Object.freeze({
+      allowedSuffixes: Object.freeze(['.txt']),
+      directory: 'scripts',
+    }),
+  }),
   capabilities: Object.freeze({}),
   configExtension: Object.freeze({ key: 'workbenchSynthetic' }),
   metadata: Object.freeze({

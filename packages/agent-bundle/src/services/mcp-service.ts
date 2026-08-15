@@ -17,6 +17,7 @@ import { createDefaultRegistry, TargetRegistry } from '../adapters/registry.ts';
 import { validateArtifact } from '../build/validate-artifact.ts';
 import { DiagnosticError } from '../core/diagnostics.ts';
 import { assertInside } from '../core/paths.ts';
+import { parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
 import { resolveMcpPathTokens } from './mcp-path-tokens.ts';
 import { readTargetMcpServer, type ModernMcpServer, type TargetMcpRuntimeContract } from './mcp-runtime.ts';
 
@@ -294,7 +295,7 @@ export class McpService {
     return readFile(path, 'utf8').then((contents) => {
       let document: unknown;
       try {
-        document = JSON.parse(contents);
+        document = parseJsonWithoutDuplicateKeys(contents);
       } catch {
         throw new Error(`MCP manifest for target ${JSON.stringify(target)} is not valid JSON.`);
       }

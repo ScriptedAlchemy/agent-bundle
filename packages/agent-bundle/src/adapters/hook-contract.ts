@@ -42,6 +42,18 @@ const isPlainDataRecord = (value: unknown): value is Record<string, unknown> => 
   return Object.values(Object.getOwnPropertyDescriptors(value)).every((descriptor) => 'value' in descriptor);
 };
 
+const hasDataKeys = (
+  value: unknown,
+  required: readonly string[],
+  optional: readonly string[] = [],
+): value is Record<string, unknown> => {
+  if (!isPlainDataRecord(value)) return false;
+  const allowed = new Set([...required, ...optional]);
+  return Reflect.ownKeys(value).length >= required.length &&
+    Reflect.ownKeys(value).every((key) => typeof key === 'string' && allowed.has(key)) &&
+    required.every((key) => Object.hasOwn(value, key));
+};
+
 const ownDataValue = (value: object, key: string): { readonly found: boolean; readonly value: unknown } | undefined => {
   const descriptor = Object.getOwnPropertyDescriptor(value, key);
   if (descriptor === undefined) return { found: false, value: undefined };
@@ -49,22 +61,19 @@ const ownDataValue = (value: object, key: string): { readonly found: boolean; re
 };
 
 const dataArray = (value: unknown): readonly unknown[] | undefined => {
-  if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype || Object.hasOwn(value, 'then')) {
-    return undefined;
-  }
-  const descriptors = Object.getOwnPropertyDescriptors(value);
+  if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype) return undefined;
   const length = Object.getOwnPropertyDescriptor(value, 'length');
   if (
     length === undefined ||
     !('value' in length) ||
-    typeof length.value !== 'number' ||
-    Object.keys(descriptors).length !== length.value + 1
+    typeof length.value !== 'number' || !Number.isSafeInteger(length.value) || length.value < 0 ||
+    Reflect.ownKeys(value).length !== length.value + 1
   ) {
     return undefined;
   }
   const entries: unknown[] = [];
   for (let index = 0; index < length.value; index += 1) {
-    const descriptor = descriptors[index];
+    const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
     if (descriptor === undefined || !('value' in descriptor)) return undefined;
     entries.push(descriptor.value);
   }
@@ -76,7 +85,7 @@ const snapshotNativeHookCommands = (value: unknown): readonly TargetNativeHookCo
   if (candidates === undefined) return undefined;
   const commands: TargetNativeHookCommand[] = [];
   for (const candidate of candidates) {
-    if (!isPlainDataRecord(candidate)) return undefined;
+    if (!hasDataKeys(candidate, ['command'])) return undefined;
     const command = ownDataValue(candidate, 'command');
     if (command === undefined || !command.found || typeof command.value !== 'string') return undefined;
     commands.push(Object.freeze({ command: command.value }));
@@ -88,8 +97,9 @@ const snapshotNativeHookCommandResult = (value: unknown): TargetNativeHookComman
   if (!isPlainDataRecord(value)) return undefined;
   const status = ownDataValue(value, 'status');
   if (status === undefined || !status.found || typeof status.value !== 'string') return undefined;
-  if (status.value === 'invalid') return Object.freeze({ status: 'invalid' });
+  if (status.value === 'invalid') return hasDataKeys(value, ['status']) ? Object.freeze({ status: 'invalid' }) : undefined;
   if (status.value !== 'found') return undefined;
+  if (!hasDataKeys(value, ['commands', 'status'])) return undefined;
   const commands = ownDataValue(value, 'commands');
   if (commands === undefined || !commands.found) return undefined;
   const snapshot = snapshotNativeHookCommands(commands.value);

@@ -144,11 +144,63 @@ it('prepares and inspects a target owned only by the supplied advanced registry'
 
     const result = await inspect({ registry, root });
 
+    expect(result.state).toBe('ready');
+    if (result.state !== 'ready') throw new Error('Expected the synthetic target inspection to be ready.');
     expect(result.model.extensions).toEqual({
       synthetic: expect.objectContaining({ target: 'synthetic', value: { enabled: true } }),
     });
     expect(result.plans).toEqual([expect.objectContaining({ target: 'synthetic' })]);
     expect(registry.names()).toEqual(['synthetic']);
+  } finally {
+    await rm(join(root, '..'), { force: true, recursive: true });
+  }
+});
+
+it('returns a frozen invalid inspection for opaque source failures', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-api-invalid-inspection-'));
+  try {
+    await writeFile(join(root, 'agent-bundle.config.ts'), "throw new Error('opaque inspect sentinel');\n");
+
+    const result = await inspect({ root });
+
+    expect(result).toMatchObject({
+      diagnostics: [expect.objectContaining({
+        code: 'AB7000',
+        recovery: expect.any(String),
+        severity: 'error',
+      })],
+      plans: [],
+      state: 'invalid',
+    });
+    expect(JSON.stringify(result)).not.toContain('opaque inspect sentinel');
+    expect('model' in result).toBe(false);
+    expect('projectContext' in result).toBe(false);
+    expect(Object.isFrozen(result)).toBe(true);
+    expect(Object.isFrozen(result.diagnostics)).toBe(true);
+    expect(Object.isFrozen(result.plans)).toBe(true);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('attaches a specific recovery to every invalid inspection diagnostic', async () => {
+  const root = await createProject();
+  try {
+    await writeFile(join(root, 'agent-bundle.config.ts'), "export default { plugin: { version: '1.0.0' } };\n");
+
+    const result = await inspect({ root });
+
+    expect(result.state).toBe('invalid');
+    expect(result.diagnostics).not.toEqual([]);
+    expect(result.diagnostics.every((diagnostic) =>
+      diagnostic.recovery !== undefined && diagnostic.recovery.trim().length > 0,
+    )).toBe(true);
+    expect(result.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        code: 'AB4000',
+        recovery: 'Correct the project configuration field named by this diagnostic, then inspect again.',
+      }),
+    ]));
   } finally {
     await rm(join(root, '..'), { force: true, recursive: true });
   }
@@ -234,7 +286,11 @@ it('keeps one supplied registry through advanced artifact, hook, and MCP operati
       target: syntheticTarget,
       tool: 'synthetic-tool',
     })).resolves.toMatchObject({ result: { structuredContent: { synthetic: true } } });
-    await expect(inspect({ root })).rejects.toThrow(/Unknown target/);
+    await expect(inspect({ root })).resolves.toMatchObject({
+      diagnostics: expect.arrayContaining([expect.objectContaining({ code: 'AB4100', recovery: expect.any(String) })]),
+      plans: [],
+      state: 'invalid',
+    });
     expect(registry.names()).toEqual([syntheticTarget]);
   } finally {
     await rm(join(root, '..'), { force: true, recursive: true });
@@ -246,12 +302,16 @@ it('prepares a factory-configured project into a frozen inspection and build res
   try {
     const inspection = await inspect({ root, targets: ['portable'] });
 
+    expect(inspection.state).toBe('ready');
+    if (inspection.state !== 'ready') throw new Error('Expected the factory-configured inspection to be ready.');
     expect(inspection.model).toMatchObject({
       metadata: { name: 'api-fixture' },
       targets: [{ name: 'portable' }],
     });
     expect(inspection.plans).toHaveLength(1);
+    expect(inspection.projectContext).toEqual(expect.objectContaining({ revision: expect.any(String) }));
     expect(Object.isFrozen(inspection.model)).toBe(true);
+    expect(Object.isFrozen(inspection.projectContext)).toBe(true);
 
     const result = await build({ output: join(root, 'artifact'), root, targets: ['portable'] });
     expect(result).toMatchObject({
@@ -318,7 +378,9 @@ it('rejects an output beneath an escaping symlink before loading source or writi
       '',
     ].join('\n'));
 
-    await expect(build({ output: 'escape/artifact', root })).rejects.toThrow(/outside project root/i);
+    await expect(build({ output: 'escape/artifact', root })).rejects.toMatchObject({
+      diagnostics: [expect.objectContaining({ code: 'AB7002', recovery: expect.any(String) })],
+    });
     await expect(readFile(marker, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
     await expect(stat(join(external, 'artifact'))).rejects.toMatchObject({ code: 'ENOENT' });
   } finally {
@@ -341,7 +403,9 @@ it('rejects a dangling output symlink before loading source', async () => {
       '',
     ].join('\n'));
 
-    await expect(build({ output: 'escape/artifact', root })).rejects.toThrow(/output root|symlink/i);
+    await expect(build({ output: 'escape/artifact', root })).rejects.toMatchObject({
+      diagnostics: [expect.objectContaining({ code: 'AB7002', recovery: expect.any(String) })],
+    });
     await expect(readFile(marker, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
   } finally {
     await rm(join(root, '..'), { force: true, recursive: true });
@@ -363,7 +427,9 @@ it('rejects an output symlink to the project root before loading source', async 
       '',
     ].join('\n'));
 
-    await expect(build({ output: 'alias', root })).rejects.toThrow(/project root/i);
+    await expect(build({ output: 'alias', root })).rejects.toMatchObject({
+      diagnostics: [expect.objectContaining({ code: 'AB7002', recovery: expect.any(String) })],
+    });
     await expect(readFile(marker, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
   } finally {
     await rm(join(root, '..'), { force: true, recursive: true });
@@ -447,6 +513,8 @@ it('normalizes named top-level scripts with stable IDs, modes, and sorted target
   try {
     const result = await inspect({ root });
 
+    expect(result.state).toBe('ready');
+    if (result.state !== 'ready') throw new Error('Expected the script fixture inspection to be ready.');
     expect(result.model.scripts).toEqual([
       {
         id: 'script:bundle',

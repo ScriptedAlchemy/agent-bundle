@@ -30,6 +30,7 @@ export {
 } from './build/manifest.ts';
 import { validateArtifact } from './build/validate-artifact.ts';
 import { DiagnosticError, type Diagnostic } from './core/diagnostics.ts';
+export type { Diagnostic, DiagnosticSeverity } from './core/diagnostics.ts';
 import type { ProjectContext } from './core/project-context.ts';
 import type { NormalizedPlugin } from './core/types.ts';
 import { ProjectService, type PreparedProject } from './dev/project-service.ts';
@@ -157,15 +158,25 @@ export interface InspectOptions extends ProjectOptions {
   readonly target?: string;
 }
 
-export interface InspectResult {
+export interface ReadyInspectResult {
   readonly diagnostics: readonly Diagnostic[];
   readonly model: NormalizedPlugin;
   readonly plans: readonly InspectionPlan[];
+  readonly projectContext: ProjectContext;
   readonly selected?: {
     readonly hooks?: NormalizedPlugin['hooks'];
     readonly skills?: NormalizedPlugin['skills'];
   };
+  readonly state: 'ready';
 }
+
+export interface InvalidInspectResult {
+  readonly diagnostics: readonly Diagnostic[];
+  readonly plans: readonly [];
+  readonly state: 'invalid';
+}
+
+export type InspectResult = ReadyInspectResult | InvalidInspectResult;
 
 export interface BuildOptions extends ProjectOptions {
   readonly output?: string;
@@ -227,6 +238,15 @@ const requirePreparedModel = (prepared: PreparedProject): NormalizedPlugin => {
   throw new DiagnosticError(prepared.diagnostics);
 };
 
+const noInspectionPlans: readonly [] = Object.freeze<[]>([]);
+
+const invalidInspection = (diagnostics: readonly Diagnostic[]): InvalidInspectResult =>
+  Object.freeze({
+    diagnostics,
+    plans: noInspectionPlans,
+    state: 'invalid',
+  });
+
 const resolveOutput = (root: string, output: string | undefined): string =>
   resolve(root, output ?? 'dist');
 
@@ -274,7 +294,14 @@ export const validate = async (options: ValidateOptions): Promise<ValidateResult
 
 export const inspect = async (options: InspectOptions): Promise<InspectResult> => {
   const prepared = await prepareProject(options, 'inspect');
-  const model = requirePreparedModel(prepared);
+  if (
+    hasErrors(prepared.diagnostics) ||
+    prepared.model === undefined ||
+    prepared.projectContext === undefined
+  ) {
+    return invalidInspection(prepared.diagnostics);
+  }
+  const { model, projectContext } = prepared;
   const plans = Object.freeze(
     model.targets
       .filter((candidate) => options.target === undefined || candidate.name === options.target)
@@ -298,7 +325,9 @@ export const inspect = async (options: InspectOptions): Promise<InspectResult> =
     diagnostics: prepared.diagnostics,
     model,
     plans,
+    projectContext,
     ...(selected === undefined ? {} : { selected }),
+    state: 'ready',
   });
 };
 

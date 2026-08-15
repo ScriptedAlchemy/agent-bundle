@@ -32,6 +32,8 @@ it('builds the checked-in fixture matrix from a path with spaces', async () => {
       devDependencies: { '@modelcontextprotocol/server': '2.0.0' },
     });
     const inspection = await inspect({ root });
+    expect(inspection.state).toBe('ready');
+    if (inspection.state !== 'ready') throw new Error('Expected the integration fixture inspection to be ready.');
     expect(inspection.model).toMatchObject({
       metadata: { name: 'integration-fixture' },
       scripts: [

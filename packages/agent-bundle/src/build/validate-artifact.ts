@@ -1,6 +1,6 @@
 import { lstat, readFile, realpath } from 'node:fs/promises';
 import { isBuiltin } from 'node:module';
-import { dirname, isAbsolute, posix, relative, resolve } from 'node:path';
+import { dirname, isAbsolute, posix, relative, resolve, win32 } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { parse as parseJavaScript } from 'acorn';
@@ -19,7 +19,9 @@ import type {
 } from '../adapters/types.ts';
 import { parseSkillMarkdown, referencedResources } from '../config/skill-references.ts';
 import { DiagnosticError, type Diagnostic } from '../core/diagnostics.ts';
+import { parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
 import { agentSkillsSchemaRevision, validateAgentSkillsFrontmatter } from '../schemas/agent-skills/contract.ts';
+import { classifyMcpArtifactArgument } from '../services/mcp-artifact-reference.ts';
 import { parseArtifactHookIndex } from '../services/hook-index.ts';
 import { resolveMcpPathTokens } from '../services/mcp-path-tokens.ts';
 import { readTargetMcpServers } from '../services/mcp-runtime.ts';
@@ -45,23 +47,74 @@ export interface ValidateArtifactOptions {
   readonly registry?: TargetRegistry;
 }
 
+type ArtifactDiagnosticCode =
+  | 'AB6000'
+  | 'AB6001'
+  | 'AB6002'
+  | 'AB6003'
+  | 'AB6004'
+  | 'AB6005'
+  | 'AB6006'
+  | 'AB6007'
+  | 'AB6008'
+  | 'AB6009'
+  | 'AB6010'
+  | 'AB6011'
+  | 'AB6012'
+  | 'AB6013'
+  | 'AB6014'
+  | 'AB6015'
+  | 'AB6016'
+  | 'AB6017'
+  | 'AB6018';
+
+const artifactRecoveries: Readonly<Record<ArtifactDiagnosticCode, string>> = Object.freeze({
+  AB6000: 'Restore a readable artifact root and canonical manifest, then rebuild the artifact.',
+  AB6001: 'Regenerate the strict canonical v2 manifest without concurrent writes, then rerun validation.',
+  AB6002: 'Rebuild the artifact from complete project source, then rerun validation.',
+  AB6003: 'Rebuild the artifact with canonical generated output, then rerun validation.',
+  AB6004: 'Rebuild the artifact so its file table and contents match the manifest.',
+  AB6005: 'Bundle every JavaScript dependency into the artifact, then rebuild it.',
+  AB6006: 'Regenerate the affected JSON document as valid JSON, then rebuild the artifact.',
+  AB6007: 'Repair MCP manifest references to generated servers, then rebuild the artifact.',
+  AB6008: 'Rebuild the artifact with the pinned Agent Skills contract.',
+  AB6009: 'Rebuild the artifact with a registered target.',
+  AB6010: 'Rebuild the artifact with the current target registry.',
+  AB6011: 'Generate the required target document, then rebuild the artifact.',
+  AB6012: 'Correct the target document source so it satisfies its schema, then rebuild the artifact.',
+  AB6013: 'Remove unsupported filesystem entries and rebuild the artifact.',
+  AB6014: 'Rebuild the artifact with files only in declared target namespaces.',
+  AB6015: 'Restore canonical Skill Markdown and copied resources, then rebuild the artifact.',
+  AB6016: 'Copy every referenced Skill resource inside its Skill root, then rebuild the artifact.',
+  AB6017: 'Rebuild the artifact so every target MCP manifest references its exact compiler outputs.',
+  AB6018: 'Rebuild the artifact so native hook commands and hook metadata agree.',
+});
+
+const isArtifactDiagnosticCode = (code: string): code is ArtifactDiagnosticCode =>
+  Object.hasOwn(artifactRecoveries, code);
+
+const recoveryForArtifactDiagnostic = (code: string): string =>
+  isArtifactDiagnosticCode(code)
+    ? artifactRecoveries[code]
+    : 'Repair the target MCP configuration and rebuild the artifact.';
+
 const diagnostic = (
   code: string,
   message: string,
   generatedPath?: string,
   target?: string,
-  recovery?: string,
+  recovery = recoveryForArtifactDiagnostic(code),
 ): Diagnostic => ({
   code,
   generatedPath,
   message,
-  ...(recovery === undefined ? {} : { recovery }),
+  recovery,
   severity: 'error',
   ...(target === undefined ? {} : { target }),
 });
 
 const javaScriptModuleSuffix = /\.(?:m?js)$/u;
-const generatedJavaScriptRecovery = 'Bundle every JavaScript dependency into the artifact, then rebuild it.';
+const generatedJavaScriptRecovery = artifactRecoveries.AB6005;
 
 const jsonModuleSuffix = /\.json$/u;
 
@@ -336,7 +389,7 @@ const inspectArtifact = async (context: ValidateArtifactOptions): Promise<Artifa
   };
 };
 
-const filesystemRecovery = 'Remove unsupported filesystem entries and rebuild the artifact.';
+const filesystemRecovery = artifactRecoveries.AB6013;
 
 const filesystemDiagnostics = (filesystem: ArtifactFilesystemSnapshot): readonly Diagnostic[] =>
   filesystem.entries
@@ -371,8 +424,6 @@ const matchesTargetMetadata = (
   target.capabilitySha256 === metadata.capabilitySha256 &&
   target.observedVersion === metadata.observedVersion &&
   sameSchemas(target.schemas, metadata.schemas);
-
-const targetRecovery = 'Rebuild the artifact with the current target registry.';
 
 const schemaValidationFailure = (): readonly TargetArtifactDocumentIssue[] => Object.freeze([
   Object.freeze({ instancePath: '/', message: 'schema validation failed' }),
@@ -447,7 +498,6 @@ const validateTargetContracts = async (options: {
         `Artifact declares unknown target ${JSON.stringify(target.name)}.`,
         artifactManifestName,
         target.name,
-        targetRecovery,
       ));
       continue;
     }
@@ -457,7 +507,6 @@ const validateTargetContracts = async (options: {
         `Artifact metadata for target ${JSON.stringify(target.name)} does not match its registered contract.`,
         artifactManifestName,
         target.name,
-        targetRecovery,
       ));
       continue;
     }
@@ -473,7 +522,6 @@ const validateTargetContracts = async (options: {
             `Target ${JSON.stringify(target.name)} is missing required document ${JSON.stringify(document.path)}.`,
             generatedPath,
             target.name,
-            targetRecovery,
           ));
         }
         continue;
@@ -494,7 +542,6 @@ const validateTargetContracts = async (options: {
           `Target ${JSON.stringify(target.name)} document ${JSON.stringify(document.path)} is invalid for schema ${JSON.stringify(document.schema)} at ${issue.instancePath || '/'}: ${issue.message}.`,
           generatedPath,
           target.name,
-          targetRecovery,
         ));
       }
     }
@@ -502,9 +549,8 @@ const validateTargetContracts = async (options: {
   return Object.freeze(diagnostics);
 };
 
-const mcpCoherenceRecovery = 'Rebuild the artifact so every target MCP manifest references its exact compiler outputs.';
-const hookCoherenceRecovery = 'Rebuild the artifact so native hook commands and hook metadata agree.';
-const emptyArtifactHookIndex: ArtifactHookIndex = Object.freeze({ hooks: Object.freeze([]), version: 1 });
+const mcpCoherenceRecovery = artifactRecoveries.AB6017;
+const hookCoherenceRecovery = artifactRecoveries.AB6018;
 
 const coherenceDiagnostic = (
   code: 'AB6017' | 'AB6018',
@@ -514,64 +560,49 @@ const coherenceDiagnostic = (
   recovery: string,
 ): Diagnostic => diagnostic(code, message, generatedPath, target, recovery);
 
-const isCanonicalRelativeReference = (value: string): boolean => {
-  const relative = value.startsWith('./') ? value.slice(2) : value;
-  return relative.length > 0 &&
-    relative === posix.normalize(relative) &&
-    relative !== '..' &&
-    !relative.startsWith('../');
-};
-
-interface ArtifactLocalReference {
-  readonly path: string;
-  readonly status: 'artifact-local';
-}
-
-interface EscapedArtifactReference {
-  readonly status: 'escaped';
-}
-
-interface ExternalArtifactReference {
-  readonly status: 'external';
-}
-
-type ArtifactReference = ArtifactLocalReference | EscapedArtifactReference | ExternalArtifactReference;
-
-const artifactReference = (options: {
-  readonly artifactRoot: string;
-  readonly targetRoot: string;
-  readonly value: string;
-}): ArtifactReference => {
-  const { artifactRoot, targetRoot, value } = options;
-  if (isAbsolute(value)) {
-    const resolved = resolve(value);
-    const artifactPath = artifactPathFor(artifactRoot, resolved);
-    if (artifactPath === undefined) {
-      return value === artifactRoot || value.startsWith(`${artifactRoot}/`)
-        ? { status: 'escaped' }
-        : { status: 'external' };
-    }
-    const targetPath = artifactPathFor(targetRoot, resolved);
-    return targetPath === undefined || value !== resolved
-      ? { status: 'escaped' }
-      : { path: targetPath, status: 'artifact-local' };
-  }
-
-  if (!value.startsWith('.') && !value.includes('/')) return { status: 'external' };
-  if (!isCanonicalRelativeReference(value)) return { status: 'escaped' };
-  const resolved = resolve(targetRoot, value);
-  const targetPath = artifactPathFor(targetRoot, resolved);
-  return targetPath === undefined
-    ? { status: 'escaped' }
-    : { path: targetPath, status: 'artifact-local' };
-};
+const mcpArtifactPathApi = process.platform === 'win32'
+  ? Object.freeze({
+    isAbsolute: win32.isAbsolute,
+    normalize: win32.normalize,
+    relative: win32.relative,
+    resolve: win32.resolve,
+    sep: '\\' as const,
+  })
+  : Object.freeze({
+    isAbsolute: posix.isAbsolute,
+    normalize: posix.normalize,
+    relative: posix.relative,
+    resolve: posix.resolve,
+    sep: '/' as const,
+  });
 
 const targetArtifactPath = (target: string, path: string): string => `${target}/${path}`;
 
-const isTargetContainedCwd = (targetRoot: string, value: string): boolean => {
-  if (!isAbsolute(value) && value !== '.' && value !== './' && !isCanonicalRelativeReference(value)) return false;
-  const resolved = resolve(targetRoot, value);
-  return resolved === targetRoot || artifactPathFor(targetRoot, resolved) !== undefined;
+const isTargetContainedCwd = (artifactRoot: string, targetRoot: string, value: string): boolean => {
+  const localPath = mcpArtifactPathApi.sep === '/'
+    ? value.replaceAll('\\', '/')
+    : value.replaceAll('/', '\\');
+  return value === '.' || value === './' || value === '.\\' ||
+    (mcpArtifactPathApi.isAbsolute(localPath) && mcpArtifactPathApi.resolve(localPath) === targetRoot) ||
+    classifyMcpArtifactArgument({
+      path: mcpArtifactPathApi,
+      roots: { artifactRoot, targetRoot },
+      value,
+    }).status === 'artifact-local';
+};
+
+interface McpReferenceOccurrence {
+  readonly field: 'argument' | 'command';
+  readonly server: string;
+}
+
+const recordMcpReference = (
+  references: Map<string, McpReferenceOccurrence[]>,
+  path: string,
+  occurrence: McpReferenceOccurrence,
+): void => {
+  const occurrences = references.get(path);
+  if (occurrences !== undefined) occurrences.push(occurrence);
 };
 
 const pathInOutputLayout = (
@@ -591,7 +622,11 @@ const validateMcpArtifactReference = (options: {
   readonly targetRoot: string;
   readonly value: string;
 }): readonly Diagnostic[] => {
-  const reference = artifactReference(options);
+  const reference = classifyMcpArtifactArgument({
+    path: mcpArtifactPathApi,
+    roots: { artifactRoot: options.artifactRoot, targetRoot: options.targetRoot },
+    value: options.value,
+  });
   if (reference.status === 'external') return Object.freeze([]);
   if (reference.status === 'escaped') {
     return Object.freeze([coherenceDiagnostic(
@@ -654,16 +689,23 @@ const validateMcpCoherence = async (options: {
     const manifestPath = targetArtifactPath(target.name, runtime.manifestPath);
     const targetRoot = resolve(artifactRoot, target.name);
     const mcpLayout = options.registry.artifactLayout(target.name).mcpEntries;
-    const referenceCounts = new Map<string, Set<string>>();
+    const referenceCounts = new Map<string, McpReferenceOccurrence[]>();
     const mcpEntries = options.files.filter((file) => pathInOutputLayout(file.path, target.name, mcpLayout));
-    for (const file of mcpEntries) referenceCounts.set(file.path, new Set());
+    for (const file of mcpEntries) referenceCounts.set(file.path, []);
 
     const manifestFile = files.get(manifestPath);
     if (manifestFile !== undefined) {
       let document: unknown;
       try {
-        document = JSON.parse(await readFile(resolve(artifactRoot, manifestPath), 'utf8'));
+        document = parseJsonWithoutDuplicateKeys(await readFile(resolve(artifactRoot, manifestPath), 'utf8'));
       } catch {
+        diagnostics.push(coherenceDiagnostic(
+          'AB6017',
+          `MCP manifest for target ${JSON.stringify(target.name)} is not valid strict JSON.`,
+          manifestPath,
+          target.name,
+          mcpCoherenceRecovery,
+        ));
         document = undefined;
       }
       if (document !== undefined) {
@@ -713,7 +755,7 @@ const validateMcpCoherence = async (options: {
             if (server.kind !== 'stdio') continue;
 
             if (server.cwd !== undefined) {
-              if (!isTargetContainedCwd(targetRoot, server.cwd)) {
+              if (!isTargetContainedCwd(artifactRoot, targetRoot, server.cwd)) {
                 diagnostics.push(coherenceDiagnostic(
                   'AB6017',
                   `MCP cwd ${JSON.stringify(server.cwd)} escapes target ${JSON.stringify(target.name)}.`,
@@ -736,10 +778,14 @@ const validateMcpCoherence = async (options: {
                 targetRoot,
                 value: server.command,
               }));
-              const commandReference = artifactReference({ artifactRoot, targetRoot, value: server.command });
+              const commandReference = classifyMcpArtifactArgument({
+                path: mcpArtifactPathApi,
+                roots: { artifactRoot, targetRoot },
+                value: server.command,
+              });
               if (commandReference.status === 'artifact-local') {
                 const path = targetArtifactPath(target.name, commandReference.path);
-                referenceCounts.get(path)?.add(entry.name);
+                recordMcpReference(referenceCounts, path, { field: 'command', server: entry.name });
               }
             }
 
@@ -755,10 +801,14 @@ const validateMcpCoherence = async (options: {
                 targetRoot,
                 value: argument,
               }));
-              const argumentReference = artifactReference({ artifactRoot, targetRoot, value: argument });
+              const argumentReference = classifyMcpArtifactArgument({
+                path: mcpArtifactPathApi,
+                roots: { artifactRoot, targetRoot },
+                value: argument,
+              });
               if (argumentReference.status === 'artifact-local') {
                 const path = targetArtifactPath(target.name, argumentReference.path);
-                referenceCounts.get(path)?.add(entry.name);
+                recordMcpReference(referenceCounts, path, { field: 'argument', server: entry.name });
               }
             }
           }
@@ -766,13 +816,13 @@ const validateMcpCoherence = async (options: {
       }
     }
 
-    for (const [path, servers] of referenceCounts) {
-      if (servers.size === 1) continue;
+    for (const [path, occurrences] of referenceCounts) {
+      if (occurrences.length === 1) continue;
       diagnostics.push(coherenceDiagnostic(
         'AB6017',
-        servers.size === 0
+        occurrences.length === 0
           ? `Compiler MCP entry ${JSON.stringify(path)} is not referenced by a server in target ${JSON.stringify(target.name)}.`
-          : `Compiler MCP entry ${JSON.stringify(path)} is referenced by multiple servers in target ${JSON.stringify(target.name)}.`,
+          : `Compiler MCP entry ${JSON.stringify(path)} is referenced ${occurrences.length} times in target ${JSON.stringify(target.name)}.`,
         path,
         target.name,
         mcpCoherenceRecovery,
@@ -797,9 +847,7 @@ const validateHookCoherence = async (options: {
   readonly registry: TargetRegistry;
 }): Promise<readonly Diagnostic[]> => {
   const indexFile = options.files.find((file) => file.path === artifactHookIndexName);
-  const index = indexFile === undefined
-    ? emptyArtifactHookIndex
-    : await readArtifactHookIndex(options.artifactRoot);
+  const index = indexFile === undefined ? undefined : await readArtifactHookIndex(options.artifactRoot);
   if (index === undefined) {
     return Object.freeze([coherenceDiagnostic(
       'AB6018',
@@ -931,7 +979,7 @@ const validateHookCoherence = async (options: {
   return Object.freeze(diagnostics);
 };
 
-const ownershipRecovery = 'Rebuild the artifact with files only in declared target namespaces.';
+const ownershipRecovery = artifactRecoveries.AB6014;
 
 const targetNamespaces = (manifest: ArtifactManifestV2): ReadonlySet<string> =>
   new Set(manifest.targets.map((target) => target.name));
@@ -1075,7 +1123,7 @@ const emittedSkillFor = (
 const isSkillRootEscape = (reference: string): boolean =>
   reference === '..' || reference.startsWith('../') || reference.startsWith('/');
 
-const skillRecovery = 'Restore canonical Skill Markdown and copied resources, then rebuild the artifact.';
+const skillRecovery = artifactRecoveries.AB6015;
 
 const validateEmittedSkills = async (options: {
   readonly artifactRoot: string;

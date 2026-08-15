@@ -124,6 +124,33 @@ it('converts malformed or throwing target reader callbacks into invalid results'
   expect(readTargetMcpServer(throwing, { nativeServers: {} }, 'fixture')).toEqual({ status: 'invalid' });
 });
 
+it.each([
+  ['an argument array with a symbol property', () => {
+    const args = ['--config'];
+    Object.defineProperty(args, Symbol('extra'), { value: true });
+    return { servers: [{ name: 'fixture', server: { args, command: 'node', kind: 'stdio' } }], status: 'found' };
+  }],
+  ['a server array with an extra property', () => {
+    const servers = [{ name: 'fixture', server: { args: [], command: 'node', kind: 'stdio' } }];
+    Object.defineProperty(servers, 'extra', { value: true });
+    return { servers, status: 'found' };
+  }],
+  ['a named server record with an extra property', () => ({
+    servers: [{ extra: true, name: 'fixture', server: { args: [], command: 'node', kind: 'stdio' } }],
+    status: 'found',
+  })],
+  ['an Array subclass', () => {
+    class ServerEntries extends Array<unknown> {}
+    return {
+      servers: new ServerEntries({ name: 'fixture', server: { args: [], command: 'node', kind: 'stdio' } }),
+      status: 'found',
+    };
+  }],
+])('rejects %s from custom MCP readers', (_name, result) => {
+  const custom = { ...runtime, readModernServers: () => result() as never };
+  expect(readTargetMcpServers(custom, {})).toEqual({ status: 'invalid' });
+});
+
 it('reads and freezes every modern server before delegating per-name lookups', () => {
   const parser = createTargetMcpRuntime({
     manifestPath: 'native/registry.json',

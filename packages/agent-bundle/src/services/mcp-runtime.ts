@@ -83,27 +83,52 @@ const plainDataRecord = (value: unknown): value is Record<string, unknown> => {
   });
 };
 
+const hasDataKeys = (
+  value: unknown,
+  required: readonly string[],
+  optional: readonly string[] = [],
+): value is Record<string, unknown> => {
+  if (!plainDataRecord(value)) return false;
+  const allowed = new Set([...required, ...optional]);
+  return Reflect.ownKeys(value).length >= required.length &&
+    Reflect.ownKeys(value).every((key) => typeof key === 'string' && allowed.has(key)) &&
+    required.every((key) => Object.hasOwn(value, key));
+};
+
 const ownDataValue = (value: object, key: string): OwnDataValue | undefined => {
   const descriptor = Object.getOwnPropertyDescriptor(value, key);
   if (descriptor === undefined) return { found: false, value: undefined };
   return 'value' in descriptor ? { found: true, value: descriptor.value } : undefined;
 };
 
-const stringArray = (value: unknown): readonly string[] | undefined => {
-  if (!Array.isArray(value)) return undefined;
-  for (const key of Reflect.ownKeys(value)) {
-    if (
-      typeof key !== 'string' ||
-      (key !== 'length' && (!/^(0|[1-9]\d*)$/u.test(key) || Number(key) >= value.length))
-    ) return undefined;
+const canonicalArrayValues = (value: unknown): readonly unknown[] | undefined => {
+  if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype) return undefined;
+  const length = Object.getOwnPropertyDescriptor(value, 'length');
+  if (
+    length === undefined || !('value' in length) ||
+    typeof length.value !== 'number' || !Number.isSafeInteger(length.value) || length.value < 0 ||
+    Reflect.ownKeys(value).length !== length.value + 1
+  ) {
+    return undefined;
   }
-  const copy: string[] = [];
-  for (let index = 0; index < value.length; index += 1) {
+  const copy: unknown[] = [];
+  for (let index = 0; index < length.value; index += 1) {
     const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
-    if (descriptor === undefined || !('value' in descriptor) || typeof descriptor.value !== 'string') return undefined;
+    if (descriptor === undefined || !('value' in descriptor)) return undefined;
     copy.push(descriptor.value);
   }
   return Object.freeze(copy);
+};
+
+const stringArray = (value: unknown): readonly string[] | undefined => {
+  const values = canonicalArrayValues(value);
+  if (values === undefined) return undefined;
+  const strings: string[] = [];
+  for (const entry of values) {
+    if (typeof entry !== 'string') return undefined;
+    strings.push(entry);
+  }
+  return Object.freeze(strings);
 };
 
 const stringRecord = (value: unknown): Readonly<Record<string, string>> | undefined => {
@@ -199,6 +224,7 @@ const snapshotModernServer = (value: unknown): ModernMcpServer | undefined => {
   if (kind === undefined || !kind.found || typeof kind.value !== 'string') return undefined;
 
   if (kind.value === 'stdio') {
+    if (!hasDataKeys(value, ['args', 'command', 'kind'], ['cwd', 'env'])) return undefined;
     const args = ownDataValue(value, 'args');
     const command = ownDataValue(value, 'command');
     const cwd = ownDataValue(value, 'cwd');
@@ -229,6 +255,7 @@ const snapshotModernServer = (value: unknown): ModernMcpServer | undefined => {
   }
 
   if (kind.value !== 'streamable-http') return undefined;
+  if (!hasDataKeys(value, ['kind', 'url'], ['headers'])) return undefined;
   const headers = ownDataValue(value, 'headers');
   const url = ownDataValue(value, 'url');
   if (headers === undefined || url === undefined || !url.found || typeof url.value !== 'string') return undefined;
@@ -243,26 +270,14 @@ const snapshotModernServer = (value: unknown): ModernMcpServer | undefined => {
 };
 
 const snapshotModernServers = (value: unknown): readonly ModernMcpServerEntry[] | undefined => {
-  if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype || Object.hasOwn(value, 'then')) {
-    return undefined;
-  }
-  const descriptors = Object.getOwnPropertyDescriptors(value);
-  const length = Object.getOwnPropertyDescriptor(value, 'length');
-  if (
-    length === undefined ||
-    !('value' in length) ||
-    typeof length.value !== 'number' ||
-    Object.keys(descriptors).length !== length.value + 1
-  ) {
-    return undefined;
-  }
+  const entries = canonicalArrayValues(value);
+  if (entries === undefined) return undefined;
   const names = new Set<string>();
   const servers: ModernMcpServerEntry[] = [];
-  for (let index = 0; index < length.value; index += 1) {
-    const descriptor = descriptors[index];
-    if (descriptor === undefined || !('value' in descriptor) || !plainDataRecord(descriptor.value)) return undefined;
-    const name = ownDataValue(descriptor.value, 'name');
-    const server = ownDataValue(descriptor.value, 'server');
+  for (const entry of entries) {
+    if (!hasDataKeys(entry, ['name', 'server'])) return undefined;
+    const name = ownDataValue(entry, 'name');
+    const server = ownDataValue(entry, 'server');
     if (
       name === undefined || !name.found || typeof name.value !== 'string' || name.value.length === 0 ||
       server === undefined || !server.found || names.has(name.value)
@@ -280,8 +295,11 @@ const snapshotModernServersResult = (value: unknown): ModernMcpServersReadResult
   if (!plainDataRecord(value)) return undefined;
   const status = ownDataValue(value, 'status');
   if (status === undefined || !status.found || typeof status.value !== 'string') return undefined;
-  if (status.value === 'invalid') return Object.freeze({ status: 'invalid' });
+  if (status.value === 'invalid') {
+    return hasDataKeys(value, ['status']) ? Object.freeze({ status: 'invalid' }) : undefined;
+  }
   if (status.value !== 'found') return undefined;
+  if (!hasDataKeys(value, ['servers', 'status'])) return undefined;
   const servers = ownDataValue(value, 'servers');
   if (servers === undefined || !servers.found) return undefined;
   const snapshot = snapshotModernServers(servers.value);

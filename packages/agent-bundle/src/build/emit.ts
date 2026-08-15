@@ -13,6 +13,7 @@ import {
 import { basename, dirname, join, resolve } from 'node:path';
 
 import { stableJson } from '../core/digest.ts';
+import { compareArtifactHooks } from '../services/hook-index.ts';
 import { assertInside } from '../core/paths.ts';
 import type { TargetArtifactEntry } from '../adapters/types.ts';
 import {
@@ -267,11 +268,7 @@ export const writeHookIndex = async (options: {
 }): Promise<ArtifactHookIndex> => {
   const hooks = options.hooks
     .slice()
-    .sort((left, right) =>
-      left.target === right.target
-        ? left.id.localeCompare(right.id)
-        : left.target.localeCompare(right.target),
-    )
+    .sort(compareArtifactHooks)
     .map((hook) => Object.freeze({ ...hook }));
   const index: ArtifactHookIndex = {
     hooks: Object.freeze(hooks),
