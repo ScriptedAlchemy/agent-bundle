@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import {
+  Agent,
   type ClientRequest,
   createServer,
   request as requestUpstream,
@@ -20,6 +21,9 @@ const appAssetLimit = 4 * 1024 * 1024;
 const headerLimit = 16 * 1024;
 const webSocketBufferLimit = 2 * 1024 * 1024;
 const webSocketMessageLimit = 1_048_576;
+const pendingWebSocketMessageLimit = 64;
+const upstreamHandshakeTimeout = 15_000;
+const upstreamRequestTimeout = 15_000;
 const loopbackHosts = new Set(['127.0.0.1', '::1']);
 
 export interface RuntimeClientSurfaceConnectionEvent {
@@ -236,6 +240,8 @@ export class RuntimeClientSurfaceProxy {
     const bootstrapPath = `/__agent_bundle_runtime/bootstrap/${bootstrapCapability}`;
     const cookieName = `agent_bundle_runtime_${randomBytes(16).toString('hex')}`;
     const sockets = new Set<Socket>();
+    const upstreamAgent = new Agent({ keepAlive: true });
+    const upstreamAborts = new Set<() => void>();
     const upstreamRequests = new Set<ClientRequest>();
     const upstreamSockets = new Set<Socket>();
     const webSockets = new Set<WebSocket>();
@@ -297,7 +303,29 @@ export class RuntimeClientSurfaceProxy {
           response(target, 404);
           return;
         }
+        let released = false;
+        let timedOut = false;
+        const release = (): void => {
+          if (released) return;
+          released = true;
+          clearTimeout(deadline);
+          upstreamRequests.delete(upstreamRequest);
+          upstreamAborts.delete(abort);
+          target.off('close', abort);
+          request.off('aborted', abort);
+          request.off('error', abort);
+        };
+        const abort = (): void => {
+          release();
+          if (!upstreamRequest.destroyed) upstreamRequest.destroy();
+        };
+        const deadline = setTimeout(() => {
+          timedOut = true;
+          response(target, 502);
+          abort();
+        }, upstreamRequestTimeout);
         const upstreamRequest = requestUpstream({
+          agent: upstreamAgent,
           headers: {
             ...(typeof request.headers.accept === 'string' ? { accept: request.headers.accept } : {}),
             ...(typeof request.headers['accept-encoding'] === 'string' ? { 'accept-encoding': request.headers['accept-encoding'] } : {}),
@@ -308,12 +336,6 @@ export class RuntimeClientSurfaceProxy {
           port: trusted.httpOrigin.port,
           protocol: trusted.httpOrigin.protocol,
         }, async (upstream) => {
-          const release = (): void => {
-            upstreamRequests.delete(upstreamRequest);
-            target.off('close', abort);
-            request.off('aborted', abort);
-            request.off('error', abort);
-          };
           const status = upstream.statusCode ?? 502;
           const headers = copyResponseHeaders(upstream.headers);
           if (status >= 300 && status < 400 && typeof upstream.headers.location === 'string') {
@@ -344,19 +366,15 @@ export class RuntimeClientSurfaceProxy {
             release();
           }
         });
-        const abort = (): void => {
-          if (!upstreamRequest.destroyed) upstreamRequest.destroy();
-        };
         upstreamRequests.add(upstreamRequest);
+        upstreamAborts.add(abort);
         upstreamRequest.once('socket', (socket) => {
           upstreamSockets.add(socket);
           socket.once('close', () => upstreamSockets.delete(socket));
         });
         upstreamRequest.once('error', () => {
-          upstreamRequests.delete(upstreamRequest);
-          target.off('close', abort);
-          request.off('aborted', abort);
-          request.off('error', abort);
+          release();
+          if (timedOut || target.destroyed || target.writableEnded) return;
           if (!target.headersSent) response(target, 502);
           else target.destroy();
         });
@@ -392,6 +410,7 @@ export class RuntimeClientSurfaceProxy {
       webSocketServer.handleUpgrade(request, socket, head, (downstream) => {
         const upstreamUrl = `${trusted.webSocketOrigin.origin}/rsbuild-hmr${requestUrl.search}`;
         const upstream = new WebSocket(upstreamUrl, requestedProtocols.length > 0 ? requestedProtocols : undefined, {
+          handshakeTimeout: upstreamHandshakeTimeout,
           maxPayload: webSocketMessageLimit,
         });
         webSockets.add(downstream);
@@ -399,6 +418,7 @@ export class RuntimeClientSurfaceProxy {
         let announced = false;
         let pairClosed = false;
         let pendingDownstreamBytes = 0;
+        let pendingDownstreamMessages = 0;
         const pendingDownstream: Array<Readonly<{ readonly data: WebSocket.RawData; readonly isBinary: boolean }>> = [];
         const closePair = (): void => {
           if (pairClosed) return;
@@ -409,6 +429,9 @@ export class RuntimeClientSurfaceProxy {
           }
           webSockets.delete(downstream);
           webSockets.delete(upstream);
+          pendingDownstream.length = 0;
+          pendingDownstreamBytes = 0;
+          pendingDownstreamMessages = 0;
           if (downstream.readyState === WebSocket.OPEN || downstream.readyState === WebSocket.CONNECTING) downstream.terminate();
           if (upstream.readyState === WebSocket.OPEN || upstream.readyState === WebSocket.CONNECTING) upstream.terminate();
         };
@@ -427,11 +450,13 @@ export class RuntimeClientSurfaceProxy {
           emit('connected');
           for (const pending of pendingDownstream.splice(0)) forward(upstream, pending.data, pending.isBinary);
           pendingDownstreamBytes = 0;
+          pendingDownstreamMessages = 0;
         });
         downstream.on('message', (data, isBinary) => {
           if (upstream.readyState === WebSocket.CONNECTING) {
             pendingDownstreamBytes += rawDataBytes(data);
-            if (pendingDownstreamBytes > webSocketMessageLimit) {
+            pendingDownstreamMessages += 1;
+            if (pendingDownstreamBytes > webSocketMessageLimit || pendingDownstreamMessages > pendingWebSocketMessageLimit) {
               closePair();
               return;
             }
@@ -471,7 +496,9 @@ export class RuntimeClientSurfaceProxy {
       if (closePromise !== undefined) return closePromise;
       closed = true;
       closePromise = (async () => {
+        for (const abort of [...upstreamAborts]) abort();
         for (const request of upstreamRequests) request.destroy();
+        upstreamAgent.destroy();
         for (const socket of upstreamSockets) socket.destroy();
         for (const socket of webSockets) socket.terminate();
         for (const socket of sockets) socket.destroy();

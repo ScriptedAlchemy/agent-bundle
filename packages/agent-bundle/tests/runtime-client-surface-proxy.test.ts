@@ -1,4 +1,4 @@
-import { createServer, get as httpGet, type IncomingMessage } from 'node:http';
+import { createServer, get as httpGet, globalAgent, type IncomingMessage } from 'node:http';
 import type { AddressInfo } from 'node:net';
 
 import { expect, it } from '@rstest/core';
@@ -244,6 +244,137 @@ it('aborts a hanging upstream request when the downstream closes or its binding 
     await close(upstream);
   }
 });
+
+it('keeps an in-flight binding B request alive when binding A closes on the same compiler origin', async () => {
+  let completeB: (() => void) | undefined;
+  const bReady = new Promise<void>((resolvePromise) => { completeB = resolvePromise; });
+  let releaseB: (() => void) | undefined;
+  const bReleased = new Promise<void>((resolvePromise) => { releaseB = resolvePromise; });
+  const upstream = createServer(async (request, response) => {
+    if (request.url === '/app/a.js') {
+      response.writeHead(200).end('a');
+      return;
+    }
+    completeB?.();
+    await bReleased;
+    response.writeHead(200).end('b');
+  });
+  const origin = await listen(upstream);
+  const endpoint = {
+    entryPath: '/app/a.js',
+    httpOrigin: origin,
+    httpPathPrefixes: ['/app/'],
+    surfaceId: 'app.weather',
+    webSocketOrigin: origin.replace('http:', 'ws:'),
+    webSocketPath: '/rsbuild-hmr' as const,
+  };
+  const originalMaxSockets = globalAgent.maxSockets;
+  globalAgent.maxSockets = 1;
+  const [first, second] = await Promise.all([
+    RuntimeClientSurfaceProxy.open(endpoint, () => undefined),
+    RuntimeClientSurfaceProxy.open({ ...endpoint, surfaceId: 'app.calendar' }, () => undefined),
+  ]);
+
+  try {
+    const [firstCookie, secondCookie] = await Promise.all([bootstrapCookie(first), bootstrapCookie(second)]);
+    await expect(fetch(`${first.origin}/app/a.js`, { headers: { cookie: firstCookie } }).then((response) => response.text())).resolves.toBe('a');
+    const b = fetch(`${second.origin}/app/b.js`, { headers: { cookie: secondCookie } });
+    void b.catch(() => undefined);
+    await bReady;
+    await first.close();
+    releaseB?.();
+    await expect(within(b.then((response) => response.text()), 500)).resolves.toBe('b');
+  } finally {
+    globalAgent.maxSockets = originalMaxSockets;
+    await Promise.all([first.close(), second.close()]);
+    upstream.closeAllConnections();
+    await close(upstream);
+  }
+});
+
+it('bounds an upstream HTTP request before headers arrive', async () => {
+  const upstream = createServer(() => undefined);
+  const origin = await listen(upstream);
+  const binding = await RuntimeClientSurfaceProxy.open({
+    entryPath: '/app/index.html',
+    httpOrigin: origin,
+    httpPathPrefixes: ['/app/'],
+    surfaceId: 'app.weather',
+    webSocketOrigin: origin.replace('http:', 'ws:'),
+    webSocketPath: '/rsbuild-hmr',
+  }, () => undefined);
+
+  try {
+    const cookie = await bootstrapCookie(binding);
+    const pending = fetch(`${binding.origin}/app/index.html`, { headers: { cookie } });
+    void pending.catch(() => undefined);
+    await expect(within(pending, 16_000)).resolves.toMatchObject({ status: 502 });
+  } finally {
+    await binding.close();
+    upstream.closeAllConnections();
+    await close(upstream);
+  }
+}, 20_000);
+
+it('bounds an unacknowledged upstream HMR handshake and pre-open message floods', async () => {
+  const upstreamSockets = new Set<import('node:stream').Duplex>();
+  const upstream = createServer();
+  upstream.on('upgrade', (_request, socket) => {
+    upstreamSockets.add(socket);
+    socket.once('close', () => upstreamSockets.delete(socket));
+  });
+  const origin = await listen(upstream);
+  const endpoint = {
+    entryPath: '/app/index.html',
+    httpOrigin: origin,
+    httpPathPrefixes: ['/app/'],
+    surfaceId: 'app.weather',
+    webSocketOrigin: origin.replace('http:', 'ws:'),
+    webSocketPath: '/rsbuild-hmr' as const,
+  };
+
+  const floodUntilClosed = async (payload: Buffer): Promise<void> => {
+    const binding = await RuntimeClientSurfaceProxy.open(endpoint, () => undefined);
+    try {
+      const cookie = await bootstrapCookie(binding);
+      const client = new WebSocket(`${binding.origin.replace('http:', 'ws:')}/rsbuild-hmr`, { headers: { cookie } });
+      const closed = new Promise<void>((resolvePromise) => client.once('close', () => resolvePromise()));
+      client.once('error', () => undefined);
+      await new Promise<void>((resolvePromise, rejectPromise) => {
+        client.once('open', resolvePromise);
+        client.once('error', rejectPromise);
+      });
+      for (let index = 0; index < 65; index += 1) client.send(payload);
+      await expect(within(closed, 1_000)).resolves.toBeUndefined();
+    } finally {
+      await binding.close();
+    }
+  };
+
+  try {
+    await floodUntilClosed(Buffer.alloc(0));
+    await floodUntilClosed(Buffer.from([1]));
+
+    const binding = await RuntimeClientSurfaceProxy.open(endpoint, () => undefined);
+    try {
+      const cookie = await bootstrapCookie(binding);
+      const client = new WebSocket(`${binding.origin.replace('http:', 'ws:')}/rsbuild-hmr`, { headers: { cookie } });
+      const closed = new Promise<void>((resolvePromise) => client.once('close', () => resolvePromise()));
+      client.once('error', () => undefined);
+      await new Promise<void>((resolvePromise, rejectPromise) => {
+        client.once('open', resolvePromise);
+        client.once('error', rejectPromise);
+      });
+      await expect(within(closed, 16_000)).resolves.toBeUndefined();
+    } finally {
+      await binding.close();
+    }
+  } finally {
+    for (const socket of upstreamSockets) socket.destroy();
+    upstream.closeAllConnections();
+    await close(upstream);
+  }
+}, 20_000);
 
 it('bounds chunked upstream assets and releases their socket immediately', async () => {
   let resolveSocketClosed: (() => void) | undefined;
