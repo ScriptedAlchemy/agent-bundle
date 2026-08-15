@@ -120,6 +120,20 @@ export {
   type RuntimeGenerationValidationInput,
   type RuntimeGenerationValidator,
 } from './runtime-generation-store.ts';
+export {
+  RuntimeMcpRegistry,
+  RuntimeMcpRegistryCloseError,
+  RuntimeMcpRegistryError,
+  type RuntimeMcpCommittedActivationReconcile,
+  type RuntimeMcpConnection,
+  type RuntimeMcpConnector,
+  type RuntimeMcpExecutionContext,
+  type RuntimeMcpExecutionValue,
+  type RuntimeMcpPreparedActivationReconcile,
+  type RuntimeMcpRegistryCloseFailure,
+  type RuntimeMcpRegistryErrorCode,
+  type RuntimeMcpRegistryOptions,
+} from './runtime-mcp-registry.ts';
 export type {
   CreateDevRuntimeProvider,
   DevRuntimeClientSurfaceEndpoint,
