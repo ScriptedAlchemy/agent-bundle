@@ -1122,6 +1122,8 @@ process.stdout.end(JSON.stringify({
     grandchildPid = Number(await readWhenPresent(marker));
 
     expect(run).toMatchObject({ status: 'succeeded' });
+    const flight = await session.readRunFlight(run.id);
+    expect(flight?.body).toEqual(Buffer.from('x'));
     await waitFor(() => !isProcessAlive(grandchildPid as number), 'Windows Job Object left a detached RSC grandchild alive after invocation');
     await session.close();
     expect(isProcessAlive(grandchildPid as number)).toBe(false);
