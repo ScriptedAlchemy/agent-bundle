@@ -131,6 +131,7 @@ export interface McpAppSandboxConsent {
 export interface McpAppSandboxPolicy {
   readonly contentSecurityPolicy: string;
   readonly iframeAllow: string;
+  readonly internalWebSocketUrl?: string;
   readonly permissionsPolicy: string;
   readonly warnings: readonly McpAppSandboxWarning[];
 }
@@ -430,11 +431,14 @@ export const deriveMcpAppSandboxPolicy = (
   const resources = cspSources(declaration.csp?.resourceDomains);
   const frames = cspSources(declaration.csp?.frameDomains);
   const baseUri = cspSources(declaration.csp?.baseUriDomains);
+  const internalOrigin = internalSources?.provenance === 'compiler-internal' && internalSources.webSocketPath === '/rsbuild-hmr'
+    ? originOf(internalSources.origin) : undefined;
+  const internalWebSocketUrl = internalOrigin === undefined ? undefined : new URL('/rsbuild-hmr', internalOrigin.replace(/^http/u, 'ws')).href;
   return Object.freeze({
     contentSecurityPolicy: [
       "default-src 'none'",
       `base-uri ${sourceList(baseUri.accepted, "'self'")}`,
-      `connect-src ${sourceList(Object.freeze([...connect.accepted, ...(internalSources?.provenance === 'compiler-internal' && internalSources.webSocketPath === '/rsbuild-hmr' ? [originOf(internalSources.origin)] : [])]), "'none'")}`,
+      `connect-src ${sourceList(Object.freeze([...connect.accepted, ...(internalOrigin === undefined ? [] : [internalOrigin])]), "'none'")}`,
       `frame-src ${sourceList(frames.accepted, "'none'")}`,
       `img-src ${['data:', ...resources.accepted].join(' ')}`,
       `media-src ${sourceList(resources.accepted, "'none'")}`,
@@ -443,6 +447,7 @@ export const deriveMcpAppSandboxPolicy = (
       `script-src ${withInline(resources.accepted)}`,
     ].join('; '),
     iframeAllow: iframeAllow(declaration.permissions, consent.permissions),
+    ...(internalWebSocketUrl === undefined ? {} : { internalWebSocketUrl }),
     permissionsPolicy: permissionPolicy(declaration.permissions, consent.permissions),
     warnings: Object.freeze([...connect.warnings, ...resources.warnings, ...frames.warnings, ...baseUri.warnings]),
   });

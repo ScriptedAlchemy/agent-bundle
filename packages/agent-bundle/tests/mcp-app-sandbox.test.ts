@@ -141,6 +141,14 @@ it('rejects every noncanonical, local, and special CSP authority before the prox
   ]);
 });
 
+it('retains only the exact server-authored HMR websocket path', () => {
+  const policy = deriveMcpAppSandboxPolicy({}, {}, {
+    origin: 'https://surface.example', provenance: 'compiler-internal', webSocketPath: '/rsbuild-hmr',
+  });
+  expect(policy.internalWebSocketUrl).toBe('wss://surface.example/rsbuild-hmr');
+  expect(policy.contentSecurityPolicy).toContain('connect-src https://surface.example');
+});
+
 it('uses one proxy relay configuration in the fixed outer frame contract', () => {
   const frame = frameFor();
   expect(frame).toMatchObject({
