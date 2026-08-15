@@ -1625,3 +1625,74 @@ it('revokes App authority before a direct session close drains its client and in
     await rm(root, { force: true, recursive: true });
   }
 }, 30_000);
+
+it('shares one close promise when a synchronous close observer re-enters shutdown', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-mcp-reentrant-close-'));
+  const pluginData = await mkdtemp(join(tmpdir(), 'agent-bundle-mcp-reentrant-data-'));
+  try {
+    let clientCloses = 0;
+    let epochCloses = 0;
+    let onCloseCalls = 0;
+    let onClosingCalls = 0;
+    let reentered = false;
+    let reentrantClose: Promise<void> | undefined;
+    const session = new McpSession({
+      binding: { epochId: 'epoch-reentrant', serverName: 'fixture', target: 'portable' },
+      createClient: () => ({
+        callTool: async () => ({ content: [] }),
+        close: async () => {
+          clientCloses += 1;
+        },
+        connect: async () => undefined,
+        getPrompt: async () => ({ messages: [] }),
+        getServerCapabilities: () => undefined,
+        getServerVersion: () => undefined,
+        listPrompts: async () => ({ prompts: [] }),
+        listResources: async () => ({ resources: [] }),
+        listResourceTemplates: async () => ({ resourceTemplates: [] }),
+        listTools: async () => ({ tools: [] }),
+        readResource: async () => ({ contents: [] }),
+      }),
+      createSseTransport: () => ({}) as never,
+      createStdioTransport: () => ({ close: async () => undefined, send: async () => undefined, start: async () => undefined, stderr: null }) as never,
+      createStreamableHttpTransport: () => ({}) as never,
+      epochReference: {
+        close: async () => {
+          epochCloses += 1;
+        },
+        root,
+      } as never,
+      id: 'session-reentrant',
+      onClose: () => {
+        onCloseCalls += 1;
+      },
+      onClosing: () => {
+        onClosingCalls += 1;
+        if (!reentered) {
+          reentered = true;
+          reentrantClose = session.close();
+        }
+      },
+      pluginData,
+      resolved: {
+        server: { args: [], command: 'node', kind: 'stdio' },
+        target: 'portable',
+        targetRoot: root,
+      },
+      workspaceRoot: root,
+    });
+    await session.initialize();
+
+    const initialClose = session.close();
+    expect(reentrantClose).toBe(initialClose);
+    await expect(Promise.all([initialClose, reentrantClose!])).resolves.toEqual([undefined, undefined]);
+    expect(onClosingCalls).toBe(1);
+    expect(onCloseCalls).toBe(1);
+    expect(clientCloses).toBe(1);
+    expect(epochCloses).toBe(1);
+    await expect(access(pluginData)).rejects.toMatchObject({ code: 'ENOENT' });
+  } finally {
+    await rm(root, { force: true, recursive: true });
+    await rm(pluginData, { force: true, recursive: true });
+  }
+}, 30_000);

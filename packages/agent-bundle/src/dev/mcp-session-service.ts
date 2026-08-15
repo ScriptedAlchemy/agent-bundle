@@ -947,16 +947,23 @@ export class McpSession {
     }));
   }
 
-  async close(): Promise<void> {
+  close(): Promise<void> {
     if (this.#closePromise !== undefined) return this.#closePromise;
     this.#closed = true;
+    let resolveClose: () => void;
+    let rejectClose: (reason?: unknown) => void;
+    const closePromise = new Promise<void>((resolvePromise, rejectPromise) => {
+      resolveClose = resolvePromise;
+      rejectClose = rejectPromise;
+    });
+    this.#closePromise = closePromise;
     try {
       this.#onClosing();
     } catch {
       // Lifecycle observers cannot prevent client, temporary-data, or epoch cleanup.
     }
-    this.#closePromise = this.#operation('close', () => this.#withLifecycle(() => this.#close()));
-    return this.#closePromise;
+    void this.#operation('close', () => this.#withLifecycle(() => this.#close())).then(resolveClose!, rejectClose!);
+    return closePromise;
   }
 
   async #close(): Promise<void> {
