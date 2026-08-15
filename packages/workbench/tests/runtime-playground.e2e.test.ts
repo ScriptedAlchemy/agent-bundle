@@ -15,11 +15,14 @@ e2e('renders the capability-gated Runtime sibling in the real RSC workbench', { 
   const fixture = await startRuntimePlaygroundFixture();
   const pageErrors: Error[] = [];
   const foregroundSessionRequests: string[] = [];
+  const forbiddenRequests: string[] = [];
   const resetRequests: unknown[] = [];
+  const forbiddenPrefixes = ['/api/mcp/sessions', '/api/runtime/mcp/sessions', '/api/mcp/apps', '/api/runtime/apps'];
   page.on('pageerror', (error) => pageErrors.push(error));
   page.on('request', (request) => {
     const requestUrl = new URL(request.url());
     if (requestUrl.origin === fixture.url && requestUrl.pathname === '/api/project/session') foregroundSessionRequests.push(request.url());
+    if (forbiddenPrefixes.some((prefix) => requestUrl.pathname.startsWith(prefix))) forbiddenRequests.push(requestUrl.pathname);
     if (requestUrl.origin === fixture.url && requestUrl.pathname === '/api/runtime/state/reset' && request.method() === 'POST') {
       resetRequests.push(JSON.parse(request.postData() ?? 'null'));
     }
@@ -75,29 +78,11 @@ e2e('renders the capability-gated Runtime sibling in the real RSC workbench', { 
     await expect(identity).toHaveAttribute('data-runtime-state-version', String(runtimeIdentity.activeVector.stateVersion));
     await expect.poll(() => foregroundSessionRequests).toHaveLength(1);
 
-    await page.goto(`${fixture.url}#mcp`);
-    await expect(page.getByRole('heading', { name: 'MCP playground' })).toBeVisible({ timeout: browserTimeout });
-    await page.locator('#mcp-target').selectOption('portable');
-    await page.locator('#mcp-server-name').fill('timeline');
-    await page.getByRole('button', { name: 'Open MCP session' }).click();
-    await expect(page.locator('.mcp-page-phase')).toContainText('Session ready', { timeout: browserTimeout });
-    await expect(foregroundSessionRequests).toHaveLength(1);
-    await page.getByRole('button', { name: 'Close MCP session' }).click();
-    await expect(page.getByRole('button', { name: 'Reset MCP session' })).toBeVisible({ timeout: browserTimeout });
-    await page.getByRole('button', { name: 'Reset MCP session' }).click();
-    await page.getByRole('button', { name: 'Open MCP session' }).click();
-    await expect(page.locator('.mcp-page-phase')).toContainText('Session ready', { timeout: browserTimeout });
-    await expect(foregroundSessionRequests).toHaveLength(1);
-    await page.getByRole('button', { name: 'Close MCP session' }).click();
-    await expect(page.getByRole('button', { name: 'Reset MCP session' })).toBeVisible({ timeout: browserTimeout });
-    await page.goto(`${fixture.url}#runtime`);
-    await expect(page.getByRole('heading', { name: 'Runtime Playground' })).toBeVisible({ timeout: browserTimeout });
-
     await page.getByLabel('Runtime surface').selectOption('mcp.recent_edits');
     await page.getByLabel('Schema form').check();
     await expect(page.getByLabel('Schema form')).toBeChecked();
     await page.getByLabel('limit').fill('2');
-    await page.getByLabel('Raw JSON').check();
+    await page.getByRole('radio', { name: 'Raw JSON' }).check();
     const input = page.locator('#runtime-input-raw');
     await expect(input).toHaveValue(/"limit": 2/);
     await input.fill('{"broken":');
@@ -189,6 +174,7 @@ e2e('renders the capability-gated Runtime sibling in the real RSC workbench', { 
     await expect(stateTab).toHaveAttribute('aria-selected', 'true');
     await page.goto(`${fixture.url}#mcp`);
     await expect(page.getByLabel('MCP App preview controls')).toHaveCount(1);
+    expect(forbiddenRequests).toEqual([]);
     expect(pageErrors).toEqual([]);
   } finally {
     await fixture.close();
@@ -338,5 +324,153 @@ e2e('resets the selected Claude fixture to its seed without replacing prior runt
     expect(pageErrors).toEqual([]);
   } finally {
     await fixture.close();
+  }
+});
+
+e2e('retains real MCP runtime history across reload and isolates a fresh provider', { timeout: 180_000 }, async ({ page }) => {
+  const firstFixture = await startRuntimePlaygroundFixture();
+  let secondFixture: Awaited<ReturnType<typeof startRuntimePlaygroundFixture>> | undefined;
+  const context = page.context();
+  const forbiddenRequests: string[] = [];
+  const runtimeRunPosts: string[] = [];
+  const pageErrors: Error[] = [];
+  const forbiddenPrefixes = ['/api/mcp/sessions', '/api/runtime/mcp/sessions', '/api/mcp/apps', '/api/runtime/apps'];
+  const expectedContent = [
+    { text: 'Runtime state contains 0 edits.', type: 'text' },
+    {
+      data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADElEQVR42mP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC',
+      mimeType: 'image/png',
+      type: 'image',
+    },
+  ];
+  const recordRequest = (request: { method(): string; url(): string }): void => {
+    const requestUrl = new URL(request.url());
+    if (forbiddenPrefixes.some((prefix) => requestUrl.pathname.startsWith(prefix))) forbiddenRequests.push(requestUrl.pathname);
+    if (requestUrl.origin === firstFixture.url && requestUrl.pathname === '/api/runtime/runs' && request.method() === 'POST') {
+      runtimeRunPosts.push(requestUrl.pathname);
+    }
+  };
+  context.on('request', recordRequest);
+  page.on('pageerror', (error) => pageErrors.push(error));
+  try {
+    await page.goto(`${firstFixture.url}#runtime`);
+    await expect(page.getByRole('heading', { name: 'Runtime Playground' })).toBeVisible({ timeout: browserTimeout });
+    const identity = page.locator('[data-runtime-provider-session]');
+    await expect(identity).toHaveCount(1);
+    const runtimeSessionToken = await page.evaluate(async () => {
+      const response = await fetch('/api/project/session', { credentials: 'same-origin' });
+      const body: unknown = await response.json();
+      if (!response.ok || typeof body !== 'object' || body === null || typeof (body as { readonly token?: unknown }).token !== 'string') {
+        throw new Error(`Runtime session bootstrap failed with ${response.status}.`);
+      }
+      return (body as { readonly token: string }).token;
+    });
+    const runtimeJson = async (path: string): Promise<unknown> => page.evaluate(async ({ route, token }) => {
+      const response = await fetch(route, {
+        credentials: 'same-origin',
+        headers: { 'x-agent-bundle-session': token },
+      });
+      if (!response.ok) throw new Error(`Runtime request ${route} failed with ${response.status}.`);
+      return response.json();
+    }, { route: path, token: runtimeSessionToken });
+    const surface = page.getByLabel('Runtime surface');
+    const target = page.getByLabel('Runtime target');
+    const input = page.locator('#runtime-input-raw');
+    const run = page.getByRole('button', { name: 'Run', exact: true });
+    const history = page.getByRole('region', { name: 'Runtime run history' }).locator('ol > li');
+
+    await surface.selectOption('mcp.runtime_status');
+    await target.selectOption('portable');
+    await page.getByRole('radio', { name: 'Raw JSON' }).check();
+    await input.fill('{}');
+    await expect(surface).toHaveValue('mcp.runtime_status');
+    await expect(target).toHaveValue('portable');
+    await expect(input).toHaveValue('{}');
+    await run.click();
+    await expect.poll(async () => history.count(), { timeout: browserTimeout }).toBe(1);
+    expect(runtimeRunPosts).toEqual(['/api/runtime/runs']);
+
+    const firstHistory = await runtimeJson('/api/runtime/runs?limit=50') as Readonly<{
+      readonly providerSessionId: string;
+      readonly runs: readonly Readonly<{
+        readonly id: string;
+        readonly result: Readonly<{
+          readonly modelVisible: unknown;
+          readonly protocol: unknown;
+          readonly trace: readonly Readonly<{ readonly id: string; readonly status: string }> [];
+        }>;
+        readonly status: string;
+        readonly surfaceId: string;
+        readonly target: string;
+        readonly vector: Readonly<{
+          readonly providerSessionId: string;
+          readonly runtimeGenerationId: string;
+          readonly stateStoreId: string;
+          readonly stateVersion: number;
+        }>;
+      }> [];
+    }>;
+    const firstStatus = await runtimeJson('/api/runtime/status') as Readonly<{
+      readonly status: Readonly<{ readonly activeVector: unknown }>;
+    }>;
+    expect(firstHistory.runs).toHaveLength(1);
+    const firstRun = firstHistory.runs[0]!;
+    const firstRunIds = firstHistory.runs.map((entry) => entry.id);
+    expect(firstRun).toMatchObject({ status: 'succeeded', surfaceId: 'mcp.runtime_status', target: 'portable' });
+    expect(firstRun.vector).toEqual(firstStatus.status.activeVector);
+    expect(firstRun.vector.providerSessionId).toBe(firstHistory.providerSessionId);
+    expect(firstRun.result.modelVisible).toEqual(expectedContent);
+    expect(firstRun.result.protocol).toEqual({
+      content: expectedContent,
+      structuredContent: { editCount: 0, stateVersion: 0 },
+    });
+    expect(firstRun.result.trace.map((entry) => entry.id)).toEqual(['normalize', 'worker', 'flight', 'decode', 'lower']);
+    expect(firstRun.result.trace.map((entry) => entry.status)).toEqual(['succeeded', 'succeeded', 'succeeded', 'succeeded', 'succeeded']);
+
+    await page.reload();
+    await expect(page.getByRole('heading', { name: 'Runtime Playground' })).toBeVisible({ timeout: browserTimeout });
+    await expect(identity).toHaveAttribute('data-runtime-provider-session', firstHistory.providerSessionId);
+    const reloadedHistory = await runtimeJson('/api/runtime/runs?limit=50') as Readonly<{
+      readonly providerSessionId: string;
+      readonly runs: readonly Readonly<{ readonly id: string }> [];
+    }>;
+    expect(reloadedHistory.providerSessionId).toBe(firstHistory.providerSessionId);
+    expect(reloadedHistory.runs.map((entry) => entry.id)).toEqual(firstRunIds);
+    expect(reloadedHistory.runs).toHaveLength(firstRunIds.length);
+    expect(reloadedHistory.runs.length).toBeLessThanOrEqual(50);
+
+    await firstFixture.close();
+    secondFixture = await startRuntimePlaygroundFixture();
+    await page.goto(`${secondFixture.url}#runtime`);
+    await expect(page.getByRole('heading', { name: 'Runtime Playground' })).toBeVisible({ timeout: browserTimeout });
+    await expect.poll(() => identity.getAttribute('data-runtime-provider-session'), { timeout: browserTimeout }).not.toBe(firstHistory.providerSessionId);
+    const freshSessionToken = await page.evaluate(async () => {
+      const response = await fetch('/api/project/session', { credentials: 'same-origin' });
+      const body: unknown = await response.json();
+      if (!response.ok || typeof body !== 'object' || body === null || typeof (body as { readonly token?: unknown }).token !== 'string') {
+        throw new Error(`Runtime session bootstrap failed with ${response.status}.`);
+      }
+      return (body as { readonly token: string }).token;
+    });
+    const freshRuntimeJson = async (path: string): Promise<unknown> => page.evaluate(async ({ route, token }) => {
+      const response = await fetch(route, {
+        credentials: 'same-origin',
+        headers: { 'x-agent-bundle-session': token },
+      });
+      if (!response.ok) throw new Error(`Runtime request ${route} failed with ${response.status}.`);
+      return response.json();
+    }, { route: path, token: freshSessionToken });
+    const freshHistory = await freshRuntimeJson('/api/runtime/runs?limit=50') as Readonly<{
+      readonly providerSessionId: string;
+      readonly runs: readonly Readonly<{ readonly id: string }> [];
+    }>;
+    expect(freshHistory.providerSessionId).not.toBe(firstHistory.providerSessionId);
+    expect(freshHistory.runs.filter((entry) => firstRunIds.includes(entry.id))).toEqual([]);
+    expect(forbiddenRequests).toEqual([]);
+    expect(pageErrors).toEqual([]);
+  } finally {
+    context.off('request', recordRequest);
+    await secondFixture?.close();
+    await firstFixture.close();
   }
 });
