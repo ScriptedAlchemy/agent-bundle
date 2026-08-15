@@ -97,10 +97,10 @@ process.stdout.end(JSON.stringify({
 
 const invoke = async (entry: string, request: Record<string, unknown>) => startInvocation(entry, request).completed;
 
-const buildInvocationEntry = async (compilerRoot: string): Promise<string> => {
+const buildInvocationEntry = async (compilerRoot: string, cwd = process.cwd()): Promise<string> => {
   const rsbuild = await createRsbuild({
     config: createRscRuntimeRsbuildConfig({ compilerRoot, mode: 'development' }),
-    cwd: process.cwd(),
+    cwd,
   });
   await rsbuild.build();
   return join(compilerRoot, 'rsc', 'dev', 'invoke.js');
@@ -199,6 +199,43 @@ const assertJsonOnly = (value: unknown): void => {
   expect(value).toBeTypeOf('object');
   Object.values(value as Record<string, unknown>).forEach(assertJsonOnly);
 };
+
+test('lowers the hook state version when copied RSC output wording changes', async () => {
+  const copied = await copyExample();
+  const compilerRoot = join(copied.workspaceRoot, 'compiler');
+  const componentSource = join(copied.projectRoot, 'src', 'rsc', 'components.tsx');
+  try {
+    const source = await readFile(componentSource, 'utf8');
+    const edited = source.replace('Shared state now contains', 'Live runtime state now contains');
+    expect(edited).not.toBe(source);
+    await writeFile(componentSource, edited);
+    const entry = await buildInvocationEntry(compilerRoot, copied.projectRoot);
+    const result = await invoke(entry, {
+      host: 'claude',
+      input: {
+        cwd: join(copied.workspaceRoot, 'workspace'),
+        hook_event_name: 'PostToolUse',
+        session_id: 'wording-independent-state-version',
+        tool_input: { file_path: 'changed-wording.txt' },
+        tool_name: 'Write',
+        tool_use_id: 'changed-wording-tool',
+      },
+      stateFile: join(copied.workspaceRoot, 'events.jsonl'),
+      stateStoreId: 'wording-independent-state-version',
+      type: 'hook/after-file-edit',
+    });
+
+    expect(result).toMatchObject({ exitCode: 0, stderr: '' });
+    expect(JSON.parse(result.stdout.toString('utf8'))).toMatchObject({
+      inspection: {
+        agentVisible: 'Recorded changed-wording.txt from claude. Live runtime state now contains 1 edit.',
+        state: { identity: { stateStoreId: 'wording-independent-state-version', stateVersion: 1 } },
+      },
+    });
+  } finally {
+    await rm(copied.workspaceRoot, { force: true, recursive: true });
+  }
+}, 30_000);
 
 test('builds a generation-contained inspection entry for Claude, Codex, and MCP fixtures', async () => {
   const compilerRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-invoke-'));

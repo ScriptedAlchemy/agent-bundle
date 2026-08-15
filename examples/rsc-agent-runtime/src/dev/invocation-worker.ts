@@ -155,7 +155,7 @@ const renderRequestFor = (request: DevRuntimeInspectionRequest): RenderRequest =
 };
 
 const hookStateVersion = (native: ReturnType<typeof lowerHookResult>): number => {
-  const match = /\bShared state now contains (\d+) edits?\./u.exec(native.hookSpecificOutput.additionalContext);
+  const match = /\bstate now contains (\d+) edits?\./u.exec(native.hookSpecificOutput.additionalContext);
   if (match === null) throw new Error('Rendered hook result did not contain a state version');
   const stateVersion = Number(match[1]);
   if (!Number.isSafeInteger(stateVersion) || stateVersion < 0) {
