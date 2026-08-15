@@ -51,6 +51,17 @@ export type RuntimeModelEffect =
   | Readonly<{ readonly kind: 'replay-run'; readonly request: DevRuntimeReplayRequest }>
   | Readonly<{ readonly kind: 'reset-state'; readonly request: DevRuntimeStateResetRequest }>;
 
+type RuntimeForegroundEffect =
+  | Extract<RuntimeModelEffect, Readonly<{ readonly kind: 'create-run' }>>
+  | Extract<RuntimeModelEffect, Readonly<{ readonly kind: 'replay-run' }>>
+  | Extract<RuntimeModelEffect, Readonly<{ readonly kind: 'reset-state' }>>;
+
+type RuntimeDeferredForegroundIntent =
+  | Readonly<{ readonly cause: 'manual' | 'reset'; readonly kind: 'create-run'; readonly request: Omit<DevRuntimeInvocationRequest, 'expectedGenerationId'> }>
+  | Readonly<{ readonly kind: 'replay-run'; readonly mode: 'latest'; readonly runId: string }>
+  | Readonly<{ readonly kind: 'replay-run'; readonly mode: 'exact'; readonly request: DevRuntimeReplayRequest }>
+  | Readonly<{ readonly kind: 'reset-state'; readonly request: DevRuntimeStateResetRequest }>;
+
 type RuntimeQueuedEffect = RuntimePendingEffect & RuntimeModelEffect & Readonly<{
   readonly operation: RuntimeModelEffect;
 }>;
@@ -63,7 +74,7 @@ export interface RuntimeModel {
   readonly activeEffect?: RuntimeQueuedEffect;
   readonly announcements: readonly string[];
   readonly confirmation?: RuntimeConfirmation;
-  readonly deferredOperation?: RuntimeModelEffect;
+  readonly deferredOperation?: RuntimeDeferredForegroundIntent;
   readonly draft: RuntimeDraft;
   readonly expandedTraceSpanIds: readonly string[];
   readonly history: readonly DevRuntimeRun[];
@@ -335,16 +346,59 @@ const deferHistoryBootstrap = (model: RuntimeModel, triggerSequence?: number): R
   });
 };
 
-const deferForegroundOperation = (model: RuntimeModel, operation: RuntimeModelEffect): RuntimeModel => {
+const deferredIntentFor = (operation: RuntimeForegroundEffect): RuntimeDeferredForegroundIntent => {
+  if (operation.kind === 'create-run') {
+    const { expectedGenerationId: _expectedGenerationId, ...request } = operation.request;
+    return Object.freeze({ cause: operation.cause, kind: 'create-run' as const, request: snapshot(request) });
+  }
+  if (operation.kind === 'replay-run' && operation.request.mode === 'latest') {
+    return Object.freeze({ kind: 'replay-run' as const, mode: 'latest' as const, runId: operation.request.runId });
+  }
+  if (operation.kind === 'replay-run') {
+    return Object.freeze({ kind: 'replay-run' as const, mode: 'exact' as const, request: snapshot(operation.request) });
+  }
+  return Object.freeze({ kind: 'reset-state' as const, request: snapshot(operation.request) });
+};
+
+const operationForDeferredIntent = (model: RuntimeModel, intent: RuntimeDeferredForegroundIntent): RuntimeModelEffect => {
+  if (intent.kind === 'create-run') {
+    return Object.freeze({
+      cause: intent.cause,
+      kind: 'create-run' as const,
+      request: snapshot({
+        ...intent.request,
+        ...(model.status?.activeVector === undefined ? {} : { expectedGenerationId: model.status.activeVector.runtimeGenerationId }),
+      }),
+    });
+  }
+  if (intent.kind === 'reset-state') {
+    return Object.freeze({ kind: 'reset-state' as const, request: snapshot(intent.request) });
+  }
+  if (intent.mode === 'latest') {
+    return Object.freeze({
+      kind: 'replay-run' as const,
+      request: snapshot({
+        ...(model.status?.activeVector === undefined ? {} : { expectedGenerationId: model.status.activeVector.runtimeGenerationId }),
+        mode: 'latest' as const,
+        runId: intent.runId,
+      }),
+    });
+  }
+  return Object.freeze({ kind: 'replay-run' as const, request: snapshot(intent.request) });
+};
+
+const deferForegroundOperation = (model: RuntimeModel, operation: RuntimeForegroundEffect): RuntimeModel => {
   if (model.deferredOperation !== undefined) {
     return announced(model, 'A foreground runtime operation is already queued; wait for it to drain.');
   }
-  return update(model, { deferredOperation: snapshot(operation) });
+  return update(model, { deferredOperation: deferredIntentFor(operation) });
 };
 
 const queueOperation = (model: RuntimeModel, operation: RuntimeModelEffect): RuntimeModel => {
   if (model.activeEffect !== undefined && model.pendingEffect !== undefined) {
-    return operation.kind === 'read-run' ? deferHistoryBootstrap(model) : deferForegroundOperation(model, operation);
+    if (operation.kind === 'read-run') return deferHistoryBootstrap(model);
+    if (operation.kind === 'bootstrap') return deferHistoryBootstrap(model, operation.triggerSequence);
+    return deferForegroundOperation(model, operation);
   }
   const [advanced, queued] = createQueuedEffect(model, operation);
   return advanced.activeEffect === undefined
@@ -374,9 +428,9 @@ const flushDeferredHistoryBootstrap = (model: RuntimeModel): RuntimeModel => {
 };
 
 const flushDeferredForegroundOperation = (model: RuntimeModel): RuntimeModel => {
-  const operation = model.deferredOperation;
-  if (operation === undefined || (model.activeEffect !== undefined && model.pendingEffect !== undefined)) return model;
-  return queueOperation(update(model, { deferredOperation: undefined }), operation);
+  const intent = model.deferredOperation;
+  if (intent === undefined || model.activeEffect?.kind === 'bootstrap' || (model.activeEffect !== undefined && model.pendingEffect !== undefined)) return model;
+  return queueOperation(update(model, { deferredOperation: undefined }), operationForDeferredIntent(model, intent));
 };
 
 const settleEffect = (model: RuntimeModel, id: string): RuntimeModel => {

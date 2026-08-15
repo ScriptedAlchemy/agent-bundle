@@ -715,10 +715,63 @@ it('preserves one direct read-only or replay operation through a full effect que
   const exact = reduce(queuedBase(), { mode: 'exact', runId: 'run-old', type: 'replay.request' });
   const latest = reduce(queuedBase(), { mode: 'latest', runId: 'run-old', type: 'replay.request' });
 
-  expect(direct.deferredOperation).toMatchObject({ cause: 'manual', kind: 'create-run', request: { expectedGenerationId: 'generation-new' } });
+  expect(direct.deferredOperation).toMatchObject({ cause: 'manual', kind: 'create-run', request: { surfaceId: 'weather', target: 'portable' } });
   expect(exact.deferredOperation).toMatchObject({ kind: 'replay-run', request: { expectedGenerationId: 'generation-old', mode: 'exact', runId: 'run-old' } });
-  expect(latest.deferredOperation).toMatchObject({ kind: 'replay-run', request: { expectedGenerationId: 'generation-new', mode: 'latest', runId: 'run-old' } });
+  expect(latest.deferredOperation).toMatchObject({ kind: 'replay-run', mode: 'latest', runId: 'run-old' });
   expect(promoteExactlyOnce(direct).activeEffect).toMatchObject({ cause: 'manual', kind: 'create-run' });
   expect(promoteExactlyOnce(exact).activeEffect).toMatchObject({ kind: 'replay-run', request: { mode: 'exact', runId: 'run-old' } });
   expect(promoteExactlyOnce(latest).activeEffect).toMatchObject({ kind: 'replay-run', request: { mode: 'latest', runId: 'run-old' } });
+});
+
+it('rebinds deferred latest intents after activation while retaining exact replay generation', () => {
+  const oldGeneration = 'generation-old';
+  const newGeneration = 'generation-new';
+  const activatedBootstrap = bootstrap({
+    history: [run('run-old', { vector: vector({ runtimeGenerationId: oldGeneration }) })],
+    status: status({
+      activeVector: vector({ runtimeGenerationId: newGeneration }),
+      lastGoodVector: vector({ runtimeGenerationId: newGeneration }),
+    }),
+    surfaces: [surface({ readOnly: true })],
+  });
+  const fullQueue = (): RuntimeModel => reduce(model({
+    history: [run('run-old', { vector: vector({ runtimeGenerationId: oldGeneration }) })],
+    status: status({
+      activeVector: vector({ runtimeGenerationId: oldGeneration }),
+      lastGoodVector: vector({ runtimeGenerationId: oldGeneration }),
+    }),
+    surfaces: [surface({ readOnly: true })],
+  }), {
+    event: {
+      occurredAt: '2026-08-15T12:00:00.000Z',
+      payload: { providerSessionId: 'provider-a', runId: 'run-a', runtimeGenerationId: oldGeneration, type: 'runtime.run.completed' },
+      sequence: 1,
+      type: 'runtime.event',
+    },
+    type: 'event.received',
+  }, { event: event(2, 'runtime.generation.activated', undefined, 'provider-a', newGeneration), type: 'event.received' });
+  const promoteAfterActivation = (state: RuntimeModel) => {
+    const read = effectFor(state);
+    if (read === undefined) throw new Error('Expected active read effect.');
+    const bootstrapping = reduce(state, { id: read.id, type: 'effect.settled' });
+    const bootstrapEffect = effectFor(bootstrapping);
+    if (bootstrapEffect === undefined || bootstrapEffect.kind !== 'bootstrap') throw new Error('Expected active bootstrap effect.');
+    const activated = reduce(bootstrapping, { bootstrap: activatedBootstrap, type: 'bootstrap.received' });
+    const promoted = effectFor(activated);
+    if (promoted === undefined) throw new Error('Expected promoted foreground effect.');
+    const drained = reduce(activated, { id: promoted.id, type: 'effect.settled' });
+    expect(effectFor(drained)).toBeUndefined();
+    expect(drained.pendingEffect).toBeUndefined();
+    return promoted;
+  };
+
+  const direct = promoteAfterActivation(reduce(fullQueue(), { type: 'run.request' }));
+  const latest = promoteAfterActivation(reduce(fullQueue(), { mode: 'latest', runId: 'run-old', type: 'replay.request' }));
+  const exact = promoteAfterActivation(reduce(fullQueue(), { mode: 'exact', runId: 'run-old', type: 'replay.request' }));
+
+  expect(direct).toMatchObject({ cause: 'manual', kind: 'create-run', request: { expectedGenerationId: newGeneration } });
+  expect(latest).toMatchObject({ kind: 'replay-run', request: { expectedGenerationId: newGeneration, mode: 'latest', runId: 'run-old' } });
+  expect(exact).toMatchObject({ kind: 'replay-run', request: { expectedGenerationId: oldGeneration, mode: 'exact', runId: 'run-old' } });
+  if (exact.kind !== 'replay-run') throw new Error('Expected exact replay effect.');
+  expect(Object.isFrozen(exact.request)).toBe(true);
 });
