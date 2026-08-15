@@ -194,3 +194,149 @@ e2e('renders the capability-gated Runtime sibling in the real RSC workbench', { 
     await fixture.close();
   }
 });
+
+e2e('resets the selected Claude fixture to its seed without replacing prior runtime evidence', { timeout: 120_000 }, async ({ page }) => {
+  const fixture = await startRuntimePlaygroundFixture();
+  const resetRequests: unknown[] = [];
+  const pageErrors: Error[] = [];
+  const claudeSeed = {
+    cwd: '/tmp',
+    hook_event_name: 'PostToolUse',
+    session_id: 'fixture-claude-post-tool-use',
+    tool_input: { file_path: 'fixture-claude-post-tool-use.txt' },
+    tool_name: 'Write',
+    tool_use_id: 'fixture-claude-post-tool-use-write',
+  };
+  page.on('pageerror', (error) => pageErrors.push(error));
+  page.on('request', (request) => {
+    const requestUrl = new URL(request.url());
+    if (requestUrl.origin === fixture.url && requestUrl.pathname === '/api/runtime/state/reset' && request.method() === 'POST') {
+      resetRequests.push(JSON.parse(request.postData() ?? 'null'));
+    }
+  });
+  try {
+    await page.goto(`${fixture.url}#runtime`);
+    await expect(page.getByRole('heading', { name: 'Runtime Playground' })).toBeVisible({ timeout: browserTimeout });
+    const identity = page.locator('[data-runtime-provider-session]');
+    await expect(identity).toHaveCount(1);
+    const runtimeSessionToken = await page.evaluate(async () => {
+      const response = await fetch('/api/project/session', { credentials: 'same-origin' });
+      const body: unknown = await response.json();
+      if (!response.ok || typeof body !== 'object' || body === null || typeof (body as { readonly token?: unknown }).token !== 'string') {
+        throw new Error(`Runtime session bootstrap failed with ${response.status}.`);
+      }
+      return (body as { readonly token: string }).token;
+    });
+    const runtimeJson = async (path: string): Promise<unknown> => page.evaluate(async ({ route, token }) => {
+      const response = await fetch(route, {
+        credentials: 'same-origin',
+        headers: { 'x-agent-bundle-session': token },
+      });
+      if (!response.ok) throw new Error(`Runtime request ${route} failed with ${response.status}.`);
+      return response.json();
+    }, { route: path, token: runtimeSessionToken });
+    const surface = page.getByLabel('Runtime surface');
+    const runtimeFixture = page.getByLabel('Runtime fixture');
+    const history = page.getByRole('region', { name: 'Runtime run history' }).locator('ol > li');
+    const run = page.getByRole('button', { name: 'Run', exact: true });
+    const reset = page.getByRole('button', { name: 'Reset fixture state' });
+    const confirmation = page.getByRole('dialog');
+    const cancel = confirmation.getByRole('button', { name: 'Cancel' });
+
+    await surface.selectOption('hook.claude');
+    await runtimeFixture.selectOption('claude-post-tool-use-write');
+    await expect(runtimeFixture).toHaveValue('claude-post-tool-use-write');
+    await run.click();
+    await expect(confirmation).toContainText('Run mutable runtime surface?');
+    await confirmation.getByRole('button', { name: 'Confirm' }).click();
+    await expect.poll(async () => history.count(), { timeout: browserTimeout }).toBe(1);
+    await expect(run).toBeEnabled({ timeout: browserTimeout });
+
+    const historyBeforeReset = await runtimeJson('/api/runtime/runs?limit=50') as Readonly<{
+      readonly runs: readonly Readonly<{
+        readonly fixtureId?: string;
+        readonly id: string;
+        readonly input: unknown;
+        readonly status: string;
+        readonly surfaceId: string;
+        readonly target: string;
+        readonly vector: Readonly<{ readonly stateStoreId: string; readonly stateVersion: number }>;
+      }> [];
+    }>;
+    expect(historyBeforeReset.runs).toHaveLength(1);
+    expect(historyBeforeReset.runs[0]).toMatchObject({
+      fixtureId: 'claude-post-tool-use-write',
+      input: claudeSeed,
+      status: 'succeeded',
+      surfaceId: 'hook.claude',
+      target: 'claude',
+    });
+    const oldRunIds = historyBeforeReset.runs.map((entry) => entry.id);
+    const oldRunVectors = Object.fromEntries(await Promise.all(oldRunIds.map(async (runId) => {
+      const response = await runtimeJson(`/api/runtime/runs/${encodeURIComponent(runId)}`) as Readonly<{
+        readonly run: Readonly<{ readonly vector: unknown }>;
+      }>;
+      return [runId, JSON.parse(JSON.stringify(response.run.vector))] as const;
+    })));
+    const stateStoreId = historyBeforeReset.runs[0]!.vector.stateStoreId;
+    const stateVersionBeforeReset = historyBeforeReset.runs[0]!.vector.stateVersion;
+    const generationId = await identity.getAttribute('data-runtime-generation');
+    expect(generationId).not.toBeNull();
+
+    await reset.click();
+    await expect(confirmation).toContainText('Reset fixture state?');
+    await expect(confirmation).toContainText(JSON.stringify(claudeSeed));
+    await expect(cancel).toBeFocused({ timeout: browserTimeout });
+    await page.keyboard.press('Tab');
+    await expect(confirmation.getByRole('button', { name: 'Confirm' })).toBeFocused({ timeout: browserTimeout });
+    await page.keyboard.press('Tab');
+    await expect(cancel).toBeFocused({ timeout: browserTimeout });
+    await page.keyboard.press('Shift+Tab');
+    await expect(confirmation.getByRole('button', { name: 'Confirm' })).toBeFocused({ timeout: browserTimeout });
+    await page.keyboard.press('Escape');
+    await expect(confirmation).toBeHidden();
+    await expect(reset).toBeFocused({ timeout: browserTimeout });
+    expect(resetRequests).toEqual([]);
+
+    await reset.click();
+    await confirmation.getByRole('button', { name: 'Confirm' }).click();
+    await expect.poll(() => resetRequests).toEqual([{
+      expectedGenerationId: generationId,
+      seed: claudeSeed,
+      stateStoreId,
+    }]);
+    await expect(page.locator('.runtime-status')).toBeFocused({ timeout: browserTimeout });
+    await expect(identity).toHaveAttribute('data-runtime-state-version', String(stateVersionBeforeReset + 1));
+
+    const historyAfterReset = await runtimeJson('/api/runtime/runs?limit=50') as Readonly<{
+      readonly runs: readonly Readonly<{
+        readonly id: string;
+        readonly result?: Readonly<{ readonly state: Readonly<{ readonly snapshot?: unknown }> }>;
+        readonly vector: Readonly<{ readonly stateStoreId: string; readonly stateVersion: number }>;
+      }> [];
+    }>;
+    expect(historyAfterReset.runs).toHaveLength(oldRunIds.length + 1);
+    const historyAfterResetIds = historyAfterReset.runs.map((entry) => entry.id);
+    const resetFollowUp = historyAfterReset.runs.find((entry) => !oldRunIds.includes(entry.id));
+    expect(resetFollowUp).toBeDefined();
+    expect(historyAfterResetIds).toEqual([resetFollowUp!.id, ...oldRunIds]);
+    expect(resetFollowUp!.vector).toMatchObject({ stateStoreId, stateVersion: stateVersionBeforeReset + 1 });
+    expect(resetFollowUp!.result?.state.snapshot).toMatchObject({ seed: claudeSeed });
+
+    for (const oldRunId of oldRunIds) {
+      const response = await runtimeJson(`/api/runtime/runs/${encodeURIComponent(oldRunId)}`) as Readonly<{
+        readonly run: Readonly<{ readonly vector: unknown }>;
+      }>;
+      expect(response.run.vector).toEqual(oldRunVectors[oldRunId]);
+    }
+
+    await history.first().getByRole('button').first().click();
+    const stateTab = page.getByRole('tab', { name: 'State', exact: true });
+    await stateTab.click();
+    await expect(stateTab).toHaveAttribute('aria-selected', 'true');
+    await expect(page.getByRole('tabpanel')).toContainText('fixture-claude-post-tool-use-write');
+    expect(pageErrors).toEqual([]);
+  } finally {
+    await fixture.close();
+  }
+});
