@@ -21,6 +21,8 @@ const readChildOutput = (stream: NodeJS.ReadableStream): Promise<Buffer> =>
     stream.once('end', () => resolve(Buffer.concat(chunks)));
   });
 
+const windowsTest = process.platform === 'win32' ? test : test.skip;
+
 const exampleRoot = process.cwd();
 const workspaceNodeModules = join(exampleRoot, '../../node_modules');
 
@@ -1068,6 +1070,61 @@ process.stdout.end(JSON.stringify({
 
     expect(run).toMatchObject({ status: 'succeeded' });
     await waitFor(() => !isProcessAlive(grandchildPid as number), 'RSC invocation grandchild remained alive after successful invocation');
+  } finally {
+    if (grandchildPid !== undefined && isProcessAlive(grandchildPid)) process.kill(grandchildPid, 'SIGKILL');
+    await session.close().catch(() => undefined);
+    await rm(storageRoot, { force: true, recursive: true });
+  }
+}, 30_000);
+
+windowsTest('keeps a detached successful worker grandchild in its Windows Job Object until it dies', async () => {
+  const storageRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-session-windows-job-'));
+  const projectRoot = process.cwd();
+  const prepared = await new ProjectService({ includeDevRuntime: true, mode: 'development', root: projectRoot }).prepare('dev');
+  const session = await createDevRuntimeProvider().start({
+    artifactStatus: () => Object.freeze({ state: 'missing' as const }),
+    emit: () => undefined,
+    environment: Object.freeze({}),
+    projectRoot,
+    preparedRuntime: prepared.devRuntime!,
+    providerSessionId: 'session-windows-job-test',
+    signal: new AbortController().signal,
+    storageRoot,
+  });
+  let grandchildPid: number | undefined;
+
+  try {
+    await waitFor(() => session.status().activeVector !== undefined, 'Timed out waiting for an active runtime generation', 15_000);
+    const generationId = session.status().activeVector!.runtimeGenerationId;
+    const marker = join(storageRoot, 'rsc-invocation-windows-job-grandchild.pid');
+    const entry = join(storageRoot, 'generation-store', 'generations', generationId, 'rsc', 'dev', 'invoke.js');
+    await writeFile(entry, `
+const { spawn } = require('node:child_process');
+const { writeFileSync, writeSync } = require('node:fs');
+const child = spawn(process.execPath, ['-e', 'process.on("SIGTERM", () => undefined); setInterval(() => undefined, 1000)'], { detached: true, stdio: 'ignore' });
+child.unref();
+writeFileSync(${JSON.stringify(marker)}, String(child.pid));
+writeSync(3, Buffer.from('x'));
+process.stdout.end(JSON.stringify({
+  flightBytes: 1,
+  inspection: {
+    flight: { bytes: 1, preview: 'eA==', truncated: false },
+    modelVisible: [],
+    protocol: [],
+    state: { identity: { stateStoreId: 'playground', stateVersion: 0 } },
+    trace: [],
+    tree: [],
+  },
+}) + '\\n');
+`);
+    const target = session.surfaces().find((surface) => surface.id === 'mcp.runtime_status')!.targets[0]!;
+    const run = await session.invoke({ expectedGenerationId: generationId, input: {}, surfaceId: 'mcp.runtime_status', target });
+    grandchildPid = Number(await readWhenPresent(marker));
+
+    expect(run).toMatchObject({ status: 'succeeded' });
+    await waitFor(() => !isProcessAlive(grandchildPid as number), 'Windows Job Object left a detached RSC grandchild alive after invocation');
+    await session.close();
+    expect(isProcessAlive(grandchildPid as number)).toBe(false);
   } finally {
     if (grandchildPid !== undefined && isProcessAlive(grandchildPid)) process.kill(grandchildPid, 'SIGKILL');
     await session.close().catch(() => undefined);

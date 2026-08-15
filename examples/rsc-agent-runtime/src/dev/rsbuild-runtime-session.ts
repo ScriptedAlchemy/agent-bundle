@@ -92,31 +92,55 @@ const invocationTimeoutMs = 10_000;
 const invocationTerminationGraceMs = 100;
 const flightPreviewBytes = 32 * 1024;
 
-// Windows has no process-group equivalent that remains addressable after the
-// invocation leader exits. Keep a provider-owned supervisor alive until the
-// session has collected and torn down the worker tree with taskkill /T.
-const windowsInvocationSupervisorSource = String.raw`
-const { spawn } = require('node:child_process');
-const { closeSync, writeSync } = require('node:fs');
-const entry = process.argv[1];
-let reported = false;
-const report = (code) => {
-  if (reported) return;
-  reported = true;
-  try { writeSync(4, String(code) + '\n'); } catch {}
-  for (const fd of [1, 2, 3, 4]) {
-    try { closeSync(fd); } catch {}
-  }
-  setInterval(() => undefined, 2 ** 30);
-};
-const worker = spawn(process.execPath, [entry], {
-  cwd: process.cwd(),
-  env: process.env,
-  stdio: [0, 1, 2, 3, 'ignore'],
-  windowsHide: true,
-});
-worker.once('error', () => report(1));
-worker.once('close', (code) => report(code === 0 ? 0 : 1));
+// Start the actual invocation suspended, assign it to a kill-on-close Job
+// Object, then resume it. Membership propagates to every descendant before
+// worker code can execute, including a child created with `detached: true`.
+const windowsJobSupervisorSource = String.raw`
+$typeDefinition = @'
+using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+using System.Text;
+using System.Threading;
+public static class AgentBundleWindowsJob {
+ const uint S=4,A=1,J=9,K=0x2000,I=0xffffffff,H=0x100;
+ [StructLayout(LayoutKind.Sequential,CharSet=CharSet.Unicode)] struct SI { public int cb; public string r,d,t; public uint x,y,xs,ys,xc,yc,fill,flags; public short show,res; public IntPtr p,i,o,e; }
+ [StructLayout(LayoutKind.Sequential)] struct PI { public IntPtr p,t; public uint pid,tid; }
+ [StructLayout(LayoutKind.Sequential)] struct BL { public long a,b; public uint flags; public UIntPtr c,d; public uint e; public UIntPtr f; public uint g,h; }
+ [StructLayout(LayoutKind.Sequential)] struct IO { public ulong a,b,c,d,e,f; }
+ [StructLayout(LayoutKind.Sequential)] struct EL { public BL b; public IO i; public UIntPtr p,j,pp,pj; }
+ [StructLayout(LayoutKind.Sequential)] struct BA { public long a,b,c,d; public uint e,f,g,h; }
+ [DllImport("kernel32.dll",CharSet=CharSet.Unicode,SetLastError=true)] static extern bool CreateProcess(string a,StringBuilder c,IntPtr d,IntPtr e,bool f,uint g,IntPtr h,string i,ref SI j,out PI k);
+ [DllImport("kernel32.dll",SetLastError=true)] static extern IntPtr CreateJobObject(IntPtr a,string b);
+ [DllImport("kernel32.dll",SetLastError=true)] static extern bool SetInformationJobObject(IntPtr a,uint b,IntPtr c,uint d);
+ [DllImport("kernel32.dll",SetLastError=true)] static extern bool QueryInformationJobObject(IntPtr a,uint b,IntPtr c,uint d,IntPtr e);
+ [DllImport("kernel32.dll",SetLastError=true)] static extern bool AssignProcessToJobObject(IntPtr a,IntPtr b);
+ [DllImport("kernel32.dll",SetLastError=true)] static extern bool TerminateJobObject(IntPtr a,uint b);
+ [DllImport("kernel32.dll",SetLastError=true)] static extern uint ResumeThread(IntPtr a);
+ [DllImport("kernel32.dll",SetLastError=true)] static extern uint WaitForSingleObject(IntPtr a,uint b);
+ [DllImport("kernel32.dll",SetLastError=true)] static extern bool GetExitCodeProcess(IntPtr a,out uint b);
+ [DllImport("kernel32.dll",SetLastError=true)] static extern bool TerminateProcess(IntPtr a,uint b);
+ [DllImport("kernel32.dll",SetLastError=true)] static extern bool CloseHandle(IntPtr a);
+ [DllImport("kernel32.dll")] static extern IntPtr GetStdHandle(int a);
+ static void Ok(bool value) { if (!value) throw new Win32Exception(Marshal.GetLastWin32Error()); }
+ static string Q(string value) { StringBuilder output=new StringBuilder("\""); int slash=0; foreach(char character in value) { if(character=='\\') { slash++; continue; } output.Append('\\',character=='"' ? slash*2+1 : slash); output.Append(character); slash=0; } output.Append('\\',slash*2); output.Append('"'); return output.ToString(); }
+ static void Stop(IntPtr job) { IntPtr accounting=Marshal.AllocHGlobal(Marshal.SizeOf(typeof(BA))); try { Ok(TerminateJobObject(job,0)); for(int attempts=0;attempts<1000;attempts++) { Ok(QueryInformationJobObject(job,A,accounting,(uint)Marshal.SizeOf(typeof(BA)),IntPtr.Zero)); if(((BA)Marshal.PtrToStructure(accounting,typeof(BA))).g==0) return; Thread.Sleep(10); } throw new TimeoutException("Windows Job Object did not terminate every descendant."); } finally { Marshal.FreeHGlobal(accounting); } }
+ public static int Run(string node,string entry) {
+  IntPtr job=IntPtr.Zero,info=IntPtr.Zero; PI process=new PI();
+  try {
+   job=CreateJobObject(IntPtr.Zero,null); if(job==IntPtr.Zero) throw new Win32Exception(Marshal.GetLastWin32Error());
+   EL limits=new EL(); limits.b.flags=K; info=Marshal.AllocHGlobal(Marshal.SizeOf(typeof(EL))); Marshal.StructureToPtr(limits,info,false); Ok(SetInformationJobObject(job,J,info,(uint)Marshal.SizeOf(typeof(EL))));
+   SI startup=new SI(); startup.cb=Marshal.SizeOf(typeof(SI)); startup.flags=H; startup.i=GetStdHandle(-10); startup.o=GetStdHandle(-11); startup.e=GetStdHandle(-12); StringBuilder command=new StringBuilder(Q(node)+" "+Q(entry)); Ok(CreateProcess(node,command,IntPtr.Zero,IntPtr.Zero,true,S,IntPtr.Zero,null,ref startup,out process));
+   if(!AssignProcessToJobObject(job,process.p)) { TerminateProcess(process.p,1); throw new Win32Exception(Marshal.GetLastWin32Error()); }
+   if(ResumeThread(process.t)==I) throw new Win32Exception(Marshal.GetLastWin32Error());
+   if(WaitForSingleObject(process.p,I)==I) throw new Win32Exception(Marshal.GetLastWin32Error()); uint code; Ok(GetExitCodeProcess(process.p,out code)); Stop(job); return unchecked((int)code);
+  } catch { if(job!=IntPtr.Zero) TerminateJobObject(job,1); throw; }
+  finally { if(process.t!=IntPtr.Zero) CloseHandle(process.t); if(process.p!=IntPtr.Zero) CloseHandle(process.p); if(info!=IntPtr.Zero) Marshal.FreeHGlobal(info); if(job!=IntPtr.Zero) CloseHandle(job); }
+ }
+}
+'@
+Add-Type -TypeDefinition $typeDefinition -ErrorAction Stop
+exit [AgentBundleWindowsJob]::Run($args[0], $args[1])
 `;
 
 interface InvocationWorker {
@@ -1230,7 +1254,9 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
     const entry = join(input.generation.root, 'rsc', 'dev', 'invoke.js');
     if (!isInside(input.generation.root, entry)) return Promise.reject(new Error('RSC invocation entry escaped its generation root.'));
     const windowsSupervised = process.platform === 'win32';
-    const child = spawn(process.execPath, windowsSupervised ? ['-e', windowsInvocationSupervisorSource, entry] : [entry], {
+    const child = spawn(windowsSupervised ? 'powershell.exe' : process.execPath, windowsSupervised
+      ? ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', windowsJobSupervisorSource, process.execPath, entry]
+      : [entry], {
       cwd: resolve(this.#context.projectRoot),
       detached: process.platform !== 'win32',
       env: {
@@ -1238,17 +1264,15 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
         AGENT_RUNTIME_STATE_FILE: this.#stateFile,
         NODE_ENV: 'development',
       },
-      stdio: windowsSupervised ? ['pipe', 'pipe', 'pipe', 'pipe', 'pipe'] : ['pipe', 'pipe', 'pipe', 'pipe'],
+      stdio: ['pipe', 'pipe', 'pipe', 'pipe'],
       windowsHide: true,
     });
     const stdout = child.stdout;
     const stderr = child.stderr;
     const flightOutput = child.stdio[3] as NodeJS.ReadableStream | undefined;
-    const supervisorOutput = windowsSupervised ? child.stdio[4] as NodeJS.ReadableStream | undefined : undefined;
     const processGroupId = child.pid;
     if (
-      stdout === null || stderr === null || flightOutput === undefined || flightOutput === null || processGroupId === undefined ||
-      (windowsSupervised && (supervisorOutput === undefined || supervisorOutput === null))
+      stdout === null || stderr === null || flightOutput === undefined || flightOutput === null || processGroupId === undefined
     ) {
       child.kill('SIGKILL');
       return Promise.reject(new Error('RSC invocation worker streams are unavailable.'));
@@ -1260,15 +1284,9 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
     let stdoutBytes = 0;
     let stderrBytes = 0;
     let flightBytes = 0;
-    let stdoutEnded = false;
-    let flightEnded = false;
-    let supervisorExitCode: number | undefined;
-    let supervisorOutputEnded = !windowsSupervised;
-    let windowsResponse: Readonly<{ readonly flight: Buffer; readonly inspection: DevRuntimeInspectionEnvelope }> | undefined;
     const stdoutChunks: Buffer[] = [];
     const stderrChunks: Buffer[] = [];
     const flightChunks: Buffer[] = [];
-    const supervisorChunks: Buffer[] = [];
     const signalGroup = async (signal: NodeJS.Signals): Promise<void> => {
       try {
         if (process.platform !== 'win32') {
@@ -1322,15 +1340,6 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
           inspection: this.#validateWorkerResponse(JSON.parse(output), flightBytes, input.surfaceId),
         });
       };
-      const completeWindowsSuccess = (): void => {
-        if (!windowsSupervised || termination !== undefined || windowsResponse !== undefined || !stdoutEnded || !flightEnded || !supervisorOutputEnded || supervisorExitCode !== 0) return;
-        try {
-          windowsResponse = parseWorkerResponse();
-          void teardownTree();
-        } catch (error) {
-          terminate(error instanceof Error ? error : new Error('RSC invocation worker emitted invalid JSON.'));
-        }
-      };
       stdout.on('data', (chunk: Buffer | string) => {
         if (termination !== undefined) return;
         const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
@@ -1340,10 +1349,6 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
           return;
         }
         stdoutChunks.push(bytes);
-      });
-      stdout.once('end', () => {
-        stdoutEnded = true;
-        completeWindowsSuccess();
       });
       stdout.once('error', () => terminate(new Error('RSC invocation stdout stream failed.')));
       flightOutput.on('data', (chunk: Buffer | string) => {
@@ -1356,10 +1361,6 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
         }
         flightChunks.push(bytes);
       });
-      flightOutput.once('end', () => {
-        flightEnded = true;
-        completeWindowsSuccess();
-      });
       flightOutput.once('error', () => terminate(new Error('RSC invocation Flight stream failed.')));
       stderr.on('data', (chunk: Buffer | string) => {
         const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
@@ -1371,39 +1372,10 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
         }
       });
       stderr.once('error', () => terminate(new Error('RSC invocation stderr stream failed.')));
-      if (supervisorOutput !== undefined && supervisorOutput !== null) {
-        supervisorOutput.on('data', (chunk: Buffer | string) => {
-          const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-          if (Buffer.concat([...supervisorChunks, bytes]).byteLength > 32) {
-            terminate(new Error('RSC invocation Windows supervisor emitted an invalid exit status.'));
-            return;
-          }
-          supervisorChunks.push(bytes);
-        });
-        supervisorOutput.once('error', () => terminate(new Error('RSC invocation Windows supervisor status stream failed.')));
-        supervisorOutput.once('end', () => {
-          const output = Buffer.concat(supervisorChunks).toString('utf8');
-          if (!/^(?:0|[1-9]\d*)\n$/u.test(output)) {
-            terminate(new Error('RSC invocation Windows supervisor emitted an invalid exit status.'));
-            return;
-          }
-          supervisorExitCode = Number(output.slice(0, -1));
-          supervisorOutputEnded = true;
-          if (supervisorExitCode !== 0) {
-            terminate(new Error(`RSC invocation worker exited with code ${String(supervisorExitCode)}.`));
-            return;
-          }
-          completeWindowsSuccess();
-        });
-      }
       child.stdin.once('error', () => terminate(new Error('RSC invocation request stream failed.')));
       child.once('error', (error) => terminate(new Error(`RSC invocation worker could not be started: ${error.message}`)));
       child.once('close', (code) => {
         const diagnostics = redactInspectionDiagnostics(Buffer.concat(stderrChunks).toString('utf8'));
-        if (windowsResponse !== undefined) {
-          void finish(() => resolveResponse(windowsResponse!));
-          return;
-        }
         if (termination !== undefined) {
           const message = termination.message;
           void finish(() => rejectResponse(new Error(`${message}${diagnostics.length === 0 ? '' : `: ${diagnostics}`}`)));
