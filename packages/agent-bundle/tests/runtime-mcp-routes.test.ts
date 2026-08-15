@@ -100,6 +100,37 @@ it('claims manual runtime MCP routes before the generic runtime browser API', as
   }
 });
 
+it('rejects query-bearing manual runtime MCP routes before authorizing a control operation', async () => {
+  const routes = new RuntimeMcpRoutes({
+    authorize: () => { throw new Error('query-bearing routes must not authorize'); },
+  });
+  const server = createServer((request, response) => {
+    void routes.handle(request, response).then((handled) => {
+      if (!handled) response.writeHead(404).end();
+    }).catch((error: unknown) => {
+      const failure = error as Partial<{ readonly code: string; readonly status: number }>;
+      response.writeHead(failure.status ?? 500, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ diagnostic: { code: failure.code ?? 'AB8007' } }));
+    });
+  });
+  await new Promise<void>((resolvePromise) => server.listen({ host: '127.0.0.1', port: 0 }, resolvePromise));
+  const address = server.address() as AddressInfo;
+  try {
+    for (const path of [
+      '/api/runtime/mcp/sessions?probe=1',
+      '/api/runtime/mcp/sessions/session-a?probe=1',
+      '/api/runtime/mcp/sessions/session-a/restart?probe=1',
+      '/api/runtime/mcp/sessions/session-a/rpc?probe=1',
+    ]) {
+      const response = await fetch(`http://127.0.0.1:${address.port}${path}`);
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toEqual({ diagnostic: { code: 'AB8202' } });
+    }
+  } finally {
+    await new Promise<void>((resolvePromise, rejectPromise) => server.close((error) => error === undefined ? resolvePromise() : rejectPromise(error)));
+  }
+});
+
 it('maps manual registry conflicts to 409 and waits for restart invalidation before returning a phase-safe failure', async () => {
   let invalidationsDrained = false;
   const runtime = {

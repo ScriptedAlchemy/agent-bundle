@@ -174,6 +174,12 @@ const opaqueSegment = (value: string): string => {
 
 const route = (requestTarget: string | undefined): Route | undefined => {
   const pathname = rawPathname(requestTarget);
+  if (
+    (requestTarget?.includes('?') === true || requestTarget?.includes('#') === true) &&
+    (pathname === '/api/runtime/apps' || pathname.startsWith('/api/runtime/apps/'))
+  ) {
+    throw requestError(diagnostic('AB8020', 'MCP App route path is not valid.', 400));
+  }
   if (pathname === '/api/runtime/apps') return Object.freeze({ kind: 'runtime-create' });
   if (pathname.startsWith('/api/runtime/apps/')) {
     const parts = pathname.split('/');
@@ -541,14 +547,17 @@ export class McpAppRoutes {
     }
     if (parsed.kind === 'runtime-operation') {
       if (method !== 'POST') return responseDiagnostic(response, diagnostic('AB8007', 'Route does not accept this method.', 405));
+      if (runtime.get(parsed.bindingId) === undefined) this.#runtimeUnavailable(runtime, parsed.bindingId);
       return responseJson(response, await runtime.operate(parsed.bindingId, runtimeOperation(await jsonBody(request))));
     }
     if (parsed.kind === 'runtime-consent-create') {
       if (method !== 'POST') return responseDiagnostic(response, diagnostic('AB8007', 'Route does not accept this method.', 405));
+      if (runtime.get(parsed.bindingId) === undefined) this.#runtimeUnavailable(runtime, parsed.bindingId);
       return responseJson(response, await runtime.createConsent(parsed.bindingId, runtimeConsentRequest(await jsonBody(request))));
     }
     if (parsed.kind !== 'runtime-consent-decide') throw new Error('Runtime MCP App route is not valid.');
     if (method !== 'POST') return responseDiagnostic(response, diagnostic('AB8007', 'Route does not accept this method.', 405));
+    if (runtime.get(parsed.bindingId) === undefined) this.#runtimeUnavailable(runtime, parsed.bindingId);
     return responseJson(response, await runtime.decideConsent(parsed.bindingId, parsed.consentId, runtimeConsentDecision(await jsonBody(request))));
   }
 

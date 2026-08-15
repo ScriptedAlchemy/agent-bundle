@@ -64,6 +64,12 @@ const opaque = (value: string): string => {
 
 const route = (target: string | undefined): Route | undefined => {
   const pathname = target?.split(/[?#]/u, 1)[0] ?? '';
+  if (
+    (target?.includes('?') === true || target?.includes('#') === true) &&
+    (pathname === '/api/runtime/mcp/sessions' || pathname.startsWith('/api/runtime/mcp/sessions/'))
+  ) {
+    throw requestError(diagnostic('AB8202', 'Runtime route path is not valid.', 400));
+  }
   if (pathname === '/api/runtime/mcp/sessions') return Object.freeze({ kind: 'open' });
   if (!pathname.startsWith('/api/runtime/mcp/sessions/')) return undefined;
   const parts = pathname.split('/');

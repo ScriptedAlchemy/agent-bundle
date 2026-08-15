@@ -236,6 +236,32 @@ it('dispatches only the fixed authenticated runtime App create route to the opti
   }
 });
 
+it('rejects query-bearing runtime App routes before they reach the preview lane', async () => {
+  const runtime: McpAppRuntimeRoutePreviewService = {
+    close: async () => undefined,
+    create: async () => { throw new Error('runtime create must not receive a query-bearing route'); },
+    createConsent: async () => { throw new Error('unused'); },
+    decideConsent: async () => { throw new Error('unused'); },
+    get: () => undefined,
+    operate: async () => { throw new Error('unused'); },
+  };
+  const started = await startRoutes(Object.assign(new RecordingPreviewService(), { runtime }));
+  try {
+    const response = await fetch(`${started.url}/api/runtime/apps?attempt=1`, {
+      body: JSON.stringify({ expectedGenerationId: 'generation-a', profileId: 'portable', runId: 'run-a' }),
+      headers: { ...headers(), 'content-type': 'application/json' },
+      method: 'POST',
+    });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      diagnostic: { code: 'AB8020', message: 'MCP App route path is not valid.' },
+    });
+  } finally {
+    await started.close();
+  }
+});
+
 it('authenticates runtime App snapshots before lookup and distinguishes a revoked binding from an unknown id', async () => {
   const lookups: string[] = [];
   const runtime: McpAppRuntimeRoutePreviewService = {
@@ -275,6 +301,36 @@ it('authenticates runtime App snapshots before lookup and distinguishes a revoke
     expect(revoked.status).toBe(410);
     const unknown = await fetch(`${started.url}/api/runtime/apps/unknown-a`, { headers: headers() });
     expect(unknown.status).toBe(404);
+  } finally {
+    await started.close();
+  }
+});
+
+it('classifies unavailable runtime App operations as unknown or revoked before delegating', async () => {
+  const operations: string[] = [];
+  const runtime: McpAppRuntimeRoutePreviewService = {
+    close: async () => undefined,
+    create: async () => { throw new Error('unused'); },
+    createConsent: async () => { throw new Error('unused'); },
+    decideConsent: async () => { throw new Error('unused'); },
+    get: () => undefined,
+    isRevoked: (bindingId) => bindingId === 'revoked-a',
+    operate: async (bindingId) => {
+      operations.push(bindingId);
+      throw new Error('unavailable runtime operation must not delegate');
+    },
+  };
+  const started = await startRoutes(Object.assign(new RecordingPreviewService(), { runtime }));
+  try {
+    for (const [bindingId, status] of [['unknown-a', 404], ['revoked-a', 410]] as const) {
+      const response = await fetch(`${started.url}/api/runtime/apps/${bindingId}/operations`, {
+        body: JSON.stringify({ kind: 'tools/list' }),
+        headers: { ...headers(), 'content-type': 'application/json' },
+        method: 'POST',
+      });
+      expect(response.status).toBe(status);
+    }
+    expect(operations).toEqual([]);
   } finally {
     await started.close();
   }
