@@ -56,7 +56,11 @@ const scanJsonValue = (bytes: string, index: number): number => {
   return cursor;
 };
 
-export type JsonValue = null | boolean | number | string | readonly JsonValue[] | Readonly<Record<string, JsonValue>>;
+interface JsonObject {
+  readonly [key: string]: JsonValue;
+}
+
+export type JsonValue = null | boolean | number | string | readonly JsonValue[] | JsonObject;
 
 const snapshotJsonValue = (value: unknown, ancestors: Set<object>): JsonValue => {
   if (value === null || typeof value === 'boolean' || typeof value === 'string') return value;
