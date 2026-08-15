@@ -321,7 +321,12 @@ export class McpAppPreviewService {
       return false;
     }
     entry.actionCount += 1;
-    return this.#serialize(entry, async () => entry.bridge.receive(action)).finally(() => {
+    return this.#serialize(entry, async () => {
+      const accepted = await entry.bridge.receive(action);
+      const close = accepted ? entry.closePromise : undefined;
+      if (close !== undefined) await close.catch(() => undefined);
+      return accepted;
+    }).finally(() => {
       entry.actionCount -= 1;
     });
   }
