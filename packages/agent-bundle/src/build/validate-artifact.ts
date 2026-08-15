@@ -7,20 +7,29 @@ import { parse as parseJavaScript } from 'acorn';
 import { init, parse } from 'es-module-lexer';
 
 import { createDefaultRegistry, type TargetRegistry } from '../adapters/registry.ts';
+import {
+  compilerHookWrapperPath,
+  generatedHookCommand,
+  readTargetNativeHookCommands,
+} from '../adapters/hook-contract.ts';
 import type {
   TargetArtifactDocumentIssue,
   TargetArtifactDocumentValidator,
   TargetArtifactOutputLayout,
 } from '../adapters/types.ts';
 import { parseSkillMarkdown, referencedResources } from '../config/skill-references.ts';
-import type { Diagnostic } from '../core/diagnostics.ts';
+import { DiagnosticError, type Diagnostic } from '../core/diagnostics.ts';
 import { agentSkillsSchemaRevision, validateAgentSkillsFrontmatter } from '../schemas/agent-skills/contract.ts';
+import { parseArtifactHookIndex } from '../services/hook-index.ts';
+import { resolveMcpPathTokens } from '../services/mcp-path-tokens.ts';
+import { readTargetMcpServers } from '../services/mcp-runtime.ts';
 import {
   artifactHookIndexName,
   artifactManifestName,
   inspectArtifactFilesystem,
   type ArtifactFile,
   type ArtifactFilesystemSnapshot,
+  type ArtifactHookIndex,
   type ManifestFile,
 } from './emit.ts';
 import { parseArtifactManifest, type ArtifactManifestV2 } from './manifest.ts';
@@ -493,6 +502,435 @@ const validateTargetContracts = async (options: {
   return Object.freeze(diagnostics);
 };
 
+const mcpCoherenceRecovery = 'Rebuild the artifact so every target MCP manifest references its exact compiler outputs.';
+const hookCoherenceRecovery = 'Rebuild the artifact so native hook commands and hook metadata agree.';
+const emptyArtifactHookIndex: ArtifactHookIndex = Object.freeze({ hooks: Object.freeze([]), version: 1 });
+
+const coherenceDiagnostic = (
+  code: 'AB6017' | 'AB6018',
+  message: string,
+  generatedPath: string,
+  target: string,
+  recovery: string,
+): Diagnostic => diagnostic(code, message, generatedPath, target, recovery);
+
+const isCanonicalRelativeReference = (value: string): boolean => {
+  const relative = value.startsWith('./') ? value.slice(2) : value;
+  return relative.length > 0 &&
+    relative === posix.normalize(relative) &&
+    relative !== '..' &&
+    !relative.startsWith('../');
+};
+
+interface ArtifactLocalReference {
+  readonly path: string;
+  readonly status: 'artifact-local';
+}
+
+interface EscapedArtifactReference {
+  readonly status: 'escaped';
+}
+
+interface ExternalArtifactReference {
+  readonly status: 'external';
+}
+
+type ArtifactReference = ArtifactLocalReference | EscapedArtifactReference | ExternalArtifactReference;
+
+const artifactReference = (options: {
+  readonly artifactRoot: string;
+  readonly targetRoot: string;
+  readonly value: string;
+}): ArtifactReference => {
+  const { artifactRoot, targetRoot, value } = options;
+  if (isAbsolute(value)) {
+    const resolved = resolve(value);
+    const artifactPath = artifactPathFor(artifactRoot, resolved);
+    if (artifactPath === undefined) {
+      return value === artifactRoot || value.startsWith(`${artifactRoot}/`)
+        ? { status: 'escaped' }
+        : { status: 'external' };
+    }
+    const targetPath = artifactPathFor(targetRoot, resolved);
+    return targetPath === undefined || value !== resolved
+      ? { status: 'escaped' }
+      : { path: targetPath, status: 'artifact-local' };
+  }
+
+  if (!value.startsWith('.') && !value.includes('/')) return { status: 'external' };
+  if (!isCanonicalRelativeReference(value)) return { status: 'escaped' };
+  const resolved = resolve(targetRoot, value);
+  const targetPath = artifactPathFor(targetRoot, resolved);
+  return targetPath === undefined
+    ? { status: 'escaped' }
+    : { path: targetPath, status: 'artifact-local' };
+};
+
+const targetArtifactPath = (target: string, path: string): string => `${target}/${path}`;
+
+const isTargetContainedCwd = (targetRoot: string, value: string): boolean => {
+  if (!isAbsolute(value) && value !== '.' && value !== './' && !isCanonicalRelativeReference(value)) return false;
+  const resolved = resolve(targetRoot, value);
+  return resolved === targetRoot || artifactPathFor(targetRoot, resolved) !== undefined;
+};
+
+const pathInOutputLayout = (
+  targetPath: string,
+  target: string,
+  layout: TargetArtifactOutputLayout | undefined,
+): boolean => isDirectLayoutPath(targetPath.slice(target.length + 1), layout);
+
+const validateMcpArtifactReference = (options: {
+  readonly artifactRoot: string;
+  readonly directExecutable: boolean;
+  readonly field: 'argument' | 'command';
+  readonly files: ReadonlyMap<string, ArtifactFile>;
+  readonly manifestFiles: ReadonlyMap<string, ManifestFile>;
+  readonly manifestPath: string;
+  readonly target: string;
+  readonly targetRoot: string;
+  readonly value: string;
+}): readonly Diagnostic[] => {
+  const reference = artifactReference(options);
+  if (reference.status === 'external') return Object.freeze([]);
+  if (reference.status === 'escaped') {
+    return Object.freeze([coherenceDiagnostic(
+      'AB6017',
+      `MCP ${options.field} ${JSON.stringify(options.value)} escapes target ${JSON.stringify(options.target)}.`,
+      options.manifestPath,
+      options.target,
+      mcpCoherenceRecovery,
+    )]);
+  }
+
+  const path = targetArtifactPath(options.target, reference.path);
+  const file = options.files.get(path);
+  const manifestFile = options.manifestFiles.get(path);
+  const diagnostics: Diagnostic[] = [];
+  if (file === undefined || manifestFile === undefined || !sameFile(file, manifestFile)) {
+    if (options.field === 'argument' && file === undefined && manifestFile !== undefined) {
+      diagnostics.push(diagnostic(
+        'AB6007',
+        `MCP manifest references missing generated server ${JSON.stringify(options.value)}.`,
+        options.manifestPath,
+      ));
+    } else {
+      diagnostics.push(coherenceDiagnostic(
+        'AB6017',
+        `MCP ${options.field} ${JSON.stringify(options.value)} references missing or unmanifested artifact file ${JSON.stringify(path)}.`,
+        options.manifestPath,
+        options.target,
+        mcpCoherenceRecovery,
+      ));
+    }
+  } else if (options.directExecutable && (manifestFile.mode === undefined || (manifestFile.mode & 0o111) === 0)) {
+    diagnostics.push(coherenceDiagnostic(
+      'AB6017',
+      `MCP command ${JSON.stringify(options.value)} references non-executable artifact file ${JSON.stringify(path)}.`,
+      options.manifestPath,
+      options.target,
+      mcpCoherenceRecovery,
+    ));
+  }
+
+  return Object.freeze(diagnostics);
+};
+
+const validateMcpCoherence = async (options: {
+  readonly artifactRoot: string;
+  readonly files: readonly ArtifactFile[];
+  readonly manifest: ArtifactManifestV2;
+  readonly registry: TargetRegistry;
+}): Promise<readonly Diagnostic[]> => {
+  const diagnostics: Diagnostic[] = [];
+  const files = new Map(options.files.map((file) => [file.path, file]));
+  const manifestFiles = new Map(options.manifest.files.map((file) => [file.path, file]));
+  const artifactRoot = resolve(options.artifactRoot);
+
+  for (const target of options.manifest.targets) {
+    if (!options.registry.has(target.name) || !options.registry.supports(target.name, 'mcp')) continue;
+    const runtime = options.registry.mcpRuntime(target.name);
+    if (runtime === undefined) continue;
+    const manifestPath = targetArtifactPath(target.name, runtime.manifestPath);
+    const targetRoot = resolve(artifactRoot, target.name);
+    const mcpLayout = options.registry.artifactLayout(target.name).mcpEntries;
+    const referenceCounts = new Map<string, Set<string>>();
+    const mcpEntries = options.files.filter((file) => pathInOutputLayout(file.path, target.name, mcpLayout));
+    for (const file of mcpEntries) referenceCounts.set(file.path, new Set());
+
+    const manifestFile = files.get(manifestPath);
+    if (manifestFile !== undefined) {
+      let document: unknown;
+      try {
+        document = JSON.parse(await readFile(resolve(artifactRoot, manifestPath), 'utf8'));
+      } catch {
+        document = undefined;
+      }
+      if (document !== undefined) {
+        const servers = readTargetMcpServers(runtime, document);
+        if (servers.status === 'invalid') {
+          diagnostics.push(coherenceDiagnostic(
+            'AB6017',
+            `MCP manifest for target ${JSON.stringify(target.name)} does not contain only modern supported servers.`,
+            manifestPath,
+            target.name,
+            mcpCoherenceRecovery,
+          ));
+        } else {
+          for (const entry of servers.servers) {
+            let server = entry.server;
+            try {
+              server = resolveMcpPathTokens({
+                roots: {
+                  pluginData: targetRoot,
+                  pluginRoot: targetRoot,
+                  workspaceRoot: dirname(artifactRoot),
+                },
+                runtime,
+                server,
+                target: target.name,
+              });
+            } catch (error) {
+              if (error instanceof DiagnosticError) {
+                diagnostics.push(...error.diagnostics.map((entry) => diagnostic(
+                  entry.code,
+                  entry.message,
+                  manifestPath,
+                  target.name,
+                  mcpCoherenceRecovery,
+                )));
+              } else {
+                diagnostics.push(coherenceDiagnostic(
+                  'AB6017',
+                  `MCP server ${JSON.stringify(entry.name)} could not resolve target runtime values.`,
+                  manifestPath,
+                  target.name,
+                  mcpCoherenceRecovery,
+                ));
+              }
+              continue;
+            }
+            if (server.kind !== 'stdio') continue;
+
+            if (server.cwd !== undefined) {
+              if (!isTargetContainedCwd(targetRoot, server.cwd)) {
+                diagnostics.push(coherenceDiagnostic(
+                  'AB6017',
+                  `MCP cwd ${JSON.stringify(server.cwd)} escapes target ${JSON.stringify(target.name)}.`,
+                  manifestPath,
+                  target.name,
+                  mcpCoherenceRecovery,
+                ));
+              }
+            }
+
+            if (!server.command.includes('${')) {
+              diagnostics.push(...validateMcpArtifactReference({
+                artifactRoot,
+                directExecutable: true,
+                field: 'command',
+                files,
+                manifestFiles,
+                manifestPath,
+                target: target.name,
+                targetRoot,
+                value: server.command,
+              }));
+              const commandReference = artifactReference({ artifactRoot, targetRoot, value: server.command });
+              if (commandReference.status === 'artifact-local') {
+                const path = targetArtifactPath(target.name, commandReference.path);
+                referenceCounts.get(path)?.add(entry.name);
+              }
+            }
+
+            for (const argument of server.args) {
+              diagnostics.push(...validateMcpArtifactReference({
+                artifactRoot,
+                directExecutable: false,
+                field: 'argument',
+                files,
+                manifestFiles,
+                manifestPath,
+                target: target.name,
+                targetRoot,
+                value: argument,
+              }));
+              const argumentReference = artifactReference({ artifactRoot, targetRoot, value: argument });
+              if (argumentReference.status === 'artifact-local') {
+                const path = targetArtifactPath(target.name, argumentReference.path);
+                referenceCounts.get(path)?.add(entry.name);
+              }
+            }
+          }
+        }
+      }
+    }
+
+    for (const [path, servers] of referenceCounts) {
+      if (servers.size === 1) continue;
+      diagnostics.push(coherenceDiagnostic(
+        'AB6017',
+        servers.size === 0
+          ? `Compiler MCP entry ${JSON.stringify(path)} is not referenced by a server in target ${JSON.stringify(target.name)}.`
+          : `Compiler MCP entry ${JSON.stringify(path)} is referenced by multiple servers in target ${JSON.stringify(target.name)}.`,
+        path,
+        target.name,
+        mcpCoherenceRecovery,
+      ));
+    }
+  }
+  return Object.freeze(diagnostics);
+};
+
+const readArtifactHookIndex = async (artifactRoot: string): Promise<ArtifactHookIndex | undefined> => {
+  try {
+    return parseArtifactHookIndex(await readFile(resolve(artifactRoot, artifactHookIndexName), 'utf8'));
+  } catch {
+    return undefined;
+  }
+};
+
+const validateHookCoherence = async (options: {
+  readonly artifactRoot: string;
+  readonly files: readonly ArtifactFile[];
+  readonly manifest: ArtifactManifestV2;
+  readonly registry: TargetRegistry;
+}): Promise<readonly Diagnostic[]> => {
+  const indexFile = options.files.find((file) => file.path === artifactHookIndexName);
+  const index = indexFile === undefined
+    ? emptyArtifactHookIndex
+    : await readArtifactHookIndex(options.artifactRoot);
+  if (index === undefined) {
+    return Object.freeze([coherenceDiagnostic(
+      'AB6018',
+      'Artifact hook metadata is not strict canonical hook index data.',
+      artifactHookIndexName,
+      'artifact',
+      hookCoherenceRecovery,
+    )]);
+  }
+
+  const diagnostics: Diagnostic[] = [];
+  const files = new Map(options.files.map((file) => [file.path, file]));
+  const manifestFiles = new Map(options.manifest.files.map((file) => [file.path, file]));
+  const targets = new Set(options.manifest.targets.map((target) => target.name));
+  const indexedByTarget = new Map<string, typeof index.hooks>();
+  for (const hook of index.hooks) {
+    const entries = indexedByTarget.get(hook.target) ?? [];
+    indexedByTarget.set(hook.target, [...entries, hook]);
+  }
+
+  for (const hook of index.hooks) {
+    if (!targets.has(hook.target) || (options.registry.has(hook.target) && !options.registry.supports(hook.target, 'hooks'))) {
+      diagnostics.push(coherenceDiagnostic(
+        'AB6018',
+        `Hook index entry ${JSON.stringify(hook.id)} selects undeclared or hook-incompatible target ${JSON.stringify(hook.target)}.`,
+        artifactHookIndexName,
+        hook.target,
+        hookCoherenceRecovery,
+      ));
+      continue;
+    }
+    if (!options.registry.has(hook.target)) continue;
+    const contract = options.registry.hookContract(hook.target);
+    const layout = options.registry.artifactLayout(hook.target).hookWrappers;
+    const expectedPrefix = `${hook.target}/`;
+    const file = files.get(hook.path);
+    const manifestFile = manifestFiles.get(hook.path);
+    if (
+      contract === undefined ||
+      !hook.path.startsWith(expectedPrefix) ||
+      !pathInOutputLayout(hook.path, hook.target, layout) ||
+      file === undefined ||
+      manifestFile === undefined ||
+      !sameFile(file, manifestFile)
+    ) {
+      diagnostics.push(coherenceDiagnostic(
+        'AB6018',
+        `Hook index entry ${JSON.stringify(hook.id)} references missing or invalid target wrapper ${JSON.stringify(hook.path)}.`,
+        hook.path,
+        hook.target,
+        hookCoherenceRecovery,
+      ));
+    }
+  }
+
+  for (const { name: target } of options.manifest.targets) {
+    if (!options.registry.has(target) || !options.registry.supports(target, 'hooks')) continue;
+    const contract = options.registry.hookContract(target);
+    if (contract === undefined) continue;
+    const hooks = indexedByTarget.get(target) ?? [];
+    const manifestPath = targetArtifactPath(target, contract.manifestPath);
+    if (!files.has(manifestPath)) {
+      if (hooks.length === 0) continue;
+      diagnostics.push(coherenceDiagnostic(
+        'AB6018',
+        `Hook index target ${JSON.stringify(target)} is missing native hook manifest ${JSON.stringify(contract.manifestPath)}.`,
+        manifestPath,
+        target,
+        hookCoherenceRecovery,
+      ));
+      continue;
+    }
+    let document: unknown;
+    try {
+      document = JSON.parse(await readFile(resolve(options.artifactRoot, manifestPath), 'utf8'));
+    } catch {
+      diagnostics.push(coherenceDiagnostic(
+        'AB6018',
+        `Hook index target ${JSON.stringify(target)} is missing native hook manifest ${JSON.stringify(contract.manifestPath)}.`,
+        manifestPath,
+        target,
+        hookCoherenceRecovery,
+      ));
+      continue;
+    }
+    const commands = readTargetNativeHookCommands(contract, document);
+    if (commands.status === 'invalid') {
+      diagnostics.push(coherenceDiagnostic(
+        'AB6018',
+        `Native hook manifest ${JSON.stringify(contract.manifestPath)} for target ${JSON.stringify(target)} is invalid for command enumeration.`,
+        manifestPath,
+        target,
+        hookCoherenceRecovery,
+      ));
+      continue;
+    }
+    const relativePaths = new Map<string, number>();
+    for (const hook of hooks) {
+      const relativePath = hook.path.slice(target.length + 1);
+      relativePaths.set(relativePath, (relativePaths.get(relativePath) ?? 0) + 1);
+      const command = generatedHookCommand(contract, relativePath);
+      const occurrences = commands.commands.filter((candidate) => candidate.command === command).length;
+      if (occurrences !== 1) {
+        diagnostics.push(coherenceDiagnostic(
+          'AB6018',
+          `Hook index entry ${JSON.stringify(hook.id)} requires exactly one native command ${JSON.stringify(command)} but found ${occurrences}.`,
+          manifestPath,
+          target,
+          hookCoherenceRecovery,
+        ));
+      }
+    }
+    for (const command of commands.commands) {
+      const relativePath = compilerHookWrapperPath(contract, command.command);
+      if (relativePath === undefined) continue;
+      const entries = relativePaths.get(relativePath) ?? 0;
+      if (entries === 1) continue;
+      diagnostics.push(coherenceDiagnostic(
+        'AB6018',
+        entries === 0
+          ? `Native hook command ${JSON.stringify(command.command)} is not indexed.`
+          : `Native hook command ${JSON.stringify(command.command)} is indexed multiple times.`,
+        manifestPath,
+        target,
+        hookCoherenceRecovery,
+      ));
+    }
+  }
+  return Object.freeze(diagnostics);
+};
+
 const ownershipRecovery = 'Rebuild the artifact with files only in declared target namespaces.';
 
 const targetNamespaces = (manifest: ArtifactManifestV2): ReadonlySet<string> =>
@@ -783,14 +1221,16 @@ const validateGeneratedFiles = async (options: {
     try {
       const document = JSON.parse(await readFile(resolve(options.artifactRoot, file.path), 'utf8')) as unknown;
       validJson.add(file.path);
-      for (const mcpPath of localMcpPaths(document)) {
-        const generatedPath = posix.join(dirname(file.path), mcpPath);
-        if (!generatedFiles.has(generatedPath)) {
-          diagnostics.push(diagnostic(
-            'AB6007',
-            `MCP manifest references missing generated server ${JSON.stringify(mcpPath)}.`,
-            file.path,
-          ));
+      if (!file.path.includes('/')) {
+        for (const mcpPath of localMcpPaths(document)) {
+          const generatedPath = posix.join(dirname(file.path), mcpPath);
+          if (!generatedFiles.has(generatedPath)) {
+            diagnostics.push(diagnostic(
+              'AB6007',
+              `MCP manifest references missing generated server ${JSON.stringify(mcpPath)}.`,
+              file.path,
+            ));
+          }
         }
       }
     } catch {
@@ -884,6 +1324,18 @@ export const validateArtifact = async (context: ValidateArtifactOptions): Promis
     registry,
   }));
   diagnostics.push(...await validateTargetContracts({
+    artifactRoot: context.artifactRoot,
+    files: inspection.files,
+    manifest,
+    registry,
+  }));
+  diagnostics.push(...await validateMcpCoherence({
+    artifactRoot: context.artifactRoot,
+    files: inspection.files,
+    manifest,
+    registry,
+  }));
+  diagnostics.push(...await validateHookCoherence({
     artifactRoot: context.artifactRoot,
     files: inspection.files,
     manifest,

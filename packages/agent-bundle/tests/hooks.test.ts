@@ -12,6 +12,7 @@ import { createDefaultRegistry } from '../src/adapters/registry.ts';
 import { build } from './support/build.ts';
 import { buildWithRslib } from '../src/build/rslib.ts';
 import { HookService } from '../src/services/hook-service.ts';
+import { parseArtifactHookIndex } from '../src/services/hook-index.ts';
 import { normalizeProject } from '../src/config/normalize.ts';
 import type { LoadedConfig } from '../src/config/load.ts';
 import type { NormalizationTargetRegistry, NormalizedPlugin } from '../src/core/types.ts';
@@ -23,6 +24,21 @@ const registry: NormalizationTargetRegistry = {
   has: (name) => name === 'portable' || name === 'codex' || name === 'claude',
   supports: (name, capability) => capability === 'hooks' && name !== 'portable',
 };
+
+it('accepts only canonical frozen hook index metadata', () => {
+  const bytes = '{"hooks":[{"event":"sessionStart","id":"hook:start","name":"start","path":"codex/hooks/start.mjs","target":"codex"}],"version":1}\n';
+  const index = parseArtifactHookIndex(bytes);
+
+  expect(index).toEqual({
+    hooks: [{ event: 'sessionStart', id: 'hook:start', name: 'start', path: 'codex/hooks/start.mjs', target: 'codex' }],
+    version: 1,
+  });
+  expect(index === undefined ? false : Object.isFrozen(index)).toBe(true);
+  expect(index === undefined ? false : Object.isFrozen(index.hooks)).toBe(true);
+  expect(parseArtifactHookIndex('{"version":1,"hooks":[]}\n')).toBeUndefined();
+  expect(parseArtifactHookIndex('{"hooks":[],"version":1,"version":1}\n')).toBeUndefined();
+  expect(parseArtifactHookIndex('{"hooks":[{"event":"sessionStart","id":"hook:start","name":"start","path":"../start.mjs","target":"codex"}],"version":1}\n')).toBeUndefined();
+});
 
 const runPublishedHook = async (wrapper: string, input: string): Promise<{ readonly code: number | null; readonly stderr: string }> =>
   new Promise((resolvePromise, reject) => {

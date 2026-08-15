@@ -8,6 +8,14 @@ import type {
 } from '../core/types.ts';
 import type { TargetHookEntry, TargetHookWrapper } from './types.ts';
 
+export interface TargetNativeHookCommand {
+  readonly command: string;
+}
+
+export type TargetNativeHookCommandsReadResult =
+  | Readonly<{ readonly commands: readonly TargetNativeHookCommand[]; readonly status: 'found' }>
+  | Readonly<{ readonly status: 'invalid' }>;
+
 export interface TargetHookContract {
   readonly commandRoot: string;
   readonly encodePlaygroundInput: (
@@ -22,9 +30,118 @@ export interface TargetHookContract {
   readonly eventNames: Readonly<Record<CanonicalHookEvent, string>>;
   readonly manifestPath: string;
   readonly matchers: Readonly<Partial<Record<CanonicalHookTool, string>>>;
+  readonly readNativeCommands?: (document: unknown) => TargetNativeHookCommandsReadResult;
   readonly wrapperPath: (hook: NormalizedHook) => string;
   readonly wrapperSource: (entry: TargetHookWrapper) => string;
 }
+
+const isPlainDataRecord = (value: unknown): value is Record<string, unknown> => {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) return false;
+  return Object.values(Object.getOwnPropertyDescriptors(value)).every((descriptor) => 'value' in descriptor);
+};
+
+const ownDataValue = (value: object, key: string): { readonly found: boolean; readonly value: unknown } | undefined => {
+  const descriptor = Object.getOwnPropertyDescriptor(value, key);
+  if (descriptor === undefined) return { found: false, value: undefined };
+  return 'value' in descriptor ? { found: true, value: descriptor.value } : undefined;
+};
+
+const dataArray = (value: unknown): readonly unknown[] | undefined => {
+  if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype || Object.hasOwn(value, 'then')) {
+    return undefined;
+  }
+  const descriptors = Object.getOwnPropertyDescriptors(value);
+  const length = Object.getOwnPropertyDescriptor(value, 'length');
+  if (
+    length === undefined ||
+    !('value' in length) ||
+    typeof length.value !== 'number' ||
+    Object.keys(descriptors).length !== length.value + 1
+  ) {
+    return undefined;
+  }
+  const entries: unknown[] = [];
+  for (let index = 0; index < length.value; index += 1) {
+    const descriptor = descriptors[index];
+    if (descriptor === undefined || !('value' in descriptor)) return undefined;
+    entries.push(descriptor.value);
+  }
+  return Object.freeze(entries);
+};
+
+const snapshotNativeHookCommands = (value: unknown): readonly TargetNativeHookCommand[] | undefined => {
+  const candidates = dataArray(value);
+  if (candidates === undefined) return undefined;
+  const commands: TargetNativeHookCommand[] = [];
+  for (const candidate of candidates) {
+    if (!isPlainDataRecord(candidate)) return undefined;
+    const command = ownDataValue(candidate, 'command');
+    if (command === undefined || !command.found || typeof command.value !== 'string') return undefined;
+    commands.push(Object.freeze({ command: command.value }));
+  }
+  return Object.freeze(commands);
+};
+
+const snapshotNativeHookCommandResult = (value: unknown): TargetNativeHookCommandsReadResult | undefined => {
+  if (!isPlainDataRecord(value)) return undefined;
+  const status = ownDataValue(value, 'status');
+  if (status === undefined || !status.found || typeof status.value !== 'string') return undefined;
+  if (status.value === 'invalid') return Object.freeze({ status: 'invalid' });
+  if (status.value !== 'found') return undefined;
+  const commands = ownDataValue(value, 'commands');
+  if (commands === undefined || !commands.found) return undefined;
+  const snapshot = snapshotNativeHookCommands(commands.value);
+  return snapshot === undefined ? undefined : Object.freeze({ commands: snapshot, status: 'found' });
+};
+
+/** Safely invokes and snapshots a target-native hook command reader. */
+export const readTargetNativeHookCommands = (
+  contract: TargetHookContract,
+  document: unknown,
+): TargetNativeHookCommandsReadResult => {
+  try {
+    const reader = contract.readNativeCommands;
+    if (typeof reader !== 'function') return Object.freeze({ status: 'invalid' });
+    return snapshotNativeHookCommandResult(reader(document)) ?? Object.freeze({ status: 'invalid' });
+  } catch {
+    return Object.freeze({ status: 'invalid' });
+  }
+};
+
+/** Enumerates commands from the native Claude/Codex hook document shape. */
+export const readStandardNativeHookCommands = (document: unknown): TargetNativeHookCommandsReadResult => {
+  if (!isPlainDataRecord(document)) return Object.freeze({ status: 'invalid' });
+  const hooks = ownDataValue(document, 'hooks');
+  if (hooks === undefined || !hooks.found || !isPlainDataRecord(hooks.value)) return Object.freeze({ status: 'invalid' });
+  const commands: TargetNativeHookCommand[] = [];
+  for (const groups of Object.values(hooks.value)) {
+    const entries = dataArray(groups);
+    if (entries === undefined) return Object.freeze({ status: 'invalid' });
+    for (const group of entries) {
+      if (!isPlainDataRecord(group)) return Object.freeze({ status: 'invalid' });
+      const nativeHooks = ownDataValue(group, 'hooks');
+      if (nativeHooks === undefined || !nativeHooks.found) return Object.freeze({ status: 'invalid' });
+      const hooksInGroup = dataArray(nativeHooks.value);
+      if (hooksInGroup === undefined) return Object.freeze({ status: 'invalid' });
+      for (const hook of hooksInGroup) {
+        if (!isPlainDataRecord(hook)) return Object.freeze({ status: 'invalid' });
+        const command = ownDataValue(hook, 'command');
+        const type = ownDataValue(hook, 'type');
+        if (command === undefined || type === undefined || !type.found || type.value !== 'command') {
+          return Object.freeze({ status: 'invalid' });
+        }
+        if (command.found && typeof command.value === 'string') {
+          commands.push(Object.freeze({ command: command.value }));
+        } else {
+          return Object.freeze({ status: 'invalid' });
+        }
+      }
+    }
+  }
+  return Object.freeze({ commands: Object.freeze(commands), status: 'found' });
+};
 
 const nativeHookInputFields = Object.freeze([
   Object.freeze({ canonical: 'cwd', native: 'cwd' }),
@@ -125,6 +242,19 @@ export const mergeHookDocuments = (
 
 const eventIndex = new Map(canonicalEventOrder.map((event, index) => [event, index]));
 
+export const generatedHookCommand = (contract: TargetHookContract, relativePath: string): string =>
+  `node "${contract.commandRoot}/${relativePath}"`;
+
+export const compilerHookWrapperPath = (
+  contract: TargetHookContract,
+  command: string,
+): string | undefined => {
+  const prefix = `node "${contract.commandRoot}/`;
+  if (!command.startsWith(prefix) || !command.endsWith('"')) return undefined;
+  const relativePath = command.slice(prefix.length, -1);
+  return relativePath.length === 0 || relativePath.includes('"') ? undefined : relativePath;
+};
+
 const error = (target: string, code: string, message: string): Diagnostic => ({
   code,
   message,
@@ -189,7 +319,7 @@ export const planHooks = (
     const matcher = matcherFor(target, contract, hook.tools, hook.name, diagnostics);
     if (diagnostics.length > diagnosticCount) continue;
     const relativePath = contract.wrapperPath(hook);
-    const command = `node "${contract.commandRoot}/${relativePath}"`;
+    const command = generatedHookCommand(contract, relativePath);
     const hookCommand = {
       command,
       ...(hook.timeout === undefined ? {} : { timeout: hook.timeout }),

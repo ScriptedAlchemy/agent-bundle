@@ -24,6 +24,7 @@ import {
   nativeHookWrapperSource,
   nativeHooksFor,
   planHooks,
+  readStandardNativeHookCommands,
   type TargetHookContract,
 } from './hook-contract.ts';
 import schemaProvenance from './schemas/claude/PROVENANCE.json' with { type: 'json' };
@@ -63,6 +64,7 @@ const hookContract = Object.freeze({
   eventNames: capabilityTable.hooks.events,
   manifestPath: 'hooks/hooks.json',
   matchers: capabilityTable.hooks.matchers,
+  readNativeCommands: readStandardNativeHookCommands,
   wrapperPath: (hook: NormalizedPlugin['hooks'][number]) => `hooks/${hook.name}.mjs`,
   wrapperSource: (entry) => nativeHookWrapperSource(entry, 'Claude'),
 } satisfies TargetHookContract);

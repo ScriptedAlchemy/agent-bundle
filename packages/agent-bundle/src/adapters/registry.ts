@@ -6,7 +6,7 @@ import type {
 } from '../core/types.ts';
 import { claudeAdapter } from './claude.ts';
 import { codexAdapter } from './codex.ts';
-import type { TargetHookContract } from './hook-contract.ts';
+import { readStandardNativeHookCommands, type TargetHookContract } from './hook-contract.ts';
 import { portableAdapter } from './portable.ts';
 import type {
   TargetAdapter,
@@ -305,6 +305,7 @@ const snapshotHookContract = (adapter: TargetAdapter): TargetHookContract | unde
     ...hookContract,
     eventNames: Object.freeze({ ...hookContract.eventNames }),
     matchers: Object.freeze({ ...hookContract.matchers }),
+    readNativeCommands: hookContract.readNativeCommands ?? readStandardNativeHookCommands,
   });
 };
 
@@ -321,7 +322,7 @@ const snapshotMcpRuntime = (adapter: TargetAdapter): TargetMcpRuntimeContract | 
     throw new Error('Target adapter MCP runtime manifest path must be a safe relative POSIX path.');
   }
   if (
-    typeof mcpRuntime.readModernServer !== 'function' ||
+    typeof mcpRuntime.readModernServers !== 'function' ||
     typeof mcpRuntime.resolveStdioArgument !== 'function' ||
     typeof mcpRuntime.resolveValue !== 'function'
   ) {
@@ -329,7 +330,7 @@ const snapshotMcpRuntime = (adapter: TargetAdapter): TargetMcpRuntimeContract | 
   }
   return Object.freeze({
     manifestPath: mcpRuntime.manifestPath,
-    readModernServer: mcpRuntime.readModernServer,
+    readModernServers: mcpRuntime.readModernServers,
     resolveStdioArgument: mcpRuntime.resolveStdioArgument,
     resolveValue: mcpRuntime.resolveValue,
   });

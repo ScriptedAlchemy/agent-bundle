@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
-import { isAbsolute, posix, resolve } from 'node:path';
+import { resolve } from 'node:path';
 
 import { createDefaultRegistry, type TargetRegistry } from '../adapters/registry.ts';
 import { DiagnosticError } from '../core/diagnostics.ts';
@@ -8,9 +8,9 @@ import { assertInside } from '../core/paths.ts';
 import {
   artifactHookIndexName,
   type ArtifactHook,
-  type ArtifactHookIndex,
 } from '../build/emit.ts';
 import { validateArtifact } from '../build/validate-artifact.ts';
+import { parseArtifactHookIndex } from './hook-index.ts';
 
 const defaultTimeoutMs = 5_000;
 const maxStreamBytes = 1_000_000;
@@ -53,40 +53,6 @@ class HookSimulationTerminationError extends Error {
     this.name = 'HookSimulationTerminationError';
   }
 }
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value);
-
-const isSafeArtifactPath = (path: string): boolean =>
-  path.length > 0 &&
-  !isAbsolute(path) &&
-  path === posix.normalize(path) &&
-  path !== '..' &&
-  !path.startsWith('../');
-
-const parseHookIndex = (value: string): ArtifactHookIndex | undefined => {
-  try {
-    const parsed = JSON.parse(value) as Partial<ArtifactHookIndex>;
-    if (
-      parsed.version !== 1 ||
-      !Array.isArray(parsed.hooks) ||
-      !parsed.hooks.every((hook) =>
-        isRecord(hook) &&
-        typeof hook.event === 'string' &&
-        typeof hook.id === 'string' &&
-        typeof hook.name === 'string' &&
-        typeof hook.path === 'string' &&
-        typeof hook.target === 'string' &&
-        (hook.timeout === undefined || (typeof hook.timeout === 'number' && Number.isInteger(hook.timeout) && hook.timeout > 0)),
-      )
-    ) {
-      return undefined;
-    }
-    return parsed as ArtifactHookIndex;
-  } catch {
-    return undefined;
-  }
-};
 
 const taskkill: Taskkill = (arguments_) => spawn('taskkill', [...arguments_], {
   stdio: 'ignore',
@@ -280,14 +246,11 @@ export class HookService {
     const errors = diagnostics.filter((diagnostic) => diagnostic.severity === 'error');
     if (errors.length > 0) throw new DiagnosticError(errors);
 
-    const index = parseHookIndex(await readFile(joinArtifact(artifact, artifactHookIndexName), 'utf8'));
+    const index = parseArtifactHookIndex(await readFile(joinArtifact(artifact, artifactHookIndexName), 'utf8'));
     if (index === undefined) {
       throw new Error('Artifact hook metadata is missing or invalid.');
     }
     const hooks = index.hooks.filter((hook) => {
-      if (!isSafeArtifactPath(hook.path)) {
-        throw new Error(`Artifact hook metadata contains unsafe path ${JSON.stringify(hook.path)}.`);
-      }
       return options.target === undefined || hook.target === options.target;
     });
     return Object.freeze(hooks.map((hook) => Object.freeze({ ...hook })));

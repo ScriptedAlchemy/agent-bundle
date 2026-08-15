@@ -8,6 +8,7 @@ import { TargetRegistry, build, inspect, invokeMcp, listHooks, listMcp, simulate
 import {
   nativeHookWrapperSource,
   planHooks,
+  readStandardNativeHookCommands,
   type TargetHookContract,
 } from '../src/adapters/hook-contract.ts';
 import type { TargetAdapter } from '../src/adapters/types.ts';
@@ -67,6 +68,7 @@ const syntheticHookContract = Object.freeze({
   }),
   manifestPath: 'hooks/hooks.json',
   matchers: Object.freeze({}),
+  readNativeCommands: readStandardNativeHookCommands,
   wrapperPath: (hook: NormalizedPlugin['hooks'][number]) => `hooks/${hook.name}.mjs`,
   wrapperSource: (entry) => nativeHookWrapperSource(entry, 'Codex'),
 } satisfies TargetHookContract);
@@ -94,12 +96,20 @@ const syntheticPlan = (model: NormalizedPlugin) => {
     }]));
   return Object.freeze({
     diagnostics: hooks.diagnostics,
-    entries: Object.freeze(Object.keys(servers).length === 0 ? [] : [{
-      content: `${JSON.stringify({ mcpServers: servers })}\n`,
-      kind: 'write' as const,
-      relativePath: syntheticMcpRuntime.manifestPath,
-      sourceInputs: [model.metadata.provenance.sourcePath],
-    }]),
+    entries: Object.freeze([
+      ...(hooks.document === undefined ? [] : [{
+        content: `${JSON.stringify(hooks.document)}\n`,
+        kind: 'write' as const,
+        relativePath: syntheticHookContract.manifestPath,
+        sourceInputs: [model.metadata.provenance.sourcePath],
+      }]),
+      ...(Object.keys(servers).length === 0 ? [] : [{
+        content: `${JSON.stringify({ mcpServers: servers })}\n`,
+        kind: 'write' as const,
+        relativePath: syntheticMcpRuntime.manifestPath,
+        sourceInputs: [model.metadata.provenance.sourcePath],
+      }]),
+    ]),
     hookEntries: hooks.hookEntries,
   });
 };

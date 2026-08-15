@@ -108,7 +108,7 @@ it('resolves URL and headers through the same target runtime contract', () => {
   };
   const runtime: TargetMcpRuntimeContract = {
     manifestPath: 'native/servers.json',
-    readModernServer: () => ({ status: 'missing' }),
+    readModernServers: () => ({ servers: [], status: 'found' }),
     resolveStdioArgument: (value) => value,
     resolveValue: (field, valueRoots, value) => ({
       diagnostics: [],
@@ -147,7 +147,7 @@ it('rejects unsupported URL tokens after resolving every remote value', () => {
   };
   const runtime: TargetMcpRuntimeContract = {
     manifestPath: 'native/servers.json',
-    readModernServer: () => ({ status: 'missing' }),
+    readModernServers: () => ({ servers: [], status: 'found' }),
     resolveStdioArgument: (value) => value,
     resolveValue: createMcpPathTokenResolver({
       target: 'synthetic',
@@ -169,7 +169,7 @@ it('rejects unsupported URL tokens after resolving every remote value', () => {
 it('returns a stable target and field diagnostic when a target value resolver is invalid', () => {
   const runtime: TargetMcpRuntimeContract = {
     manifestPath: 'native/servers.json',
-    readModernServer: () => ({ status: 'missing' }),
+    readModernServers: () => ({ servers: [], status: 'found' }),
     resolveStdioArgument: (value) => value,
     resolveValue: () => null as never,
   };
@@ -197,7 +197,7 @@ it('does not run stdio argument policy when token diagnostics already exist', ()
   let stdioArgumentCalls = 0;
   const runtime: TargetMcpRuntimeContract = {
     manifestPath: 'native/servers.json',
-    readModernServer: () => ({ status: 'missing' }),
+    readModernServers: () => ({ servers: [], status: 'found' }),
     resolveStdioArgument: (value) => {
       stdioArgumentCalls += 1;
       return value;
@@ -221,7 +221,7 @@ it('does not run stdio argument policy when token diagnostics already exist', ()
 it('returns a stable target and field diagnostic when a stdio argument policy is invalid', () => {
   const runtime: TargetMcpRuntimeContract = {
     manifestPath: 'native/servers.json',
-    readModernServer: () => ({ status: 'missing' }),
+    readModernServers: () => ({ servers: [], status: 'found' }),
     resolveStdioArgument: () => undefined as never,
     resolveValue: (_field, _roots, value) => ({ diagnostics: [], value }),
   };
