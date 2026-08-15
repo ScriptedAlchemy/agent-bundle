@@ -55,6 +55,20 @@ export interface McpPageSessionControls {
   readonly restart: boolean;
 }
 
+export interface McpPageActionRun {
+  readonly action: string;
+  readonly generation: number;
+  readonly tracker: McpPageActionTracker;
+}
+
+export interface McpPageActionSession {
+  readonly pending: readonly string[];
+  finish(run: McpPageActionRun): readonly string[] | undefined;
+  isCurrent(run: McpPageActionRun): boolean;
+  reset(): readonly string[];
+  start(action: string): McpPageActionRun | undefined;
+}
+
 type CatalogItem = Readonly<{
   readonly description?: string;
   readonly name: string;
@@ -77,6 +91,32 @@ export const createMcpPageActionTracker = (): McpPageActionTracker => {
       if (pending.has(action)) return false;
       pending.add(action);
       return true;
+    },
+  };
+};
+
+export const createMcpPageActionSession = (): McpPageActionSession => {
+  let generation = 0;
+  let tracker = createMcpPageActionTracker();
+  const isCurrent = (run: McpPageActionRun): boolean => run.generation === generation && run.tracker === tracker;
+  return {
+    get pending(): readonly string[] {
+      return tracker.pending;
+    },
+    finish: (run) => {
+      if (!isCurrent(run)) return undefined;
+      tracker.finish(run.action);
+      return tracker.pending;
+    },
+    isCurrent,
+    reset: () => {
+      generation += 1;
+      tracker = createMcpPageActionTracker();
+      return tracker.pending;
+    },
+    start: (action) => {
+      if (!tracker.start(action)) return undefined;
+      return { action, generation, tracker };
     },
   };
 };
@@ -170,13 +210,12 @@ export const McpPage = ({ controller, epochOptions, initialBinding, onDownloadCo
   const [cancelledRequests, setCancelledRequests] = useState<readonly string[]>([]);
   const [pendingActions, setPendingActions] = useState<readonly string[]>([]);
   const [traceTab, setTraceTab] = useState<TraceTab>('raw');
-  const actions = useRef(createMcpPageActionTracker());
+  const actionSession = useRef(createMcpPageActionSession());
   const requestNumber = useRef(0);
   const traceTabsByName = useRef<Partial<Record<TraceTab, HTMLButtonElement | null>>>({});
 
   useEffect(() => {
-    actions.current = createMcpPageActionTracker();
-    setPendingActions([]);
+    setPendingActions(actionSession.current.reset());
     setCancelledRequests([]);
     return controller.subscribe(setModel);
   }, [controller]);
@@ -189,12 +228,16 @@ export const McpPage = ({ controller, epochOptions, initialBinding, onDownloadCo
     return `mcp-page-${requestNumber.current}`;
   };
   const run = (action: string, operation: () => Promise<unknown>): void => {
-    if (!actions.current.start(action)) return;
+    const session = actionSession.current;
+    const run = session.start(action);
+    if (run === undefined) return;
     setActionError(undefined);
-    setPendingActions(actions.current.pending);
-    void operation().catch((reason: unknown) => setActionError(errorMessage(reason))).finally(() => {
-      actions.current.finish(action);
-      setPendingActions(actions.current.pending);
+    setPendingActions(session.pending);
+    void operation().catch((reason: unknown) => {
+      if (session.isCurrent(run)) setActionError(errorMessage(reason));
+    }).finally(() => {
+      const pending = session.finish(run);
+      if (pending !== undefined) setPendingActions(pending);
     });
   };
   const invoke = (operation: Exclude<McpSessionOperation, 'cancel' | 'close' | 'restart'>, request: Readonly<Record<string, unknown>>): void => {
@@ -209,7 +252,7 @@ export const McpPage = ({ controller, epochOptions, initialBinding, onDownloadCo
   const selectedPrompt = prompts.find((item) => item.name === promptName) ?? prompts[0];
   const active = Object.values(model.activeRequests);
   const controls = mcpPageSessionControls(model.phase, pendingActions, onResetSession !== undefined);
-  const isPending = (action: string): boolean => actions.current.isPending(action);
+  const isPending = (action: string): boolean => pendingActions.includes(action);
   const rawTrace = model.conciseTrace;
   const traceEntries = traceTab === 'raw' ? rawTrace : traceTab === 'logs' ? model.logs : model.progress;
   const traceLabel = traceTab === 'raw' ? 'Raw protocol' : traceTab === 'logs' ? 'Logs' : 'Progress';
