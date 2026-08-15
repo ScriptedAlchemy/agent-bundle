@@ -1,6 +1,6 @@
 import { lstat, readFile, realpath } from 'node:fs/promises';
 import { isBuiltin } from 'node:module';
-import { dirname, isAbsolute, posix, relative, resolve } from 'node:path';
+import { dirname, isAbsolute, posix, relative, resolve, win32 } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { parse as parseJavaScript } from 'acorn';
@@ -21,6 +21,7 @@ import { parseSkillMarkdown, referencedResources } from '../config/skill-referen
 import { DiagnosticError, type Diagnostic } from '../core/diagnostics.ts';
 import { parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
 import { agentSkillsSchemaRevision, validateAgentSkillsFrontmatter } from '../schemas/agent-skills/contract.ts';
+import { classifyMcpArtifactArgument } from '../services/mcp-artifact-reference.ts';
 import { parseArtifactHookIndex } from '../services/hook-index.ts';
 import { resolveMcpPathTokens } from '../services/mcp-path-tokens.ts';
 import { readTargetMcpServers } from '../services/mcp-runtime.ts';
@@ -518,83 +519,35 @@ const coherenceDiagnostic = (
   recovery: string,
 ): Diagnostic => diagnostic(code, message, generatedPath, target, recovery);
 
-const windowsDrivePath = /^[a-z]:[\\/]/iu;
-const uncPath = /^(?:\\\\|\/\/)/u;
-const urlValue = /^[a-z][a-z\d+.-]*:/iu;
-
-const argumentValue = (value: string): string => {
-  const assignment = value.startsWith('-') ? value.indexOf('=') : -1;
-  return assignment < 0 ? value : value.slice(assignment + 1);
-};
-
-const normalizedLocalPath = (value: string): string => value.replaceAll('\\', '/');
-
-const isWindowsAbsolutePath = (value: string): boolean => windowsDrivePath.test(value) || uncPath.test(value);
-
-const isCanonicalRelativeReference = (value: string): boolean => {
-  const relative = value.startsWith('./') ? value.slice(2) : value;
-  return relative.length > 0 &&
-    relative === posix.normalize(relative) &&
-    relative !== '..' &&
-    !relative.startsWith('../');
-};
-
-interface ArtifactLocalReference {
-  readonly path: string;
-  readonly status: 'artifact-local';
-}
-
-interface EscapedArtifactReference {
-  readonly status: 'escaped';
-}
-
-interface ExternalArtifactReference {
-  readonly status: 'external';
-}
-
-type ArtifactReference = ArtifactLocalReference | EscapedArtifactReference | ExternalArtifactReference;
-
-const artifactReference = (options: {
-  readonly artifactRoot: string;
-  readonly targetRoot: string;
-  readonly value: string;
-}): ArtifactReference => {
-  const { artifactRoot, targetRoot } = options;
-  const value = argumentValue(options.value);
-  if (isWindowsAbsolutePath(value)) return { status: 'escaped' };
-  if (urlValue.test(value)) return { status: 'external' };
-  const localPath = normalizedLocalPath(value);
-  if (isAbsolute(localPath)) {
-    const resolved = resolve(localPath);
-    const artifactPath = artifactPathFor(artifactRoot, resolved);
-    if (artifactPath === undefined) {
-      return localPath === artifactRoot || localPath.startsWith(`${artifactRoot}/`)
-        ? { status: 'escaped' }
-        : { status: 'external' };
-    }
-    const targetPath = artifactPathFor(targetRoot, resolved);
-    return targetPath === undefined || localPath !== resolved
-      ? { status: 'escaped' }
-      : { path: targetPath, status: 'artifact-local' };
-  }
-
-  if (!localPath.startsWith('.') && !localPath.includes('/')) return { status: 'external' };
-  if (!isCanonicalRelativeReference(localPath)) return { status: 'escaped' };
-  const resolved = resolve(targetRoot, localPath);
-  const targetPath = artifactPathFor(targetRoot, resolved);
-  return targetPath === undefined
-    ? { status: 'escaped' }
-    : { path: targetPath, status: 'artifact-local' };
-};
+const mcpArtifactPathApi = process.platform === 'win32'
+  ? Object.freeze({
+    isAbsolute: win32.isAbsolute,
+    normalize: win32.normalize,
+    relative: win32.relative,
+    resolve: win32.resolve,
+    sep: '\\' as const,
+  })
+  : Object.freeze({
+    isAbsolute: posix.isAbsolute,
+    normalize: posix.normalize,
+    relative: posix.relative,
+    resolve: posix.resolve,
+    sep: '/' as const,
+  });
 
 const targetArtifactPath = (target: string, path: string): string => `${target}/${path}`;
 
-const isTargetContainedCwd = (targetRoot: string, value: string): boolean => {
-  if (urlValue.test(value) || isWindowsAbsolutePath(value)) return false;
-  const localPath = normalizedLocalPath(value);
-  if (!isAbsolute(localPath) && localPath !== '.' && localPath !== './' && !isCanonicalRelativeReference(localPath)) return false;
-  const resolved = resolve(targetRoot, localPath);
-  return resolved === targetRoot || artifactPathFor(targetRoot, resolved) !== undefined;
+const isTargetContainedCwd = (artifactRoot: string, targetRoot: string, value: string): boolean => {
+  const localPath = mcpArtifactPathApi.sep === '/'
+    ? value.replaceAll('\\', '/')
+    : value.replaceAll('/', '\\');
+  return value === '.' || value === './' || value === '.\\' ||
+    (mcpArtifactPathApi.isAbsolute(localPath) && mcpArtifactPathApi.resolve(localPath) === targetRoot) ||
+    classifyMcpArtifactArgument({
+      path: mcpArtifactPathApi,
+      roots: { artifactRoot, targetRoot },
+      value,
+    }).status === 'artifact-local';
 };
 
 interface McpReferenceOccurrence {
@@ -628,7 +581,11 @@ const validateMcpArtifactReference = (options: {
   readonly targetRoot: string;
   readonly value: string;
 }): readonly Diagnostic[] => {
-  const reference = artifactReference(options);
+  const reference = classifyMcpArtifactArgument({
+    path: mcpArtifactPathApi,
+    roots: { artifactRoot: options.artifactRoot, targetRoot: options.targetRoot },
+    value: options.value,
+  });
   if (reference.status === 'external') return Object.freeze([]);
   if (reference.status === 'escaped') {
     return Object.freeze([coherenceDiagnostic(
@@ -757,7 +714,7 @@ const validateMcpCoherence = async (options: {
             if (server.kind !== 'stdio') continue;
 
             if (server.cwd !== undefined) {
-              if (!isTargetContainedCwd(targetRoot, server.cwd)) {
+              if (!isTargetContainedCwd(artifactRoot, targetRoot, server.cwd)) {
                 diagnostics.push(coherenceDiagnostic(
                   'AB6017',
                   `MCP cwd ${JSON.stringify(server.cwd)} escapes target ${JSON.stringify(target.name)}.`,
@@ -780,7 +737,11 @@ const validateMcpCoherence = async (options: {
                 targetRoot,
                 value: server.command,
               }));
-              const commandReference = artifactReference({ artifactRoot, targetRoot, value: server.command });
+              const commandReference = classifyMcpArtifactArgument({
+                path: mcpArtifactPathApi,
+                roots: { artifactRoot, targetRoot },
+                value: server.command,
+              });
               if (commandReference.status === 'artifact-local') {
                 const path = targetArtifactPath(target.name, commandReference.path);
                 recordMcpReference(referenceCounts, path, { field: 'command', server: entry.name });
@@ -799,7 +760,11 @@ const validateMcpCoherence = async (options: {
                 targetRoot,
                 value: argument,
               }));
-              const argumentReference = artifactReference({ artifactRoot, targetRoot, value: argument });
+              const argumentReference = classifyMcpArtifactArgument({
+                path: mcpArtifactPathApi,
+                roots: { artifactRoot, targetRoot },
+                value: argument,
+              });
               if (argumentReference.status === 'artifact-local') {
                 const path = targetArtifactPath(target.name, argumentReference.path);
                 recordMcpReference(referenceCounts, path, { field: 'argument', server: entry.name });

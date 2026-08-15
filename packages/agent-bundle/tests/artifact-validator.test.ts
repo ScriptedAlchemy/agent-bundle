@@ -609,6 +609,34 @@ it.each([
   }
 });
 
+it('rejects a target-local file URL argument that is absent from the artifact', async () => {
+  const nativePath = 'coherent/native/servers.json';
+  const root = await writeArtifact([{
+    contents: '{"mcpServers":{}}\n',
+    kind: 'generated',
+    path: nativePath,
+  }], true, [coherenceManifestTarget]);
+
+  try {
+    const argument = `--config=${pathToFileURL(join(root, 'coherent', 'mcp', 'missing space.mjs')).href}`;
+    const nativeContents = `${JSON.stringify({
+      mcpServers: { server: { args: [argument], command: 'node', type: 'stdio' } },
+    })}\n`;
+    const files = [{ contents: nativeContents, kind: 'generated' as const, path: nativePath }];
+    await writeFile(join(root, nativePath), nativeContents);
+    await writeFile(
+      join(root, 'agent-bundle.manifest.json'),
+      assembleArtifactManifest(manifestFor(withHookIndex(files), true, [coherenceManifestTarget])).bytes,
+    );
+
+    expect(await validateArtifact({ artifactRoot: root, registry: coherenceRegistry() })).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'AB6017', generatedPath: nativePath, target: coherenceTarget }),
+    ]));
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
 it.each([
   ['one server twice', {
     server: { args: ['mcp/mcp-server-deadbeef.mjs', 'mcp/mcp-server-deadbeef.mjs'], command: 'node', type: 'stdio' },
