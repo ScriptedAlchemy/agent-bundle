@@ -68,6 +68,9 @@ export interface McpAppPreview {
   readonly resource: McpAppBridgeResourceResolution;
 }
 
+/** `true` means an uninitialized App closed without a teardown frame. */
+export type McpAppPreviewCloseResult = McpAppBridgeMessage | boolean;
+
 export interface McpAppPreviewServiceOptions {
   readonly bindingAuthority: McpAppPreviewBindingAuthority;
   readonly closeTimeoutMs?: number;
@@ -87,6 +90,7 @@ interface PreviewEntry {
   readonly bridge: McpAppBridge;
   preview?: McpAppPreview;
   readonly outbound: McpAppBridgeMessage[];
+  pendingTeardown?: McpAppBridgeMessage;
   actionCount: number;
   closePromise?: Promise<void>;
   closing: boolean;
@@ -247,7 +251,13 @@ export class McpAppPreviewService {
         send: (message) => {
           const entry = entryRef.current;
           const bytes = messageByteLength(message);
-          if (entry === undefined || entry.closed || bytes === undefined || bytes > this.#maxOutboundBytes
+          if (entry === undefined || entry.closed) return false;
+          if (entry.closing && message.method === 'ui/resource-teardown') {
+            if (entry.pendingTeardown !== undefined) return false;
+            entry.pendingTeardown = message;
+            return true;
+          }
+          if (bytes === undefined || bytes > this.#maxOutboundBytes
             || outbound.length >= this.#maxOutboundMessages || entry.outboundBytes + bytes > this.#maxOutboundBytes) {
             return false;
           }
@@ -327,12 +337,11 @@ export class McpAppPreviewService {
     });
   }
 
-  async close(bindingId: string, options: McpAppBridgeCloseOptions): Promise<boolean> {
+  async close(bindingId: string, options: McpAppBridgeCloseOptions): Promise<McpAppPreviewCloseResult> {
     const entry = this.#entries.get(bindingId);
     if (entry === undefined) return false;
     void this.#closeEntry(entry, () => entry.bridge.close(options), false).catch(() => undefined);
-    this.#consumeTeardown(entry, options.id);
-    return true;
+    return this.#takeTeardown(entry, options.id) ?? true;
   }
 
   async forceClose(bindingId: string): Promise<boolean> {
@@ -383,6 +392,7 @@ export class McpAppPreviewService {
     if (discardOutbound) {
       entry.outbound.length = 0;
       entry.outboundBytes = 0;
+      entry.pendingTeardown = undefined;
     }
     let operationResult: Promise<void>;
     try {
@@ -397,6 +407,7 @@ export class McpAppPreviewService {
         entry.closed = true;
         entry.outbound.length = 0;
         entry.outboundBytes = 0;
+        entry.pendingTeardown = undefined;
         if (this.#entries.get(entry.binding.id) === entry) this.#entries.delete(entry.binding.id);
       },
       (error: unknown) => {
@@ -408,12 +419,11 @@ export class McpAppPreviewService {
     return pending;
   }
 
-  #consumeTeardown(entry: PreviewEntry, id: McpAppBridgeCloseOptions['id']): void {
-    const index = entry.outbound.findIndex((message) => message.id === id && message.method === 'ui/resource-teardown');
-    if (index < 0) return;
-    const [message] = entry.outbound.splice(index, 1);
-    const bytes = messageByteLength(message);
-    if (bytes !== undefined) entry.outboundBytes = Math.max(0, entry.outboundBytes - bytes);
+  #takeTeardown(entry: PreviewEntry, id: McpAppBridgeCloseOptions['id']): McpAppBridgeMessage | undefined {
+    const teardown = entry.pendingTeardown;
+    if (teardown === undefined || teardown.id !== id) return undefined;
+    entry.pendingTeardown = undefined;
+    return teardown;
   }
 
   #onBindingTeardown(bindingId: string | undefined): void {
@@ -423,6 +433,7 @@ export class McpAppPreviewService {
     entry.closed = true;
     entry.outbound.length = 0;
     entry.outboundBytes = 0;
+    entry.pendingTeardown = undefined;
     this.#entries.delete(bindingId);
     void this.#forceCloseEntry(entry).catch(() => undefined);
   }
