@@ -293,7 +293,7 @@ const previewProfileName = (state: McpAppPreviewState, fallback: McpAppPreviewPr
 /** Page-owned composition keeps the approved preview close promise ahead of session teardown. */
 const McpPageAppPreview = ({ client, host, onControllerChange, previewProfile, source }: McpPageAppPreviewProps) => {
   const [state, setState] = useState<McpAppPreviewState>(() => Object.freeze({ phase: 'loading' }));
-  const controller = useRef<McpAppPreviewController>();
+  const controller = useRef<McpAppPreviewController | undefined>(undefined);
   const iframe = useRef<HTMLIFrameElement>(null);
 
   useEffect(() => {
@@ -361,7 +361,7 @@ export const McpPage = ({ appPreviewClient, controller, epochOptions, initialBin
   const [appPreviewProfile, setAppPreviewProfile] = useState<McpAppPreviewProfile>('portable');
   const [appHost] = useState(browserMcpAppHost);
   const actionSession = useRef(createMcpPageActionSession());
-  const appPreviewController = useRef<McpAppPreviewController>();
+  const appPreviewController = useRef<McpAppPreviewController | undefined>(undefined);
   const appPreviewGeneration = useRef(0);
   const controllerIdentity = useRef(controller);
   const requestNumber = useRef(0);
