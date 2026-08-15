@@ -121,6 +121,34 @@ const createPreview = (service: McpAppPreviewService) => service.create({
   toolName: 'show-weather',
 });
 
+const actualBindingAuthorityFor = (release: () => Promise<void>) => new McpAppBindingService({
+  sessionAuthority: {
+    async acquireAppLease() {
+      return {
+        release,
+        session: {
+          async callTool() {
+            return {};
+          },
+          identity: { epochId: 'epoch-weather', serverName: 'weather', sessionId: 'session-weather', target: 'portable' },
+          async listBridgeResources() {
+            return [{ appVisible: true, uri: 'ui://weather/forecast.html' }];
+          },
+          async listBridgeTools() {
+            return [{ appVisible: true, definition: binding.toolDefinition, name: 'show-weather' }];
+          },
+          async readResource() {
+            return resourceResponse();
+          },
+        },
+        watchSessionClosed() {
+          return { closed: false, unsubscribe() {} };
+        },
+      };
+    },
+  },
+});
+
 it('creates one canonical Apps preview from its leased binding resource', async () => {
   const creates: unknown[] = [];
   const reads: Array<{ readonly bindingId: string; readonly uri: string }> = [];
@@ -605,6 +633,77 @@ it('reserves one route-owned teardown frame when ordinary outbound traffic has f
 
   expect(closes).toBe(1);
   expect(service.get(binding.id)).toBeUndefined();
+});
+
+it('awaits a delayed real lease release before reporting a one-slot teardown acknowledgment', async () => {
+  const releaseStarted = deferred<void>();
+  const releaseComplete = deferred<void>();
+  let releases = 0;
+  const service = serviceFor(actualBindingAuthorityFor(async () => {
+    releases += 1;
+    releaseStarted.resolve();
+    await releaseComplete.promise;
+  }), { maxOutboundMessages: 1 });
+  const preview = await createPreview(service);
+  await service.receive(preview.binding.id, initialize);
+  await service.takeOutbound(preview.binding.id);
+  await service.receive(preview.binding.id, initialized);
+  await service.takeOutbound(preview.binding.id);
+  await service.takeOutbound(preview.binding.id);
+  await service.receive(preview.binding.id, { id: 'queued-ping', jsonrpc: '2.0', method: 'ping' });
+  expect(await service.close(preview.binding.id, { id: 'teardown-delayed-release' })).toMatchObject({
+    id: 'teardown-delayed-release',
+    method: 'ui/resource-teardown',
+  });
+
+  const acknowledgment = service.receive(preview.binding.id, { id: 'teardown-delayed-release', jsonrpc: '2.0', result: {} });
+  let acknowledged = false;
+  void acknowledgment.then(() => {
+    acknowledged = true;
+  });
+  await releaseStarted.promise;
+
+  expect(acknowledged).toBe(false);
+  expect(service.get(preview.binding.id)).toBe(preview);
+  releaseComplete.resolve();
+  await expect(acknowledgment).resolves.toBe(true);
+  expect(releases).toBe(1);
+  expect(preview.bridge.lifecycle).toBe('closed');
+  expect(service.get(preview.binding.id)).toBeUndefined();
+  expect(await service.takeOutbound(preview.binding.id)).toEqual([]);
+});
+
+it('reports a real failed one-slot teardown release as retryable before force close', async () => {
+  let releases = 0;
+  const service = serviceFor(actualBindingAuthorityFor(async () => {
+    releases += 1;
+    if (releases === 1) throw new Error('first release fails');
+  }), { maxOutboundMessages: 1 });
+  const preview = await createPreview(service);
+  await service.receive(preview.binding.id, initialize);
+  await service.takeOutbound(preview.binding.id);
+  await service.receive(preview.binding.id, initialized);
+  await service.takeOutbound(preview.binding.id);
+  await service.takeOutbound(preview.binding.id);
+  await service.receive(preview.binding.id, { id: 'queued-ping', jsonrpc: '2.0', method: 'ping' });
+  expect(await service.close(preview.binding.id, { id: 'teardown-failed-release' })).toMatchObject({
+    id: 'teardown-failed-release',
+    method: 'ui/resource-teardown',
+  });
+
+  await expect(service.receive(preview.binding.id, { id: 'teardown-failed-release', jsonrpc: '2.0', result: {} })).resolves.toBe(true);
+
+  expect(releases).toBe(1);
+  expect(preview.bridge.lifecycle).toBe('closing');
+  expect(service.get(preview.binding.id)).toBe(preview);
+  expect(await service.takeOutbound(preview.binding.id)).toEqual([{
+    id: 'queued-ping',
+    jsonrpc: '2.0',
+    result: {},
+  }]);
+  await expect(service.forceClose(preview.binding.id)).resolves.toBe(true);
+  expect(releases).toBe(2);
+  expect(service.get(preview.binding.id)).toBeUndefined();
 });
 
 it('keeps a timed out graceful close retryable for an authoritative force close', async () => {
