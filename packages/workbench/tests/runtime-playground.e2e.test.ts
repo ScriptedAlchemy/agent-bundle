@@ -15,10 +15,14 @@ e2e('renders the capability-gated Runtime sibling in the real RSC workbench', { 
   const fixture = await startRuntimePlaygroundFixture();
   const pageErrors: Error[] = [];
   const foregroundSessionRequests: string[] = [];
+  const resetRequests: unknown[] = [];
   page.on('pageerror', (error) => pageErrors.push(error));
   page.on('request', (request) => {
     const requestUrl = new URL(request.url());
     if (requestUrl.origin === fixture.url && requestUrl.pathname === '/api/project/session') foregroundSessionRequests.push(request.url());
+    if (requestUrl.origin === fixture.url && requestUrl.pathname === '/api/runtime/state/reset' && request.method() === 'POST') {
+      resetRequests.push(JSON.parse(request.postData() ?? 'null'));
+    }
   });
   try {
     await page.route('**/api/runtime/surfaces', async (route) => {
@@ -126,10 +130,10 @@ e2e('renders the capability-gated Runtime sibling in the real RSC workbench', { 
     const confirmation = page.getByRole('dialog');
     await expect(confirmation).toContainText('Run mutable runtime surface?');
     const cancel = confirmation.getByRole('button', { name: 'Cancel' });
-    await expect(cancel).toBeFocused();
+    await expect(cancel).toBeFocused({ timeout: browserTimeout });
     await page.keyboard.press('Escape');
     await expect(confirmation).toBeHidden();
-    await expect(run).toBeFocused();
+    await expect(run).toBeFocused({ timeout: browserTimeout });
 
     const history = page.getByRole('region', { name: 'Runtime run history' }).locator('ol > li');
     const historyBeforeRun = await history.count();
@@ -148,13 +152,32 @@ e2e('renders the capability-gated Runtime sibling in the real RSC workbench', { 
     const stateVersionBeforeReset = await identity.getAttribute('data-runtime-state-version');
     await reset.click();
     await expect(confirmation).toContainText('Reset fixture state?');
-    await expect(cancel).toBeFocused();
+    await expect(confirmation).toContainText('State store');
+    await expect(confirmation).toContainText(runtimeIdentity.activeVector.stateStoreId);
+    await expect(confirmation).toContainText('Fixture seed');
+    await expect(confirmation).toContainText('No fixture seed');
+    await expect(reset).toBeDisabled();
+    await expect(cancel).toBeFocused({ timeout: browserTimeout });
+    await page.keyboard.press('Tab');
+    await expect(confirmation.getByRole('button', { name: 'Confirm' })).toBeFocused({ timeout: browserTimeout });
+    await page.keyboard.press('Tab');
+    await expect(cancel).toBeFocused({ timeout: browserTimeout });
+    await page.keyboard.press('Shift+Tab');
+    await expect(confirmation.getByRole('button', { name: 'Confirm' })).toBeFocused({ timeout: browserTimeout });
     await page.keyboard.press('Escape');
     await expect(confirmation).toBeHidden();
-    await expect(page.locator('.runtime-status')).toBeFocused();
+    await expect(reset).toBeFocused({ timeout: browserTimeout });
+    expect(resetRequests).toEqual([]);
     await reset.click();
+    await expect(confirmation).toContainText('State store');
     await confirmation.getByRole('button', { name: 'Confirm' }).click();
+    await expect.poll(() => resetRequests).toHaveLength(1);
+    expect(resetRequests).toEqual([{
+      expectedGenerationId: runtimeIdentity.activeVector.runtimeGenerationId,
+      stateStoreId: runtimeIdentity.activeVector.stateStoreId,
+    }]);
     await expect.poll(async () => identity.getAttribute('data-runtime-state-version'), { timeout: browserTimeout }).not.toBe(stateVersionBeforeReset);
+    await expect(page.locator('.runtime-status')).toBeFocused({ timeout: browserTimeout });
 
     const tabs = page.getByRole('tab');
     await expect(tabs).toHaveCount(6);

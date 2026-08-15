@@ -294,12 +294,22 @@ const historyLabel = (run: DevRuntimeRun): string => [
   new Intl.DateTimeFormat(undefined, { dateStyle: 'short', timeStyle: 'medium' }).format(new Date(run.startedAt)),
 ].join(' · ');
 
+const resetSeedLabel = (request: DevRuntimeStateResetRequest): string =>
+  request.seed === undefined ? 'No fixture seed' : JSON.stringify(request.seed);
+
 export const RuntimePlayground = ({ controller }: RuntimePlaygroundProps): React.ReactNode => {
   const [model, setModel] = useState(controller.model);
   const cancelRef = useRef<HTMLButtonElement>(null);
+  const confirmationRef = useRef<HTMLDivElement>(null);
+  const confirmRef = useRef<HTMLButtonElement>(null);
   const invokingRef = useRef<HTMLButtonElement>(null);
+  const resetRef = useRef<HTMLButtonElement>(null);
   const resetStatusRef = useRef<HTMLParagraphElement>(null);
+  const confirmationOutcome = useRef<'cancelled' | 'confirmed' | undefined>(undefined);
+  const confirmedReset = useRef(false);
   const priorConfirmation = useRef(model.confirmation);
+  const priorStateIdentity = useRef(model.stateIdentity);
+  const [confirmationPending, setConfirmationPending] = useState(false);
   const surface = selectedSurface(model);
   const run = selectedRun(model);
   const lastGoodRun = selectedLastGoodRun(model);
@@ -308,9 +318,24 @@ export const RuntimePlayground = ({ controller }: RuntimePlaygroundProps): React
   const activeVector = model.status?.activeVector;
   const displayIdentity = runtimeDisplayIdentityFor(model);
   const input = runtimeInputRecord(model.draft.input);
+  const resetDisabled = model.activeEffect !== undefined || model.confirmation !== undefined || model.stateIdentity === undefined;
 
   const replaceDraft = (next: ImmutableJsonRecord): void => {
     controller.dispatch({ input: runtimeJsonRecord(next), raw: serializeJsonRecord(next), type: 'draft.replace' });
+  };
+
+  const cancelConfirmation = (): void => {
+    if (confirmationPending) return;
+    confirmationOutcome.current = 'cancelled';
+    controller.dispatch({ type: 'confirmation.cancel' });
+  };
+
+  const confirmConfirmation = (): void => {
+    if (confirmationPending) return;
+    confirmationOutcome.current = 'confirmed';
+    if (model.confirmation?.kind === 'reset') confirmedReset.current = true;
+    setConfirmationPending(true);
+    controller.dispatch({ type: 'confirmation.confirm' });
   };
 
   useEffect(() => {
@@ -318,18 +343,45 @@ export const RuntimePlayground = ({ controller }: RuntimePlaygroundProps): React
     return controller.subscribe(setModel);
   }, [controller]);
   useEffect(() => {
-    if (model.confirmation !== undefined) cancelRef.current?.focus();
-    if (priorConfirmation.current?.kind === 'run' && model.confirmation === undefined) invokingRef.current?.focus();
-    if (priorConfirmation.current?.kind === 'reset' && model.confirmation === undefined) resetStatusRef.current?.focus();
+    if (model.confirmation !== undefined) {
+      setConfirmationPending(false);
+      cancelRef.current?.focus();
+    } else if (priorConfirmation.current?.kind === 'run' && confirmationOutcome.current === 'cancelled') {
+      invokingRef.current?.focus();
+    } else if (priorConfirmation.current?.kind === 'reset' && confirmationOutcome.current === 'cancelled') {
+      resetRef.current?.focus();
+    }
+    if (model.confirmation === undefined) confirmationOutcome.current = undefined;
     priorConfirmation.current = model.confirmation;
   }, [model.confirmation]);
   useEffect(() => {
+    if (confirmedReset.current && model.stateIdentity !== priorStateIdentity.current) {
+      confirmedReset.current = false;
+      resetStatusRef.current?.focus();
+    }
+    priorStateIdentity.current = model.stateIdentity;
+  }, [model.stateIdentity]);
+  useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
-      if (event.key === 'Escape' && model.confirmation !== undefined) controller.dispatch({ type: 'confirmation.cancel' });
+      if (model.confirmation === undefined) return;
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        cancelConfirmation();
+        return;
+      }
+      if (event.key !== 'Tab') return;
+      const controls = [cancelRef.current, confirmRef.current].filter((control): control is HTMLButtonElement => control !== null);
+      if (controls.length === 0) return;
+      const currentIndex = controls.indexOf(document.activeElement as HTMLButtonElement);
+      const nextIndex = event.shiftKey
+        ? currentIndex <= 0 ? controls.length - 1 : currentIndex - 1
+        : currentIndex === controls.length - 1 ? 0 : currentIndex + 1;
+      event.preventDefault();
+      controls[nextIndex]?.focus();
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [controller, model.confirmation]);
+  }, [controller, model.confirmation, confirmationPending]);
 
   if (model.status === undefined) return null;
   return <section aria-labelledby="runtime-playground-heading" className="runtime-playground" {...attributes}>
@@ -391,13 +443,22 @@ export const RuntimePlayground = ({ controller }: RuntimePlaygroundProps): React
       />
     </div>
     <div className="runtime-actions">
-      <button onClick={controller.dispatch.bind(controller, { type: 'reset.request' })} type="button">Reset fixture state</button>
+      <button disabled={resetDisabled} onClick={controller.dispatch.bind(controller, { type: 'reset.request' })} ref={resetRef} type="button">Reset fixture state</button>
     </div>
-    {model.confirmation === undefined ? undefined : <div aria-describedby="runtime-confirmation-copy" aria-modal="true" className="runtime-confirmation" role="dialog">
+    {model.confirmation === undefined ? undefined : <div aria-describedby="runtime-confirmation-copy" aria-modal="true" className="runtime-confirmation" ref={confirmationRef} role="dialog">
       <h2>{model.confirmation.kind === 'reset' ? 'Reset fixture state?' : 'Run mutable runtime surface?'}</h2>
-      <p id="runtime-confirmation-copy">This sends one provider-owned runtime request.</p>
-      <button onClick={controller.dispatch.bind(controller, { type: 'confirmation.cancel' })} ref={cancelRef} type="button">Cancel</button>
-      <button onClick={controller.dispatch.bind(controller, { type: 'confirmation.confirm' })} type="button">Confirm</button>
+      {model.confirmation.kind === 'reset' ? <>
+        <p id="runtime-confirmation-copy">This resets the selected provider-owned state store and then queues one follow-up runtime run.</p>
+        <dl className="runtime-reset-summary">
+          <div><dt>State store</dt><dd>{model.confirmation.request.stateStoreId}</dd></div>
+          <div><dt>Fixture seed</dt><dd><code>{resetSeedLabel(model.confirmation.request)}</code></dd></div>
+        </dl>
+      </> : <p id="runtime-confirmation-copy">This sends one provider-owned runtime request.</p>}
+      <button disabled={confirmationPending} onClick={cancelConfirmation} ref={(element) => {
+        cancelRef.current = element;
+        if (element !== null) element.focus();
+      }} type="button">Cancel</button>
+      <button disabled={confirmationPending} onClick={confirmConfirmation} ref={confirmRef} type="button">Confirm</button>
     </div>}
     {controller.error === undefined ? undefined : <p className="runtime-request-error" role="alert">{controller.error}</p>}
     <div className="runtime-layout">

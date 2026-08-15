@@ -9,6 +9,7 @@ import type {
   DevRuntimeInvocationRequest,
   DevRuntimeReplayRequest,
   DevRuntimeRun,
+  DevRuntimeStateIdentity,
   DevRuntimeStateResetRequest,
   DevRuntimeStatus,
   DevRuntimeSurface,
@@ -181,7 +182,33 @@ it('renders validation, confirmation, replay-gap, and unavailable-identity state
   expect(markup).toContain('Draft JSON is invalid. Repair the raw input before running.');
   expect(markup).toContain('Events 11–13 were unavailable.');
   expect(markup).toContain('Reset fixture state?');
+  expect(markup).toContain('State store');
+  expect(markup).toContain('state-a');
+  expect(markup).toContain('Fixture seed');
   expect(markup).toContain('disabled=""');
+});
+
+it('disables reset without a reducer-owned state identity and fences duplicate confirmation', async () => {
+  const noState = bootstrap({ status: Object.freeze({ ...status, activeVector: undefined, lastGoodVector: undefined }) });
+  const unavailableReset = createRuntimePlaygroundController({ bootstrap: noState, client: clientFor(), profiles });
+  const markup = renderToStaticMarkup(createElement(RuntimePlayground, { controller: unavailableReset }));
+  expect(markup).toContain('Reset fixture state</button>');
+
+  const pending = deferred<DevRuntimeStateIdentity>();
+  let resetCalls = 0;
+  const controller = createRuntimePlaygroundController({
+    bootstrap: bootstrap(),
+    client: clientFor({ resetState: async () => { resetCalls += 1; return pending.promise; } }),
+    profiles,
+  });
+  controller.dispatch({ type: 'reset.request' });
+  controller.dispatch({ type: 'confirmation.confirm' });
+  controller.dispatch({ type: 'confirmation.confirm' });
+  await Promise.resolve();
+
+  expect(resetCalls).toBe(1);
+  pending.resolve(Object.freeze({ stateStoreId: 'state-a', stateVersion: 2 }));
+  await controller.whenIdle();
 });
 
 it('derives all runtime identity attributes from provider, ordered HMR, and reset evidence', async () => {
