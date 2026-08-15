@@ -3,6 +3,7 @@ import { execFile } from 'node:child_process';
 import { chmod, mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { expect, it } from '@rstest/core';
 
 import { createDefaultRegistry, TargetRegistry } from '../src/adapters/registry.ts';
@@ -112,7 +113,10 @@ const customRegistry = (validate = validateCustomDocument): TargetRegistry => ne
     documents: [{ path: 'document.json', required: true, schema: 'document' }],
     schemas: [{ name: 'document', validate }],
   },
-  artifactLayout: { skills: 'skills' },
+  artifactLayout: {
+    scripts: { allowedSuffixes: ['.mjs', '.sh'], directory: 'scripts' },
+    skills: 'skills',
+  },
   capabilities: { skills: true },
   metadata: customMetadata,
   name: customTarget,
@@ -480,6 +484,172 @@ it('preserves structural artifact diagnostics after a strict v2 manifest passes'
     expect(await validateArtifact({ artifactRoot: root })).toEqual(expect.arrayContaining([
       expect.objectContaining({ code: 'AB6004', generatedPath: 'agent-bundle.manifest.json' }),
     ]));
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it.each([
+  ['a missing static import', "import './missing.mjs';\n"],
+  ['a missing dynamic import', "await import('./missing.mjs');\n"],
+])('rejects generated JavaScript with %s', async (_name, contents) => {
+  const root = await writeArtifact([
+    { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'custom/document.json' },
+    { contents, kind: 'bundle', path: 'custom/scripts/missing-dependency.mjs' },
+  ], true, [customManifestTarget]);
+
+  try {
+    await expect(validateArtifact({ artifactRoot: root, registry: customRegistry() })).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: 'AB6005',
+          generatedPath: 'custom/scripts/missing-dependency.mjs',
+          recovery: 'Bundle every JavaScript dependency into the artifact, then rebuild it.',
+        }),
+      ]),
+    );
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('rejects generated JavaScript that throws during import', async () => {
+  const root = await writeArtifact([
+    { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'custom/document.json' },
+    { contents: 'throw new Error("top-level artifact failure");\n', kind: 'bundle', path: 'custom/scripts/throws.mjs' },
+  ], true, [customManifestTarget]);
+
+  try {
+    await expect(validateArtifact({ artifactRoot: root, registry: customRegistry() })).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: 'AB6005',
+          generatedPath: 'custom/scripts/throws.mjs',
+          recovery: 'Bundle every JavaScript dependency into the artifact, then rebuild it.',
+        }),
+      ]),
+    );
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('rejects generated JavaScript that rejects during import', async () => {
+  const root = await writeArtifact([
+    { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'custom/document.json' },
+    { contents: 'await Promise.reject(new Error("top-level artifact rejection"));\n', kind: 'bundle', path: 'custom/scripts/rejects.mjs' },
+  ], true, [customManifestTarget]);
+
+  try {
+    await expect(validateArtifact({ artifactRoot: root, registry: customRegistry() })).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: 'AB6005',
+          generatedPath: 'custom/scripts/rejects.mjs',
+          recovery: 'Bundle every JavaScript dependency into the artifact, then rebuild it.',
+        }),
+      ]),
+    );
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('truncates generated JavaScript import stderr in its diagnostic', async () => {
+  const root = await writeArtifact([
+    { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'custom/document.json' },
+    {
+      contents: 'process.stderr.write("x".repeat(16_384));\nthrow new Error("after stderr");\n',
+      kind: 'bundle',
+      path: 'custom/scripts/noisy.mjs',
+    },
+  ], true, [customManifestTarget]);
+
+  try {
+    const diagnostics = await validateArtifact({ artifactRoot: root, registry: customRegistry() });
+    const diagnostic = diagnostics.find((entry) => entry.generatedPath === 'custom/scripts/noisy.mjs');
+    expect(diagnostic).toMatchObject({ code: 'AB6005' });
+    expect(diagnostic?.message).toContain('[output truncated]');
+    expect(diagnostic?.message.length).toBeLessThan(9_000);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('rejects a generated JavaScript import that exceeds its bounded validation time', async () => {
+  const root = await writeArtifact([
+    { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'custom/document.json' },
+    { contents: 'setInterval(() => undefined, 1_000);\nawait new Promise(() => undefined);\n', kind: 'bundle', path: 'custom/scripts/never-settles.mjs' },
+  ], true, [customManifestTarget]);
+
+  try {
+    await expect(validateArtifact({ artifactRoot: root, registry: customRegistry() })).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: 'AB6005',
+          generatedPath: 'custom/scripts/never-settles.mjs',
+          message: expect.stringMatching(/timed out/i),
+          recovery: 'Bundle every JavaScript dependency into the artifact, then rebuild it.',
+        }),
+      ]),
+    );
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+}, 7_000);
+
+it('imports a self-contained generated module at a path with spaces', async () => {
+  const root = await writeArtifact([
+    { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'custom/document.json' },
+    { contents: 'export const artifact = "self-contained";\n', kind: 'bundle', path: 'custom/scripts/with space.mjs' },
+  ], true, [customManifestTarget]);
+
+  try {
+    await expect(validateArtifact({ artifactRoot: root, registry: customRegistry() })).resolves.toEqual([]);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('rejects generated JavaScript that resolves a dependency outside the artifact root', async () => {
+  const outside = await mkdtemp(join(tmpdir(), 'agent-bundle-artifact-validator-outside-'));
+  const outsideModule = join(outside, 'source-tree-dependency.mjs');
+  const root = await writeArtifact([
+    { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'custom/document.json' },
+    {
+      contents: `import ${JSON.stringify(pathToFileURL(outsideModule).href)};\n`,
+      kind: 'bundle',
+      path: 'custom/scripts/external-dependency.mjs',
+    },
+  ], true, [customManifestTarget]);
+
+  try {
+    await writeFile(outsideModule, 'export const sourceTreeDependency = true;\n');
+    await expect(validateArtifact({ artifactRoot: root, registry: customRegistry() })).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: 'AB6005',
+          generatedPath: 'custom/scripts/external-dependency.mjs',
+          recovery: 'Bundle every JavaScript dependency into the artifact, then rebuild it.',
+        }),
+      ]),
+    );
+  } finally {
+    await Promise.all([
+      rm(root, { force: true, recursive: true }),
+      rm(outside, { force: true, recursive: true }),
+    ]);
+  }
+});
+
+it('does not import copied non-JavaScript resources', async () => {
+  const root = await writeArtifact([
+    { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'custom/document.json' },
+    { contents: 'this is not JavaScript\n', kind: 'copy', path: 'custom/scripts/not-a-module.sh' },
+  ], true, [customManifestTarget]);
+
+  try {
+    await expect(validateArtifact({ artifactRoot: root, registry: customRegistry() })).resolves.toEqual([]);
   } finally {
     await rm(root, { force: true, recursive: true });
   }

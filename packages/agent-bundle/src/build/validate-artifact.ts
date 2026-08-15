@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { dirname, posix, resolve } from 'node:path';
 import { spawn } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
 
 import { createDefaultRegistry, type TargetRegistry } from '../adapters/registry.ts';
 import type {
@@ -47,27 +48,116 @@ const diagnostic = (
   ...(target === undefined ? {} : { target }),
 });
 
-const checkJavaScriptSyntax = async (path: string): Promise<string | undefined> =>
+const javaScriptModuleSuffix = /\.(?:[cm]?js)$/u;
+const moduleImportTimeoutMs = 5_000;
+const childOutputLimit = 8 * 1024;
+const generatedJavaScriptRecovery = 'Bundle every JavaScript dependency into the artifact, then rebuild it.';
+
+interface ChildImportResult {
+  readonly error?: Error;
+  readonly exitCode: number | null;
+  readonly signal: NodeJS.Signals | null;
+  readonly stderr: string;
+  readonly stderrTruncated: boolean;
+  readonly stdout: string;
+  readonly stdoutTruncated: boolean;
+  readonly timedOut: boolean;
+}
+
+interface BoundedOutput {
+  readonly text: string;
+  readonly truncated: boolean;
+}
+
+const appendBoundedOutput = (output: string, chunk: Buffer): BoundedOutput => {
+  const available = childOutputLimit - Buffer.byteLength(output);
+  if (available <= 0) return { text: output, truncated: true };
+  if (chunk.length <= available) return { text: output + chunk.toString(), truncated: false };
+  return { text: output + chunk.subarray(0, available).toString(), truncated: true };
+};
+
+const runJavaScriptImport = async (artifactRoot: string, path: string): Promise<ChildImportResult> =>
   new Promise((resolvePromise) => {
-    const child = spawn(process.execPath, ['--check', path], {
-      stdio: ['ignore', 'ignore', 'pipe'],
+    const artifactUrl = pathToFileURL(`${artifactRoot}/`).href;
+    const loaderSource = [
+      `const artifactUrl = ${JSON.stringify(artifactUrl)};`,
+      'export async function resolve(specifier, context, nextResolve) {',
+      '  const resolved = await nextResolve(specifier, context);',
+      '  if (resolved.url.startsWith("file:") && !resolved.url.startsWith(artifactUrl)) {',
+      '    throw new Error("Generated JavaScript resolved a dependency outside the artifact root.");',
+      '  }',
+      '  return resolved;',
+      '}',
+    ].join('\n');
+    const loader = `data:text/javascript,${encodeURIComponent(loaderSource)}`;
+    const importSource = [
+      'import { register } from "node:module";',
+      `register(${JSON.stringify(loader)}, import.meta.url);`,
+      `await import(${JSON.stringify(pathToFileURL(path).href)});`,
+      'process.exit(0);',
+    ].join(' ');
+    const child = spawn(process.execPath, ['--input-type=module', '--eval', importSource], {
+      cwd: artifactRoot,
+      env: { PATH: process.env.PATH ?? '' },
+      stdio: ['ignore', 'pipe', 'pipe'],
     });
+    let error: Error | undefined;
+    let settled = false;
     let stderr = '';
+    let stderrTruncated = false;
+    let stdout = '';
+    let stdoutTruncated = false;
+    let timedOut = false;
     const timeout = setTimeout(() => {
-      child.kill();
-    }, 5_000);
+      timedOut = true;
+      child.kill('SIGKILL');
+    }, moduleImportTimeoutMs);
+    const settle = (exitCode: number | null, signal: NodeJS.Signals | null): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      resolvePromise({
+        ...(error === undefined ? {} : { error }),
+        exitCode,
+        signal,
+        stderr,
+        stderrTruncated,
+        stdout,
+        stdoutTruncated,
+        timedOut,
+      });
+    };
     child.stderr.on('data', (chunk: Buffer) => {
-      stderr += chunk.toString();
+      const captured = appendBoundedOutput(stderr, chunk);
+      stderr = captured.text;
+      stderrTruncated ||= captured.truncated;
     });
-    child.once('error', (error) => {
-      clearTimeout(timeout);
-      resolvePromise(error.message);
+    child.stdout.on('data', (chunk: Buffer) => {
+      const captured = appendBoundedOutput(stdout, chunk);
+      stdout = captured.text;
+      stdoutTruncated ||= captured.truncated;
     });
-    child.once('close', (code) => {
-      clearTimeout(timeout);
-      resolvePromise(code === 0 ? undefined : stderr.trim() || 'Node rejected generated JavaScript.');
+    child.once('error', (spawnError) => {
+      error = spawnError;
+      if (child.pid === undefined) settle(null, null);
     });
+    child.once('close', settle);
   });
+
+const importFailure = (result: ChildImportResult): string => {
+  if (result.timedOut) return `import timed out after ${moduleImportTimeoutMs}ms.`;
+  if (result.error !== undefined) return `import process could not start: ${result.error.message}`;
+  const output = result.stderr || result.stdout;
+  const truncated = result.stderr ? result.stderrTruncated : result.stdoutTruncated;
+  if (output.length > 0) return `${output.trim()}${truncated ? '\n[output truncated]' : ''}`;
+  return `import process exited with ${result.signal ?? `code ${result.exitCode ?? 'unknown'}`}.`;
+};
+
+const checkJavaScriptImport = async (artifactRoot: string, relativePath: string): Promise<string | undefined> => {
+  const root = resolve(artifactRoot);
+  const result = await runJavaScriptImport(root, resolve(root, relativePath));
+  return result.exitCode === 0 && !result.timedOut ? undefined : importFailure(result);
+};
 
 const sameFile = (left: ArtifactFile, right: ManifestFile): boolean =>
   left.bytes === right.bytes &&
@@ -620,10 +710,16 @@ const validateGeneratedFiles = async (options: {
     }
   }
 
-  for (const file of options.files.filter((entry) => /\.(?:[cm]?js)$/u.test(entry.path))) {
-    const syntaxError = await checkJavaScriptSyntax(resolve(options.artifactRoot, file.path));
-    if (syntaxError !== undefined) {
-      diagnostics.push(diagnostic('AB6005', `Generated JavaScript has invalid syntax: ${syntaxError}`, file.path));
+  for (const file of options.files.filter((entry) => javaScriptModuleSuffix.test(entry.path))) {
+    const importError = await checkJavaScriptImport(options.artifactRoot, file.path);
+    if (importError !== undefined) {
+      diagnostics.push(diagnostic(
+        'AB6005',
+        `Generated JavaScript cannot be imported: ${importError}`,
+        file.path,
+        undefined,
+        generatedJavaScriptRecovery,
+      ));
     }
   }
 

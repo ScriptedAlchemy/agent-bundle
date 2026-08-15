@@ -317,10 +317,12 @@ export const nativeHookWrapperSource = (
     '  const output = simulation ? decodeOutput(nativeOutput) : nativeOutput;',
     '  if (output !== undefined) process.stdout.write(JSON.stringify(output));',
     '};',
-    'await run().catch((error) => {',
-    '  process.stderr.write(`${error instanceof Error ? error.message : String(error)}\\n`);',
-    '  process.exitCode = 1;',
-    '});',
+    'if (import.meta.main) {',
+    '  await run().catch((error) => {',
+    '    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\\n`);',
+    '    process.exitCode = 1;',
+    '  });',
+    '}',
     '',
   ].join('\n');
 };

@@ -2,7 +2,8 @@ import { cp, mkdtemp, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/pr
 import { spawn, type ChildProcess } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 import { rspack } from '@rspack/core';
 import { expect, it, rs } from '@rstest/core';
@@ -49,6 +50,25 @@ const runNativeHook = async (wrapper: string, input: Record<string, unknown>): P
     child.once('error', reject);
     child.once('close', (code) => resolvePromise({ code, stderr, stdout }));
     child.stdin.end(JSON.stringify(input));
+  });
+
+const importPublishedHook = async (wrapper: string): Promise<{ readonly code: number | null; readonly stderr: string; readonly stdout: string }> =>
+  new Promise((resolvePromise, reject) => {
+    const child = spawn(
+      process.execPath,
+      ['--input-type=module', '--eval', `await import(${JSON.stringify(pathToFileURL(wrapper).href)}); process.exit(0);`],
+      { cwd: dirname(wrapper), stdio: ['ignore', 'pipe', 'pipe'] },
+    );
+    let stderr = '';
+    let stdout = '';
+    child.stderr.on('data', (chunk: Buffer) => {
+      stderr += chunk.toString();
+    });
+    child.stdout.on('data', (chunk: Buffer) => {
+      stdout += chunk.toString();
+    });
+    child.once('error', reject);
+    child.once('close', (code) => resolvePromise({ code, stderr, stdout }));
   });
 
 it('closes the Rslib build result after building a virtual hook entry', async () => {
@@ -317,6 +337,13 @@ it('lists and simulates only validated wrappers from a clean copied artifact', a
     ]);
     await build({ model, outputRoot, projectRoot: root, registry: createDefaultRegistry() });
     await cp(outputRoot, artifact, { recursive: true });
+    await rm(root, { force: true, recursive: true });
+
+    await expect(importPublishedHook(join(artifact, 'codex', 'hooks', 'session-start-session-start-7ab7e8a5.mjs'))).resolves.toEqual({
+      code: 0,
+      stderr: '',
+      stdout: '',
+    });
 
     const listed = await service.list({ artifact });
     expect(listed).toEqual([
