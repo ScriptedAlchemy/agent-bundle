@@ -128,6 +128,13 @@ export interface McpAppFailClosedSender<Message> {
   send(message: Message): Promise<boolean>;
 }
 
+export interface McpAppFailClosedSenderOptions<Message> {
+  readonly maxQueuedMessageBytes?: number;
+  readonly maxQueuedMessages?: number;
+  readonly onClose?: () => void;
+  readonly send: (message: Message) => boolean | Promise<boolean>;
+}
+
 interface McpAppFailClosedSenderInternal<Message> extends McpAppFailClosedSender<Message> {
   attempt(message: Message): boolean | undefined;
   block(): false;
@@ -202,6 +209,8 @@ const defaultMaximumQueuedHostMessageBytes = 1_048_576;
 const maximumQueuedHostMessageBytes = 16_777_216;
 const maximumQueuedHostMessageSendAttempts = 3;
 export const MAX_APP_HTML_BYTES = 2_097_152;
+const defaultSharedSenderQueuedMessages = 32;
+const defaultSharedSenderQueuedMessageBytes = 256 * 1024;
 const loggingLevels = new Set(['debug', 'info', 'notice', 'warning', 'error', 'critical', 'alert', 'emergency']);
 const displayModes = new Set<McpAppBridgeDisplayMode>(['inline', 'fullscreen', 'pip']);
 const hostStyleVariables = new Set([
@@ -747,27 +756,38 @@ const createMcpAppFailClosedSenderInternal = <Message>(options: Readonly<{
   });
 };
 
-export const createMcpAppFailClosedSender = <Message>(options: Readonly<{
-  readonly onClose?: () => void;
-  readonly send: (message: Message) => boolean | Promise<boolean>;
+export const createMcpAppFailClosedSender = <Message>(options: Readonly<McpAppFailClosedSenderOptions<Message> & {
   /** Internal artifact bridge adapter for a synchronous transport. */
   readonly synchronous?: boolean;
 }>): McpAppFailClosedSender<Message> => {
   if (options.synchronous) return createMcpAppFailClosedSenderInternal(options);
   interface QueuedMessage {
+    readonly byteLength: number;
     readonly message: Message;
     resolve(accepted: boolean): void;
     settled: boolean;
   }
   const queued: QueuedMessage[] = [];
+  const maximumMessages = options.maxQueuedMessages ?? defaultSharedSenderQueuedMessages;
+  const maximumBytes = options.maxQueuedMessageBytes ?? defaultSharedSenderQueuedMessageBytes;
+  if (!Number.isSafeInteger(maximumMessages) || maximumMessages < 1 || !Number.isSafeInteger(maximumBytes) || maximumBytes < 1) {
+    throw new RangeError('MCP App shared sender queue limits must be positive safe integers.');
+  }
   let blockedAttempts = 0;
   let closed = false;
   let closeCalled = false;
   let draining = false;
+  let queuedBytes = 0;
+  const block = (): false => {
+    blockedAttempts += 1;
+    if (blockedAttempts >= maximumQueuedHostMessageSendAttempts) close();
+    return false;
+  };
   const close = (): void => {
     if (closed) return;
     closed = true;
     for (const message of queued.splice(0)) if (!message.settled) message.resolve(false);
+    queuedBytes = 0;
     if (!closeCalled) {
       closeCalled = true;
       options.onClose?.();
@@ -784,18 +804,20 @@ export const createMcpAppFailClosedSender = <Message>(options: Readonly<{
         if (accepted) {
           blockedAttempts = 0;
           queued.shift();
+          queuedBytes -= head.byteLength;
           if (!head.settled) head.resolve(true);
           continue;
         }
-        blockedAttempts += 1;
-        if (blockedAttempts >= maximumQueuedHostMessageSendAttempts) {
-          close();
+        if (!block()) {
+          if (closed) return;
+          // The head remains queued, so later results cannot bypass it. Callers
+          // are told their current attempt was not delivered without losing FIFO state.
+          for (const message of queued) if (!message.settled) message.resolve(false);
           return;
         }
-        // The head remains queued, so later results cannot bypass it. Callers
-        // are told their current attempt was not delivered without losing FIFO state.
-        for (const message of queued) if (!message.settled) message.resolve(false);
-        return;
+        if (closed) {
+          return;
+        }
       }
     } finally {
       draining = false;
@@ -807,13 +829,38 @@ export const createMcpAppFailClosedSender = <Message>(options: Readonly<{
     close,
     send(message: Message): Promise<boolean> {
       if (closed) return Promise.resolve(false);
+      let serialized: string;
+      try {
+        serialized = JSON.stringify(message);
+      } catch {
+        block();
+        return Promise.resolve(false);
+      }
+      if (typeof serialized !== 'string' || Buffer.byteLength(serialized, 'utf8') > maximumBytes) {
+        block();
+        return Promise.resolve(false);
+      }
+      let snapshot: Message;
+      try {
+        snapshot = JSON.parse(serialized) as Message;
+      } catch {
+        block();
+        return Promise.resolve(false);
+      }
+      const byteLength = Buffer.byteLength(serialized, 'utf8');
+      if (queued.length >= maximumMessages || queuedBytes + byteLength > maximumBytes) {
+        block();
+        return Promise.resolve(false);
+      }
       return new Promise<boolean>((resolve) => {
         const entry: QueuedMessage = {
-          message,
+          byteLength,
+          message: snapshot,
           resolve: (accepted) => { entry.settled = true; resolve(accepted); },
           settled: false,
         };
         queued.push(entry);
+        queuedBytes += byteLength;
         void drain();
       });
     },

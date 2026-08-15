@@ -895,6 +895,29 @@ it('keeps a blocked input ahead of a later result in the shared asynchronous sen
   await expect(sender.send('late-result')).resolves.toBe(false);
 });
 
+it('fails closed on a bounded shared-sender flood and never sends mutable queued values', async () => {
+  const attempted: Array<{ readonly id: string }> = [];
+  let closes = 0;
+  const sender = createMcpAppFailClosedSender({
+    maxQueuedMessages: 1,
+    onClose: () => { closes += 1; },
+    send: async (message: { readonly id: string }) => {
+      attempted.push(message);
+      return false;
+    },
+  });
+  const input: { id: string } = { id: 'input' };
+  const first = sender.send(input);
+  input.id = 'mutated';
+  await first;
+  await sender.send({ id: 'result-1' });
+  await sender.send({ id: 'result-2' });
+  expect(sender.closed).toBe(true);
+  expect(closes).toBe(1);
+  expect(attempted).toEqual([{ id: 'input' }]);
+  await expect(sender.send({ id: 'late' })).resolves.toBe(false);
+});
+
 it('requires an exact one-use server grant before a privileged tool operation', async () => {
   const fixture = fixtureFor();
   const authority = createMcpAppConsentAuthority({ now: () => 1_000 });
