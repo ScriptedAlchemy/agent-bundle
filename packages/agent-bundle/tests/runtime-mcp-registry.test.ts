@@ -148,6 +148,18 @@ const connectorHarness = (input: Readonly<{
   return Object.freeze({ connections, connector, pending });
 };
 
+const scriptedConnector = (...steps: readonly (Error | RuntimeMcpConnection)[]): RuntimeMcpConnector => {
+  let next = 0;
+  return Object.freeze({
+    connect: async () => {
+      const step = steps[next++];
+      if (step === undefined) throw new Error('Unexpected fixture connector call.');
+      if (step instanceof Error) throw step;
+      return step;
+    },
+  });
+};
+
 const createGenerationStore = async (retainInactive?: number): Promise<Readonly<{
   readonly close: () => Promise<void>;
   readonly commit: (id: string) => Promise<RuntimeGeneration>;
@@ -423,6 +435,150 @@ it('keeps a failed controlled restart on its new binding revision and emits a fa
     });
     await expect(session.execute(request('list-tools', 1))).rejects.toThrow('revision');
     expect(events.map((event) => event.type)).toContain('runtime.mcp.failed');
+  } finally {
+    await registry.close().catch(() => undefined);
+    await fixture.close();
+  }
+});
+
+it('closes every connection whose relist validation fails across open, visible restart, and private activation', async () => {
+  const fixture = await createGenerationStore();
+  const openFailure = new TestConnection({
+    close: async () => { throw new Error('open cleanup failed'); },
+    relist: async () => { throw new Error('open relist failed'); },
+  });
+  const visibleOld = new TestConnection();
+  const visibleFailure = new TestConnection({ relist: async () => { throw new Error('visible relist failed'); } });
+  const privateOld = new TestConnection();
+  const privateFailure = new TestConnection({ relist: async () => { throw new Error('private relist failed'); } });
+  const openRegistry = createRegistry({ connector: scriptedConnector(openFailure), store: fixture.store });
+  const visibleRegistry = createRegistry({ connector: scriptedConnector(visibleOld, visibleFailure), store: fixture.store });
+  const privateRegistry = createRegistry({ connector: scriptedConnector(privateOld, privateFailure), store: fixture.store });
+  try {
+    await fixture.commit('g1');
+    await expect(openRegistry.open({ serverName: 'timeline', target: 'portable' })).rejects.toBeInstanceOf(AggregateError);
+    expect(openFailure.closed).toBe(true);
+
+    await visibleRegistry.open({ serverName: 'timeline', target: 'portable' });
+    expect((await visibleRegistry.reconcile(registryInput({ definitionDigest: 'definition-2' }))).action).toBe('restart-failed');
+    expect(visibleFailure.closed).toBe(true);
+
+    await privateRegistry.open({ serverName: 'timeline', target: 'portable' });
+    await expect(privateRegistry.prepareActivationReconcile(registryInput({ definitionDigest: 'definition-2' })))
+      .rejects.toThrow('private relist failed');
+    expect(privateFailure.closed).toBe(true);
+  } finally {
+    await Promise.all([
+      openRegistry.close().catch(() => undefined),
+      visibleRegistry.close().catch(() => undefined),
+      privateRegistry.close().catch(() => undefined),
+    ]);
+    await fixture.close();
+  }
+});
+
+it('repairs a failed visible session through private activation without consuming an invalid prepared transaction', async () => {
+  const fixture = await createGenerationStore();
+  const first = new TestConnection();
+  const recovered = new TestConnection();
+  const registry = createRegistry({
+    connector: scriptedConnector(first, new Error('visible restart failed'), recovered),
+    store: fixture.store,
+  });
+  try {
+    await fixture.commit('g1');
+    const session = await registry.open({ serverName: 'timeline', target: 'portable' });
+    expect((await registry.reconcile(registryInput({ transportDigest: 'transport-2' }))).action).toBe('restart-failed');
+    expect(session.snapshot().state).toBe('failed');
+
+    const prepared = await registry.prepareActivationReconcile(registryInput({ definitionDigest: 'definition-3' }));
+    const committed = registry.commitActivationReconcile(prepared);
+    expect(session.snapshot()).toMatchObject({
+      binding: { registryRevision: 3, sessionRevision: 3 },
+      state: 'ready',
+    });
+    expect(recovered.relisted).toBe(true);
+    committed.publish();
+    await committed.finalize();
+  } finally {
+    await registry.close().catch(() => undefined);
+    await fixture.close();
+  }
+});
+
+it('closes retired private activation connections even when callers drop or observe a failing finalizer', async () => {
+  const fixture = await createGenerationStore();
+  const retired = new TestConnection();
+  const replacement = new TestConnection();
+  const registry = createRegistry({ connector: scriptedConnector(retired, replacement), store: fixture.store });
+  try {
+    await fixture.commit('g1');
+    await registry.open({ serverName: 'timeline', target: 'portable' });
+    const committed = registry.commitActivationReconcile(
+      await registry.prepareActivationReconcile(registryInput({ definitionDigest: 'definition-2' })),
+    );
+    committed.publish();
+    await registry.close();
+    expect(retired.closed).toBe(true);
+    expect(replacement.closed).toBe(true);
+  } finally {
+    await registry.close().catch(() => undefined);
+    await fixture.close();
+  }
+
+  const failingFixture = await createGenerationStore();
+  const failingRetired = new TestConnection({ close: async () => { throw new Error('retired cleanup failed'); } });
+  const failingReplacement = new TestConnection();
+  const failingRegistry = createRegistry({ connector: scriptedConnector(failingRetired, failingReplacement), store: failingFixture.store });
+  try {
+    await failingFixture.commit('g1');
+    await failingRegistry.open({ serverName: 'timeline', target: 'portable' });
+    const committed = failingRegistry.commitActivationReconcile(
+      await failingRegistry.prepareActivationReconcile(registryInput({ definitionDigest: 'definition-2' })),
+    );
+    await expect(committed.finalize()).rejects.toBeInstanceOf(RuntimeMcpRegistryCloseError);
+    await expect(failingRegistry.close()).rejects.toBeInstanceOf(RuntimeMcpRegistryCloseError);
+    expect(failingRetired.closed).toBe(true);
+    expect(failingReplacement.closed).toBe(true);
+  } finally {
+    await failingRegistry.close().catch(() => undefined);
+    await failingFixture.close();
+  }
+});
+
+it('delivers public and delayed-private results in sequence order under reentrant listeners', async () => {
+  const fixture = await createGenerationStore();
+  const registry = createRegistry({ store: fixture.store });
+  try {
+    await fixture.commit('g1');
+    const received: number[] = [];
+    registry.subscribe({ afterSequence: 0 }, (message) => {
+      if ('sequence' in message && message.sequence === 1) {
+        void registry.reconcile(registryInput({ serverDigest: 'reentrant' }));
+      }
+    });
+    registry.subscribe({ afterSequence: 0 }, (message) => {
+      if ('sequence' in message) received.push(message.sequence);
+    });
+    const first = registry.commitActivationReconcile(
+      await registry.prepareActivationReconcile(registryInput({ runtimeGenerationId: 'g1', serverDigest: 'first' })),
+    );
+    first.publish();
+    expect(received).toEqual([1, 2]);
+
+    const committed = registry.commitActivationReconcile(
+      await registry.prepareActivationReconcile(registryInput({ runtimeGenerationId: 'g1', serverDigest: 'private' })),
+    );
+    await registry.reconcile(registryInput({ runtimeGenerationId: 'g1', serverDigest: 'public' }));
+    expect(received).toEqual([1, 2]);
+    committed.publish();
+    expect(received).toEqual([1, 2, 3, 4]);
+
+    const replay: number[] = [];
+    registry.subscribe({ afterSequence: 0 }, (message) => {
+      if ('sequence' in message) replay.push(message.sequence);
+    });
+    expect(replay).toEqual([1, 2, 3, 4]);
   } finally {
     await registry.close().catch(() => undefined);
     await fixture.close();

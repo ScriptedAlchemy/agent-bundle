@@ -62,13 +62,24 @@ interface PreparedActivationRecord {
   readonly input: DevRuntimeMcpRegistryReconcileInput;
   readonly invalidatedBindings: readonly DevRuntimeMcpInvalidatedBinding[];
   readonly nextDescriptors: ReadonlyMap<string, DevRuntimeMcpServerDescriptor>;
-  readonly replacements: ReadonlyMap<string, Readonly<{
-    readonly connection: RuntimeMcpConnection;
-    readonly state: DevRuntimeMcpConnectionState;
-  }>>;
+  readonly replacements: ReadonlyMap<string, ConnectedRuntimeMcp>;
   readonly requiresRestart: boolean;
   readonly reservationRevision: number;
   readonly stagedAbort: AbortController;
+}
+
+interface ConnectedRuntimeMcp {
+  readonly connection: RuntimeMcpConnection;
+  readonly state: DevRuntimeMcpConnectionState;
+}
+
+interface RetiredConnectionBatch {
+  readonly entries: readonly Readonly<{
+    readonly abort: AbortController;
+    readonly connection: RuntimeMcpConnection | undefined;
+    readonly operations: readonly OperationRecord[];
+  }>[];
+  finalization: Promise<void> | undefined;
 }
 
 interface Subscription {
@@ -288,10 +299,14 @@ export class RuntimeMcpRegistry implements DevRuntimeMcpRegistry {
   readonly #options: Required<Pick<RuntimeMcpRegistryOptions, 'createOperationId' | 'createSessionId'>> & RuntimeMcpRegistryOptions;
   readonly #sessions = new Map<string, SessionRecord>();
   readonly #subscriptions = new Set<Subscription>();
+  readonly #pendingPublications = new Map<number, DevRuntimeMcpRegistryReconcileResult>();
+  readonly #retirements = new Set<RetiredConnectionBatch>();
   #closePromise: Promise<void> | undefined;
   #closed = false;
   #preparingActivation: Readonly<{ readonly abort: AbortController; readonly settled: Promise<void> }> | undefined;
   #mutation: MutationLane = 'none';
+  #nextPublicationSequence = 1;
+  #publishing = false;
   #reservationRevision = 0;
   #sequence = 0;
   #state: RegistryState | undefined;
@@ -343,22 +358,13 @@ export class RuntimeMcpRegistry implements DevRuntimeMcpRegistry {
       const id = this.#options.createSessionId();
       nonempty(id, 'Runtime MCP session id');
       if (this.#sessions.has(id)) throw registryConflict(`Runtime MCP session ${JSON.stringify(id)} already exists.`);
-      const connection = await this.#connect(descriptor, id, controller.signal);
-      if (this.#closed) {
-        await connection.close().catch(() => undefined);
-        throw registryClosed();
-      }
-      const connectionState = await connection.relist();
-      if (this.#closed) {
-        await connection.close().catch(() => undefined);
-        throw registryClosed();
-      }
+      const connected = await this.#connectAndRelist(descriptor, id, controller.signal);
       const record: SessionRecord = {
         abort: new AbortController(),
         binding: this.#binding(id, 1, state, descriptor),
         closed: false,
-        connection,
-        connectionState: finiteConnectionState(connectionState),
+        connection: connected.connection,
+        connectionState: connected.state,
         descriptor,
         id,
         operations: new Set(),
@@ -507,10 +513,7 @@ export class RuntimeMcpRegistry implements DevRuntimeMcpRegistry {
     const preparedSettled = new Promise<void>((resolve) => { markPreparedSettled = resolve; });
     const preparation = Object.freeze({ abort: stagedAbort, settled: preparedSettled });
     this.#preparingActivation = preparation;
-    const replacements = new Map<string, Readonly<{
-      readonly connection: RuntimeMcpConnection;
-      readonly state: DevRuntimeMcpConnectionState;
-    }>>();
+    const replacements = new Map<string, ConnectedRuntimeMcp>();
     try {
       const restart = current !== undefined && requiresRestart(current.input, frozen);
       const nextDescriptors = descriptorMap(frozen);
@@ -520,9 +523,7 @@ export class RuntimeMcpRegistry implements DevRuntimeMcpRegistry {
           const next = nextDescriptors.get(descriptorKey(record.binding.serverName, record.binding.target));
           if (next === undefined) throw registryInvalid('A registered runtime MCP session no longer has a static descriptor.');
           invalidatedBindings.push(bindingCopy(record.binding));
-          const connection = await this.#connect(next, record.id, stagedAbort.signal);
-          const state = finiteConnectionState(await connection.relist());
-          replacements.set(record.id, Object.freeze({ connection, state }));
+          replacements.set(record.id, await this.#connectAndRelist(next, record.id, stagedAbort.signal));
         }
       }
       this.#activation.set(prepared, Object.freeze({
@@ -554,34 +555,53 @@ export class RuntimeMcpRegistry implements DevRuntimeMcpRegistry {
     if (record === undefined || record.reservationRevision !== prepared.reservationRevision || this.#mutation !== 'activation') {
       throw registryConflict('Runtime MCP activation reconciliation is no longer reserved.');
     }
-    this.#activation.delete(prepared);
-    this.#preparedActivations.delete(prepared);
     const previousState = record.current;
     const nextState = Object.freeze({
       descriptors: record.nextDescriptors,
       input: record.input,
       registryRevision: previousState === undefined ? 1 : previousState.registryRevision + (record.requiresRestart ? 1 : 0),
     });
-    const retired: Array<Readonly<{ readonly connection: RuntimeMcpConnection; readonly operations: readonly OperationRecord[]; readonly abort: AbortController }>> = [];
+    const transitions: Array<Readonly<{
+      readonly descriptor: DevRuntimeMcpServerDescriptor;
+      readonly replacement: ConnectedRuntimeMcp | undefined;
+      readonly session: SessionRecord;
+    }>> = [];
     if (record.requiresRestart) {
       for (const session of this.#sessions.values()) {
         const descriptor = record.nextDescriptors.get(descriptorKey(session.binding.serverName, session.binding.target));
         const replacement = record.replacements.get(session.id);
-        if (descriptor === undefined || replacement === undefined || session.connection === undefined) {
+        if (descriptor === undefined || replacement === undefined) {
           throw registryConflict('Runtime MCP activation reconciliation is incomplete.');
         }
-        retired.push(Object.freeze({ abort: session.abort, connection: session.connection, operations: Object.freeze([...session.operations]) }));
-        session.abort = new AbortController();
-        session.connection = replacement.connection;
-        session.connectionState = replacement.state;
-        session.descriptor = descriptor;
-        session.binding = this.#binding(session.id, session.binding.sessionRevision + 1, nextState, descriptor);
-        session.state = 'ready';
+        transitions.push(Object.freeze({ descriptor, replacement, session }));
       }
     } else {
       for (const session of this.#sessions.values()) {
         const descriptor = record.nextDescriptors.get(descriptorKey(session.binding.serverName, session.binding.target));
         if (descriptor === undefined) throw registryInvalid('A registered runtime MCP session no longer has a static descriptor.');
+        transitions.push(Object.freeze({ descriptor, replacement: undefined, session }));
+      }
+    }
+
+    this.#activation.delete(prepared);
+    this.#preparedActivations.delete(prepared);
+    const retired: RetiredConnectionBatch['entries'][number][] = [];
+    if (record.requiresRestart) {
+      for (const { descriptor, replacement, session } of transitions) {
+        retired.push(Object.freeze({
+          abort: session.abort,
+          connection: session.connection,
+          operations: Object.freeze([...session.operations]),
+        }));
+        session.abort = new AbortController();
+        session.connection = replacement!.connection;
+        session.connectionState = replacement!.state;
+        session.descriptor = descriptor;
+        session.binding = this.#binding(session.id, session.binding.sessionRevision + 1, nextState, descriptor);
+        session.state = 'ready';
+      }
+    } else {
+      for (const { descriptor, session } of transitions) {
         session.descriptor = descriptor;
         session.binding = this.#binding(session.id, session.binding.sessionRevision, nextState, descriptor);
       }
@@ -594,12 +614,14 @@ export class RuntimeMcpRegistry implements DevRuntimeMcpRegistry {
       nextState,
     );
     this.#mutation = 'none';
+    const retirement: RetiredConnectionBatch | undefined = retired.length === 0
+      ? undefined
+      : { entries: Object.freeze(retired), finalization: undefined };
+    if (retirement !== undefined) this.#retirements.add(retirement);
     let published = false;
-    let finalized: Promise<void> | undefined;
     return Object.freeze({
       finalize: () => {
-        finalized ??= this.#finalizeRetired(retired);
-        return finalized;
+        return retirement === undefined ? Promise.resolve() : this.#finalizeRetirement(retirement);
       },
       publish: () => {
         if (published) return;
@@ -648,12 +670,17 @@ export class RuntimeMcpRegistry implements DevRuntimeMcpRegistry {
     const prepared = [...this.#preparedActivations];
     const activationResults = await Promise.allSettled(prepared.map((activation) => this.abortActivationReconcile(activation)));
     await Promise.all([...this.#opening.values()]);
+    const retirements = [...this.#retirements];
+    const retirementResults = await Promise.allSettled(retirements.map((retirement) => this.#finalizeRetirement(retirement)));
     const records = [...this.#sessions.values()];
     this.#sessions.clear();
     const results = await Promise.allSettled(records.map((record) => this.#closeRecord(record, new Error('Runtime MCP registry was closed.'))));
     const failures = [
       ...activationResults.flatMap((result, index) => result.status === 'rejected'
         ? [Object.freeze({ error: result.reason, resource: `activation:${prepared[index]!.reservationRevision}` })]
+        : []),
+      ...retirementResults.flatMap((result, index) => result.status === 'rejected'
+        ? [Object.freeze({ error: result.reason, resource: `retirement:${index}` })]
         : []),
       ...results.flatMap((result, index) => result.status === 'rejected'
       ? [Object.freeze({ error: result.reason, resource: `session:${records[index]!.id}` })]
@@ -833,21 +860,24 @@ export class RuntimeMcpRegistry implements DevRuntimeMcpRegistry {
     if (oldConnection !== undefined) await oldConnection.close();
     const nextAbort = new AbortController();
     record.abort = nextAbort;
-    const connection = await this.#connect(record.descriptor, record.id, nextAbort.signal);
-    const connectionState = await connection.relist();
-    record.connection = connection;
-    record.connectionState = finiteConnectionState(connectionState);
+    const connected = await this.#connectAndRelist(record.descriptor, record.id, nextAbort.signal);
+    record.connection = connected.connection;
+    record.connectionState = connected.state;
     record.state = 'ready';
   }
 
-  async #finalizeRetired(retired: readonly Readonly<{
-    readonly abort: AbortController;
-    readonly connection: RuntimeMcpConnection;
-    readonly operations: readonly OperationRecord[];
-  }>[]): Promise<void> {
-    const results = await Promise.allSettled(retired.flatMap((entry) => [
+  #finalizeRetirement(retirement: RetiredConnectionBatch): Promise<void> {
+    retirement.finalization ??= this.#finalizeRetirementInternal(retirement).then(
+      () => { this.#retirements.delete(retirement); },
+      (error: unknown) => { throw error; },
+    );
+    return retirement.finalization;
+  }
+
+  async #finalizeRetirementInternal(retirement: RetiredConnectionBatch): Promise<void> {
+    const results = await Promise.allSettled(retirement.entries.flatMap((entry) => [
       this.#cancelAndDrain(entry.operations, entry.abort),
-      entry.connection.close(),
+      ...(entry.connection === undefined ? [] : [entry.connection.close()]),
     ]));
     const failures = results.flatMap((result, index) => result.status === 'rejected'
       ? [Object.freeze({ error: result.reason, resource: `retired:${index}` })]
@@ -928,12 +958,25 @@ export class RuntimeMcpRegistry implements DevRuntimeMcpRegistry {
   }
 
   #publishResult(result: DevRuntimeMcpRegistryReconcileResult): void {
-    this.#history.push(result);
-    if (this.#history.length > maxRetainedResults) this.#history.splice(0, this.#history.length - maxRetainedResults);
-    for (const subscription of this.#subscriptions) {
-      if (subscription.closed) continue;
-      if (subscription.replaying) subscription.pending.push(result);
-      else this.#deliver(subscription, result);
+    this.#pendingPublications.set(result.sequence, result);
+    if (this.#publishing) return;
+    this.#publishing = true;
+    try {
+      while (true) {
+        const next = this.#pendingPublications.get(this.#nextPublicationSequence);
+        if (next === undefined) return;
+        this.#pendingPublications.delete(next.sequence);
+        this.#nextPublicationSequence += 1;
+        this.#history.push(next);
+        if (this.#history.length > maxRetainedResults) this.#history.splice(0, this.#history.length - maxRetainedResults);
+        for (const subscription of this.#subscriptions) {
+          if (subscription.closed) continue;
+          if (subscription.replaying) subscription.pending.push(next);
+          else this.#deliver(subscription, next);
+        }
+      }
+    } finally {
+      this.#publishing = false;
     }
   }
 
@@ -1003,10 +1046,33 @@ export class RuntimeMcpRegistry implements DevRuntimeMcpRegistry {
     if (signal.aborted) throw signal.reason ?? registryClosed();
     const connection = await this.#options.connector.connect(Object.freeze({ descriptor, sessionId, signal }));
     if (signal.aborted) {
-      await connection.close().catch(() => undefined);
-      throw signal.reason ?? registryClosed();
+      await this.#closeAfterFailedSetup(connection, signal.reason ?? registryClosed());
     }
     return connection;
+  }
+
+  async #connectAndRelist(
+    descriptor: DevRuntimeMcpServerDescriptor,
+    sessionId: string,
+    signal: AbortSignal,
+  ): Promise<ConnectedRuntimeMcp> {
+    const connection = await this.#connect(descriptor, sessionId, signal);
+    try {
+      const state = finiteConnectionState(await connection.relist());
+      if (signal.aborted) throw signal.reason ?? registryClosed();
+      return Object.freeze({ connection, state });
+    } catch (error) {
+      return this.#closeAfterFailedSetup(connection, error);
+    }
+  }
+
+  async #closeAfterFailedSetup(connection: RuntimeMcpConnection, error: unknown): Promise<never> {
+    try {
+      await connection.close();
+    } catch (cleanupError) {
+      throw new AggregateError([error, cleanupError], 'Runtime MCP connection setup and cleanup both failed.');
+    }
+    throw error;
   }
 }
 
