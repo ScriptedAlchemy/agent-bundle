@@ -6,6 +6,7 @@ import {
   type McpSessionControllerRoutes,
   type McpSessionControllerTransport,
 } from '../src/mcp/mcp-session-controller.ts';
+import type { McpRouteCatalog } from '../src/mcp/mcp-route-client.ts';
 
 const binding = Object.freeze({ epochId: 'epoch-a', serverName: 'weather', target: 'portable' as const });
 const connection = Object.freeze({
@@ -56,6 +57,7 @@ const fakeTransport = (): McpSessionControllerTransport & { readonly events: str
   return {
     close: async () => { events.push('transport.close'); },
     events,
+    send: async () => undefined,
     session: Object.freeze({ binding, connection, id: 'session-weather' }),
     start: async () => { events.push('transport.start'); },
   };
@@ -75,7 +77,7 @@ const fakeClient = (): McpSessionControllerClient & { readonly events: string[] 
 };
 
 it('connects the exact artifact binding then atomically publishes catalog and config while trace stays independently live', async () => {
-  const catalog = deferred<Readonly<Record<string, readonly unknown[]>>>();
+  const catalog = deferred<McpRouteCatalog>();
   const config = deferred<unknown>();
   const stream = traceStream();
   const routes: McpSessionControllerRoutes = {
@@ -159,6 +161,43 @@ it('rejects command, path, and environment smuggling instead of widening the imm
     'MCP session binding must contain only epochId, target, and serverName.',
   );
   expect(controller.model).toMatchObject({ phase: 'idle' });
+});
+
+it('turns a replay overflow into the inclusive replay-gap marker before applying later trace entries', async () => {
+  const stream = traceStream();
+  const controller = createMcpSessionController({
+    clientFactory: fakeClient,
+    routes: {
+      catalog: async () => ({ prompts: [], resourceTemplates: [], resources: [], tools: [] }),
+      config: async () => ({ launch: { args: [], command: 'node', env: {}, kind: 'stdio' }, origin: 'artifact' }),
+      restart: async () => connection,
+      stream: async () => stream.response,
+      trace: async () => ({
+        entries: [{ kind: 'logging', occurredAt: 7, payload: { message: 'resumed' }, sequence: 7 }],
+        overflow: { afterSequence: 0, droppedThroughSequence: 6 },
+      }),
+    },
+    transportFactory: fakeTransport,
+  });
+
+  await controller.open(binding);
+
+  expect(controller.model.timeline).toEqual({
+    droppedThroughSequence: 6,
+    entries: [
+      {
+        earliestAvailableSequence: 7,
+        latestDroppedSequence: 6,
+        requestedAfterSequence: 0,
+        type: 'replay.gap',
+      },
+      { kind: 'logging', occurredAt: 7, payload: { message: 'resumed' }, sequence: 7 },
+    ],
+    lastSequence: 7,
+  });
+
+  stream.close();
+  await controller.close();
 });
 
 it('replays only the recorded epoch binding and carries replay provenance into immutable history', async () => {
@@ -264,6 +303,7 @@ it('cancels active SDK work through its transport signal and closes trace before
   };
   const transport: McpSessionControllerTransport = {
     close: async () => { events.push('transport.close'); },
+    send: async () => undefined,
     session: Object.freeze({ binding, connection, id: 'session-weather' }),
     start: async () => undefined,
   };

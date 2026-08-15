@@ -109,8 +109,10 @@ const connectionFor = (connection: McpRouteConnection): McpBrowserSessionConnect
 const invalidTrace = (): McpSessionControllerError =>
   new McpSessionControllerError('Foreground MCP trace stream contained an invalid entry.');
 
-const validCursor = (value: unknown): value is number =>
-  typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
+const validSequence = (value: unknown): value is number =>
+  typeof value === 'number' && Number.isSafeInteger(value);
+
+const validCursor = (value: unknown): value is number => validSequence(value) && value > 0;
 
 const traceEntry = (value: unknown): McpSessionTraceEntry | McpSessionTraceReplayGap => {
   if (!isRecord(value)) throw invalidTrace();
@@ -153,7 +155,7 @@ const traceEntry = (value: unknown): McpSessionTraceEntry | McpSessionTraceRepla
 
 const traceOverflow = (value: unknown): McpSessionTraceReplayGap | undefined => {
   if (value === undefined) return undefined;
-  if (!isRecord(value) || !Number.isSafeInteger(value.afterSequence) || !Number.isSafeInteger(value.droppedThroughSequence)) {
+  if (!isRecord(value) || !validSequence(value.afterSequence) || !validSequence(value.droppedThroughSequence)) {
     throw invalidTrace();
   }
   if (value.afterSequence < 0 || value.droppedThroughSequence < value.afterSequence) throw invalidTrace();
