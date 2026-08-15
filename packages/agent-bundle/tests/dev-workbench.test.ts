@@ -1,4 +1,5 @@
 import { access, mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { get as httpGet } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 
@@ -30,6 +31,53 @@ const within = async <Value>(promise: Promise<Value>, milliseconds: number): Pro
     setTimeout(() => rejectPromise(new Error(`Timed out after ${milliseconds}ms.`)), milliseconds);
   }),
 ]);
+
+const openProjectEventStream = (url: string): Readonly<{
+  readonly close: () => void;
+  readonly opened: Promise<void>;
+  readonly until: (marker: string) => Promise<string>;
+}> => {
+  let response: import('node:http').IncomingMessage | undefined;
+  let received = '';
+  let awaitedMarker: string | undefined;
+  let resolveMatch: ((value: string) => void) | undefined;
+  let rejectMatch: ((error: Error) => void) | undefined;
+  let resolveOpened: () => void = () => undefined;
+  let rejectOpened: (error: Error) => void = () => undefined;
+  const opened = new Promise<void>((resolvePromise, rejectPromise) => {
+    resolveOpened = resolvePromise;
+    rejectOpened = rejectPromise;
+  });
+  const request = httpGet(`${url}/api/project/events`, (stream) => {
+    response = stream;
+    stream.setEncoding('utf8');
+    stream.on('data', (chunk: string) => {
+      received += chunk;
+      if (awaitedMarker !== undefined && received.includes(awaitedMarker)) resolveMatch?.(received);
+    });
+    stream.once('error', (error: Error) => rejectMatch?.(error));
+    resolveOpened();
+  });
+  request.once('error', (error: Error) => {
+    rejectOpened(error);
+    rejectMatch?.(error);
+  });
+  return Object.freeze({
+    close: () => {
+      response?.destroy();
+      request.destroy();
+    },
+    opened,
+    until: (marker) => {
+      if (received.includes(marker)) return Promise.resolve(received);
+      awaitedMarker = marker;
+      return new Promise<string>((resolvePromise, rejectPromise) => {
+        resolveMatch = resolvePromise;
+        rejectMatch = rejectPromise;
+      });
+    },
+  });
+};
 
 const writeMcpProject = async (root: string): Promise<void> => {
   await Promise.all([
@@ -169,10 +217,106 @@ it('normalizes a relative project root once before constructing every dev servic
   }
 }, 30_000);
 
+it('latches a runtime declaration added to an ordinary Workbench session as restart-required', async () => {
+  const project = await createProjectFixture();
+  const assetsRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-workbench-runtime-topology-'));
+  let server: Awaited<ReturnType<typeof startDevServer>> | undefined;
+  let events: ReturnType<typeof openProjectEventStream> | undefined;
+  await writeFile(join(assetsRoot, 'index.html'), '<!doctype html><title>Agent Bundle workbench</title>');
+  try {
+    server = await startDevServer({
+      assets: createWorkbenchAssetSource({ root: assetsRoot }),
+      open: false,
+      port: 0,
+      root: project.root,
+    });
+    await expect(fetch(`${server.url}/api/runtime/status`).then((response) => response.json())).resolves.toEqual({ status: null });
+    events = openProjectEventStream(server.url);
+    await events.opened;
+    const bootstrap = await fetch(`${server.url}/api/project/session`, { headers: { 'sec-fetch-site': 'same-origin' } });
+    const { token } = await bootstrap.json() as { readonly token: string };
+    await writeFile(project.configPath, [
+      "import { defineConfig } from 'agent-bundle';",
+      '',
+      'export default defineConfig({',
+      "  dev: { runtime: { provider: './src/dev/provider.ts' } },",
+      "  plugin: { name: 'review', version: '1.0.0' },",
+      "  skills: ['skills/review'],",
+      '});',
+      '',
+    ].join('\n'));
+    await expect(fetch(`${server.url}/api/project/rebuild`, {
+      body: JSON.stringify({ paths: ['agent-bundle.config.ts'] }),
+      headers: { 'content-type': 'application/json', origin: server.url, 'x-agent-bundle-session': token },
+      method: 'POST',
+    }).then((response) => response.status)).resolves.toBe(200);
+    const received = await within(events.until('"restartRequired":true'), 5_000);
+    expect(received).toContain('"state":"failed"');
+    await expect(fetch(`${server.url}/api/runtime/status`).then((response) => response.json())).resolves.toEqual({ status: null });
+  } finally {
+    events?.close();
+    await server?.close().catch(() => undefined);
+    await Promise.all([removeProjectFixture(project.root), rm(assetsRoot, { force: true, recursive: true })]);
+  }
+}, 30_000);
+
+it('keeps the ordinary foreground and artifact lane available when provider startup fails', async () => {
+  const project = await createProjectFixture();
+  const assetsRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-workbench-runtime-failed-provider-'));
+  let server: Awaited<ReturnType<typeof startDevServer>> | undefined;
+  await mkdir(join(project.root, 'src', 'dev'), { recursive: true });
+  await Promise.all([
+    writeFile(join(assetsRoot, 'index.html'), '<!doctype html><title>Agent Bundle workbench</title>'),
+    writeFile(join(project.root, 'src', 'dev', 'provider.ts'), [
+      'export const createDevRuntimeProvider = () => ({',
+      "  descriptor: { environmentVariables: [], id: 'failed-runtime', label: 'Failed runtime', schemaVersion: 1 },",
+      "  start: () => { throw new Error('Provider startup failed.'); },",
+      '});',
+      '',
+    ].join('\n')),
+    writeFile(project.configPath, [
+      "import { defineConfig } from 'agent-bundle';",
+      '',
+      'export default defineConfig({',
+      "  dev: { runtime: { provider: './src/dev/provider.ts' } },",
+      "  plugin: { name: 'review', version: '1.0.0' },",
+      "  skills: ['skills/review'],",
+      '});',
+      '',
+    ].join('\n')),
+  ]);
+  try {
+    server = await startDevServer({
+      assets: createWorkbenchAssetSource({ root: assetsRoot }),
+      open: false,
+      port: 0,
+      root: project.root,
+    });
+    expect(server.status().artifact.state).toBe('active');
+    await expect(fetch(server.url).then(async (response) => ({ body: await response.text(), status: response.status }))).resolves.toEqual({
+      body: '<!doctype html><title>Agent Bundle workbench</title>',
+      status: 200,
+    });
+    await expect(fetch(`${server.url}/api/runtime/status`).then((response) => response.json())).resolves.toMatchObject({
+      status: { diagnostics: [{ phase: 'provider-lifecycle' }], state: 'failed' },
+    });
+  } finally {
+    await server?.close().catch(() => undefined);
+    await Promise.all([removeProjectFixture(project.root), rm(assetsRoot, { force: true, recursive: true })]);
+  }
+}, 30_000);
+
 it('prepares the optional runtime once with the development config context before provider startup', async () => {
   const project = await createProjectFixture();
   const assetsRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-workbench-runtime-'));
   let server: Awaited<ReturnType<typeof startDevServer>> | undefined;
+  let failedServer: Awaited<ReturnType<typeof startDevServer>> | undefined;
+  let resolveSurface: ((binding: { readonly bootstrapUrl: string; close(): Promise<void>; readonly origin: string; readonly surfaceId: string; readonly webSocketPath: '/rsbuild-hmr' }) => void) | undefined;
+  const pendingSurface = new Promise<{ readonly bootstrapUrl: string; close(): Promise<void>; readonly origin: string; readonly surfaceId: string; readonly webSocketPath: '/rsbuild-hmr' }>((resolvePromise) => {
+    resolveSurface = resolvePromise;
+  });
+  let proxyCalls = 0;
+  let surfaceCloseCalls = 0;
   await mkdir(join(project.root, 'src', 'dev'), { recursive: true });
   await Promise.all([
     writeFile(join(assetsRoot, 'index.html'), '<!doctype html><title>Agent Bundle workbench</title>'),
@@ -192,7 +336,7 @@ it('prepares the optional runtime once with the development config context befor
       '      storageRoot: context.storageRoot,',
       '    }));',
       '    return {',
-      '      clientSurface: () => undefined,',
+      "      clientSurface: (surfaceId) => surfaceId === 'timeline' ? { entryPath: '/', httpOrigin: 'http://127.0.0.1:41111', httpPathPrefixes: ['/'], surfaceId, webSocketOrigin: 'ws://127.0.0.1:41111', webSocketPath: '/rsbuild-hmr' } : undefined,",
       '      close: async () => undefined,',
       '      mcpRegistry: {},',
       '      providerSessionId: context.providerSessionId,',
@@ -225,6 +369,12 @@ it('prepares the optional runtime once with the development config context befor
       open: false,
       port: 0,
       root: project.root,
+      testing: {
+        openRuntimeClientSurface: async () => {
+          proxyCalls += 1;
+          return pendingSurface.then((binding) => binding);
+        },
+      },
     });
 
     const [calls, context, runtimeStatus] = await Promise.all([
@@ -244,10 +394,43 @@ it('prepares the optional runtime once with the development config context befor
     });
     expect(runtimeStatus).toMatchObject({ status: { descriptor: { id: 'fixture-runtime' }, state: 'active' } });
     await expect(server.openRuntimeClientSurface('unknown-surface')).resolves.toBeUndefined();
-    await expect(server.close()).resolves.toBeUndefined();
+    const opening = server.openRuntimeClientSurface('timeline');
+    await new Promise((resolvePromise) => setImmediate(resolvePromise));
+    const closing = server.close();
+    resolveSurface?.({
+      bootstrapUrl: 'http://127.0.0.1:41112/bootstrap',
+      close: async () => { surfaceCloseCalls += 1; },
+      origin: 'http://127.0.0.1:41112',
+      surfaceId: 'timeline',
+      webSocketPath: '/rsbuild-hmr',
+    });
+    await expect(opening).rejects.toThrow('closed');
+    await expect(closing).resolves.toBeUndefined();
+    expect(proxyCalls).toBe(1);
+    expect(surfaceCloseCalls).toBe(1);
     await expect(server.openRuntimeClientSurface('unknown-surface')).rejects.toThrow('closed');
+    let failedCloseCalls = 0;
+    failedServer = await startDevServer({
+      assets: createWorkbenchAssetSource({ root: assetsRoot }),
+      open: false,
+      port: 0,
+      root: project.root,
+      testing: {
+        openRuntimeClientSurface: async () => ({
+          bootstrapUrl: 'http://127.0.0.1:41113/bootstrap',
+          close: async () => { failedCloseCalls += 1; throw new Error('Completed client surface close failed.'); },
+          origin: 'http://127.0.0.1:41113',
+          surfaceId: 'timeline',
+          webSocketPath: '/rsbuild-hmr',
+        }),
+      },
+    });
+    await expect(failedServer.openRuntimeClientSurface('timeline')).resolves.toMatchObject({ surfaceId: 'timeline' });
+    await expect(failedServer.close()).rejects.toMatchObject({ name: 'ForegroundServerCloseError' });
+    expect(failedCloseCalls).toBe(1);
   } finally {
     await server?.close().catch(() => undefined);
+    await failedServer?.close().catch(() => undefined);
     await Promise.all([removeProjectFixture(project.root), rm(assetsRoot, { force: true, recursive: true })]);
   }
 }, 30_000);
