@@ -231,7 +231,7 @@ test('resolves the coherent development compiler configuration through Rsbuild',
     expect(environments.app?.output.distPath.root).toBe(join(compilerRoot, 'app'));
     expect(inspection.origin.rsbuildConfig.dev.writeToDisk).toBe(true);
     expect(inspection.origin.rsbuildConfig.server.host).toBe('127.0.0.1');
-    expect(inspection.origin.rsbuildConfig.server.port).toBe(0);
+    expect(inspection.origin.rsbuildConfig.server.port).toBe(3000);
     expect(rscBundler?.output?.chunkFilename).toBe('chunks/[name].js');
     expect(rscBundler?.output?.path).toBe(join(compilerRoot, 'rsc'));
     expect(widgetBundler?.output?.path).toBe(join(compilerRoot, 'widget'));
