@@ -498,6 +498,14 @@ export const startDevServer = async (options: StartDevServerOptions): Promise<De
     ...(runtime === undefined ? {} : { runtime }),
     skillDocuments: new SkillDocumentService({ epochStore, projectService, root }),
   });
+  // Linearize Workbench-owned runtime proxy acquisition before Foreground
+  // begins its asynchronous App/SSE drain. The coordinator repeats this fence
+  // defensively during lifecycle close, but that happens too late for a proxy
+  // open already pending when callers request server.close().
+  const closeForeground = (): Promise<void> => {
+    clientSurfaces.beginClose();
+    return foreground.close();
+  };
   try {
     const sandbox = await (options.testing?.createSandboxProxy ?? createMcpAppSandboxProxy)({ hostOrigin: foreground.url });
     mcpApps = new McpAppLifecycle(sandbox);
@@ -573,7 +581,7 @@ export const startDevServer = async (options: StartDevServerOptions): Promise<De
     appPreviews.attach(previews, runtimePreviews, mcpApps);
     if (options.open === true) await openBrowser(foreground.url);
   } catch (error) {
-    const [cleanup] = await Promise.allSettled([foreground.close()]);
+    const [cleanup] = await Promise.allSettled([closeForeground()]);
     if (cleanup?.status === 'rejected') {
       throw new DevServerStartError([
         Object.freeze({ error, resource: 'start' }),
@@ -583,7 +591,7 @@ export const startDevServer = async (options: StartDevServerOptions): Promise<De
     throw error;
   }
   return Object.freeze({
-    close: () => foreground.close(),
+    close: closeForeground,
     openRuntimeClientSurface: (surfaceId: string) => clientSurfaces.open(surfaceId),
     status: () => coordinator.status(),
     url: foreground.url,

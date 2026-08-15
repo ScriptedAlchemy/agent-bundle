@@ -431,8 +431,11 @@ it('prepares the optional runtime once with the development config context befor
     expect(runtimeStatus).toMatchObject({ status: { descriptor: { id: 'fixture-runtime' }, state: 'active' } });
     await expect(server.openRuntimeClientSurface('unknown-surface')).resolves.toBeUndefined();
     const opening = server.openRuntimeClientSurface('timeline');
-    await new Promise((resolvePromise) => setImmediate(resolvePromise));
+    // The test seam records synchronously before returning its unresolved
+    // promise, proving foreground shutdown races an actually pending open.
+    expect(proxyCalls).toBe(1);
     const closing = server.close();
+    expect(surfaceCloseCalls).toBe(0);
     resolveSurface?.({
       bootstrapUrl: 'http://127.0.0.1:41112/bootstrap',
       close: async () => { surfaceCloseCalls += 1; },
