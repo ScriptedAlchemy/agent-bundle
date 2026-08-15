@@ -79,6 +79,11 @@ const connection = Object.freeze({
   protocolVersion: '2025-11-25',
   server: { name: 'weather-fixture', version: '1.0.0' },
 });
+const foregroundBootstrap = Object.freeze({
+  cookieName: 'agent-bundle-foreground-session-00000000000000000000000000000000',
+  origin: 'http://127.0.0.1:4100',
+  token: 'token-a',
+});
 
 const routeFetch = (options: {
   readonly operation?: (body: Record<string, unknown>) => unknown;
@@ -91,7 +96,7 @@ const routeFetch = (options: {
       const url = String(input);
       const body = init?.body?.toString();
       requests.push({ body, headers: new Headers(init?.headers), url });
-      if (url === '/api/project/session') return json({ origin: 'http://127.0.0.1:4100', token: 'token-a' });
+      if (url === '/api/project/session') return json(foregroundBootstrap);
       if (url === '/api/mcp/sessions') return json({ session: { binding, connection, id: 'session-a' } });
       if (url.startsWith('/api/mcp/sessions/session-a/stream?after=')) {
         const response = options.streams[streamIndex];
@@ -149,6 +154,36 @@ it('maps supported SDK requests to authenticated operations and delivers same-id
   expect(fixture.requests[3]?.body).toBe('{"operation":"initialize"}');
   expect(fixture.requests[4]?.body).toBe('{"operation":"tools/list"}');
 
+  await transport.close();
+});
+
+it('returns a request-scoped route failure as a same-id JSON-RPC error without reporting a transport fault', async () => {
+  const stream = heldStream();
+  const transport = new AgentBundleRemoteTransport({
+    binding,
+    routes: new McpRouteClient({
+      fetch: async (input, init) => {
+        const url = String(input);
+        if (url === '/api/project/session') return json(foregroundBootstrap);
+        if (url === '/api/mcp/sessions') return json({ session: { binding, connection, id: 'session-a' } });
+        if (url.includes('/stream?')) return stream.response;
+        if (url.endsWith('/operations')) return json({ diagnostic: { code: 'AB8024', message: 'Operation cancelled.' } }, 499);
+        if (url === '/api/mcp/sessions/session-a' && init?.method === 'DELETE') return json({ closed: true });
+        throw new Error(`Unexpected route request ${url}.`);
+      },
+    }),
+  });
+  const errors: string[] = [];
+  const messages: JSONRPCMessage[] = [];
+  transport.onerror = (error) => errors.push(error.message);
+  transport.onmessage = (message) => messages.push(message);
+
+  await transport.start();
+  await transport.send({ id: 7, jsonrpc: '2.0', method: 'tools/call', params: { arguments: {}, name: 'forecast' } });
+  await eventually(() => messages.length === 1);
+
+  expect(messages).toEqual([{ error: { code: -32603, message: 'Operation cancelled.' }, id: 7, jsonrpc: '2.0' }]);
+  expect(errors).toEqual([]);
   await transport.close();
 });
 
@@ -231,7 +266,7 @@ it('uses one foreground bootstrap for the model-facing session, catalog, config,
     fetch: async (input, init) => {
       const url = String(input);
       requests.push({ body: init?.body?.toString(), headers: new Headers(init?.headers), url });
-      if (url === '/api/project/session') return json({ origin: 'http://127.0.0.1:4100', token: 'token-a' });
+      if (url === '/api/project/session') return json(foregroundBootstrap);
       if (url === '/api/mcp/sessions/session-a') return json({ session: { binding, connection, id: 'session-a' } });
       if (url === '/api/mcp/sessions/session-a/connection') return json({ connection });
       if (url === '/api/mcp/sessions/session-a/catalog') return json({
@@ -317,7 +352,7 @@ it('sends MCP cancellation to its typed route while a serialized tool call remai
       fetch: async (input, init) => {
         const url = String(input);
         requests.push({ body: init?.body?.toString(), headers: new Headers(init?.headers), url });
-        if (url === '/api/project/session') return json({ origin: 'http://127.0.0.1:4100', token: 'token-a' });
+        if (url === '/api/project/session') return json(foregroundBootstrap);
         if (url === '/api/mcp/sessions') return json({ session: { binding, connection, id: 'session-a' } });
         if (url.includes('/stream?')) return stream.response;
         if (url.endsWith('/operations')) {
@@ -354,7 +389,7 @@ it('closes a session created concurrently without re-bootstrap and notifies only
         const url = String(input);
         if (url === '/api/project/session') {
           bootstraps += 1;
-          return json({ origin: 'http://127.0.0.1:4100', token: 'token-a' });
+          return json(foregroundBootstrap);
         }
         if (url === '/api/mcp/sessions') return created.promise;
         if (url === '/api/mcp/sessions/session-a' && init?.method === 'DELETE') {
@@ -390,7 +425,7 @@ it('linearizes close by aborting active work, cancelling the reader, waiting cle
       fetch: async (input, init) => {
         const url = String(input);
         requests.push({ body: init?.body?.toString(), headers: new Headers(init?.headers), url });
-        if (url === '/api/project/session') return json({ origin: 'http://127.0.0.1:4100', token: 'token-a' });
+        if (url === '/api/project/session') return json(foregroundBootstrap);
         if (url === '/api/mcp/sessions') return json({ session: { binding, connection, id: 'session-a' } });
         if (url.includes('/stream?')) return stream.response;
         if (url.endsWith('/operations')) {
@@ -434,7 +469,7 @@ it('deletes a mismatched created session using its held foreground token before 
       fetch: async (input, init) => {
         const url = String(input);
         requests.push({ body: init?.body?.toString(), headers: new Headers(init?.headers), url });
-        if (url === '/api/project/session') return json({ origin: 'http://127.0.0.1:4100', token: 'token-a' });
+        if (url === '/api/project/session') return json(foregroundBootstrap);
         if (url === '/api/mcp/sessions') return json({
           session: { binding: { ...binding, epochId: 'wrong-epoch' }, connection, id: 'session-wrong' },
         });
@@ -493,7 +528,7 @@ it('aborts and waits for a bypassed cancellation before releasing its session', 
     routes: new McpRouteClient({
       fetch: async (input, init) => {
         const url = String(input);
-        if (url === '/api/project/session') return json({ origin: 'http://127.0.0.1:4100', token: 'token-a' });
+        if (url === '/api/project/session') return json(foregroundBootstrap);
         if (url === '/api/mcp/sessions') return json({ session: { binding, connection, id: 'session-a' } });
         if (url.includes('/stream?')) return stream.response;
         if (url.endsWith('/cancel')) {

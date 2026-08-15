@@ -332,6 +332,56 @@ it('cancels active SDK work through its transport signal and closes trace before
   expect(controller.model).toMatchObject({ activeRequests: {}, phase: 'closed' });
 });
 
+it('fails an active session when its transport reports a real fault during a request', async () => {
+  const stream = traceStream();
+  const events: string[] = [];
+  const routes: McpSessionControllerRoutes = {
+    catalog: async () => ({ prompts: [], resourceTemplates: [], resources: [], tools: [] }),
+    config: async () => ({ launch: { args: [], command: 'node', env: {}, kind: 'stdio' }, origin: 'artifact' }),
+    restart: async () => connection,
+    stream: async (_id, _after, signal) => {
+      signal?.addEventListener('abort', () => {
+        events.push('trace.abort');
+        stream.close();
+      }, { once: true });
+      return stream.response;
+    },
+    trace: async () => ({ entries: [] }),
+  };
+  const transport: McpSessionControllerTransport & { readonly events: string[] } = {
+    close: async () => { events.push('transport.close'); },
+    events,
+    send: async () => undefined,
+    session: Object.freeze({ binding, connection, id: 'session-weather' }),
+    start: async () => undefined,
+  };
+  const client: McpSessionControllerClient = {
+    close: async () => { events.push('client.close'); },
+    connect: async (next) => next.start(),
+    request: async (_request, options) => new Promise<unknown>((_resolve, reject) => {
+      options?.signal?.addEventListener('abort', () => {
+        events.push('request.abort');
+        reject(new DOMException('Aborted', 'AbortError'));
+      }, { once: true });
+    }),
+  };
+  const controller = createMcpSessionController({ clientFactory: () => client, routes, transportFactory: () => transport });
+  await controller.open(binding);
+
+  const request = controller.invoke({ id: 'tools-1', operation: 'listTools', request: {} });
+  await eventually(() => controller.model.activeRequests['tools-1'] !== undefined);
+  transport.onerror?.(new Error('MCP socket disconnected.'));
+
+  await expect(request).rejects.toMatchObject({ name: 'AbortError' });
+  await eventually(() => controller.model.phase === 'error');
+  expect(controller.model.diagnostics).toContainEqual({
+    code: 'mcp.transport.error',
+    message: 'MCP session controller failed: MCP socket disconnected..',
+    severity: 'error',
+  });
+  expect(events).toEqual(['trace.abort', 'request.abort', 'client.close', 'transport.close']);
+});
+
 it('preserves binding, trace, and history through restart while refreshing connection and catalogs', async () => {
   const stream = traceStream();
   let catalogCount = 0;

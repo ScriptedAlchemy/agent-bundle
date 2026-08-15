@@ -246,7 +246,6 @@ export class AgentBundleRemoteTransport implements Transport {
         if (!this.#closed) this.#emit({ id: nextRequest.id, jsonrpc: '2.0', result: resultFor(nextRequest.method, result) } as JSONRPCMessage);
       } catch (error) {
         if (!this.#closed) {
-          this.#report(error);
           this.#emit({
             error: { code: -32603, message: error instanceof Error ? error.message : 'Foreground MCP operation failed.' },
             id: nextRequest.id,
