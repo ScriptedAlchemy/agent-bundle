@@ -2,8 +2,8 @@ import { cp, mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 
-import claudeCapabilityTable from '../adapters/capabilities/claude-2.1.232.json' with { type: 'json' };
-import codexCapabilityTable from '../adapters/capabilities/codex-0.147.0.json' with { type: 'json' };
+import { canonicalHookEventFor, type TargetHookContract } from '../adapters/hook-contract.ts';
+import { createDefaultRegistry, TargetRegistry } from '../adapters/registry.ts';
 import type { ArtifactHook } from '../build/emit.ts';
 import { listArtifactFiles } from '../build/emit.ts';
 import type { CanonicalHookEvent } from '../core/types.ts';
@@ -11,7 +11,6 @@ import { digest } from '../core/digest.ts';
 import { HookService } from '../services/hook-service.ts';
 import { EpochStore, type EpochReference } from './epoch-store.ts';
 
-type HookPlaygroundTarget = 'claude' | 'codex';
 type CanonicalHookInput = Readonly<Record<string, unknown>>;
 type CanonicalHookResult = Readonly<Record<string, unknown>>;
 type NativeHookInput = Readonly<Record<string, unknown>>;
@@ -30,7 +29,7 @@ export interface HookPlaygroundHostMapping {
   /** Projection is deterministic and verified against the emitted wrapper in focused tests. */
   readonly nativeProjection: 'deterministic';
   readonly nativeSelector: string;
-  readonly target: HookPlaygroundTarget;
+  readonly target: string;
   readonly wrapperPath: string;
 }
 
@@ -41,12 +40,12 @@ export interface HookPlaygroundCanonicalIntent {
 }
 
 export interface HookPlaygroundReplay {
-  readonly binding: Readonly<HookPlaygroundBinding & { readonly target: HookPlaygroundTarget }>;
+  readonly binding: Readonly<HookPlaygroundBinding>;
   readonly input: CanonicalHookInput;
 }
 
 export interface HookPlaygroundSimulation {
-  readonly binding: Readonly<HookPlaygroundBinding & { readonly target: HookPlaygroundTarget }>;
+  readonly binding: Readonly<HookPlaygroundBinding>;
   readonly canonicalIntent: HookPlaygroundCanonicalIntent;
   readonly canonicalResult: CanonicalHookResult | undefined;
   readonly hostMapping: HookPlaygroundHostMapping;
@@ -56,7 +55,10 @@ export interface HookPlaygroundSimulation {
 }
 
 export interface HookPlaygroundDiagnostic {
-  readonly code: 'hook.playground.event.unsupported' | 'hook.playground.target.unsupported';
+  readonly code:
+    | 'hook.playground.event.unsupported'
+    | 'hook.playground.manifest.missing'
+    | 'hook.playground.target.unsupported';
   readonly event: string;
   readonly message: string;
   readonly severity: 'error';
@@ -92,26 +94,12 @@ export interface HookPlaygroundServiceOptions {
   readonly copy?: typeof cp;
   readonly epochStore: EpochStore;
   readonly hookService?: Pick<HookService, 'list' | 'simulate'>;
+  readonly registry?: TargetRegistry;
 }
-
-const hostEventNames = Object.freeze({
-  claude: claudeCapabilityTable.hooks.events,
-  codex: codexCapabilityTable.hooks.events,
-}) satisfies Readonly<Record<HookPlaygroundTarget, Readonly<Record<CanonicalHookEvent, string>>>>;
-
-const canonicalEvents: readonly CanonicalHookEvent[] = [
-  'sessionStart',
-  'beforeTool',
-  'afterTool',
-  'stop',
-];
 const epochStagingMarkerName = '.agent-bundle-epoch-stage.json';
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
-
-const defined = (value: Record<string, unknown>): Record<string, unknown> =>
-  Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined));
 
 const cloneAndFreeze = (value: unknown, seen = new WeakSet<object>()): unknown => {
   if (value === null || typeof value === 'boolean' || typeof value === 'number' || typeof value === 'string') return value;
@@ -147,9 +135,6 @@ const inputFor = (input: HookPlaygroundInput): CanonicalHookInput => {
   return cloneRecord(candidate);
 };
 
-const canonicalEventFor = (event: string): CanonicalHookEvent | undefined =>
-  canonicalEvents.find((candidate) => candidate === event);
-
 const unsupportedTarget = (target: string, event: string): HookPlaygroundDiagnosticResult => Object.freeze({
   diagnostics: Object.freeze([Object.freeze({
     code: 'hook.playground.target.unsupported',
@@ -160,7 +145,7 @@ const unsupportedTarget = (target: string, event: string): HookPlaygroundDiagnos
   })]),
 });
 
-const unsupportedEvent = (target: HookPlaygroundTarget, event: string): HookPlaygroundDiagnosticResult => Object.freeze({
+const unsupportedEvent = (target: string, event: string): HookPlaygroundDiagnosticResult => Object.freeze({
   diagnostics: Object.freeze([Object.freeze({
     code: 'hook.playground.event.unsupported',
     event,
@@ -170,25 +155,43 @@ const unsupportedEvent = (target: HookPlaygroundTarget, event: string): HookPlay
   })]),
 });
 
+const missingManifest = (target: string, event: string, manifestPath: string): HookPlaygroundDiagnosticResult => Object.freeze({
+  diagnostics: Object.freeze([Object.freeze({
+    code: 'hook.playground.manifest.missing',
+    event,
+    message: `Hook playground target ${JSON.stringify(target)} is missing hook manifest ${JSON.stringify(manifestPath)} for canonical event ${JSON.stringify(event)}.`,
+    severity: 'error',
+    target,
+  })]),
+});
+
+const isMissingFile = (error: unknown): boolean =>
+  typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT';
+
 const matcherFor = async (
   artifact: string,
   hook: ArtifactHook,
+  contract: TargetHookContract,
   nativeSelector: string,
-): Promise<string | undefined> => {
+): Promise<string | undefined | HookPlaygroundDiagnosticResult> => {
   let document: unknown;
   try {
-    document = JSON.parse(await readFile(join(artifact, hook.target, 'hooks', 'hooks.json'), 'utf8'));
-  } catch {
+    document = JSON.parse(await readFile(join(artifact, hook.target, contract.manifestPath), 'utf8'));
+  } catch (error) {
+    if (isMissingFile(error)) return missingManifest(hook.target, hook.event, contract.manifestPath);
     return undefined;
   }
   if (!isRecord(document) || !isRecord(document.hooks)) return undefined;
   const groups = document.hooks[nativeSelector];
   if (!Array.isArray(groups)) return undefined;
-  const wrapperSuffix = `/hooks/${hook.name}.mjs`;
+  const targetPrefix = `${hook.target}/`;
+  const wrapperPath = hook.path.startsWith(targetPrefix)
+    ? hook.path.slice(targetPrefix.length)
+    : hook.path;
   for (const group of groups) {
     if (!isRecord(group) || !Array.isArray(group.hooks)) continue;
     const hasWrapper = group.hooks.some((entry) =>
-      isRecord(entry) && typeof entry.command === 'string' && entry.command.includes(wrapperSuffix));
+      isRecord(entry) && typeof entry.command === 'string' && entry.command.includes(wrapperPath));
     if (hasWrapper) return typeof group.matcher === 'string' ? group.matcher : undefined;
   }
   return undefined;
@@ -197,12 +200,16 @@ const matcherFor = async (
 const hostMappingFor = async (
   artifact: string,
   hook: ArtifactHook,
+  contract: TargetHookContract,
 ): Promise<HookPlaygroundHostMapping | HookPlaygroundDiagnosticResult> => {
-  if (hook.target !== 'claude' && hook.target !== 'codex') return unsupportedTarget(hook.target, hook.event);
-  const canonicalEvent = canonicalEventFor(hook.event);
+  const canonicalEvent = canonicalHookEventFor(hook.event);
   if (canonicalEvent === undefined) return unsupportedEvent(hook.target, hook.event);
-  const nativeSelector = hostEventNames[hook.target][canonicalEvent];
-  const matcher = await matcherFor(artifact, hook, nativeSelector);
+  const nativeSelector = contract.eventNames[canonicalEvent];
+  if (typeof nativeSelector !== 'string' || nativeSelector.trim().length === 0) {
+    return unsupportedEvent(hook.target, hook.event);
+  }
+  const matcher = await matcherFor(artifact, hook, contract, nativeSelector);
+  if (typeof matcher === 'object' && matcher !== null) return matcher;
   return Object.freeze({
     canonicalEvent,
     ...(matcher === undefined ? {} : { matcher }),
@@ -214,47 +221,6 @@ const hostMappingFor = async (
   });
 };
 
-const encodeNativeInput = (
-  input: CanonicalHookInput,
-  mapping: HookPlaygroundHostMapping,
-): NativeHookInput => cloneRecord(defined({
-  cwd: input.cwd,
-  hook_event_name: mapping.nativeEvent,
-  last_assistant_message: input.lastAssistantMessage,
-  session_id: input.sessionId,
-  source: input.source,
-  stop_hook_active: input.stopHookActive,
-  tool_input: input.toolInput,
-  tool_name: input.toolName,
-  tool_response: input.toolResponse,
-  tool_use_id: input.toolUseId,
-  transcript_path: input.transcriptPath,
-}));
-
-const encodeNativeOutput = (
-  result: CanonicalHookResult | undefined,
-  mapping: HookPlaygroundHostMapping,
-): NativeHookOutput | undefined => {
-  if (result === undefined) return undefined;
-  if (mapping.canonicalEvent === 'stop') {
-    return result.outcome === 'deny'
-      ? cloneRecord(defined({ decision: 'block', reason: result.reason }))
-      : undefined;
-  }
-  const beforeTool = mapping.canonicalEvent === 'beforeTool';
-  const denied = result.outcome === 'deny';
-  const output = defined({
-    additionalContext: result.additionalContext,
-    hookEventName: mapping.nativeEvent,
-    permissionDecision: beforeTool ? (denied ? 'deny' : 'allow') : undefined,
-    permissionDecisionReason: beforeTool && denied ? result.reason : undefined,
-    updatedInput: beforeTool && !denied ? result.updatedInput : undefined,
-  });
-  return Object.keys(output).length === 1 && output.hookEventName !== undefined
-    ? undefined
-    : cloneRecord({ hookSpecificOutput: output });
-};
-
 const canonicalResultFor = (value: unknown): CanonicalHookResult | undefined => {
   if (value === undefined) return undefined;
   if (!isRecord(value)) throw new Error('Generated hook wrapper returned a non-object canonical result.');
@@ -263,7 +229,7 @@ const canonicalResultFor = (value: unknown): CanonicalHookResult | undefined => 
 
 const storedTargetDigestFor = async (
   reference: EpochReference,
-  target: HookPlaygroundTarget,
+  target: string,
 ): Promise<string> => {
   const epochId = basename(reference.root);
   let document: unknown;
@@ -284,7 +250,7 @@ const storedTargetDigestFor = async (
 
 const assertTargetDigest = async (
   artifact: string,
-  target: HookPlaygroundTarget,
+  target: string,
   expected: string,
 ): Promise<void> => {
   let actual: string;
@@ -306,11 +272,13 @@ export class HookPlaygroundService {
   readonly #copy: typeof cp;
   readonly #epochStore: EpochStore;
   readonly #hookService: Pick<HookService, 'list' | 'simulate'>;
+  readonly #registry: TargetRegistry;
 
   constructor(options: HookPlaygroundServiceOptions) {
     this.#copy = options.copy ?? cp;
     this.#epochStore = options.epochStore;
     this.#hookService = options.hookService ?? new HookService();
+    this.#registry = options.registry ?? createDefaultRegistry();
   }
 
   async list(options: HookPlaygroundListOptions): Promise<readonly HookPlaygroundHook[]> {
@@ -328,7 +296,7 @@ export class HookPlaygroundService {
   }
 
   async simulate(
-    options: HookPlaygroundSimulationOptions & { readonly target: HookPlaygroundTarget },
+    options: HookPlaygroundSimulationOptions & { readonly target: string },
   ): Promise<HookPlaygroundSimulation>;
   async simulate(options: HookPlaygroundSimulationOptions): Promise<HookPlaygroundSimulation | HookPlaygroundDiagnosticResult>;
   async simulate(options: HookPlaygroundSimulationOptions): Promise<HookPlaygroundSimulation | HookPlaygroundDiagnosticResult> {
@@ -338,9 +306,11 @@ export class HookPlaygroundService {
       if (matching.length === 0) throw new Error(`Expected one hook matching ${JSON.stringify(options.hook)}.`);
       const selected = matching.filter((hook) => hook.target === options.target);
       const example = matching[0]!;
-      if (options.target !== 'claude' && options.target !== 'codex') return unsupportedTarget(options.target, example.event);
+      if (!this.#registry.has(options.target)) return unsupportedTarget(options.target, example.event);
+      const contract = this.#registry.hookContract(options.target);
+      if (contract === undefined) return unsupportedTarget(options.target, example.event);
       if (selected.length !== 1) return unsupportedTarget(options.target, example.event);
-      const target: HookPlaygroundTarget = options.target;
+      const target = options.target;
       const canonicalInput = inputFor(options.input);
       return this.#withSimulationArtifact(reference, target, async (simulationArtifact) => {
         const clonedHooks = await this.#hookService.list({ artifact: simulationArtifact, target });
@@ -348,7 +318,7 @@ export class HookPlaygroundService {
         if (clonedMatches.length !== 1) {
           throw new Error(`Expected exactly one ${target} hook matching ${JSON.stringify(options.hook)} in the simulation clone.`);
         }
-        const mapping = await hostMappingFor(simulationArtifact, clonedMatches[0]!);
+        const mapping = await hostMappingFor(simulationArtifact, clonedMatches[0]!, contract);
         if ('diagnostics' in mapping) return mapping;
 
         const canonicalResult = canonicalResultFor(await this.#hookService.simulate({
@@ -358,14 +328,19 @@ export class HookPlaygroundService {
           ...(options.signal === undefined ? {} : { signal: options.signal }),
           target,
         }));
+        const nativeOutput = contract.encodePlaygroundOutput(
+          canonicalResult,
+          mapping.canonicalEvent,
+          mapping.nativeEvent,
+        );
         const binding = Object.freeze({ epochId: options.epochId, hook: options.hook, target });
         return Object.freeze({
           binding,
           canonicalIntent: Object.freeze({ event: mapping.canonicalEvent, hook: options.hook, input: cloneRecord(canonicalInput) }),
           canonicalResult,
           hostMapping: mapping,
-          nativeInput: encodeNativeInput(canonicalInput, mapping),
-          nativeOutput: encodeNativeOutput(canonicalResult, mapping),
+          nativeInput: cloneRecord(contract.encodePlaygroundInput(canonicalInput, mapping.nativeEvent)),
+          nativeOutput: nativeOutput === undefined ? undefined : cloneRecord(nativeOutput),
           replay: Object.freeze({ binding: Object.freeze({ ...binding }), input: cloneRecord(canonicalInput) }),
         });
       });
@@ -387,7 +362,7 @@ export class HookPlaygroundService {
 
   async #withSimulationArtifact<T>(
     reference: EpochReference,
-    target: HookPlaygroundTarget,
+    target: string,
     action: (artifact: string) => Promise<T>,
   ): Promise<T> {
     const targetDigest = await storedTargetDigestFor(reference, target);

@@ -6,7 +6,9 @@ import { dirname, join } from 'node:path';
 
 import { expect, it } from '@rstest/core';
 
-import { createDefaultRegistry } from '../src/adapters/registry.ts';
+import type { TargetHookContract } from '../src/adapters/hook-contract.ts';
+import { createDefaultRegistry, TargetRegistry } from '../src/adapters/registry.ts';
+import type { TargetAdapter } from '../src/adapters/types.ts';
 import { build } from './support/build.ts';
 import { listArtifactFiles } from '../src/build/emit.ts';
 import { normalizeProject } from '../src/config/normalize.ts';
@@ -213,6 +215,132 @@ const inputFor = (event: CanonicalHookEvent): Record<string, unknown> => ({
   sessionId: 'session-1',
   transcriptPath: '/workspace/transcript.json',
 });
+
+it('uses the injected adapter hook contract for custom manifests, mappings, matchers, and codecs', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-hook-playground-synthetic-'));
+  const sourceArtifact = join(root, 'synthetic-artifact');
+  const manifestPath = 'registrations/hook-events.json';
+  const hook = Object.freeze({
+    event: 'beforeTool',
+    id: 'hook:synthetic',
+    name: 'synthetic',
+    path: 'runtime/synthetic.mjs',
+    target: 'synthetic',
+  });
+  const contract = Object.freeze({
+    commandRoot: '${SYNTHETIC_PLUGIN_ROOT}',
+    encodePlaygroundInput: (input, nativeEvent) => ({
+      native_event: nativeEvent,
+      payload: input.payload,
+    }),
+    encodePlaygroundOutput: (result, canonicalEvent, nativeEvent) => result === undefined
+      ? undefined
+      : {
+        canonical_event: canonicalEvent,
+        native_event: nativeEvent,
+        simulated_outcome: result.outcome,
+      },
+    eventNames: {
+      afterTool: 'SyntheticAfter',
+      beforeTool: 'SyntheticBefore',
+      sessionStart: 'SyntheticStart',
+      stop: 'SyntheticStop',
+    },
+    manifestPath,
+    matchers: { shell: '^SyntheticShell$' },
+    wrapperPath: (selectedHook) => `runtime/${selectedHook.name}.mjs`,
+    wrapperSource: () => 'export default undefined;\n',
+  } satisfies TargetHookContract);
+  const adapter: TargetAdapter = {
+    capabilities: { hooks: true },
+    hookContract: contract,
+    metadata: {
+      adapterRevision: 'test',
+      capabilityRevision: 'test',
+      capabilitySha256: '0'.repeat(64),
+      observedVersion: 'test',
+      schemas: [],
+    },
+    name: 'synthetic',
+    plan: () => ({ diagnostics: [], entries: [] }),
+    validateModel: () => [],
+  };
+  try {
+    await Promise.all([
+      mkdir(dirname(join(sourceArtifact, manifestPath)), { recursive: true }),
+      mkdir(dirname(join(sourceArtifact, hook.path)), { recursive: true }),
+    ]);
+    await Promise.all([
+      writeFile(join(sourceArtifact, manifestPath), `${JSON.stringify({
+        hooks: {
+          SyntheticBefore: [{
+            hooks: [{ command: 'node "${SYNTHETIC_PLUGIN_ROOT}/runtime/synthetic.mjs"', type: 'command' }],
+            matcher: '^SyntheticShell$',
+          }],
+        },
+      })}\n`),
+      writeFile(join(sourceArtifact, hook.path), 'export default undefined;\n'),
+    ]);
+    const epochStore = new EpochStore({ projectRoot: root });
+    const staging = await epochStore.createStagingEpoch({
+      epoch: epochFor(root, 'epoch-1', { synthetic: digest(await listArtifactFiles(sourceArtifact)) }),
+      targets: ['synthetic'],
+    });
+    await Promise.all([
+      cp(sourceArtifact, join(staging.root, 'synthetic'), { recursive: true }),
+      writeFile(join(staging.root, 'agent-bundle.manifest.json'), '{}\n'),
+    ]);
+    await staging.publish(async () => undefined);
+
+    const service = new HookPlaygroundService({
+      epochStore,
+      hookService: {
+        list: async () => [hook],
+        simulate: async () => ({ additionalContext: 'simulated', outcome: 'continue' }),
+      },
+      registry: new TargetRegistry().register(adapter),
+    });
+
+    await expect(service.simulate({
+      epochId: 'epoch-1',
+      hook: hook.id,
+      input: { inline: { payload: { value: 'custom' } } },
+      target: 'synthetic',
+    })).resolves.toEqual({
+      binding: { epochId: 'epoch-1', hook: hook.id, target: 'synthetic' },
+      canonicalIntent: {
+        event: 'beforeTool',
+        hook: hook.id,
+        input: { payload: { value: 'custom' } },
+      },
+      canonicalResult: { additionalContext: 'simulated', outcome: 'continue' },
+      hostMapping: {
+        canonicalEvent: 'beforeTool',
+        matcher: '^SyntheticShell$',
+        nativeEvent: 'SyntheticBefore',
+        nativeProjection: 'deterministic',
+        nativeSelector: 'SyntheticBefore',
+        target: 'synthetic',
+        wrapperPath: hook.path,
+      },
+      nativeInput: {
+        native_event: 'SyntheticBefore',
+        payload: { value: 'custom' },
+      },
+      nativeOutput: {
+        canonical_event: 'beforeTool',
+        native_event: 'SyntheticBefore',
+        simulated_outcome: 'continue',
+      },
+      replay: {
+        binding: { epochId: 'epoch-1', hook: hook.id, target: 'synthetic' },
+        input: { payload: { value: 'custom' } },
+      },
+    });
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+}, 30_000);
 
 it('runs fixture and inline canonical input through the epoch-bound wrapper and preserves its replay epoch', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-hook-playground-'));

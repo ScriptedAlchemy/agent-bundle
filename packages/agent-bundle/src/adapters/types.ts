@@ -5,6 +5,7 @@ import type {
   NormalizedHook,
   NormalizedPlugin,
 } from '../core/types.ts';
+import type { TargetHookContract } from './hook-contract.ts';
 
 export interface TargetArtifactWrite {
   readonly content: string;
@@ -72,6 +73,7 @@ export interface TargetAdapterMetadata {
 export interface TargetAdapter {
   readonly capabilities: Readonly<Record<string, boolean>>;
   readonly configExtension?: TargetConfigExtension;
+  readonly hookContract?: TargetHookContract;
   readonly metadata: TargetAdapterMetadata;
   readonly mcpPathTokens?: McpPathTokenCapabilities;
   readonly name: string;

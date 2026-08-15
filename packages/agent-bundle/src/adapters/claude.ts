@@ -13,6 +13,8 @@ import {
 import capabilityTable from './capabilities/claude-2.1.232.json' with { type: 'json' };
 import {
   mergeHookDocuments,
+  encodeNativeHookPlaygroundInput,
+  encodeNativeHookPlaygroundOutput,
   nativeHookWrapperSource,
   nativeHooksFor,
   planHooks,
@@ -45,6 +47,8 @@ const validateMarketplace = validator.compile(marketplaceSchema);
 const validateHooks = validator.compile(hooksSchema);
 const hookContract = Object.freeze({
   commandRoot: '${CLAUDE_PLUGIN_ROOT}',
+  encodePlaygroundInput: encodeNativeHookPlaygroundInput,
+  encodePlaygroundOutput: encodeNativeHookPlaygroundOutput,
   eventNames: capabilityTable.hooks.events,
   manifestPath: 'hooks/hooks.json',
   matchers: capabilityTable.hooks.matchers,
@@ -313,6 +317,7 @@ export const claudeAdapter: TargetAdapter = Object.freeze({
     skills: capabilityTable.plugin.skills,
   }),
   configExtension: Object.freeze({ key: claudeName }),
+  hookContract,
   metadata,
   mcpPathTokens: Object.freeze({
     args: Object.freeze({
