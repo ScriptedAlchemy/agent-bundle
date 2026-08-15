@@ -505,7 +505,6 @@ export class McpSessionController {
     this.#state = 'failed';
     this.#generation += 1;
     this.#publish({ diagnostic: diagnosticFor(code, reason), type: 'failed' });
-    if (this.#state === 'closing') return;
     await this.#drainResources(client, transport);
     this.#clearResources(client, transport);
   }

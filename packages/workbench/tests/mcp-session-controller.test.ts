@@ -435,6 +435,7 @@ it('admits one opening session and disposes that exact client and transport when
       if (transports > 1) throw new Error('A second transport must not be created.');
       return {
         close: async () => { events.push('transport.close'); },
+        send: async () => undefined,
         session: Object.freeze({ binding, connection, id: 'session-weather' }),
         start: async () => undefined,
       };
@@ -504,6 +505,7 @@ it('gates post-close operations before their routes or client calls and drains a
   };
   const transport: McpSessionControllerTransport = {
     close: async () => { events.push('transport.close'); },
+    send: async () => undefined,
     session: Object.freeze({ binding, connection, id: 'session-weather' }),
     start: async () => undefined,
   };
