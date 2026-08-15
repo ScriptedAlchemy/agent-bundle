@@ -15,12 +15,14 @@ import {
   createRscCompilerAssetCheckpointTracker,
   materializeRuntimeGeneration,
   rscRuntimeGenerationMetadataCodec,
+  runtimeDefinitionDigest,
   validateRscRuntimeGenerationMetadata,
   type RscCompilerAssetCheckpointTracker,
   type RscRuntimeCapturedGenerationSnapshot,
   type RscRuntimeGenerationMetadata,
 } from '../src/dev/generation-materializer.js';
 import { RuntimeGenerationStore } from '../../../packages/agent-bundle/src/dev/runtime-generation-store.ts';
+import type { DevRuntimePreparedProject } from '../../../packages/agent-bundle/src/dev/runtime-provider.ts';
 
 const sha256 = (value: string): string => createHash('sha256').update(value).digest('hex');
 
@@ -77,6 +79,36 @@ const preparedRuntime = Object.freeze({
   provider: './src/dev/provider.ts',
   servers: Object.freeze([]),
   sourceRevision: 'prepared-r1',
+});
+
+const preparedRuntimeWithApp = (
+  app: Partial<DevRuntimePreparedProject['apps'][number]> = {},
+  runtime: Partial<Omit<DevRuntimePreparedProject, 'apps'>> = {},
+): DevRuntimePreparedProject => Object.freeze({
+  apps: Object.freeze([Object.freeze({
+    _meta: Object.freeze({ presentation: Object.freeze({ accent: 'indigo', version: 1 }) }),
+    id: 'timeline-app',
+    name: 'Timeline',
+    resourceUri: 'ui://rsc-agent-runtime/edit-timeline-v1.html',
+    serverId: 'timeline-server',
+    serverName: 'Timeline MCP',
+    source: '/workspace/plugin/agent-bundle.config.ts',
+    targets: Object.freeze(['claude', 'codex']),
+    template: 'ui://rsc-agent-runtime/edit-timeline-v1.html',
+    ...app,
+  })]),
+  provider: './src/dev/provider.ts',
+  servers: Object.freeze([Object.freeze({
+    command: 'node',
+    cwd: '/workspace/plugin',
+    id: 'timeline-server',
+    name: 'Timeline MCP',
+    source: '/workspace/plugin/agent-bundle.config.ts',
+    targets: Object.freeze(['claude', 'codex']),
+    transport: 'stdio' as const,
+  })]),
+  sourceRevision: 'prepared-r1',
+  ...runtime,
 });
 
 const createStore = (storageRoot: string): RuntimeGenerationStore<RscRuntimeGenerationMetadata> =>
@@ -242,11 +274,101 @@ test('captures immutable paired compiler outputs and records every digested asse
       'widget/rsc/index.html',
       'widget/static/js/rsc/index.js',
     ]));
-    expect(prepared.generation.manifest.metadata.definitionDigest).toBe(sha256(definitionJson));
+    expect(prepared.generation.manifest.metadata.definitionDigest)
+      .toBe(sha256('{"apps":[],"definition":{"nativeHooks":[],"resources":[],"tools":[]}}'));
     expect(prepared.generation.manifest.metadata.environmentHashes).toEqual(expect.objectContaining({
       rsc: expect.stringMatching(/^[a-f0-9]{64}$/u),
       widget: expect.stringMatching(/^[a-f0-9]{64}$/u),
     }));
+  } finally {
+    await store.close().catch(() => undefined);
+    await rm(storageRoot, { force: true, recursive: true });
+  }
+});
+
+test('includes prepared App definitions in the captured runtime definition digest', async () => {
+  const storageRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-definition-digest-'));
+  const compilerRoot = join(storageRoot, 'compiler');
+  const store = createStore(storageRoot);
+  try {
+    await writeCompilerCohort(compilerRoot);
+    const metadataFor = async (
+      id: string,
+      prepared: DevRuntimePreparedProject,
+      sourceRevision = 'captured-r1',
+    ) => {
+      const candidate = await store.begin({ id, sourceRevision });
+      const snapshot = await captureRuntimeGenerationSnapshot({
+        attemptId: `attempt-${id}`,
+        candidate,
+        compilerRoot,
+        preparedRuntime: prepared,
+        rscCohortRevision: 1,
+        sourceRevision,
+      });
+      const generation = await materializeRuntimeGeneration({ snapshot, store });
+      return Object.freeze({ generation: generation.generation, metadata: generation.generation.manifest.metadata, snapshot });
+    };
+
+    const baseline = await metadataFor('baseline', preparedRuntimeWithApp());
+    const appDefinitionVariants: readonly Readonly<{ readonly id: string; readonly prepared: DevRuntimePreparedProject }>[] = [
+      { id: 'meta', prepared: preparedRuntimeWithApp({ _meta: Object.freeze({ presentation: Object.freeze({ accent: 'teal', version: 2 }) }) }) },
+      { id: 'id', prepared: preparedRuntimeWithApp({ id: 'timeline-app-v2' }) },
+      { id: 'name', prepared: preparedRuntimeWithApp({ name: 'Timeline v2' }) },
+      { id: 'server-id', prepared: preparedRuntimeWithApp({ serverId: 'timeline-server-v2' }) },
+      { id: 'server-name', prepared: preparedRuntimeWithApp({ serverName: 'Timeline MCP v2' }) },
+      { id: 'resource-uri', prepared: preparedRuntimeWithApp({ resourceUri: 'ui://rsc-agent-runtime/edit-timeline-v2.html' }) },
+      { id: 'targets', prepared: preparedRuntimeWithApp({ targets: Object.freeze(['codex']) }) },
+      { id: 'template', prepared: preparedRuntimeWithApp({ template: 'ui://rsc-agent-runtime/edit-timeline-v2.html' }) },
+    ];
+
+    for (const variant of appDefinitionVariants) {
+      const captured = await metadataFor(variant.id, variant.prepared);
+      expect(captured.metadata.definitionDigest).not.toBe(baseline.metadata.definitionDigest);
+      expect(captured.metadata.servers.map((server) => server.definitionDigest)).toEqual([
+        captured.metadata.definitionDigest,
+        captured.metadata.definitionDigest,
+      ]);
+    }
+
+    const sourceAndTransportNoise = await metadataFor('noise', preparedRuntimeWithApp({
+      source: '/other-machine/plugin/agent-bundle.config.ts',
+    }, {
+      provider: '/other-machine/plugin/src/dev/provider.ts',
+      servers: Object.freeze([Object.freeze({
+        command: 'node',
+        cwd: '/other-machine/plugin',
+        id: 'timeline-server',
+        name: 'Timeline MCP',
+        source: '/other-machine/plugin/agent-bundle.config.ts',
+        targets: Object.freeze(['claude', 'codex']),
+        transport: 'stdio' as const,
+      })]),
+      sourceRevision: 'prepared-r2',
+    }), 'captured-r2');
+    expect(sourceAndTransportNoise.metadata.definitionDigest).toBe(baseline.metadata.definitionDigest);
+
+    expect(runtimeDefinitionDigest(baseline.snapshot.definition, baseline.snapshot.preparedRuntime))
+      .toBe(baseline.metadata.definitionDigest);
+
+    const [baselineApp] = baseline.snapshot.preparedRuntime.apps;
+    if (baselineApp === undefined) throw new Error('Baseline prepared App was not captured.');
+    const tamperedAppDefinitions = Object.freeze([Object.freeze({
+      ...(baselineApp._meta === undefined ? {} : { _meta: baselineApp._meta }),
+      id: baselineApp.id,
+      name: 'Tampered timeline',
+      resourceUri: baselineApp.resourceUri,
+      serverId: baselineApp.serverId,
+      serverName: baselineApp.serverName,
+      targets: baselineApp.targets,
+      ...(baselineApp.template === undefined ? {} : { template: baselineApp.template }),
+    })]);
+    const tamperedMetadata = Object.freeze({ ...baseline.metadata, appDefinitions: tamperedAppDefinitions });
+    await expect(validateRscRuntimeGenerationMetadata({
+      assets: baseline.generation.manifest.assets,
+      metadata: tamperedMetadata,
+      root: baseline.generation.root,
+    })).rejects.toThrow('definition digest is inconsistent');
   } finally {
     await store.close().catch(() => undefined);
     await rm(storageRoot, { force: true, recursive: true });

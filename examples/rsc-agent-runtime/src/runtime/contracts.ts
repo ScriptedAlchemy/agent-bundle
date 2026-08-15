@@ -1,5 +1,6 @@
 import type { ZodType } from 'zod';
 import type { DevRuntimeMcpServerDescriptor } from '../../../../packages/agent-bundle/src/dev/runtime-protocol.ts';
+import type { JsonObject } from '../../../../packages/agent-bundle/src/dev/types.ts';
 
 export interface EditEvent {
   eventId: string;
@@ -112,7 +113,19 @@ export interface RscRuntimeSurfaceAsset {
   readonly sha256: string;
 }
 
+export interface RscRuntimeAppDefinition {
+  readonly _meta?: JsonObject;
+  readonly id: string;
+  readonly name: string;
+  readonly resourceUri: string;
+  readonly serverId: string;
+  readonly serverName: string;
+  readonly targets: readonly string[];
+  readonly template?: string;
+}
+
 export interface RscRuntimeGenerationMetadata {
+  readonly appDefinitions: readonly RscRuntimeAppDefinition[];
   readonly definitionDigest: string;
   readonly entries: Readonly<Record<string, string>>;
   readonly environmentHashes: Readonly<Record<'rsc' | 'widget', string>>;
