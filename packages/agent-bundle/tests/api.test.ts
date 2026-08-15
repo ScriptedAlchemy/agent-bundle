@@ -471,10 +471,10 @@ it('normalizes named top-level scripts with stable IDs, modes, and sorted target
 it('copies every supported top-level script output suffix byte-for-byte with source modes', async () => {
   const parent = await mkdtemp(join(tmpdir(), 'agent-bundle-copy-scripts-parent-'));
   const root = join(parent, 'project with spaces');
-  const sourceBash = join(root, 'src', 'run.bash');
+  const sourceBash = join(root, 'src', 'run.BASH');
   const sourceBundle = join(root, 'src', 'bundle.ts');
-  const sourceShell = join(root, 'src', 'run.sh');
-  const sourcePython = join(root, 'src', 'run.py');
+  const sourceShell = join(root, 'src', 'run.SH');
+  const sourcePython = join(root, 'src', 'run.Py');
   const output = join(root, 'artifact');
   await mkdir(join(root, 'src'), { recursive: true });
   await Promise.all([
@@ -485,10 +485,10 @@ it('copies every supported top-level script output suffix byte-for-byte with sou
         "  plugin: { name: 'copy-script-fixture', version: '1.0.0' },",
         "  targets: ['portable', 'codex', 'claude'],",
         '  scripts: {',
-        "    bash: './src/run.bash',",
+        "    bash: './src/run.BASH',",
         "    bundle: { entry: './src/bundle.ts' },",
-        "    shell: './src/run.sh',",
-        "    python: './src/run.py',",
+        "    shell: './src/run.SH',",
+        "    python: './src/run.Py',",
         '  },',
         '};',
         '',
@@ -544,7 +544,7 @@ it('copies every supported top-level script output suffix byte-for-byte with sou
         kind: 'copy',
         mode: 0o741,
         path: 'portable/scripts/bash.bash',
-        sourceInputs: ['agent-bundle.config.ts', 'src/run.bash'],
+        sourceInputs: ['agent-bundle.config.ts', 'src/run.BASH'],
       }),
       expect.objectContaining({
         kind: 'bundle',
@@ -555,13 +555,13 @@ it('copies every supported top-level script output suffix byte-for-byte with sou
         kind: 'copy',
         mode: 0o751,
         path: 'portable/scripts/shell.sh',
-        sourceInputs: ['agent-bundle.config.ts', 'src/run.sh'],
+        sourceInputs: ['agent-bundle.config.ts', 'src/run.SH'],
       }),
       expect.objectContaining({
         kind: 'copy',
         mode: 0o711,
         path: 'portable/scripts/python.py',
-        sourceInputs: ['agent-bundle.config.ts', 'src/run.py'],
+        sourceInputs: ['agent-bundle.config.ts', 'src/run.Py'],
       }),
     ]));
     await expect(validate({ artifact: output, root })).resolves.toEqual({ diagnostics: [] });
@@ -574,6 +574,52 @@ it('copies every supported top-level script output suffix byte-for-byte with sou
     await rm(parent, { force: true, recursive: true });
   }
 }, 30_000);
+
+it('canonicalizes copied script extensions in emitted artifact paths', async () => {
+  const parent = await mkdtemp(join(tmpdir(), 'agent-bundle-uppercase-script-parent-'));
+  const root = join(parent, 'project');
+  const source = join(root, 'src', 'run.SH');
+  const output = join(root, 'artifact');
+  await mkdir(join(root, 'src'), { recursive: true });
+  await Promise.all([
+    writeFile(join(root, 'agent-bundle.config.ts'), [
+      'export default {',
+      "  plugin: { name: 'uppercase-script-fixture', version: '1.0.0' },",
+      "  targets: ['portable'],",
+      "  scripts: { upper: './src/run.SH' },",
+      '};',
+      '',
+    ].join('\n')),
+    writeFile(source, '#!/usr/bin/env sh\nprintf "uppercase\\n"\n'),
+  ]);
+
+  try {
+    const result = await build({ output, root });
+    const generated = join(output, 'portable', 'scripts', 'upper.sh');
+
+    await expect(readFile(generated, 'utf8')).resolves.toBe(await readFile(source, 'utf8'));
+    await expect(readFile(join(output, 'portable', 'scripts', 'upper.SH'), 'utf8')).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+    expect(result.build.manifest.files).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'copy',
+        path: 'portable/scripts/upper.sh',
+        sourceInputs: ['agent-bundle.config.ts', 'src/run.SH'],
+      }),
+    ]));
+    expect(result.build.outputProvenance).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'copy',
+        path: 'portable/scripts/upper.sh',
+        sourceInputs: ['agent-bundle.config.ts', 'src/run.SH'],
+      }),
+    ]));
+    await expect(validate({ artifact: output, root })).resolves.toEqual({ diagnostics: [] });
+  } finally {
+    await rm(parent, { force: true, recursive: true });
+  }
+});
 
 it('documents a versioned MCP App resource URI accepted by source validation', async () => {
   const parent = await mkdtemp(join(tmpdir(), 'agent-bundle-readme-uri-parent-'));

@@ -35,7 +35,7 @@ export interface CompiledMcpEntry extends CompiledEntry {
 }
 
 const outputName = (script: NormalizedScript): string =>
-  script.mode === 'bundle' ? `${script.name}.mjs` : `${script.name}${extname(script.source)}`;
+  script.mode === 'bundle' ? `${script.name}.mjs` : `${script.name}${extname(script.source).toLowerCase()}`;
 
 export const planCompiledEntries = (
   entries: readonly NormalizedScript[],

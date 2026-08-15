@@ -823,6 +823,8 @@ it('rejects a script name that exits its target scripts directory', async () => 
 
 it('rejects canonical aliases and adapter/root-script collisions before emission', async () => {
   const project = await createProject();
+  const uppercaseScript = join(project.root, 'skills', 'review', 'scripts', 'upper.SH');
+  const lowercaseScript = join(project.root, 'skills', 'review', 'scripts', 'upper.sh');
   const aliasesAdapter: TargetAdapter = {
     capabilities: {},
     metadata: testAdapterMetadata,
@@ -850,6 +852,10 @@ it('rejects canonical aliases and adapter/root-script collisions before emission
   };
 
   try {
+    await Promise.all([
+      writeFile(uppercaseScript, '#!/usr/bin/env sh\n'),
+      writeFile(lowercaseScript, '#!/usr/bin/env sh\n'),
+    ]);
     await mkdir(project.outputRoot, { recursive: true });
     await writeFile(join(project.outputRoot, 'previous.txt'), 'previous\n');
     const model = modelFor(project);
@@ -872,6 +878,22 @@ it('rejects canonical aliases and adapter/root-script collisions before emission
         registry: new TargetRegistry().register(scriptCollisionAdapter, { default: true }),
       }),
     ).rejects.toThrow(/duplicate/i);
+    await expect(
+      build({
+        ...options,
+        model: {
+          ...model,
+          scripts: [
+            { ...model.scripts[0]!, mode: 'copy', name: 'upper', source: uppercaseScript },
+            { ...model.scripts[0]!, mode: 'copy', name: 'upper', source: lowercaseScript },
+          ],
+        },
+        registry: new TargetRegistry().register(
+          (await import('../src/adapters/portable.ts')).portableAdapter,
+          { default: true },
+        ),
+      }),
+    ).rejects.toThrow('Duplicate compiled script destination "scripts/upper.sh".');
     await expect(readFile(join(project.outputRoot, 'previous.txt'), 'utf8')).resolves.toBe('previous\n');
   } finally {
     await cleanupProject(project);
