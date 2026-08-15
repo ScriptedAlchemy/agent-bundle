@@ -830,3 +830,85 @@ it('rebinds deferred latest intents after activation while retaining exact repla
   if (exact.kind !== 'replay-run') throw new Error('Expected exact replay effect.');
   expect(Object.isFrozen(exact.request)).toBe(true);
 });
+
+it('retains an activation replay through a later refresh bootstrap without duplicating it', () => {
+  const generationB = 'generation-b';
+  const generationBBootstrap = bootstrap({
+    status: status({
+      activeVector: vector({ runtimeGenerationId: generationB }),
+      lastGoodVector: vector({ runtimeGenerationId: generationB }),
+    }),
+  });
+  const foreground = reduce(model(), { type: 'run.request' }, { type: 'confirmation.confirm' });
+  const activated = reduce(foreground, {
+    event: event(2, 'runtime.generation.activated', undefined, 'provider-a', generationB),
+    type: 'event.received',
+  });
+  const refreshed = reduce(activated, {
+    event: event(3, 'runtime.status', undefined, 'provider-a', generationB),
+    type: 'event.received',
+  });
+  const activeForeground = effectFor(refreshed);
+  if (activeForeground === undefined || activeForeground.kind !== 'create-run') throw new Error('Expected active foreground run.');
+  const booting = reduce(refreshed, { id: activeForeground.id, type: 'effect.settled' });
+  const activeBootstrap = effectFor(booting);
+  if (activeBootstrap === undefined || activeBootstrap.kind !== 'bootstrap') throw new Error('Expected coalesced bootstrap.');
+  const replayed = reduce(booting, { bootstrap: generationBBootstrap, type: 'bootstrap.received' });
+  const activationRun = effectFor(replayed);
+  if (activationRun === undefined) throw new Error('Expected selected-fixture activation run.');
+  const settled = reduce(replayed, { id: activationRun.id, type: 'effect.settled' });
+  const laterBootstrap = reduce(settled, { bootstrap: generationBBootstrap, type: 'bootstrap.received' });
+
+  expect(activeBootstrap.triggerSequence).toBe(3);
+  expect(activationRun).toMatchObject({
+    cause: 'activation',
+    kind: 'create-run',
+    request: { expectedGenerationId: generationB, fixtureId: 'fixture-a', input: { city: 'London' }, surfaceId: 'weather', target: 'portable' },
+  });
+  expect(replayed.pendingActivationReplay).toBeUndefined();
+  expect(effectFor(settled)).toBeUndefined();
+  expect(effectFor(laterBootstrap)).toBeUndefined();
+  expect(laterBootstrap.pendingActivationReplay).toBeUndefined();
+});
+
+it('does not retain or auto-run activation replay for same, foreign, conflicted, or unavailable bootstraps', () => {
+  const generationB = 'generation-b';
+  const generationBBootstrap = bootstrap({
+    status: status({
+      activeVector: vector({ runtimeGenerationId: generationB }),
+      lastGoodVector: vector({ runtimeGenerationId: generationB }),
+    }),
+  });
+  const activate = (providerSessionId = 'provider-a', runtimeGenerationId = generationB): RuntimeModel => reduce(model(), {
+    event: event(1, 'runtime.generation.activated', undefined, providerSessionId, runtimeGenerationId),
+    type: 'event.received',
+  });
+  const sameGeneration = reduce(activate('provider-a', 'generation-a'), {
+    bootstrap: bootstrap(),
+    type: 'bootstrap.received',
+  });
+  const foreign = reduce(activate('provider-b'), {
+    bootstrap: bootstrap({
+      history: [run('provider-b', { vector: vector({ providerSessionId: 'provider-b', runtimeGenerationId: generationB }) })],
+      providerSessionId: 'provider-b',
+      status: status({
+        activeVector: vector({ providerSessionId: 'provider-b', runtimeGenerationId: generationB }),
+        lastGoodVector: vector({ providerSessionId: 'provider-b', runtimeGenerationId: generationB }),
+      }),
+    }),
+    type: 'bootstrap.received',
+  });
+  const activation = activate();
+  const activeBootstrap = effectFor(activation);
+  if (activeBootstrap === undefined || activeBootstrap.kind !== 'bootstrap') throw new Error('Expected activation bootstrap.');
+  const conflicted = reduce(activation, { id: activeBootstrap.id, type: 'effect.conflict' });
+  const afterConflict = reduce(conflicted, { bootstrap: generationBBootstrap, type: 'bootstrap.received' });
+  const unavailable = reduce(activate(), { bootstrap: { kind: 'unavailable' }, type: 'bootstrap.received' });
+
+  for (const state of [sameGeneration, foreign, afterConflict, unavailable]) {
+    expect(effectFor(state)).toBeUndefined();
+    expect(state.pendingActivationReplay).toBeUndefined();
+  }
+  expect(effectFor(conflicted)).toMatchObject({ kind: 'bootstrap' });
+  expect(conflicted.pendingActivationReplay).toBeUndefined();
+});

@@ -52,7 +52,10 @@ export interface RuntimeResetCompletion {
 /** A generation activation that must wait for its correlated bootstrap snapshot. */
 export interface RuntimeActivationReplay {
   readonly providerSessionId: string;
+  /** Latest ordinary refresh that coalesced the bootstrap for this activation. */
+  readonly refreshTriggerSequence: number;
   readonly runtimeGenerationId: string;
+  /** The runtime event that established this activation's provider and generation identity. */
   readonly triggerSequence: number;
 }
 
@@ -557,7 +560,7 @@ const isActivatedGenerationBootstrap = (
   activation: RuntimeActivationReplay | undefined,
 ): boolean => {
   if (bootstrap.kind === 'unavailable' || activeBootstrap?.kind !== 'bootstrap' || activation === undefined) return false;
-  if (activeBootstrap.triggerSequence !== activation.triggerSequence) return false;
+  if (activeBootstrap.triggerSequence !== activation.refreshTriggerSequence) return false;
   const priorVector = model.status?.activeVector;
   const nextVector = bootstrap.status.activeVector;
   return model.providerSessionId === activation.providerSessionId &&
@@ -566,6 +569,14 @@ const isActivatedGenerationBootstrap = (
     priorVector.runtimeGenerationId !== activation.runtimeGenerationId &&
     nextVector?.providerSessionId === activation.providerSessionId &&
     nextVector.runtimeGenerationId === activation.runtimeGenerationId;
+};
+
+const withActivationRefreshCursor = (model: RuntimeModel, triggerSequence: number): RuntimeModel => {
+  const activation = model.pendingActivationReplay;
+  if (activation === undefined || triggerSequence <= activation.refreshTriggerSequence) return model;
+  return update(model, {
+    pendingActivationReplay: Object.freeze({ ...activation, refreshTriggerSequence: triggerSequence }),
+  });
 };
 
 export const createRuntimeModel = ({ bootstrap, profiles }: RuntimeModelOptions): RuntimeModel => {
@@ -651,12 +662,13 @@ const receivedEvent = (model: RuntimeModel, message: ProjectEventMessage): Runti
     return queueBootstrap(update(advanced, {
       pendingActivationReplay: Object.freeze({
         providerSessionId: event.providerSessionId,
+        refreshTriggerSequence: message.sequence,
         runtimeGenerationId: event.runtimeGenerationId,
         triggerSequence: message.sequence,
       }),
     }), message.sequence);
   }
-  return queueBootstrap(advanced, message.sequence);
+  return queueBootstrap(withActivationRefreshCursor(advanced, message.sequence), message.sequence);
 };
 
 export const reduceRuntimeModel = (model: RuntimeModel, action: RuntimeModelAction): RuntimeModel => {
@@ -666,7 +678,7 @@ export const reduceRuntimeModel = (model: RuntimeModel, action: RuntimeModelActi
       const activation = model.pendingActivationReplay;
       const shouldReplay = isActivatedGenerationBootstrap(model, action.bootstrap, activeBootstrap, activation);
       const bootstrapped = settleEffectKind(bootstrapModel(model, action.bootstrap), 'bootstrap');
-      if (activeBootstrap?.triggerSequence !== activation?.triggerSequence) return bootstrapped;
+      if (activeBootstrap?.triggerSequence !== activation?.refreshTriggerSequence) return bootstrapped;
       const consumed = update(bootstrapped, { pendingActivationReplay: undefined });
       const request = shouldReplay ? invocationFor(consumed) : undefined;
       return request === undefined
@@ -679,7 +691,12 @@ export const reduceRuntimeModel = (model: RuntimeModel, action: RuntimeModelActi
       return settleEffect(model, action.id);
     case 'effect.conflict': {
       if (model.activeEffect?.id !== action.id) return model;
-      return queueBootstrap(settleEffect(update(model, { confirmation: undefined }), action.id));
+      const clearsActivationReplay = model.activeEffect.kind === 'bootstrap' &&
+        model.activeEffect.triggerSequence === model.pendingActivationReplay?.refreshTriggerSequence;
+      return queueBootstrap(settleEffect(update(model, {
+        confirmation: undefined,
+        ...(clearsActivationReplay ? { pendingActivationReplay: undefined } : {}),
+      }), action.id));
     }
     case 'draft.replace':
       return update(model, { draft: draftFor(action.input, action.raw) });
