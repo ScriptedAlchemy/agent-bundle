@@ -208,3 +208,39 @@ it('releases a runtime binding when the non-owning session view closes and close
   await service.close();
   expect(service.get(secondBinding.id)).toBeUndefined();
 });
+
+it('waits for an in-flight operation before invalidation delivers teardown and rejects its stale result', async () => {
+  let resolveOperation: ((value: { readonly operationId: string; readonly sessionId: string; readonly sessionRevision: number; readonly value: McpAppJsonValue; readonly vector: RuntimeVector }) => void) | undefined;
+  let teardownDelivered = false;
+  const service = new McpAppRuntimeBindingService();
+  const binding = await service.createBinding({
+    onTeardown: () => {
+      teardownDelivered = true;
+    },
+    profileId: 'portable',
+    runBinding,
+    runVector,
+    session: {
+      execute: async () => new Promise((resolve) => {
+        resolveOperation = resolve;
+      }),
+      snapshot: sessionSnapshot,
+      watchClosed: () => ({ closed: false, unsubscribe: () => undefined }),
+    },
+  });
+
+  const operation = service.execute(binding.id, { kind: 'list-tools' });
+  const invalidation = service.invalidateBindings({ sessionId: 'mcp-1', sessionRevision: 3 });
+  await Promise.resolve();
+  expect(teardownDelivered).toBe(false);
+  resolveOperation?.({
+    operationId: 'op-in-flight',
+    sessionId: 'mcp-1',
+    sessionRevision: 3,
+    value: { content: [] },
+    vector: { ...runVector, runtimeGenerationId: 'g8' },
+  });
+  await expect(operation).rejects.toThrow('closed');
+  await invalidation;
+  expect(teardownDelivered).toBe(true);
+});

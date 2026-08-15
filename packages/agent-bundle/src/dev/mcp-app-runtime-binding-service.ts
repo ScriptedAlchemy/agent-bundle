@@ -73,6 +73,7 @@ export interface McpAppRuntimeBindingInvalidation {
 
 interface McpAppRuntimeBinding {
   closing: boolean;
+  readonly operations: Set<Promise<void>>;
   readonly privateRunVector: RuntimeVector;
   readonly session: DevRuntimeMcpSessionView;
   readonly snapshot: McpAppRuntimeBindingSnapshot;
@@ -210,6 +211,7 @@ export class McpAppRuntimeBindingService {
       });
       entry = {
         closing: false,
+        operations: new Set(),
         privateRunVector,
         session: options.session,
         snapshot,
@@ -231,9 +233,19 @@ export class McpAppRuntimeBindingService {
   async execute(bindingId: string, request: McpAppRuntimeOperationRequest): Promise<McpAppBoundOperationResult> {
     const entry = this.#entry(bindingId);
     const canonical = canonicalOperation(request, entry.snapshot.sessionRevision);
-    const operation = await entry.session.execute(canonical);
-    this.#assertActive(entry);
-    return this.#operationResult(entry, operation);
+    let finish: (() => void) | undefined;
+    const settled = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    entry.operations.add(settled);
+    try {
+      const operation = await entry.session.execute(canonical);
+      this.#assertActive(entry);
+      return this.#operationResult(entry, operation);
+    } finally {
+      entry.operations.delete(settled);
+      finish?.();
+    }
   }
 
   async closeBinding(bindingId: string): Promise<boolean> {
@@ -298,6 +310,7 @@ export class McpAppRuntimeBindingService {
     entry.closing = true;
     entry.unsubscribe();
     this.#entries.delete(entry.snapshot.id);
+    await Promise.allSettled([...entry.operations]);
     if (entry.teardown !== undefined) await entry.teardown(Object.freeze({ binding: entry.snapshot, reason }));
   }
 }
