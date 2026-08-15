@@ -3,8 +3,11 @@ import { appendFile, lstat, mkdir, open, readFile, realpath, rename, unlink, wri
 import { basename, isAbsolute, join, relative, resolve } from 'node:path';
 
 export type PlaygroundJsonPrimitive = boolean | null | number | string;
-export type PlaygroundJsonValue = PlaygroundJsonPrimitive | readonly PlaygroundJsonValue[] | Readonly<Record<string, PlaygroundJsonValue>>;
-export type PlaygroundJsonObject = Readonly<Record<string, PlaygroundJsonValue>>;
+export type PlaygroundJsonArray = readonly PlaygroundJsonValue[];
+export interface PlaygroundJsonObject {
+  readonly [key: string]: PlaygroundJsonValue;
+}
+export type PlaygroundJsonValue = PlaygroundJsonArray | PlaygroundJsonObject | PlaygroundJsonPrimitive;
 
 export type PlaygroundTraceSource =
   | 'build'
@@ -270,6 +273,24 @@ const nonempty = (value: unknown, label: string): string => {
   return value;
 };
 
+const traceSource = (value: unknown): PlaygroundTraceSource => {
+  switch (value) {
+    case 'build':
+    case 'diagnostics':
+    case 'hook':
+    case 'host-preflight':
+    case 'mcp':
+    case 'project':
+    case 'response':
+    case 'script':
+    case 'skill-evidence':
+    case 'workspace-change':
+      return value;
+    default:
+      throw serviceError('PLAYGROUND_VALUE_INVALID', 'Playground event source must be supported.');
+  }
+};
+
 const safeSessionId = (value: string): string => {
   if (!pathSegment.test(value) || value === '.' || value === '..') {
     throw serviceError('PLAYGROUND_SESSION_ID_INVALID', 'Playground session id must be a path-safe identifier.');
@@ -356,28 +377,30 @@ const normalizeIdentity = (value: PlaygroundSessionIdentity): PlaygroundSessionI
       text: nonempty(value?.task?.text, 'Playground task text'),
     }),
   });
-  assertNoProviderCredentials(identity as PlaygroundJsonValue);
+  assertNoProviderCredentials(json(identity, 'Playground identity'));
   return identity;
 };
 
-const normalizeOutcome = (value: PlaygroundDurableOutcome): PlaygroundDurableOutcome => {
+const normalizeOutcome = (value: unknown): PlaygroundDurableOutcome => {
+  if (!isRecord(value)) throw serviceError('PLAYGROUND_VALUE_INVALID', 'Playground outcome must be an object.');
   const outcome = Object.freeze({
-    ...(value?.response === undefined ? {} : { response: nonempty(value.response, 'Playground outcome response') }),
-    status: nonempty(value?.status, 'Playground outcome status'),
-    ...(value?.workspace === undefined ? {} : { workspace: jsonObject(value.workspace, 'Playground outcome workspace') }),
+    ...(value.response === undefined ? {} : { response: nonempty(value.response, 'Playground outcome response') }),
+    status: nonempty(value.status, 'Playground outcome status'),
+    ...(value.workspace === undefined ? {} : { workspace: jsonObject(value.workspace, 'Playground outcome workspace') }),
   });
-  assertNoProviderCredentials(outcome as PlaygroundJsonValue);
+  assertNoProviderCredentials(json(outcome, 'Playground outcome'));
   return outcome;
 };
 
-const normalizeEventInput = (value: PlaygroundEventInput): PlaygroundEventInput => {
+const normalizeEventInput = (value: unknown): PlaygroundEventInput => {
+  if (!isRecord(value)) throw serviceError('PLAYGROUND_VALUE_INVALID', 'Playground event must be an object.');
   const event = Object.freeze({
-    kind: nonempty(value?.kind, 'Playground event kind'),
-    raw: json(value?.raw, 'Playground event raw value'),
-    source: nonempty(value?.source, 'Playground event source') as PlaygroundTraceSource,
-    summary: nonempty(value?.summary, 'Playground event summary'),
+    kind: nonempty(value.kind, 'Playground event kind'),
+    raw: json(value.raw, 'Playground event raw value'),
+    source: traceSource(value.source),
+    summary: nonempty(value.summary, 'Playground event summary'),
   });
-  assertNoProviderCredentials(event as PlaygroundJsonValue);
+  assertNoProviderCredentials(json(event, 'Playground event'));
   return event;
 };
 
@@ -655,7 +678,7 @@ export class PlaygroundService {
         epoch: clone(record.identity.epoch, 'Playground epoch') as PlaygroundEpochIdentity,
         fixture: clone(record.identity.fixture, 'Playground fixture') as PlaygroundFixtureIdentity,
         invocation: clone(record.identity.invocation, 'Playground invocation') as PlaygroundInvocation,
-        outcome: redactSecrets(clone(record.outcome, 'Playground durable outcome') as PlaygroundJsonValue) as PlaygroundDurableOutcome,
+        outcome: normalizeOutcome(redactSecrets(json(record.outcome, 'Playground durable outcome'))),
         schemaVersion,
         target: clone(record.identity.target, 'Playground target') as PlaygroundTarget,
         task: clone(record.identity.task, 'Playground task') as PlaygroundTask,
@@ -878,10 +901,14 @@ export class PlaygroundService {
     } catch {
       throw serviceError('PLAYGROUND_STORE_CORRUPT', 'Playground owner lock is malformed.');
     }
-    if (!isRecord(parsed) || parsed.version !== 1 || !Number.isSafeInteger(parsed.pid) || parsed.pid < 1 || typeof parsed.token !== 'string') {
+    if (!isRecord(parsed) || parsed.version !== 1 || typeof parsed.token !== 'string') {
       throw serviceError('PLAYGROUND_STORE_CORRUPT', 'Playground owner lock is invalid.');
     }
-    return Object.freeze({ pid: parsed.pid, token: parsed.token, version: 1 });
+    const pid = parsed.pid;
+    if (typeof pid !== 'number' || !Number.isFinite(pid) || !Number.isSafeInteger(pid) || pid < 1) {
+      throw serviceError('PLAYGROUND_STORE_CORRUPT', 'Playground owner lock is invalid.');
+    }
+    return Object.freeze({ pid, token: parsed.token, version: 1 });
   }
 
   #ownerIsStale(owner: OwnerLock): boolean {
@@ -923,7 +950,7 @@ export class PlaygroundService {
       sessionId: record.id,
       state: record.state,
     });
-    assertNoProviderCredentials(document as unknown as PlaygroundJsonValue);
+    assertNoProviderCredentials(json(document, 'Playground persisted session'));
     await this.#assertSessionDocumentPath(record.root, true);
     const temporary = join(record.root, `.${sessionDocumentName}.${randomUUID()}.tmp`);
     await writeFile(temporary, `${JSON.stringify(document)}\n`, { encoding: 'utf8', flag: 'wx' });
@@ -1001,7 +1028,12 @@ export class PlaygroundService {
       if (!isRecord(parsed)) throw serviceError('PLAYGROUND_STORE_CORRUPT', 'Playground event log contains a non-object record.');
       let event: PlaygroundTraceEvent;
       try {
-        const input = normalizeEventInput(parsed as PlaygroundEventInput);
+        const input = normalizeEventInput({
+          kind: parsed.kind,
+          raw: parsed.raw,
+          source: parsed.source,
+          summary: parsed.summary,
+        });
         const sequence = parsed.sequence;
         if (!Number.isSafeInteger(sequence) || sequence !== index + 1 || typeof parsed.timestamp !== 'string'
           || parsed.rawEventRef !== `${eventDocumentName}#${sequence}`) {

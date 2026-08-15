@@ -9,6 +9,7 @@ import {
   PlaygroundServiceCloseError,
   PlaygroundSessionCloseError,
   type PlaygroundEventInput,
+  type PlaygroundJsonObject,
 } from '../src/services/playground-service.ts';
 
 const eventually = async (assertion: () => void, attempts = 100): Promise<void> => {
@@ -46,7 +47,7 @@ const event = (
   source: PlaygroundEventInput['source'],
   kind: string,
   summary: string,
-  raw: Record<string, unknown>,
+  raw: PlaygroundJsonObject,
 ): PlaygroundEventInput => Object.freeze({ kind, raw, source, summary });
 
 const createFixture = async (input: Readonly<{
@@ -369,6 +370,34 @@ it('gives exactly one service instance the durable writer claim for an open sess
     await expect(contender.replay('owned')).resolves.toMatchObject({ events: [{ sequence: 1 }] });
   } finally {
     await Promise.allSettled([fixture.close(), contender.close()]);
+  }
+});
+
+it('rejects persisted trace records with unsupported source values', async () => {
+  const fixture = await createFixture();
+  try {
+    await fixture.service.openSession({ ...sessionInput(), sessionId: 'invalid-event-source' });
+    await fixture.service.append('invalid-event-source', event('project', 'loaded', 'Project loaded.', { revision: 'a' }));
+    await fixture.service.close();
+
+    const eventPath = join(fixture.storageRoot, 'sessions', 'invalid-event-source', 'events.jsonl');
+    const persisted = JSON.parse((await readFile(eventPath, 'utf8')).trim()) as Record<string, unknown>;
+    await writeFile(eventPath, `${JSON.stringify({ ...persisted, source: 'unsupported-source' })}\n`, 'utf8');
+
+    const reopened = new PlaygroundService({
+      projectId: 'project-1',
+      projectRoot: fixture.projectRoot,
+      storageRoot: fixture.storageRoot,
+    });
+    try {
+      await expect(reopened.reopen('invalid-event-source')).rejects.toMatchObject({
+        code: 'PLAYGROUND_STORE_CORRUPT',
+      });
+    } finally {
+      await reopened.close().catch(() => undefined);
+    }
+  } finally {
+    await fixture.close();
   }
 });
 
