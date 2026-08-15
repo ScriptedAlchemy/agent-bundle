@@ -410,6 +410,68 @@ it('admits one opening session and disposes that exact client and transport when
   expect(events).toEqual(['client.close', 'transport.close']);
 });
 
+it('retains a failed connection and both cleanup failures for every subsequent close', async () => {
+  const primaryFailure = new Error('connect failed');
+  const clientCloseFailure = new Error('client DELETE failed');
+  const transportCloseFailure = new Error('transport DELETE failed');
+  const events: string[] = [];
+  const routes: McpSessionControllerRoutes = {
+    catalog: async () => ({ prompts: [], resourceTemplates: [], resources: [], tools: [] }),
+    config: async () => ({ launch: { args: [], command: 'node', env: {}, kind: 'stdio' }, origin: 'artifact' }),
+    restart: async () => connection,
+    stream: async () => new Response(null),
+    trace: async () => ({ entries: [] }),
+  };
+  const controller = createMcpSessionController({
+    clientFactory: () => ({
+      close: async () => {
+        events.push('client.close');
+        throw clientCloseFailure;
+      },
+      connect: async () => { throw primaryFailure; },
+      request: async () => undefined,
+    }),
+    routes,
+    transportFactory: () => ({
+      close: async () => {
+        events.push('transport.close');
+        throw transportCloseFailure;
+      },
+      session: Object.freeze({ binding, connection, id: 'session-weather' }),
+      start: async () => undefined,
+    }),
+  });
+
+  const [opening] = await Promise.allSettled([controller.open(binding)]);
+  const [closing] = await Promise.allSettled([controller.close()]);
+  expect(opening.status).toBe('rejected');
+  expect(closing.status).toBe('rejected');
+  if (opening.status !== 'rejected' || closing.status !== 'rejected') throw new Error('Expected failed connection and close.');
+  expect(closing.reason).toBe(opening.reason);
+  expect(opening.reason).toMatchObject({
+    failures: [
+      { reason: clientCloseFailure, resource: 'client' },
+      { reason: transportCloseFailure, resource: 'transport' },
+    ],
+    message: 'MCP session controller failed: connect failed. Cleanup failed for client, transport.',
+    name: 'McpSessionControllerFailureError',
+    primary: primaryFailure,
+  });
+  const failure = opening.reason as Readonly<{ readonly failures: readonly object[] }>;
+  expect(Object.isFrozen(opening.reason)).toBe(true);
+  expect(Object.isFrozen(failure.failures)).toBe(true);
+  expect(failure.failures.every(Object.isFrozen)).toBe(true);
+  expect(events).toEqual(['client.close', 'transport.close']);
+  expect(controller.model).toMatchObject({
+    diagnostics: [{
+      code: 'mcp.connect.failed',
+      message: 'MCP session controller failed: connect failed. Cleanup failed for client, transport.',
+      severity: 'error',
+    }],
+    phase: 'error',
+  });
+});
+
 it('rejects a concurrent restart so a late result cannot overwrite the admitted refresh', async () => {
   const stream = traceStream();
   const firstRestart = deferred<typeof connection>();
@@ -611,6 +673,10 @@ it('rejects one shared close outcome after every delayed resource cleanup is att
     message: 'MCP session controller close failed for client, transport.',
     name: 'McpSessionControllerCloseError',
   });
+  const closeFailure = firstResult.reason as Readonly<{ readonly failures: readonly object[] }>;
+  expect(Object.isFrozen(firstResult.reason)).toBe(true);
+  expect(Object.isFrozen(closeFailure.failures)).toBe(true);
+  expect(closeFailure.failures.every(Object.isFrozen)).toBe(true);
   expect(events).toEqual([
     'trace.abort',
     'request.abort',
