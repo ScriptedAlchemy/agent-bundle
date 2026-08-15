@@ -23,6 +23,11 @@ export type {
   ArtifactManifestValidationStatus,
   AssembledArtifactManifest,
 } from './build/manifest.ts';
+export {
+  assembleArtifactManifest,
+  parseArtifactManifest,
+  serializeArtifactManifest,
+} from './build/manifest.ts';
 import { validateArtifact } from './build/validate-artifact.ts';
 import { DiagnosticError, type Diagnostic } from './core/diagnostics.ts';
 import type { NormalizedPlugin } from './core/types.ts';

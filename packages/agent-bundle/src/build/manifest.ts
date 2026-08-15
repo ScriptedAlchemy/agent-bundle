@@ -289,7 +289,7 @@ const validateManifest = (value: unknown): ArtifactManifestV2 => {
     fail('project.configDigest must equal the declared configPath source input hash.');
   }
   const revision = requireHash(project.revision, 'project.revision');
-  if (revision !== digest(sourceInputs)) fail('project.revision does not match project.sourceInputs.');
+  if (revision !== digest({ inputs: sourceInputs })) fail('project.revision does not match project.sourceInputs.');
 
   const files = parseFiles(manifest.files);
   const projectInputPaths = new Set(sourceInputs.map((input) => input.path));

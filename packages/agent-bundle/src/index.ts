@@ -5,6 +5,11 @@ import type { AgentBundleConfig as CoreAgentBundleConfig } from './core/types.ts
 
 export { defineConfig, pathTokens } from './core/types.ts';
 export { startDevServer } from './api.ts';
+export {
+  assembleArtifactManifest,
+  parseArtifactManifest,
+  serializeArtifactManifest,
+} from './api.ts';
 export type {
   ArtifactOutputKind,
   ArtifactOutputProvenance,
