@@ -47,7 +47,7 @@ export interface ValidateArtifactOptions {
   readonly registry?: TargetRegistry;
 }
 
-type ArtifactDiagnosticCode =
+export type ArtifactDiagnosticCode =
   | 'AB6000'
   | 'AB6001'
   | 'AB6002'
@@ -68,7 +68,7 @@ type ArtifactDiagnosticCode =
   | 'AB6017'
   | 'AB6018';
 
-const artifactRecoveries: Readonly<Record<ArtifactDiagnosticCode, string>> = Object.freeze({
+export const artifactDiagnosticRecoveries: Readonly<Record<ArtifactDiagnosticCode, string>> = Object.freeze({
   AB6000: 'Restore a readable artifact root and canonical manifest, then rebuild the artifact.',
   AB6001: 'Regenerate the strict canonical v2 manifest without concurrent writes, then rerun validation.',
   AB6002: 'Rebuild the artifact from complete project source, then rerun validation.',
@@ -91,11 +91,11 @@ const artifactRecoveries: Readonly<Record<ArtifactDiagnosticCode, string>> = Obj
 });
 
 const isArtifactDiagnosticCode = (code: string): code is ArtifactDiagnosticCode =>
-  Object.hasOwn(artifactRecoveries, code);
+  Object.hasOwn(artifactDiagnosticRecoveries, code);
 
 const recoveryForArtifactDiagnostic = (code: string): string =>
   isArtifactDiagnosticCode(code)
-    ? artifactRecoveries[code]
+    ? artifactDiagnosticRecoveries[code]
     : 'Repair the target MCP configuration and rebuild the artifact.';
 
 const diagnostic = (
@@ -114,7 +114,7 @@ const diagnostic = (
 });
 
 const javaScriptModuleSuffix = /\.(?:m?js)$/u;
-const generatedJavaScriptRecovery = artifactRecoveries.AB6005;
+const generatedJavaScriptRecovery = artifactDiagnosticRecoveries.AB6005;
 
 const jsonModuleSuffix = /\.json$/u;
 
@@ -389,7 +389,7 @@ const inspectArtifact = async (context: ValidateArtifactOptions): Promise<Artifa
   };
 };
 
-const filesystemRecovery = artifactRecoveries.AB6013;
+const filesystemRecovery = artifactDiagnosticRecoveries.AB6013;
 
 const filesystemDiagnostics = (filesystem: ArtifactFilesystemSnapshot): readonly Diagnostic[] =>
   filesystem.entries
@@ -553,8 +553,8 @@ const validateTargetContracts = async (options: {
   return Object.freeze(diagnostics);
 };
 
-const mcpCoherenceRecovery = artifactRecoveries.AB6017;
-const hookCoherenceRecovery = artifactRecoveries.AB6018;
+const mcpCoherenceRecovery = artifactDiagnosticRecoveries.AB6017;
+const hookCoherenceRecovery = artifactDiagnosticRecoveries.AB6018;
 
 const coherenceDiagnostic = (
   code: 'AB6017' | 'AB6018',
@@ -983,7 +983,7 @@ const validateHookCoherence = async (options: {
   return Object.freeze(diagnostics);
 };
 
-const ownershipRecovery = artifactRecoveries.AB6014;
+const ownershipRecovery = artifactDiagnosticRecoveries.AB6014;
 
 const targetNamespaces = (manifest: ArtifactManifestV2): ReadonlySet<string> =>
   new Set(manifest.targets.map((target) => target.name));
@@ -1127,7 +1127,7 @@ const emittedSkillFor = (
 const isSkillRootEscape = (reference: string): boolean =>
   reference === '..' || reference.startsWith('../') || reference.startsWith('/');
 
-const skillRecovery = artifactRecoveries.AB6015;
+const skillRecovery = artifactDiagnosticRecoveries.AB6015;
 
 const validateEmittedSkills = async (options: {
   readonly artifactRoot: string;
@@ -1243,7 +1243,7 @@ const validateEmittedSkills = async (options: {
           `Emitted Skill reference ${JSON.stringify(reference)} escapes its Skill root.`,
           skill.path,
           skill.target,
-          skillRecovery,
+          artifactDiagnosticRecoveries.AB6016,
         ));
       } else if (!resources.has(reference)) {
         diagnostics.push(diagnostic(
@@ -1251,7 +1251,7 @@ const validateEmittedSkills = async (options: {
           `Emitted Skill references missing regular resource ${JSON.stringify(reference)}.`,
           skill.path,
           skill.target,
-          skillRecovery,
+          artifactDiagnosticRecoveries.AB6016,
         ));
       }
     }
@@ -1363,7 +1363,7 @@ export const validateArtifact = async (context: ValidateArtifactOptions): Promis
       'Artifact Agent Skills provenance does not match the pinned schema contract.',
       artifactManifestName,
       undefined,
-      'Rebuild the artifact with the pinned Agent Skills contract.',
+      artifactDiagnosticRecoveries.AB6008,
     ));
   }
   if (!matchesManifestFileTable(inspection.files, manifest.files)) {

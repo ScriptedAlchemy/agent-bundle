@@ -14,6 +14,7 @@ import {
 import type { TargetAdapter } from '../src/adapters/types.ts';
 import { inspectArtifactFilesystem } from '../src/build/emit.ts';
 import { pathTokens, type NormalizedPlugin } from '../src/core/types.ts';
+import { ProjectService } from '../src/dev/project-service.ts';
 import {
   createTargetMcpRuntime,
   resolveTargetRelativeStdioArgument,
@@ -129,6 +130,12 @@ const syntheticAdapter: TargetAdapter = Object.freeze({
   validateModel: (model: NormalizedPlugin) => [...syntheticPlan(model).diagnostics],
 });
 
+const readyInspection = async (options: Parameters<typeof inspect>[0]) => {
+  const result = await inspect(options);
+  if (result.state !== 'ready') throw new Error('Expected a ready inspection.');
+  return result;
+};
+
 it('prepares and inspects a target owned only by the supplied advanced registry', async () => {
   const root = await createProject();
   const registry = new TargetRegistry().register(syntheticAdapter, { default: true });
@@ -142,7 +149,7 @@ it('prepares and inspects a target owned only by the supplied advanced registry'
       '',
     ].join('\n'));
 
-    const result = await inspect({ registry, root });
+    const result = await readyInspection({ registry, root });
 
     expect(result.model.extensions).toEqual({
       synthetic: expect.objectContaining({ target: 'synthetic', value: { enabled: true } }),
@@ -190,13 +197,201 @@ it('attaches a specific recovery to every invalid inspection diagnostic', async 
 
     expect(result.state).toBe('invalid');
     expect(result.diagnostics).not.toEqual([]);
-    expect(result.diagnostics.every((diagnostic) => diagnostic.recovery?.trim().length > 0)).toBe(true);
+    expect(result.diagnostics.every((diagnostic) =>
+      diagnostic.recovery !== undefined && diagnostic.recovery.trim().length > 0,
+    )).toBe(true);
     expect(result.diagnostics).toEqual(expect.arrayContaining([
       expect.objectContaining({
         code: 'AB4000',
         recovery: 'Correct the project configuration field named by this diagnostic, then inspect again.',
       }),
     ]));
+  } finally {
+    await rm(join(root, '..'), { force: true, recursive: true });
+  }
+});
+
+it('contains hostile source getters as reusable preparation diagnostics', async () => {
+  const root = await createProject();
+  try {
+    await writeFile(join(root, 'agent-bundle.config.ts'), [
+      "const hostile = { toString() { throw new Error('hostile source getter was stringified'); } };",
+      'hostile.self = hostile;',
+      'const config = { plugin: { name: \'hostile-config\', version: \'1.0.0\' }, targets: [\'codex\'] };',
+      "Object.defineProperty(config, 'hooks', { enumerable: true, get() { throw hostile; } });",
+      'export default config;',
+      '',
+    ].join('\n'));
+
+    const service = new ProjectService({ root });
+    const invalid = await service.prepare('inspect');
+
+    expect(invalid).toMatchObject({
+      diagnostics: [expect.objectContaining({
+        code: 'AB7001',
+        message: 'Unable to validate project source.',
+        recovery: expect.any(String),
+      })],
+      source: { state: 'invalid' },
+    });
+    expect(JSON.stringify(invalid)).not.toContain('hostile source getter was stringified');
+    expect(invalid.model).toBeUndefined();
+    expect(invalid.projectContext).toBeUndefined();
+    expect(Object.isFrozen(invalid)).toBe(true);
+    expect(Object.isFrozen(invalid.diagnostics)).toBe(true);
+    await expect(build({ root })).rejects.toMatchObject({
+      diagnostics: [expect.objectContaining({ code: 'AB7001' })],
+    });
+
+    await writeFile(join(root, 'agent-bundle.config.ts'), [
+      'export default {',
+      "  plugin: { name: 'recovered-config', version: '1.0.0' },",
+      "  targets: ['codex'],",
+      '};',
+      '',
+    ].join('\n'));
+    const recovered = await service.prepare('inspect');
+    expect(recovered.source.state).toBe('ready');
+    expect(recovered.model?.targets).toEqual([expect.objectContaining({ name: 'codex' })]);
+  } finally {
+    await rm(join(root, '..'), { force: true, recursive: true });
+  }
+});
+
+const hostileAdapterError = (): object => {
+  const error = Object.create(null) as Record<string, unknown>;
+  error.self = error;
+  Object.defineProperty(error, 'toString', {
+    enumerable: true,
+    value: () => {
+      throw new Error('hostile adapter error was stringified');
+    },
+  });
+  return error;
+};
+
+it.each(['validateModel', 'plan'] as const)(
+  'contains a throwing adapter %s as a reusable preparation diagnostic',
+  async (phase) => {
+    const root = await createProject();
+    let throwFromAdapter = true;
+    const adapter: TargetAdapter = Object.freeze({
+      ...syntheticAdapter,
+      plan: (model: NormalizedPlugin) => {
+        if (phase === 'plan' && throwFromAdapter) throw hostileAdapterError();
+        return syntheticPlan(model);
+      },
+      validateModel: () => {
+        if (phase === 'validateModel' && throwFromAdapter) throw hostileAdapterError();
+        return [];
+      },
+    });
+    const registry = new TargetRegistry().register(adapter, { default: true });
+    try {
+      await writeFile(join(root, 'agent-bundle.config.ts'), [
+        'export default {',
+        "  plugin: { name: 'hostile-adapter', version: '1.0.0' },",
+        "  synthetic: { enabled: true },",
+        "  targets: ['synthetic'],",
+        '};',
+        '',
+      ].join('\n'));
+
+      const service = new ProjectService({ registry, root });
+      const invalid = await service.prepare('inspect');
+
+      expect(invalid).toMatchObject({
+        diagnostics: [expect.objectContaining({
+          code: 'AB7001',
+          message: 'Unable to validate normalized project.',
+          recovery: expect.any(String),
+        })],
+        source: { state: 'invalid' },
+      });
+      expect(JSON.stringify(invalid)).not.toContain('hostile adapter error was stringified');
+      expect(invalid.model).toBeUndefined();
+      expect(invalid.projectContext).toBeUndefined();
+      expect(Object.isFrozen(invalid)).toBe(true);
+      expect(Object.isFrozen(invalid.diagnostics)).toBe(true);
+
+      throwFromAdapter = false;
+      const recovered = await service.prepare('inspect');
+      expect(recovered.source.state).toBe('ready');
+      expect(recovered.model?.targets).toEqual([expect.objectContaining({ name: syntheticTarget })]);
+    } finally {
+      await rm(join(root, '..'), { force: true, recursive: true });
+    }
+  },
+);
+
+it('contains an adapter planner that fails after preparation during inspect', async () => {
+  const root = await createProject();
+  let planCalls = 0;
+  const adapter: TargetAdapter = Object.freeze({
+    ...syntheticAdapter,
+    plan: (model: NormalizedPlugin) => {
+      planCalls += 1;
+      if (planCalls > 1) throw hostileAdapterError();
+      return syntheticPlan(model);
+    },
+    validateModel: () => [],
+  });
+  const registry = new TargetRegistry().register(adapter, { default: true });
+  try {
+    await writeFile(join(root, 'agent-bundle.config.ts'), [
+      'export default {',
+      "  plugin: { name: 'inspection-planner', version: '1.0.0' },",
+      "  synthetic: { enabled: true },",
+      "  targets: ['synthetic'],",
+      '};',
+      '',
+    ].join('\n'));
+
+    const result = await inspect({ registry, root });
+
+    expect(result).toMatchObject({
+      diagnostics: [expect.objectContaining({
+        code: 'AB7001',
+        message: 'Unable to prepare inspection plans.',
+        recovery: expect.any(String),
+      })],
+      plans: [],
+      state: 'invalid',
+    });
+    expect(JSON.stringify(result)).not.toContain('hostile adapter error was stringified');
+    expect('model' in result).toBe(false);
+    expect('projectContext' in result).toBe(false);
+    expect(Object.isFrozen(result)).toBe(true);
+    expect(Object.isFrozen(result.diagnostics)).toBe(true);
+  } finally {
+    await rm(join(root, '..'), { force: true, recursive: true });
+  }
+});
+
+it('returns an invalid inspection for selected targets outside the normalized project', async () => {
+  const root = await createProject();
+  try {
+    const valid = await inspect({ root, target: 'codex' });
+    expect(valid).toMatchObject({ plans: [expect.objectContaining({ target: 'codex' })], state: 'ready' });
+
+    for (const target of ['portable', 'codec']) {
+      const invalid = await inspect({ root, target });
+      expect(invalid).toMatchObject({
+        diagnostics: [expect.objectContaining({
+          code: 'AB7004',
+          recovery: expect.any(String),
+          severity: 'error',
+          target,
+        })],
+        plans: [],
+        state: 'invalid',
+      });
+      expect('model' in invalid).toBe(false);
+      expect('projectContext' in invalid).toBe(false);
+      expect(Object.isFrozen(invalid)).toBe(true);
+      expect(Object.isFrozen(invalid.diagnostics)).toBe(true);
+      expect(Object.isFrozen(invalid.plans)).toBe(true);
+    }
   } finally {
     await rm(join(root, '..'), { force: true, recursive: true });
   }
@@ -296,7 +491,7 @@ it('keeps one supplied registry through advanced artifact, hook, and MCP operati
 it('prepares a factory-configured project into a frozen inspection and build result', async () => {
   const root = await createProject();
   try {
-    const inspection = await inspect({ root, targets: ['portable'] });
+    const inspection = await readyInspection({ root, targets: ['portable'] });
 
     expect(inspection.model).toMatchObject({
       metadata: { name: 'api-fixture' },
@@ -506,7 +701,7 @@ it('normalizes named top-level scripts with stable IDs, modes, and sorted target
   ]);
 
   try {
-    const result = await inspect({ root });
+    const result = await readyInspection({ root });
 
     expect(result.model.scripts).toEqual([
       {
