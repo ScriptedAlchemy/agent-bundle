@@ -657,6 +657,7 @@ it('awaits a delayed real lease release before reporting a one-slot teardown ack
   });
 
   const acknowledgment = service.receive(preview.binding.id, { id: 'teardown-delayed-release', jsonrpc: '2.0', result: {} });
+  const duplicateAcknowledgment = service.receive(preview.binding.id, { id: 'teardown-delayed-release', jsonrpc: '2.0', result: {} });
   let acknowledged = false;
   void acknowledgment.then(() => {
     acknowledged = true;
@@ -667,6 +668,7 @@ it('awaits a delayed real lease release before reporting a one-slot teardown ack
   expect(service.get(preview.binding.id)).toBe(preview);
   releaseComplete.resolve();
   await expect(acknowledgment).resolves.toBe(true);
+  await expect(duplicateAcknowledgment).resolves.toBe(false);
   expect(releases).toBe(1);
   expect(preview.bridge.lifecycle).toBe('closed');
   expect(service.get(preview.binding.id)).toBeUndefined();
@@ -691,7 +693,11 @@ it('reports a real failed one-slot teardown release as retryable before force cl
     method: 'ui/resource-teardown',
   });
 
-  await expect(service.receive(preview.binding.id, { id: 'teardown-failed-release', jsonrpc: '2.0', result: {} })).resolves.toBe(true);
+  const acknowledgment = service.receive(preview.binding.id, { id: 'teardown-failed-release', jsonrpc: '2.0', result: {} });
+  const duplicateAcknowledgment = service.receive(preview.binding.id, { id: 'teardown-failed-release', jsonrpc: '2.0', result: {} });
+
+  await expect(acknowledgment).resolves.toBe(true);
+  await expect(duplicateAcknowledgment).resolves.toBe(false);
 
   expect(releases).toBe(1);
   expect(preview.bridge.lifecycle).toBe('closing');

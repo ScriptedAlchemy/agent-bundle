@@ -91,6 +91,7 @@ interface PreviewEntry {
   preview?: McpAppPreview;
   readonly outbound: McpAppBridgeMessage[];
   pendingTeardown?: McpAppBridgeMessage;
+  teardownAckAccepted: boolean;
   actionCount: number;
   closePromise?: Promise<void>;
   closing: boolean;
@@ -275,6 +276,7 @@ export class McpAppPreviewService {
         outbound,
         outboundBytes: 0,
         tail: Promise.resolve(),
+        teardownAckAccepted: false,
       };
       entryRef.current = entry;
       control.entry = entry;
@@ -322,8 +324,11 @@ export class McpAppPreviewService {
     }
     entry.actionCount += 1;
     return this.#serialize(entry, async () => {
+      if (entry.closed || this.#entries.get(bindingId) !== entry || entry.teardownAckAccepted) return false;
       const accepted = await entry.bridge.receive(action);
-      const close = accepted ? entry.closePromise : undefined;
+      const acknowledged = accepted && entry.closing;
+      if (acknowledged) entry.teardownAckAccepted = true;
+      const close = acknowledged ? entry.closePromise : undefined;
       if (close !== undefined) await close.catch(() => undefined);
       return accepted;
     }).finally(() => {
