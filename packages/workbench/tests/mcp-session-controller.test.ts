@@ -366,3 +366,172 @@ it('reports a terminal trace stream EOF as an explicit controller error instead 
   }]);
   await controller.close();
 });
+
+it('admits one opening session and disposes that exact client and transport when connection fails', async () => {
+  const connecting = deferred<void>();
+  const events: string[] = [];
+  let clients = 0;
+  let transports = 0;
+  const routes: McpSessionControllerRoutes = {
+    catalog: async () => ({ prompts: [], resourceTemplates: [], resources: [], tools: [] }),
+    config: async () => ({ launch: { args: [], command: 'node', env: {}, kind: 'stdio' }, origin: 'artifact' }),
+    restart: async () => connection,
+    stream: async () => new Response(null),
+    trace: async () => ({ entries: [] }),
+  };
+  const controller = createMcpSessionController({
+    clientFactory: () => {
+      clients += 1;
+      if (clients > 1) throw new Error('A second client must not be created.');
+      return {
+        close: async () => { events.push('client.close'); },
+        connect: async () => connecting.promise,
+        request: async () => undefined,
+      };
+    },
+    routes,
+    transportFactory: () => {
+      transports += 1;
+      if (transports > 1) throw new Error('A second transport must not be created.');
+      return {
+        close: async () => { events.push('transport.close'); },
+        session: Object.freeze({ binding, connection, id: 'session-weather' }),
+        start: async () => undefined,
+      };
+    },
+  });
+
+  const opening = controller.open(binding);
+  await expect(controller.open(binding)).rejects.toThrow('MCP session controller is already open.');
+  expect({ clients, transports }).toEqual({ clients: 1, transports: 1 });
+
+  connecting.reject(new Error('connect failed'));
+  await expect(opening).rejects.toThrow('connect failed');
+  expect(events).toEqual(['client.close', 'transport.close']);
+});
+
+it('rejects a concurrent restart so a late result cannot overwrite the admitted refresh', async () => {
+  const stream = traceStream();
+  const firstRestart = deferred<typeof connection>();
+  let restartCalls = 0;
+  const routes: McpSessionControllerRoutes = {
+    catalog: async () => ({ prompts: [], resourceTemplates: [], resources: [], tools: [] }),
+    config: async () => ({ launch: { args: [], command: 'node', env: {}, kind: 'stdio' }, origin: 'artifact' }),
+    restart: async () => {
+      restartCalls += 1;
+      return restartCalls === 1 ? firstRestart.promise : connection;
+    },
+    stream: async () => stream.response,
+    trace: async () => ({ entries: [] }),
+  };
+  const controller = createMcpSessionController({ clientFactory: fakeClient, routes, transportFactory: fakeTransport });
+  await controller.open(binding);
+
+  const restarting = controller.restart();
+  await eventually(() => restartCalls === 1);
+  await expect(controller.restart()).rejects.toThrow('MCP session controller is restarting.');
+  expect(restartCalls).toBe(1);
+
+  firstRestart.resolve(connection);
+  await restarting;
+  expect(controller.model.phase).toBe('ready');
+
+  stream.close();
+  await controller.close();
+});
+
+it('gates post-close operations before their routes or client calls and drains active request and trace work first', async () => {
+  const releaseRequest = deferred<void>();
+  const stream = traceStream();
+  const events: string[] = [];
+  let requestCalls = 0;
+  let restartCalls = 0;
+  const routes: McpSessionControllerRoutes = {
+    catalog: async () => ({ prompts: [], resourceTemplates: [], resources: [], tools: [] }),
+    config: async () => ({ launch: { args: [], command: 'node', env: {}, kind: 'stdio' }, origin: 'artifact' }),
+    restart: async () => {
+      restartCalls += 1;
+      return connection;
+    },
+    stream: async (_id, _after, signal) => {
+      signal?.addEventListener('abort', () => {
+        events.push('trace.abort');
+        stream.close();
+      }, { once: true });
+      return stream.response;
+    },
+    trace: async () => ({ entries: [] }),
+  };
+  const transport: McpSessionControllerTransport = {
+    close: async () => { events.push('transport.close'); },
+    session: Object.freeze({ binding, connection, id: 'session-weather' }),
+    start: async () => undefined,
+  };
+  const client: McpSessionControllerClient = {
+    close: async () => { events.push('client.close'); },
+    connect: async (next) => next.start(),
+    request: async (_request, options) => {
+      requestCalls += 1;
+      if (requestCalls > 1) throw new Error('A post-close client call must not occur.');
+      return new Promise<unknown>((_resolve, reject) => {
+        options?.signal?.addEventListener('abort', () => {
+          events.push('request.abort');
+          void releaseRequest.promise.then(() => reject(new DOMException('Aborted', 'AbortError')));
+        }, { once: true });
+      });
+    },
+  };
+  const controller = createMcpSessionController({ clientFactory: () => client, routes, transportFactory: () => transport });
+  await controller.open(binding);
+  const active = controller.invoke({ id: 'active-1', operation: 'listTools', request: {} });
+  await eventually(() => controller.model.activeRequests['active-1'] !== undefined);
+
+  const closing = controller.close();
+  await eventually(() => events.includes('request.abort') && events.includes('trace.abort'));
+  await expect(controller.invoke({ id: 'late-1', operation: 'listTools', request: {} })).rejects.toThrow('MCP session controller is closing.');
+  await expect(controller.restart()).rejects.toThrow('MCP session controller is closing.');
+  await expect(controller.open(binding)).rejects.toThrow('MCP session controller is closing.');
+  expect({ requestCalls, restartCalls }).toEqual({ requestCalls: 1, restartCalls: 0 });
+  expect(events).toEqual(['trace.abort', 'request.abort']);
+
+  releaseRequest.resolve();
+  await expect(active).rejects.toMatchObject({ name: 'AbortError' });
+  await closing;
+  expect(events).toEqual(['trace.abort', 'request.abort', 'client.close', 'transport.close']);
+});
+
+it('buffers live trace frames until a delayed restart snapshot supplies the missing cursor', async () => {
+  const stream = traceStream();
+  const delayedSnapshot = deferred<Readonly<{ readonly entries: readonly unknown[] }>>();
+  let traceCalls = 0;
+  const routes: McpSessionControllerRoutes = {
+    catalog: async () => ({ prompts: [], resourceTemplates: [], resources: [], tools: [] }),
+    config: async () => ({ launch: { args: [], command: 'node', env: {}, kind: 'stdio' }, origin: 'artifact' }),
+    restart: async () => connection,
+    stream: async () => stream.response,
+    trace: async (_id, after) => {
+      traceCalls += 1;
+      return after === 0
+        ? { entries: [{ kind: 'logging', occurredAt: 1, payload: { message: 'one' }, sequence: 1 }] }
+        : delayedSnapshot.promise;
+    },
+  };
+  const controller = createMcpSessionController({ clientFactory: fakeClient, routes, transportFactory: fakeTransport });
+  await controller.open(binding);
+
+  const restarting = controller.restart();
+  await eventually(() => traceCalls === 2);
+  stream.send({ kind: 'logging', occurredAt: 3, payload: { message: 'three' }, sequence: 3 });
+  delayedSnapshot.resolve({ entries: [{ kind: 'logging', occurredAt: 2, payload: { message: 'two' }, sequence: 2 }] });
+  await restarting;
+
+  expect(controller.model.logs).toEqual([
+    { kind: 'logging', occurredAt: 1, payload: { message: 'one' }, sequence: 1 },
+    { kind: 'logging', occurredAt: 2, payload: { message: 'two' }, sequence: 2 },
+    { kind: 'logging', occurredAt: 3, payload: { message: 'three' }, sequence: 3 },
+  ]);
+  expect(controller.model.diagnostics).not.toContainEqual(expect.objectContaining({ code: 'mcp.trace.gap-required' }));
+
+  stream.close();
+  await controller.close();
+});

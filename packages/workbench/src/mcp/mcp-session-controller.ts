@@ -86,6 +86,17 @@ export class McpSessionControllerError extends Error {
 
 interface ActiveRequest {
   readonly abort: AbortController;
+  readonly settled: Promise<void>;
+  settle(): void;
+}
+
+type ControllerState = 'closed' | 'closing' | 'failed' | 'idle' | 'opening' | 'ready' | 'restarting';
+
+type TraceMessage = McpSessionTraceEntry | McpSessionTraceReplayGap;
+
+interface TraceRefresh {
+  readonly generation: number;
+  readonly live: TraceMessage[];
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -165,6 +176,18 @@ const traceOverflow = (value: unknown): McpSessionTraceReplayGap | undefined => 
   };
 };
 
+const isReplayGap = (entry: TraceMessage): entry is McpSessionTraceReplayGap =>
+  'type' in entry && entry.type === 'replay.gap';
+
+const traceCursor = (entry: TraceMessage): number =>
+  isReplayGap(entry) ? entry.latestDroppedSequence : entry.sequence;
+
+const activeRequest = (): ActiveRequest => {
+  let settle: () => void = () => undefined;
+  const settled = new Promise<void>((resolve) => { settle = resolve; });
+  return { abort: new AbortController(), settle, settled };
+};
+
 const requestFor = (
   operation: McpSessionControllerOperation,
   params: Readonly<Record<string, unknown>>,
@@ -217,8 +240,11 @@ export class McpSessionController {
   #generation = 0;
   #model = createMcpBrowserSessionModel('mcp-session-controller');
   #requests = new Map<string, ActiveRequest>();
+  #traceRefresh: TraceRefresh | undefined;
   #session: McpRouteSession | undefined;
+  #state: ControllerState = 'idle';
   #traceAbort: AbortController | undefined;
+  #traceTask: Promise<void> | undefined;
   #transport: McpSessionControllerTransport | undefined;
 
   constructor(options: McpSessionControllerOptions) {
@@ -243,7 +269,9 @@ export class McpSessionController {
 
   async open(binding: McpSessionControllerBinding): Promise<McpBrowserSessionModel> {
     if (!isBinding(binding)) throw new McpSessionControllerError('MCP session binding must contain only epochId, target, and serverName.');
-    if (this.#session !== undefined || this.#closing) throw new McpSessionControllerError('MCP session controller is already open.');
+    if (this.#state === 'closing') throw new McpSessionControllerError('MCP session controller is closing.');
+    if (this.#state !== 'idle') throw new McpSessionControllerError('MCP session controller is already open.');
+    this.#state = 'opening';
     const generation = ++this.#generation;
     const requested = Object.freeze({ ...binding });
     const transport = this.#transportFactory({ binding: requested, routes: this.#routes });
@@ -261,17 +289,20 @@ export class McpSessionController {
       this.#session = session;
       this.#model = createMcpBrowserSessionModel(session.id);
       this.#publish({ binding: requested, type: 'open' });
+      this.#watchTransport(transport, generation);
       await this.#refresh(session.connection, generation);
       return this.#model;
     } catch (reason) {
-      if (this.#current(generation)) this.#publish({ diagnostic: diagnosticFor('mcp.connect.failed', reason), type: 'failed' });
+      if (this.#current(generation)) await this.#failSession(generation, client, transport, 'mcp.connect.failed', reason);
       throw reason;
     }
   }
 
   async restart(): Promise<McpBrowserSessionModel> {
+    this.#assertReady('restart');
     const session = this.#requireSession();
     const generation = this.#generation;
+    this.#state = 'restarting';
     this.#publish({ type: 'restart' });
     try {
       const connection = await this.#routes.restart(session.id);
@@ -279,7 +310,7 @@ export class McpSessionController {
       await this.#refresh(connection, generation);
       return this.#model;
     } catch (reason) {
-      if (this.#current(generation)) this.#publish({ diagnostic: diagnosticFor('mcp.restart.failed', reason), type: 'failed' });
+      if (this.#current(generation)) await this.#failSession(generation, this.#client, this.#transport, 'mcp.restart.failed', reason);
       throw reason;
     }
   }
@@ -289,6 +320,7 @@ export class McpSessionController {
   }
 
   async replay(input: McpSessionControllerReplay): Promise<unknown> {
+    this.#assertReady('invoke');
     const original = this.history.find((entry) => entry.id === input.invocationId);
     if (original === undefined) {
       const error = new McpSessionControllerError(`MCP invocation ${JSON.stringify(input.invocationId)} is not available for replay.`);
@@ -318,57 +350,61 @@ export class McpSessionController {
 
   async close(): Promise<void> {
     if (this.#closePromise !== undefined) return this.#closePromise;
+    this.#state = 'closing';
     this.#closing = true;
     this.#generation += 1;
     this.#publish({ type: 'close' });
-    this.#traceAbort?.abort();
-    for (const active of this.#requests.values()) active.abort.abort();
     const client = this.#client;
     const transport = this.#transport;
-    this.#closePromise = (async () => {
-      try {
-        await client?.close();
-      } catch (reason) {
-        this.#publish({ diagnostic: diagnosticFor('mcp.close.client', reason), type: 'failed' });
-      }
-      try {
-        await transport?.close();
-      } catch (reason) {
-        this.#publish({ diagnostic: diagnosticFor('mcp.close.transport', reason), type: 'failed' });
-      } finally {
-        this.#client = undefined;
-        this.#session = undefined;
-        this.#transport = undefined;
-        this.#traceAbort = undefined;
-        this.#requests.clear();
-        this.#publish({ type: 'closed' });
-      }
-    })();
+    this.#closePromise = this.#drainResources(client, transport).then(() => {
+      this.#clearResources(client, transport);
+      this.#state = 'closed';
+      this.#publish({ type: 'closed' });
+    });
     return this.#closePromise;
   }
 
   async #refresh(connection: McpRouteConnection, generation: number): Promise<void> {
     const session = this.#requireSession();
     const after = this.#model.timeline.lastSequence;
+    const refresh: TraceRefresh = { generation, live: [] };
+    this.#traceRefresh = refresh;
     this.#publish({ connection: connectionFor(connection), type: 'connection' });
-    const trace = this.#routes.trace(session.id, after).then((next) => {
+    try {
+      const trace = this.#routes.trace(session.id, after).then((next) => {
+        const overflow = traceOverflow(next.overflow);
+        const snapshot = Object.freeze([
+          ...(overflow === undefined ? [] : [overflow]),
+          ...next.entries.map(traceEntry),
+        ]);
+        if (this.#current(generation)) this.#publishTrace(snapshot);
+        return snapshot;
+      });
+      const [catalog, config] = await Promise.all([
+        this.#routes.catalog(session.id),
+        this.#routes.config(session.id),
+        trace,
+      ]);
       if (!this.#current(generation)) return;
-      const overflow = traceOverflow(next.overflow);
-      if (overflow !== undefined) this.#publish({ entry: overflow, type: 'trace' });
-      for (const entry of next.entries.map(traceEntry)) this.#publish({ entry, type: 'trace' });
-    });
-    const [catalog, config] = await Promise.all([
-      this.#routes.catalog(session.id),
-      this.#routes.config(session.id),
-    ]);
-    await trace;
-    if (!this.#current(generation)) return;
-    this.#publish(
-      { catalogs: catalog, type: 'catalogs' },
-      { config: config as McpSessionInspectorConfig, type: 'config' },
-    );
-    this.#publish({ type: 'ready' });
-    if (this.#traceAbort === undefined) void this.#subscribeTrace(session.id, generation);
+      this.#publishTrace(refresh.live);
+      this.#traceRefresh = undefined;
+      this.#publish(
+        { catalogs: catalog, type: 'catalogs' },
+        { config: config as McpSessionInspectorConfig, type: 'config' },
+      );
+      if (!this.#current(generation)) return;
+      this.#state = 'ready';
+      this.#publish({ type: 'ready' });
+      if (this.#traceAbort === undefined) {
+        const task = this.#subscribeTrace(session.id, generation);
+        this.#traceTask = task;
+        void task.finally(() => {
+          if (this.#traceTask === task) this.#traceTask = undefined;
+        });
+      }
+    } finally {
+      if (this.#traceRefresh === refresh) this.#traceRefresh = undefined;
+    }
   }
 
   async #subscribeTrace(sessionId: string, generation: number): Promise<void> {
@@ -409,11 +445,96 @@ export class McpSessionController {
   }
 
   #receiveTrace(entry: McpSessionTraceEntry | McpSessionTraceReplayGap, generation: number): void {
-    if (this.#current(generation)) this.#publish({ entry, type: 'trace' });
+    if (!this.#current(generation)) return;
+    if (this.#traceRefresh?.generation === generation) {
+      this.#traceRefresh.live.push(entry);
+      return;
+    }
+    this.#publishTrace([entry]);
   }
 
   #current(generation: number): boolean {
     return !this.#closing && this.#generation === generation;
+  }
+
+  #assertReady(action: 'invoke' | 'restart'): void {
+    if (this.#state === 'closing') throw new McpSessionControllerError('MCP session controller is closing.');
+    if (this.#state === 'restarting') throw new McpSessionControllerError('MCP session controller is restarting.');
+    if (this.#state === 'opening') throw new McpSessionControllerError('MCP session controller is opening.');
+    if (this.#state !== 'ready') throw new McpSessionControllerError(`MCP session controller cannot ${action} while ${this.#state}.`);
+  }
+
+  #publishTrace(entries: readonly TraceMessage[]): void {
+    const ordered = [...entries].sort((left, right) => traceCursor(left) - traceCursor(right));
+    for (const entry of ordered) {
+      const cursor = traceCursor(entry);
+      if (cursor <= this.#model.timeline.lastSequence) continue;
+      this.#publish({ entry, type: 'trace' });
+    }
+  }
+
+  #watchTransport(transport: McpSessionControllerTransport, generation: number): void {
+    const onclose = transport.onclose;
+    const onerror = transport.onerror;
+    transport.onerror = (reason) => {
+      onerror?.(reason);
+      void this.#failSession(generation, transport === this.#transport ? this.#client : undefined, transport, 'mcp.transport.error', reason);
+    };
+    transport.onclose = () => {
+      onclose?.();
+      void this.#failSession(
+        generation,
+        transport === this.#transport ? this.#client : undefined,
+        transport,
+        'mcp.transport.closed',
+        new McpSessionControllerError('Foreground MCP transport closed unexpectedly.'),
+      );
+    };
+  }
+
+  async #failSession(
+    generation: number,
+    client: McpSessionControllerClient | undefined,
+    transport: McpSessionControllerTransport | undefined,
+    code: string,
+    reason: unknown,
+  ): Promise<void> {
+    if (!this.#current(generation)) return;
+    this.#state = 'failed';
+    this.#generation += 1;
+    this.#publish({ diagnostic: diagnosticFor(code, reason), type: 'failed' });
+    if (this.#state === 'closing') return;
+    await this.#drainResources(client, transport);
+    this.#clearResources(client, transport);
+  }
+
+  async #drainResources(
+    client: McpSessionControllerClient | undefined,
+    transport: McpSessionControllerTransport | undefined,
+  ): Promise<void> {
+    this.#traceAbort?.abort();
+    const active = [...this.#requests.values()];
+    for (const request of active) request.abort.abort();
+    await Promise.allSettled([
+      ...active.map((request) => request.settled),
+      ...(this.#traceTask === undefined ? [] : [this.#traceTask]),
+    ]);
+    await Promise.allSettled([client?.close(), transport?.close()]);
+  }
+
+  #clearResources(
+    client: McpSessionControllerClient | undefined,
+    transport: McpSessionControllerTransport | undefined,
+  ): void {
+    if (this.#client === client) this.#client = undefined;
+    if (this.#transport === transport) this.#transport = undefined;
+    if (this.#client === undefined && this.#transport === undefined) {
+      this.#binding = undefined;
+      this.#session = undefined;
+      this.#traceAbort = undefined;
+      this.#traceTask = undefined;
+      this.#requests.clear();
+    }
   }
 
   #publish(...events: readonly McpBrowserSessionEvent[]): void {
@@ -440,6 +561,7 @@ export class McpSessionController {
   }
 
   async #runInvocation(input: McpSessionControllerRequest, replayOf?: string): Promise<unknown> {
+    this.#assertReady('invoke');
     const client = this.#requireClient();
     this.#requireSession();
     if (!isRecord(input.request) || typeof input.id !== 'string' || input.id.length === 0) {
@@ -453,11 +575,11 @@ export class McpSessionController {
       this.#publish({ diagnostic: diagnosticFor('mcp.operation.unsupported', reason), type: 'failed' });
       throw reason;
     }
-    const abort = new AbortController();
-    const onAbort = () => abort.abort(input.signal?.reason);
+    const active = activeRequest();
+    const onAbort = () => active.abort.abort(input.signal?.reason);
     input.signal?.addEventListener('abort', onAbort, { once: true });
     if (input.signal?.aborted) onAbort();
-    this.#requests.set(input.id, { abort });
+    this.#requests.set(input.id, active);
     this.#publish({
       request: {
         id: input.id,
@@ -469,7 +591,7 @@ export class McpSessionController {
       type: 'request.start',
     });
     try {
-      const result = await client.request(operation, { signal: abort.signal });
+      const result = await client.request(operation, { signal: active.abort.signal });
       if (!this.#closing) this.#publish({ completedAt: Date.now(), id: input.id, result, type: 'request.settled' });
       return result;
     } catch (reason) {
@@ -478,6 +600,7 @@ export class McpSessionController {
     } finally {
       input.signal?.removeEventListener('abort', onAbort);
       this.#requests.delete(input.id);
+      active.settle();
     }
   }
 }
