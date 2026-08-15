@@ -9,6 +9,10 @@ import {
   type ForegroundCoordinator,
   type WorkbenchAssetSource,
 } from './foreground-server.ts';
+import { McpAppBindingService, type McpAppToolDefinition } from './mcp-app-binding-service.ts';
+import type { McpAppRoutePreviewService } from './mcp-app-routes.ts';
+import { McpAppPreviewService } from './mcp-app-preview-service.ts';
+import { createMcpAppSandboxProxy, type McpAppSandboxProxy } from './mcp-app-sandbox.ts';
 import { McpSessionService } from './mcp-session-service.ts';
 import { ProjectService } from './project-service.ts';
 import { SkillDocumentService } from './skill-document-service.ts';
@@ -29,7 +33,7 @@ interface Closeable {
 
 export interface DevServerLifecycleCloseFailure {
   readonly error: unknown;
-  readonly resource: 'coordinator' | 'mcp-sessions';
+  readonly resource: 'coordinator' | 'mcp-apps' | 'mcp-sessions';
 }
 
 /** Reports session and coordinator cleanup failures without hiding either resource. */
@@ -54,28 +58,131 @@ export interface StartDevServerOptions {
   readonly root: string;
 }
 
+interface McpAppLifecycleCloseFailure {
+  readonly error: unknown;
+  readonly resource: 'previews' | 'sandbox';
+}
+
+class McpAppLifecycleCloseError extends Error {
+  readonly failures: readonly McpAppLifecycleCloseFailure[];
+
+  constructor(failures: readonly McpAppLifecycleCloseFailure[]) {
+    super('MCP Apps could not close every lifecycle resource.');
+    this.name = 'McpAppLifecycleCloseError';
+    this.failures = Object.freeze([...failures]);
+  }
+}
+
+class McpAppLifecycle implements Closeable {
+  readonly #sandbox: McpAppSandboxProxy;
+  #closePromise: Promise<void> | undefined;
+  #previews: McpAppPreviewService | undefined;
+
+  constructor(sandbox: McpAppSandboxProxy) {
+    this.#sandbox = sandbox;
+  }
+
+  attach(previews: McpAppPreviewService): void {
+    if (this.#previews !== undefined) throw new Error('MCP App previews are already attached.');
+    this.#previews = previews;
+  }
+
+  close(): Promise<void> {
+    this.#closePromise ??= this.#close();
+    return this.#closePromise;
+  }
+
+  async #close(): Promise<void> {
+    const preview = this.#previews === undefined
+      ? undefined
+      : await Promise.allSettled([this.#previews.closeAll()]);
+    const sandbox = await Promise.allSettled([this.#sandbox.close()]);
+    const failures: McpAppLifecycleCloseFailure[] = [
+      ...(preview?.flatMap((result) => result.status === 'rejected'
+        ? [Object.freeze({ error: result.reason, resource: 'previews' as const })]
+        : []) ?? []),
+      ...sandbox.flatMap((result) => result.status === 'rejected'
+        ? [Object.freeze({ error: result.reason, resource: 'sandbox' as const })]
+        : []),
+    ];
+    if (failures.length > 0) throw new McpAppLifecycleCloseError(failures);
+  }
+}
+
+/** Connects foreground-owned App routes after the listener reveals its loopback origin. */
+class DeferredMcpAppPreviewService implements McpAppRoutePreviewService {
+  #service: McpAppRoutePreviewService | undefined;
+
+  attach(service: McpAppRoutePreviewService): void {
+    if (this.#service !== undefined) throw new Error('MCP App preview route service is already attached.');
+    this.#service = service;
+  }
+
+  get(bindingId: string) {
+    return this.#service?.get(bindingId);
+  }
+
+  create(options: Parameters<McpAppRoutePreviewService['create']>[0]) {
+    return this.#active().create(options);
+  }
+
+  forceClose(bindingId: string) {
+    return this.#active().forceClose(bindingId);
+  }
+
+  receive(bindingId: string, action: unknown) {
+    return this.#active().receive(bindingId, action);
+  }
+
+  takeOutbound(bindingId: string) {
+    return this.#active().takeOutbound(bindingId);
+  }
+
+  close(bindingId: string, options: Parameters<McpAppRoutePreviewService['close']>[1]) {
+    return this.#active().close(bindingId, options);
+  }
+
+  #active(): McpAppRoutePreviewService {
+    if (this.#service === undefined) throw new Error('MCP App preview service is not ready.');
+    return this.#service;
+  }
+}
+
 /** Closes persistent MCP state alongside the coordinator, preserving all cleanup failures. */
 export const closeDevServerLifecycle = async (
   mcpSessions: Closeable,
   coordinator: Closeable,
+  mcpApps?: Closeable,
 ): Promise<void> => {
-  const results = await Promise.allSettled([mcpSessions.close(), coordinator.close()]);
-  const failures = results.flatMap((result, index): readonly DevServerLifecycleCloseFailure[] =>
+  const appResults = mcpApps === undefined ? [] : await Promise.allSettled([mcpApps.close()]);
+  const sessionResults = await Promise.allSettled([mcpSessions.close()]);
+  const coordinatorResults = await Promise.allSettled([coordinator.close()]);
+  const failures = [
+    ...appResults.flatMap((result): readonly DevServerLifecycleCloseFailure[] =>
+      result.status === 'rejected'
+        ? [Object.freeze({ error: result.reason, resource: 'mcp-apps' as const })]
+        : [],
+    ),
+    ...sessionResults.flatMap((result): readonly DevServerLifecycleCloseFailure[] =>
+      result.status === 'rejected'
+        ? [Object.freeze({ error: result.reason, resource: 'mcp-sessions' as const })]
+        : [],
+    ),
+    ...coordinatorResults.flatMap((result): readonly DevServerLifecycleCloseFailure[] =>
     result.status === 'rejected'
-      ? [Object.freeze({
-        error: result.reason,
-        resource: index === 0 ? 'mcp-sessions' : 'coordinator',
-      })]
+      ? [Object.freeze({ error: result.reason, resource: 'coordinator' as const })]
       : [],
-  );
+    ),
+  ];
   if (failures.length > 0) throw new DevServerLifecycleCloseError(failures);
 };
 
 const withMcpSessionLifecycle = (
   coordinator: DevCoordinator,
   mcpSessions: McpSessionService,
+  mcpApps: () => Closeable | undefined,
 ): ForegroundCoordinator => Object.freeze({
-  close: () => closeDevServerLifecycle(mcpSessions, coordinator),
+  close: () => closeDevServerLifecycle(mcpSessions, coordinator, mcpApps()),
   rebuild: (invalidation: Invalidation) => coordinator.rebuild(invalidation),
   start: () => coordinator.start(),
   status: () => coordinator.status(),
@@ -103,15 +210,48 @@ export const startDevServer = async (options: StartDevServerOptions): Promise<De
   const projectService = new ProjectService({ root });
   const coordinator = new DevCoordinator({ epochStore, eventHub, projectService, root });
   const mcpSessions = new McpSessionService({ epochStore, projectRoot: root });
+  const appPreviews = new DeferredMcpAppPreviewService();
+  let mcpApps: McpAppLifecycle | undefined;
   const foreground = await startForegroundServer({
     assets: options.assets ?? createWorkbenchAssetSource(),
-    coordinator: withMcpSessionLifecycle(coordinator, mcpSessions),
+    coordinator: withMcpSessionLifecycle(coordinator, mcpSessions, () => mcpApps),
     eventHub,
+    mcpAppPreviews: appPreviews,
     mcpSessions,
     port: options.port,
     skillDocuments: new SkillDocumentService({ epochStore, projectService, root }),
   });
   try {
+    const sandbox = await createMcpAppSandboxProxy({ hostOrigin: foreground.url });
+    mcpApps = new McpAppLifecycle(sandbox);
+    const bindings = new McpAppBindingService({ sessionAuthority: mcpSessions });
+    const previews = new McpAppPreviewService({
+      bindingAuthority: bindings,
+      hostInfo: { name: 'agent-bundle', version: '0.1.0' },
+      hostOrigin: foreground.url,
+      sandboxProxy: sandbox,
+      toolAuthority: {
+        resolveTool: async (sessionId, toolName): Promise<McpAppToolDefinition> => {
+          const session = mcpSessions.get(sessionId);
+          if (session === undefined) throw new Error(`Unknown MCP App session ${JSON.stringify(sessionId)}.`);
+          const tools = await session.listTools();
+          const tool = tools.find((candidate) => candidate.name === toolName);
+          if (tool === undefined) throw new Error(`Unknown MCP App tool ${JSON.stringify(toolName)}.`);
+          const metadata = tool._meta as Readonly<Record<string, unknown>> | undefined;
+          const ui = metadata?.ui as Readonly<Record<string, unknown>> | undefined;
+          const resourceUri = ui?.resourceUri;
+          if (typeof resourceUri !== 'string') {
+            throw new Error(`MCP App tool ${JSON.stringify(toolName)} lacks a standard _meta.ui.resourceUri.`);
+          }
+          return Object.freeze({
+            _meta: Object.freeze({ ui: Object.freeze({ resourceUri }) }),
+            name: tool.name,
+          });
+        },
+      },
+    });
+    mcpApps.attach(previews);
+    appPreviews.attach(previews);
     if (options.open === true) await (options.openBrowser ?? openInBrowser)(foreground.url);
   } catch (error) {
     await foreground.close();
