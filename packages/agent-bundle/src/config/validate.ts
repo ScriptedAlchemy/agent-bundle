@@ -15,6 +15,7 @@ import type {
 import type { DiscoveredProject } from './discover.ts';
 import type { LoadedConfig } from './load.ts';
 import type { SkillDocument } from './skill.ts';
+import { validateAgentSkillsFrontmatter } from '../schemas/agent-skills/contract.ts';
 
 const sourceDiagnostic = (
   code: string,
@@ -684,23 +685,15 @@ const referencedResources = (body: string): string[] => {
 const validateSkill = (skill: SkillDocument): Diagnostic[] => {
   const diagnostics = [...skill.diagnostics];
   const name = skill.frontmatter.name;
-  const description = skill.frontmatter.description;
 
-  if (typeof name !== 'string' || name.trim().length === 0) {
-    diagnostics.push(
-      sourceDiagnostic('AB4002', 'Skill frontmatter must define a nonempty name.', skill.source),
+  diagnostics.push(...validateAgentSkillsFrontmatter(skill.frontmatter).map((issue) => {
+    const location = issue.field ?? (issue.instancePath === '' ? 'root' : issue.instancePath);
+    return sourceDiagnostic(
+      issue.field === 'name' ? 'AB4002' : issue.field === 'description' ? 'AB4003' : 'AB4007',
+      `Skill frontmatter ${location} ${issue.message}.`,
+      skill.source,
     );
-  }
-
-  if (typeof description !== 'string' || description.trim().length === 0) {
-    diagnostics.push(
-      sourceDiagnostic(
-        'AB4003',
-        'Skill frontmatter must define a nonempty description.',
-        skill.source,
-      ),
-    );
-  }
+  }));
 
   if (typeof name === 'string' && name !== basename(skill.dir)) {
     diagnostics.push(

@@ -337,6 +337,45 @@ it('reports stable source diagnostics for malformed and conflicting Skills', () 
   });
 });
 
+it('maps pinned Agent Skills schema issues to stable source diagnostics without duplicates', () => {
+  const root = '/workspace/project';
+  const document = skill(root, 'review-tools', 'Review-tools', {
+    description: ' \t ',
+  });
+  document.frontmatter.unknown = true;
+
+  expect(validateSource(
+    loadedProject({ plugin: { name: 'review-tools', version: '1.0.0' } }),
+    { skills: [document] },
+    registry,
+  )).toEqual([
+    {
+      code: 'AB4007',
+      message: 'Skill frontmatter unknown must NOT have additional properties.',
+      severity: 'error',
+      sourcePath: document.source,
+    },
+    {
+      code: 'AB4003',
+      message: 'Skill frontmatter description must match pattern "\\S".',
+      severity: 'error',
+      sourcePath: document.source,
+    },
+    {
+      code: 'AB4002',
+      message: 'Skill frontmatter name must match pattern "^[a-z0-9]+(?:-[a-z0-9]+)*$".',
+      severity: 'error',
+      sourcePath: document.source,
+    },
+    {
+      code: 'AB4004',
+      message: 'Skill name "Review-tools" must match directory "review-tools".',
+      severity: 'error',
+      sourcePath: document.source,
+    },
+  ]);
+});
+
 it('diagnoses a missing plugin object instead of throwing', () => {
   const loaded = loadedProject({} as AgentBundleConfig);
 

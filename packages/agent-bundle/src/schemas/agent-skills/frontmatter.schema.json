@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-bundle.dev/schemas/agent-skills/69ef37e9424c0a7ea9dd2293b559e43ec8176379/frontmatter.schema.json",
+  "title": "Agent Skills frontmatter",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "allowed-tools": {
+      "type": "string"
+    },
+    "compatibility": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500
+    },
+    "description": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "\\S"
+    },
+    "license": {
+      "type": "string"
+    },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+    }
+  },
+  "required": [
+    "name",
+    "description"
+  ]
+}

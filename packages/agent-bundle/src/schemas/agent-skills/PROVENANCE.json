@@ -1,0 +1,23 @@
+{
+  "derivedSchema": {
+    "bytes": 923,
+    "path": "frontmatter.schema.json",
+    "sha256": "6d06b61e423317421de2295ea1fd0c7b4491bfa36c5b7705c28616dfe76d4047"
+  },
+  "normativeTextWinsOnConflict": true,
+  "referenceValidator": {
+    "bytes": 5154,
+    "path": "skills-ref/src/skills_ref/validator.py",
+    "sha256": "b5ee3d8537c83c959c31c2cb080a5227646ede5aea545f1ac835ed3c4645f6c5",
+    "url": "https://raw.githubusercontent.com/agentskills/agentskills/69ef37e9424c0a7ea9dd2293b559e43ec8176379/skills-ref/src/skills_ref/validator.py"
+  },
+  "retrievedAt": "2026-08-15",
+  "sourceRevision": "69ef37e9424c0a7ea9dd2293b559e43ec8176379",
+  "specification": {
+    "bytes": 7166,
+    "path": "docs/specification.mdx",
+    "sha256": "b9079c0c10b7930e8c6a20ff2bc10cda2a3343c55185120e3f1116a1a529b220",
+    "url": "https://raw.githubusercontent.com/agentskills/agentskills/69ef37e9424c0a7ea9dd2293b559e43ec8176379/docs/specification.mdx"
+  },
+  "validation": "The derived JSON Schema is validated locally with Ajv. Runtime validation never downloads schemas or invokes the reference validator."
+}
