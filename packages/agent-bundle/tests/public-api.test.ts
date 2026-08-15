@@ -17,9 +17,11 @@ import {
 import { runCli } from '../src/cli.ts';
 import { writeManifest } from '../src/build/emit.ts';
 import type {
+  AgentBundleConfig as ConfigEntryAgentBundleConfig,
   AgentBundleDevConfig,
   AgentBundleDevRuntimeConfig,
 } from '../src/config/index.ts';
+import { defineConfig as defineConfigFromConfigEntry } from '../src/config/index.ts';
 import type {
   CreateDevRuntimeProvider,
   DevRuntimeProvider,
@@ -58,6 +60,15 @@ it('preserves a synchronous config and exposes opaque path tokens', () => {
     pluginData: 'agent-bundle:path:plugin-data',
     workspaceRoot: 'agent-bundle:path:workspace-root',
   });
+});
+
+it('exposes the same typed config factory from the config entrypoint', () => {
+  const config = {
+    plugin: { name: 'config-entrypoint', version: '1.0.0' },
+  } satisfies ConfigEntryAgentBundleConfig;
+
+  expect(defineConfigFromConfigEntry).toBe(defineConfig);
+  expect(defineConfigFromConfigEntry(config)).toBe(config);
 });
 
 it('exposes an optional author-facing development runtime declaration', () => {
@@ -129,10 +140,11 @@ it('publishes directly executable built entrypoints with declarations', async ()
   const distFiles = await readdir(join(packageRoot, 'dist'));
   expect(distFiles.filter((file) => file.endsWith('.js')).every((file) => !/-[a-f0-9]{8,}\.js$/i.test(file))).toBe(true);
 
-  await expect(import('agent-bundle')).resolves.toBeDefined();
+  const rootEntrypoint = await import('agent-bundle');
   await expect(import('agent-bundle/api')).resolves.toBeDefined();
-  await expect(import('agent-bundle/config')).resolves.toBeDefined();
+  const configEntrypoint = await import('agent-bundle/config');
   await expect(import('agent-bundle/eval')).resolves.toBeDefined();
+  expect(configEntrypoint.defineConfig).toBe(rootEntrypoint.defineConfig);
 
   const binPath = join(packageRoot, manifest.bin['agent-bundle']);
   const binSource = await readFile(binPath, 'utf8');
@@ -167,9 +179,37 @@ it('imports the externalized config entry from a packed npm consumer', async () 
       execFile(process.execPath, [
         '--input-type=module',
         '--eval',
-        "await import('agent-bundle/config');",
+        [
+          "import { defineConfig as rootDefineConfig } from 'agent-bundle';",
+          "import { defineConfig } from 'agent-bundle/config';",
+          'if (defineConfig !== rootDefineConfig) throw new Error(\'config factory identity mismatch\');',
+        ].join('\n'),
       ], { cwd: consumerRoot }),
     ).resolves.toMatchObject({ stderr: '', stdout: '' });
+    await symlink(
+      join(workspaceRoot, 'node_modules', '@types'),
+      join(consumerRoot, 'node_modules', '@types'),
+      'dir',
+    );
+    await writeFile(join(consumerRoot, 'config.mts'), [
+      "import { defineConfig, type AgentBundleConfig } from 'agent-bundle/config';",
+      '',
+      'const config = {',
+      "  plugin: { name: 'packed-config-types', version: '1.0.0' },",
+      '} satisfies AgentBundleConfig;',
+      '',
+      'void defineConfig(config);',
+      '',
+    ].join('\n'));
+    await expect(execFile(join(workspaceRoot, 'node_modules', '.bin', 'tsc'), [
+      '--module', 'nodenext',
+      '--moduleResolution', 'nodenext',
+      '--noEmit',
+      '--strict',
+      '--target', 'es2022',
+      '--types', 'node',
+      'config.mts',
+    ], { cwd: consumerRoot })).resolves.toMatchObject({ stderr: '', stdout: '' });
   } finally {
     await rm(consumerRoot, { force: true, recursive: true });
   }

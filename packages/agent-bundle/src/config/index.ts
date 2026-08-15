@@ -1,4 +1,5 @@
 export { discoverProject } from './discover.ts';
+export { defineConfig } from '../core/types.ts';
 export type { DiscoveredProject } from './discover.ts';
 export { loadConfig } from './load.ts';
 export type { LoadedConfig, LoadConfigOptions } from './load.ts';
