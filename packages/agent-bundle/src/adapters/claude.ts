@@ -3,7 +3,7 @@ import addFormats from 'ajv-formats';
 
 import { stableJson } from '../core/digest.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
-import { unsupportedMcpTransportDiagnostic } from '../core/mcp-transport.ts';
+import { readMcpTransport, unsupportedMcpTransportDiagnostic } from '../core/mcp-transport.ts';
 import {
   pathTokens,
   type AgentBundleConfig,
@@ -160,10 +160,11 @@ const headerKeyDiagnostic = (key: string): Diagnostic | undefined =>
 const planMcpServer = (
   server: NormalizedMcpServer,
 ): { readonly diagnostics: readonly Diagnostic[]; readonly value?: Record<string, unknown> } => {
-  const transportDiagnostic = unsupportedMcpTransportDiagnostic(server);
+  const transport = readMcpTransport(server);
+  const transportDiagnostic = unsupportedMcpTransportDiagnostic(server, transport);
   if (transportDiagnostic !== undefined) return { diagnostics: [transportDiagnostic] };
   const diagnostics: Diagnostic[] = [];
-  if (server.transport === 'stdio') {
+  if (transport === 'stdio') {
     if (server.command === undefined) {
       diagnostics.push(errorDiagnostic('claude.mcp.command.required', `Claude MCP server "${server.name}" requires a command.`));
       return { diagnostics };

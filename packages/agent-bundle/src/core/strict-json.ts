@@ -56,6 +56,62 @@ const scanJsonValue = (bytes: string, index: number): number => {
   return cursor;
 };
 
+export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
+
+const snapshotJsonValue = (value: unknown, ancestors: Set<object>): JsonValue => {
+  if (value === null || typeof value === 'boolean' || typeof value === 'string') return value;
+  if (typeof value === 'number') {
+    if (Number.isFinite(value)) return value;
+    throw new TypeError('JSON values must be finite.');
+  }
+  if (typeof value !== 'object') throw new TypeError('JSON values must be primitives, arrays, or plain objects.');
+  if (ancestors.has(value)) throw new TypeError('JSON values must not be cyclic.');
+  ancestors.add(value);
+  try {
+    const descriptors = Object.getOwnPropertyDescriptors(value);
+    if (Array.isArray(value)) {
+      const length = descriptors.length;
+      if (length === undefined || !('value' in length) || !Number.isSafeInteger(length.value) || length.value < 0) {
+        throw new TypeError('JSON arrays must have a finite length.');
+      }
+      const values: JsonValue[] = [];
+      for (let index = 0; index < length.value; index += 1) {
+        const descriptor = descriptors[String(index)];
+        if (descriptor === undefined || !descriptor.enumerable || !('value' in descriptor)) {
+          throw new TypeError('JSON arrays must contain only enumerable data properties.');
+        }
+        values.push(snapshotJsonValue(descriptor.value, ancestors));
+      }
+      if (Reflect.ownKeys(descriptors).some((key) =>
+        key !== 'length' && (
+          typeof key !== 'string' ||
+          !/^(?:0|[1-9]\d*)$/u.test(key) ||
+          Number(key) >= length.value
+        ))) {
+        throw new TypeError('JSON arrays must not have extra properties.');
+      }
+      return values;
+    }
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) {
+      throw new TypeError('JSON objects must be plain objects.');
+    }
+    return Object.fromEntries(Reflect.ownKeys(descriptors).map((key) => {
+      if (typeof key !== 'string') throw new TypeError('JSON objects must not use symbol keys.');
+      const descriptor = descriptors[key];
+      if (descriptor === undefined || !descriptor.enumerable || !('value' in descriptor)) {
+        throw new TypeError('JSON objects must contain only enumerable data properties.');
+      }
+      return [key, snapshotJsonValue(descriptor.value, ancestors)];
+    }));
+  } finally {
+    ancestors.delete(value);
+  }
+};
+
+/** Detaches a finite JSON value without evaluating accessors or retaining hostile prototypes. */
+export const snapshotStrictJsonValue = (value: unknown): JsonValue => snapshotJsonValue(value, new Set<object>());
+
 /** Parses JSON only after rejecting duplicate object keys at every depth. */
 export const parseJsonWithoutDuplicateKeys = (bytes: string): unknown => {
   const end = skipWhitespace(bytes, scanJsonValue(bytes, 0));

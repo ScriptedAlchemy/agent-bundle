@@ -280,6 +280,89 @@ it.each([
   expect(schemaCalls).toBe(1);
 });
 
+it('uses one detached snapshot for both legacy-SSE policy and pinned schema validation', () => {
+  const document = { mcpServers: { events: { type: 'streamable-http' } } };
+  let schemaCalls = 0;
+  let schemaDocument: unknown;
+  const validate = validateModernMcpDocument((value) => {
+    schemaCalls += 1;
+    schemaDocument = value;
+    return (value as { readonly mcpServers: { readonly events: { readonly type: string } } })
+      .mcpServers.events.type === 'streamable-http'
+      ? []
+      : [{ instancePath: '/mcpServers/events/type', message: 'pinned schema saw legacy SSE' }];
+  });
+
+  expect(validate(document)).toEqual([]);
+  expect(schemaCalls).toBe(1);
+  expect(schemaDocument).not.toBe(document);
+  expect(schemaDocument).toEqual({ mcpServers: { events: { type: 'streamable-http' } } });
+});
+
+it('returns one frozen policy issue for unsupported MCP document values without invoking the schema', () => {
+  let accessorReads = 0;
+  const accessorDocument = Object.defineProperty({}, 'mcpServers', {
+    enumerable: true,
+    get: () => {
+      accessorReads += 1;
+      return { events: { type: accessorReads === 1 ? 'streamable-http' : 'sse' } };
+    },
+  });
+  const cyclic: { self?: unknown } = {};
+  cyclic.self = cyclic;
+  const documents = [
+    Object.create({ mcpServers: { events: { type: 'streamable-http' } } }),
+    accessorDocument,
+    new Proxy({}, { ownKeys: () => { throw new Error('unreadable document'); } }),
+    Symbol('not-json'),
+    cyclic,
+    { mcpServers: { events: { timeout: Number.NaN, type: 'streamable-http' } } },
+  ];
+  const expected = [{
+    instancePath: '',
+    message: 'MCP document must be a detached finite JSON value.',
+  }];
+  let schemaCalls = 0;
+  const validate = validateModernMcpDocument(() => {
+    schemaCalls += 1;
+    return [];
+  });
+
+  for (const document of documents) {
+    const issues = validate(document);
+    expect(issues).toEqual(expected);
+    expect(Object.isFrozen(issues)).toBe(true);
+    expect(Object.isFrozen(issues[0])).toBe(true);
+  }
+  expect(accessorReads).toBe(0);
+  expect(schemaCalls).toBe(0);
+});
+
+it('delegates one safe snapshot of null-prototype MCP objects with an own __proto__ key', () => {
+  const servers = Object.create(null) as Record<string, unknown>;
+  Object.defineProperty(servers, '__proto__', {
+    enumerable: true,
+    value: Object.assign(Object.create(null), { type: 'streamable-http' }),
+  });
+  const document = Object.assign(Object.create(null), { mcpServers: servers });
+  let schemaCalls = 0;
+  let schemaDocument: unknown;
+  const validate = validateModernMcpDocument((value) => {
+    schemaCalls += 1;
+    schemaDocument = value;
+    return [];
+  });
+
+  expect(validate(document)).toEqual([]);
+  expect(schemaCalls).toBe(1);
+  expect(schemaDocument).not.toBe(document);
+  const snapshot = schemaDocument as { readonly mcpServers: Record<string, { readonly type: string }> };
+  expect(Object.getPrototypeOf(snapshot)).toBe(Object.prototype);
+  expect(Object.getPrototypeOf(snapshot.mcpServers)).toBe(Object.prototype);
+  expect(Object.prototype.hasOwnProperty.call(snapshot.mcpServers, '__proto__')).toBe(true);
+  expect(snapshot.mcpServers.__proto__).toEqual({ type: 'streamable-http' });
+});
+
 it('validates an emitted Skill and copied resources from the artifact only', async () => {
   const files = customSkillFiles(
     '[inline resource](resources/with%20space.md?download=1#section)\n\n[unescaped space resource](resources/with space.md)\n\n[reference resource][guide]\n\n[guide]: <resources/with space.md>\n\n[shortcut]\n\n[shortcut]: resources/with space.md\n',
