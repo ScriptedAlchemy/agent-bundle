@@ -1167,6 +1167,33 @@ const validateArtifactOwnership = (options: {
   return Object.freeze(diagnostics);
 };
 
+const validateArtifactStructure = (options: {
+  readonly changedFrom?: readonly ArtifactFile[];
+  readonly inspection: ArtifactInspection;
+  readonly manifest: ArtifactManifestV2;
+  readonly registry: TargetRegistry;
+}): readonly Diagnostic[] => {
+  const diagnostics: Diagnostic[] = [...filesystemDiagnostics(options.inspection.filesystem)];
+  if (!matchesManifestFileTable(options.inspection.files, options.manifest.files)) {
+    const changedPaths = options.changedFrom === undefined
+      ? []
+      : changedArtifactPaths(options.changedFrom, options.inspection.files);
+    if (changedPaths.length === 0) {
+      diagnostics.push(diagnostic('AB6004', 'Artifact files do not match the manifest.', artifactManifestName));
+    } else {
+      diagnostics.push(...changedPaths.map((path) =>
+        diagnostic('AB6004', `Artifact file changed during validation: ${JSON.stringify(path)}.`, path)));
+    }
+  }
+  diagnostics.push(...validateArtifactOwnership({
+    filesystem: options.inspection.filesystem,
+    files: options.inspection.files,
+    manifest: options.manifest,
+    registry: options.registry,
+  }));
+  return Object.freeze(diagnostics);
+};
+
 interface EmittedSkill {
   readonly name: string;
   readonly path: string;
@@ -1416,11 +1443,11 @@ export const validateArtifactWithSnapshot = async (
   } catch {
     return invalidArtifactSnapshot([diagnostic('AB6000', 'Artifact manifest is missing or cannot be read.', artifactManifestName)]);
   }
-  const structuralDiagnostics = filesystemDiagnostics(inspection.filesystem);
+  const initialFilesystemDiagnostics = filesystemDiagnostics(inspection.filesystem);
   const rootEntry = inspection.filesystem.entries.find((entry) => entry.path === '.');
   if (rootEntry !== undefined) {
     return invalidArtifactSnapshot([
-      ...structuralDiagnostics,
+      ...initialFilesystemDiagnostics,
       diagnostic('AB6000', 'Artifact root is not a readable directory.', artifactManifestName),
     ]);
   }
@@ -1428,7 +1455,7 @@ export const validateArtifactWithSnapshot = async (
   const manifestEntry = inspection.filesystem.entries.find((entry) => entry.path === artifactManifestName);
   if (manifestEntry !== undefined && manifestEntry.kind !== 'file') {
     return invalidArtifactSnapshot([
-      ...structuralDiagnostics,
+      ...initialFilesystemDiagnostics,
       diagnostic('AB6000', 'Artifact manifest is missing or cannot be read.', artifactManifestName),
     ]);
   }
@@ -1450,7 +1477,8 @@ export const validateArtifactWithSnapshot = async (
 
   const registry = context.registry ?? createDefaultRegistry();
   const runtimeEvidence = runtimeEvidenceBuilder();
-  const diagnostics: Diagnostic[] = [...structuralDiagnostics];
+  const initialStructuralDiagnostics = validateArtifactStructure({ inspection, manifest, registry });
+  const diagnostics: Diagnostic[] = [...initialStructuralDiagnostics];
   if (
     manifest.agentSkills.schemaSha256 !== agentSkillsSchemaRevision.schemaSha256 ||
     manifest.agentSkills.sourceRevision !== agentSkillsSchemaRevision.sourceRevision ||
@@ -1464,15 +1492,6 @@ export const validateArtifactWithSnapshot = async (
       artifactDiagnosticRecoveries.AB6008,
     ));
   }
-  if (!matchesManifestFileTable(inspection.files, manifest.files)) {
-    diagnostics.push(diagnostic('AB6004', 'Artifact files do not match the manifest.', artifactManifestName));
-  }
-  diagnostics.push(...validateArtifactOwnership({
-    filesystem: inspection.filesystem,
-    files: inspection.files,
-    manifest,
-    registry,
-  }));
   diagnostics.push(...await validateTargetContracts({
     artifactRoot: context.artifactRoot,
     files: inspection.files,
@@ -1522,13 +1541,15 @@ export const validateArtifactWithSnapshot = async (
     diagnostics.push(diagnostic('AB6001', 'Artifact manifest changed during validation.', artifactManifestName));
   }
   if (finalInspection !== undefined) {
-    const finalFilesystemDiagnostics = filesystemDiagnostics(finalInspection.filesystem).filter((entry) =>
-      !structuralDiagnostics.some((initial) =>
+    const finalStructuralDiagnostics = validateArtifactStructure({
+      changedFrom: inspection.files,
+      inspection: finalInspection,
+      manifest,
+      registry,
+    }).filter((entry) =>
+      !initialStructuralDiagnostics.some((initial) =>
         initial.code === entry.code && initial.generatedPath === entry.generatedPath));
-    diagnostics.push(...finalFilesystemDiagnostics);
-    for (const path of changedArtifactPaths(inspection.files, finalInspection.files)) {
-      diagnostics.push(diagnostic('AB6004', `Artifact file changed during validation: ${JSON.stringify(path)}.`, path));
-    }
+    diagnostics.push(...finalStructuralDiagnostics);
   }
   return diagnostics.length === 0
     ? validArtifactSnapshot(manifest, runtimeEvidence)
