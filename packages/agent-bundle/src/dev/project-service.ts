@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
-import { readFile, readdir, realpath } from 'node:fs/promises';
-import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { lstat, readFile, readdir, realpath } from 'node:fs/promises';
+import { isAbsolute, join, relative, resolve } from 'node:path';
 
 import { createDefaultRegistry, type TargetRegistry } from '../adapters/registry.ts';
 import { discoverProject } from '../config/discover.ts';
@@ -109,20 +109,39 @@ const isWithinOutputRoot = (source: string, outputRoot: string): boolean => {
   return path.length === 0 || (path !== '..' && !path.startsWith('../') && !isAbsolute(path));
 };
 
-const nearestExistingAncestor = async (path: string): Promise<string> => {
-  let candidate = path;
-  for (;;) {
+const isNotFound = (error: unknown): boolean =>
+  typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT';
+
+const physicalOutputRoot = async (
+  root: string,
+  outputRoot: string,
+  requestedOutputRoot: string,
+): Promise<string> => {
+  let physical = root;
+  const parts = relative(root, outputRoot).split('/');
+  for (let index = 0; index < parts.length; index += 1) {
+    const candidate = join(physical, parts[index]);
+    let entry;
     try {
-      return await realpath(candidate);
-    } catch (error: unknown) {
-      if (!(typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT')) {
-        throw error;
+      entry = await lstat(candidate);
+    } catch (error) {
+      if (!isNotFound(error)) throw error;
+      return join(physical, ...parts.slice(index));
+    }
+    if (entry.isSymbolicLink()) {
+      try {
+        physical = await realpath(candidate);
+      } catch {
+        throw new RangeError(`Configured output root ${JSON.stringify(requestedOutputRoot)} contains an unresolved symlink.`);
       }
-      const parent = dirname(candidate);
-      if (parent === candidate) throw error;
-      candidate = parent;
+    } else {
+      physical = candidate;
+    }
+    if (!isWithinOutputRoot(physical, root)) {
+      throw new RangeError(`Configured output root ${JSON.stringify(requestedOutputRoot)} is outside project root ${JSON.stringify(root)}.`);
     }
   }
+  return physical;
 };
 
 const resolveOutputRoots = async (
@@ -145,11 +164,7 @@ const resolveOutputRoots = async (
     if (canonicalOutputRoot === canonicalRoot) {
       throw new RangeError('Configured output root must not be the project root.');
     }
-    const ancestor = await nearestExistingAncestor(canonicalOutputRoot);
-    if (!isWithinOutputRoot(ancestor, canonicalRoot)) {
-      throw new RangeError(`Configured output root ${JSON.stringify(requestedOutputRoot)} is outside project root ${JSON.stringify(canonicalRoot)}.`);
-    }
-    return canonicalOutputRoot;
+    return physicalOutputRoot(canonicalRoot, canonicalOutputRoot, requestedOutputRoot);
   };
   const roots = await Promise.all((outputRoots ?? []).map(resolveOutputRoot));
   return Object.freeze([...new Set(roots)].sort((left, right) => left.localeCompare(right)));
