@@ -183,7 +183,7 @@ const snapshotSchemaIssues = (value: unknown): readonly TargetArtifactDocumentIs
   if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype || Object.hasOwn(value, 'then')) {
     return schemaValidationFailure();
   }
-  const descriptors = Object.getOwnPropertyDescriptors(value);
+  const descriptors = Object.getOwnPropertyDescriptors(value) as Record<string, PropertyDescriptor>;
   const length = descriptors.length;
   if (length === undefined || !('value' in length) || typeof length.value !== 'number') {
     return schemaValidationFailure();

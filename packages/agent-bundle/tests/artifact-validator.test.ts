@@ -343,11 +343,11 @@ it('validates a canonically rehashed Codex marketplace at its emitted path', asy
 
 const malformedValidator = (callback: () => unknown): TargetArtifactDocumentValidator => callback as never;
 
-const throwingArrayElement = (): readonly unknown[] => {
+const throwingArrayElement = (): unknown => {
   const issues: unknown[] = [];
   Object.defineProperty(issues, '0', {
     enumerable: true,
-    get: () => {
+    get: (): never => {
       throw new Error('issue element getter must not escape validation');
     },
   });
@@ -355,7 +355,7 @@ const throwingArrayElement = (): readonly unknown[] => {
   return issues;
 };
 
-const throwingIssueProperty = (): object => Object.defineProperties({}, {
+const throwingIssueProperty = (): unknown => Object.defineProperties({}, {
   instancePath: {
     enumerable: true,
     get: () => {
@@ -370,9 +370,9 @@ const throwingIssueProperty = (): object => Object.defineProperties({}, {
   },
 });
 
-const thenableArray = (): readonly unknown[] => Object.assign([], { then: () => undefined });
+const thenableArray = (): unknown => Object.assign([], { then: (): undefined => undefined });
 
-it.each([
+const malformedValidatorCases = [
   ['a null callback result', () => null],
   ['an array-like callback result', () => ({ 0: {}, length: 1 })],
   ['a thenable callback result', () => ({ then: () => undefined })],
@@ -384,7 +384,9 @@ it.each([
   ['a throwing callback', () => {
     throw new Error('validator callback must not escape artifact validation');
   }],
-] as const)('reports $0 through the stable schema diagnostic', async (_name, callback) => {
+] as const satisfies readonly (readonly [string, () => unknown])[];
+
+it.each(malformedValidatorCases)('reports $0 through the stable schema diagnostic', async (_name, callback) => {
   const files = [{ contents: '{"kind":"custom"}\n', kind: 'generated' as const, path: 'custom/document.json' }];
   const root = await writeArtifact(files, true, [customManifestTarget]);
 
