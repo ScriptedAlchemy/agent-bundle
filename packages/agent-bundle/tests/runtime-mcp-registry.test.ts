@@ -847,6 +847,110 @@ it('settles an aborted private activation preparation before registry close reso
   }
 });
 
+it('waits deferred public reconcile and restart replacement negotiation before closing late failed setup ownership', async () => {
+  const run = async (kind: 'reconcile' | 'restart'): Promise<void> => {
+    const fixture = await createGenerationStore();
+    const old = new TestConnection();
+    const replacement = deferred<RuntimeMcpConnection>();
+    let replacementCloseCalls = 0;
+    const failedReplacement = new TestConnection({
+      close: async () => {
+        replacementCloseCalls += 1;
+        throw new Error(`${kind} replacement cleanup failed`);
+      },
+      relist: async () => { throw new Error(`${kind} replacement relist failed`); },
+    });
+    let connects = 0;
+    const registry = createRegistry({
+      connector: Object.freeze({
+        connect: async () => {
+          connects += 1;
+          return connects === 1 ? old : replacement.promise;
+        },
+      }),
+      store: fixture.store,
+    });
+    try {
+      await fixture.commit('g1');
+      const session = await registry.open({ serverName: 'timeline', target: 'portable' });
+      const changing = kind === 'reconcile'
+        ? registry.reconcile(registryInput({ definitionDigest: 'definition-2' }))
+        : registry.restart({
+          expectedSessionRevision: session.snapshot().binding.sessionRevision,
+          sessionId: session.snapshot().binding.sessionId,
+        });
+      await new Promise<void>((resolve) => { setImmediate(resolve); });
+      expect(connects).toBe(2);
+      let closeSettled = false;
+      const closing = registry.close();
+      void closing.then(
+        () => { closeSettled = true; },
+        () => { closeSettled = true; },
+      );
+      await new Promise<void>((resolve) => { setImmediate(resolve); });
+      expect(closeSettled).toBe(false);
+
+      replacement.resolve(failedReplacement);
+      if (kind === 'reconcile') await expect(changing).rejects.toThrow('closed');
+      else await expect(changing).resolves.toMatchObject({ action: 'restart-failed' });
+      await expect(closing).rejects.toBeInstanceOf(RuntimeMcpRegistryCloseError);
+      expect(replacementCloseCalls).toBe(2);
+    } finally {
+      await registry.close().catch(() => undefined);
+      await fixture.close();
+    }
+  };
+
+  await run('reconcile');
+  await run('restart');
+});
+
+it('waits public closeSession and owned session close before closing their late orphan cleanup', async () => {
+  const run = async (kind: 'close-session' | 'owned-close'): Promise<void> => {
+    const fixture = await createGenerationStore();
+    const deferredClose = deferred<void>();
+    let closeCalls = 0;
+    const connection = new TestConnection({
+      close: async () => {
+        closeCalls += 1;
+        return deferredClose.promise;
+      },
+    });
+    const registry = createRegistry({ connector: scriptedConnector(connection), store: fixture.store });
+    try {
+      await fixture.commit('g1');
+      const session = await registry.open({ serverName: 'timeline', target: 'portable' });
+      const closingSession = kind === 'close-session'
+        ? registry.closeSession({
+          expectedSessionRevision: session.snapshot().binding.sessionRevision,
+          sessionId: session.snapshot().binding.sessionId,
+        })
+        : session.close();
+      await Promise.resolve();
+      expect(closeCalls).toBe(1);
+      let closeSettled = false;
+      const closing = registry.close();
+      void closing.then(
+        () => { closeSettled = true; },
+        () => { closeSettled = true; },
+      );
+      await new Promise<void>((resolve) => { setImmediate(resolve); });
+      expect(closeSettled).toBe(false);
+
+      deferredClose.reject(new Error(`${kind} cleanup failed`));
+      await expect(closingSession).rejects.toBeInstanceOf(RuntimeMcpRegistryCloseError);
+      await expect(closing).rejects.toBeInstanceOf(RuntimeMcpRegistryCloseError);
+      expect(closeCalls).toBe(2);
+    } finally {
+      await registry.close().catch(() => undefined);
+      await fixture.close();
+    }
+  };
+
+  await run('close-session');
+  await run('owned-close');
+});
+
 it('prepares private activation without public visibility, commits synchronously with buffered publish, and aborts without changes', async () => {
   const fixture = await createGenerationStore();
   const connector = connectorHarness({ deferAfter: 2 });

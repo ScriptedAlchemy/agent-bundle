@@ -302,6 +302,7 @@ export class RuntimeMcpRegistry implements DevRuntimeMcpRegistry {
   readonly #closeAbort = new AbortController();
   readonly #history: DevRuntimeMcpRegistryReconcileResult[] = [];
   readonly #opening = new Map<AbortController, Promise<void>>();
+  readonly #publicMutations = new Set<Promise<void>>();
   readonly #options: Required<Pick<RuntimeMcpRegistryOptions, 'createOperationId' | 'createSessionId'>> & RuntimeMcpRegistryOptions;
   readonly #sessions = new Map<string, SessionRecord>();
   readonly #subscriptions = new Set<Subscription>();
@@ -395,6 +396,7 @@ export class RuntimeMcpRegistry implements DevRuntimeMcpRegistry {
   async reconcile(input: DevRuntimeMcpRegistryReconcileInput): Promise<DevRuntimeMcpRegistryReconcileResult> {
     const frozen = freezeInput(input);
     const release = this.#reserve('public');
+    const settle = this.#trackPublicMutation();
     try {
       const current = this.#state;
       if (current === undefined) {
@@ -435,11 +437,13 @@ export class RuntimeMcpRegistry implements DevRuntimeMcpRegistry {
       return result;
     } finally {
       release();
+      settle();
     }
   }
 
   async restart(request: DevRuntimeMcpSessionControlRequest): Promise<DevRuntimeMcpRegistryReconcileResult> {
     const release = this.#reserve('public');
+    const settle = this.#trackPublicMutation();
     try {
       const current = this.#requireState();
       const record = this.#sessionForControl(request);
@@ -463,17 +467,20 @@ export class RuntimeMcpRegistry implements DevRuntimeMcpRegistry {
       }
     } finally {
       release();
+      settle();
     }
   }
 
   async closeSession(request: DevRuntimeMcpSessionControlRequest): Promise<void> {
     const release = this.#reserve('public');
+    const settle = this.#trackPublicMutation();
     try {
       const record = this.#sessionForControl(request);
       await this.#closeRecord(record, new Error('Runtime MCP session was closed.'));
       this.#sessions.delete(record.id);
     } finally {
       release();
+      settle();
     }
   }
 
@@ -687,6 +694,7 @@ export class RuntimeMcpRegistry implements DevRuntimeMcpRegistry {
   }
 
   async #closeAll(): Promise<void> {
+    await Promise.all([...this.#publicMutations]);
     const preparing = this.#preparingActivation?.settled;
     if (preparing !== undefined) await preparing;
     const prepared = [...this.#preparedActivations];
@@ -736,12 +744,14 @@ export class RuntimeMcpRegistry implements DevRuntimeMcpRegistry {
 
   async #closeOwned(record: SessionRecord): Promise<void> {
     const release = this.#reserve('public');
+    const settle = this.#trackPublicMutation();
     try {
       if (record.closed) return;
       await this.#closeRecord(record, new Error('Runtime MCP session was closed.'));
       this.#sessions.delete(record.id);
     } finally {
       release();
+      settle();
     }
   }
 
@@ -1104,6 +1114,19 @@ export class RuntimeMcpRegistry implements DevRuntimeMcpRegistry {
       if (released) return;
       released = true;
       if (this.#mutation === lane) this.#mutation = 'none';
+    };
+  }
+
+  #trackPublicMutation(): () => void {
+    let resolve!: () => void;
+    const settled = new Promise<void>((resolvePromise) => { resolve = resolvePromise; });
+    this.#publicMutations.add(settled);
+    let active = true;
+    return () => {
+      if (!active) return;
+      active = false;
+      this.#publicMutations.delete(settled);
+      resolve();
     };
   }
 
