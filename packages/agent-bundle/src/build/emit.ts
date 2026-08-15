@@ -15,23 +15,21 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { stableJson } from '../core/digest.ts';
 import { assertInside } from '../core/paths.ts';
 import type { TargetArtifactEntry } from '../adapters/types.ts';
+import {
+  assembleArtifactManifest,
+  parseArtifactManifest,
+  type ArtifactManifestFile,
+  type ArtifactManifestV2,
+} from './manifest.ts';
+import type { ArtifactOutputProvenance } from './provenance.ts';
 
-export interface ManifestFile {
+export type ManifestFile = ArtifactManifestFile;
+
+export interface ArtifactFile {
   readonly bytes: number;
-  /** POSIX permission bits for executable copied shell or Python scripts only. */
-  readonly mode?: number;
+  readonly mode: number;
   readonly path: string;
   readonly sha256: string;
-}
-
-export interface ArtifactFile extends ManifestFile {
-  readonly mode: number;
-}
-
-export interface ArtifactManifest {
-  readonly files: readonly ManifestFile[];
-  readonly targets: readonly string[];
-  readonly version: number;
 }
 
 export interface ArtifactHook {
@@ -50,13 +48,12 @@ export interface ArtifactHookIndex {
 }
 
 export const artifactHookIndexName = 'agent-bundle.hooks.json';
+export const artifactManifestName = 'agent-bundle.manifest.json';
 
 const normalizeRelativePath = (path: string): string => path.replaceAll('\\', '/');
 
-const executableCopiedScriptMode = (file: ArtifactFile): number | undefined =>
-  /(?:^|\/)scripts\/[^/]+\.(?:sh|bash|py)$/iu.test(file.path) && (file.mode & 0o111) !== 0
-    ? file.mode
-    : undefined;
+const executableFileMode = (file: ArtifactFile): number | undefined =>
+  (file.mode & 0o111) === 0 ? undefined : file.mode;
 
 const isMissing = (error: unknown): boolean =>
   typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT';
@@ -153,30 +150,69 @@ export const listArtifactFiles = async (
   return files;
 };
 
+export const createArtifactManifestFiles = (options: {
+  readonly files: readonly ArtifactFile[];
+  readonly outputProvenance: readonly ArtifactOutputProvenance[];
+}): readonly ArtifactManifestFile[] => {
+  const filesByPath = new Map<string, ArtifactFile>();
+  for (const file of options.files) {
+    if (file.path === artifactManifestName) {
+      throw new Error('Artifact manifest must not include itself in the file table.');
+    }
+    if (filesByPath.has(file.path)) {
+      throw new Error(`Artifact files contain duplicate path ${JSON.stringify(file.path)}.`);
+    }
+    filesByPath.set(file.path, file);
+  }
+
+  const provenanceByPath = new Map<string, ArtifactOutputProvenance>();
+  for (const provenance of options.outputProvenance) {
+    if (provenance.path === artifactManifestName) {
+      throw new Error('Output provenance must not include the artifact manifest.');
+    }
+    if (provenanceByPath.has(provenance.path)) {
+      throw new Error(`Output provenance contains duplicate path ${JSON.stringify(provenance.path)}.`);
+    }
+    provenanceByPath.set(provenance.path, provenance);
+  }
+
+  if (filesByPath.size !== provenanceByPath.size) {
+    throw new Error('Output provenance must contain exactly one record for every pre-manifest artifact file.');
+  }
+
+  const manifestFiles: ArtifactManifestFile[] = [];
+  for (const [path, file] of filesByPath) {
+    const provenance = provenanceByPath.get(path);
+    if (provenance === undefined) {
+      throw new Error('Output provenance must contain exactly one record for every pre-manifest artifact file.');
+    }
+    const mode = executableFileMode(file);
+    manifestFiles.push({
+      bytes: file.bytes,
+      kind: provenance.kind,
+      ...(mode === undefined ? {} : { mode }),
+      path,
+      sha256: file.sha256,
+      sourceInputs: provenance.sourceInputs,
+    });
+  }
+  for (const path of provenanceByPath.keys()) {
+    if (!filesByPath.has(path)) {
+      throw new Error('Output provenance must contain exactly one record for every pre-manifest artifact file.');
+    }
+  }
+
+  return Object.freeze(manifestFiles.sort((left, right) => left.path.localeCompare(right.path)));
+};
+
 export const writeManifest = async (options: {
   readonly artifactRoot: string;
-  readonly targets: readonly string[];
-}): Promise<ArtifactManifest> => {
-  const files = await listArtifactFiles(options.artifactRoot);
-  const manifest: ArtifactManifest = {
-    files: Object.freeze(files.map((file) => {
-      const mode = executableCopiedScriptMode(file);
-      return {
-        bytes: file.bytes,
-        ...(mode === undefined ? {} : { mode }),
-        path: file.path,
-        sha256: file.sha256,
-      };
-    })),
-    targets: Object.freeze([...options.targets].sort()),
-    version: 1,
-  };
-  await writeFile(
-    join(options.artifactRoot, 'agent-bundle.manifest.json'),
-    `${stableJson(manifest)}\n`,
-    'utf8',
-  );
-  return Object.freeze(manifest);
+  readonly manifest: ArtifactManifestV2;
+}): Promise<ArtifactManifestV2> => {
+  const assembled = assembleArtifactManifest(options.manifest);
+  const manifestPath = join(options.artifactRoot, artifactManifestName);
+  await writeFile(manifestPath, assembled.bytes, 'utf8');
+  return parseArtifactManifest(await readFile(manifestPath, 'utf8'));
 };
 
 export const writeHookIndex = async (options: {

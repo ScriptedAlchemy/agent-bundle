@@ -1,16 +1,16 @@
 import { readFile } from 'node:fs/promises';
-import { dirname, isAbsolute, posix, resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import { spawn } from 'node:child_process';
 
 import type { Diagnostic } from '../core/diagnostics.ts';
 import {
+  artifactManifestName,
   listArtifactFiles,
   type ArtifactFile,
-  type ArtifactManifest,
   type ManifestFile,
 } from './emit.ts';
+import { parseArtifactManifest, type ArtifactManifestV2 } from './manifest.ts';
 
-const manifestName = 'agent-bundle.manifest.json';
 const epochStagingMarkerName = '.agent-bundle-epoch-stage.json';
 
 export interface ValidateArtifactOptions {
@@ -25,13 +25,6 @@ const diagnostic = (code: string, message: string, generatedPath?: string): Diag
   message,
   severity: 'error',
 });
-
-const isSafeArtifactPath = (path: string): boolean =>
-  path.length > 0 &&
-  !isAbsolute(path) &&
-  path === posix.normalize(path) &&
-  path !== '..' &&
-  !path.startsWith('../');
 
 const checkJavaScriptSyntax = async (path: string): Promise<string | undefined> =>
   new Promise((resolvePromise) => {
@@ -57,9 +50,21 @@ const checkJavaScriptSyntax = async (path: string): Promise<string | undefined> 
 
 const sameFile = (left: ArtifactFile, right: ManifestFile): boolean =>
   left.bytes === right.bytes &&
-  (right.mode === undefined || left.mode === right.mode) &&
+  (right.mode === undefined ? (left.mode & 0o111) === 0 : left.mode === right.mode) &&
   left.path === right.path &&
   left.sha256 === right.sha256;
+
+const matchesManifestFileTable = (
+  files: readonly ArtifactFile[],
+  manifestFiles: readonly ManifestFile[],
+): boolean => {
+  if (files.length !== manifestFiles.length) return false;
+  const manifestFilesByPath = new Map(manifestFiles.map((file) => [file.path, file]));
+  return files.every((file) => {
+    const manifestFile = manifestFilesByPath.get(file.path);
+    return manifestFile !== undefined && sameFile(file, manifestFile);
+  });
+};
 
 const localMcpArgument = (value: unknown): string | undefined => {
   if (typeof value !== 'string') return undefined;
@@ -78,36 +83,6 @@ const localMcpPaths = (document: unknown): readonly string[] => {
   });
 };
 
-const parseManifest = (value: string): ArtifactManifest | undefined => {
-  try {
-    const parsed = JSON.parse(value) as Partial<ArtifactManifest>;
-    if (
-      parsed.version !== 1 ||
-      !Array.isArray(parsed.targets) ||
-      !Array.isArray(parsed.files) ||
-      !parsed.targets.every((target) => typeof target === 'string') ||
-      !parsed.files.every(
-        (file) =>
-          typeof file === 'object' &&
-          file !== null &&
-          typeof (file as ManifestFile).bytes === 'number' &&
-          ((file as ManifestFile).mode === undefined ||
-            (typeof (file as ManifestFile).mode === 'number' &&
-              Number.isInteger((file as ManifestFile).mode) &&
-              (file as ManifestFile).mode! >= 0 &&
-              (file as ManifestFile).mode! <= 0o777)) &&
-          typeof (file as ManifestFile).path === 'string' &&
-          typeof (file as ManifestFile).sha256 === 'string',
-      )
-    ) {
-      return undefined;
-    }
-    return parsed as ArtifactManifest;
-  } catch {
-    return undefined;
-  }
-};
-
 const isEpochStagingMarker = (value: string): boolean => {
   try {
     const marker: unknown = JSON.parse(value);
@@ -123,17 +98,7 @@ const isEpochStagingMarker = (value: string): boolean => {
   }
 };
 
-export const validateArtifact = async (context: ValidateArtifactOptions): Promise<readonly Diagnostic[]> => {
-  const manifestPath = resolve(context.artifactRoot, manifestName);
-  let manifest: ArtifactManifest | undefined;
-  try {
-    manifest = parseManifest(await readFile(manifestPath, 'utf8'));
-  } catch {
-    return [diagnostic('AB6000', 'Artifact manifest is missing or cannot be read.', manifestName)];
-  }
-  if (manifest === undefined) {
-    return [diagnostic('AB6001', 'Artifact manifest is not valid JSON with the required shape.', manifestName)];
-  }
+const artifactFiles = async (context: ValidateArtifactOptions): Promise<readonly ArtifactFile[]> => {
   let allowedEpochStagingMarker = false;
   if (context.allowEpochStagingMarker === true) {
     try {
@@ -144,32 +109,19 @@ export const validateArtifact = async (context: ValidateArtifactOptions): Promis
       allowedEpochStagingMarker = false;
     }
   }
-
-  const diagnostics: Diagnostic[] = [];
-  const manifestPaths = new Set<string>();
-  for (const file of manifest.files) {
-    if (!isSafeArtifactPath(file.path) || file.path === manifestName) {
-      diagnostics.push(diagnostic('AB6002', `Manifest contains an unsafe file path ${JSON.stringify(file.path)}.`, file.path));
-      continue;
-    }
-    if (manifestPaths.has(file.path)) {
-      diagnostics.push(diagnostic('AB6003', `Manifest lists ${JSON.stringify(file.path)} more than once.`, file.path));
-    }
-    manifestPaths.add(file.path);
-  }
-
-  const actualFiles = (await listArtifactFiles(context.artifactRoot)).filter(
-    (file) => file.path !== manifestName &&
+  return (await listArtifactFiles(context.artifactRoot)).filter(
+    (file) => file.path !== artifactManifestName &&
       !(allowedEpochStagingMarker && file.path === epochStagingMarkerName),
   );
-  if (
-    actualFiles.length !== manifest.files.length ||
-    actualFiles.some((file, index) => !sameFile(file, manifest.files[index]!))
-  ) {
-    diagnostics.push(diagnostic('AB6004', 'Artifact files do not match the manifest.', manifestName));
-  }
+};
 
-  for (const file of actualFiles.filter((entry) => entry.path.endsWith('.json'))) {
+export const validateArtifactFiles = async (
+  context: ValidateArtifactOptions,
+): Promise<readonly Diagnostic[]> => {
+  const files = await artifactFiles(context);
+  const diagnostics: Diagnostic[] = [];
+
+  for (const file of files.filter((entry) => entry.path.endsWith('.json'))) {
     try {
       const document = JSON.parse(await readFile(resolve(context.artifactRoot, file.path), 'utf8')) as unknown;
       for (const mcpPath of localMcpPaths(document)) {
@@ -188,12 +140,35 @@ export const validateArtifact = async (context: ValidateArtifactOptions): Promis
     }
   }
 
-  for (const file of actualFiles.filter((entry) => /\.(?:[cm]?js)$/u.test(entry.path))) {
+  for (const file of files.filter((entry) => /\.(?:[cm]?js)$/u.test(entry.path))) {
     const syntaxError = await checkJavaScriptSyntax(resolve(context.artifactRoot, file.path));
     if (syntaxError !== undefined) {
       diagnostics.push(diagnostic('AB6005', `Generated JavaScript has invalid syntax: ${syntaxError}`, file.path));
     }
   }
 
+  return Object.freeze(diagnostics);
+};
+
+export const validateArtifact = async (context: ValidateArtifactOptions): Promise<readonly Diagnostic[]> => {
+  const manifestPath = resolve(context.artifactRoot, artifactManifestName);
+  let manifest: ArtifactManifestV2;
+  try {
+    manifest = parseArtifactManifest(await readFile(manifestPath, 'utf8'));
+  } catch {
+    try {
+      await readFile(manifestPath, 'utf8');
+    } catch {
+      return [diagnostic('AB6000', 'Artifact manifest is missing or cannot be read.', artifactManifestName)];
+    }
+    return [diagnostic('AB6001', 'Artifact manifest is not a strict canonical v2 manifest.', artifactManifestName)];
+  }
+
+  const actualFiles = await artifactFiles(context);
+  const diagnostics: Diagnostic[] = [];
+  if (!matchesManifestFileTable(actualFiles, manifest.files)) {
+    diagnostics.push(diagnostic('AB6004', 'Artifact files do not match the manifest.', artifactManifestName));
+  }
+  diagnostics.push(...await validateArtifactFiles(context));
   return Object.freeze(diagnostics);
 };

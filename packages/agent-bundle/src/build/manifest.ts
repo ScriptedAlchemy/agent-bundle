@@ -147,7 +147,7 @@ const requireSortedUnique = <Value>(
   let previous: string | undefined;
   for (const value of values) {
     const key = keyFor(value);
-    if (previous !== undefined && previous >= key) {
+    if (previous !== undefined && previous.localeCompare(key) >= 0) {
       fail(`${location} must be sorted with no duplicate entries.`);
     }
     previous = key;

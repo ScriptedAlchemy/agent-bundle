@@ -4,8 +4,10 @@ import { basename, dirname, join, relative, resolve } from 'node:path';
 import type { TargetRegistry } from '../adapters/registry.ts';
 import type { TargetArtifactEntry } from '../adapters/types.ts';
 import { DiagnosticBag, DiagnosticError, type Diagnostic } from '../core/diagnostics.ts';
+import type { ProjectContext } from '../core/project-context.ts';
 import type { NormalizedPlugin } from '../core/types.ts';
 import { assertInside } from '../core/paths.ts';
+import { agentSkillsSchemaRevision } from '../schemas/agent-skills/contract.ts';
 import {
   compileEntries,
   compileHooks,
@@ -21,27 +23,30 @@ import { compileMcpApps, planCompiledMcpApps, type CompiledMcpApp } from './mcp-
 import {
   assertUniqueArtifactDestinations,
   artifactHookIndexName,
+  createArtifactManifestFiles,
   emitPlanEntries,
   listArtifactFiles,
   publishArtifact,
   resolveArtifactDestination,
   writeHookIndex,
   writeManifest,
-  type ArtifactManifest,
 } from './emit.ts';
+import type { ArtifactManifestV2 } from './manifest.ts';
 import {
   createOutputProvenance,
   type ArtifactOutputCandidate,
   type ArtifactOutputProvenance,
 } from './provenance.ts';
-import { validateArtifact } from './validate-artifact.ts';
+import { validateArtifact, validateArtifactFiles } from './validate-artifact.ts';
+
+declare const __AGENT_BUNDLE_VERSION__: string;
 
 export interface BuildResult {
   readonly compiledEntries: readonly CompiledEntry[];
   readonly compiledHooks: readonly CompiledHookEntry[];
   readonly compiledMcpApps: readonly CompiledMcpApp[];
   readonly compiledMcpEntries: readonly CompiledMcpEntry[];
-  readonly manifest: ArtifactManifest;
+  readonly manifest: ArtifactManifestV2;
   readonly outputProvenance: readonly ArtifactOutputProvenance[];
   readonly outputRoot: string;
 }
@@ -49,6 +54,7 @@ export interface BuildResult {
 export interface BuildOptions {
   readonly model: NormalizedPlugin;
   readonly outputRoot: string;
+  readonly projectContext: ProjectContext;
   readonly projectRoot: string;
   readonly registry: TargetRegistry;
 }
@@ -73,6 +79,7 @@ const planTargets = (options: BuildOptions): readonly PlannedTarget[] => {
 
   for (const target of options.model.targets) {
     const adapter = options.registry.get(target.name);
+    diagnostics.push(...adapter.validateModel(options.model));
     const plan = adapter.plan(options.model);
     diagnostics.push(...plan.diagnostics);
     planned.push({
@@ -169,19 +176,59 @@ const outputCandidatesFor = (options: {
   },
 ];
 
-const assertCompleteOutputProvenance = async (options: {
-  readonly artifactRoot: string;
+const assertOutputProvenanceSources = (options: {
   readonly outputProvenance: readonly ArtifactOutputProvenance[];
-}): Promise<void> => {
-  const files = await listArtifactFiles(options.artifactRoot);
-  const filePaths = new Set(files.map((file) => file.path));
-  const provenancePaths = options.outputProvenance.map((record) => record.path);
-  const provenancePathSet = new Set(provenancePaths);
-  const missing = files.filter((file) => !provenancePathSet.has(file.path)).map((file) => file.path);
-  const extra = provenancePaths.filter((path) => !filePaths.has(path));
-  if (missing.length > 0 || extra.length > 0 || provenancePathSet.size !== provenancePaths.length) {
-    throw new Error('Output provenance must contain exactly one record for every pre-manifest artifact file.');
+  readonly projectContext: ProjectContext;
+}): void => {
+  const declaredSources = new Set(options.projectContext.sourceInputs.map((input) => input.path));
+  for (const output of options.outputProvenance) {
+    for (const sourceInput of output.sourceInputs) {
+      if (!declaredSources.has(sourceInput)) {
+        throw new Error(`Output provenance source ${JSON.stringify(sourceInput)} is not declared in the project context.`);
+      }
+    }
   }
+};
+
+const manifestTargets = (
+  registry: TargetRegistry,
+  targets: readonly StagedTarget[],
+): ArtifactManifestV2['targets'] => Object.freeze(targets
+  .map(({ name }) => {
+    const metadata = registry.metadata(name);
+    return Object.freeze({
+      adapterRevision: metadata.adapterRevision,
+      capabilityRevision: metadata.capabilityRevision,
+      capabilitySha256: metadata.capabilitySha256,
+      name,
+      observedVersion: metadata.observedVersion,
+      schemas: Object.freeze(metadata.schemas
+        .map((schema) => Object.freeze({ ...schema }))
+        .sort((left, right) => left.name.localeCompare(right.name))),
+    });
+  })
+  .sort((left, right) => left.name.localeCompare(right.name)));
+
+const manifestFor = (options: {
+  readonly files: ArtifactManifestV2['files'];
+  readonly projectContext: ProjectContext;
+  readonly registry: TargetRegistry;
+  readonly targets: readonly StagedTarget[];
+}): ArtifactManifestV2 => {
+  const targets = manifestTargets(options.registry, options.targets);
+  return {
+    agentSkills: agentSkillsSchemaRevision,
+    files: options.files,
+    producer: { name: 'agent-bundle', version: __AGENT_BUNDLE_VERSION__ },
+    project: options.projectContext,
+    targets,
+    validation: {
+      artifact: { status: 'passed' },
+      source: { status: 'passed' },
+      targets: targets.map(({ name }) => ({ name, status: 'passed' })),
+    },
+    version: 2,
+  };
 };
 
 export const build = async (options: BuildOptions): Promise<BuildResult> => {
@@ -263,10 +310,23 @@ export const build = async (options: BuildOptions): Promise<BuildResult> => {
       }),
       projectRoot: options.projectRoot,
     });
-    await assertCompleteOutputProvenance({ artifactRoot: stageRoot, outputProvenance });
+    assertOutputProvenanceSources({ outputProvenance, projectContext: options.projectContext });
+    const files = createArtifactManifestFiles({
+      files: await listArtifactFiles(stageRoot),
+      outputProvenance,
+    });
+    const preManifestDiagnostics = await validateArtifactFiles({ artifactRoot: stageRoot });
+    if (preManifestDiagnostics.some((entry) => entry.severity === 'error')) {
+      throw new DiagnosticError(preManifestDiagnostics);
+    }
     const manifest = await writeManifest({
       artifactRoot: stageRoot,
-      targets: stagedTargets.map((target) => target.name),
+      manifest: manifestFor({
+        files,
+        projectContext: options.projectContext,
+        registry: options.registry,
+        targets: stagedTargets,
+      }),
     });
     const diagnostics = await validateArtifact({ artifactRoot: stageRoot });
     if (diagnostics.some((entry) => entry.severity === 'error')) {
