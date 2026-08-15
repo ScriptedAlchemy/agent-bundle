@@ -361,8 +361,9 @@ export const McpPage = ({ appPreviewClient, controller, epochOptions, initialBin
   const [appPreviewProfile, setAppPreviewProfile] = useState<McpAppPreviewProfile>('portable');
   const [appHost] = useState(browserMcpAppHost);
   const actionSession = useRef(createMcpPageActionSession());
+  const appPreviewClosePromise = useRef<Promise<void> | undefined>(undefined);
   const appPreviewController = useRef<McpAppPreviewController | undefined>(undefined);
-  const appPreviewGeneration = useRef(0);
+  const appPreviewOpenGeneration = useRef(0);
   const controllerIdentity = useRef(controller);
   const requestNumber = useRef(0);
   const traceTabsByName = useRef<Partial<Record<TraceTab, HTMLButtonElement | null>>>({});
@@ -385,40 +386,45 @@ export const McpPage = ({ appPreviewClient, controller, epochOptions, initialBin
   const setActiveAppPreviewController = useCallback((next: McpAppPreviewController | undefined): void => {
     appPreviewController.current = next;
   }, []);
-  const closeAppPreview = async (): Promise<void> => {
-    const generation = ++appPreviewGeneration.current;
+  const closeCurrentAppPreview = (): Promise<void> => {
+    if (appPreviewClosePromise.current !== undefined) return appPreviewClosePromise.current;
     const current = appPreviewController.current;
     appPreviewController.current = undefined;
     setAppPreviewBusy(true);
-    try {
-      await current?.close();
-    } finally {
-      if (appPreviewGeneration.current === generation) {
+    let close: Promise<void> | undefined;
+    close = (async (): Promise<void> => {
+      try {
+        await current?.close();
+      } finally {
+        if (close !== undefined && appPreviewClosePromise.current === close) {
+          appPreviewClosePromise.current = undefined;
         setAppPreview(undefined);
         setAppPreviewBusy(false);
+        }
       }
-    }
+    })();
+    appPreviewClosePromise.current = close;
+    return close;
+  };
+  const closeAppPreview = (): Promise<void> => {
+    appPreviewOpenGeneration.current += 1;
+    return closeCurrentAppPreview();
   };
   const openAppPreview = (source: McpPageAppPreviewSource, profile = appPreviewProfile): void => {
-    const generation = ++appPreviewGeneration.current;
-    const current = appPreviewController.current;
-    appPreviewController.current = undefined;
+    const generation = ++appPreviewOpenGeneration.current;
     setAppPreviewBusy(true);
-    void current?.close().catch(() => undefined).finally(() => {
-      if (appPreviewGeneration.current !== generation) return;
+    void closeCurrentAppPreview().catch(() => undefined).finally(() => {
+      if (appPreviewOpenGeneration.current !== generation) return;
       setAppPreviewProfile(profile);
       setAppPreview(source);
       setAppPreviewBusy(false);
     });
-    if (current === undefined) {
-      setAppPreviewProfile(profile);
-      setAppPreview(source);
-      setAppPreviewBusy(false);
-    }
   };
   useEffect(() => {
-    if (appPreview !== undefined && appPreview.sessionId !== model.sessionId) void closeAppPreview();
-  }, [appPreview?.sessionId, model.sessionId]);
+    if (appPreview !== undefined && (appPreview.sessionId !== model.sessionId || model.phase === 'closed' || model.phase === 'error')) {
+      void closeAppPreview();
+    }
+  }, [appPreview?.sessionId, model.phase, model.sessionId]);
 
   const nextRequestId = (): string => {
     requestNumber.current += 1;

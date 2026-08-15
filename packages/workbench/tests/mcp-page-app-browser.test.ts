@@ -105,7 +105,7 @@ const mountedPageFixture = async () => {
     '  subscribe(listener) { listeners.add(listener); listener(model); return () => listeners.delete(listener); },',
     '};',
     "createRoot(document.getElementById('root')).render(React.createElement(McpPage, { appPreviewClient: appClient, controller, epochOptions: ['epoch-1'], targetOptions: ['portable'] }));",
-    'globalThis.__mcpPageAppFixture = { stats: () => ({ closes: structuredClone(closes), controllerEvents: structuredClone(controllerEvents), creates: structuredClone(creates), messages: structuredClone(messages), sandboxOrigin }) };',
+    "globalThis.__mcpPageAppFixture = { stats: () => ({ closes: structuredClone(closes), controllerEvents: structuredClone(controllerEvents), creates: structuredClone(creates), messages: structuredClone(messages), sandboxOrigin }), terminateAndClickClose: (phase) => { model = { ...model, phase }; emit(); [...document.querySelectorAll('button')].find((button) => button.textContent === 'Close App preview')?.click(); } };",
   ].join('\n'));
   const rsbuild = await createRsbuild({
     config: {
@@ -220,16 +220,26 @@ describe('MCP App page browser integration', () => {
 
       await page.getByRole('button', { name: 'Open App preview for weather-call' }).click();
       await frame.waitFor();
-      await page.getByRole('button', { name: 'Close MCP session' }).click();
-      await page.waitForFunction(() => (globalThis as typeof globalThis & { __mcpPageAppFixture: { stats(): { controllerEvents: readonly { readonly appCloseCount?: number; readonly type: string }[] } } }).__mcpPageAppFixture.stats().controllerEvents.some(({ type }) => type === 'close'));
+      await page.evaluate(() => (globalThis as typeof globalThis & { __mcpPageAppFixture: { terminateAndClickClose(phase: 'error'): void } }).__mcpPageAppFixture.terminateAndClickClose('error'));
+      await page.waitForFunction(() => document.querySelector('iframe[title="MCP App preview: weather"]') === null);
+      expect(await page.locator('.mcp-page-phase').textContent()).toContain('Session error');
       const final = await page.evaluate(() => (globalThis as typeof globalThis & { __mcpPageAppFixture: { stats(): unknown } }).__mcpPageAppFixture.stats()) as {
         readonly closes: readonly unknown[];
-        readonly controllerEvents: readonly { readonly appCloseCount?: number; readonly type: string }[];
         readonly creates: readonly { readonly request: Readonly<Record<string, unknown>> }[];
       };
-      expect(final.controllerEvents.find(({ type }) => type === 'close')!.appCloseCount).toBe(final.closes.length);
+      expect(final.closes).toHaveLength(6);
       expect(final.creates.every(({ request }) => !Object.hasOwn(request, 'toolMetadata') && !Object.hasOwn(request, 'resourceUri'))).toBe(true);
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+
+      await page.goto(`${fixture.outerOrigin}/page.html`);
+      await page.waitForFunction(() => '__mcpPageAppFixture' in globalThis);
+      await page.getByRole('button', { name: 'Open App preview for weather-call' }).click();
+      await frame.waitFor();
+      await page.evaluate(() => (globalThis as typeof globalThis & { __mcpPageAppFixture: { terminateAndClickClose(phase: 'closed'): void } }).__mcpPageAppFixture.terminateAndClickClose('closed'));
+      await page.waitForFunction(() => document.querySelector('iframe[title="MCP App preview: weather"]') === null);
+      expect(await page.locator('.mcp-page-phase').textContent()).toContain('Session closed');
+      const closedTerminal = await page.evaluate(() => (globalThis as typeof globalThis & { __mcpPageAppFixture: { stats(): { closes: readonly unknown[] } } }).__mcpPageAppFixture.stats().closes);
+      expect(closedTerminal).toHaveLength(1);
       expect(pageErrors).toEqual([]);
     } finally {
       await browser.close();
