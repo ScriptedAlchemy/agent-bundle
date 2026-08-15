@@ -11,7 +11,10 @@ const vendorRoot = resolve(sourceRoot, 'inspector', 'vendor');
  * server. Production assets never proxy: they are served by that foreground
  * server directly from the published package.
  */
-export const createWorkbenchConfig = (apiProxyTarget = process.env.AGENT_BUNDLE_WORKBENCH_API_PROXY) => ({
+export const createWorkbenchConfig = (
+  apiProxyTarget = process.env.AGENT_BUNDLE_WORKBENCH_API_PROXY,
+  env = 'development',
+) => ({
   html: {
     template: resolve(import.meta.dirname, 'index.html'),
   },
@@ -38,10 +41,14 @@ export const createWorkbenchConfig = (apiProxyTarget = process.env.AGENT_BUNDLE_
     },
   },
   source: {
+    define: {
+      'process.env.NODE_ENV': JSON.stringify(env),
+    },
     entry: {
       'inspector-closure': resolve(sourceRoot, 'inspector-closure.tsx'),
       index: resolve(sourceRoot, 'main.tsx'),
     },
+    include: [/node_modules[\\/](?:react|react-dom|scheduler)[\\/]/],
   },
   ...(apiProxyTarget === undefined ? {} : {
     server: {
@@ -62,4 +69,4 @@ export const createWorkbenchConfig = (apiProxyTarget = process.env.AGENT_BUNDLE_
   },
 });
 
-export default defineConfig(createWorkbenchConfig());
+export default defineConfig(({ env }) => createWorkbenchConfig(undefined, env));
