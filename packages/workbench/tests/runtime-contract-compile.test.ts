@@ -28,6 +28,7 @@ import { McpProtocolEvidence, type McpProtocolEvidenceProps } from '../src/mcp/m
 import type { InspectorRuntimeEvidenceProps } from '../src/inspector/adapter/inspector-session-adapter-entry.ts';
 import { RuntimeClient, RuntimeClientError, type RuntimeBootstrap } from '../src/runtime-client.ts';
 import type { RuntimeInspectorProps } from '../src/runtime-inspector.tsx';
+import { createRuntimePlaygroundController, type RuntimePlaygroundProps } from '../src/runtime-playground.tsx';
 import {
   createRuntimeModel,
   effectFor,
@@ -206,6 +207,19 @@ const runtimeBootstrap = {
   surfaces: [surface],
 } satisfies RuntimeBootstrap;
 
+const runtimePlaygroundController = createRuntimePlaygroundController({
+  bootstrap: runtimeBootstrap,
+  client: {
+    bootstrap: async () => runtimeBootstrap,
+    createRun: async () => run,
+    readRun: async () => run,
+    replayRun: async () => run,
+    resetState: async () => state,
+  },
+  profiles,
+});
+const runtimePlaygroundProps: RuntimePlaygroundProps = { controller: runtimePlaygroundController };
+
 it('compiles RuntimeClient against the exact provider wire contract', () => {
   const foreground = new ForegroundRouteClient({ fetch: async () => Response.json(statusResponse) });
   const client: RuntimeClient = new RuntimeClient(foreground);
@@ -231,6 +245,8 @@ it('compiles RuntimeClient against the exact provider wire contract', () => {
     replay,
     reset,
     runtimeModel,
+    runtimePlaygroundController,
+    runtimePlaygroundProps,
     runResponse,
     runsResponse,
     stateResponse,

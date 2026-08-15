@@ -14,6 +14,7 @@ export default defineConfig({
     'packages/workbench/tests/runtime-client.test.ts',
     'packages/workbench/tests/runtime-contract-compile.test.ts',
     'packages/workbench/tests/runtime-model.test.ts',
+    'packages/workbench/tests/runtime-playground.test.ts',
   ],
   pool: { maxWorkers: 1 },
   testEnvironment: 'node',
