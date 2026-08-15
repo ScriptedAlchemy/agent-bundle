@@ -285,14 +285,23 @@ e2e('resets the selected Claude fixture to its seed without replacing prior runt
     expect(resetRequests).toEqual([]);
 
     await reset.click();
+    const resetResponse = page.waitForResponse((response) => {
+      const requestUrl = new URL(response.url());
+      return requestUrl.origin === fixture.url && requestUrl.pathname === '/api/runtime/state/reset' && response.request().method() === 'POST';
+    });
     await confirmation.getByRole('button', { name: 'Confirm' }).click();
-    await expect.poll(() => resetRequests).toEqual([{
+    await expect.poll(() => resetRequests, { timeout: browserTimeout }).toEqual([{
       expectedGenerationId: generationId,
       seed: claudeSeed,
       stateStoreId,
     }]);
-    await expect(page.locator('.runtime-status')).toBeFocused({ timeout: browserTimeout });
-    await expect(identity).toHaveAttribute('data-runtime-state-version', String(stateVersionBeforeReset + 1));
+    expect((await resetResponse).status()).toBe(200);
+    await expect(identity).toHaveAttribute('data-runtime-state-version', String(stateVersionBeforeReset + 1), { timeout: browserTimeout });
+    await expect.poll(async () => history.count(), { timeout: browserTimeout }).toBe(oldRunIds.length + 1);
+    await expect.poll(
+      async () => page.locator('.runtime-status').evaluate((element) => element.ownerDocument.activeElement === element),
+      { timeout: browserTimeout },
+    ).toBe(true);
 
     const historyAfterReset = await runtimeJson('/api/runtime/runs?limit=50') as Readonly<{
       readonly runs: readonly Readonly<{

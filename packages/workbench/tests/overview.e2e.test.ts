@@ -120,6 +120,7 @@ e2e('opens one real epoch MCP session and keeps its playground operations respon
       root: project.root,
     });
     const serverUrl = server.url;
+    const serverOrigin = new URL(serverUrl).origin;
     const artifact = server.status().artifact;
     if (artifact.state === 'missing') throw new Error('Expected an active fixture artifact epoch.');
     const epochId = artifact.activeEpoch.id;
@@ -131,9 +132,22 @@ e2e('opens one real epoch MCP session and keeps its playground operations respon
     const compiledEntry = manifest.mcpServers.fixture.args?.[0];
     if (compiledEntry === undefined) throw new Error('Expected the fixture MCP manifest to include its compiled entry.');
     const pageErrors: Error[] = [];
+    const artifactMcpSessionRequests: string[] = [];
+    const runtimeAssetRequests: string[] = [];
+    const runtimeMcpSessionRequests: string[] = [];
     page.on('pageerror', (error) => pageErrors.push(error));
+    page.on('request', (request) => {
+      const requestUrl = new URL(request.url());
+      if (requestUrl.origin !== serverOrigin) return;
+      if (requestUrl.pathname.startsWith('/api/mcp/sessions')) {
+        artifactMcpSessionRequests.push(`${request.method()} ${requestUrl.pathname}`);
+      }
+      if (requestUrl.pathname.startsWith('/api/runtime/assets/')) runtimeAssetRequests.push(requestUrl.pathname);
+      if (requestUrl.pathname.startsWith('/api/runtime/mcp/sessions')) runtimeMcpSessionRequests.push(requestUrl.pathname);
+    });
     await page.goto(`${serverUrl}#mcp`);
     await expect(page.getByRole('heading', { name: 'MCP playground' })).toBeVisible({ timeout: browserTimeout });
+    expect(await page.locator('a[href="#runtime"]').count()).toBe(0);
     await page.locator('#mcp-target').selectOption('portable');
     await page.locator('#mcp-server-name').fill('fixture');
     const opened = page.waitForResponse((response) =>
@@ -233,6 +247,10 @@ e2e('opens one real epoch MCP session and keeps its playground operations respon
     const reopenedSession = await (await reopened).json() as { readonly session: Readonly<{ readonly id: string }> };
     expect(reopenedSession.session.id).not.toBe(openedSession.session.id);
     await expect(page.locator('.mcp-page-phase')).toContainText('Session ready', { timeout: browserTimeout });
+    expect(artifactMcpSessionRequests).toContain('POST /api/mcp/sessions');
+    expect(artifactMcpSessionRequests.some((request) => request.startsWith('POST /api/mcp/sessions/'))).toBe(true);
+    expect(runtimeAssetRequests).toEqual([]);
+    expect(runtimeMcpSessionRequests).toEqual([]);
     await page.setViewportSize({ height: 844, width: 390 });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     expect(pageErrors).toEqual([]);
