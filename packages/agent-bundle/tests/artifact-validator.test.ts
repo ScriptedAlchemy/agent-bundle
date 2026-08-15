@@ -280,6 +280,133 @@ it.each([
   expect(schemaCalls).toBe(1);
 });
 
+it('passes one deeply frozen detached snapshot to the pinned schema', () => {
+  const document = {
+    mcpServers: { events: { headers: { accepted: ['application/json'] }, type: 'streamable-http' } },
+  };
+  let schemaCalls = 0;
+  let retainedSnapshot: unknown;
+  const validate = validateModernMcpDocument((value) => {
+    schemaCalls += 1;
+    const snapshot = value as {
+      mcpServers: { events: { headers: { accepted: string[] }; type: string } };
+    };
+    retainedSnapshot = snapshot;
+    expect(() => { snapshot.mcpServers.events.type = 'sse'; }).toThrow(TypeError);
+    expect(() => { snapshot.mcpServers.events.headers.accepted.push('text/event-stream'); }).toThrow(TypeError);
+    return [];
+  });
+
+  expect(validate(document)).toEqual([]);
+  expect(schemaCalls).toBe(1);
+  const snapshot = retainedSnapshot as {
+    readonly mcpServers: { readonly events: { readonly headers: { readonly accepted: readonly string[] }; readonly type: string } };
+  };
+  expect(snapshot).not.toBe(document);
+  expect(snapshot).toEqual(document);
+  expect(Object.isFrozen(snapshot)).toBe(true);
+  expect(Object.isFrozen(snapshot.mcpServers)).toBe(true);
+  expect(Object.isFrozen(snapshot.mcpServers.events)).toBe(true);
+  expect(Object.isFrozen(snapshot.mcpServers.events.headers)).toBe(true);
+  expect(Object.isFrozen(snapshot.mcpServers.events.headers.accepted)).toBe(true);
+});
+
+it('freezes detached branches independently when an MCP document repeats an object alias', () => {
+  const server = { headers: { accepted: ['application/json'] }, type: 'streamable-http' };
+  let retainedSnapshot: unknown;
+  const validate = validateModernMcpDocument((value) => {
+    retainedSnapshot = value;
+    return [];
+  });
+
+  expect(validate({ mcpServers: { first: server, second: server } })).toEqual([]);
+  const snapshot = retainedSnapshot as {
+    readonly mcpServers: {
+      readonly first: { readonly headers: { readonly accepted: readonly string[] } };
+      readonly second: { readonly headers: { readonly accepted: readonly string[] } };
+    };
+  };
+  expect(snapshot.mcpServers.first).not.toBe(snapshot.mcpServers.second);
+  expect(Object.isFrozen(snapshot.mcpServers.first)).toBe(true);
+  expect(Object.isFrozen(snapshot.mcpServers.first.headers.accepted)).toBe(true);
+  expect(Object.isFrozen(snapshot.mcpServers.second)).toBe(true);
+  expect(Object.isFrozen(snapshot.mcpServers.second.headers.accepted)).toBe(true);
+});
+
+it('returns one frozen policy issue for unsupported MCP document values without invoking the schema', () => {
+  let accessorReads = 0;
+  const accessorDocument = Object.defineProperty({}, 'mcpServers', {
+    enumerable: true,
+    get: () => {
+      accessorReads += 1;
+      return { events: { type: accessorReads === 1 ? 'streamable-http' : 'sse' } };
+    },
+  });
+  const cyclic: { self?: unknown } = {};
+  cyclic.self = cyclic;
+  const documents = [
+    Object.create({ mcpServers: { events: { type: 'streamable-http' } } }),
+    accessorDocument,
+    new Proxy({}, { ownKeys: () => { throw new Error('unreadable document'); } }),
+    Symbol('not-json'),
+    cyclic,
+    { mcpServers: { events: { timeout: Number.NaN, type: 'streamable-http' } } },
+  ];
+  const expected = [{
+    instancePath: '',
+    message: 'MCP document must be a detached finite JSON value.',
+  }];
+  let schemaCalls = 0;
+  const validate = validateModernMcpDocument(() => {
+    schemaCalls += 1;
+    return [];
+  });
+
+  for (const document of documents) {
+    const issues = validate(document);
+    expect(issues).toEqual(expected);
+    expect(Object.isFrozen(issues)).toBe(true);
+    expect(Object.isFrozen(issues[0])).toBe(true);
+  }
+  expect(accessorReads).toBe(0);
+  expect(schemaCalls).toBe(0);
+});
+
+it('delegates one safe snapshot of null-prototype MCP objects with an own __proto__ key', () => {
+  const servers = Object.create(null) as Record<string, unknown>;
+  Object.defineProperty(servers, '__proto__', {
+    enumerable: true,
+    value: Object.assign(Object.create(null), { type: 'streamable-http' }),
+  });
+  Object.defineProperty(servers, 'constructor', {
+    enumerable: true,
+    value: Object.assign(Object.create(null), { type: 'streamable-http' }),
+  });
+  const document = Object.assign(Object.create(null), { mcpServers: servers });
+  let schemaCalls = 0;
+  let schemaDocument: unknown;
+  const validate = validateModernMcpDocument((value) => {
+    schemaCalls += 1;
+    schemaDocument = value;
+    return [];
+  });
+
+  expect(validate(document)).toEqual([]);
+  expect(schemaCalls).toBe(1);
+  expect(schemaDocument).not.toBe(document);
+  const snapshot = schemaDocument as { readonly mcpServers: Record<string, { readonly type: string }> };
+  expect(Object.getPrototypeOf(snapshot)).toBe(Object.prototype);
+  expect(Object.getPrototypeOf(snapshot.mcpServers)).toBe(Object.prototype);
+  expect(Object.prototype.hasOwnProperty.call(snapshot.mcpServers, '__proto__')).toBe(true);
+  expect(snapshot.mcpServers.__proto__).toEqual({ type: 'streamable-http' });
+  expect(Object.prototype.hasOwnProperty.call(snapshot.mcpServers, 'constructor')).toBe(true);
+  expect(snapshot.mcpServers.constructor).toEqual({ type: 'streamable-http' });
+  expect(Object.isFrozen(snapshot)).toBe(true);
+  expect(Object.isFrozen(snapshot.mcpServers)).toBe(true);
+  expect(Object.isFrozen(snapshot.mcpServers.__proto__)).toBe(true);
+  expect(Object.isFrozen(snapshot.mcpServers.constructor)).toBe(true);
+});
+
 it('validates an emitted Skill and copied resources from the artifact only', async () => {
   const files = customSkillFiles(
     '[inline resource](resources/with%20space.md?download=1#section)\n\n[unescaped space resource](resources/with space.md)\n\n[reference resource][guide]\n\n[guide]: <resources/with space.md>\n\n[shortcut]\n\n[shortcut]: resources/with space.md\n',

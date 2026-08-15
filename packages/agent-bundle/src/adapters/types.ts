@@ -1,4 +1,5 @@
 import type { Diagnostic } from '../core/diagnostics.ts';
+import { snapshotStrictJsonValue } from '../core/strict-json.ts';
 import type {
   AgentBundleConfig,
   CanonicalHookEvent,
@@ -95,6 +96,10 @@ export interface TargetArtifactOutputLayout {
 }
 
 const noArtifactDocumentIssues: readonly TargetArtifactDocumentIssue[] = Object.freeze([]);
+const invalidMcpDocumentIssues: readonly TargetArtifactDocumentIssue[] = Object.freeze([Object.freeze({
+  instancePath: '',
+  message: 'MCP document must be a detached finite JSON value.',
+})]);
 
 /**
  * Target-owned compiler namespaces, separate from target-native schema documents.
@@ -149,9 +154,15 @@ const legacySseMcpIssues = (document: unknown): readonly TargetArtifactDocumentI
 export const validateModernMcpDocument = (
   validateSchema: TargetArtifactDocumentValidator,
 ): TargetArtifactDocumentValidator => (document) => {
-  const legacyIssues = legacySseMcpIssues(document);
+  let snapshot: unknown;
+  try {
+    snapshot = snapshotStrictJsonValue(document);
+  } catch {
+    return invalidMcpDocumentIssues;
+  }
+  const legacyIssues = legacySseMcpIssues(snapshot);
   if (legacyIssues.length > 0) return legacyIssues;
-  return validateSchema(document);
+  return validateSchema(snapshot);
 };
 
 export interface TargetAdapter {

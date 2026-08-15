@@ -12,7 +12,7 @@ import { publishArtifact } from '../src/build/emit.ts';
 import type { TargetHookContract } from '../src/adapters/hook-contract.ts';
 import { parseArtifactManifest, serializeArtifactManifest } from '../src/build/manifest.ts';
 import type { TargetAdapter } from '../src/adapters/types.ts';
-import { TargetRegistry } from '../src/adapters/registry.ts';
+import { createDefaultRegistry, TargetRegistry } from '../src/adapters/registry.ts';
 import { createProjectContext } from '../src/core/project-context.ts';
 import type { NormalizedPlugin } from '../src/core/types.ts';
 
@@ -676,6 +676,52 @@ it('rejects a hostile normalized legacy MCP transport before emission and preser
     await cleanupProject(project);
   }
 });
+
+it.each(['portable', 'codex', 'claude'] as const)(
+  'preserves the prior artifact when %s cannot read a proxy MCP transport',
+  async (target) => {
+    const project = await createProject();
+    const base = modelFor(project);
+    const server = new Proxy({
+      id: 'mcp:events',
+      name: 'events',
+      provenance: { kind: 'config' as const, sourcePath: join(project.root, 'agent-bundle.config.ts') },
+      targets: [target],
+      transport: 'stdio' as const,
+    }, {
+      get: (value, property, receiver) => {
+        if (property === 'transport') throw new Error('unreadable transport');
+        return Reflect.get(value, property, receiver);
+      },
+    }) as NormalizedPlugin['mcpServers'][number];
+    const model = {
+      ...base,
+      mcpServers: [server],
+      scripts: [],
+      skills: [],
+      targets: [{ ...base.targets[0]!, id: `target:${target}`, name: target }],
+    } satisfies NormalizedPlugin;
+
+    try {
+      await mkdir(project.outputRoot, { recursive: true });
+      await writeFile(join(project.outputRoot, 'previous.txt'), 'previous\n');
+
+      await expect(buildArtifact({
+        model,
+        outputRoot: project.outputRoot,
+        projectContext: await projectContextFor(project.root, project.outputRoot, base),
+        projectRoot: project.root,
+        registry: createDefaultRegistry(),
+      })).rejects.toThrow(/AB4339/);
+      await expect(readFile(join(project.outputRoot, 'previous.txt'), 'utf8')).resolves.toBe('previous\n');
+      await expect(readFile(join(project.outputRoot, 'agent-bundle.manifest.json'), 'utf8')).rejects.toMatchObject({
+        code: 'ENOENT',
+      });
+    } finally {
+      await cleanupProject(project);
+    }
+  },
+);
 
 it('rejects an authored bundled dependency outside the project and preserves the prior artifact', async () => {
   const project = await createProject();

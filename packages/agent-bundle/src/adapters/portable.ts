@@ -2,7 +2,7 @@ import { Ajv2020, type ErrorObject } from 'ajv/dist/2020.js';
 
 import { stableJson } from '../core/digest.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
-import { unsupportedMcpTransportDiagnostic } from '../core/mcp-transport.ts';
+import { readMcpTransport, unsupportedMcpTransportDiagnostic } from '../core/mcp-transport.ts';
 import {
   pathTokens,
   type AgentBundlePortableConfig,
@@ -149,11 +149,12 @@ const sourceInputs = (...sources: readonly (string | undefined)[]): readonly str
 const planMcpServer = (
   server: NormalizedMcpServer,
 ): { readonly diagnostics: readonly Diagnostic[]; readonly value?: Record<string, unknown> } => {
-  const transportDiagnostic = unsupportedMcpTransportDiagnostic(server);
+  const transport = readMcpTransport(server);
+  const transportDiagnostic = unsupportedMcpTransportDiagnostic(server, transport);
   if (transportDiagnostic !== undefined) return { diagnostics: [transportDiagnostic] };
   const diagnostics: Diagnostic[] = [];
 
-  if (server.transport === 'stdio') {
+  if (transport === 'stdio') {
     const args = server.args?.map((argument, index) => {
       if (argument.includes(pathTokens.workspaceRoot)) {
         diagnostics.push(
@@ -209,7 +210,7 @@ const planMcpServer = (
         command: server.command,
         ...(cwd === undefined ? {} : { cwd }),
         ...(env === undefined ? {} : { env }),
-        type: server.transport,
+        type: transport,
       },
     };
   }

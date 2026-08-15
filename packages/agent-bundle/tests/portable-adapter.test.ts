@@ -180,6 +180,61 @@ it('rejects a hostile normalized legacy MCP transport without emitting an MCP do
   expect(plan.entries.some((entry) => entry.relativePath === 'mcp.json')).toBe(false);
 });
 
+it('snapshots a changing MCP transport once for direct portable planning and validation', () => {
+  const alternatingServer = () => {
+    let reads = 0;
+    const server = {
+      command: 'node',
+      id: 'mcp:events',
+      name: 'events',
+      provenance: { kind: 'config' as const, sourcePath: '/workspace/agent-bundle.config.ts' },
+      targets: ['portable'],
+      url: 'https://mcp.example.test/events',
+    };
+    Object.defineProperty(server, 'transport', {
+      enumerable: true,
+      get: () => {
+        reads += 1;
+        return reads === 1 ? 'stdio' : 'sse';
+      },
+    });
+    return { reads: () => reads, server: server as unknown as NormalizedPlugin['mcpServers'][number] };
+  };
+  const adapter = createDefaultRegistry().get('portable');
+  const planned = alternatingServer();
+  const plan = adapter.plan({ ...plugin(), mcpServers: [planned.server] });
+  const mcp = plan.entries.find((entry) => entry.kind === 'write' && entry.relativePath === 'mcp.json');
+  const validated = alternatingServer();
+
+  expect(plan.diagnostics).toEqual([]);
+  expect(JSON.parse((mcp as Extract<typeof mcp, { readonly kind: 'write' }>).content)).toMatchObject({
+    mcpServers: { events: { command: 'node', type: 'stdio' } },
+  });
+  expect(planned.reads()).toBe(1);
+  expect(adapter.validateModel({ ...plugin(), mcpServers: [validated.server] })).toEqual([]);
+  expect(validated.reads()).toBe(1);
+});
+
+it('contains an unreadable proxy transport as a portable model diagnostic', () => {
+  const server = new Proxy({
+    id: 'mcp:events',
+    name: 'events',
+    provenance: { kind: 'config' as const, sourcePath: '/workspace/agent-bundle.config.ts' },
+    targets: ['portable'],
+    transport: 'stdio' as const,
+  }, {
+    get: (target, property, receiver) => {
+      if (property === 'transport') throw new Error('unreadable transport');
+      return Reflect.get(target, property, receiver);
+    },
+  }) as NormalizedPlugin['mcpServers'][number];
+  const adapter = createDefaultRegistry().get('portable');
+  const model = { ...plugin(), mcpServers: [server] };
+
+  expect(adapter.plan(model).diagnostics).toEqual([expect.objectContaining({ code: 'AB4339' })]);
+  expect(adapter.validateModel(model)).toEqual([expect.objectContaining({ code: 'AB4339' })]);
+});
+
 it('preserves a valid MCP server named __proto__', () => {
   const plan = createDefaultRegistry().get('portable').plan({
     ...plugin(),
