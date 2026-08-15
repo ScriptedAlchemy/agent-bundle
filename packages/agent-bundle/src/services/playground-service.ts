@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { appendFile, lstat, mkdir, readFile, realpath, rename, writeFile } from 'node:fs/promises';
+import { appendFile, lstat, mkdir, open, readFile, realpath, rename, unlink, writeFile } from 'node:fs/promises';
 import { basename, isAbsolute, join, relative, resolve } from 'node:path';
 
 export type PlaygroundJsonPrimitive = boolean | null | number | string;
@@ -144,6 +144,7 @@ export interface PlaygroundServiceOptions {
 export type PlaygroundServiceErrorCode =
   | 'PLAYGROUND_CURSOR_AHEAD'
   | 'PLAYGROUND_CURSOR_INVALID'
+  | 'PLAYGROUND_CREDENTIAL_REJECTED'
   | 'PLAYGROUND_OUTCOME_REQUIRED'
   | 'PLAYGROUND_PROJECT_MISMATCH'
   | 'PLAYGROUND_ROOT_INVALID'
@@ -152,6 +153,7 @@ export type PlaygroundServiceErrorCode =
   | 'PLAYGROUND_SESSION_FINALIZED'
   | 'PLAYGROUND_SESSION_ID_INVALID'
   | 'PLAYGROUND_SESSION_NOT_FOUND'
+  | 'PLAYGROUND_SESSION_OWNED'
   | 'PLAYGROUND_STORE_CORRUPT'
   | 'PLAYGROUND_VALUE_INVALID';
 
@@ -213,6 +215,7 @@ interface SessionRecord {
   state: PlaygroundSession['state'];
   readonly subscribers: Set<SubscriptionRecord>;
   tail: Promise<void>;
+  ownerToken: string | undefined;
 }
 
 interface PersistedSession {
@@ -227,12 +230,24 @@ interface PersistedSession {
   readonly state: PlaygroundSession['state'];
 }
 
+interface OwnerLock {
+  readonly pid: number;
+  readonly token: string;
+  readonly version: 1;
+}
+
 const schemaVersion = 1 as const;
 const sessionDirectoryName = 'sessions';
 const sessionDocumentName = 'session.json';
 const eventDocumentName = 'events.jsonl';
+const ownerLockName = '.owner.lock';
 const pathSegment = /^[a-z0-9][a-z0-9._-]*$/iu;
 const sensitiveKey = /(?:api[-_]?key|authorization|credential|password|secret|token)/iu;
+const providerCredentialPatterns = Object.freeze([
+  /\bsk-(?:proj-|ant-|live-)?[a-z0-9_-]{16,}\b/iu,
+  /\b(?:gh[pousr]_[a-z0-9]{20,}|github_pat_[a-z0-9_]{20,}|xox[baprs]-[a-z0-9-]{16,}|akia[a-z0-9]{16})\b/iu,
+  /\bbearer[ \t]+[a-z0-9._~+/=-]{20,}\b/iu,
+]);
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -244,6 +259,9 @@ const contained = (root: string, candidate: string): boolean => {
 
 const serviceError = (code: PlaygroundServiceErrorCode, message: string): PlaygroundServiceError =>
   new PlaygroundServiceError(code, message);
+
+const isErrno = (error: unknown, code: string): boolean =>
+  typeof error === 'object' && error !== null && 'code' in error && error.code === code;
 
 const nonempty = (value: unknown, label: string): string => {
   if (typeof value !== 'string' || value.length === 0) {
@@ -299,41 +317,69 @@ const jsonObject = (value: unknown, label: string): PlaygroundJsonObject => {
 
 const clone = <T>(value: T, label = 'Playground value'): T => json(value, label) as T;
 
-const normalizeIdentity = (value: PlaygroundSessionIdentity): PlaygroundSessionIdentity => Object.freeze({
-  epoch: Object.freeze({
-    digest: nonempty(value?.epoch?.digest, 'Playground epoch digest'),
-    id: nonempty(value?.epoch?.id, 'Playground epoch id'),
-  }),
-  fixture: Object.freeze({
-    digest: nonempty(value?.fixture?.digest, 'Playground fixture digest'),
-    id: nonempty(value?.fixture?.id, 'Playground fixture id'),
-  }),
-  invocation: Object.freeze({
-    intent: jsonObject(value?.invocation?.intent, 'Playground invocation intent'),
-    kind: nonempty(value?.invocation?.kind, 'Playground invocation kind'),
-  }),
-  target: Object.freeze({
-    ...(value?.target?.digest === undefined ? {} : { digest: nonempty(value.target.digest, 'Playground target digest') }),
-    name: nonempty(value?.target?.name, 'Playground target name'),
-  }),
-  task: Object.freeze({
-    id: nonempty(value?.task?.id, 'Playground task id'),
-    text: nonempty(value?.task?.text, 'Playground task text'),
-  }),
-});
+const assertNoProviderCredentials = (value: PlaygroundJsonValue): void => {
+  if (typeof value === 'string') {
+    if (providerCredentialPatterns.some((pattern) => pattern.test(value))) {
+      throw serviceError('PLAYGROUND_CREDENTIAL_REJECTED', 'Playground records must not contain provider credential material.');
+    }
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) assertNoProviderCredentials(item);
+    return;
+  }
+  if (isRecord(value)) {
+    for (const item of Object.values(value)) assertNoProviderCredentials(item);
+  }
+};
 
-const normalizeOutcome = (value: PlaygroundDurableOutcome): PlaygroundDurableOutcome => Object.freeze({
-  ...(value?.response === undefined ? {} : { response: nonempty(value.response, 'Playground outcome response') }),
-  status: nonempty(value?.status, 'Playground outcome status'),
-  ...(value?.workspace === undefined ? {} : { workspace: jsonObject(value.workspace, 'Playground outcome workspace') }),
-});
+const normalizeIdentity = (value: PlaygroundSessionIdentity): PlaygroundSessionIdentity => {
+  const identity = Object.freeze({
+    epoch: Object.freeze({
+      digest: nonempty(value?.epoch?.digest, 'Playground epoch digest'),
+      id: nonempty(value?.epoch?.id, 'Playground epoch id'),
+    }),
+    fixture: Object.freeze({
+      digest: nonempty(value?.fixture?.digest, 'Playground fixture digest'),
+      id: nonempty(value?.fixture?.id, 'Playground fixture id'),
+    }),
+    invocation: Object.freeze({
+      intent: jsonObject(value?.invocation?.intent, 'Playground invocation intent'),
+      kind: nonempty(value?.invocation?.kind, 'Playground invocation kind'),
+    }),
+    target: Object.freeze({
+      ...(value?.target?.digest === undefined ? {} : { digest: nonempty(value.target.digest, 'Playground target digest') }),
+      name: nonempty(value?.target?.name, 'Playground target name'),
+    }),
+    task: Object.freeze({
+      id: nonempty(value?.task?.id, 'Playground task id'),
+      text: nonempty(value?.task?.text, 'Playground task text'),
+    }),
+  });
+  assertNoProviderCredentials(identity as PlaygroundJsonValue);
+  return identity;
+};
 
-const normalizeEventInput = (value: PlaygroundEventInput): PlaygroundEventInput => Object.freeze({
-  kind: nonempty(value?.kind, 'Playground event kind'),
-  raw: json(value?.raw, 'Playground event raw value'),
-  source: nonempty(value?.source, 'Playground event source') as PlaygroundTraceSource,
-  summary: nonempty(value?.summary, 'Playground event summary'),
-});
+const normalizeOutcome = (value: PlaygroundDurableOutcome): PlaygroundDurableOutcome => {
+  const outcome = Object.freeze({
+    ...(value?.response === undefined ? {} : { response: nonempty(value.response, 'Playground outcome response') }),
+    status: nonempty(value?.status, 'Playground outcome status'),
+    ...(value?.workspace === undefined ? {} : { workspace: jsonObject(value.workspace, 'Playground outcome workspace') }),
+  });
+  assertNoProviderCredentials(outcome as PlaygroundJsonValue);
+  return outcome;
+};
+
+const normalizeEventInput = (value: PlaygroundEventInput): PlaygroundEventInput => {
+  const event = Object.freeze({
+    kind: nonempty(value?.kind, 'Playground event kind'),
+    raw: json(value?.raw, 'Playground event raw value'),
+    source: nonempty(value?.source, 'Playground event source') as PlaygroundTraceSource,
+    summary: nonempty(value?.summary, 'Playground event summary'),
+  });
+  assertNoProviderCredentials(event as PlaygroundJsonValue);
+  return event;
+};
 
 const snapshotEvent = (value: PlaygroundTraceEvent): PlaygroundTraceEvent => Object.freeze({
   kind: value.kind,
@@ -377,12 +423,18 @@ const redactSecrets = (value: PlaygroundJsonValue): PlaygroundJsonValue => {
   return Object.freeze(copied);
 };
 
-const normalizeAssertion = (value: PlaygroundSelectedAssertion): PlaygroundSelectedAssertion => Object.freeze({
-  evidence: redactSecrets(json(value?.evidence, 'Playground assertion evidence')),
-  expectation: redactSecrets(json(value?.expectation, 'Playground assertion expectation')),
-  id: nonempty(value?.id, 'Playground assertion id'),
-  kind: nonempty(value?.kind, 'Playground assertion kind'),
-});
+const normalizeAssertion = (value: PlaygroundSelectedAssertion): PlaygroundSelectedAssertion => {
+  const evidence = json(value?.evidence, 'Playground assertion evidence');
+  const expectation = json(value?.expectation, 'Playground assertion expectation');
+  assertNoProviderCredentials(evidence);
+  assertNoProviderCredentials(expectation);
+  return Object.freeze({
+    evidence: redactSecrets(evidence),
+    expectation: redactSecrets(expectation),
+    id: nonempty(value?.id, 'Playground assertion id'),
+    kind: nonempty(value?.kind, 'Playground assertion kind'),
+  });
+};
 
 export class PlaygroundService {
   readonly #maxSubscriberQueue: number;
@@ -394,9 +446,7 @@ export class PlaygroundService {
   #closePromise: Promise<void> | undefined;
   #closing = false;
   #ready: Promise<void> | undefined;
-  #resolvedProjectRoot: string | undefined;
   #resolvedSessionsRoot: string | undefined;
-  #resolvedStorageRoot: string | undefined;
 
   constructor(options: PlaygroundServiceOptions) {
     this.#projectId = nonempty(options.projectId, 'Playground project id');
@@ -428,6 +478,7 @@ export class PlaygroundService {
       throw error;
     }
     await this.#assertSessionDirectory(root, id);
+    const ownerToken = await this.#acquireOwner(root, id);
     const record: SessionRecord = {
       cleanupFailures: [],
       createdAt: this.#timestamp(),
@@ -440,11 +491,13 @@ export class PlaygroundService {
       state: 'open',
       subscribers: new Set(),
       tail: Promise.resolve(),
+      ownerToken,
     };
     try {
       await writeFile(join(root, eventDocumentName), '', { encoding: 'utf8', flag: 'wx' });
       await this.#persistSession(record);
     } catch (error) {
+      await this.#releaseOwner(root, ownerToken).catch(() => undefined);
       throw error;
     }
     this.#sessions.set(id, record);
@@ -466,7 +519,14 @@ export class PlaygroundService {
       throw error;
     }
     const document = await this.#readPersistedSession(root, id);
-    const events = await this.#readEvents(root);
+    const ownerToken = document.state === 'open' ? await this.#acquireOwner(root, id) : undefined;
+    let events: readonly PlaygroundTraceEvent[];
+    try {
+      events = await this.#readEvents(root);
+    } catch (error) {
+      if (ownerToken !== undefined) await this.#releaseOwner(root, ownerToken).catch(() => undefined);
+      throw error;
+    }
     const record: SessionRecord = {
       cleanupFailures: [...document.cleanupFailures],
       createdAt: document.createdAt,
@@ -479,6 +539,7 @@ export class PlaygroundService {
       state: document.state,
       subscribers: new Set(),
       tail: Promise.resolve(),
+      ownerToken,
     };
     this.#sessions.set(id, record);
     return snapshotSession(record);
@@ -521,9 +582,7 @@ export class PlaygroundService {
       if (record.state !== 'open') {
         throw serviceError('PLAYGROUND_SESSION_FINALIZED', `Playground session ${JSON.stringify(record.id)} is finalized.`);
       }
-      record.outcome = durable;
-      record.state = 'finalized';
-      await this.#persistSession(record);
+      await this.#commitState(record, 'finalized', durable);
     });
     await this.#drainSubscriptions(record);
     return this.#enqueue(record, async () => {
@@ -559,16 +618,19 @@ export class PlaygroundService {
       if (afterSequence > latest) {
         throw serviceError('PLAYGROUND_CURSOR_AHEAD', 'Playground subscription cursor is ahead of persisted history.');
       }
+      const backlog = record.events.filter((event) => event.sequence > afterSequence);
       const subscription: SubscriptionRecord = {
-        active: true,
-        closed: false,
+        active: backlog.length <= this.#maxSubscriberQueue,
+        closed: backlog.length > this.#maxSubscriberQueue,
         delivery: Promise.resolve(),
         draining: false,
         onEvent: options.onEvent,
-        queue: record.events.filter((event) => event.sequence > afterSequence),
+        queue: backlog.length > this.#maxSubscriberQueue ? [] : backlog,
       };
-      record.subscribers.add(subscription);
-      this.#drainSubscription(record, subscription);
+      if (subscription.active) {
+        record.subscribers.add(subscription);
+        this.#drainSubscription(record, subscription);
+      }
       const view: PlaygroundSubscription = Object.freeze({
         close: async () => this.#closeSubscription(record, subscription),
         get closed(): boolean { return subscription.closed; },
@@ -585,7 +647,7 @@ export class PlaygroundService {
   async promoteToDraftEval(sessionId: string, selectedAssertions: readonly PlaygroundSelectedAssertion[]): Promise<DraftEvalCase> {
     const record = this.#requireSession(sessionId);
     return this.#enqueue(record, async () => {
-      if (record.outcome === undefined) {
+      if ((record.state !== 'finalized' && record.state !== 'closed') || record.outcome === undefined) {
         throw serviceError('PLAYGROUND_OUTCOME_REQUIRED', 'A durable playground outcome is required before promotion.');
       }
       return Object.freeze({
@@ -625,9 +687,13 @@ export class PlaygroundService {
   async #closeRecord(record: SessionRecord): Promise<void> {
     const subscriptions = await this.#enqueue(record, async () => {
       if (record.state === 'open') {
-        throw serviceError('PLAYGROUND_OUTCOME_REQUIRED', 'A durable playground outcome is required before closing a playground session.');
+        await this.#commitState(record, 'closed', Object.freeze({ status: 'aborted' }));
+      } else if (record.state === 'finalized') {
+        if (record.outcome === undefined) {
+          throw serviceError('PLAYGROUND_OUTCOME_REQUIRED', 'A finalized playground session is missing its durable outcome.');
+        }
+        await this.#commitState(record, 'closed', record.outcome);
       }
-      record.state = 'closed';
       return [...record.subscribers];
     });
     await this.#drainSubscriptions(record, subscriptions);
@@ -635,6 +701,11 @@ export class PlaygroundService {
       for (const subscription of subscriptions) this.#deactivateSubscription(record, subscription);
       await this.#persistSession(record);
     });
+    if (record.ownerToken !== undefined) {
+      const token = record.ownerToken;
+      await this.#releaseOwner(record.root, token);
+      record.ownerToken = undefined;
+    }
     if (record.cleanupFailures.length > 0) {
       throw new PlaygroundSessionCloseError(record.id, snapshotCleanupFailures(record.cleanupFailures));
     }
@@ -697,8 +768,6 @@ export class PlaygroundService {
     if (!contained(resolvedStorageRoot, resolvedSessionsRoot)) {
       throw serviceError('PLAYGROUND_ROOT_INVALID', 'Playground session root resolves outside configured storage.');
     }
-    this.#resolvedProjectRoot = resolvedProjectRoot;
-    this.#resolvedStorageRoot = resolvedStorageRoot;
     this.#resolvedSessionsRoot = resolvedSessionsRoot;
   }
 
@@ -720,6 +789,24 @@ export class PlaygroundService {
     }
   }
 
+  async #assertSessionDocumentPath(root: string, missingAllowed = false): Promise<void> {
+    const path = join(root, sessionDocumentName);
+    let stat: Awaited<ReturnType<typeof lstat>>;
+    try {
+      stat = await lstat(path);
+    } catch (error) {
+      if (missingAllowed && isErrno(error, 'ENOENT')) return;
+      throw error;
+    }
+    if (!stat.isFile() || stat.isSymbolicLink()) {
+      throw serviceError('PLAYGROUND_ROOT_INVALID', 'Playground session metadata must be a real contained file.');
+    }
+    const resolved = await realpath(path);
+    if (!contained(root, resolved) || basename(resolved) !== sessionDocumentName) {
+      throw serviceError('PLAYGROUND_ROOT_INVALID', 'Playground session metadata resolves outside its session.');
+    }
+  }
+
   async #assertEventPath(root: string): Promise<void> {
     const path = join(root, eventDocumentName);
     const stat = await lstat(path);
@@ -729,6 +816,98 @@ export class PlaygroundService {
     const resolved = await realpath(path);
     if (!contained(root, resolved) || basename(resolved) !== eventDocumentName) {
       throw serviceError('PLAYGROUND_ROOT_INVALID', 'Playground event log resolves outside its session.');
+    }
+  }
+
+  async #assertOwnerLockPath(root: string): Promise<void> {
+    const path = join(root, ownerLockName);
+    const stat = await lstat(path);
+    if (!stat.isFile() || stat.isSymbolicLink()) {
+      throw serviceError('PLAYGROUND_ROOT_INVALID', 'Playground owner lock must be a real contained file.');
+    }
+    const resolved = await realpath(path);
+    if (!contained(root, resolved) || basename(resolved) !== ownerLockName) {
+      throw serviceError('PLAYGROUND_ROOT_INVALID', 'Playground owner lock resolves outside its session.');
+    }
+  }
+
+  async #acquireOwner(root: string, sessionId: string): Promise<string> {
+    const token = randomUUID();
+    const path = join(root, ownerLockName);
+    const document = Object.freeze({ pid: process.pid, token, version: 1 as const });
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        const handle = await open(path, 'wx', 0o600);
+        try {
+          await handle.writeFile(`${JSON.stringify(document)}\n`, 'utf8');
+        } finally {
+          await handle.close();
+        }
+        return token;
+      } catch (error) {
+        if (!isErrno(error, 'EEXIST')) throw error;
+      }
+      const owner = await this.#readOwnerLock(root);
+      if (!this.#ownerIsStale(owner)) {
+        throw serviceError('PLAYGROUND_SESSION_OWNED', `Playground session ${JSON.stringify(sessionId)} is owned by another foreground service.`);
+      }
+      try {
+        await unlink(path);
+      } catch (error) {
+        if (!isErrno(error, 'ENOENT')) throw error;
+      }
+    }
+    throw serviceError('PLAYGROUND_SESSION_OWNED', `Playground session ${JSON.stringify(sessionId)} ownership could not be acquired.`);
+  }
+
+  async #releaseOwner(root: string, token: string): Promise<void> {
+    const path = join(root, ownerLockName);
+    try {
+      const owner = await this.#readOwnerLock(root);
+      if (owner.token === token) await unlink(path);
+    } catch (error) {
+      if (!isErrno(error, 'ENOENT')) throw error;
+    }
+  }
+
+  async #readOwnerLock(root: string): Promise<OwnerLock> {
+    await this.#assertOwnerLockPath(root);
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(await readFile(join(root, ownerLockName), 'utf8'));
+    } catch {
+      throw serviceError('PLAYGROUND_STORE_CORRUPT', 'Playground owner lock is malformed.');
+    }
+    if (!isRecord(parsed) || parsed.version !== 1 || !Number.isSafeInteger(parsed.pid) || parsed.pid < 1 || typeof parsed.token !== 'string') {
+      throw serviceError('PLAYGROUND_STORE_CORRUPT', 'Playground owner lock is invalid.');
+    }
+    return Object.freeze({ pid: parsed.pid, token: parsed.token, version: 1 });
+  }
+
+  #ownerIsStale(owner: OwnerLock): boolean {
+    try {
+      process.kill(owner.pid, 0);
+      return false;
+    } catch (error) {
+      return isErrno(error, 'ESRCH');
+    }
+  }
+
+  async #commitState(
+    record: SessionRecord,
+    state: PlaygroundSession['state'],
+    outcome: PlaygroundDurableOutcome,
+  ): Promise<void> {
+    const previousOutcome = record.outcome;
+    const previousState = record.state;
+    record.outcome = outcome;
+    record.state = state;
+    try {
+      await this.#persistSession(record);
+    } catch (error) {
+      record.outcome = previousOutcome;
+      record.state = previousState;
+      throw error;
     }
   }
 
@@ -744,12 +923,15 @@ export class PlaygroundService {
       sessionId: record.id,
       state: record.state,
     });
+    assertNoProviderCredentials(document as unknown as PlaygroundJsonValue);
+    await this.#assertSessionDocumentPath(record.root, true);
     const temporary = join(record.root, `.${sessionDocumentName}.${randomUUID()}.tmp`);
     await writeFile(temporary, `${JSON.stringify(document)}\n`, { encoding: 'utf8', flag: 'wx' });
     await rename(temporary, join(record.root, sessionDocumentName));
   }
 
   async #readPersistedSession(root: string, expectedId: string): Promise<PersistedSession> {
+    await this.#assertSessionDocumentPath(root);
     let parsed: unknown;
     try {
       parsed = JSON.parse(await readFile(join(root, sessionDocumentName), 'utf8'));
