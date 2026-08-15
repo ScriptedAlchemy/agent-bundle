@@ -210,6 +210,47 @@ it('reloads an edited native ESM config on each load', async () => {
   }
 });
 
+it('reloads an overwritten static TypeScript default config', async () => {
+  const fixture = await createProjectFixture();
+  const options = {
+    command: 'inspect',
+    mode: 'development',
+    root: fixture.root,
+    targets: [],
+  };
+
+  try {
+    await expect(loadConfig(options)).resolves.toMatchObject({
+      config: { plugin: { name: 'review', version: '1.0.0' } },
+    });
+    await writeFile(
+      fixture.configPath,
+      [
+        "enum Version { Current = '1.0.0' }",
+        "export default { plugin: { name: 'typescript-fresh', version: Version.Current } };",
+        '',
+      ].join('\n'),
+    );
+    await expect(loadConfig(options)).resolves.toMatchObject({
+      config: { plugin: { name: 'typescript-fresh', version: '1.0.0' } },
+    });
+
+    await writeFile(
+      fixture.configPath,
+      [
+        "enum Version { Current = '2.0.0' }",
+        "export default { plugin: { name: 'typescript-fresh', version: Version.Current } };",
+        '',
+      ].join('\n'),
+    );
+    await expect(loadConfig(options)).resolves.toMatchObject({
+      config: { plugin: { name: 'typescript-fresh', version: '2.0.0' } },
+    });
+  } finally {
+    await removeProjectFixture(fixture.root);
+  }
+});
+
 it('discovers an explicit non-conventional skill path relative to the project root', async () => {
   const fixture = await createProjectFixture();
   const selectedSkillDir = join(fixture.root, 'custom/selected');
