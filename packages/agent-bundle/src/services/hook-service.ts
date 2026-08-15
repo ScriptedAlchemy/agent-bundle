@@ -2,6 +2,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { isAbsolute, posix, resolve } from 'node:path';
 
+import { createDefaultRegistry, type TargetRegistry } from '../adapters/registry.ts';
 import { DiagnosticError } from '../core/diagnostics.ts';
 import { assertInside } from '../core/paths.ts';
 import {
@@ -38,6 +39,8 @@ export interface HookSimulationOptions {
 export interface HookServiceOptions {
   /** Internal test seam; production uses the current host platform. */
   readonly platform?: NodeJS.Platform;
+  /** Target contracts that own and validate the artifact. */
+  readonly registry?: TargetRegistry;
   /** Internal test seam; production runs Windows taskkill directly. */
   readonly taskkill?: Taskkill;
 }
@@ -258,10 +261,12 @@ const runWrapper = async (options: {
 
 export class HookService {
   readonly #platform: NodeJS.Platform;
+  readonly #registry: TargetRegistry;
   readonly #taskkill: Taskkill;
 
   constructor(options: HookServiceOptions = {}) {
     this.#platform = options.platform ?? process.platform;
+    this.#registry = options.registry ?? createDefaultRegistry();
     this.#taskkill = options.taskkill ?? taskkill;
   }
 
@@ -270,6 +275,7 @@ export class HookService {
     const diagnostics = await validateArtifact({
       ...(options.allowEpochStagingMarker === true ? { allowEpochStagingMarker: true } : {}),
       artifactRoot: artifact,
+      registry: this.#registry,
     });
     const errors = diagnostics.filter((diagnostic) => diagnostic.severity === 'error');
     if (errors.length > 0) throw new DiagnosticError(errors);

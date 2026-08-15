@@ -18,7 +18,19 @@ const validMetadata = () => ({
   ],
 });
 
+const validArtifactValidation = () => ({
+  documents: [
+    { path: 'mcp.json', required: false, schema: 'mcp' },
+    { path: 'plugin.json', required: true, schema: 'plugin' },
+  ],
+  schemas: [
+    { name: 'mcp', validate: () => [] },
+    { name: 'plugin', validate: () => [] },
+  ],
+});
+
 const adapter = (name: string, metadata: unknown = validMetadata(), extension?: string) => ({
+  artifactValidation: validArtifactValidation(),
   capabilities: {},
   ...(extension === undefined ? {} : { configExtension: { key: extension } }),
   metadata: metadata as never,
@@ -206,4 +218,29 @@ it('rejects malformed metadata atomically and preserves existing collision behav
   expect(() => registryMetadata(registry, 'missing')).toThrow('Unknown target adapter "missing"');
   expect(() => registry.register(adapter('other', validMetadata(), 'example'))).toThrow('example');
   expect(() => registry.register(adapter('existing', validMetadata()))).toThrow('already registered');
+});
+
+it('requires a complete, uniquely owned artifact schema and document contract atomically', () => {
+  const registry = new TargetRegistry().register(adapter('existing'));
+
+  expect(() => registry.register({
+    ...adapter('missing-schema'),
+    artifactValidation: {
+      ...validArtifactValidation(),
+      schemas: [{ name: 'plugin', validate: () => [] }],
+    },
+  })).toThrow(/schema.*metadata|metadata.*schema/i);
+  expect(registry.names()).toEqual(['existing']);
+
+  expect(() => registry.register({
+    ...adapter('duplicate-path'),
+    artifactValidation: {
+      ...validArtifactValidation(),
+      documents: [
+        { path: 'plugin.json', required: true, schema: 'mcp' },
+        { path: 'plugin.json', required: true, schema: 'plugin' },
+      ],
+    },
+  })).toThrow(/document path.*already declared/i);
+  expect(registry.names()).toEqual(['existing']);
 });

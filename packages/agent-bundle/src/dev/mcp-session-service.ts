@@ -1,6 +1,5 @@
 import {
   Client,
-  SSEClientTransport,
   StreamableHTTPClientTransport,
   type CallToolResult,
   type GetPromptResult,
@@ -19,11 +18,16 @@ import { tmpdir } from 'node:os';
 import { isAbsolute, posix, resolve } from 'node:path';
 import type { Stream } from 'node:stream';
 
-import { createDefaultRegistry } from '../adapters/registry.ts';
+import { createDefaultRegistry, TargetRegistry } from '../adapters/registry.ts';
 import { validateArtifact } from '../build/validate-artifact.ts';
 import { DiagnosticError } from '../core/diagnostics.ts';
 import { assertInside } from '../core/paths.ts';
 import { resolveMcpPathTokens } from '../services/mcp-path-tokens.ts';
+import {
+  readTargetMcpServer,
+  type ModernMcpServer,
+  type TargetMcpRuntimeContract,
+} from '../services/mcp-runtime.ts';
 import { EpochStore, type EpochReference } from './epoch-store.ts';
 import type {
   McpAppBridgeResource,
@@ -71,7 +75,6 @@ const maxRetainedFrames = 512;
 const maxRetainedTraceEntries = 512;
 const inspectorEnvironmentAllowlist = new Set(['FORCE_COLOR', 'LANG', 'LC_ALL', 'NO_COLOR', 'TZ']);
 
-type NativeTarget = 'portable' | 'codex' | 'claude';
 type RawMcpFrame = Parameters<Transport['send']>[0];
 
 interface RequestOptions {
@@ -119,22 +122,6 @@ interface StdioOptions {
 interface RemoteTransportOptions {
   readonly headers?: Record<string, string>;
 }
-
-interface StdioManifestServer {
-  readonly args: readonly string[];
-  readonly command: string;
-  readonly cwd?: string;
-  readonly env?: Readonly<Record<string, string>>;
-  readonly kind: 'stdio';
-}
-
-interface RemoteManifestServer {
-  readonly headers?: Readonly<Record<string, string>>;
-  readonly kind: 'streamable-http' | 'sse';
-  readonly url: string;
-}
-
-type ManifestServer = StdioManifestServer | RemoteManifestServer;
 
 export interface OpenMcpSessionOptions extends McpSessionBinding {
   readonly signal?: AbortSignal;
@@ -190,11 +177,11 @@ export interface McpSessionReplay {
 
 export interface McpSessionServiceOptions {
   readonly createClient?: () => McpClient;
-  readonly createSseTransport?: (url: URL, options: RemoteTransportOptions) => Transport;
   readonly createStdioTransport?: (options: StdioOptions) => StdioTransport;
   readonly createStreamableHttpTransport?: (url: URL, options: RemoteTransportOptions) => Transport;
   readonly epochStore: EpochStore;
   readonly projectRoot: string;
+  readonly registry?: TargetRegistry;
 }
 
 export interface McpSessionServiceCloseFailure {
@@ -215,8 +202,9 @@ export class McpSessionServiceCloseError extends Error {
 }
 
 interface ResolvedSessionServer {
-  readonly server: ManifestServer;
-  readonly target: NativeTarget;
+  readonly runtime: TargetMcpRuntimeContract;
+  readonly server: ModernMcpServer;
+  readonly target: string;
   readonly targetRoot: string;
 }
 
@@ -231,7 +219,7 @@ interface ResolvedStdioLaunch {
 
 interface ResolvedRemoteLaunch {
   readonly headers?: Readonly<Record<string, string>>;
-  readonly kind: 'streamable-http' | 'sse';
+  readonly kind: 'streamable-http';
   readonly url: URL;
 }
 
@@ -441,77 +429,12 @@ const mcpAppLeaseIdentity = (session: McpSession): McpAppLeaseIdentity => {
   return Object.freeze(identity) as McpAppLeaseIdentity;
 };
 
-const stringRecord = (value: unknown): Record<string, string> | undefined => {
-  if (value === undefined) return undefined;
-  if (!isRecord(value) || Object.values(value).some((item) => typeof item !== 'string')) return undefined;
-  return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, item as string]));
-};
-
 const safeArtifactPath = (path: string): boolean =>
   path.length > 0 &&
   !isAbsolute(path) &&
   path === posix.normalize(path) &&
   path !== '..' &&
   !path.startsWith('../');
-
-const manifestPath = (target: NativeTarget): string =>
-  target === 'portable' ? 'mcp.json' : '.mcp.json';
-
-const parseManifestServer = (value: unknown): ManifestServer | undefined => {
-  if (!isRecord(value) || typeof value.type !== 'string') return undefined;
-  if (value.type === 'stdio') {
-    const env = stringRecord(value.env);
-    if (
-      typeof value.command !== 'string' ||
-      (value.args !== undefined && (!Array.isArray(value.args) || value.args.some((argument) => typeof argument !== 'string'))) ||
-      (value.cwd !== undefined && typeof value.cwd !== 'string') ||
-      (value.env !== undefined && env === undefined)
-    ) {
-      return undefined;
-    }
-    return {
-      args: value.args === undefined ? [] : [...value.args],
-      command: value.command,
-      ...(value.cwd === undefined ? {} : { cwd: value.cwd }),
-      ...(env === undefined ? {} : { env }),
-      kind: 'stdio',
-    };
-  }
-
-  const kind = value.type === 'http' ? 'streamable-http' : value.type;
-  const headers = stringRecord(value.headers);
-  if (
-    (kind !== 'streamable-http' && kind !== 'sse') ||
-    typeof value.url !== 'string' ||
-    (value.headers !== undefined && headers === undefined)
-  ) {
-    return undefined;
-  }
-  return {
-    ...(headers === undefined ? {} : { headers }),
-    kind,
-    url: value.url,
-  };
-};
-
-const expandRemoteTokens = (
-  value: string,
-  target: NativeTarget,
-  roots: { readonly pluginData: string; readonly pluginRoot: string; readonly workspaceRoot: string },
-): string => {
-  if (target === 'portable') {
-    return value
-      .replaceAll('${PLUGIN_ROOT}', roots.pluginRoot)
-      .replaceAll('${PLUGIN_DATA}', roots.pluginData);
-  }
-  if (target === 'claude') {
-    return value
-      .replaceAll('${CLAUDE_PLUGIN_ROOT}', roots.pluginRoot)
-      .replaceAll('${CLAUDE_PLUGIN_DATA}', roots.pluginData)
-      .replaceAll('${CLAUDE_PROJECT_DIR}', roots.workspaceRoot);
-  }
-  return value;
-};
 
 const resolveContained = (root: string, path: string): string =>
   isAbsolute(path) ? path : assertInside(root, resolve(root, path));
@@ -663,7 +586,6 @@ class RecordingTransport implements Transport {
 export class McpSession {
   readonly #binding: McpSessionBinding;
   readonly #createClient: () => McpClient;
-  readonly #createSseTransport: (url: URL, options: RemoteTransportOptions) => Transport;
   readonly #createStdioTransport: (options: StdioOptions) => StdioTransport;
   readonly #createStreamableHttpTransport: (url: URL, options: RemoteTransportOptions) => Transport;
   readonly #epochReference: EpochReference;
@@ -697,7 +619,6 @@ export class McpSession {
   constructor(options: {
     readonly binding: McpSessionBinding;
     readonly createClient: () => McpClient;
-    readonly createSseTransport: (url: URL, options: RemoteTransportOptions) => Transport;
     readonly createStdioTransport: (options: StdioOptions) => StdioTransport;
     readonly createStreamableHttpTransport: (url: URL, options: RemoteTransportOptions) => Transport;
     readonly epochReference: EpochReference;
@@ -710,7 +631,6 @@ export class McpSession {
   }) {
     this.#binding = Object.freeze({ ...options.binding });
     this.#createClient = options.createClient;
-    this.#createSseTransport = options.createSseTransport;
     this.#createStdioTransport = options.createStdioTransport;
     this.#createStreamableHttpTransport = options.createStreamableHttpTransport;
     this.#epochReference = options.epochReference;
@@ -1227,9 +1147,10 @@ export class McpSession {
       return transport;
     }
     const headers = this.#launch.headers === undefined ? undefined : { ...this.#launch.headers };
-    return this.#launch.kind === 'streamable-http'
-      ? this.#createStreamableHttpTransport(this.#launch.url, { ...(headers === undefined ? {} : { headers }) })
-      : this.#createSseTransport(this.#launch.url, { ...(headers === undefined ? {} : { headers }) });
+    return this.#createStreamableHttpTransport(
+      this.#launch.url,
+      { ...(headers === undefined ? {} : { headers }) },
+    );
   }
 
   #handleStderrOverflow(): void {
@@ -1243,22 +1164,19 @@ export class McpSession {
       pluginRoot: this.#resolved.targetRoot,
       workspaceRoot: this.#workspaceRoot,
     };
-    if (this.#resolved.server.kind === 'stdio') {
-      const resolved = resolveMcpPathTokens({
-        adapter: createDefaultRegistry().get(this.#resolved.target),
-        roots,
-        server: this.#resolved.server,
-      });
+    const resolved = resolveMcpPathTokens({
+      roots,
+      runtime: this.#resolved.runtime,
+      server: this.#resolved.server,
+      target: this.#resolved.target,
+    });
+    if (resolved.kind === 'stdio') {
       const cwd = resolved.cwd === undefined ? undefined : resolveContained(this.#resolved.targetRoot, resolved.cwd);
-      const args = resolved.args.map((argument) =>
-        this.#resolved.target === 'codex' && argument.startsWith('./')
-          ? resolveContained(this.#resolved.targetRoot, argument)
-          : argument);
       const inheritedEnv = Object.fromEntries(
         Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined),
       );
       return Object.freeze({
-        args: Object.freeze(args),
+        args: Object.freeze([...resolved.args]),
         command: resolved.command,
         ...(cwd === undefined ? {} : { cwd }),
         env: Object.freeze({ ...inheritedEnv, ...(resolved.env ?? {}) }),
@@ -1267,16 +1185,11 @@ export class McpSession {
       });
     }
 
-    const headers = this.#resolved.server.headers === undefined
-      ? undefined
-      : Object.freeze(Object.fromEntries(Object.entries(this.#resolved.server.headers).map(([key, value]) => [
-          key,
-          expandRemoteTokens(value, this.#resolved.target, roots),
-        ])));
+    const headers = resolved.headers === undefined ? undefined : Object.freeze({ ...resolved.headers });
     return Object.freeze({
       ...(headers === undefined ? {} : { headers }),
-      kind: this.#resolved.server.kind,
-      url: new URL(expandRemoteTokens(this.#resolved.server.url, this.#resolved.target, roots)),
+      kind: 'streamable-http',
+      url: new URL(resolved.url),
     });
   }
 }
@@ -1284,11 +1197,11 @@ export class McpSession {
 /** Owns persistent MCP sessions and releases every epoch reference on shutdown. */
 export class McpSessionService {
   readonly #createClient: () => McpClient;
-  readonly #createSseTransport: (url: URL, options: RemoteTransportOptions) => Transport;
   readonly #createStdioTransport: (options: StdioOptions) => StdioTransport;
   readonly #createStreamableHttpTransport: (url: URL, options: RemoteTransportOptions) => Transport;
   readonly #epochStore: EpochStore;
   readonly #projectRoot: string;
+  readonly #registry: TargetRegistry;
   readonly #openingSessions = new Set<OpeningSession>();
   readonly #sessions = new Map<string, ActiveSession>();
   #closePromise: Promise<void> | undefined;
@@ -1297,15 +1210,6 @@ export class McpSessionService {
   constructor(options: McpSessionServiceOptions) {
     if (!isAbsolute(options.projectRoot)) throw new Error('MCP session service project root must be absolute.');
     this.#createClient = options.createClient ?? (() => new Client({ name: 'agent-bundle', version: '0.1.0' }));
-    this.#createSseTransport = options.createSseTransport ?? ((url, transportOptions) => new SSEClientTransport(url, {
-      eventSourceInit: transportOptions.headers === undefined ? undefined : {
-        fetch: (input, init) => fetch(input, {
-          ...init,
-          headers: new Headers({ ...Object.fromEntries(new Headers(init?.headers)), ...transportOptions.headers }),
-        }),
-      },
-      requestInit: transportOptions.headers === undefined ? undefined : { headers: transportOptions.headers },
-    }));
     this.#createStdioTransport = options.createStdioTransport ?? ((stdioOptions) => new StdioClientTransport(stdioOptions));
     this.#createStreamableHttpTransport = options.createStreamableHttpTransport ?? ((url, transportOptions) =>
       new StreamableHTTPClientTransport(url, {
@@ -1313,6 +1217,7 @@ export class McpSessionService {
       }));
     this.#epochStore = options.epochStore;
     this.#projectRoot = resolve(options.projectRoot);
+    this.#registry = options.registry ?? createDefaultRegistry();
   }
 
   async open(options: OpenMcpSessionOptions): Promise<McpSession> {
@@ -1343,24 +1248,28 @@ export class McpSessionService {
     options: OpenMcpSessionOptions,
     reportCleanupFailure: (error: unknown) => void,
   ): Promise<McpSession> {
-    const target = this.#target(options.target);
+    const target = options.target;
+    const runtime = this.#runtime(target);
     if (options.serverName.trim().length === 0) throw new Error('MCP server name must be nonempty.');
     const epochReference = await this.#epochStore.acquireEpochReference(options.epochId);
     let pluginData: string | undefined;
     let session: McpSession | undefined;
     try {
       const epochRoot = epochReference.root;
-      const diagnostics = await validateArtifact({ allowEpochStagingMarker: true, artifactRoot: epochRoot });
+      const diagnostics = await validateArtifact({
+        allowEpochStagingMarker: true,
+        artifactRoot: epochRoot,
+        registry: this.#registry,
+      });
       const errors = diagnostics.filter((diagnostic) => diagnostic.severity === 'error');
       if (errors.length > 0) throw new DiagnosticError(errors);
       const targetRoot = joinArtifact(epochRoot, target);
-      const server = await this.#server(epochRoot, target, options.serverName);
+      const server = await this.#server(targetRoot, target, runtime, options.serverName);
       pluginData = await mkdtemp(resolve(tmpdir(), 'agent-bundle-mcp-'));
       const sessionId = randomUUID();
       session = new McpSession({
         binding: { epochId: options.epochId, serverName: options.serverName, target },
         createClient: this.#createClient,
-        createSseTransport: this.#createSseTransport,
         createStdioTransport: this.#createStdioTransport,
         createStreamableHttpTransport: this.#createStreamableHttpTransport,
         epochReference,
@@ -1368,7 +1277,7 @@ export class McpSessionService {
         onClose: () => this.#invalidateSession(sessionId, new Error('MCP session closed.')),
         onClosing: () => this.#invalidateSession(sessionId, new Error('MCP session is closing.')),
         pluginData,
-        resolved: { server, target, targetRoot },
+        resolved: { runtime, server, target, targetRoot },
         workspaceRoot: resolve(options.workspaceRoot ?? this.#projectRoot),
       });
       await session.initialize(options);
@@ -1548,13 +1457,22 @@ export class McpSessionService {
     return entry;
   }
 
-  #target(name: string): NativeTarget {
-    if (name === 'portable' || name === 'codex' || name === 'claude') return name;
-    throw new Error(`Unsupported MCP target ${JSON.stringify(name)}.`);
+  #runtime(name: string): TargetMcpRuntimeContract {
+    if (!this.#registry.has(name) || !this.#registry.supports(name, 'mcp')) {
+      throw new Error(`Unsupported MCP target ${JSON.stringify(name)}.`);
+    }
+    const runtime = this.#registry.mcpRuntime(name);
+    if (runtime === undefined) throw new Error(`Unsupported MCP target ${JSON.stringify(name)}.`);
+    return runtime;
   }
 
-  async #server(epochRoot: string, target: NativeTarget, name: string): Promise<ManifestServer> {
-    const path = joinArtifact(epochRoot, `${target}/${manifestPath(target)}`);
+  async #server(
+    targetRoot: string,
+    target: string,
+    runtime: TargetMcpRuntimeContract,
+    name: string,
+  ): Promise<ModernMcpServer> {
+    const path = joinArtifact(targetRoot, runtime.manifestPath);
     let document: unknown;
     try {
       document = JSON.parse(await readFile(path, 'utf8'));
@@ -1564,13 +1482,13 @@ export class McpSessionService {
       }
       throw error;
     }
-    if (!isRecord(document) || !isRecord(document.mcpServers) || !Object.hasOwn(document.mcpServers, name)) {
+    const result = readTargetMcpServer(runtime, document, name);
+    if (result.status === 'missing') {
       throw new Error(`Expected exactly one ${target} MCP server matching ${JSON.stringify(name)}.`);
     }
-    const server = parseManifestServer(document.mcpServers[name]);
-    if (server === undefined) {
+    if (result.status === 'invalid') {
       throw new Error(`MCP server ${JSON.stringify(name)} in target ${JSON.stringify(target)} is invalid.`);
     }
-    return server;
+    return result.server;
   }
 }

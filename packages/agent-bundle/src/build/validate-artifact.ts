@@ -2,7 +2,9 @@ import { readFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { spawn } from 'node:child_process';
 
+import { createDefaultRegistry, type TargetRegistry } from '../adapters/registry.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
+import { agentSkillsSchemaRevision } from '../schemas/agent-skills/contract.ts';
 import {
   artifactManifestName,
   listArtifactFiles,
@@ -17,13 +19,23 @@ export interface ValidateArtifactOptions {
   /** Enables the one store-owned epoch staging marker after its exact schema validates. */
   readonly allowEpochStagingMarker?: true;
   readonly artifactRoot: string;
+  /** Target contracts that produced and must validate this artifact. */
+  readonly registry?: TargetRegistry;
 }
 
-const diagnostic = (code: string, message: string, generatedPath?: string): Diagnostic => ({
+const diagnostic = (
+  code: string,
+  message: string,
+  generatedPath?: string,
+  target?: string,
+  recovery?: string,
+): Diagnostic => ({
   code,
   generatedPath,
   message,
+  ...(recovery === undefined ? {} : { recovery }),
   severity: 'error',
+  ...(target === undefined ? {} : { target }),
 });
 
 const checkJavaScriptSyntax = async (path: string): Promise<string | undefined> =>
@@ -115,6 +127,107 @@ const artifactFiles = async (context: ValidateArtifactOptions): Promise<readonly
   );
 };
 
+const sameSchemas = (
+  manifest: ArtifactManifestV2['targets'][number]['schemas'],
+  registered: ReturnType<TargetRegistry['metadata']>['schemas'],
+): boolean => {
+  const expected = [...registered].sort((left, right) => left.name.localeCompare(right.name));
+  return manifest.length === expected.length && manifest.every((schema, index) => {
+    const current = expected[index];
+    return current !== undefined &&
+      schema.name === current.name &&
+      schema.revision === current.revision &&
+      schema.sha256 === current.sha256;
+  });
+};
+
+const matchesTargetMetadata = (
+  target: ArtifactManifestV2['targets'][number],
+  metadata: ReturnType<TargetRegistry['metadata']>,
+): boolean => target.adapterRevision === metadata.adapterRevision &&
+  target.capabilityRevision === metadata.capabilityRevision &&
+  target.capabilitySha256 === metadata.capabilitySha256 &&
+  target.observedVersion === metadata.observedVersion &&
+  sameSchemas(target.schemas, metadata.schemas);
+
+const targetRecovery = 'Rebuild the artifact with the current target registry.';
+
+const validateTargetContracts = async (options: {
+  readonly artifactRoot: string;
+  readonly files: readonly ArtifactFile[];
+  readonly manifest: ArtifactManifestV2;
+  readonly registry: TargetRegistry;
+}): Promise<readonly Diagnostic[]> => {
+  const diagnostics: Diagnostic[] = [];
+  const files = new Set(options.files.map((file) => file.path));
+
+  for (const target of options.manifest.targets) {
+    if (!options.registry.has(target.name)) {
+      diagnostics.push(diagnostic(
+        'AB6009',
+        `Artifact declares unknown target ${JSON.stringify(target.name)}.`,
+        artifactManifestName,
+        target.name,
+        targetRecovery,
+      ));
+      continue;
+    }
+    if (!matchesTargetMetadata(target, options.registry.metadata(target.name))) {
+      diagnostics.push(diagnostic(
+        'AB6010',
+        `Artifact metadata for target ${JSON.stringify(target.name)} does not match its registered contract.`,
+        artifactManifestName,
+        target.name,
+        targetRecovery,
+      ));
+      continue;
+    }
+
+    const validation = options.registry.artifactValidation(target.name);
+    const validators = new Map(validation.schemas.map((schema) => [schema.name, schema.validate]));
+    for (const document of validation.documents) {
+      const generatedPath = `${target.name}/${document.path}`;
+      if (!files.has(generatedPath)) {
+        if (document.required) {
+          diagnostics.push(diagnostic(
+            'AB6011',
+            `Target ${JSON.stringify(target.name)} is missing required document ${JSON.stringify(document.path)}.`,
+            generatedPath,
+            target.name,
+            targetRecovery,
+          ));
+        }
+        continue;
+      }
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(await readFile(resolve(options.artifactRoot, generatedPath), 'utf8')) as unknown;
+      } catch {
+        continue;
+      }
+      const validate = validators.get(document.schema);
+      if (validate === undefined) continue;
+      let issues;
+      try {
+        issues = validate(parsed);
+      } catch {
+        issues = Object.freeze([{ instancePath: '/', message: 'schema validation failed' }]);
+      }
+      const issue = issues[0];
+      if (issue !== undefined) {
+        diagnostics.push(diagnostic(
+          'AB6012',
+          `Target ${JSON.stringify(target.name)} document ${JSON.stringify(document.path)} is invalid for schema ${JSON.stringify(document.schema)} at ${issue.instancePath || '/'}: ${issue.message}.`,
+          generatedPath,
+          target.name,
+          targetRecovery,
+        ));
+      }
+    }
+  }
+  return Object.freeze(diagnostics);
+};
+
 export const validateArtifactFiles = async (
   context: ValidateArtifactOptions,
 ): Promise<readonly Diagnostic[]> => {
@@ -166,9 +279,28 @@ export const validateArtifact = async (context: ValidateArtifactOptions): Promis
 
   const actualFiles = await artifactFiles(context);
   const diagnostics: Diagnostic[] = [];
+  if (
+    manifest.agentSkills.schemaSha256 !== agentSkillsSchemaRevision.schemaSha256 ||
+    manifest.agentSkills.sourceRevision !== agentSkillsSchemaRevision.sourceRevision ||
+    manifest.agentSkills.specification !== agentSkillsSchemaRevision.specification
+  ) {
+    diagnostics.push(diagnostic(
+      'AB6008',
+      'Artifact Agent Skills provenance does not match the pinned schema contract.',
+      artifactManifestName,
+      undefined,
+      'Rebuild the artifact with the pinned Agent Skills contract.',
+    ));
+  }
   if (!matchesManifestFileTable(actualFiles, manifest.files)) {
     diagnostics.push(diagnostic('AB6004', 'Artifact files do not match the manifest.', artifactManifestName));
   }
+  diagnostics.push(...await validateTargetContracts({
+    artifactRoot: context.artifactRoot,
+    files: actualFiles,
+    manifest,
+    registry: context.registry ?? createDefaultRegistry(),
+  }));
   diagnostics.push(...await validateArtifactFiles(context));
   return Object.freeze(diagnostics);
 };

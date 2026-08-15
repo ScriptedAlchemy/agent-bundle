@@ -6,6 +6,7 @@ import type {
   NormalizedPlugin,
 } from '../core/types.ts';
 import type { TargetHookContract } from './hook-contract.ts';
+import type { TargetMcpRuntimeContract } from '../services/mcp-runtime.ts';
 
 export interface TargetArtifactWrite {
   readonly content: string;
@@ -44,14 +45,6 @@ export interface TargetArtifactPlan {
   readonly hookEntries?: readonly TargetHookEntry[];
 }
 
-export type McpPathTokenRoot = 'pluginData' | 'pluginRoot' | 'workspaceRoot';
-
-export interface McpPathTokenCapabilities {
-  readonly args: Readonly<Record<string, McpPathTokenRoot>>;
-  readonly cwd: Readonly<Record<string, McpPathTokenRoot>>;
-  readonly env: Readonly<Record<string, McpPathTokenRoot>>;
-}
-
 export interface TargetConfigExtension {
   readonly key: string;
 }
@@ -70,12 +63,55 @@ export interface TargetAdapterMetadata {
   readonly schemas: readonly TargetSchemaDescriptor[];
 }
 
+export interface TargetArtifactDocumentIssue {
+  readonly instancePath: string;
+  readonly message: string;
+}
+
+export type TargetArtifactDocumentValidator = (
+  document: unknown,
+) => readonly TargetArtifactDocumentIssue[];
+
+export interface TargetArtifactSchemaContract {
+  readonly name: string;
+  readonly validate: TargetArtifactDocumentValidator;
+}
+
+export interface TargetArtifactDocumentContract {
+  readonly path: string;
+  readonly required: boolean;
+  readonly schema: string;
+}
+
+export interface TargetArtifactValidationContract {
+  readonly documents: readonly TargetArtifactDocumentContract[];
+  readonly schemas: readonly TargetArtifactSchemaContract[];
+}
+
+interface JsonSchemaValidator {
+  (document: unknown): boolean;
+  readonly errors?: readonly { readonly instancePath: string; readonly message?: string }[] | null;
+}
+
+/** Converts the checked-in AJV validator result into the artifact contract's stable issue shape. */
+export const validateJsonSchemaDocument = (
+  validator: JsonSchemaValidator,
+): TargetArtifactDocumentValidator => (document) => {
+  if (validator(document)) return Object.freeze([]);
+  return Object.freeze((validator.errors ?? []).map((error) => Object.freeze({
+    instancePath: error.instancePath,
+    message: error.message ?? 'schema validation failed',
+  })));
+};
+
 export interface TargetAdapter {
+  /** Validates target-native JSON documents against schemas pinned in metadata. */
+  readonly artifactValidation?: TargetArtifactValidationContract;
   readonly capabilities: Readonly<Record<string, boolean>>;
   readonly configExtension?: TargetConfigExtension;
   readonly hookContract?: TargetHookContract;
   readonly metadata: TargetAdapterMetadata;
-  readonly mcpPathTokens?: McpPathTokenCapabilities;
+  readonly mcpRuntime?: TargetMcpRuntimeContract;
   readonly name: string;
   nativeHookSource?(config: Readonly<AgentBundleConfig>): string | undefined;
   plan(model: NormalizedPlugin): TargetArtifactPlan;

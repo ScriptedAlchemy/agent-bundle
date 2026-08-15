@@ -590,6 +590,7 @@ it('bundles each local MCP entry once and maps every target manifest to that art
 
     const collisionRegistry = new TargetRegistry().register({
       capabilities: { mcp: true },
+      mcpRuntime: createDefaultRegistry().mcpRuntime('portable'),
       metadata: testAdapterMetadata,
       name: 'portable',
       plan: () => ({
@@ -755,7 +756,7 @@ it('rejects the MCP Apps virtual module outside Agent Bundle compilation', async
   );
 });
 
-it('uses the selected remote manifest with propagated cancellation and cleans data before rejecting tampering', async () => {
+it('uses the selected streamable HTTP manifest with propagated cancellation and cleans data before rejecting tampering', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-mcp-remote-'));
   try {
     await writeFile(join(root, 'agent-bundle.config.ts'), 'export default {};\n');
@@ -763,11 +764,6 @@ it('uses the selected remote manifest with propagated cancellation and cleans da
       loadedProject(root, {
         mcp: {
           servers: {
-            events: {
-              headers: { 'X-Mode': 'events' },
-              transport: 'sse',
-              url: 'https://mcp.example.test/events',
-            },
             http: {
               headers: { 'X-Data': pathTokens.pluginData },
               transport: 'streamable-http',
@@ -787,7 +783,6 @@ it('uses the selected remote manifest with propagated cancellation and cleans da
     const connected: Array<{ readonly options: { readonly signal?: AbortSignal; readonly timeout: number }; readonly transport: unknown }> = [];
     const requested: Array<{ readonly signal?: AbortSignal; readonly timeout: number }> = [];
     const http: Array<{ readonly headers?: Record<string, string>; readonly url: string }> = [];
-    const sse: Array<{ readonly headers?: Record<string, string>; readonly url: string }> = [];
     let closes = 0;
     const service = new McpService({
       createClient: () => ({
@@ -805,10 +800,6 @@ it('uses the selected remote manifest with propagated cancellation and cleans da
           return { tools: [] };
         },
       }),
-      createSseTransport: (url, options) => {
-        sse.push({ ...options, url: url.href });
-        return {} as never;
-      },
       createStreamableHttpTransport: (url, options) => {
         http.push({ ...options, url: url.href });
         return {} as never;
@@ -823,18 +814,16 @@ it('uses the selected remote manifest with propagated cancellation and cleans da
       timeoutMs: 321,
       workspaceRoot: join(root, 'workspace'),
     });
-    await service.list({ artifact, server: 'events', target: 'claude' });
 
     expect(http).toEqual([{ headers: { 'X-Data': expect.any(String) }, url: 'https://mcp.example.test/tools' }]);
-    expect(sse).toEqual([{ headers: { 'X-Mode': 'events' }, url: 'https://mcp.example.test/events' }]);
     expect(connected[0]?.options).toEqual({ signal: controller.signal, timeout: 321 });
     expect(requested[0]).toEqual({ signal: controller.signal, timeout: 321 });
-    expect(closes).toBe(2);
+    expect(closes).toBe(1);
     await expect(access(http[0]!.headers!['X-Data']!)).rejects.toMatchObject({ code: 'ENOENT' });
 
     await writeFile(join(artifact, 'claude', '.claude-plugin', 'plugin.json'), '{"name":"tampered"}\n');
     await expect(service.list({ artifact, server: 'http', target: 'claude' })).rejects.toThrow();
-    expect(closes).toBe(2);
+    expect(closes).toBe(1);
   } finally {
     await rm(root, { force: true, recursive: true });
   }

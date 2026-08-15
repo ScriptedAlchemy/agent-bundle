@@ -15,6 +15,7 @@ import type {
   McpSessionTraceListener,
   McpSessionTraceMessage,
   McpSessionTraceReplay,
+  McpSessionTraceSubscription,
 } from '../src/dev/mcp-session-service.ts';
 
 interface StartedRoutes {
@@ -135,7 +136,7 @@ class RecordingSession implements McpSessionRouteSession {
   subscribeTrace(
     options: { readonly afterSequence?: number },
     listener: McpSessionTraceListener,
-  ): { readonly unsubscribe: () => void } {
+  ): McpSessionTraceSubscription {
     this.trace(options.afterSequence);
     for (const entry of this.#replay) listener(entry);
     this.#listeners.add(listener);
@@ -274,6 +275,17 @@ it('accepts only an epoch target and server name when creating a session', async
       },
     });
     expect(service.opens).toEqual([{ epochId: 'epoch-a', serverName: 'weather', target: 'portable' }]);
+
+    const synthetic = await fetch(`${started.url}/api/mcp/sessions`, {
+      body: JSON.stringify({ epochId: 'epoch-a', serverName: 'weather', target: 'synthetic-mcp' }),
+      headers: { ...headers(), 'content-type': 'application/json' },
+      method: 'POST',
+    });
+    expect(synthetic.status).toBe(200);
+    expect(service.opens).toEqual([
+      { epochId: 'epoch-a', serverName: 'weather', target: 'portable' },
+      { epochId: 'epoch-a', serverName: 'weather', target: 'synthetic-mcp' },
+    ]);
   } finally {
     await started.close();
   }

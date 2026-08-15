@@ -8,10 +8,24 @@ import { claudeAdapter } from './claude.ts';
 import { codexAdapter } from './codex.ts';
 import type { TargetHookContract } from './hook-contract.ts';
 import { portableAdapter } from './portable.ts';
-import type { TargetAdapter, TargetAdapterMetadata, TargetSchemaDescriptor } from './types.ts';
+import type {
+  TargetAdapter,
+  TargetArtifactDocumentContract,
+  TargetArtifactDocumentValidator,
+  TargetArtifactSchemaContract,
+  TargetArtifactValidationContract,
+  TargetAdapterMetadata,
+  TargetSchemaDescriptor,
+} from './types.ts';
+import type { TargetMcpRuntimeContract } from '../services/mcp-runtime.ts';
 
 const sha256Pattern = /^[0-9a-f]{64}$/;
 type NativeHookSource = NonNullable<TargetAdapter['nativeHookSource']>;
+
+const emptyArtifactValidation: TargetArtifactValidationContract = Object.freeze({
+  documents: Object.freeze([]),
+  schemas: Object.freeze([]),
+});
 
 const requireNonempty = (value: unknown, field: string): string => {
   if (typeof value !== 'string' || value.trim().length === 0) {
@@ -27,11 +41,19 @@ const requireSha256 = (value: unknown, field: string): string => {
   return value;
 };
 
+const record = (value: unknown): Record<string, unknown> | undefined =>
+  value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+
+const isArtifactDocumentValidator = (value: unknown): value is TargetArtifactDocumentValidator =>
+  typeof value === 'function';
+
 const snapshotSchema = (schema: unknown): TargetSchemaDescriptor => {
-  if (schema === null || typeof schema !== 'object') {
+  const candidate = record(schema);
+  if (candidate === undefined) {
     throw new Error('Target adapter metadata schemas must contain records.');
   }
-  const candidate = schema as Record<string, unknown>;
   return Object.freeze({
     name: requireNonempty(candidate.name, 'schema name'),
     revision: requireNonempty(candidate.revision, 'schema revision'),
@@ -40,10 +62,10 @@ const snapshotSchema = (schema: unknown): TargetSchemaDescriptor => {
 };
 
 const snapshotMetadata = (metadata: unknown): TargetAdapterMetadata => {
-  if (metadata === null || typeof metadata !== 'object') {
+  const candidate = record(metadata);
+  if (candidate === undefined) {
     throw new Error('Target adapter metadata is required.');
   }
-  const candidate = metadata as Record<string, unknown>;
   if (!Array.isArray(candidate.schemas)) {
     throw new Error('Target adapter metadata schemas must be an array.');
   }
@@ -63,6 +85,90 @@ const snapshotMetadata = (metadata: unknown): TargetAdapterMetadata => {
     capabilitySha256: requireSha256(candidate.capabilitySha256, 'capability hash'),
     observedVersion: requireNonempty(candidate.observedVersion, 'observed version'),
     schemas: Object.freeze(schemas),
+  });
+};
+
+const isSafeArtifactDocumentPath = (value: string): boolean => {
+  const segments = value.split('/');
+  return value.length > 0 &&
+    !value.startsWith('/') &&
+    !value.includes('\\') &&
+    !value.includes('\0') &&
+    segments.every((segment) => segment.length > 0 && segment !== '.' && segment !== '..');
+};
+
+const snapshotArtifactValidation = (
+  adapter: TargetAdapter,
+  metadata: TargetAdapterMetadata,
+): TargetArtifactValidationContract => {
+  const validation = adapter.artifactValidation;
+  if (validation === undefined) {
+    if (metadata.schemas.length === 0) return emptyArtifactValidation;
+    throw new Error(`Target adapter "${adapter.name}" must declare artifact validation for every metadata schema.`);
+  }
+  if (validation === null || typeof validation !== 'object' ||
+    !Array.isArray(validation.schemas) || !Array.isArray(validation.documents)) {
+    throw new Error('Target adapter artifact validation must declare schema and document arrays.');
+  }
+
+  const schemaNames = new Set<string>();
+  const schemas = validation.schemas.map((candidate): TargetArtifactSchemaContract => {
+    const schema = record(candidate);
+    if (schema === undefined) {
+      throw new Error('Target adapter artifact schema contracts must contain records.');
+    }
+    const name = requireNonempty(schema.name, 'artifact schema contract name');
+    if (schemaNames.has(name)) {
+      throw new Error(`Target adapter artifact schema contract "${name}" is already declared.`);
+    }
+    if (!isArtifactDocumentValidator(schema.validate)) {
+      throw new Error(`Target adapter artifact schema contract "${name}" must provide a validator.`);
+    }
+    schemaNames.add(name);
+    return Object.freeze({ name, validate: schema.validate });
+  });
+  const metadataSchemaNames = new Set(metadata.schemas.map((schema) => schema.name));
+  if (
+    schemaNames.size !== metadataSchemaNames.size ||
+    [...schemaNames].some((name) => !metadataSchemaNames.has(name))
+  ) {
+    throw new Error(`Target adapter "${adapter.name}" artifact schema contracts must exactly match metadata schemas.`);
+  }
+
+  const documentPaths = new Set<string>();
+  const referencedSchemas = new Set<string>();
+  const documents = validation.documents.map((candidate): TargetArtifactDocumentContract => {
+    const document = record(candidate);
+    if (document === undefined) {
+      throw new Error('Target adapter artifact documents must contain records.');
+    }
+    const path = requireNonempty(document.path, 'artifact document path');
+    if (!isSafeArtifactDocumentPath(path)) {
+      throw new Error(`Target adapter artifact document path ${JSON.stringify(path)} must be a safe relative POSIX path.`);
+    }
+    if (documentPaths.has(path)) {
+      throw new Error(`Target adapter artifact document path "${path}" is already declared.`);
+    }
+    const schema = requireNonempty(document.schema, 'artifact document schema');
+    if (!schemaNames.has(schema)) {
+      throw new Error(`Target adapter artifact document ${JSON.stringify(path)} references unknown schema "${schema}".`);
+    }
+    if (typeof document.required !== 'boolean') {
+      throw new Error(`Target adapter artifact document ${JSON.stringify(path)} must declare whether it is required.`);
+    }
+    documentPaths.add(path);
+    referencedSchemas.add(schema);
+    return Object.freeze({ path, required: document.required, schema });
+  });
+  if (documents.length === 0 || !documents.some((document) => document.required)) {
+    throw new Error(`Target adapter "${adapter.name}" must declare at least one required artifact document.`);
+  }
+  if ([...schemaNames].some((name) => !referencedSchemas.has(name))) {
+    throw new Error(`Target adapter "${adapter.name}" must assign every artifact schema contract to a document.`);
+  }
+  return Object.freeze({
+    documents: Object.freeze(documents.sort((left, right) => left.path.localeCompare(right.path))),
+    schemas: Object.freeze(schemas.sort((left, right) => left.name.localeCompare(right.name))),
   });
 };
 
@@ -90,12 +196,41 @@ const snapshotHookContract = (adapter: TargetAdapter): TargetHookContract | unde
   });
 };
 
+const snapshotMcpRuntime = (adapter: TargetAdapter): TargetMcpRuntimeContract | undefined => {
+  const mcpRuntime = adapter.mcpRuntime;
+  if (adapter.capabilities.mcp === true && mcpRuntime === undefined) {
+    throw new Error(`Target adapter "${adapter.name}" declares mcp capability without an MCP runtime contract.`);
+  }
+  if (adapter.capabilities.mcp !== true && mcpRuntime !== undefined) {
+    throw new Error(`Target adapter "${adapter.name}" declares an MCP runtime contract without mcp capability.`);
+  }
+  if (mcpRuntime === undefined) return undefined;
+  if (typeof mcpRuntime.manifestPath !== 'string' || mcpRuntime.manifestPath.trim().length === 0) {
+    throw new Error('Target adapter MCP runtime manifest path must be a nonempty string.');
+  }
+  if (
+    typeof mcpRuntime.readModernServer !== 'function' ||
+    typeof mcpRuntime.resolveStdioArgument !== 'function' ||
+    typeof mcpRuntime.resolveValue !== 'function'
+  ) {
+    throw new Error('Target adapter MCP runtime contract methods must be functions.');
+  }
+  return Object.freeze({
+    manifestPath: mcpRuntime.manifestPath,
+    readModernServer: mcpRuntime.readModernServer,
+    resolveStdioArgument: mcpRuntime.resolveStdioArgument,
+    resolveValue: mcpRuntime.resolveValue,
+  });
+};
+
 export class TargetRegistry implements NormalizationTargetRegistry {
   readonly #adapters = new Map<string, TargetAdapter>();
+  readonly #artifactValidations = new Map<string, TargetArtifactValidationContract>();
   readonly #defaults: string[] = [];
   readonly #extensions = new Map<string, NormalizationConfigExtension>();
   readonly #hookContracts = new Map<string, TargetHookContract>();
   readonly #metadata = new Map<string, TargetAdapterMetadata>();
+  readonly #mcpRuntimes = new Map<string, TargetMcpRuntimeContract>();
   readonly #nativeHookSources = new Map<string, NativeHookSource>();
 
   register(adapter: TargetAdapter, options: { readonly default?: boolean } = {}): this {
@@ -107,10 +242,13 @@ export class TargetRegistry implements NormalizationTargetRegistry {
       throw new Error(`Config extension key "${extension.key}" is already registered.`);
     }
     const metadata = snapshotMetadata(adapter.metadata);
+    const artifactValidation = snapshotArtifactValidation(adapter, metadata);
     const nativeHookSource = snapshotNativeHookSource(adapter);
     const hookContract = snapshotHookContract(adapter);
+    const mcpRuntime = snapshotMcpRuntime(adapter);
 
     this.#adapters.set(adapter.name, adapter);
+    this.#artifactValidations.set(adapter.name, artifactValidation);
     this.#metadata.set(adapter.name, metadata);
     if (extension !== undefined) {
       this.#extensions.set(extension.key, Object.freeze({
@@ -123,6 +261,9 @@ export class TargetRegistry implements NormalizationTargetRegistry {
     }
     if (hookContract !== undefined) {
       this.#hookContracts.set(adapter.name, hookContract);
+    }
+    if (mcpRuntime !== undefined) {
+      this.#mcpRuntimes.set(adapter.name, mcpRuntime);
     }
     if (options.default === true) {
       this.#defaults.push(adapter.name);
@@ -148,6 +289,14 @@ export class TargetRegistry implements NormalizationTargetRegistry {
     return metadata;
   }
 
+  artifactValidation(name: string): TargetArtifactValidationContract {
+    const validation = this.#artifactValidations.get(name);
+    if (validation === undefined) {
+      throw new Error(`Unknown target adapter "${name}".`);
+    }
+    return validation;
+  }
+
   has(name: string): boolean {
     return this.#adapters.has(name);
   }
@@ -157,6 +306,13 @@ export class TargetRegistry implements NormalizationTargetRegistry {
       throw new Error(`Unknown target adapter "${name}".`);
     }
     return this.#hookContracts.get(name);
+  }
+
+  mcpRuntime(name: string): TargetMcpRuntimeContract | undefined {
+    if (!this.#adapters.has(name)) {
+      throw new Error(`Unknown target adapter "${name}".`);
+    }
+    return this.#mcpRuntimes.get(name);
   }
 
   configExtensions(): readonly NormalizationConfigExtension[] {

@@ -339,7 +339,7 @@ export const build = async (options: BuildOptions): Promise<BuildResult> => {
         targets: stagedTargets,
       }),
     });
-    const diagnostics = await validateArtifact({ artifactRoot: stageRoot });
+    const diagnostics = await validateArtifact({ artifactRoot: stageRoot, registry: options.registry });
     if (diagnostics.some((entry) => entry.severity === 'error')) {
       throw new DiagnosticError(diagnostics);
     }

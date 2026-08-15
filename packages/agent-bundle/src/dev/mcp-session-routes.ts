@@ -4,6 +4,7 @@ import type {
   McpSessionBinding,
   McpSessionConnectionState,
   McpSessionInspectorConfig,
+  McpSessionTraceListener,
   McpSessionTraceReplay,
   McpSessionTraceSubscription,
 } from './mcp-session-service.ts';
@@ -51,7 +52,7 @@ export interface McpSessionRouteSession {
   restart(): Promise<McpSessionConnectionState>;
   subscribeTrace(
     options: { readonly afterSequence?: number },
-    listener: (entry: unknown) => void,
+    listener: McpSessionTraceListener,
   ): McpSessionTraceSubscription;
   trace(afterSequence?: number): McpSessionTraceReplay;
 }
@@ -211,15 +212,15 @@ const jsonBody = async (request: IncomingMessage): Promise<JsonObject> => {
     if (isRequestDiagnostic(error)) throw error;
     throw requestError(diagnostic('AB8001', 'Request body must be valid JSON.', 400));
   }
-  if (!isRecord(parsed)) return invalidShape();
-  return parsed;
+  return isRecord(parsed) ? parsed : invalidShape();
 };
 
 const createRequest = (value: JsonObject): { readonly epochId: string; readonly serverName: string; readonly target: string } => {
-  if (!hasOnly(value, ['epochId', 'serverName', 'target'])) invalidShape();
+  if (!hasOnly(value, ['epochId', 'serverName', 'target'])) return invalidShape();
   const { epochId, serverName, target } = value;
-  if (!nonemptyString(epochId) || !nonemptyString(serverName) || !nonemptyString(target)) return invalidShape();
-  if (target !== 'portable' && target !== 'codex' && target !== 'claude') invalidShape();
+  if (!nonemptyString(epochId)) return invalidShape();
+  if (!nonemptyString(serverName)) return invalidShape();
+  if (!nonemptyString(target)) return invalidShape();
   return Object.freeze({ epochId, serverName, target });
 };
 
@@ -233,36 +234,43 @@ type Operation =
 const operationRequest = (value: JsonObject): Operation => {
   const operation = value.operation;
   if (operation === 'initialize') {
-    if (!hasOnly(value, ['operation'])) invalidShape();
+    if (!hasOnly(value, ['operation'])) return invalidShape();
     return Object.freeze({ operation });
   }
   if (operation === 'tools/list' || operation === 'resources/list' || operation === 'resources/templates/list' || operation === 'prompts/list') {
-    if (!hasOnly(value, ['operation'])) invalidShape();
+    if (!hasOnly(value, ['operation'])) return invalidShape();
     return Object.freeze({ operation });
   }
   if (operation === 'prompts/get') {
-    if (!hasOnly(value, ['arguments', 'name', 'operation']) || !nonemptyString(value.name)) return invalidShape();
-    if (value.arguments !== undefined && !stringRecord(value.arguments)) return invalidShape();
+    if (!hasOnly(value, ['arguments', 'name', 'operation'])) return invalidShape();
+    const name = value.name;
+    const argumentsValue = value.arguments;
+    if (!nonemptyString(name)) return invalidShape();
+    if (argumentsValue !== undefined && !stringRecord(argumentsValue)) return invalidShape();
     return Object.freeze({
-      ...(value.arguments === undefined ? {} : { arguments: value.arguments }),
-      name: value.name,
+      ...(argumentsValue === undefined ? {} : { arguments: argumentsValue }),
+      name,
       operation,
     });
   }
   if (operation === 'resources/read') {
-    if (!hasOnly(value, ['operation', 'uri']) || !nonemptyString(value.uri)) return invalidShape();
-    return Object.freeze({ operation, uri: value.uri });
+    if (!hasOnly(value, ['operation', 'uri'])) return invalidShape();
+    const uri = value.uri;
+    if (!nonemptyString(uri)) return invalidShape();
+    return Object.freeze({ operation, uri });
   }
   if (operation === 'tools/call') {
-    if (!hasOnly(value, ['arguments', 'name', 'operation', 'requestId']) || !nonemptyString(value.name) || !jsonRecord(value.arguments)) {
-      return invalidShape();
-    }
-    if (value.requestId !== undefined && !nonemptyString(value.requestId)) return invalidShape();
+    if (!hasOnly(value, ['arguments', 'name', 'operation', 'requestId'])) return invalidShape();
+    const argumentsValue = value.arguments;
+    const name = value.name;
+    const requestId = value.requestId;
+    if (!nonemptyString(name) || !jsonRecord(argumentsValue)) return invalidShape();
+    if (requestId !== undefined && !nonemptyString(requestId)) return invalidShape();
     return Object.freeze({
-      arguments: value.arguments,
-      name: value.name,
+      arguments: argumentsValue,
+      name,
       operation,
-      ...(value.requestId === undefined ? {} : { requestId: value.requestId }),
+      ...(requestId === undefined ? {} : { requestId }),
     });
   }
   return invalidShape();
@@ -404,8 +412,10 @@ export class McpSessionRoutes {
     if (parsed.kind === 'cancel') {
       if (method !== 'POST') return responseDiagnostic(response, diagnostic('AB8007', 'Route does not accept this method.', 405));
       const body = await jsonBody(request);
-      if (!hasOnly(body, ['requestId']) || !nonemptyString(body.requestId)) return invalidShape();
-      return responseJson(response, { cancelled: session.cancel(body.requestId) });
+      if (!hasOnly(body, ['requestId'])) return invalidShape();
+      const requestId = body.requestId;
+      if (!nonemptyString(requestId)) return invalidShape();
+      return responseJson(response, { cancelled: session.cancel(requestId) });
     }
     try {
       if (!await service.closeSession(parsed.id)) throw this.#unavailable();
@@ -434,12 +444,14 @@ export class McpSessionRoutes {
       return session.getPrompt({ ...(operation.arguments === undefined ? {} : { arguments: operation.arguments }), name: operation.name });
     }
     if (operation.operation === 'resources/read') return session.readResource({ uri: operation.uri });
-    if (operation.operation !== 'tools/call') return invalidShape();
-    return session.callTool({
-      arguments: operation.arguments,
-      name: operation.name,
-      ...(operation.requestId === undefined ? {} : { requestId: operation.requestId }),
-    });
+    if (operation.operation === 'tools/call') {
+      return session.callTool({
+        arguments: operation.arguments,
+        name: operation.name,
+        ...(operation.requestId === undefined ? {} : { requestId: operation.requestId }),
+      });
+    }
+    return invalidShape();
   }
 
   #stream(

@@ -10,6 +10,12 @@ import {
   type NormalizedMcpServer,
   type NormalizedPlugin,
 } from '../core/types.ts';
+import {
+  allMcpPathTokenFields,
+  createMcpPathTokenResolver,
+  standardMcpPathTokens,
+} from '../services/mcp-path-tokens.ts';
+import { createTargetMcpRuntime } from '../services/mcp-runtime.ts';
 import capabilityTable from './capabilities/claude-2.1.232.json' with { type: 'json' };
 import {
   mergeHookDocuments,
@@ -25,7 +31,12 @@ import hooksSchema from './schemas/claude/hooks.schema.json' with { type: 'json'
 import marketplaceSchema from './schemas/claude/marketplace.schema.json' with { type: 'json' };
 import mcpSchema from './schemas/claude/mcp.schema.json' with { type: 'json' };
 import pluginSchema from './schemas/claude/plugin.schema.json' with { type: 'json' };
-import type { TargetAdapter, TargetArtifactEntry, TargetArtifactPlan } from './types.ts';
+import {
+  validateJsonSchemaDocument,
+  type TargetAdapter,
+  type TargetArtifactEntry,
+  type TargetArtifactPlan,
+} from './types.ts';
 
 export interface ClaudeConfigExtension {
   claude?: AgentBundleHostConfig;
@@ -69,6 +80,35 @@ const metadata = Object.freeze({
       }))
       .sort((left, right) => left.name.localeCompare(right.name)),
   ),
+});
+
+const artifactValidation = Object.freeze({
+  documents: Object.freeze([
+    Object.freeze({ path: 'hooks/hooks.json', required: false, schema: 'hooks' }),
+    Object.freeze({ path: '.claude-plugin/marketplace.json', required: false, schema: 'marketplace' }),
+    Object.freeze({ path: '.mcp.json', required: false, schema: 'mcp' }),
+    Object.freeze({ path: '.claude-plugin/plugin.json', required: true, schema: 'plugin' }),
+  ]),
+  schemas: Object.freeze([
+    Object.freeze({ name: 'hooks', validate: validateJsonSchemaDocument(validateHooks) }),
+    Object.freeze({ name: 'marketplace', validate: validateJsonSchemaDocument(validateMarketplace) }),
+    Object.freeze({ name: 'mcp', validate: validateJsonSchemaDocument(validateMcp) }),
+    Object.freeze({ name: 'plugin', validate: validateJsonSchemaDocument(validatePlugin) }),
+  ]),
+});
+
+const mcpRuntime = createTargetMcpRuntime({
+  manifestPath: '.mcp.json',
+  remoteTypes: ['http'],
+  resolveValue: createMcpPathTokenResolver({
+    knownTokens: standardMcpPathTokens,
+    target: claudeName,
+    tokens: allMcpPathTokenFields(Object.freeze({
+      '${CLAUDE_PLUGIN_DATA}': 'pluginData',
+      '${CLAUDE_PLUGIN_ROOT}': 'pluginRoot',
+      '${CLAUDE_PROJECT_DIR}': 'workspaceRoot',
+    })),
+  }),
 });
 
 const errorDiagnostic = (code: string, message: string): Diagnostic => ({
@@ -309,6 +349,7 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
 };
 
 export const claudeAdapter: TargetAdapter = Object.freeze({
+  artifactValidation,
   capabilities: Object.freeze({
     marketplace: true,
     hooks: true,
@@ -319,23 +360,7 @@ export const claudeAdapter: TargetAdapter = Object.freeze({
   configExtension: Object.freeze({ key: claudeName }),
   hookContract,
   metadata,
-  mcpPathTokens: Object.freeze({
-    args: Object.freeze({
-      '${CLAUDE_PLUGIN_DATA}': 'pluginData',
-      '${CLAUDE_PLUGIN_ROOT}': 'pluginRoot',
-      '${CLAUDE_PROJECT_DIR}': 'workspaceRoot',
-    }),
-    cwd: Object.freeze({
-      '${CLAUDE_PLUGIN_DATA}': 'pluginData',
-      '${CLAUDE_PLUGIN_ROOT}': 'pluginRoot',
-      '${CLAUDE_PROJECT_DIR}': 'workspaceRoot',
-    }),
-    env: Object.freeze({
-      '${CLAUDE_PLUGIN_DATA}': 'pluginData',
-      '${CLAUDE_PLUGIN_ROOT}': 'pluginRoot',
-      '${CLAUDE_PROJECT_DIR}': 'workspaceRoot',
-    }),
-  }),
+  mcpRuntime,
   name: claudeName,
   nativeHookSource: (config: Readonly<AgentBundleConfig>) => config.claude?.nativeHooks,
   plan,

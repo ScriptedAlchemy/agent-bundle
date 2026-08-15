@@ -1,8 +1,7 @@
 import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
-import { createDefaultRegistry } from './adapters/registry.ts';
+import { createDefaultRegistry, TargetRegistry } from './adapters/registry.ts';
 import type { TargetArtifactEntry, TargetHookEntry } from './adapters/types.ts';
 import { build as buildArtifact, type BuildResult } from './build/build.ts';
 export type { BuildResult } from './build/build.ts';
@@ -74,6 +73,35 @@ export type {
 
 export { HookService } from './services/hook-service.ts';
 export type { HookListOptions, HookSimulationOptions } from './services/hook-service.ts';
+export { createDefaultRegistry, TargetRegistry } from './adapters/registry.ts';
+export type {
+  TargetAdapter,
+  TargetAdapterMetadata,
+  TargetArtifactCopy,
+  TargetArtifactDocumentContract,
+  TargetArtifactDocumentIssue,
+  TargetArtifactDocumentValidator,
+  TargetArtifactEntry,
+  TargetArtifactPlan,
+  TargetArtifactSchemaContract,
+  TargetArtifactValidationContract,
+  TargetArtifactWrite,
+  TargetConfigExtension,
+  TargetHookEntry,
+  TargetHookWrapper,
+  TargetSchemaDescriptor,
+} from './adapters/types.ts';
+export type { TargetHookContract } from './adapters/hook-contract.ts';
+export type {
+  McpRuntimeRoots,
+  McpRuntimeValueField,
+  McpRuntimeValueResolution,
+  ModernMcpServer,
+  ModernMcpServerReadResult,
+  ModernMcpStdioServer,
+  ModernMcpStreamableHttpServer,
+  TargetMcpRuntimeContract,
+} from './services/mcp-runtime.ts';
 export { McpService } from './services/mcp-service.ts';
 export type {
   McpConnectionState,
@@ -102,6 +130,8 @@ export interface ProjectOptions {
   readonly configPath?: string;
   readonly logger?: StructuredLogger;
   readonly mode?: string;
+  /** Advanced adapter registry used for every source, artifact, and runtime operation. */
+  readonly registry?: TargetRegistry;
   readonly root: string;
   readonly targets?: readonly string[];
 }
@@ -200,19 +230,23 @@ const requirePreparedModel = (prepared: PreparedProject): NormalizedPlugin => {
 const resolveOutput = (root: string, output: string | undefined): string =>
   resolve(root, output ?? 'dist');
 
+const registryFor = (options: ProjectOptions): TargetRegistry =>
+  options.registry ?? createDefaultRegistry();
+
 const temporaryArtifact = async <Result>(
   options: ArtifactOperationOptions,
   operation: (artifact: string) => Promise<Result>,
 ): Promise<Result> => {
   if (options.artifact !== undefined) return operation(resolve(options.artifact));
 
-  const artifact = await mkdtemp(join(tmpdir(), 'agent-bundle-artifact-'));
+  const artifact = await mkdtemp(join(resolve(options.root), '.agent-bundle-artifact-'));
   try {
     await build({
       configPath: options.configPath,
       logger: options.logger,
       mode: options.mode,
       output: artifact,
+      registry: options.registry,
       root: options.root,
       targets: options.targets,
     });
@@ -226,7 +260,9 @@ export const validate = async (options: ValidateOptions): Promise<ValidateResult
   if (options.artifact !== undefined) {
     const artifact = resolve(options.artifact);
     log(options.logger, 'artifact.validate', { artifact });
-    return Object.freeze({ diagnostics: freezeDiagnostics(await validateArtifact({ artifactRoot: artifact })) });
+    return Object.freeze({
+      diagnostics: freezeDiagnostics(await validateArtifact({ artifactRoot: artifact, registry: registryFor(options) })),
+    });
   }
 
   const prepared = await prepareProject(options, 'validate');
@@ -284,17 +320,20 @@ export const build = async (options: BuildOptions): Promise<BuildProjectResult> 
   return Object.freeze({ build: result, diagnostics: prepared.diagnostics, model, projectContext });
 };
 
-export const listMcp = async (options: ListMcpOptions): Promise<McpListResult> =>
-  temporaryArtifact(options, async (artifact) => new McpService().list({
+export const listMcp = async (options: ListMcpOptions): Promise<McpListResult> => {
+  const registry = registryFor(options);
+  return temporaryArtifact({ ...options, registry }, async (artifact) => new McpService({ registry }).list({
     artifact,
     server: options.server,
     target: options.target,
     timeoutMs: options.timeoutMs,
     workspaceRoot: resolve(options.root),
   } satisfies McpListOptions));
+};
 
-export const invokeMcp = async (options: InvokeMcpOptions): Promise<McpInvokeResult> =>
-  temporaryArtifact(options, async (artifact) => new McpService().invoke({
+export const invokeMcp = async (options: InvokeMcpOptions): Promise<McpInvokeResult> => {
+  const registry = registryFor(options);
+  return temporaryArtifact({ ...options, registry }, async (artifact) => new McpService({ registry }).invoke({
     artifact,
     input: options.input,
     server: options.server,
@@ -303,21 +342,25 @@ export const invokeMcp = async (options: InvokeMcpOptions): Promise<McpInvokeRes
     tool: options.tool,
     workspaceRoot: resolve(options.root),
   } satisfies McpInvokeOptions));
+};
 
 export const listHooks = async (options: ListHooksOptions) => {
-  if (options.target !== undefined && !createDefaultRegistry().has(options.target)) {
+  const registry = registryFor(options);
+  if (options.target !== undefined && !registry.has(options.target)) {
     throw new RangeError(`Unknown target ${JSON.stringify(options.target)}.`);
   }
-  return temporaryArtifact(options, async (artifact) => new HookService().list({
+  return temporaryArtifact({ ...options, registry }, async (artifact) => new HookService({ registry }).list({
     artifact,
     target: options.target,
   } satisfies HookListOptions));
 };
 
-export const simulateHook = async (options: SimulateHookOptions): Promise<unknown> =>
-  temporaryArtifact(options, async (artifact) => new HookService().simulate({
+export const simulateHook = async (options: SimulateHookOptions): Promise<unknown> => {
+  const registry = registryFor(options);
+  return temporaryArtifact({ ...options, registry }, async (artifact) => new HookService({ registry }).simulate({
     artifact,
     hook: options.hook,
     input: options.input,
     target: options.target,
   } satisfies HookSimulationOptions));
+};

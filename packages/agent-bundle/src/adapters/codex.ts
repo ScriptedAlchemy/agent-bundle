@@ -11,6 +11,8 @@ import {
   type NormalizedMcpServer,
   type NormalizedPlugin,
 } from '../core/types.ts';
+import { createMcpPathTokenResolver, standardMcpPathTokens } from '../services/mcp-path-tokens.ts';
+import { createTargetMcpRuntime, resolveTargetRelativeStdioArgument } from '../services/mcp-runtime.ts';
 import capabilityTable from './capabilities/codex-0.147.0.json' with { type: 'json' };
 import {
   mergeHookDocuments,
@@ -26,7 +28,12 @@ import hooksSchema from './schemas/codex/hooks.schema.json' with { type: 'json' 
 import marketplaceSchema from './schemas/codex/marketplace.schema.json' with { type: 'json' };
 import mcpSchema from './schemas/codex/mcp.schema.json' with { type: 'json' };
 import pluginSchema from './schemas/codex/plugin.schema.json' with { type: 'json' };
-import type { TargetAdapter, TargetArtifactEntry, TargetArtifactPlan } from './types.ts';
+import {
+  validateJsonSchemaDocument,
+  type TargetAdapter,
+  type TargetArtifactEntry,
+  type TargetArtifactPlan,
+} from './types.ts';
 
 export interface CodexConfigExtension {
   codex?: AgentBundleHostConfig;
@@ -70,6 +77,32 @@ const metadata = Object.freeze({
       }))
       .sort((left, right) => left.name.localeCompare(right.name)),
   ),
+});
+
+const artifactValidation = Object.freeze({
+  documents: Object.freeze([
+    Object.freeze({ path: 'hooks/hooks.json', required: false, schema: 'hooks' }),
+    Object.freeze({ path: '.codex-plugin/marketplace.json', required: false, schema: 'marketplace' }),
+    Object.freeze({ path: '.mcp.json', required: false, schema: 'mcp' }),
+    Object.freeze({ path: '.codex-plugin/plugin.json', required: true, schema: 'plugin' }),
+  ]),
+  schemas: Object.freeze([
+    Object.freeze({ name: 'hooks', validate: validateJsonSchemaDocument(validateHooks) }),
+    Object.freeze({ name: 'marketplace', validate: validateJsonSchemaDocument(validateMarketplace) }),
+    Object.freeze({ name: 'mcp', validate: validateJsonSchemaDocument(validateMcp) }),
+    Object.freeze({ name: 'plugin', validate: validateJsonSchemaDocument(validatePlugin) }),
+  ]),
+});
+
+const mcpRuntime = createTargetMcpRuntime({
+  manifestPath: '.mcp.json',
+  remoteTypes: ['streamable-http'],
+  resolveStdioArgument: resolveTargetRelativeStdioArgument,
+  resolveValue: createMcpPathTokenResolver({
+    knownTokens: standardMcpPathTokens,
+    target: codexName,
+    tokens: {},
+  }),
 });
 
 const errorDiagnostic = (code: string, message: string): Diagnostic => ({
@@ -410,6 +443,7 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
 };
 
 export const codexAdapter: TargetAdapter = Object.freeze({
+  artifactValidation,
   capabilities: Object.freeze({
     marketplace: true,
     hooks: true,
@@ -420,11 +454,7 @@ export const codexAdapter: TargetAdapter = Object.freeze({
   configExtension: Object.freeze({ key: codexName }),
   hookContract,
   metadata,
-  mcpPathTokens: Object.freeze({
-    args: Object.freeze({}),
-    cwd: Object.freeze({}),
-    env: Object.freeze({}),
-  }),
+  mcpRuntime,
   name: codexName,
   nativeHookSource: (config: Readonly<AgentBundleConfig>) => config.codex?.nativeHooks,
   plan,

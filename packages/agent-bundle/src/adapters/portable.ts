@@ -8,14 +8,21 @@ import {
   type NormalizedMcpServer,
   type NormalizedPlugin,
 } from '../core/types.ts';
+import {
+  allMcpPathTokenFields,
+  createMcpPathTokenResolver,
+  standardMcpPathTokens,
+} from '../services/mcp-path-tokens.ts';
+import { createTargetMcpRuntime } from '../services/mcp-runtime.ts';
 import capabilityTable from './capabilities/portable-1.0.0.json' with { type: 'json' };
 import schemaProvenance from './schemas/portable/PROVENANCE.json' with { type: 'json' };
 import mcpSchema from './schemas/portable/mcp.schema.json' with { type: 'json' };
 import pluginSchema from './schemas/portable/plugin.schema.json' with { type: 'json' };
-import type {
-  TargetAdapter,
-  TargetArtifactEntry,
-  TargetArtifactPlan,
+import {
+  validateJsonSchemaDocument,
+  type TargetAdapter,
+  type TargetArtifactEntry,
+  type TargetArtifactPlan,
 } from './types.ts';
 
 export interface PortableConfigExtension {
@@ -49,6 +56,30 @@ const metadata = Object.freeze({
       }))
       .sort((left, right) => left.name.localeCompare(right.name)),
   ),
+});
+
+const artifactValidation = Object.freeze({
+  documents: Object.freeze([
+    Object.freeze({ path: 'mcp.json', required: false, schema: 'mcp' }),
+    Object.freeze({ path: 'plugin.json', required: true, schema: 'plugin' }),
+  ]),
+  schemas: Object.freeze([
+    Object.freeze({ name: 'mcp', validate: validateJsonSchemaDocument(validateMcp) }),
+    Object.freeze({ name: 'plugin', validate: validateJsonSchemaDocument(validatePlugin) }),
+  ]),
+});
+
+const mcpRuntime = createTargetMcpRuntime({
+  manifestPath: 'mcp.json',
+  remoteTypes: ['streamable-http'],
+  resolveValue: createMcpPathTokenResolver({
+    knownTokens: standardMcpPathTokens,
+    target: portableName,
+    tokens: allMcpPathTokenFields(Object.freeze({
+      '${PLUGIN_DATA}': 'pluginData',
+      '${PLUGIN_ROOT}': 'pluginRoot',
+    })),
+  }),
 });
 
 const errorDiagnostic = (code: string, message: string): Diagnostic => ({
@@ -283,6 +314,7 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
 };
 
 export const portableAdapter: TargetAdapter = Object.freeze({
+  artifactValidation,
   capabilities: Object.freeze({
     mcp: capabilityTable.mcp.stdio && capabilityTable.mcp.streamableHttp,
     sse: capabilityTable.mcp.sse,
@@ -290,11 +322,7 @@ export const portableAdapter: TargetAdapter = Object.freeze({
   }),
   configExtension: Object.freeze({ key: portableName }),
   metadata,
-  mcpPathTokens: Object.freeze({
-    args: Object.freeze({ '${PLUGIN_DATA}': 'pluginData', '${PLUGIN_ROOT}': 'pluginRoot' }),
-    cwd: Object.freeze({ '${PLUGIN_DATA}': 'pluginData', '${PLUGIN_ROOT}': 'pluginRoot' }),
-    env: Object.freeze({ '${PLUGIN_DATA}': 'pluginData', '${PLUGIN_ROOT}': 'pluginRoot' }),
-  }),
+  mcpRuntime,
   name: portableName,
   plan,
   validateModel: (model: NormalizedPlugin) => plan(model).diagnostics.slice(),

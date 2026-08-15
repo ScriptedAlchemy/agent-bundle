@@ -14,6 +14,12 @@ import {
   type NormalizedConfigExtension,
   type NormalizedPlugin,
 } from '../src/index.ts';
+import { TargetRegistry, createDefaultRegistry } from '../src/api.ts';
+import type {
+  TargetAdapter,
+  TargetHookContract,
+  TargetMcpRuntimeContract,
+} from '../src/api.ts';
 import { runCli } from '../src/cli.ts';
 import type {
   AgentBundleConfig as ConfigEntryAgentBundleConfig,
@@ -152,6 +158,44 @@ it('exposes immutable output provenance types from the root import', () => {
   };
 
   expect(output.kind).toBe('bundle');
+});
+
+it('exposes advanced adapter registry and contract types only from the advanced API', () => {
+  const hookContract = {
+    commandRoot: '${PLUGIN_ROOT}',
+    encodePlaygroundInput: (input) => input,
+    encodePlaygroundOutput: (result) => result,
+    eventNames: { afterTool: 'AfterTool', beforeTool: 'BeforeTool', sessionStart: 'SessionStart', stop: 'Stop' },
+    manifestPath: 'hooks.json',
+    matchers: {},
+    wrapperPath: () => 'hook.mjs',
+    wrapperSource: () => 'export default undefined;\n',
+  } satisfies TargetHookContract;
+  const mcpRuntime = {
+    manifestPath: 'mcp.json',
+    readModernServer: () => ({ status: 'missing' as const }),
+    resolveStdioArgument: (value) => value,
+    resolveValue: (_field, _roots, value) => ({ diagnostics: [], value }),
+  } satisfies TargetMcpRuntimeContract;
+  const adapter = {
+    capabilities: { hooks: true, mcp: true },
+    hookContract,
+    mcpRuntime,
+    metadata: {
+      adapterRevision: 'test',
+      capabilityRevision: 'test',
+      capabilitySha256: '0'.repeat(64),
+      observedVersion: 'test',
+      schemas: [],
+    },
+    name: 'advanced-synthetic',
+    plan: () => ({ diagnostics: [], entries: [] }),
+    validateModel: () => [],
+  } satisfies TargetAdapter;
+  const registry = new TargetRegistry().register(adapter, { default: true });
+
+  expect(registry.defaultTargetNames()).toEqual(['advanced-synthetic']);
+  expect(createDefaultRegistry().has('portable')).toBe(true);
 });
 
 it('loads every public subpath and reports the package version', async () => {

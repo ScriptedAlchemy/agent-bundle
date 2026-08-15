@@ -12,6 +12,7 @@ import type { LoadedConfig } from '../src/config/load.ts';
 import { normalizeProject } from '../src/config/normalize.ts';
 import type { AgentBundleConfig } from '../src/core/types.ts';
 import { resolveMcpPathTokens } from '../src/services/mcp-path-tokens.ts';
+import { readTargetMcpServer } from '../src/services/mcp-runtime.ts';
 
 interface BridgeFixture {
   readonly binding: { readonly serverName: string; readonly sessionId: string; readonly target: string };
@@ -158,20 +159,25 @@ class AgentBundleRemoteTransport implements Transport {
 
 const generatedServer = async (artifact: string, target: string, serverName: string, workspaceRoot: string): Promise<GeneratedStdioServer> => {
   const targetRoot = join(artifact, target);
-  const document = JSON.parse(await readFile(join(targetRoot, 'mcp.json'), 'utf8')) as {
-    readonly mcpServers: Record<string, GeneratedStdioServer>;
-  };
-  const server = document.mcpServers[serverName];
-  if (server === undefined) throw new Error(`Missing generated MCP server ${JSON.stringify(serverName)}.`);
+  const runtime = createDefaultRegistry().mcpRuntime(target);
+  if (runtime === undefined) throw new Error(`Missing MCP runtime for ${JSON.stringify(target)}.`);
+  const document: unknown = JSON.parse(await readFile(join(targetRoot, runtime.manifestPath), 'utf8'));
+  const result = readTargetMcpServer(runtime, document, serverName);
+  if (result.status === 'missing') throw new Error(`Missing generated MCP server ${JSON.stringify(serverName)}.`);
+  if (result.status === 'invalid' || result.server.kind !== 'stdio') {
+    throw new Error(`Generated MCP server ${JSON.stringify(serverName)} must be a valid stdio server.`);
+  }
   const resolved = resolveMcpPathTokens({
-    adapter: createDefaultRegistry().get(target),
     roots: {
       pluginData: join(artifact, 'session-data'),
       pluginRoot: targetRoot,
       workspaceRoot,
     },
-    server,
+    runtime,
+    server: result.server,
+    target,
   });
+  if (resolved.kind !== 'stdio') throw new Error(`Generated MCP server ${JSON.stringify(serverName)} must be stdio.`);
   return {
     ...resolved,
     ...(resolved.cwd === undefined ? {} : { cwd: resolve(targetRoot, resolved.cwd) }),

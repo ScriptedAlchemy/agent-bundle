@@ -4,7 +4,19 @@ import { join } from 'node:path';
 
 import { expect, it } from '@rstest/core';
 
-import { build, inspect, listHooks, validate } from '../src/api.ts';
+import { TargetRegistry, build, inspect, invokeMcp, listHooks, listMcp, simulateHook, validate } from '../src/api.ts';
+import {
+  nativeHookWrapperSource,
+  planHooks,
+  type TargetHookContract,
+} from '../src/adapters/hook-contract.ts';
+import type { TargetAdapter } from '../src/adapters/types.ts';
+import { pathTokens, type NormalizedPlugin } from '../src/core/types.ts';
+import {
+  createTargetMcpRuntime,
+  resolveTargetRelativeStdioArgument,
+} from '../src/services/mcp-runtime.ts';
+import { createMcpPathTokenResolver, standardMcpPathTokens } from '../src/services/mcp-path-tokens.ts';
 
 const createProject = async (): Promise<string> => {
   const parent = await mkdtemp(join(tmpdir(), 'agent-bundle-api-parent-'));
@@ -32,6 +44,179 @@ const createProject = async (): Promise<string> => {
   ]);
   return root;
 };
+
+const syntheticMetadata = Object.freeze({
+  adapterRevision: 'test',
+  capabilityRevision: 'test',
+  capabilitySha256: '0'.repeat(64),
+  observedVersion: 'test',
+  schemas: Object.freeze([]),
+});
+
+const syntheticTarget = 'synthetic';
+const syntheticHookContract = Object.freeze({
+  commandRoot: '${PLUGIN_ROOT}',
+  encodePlaygroundInput: (input) => input,
+  encodePlaygroundOutput: (result) => result,
+  eventNames: Object.freeze({
+    afterTool: 'AfterTool',
+    beforeTool: 'BeforeTool',
+    sessionStart: 'SessionStart',
+    stop: 'Stop',
+  }),
+  manifestPath: 'hooks/hooks.json',
+  matchers: Object.freeze({}),
+  wrapperPath: (hook: NormalizedPlugin['hooks'][number]) => `hooks/${hook.name}.mjs`,
+  wrapperSource: (entry) => nativeHookWrapperSource(entry, 'Codex'),
+} satisfies TargetHookContract);
+const syntheticMcpRuntime = createTargetMcpRuntime({
+  manifestPath: 'synthetic-mcp.json',
+  remoteTypes: [],
+  resolveStdioArgument: resolveTargetRelativeStdioArgument,
+  resolveValue: createMcpPathTokenResolver({
+    knownTokens: standardMcpPathTokens,
+    target: syntheticTarget,
+    tokens: { cwd: { '${PLUGIN_ROOT}': 'pluginRoot' } },
+  }),
+});
+
+const syntheticPlan = (model: NormalizedPlugin) => {
+  const hooks = planHooks(model, syntheticTarget, syntheticHookContract);
+  const servers = Object.fromEntries(model.mcpServers
+    .filter((server) => server.targets.includes(syntheticTarget))
+    .map((server) => [server.name, {
+      ...(server.args === undefined ? {} : { args: server.args }),
+      command: server.command,
+      ...(server.cwd === undefined ? {} : { cwd: server.cwd.replaceAll(pathTokens.pluginRoot, '${PLUGIN_ROOT}') }),
+      ...(server.env === undefined ? {} : { env: server.env }),
+      type: 'stdio',
+    }]));
+  return Object.freeze({
+    diagnostics: hooks.diagnostics,
+    entries: Object.freeze(Object.keys(servers).length === 0 ? [] : [{
+      content: `${JSON.stringify({ mcpServers: servers })}\n`,
+      kind: 'write' as const,
+      relativePath: syntheticMcpRuntime.manifestPath,
+      sourceInputs: [model.metadata.provenance.sourcePath],
+    }]),
+    hookEntries: hooks.hookEntries,
+  });
+};
+
+const syntheticAdapter: TargetAdapter = Object.freeze({
+  capabilities: Object.freeze({ hooks: true, mcp: true }),
+  configExtension: Object.freeze({ key: 'synthetic' }),
+  hookContract: syntheticHookContract,
+  metadata: syntheticMetadata,
+  mcpRuntime: syntheticMcpRuntime,
+  name: syntheticTarget,
+  plan: syntheticPlan,
+  validateModel: (model: NormalizedPlugin) => [...syntheticPlan(model).diagnostics],
+});
+
+it('prepares and inspects a target owned only by the supplied advanced registry', async () => {
+  const root = await createProject();
+  const registry = new TargetRegistry().register(syntheticAdapter, { default: true });
+  try {
+    await writeFile(join(root, 'agent-bundle.config.ts'), [
+      'export default {',
+      "  plugin: { name: 'synthetic-api-fixture', version: '1.0.0' },",
+      "  synthetic: { enabled: true },",
+      "  targets: ['synthetic'],",
+      '};',
+      '',
+    ].join('\n'));
+
+    const result = await inspect({ registry, root });
+
+    expect(result.model.extensions).toEqual({
+      synthetic: expect.objectContaining({ target: 'synthetic', value: { enabled: true } }),
+    });
+    expect(result.plans).toEqual([expect.objectContaining({ target: 'synthetic' })]);
+    expect(registry.names()).toEqual(['synthetic']);
+  } finally {
+    await rm(join(root, '..'), { force: true, recursive: true });
+  }
+});
+
+it('keeps one supplied registry through advanced artifact, hook, and MCP operations', async () => {
+  const root = await createProject();
+  const registry = new TargetRegistry().register(syntheticAdapter, { default: true });
+  const artifact = join(root, 'artifact');
+  try {
+    await Promise.all([
+      writeFile(join(root, 'src', 'hook.ts'), "export default () => ({ additionalContext: 'synthetic hook' });\n"),
+      writeFile(join(root, 'src', 'mcp-server.ts'), [
+        "let buffer = '';",
+        'const send = (id, result) => process.stdout.write(`${JSON.stringify({ jsonrpc: \'2.0\', id, result })}\\n`);',
+        "process.stdin.setEncoding('utf8');",
+        "process.stdin.on('data', (chunk) => {",
+        '  buffer += chunk;',
+        "  for (let newline; (newline = buffer.indexOf('\\n')) >= 0;) {",
+        '    const line = buffer.slice(0, newline).trim();',
+        '    buffer = buffer.slice(newline + 1);',
+        '    if (!line) continue;',
+        '    const request = JSON.parse(line);',
+        "    if (request.method === 'initialize') send(request.id, { capabilities: { tools: {} }, protocolVersion: request.params.protocolVersion, serverInfo: { name: 'synthetic', version: '1.0.0' } });",
+        "    if (request.method === 'tools/list') send(request.id, { tools: [{ description: 'Synthetic tool', inputSchema: { properties: {}, type: 'object' }, name: 'synthetic-tool' }] });",
+        "    if (request.method === 'tools/call') send(request.id, { content: [{ text: 'synthetic result', type: 'text' }], structuredContent: { synthetic: true } });",
+        '  }',
+        '});',
+        '',
+      ].join('\n')),
+      writeFile(join(root, 'agent-bundle.config.ts'), [
+        'export default {',
+        "  hooks: { sessionStart: { handler: './src/hook.ts' } },",
+        "  mcp: { servers: { synthetic: { entry: './src/mcp-server.ts' } } },",
+        "  plugin: { name: 'synthetic-api-fixture', version: '1.0.0' },",
+        "  synthetic: { enabled: true },",
+        "  targets: ['synthetic'],",
+        '};',
+        '',
+      ].join('\n')),
+    ]);
+
+    const [inspection, built] = await Promise.all([
+      inspect({ registry, root }),
+      build({ output: artifact, registry, root }),
+    ]);
+    expect(inspection.plans).toEqual([expect.objectContaining({
+      hookEntries: [expect.objectContaining({ target: syntheticTarget })],
+      target: syntheticTarget,
+    })]);
+    expect(built.build.manifest.targets).toEqual([expect.objectContaining({ name: syntheticTarget })]);
+    await expect(validate({ artifact, registry, root })).resolves.toEqual({ diagnostics: [] });
+    await expect(validate({ artifact, root })).resolves.toMatchObject({
+      diagnostics: [expect.objectContaining({ code: 'AB6009', target: syntheticTarget })],
+    });
+    const hooks = await listHooks({ artifact, registry, root, target: syntheticTarget });
+    expect(hooks).toEqual([expect.objectContaining({ target: syntheticTarget })]);
+    await expect(simulateHook({
+      artifact,
+      hook: hooks[0]!.id,
+      input: { cwd: root, sessionId: 'session', source: 'startup', transcriptPath: '/tmp/transcript' },
+      registry,
+      root,
+      target: syntheticTarget,
+    })).resolves.toEqual({ additionalContext: 'synthetic hook', outcome: 'continue' });
+    await expect(listMcp({ registry, root, server: 'synthetic', target: syntheticTarget })).resolves.toMatchObject({
+      tools: [expect.objectContaining({ name: 'synthetic-tool' })],
+    });
+    await expect(invokeMcp({
+      artifact,
+      input: {},
+      registry,
+      root,
+      server: 'synthetic',
+      target: syntheticTarget,
+      tool: 'synthetic-tool',
+    })).resolves.toMatchObject({ result: { structuredContent: { synthetic: true } } });
+    await expect(inspect({ root })).rejects.toThrow(/Unknown target/);
+    expect(registry.names()).toEqual([syntheticTarget]);
+  } finally {
+    await rm(join(root, '..'), { force: true, recursive: true });
+  }
+}, 60_000);
 
 it('prepares a factory-configured project into a frozen inspection and build result', async () => {
   const root = await createProject();

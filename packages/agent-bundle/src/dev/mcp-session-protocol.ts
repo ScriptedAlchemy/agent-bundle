@@ -115,7 +115,7 @@ export interface McpSessionInspectorConfig {
       readonly kind: 'stdio';
     }>
     | Readonly<{
-      readonly kind: 'streamable-http' | 'sse';
+      readonly kind: 'streamable-http';
       /** Credentials, fragments, and query parameters are redacted. */
       readonly url: string;
     }>;
