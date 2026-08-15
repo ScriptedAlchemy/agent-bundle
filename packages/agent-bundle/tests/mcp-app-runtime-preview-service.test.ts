@@ -2,7 +2,7 @@ import { expect, it } from '@rstest/core';
 
 import { McpAppRuntimePreviewService } from '../src/dev/mcp-app-runtime-preview-service.ts';
 import { McpAppRuntimeBindingService } from '../src/dev/mcp-app-runtime-binding-service.ts';
-import type { DevRuntimeMcpRegistryMessage, DevRuntimeMcpSessionView, DevRuntimeSession } from '../src/dev/runtime-provider.ts';
+import type { DevRuntimeClientSurfaceProxyBinding, DevRuntimeMcpRegistryMessage, DevRuntimeMcpSessionView, DevRuntimeSession } from '../src/dev/runtime-provider.ts';
 import type { DevRuntimeMcpOperationRequest, DevRuntimeMcpSessionSnapshot, DevRuntimeRun, RuntimeVector } from '../src/dev/runtime-protocol.ts';
 import type { JsonValue } from '../src/dev/types.ts';
 
@@ -81,6 +81,7 @@ const createRuntimeFixture = (options: Readonly<{
   readonly closeBinding?: () => Promise<void>;
   readonly closeProxy?: () => Promise<void>;
   readonly failProxyOpen?: boolean;
+  readonly openRuntimeClientSurface?: (surfaceId: string) => Promise<DevRuntimeClientSurfaceProxyBinding | undefined>;
   readonly permissions?: JsonValue;
 }> = {}) => {
   const requests: DevRuntimeMcpOperationRequest[] = [];
@@ -130,6 +131,7 @@ const createRuntimeFixture = (options: Readonly<{
     emit: (details) => { emitted.push(details); },
     openRuntimeClientSurface: async (surfaceId) => {
       if (options.failProxyOpen === true) throw new Error('proxy open failed');
+      if (options.openRuntimeClientSurface !== undefined) return options.openRuntimeClientSurface(surfaceId);
       return Object.freeze({ bootstrapUrl: `http://proxy.test/${surfaceId}`, close: options.closeProxy ?? (async () => undefined), origin: 'http://proxy.test', surfaceId, webSocketPath: '/rsbuild-hmr' });
     },
     runtime,
@@ -243,15 +245,14 @@ it('retains only the frozen App-visible catalog and rejects hidden actions befor
     kind: 'resources/read', uri: 'ui://weather/other.html',
   })).rejects.toThrow('not in the binding catalog');
 
-  const challenge = await service.createConsent(preview.binding.id, {
-    actionFingerprint: 'server-fingerprint', capability: 'call-tool', details: { arguments: {}, name: 'foreign-app' }, scope: 'action', summary: 'foreign App tool',
-  });
-  const decision = await service.decideConsent(preview.binding.id, challenge.challenge.id, 'allow-once');
-  await expect(service.operate(preview.binding.id, {
-    consentId: decision.grant?.authorizationId,
-    kind: 'tools/call',
-    name: 'foreign-app',
-  })).rejects.toThrow('not in the binding catalog');
+  for (let attempt = 0; attempt < 9; attempt += 1) {
+    await expect(service.createConsent(preview.binding.id, {
+      actionFingerprint: `server-fingerprint-${attempt}`, capability: 'call-tool', details: { arguments: {}, name: 'foreign-app' }, scope: 'action', summary: 'foreign App tool',
+    })).rejects.toThrow('not in the binding catalog');
+  }
+  await expect(service.createConsent(preview.binding.id, {
+    actionFingerprint: 'visible-after-hidden', capability: 'call-tool', details: { arguments: {}, name: 'show-weather' }, scope: 'action', summary: 'visible App tool',
+  })).resolves.toMatchObject({ challenge: { request: { capability: 'call-tool' } } });
   expect(requests).toHaveLength(3);
 });
 
@@ -293,6 +294,38 @@ it('awaits matching session-close App cleanup after publishing its terminal inva
   releaseProxy?.();
   await closing;
   expect(settled).toBe(true);
+});
+
+it('joins a late runtime client-surface acquisition before manual session cleanup returns', async () => {
+  let resolveProxy: ((proxy: DevRuntimeClientSurfaceProxyBinding) => void) | undefined;
+  let proxyCloseCalls = 0;
+  let surfaceOpenCalls = 0;
+  const { service } = createRuntimeFixture({
+    openRuntimeClientSurface: async () => new Promise<DevRuntimeClientSurfaceProxyBinding>((resolvePromise) => {
+      surfaceOpenCalls += 1;
+      resolveProxy = resolvePromise;
+    }),
+  });
+  const creating = service.create({ expectedGenerationId: 'generation-a', profileId: 'portable', runId: 'run-a' });
+  await eventually(() => surfaceOpenCalls === 1 && resolveProxy !== undefined);
+
+  let closed = false;
+  const closing = service.closeSession('session-a', 2).then(() => { closed = true; });
+  await new Promise<void>((resolvePromise) => setImmediate(resolvePromise));
+  expect(closed).toBe(false);
+
+  resolveProxy?.(Object.freeze({
+    bootstrapUrl: 'http://proxy.test/app.weather',
+    close: async () => { proxyCloseCalls += 1; },
+    origin: 'http://proxy.test',
+    surfaceId: 'app.weather',
+    webSocketPath: '/rsbuild-hmr',
+  }));
+  await closing;
+  await expect(creating).rejects.toThrow('stable session changed');
+  expect(proxyCloseCalls).toBe(1);
+  await expect(service.closeAll()).resolves.toBeUndefined();
+  expect(proxyCloseCalls).toBe(1);
 });
 
 it('logically revokes before retaining failed runtime preview cleanup for an explicit retry', async () => {

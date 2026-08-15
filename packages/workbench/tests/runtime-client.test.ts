@@ -68,6 +68,13 @@ const run = (id = 'run-a', startedAt = '2026-08-15T12:00:00.000Z'): DevRuntimeRu
 
 const json = (body: unknown, statusCode = 200): Response => Response.json(body, { status: statusCode });
 
+/** Mirrors the server-issued per-listener foreground session bootstrap. */
+const foregroundSession = Object.freeze({
+  cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef',
+  origin: 'http://localhost',
+  token: 'foreground-token',
+});
+
 const deferred = <Value>(): Deferred<Value> => {
   let reject!: (reason: unknown) => void;
   let resolve!: (value: Value) => void;
@@ -90,7 +97,7 @@ const runtimeFetch = (options: {
       requests.push({ body: init?.body?.toString(), headers: new Headers(init?.headers), url });
       if (url === '/api/runtime/status') return json({ status: options.status === undefined ? status : options.status });
       if (url === '/api/runtime/surfaces') return json({ surfaces: [surface] });
-      if (url === '/api/project/session') return json({ origin: 'http://localhost', token: 'foreground-token' });
+      if (url === '/api/project/session') return json(foregroundSession);
       if (url === '/api/runtime/runs?limit=50' && init?.method === undefined) return json({ providerSessionId: 'provider-a', runs: options.runs ?? [run()] });
       if (url === '/api/runtime/runs' && init?.method === 'POST') return json({ run: run('run-created') });
       if (url === '/api/runtime/runs/run%20a') return json({ run: run('run a') });
@@ -118,7 +125,7 @@ it('rejects absolute, protocol-relative, credentialed, and fragmented protected 
   const foreground = new ForegroundRouteClient({
     fetch: async (input) => {
       requests.push(String(input));
-      return json({ origin: 'http://localhost', token: 'foreground-token' });
+      return json(foregroundSession);
     },
   });
 
@@ -159,7 +166,7 @@ it('shares one injected foreground bootstrap across MCP, Runtime, and Project cl
     fetch: async (input, init) => {
       const url = String(input);
       requests.push({ body: init?.body?.toString(), headers: new Headers(init?.headers), url });
-      if (url === '/api/project/session') return json({ origin: 'http://localhost', token: 'foreground-token' });
+      if (url === '/api/project/session') return json(foregroundSession);
       if (url === '/api/mcp/sessions/session-a') {
         return json({
           session: {
@@ -209,7 +216,7 @@ it('fences an in-flight Project rebuild when shutdown invalidates foreground aut
 
   const rebuilding = client.rebuild(['skills/review/SKILL.md']);
   client.close();
-  session.resolve(json({ origin: 'http://localhost', token: 'foreground-token' }));
+  session.resolve(json(foregroundSession));
 
   await expect(rebuilding).rejects.toBeInstanceOf(Error);
   expect(requests.map((request) => request.url)).toEqual(['/api/project/session']);
@@ -242,7 +249,7 @@ it('keeps a newer foreground bootstrap when an invalidated bootstrap rejects', a
 
   const third = foreground.protectedJson('/api/foreground/third');
   expect(sessions).toHaveLength(2);
-  sessions[1]?.resolve(json({ origin: 'http://localhost', token: 'foreground-token' }));
+  sessions[1]?.resolve(json(foregroundSession));
 
   await expect(second).resolves.toEqual({ route: '/api/foreground/second' });
   await expect(third).resolves.toEqual({ route: '/api/foreground/third' });
@@ -336,7 +343,7 @@ it('surfaces a complete sanitized generation conflict without retrying the prote
       const url = String(input);
       if (url === '/api/runtime/status') return json({ status });
       if (url === '/api/runtime/surfaces') return json({ surfaces: [surface] });
-      if (url === '/api/project/session') return json({ origin: 'http://localhost', token: 'foreground-token' });
+      if (url === '/api/project/session') return json(foregroundSession);
       if (url === '/api/runtime/runs?limit=50') return json({ providerSessionId: 'provider-a', runs: [run()] });
       if (url === '/api/runtime/runs' && init?.method === 'POST') {
         runs += 1;
@@ -375,7 +382,7 @@ it('preserves own __proto__ keys as immutable prototype-inert JSON snapshots', a
   const foreground = new ForegroundRouteClient({
     fetch: async (input) => String(input) === '/public'
       ? new Response('{"__proto__":{"polluted":true},"nested":{"__proto__":{"nested":true}}}', { headers: { 'content-type': 'application/json' } })
-      : json({ origin: 'http://localhost', token: 'foreground-token' }),
+      : json(foregroundSession),
   });
   const publicSnapshot = await foreground.publicJson('/public') as Readonly<Record<string, unknown>>;
   const source = JSON.parse('{"__proto__":{"polluted":true},"nested":{"__proto__":{"nested":true}}}');

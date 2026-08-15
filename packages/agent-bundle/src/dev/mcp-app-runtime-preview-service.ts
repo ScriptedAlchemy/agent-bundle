@@ -168,6 +168,8 @@ interface PreviewCleanup {
   bindingReleased: boolean;
   bindingReleaseInFlight: boolean;
   closeAttempt?: Promise<void>;
+  /** The foreground proxy can be acquired after a concurrent DELETE starts. */
+  proxyAcquisition?: Promise<DevRuntimeClientSurfaceProxyBinding | undefined>;
   proxy?: DevRuntimeClientSurfaceProxyBinding;
   proxyClosed: boolean;
 }
@@ -177,6 +179,19 @@ const maxConcurrentOperations = 4;
 const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
   typeof value === 'object' && value !== null && !Array.isArray(value) &&
   (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null);
+
+const canonicalCallToolConsentDetails = (
+  catalog: PreviewEntry['catalog'],
+  details: McpAppJsonValue,
+): McpAppJsonValue => {
+  if (!isRecord(details) || typeof details.name !== 'string' || !catalog.toolNames.includes(details.name)) {
+    throw new Error('Runtime MCP App tool is not in the binding catalog.');
+  }
+  return frozenJson(Object.freeze({
+    arguments: details.arguments ?? Object.freeze({}),
+    name: details.name,
+  }), 'Runtime MCP App call-tool consent details');
+};
 
 const nonempty = (value: unknown, label: string): string => {
   if (typeof value !== 'string' || value.length === 0 || value.length > 4_096 || value.includes('\0')) {
@@ -387,8 +402,14 @@ export class McpAppRuntimePreviewService implements McpAppRuntimeRoutePreviewSer
         resource: { metadata: resourceMetadata.merged, mimeType: 'text/html;profile=mcp-app', uri: run.result.app.resourceUri },
         toolMetadata: metadataOf(appTool),
       });
-      proxy = profile.kind === 'apps' ? await this.#openRuntimeClientSurface(run.result.app.surfaceId) : undefined;
-      cleanup.proxy = proxy;
+      if (profile.kind === 'apps') {
+        // Store the promise before yielding. A concurrent DELETE therefore
+        // joins the acquisition and closes a proxy that resolves afterward.
+        const proxyAcquisition = this.#openRuntimeClientSurface(run.result.app.surfaceId);
+        cleanup.proxyAcquisition = proxyAcquisition;
+        proxy = await proxyAcquisition;
+        cleanup.proxy = proxy;
+      }
       this.#assertCreateStillValid(binding.id, runBinding, run.vector, session);
       const documentPolicy = createMcpAppDocumentPolicySnapshot(1, { permissions: parsed.permissions }, []);
       const base = Object.freeze({
@@ -483,7 +504,7 @@ export class McpAppRuntimePreviewService implements McpAppRuntimeRoutePreviewSer
     if (!isRecord(request) || typeof request.actionFingerprint !== 'string' || typeof request.summary !== 'string') {
       throw new TypeError('Runtime MCP App consent request is invalid.');
     }
-    const details = frozenJson(request.details, 'Runtime MCP App consent details');
+    const suppliedDetails = frozenJson(request.details, 'Runtime MCP App consent details');
     const capability = request.capability;
     const valid = new Set(['call-tool', 'download-file', 'open-external-link', 'clipboard-write', 'camera', 'microphone', 'geolocation', 'request-display-mode']);
     const documentScoped = capability === 'clipboard-write' || capability === 'camera' || capability === 'microphone' || capability === 'geolocation';
@@ -493,6 +514,9 @@ export class McpAppRuntimePreviewService implements McpAppRuntimeRoutePreviewSer
       || request.scope !== (documentScoped ? 'document' : 'action')) {
       throw new TypeError('Runtime MCP App consent request is invalid.');
     }
+    const details = capability === 'call-tool'
+      ? canonicalCallToolConsentDetails(entry.catalog, suppliedDetails)
+      : suppliedDetails;
     const challenge = entry.consent.challenge({ actionDigest: createMcpAppConsentActionDigest(capability, details), bindingId, capability, details, profile: entry.binding.profileId });
     if (challenge === undefined) throw new Error('Runtime MCP App consent challenge limit reached.');
     return Object.freeze({ challenge, documentPolicy: this.#documentPolicy(entry) });
@@ -639,6 +663,17 @@ export class McpAppRuntimePreviewService implements McpAppRuntimeRoutePreviewSer
           failures.push(error);
         } finally {
           cleanup.bindingReleaseInFlight = false;
+        }
+      }
+      if (!cleanup.proxyClosed) {
+        if (cleanup.proxyAcquisition !== undefined) {
+          try {
+            cleanup.proxy ??= await cleanup.proxyAcquisition;
+          } catch {
+            // The acquisition itself failed, so no proxy resource exists to
+            // close. Creation reports that failure through its own promise.
+            cleanup.proxyClosed = true;
+          }
         }
       }
       if (!cleanup.proxyClosed) {

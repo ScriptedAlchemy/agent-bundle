@@ -111,10 +111,17 @@ const event = (
 const reduce = (state: RuntimeModel, ...actions: Parameters<typeof reduceRuntimeModel>[1][]): RuntimeModel =>
   actions.reduce(reduceRuntimeModel, state);
 
+/** Mirrors the server-issued per-listener foreground session bootstrap. */
+const foregroundSession = Object.freeze({
+  cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef',
+  origin: 'http://localhost',
+  token: 'token',
+});
+
 const clientFor = (routes: Readonly<Record<string, unknown>>): RuntimeClient => new RuntimeClient(new ForegroundRouteClient({
   fetch: async (input) => {
     const url = String(input);
-    if (url === '/api/project/session') return Response.json({ origin: 'http://localhost', token: 'token' });
+    if (url === '/api/project/session') return Response.json(foregroundSession);
     const response = routes[url];
     if (response instanceof Response) return response;
     if (response === undefined) throw new Error(`Unexpected route ${url}.`);
