@@ -1,5 +1,5 @@
 import { execFile as executeFile } from 'node:child_process';
-import { access, mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import { access, mkdtemp, mkdir, readFile, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -163,6 +163,69 @@ it('imports the externalized config entry from a packed npm consumer', async () 
     await rm(consumerRoot, { force: true, recursive: true });
   }
 }, 15_000);
+
+it('keeps bundled config extension types in emitted root declarations', async () => {
+  const consumerRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-root-types-'));
+  try {
+    const emittedPackageRoot = join(consumerRoot, 'node_modules', 'agent-bundle');
+    await mkdir(emittedPackageRoot, { recursive: true });
+    await symlink(
+      join(workspaceRoot, 'node_modules', '@modelcontextprotocol'),
+      join(consumerRoot, 'node_modules', '@modelcontextprotocol'),
+      'dir',
+    );
+    await symlink(
+      join(workspaceRoot, 'node_modules', '@types'),
+      join(consumerRoot, 'node_modules', '@types'),
+      'dir',
+    );
+    await writeFile(join(emittedPackageRoot, 'package.json'), JSON.stringify({
+      exports: { '.': { types: './dist/index.d.ts' } },
+      name: 'agent-bundle',
+      type: 'module',
+    }));
+    await execFile(join(workspaceRoot, 'node_modules', '.bin', 'tsc'), [
+      '--declaration',
+      '--emitDeclarationOnly',
+      '--ignoreConfig',
+      '--module', 'nodenext',
+      '--moduleResolution', 'nodenext',
+      '--noCheck',
+      '--outDir', join(emittedPackageRoot, 'dist'),
+      '--target', 'es2022',
+      join(packageRoot, 'src', 'index.ts'),
+    ], { cwd: workspaceRoot });
+    await writeFile(join(consumerRoot, 'package.json'), '{"type":"module"}\n');
+    await writeFile(join(consumerRoot, 'config.mts'), [
+      "import type { AgentBundleConfig } from 'agent-bundle';",
+      '',
+      'const config: AgentBundleConfig = {',
+      "  claude: { nativeHooks: './claude-hooks.json' },",
+      "  codex: { nativeHooks: './codex-hooks.json' },",
+      "  plugin: { name: 'packed-root-types', version: '1.0.0' },",
+      "  portable: { compatibility: 'v1' },",
+      '};',
+      '',
+      'const claudeHook: string | undefined = config.claude?.nativeHooks;',
+      'const codexHook: string | undefined = config.codex?.nativeHooks;',
+      'const portableValue: unknown = config.portable?.compatibility;',
+      'void [claudeHook, codexHook, portableValue];',
+      '',
+    ].join('\n'));
+
+    await expect(execFile(join(workspaceRoot, 'node_modules', '.bin', 'tsc'), [
+      '--module', 'nodenext',
+      '--moduleResolution', 'nodenext',
+      '--noEmit',
+      '--strict',
+      '--target', 'es2022',
+      '--types', 'node',
+      'config.mts',
+    ], { cwd: consumerRoot })).resolves.toMatchObject({ stderr: '', stdout: '' });
+  } finally {
+    await rm(consumerRoot, { force: true, recursive: true });
+  }
+}, 30_000);
 
 it('invokes a prebuilt MCP server from a clean packed consumer', async () => {
   const consumerRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-mcp-consumer-'));
