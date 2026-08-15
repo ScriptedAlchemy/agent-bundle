@@ -102,12 +102,7 @@ const readRequest = async (): Promise<RenderRequest> => {
 
 const render = async (): Promise<void> => {
   const request = await readRequest();
-  const workspaceFallbackRoot =
-    request.type === 'hook/after-file-edit' &&
-    request.stateFile === resolve(request.event.cwd, '.agent-runtime-demo', 'events.jsonl')
-      ? request.event.cwd
-      : undefined;
-  const runtime = createFileRuntimeKernel({ stateFile: request.stateFile, workspaceFallbackRoot });
+  const runtime = createFileRuntimeKernel({ stateFile: request.stateFile });
   const snapshot =
     request.type === 'hook/after-file-edit'
       ? await runtime.recordEdit({

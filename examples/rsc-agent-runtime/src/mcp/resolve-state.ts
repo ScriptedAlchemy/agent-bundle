@@ -1,8 +1,10 @@
 import { fileURLToPath } from 'node:url';
-import { join, resolve } from 'node:path';
+import { resolve } from 'node:path';
 
 import { ListRootsResultSchema, type ServerNotification, type ServerRequest } from '@modelcontextprotocol/sdk/types.js';
 import type { RequestHandlerExtra } from '@modelcontextprotocol/sdk/shared/protocol.js';
+
+import { resolveImplicitRuntimeStateFile } from '../runtime/state-file.js';
 
 export type McpRequestExtra = RequestHandlerExtra<ServerRequest, ServerNotification>;
 
@@ -22,7 +24,7 @@ const stateFileFromRoots = async (extra: McpRequestExtra): Promise<string | unde
       return undefined;
     }
 
-    return join(fileURLToPath(root.uri), '.agent-runtime-demo', 'events.jsonl');
+    return resolveImplicitRuntimeStateFile(fileURLToPath(root.uri));
   } catch {
     return undefined;
   }
@@ -45,5 +47,5 @@ export const resolveStateFile = async (options: ResolveStateOptions, extra: McpR
     return fromRoots;
   }
 
-  return join(process.cwd(), '.agent-runtime-demo', 'events.jsonl');
+  return resolveImplicitRuntimeStateFile(process.cwd());
 };

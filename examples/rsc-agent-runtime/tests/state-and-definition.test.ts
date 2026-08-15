@@ -351,7 +351,7 @@ test('releases a lease acquired after an expired absolute acquisition deadline',
         new Promise((resolve) => {
           setTimeout(() => resolve(async () => {
             releases += 1;
-          }), 10);
+          }), 30);
         }),
     },
   });
@@ -365,10 +365,10 @@ test('releases a lease acquired after an expired absolute acquisition deadline',
         sessionId: 'session-1',
         toolName: 'Write',
       },
-      { lockAcquireTimeoutMs: 1 },
+      { lockAcquireTimeoutMs: 20 },
     ),
   ).rejects.toThrow('Timed out acquiring runtime state lease');
-  await wait(25);
+  await wait(60);
   expect(releases).toBe(1);
 });
 
@@ -390,8 +390,293 @@ test('cancels a never-settling active phase at the hard critical-section deadlin
       sessionId: 'session-1',
       toolName: 'Write',
     }),
-  ).rejects.toThrow('exceeded 10 ms critical-section limit');
+  ).rejects.toThrow('did not settle within 100 ms after cancellation');
   await expect(readFile(stateFile, 'utf8')).resolves.toBe('');
+});
+
+test('retains the lease until a timed-out mutation phase actually settles', async () => {
+  const stateFile = join(await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-')), 'state.jsonl');
+  let entered!: () => void;
+  let settle!: () => void;
+  const phaseEntered = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  const phaseSettlement = new Promise<void>((resolve) => {
+    settle = resolve;
+  });
+  const first = createTestFileRuntimeKernel({
+    stateFile,
+    adapter: {
+      beforeAppend: async () => {
+        entered();
+        await phaseSettlement;
+      },
+      criticalSectionMs: 20,
+      ownerSettlementMs: 200,
+    },
+  });
+  const second = createTestFileRuntimeKernel({ stateFile });
+
+  const firstMutation = first.recordEdit({
+    host: 'claude',
+    idempotencyKey: 'test:state:late-phase-owner',
+    path: 'late-phase-owner.ts',
+    sessionId: 'session-1',
+    toolName: 'Write',
+  });
+  void firstMutation.catch(() => undefined);
+  await phaseEntered;
+  await wait(30);
+
+  let contenderSettled = false;
+  const contender = second.recordEdit(
+    {
+      host: 'codex',
+      idempotencyKey: 'test:state:late-phase-contender',
+      path: 'late-phase-contender.ts',
+      sessionId: 'session-2',
+      toolName: 'apply_patch',
+    },
+    { lockAcquireTimeoutMs: 500 },
+  ).finally(() => {
+    contenderSettled = true;
+  });
+  await wait(40);
+  expect(contenderSettled).toBe(false);
+
+  settle();
+  await expect(firstMutation).rejects.toThrow('exceeded 20 ms critical-section limit');
+  await expect(contender).resolves.toMatchObject({ stateVersion: 1 });
+  const settledContents = await readFile(stateFile, 'utf8');
+  await wait(30);
+  expect(await readFile(stateFile, 'utf8')).toBe(settledContents);
+  expect(settledContents).not.toContain('late-phase-owner.ts');
+  expect(settledContents).toContain('late-phase-contender.ts');
+});
+
+for (const phase of ['truncate', 'append', 'fsync'] as const) {
+  test(`does not unlock while a timed-out ${phase} phase is unsettled`, async () => {
+    const stateFile = join(await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-')), 'state.jsonl');
+    if (phase === 'truncate') {
+      await writeFile(stateFile, '{"incomplete":true', 'utf8');
+    }
+    let entered!: () => void;
+    let settle!: () => void;
+    const phaseEntered = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const phaseSettlement = new Promise<void>((resolve) => {
+      settle = resolve;
+    });
+    const barrier = async () => {
+      entered();
+      await phaseSettlement;
+    };
+    const first = createTestFileRuntimeKernel({
+      stateFile,
+      adapter: {
+        ...(phase === 'truncate' ? { beforeRepair: barrier } : {}),
+        ...(phase === 'append' ? { beforeAppendWrite: barrier } : {}),
+        ...(phase === 'fsync' ? { beforeAppendSync: barrier } : {}),
+        criticalSectionMs: 20,
+        ownerSettlementMs: 200,
+      },
+    });
+    const second = createTestFileRuntimeKernel({ stateFile });
+    const firstMutation = first.recordEdit({
+      host: 'claude',
+      idempotencyKey: `test:state:${phase}-owner`,
+      path: `${phase}-owner.ts`,
+      sessionId: 'session-1',
+      toolName: 'Write',
+    });
+    void firstMutation.catch(() => undefined);
+    await phaseEntered;
+    await wait(30);
+
+    let contenderSettled = false;
+    const contender = second.recordEdit(
+      {
+        host: 'codex',
+        idempotencyKey: `test:state:${phase}-contender`,
+        path: `${phase}-contender.ts`,
+        sessionId: 'session-2',
+        toolName: 'apply_patch',
+      },
+      { lockAcquireTimeoutMs: 500 },
+    ).finally(() => {
+      contenderSettled = true;
+    });
+    await wait(40);
+    expect(contenderSettled).toBe(false);
+
+    settle();
+    await expect(firstMutation).rejects.toThrow('exceeded 20 ms critical-section limit');
+    await expect(contender).resolves.toMatchObject({ stateVersion: phase === 'fsync' ? 2 : 1 });
+    const contentsAtUnlock = await readFile(stateFile, 'utf8');
+    await wait(30);
+    expect(await readFile(stateFile, 'utf8')).toBe(contentsAtUnlock);
+  });
+}
+
+test('keeps contenders excluded until a delayed release settles', async () => {
+  const stateFile = join(await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-')), 'state.jsonl');
+  let releaseEntered!: () => void;
+  let settleRelease!: () => void;
+  const entered = new Promise<void>((resolve) => {
+    releaseEntered = resolve;
+  });
+  const settlement = new Promise<void>((resolve) => {
+    settleRelease = resolve;
+  });
+  const first = createTestFileRuntimeKernel({
+    stateFile,
+    adapter: {
+      beforeRelease: async () => {
+        releaseEntered();
+        await settlement;
+      },
+      releaseMs: 200,
+    },
+  });
+  const second = createTestFileRuntimeKernel({ stateFile });
+  const firstMutation = first.recordEdit({
+    host: 'claude',
+    idempotencyKey: 'test:state:delayed-release-owner',
+    path: 'release-owner.ts',
+    sessionId: 'session-1',
+    toolName: 'Write',
+  });
+  await entered;
+  let contenderSettled = false;
+  const contender = second.recordEdit(
+    {
+      host: 'codex',
+      idempotencyKey: 'test:state:delayed-release-contender',
+      path: 'release-contender.ts',
+      sessionId: 'session-2',
+      toolName: 'apply_patch',
+    },
+    { lockAcquireTimeoutMs: 500 },
+  ).finally(() => {
+    contenderSettled = true;
+  });
+  await wait(40);
+  expect(contenderSettled).toBe(false);
+  settleRelease();
+  await expect(firstMutation).resolves.toMatchObject({ stateVersion: 1 });
+  await expect(contender).resolves.toMatchObject({ stateVersion: 2 });
+});
+
+test('bounds a stuck release and invokes fatal owner teardown without unlocking', async () => {
+  const stateFile = join(await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-')), 'state.jsonl');
+  let fatalError: Error | undefined;
+  const kernel = createTestFileRuntimeKernel({
+    stateFile,
+    adapter: {
+      acquireLock: async () => async () => new Promise<void>(() => undefined),
+      criticalSectionMs: 20,
+      fatalOwnerTeardown: (error) => {
+        fatalError = error;
+      },
+      prepareStateFile: async ({ stateFile: preparedStateFile }) => {
+        await writeFile(preparedStateFile, '', 'utf8');
+        return preparedStateFile;
+      },
+      releaseMs: 20,
+    },
+  });
+
+  const outcome = await Promise.race([
+    kernel.recordEdit({
+      host: 'claude',
+      idempotencyKey: 'test:state:stuck-release',
+      path: 'stuck-release.ts',
+      sessionId: 'session-1',
+      toolName: 'Write',
+    }).then(() => 'resolved', (error: unknown) => error),
+    wait(200).then(() => 'test-timeout'),
+  ]);
+
+  expect(outcome).toBeInstanceOf(Error);
+  expect((outcome as Error).message).toContain('lease release exceeded 20 ms');
+  expect(fatalError?.message).toContain('lease release exceeded 20 ms');
+  await expect(
+    kernel.recordEdit({
+      host: 'codex',
+      idempotencyKey: 'test:state:after-stuck-release',
+      path: 'after-stuck-release.ts',
+      sessionId: 'session-2',
+      toolName: 'apply_patch',
+    }),
+  ).rejects.toThrow('permanently poisoned');
+});
+
+test('lease compromise cancels its owning mutation while a contender is acquiring', async () => {
+  const stateFile = join(await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-')), 'state.jsonl');
+  let allowRead!: () => void;
+  let compromiseOwner!: (error: Error) => void;
+  let firstRead = true;
+  let acquireCount = 0;
+  const readBarrier = new Promise<void>((resolve) => {
+    allowRead = resolve;
+  });
+  const kernel = createTestFileRuntimeKernel({
+    stateFile,
+    adapter: {
+      acquireLock: async ({ onCompromised }) => {
+        acquireCount += 1;
+        if (acquireCount === 1) {
+          compromiseOwner = onCompromised;
+          return async () => undefined;
+        }
+        return new Promise(() => undefined);
+      },
+      beforeRead: async () => {
+        if (firstRead) {
+          firstRead = false;
+          await readBarrier;
+        }
+      },
+      criticalSectionMs: 500,
+      prepareStateFile: async ({ stateFile: preparedStateFile }) => {
+        await writeFile(preparedStateFile, '', 'utf8');
+        return preparedStateFile;
+      },
+    },
+  });
+  const first = kernel.recordEdit({
+    host: 'claude',
+    idempotencyKey: 'test:state:compromise-owner-a',
+    path: 'owner-a.ts',
+    sessionId: 'session-a',
+    toolName: 'Write',
+  });
+  void first.catch(() => undefined);
+  await wait(10);
+  const second = kernel.recordEdit(
+    {
+      host: 'codex',
+      idempotencyKey: 'test:state:compromise-contender-b',
+      path: 'contender-b.ts',
+      sessionId: 'session-b',
+      toolName: 'apply_patch',
+    },
+    { lockAcquireTimeoutMs: 500 },
+  );
+  void second.catch(() => undefined);
+  await wait(10);
+  compromiseOwner(new Error('simulated owner compromise'));
+
+  const firstOutcome = await Promise.race([
+    first.then(() => 'resolved', (error: unknown) => error),
+    wait(100).then(() => 'test-timeout'),
+  ]);
+  expect(firstOutcome).toBeInstanceOf(Error);
+  expect((firstOutcome as Error).message).toContain('permanently poisoned');
+  await expect(second).rejects.toThrow('permanently poisoned');
+  await expect(readFile(stateFile, 'utf8')).resolves.toBe('');
+  allowRead();
 });
 
 test('accepts Windows parent-fsync limitations when creating a new state file', async () => {
@@ -468,7 +753,7 @@ test('poisons a kernel after lease compromise before it can append or mutate aga
   await rm(`${stateFile}.lock`, { force: true, recursive: true });
   await wait(1_100);
   continueAppend();
-  await expect(pending).rejects.toThrow('lease release failed');
+  await expect(pending).rejects.toThrow('lease was compromised');
   await expect(
     kernel.recordEdit({
       host: 'claude',

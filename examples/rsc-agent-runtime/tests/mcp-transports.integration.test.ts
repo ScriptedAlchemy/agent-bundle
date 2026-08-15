@@ -1,16 +1,19 @@
 import { spawn } from 'node:child_process';
-import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { request as httpRequest } from 'node:http';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { once } from 'node:events';
+import { pathToFileURL } from 'node:url';
 
+import { createRsbuild } from '@rsbuild/core';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { expect, test } from '@rstest/core';
 
 import { createFileRuntimeKernel } from '../src/runtime/state-file.js';
+import { createRscRuntimeRsbuildConfig } from '../rsbuild.config.js';
 
 const createStateFile = async (): Promise<string> => {
   const directory = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-mcp-'));
@@ -137,6 +140,61 @@ test('built stdio MCP serves static tools, file-backed data, Flight results, and
   } finally {
     await client.close();
     await rm(join(stateFile, '..'), { force: true, recursive: true });
+  }
+});
+
+test('implicit hook and MCP callers share one external workspace identity', async () => {
+  const runtimeRoot = join(process.cwd(), 'dist/runtime');
+  const workspace = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-shared-workspace-'));
+  const stateHome = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-shared-state-'));
+  const environment = Object.fromEntries(
+    Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined),
+  );
+  delete environment.AGENT_RUNTIME_STATE_FILE;
+  environment.XDG_STATE_HOME = stateHome;
+
+  const hook = spawn(process.execPath, [join(runtimeRoot, 'hook/index.js'), '--host', 'codex'], {
+    cwd: workspace,
+    env: environment,
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+  hook.stdin.end(JSON.stringify({
+    cwd: workspace,
+    event_id: 'shared-fallback-event',
+    hook_event_name: 'PostToolUse',
+    session_id: 'shared-session',
+    tool_input: { command: '*** Begin Patch\n*** Add File: shared.txt\n+shared\n*** End Patch' },
+    tool_name: 'apply_patch',
+  }));
+  const hookStderr: Buffer[] = [];
+  hook.stderr.on('data', (chunk: Buffer) => hookStderr.push(chunk));
+  hook.stdout.resume();
+  const [hookExit] = (await once(hook, 'close')) as [number | null, NodeJS.Signals | null];
+  expect(hookExit, Buffer.concat(hookStderr).toString('utf8')).toBe(0);
+
+  const client = createClient();
+  const transport = new StdioClientTransport({
+    args: [join(runtimeRoot, 'mcp/stdio.js')],
+    command: process.execPath,
+    cwd: workspace,
+    env: environment,
+    stderr: 'pipe',
+  });
+  try {
+    await client.connect(transport);
+    await expect(client.callTool({ name: 'recent_edits', arguments: { limit: 10 } })).resolves.toMatchObject({
+      structuredContent: {
+        edits: [{ eventId: expect.any(String), path: join(workspace, 'shared.txt') }],
+        stateVersion: 1,
+      },
+    });
+    await expect(access(join(workspace, '.agent-runtime-demo'))).rejects.toThrow();
+  } finally {
+    await client.close();
+    await Promise.all([
+      rm(workspace, { force: true, recursive: true }),
+      rm(stateHome, { force: true, recursive: true }),
+    ]);
   }
 });
 
@@ -294,6 +352,55 @@ test('runtime manifest declares every Node entry and dynamic chunk in its artifa
   }
   for (const { chunkId } of dynamicChunkDependencies) {
     expect(manifestFiles).toContain(`chunks/${chunkId}.js`);
+  }
+});
+
+test('production and development runtime graphs exclude state test controls', async () => {
+  const forbidden = [
+    'state-file-test-support',
+    'createFileRuntimeKernelForTesting',
+    'RuntimeStateTestAdapter',
+    'beforeAppend',
+    'criticalSectionMs',
+  ];
+  const readRuntimeSources = async (root: string): Promise<string> => {
+    const sources: string[] = [];
+    const visit = async (directory: string): Promise<void> => {
+      for (const entry of await readdir(directory, { withFileTypes: true })) {
+        const path = join(directory, entry.name);
+        if (entry.isDirectory()) await visit(path);
+        else if (entry.name.endsWith('.js') || entry.name.endsWith('.map')) sources.push(await readFile(path, 'utf8'));
+      }
+    };
+    await visit(root);
+    return sources.join('\n');
+  };
+  const assertExcluded = (source: string): void => {
+    for (const name of forbidden) expect(source).not.toContain(name);
+  };
+
+  assertExcluded(await readRuntimeSources(join(process.cwd(), 'dist/runtime')));
+  for (const host of ['claude', 'codex']) {
+    const packagedRuntime = join(process.cwd(), 'dist/plugins', host, 'runtime');
+    assertExcluded(await readRuntimeSources(packagedRuntime));
+    await expect(import(pathToFileURL(join(packagedRuntime, 'state-file-test-support.js')).href)).rejects.toThrow();
+  }
+
+  const compilerRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-state-graph-'));
+  const rsbuild = await createRsbuild({
+    config: createRscRuntimeRsbuildConfig({ compilerRoot, mode: 'development' }),
+    cwd: process.cwd(),
+  });
+  let closeBuild = async (): Promise<void> => undefined;
+  try {
+    const result = await rsbuild.build();
+    closeBuild = result.close;
+    expect(result.stats).toBeDefined();
+    assertExcluded(JSON.stringify(result.stats?.toJson({ all: false, children: true, modules: true, source: true })));
+    assertExcluded(await readRuntimeSources(join(compilerRoot, 'rsc')));
+  } finally {
+    await closeBuild();
+    await rm(compilerRoot, { force: true, recursive: true });
   }
 });
 

@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 
 import { requestFlightRender } from '../flight/request-render.js';
 import { lowerHookResult } from '../runtime/lower-hook.js';
+import { resolveImplicitRuntimeStateFile } from '../runtime/state-file.js';
 import { normalizeClaudeHook, normalizeCodexHook } from './normalize.js';
 
 let probeInput: Record<string, unknown> | undefined;
@@ -65,7 +66,7 @@ const run = async (): Promise<void> => {
   const event = host === 'claude' ? normalizeClaudeHook(input) : normalizeCodexHook(input);
   const configuredStateFile = process.env.AGENT_RUNTIME_STATE_FILE;
   const stateFile = configuredStateFile === undefined || configuredStateFile.trim() === ''
-    ? resolve(event.cwd, '.agent-runtime-demo', 'events.jsonl')
+    ? await resolveImplicitRuntimeStateFile(event.cwd)
     : resolve(configuredStateFile);
 
   const result = await requestFlightRender({

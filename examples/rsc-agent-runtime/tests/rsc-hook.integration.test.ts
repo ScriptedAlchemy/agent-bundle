@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from '@rstest/core';
-import { mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { access, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
@@ -232,8 +233,9 @@ describe('built RSC hook entry', () => {
     expect(result.stdout).toBe('');
   });
 
-  it('falls back to the workspace state file when a native host omits the configured environment', async () => {
+  it('falls back to tool-owned external state when a native host omits the configured environment', async () => {
     const workspace = await createTemporaryDirectory();
+    const stateHome = await createTemporaryDirectory();
     const result = await runHook(
       'codex',
       {
@@ -245,35 +247,54 @@ describe('built RSC hook entry', () => {
         event_id: 'fallback-event-1',
       },
       undefined,
+      { XDG_STATE_HOME: stateHome },
     );
 
     expect(result.exitCode).toBe(0);
-    const stateFile = join(workspace, '.agent-runtime-demo', 'events.jsonl');
+    const workspaceId = createHash('sha256').update(await realpath(workspace)).digest('hex');
+    const stateFile = join(stateHome, 'agent-bundle', 'rsc-agent-runtime', workspaceId, 'events.jsonl');
     expect((await readFile(stateFile, 'utf8')).trim()).toContain('fallback.txt');
+    await expect(access(join(workspace, '.agent-runtime-demo'))).rejects.toThrow();
   });
 
-  it('rejects a symlinked workspace fallback path without modifying its external target', async () => {
+  it('ignores workspace fallback symlink swaps and never modifies their external target', async () => {
     const workspace = await createTemporaryDirectory();
     const external = await createTemporaryDirectory();
+    const stateHome = await createTemporaryDirectory();
     const externalState = join(external, 'events.jsonl');
     await writeFile(externalState, '', 'utf8');
-    await symlink(external, join(workspace, '.agent-runtime-demo'), 'dir');
+    const workspaceFallback = join(workspace, '.agent-runtime-demo');
+    let keepSwapping = true;
+    const swapper = (async () => {
+      while (keepSwapping) {
+        await rm(workspaceFallback, { force: true, recursive: true });
+        await mkdir(workspaceFallback);
+        await rm(workspaceFallback, { force: true, recursive: true });
+        await symlink(external, workspaceFallback, 'dir');
+      }
+    })();
 
-    const result = await runHook(
-      'codex',
-      {
-        session_id: 'codex-session',
-        cwd: workspace,
-        event_id: 'symlink-fallback-event',
-        hook_event_name: 'PostToolUse',
-        tool_name: 'apply_patch',
-        tool_input: { command: '*** Begin Patch\n*** Add File: protected.txt\n+protected\n*** End Patch' },
-      },
-      undefined,
-    );
+    let result: Awaited<ReturnType<typeof runHook>>;
+    try {
+      result = await runHook(
+        'codex',
+        {
+          session_id: 'codex-session',
+          cwd: workspace,
+          event_id: 'symlink-fallback-event',
+          hook_event_name: 'PostToolUse',
+          tool_name: 'apply_patch',
+          tool_input: { command: '*** Begin Patch\n*** Add File: protected.txt\n+protected\n*** End Patch' },
+        },
+        undefined,
+        { XDG_STATE_HOME: stateHome },
+      );
+    } finally {
+      keepSwapping = false;
+      await swapper;
+    }
 
-    expect(result.exitCode).not.toBe(0);
-    expect(result.stdout).toBe('');
+    expect(result.exitCode).toBe(0);
     await expect(readFile(externalState, 'utf8')).resolves.toBe('');
   });
 
