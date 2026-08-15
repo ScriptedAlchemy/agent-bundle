@@ -1,4 +1,4 @@
-import { access, mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { access, mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 
@@ -169,6 +169,89 @@ it('normalizes a relative project root once before constructing every dev servic
   }
 }, 30_000);
 
+it('prepares the optional runtime once with the development config context before provider startup', async () => {
+  const project = await createProjectFixture();
+  const assetsRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-workbench-runtime-'));
+  let server: Awaited<ReturnType<typeof startDevServer>> | undefined;
+  await mkdir(join(project.root, 'src', 'dev'), { recursive: true });
+  await Promise.all([
+    writeFile(join(assetsRoot, 'index.html'), '<!doctype html><title>Agent Bundle workbench</title>'),
+    writeFile(join(project.root, 'src', 'dev', 'provider.ts'), [
+      "import { writeFile } from 'node:fs/promises';",
+      "import { join } from 'node:path';",
+      '',
+      'export const createDevRuntimeProvider = () => ({',
+      "  descriptor: { environmentVariables: [], id: 'fixture-runtime', label: 'Fixture runtime', schemaVersion: 1 },",
+      '  start: async (context) => {',
+      "    await writeFile(join(context.projectRoot, 'provider-context.json'), JSON.stringify({",
+      '      artifact: context.artifactStatus(),',
+      '      environment: context.environment,',
+      '      preparedRuntime: context.preparedRuntime,',
+      '      providerSessionId: context.providerSessionId,',
+      '      projectRoot: context.projectRoot,',
+      '      storageRoot: context.storageRoot,',
+      '    }));',
+      '    return {',
+      '      clientSurface: () => undefined,',
+      '      close: async () => undefined,',
+      '      mcpRegistry: {},',
+      '      providerSessionId: context.providerSessionId,',
+      '      status: () => ({ descriptor: { environmentVariables: [], id: \'fixture-runtime\', label: \'Fixture runtime\', schemaVersion: 1 }, diagnostics: [], hmrReady: false, state: \'active\' }),',
+      '      surfaces: () => [],',
+      '    };',
+      '  },',
+      '});',
+      '',
+    ].join('\n')),
+    writeFile(project.configPath, [
+      "import { appendFile } from 'node:fs/promises';",
+      "import { join } from 'node:path';",
+      "import { defineConfig } from 'agent-bundle';",
+      '',
+      'export default defineConfig(async ({ command, mode, projectRoot }) => {',
+      "  await appendFile(join(projectRoot, 'config-calls.ndjson'), JSON.stringify({ command, mode }) + '\\n');",
+      '  return {',
+      "    dev: { runtime: { provider: './src/dev/provider.ts' } },",
+      "    plugin: { name: 'runtime-fixture', version: '1.0.0' },",
+      "    skills: ['skills/review'],",
+      '  };',
+      '});',
+      '',
+    ].join('\n')),
+  ]);
+  try {
+    server = await startDevServer({
+      assets: createWorkbenchAssetSource({ root: assetsRoot }),
+      open: false,
+      port: 0,
+      root: project.root,
+    });
+
+    const [calls, context, runtimeStatus] = await Promise.all([
+      readFile(join(project.root, 'config-calls.ndjson'), 'utf8'),
+      readFile(join(project.root, 'provider-context.json'), 'utf8').then(JSON.parse) as Promise<Record<string, unknown>>,
+      fetch(`${server.url}/api/runtime/status`).then((response) => response.json()),
+    ]);
+    expect(calls.trim().split('\n').map((line) => JSON.parse(line))).toEqual([
+      { command: 'dev', mode: 'development' },
+    ]);
+    expect(context).toMatchObject({
+      artifact: { state: 'active' },
+      environment: {},
+      preparedRuntime: { provider: './src/dev/provider.ts' },
+      projectRoot: project.root,
+      storageRoot: expect.stringMatching(new RegExp(`^${join(project.root, '.agent-bundle', 'runtime').replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')}/`)),
+    });
+    expect(runtimeStatus).toMatchObject({ status: { descriptor: { id: 'fixture-runtime' }, state: 'active' } });
+    await expect(server.openRuntimeClientSurface('unknown-surface')).resolves.toBeUndefined();
+    await expect(server.close()).resolves.toBeUndefined();
+    await expect(server.openRuntimeClientSurface('unknown-surface')).rejects.toThrow('closed');
+  } finally {
+    await server?.close().catch(() => undefined);
+    await Promise.all([removeProjectFixture(project.root), rm(assetsRoot, { force: true, recursive: true })]);
+  }
+}, 30_000);
+
 it('binds real epoch MCP sessions to the workbench lifecycle and drains trace readers before cleanup', async () => {
   const project = await createProjectFixture();
   const assetsRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-workbench-mcp-'));
@@ -325,6 +408,41 @@ it('closes MCP Apps before sessions and the coordinator while retaining every cl
   expect(closeOrder).toEqual(['mcp-apps', 'mcp-sessions', 'coordinator']);
 });
 
+it('closes runtime client surfaces before every other lifecycle resource without losing failures', async () => {
+  const clientFailure = new Error('Runtime client surface cleanup failed.');
+  const appFailure = new Error('MCP App cleanup failed.');
+  const runtimeFailure = new Error('Runtime cleanup failed.');
+  const mcpFailure = new Error('MCP cleanup failed.');
+  const coordinatorFailure = new Error('Coordinator cleanup failed.');
+  const closeOrder: string[] = [];
+
+  await expect(closeDevServerLifecycle(
+    { close: async () => { closeOrder.push('mcp-sessions'); throw mcpFailure; } },
+    { close: async () => { closeOrder.push('coordinator'); throw coordinatorFailure; } },
+    { close: async () => { closeOrder.push('mcp-apps'); throw appFailure; } },
+    {
+      clientSurfaces: { close: async () => { closeOrder.push('runtime-client-surfaces'); throw clientFailure; } },
+      runtime: { close: async () => { closeOrder.push('runtime'); throw runtimeFailure; } },
+    },
+  )).rejects.toEqual(expect.objectContaining({
+    failures: [
+      { error: clientFailure, resource: 'runtime-client-surfaces' },
+      { error: appFailure, resource: 'mcp-apps' },
+      { error: runtimeFailure, resource: 'runtime' },
+      { error: mcpFailure, resource: 'mcp-sessions' },
+      { error: coordinatorFailure, resource: 'coordinator' },
+    ],
+    name: DevServerLifecycleCloseError.name,
+  }));
+  expect(closeOrder).toEqual([
+    'runtime-client-surfaces',
+    'mcp-apps',
+    'runtime',
+    'mcp-sessions',
+    'coordinator',
+  ]);
+});
+
 it('retains sandbox startup and foreground cleanup failures structurally', async () => {
   const project = await createProjectFixture();
   const sandboxFailure = new Error('Sandbox startup failed.');
@@ -368,7 +486,12 @@ it('passes --no-open and the requested port from the CLI to the public dev API',
   }, {
     startDevServer: async (options) => {
       received.push(options);
-      return { close: async () => undefined, status: () => ({}) as never, url: 'http://127.0.0.1:4100' };
+      return {
+        close: async () => undefined,
+        openRuntimeClientSurface: async () => undefined,
+        status: () => ({}) as never,
+        url: 'http://127.0.0.1:4100',
+      };
     },
   });
 
@@ -389,6 +512,7 @@ it('closes the foreground session once when the dev CLI receives a termination s
     },
     startDevServer: async () => ({
       close: async () => { closeCalls += 1; },
+      openRuntimeClientSurface: async () => undefined,
       status: () => ({}) as never,
       url: 'http://127.0.0.1:4100',
     }),

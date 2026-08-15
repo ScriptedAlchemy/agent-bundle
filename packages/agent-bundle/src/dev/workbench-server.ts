@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 
 import { DevCoordinator } from './coordinator.ts';
 import { EpochStore } from './epoch-store.ts';
@@ -20,12 +20,21 @@ import {
 } from './mcp-app-sandbox.ts';
 import { McpSessionService } from './mcp-session-service.ts';
 import { ProjectService } from './project-service.ts';
+import { DevRuntimeController } from './runtime-controller.ts';
+import { RuntimeClientSurfaceProxy } from './runtime-client-surface-proxy.ts';
+import { resolveDevRuntimeProvider } from './runtime-provider-loader.ts';
+import {
+  DevRuntimeUnavailableError,
+  type DevRuntimeClientSurfaceProxyBinding,
+  type DevRuntimeEventInput,
+} from './runtime-provider.ts';
 import { SkillDocumentService } from './skill-document-service.ts';
 import { createWorkbenchAssetSource } from './workbench-assets.ts';
 import type { Invalidation, ProjectStatus } from './types.ts';
 
 export interface DevServerSession {
   close(): Promise<void>;
+  openRuntimeClientSurface(surfaceId: string): Promise<DevRuntimeClientSurfaceProxyBinding | undefined>;
   status(): ProjectStatus;
   readonly url: string;
 }
@@ -38,7 +47,7 @@ interface Closeable {
 
 export interface DevServerLifecycleCloseFailure {
   readonly error: unknown;
-  readonly resource: 'coordinator' | 'mcp-apps' | 'mcp-sessions';
+  readonly resource: 'coordinator' | 'mcp-apps' | 'mcp-sessions' | 'runtime' | 'runtime-client-surfaces';
 }
 
 /** Reports session and coordinator cleanup failures without hiding either resource. */
@@ -181,19 +190,99 @@ class DeferredMcpAppPreviewService implements McpAppRoutePreviewService {
   }
 }
 
+/** Owns every fixed loopback proxy binding for the life of a Workbench session. */
+class RuntimeClientSurfaceBindings implements Closeable {
+  readonly #runtime: DevRuntimeController | undefined;
+  readonly #bindings = new Set<DevRuntimeClientSurfaceProxyBinding>();
+  #closing = false;
+  #closePromise: Promise<void> | undefined;
+
+  constructor(runtime: DevRuntimeController | undefined) {
+    this.#runtime = runtime;
+  }
+
+  async open(surfaceId: string): Promise<DevRuntimeClientSurfaceProxyBinding | undefined> {
+    if (this.#closing) throw new Error('Development runtime client surfaces are closed.');
+    let endpoint;
+    try {
+      endpoint = this.#runtime?.clientSurface(surfaceId);
+    } catch (error) {
+      if (error instanceof DevRuntimeUnavailableError) return undefined;
+      throw error;
+    }
+    if (endpoint === undefined) return undefined;
+    const binding = await RuntimeClientSurfaceProxy.open(endpoint, (event) => {
+      this.#runtime?.emit(Object.freeze({
+        details: Object.freeze({ connectionCount: event.connectionCount, surfaceId: event.surfaceId }),
+        type: event.type === 'connected' ? 'runtime.hmr.client-connected' : 'runtime.hmr.client-disconnected',
+      } satisfies DevRuntimeEventInput));
+    });
+    if (this.#closing) {
+      await binding.close();
+      throw new Error('Development runtime client surfaces are closed.');
+    }
+    const wrapped: DevRuntimeClientSurfaceProxyBinding = Object.freeze({
+      ...binding,
+      close: async (): Promise<void> => {
+        try {
+          await binding.close();
+        } finally {
+          this.#bindings.delete(wrapped);
+        }
+      },
+    });
+    this.#bindings.add(wrapped);
+    return wrapped;
+  }
+
+  close(): Promise<void> {
+    this.#closePromise ??= this.#close();
+    return this.#closePromise;
+  }
+
+  async #close(): Promise<void> {
+    this.#closing = true;
+    const results = await Promise.allSettled([...this.#bindings].map((binding) => binding.close()));
+    const failures = results.filter((result): result is PromiseRejectedResult => result.status === 'rejected');
+    if (failures.length > 0) throw new AggregateError(failures.map((failure) => failure.reason), 'Runtime client surfaces could not close.');
+  }
+}
+
+export interface DevServerRuntimeLifecycleResources {
+  readonly clientSurfaces?: Closeable;
+  readonly runtime?: Closeable;
+}
+
 /** Closes persistent MCP state alongside the coordinator, preserving all cleanup failures. */
 export const closeDevServerLifecycle = async (
   mcpSessions: Closeable,
   coordinator: Closeable,
   mcpApps?: Closeable,
+  runtimeResources?: DevServerRuntimeLifecycleResources,
 ): Promise<void> => {
+  const clientSurfaceResults = runtimeResources?.clientSurfaces === undefined
+    ? []
+    : await Promise.allSettled([runtimeResources.clientSurfaces.close()]);
   const appResults = mcpApps === undefined ? [] : await Promise.allSettled([mcpApps.close()]);
+  const runtimeResults = runtimeResources?.runtime === undefined
+    ? []
+    : await Promise.allSettled([runtimeResources.runtime.close()]);
   const sessionResults = await Promise.allSettled([mcpSessions.close()]);
   const coordinatorResults = await Promise.allSettled([coordinator.close()]);
   const failures = [
+    ...clientSurfaceResults.flatMap((result): readonly DevServerLifecycleCloseFailure[] =>
+      result.status === 'rejected'
+        ? [Object.freeze({ error: result.reason, resource: 'runtime-client-surfaces' as const })]
+        : [],
+    ),
     ...appResults.flatMap((result): readonly DevServerLifecycleCloseFailure[] =>
       result.status === 'rejected'
         ? [Object.freeze({ error: result.reason, resource: 'mcp-apps' as const })]
+        : [],
+    ),
+    ...runtimeResults.flatMap((result): readonly DevServerLifecycleCloseFailure[] =>
+      result.status === 'rejected'
+        ? [Object.freeze({ error: result.reason, resource: 'runtime' as const })]
         : [],
     ),
     ...sessionResults.flatMap((result): readonly DevServerLifecycleCloseFailure[] =>
@@ -214,10 +303,15 @@ const withMcpSessionLifecycle = (
   coordinator: DevCoordinator,
   mcpSessions: McpSessionService,
   mcpApps: () => Closeable | undefined,
+  runtime: DevRuntimeController | undefined,
+  clientSurfaces: Closeable,
 ): ForegroundCoordinator => Object.freeze({
-  close: () => closeDevServerLifecycle(mcpSessions, coordinator, mcpApps()),
+  close: () => closeDevServerLifecycle(mcpSessions, coordinator, mcpApps(), { clientSurfaces, runtime }),
   rebuild: (invalidation: Invalidation) => coordinator.rebuild(invalidation),
-  start: () => coordinator.start(),
+  start: async () => {
+    await coordinator.start();
+    await runtime?.start();
+  },
   status: () => coordinator.status(),
 });
 
@@ -240,18 +334,75 @@ export const startDevServer = async (options: StartDevServerOptions): Promise<De
   const root = resolve(options.root);
   const eventHub = new ProjectEventHub();
   const epochStore = new EpochStore({ projectRoot: root });
-  const projectService = new ProjectService({ root });
-  const coordinator = new DevCoordinator({ epochStore, eventHub, projectService, root });
+  const projectService = new ProjectService({ includeDevRuntime: true, mode: 'development', root });
+  const initialPreparedProject = await projectService.prepare('dev');
+  let status: () => ProjectStatus = () => Object.freeze({
+    artifact: Object.freeze({ state: 'missing' }),
+    build: Object.freeze({ state: 'idle' }),
+    source: Object.freeze({ diagnostics: Object.freeze([]), state: 'unknown' }),
+  });
+  let runtime: DevRuntimeController | undefined;
+  if (initialPreparedProject.devRuntime !== undefined || initialPreparedProject.devRuntimeDiagnostic !== undefined) {
+    const preparedRuntime = initialPreparedProject.devRuntime ?? Object.freeze({
+      apps: Object.freeze([]),
+      provider: '',
+      servers: Object.freeze([]),
+      sourceRevision: initialPreparedProject.source.revision ?? 'unknown',
+    });
+    let provider;
+    let providerLoadError: unknown;
+    if (initialPreparedProject.devRuntime !== undefined) {
+      try {
+        provider = await resolveDevRuntimeProvider(root, initialPreparedProject.devRuntime);
+      } catch (error) {
+        providerLoadError = error;
+      }
+    } else {
+      providerLoadError = initialPreparedProject.devRuntimeDiagnostic;
+    }
+    runtime = new DevRuntimeController({
+      artifactStatus: () => status().artifact,
+      emit: (event) => {
+        const artifact = status().artifact;
+        eventHub.publish({
+          ...((artifact.state === 'active' || artifact.state === 'stale') ? { epochId: artifact.activeEpoch.id } : {}),
+          payload: event,
+          type: 'runtime.event',
+        });
+      },
+      environment: process.env,
+      preparedRuntime,
+      projectRoot: root,
+      provider,
+      providerLoadError,
+      storageRoot: join(root, '.agent-bundle', 'runtime'),
+    });
+  }
+  const coordinator = new DevCoordinator({
+    epochStore,
+    eventHub,
+    initialPreparedProject,
+    onPreparedProject: async (prepared) => {
+      if (prepared.devRuntime !== undefined) await runtime?.reconcilePreparedRuntime(prepared.devRuntime);
+    },
+    outputPaths: ['dist', '.agent-bundle/runtime'],
+    prepareCommand: 'dev',
+    projectService,
+    root,
+  });
+  status = () => coordinator.status();
   const mcpSessions = new McpSessionService({ epochStore, projectRoot: root });
   const appPreviews = new DeferredMcpAppPreviewService();
+  const clientSurfaces = new RuntimeClientSurfaceBindings(runtime);
   let mcpApps: McpAppLifecycle | undefined;
   const foreground = await (options.testing?.startForegroundServer ?? startForegroundServer)({
     assets: options.assets ?? createWorkbenchAssetSource(),
-    coordinator: withMcpSessionLifecycle(coordinator, mcpSessions, () => mcpApps),
+    coordinator: withMcpSessionLifecycle(coordinator, mcpSessions, () => mcpApps, runtime, clientSurfaces),
     eventHub,
     mcpAppPreviews: appPreviews,
     mcpSessions,
     port: options.port,
+    ...(runtime === undefined ? {} : { runtime }),
     skillDocuments: new SkillDocumentService({ epochStore, projectService, root }),
   });
   try {
@@ -298,6 +449,7 @@ export const startDevServer = async (options: StartDevServerOptions): Promise<De
   }
   return Object.freeze({
     close: () => foreground.close(),
+    openRuntimeClientSurface: (surfaceId: string) => clientSurfaces.open(surfaceId),
     status: () => coordinator.status(),
     url: foreground.url,
   });

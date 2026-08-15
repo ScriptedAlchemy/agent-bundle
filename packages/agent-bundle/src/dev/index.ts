@@ -88,6 +88,7 @@ export {
   DevServerLifecycleCloseError,
   DevServerStartError,
   type DevServerLifecycleCloseFailure,
+  type DevServerRuntimeLifecycleResources,
   type DevServerStartFailure,
   type DevServerSession,
   type OpenBrowser,
@@ -101,6 +102,10 @@ export {
   type RslintLintResult,
   type RslintMessage,
 } from './diagnostic-service.ts';
+export {
+  DevRuntimeController,
+  type DevRuntimeControllerOptions,
+} from './runtime-controller.ts';
 export {
   DevRuntimeGenerationConflictError,
   DevRuntimeUnavailableError,

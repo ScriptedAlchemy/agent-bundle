@@ -5,8 +5,11 @@ import { join } from 'node:path';
 import { expect, it } from '@rstest/core';
 
 import {
+  DevRuntimeController,
   DevRuntimeGenerationConflictError,
   DevRuntimeUnavailableError,
+  type DevRuntimeProvider,
+  type DevRuntimeSession,
   type DevRuntimeMcpSessionBinding,
   type DevRuntimeRun,
   type DevRuntimeSurface,
@@ -162,6 +165,90 @@ it('uses stable errors for unavailable and stale runtime generations', () => {
     expectedGenerationId: 'expected-generation',
     name: 'DevRuntimeGenerationConflictError',
   });
+});
+
+it('starts one provider from the trusted prepared snapshot with only declared environment values', async () => {
+  const events: unknown[] = [];
+  const session = {
+    close: async () => undefined,
+    mcpRegistry: {},
+    providerSessionId: 'upstream-provider-session',
+    status: () => ({
+      descriptor: { environmentVariables: ['RUNTIME_TOKEN'], id: 'fixture-runtime', label: 'Fixture runtime', schemaVersion: 1 },
+      diagnostics: [],
+      hmrReady: true,
+      state: 'active',
+    }),
+  } as unknown as DevRuntimeSession;
+  let received: Parameters<DevRuntimeProvider['start']>[0] | undefined;
+  const controller = new DevRuntimeController({
+    artifactStatus: () => ({ state: 'missing' }),
+    emit: (event) => events.push(event),
+    environment: { RUNTIME_TOKEN: 'allowed', UNDECLARED_SECRET: 'must-not-pass' },
+    preparedRuntime: {
+      apps: [],
+      provider: './src/dev/provider.ts',
+      servers: [],
+      sourceRevision: 'source-1',
+    },
+    projectRoot: '/workspace/project',
+    provider: {
+      descriptor: { environmentVariables: ['RUNTIME_TOKEN'], id: 'fixture-runtime', label: 'Fixture runtime', schemaVersion: 1 },
+      start: async (context) => {
+        received = context;
+        return session;
+      },
+    },
+    storageRoot: '/workspace/project/.agent-bundle/runtime',
+  });
+
+  await controller.start();
+
+  expect(received).toMatchObject({
+    environment: { RUNTIME_TOKEN: 'allowed' },
+    preparedRuntime: { sourceRevision: 'source-1' },
+    projectRoot: '/workspace/project',
+    storageRoot: expect.stringMatching(/^\/workspace\/project\/\.agent-bundle\/runtime\//u),
+  });
+  expect(received?.environment).not.toHaveProperty('UNDECLARED_SECRET');
+  expect(controller.providerSessionId).toMatch(/^[0-9a-f-]{36}$/u);
+  expect(controller.status()).toMatchObject({ hmrReady: true, state: 'active' });
+  expect(events).toEqual([]);
+  await controller.close();
+});
+
+it('aborts a timed-out provider start and closes a late session exactly once', async () => {
+  let resolveLate: ((session: DevRuntimeSession) => void) | undefined;
+  const late = new Promise<DevRuntimeSession>((resolvePromise) => { resolveLate = resolvePromise; });
+  let context: Parameters<DevRuntimeProvider['start']>[0] | undefined;
+  let closes = 0;
+  const controller = new DevRuntimeController({
+    artifactStatus: () => ({ state: 'missing' }),
+    emit: () => undefined,
+    environment: {},
+    preparedRuntime: { apps: [], provider: './src/dev/provider.ts', servers: [], sourceRevision: 'source-1' },
+    projectRoot: '/workspace/project',
+    provider: {
+      descriptor: { environmentVariables: [], id: 'fixture-runtime', label: 'Fixture runtime', schemaVersion: 1 },
+      start: async (received) => {
+        context = received;
+        return late;
+      },
+    },
+    startupTimeoutMs: 5,
+    storageRoot: '/workspace/project/.agent-bundle/runtime',
+  });
+
+  await controller.start();
+
+  expect(context?.signal.aborted).toBe(true);
+  expect(controller.status()).toMatchObject({
+    diagnostics: [{ phase: 'provider-lifecycle' }],
+    state: 'failed',
+  });
+  resolveLate?.({ close: async () => { closes += 1; } } as unknown as DevRuntimeSession);
+  await controller.close();
+  expect(closes).toBe(1);
 });
 
 it('loads one contained named runtime provider export with a frozen descriptor', async () => {

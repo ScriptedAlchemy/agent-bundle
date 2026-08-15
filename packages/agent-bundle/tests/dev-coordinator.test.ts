@@ -786,6 +786,52 @@ it('loads the active epoch before a failed initial build and retains it as stale
   }
 });
 
+it('uses one initial development preparation before preparing later development rebuilds', async () => {
+  const root = await createProject();
+  const initial = {
+    source: { diagnostics: [], revision: 'initial-source', state: 'valid' },
+  } as unknown as PreparedProject;
+  const later = {
+    source: { diagnostics: [], revision: 'later-source', state: 'valid' },
+  } as unknown as PreparedProject;
+  const preparedByCoordinator: PreparedProject[] = [];
+  const prepareCommands: string[] = [];
+  const built: PreparedProject[] = [];
+  try {
+    const coordinator = new DevCoordinator({
+      acquireLock: async () => ({ close: async () => undefined }),
+      artifactService: {
+        build: async (prepared) => {
+          built.push(prepared);
+          return succeeded(epochFor(root, `epoch-${built.length}`, prepared.source.revision ?? 'missing'));
+        },
+      },
+      createWatcher: () => ({ close: async () => undefined }),
+      diagnosticService: { close: async () => undefined, lint: async (paths) => ({ diagnostics: [], paths }) },
+      initialPreparedProject: initial,
+      onPreparedProject: async (prepared) => { preparedByCoordinator.push(prepared); },
+      prepareCommand: 'dev',
+      projectService: {
+        prepare: async (command) => {
+          prepareCommands.push(command);
+          return later;
+        },
+      },
+      root,
+    });
+
+    await coordinator.start();
+    await coordinator.rebuild(invalidation(['src/changed.ts']));
+
+    expect(prepareCommands).toEqual(['dev']);
+    expect(preparedByCoordinator).toEqual([initial, later]);
+    expect(built).toEqual([initial, later]);
+    await coordinator.close();
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
 it('turns prepare, lint, and artifact rejections into failed attempts and events', async () => {
   const phases = ['prepare', 'lint', 'artifact'] as const;
   for (const phase of phases) {

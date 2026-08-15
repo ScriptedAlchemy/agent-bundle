@@ -20,7 +20,7 @@ import type {
 import type { DevRuntimePreparedMcpApp, DevRuntimePreparedMcpServer, DevRuntimePreparedProject } from './runtime-provider.ts';
 import { freezeJsonValue, type JsonObject, type JsonValue, type SourceStatus } from './types.ts';
 
-export type ProjectCommand = 'build' | 'inspect' | 'validate';
+export type ProjectCommand = 'build' | 'dev' | 'inspect' | 'validate';
 
 export interface ProjectServiceLogger {
   log?(event: string, details: Readonly<Record<string, unknown>>): void;
