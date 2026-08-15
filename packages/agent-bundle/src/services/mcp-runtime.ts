@@ -27,6 +27,12 @@ export interface ModernMcpStreamableHttpServer {
 
 export type ModernMcpServer = ModernMcpStdioServer | ModernMcpStreamableHttpServer;
 
+interface ParsedRemoteMcpServer {
+  readonly headers?: Readonly<Record<string, string>>;
+  readonly type: string;
+  readonly url: string;
+}
+
 export interface ModernMcpServerEntry {
   readonly name: string;
   readonly server: ModernMcpServer;
@@ -60,6 +66,7 @@ export interface TargetMcpRuntimeContract {
 interface CreateTargetMcpRuntimeOptions {
   readonly manifestPath: string;
   readonly remoteTypes: readonly string[];
+  readonly validatedButNonModernRemoteTypes?: readonly string[];
   readonly resolveStdioArgument?: TargetMcpRuntimeContract['resolveStdioArgument'];
   readonly resolveValue: TargetMcpRuntimeContract['resolveValue'];
 }
@@ -172,10 +179,7 @@ const stdioServer = (value: unknown): ModernMcpStdioServer | undefined => {
   });
 };
 
-const streamableHttpServer = (
-  value: unknown,
-  remoteTypes: ReadonlySet<string>,
-): ModernMcpStreamableHttpServer | undefined => {
+const remoteServer = (value: unknown): ParsedRemoteMcpServer | undefined => {
   if (!plainDataRecord(value)) return undefined;
   const type = ownDataValue(value, 'type');
   const headers = ownDataValue(value, 'headers');
@@ -186,12 +190,11 @@ const streamableHttpServer = (
   ) return undefined;
   const copiedHeaders = headers.found && headers.value !== undefined ? stringRecord(headers.value) : undefined;
   if (
-    !remoteTypes.has(type.value) ||
     (headers.found && headers.value !== undefined && copiedHeaders === undefined)
   ) return undefined;
   return Object.freeze({
     ...(copiedHeaders === undefined ? {} : { headers: copiedHeaders }),
-    kind: 'streamable-http',
+    type: type.value,
     url: url.value,
   });
 };
@@ -199,6 +202,7 @@ const streamableHttpServer = (
 const readModernMcpServers = (
   document: unknown,
   remoteTypes: ReadonlySet<string>,
+  validatedButNonModernRemoteTypes: ReadonlySet<string>,
 ): ModernMcpServersReadResult => {
   if (!plainDataRecord(document)) return { status: 'invalid' };
   const servers = ownDataValue(document, 'mcpServers');
@@ -209,11 +213,28 @@ const readModernMcpServers = (
     if (!plainDataRecord(value)) return { status: 'invalid' };
     const type = ownDataValue(value, 'type');
     if (type === undefined || !type.found || typeof type.value !== 'string') return { status: 'invalid' };
-    const server = type.value === 'stdio'
-      ? stdioServer(value)
-      : streamableHttpServer(value, remoteTypes);
+    if (type.value === 'stdio') {
+      const server = stdioServer(value);
+      if (server === undefined) return { status: 'invalid' };
+      entries.push(Object.freeze({ name, server }));
+      continue;
+    }
+
+    const server = remoteServer(value);
     if (server === undefined) return { status: 'invalid' };
-    entries.push(Object.freeze({ name, server }));
+    if (remoteTypes.has(server.type)) {
+      entries.push(Object.freeze({
+        name,
+        server: Object.freeze({
+          ...(server.headers === undefined ? {} : { headers: server.headers }),
+          kind: 'streamable-http',
+          url: server.url,
+        }),
+      }));
+      continue;
+    }
+    if (validatedButNonModernRemoteTypes.has(server.type)) continue;
+    return { status: 'invalid' };
   }
   return Object.freeze({ servers: Object.freeze(entries), status: 'found' });
 };
@@ -335,13 +356,19 @@ export const readTargetMcpServer = (
 export const createTargetMcpRuntime = ({
   manifestPath,
   remoteTypes,
+  validatedButNonModernRemoteTypes = [],
   resolveStdioArgument = noRelativeArgumentResolution,
   resolveValue,
 }: CreateTargetMcpRuntimeOptions): TargetMcpRuntimeContract => {
   const nativeRemoteTypes = new Set(remoteTypes);
+  const nativeValidatedButNonModernRemoteTypes = new Set(validatedButNonModernRemoteTypes);
   return Object.freeze({
     manifestPath,
-    readModernServers: (document: unknown) => readModernMcpServers(document, nativeRemoteTypes),
+    readModernServers: (document: unknown) => readModernMcpServers(
+      document,
+      nativeRemoteTypes,
+      nativeValidatedButNonModernRemoteTypes,
+    ),
     resolveStdioArgument,
     resolveValue,
   });

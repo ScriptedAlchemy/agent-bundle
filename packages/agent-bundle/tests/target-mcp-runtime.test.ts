@@ -179,6 +179,34 @@ it('reads and freezes every modern server before delegating per-name lookups', (
   });
 });
 
+it('omits validated legacy remote servers while retaining modern MCP servers', () => {
+  const parser = createTargetMcpRuntime({
+    manifestPath: 'native/registry.json',
+    remoteTypes: ['native-http'],
+    validatedButNonModernRemoteTypes: ['sse'],
+    resolveValue: (_field, _roots, value) => ({ diagnostics: [], value }),
+  });
+  const document = {
+    mcpServers: {
+      legacy: { headers: { Authorization: 'Bearer token' }, type: 'sse', url: 'https://mcp.example.test/events' },
+      modern: { type: 'native-http', url: 'https://mcp.example.test' },
+      stdio: { args: ['mcp/server.mjs'], command: 'node', type: 'stdio' },
+    },
+  };
+
+  expect(readTargetMcpServers(parser, document)).toEqual({
+    servers: [
+      { name: 'modern', server: { kind: 'streamable-http', url: 'https://mcp.example.test' } },
+      { name: 'stdio', server: { args: ['mcp/server.mjs'], command: 'node', kind: 'stdio' } },
+    ],
+    status: 'found',
+  });
+  expect(readTargetMcpServer(parser, document, 'legacy')).toEqual({ status: 'missing' });
+  expect(readTargetMcpServers(parser, {
+    mcpServers: { legacy: { type: 'sse', url: 42 } },
+  })).toEqual({ status: 'invalid' });
+});
+
 it('detaches and freezes reader servers before delayed mutation can change a launch', async () => {
   const args = ['--original'];
   const sharedFields = Object.create(null) as Record<string, string>;

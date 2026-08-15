@@ -102,6 +102,7 @@ const artifactValidation = Object.freeze({
 const mcpRuntime = createTargetMcpRuntime({
   manifestPath: '.mcp.json',
   remoteTypes: ['http'],
+  validatedButNonModernRemoteTypes: ['sse'],
   resolveValue: createMcpPathTokenResolver({
     knownTokens: standardMcpPathTokens,
     target: claudeName,
