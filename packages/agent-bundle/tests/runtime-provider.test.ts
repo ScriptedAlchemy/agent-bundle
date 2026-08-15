@@ -8,7 +8,9 @@ import {
   DevRuntimeController,
   DevRuntimeGenerationConflictError,
   DevRuntimeUnavailableError,
+  type DevRuntimeControllerOptions,
   type DevRuntimeProvider,
+  type DevRuntimePreparedProject,
   type DevRuntimeSession,
   type DevRuntimeMcpSessionBinding,
   type DevRuntimeRun,
@@ -249,6 +251,210 @@ it('aborts a timed-out provider start and closes a late session exactly once', a
   resolveLate?.({ close: async () => { closes += 1; } } as unknown as DevRuntimeSession);
   await controller.close();
   expect(closes).toBe(1);
+});
+
+it('contains synchronous provider and malformed status failures as failed runtime state', async () => {
+  const options: Omit<DevRuntimeControllerOptions, 'provider'> = {
+    artifactStatus: () => ({ state: 'missing' }),
+    emit: () => undefined,
+    environment: {},
+    preparedRuntime: { apps: [], provider: './src/dev/provider.ts', servers: [], sourceRevision: 'source-1' },
+    projectRoot: '/workspace/project',
+    storageRoot: '/workspace/project/.agent-bundle/runtime',
+  } as const;
+  const descriptor = { environmentVariables: [], id: 'fixture-runtime', label: 'Fixture runtime', schemaVersion: 1 } as const;
+  const synchronousFailure = new DevRuntimeController({
+    ...options,
+    provider: { descriptor, start: () => { throw new Error('synchronous provider failure'); } },
+  });
+  const malformedStatus = new DevRuntimeController({
+    ...options,
+    provider: { descriptor, start: async () => ({ close: async () => undefined }) as unknown as DevRuntimeSession },
+  });
+  const throwingStatus = new DevRuntimeController({
+    ...options,
+    provider: {
+      descriptor,
+      start: async () => ({ close: async () => undefined, status: () => { throw new Error('status failure'); } }) as unknown as DevRuntimeSession,
+    },
+  });
+
+  await expect(synchronousFailure.start()).resolves.toBeUndefined();
+  await expect(malformedStatus.start()).resolves.toBeUndefined();
+  await expect(throwingStatus.start()).resolves.toBeUndefined();
+  for (const controller of [synchronousFailure, malformedStatus, throwingStatus]) {
+    expect(controller.status()).toMatchObject({
+      diagnostics: [{ phase: 'provider-lifecycle' }],
+      state: 'failed',
+    });
+    await expect(controller.close()).resolves.toBeUndefined();
+  }
+});
+
+it('reconciles the newest revision exactly once after a deferred provider start publishes its session', async () => {
+  let resolveSession: ((session: DevRuntimeSession) => void) | undefined;
+  const deferredSession = new Promise<DevRuntimeSession>((resolvePromise) => { resolveSession = resolvePromise; });
+  const reconciled: string[] = [];
+  const controller = new DevRuntimeController({
+    artifactStatus: () => ({ state: 'missing' }),
+    emit: () => undefined,
+    environment: {},
+    preparedRuntime: { apps: [], provider: './src/dev/provider.ts', servers: [], sourceRevision: 'source-1' },
+    projectRoot: '/workspace/project',
+    provider: {
+      descriptor: { environmentVariables: [], id: 'fixture-runtime', label: 'Fixture runtime', schemaVersion: 1 },
+      start: async () => deferredSession,
+    },
+    storageRoot: '/workspace/project/.agent-bundle/runtime',
+  });
+  const starting = controller.start();
+  await new Promise((resolvePromise) => setImmediate(resolvePromise));
+
+  await controller.reconcilePreparedRuntime({
+    apps: [],
+    provider: './src/dev/provider.ts',
+    servers: [],
+    sourceRevision: 'source-2',
+  });
+  resolveSession?.({
+    close: async () => undefined,
+    mcpRegistry: {},
+    reconcilePreparedRuntime: async (prepared: DevRuntimePreparedProject) => { reconciled.push(prepared.sourceRevision); },
+    status: () => ({ descriptor: { environmentVariables: [], id: 'fixture-runtime', label: 'Fixture runtime', schemaVersion: 1 }, diagnostics: [], hmrReady: true, state: 'active' }),
+    surfaces: () => [],
+  } as unknown as DevRuntimeSession);
+
+  await starting;
+  expect(reconciled).toEqual(['source-2']);
+  await controller.close();
+});
+
+it('latches declaration topology failures and revokes registry capabilities captured while active', async () => {
+  let executions = 0;
+  const view = {
+    execute: async () => { executions += 1; return {}; },
+    snapshot: () => ({}),
+    watchClosed: () => ({ closed: false, unsubscribe: () => undefined }),
+  };
+  const registry = {
+    close: async () => undefined,
+    closeSession: async () => undefined,
+    open: async () => ({ ...view, close: async () => undefined }),
+    reconcile: async () => ({}),
+    restart: async () => ({}),
+    session: () => view,
+    snapshot: () => undefined,
+    subscribe: () => ({ unsubscribe: () => undefined }),
+  };
+  const controller = new DevRuntimeController({
+    artifactStatus: () => ({ state: 'missing' }),
+    emit: () => undefined,
+    environment: {},
+    preparedRuntime: { apps: [], provider: './src/dev/provider.ts', servers: [], sourceRevision: 'source-1' },
+    projectRoot: '/workspace/project',
+    provider: {
+      descriptor: { environmentVariables: [], id: 'fixture-runtime', label: 'Fixture runtime', schemaVersion: 1 },
+      start: async () => ({
+        close: async () => undefined,
+        mcpRegistry: registry,
+        status: () => ({ descriptor: { environmentVariables: [], id: 'fixture-runtime', label: 'Fixture runtime', schemaVersion: 1 }, diagnostics: [], hmrReady: true, state: 'active' }),
+        surfaces: () => [],
+      }) as unknown as DevRuntimeSession,
+    },
+    storageRoot: '/workspace/project/.agent-bundle/runtime',
+  });
+  await controller.start();
+  const capturedRegistry = controller.mcpRegistry;
+  const capturedView = capturedRegistry.session('mcp-a');
+  if (capturedView === undefined) throw new Error('Expected a captured runtime MCP view.');
+  const capturedSession = await capturedRegistry.open({ serverName: 'timeline', target: 'portable' });
+  await capturedView.execute({ expectedSessionRevision: 1, kind: 'list-tools' });
+  expect(executions).toBe(1);
+
+  await controller.reconcileDeclaration({
+    apps: [],
+    provider: './src/dev/replaced-provider.ts',
+    servers: [],
+    sourceRevision: 'source-2',
+  });
+
+  expect(controller.status()).toMatchObject({ state: 'failed' });
+  await expect(capturedRegistry.open({ serverName: 'timeline', target: 'portable' })).rejects.toMatchObject({ code: 'AB8201' });
+  await expect(capturedView.execute({ expectedSessionRevision: 1, kind: 'list-tools' })).rejects.toMatchObject({ code: 'AB8201' });
+  await expect(capturedSession.close()).rejects.toMatchObject({ code: 'AB8201' });
+  expect(() => capturedView.snapshot()).toThrow(DevRuntimeUnavailableError);
+  await controller.close();
+});
+
+it('latches runtime removal and diagnostics as restart-required failures', async () => {
+  const descriptor = { environmentVariables: [], id: 'fixture-runtime', label: 'Fixture runtime', schemaVersion: 1 } as const;
+  const prepared = { apps: [], provider: './src/dev/provider.ts', servers: [], sourceRevision: 'source-1' } as const;
+  const controller = () => new DevRuntimeController({
+    artifactStatus: () => ({ state: 'missing' }),
+    emit: () => undefined,
+    environment: {},
+    preparedRuntime: prepared,
+    projectRoot: '/workspace/project',
+    provider: {
+      descriptor,
+      start: async () => ({
+        close: async () => undefined,
+        status: () => ({ descriptor, diagnostics: [], hmrReady: true, state: 'active' }),
+        surfaces: () => [],
+      }) as unknown as DevRuntimeSession,
+    },
+    storageRoot: '/workspace/project/.agent-bundle/runtime',
+  });
+  const removed = controller();
+  await removed.start();
+  await removed.reconcileDeclaration(undefined);
+  expect(removed.status()).toMatchObject({
+    diagnostics: [{ message: expect.stringContaining('restart required') }],
+    state: 'failed',
+  });
+
+  const diagnosed = controller();
+  await diagnosed.start();
+  await diagnosed.reconcileDeclaration(prepared, { code: 'AB8200' });
+  expect(diagnosed.status()).toMatchObject({
+    diagnostics: [{ message: expect.stringContaining('restart required') }],
+    state: 'failed',
+  });
+  await Promise.all([removed.close(), diagnosed.close()]);
+});
+
+it('observes a late provider close rejection and preserves it across a concurrent close race', async () => {
+  let resolveSession: ((session: DevRuntimeSession) => void) | undefined;
+  const deferredSession = new Promise<DevRuntimeSession>((resolvePromise) => { resolveSession = resolvePromise; });
+  const closeFailure = new Error('Late provider close failed.');
+  let closeCalls = 0;
+  let lateClosed: (() => void) | undefined;
+  const closed = new Promise<void>((resolvePromise) => { lateClosed = resolvePromise; });
+  const controller = new DevRuntimeController({
+    artifactStatus: () => ({ state: 'missing' }),
+    emit: () => undefined,
+    environment: {},
+    preparedRuntime: { apps: [], provider: './src/dev/provider.ts', servers: [], sourceRevision: 'source-1' },
+    projectRoot: '/workspace/project',
+    provider: {
+      descriptor: { environmentVariables: [], id: 'fixture-runtime', label: 'Fixture runtime', schemaVersion: 1 },
+      start: async () => deferredSession,
+    },
+    startupTimeoutMs: 5,
+    storageRoot: '/workspace/project/.agent-bundle/runtime',
+  });
+
+  await controller.start();
+  const firstClose = controller.close();
+  const secondClose = controller.close();
+  resolveSession?.({ close: async () => { closeCalls += 1; lateClosed?.(); throw closeFailure; } } as unknown as DevRuntimeSession);
+  await closed;
+
+  expect(controller.status()).toMatchObject({ state: 'failed' });
+  expect(closeCalls).toBe(1);
+  await expect(firstClose).rejects.toBe(closeFailure);
+  await expect(secondClose).rejects.toBe(closeFailure);
+  expect(closeCalls).toBe(1);
 });
 
 it('loads one contained named runtime provider export with a frozen descriptor', async () => {
