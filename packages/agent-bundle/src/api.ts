@@ -7,6 +7,27 @@ import type { TargetArtifactEntry, TargetHookEntry } from './adapters/types.ts';
 import { build as buildArtifact, type BuildResult } from './build/build.ts';
 export type { BuildResult } from './build/build.ts';
 export type { ArtifactOutputKind, ArtifactOutputProvenance } from './build/provenance.ts';
+export type {
+  ArtifactManifestAgentSkills,
+  ArtifactManifestFile,
+  ArtifactManifestFileKind,
+  ArtifactManifestProducer,
+  ArtifactManifestProject,
+  ArtifactManifestSourceInput,
+  ArtifactManifestTarget,
+  ArtifactManifestTargetSchema,
+  ArtifactManifestTargetValidation,
+  ArtifactManifestV2,
+  ArtifactManifestValidation,
+  ArtifactManifestValidationRecord,
+  ArtifactManifestValidationStatus,
+  AssembledArtifactManifest,
+} from './build/manifest.ts';
+export {
+  assembleArtifactManifest,
+  parseArtifactManifest,
+  serializeArtifactManifest,
+} from './build/manifest.ts';
 import { validateArtifact } from './build/validate-artifact.ts';
 import { DiagnosticError, type Diagnostic } from './core/diagnostics.ts';
 import type { NormalizedPlugin } from './core/types.ts';

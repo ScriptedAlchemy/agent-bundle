@@ -5,9 +5,28 @@ import type { AgentBundleConfig as CoreAgentBundleConfig } from './core/types.ts
 
 export { defineConfig, pathTokens } from './core/types.ts';
 export { startDevServer } from './api.ts';
+export {
+  assembleArtifactManifest,
+  parseArtifactManifest,
+  serializeArtifactManifest,
+} from './api.ts';
 export type {
   ArtifactOutputKind,
   ArtifactOutputProvenance,
+  ArtifactManifestAgentSkills,
+  ArtifactManifestFile,
+  ArtifactManifestFileKind,
+  ArtifactManifestProducer,
+  ArtifactManifestProject,
+  ArtifactManifestSourceInput,
+  ArtifactManifestTarget,
+  ArtifactManifestTargetSchema,
+  ArtifactManifestTargetValidation,
+  ArtifactManifestV2,
+  ArtifactManifestValidation,
+  ArtifactManifestValidationRecord,
+  ArtifactManifestValidationStatus,
+  AssembledArtifactManifest,
   BuildResult,
   DevServerSession,
   StartDevServerOptions,
