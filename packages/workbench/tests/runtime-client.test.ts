@@ -15,6 +15,12 @@ interface RecordedRequest {
   readonly url: string;
 }
 
+interface Deferred<Value> {
+  readonly promise: Promise<Value>;
+  reject(reason: unknown): void;
+  resolve(value: Value): void;
+}
+
 const vector = Object.freeze({
   artifactEpochId: 'epoch-a',
   providerSessionId: 'provider-a',
@@ -61,6 +67,16 @@ const run = (id = 'run-a', startedAt = '2026-08-15T12:00:00.000Z'): DevRuntimeRu
 });
 
 const json = (body: unknown, statusCode = 200): Response => Response.json(body, { status: statusCode });
+
+const deferred = <Value>(): Deferred<Value> => {
+  let reject!: (reason: unknown) => void;
+  let resolve!: (value: Value) => void;
+  const promise = new Promise<Value>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, reject, resolve };
+};
 
 const runtimeFetch = (options: {
   readonly asset?: Response;
@@ -168,6 +184,7 @@ it('shares one injected foreground bootstrap across MCP, Runtime, and Project cl
   expect(requests.filter((request) => request.url === '/api/project/session')).toHaveLength(1);
 
   mcp.forgetAuthentication();
+  mcp.forgetAuthentication();
   await project.rebuild(['skills/review/SKILL.md']);
   expect(requests.filter((request) => request.url === '/api/project/session')).toHaveLength(2);
 
@@ -175,6 +192,61 @@ it('shares one injected foreground bootstrap across MCP, Runtime, and Project cl
   project.close();
   await new ProjectClient({ foreground }).rebuild(['skills/review/SKILL.md']);
   expect(requests.filter((request) => request.url === '/api/project/session')).toHaveLength(3);
+});
+
+it('fences an in-flight Project rebuild when shutdown invalidates foreground authentication', async () => {
+  const session = deferred<Response>();
+  const requests: RecordedRequest[] = [];
+  const client = new ProjectClient({
+    fetch: async (input, init) => {
+      const url = String(input);
+      requests.push({ body: init?.body?.toString(), headers: new Headers(init?.headers), url });
+      if (url === '/api/project/session') return session.promise;
+      if (url === '/api/project/rebuild') return json({ status });
+      throw new Error(`Unexpected route request ${url}.`);
+    },
+  });
+
+  const rebuilding = client.rebuild(['skills/review/SKILL.md']);
+  client.close();
+  session.resolve(json({ origin: 'http://localhost', token: 'foreground-token' }));
+
+  await expect(rebuilding).rejects.toBeInstanceOf(Error);
+  expect(requests.map((request) => request.url)).toEqual(['/api/project/session']);
+  expect(requests[0]?.headers.get('x-agent-bundle-session')).toBeNull();
+});
+
+it('keeps a newer foreground bootstrap when an invalidated bootstrap rejects', async () => {
+  const sessions: Deferred<Response>[] = [];
+  const requests: RecordedRequest[] = [];
+  const foreground = new ForegroundRouteClient({
+    fetch: async (input, init) => {
+      const url = String(input);
+      requests.push({ body: init?.body?.toString(), headers: new Headers(init?.headers), url });
+      if (url === '/api/project/session') {
+        const session = deferred<Response>();
+        sessions.push(session);
+        return session.promise;
+      }
+      return json({ route: url });
+    },
+  });
+
+  const first = foreground.protectedJson('/api/foreground/first');
+  foreground.forgetAuthentication();
+  const second = foreground.protectedJson('/api/foreground/second');
+  expect(sessions).toHaveLength(2);
+
+  sessions[0]?.reject(new Error('first bootstrap failed'));
+  await expect(first).rejects.toThrow('first bootstrap failed');
+
+  const third = foreground.protectedJson('/api/foreground/third');
+  expect(sessions).toHaveLength(2);
+  sessions[1]?.resolve(json({ origin: 'http://localhost', token: 'foreground-token' }));
+
+  await expect(second).resolves.toEqual({ route: '/api/foreground/second' });
+  await expect(third).resolves.toEqual({ route: '/api/foreground/third' });
+  expect(requests.filter((request) => request.url === '/api/project/session')).toHaveLength(2);
 });
 
 it('rejects every runtime mutation and protected read before an available bootstrap without sending a request', async () => {

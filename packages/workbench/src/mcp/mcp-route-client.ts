@@ -51,6 +51,11 @@ interface ForegroundSession {
   readonly token: string;
 }
 
+interface ForegroundAuthentication {
+  readonly generation: number;
+  readonly promise: Promise<ForegroundSession>;
+}
+
 interface Diagnostic {
   readonly code: string;
   readonly details?: unknown;
@@ -177,7 +182,8 @@ const foregroundRoute = (path: string): string => {
 /** Memory-only authentication shared by foreground browser route clients. */
 export class ForegroundRouteClient {
   readonly #fetch: typeof fetch;
-  #authentication: Promise<ForegroundSession> | undefined;
+  #authentication: ForegroundAuthentication | undefined;
+  #authenticationGeneration = 0;
 
   constructor(options: ForegroundRouteClientOptions = {}) {
     this.#fetch = options.fetch ?? globalThis.fetch.bind(globalThis);
@@ -193,9 +199,13 @@ export class ForegroundRouteClient {
 
   async protectedResponse(path: string, init: RequestInit = {}): Promise<Response> {
     const route = foregroundRoute(path);
-    const authentication = await this.#authenticate();
+    const authentication = this.#authenticate();
+    const session = await authentication.promise;
+    if (!this.#isAuthenticationCurrent(authentication)) {
+      throw new ForegroundRouteClientError('AB8019', 'Foreground authentication was invalidated.', 401);
+    }
     const headers = new Headers(init.headers);
-    headers.set('x-agent-bundle-session', authentication.token);
+    headers.set('x-agent-bundle-session', session.token);
     const response = await this.#fetch(route, { ...init, headers });
     if (!response.ok) throw ForegroundRouteClientError.fromResponse(await response.clone().json().catch(() => undefined), response.status);
     return response;
@@ -203,7 +213,9 @@ export class ForegroundRouteClient {
 
   /** Erases the short-lived foreground token once its owning transport closes. */
   forgetAuthentication(): void {
+    if (this.#authentication === undefined) return;
     this.#authentication = undefined;
+    this.#authenticationGeneration += 1;
   }
 
   async #json(response: Response): Promise<unknown> {
@@ -217,14 +229,21 @@ export class ForegroundRouteClient {
     }
   }
 
-  async #authenticate(): Promise<ForegroundSession> {
-    if (this.#authentication === undefined) this.#authentication = this.#bootstrap();
-    try {
-      return await this.#authentication;
-    } catch (error) {
-      this.#authentication = undefined;
-      throw error;
-    }
+  #authenticate(): ForegroundAuthentication {
+    if (this.#authentication !== undefined) return this.#authentication;
+    const authentication = Object.freeze({
+      generation: this.#authenticationGeneration,
+      promise: this.#bootstrap(),
+    });
+    this.#authentication = authentication;
+    void authentication.promise.catch(() => {
+      if (this.#isAuthenticationCurrent(authentication)) this.#authentication = undefined;
+    });
+    return authentication;
+  }
+
+  #isAuthenticationCurrent(authentication: ForegroundAuthentication): boolean {
+    return this.#authentication === authentication && this.#authenticationGeneration === authentication.generation;
   }
 
   async #bootstrap(): Promise<ForegroundSession> {
