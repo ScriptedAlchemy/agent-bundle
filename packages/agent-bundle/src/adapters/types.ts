@@ -25,11 +25,16 @@ export interface TargetArtifactCopy {
 
 export type TargetArtifactEntry = TargetArtifactWrite | TargetArtifactCopy;
 
-export interface TargetHookEntry {
+export interface TargetHookWrapper {
   readonly event: CanonicalHookEvent;
   readonly hook: NormalizedHook;
+  readonly nativeEvent: string;
   readonly relativePath: string;
   readonly target: string;
+}
+
+export interface TargetHookEntry extends TargetHookWrapper {
+  readonly virtualSource: string;
 }
 
 export interface TargetArtifactPlan {

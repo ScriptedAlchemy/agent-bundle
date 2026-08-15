@@ -11,7 +11,13 @@ import {
   type NormalizedPlugin,
 } from '../core/types.ts';
 import capabilityTable from './capabilities/claude-2.1.232.json' with { type: 'json' };
-import { mergeHookDocuments, nativeHooksFor, planHooks } from './hook-contract.ts';
+import {
+  mergeHookDocuments,
+  nativeHookWrapperSource,
+  nativeHooksFor,
+  planHooks,
+  type TargetHookContract,
+} from './hook-contract.ts';
 import schemaProvenance from './schemas/claude/PROVENANCE.json' with { type: 'json' };
 import hooksSchema from './schemas/claude/hooks.schema.json' with { type: 'json' };
 import marketplaceSchema from './schemas/claude/marketplace.schema.json' with { type: 'json' };
@@ -37,6 +43,15 @@ const validatePlugin = validator.compile(pluginSchema);
 const validateMcp = validator.compile(mcpSchema);
 const validateMarketplace = validator.compile(marketplaceSchema);
 const validateHooks = validator.compile(hooksSchema);
+const hookContract = Object.freeze({
+  commandRoot: '${CLAUDE_PLUGIN_ROOT}',
+  eventNames: capabilityTable.hooks.events,
+  manifestPath: 'hooks/hooks.json',
+  matchers: capabilityTable.hooks.matchers,
+  target: claudeName,
+  wrapperPath: (hook: NormalizedPlugin['hooks'][number]) => `hooks/${hook.name}.mjs`,
+  wrapperSource: (entry) => nativeHookWrapperSource(entry, 'Claude'),
+} satisfies TargetHookContract);
 const metadata = Object.freeze({
   adapterRevision: '1.0.0',
   capabilityRevision: capabilityTable.observedCliVersion,
@@ -161,12 +176,7 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
   }
   const mcp = Object.keys(servers).length === 0 ? undefined : { mcpServers: servers };
   if (mcp !== undefined) diagnostics.push(...schemaDiagnostics('mcp', validateMcp(mcp), validateMcp.errors));
-  const generatedHooks = planHooks(model, {
-    commandRoot: '${CLAUDE_PLUGIN_ROOT}',
-    eventNames: capabilityTable.hooks.events,
-    matchers: capabilityTable.hooks.matchers,
-    target: claudeName,
-  });
+  const generatedHooks = planHooks(model, hookContract);
   diagnostics.push(...generatedHooks.diagnostics);
   if (generatedHooks.document !== undefined) {
     diagnostics.push(...schemaDiagnostics('hooks', validateHooks(generatedHooks.document), validateHooks.errors));
@@ -195,7 +205,7 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
   const plugin = {
     author: { name: model.metadata.name },
     description: model.metadata.description ?? model.metadata.name,
-    ...(hookDocument === undefined ? {} : { hooks: './hooks/hooks.json' }),
+    ...(hookDocument === undefined ? {} : { hooks: `./${hookContract.manifestPath}` }),
     name: model.metadata.name,
     version: model.metadata.version,
   };
@@ -257,7 +267,7 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
     entries.push({
       content: `${stableJson(hookDocument)}\n`,
       kind: 'write',
-      relativePath: 'hooks/hooks.json',
+      relativePath: hookContract.manifestPath,
       sourceInputs: sourceInputs(
         ...targetSourceInputs,
         ...hookSourceInputs,
