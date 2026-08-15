@@ -376,6 +376,98 @@ it('bounds an unacknowledged upstream HMR handshake and pre-open message floods'
   }
 }, 20_000);
 
+it('destroys declared-oversize upstream bodies instead of releasing their binding early', async () => {
+  let resolveSocketClosed: (() => void) | undefined;
+  const socketClosed = new Promise<void>((resolvePromise) => { resolveSocketClosed = resolvePromise; });
+  const upstream = createServer((request, response) => {
+    request.socket.once('close', () => resolveSocketClosed?.());
+    response.writeHead(200, { 'content-length': String((4 * 1024 * 1024) + 1) });
+    response.write('never-ending');
+  });
+  const origin = await listen(upstream);
+  const binding = await RuntimeClientSurfaceProxy.open({
+    entryPath: '/app/index.html',
+    httpOrigin: origin,
+    httpPathPrefixes: ['/app/'],
+    surfaceId: 'app.weather',
+    webSocketOrigin: origin.replace('http:', 'ws:'),
+    webSocketPath: '/rsbuild-hmr',
+  }, () => undefined);
+
+  try {
+    const cookie = await bootstrapCookie(binding);
+    await expect(within(fetch(`${binding.origin}/app/main.js`, { headers: { cookie } }), 500)).resolves.toMatchObject({ status: 413 });
+    await expect(within(socketClosed, 250)).resolves.toBeUndefined();
+  } finally {
+    await binding.close();
+    upstream.closeAllConnections();
+    await close(upstream);
+  }
+});
+
+it('destroys endless redirect bodies before releasing their binding', async () => {
+  let resolveSocketClosed: (() => void) | undefined;
+  const socketClosed = new Promise<void>((resolvePromise) => { resolveSocketClosed = resolvePromise; });
+  const upstream = createServer((request, response) => {
+    request.socket.once('close', () => resolveSocketClosed?.());
+    response.writeHead(302, { location: '/app/next' });
+    response.write('never-ending');
+  });
+  const origin = await listen(upstream);
+  const binding = await RuntimeClientSurfaceProxy.open({
+    entryPath: '/app/index.html',
+    httpOrigin: origin,
+    httpPathPrefixes: ['/app/'],
+    surfaceId: 'app.weather',
+    webSocketOrigin: origin.replace('http:', 'ws:'),
+    webSocketPath: '/rsbuild-hmr',
+  }, () => undefined);
+
+  try {
+    const cookie = await bootstrapCookie(binding);
+    await expect(within(fetch(`${binding.origin}/app/index.html`, { headers: { cookie }, redirect: 'manual' }), 500)).resolves.toMatchObject({ status: 302 });
+    await expect(within(socketClosed, 250)).resolves.toBeUndefined();
+  } finally {
+    await binding.close();
+    upstream.closeAllConnections();
+    await close(upstream);
+  }
+});
+
+it('keeps a completed 502 response intact when a response body stalls after headers', async () => {
+  let resolveSocketClosed: (() => void) | undefined;
+  const socketClosed = new Promise<void>((resolvePromise) => { resolveSocketClosed = resolvePromise; });
+  const upstream = createServer((request, response) => {
+    request.socket.once('close', () => resolveSocketClosed?.());
+    response.writeHead(200, { 'content-type': 'application/javascript' });
+    response.write('stalled');
+  });
+  const origin = await listen(upstream);
+  const binding = await RuntimeClientSurfaceProxy.open({
+    entryPath: '/app/index.html',
+    httpOrigin: origin,
+    httpPathPrefixes: ['/app/'],
+    surfaceId: 'app.weather',
+    webSocketOrigin: origin.replace('http:', 'ws:'),
+    webSocketPath: '/rsbuild-hmr',
+  }, () => undefined);
+
+  try {
+    const cookie = await bootstrapCookie(binding);
+    const pending = fetch(`${binding.origin}/app/main.js`, { headers: { cookie } }).then(async (response) => ({
+      body: await response.text(),
+      status: response.status,
+    }));
+    void pending.catch(() => undefined);
+    await expect(within(pending, 16_000)).resolves.toEqual({ body: 'Not Found', status: 502 });
+    await expect(within(socketClosed, 250)).resolves.toBeUndefined();
+  } finally {
+    await binding.close();
+    upstream.closeAllConnections();
+    await close(upstream);
+  }
+}, 20_000);
+
 it('bounds chunked upstream assets and releases their socket immediately', async () => {
   let resolveSocketClosed: (() => void) | undefined;
   const socketClosed = new Promise<void>((resolvePromise) => { resolveSocketClosed = resolvePromise; });

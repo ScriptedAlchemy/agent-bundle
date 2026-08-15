@@ -170,7 +170,7 @@ const copyResponseHeaders = (headers: IncomingMessage['headers']): Record<string
 const responseChunks = async (source: IncomingMessage): Promise<Uint8Array> => new Promise((resolvePromise, rejectPromise) => {
   const declared = source.headers['content-length'];
   if (typeof declared === 'string' && (!/^\d+$/u.test(declared) || Number(declared) > appAssetLimit)) {
-    source.resume();
+    source.destroy();
     rejectPromise(new RangeError('Runtime client asset exceeds the allowed size.'));
     return;
   }
@@ -304,6 +304,7 @@ export class RuntimeClientSurfaceProxy {
           return;
         }
         let released = false;
+        let receivedResponse = false;
         let timedOut = false;
         const release = (): void => {
           if (released) return;
@@ -336,11 +337,16 @@ export class RuntimeClientSurfaceProxy {
           port: trusted.httpOrigin.port,
           protocol: trusted.httpOrigin.protocol,
         }, async (upstream) => {
+          receivedResponse = true;
+          const destroyResponse = (): void => {
+            if (!upstream.destroyed) upstream.destroy();
+            if (!upstreamRequest.destroyed) upstreamRequest.destroy();
+          };
           const status = upstream.statusCode ?? 502;
           const headers = copyResponseHeaders(upstream.headers);
           if (status >= 300 && status < 400 && typeof upstream.headers.location === 'string') {
             const location = sameOriginRedirect(upstream.headers.location, trusted.httpOrigin);
-            upstream.resume();
+            destroyResponse();
             release();
             if (location === undefined) {
               response(target, 502);
@@ -351,7 +357,9 @@ export class RuntimeClientSurfaceProxy {
             return;
           }
           try {
-            const body = request.method === 'HEAD' ? new Uint8Array() : await responseChunks(upstream);
+            const body = request.method === 'HEAD'
+              ? (destroyResponse(), new Uint8Array())
+              : await responseChunks(upstream);
             if (target.destroyed || target.writableEnded) return;
             target.writeHead(status, {
               ...headers,
@@ -360,6 +368,8 @@ export class RuntimeClientSurfaceProxy {
             });
             target.end(request.method === 'HEAD' ? undefined : body);
           } catch {
+            if (target.destroyed || target.writableEnded) return;
+            destroyResponse();
             if (!target.headersSent) response(target, 413);
             else target.destroy();
           } finally {
@@ -374,7 +384,7 @@ export class RuntimeClientSurfaceProxy {
         });
         upstreamRequest.once('error', () => {
           release();
-          if (timedOut || target.destroyed || target.writableEnded) return;
+          if (timedOut || receivedResponse || target.destroyed || target.writableEnded) return;
           if (!target.headersSent) response(target, 502);
           else target.destroy();
         });
