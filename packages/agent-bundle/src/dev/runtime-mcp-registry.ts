@@ -278,13 +278,6 @@ const freezeInput = (input: DevRuntimeMcpRegistryReconcileInput): DevRuntimeMcpR
 const descriptorMap = (input: DevRuntimeMcpRegistryReconcileInput): ReadonlyMap<string, DevRuntimeMcpServerDescriptor> =>
   new Map(input.servers.map((descriptor) => [descriptorKey(descriptor.name, descriptor.target), descriptor]));
 
-const defaultConnectionState = (): DevRuntimeMcpConnectionState => Object.freeze({
-  capabilities: undefined,
-  protocolEra: undefined,
-  protocolVersion: undefined,
-  server: undefined,
-});
-
 const staticValue = (descriptor: DevRuntimeMcpServerDescriptor, request: DevRuntimeMcpOperationRequest): JsonValue | undefined => {
   if (request.kind === 'list-tools') return descriptor.tools;
   if (request.kind === 'list-resources') return descriptor.resources;
@@ -577,6 +570,7 @@ export class RuntimeMcpRegistry implements DevRuntimeMcpRegistry {
         throw new AggregateError(
           [error, ...cleanupFailures],
           'Runtime MCP activation staging and cleanup both failed.',
+          { cause: error },
         );
       }
       throw error;
