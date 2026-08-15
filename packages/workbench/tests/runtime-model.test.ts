@@ -388,12 +388,21 @@ it('parses running and failed provider runs, optional runtime metadata, reset id
 
 it('rejects invalid wrapper, opaque path, and asset headers through the public RuntimeClient boundary', async () => {
   await expect(clientFor({ '/api/runtime/status': { nope: true } }).bootstrap()).rejects.toMatchObject({ code: 'AB8206' });
-  await expect(clientFor({ '/api/runtime/runs/..': { run: run('x') } }).readRun('..')).rejects.toMatchObject({ code: 'AB8206' });
+  const bootstrappedRoutes = {
+    '/api/runtime/runs?limit=50': { providerSessionId: 'provider-a', runs: [run('initial')] },
+    '/api/runtime/status': { status: status() },
+    '/api/runtime/surfaces': { surfaces: [surface()] },
+  };
+  const opaqueClient = clientFor({ ...bootstrappedRoutes, '/api/runtime/runs/..': { run: run('x') } });
+  await opaqueClient.bootstrap();
+  await expect(opaqueClient.readRun('..')).rejects.toMatchObject({ code: 'AB8206' });
   const assetClient = clientFor({
+    ...bootstrappedRoutes,
     '/api/runtime/assets/weather/assets/main.js?generation=generation-a': new Response(new Uint8Array([1]), {
       headers: { 'content-length': '-1', 'content-type': 'application/javascript' },
     }),
   });
+  await assetClient.bootstrap();
   await expect(assetClient.readAsset({ path: ['assets', 'main.js'], runtimeGenerationId: 'generation-a', surfaceId: 'weather' })).rejects.toMatchObject({ code: 'AB8206' });
   await expect(assetClient.readAsset({ path: [], runtimeGenerationId: 'generation-a', surfaceId: 'weather' })).rejects.toMatchObject({ code: 'AB8206' });
 });
@@ -447,13 +456,20 @@ it('parses optional App inspection evidence and rejects every provider envelope 
         resourceUri: 'ui://weather/app.html',
         surfaceId: 'weather',
     },
-    flight: { bytes: 8, downloadPath: '/api/runtime/assets/weather/flight', preview: 'flight', truncated: false },
+    flight: { bytes: 8, downloadPath: '/api/runtime/runs/app-evidence/flight', preview: 'flight', truncated: false },
   };
   const withApp = {
     ...original,
     result: appResult,
   } satisfies DevRuntimeRun;
-  await expect(clientFor({ '/api/runtime/runs': { run: withApp } }).createRun({ input: {}, surfaceId: 'weather', target: 'portable' }))
+  const appClient = clientFor({
+    '/api/runtime/runs?limit=50': { providerSessionId: 'provider-a', runs: [run('initial')] },
+    '/api/runtime/status': { status: status() },
+    '/api/runtime/surfaces': { surfaces: [surface()] },
+    '/api/runtime/runs': { run: withApp },
+  });
+  await appClient.bootstrap();
+  await expect(appClient.createRun({ input: {}, surfaceId: 'weather', target: 'portable' }))
     .resolves.toMatchObject({ result: { app: { resourceUri: 'ui://weather/app.html' } } });
 
   const invalidBootstrap = async (statusBody: unknown, surfacesBody: unknown = { surfaces: [surface()] }, runsBody: unknown = { providerSessionId: 'provider-a', runs: [run('base')] }): Promise<void> => {
@@ -470,14 +486,133 @@ it('parses optional App inspection evidence and rejects every provider envelope 
   await invalidBootstrap({ status: status() }, undefined, { runs: [] });
 
   const invalidRun = async (entry: unknown): Promise<void> => {
-    await expect(clientFor({ '/api/runtime/runs': { run: entry } }).createRun({ input: {}, surfaceId: 'weather', target: 'portable' })).rejects.toMatchObject({ code: 'AB8206' });
+    const client = clientFor({
+      '/api/runtime/runs?limit=50': { providerSessionId: 'provider-a', runs: [run('initial')] },
+      '/api/runtime/status': { status: status() },
+      '/api/runtime/surfaces': { surfaces: [surface()] },
+      '/api/runtime/runs': { run: entry },
+    });
+    await client.bootstrap();
+    await expect(client.createRun({ input: {}, surfaceId: 'weather', target: 'portable' })).rejects.toMatchObject({ code: 'AB8206' });
   };
   await invalidRun({ ...run('bad-run'), status: 'unknown' });
   await invalidRun({ ...withApp, result: { ...appResult, tree: [{ children: [], id: '', kind: 'component', label: 'bad' }] } });
   await invalidRun({ ...withApp, result: { ...appResult, trace: [{ id: 'trace', phase: 'rsc', startedAt: 'no-date', status: 'succeeded' }] } });
   await invalidRun({ ...withApp, result: { ...appResult, app: { ...appResult.app, resourceUri: '' } } });
   await invalidRun({ ...withApp, result: { ...appResult, flight: { bytes: -1, preview: 'flight', truncated: false } } });
-  await expect(clientFor({ '/api/runtime/state/reset': { state: { stateStoreId: '', stateVersion: -1 } } }).resetState({ stateStoreId: 'state-a' }))
+  const invalidStateClient = clientFor({
+    '/api/runtime/runs?limit=50': { providerSessionId: 'provider-a', runs: [run('initial')] },
+    '/api/runtime/status': { status: status() },
+    '/api/runtime/surfaces': { surfaces: [surface()] },
+    '/api/runtime/state/reset': { state: { stateStoreId: '', stateVersion: -1 } },
+  });
+  await invalidStateClient.bootstrap();
+  await expect(invalidStateClient.resetState({ stateStoreId: 'state-a' }))
     .rejects.toMatchObject({ code: 'AB8206' });
   await expect(clientFor({ '/api/runtime/status': new Response(null, { status: 500 }) }).bootstrap()).rejects.toMatchObject({ code: 'AB8019' });
+});
+
+it('monotonically replaces a same-ID running run with its terminal record and rejects incompatible identity', () => {
+  const running = {
+    ...run('evolving'),
+    completedAt: undefined,
+    result: undefined,
+    status: 'running',
+  } as DevRuntimeRun;
+  const state = model({ history: [running] });
+  const completed = reduce(state, { run: run('evolving'), type: 'run.received' });
+
+  expect(completed.history).toHaveLength(1);
+  expect(completed.history[0]?.status).toBe('succeeded');
+  expect(completed.lastGoodRunId).toBe('evolving');
+  expect(() => reduce(completed, {
+    run: run('evolving', { startedAt: '2026-08-15T12:00:02.000Z' }),
+    type: 'run.received',
+  })).toThrow(/run ID/i);
+  expect(() => reduce(completed, {
+    run: run('evolving', { vector: vector({ runtimeGenerationId: 'generation-b' }) }),
+    type: 'run.received',
+  })).toThrow(/run ID/i);
+});
+
+it('falls selection back only when bounded history evicts it', () => {
+  const history = Array.from({ length: 50 }, (_, index) => run(`run-${index}`, {
+    startedAt: `2026-08-15T12:00:${String(index).padStart(2, '0')}.000Z`,
+  }));
+  const initial = reduce(model({ history }), { runId: 'run-0', type: 'selection.run' });
+  const evicted = reduce(initial, { run: run('run-new', { startedAt: '2026-08-15T12:01:00.000Z' }), type: 'run.received' });
+  const preserved = reduce(reduce(model({ history }), { runId: 'run-40', type: 'selection.run' }), {
+    run: run('run-new', { startedAt: '2026-08-15T12:01:00.000Z' }),
+    type: 'run.received',
+  });
+
+  expect(evicted.history).toHaveLength(50);
+  expect(evicted.history.some((entry) => entry.id === 'run-0')).toBe(false);
+  expect(evicted.selectedRunId).toBe('run-new');
+  expect(preserved.selectedRunId).toBe('run-40');
+});
+
+it('deduplicates an identical replay gap but advances recovery for a newer dropped range', () => {
+  const firstGap = { earliestAvailableSequence: 6, latestDroppedSequence: 5, requestedAfterSequence: 1, type: 'replay.gap' } as const;
+  const newerGap = { earliestAvailableSequence: 9, latestDroppedSequence: 8, requestedAfterSequence: 5, type: 'replay.gap' } as const;
+  const first = reduce(model(), { event: firstGap, type: 'event.received' });
+  const duplicate = reduce(first, { event: firstGap, type: 'event.received' });
+  const newer = reduce(duplicate, { event: newerGap, type: 'event.received' });
+
+  expect(duplicate).toBe(first);
+  expect(newer.replayGap).toEqual(newerGap);
+  expect(newer.replayDroppedThroughSequence).toBe(8);
+  expect(newer.activeEffect).toMatchObject({ kind: 'bootstrap', triggerSequence: 5 });
+  expect(newer.pendingEffect).toMatchObject({ kind: 'bootstrap', triggerSequence: 8 });
+});
+
+it('coalesces background read overflow to history bootstrap without losing confirmed run or reset requests', () => {
+  const activeRead = reduce(model(), { event: {
+    occurredAt: '2026-08-15T12:00:00.000Z',
+    payload: { providerSessionId: 'provider-a', runId: 'run-a', runtimeGenerationId: 'generation-a', type: 'runtime.run.completed' },
+    sequence: 1,
+    type: 'runtime.event',
+  }, type: 'event.received' });
+  const full = reduce(activeRead, { event: event(2, 'runtime.generation.activated'), type: 'event.received' });
+  const overflow = reduce(full, { event: {
+    occurredAt: '2026-08-15T12:00:00.000Z',
+    payload: { providerSessionId: 'provider-a', runId: 'run-b', runtimeGenerationId: 'generation-a', type: 'runtime.run.completed' },
+    sequence: 3,
+    type: 'runtime.event',
+  }, type: 'event.received' });
+  const runConfirmed = reduce(overflow, { type: 'run.request' }, { type: 'confirmation.confirm' });
+  const resetConfirmed = reduce(overflow, { type: 'reset.request' }, { type: 'confirmation.confirm' });
+  const activeRunRead = runConfirmed.activeEffect;
+  const activeResetRead = resetConfirmed.activeEffect;
+  if (activeRunRead === undefined || activeResetRead === undefined) throw new Error('Expected active background reads.');
+  const readSettledForRun = reduce(runConfirmed, { id: activeRunRead.id, type: 'effect.settled' });
+  const readSettledForReset = reduce(resetConfirmed, { id: activeResetRead.id, type: 'effect.settled' });
+  const runQueued = reduce(readSettledForRun, { type: 'confirmation.confirm' });
+  const resetQueued = reduce(readSettledForReset, { type: 'confirmation.confirm' });
+
+  expect(overflow.activeEffect).toMatchObject({ kind: 'read-run', runId: 'run-a' });
+  expect(overflow.pendingEffect).toMatchObject({ kind: 'bootstrap', triggerSequence: 2 });
+  expect(overflow.historyBootstrapPending).toBe(true);
+  expect(runConfirmed.confirmation).toMatchObject({ kind: 'run' });
+  expect(resetConfirmed.confirmation).toMatchObject({ kind: 'reset' });
+  expect(runQueued.confirmation).toBeUndefined();
+  expect(runQueued.pendingEffect).toMatchObject({ kind: 'create-run' });
+  expect(resetQueued.confirmation).toBeUndefined();
+  expect(resetQueued.pendingEffect).toMatchObject({ kind: 'reset-state' });
+});
+
+it('clears malformed HMR evidence by named surface or globally while ignoring lower sequences', () => {
+  const connected = reduce(model(), { event: event(4, 'runtime.hmr.client-connected', { connectionCount: 2, surfaceId: 'weather' }), type: 'event.received' });
+  const malformedNamed = reduce(connected, { event: event(5, 'runtime.hmr.client-disconnected', { connectionCount: 'bad', surfaceId: 'weather' }), type: 'event.received' });
+  const twoKnown = reduce(malformedNamed,
+    { event: event(6, 'runtime.hmr.client-connected', { connectionCount: 1, surfaceId: 'weather' }), type: 'event.received' },
+    { event: event(7, 'runtime.hmr.client-connected', { connectionCount: 1, surfaceId: 'other' }), type: 'event.received' },
+  );
+  const malformedGlobal = reduce(twoKnown, { event: event(8, 'runtime.hmr.client-disconnected', { connectionCount: 0 }), type: 'event.received' });
+  const lower = reduce(twoKnown, { event: event(7, 'runtime.hmr.client-disconnected', { connectionCount: 'bad', surfaceId: 'weather' }), type: 'event.received' });
+
+  expect(malformedNamed.hmrClientCountBySurface.weather).toBeUndefined();
+  expect(malformedNamed.hmrClientCountKnownSurfaces).toEqual([]);
+  expect(malformedGlobal.hmrClientCountKnownSurfaces).toEqual([]);
+  expect(lower).toBe(twoKnown);
 });

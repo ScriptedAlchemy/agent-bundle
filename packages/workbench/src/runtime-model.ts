@@ -66,6 +66,8 @@ export interface RuntimeModel {
   readonly draft: RuntimeDraft;
   readonly expandedTraceSpanIds: readonly string[];
   readonly history: readonly DevRuntimeRun[];
+  readonly historyBootstrapPending?: boolean;
+  readonly historyBootstrapTriggerSequence?: number;
   readonly hmrClientCountBySurface: Readonly<Record<string, number>>;
   readonly hmrClientCountKnownSurfaces: readonly string[];
   readonly lastConsumedEventSequence: number;
@@ -76,6 +78,7 @@ export interface RuntimeModel {
   readonly profiles: readonly RuntimeProfileOption[];
   readonly providerSessionId?: string;
   readonly replayGap?: ProjectReplayGap;
+  readonly replayDroppedThroughSequence?: number;
   readonly selectedFixtureId?: string;
   readonly selectedProfileId?: string;
   readonly selectedRunId?: string;
@@ -193,6 +196,24 @@ const runOrder = (left: DevRuntimeRun, right: DevRuntimeRun): number => {
   return started === 0 ? left.id.localeCompare(right.id) : started;
 };
 
+const sameVector = (left: RuntimeVector, right: RuntimeVector): boolean =>
+  left.artifactEpochId === right.artifactEpochId &&
+  left.providerSessionId === right.providerSessionId &&
+  left.runtimeGenerationId === right.runtimeGenerationId &&
+  left.sourceRevision === right.sourceRevision &&
+  left.stateStoreId === right.stateStoreId &&
+  left.stateVersion === right.stateVersion;
+
+const sameRunIdentity = (left: DevRuntimeRun, right: DevRuntimeRun): boolean =>
+  left.fixtureId === right.fixtureId &&
+  left.id === right.id &&
+  left.startedAt === right.startedAt &&
+  left.surfaceId === right.surfaceId &&
+  left.target === right.target &&
+  sameVector(left.vector, right.vector);
+
+const terminalRun = (run: DevRuntimeRun): boolean => run.status === 'succeeded' || run.status === 'failed';
+
 const historyFor = (runs: readonly DevRuntimeRun[], providerSessionId: string): readonly DevRuntimeRun[] => {
   const byId = new Map<string, DevRuntimeRun>();
   for (const source of runs) {
@@ -201,7 +222,15 @@ const historyFor = (runs: readonly DevRuntimeRun[], providerSessionId: string): 
       throw new TypeError('Runtime history must belong to the active provider session.');
     }
     const previous = byId.get(entry.id);
-    if (previous === undefined || runOrder(entry, previous) < 0) byId.set(entry.id, entry);
+    if (previous === undefined) {
+      byId.set(entry.id, entry);
+      continue;
+    }
+    if (!sameRunIdentity(previous, entry)) throw new TypeError(`Runtime history cannot merge incompatible records for run ID ${entry.id}.`);
+    if (previous.status === 'running' && terminalRun(entry)) byId.set(entry.id, entry);
+    else if (terminalRun(previous) && entry.status === 'running') continue;
+    else if (previous.status !== entry.status) throw new TypeError(`Runtime history cannot replace terminal run ID ${entry.id}.`);
+    else if (runOrder(entry, previous) < 0) byId.set(entry.id, entry);
   }
   return Object.freeze([...byId.values()].sort(runOrder).slice(0, 50));
 };
@@ -238,6 +267,9 @@ const staleIdentityFor = (history: readonly DevRuntimeRun[], selectedRunId: stri
 const lastGoodRunIdFor = (history: readonly DevRuntimeRun[]): string | undefined =>
   history.find((entry) => entry.status === 'succeeded')?.id;
 
+const selectedRunIdFor = (history: readonly DevRuntimeRun[], selectedRunId: string | undefined): string | undefined =>
+  history.some((entry) => entry.id === selectedRunId) ? selectedRunId : history[0]?.id;
+
 const update = (model: RuntimeModel, change: Partial<RuntimeModel>): RuntimeModel => Object.freeze({ ...model, ...change });
 
 const announced = (model: RuntimeModel, message: string): RuntimeModel => update(model, {
@@ -259,8 +291,22 @@ const createQueuedEffect = (model: RuntimeModel, operation: RuntimeModelEffect):
   return [update(model, { nextEffectId: model.nextEffectId + 1 }), queued];
 };
 
+const deferHistoryBootstrap = (model: RuntimeModel, triggerSequence?: number): RuntimeModel => {
+  const previous = model.historyBootstrapTriggerSequence;
+  const nextTriggerSequence = triggerSequence === undefined || previous === undefined
+    ? triggerSequence ?? previous
+    : Math.max(triggerSequence, previous);
+  if (model.historyBootstrapPending === true && nextTriggerSequence === previous) return model;
+  return update(model, {
+    historyBootstrapPending: true,
+    ...(nextTriggerSequence === undefined ? { historyBootstrapTriggerSequence: undefined } : { historyBootstrapTriggerSequence: nextTriggerSequence }),
+  });
+};
+
 const queueOperation = (model: RuntimeModel, operation: RuntimeModelEffect): RuntimeModel => {
-  if (model.activeEffect !== undefined && model.pendingEffect !== undefined) return model;
+  if (model.activeEffect !== undefined && model.pendingEffect !== undefined) {
+    return operation.kind === 'read-run' ? deferHistoryBootstrap(model) : model;
+  }
   const [advanced, queued] = createQueuedEffect(model, operation);
   return advanced.activeEffect === undefined
     ? update(advanced, { activeEffect: queued })
@@ -268,18 +314,32 @@ const queueOperation = (model: RuntimeModel, operation: RuntimeModelEffect): Run
 };
 
 const queueBootstrap = (model: RuntimeModel, triggerSequence?: number): RuntimeModel => {
-  const existing = model.pendingEffect?.operation.kind === 'bootstrap' ? model.pendingEffect : undefined;
-  if (model.activeEffect === undefined && existing === undefined) return queueOperation(model, Object.freeze({ kind: 'bootstrap', ...(triggerSequence === undefined ? {} : { triggerSequence }) }));
-  if (existing !== undefined && (triggerSequence === undefined || existing.triggerSequence === undefined || triggerSequence <= existing.triggerSequence)) return model;
-  if (model.activeEffect?.operation.kind === 'bootstrap' && model.pendingEffect === undefined && triggerSequence === undefined) return model;
+  const operation = Object.freeze({ kind: 'bootstrap' as const, ...(triggerSequence === undefined ? {} : { triggerSequence }) });
+  if (model.activeEffect === undefined) return queueOperation(model, operation);
+  const existing = model.pendingEffect;
+  if (existing === undefined) {
+    if (model.activeEffect.kind === 'bootstrap' && triggerSequence === undefined) return model;
+    return queueOperation(model, operation);
+  }
+  if (existing.kind !== 'bootstrap') return deferHistoryBootstrap(model, triggerSequence);
+  if (triggerSequence === undefined || existing.triggerSequence === undefined || triggerSequence <= existing.triggerSequence) return model;
   const [advanced, queued] = createQueuedEffect(model, Object.freeze({ kind: 'bootstrap', ...(triggerSequence === undefined ? {} : { triggerSequence }) }));
-  return advanced.activeEffect === undefined ? update(advanced, { activeEffect: queued }) : update(advanced, { pendingEffect: queued });
+  return update(advanced, { pendingEffect: queued });
+};
+
+const flushDeferredHistoryBootstrap = (model: RuntimeModel): RuntimeModel => {
+  if (model.historyBootstrapPending !== true) return model;
+  const cleared = update(model, { historyBootstrapPending: undefined, historyBootstrapTriggerSequence: undefined });
+  if (cleared.activeEffect?.kind === 'bootstrap' || cleared.pendingEffect?.kind === 'bootstrap') return cleared;
+  return queueBootstrap(cleared, model.historyBootstrapTriggerSequence);
 };
 
 const settleEffect = (model: RuntimeModel, id: string): RuntimeModel => {
   if (model.activeEffect?.id !== id) return model;
-  if (model.pendingEffect === undefined) return update(model, { activeEffect: undefined });
-  return update(model, { activeEffect: model.pendingEffect, pendingEffect: undefined });
+  const settled = model.pendingEffect === undefined
+    ? update(model, { activeEffect: undefined })
+    : update(model, { activeEffect: model.pendingEffect, pendingEffect: undefined });
+  return flushDeferredHistoryBootstrap(settled);
 };
 
 const settleEffectKind = (model: RuntimeModel, kind: RuntimePendingEffect['kind']): RuntimeModel =>
@@ -352,9 +412,7 @@ const bootstrapModel = (model: RuntimeModel, bootstrap: RuntimeBootstrap): Runti
   const surface = selectedSurface(nextSurfaces, providerRestarted ? undefined : model.selectedSurfaceId);
   const target = selectedTarget(surface, providerRestarted ? undefined : model.selectedTarget);
   const fixture = selectedFixture(surface, providerRestarted ? undefined : model.selectedFixtureId);
-  const selectedRunId = nextHistory.some((entry) => entry.id === model.selectedRunId)
-    ? model.selectedRunId
-    : nextHistory[0]?.id;
+  const selectedRunId = selectedRunIdFor(nextHistory, model.selectedRunId);
   const priorLastGood = model.history.find((entry) => entry.id === model.lastGoodRunId);
   const nextLastGoodRunId = lastGoodRunIdFor(nextHistory);
   let next = update(model, {
@@ -408,22 +466,25 @@ const mergeRun = (model: RuntimeModel, run: DevRuntimeRun): RuntimeModel => {
     throw new TypeError('Runtime run must belong to the active provider session.');
   }
   const history = historyFor([...model.history, run], model.providerSessionId);
+  const selectedRunId = selectedRunIdFor(history, model.selectedRunId);
   const lastGoodRunId = lastGoodRunIdFor(history);
   return update(model, {
     history,
     ...(lastGoodRunId === undefined ? { lastGoodRunId: undefined } : { lastGoodRunId }),
     ...(lastGoodRunId === undefined ? {} : { previousProviderLastGood: undefined }),
-    staleIdentity: staleIdentityFor(history, model.selectedRunId, model.status),
+    selectedRunId,
+    staleIdentity: staleIdentityFor(history, selectedRunId, model.status),
   });
 };
 
 const receivedEvent = (model: RuntimeModel, message: ProjectEventMessage): RuntimeModel => {
   if (message.type === 'replay.gap') {
-    if (model.replayGap !== undefined) return model;
+    if (message.latestDroppedSequence <= (model.replayDroppedThroughSequence ?? -1)) return model;
     return queueBootstrap(update(model, {
       hmrClientCountBySurface: emptyCounts,
       hmrClientCountKnownSurfaces: emptyStrings,
       replayGap: snapshot(message),
+      replayDroppedThroughSequence: message.latestDroppedSequence,
     }), message.latestDroppedSequence);
   }
   if (message.type !== 'runtime.event' || message.sequence <= model.lastConsumedEventSequence) return model;
@@ -434,7 +495,17 @@ const receivedEvent = (model: RuntimeModel, message: ProjectEventMessage): Runti
   }
   if (event.type === 'runtime.hmr.client-connected' || event.type === 'runtime.hmr.client-disconnected') {
     const count = hmrCount(event.details);
-    return count === undefined ? advanced : replaceHmrCount(advanced, count.surfaceId, count.count);
+    if (count !== undefined) return replaceHmrCount(advanced, count.surfaceId, count.count);
+    const namedSurface = typeof event.details?.surfaceId === 'string' && event.details.surfaceId.length > 0
+      ? event.details.surfaceId
+      : undefined;
+    if (namedSurface === undefined) return update(advanced, { hmrClientCountBySurface: emptyCounts, hmrClientCountKnownSurfaces: emptyStrings });
+    const counts = Object.create(null) as Record<string, number>;
+    for (const [surfaceId, connectionCount] of Object.entries(advanced.hmrClientCountBySurface)) {
+      if (surfaceId !== namedSurface) counts[surfaceId] = connectionCount;
+    }
+    const frozen = Object.freeze(counts) as Readonly<Record<string, number>>;
+    return update(advanced, { hmrClientCountBySurface: frozen, hmrClientCountKnownSurfaces: Object.freeze(Object.keys(frozen).sort()) });
   }
   if ((event.type === 'runtime.run.started' || event.type === 'runtime.run.completed' || event.type === 'runtime.run.failed') && event.runId !== undefined) {
     return queueOperation(advanced, Object.freeze({ kind: 'read-run', runId: event.runId }));
@@ -452,8 +523,7 @@ export const reduceRuntimeModel = (model: RuntimeModel, action: RuntimeModelActi
       return settleEffect(model, action.id);
     case 'effect.conflict': {
       if (model.activeEffect?.id !== action.id) return model;
-      const cleared = update(model, { activeEffect: undefined, confirmation: undefined, pendingEffect: undefined });
-      return queueBootstrap(cleared);
+      return queueBootstrap(settleEffect(update(model, { confirmation: undefined }), action.id));
     }
     case 'draft.replace':
       return update(model, { draft: draftFor(action.input, action.raw) });
@@ -536,11 +606,13 @@ export const reduceRuntimeModel = (model: RuntimeModel, action: RuntimeModelActi
       return model.confirmation === undefined ? model : update(model, { confirmation: undefined });
     case 'confirmation.confirm': {
       if (model.confirmation?.kind === 'run') {
+        if (model.activeEffect !== undefined && model.pendingEffect !== undefined) return model;
         const request = model.confirmation.request;
         const next = update(model, { confirmation: undefined });
         return queueOperation(next, Object.freeze({ cause: 'manual' as const, kind: 'create-run' as const, request }));
       }
       if (model.confirmation?.kind === 'reset') {
+        if (model.activeEffect !== undefined && model.pendingEffect !== undefined) return model;
         const request = model.confirmation.request;
         return queueOperation(update(model, { confirmation: undefined }), Object.freeze({ kind: 'reset-state', request }));
       }
