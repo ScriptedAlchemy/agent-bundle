@@ -1,7 +1,10 @@
-import { readFile } from 'node:fs/promises';
-import { dirname, posix, resolve } from 'node:path';
-import { spawn } from 'node:child_process';
-import { pathToFileURL } from 'node:url';
+import { lstat, readFile, realpath } from 'node:fs/promises';
+import { isBuiltin } from 'node:module';
+import { dirname, isAbsolute, posix, relative, resolve } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+
+import { parse as parseJavaScript } from 'acorn';
+import { init, parse } from 'es-module-lexer';
 
 import { createDefaultRegistry, type TargetRegistry } from '../adapters/registry.ts';
 import type {
@@ -48,115 +51,154 @@ const diagnostic = (
   ...(target === undefined ? {} : { target }),
 });
 
-const javaScriptModuleSuffix = /\.(?:[cm]?js)$/u;
-const moduleImportTimeoutMs = 5_000;
-const childOutputLimit = 8 * 1024;
+const javaScriptModuleSuffix = /\.(?:m?js)$/u;
 const generatedJavaScriptRecovery = 'Bundle every JavaScript dependency into the artifact, then rebuild it.';
 
-interface ChildImportResult {
-  readonly error?: Error;
-  readonly exitCode: number | null;
-  readonly signal: NodeJS.Signals | null;
-  readonly stderr: string;
-  readonly stderrTruncated: boolean;
-  readonly stdout: string;
-  readonly stdoutTruncated: boolean;
-  readonly timedOut: boolean;
-}
+const jsonModuleSuffix = /\.json$/u;
 
-interface BoundedOutput {
-  readonly text: string;
-  readonly truncated: boolean;
-}
-
-const appendBoundedOutput = (output: string, chunk: Buffer): BoundedOutput => {
-  const available = childOutputLimit - Buffer.byteLength(output);
-  if (available <= 0) return { text: output, truncated: true };
-  if (chunk.length <= available) return { text: output + chunk.toString(), truncated: false };
-  return { text: output + chunk.subarray(0, available).toString(), truncated: true };
+const artifactPathFor = (root: string, path: string): string | undefined => {
+  const artifactPath = relative(root, path).replaceAll('\\', '/');
+  return artifactPath === '' || artifactPath === '..' || artifactPath.startsWith('../') || isAbsolute(artifactPath)
+    ? undefined
+    : artifactPath;
 };
 
-const runJavaScriptImport = async (artifactRoot: string, path: string): Promise<ChildImportResult> =>
-  new Promise((resolvePromise) => {
-    const artifactUrl = pathToFileURL(`${artifactRoot}/`).href;
-    const loaderSource = [
-      `const artifactUrl = ${JSON.stringify(artifactUrl)};`,
-      'export async function resolve(specifier, context, nextResolve) {',
-      '  const resolved = await nextResolve(specifier, context);',
-      '  if (resolved.url.startsWith("file:") && !resolved.url.startsWith(artifactUrl)) {',
-      '    throw new Error("Generated JavaScript resolved a dependency outside the artifact root.");',
-      '  }',
-      '  return resolved;',
-      '}',
-    ].join('\n');
-    const loader = `data:text/javascript,${encodeURIComponent(loaderSource)}`;
-    const importSource = [
-      'import { register } from "node:module";',
-      `register(${JSON.stringify(loader)}, import.meta.url);`,
-      `await import(${JSON.stringify(pathToFileURL(path).href)});`,
-      'process.exit(0);',
-    ].join(' ');
-    const child = spawn(process.execPath, ['--input-type=module', '--eval', importSource], {
-      cwd: artifactRoot,
-      env: { PATH: process.env.PATH ?? '' },
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-    let error: Error | undefined;
-    let settled = false;
-    let stderr = '';
-    let stderrTruncated = false;
-    let stdout = '';
-    let stdoutTruncated = false;
-    let timedOut = false;
-    const timeout = setTimeout(() => {
-      timedOut = true;
-      child.kill('SIGKILL');
-    }, moduleImportTimeoutMs);
-    const settle = (exitCode: number | null, signal: NodeJS.Signals | null): void => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timeout);
-      resolvePromise({
-        ...(error === undefined ? {} : { error }),
-        exitCode,
-        signal,
-        stderr,
-        stderrTruncated,
-        stdout,
-        stdoutTruncated,
-        timedOut,
+const graphDiagnostic = (importer: string, message: string): Diagnostic => diagnostic(
+  'AB6005',
+  `Generated JavaScript import from ${JSON.stringify(importer)} ${message}`,
+  importer,
+  undefined,
+  generatedJavaScriptRecovery,
+);
+
+const resolveJavaScriptImport = async (options: {
+  readonly artifactRoot: string;
+  readonly files: ReadonlyMap<string, ArtifactFile>;
+  readonly importer: string;
+  readonly specifier: string;
+  readonly validJson: ReadonlySet<string>;
+}): Promise<{ readonly diagnostic?: Diagnostic; readonly module?: string }> => {
+  if (isBuiltin(options.specifier)) return {};
+  if (!options.specifier.startsWith('.') && !options.specifier.startsWith('file:')) {
+    return { diagnostic: graphDiagnostic(options.importer, `uses unsupported specifier ${JSON.stringify(options.specifier)}.`) };
+  }
+
+  let url: URL;
+  try {
+    url = new URL(options.specifier, pathToFileURL(resolve(options.artifactRoot, options.importer)));
+  } catch {
+    return { diagnostic: graphDiagnostic(options.importer, `uses invalid specifier ${JSON.stringify(options.specifier)}.`) };
+  }
+  if (url.protocol !== 'file:' || url.search.length > 0 || url.hash.length > 0) {
+    return { diagnostic: graphDiagnostic(options.importer, `uses unsupported specifier ${JSON.stringify(options.specifier)}.`) };
+  }
+
+  let path: string;
+  try {
+    path = fileURLToPath(url);
+  } catch {
+    return { diagnostic: graphDiagnostic(options.importer, `uses invalid file URL ${JSON.stringify(options.specifier)}.`) };
+  }
+  if (artifactPathFor(options.artifactRoot, path) === undefined) {
+    return { diagnostic: graphDiagnostic(options.importer, `resolves outside the artifact root: ${JSON.stringify(options.specifier)}.`) };
+  }
+
+  let metadata: Awaited<ReturnType<typeof lstat>>;
+  try {
+    metadata = await lstat(path);
+  } catch {
+    return { diagnostic: graphDiagnostic(options.importer, `is missing ${JSON.stringify(options.specifier)}.`) };
+  }
+  if (!metadata.isFile()) {
+    return { diagnostic: graphDiagnostic(options.importer, `does not resolve to a regular file: ${JSON.stringify(options.specifier)}.`) };
+  }
+
+  let canonicalPath: string;
+  try {
+    canonicalPath = await realpath(path);
+  } catch {
+    return { diagnostic: graphDiagnostic(options.importer, `is missing ${JSON.stringify(options.specifier)}.`) };
+  }
+  const artifactPath = artifactPathFor(options.artifactRoot, canonicalPath);
+  if (artifactPath === undefined) {
+    return { diagnostic: graphDiagnostic(options.importer, `resolves outside the artifact root: ${JSON.stringify(options.specifier)}.`) };
+  }
+  if (!options.files.has(artifactPath)) {
+    return { diagnostic: graphDiagnostic(options.importer, `is not listed in the artifact manifest: ${JSON.stringify(options.specifier)}.`) };
+  }
+  if (jsonModuleSuffix.test(artifactPath)) {
+    return options.validJson.has(artifactPath)
+      ? {}
+      : { diagnostic: graphDiagnostic(options.importer, `references invalid JSON ${JSON.stringify(options.specifier)}.`) };
+  }
+  if (!javaScriptModuleSuffix.test(artifactPath)) {
+    return { diagnostic: graphDiagnostic(options.importer, `uses unsupported target ${JSON.stringify(options.specifier)}.`) };
+  }
+  return { module: artifactPath };
+};
+
+const validateJavaScriptModules = async (options: {
+  readonly artifactRoot: string;
+  readonly files: readonly ArtifactFile[];
+  readonly manifestFiles?: ReadonlySet<string>;
+  readonly validJson: ReadonlySet<string>;
+}): Promise<readonly Diagnostic[]> => {
+  await init;
+  const artifactRoot = await realpath(options.artifactRoot);
+  const files = new Map(options.files
+    .filter((file) => options.manifestFiles === undefined || options.manifestFiles.has(file.path))
+    .map((file) => [file.path, file]));
+  const diagnostics: Diagnostic[] = [];
+  const visited = new Set<string>();
+  const visiting = new Set<string>();
+
+  const validateModule = async (path: string): Promise<void> => {
+    if (visited.has(path) || visiting.has(path)) return;
+    visiting.add(path);
+    let source: string;
+    try {
+      source = await readFile(resolve(artifactRoot, path), 'utf8');
+    } catch {
+      diagnostics.push(graphDiagnostic(path, 'cannot be read.'));
+      visiting.delete(path);
+      visited.add(path);
+      return;
+    }
+
+    let imports: ReturnType<typeof parse>[0];
+    try {
+      parseJavaScript(source, { ecmaVersion: 'latest', sourceType: 'module' });
+      [imports] = parse(source);
+    } catch {
+      diagnostics.push(graphDiagnostic(path, 'has invalid syntax.'));
+      visiting.delete(path);
+      visited.add(path);
+      return;
+    }
+    for (const imported of imports) {
+      if (imported.d === -2) continue;
+      if (imported.n === undefined) {
+        diagnostics.push(graphDiagnostic(path, 'has a non-literal dynamic import.'));
+        continue;
+      }
+      const resolved = await resolveJavaScriptImport({
+        artifactRoot,
+        files,
+        importer: path,
+        specifier: imported.n,
+        validJson: options.validJson,
       });
-    };
-    child.stderr.on('data', (chunk: Buffer) => {
-      const captured = appendBoundedOutput(stderr, chunk);
-      stderr = captured.text;
-      stderrTruncated ||= captured.truncated;
-    });
-    child.stdout.on('data', (chunk: Buffer) => {
-      const captured = appendBoundedOutput(stdout, chunk);
-      stdout = captured.text;
-      stdoutTruncated ||= captured.truncated;
-    });
-    child.once('error', (spawnError) => {
-      error = spawnError;
-      if (child.pid === undefined) settle(null, null);
-    });
-    child.once('close', settle);
-  });
+      if (resolved.diagnostic !== undefined) diagnostics.push(resolved.diagnostic);
+      else if (resolved.module !== undefined) await validateModule(resolved.module);
+    }
+    visiting.delete(path);
+    visited.add(path);
+  };
 
-const importFailure = (result: ChildImportResult): string => {
-  if (result.timedOut) return `import timed out after ${moduleImportTimeoutMs}ms.`;
-  if (result.error !== undefined) return `import process could not start: ${result.error.message}`;
-  const output = result.stderr || result.stdout;
-  const truncated = result.stderr ? result.stderrTruncated : result.stdoutTruncated;
-  if (output.length > 0) return `${output.trim()}${truncated ? '\n[output truncated]' : ''}`;
-  return `import process exited with ${result.signal ?? `code ${result.exitCode ?? 'unknown'}`}.`;
-};
-
-const checkJavaScriptImport = async (artifactRoot: string, relativePath: string): Promise<string | undefined> => {
-  const root = resolve(artifactRoot);
-  const result = await runJavaScriptImport(root, resolve(root, relativePath));
-  return result.exitCode === 0 && !result.timedOut ? undefined : importFailure(result);
+  for (const path of [...files.keys()].filter((path) => javaScriptModuleSuffix.test(path)).sort((left, right) => left.localeCompare(right))) {
+    await validateModule(path);
+  }
+  return Object.freeze(diagnostics);
 };
 
 const sameFile = (left: ArtifactFile, right: ManifestFile): boolean =>
@@ -688,13 +730,16 @@ const validateEmittedSkills = async (options: {
 const validateGeneratedFiles = async (options: {
   readonly artifactRoot: string;
   readonly files: readonly ArtifactFile[];
+  readonly manifestFiles?: readonly ManifestFile[];
 }): Promise<readonly Diagnostic[]> => {
   const diagnostics: Diagnostic[] = [];
   const generatedFiles = new Set(options.files.map((file) => file.path));
+  const validJson = new Set<string>();
 
   for (const file of options.files.filter((entry) => entry.path.endsWith('.json'))) {
     try {
       const document = JSON.parse(await readFile(resolve(options.artifactRoot, file.path), 'utf8')) as unknown;
+      validJson.add(file.path);
       for (const mcpPath of localMcpPaths(document)) {
         const generatedPath = posix.join(dirname(file.path), mcpPath);
         if (!generatedFiles.has(generatedPath)) {
@@ -710,18 +755,14 @@ const validateGeneratedFiles = async (options: {
     }
   }
 
-  for (const file of options.files.filter((entry) => javaScriptModuleSuffix.test(entry.path))) {
-    const importError = await checkJavaScriptImport(options.artifactRoot, file.path);
-    if (importError !== undefined) {
-      diagnostics.push(diagnostic(
-        'AB6005',
-        `Generated JavaScript cannot be imported: ${importError}`,
-        file.path,
-        undefined,
-        generatedJavaScriptRecovery,
-      ));
-    }
-  }
+  diagnostics.push(...await validateJavaScriptModules({
+    artifactRoot: options.artifactRoot,
+    files: options.files,
+    ...(options.manifestFiles === undefined
+      ? {}
+      : { manifestFiles: new Set(options.manifestFiles.map((file) => file.path)) }),
+    validJson,
+  }));
 
   return Object.freeze(diagnostics);
 };
@@ -812,6 +853,44 @@ export const validateArtifact = async (context: ValidateArtifactOptions): Promis
   diagnostics.push(...await validateGeneratedFiles({
     artifactRoot: context.artifactRoot,
     files: inspection.files,
+    manifestFiles: manifest.files,
   }));
+
+  let finalInspection: ArtifactInspection;
+  try {
+    finalInspection = await inspectArtifact(context);
+  } catch {
+    diagnostics.push(diagnostic('AB6004', 'Artifact files do not match the manifest.', artifactManifestName));
+    return Object.freeze(diagnostics);
+  }
+  if (!matchesManifestFileTable(finalInspection.files, manifest.files)) {
+    if (!diagnostics.some((entry) => entry.code === 'AB6004')) {
+      diagnostics.push(diagnostic('AB6004', 'Artifact files do not match the manifest.', artifactManifestName));
+    }
+    diagnostics.push(...filesystemDiagnostics(finalInspection.filesystem));
+    diagnostics.push(...validateArtifactOwnership({
+      filesystem: finalInspection.filesystem,
+      files: finalInspection.files,
+      manifest,
+      registry,
+    }));
+    diagnostics.push(...await validateTargetContracts({
+      artifactRoot: context.artifactRoot,
+      files: finalInspection.files,
+      manifest,
+      registry,
+    }));
+    diagnostics.push(...await validateEmittedSkills({
+      artifactRoot: context.artifactRoot,
+      files: finalInspection.files,
+      manifest,
+      registry,
+    }));
+    diagnostics.push(...await validateGeneratedFiles({
+      artifactRoot: context.artifactRoot,
+      files: finalInspection.files,
+      manifestFiles: manifest.files,
+    }));
+  }
   return Object.freeze(diagnostics);
 };
