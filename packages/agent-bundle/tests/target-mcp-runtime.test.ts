@@ -16,7 +16,7 @@ import {
   readTargetMcpServer,
   resolveTargetRelativeStdioArgument,
 } from '../src/services/mcp-runtime.ts';
-import { createMcpPathTokenResolver } from '../src/services/mcp-path-tokens.ts';
+import { createMcpPathTokenResolver, resolveMcpPathTokens } from '../src/services/mcp-path-tokens.ts';
 import { McpService } from '../src/services/mcp-service.ts';
 import { build } from './support/build.ts';
 
@@ -116,6 +116,69 @@ it('converts malformed or throwing target reader callbacks into invalid results'
 
   expect(readTargetMcpServer(malformed, { nativeServers: {} }, 'fixture')).toEqual({ status: 'invalid' });
   expect(readTargetMcpServer(throwing, { nativeServers: {} }, 'fixture')).toEqual({ status: 'invalid' });
+});
+
+it('detaches and freezes reader servers before delayed mutation can change a launch', async () => {
+  const args = ['--original'];
+  const sharedFields = Object.create(null) as Record<string, string>;
+  Object.defineProperty(sharedFields, '__proto__', { enumerable: true, value: 'safe-field' });
+  sharedFields.Authorization = 'Bearer original';
+  sharedFields.SESSION = 'original-session';
+  const stdioServer = { args, command: 'runner', env: sharedFields, kind: 'stdio' as const };
+  const httpServer = { headers: sharedFields, kind: 'streamable-http' as const, url: 'https://mcp.example.test/original' };
+  const mutatingRuntime: TargetMcpRuntimeContract = {
+    manifestPath: 'native/registry.json',
+    readModernServer: (_document, name) => ({
+      server: name === 'stdio' ? stdioServer : httpServer,
+      status: 'found',
+    }),
+    resolveStdioArgument: (value) => value,
+    resolveValue: (_field, _roots, value) => ({ diagnostics: [], value }),
+  };
+
+  const stdio = readTargetMcpServer(mutatingRuntime, {}, 'stdio');
+  const http = readTargetMcpServer(mutatingRuntime, {}, 'http');
+  if (stdio.status !== 'found' || http.status !== 'found') throw new Error('Expected valid reader servers.');
+  if (stdio.server.kind !== 'stdio' || http.server.kind !== 'streamable-http') {
+    throw new Error('Expected matching stdio and streamable HTTP servers.');
+  }
+  if (stdio.server.env === undefined || http.server.headers === undefined) {
+    throw new Error('Expected stdio environment and remote headers.');
+  }
+  queueMicrotask(() => {
+    args[0] = '--mutated';
+    sharedFields.Authorization = 'Bearer mutated';
+    sharedFields.SESSION = 'mutated-session';
+    httpServer.url = 'https://mcp.example.test/mutated';
+  });
+  await Promise.resolve();
+
+  expect(Object.isFrozen(stdio)).toBe(true);
+  expect(Object.isFrozen(stdio.server)).toBe(true);
+  expect(Object.isFrozen(stdio.server.args)).toBe(true);
+  expect(Object.isFrozen(stdio.server.env)).toBe(true);
+  expect(Object.isFrozen(http)).toBe(true);
+  expect(Object.isFrozen(http.server)).toBe(true);
+  expect(Object.isFrozen(http.server.headers)).toBe(true);
+  expect(Object.getPrototypeOf(stdio.server.env)).toBeNull();
+  expect(Object.getPrototypeOf(http.server.headers)).toBeNull();
+  expect(Object.hasOwn(stdio.server.env, '__proto__')).toBe(true);
+  expect(Object.hasOwn(http.server.headers, '__proto__')).toBe(true);
+  expect(stdio.server).toMatchObject({ args: ['--original'], env: { SESSION: 'original-session' } });
+  expect(http.server).toMatchObject({
+    headers: { Authorization: 'Bearer original' },
+    url: 'https://mcp.example.test/original',
+  });
+
+  const roots = { pluginData: '/data', pluginRoot: '/plugin', workspaceRoot: '/workspace' };
+  expect(resolveMcpPathTokens({ roots, runtime: mutatingRuntime, server: stdio.server, target: 'synthetic' })).toMatchObject({
+    args: ['--original'],
+    env: { SESSION: 'original-session' },
+  });
+  expect(resolveMcpPathTokens({ roots, runtime: mutatingRuntime, server: http.server, target: 'synthetic' })).toMatchObject({
+    headers: { Authorization: 'Bearer original' },
+    url: 'https://mcp.example.test/original',
+  });
 });
 
 it('distinguishes a missing server from an invalid modern manifest server', () => {
