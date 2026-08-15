@@ -1,4 +1,5 @@
 import type { Diagnostic } from '../core/diagnostics.ts';
+import type { ProjectContext } from '../core/project-context.ts';
 
 export type JsonPrimitive = boolean | null | number | string;
 export type JsonArray = readonly JsonValue[];
@@ -21,6 +22,117 @@ export interface ArtifactEpoch {
   readonly modelDigest: string;
   readonly projectRevision: string;
   readonly targetDigests: Readonly<Record<string, string>>;
+}
+
+/** A source input referenced directly by an emitted artifact file. */
+export interface ArtifactInspectionSourceInput {
+  readonly path: string;
+  readonly sha256: string;
+}
+
+/** Manifested artifact file facts, without the file contents. */
+export interface ArtifactInspectionFile {
+  readonly bytes: number;
+  readonly kind: 'bundle' | 'copy' | 'generated';
+  readonly mode?: number;
+  readonly path: string;
+  readonly sha256: string;
+  readonly sourceInputs: readonly ArtifactInspectionSourceInput[];
+}
+
+export interface ArtifactInspectionFileNode {
+  readonly file: ArtifactInspectionFile;
+  readonly kind: 'file';
+  readonly name: string;
+  readonly path: string;
+}
+
+export interface ArtifactInspectionDirectoryNode {
+  readonly children: readonly ArtifactInspectionTreeNode[];
+  readonly kind: 'directory';
+  readonly name: string;
+  readonly path: string;
+}
+
+/** One immutable tree node within a declared artifact target. */
+export type ArtifactInspectionTreeNode = ArtifactInspectionDirectoryNode | ArtifactInspectionFileNode;
+
+export interface ArtifactInspectionTarget {
+  readonly name: string;
+  readonly tree: ArtifactInspectionDirectoryNode;
+}
+
+/** Direct declared provenance for one emitted output path. */
+export interface ArtifactInspectionProvenance {
+  readonly outputPath: string;
+  readonly sourceInputs: readonly ArtifactInspectionSourceInput[];
+}
+
+export interface ArtifactInspectionHook {
+  readonly event: string;
+  readonly file: ArtifactInspectionFile;
+  readonly id: string;
+  readonly name: string;
+  readonly path: string;
+  readonly target: string;
+  readonly timeout?: number;
+}
+
+/** Non-secret runtime facts for one strict modern MCP server declaration. */
+export interface ArtifactInspectionMcpServer {
+  readonly entryPaths: readonly string[];
+  readonly kind: 'stdio' | 'streamable-http';
+  readonly manifestPath: string;
+  readonly name: string;
+  readonly target: string;
+}
+
+export interface ArtifactInspectionRuntime {
+  readonly executables: readonly ArtifactInspectionFile[];
+  readonly hooks: readonly ArtifactInspectionHook[];
+  readonly mcpServers: readonly ArtifactInspectionMcpServer[];
+}
+
+/** Detached facts from one strictly validated, published Artifact Manifest v2 epoch. */
+export interface ArtifactInspection {
+  readonly epochId: string;
+  readonly files: readonly ArtifactInspectionFile[];
+  readonly project: ProjectContext;
+  readonly provenance: readonly ArtifactInspectionProvenance[];
+  readonly runtime: ArtifactInspectionRuntime;
+  readonly targets: readonly ArtifactInspectionTarget[];
+}
+
+export interface ArtifactEpochAddedFile {
+  readonly after: ArtifactInspectionFile;
+  readonly path: string;
+}
+
+export interface ArtifactEpochRemovedFile {
+  readonly before: ArtifactInspectionFile;
+  readonly path: string;
+}
+
+export interface ArtifactEpochChangedFile {
+  readonly after: ArtifactInspectionFile;
+  readonly before: ArtifactInspectionFile;
+  readonly path: string;
+}
+
+export interface ArtifactEpochUnchangedFile {
+  readonly after: ArtifactInspectionFile;
+  readonly before: ArtifactInspectionFile;
+  readonly path: string;
+}
+
+/** Stable facts-only difference between two exact published artifact epochs. */
+export interface ArtifactEpochDiff {
+  readonly added: readonly ArtifactEpochAddedFile[];
+  readonly baseEpochId: string;
+  readonly candidateEpochId: string;
+  readonly changed: readonly ArtifactEpochChangedFile[];
+  readonly removed: readonly ArtifactEpochRemovedFile[];
+  readonly unchanged: readonly ArtifactEpochUnchangedFile[];
 }
 
 export type SourceState = 'unknown' | 'ready' | 'invalid';
