@@ -1042,6 +1042,7 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
           vector: this.#vector(generationLease.generation, stateAfter),
         });
         await this.#recordTerminal(failed);
+        this.#publishActiveStateVersion(generationLease.generation, stateAfter);
         this.#emit(Object.freeze({ runId: running.id, runtimeGenerationId: generationLease.generation.id, type: 'runtime.run.failed' }));
         return failed;
       }

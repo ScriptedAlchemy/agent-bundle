@@ -1002,9 +1002,13 @@ test('refreshes a failed run vector after its generation-contained hook mutates 
   const storageRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-session-failed-vector-'));
   const projectRoot = process.cwd();
   const prepared = await new ProjectService({ includeDevRuntime: true, mode: 'development', root: projectRoot }).prepare('dev');
+  let activeVectorAtFailure: unknown;
+  let readActiveVector = (): unknown => undefined;
   const session = await createDevRuntimeProvider().start({
     artifactStatus: () => Object.freeze({ state: 'missing' as const }),
-    emit: () => undefined,
+    emit: (event) => {
+      if (event.type === 'runtime.run.failed') activeVectorAtFailure = readActiveVector();
+    },
     environment: Object.freeze({}),
     projectRoot,
     preparedRuntime: prepared.devRuntime!,
@@ -1012,6 +1016,7 @@ test('refreshes a failed run vector after its generation-contained hook mutates 
     signal: new AbortController().signal,
     storageRoot,
   });
+  readActiveVector = () => session.status().activeVector;
 
   try {
     await waitFor(() => session.status().activeVector !== undefined, 'Timed out waiting for an active runtime generation', 15_000);
@@ -1039,6 +1044,8 @@ require(${JSON.stringify(original)});
     });
 
     expect(run).toMatchObject({ status: 'failed', vector: { runtimeGenerationId: generationId, stateVersion: 1 } });
+    expect(activeVectorAtFailure).toEqual(run.vector);
+    expect(session.status().activeVector).toEqual(run.vector);
   } finally {
     await session.close().catch(() => undefined);
     await rm(storageRoot, { force: true, recursive: true });
