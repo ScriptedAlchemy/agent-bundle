@@ -157,6 +157,20 @@ const expectMissing = async (path: string): Promise<void> => {
   await expect(access(path)).rejects.toMatchObject({ code: 'ENOENT' });
 };
 
+const deferred = <T = void>(): Readonly<{
+  readonly promise: Promise<T>;
+  readonly reject: (reason?: unknown) => void;
+  readonly resolve: (value: T) => void;
+}> => {
+  let reject!: (reason?: unknown) => void;
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return Object.freeze({ promise, reject, resolve });
+};
+
 it('prepares an opaque validated generation without publishing it before synchronous commit', async () => {
   const { root, store } = await createStore();
   const value = fixture('g1');
@@ -385,6 +399,41 @@ it('retains active plus five newest inactive generations and defers a leased pru
   }
 });
 
+it('does not admit an explicit lease after pruning has synchronously reserved its generation', async () => {
+  const removalStarted = deferred<void>();
+  const removalFinished = deferred<void>();
+  const allowRemoval = deferred<void>();
+  const { root, store } = await createStore({
+    remove: async (path) => {
+      if (path.endsWith('/g1')) {
+        removalStarted.resolve();
+        await allowRemoval.promise;
+        await rm(path, { force: true, recursive: true });
+        removalFinished.resolve();
+        return;
+      }
+      await rm(path, { force: true, recursive: true });
+    },
+    retainInactive: 5,
+  });
+  try {
+    for (const id of ['g1', 'g2', 'g3', 'g4', 'g5', 'g6']) {
+      await commitFixture(store, id);
+    }
+    await commitFixture(store, 'g7');
+    await removalStarted.promise;
+
+    await expect(store.lease('g1')).rejects.toMatchObject({ code: 'RUNTIME_GENERATION_NOT_FOUND' });
+    allowRemoval.resolve();
+    await removalFinished.promise;
+    await expectMissing(join(root, 'generations', 'g1'));
+  } finally {
+    allowRemoval.resolve();
+    await store.close().catch(() => undefined);
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
 it('aborts prepared roots, removes abandoned session roots on reopen, and reports cleanup failures structurally', async () => {
   const { root, store } = await createStore();
   try {
@@ -464,6 +513,100 @@ it('runs synchronous guard checks directly after both asynchronous guard waits',
     await expectMissing(join(root, 'generations', 'guarded'));
   } finally {
     await store.close().catch(() => undefined);
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('keeps a candidate non-public when the pre-rename guard changes in its wait/check microtask seam', async () => {
+  const { root, store } = await createStore();
+  const value = fixture('pre-guard-race');
+  try {
+    const candidate = await store.begin({ id: 'pre-guard-race', sourceRevision: 'source-pre-guard-race' });
+    await writeGeneration(candidate.root, value);
+    let revision = 1;
+    const guard: RuntimeGenerationActivationGuard<TestMetadata> = {
+      check: () => revision === 1,
+      wait: () => new Promise<void>((resolve) => {
+        resolve();
+        queueMicrotask(() => { revision = 2; });
+      }),
+    };
+
+    await expect(store.prepare(candidate, value.manifest, { guard }))
+      .rejects.toMatchObject({ code: 'RUNTIME_GENERATION_SUPERSEDED' });
+    expect(store.active()).toBeUndefined();
+    await expect(store.lease('pre-guard-race')).rejects.toMatchObject({ code: 'RUNTIME_GENERATION_NOT_FOUND' });
+  } finally {
+    await store.close().catch(() => undefined);
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('keeps a candidate non-public when the post-rename guard changes in its wait/check microtask seam', async () => {
+  const { root, store } = await createStore();
+  const value = fixture('post-guard-race');
+  try {
+    const candidate = await store.begin({ id: 'post-guard-race', sourceRevision: 'source-post-guard-race' });
+    await writeGeneration(candidate.root, value);
+    let revision = 1;
+    let waits = 0;
+    const guard: RuntimeGenerationActivationGuard<TestMetadata> = {
+      check: () => revision === 1,
+      wait: () => new Promise<void>((resolve) => {
+        waits += 1;
+        resolve();
+        if (waits === 2) queueMicrotask(() => { revision = 2; });
+      }),
+    };
+
+    await expect(store.prepare(candidate, value.manifest, { guard }))
+      .rejects.toMatchObject({ code: 'RUNTIME_GENERATION_SUPERSEDED' });
+    expect(store.active()).toBeUndefined();
+    await expect(store.lease('post-guard-race')).rejects.toMatchObject({ code: 'RUNTIME_GENERATION_NOT_FOUND' });
+    await expectMissing(join(root, 'generations', 'post-guard-race'));
+  } finally {
+    await store.close().catch(() => undefined);
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('shares one in-flight close failure across concurrent callers and remains idempotent afterwards', async () => {
+  const started = deferred<void>();
+  const allowFailure = deferred<void>();
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-runtime-generations-close-race-'));
+  const store = new RuntimeGenerationStore<TestMetadata>({
+    metadataCodec,
+    remove: async (path) => {
+      if (path.endsWith('/prepared')) {
+        started.resolve();
+        await allowFailure.promise;
+        throw new Error('deferred cleanup refused');
+      }
+      await rm(path, { force: true, recursive: true });
+    },
+    storageRoot: root,
+    validateMetadata: (input) => input.metadata,
+  });
+  try {
+    const candidate = await store.begin({ id: 'prepared', sourceRevision: 'source-prepared' });
+    const value = fixture('prepared');
+    await writeGeneration(candidate.root, value);
+    await store.prepare(candidate, value.manifest);
+
+    const first = store.close();
+    const second = store.close();
+    expect(second).toBe(first);
+    await started.promise;
+    allowFailure.resolve();
+    await expect(first).rejects.toMatchObject({
+      failures: [expect.objectContaining({ path: join(root, 'generations', 'prepared') })],
+    });
+    await expect(second).rejects.toMatchObject({
+      failures: [expect.objectContaining({ path: join(root, 'generations', 'prepared') })],
+    });
+    await expect(store.close()).resolves.toBeUndefined();
+  } finally {
+    allowFailure.resolve();
     await rm(root, { force: true, recursive: true });
   }
 });

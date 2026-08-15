@@ -140,6 +140,7 @@ interface PreparedRecord<TMetadata> {
 
 interface CommittedRecord<TMetadata> {
   readonly generation: RuntimeGeneration<TMetadata>;
+  pruning: boolean;
   readonly sequence: number;
   references: number;
 }
@@ -300,6 +301,8 @@ export class RuntimeGenerationStore<TMetadata = unknown> {
   #cleanupScheduled = false;
   #cleanupTail: Promise<void> = Promise.resolve();
   #closed = false;
+  #closePromise: Promise<void> | undefined;
+  #closeState: 'open' | 'closing' | 'closed' = 'open';
   #initialized = false;
   #initialization: Promise<void> | undefined;
   #newestSequence = 0;
@@ -410,13 +413,20 @@ export class RuntimeGenerationStore<TMetadata = unknown> {
           throw error;
         },
       );
-      await this.#checkGuard(options.guard, provisional);
+      const guard = options.guard;
+      if (guard !== undefined) {
+        await guard.wait(provisional);
+        if (!guard.check(provisional)) throw superseded();
+      }
       this.#assertCurrent(record);
 
       await rename(candidate.root, destination);
       renamedRoot = destination;
       const generation = await this.#readGeneration(destination, candidate.id, candidate.sourceRevision);
-      await this.#checkGuard(options.guard, generation.manifest);
+      if (guard !== undefined) {
+        await guard.wait(generation.manifest);
+        if (!guard.check(generation.manifest)) throw superseded();
+      }
       this.#assertCurrent(record);
 
       const prepared = Object.freeze({ generation, sequence: candidate.sequence });
@@ -453,6 +463,7 @@ export class RuntimeGenerationStore<TMetadata = unknown> {
     record.candidate.state = 'prepared';
     this.#committed.set(generation.id, {
       generation,
+      pruning: false,
       references: 0,
       sequence: record.candidate.candidate.sequence,
     });
@@ -486,7 +497,7 @@ export class RuntimeGenerationStore<TMetadata = unknown> {
     const generationId = id ?? this.#activeId;
     if (generationId === undefined) throw notFound('(active)');
     const record = this.#committed.get(generationId);
-    if (record === undefined) throw notFound(generationId);
+    if (record === undefined || record.pruning) throw notFound(generationId);
     record.references += 1;
 
     let released = false;
@@ -505,9 +516,24 @@ export class RuntimeGenerationStore<TMetadata = unknown> {
     });
   }
 
-  async close(): Promise<void> {
-    if (this.#closed) return;
+  close(): Promise<void> {
+    if (this.#closeState === 'closing') return this.#closePromise!;
+    if (this.#closeState === 'closed') return Promise.resolve();
+
+    this.#closeState = 'closing';
     this.#closed = true;
+    const closePromise = this.#closeInternal().then(
+      () => { this.#closeState = 'closed'; },
+      (error: unknown) => {
+        this.#closeState = 'closed';
+        throw error;
+      },
+    );
+    this.#closePromise = closePromise;
+    return closePromise;
+  }
+
+  async #closeInternal(): Promise<void> {
     const failures: RuntimeGenerationCloseFailure[] = [];
 
     if (this.#initialization !== undefined) {
@@ -572,15 +598,6 @@ export class RuntimeGenerationStore<TMetadata = unknown> {
   #assertCurrent(record: CandidateRecord): void {
     this.#assertOpen();
     if (record.candidate.sequence !== this.#newestSequence || record.state === 'failed') throw superseded();
-  }
-
-  async #checkGuard(
-    guard: RuntimeGenerationActivationGuard<TMetadata> | undefined,
-    manifest: RuntimeGenerationManifest<TMetadata>,
-  ): Promise<void> {
-    if (guard === undefined) return;
-    await guard.wait(manifest);
-    if (!guard.check(manifest)) throw superseded();
   }
 
   #manifestFromDisk(
@@ -771,14 +788,19 @@ export class RuntimeGenerationStore<TMetadata = unknown> {
     const inactive = Array.from(this.#committed.values())
       .filter((record) => record.generation.id !== this.#activeId)
       .sort((left, right) => right.sequence - left.sequence);
-    const retained = inactive.slice(0, this.#retainInactive);
-    const retainedIds = new Set(retained.map((record) => record.generation.id));
-    for (const record of inactive) {
-      if (retainedIds.has(record.generation.id) || record.references > 0) continue;
+    const retainedIds = new Set(inactive.slice(0, this.#retainInactive).map((record) => record.generation.id));
+    const pruning = inactive.filter((record) =>
+      !retainedIds.has(record.generation.id) && record.references === 0 && !record.pruning,
+    );
+    for (const record of pruning) {
+      record.pruning = true;
+    }
+    for (const record of pruning) {
       try {
         await this.#remove(record.generation.root);
         this.#committed.delete(record.generation.id);
       } catch (error) {
+        record.pruning = false;
         this.#cleanupFailures.push(Object.freeze({ error, path: record.generation.root }));
       }
     }
