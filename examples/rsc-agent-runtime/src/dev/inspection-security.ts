@@ -10,6 +10,7 @@ const providerCredentialValues = Object.freeze(providerCredentialSources.map((so
 const providerCredentialDiagnostics = Object.freeze(providerCredentialSources.map((source) => new RegExp(source, 'giu')));
 const credentialAssignment = /(?:api[-_]?key|authorization|credential|cookie|password|secret|token)\s*[:=]\s*[^\s,;]+/iu;
 const bearerCredential = /\bbearer\s+[^\s,;]+/iu;
+const bearerCredentialDiagnostic = new RegExp(bearerCredential.source, 'giu');
 
 export const isInspectionSensitiveKey = (key: string): boolean => sensitiveKey.test(key);
 
@@ -19,7 +20,10 @@ export const hasInspectionCredential = (value: string): boolean =>
   || providerCredentialValues.some((pattern) => pattern.test(value));
 
 export const redactInspectionDiagnostics = (value: string): string => {
-  let redacted = value.slice(0, diagnosticPreviewBytes).replace(sensitiveLabel, '$1[REDACTED]');
-  for (const pattern of providerCredentialDiagnostics) redacted = redacted.replace(pattern, '[REDACTED]');
+  let redacted = value
+    .slice(0, diagnosticPreviewBytes)
+    .replace(sensitiveLabel, '$1[redacted]')
+    .replace(bearerCredentialDiagnostic, 'Bearer [redacted]');
+  for (const pattern of providerCredentialDiagnostics) redacted = redacted.replace(pattern, '[redacted]');
   return redacted;
 };

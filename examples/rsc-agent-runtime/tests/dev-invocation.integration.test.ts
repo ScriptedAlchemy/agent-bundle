@@ -386,7 +386,7 @@ test('redacts bounded RSC worker stderr diagnostics', async () => {
     const entry = await buildInvocationEntry(compilerRoot);
     await writeFile(
       join(compilerRoot, 'rsc', 'rsc', 'index.js'),
-      "process.stderr.write('credential=fixture-credential cookie=fixture-cookie authorization=fixture-authorization sk-live-abcdefghijklmnopqrstuvwxyz ghp_012345678901234567890123456789 xoxb-0123456789-0123456789-abcdefghijklmnop AKIA0123456789ABCDEF\\n'.repeat(20_000), () => process.exit(1));\n",
+      "process.stderr.write('credential=fixture-credential cookie=fixture-cookie authorization=fixture-authorization Bearer fixture-bearer-secret sk-live-abcdefghijklmnopqrstuvwxyz ghp_012345678901234567890123456789 xoxb-0123456789-0123456789-abcdefghijklmnop AKIA0123456789ABCDEF\\n'.repeat(20_000), () => process.exit(1));\n",
     );
     const result = await invoke(entry, {
       stateFile: join(compilerRoot, 'events.jsonl'),
@@ -401,12 +401,13 @@ test('redacts bounded RSC worker stderr diagnostics', async () => {
       'fixture-credential',
       'fixture-cookie',
       'fixture-authorization',
+      'fixture-bearer-secret',
       'sk-live-abcdefghijklmnopqrstuvwxyz',
       'ghp_012345678901234567890123456789',
       'xoxb-0123456789-0123456789-abcdefghijklmnop',
       'AKIA0123456789ABCDEF',
     ]) expect(result.stderr).not.toContain(secret);
-    expect(result.stderr).toContain('[REDACTED]');
+    expect(result.stderr).toContain('[redacted]');
   } finally {
     await rm(compilerRoot, { force: true, recursive: true });
   }
