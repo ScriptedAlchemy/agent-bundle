@@ -114,7 +114,8 @@ export type DevRuntimeInspectionRequest =
   | DevRuntimeMcpStatusInspectionRequest;
 
 export interface DevRuntimeInspectionResponse {
-  readonly flightBase64: string;
+  /** Raw Flight bytes are sent over the provider-owned fd 3 side channel. */
+  readonly flightBytes: number;
   readonly inspection: DevRuntimeInspectionEnvelope;
 }
 

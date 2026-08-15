@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { appendFile, mkdtemp, readdir, rename, rm, writeFile } from 'node:fs/promises';
+import { appendFile, cp, mkdir, mkdtemp, readFile, readdir, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -21,21 +21,76 @@ const readChildOutput = (stream: NodeJS.ReadableStream): Promise<Buffer> =>
     stream.once('end', () => resolve(Buffer.concat(chunks)));
   });
 
+const exampleRoot = process.cwd();
+const workspaceNodeModules = join(exampleRoot, '../../node_modules');
+
+const copyExample = async (): Promise<Readonly<{ readonly projectRoot: string; readonly workspaceRoot: string }>> => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-invocation-copy-'));
+  const projectRoot = join(workspaceRoot, 'examples', 'rsc-agent-runtime');
+  await cp(exampleRoot, projectRoot, {
+    filter: (source) => !['.agent-bundle', 'dist', 'node_modules'].includes(source.split('/').at(-1) ?? ''),
+    recursive: true,
+  });
+  await symlink(workspaceNodeModules, join(workspaceRoot, 'node_modules'), 'dir');
+  await symlink(join(exampleRoot, '../../tsconfig.json'), join(workspaceRoot, 'tsconfig.json'));
+  return Object.freeze({ projectRoot, workspaceRoot });
+};
+
 const startInvocation = (entry: string, request: Record<string, unknown>) => {
-  const child = spawn(process.execPath, [entry], { stdio: ['pipe', 'pipe', 'pipe'] });
+  const child = spawn(process.execPath, [entry], { stdio: ['pipe', 'pipe', 'pipe', 'pipe'] });
+  const flight = child.stdio[3] as NodeJS.ReadableStream | null | undefined;
+  if (flight === null || flight === undefined) throw new Error('Invocation worker Flight stream is unavailable.');
   child.stdin.end(JSON.stringify(request));
 
   const completed = Promise.all([
+    readChildOutput(flight),
     readChildOutput(child.stdout),
     readChildOutput(child.stderr),
     new Promise<number | null>((resolve, reject) => {
       child.once('error', reject);
       child.once('close', resolve);
     }),
-  ]).then(([stdout, stderr, exitCode]) => ({ exitCode, stderr: stderr.toString('utf8'), stdout }));
+  ]).then(([flight, stdout, stderr, exitCode]) => ({ exitCode, flight, stderr: stderr.toString('utf8'), stdout }));
 
   return { child, completed };
 };
+
+test('streams a raw Flight payload separately from its bounded inspection response', async () => {
+  const compilerRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-invoke-'));
+  try {
+    const entry = await buildInvocationEntry(compilerRoot);
+    const flightBytes = 3 * 1024 * 1024;
+    await writeFile(entry, `
+const { writeSync } = require('node:fs');
+writeSync(3, Buffer.alloc(${flightBytes}, 120));
+process.stdout.end(JSON.stringify({
+  flightBytes: ${flightBytes},
+  inspection: {
+    flight: { bytes: ${flightBytes}, preview: '', truncated: true },
+    state: { identity: { stateStoreId: 'fixture-state', stateVersion: 0 } },
+    trace: [],
+    tree: [],
+  },
+}) + '\\n');
+`);
+    const result = await invoke(entry, {
+      stateFile: join(compilerRoot, 'events.jsonl'),
+      stateStoreId: 'fixture-state',
+      type: 'mcp/runtime-status',
+    });
+
+    expect(result).toMatchObject({ exitCode: 0, stderr: '' });
+    expect(result.flight.byteLength).toBe(flightBytes);
+    expect(result.flight.byteLength).toBeLessThanOrEqual(4 * 1024 * 1024);
+    expect(result.stdout.byteLength).toBeLessThanOrEqual(4 * 1024 * 1024);
+    expect(JSON.parse(result.stdout.toString('utf8'))).toMatchObject({
+      flightBytes: result.flight.byteLength,
+      inspection: expect.any(Object),
+    });
+  } finally {
+    await rm(compilerRoot, { force: true, recursive: true });
+  }
+}, 30_000);
 
 const invoke = async (entry: string, request: Record<string, unknown>) => startInvocation(entry, request).completed;
 
@@ -146,12 +201,14 @@ test('builds a generation-contained inspection entry for Claude, Codex, and MCP 
     expect(first.stdout.toString('utf8')).toMatch(/^\{[^\n]+\}\n$/u);
 
     const firstResult = JSON.parse(first.stdout.toString('utf8')) as {
-      flightBase64: string;
+      flightBytes: number;
       inspection: Record<string, unknown>;
     };
     const secondResult = JSON.parse(second.stdout.toString('utf8')) as typeof firstResult;
     expect(inspectionShape(secondResult)).toEqual(inspectionShape(firstResult));
-    expect(firstResult.flightBase64).toMatch(/^[A-Za-z0-9+/]+={0,2}$/u);
+    expect(firstResult.flightBytes).toBe(first.flight.byteLength);
+    expect(secondResult.flightBytes).toBe(second.flight.byteLength);
+    expect(first.flight.byteLength).toBeGreaterThan(0);
     assertJsonOnly(firstResult);
     expect(firstResult.inspection).toMatchObject({
       agentVisible: 'Recorded demo.txt from claude. Shared state now contains 1 edit.',
@@ -417,11 +474,11 @@ test('redacts bounded RSC worker stderr diagnostics', async () => {
   }
 });
 
-test('caps a sub-two-megabyte Flight before its duplicated inspection response reaches stdout', async () => {
+test('caps inspection stdout independently after Flight leaves its response envelope', async () => {
   const compilerRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-invoke-'));
   try {
     const entry = await buildInvocationEntry(compilerRoot);
-    await writeFile(join(compilerRoot, 'rsc', 'rsc', 'index.js'), oversizedMcpWorker(1_500_000));
+    await writeFile(join(compilerRoot, 'rsc', 'rsc', 'index.js'), oversizedMcpWorker(2_100_000));
     const result = await invoke(entry, {
       stateFile: join(compilerRoot, 'events.jsonl'),
       stateStoreId: 'fixture-state',
@@ -446,7 +503,7 @@ test('bounds Flight output and waits for a SIGKILL cleanup when the RSC child ig
     const marker = join(compilerRoot, 'rsc-flight-child.pid');
     await writeFile(
       join(compilerRoot, 'rsc', 'rsc', 'index.js'),
-      `require('node:fs').writeFileSync(${JSON.stringify(marker)}, String(process.pid)); process.on('SIGTERM', () => undefined); process.stdout.write('x'.repeat(3 * 1024 * 1024)); setInterval(() => undefined, 1_000);\n`,
+      `require('node:fs').writeFileSync(${JSON.stringify(marker)}, String(process.pid)); process.on('SIGTERM', () => undefined); process.stdout.write('x'.repeat(5 * 1024 * 1024)); setInterval(() => undefined, 1_000);\n`,
     );
     invocation = startInvocation(entry, {
       stateFile: join(compilerRoot, 'events.jsonl'),
@@ -519,10 +576,31 @@ test('runs an exact generation-contained hook invocation and retains its immutab
     const generationId = session.status().activeVector!.runtimeGenerationId;
     await expect(session.invoke({
       expectedGenerationId: 'generation-that-does-not-exist',
-      input: {},
+      input: {
+        cwd: projectRoot,
+        hook_event_name: 'PostToolUse',
+        session_id: 'session-invocation-test',
+        tool_input: { file_path: 'timeline.ts' },
+        tool_name: 'Write',
+        tool_use_id: 'missing-generation',
+      },
       surfaceId: 'hook.claude',
       target: 'claude',
     })).rejects.toThrow('generation-that-does-not-exist');
+    expect(session.runs(50)).toEqual([]);
+
+    await expect(session.invoke({
+      expectedGenerationId: generationId,
+      input: {
+        cwd: projectRoot,
+        hook_event_name: 'PostToolUse',
+        session_id: 'session-invocation-test',
+        tool_input: { file_path: 'timeline.ts' },
+        tool_name: 'Write',
+      },
+      surfaceId: 'hook.claude',
+      target: 'claude',
+    })).rejects.toThrow('tool_use_id or event_id');
     expect(session.runs(50)).toEqual([]);
 
     const run = await session.invoke({
@@ -551,11 +629,142 @@ test('runs an exact generation-contained hook invocation and retains its immutab
     expect(flight?.body.byteLength).toBeGreaterThan(0);
     expect(session.run(run.id)).toEqual(run);
     expect(session.runs(1)).toEqual([run]);
+
+    const replacedRunDirectory = join(storageRoot, 'replaced-run-directory');
+    await mkdir(replacedRunDirectory);
+    await writeFile(join(replacedRunDirectory, 'flight.bin'), 'untrusted Flight');
+    await rm(join(storageRoot, 'runs', run.id), { force: true, recursive: true });
+    await symlink(replacedRunDirectory, join(storageRoot, 'runs', run.id), 'dir');
+    await expect(session.readRunFlight(run.id)).resolves.toBeUndefined();
   } finally {
     await session.close();
     await rm(storageRoot, { force: true, recursive: true });
   }
 }, 30_000);
+
+test('refuses to adopt an existing or symbolic provider run root', async () => {
+  const storageRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-session-run-root-'));
+  const projectRoot = process.cwd();
+  const prepared = await new ProjectService({ includeDevRuntime: true, mode: 'development', root: projectRoot }).prepare('dev');
+  const external = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-session-external-runs-'));
+  await symlink(external, join(storageRoot, 'runs'), 'dir');
+
+  try {
+    await expect(createDevRuntimeProvider().start({
+      artifactStatus: () => Object.freeze({ state: 'missing' as const }),
+      emit: () => undefined,
+      environment: Object.freeze({}),
+      projectRoot,
+      preparedRuntime: prepared.devRuntime!,
+      providerSessionId: 'session-run-root-test',
+      signal: new AbortController().signal,
+      storageRoot,
+    })).rejects.toThrow('invocation root already exists');
+    expect(await readdir(external)).toEqual([]);
+  } finally {
+    await rm(storageRoot, { force: true, recursive: true });
+    await rm(external, { force: true, recursive: true });
+  }
+}, 30_000);
+
+test('refreshes a failed run vector after its generation-contained hook mutates durable state', async () => {
+  const storageRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-session-failed-vector-'));
+  const projectRoot = process.cwd();
+  const prepared = await new ProjectService({ includeDevRuntime: true, mode: 'development', root: projectRoot }).prepare('dev');
+  const session = await createDevRuntimeProvider().start({
+    artifactStatus: () => Object.freeze({ state: 'missing' as const }),
+    emit: () => undefined,
+    environment: Object.freeze({}),
+    projectRoot,
+    preparedRuntime: prepared.devRuntime!,
+    providerSessionId: 'session-failed-vector-test',
+    signal: new AbortController().signal,
+    storageRoot,
+  });
+
+  try {
+    await waitFor(() => session.status().activeVector !== undefined, 'Timed out waiting for an active runtime generation', 15_000);
+    const generationId = session.status().activeVector!.runtimeGenerationId;
+    const entry = join(storageRoot, 'generation-store', 'generations', generationId, 'rsc', 'dev', 'invoke.js');
+    const original = `${entry}.original`;
+    await rename(entry, original);
+    await writeFile(entry, `
+process.stdout.write = () => { process.exitCode = 1; return true; };
+require(${JSON.stringify(original)});
+`);
+
+    const run = await session.invoke({
+      expectedGenerationId: generationId,
+      input: {
+        cwd: projectRoot,
+        hook_event_name: 'PostToolUse',
+        session_id: 'session-failed-vector-test',
+        tool_input: { file_path: 'failed-vector.ts' },
+        tool_name: 'Write',
+        tool_use_id: 'failed-vector-hook',
+      },
+      surfaceId: 'hook.claude',
+      target: 'claude',
+    });
+
+    expect(run).toMatchObject({ status: 'failed', vector: { runtimeGenerationId: generationId, stateVersion: 1 } });
+  } finally {
+    await session.close().catch(() => undefined);
+    await rm(storageRoot, { force: true, recursive: true });
+  }
+}, 30_000);
+
+test('pins an overlapping g1 invocation while exact replay stays on g1 and latest replay advances to g2', async () => {
+  const copied = await copyExample();
+  const storageRoot = join(copied.workspaceRoot, 'runtime-storage');
+  const prepared = await new ProjectService({ includeDevRuntime: true, mode: 'development', root: copied.projectRoot }).prepare('dev');
+  const session = await createDevRuntimeProvider().start({
+    artifactStatus: () => Object.freeze({ state: 'missing' as const }),
+    emit: () => undefined,
+    environment: Object.freeze({}),
+    projectRoot: copied.projectRoot,
+    preparedRuntime: prepared.devRuntime!,
+    providerSessionId: 'session-generation-pinning-test',
+    signal: new AbortController().signal,
+    storageRoot,
+  });
+  let blocked: Promise<unknown> | undefined;
+
+  try {
+    await waitFor(() => session.status().activeVector !== undefined, 'Timed out waiting for an active runtime generation', 15_000);
+    const g1 = session.status().activeVector!.runtimeGenerationId;
+    const target = session.surfaces().find((surface) => surface.id === 'mcp.runtime_status')!.targets[0]!;
+    const completedG1 = await session.invoke({ expectedGenerationId: g1, input: {}, surfaceId: 'mcp.runtime_status', target });
+    expect(completedG1).toMatchObject({ status: 'succeeded', vector: { runtimeGenerationId: g1 } });
+
+    const g1Worker = join(storageRoot, 'generation-store', 'generations', g1, 'rsc', 'rsc', 'index.js');
+    const originalG1Worker = await readFile(g1Worker);
+    const marker = join(storageRoot, 'g1-blocked-worker.txt');
+    await writeFile(g1Worker, `
+require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'ready');
+process.on('SIGTERM', () => undefined);
+setInterval(() => undefined, 1_000);
+`);
+    blocked = session.invoke({ expectedGenerationId: g1, input: {}, surfaceId: 'mcp.runtime_status', target });
+    await readWhenPresent(marker);
+
+    const workerSource = join(copied.projectRoot, 'src', 'rsc', 'worker.tsx');
+    const source = await readFile(workerSource, 'utf8');
+    await writeFile(workerSource, source.replace('RSC worker received an invalid event', 'RSC worker received an invalid event generation-two'));
+    await waitFor(() => session.status().activeVector?.runtimeGenerationId !== g1, 'Timed out waiting for generation two');
+    const g2 = session.status().activeVector!.runtimeGenerationId;
+    await writeFile(g1Worker, originalG1Worker);
+
+    const exact = await session.replay({ expectedGenerationId: g1, mode: 'exact', runId: completedG1.id });
+    const latest = await session.replay({ expectedGenerationId: g2, mode: 'latest', runId: completedG1.id });
+    expect(exact).toMatchObject({ status: 'succeeded', vector: { runtimeGenerationId: g1 } });
+    expect(latest).toMatchObject({ status: 'succeeded', vector: { runtimeGenerationId: g2 } });
+  } finally {
+    await session.close().catch(() => undefined);
+    await blocked?.catch(() => undefined);
+    await rm(copied.workspaceRoot, { force: true, recursive: true });
+  }
+}, 60_000);
 
 test('closes the provider-owned invocation process group without orphaning its RSC grandchild', async () => {
   const storageRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-session-close-'));
@@ -617,6 +826,47 @@ setInterval(() => undefined, 1000);
   }
 }, 30_000);
 
+test('hard-kills the invocation process group when its leader exits before an RSC grandchild', async () => {
+  const storageRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-session-leader-exit-'));
+  const projectRoot = process.cwd();
+  const prepared = await new ProjectService({ includeDevRuntime: true, mode: 'development', root: projectRoot }).prepare('dev');
+  const session = await createDevRuntimeProvider().start({
+    artifactStatus: () => Object.freeze({ state: 'missing' as const }),
+    emit: () => undefined,
+    environment: Object.freeze({}),
+    projectRoot,
+    preparedRuntime: prepared.devRuntime!,
+    providerSessionId: 'session-leader-exit-test',
+    signal: new AbortController().signal,
+    storageRoot,
+  });
+  let grandchildPid: number | undefined;
+
+  try {
+    await waitFor(() => session.status().activeVector !== undefined, 'Timed out waiting for an active runtime generation', 15_000);
+    const generationId = session.status().activeVector!.runtimeGenerationId;
+    const marker = join(storageRoot, 'rsc-invocation-leader-exit-grandchild.pid');
+    const worker = join(storageRoot, 'generation-store', 'generations', generationId, 'rsc', 'rsc', 'index.js');
+    await writeFile(worker, `
+const { spawn } = require('node:child_process');
+const { writeFileSync } = require('node:fs');
+const child = spawn(process.execPath, ['-e', 'process.on("SIGTERM", () => undefined); setInterval(() => undefined, 1000)'], { stdio: 'ignore' });
+writeFileSync(${JSON.stringify(marker)}, String(child.pid));
+process.exit(0);
+`);
+    const target = session.surfaces().find((surface) => surface.id === 'mcp.runtime_status')!.targets[0]!;
+    const run = await session.invoke({ expectedGenerationId: generationId, input: {}, surfaceId: 'mcp.runtime_status', target });
+    grandchildPid = Number(await readWhenPresent(marker));
+
+    expect(run).toMatchObject({ status: 'failed' });
+    await waitFor(() => !isProcessAlive(grandchildPid as number), 'RSC grandchild remained alive after invocation leader exit');
+  } finally {
+    if (grandchildPid !== undefined && isProcessAlive(grandchildPid)) process.kill(grandchildPid, 'SIGKILL');
+    await session.close().catch(() => undefined);
+    await rm(storageRoot, { force: true, recursive: true });
+  }
+}, 30_000);
+
 test('keeps the newest fifty immutable run artifacts and evicts the oldest completed Flight', async () => {
   const storageRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-session-history-'));
   const projectRoot = process.cwd();
@@ -663,7 +913,7 @@ test('keeps the newest fifty immutable run artifacts and evicts the oldest compl
     await expect(session.readRunFlight('../flight.bin')).resolves.toBeUndefined();
     expect(session.runs(50)).toHaveLength(50);
     expect(session.runs(50)[0]!.id).not.toBe(first.id);
-    expect(await readdir(join(storageRoot, 'runs'))).toHaveLength(50);
+    expect((await readdir(join(storageRoot, 'runs'))).filter((entry) => entry !== '.agent-bundle-runtime-owner')).toHaveLength(50);
   } finally {
     await session.close().catch(() => undefined);
     await rm(storageRoot, { force: true, recursive: true });
@@ -710,15 +960,17 @@ setInterval(() => undefined, 1000);
       target: 'claude',
     });
     const workers = ['one', 'two', 'three', 'four'].map((id) => session.invoke(request(id)));
+    const fifth = session.invoke(request('five'));
     await waitFor(() => {
       try {
-        return readFileSync(marker, 'utf8').trim().split('\n').length === 4;
+        return readFileSync(marker, 'utf8').trim().split('\n').length >= 4;
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
         throw error;
       }
     }, 'Timed out waiting for four blocked invocation workers');
-    await expect(session.invoke(request('five'))).rejects.toThrow('limit of 4 concurrent workers');
+    await expect(fifth).rejects.toThrow('limit of 4 concurrent workers');
+    expect(readFileSync(marker, 'utf8').trim().split('\n')).toHaveLength(4);
     await session.close();
     await expect(Promise.all(workers)).resolves.toEqual(expect.arrayContaining([
       expect.objectContaining({ status: 'failed' }),
@@ -767,7 +1019,24 @@ test('contains invocation stdout, stderr, and timeout failures without retaining
     const timeout = await session.invoke(request);
     expect(timeout).toMatchObject({ diagnostics: [expect.objectContaining({ message: expect.stringContaining('exceeded 10000 ms') })], status: 'failed' });
     expect(Date.now() - startedAt).toBeGreaterThanOrEqual(9_000);
-    expect(await readdir(join(storageRoot, 'runs'))).toEqual([]);
+
+    await writeFile(entry, `
+require('node:fs').writeSync(3, Buffer.from('x'));
+process.stdout.end(JSON.stringify({
+  flightBytes: 1,
+  inspection: {
+    agentVisible: 'token=worker-response-secret',
+    flight: { bytes: 1, preview: 'eA==', truncated: false },
+    state: { identity: { stateStoreId: 'playground', stateVersion: 0 } },
+    trace: [],
+    tree: [],
+  },
+}) + '\\n');
+`);
+    const credential = await session.invoke(request);
+    expect(credential).toMatchObject({ diagnostics: [expect.objectContaining({ message: expect.stringContaining('credentials') })], status: 'failed' });
+    if (credential.status === 'failed') expect(credential.diagnostics[0]!.message).not.toContain('worker-response-secret');
+    expect(await readdir(join(storageRoot, 'runs'))).toEqual(['.agent-bundle-runtime-owner']);
   } finally {
     await session.close().catch(() => undefined);
     await rm(storageRoot, { force: true, recursive: true });

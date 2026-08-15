@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { lstat, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { lstat, mkdir, open, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 import { createRsbuild, type StartDevServerResult } from '@rsbuild/core';
@@ -24,6 +25,12 @@ import type {
   SerializedRuntimeDefinition,
 } from '../runtime/contracts.js';
 import { createFileRuntimeKernel } from '../runtime/state-file.js';
+import { normalizeClaudeHook, normalizeCodexHook } from '../hook/normalize.js';
+import {
+  hasInspectionCredential,
+  isInspectionSensitiveKey,
+  redactInspectionDiagnostics,
+} from './inspection-security.js';
 import {
   RuntimeGenerationStore,
   type RuntimeGeneration,
@@ -88,6 +95,14 @@ const flightPreviewBytes = 32 * 1024;
 interface InvocationWorker {
   readonly done: Promise<void>;
   terminate(reason: Error): void;
+}
+
+interface OwnedRunsRoot {
+  readonly dev: number;
+  readonly ino: number;
+  readonly marker: string;
+  readonly root: string;
+  readonly token: string;
 }
 
 interface ValidatedInvocation {
@@ -188,14 +203,9 @@ const cloneJson = (value: unknown, ancestors = new WeakSet<object>()): JsonValue
   }
 };
 
-const redactInvocationDiagnostics = (value: string): string => value
-  .slice(0, maximumInvocationStderrBytes)
-  .replace(/((?:authorization|password|secret|token|credential|cookie)\s*[:=]\s*)(?:bearer\s+)?[^\s,;]+/giu, '$1[redacted]')
-  .replace(/\b(?:Bearer\s+|sk-[A-Za-z0-9_-]+|ghp_[A-Za-z0-9]+|xox[baprs]-[A-Za-z0-9-]+|AKIA[A-Z0-9]{16})[^\s,;]*/gu, '[redacted]');
-
 const invocationDiagnostic = (error: unknown): DevRuntimeDiagnostic => Object.freeze({
   code: 'AB8203',
-  message: error instanceof Error ? redactInvocationDiagnostics(error.message) : 'RSC runtime invocation failed.',
+  message: error instanceof Error ? redactInspectionDiagnostics(error.message) : 'RSC runtime invocation failed.',
   phase: 'rsc-render',
   severity: 'error',
 });
@@ -210,6 +220,36 @@ const deepFreeze = <T>(value: T, seen = new WeakSet<object>()): T => {
   }
   seen.delete(value);
   return Object.freeze(value);
+};
+
+const plainRecord = (value: unknown, message: string): Record<string, unknown> => {
+  if (value === null || typeof value !== 'object' || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype) {
+    throw new Error(message);
+  }
+  return value as Record<string, unknown>;
+};
+
+const assertExactKeys = (value: Record<string, unknown>, keys: readonly string[], message: string): void => {
+  const actual = Object.keys(value).sort();
+  const expected = [...keys].sort();
+  if (actual.length !== expected.length || actual.some((key, index) => key !== expected[index])) throw new Error(message);
+};
+
+const assertCredentialSafeJson = (value: unknown): void => {
+  if (value === null || typeof value === 'boolean' || typeof value === 'number') return;
+  if (typeof value === 'string') {
+    if (hasInspectionCredential(value)) throw new Error('RSC invocation worker inspection contains credentials.');
+    return;
+  }
+  if (Array.isArray(value)) {
+    value.forEach(assertCredentialSafeJson);
+    return;
+  }
+  const record = plainRecord(value, 'RSC invocation worker inspection contains a non-JSON value.');
+  for (const [key, item] of Object.entries(record)) {
+    if (isInspectionSensitiveKey(key)) throw new Error('RSC invocation worker inspection contains sensitive fields.');
+    assertCredentialSafeJson(item);
+  }
 };
 
 const clonePrepared = (prepared: DevRuntimePreparedProject): DevRuntimePreparedProject =>
@@ -310,11 +350,14 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
   readonly #mcpRegistry: RuntimeMcpRegistry;
   readonly #preparedRevisions = new Set<string>();
   readonly #invocations = new Set<Promise<DevRuntimeRun>>();
+  readonly #invocationAbort = new AbortController();
   readonly #runReadTasks = new Map<string, Set<Promise<unknown>>>();
   readonly #runRoot: string;
+  readonly #ownedRunsRoot: OwnedRunsRoot;
   readonly #stateFile: string;
   readonly #stateKernel: ReturnType<typeof createFileRuntimeKernel>;
-  readonly #runs = new Map<string, DevRuntimeRun>();
+  readonly #activeRuns = new Map<string, DevRuntimeRun>();
+  readonly #terminalRuns = new Map<string, DevRuntimeRun>();
   readonly #surfaceAssetApps = new Map<string, DevRuntimePreparedProject['apps'][number]>();
   readonly #surfaces = new Map<string, DevRuntimeSurface>();
   readonly #testing: RsbuildRuntimeSessionStartTesting;
@@ -325,12 +368,14 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
   #clientSurface: DevRuntimeClientSurfaceEndpoint | undefined;
   #closePromise: Promise<void> | undefined;
   #closed = false;
+  #evictionTail: Promise<void> = Promise.resolve();
   #generationSequence = 0;
   #failureTail: Promise<void> = Promise.resolve();
   #hmrReady = false;
   #latestAttemptSequence = 0;
   #latestPreparedRuntime: DevRuntimePreparedProject;
   #latestRscCohortRevision = 0;
+  #invocationReservations = 0;
   #providerTail: Promise<void> = Promise.resolve();
   #server: StartDevServerResult['server'] | undefined;
   #status: DevRuntimeStatus;
@@ -340,6 +385,7 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
     readonly context: DevRuntimeStartContext;
     readonly generationStore: RuntimeGenerationStore<RscRuntimeGenerationMetadata>;
     readonly mcpRegistry: RuntimeMcpRegistry;
+    readonly ownedRunsRoot: OwnedRunsRoot;
     readonly preparedRuntime: DevRuntimePreparedProject;
     readonly testing: RsbuildRuntimeSessionStartTesting;
   }>) {
@@ -349,7 +395,8 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
     this.#mcpRegistry = input.mcpRegistry;
     this.#latestPreparedRuntime = input.preparedRuntime;
     this.#testing = input.testing;
-    this.#runRoot = join(resolve(input.context.storageRoot), 'runs');
+    this.#ownedRunsRoot = input.ownedRunsRoot;
+    this.#runRoot = input.ownedRunsRoot.root;
     this.#stateFile = join(resolve(input.context.storageRoot), 'state', `${stateStoreId}.jsonl`);
     this.#stateKernel = createFileRuntimeKernel({ stateFile: this.#stateFile });
     this.#preparedRevisions.add(input.preparedRuntime.sourceRevision);
@@ -390,9 +437,10 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
       ledger.add(async () => { checkpointTracker.close(); });
       await Promise.all([
         mkdir(join(storageRoot, 'compiler'), { recursive: true }),
-        mkdir(join(storageRoot, 'runs'), { recursive: true }),
         mkdir(join(storageRoot, 'state'), { recursive: true }),
       ]);
+      const ownedRunsRoot = await RsbuildRuntimeSession.#createOwnedRunsRoot(storageRoot, context.providerSessionId);
+      ledger.add(() => RsbuildRuntimeSession.#removeOwnedRunsRoot(ownedRunsRoot));
       context.signal.throwIfAborted();
 
       const connectionState: DevRuntimeMcpConnectionState = Object.freeze({
@@ -440,6 +488,7 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
         context,
         generationStore,
         mcpRegistry,
+        ownedRunsRoot,
         preparedRuntime,
         testing,
       });
@@ -541,16 +590,32 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
 
   async readRunFlight(runId: string): Promise<DevRuntimeAsset | undefined> {
     if (this.#closed || !safeSegment(runId)) return undefined;
-    const run = this.#runs.get(runId);
+    const run = this.#terminalRuns.get(runId);
     if (run?.status !== 'succeeded' || run.vector.providerSessionId !== this.providerSessionId) return undefined;
-    const flightPath = join(this.#runRoot, runId, 'flight.bin');
-    if (!isInside(this.#runRoot, flightPath)) return undefined;
     const task = (async (): Promise<DevRuntimeAsset | undefined> => {
       try {
+        await this.#assertCurrentOwnedRunsRoot();
+        const runDirectory = join(this.#runRoot, runId);
+        if (!isInside(this.#runRoot, runDirectory)) return undefined;
+        const directoryDetails = await lstat(runDirectory);
+        if (!directoryDetails.isDirectory() || directoryDetails.isSymbolicLink()) return undefined;
+        const canonicalDirectory = await realpath(runDirectory);
+        if (!isInside(this.#runRoot, canonicalDirectory) || canonicalDirectory === this.#runRoot) return undefined;
+        const flightPath = join(canonicalDirectory, 'flight.bin');
+        if (!isInside(canonicalDirectory, flightPath)) return undefined;
         const details = await lstat(flightPath);
         if (!details.isFile() || details.isSymbolicLink() || details.size > maximumInvocationFlightBytes) return undefined;
-        const body = await readFile(flightPath);
+        const file = await open(flightPath, constants.O_RDONLY | constants.O_NOFOLLOW);
+        let body: Buffer;
+        try {
+          const opened = await file.stat();
+          if (!opened.isFile() || opened.size !== details.size || opened.size > maximumInvocationFlightBytes) return undefined;
+          body = await file.readFile();
+        } finally {
+          await file.close();
+        }
         if (body.byteLength !== details.size || body.byteLength > maximumInvocationFlightBytes) return undefined;
+        await this.#assertCurrentOwnedRunsRoot();
         return Object.freeze({ body, contentType: 'application/octet-stream' });
       } catch {
         return undefined;
@@ -581,7 +646,11 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
 
   async replay(request: DevRuntimeReplayRequest): Promise<DevRuntimeRun> {
     if (this.#closed) throw new DevRuntimeUnavailableError('RSC runtime session is closed.');
-    const historical = this.#runs.get(request.runId);
+    if (request === null || typeof request !== 'object' || !safeSegment(request.runId)) {
+      throw new TypeError('Runtime replay requires a retained run id.');
+    }
+    if (request.mode !== 'exact' && request.mode !== 'latest') throw new TypeError('Runtime replay mode is invalid.');
+    const historical = this.#terminalRuns.get(request.runId);
     if (historical === undefined) throw new Error(`Runtime run ${JSON.stringify(request.runId)} does not exist.`);
     const historicalGenerationId = historical.vector.runtimeGenerationId;
     const activeGenerationId = this.#active?.id;
@@ -593,6 +662,16 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
     }
     const expectedGenerationId = request.mode === 'exact' ? historicalGenerationId : activeGenerationId;
     if (expectedGenerationId === undefined) throw new DevRuntimeUnavailableError('RSC runtime has no active generation.');
+    if (request.mode === 'exact') {
+      let retained;
+      try {
+        retained = await this.#generationStore.lease(historicalGenerationId);
+      } catch {
+        throw new DevRuntimeGenerationConflictError(historicalGenerationId, this.#active?.id);
+      } finally {
+        await retained?.release();
+      }
+    }
     return this.invoke({
       expectedGenerationId,
       ...(historical.fixtureId === undefined ? {} : { fixtureId: historical.fixtureId }),
@@ -626,7 +705,7 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
   }
 
   run(runId: string): DevRuntimeRun | undefined {
-    return this.#closed ? undefined : this.#runs.get(runId);
+    return this.#closed ? undefined : this.#activeRuns.get(runId) ?? this.#terminalRuns.get(runId);
   }
 
   runs(limit: number): readonly DevRuntimeRun[] {
@@ -634,7 +713,7 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > maximumRunHistory) {
       throw new RangeError(`Runtime run history limit must be an integer from 1 through ${maximumRunHistory}.`);
     }
-    return Object.freeze([...this.#runs.values()].reverse().slice(0, limit));
+    return Object.freeze([...this.#terminalRuns.values()].reverse().slice(0, limit));
   }
 
   status(): DevRuntimeStatus {
@@ -649,25 +728,22 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
     const invocation = this.#validateInvocation(request);
     const generationId = invocation.request.expectedGenerationId ?? this.#active?.id;
     if (generationId === undefined) throw new DevRuntimeUnavailableError('RSC runtime has no active generation.');
-    if (this.#workers.size >= maximumInvocationWorkers) {
-      throw new Error(`RSC runtime invocation limit of ${maximumInvocationWorkers} concurrent workers has been reached.`);
-    }
+    const releaseReservation = this.#reserveInvocation();
 
     let lease;
     try {
       lease = await this.#generationStore.lease(generationId);
     } catch {
+      releaseReservation();
       throw new DevRuntimeGenerationConflictError(generationId, this.#active?.id);
     }
 
     let runDirectory: string | undefined;
     let running: DevRuntimeRun | undefined;
     try {
-      if (this.#closed) throw new DevRuntimeUnavailableError('RSC runtime session is closed.');
-      if (this.#workers.size >= maximumInvocationWorkers) {
-        throw new Error(`RSC runtime invocation limit of ${maximumInvocationWorkers} concurrent workers has been reached.`);
-      }
+      this.#assertInvocationOpen();
       const stateBefore = await this.#stateKernel.readSnapshot();
+      this.#assertInvocationOpen();
       const runId = randomUUID();
       const startedAt = new Date().toISOString();
       running = Object.freeze({
@@ -680,13 +756,14 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
         target: invocation.request.target,
         vector: this.#vector(lease.generation, stateBefore.stateVersion),
       });
-      await this.#insertRun(running);
+      this.#activeRuns.set(runId, running);
       runDirectory = join(this.#runRoot, runId);
       if (!isInside(this.#runRoot, runDirectory) || !safeSegment(runId)) {
         throw new Error('RSC runtime run directory escaped its provider storage root.');
       }
+      await this.#assertCurrentOwnedRunsRoot();
       await mkdir(runDirectory, { recursive: false });
-      if (this.#closed) throw new DevRuntimeUnavailableError('RSC runtime session is closed.');
+      this.#assertInvocationOpen();
       this.#emit(Object.freeze({ runId, runtimeGenerationId: lease.generation.id, type: 'runtime.run.started' }));
 
       const response = await this.#runInvocationWorker({
@@ -694,11 +771,14 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
         input: await this.#workerRequest(invocation),
         runId,
       });
-      const flight = this.#decodeFlight(response.flightBase64);
+      this.#assertInvocationOpen();
+      const flight = response.flight;
       const stateAfter = await this.#stateKernel.readSnapshot();
+      this.#assertInvocationOpen();
       const result = this.#inspectionResult(response.inspection, flight, stateAfter.stateVersion, runId);
       const flightPath = join(runDirectory, 'flight.bin');
       if (!isInside(runDirectory, flightPath)) throw new Error('RSC runtime Flight path escaped its run directory.');
+      await this.#assertCurrentOwnedRunsRoot();
       await writeFile(flightPath, flight, { flag: 'wx' });
       const completed = Object.freeze({
         ...(invocation.fixtureId === undefined ? {} : { fixtureId: invocation.fixtureId }),
@@ -712,12 +792,15 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
         target: invocation.request.target,
         vector: this.#vector(lease.generation, stateAfter.stateVersion),
       });
-      this.#runs.set(runId, completed);
+      this.#activeRuns.delete(runId);
+      await this.#recordTerminal(completed);
       this.#emit(Object.freeze({ runId, runtimeGenerationId: lease.generation.id, type: 'runtime.run.completed' }));
       return completed;
     } catch (error) {
-      if (runDirectory !== undefined) await rm(runDirectory, { force: true, recursive: true }).catch(() => undefined);
+      if (runDirectory !== undefined) await this.#removeRunDirectory(running?.id).catch(() => undefined);
       if (running === undefined) throw error;
+      this.#activeRuns.delete(running.id);
+      const stateAfter = await this.#readTerminalStateVersion(running.vector.stateVersion);
       const failed = Object.freeze({
         ...(running.fixtureId === undefined ? {} : { fixtureId: running.fixtureId }),
         completedAt: new Date().toISOString(),
@@ -728,14 +811,35 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
         status: 'failed' as const,
         surfaceId: running.surfaceId,
         target: running.target,
-        vector: running.vector,
+        vector: this.#vector(lease.generation, stateAfter),
       });
-      this.#runs.set(running.id, failed);
+      await this.#recordTerminal(failed);
       this.#emit(Object.freeze({ runId: running.id, runtimeGenerationId: lease.generation.id, type: 'runtime.run.failed' }));
       return failed;
     } finally {
       await lease.release();
+      releaseReservation();
     }
+  }
+
+  #assertInvocationOpen(): void {
+    if (this.#closed || this.#invocationAbort.signal.aborted) {
+      throw new DevRuntimeUnavailableError('RSC runtime session is closed.');
+    }
+  }
+
+  #reserveInvocation(): () => void {
+    this.#assertInvocationOpen();
+    if (this.#invocationReservations >= maximumInvocationWorkers) {
+      throw new Error(`RSC runtime invocation limit of ${maximumInvocationWorkers} concurrent workers has been reached.`);
+    }
+    this.#invocationReservations += 1;
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      this.#invocationReservations -= 1;
+    };
   }
 
   #validateInvocation(request: DevRuntimeInvocationRequest): ValidatedInvocation {
@@ -766,9 +870,26 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
         throw new Error(`Runtime surface ${JSON.stringify(surface.id)} has no fixture ${JSON.stringify(request.fixtureId)}.`);
       }
     }
+    const input = cloneJson(request.input);
+    if (surface.id === 'hook.claude' || surface.id === 'hook.codex') {
+      if (input === null || typeof input !== 'object' || Array.isArray(input)) {
+        throw new TypeError('Native hook runtime invocation input must be an object.');
+      }
+      const hookInput = input as Record<string, unknown>;
+      if (surface.id === 'hook.claude') normalizeClaudeHook(hookInput);
+      else normalizeCodexHook(hookInput);
+    } else if (
+      surface.id === 'mcp.render_edit_timeline' ||
+      surface.id === 'mcp.recent_edits' ||
+      surface.id === 'mcp.runtime_status'
+    ) {
+      if (input === null || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).length !== 0) {
+        throw new TypeError(`Runtime surface ${JSON.stringify(surface.id)} requires an empty object input.`);
+      }
+    }
     return Object.freeze({
       ...(request.fixtureId === undefined ? {} : { fixtureId: request.fixtureId }),
-      input: cloneJson(request.input),
+      input,
       request: Object.freeze({ ...request }),
       surface,
     });
@@ -798,19 +919,47 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
     return Object.freeze({ stateFile: this.#stateFile, stateStoreId, type: 'mcp/runtime-status' });
   }
 
-  async #insertRun(run: DevRuntimeRun): Promise<void> {
-    this.#runs.set(run.id, run);
-    while (this.#runs.size > maximumRunHistory) {
-      const oldestId = this.#runs.keys().next().value as string | undefined;
+  async #readTerminalStateVersion(fallback: number): Promise<number> {
+    try {
+      return (await this.#stateKernel.readSnapshot()).stateVersion;
+    } catch {
+      return fallback;
+    }
+  }
+
+  async #recordTerminal(run: DevRuntimeRun): Promise<void> {
+    this.#terminalRuns.set(run.id, run);
+    const eviction = this.#evictionTail.then(() => this.#evictTerminalRuns());
+    this.#evictionTail = eviction.catch(() => undefined);
+    await eviction;
+  }
+
+  async #evictTerminalRuns(): Promise<void> {
+    while (this.#terminalRuns.size > maximumRunHistory) {
+      const oldestId = this.#terminalRuns.keys().next().value as string | undefined;
       if (oldestId === undefined) return;
-      this.#runs.delete(oldestId);
+      this.#terminalRuns.delete(oldestId);
       const reads = this.#runReadTasks.get(oldestId);
       if (reads !== undefined) await Promise.allSettled([...reads]);
-      const oldDirectory = join(this.#runRoot, oldestId);
-      if (safeSegment(oldestId) && isInside(this.#runRoot, oldDirectory)) {
-        await rm(oldDirectory, { force: true, recursive: true });
-      }
+      await this.#removeRunDirectory(oldestId);
     }
+  }
+
+  async #removeRunDirectory(runId: string | undefined): Promise<void> {
+    if (runId === undefined || !safeSegment(runId)) return;
+    await this.#assertCurrentOwnedRunsRoot();
+    const directory = join(this.#runRoot, runId);
+    if (!isInside(this.#runRoot, directory)) throw new Error('RSC runtime run directory escaped its provider storage root.');
+    const details = await lstat(directory).catch((error: unknown) => {
+      const code = error instanceof Error && 'code' in error ? error.code : undefined;
+      if (code === 'ENOENT') return undefined;
+      throw error;
+    });
+    if (details === undefined) return;
+    if (!details.isDirectory() || details.isSymbolicLink()) {
+      throw new Error('RSC runtime run directory is not a contained non-symbolic directory.');
+    }
+    await rm(directory, { force: true, recursive: true });
   }
 
   #inspectionResult(
@@ -834,22 +983,47 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
     });
   }
 
-  #decodeFlight(value: unknown): Buffer {
-    if (typeof value !== 'string' || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(value)) {
-      throw new Error('RSC invocation response did not contain valid base64 Flight data.');
+  #validateWorkerResponse(value: unknown, flightBytes: number): DevRuntimeInspectionEnvelope {
+    const response = plainRecord(value, 'RSC invocation worker emitted an invalid response.');
+    assertExactKeys(response, ['flightBytes', 'inspection'], 'RSC invocation worker response has unsupported fields.');
+    if (
+      typeof response.flightBytes !== 'number' || !Number.isSafeInteger(response.flightBytes) ||
+      response.flightBytes < 0 || response.flightBytes > maximumInvocationFlightBytes || response.flightBytes !== flightBytes
+    ) {
+      throw new Error('RSC invocation worker Flight framing is invalid.');
     }
-    const flight = Buffer.from(value, 'base64');
-    if (flight.byteLength > maximumInvocationFlightBytes) {
-      throw new Error(`RSC invocation Flight exceeded ${maximumInvocationFlightBytes} bytes.`);
+    const inspection = plainRecord(response.inspection, 'RSC invocation worker inspection is invalid.');
+    const allowed = new Set(['agentVisible', 'app', 'flight', 'modelVisible', 'native', 'protocol', 'state', 'trace', 'tree']);
+    if (Object.keys(inspection).some((key) => !allowed.has(key))) {
+      throw new Error('RSC invocation worker inspection has unsupported fields.');
     }
-    return flight;
+    const flight = plainRecord(inspection.flight, 'RSC invocation worker inspection is missing Flight metadata.');
+    assertExactKeys(flight, ['bytes', 'preview', 'truncated'], 'RSC invocation worker Flight metadata is invalid.');
+    if (flight.bytes !== flightBytes || typeof flight.preview !== 'string' || typeof flight.truncated !== 'boolean') {
+      throw new Error('RSC invocation worker Flight metadata does not match its raw Flight stream.');
+    }
+    const state = plainRecord(inspection.state, 'RSC invocation worker inspection is missing state metadata.');
+    const stateKeys = Object.keys(state).sort();
+    if (stateKeys.length < 1 || stateKeys.length > 2 || stateKeys[0] !== 'identity' || (stateKeys.length === 2 && stateKeys[1] !== 'snapshot')) {
+      throw new Error('RSC invocation worker state metadata is invalid.');
+    }
+    const identity = plainRecord(state.identity, 'RSC invocation worker state identity is invalid.');
+    assertExactKeys(identity, ['stateStoreId', 'stateVersion'], 'RSC invocation worker state identity is invalid.');
+    if (identity.stateStoreId !== stateStoreId || !Number.isSafeInteger(identity.stateVersion) || (identity.stateVersion as number) < 0) {
+      throw new Error('RSC invocation worker state identity is invalid.');
+    }
+    if (!Array.isArray(inspection.trace) || !Array.isArray(inspection.tree)) {
+      throw new Error('RSC invocation worker inspection is missing trace or tree output.');
+    }
+    assertCredentialSafeJson(inspection);
+    return deepFreeze(inspection as unknown as DevRuntimeInspectionEnvelope);
   }
 
   #runInvocationWorker(input: Readonly<{
     readonly generation: RuntimeGeneration<RscRuntimeGenerationMetadata>;
     readonly input: JsonObject;
     readonly runId: string;
-  }>): Promise<Readonly<{ readonly flightBase64: string; readonly inspection: DevRuntimeInspectionEnvelope }>> {
+  }>): Promise<Readonly<{ readonly flight: Buffer; readonly inspection: DevRuntimeInspectionEnvelope }>> {
     const entry = join(input.generation.root, 'rsc', 'dev', 'invoke.js');
     if (!isInside(input.generation.root, entry)) return Promise.reject(new Error('RSC invocation entry escaped its generation root.'));
     const child = spawn(process.execPath, [entry], {
@@ -860,55 +1034,62 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
         AGENT_RUNTIME_STATE_FILE: this.#stateFile,
         NODE_ENV: 'development',
       },
-      stdio: ['pipe', 'pipe', 'pipe'],
+      stdio: ['pipe', 'pipe', 'pipe', 'pipe'],
       windowsHide: true,
     });
     const stdout = child.stdout;
     const stderr = child.stderr;
-    if (stdout === null || stderr === null) {
+    const flightOutput = child.stdio[3] as NodeJS.ReadableStream | undefined;
+    const processGroupId = child.pid;
+    if (stdout === null || stderr === null || flightOutput === undefined || flightOutput === null || processGroupId === undefined) {
       child.kill('SIGKILL');
       return Promise.reject(new Error('RSC invocation worker streams are unavailable.'));
     }
 
     let termination: Error | undefined;
-    let terminationGrace: ReturnType<typeof setTimeout> | undefined;
     let timeout: ReturnType<typeof setTimeout> | undefined;
     let settled = false;
     let stdoutBytes = 0;
     let stderrBytes = 0;
+    let flightBytes = 0;
     const stdoutChunks: Buffer[] = [];
     const stderrChunks: Buffer[] = [];
-    const signalGroup = (signal: NodeJS.Signals): void => {
-      if (child.pid === undefined) return;
+    const flightChunks: Buffer[] = [];
+    const signalGroup = async (signal: NodeJS.Signals): Promise<void> => {
       try {
         if (process.platform !== 'win32') {
-          process.kill(-child.pid, signal);
+          process.kill(-processGroupId, signal);
           return;
         }
-        if (signal === 'SIGKILL') {
-          const terminator = spawn('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
-          terminator.unref();
-          return;
-        }
-        child.kill(signal);
+        await new Promise<void>((resolve) => {
+          const terminator = spawn('taskkill', [
+            '/PID', String(processGroupId), '/T', ...(signal === 'SIGKILL' ? ['/F'] : []),
+          ], { stdio: 'ignore', windowsHide: true });
+          terminator.once('error', () => resolve());
+          terminator.once('close', () => resolve());
+        });
       } catch {
         try { child.kill(signal); } catch { /* Child already exited. */ }
       }
     };
+    let terminationTask: Promise<void> | undefined;
     const terminate = (reason: Error): void => {
-      if (termination !== undefined || settled) return;
+      if (termination !== undefined) return;
       termination = reason;
       child.stdin.destroy();
-      signalGroup('SIGTERM');
-      terminationGrace = setTimeout(() => signalGroup('SIGKILL'), invocationTerminationGraceMs);
+      terminationTask = (async () => {
+        await signalGroup('SIGTERM');
+        await new Promise<void>((resolve) => setTimeout(resolve, invocationTerminationGraceMs));
+        await signalGroup('SIGKILL');
+      })();
     };
 
-    const response = new Promise<Readonly<{ readonly flightBase64: string; readonly inspection: DevRuntimeInspectionEnvelope }>>((resolveResponse, rejectResponse) => {
-      const finish = (callback: () => void): void => {
+    const response = new Promise<Readonly<{ readonly flight: Buffer; readonly inspection: DevRuntimeInspectionEnvelope }>>((resolveResponse, rejectResponse) => {
+      const finish = async (callback: () => void): Promise<void> => {
         if (settled) return;
         settled = true;
         if (timeout !== undefined) clearTimeout(timeout);
-        if (terminationGrace !== undefined) clearTimeout(terminationGrace);
+        await terminationTask;
         callback();
       };
       stdout.on('data', (chunk: Buffer | string) => {
@@ -922,6 +1103,17 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
         stdoutChunks.push(bytes);
       });
       stdout.once('error', () => terminate(new Error('RSC invocation stdout stream failed.')));
+      flightOutput.on('data', (chunk: Buffer | string) => {
+        if (termination !== undefined) return;
+        const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+        flightBytes += bytes.byteLength;
+        if (flightBytes > maximumInvocationFlightBytes) {
+          terminate(new Error(`RSC invocation Flight exceeded ${maximumInvocationFlightBytes} bytes.`));
+          return;
+        }
+        flightChunks.push(bytes);
+      });
+      flightOutput.once('error', () => terminate(new Error('RSC invocation Flight stream failed.')));
       stderr.on('data', (chunk: Buffer | string) => {
         const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
         const retained = Math.min(bytes.byteLength, Math.max(0, maximumInvocationStderrBytes - stderrBytes));
@@ -935,14 +1127,16 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
       child.stdin.once('error', () => terminate(new Error('RSC invocation request stream failed.')));
       child.once('error', (error) => terminate(new Error(`RSC invocation worker could not be started: ${error.message}`)));
       child.once('close', (code) => {
-        const diagnostics = redactInvocationDiagnostics(Buffer.concat(stderrChunks).toString('utf8'));
+        const diagnostics = redactInspectionDiagnostics(Buffer.concat(stderrChunks).toString('utf8'));
         if (termination !== undefined) {
           const message = termination.message;
-          finish(() => rejectResponse(new Error(`${message}${diagnostics.length === 0 ? '' : `: ${diagnostics}`}`)));
+          void finish(() => rejectResponse(new Error(`${message}${diagnostics.length === 0 ? '' : `: ${diagnostics}`}`)));
           return;
         }
         if (code !== 0) {
-          finish(() => rejectResponse(new Error(`RSC invocation worker exited with code ${String(code)}${diagnostics.length === 0 ? '' : `: ${diagnostics}`}`)));
+          const failure = new Error(`RSC invocation worker exited with code ${String(code)}${diagnostics.length === 0 ? '' : `: ${diagnostics}`}`);
+          terminate(failure);
+          void finish(() => rejectResponse(failure));
           return;
         }
         try {
@@ -950,22 +1144,15 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
           if (!output.endsWith('\n') || output.indexOf('\n') !== output.length - 1) {
             throw new Error('RSC invocation worker did not emit exactly one JSON response line.');
           }
-          const parsed = JSON.parse(output) as unknown;
-          if (
-            parsed === null || typeof parsed !== 'object' || Array.isArray(parsed) ||
-            typeof (parsed as { flightBase64?: unknown }).flightBase64 !== 'string' ||
-            (parsed as { inspection?: unknown }).inspection === null ||
-            typeof (parsed as { inspection?: unknown }).inspection !== 'object' ||
-            Array.isArray((parsed as { inspection?: unknown }).inspection)
-          ) {
-            throw new Error('RSC invocation worker emitted an invalid response.');
-          }
-          finish(() => resolveResponse(Object.freeze({
-            flightBase64: (parsed as { flightBase64: string }).flightBase64,
-            inspection: deepFreeze((parsed as { inspection: DevRuntimeInspectionEnvelope }).inspection),
+          const parsed = this.#validateWorkerResponse(JSON.parse(output), flightBytes);
+          void finish(() => resolveResponse(Object.freeze({
+            flight: Buffer.concat(flightChunks),
+            inspection: parsed,
           })));
         } catch (error) {
-          finish(() => rejectResponse(error instanceof Error ? error : new Error('RSC invocation worker emitted invalid JSON.')));
+          const failure = error instanceof Error ? error : new Error('RSC invocation worker emitted invalid JSON.');
+          terminate(failure);
+          void finish(() => rejectResponse(failure));
         }
       });
       timeout = setTimeout(() => terminate(new Error(`RSC invocation worker exceeded ${invocationTimeoutMs} ms.`)), invocationTimeoutMs);
@@ -1246,6 +1433,7 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
 
   async #close(): Promise<void> {
     this.#closed = true;
+    this.#invocationAbort.abort(new Error('RSC runtime session is closing.'));
     this.#hmrReady = false;
     for (const attempt of [...this.#attempts.values()]) attempt.settle();
     for (const worker of this.#workers.values()) {
@@ -1260,7 +1448,8 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
     while (this.#runReadTasks.size > 0) {
       await Promise.allSettled([...this.#runReadTasks.values()].flatMap((reads) => [...reads]));
     }
-    await rm(this.#runRoot, { force: true, recursive: true });
+    await this.#evictionTail;
+    await RsbuildRuntimeSession.#removeOwnedRunsRoot(this.#ownedRunsRoot);
     await Promise.all([this.#providerTail.catch(() => undefined), this.#failureTail]);
     const results = await Promise.allSettled([
       this.#server?.close() ?? Promise.resolve(),
@@ -1383,6 +1572,63 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
       stateStoreId,
       stateVersion,
     });
+  }
+
+  static async #createOwnedRunsRoot(storageRoot: string, providerSessionId: string): Promise<OwnedRunsRoot> {
+    await mkdir(storageRoot, { recursive: true });
+    const canonicalStorageRoot = await realpath(storageRoot);
+    const candidate = join(canonicalStorageRoot, 'runs');
+    try {
+      await mkdir(candidate);
+    } catch (error) {
+      const code = error instanceof Error && 'code' in error ? error.code : undefined;
+      if (code === 'EEXIST') {
+        throw new Error('RSC runtime invocation root already exists and is not owned by this provider session.', { cause: error });
+      }
+      throw error;
+    }
+    try {
+      const root = await realpath(candidate);
+      const details = await lstat(root);
+      if (!isInside(canonicalStorageRoot, root) || !details.isDirectory() || details.isSymbolicLink()) {
+        throw new Error('RSC runtime invocation root is not a contained non-symbolic directory.');
+      }
+      const marker = join(root, '.agent-bundle-runtime-owner');
+      const token = `${providerSessionId}:${randomUUID()}`;
+      await writeFile(marker, token, { flag: 'wx' });
+      const markerDetails = await lstat(marker);
+      if (!markerDetails.isFile() || markerDetails.isSymbolicLink()) {
+        throw new Error('RSC runtime invocation root ownership marker is unsafe.');
+      }
+      return Object.freeze({ dev: details.dev, ino: details.ino, marker, root, token });
+    } catch (error) {
+      await rm(candidate, { force: true, recursive: true }).catch(() => undefined);
+      throw error;
+    }
+  }
+
+  static async #assertOwnedRunsRoot(owned: OwnedRunsRoot): Promise<void> {
+    const details = await lstat(owned.root);
+    if (
+      !details.isDirectory() || details.isSymbolicLink() ||
+      details.dev !== owned.dev || details.ino !== owned.ino ||
+      await realpath(owned.root) !== owned.root
+    ) {
+      throw new Error('RSC runtime invocation root ownership changed during this provider session.');
+    }
+    const markerDetails = await lstat(owned.marker);
+    if (!markerDetails.isFile() || markerDetails.isSymbolicLink() || await readFile(owned.marker, 'utf8') !== owned.token) {
+      throw new Error('RSC runtime invocation root ownership marker changed during this provider session.');
+    }
+  }
+
+  static async #removeOwnedRunsRoot(owned: OwnedRunsRoot): Promise<void> {
+    await RsbuildRuntimeSession.#assertOwnedRunsRoot(owned);
+    await rm(owned.root, { force: true, recursive: true });
+  }
+
+  #assertCurrentOwnedRunsRoot(): Promise<void> {
+    return RsbuildRuntimeSession.#assertOwnedRunsRoot(this.#ownedRunsRoot);
   }
 
   #validatePreparedRuntime(prepared: DevRuntimePreparedProject): void {

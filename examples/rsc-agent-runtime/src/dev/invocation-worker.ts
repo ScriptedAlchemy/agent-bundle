@@ -1,4 +1,5 @@
 import { requestFlightRenderWithFlight } from '../flight/request-render.js';
+import { writeSync } from 'node:fs';
 import { lowerHookResult } from '../runtime/lower-hook.js';
 import { lowerMcpResult } from '../runtime/lower-mcp.js';
 import type {
@@ -14,7 +15,7 @@ import { hasInspectionCredential, isInspectionSensitiveKey } from './inspection-
 import { serializeInspection } from './serialize-inspection.js';
 
 const maximumInvocationRequestBytes = 1024 * 1024;
-const maximumInvocationFlightBytes = 2 * 1024 * 1024;
+const maximumInvocationFlightBytes = 4 * 1024 * 1024;
 const maximumInvocationResponseBytes = 4 * 1024 * 1024;
 
 const asRecord = (value: unknown): Record<string, unknown> | undefined =>
@@ -175,7 +176,12 @@ const statusStateVersion = (protocol: ReturnType<typeof lowerMcpResult>): number
   return stateVersion;
 };
 
-const invoke = async (signal?: AbortSignal): Promise<DevRuntimeInspectionResponse> => {
+interface InvocationOutput {
+  readonly flight: Buffer;
+  readonly response: DevRuntimeInspectionResponse;
+}
+
+const invoke = async (signal?: AbortSignal): Promise<InvocationOutput> => {
   const request = await readRequest();
   const rendered = await requestFlightRenderWithFlight(renderRequestFor(request), {
     maximumFlightBytes: maximumInvocationFlightBytes,
@@ -185,14 +191,17 @@ const invoke = async (signal?: AbortSignal): Promise<DevRuntimeInspectionRespons
   if (request.type === 'hook/after-file-edit') {
     const native = lowerHookResult(rendered.node);
     return Object.freeze({
-      flightBase64: Buffer.from(rendered.flight).toString('base64'),
-      inspection: serializeInspection({
+      flight: Buffer.from(rendered.flight),
+      response: Object.freeze({
+        flightBytes: rendered.flight.byteLength,
+        inspection: serializeInspection({
         agentVisible: native.hookSpecificOutput.additionalContext,
         flight: rendered.flight,
         native,
         node: rendered.node,
         stateStoreId: request.stateStoreId,
         stateVersion: hookStateVersion(native),
+        }),
       }),
     });
   }
@@ -200,14 +209,17 @@ const invoke = async (signal?: AbortSignal): Promise<DevRuntimeInspectionRespons
   const protocol = lowerMcpResult(rendered.node);
   const stateVersion = request.type === 'mcp/render-timeline' ? request.snapshot.stateVersion : statusStateVersion(protocol);
   return Object.freeze({
-    flightBase64: Buffer.from(rendered.flight).toString('base64'),
-    inspection: serializeInspection({
+    flight: Buffer.from(rendered.flight),
+    response: Object.freeze({
+      flightBytes: rendered.flight.byteLength,
+      inspection: serializeInspection({
       flight: rendered.flight,
       modelVisible: protocol.content,
       node: rendered.node,
       protocol,
       stateStoreId: request.stateStoreId,
       stateVersion,
+      }),
     }),
   });
 };
@@ -217,7 +229,15 @@ const abort = (): void => controller.abort();
 process.once('SIGINT', abort);
 process.once('SIGTERM', abort);
 
-const writeResponse = (response: DevRuntimeInspectionResponse): void => {
+const writeFlight = (flight: Buffer): void => {
+  let offset = 0;
+  while (offset < flight.byteLength) {
+    offset += writeSync(3, flight, offset, flight.byteLength - offset);
+  }
+};
+
+const writeResponse = ({ flight, response }: InvocationOutput): void => {
+  writeFlight(flight);
   const line = `${JSON.stringify(response)}\n`;
   if (Buffer.byteLength(line, 'utf8') > maximumInvocationResponseBytes) {
     throw new Error('Inspection response exceeded output limit');
