@@ -13,7 +13,6 @@ import { normalizeClaudeHook, normalizeCodexHook } from '../hook/normalize.js';
 
 import { hasInspectionCredential, isInspectionSensitiveKey } from './inspection-security.js';
 import { serializeInspection } from './serialize-inspection.js';
-import { createFileRuntimeKernel } from '../runtime/state-file.js';
 
 const maximumInvocationRequestBytes = 1024 * 1024;
 const maximumInvocationFlightBytes = 4 * 1024 * 1024;
@@ -158,26 +157,6 @@ const renderRequestFor = (request: DevRuntimeInspectionRequest): RenderRequest =
   return { stateFile: request.stateFile, type: request.type };
 };
 
-const postRenderStateVersion = async (stateFile: string): Promise<number> => {
-  const stateVersion = (await createFileRuntimeKernel({ stateFile }).readSnapshot()).stateVersion;
-  if (!Number.isSafeInteger(stateVersion) || stateVersion < 0) {
-    throw new Error('Rendered runtime state contained an invalid state version');
-  }
-  return stateVersion;
-};
-
-const statusStateVersion = (protocol: ReturnType<typeof lowerMcpResult>): number => {
-  const structuredContent = protocol.structuredContent;
-  if (structuredContent === null || typeof structuredContent !== 'object' || Array.isArray(structuredContent)) {
-    throw new Error('Rendered MCP result did not contain a state version');
-  }
-  const stateVersion = (structuredContent as Record<string, unknown>).stateVersion;
-  if (typeof stateVersion !== 'number' || !Number.isSafeInteger(stateVersion) || stateVersion < 0) {
-    throw new Error('Rendered MCP result contained an invalid state version');
-  }
-  return stateVersion;
-};
-
 interface InvocationOutput {
   readonly flight: Buffer;
   readonly response: DevRuntimeInspectionResponse;
@@ -202,14 +181,13 @@ const invoke = async (signal?: AbortSignal): Promise<InvocationOutput> => {
         native,
         node: rendered.node,
         stateStoreId: request.stateStoreId,
-        stateVersion: await postRenderStateVersion(request.stateFile),
+        stateVersion: rendered.stateVersion,
         }),
       }),
     });
   }
 
   const protocol = lowerMcpResult(rendered.node);
-  const stateVersion = request.type === 'mcp/render-timeline' ? request.snapshot.stateVersion : statusStateVersion(protocol);
   return Object.freeze({
     flight: Buffer.from(rendered.flight),
     response: Object.freeze({
@@ -220,7 +198,7 @@ const invoke = async (signal?: AbortSignal): Promise<InvocationOutput> => {
       node: rendered.node,
       protocol,
       stateStoreId: request.stateStoreId,
-      stateVersion,
+      stateVersion: rendered.stateVersion,
       }),
     }),
   });

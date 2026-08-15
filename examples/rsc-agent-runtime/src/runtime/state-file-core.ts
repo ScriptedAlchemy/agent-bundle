@@ -10,6 +10,7 @@ import type {
   RuntimeKernel,
   RuntimeMutationOptions,
   RuntimeSnapshot,
+  RuntimeSnapshotReadOptions,
   RuntimeStateRecord,
 } from './contracts.js';
 
@@ -271,6 +272,12 @@ const delay = async (milliseconds: number, signal: AbortSignal): Promise<void> =
 const validateLimit = (limit: number | undefined): void => {
   if (limit !== undefined && (!Number.isInteger(limit) || limit < 1 || limit > 50)) {
     throw new RangeError('limit must be an integer from 1 through 50');
+  }
+};
+
+const validateStateVersion = (stateVersion: number | undefined): void => {
+  if (stateVersion !== undefined && (!Number.isSafeInteger(stateVersion) || stateVersion < 0)) {
+    throw new RangeError('stateVersion must be a nonnegative safe integer');
   }
 };
 
@@ -537,11 +544,16 @@ export const createRuntimeStateKernel = ({
     }
   };
 
-  const readSnapshot = async ({ limit }: { limit?: number } = {}): Promise<RuntimeSnapshot> => {
+  const readSnapshot = async ({ limit, stateVersion }: RuntimeSnapshotReadOptions = {}): Promise<RuntimeSnapshot> => {
     validateLimit(limit);
+    validateStateVersion(stateVersion);
     assertHealthy();
     const controller = new AbortController();
     const parsed = parseSnapshot(await storage.read(stateFile, controller.signal));
+    if (stateVersion !== undefined) {
+      if (stateVersion > parsed.records.length) throw new RangeError(`state version ${stateVersion} is unavailable`);
+      return snapshotForRecords(parsed.records.slice(0, stateVersion), limit);
+    }
     return snapshotForRecords(parsed.records, limit);
   };
 

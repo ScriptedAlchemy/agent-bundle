@@ -51,7 +51,14 @@ export interface RuntimeKernel {
     input: Readonly<{ idempotencyKey: string; seed?: JsonValue }>,
     options?: RuntimeMutationOptions,
   ): Promise<RuntimeSnapshot>;
-  readSnapshot(options?: { limit?: number }): Promise<RuntimeSnapshot>;
+  readSnapshot(options?: RuntimeSnapshotReadOptions): Promise<RuntimeSnapshot>;
+}
+
+/** Internal durable-state read options; this is not part of the runtime provider protocol. */
+export interface RuntimeSnapshotReadOptions {
+  readonly limit?: number;
+  /** Reconstruct the exact validated durable prefix at this version. */
+  readonly stateVersion?: number;
 }
 
 export interface RuntimeMutationOptions {

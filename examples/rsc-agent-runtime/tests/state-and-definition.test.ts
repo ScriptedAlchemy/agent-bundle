@@ -286,6 +286,55 @@ test('preserves reset seeds across immediate, idempotent, reopened, limited, and
   await expect(createFileRuntimeKernel({ stateFile }).readSnapshot()).resolves.toEqual({ edits: [], stateVersion: 4 });
 });
 
+test('reconstructs an exact durable snapshot version through edits, resets, and idempotent replays', async () => {
+  const stateFile = join(await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-')), 'state.jsonl');
+  const kernel = createFileRuntimeKernel({
+    stateFile,
+    createId: () => 'exact-version-edit',
+    now: () => new Date('2026-08-15T01:00:00.000Z'),
+  });
+  const readExact = (stateVersion: number) => kernel.readSnapshot({ stateVersion });
+
+  await kernel.recordEdit({
+    host: 'claude',
+    idempotencyKey: 'test:state:exact-before-reset',
+    path: 'before-reset.ts',
+    sessionId: 'exact-version-session',
+    toolName: 'Write',
+  });
+  const seed = Object.freeze({ reason: 'exact-version-reset' });
+  await kernel.resetState({ idempotencyKey: 'test:state:exact-reset', seed });
+  const afterReset = await kernel.recordEdit({
+    host: 'codex',
+    idempotencyKey: 'test:state:exact-after-reset',
+    path: 'after-reset.ts',
+    sessionId: 'exact-version-session',
+    toolName: 'apply_patch',
+  });
+  await expect(kernel.recordEdit({
+    host: 'codex',
+    idempotencyKey: 'test:state:exact-after-reset',
+    path: 'after-reset.ts',
+    sessionId: 'exact-version-session',
+    toolName: 'apply_patch',
+  })).resolves.toEqual(afterReset);
+
+  await expect(readExact(0)).resolves.toEqual({ edits: [], stateVersion: 0 });
+  await expect(readExact(1)).resolves.toMatchObject({
+    edits: [expect.objectContaining({ path: 'before-reset.ts' })],
+    stateVersion: 1,
+  });
+  await expect(readExact(2)).resolves.toEqual({ edits: [], seed, stateVersion: 2 });
+  await expect(readExact(3)).resolves.toMatchObject({
+    edits: [expect.objectContaining({ path: 'after-reset.ts' })],
+    seed,
+    stateVersion: 3,
+  });
+  await expect(readExact(4)).rejects.toThrow('state version 4 is unavailable');
+  await expect(readExact(-1)).rejects.toThrow(RangeError);
+  await expect(readExact(1.5)).rejects.toThrow(RangeError);
+});
+
 test('rejects terminated JSONL corruption while preserving only an incomplete final tail for recovery', async () => {
   const stateFile = join(await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-')), 'state.jsonl');
   const kernel = createFileRuntimeKernel({ stateFile, createId: () => 'complete-edit' });

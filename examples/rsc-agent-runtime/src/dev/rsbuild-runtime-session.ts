@@ -526,6 +526,10 @@ export interface RsbuildRuntimeSessionStartTesting {
     readonly runtimeGenerationId: string;
   }>) => Promise<void> | void;
   readonly beforeMcpRelist?: () => Promise<void> | void;
+  readonly afterInvocationWorkerResponse?: (input: Readonly<{
+    readonly runId: string;
+    readonly surfaceId: string;
+  }>) => Promise<void> | void;
   /** Windows-only Job owner fault injection; never used by the public provider. */
   readonly windowsJobOwnerMode?: 'close-control' | 'hang-ready' | 'ignore-stop' | 'nonzero-after-drain' | 'normal';
 }
@@ -992,8 +996,10 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
           surfaceId: invocation.surface.id,
         });
         this.#assertInvocationOpen();
+        await this.#testing.afterInvocationWorkerResponse?.(Object.freeze({ runId, surfaceId: invocation.surface.id }));
+        this.#assertInvocationOpen();
         const flight = response.flight;
-        const stateAfter = await this.#stateKernel.readSnapshot();
+        const stateAfter = await this.#stateKernel.readSnapshot({ stateVersion: response.inspection.state.identity.stateVersion });
         this.#assertInvocationOpen();
         const result = this.#inspectionResult(response.inspection, flight, stateAfter, runId);
         if (artifact === undefined) throw new Error('RSC runtime Flight artifact is unavailable.');

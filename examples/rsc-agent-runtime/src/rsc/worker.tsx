@@ -1,6 +1,7 @@
 import { Readable } from 'node:stream';
 import { finished } from 'node:stream/promises';
 import { resolve } from 'node:path';
+import { writeSync } from 'node:fs';
 
 import { renderToReadableStream } from 'react-server-dom-rspack/server.node';
 
@@ -125,12 +126,20 @@ const render = async (): Promise<void> => {
     await finished(output);
   };
 
+  const writeSnapshotMetadata = (): void => {
+    const metadata = Buffer.from(`{"stateVersion":${String(snapshot.stateVersion)}}`, 'utf8');
+    let offset = 0;
+    while (offset < metadata.byteLength) {
+      offset += writeSync(3, metadata, offset, metadata.byteLength - offset);
+    }
+  };
+
   if (request.type === 'hook/after-file-edit') {
     await withRenderContext({ edit: request.event, snapshot }, renderFlight);
-    return;
+  } else {
+    await renderFlight();
   }
-
-  await renderFlight();
+  writeSnapshotMetadata();
 };
 
 render().catch((error: unknown) => {

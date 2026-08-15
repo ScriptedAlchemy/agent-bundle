@@ -11,12 +11,15 @@ import { redactInspectionDiagnostics } from '../dev/inspection-security.js';
 
 export const maximumFlightRenderBytes = 4 * 1024 * 1024;
 export const maximumFlightRenderStderrBytes = 256 * 1024;
+export const maximumFlightRenderMetadataBytes = 128;
 
 const defaultTerminationGraceMs = 100;
 
 export interface FlightRenderResult {
   readonly flight: Uint8Array;
   readonly node: ReactNode;
+  /** Exact durable state identity captured by the render worker; never user-visible. */
+  readonly stateVersion: number;
 }
 
 export interface FlightRenderOptions {
@@ -34,6 +37,36 @@ const positiveSafeInteger = (value: number, name: string): number => {
 const workerFailure = (message: string, diagnostics: string): Error =>
   new Error(`${message}${diagnostics.length === 0 ? '' : `: ${diagnostics}`}`);
 
+const parseSnapshotMetadata = (metadata: Buffer): number => {
+  let text: string;
+  try {
+    text = new TextDecoder('utf-8', { fatal: true }).decode(metadata);
+  } catch {
+    throw new Error('RSC worker emitted invalid snapshot metadata.');
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new Error('RSC worker emitted invalid snapshot metadata.');
+  }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('RSC worker emitted invalid snapshot metadata.');
+  }
+  const record = parsed as Record<string, unknown>;
+  const stateVersion = record.stateVersion;
+  if (
+    Object.keys(record).length !== 1 ||
+    typeof stateVersion !== 'number' ||
+    !Number.isSafeInteger(stateVersion) ||
+    stateVersion < 0 ||
+    text !== `{"stateVersion":${String(stateVersion)}}`
+  ) {
+    throw new Error('RSC worker emitted invalid snapshot metadata.');
+  }
+  return stateVersion;
+};
+
 export const requestFlightRenderWithFlight = async (
   request: RenderRequest,
   options: FlightRenderOptions = {},
@@ -45,13 +78,16 @@ export const requestFlightRenderWithFlight = async (
   return new Promise<FlightRenderResult>((resolveRender, rejectRender) => {
     const currentDirectory = dirname(fileURLToPath(import.meta.url));
     const workerPath = join(currentDirectory, '../rsc/index.js');
-    const child = spawn(process.execPath, [workerPath], { stdio: ['pipe', 'pipe', 'pipe'] });
+    const child = spawn(process.execPath, [workerPath], { stdio: ['pipe', 'pipe', 'pipe', 'pipe'] });
     const stdout = child.stdout;
     const stderr = child.stderr;
+    const snapshotMetadata = child.stdio[3] as NodeJS.ReadableStream | undefined;
     const flight: Buffer[] = [];
     const diagnostics: Buffer[] = [];
+    const metadata: Buffer[] = [];
     let flightBytes = 0;
     let stderrBytes = 0;
+    let metadataBytes = 0;
     let termination: Error | undefined;
     let terminationGrace: ReturnType<typeof setTimeout> | undefined;
     let closed = false;
@@ -73,7 +109,7 @@ export const requestFlightRenderWithFlight = async (
 
     const abort = (): void => terminate(new Error('RSC worker render was aborted.'));
 
-    if (stdout === null || stderr === null) {
+    if (stdout === null || stderr === null || snapshotMetadata === undefined || snapshotMetadata === null) {
       terminate(new Error('RSC worker streams are unavailable.'));
     } else {
       stdout.on('data', (chunk: Buffer | string) => {
@@ -97,6 +133,17 @@ export const requestFlightRenderWithFlight = async (
         }
       });
       stderr.once('error', () => terminate(new Error('RSC worker stderr stream failed.')));
+      snapshotMetadata.on('data', (chunk: Buffer | string) => {
+        if (termination !== undefined) return;
+        const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+        metadataBytes += buffer.byteLength;
+        if (metadataBytes > maximumFlightRenderMetadataBytes) {
+          terminate(new Error(`RSC worker snapshot metadata exceeded ${maximumFlightRenderMetadataBytes} bytes.`));
+          return;
+        }
+        metadata.push(buffer);
+      });
+      snapshotMetadata.once('error', () => terminate(new Error('RSC worker snapshot metadata stream failed.')));
     }
 
     child.stdin.once('error', () => terminate(new Error('RSC worker request stream failed.')));
@@ -119,7 +166,7 @@ export const requestFlightRenderWithFlight = async (
           const node = await createFromReadableStream<ReactNode>(
             Readable.toWeb(Readable.from([rawFlight])) as ReadableStream<Uint8Array>,
           );
-          resolveRender(Object.freeze({ flight: rawFlight, node }));
+          resolveRender(Object.freeze({ flight: rawFlight, node, stateVersion: parseSnapshotMetadata(Buffer.concat(metadata)) }));
         } catch {
           rejectRender(new Error('RSC worker emitted invalid Flight data.'));
         }

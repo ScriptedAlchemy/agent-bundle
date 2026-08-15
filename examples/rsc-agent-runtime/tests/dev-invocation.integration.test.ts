@@ -114,6 +114,16 @@ const waitFor = async (condition: () => boolean, message: string, timeoutMs = 4_
   }
 };
 
+const deferred = <T = void>() => {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((nextResolve, nextReject) => {
+    resolve = nextResolve;
+    reject = nextReject;
+  });
+  return Object.freeze({ promise, reject, resolve });
+};
+
 const readWhenPresent = async (path: string): Promise<string> => {
   let value: string | undefined;
   await waitFor(() => {
@@ -172,13 +182,15 @@ const event = (eventId: string) => ({
 });
 
 const oversizedMcpWorker = (payloadBytes: number): string => {
-  return `const payload = 'x'.repeat(${payloadBytes});
+  return `const { writeSync } = require('node:fs');
+const payload = 'x'.repeat(${payloadBytes});
 const model = ['$', 'mcp-result', null, {
   _meta: '$undefined',
   isError: '$undefined',
   structuredContent: { payload, stateVersion: 0 },
   children: [['$', 'mcp-text', null, { children: 'ok' }]],
 }];
+writeSync(3, Buffer.from('{"stateVersion":0}'));
 process.stdout.end(\`0:\${JSON.stringify(model)}\\n\`);
 `;
 };
@@ -621,6 +633,90 @@ test('forwards dev invocation termination through a SIGKILL cleanup of its RSC c
     await rm(compilerRoot, { force: true, recursive: true });
   }
 }, 6_000);
+
+test('keeps each concurrent hook run bound to its rendered durable snapshot', async () => {
+  const storageRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-session-exact-snapshot-'));
+  const projectRoot = process.cwd();
+  const prepared = await new ProjectService({ includeDevRuntime: true, mode: 'development', root: projectRoot }).prepare('dev');
+  const firstWorkerResponse = deferred<void>();
+  const releaseFirst = deferred<void>();
+  let pauseFirst = true;
+  const session = await RsbuildRuntimeSession.start({
+    artifactStatus: () => Object.freeze({ state: 'missing' as const }),
+    emit: () => undefined,
+    environment: Object.freeze({}),
+    projectRoot,
+    preparedRuntime: prepared.devRuntime!,
+    providerSessionId: 'session-exact-concurrent-hook-snapshot',
+    signal: new AbortController().signal,
+    storageRoot,
+  }, {
+    afterInvocationWorkerResponse: async ({ surfaceId }) => {
+      if (surfaceId !== 'hook.claude' || !pauseFirst) return;
+      pauseFirst = false;
+      firstWorkerResponse.resolve();
+      await releaseFirst.promise;
+    },
+  });
+
+  try {
+    await waitFor(() => session.status().activeVector !== undefined, 'Timed out waiting for an active runtime generation', 15_000);
+    const generationId = session.status().activeVector!.runtimeGenerationId;
+    const request = (path: string, toolUseId: string) => ({
+      expectedGenerationId: generationId,
+      input: {
+        cwd: projectRoot,
+        hook_event_name: 'PostToolUse',
+        session_id: 'session-exact-concurrent-hook-snapshot',
+        tool_input: { file_path: path },
+        tool_name: 'Write',
+        tool_use_id: toolUseId,
+      },
+      surfaceId: 'hook.claude' as const,
+      target: 'claude' as const,
+    });
+
+    const first = session.invoke(request('first-coherent.ts', 'coherent-hook-a'));
+    await firstWorkerResponse.promise;
+    const second = await session.invoke(request('second-coherent.ts', 'coherent-hook-b'));
+    releaseFirst.resolve();
+    const firstRun = await first;
+
+    expect(firstRun).toMatchObject({
+      result: {
+        agentVisible: 'Recorded first-coherent.ts from claude. Shared state now contains 1 edit.',
+        native: { hookSpecificOutput: { additionalContext: 'Recorded first-coherent.ts from claude. Shared state now contains 1 edit.' } },
+        state: {
+          identity: { stateStoreId: 'playground', stateVersion: 1 },
+          snapshot: { edits: [expect.objectContaining({ path: join(projectRoot, 'first-coherent.ts') })], stateVersion: 1 },
+        },
+      },
+      status: 'succeeded',
+      vector: { runtimeGenerationId: generationId, stateVersion: 1 },
+    });
+    expect(second).toMatchObject({
+      result: {
+        state: {
+          identity: { stateStoreId: 'playground', stateVersion: 2 },
+          snapshot: {
+            edits: [
+              expect.objectContaining({ path: join(projectRoot, 'first-coherent.ts') }),
+              expect.objectContaining({ path: join(projectRoot, 'second-coherent.ts') }),
+            ],
+            stateVersion: 2,
+          },
+        },
+      },
+      status: 'succeeded',
+      vector: { runtimeGenerationId: generationId, stateVersion: 2 },
+    });
+    expect(session.run(firstRun.id)).toEqual(firstRun);
+  } finally {
+    releaseFirst.resolve();
+    await session.close();
+    await rm(storageRoot, { force: true, recursive: true });
+  }
+}, 30_000);
 
 test('runs an exact generation-contained hook invocation and retains its immutable Flight asset', async () => {
   const storageRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-session-'));
