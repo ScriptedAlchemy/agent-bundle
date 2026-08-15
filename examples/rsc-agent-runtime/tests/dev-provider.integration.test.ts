@@ -10,6 +10,7 @@ import {
   ProjectService,
 } from '../../../packages/agent-bundle/src/dev/index.ts';
 import { EpochStore } from '../../../packages/agent-bundle/src/dev/epoch-store.ts';
+import { resolveDevRuntimeProvider } from '../../../packages/agent-bundle/src/dev/runtime-provider-loader.ts';
 import {
   createRscRuntimeRsbuildConfig,
   type RscRuntimeActivationOutcome,
@@ -107,6 +108,7 @@ const copyExample = async (): Promise<CopiedExample> => {
     recursive: true,
   });
   await symlink(workspaceNodeModules, join(workspaceRoot, 'node_modules'), 'dir');
+  await symlink(join(exampleRoot, '../../packages'), join(workspaceRoot, 'packages'), 'dir');
   await symlink(join(exampleRoot, '../../tsconfig.json'), join(workspaceRoot, 'tsconfig.json'));
   return Object.freeze({ projectRoot, workspaceRoot });
 };
@@ -322,6 +324,36 @@ test('declares an optional runtime while keeping Claude and Codex artifacts buil
       await session.close();
     }
   } finally {
+    await rm(copied.workspaceRoot, { force: true, recursive: true });
+  }
+}, 30_000);
+
+test('resets state through the dynamically loaded copied provider', async () => {
+  const copied = await copyExample();
+  const storageRoot = join(copied.projectRoot, '.agent-bundle', 'runtime-dynamic-reset');
+  const controller = new AbortController();
+  let session: Awaited<ReturnType<Awaited<ReturnType<typeof resolveDevRuntimeProvider>>['start']>> | undefined;
+  try {
+    const prepared = await new ProjectService({ includeDevRuntime: true, mode: 'development', root: copied.projectRoot }).prepare('dev');
+    const provider = await resolveDevRuntimeProvider(copied.projectRoot, prepared.devRuntime!);
+    session = await provider.start(startContext({
+      preparedRuntime: prepared.devRuntime!,
+      projectRoot: copied.projectRoot,
+      providerSessionId: 'provider-dynamic-reset',
+      signal: controller.signal,
+      storageRoot,
+    }));
+    await waitFor(() => session!.status().state === 'active');
+    const activeVector = session.status().activeVector;
+    if (activeVector === undefined) throw new Error('The copied provider did not activate a runtime generation.');
+
+    await expect(session.resetState({
+      expectedGenerationId: activeVector.runtimeGenerationId,
+      stateStoreId: activeVector.stateStoreId,
+    })).resolves.toEqual({ stateStoreId: activeVector.stateStoreId, stateVersion: 1 });
+  } finally {
+    controller.abort();
+    await session?.close();
     await rm(copied.workspaceRoot, { force: true, recursive: true });
   }
 }, 30_000);

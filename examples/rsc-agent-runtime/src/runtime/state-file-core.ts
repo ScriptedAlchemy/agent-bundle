@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { lstat, mkdir, open, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
-import lockfile from 'proper-lockfile';
+import { lock as acquireLockfile } from 'proper-lockfile';
 
 import type {
   EditEvent,
@@ -678,7 +678,7 @@ export const createNodeStateStorage = ({
   platform?: NodeJS.Platform;
   syncParent?: (directory: string) => Promise<void>;
 }> = {}): StateStorage => ({
-  acquire: (input) => lockfile.lock(input.stateFile, {
+  acquire: (input) => acquireLockfile(input.stateFile, {
     onCompromised: input.onCompromised,
     realpath: false,
     retries: 0,
