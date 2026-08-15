@@ -12,16 +12,26 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 
 import type { McpBrowserSessionModel, McpBrowserSessionTimelineEntry } from '../../mcp/mcp-session-model.ts';
 import type { McpSessionControllerRequest } from '../../mcp/mcp-session-controller.ts';
-import type { LogEntryData } from '../vendor/clients/web/src/components/elements/LogEntry/LogEntry.tsx';
-import type { SortDirection } from '../vendor/clients/web/src/components/elements/SortToggle/SortToggle.tsx';
-import { LoggingScreen, type LogsUiState } from '../vendor/clients/web/src/components/screens/LoggingScreen/LoggingScreen.tsx';
-import { ALL_LEVELS_VISIBLE } from '../vendor/clients/web/src/components/screens/LoggingScreen/logLevels.ts';
-import { PromptsScreen, type GetPromptState, type PromptsUiState } from '../vendor/clients/web/src/components/screens/PromptsScreen/PromptsScreen.tsx';
-import { ProtocolScreen, type ProtocolUiState } from '../vendor/clients/web/src/components/screens/ProtocolScreen/ProtocolScreen.tsx';
-import { ResourcesScreen, type ReadResourceState, type ResourcesUiState } from '../vendor/clients/web/src/components/screens/ResourcesScreen/ResourcesScreen.tsx';
-import { ToolsScreen, type ToolCallState, type ToolsUiState } from '../vendor/clients/web/src/components/screens/ToolsScreen/ToolsScreen.tsx';
-import type { MessageEntry } from '../vendor/core/mcp/types.ts';
-import { clearScrollMemory } from '../vendor/clients/web/src/hooks/useScrollMemory.ts';
+import {
+  ALL_LEVELS_VISIBLE,
+  clearScrollMemory,
+  LoggingScreen,
+  PromptsScreen,
+  ProtocolScreen,
+  ResourcesScreen,
+  ToolsScreen,
+  type GetPromptState,
+  type LogEntryData,
+  type LogsUiState,
+  type MessageEntry,
+  type PromptsUiState,
+  type ProtocolUiState,
+  type ReadResourceState,
+  type ResourcesUiState,
+  type SortDirection,
+  type ToolCallState,
+  type ToolsUiState,
+} from './inspector-session-adapter-vendor.js';
 import {
   inspectorLogEntries,
   inspectorProtocolEntries,
