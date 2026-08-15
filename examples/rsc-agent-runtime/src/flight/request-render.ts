@@ -7,12 +7,12 @@ import { createFromReadableStream } from 'react-server-dom-rspack/client.node';
 import type { ReactNode } from 'react';
 
 import type { RenderRequest } from '../runtime/contracts.js';
+import { redactInspectionDiagnostics } from '../dev/inspection-security.js';
 
 export const maximumFlightRenderBytes = 4 * 1024 * 1024;
 export const maximumFlightRenderStderrBytes = 256 * 1024;
 
 const defaultTerminationGraceMs = 100;
-const diagnosticPreviewBytes = 16 * 1024;
 
 export interface FlightRenderResult {
   readonly flight: Uint8Array;
@@ -30,11 +30,6 @@ const positiveSafeInteger = (value: number, name: string): number => {
   if (!Number.isSafeInteger(value) || value < 1) throw new RangeError(`${name} must be a positive safe integer`);
   return value;
 };
-
-const redactDiagnostics = (value: string): string => value
-  .slice(0, diagnosticPreviewBytes)
-  .replace(/((?:api[-_]?key|authorization|password|secret|token)\s*[:=]\s*)(?:bearer\s+)?[^\s,;]+/giu, '$1[REDACTED]')
-  .replace(/\bbearer\s+[^\s,;]+/giu, 'Bearer [REDACTED]');
 
 const workerFailure = (message: string, diagnostics: string): Error =>
   new Error(`${message}${diagnostics.length === 0 ? '' : `: ${diagnostics}`}`);
@@ -109,7 +104,7 @@ export const requestFlightRenderWithFlight = async (
     child.once('close', (code) => {
       closed = true;
       cleanup();
-      const output = redactDiagnostics(Buffer.concat(diagnostics).toString('utf8'));
+      const output = redactInspectionDiagnostics(Buffer.concat(diagnostics).toString('utf8'));
       if (termination !== undefined) {
         rejectRender(workerFailure(termination.message, output));
         return;

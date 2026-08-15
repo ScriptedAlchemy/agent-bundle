@@ -10,17 +10,12 @@ import type {
 } from '../runtime/contracts.js';
 import { normalizeClaudeHook, normalizeCodexHook } from '../hook/normalize.js';
 
+import { hasInspectionCredential, isInspectionSensitiveKey } from './inspection-security.js';
 import { serializeInspection } from './serialize-inspection.js';
 
 const maximumInvocationRequestBytes = 1024 * 1024;
 const maximumInvocationFlightBytes = 2 * 1024 * 1024;
-const credentialShaped = /(?:api[-_]?key|authorization|bearer|credential|cookie|password|secret|token)/iu;
-const credentialValuePatterns = Object.freeze([
-  /\bsk-(?:proj-|ant-|live-)?[a-z0-9_-]{16,}\b/iu,
-  /\b(?:gh[pousr]_[a-z0-9]{20,}|github_pat_[a-z0-9_]{20,}|xox[baprs]-[a-z0-9-]{16,}|akia[a-z0-9]{16})\b/iu,
-  /\bbearer\s+[^\s,;]+/iu,
-  /(?:api[-_]?key|authorization|credential|cookie|password|secret|token)\s*[:=]\s*[^\s,;]+/iu,
-]);
+const maximumInvocationResponseBytes = 4 * 1024 * 1024;
 
 const asRecord = (value: unknown): Record<string, unknown> | undefined =>
   value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
@@ -40,7 +35,7 @@ const assertExactKeys = (value: Record<string, unknown>, keys: readonly string[]
 
 const assertNoSnapshotCredentials = (value: Record<string, unknown>): void => {
   for (const [key, item] of Object.entries(value)) {
-    if (credentialShaped.test(key) || (typeof item === 'string' && credentialValuePatterns.some((pattern) => pattern.test(item)))) {
+    if (isInspectionSensitiveKey(key) || (typeof item === 'string' && hasInspectionCredential(item))) {
       throw new Error('Runtime snapshot contains sensitive data');
     }
   }
@@ -222,14 +217,21 @@ const abort = (): void => controller.abort();
 process.once('SIGINT', abort);
 process.once('SIGTERM', abort);
 
-void invoke(controller.signal).then(
-  (response) => process.stdout.write(`${JSON.stringify(response)}\n`),
-  (error: unknown) => {
-    const message = error instanceof Error ? error.message : 'Invocation failed';
-    process.stderr.write(`${message}\n`);
-    process.exitCode = 1;
-  },
-).finally(() => {
+const writeResponse = (response: DevRuntimeInspectionResponse): void => {
+  const line = `${JSON.stringify(response)}\n`;
+  if (Buffer.byteLength(line, 'utf8') > maximumInvocationResponseBytes) {
+    throw new Error('Inspection response exceeded output limit');
+  }
+  process.stdout.write(line);
+};
+
+const reportFailure = (error: unknown): void => {
+  const message = error instanceof Error ? error.message : 'Invocation failed';
+  process.stderr.write(`${message}\n`);
+  process.exitCode = 1;
+};
+
+void invoke(controller.signal).then(writeResponse).catch(reportFailure).finally(() => {
   process.removeListener('SIGINT', abort);
   process.removeListener('SIGTERM', abort);
 });

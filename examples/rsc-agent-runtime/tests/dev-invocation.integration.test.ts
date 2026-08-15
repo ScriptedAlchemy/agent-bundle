@@ -87,6 +87,18 @@ const event = (eventId: string) => ({
   toolName: 'Write',
 });
 
+const oversizedMcpWorker = (payloadBytes: number): string => {
+  return `const payload = 'x'.repeat(${payloadBytes});
+const model = ['$', 'mcp-result', null, {
+  _meta: '$undefined',
+  isError: '$undefined',
+  structuredContent: { payload, stateVersion: 0 },
+  children: [['$', 'mcp-text', null, { children: 'ok' }]],
+}];
+process.stdout.end(\`0:\${JSON.stringify(model)}\\n\`);
+`;
+};
+
 const inspectionShape = (result: { inspection: Record<string, unknown> }) => {
   const { flight: _flight, ...inspection } = result.inspection;
   return inspection;
@@ -258,6 +270,7 @@ test('strictly freezes decoded inspection values while stripping only functions 
   const cycle: Record<string, unknown> = {};
   cycle.self = cycle;
   const repeatedCycle = { cycle };
+  const shared = Object.freeze({ value: 'shared' });
   const cyclicChildren: ReactNode[] = [];
   cyclicChildren.push(cyclicChildren);
   const sparseChildren = new Array<ReactNode>(2);
@@ -290,6 +303,13 @@ test('strictly freezes decoded inspection values while stripping only functions 
   expect(() => serializeInspection({
     flight: Buffer.from('flight'),
     node: createElement('inspection-root', null, new Date('2026-08-15T00:00:00.000Z') as unknown as ReactNode),
+    stateStoreId: 'state',
+    stateVersion: 1,
+  })).toThrow('Inspection JSON');
+  expect(() => serializeInspection({
+    flight: Buffer.from('flight'),
+    native: { first: shared, second: shared },
+    node: createElement('inspection-root'),
     stateStoreId: 'state',
     stateVersion: 1,
   })).toThrow('Inspection JSON');
@@ -366,7 +386,7 @@ test('redacts bounded RSC worker stderr diagnostics', async () => {
     const entry = await buildInvocationEntry(compilerRoot);
     await writeFile(
       join(compilerRoot, 'rsc', 'rsc', 'index.js'),
-      "process.stderr.write('authorization=fixture-worker-secret\\n'.repeat(20_000), () => process.exit(1));\n",
+      "process.stderr.write('credential=fixture-credential cookie=fixture-cookie authorization=fixture-authorization sk-live-abcdefghijklmnopqrstuvwxyz ghp_012345678901234567890123456789 xoxb-0123456789-0123456789-abcdefghijklmnop AKIA0123456789ABCDEF\\n'.repeat(20_000), () => process.exit(1));\n",
     );
     const result = await invoke(entry, {
       stateFile: join(compilerRoot, 'events.jsonl'),
@@ -377,8 +397,36 @@ test('redacts bounded RSC worker stderr diagnostics', async () => {
     expect(result.exitCode).not.toBe(0);
     expect(result.stdout).toEqual(Buffer.alloc(0));
     expect(Buffer.byteLength(result.stderr, 'utf8')).toBeLessThanOrEqual(256 * 1024 + 1_024);
-    expect(result.stderr).not.toContain('fixture-worker-secret');
+    for (const secret of [
+      'fixture-credential',
+      'fixture-cookie',
+      'fixture-authorization',
+      'sk-live-abcdefghijklmnopqrstuvwxyz',
+      'ghp_012345678901234567890123456789',
+      'xoxb-0123456789-0123456789-abcdefghijklmnop',
+      'AKIA0123456789ABCDEF',
+    ]) expect(result.stderr).not.toContain(secret);
     expect(result.stderr).toContain('[REDACTED]');
+  } finally {
+    await rm(compilerRoot, { force: true, recursive: true });
+  }
+});
+
+test('caps a sub-two-megabyte Flight before its duplicated inspection response reaches stdout', async () => {
+  const compilerRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-invoke-'));
+  try {
+    const entry = await buildInvocationEntry(compilerRoot);
+    await writeFile(join(compilerRoot, 'rsc', 'rsc', 'index.js'), oversizedMcpWorker(1_500_000));
+    const result = await invoke(entry, {
+      stateFile: join(compilerRoot, 'events.jsonl'),
+      stateStoreId: 'fixture-state',
+      type: 'mcp/runtime-status',
+    });
+
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stdout).toEqual(Buffer.alloc(0));
+    expect(result.stderr).toContain('Inspection response exceeded output limit');
+    expect(result.stderr).not.toContain('x'.repeat(128));
   } finally {
     await rm(compilerRoot, { force: true, recursive: true });
   }

@@ -27,7 +27,7 @@ const isArrayIndex = (key: string, length: number): boolean => {
  * cannot cross the JSON boundary. Every other non-JSON shape is rejected so a
  * decoded Flight value can never be silently changed while being inspected.
  */
-const freezeJson = (value: unknown, ancestors = new WeakSet<object>()): JsonCandidate => {
+const freezeJson = (value: unknown, references = new WeakSet<object>()): JsonCandidate => {
   if (value === null || typeof value === 'boolean' || typeof value === 'string') return value;
   if (typeof value === 'number') {
     if (!Number.isFinite(value)) throw inspectionJsonError('a non-finite number');
@@ -35,48 +35,44 @@ const freezeJson = (value: unknown, ancestors = new WeakSet<object>()): JsonCand
   }
   if (typeof value === 'function' || typeof value === 'symbol') return stripped;
   if (typeof value !== 'object') throw inspectionJsonError('a non-JSON value');
-  if (ancestors.has(value)) throw inspectionJsonError('a cyclic value');
+  if (references.has(value)) throw inspectionJsonError('a repeated or cyclic value');
 
-  ancestors.add(value);
-  try {
-    if (Array.isArray(value)) {
-      const keys = Reflect.ownKeys(value);
-      if (
-        keys.length !== value.length + 1 ||
-        keys.some((key) => key !== 'length' && (typeof key !== 'string' || !isArrayIndex(key, value.length)))
-      ) {
-        throw inspectionJsonError('a sparse or decorated array');
-      }
-
-      const output: JsonValue[] = [];
-      for (let index = 0; index < value.length; index += 1) {
-        if (!Object.hasOwn(value, index)) throw inspectionJsonError('a sparse array');
-        const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
-        if (descriptor === undefined || !('value' in descriptor)) throw inspectionJsonError('an array accessor');
-        const item = freezeJson(descriptor.value, ancestors);
-        if (item !== stripped) output.push(item);
-      }
-      return Object.freeze(output);
-    }
-
-    const prototype = Object.getPrototypeOf(value);
-    if (prototype !== Object.prototype && prototype !== null) throw inspectionJsonError('a non-plain object');
-
-    const output: Record<string, JsonValue> = Object.create(null) as Record<string, JsonValue>;
+  references.add(value);
+  if (Array.isArray(value)) {
     const keys = Reflect.ownKeys(value);
-    if (keys.some((key) => typeof key !== 'string')) throw inspectionJsonError('a symbol key');
-    for (const key of keys as string[]) {
-      const descriptor = Object.getOwnPropertyDescriptor(value, key);
-      if (descriptor === undefined || !descriptor.enumerable || !('value' in descriptor)) {
-        throw inspectionJsonError('a non-enumerable or accessor property');
-      }
-      const item = freezeJson(descriptor.value, ancestors);
-      if (item !== stripped) output[key] = item;
+    if (
+      keys.length !== value.length + 1 ||
+      keys.some((key) => key !== 'length' && (typeof key !== 'string' || !isArrayIndex(key, value.length)))
+    ) {
+      throw inspectionJsonError('a sparse or decorated array');
     }
-    return Object.freeze(Object.fromEntries(Object.entries(output).sort(([left], [right]) => left.localeCompare(right))));
-  } finally {
-    ancestors.delete(value);
+
+    const output: JsonValue[] = [];
+    for (let index = 0; index < value.length; index += 1) {
+      if (!Object.hasOwn(value, index)) throw inspectionJsonError('a sparse array');
+      const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+      if (descriptor === undefined || !('value' in descriptor)) throw inspectionJsonError('an array accessor');
+      const item = freezeJson(descriptor.value, references);
+      if (item !== stripped) output.push(item);
+    }
+    return Object.freeze(output);
   }
+
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) throw inspectionJsonError('a non-plain object');
+
+  const output: Record<string, JsonValue> = Object.create(null) as Record<string, JsonValue>;
+  const keys = Reflect.ownKeys(value);
+  if (keys.some((key) => typeof key !== 'string')) throw inspectionJsonError('a symbol key');
+  for (const key of keys as string[]) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (descriptor === undefined || !descriptor.enumerable || !('value' in descriptor)) {
+      throw inspectionJsonError('a non-enumerable or accessor property');
+    }
+    const item = freezeJson(descriptor.value, references);
+    if (item !== stripped) output[key] = item;
+  }
+  return Object.freeze(Object.fromEntries(Object.entries(output).sort(([left], [right]) => left.localeCompare(right))));
 };
 
 const freezeOptionalJson = (value: unknown): JsonCandidate | undefined =>
@@ -119,11 +115,11 @@ const ownDataProperties = (value: unknown, name: string): readonly (readonly [st
   }));
 };
 
-const serializeProps = (value: unknown): JsonObject | undefined => {
+const serializeProps = (value: unknown, references: WeakSet<object>): JsonObject | undefined => {
   const output: Record<string, JsonValue> = Object.create(null) as Record<string, JsonValue>;
   for (const [key, itemValue] of ownDataProperties(value, 'props')) {
     if (key === 'children') continue;
-    const item = freezeJson(itemValue);
+    const item = freezeJson(itemValue, references);
     if (item !== stripped) output[key] = item;
   }
   return Object.keys(output).length === 0 ? undefined : Object.freeze(output);
@@ -153,6 +149,7 @@ const assertTreeArray = (value: readonly unknown[]): void => {
 
 const serializeTree = (node: ReactNode): readonly DevRuntimeTreeNode[] => {
   let nextId = 0;
+  const jsonReferences = new WeakSet<object>();
   const nodes = (value: unknown, ancestors = new WeakSet<object>()): DevRuntimeTreeNode[] => {
     if (Array.isArray(value)) {
       if (ancestors.has(value)) throw new Error('Inspection tree contains a cyclic value.');
@@ -178,7 +175,7 @@ const serializeTree = (node: ReactNode): readonly DevRuntimeTreeNode[] => {
       return [Object.freeze({ children: Object.freeze([]), id: `node-${nextId++}`, kind: 'text', label: String(value) })];
     }
     if (!isValidElement(value)) {
-      void freezeJson(value);
+      void freezeJson(value, jsonReferences);
       return [Object.freeze({ children: Object.freeze([]), id: `node-${nextId++}`, kind: 'value', label: 'Object' })];
     }
 
@@ -187,7 +184,7 @@ const serializeTree = (node: ReactNode): readonly DevRuntimeTreeNode[] => {
     try {
       const id = `node-${nextId++}`;
       const element = labelForElement(value.type);
-      const props = serializeProps(value.props);
+      const props = serializeProps(value.props, jsonReferences);
       const children = nodes(childrenFor(value.props), ancestors);
       return [Object.freeze({
         children: Object.freeze(children),
