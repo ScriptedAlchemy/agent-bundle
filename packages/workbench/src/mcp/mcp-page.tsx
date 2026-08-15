@@ -389,19 +389,20 @@ export const McpPage = ({ appPreviewClient, controller, epochOptions, initialBin
     const generation = ++appPreviewGeneration.current;
     const current = appPreviewController.current;
     appPreviewController.current = undefined;
-    setAppPreview(undefined);
     setAppPreviewBusy(true);
     try {
       await current?.close();
     } finally {
-      if (appPreviewGeneration.current === generation) setAppPreviewBusy(false);
+      if (appPreviewGeneration.current === generation) {
+        setAppPreview(undefined);
+        setAppPreviewBusy(false);
+      }
     }
   };
   const openAppPreview = (source: McpPageAppPreviewSource, profile = appPreviewProfile): void => {
     const generation = ++appPreviewGeneration.current;
     const current = appPreviewController.current;
     appPreviewController.current = undefined;
-    setAppPreview(undefined);
     setAppPreviewBusy(true);
     void current?.close().catch(() => undefined).finally(() => {
       if (appPreviewGeneration.current !== generation) return;
