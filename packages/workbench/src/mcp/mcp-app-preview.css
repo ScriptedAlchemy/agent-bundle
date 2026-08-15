@@ -1,0 +1,55 @@
+.mcp-app-preview {
+  border: 1px solid var(--mantine-color-default-border);
+  border-radius: var(--mantine-radius-sm);
+  display: grid;
+  gap: var(--mantine-spacing-sm);
+  padding: var(--mantine-spacing-sm);
+}
+
+.mcp-app-preview__header {
+  align-items: baseline;
+  display: flex;
+  gap: var(--mantine-spacing-md);
+  justify-content: space-between;
+}
+
+.mcp-app-preview__header h2 {
+  font-size: var(--mantine-font-size-md);
+  margin: 0;
+}
+
+.mcp-app-preview__profile {
+  display: flex;
+  gap: var(--mantine-spacing-sm);
+  margin: 0;
+}
+
+.mcp-app-preview__profile div {
+  display: flex;
+  gap: var(--mantine-spacing-xs);
+}
+
+.mcp-app-preview__profile dt {
+  font-weight: 600;
+}
+
+.mcp-app-preview__profile dd {
+  margin: 0;
+}
+
+.mcp-app-preview__frame {
+  border: 0;
+  min-height: 22rem;
+  width: 100%;
+}
+
+.mcp-app-preview__fallback {
+  display: grid;
+  gap: var(--mantine-spacing-xs);
+}
+
+.mcp-app-preview__fallback pre {
+  max-height: 16rem;
+  overflow: auto;
+  white-space: pre-wrap;
+}
