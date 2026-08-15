@@ -1123,6 +1123,59 @@ it('rejects an empty directory added during validation without returning a snaps
   }
 });
 
+it('does not re-enter artifact validation after taking final evidence snapshots', async () => {
+  const root = await writeArtifact([
+    { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'custom/document.json' },
+  ], true, [customManifestTarget]);
+  const manifestPath = join(root, 'agent-bundle.manifest.json');
+  const initialManifest = readFileSync(manifestPath);
+  const registry = customRegistry();
+  const artifactValidation = registry.artifactValidation.bind(registry);
+  let artifactValidationCalls = 0;
+  registry.artifactValidation = (target) => {
+    artifactValidationCalls += 1;
+    if (artifactValidationCalls === 3) writeFileSync(manifestPath, '{"invalid":true}\n');
+    return artifactValidation(target);
+  };
+
+  try {
+    const result = await validateArtifactWithSnapshot({ artifactRoot: root, registry });
+
+    expect(artifactValidationCalls).toBe(2);
+    expect(readFileSync(manifestPath)).toEqual(initialManifest);
+    expect(result.diagnostics).toEqual([]);
+    expect(result.snapshot).toBeDefined();
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('does not allow a late registry re-entry to create an unvalidated empty directory', async () => {
+  const root = await writeArtifact([
+    { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'custom/document.json' },
+  ], true, [customManifestTarget]);
+  const emptyDirectory = join(root, 'custom', 'too-late-empty');
+  const registry = customRegistry();
+  const artifactValidation = registry.artifactValidation.bind(registry);
+  let artifactValidationCalls = 0;
+  registry.artifactValidation = (target) => {
+    artifactValidationCalls += 1;
+    if (artifactValidationCalls === 3) mkdirSync(emptyDirectory);
+    return artifactValidation(target);
+  };
+
+  try {
+    const result = await validateArtifactWithSnapshot({ artifactRoot: root, registry });
+
+    expect(artifactValidationCalls).toBe(2);
+    await expect(access(emptyDirectory)).rejects.toThrow();
+    expect(result.diagnostics).toEqual([]);
+    expect(result.snapshot).toBeDefined();
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
 it.each([
   ['rewritten', (manifestPath: string) => { writeFileSync(manifestPath, '{"invalid":true}\n'); }],
   ['replaced with identical bytes', (manifestPath: string) => {
