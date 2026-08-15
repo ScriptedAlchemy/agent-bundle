@@ -57,7 +57,7 @@ export interface McpAppPreviewFallback {
 
 export type McpAppPreviewState =
   | Readonly<{ readonly phase: 'loading' }>
-  | Readonly<{ readonly message: string; readonly phase: 'error' }>
+  | Readonly<{ readonly fallback: McpAppPreviewFallback; readonly message: string; readonly phase: 'error' }>
   | Readonly<{ readonly fallback: McpAppPreviewFallback; readonly phase: 'fallback'; readonly preview: McpAppPreviewResponse }>
   | Readonly<{ readonly phase: 'ready'; readonly preview: McpAppPreviewResponse; readonly resource: McpAppCanonicalResource }>;
 
@@ -81,9 +81,40 @@ export interface McpAppPreviewFrameProps {
 }
 
 const loadingState: McpAppPreviewState = Object.freeze({ phase: 'loading' });
+const completed = Promise.resolve();
 
 const isRecord = (value: McpAppJsonValue): value is Readonly<Record<string, McpAppJsonValue>> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
+
+class McpAppPreviewDataError extends Error {
+  constructor(message: string) {
+    super(`MCP App preview ${message}.`);
+    this.name = 'McpAppPreviewDataError';
+  }
+}
+
+const detachedJson = (value: unknown, ancestors = new WeakSet<object>()): McpAppJsonValue => {
+  if (value === null || typeof value === 'boolean' || typeof value === 'string') return value;
+  if (typeof value === 'number') {
+    if (Number.isFinite(value)) return value;
+    throw new McpAppPreviewDataError('input and result must contain finite JSON numbers');
+  }
+  if (typeof value !== 'object') throw new McpAppPreviewDataError('input and result must contain only JSON values');
+  if (ancestors.has(value)) throw new McpAppPreviewDataError('input and result must not be cyclic JSON');
+  ancestors.add(value);
+  try {
+    if (Array.isArray(value)) return Object.freeze(value.map((entry) => detachedJson(entry, ancestors)));
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) {
+      throw new McpAppPreviewDataError('input and result must use ordinary JSON objects');
+    }
+    const copy = Object.create(null) as Record<string, McpAppJsonValue>;
+    for (const [key, entry] of Object.entries(value)) copy[key] = detachedJson(entry, ancestors);
+    return Object.freeze(copy);
+  } finally {
+    ancestors.delete(value);
+  }
+};
 
 const messageFor = (error: unknown): string =>
   error instanceof Error && error.message.length > 0 ? error.message : 'MCP App preview failed.';
@@ -98,7 +129,12 @@ const canonicalResource = (value: McpAppJsonValue): McpAppCanonicalResource | un
   });
 };
 
-const fallbackFor = (resource: McpAppJsonValue, input: McpAppJsonValue, result: McpAppJsonValue): McpAppPreviewFallback => {
+const fallbackFor = (
+  resource: McpAppJsonValue | undefined,
+  input: McpAppJsonValue,
+  result: McpAppJsonValue,
+  reason = 'invalid-resource',
+): McpAppPreviewFallback => {
   if (isRecord(resource) && resource.kind === 'fallback' && typeof resource.reason === 'string') {
     return Object.freeze({
       input: resource.input ?? input,
@@ -106,11 +142,21 @@ const fallbackFor = (resource: McpAppJsonValue, input: McpAppJsonValue, result: 
       result: resource.result ?? result,
     });
   }
-  return Object.freeze({ input, reason: 'invalid-resource', result });
+  return Object.freeze({ input, reason, result });
+};
+
+const canonicalUiResourceUri = (value: McpAppJsonValue): boolean => {
+  if (typeof value !== 'string' || value.length === 0) return false;
+  try {
+    const uri = new URL(value);
+    return uri.protocol === 'ui:' && uri.hostname.length > 0 && uri.href === value;
+  } catch {
+    return false;
+  }
 };
 
 const hasCanonicalAppsProfile = (value: McpAppJsonValue): boolean =>
-  isRecord(value) && value.kind === 'apps' && typeof value.resourceUri === 'string' && value.resourceUri.startsWith('ui://');
+  isRecord(value) && value.kind === 'apps' && canonicalUiResourceUri(value.resourceUri);
 
 const stateFor = (preview: McpAppPreviewResponse, input: McpAppJsonValue, result: McpAppJsonValue): McpAppPreviewState => {
   const resource = canonicalResource(preview.resource);
@@ -120,12 +166,16 @@ const stateFor = (preview: McpAppPreviewResponse, input: McpAppJsonValue, result
   return Object.freeze({ fallback: fallbackFor(preview.resource, input, result), phase: 'fallback', preview });
 };
 
-const createRequest = (options: McpAppPreviewControllerOptions): McpAppPreviewCreateRequest => Object.freeze({
+const createRequest = (
+  options: McpAppPreviewControllerOptions,
+  input: McpAppJsonValue,
+  result: McpAppJsonValue,
+): McpAppPreviewCreateRequest => Object.freeze({
   ...(options.consent === undefined ? {} : { consent: options.consent }),
   host: options.host,
-  input: options.input,
+  input,
   previewProfile: options.previewProfile ?? 'portable',
-  result: options.result,
+  result,
   toolName: options.toolName,
 });
 
@@ -148,15 +198,16 @@ export class McpAppPreviewController {
   #preview: McpAppPreviewResponse | undefined;
   #relay: McpAppFrameRelayLike | undefined;
   #started = false;
+  #startPromise: Promise<void> | undefined;
   #state: McpAppPreviewState = loadingState;
 
   constructor(options: McpAppPreviewControllerOptions) {
     this.#client = options.client;
     this.#closeTimeoutMs = options.closeTimeoutMs;
     this.#frameRelayFactory = options.frameRelayFactory;
-    this.#input = options.input;
-    this.#request = createRequest(options);
-    this.#result = options.result;
+    this.#input = detachedJson(options.input);
+    this.#result = detachedJson(options.result);
+    this.#request = createRequest(options, this.#input, this.#result);
     this.#sessionId = options.sessionId;
   }
 
@@ -170,19 +221,28 @@ export class McpAppPreviewController {
     return () => { this.#listeners.delete(listener); };
   }
 
-  async start(): Promise<void> {
-    if (this.#started || this.#closed) return;
+  start(): Promise<void> {
+    if (this.#started) return this.#startPromise ?? completed;
+    if (this.#closed) return completed;
     this.#started = true;
+    this.#startPromise = this.#start();
+    return this.#startPromise;
+  }
+
+  async #start(): Promise<void> {
     try {
       const preview = await this.#client.create(this.#sessionId, this.#request);
-      if (this.#closed) {
-        await this.#forceClose(preview.bindingId);
-        return;
-      }
       this.#preview = preview;
+      if (this.#closed) return;
       this.#setState(stateFor(preview, this.#input, this.#result));
     } catch (error) {
-      if (!this.#closed) this.#setState(Object.freeze({ message: messageFor(error), phase: 'error' }));
+      if (!this.#closed) {
+        this.#setState(Object.freeze({
+          fallback: fallbackFor(undefined, this.#input, this.#result, 'preview-error'),
+          message: messageFor(error),
+          phase: 'error',
+        }));
+      }
     }
   }
 
@@ -219,6 +279,7 @@ export class McpAppPreviewController {
   }
 
   async #close(): Promise<void> {
+    await this.#startPromise;
     const bindingId = this.#preview?.bindingId;
     if (bindingId === undefined) return;
     if (this.#relay !== undefined) {
@@ -243,7 +304,11 @@ export class McpAppPreviewController {
 
   #relayError(error: McpAppFrameRelayError | Error): void {
     if (this.#closed) return;
-    this.#setState(Object.freeze({ message: messageFor(error), phase: 'error' }));
+    this.#setState(Object.freeze({
+      fallback: fallbackFor(this.#preview?.resource, this.#input, this.#result, 'preview-error'),
+      message: messageFor(error),
+      phase: 'error',
+    }));
     void this.close();
   }
 
@@ -325,19 +390,20 @@ export const McpAppPreview = ({
     controller.current?.attachFrame(iframe.current, browserWindow);
   }, [browserWindow, state]);
 
+  const fallback = state.phase === 'fallback' || state.phase === 'error' ? state.fallback : undefined;
   const profile = state.phase === 'ready' || state.phase === 'fallback' ? <Profile profile={state.preview.profile} /> : null;
   return (
     <section aria-busy={state.phase === 'loading'} aria-label={title} className="mcp-app-preview">
       <header className="mcp-app-preview__header"><h2>{title}</h2>{profile}</header>
       {state.phase === 'loading' ? <p role="status">Creating MCP App preview…</p> : null}
       {state.phase === 'error' ? <p role="alert">{state.message}</p> : null}
-      {state.phase === 'fallback' ? (
+      {fallback === undefined ? null : (
         <section aria-label="MCP App fallback" className="mcp-app-preview__fallback">
-          <p role="status">Interactive App rendering is unavailable ({state.fallback.reason}). Showing the ordinary tool result instead.</p>
-          <details open><summary>Tool input</summary><pre>{json(state.fallback.input)}</pre></details>
-          <details open><summary>Tool result</summary><pre>{json(state.fallback.result)}</pre></details>
+          <p role="status">Interactive App rendering is unavailable ({fallback.reason}). Showing the ordinary tool result instead.</p>
+          <details open><summary>Tool input</summary><pre>{json(fallback.input)}</pre></details>
+          <details open><summary>Tool result</summary><pre>{json(fallback.result)}</pre></details>
         </section>
-      ) : null}
+      )}
       {state.phase === 'ready' && state.preview.frame !== undefined ? <McpAppPreviewFrame frame={state.preview.frame} iframeRef={iframe} title={title} /> : null}
     </section>
   );

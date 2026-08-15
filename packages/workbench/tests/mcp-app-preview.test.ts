@@ -93,6 +93,16 @@ const browserWindow: McpAppFrameWindow = Object.freeze({
   removeEventListener: () => undefined,
 });
 
+const deferred = <Value>() => {
+  let reject: (reason?: unknown) => void = () => undefined;
+  let resolve: (value: Value) => void = () => undefined;
+  const promise = new Promise<Value>((nextResolve, nextReject) => {
+    resolve = nextResolve;
+    reject = nextReject;
+  });
+  return { promise, reject, resolve };
+};
+
 describe('MCP App preview', () => {
   it('creates a preview from immutable tool data and starts a relay bound to the exact sandbox frame', async () => {
     const input: McpAppJsonValue = Object.freeze({ city: 'Paris', nested: Object.freeze({ unit: 'celsius' }) });
@@ -190,7 +200,93 @@ describe('MCP App preview', () => {
     expect(forceClosed).toEqual(['binding-weather']);
   });
 
-  it('reports create failures and force-closes a relay when graceful unmount cleanup rejects', async () => {
+  it('rejects malformed or noncanonical ui resource URIs before mounting a sandbox', async () => {
+    for (const resourceUri of ['ui:///', 'ui://weather/../forecast.html', 'https://weather/forecast.html', 'ui:// weather/forecast.html']) {
+      const { client, forceClosed } = fakeClient(Promise.resolve(preview({
+        profile: Object.freeze({ kind: 'apps', profile: 'portable', resourceUri }),
+      })));
+      const controller = createMcpAppPreviewController({
+        client,
+        frameRelayFactory: () => { throw new Error('a noncanonical resource must not start a relay'); },
+        host,
+        input: Object.freeze({ city: 'Paris' }),
+        result: Object.freeze({ text: 'Sunny' }),
+        sessionId: 'session-weather',
+        toolName: 'show-weather',
+      });
+
+      await controller.start();
+
+      expect(controller.state).toMatchObject({ fallback: { reason: 'invalid-resource' }, phase: 'fallback' });
+      await controller.close();
+      expect(forceClosed).toEqual(['binding-weather']);
+    }
+  });
+
+  it('deep-detaches JSON input and result transactionally before a preview create can observe them', async () => {
+    const input = { city: 'Paris', nested: { unit: 'celsius' } } as unknown as McpAppJsonValue;
+    const result = { temperature: 22 } as unknown as McpAppJsonValue;
+    const { client, creates } = fakeClient(Promise.resolve(preview()));
+    const controller = createMcpAppPreviewController({
+      client,
+      frameRelayFactory: () => ({ async close() {}, start: () => true }),
+      host,
+      input,
+      result,
+      sessionId: 'session-weather',
+      toolName: 'show-weather',
+    });
+    (input as { nested: { unit: string } }).nested.unit = 'fahrenheit';
+    (result as { temperature: number }).temperature = 23;
+
+    await controller.start();
+
+    expect(creates[0]).toMatchObject({ input: { city: 'Paris', nested: { unit: 'celsius' } }, result: { temperature: 22 } });
+    expect(Object.isFrozen(creates[0]?.input)).toBe(true);
+    expect(Object.isFrozen((creates[0]?.input as { readonly nested: object }).nested)).toBe(true);
+    expect(Object.isFrozen(creates[0]?.result)).toBe(true);
+
+    const cyclic: { readonly self?: unknown } = {};
+    (cyclic as { self: unknown }).self = cyclic;
+    expect(() => createMcpAppPreviewController({
+      client,
+      frameRelayFactory: () => ({ async close() {}, start: () => true }),
+      host,
+      input: cyclic as McpAppJsonValue,
+      result: { invalid: Number.NaN } as unknown as McpAppJsonValue,
+      sessionId: 'session-weather',
+      toolName: 'show-weather',
+    })).toThrow('JSON');
+    expect(creates).toHaveLength(1);
+  });
+
+  it('waits for a late preview create before force-closing its binding during unmount', async () => {
+    const pending = deferred<Preview>();
+    const { client, forceClosed } = fakeClient(pending.promise);
+    const controller = createMcpAppPreviewController({
+      client,
+      frameRelayFactory: () => ({ async close() {}, start: () => true }),
+      host,
+      input: Object.freeze({ city: 'Paris' }),
+      result: Object.freeze({ text: 'Sunny' }),
+      sessionId: 'session-weather',
+      toolName: 'show-weather',
+    });
+
+    const starting = controller.start();
+    let closeFinished = false;
+    const closing = controller.close().then(() => { closeFinished = true; });
+    await Promise.resolve();
+
+    expect(closeFinished).toBe(false);
+    pending.resolve(preview());
+    await Promise.all([starting, closing]);
+
+    expect(forceClosed).toEqual(['binding-weather']);
+    expect(controller.state).toEqual({ phase: 'loading' });
+  });
+
+  it('reports create and relay failures with the ordinary immutable fallback before cleanup', async () => {
     const failed = fakeClient(Promise.reject(new Error('preview route failed')));
     const createFailure = createMcpAppPreviewController({
       client: failed.client,
@@ -204,25 +300,39 @@ describe('MCP App preview', () => {
 
     await createFailure.start();
 
-    expect(createFailure.state).toMatchObject({ phase: 'error', message: 'preview route failed' });
+    expect(createFailure.state).toMatchObject({
+      fallback: { input: {}, result: {} },
+      message: 'preview route failed',
+      phase: 'error',
+    });
 
     const active = fakeClient(Promise.resolve(preview()));
+    let relayOptions: McpAppFrameRelayOptions | undefined;
     const relayFailure = createMcpAppPreviewController({
       client: active.client,
-      frameRelayFactory: () => ({
+      frameRelayFactory: (options) => {
+        relayOptions = options;
+        return {
         async close() { throw new Error('graceful close failed'); },
         start: () => true,
-      }),
+        };
+      },
       host,
-      input: Object.freeze({}),
-      result: Object.freeze({}),
+      input: Object.freeze({ city: 'Paris' }),
+      result: Object.freeze({ text: 'Sunny' }),
       sessionId: 'session-weather',
       toolName: 'show-weather',
     });
     await relayFailure.start();
     relayFailure.attachFrame(iframe(), browserWindow);
-    await relayFailure.close();
+    relayOptions?.onError?.(new Error('relay failed') as never);
 
+    expect(relayFailure.state).toMatchObject({
+      fallback: { input: { city: 'Paris' }, result: { text: 'Sunny' } },
+      message: 'relay failed',
+      phase: 'error',
+    });
+    await relayFailure.close();
     expect(active.forceClosed).toEqual(['binding-weather']);
   });
 
@@ -247,4 +357,5 @@ describe('MCP App preview', () => {
     expect(sandbox).toContain('referrerPolicy="no-referrer"');
     expect(sandbox).not.toContain('srcdoc=');
   });
+
 });
