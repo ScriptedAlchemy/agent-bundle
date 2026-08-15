@@ -5,7 +5,7 @@ import type {
   DevRuntimeStatus,
   DevRuntimeSurface,
 } from '../../agent-bundle/src/dev/runtime-protocol.ts';
-import { ForegroundRouteClient } from '../src/mcp/mcp-route-client.ts';
+import { ForegroundRouteClient, ForegroundRouteClientError } from '../src/mcp/mcp-route-client.ts';
 import { RuntimeClient, RuntimeClientError } from '../src/runtime-client.ts';
 
 interface RecordedRequest {
@@ -96,6 +96,27 @@ it('performs only the public status request when runtime is unavailable', async 
   expect(fixture.requests[0]?.headers.get('x-agent-bundle-session')).toBeNull();
 });
 
+it('rejects absolute, protocol-relative, credentialed, and fragmented protected routes before foreground authentication', async () => {
+  const requests: string[] = [];
+  const foreground = new ForegroundRouteClient({
+    fetch: async (input) => {
+      requests.push(String(input));
+      return json({ origin: 'http://localhost', token: 'foreground-token' });
+    },
+  });
+
+  for (const path of [
+    'https://localhost/api/runtime/runs',
+    '//localhost/api/runtime/runs',
+    'https://token@localhost/api/runtime/runs',
+    '/api/runtime/runs#fragment',
+    'api/runtime/runs',
+  ]) {
+    await expect(foreground.protectedResponse(path)).rejects.toBeInstanceOf(ForegroundRouteClientError);
+  }
+  expect(requests).toEqual([]);
+});
+
 it('bootstraps available runtime history through one shared foreground authentication session', async () => {
   const fixture = runtimeFetch();
   const foreground = new ForegroundRouteClient({ fetch: fixture.fetch });
@@ -115,12 +136,43 @@ it('bootstraps available runtime history through one shared foreground authentic
   expect(Object.isFrozen((left as Extract<typeof left, { readonly kind: 'available' }>).history[0]!)).toBe(true);
 });
 
+it('rejects every runtime mutation and protected read before an available bootstrap without sending a request', async () => {
+  const fixture = runtimeFetch();
+  const client = new RuntimeClient(new ForegroundRouteClient({ fetch: fixture.fetch }));
+
+  await expect(client.createRun({ input: {}, surfaceId: 'app-weather', target: 'portable' })).rejects.toMatchObject({ code: 'AB8201' });
+  await expect(client.readRun('run a')).rejects.toMatchObject({ code: 'AB8201' });
+  await expect(client.replayRun({ mode: 'exact', runId: 'run a' })).rejects.toMatchObject({ code: 'AB8201' });
+  await expect(client.resetState({ stateStoreId: 'state-a' })).rejects.toMatchObject({ code: 'AB8201' });
+  await expect(client.readAsset({ path: ['assets', 'weather app.js'], runtimeGenerationId: 'generation a', surfaceId: 'app-weather' })).rejects.toMatchObject({ code: 'AB8201' });
+  expect(fixture.requests).toEqual([]);
+});
+
+it('clears previously bootstrapped provider authority when status becomes unavailable', async () => {
+  const fixture = runtimeFetch();
+  let unavailable = false;
+  const client = new RuntimeClient(new ForegroundRouteClient({
+    fetch: async (input, init) => String(input) === '/api/runtime/status' && unavailable
+      ? json({ status: null })
+      : fixture.fetch(input, init),
+  }));
+
+  await expect(client.bootstrap()).resolves.toMatchObject({ kind: 'available', providerSessionId: 'provider-a' });
+  unavailable = true;
+  await expect(client.bootstrap()).resolves.toEqual({ kind: 'unavailable' });
+  const requestCount = fixture.requests.length;
+
+  await expect(client.readRun('run a')).rejects.toMatchObject({ code: 'AB8201' });
+  expect(fixture.requests).toHaveLength(requestCount);
+});
+
 it('rejects invalid runtime history before it can enter browser state', async () => {
   const cases = [
     Object.freeze(Array.from({ length: 51 }, (_, index) => run(`run-${index}`, `2026-08-15T12:${String(index).padStart(2, '0')}:00.000Z`))),
     Object.freeze([run('duplicate'), run('duplicate')]),
     Object.freeze([{ ...run('foreign'), vector: { ...vector, providerSessionId: 'provider-other' } } as DevRuntimeRun]),
     Object.freeze([run('older', '2026-08-15T11:00:00.000Z'), run('newer', '2026-08-15T12:00:00.000Z')]),
+    Object.freeze([run('run/not-an-opaque-id')]),
   ];
 
   for (const runs of cases) {
@@ -133,6 +185,7 @@ it('uses the exact imported request bodies and encoded opaque runtime paths', as
   const fixture = runtimeFetch();
   const client = new RuntimeClient(new ForegroundRouteClient({ fetch: fixture.fetch }));
 
+  await client.bootstrap();
   await client.createRun({ expectedGenerationId: 'generation-a', fixtureId: 'fixture-a', input: { city: 'London' }, surfaceId: 'app-weather', target: 'portable' });
   await client.readRun('run a');
   await client.replayRun({ expectedGenerationId: 'generation-a', mode: 'exact', runId: 'run a' });
@@ -150,12 +203,28 @@ it('uses the exact imported request bodies and encoded opaque runtime paths', as
   );
 });
 
+it('rejects foreign provider runs after authoritative bootstrap before they can replace current evidence', async () => {
+  const fixture = runtimeFetch();
+  const foreign = Object.freeze({ ...run('foreign-run'), vector: Object.freeze({ ...vector, providerSessionId: 'provider-other' }) }) as DevRuntimeRun;
+  const client = new RuntimeClient(new ForegroundRouteClient({
+    fetch: async (input, init) => String(input) === '/api/runtime/runs' && init?.method === 'POST'
+      ? json({ run: foreign })
+      : fixture.fetch(input, init),
+  }));
+
+  await client.bootstrap();
+  await expect(client.createRun({ input: {}, surfaceId: 'app-weather', target: 'portable' })).rejects.toMatchObject({ code: 'AB8206' });
+});
+
 it('surfaces a complete sanitized generation conflict without retrying the protected mutation', async () => {
   let runs = 0;
   const foreground = new ForegroundRouteClient({
     fetch: async (input, init) => {
       const url = String(input);
+      if (url === '/api/runtime/status') return json({ status });
+      if (url === '/api/runtime/surfaces') return json({ surfaces: [surface] });
       if (url === '/api/project/session') return json({ origin: 'http://localhost', token: 'foreground-token' });
+      if (url === '/api/runtime/runs?limit=50') return json({ providerSessionId: 'provider-a', runs: [run()] });
       if (url === '/api/runtime/runs' && init?.method === 'POST') {
         runs += 1;
         return json({ diagnostic: { code: 'AB8204', details: { actualGenerationId: 'generation-b' }, message: 'Generation changed.', phase: 'provider-lifecycle', secret: 'must-not-leak' } }, 409);
@@ -164,7 +233,9 @@ it('surfaces a complete sanitized generation conflict without retrying the prote
     },
   });
 
-  await expect(new RuntimeClient(foreground).createRun({ input: {}, surfaceId: 'app-weather', target: 'portable' })).rejects.toEqual(
+  const client = new RuntimeClient(foreground);
+  await client.bootstrap();
+  await expect(client.createRun({ input: {}, surfaceId: 'app-weather', target: 'portable' })).rejects.toEqual(
     new RuntimeClientError({ code: 'AB8204', details: { actualGenerationId: 'generation-b' }, message: 'Generation changed.', phase: 'provider-lifecycle' }),
   );
   expect(runs).toBe(1);
@@ -177,10 +248,66 @@ it('rejects oversized, untyped, or unsupported protected assets', async () => {
 
   for (const asset of [oversized, missingType, unsupportedType]) {
     const fixture = runtimeFetch({ asset });
-    await expect(new RuntimeClient(new ForegroundRouteClient({ fetch: fixture.fetch })).readAsset({
+    const client = new RuntimeClient(new ForegroundRouteClient({ fetch: fixture.fetch }));
+    await client.bootstrap();
+    await expect(client.readAsset({
       path: ['assets', 'weather app.js'],
       runtimeGenerationId: 'generation a',
       surfaceId: 'app-weather',
     })).rejects.toMatchObject({ code: 'AB8206' });
   }
+});
+
+it('preserves own __proto__ keys as immutable prototype-inert JSON snapshots', async () => {
+  const foreground = new ForegroundRouteClient({
+    fetch: async (input) => String(input) === '/public'
+      ? new Response('{"__proto__":{"polluted":true},"nested":{"__proto__":{"nested":true}}}', { headers: { 'content-type': 'application/json' } })
+      : json({ origin: 'http://localhost', token: 'foreground-token' }),
+  });
+  const publicSnapshot = await foreground.publicJson('/public') as Readonly<Record<string, unknown>>;
+  const source = JSON.parse('{"__proto__":{"polluted":true},"nested":{"__proto__":{"nested":true}}}');
+  const base = run('run-proto');
+  if (base.status !== 'succeeded') throw new Error('Expected succeeded fixture run.');
+  const poisoned = Object.freeze({ ...base, input: source, result: Object.freeze({ ...base.result, agentVisible: source }) }) as DevRuntimeRun;
+  const fixture = runtimeFetch({ runs: [poisoned] });
+  const runtime = new RuntimeClient(new ForegroundRouteClient({ fetch: fixture.fetch }));
+  const bootstrapped = await runtime.bootstrap();
+  if (bootstrapped.kind !== 'available') throw new Error('Expected available runtime.');
+  const runtimeSnapshot = bootstrapped.history[0]!;
+
+  for (const value of [publicSnapshot, runtimeSnapshot.input, runtimeSnapshot.result?.agentVisible] as const) {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new Error('Expected object snapshot.');
+    expect(Object.getPrototypeOf(value)).toBeNull();
+    expect(Object.hasOwn(value, '__proto__')).toBe(true);
+    const nested = (value as Readonly<Record<string, unknown>>).nested as object;
+    expect(Object.getPrototypeOf(nested)).toBeNull();
+    expect(Object.hasOwn(nested, '__proto__')).toBe(true);
+  }
+});
+
+it('derives Flight downloads from the validated run ID and rejects mismatched provider metadata', async () => {
+  const base = run('run a');
+  if (base.status !== 'succeeded') throw new Error('Expected succeeded fixture run.');
+  const matching = Object.freeze({
+    ...base,
+    result: Object.freeze({
+      ...base.result,
+      flight: Object.freeze({ bytes: 12, downloadPath: '/api/runtime/runs/run%20a/flight', preview: 'Flight', truncated: false }),
+    }),
+  }) as DevRuntimeRun;
+  const matchingClient = new RuntimeClient(new ForegroundRouteClient({ fetch: runtimeFetch({ runs: [matching] }).fetch }));
+  const matchingBootstrap = await matchingClient.bootstrap();
+  const matchingRun = matchingBootstrap.kind === 'available' ? matchingBootstrap.history[0] : undefined;
+  if (matchingRun?.status !== 'succeeded') throw new Error('Expected available succeeded Flight run.');
+  expect(matchingRun.result.flight?.downloadPath).toBe('/api/runtime/runs/run%20a/flight');
+
+  const mismatched = Object.freeze({
+    ...matching,
+    result: Object.freeze({
+      ...base.result,
+      flight: Object.freeze({ bytes: 12, downloadPath: 'https://invalid.example/flight', preview: 'Flight', truncated: false }),
+    }),
+  }) as DevRuntimeRun;
+  const mismatchedClient = new RuntimeClient(new ForegroundRouteClient({ fetch: runtimeFetch({ runs: [mismatched] }).fetch }));
+  await expect(mismatchedClient.bootstrap()).rejects.toMatchObject({ code: 'AB8206' });
 });

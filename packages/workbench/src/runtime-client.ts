@@ -78,8 +78,15 @@ const jsonValue = (value: unknown, ancestors = new WeakSet<object>()): RuntimeJs
   try {
     if (Array.isArray(value)) return Object.freeze(value.map((entry) => jsonValue(entry, ancestors))) as RuntimeJsonValue;
     if (!isRecord(value)) throw invalid('Runtime data must use ordinary JSON objects.');
-    const copy: Record<string, unknown> = {};
-    for (const [key, entry] of Object.entries(value)) copy[key] = jsonValue(entry, ancestors);
+    const copy = Object.create(null) as Record<string, RuntimeJsonValue>;
+    for (const [key, entry] of Object.entries(value)) {
+      Object.defineProperty(copy, key, {
+        configurable: false,
+        enumerable: true,
+        value: jsonValue(entry, ancestors),
+        writable: false,
+      });
+    }
     return Object.freeze(copy) as RuntimeJsonValue;
   } finally {
     ancestors.delete(value);
@@ -236,7 +243,7 @@ const traceSpan = (value: unknown): DevRuntimeTraceSpan => {
   });
 };
 
-const inspection = (value: unknown): DevRuntimeInspectionEnvelope => {
+const inspection = (value: unknown, runId: string): DevRuntimeInspectionEnvelope => {
   const response = record(value);
   if (!hasOnly(response, ['agentVisible', 'app', 'flight', 'modelVisible', 'native', 'protocol', 'state', 'trace', 'tree']) ||
     !isRecord(response.state) || !hasOnly(response.state, ['identity', 'snapshot']) || !Array.isArray(response.trace) || !Array.isArray(response.tree)) {
@@ -273,12 +280,16 @@ const inspection = (value: unknown): DevRuntimeInspectionEnvelope => {
     (flight.downloadPath !== undefined && !nonemptyString(flight.downloadPath)) || !nonemptyString(flight.preview) || typeof flight.truncated !== 'boolean')) {
     throw invalid('Runtime route returned an invalid Flight inspection.');
   }
+  const flightDownloadPath = flight === undefined ? undefined : `/api/runtime/runs/${opaqueSegment(runId, 'Runtime run ID')}/flight`;
+  if (flight !== undefined && flight.downloadPath !== undefined && flight.downloadPath !== flightDownloadPath) {
+    throw invalid('Runtime route returned an invalid Flight download path.');
+  }
   return Object.freeze({
     ...(response.agentVisible === undefined ? {} : { agentVisible: jsonValue(response.agentVisible) }),
     ...(appSnapshot === undefined ? {} : { app: appSnapshot }),
     ...(flight === undefined ? {} : { flight: Object.freeze({
       bytes: flight.bytes as number,
-      ...(flight.downloadPath === undefined ? {} : { downloadPath: flight.downloadPath as string }),
+      downloadPath: flightDownloadPath,
       preview: flight.preview as string,
       truncated: flight.truncated as boolean,
     }) }),
@@ -303,6 +314,7 @@ const run = (value: unknown): DevRuntimeRun => {
     (response.status !== 'running' && response.status !== 'succeeded' && response.status !== 'failed')) {
     throw invalid('Runtime route returned an invalid run.');
   }
+  opaqueSegment(response.id, 'Runtime run ID');
   const base = {
     ...(response.fixtureId === undefined ? {} : { fixtureId: response.fixtureId }),
     id: response.id,
@@ -319,7 +331,7 @@ const run = (value: unknown): DevRuntimeRun => {
   const completedAt = requiredDate(response.completedAt, 'Runtime route returned an invalid completed run.');
   if (response.status === 'succeeded') {
     if (response.diagnostics !== undefined || response.result === undefined) throw invalid('Runtime route returned an invalid succeeded run.');
-    return Object.freeze({ ...base, completedAt, result: inspection(response.result), status: 'succeeded' });
+    return Object.freeze({ ...base, completedAt, result: inspection(response.result, response.id), status: 'succeeded' });
   }
   if (response.result !== undefined || !Array.isArray(response.diagnostics)) throw invalid('Runtime route returned an invalid failed run.');
   return Object.freeze({ ...base, completedAt, diagnostics: Object.freeze(response.diagnostics.map(diagnostic)), status: 'failed' });
@@ -402,6 +414,7 @@ export class RuntimeClient {
   }
 
   async bootstrap(): Promise<RuntimeBootstrap> {
+    this.#providerSessionId = undefined;
     try {
       const statusResult = statusResponse(await this.#foreground.publicJson('/api/runtime/status'));
       if (statusResult.status === null) return Object.freeze({ kind: 'unavailable' });
@@ -423,19 +436,23 @@ export class RuntimeClient {
   }
 
   async createRun(request: DevRuntimeInvocationRequest): Promise<DevRuntimeRun> {
+    this.#requireProvider();
     return this.#runRequest('/api/runtime/runs', request, 'POST');
   }
 
   async readRun(runId: string): Promise<DevRuntimeRun> {
+    this.#requireProvider();
     return this.#readRun(`/api/runtime/runs/${opaqueSegment(runId, 'Runtime run ID')}`);
   }
 
   async replayRun(request: DevRuntimeReplayRequest): Promise<DevRuntimeRun> {
+    this.#requireProvider();
     const path = `/api/runtime/runs/${opaqueSegment(request.runId, 'Runtime run ID')}/replay`;
     return this.#runRequest(path, request, 'POST');
   }
 
   async resetState(request: DevRuntimeStateResetRequest): Promise<DevRuntimeStateIdentity> {
+    this.#requireProvider();
     try {
       return stateResponse(await this.#foreground.protectedJson('/api/runtime/state/reset', {
         body: JSON.stringify(request),
@@ -448,6 +465,7 @@ export class RuntimeClient {
   }
 
   async readAsset(request: DevRuntimeAssetRequest): Promise<Blob> {
+    this.#requireProvider();
     if (request.path.length === 0) throw invalid('Runtime asset path is not valid.');
     try {
       const path = request.path.map((segment) => opaqueSegment(segment, 'Runtime asset path segment')).join('/');
@@ -489,10 +507,17 @@ export class RuntimeClient {
   }
 
   #assertProvider(value: DevRuntimeRun): DevRuntimeRun {
-    if (this.#providerSessionId !== undefined && value.vector.providerSessionId !== this.#providerSessionId) {
+    if (value.vector.providerSessionId !== this.#requireProvider()) {
       throw invalid('Runtime route returned a run for another provider session.');
     }
     return value;
+  }
+
+  #requireProvider(): string {
+    if (this.#providerSessionId === undefined) {
+      throw new RuntimeClientError({ code: 'AB8201', message: 'Development runtime is not available.' });
+    }
+    return this.#providerSessionId;
   }
 }
 

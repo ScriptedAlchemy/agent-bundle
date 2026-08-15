@@ -76,8 +76,15 @@ const detachedJson = (value: unknown, ancestors = new WeakSet<object>()): unknow
     if (Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null) {
       throw new McpRouteClientError('AB8016', 'Foreground MCP data must use ordinary JSON objects.');
     }
-    const copy: Record<string, unknown> = {};
-    for (const [key, entry] of Object.entries(value)) copy[key] = detachedJson(entry, ancestors);
+    const copy = Object.create(null) as Record<string, unknown>;
+    for (const [key, entry] of Object.entries(value)) {
+      Object.defineProperty(copy, key, {
+        configurable: false,
+        enumerable: true,
+        value: detachedJson(entry, ancestors),
+        writable: false,
+      });
+    }
     return Object.freeze(copy);
   } finally {
     ancestors.delete(value);
@@ -149,6 +156,21 @@ const routeSession = (value: unknown): McpRouteSession => {
 
 const encode = (value: string): string => encodeURIComponent(value);
 
+const foregroundRoute = (path: string): string => {
+  const origin = 'http://foreground.invalid';
+  let parsed: URL;
+  try {
+    parsed = new URL(path, origin);
+  } catch {
+    throw new ForegroundRouteClientError('AB8015', 'Foreground route is not valid.', 400);
+  }
+  if (!path.startsWith('/') || path.startsWith('//') || parsed.origin !== origin || parsed.username.length > 0 || parsed.password.length > 0 ||
+    parsed.hash.length > 0 || `${parsed.pathname}${parsed.search}` !== path) {
+    throw new ForegroundRouteClientError('AB8015', 'Foreground route is not valid.', 400);
+  }
+  return path;
+};
+
 /** Memory-only authentication shared by foreground browser route clients. */
 export class ForegroundRouteClient {
   readonly #fetch: typeof fetch;
@@ -159,7 +181,7 @@ export class ForegroundRouteClient {
   }
 
   async publicJson(path: string, init: RequestInit = {}): Promise<unknown> {
-    return this.#json(await this.#fetch(path, init));
+    return this.#json(await this.#fetch(foregroundRoute(path), init));
   }
 
   async protectedJson(path: string, init: RequestInit = {}): Promise<unknown> {
@@ -167,10 +189,11 @@ export class ForegroundRouteClient {
   }
 
   async protectedResponse(path: string, init: RequestInit = {}): Promise<Response> {
+    const route = foregroundRoute(path);
     const authentication = await this.#authenticate();
     const headers = new Headers(init.headers);
     headers.set('x-agent-bundle-session', authentication.token);
-    const response = await this.#fetch(path, { ...init, headers });
+    const response = await this.#fetch(route, { ...init, headers });
     if (!response.ok) throw ForegroundRouteClientError.fromResponse(await response.clone().json().catch(() => undefined), response.status);
     return response;
   }
