@@ -58,7 +58,7 @@ const resource: McpAppJsonValue = Object.freeze({
 const preview = (overrides: Partial<Preview> = {}): Preview => Object.freeze({
   bindingId: 'binding-weather',
   frame,
-  profile: Object.freeze({ kind: 'apps', profile: 'portable' }),
+  profile: Object.freeze({ kind: 'apps', profile: 'portable', resourceUri: 'ui://weather/forecast.html' }),
   resource,
   ...overrides,
 });
@@ -165,6 +165,28 @@ describe('MCP App preview', () => {
     await controller.close();
 
     expect(controller.state).toMatchObject({ fallback: { reason: 'invalid-resource' }, phase: 'fallback' });
+    expect(forceClosed).toEqual(['binding-weather']);
+  });
+
+  it('refuses a sandbox frame unless its profile proves the canonical ui resource', async () => {
+    const { client, forceClosed } = fakeClient(Promise.resolve(preview({
+      profile: Object.freeze({ kind: 'apps', profile: 'portable' }),
+    })));
+    const controller = createMcpAppPreviewController({
+      client,
+      frameRelayFactory: () => { throw new Error('an unproven resource must not start a relay'); },
+      host,
+      input: Object.freeze({ city: 'Paris' }),
+      result: Object.freeze({ text: 'Sunny' }),
+      sessionId: 'session-weather',
+      toolName: 'show-weather',
+    });
+
+    await controller.start();
+
+    expect(controller.state).toMatchObject({ fallback: { reason: 'invalid-resource' }, phase: 'fallback' });
+    expect(controller.attachFrame(iframe(), browserWindow)).toBe(false);
+    await controller.close();
     expect(forceClosed).toEqual(['binding-weather']);
   });
 

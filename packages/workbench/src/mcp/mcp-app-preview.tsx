@@ -109,9 +109,14 @@ const fallbackFor = (resource: McpAppJsonValue, input: McpAppJsonValue, result: 
   return Object.freeze({ input, reason: 'invalid-resource', result });
 };
 
+const hasCanonicalAppsProfile = (value: McpAppJsonValue): boolean =>
+  isRecord(value) && value.kind === 'apps' && typeof value.resourceUri === 'string' && value.resourceUri.startsWith('ui://');
+
 const stateFor = (preview: McpAppPreviewResponse, input: McpAppJsonValue, result: McpAppJsonValue): McpAppPreviewState => {
   const resource = canonicalResource(preview.resource);
-  if (preview.frame !== undefined && resource !== undefined) return Object.freeze({ phase: 'ready', preview, resource });
+  if (preview.frame !== undefined && resource !== undefined && hasCanonicalAppsProfile(preview.profile)) {
+    return Object.freeze({ phase: 'ready', preview, resource });
+  }
   return Object.freeze({ fallback: fallbackFor(preview.resource, input, result), phase: 'fallback', preview });
 };
 
