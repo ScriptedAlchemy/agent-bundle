@@ -7,12 +7,17 @@ import { ProjectEventHub } from './events.ts';
 import {
   startForegroundServer,
   type ForegroundCoordinator,
+  type ForegroundServerOptions,
   type WorkbenchAssetSource,
 } from './foreground-server.ts';
 import { McpAppBindingService, type McpAppToolDefinition } from './mcp-app-binding-service.ts';
 import type { McpAppRoutePreviewService } from './mcp-app-routes.ts';
 import { McpAppPreviewService } from './mcp-app-preview-service.ts';
-import { createMcpAppSandboxProxy, type McpAppSandboxProxy } from './mcp-app-sandbox.ts';
+import {
+  createMcpAppSandboxProxy,
+  type CreateMcpAppSandboxProxyOptions,
+  type McpAppSandboxProxy,
+} from './mcp-app-sandbox.ts';
 import { McpSessionService } from './mcp-session-service.ts';
 import { ProjectService } from './project-service.ts';
 import { SkillDocumentService } from './skill-document-service.ts';
@@ -56,6 +61,34 @@ export interface StartDevServerOptions {
   readonly openBrowser?: OpenBrowser;
   readonly port?: number;
   readonly root: string;
+  /** Test-only listener and sandbox factories; production always uses the built-in loopback services. */
+  readonly testing?: DevServerTesting;
+}
+
+interface DevServerForeground {
+  close(): Promise<void>;
+  readonly url: string;
+}
+
+interface DevServerTesting {
+  readonly createSandboxProxy?: (options: CreateMcpAppSandboxProxyOptions) => Promise<McpAppSandboxProxy>;
+  readonly startForegroundServer?: (options: ForegroundServerOptions) => Promise<DevServerForeground>;
+}
+
+export interface DevServerStartFailure {
+  readonly error: unknown;
+  readonly resource: 'cleanup' | 'start';
+}
+
+/** Preserves a failed post-listener startup and every release failure needed to unwind it. */
+export class DevServerStartError extends Error {
+  readonly failures: readonly DevServerStartFailure[];
+
+  constructor(failures: readonly DevServerStartFailure[]) {
+    super('Development workbench could not start cleanly.');
+    this.name = 'DevServerStartError';
+    this.failures = Object.freeze([...failures]);
+  }
 }
 
 interface McpAppLifecycleCloseFailure {
@@ -212,7 +245,7 @@ export const startDevServer = async (options: StartDevServerOptions): Promise<De
   const mcpSessions = new McpSessionService({ epochStore, projectRoot: root });
   const appPreviews = new DeferredMcpAppPreviewService();
   let mcpApps: McpAppLifecycle | undefined;
-  const foreground = await startForegroundServer({
+  const foreground = await (options.testing?.startForegroundServer ?? startForegroundServer)({
     assets: options.assets ?? createWorkbenchAssetSource(),
     coordinator: withMcpSessionLifecycle(coordinator, mcpSessions, () => mcpApps),
     eventHub,
@@ -222,7 +255,7 @@ export const startDevServer = async (options: StartDevServerOptions): Promise<De
     skillDocuments: new SkillDocumentService({ epochStore, projectService, root }),
   });
   try {
-    const sandbox = await createMcpAppSandboxProxy({ hostOrigin: foreground.url });
+    const sandbox = await (options.testing?.createSandboxProxy ?? createMcpAppSandboxProxy)({ hostOrigin: foreground.url });
     mcpApps = new McpAppLifecycle(sandbox);
     const bindings = new McpAppBindingService({ sessionAuthority: mcpSessions });
     const previews = new McpAppPreviewService({
@@ -254,7 +287,13 @@ export const startDevServer = async (options: StartDevServerOptions): Promise<De
     appPreviews.attach(previews);
     if (options.open === true) await (options.openBrowser ?? openInBrowser)(foreground.url);
   } catch (error) {
-    await foreground.close();
+    const [cleanup] = await Promise.allSettled([foreground.close()]);
+    if (cleanup?.status === 'rejected') {
+      throw new DevServerStartError([
+        Object.freeze({ error, resource: 'start' }),
+        Object.freeze({ error: cleanup.reason, resource: 'cleanup' }),
+      ]);
+    }
     throw error;
   }
   return Object.freeze({

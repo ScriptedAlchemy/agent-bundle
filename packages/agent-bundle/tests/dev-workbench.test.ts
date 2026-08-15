@@ -9,6 +9,7 @@ import { createWorkbenchAssetSource } from '../src/dev/workbench-assets.ts';
 import {
   closeDevServerLifecycle,
   DevServerLifecycleCloseError,
+  DevServerStartError,
   startDevServer,
 } from '../src/dev/workbench-server.ts';
 import { createProjectFixture, removeProjectFixture } from './helpers/project-fixture.ts';
@@ -322,6 +323,41 @@ it('closes MCP Apps before sessions and the coordinator while retaining every cl
     name: DevServerLifecycleCloseError.name,
   }));
   expect(closeOrder).toEqual(['mcp-apps', 'mcp-sessions', 'coordinator']);
+});
+
+it('retains sandbox startup and foreground cleanup failures structurally', async () => {
+  const project = await createProjectFixture();
+  const sandboxFailure = new Error('Sandbox startup failed.');
+  const cleanupFailure = new Error('Foreground cleanup failed.');
+  const calls: string[] = [];
+  try {
+    await expect(startDevServer({
+      root: project.root,
+      testing: {
+        createSandboxProxy: async () => {
+          calls.push('sandbox-start');
+          throw sandboxFailure;
+        },
+        startForegroundServer: async (options) => ({
+          close: async () => {
+            calls.push('foreground-close');
+            await options.coordinator.close();
+            throw cleanupFailure;
+          },
+          url: 'http://127.0.0.1:43123',
+        }),
+      },
+    })).rejects.toEqual(expect.objectContaining({
+      failures: [
+        { error: sandboxFailure, resource: 'start' },
+        { error: cleanupFailure, resource: 'cleanup' },
+      ],
+      name: DevServerStartError.name,
+    }));
+    expect(calls).toEqual(['sandbox-start', 'foreground-close']);
+  } finally {
+    await removeProjectFixture(project.root);
+  }
 });
 
 it('passes --no-open and the requested port from the CLI to the public dev API', async () => {
