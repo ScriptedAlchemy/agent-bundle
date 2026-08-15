@@ -15,7 +15,6 @@
     }
   },
   "mcp": {
-    "sse": false,
     "stdio": true,
     "streamableHttp": true
   },

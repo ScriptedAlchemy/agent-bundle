@@ -4,7 +4,6 @@
     "source": "https://docs.anthropic.com/en/docs/claude-code/plugins"
   },
   "mcp": {
-    "sse": true,
     "stdio": true,
     "streamableHttp": true
   },

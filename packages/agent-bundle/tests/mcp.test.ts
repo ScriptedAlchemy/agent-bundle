@@ -46,7 +46,27 @@ const loadedProject = (root: string, config: AgentBundleConfig): LoadedConfig =>
   },
 });
 
-it('normalizes local, prebuilt, HTTP, and SSE MCP server declarations', async () => {
+it('rejects legacy MCP SSE source declarations with one AB4317 diagnostic', () => {
+  const config = {
+    mcp: {
+      servers: {
+        events: {
+          transport: 'sse',
+          url: 'https://mcp.example.test/events',
+        },
+      },
+    },
+    plugin: { name: 'legacy-sse', version: '1.0.0' },
+  } as unknown as AgentBundleConfig;
+  const diagnostics = validateSource(loadedProject('/workspace', config), { skills: [] }, registry);
+
+  expect(diagnostics).toEqual([expect.objectContaining({
+    code: 'AB4317',
+    message: 'MCP server "events" URL requires streamable-http transport.',
+  })]);
+});
+
+it('normalizes local, prebuilt, and HTTP MCP server declarations', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-mcp-'));
   try {
     await mkdir(join(root, 'src'), { recursive: true });
@@ -73,11 +93,6 @@ it('normalizes local, prebuilt, HTTP, and SSE MCP server declarations', async ()
         headers: { Authorization: 'Bearer literal' },
         transport: 'streamable-http',
         url: 'https://mcp.example.test/http',
-      },
-      'remote-sse': {
-        headers: { 'X-Mode': 'events' },
-        transport: 'sse',
-        url: 'https://mcp.example.test/sse',
       },
     });
     Object.defineProperty(servers, '__proto__', {
@@ -135,15 +150,6 @@ it('normalizes local, prebuilt, HTTP, and SSE MCP server declarations', async ()
         targets: ['claude', 'codex', 'portable'],
         transport: 'streamable-http',
         url: 'https://mcp.example.test/http',
-      },
-      {
-        headers: { 'X-Mode': 'events' },
-        id: 'mcp:remote-sse',
-        name: 'remote-sse',
-        provenance: { kind: 'config', sourcePath: join(root, 'agent-bundle.config.ts') },
-        targets: ['claude', 'codex', 'portable'],
-        transport: 'sse',
-        url: 'https://mcp.example.test/sse',
       },
     ]);
     expect(Object.isFrozen(model.mcpServers)).toBe(true);
@@ -270,7 +276,7 @@ it('reports source and model diagnostics before an MCP server can be compiled', 
         },
       },
       plugin: { name: 'mcp-fixture', version: '1.0.0' },
-    } satisfies AgentBundleConfig;
+    } as unknown as AgentBundleConfig;
     const loaded = loadedProject(root, config);
 
     expect(validateSource(loaded, { skills: [] }, registry).map(({ code }) => code)).toEqual([
@@ -279,6 +285,7 @@ it('reports source and model diagnostics before an MCP server can be compiled', 
       'AB4313',
       'AB4316',
       'AB4307',
+      'AB4317',
       'AB4318',
     ]);
 
