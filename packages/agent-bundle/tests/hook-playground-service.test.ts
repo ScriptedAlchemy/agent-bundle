@@ -6,7 +6,9 @@ import { dirname, join } from 'node:path';
 
 import { expect, it } from '@rstest/core';
 
-import { createDefaultRegistry } from '../src/adapters/registry.ts';
+import type { TargetHookContract } from '../src/adapters/hook-contract.ts';
+import { createDefaultRegistry, TargetRegistry } from '../src/adapters/registry.ts';
+import type { TargetAdapter } from '../src/adapters/types.ts';
 import { build } from './support/build.ts';
 import { listArtifactFiles } from '../src/build/emit.ts';
 import { normalizeProject } from '../src/config/normalize.ts';
@@ -14,7 +16,11 @@ import { digest } from '../src/core/digest.ts';
 import type { LoadedConfig } from '../src/config/load.ts';
 import type { AgentBundleConfig, CanonicalHookEvent, NormalizationTargetRegistry } from '../src/core/types.ts';
 import { EpochStore } from '../src/dev/epoch-store.ts';
-import { HookPlaygroundService } from '../src/dev/hook-playground-service.ts';
+import {
+  HookPlaygroundService,
+  type HookPlaygroundDiagnosticResult,
+  type HookPlaygroundSimulation,
+} from '../src/dev/hook-playground-service.ts';
 import { HookService } from '../src/services/hook-service.ts';
 import type { ArtifactEpoch } from '../src/dev/types.ts';
 
@@ -55,6 +61,21 @@ interface PublishedHookEpoch {
   readonly epochStore: EpochStore;
   readonly hooks: Readonly<Record<CanonicalHookEvent, Readonly<{ readonly id: string; readonly name: string }>>>;
 }
+
+type IsExact<Left, Right> =
+  (<Type>() => Type extends Left ? 1 : 2) extends
+  (<Type>() => Type extends Right ? 1 : 2)
+    ? true
+    : false;
+
+const requireSimulation = (
+  result: HookPlaygroundSimulation | HookPlaygroundDiagnosticResult,
+): HookPlaygroundSimulation => {
+  if ('diagnostics' in result) {
+    throw new Error(`Expected a hook playground simulation, received diagnostics: ${JSON.stringify(result.diagnostics)}.`);
+  }
+  return result;
+};
 
 class CopyFailureEpochStore extends EpochStore {
   readonly #copyWorkSettled: () => boolean;
@@ -214,6 +235,153 @@ const inputFor = (event: CanonicalHookEvent): Record<string, unknown> => ({
   transcriptPath: '/workspace/transcript.json',
 });
 
+it('uses the injected adapter hook contract for custom manifests, mappings, matchers, and codecs', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-hook-playground-synthetic-'));
+  const sourceArtifact = join(root, 'synthetic-artifact');
+  const manifestPath = 'registrations/hook-events.json';
+  const hook = Object.freeze({
+    event: 'beforeTool',
+    id: 'hook:synthetic',
+    name: 'synthetic',
+    path: 'runtime/synthetic.mjs',
+    target: 'synthetic',
+  });
+  const contract = Object.freeze({
+    commandRoot: '${SYNTHETIC_PLUGIN_ROOT}',
+    encodePlaygroundInput: (input, nativeEvent) => ({
+      native_event: nativeEvent,
+      payload: input.payload,
+    }),
+    encodePlaygroundOutput: (result, canonicalEvent, nativeEvent) => result === undefined
+      ? undefined
+      : {
+        canonical_event: canonicalEvent,
+        native_event: nativeEvent,
+        simulated_outcome: result.outcome,
+      },
+    eventNames: {
+      afterTool: 'SyntheticAfter',
+      beforeTool: 'SyntheticBefore',
+      sessionStart: 'SyntheticStart',
+      stop: 'SyntheticStop',
+    },
+    manifestPath,
+    matchers: { shell: '^SyntheticShell$' },
+    wrapperPath: (selectedHook) => `runtime/${selectedHook.name}.mjs`,
+    wrapperSource: () => 'export default undefined;\n',
+  } satisfies TargetHookContract);
+  const adapter: TargetAdapter = {
+    capabilities: { hooks: true },
+    hookContract: contract,
+    metadata: {
+      adapterRevision: 'test',
+      capabilityRevision: 'test',
+      capabilitySha256: '0'.repeat(64),
+      observedVersion: 'test',
+      schemas: [],
+    },
+    name: 'synthetic',
+    plan: () => ({ diagnostics: [], entries: [] }),
+    validateModel: () => [],
+  };
+  try {
+    await Promise.all([
+      mkdir(dirname(join(sourceArtifact, manifestPath)), { recursive: true }),
+      mkdir(dirname(join(sourceArtifact, hook.path)), { recursive: true }),
+    ]);
+    await Promise.all([
+      writeFile(join(sourceArtifact, manifestPath), `${JSON.stringify({
+        hooks: {
+          SyntheticBefore: [{
+            hooks: [{ command: 'node "${SYNTHETIC_PLUGIN_ROOT}/runtime/synthetic.mjs"', type: 'command' }],
+            matcher: '^SyntheticShell$',
+          }],
+        },
+      })}\n`),
+      writeFile(join(sourceArtifact, hook.path), 'export default undefined;\n'),
+    ]);
+    const epochStore = new EpochStore({ projectRoot: root });
+    const staging = await epochStore.createStagingEpoch({
+      epoch: epochFor(root, 'epoch-1', { synthetic: digest(await listArtifactFiles(sourceArtifact)) }),
+      targets: ['synthetic'],
+    });
+    await Promise.all([
+      cp(sourceArtifact, join(staging.root, 'synthetic'), { recursive: true }),
+      writeFile(join(staging.root, 'agent-bundle.manifest.json'), '{}\n'),
+    ]);
+    await staging.publish(async () => undefined);
+
+    const hookService = {
+      list: async () => [hook],
+      simulate: async () => ({ additionalContext: 'simulated', outcome: 'continue' }),
+    };
+    const request = {
+      epochId: 'epoch-1',
+      hook: hook.id,
+      input: { inline: { payload: { value: 'custom' } } },
+      target: 'synthetic',
+    } as const;
+    const service = new HookPlaygroundService({
+      epochStore,
+      hookService,
+      registry: new TargetRegistry().register(adapter),
+    });
+
+    await expect(service.simulate(request)).resolves.toEqual({
+      binding: { epochId: 'epoch-1', hook: hook.id, target: 'synthetic' },
+      canonicalIntent: {
+        event: 'beforeTool',
+        hook: hook.id,
+        input: { payload: { value: 'custom' } },
+      },
+      canonicalResult: { additionalContext: 'simulated', outcome: 'continue' },
+      hostMapping: {
+        canonicalEvent: 'beforeTool',
+        matcher: '^SyntheticShell$',
+        nativeEvent: 'SyntheticBefore',
+        nativeProjection: 'deterministic',
+        nativeSelector: 'SyntheticBefore',
+        target: 'synthetic',
+        wrapperPath: hook.path,
+      },
+      nativeInput: {
+        native_event: 'SyntheticBefore',
+        payload: { value: 'custom' },
+      },
+      nativeOutput: {
+        canonical_event: 'beforeTool',
+        native_event: 'SyntheticBefore',
+        simulated_outcome: 'continue',
+      },
+      replay: {
+        binding: { epochId: 'epoch-1', hook: hook.id, target: 'synthetic' },
+        input: { payload: { value: 'custom' } },
+      },
+    });
+    const missingManifestAdapter: TargetAdapter = {
+      ...adapter,
+      hookContract: { ...contract, manifestPath: 'registrations/missing.json' },
+    };
+    const missingManifestService = new HookPlaygroundService({
+      epochStore,
+      hookService,
+      registry: new TargetRegistry().register(missingManifestAdapter),
+    });
+
+    await expect(missingManifestService.simulate(request)).resolves.toEqual({
+      diagnostics: [{
+        code: 'hook.playground.manifest.missing',
+        event: 'beforeTool',
+        message: 'Hook playground target "synthetic" is missing hook manifest "registrations/missing.json" for canonical event "beforeTool".',
+        severity: 'error',
+        target: 'synthetic',
+      }],
+    });
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+}, 30_000);
+
 it('runs fixture and inline canonical input through the epoch-bound wrapper and preserves its replay epoch', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-hook-playground-'));
   try {
@@ -234,8 +402,8 @@ it('runs fixture and inline canonical input through the epoch-bound wrapper and 
       target: 'codex',
     } as const;
 
-    const inline = await service.simulate({ ...options, input: { inline: input } });
-    const fixture = await service.simulate({ ...options, input: { fixture: input } });
+    const inline = requireSimulation(await service.simulate({ ...options, input: { inline: input } }));
+    const fixture = requireSimulation(await service.simulate({ ...options, input: { fixture: input } }));
 
     expect(inline).toEqual({
       binding: options,
@@ -281,7 +449,16 @@ it('runs fixture and inline canonical input through the epoch-bound wrapper and 
     await expect(service.replay(inline.replay)).resolves.toEqual(inline);
     expect(Object.isFrozen(inline.canonicalIntent.input.toolInput)).toBe(true);
     expect(Object.isFrozen(inline.nativeInput.tool_input)).toBe(true);
-    expect(Object.isFrozen((inline.nativeOutput?.hookSpecificOutput as Record<string, unknown>).updatedInput)).toBe(true);
+    const nativeHookOutput = inline.nativeOutput?.hookSpecificOutput;
+    if (
+      nativeHookOutput === null ||
+      typeof nativeHookOutput !== 'object' ||
+      Array.isArray(nativeHookOutput) ||
+      !('updatedInput' in nativeHookOutput)
+    ) {
+      throw new Error('Expected hook-specific native output with updated input.');
+    }
+    expect(Object.isFrozen(nativeHookOutput.updatedInput)).toBe(true);
     expect(Object.isFrozen(inline.replay.input.toolInput)).toBe(true);
     expect(inline.canonicalIntent.input.toolInput).not.toBe(input.toolInput);
     input.toolInput.command = 'mutated after simulation';
@@ -300,6 +477,58 @@ it('runs fixture and inline canonical input through the epoch-bound wrapper and 
   }
 }, 30_000);
 
+it('returns target diagnostics from simulation and replay for an unknown string target', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-hook-playground-unknown-target-'));
+  try {
+    const epoch = await publishHookEpoch(root, 'epoch-1', 'one');
+    const service = new HookPlaygroundService({ epochStore: epoch.epochStore });
+    const target: string = 'unknown';
+    const input = inputFor('beforeTool');
+    const request = {
+      epochId: 'epoch-1',
+      hook: epoch.hooks.beforeTool.id,
+      input: { inline: input },
+      target,
+    };
+    const simulation = service.simulate(request);
+    const replay = service.replay({
+      binding: { epochId: 'epoch-1', hook: epoch.hooks.beforeTool.id, target },
+      input,
+    });
+    const expectedType: IsExact<
+      typeof simulation,
+      Promise<HookPlaygroundSimulation | HookPlaygroundDiagnosticResult>
+    > = true;
+    const expectedReplayType: IsExact<
+      typeof replay,
+      Promise<HookPlaygroundSimulation | HookPlaygroundDiagnosticResult>
+    > = true;
+
+    expect(expectedType).toBe(true);
+    expect(expectedReplayType).toBe(true);
+    await expect(simulation).resolves.toEqual({
+      diagnostics: [{
+        code: 'hook.playground.target.unsupported',
+        event: 'beforeTool',
+        message: 'Hook playground cannot map target "unknown" for canonical event "beforeTool".',
+        severity: 'error',
+        target,
+      }],
+    });
+    await expect(replay).resolves.toEqual({
+      diagnostics: [{
+        code: 'hook.playground.target.unsupported',
+        event: 'beforeTool',
+        message: 'Hook playground cannot map target "unknown" for canonical event "beforeTool".',
+        severity: 'error',
+        target,
+      }],
+    });
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+}, 30_000);
+
 it('projects every emitted Codex and Claude event deterministically and exposes its native selector', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-hook-playground-codecs-'));
   try {
@@ -308,12 +537,12 @@ it('projects every emitted Codex and Claude event deterministically and exposes 
 
     for (const target of ['codex', 'claude'] as const) {
       for (const event of ['sessionStart', 'beforeTool', 'afterTool', 'stop'] as const) {
-        const trace = await service.simulate({
+        const trace = requireSimulation(await service.simulate({
           epochId: 'epoch-1',
           hook: epoch.hooks[event].id,
           input: { inline: inputFor(event) },
           target,
-        });
+        }));
         expect(trace.hostMapping).toMatchObject({
           canonicalEvent: event,
           nativeProjection: 'deterministic',
@@ -351,7 +580,9 @@ it('isolates malicious relative writes from the referenced epoch and rejects coo
     const manifestPath = join(epochRoot, 'agent-bundle.manifest.json');
     const manifestBefore = await readFile(manifestPath, 'utf8');
 
-    const [first, second] = await Promise.all([service.simulate(request), service.simulate(request)]);
+    const [firstResult, secondResult] = await Promise.all([service.simulate(request), service.simulate(request)]);
+    const first = requireSimulation(firstResult);
+    const second = requireSimulation(secondResult);
     expect(first.canonicalResult?.additionalContext).toMatch(/^mutated:/);
     expect(second.canonicalResult?.additionalContext).toMatch(/^mutated:/);
     expect(first.canonicalResult?.additionalContext).not.toEqual(second.canonicalResult?.additionalContext);
@@ -403,9 +634,9 @@ it('settles route cancellation and cleans the per-simulation clone before releas
     setTimeout(() => controller.abort(), 25);
 
     await expect(pending).rejects.toThrow('Hook simulation aborted.');
-    expect(runnableArtifact).toBeDefined();
+    if (runnableArtifact === undefined) throw new Error('Expected a runnable simulation artifact.');
     expect(runnableArtifact).not.toBe(join(root, '.agent-bundle', 'epochs', 'epoch-1'));
-    await expect(access(runnableArtifact!)).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(access(runnableArtifact)).rejects.toMatchObject({ code: 'ENOENT' });
   } finally {
     await rm(root, { force: true, recursive: true });
   }
@@ -443,7 +674,8 @@ it('settles clone copies before cleanup and reference release when an injected c
     expect(copies).toEqual({ settled: 1, started: 1 });
     expect(store.copyWorkSettledBeforeRelease).toBe(true);
     expect(store.cloneRootExistsBeforeRelease).toBe(false);
-    await expect(access(store.cloneRoot!)).rejects.toMatchObject({ code: 'ENOENT' });
+    if (store.cloneRoot === undefined) throw new Error('Expected the injected copy destination.');
+    await expect(access(store.cloneRoot)).rejects.toMatchObject({ code: 'ENOENT' });
   } finally {
     await new Promise<void>((resolvePromise) => { setTimeout(resolvePromise, 75); });
     if (store.cloneRoot !== undefined) await rm(store.cloneRoot, { force: true, recursive: true });

@@ -6,6 +6,7 @@ import type {
 } from '../core/types.ts';
 import { claudeAdapter } from './claude.ts';
 import { codexAdapter } from './codex.ts';
+import type { TargetHookContract } from './hook-contract.ts';
 import { portableAdapter } from './portable.ts';
 import type { TargetAdapter, TargetAdapterMetadata, TargetSchemaDescriptor } from './types.ts';
 
@@ -73,10 +74,27 @@ const snapshotNativeHookSource = (adapter: TargetAdapter): NativeHookSource | un
   return source;
 };
 
+const snapshotHookContract = (adapter: TargetAdapter): TargetHookContract | undefined => {
+  const hookContract = adapter.hookContract;
+  if (adapter.capabilities.hooks === true && hookContract === undefined) {
+    throw new Error(`Target adapter "${adapter.name}" declares hooks capability without a hook contract.`);
+  }
+  if (adapter.capabilities.hooks !== true && hookContract !== undefined) {
+    throw new Error(`Target adapter "${adapter.name}" declares a hook contract without hooks capability.`);
+  }
+  if (hookContract === undefined) return undefined;
+  return Object.freeze({
+    ...hookContract,
+    eventNames: Object.freeze({ ...hookContract.eventNames }),
+    matchers: Object.freeze({ ...hookContract.matchers }),
+  });
+};
+
 export class TargetRegistry implements NormalizationTargetRegistry {
   readonly #adapters = new Map<string, TargetAdapter>();
   readonly #defaults: string[] = [];
   readonly #extensions = new Map<string, NormalizationConfigExtension>();
+  readonly #hookContracts = new Map<string, TargetHookContract>();
   readonly #metadata = new Map<string, TargetAdapterMetadata>();
   readonly #nativeHookSources = new Map<string, NativeHookSource>();
 
@@ -90,6 +108,7 @@ export class TargetRegistry implements NormalizationTargetRegistry {
     }
     const metadata = snapshotMetadata(adapter.metadata);
     const nativeHookSource = snapshotNativeHookSource(adapter);
+    const hookContract = snapshotHookContract(adapter);
 
     this.#adapters.set(adapter.name, adapter);
     this.#metadata.set(adapter.name, metadata);
@@ -101,6 +120,9 @@ export class TargetRegistry implements NormalizationTargetRegistry {
     }
     if (nativeHookSource !== undefined) {
       this.#nativeHookSources.set(adapter.name, nativeHookSource);
+    }
+    if (hookContract !== undefined) {
+      this.#hookContracts.set(adapter.name, hookContract);
     }
     if (options.default === true) {
       this.#defaults.push(adapter.name);
@@ -128,6 +150,13 @@ export class TargetRegistry implements NormalizationTargetRegistry {
 
   has(name: string): boolean {
     return this.#adapters.has(name);
+  }
+
+  hookContract(name: string): TargetHookContract | undefined {
+    if (!this.#adapters.has(name)) {
+      throw new Error(`Unknown target adapter "${name}".`);
+    }
+    return this.#hookContracts.get(name);
   }
 
   configExtensions(): readonly NormalizationConfigExtension[] {

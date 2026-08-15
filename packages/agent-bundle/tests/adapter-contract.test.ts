@@ -4,6 +4,7 @@ import { join } from 'node:path';
 
 import { expect, it } from '@rstest/core';
 
+import type { TargetHookContract } from '../src/adapters/hook-contract.ts';
 import { TargetRegistry } from '../src/adapters/registry.ts';
 import type { TargetAdapter } from '../src/adapters/types.ts';
 import { normalizeProject } from '../src/config/normalize.ts';
@@ -18,6 +19,22 @@ const metadata = Object.freeze({
   schemas: Object.freeze([]),
 });
 
+const hookContract = Object.freeze({
+  commandRoot: '${TEST_PLUGIN_ROOT}',
+  encodePlaygroundInput: (input) => input,
+  encodePlaygroundOutput: (result) => result,
+  eventNames: {
+    afterTool: 'AfterTool',
+    beforeTool: 'BeforeTool',
+    sessionStart: 'SessionStart',
+    stop: 'Stop',
+  },
+  manifestPath: 'hooks/hooks.json',
+  matchers: {},
+  wrapperPath: (hook) => `hooks/${hook.name}.mjs`,
+  wrapperSource: () => 'export default undefined;\n',
+} satisfies TargetHookContract);
+
 it('delegates selected native hook sources through registered adapters', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-adapter-contract-'));
   const source = join(root, 'example-hooks.json');
@@ -25,6 +42,7 @@ it('delegates selected native hook sources through registered adapters', async (
   const adapter: TargetAdapter = {
     capabilities: { hooks: true },
     configExtension: { key: 'example' },
+    hookContract,
     metadata,
     name: 'example',
     nativeHookSource(config) {
@@ -95,12 +113,39 @@ it('rejects malformed native hook source contributions atomically', () => {
   expect(registry.names()).toEqual(['existing']);
 });
 
+it('rejects contradictory hook capability and contract registrations atomically', () => {
+  const registry = new TargetRegistry().register({
+    capabilities: {},
+    metadata,
+    name: 'existing',
+    plan: () => ({ diagnostics: [], entries: [] }),
+    validateModel: () => [],
+  });
+  const adapter = (name: string): TargetAdapter => ({
+    capabilities: { hooks: true },
+    metadata,
+    name,
+    plan: () => ({ diagnostics: [], entries: [] }),
+    validateModel: () => [],
+  });
+
+  expect(() => registry.register(adapter('missing-contract'))).toThrow('hooks capability without a hook contract');
+  expect(registry.names()).toEqual(['existing']);
+  expect(() => registry.register({
+    ...adapter('unsupported-contract'),
+    capabilities: {},
+    hookContract,
+  })).toThrow('hook contract without hooks capability');
+  expect(registry.names()).toEqual(['existing']);
+});
+
 it('normalizes malformed native hook source values into diagnostics without skipping valid targets', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-native-source-invalid-'));
   const source = join(root, 'valid-hooks.json');
   const registry = new TargetRegistry()
     .register({
       capabilities: { hooks: true },
+      hookContract,
       metadata,
       name: 'invalid',
       nativeHookSource: () => null as never,
@@ -109,6 +154,7 @@ it('normalizes malformed native hook source values into diagnostics without skip
     })
     .register({
       capabilities: { hooks: true },
+      hookContract,
       metadata,
       name: 'valid',
       nativeHookSource: () => './valid-hooks.json',
@@ -150,6 +196,7 @@ it('normalizes thrown native hook sources into diagnostics', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-native-source-throws-'));
   const registry = new TargetRegistry().register({
     capabilities: { hooks: true },
+    hookContract,
     metadata,
     name: 'throws',
     nativeHookSource: () => {

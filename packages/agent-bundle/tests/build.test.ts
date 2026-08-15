@@ -9,6 +9,7 @@ import { createJiti } from 'jiti';
 
 import { build as buildArtifact, type BuildOptions as LowLevelBuildOptions, type BuildResult } from '../src/build/build.ts';
 import { publishArtifact } from '../src/build/emit.ts';
+import type { TargetHookContract } from '../src/adapters/hook-contract.ts';
 import { parseArtifactManifest, serializeArtifactManifest } from '../src/build/manifest.ts';
 import type { TargetAdapter } from '../src/adapters/types.ts';
 import { TargetRegistry } from '../src/adapters/registry.ts';
@@ -41,6 +42,22 @@ const testAdapterMetadata = Object.freeze({
   observedVersion: 'test',
   schemas: Object.freeze([]),
 });
+
+const hookContract = Object.freeze({
+  commandRoot: '${TEST_PLUGIN_ROOT}',
+  encodePlaygroundInput: (input) => input,
+  encodePlaygroundOutput: (result) => result,
+  eventNames: {
+    afterTool: 'AfterTool',
+    beforeTool: 'BeforeTool',
+    sessionStart: 'SessionStart',
+    stop: 'Stop',
+  },
+  manifestPath: 'hooks/hooks.json',
+  matchers: {},
+  wrapperPath: (hook) => `hooks/${hook.name}.mjs`,
+  wrapperSource: () => 'export default undefined;\n',
+} satisfies TargetHookContract);
 
 const skillFixture = {
   markdown: '---\nname: review\ndescription: Review changes\n---\n# Review\n\nSee [guide](references/guide.md).\n',
@@ -541,6 +558,7 @@ it('rejects hook entries stamped for a target other than their selected adapter'
   };
   const adapter: TargetAdapter = {
     capabilities: { hooks: true },
+    hookContract,
     metadata: testAdapterMetadata,
     name: 'portable',
     plan: () => ({

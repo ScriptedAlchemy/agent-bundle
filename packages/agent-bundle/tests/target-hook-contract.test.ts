@@ -19,6 +19,11 @@ const metadata = Object.freeze({
   schemas: Object.freeze([]),
 });
 
+const playgroundCodec = Object.freeze({
+  encodePlaygroundInput: (input: Readonly<Record<string, unknown>>) => input,
+  encodePlaygroundOutput: (result: Readonly<Record<string, unknown>> | undefined) => result,
+});
+
 const planningModel = (hooks: readonly NormalizedHook[]): NormalizedPlugin => ({
   extensions: {},
   hooks,
@@ -99,6 +104,7 @@ it('builds adapter-owned native hook event, layout, and wrapper source', async (
   };
   const contract = {
     commandRoot: '${SYNTHETIC_PLUGIN_ROOT}',
+    ...playgroundCodec,
     eventNames: {
       afterTool: 'SyntheticAfterTool',
       beforeTool: 'SyntheticBeforeWrite',
@@ -118,6 +124,7 @@ it('builds adapter-owned native hook event, layout, and wrapper source', async (
   const staleTargetContract = { ...contract, target: 'contract-target' };
   const adapter: TargetAdapter = {
     capabilities: { hooks: true },
+    hookContract: contract,
     metadata,
     name: 'synthetic',
     plan: (selectedModel) => {
@@ -193,6 +200,7 @@ it('rejects missing and blank native event mappings before creating hook entries
   for (const eventNames of eventMappings) {
     const plan = planHooks(planningModel([planningHook('beforeTool', [])]), 'synthetic', {
       commandRoot: '${SYNTHETIC_PLUGIN_ROOT}',
+      ...playgroundCodec,
       eventNames,
       manifestPath: 'native-events/registration.json',
       matchers: {},
@@ -217,6 +225,7 @@ it('continues planning valid hooks after a prior hook mapping error', () => {
     planningHook('afterTool', []),
   ]), 'synthetic', {
     commandRoot: '${SYNTHETIC_PLUGIN_ROOT}',
+    ...playgroundCodec,
     eventNames: {
       afterTool: 'SyntheticAfterTool',
       beforeTool: 'SyntheticBeforeTool',

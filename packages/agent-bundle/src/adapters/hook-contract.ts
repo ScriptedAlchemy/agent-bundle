@@ -10,12 +10,83 @@ import type { TargetHookEntry, TargetHookWrapper } from './types.ts';
 
 export interface TargetHookContract {
   readonly commandRoot: string;
+  readonly encodePlaygroundInput: (
+    input: Readonly<Record<string, unknown>>,
+    nativeEvent: string,
+  ) => Readonly<Record<string, unknown>>;
+  readonly encodePlaygroundOutput: (
+    result: Readonly<Record<string, unknown>> | undefined,
+    canonicalEvent: CanonicalHookEvent,
+    nativeEvent: string,
+  ) => Readonly<Record<string, unknown>> | undefined;
   readonly eventNames: Readonly<Record<CanonicalHookEvent, string>>;
   readonly manifestPath: string;
   readonly matchers: Readonly<Partial<Record<CanonicalHookTool, string>>>;
   readonly wrapperPath: (hook: NormalizedHook) => string;
   readonly wrapperSource: (entry: TargetHookWrapper) => string;
 }
+
+const nativeHookInputFields = Object.freeze([
+  Object.freeze({ canonical: 'cwd', native: 'cwd' }),
+  Object.freeze({ canonical: 'hookEventName', native: 'hook_event_name' }),
+  Object.freeze({ canonical: 'lastAssistantMessage', native: 'last_assistant_message' }),
+  Object.freeze({ canonical: 'sessionId', native: 'session_id' }),
+  Object.freeze({ canonical: 'source', native: 'source' }),
+  Object.freeze({ canonical: 'stopHookActive', native: 'stop_hook_active' }),
+  Object.freeze({ canonical: 'toolInput', native: 'tool_input' }),
+  Object.freeze({ canonical: 'toolName', native: 'tool_name' }),
+  Object.freeze({ canonical: 'toolResponse', native: 'tool_response' }),
+  Object.freeze({ canonical: 'toolUseId', native: 'tool_use_id' }),
+  Object.freeze({ canonical: 'transcriptPath', native: 'transcript_path' }),
+]);
+
+const defined = (value: Record<string, unknown>): Record<string, unknown> =>
+  Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined));
+
+const canonicalEventOrder: readonly CanonicalHookEvent[] = [
+  'sessionStart',
+  'beforeTool',
+  'afterTool',
+  'stop',
+];
+
+export const canonicalHookEventFor = (event: string): CanonicalHookEvent | undefined =>
+  canonicalEventOrder.find((candidate) => candidate === event);
+
+export const encodeNativeHookPlaygroundInput = (
+  input: Readonly<Record<string, unknown>>,
+  nativeEvent: string,
+): Readonly<Record<string, unknown>> => defined(Object.fromEntries([
+  ['hook_event_name', nativeEvent],
+  ...nativeHookInputFields
+    .filter((field) => field.canonical !== 'hookEventName')
+    .map((field) => [field.native, input[field.canonical]]),
+]));
+
+export const encodeNativeHookPlaygroundOutput = (
+  result: Readonly<Record<string, unknown>> | undefined,
+  canonicalEvent: CanonicalHookEvent,
+  nativeEvent: string,
+): Readonly<Record<string, unknown>> | undefined => {
+  if (result === undefined) return undefined;
+  if (canonicalEvent === 'stop') {
+    return result.outcome === 'deny'
+      ? defined({ decision: 'block', reason: result.reason })
+      : undefined;
+  }
+  const beforeTool = canonicalEvent === 'beforeTool';
+  const denied = result.outcome === 'deny';
+  const output = defined({
+    additionalContext: result.additionalContext,
+    hookEventName: nativeEvent,
+    permissionDecision: beforeTool ? (denied ? 'deny' : 'allow') : undefined,
+    permissionDecisionReason: beforeTool && denied ? result.reason : undefined,
+    updatedInput: beforeTool && !denied ? result.updatedInput : undefined,
+  });
+  return Object.keys(output).length === 1 && output.hookEventName !== undefined
+    ? undefined
+    : { hookSpecificOutput: output };
+};
 
 export interface HookPlan {
   readonly diagnostics: readonly Diagnostic[];
@@ -52,14 +123,7 @@ export const mergeHookDocuments = (
   };
 };
 
-const eventOrder: readonly CanonicalHookEvent[] = [
-  'sessionStart',
-  'beforeTool',
-  'afterTool',
-  'stop',
-];
-
-const eventIndex = new Map(eventOrder.map((event, index) => [event, index]));
+const eventIndex = new Map(canonicalEventOrder.map((event, index) => [event, index]));
 
 const error = (target: string, code: string, message: string): Diagnostic => ({
   code,
@@ -152,6 +216,11 @@ export const nativeHookWrapperSource = (
   codecName: 'Claude' | 'Codex',
 ): string => {
   const nativeEvent = entry.nativeEvent;
+  const decoderFields = nativeHookInputFields.map((field) =>
+    `  ${field.canonical}: nativeInput.${field.native},`);
+  const encoderFields = nativeHookInputFields
+    .filter((field) => field.canonical !== 'hookEventName')
+    .map((field) => `  ${field.native}: canonicalInput.${field.canonical},`);
 
   return [
     `import * as handlerModule from ${JSON.stringify(entry.hook.source)};`,
@@ -162,30 +231,11 @@ export const nativeHookWrapperSource = (
     'const isRecord = (value) => typeof value === "object" && value !== null && !Array.isArray(value);',
     'const defined = (value) => Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined));',
     `const decode${codecName}Native = (nativeInput) => ({`,
-    '  cwd: nativeInput.cwd,',
-    '  hookEventName: nativeInput.hook_event_name,',
-    '  lastAssistantMessage: nativeInput.last_assistant_message,',
-    '  sessionId: nativeInput.session_id,',
-    '  source: nativeInput.source,',
-    '  stopHookActive: nativeInput.stop_hook_active,',
-    '  toolInput: nativeInput.tool_input,',
-    '  toolName: nativeInput.tool_name,',
-    '  toolResponse: nativeInput.tool_response,',
-    '  toolUseId: nativeInput.tool_use_id,',
-    '  transcriptPath: nativeInput.transcript_path,',
+    ...decoderFields,
     '});',
     `const encode${codecName}Native = (canonicalInput) => defined({`,
-    '  cwd: canonicalInput.cwd,',
     '  hook_event_name: nativeEvent,',
-    '  last_assistant_message: canonicalInput.lastAssistantMessage,',
-    '  session_id: canonicalInput.sessionId,',
-    '  source: canonicalInput.source,',
-    '  stop_hook_active: canonicalInput.stopHookActive,',
-    '  tool_input: canonicalInput.toolInput,',
-    '  tool_name: canonicalInput.toolName,',
-    '  tool_response: canonicalInput.toolResponse,',
-    '  tool_use_id: canonicalInput.toolUseId,',
-    '  transcript_path: canonicalInput.transcriptPath,',
+    ...encoderFields,
     '});',
     `const decodeNative = decode${codecName}Native;`,
     `const encodeNative = encode${codecName}Native;`,

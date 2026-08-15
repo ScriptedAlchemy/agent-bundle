@@ -14,6 +14,8 @@ import {
 import capabilityTable from './capabilities/codex-0.147.0.json' with { type: 'json' };
 import {
   mergeHookDocuments,
+  encodeNativeHookPlaygroundInput,
+  encodeNativeHookPlaygroundOutput,
   nativeHookWrapperSource,
   nativeHooksFor,
   planHooks,
@@ -46,6 +48,8 @@ const validateMarketplace = validator.compile(marketplaceSchema);
 const validateHooks = validator.compile(hooksSchema);
 const hookContract = Object.freeze({
   commandRoot: '${PLUGIN_ROOT}',
+  encodePlaygroundInput: encodeNativeHookPlaygroundInput,
+  encodePlaygroundOutput: encodeNativeHookPlaygroundOutput,
   eventNames: capabilityTable.hooks.events,
   manifestPath: 'hooks/hooks.json',
   matchers: capabilityTable.hooks.matchers,
@@ -414,6 +418,7 @@ export const codexAdapter: TargetAdapter = Object.freeze({
     skills: capabilityTable.plugin.skills,
   }),
   configExtension: Object.freeze({ key: codexName }),
+  hookContract,
   metadata,
   mcpPathTokens: Object.freeze({
     args: Object.freeze({}),
