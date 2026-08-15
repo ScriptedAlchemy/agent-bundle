@@ -9,8 +9,10 @@ import { Layers, pluginRSC } from 'rsbuild-plugin-rsc';
 import { emitRuntimeArtifacts } from './src/build/emit-artifacts.js';
 
 export interface RscRuntimeCompileSnapshot {
+  readonly acceptCompilerAssetCheckpoint?: () => void;
   readonly attemptId: string;
   readonly candidateId: string;
+  readonly discardCompilerAssetCheckpoint?: () => void;
   readonly preparedRevision: string;
   readonly rscCohortRevision: number;
   readonly sourceRevision: string;
@@ -61,6 +63,7 @@ const runtimeCompileObserverPlugin = (
         if (attemptId === undefined) {
           throw new Error('RSC runtime compile completed without a matching attempt.');
         }
+        let snapshot: RscRuntimeCompileSnapshot | undefined;
         try {
           if (stats.hasErrors()) {
             throw new Error('RSC runtime compile reported errors.');
@@ -82,7 +85,7 @@ const runtimeCompileObserverPlugin = (
           }
           const hashes = (['rsc', 'widget'] as const).map((name) => [name, cohortHashes.get(name) as string]);
           const sourceRevision = createHash('sha256').update(JSON.stringify(hashes)).digest('hex');
-          const snapshot = await observer.capture({
+          snapshot = await observer.capture({
             attemptId,
             cohortChanged: sourceRevision !== previousCapturedCohortHash,
             hasErrors: false,
@@ -90,9 +93,15 @@ const runtimeCompileObserverPlugin = (
           });
           if (snapshot !== undefined) {
             observer.enqueue(snapshot);
+            snapshot.acceptCompilerAssetCheckpoint?.();
             previousCapturedCohortHash = sourceRevision;
           }
         } catch (error) {
+          try {
+            snapshot?.discardCompilerAssetCheckpoint?.();
+          } catch {
+            // The original capture/enqueue error remains the attempted failure cause.
+          }
           observer.failAttempt(attemptId, error);
         }
       });

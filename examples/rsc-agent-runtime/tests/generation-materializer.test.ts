@@ -8,12 +8,16 @@ import { expect, test } from '@rstest/core';
 
 import {
   createRscRuntimeRsbuildConfig,
+  type RscRuntimeCompileSnapshot,
 } from '../rsbuild.config.js';
 import {
   captureRuntimeGenerationSnapshot,
+  createRscCompilerAssetCheckpointTracker,
   materializeRuntimeGeneration,
   rscRuntimeGenerationMetadataCodec,
   validateRscRuntimeGenerationMetadata,
+  type RscCompilerAssetCheckpointTracker,
+  type RscRuntimeCapturedGenerationSnapshot,
   type RscRuntimeGenerationMetadata,
 } from '../src/dev/generation-materializer.js';
 import { RuntimeGenerationStore } from '../../../packages/agent-bundle/src/dev/runtime-generation-store.ts';
@@ -83,6 +87,19 @@ const createStore = (storageRoot: string): RuntimeGenerationStore<RscRuntimeGene
     validateMetadata: validateRscRuntimeGenerationMetadata,
   });
 
+const acceptCompilerAssetCheckpoint = (snapshot: RscRuntimeCapturedGenerationSnapshot): void => {
+  expect(snapshot.acceptCompilerAssetCheckpoint).toBeTypeOf('function');
+  snapshot.acceptCompilerAssetCheckpoint?.();
+};
+
+const captureWithCompilerAssetCheckpoint = async (
+  input: Parameters<typeof captureRuntimeGenerationSnapshot>[0],
+  tracker: RscCompilerAssetCheckpointTracker,
+) => captureRuntimeGenerationSnapshot({
+  ...input,
+  compilerAssetCheckpointTracker: tracker,
+});
+
 const isProcessAlive = (pid: number): boolean => {
   try {
     process.kill(pid, 0);
@@ -93,29 +110,11 @@ const isProcessAlive = (pid: number): boolean => {
   }
 };
 
-const compilerObserver = (input: Readonly<{
-  readonly capture: Array<Readonly<Record<string, unknown>>>;
-  readonly enqueued: string[];
-  readonly failed: unknown[];
-}>) => {
+const activateCompilerObserver = (onCompile: NonNullable<Parameters<typeof createRscRuntimeRsbuildConfig>[0]['onCompile']>) => {
   const config = createRscRuntimeRsbuildConfig({
     compilerRoot: join(tmpdir(), 'rsc-agent-runtime-observer'),
     mode: 'development',
-    onCompile: {
-      beforeAttempt: () => 'attempt-1',
-      capture: async (value) => {
-        input.capture.push(value);
-        return {
-          attemptId: value.attemptId,
-          candidateId: 'candidate-1',
-          preparedRevision: 'prepared-1',
-          rscCohortRevision: 1,
-          sourceRevision: value.sourceRevision,
-        };
-      },
-      enqueue: (snapshot) => input.enqueued.push(snapshot.attemptId),
-      failAttempt: (_attemptId, error) => input.failed.push(error),
-    },
+    onCompile,
   });
   const plugin = (config.plugins as readonly unknown[]).find((value): value is Readonly<{
     readonly name: string;
@@ -141,6 +140,26 @@ const compilerObserver = (input: Readonly<{
     },
   });
 };
+
+const compilerObserver = (input: Readonly<{
+  readonly capture: Array<Readonly<Record<string, unknown>>>;
+  readonly enqueued: string[];
+  readonly failed: unknown[];
+}>) => activateCompilerObserver({
+      beforeAttempt: () => 'attempt-1',
+      capture: async (value) => {
+        input.capture.push(value);
+        return {
+          attemptId: value.attemptId,
+          candidateId: 'candidate-1',
+          preparedRevision: 'prepared-1',
+          rscCohortRevision: 1,
+          sourceRevision: value.sourceRevision,
+        };
+      },
+      enqueue: (snapshot) => input.enqueued.push(snapshot.attemptId),
+      failAttempt: (_attemptId, error) => input.failed.push(error),
+});
 
 test('resolves the coherent development compiler configuration through Rsbuild', async () => {
   const compilerRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-compiler-'));
@@ -327,6 +346,59 @@ test('fails compile attempts unless stats contain one nonempty RSC and widget ha
   }
 });
 
+test('accepts a compiler checkpoint only after enqueue and discards it after an enqueue failure', async () => {
+  const lifecycle: string[] = [];
+  const captures: Array<Readonly<{ readonly cohortChanged: boolean }>> = [];
+  const failed: unknown[] = [];
+  const snapshots = [
+    Object.freeze({
+      acceptCompilerAssetCheckpoint: () => lifecycle.push('accept-a'),
+      attemptId: 'a', candidateId: 'a', discardCompilerAssetCheckpoint: () => lifecycle.push('discard-a'), preparedRevision: 'prepared-a', rscCohortRevision: 1, sourceRevision: 'a',
+    }),
+    Object.freeze({
+      acceptCompilerAssetCheckpoint: () => lifecycle.push('accept-b'),
+      attemptId: 'b', candidateId: 'b', discardCompilerAssetCheckpoint: () => lifecycle.push('discard-b'), preparedRevision: 'prepared-b', rscCohortRevision: 2, sourceRevision: 'b',
+    }),
+    Object.freeze({
+      acceptCompilerAssetCheckpoint: () => lifecycle.push('accept-b-retry'),
+      attemptId: 'b-retry', candidateId: 'b-retry', discardCompilerAssetCheckpoint: () => lifecycle.push('discard-b-retry'), preparedRevision: 'prepared-b', rscCohortRevision: 3, sourceRevision: 'b',
+    }),
+  ] as const satisfies readonly RscRuntimeCompileSnapshot[];
+  let index = 0;
+  let enqueueCount = 0;
+  const observer = activateCompilerObserver({
+    beforeAttempt: () => `attempt-${String(index)}`,
+    capture: async (input) => {
+      captures.push({ cohortChanged: input.cohortChanged });
+      const snapshot = snapshots[index];
+      index += 1;
+      return snapshot;
+    },
+    enqueue: (snapshot) => {
+      lifecycle.push(`enqueue-${snapshot.attemptId}`);
+      enqueueCount += 1;
+      if (enqueueCount === 2) throw new Error('enqueue failed');
+    },
+    failAttempt: (_attemptId, error) => failed.push(error),
+  });
+
+  await observer.compile([{ name: 'rsc', hash: 'rsc-a' }, { name: 'widget', hash: 'widget-a' }]);
+  await observer.compile([{ name: 'rsc', hash: 'rsc-b' }, { name: 'widget', hash: 'widget-b' }]);
+  await observer.compile([{ name: 'rsc', hash: 'rsc-b' }, { name: 'widget', hash: 'widget-b' }]);
+
+  expect(lifecycle).toEqual([
+    'enqueue-a', 'accept-a',
+    'enqueue-b', 'discard-b',
+    'enqueue-b-retry', 'accept-b-retry',
+  ]);
+  expect(captures).toEqual([
+    { cohortChanged: true },
+    { cohortChanged: true },
+    { cohortChanged: true },
+  ]);
+  expect(failed).toHaveLength(1);
+});
+
 test('requires every executable entry to declare its async cohort assets', async () => {
   const storageRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-generations-'));
   const compilerRoot = join(storageRoot, 'compiler');
@@ -368,14 +440,16 @@ test('reconciles a stale known async chunk from a prior incremental compiler coh
   const storageRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-generations-'));
   const compilerRoot = join(storageRoot, 'compiler');
   const store = createStore(storageRoot);
+  const tracker = createRscCompilerAssetCheckpointTracker();
   try {
     await writeCompilerCohort(compilerRoot);
     const firstCandidate = await store.begin({ id: 'first', sourceRevision: 'source-first' });
-    const firstSnapshot = await captureRuntimeGenerationSnapshot({
+    const firstSnapshot = await captureWithCompilerAssetCheckpoint({
       attemptId: 'attempt-first', candidate: firstCandidate, compilerRoot, preparedRuntime, rscCohortRevision: 1, sourceRevision: 'source-first',
-    });
+    }, tracker);
     const firstPrepared = await materializeRuntimeGeneration({ snapshot: firstSnapshot, store });
     await store.abort(firstPrepared);
+    acceptCompilerAssetCheckpoint(firstSnapshot);
 
     const rscRoot = join(compilerRoot, 'rsc');
     await writeFile(join(rscRoot, 'chunks', '202.js'), 'replacement-async-chunk', 'utf8');
@@ -385,9 +459,9 @@ test('reconciles a stale known async chunk from a prior incremental compiler coh
     expect(await readFile(join(rscRoot, 'chunks', '101.js'), 'utf8')).toBe('async-chunk');
 
     const secondCandidate = await store.begin({ id: 'second', sourceRevision: 'source-second' });
-    const snapshot = await captureRuntimeGenerationSnapshot({
+    const snapshot = await captureWithCompilerAssetCheckpoint({
       attemptId: 'attempt-second', candidate: secondCandidate, compilerRoot, preparedRuntime, rscCohortRevision: 2, sourceRevision: 'source-second',
-    });
+    }, tracker);
     const prepared = await materializeRuntimeGeneration({ snapshot, store });
 
     expect(prepared.generation.manifest.assets.map((asset) => asset.path)).toEqual(expect.arrayContaining([
@@ -397,6 +471,154 @@ test('reconciles a stale known async chunk from a prior incremental compiler coh
     expect(await readFile(join(prepared.generation.root, 'rsc', 'chunks', '202.js'), 'utf8')).toBe('replacement-async-chunk');
     await expect(readFile(join(prepared.generation.root, 'rsc', 'chunks', '101.js'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
   } finally {
+    tracker.close();
+    await store.close().catch(() => undefined);
+    await rm(storageRoot, { force: true, recursive: true });
+  }
+});
+
+test('retries a stale known compiler chunk after enqueue discards the prior capture checkpoint', async () => {
+  const storageRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-generations-'));
+  const compilerRoot = join(storageRoot, 'compiler');
+  const store = createStore(storageRoot);
+  const tracker = createRscCompilerAssetCheckpointTracker();
+  const snapshots: RscRuntimeCapturedGenerationSnapshot[] = [];
+  const failed: unknown[] = [];
+  let candidateNumber = 0;
+  let enqueueNumber = 0;
+  try {
+    await writeCompilerCohort(compilerRoot);
+    const observer = activateCompilerObserver({
+      beforeAttempt: () => `attempt-${String(candidateNumber)}`,
+      capture: async (input) => {
+        candidateNumber += 1;
+        const candidate = await store.begin({ id: `candidate-${String(candidateNumber)}`, sourceRevision: input.sourceRevision });
+        const snapshot = await captureWithCompilerAssetCheckpoint({
+          attemptId: input.attemptId,
+          candidate,
+          compilerRoot,
+          preparedRuntime,
+          rscCohortRevision: candidateNumber,
+          sourceRevision: input.sourceRevision,
+        }, tracker);
+        snapshots.push(snapshot);
+        return Object.freeze({
+          ...snapshot,
+          candidateId: candidate.id,
+          preparedRevision: snapshot.preparedRuntime.sourceRevision,
+        });
+      },
+      enqueue: () => {
+        enqueueNumber += 1;
+        if (enqueueNumber === 2) throw new Error('enqueue rejects B');
+      },
+      failAttempt: (_attemptId, error) => failed.push(error),
+    });
+
+    await observer.compile([{ name: 'rsc', hash: 'rsc-a' }, { name: 'widget', hash: 'widget-a' }]);
+    const rscRoot = join(compilerRoot, 'rsc');
+    await writeFile(join(rscRoot, 'chunks', '202.js'), 'replacement-async-chunk', 'utf8');
+    const manifestPath = join(rscRoot, 'runtime-assets.json');
+    await writeFile(manifestPath, (await readFile(manifestPath, 'utf8')).replaceAll('/chunks/101.js', '/chunks/202.js'), 'utf8');
+
+    await observer.compile([{ name: 'rsc', hash: 'rsc-b' }, { name: 'widget', hash: 'widget-b' }]);
+    await observer.compile([{ name: 'rsc', hash: 'rsc-b' }, { name: 'widget', hash: 'widget-b' }]);
+
+    expect(failed).toHaveLength(1);
+    expect(snapshots).toHaveLength(3);
+    for (const snapshot of snapshots.slice(1)) {
+      expect(snapshot.assets.map((asset) => asset.path)).toContain('rsc/chunks/202.js');
+      expect(snapshot.assets.map((asset) => asset.path)).not.toContain('rsc/chunks/101.js');
+    }
+  } finally {
+    tracker.close();
+    await store.close().catch(() => undefined);
+    await rm(storageRoot, { force: true, recursive: true });
+  }
+});
+
+test('isolates roots between tracker sessions and revokes checkpoint provenance on close', async () => {
+  const storageRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-generations-'));
+  const compilerRoot = join(storageRoot, 'compiler');
+  const otherCompilerRoot = join(storageRoot, 'other-compiler');
+  const store = createStore(storageRoot);
+  const firstTracker = createRscCompilerAssetCheckpointTracker();
+  let secondTracker: RscCompilerAssetCheckpointTracker | undefined;
+  try {
+    await writeCompilerCohort(compilerRoot);
+    const firstCandidate = await store.begin({ id: 'first', sourceRevision: 'source-first' });
+    const firstSnapshot = await captureWithCompilerAssetCheckpoint({
+      attemptId: 'attempt-first', candidate: firstCandidate, compilerRoot, preparedRuntime, rscCohortRevision: 1, sourceRevision: 'source-first',
+    }, firstTracker);
+    acceptCompilerAssetCheckpoint(firstSnapshot);
+
+    const rscRoot = join(compilerRoot, 'rsc');
+    await writeFile(join(rscRoot, 'chunks', '202.js'), 'replacement-async-chunk', 'utf8');
+    const manifestPath = join(rscRoot, 'runtime-assets.json');
+    await writeFile(manifestPath, (await readFile(manifestPath, 'utf8')).replaceAll('/chunks/101.js', '/chunks/202.js'), 'utf8');
+    firstTracker.close();
+
+    secondTracker = createRscCompilerAssetCheckpointTracker();
+    const reusedRootCandidate = await store.begin({ id: 'reused-root', sourceRevision: 'source-reused-root' });
+    await expect(captureWithCompilerAssetCheckpoint({
+      attemptId: 'attempt-reused-root', candidate: reusedRootCandidate, compilerRoot, preparedRuntime, rscCohortRevision: 2, sourceRevision: 'source-reused-root',
+    }, secondTracker as RscCompilerAssetCheckpointTracker)).rejects.toThrow('undeclared');
+
+    await writeCompilerCohort(otherCompilerRoot);
+    const otherRootManifestPath = join(otherCompilerRoot, 'rsc', 'runtime-assets.json');
+    await writeFile(join(otherCompilerRoot, 'rsc', 'chunks', '202.js'), 'replacement-async-chunk', 'utf8');
+    await writeFile(otherRootManifestPath, (await readFile(otherRootManifestPath, 'utf8')).replaceAll('/chunks/101.js', '/chunks/202.js'), 'utf8');
+    const otherRootCandidate = await store.begin({ id: 'other-root', sourceRevision: 'source-other-root' });
+    await expect(captureWithCompilerAssetCheckpoint({
+      attemptId: 'attempt-other-root', candidate: otherRootCandidate, compilerRoot: otherCompilerRoot, preparedRuntime, rscCohortRevision: 3, sourceRevision: 'source-other-root',
+    }, secondTracker as RscCompilerAssetCheckpointTracker)).rejects.toThrow('undeclared');
+  } finally {
+    secondTracker?.close();
+    firstTracker.close();
+    await store.close().catch(() => undefined);
+    await rm(storageRoot, { force: true, recursive: true });
+  }
+});
+
+test('serializes concurrent same-root captures and commits checkpoints in capture order', async () => {
+  const storageRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-generations-'));
+  const compilerRoot = join(storageRoot, 'compiler');
+  const store = createStore(storageRoot);
+  const tracker = createRscCompilerAssetCheckpointTracker();
+  try {
+    await writeCompilerCohort(compilerRoot);
+    const firstCandidate = await store.begin({ id: 'first', sourceRevision: 'source-first' });
+    const firstSnapshot = await captureWithCompilerAssetCheckpoint({
+      attemptId: 'attempt-first', candidate: firstCandidate, compilerRoot, preparedRuntime, rscCohortRevision: 1, sourceRevision: 'source-first',
+    }, tracker);
+    acceptCompilerAssetCheckpoint(firstSnapshot);
+
+    const rscRoot = join(compilerRoot, 'rsc');
+    await writeFile(join(rscRoot, 'chunks', '202.js'), 'replacement-async-chunk', 'utf8');
+    const manifestPath = join(rscRoot, 'runtime-assets.json');
+    await writeFile(manifestPath, (await readFile(manifestPath, 'utf8')).replaceAll('/chunks/101.js', '/chunks/202.js'), 'utf8');
+    const secondCandidate = await store.begin({ id: 'second', sourceRevision: 'source-second' });
+    const thirdCandidate = await store.begin({ id: 'third', sourceRevision: 'source-third' });
+    const secondSnapshot = await captureWithCompilerAssetCheckpoint({
+      attemptId: 'attempt-second', candidate: secondCandidate, compilerRoot, preparedRuntime, rscCohortRevision: 2, sourceRevision: 'source-second',
+    }, tracker);
+    let thirdSettled = false;
+    const thirdSnapshotPromise = captureWithCompilerAssetCheckpoint({
+      attemptId: 'attempt-third', candidate: thirdCandidate, compilerRoot, preparedRuntime, rscCohortRevision: 3, sourceRevision: 'source-third',
+    }, tracker).then((snapshot) => {
+      thirdSettled = true;
+      return snapshot;
+    });
+    await new Promise<void>((resolveMicrotask) => queueMicrotask(resolveMicrotask));
+    expect(thirdSettled).toBe(false);
+
+    acceptCompilerAssetCheckpoint(secondSnapshot);
+    const thirdSnapshot = await thirdSnapshotPromise;
+    expect(thirdSnapshot.assets.map((asset) => asset.path)).toContain('rsc/chunks/202.js');
+    expect(thirdSnapshot.assets.map((asset) => asset.path)).not.toContain('rsc/chunks/101.js');
+    acceptCompilerAssetCheckpoint(thirdSnapshot);
+  } finally {
+    tracker.close();
     await store.close().catch(() => undefined);
     await rm(storageRoot, { force: true, recursive: true });
   }
