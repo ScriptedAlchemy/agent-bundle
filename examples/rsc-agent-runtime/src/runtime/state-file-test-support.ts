@@ -22,6 +22,7 @@ export interface RuntimeStateTestAdapter {
   readonly ownerSettlementMs?: number;
   readonly platform?: NodeJS.Platform;
   readonly prepareStateFile?: (input: Readonly<{ stateFile: string }>) => Promise<string>;
+  readonly readState?: StateStorage['read'];
   readonly releaseMs?: number;
   readonly syncParent?: (directory: string) => Promise<void>;
 }
@@ -70,10 +71,10 @@ export const createTestFileRuntimeKernel = ({ adapter = {}, ...options }: TestFi
     prepare: adapter.prepareStateFile === undefined
       ? native.prepare
       : (stateFile) => adapter.prepareStateFile!({ stateFile }),
-    async read(stateFile, signal) {
+    read: adapter.readState ?? (async (stateFile, signal) => {
       await adapter.beforeRead?.();
       return native.read(stateFile, signal);
-    },
+    }),
     async repair(stateFile, completeBytes, signal) {
       await adapter.beforeRepair?.();
       if (signal.aborted) throw signal.reason;

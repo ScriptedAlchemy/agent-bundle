@@ -24,6 +24,15 @@ const wait = async (milliseconds: number): Promise<void> =>
     setTimeout(resolve, milliseconds);
   });
 
+const eagerPromise = <T>(value: T): Promise<T> => ({
+  then<TResult1 = T, TResult2 = never>(
+    onfulfilled?: ((value: T) => TResult1 | PromiseLike<TResult1>) | null,
+    _onrejected?: ((reason: unknown) => TResult2 | PromiseLike<TResult2>) | null,
+  ): Promise<TResult1 | TResult2> {
+    return Promise.resolve(onfulfilled === undefined || onfulfilled === null ? value as unknown as TResult1 : onfulfilled(value));
+  },
+}) as Promise<T>;
+
 const startLockOwner = async (stateFile: string, timing: { stale: number; update: number } = { stale: 2_000, update: 1_000 }) => {
   const child = spawn(process.execPath, [
     join(process.cwd(), 'tests/fixtures/state-lock-owner.mjs'),
@@ -677,6 +686,93 @@ test('lease compromise cancels its owning mutation while a contender is acquirin
   await expect(second).rejects.toThrow('permanently poisoned');
   await expect(readFile(stateFile, 'utf8')).resolves.toBe('');
   allowRead();
+});
+
+test('rechecks a simultaneous owner abort after a phase value wins and releases exactly once', async () => {
+  const stateFile = join(await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-')), 'state.jsonl');
+  const controller = new AbortController();
+  let appendAttempts = 0;
+  let releases = 0;
+  const kernel = createTestFileRuntimeKernel({
+    stateFile,
+    adapter: {
+      acquireLock: async () => async () => {
+        releases += 1;
+      },
+      beforeAppend: async () => {
+        appendAttempts += 1;
+      },
+      prepareStateFile: async ({ stateFile: preparedStateFile }) => {
+        await writeFile(preparedStateFile, '', 'utf8');
+        return preparedStateFile;
+      },
+      readState: () => {
+        controller.abort(new Error('simultaneous owner abort'));
+        return eagerPromise(Buffer.alloc(0));
+      },
+    },
+  });
+
+  await expect(
+    kernel.recordEdit(
+      {
+        host: 'claude',
+        idempotencyKey: 'test:state:simultaneous-abort',
+        path: 'simultaneous-abort.ts',
+        sessionId: 'session-1',
+        toolName: 'Write',
+      },
+      { signal: controller.signal },
+    ),
+  ).rejects.toThrow('simultaneous owner abort');
+  expect(appendAttempts).toBe(0);
+  expect(releases).toBe(1);
+});
+
+test('rechecks simultaneous lease poison after a phase value wins and never enters append', async () => {
+  const stateFile = join(await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-')), 'state.jsonl');
+  let appendAttempts = 0;
+  let compromise!: (error: Error) => void;
+  let fatalTeardowns = 0;
+  let releases = 0;
+  const kernel = createTestFileRuntimeKernel({
+    stateFile,
+    adapter: {
+      acquireLock: async ({ onCompromised }) => {
+        compromise = onCompromised;
+        return async () => {
+          releases += 1;
+        };
+      },
+      beforeAppend: async () => {
+        appendAttempts += 1;
+      },
+      fatalOwnerTeardown: () => {
+        fatalTeardowns += 1;
+      },
+      prepareStateFile: async ({ stateFile: preparedStateFile }) => {
+        await writeFile(preparedStateFile, '', 'utf8');
+        return preparedStateFile;
+      },
+      readState: () => {
+        compromise(new Error('simultaneous owner compromise'));
+        return eagerPromise(Buffer.alloc(0));
+      },
+    },
+  });
+
+  await expect(
+    kernel.recordEdit({
+      host: 'claude',
+      idempotencyKey: 'test:state:simultaneous-poison',
+      path: 'simultaneous-poison.ts',
+      sessionId: 'session-1',
+      toolName: 'Write',
+    }),
+  ).rejects.toThrow('permanently poisoned');
+  expect(appendAttempts).toBe(0);
+  expect(fatalTeardowns).toBe(1);
+  expect(releases).toBe(0);
 });
 
 test('accepts Windows parent-fsync limitations when creating a new state file', async () => {

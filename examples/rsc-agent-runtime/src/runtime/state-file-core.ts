@@ -381,6 +381,13 @@ export const createRuntimeStateKernel = ({
     clearTimeout(timer);
     if (outcome.type === 'error') throw outcome.error;
     if (outcome.type === 'value') {
+      if (poisoned !== undefined) {
+        owner.unsafeToRelease = true;
+        throw poisoned;
+      }
+      if (owner.controller.signal.aborted) {
+        throw abortError(owner.controller.signal);
+      }
       if (Date.now() >= deadline) {
         owner.controller.abort(timeoutError);
         throw timeoutError;
