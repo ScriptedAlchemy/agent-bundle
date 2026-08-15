@@ -68,6 +68,15 @@ type IsExact<Left, Right> =
     ? true
     : false;
 
+const requireSimulation = (
+  result: HookPlaygroundSimulation | HookPlaygroundDiagnosticResult,
+): HookPlaygroundSimulation => {
+  if ('diagnostics' in result) {
+    throw new Error(`Expected a hook playground simulation, received diagnostics: ${JSON.stringify(result.diagnostics)}.`);
+  }
+  return result;
+};
+
 class CopyFailureEpochStore extends EpochStore {
   readonly #copyWorkSettled: () => boolean;
   cloneRoot: string | undefined;
@@ -393,8 +402,8 @@ it('runs fixture and inline canonical input through the epoch-bound wrapper and 
       target: 'codex',
     } as const;
 
-    const inline = await service.simulate({ ...options, input: { inline: input } });
-    const fixture = await service.simulate({ ...options, input: { fixture: input } });
+    const inline = requireSimulation(await service.simulate({ ...options, input: { inline: input } }));
+    const fixture = requireSimulation(await service.simulate({ ...options, input: { fixture: input } }));
 
     expect(inline).toEqual({
       binding: options,
@@ -440,7 +449,16 @@ it('runs fixture and inline canonical input through the epoch-bound wrapper and 
     await expect(service.replay(inline.replay)).resolves.toEqual(inline);
     expect(Object.isFrozen(inline.canonicalIntent.input.toolInput)).toBe(true);
     expect(Object.isFrozen(inline.nativeInput.tool_input)).toBe(true);
-    expect(Object.isFrozen((inline.nativeOutput?.hookSpecificOutput as Record<string, unknown>).updatedInput)).toBe(true);
+    const nativeHookOutput = inline.nativeOutput?.hookSpecificOutput;
+    if (
+      nativeHookOutput === null ||
+      typeof nativeHookOutput !== 'object' ||
+      Array.isArray(nativeHookOutput) ||
+      !('updatedInput' in nativeHookOutput)
+    ) {
+      throw new Error('Expected hook-specific native output with updated input.');
+    }
+    expect(Object.isFrozen(nativeHookOutput.updatedInput)).toBe(true);
     expect(Object.isFrozen(inline.replay.input.toolInput)).toBe(true);
     expect(inline.canonicalIntent.input.toolInput).not.toBe(input.toolInput);
     input.toolInput.command = 'mutated after simulation';
@@ -519,12 +537,12 @@ it('projects every emitted Codex and Claude event deterministically and exposes 
 
     for (const target of ['codex', 'claude'] as const) {
       for (const event of ['sessionStart', 'beforeTool', 'afterTool', 'stop'] as const) {
-        const trace = await service.simulate({
+        const trace = requireSimulation(await service.simulate({
           epochId: 'epoch-1',
           hook: epoch.hooks[event].id,
           input: { inline: inputFor(event) },
           target,
-        });
+        }));
         expect(trace.hostMapping).toMatchObject({
           canonicalEvent: event,
           nativeProjection: 'deterministic',
@@ -562,7 +580,9 @@ it('isolates malicious relative writes from the referenced epoch and rejects coo
     const manifestPath = join(epochRoot, 'agent-bundle.manifest.json');
     const manifestBefore = await readFile(manifestPath, 'utf8');
 
-    const [first, second] = await Promise.all([service.simulate(request), service.simulate(request)]);
+    const [firstResult, secondResult] = await Promise.all([service.simulate(request), service.simulate(request)]);
+    const first = requireSimulation(firstResult);
+    const second = requireSimulation(secondResult);
     expect(first.canonicalResult?.additionalContext).toMatch(/^mutated:/);
     expect(second.canonicalResult?.additionalContext).toMatch(/^mutated:/);
     expect(first.canonicalResult?.additionalContext).not.toEqual(second.canonicalResult?.additionalContext);
@@ -614,9 +634,9 @@ it('settles route cancellation and cleans the per-simulation clone before releas
     setTimeout(() => controller.abort(), 25);
 
     await expect(pending).rejects.toThrow('Hook simulation aborted.');
-    expect(runnableArtifact).toBeDefined();
+    if (runnableArtifact === undefined) throw new Error('Expected a runnable simulation artifact.');
     expect(runnableArtifact).not.toBe(join(root, '.agent-bundle', 'epochs', 'epoch-1'));
-    await expect(access(runnableArtifact!)).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(access(runnableArtifact)).rejects.toMatchObject({ code: 'ENOENT' });
   } finally {
     await rm(root, { force: true, recursive: true });
   }
@@ -654,7 +674,8 @@ it('settles clone copies before cleanup and reference release when an injected c
     expect(copies).toEqual({ settled: 1, started: 1 });
     expect(store.copyWorkSettledBeforeRelease).toBe(true);
     expect(store.cloneRootExistsBeforeRelease).toBe(false);
-    await expect(access(store.cloneRoot!)).rejects.toMatchObject({ code: 'ENOENT' });
+    if (store.cloneRoot === undefined) throw new Error('Expected the injected copy destination.');
+    await expect(access(store.cloneRoot)).rejects.toMatchObject({ code: 'ENOENT' });
   } finally {
     await new Promise<void>((resolvePromise) => { setTimeout(resolvePromise, 75); });
     if (store.cloneRoot !== undefined) await rm(store.cloneRoot, { force: true, recursive: true });
