@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { lstat, readFile, readdir, realpath } from 'node:fs/promises';
-import { isAbsolute, join, relative, resolve } from 'node:path';
+import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 import { createDefaultRegistry, type TargetRegistry } from '../adapters/registry.ts';
 import { discoverProject } from '../config/discover.ts';
@@ -76,17 +76,33 @@ const errorCode = (error: unknown): string =>
       ? error.name
       : typeof error;
 
+export type ProjectPathApi = Pick<typeof import('node:path').win32, 'isAbsolute' | 'relative' | 'resolve' | 'sep'>;
+
+const nativePath: ProjectPathApi = { isAbsolute, relative, resolve, sep };
+
+export const containedPathComponents = (
+  root: string,
+  candidate: string,
+  path: ProjectPathApi = nativePath,
+): readonly string[] | undefined => {
+  const pathRelative = path.relative(path.resolve(root), path.resolve(candidate));
+  if (
+    pathRelative === '..' ||
+    pathRelative.startsWith(`..${path.sep}`) ||
+    path.isAbsolute(pathRelative)
+  ) return undefined;
+  return pathRelative.length === 0 ? [] : pathRelative.split(path.sep);
+};
+
 const relativeSourcePath = (root: string, source: string): string => {
   const resolvedRoot = resolve(root);
   const resolvedSource = resolve(resolvedRoot, source);
-  const projectRelative = relative(resolvedRoot, resolvedSource);
-  if (projectRelative === '..' || projectRelative.startsWith('../')) {
+  const components = containedPathComponents(resolvedRoot, resolvedSource);
+  if (components === undefined) {
     throw new RangeError(`Project source path ${JSON.stringify(resolvedSource)} is outside project root ${JSON.stringify(resolvedRoot)}.`);
   }
-  if (projectRelative.length === 0) {
-    throw new RangeError('Project source path must not be the project root.');
-  }
-  return projectRelative.replaceAll('\\', '/');
+  if (components.length === 0) throw new RangeError('Project source path must not be the project root.');
+  return components.join('/');
 };
 
 const sourceInput = async (root: string, source: string): Promise<ProjectSourceSnapshotInput> => {
@@ -104,21 +120,15 @@ const sourceInput = async (root: string, source: string): Promise<ProjectSourceS
   }
 };
 
-const isWithinOutputRoot = (source: string, outputRoot: string): boolean => {
-  const path = relative(outputRoot, source);
-  return path.length === 0 || (path !== '..' && !path.startsWith('../') && !isAbsolute(path));
-};
-
 const isNotFound = (error: unknown): boolean =>
   typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT';
 
 const physicalOutputRoot = async (
   root: string,
-  outputRoot: string,
+  parts: readonly string[],
   requestedOutputRoot: string,
 ): Promise<string> => {
   let physical = root;
-  const parts = relative(root, outputRoot).split('/');
   for (let index = 0; index < parts.length; index += 1) {
     const candidate = join(physical, parts[index]);
     let entry;
@@ -140,7 +150,7 @@ const physicalOutputRoot = async (
     if (index === parts.length - 1 && physical === root) {
       throw new RangeError('Configured output root must not be the project root.');
     }
-    if (!isWithinOutputRoot(physical, root)) {
+    if (containedPathComponents(root, physical) === undefined) {
       throw new RangeError(`Configured output root ${JSON.stringify(requestedOutputRoot)} is outside project root ${JSON.stringify(root)}.`);
     }
   }
@@ -156,18 +166,23 @@ const resolveOutputRoots = async (
   const canonicalRoot = resolve(root);
   const resolveOutputRoot = async (outputRoot: string): Promise<string> => {
     const requestedOutputRoot = resolve(requestedProjectRoot, outputRoot);
+    const requestedComponents = containedPathComponents(requestedProjectRoot, requestedOutputRoot);
     let canonicalOutputRoot: string;
-    if (isWithinOutputRoot(requestedOutputRoot, requestedProjectRoot)) {
-      canonicalOutputRoot = resolve(canonicalRoot, relative(requestedProjectRoot, requestedOutputRoot));
-    } else if (isAbsolute(outputRoot) && isWithinOutputRoot(requestedOutputRoot, canonicalRoot)) {
+    if (requestedComponents !== undefined) {
+      canonicalOutputRoot = resolve(canonicalRoot, ...requestedComponents);
+    } else if (isAbsolute(outputRoot) && containedPathComponents(canonicalRoot, requestedOutputRoot) !== undefined) {
       canonicalOutputRoot = requestedOutputRoot;
     } else {
       throw new RangeError(`Configured output root ${JSON.stringify(requestedOutputRoot)} is outside project root ${JSON.stringify(canonicalRoot)}.`);
     }
-    if (canonicalOutputRoot === canonicalRoot) {
+    const components = containedPathComponents(canonicalRoot, canonicalOutputRoot);
+    if (components === undefined) {
+      throw new RangeError(`Configured output root ${JSON.stringify(requestedOutputRoot)} is outside project root ${JSON.stringify(canonicalRoot)}.`);
+    }
+    if (components.length === 0) {
       throw new RangeError('Configured output root must not be the project root.');
     }
-    return physicalOutputRoot(canonicalRoot, canonicalOutputRoot, requestedOutputRoot);
+    return physicalOutputRoot(canonicalRoot, components, requestedOutputRoot);
   };
   const roots = await Promise.all((outputRoots ?? []).map(resolveOutputRoot));
   return Object.freeze([...new Set(roots)].sort((left, right) => left.localeCompare(right)));
@@ -182,7 +197,7 @@ const sourcePaths = async (root: string, outputRoots: readonly string[]): Promis
     for (const entry of entries) {
       const source = join(directory, entry.name);
       if (isProjectPathIgnored(rules, root, source)) continue;
-      if (outputRoots.some((outputRoot) => isWithinOutputRoot(source, outputRoot))) continue;
+      if (outputRoots.some((outputRoot) => containedPathComponents(outputRoot, source) !== undefined)) continue;
       if (entry.isDirectory()) {
         await visit(source);
         continue;
