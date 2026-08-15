@@ -1,5 +1,5 @@
 import { execFile as executeFile } from 'node:child_process';
-import { mkdir, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 
@@ -21,11 +21,14 @@ const e2e = test.extend({
   } satisfies PlaywrightOptions,
 });
 
-const buildWorkbench = async (): Promise<void> => {
-  const { RSTEST: _rstest, ...environment } = process.env;
-  await execFile('npm', ['run', 'build', '--workspace', 'agent-bundle-workbench'], {
-    cwd: workspaceRoot,
-    env: { ...environment, NODE_ENV: 'production' },
+const buildWorkbench = async (mode: 'development' | 'production' = 'production'): Promise<void> => {
+  const { NODE_ENV: _nodeEnv, RSTEST: _rstest, ...environment } = process.env;
+  const isProduction = mode === 'production';
+  await execFile('npm', isProduction
+    ? ['run', 'build', '--workspace', 'agent-bundle-workbench']
+    : ['exec', 'rsbuild', '--', 'build', '--mode', mode], {
+    cwd: isProduction ? workspaceRoot : join(workspaceRoot, 'packages', 'workbench'),
+    env: { ...environment, NODE_ENV: mode },
   });
 };
 
@@ -156,6 +159,29 @@ e2e('presents one real session as Inspector tools, protocol frames, and logging'
     expect(sessionPosts).toBe(1);
     await page.setViewportSize({ height: 844, width: 390 });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    expect(pageErrors).toEqual([]);
+  } finally {
+    await server.close();
+    await removeProjectFixture(project.root);
+  }
+});
+
+e2e('mounts Inspector from an explicit development-mode artifact', { timeout: 60_000 }, async ({ page }) => {
+  await buildWorkbench('development');
+  const project = await createProjectFixture();
+  const server = await startDevServer({
+    assets: createWorkbenchAssetSource({ root: workbenchAssets }),
+    open: false,
+    port: 0,
+    root: project.root,
+  });
+  try {
+    const pageErrors: Error[] = [];
+    page.on('pageerror', (error) => pageErrors.push(error));
+    await page.goto(`${server.url}#inspector`);
+    await expect(page.getByRole('heading', { name: 'Inspector' })).toBeVisible({ timeout: browserTimeout });
+    await expect(page.getByText('Negotiated protocol: Not negotiated')).toBeVisible({ timeout: browserTimeout });
+    await expect(await readFile(join(workbenchAssets, 'static', 'js', 'lib-react.js'), 'utf8')).toContain('react.development.js');
     expect(pageErrors).toEqual([]);
   } finally {
     await server.close();
