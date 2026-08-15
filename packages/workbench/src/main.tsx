@@ -14,7 +14,12 @@ import { ProjectClient } from './project-client.ts';
 import { SkillClient } from './skill-client.ts';
 import { SkillsPage } from './skills-page.tsx';
 import { RuntimeClient, type RuntimeBootstrap } from './runtime-client.ts';
-import { createRuntimePlaygroundController, RuntimePlayground, type RuntimePlaygroundController } from './runtime-playground.tsx';
+import {
+  createRuntimeEventBuffer,
+  createRuntimePlaygroundController,
+  RuntimePlayground,
+  type RuntimePlaygroundController,
+} from './runtime-playground.tsx';
 import type { RuntimeProfileOption } from './runtime-model.ts';
 import './styles.css';
 
@@ -43,7 +48,14 @@ const runtimeProfiles = [{
   version: 'agent-bundle:mcp-apps:2026-01-26',
 }] satisfies readonly RuntimeProfileOption[];
 
-const createMcpController = () => createMcpSessionController({ routes: new McpRouteClient() });
+/** The Workbench, rather than an individual MCP transport, owns this shared foreground credential. */
+class WorkbenchMcpRouteClient extends McpRouteClient {
+  override forgetAuthentication(): void {}
+}
+
+const createMcpController = (foreground: ForegroundRouteClient) => createMcpSessionController({
+  routes: new WorkbenchMcpRouteClient({ foreground }),
+});
 
 const downloadMcpConfig = ({ blob, filename }: McpConfigDownload): void => {
   const url = URL.createObjectURL(blob);
@@ -314,13 +326,16 @@ const RuntimeScreen = ({ connectionError, controller, onNavigate }: {
 
 const Workbench = () => {
   const client = useRef<ProjectClient>();
+  const foreground = useRef<ForegroundRouteClient>();
   const mcpAppClient = useRef<McpAppClient>();
   const runtimeClient = useRef<RuntimeClient>();
   const runtimeController = useRef<RuntimePlaygroundController>();
   const skillClient = useRef<SkillClient>();
   const [connectionError, setConnectionError] = useState<string>();
   const [error, setError] = useState<string>();
-  const [mcpController, setMcpController] = useState(createMcpController);
+  if (foreground.current === undefined) foreground.current = new ForegroundRouteClient();
+
+  const [mcpController, setMcpController] = useState(() => createMcpController(foreground.current!));
   const [mcpModel, setMcpModel] = useState(() => mcpController.model);
   const [page, setPage] = useState<WorkbenchPage>(() => pageForHash(false));
   const [runtimeCapability, setRuntimeCapability] = useState<RuntimeCapability>('unknown');
@@ -329,7 +344,7 @@ const Workbench = () => {
   const [status, setStatus] = useState<ProjectStatus>();
 
   if (mcpAppClient.current === undefined) mcpAppClient.current = new McpAppClient();
-  if (runtimeClient.current === undefined) runtimeClient.current = new RuntimeClient(new ForegroundRouteClient());
+  if (runtimeClient.current === undefined) runtimeClient.current = new RuntimeClient(foreground.current);
 
   const runtimeAvailable = runtimeCapability === 'available';
 
@@ -340,15 +355,16 @@ const Workbench = () => {
   };
 
   const resetMcpSession = (): void => {
-    const replacement = createMcpController();
+    const replacement = createMcpController(foreground.current!);
     setMcpController(replacement);
     setMcpModel(replacement.model);
   };
 
   useEffect(() => {
-    const next = new ProjectClient();
+    const next = new ProjectClient({ foreground: foreground.current! });
     const nextSkillClient = new SkillClient();
     const nextRuntimeClient = runtimeClient.current!;
+    const runtimeEvents = createRuntimeEventBuffer();
     let mounted = true;
     let runtimeRetry: ReturnType<typeof setTimeout> | undefined;
     client.current = next;
@@ -356,6 +372,7 @@ const Workbench = () => {
     const resolveRuntimeCapability = (bootstrap: RuntimeBootstrap): void => {
       if (!mounted) return;
       if (bootstrap.kind === 'unavailable') {
+        runtimeEvents.close();
         setRuntimeCapability('unavailable');
         if (window.location.hash === '#runtime') {
           window.history.replaceState(undefined, '', '#overview');
@@ -367,6 +384,7 @@ const Workbench = () => {
       if (controller === undefined) {
         const nextController = createRuntimePlaygroundController({ bootstrap, client: nextRuntimeClient, profiles: runtimeProfiles });
         runtimeController.current = nextController;
+        runtimeEvents.install(nextController);
         setRuntimeControllerState(nextController);
       } else {
         controller.dispatch({ bootstrap, type: 'bootstrap.received' });
@@ -395,7 +413,7 @@ const Workbench = () => {
       (reason) => {
         if (mounted) setConnectionError(errorMessage(reason));
       },
-      (event) => { void runtimeController.current?.receive(event); },
+      (event) => { runtimeEvents.receive(event); },
     ).catch((reason: unknown) => {
       if (mounted) setError(errorMessage(reason));
     });
@@ -403,6 +421,7 @@ const Workbench = () => {
     return () => {
       mounted = false;
       if (runtimeRetry !== undefined) clearTimeout(runtimeRetry);
+      runtimeEvents.close();
       next.close();
       runtimeController.current?.close();
       runtimeController.current = undefined;

@@ -16,6 +16,7 @@ import type {
 import type { JsonValue, ProjectEventMessage, RuntimeEvent } from '../../agent-bundle/src/dev/types.ts';
 import { RuntimeClientError, type RuntimeBootstrap } from '../src/runtime-client.ts';
 import {
+  createRuntimeEventBuffer,
   createRuntimePlaygroundController,
   runtimeDataAttributesFor,
   runtimePlaygroundLiveMcpPageAdapter,
@@ -373,6 +374,35 @@ it('processes a replay gap bootstrap before the queued next runtime event', asyn
   expect(bootstrapCalls).toBe(1);
   expect(controller.model.replayGap).toEqual(gap);
   expect(client.requests).toEqual(['run-after-gap']);
+});
+
+it('delivers pre-bootstrap runtime gap, activation, and terminal events before later live events', async () => {
+  const gate = deferred<void>();
+  const received: ProjectEventMessage[] = [];
+  const buffer = createRuntimeEventBuffer();
+  const gap = Object.freeze({ earliestAvailableSequence: 14, latestDroppedSequence: 13, requestedAfterSequence: 10, type: 'replay.gap' as const });
+  const activation = runtimeEvent(14, 'runtime.generation.activated');
+  const terminal = runtimeEvent(15, 'runtime.run.completed', 'queued-run');
+  const live = runtimeEvent(16, 'runtime.run.failed', 'live-run');
+
+  buffer.receive(gap);
+  buffer.receive(activation);
+  buffer.receive(terminal);
+  await buffer.whenIdle();
+  buffer.install({
+    receive: async (event) => {
+      received.push(event);
+      if (event === gap) await gate.promise;
+    },
+  });
+  buffer.receive(live);
+  await Promise.resolve();
+  expect(received).toEqual([gap]);
+
+  gate.resolve();
+  await buffer.whenIdle();
+
+  expect(received).toEqual([gap, activation, terminal, live]);
 });
 
 it('ignores a late resolution after unmount', async () => {

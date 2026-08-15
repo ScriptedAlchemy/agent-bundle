@@ -40,6 +40,17 @@ export interface RuntimePlaygroundController {
   whenIdle(): Promise<void>;
 }
 
+export interface RuntimeEventReceiver {
+  receive(event: ProjectEventMessage): Promise<void>;
+}
+
+export interface RuntimeEventBuffer {
+  close(): void;
+  install(receiver: RuntimeEventReceiver): void;
+  receive(event: ProjectEventMessage): void;
+  whenIdle(): Promise<void>;
+}
+
 export interface RuntimePlaygroundControllerOptions {
   readonly bootstrap: RuntimeBootstrap;
   readonly client: RuntimePlaygroundClient;
@@ -174,6 +185,47 @@ class RuntimePlaygroundControllerImpl implements RuntimePlaygroundController {
 
 export const createRuntimePlaygroundController = (options: RuntimePlaygroundControllerOptions): RuntimePlaygroundController =>
   new RuntimePlaygroundControllerImpl(options);
+
+class RuntimeEventBufferImpl implements RuntimeEventBuffer {
+  #closed = false;
+  #pending: ProjectEventMessage[] = [];
+  #receiver: RuntimeEventReceiver | undefined;
+  #tail: Promise<void> = Promise.resolve();
+
+  close(): void {
+    this.#closed = true;
+    this.#pending = [];
+  }
+
+  install(receiver: RuntimeEventReceiver): void {
+    if (this.#closed || this.#receiver !== undefined) return;
+    this.#receiver = receiver;
+    this.#tail = this.#tail.then(async () => {
+      if (this.#closed) return;
+      const pending = this.#pending;
+      this.#pending = [];
+      for (const event of pending) await receiver.receive(event);
+    }).catch(() => undefined);
+  }
+
+  receive(event: ProjectEventMessage): void {
+    this.#tail = this.#tail.then(async () => {
+      if (this.#closed) return;
+      const receiver = this.#receiver;
+      if (receiver === undefined) {
+        this.#pending.push(event);
+        return;
+      }
+      await receiver.receive(event);
+    }).catch(() => undefined);
+  }
+
+  whenIdle(): Promise<void> {
+    return this.#tail;
+  }
+}
+
+export const createRuntimeEventBuffer = (): RuntimeEventBuffer => new RuntimeEventBufferImpl();
 
 export interface RuntimePlaygroundProps {
   readonly controller: RuntimePlaygroundController;

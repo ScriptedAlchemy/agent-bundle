@@ -14,7 +14,12 @@ const e2e = test.extend({
 e2e('renders the capability-gated Runtime sibling in the real RSC workbench', { timeout: 120_000 }, async ({ page }) => {
   const fixture = await startRuntimePlaygroundFixture();
   const pageErrors: Error[] = [];
+  const foregroundSessionRequests: string[] = [];
   page.on('pageerror', (error) => pageErrors.push(error));
+  page.on('request', (request) => {
+    const requestUrl = new URL(request.url());
+    if (requestUrl.origin === fixture.url && requestUrl.pathname === '/api/project/session') foregroundSessionRequests.push(request.url());
+  });
   try {
     await page.goto(`${fixture.url}#overview`);
     await expect(page.getByRole('link', { name: 'MCP playground' })).toBeVisible({ timeout: browserTimeout });
@@ -59,11 +64,26 @@ e2e('renders the capability-gated Runtime sibling in the real RSC workbench', { 
     await expect(identity).toHaveAttribute('data-runtime-artifact-epoch', runtimeIdentity.activeVector.artifactEpochId ?? 'Not packaged');
     await expect(identity).toHaveAttribute('data-runtime-generation', runtimeIdentity.activeVector.runtimeGenerationId);
     expect(Number(await identity.getAttribute('data-runtime-event-sequence'))).toBeGreaterThanOrEqual(0);
-    expect(Number(await identity.getAttribute('data-runtime-hmr-client-count'))).toBeGreaterThanOrEqual(0);
+    await expect(identity).toHaveAttribute('data-runtime-hmr-client-count', 'Unknown');
     await expect(identity).toHaveAttribute('data-runtime-hmr-ready', String(runtimeIdentity.hmrReady));
     await expect(identity).toHaveAttribute('data-runtime-provider-session', runtimeIdentity.activeVector.providerSessionId);
     await expect(identity).toHaveAttribute('data-runtime-source-revision', runtimeIdentity.activeVector.sourceRevision);
     await expect(identity).toHaveAttribute('data-runtime-state-version', String(runtimeIdentity.activeVector.stateVersion));
+    await expect.poll(() => foregroundSessionRequests).toHaveLength(1);
+
+    await page.goto(`${fixture.url}#mcp`);
+    await expect(page.getByRole('heading', { name: 'MCP playground' })).toBeVisible({ timeout: browserTimeout });
+    await page.locator('#mcp-target').selectOption('portable');
+    await page.locator('#mcp-server-name').fill('timeline');
+    await page.getByRole('button', { name: 'Open MCP session' }).click();
+    await expect(page.locator('.mcp-page-phase')).toContainText('Session ready', { timeout: browserTimeout });
+    await expect(foregroundSessionRequests).toHaveLength(1);
+    await page.getByRole('button', { name: 'Close MCP session' }).click();
+    await expect(page.getByRole('button', { name: 'Reset MCP session' })).toBeVisible({ timeout: browserTimeout });
+    await page.getByRole('button', { name: 'Reset MCP session' }).click();
+    await page.getByRole('button', { name: 'Open MCP session' }).click();
+    await expect(page.locator('.mcp-page-phase')).toContainText('Session ready', { timeout: browserTimeout });
+    await expect(foregroundSessionRequests).toHaveLength(1);
 
     const input = page.locator('#runtime-input');
     await input.fill('{"broken":');
