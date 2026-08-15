@@ -32,6 +32,7 @@ import type {
   DevRuntimeStateResetRequest,
   DevRuntimeStatus,
   DevRuntimeSurface,
+  RuntimeVector,
 } from './runtime-protocol.ts';
 
 const defaultStartupTimeoutMs = 30_000;
@@ -92,6 +93,22 @@ const states = new Set<DevRuntimeStatus['state']>([
 const validStatus = (value: unknown): value is DevRuntimeStatus => isRecord(value) &&
   validDescriptor(value.descriptor) && Array.isArray(value.diagnostics) &&
   typeof value.hmrReady === 'boolean' && typeof value.state === 'string' && states.has(value.state as DevRuntimeStatus['state']);
+
+const frozenVector = (vector: RuntimeVector): RuntimeVector => Object.freeze({ ...vector });
+
+const frozenStatus = (status: DevRuntimeStatus): DevRuntimeStatus => Object.freeze({
+  ...(status.activeVector === undefined ? {} : { activeVector: frozenVector(status.activeVector) }),
+  descriptor: Object.freeze({
+    environmentVariables: Object.freeze([...status.descriptor.environmentVariables]),
+    id: status.descriptor.id,
+    label: status.descriptor.label,
+    schemaVersion: 1,
+  }),
+  diagnostics: Object.freeze(status.diagnostics.map((diagnostic) => Object.freeze({ ...diagnostic }))),
+  hmrReady: status.hmrReady,
+  ...(status.lastGoodVector === undefined ? {} : { lastGoodVector: frozenVector(status.lastGoodVector) }),
+  state: status.state,
+});
 
 const call = <TResult>(owner: object, key: PropertyKey, args: readonly unknown[] = []): TResult => {
   const candidate = (owner as Record<PropertyKey, unknown>)[key];
@@ -330,7 +347,7 @@ export class DevRuntimeController implements DevRuntimeSession {
     }
     const status = session.status();
     if (!validStatus(status)) throw new DevRuntimeUnavailableError();
-    return status;
+    return frozenStatus(status);
   }
 
   #adoptStatus(status: DevRuntimeStatus): void {
@@ -338,12 +355,13 @@ export class DevRuntimeController implements DevRuntimeSession {
     if (status.state === 'active' || status.state === 'degraded') this.#lastGoodStatus = status;
   }
 
-  #captureSurfaces(session: DevRuntimeSession): void {
+  #snapshotSurfaces(session: DevRuntimeSession, tolerateFailure = true): readonly DevRuntimeSurface[] {
     try {
       const surfaces = session.surfaces();
-      this.#surfaces = Array.isArray(surfaces) ? Object.freeze([...surfaces]) : Object.freeze([]);
-    } catch {
-      this.#surfaces = Object.freeze([]);
+      return Array.isArray(surfaces) ? Object.freeze([...surfaces]) : Object.freeze([]);
+    } catch (error) {
+      if (!tolerateFailure) throw error;
+      return Object.freeze([]);
     }
   }
 
@@ -414,6 +432,7 @@ export class DevRuntimeController implements DevRuntimeSession {
         return;
       }
       const status = this.#captureStatus(session);
+      const surfaces = this.#snapshotSurfaces(session);
       if (this.#closed || this.#topologyFailed) {
         try {
           await this.#closeSessionOnce(session);
@@ -424,7 +443,7 @@ export class DevRuntimeController implements DevRuntimeSession {
       }
       this.#session = session;
       this.#adoptStatus(status);
-      this.#captureSurfaces(session);
+      this.#surfaces = surfaces;
       if (this.#bufferedPrepared.sourceRevision !== startedPrepared.sourceRevision) {
         await this.#enqueueReconcile(this.#bufferedPrepared);
       }
@@ -444,8 +463,11 @@ export class DevRuntimeController implements DevRuntimeSession {
       try {
         await session.reconcilePreparedRuntime(prepared);
         if (this.#closed || this.#topologyFailed) return;
-        this.#adoptStatus(this.#captureStatus(session));
-        this.#captureSurfaces(session);
+        const status = this.#captureStatus(session);
+        const surfaces = this.#snapshotSurfaces(session);
+        if (this.#closed || this.#topologyFailed || this.#session !== session) return;
+        this.#adoptStatus(status);
+        this.#surfaces = surfaces;
       } catch {
         if (!this.#topologyFailed) this.#failLifecycle('degraded');
       }
@@ -455,10 +477,27 @@ export class DevRuntimeController implements DevRuntimeSession {
   }
 
   #publish(event: DevRuntimeEventInput): void {
+    if (event.type === 'runtime.generation.activated') this.#refreshSnapshot();
     try {
       this.#emit(runtimeEvent(this.#providerSessionId, event));
     } catch {
       // Provider health must not depend on a failed observer.
+    }
+  }
+
+  /** Refreshes browser-visible snapshots before activation reaches event consumers. */
+  #refreshSnapshot(): void {
+    if (this.#closed || this.#topologyFailed) return;
+    const session = this.#session;
+    if (session === undefined) return;
+    try {
+      const status = this.#captureStatus(session);
+      const surfaces = this.#snapshotSurfaces(session, false);
+      if (this.#closed || this.#topologyFailed || this.#session !== session) return;
+      this.#adoptStatus(status);
+      this.#surfaces = surfaces;
+    } catch {
+      if (!this.#topologyFailed) this.#failLifecycle('degraded');
     }
   }
 

@@ -221,6 +221,115 @@ it('starts one provider from the trusted prepared snapshot with only declared en
   await controller.close();
 });
 
+it('refreshes controller endpoint snapshots before publishing a later runtime activation', async () => {
+  const descriptor = { environmentVariables: [], id: 'fixture-runtime', label: 'Fixture runtime', schemaVersion: 1 } as const;
+  let activated = false;
+  let emit: Parameters<DevRuntimeProvider['start']>[0]['emit'] | undefined;
+  const observedEvents: Array<Readonly<{ readonly state: string; readonly surfaceCount: number; readonly type: string }>> = [];
+  const endpoint = {
+    entryPath: '/',
+    httpOrigin: 'http://127.0.0.1:43111',
+    httpPathPrefixes: ['/'],
+    surfaceId: surface.id,
+    webSocketOrigin: 'ws://127.0.0.1:43111',
+    webSocketPath: '/rsbuild-hmr' as const,
+  };
+  const session = {
+    clientSurface: () => activated ? endpoint : undefined,
+    close: async () => undefined,
+    mcpRegistry: {},
+    reconcilePreparedRuntime: async () => undefined,
+    status: () => activated
+      ? { activeVector: vector, descriptor, diagnostics: [], hmrReady: true, lastGoodVector: vector, state: 'active' as const }
+      : { descriptor, diagnostics: [], hmrReady: false, state: 'compiling' as const },
+    surfaces: () => activated ? [surface] : [],
+  } as unknown as DevRuntimeSession;
+  const controller = new DevRuntimeController({
+    artifactStatus: () => ({ state: 'missing' }),
+    emit: (event) => {
+      observedEvents.push({ state: controller.status().state, surfaceCount: controller.surfaces().length, type: event.type });
+    },
+    environment: {},
+    preparedRuntime: { apps: [], provider: './src/dev/provider.ts', servers: [], sourceRevision: 'source-1' },
+    projectRoot: '/workspace/project',
+    provider: {
+      descriptor,
+      start: async (context) => {
+        emit = context.emit;
+        return session;
+      },
+    },
+    storageRoot: '/workspace/project/.agent-bundle/runtime',
+  });
+
+  await controller.start();
+  expect(controller.status()).toMatchObject({ hmrReady: false, state: 'compiling' });
+  expect(controller.status()).not.toHaveProperty('activeVector');
+  expect(controller.surfaces()).toEqual([]);
+  expect(controller.clientSurface(surface.id)).toBeUndefined();
+
+  activated = true;
+  emit?.({ runtimeGenerationId: vector.runtimeGenerationId, type: 'runtime.generation.activated' });
+
+  expect(controller.status()).toMatchObject({
+    activeVector: vector,
+    hmrReady: true,
+    lastGoodVector: vector,
+    state: 'active',
+  });
+  expect(controller.surfaces()).toEqual([surface]);
+  expect(Object.isFrozen(controller.status())).toBe(true);
+  expect(Object.isFrozen(controller.surfaces())).toBe(true);
+  expect(controller.clientSurface(surface.id)).toEqual(endpoint);
+  expect(observedEvents).toEqual([{ state: 'active', surfaceCount: 1, type: 'runtime.generation.activated' }]);
+
+  await controller.close();
+  emit?.({ runtimeGenerationId: vector.runtimeGenerationId, type: 'runtime.generation.activated' });
+  expect(controller.status()).toMatchObject({ state: 'closed' });
+});
+
+it('sanitizes a failed activation refresh without recursively publishing runtime events', async () => {
+  const descriptor = { environmentVariables: [], id: 'fixture-runtime', label: 'Fixture runtime', schemaVersion: 1 } as const;
+  const published: string[] = [];
+  let activated = false;
+  let emit: Parameters<DevRuntimeProvider['start']>[0]['emit'] | undefined;
+  const controller = new DevRuntimeController({
+    artifactStatus: () => ({ state: 'missing' }),
+    emit: (event) => { published.push(event.type); },
+    environment: {},
+    preparedRuntime: { apps: [], provider: './src/dev/provider.ts', servers: [], sourceRevision: 'source-1' },
+    projectRoot: '/workspace/project',
+    provider: {
+      descriptor,
+      start: async (context) => {
+        emit = context.emit;
+        return {
+          close: async () => undefined,
+          mcpRegistry: {},
+          reconcilePreparedRuntime: async () => undefined,
+          status: () => ({ descriptor, diagnostics: [], hmrReady: activated, state: activated ? 'active' as const : 'compiling' as const }),
+          surfaces: () => {
+            if (activated) throw new Error('Activation surface snapshot failed.');
+            return [];
+          },
+        } as unknown as DevRuntimeSession;
+      },
+    },
+    storageRoot: '/workspace/project/.agent-bundle/runtime',
+  });
+
+  await controller.start();
+  activated = true;
+  emit?.({ type: 'runtime.generation.activated' });
+
+  expect(controller.status()).toMatchObject({
+    diagnostics: [{ phase: 'provider-lifecycle' }],
+    state: 'degraded',
+  });
+  expect(published).toEqual(['runtime.status', 'runtime.generation.activated']);
+  await controller.close();
+});
+
 it('aborts a timed-out provider start and closes a late session exactly once', async () => {
   let resolveLate: ((session: DevRuntimeSession) => void) | undefined;
   const late = new Promise<DevRuntimeSession>((resolvePromise) => { resolveLate = resolvePromise; });
@@ -556,6 +665,7 @@ it('retains a topology failure when it races an accepted runtime reconcile', asy
   const descriptor = { environmentVariables: [], id: 'fixture-runtime', label: 'Fixture runtime', schemaVersion: 1 } as const;
   const prepared = { apps: [], provider: './src/dev/provider.ts', servers: [], sourceRevision: 'source-1' } as const;
   let closeCalls = 0;
+  let emit: Parameters<DevRuntimeProvider['start']>[0]['emit'] | undefined;
   let resolveReconcile: (() => void) | undefined;
   const reconcileGate = new Promise<void>((resolvePromise) => { resolveReconcile = resolvePromise; });
   const controller = new DevRuntimeController({
@@ -566,13 +676,16 @@ it('retains a topology failure when it races an accepted runtime reconcile', asy
     projectRoot: '/workspace/project',
     provider: {
       descriptor,
-      start: async () => ({
+      start: async (context) => {
+        emit = context.emit;
+        return {
         close: async () => { closeCalls += 1; },
         mcpRegistry: {},
         reconcilePreparedRuntime: async () => reconcileGate,
         status: () => ({ descriptor, diagnostics: [], hmrReady: true, state: 'active' }),
         surfaces: () => [],
-      }) as unknown as DevRuntimeSession,
+        } as unknown as DevRuntimeSession;
+      },
     },
     storageRoot: '/workspace/project/.agent-bundle/runtime',
   });
@@ -581,6 +694,7 @@ it('retains a topology failure when it races an accepted runtime reconcile', asy
   const reconciling = controller.reconcilePreparedRuntime({ ...prepared, sourceRevision: 'source-2' });
   await new Promise((resolvePromise) => setImmediate(resolvePromise));
   await controller.reconcileDeclaration(undefined);
+  emit?.({ type: 'runtime.generation.activated' });
   resolveReconcile?.();
   await reconciling;
 
