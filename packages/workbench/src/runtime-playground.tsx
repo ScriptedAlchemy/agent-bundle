@@ -189,20 +189,38 @@ const selectedSurface = (model: RuntimeModel) => model.surfaces.find((entry) => 
 
 const selectedProfile = (model: RuntimeModel) => model.profiles.find((entry) => entry.id === model.selectedProfileId);
 
+type RuntimeDisplayIdentity = Readonly<{
+  readonly hmrClientCount: number | 'Unknown';
+  readonly stateIdentity: DevRuntimeStateIdentity | undefined;
+}>;
+
+const runtimeDisplayIdentityFor = (model: RuntimeModel): RuntimeDisplayIdentity => {
+  const surfaceId = model.selectedSurfaceId;
+  const hmrClientCount = surfaceId !== undefined && model.hmrClientCountKnownSurfaces.includes(surfaceId)
+    ? model.hmrClientCountBySurface[surfaceId] ?? 0
+    : 'Unknown';
+  const vector = model.status?.activeVector;
+  return Object.freeze({
+    hmrClientCount,
+    stateIdentity: model.stateIdentity ?? (vector === undefined
+      ? undefined
+      : Object.freeze({ stateStoreId: vector.stateStoreId, stateVersion: vector.stateVersion })),
+  });
+};
+
 export const runtimeDataAttributesFor = (model: RuntimeModel): Readonly<Record<string, string>> => {
   const vector = model.status?.activeVector;
   if (vector === undefined) return Object.freeze({});
-  const surfaceId = model.selectedSurfaceId;
-  const clients = surfaceId === undefined ? 0 : model.hmrClientCountBySurface[surfaceId] ?? 0;
+  const identity = runtimeDisplayIdentityFor(model);
   return Object.freeze({
     'data-runtime-artifact-epoch': vector.artifactEpochId ?? 'Not packaged',
     'data-runtime-event-sequence': String(model.lastConsumedEventSequence),
     'data-runtime-generation': vector.runtimeGenerationId,
-    'data-runtime-hmr-client-count': String(clients),
+    'data-runtime-hmr-client-count': String(identity.hmrClientCount),
     'data-runtime-hmr-ready': String(model.status?.hmrReady === true),
     'data-runtime-provider-session': vector.providerSessionId,
     'data-runtime-source-revision': vector.sourceRevision,
-    'data-runtime-state-version': String(model.stateIdentity?.stateVersion ?? vector.stateVersion),
+    'data-runtime-state-version': String(identity.stateIdentity?.stateVersion ?? 'Unknown'),
   });
 };
 
@@ -228,6 +246,7 @@ export const RuntimePlayground = ({ controller }: RuntimePlaygroundProps): React
   const profile = selectedProfile(model);
   const attributes = runtimeDataAttributesFor(model);
   const activeVector = model.status?.activeVector;
+  const displayIdentity = runtimeDisplayIdentityFor(model);
 
   useEffect(() => {
     setModel(controller.model);
@@ -258,13 +277,13 @@ export const RuntimePlayground = ({ controller }: RuntimePlaygroundProps): React
     <dl aria-label="Runtime identity" className="runtime-identity">
       <div><dt>Provider state</dt><dd>{model.status.state}</dd></div>
       <div><dt>HMR endpoint ready</dt><dd>{String(model.status.hmrReady)}</dd></div>
-      <div><dt>Browser HMR clients</dt><dd>{surface === undefined ? 0 : model.hmrClientCountBySurface[surface.id] ?? 0}</dd></div>
+      <div><dt>Browser HMR clients</dt><dd>{displayIdentity.hmrClientCount}</dd></div>
       <div><dt>Provider session ID</dt><dd>{activeVector?.providerSessionId ?? 'Not available'}</dd></div>
       <div><dt>Runtime generation ID</dt><dd>{activeVector?.runtimeGenerationId ?? 'Not available'}</dd></div>
       <div><dt>Source revision</dt><dd>{activeVector?.sourceRevision ?? 'Not available'}</dd></div>
       <div><dt>Artifact epoch ID</dt><dd>{activeVector?.artifactEpochId ?? 'Not packaged'}</dd></div>
-      <div><dt>State store ID</dt><dd>{activeVector?.stateStoreId ?? 'Not available'}</dd></div>
-      <div><dt>State version</dt><dd>{activeVector?.stateVersion ?? 'Not available'}</dd></div>
+      <div><dt>State store ID</dt><dd>{displayIdentity.stateIdentity?.stateStoreId ?? 'Not available'}</dd></div>
+      <div><dt>State version</dt><dd>{displayIdentity.stateIdentity?.stateVersion ?? 'Not available'}</dd></div>
       <div><dt>Last event sequence</dt><dd>{model.lastConsumedEventSequence}</dd></div>
       <div><dt>Target</dt><dd>{model.selectedTarget ?? 'Not available'}</dd></div>
       <div><dt>Profile version</dt><dd>{profile?.version ?? 'Not available'}</dd></div>

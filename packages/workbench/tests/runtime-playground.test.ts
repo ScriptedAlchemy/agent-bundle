@@ -182,7 +182,7 @@ it('derives all runtime identity attributes from provider, ordered HMR, and rese
     'data-runtime-artifact-epoch': 'epoch-a',
     'data-runtime-event-sequence': '0',
     'data-runtime-generation': 'generation-a',
-    'data-runtime-hmr-client-count': '0',
+    'data-runtime-hmr-client-count': 'Unknown',
     'data-runtime-hmr-ready': 'true',
     'data-runtime-provider-session': 'provider-a',
     'data-runtime-source-revision': 'source-a',
@@ -205,6 +205,26 @@ it('derives all runtime identity attributes from provider, ordered HMR, and rese
   });
 });
 
+it('does not present unknown HMR clients as zero and keeps the visible state version aligned after reset', async () => {
+  const controller = createRuntimePlaygroundController({
+    bootstrap: bootstrap(),
+    client: clientFor({ createRun: async () => run('02') }),
+    profiles,
+  });
+
+  expect(runtimeDataAttributesFor(controller.model)).toMatchObject({
+    'data-runtime-hmr-client-count': 'Unknown',
+  });
+
+  controller.dispatch({ type: 'reset.request' });
+  controller.dispatch({ type: 'confirmation.confirm' });
+  await controller.whenIdle();
+
+  const markup = renderToStaticMarkup(createElement(RuntimePlayground, { controller }));
+  expect(markup).toContain('data-runtime-state-version="2"');
+  expect(markup).toContain('<dt>State version</dt><dd>2</dd>');
+});
+
 it('renders available capability without a current vector and preserves fallback identity labels', () => {
   const withoutEpoch = Object.freeze({ ...vector, artifactEpochId: undefined });
   const noVectorStatus = Object.freeze({ ...status, activeVector: undefined, hmrReady: false, lastGoodVector: undefined, state: 'compiling' }) satisfies DevRuntimeStatus;
@@ -222,7 +242,7 @@ it('renders available capability without a current vector and preserves fallback
 
   expect(attributes).toMatchObject({
     'data-runtime-artifact-epoch': 'Not packaged',
-    'data-runtime-hmr-client-count': '0',
+    'data-runtime-hmr-client-count': 'Unknown',
     'data-runtime-state-version': '1',
   });
   expect(markup).toContain('HMR endpoint unavailable');
