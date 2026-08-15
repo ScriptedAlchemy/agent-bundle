@@ -194,11 +194,18 @@ it('imports the externalized config entry from a packed npm consumer', async () 
     await writeFile(join(consumerRoot, 'config.mts'), [
       "import { defineConfig, type AgentBundleConfig } from 'agent-bundle/config';",
       '',
-      'const config = {',
+      'const config: AgentBundleConfig = {',
+      "  claude: { nativeHooks: './claude-hooks.json' },",
+      "  codex: { nativeHooks: './codex-hooks.json' },",
       "  plugin: { name: 'packed-config-types', version: '1.0.0' },",
-      '} satisfies AgentBundleConfig;',
+      "  portable: { compatibility: 'v1' },",
+      '};',
       '',
+      'const claudeHook: string | undefined = config.claude?.nativeHooks;',
+      'const codexHook: string | undefined = config.codex?.nativeHooks;',
+      'const portableConfig: { readonly [key: string]: unknown } | undefined = config.portable;',
       'void defineConfig(config);',
+      'void [claudeHook, codexHook, portableConfig];',
       '',
     ].join('\n'));
     await expect(execFile(join(workspaceRoot, 'node_modules', '.bin', 'tsc'), [
