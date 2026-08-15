@@ -7,6 +7,7 @@ import type { TargetArtifactEntry, TargetHookEntry } from './adapters/types.ts';
 import { build as buildArtifact, type BuildResult } from './build/build.ts';
 export type { BuildResult } from './build/build.ts';
 export type { ArtifactOutputKind, ArtifactOutputProvenance } from './build/provenance.ts';
+export type { ProjectContext, ProjectSourceInput, ProjectSourceSnapshotInput } from './core/project-context.ts';
 export type {
   ArtifactManifestAgentSkills,
   ArtifactManifestFile,
@@ -30,6 +31,7 @@ export {
 } from './build/manifest.ts';
 import { validateArtifact } from './build/validate-artifact.ts';
 import { DiagnosticError, type Diagnostic } from './core/diagnostics.ts';
+import type { ProjectContext } from './core/project-context.ts';
 import type { NormalizedPlugin } from './core/types.ts';
 import { ProjectService, type PreparedProject } from './dev/project-service.ts';
 import {
@@ -135,6 +137,7 @@ export interface BuildProjectResult {
   readonly build: BuildResult;
   readonly diagnostics: readonly Diagnostic[];
   readonly model: NormalizedPlugin;
+  readonly projectContext: ProjectContext;
 }
 
 export interface ArtifactOperationOptions extends ProjectOptions {
@@ -256,9 +259,12 @@ export const inspect = async (options: InspectOptions): Promise<InspectResult> =
 };
 
 export const build = async (options: BuildOptions): Promise<BuildProjectResult> => {
-  const prepared = await prepareProject(options, 'build');
+  const root = resolve(options.root);
+  const output = resolveOutput(root, options.output);
+  const prepared = await new ProjectService({ ...options, outputRoots: [output], root }).prepare('build');
   const model = requirePreparedModel(prepared);
-  const output = resolveOutput(prepared.root, options.output);
+  const projectContext = prepared.projectContext;
+  if (projectContext === undefined) throw new DiagnosticError(prepared.diagnostics);
   log(options.logger, 'artifact.build', { output, root: prepared.root });
   const result = await buildArtifact({
     model,
@@ -266,7 +272,7 @@ export const build = async (options: BuildOptions): Promise<BuildProjectResult> 
     projectRoot: prepared.root,
     registry: prepared.registry,
   });
-  return Object.freeze({ build: result, diagnostics: prepared.diagnostics, model });
+  return Object.freeze({ build: result, diagnostics: prepared.diagnostics, model, projectContext });
 };
 
 export const listMcp = async (options: ListMcpOptions): Promise<McpListResult> =>

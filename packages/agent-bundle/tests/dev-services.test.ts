@@ -6,9 +6,12 @@ import { join } from 'node:path';
 import { expect, it } from '@rstest/core';
 
 import { validate } from '../src/api.ts';
+import { digest } from '../src/core/digest.ts';
 import {
   DiagnosticService,
+  createProjectContext,
   ProjectService,
+  snapshotProjectSource,
   type RslintEngine,
 } from '../src/dev/index.ts';
 
@@ -87,14 +90,119 @@ it('retains the resolved configuration path in the prepared project', async () =
     expect(Object.getOwnPropertyDescriptor(prepared, 'configPath')?.value).toBe(
       join(root, 'agent-bundle.config.ts'),
     );
-    expect(prepared.configDigest).toBe(
+    expect(prepared.projectContext?.configDigest).toBe(
       createHash('sha256').update(await readFile(join(root, 'agent-bundle.config.ts'))).digest('hex'),
     );
-    expect(prepared.sourceInputs).toEqual(expect.arrayContaining([
+    expect(prepared.projectContext?.sourceInputs).toEqual(expect.arrayContaining([
       expect.objectContaining({ path: 'agent-bundle.config.ts' }),
       expect.objectContaining({ path: 'skills/review/SKILL.md' }),
     ]));
-    expect(Object.isFrozen(prepared.sourceInputs)).toBe(true);
+    expect(Object.isFrozen(prepared.projectContext?.sourceInputs)).toBe(true);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('creates an exact deeply frozen root-independent project context', async () => {
+  const skillMarkdown = [
+    '---',
+    'name: review',
+    'description: Reviews changes',
+    '---',
+    'Review the changed files.',
+    '',
+  ].join('\n');
+  const leftRoot = await createProject(skillMarkdown);
+  const rightRoot = await createProject(skillMarkdown);
+  try {
+    await Promise.all([
+      writeFile(join(leftRoot, 'z-last.txt'), 'z\n'),
+      writeFile(join(leftRoot, 'a-first.txt'), 'a\n'),
+      writeFile(join(rightRoot, 'z-last.txt'), 'z\n'),
+      writeFile(join(rightRoot, 'a-first.txt'), 'a\n'),
+    ]);
+    const [left, right] = await Promise.all([
+      new ProjectService({ root: leftRoot }).prepare('build'),
+      new ProjectService({ root: rightRoot }).prepare('build'),
+    ]);
+
+    expect(left.projectContext).toEqual(right.projectContext);
+    expect(left.projectContext).toBeDefined();
+    expect(Object.keys(left.projectContext ?? {})).toEqual([
+      'configDigest',
+      'configPath',
+      'modelDigest',
+      'revision',
+      'sourceInputs',
+    ]);
+    expect(left.projectContext?.configPath).toBe('agent-bundle.config.ts');
+    expect(left.projectContext?.revision).toBe(digest({ inputs: left.projectContext?.sourceInputs }));
+    expect(left.projectContext?.sourceInputs.map((input) => input.path)).toEqual([
+      'a-first.txt',
+      'agent-bundle.config.ts',
+      'skills/review/SKILL.md',
+      'z-last.txt',
+    ]);
+    expect(Object.isFrozen(left.projectContext)).toBe(true);
+    expect(Object.isFrozen(left.projectContext?.sourceInputs)).toBe(true);
+    expect(Object.isFrozen(left.projectContext?.sourceInputs[0])).toBe(true);
+    expect(Object.keys(left.projectContext?.sourceInputs[0] ?? {})).toEqual(['path', 'sha256']);
+    expect(JSON.stringify(left.projectContext)).not.toContain(leftRoot);
+    expect(JSON.stringify(right.projectContext)).not.toContain(rightRoot);
+
+    const model = left.model;
+    if (model === undefined) throw new Error('Expected a normalized project model.');
+    await expect(Promise.resolve().then(() => createProjectContext({
+      configPath: left.configPath,
+      model,
+      root: leftRoot,
+      sourceInputs: [{ error: 'EACCES', path: 'agent-bundle.config.ts' }],
+    }))).rejects.toThrow(/SHA-256 digest/i);
+    expect(() => createProjectContext({
+      configPath: left.configPath,
+      model: {
+        ...model,
+        metadata: {
+          ...model.metadata,
+          provenance: { ...model.metadata.provenance, sourcePath: join(leftRoot, '..', 'outside.ts') },
+        },
+      },
+      root: leftRoot,
+      sourceInputs: left.projectContext?.sourceInputs ?? [],
+    })).toThrow(/outside project root/i);
+  } finally {
+    await Promise.all([
+      rm(leftRoot, { force: true, recursive: true }),
+      rm(rightRoot, { force: true, recursive: true }),
+    ]);
+  }
+});
+
+it('excludes configured output trees from project identity and rejects unsafe snapshot roots', async () => {
+  const root = await createProject([
+    '---',
+    'name: review',
+    'description: Reviews changes',
+    '---',
+    'Review the changed files.',
+    '',
+  ].join('\n'));
+  const output = join(root, 'custom-output');
+  try {
+    await mkdir(output, { recursive: true });
+    await writeFile(join(output, 'generated.js'), 'first\n');
+    const initial = await new ProjectService({ outputRoots: [output], root }).prepare('build');
+    await writeFile(join(output, 'generated.js'), 'second\n');
+    const changed = await new ProjectService({ outputRoots: [output], root }).prepare('build');
+
+    expect(changed.projectContext).toEqual(initial.projectContext);
+    expect(changed.projectContext?.sourceInputs.map((input) => input.path)).not.toContain(
+      'custom-output/generated.js',
+    );
+    await expect(snapshotProjectSource(root, join(root, '..', 'outside.ts')))
+      .rejects.toThrow(/outside project root/i);
+    await expect(new ProjectService({ outputRoots: [root], root }).prepare('build'))
+      .rejects.toThrow(/must not be the project root/i);
   } finally {
     await rm(root, { force: true, recursive: true });
   }

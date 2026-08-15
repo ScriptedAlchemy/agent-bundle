@@ -232,7 +232,10 @@ export class DevCoordinator {
     this.#ignoredPaths = Object.freeze([...(options.ignoredPaths ?? [])]);
     this.#now = options.now ?? (() => new Date());
     this.#outputPaths = Object.freeze([...(options.outputPaths ?? ['dist'])]);
-    this.#projectService = options.projectService ?? new ProjectService({ root: this.#root });
+    this.#projectService = options.projectService ?? new ProjectService({
+      outputRoots: this.#outputPaths,
+      root: this.#root,
+    });
   }
 
   async start(): Promise<DevSession> {

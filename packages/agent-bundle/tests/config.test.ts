@@ -1,5 +1,6 @@
 import { expect, it } from '@rstest/core';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
@@ -125,6 +126,49 @@ it('loads sync config objects from relative and absolute explicit paths', async 
     });
   } finally {
     await removeProjectFixture(fixture.root);
+  }
+});
+
+it('rejects external config paths before evaluating their modules', async () => {
+  const parent = await mkdtemp(join(tmpdir(), 'agent-bundle-external-config-'));
+  const root = join(parent, 'project');
+  const external = join(parent, 'external.config.mjs');
+  try {
+    await mkdir(root, { recursive: true });
+    await writeFile(
+      external,
+      "throw new Error('external config was evaluated');\n",
+    );
+
+    await expect(loadConfig({
+      command: 'build',
+      configPath: external,
+      mode: 'production',
+      root,
+    })).rejects.toThrow(/outside project root/i);
+  } finally {
+    await rm(parent, { force: true, recursive: true });
+  }
+});
+
+it('rejects config symlinks whose resolved targets escape the real project root before evaluation', async () => {
+  const parent = await mkdtemp(join(tmpdir(), 'agent-bundle-symlink-config-'));
+  const root = join(parent, 'project');
+  const external = join(parent, 'external.config.mjs');
+  const linked = join(root, 'agent-bundle.config.mjs');
+  try {
+    await mkdir(root, { recursive: true });
+    await writeFile(external, "throw new Error('symlinked config was evaluated');\n");
+    await symlink(external, linked);
+
+    await expect(loadConfig({
+      command: 'build',
+      configPath: 'agent-bundle.config.mjs',
+      mode: 'production',
+      root,
+    })).rejects.toThrow(/outside project root/i);
+  } finally {
+    await rm(parent, { force: true, recursive: true });
   }
 });
 

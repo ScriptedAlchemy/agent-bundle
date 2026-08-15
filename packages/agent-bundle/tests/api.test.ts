@@ -55,6 +55,35 @@ it('prepares a factory-configured project into a frozen inspection and build res
   }
 }, 30_000);
 
+it('returns an output-independent project context without absolute project paths', async () => {
+  const [leftRoot, rightRoot] = await Promise.all([createProject(), createProject()]);
+  try {
+    const [left, right] = await Promise.all([
+      build({ output: join(leftRoot, 'custom-artifact'), root: leftRoot, targets: ['portable'] }),
+      build({ output: join(rightRoot, 'another-artifact'), root: rightRoot, targets: ['portable'] }),
+    ]);
+
+    expect(left.projectContext).toEqual(right.projectContext);
+    expect(Object.keys(left.projectContext)).toEqual([
+      'configDigest',
+      'configPath',
+      'modelDigest',
+      'revision',
+      'sourceInputs',
+    ]);
+    expect(JSON.stringify(left.projectContext)).not.toContain(leftRoot);
+    expect(JSON.stringify(right.projectContext)).not.toContain(rightRoot);
+    expect(JSON.stringify(left.projectContext)).not.toContain('custom-artifact');
+    expect(JSON.stringify(right.projectContext)).not.toContain('another-artifact');
+    expect(Object.isFrozen(left.projectContext)).toBe(true);
+  } finally {
+    await Promise.all([
+      rm(join(leftRoot, '..'), { force: true, recursive: true }),
+      rm(join(rightRoot, '..'), { force: true, recursive: true }),
+    ]);
+  }
+}, 30_000);
+
 it('normalizes named top-level scripts with stable IDs, modes, and sorted targets', async () => {
   const parent = await mkdtemp(join(tmpdir(), 'agent-bundle-scripts-parent-'));
   const root = join(parent, 'project with spaces');

@@ -102,10 +102,17 @@ export {
   type ProjectCommand,
   type ProjectServiceLogger,
   type ProjectServiceOptions,
-  type ProjectSourceInput,
   type ProjectSourceSnapshot,
   snapshotProjectSource,
 } from './project-service.ts';
+export {
+  canonicalizeNormalizedModel,
+  createProjectContext,
+  type CreateProjectContextOptions,
+  type ProjectContext,
+  type ProjectSourceInput,
+  type ProjectSourceSnapshotInput,
+} from '../core/project-context.ts';
 export {
   SkillDocumentError,
   SkillDocumentService,
