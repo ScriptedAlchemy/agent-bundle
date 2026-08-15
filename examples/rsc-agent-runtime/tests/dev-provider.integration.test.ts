@@ -555,6 +555,58 @@ test('binds renamed and added App surfaces to the active generation assets witho
   }
 }, 30_000);
 
+test('rebinds current App surfaces across retained generations after a later configuration reconcile', async () => {
+  const copied = await copyExample();
+  try {
+    const prepared = await new ProjectService({ includeDevRuntime: true, mode: 'development', root: copied.projectRoot }).prepare('dev');
+    const session = await RsbuildRuntimeSession.start(startContext({
+      projectRoot: copied.projectRoot,
+      preparedRuntime: prepared.devRuntime!,
+      providerSessionId: 'provider-reconciled-retained-app-assets',
+      signal: new AbortController().signal,
+      storageRoot: join(copied.projectRoot, '.agent-bundle', 'runtime-reconciled-retained-app-assets'),
+    }));
+    try {
+      await waitFor(() => session.status().state === 'active');
+      const firstGenerationId = session.mcpRegistry.snapshot()!.runtimeGenerationId;
+      await changeWorkerImplementation(copied.projectRoot, 'reconciled-retained-app-assets-generation-two');
+      await waitFor(() => session.status().activeVector?.runtimeGenerationId !== firstGenerationId);
+      const secondGenerationId = session.status().activeVector!.runtimeGenerationId;
+      const original = prepared.devRuntime!.apps[0]!;
+      await session.reconcilePreparedRuntime({
+        ...prepared.devRuntime!,
+        apps: [
+          { ...original, name: 'timeline-renamed' },
+          { ...original, id: `${original.id}-added`, name: 'timeline-added' },
+        ],
+        sourceRevision: `${prepared.devRuntime!.sourceRevision}-reconciled-retained-app-assets`,
+      });
+
+      for (const generationId of [firstGenerationId, secondGenerationId]) {
+        await expect(session.readAsset({
+          path: ['rsc', 'index.html'],
+          runtimeGenerationId: generationId,
+          surfaceId: 'mcp.timeline-renamed',
+        })).resolves.toMatchObject({ contentType: 'text/html' });
+        await expect(session.readAsset({
+          path: ['rsc', 'index.html'],
+          runtimeGenerationId: generationId,
+          surfaceId: 'mcp.timeline-added',
+        })).resolves.toMatchObject({ contentType: 'text/html' });
+        await expect(session.readAsset({
+          path: ['rsc', 'index.html'],
+          runtimeGenerationId: generationId,
+          surfaceId: 'mcp.timeline',
+        })).resolves.toBeUndefined();
+      }
+    } finally {
+      await session.close();
+    }
+  } finally {
+    await rm(copied.workspaceRoot, { force: true, recursive: true });
+  }
+}, 30_000);
+
 test('keeps the same MCP session and revision across an implementation-only generation', async () => {
   const copied = await copyExample();
   try {
