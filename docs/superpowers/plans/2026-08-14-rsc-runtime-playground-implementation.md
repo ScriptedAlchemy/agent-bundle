@@ -1,0 +1,358 @@
+# RSC Runtime Playground Frontend and DX Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Every task is strict RED (run and observe the named failure) → minimal GREEN → refactor → focused review.
+
+**Goal:** Add an optional, accessible, run-centered Runtime Playground to the Agent Bundle Workbench. It renders provider-owned RSC run evidence for hooks and MCP surfaces, preserves immutable history and last-good output across HMR, exposes state/reset/replay controls, reuses the existing JSON input and Inspector boundary, and leaves every live MCP lifecycle to the sole merged controller.
+
+**Architecture:** The provider/HMR plan owns the long-lived provider, compiler generations, wire types, `/api/runtime/*`, bounded provider run history, and activation events. This slice adds a thin browser client over the Workbench's shared authenticated foreground request primitive, an outer runtime reducer, and React presentation. `ProjectClient` delivers every project event through a sequence-ordered FIFO; `replay.gap` causes one authoritative bootstrap rather than guessed replay. Hook and MCP surfaces are both rendered exclusively from immutable `DevRuntimeRun.result.protocol`, result, and trace evidence. The later host/App plan is the only slice allowed to open a live MCP browser session, and it must extend the merged `McpSessionController`, which remains the sole transport/client/model/session lifecycle owner.
+
+**Tech Stack:** React 19.2.8, TypeScript 7.0.2, Rsbuild 2.1.13/React Refresh, Rstest 0.11.8, `@rstest/playwright`/Chrome, native EventSource/fetch, ImageGen, Browser/IAB, and `view_image`.
+
+## Non-negotiable contracts
+
+- Runtime remains supplemental. `{status:null}` plus `{surfaces:[]}` removes the Runtime navigation and starts no runtime/MCP work for an ordinary bundle.
+- Import the provider types listed below. Never copy a partial wire interface into Workbench.
+- Browser requests contain provider-declared opaque IDs and JSON only—never commands, cwd, environment, output roots, local paths, or arbitrary URLs.
+- Protected reads and all mutations use the memory-only `x-agent-bundle-session`. A `409 AB8204` is shown and never automatically retried.
+- The outer project-event `sequence`, not generation ID, is the sole event-order cursor. Deliver all queued events FIFO. A replay gap triggers authoritative status/surface/history resynchronization.
+- Run history is provider-session scoped, newest-first, and capped at 50 in both provider and browser. A Workbench reload bootstraps that history from the provider; it is not durable across provider restart.
+- Runs, vectors, results, provider MCP protocol evidence, and history entries are deep immutable snapshots. Edit, exact/latest replay, reset-follow-up, and HMR each create new evidence.
+- Raw `rsc:update` only invalidates. Auto-run occurs only after `runtime.generation.activated` and coalesces to the newest activated generation.
+- Preserve last-good output after compile/run/App failure. Show the historical and active identities rather than relabeling stale evidence as current.
+- No in-browser TSX/JSX/source editor. Reuse schema-derived fields and raw JSON in `McpJsonInput`.
+- Read-only runs start immediately. Mutating runs and state reset require explicit, keyboard-accessible confirmation.
+- App preview is a sibling of model-visible RSC output, never a decoded-tree child. No host profile claims real-host parity.
+- Playground must not construct `McpRouteClient`, `AgentBundleRemoteTransport`, `McpBrowserSessionModel`, or depend on `/api/runtime/mcp/sessions*`. It only renders provider-run snapshots. The later host plan may use live sessions solely through `packages/workbench/src/mcp/mcp-session-controller.ts` and must not fork its lease/transport/client/model lifecycle.
+- The host `renderLiveMcpPage` adapter delegates all actions to one `McpSessionController`; it adds no queue or admission state. Preserve the controller's serialized single-admission open/restart/invoke/close, replay-before-live trace ordering, failure cleanup, late-work rejection, and drain-before-close invariants.
+- `DevRuntimeStatus.hmrReady` means only that the compiler HMR endpoint is available. Actual browser proxy lifecycle comes only from ordered `runtime.hmr.client-connected` / `runtime.hmr.client-disconnected` events with provider-declared `surfaceId` and `count`; never infer connection from provider startup or `hmrReady`.
+- Vendored Inspector files remain byte-identical. New adaptation lives only under `src/inspector/adapter/`.
+- Controls are at least 40px, tab order follows visual order, status updates are polite, failures are alerts, reduced motion is honored, and 390×844 has no horizontal document overflow.
+
+## Exact shared contracts consumed
+
+`packages/workbench/src/runtime-client.ts`, `runtime-model.ts`, `runtime-stage.tsx`, `runtime-inspector.tsx`, and their compile fixture must use this exact type-only import list from `packages/agent-bundle/src/dev/runtime-protocol.ts`:
+
+```ts
+import type {
+  DevRuntimeAssetRequest,
+  DevRuntimeDiagnostic,
+  DevRuntimeInspectionEnvelope,
+  DevRuntimeInvocationRequest,
+  DevRuntimeReplayRequest,
+  DevRuntimeRun,
+  DevRuntimeRunResponse,
+  DevRuntimeRunsResponse,
+  DevRuntimeStateIdentity,
+  DevRuntimeStateResetRequest,
+  DevRuntimeStateResponse,
+  DevRuntimeStatus,
+  DevRuntimeStatusResponse,
+  DevRuntimeSurface,
+  DevRuntimeSurfacesResponse,
+  DevRuntimeTreeNode,
+  DevRuntimeTraceSpan,
+  RuntimeVector,
+} from '../../agent-bundle/src/dev/runtime-protocol.ts';
+```
+
+The event boundary imports `ProjectEventMessage`, `ProjectEventOf`, and `ProjectReplayGap` from `packages/agent-bundle/src/dev/types.ts`; it does not redefine the provider event payload. Host profile types do not exist when this plan executes, so `runtime-model.ts` owns the earlier, neutral `RuntimeProfileOption`; the later host descriptors must structurally satisfy it.
+
+```text
+GET  /api/runtime/status                         -> 200 DevRuntimeStatusResponse
+GET  /api/runtime/surfaces                      -> 200 DevRuntimeSurfacesResponse
+GET  /api/runtime/runs?limit=50                 -> 200 DevRuntimeRunsResponse
+POST /api/runtime/runs                          -> 200 DevRuntimeRunResponse
+GET  /api/runtime/runs/:runId                   -> 200 DevRuntimeRunResponse
+POST /api/runtime/runs/:runId/replay            -> 200 DevRuntimeRunResponse
+POST /api/runtime/state/reset                   -> 200 DevRuntimeStateResponse
+GET  /api/runtime/assets/:surfaceId/*?generation=:id -> generation-contained bytes
+```
+
+`DevRuntimeRunsResponse` is the provider-owned wrapper containing `providerSessionId` and `runs`; Workbench never redeclares it. This gives the identity strip and restart logic an identity even while no active vector exists. `GET /api/runtime/runs` is protected, restricted to that provider session, accepts only integer `limit` in `1..50`, returns newest `startedAt` then ID, and is the browser bootstrap/resync boundary. The provider plan must land the type and route before Task 2 GREEN. No-session status/surfaces remain `200 {status:null}`/`200 {surfaces:[]}`; all other absent runtime routes remain `404 AB8201`.
+
+## Final topology
+
+```text
+docs/assets/rsc-runtime-workbench/
+  desktop-concept.png
+  design-inventory.md
+  fidelity-ledger.md
+  desktop.png
+  mobile.png
+packages/workbench/src/
+  project-client.ts
+  runtime-client.ts
+  runtime-model.ts
+  runtime-stage.tsx
+  runtime-inspector.tsx
+  runtime-playground.tsx
+  main.tsx
+  styles.css
+  mcp/
+    mcp-route-client.ts                  # extract/reuse authenticated request primitive
+    mcp-json-input.tsx                   # add backward-compatible controlled raw-draft seam
+    mcp-page.tsx                         # extend with shared read-only protocol evidence presenter
+    mcp-page.css
+    mcp-session-controller.ts            # existing sole live-session owner; untouched here
+  inspector/adapter/
+    closure-spike.ts                     # existing imports remain the vendor boundary
+    runtime-playground.tsx               # runtime-to-Inspector presenters/adapters
+packages/workbench/tests/
+  helpers/runtime-playground-fixture.ts
+  mcp-json-input.test.ts
+  mcp-page.test.ts
+  project-client.test.ts
+  runtime-client.test.ts
+  runtime-contract-compile.test.ts
+  runtime-model.test.ts
+  runtime-stage.test.ts
+  runtime-inspector.test.ts
+  runtime-playground.test.ts
+  runtime-playground.e2e.test.ts
+  runtime-playground-hmr.e2e.test.ts
+  overview.e2e.test.ts
+packages/workbench/scripts/
+  capture-runtime-playground.mjs
+rstest.runtime-playground.config.ts         # isolated V8 thresholds for this slice
+```
+
+There is deliberately no `runtime-input.tsx`, second MCP transport, second MCP session reducer/controller, live MCP Playground route, or second schema form implementation.
+
+The final `packages/workbench/tsconfig.json#include` allowlist enumerates every new TS/TSX source and test in this topology: the six runtime/adapter sources, the three modified MCP modules, runtime contract/client/model/stage/inspector/playground tests, `mcp-json-input.test.ts`, `mcp-page.test.ts`, both browser tests, and the fixture helper. `runtime-contract-compile.test.ts` imports every new runtime source/adapter and shared MCP presenter used by runtime; Workbench typecheck compiles every listed test/helper. No wildcard hides a missing file.
+
+---
+
+### Task 1: Generate, inspect, and inventory the desktop concept before code
+
+**Files:** Create `docs/assets/rsc-runtime-workbench/desktop-concept.png`, `design-inventory.md`, and `fidelity-ledger.md`.
+
+- [ ] Invoke ImageGen with `ui-mockup` and this exact prompt:
+
+```text
+Desktop product UI concept, 1536×1024, for the existing Agent Bundle Workbench. True white canvas, near-black text, cobalt blue active accents, restrained 1px gray borders, square-to-6px radii, compact technical typography, no gradients and no marketing cards. Add the existing Workbench header and a page titled “Runtime Playground”. Directly below, a persistent identity strip with separately labelled values: “Provider active”, “HMR endpoint ready”, “Browser HMR clients: 1”, “Provider session”, “Runtime generation”, “Source revision”, “Artifact epoch”, “State store”, “State version”, “Event sequence”, “Target”, and “Profile: Portable MCP Apps · agent-bundle:mcp-apps:2026-01-26 · Simulated”. Left run rail: grouped “Hooks”, “MCP Tools”, “MCP Resources”, “MCP Apps”; “Fixtures”; target; “Form” and “Raw JSON” tabs; “Run”; “Reset fixture state”; bounded “Run history”. Center stage: “Agent-visible output”, “Native response”, “Model-visible output”, and sibling “MCP App preview”, with stale/last-good banner. Right inspector: tabs “Tree”, “Result”, “Flight”, “Protocol”, “State”, “Diagnostics”; selected Tree shows “Decoded React tree”. Bottom full-width ordered “Trace” with disclosure rows. Show one successful hook run, one MCP tool run, immutable historical generation chips, and a visible but non-dominant simulated-host disclaimer. Accessible focus rings, readable real labels, dense developer-tool information hierarchy. Do not include a source editor, TSX, JSX, terminal, charts, KPI cards, fake host certification, iframe inside the tree, decorative browser chrome, or invented navigation.
+```
+
+- [ ] Use the returned `output_hint` path; copy exactly that PNG to `docs/assets/rsc-runtime-workbench/desktop-concept.png`. Do not scan unrelated generated-image directories.
+- [ ] Call `view_image({path:'/fast/projects/agent-bundle/.worktrees/rsc-agent-runtime-demo/docs/assets/rsc-runtime-workbench/desktop-concept.png', detail:'original'})`. If any named region is absent, text is unreadable, or a forbidden element appears, make one targeted ImageGen edit and inspect the replacement again. Record which generation was selected.
+- [ ] Run `identify docs/assets/rsc-runtime-workbench/desktop-concept.png`. In `design-inventory.md`, record actual dimensions, all visible copy, palette, type scale, spacing, borders/radii, focus/selected/error/stale states, desktop regions, 1100px continuation, 390px continuation, and owning component/file.
+- [ ] Seed `fidelity-ledger.md` with columns `Region | Concept evidence | Acceptance | Render evidence | Disposition`; render fields stay explicitly `Pending implementation`, never blank.
+- [ ] Verify: `test -s docs/assets/rsc-runtime-workbench/desktop-concept.png && identify docs/assets/rsc-runtime-workbench/desktop-concept.png && rg -n "Runtime Playground|Provider session|MCP App preview|Trace" docs/assets/rsc-runtime-workbench/{design-inventory,fidelity-ledger}.md`.
+- [ ] Commit only this task: `git add docs/assets/rsc-runtime-workbench/desktop-concept.png docs/assets/rsc-runtime-workbench/design-inventory.md docs/assets/rsc-runtime-workbench/fidelity-ledger.md && git commit -m "docs: define Runtime Playground visual contract"`.
+
+### Task 2: Share foreground authentication and add the runtime history client
+
+**Files:** Modify `packages/workbench/src/mcp/mcp-route-client.ts`, `packages/workbench/tsconfig.json`; create `packages/workbench/src/runtime-client.ts`, `packages/workbench/tests/runtime-client.test.ts`, `packages/workbench/tests/runtime-contract-compile.test.ts`.
+
+- [ ] RED in `runtime-contract-compile.test.ts`: import the exact provider list above and import every new runtime module as it lands (`runtime-client`, `runtime-model`, `runtime-stage`, `runtime-inspector`, `runtime-playground`, and `inspector/adapter/runtime-playground`). Use `satisfies` fixtures for every request/response wrapper and public export. Include a succeeded run whose `result.app` has `surfaceId`, `resourceUri`, and the complete provider `mcpBinding`; this test must fail on renamed/missing provider fields and must not declare lookalike provider interfaces. Until later files exist, add their imports in the same task that creates them and run this test there.
+- [ ] RED client tests: unavailable bootstrap performs only status; available bootstrap reads surfaces and protected `runs?limit=50`; rejects >50, foreign provider-session runs, duplicate IDs, invalid wrappers, or unsorted history; run/replay/reset/asset bodies use the imported request types; path segments are encoded; assets use exactly one owning-generation query; 409 exposes complete `{code,message,phase,details}` without response-body leakage; no automatic retry; two clients sharing the request primitive make one session bootstrap.
+- [ ] Extract the existing token/bootstrap/origin validation, diagnostic parsing, detached/frozen JSON, and protected-response behavior from `McpRouteClient` into an exported `ForegroundRouteClient` in the same file. Its exact surface is `publicJson(path, init?)`, `protectedJson(path, init?)`, `protectedResponse(path, init?)`, and `forgetAuthentication()`. Public status/surfaces do not bootstrap a token; history/run/asset/reset do. `McpRouteClient` delegates to this primitive so its existing controller/transport behavior is unchanged; Playground constructs only `ForegroundRouteClient` + `RuntimeClient`, never `McpRouteClient`.
+- [ ] Implement `RuntimeClient(foreground: ForegroundRouteClient)` with:
+
+```ts
+export type RuntimeBootstrap =
+  | Readonly<{ kind: 'unavailable' }>
+  | Readonly<{ kind: 'available'; history: readonly DevRuntimeRun[]; providerSessionId: string; status: DevRuntimeStatus; surfaces: readonly DevRuntimeSurface[] }>;
+
+export class RuntimeClient {
+  bootstrap(): Promise<RuntimeBootstrap>;
+  createRun(request: DevRuntimeInvocationRequest): Promise<DevRuntimeRun>;
+  readRun(runId: string): Promise<DevRuntimeRun>;
+  replayRun(request: DevRuntimeReplayRequest): Promise<DevRuntimeRun>;
+  resetState(request: DevRuntimeStateResetRequest): Promise<DevRuntimeStateIdentity>;
+  readAsset(request: DevRuntimeAssetRequest): Promise<Blob>;
+}
+```
+
+- [ ] History validation deep-freezes all values, enforces `history.length <= 50`, matches every vector to `DevRuntimeRunsResponse.providerSessionId`, and sorts only after rejecting server misordering. Asset reads enforce the provider's byte/content-type bounds and never expose a naked protected URL.
+- [ ] Add `src/mcp/mcp-route-client.ts`, `src/runtime-client.ts`, `tests/runtime-client.test.ts`, and `tests/runtime-contract-compile.test.ts` to the explicit `packages/workbench/tsconfig.json#include` allowlist. Run RED/GREEN exactly: `npm test -- packages/workbench/tests/runtime-contract-compile.test.ts packages/workbench/tests/runtime-client.test.ts packages/workbench/tests/agent-bundle-remote-transport.test.ts packages/workbench/tests/mcp-session-controller.test.ts`; then `npm run typecheck --workspace agent-bundle-workbench`.
+- [ ] Commit: `git add packages/workbench/src/mcp/mcp-route-client.ts packages/workbench/src/runtime-client.ts packages/workbench/tests/runtime-client.test.ts packages/workbench/tests/runtime-contract-compile.test.ts packages/workbench/tsconfig.json && git commit -m "feat(workbench): add shared runtime route client"`.
+
+### Task 3: Deliver every runtime event in sequence and recover replay gaps
+
+**Files:** Modify `packages/workbench/src/project-client.ts`, `packages/workbench/tests/project-client.test.ts`.
+
+- [ ] RED with the real `RecordingEventSource`: synchronously emit runtime events with outer sequences 8, 9, and 10 before React/effects can yield. Expect the listener to receive `[8,9,10]` once and in order, `lastEventId === 10`, and no project-status fetch beyond connect. Emit duplicate 9 and late 7; expect neither. Emit malformed 11; expect one error and cursor remains 10.
+- [ ] RED replay-gap case: emit `{type:'replay.gap',requestedAfterSequence:10,latestDroppedSequence:13,earliestAvailableSequence:14}` followed synchronously by runtime 14. Expect FIFO delivery of gap then 14, with no lost 14. Artifact/source events retain the existing coalesced status refresh behavior.
+- [ ] Change `connect` to accept an optional `ProjectEventListener = (event: ProjectEventMessage) => void`. Parse/freeze the entire message. Maintain a private FIFO plus one draining promise; enqueue synchronously, drain serially, update the cursor only after delivery, and catch consumer exceptions without dropping later events. Do not represent the queue as a single React `latestEvent` state value.
+- [ ] The client delivers `replay.gap` to the Playground and also coalesces one project-status refresh. The Playground owns runtime bootstrap; `runtime.event` never triggers project-status refresh. `close()` clears listeners/queue and ignores late callbacks.
+- [ ] Run: `npm test -- packages/workbench/tests/project-client.test.ts && npm run typecheck --workspace agent-bundle-workbench`.
+- [ ] Commit: `git add packages/workbench/src/project-client.ts packages/workbench/tests/project-client.test.ts && git commit -m "feat(workbench): deliver ordered runtime events"`.
+
+### Task 4: Implement the immutable outer runtime reducer
+
+**Files:** Create `packages/workbench/src/runtime-model.ts`, `packages/workbench/tests/runtime-model.test.ts`, `rstest.runtime-playground.config.ts`.
+
+- [ ] RED covers: bootstrap default target/fixture/profile; provider history capped at 50; draft edits do not mutate fixture/history; every result/tree/Flight/protocol/state/trace value is frozen; late completion appends but cannot replace the current selection; edit-as-draft copies input; exact replay keeps the original vector; lower/equal event sequences are ignored; `replay.gap` queues one bootstrap; activation coalesces to newest generation; `hmrReady` does not imply a connected browser; ordered HMR client events replace the named surface count; failure retains last-good; conflict retains draft and does not retry; mutable run and reset both require confirmation.
+- [ ] Treat hook and MCP runs identically: deep-snapshot `DevRuntimeRun.result.protocol`, `result.trace`, `result.modelVisible`, and `result.native` into immutable history. The reducer has no live MCP model, session ID, trace cursor, catalog, transport, or controller actions.
+- [ ] Define only runtime-specific UI state:
+
+```ts
+export type RuntimeInspectorTab = 'tree' | 'result' | 'flight' | 'protocol' | 'state' | 'diagnostics';
+export interface RuntimePendingEffect {
+  readonly id: string;
+  readonly kind: 'bootstrap' | 'create-run' | 'read-run' | 'replay-run' | 'reset-state';
+  readonly triggerSequence?: number;
+}
+export interface RuntimeProfileOption {
+  readonly claimsRealHostParity: false;
+  readonly evidence: 'simulated';
+  readonly id: string;
+  readonly label: string;
+  readonly version: string;
+}
+```
+
+- [ ] State contains provider status/surfaces, provider-session ID, history (max 50), selected/last-good run IDs, valid JSON value plus controlled raw repair draft, selected fixture/target/profile/tab, expanded trace spans, confirmation, active/pending effect, stale identity pair, last consumed event sequence, a visible replay-gap diagnostic, reset seed preview, immutable `hmrClientCountBySurface`, and `hmrClientCountKnownSurfaces`. Replay gap/provider restart clears known counts so UI reads `Unknown`, never a fabricated zero. It contains no MCP session/controller/model state.
+- [ ] Reset flow is exact: `request-reset` captures `{stateStoreId, seed:selectedFixture.seed, expectedGenerationId}`; `confirm-reset` queues one request; success replaces the displayed `DevRuntimeStateIdentity`, clears stale state, preserves all old runs, and queues one new run with cause `reset` using the selected fixture/draft; cancellation performs no request. A reset conflict refreshes bootstrap and never resets/runs automatically.
+- [ ] HMR preserve policy: retain selected surface/fixture/target/profile/tab, expanded trace IDs, raw repair draft, and selected historical run if those IDs still exist; replace only provider status/surfaces/history; mark the selected old vector stale. If a surface/target disappears, select provider defaults and announce it.
+- [ ] History merge deduplicates IDs, validates provider-session identity, orders newest `startedAt` then ID, freezes entries, and truncates to 50. Provider restart clears incompatible history and labels the prior last-good snapshot `Previous provider session` until a current-session success exists.
+- [ ] Add `src/runtime-model.ts` and `tests/runtime-model.test.ts` to the Workbench tsconfig allowlist and add the runtime-model imports/fixtures to `runtime-contract-compile.test.ts`. Create root `rstest.runtime-playground.config.ts` using `defineConfig` + `withRslibConfig()`, the focused runtime tests, `coverage: {enabled:true, provider:'v8', include:['packages/workbench/src/runtime-{client,model,playground}.{ts,tsx}'], reporters:['text','json'], thresholds:{statements:90,lines:90,functions:90,branches:85}}`, and the existing single-worker rule. Run `npx rstest --config rstest.runtime-playground.config.ts`. No uncovered conflict, replay-gap, reset, provider-restart, or late-completion branch is allowed even when aggregates pass.
+- [ ] Commit: `git add packages/workbench/src/runtime-model.ts packages/workbench/tests/runtime-model.test.ts packages/workbench/tests/runtime-contract-compile.test.ts packages/workbench/tsconfig.json rstest.runtime-playground.config.ts && git commit -m "feat(workbench): model immutable runtime evidence"`.
+
+### Task 5: Build accessible run, output, Inspector, reset, and profile UI
+
+**Files:** Create `packages/workbench/src/runtime-stage.tsx`, `packages/workbench/src/runtime-inspector.tsx`, `packages/workbench/src/inspector/adapter/runtime-playground.tsx`, `packages/workbench/tests/runtime-stage.test.ts`, `packages/workbench/tests/runtime-inspector.test.ts`; modify `packages/workbench/src/mcp/mcp-json-input.tsx`, `packages/workbench/src/mcp/mcp-page.tsx`, `packages/workbench/src/mcp/mcp-page.css`, `packages/workbench/tests/mcp-json-input.test.ts`, `packages/workbench/tests/mcp-page.test.ts`, `packages/workbench/tests/runtime-contract-compile.test.ts`, `packages/workbench/src/styles.css`, `packages/workbench/tsconfig.json`.
+
+- [ ] RED `mcp-json-input.test.ts`: uncontrolled callers preserve current behavior; controlled `{rawDraft:'{"name":', onRawDraftChange}` renders the invalid repair text, reports it, calls the callback with every edit, and does not replace it when a new canonical `value` arrives; changing the controlled prop intentionally replaces it. Reject only the half-controlled cases (`rawDraft` without callback or callback without `rawDraft`) with the exact developer error `McpJsonInput rawDraft and onRawDraftChange must be provided together.`
+- [ ] Add backward-compatible `rawDraft?: string` and `onRawDraftChange?: (draft: string) => void` to `McpJsonInputProps`. In controlled mode the prop is the textarea source of truth and all edits call the callback; the parent reducer owns fixture/replay resets and HMR preservation. In uncontrolled mode retain the current internal `rawJsonDraftState` behavior byte-for-byte. Add only generic optional `formLabel='Form'`, `rawLabel='Raw JSON'`, `submitShortcut`, and `invalidJsonLabel` props if runtime copy needs them. This remains the sole form/raw parser; there is no `runtime-input.tsx`.
+- [ ] RED `mcp-page.test.ts`: the existing lifecycle/catalog/history/trace markup remains unchanged; a new controller-free evidence presenter renders a provider MCP protocol object and ordered provider trace spans with the same `.mcp-page-trace`, JSON display, empty-state, overflow, and accessible heading conventions. It exposes no Open/Restart/Close/Invoke/Replay controls.
+- [ ] Extend `mcp-page.tsx` with the exact shared seam, and make `McpPage` itself use it for its raw protocol trace panel:
+
+```ts
+export interface McpProtocolEvidenceProps {
+  readonly ariaLabel: string;
+  readonly protocol?: unknown;
+  readonly trace: readonly unknown[];
+}
+export const McpProtocolEvidence: (props: McpProtocolEvidenceProps) => React.ReactNode;
+```
+
+`RuntimeInspector` uses `McpProtocolEvidence` for a selected MCP provider run; hook protocol remains in the same generic Result/Protocol pane. This is a read-only presentation reuse, not a fabricated `McpPageController`. The RSC Tree/Result/Flight/State/Diagnostics panes remain separate from the standalone live `McpPage`.
+- [ ] Run rail shows grouped Hooks/MCP Tools/MCP Resources/MCP Apps, fixtures, provider targets, `McpJsonInput`, Run, Reset fixture state, and immutable history. Unsupported schemas use Raw JSON. Invalid JSON stays editable locally, announces `Raw JSON input is not valid`, and never replaces the last valid request value.
+- [ ] Reset button names the state store, shows the selected seed in a disclosure, opens an ARIA modal reading `Reset fixture state?`, and has Cancel/Reset buttons. Move initial focus to Cancel, trap focus, let Escape cancel, and restore focus to the invoking button; after confirmation, focus the polite reset status. Disable it during active run/reset and when no state identity exists.
+- [ ] `RuntimePlaygroundProps` accepts `profileOptions: readonly RuntimeProfileOption[]`, `defaultProfileId: string`, and `renderAppPreview?`. Begin with one exact option `{id:'portable',label:'Portable MCP Apps',version:'agent-bundle:mcp-apps:2026-01-26',evidence:'simulated',claimsRealHostParity:false}`. The later host plan injects structurally compatible ChatGPT/Claude descriptors. Selector text is `${label} · ${version} · Simulated`; a persistent note reads `Simulated locally — not host certification`. Reject duplicate IDs, real-parity claims, or a missing default.
+- [ ] Keep the exact preview seam:
+
+```ts
+export interface RuntimeAppPreviewProps {
+  readonly profile: RuntimeProfileOption;
+  readonly profileId: string;
+  readonly run: DevRuntimeRun;
+  readonly surface: DevRuntimeSurface;
+}
+export type RuntimeAppPreviewRenderer = (props: RuntimeAppPreviewProps) => React.ReactNode;
+
+export interface RuntimeLiveMcpPageProps extends RuntimeAppPreviewProps {
+  readonly mcpBinding: NonNullable<DevRuntimeInspectionEnvelope['app']>['mcpBinding'];
+}
+export type RuntimeLiveMcpPageRenderer = (props: RuntimeLiveMcpPageProps) => React.ReactNode;
+export type RuntimeLiveMcpPageAdapter =
+  | Readonly<{ readonly kind: 'disabled' }>
+  | Readonly<{ readonly kind: 'host-owned'; readonly render: RuntimeLiveMcpPageRenderer }>;
+```
+
+The Playground phase hard-codes `liveMcpPage={{kind:'disabled'}}`; it does not implement, invoke, test-drive, or expose a live-session renderer. `RuntimeLiveMcpPageAdapter` is an explicit later host-owned extension contract only. The later host plan changes the composition root to `{kind:'host-owned', render}` after resolving the leased `mcpBinding`; that renderer owns one `McpSessionController` and renders the existing `McpPage` with explicit `controller`, `epochOptions`, `targetOptions`, `initialBinding`, and `onDownloadConfig` props. It may create one shared `McpRouteClient` only as the controller's `routes` dependency and must never call it directly or construct `AgentBundleRemoteTransport`/`McpBrowserSessionModel`; the controller owns serialized admission, replay+live trace order, failure cleanup, late-work rejection, cancellation shutdown, and drain-before-close. The adapter adds no promise chain, mutex, queue, retry, or parallel close path.
+
+- [ ] Stage shows agent-visible, native, and model-visible values without flattening MCP text/image/resource/structured content into Markdown. App preview is invoked only for succeeded `result.app`; it receives the exact `result.app.mcpBinding` through `run`, never reconstructs a binding from current state, and model-visible fallback stays present through App error.
+- [ ] Add `inspector/adapter/runtime-playground.tsx`. It imports the existing closure only through `inspectorClosure`, reuses the closure's screen/tab naming and visual boundary, and supplies stable read-only presenters for the selected provider run's `result.protocol`, diagnostics, and trace. It does not synthesize Inspector host state or instantiate a live session. Do not import vendor paths from runtime components and do not edit `src/inspector/vendor/**`.
+- [ ] Inspector renders all roots of `DevRuntimeTreeNode[]` with `tree/treeitem/aria-level`, six roving tabs and one labelled tabpanel, bounded Flight preview plus authenticated callback download, state identity/snapshot, every provider diagnostic phase, and ordered parent/child `result.trace`. For an MCP provider run, Protocol delegates to `McpProtocolEvidence {protocol:run.result.protocol, trace:run.result.trace}`; the test proves text/image/resource/structured content without `McpBrowserSessionModel` or a parallel MCP history/trace widget.
+- [ ] Identity strip uses separate `<dt>/<dd>` labels for provider state, `HMR endpoint ready` from `status.hmrReady`, selected-surface `Browser HMR clients` from ordered events, provider session ID, runtime generation ID, source revision, artifact epoch ID or `Not packaged`, state store ID, state version, last event sequence, target, profile version, and evidence. Mirror values as `data-runtime-hmr-ready`, `data-runtime-hmr-client-count`, `data-runtime-provider-session`, `data-runtime-generation`, `data-runtime-source-revision`, `data-runtime-artifact-epoch`, `data-runtime-state-version`, and `data-runtime-event-sequence`; remove all eight when unavailable. Never collapse these into an ambiguous `Version` chip or label `hmrReady` as connected.
+- [ ] At 1100px inspector moves below stage; at 720px the internal rail scrolls while document width stays bounded; at 390×844 all actions remain reachable. Preserve reduced motion and visible focus.
+- [ ] Add `src/mcp/mcp-json-input.tsx`, `src/mcp/mcp-page.tsx`, `src/runtime-stage.tsx`, `src/runtime-inspector.tsx`, `src/inspector/adapter/runtime-playground.tsx`, and their four tests to the tsconfig allowlist. Import each new runtime module and `McpProtocolEvidence` in `runtime-contract-compile.test.ts`; assert the controlled raw-draft and protocol-evidence props compile. Run: `npm test -- packages/workbench/tests/mcp-json-input.test.ts packages/workbench/tests/mcp-page.test.ts packages/workbench/tests/runtime-stage.test.ts packages/workbench/tests/runtime-inspector.test.ts packages/workbench/tests/runtime-contract-compile.test.ts packages/workbench/tests/mcp-session-controller.test.ts`; `npm run build --workspace agent-bundle-workbench`; `npm run typecheck --workspace agent-bundle-workbench`; `git diff --exit-code -- packages/workbench/src/inspector/vendor`.
+- [ ] Commit: `git add packages/workbench/src/mcp/mcp-json-input.tsx packages/workbench/src/mcp/mcp-page.tsx packages/workbench/src/mcp/mcp-page.css packages/workbench/src/inspector/adapter/runtime-playground.tsx packages/workbench/src/runtime-stage.tsx packages/workbench/src/runtime-inspector.tsx packages/workbench/src/styles.css packages/workbench/tests/mcp-json-input.test.ts packages/workbench/tests/mcp-page.test.ts packages/workbench/tests/runtime-stage.test.ts packages/workbench/tests/runtime-inspector.test.ts packages/workbench/tests/runtime-contract-compile.test.ts packages/workbench/tsconfig.json && git commit -m "feat(workbench): render runtime inspection surfaces"`.
+
+### Task 6: Orchestrate capability navigation, effects, profiles, and resync
+
+**Files:** Create `packages/workbench/src/runtime-playground.tsx`, `packages/workbench/tests/runtime-playground.test.ts`, `packages/workbench/tests/helpers/runtime-playground-fixture.ts`, `packages/workbench/tests/runtime-playground.e2e.test.ts`; modify `packages/workbench/src/main.tsx`, `packages/workbench/src/styles.css`, `packages/workbench/tests/runtime-contract-compile.test.ts`, `packages/workbench/tsconfig.json`.
+
+- [ ] RED pure orchestration tests: unavailable is absent; available initializes all 50 history items; read-only runs once; mutable waits; reset cancellation/request/success-follow-up is exact; exact/latest replay bodies are exact; terminal run event reads/deduplicates; conflict bootstraps but does not POST again; unmount ignores late resolution; the Playground composition is exactly `{kind:'disabled'}` and exposes no live control. Do not add a host-owned-renderer execution test in this phase; the host plan owns that discriminated branch and its exact immutable `result.app.mcpBinding` assertion.
+- [ ] Immediately before production orchestration, add the executable Chrome RED. `startRuntimePlaygroundFixture()` copies the real runtime example into a workspace-local temp root, starts the built Workbench with real `startDevServer`, and returns `root`, `url`, `serverComponentSource`, `appStyles`, `closed`, and idempotent `close()`. The test navigates `#runtime` and asserts heading, identity data attributes, controlled invalid JSON persistence, keyboard Run, confirmation/focus/reset, six tabs, and immutable history. Run `npm test -- packages/workbench/tests/runtime-playground.e2e.test.ts`; expected failure is absent Runtime navigation/heading, not setup/import failure. The GREEN implementation and rerun are the remaining steps of this same task—never carry this failing test into another task or commit.
+- [ ] Runtime events enter an imperative FIFO owned beside the reducer. Dispatch one `ProjectEventMessage` at a time and await its required effect before advancing. For `replay.gap`, set visible `Events 11–13 were unavailable`, call one `RuntimeClient.bootstrap()`, atomically replace status/surfaces/history, then process queued sequence 14. Coalesce nested gaps/bootstrap requests, but never coalesce ordinary runtime events.
+- [ ] Generation activation flow: bootstrap active status/history, compare provider session/generation, queue exactly one latest selected-fixture run, and preserve selected profile/input/tab/history. `runtime.run.completed/failed` reads the run by ID. `runtime.generation.failed` keeps last-good. `runtime.status` refreshes without auto-run. Ordered `runtime.hmr.client-connected`/`disconnected` replace that surface's displayed client count from the event payload; they never trigger a run. `status.hmrReady` controls only `HMR endpoint ready`. Raw source invalidation does none of these.
+- [ ] Construct one shared `ForegroundRouteClient` for `RuntimeClient` only. Selecting an MCP surface posts the same `DevRuntimeInvocationRequest` as a hook surface and renders the returned `DevRuntimeRun.result.protocol`/trace; Playground does not open, restart, invoke, subscribe to, or close an MCP browser session. The later host renderer may pass one `McpRouteClient` as `McpSessionController.routes` but never calls it directly; it uses `result.app.mcpBinding` through that sole controller and the existing `McpPage`.
+- [ ] Main initially injects the exact Portable `RuntimeProfileOption` and `defaultProfileId="portable"`. The later host plan replaces the options with `Object.values(MCP_APP_PROFILE_DESCRIPTORS)` (each checked with `satisfies RuntimeProfileOption`) and supplies `McpAppPreview`. The runtime reducer stores only the selected neutral option; no ChatGPT/Claude branching enters it.
+- [ ] Pages become overview/skills/runtime. Only available capability shows Runtime and accepts `#runtime`; unavailable normalizes to Overview without runtime chrome or asset/MCP requests. Starting/compiling/degraded/failed provider states remain navigable for diagnostics.
+- [ ] Status messaging is polite for run/HMR/reset and alert for compilation/runtime diagnostics. Stale banner names both generation IDs. Run history labels status, kind, surface, target, provider session suffix, generation suffix, state version, and start time; expose Edit as new draft, Replay exact, and Replay latest separately.
+- [ ] Add `src/runtime-playground.tsx`, `tests/runtime-playground.test.ts`, `tests/helpers/runtime-playground-fixture.ts`, and `tests/runtime-playground.e2e.test.ts` to tsconfig and import the runtime module in `runtime-contract-compile.test.ts`. Unit and browser tests assert all eight root data attributes update on bootstrap/HMR-event/reset and are absent when unavailable. Run `npm test -- packages/workbench/tests/runtime-playground.test.ts packages/workbench/tests/runtime-playground.e2e.test.ts packages/workbench/tests/project-client.test.ts packages/workbench/tests/runtime-contract-compile.test.ts`; then `npx rstest --config rstest.runtime-playground.config.ts`, Workbench build/typecheck. The V8 90/90/90/85 thresholds are hard gates.
+- [ ] Commit only after the Chrome RED is green: `git add packages/workbench/src/runtime-playground.tsx packages/workbench/src/main.tsx packages/workbench/src/styles.css packages/workbench/tests/runtime-playground.test.ts packages/workbench/tests/helpers/runtime-playground-fixture.ts packages/workbench/tests/runtime-playground.e2e.test.ts packages/workbench/tests/runtime-contract-compile.test.ts packages/workbench/tsconfig.json && git commit -m "feat(workbench): add optional Runtime Playground"`.
+
+### Task 7: Prove DOM behavior, state reset, MCP execution, and RSC HMR in Chrome
+
+**Files:** Create `packages/workbench/tests/runtime-playground-hmr.e2e.test.ts`; modify `packages/workbench/tests/helpers/runtime-playground-fixture.ts`, `packages/workbench/tests/runtime-playground.e2e.test.ts`, `packages/workbench/tests/overview.e2e.test.ts`, `packages/workbench/tsconfig.json`.
+
+- [ ] Extend the already-green fixture helper without changing its contract: its `closed` promise keeps manual/capture processes alive until `close()`, SIGINT, or SIGTERM; cleanup closes browser-facing server/compiler before removing `root`. No committed example source is mutated.
+- [ ] Immediately before HMR production fixes, write the executable RED in `runtime-playground-hmr.e2e.test.ts`: record document identity and controlled raw draft, wait for ordered `runtime.hmr.client-connected` with the selected `surfaceId`/positive `count`, edit copied RSC source, and expect activated generation plus automatic replay without reload. Run only this file and observe the missing HMR preservation/activation behavior. Implement the minimal HMR corrections and rerun it green within Task 7. A true `hmrReady` with count zero must render endpoint-ready/disconnected, not connected.
+- [ ] Exercise reset/seed: record state store/version and history IDs; run a mutating hook; open `Reset fixture state?`, assert Cancel has initial focus, Tab stays trapped, press Escape, assert no request and invoking-button focus restoration; reopen/confirm; assert request seed equals selected fixture seed, displayed store is same, version advances, seeded snapshot returns, old history/vector remains unchanged, one new reset-caused run appears, and focus reaches the reset status.
+- [ ] Exercise a real MCP tool surface after the hook run. Assert one provider runtime run succeeds and its immutable `result.protocol`/trace preserve model-visible text, image/resource, structured parts, target, vector, and phase diagnostics. Assert zero requests whose paths begin `/api/mcp/sessions` and zero whose paths begin `/api/runtime/mcp/sessions` during Playground use. Live App/session interaction is deferred to the host plan and its sole `McpSessionController`.
+- [ ] Reload the page and assert provider-scoped history bootstraps with the same run IDs (max 50). Restarting the fixture provider establishes a new provider-session identity and does not present old runs as current.
+- [ ] HMR test records `performance.timeOrigin`, a random `document.documentElement.dataset.runtimeMarker`, all eight `data-runtime-*` attributes, selected profile, controlled raw JSON repair draft, inspector tab, expanded trace ID, selected historical run, current generation, hook run, MCP provider run, and state identity. Replace copied component literal `Shared state now contains` with `Live runtime state now contains`; wait for `runtime.generation.activated`, one automatic hook rerun, and changed output. Assert time origin/marker and every compatible UI selection remain unchanged; generation/source/event attributes advance, artifact epoch stays packaged, reset advances only state version, and HMR count changes only on the two client lifecycle events.
+- [ ] Run the MCP provider surface again on the activated generation and assert its runtime vector, provider protocol snapshot, and output use that generation. Introduce a syntax error, wait for `source/build` diagnostic, assert last-good hook/MCP output and history remain; restore source, wait for later generation and one auto replay.
+- [ ] At 390×844 assert no document overflow, rail is keyboard/scroll reachable, reset dialog fits, and inspector tabs remain operable. Ordinary overview e2e asserts zero Runtime links, null status, Overview/Skills function, zero runtime asset requests, zero `/api/mcp/sessions*` requests, zero `/api/runtime/mcp/sessions*` requests, and no `data-runtime-*` attributes anywhere in the document.
+- [ ] Never intercept `/api/runtime`, `/api/mcp`, or project SSE and never fabricate events. Run: `npm test -- packages/workbench/tests/runtime-playground.e2e.test.ts packages/workbench/tests/runtime-playground-hmr.e2e.test.ts packages/workbench/tests/overview.e2e.test.ts`.
+- [ ] Add `tests/runtime-playground-hmr.e2e.test.ts` to tsconfig. Run all three browser files and typecheck. Commit: `git add packages/workbench/tests/helpers/runtime-playground-fixture.ts packages/workbench/tests/runtime-playground.e2e.test.ts packages/workbench/tests/runtime-playground-hmr.e2e.test.ts packages/workbench/tests/overview.e2e.test.ts packages/workbench/tsconfig.json && git commit -m "test(workbench): prove Runtime Playground state and HMR"`.
+
+### Task 8: Capture browser evidence and close fidelity
+
+**Files:** Create `packages/workbench/scripts/capture-runtime-playground.mjs`, `docs/assets/rsc-runtime-workbench/desktop.png`, `docs/assets/rsc-runtime-workbench/mobile.png`; complete `docs/assets/rsc-runtime-workbench/fidelity-ledger.md`; modify frontend CSS/components only for observed drift.
+
+- [ ] Build Agent Bundle and Workbench. The capture script imports `startRuntimePlaygroundFixture()` and has two mutually exclusive modes: capture requires both `--desktop` and `--mobile`; manual QA requires `--keepalive /tmp/agent-bundle-runtime-playground-session.json`. Keepalive atomically writes the exact fixture-returned `{root,url,serverComponentSource,appStyles}` JSON, waits on `fixture.closed`, handles SIGINT/SIGTERM by calling `close()`, and removes the session JSON after browser/server/compiler/temp-root cleanup. Capture performs one real hook and provider MCP run, selects State, expands Trace, and writes nonempty PNGs atomically.
+- [ ] Start the plugin-author lane in terminal A with `node packages/workbench/scripts/capture-runtime-playground.mjs --keepalive /tmp/agent-bundle-runtime-playground-session.json`. In terminal B define only task-specific values from that live fixture: `export AB_RUNTIME_FIXTURE_ROOT="$(node -e "const f=require('node:fs'); console.log(JSON.parse(f.readFileSync('/tmp/agent-bundle-runtime-playground-session.json','utf8')).root)")"` and `export AB_RUNTIME_FIXTURE_URL="$(node -e "const f=require('node:fs'); console.log(JSON.parse(f.readFileSync('/tmp/agent-bundle-runtime-playground-session.json','utf8')).url)")"`; verify both with `test -d "$AB_RUNTIME_FIXTURE_ROOT" && node -e "new URL(process.argv[1])" "$AB_RUNTIME_FIXTURE_URL"`. These variables are defined by the running helper, never assumed.
+- [ ] For visual/manual QA, use the in-app Browser control workflow with the inferred fixture URL. In the Node control session run exactly:
+
+```js
+// @exec: {"max_output_tokens": 20000}
+if (globalThis.agent?.browsers == null) {
+  const { setupBrowserRuntime } = await import('/home/zack/.codex/plugins/cache/openai-bundled/browser/26.810.41047/scripts/browser-client.mjs');
+  globalThis.agent = await setupBrowserRuntime();
+}
+const { readFile } = await import('node:fs/promises');
+globalThis.runtimeFixture = JSON.parse(await readFile('/tmp/agent-bundle-runtime-playground-session.json', 'utf8'));
+if (globalThis.browser == null) {
+  globalThis.browser = await agent.browsers.getForUrl(runtimeFixture.url);
+  nodeRepl.write(await browser.documentation());
+}
+globalThis.runtimeTab = await browser.tabs.open(runtimeFixture.url);
+```
+
+Read the complete `browser.documentation()` output in that single direct call before the first tab operation. Reuse `browser`/`runtimeTab`; with the documented `runtimeTab.playwright` operations, verify Runtime heading, run hook and MCP provider surfaces, edit the exact `runtimeFixture.serverComponentSource`, observe activation without document replacement, and inspect all six panels. If setup succeeds but URL selection fails, read `await agent.documentation.get('bootstrap-troubleshooting')` before retrying; do not substitute standalone Playwright for this manual lane.
+- [ ] Contributor lane uses the same live backend and a fixed local URL: `AGENT_BUNDLE_WORKBENCH_API_PROXY="$AB_RUNTIME_FIXTURE_URL" npm run dev --workspace agent-bundle-workbench -- --host 127.0.0.1 --port 4311`. Reuse the already-documented `browser` binding and open `http://127.0.0.1:4311` in a fresh tab; do not call `getForUrl` or reread documentation for the same browser. Edit one temporary Workbench CSS token, observe React Refresh preserving controlled raw draft/profile/history, then restore the token before capture. Stop terminal A only after both lanes finish; its signal cleanup removes the copied root.
+- [ ] Capture desktop at the concept's actual native dimensions and mobile at 390×844 to the canonical docs paths. Call `view_image(detail:'original')` separately for concept, desktop, and mobile in one QA pass.
+- [ ] Complete every fidelity-ledger row with rendered evidence and `Match`, `Intentional divergence`, or `Fixed`; compare copy, identities, regions, typography, palette, border/radius, selected/error/stale/last-good/reset states, trace density, App sibling placement, and mobile continuation. Fix and recapture every fixable mismatch/overflow.
+- [ ] Verify the driver and evidence: `node packages/workbench/scripts/capture-runtime-playground.mjs --desktop docs/assets/rsc-runtime-workbench/desktop.png --mobile docs/assets/rsc-runtime-workbench/mobile.png`; `test -s` both PNGs; `identify` both; `rg -n "Pending implementation|Fix required" docs/assets/rsc-runtime-workbench/fidelity-ledger.md` must return no matches.
+- [ ] Run final focused suite, build/typecheck, `git diff --check`, and vendor immutability check. Commit: `git add packages/workbench/scripts/capture-runtime-playground.mjs docs/assets/rsc-runtime-workbench/desktop.png docs/assets/rsc-runtime-workbench/mobile.png docs/assets/rsc-runtime-workbench/fidelity-ledger.md packages/workbench/src/styles.css packages/workbench/src/runtime-stage.tsx packages/workbench/src/runtime-inspector.tsx packages/workbench/src/runtime-playground.tsx && git commit -m "docs(workbench): verify Runtime Playground fidelity"`.
+
+## Risk register
+
+| Risk | Detection | Mitigation / release gate |
+|---|---|---|
+| React batching drops SSE events | synchronous 8/9/10 unit test | imperative FIFO ordered by project sequence; never `latestEvent` state |
+| Replay window overflow hides runs | real `replay.gap` before sequence 14 | visible gap + protected history bootstrap before later event processing |
+| Provider MCP evidence diverges from MCP UI | `McpProtocolEvidence` unit + provider-run e2e | extend `McpPage` presenter; no parallel MCP history/trace/run surface |
+| Live MCP lifecycle is duplicated or reordered | zero `/api/mcp/sessions*` and `/api/runtime/mcp/sessions*` Playground assertions + `mcp-session-controller.test.ts` serialized/late-work/drain cases | defer live renderer to host plan; one `McpSessionController` owns admission, replay+live trace order, failure cleanup, route/transport/client/model/lease lifecycle, and drain-before-close |
+| HMR readiness is mislabeled as connectivity | ready-with-zero and ordered connect/disconnect tests | render `hmrReady` separately from event-derived per-surface count |
+| HMR wipes author context | browser marker/profile/draft/tab/trace/history assertions | reducer preserve policy keyed by stable IDs; generation activation only |
+| Reset destroys unexpected state | dialog/seed/body/version e2e | explicit confirmation, named store/seed, no retry on conflict |
+| Stale evidence looks current | identity-strip and provider-restart tests | show provider session/generation/source/artifact/store/version separately |
+| Host simulation implies parity | descriptor option text and DOM assertion | version + `Simulated locally — not host certification`; `claimsRealHostParity:false` |
+| Provider history grows without bound | 51-entry client/model fixtures | server and client hard cap 50; newest-first deterministic eviction |
+| Inspector vendor fork drifts | `git diff --exit-code -- packages/workbench/src/inspector/vendor` | all conversion in `packages/workbench/src/inspector/adapter/runtime-playground.tsx` |
+| Protected Flight URL leaks token/identity | client tests and DOM inspection | authenticated callback download; no naked link or token in URL |
+| Browser tests pass on mocks | route-request listener and fixture code review | real provider/compiler/SSE and provider MCP runs; reject interception of scoped APIs |
+
+## Final self-review and release gate
+
+- Optional/ordinary isolation: Tasks 2, 6, 7.
+- Ordered events/no loss/replay gap/history bootstrap: Tasks 2–4, 6, 7.
+- Immutable evidence/history cap/edit/replay/conflict/provider restart: Tasks 2, 4, 6, 7.
+- Provider-run MCP evidence through shared `McpProtocolEvidence`, with no live lifecycle: Tasks 4–7.
+- Sole-controller live `McpPage` extension seam deferred to host plan: Tasks 5–7.
+- Full versioned portable/ChatGPT/Claude injection seam: Tasks 5–7.
+- Reset/seed request, reducer, UI, and real e2e: Tasks 4–7.
+- Agent/native/model/App sibling stage and Tree/Result/Flight/Protocol/State/Diagnostics/Trace: Task 5.
+- Exact identity display and stale/last-good semantics: Tasks 4–7.
+- DOM keyboard/accessibility/mobile: Tasks 6 and 7.
+- Real hook + MCP HMR without document reload and state preservation: Task 7.
+- Pre-code ImageGen, canonical assets, Browser/IAB, captures, and fidelity ledger: Tasks 1 and 8.
+- Provider compile contract/tsconfig allowlist: Tasks 2, 4–7; vendor immutability: Tasks 5 and 8.
+
+Reject the slice if any ordinary project shows Runtime; an event is represented only as latest React state; replay gap does not bootstrap history; reload loses same-session history; history exceeds 50; Playground constructs an MCP route client/transport/model/controller or calls a live MCP session route; provider MCP evidence bypasses `McpProtocolEvidence`; the host live renderer bypasses `McpSessionController`/`McpPage`; `hmrReady` is labeled connected; reset lacks confirmation/seed proof; controlled invalid raw JSON is lost on HMR; any new runtime file is absent from tsconfig or the compile-contract import; profile options omit version/evidence; identity fields are collapsed; 409 retries; late run replaces newer output; raw invalidation runs; failure removes last-good; App enters the decoded tree; browser accepts commands/paths; vendor changes; e2e mocks scoped routes/events; HMR reloads the document or loses compatible UI state; coverage is below 90/85; or final screenshots retain a fixable mismatch/overflow.
