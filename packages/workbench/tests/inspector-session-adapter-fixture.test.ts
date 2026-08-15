@@ -38,7 +38,7 @@ const startStaticServer = async (root: string) => {
 };
 
 describe('Inspector session adapter production fixture', () => {
-  it('builds the styled entry and mounts all five actual vendor screens in Chrome', async () => {
+  it('builds the styled entry and mounts all five Inspector presentations in Chrome', async () => {
     const output = await mkdtemp(join(tmpdir(), 'agent-bundle-inspector-fixture-'));
     const config: RsbuildConfig = createWorkbenchConfig();
     config.source = {
@@ -69,6 +69,10 @@ describe('Inspector session adapter production fixture', () => {
         await page.getByText(expected, { exact: true }).waitFor({ timeout: 5_000 });
       }
 
+      await page.getByRole('button', { name: 'Protocol' }).click();
+      await page.locator('[data-protocol-frame="request:tools/call"]').waitFor({ timeout: 5_000 });
+      expect(await page.locator('[data-protocol-sequence]').evaluateAll((nodes) => nodes.map((node) => node.getAttribute('data-protocol-sequence')))).toEqual(['1', '2', '3', '4']);
+      expect(await page.locator('[data-protocol-frame="response:2"]').count()).toBe(1);
       expect(await page.locator('link[rel="stylesheet"]').count()).toBeGreaterThan(0);
       expect(await page.locator('[aria-label="Replay"]').count()).toBe(0);
       expect(await page.getByText('Set Active Level', { exact: true }).count()).toBe(0);

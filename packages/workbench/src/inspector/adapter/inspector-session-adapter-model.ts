@@ -46,18 +46,6 @@ const isFrame = (entry: McpBrowserSessionTimelineEntry): entry is FrameTraceEntr
 const isLogging = (entry: McpBrowserSessionTimelineEntry): entry is LoggingTraceEntry =>
   'kind' in entry && entry.kind === 'logging';
 
-const vendorReplayableMethods = new Set([
-  'ping',
-  'prompts/get',
-  'prompts/list',
-  'resources/list',
-  'resources/read',
-  'resources/templates/list',
-  'tasks/list',
-  'tools/call',
-  'tools/list',
-]);
-
 const jsonRpcDirection = (message: Readonly<Record<string, unknown>>): InspectorProtocolEntry['direction'] | undefined => {
   const hasId = Object.hasOwn(message, 'id');
   const hasMethod = typeof message.method === 'string';
@@ -81,7 +69,6 @@ export const inspectorProtocolEntries = (
   if (!isFrame(entry) || !isRecord(entry.message)) return [];
   const direction = jsonRpcDirection(entry.message);
   if (direction === undefined) return [];
-  if (direction === 'request' && typeof entry.message.method === 'string' && vendorReplayableMethods.has(entry.message.method)) return [];
   return [{
     direction,
     id: `trace-${entry.sequence}`,

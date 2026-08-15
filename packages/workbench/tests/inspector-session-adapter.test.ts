@@ -83,8 +83,15 @@ const model = {
         occurredAt: 1_700_000_000_005,
         sequence: 11,
       },
+      {
+        direction: 'server',
+        kind: 'frame',
+        message: { id: 2, jsonrpc: '2.0', result: { content: [] } },
+        occurredAt: 1_700_000_000_006,
+        sequence: 12,
+      },
     ],
-    lastSequence: 11,
+    lastSequence: 12,
   },
 } as unknown as McpBrowserSessionModel;
 
@@ -93,11 +100,15 @@ describe('Inspector session adapter', () => {
     const entries = inspectorProtocolEntries(model.timeline.entries);
     const logs = inspectorLogEntries(model.timeline.entries);
 
-    expect(entries).toHaveLength(3);
+    expect(entries).toHaveLength(5);
     expect(entries[0]).toMatchObject({ direction: 'request', id: 'trace-7', sequence: 7 });
     expect(entries[0]!.timestamp.getTime()).toBe(1_700_000_000_001);
     expect(entries[1]).toMatchObject({ direction: 'response', id: 'trace-8', sequence: 8 });
     expect(entries[2]).toMatchObject({ direction: 'notification', id: 'trace-9', origin: 'server', sequence: 9 });
+    expect(entries[3]).toMatchObject({ direction: 'request', id: 'trace-11', sequence: 11 });
+    expect(entries[3]!.message).toEqual({ id: 2, jsonrpc: '2.0', method: 'tools/call' });
+    expect(entries[4]).toMatchObject({ direction: 'response', id: 'trace-12', sequence: 12 });
+    expect(entries[4]!.message).toEqual({ id: 2, jsonrpc: '2.0', result: { content: [] } });
     expect(logs).toHaveLength(1);
     expect(logs[0]).toMatchObject({ receivedAt: new Date(1_700_000_000_004), sequence: 10 });
     expect(logs[0]!.params).toEqual({ data: 'Connected', level: 'info' });
@@ -147,7 +158,7 @@ describe('Inspector session adapter', () => {
 
     renderToStaticMarkup(createElement(InspectorSessionAdapter, { controller, initialTab: 'protocol', model }));
     expect(screens.protocol).toBeDefined();
-    expect(screens.protocol!.entries).toHaveLength(3);
+    expect(screens.protocol!.entries).toHaveLength(5);
     expect(screens.logging!.embedded).toBe(true);
     expect(markup).not.toContain('Set Active Level');
   });

@@ -148,7 +148,6 @@ export const InspectorSessionAdapter = ({ controller, initialTab = 'tools', mode
   const [loggingDiagnostic, setLoggingDiagnostic] = useState('Log-level changes are unavailable because this W13 session does not expose logging/setLevel.');
   const [sortDirection, setSortDirection] = useState<SortDirection>('oldest-first');
   const [compact, setCompact] = useState(false);
-  const [protocolReplayUnavailable, setProtocolReplayUnavailable] = useState(false);
 
   useEffect(() => {
     if (previousBindingKey.current === bindingKey) return;
@@ -168,7 +167,6 @@ export const InspectorSessionAdapter = ({ controller, initialTab = 'tools', mode
     setProtocolCleared(false);
     setLoggingCleared(false);
     setLoggingDiagnostic('Log-level changes are unavailable because this W13 session does not expose logging/setLevel.');
-    setProtocolReplayUnavailable(false);
   }, [bindingKey]);
 
   const protocolEntries = useMemo(() => inspectorProtocolEntries(model.timeline.entries), [model.timeline.entries]);
@@ -283,10 +281,7 @@ export const InspectorSessionAdapter = ({ controller, initialTab = 'tools', mode
         compact={compact}
         entries={displayedProtocol}
         onClearAll={() => setProtocolCleared(true)}
-        onClearSection={(section: 'history' | 'pinned') => section === 'history' ? setProtocolCleared(true) : setPinnedIds(new Set())}
         onExport={() => onExportTrace?.(model.timeline.entries)}
-        onExportSection={() => onExportTrace?.(model.timeline.entries)}
-        onReplay={() => setProtocolReplayUnavailable(true)}
         onSortChange={setSortDirection}
         onToggleCompact={() => setCompact((value) => !value)}
         onTogglePin={(id: string) => setPinnedIds((current) => {
@@ -299,7 +294,6 @@ export const InspectorSessionAdapter = ({ controller, initialTab = 'tools', mode
         sortDirection={sortDirection}
         ui={protocolUi}
       /> : undefined}
-      {protocolReplayUnavailable ? <p role="status">Replay is unavailable for raw W13 trace frames.</p> : undefined}
       {tab === 'logging' ? <section aria-label="Logging inspector">
         <p role="note">{loggingDiagnostic}</p>
         <LoggingScreen

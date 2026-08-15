@@ -25,9 +25,11 @@ const model = {
     entries: [
       { direction: 'client', kind: 'frame', message: { id: 1, jsonrpc: '2.0', method: 'initialize' }, occurredAt: 1_700_000_000_001, sequence: 1 },
       { direction: 'server', kind: 'frame', message: { id: 1, jsonrpc: '2.0', result: { protocolVersion: '2026-06-01' } }, occurredAt: 1_700_000_000_002, sequence: 2 },
-      { kind: 'logging', occurredAt: 1_700_000_000_003, payload: { data: 'Fixture connected', level: 'info' }, sequence: 3 },
+      { direction: 'client', kind: 'frame', message: { id: 2, jsonrpc: '2.0', method: 'tools/call', params: { name: 'fixture-tool' } }, occurredAt: 1_700_000_000_003, sequence: 3 },
+      { direction: 'server', kind: 'frame', message: { id: 2, jsonrpc: '2.0', result: { content: [] } }, occurredAt: 1_700_000_000_004, sequence: 4 },
+      { kind: 'logging', occurredAt: 1_700_000_000_005, payload: { data: 'Fixture connected', level: 'info' }, sequence: 5 },
     ],
-    lastSequence: 3,
+    lastSequence: 5,
   },
 } as unknown as McpBrowserSessionModel;
 
