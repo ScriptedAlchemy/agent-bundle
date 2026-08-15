@@ -18,7 +18,7 @@ import { validateArtifact } from '../build/validate-artifact.ts';
 import { DiagnosticError } from '../core/diagnostics.ts';
 import { assertInside } from '../core/paths.ts';
 import { resolveMcpPathTokens } from './mcp-path-tokens.ts';
-import type { ModernMcpServer, TargetMcpRuntimeContract } from './mcp-runtime.ts';
+import { readTargetMcpServer, type ModernMcpServer, type TargetMcpRuntimeContract } from './mcp-runtime.ts';
 
 const defaultTimeoutMs = 5_000;
 const maxStderrBytes = 1_000_000;
@@ -247,7 +247,7 @@ export class McpService {
         pluginRoot: targetRoot,
         workspaceRoot: resolve(options.workspaceRoot ?? process.cwd()),
       };
-      const transport = this.#transport(server, runtime, targetRoot, roots, (nextCapture) => {
+      const transport = this.#transport(server, runtime, options.target, targetRoot, roots, (nextCapture) => {
         capture = nextCapture;
       });
       await client.connect(transport, requestOptions);
@@ -298,11 +298,14 @@ export class McpService {
       } catch {
         throw new Error(`MCP manifest for target ${JSON.stringify(target)} is not valid JSON.`);
       }
-      const server = runtime.readModernServer(document, name);
-      if (server === undefined) {
+      const result = readTargetMcpServer(runtime, document, name);
+      if (result.status === 'missing') {
+        throw new Error(`Expected exactly one ${target} MCP server matching ${JSON.stringify(name)}.`);
+      }
+      if (result.status === 'invalid') {
         throw new Error(`MCP server ${JSON.stringify(name)} in target ${JSON.stringify(target)} is invalid.`);
       }
-      return server;
+      return result.server;
     });
   }
 
@@ -326,11 +329,12 @@ export class McpService {
   #transport(
     server: ModernMcpServer,
     runtime: TargetMcpRuntimeContract,
+    target: string,
     targetRoot: string,
     roots: { readonly pluginData: string; readonly pluginRoot: string; readonly workspaceRoot: string },
     setCapture: (capture: StderrCapture) => void,
   ): Transport {
-    const resolved = resolveMcpPathTokens({ roots, runtime, server });
+    const resolved = resolveMcpPathTokens({ roots, runtime, server, target });
     if (resolved.kind === 'stdio') {
       const cwd = resolved.cwd === undefined
         ? undefined

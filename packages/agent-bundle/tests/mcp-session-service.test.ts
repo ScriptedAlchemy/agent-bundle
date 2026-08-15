@@ -24,6 +24,12 @@ const registry: NormalizationTargetRegistry = {
   supports: () => true,
 };
 
+const runtimeFor = (target: string) => {
+  const runtime = createDefaultRegistry().mcpRuntime(target);
+  if (runtime === undefined) throw new Error(`Expected MCP runtime for ${JSON.stringify(target)}.`);
+  return runtime;
+};
+
 const loadedProject = (root: string, config: AgentBundleConfig): LoadedConfig => ({
   config,
   configPath: join(root, 'agent-bundle.config.ts'),
@@ -155,11 +161,6 @@ const publishRemoteEpoch = async (root: string, id: string): Promise<EpochStore>
     loadedProject(root, {
       mcp: {
         servers: {
-          events: {
-            headers: { 'X-Mode': 'events' },
-            transport: 'sse',
-            url: 'https://mcp.example.test/events',
-          },
           http: {
             headers: { Authorization: 'Bearer ${PLUGIN_DATA}' },
             transport: 'streamable-http',
@@ -937,12 +938,11 @@ it('fails and closes the session as soon as stderr exceeds its output bound', as
   }
 }, 30_000);
 
-it('opens generated streamable HTTP and SSE servers through their dedicated transports', async () => {
+it('opens a generated streamable HTTP server through its modern transport', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-persistent-mcp-remote-'));
   try {
     const epochStore = await publishRemoteEpoch(root, 'epoch-remote');
     const http: Array<{ readonly headers?: Readonly<Record<string, string>>; readonly url: string }> = [];
-    const sse: Array<{ readonly headers?: Readonly<Record<string, string>>; readonly url: string }> = [];
     const service = new McpSessionService({
       createClient: () => ({
         callTool: async () => ({ content: [] }),
@@ -957,10 +957,6 @@ it('opens generated streamable HTTP and SSE servers through their dedicated tran
         listTools: async () => ({ tools: [] }),
         readResource: async () => ({ contents: [] }),
       }),
-      createSseTransport: (url, options) => {
-        sse.push({ ...options, url: url.href });
-        return { close: async () => undefined, send: async () => undefined, start: async () => undefined } as never;
-      },
       createStreamableHttpTransport: (url, options) => {
         http.push({ ...options, url: url.href });
         return { close: async () => undefined, send: async () => undefined, start: async () => undefined } as never;
@@ -970,14 +966,12 @@ it('opens generated streamable HTTP and SSE servers through their dedicated tran
     });
 
     const httpSession = await service.open({ epochId: 'epoch-remote', serverName: 'http', target: 'portable' });
-    const sseSession = await service.open({ epochId: 'epoch-remote', serverName: 'events', target: 'portable' });
 
     expect(http[0]?.url).toBe('https://mcp.example.test/tools');
     expect(http[0]?.headers?.Authorization).toMatch(/^Bearer \/.+/u);
     expect(http[0]?.headers?.Authorization).not.toContain('${PLUGIN_DATA}');
-    expect(sse).toEqual([{ headers: { 'X-Mode': 'events' }, url: 'https://mcp.example.test/events' }]);
 
-    await Promise.all([httpSession.close(), sseSession.close(), service.close()]);
+    await Promise.all([httpSession.close(), service.close()]);
   } finally {
     await rm(root, { force: true, recursive: true });
   }
@@ -1174,7 +1168,6 @@ it('fails closed when projecting adversarial generated launch configuration for 
   const shared = {
     binding: { epochId: 'epoch-inspector', serverName: 'fixture', target: 'portable' },
     createClient: () => ({}) as never,
-    createSseTransport: () => ({}) as never,
     createStdioTransport: () => ({}) as never,
     createStreamableHttpTransport: () => ({}) as never,
     epochReference: { close: async () => undefined, root: '/tmp/agent-bundle-inspector' } as never,
@@ -1186,6 +1179,7 @@ it('fails closed when projecting adversarial generated launch configuration for 
   const stdio = new McpSession({
     ...shared,
     resolved: {
+      runtime: runtimeFor('portable'),
       server: {
         args: [
           '--header',
@@ -1230,6 +1224,7 @@ it('fails closed when projecting adversarial generated launch configuration for 
     ...shared,
     id: 'session-inspector-remote',
     resolved: {
+      runtime: runtimeFor('portable'),
       server: {
         headers: { Authorization: 'Bearer header-secret', Cookie: 'session=cookie-secret' },
         kind: 'streamable-http',
@@ -1656,7 +1651,6 @@ it('shares one close promise when a synchronous close observer re-enters shutdow
         listTools: async () => ({ tools: [] }),
         readResource: async () => ({ contents: [] }),
       }),
-      createSseTransport: () => ({}) as never,
       createStdioTransport: () => ({ close: async () => undefined, send: async () => undefined, start: async () => undefined, stderr: null }) as never,
       createStreamableHttpTransport: () => ({}) as never,
       epochReference: {
@@ -1678,6 +1672,7 @@ it('shares one close promise when a synchronous close observer re-enters shutdow
       },
       pluginData,
       resolved: {
+        runtime: runtimeFor('portable'),
         server: { args: [], command: 'node', kind: 'stdio' },
         target: 'portable',
         targetRoot: root,

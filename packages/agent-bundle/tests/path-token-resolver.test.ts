@@ -74,6 +74,7 @@ for (const testCase of fixture.cases) {
       roots: fixture.roots,
       runtime: runtimeFor(testCase.target),
       server: { args: [], ...testCase.server, kind: 'stdio' },
+      target: testCase.target,
     })).toEqual({ ...testCase.expected, kind: 'stdio' });
   });
 }
@@ -84,6 +85,7 @@ it('reports the selected adapter capability diagnostic for an unsupported path t
       roots: fixture.roots,
       runtime: runtimeFor(fixture.unsupported.target),
       server: { args: [], ...fixture.unsupported.server, kind: 'stdio' },
+      target: fixture.unsupported.target,
     });
     throw new Error('expected unsupported path token to be rejected');
   } catch (error) {
@@ -106,7 +108,7 @@ it('resolves URL and headers through the same target runtime contract', () => {
   };
   const runtime: TargetMcpRuntimeContract = {
     manifestPath: 'native/servers.json',
-    readModernServer: () => undefined,
+    readModernServer: () => ({ status: 'missing' }),
     resolveStdioArgument: (value) => value,
     resolveValue: (field, valueRoots, value) => ({
       diagnostics: [],
@@ -126,6 +128,7 @@ it('resolves URL and headers through the same target runtime contract', () => {
       kind: 'streamable-http',
       url: 'https://mcp.example.test/$FIELD/$WORKSPACE',
     },
+    target: 'synthetic',
   })).toEqual({
     headers: {
       Authorization: 'Bearer /session/data',
@@ -144,7 +147,7 @@ it('rejects unsupported URL tokens after resolving every remote value', () => {
   };
   const runtime: TargetMcpRuntimeContract = {
     manifestPath: 'native/servers.json',
-    readModernServer: () => undefined,
+    readModernServer: () => ({ status: 'missing' }),
     resolveStdioArgument: (value) => value,
     resolveValue: createMcpPathTokenResolver({
       target: 'synthetic',
@@ -159,7 +162,87 @@ it('rejects unsupported URL tokens after resolving every remote value', () => {
       kind: 'streamable-http',
       url: 'https://mcp.example.test/$DATA',
     },
+    target: 'synthetic',
   })).toThrow('MCP url cannot resolve "$DATA" for selected synthetic adapter.');
+});
+
+it('returns a stable target and field diagnostic when a target value resolver is invalid', () => {
+  const runtime: TargetMcpRuntimeContract = {
+    manifestPath: 'native/servers.json',
+    readModernServer: () => ({ status: 'missing' }),
+    resolveStdioArgument: (value) => value,
+    resolveValue: () => null as never,
+  };
+
+  try {
+    resolveMcpPathTokens({
+      roots: { pluginData: '/data', pluginRoot: '/plugin', workspaceRoot: '/workspace' },
+      runtime,
+      server: { args: ['--fixture'], command: 'runner', kind: 'stdio' },
+      target: 'synthetic',
+    });
+    throw new Error('expected invalid resolver result to be rejected');
+  } catch (error) {
+    expect(error).toBeInstanceOf(DiagnosticError);
+    expect((error as DiagnosticError).diagnostics).toEqual([{
+      code: 'mcp.runtime.resolve-value.args',
+      message: 'MCP target "synthetic" returned an invalid args value resolver result.',
+      severity: 'error',
+      target: 'synthetic',
+    }]);
+  }
+});
+
+it('does not run stdio argument policy when token diagnostics already exist', () => {
+  let stdioArgumentCalls = 0;
+  const runtime: TargetMcpRuntimeContract = {
+    manifestPath: 'native/servers.json',
+    readModernServer: () => ({ status: 'missing' }),
+    resolveStdioArgument: (value) => {
+      stdioArgumentCalls += 1;
+      return value;
+    },
+    resolveValue: createMcpPathTokenResolver({
+      knownTokens: ['$UNSUPPORTED'],
+      target: 'synthetic',
+      tokens: {},
+    }),
+  };
+
+  expect(() => resolveMcpPathTokens({
+    roots: { pluginData: '/data', pluginRoot: '/plugin', workspaceRoot: '/workspace' },
+    runtime,
+    server: { args: ['$UNSUPPORTED'], command: 'runner', kind: 'stdio' },
+    target: 'synthetic',
+  })).toThrow('MCP args cannot resolve "$UNSUPPORTED" for selected synthetic adapter.');
+  expect(stdioArgumentCalls).toBe(0);
+});
+
+it('returns a stable target and field diagnostic when a stdio argument policy is invalid', () => {
+  const runtime: TargetMcpRuntimeContract = {
+    manifestPath: 'native/servers.json',
+    readModernServer: () => ({ status: 'missing' }),
+    resolveStdioArgument: () => undefined as never,
+    resolveValue: (_field, _roots, value) => ({ diagnostics: [], value }),
+  };
+
+  try {
+    resolveMcpPathTokens({
+      roots: { pluginData: '/data', pluginRoot: '/plugin', workspaceRoot: '/workspace' },
+      runtime,
+      server: { args: ['--fixture'], command: 'runner', kind: 'stdio' },
+      target: 'synthetic',
+    });
+    throw new Error('expected invalid stdio policy result to be rejected');
+  } catch (error) {
+    expect(error).toBeInstanceOf(DiagnosticError);
+    expect((error as DiagnosticError).diagnostics).toEqual([{
+      code: 'mcp.runtime.resolve-stdio-argument.args',
+      message: 'MCP target "synthetic" returned an invalid stdio argument resolver result for args.',
+      severity: 'error',
+      target: 'synthetic',
+    }]);
+  }
 });
 
 it('resolves Claude path tokens outside command when launching a generated artifact', async () => {

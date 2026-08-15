@@ -10,6 +10,7 @@ export interface ResolveMcpPathTokensOptions {
   readonly roots: McpRuntimeRoots;
   readonly runtime: TargetMcpRuntimeContract;
   readonly server: ModernMcpServer;
+  readonly target: string;
 }
 
 type McpPathTokenMap = Readonly<Partial<Record<McpRuntimeValueField, Readonly<Record<string, keyof McpRuntimeRoots>>>>>;
@@ -21,6 +22,38 @@ export interface McpPathTokenResolverOptions {
 }
 
 const runtimeFields: readonly McpRuntimeValueField[] = ['args', 'cwd', 'env', 'headers', 'url'];
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  value !== null && typeof value === 'object' && !Array.isArray(value);
+
+const runtimeDiagnostic = (
+  target: string,
+  field: McpRuntimeValueField,
+  operation: 'resolve-value' | 'resolve-stdio-argument',
+): Diagnostic => ({
+  code: `mcp.runtime.${operation}.${field}`,
+  message: operation === 'resolve-value'
+    ? `MCP target ${JSON.stringify(target)} returned an invalid ${field} value resolver result.`
+    : `MCP target ${JSON.stringify(target)} returned an invalid stdio argument resolver result for ${field}.`,
+  severity: 'error',
+  target,
+});
+
+const validDiagnostic = (value: unknown): value is Diagnostic =>
+  isRecord(value) &&
+  typeof value.code === 'string' &&
+  typeof value.message === 'string' &&
+  (value.generatedPath === undefined || typeof value.generatedPath === 'string') &&
+  (value.recovery === undefined || typeof value.recovery === 'string') &&
+  (value.sourcePath === undefined || typeof value.sourcePath === 'string') &&
+  (value.target === undefined || typeof value.target === 'string') &&
+  (value.severity === 'error' || value.severity === 'info' || value.severity === 'warning');
+
+const validValueResolution = (value: unknown): value is { readonly diagnostics: readonly Diagnostic[]; readonly value: string } =>
+  isRecord(value) &&
+  typeof value.value === 'string' &&
+  Array.isArray(value.diagnostics) &&
+  value.diagnostics.every(validDiagnostic);
 
 export const standardMcpPathTokens = Object.freeze([
   '${PLUGIN_ROOT}',
@@ -73,12 +106,34 @@ export const resolveMcpPathTokens = ({
   roots,
   runtime,
   server,
+  target,
 }: ResolveMcpPathTokensOptions): ModernMcpServer => {
   const diagnostics: Diagnostic[] = [];
   const resolveValue = (field: McpRuntimeValueField, value: string): string => {
-    const resolved = runtime.resolveValue(field, roots, value);
+    let resolved: unknown;
+    try {
+      resolved = runtime.resolveValue(field, roots, value);
+    } catch {
+      diagnostics.push(runtimeDiagnostic(target, field, 'resolve-value'));
+      return value;
+    }
+    if (!validValueResolution(resolved)) {
+      diagnostics.push(runtimeDiagnostic(target, field, 'resolve-value'));
+      return value;
+    }
     diagnostics.push(...resolved.diagnostics);
     return resolved.value;
+  };
+
+  const resolveStdioArgument = (value: string): string => {
+    try {
+      const resolved: unknown = runtime.resolveStdioArgument(value, roots);
+      if (typeof resolved === 'string') return resolved;
+    } catch {
+      // Target callbacks are isolated behind a stable diagnostic below.
+    }
+    diagnostics.push(runtimeDiagnostic(target, 'args', 'resolve-stdio-argument'));
+    return value;
   };
 
   if (server.kind === 'streamable-http') {
@@ -94,12 +149,14 @@ export const resolveMcpPathTokens = ({
     };
   }
 
-  const args = server.args.map((value) => runtime.resolveStdioArgument(resolveValue('args', value), roots));
+  const unresolvedArgs = server.args.map((value) => resolveValue('args', value));
   const cwd = server.cwd === undefined ? undefined : resolveValue('cwd', server.cwd);
   const env = server.env === undefined
     ? undefined
     : Object.fromEntries(Object.entries(server.env).map(([key, value]) => [key, resolveValue('env', value)]));
 
+  if (diagnostics.length > 0) throw new DiagnosticError(diagnostics);
+  const args = unresolvedArgs.map(resolveStdioArgument);
   if (diagnostics.length > 0) throw new DiagnosticError(diagnostics);
 
   return {
