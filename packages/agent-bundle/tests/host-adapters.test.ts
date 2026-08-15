@@ -558,9 +558,9 @@ it('filters host components and builds portable, Codex, and Claude target roots'
     await expect(readFile(join(outputRoot, 'claude', '.claude-plugin', 'plugin.json'), 'utf8')).resolves.toContain('review-tools');
     const manifest = JSON.parse(await readFile(join(outputRoot, 'agent-bundle.manifest.json'), 'utf8')) as {
       readonly files: readonly { readonly path: string }[];
-      readonly targets: readonly string[];
+      readonly targets: readonly { readonly name: string }[];
     };
-    expect(manifest.targets).toEqual(['claude', 'codex', 'portable']);
+    expect(manifest.targets.map(({ name }) => name)).toEqual(['claude', 'codex', 'portable']);
     expect(manifest.files.map((file) => file.path)).toEqual(expect.arrayContaining([
       'portable/plugin.json',
       'codex/.codex-plugin/plugin.json',

@@ -41,6 +41,14 @@ interface PackageManifest {
 const execFile = promisify(executeFile);
 const workspaceRoot = process.cwd();
 const packageRoot = join(workspaceRoot, 'packages/agent-bundle');
+let buildPromise: Promise<void> | undefined;
+
+const buildPackage = async (): Promise<void> => {
+  buildPromise ??= execFile('npm', ['run', 'build'], {
+    cwd: workspaceRoot,
+  }).then(() => undefined);
+  await buildPromise;
+};
 
 const readPackageManifest = async (): Promise<PackageManifest> =>
   JSON.parse(
@@ -154,6 +162,8 @@ it('loads every public subpath and reports the package version', async () => {
 });
 
 it('publishes directly executable built entrypoints with declarations', async () => {
+  await buildPackage();
+
   const manifest = await readPackageManifest();
   expect(manifest.engines?.node).toBe('>=22.19.0');
 
@@ -180,6 +190,8 @@ it('publishes directly executable built entrypoints with declarations', async ()
 });
 
 it('writes the package version as the producer of a built CLI manifest', async () => {
+  await buildPackage();
+
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-built-manifest-'));
   const manifest = await readPackageManifest();
   try {
@@ -197,6 +209,8 @@ it('writes the package version as the producer of a built CLI manifest', async (
 });
 
 it('writes the package version as the producer of a packed CLI manifest', async () => {
+  await buildPackage();
+
   const consumerRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-packed-manifest-'));
   const manifest = await readPackageManifest();
   try {
@@ -231,6 +245,8 @@ it('writes the package version as the producer of a packed CLI manifest', async 
 }, 30_000);
 
 it('imports the externalized config entry from a packed npm consumer', async () => {
+  await buildPackage();
+
   const consumerRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-consumer-'));
   try {
     const { stdout: packedOutput } = await execFile(
@@ -362,6 +378,8 @@ it('keeps bundled config extension types in emitted root declarations', async ()
 }, 30_000);
 
 it('invokes a prebuilt MCP server from a clean packed consumer', async () => {
+  await buildPackage();
+
   const consumerRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-mcp-consumer-'));
   try {
     const artifact = join(consumerRoot, 'artifact');

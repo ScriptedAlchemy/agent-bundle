@@ -136,7 +136,7 @@ it('builds a selected target through the built executable from a path containing
       },
     });
     expect(JSON.parse(await readFile(join(project.output, 'agent-bundle.manifest.json'), 'utf8'))).toMatchObject({
-      targets: ['codex', 'portable'],
+      targets: [{ name: 'codex' }, { name: 'portable' }],
     });
   } finally {
     await rm(resolve(project.root, '..'), { force: true, recursive: true });
