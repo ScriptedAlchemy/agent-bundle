@@ -13,7 +13,6 @@ export interface TargetHookContract {
   readonly eventNames: Readonly<Record<CanonicalHookEvent, string>>;
   readonly manifestPath: string;
   readonly matchers: Readonly<Partial<Record<CanonicalHookTool, string>>>;
-  readonly target: string;
   readonly wrapperPath: (hook: NormalizedHook) => string;
   readonly wrapperSource: (entry: TargetHookWrapper) => string;
 }
@@ -70,6 +69,7 @@ const error = (target: string, code: string, message: string): Diagnostic => ({
 });
 
 const matcherFor = (
+  target: string,
   contract: TargetHookContract,
   tools: readonly CanonicalHookTool[],
   hookName: string,
@@ -80,9 +80,9 @@ const matcherFor = (
     const matcher = contract.matchers[tool];
     if (matcher === undefined) {
       diagnostics.push(error(
-        contract.target,
-        `${contract.target}.hook.tool.${tool.replaceAll('.', '-')}`,
-        `${contract.target} cannot map canonical hook tool ${JSON.stringify(tool)} for ${JSON.stringify(hookName)}.`,
+        target,
+        `${target}.hook.tool.${tool.replaceAll('.', '-')}`,
+        `${target} cannot map canonical hook tool ${JSON.stringify(tool)} for ${JSON.stringify(hookName)}.`,
       ));
       continue;
     }
@@ -94,11 +94,12 @@ const matcherFor = (
 
 export const planHooks = (
   model: NormalizedPlugin,
+  target: string,
   contract: TargetHookContract,
 ): HookPlan => {
   const diagnostics: Diagnostic[] = [];
   const selected = model.hooks
-    .filter((hook) => hook.targets.includes(contract.target))
+    .filter((hook) => hook.targets.includes(target))
     .slice()
     .sort((left, right) => {
       const eventComparison = (eventIndex.get(left.event) ?? 0) - (eventIndex.get(right.event) ?? 0);
@@ -112,8 +113,17 @@ export const planHooks = (
   const hookEntries: TargetHookEntry[] = [];
   for (const hook of selected) {
     const nativeEvent = contract.eventNames[hook.event];
-    const matcher = matcherFor(contract, hook.tools, hook.name, diagnostics);
-    if (diagnostics.length > 0) continue;
+    if (typeof nativeEvent !== 'string' || nativeEvent.trim().length === 0) {
+      diagnostics.push(error(
+        target,
+        `${target}.hook.event.${hook.event.replaceAll(/[A-Z]/gu, (letter) => `-${letter.toLowerCase()}`)}`,
+        `${target} cannot map canonical hook event ${JSON.stringify(hook.event)}.`,
+      ));
+      continue;
+    }
+    const diagnosticCount = diagnostics.length;
+    const matcher = matcherFor(target, contract, hook.tools, hook.name, diagnostics);
+    if (diagnostics.length > diagnosticCount) continue;
     const relativePath = contract.wrapperPath(hook);
     const command = `node "${contract.commandRoot}/${relativePath}"`;
     const hookCommand = {
@@ -126,7 +136,7 @@ export const planHooks = (
       ...(matcher === undefined ? {} : { matcher }),
     };
     (groups[nativeEvent] ??= []).push(group);
-    const wrapper: TargetHookWrapper = { event: hook.event, hook, nativeEvent, relativePath, target: contract.target };
+    const wrapper: TargetHookWrapper = { event: hook.event, hook, nativeEvent, relativePath, target };
     hookEntries.push({ ...wrapper, virtualSource: contract.wrapperSource(wrapper) });
   }
 

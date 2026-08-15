@@ -48,7 +48,6 @@ const hookContract = Object.freeze({
   eventNames: capabilityTable.hooks.events,
   manifestPath: 'hooks/hooks.json',
   matchers: capabilityTable.hooks.matchers,
-  target: claudeName,
   wrapperPath: (hook: NormalizedPlugin['hooks'][number]) => `hooks/${hook.name}.mjs`,
   wrapperSource: (entry) => nativeHookWrapperSource(entry, 'Claude'),
 } satisfies TargetHookContract);
@@ -176,7 +175,7 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
   }
   const mcp = Object.keys(servers).length === 0 ? undefined : { mcpServers: servers };
   if (mcp !== undefined) diagnostics.push(...schemaDiagnostics('mcp', validateMcp(mcp), validateMcp.errors));
-  const generatedHooks = planHooks(model, hookContract);
+  const generatedHooks = planHooks(model, claudeName, hookContract);
   diagnostics.push(...generatedHooks.diagnostics);
   if (generatedHooks.document !== undefined) {
     diagnostics.push(...schemaDiagnostics('hooks', validateHooks(generatedHooks.document), validateHooks.errors));

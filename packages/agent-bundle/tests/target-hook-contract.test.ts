@@ -8,7 +8,7 @@ import { expect, it } from '@rstest/core';
 import { planHooks, type TargetHookContract } from '../src/adapters/hook-contract.ts';
 import { TargetRegistry } from '../src/adapters/registry.ts';
 import type { TargetAdapter } from '../src/adapters/types.ts';
-import type { NormalizedPlugin } from '../src/core/types.ts';
+import type { NormalizedHook, NormalizedPlugin } from '../src/core/types.ts';
 import { build } from './support/build.ts';
 
 const metadata = Object.freeze({
@@ -17,6 +17,38 @@ const metadata = Object.freeze({
   capabilitySha256: '0'.repeat(64),
   observedVersion: 'test',
   schemas: Object.freeze([]),
+});
+
+const planningModel = (hooks: readonly NormalizedHook[]): NormalizedPlugin => ({
+  extensions: {},
+  hooks,
+  mcpServers: [],
+  metadata: {
+    id: 'plugin:synthetic',
+    name: 'synthetic',
+    provenance: { kind: 'config', sourcePath: '/workspace/agent-bundle.config.ts' },
+    version: '1.0.0',
+  },
+  scripts: [],
+  skills: [],
+  targets: [{
+    id: 'target:synthetic',
+    name: 'synthetic',
+    provenance: { kind: 'config', sourcePath: '/workspace/agent-bundle.config.ts' },
+  }],
+});
+
+const planningHook = (
+  event: NormalizedHook['event'],
+  tools: NormalizedHook['tools'],
+): NormalizedHook => ({
+  event,
+  id: `hook:${event}`,
+  name: event,
+  provenance: { kind: 'config', sourcePath: '/workspace/agent-bundle.config.ts' },
+  source: `/workspace/src/${event}.ts`,
+  targets: ['synthetic'],
+  tools,
 });
 
 const runWrapper = async (wrapper: string): Promise<string> =>
@@ -75,7 +107,6 @@ it('builds adapter-owned native hook event, layout, and wrapper source', async (
     },
     manifestPath: 'native-events/registration.json',
     matchers: { 'file.write': '^SyntheticWrite$' },
-    target: 'synthetic',
     wrapperPath: (selectedHook) => `runtime/native/${selectedHook.name}.mjs`,
     wrapperSource: (entry) => [
       `import handler from ${JSON.stringify(entry.hook.source)};`,
@@ -84,12 +115,13 @@ it('builds adapter-owned native hook event, layout, and wrapper source', async (
       '',
     ].join('\n'),
   } satisfies TargetHookContract;
+  const staleTargetContract = { ...contract, target: 'contract-target' };
   const adapter: TargetAdapter = {
     capabilities: { hooks: true },
     metadata,
     name: 'synthetic',
     plan: (selectedModel) => {
-      const generated = planHooks(selectedModel, contract);
+      const generated = planHooks(selectedModel, 'synthetic', staleTargetContract);
       return {
         diagnostics: generated.diagnostics,
         entries: generated.document === undefined ? [] : [{
@@ -112,13 +144,14 @@ it('builds adapter-owned native hook event, layout, and wrapper source', async (
       writeFile(source, 'export default ({ nativeEvent }) => ({ nativeEvent });\n'),
     ]);
 
-    await build({
+    const result = await build({
       model,
       outputRoot,
       projectRoot: root,
       registry: new TargetRegistry().register(adapter, { default: true }),
     });
 
+    expect(result.compiledHooks[0]).toMatchObject({ target: 'synthetic' });
     const wrapper = join(outputRoot, 'synthetic', 'runtime', 'native', 'synthetic-before-tool.mjs');
     await expect(readFile(wrapper, 'utf8')).resolves.toContain('synthetic-wrapper-marker');
     await expect(runWrapper(wrapper)).resolves.toBe('synthetic-wrapper-marker:{"nativeEvent":"SyntheticBeforeWrite"}');
@@ -137,4 +170,72 @@ it('builds adapter-owned native hook event, layout, and wrapper source', async (
   } finally {
     await rm(root, { force: true, recursive: true });
   }
+});
+
+it('rejects missing and blank native event mappings before creating hook entries', () => {
+  const missingEventMapping = {
+    afterTool: 'SyntheticAfterTool',
+    beforeTool: 'SyntheticBeforeTool',
+    sessionStart: 'SyntheticSessionStart',
+    stop: 'SyntheticStop',
+  } satisfies TargetHookContract['eventNames'];
+  Reflect.deleteProperty(missingEventMapping, 'beforeTool');
+  const eventMappings = [
+    missingEventMapping,
+    {
+      afterTool: 'SyntheticAfterTool',
+      beforeTool: '',
+      sessionStart: 'SyntheticSessionStart',
+      stop: 'SyntheticStop',
+    },
+  ];
+
+  for (const eventNames of eventMappings) {
+    const plan = planHooks(planningModel([planningHook('beforeTool', [])]), 'synthetic', {
+      commandRoot: '${SYNTHETIC_PLUGIN_ROOT}',
+      eventNames,
+      manifestPath: 'native-events/registration.json',
+      matchers: {},
+      wrapperPath: (hook) => `hooks/${hook.name}.mjs`,
+      wrapperSource: () => 'export default undefined;\n',
+    });
+
+    expect(plan.diagnostics).toEqual([{
+      code: 'synthetic.hook.event.before-tool',
+      message: 'synthetic cannot map canonical hook event "beforeTool".',
+      severity: 'error',
+      target: 'synthetic',
+    }]);
+    expect(plan.document).toBeUndefined();
+    expect(plan.hookEntries).toEqual([]);
+  }
+});
+
+it('continues planning valid hooks after a prior hook mapping error', () => {
+  const plan = planHooks(planningModel([
+    planningHook('beforeTool', ['shell']),
+    planningHook('afterTool', []),
+  ]), 'synthetic', {
+    commandRoot: '${SYNTHETIC_PLUGIN_ROOT}',
+    eventNames: {
+      afterTool: 'SyntheticAfterTool',
+      beforeTool: 'SyntheticBeforeTool',
+      sessionStart: 'SyntheticSessionStart',
+      stop: 'SyntheticStop',
+    },
+    manifestPath: 'native-events/registration.json',
+    matchers: {},
+    wrapperPath: (hook) => `hooks/${hook.name}.mjs`,
+    wrapperSource: () => 'export default undefined;\n',
+  });
+
+  expect(plan.diagnostics.map((diagnostic) => diagnostic.code)).toEqual(['synthetic.hook.tool.shell']);
+  expect(plan.document).toEqual({
+    hooks: {
+      SyntheticAfterTool: [{
+        hooks: [{ command: 'node "${SYNTHETIC_PLUGIN_ROOT}/hooks/afterTool.mjs"', type: 'command' }],
+      }],
+    },
+  });
+  expect(plan.hookEntries.map((entry) => entry.event)).toEqual(['afterTool']);
 });
