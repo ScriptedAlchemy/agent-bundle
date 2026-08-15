@@ -8,6 +8,7 @@ import {
   createMcpPageActionTracker,
   createMcpPageActionSession,
   mcpConfigDownload,
+  mcpPageControllerReplacementState,
   mcpPageSessionControls,
   type McpPageController,
 } from '../src/mcp/mcp-page.tsx';
@@ -156,6 +157,30 @@ describe('MCP page', () => {
     expect(actions.finish(oldOpen!)).toBeUndefined();
     expect(actions.pending).toEqual(['open']);
     expect(actions.isCurrent(newOpen!)).toBe(true);
+    expect(mcpPageSessionControls('idle', actions.pending, false)).toMatchObject({ close: true, open: false });
+  });
+
+  it('clears existing transient error state when the parent injects a replacement controller', () => {
+    const replacement = mcpPageControllerReplacementState();
+
+    expect(replacement.actionError).toBeUndefined();
+    expect(replacement.cancelledRequests).toEqual([]);
+    expect(replacement.pendingActions).toEqual([]);
+  });
+
+  it('rejects a delayed old rejection after synchronous controller-generation replacement', () => {
+    const actions = createMcpPageActionSession();
+    const oldOpen = actions.start('open')!;
+    let actionError: string | undefined;
+
+    actions.reset();
+    const replacementOpen = actions.start('open')!;
+    if (actions.isCurrent(oldOpen)) actionError = 'old open rejected';
+
+    expect(actionError).toBeUndefined();
+    expect(actions.finish(oldOpen)).toBeUndefined();
+    expect(actions.pending).toEqual(['open']);
+    expect(actions.isCurrent(replacementOpen)).toBe(true);
     expect(mcpPageSessionControls('idle', actions.pending, false)).toMatchObject({ close: true, open: false });
   });
 });

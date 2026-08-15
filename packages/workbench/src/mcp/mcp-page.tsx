@@ -55,6 +55,12 @@ export interface McpPageSessionControls {
   readonly restart: boolean;
 }
 
+export interface McpPageControllerReplacementState {
+  readonly actionError: undefined;
+  readonly cancelledRequests: readonly string[];
+  readonly pendingActions: readonly string[];
+}
+
 export interface McpPageActionRun {
   readonly action: string;
   readonly generation: number;
@@ -120,6 +126,12 @@ export const createMcpPageActionSession = (): McpPageActionSession => {
     },
   };
 };
+
+export const mcpPageControllerReplacementState = (): McpPageControllerReplacementState => ({
+  actionError: undefined,
+  cancelledRequests: [],
+  pendingActions: [],
+});
 
 export const mcpPageSessionControls = (
   phase: McpBrowserSessionModel['phase'],
@@ -211,14 +223,20 @@ export const McpPage = ({ controller, epochOptions, initialBinding, onDownloadCo
   const [pendingActions, setPendingActions] = useState<readonly string[]>([]);
   const [traceTab, setTraceTab] = useState<TraceTab>('raw');
   const actionSession = useRef(createMcpPageActionSession());
+  const controllerIdentity = useRef(controller);
   const requestNumber = useRef(0);
   const traceTabsByName = useRef<Partial<Record<TraceTab, HTMLButtonElement | null>>>({});
 
-  useEffect(() => {
-    setPendingActions(actionSession.current.reset());
-    setCancelledRequests([]);
-    return controller.subscribe(setModel);
-  }, [controller]);
+  if (controllerIdentity.current !== controller) {
+    controllerIdentity.current = controller;
+    actionSession.current.reset();
+    const replacement = mcpPageControllerReplacementState();
+    if (actionError !== replacement.actionError) setActionError(replacement.actionError);
+    if (cancelledRequests.length > 0) setCancelledRequests(replacement.cancelledRequests);
+    if (pendingActions.length > 0) setPendingActions(replacement.pendingActions);
+  }
+
+  useEffect(() => controller.subscribe(setModel), [controller]);
   useEffect(() => {
     setCancelledRequests((current) => current.filter((id) => Object.hasOwn(model.activeRequests, id)));
   }, [model.activeRequests]);
