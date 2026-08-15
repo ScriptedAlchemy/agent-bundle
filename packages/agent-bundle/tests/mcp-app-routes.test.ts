@@ -49,10 +49,11 @@ class RecordingPreviewService implements McpAppRoutePreviewService {
   });
   readonly outbound: unknown[] = [];
   blockFirstReceive = false;
+  previewAvailable = true;
   #releaseFirstReceive: (() => void) | undefined;
 
   get(bindingId: string) {
-    return bindingId === this.preview.binding.id ? this.preview : undefined;
+    return this.previewAvailable && bindingId === this.preview.binding.id ? this.preview : undefined;
   }
 
   async create(options: Parameters<McpAppRoutePreviewService['create']>[0]) {
@@ -70,6 +71,7 @@ class RecordingPreviewService implements McpAppRoutePreviewService {
     }
     if (this.bridge.lifecycle === 'closing' && (action as { readonly id?: unknown }).id === 'close-a') {
       this.bridge.lifecycle = 'closed';
+      this.previewAvailable = false;
       return true;
     }
     this.bridge.lifecycle = 'initialized';
@@ -89,7 +91,7 @@ class RecordingPreviewService implements McpAppRoutePreviewService {
   async close(bindingId: string, options: { readonly id: string | number | null; readonly reason?: string }): Promise<boolean> {
     this.calls.push({ bindingId, kind: 'close', options });
     this.bridge.lifecycle = 'closing';
-    return new Promise<boolean>(() => undefined);
+    return true;
   }
 
   async forceClose(bindingId: string): Promise<boolean> {
@@ -380,6 +382,15 @@ it('keeps the App acknowledgement route claimed while graceful teardown is pendi
       options: { id: 'close-a', reason: 'pane closed' },
     });
 
+    const duplicateClose = await fetch(`${started.url}/api/mcp/apps/binding-a/close`, {
+      body: JSON.stringify({ id: 'close-b' }),
+      headers: { ...headers(), 'content-type': 'application/json' },
+      method: 'POST',
+    });
+    expect(duplicateClose.status).toBe(200);
+    await expect(duplicateClose.json()).resolves.toEqual({ actions: [], lifecycle: 'closing' });
+    expect(started.service.calls.filter((call) => (call as { readonly kind?: string }).kind === 'close')).toHaveLength(1);
+
     const acknowledgement = await fetch(`${started.url}/api/mcp/apps/binding-a/messages`, {
       body: JSON.stringify({ message: { id: 'close-a', jsonrpc: '2.0', result: {} } }),
       headers: { ...headers(), 'content-type': 'application/json' },
@@ -392,6 +403,16 @@ it('keeps the App acknowledgement route claimed while graceful teardown is pendi
       lifecycle: 'closed',
       messages: [],
     });
+
+    const duplicateAcknowledgement = await fetch(`${started.url}/api/mcp/apps/binding-a/messages`, {
+      body: JSON.stringify({ message: { id: 'close-a', jsonrpc: '2.0', result: {} } }),
+      headers: { ...headers(), 'content-type': 'application/json' },
+      method: 'POST',
+    });
+    expect(duplicateAcknowledgement.status).toBe(404);
+    await expect(duplicateAcknowledgement.json()).resolves.toEqual({
+      diagnostic: { code: 'AB8022', message: 'MCP App preview is not available.' },
+    });
   } finally {
     await started.close();
   }
@@ -400,6 +421,8 @@ it('keeps the App acknowledgement route claimed while graceful teardown is pendi
 it('force closes an App preview on DELETE', async () => {
   const started = await startRoutes();
   try {
+    started.service.previewAvailable = false;
+    started.service.bridge.lifecycle = 'closing';
     const closed = await fetch(`${started.url}/api/mcp/apps/binding-a`, {
       headers: headers(),
       method: 'DELETE',

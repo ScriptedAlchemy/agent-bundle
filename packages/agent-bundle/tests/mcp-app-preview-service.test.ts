@@ -416,7 +416,7 @@ it('does not publish a fallback when the leased binding closes during a resource
   expect(service.get(binding.id)).toBeUndefined();
 });
 
-it('drains every preview and reports all release failures together', async () => {
+it('reports release failures together while retaining the failed preview for retry', async () => {
   let closes = 0;
   const service = serviceFor(authorityFor({
     closeBinding: async () => {
@@ -430,7 +430,7 @@ it('drains every preview and reports all release failures together', async () =>
   const secondClose = service.closeAll();
   await expect(firstClose).rejects.toThrow('MCP App preview shutdown failed.');
   await expect(secondClose).rejects.toThrow('MCP App preview shutdown failed.');
-  expect(service.get(binding.id)).toBeUndefined();
+  expect(service.get(binding.id)).toBeDefined();
   expect(closes).toBe(1);
 });
 
@@ -560,15 +560,59 @@ it('keeps a graceful close routable until its resource-teardown acknowledgment r
 
   expect(await service.close(binding.id, { id: 'teardown-weather' })).toBe(true);
   expect(service.get(binding.id)).toBe(preview);
-  expect(await service.takeOutbound(binding.id)).toMatchObject([{
-    id: 'teardown-weather',
-    jsonrpc: '2.0',
-    method: 'ui/resource-teardown',
-  }]);
+  expect(await service.takeOutbound(binding.id)).toEqual([]);
   expect(await service.receive(binding.id, { id: 'teardown-weather', jsonrpc: '2.0', result: {} })).toBe(true);
   await new Promise<void>((resolve) => setTimeout(resolve, 0));
 
   expect(closes).toBe(1);
+  expect(service.get(binding.id)).toBeUndefined();
+});
+
+it('keeps a timed out graceful close retryable for an authoritative force close', async () => {
+  let closes = 0;
+  const service = serviceFor(authorityFor({
+    closeBinding: async () => {
+      closes += 1;
+      return true;
+    },
+  }), { closeTimeoutMs: 20 });
+  const preview = await createPreview(service);
+  await service.receive(binding.id, initialize);
+  await service.takeOutbound(binding.id);
+  await service.receive(binding.id, initialized);
+  await service.takeOutbound(binding.id);
+
+  expect(await service.close(binding.id, { id: 'teardown-timeout' })).toBe(true);
+  await new Promise<void>((resolve) => setTimeout(resolve, 40));
+
+  expect(service.get(binding.id)).toBe(preview);
+  await expect(service.forceClose(binding.id)).resolves.toBe(true);
+  expect(closes).toBe(1);
+  expect(service.get(binding.id)).toBeUndefined();
+});
+
+it('keeps a rejected graceful release retryable for an authoritative force close', async () => {
+  let closes = 0;
+  const service = serviceFor(authorityFor({
+    closeBinding: async () => {
+      closes += 1;
+      return closes > 1;
+    },
+  }));
+  const preview = await createPreview(service);
+  await service.receive(binding.id, initialize);
+  await service.takeOutbound(binding.id);
+  await service.receive(binding.id, initialized);
+  await service.takeOutbound(binding.id);
+
+  expect(await service.close(binding.id, { id: 'teardown-release-failure' })).toBe(true);
+  expect(await service.receive(binding.id, { id: 'teardown-release-failure', jsonrpc: '2.0', result: {} })).toBe(true);
+  await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+  expect(closes).toBe(1);
+  expect(service.get(binding.id)).toBe(preview);
+  await expect(service.forceClose(binding.id)).resolves.toBe(true);
+  expect(closes).toBe(2);
   expect(service.get(binding.id)).toBeUndefined();
 });
 
