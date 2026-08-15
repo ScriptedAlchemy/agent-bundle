@@ -112,7 +112,6 @@ const serviceFor = (bindingAuthority: McpAppPreviewBindingAuthority, options: {
 });
 
 const createPreview = (service: McpAppPreviewService) => service.create({
-  consent: { permissions: { geolocation: {} } },
   host,
   input: originalInput,
   previewProfile: 'portable',
@@ -184,7 +183,6 @@ it('creates one canonical Apps preview from its leased binding resource', async 
   });
 
   const preview = await service.create({
-    consent: { permissions: { geolocation: {} } },
     host,
     input: originalInput,
     previewProfile: 'portable',
@@ -205,7 +203,7 @@ it('creates one canonical Apps preview from its leased binding resource', async 
   expect(preview.binding).toBe(binding);
   expect(preview.profile).toMatchObject({
     kind: 'apps',
-    permissions: { geolocation: {} },
+    permissions: {},
     resourceUri: 'ui://weather/forecast.html',
   });
   expect(preview.resource).toEqual({
@@ -215,7 +213,7 @@ it('creates one canonical Apps preview from its leased binding resource', async 
     permissions: { geolocation: {} },
   });
   expect(preview.frame).toMatchObject({
-    allow: 'geolocation',
+    allow: '',
     sandbox: 'allow-scripts allow-same-origin',
     targetOrigin: 'http://127.0.0.1:43124',
   });
@@ -228,7 +226,6 @@ it('replaces browser toolInfo with the canonical leased tool definition', async 
     toolInfo: { tool: { inputSchema: { type: 'object' }, name: 'browser-forged-tool' } },
   };
   await service.create({
-    consent: { permissions: { geolocation: {} } },
     host: forgedHost,
     input: originalInput,
     previewProfile: 'portable',
@@ -368,8 +365,6 @@ it('rejects legacy-only resource metadata before it can create a preview', async
 it('preserves input-result FIFO order across one bounded outbound slot', async () => {
   const service = serviceFor(authorityFor(), { maxOutboundMessages: 1 });
   const preview = await createPreview(service);
-
-  expect(preview.consent).toBeDefined();
 
   expect(await service.receive(binding.id, initialize)).toBe(true);
   expect((await service.takeOutbound(binding.id)).map((message) => message.id)).toEqual(['initialize-weather']);

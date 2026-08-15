@@ -126,8 +126,8 @@ it('fails closed for unsafe CSP sources and freezes document grants into a revis
 
 it('rejects every noncanonical, local, and special CSP authority before the proxy receives it', () => {
   const rejected = [
-    '*', 'https://127.0.0.2', 'https://169.254.1.1', 'https://0.0.0.0',
-    'https://[::1]', 'https://[fc00::1]', 'https://api.localhost',
+    '*', 'https://*.weather.example', 'https://127.0.0.2', 'https://169.254.1.1', 'https://0.0.0.0',
+    'https://[::1]', 'https://[fc00::1]', 'https://[2001:db8::1]', 'https://api.localhost',
     'https://user:secret@api.example', 'https://api.example/path', 'https://api.example?query=1',
   ];
   const policy = deriveMcpAppSandboxPolicy({
@@ -136,7 +136,8 @@ it('rejects every noncanonical, local, and special CSP authority before the prox
   expect(policy.contentSecurityPolicy).toContain('connect-src https://api.example');
   expect(policy.warnings).toEqual([
     { code: 'csp-wildcard-rejected', value: '*' },
-    ...rejected.slice(1).map((value) => ({ code: 'csp-source-rejected' as const, value })),
+    { code: 'csp-wildcard-rejected', value: 'https://*.weather.example' },
+    ...rejected.slice(2).map((value) => ({ code: 'csp-source-rejected' as const, value })),
   ]);
 });
 
@@ -205,7 +206,7 @@ it('enforces the JSON-RPC proxy lifecycle and holds host traffic until initializ
   expect(sent).toEqual([{
     message: rpcNotification('ui/notifications/sandbox-resource-ready', {
       allow: 'camera',
-      contentSecurityPolicy: "default-src 'none'; base-uri 'self'; connect-src http://127.0.0.1:43124; frame-src 'none'; img-src data:; media-src 'none'; font-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'",
+      contentSecurityPolicy: "default-src 'none'; base-uri 'self'; connect-src 'none'; frame-src 'none'; img-src data:; media-src 'none'; font-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'",
       html: '<p>Hello</p>',
       sandbox: 'allow-scripts',
     }),

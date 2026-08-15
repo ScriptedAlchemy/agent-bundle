@@ -29,7 +29,8 @@ import {
   createMcpAppConsentAuthority,
   createMcpAppSandboxFrame,
   type McpAppConsentAuthority,
-  type McpAppSandboxConsent,
+  type McpAppConsentChallenge,
+  type McpAppConsentGrant,
   type McpAppSandboxEndpoint,
   type McpAppSandboxFrame,
   type McpAppSandboxPermissions,
@@ -53,7 +54,6 @@ export interface McpAppPreviewToolAuthority {
 export type McpAppPreviewHostContext = Omit<McpAppHostContextInput, 'toolInfo'>;
 
 export interface CreateMcpAppPreviewOptions {
-  readonly consent?: McpAppSandboxConsent;
   readonly host: McpAppPreviewHostContext;
   readonly input: McpAppJsonValue;
   readonly previewProfile: McpAppPreviewProfile;
@@ -65,8 +65,6 @@ export interface CreateMcpAppPreviewOptions {
 export interface McpAppPreview {
   readonly binding: McpAppBinding;
   readonly bridge: McpAppBridge;
-  /** Server-only authority; never serialize this object into App data. */
-  readonly consent: McpAppConsentAuthority;
   readonly frame?: McpAppSandboxFrame;
   readonly profile: McpAppHostProfileResolution;
   readonly resource: McpAppBridgeResourceResolution;
@@ -92,6 +90,7 @@ export interface McpAppPreviewServiceOptions {
 interface PreviewEntry {
   readonly binding: McpAppBinding;
   readonly bridge: McpAppBridge;
+  readonly consent: McpAppConsentAuthority;
   preview?: McpAppPreview;
   readonly outbound: McpAppBridgeMessage[];
   pendingTeardown?: McpAppBridgeMessage;
@@ -217,6 +216,16 @@ export class McpAppPreviewService {
     return this.#entries.get(bindingId)?.preview;
   }
 
+  consentChallenges(bindingId: string): readonly McpAppConsentChallenge[] | undefined {
+    const entry = this.#entries.get(bindingId);
+    return entry === undefined || entry.closed ? undefined : entry.consent.pending();
+  }
+
+  decideConsent(bindingId: string, challengeId: string, approved: boolean): McpAppConsentGrant | undefined {
+    const entry = this.#entries.get(bindingId);
+    return entry === undefined || entry.closed ? undefined : entry.consent.grant(challengeId, approved);
+  }
+
   async create(options: CreateMcpAppPreviewOptions): Promise<McpAppPreview> {
     if (this.#closing) throw new Error('MCP App preview service is closed.');
     const control = createControl();
@@ -279,6 +288,7 @@ export class McpAppPreviewService {
         actionCount: 0,
         binding,
         bridge,
+        consent: consentAuthority,
         closing: false,
         closed: false,
         outbound,
@@ -293,7 +303,7 @@ export class McpAppPreviewService {
       const resource = await bridge.loadResource();
       this.#assertCreateAvailable(control);
       const profile = resolveMcpAppHostProfile({
-        consentedCapabilities: capabilitiesOf(options.consent?.permissions),
+        consentedCapabilities: [],
         declaredCapabilities: capabilitiesOf(resource.kind === 'resource' ? resource.permissions : undefined),
         host,
         profile: options.previewProfile,
@@ -301,13 +311,13 @@ export class McpAppPreviewService {
       });
       const frame = resource.kind === 'resource' && profile.kind === 'apps'
         ? createMcpAppSandboxFrame({
-          consent: options.consent,
+          consent: Object.freeze({}),
           declaration: { csp: resource.csp, permissions: resource.permissions },
           hostOrigin: this.#hostOrigin,
           proxy: this.#sandboxProxy,
         })
         : undefined;
-      const preview = Object.freeze({ binding, bridge, consent: consentAuthority, ...(frame === undefined ? {} : { frame }), profile, resource });
+      const preview = Object.freeze({ binding, bridge, ...(frame === undefined ? {} : { frame }), profile, resource });
       this.#assertCreateAvailable(control);
       entry.preview = preview;
       return preview;

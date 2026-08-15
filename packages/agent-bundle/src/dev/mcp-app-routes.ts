@@ -4,7 +4,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { McpAppJsonValue, McpAppPreviewProfile } from './mcp-app-binding-service.ts';
 import type { McpAppBridgeCloseOptions, McpAppBridgeJsonRecord, McpAppBridgeLifecycle } from './mcp-app-bridge.ts';
 import type { McpAppPreviewCloseResult, McpAppPreviewHostContext } from './mcp-app-preview-service.ts';
-import type { McpAppSandboxConsent } from './mcp-app-sandbox.ts';
+import type { McpAppConsentChallenge, McpAppConsentGrant } from './mcp-app-sandbox.ts';
 
 const bodyLimit = 64 * 1024;
 
@@ -21,7 +21,7 @@ interface CreateRoute {
 
 interface BindingRoute {
   readonly bindingId: string;
-  readonly kind: 'messages' | 'host-context' | 'close' | 'force-close';
+  readonly kind: 'messages' | 'host-context' | 'close' | 'force-close' | 'consent';
 }
 
 type Route = CreateRoute | BindingRoute;
@@ -42,7 +42,6 @@ export interface McpAppRoutePreview {
 export interface McpAppRoutePreviewService {
   close(bindingId: string, options: McpAppBridgeCloseOptions): Promise<McpAppPreviewCloseResult>;
   create(options: {
-    readonly consent?: McpAppSandboxConsent;
     readonly host: McpAppPreviewHostContext;
     readonly input: McpAppJsonValue;
     readonly previewProfile: McpAppPreviewProfile;
@@ -50,6 +49,8 @@ export interface McpAppRoutePreviewService {
     readonly sessionId: string;
     readonly toolName: string;
   }): Promise<McpAppRoutePreview>;
+  consentChallenges?(bindingId: string): readonly McpAppConsentChallenge[] | undefined;
+  decideConsent?(bindingId: string, challengeId: string, approved: boolean): McpAppConsentGrant | undefined;
   forceClose(bindingId: string): Promise<boolean>;
   get(bindingId: string): McpAppRoutePreview | undefined;
   receive(bindingId: string, action: unknown): Promise<boolean>;
@@ -163,7 +164,7 @@ const route = (requestTarget: string | undefined): Route | undefined => {
   if (parts.length !== 6) throw requestError(diagnostic('AB8020', 'MCP App route path is not valid.', 400));
   const bindingId = opaqueSegment(parts[4]!);
   const kind = parts[5];
-  if (kind === 'messages' || kind === 'host-context' || kind === 'close') return Object.freeze({ bindingId, kind });
+  if (kind === 'messages' || kind === 'host-context' || kind === 'close' || kind === 'consent') return Object.freeze({ bindingId, kind });
   if (kind === undefined || kind.length === 0) throw requestError(diagnostic('AB8020', 'MCP App route path is not valid.', 400));
   throw requestError(diagnostic('AB8020', 'MCP App route path is not valid.', 400));
 };
@@ -263,25 +264,12 @@ const hostContext = (value: unknown): McpAppPreviewHostContext => {
   });
 };
 
-const consent = (value: unknown): McpAppSandboxConsent | undefined => {
-  if (value === undefined) return undefined;
-  const record = exactRecord(value, ['permissions']);
-  if (record === undefined) return invalidShape();
-  if (record.permissions === undefined) return Object.freeze({});
-  const permissions = exactRecord(record.permissions, ['camera', 'clipboardWrite', 'geolocation', 'microphone']);
-  if (permissions === undefined || Object.values(permissions).some((permission) => !isRecord(permission) || Object.keys(permission).length > 0)) {
-    return invalidShape();
-  }
-  return Object.freeze({ permissions: Object.freeze({ ...permissions }) });
-};
-
 const createRequest = (value: JsonObject, sessionId: string): Parameters<McpAppRoutePreviewService['create']>[0] => {
   if (!hasOnly(value, ['consent', 'host', 'input', 'previewProfile', 'result', 'toolName']) || !nonemptyString(value.toolName)
     || !isJsonValue(value.input) || !isJsonValue(value.result) || (value.previewProfile !== 'portable' && value.previewProfile !== 'chatgpt' && value.previewProfile !== 'claude')) {
     return invalidShape();
   }
   return Object.freeze({
-    ...(value.consent === undefined ? {} : { consent: consent(value.consent) }),
     host: hostContext(value.host),
     input: cloneJson(value.input),
     previewProfile: value.previewProfile,
@@ -302,6 +290,11 @@ const closeRequest = (value: JsonObject): McpAppBridgeCloseOptions => {
   if (id !== null && (typeof id !== 'number' || !Number.isFinite(id)) && !nonemptyString(id)) return invalidShape();
   if (value.reason !== undefined && !nonemptyString(value.reason)) return invalidShape();
   return Object.freeze({ ...(value.reason === undefined ? {} : { reason: value.reason }), id: id as JsonRequestId });
+};
+
+const consentDecision = (value: JsonObject): Readonly<{ approved: boolean; challengeId: string }> => {
+  if (!hasOnly(value, ['approved', 'challengeId']) || typeof value.approved !== 'boolean' || !nonemptyString(value.challengeId)) return invalidShape();
+  return Object.freeze({ approved: value.approved, challengeId: value.challengeId });
 };
 
 const previewSnapshot = (preview: McpAppRoutePreview): Readonly<Record<string, unknown>> => Object.freeze({
@@ -379,6 +372,18 @@ export class McpAppRoutes {
       this.#tails.delete(parsed.bindingId);
       this.#teardowns.delete(parsed.bindingId);
       return responseJson(response, { closed: true, lifecycle: 'closed' });
+    }
+    if (parsed.kind === 'consent') {
+      const preview = this.#preview(service, parsed.bindingId);
+      if (method === 'GET') {
+        const challenges = service.consentChallenges?.(parsed.bindingId);
+        if (challenges === undefined) this.#unavailable();
+        return responseJson(response, { challenges, lifecycle: preview.bridge.lifecycle });
+      }
+      if (method !== 'POST') return responseDiagnostic(response, diagnostic('AB8007', 'Route does not accept this method.', 405));
+      const decision = consentDecision(await jsonBody(request));
+      const grant = service.decideConsent?.(parsed.bindingId, decision.challengeId, decision.approved);
+      return responseJson(response, { approved: grant !== undefined, lifecycle: preview.bridge.lifecycle });
     }
     if (method !== 'POST') return responseDiagnostic(response, diagnostic('AB8007', 'Route does not accept this method.', 405));
     if (parsed.kind === 'close') {

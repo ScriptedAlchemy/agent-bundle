@@ -174,6 +174,7 @@ export interface McpAppConsentAuthority {
     readonly profile: string;
   }>): boolean;
   grant(challengeId: string, approved: boolean): McpAppConsentGrant | undefined;
+  pending(): readonly McpAppConsentChallenge[];
 }
 
 export interface McpAppSandboxWarning {
@@ -324,6 +325,15 @@ export const createMcpAppConsentAuthority = (options: Readonly<{ readonly now?: 
       }));
       return Object.freeze({ authorizationId, bindingId: challenge.bindingId, capability: challenge.capability, challengeId, scope: consentScope(challenge.capability) });
     },
+    pending() {
+      const instant = now();
+      for (const [id, challenge] of challenges) if (challenge.expiresAt < instant) challenges.delete(id);
+      return Object.freeze([...challenges.entries()].map(([id, challenge]) => Object.freeze({
+        expiresAt: challenge.expiresAt,
+        id,
+        request: Object.freeze({ capability: challenge.capability, details: challenge.details, scope: consentScope(challenge.capability), summary: consentSummary(challenge.capability) }),
+      })));
+    },
   });
 };
 
@@ -346,14 +356,14 @@ const prohibitedHost = (value: string): boolean => {
   if (isIP(host) !== 6) return false;
   return host === '::' || host === '::1' || host.startsWith('fe8') || host.startsWith('fe9')
     || host.startsWith('fea') || host.startsWith('feb') || host.startsWith('fc') || host.startsWith('fd')
-    || host.startsWith('::ffff:');
+    || host.startsWith('ff') || host.startsWith('2001:db8') || host.startsWith('::ffff:');
 };
 
 const cspSources = (sources: readonly string[] | undefined): Readonly<{ accepted: readonly string[]; warnings: readonly McpAppSandboxWarning[] }> => {
   const accepted = new Set<string>();
   const warnings: McpAppSandboxWarning[] = [];
   for (const source of sources ?? []) {
-    if (source === '*') {
+    if (source.includes('*')) {
       warnings.push(Object.freeze({ code: 'csp-wildcard-rejected', value: source }));
       continue;
     }
@@ -511,11 +521,7 @@ export const createMcpAppSandboxFrame = (
     throw new TypeError('MCP App sandbox frame must target a loopback HTTP proxy');
   }
   const relay = relayOf(options.proxy.relay.maxMessageBytes, options.proxy.relay.maxQueuedMessages);
-  const policy = deriveMcpAppSandboxPolicy(options.declaration ?? {}, options.consent, {
-    origin: proxyOrigin,
-    provenance: 'compiler-internal',
-    webSocketPath: '/rsbuild-hmr',
-  });
+  const policy = deriveMcpAppSandboxPolicy(options.declaration ?? {}, options.consent);
   const configuration = encodeURIComponent(JSON.stringify({ hostOrigin, maxMessageBytes: relay.maxMessageBytes }));
   return Object.freeze({
     allow: policy.iframeAllow,

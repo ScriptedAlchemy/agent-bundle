@@ -59,6 +59,19 @@ class RecordingPreviewService implements McpAppRoutePreviewService {
   previewAvailable = true;
   #releaseFirstReceive: (() => void) | undefined;
 
+  consentChallenges(bindingId: string) {
+    return bindingId === 'binding-a' ? [{
+      expiresAt: 31_000,
+      id: 'consent-1',
+      request: { capability: 'call-tool' as const, details: { name: 'refresh-weather' }, scope: 'action' as const, summary: 'Allow MCP App call tool?' },
+    }] : undefined;
+  }
+
+  decideConsent(bindingId: string, challengeId: string, approved: boolean) {
+    if (bindingId !== 'binding-a' || challengeId !== 'consent-1' || !approved) return undefined;
+    return { authorizationId: 'grant-1', bindingId, capability: 'call-tool' as const, challengeId, scope: 'action' as const };
+  }
+
   get(bindingId: string) {
     return this.previewAvailable && bindingId === this.preview.binding.id ? this.preview : undefined;
   }
@@ -186,6 +199,26 @@ it('leaves unrelated MCP paths for the session route handler', async () => {
   }
 });
 
+it('exposes only server-created consent challenges and accepts a decision by opaque challenge id', async () => {
+  const started = await startRoutes();
+  try {
+    const listed = await fetch(`${started.url}/api/mcp/apps/binding-a/consent`, { headers: headers() });
+    await expect(listed.json()).resolves.toMatchObject({ challenges: [{ id: 'consent-1', request: { scope: 'action' } }] });
+    const forged = await fetch(`${started.url}/api/mcp/apps/binding-a/consent`, {
+      body: JSON.stringify({ approved: true, challengeId: 'camera-from-browser' }),
+      headers: { ...headers(), 'content-type': 'application/json' }, method: 'POST',
+    });
+    await expect(forged.json()).resolves.toEqual({ approved: false, lifecycle: 'created' });
+    const approved = await fetch(`${started.url}/api/mcp/apps/binding-a/consent`, {
+      body: JSON.stringify({ approved: true, challengeId: 'consent-1' }),
+      headers: { ...headers(), 'content-type': 'application/json' }, method: 'POST',
+    });
+    await expect(approved.json()).resolves.toEqual({ approved: true, lifecycle: 'created' });
+  } finally {
+    await started.close();
+  }
+});
+
 it('creates an App preview from only session-scoped JSON data', async () => {
   const started = await startRoutes();
   try {
@@ -208,7 +241,6 @@ it('creates an App preview from only session-scoped JSON data', async () => {
     expect(started.service.calls).toEqual([{
       kind: 'create',
       options: {
-        consent: { permissions: { geolocation: {} } },
         host,
         input: { city: 'Paris' },
         previewProfile: 'portable',

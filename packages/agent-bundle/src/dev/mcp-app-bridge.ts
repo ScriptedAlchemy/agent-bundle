@@ -808,10 +808,15 @@ export const createMcpAppBridge = (options: CreateMcpAppBridgeOptions): McpAppBr
   const authorized = (capability: McpAppConsentCapability, details: McpAppJsonValue, params: McpAppJsonValue | undefined): boolean => {
     if (options.consentAuthority === undefined) return true;
     const id = authorizationId(params);
-    return id !== undefined && options.profile !== undefined && options.consentAuthority.consume({
+    if (id !== undefined && options.profile !== undefined && options.consentAuthority.consume({
       actionDigest: createMcpAppConsentActionDigest(capability, details), authorizationId: id,
       bindingId: binding.id, capability, profile: options.profile,
+    })) return true;
+    if (options.profile !== undefined) options.consentAuthority.challenge({
+      actionDigest: createMcpAppConsentActionDigest(capability, details), bindingId: binding.id,
+      capability, details, profile: options.profile,
     });
+    return false;
   };
 
   const hostMessageByteLength = (message: McpAppBridgeMessage): number => Buffer.byteLength(JSON.stringify(message), 'utf8');
