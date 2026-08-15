@@ -310,6 +310,64 @@ const deepFreeze = <Value>(value: Value): Value => {
   return Object.freeze(value);
 };
 
+const invalidExtensionValue = (key: string): never => {
+  throw new Error(`AB4500: Config extension "${key}" must contain strict finite JSON data.`);
+};
+
+const cloneExtensionValue = (
+  key: string,
+  value: unknown,
+  ancestors = new Set<object>(),
+): unknown => {
+  if (value === null || typeof value === 'boolean' || typeof value === 'string') {
+    return value;
+  }
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : invalidExtensionValue(key);
+  }
+  if (typeof value !== 'object' || ancestors.has(value)) {
+    return invalidExtensionValue(key);
+  }
+
+  ancestors.add(value);
+  try {
+    if (Array.isArray(value)) {
+      const clone: unknown[] = [];
+      for (let index = 0; index < value.length; index += 1) {
+        const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+        if (descriptor === undefined || !descriptor.enumerable || !('value' in descriptor)) {
+          return invalidExtensionValue(key);
+        }
+        clone.push(cloneExtensionValue(key, descriptor.value, ancestors));
+      }
+      for (const property of Reflect.ownKeys(value)) {
+        if (property === 'length') continue;
+        if (typeof property !== 'string' || !/^(?:0|[1-9]\d*)$/u.test(property) || Number(property) >= value.length) {
+          return invalidExtensionValue(key);
+        }
+      }
+      return clone;
+    }
+
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) {
+      return invalidExtensionValue(key);
+    }
+    const clone = Object.create(null) as Record<string, unknown>;
+    for (const property of Reflect.ownKeys(value)) {
+      if (typeof property !== 'string') return invalidExtensionValue(key);
+      const descriptor = Object.getOwnPropertyDescriptor(value, property);
+      if (descriptor === undefined || !descriptor.enumerable || !('value' in descriptor)) {
+        return invalidExtensionValue(key);
+      }
+      clone[property] = cloneExtensionValue(key, descriptor.value, ancestors);
+    }
+    return clone;
+  } finally {
+    ancestors.delete(value);
+  }
+};
+
 const normalizeExtensions = (
   loaded: LoadedConfig,
   registry: NormalizationTargetRegistry,
@@ -321,13 +379,12 @@ const normalizeExtensions = (
   for (const descriptor of [...descriptors].sort((left, right) => left.key.localeCompare(right.key))) {
     if (!Object.hasOwn(loaded.config, descriptor.key)) continue;
     const value = loaded.config[descriptor.key];
-    if (value === undefined) continue;
     extensions[descriptor.key] = {
       id: `extension:${descriptor.key}`,
       key: descriptor.key,
       provenance: { ...provenance },
       target: descriptor.target,
-      value: structuredClone(value),
+      value: cloneExtensionValue(descriptor.key, value),
     };
   }
 

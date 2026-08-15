@@ -16,6 +16,10 @@ import type {
   TargetArtifactPlan,
 } from './types.ts';
 
+export interface PortableConfigExtension {
+  portable?: AgentBundlePortableConfig;
+}
+
 declare module '../core/types.ts' {
   interface AgentBundleConfigExtensions {
     portable?: AgentBundlePortableConfig;

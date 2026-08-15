@@ -17,6 +17,10 @@ import mcpSchema from './schemas/claude/mcp.schema.json' with { type: 'json' };
 import pluginSchema from './schemas/claude/plugin.schema.json' with { type: 'json' };
 import type { TargetAdapter, TargetArtifactEntry, TargetArtifactPlan } from './types.ts';
 
+export interface ClaudeConfigExtension {
+  claude?: AgentBundleHostConfig;
+}
+
 declare module '../core/types.ts' {
   interface AgentBundleConfigExtensions {
     claude?: AgentBundleHostConfig;

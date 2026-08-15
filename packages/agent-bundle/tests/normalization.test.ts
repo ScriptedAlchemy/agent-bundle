@@ -18,6 +18,15 @@ const registry: NormalizationTargetRegistry = {
   supports: (name, capability) => capability === 'hooks' && name !== 'portable',
 };
 
+const extensionRegistry: NormalizationTargetRegistry = {
+  configExtensions: () => Object.freeze([
+    Object.freeze({ key: 'example', target: 'example' }),
+  ]),
+  defaultTargetNames: () => ['example'],
+  has: (name) => name === 'example',
+  supports: (name, capability) => name === 'example' && capability === 'hooks',
+};
+
 const loadedProject = (
   config: AgentBundleConfig,
   options: { root?: string; selectedTargets?: string[] } = {},
@@ -103,17 +112,6 @@ it.each([
 });
 
 it('normalizes registered extensions and validates registered script and hook targets', async () => {
-  const extensionRegistry = {
-    configExtensions: () => Object.freeze([
-      Object.freeze({ key: 'example', target: 'example' }),
-    ]),
-    defaultTargetNames: () => ['example'],
-    has: (name: string) => name === 'example',
-    supports: (name: string, capability: string) =>
-      name === 'example' && capability === 'hooks',
-  } as NormalizationTargetRegistry & {
-    configExtensions(): readonly Readonly<{ key: string; target: string }>[];
-  };
   const config: AgentBundleConfig = {
     example: { nested: { enabled: true } },
     hooks: { sessionStart: { handler: './hooks/start.ts', targets: ['example'] } },
@@ -158,6 +156,73 @@ it('normalizes registered extensions and validates registered script and hook ta
   expect(Object.isFrozen(extensions)).toBe(true);
   expect(Object.isFrozen(extensions.example?.value)).toBe(true);
   expect(Object.isFrozen(extensions.example?.value.nested)).toBe(true);
+});
+
+it('rejects non-JSON values in registered config extensions before normalization', async () => {
+  class ExtensionClass {
+    readonly enabled = true;
+  }
+  const cyclic: { self?: unknown } = {};
+  cyclic.self = cyclic;
+  const values: readonly unknown[] = [
+    new Map([['value', true]]),
+    new Set(['value']),
+    new Date('2026-08-15T00:00:00.000Z'),
+    /extension/u,
+    new ExtensionClass(),
+    () => true,
+    Symbol('extension'),
+    1n,
+    undefined,
+    Number.NaN,
+    Number.POSITIVE_INFINITY,
+    cyclic,
+  ];
+
+  for (const value of values) {
+    await expect(normalizeProject(loadedProject({
+      example: value,
+      plugin: { name: 'extension-json-fixture', version: '1.0.0' },
+    }), { skills: [] }, extensionRegistry)).rejects.toThrow(
+      'AB4500: Config extension "example" must contain strict finite JSON data.',
+    );
+  }
+});
+
+it('detaches and freezes strict JSON extension values with special own keys and aliases', async () => {
+  const shared = { nested: ['original'] };
+  const extension = Object.create(null) as Record<string, unknown>;
+  Object.defineProperty(extension, '__proto__', {
+    configurable: true,
+    enumerable: true,
+    value: { preserved: true },
+    writable: true,
+  });
+  Object.defineProperties(extension, {
+    constructor: { configurable: true, enumerable: true, value: { preserved: true }, writable: true },
+    first: { configurable: true, enumerable: true, value: shared, writable: true },
+    second: { configurable: true, enumerable: true, value: shared, writable: true },
+  });
+  const model = await normalizeProject(loadedProject({
+    example: extension,
+    plugin: { name: 'extension-json-fixture', version: '1.0.0' },
+  }), { skills: [] }, extensionRegistry);
+  const value = model.extensions.example!.value as Record<string, { nested?: string[]; preserved?: boolean }>;
+
+  shared.nested[0] = 'mutated';
+  expect(value).toMatchObject({
+    __proto__: { preserved: true },
+    constructor: { preserved: true },
+    first: { nested: ['original'] },
+    second: { nested: ['original'] },
+  });
+  expect(Object.getPrototypeOf(value)).toBeNull();
+  expect(Object.hasOwn(value, '__proto__')).toBe(true);
+  expect(Object.hasOwn(value, 'constructor')).toBe(true);
+  expect(Object.isFrozen(value)).toBe(true);
+  expect(Object.isFrozen(value.first)).toBe(true);
+  expect(Object.isFrozen(value.first?.nested)).toBe(true);
+  expect(() => value.first!.nested!.push('blocked')).toThrow();
 });
 
 it('reports unknown hook and script targets through the target registry', () => {

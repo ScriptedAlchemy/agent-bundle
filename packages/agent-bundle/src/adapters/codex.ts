@@ -18,6 +18,10 @@ import mcpSchema from './schemas/codex/mcp.schema.json' with { type: 'json' };
 import pluginSchema from './schemas/codex/plugin.schema.json' with { type: 'json' };
 import type { TargetAdapter, TargetArtifactEntry, TargetArtifactPlan } from './types.ts';
 
+export interface CodexConfigExtension {
+  codex?: AgentBundleHostConfig;
+}
+
 declare module '../core/types.ts' {
   interface AgentBundleConfigExtensions {
     codex?: AgentBundleHostConfig;
