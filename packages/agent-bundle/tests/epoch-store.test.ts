@@ -40,6 +40,26 @@ const settleMicrotasks = async (): Promise<void> => {
   for (let step = 0; step < 16; step += 1) await Promise.resolve();
 };
 
+type Deferred<T> = {
+  promise: Promise<T>;
+  reject: (reason?: unknown) => void;
+  resolve: (value: T | PromiseLike<T>) => void;
+};
+
+const deferred = <T>(): Deferred<T> => {
+  let resolve: Deferred<T>['resolve'] = () => {
+    throw new Error('Deferred resolver invoked before initialization.');
+  };
+  let reject: Deferred<T>['reject'] = () => {
+    throw new Error('Deferred rejecter invoked before initialization.');
+  };
+  const promise = new Promise<T>((promiseResolve, promiseReject) => {
+    resolve = promiseResolve;
+    reject = promiseReject;
+  });
+  return { promise, reject, resolve };
+};
+
 it('publishes a validated staging directory as the active immutable epoch', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent bundle epoch store with spaces '));
   const epoch = epochFor(root, 'epoch-1');
@@ -320,10 +340,10 @@ it('waits for every eligible cleanup deletion before admitting a later reference
   const epochOneRoot = join(root, '.agent-bundle', 'epochs', 'epoch-1');
   const epochTwoRoot = join(root, '.agent-bundle', 'epochs', 'epoch-2');
   const firstFailure = new Error('epoch-1 directory removal failed');
-  const earlyGate = Promise.withResolvers<void>();
-  const lateGate = Promise.withResolvers<void>();
-  const earlyStarted = Promise.withResolvers<void>();
-  const lateStarted = Promise.withResolvers<void>();
+  const earlyGate = deferred<void>();
+  const lateGate = deferred<void>();
+  const earlyStarted = deferred<void>();
+  const lateStarted = deferred<void>();
   let preserveDuringPublication = true;
 
   const cleanupRemove: typeof rm = async (path, options) => {
