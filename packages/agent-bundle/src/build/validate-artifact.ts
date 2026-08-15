@@ -219,6 +219,27 @@ const matchesManifestFileTable = (
   });
 };
 
+const sameArtifactFile = (left: ArtifactFile, right: ArtifactFile): boolean =>
+  left.bytes === right.bytes &&
+  left.mode === right.mode &&
+  left.path === right.path &&
+  left.sha256 === right.sha256;
+
+const changedArtifactPaths = (
+  initialFiles: readonly ArtifactFile[],
+  finalFiles: readonly ArtifactFile[],
+): readonly string[] => {
+  const initialFilesByPath = new Map(initialFiles.map((file) => [file.path, file]));
+  const finalFilesByPath = new Map(finalFiles.map((file) => [file.path, file]));
+  return [...new Set([...initialFilesByPath.keys(), ...finalFilesByPath.keys()])]
+    .filter((path) => {
+      const initialFile = initialFilesByPath.get(path);
+      const finalFile = finalFilesByPath.get(path);
+      return initialFile === undefined || finalFile === undefined || !sameArtifactFile(initialFile, finalFile);
+    })
+    .sort((left, right) => left.localeCompare(right));
+};
+
 const localMcpArgument = (value: unknown): string | undefined => {
   if (typeof value !== 'string') return undefined;
   const relative = value.replace(/^\.\//, '');
@@ -255,6 +276,32 @@ interface ArtifactInspection {
   readonly filesystem: ArtifactFilesystemSnapshot;
   readonly files: readonly ArtifactFile[];
 }
+
+interface ManifestSnapshot {
+  readonly bytes: Buffer;
+  readonly device: number;
+  readonly inode: number;
+}
+
+const sameManifestSnapshot = (left: ManifestSnapshot, right: ManifestSnapshot): boolean =>
+  left.device === right.device &&
+  left.inode === right.inode &&
+  left.bytes.equals(right.bytes);
+
+const snapshotManifest = async (path: string): Promise<ManifestSnapshot> => {
+  const initialMetadata = await lstat(path);
+  if (!initialMetadata.isFile()) throw new Error('Artifact manifest is not a regular file.');
+  const bytes = await readFile(path);
+  const finalMetadata = await lstat(path);
+  if (
+    !finalMetadata.isFile() ||
+    initialMetadata.dev !== finalMetadata.dev ||
+    initialMetadata.ino !== finalMetadata.ino
+  ) {
+    throw new Error('Artifact manifest changed while being read.');
+  }
+  return Object.freeze({ bytes, device: initialMetadata.dev, inode: initialMetadata.ino });
+};
 
 const inspectArtifact = async (context: ValidateArtifactOptions): Promise<ArtifactInspection> => {
   const filesystem = await inspectArtifactFilesystem(context.artifactRoot);
@@ -802,15 +849,17 @@ export const validateArtifact = async (context: ValidateArtifactOptions): Promis
   }
 
   const manifestPath = resolve(context.artifactRoot, artifactManifestName);
+  let manifestSnapshot: ManifestSnapshot;
+  try {
+    manifestSnapshot = await snapshotManifest(manifestPath);
+  } catch {
+    return [diagnostic('AB6000', 'Artifact manifest is missing or cannot be read.', artifactManifestName)];
+  }
+
   let manifest: ArtifactManifestV2;
   try {
-    manifest = parseArtifactManifest(await readFile(manifestPath, 'utf8'));
+    manifest = parseArtifactManifest(manifestSnapshot.bytes.toString('utf8'));
   } catch {
-    try {
-      await readFile(manifestPath, 'utf8');
-    } catch {
-      return [diagnostic('AB6000', 'Artifact manifest is missing or cannot be read.', artifactManifestName)];
-    }
     return [diagnostic('AB6001', 'Artifact manifest is not a strict canonical v2 manifest.', artifactManifestName)];
   }
 
@@ -856,41 +905,26 @@ export const validateArtifact = async (context: ValidateArtifactOptions): Promis
     manifestFiles: manifest.files,
   }));
 
-  let finalInspection: ArtifactInspection;
+  let finalInspection: ArtifactInspection | undefined;
   try {
     finalInspection = await inspectArtifact(context);
   } catch {
-    diagnostics.push(diagnostic('AB6004', 'Artifact files do not match the manifest.', artifactManifestName));
-    return Object.freeze(diagnostics);
+    diagnostics.push(diagnostic('AB6004', 'Artifact file table changed during validation.', artifactManifestName));
   }
-  if (!matchesManifestFileTable(finalInspection.files, manifest.files)) {
-    if (!diagnostics.some((entry) => entry.code === 'AB6004')) {
-      diagnostics.push(diagnostic('AB6004', 'Artifact files do not match the manifest.', artifactManifestName));
+
+  let finalManifestSnapshot: ManifestSnapshot | undefined;
+  try {
+    finalManifestSnapshot = await snapshotManifest(manifestPath);
+  } catch {
+    diagnostics.push(diagnostic('AB6001', 'Artifact manifest changed during validation.', artifactManifestName));
+  }
+  if (finalManifestSnapshot !== undefined && !sameManifestSnapshot(manifestSnapshot, finalManifestSnapshot)) {
+    diagnostics.push(diagnostic('AB6001', 'Artifact manifest changed during validation.', artifactManifestName));
+  }
+  if (finalInspection !== undefined) {
+    for (const path of changedArtifactPaths(inspection.files, finalInspection.files)) {
+      diagnostics.push(diagnostic('AB6004', `Artifact file changed during validation: ${JSON.stringify(path)}.`, path));
     }
-    diagnostics.push(...filesystemDiagnostics(finalInspection.filesystem));
-    diagnostics.push(...validateArtifactOwnership({
-      filesystem: finalInspection.filesystem,
-      files: finalInspection.files,
-      manifest,
-      registry,
-    }));
-    diagnostics.push(...await validateTargetContracts({
-      artifactRoot: context.artifactRoot,
-      files: finalInspection.files,
-      manifest,
-      registry,
-    }));
-    diagnostics.push(...await validateEmittedSkills({
-      artifactRoot: context.artifactRoot,
-      files: finalInspection.files,
-      manifest,
-      registry,
-    }));
-    diagnostics.push(...await validateGeneratedFiles({
-      artifactRoot: context.artifactRoot,
-      files: finalInspection.files,
-      manifestFiles: manifest.files,
-    }));
   }
   return Object.freeze(diagnostics);
 };

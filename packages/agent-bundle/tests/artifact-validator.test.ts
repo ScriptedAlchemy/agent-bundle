@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { execFile } from 'node:child_process';
-import { chmodSync, writeFileSync } from 'node:fs';
+import { chmodSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { access, chmod, mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -768,7 +768,7 @@ it('does not execute artifact JavaScript while validating deferred imports', asy
   }
 });
 
-it('rechecks the manifest file table after validation-side concurrent mutation', async () => {
+it('reports one structural change for a file mutation during validation', async () => {
   const files = [
     { contents: '{"kind":"custom"}\n', kind: 'generated' as const, path: 'custom/document.json' },
     { contents: 'export const original = true;\n', kind: 'bundle' as const, mode: 0o755, path: 'custom/scripts/mutable.mjs' },
@@ -784,10 +784,56 @@ it('rechecks the manifest file table after validation-side concurrent mutation',
   });
 
   try {
-    await expect(validateArtifact({ artifactRoot: root, registry })).resolves.toEqual(expect.arrayContaining([
-      expect.objectContaining({ code: 'AB6004', generatedPath: 'agent-bundle.manifest.json' }),
-    ]));
+    const diagnostics = await validateArtifact({ artifactRoot: root, registry });
+    expect(diagnostics.filter((entry) => entry.code === 'AB6004' && entry.generatedPath === 'custom/scripts/mutable.mjs')).toHaveLength(1);
     expect(mutated).toBe(true);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it.each([
+  ['rewritten', (manifestPath: string) => { writeFileSync(manifestPath, '{"invalid":true}\n'); }],
+  ['replaced with identical bytes', (manifestPath: string) => {
+    const replacementPath = `${manifestPath}.replacement`;
+    writeFileSync(replacementPath, readFileSync(manifestPath));
+    renameSync(replacementPath, manifestPath);
+  }],
+  ['removed', (manifestPath: string) => { rmSync(manifestPath); }],
+])('rejects a manifest %s during a synchronous schema callback', async (_name, mutateManifest) => {
+  const root = await writeArtifact([
+    { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'custom/document.json' },
+  ], true, [customManifestTarget]);
+  const manifestPath = join(root, 'agent-bundle.manifest.json');
+  const registry = customRegistry(() => {
+    mutateManifest(manifestPath);
+    return [];
+  });
+
+  try {
+    const diagnostics = await validateArtifact({ artifactRoot: root, registry });
+    expect(diagnostics.filter((entry) => entry.code === 'AB6001' && entry.generatedPath === 'agent-bundle.manifest.json')).toHaveLength(1);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('does not repeat JavaScript diagnostics after a validation-side mutation', async () => {
+  const files = [
+    { contents: '{"kind":"custom"}\n', kind: 'generated' as const, path: 'custom/document.json' },
+    { contents: 'export const valid = true;\n', kind: 'bundle' as const, path: 'custom/scripts/mutable.mjs' },
+  ];
+  const root = await writeArtifact(files, true, [customManifestTarget]);
+  const modulePath = join(root, 'custom', 'scripts', 'mutable.mjs');
+  const registry = customRegistry(() => {
+    writeFileSync(modulePath, 'export const broken = ;\n');
+    return [];
+  });
+
+  try {
+    const diagnostics = await validateArtifact({ artifactRoot: root, registry });
+    expect(diagnostics.filter((entry) => entry.code === 'AB6005' && entry.generatedPath === 'custom/scripts/mutable.mjs')).toHaveLength(1);
+    expect(diagnostics.filter((entry) => entry.code === 'AB6004' && entry.generatedPath === 'custom/scripts/mutable.mjs')).toHaveLength(1);
   } finally {
     await rm(root, { force: true, recursive: true });
   }
