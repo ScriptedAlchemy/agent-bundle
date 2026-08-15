@@ -606,6 +606,7 @@ it('rejects one shared close outcome after every delayed resource cleanup is att
       events.push('transport.close.reject');
       throw transportCloseFailure;
     },
+    send: async () => undefined,
     session: Object.freeze({ binding, connection, id: 'session-weather' }),
     start: async () => undefined,
   };
