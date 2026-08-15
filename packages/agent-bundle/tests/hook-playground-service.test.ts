@@ -16,7 +16,11 @@ import { digest } from '../src/core/digest.ts';
 import type { LoadedConfig } from '../src/config/load.ts';
 import type { AgentBundleConfig, CanonicalHookEvent, NormalizationTargetRegistry } from '../src/core/types.ts';
 import { EpochStore } from '../src/dev/epoch-store.ts';
-import { HookPlaygroundService } from '../src/dev/hook-playground-service.ts';
+import {
+  HookPlaygroundService,
+  type HookPlaygroundDiagnosticResult,
+  type HookPlaygroundSimulation,
+} from '../src/dev/hook-playground-service.ts';
 import { HookService } from '../src/services/hook-service.ts';
 import type { ArtifactEpoch } from '../src/dev/types.ts';
 
@@ -57,6 +61,12 @@ interface PublishedHookEpoch {
   readonly epochStore: EpochStore;
   readonly hooks: Readonly<Record<CanonicalHookEvent, Readonly<{ readonly id: string; readonly name: string }>>>;
 }
+
+type IsExact<Left, Right> =
+  (<Type>() => Type extends Left ? 1 : 2) extends
+  (<Type>() => Type extends Right ? 1 : 2)
+    ? true
+    : false;
 
 class CopyFailureEpochStore extends EpochStore {
   readonly #copyWorkSettled: () => boolean;
@@ -443,6 +453,58 @@ it('runs fixture and inline canonical input through the epoch-bound wrapper and 
       code: 0,
       stderr: '',
       stdout: JSON.stringify(inline.nativeOutput),
+    });
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+}, 30_000);
+
+it('returns target diagnostics from simulation and replay for an unknown string target', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-hook-playground-unknown-target-'));
+  try {
+    const epoch = await publishHookEpoch(root, 'epoch-1', 'one');
+    const service = new HookPlaygroundService({ epochStore: epoch.epochStore });
+    const target: string = 'unknown';
+    const input = inputFor('beforeTool');
+    const request = {
+      epochId: 'epoch-1',
+      hook: epoch.hooks.beforeTool.id,
+      input: { inline: input },
+      target,
+    };
+    const simulation = service.simulate(request);
+    const replay = service.replay({
+      binding: { epochId: 'epoch-1', hook: epoch.hooks.beforeTool.id, target },
+      input,
+    });
+    const expectedType: IsExact<
+      typeof simulation,
+      Promise<HookPlaygroundSimulation | HookPlaygroundDiagnosticResult>
+    > = true;
+    const expectedReplayType: IsExact<
+      typeof replay,
+      Promise<HookPlaygroundSimulation | HookPlaygroundDiagnosticResult>
+    > = true;
+
+    expect(expectedType).toBe(true);
+    expect(expectedReplayType).toBe(true);
+    await expect(simulation).resolves.toEqual({
+      diagnostics: [{
+        code: 'hook.playground.target.unsupported',
+        event: 'beforeTool',
+        message: 'Hook playground cannot map target "unknown" for canonical event "beforeTool".',
+        severity: 'error',
+        target,
+      }],
+    });
+    await expect(replay).resolves.toEqual({
+      diagnostics: [{
+        code: 'hook.playground.target.unsupported',
+        event: 'beforeTool',
+        message: 'Hook playground cannot map target "unknown" for canonical event "beforeTool".',
+        severity: 'error',
+        target,
+      }],
     });
   } finally {
     await rm(root, { force: true, recursive: true });

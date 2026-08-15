@@ -295,9 +295,6 @@ export class HookPlaygroundService {
     });
   }
 
-  async simulate(
-    options: HookPlaygroundSimulationOptions & { readonly target: string },
-  ): Promise<HookPlaygroundSimulation>;
   async simulate(options: HookPlaygroundSimulationOptions): Promise<HookPlaygroundSimulation | HookPlaygroundDiagnosticResult>;
   async simulate(options: HookPlaygroundSimulationOptions): Promise<HookPlaygroundSimulation | HookPlaygroundDiagnosticResult> {
     return this.#withEpoch(options.epochId, async (artifact, reference) => {
@@ -347,7 +344,7 @@ export class HookPlaygroundService {
     });
   }
 
-  async replay(replay: HookPlaygroundReplay): Promise<HookPlaygroundSimulation> {
+  async replay(replay: HookPlaygroundReplay): Promise<HookPlaygroundSimulation | HookPlaygroundDiagnosticResult> {
     return this.simulate({ ...replay.binding, input: { fixture: replay.input } });
   }
 
