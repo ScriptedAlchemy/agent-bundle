@@ -137,7 +137,7 @@ const physicalOutputRoot = async (
     } else {
       physical = candidate;
     }
-    if (physical === root) {
+    if (index === parts.length - 1 && physical === root) {
       throw new RangeError('Configured output root must not be the project root.');
     }
     if (!isWithinOutputRoot(physical, root)) {

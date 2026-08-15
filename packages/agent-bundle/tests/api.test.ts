@@ -153,6 +153,20 @@ it('rejects an output symlink to the project root before loading source', async 
   }
 }, 30_000);
 
+it('allows an output below a symlink to the project root', async () => {
+  const root = await createProject();
+  try {
+    await symlink(root, join(root, 'alias'), 'dir');
+
+    const result = await build({ output: 'alias/artifact', root, targets: ['portable'] });
+
+    expect(result.build.outputRoot).toBe(join(root, 'alias', 'artifact'));
+    expect((await stat(join(root, 'artifact'))).isDirectory()).toBe(true);
+  } finally {
+    await rm(join(root, '..'), { force: true, recursive: true });
+  }
+}, 30_000);
+
 it('excludes a contained symlinked output tree from project context identity', async () => {
   const [leftRoot, rightRoot] = await Promise.all([createProject(), createProject()]);
   try {
