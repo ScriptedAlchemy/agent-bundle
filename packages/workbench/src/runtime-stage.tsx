@@ -75,18 +75,18 @@ export const RuntimeStage = ({ lastGoodRun, profile, profileId, renderAppPreview
   const result = evidenceRun?.status === 'succeeded' ? evidenceRun.result : undefined;
   const app = renderedApp(evidenceRun, surface, profile, profileId, renderAppPreview);
   const activeVector = status?.activeVector;
-  const current = run !== undefined && activeVector !== undefined && sameRuntimeIdentity(run.vector, activeVector);
+  const evidenceCurrent = evidenceRun !== undefined && activeVector !== undefined && sameRuntimeIdentity(evidenceRun.vector, activeVector);
   const lastGood = lastGoodRun ?? (run?.status === 'succeeded' ? run : undefined);
 
   return <section aria-label="Runtime output stage" className="runtime-stage">
-    <header className={`runtime-stage-generation ${current ? 'runtime-stage-generation--current' : 'runtime-stage-generation--stale'}`}>
+    <header className={`runtime-stage-generation ${evidenceCurrent ? 'runtime-stage-generation--current' : 'runtime-stage-generation--stale'}`}>
       {run === undefined ? <p>No runtime output selected.</p> : retainedLastGood !== undefined
         ? <p>Selected run failed in runtime generation {run.vector.runtimeGenerationId}. Retained last-good output is shown below.</p>
-        : current
+        : evidenceCurrent
           ? <p>All outputs are from the current runtime generation ({run.vector.runtimeGenerationId}). No stale views.</p>
           : <p>Selected output is from runtime generation {run.vector.runtimeGenerationId}; current generation is {activeVector?.runtimeGenerationId ?? 'unavailable'}.</p>}
       {lastGood === undefined ? undefined : <p>Last good: {lastGood.vector.runtimeGenerationId}{run !== undefined && !sameRuntimeIdentity(run.vector, lastGood.vector) ? ' (shown separately)' : ''}</p>}
-      {retainedLastGood === undefined ? undefined : <p>Retained last-good output (stale evidence): {retainedLastGood.vector.runtimeGenerationId}.</p>}
+      {retainedLastGood === undefined ? undefined : <p>Retained last-good output ({evidenceCurrent ? 'current evidence' : 'stale evidence'}): {retainedLastGood.vector.runtimeGenerationId}.</p>}
     </header>
     {run?.status === 'failed' ? <section aria-label="Runtime output diagnostics" className="runtime-stage-diagnostics" role="alert">
       <h2>Runtime run failed</h2>

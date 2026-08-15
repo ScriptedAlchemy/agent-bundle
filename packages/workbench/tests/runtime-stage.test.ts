@@ -113,6 +113,7 @@ describe('Runtime stage', () => {
     expect(markup).toContain('Runtime run failed');
     expect(markup).toContain('RSC_RENDER_FAILED');
     expect(markup).toContain('Retained last-good output');
+    expect(markup).toContain('stale evidence');
     expect(markup).toContain('Customer is active.');
     expect((markup.match(/data-runtime-app-sentinel/g) ?? [])).toHaveLength(1);
     expect(markup).toContain('run-customer');
@@ -136,6 +137,36 @@ describe('Runtime stage', () => {
     for (const markup of [changedState, changedProvider]) {
       expect(markup).toContain('Selected output is from runtime generation');
       expect(markup).not.toContain('No stale views.');
+    }
+  });
+
+  it('derives retained last-good currentness from the displayed evidence vector', () => {
+    const current = renderToStaticMarkup(createElement(RuntimeStage, {
+      lastGoodRun: run,
+      run: failedRun,
+      status: runtimeStatus(run.vector),
+      surface,
+    }));
+    const changedState = renderToStaticMarkup(createElement(RuntimeStage, {
+      lastGoodRun: run,
+      run: failedRun,
+      status: runtimeStatus({ ...run.vector, stateVersion: run.vector.stateVersion + 1 }),
+      surface,
+    }));
+    const changedProvider = renderToStaticMarkup(createElement(RuntimeStage, {
+      lastGoodRun: run,
+      run: failedRun,
+      status: runtimeStatus({ ...run.vector, providerSessionId: 'provider-restarted' }),
+      surface,
+    }));
+
+    expect(current).toContain('runtime-stage-generation--current');
+    expect(current).toContain('Retained last-good output (current evidence)');
+    expect(current).not.toContain('stale evidence');
+    for (const markup of [changedState, changedProvider]) {
+      expect(markup).toContain('runtime-stage-generation--stale');
+      expect(markup).toContain('Retained last-good output (stale evidence)');
+      expect(markup).toContain('RSC_RENDER_FAILED');
     }
   });
 });
