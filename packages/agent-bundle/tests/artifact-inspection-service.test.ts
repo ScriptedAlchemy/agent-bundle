@@ -10,69 +10,11 @@ import type { TargetAdapter, TargetAdapterMetadata } from '../src/adapters/types
 import { assembleArtifactManifest, type ArtifactManifestFileKind, type ArtifactManifestV2 } from '../src/build/manifest.ts';
 import { validateArtifact } from '../src/build/validate-artifact.ts';
 import { digest } from '../src/core/digest.ts';
-import * as dev from '../src/dev/index.ts';
+import { ArtifactInspectionService } from '../src/dev/index.ts';
 import { EpochStore } from '../src/dev/epoch-store.ts';
 import type { ArtifactEpoch } from '../src/dev/types.ts';
 import { agentSkillsSchemaRevision } from '../src/schemas/agent-skills/contract.ts';
-import { createTargetMcpRuntime } from '../src/services/mcp-runtime.ts';
-
-type InspectionFile = Readonly<{
-  readonly bytes: number;
-  readonly kind: ArtifactManifestFileKind;
-  readonly mode?: number;
-  readonly path: string;
-  readonly sha256: string;
-  readonly sourceInputs: readonly Readonly<{ readonly path: string; readonly sha256: string }>[];
-}>;
-
-type Inspection = Readonly<{
-  readonly epochId: string;
-  readonly files: readonly InspectionFile[];
-  readonly project: Readonly<{
-    readonly configDigest: string;
-    readonly configPath: string;
-    readonly modelDigest: string;
-    readonly revision: string;
-    readonly sourceInputs: readonly Readonly<{ readonly path: string; readonly sha256: string }>[];
-  }>;
-  readonly provenance: readonly Readonly<{
-    readonly outputPath: string;
-    readonly sourceInputs: readonly Readonly<{ readonly path: string; readonly sha256: string }>[];
-  }>[];
-  readonly runtime: Readonly<{
-    readonly executables: readonly InspectionFile[];
-    readonly hooks: readonly Readonly<{ readonly path: string; readonly target: string }>[];
-    readonly mcpServers: readonly Readonly<{
-      readonly entryPaths: readonly string[];
-      readonly kind: 'stdio' | 'streamable-http';
-      readonly manifestPath: string;
-      readonly name: string;
-      readonly target: string;
-    }>[];
-  }>;
-  readonly targets: readonly Readonly<{
-    readonly name: string;
-    readonly tree: Readonly<{
-      readonly children: readonly Readonly<{
-        readonly name: string;
-        readonly path: string;
-      }>[];
-      readonly path: string;
-    }>;
-  }>[];
-}>;
-
-type InspectionService = Readonly<{
-  diff(baseEpochId: string, candidateEpochId: string): Promise<Readonly<{
-    readonly added: readonly Readonly<{ readonly after: InspectionFile; readonly path: string }>[];
-    readonly changed: readonly Readonly<{ readonly after: InspectionFile; readonly before: InspectionFile; readonly path: string }>[];
-    readonly removed: readonly Readonly<{ readonly before: InspectionFile; readonly path: string }>[];
-    readonly unchanged: readonly Readonly<{ readonly after: InspectionFile; readonly before: InspectionFile; readonly path: string }>[];
-  }>>;
-  inspect(epochId: string): Promise<Inspection>;
-}>;
-
-type InspectionServiceConstructor = new (store: EpochStore, registry?: TargetRegistry) => InspectionService;
+import { createTargetMcpRuntime, type TargetMcpRuntimeContract } from '../src/services/mcp-runtime.ts';
 
 interface FixtureFile {
   readonly contents: string;
@@ -100,12 +42,6 @@ const fixtureMetadata: TargetAdapterMetadata = Object.freeze({
 
 const sha256 = (value: string): string => createHash('sha256').update(value).digest('hex');
 
-const inspectionService = (): InspectionServiceConstructor => {
-  const constructor = Reflect.get(dev, 'ArtifactInspectionService');
-  expect(constructor).toBeTypeOf('function');
-  return constructor as InspectionServiceConstructor;
-};
-
 const scriptRegistry = (): TargetRegistry => new TargetRegistry().register({
   artifactLayout: { scripts: { allowedSuffixes: ['.mjs'], directory: 'scripts' } },
   capabilities: {},
@@ -115,7 +51,13 @@ const scriptRegistry = (): TargetRegistry => new TargetRegistry().register({
   validateModel: () => [],
 } satisfies TargetAdapter);
 
-const runtimeRegistry = (): TargetRegistry => new TargetRegistry().register({
+const runtimeRegistry = (
+  mcpRuntime: TargetMcpRuntimeContract = createTargetMcpRuntime({
+    manifestPath: 'mcp.json',
+    remoteTypes: ['streamable-http'],
+    resolveValue: (_field, _roots, value) => Object.freeze({ diagnostics: Object.freeze([]), value }),
+  }),
+): TargetRegistry => new TargetRegistry().register({
   artifactLayout: {
     hookWrappers: { allowedSuffixes: ['.mjs'], directory: 'hooks' },
     mcpEntries: { allowedSuffixes: ['.mjs'], directory: 'mcp' },
@@ -135,16 +77,50 @@ const runtimeRegistry = (): TargetRegistry => new TargetRegistry().register({
     wrapperPath: () => 'hooks/run.mjs',
     wrapperSource: () => 'export {};\n',
   },
-  mcpRuntime: createTargetMcpRuntime({
-    manifestPath: 'mcp.json',
-    remoteTypes: ['streamable-http'],
-    resolveValue: (_field, _roots, value) => Object.freeze({ diagnostics: Object.freeze([]), value }),
-  }),
+  mcpRuntime,
   metadata: fixtureMetadata,
   name: fixtureTarget,
   plan: () => ({ diagnostics: [], entries: [] }),
   validateModel: () => [],
 } satisfies TargetAdapter);
+
+const mutatingRuntimeRegistry = (calls: { reads: number; resolutions: number }): TargetRegistry => runtimeRegistry(Object.freeze({
+  manifestPath: 'mcp.json',
+  readModernServers: () => {
+    calls.reads += 1;
+    return calls.reads === 1
+      ? Object.freeze({
+        servers: Object.freeze([Object.freeze({
+          name: 'runner',
+          server: Object.freeze({
+            args: Object.freeze(['./mcp/runner.mjs']),
+            command: 'node',
+            kind: 'stdio' as const,
+          }),
+        })]),
+        status: 'found' as const,
+      })
+      : Object.freeze({
+        servers: Object.freeze([Object.freeze({
+          name: 'mutated',
+          server: Object.freeze({
+            args: Object.freeze(['./mcp/not-manifested.mjs']),
+            command: 'node',
+            kind: 'stdio' as const,
+          }),
+        })]),
+        status: 'found' as const,
+      });
+  },
+  resolveStdioArgument: (value: string) => value,
+  resolveValue: (_field, _roots, value) => {
+    calls.resolutions += 1;
+    return Object.freeze({
+      diagnostics: Object.freeze([]),
+      value: calls.resolutions === 1 ? value : './mcp/not-manifested.mjs',
+    });
+  },
+} satisfies TargetMcpRuntimeContract));
 
 const targetRecord = (registry: TargetRegistry): ArtifactManifestV2['targets'][number] => {
   const metadata = registry.metadata(fixtureTarget);
@@ -289,9 +265,32 @@ class TrackingEpochStore extends EpochStore {
     this.acquired += 1;
     const close = reference.close.bind(reference);
     Object.defineProperty(reference, 'close', {
+      configurable: true,
       value: async () => {
         this.closed += 1;
         await close();
+      },
+    });
+    return reference;
+  }
+}
+
+class ReadFailingEpochStore extends TrackingEpochStore {
+  override async acquireEpochReference(epochId: string) {
+    const reference = await super.acquireEpochReference(epochId);
+    await rm(join(reference.root, 'synthetic', 'mcp', 'runner.mjs'));
+    return reference;
+  }
+}
+
+class ThrowingCloseEpochStore extends TrackingEpochStore {
+  override async acquireEpochReference(epochId: string) {
+    const reference = await super.acquireEpochReference(epochId);
+    const close = reference.close.bind(reference);
+    Object.defineProperty(reference, 'close', {
+      value: async () => {
+        await close();
+        throw new Error('synthetic close failure');
       },
     });
     return reference;
@@ -311,7 +310,7 @@ it('inspects one validated epoch as sorted, source-free artifact facts', async (
     await rm(join(root, configPath));
     await rm(join(root, runnerSourcePath));
 
-    const inspection = await new (inspectionService())(store, registry).inspect('epoch-runtime');
+    const inspection = await new ArtifactInspectionService(store, registry).inspect('epoch-runtime');
 
     expect(inspection.epochId).toBe('epoch-runtime');
     expect(inspection.project).toEqual({
@@ -362,7 +361,7 @@ it('returns deeply frozen detached inspection records', async () => {
 
   try {
     await publish({ files: runtimeFiles(), id: 'epoch-immutable', registry, root, store });
-    const service = new (inspectionService())(store, registry);
+    const service = new ArtifactInspectionService(store, registry);
     const inspection = await service.inspect('epoch-immutable');
 
     expect(Object.isFrozen(inspection)).toBe(true);
@@ -385,6 +384,66 @@ it('returns deeply frozen detached inspection records', async () => {
   }
 });
 
+it('uses callback facts captured during validation and excludes unmanifested mutated MCP paths', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-artifact-inspection-runtime-snapshot-'));
+  const publishingRegistry = runtimeRegistry();
+  const calls = { reads: 0, resolutions: 0 };
+  const store = new EpochStore({ projectRoot: root });
+
+  try {
+    await publish({ files: runtimeFiles(), id: 'epoch-runtime-snapshot', registry: publishingRegistry, root, store });
+    const inspection = await new ArtifactInspectionService(store, mutatingRuntimeRegistry(calls))
+      .inspect('epoch-runtime-snapshot');
+
+    expect(calls.reads).toBe(1);
+    expect(calls.resolutions).toBe(1);
+    expect(inspection.runtime.mcpServers).toEqual([{
+      entryPaths: ['synthetic/mcp/runner.mjs'],
+      kind: 'stdio',
+      manifestPath: 'synthetic/mcp.json',
+      name: 'runner',
+      target: fixtureTarget,
+    }]);
+    expect(JSON.stringify(inspection.runtime)).not.toContain('not-manifested.mjs');
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('fails closed without an inspection when an acquired artifact file cannot be read and releases its reference', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-artifact-inspection-read-failure-'));
+  const registry = runtimeRegistry();
+  const store = new ReadFailingEpochStore({ projectRoot: root });
+
+  try {
+    await publish({ files: runtimeFiles(), id: 'epoch-read-failure', registry, root, store });
+    await expect(new ArtifactInspectionService(store, registry).inspect('epoch-read-failure')).rejects.toMatchObject({
+      code: 'ARTIFACT_INSPECTION_INVALID',
+      diagnostics: expect.arrayContaining([expect.objectContaining({ code: 'AB6004' })]),
+    });
+    expect(store).toMatchObject({ acquired: 1, closed: 1 });
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('surfaces release failure after inspecting and closes every acquired reference', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-artifact-inspection-close-failure-'));
+  const registry = runtimeRegistry();
+  const store = new ThrowingCloseEpochStore({ projectRoot: root });
+
+  try {
+    await publish({ files: runtimeFiles(), id: 'epoch-close-failure', registry, root, store });
+    await expect(new ArtifactInspectionService(store, registry).inspect('epoch-close-failure')).rejects.toMatchObject({
+      code: 'ARTIFACT_INSPECTION_RELEASE_FAILED',
+      diagnostics: [expect.objectContaining({ code: 'AB6201' })],
+    });
+    expect(store).toMatchObject({ acquired: 1, closed: 1 });
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
 it('releases references after successful and invalid artifact inspections', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-artifact-inspection-references-'));
   const registry = runtimeRegistry();
@@ -392,7 +451,7 @@ it('releases references after successful and invalid artifact inspections', asyn
 
   try {
     await publish({ files: runtimeFiles(), id: 'epoch-reference', registry, root, store });
-    const service = new (inspectionService())(store, registry);
+    const service = new ArtifactInspectionService(store, registry);
     await service.inspect('epoch-reference');
     expect(store).toMatchObject({ acquired: 1, closed: 1 });
 
@@ -414,11 +473,11 @@ it('uses the exact supplied registry and fails closed with the default registry'
 
   try {
     await publish({ files: runtimeFiles(), id: 'epoch-registry', registry, root, store });
-    await expect(new (inspectionService())(store).inspect('epoch-registry')).rejects.toMatchObject({
+    await expect(new ArtifactInspectionService(store).inspect('epoch-registry')).rejects.toMatchObject({
       code: 'ARTIFACT_INSPECTION_INVALID',
       diagnostics: expect.arrayContaining([expect.objectContaining({ code: 'AB6009', target: fixtureTarget })]),
     });
-    await expect(new (inspectionService())(store, registry).inspect('epoch-registry')).resolves.toMatchObject({
+    await expect(new ArtifactInspectionService(store, registry).inspect('epoch-registry')).resolves.toMatchObject({
       epochId: 'epoch-registry',
     });
   } finally {
@@ -434,7 +493,7 @@ it('diffs exact epochs by artifact facts with stable lexical records', async () 
   try {
     await publish({ files: [...diffFiles('base')].reverse(), id: 'epoch-base', registry, root, store });
     await publish({ files: diffFiles('candidate'), id: 'epoch-candidate', registry, root, store });
-    const service = new (inspectionService())(store, registry);
+    const service = new ArtifactInspectionService(store, registry);
     const diff = await service.diff('epoch-base', 'epoch-candidate');
 
     expect(diff.added.map((record) => record.path)).toEqual(['synthetic/scripts/added.mjs']);
@@ -487,8 +546,26 @@ it('releases an acquired base reference when candidate acquisition fails', async
 
   try {
     await publish({ files: diffFiles('base'), id: 'epoch-base', registry, root, store });
-    await expect(new (inspectionService())(store, registry).diff('epoch-base', 'epoch-missing'))
+    await expect(new ArtifactInspectionService(store, registry).diff('epoch-base', 'epoch-missing'))
       .rejects.toMatchObject({ code: 'EPOCH_NOT_FOUND' });
+    expect(store).toMatchObject({ acquired: 1, closed: 1 });
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('surfaces release failure when diff closes a partially acquired reference', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-artifact-inspection-partial-close-failure-'));
+  const registry = scriptRegistry();
+  const store = new ThrowingCloseEpochStore({ projectRoot: root });
+
+  try {
+    await publish({ files: diffFiles('base'), id: 'epoch-base', registry, root, store });
+    await expect(new ArtifactInspectionService(store, registry).diff('epoch-base', 'epoch-missing'))
+      .rejects.toMatchObject({
+        code: 'ARTIFACT_INSPECTION_RELEASE_FAILED',
+        diagnostics: [expect.objectContaining({ code: 'AB6201' })],
+      });
     expect(store).toMatchObject({ acquired: 1, closed: 1 });
   } finally {
     await rm(root, { force: true, recursive: true });
@@ -520,7 +597,7 @@ it('compares canonical file source-input paths rather than project input hashes'
       sourceInputs: changedProjectInputs,
       store,
     });
-    const diff = await new (inspectionService())(store, registry)
+    const diff = await new ArtifactInspectionService(store, registry)
       .diff('epoch-provenance-base', 'epoch-provenance-candidate');
 
     expect(diff.changed).toEqual([]);
