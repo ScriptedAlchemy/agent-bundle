@@ -155,7 +155,6 @@ export interface RscRuntimeAppDefinition {
   readonly serverId: string;
   readonly serverName: string;
   readonly targets: readonly string[];
-  readonly template?: string;
 }
 
 export interface RscRuntimeGenerationMetadata {

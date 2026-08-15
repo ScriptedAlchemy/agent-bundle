@@ -657,8 +657,11 @@ const appDefinitions = (preparedRuntime: RuntimeDefinitionPreparedProject): read
     serverId: app.serverId,
     serverName: app.serverName,
     targets: [...app.targets],
-    ...(app.template === undefined ? {} : { template: app.template }),
-  }))) as unknown as readonly RscRuntimeAppDefinition[];
+  })).sort((left, right) => {
+    const leftJson = canonicalJson(left);
+    const rightJson = canonicalJson(right);
+    return leftJson < rightJson ? -1 : leftJson > rightJson ? 1 : 0;
+  })) as unknown as readonly RscRuntimeAppDefinition[];
 
 const runtimeDefinitionProjection = (
   definition: SerializedRuntimeDefinition,
@@ -809,7 +812,7 @@ const decodeMetadata = (value: JsonValue): RscRuntimeGenerationMetadata => {
 
   const decodedAppDefinitions = appDefinitions.map((value): RscRuntimeAppDefinition => {
     if (!isJsonObject(value)) throw new TypeError('Runtime generation App definition is malformed.');
-    const fields = ['_meta', 'id', 'name', 'resourceUri', 'serverId', 'serverName', 'targets', 'template'];
+    const fields = ['_meta', 'id', 'name', 'resourceUri', 'serverId', 'serverName', 'targets'];
     const requiredFields = ['id', 'name', 'resourceUri', 'serverId', 'serverName', 'targets'];
     if (Object.keys(value).some((key) => !fields.includes(key)) || requiredFields.some((field) => !(field in value)) ||
       typeof value.id !== 'string' || typeof value.name !== 'string' || typeof value.resourceUri !== 'string' ||
@@ -828,7 +831,6 @@ const decodeMetadata = (value: JsonValue): RscRuntimeGenerationMetadata => {
       serverId: value.serverId,
       serverName: value.serverName,
       targets: Object.freeze([...value.targets]),
-      ...(!('template' in value) ? {} : { template: value.template as string }),
     });
   });
 
