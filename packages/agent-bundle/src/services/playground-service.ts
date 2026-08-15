@@ -137,8 +137,6 @@ export interface PlaygroundSubscribeOptions {
 }
 
 export interface PlaygroundServiceOptions {
-  /** Test seam for deterministic lifecycle admission tests. */
-  readonly beforeSessionInstall?: () => void | Promise<void>;
   readonly maxSubscriberQueue?: number;
   readonly now?: () => Date;
   readonly projectId: string;
@@ -466,7 +464,6 @@ const normalizeAssertion = (value: PlaygroundSelectedAssertion): PlaygroundSelec
 
 export class PlaygroundService {
   readonly #admissions = new Set<Promise<void>>();
-  readonly #beforeSessionInstall: (() => void | Promise<void>) | undefined;
   readonly #maxSubscriberQueue: number;
   readonly #now: () => Date;
   readonly #projectId: string;
@@ -484,7 +481,6 @@ export class PlaygroundService {
     this.#projectId = projectId;
     this.#projectRoot = options.projectRoot;
     this.#storageRoot = options.storageRoot;
-    this.#beforeSessionInstall = options.beforeSessionInstall;
     this.#now = options.now ?? (() => new Date());
     const queue = options.maxSubscriberQueue ?? 64;
     if (!Number.isSafeInteger(queue) || queue < 1) {
@@ -504,9 +500,18 @@ export class PlaygroundService {
         throw serviceError('PLAYGROUND_SESSION_CONFLICT', `Playground session ${JSON.stringify(id)} already exists.`);
       }
       const root = this.#sessionRoot(id);
+      let createdRoot = false;
       let record: SessionRecord | undefined;
       try {
-        await mkdir(root);
+        try {
+          await mkdir(root);
+          createdRoot = true;
+        } catch (error) {
+          if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'EEXIST') {
+            throw serviceError('PLAYGROUND_SESSION_CONFLICT', `Playground session ${JSON.stringify(id)} already exists.`);
+          }
+          throw error;
+        }
         await this.#assertSessionDirectory(root, id);
         this.#assertAvailable();
         const ownerToken = await this.#acquireOwner(root, id);
@@ -526,13 +531,12 @@ export class PlaygroundService {
         };
         await writeFile(join(root, eventDocumentName), '', { encoding: 'utf8', flag: 'wx' });
         await this.#persistSession(record);
-        await this.#beforeSessionInstall?.();
         this.#assertAvailable();
         this.#sessions.set(id, record);
         return snapshotSession(record);
       } catch (error) {
         if (record !== undefined) await this.#discardUnadmittedSession(record).catch(() => undefined);
-        else if (this.#closing) await this.#removeSessionRoot(root, id).catch(() => undefined);
+        else if (createdRoot) await this.#removeSessionRoot(root, id).catch(() => undefined);
         throw error;
       }
     });
@@ -579,7 +583,6 @@ export class PlaygroundService {
         ownerToken,
       };
       try {
-        await this.#beforeSessionInstall?.();
         this.#assertAvailable();
         this.#sessions.set(id, record);
         return snapshotSession(record);
