@@ -245,12 +245,22 @@ const sessionDocumentName = 'session.json';
 const eventDocumentName = 'events.jsonl';
 const ownerLockName = '.owner.lock';
 const pathSegment = /^[a-z0-9][a-z0-9._-]*$/iu;
-const sensitiveKey = /(?:api[-_]?key|authorization|credential|password|secret|token)/iu;
 const providerCredentialPatterns = Object.freeze([
   /\bsk-(?:proj-|ant-|live-)?[a-z0-9_-]{16,}\b/iu,
   /\b(?:gh[pousr]_[a-z0-9]{20,}|github_pat_[a-z0-9_]{20,}|xox[baprs]-[a-z0-9-]{16,}|akia[a-z0-9]{16})\b/iu,
   /\bbearer[ \t]+[a-z0-9._~+/=-]{20,}\b/iu,
 ]);
+
+const sensitiveKey = (key: string): boolean => {
+  const segments = key
+    .replace(/([a-z0-9])([A-Z])/gu, '$1 $2')
+    .toLocaleLowerCase('en-US')
+    .split(/[^a-z0-9]+/u)
+    .filter((segment) => segment.length > 0);
+  const compact = segments.join('');
+  return segments.some((segment) => ['authorization', 'credential', 'credentials', 'password', 'secret', 'token'].includes(segment))
+    || /(?:apikey|apitoken|authtoken|accesstoken)$/u.test(compact);
+};
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -350,7 +360,12 @@ const assertNoProviderCredentials = (value: PlaygroundJsonValue): void => {
     return;
   }
   if (isRecord(value)) {
-    for (const item of Object.values(value)) assertNoProviderCredentials(item);
+    for (const [key, item] of Object.entries(value)) {
+      if (sensitiveKey(key)) {
+        throw serviceError('PLAYGROUND_CREDENTIAL_REJECTED', 'Playground records must not contain provider credential material.');
+      }
+      assertNoProviderCredentials(item);
+    }
   }
 };
 
@@ -441,7 +456,7 @@ const redactSecrets = (value: PlaygroundJsonValue): PlaygroundJsonValue => {
   if (!isRecord(value)) return value;
   const copied: Record<string, PlaygroundJsonValue> = {};
   for (const [key, item] of Object.entries(value)) {
-    if (!sensitiveKey.test(key)) copied[key] = redactSecrets(item);
+    if (!sensitiveKey(key)) copied[key] = redactSecrets(item);
   }
   return Object.freeze(copied);
 };
@@ -528,6 +543,7 @@ export class PlaygroundService {
   }
 
   async reopen(sessionId: string): Promise<PlaygroundSession> {
+    this.#assertAvailable();
     await this.#ensureStore();
     const id = safeSessionId(sessionId);
     const existing = this.#sessions.get(id);
@@ -615,6 +631,7 @@ export class PlaygroundService {
   }
 
   async replay(sessionId: string, cursor?: PlaygroundReplayCursor): Promise<PlaygroundReplay> {
+    this.#assertAvailable();
     const record = this.#requireSession(sessionId);
     const afterSequence = normalizeCursor(cursor);
     return this.#enqueue(record, async () => {
@@ -631,6 +648,7 @@ export class PlaygroundService {
   }
 
   async subscribe(sessionId: string, options: PlaygroundSubscribeOptions): Promise<PlaygroundSubscription> {
+    this.#assertAvailable();
     const record = this.#requireSession(sessionId);
     if (typeof options.onEvent !== 'function') {
       throw serviceError('PLAYGROUND_VALUE_INVALID', 'Playground subscription requires an event callback.');
@@ -663,11 +681,13 @@ export class PlaygroundService {
   }
 
   async export(sessionId: string): Promise<PlaygroundExport> {
+    this.#assertAvailable();
     const replay = await this.replay(sessionId);
     return Object.freeze({ events: replay.events, schemaVersion, session: replay.session });
   }
 
   async promoteToDraftEval(sessionId: string, selectedAssertions: readonly PlaygroundSelectedAssertion[]): Promise<DraftEvalCase> {
+    this.#assertAvailable();
     const record = this.#requireSession(sessionId);
     return this.#enqueue(record, async () => {
       if ((record.state !== 'finalized' && record.state !== 'closed') || record.outcome === undefined) {

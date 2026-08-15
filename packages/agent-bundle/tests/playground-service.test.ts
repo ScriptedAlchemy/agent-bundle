@@ -135,7 +135,7 @@ it('persists a frozen, globally ordered whole-plugin timeline with raw replay re
         kind: 'workspace-content',
       },
       {
-        evidence: { authorization: 'Bearer provider-secret', nested: { apiKey: 'provider-key', retained: true } },
+        evidence: { nested: { retained: true } },
         expectation: { status: 'passed' },
         id: 'response-completed',
         kind: 'durable-outcome',
@@ -164,8 +164,6 @@ it('persists a frozen, globally ordered whole-plugin timeline with raw replay re
       target: { digest: 'target-sha256', name: 'codex' },
       task: { id: 'task-1', text: 'Explain the current workspace state.' },
     });
-    expect(JSON.stringify(draft)).not.toContain('provider-secret');
-    expect(JSON.stringify(draft)).not.toContain('provider-key');
     expect(JSON.stringify(draft)).not.toContain('events.jsonl');
     expect(JSON.stringify(draft)).not.toContain('sequence');
 
@@ -506,6 +504,123 @@ it('fails closed deterministically when a replay backlog exceeds the subscriber 
     expect(subscription.closed).toBe(true);
     expect(received).toEqual([]);
     await expect(fixture.service.replay('backlog')).resolves.toMatchObject({ events: [{ sequence: 1 }, { sequence: 2 }, { sequence: 3 }] });
+  } finally {
+    await fixture.close();
+  }
+});
+
+it('rejects sensitive credential key names before metadata, event logs, outcomes, or draft evals can retain their values', async () => {
+  const fixture = await createFixture();
+  const credential = '0123456789abcdef0123456789abcdef';
+  try {
+    await expect(fixture.service.openSession({
+      ...sessionInput(),
+      invocation: { intent: { provider: { apiKey: credential } }, kind: 'script' },
+      sessionId: 'credential-key-identity',
+    })).rejects.toMatchObject({ code: 'PLAYGROUND_CREDENTIAL_REJECTED' });
+
+    await fixture.service.openSession({ ...sessionInput(), sessionId: 'credential-key' });
+    await fixture.service.append('credential-key', event('project', 'loaded', 'Project loaded.', { revision: 'a' }));
+    await expect(fixture.service.append('credential-key', event('mcp', 'response', 'MCP responded.', {
+      headers: { 'auth-token': credential },
+    }))).rejects.toMatchObject({ code: 'PLAYGROUND_CREDENTIAL_REJECTED' });
+    await expect(fixture.service.finalize('credential-key', {
+      status: 'passed',
+      workspace: { provider_secret: credential },
+    })).rejects.toMatchObject({ code: 'PLAYGROUND_CREDENTIAL_REJECTED' });
+
+    await fixture.service.finalize('credential-key', { status: 'passed' });
+    await expect(fixture.service.promoteToDraftEval('credential-key', [{
+      evidence: { nested: { access_token: credential } },
+      expectation: { equals: 'passed' },
+      id: 'credential-key',
+      kind: 'durable-outcome',
+    }])).rejects.toMatchObject({ code: 'PLAYGROUND_CREDENTIAL_REJECTED' });
+    const draft = await fixture.service.promoteToDraftEval('credential-key', [{
+      evidence: { status: 'passed' },
+      expectation: { equals: 'passed' },
+      id: 'durable-outcome',
+      kind: 'durable-outcome',
+    }]);
+    const sessionDocument = await readFile(join(fixture.storageRoot, 'sessions', 'credential-key', 'session.json'), 'utf8');
+    const eventDocument = await readFile(join(fixture.storageRoot, 'sessions', 'credential-key', 'events.jsonl'), 'utf8');
+    expect(sessionDocument).not.toContain(credential);
+    expect(eventDocument).not.toContain(credential);
+    expect(JSON.stringify(draft)).not.toContain(credential);
+  } finally {
+    await fixture.close();
+  }
+});
+
+it('rejects reopened metadata and event records that contain sensitive credential key names without echoing their values', async () => {
+  const fixture = await createFixture();
+  const credential = '0123456789abcdef0123456789abcdef';
+  try {
+    await fixture.service.openSession({ ...sessionInput(), sessionId: 'credential-corrupt' });
+    await fixture.service.append('credential-corrupt', event('project', 'loaded', 'Project loaded.', { revision: 'a' }));
+    await fixture.service.finalize('credential-corrupt', { status: 'passed' });
+    await fixture.service.close();
+
+    const sessionPath = join(fixture.storageRoot, 'sessions', 'credential-corrupt', 'session.json');
+    const eventPath = join(fixture.storageRoot, 'sessions', 'credential-corrupt', 'events.jsonl');
+    const originalSession = await readFile(sessionPath, 'utf8');
+    const originalEvents = await readFile(eventPath, 'utf8');
+    const metadata = JSON.parse(originalSession) as { identity: { invocation: { intent: Record<string, unknown> } } };
+    metadata.identity.invocation.intent = { api_key: credential };
+    await writeFile(sessionPath, `${JSON.stringify(metadata)}\n`, 'utf8');
+    const corruptMetadata = new PlaygroundService({
+      projectId: 'project-1',
+      projectRoot: fixture.projectRoot,
+      storageRoot: fixture.storageRoot,
+    });
+    try {
+      const failure = await corruptMetadata.reopen('credential-corrupt').catch((error: unknown) => error);
+      expect(failure).toMatchObject({ code: 'PLAYGROUND_STORE_CORRUPT' });
+      expect(String(failure)).not.toContain(credential);
+    } finally {
+      await corruptMetadata.close().catch(() => undefined);
+    }
+
+    await writeFile(sessionPath, originalSession, 'utf8');
+    const events = originalEvents.trim().split('\n').map((line) => JSON.parse(line) as { raw: Record<string, unknown> });
+    events[0]!.raw = { authorization: credential };
+    await writeFile(eventPath, `${events.map((item) => JSON.stringify(item)).join('\n')}\n`, 'utf8');
+    const corruptEvent = new PlaygroundService({
+      projectId: 'project-1',
+      projectRoot: fixture.projectRoot,
+      storageRoot: fixture.storageRoot,
+    });
+    try {
+      const failure = await corruptEvent.reopen('credential-corrupt').catch((error: unknown) => error);
+      expect(failure).toMatchObject({ code: 'PLAYGROUND_STORE_CORRUPT' });
+      expect(String(failure)).not.toContain(credential);
+    } finally {
+      await corruptEvent.close().catch(() => undefined);
+    }
+  } finally {
+    await fixture.close();
+  }
+});
+
+it('does not admit sessions, subscriptions, replay, export, or promotion after close begins or resolves', async () => {
+  const fixture = await createFixture();
+  let deliveries = 0;
+  try {
+    await fixture.service.openSession({ ...sessionInput(), sessionId: 'post-close' });
+    await fixture.service.append('post-close', event('project', 'loaded', 'Project loaded.', { revision: 'a' }));
+    await expect(fixture.service.close()).resolves.toBeUndefined();
+
+    await expect(fixture.service.reopen('post-close')).rejects.toMatchObject({ code: 'PLAYGROUND_SERVICE_CLOSED' });
+    await expect(fixture.service.subscribe('post-close', {
+      onEvent: () => { deliveries += 1; },
+    })).rejects.toMatchObject({ code: 'PLAYGROUND_SERVICE_CLOSED' });
+    await expect(fixture.service.replay('post-close')).rejects.toMatchObject({ code: 'PLAYGROUND_SERVICE_CLOSED' });
+    await expect(fixture.service.export('post-close')).rejects.toMatchObject({ code: 'PLAYGROUND_SERVICE_CLOSED' });
+    await expect(fixture.service.promoteToDraftEval('post-close', [])).rejects.toMatchObject({ code: 'PLAYGROUND_SERVICE_CLOSED' });
+    await expect(fixture.service.closeSession('post-close')).resolves.toBeUndefined();
+    await expect(fixture.service.close()).resolves.toBeUndefined();
+    expect(fixture.service.session('post-close')).toMatchObject({ state: 'closed' });
+    expect(deliveries).toBe(0);
   } finally {
     await fixture.close();
   }
