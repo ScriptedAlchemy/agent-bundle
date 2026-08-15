@@ -477,6 +477,102 @@ it('closes every connection whose relist validation fails across open, visible r
   }
 });
 
+it('retains public and manual relist cleanup failures for registry-close retry and aggregation', async () => {
+  const fixture = await createGenerationStore();
+  const publicOld = new TestConnection();
+  let publicCloseCalls = 0;
+  const publicFailure = new TestConnection({
+    close: async () => {
+      publicCloseCalls += 1;
+      throw new Error('public cleanup failed');
+    },
+    relist: async () => { throw new Error('public relist failed'); },
+  });
+  const manualOld = new TestConnection();
+  let manualCloseCalls = 0;
+  const manualFailure = new TestConnection({
+    close: async () => {
+      manualCloseCalls += 1;
+      throw new Error('manual cleanup failed');
+    },
+    relist: async () => { throw new Error('manual relist failed'); },
+  });
+  const publicRegistry = createRegistry({ connector: scriptedConnector(publicOld, publicFailure), store: fixture.store });
+  const manualRegistry = createRegistry({ connector: scriptedConnector(manualOld, manualFailure), store: fixture.store });
+  try {
+    await fixture.commit('g1');
+    await publicRegistry.open({ serverName: 'timeline', target: 'portable' });
+    expect((await publicRegistry.reconcile(registryInput({ definitionDigest: 'definition-2' }))).action).toBe('restart-failed');
+    await expect(publicRegistry.close()).rejects.toBeInstanceOf(RuntimeMcpRegistryCloseError);
+    expect(publicFailure.closed).toBe(true);
+    expect(publicCloseCalls).toBe(2);
+
+    const session = await manualRegistry.open({ serverName: 'timeline', target: 'portable' });
+    expect((await manualRegistry.restart({
+      expectedSessionRevision: session.snapshot().binding.sessionRevision,
+      sessionId: session.snapshot().binding.sessionId,
+    })).action).toBe('restart-failed');
+    await expect(manualRegistry.close()).rejects.toBeInstanceOf(RuntimeMcpRegistryCloseError);
+    expect(manualFailure.closed).toBe(true);
+    expect(manualCloseCalls).toBe(2);
+  } finally {
+    await Promise.all([
+      publicRegistry.close().catch(() => undefined),
+      manualRegistry.close().catch(() => undefined),
+    ]);
+    await fixture.close();
+  }
+});
+
+it('retains every failed staged cleanup when a later private replacement setup fails', async () => {
+  const fixture = await createGenerationStore();
+  const firstOld = new TestConnection();
+  const secondOld = new TestConnection();
+  let firstStagedCloseCalls = 0;
+  const firstStaged = new TestConnection({
+    close: async () => {
+      firstStagedCloseCalls += 1;
+      throw new Error('first staged cleanup failed');
+    },
+  });
+  let secondStagedCloseCalls = 0;
+  const secondStaged = new TestConnection({
+    close: async () => {
+      secondStagedCloseCalls += 1;
+      throw new Error('second staged cleanup failed');
+    },
+    relist: async () => { throw new Error('second staged relist failed'); },
+  });
+  let session = 0;
+  const registry = createRegistry({
+    connector: Object.freeze({
+      connect: async () => {
+        session += 1;
+        if (session === 1) return firstOld;
+        if (session === 2) return secondOld;
+        if (session === 3) return firstStaged;
+        return secondStaged;
+      },
+    }),
+    store: fixture.store,
+  });
+  try {
+    await fixture.commit('g1');
+    await registry.open({ serverName: 'timeline', target: 'portable' });
+    await registry.open({ serverName: 'timeline', target: 'portable' });
+    await expect(registry.prepareActivationReconcile(registryInput({ definitionDigest: 'definition-2' })))
+      .rejects.toBeInstanceOf(AggregateError);
+    await expect(registry.close()).rejects.toBeInstanceOf(RuntimeMcpRegistryCloseError);
+    expect(firstStaged.closed).toBe(true);
+    expect(secondStaged.closed).toBe(true);
+    expect(firstStagedCloseCalls).toBe(2);
+    expect(secondStagedCloseCalls).toBe(2);
+  } finally {
+    await registry.close().catch(() => undefined);
+    await fixture.close();
+  }
+});
+
 it('repairs a failed visible session through private activation without consuming an invalid prepared transaction', async () => {
   const fixture = await createGenerationStore();
   const first = new TestConnection();
@@ -579,6 +675,41 @@ it('delivers public and delayed-private results in sequence order under reentran
       if ('sequence' in message) replay.push(message.sequence);
     });
     expect(replay).toEqual([1, 2, 3, 4]);
+  } finally {
+    await registry.close().catch(() => undefined);
+    await fixture.close();
+  }
+});
+
+it('honors afterSequence and snapshots subscribers across delayed and reentrant delivery', async () => {
+  const fixture = await createGenerationStore();
+  const registry = createRegistry({ store: fixture.store });
+  try {
+    await fixture.commit('g1');
+    await registry.reconcile(registryInput({ serverDigest: 'one' }));
+    await registry.reconcile(registryInput({ serverDigest: 'two' }));
+    const delayed = registry.commitActivationReconcile(
+      await registry.prepareActivationReconcile(registryInput({ runtimeGenerationId: 'g1', serverDigest: 'three' })),
+    );
+    await registry.reconcile(registryInput({ serverDigest: 'four' }));
+    const afterFour: number[] = [];
+    registry.subscribe({ afterSequence: 4 }, (message) => {
+      if ('sequence' in message) afterFour.push(message.sequence);
+    });
+    delayed.publish();
+    expect(afterFour).toEqual([]);
+
+    const nested: number[] = [];
+    registry.subscribe({ afterSequence: 4 }, (message) => {
+      if ('sequence' in message && message.sequence === 5) {
+        registry.subscribe({ afterSequence: 0 }, (inner) => {
+          if ('sequence' in inner) nested.push(inner.sequence);
+        });
+      }
+    });
+    await registry.reconcile(registryInput({ serverDigest: 'five' }));
+    await registry.reconcile(registryInput({ serverDigest: 'six' }));
+    expect(nested).toEqual([1, 2, 3, 4, 5, 6]);
   } finally {
     await registry.close().catch(() => undefined);
     await fixture.close();

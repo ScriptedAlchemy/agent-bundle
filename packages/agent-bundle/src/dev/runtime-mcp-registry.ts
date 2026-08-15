@@ -82,8 +82,14 @@ interface RetiredConnectionBatch {
   finalization: Promise<void> | undefined;
 }
 
+interface OrphanedConnection {
+  readonly connection: RuntimeMcpConnection;
+  finalization: Promise<void> | undefined;
+}
+
 interface Subscription {
   closed: boolean;
+  lastDeliveredSequence: number;
   readonly listener: DevRuntimeMcpRegistryListener;
   readonly pending: RuntimeMcpRegistryMessage[];
   replaying: boolean;
@@ -300,6 +306,7 @@ export class RuntimeMcpRegistry implements DevRuntimeMcpRegistry {
   readonly #sessions = new Map<string, SessionRecord>();
   readonly #subscriptions = new Set<Subscription>();
   readonly #pendingPublications = new Map<number, DevRuntimeMcpRegistryReconcileResult>();
+  readonly #orphanedConnections = new Map<RuntimeMcpConnection, OrphanedConnection>();
   readonly #retirements = new Set<RetiredConnectionBatch>();
   #closePromise: Promise<void> | undefined;
   #closed = false;
@@ -479,7 +486,13 @@ export class RuntimeMcpRegistry implements DevRuntimeMcpRegistry {
     if (!Number.isSafeInteger(afterSequence) || afterSequence < 0 || afterSequence > this.#sequence) {
       throw registryConflict('afterSequence must be a current runtime MCP registry cursor.');
     }
-    const subscription: Subscription = { closed: false, listener, pending: [], replaying: true };
+    const subscription: Subscription = {
+      closed: false,
+      lastDeliveredSequence: afterSequence,
+      listener,
+      pending: [],
+      replaying: true,
+    };
     this.#subscriptions.add(subscription);
     const earliest = this.#history[0]?.sequence;
     if (earliest !== undefined && afterSequence < earliest - 1) {
@@ -542,10 +555,18 @@ export class RuntimeMcpRegistry implements DevRuntimeMcpRegistry {
       return prepared;
     } catch (error) {
       stagedAbort.abort(error);
-      await Promise.allSettled([...replacements.values()].map(async ({ connection }) => connection.close()));
+      const cleanupFailures = await this.#closeConnectionsAndRetain(
+        [...replacements.values()].map(({ connection }) => connection),
+      );
       release();
       if (this.#preparingActivation === preparation) this.#preparingActivation = undefined;
       markPreparedSettled();
+      if (cleanupFailures.length > 0) {
+        throw new AggregateError(
+          [error, ...cleanupFailures],
+          'Runtime MCP activation staging and cleanup both failed.',
+        );
+      }
       throw error;
     }
   }
@@ -641,13 +662,14 @@ export class RuntimeMcpRegistry implements DevRuntimeMcpRegistry {
     this.#activation.delete(prepared);
     this.#preparedActivations.delete(prepared);
     record.stagedAbort.abort(new Error('Runtime MCP activation reconciliation was aborted.'));
-    const results = await Promise.allSettled([...record.replacements.entries()].map(async ([id, replacement]) => {
-      await replacement.connection.close();
+    const entries = [...record.replacements.entries()];
+    const results = await Promise.allSettled(entries.map(async ([id, replacement]) => {
+      await this.#closeOrRetain(replacement.connection);
       return id;
     }));
     this.#mutation = 'none';
     const failures = results.flatMap((result, index) => result.status === 'rejected'
-      ? [Object.freeze({ error: result.reason, resource: `staged:${[...record.replacements.keys()][index]}` })]
+      ? [Object.freeze({ error: result.reason, resource: `staged:${entries[index]![0]}` })]
       : []);
     if (failures.length > 0) throw new RuntimeMcpRegistryCloseError(failures);
   }
@@ -675,6 +697,8 @@ export class RuntimeMcpRegistry implements DevRuntimeMcpRegistry {
     const records = [...this.#sessions.values()];
     this.#sessions.clear();
     const results = await Promise.allSettled(records.map((record) => this.#closeRecord(record, new Error('Runtime MCP registry was closed.'))));
+    const orphans = [...this.#orphanedConnections.values()];
+    const orphanResults = await Promise.allSettled(orphans.map((orphan) => this.#finalizeOrphan(orphan)));
     const failures = [
       ...activationResults.flatMap((result, index) => result.status === 'rejected'
         ? [Object.freeze({ error: result.reason, resource: `activation:${prepared[index]!.reservationRevision}` })]
@@ -685,6 +709,9 @@ export class RuntimeMcpRegistry implements DevRuntimeMcpRegistry {
       ...results.flatMap((result, index) => result.status === 'rejected'
       ? [Object.freeze({ error: result.reason, resource: `session:${records[index]!.id}` })]
       : []),
+      ...orphanResults.flatMap((result, index) => result.status === 'rejected'
+        ? [Object.freeze({ error: result.reason, resource: `orphan:${index}` })]
+        : []),
     ];
     if (failures.length > 0) throw new RuntimeMcpRegistryCloseError(failures);
   }
@@ -857,7 +884,7 @@ export class RuntimeMcpRegistry implements DevRuntimeMcpRegistry {
     const oldConnection = record.connection;
     const oldOperations = [...record.operations];
     await this.#cancelAndDrain(oldOperations, record.abort);
-    if (oldConnection !== undefined) await oldConnection.close();
+    if (oldConnection !== undefined) await this.#closeOrRetain(oldConnection);
     const nextAbort = new AbortController();
     record.abort = nextAbort;
     const connected = await this.#connectAndRelist(record.descriptor, record.id, nextAbort.signal);
@@ -869,7 +896,10 @@ export class RuntimeMcpRegistry implements DevRuntimeMcpRegistry {
   #finalizeRetirement(retirement: RetiredConnectionBatch): Promise<void> {
     retirement.finalization ??= this.#finalizeRetirementInternal(retirement).then(
       () => { this.#retirements.delete(retirement); },
-      (error: unknown) => { throw error; },
+      (error: unknown) => {
+        retirement.finalization = undefined;
+        throw error;
+      },
     );
     return retirement.finalization;
   }
@@ -877,7 +907,7 @@ export class RuntimeMcpRegistry implements DevRuntimeMcpRegistry {
   async #finalizeRetirementInternal(retirement: RetiredConnectionBatch): Promise<void> {
     const results = await Promise.allSettled(retirement.entries.flatMap((entry) => [
       this.#cancelAndDrain(entry.operations, entry.abort),
-      ...(entry.connection === undefined ? [] : [entry.connection.close()]),
+      ...(entry.connection === undefined ? [] : [this.#closeOrRetain(entry.connection)]),
     ]));
     const failures = results.flatMap((result, index) => result.status === 'rejected'
       ? [Object.freeze({ error: result.reason, resource: `retired:${index}` })]
@@ -896,12 +926,42 @@ export class RuntimeMcpRegistry implements DevRuntimeMcpRegistry {
     record.connection = undefined;
     const results = await Promise.allSettled([
       this.#cancelAndDrain(operations, record.abort),
-      ...(connection === undefined ? [] : [connection.close()]),
+      ...(connection === undefined ? [] : [this.#closeOrRetain(connection)]),
     ]);
     const failures = results.flatMap((result, index) => result.status === 'rejected'
       ? [Object.freeze({ error: result.reason, resource: `${record.id}:${index}` })]
       : []);
     if (failures.length > 0) throw new RuntimeMcpRegistryCloseError(failures);
+  }
+
+  #retainOrphan(connection: RuntimeMcpConnection): void {
+    if (this.#orphanedConnections.has(connection)) return;
+    this.#orphanedConnections.set(connection, { connection, finalization: undefined });
+  }
+
+  async #closeOrRetain(connection: RuntimeMcpConnection): Promise<void> {
+    try {
+      await connection.close();
+    } catch (error) {
+      this.#retainOrphan(connection);
+      throw error;
+    }
+  }
+
+  #finalizeOrphan(orphan: OrphanedConnection): Promise<void> {
+    orphan.finalization ??= this.#closeOrRetain(orphan.connection).then(
+      () => { this.#orphanedConnections.delete(orphan.connection); },
+      (error: unknown) => {
+        orphan.finalization = undefined;
+        throw error;
+      },
+    );
+    return orphan.finalization;
+  }
+
+  async #closeConnectionsAndRetain(connections: readonly RuntimeMcpConnection[]): Promise<readonly unknown[]> {
+    const results = await Promise.allSettled(connections.map((connection) => this.#closeOrRetain(connection)));
+    return Object.freeze(results.flatMap((result) => result.status === 'rejected' ? [result.reason] : []));
   }
 
   async #cancelAndDrain(operations: readonly OperationRecord[], abort: AbortController): Promise<void> {
@@ -969,7 +1029,8 @@ export class RuntimeMcpRegistry implements DevRuntimeMcpRegistry {
         this.#nextPublicationSequence += 1;
         this.#history.push(next);
         if (this.#history.length > maxRetainedResults) this.#history.splice(0, this.#history.length - maxRetainedResults);
-        for (const subscription of this.#subscriptions) {
+        const subscribers = [...this.#subscriptions];
+        for (const subscription of subscribers) {
           if (subscription.closed) continue;
           if (subscription.replaying) subscription.pending.push(next);
           else this.#deliver(subscription, next);
@@ -982,6 +1043,10 @@ export class RuntimeMcpRegistry implements DevRuntimeMcpRegistry {
 
   #deliver(subscription: Subscription, message: RuntimeMcpRegistryMessage): void {
     if (subscription.closed) return;
+    if ('sequence' in message) {
+      if (message.sequence <= subscription.lastDeliveredSequence) return;
+      subscription.lastDeliveredSequence = message.sequence;
+    }
     try {
       subscription.listener(message);
     } catch {
@@ -1067,10 +1132,9 @@ export class RuntimeMcpRegistry implements DevRuntimeMcpRegistry {
   }
 
   async #closeAfterFailedSetup(connection: RuntimeMcpConnection, error: unknown): Promise<never> {
-    try {
-      await connection.close();
-    } catch (cleanupError) {
-      throw new AggregateError([error, cleanupError], 'Runtime MCP connection setup and cleanup both failed.');
+    const cleanupFailures = await this.#closeConnectionsAndRetain([connection]);
+    if (cleanupFailures.length > 0) {
+      throw new AggregateError([error, ...cleanupFailures], 'Runtime MCP connection setup and cleanup both failed.');
     }
     throw error;
   }
