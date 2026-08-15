@@ -1,3 +1,7 @@
+import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import { expect, it } from '@rstest/core';
 
 import {
@@ -7,6 +11,39 @@ import {
   type DevRuntimeRun,
   type DevRuntimeSurface,
 } from '../src/dev/index.ts';
+import {
+  DevRuntimeProviderLoadError,
+  resolveDevRuntimeProvider,
+} from '../src/dev/runtime-provider-loader.ts';
+
+const createProviderFixture = async (): Promise<{
+  readonly provider: string;
+  readonly root: string;
+}> => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-runtime-provider-'));
+  const provider = join(root, 'src', 'dev', 'provider.ts');
+  await mkdir(join(root, 'src', 'dev'), { recursive: true });
+  await writeFile(provider, [
+    "export const createDevRuntimeProvider = () => ({",
+    "  descriptor: { environmentVariables: ['RUNTIME_TOKEN'], id: 'fixture-runtime', label: 'Fixture runtime', schemaVersion: 1 },",
+    '  start: async () => ({}),',
+    '});',
+    '',
+  ].join('\n'));
+  return { provider, root };
+};
+
+const fixtureProvider = (overrides: Readonly<Record<string, unknown>> = {}) => ({
+  descriptor: {
+    environmentVariables: ['RUNTIME_TOKEN'],
+    id: 'fixture-runtime',
+    label: 'Fixture runtime',
+    schemaVersion: 1,
+    ...(overrides.descriptor as Record<string, unknown> | undefined),
+  },
+  start: async () => ({}),
+  ...overrides,
+});
 
 const vector = {
   providerSessionId: 'provider-a',
@@ -125,4 +162,106 @@ it('uses stable errors for unavailable and stale runtime generations', () => {
     expectedGenerationId: 'expected-generation',
     name: 'DevRuntimeGenerationConflictError',
   });
+});
+
+it('loads one contained named runtime provider export with a frozen descriptor', async () => {
+  const { root } = await createProviderFixture();
+  let imports = 0;
+  let factories = 0;
+  try {
+    const provider = await resolveDevRuntimeProvider(
+      root,
+      { provider: './src/dev/provider.ts' },
+      async (path) => {
+        imports += 1;
+        expect(path).toBe(join(root, 'src', 'dev', 'provider.ts'));
+        return {
+          createDevRuntimeProvider: () => {
+            factories += 1;
+            return fixtureProvider();
+          },
+        };
+      },
+    );
+
+    expect(imports).toBe(1);
+    expect(factories).toBe(1);
+    expect(provider.descriptor).toEqual({
+      environmentVariables: ['RUNTIME_TOKEN'],
+      id: 'fixture-runtime',
+      label: 'Fixture runtime',
+      schemaVersion: 1,
+    });
+    expect(Object.isFrozen(provider.descriptor)).toBe(true);
+    expect(Object.isFrozen(provider.descriptor.environmentVariables)).toBe(true);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('rejects lexical, symlink, and directory provider escapes before importing', async () => {
+  const { root } = await createProviderFixture();
+  const outside = await mkdtemp(join(tmpdir(), 'agent-bundle-runtime-provider-outside-'));
+  const linked = join(root, 'linked');
+  let imports = 0;
+  const importer = async () => {
+    imports += 1;
+    return { createDevRuntimeProvider: () => fixtureProvider() };
+  };
+  try {
+    await symlink(outside, linked, 'dir');
+    await expect(resolveDevRuntimeProvider(root, { provider: '../outside/provider.ts' }, importer))
+      .rejects.toBeInstanceOf(DevRuntimeProviderLoadError);
+    await expect(resolveDevRuntimeProvider(root, { provider: './linked/provider.ts' }, importer))
+      .rejects.toMatchObject({ code: 'AB8200' });
+    await expect(resolveDevRuntimeProvider(root, { provider: './src/dev' }, importer))
+      .rejects.toMatchObject({ code: 'AB8200' });
+    expect(imports).toBe(0);
+  } finally {
+    await Promise.all([
+      rm(root, { force: true, recursive: true }),
+      rm(outside, { force: true, recursive: true }),
+    ]);
+  }
+});
+
+it('rejects missing exports and malformed provider descriptors without leaking environment values', async () => {
+  const { root } = await createProviderFixture();
+  try {
+    await expect(resolveDevRuntimeProvider(root, { provider: './src/dev/provider.ts' }, async () => ({})))
+      .rejects.toMatchObject({ code: 'AB8200' });
+    await expect(resolveDevRuntimeProvider(root, { provider: './src/dev/provider.ts' }, async () => ({
+      createDevRuntimeProvider: () => fixtureProvider({
+        descriptor: { environmentVariables: ['RUNTIME_TOKEN', 'RUNTIME_TOKEN'], id: '', label: '', schemaVersion: 2 },
+      }),
+    }))).rejects.toMatchObject({ code: 'AB8200' });
+    const error = await resolveDevRuntimeProvider(
+      root,
+      { provider: './src/dev/provider.ts' },
+      async () => ({
+        createDevRuntimeProvider: () => fixtureProvider({
+          descriptor: { environmentVariables: ['RUNTIME_TOKEN=must-not-leak'], id: 'fixture-runtime', label: 'Fixture runtime', schemaVersion: 1 },
+        }),
+      }),
+    ).then(() => undefined, (reason: unknown) => reason);
+    expect(error).toMatchObject({ code: 'AB8200' });
+    expect((error as Error).message).not.toContain('must-not-leak');
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('normalizes provider property accessor failures to the stable load error', async () => {
+  const { root } = await createProviderFixture();
+  try {
+    await expect(resolveDevRuntimeProvider(root, { provider: './src/dev/provider.ts' }, async () => ({
+      createDevRuntimeProvider: () => Object.defineProperty({ start: async () => ({}) }, 'descriptor', {
+        get: () => {
+          throw new Error('provider descriptor accessor failed');
+        },
+      }),
+    }))).rejects.toMatchObject({ code: 'AB8200' });
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
 });

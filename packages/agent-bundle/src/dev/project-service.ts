@@ -10,8 +10,15 @@ import { normalizeProject } from '../config/normalize.ts';
 import { validateModel, validateSource } from '../config/validate.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { digest } from '../core/digest.ts';
-import type { NormalizedPlugin } from '../core/types.ts';
-import type { SourceStatus } from './types.ts';
+import type {
+  AgentBundleConfig,
+  AgentBundleDevRuntimeConfig,
+  NormalizedMcpApp,
+  NormalizedMcpServer,
+  NormalizedPlugin,
+} from '../core/types.ts';
+import type { DevRuntimePreparedMcpApp, DevRuntimePreparedMcpServer, DevRuntimePreparedProject } from './runtime-provider.ts';
+import { freezeJsonValue, type JsonObject, type JsonValue, type SourceStatus } from './types.ts';
 
 export type ProjectCommand = 'build' | 'inspect' | 'validate';
 
@@ -21,6 +28,7 @@ export interface ProjectServiceLogger {
 
 export interface ProjectServiceOptions {
   readonly configPath?: string;
+  readonly includeDevRuntime?: boolean;
   readonly logger?: ProjectServiceLogger;
   readonly mode?: string;
   readonly root: string;
@@ -31,6 +39,8 @@ export interface PreparedProject {
   readonly configDigest?: string;
   readonly configPath: string;
   readonly diagnostics: readonly Diagnostic[];
+  readonly devRuntime?: DevRuntimePreparedProject;
+  readonly devRuntimeDiagnostic?: Diagnostic;
   readonly model?: NormalizedPlugin;
   readonly registry: TargetRegistry;
   readonly root: string;
@@ -136,6 +146,179 @@ const sourceStatus = (
   state: hasErrors(diagnostics) ? 'invalid' : 'ready',
 });
 
+const sourceDiagnostic = (message: string, sourcePath: string): Diagnostic => Object.freeze({
+  code: 'AB8200',
+  message,
+  severity: 'error',
+  sourcePath,
+});
+
+const runtimeDeclaration = (
+  include: boolean,
+  config: unknown,
+  configPath: string,
+): Readonly<{ declaration?: AgentBundleDevRuntimeConfig; diagnostic?: Diagnostic }> => {
+  if (!include) return Object.freeze({});
+  if (typeof config !== 'object' || config === null || Array.isArray(config)) {
+    return Object.freeze({ diagnostic: sourceDiagnostic('Development configuration must be an object.', configPath) });
+  }
+  const dev = Object.getOwnPropertyDescriptor(config, 'dev');
+  if (dev === undefined) return Object.freeze({});
+  if (!('value' in dev) || typeof dev.value !== 'object' || dev.value === null || Array.isArray(dev.value)) {
+    return Object.freeze({ diagnostic: sourceDiagnostic('Development configuration must be an object.', configPath) });
+  }
+  const runtime = Object.getOwnPropertyDescriptor(dev.value, 'runtime');
+  if (runtime === undefined) return Object.freeze({});
+  if (!('value' in runtime) || typeof runtime.value !== 'object' || runtime.value === null || Array.isArray(runtime.value)) {
+    return Object.freeze({ diagnostic: sourceDiagnostic('Development runtime provider must be a nonempty project-relative module path.', configPath) });
+  }
+  const provider = Object.getOwnPropertyDescriptor(runtime.value, 'provider');
+  if (provider === undefined || !('value' in provider) || typeof provider.value !== 'string' || provider.value.trim().length === 0) {
+    return Object.freeze({ diagnostic: sourceDiagnostic('Development runtime provider must be a nonempty project-relative module path.', configPath) });
+  }
+  return Object.freeze({ declaration: Object.freeze({ provider: provider.value }) });
+};
+
+const cloneJsonSnapshot = (value: unknown, ancestors = new Set<object>()): JsonValue => {
+  if (value === null || typeof value === 'boolean' || typeof value === 'string') return value;
+  if (typeof value === 'number') {
+    if (Number.isFinite(value)) return value;
+    throw new TypeError('numbers must be finite');
+  }
+  if (typeof value !== 'object' || ancestors.has(value)) throw new TypeError('value must be a finite JSON tree');
+
+  ancestors.add(value);
+  try {
+    if (Array.isArray(value)) {
+      const copy: JsonValue[] = [];
+      for (const key of Reflect.ownKeys(value)) {
+        if (typeof key !== 'string' || (key !== 'length' && (!/^(0|[1-9]\d*)$/u.test(key) || Number(key) >= value.length))) {
+          throw new TypeError('arrays must contain only indexed values');
+        }
+      }
+      for (let index = 0; index < value.length; index += 1) {
+        const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+        if (descriptor === undefined || !('value' in descriptor)) throw new TypeError('arrays cannot contain accessors or holes');
+        copy.push(cloneJsonSnapshot(descriptor.value, ancestors));
+      }
+      return copy;
+    }
+
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) throw new TypeError('objects must be plain');
+    const copy: Record<string, JsonValue> = {};
+    for (const key of Reflect.ownKeys(value)) {
+      if (typeof key !== 'string') throw new TypeError('objects cannot contain symbol properties');
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (descriptor === undefined || !('value' in descriptor)) throw new TypeError('objects cannot contain accessors');
+      copy[key] = cloneJsonSnapshot(descriptor.value, ancestors);
+    }
+    return copy;
+  } finally {
+    ancestors.delete(value);
+  }
+};
+
+const appMetadata = (value: unknown): JsonObject => {
+  const snapshot = cloneJsonSnapshot(value);
+  if (typeof snapshot !== 'object' || snapshot === null || Array.isArray(snapshot)) {
+    throw new TypeError('MCP App metadata must be a JSON object');
+  }
+  return freezeJsonValue(snapshot) as JsonObject;
+};
+
+const stringRecord = (value: Readonly<Record<string, string>> | undefined): Readonly<Record<string, string>> | undefined =>
+  value === undefined ? undefined : Object.freeze({ ...value });
+
+const preparedMcpServer = (server: NormalizedMcpServer): DevRuntimePreparedMcpServer => Object.freeze({
+  ...(server.args === undefined ? {} : { args: Object.freeze([...server.args]) }),
+  ...(server.command === undefined ? {} : { command: server.command }),
+  ...(server.cwd === undefined ? {} : { cwd: server.cwd }),
+  ...(server.env === undefined ? {} : { env: stringRecord(server.env) }),
+  ...(server.headers === undefined ? {} : { headers: stringRecord(server.headers) }),
+  id: server.id,
+  name: server.name,
+  ...(server.source === undefined ? {} : { source: server.source }),
+  targets: Object.freeze([...server.targets]),
+  transport: server.transport,
+  ...(server.url === undefined ? {} : { url: server.url }),
+});
+
+const preparedMcpApp = (app: NormalizedMcpApp): DevRuntimePreparedMcpApp => Object.freeze({
+  ...(app._meta === undefined ? {} : { _meta: appMetadata(app._meta) }),
+  id: app.id,
+  name: app.name,
+  resourceUri: app.resourceUri,
+  serverId: app.serverId,
+  serverName: app.serverName,
+  source: app.source,
+  targets: Object.freeze([...app.targets]),
+  ...(app.template === undefined ? {} : { template: app.template }),
+});
+
+const preparedRuntime = (
+  declaration: AgentBundleDevRuntimeConfig,
+  model: NormalizedPlugin,
+  revision: string,
+): DevRuntimePreparedProject => Object.freeze({
+  apps: Object.freeze((model.mcpApps ?? []).map(preparedMcpApp)),
+  provider: declaration.provider,
+  servers: Object.freeze(model.mcpServers.map(preparedMcpServer)),
+  sourceRevision: revision,
+});
+
+const runtimeMetadataDiagnostics = new Set(['AB4335', 'AB4338']);
+
+const configWithRuntimeMetadataRemoved = (config: Record<string, unknown>): Record<string, unknown> => {
+  const mcp = Object.getOwnPropertyDescriptor(config, 'mcp');
+  if (mcp === undefined || !('value' in mcp) || typeof mcp.value !== 'object' || mcp.value === null || Array.isArray(mcp.value)) return config;
+  const servers = Object.getOwnPropertyDescriptor(mcp.value, 'servers');
+  if (servers === undefined || !('value' in servers) || typeof servers.value !== 'object' || servers.value === null || Array.isArray(servers.value)) return config;
+
+  const sanitizedServers: Record<string, unknown> = {};
+  for (const [name, server] of Object.entries(servers.value)) {
+    if (typeof server !== 'object' || server === null || Array.isArray(server)) {
+      sanitizedServers[name] = server;
+      continue;
+    }
+    const apps = Object.getOwnPropertyDescriptor(server, 'apps');
+    if (apps === undefined || !('value' in apps) || typeof apps.value !== 'object' || apps.value === null || Array.isArray(apps.value)) {
+      sanitizedServers[name] = server;
+      continue;
+    }
+    const sanitizedApps: Record<string, unknown> = {};
+    for (const [appName, app] of Object.entries(apps.value)) {
+      if (typeof app !== 'object' || app === null || Array.isArray(app)) {
+        sanitizedApps[appName] = app;
+        continue;
+      }
+      const meta = Object.getOwnPropertyDescriptor(app, '_meta');
+      if (meta === undefined || ('value' in meta && (() => {
+        try {
+          appMetadata(meta.value);
+          return true;
+        } catch {
+          return false;
+        }
+      })())) {
+        sanitizedApps[appName] = app;
+        continue;
+      }
+      const descriptors = Object.getOwnPropertyDescriptors(app);
+      delete descriptors._meta;
+      sanitizedApps[appName] = Object.defineProperties({}, descriptors);
+    }
+    const descriptors = Object.getOwnPropertyDescriptors(server);
+    descriptors.apps = { configurable: true, enumerable: true, value: sanitizedApps, writable: true };
+    sanitizedServers[name] = Object.defineProperties({}, descriptors);
+  }
+  const mcpDescriptors = Object.getOwnPropertyDescriptors(mcp.value);
+  mcpDescriptors.servers = { configurable: true, enumerable: true, value: sanitizedServers, writable: true };
+  const configDescriptors = Object.getOwnPropertyDescriptors(config);
+  configDescriptors.mcp = { configurable: true, enumerable: true, value: Object.defineProperties({}, mcpDescriptors), writable: true };
+  return Object.defineProperties({}, configDescriptors);
+};
+
 const preparedProject = (
   configPath: string,
   snapshot: ProjectSourceSnapshot,
@@ -144,11 +327,15 @@ const preparedProject = (
   root: string,
   source: SourceStatus,
   model?: NormalizedPlugin,
+  devRuntime?: DevRuntimePreparedProject,
+  devRuntimeDiagnostic?: Diagnostic,
 ): PreparedProject => Object.freeze({
   ...(snapshot.configDigest === undefined ? {} : { configDigest: snapshot.configDigest }),
   configPath,
   diagnostics,
   ...(model === undefined ? {} : { model }),
+  ...(devRuntime === undefined ? {} : { devRuntime }),
+  ...(devRuntimeDiagnostic === undefined ? {} : { devRuntimeDiagnostic }),
   registry,
   root,
   source,
@@ -194,8 +381,11 @@ export class ProjectService {
     }
 
     const snapshot = await snapshotProjectSource(root, loaded.configPath);
+    const runtime = runtimeDeclaration(this.#options.includeDevRuntime === true, loaded.config, loaded.configPath);
     const sourceDiagnostics = freezeDiagnostics(validateSource(loaded, discovered));
-    if (hasErrors(sourceDiagnostics)) {
+    const supplementalMetadataFailure = runtime.declaration !== undefined &&
+      sourceDiagnostics.length > 0 && sourceDiagnostics.every((diagnostic) => runtimeMetadataDiagnostics.has(diagnostic.code));
+    if (hasErrors(sourceDiagnostics) && !supplementalMetadataFailure) {
       const source = sourceStatus(sourceDiagnostics, snapshot.revision);
       log(this.#options.logger, 'project.invalid-source', { diagnostics: sourceDiagnostics.length, root });
       return preparedProject(loaded.configPath, snapshot, sourceDiagnostics, registry, root, source);
@@ -203,7 +393,16 @@ export class ProjectService {
 
     let model: NormalizedPlugin;
     try {
-      model = await normalizeProject(loaded, discovered, registry);
+      model = await normalizeProject(
+        supplementalMetadataFailure
+          ? {
+            ...loaded,
+            config: configWithRuntimeMetadataRemoved(loaded.config as Record<string, unknown>) as AgentBundleConfig,
+          }
+          : loaded,
+        discovered,
+        registry,
+      );
     } catch (error) {
       const diagnostics = freezeDiagnostics([{
         code: 'AB7001',
@@ -229,6 +428,28 @@ export class ProjectService {
       root,
       targets: model.targets.map((target) => target.name),
     });
-    return preparedProject(loaded.configPath, snapshot, frozenDiagnostics, registry, root, source, model);
+    let devRuntime: DevRuntimePreparedProject | undefined;
+    let devRuntimeDiagnostic = runtime.diagnostic;
+    if (runtime.declaration !== undefined && !supplementalMetadataFailure) {
+      try {
+        devRuntime = preparedRuntime(runtime.declaration, model, snapshot.revision);
+      } catch {
+        devRuntimeDiagnostic = sourceDiagnostic('Development runtime MCP App metadata must contain only finite JSON data.', loaded.configPath);
+      }
+    }
+    if (supplementalMetadataFailure) {
+      devRuntimeDiagnostic = sourceDiagnostic('Development runtime MCP App metadata must contain only finite JSON data.', loaded.configPath);
+    }
+    return preparedProject(
+      loaded.configPath,
+      snapshot,
+      frozenDiagnostics,
+      registry,
+      root,
+      source,
+      model,
+      devRuntime,
+      devRuntimeDiagnostic,
+    );
   }
 }

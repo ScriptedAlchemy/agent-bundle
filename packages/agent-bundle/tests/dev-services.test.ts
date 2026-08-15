@@ -31,6 +31,110 @@ const createProject = async (skillMarkdown: string): Promise<string> => {
   return root;
 };
 
+const createRuntimeProject = async (options: Readonly<{
+  readonly appMeta?: string;
+  readonly provider?: string;
+}> = {}): Promise<{
+  readonly root: string;
+  readonly sentinel: string;
+}> => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-dev-runtime-'));
+  const sentinel = join(root, 'provider-imported');
+  await mkdir(join(root, 'skills', 'review'), { recursive: true });
+  await mkdir(join(root, 'src', 'dev'), { recursive: true });
+  await Promise.all([
+    writeFile(join(root, 'skills', 'review', 'SKILL.md'), [
+      '---',
+      'name: review',
+      'description: Reviews changes',
+      '---',
+      'Review the changed files.',
+      '',
+    ].join('\n')),
+    writeFile(join(root, 'src', 'server.ts'), 'export const server = true;\n'),
+    writeFile(join(root, 'src', 'app.ts'), 'export const app = true;\n'),
+    writeFile(join(root, 'src', 'shell.html'), '<main>fixture</main>\n'),
+    writeFile(join(root, 'src', 'dev', 'provider.ts'), [
+      "import { writeFileSync } from 'node:fs';",
+      `writeFileSync(${JSON.stringify(sentinel)}, 'imported');`,
+      "export const createDevRuntimeProvider = () => ({ descriptor: { environmentVariables: [], id: 'fixture-runtime', label: 'Fixture runtime', schemaVersion: 1 }, start: async () => ({}) });",
+      '',
+    ].join('\n')),
+    writeFile(join(root, 'agent-bundle.config.ts'), [
+      'export default {',
+      "  dev: { runtime: { provider: " + JSON.stringify(options.provider ?? './src/dev/provider.ts') + ' } },',
+      "  mcp: { servers: { timeline: { apps: { dashboard: { _meta: " + (options.appMeta ?? "{ ui: { preferred: 'compact' }, labels: ['one', 'two'] }") + ", entry: './src/app.ts', resourceUri: 'ui://timeline/v1/dashboard', targets: ['portable'], template: './src/shell.html' } }, entry: './src/server.ts', targets: ['portable'] } } },",
+      "  plugin: { name: 'dev-runtime-fixture', version: '1.0.0' },",
+      "  targets: ['portable'],",
+      '};',
+      '',
+    ].join('\n')),
+  ]);
+  return { root, sentinel };
+};
+
+it('prepares a frozen server-only runtime declaration only for development callers', async () => {
+  const { root, sentinel } = await createRuntimeProject();
+  try {
+    const ordinary = await new ProjectService({ includeDevRuntime: false, mode: 'development', root }).prepare('build');
+    const runtime = await new ProjectService({ includeDevRuntime: true, mode: 'development', root }).prepare('build');
+
+    expect(ordinary.devRuntime).toBeUndefined();
+    await expect(readFile(sentinel, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(runtime.source.state).toBe('ready');
+    expect(runtime.devRuntime).toEqual({
+      apps: [{
+        _meta: { labels: ['one', 'two'], ui: { preferred: 'compact' } },
+        id: 'mcp-app:timeline:dashboard',
+        name: 'dashboard',
+        resourceUri: 'ui://timeline/v1/dashboard',
+        serverId: 'mcp:timeline',
+        serverName: 'timeline',
+        source: join(root, 'src', 'app.ts'),
+        targets: ['portable'],
+        template: join(root, 'src', 'shell.html'),
+      }],
+      provider: './src/dev/provider.ts',
+      servers: [expect.objectContaining({
+        id: 'mcp:timeline',
+        name: 'timeline',
+        source: join(root, 'src', 'server.ts'),
+        targets: ['portable'],
+        transport: 'stdio',
+      })],
+      sourceRevision: runtime.source.revision,
+    });
+    expect(Object.isFrozen(runtime.devRuntime)).toBe(true);
+    expect(Object.isFrozen(runtime.devRuntime?.apps)).toBe(true);
+    expect(Object.isFrozen(runtime.devRuntime?.apps[0]!._meta)).toBe(true);
+    expect(Object.isFrozen(runtime.devRuntime?.apps[0]!._meta?.labels)).toBe(true);
+    expect('provenance' in runtime.devRuntime!.apps[0]!).toBe(false);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('keeps supplemental runtime declaration and App metadata failures out of the artifact source lane', async () => {
+  const malformedDeclaration = await createRuntimeProject({ provider: '  ' });
+  const nonfiniteMetadata = await createRuntimeProject({ appMeta: '{ count: Number.NaN }' });
+  try {
+    const declaration = await new ProjectService({ includeDevRuntime: true, mode: 'development', root: malformedDeclaration.root }).prepare('build');
+    const metadata = await new ProjectService({ includeDevRuntime: true, mode: 'development', root: nonfiniteMetadata.root }).prepare('build');
+
+    expect(declaration.source.state).toBe('ready');
+    expect(declaration.devRuntime).toBeUndefined();
+    expect(declaration.devRuntimeDiagnostic).toMatchObject({ code: 'AB8200' });
+    expect(metadata.source.state).toBe('ready');
+    expect(metadata.devRuntime).toBeUndefined();
+    expect(metadata.devRuntimeDiagnostic).toMatchObject({ code: 'AB8200' });
+  } finally {
+    await Promise.all([
+      rm(malformedDeclaration.root, { force: true, recursive: true }),
+      rm(nonfiniteMetadata.root, { force: true, recursive: true }),
+    ]);
+  }
+});
+
 it('stops the shared project pipeline on source errors with a frozen structured status', async () => {
   const root = await createProject('# Missing frontmatter\n');
   try {
