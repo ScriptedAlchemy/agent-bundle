@@ -64,7 +64,7 @@ export interface McpAppRouteMessages {
 
 export interface McpAppRouteClose {
   readonly lifecycle: McpAppBridgeLifecycle;
-  readonly messages: readonly McpAppJsonValue[];
+  readonly message?: McpAppJsonValue;
 }
 
 export interface McpAppClientOptions {
@@ -100,7 +100,7 @@ const detachedJson = (value: unknown, ancestors = new WeakSet<object>()): McpApp
     if (Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null) {
       throw new McpAppClientError('AB8016', 'Foreground MCP App data must use ordinary JSON objects.');
     }
-    const copy: Record<string, McpAppJsonValue> = {};
+    const copy = Object.create(null) as Record<string, McpAppJsonValue>;
     for (const [key, entry] of Object.entries(value)) copy[key] = detachedJson(entry, ancestors);
     return Object.freeze(copy);
   } finally {
@@ -110,12 +110,20 @@ const detachedJson = (value: unknown, ancestors = new WeakSet<object>()): McpApp
 
 const asRecord = (value: unknown, code = 'AB8019'): Readonly<Record<string, McpAppJsonValue>> => {
   if (!isRecord(value)) throw new McpAppClientError(code, 'Foreground MCP App route returned an invalid response.');
-  return detachedJson(value) as Readonly<Record<string, McpAppJsonValue>>;
+  try {
+    return detachedJson(value) as Readonly<Record<string, McpAppJsonValue>>;
+  } catch {
+    throw new McpAppClientError(code, 'Foreground MCP App route returned an invalid response.');
+  }
 };
 
 const asArray = (value: unknown): readonly McpAppJsonValue[] => {
   if (!Array.isArray(value)) throw new McpAppClientError('AB8019', 'Foreground MCP App route returned an invalid response.');
-  return detachedJson(value) as readonly McpAppJsonValue[];
+  try {
+    return detachedJson(value) as readonly McpAppJsonValue[];
+  } catch {
+    throw new McpAppClientError('AB8019', 'Foreground MCP App route returned an invalid response.');
+  }
 };
 
 const diagnostic = (value: unknown, status: number): Diagnostic => {
@@ -154,7 +162,7 @@ const origin = (value: unknown): string => {
   return value;
 };
 
-const frame = (value: unknown): McpAppRelayFrame => {
+const frame = (value: unknown, foregroundOrigin: string): McpAppRelayFrame => {
   const snapshot = asRecord(value);
   const policy = asRecord(snapshot.policy);
   const relay = asRecord(snapshot.relay);
@@ -165,6 +173,9 @@ const frame = (value: unknown): McpAppRelayFrame => {
     snapshot.sandbox !== 'allow-scripts allow-same-origin' || typeof snapshot.src !== 'string'
   ) throw new McpAppClientError('AB8019', 'Foreground MCP App route returned an invalid frame.');
   const targetOrigin = origin(snapshot['targetOrigin']);
+  if (targetOrigin === foregroundOrigin) {
+    throw new McpAppClientError('AB8019', 'Foreground MCP App frame must use a distinct proxy origin.');
+  }
   let source: URL;
   try {
     source = new URL(snapshot.src);
@@ -187,7 +198,7 @@ const frame = (value: unknown): McpAppRelayFrame => {
   });
 };
 
-const preview = (value: unknown): McpAppPreview => {
+const preview = (value: unknown, foregroundOrigin: string): McpAppPreview => {
   const snapshot = asRecord(value);
   if (typeof snapshot.bindingId !== 'string') throw new McpAppClientError('AB8019', 'Foreground MCP App route returned an invalid preview.');
   const bindingId = opaqueSegment(snapshot.bindingId, 'MCP App binding');
@@ -196,7 +207,7 @@ const preview = (value: unknown): McpAppPreview => {
   }
   return Object.freeze({
     bindingId: decodeURIComponent(bindingId),
-    ...(snapshot.frame === undefined ? {} : { frame: frame(snapshot.frame) }),
+    ...(snapshot.frame === undefined ? {} : { frame: frame(snapshot.frame, foregroundOrigin) }),
     profile: snapshot.profile,
     resource: snapshot.resource,
   });
@@ -210,7 +221,10 @@ const messages = (value: unknown): McpAppRouteMessages => {
 
 const close = (value: unknown): McpAppRouteClose => {
   const snapshot = asRecord(value);
-  return Object.freeze({ lifecycle: lifecycle(snapshot.lifecycle), messages: asArray(snapshot.messages) });
+  return Object.freeze({
+    lifecycle: lifecycle(snapshot.lifecycle),
+    ...(snapshot.message === undefined ? {} : { message: snapshot.message }),
+  });
 };
 
 const closeOptions = (value: Readonly<{ readonly id: McpAppRequestId; readonly reason?: string }>): Readonly<{ readonly id: McpAppRequestId; readonly reason?: string }> => {
@@ -233,11 +247,12 @@ export class McpAppClient {
   }
 
   async create(sessionId: string, request: McpAppPreviewCreateRequest): Promise<McpAppPreview> {
+    const foreground = await this.#authenticate();
     return preview(asRecord(await this.#json(`/api/mcp/sessions/${opaqueSegment(sessionId, 'MCP session')}/apps`, {
       body: JSON.stringify(detachedJson(request)),
       headers: { 'content-type': 'application/json' },
       method: 'POST',
-    })).preview);
+    })).preview, foreground.origin);
   }
 
   async message(bindingId: string, message: McpAppJsonValue, signal?: AbortSignal): Promise<McpAppRouteMessages> {
@@ -280,12 +295,18 @@ export class McpAppClient {
 
   async #json(path: string, init: RequestInit = {}): Promise<unknown> {
     const response = await this.#request(path, init);
-    const body: unknown = await response.json().catch(() => undefined);
+    const body: unknown = await response.json().catch(() => {
+      throw new McpAppClientError('AB8019', 'Foreground MCP App route returned an invalid response.');
+    });
     if (!response.ok) {
       const detail = diagnostic(body, response.status);
       throw new McpAppClientError(detail.code, detail.message);
     }
-    return detachedJson(body);
+    try {
+      return detachedJson(body);
+    } catch {
+      throw new McpAppClientError('AB8019', 'Foreground MCP App route returned an invalid response.');
+    }
   }
 
   async #request(path: string, init: RequestInit = {}): Promise<Response> {
