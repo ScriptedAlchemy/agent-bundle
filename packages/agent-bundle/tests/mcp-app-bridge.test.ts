@@ -871,6 +871,30 @@ it('closes a bounded asynchronous sender once after consecutive transport errors
   expect(closes).toBe(1);
 });
 
+it('keeps a blocked input ahead of a later result in the shared asynchronous sender', async () => {
+  const attempts: string[] = [];
+  let closes = 0;
+  const sender = createMcpAppFailClosedSender({
+    onClose: () => { closes += 1; },
+    send: async (message: string) => {
+      attempts.push(message);
+      return false;
+    },
+  });
+
+  const input = sender.send('input');
+  const result = sender.send('result');
+  await Promise.all([input, result]);
+  expect(attempts).toEqual(['input']);
+  await sender.send('retry-1');
+  expect(attempts).toEqual(['input', 'input']);
+  await sender.send('retry-2');
+  expect(sender.closed).toBe(true);
+  expect(closes).toBe(1);
+  expect(attempts).toEqual(['input', 'input', 'input']);
+  await expect(sender.send('late-result')).resolves.toBe(false);
+});
+
 it('requires an exact one-use server grant before a privileged tool operation', async () => {
   const fixture = fixtureFor();
   const authority = createMcpAppConsentAuthority({ now: () => 1_000 });

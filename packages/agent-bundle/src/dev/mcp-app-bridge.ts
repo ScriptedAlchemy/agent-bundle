@@ -750,7 +750,75 @@ const createMcpAppFailClosedSenderInternal = <Message>(options: Readonly<{
 export const createMcpAppFailClosedSender = <Message>(options: Readonly<{
   readonly onClose?: () => void;
   readonly send: (message: Message) => boolean | Promise<boolean>;
-}>): McpAppFailClosedSender<Message> => createMcpAppFailClosedSenderInternal(options);
+  /** Internal artifact bridge adapter for a synchronous transport. */
+  readonly synchronous?: boolean;
+}>): McpAppFailClosedSender<Message> => {
+  if (options.synchronous) return createMcpAppFailClosedSenderInternal(options);
+  interface QueuedMessage {
+    readonly message: Message;
+    resolve(accepted: boolean): void;
+    settled: boolean;
+  }
+  const queued: QueuedMessage[] = [];
+  let blockedAttempts = 0;
+  let closed = false;
+  let closeCalled = false;
+  let draining = false;
+  const close = (): void => {
+    if (closed) return;
+    closed = true;
+    for (const message of queued.splice(0)) if (!message.settled) message.resolve(false);
+    if (!closeCalled) {
+      closeCalled = true;
+      options.onClose?.();
+    }
+  };
+  const drain = async (): Promise<void> => {
+    if (draining || closed) return;
+    draining = true;
+    try {
+      while (!closed && queued.length > 0) {
+        const head = queued[0]!;
+        let accepted = false;
+        try { accepted = await options.send(head.message); } catch { /* fail closed below */ }
+        if (accepted) {
+          blockedAttempts = 0;
+          queued.shift();
+          if (!head.settled) head.resolve(true);
+          continue;
+        }
+        blockedAttempts += 1;
+        if (blockedAttempts >= maximumQueuedHostMessageSendAttempts) {
+          close();
+          return;
+        }
+        // The head remains queued, so later results cannot bypass it. Callers
+        // are told their current attempt was not delivered without losing FIFO state.
+        for (const message of queued) if (!message.settled) message.resolve(false);
+        return;
+      }
+    } finally {
+      draining = false;
+    }
+  };
+  return Object.freeze({
+    get blockedAttempts(): number { return blockedAttempts; },
+    get closed(): boolean { return closed; },
+    close,
+    send(message: Message): Promise<boolean> {
+      if (closed) return Promise.resolve(false);
+      return new Promise<boolean>((resolve) => {
+        const entry: QueuedMessage = {
+          message,
+          resolve: (accepted) => { entry.settled = true; resolve(accepted); },
+          settled: false,
+        };
+        queued.push(entry);
+        void drain();
+      });
+    },
+  });
+};
 
 const validModelContext = (params: McpAppJsonValue | undefined): McpAppBridgeModelContext | undefined => {
   const record = jsonRecord(params);
@@ -850,11 +918,11 @@ export const createMcpAppBridge = (options: CreateMcpAppBridgeOptions): McpAppBr
     }
   };
 
-  const hostFailureSender = createMcpAppFailClosedSenderInternal({
+  const hostFailureSender = createMcpAppFailClosedSender({
     onClose: () => failClosedHostTraffic(),
     send,
     synchronous: true,
-  });
+  }) as McpAppFailClosedSenderInternal<McpAppBridgeMessage>;
 
   const emitHost = (message: McpAppBridgeMessage): boolean => {
     if (lifecycle === 'closing' || lifecycle === 'closed') return false;
