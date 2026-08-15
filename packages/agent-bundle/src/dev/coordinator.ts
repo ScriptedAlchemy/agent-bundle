@@ -242,7 +242,10 @@ export class DevCoordinator {
     this.#onPreparedProject = options.onPreparedProject;
     this.#outputPaths = Object.freeze([...(options.outputPaths ?? ['dist'])]);
     this.#prepareCommand = options.prepareCommand ?? 'build';
-    this.#projectService = options.projectService ?? new ProjectService({ root: this.#root });
+    this.#projectService = options.projectService ?? new ProjectService({
+      outputRoots: this.#outputPaths,
+      root: this.#root,
+    });
   }
 
   async start(): Promise<DevSession> {

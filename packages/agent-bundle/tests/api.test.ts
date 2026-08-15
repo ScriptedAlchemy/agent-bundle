@@ -1,4 +1,4 @@
-import { chmod, mkdtemp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, mkdir, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -52,6 +52,117 @@ it('prepares a factory-configured project into a frozen inspection and build res
     });
   } finally {
     await rm(join(root, '..'), { force: true, recursive: true });
+  }
+}, 30_000);
+
+it('returns an output-independent project context without absolute project paths', async () => {
+  const [leftRoot, rightRoot] = await Promise.all([createProject(), createProject()]);
+  try {
+    const [left, right] = await Promise.all([
+      build({ output: join(leftRoot, 'custom-artifact'), root: leftRoot, targets: ['portable'] }),
+      build({ output: join(rightRoot, 'another-artifact'), root: rightRoot, targets: ['portable'] }),
+    ]);
+
+    expect(left.projectContext).toEqual(right.projectContext);
+    expect(Object.keys(left.projectContext)).toEqual([
+      'configDigest',
+      'configPath',
+      'modelDigest',
+      'revision',
+      'sourceInputs',
+    ]);
+    expect(JSON.stringify(left.projectContext)).not.toContain(leftRoot);
+    expect(JSON.stringify(right.projectContext)).not.toContain(rightRoot);
+    expect(JSON.stringify(left.projectContext)).not.toContain('custom-artifact');
+    expect(JSON.stringify(right.projectContext)).not.toContain('another-artifact');
+    expect(Object.isFrozen(left.projectContext)).toBe(true);
+  } finally {
+    await Promise.all([
+      rm(join(leftRoot, '..'), { force: true, recursive: true }),
+      rm(join(rightRoot, '..'), { force: true, recursive: true }),
+    ]);
+  }
+}, 30_000);
+
+it('rejects an output beneath an escaping symlink before loading source or writing outside the project', async () => {
+  const root = await createProject();
+  const external = join(root, '..', 'external-output');
+  const marker = join(external, 'config-evaluated.txt');
+  try {
+    await mkdir(external, { recursive: true });
+    await symlink(external, join(root, 'escape'), 'dir');
+    await writeFile(join(root, 'agent-bundle.config.ts'), [
+      "import { writeFileSync } from 'node:fs';",
+      `writeFileSync(${JSON.stringify(marker)}, 'evaluated\\n');`,
+      'export default {',
+      "  plugin: { name: 'escaping-output', version: '1.0.0' },",
+      "  targets: ['portable'],",
+      '};',
+      '',
+    ].join('\n'));
+
+    await expect(build({ output: 'escape/artifact', root })).rejects.toThrow(/outside project root/i);
+    await expect(readFile(marker, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(stat(join(external, 'artifact'))).rejects.toMatchObject({ code: 'ENOENT' });
+  } finally {
+    await rm(join(root, '..'), { force: true, recursive: true });
+  }
+}, 30_000);
+
+it('rejects a dangling output symlink before loading source', async () => {
+  const root = await createProject();
+  const marker = join(root, '..', 'config-evaluated.txt');
+  try {
+    await symlink(join(root, '..', 'missing-output', 'artifact'), join(root, 'escape'), 'dir');
+    await writeFile(join(root, 'agent-bundle.config.ts'), [
+      "import { writeFileSync } from 'node:fs';",
+      `writeFileSync(${JSON.stringify(marker)}, 'evaluated\\n');`,
+      'export default {',
+      "  plugin: { name: 'dangling-output', version: '1.0.0' },",
+      "  targets: ['portable'],",
+      '};',
+      '',
+    ].join('\n'));
+
+    await expect(build({ output: 'escape/artifact', root })).rejects.toThrow(/output root|symlink/i);
+    await expect(readFile(marker, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  } finally {
+    await rm(join(root, '..'), { force: true, recursive: true });
+  }
+}, 30_000);
+
+it('excludes a contained symlinked output tree from project context identity', async () => {
+  const [leftRoot, rightRoot] = await Promise.all([createProject(), createProject()]);
+  try {
+    const fixtures = [
+      { bytes: 'first generated output\n', root: leftRoot },
+      { bytes: 'second generated output\n', root: rightRoot },
+    ];
+    await Promise.all(fixtures.map(async ({ bytes, root }) => {
+      const actual = join(root, 'actual-output');
+      await mkdir(join(actual, 'artifact'), { recursive: true });
+      await Promise.all([
+        symlink(actual, join(root, 'output-alias'), 'dir'),
+        writeFile(join(actual, 'artifact', 'generated.js'), bytes),
+      ]);
+    }));
+
+    const [left, right] = await Promise.all([
+      build({ output: 'output-alias/artifact', root: leftRoot, targets: ['portable'] }),
+      build({ output: 'output-alias/artifact', root: rightRoot, targets: ['portable'] }),
+    ]);
+
+    expect(left.projectContext).toEqual(right.projectContext);
+    expect(left.projectContext.sourceInputs.map((input) => input.path)).not.toContain(
+      'actual-output/artifact/generated.js',
+    );
+    expect(JSON.stringify(left.projectContext)).not.toContain('actual-output');
+    expect(JSON.stringify(right.projectContext)).not.toContain('actual-output');
+  } finally {
+    await Promise.all([
+      rm(join(leftRoot, '..'), { force: true, recursive: true }),
+      rm(join(rightRoot, '..'), { force: true, recursive: true }),
+    ]);
   }
 }, 30_000);
 

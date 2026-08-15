@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
-import { readFile, readdir } from 'node:fs/promises';
-import { join, relative, resolve } from 'node:path';
+import { lstat, readFile, readdir, realpath } from 'node:fs/promises';
+import { isAbsolute, join, relative, resolve } from 'node:path';
 
 import { createDefaultRegistry, type TargetRegistry } from '../adapters/registry.ts';
 import { discoverProject } from '../config/discover.ts';
@@ -10,6 +10,11 @@ import { normalizeProject } from '../config/normalize.ts';
 import { validateModel, validateSource } from '../config/validate.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { digest } from '../core/digest.ts';
+import {
+  createProjectContext,
+  type ProjectContext,
+  type ProjectSourceSnapshotInput,
+} from '../core/project-context.ts';
 import type {
   AgentBundleConfig,
   AgentBundleDevRuntimeConfig,
@@ -31,34 +36,29 @@ export interface ProjectServiceOptions {
   readonly includeDevRuntime?: boolean;
   readonly logger?: ProjectServiceLogger;
   readonly mode?: string;
+  readonly outputRoots?: readonly string[];
   readonly root: string;
   readonly targets?: readonly string[];
 }
 
 export interface PreparedProject {
-  readonly configDigest?: string;
   readonly configPath: string;
   readonly diagnostics: readonly Diagnostic[];
   readonly devRuntime?: DevRuntimePreparedProject;
   readonly devRuntimeDiagnostic?: Diagnostic;
   readonly model?: NormalizedPlugin;
+  readonly outputRoots: readonly string[];
+  readonly projectContext?: ProjectContext;
   readonly registry: TargetRegistry;
   readonly root: string;
   readonly source: SourceStatus;
-  readonly sourceInputs: readonly ProjectSourceInput[];
 }
 
-/** One deterministic, byte-addressed authored input in a prepared project. */
-export interface ProjectSourceInput {
-  readonly error?: string;
-  readonly path: string;
-  readonly sha256?: string;
-}
+export type { ProjectSourceInput, ProjectSourceSnapshotInput } from '../core/project-context.ts';
 
 /** Broad source snapshot carried from preparation through artifact publication. */
 export interface ProjectSourceSnapshot {
-  readonly configDigest?: string;
-  readonly inputs: readonly ProjectSourceInput[];
+  readonly inputs: readonly ProjectSourceSnapshotInput[];
   readonly revision: string;
 }
 
@@ -86,22 +86,101 @@ const errorCode = (error: unknown): string =>
       ? error.name
       : typeof error;
 
-const relativeSourcePath = (root: string, source: string): string =>
-  relative(root, source).replaceAll('\\', '/');
+const relativeSourcePath = (root: string, source: string): string => {
+  const resolvedRoot = resolve(root);
+  const resolvedSource = resolve(resolvedRoot, source);
+  const projectRelative = relative(resolvedRoot, resolvedSource);
+  if (projectRelative === '..' || projectRelative.startsWith('../')) {
+    throw new RangeError(`Project source path ${JSON.stringify(resolvedSource)} is outside project root ${JSON.stringify(resolvedRoot)}.`);
+  }
+  if (projectRelative.length === 0) {
+    throw new RangeError('Project source path must not be the project root.');
+  }
+  return projectRelative.replaceAll('\\', '/');
+};
 
-const sourceInput = async (root: string, source: string): Promise<ProjectSourceInput> => {
-  const path = relativeSourcePath(root, source);
+const sourceInput = async (root: string, source: string): Promise<ProjectSourceSnapshotInput> => {
   try {
+    const resolvedSource = await realpath(source);
+    const path = relativeSourcePath(root, resolvedSource);
     return Object.freeze({
-      sha256: createHash('sha256').update(await readFile(source)).digest('hex'),
+      sha256: createHash('sha256').update(await readFile(resolvedSource)).digest('hex'),
       path,
     });
   } catch (error) {
+    if (error instanceof RangeError) throw error;
+    const path = relativeSourcePath(root, source);
     return Object.freeze({ error: errorCode(error), path });
   }
 };
 
-const sourcePaths = async (root: string): Promise<readonly string[]> => {
+const isWithinOutputRoot = (source: string, outputRoot: string): boolean => {
+  const path = relative(outputRoot, source);
+  return path.length === 0 || (path !== '..' && !path.startsWith('../') && !isAbsolute(path));
+};
+
+const isNotFound = (error: unknown): boolean =>
+  typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT';
+
+const physicalOutputRoot = async (
+  root: string,
+  outputRoot: string,
+  requestedOutputRoot: string,
+): Promise<string> => {
+  let physical = root;
+  const parts = relative(root, outputRoot).split('/');
+  for (let index = 0; index < parts.length; index += 1) {
+    const candidate = join(physical, parts[index]);
+    let entry;
+    try {
+      entry = await lstat(candidate);
+    } catch (error) {
+      if (!isNotFound(error)) throw error;
+      return join(physical, ...parts.slice(index));
+    }
+    if (entry.isSymbolicLink()) {
+      try {
+        physical = await realpath(candidate);
+      } catch {
+        throw new RangeError(`Configured output root ${JSON.stringify(requestedOutputRoot)} contains an unresolved symlink.`);
+      }
+    } else {
+      physical = candidate;
+    }
+    if (!isWithinOutputRoot(physical, root)) {
+      throw new RangeError(`Configured output root ${JSON.stringify(requestedOutputRoot)} is outside project root ${JSON.stringify(root)}.`);
+    }
+  }
+  return physical;
+};
+
+const resolveOutputRoots = async (
+  requestedRoot: string,
+  root: string,
+  outputRoots: readonly string[] | undefined,
+): Promise<readonly string[]> => {
+  const requestedProjectRoot = resolve(requestedRoot);
+  const canonicalRoot = resolve(root);
+  const resolveOutputRoot = async (outputRoot: string): Promise<string> => {
+    const requestedOutputRoot = resolve(requestedProjectRoot, outputRoot);
+    let canonicalOutputRoot: string;
+    if (isWithinOutputRoot(requestedOutputRoot, requestedProjectRoot)) {
+      canonicalOutputRoot = resolve(canonicalRoot, relative(requestedProjectRoot, requestedOutputRoot));
+    } else if (isAbsolute(outputRoot) && isWithinOutputRoot(requestedOutputRoot, canonicalRoot)) {
+      canonicalOutputRoot = requestedOutputRoot;
+    } else {
+      throw new RangeError(`Configured output root ${JSON.stringify(requestedOutputRoot)} is outside project root ${JSON.stringify(canonicalRoot)}.`);
+    }
+    if (canonicalOutputRoot === canonicalRoot) {
+      throw new RangeError('Configured output root must not be the project root.');
+    }
+    return physicalOutputRoot(canonicalRoot, canonicalOutputRoot, requestedOutputRoot);
+  };
+  const roots = await Promise.all((outputRoots ?? []).map(resolveOutputRoot));
+  return Object.freeze([...new Set(roots)].sort((left, right) => left.localeCompare(right)));
+};
+
+const sourcePaths = async (root: string, outputRoots: readonly string[]): Promise<readonly string[]> => {
   const rules = await readProjectIgnoreRules(root);
   const paths: string[] = [];
 
@@ -110,6 +189,7 @@ const sourcePaths = async (root: string): Promise<readonly string[]> => {
     for (const entry of entries) {
       const source = join(directory, entry.name);
       if (isProjectPathIgnored(rules, root, source)) continue;
+      if (outputRoots.some((outputRoot) => isWithinOutputRoot(source, outputRoot))) continue;
       if (entry.isDirectory()) {
         await visit(source);
         continue;
@@ -125,16 +205,39 @@ const sourcePaths = async (root: string): Promise<readonly string[]> => {
 export const snapshotProjectSource = async (
   root: string,
   configPath: string,
+  outputRoots: readonly string[] = [],
 ): Promise<ProjectSourceSnapshot> => {
-  const sources = new Set<string>([configPath, ...(await sourcePaths(root))]);
-  const inputs = Object.freeze((await Promise.all([...sources].map((source) => sourceInput(root, source))))
+  const requestedRoot = resolve(root);
+  const resolvedRoot = await realpath(requestedRoot);
+  const resolvedOutputRoots = await resolveOutputRoots(requestedRoot, resolvedRoot, outputRoots);
+  const requestedConfigPath = resolve(requestedRoot, configPath);
+  relativeSourcePath(requestedRoot, requestedConfigPath);
+  const resolvedConfigPath = await realpath(requestedConfigPath);
+  relativeSourcePath(resolvedRoot, resolvedConfigPath);
+  const sources = new Set<string>([resolvedConfigPath, ...(await sourcePaths(resolvedRoot, resolvedOutputRoots))]);
+  const inputs = Object.freeze((await Promise.all([...sources].map((source) => sourceInput(resolvedRoot, source))))
     .sort((left, right) => left.path.localeCompare(right.path)));
-  const configInput = inputs.find((input) => input.path === relativeSourcePath(root, configPath));
   return Object.freeze({
-    ...(configInput?.sha256 === undefined ? {} : { configDigest: configInput.sha256 }),
     inputs,
     revision: digest({ inputs }),
   });
+};
+
+const emptySnapshot = (): ProjectSourceSnapshot => Object.freeze({
+  inputs: Object.freeze([]),
+  revision: digest({ inputs: [] }),
+});
+
+const snapshotForLoadFailure = async (
+  root: string,
+  configPath: string,
+  outputRoots: readonly string[],
+): Promise<ProjectSourceSnapshot> => {
+  try {
+    return await snapshotProjectSource(root, configPath, outputRoots);
+  } catch {
+    return emptySnapshot();
+  }
 };
 
 const sourceStatus = (
@@ -334,6 +437,8 @@ const preparedProject = (
   configPath: string,
   snapshot: ProjectSourceSnapshot,
   diagnostics: readonly Diagnostic[],
+  outputRoots: readonly string[],
+  projectContext: ProjectContext | undefined,
   registry: TargetRegistry,
   root: string,
   source: SourceStatus,
@@ -341,16 +446,16 @@ const preparedProject = (
   devRuntime?: DevRuntimePreparedProject,
   devRuntimeDiagnostic?: Diagnostic,
 ): PreparedProject => Object.freeze({
-  ...(snapshot.configDigest === undefined ? {} : { configDigest: snapshot.configDigest }),
   configPath,
   diagnostics,
   ...(model === undefined ? {} : { model }),
   ...(devRuntime === undefined ? {} : { devRuntime }),
   ...(devRuntimeDiagnostic === undefined ? {} : { devRuntimeDiagnostic }),
+  outputRoots,
+  ...(projectContext === undefined ? {} : { projectContext }),
   registry,
   root,
   source,
-  sourceInputs: snapshot.inputs,
 });
 
 /** Loads, discovers, validates, and normalizes source once for dev consumers. */
@@ -362,7 +467,9 @@ export class ProjectService {
   }
 
   async prepare(command: ProjectCommand): Promise<PreparedProject> {
-    const root = resolve(this.#options.root);
+    const requestedRoot = resolve(this.#options.root);
+    const root = await realpath(requestedRoot);
+    const outputRoots = await resolveOutputRoots(requestedRoot, root, this.#options.outputRoots);
     const registry = createDefaultRegistry();
     const configPath = resolve(root, this.#options.configPath ?? 'agent-bundle.config.ts');
     log(this.#options.logger, 'project.load', { command, root });
@@ -374,7 +481,7 @@ export class ProjectService {
         command,
         configPath: this.#options.configPath,
         mode: this.#options.mode ?? 'production',
-        root,
+        root: requestedRoot,
         targets: this.#options.targets,
       });
       discovered = await discoverProject(root, loaded.config);
@@ -385,13 +492,13 @@ export class ProjectService {
         severity: 'error',
         sourcePath: configPath,
       }]);
-      const snapshot = await snapshotProjectSource(root, configPath);
+      const snapshot = await snapshotForLoadFailure(root, configPath, outputRoots);
       const source = sourceStatus(diagnostics, snapshot.revision);
       log(this.#options.logger, 'project.invalid-source', { diagnostics: diagnostics.length, root });
-      return preparedProject(configPath, snapshot, diagnostics, registry, root, source);
+      return preparedProject(configPath, snapshot, diagnostics, outputRoots, undefined, registry, root, source);
     }
 
-    const snapshot = await snapshotProjectSource(root, loaded.configPath);
+    const snapshot = await snapshotProjectSource(root, loaded.configPath, outputRoots);
     const runtime = runtimeDeclaration(this.#options.includeDevRuntime === true, loaded.config, loaded.configPath);
     const runtimeMetadata = runtime.declaration === undefined
       ? Object.freeze({ changed: false, config: loaded.config })
@@ -404,7 +511,7 @@ export class ProjectService {
     if (hasErrors(sourceDiagnostics)) {
       const source = sourceStatus(sourceDiagnostics, snapshot.revision);
       log(this.#options.logger, 'project.invalid-source', { diagnostics: sourceDiagnostics.length, root });
-      return preparedProject(loaded.configPath, snapshot, sourceDiagnostics, registry, root, source);
+      return preparedProject(loaded.configPath, snapshot, sourceDiagnostics, outputRoots, undefined, registry, root, source);
     }
 
     let model: NormalizedPlugin;
@@ -423,7 +530,7 @@ export class ProjectService {
       }]);
       const source = sourceStatus(diagnostics, snapshot.revision);
       log(this.#options.logger, 'project.prepared', { diagnostics: diagnostics.length, root, targets: [] });
-      return preparedProject(loaded.configPath, snapshot, diagnostics, registry, root, source);
+      return preparedProject(loaded.configPath, snapshot, diagnostics, outputRoots, undefined, registry, root, source);
     }
 
     const diagnostics: Diagnostic[] = [...validateModel(model, registry)];
@@ -431,6 +538,22 @@ export class ProjectService {
       if (registry.has(target.name)) {
         diagnostics.push(...registry.get(target.name).plan(model).diagnostics);
       }
+    }
+    let projectContext: ProjectContext | undefined;
+    try {
+      projectContext = createProjectContext({
+        configPath: loaded.configPath,
+        model,
+        root,
+        sourceInputs: snapshot.inputs,
+      });
+    } catch (error) {
+      diagnostics.push({
+        code: 'AB7001',
+        message: `Unable to create project context: ${errorMessage(error)}`,
+        severity: 'error',
+        sourcePath: loaded.configPath,
+      });
     }
     const frozenDiagnostics = freezeDiagnostics(diagnostics);
     const source = sourceStatus(frozenDiagnostics, snapshot.revision);
@@ -455,6 +578,8 @@ export class ProjectService {
       loaded.configPath,
       snapshot,
       frozenDiagnostics,
+      outputRoots,
+      projectContext,
       registry,
       root,
       source,

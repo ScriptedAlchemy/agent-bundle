@@ -1,4 +1,5 @@
-import { resolve } from 'node:path';
+import { realpath } from 'node:fs/promises';
+import { isAbsolute, relative, resolve, sep } from 'node:path';
 
 import { loadConfig as loadRstackConfig } from '@rstackjs/load-config';
 
@@ -26,6 +27,22 @@ export interface LoadedConfig {
 const isConfig = (value: unknown): value is AgentBundleConfig =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
+const assertInsideProjectRoot = (root: string, candidate: string): string => {
+  const projectRoot = resolve(root);
+  const resolvedCandidate = resolve(candidate);
+  const projectRelative = relative(projectRoot, resolvedCandidate);
+  if (
+    projectRelative === '..' ||
+    projectRelative.startsWith(`..${sep}`) ||
+    isAbsolute(projectRelative)
+  ) {
+    throw new RangeError(
+      `Configuration path ${JSON.stringify(resolvedCandidate)} is outside project root ${JSON.stringify(projectRoot)}.`,
+    );
+  }
+  return resolvedCandidate;
+};
+
 export const loadConfig = async ({
   root,
   configPath,
@@ -34,11 +51,19 @@ export const loadConfig = async ({
   targets = [],
 }: LoadConfigOptions): Promise<LoadedConfig> => {
   const projectRoot = resolve(root);
-  const resolvedConfigPath = resolve(projectRoot, configPath ?? defaultConfigFile);
+  const requestedConfigPath = assertInsideProjectRoot(
+    projectRoot,
+    resolve(projectRoot, configPath ?? defaultConfigFile),
+  );
+  const [realProjectRoot, resolvedConfigPath] = await Promise.all([
+    realpath(projectRoot),
+    realpath(requestedConfigPath),
+  ]);
+  assertInsideProjectRoot(realProjectRoot, resolvedConfigPath);
   const context: ConfigFactoryContext = {
     command,
     mode,
-    projectRoot,
+    projectRoot: realProjectRoot,
     selectedTargets: [...targets],
   };
   const { content: config } = await loadRstackConfig<

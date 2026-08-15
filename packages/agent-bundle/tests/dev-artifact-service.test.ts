@@ -88,14 +88,17 @@ it('publishes one validated prepared project as an immutable epoch and removes i
 
     expect(result).toMatchObject({
       epoch: {
-        configDigest: sha256(await readFile(join(root, 'agent-bundle.config.ts'))),
         createdAt: '2026-08-14T12:00:00.000Z',
         id: 'epoch-one',
         projectRevision: prepared.source.revision,
       },
       outcome: 'succeeded',
     });
-    expect(result.epoch.modelDigest).toMatch(/^[a-f0-9]{64}$/);
+    expect(prepared.projectContext).toBeDefined();
+    expect(result.epoch.configDigest).toBe(prepared.projectContext?.configDigest);
+    expect(result.epoch.modelDigest).toBe(prepared.projectContext?.modelDigest);
+    expect(result.epoch.projectRevision).toBe(prepared.projectContext?.revision);
+    expect(result.epoch.configDigest).toBe(sha256(await readFile(join(root, 'agent-bundle.config.ts'))));
     expect(result.epoch.targetDigests.portable).toMatch(/^[a-f0-9]{64}$/);
     expect(result.epoch.manifestPath).toBe(
       join(root, '.agent-bundle', 'epochs', 'epoch-one', 'agent-bundle.manifest.json'),
@@ -188,6 +191,31 @@ it.each(['added', 'changed', 'removed'] as const)(
     }
   },
 );
+
+it('uses the prepared output exclusions when checking source changes after compilation', async () => {
+  const root = await createProject();
+  const output = join(root, 'custom-artifact');
+  const store = new EpochStore({ projectRoot: root });
+  try {
+    const prepared = await new ProjectService({ outputRoots: [output], root }).prepare('build');
+    const service = new ArtifactService({
+      compile: async (options) => {
+        const result = await build(options);
+        await mkdir(output, { recursive: true });
+        await writeFile(join(output, 'generated.js'), 'changed after preparation\n');
+        return result;
+      },
+      createEpochId: () => 'epoch-custom-output',
+      epochStore: store,
+    });
+
+    const result = await service.build(prepared);
+
+    expect(result.outcome).toBe('succeeded');
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
 
 it('uses a root-independent digest for equivalent normalized project models', async () => {
   const leftRoot = await createProject();
