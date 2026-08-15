@@ -155,6 +155,15 @@ const authenticated = (server: Awaited<ReturnType<typeof startForegroundServer>>
   'x-agent-bundle-session': server.sessionToken,
 });
 
+interface RuntimeRouteMatrixCase {
+  readonly acceptedMethod: string;
+  readonly acceptedPath: string;
+  readonly body?: string;
+  readonly headers?: Readonly<Record<string, string>>;
+  readonly invalidMethod: string;
+  readonly queryPath: string;
+}
+
 it('keeps public runtime capability summaries empty when the optional runtime is absent', async () => {
   const server = await start();
   try {
@@ -254,6 +263,50 @@ it('rejects malformed, stale, undeclared, and excessive runtime inputs at the fi
 
     const traversal = await fetch(`${server.url}/api/runtime/assets/hook.after-edit/%2e%2e/main.js?generation=g1`, { headers });
     expect(traversal.status).toBe(400);
+  } finally {
+    await server.close();
+  }
+});
+
+it('accepts only the literal method and query matrix for every runtime route', async () => {
+  const server = await start(new MemoryRuntime());
+  const privateHeaders = authenticated(server);
+  const jsonHeaders = { ...privateHeaders, 'content-type': 'application/json' };
+  const root = server.url;
+  const routes: readonly RuntimeRouteMatrixCase[] = [
+    { acceptedMethod: 'GET', acceptedPath: '/api/runtime/status', headers: undefined, invalidMethod: 'POST', queryPath: '/api/runtime/status?extra=1&extra=2' },
+    { acceptedMethod: 'GET', acceptedPath: '/api/runtime/surfaces', headers: undefined, invalidMethod: 'POST', queryPath: '/api/runtime/surfaces?extra=1&extra=2' },
+    { acceptedMethod: 'POST', acceptedPath: '/api/runtime/runs', body: JSON.stringify({ input: {}, surfaceId: 'hook.after-edit', target: 'claude' }), headers: jsonHeaders, invalidMethod: 'PATCH', queryPath: '/api/runtime/runs?extra=1&extra=2' },
+    { acceptedMethod: 'GET', acceptedPath: '/api/runtime/runs?limit=1', headers: privateHeaders, invalidMethod: 'PATCH', queryPath: '/api/runtime/runs?limit=1&limit=2' },
+    { acceptedMethod: 'GET', acceptedPath: '/api/runtime/runs/run-a', headers: privateHeaders, invalidMethod: 'POST', queryPath: '/api/runtime/runs/run-a?extra=1&extra=2' },
+    { acceptedMethod: 'GET', acceptedPath: '/api/runtime/runs/run-a/flight', headers: privateHeaders, invalidMethod: 'POST', queryPath: '/api/runtime/runs/run-a/flight?extra=1&extra=2' },
+    { acceptedMethod: 'POST', acceptedPath: '/api/runtime/runs/run-a/replay', body: JSON.stringify({ mode: 'exact', runId: 'run-a' }), headers: jsonHeaders, invalidMethod: 'GET', queryPath: '/api/runtime/runs/run-a/replay?extra=1&extra=2' },
+    { acceptedMethod: 'POST', acceptedPath: '/api/runtime/state/reset', body: JSON.stringify({ stateStoreId: 'state-a' }), headers: jsonHeaders, invalidMethod: 'GET', queryPath: '/api/runtime/state/reset?extra=1&extra=2' },
+    { acceptedMethod: 'GET', acceptedPath: '/api/runtime/assets/hook.after-edit/main.js?generation=g1', headers: privateHeaders, invalidMethod: 'HEAD', queryPath: '/api/runtime/assets/hook.after-edit/main.js?generation=g1&generation=g2' },
+  ];
+
+  try {
+    for (const route of routes) {
+      const accepted = await fetch(`${root}${route.acceptedPath}`, {
+        ...(route.body === undefined ? {} : { body: route.body }),
+        ...(route.headers === undefined ? {} : { headers: route.headers }),
+        method: route.acceptedMethod,
+      });
+      expect(accepted.status).toBe(200);
+
+      const wrongMethod = await fetch(`${root}${route.acceptedPath}`, {
+        ...(route.headers === undefined ? {} : { headers: route.headers }),
+        method: route.invalidMethod,
+      });
+      expect(wrongMethod.status).toBe(405);
+
+      const wrongQuery = await fetch(`${root}${route.queryPath}`, {
+        ...(route.body === undefined ? {} : { body: route.body }),
+        ...(route.headers === undefined ? {} : { headers: route.headers }),
+        method: route.acceptedMethod,
+      });
+      expect(wrongQuery.status).toBe(400);
+    }
   } finally {
     await server.close();
   }

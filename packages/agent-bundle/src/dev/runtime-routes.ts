@@ -108,6 +108,8 @@ const readBody = async (request: IncomingMessage): Promise<string> => new Promis
 const rawPathname = (requestTarget: string | undefined): string =>
   requestTarget?.split(/[?#]/u, 1)[0] ?? '';
 
+const hasQuery = (requestTarget: string | undefined): boolean => requestTarget?.includes('?') ?? false;
+
 const runtimePathError = (): never => {
   throw requestError(diagnostic('AB8202', 'Runtime route path is not valid.', 400));
 };
@@ -129,7 +131,7 @@ const decodedSegment = (value: string): string => {
 const onlyQuery = (requestTarget: string | undefined, name: string | undefined): URLSearchParams => {
   const url = new URL(requestTarget ?? '/', 'http://runtime.invalid');
   if (name === undefined) {
-    if ([...url.searchParams].length > 0) runtimePathError();
+    if (hasQuery(requestTarget)) runtimePathError();
     return url.searchParams;
   }
   const values = url.searchParams.getAll(name);
@@ -245,8 +247,8 @@ const reset = (value: Record<string, unknown>): DevRuntimeStateResetRequest => {
 
 const historyLimit = (requestTarget: string | undefined): number => {
   const url = new URL(requestTarget ?? '/', 'http://runtime.invalid');
+  if (!hasQuery(requestTarget)) return 50;
   const values = url.searchParams.getAll('limit');
-  if (values.length === 0 && [...url.searchParams].length === 0) return 50;
   if (values.length !== 1 || [...url.searchParams].length !== 1 || !/^(?:[1-9]|[1-4]\d|50)$/u.test(values[0]!)) runtimePathError();
   return Number(values[0]);
 };
@@ -326,17 +328,22 @@ export class RuntimeRoutes {
     const method = request.method ?? 'GET';
     if (parsed.kind === 'status') {
       if (method !== 'GET') return responseDiagnostic(response, diagnostic('AB8007', 'Route does not accept this method.', 405));
+      onlyQuery(request.url, undefined);
       return responseJson(response, { status: this.#runtime?.status() ?? null });
     }
     if (parsed.kind === 'surfaces') {
       if (method !== 'GET') return responseDiagnostic(response, diagnostic('AB8007', 'Route does not accept this method.', 405));
+      onlyQuery(request.url, undefined);
       return responseJson(response, { surfaces: this.#runtime?.surfaces() ?? [] });
     }
     const session = this.#session();
     if (parsed.kind === 'runs') {
-      if (method === 'POST') return responseJson(response, {
-        run: assertRunOwned(session, await session.invoke(invocation(await jsonBody(request), session.surfaces()))),
-      });
+      if (method === 'POST') {
+        onlyQuery(request.url, undefined);
+        return responseJson(response, {
+          run: assertRunOwned(session, await session.invoke(invocation(await jsonBody(request), session.surfaces()))),
+        });
+      }
       if (method !== 'GET') return responseDiagnostic(response, diagnostic('AB8007', 'Route does not accept this method.', 405));
       const limit = historyLimit(request.url);
       const provider = providerSessionId(session);
@@ -374,23 +381,13 @@ export class RuntimeRoutes {
       return responseJson(response, { state: await session.resetState(reset(await jsonBody(request))) });
     }
     if (parsed.kind !== 'asset') return;
-    if (method !== 'GET' && method !== 'HEAD') return responseDiagnostic(response, diagnostic('AB8007', 'Route does not accept this method.', 405));
+    if (method !== 'GET') return responseDiagnostic(response, diagnostic('AB8007', 'Route does not accept this method.', 405));
     const asset = await session.readAsset({
       path: parsed.path,
       runtimeGenerationId: parsed.generation,
       surfaceId: parsed.surfaceId,
     });
     if (asset === undefined) throw new DevRuntimeUnavailableError('Runtime asset is not available.');
-    if (method === 'HEAD') {
-      if (asset.body.byteLength > assetLimit) throw new DevRuntimeUnavailableError('Runtime asset is not available.');
-      response.writeHead(200, {
-        'content-length': String(asset.body.byteLength),
-        'content-type': asset.contentType,
-        'x-content-type-options': 'nosniff',
-      });
-      response.end();
-      return;
-    }
     return responseAsset(response, asset);
   }
 }
