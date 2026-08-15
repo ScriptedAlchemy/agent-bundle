@@ -103,6 +103,92 @@ it('collects nested authored module inputs from public stats without using ident
   expect(Object.isFrozen(evidence[0]!.sourceInputs)).toBe(true);
 });
 
+it('uses declared inputs for an explicitly authorized final HTML asset without chunk association', () => {
+  const finalHtml = {
+    allowUnassociatedHtml: true as const,
+    path: 'mcp-apps/dashboard.html',
+    sourceInputs: [
+      '/work/project/agent-bundle.config.ts',
+      '/work/project/views/dashboard.ts',
+      '/work/project/views/shell.html',
+    ],
+  };
+  const evidence = collectBundledOutputEvidence({
+    expectedAssets: [finalHtml],
+    projectRoot,
+    stats: {
+      toJson: () => ({
+        assets: [
+          { name: 'mcp-apps/dashboard.html' },
+          { chunks: [7], name: 'mcp-apps/dashboard.js' },
+        ],
+        modules: [{
+          chunks: [7],
+          nameForCondition: '/work/project/views/dashboard.ts',
+        }],
+      }),
+    },
+  });
+
+  expect(evidence).toEqual([{
+    path: 'mcp-apps/dashboard.html',
+    sourceInputs: [
+      '/work/project/agent-bundle.config.ts',
+      '/work/project/views/dashboard.ts',
+      '/work/project/views/shell.html',
+    ],
+  }]);
+  expect(Object.isFrozen(evidence[0]!.sourceInputs)).toBe(true);
+});
+
+it('keeps unassociated assets strict when final HTML authorization is absent or invalid', () => {
+  const stats = {
+    toJson: () => ({
+      assets: [
+        { name: 'mcp-apps/dashboard.html' },
+        { chunks: [7], name: 'mcp-apps/dashboard.js' },
+      ],
+      modules: [{
+        chunks: [7],
+        nameForCondition: '/work/project/views/dashboard.ts',
+      }],
+    }),
+  };
+  const collect = (expectedAssets: readonly { readonly path: string; readonly sourceInputs: readonly string[] }[]) =>
+    collectBundledOutputEvidence({ expectedAssets, projectRoot, stats });
+  const authorizedHtml = (sourceInputs: readonly string[]) => ({
+    allowUnassociatedHtml: true as const,
+    path: 'mcp-apps/dashboard.html',
+    sourceInputs,
+  });
+
+  expect(() => collect([{
+    path: 'mcp-apps/dashboard.html',
+    sourceInputs: ['/work/project/views/dashboard.ts'],
+  }])).toThrow(/associate/i);
+  expect(() => collect([authorizedHtml([])])).toThrow(/declare source inputs/i);
+  expect(() => collect([authorizedHtml(['/outside/project/dashboard.ts'])])).toThrow(/outside/i);
+  const authorizedScript = {
+    allowUnassociatedHtml: true as const,
+    path: 'mcp-apps/dashboard.js',
+    sourceInputs: ['/work/project/views/dashboard.ts'],
+  };
+  expect(() => collect([authorizedScript])).toThrow(/HTML/i);
+  expect(() => collectBundledOutputEvidence({
+    expectedAssets: [authorizedHtml(['/work/project/views/dashboard.ts'])],
+    projectRoot,
+    stats: {
+      toJson: () => ({
+        assets: [
+          { name: 'mcp-apps/dashboard.html' },
+          { name: 'mcp-apps/dashboard.html' },
+        ],
+        modules: [],
+      }),
+    },
+  })).toThrow(/ambiguous/i);
+});
+
 it('rejects incomplete, ambiguous, filtered, and outside-root public stats', () => {
   const expectedAssets = [{
     path: 'portable/scripts/greeting.mjs',

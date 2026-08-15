@@ -636,14 +636,17 @@ it('builds one deterministic self-contained MCP App view and injects it through 
   try {
     await mkdir(join(root, 'src'), { recursive: true });
     await mkdir(join(root, 'views'), { recursive: true });
+    await symlink(join(process.cwd(), 'node_modules'), join(root, 'node_modules'), 'dir');
     await writeFile(join(root, 'src', 'server.ts'), [
       "import apps from 'agent-bundle/mcp-apps';",
       'export const bundledApps = apps;',
       '',
     ].join('\n'));
     await writeFile(join(root, 'views', 'dashboard.ts'), [
+      "import { createElement } from 'react';",
+      "import { createRoot } from 'react-dom/client';",
       "import './dashboard.css';",
-      "document.querySelector('#view')!.textContent = 'dashboard-ready';",
+      "createRoot(document.querySelector('#view')!).render(createElement('span', undefined, 'dashboard-ready'));",
       '',
     ].join('\n'));
     await writeFile(join(root, 'views', 'dashboard.css'), '#view { color: rebeccapurple; }\n');
@@ -684,6 +687,7 @@ it('builds one deterministic self-contained MCP App view and injects it through 
         readonly name: string;
         readonly output: string;
         readonly resourceUri: string;
+        readonly sourceInputs: readonly string[];
         readonly target: string;
       }[];
     }).compiledMcpApps;
@@ -697,9 +701,16 @@ it('builds one deterministic self-contained MCP App view and injects it through 
         resourceUri: 'ui://agent-bundle/dashboard-v1.html',
         serverId: 'mcp:fixture',
         source: join(root, 'views', 'dashboard.ts'),
+        sourceInputs: [
+          join(root, 'agent-bundle.config.ts'),
+          join(root, 'views', 'dashboard.css'),
+          join(root, 'views', 'dashboard.ts'),
+          join(root, 'views', 'shell.html'),
+        ],
         target: 'portable',
       },
     ]);
+    expect(Object.isFrozen(compiled[0]!.sourceInputs)).toBe(true);
     const html = await readFile(join(outputRoot, 'portable', 'mcp-apps', 'dashboard.html'), 'utf8');
     expect(html).toContain('dashboard-ready');
     expect(html).toContain('<script');
