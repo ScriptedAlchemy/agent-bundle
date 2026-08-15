@@ -143,22 +143,26 @@ const snapshotJson = (value: unknown, seen = new WeakSet<object>()): JsonValue =
   if (typeof value !== 'object' || value === null) return snapshotInvalid();
   if (seen.has(value)) return snapshotInvalid();
   seen.add(value);
-  if (Array.isArray(value)) return Object.freeze(snapshotArray(value).map((entry) => snapshotJson(entry, seen)));
-  const prototype = Object.getPrototypeOf(value);
-  if (prototype !== Object.prototype && prototype !== null) return snapshotInvalid();
-  const copied = Object.create(null) as Record<string, JsonValue>;
-  for (const key of Reflect.ownKeys(value)) {
-    if (typeof key !== 'string') return snapshotInvalid();
-    const descriptor = Object.getOwnPropertyDescriptor(value, key);
-    if (!isEnumerableDataDescriptor(descriptor)) return snapshotInvalid();
-    Object.defineProperty(copied, key, {
-      configurable: false,
-      enumerable: true,
-      value: snapshotJson(descriptor.value, seen),
-      writable: false,
-    });
+  try {
+    if (Array.isArray(value)) return Object.freeze(snapshotArray(value).map((entry) => snapshotJson(entry, seen)));
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) return snapshotInvalid();
+    const copied = Object.create(null) as Record<string, JsonValue>;
+    for (const key of Reflect.ownKeys(value)) {
+      if (typeof key !== 'string') return snapshotInvalid();
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (!isEnumerableDataDescriptor(descriptor)) return snapshotInvalid();
+      Object.defineProperty(copied, key, {
+        configurable: false,
+        enumerable: true,
+        value: snapshotJson(descriptor.value, seen),
+        writable: false,
+      });
+    }
+    return Object.freeze(copied) as JsonObject;
+  } finally {
+    seen.delete(value);
   }
-  return Object.freeze(copied) as JsonObject;
 };
 
 const snapshotDescriptor = (value: unknown): DevRuntimeDescriptor => {

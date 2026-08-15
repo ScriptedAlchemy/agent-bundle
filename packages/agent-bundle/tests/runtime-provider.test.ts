@@ -450,6 +450,54 @@ it('degrades instead of publishing malformed activation snapshots', async () => 
   }
 });
 
+it('accepts acyclic shared JSON fragments in activation snapshots', async () => {
+  const descriptor = { environmentVariables: [], id: 'fixture-runtime', label: 'Fixture runtime', schemaVersion: 1 } as const;
+  const sharedSchema = { type: 'string' };
+  const sharedSeed = { value: 'shared' };
+  let activated = false;
+  let emit: Parameters<DevRuntimeProvider['start']>[0]['emit'] | undefined;
+  const controller = new DevRuntimeController({
+    artifactStatus: () => ({ state: 'missing' }),
+    emit: () => undefined,
+    environment: {},
+    preparedRuntime: { apps: [], provider: './src/dev/provider.ts', servers: [], sourceRevision: 'source-1' },
+    projectRoot: '/workspace/project',
+    provider: {
+      descriptor,
+      start: async (context) => {
+        emit = context.emit;
+        return {
+          close: async () => undefined,
+          mcpRegistry: {},
+          reconcilePreparedRuntime: async () => undefined,
+          status: () => activated
+            ? { activeVector: vector, descriptor, diagnostics: [], hmrReady: true, state: 'active' as const }
+            : { descriptor, diagnostics: [], hmrReady: false, state: 'compiling' as const },
+          surfaces: () => activated
+            ? [{
+                ...surface,
+                fixtures: [{ id: 'after-edit', label: 'After file edit', seed: { first: sharedSeed, second: sharedSeed } }],
+                inputSchema: { properties: { first: sharedSchema, second: sharedSchema }, type: 'object' },
+              }]
+            : [],
+        } as unknown as DevRuntimeSession;
+      },
+    },
+    storageRoot: '/workspace/project/.agent-bundle/runtime',
+  });
+
+  await controller.start();
+  activated = true;
+  emit?.({ type: 'runtime.generation.activated' });
+
+  expect(controller.status()).toMatchObject({ state: 'active' });
+  expect(controller.surfaces()).toMatchObject([{
+    fixtures: [{ seed: { first: { value: 'shared' }, second: { value: 'shared' } } }],
+    inputSchema: { properties: { first: { type: 'string' }, second: { type: 'string' } } },
+  }]);
+  await controller.close();
+});
+
 it('buffers synchronous startup activation until controller snapshots install', async () => {
   const descriptor = { environmentVariables: [], id: 'fixture-runtime', label: 'Fixture runtime', schemaVersion: 1 } as const;
   const seen: Array<Readonly<{ readonly generation?: string; readonly state: string; readonly surfaceCount: number; readonly type: string }>> = [];
