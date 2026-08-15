@@ -615,6 +615,62 @@ it('accepts acyclic shared JSON fragments in activation snapshots', async () => 
   await controller.close();
 });
 
+it('buffers synchronous startup failure and status until controller snapshots install', async () => {
+  const descriptor = { environmentVariables: [], id: 'fixture-runtime', label: 'Fixture runtime', schemaVersion: 1 } as const;
+  const sourceBuildDiagnostic = {
+    code: 'AB8206',
+    message: 'RSC runtime source build failed.',
+    phase: 'source/build' as const,
+    severity: 'error' as const,
+  };
+  const seen: Array<Readonly<{
+    readonly detail?: string;
+    readonly diagnostics: readonly string[];
+    readonly state: string;
+    readonly surfaceCount: number;
+    readonly type: string;
+  }>> = [];
+  const controller = new DevRuntimeController({
+    artifactStatus: () => ({ state: 'missing' }),
+    emit: (event) => {
+      seen.push({
+        ...(typeof event.details?.sequence === 'string' ? { detail: event.details.sequence } : {}),
+        diagnostics: controller.status().diagnostics.map((diagnostic) => diagnostic.code),
+        state: controller.status().state,
+        surfaceCount: controller.surfaces().length,
+        type: event.type,
+      });
+    },
+    environment: {},
+    preparedRuntime: { apps: [], provider: './src/dev/provider.ts', servers: [], sourceRevision: 'source-1' },
+    projectRoot: '/workspace/project',
+    provider: {
+      descriptor,
+      start: async (context) => {
+        context.emit(Object.freeze({ details: Object.freeze({ sequence: 'failed' }), type: 'runtime.generation.failed' }));
+        context.emit(Object.freeze({ details: Object.freeze({ sequence: 'stale' }), type: 'runtime.status' }));
+        context.emit(Object.freeze({ details: Object.freeze({ sequence: 'latest' }), type: 'runtime.status' }));
+        return {
+          close: async () => undefined,
+          mcpRegistry: {},
+          reconcilePreparedRuntime: async () => undefined,
+          status: () => ({ descriptor, diagnostics: [sourceBuildDiagnostic], hmrReady: true, state: 'degraded' as const }),
+          surfaces: () => [surface],
+        } as unknown as DevRuntimeSession;
+      },
+    },
+    storageRoot: '/workspace/project/.agent-bundle/runtime',
+  });
+
+  await controller.start();
+
+  expect(seen).toEqual([
+    { detail: 'failed', diagnostics: ['AB8206'], state: 'degraded', surfaceCount: 1, type: 'runtime.generation.failed' },
+    { detail: 'latest', diagnostics: ['AB8206'], state: 'degraded', surfaceCount: 1, type: 'runtime.status' },
+  ]);
+  await controller.close();
+});
+
 it('buffers synchronous startup activation until controller snapshots install', async () => {
   const descriptor = { environmentVariables: [], id: 'fixture-runtime', label: 'Fixture runtime', schemaVersion: 1 } as const;
   const seen: Array<Readonly<{ readonly generation?: string; readonly state: string; readonly surfaceCount: number; readonly type: string }>> = [];
@@ -658,7 +714,7 @@ it('buffers synchronous startup activation until controller snapshots install', 
   await controller.close();
 });
 
-it('drops buffered startup activation after close or topology failure', async () => {
+it('drops buffered startup lifecycle events after close or topology failure', async () => {
   const descriptor = { environmentVariables: [], id: 'fixture-runtime', label: 'Fixture runtime', schemaVersion: 1 } as const;
   const prepared = { apps: [], provider: './src/dev/provider.ts', servers: [], sourceRevision: 'source-1' } as const;
   for (const transition of ['close', 'topology'] as const) {
@@ -675,6 +731,8 @@ it('drops buffered startup activation after close or topology failure', async ()
       provider: {
         descriptor,
         start: async (context) => {
+          context.emit({ type: 'runtime.generation.failed' });
+          context.emit({ type: 'runtime.status' });
           context.emit({ runtimeGenerationId: vector.runtimeGenerationId, type: 'runtime.generation.activated' });
           return pendingSession;
         },
@@ -698,6 +756,7 @@ it('drops buffered startup activation after close or topology failure', async ()
 
     expect(published, transition).toEqual(['runtime.status']);
     expect(published, transition).not.toContain('runtime.generation.activated');
+    expect(published, transition).not.toContain('runtime.generation.failed');
     expect(closeCalls, transition).toBe(1);
     if (transition === 'topology') await controller.close();
   }

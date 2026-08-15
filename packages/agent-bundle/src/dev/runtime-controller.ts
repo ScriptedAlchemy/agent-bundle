@@ -333,7 +333,7 @@ export class DevRuntimeController implements DevRuntimeSession {
   readonly #startupTimeoutMs: number;
   readonly #storageRoot: string;
   #bufferedPrepared: DevRuntimePreparedProject;
-  #bufferedStartupActivation: DevRuntimeEventInput | undefined;
+  #bufferedStartupEvents: readonly DevRuntimeEventInput[] = Object.freeze([]);
   #closePromise: Promise<void> | undefined;
   #closed = false;
   #lastAcceptedSourceRevision: string;
@@ -415,7 +415,7 @@ export class DevRuntimeController implements DevRuntimeSession {
     if (prepared === undefined || diagnostic !== undefined || prepared.provider !== this.#initialProviderPath) {
       if (!this.#topologyFailed) {
         this.#topologyFailed = true;
-        this.#bufferedStartupActivation = undefined;
+        this.#bufferedStartupEvents = Object.freeze([]);
         this.#failLifecycle('failed', true);
       }
       return Promise.resolve();
@@ -632,12 +632,12 @@ export class DevRuntimeController implements DevRuntimeSession {
       this.#session = session;
       this.#adoptStatus(status);
       this.#surfaces = surfaces;
-      this.#flushStartupActivation();
+      this.#flushStartupEvents();
       if (this.#bufferedPrepared.sourceRevision !== startedPrepared.sourceRevision) {
         await this.#enqueueReconcile(this.#bufferedPrepared);
       }
     } catch {
-      this.#bufferedStartupActivation = undefined;
+      this.#bufferedStartupEvents = Object.freeze([]);
       if (!this.#topologyFailed) this.#failLifecycle();
       this.#observeLateStart(providerStart);
     } finally {
@@ -667,19 +667,17 @@ export class DevRuntimeController implements DevRuntimeSession {
   }
 
   #publish(event: DevRuntimeEventInput): void {
-    if (event.type === 'runtime.generation.activated') {
+    const authoritative = event.type === 'runtime.generation.activated' ||
+      event.type === 'runtime.generation.failed' || event.type === 'runtime.status';
+    const controllerLifecycleStatus = event.type === 'runtime.status' && this.#publishingLifecycleStatus;
+    if (authoritative && !controllerLifecycleStatus) {
       if (this.#closed || this.#topologyFailed) return;
       if (this.#session === undefined) {
         if (this.#startPromise === undefined || this.#status.state !== 'starting') return;
-        this.#bufferedStartupActivation = event;
+        this.#bufferStartupEvent(event);
         return;
       }
-      this.#refreshSnapshot();
-    } else if (
-      (event.type === 'runtime.generation.failed' || event.type === 'runtime.status') &&
-      !this.#refreshingSnapshot && !this.#publishingLifecycleStatus
-    ) {
-      this.#refreshSnapshot();
+      if (!this.#refreshingSnapshot) this.#refreshSnapshot();
     }
     try {
       this.#emit(runtimeEvent(this.#providerSessionId, event));
@@ -688,34 +686,43 @@ export class DevRuntimeController implements DevRuntimeSession {
     }
   }
 
-  /** Coalesces early provider activation until browser-visible snapshots are installed. */
-  #flushStartupActivation(): void {
-    const activation = this.#bufferedStartupActivation;
-    this.#bufferedStartupActivation = undefined;
-    if (activation === undefined || this.#closed || this.#topologyFailed || this.#session === undefined) return;
-    this.#refreshSnapshot();
-    if (this.#closed || this.#topologyFailed || this.#session === undefined) return;
-    try {
-      this.#emit(runtimeEvent(this.#providerSessionId, activation));
-    } catch {
-      // Provider health must not depend on a failed observer.
+  /** Coalesces startup lifecycle events until browser-visible snapshots are installed. */
+  #bufferStartupEvent(event: DevRuntimeEventInput): void {
+    this.#bufferedStartupEvents = Object.freeze([
+      ...this.#bufferedStartupEvents.filter((buffered) => buffered.type !== event.type),
+      event,
+    ]);
+  }
+
+  #flushStartupEvents(): void {
+    const events = this.#bufferedStartupEvents;
+    this.#bufferedStartupEvents = Object.freeze([]);
+    for (const event of events) {
+      if (this.#closed || this.#topologyFailed || this.#session === undefined || !this.#refreshSnapshot()) return;
+      try {
+        this.#emit(runtimeEvent(this.#providerSessionId, event));
+      } catch {
+        // Provider health must not depend on a failed observer.
+      }
     }
   }
 
   /** Refreshes browser-visible snapshots before an authoritative lifecycle event reaches consumers. */
-  #refreshSnapshot(): void {
-    if (this.#closed || this.#topologyFailed || this.#refreshingSnapshot) return;
+  #refreshSnapshot(): boolean {
+    if (this.#closed || this.#topologyFailed || this.#refreshingSnapshot) return false;
     const session = this.#session;
-    if (session === undefined) return;
+    if (session === undefined) return false;
     this.#refreshingSnapshot = true;
     try {
       const status = this.#captureStatus(session);
       const surfaces = this.#snapshotSurfaces(session, false);
-      if (this.#closed || this.#topologyFailed || this.#session !== session) return;
+      if (this.#closed || this.#topologyFailed || this.#session !== session) return false;
       this.#adoptStatus(status);
       this.#surfaces = surfaces;
+      return true;
     } catch {
       if (!this.#topologyFailed) this.#failLifecycle('degraded');
+      return false;
     } finally {
       this.#refreshingSnapshot = false;
     }
@@ -747,7 +754,7 @@ export class DevRuntimeController implements DevRuntimeSession {
 
   async #close(): Promise<void> {
     this.#closed = true;
-    this.#bufferedStartupActivation = undefined;
+    this.#bufferedStartupEvents = Object.freeze([]);
     this.#startAbort.abort();
     await this.#startPromise;
     await this.#reconcileTail;
