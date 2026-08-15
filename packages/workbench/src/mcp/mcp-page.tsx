@@ -247,6 +247,121 @@ const display = (value: unknown): string => {
   }
 };
 
+const consentDetailLimit = 480;
+const consentDetailDepthLimit = 3;
+const consentDetailEntryLimit = 8;
+const sensitiveConsentDetail = /(?:api[_-]?key|authorization|bearer|cookie|credential|pass(?:word)?|private[_-]?key|secret|token)/iu;
+
+const boundedConsentText = (value: unknown, maximum = 160): string | undefined => {
+  if (typeof value !== 'string') return undefined;
+  if (sensitiveConsentDetail.test(value)) return '[redacted]';
+  const normalized = Array.from(value, (character) => {
+    const codePoint = character.codePointAt(0)!;
+    return codePoint < 0x20 || codePoint === 0x7f ? ' ' : character;
+  }).join('');
+  return normalized.length <= maximum ? normalized : `${normalized.slice(0, Math.max(0, maximum - 1))}…`;
+};
+
+/**
+ * Formats only bounded, finite JSON consent context for a React text node.
+ * It never follows accessors and redacts common credential-bearing names/values.
+ */
+const redactedConsentJson = (value: unknown, depth = 0, ancestors = new WeakSet<object>()): string | undefined => {
+  if (value === null || typeof value === 'boolean') return JSON.stringify(value);
+  if (typeof value === 'number') return Number.isFinite(value) ? String(value) : undefined;
+  if (typeof value === 'string') {
+    const textValue = boundedConsentText(value);
+    return textValue === undefined ? undefined : JSON.stringify(textValue);
+  }
+  if (typeof value !== 'object' || depth >= consentDetailDepthLimit || ancestors.has(value)) return undefined;
+  try {
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null && !Array.isArray(value)) return undefined;
+    ancestors.add(value);
+    if (Array.isArray(value)) {
+      const parts: string[] = [];
+      for (let index = 0; index < Math.min(value.length, consentDetailEntryLimit); index += 1) {
+        const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+        const entry = descriptor === undefined || !Object.hasOwn(descriptor, 'value')
+          ? '[withheld]'
+          : redactedConsentJson(descriptor.value, depth + 1, ancestors);
+        if (entry === undefined) return undefined;
+        parts.push(entry);
+      }
+      if (value.length > consentDetailEntryLimit) parts.push('…');
+      return `[${parts.join(', ')}]`;
+    }
+    const parts: string[] = [];
+    for (const key of Object.keys(value).sort().slice(0, consentDetailEntryLimit)) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (descriptor === undefined || !Object.hasOwn(descriptor, 'value')) return undefined;
+      const entry = sensitiveConsentDetail.test(key) ? '"[redacted]"' : redactedConsentJson(descriptor.value, depth + 1, ancestors);
+      if (entry === undefined) return undefined;
+      parts.push(`${JSON.stringify(key)}: ${entry}`);
+    }
+    if (Object.keys(value).length > consentDetailEntryLimit) parts.push('…');
+    return `{${parts.join(', ')}}`;
+  } catch {
+    return undefined;
+  } finally {
+    ancestors.delete(value as object);
+  }
+};
+
+const boundedConsentSummary = (value: string): string =>
+  value.length <= consentDetailLimit ? value : `${value.slice(0, consentDetailLimit - 1)}…`;
+
+const externalLinkTarget = (value: unknown): string | undefined => {
+  if (typeof value !== 'string') return undefined;
+  try {
+    const target = new URL(value);
+    if ((target.protocol !== 'http:' && target.protocol !== 'https:') || target.username.length > 0 || target.password.length > 0) return undefined;
+    return boundedConsentText(`${target.protocol}//${target.host}${target.pathname}`, 240);
+  } catch {
+    return undefined;
+  }
+};
+
+/** A capability-specific, bounded and credential-safe explanation of a server challenge. */
+export const mcpAppConsentDetailsSummary = (request: unknown): string => {
+  if (!isRecord(request) || !isRecord(request.details) || typeof request.capability !== 'string') return 'Details unavailable.';
+  const details = request.details;
+  let summary: string;
+  switch (request.capability) {
+    case 'call-tool': {
+      const name = boundedConsentText(details.name, 120);
+      const argumentsSummary = redactedConsentJson(details.arguments);
+      summary = name === undefined ? 'Tool details unavailable.' : `Tool: ${name}${argumentsSummary === undefined ? '' : `; arguments: ${argumentsSummary}`}`;
+      break;
+    }
+    case 'open-external-link': {
+      const target = externalLinkTarget(details.url);
+      summary = target === undefined ? 'External link target unavailable.' : `External link: ${target}`;
+      break;
+    }
+    case 'download-file': {
+      const contents = Array.isArray(details.contents) ? details.contents : undefined;
+      if (contents === undefined) {
+        summary = 'Download details unavailable.';
+        break;
+      }
+      const types = contents.slice(0, consentDetailEntryLimit).map((entry) => isRecord(entry) ? boundedConsentText(entry.type, 48) ?? 'unspecified' : 'unspecified');
+      summary = `Download ${contents.length} file${contents.length === 1 ? '' : 's'}${types.length === 0 ? '' : ` (${types.join(', ')})`}.`;
+      break;
+    }
+    case 'request-display-mode': {
+      const mode = boundedConsentText(details.mode, 80);
+      summary = mode === undefined ? 'Display mode details unavailable.' : `Display mode: ${mode}`;
+      break;
+    }
+    default: {
+      const value = redactedConsentJson(details);
+      summary = value === undefined ? 'Details unavailable.' : `Request details: ${value}`;
+    }
+  }
+  return boundedConsentSummary(summary);
+};
+
 /** Read-only provider evidence shared by the live MCP page and Runtime Inspector. */
 export const McpProtocolEvidence = ({ ariaLabel, protocol, trace }: McpProtocolEvidenceProps): React.ReactNode => <section aria-label={ariaLabel} className="mcp-page-trace">
   <h3>{ariaLabel}</h3>
@@ -397,6 +512,7 @@ const McpPageAppPreview = ({ client, host, onControllerChange, previewProfile, s
         <p>{isRecord(challenge.request) && typeof challenge.request.summary === 'string'
           ? challenge.request.summary
           : 'Allow this MCP App action?'}</p>
+        <p><strong>Details:</strong> {mcpAppConsentDetailsSummary(challenge.request)}</p>
         <button disabled={consentPending !== undefined} onClick={() => { decideConsent(challenge, true); }} type="button">Allow {isRecord(challenge.request) && typeof challenge.request.capability === 'string' ? challenge.request.capability.replaceAll('-', ' ') : 'action'}</button>
         <button disabled={consentPending !== undefined} onClick={() => { decideConsent(challenge, false); }} type="button">Deny</button>
       </li>)}</ol>

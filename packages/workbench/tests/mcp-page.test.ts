@@ -9,6 +9,7 @@ import {
   McpProtocolEvidence,
   createMcpPageActionTracker,
   createMcpPageActionSession,
+  mcpAppConsentDetailsSummary,
   mcpConfigDownload,
   mcpAppPreviewSourceFor,
   mcpPageControllerReplacementState,
@@ -95,6 +96,38 @@ const appPreviewClient: McpAppPreviewClient = {
 };
 
 describe('MCP page', () => {
+  it('describes distinct consent targets with bounded redacted React text', () => {
+    const call = mcpAppConsentDetailsSummary({
+      capability: 'call-tool',
+      details: { arguments: { api_key: 'do-not-show', message: '<img src=x onerror=alert(1)>' }, name: 'weather.lookup' },
+    });
+    const link = mcpAppConsentDetailsSummary({
+      capability: 'open-external-link',
+      details: { url: 'https://example.test/billing?token=do-not-show#fragment' },
+    });
+    const credentialedLink = mcpAppConsentDetailsSummary({
+      capability: 'open-external-link',
+      details: { url: 'https://user:do-not-show@example.test/private' },
+    });
+    const download = mcpAppConsentDetailsSummary({
+      capability: 'download-file',
+      details: { contents: [{ text: 'do-not-show', type: 'text' }, { blob: 'also-private', type: 'binary' }] },
+    });
+    const markup = renderToStaticMarkup(createElement('p', undefined, call));
+
+    expect(call).toContain('Tool: weather.lookup');
+    expect(call).toContain('"api_key": "[redacted]"');
+    expect(call).not.toContain('do-not-show');
+    expect(markup).toContain('&lt;img src=x onerror=alert(1)&gt;');
+    expect(markup).not.toContain('<img src=x');
+    expect(link).toBe('External link: https://example.test/billing');
+    expect(link).not.toContain('token=');
+    expect(credentialedLink).toBe('External link target unavailable.');
+    expect(download).toBe('Download 2 files (text, binary).');
+    expect(download).not.toContain('also-private');
+    expect(mcpAppConsentDetailsSummary({ capability: 'call-tool', details: { arguments: { note: 'a'.repeat(2_000) }, name: 'long' } }).length).toBeLessThanOrEqual(480);
+  });
+
   it('renders provider protocol evidence without adding live session controls', () => {
     const markup = renderToStaticMarkup(createElement(McpProtocolEvidence, {
       ariaLabel: 'Provider MCP protocol evidence',

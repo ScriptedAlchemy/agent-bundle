@@ -306,6 +306,46 @@ describe('MCP App preview', () => {
     await controller.close();
   });
 
+  it('retains the credential-owning client receiver while listing and deciding consent', async () => {
+    const challenge = Object.freeze({
+      expiresAt: 30_000,
+      id: 'consent-tool',
+      request: Object.freeze({ capability: 'call-tool' as const, details: Object.freeze({ name: 'refresh-weather' }), scope: 'action' as const, summary: 'Allow MCP App call tool?' }),
+    });
+    class ReceiverBoundClient implements McpAppPreviewClient {
+      readonly calls: string[] = [];
+      async close() { return closed(); }
+      async consentChallenges(bindingId: string) {
+        this.calls.push(`list:${bindingId}`);
+        return Object.freeze([challenge]);
+      }
+      async create() { return preview(); }
+      async decideConsent(bindingId: string, challengeId: string, approved: boolean) {
+        this.calls.push(`decide:${bindingId}:${challengeId}:${approved}`);
+        return Object.freeze({ approved, messages: Object.freeze([]), preview: preview() });
+      }
+      async forceClose() { return true; }
+      async message() { return messages(); }
+    }
+    const client = new ReceiverBoundClient();
+    const controller = createMcpAppPreviewController({
+      client,
+      frameRelayFactory: () => ({ async close() {}, deliverHostMessages: () => true, start: () => true }),
+      host,
+      input: Object.freeze({ city: 'Paris' }),
+      result: Object.freeze({ text: 'Sunny' }),
+      sessionId: 'session-weather',
+      toolName: 'show-weather',
+    });
+
+    await controller.start();
+    controller.attachFrame(iframe(), browserWindow);
+    await expect(controller.consentChallenges()).resolves.toEqual([challenge]);
+    await expect(controller.decideConsent(challenge.id, true)).resolves.toBe(true);
+    expect(client.calls).toEqual(['list:binding-weather', 'decide:binding-weather:consent-tool:true']);
+    await controller.close();
+  });
+
   it('waits for a late preview create before force-closing its binding during unmount', async () => {
     const pending = deferred<Preview>();
     const { client, forceClosed } = fakeClient(pending.promise);

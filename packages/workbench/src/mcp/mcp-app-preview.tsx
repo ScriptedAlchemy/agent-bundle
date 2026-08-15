@@ -227,14 +227,14 @@ export class McpAppPreviewController {
   async consentChallenges(): Promise<readonly McpAppConsentChallenge[]> {
     const bindingId = this.#preview?.bindingId;
     const list = this.#client.consentChallenges;
-    return bindingId === undefined || this.#closed || list === undefined ? Object.freeze([]) : list(bindingId);
+    return bindingId === undefined || this.#closed || list === undefined ? Object.freeze([]) : list.call(this.#client, bindingId);
   }
 
   async decideConsent(challengeId: string, approved: boolean): Promise<boolean> {
     const previous = this.#preview;
     const decide = this.#client.decideConsent;
     if (previous === undefined || this.#closed || decide === undefined) return false;
-    const decision = await decide(previous.bindingId, challengeId, approved);
+    const decision = await decide.call(this.#client, previous.bindingId, challengeId, approved);
     if (this.#closed) return false;
     if (!decision.approved) return decision.messages.length > 0 && this.#relay?.deliverHostMessages?.(decision.messages) === true;
     const documentChanged = previous.frame?.documentPolicy?.revision !== decision.preview.frame?.documentPolicy?.revision;

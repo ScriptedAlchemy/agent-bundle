@@ -121,6 +121,10 @@ interface AppRouteRequest {
   readonly path: string;
 }
 
+interface AppRouteResponse extends AppRouteRequest {
+  readonly response: unknown;
+}
+
 const requestBody = (body: string | null): unknown => {
   if (body === null) return undefined;
   try {
@@ -153,11 +157,25 @@ e2e('runs a generated SDK-v2 App through the real foreground session and separat
     const epochRoot = join(project.root, '.agent-bundle', 'epochs', artifact.activeEpoch.id);
     const pageErrors: Error[] = [];
     const appRequests: AppRouteRequest[] = [];
+    const appResponses: AppRouteResponse[] = [];
+    const consentSnapshots: unknown[] = [];
     page.on('pageerror', (error) => pageErrors.push(error));
     page.on('request', (request) => {
       const requestUrl = new URL(request.url());
       if (requestUrl.origin !== foregroundOrigin || !requestUrl.pathname.startsWith('/api/mcp/apps/')) return;
       appRequests.push({ body: requestBody(request.postData()), path: requestUrl.pathname });
+    });
+    page.on('response', (response) => {
+      const responseUrl = new URL(response.url());
+      if (responseUrl.origin !== foregroundOrigin || !responseUrl.pathname.endsWith('/consent')) return;
+      void response.json().then((body) => { consentSnapshots.push(body); }).catch(() => undefined);
+    });
+    page.on('response', (response) => {
+      const responseUrl = new URL(response.url());
+      if (responseUrl.origin !== foregroundOrigin || !responseUrl.pathname.endsWith('/messages')) return;
+      void response.json().then((body) => {
+        appResponses.push({ body: requestBody(response.request().postData()), path: responseUrl.pathname, response: body });
+      }).catch(() => undefined);
     });
 
     await page.goto(`${foregroundOrigin}#mcp`);
@@ -214,6 +232,34 @@ e2e('runs a generated SDK-v2 App through the real foreground session and separat
     expect(sandboxOrigin).not.toBe(foregroundOrigin);
     await expect(outerFrame).toHaveAttribute('sandbox', 'allow-scripts allow-same-origin');
     await expect(outerFrame).toHaveAttribute('referrerpolicy', 'no-referrer');
+    await expect.poll(() => appRequests.some((request) => {
+      const message = (request.body as { readonly message?: { readonly method?: string } } | undefined)?.message;
+      return request.path.endsWith('/messages') && message?.method === 'ui/notifications/initialized';
+    }), { timeout: browserTimeout }).toBe(true);
+    await expect.poll(() => appResponses.find((entry) => {
+      const request = (entry.body as { readonly message?: { readonly method?: string } } | undefined)?.message;
+      const messages = (entry.response as { readonly messages?: readonly { readonly method?: string }[] }).messages;
+      return request?.method === 'ui/notifications/initialized' && messages?.some((message) => message.method === 'ui/notifications/tool-result');
+    }), { timeout: browserTimeout }).toMatchObject({
+      response: { messages: expect.arrayContaining([expect.objectContaining({ method: 'ui/notifications/tool-result' })]) },
+    });
+    await expect.poll(() => page.frames().find((frame) => frame.url() === 'about:blank')?.getByTestId('app-state').textContent(), {
+      timeout: browserTimeout,
+    }).toContain('real-sdk-v2');
+    await expect.poll(() => appRequests.some((request) => {
+      const message = (request.body as { readonly message?: { readonly method?: string } } | undefined)?.message;
+      return request.path.endsWith('/messages') && message?.method === 'tools/call';
+    }), { timeout: browserTimeout }).toBe(true);
+    await expect.poll(() => appResponses.find((entry) => {
+      const message = (entry.body as { readonly message?: { readonly method?: string } } | undefined)?.message;
+      return message?.method === 'tools/call';
+    }), { timeout: browserTimeout }).toMatchObject({ response: { accepted: true, messages: [] } });
+    await expect.poll(() => JSON.stringify(consentSnapshots), { timeout: browserTimeout }).toContain('"capability":"call-tool"');
+    const consent = page.getByLabel('MCP App consent');
+    await expect(consent).toContainText('Tool: inner-echo');
+    await expect(consent).toContainText('External link: https://example.test/real-app-link');
+    await expect(consent).toContainText('Download 1 file (text).');
+    await expect(consent).toContainText('Display mode: inline');
     await page.getByRole('button', { name: 'Allow call tool' }).click();
     await page.getByRole('button', { name: 'Allow open external link' }).click();
     await page.getByRole('button', { name: 'Allow download file' }).click();
