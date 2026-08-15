@@ -292,21 +292,23 @@ it('uses the injected adapter hook contract for custom manifests, mappings, matc
     ]);
     await staging.publish(async () => undefined);
 
-    const service = new HookPlaygroundService({
-      epochStore,
-      hookService: {
-        list: async () => [hook],
-        simulate: async () => ({ additionalContext: 'simulated', outcome: 'continue' }),
-      },
-      registry: new TargetRegistry().register(adapter),
-    });
-
-    await expect(service.simulate({
+    const hookService = {
+      list: async () => [hook],
+      simulate: async () => ({ additionalContext: 'simulated', outcome: 'continue' }),
+    };
+    const request = {
       epochId: 'epoch-1',
       hook: hook.id,
       input: { inline: { payload: { value: 'custom' } } },
       target: 'synthetic',
-    })).resolves.toEqual({
+    } as const;
+    const service = new HookPlaygroundService({
+      epochStore,
+      hookService,
+      registry: new TargetRegistry().register(adapter),
+    });
+
+    await expect(service.simulate(request)).resolves.toEqual({
       binding: { epochId: 'epoch-1', hook: hook.id, target: 'synthetic' },
       canonicalIntent: {
         event: 'beforeTool',
@@ -336,6 +338,25 @@ it('uses the injected adapter hook contract for custom manifests, mappings, matc
         binding: { epochId: 'epoch-1', hook: hook.id, target: 'synthetic' },
         input: { payload: { value: 'custom' } },
       },
+    });
+    const missingManifestAdapter: TargetAdapter = {
+      ...adapter,
+      hookContract: { ...contract, manifestPath: 'registrations/missing.json' },
+    };
+    const missingManifestService = new HookPlaygroundService({
+      epochStore,
+      hookService,
+      registry: new TargetRegistry().register(missingManifestAdapter),
+    });
+
+    await expect(missingManifestService.simulate(request)).resolves.toEqual({
+      diagnostics: [{
+        code: 'hook.playground.manifest.missing',
+        event: 'beforeTool',
+        message: 'Hook playground target "synthetic" is missing hook manifest "registrations/missing.json" for canonical event "beforeTool".',
+        severity: 'error',
+        target: 'synthetic',
+      }],
     });
   } finally {
     await rm(root, { force: true, recursive: true });
