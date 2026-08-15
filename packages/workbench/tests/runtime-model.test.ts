@@ -215,6 +215,51 @@ it('ignores lower or equal runtime event sequences and coalesces activation boot
   expect(afterFirst.pendingEffect).toBeUndefined();
 });
 
+it('queues one latest selected-fixture run only after a same-provider generation activation bootstraps', () => {
+  const initial = model();
+  const activation = reduce(initial, {
+    event: event(1, 'runtime.generation.activated', undefined, 'provider-a', 'generation-b'),
+    type: 'event.received',
+  });
+  const activated = reduce(activation, {
+    bootstrap: bootstrap({ status: status({ activeVector: vector({ runtimeGenerationId: 'generation-b' }), lastGoodVector: vector({ runtimeGenerationId: 'generation-b' }) }) }),
+    type: 'bootstrap.received',
+  });
+  const completed = reduce(activated, {
+    run: run('run-activation', { vector: vector({ runtimeGenerationId: 'generation-b' }) }),
+    type: 'run.received',
+  });
+
+  expect(effectFor(activation)).toMatchObject({ kind: 'bootstrap', triggerSequence: 1 });
+  expect(effectFor(activated)).toMatchObject({
+    cause: 'activation',
+    kind: 'create-run',
+    request: { expectedGenerationId: 'generation-b', fixtureId: 'fixture-a', input: { city: 'London' }, surfaceId: 'weather', target: 'portable' },
+  });
+  expect(effectFor(completed)).toBeUndefined();
+
+  const settledFor = (eventInput: ProjectEventMessage, nextBootstrap: RuntimeBootstrap): RuntimeModel => {
+    const pending = reduce(initial, { event: eventInput, type: 'event.received' });
+    return reduce(pending, { bootstrap: nextBootstrap, type: 'bootstrap.received' });
+  };
+  const nextGeneration = bootstrap({ status: status({ activeVector: vector({ runtimeGenerationId: 'generation-b' }), lastGoodVector: vector({ runtimeGenerationId: 'generation-b' }) }) });
+  const providerBVector = vector({ providerSessionId: 'provider-b', runtimeGenerationId: 'generation-b' });
+  const providerRestart = bootstrap({
+    history: [run('run-provider-b', { vector: providerBVector })],
+    providerSessionId: 'provider-b',
+    status: status({ activeVector: providerBVector, lastGoodVector: providerBVector }),
+  });
+  const manual = reduce(initial, { type: 'run.request' }, { type: 'confirmation.confirm' });
+  const conflicted = reduce(manual, { id: effectFor(manual)!.id, type: 'effect.conflict' });
+
+  expect(effectFor(createRuntimeModel({ bootstrap: nextGeneration, profiles }))).toBeUndefined();
+  expect(effectFor(settledFor(event(1, 'runtime.status', undefined, 'provider-a', 'generation-b'), nextGeneration))).toBeUndefined();
+  expect(effectFor(settledFor(event(1, 'runtime.generation.failed', undefined, 'provider-a', 'generation-b'), nextGeneration))).toBeUndefined();
+  expect(effectFor(reduce(initial, { event: event(1, 'runtime.hmr.client-connected', { connectionCount: 1, surfaceId: 'weather' }), type: 'event.received' }))).toBeUndefined();
+  expect(effectFor(settledFor(event(1, 'runtime.generation.activated', undefined, 'provider-b', 'generation-b'), providerRestart))).toBeUndefined();
+  expect(effectFor(reduce(conflicted, { bootstrap: nextGeneration, type: 'bootstrap.received' }))).toBeUndefined();
+});
+
 it('turns a replay gap into exactly one bootstrap and clears HMR connection knowledge', () => {
   const connected = reduce(model(), { event: event(1, 'runtime.hmr.client-connected', { connectionCount: 2, surfaceId: 'weather' }), type: 'event.received' });
   const gap = { earliestAvailableSequence: 6, latestDroppedSequence: 5, requestedAfterSequence: 1, type: 'replay.gap' } as const;
@@ -767,8 +812,11 @@ it('rebinds deferred latest intents after activation while retaining exact repla
     const promoted = effectFor(activated);
     if (promoted === undefined) throw new Error('Expected promoted foreground effect.');
     const drained = reduce(activated, { id: promoted.id, type: 'effect.settled' });
-    expect(effectFor(drained)).toBeUndefined();
-    expect(drained.pendingEffect).toBeUndefined();
+    const activationReplay = effectFor(drained);
+    expect(activationReplay).toMatchObject({ cause: 'activation', kind: 'create-run', request: { expectedGenerationId: newGeneration } });
+    const settled = reduce(drained, { id: activationReplay!.id, type: 'effect.settled' });
+    expect(effectFor(settled)).toBeUndefined();
+    expect(settled.pendingEffect).toBeUndefined();
     return promoted;
   };
 

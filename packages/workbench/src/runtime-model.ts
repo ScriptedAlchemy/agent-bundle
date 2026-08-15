@@ -49,9 +49,16 @@ export interface RuntimeResetCompletion {
   readonly state: DevRuntimeStateIdentity;
 }
 
+/** A generation activation that must wait for its correlated bootstrap snapshot. */
+export interface RuntimeActivationReplay {
+  readonly providerSessionId: string;
+  readonly runtimeGenerationId: string;
+  readonly triggerSequence: number;
+}
+
 export type RuntimeModelEffect =
   | Readonly<{ readonly kind: 'bootstrap'; readonly triggerSequence?: number }>
-  | Readonly<{ readonly cause: 'manual' | 'reset'; readonly kind: 'create-run'; readonly request: DevRuntimeInvocationRequest }>
+  | Readonly<{ readonly cause: 'activation' | 'manual' | 'reset'; readonly kind: 'create-run'; readonly request: DevRuntimeInvocationRequest }>
   | Readonly<{ readonly kind: 'read-run'; readonly runId: string }>
   | Readonly<{ readonly kind: 'replay-run'; readonly request: DevRuntimeReplayRequest }>
   | Readonly<{ readonly kind: 'reset-state'; readonly request: DevRuntimeStateResetRequest }>;
@@ -62,7 +69,7 @@ type RuntimeForegroundEffect =
   | Extract<RuntimeModelEffect, Readonly<{ readonly kind: 'reset-state' }>>;
 
 type RuntimeDeferredForegroundIntent =
-  | Readonly<{ readonly cause: 'manual' | 'reset'; readonly kind: 'create-run'; readonly request: Omit<DevRuntimeInvocationRequest, 'expectedGenerationId'> }>
+  | Readonly<{ readonly cause: 'activation' | 'manual' | 'reset'; readonly kind: 'create-run'; readonly request: Omit<DevRuntimeInvocationRequest, 'expectedGenerationId'> }>
   | Readonly<{ readonly kind: 'replay-run'; readonly mode: 'latest'; readonly runId: string }>
   | Readonly<{ readonly kind: 'replay-run'; readonly mode: 'exact'; readonly request: DevRuntimeReplayRequest }>
   | Readonly<{ readonly kind: 'reset-state'; readonly request: DevRuntimeStateResetRequest }>;
@@ -90,6 +97,7 @@ export interface RuntimeModel {
   readonly lastConsumedEventSequence: number;
   readonly lastGoodRunId?: string;
   readonly nextEffectId: number;
+  readonly pendingActivationReplay?: RuntimeActivationReplay;
   readonly pendingEffect?: RuntimeQueuedEffect;
   readonly previousProviderLastGood?: RuntimePreviousProviderLastGood;
   readonly profiles: readonly RuntimeProfileOption[];
@@ -542,6 +550,24 @@ const bootstrapModel = (model: RuntimeModel, bootstrap: RuntimeBootstrap): Runti
   return next;
 };
 
+const isActivatedGenerationBootstrap = (
+  model: RuntimeModel,
+  bootstrap: RuntimeBootstrap,
+  activeBootstrap: RuntimeQueuedEffect | undefined,
+  activation: RuntimeActivationReplay | undefined,
+): boolean => {
+  if (bootstrap.kind === 'unavailable' || activeBootstrap?.kind !== 'bootstrap' || activation === undefined) return false;
+  if (activeBootstrap.triggerSequence !== activation.triggerSequence) return false;
+  const priorVector = model.status?.activeVector;
+  const nextVector = bootstrap.status.activeVector;
+  return model.providerSessionId === activation.providerSessionId &&
+    bootstrap.providerSessionId === activation.providerSessionId &&
+    priorVector?.providerSessionId === activation.providerSessionId &&
+    priorVector.runtimeGenerationId !== activation.runtimeGenerationId &&
+    nextVector?.providerSessionId === activation.providerSessionId &&
+    nextVector.runtimeGenerationId === activation.runtimeGenerationId;
+};
+
 export const createRuntimeModel = ({ bootstrap, profiles }: RuntimeModelOptions): RuntimeModel => {
   const snapshots = snapshotProfiles(profiles);
   const base: RuntimeModel = Object.freeze({
@@ -598,7 +624,11 @@ const receivedEvent = (model: RuntimeModel, message: ProjectEventMessage): Runti
   const advanced = update(model, { lastConsumedEventSequence: message.sequence });
   const event = message.payload;
   if (advanced.providerSessionId !== undefined && event.providerSessionId !== advanced.providerSessionId) {
-    return queueBootstrap(update(advanced, { hmrClientCountBySurface: emptyCounts, hmrClientCountKnownSurfaces: emptyStrings }), message.sequence);
+    return queueBootstrap(update(advanced, {
+      hmrClientCountBySurface: emptyCounts,
+      hmrClientCountKnownSurfaces: emptyStrings,
+      pendingActivationReplay: undefined,
+    }), message.sequence);
   }
   if (event.type === 'runtime.hmr.client-connected' || event.type === 'runtime.hmr.client-disconnected') {
     const count = hmrCount(event.details);
@@ -617,13 +647,32 @@ const receivedEvent = (model: RuntimeModel, message: ProjectEventMessage): Runti
   if ((event.type === 'runtime.run.started' || event.type === 'runtime.run.completed' || event.type === 'runtime.run.failed') && event.runId !== undefined) {
     return queueOperation(advanced, Object.freeze({ kind: 'read-run', runId: event.runId }));
   }
+  if (event.type === 'runtime.generation.activated' && event.runtimeGenerationId !== undefined) {
+    return queueBootstrap(update(advanced, {
+      pendingActivationReplay: Object.freeze({
+        providerSessionId: event.providerSessionId,
+        runtimeGenerationId: event.runtimeGenerationId,
+        triggerSequence: message.sequence,
+      }),
+    }), message.sequence);
+  }
   return queueBootstrap(advanced, message.sequence);
 };
 
 export const reduceRuntimeModel = (model: RuntimeModel, action: RuntimeModelAction): RuntimeModel => {
   switch (action.type) {
-    case 'bootstrap.received':
-      return settleEffectKind(bootstrapModel(model, action.bootstrap), 'bootstrap');
+    case 'bootstrap.received': {
+      const activeBootstrap = model.activeEffect?.kind === 'bootstrap' ? model.activeEffect : undefined;
+      const activation = model.pendingActivationReplay;
+      const shouldReplay = isActivatedGenerationBootstrap(model, action.bootstrap, activeBootstrap, activation);
+      const bootstrapped = settleEffectKind(bootstrapModel(model, action.bootstrap), 'bootstrap');
+      if (activeBootstrap?.triggerSequence !== activation?.triggerSequence) return bootstrapped;
+      const consumed = update(bootstrapped, { pendingActivationReplay: undefined });
+      const request = shouldReplay ? invocationFor(consumed) : undefined;
+      return request === undefined
+        ? consumed
+        : queueOperation(consumed, Object.freeze({ cause: 'activation' as const, kind: 'create-run' as const, request }));
+    }
     case 'event.received':
       return receivedEvent(model, action.event);
     case 'effect.settled':
