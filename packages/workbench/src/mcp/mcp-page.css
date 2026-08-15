@@ -20,6 +20,7 @@
 .mcp-page-active,
 .mcp-page-history,
 .mcp-page-trace,
+.mcp-page-recovery,
 .mcp-page-diagnostics {
   background: #16202e;
   border: 1px solid #34465d;
@@ -153,6 +154,7 @@
 .mcp-page-active,
 .mcp-page-history,
 .mcp-page-trace,
+.mcp-page-recovery,
 .mcp-page-diagnostics {
   display: grid;
   gap: 0.65rem;

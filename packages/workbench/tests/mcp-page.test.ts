@@ -3,7 +3,13 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from '@rstest/core';
 
 import type { McpBrowserSessionModel } from '../src/mcp/mcp-session-model.ts';
-import { McpPage, mcpConfigDownload, type McpPageController } from '../src/mcp/mcp-page.tsx';
+import {
+  McpPage,
+  createMcpPageActionTracker,
+  mcpConfigDownload,
+  mcpPageSessionControls,
+  type McpPageController,
+} from '../src/mcp/mcp-page.tsx';
 
 const model = {
   activeRequests: {
@@ -40,7 +46,7 @@ const model = {
   connection: { protocolVersion: '2025-06-18', serverCapabilities: { tools: {} }, serverInfo: { name: 'Weather Server' } },
   diagnostics: [{ code: 'mcp.trace.delayed', message: 'Trace delivery is delayed.', severity: 'warning' }],
   logs: [{ kind: 'logging', occurredAt: 1_700_000_000_002, payload: { level: 'info', message: 'Connected' }, sequence: 2 }],
-  phase: 'ready',
+  phase: 'idle',
   progress: [{ kind: 'progress', occurredAt: 1_700_000_000_003, payload: { progress: 1 }, sequence: 3 }],
   sessionId: 'session-1',
   timeline: {
@@ -112,5 +118,28 @@ describe('MCP page', () => {
     expect(download.filename).toBe('mcp-session-1-inspector.json');
     expect(download.blob.type).toBe('application/json');
     await expect(download.blob.text()).resolves.toContain('"command": "node"');
+  });
+
+  it('tracks interactions independently so cancellation and close recovery remain available', () => {
+    const actions = createMcpPageActionTracker();
+
+    expect(actions.start('invoke:listTools')).toBe(true);
+    expect(actions.start('invoke:listTools')).toBe(false);
+    expect(actions.isPending('cancel:tool-call-1')).toBe(false);
+    expect(mcpPageSessionControls('ready', actions.pending, false).close).toBe(true);
+
+    actions.finish('invoke:listTools');
+    expect(actions.start('open')).toBe(true);
+    expect(mcpPageSessionControls('idle', actions.pending, false)).toMatchObject({ close: true, open: false });
+
+    actions.finish('open');
+    expect(actions.start('restart')).toBe(true);
+    expect(mcpPageSessionControls('restarting', actions.pending, false).close).toBe(true);
+  });
+
+  it('does not advertise a dead open path after the controller reaches a terminal phase', () => {
+    expect(mcpPageSessionControls('idle', [], false)).toMatchObject({ open: true, recovery: 'none' });
+    expect(mcpPageSessionControls('closed', [], false)).toMatchObject({ open: false, recovery: 'unavailable' });
+    expect(mcpPageSessionControls('error', [], true)).toMatchObject({ open: false, recovery: 'available' });
   });
 });

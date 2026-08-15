@@ -29,6 +29,8 @@ export interface McpPageProps {
   readonly epochOptions: readonly string[];
   readonly initialBinding?: Partial<McpSessionBinding>;
   readonly onDownloadConfig?: (download: McpConfigDownload) => void;
+  /** Replaces the terminal controller with a fresh idle controller in the parent. */
+  readonly onResetSession?: () => void;
   readonly targetOptions: readonly string[];
 }
 
@@ -39,6 +41,20 @@ export interface McpConfigDownload {
 
 type TraceTab = 'raw' | 'logs' | 'progress';
 
+export interface McpPageActionTracker {
+  readonly pending: readonly string[];
+  finish(action: string): void;
+  isPending(action: string): boolean;
+  start(action: string): boolean;
+}
+
+export interface McpPageSessionControls {
+  readonly close: boolean;
+  readonly open: boolean;
+  readonly recovery: 'available' | 'none' | 'unavailable';
+  readonly restart: boolean;
+}
+
 type CatalogItem = Readonly<{
   readonly description?: string;
   readonly name: string;
@@ -48,6 +64,37 @@ type CatalogItem = Readonly<{
 }>;
 
 const traceTabs: readonly TraceTab[] = ['raw', 'logs', 'progress'];
+
+export const createMcpPageActionTracker = (): McpPageActionTracker => {
+  const pending = new Set<string>();
+  return {
+    get pending(): readonly string[] {
+      return [...pending];
+    },
+    finish: (action) => { pending.delete(action); },
+    isPending: (action) => pending.has(action),
+    start: (action) => {
+      if (pending.has(action)) return false;
+      pending.add(action);
+      return true;
+    },
+  };
+};
+
+export const mcpPageSessionControls = (
+  phase: McpBrowserSessionModel['phase'],
+  pending: readonly string[],
+  hasReset: boolean,
+): McpPageSessionControls => {
+  const isPending = (action: string): boolean => pending.includes(action);
+  const terminal = phase === 'closed' || phase === 'error';
+  return {
+    close: !terminal && !isPending('close') && (phase === 'opening' || phase === 'ready' || phase === 'restarting' || isPending('open') || isPending('restart')),
+    open: phase === 'idle' && !isPending('open'),
+    recovery: terminal ? hasReset ? 'available' : 'unavailable' : 'none',
+    restart: phase === 'ready' && !isPending('restart'),
+  };
+};
 
 const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -110,7 +157,7 @@ const traceValue = (entry: McpBrowserSessionTimelineEntry): unknown => {
   return entry;
 };
 
-export const McpPage = ({ controller, epochOptions, initialBinding, onDownloadConfig, targetOptions }: McpPageProps) => {
+export const McpPage = ({ controller, epochOptions, initialBinding, onDownloadConfig, onResetSession, targetOptions }: McpPageProps) => {
   const [model, setModel] = useState(() => controller.model);
   const [epochId, setEpochId] = useState(initialBinding?.epochId ?? '');
   const [target, setTarget] = useState(initialBinding?.target ?? '');
@@ -120,24 +167,38 @@ export const McpPage = ({ controller, epochOptions, initialBinding, onDownloadCo
   const [promptName, setPromptName] = useState('');
   const [promptArguments, setPromptArguments] = useState<ImmutableJsonRecord>({});
   const [actionError, setActionError] = useState<string>();
-  const [pendingAction, setPendingAction] = useState<string>();
+  const [cancelledRequests, setCancelledRequests] = useState<readonly string[]>([]);
+  const [pendingActions, setPendingActions] = useState<readonly string[]>([]);
   const [traceTab, setTraceTab] = useState<TraceTab>('raw');
+  const actions = useRef(createMcpPageActionTracker());
   const requestNumber = useRef(0);
   const traceTabsByName = useRef<Partial<Record<TraceTab, HTMLButtonElement | null>>>({});
 
-  useEffect(() => controller.subscribe(setModel), [controller]);
+  useEffect(() => {
+    actions.current = createMcpPageActionTracker();
+    setPendingActions([]);
+    setCancelledRequests([]);
+    return controller.subscribe(setModel);
+  }, [controller]);
+  useEffect(() => {
+    setCancelledRequests((current) => current.filter((id) => Object.hasOwn(model.activeRequests, id)));
+  }, [model.activeRequests]);
 
   const nextRequestId = (): string => {
     requestNumber.current += 1;
     return `mcp-page-${requestNumber.current}`;
   };
-  const run = (label: string, operation: () => Promise<unknown>): void => {
+  const run = (action: string, operation: () => Promise<unknown>): void => {
+    if (!actions.current.start(action)) return;
     setActionError(undefined);
-    setPendingAction(label);
-    void operation().catch((reason: unknown) => setActionError(errorMessage(reason))).finally(() => setPendingAction(undefined));
+    setPendingActions(actions.current.pending);
+    void operation().catch((reason: unknown) => setActionError(errorMessage(reason))).finally(() => {
+      actions.current.finish(action);
+      setPendingActions(actions.current.pending);
+    });
   };
   const invoke = (operation: Exclude<McpSessionOperation, 'cancel' | 'close' | 'restart'>, request: Readonly<Record<string, unknown>>): void => {
-    run(operation, () => controller.invoke({ id: nextRequestId(), operation, request }));
+    run(`invoke:${operation}`, () => controller.invoke({ id: nextRequestId(), operation, request }));
   };
 
   const tools = catalogItems(model.catalogs.tools, 'Tool');
@@ -147,9 +208,8 @@ export const McpPage = ({ controller, epochOptions, initialBinding, onDownloadCo
   const selectedTool = tools.find((item) => item.name === toolName) ?? tools[0];
   const selectedPrompt = prompts.find((item) => item.name === promptName) ?? prompts[0];
   const active = Object.values(model.activeRequests);
-  const canOpen = model.phase === 'idle' || model.phase === 'closed' || model.phase === 'error';
-  const canRestart = model.phase === 'ready';
-  const canClose = model.phase === 'opening' || model.phase === 'ready' || model.phase === 'restarting' || model.phase === 'error';
+  const controls = mcpPageSessionControls(model.phase, pendingActions, onResetSession !== undefined);
+  const isPending = (action: string): boolean => actions.current.isPending(action);
   const rawTrace = model.conciseTrace;
   const traceEntries = traceTab === 'raw' ? rawTrace : traceTab === 'logs' ? model.logs : model.progress;
   const traceLabel = traceTab === 'raw' ? 'Raw protocol' : traceTab === 'logs' ? 'Logs' : 'Progress';
@@ -186,33 +246,38 @@ export const McpPage = ({ controller, epochOptions, initialBinding, onDownloadCo
 
     <section className="mcp-page-section" aria-labelledby="mcp-session-heading">
       <h2 id="mcp-session-heading">Session</h2>
-      <form className="mcp-page-binding" onSubmit={(event) => {
+      {controls.recovery !== 'none' ? <div className="mcp-page-recovery" role="status">
+        <p>This controller is terminal. Supply a new controller before opening another MCP session.</p>
+        {controls.recovery === 'available'
+          ? <button onClick={onResetSession} type="button">Reset MCP session</button>
+          : <button disabled type="button">New MCP session unavailable</button>}
+      </div> : <form className="mcp-page-binding" onSubmit={(event) => {
         event.preventDefault();
         const form = event.currentTarget;
         if (!form.reportValidity()) return;
         run('open', () => controller.open({ epochId, serverName, target }));
       }}>
         <label htmlFor="mcp-epoch">Artifact epoch
-          <select disabled={!canOpen || pendingAction !== undefined} id="mcp-epoch" onChange={(event) => setEpochId(event.currentTarget.value)} required value={epochId}>
+          <select disabled={!controls.open} id="mcp-epoch" onChange={(event) => setEpochId(event.currentTarget.value)} required value={epochId}>
             <option value="">Select an epoch</option>
             {epochOptions.map((option) => <option key={option} value={option}>{option}</option>)}
           </select>
         </label>
         <label htmlFor="mcp-target">Generated target
-          <select disabled={!canOpen || pendingAction !== undefined} id="mcp-target" onChange={(event) => setTarget(event.currentTarget.value)} required value={target}>
+          <select disabled={!controls.open} id="mcp-target" onChange={(event) => setTarget(event.currentTarget.value)} required value={target}>
             <option value="">Select a target</option>
             {targetOptions.map((option) => <option key={option} value={option}>{option}</option>)}
           </select>
         </label>
         <label htmlFor="mcp-server-name">Server name
-          <input disabled={!canOpen || pendingAction !== undefined} id="mcp-server-name" onChange={(event) => setServerName(event.currentTarget.value)} required value={serverName} />
+          <input disabled={!controls.open} id="mcp-server-name" onChange={(event) => setServerName(event.currentTarget.value)} required value={serverName} />
         </label>
         <div className="mcp-page-actions">
-          <button disabled={!canOpen || pendingAction !== undefined} type="submit">Open MCP session</button>
-          <button disabled={!canRestart || pendingAction !== undefined} onClick={() => run('restart', () => controller.restart())} type="button">Restart MCP session</button>
-          <button disabled={!canClose || pendingAction !== undefined} onClick={() => run('close', () => controller.close())} type="button">Close MCP session</button>
+          {controls.open ? <button type="submit">Open MCP session</button> : undefined}
+          <button disabled={!controls.restart} onClick={() => run('restart', () => controller.restart())} type="button">Restart MCP session</button>
+          <button disabled={!controls.close} onClick={() => run('close', () => controller.close())} type="button">Close MCP session</button>
         </div>
-      </form>
+      </form>}
       <div className="mcp-page-connection" aria-label="Negotiated connection">
         <h3>Negotiated connection</h3>
         <p>{connectionSummary(model.connection)}</p>
@@ -220,8 +285,12 @@ export const McpPage = ({ controller, epochOptions, initialBinding, onDownloadCo
       </div>
       {active.length === 0 ? undefined : <section aria-label="Active MCP operations" className="mcp-page-active">
         <h3>Active operations</h3>
-        <ul>{active.map((request) => <li key={request.id}><span>{request.operation} · {request.id}</span><button disabled={pendingAction !== undefined} onClick={() => {
-          if (!controller.cancel(request.id)) setActionError(`MCP operation ${request.id} is no longer active.`);
+        <ul>{active.map((request) => <li key={request.id}><span>{request.operation} · {request.id}</span><button disabled={cancelledRequests.includes(request.id)} onClick={() => {
+          if (!controller.cancel(request.id)) {
+            setActionError(`MCP operation ${request.id} is no longer active.`);
+            return;
+          }
+          setCancelledRequests((current) => current.includes(request.id) ? current : [...current, request.id]);
         }} type="button">Cancel {request.id}</button></li>)}</ul>
       </section>}
     </section>
@@ -239,7 +308,7 @@ export const McpPage = ({ controller, epochOptions, initialBinding, onDownloadCo
             {item.description === undefined ? undefined : <p>{item.description}</p>}
           </li>)}</ol>}
           {selectedTool === undefined ? undefined : <McpJsonInput
-            disabled={model.phase !== 'ready' || pendingAction !== undefined}
+            disabled={model.phase !== 'ready' || isPending('invoke:callTool')}
             id="mcp-tool-arguments"
             label="Tool arguments"
             onChange={setToolArguments}
@@ -259,7 +328,7 @@ export const McpPage = ({ controller, epochOptions, initialBinding, onDownloadCo
             {item.description === undefined ? undefined : <p>{item.description}</p>}
           </li>)}</ol>}
           {selectedPrompt === undefined ? undefined : <McpJsonInput
-            disabled={model.phase !== 'ready' || pendingAction !== undefined}
+            disabled={model.phase !== 'ready' || isPending('invoke:getPrompt')}
             id="mcp-prompt-arguments"
             label="Prompt arguments"
             onChange={setPromptArguments}
@@ -278,17 +347,17 @@ export const McpPage = ({ controller, epochOptions, initialBinding, onDownloadCo
     <section className="mcp-page-section" aria-labelledby="mcp-operations-heading">
       <h2 id="mcp-operations-heading">Operations and results</h2>
       <div className="mcp-page-actions" aria-label="Catalog operations">
-        <button disabled={model.phase !== 'ready' || pendingAction !== undefined} onClick={() => invoke('listTools', {})} type="button">List tools</button>
-        <button disabled={model.phase !== 'ready' || pendingAction !== undefined} onClick={() => invoke('listResources', {})} type="button">List resources</button>
-        <button disabled={model.phase !== 'ready' || pendingAction !== undefined} onClick={() => invoke('listResourceTemplates', {})} type="button">List resource templates</button>
-        <button disabled={model.phase !== 'ready' || pendingAction !== undefined} onClick={() => invoke('listPrompts', {})} type="button">List prompts</button>
+        <button disabled={model.phase !== 'ready' || isPending('invoke:listTools')} onClick={() => invoke('listTools', {})} type="button">List tools</button>
+        <button disabled={model.phase !== 'ready' || isPending('invoke:listResources')} onClick={() => invoke('listResources', {})} type="button">List resources</button>
+        <button disabled={model.phase !== 'ready' || isPending('invoke:listResourceTemplates')} onClick={() => invoke('listResourceTemplates', {})} type="button">List resource templates</button>
+        <button disabled={model.phase !== 'ready' || isPending('invoke:listPrompts')} onClick={() => invoke('listPrompts', {})} type="button">List prompts</button>
       </div>
       <section aria-label="Invocation history" className="mcp-page-history">
         <h3>Invocation history</h3>
         {controller.history.length === 0 ? <p className="mcp-page-empty">No completed invocations yet.</p> : <ol>{controller.history.map((invocation) => <li key={invocation.id}>
           <div><strong>{invocation.operation}</strong><span>{invocation.id}</span>{invocation.replayOf === undefined ? undefined : <span>Replay of {invocation.replayOf}</span>}</div>
           <pre><code>{display({ error: invocation.error, request: invocation.request, result: invocation.result, timing: invocation.timing })}</code></pre>
-          <button disabled={model.phase !== 'ready' || pendingAction !== undefined} onClick={() => run('replay', () => controller.replay({ id: nextRequestId(), invocationId: invocation.id }))} type="button">Replay {invocation.id}</button>
+          <button disabled={model.phase !== 'ready' || isPending('replay')} onClick={() => run('replay', () => controller.replay({ id: nextRequestId(), invocationId: invocation.id }))} type="button">Replay {invocation.id}</button>
         </li>)}</ol>}
       </section>
     </section>
