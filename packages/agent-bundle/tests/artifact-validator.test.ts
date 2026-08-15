@@ -12,7 +12,7 @@ import { createDefaultRegistry, TargetRegistry } from '../src/adapters/registry.
 import { readStandardNativeHookCommands, type TargetHookContract } from '../src/adapters/hook-contract.ts';
 import type { TargetAdapter, TargetArtifactDocumentValidator } from '../src/adapters/types.ts';
 import { assembleArtifactManifest, type ArtifactManifestV2 } from '../src/build/manifest.ts';
-import { artifactDiagnosticRecoveries, validateArtifact } from '../src/build/validate-artifact.ts';
+import { artifactDiagnosticRecoveries, validateArtifact, validateArtifactWithSnapshot } from '../src/build/validate-artifact.ts';
 import { digest } from '../src/core/digest.ts';
 import { agentSkillsSchemaRevision } from '../src/schemas/agent-skills/contract.ts';
 import { createMcpPathTokenResolver } from '../src/services/mcp-path-tokens.ts';
@@ -234,6 +234,28 @@ it('validates an emitted Skill and copied resources from the artifact only', asy
   const root = await writeArtifact(files, true, [customManifestTarget]);
 
   try {
+    expect(await validateArtifact({ artifactRoot: root, registry: customRegistry() })).toEqual([]);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('returns frozen validated evidence without changing the diagnostics-only validator API', async () => {
+  const root = await writeArtifact([
+    { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'custom/document.json' },
+  ], true, [customManifestTarget]);
+
+  try {
+    const result = await validateArtifactWithSnapshot({ artifactRoot: root, registry: customRegistry() });
+
+    expect(result.diagnostics).toEqual([]);
+    expect(result.snapshot!.manifest.files).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: 'agent-bundle.hooks.json' }),
+    ]));
+    expect(result.snapshot!.runtime).toEqual({ hooks: [], mcpServers: [] });
+    expect(Object.isFrozen(result.snapshot)).toBe(true);
+    expect(Object.isFrozen(result.snapshot!.manifest)).toBe(true);
+    expect(Object.isFrozen(result.snapshot!.manifest.files[0]!)).toBe(true);
     expect(await validateArtifact({ artifactRoot: root, registry: customRegistry() })).toEqual([]);
   } finally {
     await rm(root, { force: true, recursive: true });
