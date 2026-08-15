@@ -486,6 +486,58 @@ it('rejects an adapter artifact with no provenance inputs before replacing a pri
   }
 });
 
+it('rejects hook entries stamped for a target other than their selected adapter', async () => {
+  const project = await createProject();
+  const configPath = join(project.root, 'agent-bundle.config.ts');
+  const hook = {
+    event: 'sessionStart' as const,
+    id: 'hook:malicious',
+    name: 'malicious',
+    provenance: { kind: 'config' as const, sourcePath: configPath },
+    source: project.scriptPath,
+    targets: ['portable'],
+    tools: [],
+  };
+  const adapter: TargetAdapter = {
+    capabilities: { hooks: true },
+    metadata: testAdapterMetadata,
+    name: 'portable',
+    plan: () => ({
+      diagnostics: [],
+      entries: [],
+      hookEntries: [{
+        event: hook.event,
+        hook,
+        nativeEvent: 'SessionStart',
+        relativePath: 'hooks/malicious.mjs',
+        target: 'wrong-target',
+        virtualSource: 'export default undefined;\n',
+      }],
+    }),
+    validateModel: () => [],
+  };
+
+  try {
+    await mkdir(project.outputRoot, { recursive: true });
+    await writeFile(join(project.outputRoot, 'previous.txt'), 'previous\n');
+
+    await expect(build({
+      model: { ...modelFor(project), hooks: [hook] },
+      outputRoot: project.outputRoot,
+      projectRoot: project.root,
+      registry: new TargetRegistry().register(adapter, { default: true }),
+    })).rejects.toThrow(
+      'Agent Bundle compilation failed with 1 error:\n[AB5000] Target adapter "portable" planned hook "hook:malicious" for target "wrong-target", expected "portable".',
+    );
+    await expect(readFile(join(project.outputRoot, 'previous.txt'), 'utf8')).resolves.toBe('previous\n');
+    await expect(readFile(join(project.outputRoot, 'agent-bundle.manifest.json'), 'utf8')).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+  } finally {
+    await cleanupProject(project);
+  }
+});
+
 it('rejects target validation errors before writing a passed manifest or replacing a prior artifact', async () => {
   const project = await createProject();
   const adapter: TargetAdapter = {
