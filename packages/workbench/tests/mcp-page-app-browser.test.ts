@@ -34,16 +34,15 @@ const proxyDocument = `<!doctype html>
     const message = event.data;
     if (message?.method === 'ui/notifications/sandbox-resource-ready') {
       document.body.dataset.resource = message.params.html;
-      send({ id: 'initialize', jsonrpc: '2.0', method: 'ui/initialize', params: { protocolVersion: '2026-01-26' } });
+      send({ id: 'initialize', jsonrpc: '2.0', method: 'ui/initialize', params: { appCapabilities: { availableDisplayModes: ['inline'] }, appInfo: { name: 'fixture-app', version: '1.0.0' }, protocolVersion: '2026-01-26' } });
       return;
     }
     if (message?.id === 'initialize') {
-      send({ jsonrpc: '2.0', method: 'ui/notifications/initialized' });
-      send({ id: 'app-tool', jsonrpc: '2.0', method: 'ui/callTool', params: { arguments: { from: 'sandbox' }, name: 'nested-tool' } });
+      send({ jsonrpc: '2.0', method: 'ui/notifications/initialized', params: {} });
+      send({ id: 'app-tool', jsonrpc: '2.0', method: 'tools/call', params: { arguments: { from: 'sandbox' }, name: 'nested-tool' } });
       send({ id: 'resource-read', jsonrpc: '2.0', method: 'resources/read', params: { uri: 'weather://berlin' } });
-      send({ id: 'host-context', jsonrpc: '2.0', method: 'ui/getHostContext', params: {} });
-      send({ id: 'display-mode', jsonrpc: '2.0', method: 'ui/requestDisplayMode', params: { mode: 'inline' } });
-      send({ jsonrpc: '2.0', method: 'ui/notifications/logging', params: { level: 'info', message: 'sandbox initialized' } });
+      send({ id: 'display-mode', jsonrpc: '2.0', method: 'ui/request-display-mode', params: { mode: 'inline' } });
+      send({ jsonrpc: '2.0', method: 'notifications/message', params: { data: { event: 'sandbox-initialized' }, level: 'info', logger: 'fixture-app' } });
       return;
     }
     if (typeof message?.id === 'string' && message.id.startsWith('mcp-app-frame-close:')) {
@@ -89,10 +88,13 @@ const mountedPageFixture = async () => {
     '  async message(bindingId, message) {',
     '    messages.push({ bindingId, message });',
     "    if (typeof message.id === 'string' && message.id.startsWith('mcp-app-frame-close:')) return { accepted: true, lifecycle: 'closed', messages: [] };",
-    "    if (message.method === 'ui/initialize') return { accepted: true, lifecycle: 'initialized', messages: [{ id: message.id, jsonrpc: '2.0', result: { protocolVersion: '2026-01-26' } }] };",
-    "    return { accepted: true, lifecycle: 'initialized', messages: Object.hasOwn(message, 'id') ? [{ id: message.id, jsonrpc: '2.0', result: { ok: true } }] : [] };",
+    "    if (message.method === 'ui/initialize') return { accepted: true, lifecycle: 'initialized', messages: [{ id: message.id, jsonrpc: '2.0', result: { hostCapabilities: { logging: {} }, hostContext: { availableDisplayModes: ['inline'], displayMode: 'inline', theme: 'light' }, hostInfo: { name: 'fixture-host', version: '1.0.0' }, protocolVersion: '2026-01-26' } }] };",
+    "    if (message.method === 'tools/call') return { accepted: true, lifecycle: 'initialized', messages: [{ id: message.id, jsonrpc: '2.0', result: { content: [{ text: 'nested result', type: 'text' }] } }] };",
+    "    if (message.method === 'resources/read') return { accepted: true, lifecycle: 'initialized', messages: [{ id: message.id, jsonrpc: '2.0', result: { contents: [{ mimeType: 'text/plain', text: 'nested resource', uri: message.params.uri }] } }] };",
+    "    if (message.method === 'ui/request-display-mode') return { accepted: true, lifecycle: 'initialized', messages: [{ id: message.id, jsonrpc: '2.0', result: { mode: 'inline' } }] };",
+    "    return { accepted: true, lifecycle: 'initialized', messages: [] };",
     '  },',
-    '  async close(bindingId, options) { closes.push({ bindingId, options, type: \'close\' }); return { lifecycle: \'closing\', message: { id: options.id, jsonrpc: \'2.0\', method: \'ui/teardown\' } }; },',
+    '  async close(bindingId, options) { closes.push({ bindingId, options, type: \'close\' }); return { lifecycle: \'closing\', message: { id: options.id, jsonrpc: \'2.0\', method: \'ui/resource-teardown\' } }; },',
     "  async forceClose(bindingId) { closes.push({ bindingId, type: 'force' }); return true; },",
     '};',
     'const controller = {',
@@ -176,7 +178,7 @@ describe('MCP App page browser integration', () => {
       expect(await frame.getAttribute('sandbox')).toBe('allow-scripts allow-same-origin');
       expect(await frame.getAttribute('referrerpolicy')).toBe('no-referrer');
       expect(await frame.contentFrame()?.locator('body').innerText()).not.toContain('foreground-token');
-      await page.waitForFunction(() => (globalThis as typeof globalThis & { __mcpPageAppFixture: { stats(): { messages: readonly { readonly message: { readonly method?: string } }[] } } }).__mcpPageAppFixture.stats().messages.some(({ message }) => message.method === 'ui/notifications/initialized'));
+      await page.waitForFunction(() => (globalThis as typeof globalThis & { __mcpPageAppFixture: { stats(): { messages: readonly { readonly bindingId: string; readonly message: { readonly method?: string } }[] } } }).__mcpPageAppFixture.stats().messages.some(({ bindingId, message }) => bindingId === 'binding-1' && message.method === 'ui/notifications/initialized'));
       const first = await page.evaluate(() => (globalThis as typeof globalThis & { __mcpPageAppFixture: { stats(): unknown } }).__mcpPageAppFixture.stats()) as {
         readonly creates: readonly { readonly request: { readonly host: { readonly displayMode: string; readonly locale: string; readonly theme: string }; readonly input: unknown; readonly previewProfile: string; readonly result: unknown; readonly toolName: string }; readonly sessionId: string }[];
         readonly messages: readonly { readonly message: { readonly method?: string } }[];
@@ -194,14 +196,14 @@ describe('MCP App page browser integration', () => {
       expect(['light', 'dark']).toContain(first.creates[0]!.request.host.theme);
       expect(first.creates[0]!.request.host.locale.length).toBeGreaterThan(0);
       expect(first.messages.map(({ message }) => message.method)).toEqual(expect.arrayContaining([
-        'ui/initialize', 'ui/notifications/initialized', 'ui/callTool', 'resources/read', 'ui/getHostContext', 'ui/requestDisplayMode', 'ui/notifications/logging',
+        'ui/initialize', 'ui/notifications/initialized', 'tools/call', 'resources/read', 'ui/request-display-mode', 'notifications/message',
       ]));
 
       await page.selectOption('#mcp-app-profile', 'chatgpt');
-      await page.waitForFunction(() => (globalThis as typeof globalThis & { __mcpPageAppFixture: { stats(): { creates: readonly { readonly request: { readonly previewProfile: string } }[] } } }).__mcpPageAppFixture.stats().creates.some(({ request }) => request.previewProfile === 'chatgpt'));
+      await page.waitForFunction(() => (globalThis as typeof globalThis & { __mcpPageAppFixture: { stats(): { creates: readonly { readonly request: { readonly previewProfile: string } }[]; readonly messages: readonly { readonly bindingId: string; readonly message: { readonly method?: string } }[] } } }).__mcpPageAppFixture.stats().creates.some(({ request }) => request.previewProfile === 'chatgpt') && __mcpPageAppFixture.stats().messages.some(({ bindingId, message }) => bindingId === 'binding-2' && message.method === 'ui/notifications/initialized'));
       expect(await page.getByLabel('MCP App preview', { exact: true }).textContent()).toContain('chatgpt');
       await page.selectOption('#mcp-app-profile', 'claude');
-      await page.waitForFunction(() => (globalThis as typeof globalThis & { __mcpPageAppFixture: { stats(): { creates: readonly { readonly request: { readonly previewProfile: string } }[] } } }).__mcpPageAppFixture.stats().creates.some(({ request }) => request.previewProfile === 'claude'));
+      await page.waitForFunction(() => (globalThis as typeof globalThis & { __mcpPageAppFixture: { stats(): { creates: readonly { readonly request: { readonly previewProfile: string } }[]; readonly messages: readonly { readonly bindingId: string; readonly message: { readonly method?: string } }[] } } }).__mcpPageAppFixture.stats().creates.some(({ request }) => request.previewProfile === 'claude') && __mcpPageAppFixture.stats().messages.some(({ bindingId, message }) => bindingId === 'binding-3' && message.method === 'ui/notifications/initialized'));
       expect(await page.getByLabel('MCP App preview', { exact: true }).textContent()).toContain('claude');
 
       await page.getByRole('button', { name: 'Close App preview' }).click();

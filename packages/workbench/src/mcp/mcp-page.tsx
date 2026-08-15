@@ -398,8 +398,8 @@ export const McpPage = ({ appPreviewClient, controller, epochOptions, initialBin
       } finally {
         if (close !== undefined && appPreviewClosePromise.current === close) {
           appPreviewClosePromise.current = undefined;
-        setAppPreview(undefined);
-        setAppPreviewBusy(false);
+          setAppPreview(undefined);
+          setAppPreviewBusy(false);
         }
       }
     })();
