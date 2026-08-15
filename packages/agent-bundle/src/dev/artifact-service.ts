@@ -186,6 +186,7 @@ export class ArtifactService {
       await this.#compile({
         model,
         outputRoot: artifactRoot,
+        projectContext,
         projectRoot: prepared.root,
         registry: prepared.registry,
       });

@@ -269,6 +269,7 @@ export const build = async (options: BuildOptions): Promise<BuildProjectResult> 
   const result = await buildArtifact({
     model,
     outputRoot: output,
+    projectContext,
     projectRoot: prepared.root,
     registry: prepared.registry,
   });

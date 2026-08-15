@@ -6,10 +6,12 @@ import { pathToFileURL } from 'node:url';
 import { expect, it } from '@rstest/core';
 import { spawn } from 'node:child_process';
 
-import { build } from '../src/build/build.ts';
+import { build as buildArtifact, type BuildOptions as LowLevelBuildOptions, type BuildResult } from '../src/build/build.ts';
 import { publishArtifact } from '../src/build/emit.ts';
+import { parseArtifactManifest, serializeArtifactManifest } from '../src/build/manifest.ts';
 import type { TargetAdapter } from '../src/adapters/types.ts';
 import { TargetRegistry } from '../src/adapters/registry.ts';
+import { createProjectContext } from '../src/core/project-context.ts';
 import type { NormalizedPlugin } from '../src/core/types.ts';
 
 interface TestProject {
@@ -95,6 +97,7 @@ const createProject = async (): Promise<TestProject> => {
   const pythonScriptPath = join(skillScriptsRoot, 'review helper.py');
 
   await Promise.all([
+    writeFile(join(root, 'agent-bundle.config.ts'), 'export default {};\n'),
     mkdir(join(skillRoot, 'assets'), { recursive: true }),
     mkdir(join(skillRoot, 'references'), { recursive: true }),
     mkdir(skillScriptsRoot, { recursive: true }),
@@ -127,6 +130,34 @@ const createProject = async (): Promise<TestProject> => {
     scriptPath,
   };
 };
+
+const projectContextFor = async (
+  projectRoot: string,
+  outputRoot: string,
+  model: NormalizedPlugin,
+) => {
+  const outputPath = relative(projectRoot, outputRoot).replaceAll('\\', '/');
+  const sourceInputs = (await treeDigest(projectRoot))
+    .filter((input) =>
+      input.path !== outputPath &&
+      !input.path.startsWith(`${outputPath}/`) &&
+      input.path !== 'node_modules' &&
+      !input.path.startsWith('node_modules/'))
+    .map(({ path, sha256 }) => ({ path: join(projectRoot, path), sha256 }));
+  return createProjectContext({
+    configPath: model.metadata.provenance.sourcePath,
+    model,
+    root: projectRoot,
+    sourceInputs,
+  });
+};
+
+const build = async (
+  options: Omit<LowLevelBuildOptions, 'projectContext'>,
+): Promise<BuildResult> => buildArtifact({
+  ...options,
+  projectContext: await projectContextFor(options.projectRoot, options.outputRoot, options.model),
+});
 
 const modelFor = (project: TestProject): NormalizedPlugin => ({
   extensions: {},
@@ -229,7 +260,7 @@ const cleanupProject = async (project: TestProject): Promise<void> => {
   await rm(project.root, { force: true, recursive: true });
 };
 
-it('builds a configured TypeScript Skill script from paths with spaces without repository dependencies', async () => {
+it('low-level build writes and returns the exact canonical v2 manifest for a configured Skill script', async () => {
   const project = await createProject();
   const model = modelFor(project);
 
@@ -258,25 +289,29 @@ it('builds a configured TypeScript Skill script from paths with spaces without r
       /from\s+['"]agent-bundle(?:\/[^'"]*)?['"]/,
     );
 
-    const manifest = JSON.parse(
-      await readFile(join(project.outputRoot, 'agent-bundle.manifest.json'), 'utf8'),
-    ) as {
-      readonly files: readonly {
-        readonly bytes: number;
-        readonly mode?: number;
-        readonly path: string;
-        readonly sha256: string;
-      }[];
-      readonly targets: readonly string[];
-      readonly version: number;
-    };
+    const manifestBytes = await readFile(join(project.outputRoot, 'agent-bundle.manifest.json'), 'utf8');
+    const manifest = parseArtifactManifest(manifestBytes);
     const files = (await treeDigest(project.outputRoot)).filter(
       (entry) => entry.path !== 'agent-bundle.manifest.json',
     );
+    expect(result.manifest).toEqual(manifest);
+    expect(manifestBytes).toBe(serializeArtifactManifest(result.manifest));
     expect(manifest).toMatchObject({
       files: files.map(({ bytes, path, sha256 }) => ({ bytes, path, sha256 })),
-      targets: ['portable'],
-      version: 1,
+      project: {
+        configPath: 'agent-bundle.config.ts',
+        sourceInputs: expect.arrayContaining([
+          expect.objectContaining({ path: 'agent-bundle.config.ts' }),
+          expect.objectContaining({ path: 'skills/review/SKILL.md' }),
+        ]),
+      },
+      targets: [expect.objectContaining({ name: 'portable' })],
+      validation: {
+        artifact: { status: 'passed' },
+        source: { status: 'passed' },
+        targets: [{ name: 'portable', status: 'passed' }],
+      },
+      version: 2,
     });
     for (const file of files.filter((entry) => entry.path.endsWith('.json'))) {
       expect(JSON.parse(await readFile(join(project.outputRoot, file.path), 'utf8'))).toBeDefined();
@@ -311,12 +346,17 @@ it('builds a configured TypeScript Skill script from paths with spaces without r
       const contents = await readFile(resource.source);
       await expect(readFile(emittedResource)).resolves.toEqual(contents);
       expect((await stat(emittedResource)).mode & 0o777).toBe(0o751);
-      expect(manifest.files).toContainEqual({
+      expect(manifest.files).toContainEqual(expect.objectContaining({
         bytes: contents.byteLength,
+        kind: 'copy',
         mode: 0o751,
         path: resource.path,
         sha256: sha256(contents),
-      });
+        sourceInputs: expect.arrayContaining([
+          resource.path.replace('portable/', ''),
+          'skills/review/SKILL.md',
+        ]),
+      }));
     }
   } finally {
     await cleanupProject(project);
@@ -505,9 +545,10 @@ it('emits a configured Skill script deterministically and preserves the prior ar
       projectRoot: project.root,
       registry,
     };
-    await build(options);
+    const firstResult = await build(options);
     const first = await treeDigest(project.outputRoot);
-    await build(options);
+    const secondResult = await build(options);
+    expect(secondResult.manifest).toEqual(firstResult.manifest);
     expect(await treeDigest(project.outputRoot)).toEqual(first);
 
     const brokenSource = 'export const = broken;\n';
