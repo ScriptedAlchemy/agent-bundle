@@ -147,12 +147,9 @@ e2e('runs a generated SDK-v2 App through the real foreground session and separat
     const epochRoot = join(project.root, '.agent-bundle', 'epochs', artifact.activeEpoch.id);
     const pageErrors: Error[] = [];
     const appRequests: AppRouteRequest[] = [];
-    let foregroundToken: string | undefined;
     page.on('pageerror', (error) => pageErrors.push(error));
     page.on('request', (request) => {
       const requestUrl = new URL(request.url());
-      const token = request.headerValue('x-agent-bundle-session');
-      if (token !== null) foregroundToken = token;
       if (requestUrl.origin !== foregroundOrigin || !requestUrl.pathname.startsWith('/api/mcp/apps/')) return;
       appRequests.push({ body: requestBody(request.postData()), path: requestUrl.pathname });
     });
@@ -164,7 +161,10 @@ e2e('runs a generated SDK-v2 App through the real foreground session and separat
     const opened = page.waitForResponse((response) =>
       response.url() === `${foregroundOrigin}/api/mcp/sessions` && response.request().method() === 'POST');
     await page.getByRole('button', { name: 'Open MCP session' }).click();
-    const openedSession = await (await opened).json() as { readonly session: Readonly<{
+    const openedResponse = await opened;
+    const foregroundToken = await openedResponse.request().headerValue('x-agent-bundle-session');
+    if (foregroundToken === null) throw new Error('Expected the foreground MCP session request to include its session token.');
+    const openedSession = await openedResponse.json() as { readonly session: Readonly<{
       readonly binding: Readonly<{ readonly epochId: string; readonly serverName: string; readonly target: string }>;
       readonly id: string;
     }> };
@@ -238,8 +238,7 @@ e2e('runs a generated SDK-v2 App through the real foreground session and separat
       const message = (request.body as { readonly message?: { readonly method?: string } } | undefined)?.message;
       return request.path.endsWith('/messages') && message?.method === 'ui/request-display-mode';
     }), { timeout: browserTimeout }).toBe(true);
-    expect(foregroundToken).toBeDefined();
-    expect(await appFrame.content()).not.toContain(foregroundToken!);
+    expect(await appFrame.content()).not.toContain(foregroundToken);
 
     await page.setViewportSize({ height: 844, width: 390 });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
