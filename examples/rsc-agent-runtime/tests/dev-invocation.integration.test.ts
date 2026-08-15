@@ -200,13 +200,16 @@ const assertJsonOnly = (value: unknown): void => {
   Object.values(value as Record<string, unknown>).forEach(assertJsonOnly);
 };
 
-test('lowers the hook state version when copied RSC output wording changes', async () => {
+test('lowers the hook state version from durable state when copied RSC output grammar changes', async () => {
   const copied = await copyExample();
   const compilerRoot = join(copied.workspaceRoot, 'compiler');
   const componentSource = join(copied.projectRoot, 'src', 'rsc', 'components.tsx');
   try {
     const source = await readFile(componentSource, 'utf8');
-    const edited = source.replace('Shared state now contains', 'Live runtime state now contains');
+    const edited = source.replace(
+      'Shared state now contains ${editCount} ${editNoun}.',
+      "There is now ${editCount === 1 ? 'one recorded edit' : `${editCount} recorded ${editNoun}`}",
+    );
     expect(edited).not.toBe(source);
     await writeFile(componentSource, edited);
     const entry = await buildInvocationEntry(compilerRoot, copied.projectRoot);
@@ -228,7 +231,7 @@ test('lowers the hook state version when copied RSC output wording changes', asy
     expect(result).toMatchObject({ exitCode: 0, stderr: '' });
     expect(JSON.parse(result.stdout.toString('utf8'))).toMatchObject({
       inspection: {
-        agentVisible: 'Recorded changed-wording.txt from claude. Live runtime state now contains 1 edit.',
+        agentVisible: 'Recorded changed-wording.txt from claude. There is now one recorded edit',
         state: { identity: { stateStoreId: 'wording-independent-state-version', stateVersion: 1 } },
       },
     });
