@@ -27,6 +27,14 @@ const registry: NormalizationTargetRegistry = {
   supports: () => true,
 };
 
+const testAdapterMetadata = Object.freeze({
+  adapterRevision: 'test',
+  capabilityRevision: 'test',
+  capabilitySha256: '0'.repeat(64),
+  observedVersion: 'test',
+  schemas: Object.freeze([]),
+});
+
 const loadedProject = (root: string, config: AgentBundleConfig): LoadedConfig => ({
   config,
   configPath: join(root, 'agent-bundle.config.ts'),
@@ -563,6 +571,7 @@ it('bundles each local MCP entry once and maps every target manifest to that art
 
     const collisionRegistry = new TargetRegistry().register({
       capabilities: { mcp: true },
+      metadata: testAdapterMetadata,
       name: 'portable',
       plan: () => ({
         diagnostics: [],

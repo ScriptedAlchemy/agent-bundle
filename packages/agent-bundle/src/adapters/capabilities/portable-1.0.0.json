@@ -1,0 +1,27 @@
+{
+  "host": "portable",
+  "mcp": {
+    "pathTokens": {
+      "args": [
+        "${PLUGIN_DATA}",
+        "${PLUGIN_ROOT}"
+      ],
+      "cwd": [
+        "${PLUGIN_DATA}",
+        "${PLUGIN_ROOT}"
+      ],
+      "env": [
+        "${PLUGIN_DATA}",
+        "${PLUGIN_ROOT}"
+      ]
+    },
+    "sse": true,
+    "stdio": true,
+    "streamableHttp": true
+  },
+  "observedSpecificationVersion": "1.0.0",
+  "plugin": {
+    "manifest": "plugin.json",
+    "skills": true
+  }
+}

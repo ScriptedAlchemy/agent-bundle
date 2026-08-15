@@ -53,10 +53,19 @@ const plugin = (): NormalizedPlugin => ({
   ],
 });
 
+const testAdapterMetadata = Object.freeze({
+  adapterRevision: 'test',
+  capabilityRevision: 'test',
+  capabilitySha256: '0'.repeat(64),
+  observedVersion: 'test',
+  schemas: Object.freeze([]),
+});
+
 it('rejects duplicate adapter config-extension keys and freezes the registry snapshot', () => {
   const adapter = (name: string): TargetAdapter => ({
     capabilities: {},
     configExtension: { key: 'example' },
+    metadata: testAdapterMetadata,
     name,
     plan: () => ({ diagnostics: [], entries: [] }),
     validateModel: () => [],

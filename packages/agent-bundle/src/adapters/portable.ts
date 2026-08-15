@@ -8,6 +8,8 @@ import {
   type NormalizedMcpServer,
   type NormalizedPlugin,
 } from '../core/types.ts';
+import capabilityTable from './capabilities/portable-1.0.0.json' with { type: 'json' };
+import schemaProvenance from './schemas/portable/PROVENANCE.json' with { type: 'json' };
 import mcpSchema from './schemas/portable/mcp.schema.json' with { type: 'json' };
 import pluginSchema from './schemas/portable/plugin.schema.json' with { type: 'json' };
 import type {
@@ -33,6 +35,21 @@ const portableName = 'portable';
 const schemaValidator = new Ajv2020({ allErrors: true, strict: false });
 const validatePlugin = schemaValidator.compile(pluginSchema);
 const validateMcp = schemaValidator.compile(mcpSchema);
+const metadata = Object.freeze({
+  adapterRevision: '1.0.0',
+  capabilityRevision: capabilityTable.observedSpecificationVersion,
+  capabilitySha256: '84d75e50296ed0acf393742bd3934f90ff756bbd4fe5684a01b3fb4a284ee819',
+  observedVersion: capabilityTable.observedSpecificationVersion,
+  schemas: Object.freeze(
+    Object.entries(schemaProvenance.schemas)
+      .map(([fileName, schema]) => Object.freeze({
+        name: fileName.replace(/\.schema\.json$/, ''),
+        revision: schemaProvenance.version,
+        sha256: schema.sha256,
+      }))
+      .sort((left, right) => left.name.localeCompare(right.name)),
+  ),
+});
 
 const errorDiagnostic = (code: string, message: string): Diagnostic => ({
   code,
@@ -255,8 +272,13 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
 };
 
 export const portableAdapter: TargetAdapter = Object.freeze({
-  capabilities: Object.freeze({ mcp: true, skills: true }),
+  capabilities: Object.freeze({
+    mcp: capabilityTable.mcp.stdio && capabilityTable.mcp.streamableHttp,
+    sse: capabilityTable.mcp.sse,
+    skills: capabilityTable.plugin.skills,
+  }),
   configExtension: Object.freeze({ key: portableName }),
+  metadata,
   mcpPathTokens: Object.freeze({
     args: Object.freeze({ '${PLUGIN_DATA}': 'pluginData', '${PLUGIN_ROOT}': 'pluginRoot' }),
     cwd: Object.freeze({ '${PLUGIN_DATA}': 'pluginData', '${PLUGIN_ROOT}': 'pluginRoot' }),
