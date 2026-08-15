@@ -343,6 +343,16 @@ const statusResponse = (value: unknown): DevRuntimeStatusResponse => {
   return Object.freeze({ status: response.status === null ? null : status(response.status) });
 };
 
+const statusForProvider = (value: DevRuntimeStatus, providerSessionId: string): DevRuntimeStatus => {
+  if (
+    value.activeVector !== undefined && value.activeVector.providerSessionId !== providerSessionId ||
+    value.lastGoodVector !== undefined && value.lastGoodVector.providerSessionId !== providerSessionId
+  ) {
+    throw invalid('Runtime route returned a status vector for another provider session.');
+  }
+  return value;
+};
+
 const surfacesResponse = (value: unknown): DevRuntimeSurfacesResponse => {
   const response = record(value);
   if (!hasOnly(response, ['surfaces']) || !Array.isArray(response.surfaces)) throw invalid('Runtime route returned an invalid surfaces wrapper.');
@@ -422,12 +432,13 @@ export class RuntimeClient {
         this.#foreground.publicJson('/api/runtime/surfaces').then(surfacesResponse),
         this.#foreground.protectedJson('/api/runtime/runs?limit=50').then(runsResponse),
       ]);
+      const providerStatus = statusForProvider(statusResult.status, historyResult.providerSessionId);
       this.#providerSessionId = historyResult.providerSessionId;
       return Object.freeze({
         history: historyResult.runs,
         kind: 'available',
         providerSessionId: historyResult.providerSessionId,
-        status: statusResult.status,
+        status: providerStatus,
         surfaces: surfacesResult.surfaces,
       });
     } catch (error) {

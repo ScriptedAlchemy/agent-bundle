@@ -159,6 +159,12 @@ const isPlainRecord = (value: object): value is Record<string, unknown> => {
   return prototype === Object.prototype || prototype === null;
 };
 
+const nonemptyString = (value: unknown): value is string =>
+  typeof value === 'string' && value.length > 0;
+
+const nonnegativeInteger = (value: unknown): value is number =>
+  typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+
 const snapshot = <Value>(value: Value, ancestors = new WeakSet<object>()): Value => {
   if (value === undefined || value === null || typeof value === 'string' || typeof value === 'boolean') return value;
   if (typeof value === 'number') {
@@ -215,6 +221,31 @@ const snapshotProfiles = (profiles: readonly RuntimeProfileOption[]): readonly R
     return snapshot(profile);
   });
   return Object.freeze(copies);
+};
+
+const statusVectorForProvider = (value: unknown, providerSessionId: string): value is RuntimeVector => {
+  if (value === null || typeof value !== 'object' || Array.isArray(value) || !isPlainRecord(value)) return false;
+  if (Object.keys(value).some((key) => !['artifactEpochId', 'providerSessionId', 'runtimeGenerationId', 'sourceRevision', 'stateStoreId', 'stateVersion'].includes(key))) {
+    return false;
+  }
+  return (value.artifactEpochId === undefined || nonemptyString(value.artifactEpochId)) &&
+    nonemptyString(value.providerSessionId) && value.providerSessionId === providerSessionId &&
+    nonemptyString(value.runtimeGenerationId) && nonemptyString(value.sourceRevision) &&
+    nonemptyString(value.stateStoreId) && nonnegativeInteger(value.stateVersion);
+};
+
+const statusForProvider = (status: DevRuntimeStatus, providerSessionId: string): DevRuntimeStatus => {
+  const statusSnapshot = snapshot(status);
+  const statusValue: unknown = statusSnapshot;
+  if (statusValue === null || typeof statusValue !== 'object' || Array.isArray(statusValue) || !isPlainRecord(statusValue)) {
+    throw new TypeError('Runtime status vector source must be a plain object.');
+  }
+  for (const vector of [statusValue.activeVector, statusValue.lastGoodVector]) {
+    if (vector !== undefined && !statusVectorForProvider(vector, providerSessionId)) {
+      throw new TypeError('Runtime status vector must belong to the active provider session.');
+    }
+  }
+  return statusSnapshot;
 };
 
 const stateIdentityFor = (vector: RuntimeVector | undefined): DevRuntimeStateIdentity | undefined => vector === undefined
@@ -523,8 +554,8 @@ const bootstrapModel = (model: RuntimeModel, bootstrap: RuntimeBootstrap): Runti
   }
 
   const nextSurfaces = snapshot(bootstrap.surfaces);
+  const nextStatus = statusForProvider(bootstrap.status, bootstrap.providerSessionId);
   const nextHistory = historyFor(bootstrap.history, bootstrap.providerSessionId);
-  const nextStatus = snapshot(bootstrap.status);
   const providerRestarted = model.providerSessionId !== undefined && model.providerSessionId !== bootstrap.providerSessionId;
   const surface = selectedSurface(nextSurfaces, providerRestarted ? undefined : model.selectedSurfaceId);
   const target = selectedTarget(surface, providerRestarted ? undefined : model.selectedTarget);

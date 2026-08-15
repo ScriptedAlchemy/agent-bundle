@@ -120,6 +120,36 @@ it('performs only the public status request when runtime is unavailable', async 
   expect(fixture.requests[0]?.headers.get('x-agent-bundle-session')).toBeNull();
 });
 
+const foreignStatus = (field: 'activeVector' | 'lastGoodVector'): DevRuntimeStatus => Object.freeze({
+  ...status,
+  [field]: Object.freeze({ ...vector, providerSessionId: 'provider-other' }),
+});
+
+const rejectsForeignStatusVector = async (field: 'activeVector' | 'lastGoodVector'): Promise<void> => {
+  let foreign = false;
+  const fixture = runtimeFetch();
+  const client = new RuntimeClient(new ForegroundRouteClient({
+    fetch: async (input, init) => String(input) === '/api/runtime/status' && foreign
+      ? json({ status: foreignStatus(field) })
+      : fixture.fetch(input, init),
+  }));
+
+  await expect(client.bootstrap()).resolves.toMatchObject({ kind: 'available', providerSessionId: 'provider-a' });
+  foreign = true;
+  await expect(client.bootstrap()).rejects.toMatchObject({ code: 'AB8206' });
+  const requestCount = fixture.requests.length;
+  await expect(client.readRun('run-a')).rejects.toMatchObject({ code: 'AB8201' });
+  expect(fixture.requests).toHaveLength(requestCount);
+};
+
+it('rejects a foreign active runtime status vector and clears cached provider authority', async () => {
+  await rejectsForeignStatusVector('activeVector');
+});
+
+it('rejects a foreign last-good runtime status vector and clears cached provider authority', async () => {
+  await rejectsForeignStatusVector('lastGoodVector');
+});
+
 it('rejects absolute, protocol-relative, credentialed, and fragmented protected routes before foreground authentication', async () => {
   const requests: string[] = [];
   const foreground = new ForegroundRouteClient({

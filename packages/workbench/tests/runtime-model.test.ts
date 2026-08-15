@@ -349,7 +349,10 @@ it('clears incompatible provider history and retains a labelled previous last-go
     bootstrap: bootstrap({
       history: [run('new-running', { status: 'running', vector: vector({ providerSessionId: 'provider-b', runtimeGenerationId: 'generation-b' }) })],
       providerSessionId: 'provider-b',
-      status: status({ activeVector: vector({ providerSessionId: 'provider-b', runtimeGenerationId: 'generation-b' }) }),
+      status: status({
+        activeVector: vector({ providerSessionId: 'provider-b', runtimeGenerationId: 'generation-b' }),
+        lastGoodVector: vector({ providerSessionId: 'provider-b', runtimeGenerationId: 'generation-b' }),
+      }),
     }),
     type: 'bootstrap.received',
   });
@@ -389,6 +392,37 @@ it('rejects non-JSON snapshots and validates foreign history and run provider id
   })).toThrow(/provider session/i);
   expect(() => reduce(model(), { run: run('foreign', { vector: vector({ providerSessionId: 'other' }) }), type: 'run.received' })).toThrow(/provider session/i);
   expect(() => createRuntimeModel({ bootstrap: bootstrap(), profiles: [...profiles, profiles[0]!] })).toThrow(/unique simulated/i);
+});
+
+it('rejects foreign direct status vectors before model creation or bootstrap reduction can render them', () => {
+  for (const field of ['activeVector', 'lastGoodVector'] as const) {
+    const foreignBootstrap = bootstrap({
+      status: status({ [field]: vector({ providerSessionId: 'provider-b' }) }),
+    });
+    expect(() => createRuntimeModel({ bootstrap: foreignBootstrap, profiles })).toThrow(/status vector.*provider session/i);
+    expect(() => reduce(model(), { bootstrap: foreignBootstrap, type: 'bootstrap.received' })).toThrow(/status vector.*provider session/i);
+  }
+});
+
+it('rejects malformed direct status vectors while unavailable and matching provider replacements remain inert or renderable', () => {
+  const malformedStatus = { ...status(), activeVector: null } as unknown as DevRuntimeStatus;
+  const malformedBootstrap = bootstrap({ status: malformedStatus });
+  const unavailable = createRuntimeModel({ bootstrap: { kind: 'unavailable' }, profiles });
+  const providerBVector = vector({ providerSessionId: 'provider-b', runtimeGenerationId: 'generation-b' });
+  const providerB = createRuntimeModel({
+    bootstrap: bootstrap({
+      history: [run('provider-b-run', { vector: providerBVector })],
+      providerSessionId: 'provider-b',
+      status: status({ activeVector: providerBVector, lastGoodVector: providerBVector }),
+    }),
+    profiles,
+  });
+
+  expect(() => createRuntimeModel({ bootstrap: malformedBootstrap, profiles })).toThrow(/status vector/i);
+  expect(() => reduce(model(), { bootstrap: malformedBootstrap, type: 'bootstrap.received' })).toThrow(/status vector/i);
+  expect(unavailable.providerSessionId).toBeUndefined();
+  expect(unavailable.status).toBeUndefined();
+  expect(providerB).toMatchObject({ providerSessionId: 'provider-b', status: { activeVector: { providerSessionId: 'provider-b' } } });
 });
 
 it('rejects a stale provider run injected into a fresh-provider bootstrap', () => {
