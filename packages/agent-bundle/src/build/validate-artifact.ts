@@ -1493,7 +1493,9 @@ export const validateArtifactWithSnapshot = async (
   const artifactRoot = context.artifactRoot;
   const allowEpochStagingMarker = context.allowEpochStagingMarker === true;
   const registry = context.registry ?? createDefaultRegistry();
-  const inspectionOptions = { allowEpochStagingMarker, artifactRoot };
+  const inspectionOptions: ValidateArtifactOptions = allowEpochStagingMarker
+    ? { allowEpochStagingMarker: true, artifactRoot }
+    : { artifactRoot };
   let inspection: ArtifactInspection;
   try {
     inspection = await inspectArtifact(inspectionOptions);
