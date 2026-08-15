@@ -1,3 +1,4 @@
+import { createHmac, randomBytes } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
 import { isIP, type Socket } from 'node:net';
 
@@ -147,6 +148,8 @@ export interface McpAppConsentGrant {
 }
 
 export interface McpAppConsentRequest {
+  /** Opaque server-produced reference only; it has no authorization value. */
+  readonly actionFingerprint: string;
   readonly capability: McpAppConsentCapability;
   readonly details: McpAppJsonValue;
   readonly scope: 'action' | 'document';
@@ -307,16 +310,79 @@ const consentSummary = (capability: McpAppConsentCapability): string => `Allow M
 
 export const createMcpAppConsentActionDigest = (capability: McpAppConsentCapability, details: McpAppJsonValue): string => `${capability}:${JSON.stringify(details)}`;
 
+const consentSensitiveName = /(?:api[_-]?key|authorization|bearer|cookie|credential|pass(?:word)?|private[_-]?key|secret|token)/iu;
+
+const publicConsentText = (value: string, maximum: number): string => {
+  const normalized = Array.from(value, (character) => {
+    const codePoint = character.codePointAt(0)!;
+    return codePoint < 0x20 || codePoint === 0x7f ? ' ' : character;
+  }).join('');
+  return normalized.length <= maximum ? normalized : `${normalized.slice(0, Math.max(0, maximum - 1))}…`;
+};
+
+const publicLinkConsentDetails = (details: McpAppJsonValue): McpAppJsonValue => {
+  if (!isRecord(details) || typeof details.url !== 'string') return Object.freeze({});
+  try {
+    const target = new URL(details.url);
+    const keys = new Set<string>();
+    let inspected = 0;
+    for (const key of target.searchParams.keys()) {
+      if (inspected >= 32 || keys.size >= 8) break;
+      inspected += 1;
+      keys.add(consentSensitiveName.test(key) ? '[redacted]' : publicConsentText(key, 48));
+    }
+    const queryKeys = [...keys].sort();
+    return Object.freeze({
+      queryKeys: Object.freeze(queryKeys),
+      target: publicConsentText(`${target.protocol}//${target.host}${target.pathname}`, 240),
+    });
+  } catch {
+    return Object.freeze({});
+  }
+};
+
+const publicDownloadByteLength = (content: McpAppJsonValue): number | undefined => {
+  if (!isRecord(content) || typeof content.type !== 'string') return undefined;
+  if (content.type === 'text') return typeof content.text === 'string' ? Buffer.byteLength(content.text, 'utf8') : undefined;
+  const encoded = content.type === 'image' || content.type === 'audio' ? content.data
+    : content.type === 'resource' && isRecord(content.resource) ? content.resource.blob
+      : undefined;
+  if (typeof encoded === 'string') return encoded.length % 4 === 0 && /^[A-Za-z0-9+/]*={0,2}$/u.test(encoded) ? Buffer.from(encoded, 'base64').length : undefined;
+  if (content.type === 'resource' && isRecord(content.resource) && typeof content.resource.text === 'string') return Buffer.byteLength(content.resource.text, 'utf8');
+  return content.type === 'resource_link' && typeof content.size === 'number' && Number.isSafeInteger(content.size) && content.size >= 0 ? content.size : 0;
+};
+
+const publicDownloadConsentDetails = (details: McpAppJsonValue): McpAppJsonValue => {
+  const contents = isRecord(details) && Array.isArray(details.contents) ? details.contents : [];
+  const items = contents.slice(0, 8).map((content) => {
+    const record = isRecord(content) ? content : undefined;
+    const bytes = publicDownloadByteLength(content as McpAppJsonValue);
+    return Object.freeze({ bytes: bytes ?? 0, type: typeof record?.type === 'string' ? publicConsentText(record.type, 48) : 'unspecified' });
+  });
+  return Object.freeze({ itemCount: contents.length, items: Object.freeze(items) });
+};
+
+/** Only the browser-visible consent presentation is reduced; authority retains its private action digest. */
+const publicConsentDetails = (capability: McpAppConsentCapability, details: McpAppJsonValue): McpAppJsonValue => {
+  if (capability === 'open-external-link') return publicLinkConsentDetails(details);
+  if (capability === 'download-file') return publicDownloadConsentDetails(details);
+  return details;
+};
+
+const consentActionFingerprint = (secret: Uint8Array, actionDigest: string): string =>
+  `act-${createHmac('sha256', secret).update(actionDigest).digest('base64url').slice(0, 12)}`;
+
 export const createMcpAppConsentAuthority = (options: Readonly<{ readonly now?: () => number }> = {}): McpAppConsentAuthority => {
   const now = options.now ?? Date.now;
-  const challenges = new Map<string, Readonly<{ actionDigest: string; bindingId: string; capability: McpAppConsentCapability; details: McpAppJsonValue; expiresAt: number; profile: string }>>();
-  const expiredChallenges = new Map<string, Readonly<{ actionDigest: string; bindingId: string; capability: McpAppConsentCapability; details: McpAppJsonValue; expiresAt: number; profile: string }>>();
+  const fingerprintSecret = randomBytes(32);
+  const challenges = new Map<string, Readonly<{ actionDigest: string; actionFingerprint: string; bindingId: string; capability: McpAppConsentCapability; details: McpAppJsonValue; expiresAt: number; profile: string }>>();
+  const expiredChallenges = new Map<string, Readonly<{ actionDigest: string; actionFingerprint: string; bindingId: string; capability: McpAppConsentCapability; details: McpAppJsonValue; expiresAt: number; profile: string }>>();
   const grants = new Map<string, Readonly<{ actionDigest: string; bindingId: string; capability: McpAppConsentCapability; challengeId: string; expiresAt: number; profile: string; scope: 'action' | 'document' }>>();
   let nextId = 1;
-  const challengeSnapshot = (id: string, challenge: Readonly<{ capability: McpAppConsentCapability; details: McpAppJsonValue; expiresAt: number }>): McpAppConsentChallenge => Object.freeze({
+  const challengeSnapshot = (id: string, challenge: Readonly<{ actionFingerprint: string; capability: McpAppConsentCapability; details: McpAppJsonValue; expiresAt: number }>): McpAppConsentChallenge => Object.freeze({
     expiresAt: challenge.expiresAt,
     id,
-    request: Object.freeze({ capability: challenge.capability, details: challenge.details, scope: consentScope(challenge.capability), summary: consentSummary(challenge.capability) }),
+    request: Object.freeze({ actionFingerprint: challenge.actionFingerprint, capability: challenge.capability, details: publicConsentDetails(challenge.capability, challenge.details), scope: consentScope(challenge.capability), summary: consentSummary(challenge.capability) }),
   });
   const expireChallenges = (): void => {
     const instant = now();
@@ -361,9 +427,9 @@ export const createMcpAppConsentAuthority = (options: Readonly<{ readonly now?: 
       if (!finiteJson(input.details) || !input.bindingId || !input.profile || !input.actionDigest || challenges.size >= 8) return undefined;
       const id = `consent-${nextId++}`;
       const expiresAt = now() + 30_000;
-      const request = Object.freeze({ capability: input.capability, details: input.details, scope: consentScope(input.capability), summary: consentSummary(input.capability) });
-      challenges.set(id, Object.freeze({ ...input, expiresAt }));
-      return Object.freeze({ expiresAt, id, request });
+      const challenge = Object.freeze({ ...input, actionFingerprint: consentActionFingerprint(fingerprintSecret, input.actionDigest), expiresAt });
+      challenges.set(id, challenge);
+      return challengeSnapshot(id, challenge);
     },
     consume(input: Readonly<{ actionDigest: string; authorizationId: string; bindingId: string; capability: McpAppConsentCapability; profile: string }>) {
       const grant = grants.get(input.authorizationId);

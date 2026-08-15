@@ -311,16 +311,74 @@ const redactedConsentJson = (value: unknown, depth = 0, ancestors = new WeakSet<
 const boundedConsentSummary = (value: string): string =>
   value.length <= consentDetailLimit ? value : `${value.slice(0, consentDetailLimit - 1)}…`;
 
-const externalLinkTarget = (value: unknown): string | undefined => {
-  if (typeof value !== 'string') return undefined;
+const publicQueryKeys = (values: Iterable<unknown>): readonly string[] => {
+  const keys = new Set<string>();
+  let inspected = 0;
+  for (const value of values) {
+    if (inspected >= consentDetailEntryLimit * 4 || keys.size >= consentDetailEntryLimit) break;
+    inspected += 1;
+    keys.add(boundedConsentText(value, 48) ?? '[redacted]');
+  }
+  return [...keys].sort();
+};
+
+const externalLinkTarget = (details: Readonly<Record<string, unknown>>): Readonly<{ readonly queryKeys: readonly string[]; readonly target: string }> | undefined => {
+  if (typeof details.target === 'string') {
+    const target = boundedConsentText(details.target, 240);
+    return target === undefined ? undefined : Object.freeze({ queryKeys: Object.freeze(publicQueryKeys(Array.isArray(details.queryKeys) ? details.queryKeys : [])), target });
+  }
+  if (typeof details.url !== 'string') return undefined;
   try {
-    const target = new URL(value);
+    const target = new URL(details.url);
     if ((target.protocol !== 'http:' && target.protocol !== 'https:') || target.username.length > 0 || target.password.length > 0) return undefined;
-    return boundedConsentText(`${target.protocol}//${target.host}${target.pathname}`, 240);
+    const visibleTarget = boundedConsentText(`${target.protocol}//${target.host}${target.pathname}`, 240);
+    if (visibleTarget === undefined) return undefined;
+    const queryKeys = publicQueryKeys(target.searchParams.keys());
+    return Object.freeze({ queryKeys: Object.freeze(queryKeys), target: visibleTarget });
   } catch {
     return undefined;
   }
 };
+
+const base64ByteLength = (value: string): number | undefined => {
+  if (value.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/u.test(value)) return undefined;
+  const padding = value.endsWith('==') ? 2 : value.endsWith('=') ? 1 : 0;
+  return value.length / 4 * 3 - padding;
+};
+
+const contentByteLength = (content: unknown): number | undefined => {
+  if (!isRecord(content) || typeof content.type !== 'string') return undefined;
+  if (content.type === 'text') return typeof content.text === 'string' ? new TextEncoder().encode(content.text).byteLength : undefined;
+  if (content.type === 'image' || content.type === 'audio') return typeof content.data === 'string' ? base64ByteLength(content.data) : undefined;
+  if (content.type === 'resource') {
+    if (!isRecord(content.resource)) return undefined;
+    if (typeof content.resource.text === 'string') return new TextEncoder().encode(content.resource.text).byteLength;
+    return typeof content.resource.blob === 'string' ? base64ByteLength(content.resource.blob) : undefined;
+  }
+  return content.type === 'resource_link' && typeof content.size === 'number' && Number.isSafeInteger(content.size) && content.size >= 0
+    ? content.size
+    : undefined;
+};
+
+const publicDownloadItems = (details: Readonly<Record<string, unknown>>): readonly string[] | undefined => {
+  if (Array.isArray(details.items)) return details.items.slice(0, consentDetailEntryLimit).map((entry, index) => {
+    const type = isRecord(entry) ? boundedConsentText(entry.type, 48) ?? 'unspecified' : 'unspecified';
+    const bytes = isRecord(entry) && typeof entry.bytes === 'number' && Number.isSafeInteger(entry.bytes) && entry.bytes >= 0 ? entry.bytes : undefined;
+    return `${index + 1}: ${type} ${bytes === undefined ? 'size unavailable' : `${bytes} B`}`;
+  });
+  const contents = Array.isArray(details.contents) ? details.contents : undefined;
+  if (contents === undefined) return undefined;
+  return contents.slice(0, consentDetailEntryLimit).map((entry, index) => {
+    const type = isRecord(entry) ? boundedConsentText(entry.type, 48) ?? 'unspecified' : 'unspecified';
+    const bytes = contentByteLength(entry);
+    return `${index + 1}: ${type} ${bytes === undefined ? 'size unavailable' : `${bytes} B`}`;
+  });
+};
+
+const actionFingerprint = (request: Readonly<Record<string, unknown>>): string | undefined =>
+  typeof request.actionFingerprint === 'string' && /^act-[A-Za-z0-9_-]{12}$/u.test(request.actionFingerprint)
+    ? request.actionFingerprint
+    : undefined;
 
 /** A capability-specific, bounded and credential-safe explanation of a server challenge. */
 export const mcpAppConsentDetailsSummary = (request: unknown): string => {
@@ -335,18 +393,22 @@ export const mcpAppConsentDetailsSummary = (request: unknown): string => {
       break;
     }
     case 'open-external-link': {
-      const target = externalLinkTarget(details.url);
-      summary = target === undefined ? 'External link target unavailable.' : `External link: ${target}`;
+      const target = externalLinkTarget(details);
+      summary = target === undefined
+        ? 'External link target unavailable.'
+        : `External link: ${target.target}${target.queryKeys.length === 0 ? '' : `; query keys: ${target.queryKeys.join(', ')}`}`;
       break;
     }
     case 'download-file': {
-      const contents = Array.isArray(details.contents) ? details.contents : undefined;
-      if (contents === undefined) {
+      const items = publicDownloadItems(details);
+      const itemCount = typeof details.itemCount === 'number' && Number.isSafeInteger(details.itemCount) && details.itemCount >= 0
+        ? details.itemCount
+        : Array.isArray(details.contents) ? details.contents.length : undefined;
+      if (items === undefined || itemCount === undefined) {
         summary = 'Download details unavailable.';
         break;
       }
-      const types = contents.slice(0, consentDetailEntryLimit).map((entry) => isRecord(entry) ? boundedConsentText(entry.type, 48) ?? 'unspecified' : 'unspecified');
-      summary = `Download ${contents.length} file${contents.length === 1 ? '' : 's'}${types.length === 0 ? '' : ` (${types.join(', ')})`}.`;
+      summary = `Download ${itemCount} file${itemCount === 1 ? '' : 's'}${items.length === 0 ? '' : ` (${items.join(', ')})`}.`;
       break;
     }
     case 'request-display-mode': {
@@ -359,7 +421,8 @@ export const mcpAppConsentDetailsSummary = (request: unknown): string => {
       summary = value === undefined ? 'Details unavailable.' : `Request details: ${value}`;
     }
   }
-  return boundedConsentSummary(summary);
+  const fingerprint = actionFingerprint(request);
+  return boundedConsentSummary(`${summary}${fingerprint === undefined ? '' : `; action reference: ${fingerprint}`}`);
 };
 
 /** Read-only provider evidence shared by the live MCP page and Runtime Inspector. */

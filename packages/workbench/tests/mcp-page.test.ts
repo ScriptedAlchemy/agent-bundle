@@ -98,10 +98,12 @@ const appPreviewClient: McpAppPreviewClient = {
 describe('MCP page', () => {
   it('describes distinct consent targets with bounded redacted React text', () => {
     const call = mcpAppConsentDetailsSummary({
+      actionFingerprint: 'act-tool-demo123',
       capability: 'call-tool',
       details: { arguments: { api_key: 'do-not-show', message: '<img src=x onerror=alert(1)>' }, name: 'weather.lookup' },
     });
     const link = mcpAppConsentDetailsSummary({
+      actionFingerprint: 'act-link-demo123',
       capability: 'open-external-link',
       details: { url: 'https://example.test/billing?token=do-not-show#fragment' },
     });
@@ -110,22 +112,58 @@ describe('MCP page', () => {
       details: { url: 'https://user:do-not-show@example.test/private' },
     });
     const download = mcpAppConsentDetailsSummary({
+      actionFingerprint: 'act-file-demo123',
       capability: 'download-file',
-      details: { contents: [{ text: 'do-not-show', type: 'text' }, { blob: 'also-private', type: 'binary' }] },
+      details: { contents: [{ text: 'do-not-show', type: 'text' }, { text: 'also-private', type: 'text' }] },
     });
     const markup = renderToStaticMarkup(createElement('p', undefined, call));
 
     expect(call).toContain('Tool: weather.lookup');
     expect(call).toContain('"api_key": "[redacted]"');
     expect(call).not.toContain('do-not-show');
+    expect(call).toContain('action reference: act-tool-demo123');
     expect(markup).toContain('&lt;img src=x onerror=alert(1)&gt;');
     expect(markup).not.toContain('<img src=x');
-    expect(link).toBe('External link: https://example.test/billing');
+    expect(link).toBe('External link: https://example.test/billing; query keys: [redacted]; action reference: act-link-demo123');
     expect(link).not.toContain('token=');
     expect(credentialedLink).toBe('External link target unavailable.');
-    expect(download).toBe('Download 2 files (text, binary).');
+    expect(download).toBe('Download 2 files (1: text 11 B, 2: text 12 B).; action reference: act-file-demo123');
     expect(download).not.toContain('also-private');
     expect(mcpAppConsentDetailsSummary({ capability: 'call-tool', details: { arguments: { note: 'a'.repeat(2_000) }, name: 'long' } }).length).toBeLessThanOrEqual(480);
+  });
+
+  it('renders distinct bounded references for concurrent same-capability links and downloads', () => {
+    const linkA = mcpAppConsentDetailsSummary({
+      actionFingerprint: 'act-link-alpha12',
+      capability: 'open-external-link',
+      details: { url: 'https://example.test/export?account=first&token=do-not-show-a' },
+    });
+    const linkB = mcpAppConsentDetailsSummary({
+      actionFingerprint: 'act-link-bravo12',
+      capability: 'open-external-link',
+      details: { url: 'https://example.test/export?report=second&token=do-not-show-b' },
+    });
+    const downloadA = mcpAppConsentDetailsSummary({
+      actionFingerprint: 'act-file-alpha12',
+      capability: 'download-file',
+      details: { contents: [{ text: 'one', type: 'text' }] },
+    });
+    const downloadB = mcpAppConsentDetailsSummary({
+      actionFingerprint: 'act-file-bravo12',
+      capability: 'download-file',
+      details: { contents: [{ text: 'two-two', type: 'text' }] },
+    });
+    const markup = renderToStaticMarkup(createElement('ol', undefined, [linkA, linkB, downloadA, downloadB].map((label) => createElement('li', { key: label }, label))));
+
+    expect(new Set([linkA, linkB, downloadA, downloadB]).size).toBe(4);
+    expect(linkA).toContain('query keys: [redacted], account');
+    expect(linkB).toContain('query keys: [redacted], report');
+    expect(downloadA).toContain('1: text 3 B');
+    expect(downloadB).toContain('1: text 7 B');
+    expect(markup).toContain('act-link-alpha12');
+    expect(markup).not.toContain('do-not-show');
+    expect(markup).not.toContain('grant-');
+    expect(markup).not.toContain('authorizationId');
   });
 
   it('renders provider protocol evidence without adding live session controls', () => {

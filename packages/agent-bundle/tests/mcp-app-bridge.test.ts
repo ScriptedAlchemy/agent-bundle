@@ -960,6 +960,52 @@ it('does not invoke a download handler until its route-owned challenge decision 
   expect(downloads).toEqual([{ ...details, embeddedBytes: 0, itemCount: 1 }]);
 });
 
+it('keeps concurrent same-capability consent labels opaque and resumes only their exact digest-bound action', async () => {
+  const links: string[] = [];
+  const downloads: unknown[] = [];
+  const fixture = fixtureFor({
+    host: {
+      onDownload: (download) => { downloads.push(download); },
+      onOpenLink: (url) => { links.push(url); },
+    },
+  });
+  const authority = createMcpAppConsentAuthority({ now: () => 1_000 });
+  const bridge = createMcpAppBridge({ binding: fixture.binding, consentAuthority: authority, host: fixture.host, operations: fixture.operations, profile: 'portable', send: (message) => (fixture.sent.push(message), true) });
+  await bridge.receive(initialize('init:concurrent-consent'));
+  await bridge.receive(initialized());
+  await bridge.receive({ id: 'link-a', jsonrpc: '2.0', method: 'ui/open-link', params: { url: 'https://example.test/export?account=first&token=secret-link-a' } });
+  await bridge.receive({ id: 'link-b', jsonrpc: '2.0', method: 'ui/open-link', params: { url: 'https://example.test/export?report=second&token=secret-link-b' } });
+  await bridge.receive({ id: 'download-a', jsonrpc: '2.0', method: 'ui/download-file', params: { contents: [{ text: 'secret-download-a', type: 'text' }] } });
+  await bridge.receive({ id: 'download-b', jsonrpc: '2.0', method: 'ui/download-file', params: { contents: [{ text: 'secret-download-bb', type: 'text' }] } });
+  const pending = authority.pending();
+  const linkChallenges = pending.filter((challenge) => challenge.request.capability === 'open-external-link');
+  const downloadChallenges = pending.filter((challenge) => challenge.request.capability === 'download-file');
+  const publicSnapshot = JSON.stringify([...linkChallenges, ...downloadChallenges]);
+
+  expect(linkChallenges).toHaveLength(2);
+  expect(downloadChallenges).toHaveLength(2);
+  expect(new Set([...linkChallenges, ...downloadChallenges].map((challenge) => challenge.request.actionFingerprint)).size).toBe(4);
+  expect(linkChallenges.map((challenge) => challenge.request.details)).toEqual([
+    { queryKeys: ['[redacted]', 'account'], target: 'https://example.test/export' },
+    { queryKeys: ['[redacted]', 'report'], target: 'https://example.test/export' },
+  ]);
+  expect(downloadChallenges.map((challenge) => challenge.request.details)).toEqual([
+    { itemCount: 1, items: [{ bytes: 17, type: 'text' }] },
+    { itemCount: 1, items: [{ bytes: 18, type: 'text' }] },
+  ]);
+  expect(publicSnapshot).not.toContain('secret-');
+  expect(publicSnapshot).not.toContain('grant-');
+  expect(publicSnapshot).not.toContain('authorizationId');
+
+  await expect(bridge.decideConsent(linkChallenges[0]?.id ?? '', true)).resolves.toBe(true);
+  await expect(bridge.decideConsent(linkChallenges[0]?.id ?? '', true)).resolves.toBe(false);
+  expect(links).toEqual(['https://example.test/export?account=first&token=secret-link-a']);
+  expect(downloads).toEqual([]);
+  await expect(bridge.decideConsent(downloadChallenges[1]?.id ?? '', true)).resolves.toBe(true);
+  expect(downloads).toEqual([expect.objectContaining({ contents: [{ text: 'secret-download-bb', type: 'text' }] })]);
+  expect(fixture.sent.filter((message) => message.id === 'link-b' || message.id === 'download-a')).toEqual([]);
+});
+
 it('resumes each privileged effect at most once and expires queued continuations before effects', async () => {
   let now = 1_000;
   const links: string[] = [];

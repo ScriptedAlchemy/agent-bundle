@@ -258,7 +258,7 @@ e2e('runs a generated SDK-v2 App through the real foreground session and separat
     const consent = page.getByLabel('MCP App consent');
     await expect(consent).toContainText('Tool: inner-echo');
     await expect(consent).toContainText('External link: https://example.test/real-app-link');
-    await expect(consent).toContainText('Download 1 file (text).');
+    await expect(consent).toContainText('Download 1 file (1: text 17 B).');
     await expect(consent).toContainText('Display mode: inline');
     await page.getByRole('button', { name: 'Allow call tool' }).click();
     await page.getByRole('button', { name: 'Allow open external link' }).click();

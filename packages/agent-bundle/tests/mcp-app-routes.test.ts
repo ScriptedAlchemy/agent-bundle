@@ -64,7 +64,7 @@ class RecordingPreviewService implements McpAppRoutePreviewService {
     return bindingId === 'binding-a' ? [{
       expiresAt: 31_000,
       id: 'consent-1',
-      request: { capability: 'call-tool' as const, details: { name: 'refresh-weather' }, scope: 'action' as const, summary: 'Allow MCP App call tool?' },
+      request: { actionFingerprint: 'act-route-demo12', capability: 'call-tool' as const, details: { name: 'refresh-weather' }, scope: 'action' as const, summary: 'Allow MCP App call tool?' },
     }] : undefined;
   }
 
