@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { appendFile, cp, mkdir, mkdtemp, readFile, readdir, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -856,6 +856,71 @@ test('replays an exact historical surface after generation two removes it', asyn
   }
 }, 60_000);
 
+test('releases an exact historical lease when four active workers reject its admission', async () => {
+  const copied = await copyExample();
+  const storageRoot = join(copied.projectRoot, '.agent-bundle', 'runtime-exact-lease-capacity');
+  const prepared = await new ProjectService({ includeDevRuntime: true, mode: 'development', root: copied.projectRoot }).prepare('dev');
+  const session = await createDevRuntimeProvider().start({
+    artifactStatus: () => Object.freeze({ state: 'missing' as const }),
+    emit: () => undefined,
+    environment: Object.freeze({}),
+    projectRoot: copied.projectRoot,
+    preparedRuntime: prepared.devRuntime!,
+    providerSessionId: 'session-exact-lease-capacity',
+    signal: new AbortController().signal,
+    storageRoot,
+  });
+
+  try {
+    await waitFor(() => session.status().activeVector !== undefined, 'Timed out waiting for an active runtime generation', 15_000);
+    const g1 = session.status().activeVector!.runtimeGenerationId;
+    const target = session.surfaces().find((surface) => surface.id === 'mcp.runtime_status')!.targets[0]!;
+    const historical = await session.invoke({ expectedGenerationId: g1, input: {}, surfaceId: 'mcp.runtime_status', target });
+    expect(historical).toMatchObject({ status: 'succeeded', vector: { runtimeGenerationId: g1 } });
+
+    const definition = join(copied.projectRoot, 'src', 'definition.ts');
+    await appendFile(definition, '\n// exact-lease-capacity-g2\n');
+    await waitFor(() => session.status().activeVector?.runtimeGenerationId !== g1, 'Timed out waiting for generation two');
+    const g2 = session.status().activeVector!.runtimeGenerationId;
+    const marker = join(storageRoot, 'blocked-exact-lease-workers.txt');
+    const worker = join(storageRoot, 'generation-store', 'generations', g2, 'rsc', 'rsc', 'index.js');
+    await writeFile(worker, `
+import { appendFileSync } from 'node:fs';
+appendFileSync(${JSON.stringify(marker)}, 'ready\\n');
+setTimeout(() => process.exit(0), 1_000);
+`);
+    const workers = Array.from({ length: 4 }, () => session.invoke({
+      expectedGenerationId: g2,
+      input: {},
+      surfaceId: 'mcp.runtime_status',
+      target,
+    }));
+    await waitFor(() => {
+      try {
+        return readFileSync(marker, 'utf8').trim().split('\n').length === 4;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+        throw error;
+      }
+    }, 'Timed out waiting for four capacity workers');
+
+    await expect(session.replay({ expectedGenerationId: g1, mode: 'exact', runId: historical.id }))
+      .rejects.toThrow('limit of 4 concurrent workers');
+    await Promise.all(workers);
+
+    let active = g2;
+    for (let generation = 3; generation <= 8; generation += 1) {
+      await appendFile(definition, `// exact-lease-capacity-g${String(generation)}\\n`);
+      await waitFor(() => session.status().activeVector?.runtimeGenerationId !== active, `Timed out waiting for generation ${String(generation)}`, 15_000);
+      active = session.status().activeVector!.runtimeGenerationId;
+    }
+    await waitFor(() => !existsSync(join(storageRoot, 'generation-store', 'generations', g1)), 'Exact replay leaked generation one after capacity rejection', 15_000);
+  } finally {
+    await session.close().catch(() => undefined);
+    await rm(copied.workspaceRoot, { force: true, recursive: true });
+  }
+}, 90_000);
+
 test('closes the provider-owned invocation process group without orphaning its RSC grandchild', async () => {
   const storageRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-session-close-'));
   const controller = new AbortController();
@@ -950,6 +1015,59 @@ process.exit(0);
 
     expect(run).toMatchObject({ status: 'failed' });
     await waitFor(() => !isProcessAlive(grandchildPid as number), 'RSC grandchild remained alive after invocation leader exit');
+  } finally {
+    if (grandchildPid !== undefined && isProcessAlive(grandchildPid)) process.kill(grandchildPid, 'SIGKILL');
+    await session.close().catch(() => undefined);
+    await rm(storageRoot, { force: true, recursive: true });
+  }
+}, 30_000);
+
+test('settles a successful invocation only after its TERM-resistant RSC grandchild exits', async () => {
+  const storageRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-session-success-tree-'));
+  const projectRoot = process.cwd();
+  const prepared = await new ProjectService({ includeDevRuntime: true, mode: 'development', root: projectRoot }).prepare('dev');
+  const session = await createDevRuntimeProvider().start({
+    artifactStatus: () => Object.freeze({ state: 'missing' as const }),
+    emit: () => undefined,
+    environment: Object.freeze({}),
+    projectRoot,
+    preparedRuntime: prepared.devRuntime!,
+    providerSessionId: 'session-success-tree-test',
+    signal: new AbortController().signal,
+    storageRoot,
+  });
+  let grandchildPid: number | undefined;
+
+  try {
+    await waitFor(() => session.status().activeVector !== undefined, 'Timed out waiting for an active runtime generation', 15_000);
+    const generationId = session.status().activeVector!.runtimeGenerationId;
+    const marker = join(storageRoot, 'rsc-invocation-success-grandchild.pid');
+    const entry = join(storageRoot, 'generation-store', 'generations', generationId, 'rsc', 'dev', 'invoke.js');
+    await writeFile(entry, `
+const { spawn } = require('node:child_process');
+const { writeFileSync, writeSync } = require('node:fs');
+const child = spawn(process.execPath, ['-e', 'process.on("SIGTERM", () => undefined); setInterval(() => undefined, 1000)'], { stdio: 'ignore' });
+child.unref();
+writeFileSync(${JSON.stringify(marker)}, String(child.pid));
+writeSync(3, Buffer.from('x'));
+process.stdout.end(JSON.stringify({
+  flightBytes: 1,
+  inspection: {
+    flight: { bytes: 1, preview: 'eA==', truncated: false },
+    modelVisible: [],
+    protocol: [],
+    state: { identity: { stateStoreId: 'playground', stateVersion: 0 } },
+    trace: [],
+    tree: [],
+  },
+}) + '\\n');
+`);
+    const target = session.surfaces().find((surface) => surface.id === 'mcp.runtime_status')!.targets[0]!;
+    const run = await session.invoke({ expectedGenerationId: generationId, input: {}, surfaceId: 'mcp.runtime_status', target });
+    grandchildPid = Number(await readWhenPresent(marker));
+
+    expect(run).toMatchObject({ status: 'succeeded' });
+    await waitFor(() => !isProcessAlive(grandchildPid as number), 'RSC invocation grandchild remained alive after successful invocation');
   } finally {
     if (grandchildPid !== undefined && isProcessAlive(grandchildPid)) process.kill(grandchildPid, 'SIGKILL');
     await session.close().catch(() => undefined);
@@ -1146,7 +1264,11 @@ process.stdout.end(${JSON.stringify(`${JSON.stringify({ flightBytes: 1, inspecti
       tree: [],
     };
     await malformed({ ...validInspection, tree: [{ children: {}, id: 'node', kind: 'element', label: 'bad' }] });
+    await malformed({ ...validInspection, tree: [{ children: [], id: 'node', kind: 'element', label: 'bad', props: [] }] });
+    await malformed({ ...validInspection, tree: [{ children: [], id: 'node', kind: 'element', label: 'bad', props: null }] });
     await malformed({ ...validInspection, trace: [{ id: '', phase: 'render', startedAt: 'not-a-date', status: 'unknown' }] });
+    await malformed({ ...validInspection, trace: [{ details: null, id: 'trace', phase: 'render', startedAt: '2026-08-15T00:00:00.000Z', status: 'succeeded' }] });
+    await malformed({ ...validInspection, trace: [{ details: [], id: 'trace', phase: 'render', startedAt: '2026-08-15T00:00:00.000Z', status: 'succeeded' }] });
     await malformed({ ...validInspection, app: { mcpBinding: {}, resourceUri: 'ui://unsafe', surfaceId: 'mcp.timeline' } });
     expect(await readdir(join(storageRoot, 'runs'))).toEqual(['.agent-bundle-runtime-owner']);
   } finally {

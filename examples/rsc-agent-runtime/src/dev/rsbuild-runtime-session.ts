@@ -92,6 +92,33 @@ const invocationTimeoutMs = 10_000;
 const invocationTerminationGraceMs = 100;
 const flightPreviewBytes = 32 * 1024;
 
+// Windows has no process-group equivalent that remains addressable after the
+// invocation leader exits. Keep a provider-owned supervisor alive until the
+// session has collected and torn down the worker tree with taskkill /T.
+const windowsInvocationSupervisorSource = String.raw`
+const { spawn } = require('node:child_process');
+const { closeSync, writeSync } = require('node:fs');
+const entry = process.argv[1];
+let reported = false;
+const report = (code) => {
+  if (reported) return;
+  reported = true;
+  try { writeSync(4, String(code) + '\n'); } catch {}
+  for (const fd of [1, 2, 3, 4]) {
+    try { closeSync(fd); } catch {}
+  }
+  setInterval(() => undefined, 2 ** 30);
+};
+const worker = spawn(process.execPath, [entry], {
+  cwd: process.cwd(),
+  env: process.env,
+  stdio: [0, 1, 2, 3, 'ignore'],
+  windowsHide: true,
+});
+worker.once('error', () => report(1));
+worker.once('close', (code) => report(code === 0 ? 0 : 1));
+`;
+
 interface InvocationWorker {
   readonly done: Promise<void>;
   terminate(reason: Error): void;
@@ -279,7 +306,9 @@ const validateTrace = (value: unknown): void => {
       ('durationMs' in span && (typeof span.durationMs !== 'number' || !Number.isFinite(span.durationMs) || span.durationMs < 0))) {
       throw new Error('RSC invocation worker trace is invalid.');
     }
-    if ('details' in span) assertCredentialSafeJson(span.details);
+    if ('details' in span) {
+      assertCredentialSafeJson(plainRecord(span.details, 'RSC invocation worker trace is invalid.'));
+    }
   }
 };
 
@@ -292,7 +321,9 @@ const validateTree = (value: unknown): void => {
       !['component', 'element', 'text', 'value'].includes(node.kind as string)) {
       throw new Error('RSC invocation worker tree is invalid.');
     }
-    if ('props' in node) assertCredentialSafeJson(node.props);
+    if ('props' in node) {
+      assertCredentialSafeJson(plainRecord(node.props, 'RSC invocation worker tree is invalid.'));
+    }
     validateTree(node.children);
   }
 };
@@ -718,8 +749,17 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
     if (request.mode === 'exact') {
       let retained: Awaited<ReturnType<RuntimeGenerationStore<RscRuntimeGenerationMetadata>['lease']>> | undefined;
       try {
-        retained = await this.#generationStore.lease(historicalGenerationId);
-        const surface = await this.#historicalSurface(retained.generation, historical.surfaceId);
+        try {
+          retained = await this.#generationStore.lease(historicalGenerationId);
+        } catch {
+          throw new DevRuntimeGenerationConflictError(historicalGenerationId, this.#active?.id);
+        }
+        let surface: DevRuntimeSurface;
+        try {
+          surface = await this.#historicalSurface(retained.generation, historical.surfaceId);
+        } catch {
+          throw new DevRuntimeGenerationConflictError(historicalGenerationId, this.#active?.id);
+        }
         const replay = this.#invoke({
           expectedGenerationId,
           ...(historical.fixtureId === undefined ? {} : { fixtureId: historical.fixtureId }),
@@ -729,8 +769,6 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
         }, retained, surface);
         retained = undefined;
         return await replay;
-      } catch {
-        throw new DevRuntimeGenerationConflictError(historicalGenerationId, this.#active?.id);
       } finally {
         await retained?.release();
       }
@@ -792,115 +830,111 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
     suppliedLease?: Awaited<ReturnType<RuntimeGenerationStore<RscRuntimeGenerationMetadata>['lease']>>,
     historicalSurface?: DevRuntimeSurface,
   ): Promise<DevRuntimeRun> {
-    let invocation: ValidatedInvocation;
-    try {
-      invocation = this.#validateInvocation(request, historicalSurface);
-    } catch (error) {
-      await suppliedLease?.release();
-      throw error;
-    }
-    const generationId = invocation.request.expectedGenerationId ?? suppliedLease?.generation.id ?? this.#active?.id;
-    if (generationId === undefined) throw new DevRuntimeUnavailableError('RSC runtime has no active generation.');
-    if (suppliedLease !== undefined && suppliedLease.generation.id !== generationId) {
-      await suppliedLease.release();
-      throw new DevRuntimeGenerationConflictError(generationId, suppliedLease.generation.id);
-    }
-    const releaseReservation = this.#reserveInvocation();
-
     let lease = suppliedLease;
-    if (lease === undefined) {
-      try {
-        lease = await this.#generationStore.lease(generationId);
-      } catch {
-        releaseReservation();
-        throw new DevRuntimeGenerationConflictError(generationId, this.#active?.id);
-      }
-    }
-
-    let runDirectory: string | undefined;
-    let running: DevRuntimeRun | undefined;
-    let artifact: RunArtifact | undefined;
+    let releaseReservation: (() => void) | undefined;
     try {
-      this.#assertInvocationOpen();
-      const stateBefore = await this.#stateKernel.readSnapshot();
-      this.#assertInvocationOpen();
-      const runId = randomUUID();
-      const startedAt = new Date().toISOString();
-      running = Object.freeze({
-        ...(invocation.fixtureId === undefined ? {} : { fixtureId: invocation.fixtureId }),
-        id: runId,
-        input: invocation.input,
-        startedAt,
-        status: 'running' as const,
-        surfaceId: invocation.surface.id,
-        target: invocation.request.target,
-        vector: this.#vector(lease.generation, stateBefore.stateVersion),
-      });
-      this.#activeRuns.set(runId, running);
-      runDirectory = join(this.#runRoot, runId);
-      if (!isInside(this.#runRoot, runDirectory) || !safeSegment(runId)) {
-        throw new Error('RSC runtime run directory escaped its provider storage root.');
+      const invocation = this.#validateInvocation(request, historicalSurface);
+      const generationId = invocation.request.expectedGenerationId ?? lease?.generation.id ?? this.#active?.id;
+      if (generationId === undefined) throw new DevRuntimeUnavailableError('RSC runtime has no active generation.');
+      if (lease !== undefined && lease.generation.id !== generationId) {
+        throw new DevRuntimeGenerationConflictError(generationId, lease.generation.id);
       }
-      await this.#assertCurrentOwnedRunsRoot();
-      await mkdir(runDirectory, { recursive: false });
-      artifact = await this.#openRunArtifact(runId);
-      this.#assertInvocationOpen();
-      this.#emit(Object.freeze({ runId, runtimeGenerationId: lease.generation.id, type: 'runtime.run.started' }));
-      const workerInput = await this.#workerRequest(invocation);
-      this.#assertInvocationOpen();
-      const response = await this.#runInvocationWorker({
-        generation: lease.generation,
-        input: workerInput,
-        runId,
-        surfaceId: invocation.surface.id,
-      });
-      this.#assertInvocationOpen();
-      const flight = response.flight;
-      const stateAfter = await this.#stateKernel.readSnapshot();
-      this.#assertInvocationOpen();
-      const result = this.#inspectionResult(response.inspection, flight, stateAfter.stateVersion, runId);
-      if (artifact === undefined) throw new Error('RSC runtime Flight artifact is unavailable.');
-      await this.#writeRunFlight(artifact, flight);
-      const completed = Object.freeze({
-        ...(invocation.fixtureId === undefined ? {} : { fixtureId: invocation.fixtureId }),
-        completedAt: new Date().toISOString(),
-        id: runId,
-        input: invocation.input,
-        result,
-        startedAt,
-        status: 'succeeded' as const,
-        surfaceId: invocation.surface.id,
-        target: invocation.request.target,
-        vector: this.#vector(lease.generation, stateAfter.stateVersion),
-      });
-      this.#activeRuns.delete(runId);
-      await this.#recordTerminal(completed);
-      this.#emit(Object.freeze({ runId, runtimeGenerationId: lease.generation.id, type: 'runtime.run.completed' }));
-      return completed;
-    } catch (error) {
-      if (artifact !== undefined) await this.#releaseRunArtifact(artifact.runId).catch(() => undefined);
-      if (runDirectory !== undefined) await this.#removeRunDirectory(running?.id).catch(() => undefined);
-      if (running === undefined) throw error;
-      this.#activeRuns.delete(running.id);
-      const stateAfter = await this.#readTerminalStateVersion(running.vector.stateVersion);
-      const failed = Object.freeze({
-        ...(running.fixtureId === undefined ? {} : { fixtureId: running.fixtureId }),
-        completedAt: new Date().toISOString(),
-        diagnostics: Object.freeze([invocationDiagnostic(error)]),
-        id: running.id,
-        input: running.input,
-        startedAt: running.startedAt,
-        status: 'failed' as const,
-        surfaceId: running.surfaceId,
-        target: running.target,
-        vector: this.#vector(lease.generation, stateAfter),
-      });
-      await this.#recordTerminal(failed);
-      this.#emit(Object.freeze({ runId: running.id, runtimeGenerationId: lease.generation.id, type: 'runtime.run.failed' }));
-      return failed;
+      releaseReservation = this.#reserveInvocation();
+      if (lease === undefined) {
+        try {
+          lease = await this.#generationStore.lease(generationId);
+        } catch {
+          throw new DevRuntimeGenerationConflictError(generationId, this.#active?.id);
+        }
+      }
+      const generationLease = lease;
+      if (generationLease === undefined) throw new Error('RSC runtime generation lease is unavailable.');
+
+      let runDirectory: string | undefined;
+      let running: DevRuntimeRun | undefined;
+      let artifact: RunArtifact | undefined;
+      try {
+        this.#assertInvocationOpen();
+        const stateBefore = await this.#stateKernel.readSnapshot();
+        this.#assertInvocationOpen();
+        const runId = randomUUID();
+        const startedAt = new Date().toISOString();
+        running = Object.freeze({
+          ...(invocation.fixtureId === undefined ? {} : { fixtureId: invocation.fixtureId }),
+          id: runId,
+          input: invocation.input,
+          startedAt,
+          status: 'running' as const,
+          surfaceId: invocation.surface.id,
+          target: invocation.request.target,
+          vector: this.#vector(generationLease.generation, stateBefore.stateVersion),
+        });
+        this.#activeRuns.set(runId, running);
+        runDirectory = join(this.#runRoot, runId);
+        if (!isInside(this.#runRoot, runDirectory) || !safeSegment(runId)) {
+          throw new Error('RSC runtime run directory escaped its provider storage root.');
+        }
+        await this.#assertCurrentOwnedRunsRoot();
+        await mkdir(runDirectory, { recursive: false });
+        artifact = await this.#openRunArtifact(runId);
+        this.#assertInvocationOpen();
+        this.#emit(Object.freeze({ runId, runtimeGenerationId: generationLease.generation.id, type: 'runtime.run.started' }));
+        const workerInput = await this.#workerRequest(invocation);
+        this.#assertInvocationOpen();
+        const response = await this.#runInvocationWorker({
+          generation: generationLease.generation,
+          input: workerInput,
+          runId,
+          surfaceId: invocation.surface.id,
+        });
+        this.#assertInvocationOpen();
+        const flight = response.flight;
+        const stateAfter = await this.#stateKernel.readSnapshot();
+        this.#assertInvocationOpen();
+        const result = this.#inspectionResult(response.inspection, flight, stateAfter.stateVersion, runId);
+        if (artifact === undefined) throw new Error('RSC runtime Flight artifact is unavailable.');
+        await this.#writeRunFlight(artifact, flight);
+        const completed = Object.freeze({
+          ...(invocation.fixtureId === undefined ? {} : { fixtureId: invocation.fixtureId }),
+          completedAt: new Date().toISOString(),
+          id: runId,
+          input: invocation.input,
+          result,
+          startedAt,
+          status: 'succeeded' as const,
+          surfaceId: invocation.surface.id,
+          target: invocation.request.target,
+          vector: this.#vector(generationLease.generation, stateAfter.stateVersion),
+        });
+        this.#activeRuns.delete(runId);
+        await this.#recordTerminal(completed);
+        this.#emit(Object.freeze({ runId, runtimeGenerationId: generationLease.generation.id, type: 'runtime.run.completed' }));
+        return completed;
+      } catch (error) {
+        if (artifact !== undefined) await this.#releaseRunArtifact(artifact.runId).catch(() => undefined);
+        if (runDirectory !== undefined) await this.#removeRunDirectory(running?.id).catch(() => undefined);
+        if (running === undefined) throw error;
+        this.#activeRuns.delete(running.id);
+        const stateAfter = await this.#readTerminalStateVersion(running.vector.stateVersion);
+        const failed = Object.freeze({
+          ...(running.fixtureId === undefined ? {} : { fixtureId: running.fixtureId }),
+          completedAt: new Date().toISOString(),
+          diagnostics: Object.freeze([invocationDiagnostic(error)]),
+          id: running.id,
+          input: running.input,
+          startedAt: running.startedAt,
+          status: 'failed' as const,
+          surfaceId: running.surfaceId,
+          target: running.target,
+          vector: this.#vector(generationLease.generation, stateAfter),
+        });
+        await this.#recordTerminal(failed);
+        this.#emit(Object.freeze({ runId: running.id, runtimeGenerationId: generationLease.generation.id, type: 'runtime.run.failed' }));
+        return failed;
+      }
     } finally {
-      await lease.release();
-      releaseReservation();
+      await lease?.release();
+      releaseReservation?.();
     }
   }
 
@@ -1195,7 +1229,8 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
     this.#assertInvocationOpen();
     const entry = join(input.generation.root, 'rsc', 'dev', 'invoke.js');
     if (!isInside(input.generation.root, entry)) return Promise.reject(new Error('RSC invocation entry escaped its generation root.'));
-    const child = spawn(process.execPath, [entry], {
+    const windowsSupervised = process.platform === 'win32';
+    const child = spawn(process.execPath, windowsSupervised ? ['-e', windowsInvocationSupervisorSource, entry] : [entry], {
       cwd: resolve(this.#context.projectRoot),
       detached: process.platform !== 'win32',
       env: {
@@ -1203,14 +1238,18 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
         AGENT_RUNTIME_STATE_FILE: this.#stateFile,
         NODE_ENV: 'development',
       },
-      stdio: ['pipe', 'pipe', 'pipe', 'pipe'],
+      stdio: windowsSupervised ? ['pipe', 'pipe', 'pipe', 'pipe', 'pipe'] : ['pipe', 'pipe', 'pipe', 'pipe'],
       windowsHide: true,
     });
     const stdout = child.stdout;
     const stderr = child.stderr;
     const flightOutput = child.stdio[3] as NodeJS.ReadableStream | undefined;
+    const supervisorOutput = windowsSupervised ? child.stdio[4] as NodeJS.ReadableStream | undefined : undefined;
     const processGroupId = child.pid;
-    if (stdout === null || stderr === null || flightOutput === undefined || flightOutput === null || processGroupId === undefined) {
+    if (
+      stdout === null || stderr === null || flightOutput === undefined || flightOutput === null || processGroupId === undefined ||
+      (windowsSupervised && (supervisorOutput === undefined || supervisorOutput === null))
+    ) {
       child.kill('SIGKILL');
       return Promise.reject(new Error('RSC invocation worker streams are unavailable.'));
     }
@@ -1221,9 +1260,15 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
     let stdoutBytes = 0;
     let stderrBytes = 0;
     let flightBytes = 0;
+    let stdoutEnded = false;
+    let flightEnded = false;
+    let supervisorExitCode: number | undefined;
+    let supervisorOutputEnded = !windowsSupervised;
+    let windowsResponse: Readonly<{ readonly flight: Buffer; readonly inspection: DevRuntimeInspectionEnvelope }> | undefined;
     const stdoutChunks: Buffer[] = [];
     const stderrChunks: Buffer[] = [];
     const flightChunks: Buffer[] = [];
+    const supervisorChunks: Buffer[] = [];
     const signalGroup = async (signal: NodeJS.Signals): Promise<void> => {
       try {
         if (process.platform !== 'win32') {
@@ -1241,16 +1286,20 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
         try { child.kill(signal); } catch { /* Child already exited. */ }
       }
     };
-    let terminationTask: Promise<void> | undefined;
-    const terminate = (reason: Error): void => {
-      if (termination !== undefined) return;
-      termination = reason;
-      child.stdin.destroy();
-      terminationTask = (async () => {
+    let treeCleanup: Promise<void> | undefined;
+    const teardownTree = (): Promise<void> => {
+      treeCleanup ??= (async () => {
         await signalGroup('SIGTERM');
         await new Promise<void>((resolve) => setTimeout(resolve, invocationTerminationGraceMs));
         await signalGroup('SIGKILL');
       })();
+      return treeCleanup;
+    };
+    const terminate = (reason: Error): void => {
+      if (termination !== undefined) return;
+      termination = reason;
+      child.stdin.destroy();
+      void teardownTree();
     };
     const abort = (): void => terminate(new DevRuntimeUnavailableError('RSC runtime session is closed.'));
     this.#invocationAbort.signal.addEventListener('abort', abort, { once: true });
@@ -1260,8 +1309,27 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
         if (settled) return;
         settled = true;
         if (timeout !== undefined) clearTimeout(timeout);
-        await terminationTask;
+        await treeCleanup;
         callback();
+      };
+      const parseWorkerResponse = (): Readonly<{ readonly flight: Buffer; readonly inspection: DevRuntimeInspectionEnvelope }> => {
+        const output = new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(stdoutChunks));
+        if (!output.endsWith('\n') || output.indexOf('\n') !== output.length - 1) {
+          throw new Error('RSC invocation worker did not emit exactly one JSON response line.');
+        }
+        return Object.freeze({
+          flight: Buffer.concat(flightChunks),
+          inspection: this.#validateWorkerResponse(JSON.parse(output), flightBytes, input.surfaceId),
+        });
+      };
+      const completeWindowsSuccess = (): void => {
+        if (!windowsSupervised || termination !== undefined || windowsResponse !== undefined || !stdoutEnded || !flightEnded || !supervisorOutputEnded || supervisorExitCode !== 0) return;
+        try {
+          windowsResponse = parseWorkerResponse();
+          void teardownTree();
+        } catch (error) {
+          terminate(error instanceof Error ? error : new Error('RSC invocation worker emitted invalid JSON.'));
+        }
       };
       stdout.on('data', (chunk: Buffer | string) => {
         if (termination !== undefined) return;
@@ -1272,6 +1340,10 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
           return;
         }
         stdoutChunks.push(bytes);
+      });
+      stdout.once('end', () => {
+        stdoutEnded = true;
+        completeWindowsSuccess();
       });
       stdout.once('error', () => terminate(new Error('RSC invocation stdout stream failed.')));
       flightOutput.on('data', (chunk: Buffer | string) => {
@@ -1284,6 +1356,10 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
         }
         flightChunks.push(bytes);
       });
+      flightOutput.once('end', () => {
+        flightEnded = true;
+        completeWindowsSuccess();
+      });
       flightOutput.once('error', () => terminate(new Error('RSC invocation Flight stream failed.')));
       stderr.on('data', (chunk: Buffer | string) => {
         const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
@@ -1295,10 +1371,39 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
         }
       });
       stderr.once('error', () => terminate(new Error('RSC invocation stderr stream failed.')));
+      if (supervisorOutput !== undefined && supervisorOutput !== null) {
+        supervisorOutput.on('data', (chunk: Buffer | string) => {
+          const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+          if (Buffer.concat([...supervisorChunks, bytes]).byteLength > 32) {
+            terminate(new Error('RSC invocation Windows supervisor emitted an invalid exit status.'));
+            return;
+          }
+          supervisorChunks.push(bytes);
+        });
+        supervisorOutput.once('error', () => terminate(new Error('RSC invocation Windows supervisor status stream failed.')));
+        supervisorOutput.once('end', () => {
+          const output = Buffer.concat(supervisorChunks).toString('utf8');
+          if (!/^(?:0|[1-9]\d*)\n$/u.test(output)) {
+            terminate(new Error('RSC invocation Windows supervisor emitted an invalid exit status.'));
+            return;
+          }
+          supervisorExitCode = Number(output.slice(0, -1));
+          supervisorOutputEnded = true;
+          if (supervisorExitCode !== 0) {
+            terminate(new Error(`RSC invocation worker exited with code ${String(supervisorExitCode)}.`));
+            return;
+          }
+          completeWindowsSuccess();
+        });
+      }
       child.stdin.once('error', () => terminate(new Error('RSC invocation request stream failed.')));
       child.once('error', (error) => terminate(new Error(`RSC invocation worker could not be started: ${error.message}`)));
       child.once('close', (code) => {
         const diagnostics = redactInspectionDiagnostics(Buffer.concat(stderrChunks).toString('utf8'));
+        if (windowsResponse !== undefined) {
+          void finish(() => resolveResponse(windowsResponse!));
+          return;
+        }
         if (termination !== undefined) {
           const message = termination.message;
           void finish(() => rejectResponse(new Error(`${message}${diagnostics.length === 0 ? '' : `: ${diagnostics}`}`)));
@@ -1311,15 +1416,17 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
           return;
         }
         try {
-          const output = new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(stdoutChunks));
-          if (!output.endsWith('\n') || output.indexOf('\n') !== output.length - 1) {
-            throw new Error('RSC invocation worker did not emit exactly one JSON response line.');
-          }
-          const parsed = this.#validateWorkerResponse(JSON.parse(output), flightBytes, input.surfaceId);
-          void finish(() => resolveResponse(Object.freeze({
-            flight: Buffer.concat(flightChunks),
-            inspection: parsed,
-          })));
+          const parsed = parseWorkerResponse();
+          void (async () => {
+            await teardownTree();
+            const terminationAfterCleanup = termination as Error | undefined;
+            if (terminationAfterCleanup !== undefined) {
+              const message = terminationAfterCleanup.message;
+              await finish(() => rejectResponse(new Error(`${message}${diagnostics.length === 0 ? '' : `: ${diagnostics}`}`)));
+              return;
+            }
+            await finish(() => resolveResponse(parsed));
+          })();
         } catch (error) {
           const failure = error instanceof Error ? error : new Error('RSC invocation worker emitted invalid JSON.');
           terminate(failure);
