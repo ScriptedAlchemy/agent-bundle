@@ -1,5 +1,5 @@
 import { execFile as executeFile } from 'node:child_process';
-import { rename, writeFile } from 'node:fs/promises';
+import { mkdir, rename, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 
@@ -62,6 +62,106 @@ const startFrozenEpochServer = async (root: string) => {
     skillDocuments: new SkillDocumentService({ epochStore, projectService, root }),
   });
 };
+
+const writeMcpPlaygroundProject = async (root: string): Promise<void> => {
+  await Promise.all([
+    mkdir(join(root, 'src'), { recursive: true }),
+    symlink(join(workspaceRoot, 'node_modules', '@modelcontextprotocol'), join(root, 'node_modules', '@modelcontextprotocol'), 'dir'),
+    symlink(join(workspaceRoot, 'node_modules', 'zod'), join(root, 'node_modules', 'zod'), 'dir'),
+  ]);
+  await Promise.all([
+    writeFile(join(root, 'package.json'), '{"type":"module"}\n'),
+    writeFile(join(root, 'src', 'server.ts'), [
+      "import { McpServer } from '@modelcontextprotocol/server';",
+      "import { StdioServerTransport } from '@modelcontextprotocol/server/stdio';",
+      "import { z } from 'zod';",
+      '',
+      "const server = new McpServer({ name: 'playground-fixture', version: '1.0.0' });",
+      "server.registerTool('echo', { description: 'Echo one message.', inputSchema: z.object({ message: z.string() }) }, async ({ message }) => ({",
+      "  content: [{ type: 'text', text: `Echo: ${message}` }],",
+      '}));',
+      "server.registerTool('wait', { description: 'Wait for cancellation.' }, async () => new Promise(() => {}));",
+      "server.registerResource('fixture', 'ui://fixture/resource.txt', { mimeType: 'text/plain' }, async (uri) => ({",
+      "  contents: [{ mimeType: 'text/plain', text: 'fixture resource', uri: uri.href }],",
+      '}));',
+      "server.registerPrompt('fixture', { description: 'Fixture prompt.' }, async () => ({",
+      "  messages: [{ role: 'user', content: { type: 'text', text: 'fixture prompt' } }],",
+      '}));',
+      'await server.connect(new StdioServerTransport());',
+      '',
+    ].join('\n')),
+    writeFile(join(root, 'agent-bundle.config.ts'), [
+      "import { defineConfig } from 'agent-bundle';",
+      '',
+      'export default defineConfig({',
+      "  mcp: { servers: { fixture: { entry: './src/server.ts' } } },",
+      "  plugin: { name: 'workbench-mcp-fixture', version: '1.0.0' },",
+      "  skills: ['skills/review'],",
+      "  targets: ['portable'],",
+      '});',
+      '',
+    ].join('\n')),
+  ]);
+};
+
+e2e('opens one real epoch MCP session and keeps its playground operations responsive', { timeout: 90_000 }, async ({ page }) => {
+  await buildWorkbench();
+  const project = await createProjectFixture();
+  await writeMcpPlaygroundProject(project.root);
+  const server = await startDevServer({
+    assets: createWorkbenchAssetSource({ root: workbenchAssets }),
+    open: false,
+    port: 0,
+    root: project.root,
+  });
+  const pageErrors: Error[] = [];
+  page.on('pageerror', (error) => pageErrors.push(error));
+  try {
+    await page.goto(`${server.url}#mcp`);
+    await expect(page.getByRole('heading', { name: 'MCP playground' })).toBeVisible({ timeout: browserTimeout });
+    await page.locator('#mcp-target').selectOption('portable');
+    await page.locator('#mcp-server-name').fill('fixture');
+    await page.getByRole('button', { name: 'Open MCP session' }).click();
+    await expect(page.locator('.mcp-page-phase')).toContainText('Session ready', { timeout: browserTimeout });
+    await expect(page.getByRole('heading', { name: 'Tools' })).toBeVisible({ timeout: browserTimeout });
+    await expect(page.getByRole('button', { name: 'echo', exact: true })).toBeVisible({ timeout: browserTimeout });
+    await expect(page.getByRole('heading', { name: 'Prompts' })).toBeVisible({ timeout: browserTimeout });
+    await expect(page.getByRole('heading', { name: 'Resources' })).toBeVisible({ timeout: browserTimeout });
+
+    await expect(page.getByRole('radio', { name: 'Form' })).toBeVisible({ timeout: browserTimeout });
+    await page.locator('#mcp-tool-arguments-message').fill('form');
+    await page.getByRole('button', { name: 'Call echo' }).click();
+    await expect(page.getByRole('region', { name: 'Invocation history' })).toContainText('Echo: form', { timeout: browserTimeout });
+    await page.getByRole('radio', { name: 'Raw JSON' }).check();
+    await page.locator('#mcp-tool-arguments-raw').fill('{"message":"raw"}');
+    await page.getByRole('button', { name: 'Call echo' }).click();
+    await expect(page.getByRole('region', { name: 'Invocation history' })).toContainText('Echo: raw', { timeout: browserTimeout });
+    await page.getByRole('button', { name: /Replay mcp-page-1/u }).click();
+    await expect(page.getByRole('region', { name: 'Invocation history' })).toContainText('Replay of mcp-page-1', { timeout: browserTimeout });
+    await expect(page.getByRole('tabpanel')).toContainText('callTool', { timeout: browserTimeout });
+
+    const download = page.waitForEvent('download');
+    await page.getByRole('button', { name: 'Download Inspector config' }).click();
+    expect((await download).suggestedFilename()).toMatch(/^mcp-.+-inspector\.json$/u);
+
+    await page.getByRole('button', { name: 'wait', exact: true }).click();
+    await page.getByRole('button', { name: 'Call wait' }).click();
+    const cancel = page.getByRole('button', { name: /Cancel mcp-page-/u });
+    await expect(cancel).toBeVisible({ timeout: browserTimeout });
+    await cancel.click();
+    await expect(cancel).toBeHidden({ timeout: browserTimeout });
+
+    await page.getByRole('button', { name: 'Close MCP session' }).click();
+    await expect(page.locator('.mcp-page-phase')).toContainText('Session closed', { timeout: browserTimeout });
+    await expect(page.getByRole('button', { name: 'Reset MCP session' })).toBeVisible({ timeout: browserTimeout });
+    await page.setViewportSize({ height: 844, width: 390 });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    expect(pageErrors).toEqual([]);
+  } finally {
+    await server.close();
+    await removeProjectFixture(project.root);
+  }
+});
 
 e2e('renders and rebuilds the complete responsive Overview against a real foreground server', { timeout: 60_000 }, async ({ page }) => {
   await buildWorkbench();
