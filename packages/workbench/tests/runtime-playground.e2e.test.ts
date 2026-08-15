@@ -21,6 +21,22 @@ e2e('renders the capability-gated Runtime sibling in the real RSC workbench', { 
     if (requestUrl.origin === fixture.url && requestUrl.pathname === '/api/project/session') foregroundSessionRequests.push(request.url());
   });
   try {
+    await page.route('**/api/runtime/surfaces', async (route) => {
+      const response = await route.fetch();
+      const body = await response.json() as Readonly<{ readonly surfaces: readonly Readonly<Record<string, unknown>>[] }>;
+      await route.fulfill({
+        body: JSON.stringify({
+          surfaces: body.surfaces.map((surface) => ({
+            ...surface,
+            inputSchema: {
+              properties: { city: { title: 'City', type: 'string' } },
+              type: 'object',
+            },
+          })),
+        }),
+        contentType: 'application/json',
+      });
+    });
     await page.goto(`${fixture.url}#overview`);
     await expect(page.getByRole('link', { name: 'MCP playground' })).toBeVisible({ timeout: browserTimeout });
     await expect(page.getByRole('link', { name: 'Inspector' })).toBeVisible({ timeout: browserTimeout });
@@ -84,8 +100,16 @@ e2e('renders the capability-gated Runtime sibling in the real RSC workbench', { 
     await page.getByRole('button', { name: 'Open MCP session' }).click();
     await expect(page.locator('.mcp-page-phase')).toContainText('Session ready', { timeout: browserTimeout });
     await expect(foregroundSessionRequests).toHaveLength(1);
+    await page.getByRole('button', { name: 'Close MCP session' }).click();
+    await expect(page.getByRole('button', { name: 'Reset MCP session' })).toBeVisible({ timeout: browserTimeout });
+    await page.goto(`${fixture.url}#runtime`);
+    await expect(page.getByRole('heading', { name: 'Runtime Playground' })).toBeVisible({ timeout: browserTimeout });
 
-    const input = page.locator('#runtime-input');
+    await expect(page.getByLabel('Schema form')).toBeChecked();
+    await page.getByLabel('City').fill('Paris');
+    await page.getByLabel('Raw JSON').check();
+    const input = page.locator('#runtime-input-raw');
+    await expect(input).toHaveValue(/"city": "Paris"/);
     await input.fill('{"broken":');
     await expect(page.getByText('Draft JSON is invalid. Repair the raw input before running.')).toBeVisible();
     await page.goto(`${fixture.url}#inspector`);
@@ -96,6 +120,7 @@ e2e('renders the capability-gated Runtime sibling in the real RSC workbench', { 
 
     await input.fill('{}');
     const run = page.getByRole('button', { name: 'Run', exact: true });
+    await expect(run).toBeEnabled({ timeout: browserTimeout });
     await run.focus();
     await page.keyboard.press('Enter');
     const confirmation = page.getByRole('dialog');

@@ -7,8 +7,9 @@ import type {
   DevRuntimeStateIdentity,
   DevRuntimeStateResetRequest,
 } from '../../agent-bundle/src/dev/runtime-protocol.ts';
-import type { ProjectEventMessage } from '../../agent-bundle/src/dev/types.ts';
+import type { JsonValue, ProjectEventMessage } from '../../agent-bundle/src/dev/types.ts';
 import { RuntimeClientError, type RuntimeBootstrap } from './runtime-client.ts';
+import { McpJsonInput, serializeJsonRecord, type ImmutableJsonRecord } from './mcp/mcp-json-input.tsx';
 import {
   createRuntimeModel,
   effectFor,
@@ -241,6 +242,13 @@ const selectedSurface = (model: RuntimeModel) => model.surfaces.find((entry) => 
 
 const selectedProfile = (model: RuntimeModel) => model.profiles.find((entry) => entry.id === model.selectedProfileId);
 
+const runtimeInputRecord = (value: unknown): ImmutableJsonRecord =>
+  value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value as ImmutableJsonRecord
+    : Object.freeze({});
+
+const runtimeJsonRecord = (value: ImmutableJsonRecord): JsonValue => value as unknown as JsonValue;
+
 type RuntimeDisplayIdentity = Readonly<{
   readonly hmrClientCount: number | 'Unknown';
   readonly stateIdentity: DevRuntimeStateIdentity | undefined;
@@ -299,6 +307,11 @@ export const RuntimePlayground = ({ controller }: RuntimePlaygroundProps): React
   const attributes = runtimeDataAttributesFor(model);
   const activeVector = model.status?.activeVector;
   const displayIdentity = runtimeDisplayIdentityFor(model);
+  const input = runtimeInputRecord(model.draft.input);
+
+  const replaceDraft = (next: ImmutableJsonRecord): void => {
+    controller.dispatch({ input: runtimeJsonRecord(next), raw: serializeJsonRecord(next), type: 'draft.replace' });
+  };
 
   useEffect(() => {
     setModel(controller.model);
@@ -358,10 +371,26 @@ export const RuntimePlayground = ({ controller }: RuntimePlaygroundProps): React
       </select></label>
       <p className="runtime-profile-disclaimer">Profile simulation is evidence-only and does not claim real host parity.</p>
     </div>
-    <label className="runtime-input" htmlFor="runtime-input">Runtime input<textarea id="runtime-input" onChange={(event) => controller.dispatch({ raw: event.currentTarget.value, type: 'draft.raw' })} value={model.draft.raw} /></label>
-    {model.draft.error === undefined ? undefined : <p className="runtime-input-error" role="alert">{model.draft.error}</p>}
+    <div className="runtime-input">
+      <McpJsonInput
+        formLabel="Schema form"
+        id="runtime-input"
+        invalidJsonLabel="Draft JSON is invalid. Repair the raw input before running."
+        label="Runtime input"
+        onChange={replaceDraft}
+        onRawDraftChange={(raw) => controller.dispatch({ raw, type: 'draft.raw' })}
+        onSubmit={(next) => {
+          replaceDraft(next);
+          controller.dispatch({ type: 'run.request' });
+        }}
+        rawDraft={model.draft.raw}
+        schema={surface?.inputSchema}
+        submitLabel="Run"
+        submitRef={invokingRef}
+        value={input}
+      />
+    </div>
     <div className="runtime-actions">
-      <button disabled={model.draft.error !== undefined} onClick={controller.dispatch.bind(controller, { type: 'run.request' })} ref={invokingRef} type="button">Run</button>
       <button onClick={controller.dispatch.bind(controller, { type: 'reset.request' })} type="button">Reset fixture state</button>
     </div>
     {model.confirmation === undefined ? undefined : <div aria-describedby="runtime-confirmation-copy" aria-modal="true" className="runtime-confirmation" role="dialog">

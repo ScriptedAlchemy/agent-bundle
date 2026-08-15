@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { type Ref, useState } from 'react';
 
 export type ImmutableJsonRecord = Readonly<Record<string, unknown>>;
 
@@ -37,6 +37,7 @@ export type McpJsonInputProps = Readonly<{
   rawLabel?: string;
   schema?: unknown;
   submitLabel?: string;
+  submitRef?: Ref<HTMLButtonElement>;
   submitShortcut?: string;
   value: Readonly<Record<string, unknown>>;
 }>;
@@ -319,6 +320,7 @@ export const McpJsonInput = ({
   rawLabel = 'Raw JSON',
   schema,
   submitLabel = 'Call tool',
+  submitRef,
   submitShortcut,
   value,
 }: McpJsonInputProps) => {
@@ -327,7 +329,8 @@ export const McpJsonInput = ({
   }
   const controlled = controlledRawDraft !== undefined;
   const formSchema = formSchemaFromJsonSchema(schema);
-  const [mode, setMode] = useState<'form' | 'raw'>(formSchema === null ? 'raw' : 'form');
+  const [mode, setMode] = useState<'form' | 'raw'>(() =>
+    formSchema === null || rawJsonDraftState(value, controlledRawDraft).error !== undefined ? 'raw' : 'form');
   const [rawState, setRawState] = useState(() => ({ source: value, ...rawJsonDraftState(value) }));
   const uncontrolledRawState = rawState.source === value ? rawState : { source: value, ...rawJsonDraftState(value) };
   if (!controlled && uncontrolledRawState !== rawState) setRawState(uncontrolledRawState);
@@ -381,7 +384,7 @@ export const McpJsonInput = ({
           </>
         ) : <FormEditor disabled={disabled} id={id} onChange={onChange} schema={formSchema} value={value} />}
       </div>
-      <button aria-keyshortcuts={submitShortcut} disabled={disabled || !rawSubmissionValid || !formSubmissionValid} onClick={() => submitJsonRecord(value, onSubmit, rawPanel ? rawDraft : undefined)} type="button">{submitLabel}</button>
+      <button aria-keyshortcuts={submitShortcut} disabled={disabled || !rawSubmissionValid || !formSubmissionValid} onClick={() => submitJsonRecord(value, onSubmit, rawPanel ? rawDraft : undefined)} ref={submitRef} type="button">{submitLabel}</button>
     </section>
   );
 };

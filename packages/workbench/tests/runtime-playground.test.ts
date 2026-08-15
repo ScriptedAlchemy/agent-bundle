@@ -47,6 +47,11 @@ const surface = Object.freeze({
   defaultTarget: 'portable',
   fixtures: Object.freeze([{ id: 'fixture-a', label: 'Fixture A', seed: Object.freeze({ city: 'London' }) }]),
   id: 'hook.claude',
+  inputSchema: Object.freeze({
+    properties: Object.freeze({ city: Object.freeze({ title: 'City', type: 'string' as const }) }),
+    required: Object.freeze(['city']),
+    type: 'object' as const,
+  }),
   kind: 'hook' as const,
   label: 'Claude hook',
   readOnly: true,
@@ -150,6 +155,9 @@ it('renders the available Runtime playground controls, identity, and optional ca
   expect(markup).toContain('Optional development capability');
   expect(markup).toContain('Runtime identity');
   expect(markup).toContain('Profile simulation is evidence-only');
+  expect(markup).toContain('Runtime input input mode');
+  expect(markup).toContain('City');
+  expect(markup).toContain('Raw JSON');
   expect(markup).toContain('Run history');
   expect(markup).toContain('data-runtime-provider-session="provider-a"');
   expect(markup).toContain('Loading runtime evidence…');
