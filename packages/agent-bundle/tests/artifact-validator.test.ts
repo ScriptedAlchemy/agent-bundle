@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { execFile } from 'node:child_process';
-import { chmodSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { access, chmod, mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -1097,6 +1097,26 @@ it('rejects a special entry added during validation without returning a snapshot
     const result = await validateArtifactWithSnapshot({ artifactRoot: root, registry });
 
     expect(result.diagnostics.filter((entry) => entry.code === 'AB6013' && entry.generatedPath === 'custom/late-link.json')).toHaveLength(1);
+    expect(result.snapshot).toBeUndefined();
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('rejects an empty directory added during validation without returning a snapshot', async () => {
+  const root = await writeArtifact([
+    { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'custom/document.json' },
+  ], true, [customManifestTarget]);
+  const emptyDirectory = join(root, 'custom', 'late-empty');
+  const registry = customRegistry(() => {
+    mkdirSync(emptyDirectory);
+    return [];
+  });
+
+  try {
+    const result = await validateArtifactWithSnapshot({ artifactRoot: root, registry });
+
+    expect(result.diagnostics.filter((entry) => entry.code === 'AB6014' && entry.generatedPath === 'custom/late-empty')).toHaveLength(1);
     expect(result.snapshot).toBeUndefined();
   } finally {
     await rm(root, { force: true, recursive: true });
