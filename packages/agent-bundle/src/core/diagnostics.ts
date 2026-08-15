@@ -10,6 +10,29 @@ export interface Diagnostic {
   recovery?: string;
 }
 
+const diagnosticIdentity = (diagnostic: Diagnostic): string => JSON.stringify([
+  diagnostic.code,
+  diagnostic.message,
+  diagnostic.severity,
+  diagnostic.sourcePath,
+  diagnostic.generatedPath,
+  diagnostic.target,
+  diagnostic.recovery,
+]);
+
+/** Keeps the first occurrence of each user-visible diagnostic identity. */
+export const deduplicateDiagnostics = (diagnostics: Iterable<Diagnostic>): Diagnostic[] => {
+  const identities = new Set<string>();
+  const unique: Diagnostic[] = [];
+  for (const diagnostic of diagnostics) {
+    const identity = diagnosticIdentity(diagnostic);
+    if (identities.has(identity)) continue;
+    identities.add(identity);
+    unique.push(diagnostic);
+  }
+  return unique;
+};
+
 const sourceRecovery = (code: string): string => {
   if (code.startsWith('AB30')) {
     return 'Restore valid Skill Markdown frontmatter and referenced resources, then inspect again.';

@@ -155,6 +155,31 @@ it('plans portable MCP server variants with tokens expanded only where portable 
   });
 });
 
+it('rejects a hostile normalized legacy MCP transport without emitting an MCP document', () => {
+  const model = {
+    ...plugin(),
+    mcpServers: [{
+      id: 'mcp:events',
+      name: 'events',
+      provenance: { kind: 'config' as const, sourcePath: '/workspace/agent-bundle.config.ts' },
+      targets: ['portable'],
+      transport: 'sse' as unknown as 'streamable-http',
+      url: 'https://mcp.example.test/events',
+    }],
+  } satisfies NormalizedPlugin;
+  const adapter = createDefaultRegistry().get('portable');
+  const plan = adapter.plan(model);
+
+  expect(adapter.validateModel(model)).toEqual([{
+    code: 'AB4339',
+    message: 'MCP server "events" uses unsupported transport "sse".',
+    severity: 'error',
+    sourcePath: '/workspace/agent-bundle.config.ts',
+  }]);
+  expect(plan.diagnostics).toEqual(adapter.validateModel(model));
+  expect(plan.entries.some((entry) => entry.relativePath === 'mcp.json')).toBe(false);
+});
+
 it('preserves a valid MCP server named __proto__', () => {
   const plan = createDefaultRegistry().get('portable').plan({
     ...plugin(),

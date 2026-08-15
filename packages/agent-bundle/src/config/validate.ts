@@ -2,6 +2,7 @@ import { existsSync, realpathSync, statSync } from 'node:fs';
 import { basename, extname, isAbsolute, posix, relative, resolve, sep } from 'node:path';
 
 import type { Diagnostic } from '../core/diagnostics.ts';
+import { unsupportedMcpTransportDiagnostic } from '../core/mcp-transport.ts';
 import type {
   AgentBundleHookEntry,
   AgentBundleHookInput,
@@ -783,6 +784,8 @@ export const validateModel = (
   }
 
   for (const server of model.mcpServers) {
+    const transportDiagnostic = unsupportedMcpTransportDiagnostic(server);
+    if (transportDiagnostic !== undefined) diagnostics.push(transportDiagnostic);
     for (const target of server.targets) {
       if (!registry.has(target)) {
         diagnostics.push({

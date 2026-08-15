@@ -94,6 +94,8 @@ export interface TargetArtifactOutputLayout {
   readonly directory: string;
 }
 
+const noArtifactDocumentIssues: readonly TargetArtifactDocumentIssue[] = Object.freeze([]);
+
 /**
  * Target-owned compiler namespaces, separate from target-native schema documents.
  * Every field is an emitted-layout fact rather than a target-name convention.
@@ -122,32 +124,33 @@ export const validateJsonSchemaDocument = (
   })));
 };
 
-const legacySseMcpIssue = (document: unknown): TargetArtifactDocumentIssue | undefined => {
-  if (document === null || typeof document !== 'object' || Array.isArray(document)) return undefined;
+const escapeJsonPointerSegment = (value: string): string => value
+  .replaceAll('~', '~0')
+  .replaceAll('/', '~1');
+
+const legacySseMcpIssues = (document: unknown): readonly TargetArtifactDocumentIssue[] => {
+  if (document === null || typeof document !== 'object' || Array.isArray(document)) return noArtifactDocumentIssues;
   const servers = (document as { readonly mcpServers?: unknown }).mcpServers;
-  if (servers === null || typeof servers !== 'object' || Array.isArray(servers)) return undefined;
-  for (const [name, server] of Object.entries(servers)) {
-    if (
+  if (servers === null || typeof servers !== 'object' || Array.isArray(servers)) return noArtifactDocumentIssues;
+  return Object.freeze(Object.entries(servers)
+    .filter(([, server]) =>
       server !== null &&
       typeof server === 'object' &&
       !Array.isArray(server) &&
-      (server as { readonly type?: unknown }).type === 'sse'
-    ) {
-      return Object.freeze({
-        instancePath: `/mcpServers/${name}/type`,
-        message: 'legacy SSE MCP transport is not supported',
-      });
-    }
-  }
-  return undefined;
+      (server as { readonly type?: unknown }).type === 'sse')
+    .sort(([left], [right]) => left === right ? 0 : left < right ? -1 : 1)
+    .map(([name]) => Object.freeze({
+      instancePath: `/mcpServers/${escapeJsonPointerSegment(name)}/type`,
+      message: 'legacy SSE MCP transport is not supported',
+    })));
 };
 
 /** Adds Agent Bundle's modern-only MCP transport policy to a pinned schema validator. */
 export const validateModernMcpDocument = (
   validateSchema: TargetArtifactDocumentValidator,
 ): TargetArtifactDocumentValidator => (document) => {
-  const legacyIssue = legacySseMcpIssue(document);
-  if (legacyIssue !== undefined) return Object.freeze([legacyIssue]);
+  const legacyIssues = legacySseMcpIssues(document);
+  if (legacyIssues.length > 0) return legacyIssues;
   return validateSchema(document);
 };
 

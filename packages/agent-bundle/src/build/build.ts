@@ -5,7 +5,7 @@ import packageManifest from '../../package.json' with { type: 'json' };
 
 import type { TargetRegistry } from '../adapters/registry.ts';
 import type { TargetArtifactEntry } from '../adapters/types.ts';
-import { DiagnosticBag, DiagnosticError, type Diagnostic } from '../core/diagnostics.ts';
+import { deduplicateDiagnostics, DiagnosticBag, DiagnosticError, type Diagnostic } from '../core/diagnostics.ts';
 import type { ProjectContext } from '../core/project-context.ts';
 import type { NormalizedPlugin } from '../core/types.ts';
 import { assertInside } from '../core/paths.ts';
@@ -99,7 +99,7 @@ const planTargets = (options: BuildOptions): readonly PlannedTarget[] => {
       name: target.name,
     });
   }
-  new DiagnosticBag(diagnostics).throwIfErrors();
+  new DiagnosticBag(deduplicateDiagnostics(diagnostics)).throwIfErrors();
   return planned;
 };
 

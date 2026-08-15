@@ -638,6 +638,45 @@ it('rejects target validation errors before writing a passed manifest or replaci
   }
 });
 
+it('rejects a hostile normalized legacy MCP transport before emission and preserves the prior artifact', async () => {
+  const project = await createProject();
+  const registry = new TargetRegistry().register(
+    (await import('../src/adapters/portable.ts')).portableAdapter,
+    { default: true },
+  );
+
+  try {
+    await mkdir(project.outputRoot, { recursive: true });
+    await writeFile(join(project.outputRoot, 'previous.txt'), 'previous\n');
+    const model = {
+      ...modelFor(project),
+      mcpServers: [{
+        id: 'mcp:events',
+        name: 'events',
+        provenance: { kind: 'config' as const, sourcePath: join(project.root, 'agent-bundle.config.ts') },
+        targets: ['portable'],
+        transport: 'sse' as unknown as 'streamable-http',
+        url: 'https://mcp.example.test/events',
+      }],
+    } satisfies NormalizedPlugin;
+
+    await expect(build({
+      model,
+      outputRoot: project.outputRoot,
+      projectRoot: project.root,
+      registry,
+    })).rejects.toThrow(
+      'Agent Bundle compilation failed with 1 error:\n[AB4339] MCP server "events" uses unsupported transport "sse".',
+    );
+    await expect(readFile(join(project.outputRoot, 'previous.txt'), 'utf8')).resolves.toBe('previous\n');
+    await expect(readFile(join(project.outputRoot, 'agent-bundle.manifest.json'), 'utf8')).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+  } finally {
+    await cleanupProject(project);
+  }
+});
+
 it('rejects an authored bundled dependency outside the project and preserves the prior artifact', async () => {
   const project = await createProject();
   const outside = join(dirname(project.root), 'agent-bundle-provenance-outside.ts');
