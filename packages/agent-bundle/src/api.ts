@@ -33,7 +33,11 @@ import { DiagnosticError, type Diagnostic } from './core/diagnostics.ts';
 export type { Diagnostic, DiagnosticSeverity } from './core/diagnostics.ts';
 import type { ProjectContext } from './core/project-context.ts';
 import type { NormalizedPlugin } from './core/types.ts';
-import { ProjectService, type PreparedProject } from './dev/project-service.ts';
+import {
+  ProjectService,
+  projectDiagnostic,
+  type PreparedProject,
+} from './dev/project-service.ts';
 import {
   HookService,
   type HookListOptions,
@@ -302,8 +306,19 @@ export const inspect = async (options: InspectOptions): Promise<InspectResult> =
     return invalidInspection(prepared.diagnostics);
   }
   const { model, projectContext } = prepared;
-  const plans = Object.freeze(
-    model.targets
+  if (options.target !== undefined && !model.targets.some((candidate) => candidate.name === options.target)) {
+    return invalidInspection(freezeDiagnostics([
+      ...prepared.diagnostics,
+      projectDiagnostic(
+        'AB7004',
+        `Requested inspection target ${JSON.stringify(options.target)} is not selected for this project.`,
+        { sourcePath: prepared.configPath, target: options.target },
+      ),
+    ]));
+  }
+  let plans: readonly InspectionPlan[];
+  try {
+    plans = Object.freeze(model.targets
       .filter((candidate) => options.target === undefined || candidate.name === options.target)
       .map((target) => {
         const plan = prepared.registry.get(target.name).plan(model);
@@ -313,8 +328,17 @@ export const inspect = async (options: InspectOptions): Promise<InspectResult> =
           hookEntries: Object.freeze([...(plan.hookEntries ?? [])]),
           target: target.name,
         });
-      }),
-  );
+      }));
+  } catch {
+    return invalidInspection(freezeDiagnostics([
+      ...prepared.diagnostics,
+      projectDiagnostic(
+        'AB7001',
+        'Unable to prepare inspection plans.',
+        { sourcePath: prepared.configPath },
+      ),
+    ]));
+  }
   const selected = options.focus === undefined
     ? undefined
     : Object.freeze({

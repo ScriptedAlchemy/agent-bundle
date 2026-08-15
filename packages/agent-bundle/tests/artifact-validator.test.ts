@@ -12,7 +12,7 @@ import { createDefaultRegistry, TargetRegistry } from '../src/adapters/registry.
 import { readStandardNativeHookCommands, type TargetHookContract } from '../src/adapters/hook-contract.ts';
 import type { TargetAdapter, TargetArtifactDocumentValidator } from '../src/adapters/types.ts';
 import { assembleArtifactManifest, type ArtifactManifestV2 } from '../src/build/manifest.ts';
-import { validateArtifact } from '../src/build/validate-artifact.ts';
+import { artifactDiagnosticRecoveries, validateArtifact } from '../src/build/validate-artifact.ts';
 import { digest } from '../src/core/digest.ts';
 import { agentSkillsSchemaRevision } from '../src/schemas/agent-skills/contract.ts';
 import { createMcpPathTokenResolver } from '../src/services/mcp-path-tokens.ts';
@@ -448,7 +448,12 @@ it.each([
   try {
     const diagnostics = await validateArtifact({ artifactRoot: root, registry: customRegistry() });
     expect(diagnostics).toEqual(expect.arrayContaining([
-      expect.objectContaining({ code: 'AB6016', generatedPath: 'custom/skills/artifact-skill/SKILL.md', target: customTarget }),
+      expect.objectContaining({
+        code: 'AB6016',
+        generatedPath: 'custom/skills/artifact-skill/SKILL.md',
+        recovery: artifactDiagnosticRecoveries.AB6016,
+        target: customTarget,
+      }),
     ]));
     expect(diagnostics).not.toEqual(expect.arrayContaining([
       expect.objectContaining({ code: 'AB6004' }),
@@ -472,7 +477,12 @@ it('validates emitted Skill frontmatter against the pinned contract and director
   try {
     const diagnostics = await validateArtifact({ artifactRoot: root, registry: customRegistry() });
     expect(diagnostics).toEqual(expect.arrayContaining([
-      expect.objectContaining({ code: 'AB6015', generatedPath: 'custom/skills/artifact-skill/SKILL.md', target: customTarget }),
+      expect.objectContaining({
+        code: 'AB6015',
+        generatedPath: 'custom/skills/artifact-skill/SKILL.md',
+        recovery: artifactDiagnosticRecoveries.AB6015,
+        target: customTarget,
+      }),
     ]));
     expect(diagnostics).not.toEqual(expect.arrayContaining([
       expect.objectContaining({ code: 'AB6004' }),
@@ -1305,12 +1315,22 @@ it.each(malformedValidatorCases)('reports $0 through the stable schema diagnosti
   }
 });
 
-it('attaches actionable recovery to every artifact validation diagnostic', async () => {
+it('documents recovery for every stable artifact diagnostic code', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-artifact-recovery-'));
   try {
     const diagnostics = await validateArtifact({ artifactRoot: root });
 
-    expect(diagnostics).toEqual([expect.objectContaining({ code: 'AB6000' })]);
+    expect(Object.keys(artifactDiagnosticRecoveries).sort()).toEqual([
+      'AB6000', 'AB6001', 'AB6002', 'AB6003', 'AB6004', 'AB6005', 'AB6006',
+      'AB6007', 'AB6008', 'AB6009', 'AB6010', 'AB6011', 'AB6012', 'AB6013',
+      'AB6014', 'AB6015', 'AB6016', 'AB6017', 'AB6018',
+    ]);
+    expect(Object.values(artifactDiagnosticRecoveries).every((recovery) => recovery.trim().length > 0)).toBe(true);
+    expect(artifactDiagnosticRecoveries.AB6015).not.toBe(artifactDiagnosticRecoveries.AB6016);
+    expect(diagnostics).toEqual([expect.objectContaining({
+      code: 'AB6000',
+      recovery: artifactDiagnosticRecoveries.AB6000,
+    })]);
     expect(diagnostics.every((diagnostic) =>
       diagnostic.recovery !== undefined && diagnostic.recovery.trim().length > 0,
     )).toBe(true);

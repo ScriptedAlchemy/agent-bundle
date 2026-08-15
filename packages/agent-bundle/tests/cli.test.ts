@@ -372,6 +372,40 @@ it('prints a complete invalid inspection on JSON and human output', async () => 
   }
 }, 30_000);
 
+it('reports an unselected inspect target on JSON and human output', async () => {
+  const project = await createCliProject();
+  try {
+    const ready = await runSourceCliWithOutput([
+      'inspect', '--root', project.root, '--target', 'portable', '--json',
+    ]);
+    expect(ready).toMatchObject({ code: 0, stderr: '' });
+    expect(JSON.parse(ready.stdout)).toMatchObject({
+      plans: [expect.objectContaining({ target: 'portable' })],
+      state: 'ready',
+    });
+
+    const json = await runSourceCliWithOutput([
+      'inspect', '--root', project.root, '--target', 'portabl', '--json',
+    ]);
+    expect(json).toMatchObject({ code: 1, stderr: '' });
+    expect(JSON.parse(json.stdout)).toMatchObject({
+      diagnostics: [expect.objectContaining({ code: 'AB7004', recovery: expect.any(String), target: 'portabl' })],
+      plans: [],
+      state: 'invalid',
+    });
+
+    const human = await runSourceCliWithOutput([
+      'inspect', '--root', project.root, '--target', 'portabl',
+    ]);
+    expect(human).toMatchObject({ code: 1, stderr: '' });
+    expect(human.stdout).toContain('AB7004');
+    expect(human.stdout).toContain('portabl');
+    expect(human.stdout).toContain('Recovery:');
+  } finally {
+    await rm(resolve(project.root, '..'), { force: true, recursive: true });
+  }
+}, 30_000);
+
 it('reports source validation diagnostics on stderr before staging an artifact', async () => {
   const project = await createCliProject();
   const output = join(project.root, 'must remain untouched');
