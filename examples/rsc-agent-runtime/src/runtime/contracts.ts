@@ -1,5 +1,8 @@
 import type { ZodType } from 'zod';
-import type { DevRuntimeMcpServerDescriptor } from '../../../../packages/agent-bundle/src/dev/runtime-protocol.ts';
+import type {
+  DevRuntimeInspectionEnvelope,
+  DevRuntimeMcpServerDescriptor,
+} from '../../../../packages/agent-bundle/src/dev/runtime-protocol.ts';
 import type { JsonObject } from '../../../../packages/agent-bundle/src/dev/types.ts';
 
 export interface EditEvent {
@@ -47,6 +50,37 @@ export interface McpRuntimeStatusRequest {
 }
 
 export type RenderRequest = HookRenderRequest | McpRenderTimelineRequest | McpRuntimeStatusRequest;
+
+export interface DevRuntimeHookInspectionRequest {
+  readonly host: 'claude' | 'codex';
+  readonly input: Readonly<Record<string, unknown>>;
+  readonly stateFile: string;
+  readonly stateStoreId: string;
+  readonly type: 'hook/after-file-edit';
+}
+
+export interface DevRuntimeMcpTimelineInspectionRequest {
+  readonly snapshot: RuntimeSnapshot;
+  readonly stateFile: string;
+  readonly stateStoreId: string;
+  readonly type: 'mcp/render-timeline';
+}
+
+export interface DevRuntimeMcpStatusInspectionRequest {
+  readonly stateFile: string;
+  readonly stateStoreId: string;
+  readonly type: 'mcp/runtime-status';
+}
+
+export type DevRuntimeInspectionRequest =
+  | DevRuntimeHookInspectionRequest
+  | DevRuntimeMcpTimelineInspectionRequest
+  | DevRuntimeMcpStatusInspectionRequest;
+
+export interface DevRuntimeInspectionResponse {
+  readonly flightBase64: string;
+  readonly inspection: DevRuntimeInspectionEnvelope;
+}
 
 export type McpTimeline = RuntimeSnapshot;
 
