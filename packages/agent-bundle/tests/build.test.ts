@@ -2,9 +2,10 @@ import { createHash } from 'node:crypto';
 import { chmod, mkdtemp, mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { expect, it } from '@rstest/core';
 import { spawn } from 'node:child_process';
+import { createJiti } from 'jiti';
 
 import { build as buildArtifact, type BuildOptions as LowLevelBuildOptions, type BuildResult } from '../src/build/build.ts';
 import { publishArtifact } from '../src/build/emit.ts';
@@ -158,6 +159,19 @@ const build = async (
   ...options,
   projectContext: await projectContextFor(options.projectRoot, options.outputRoot, options.model),
 });
+
+const buildFromSource = async (
+  options: Omit<LowLevelBuildOptions, 'projectContext'>,
+): Promise<BuildResult> => {
+  const jiti = createJiti(import.meta.url, { interopDefault: false, moduleCache: false });
+  const module = await jiti.import<typeof import('../src/build/build.ts')>(
+    fileURLToPath(new URL('../src/build/build.ts', import.meta.url)),
+  );
+  return module.build({
+    ...options,
+    projectContext: await projectContextFor(options.projectRoot, options.outputRoot, options.model),
+  });
+};
 
 const modelFor = (project: TestProject): NormalizedPlugin => ({
   extensions: {},
@@ -358,6 +372,33 @@ it('low-level build writes and returns the exact canonical v2 manifest for a con
         ]),
       }));
     }
+  } finally {
+    await cleanupProject(project);
+  }
+});
+
+it('uses the package version in a manifest produced by the raw source build module', async () => {
+  const project = await createProject();
+  const model = modelFor(project);
+  const packageManifest = JSON.parse(
+    await readFile(new URL('../package.json', import.meta.url), 'utf8'),
+  ) as { readonly version: string };
+
+  try {
+    const result = await buildFromSource({
+      model,
+      outputRoot: project.outputRoot,
+      projectRoot: project.root,
+      registry: new TargetRegistry().register(
+        (await import('../src/adapters/portable.ts')).portableAdapter,
+        { default: true },
+      ),
+    });
+
+    expect(result.manifest.producer).toEqual({ name: 'agent-bundle', version: packageManifest.version });
+    await expect(readFile(join(project.outputRoot, 'agent-bundle.manifest.json'), 'utf8')).resolves.toContain(
+      `"version":"${packageManifest.version}"`,
+    );
   } finally {
     await cleanupProject(project);
   }

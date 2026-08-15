@@ -1,6 +1,8 @@
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { basename, dirname, join, relative, resolve } from 'node:path';
 
+import packageManifest from '../../package.json' with { type: 'json' };
+
 import type { TargetRegistry } from '../adapters/registry.ts';
 import type { TargetArtifactEntry } from '../adapters/types.ts';
 import { DiagnosticBag, DiagnosticError, type Diagnostic } from '../core/diagnostics.ts';
@@ -38,8 +40,6 @@ import {
   type ArtifactOutputProvenance,
 } from './provenance.ts';
 import { validateArtifact, validateArtifactFiles } from './validate-artifact.ts';
-
-declare const __AGENT_BUNDLE_VERSION__: string;
 
 export interface BuildResult {
   readonly compiledEntries: readonly CompiledEntry[];
@@ -219,7 +219,7 @@ const manifestFor = (options: {
   return {
     agentSkills: agentSkillsSchemaRevision,
     files: options.files,
-    producer: { name: 'agent-bundle', version: __AGENT_BUNDLE_VERSION__ },
+    producer: { name: 'agent-bundle', version: packageManifest.version },
     project: options.projectContext,
     targets,
     validation: {

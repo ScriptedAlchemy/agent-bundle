@@ -47,6 +47,31 @@ const readPackageManifest = async (): Promise<PackageManifest> =>
     await readFile(join(packageRoot, 'package.json'), 'utf8'),
   ) as PackageManifest;
 
+const createBuildProject = async (root: string): Promise<{ readonly output: string; readonly project: string }> => {
+  const project = join(root, 'manifest-version-project');
+  const output = join(project, 'manifest-version-artifact');
+  await mkdir(join(project, 'skills', 'review'), { recursive: true });
+  await Promise.all([
+    writeFile(join(project, 'package.json'), '{"type":"module"}\n'),
+    writeFile(
+      join(project, 'agent-bundle.config.ts'),
+      "export default { plugin: { name: 'manifest-version-fixture', version: '1.0.0' }, targets: ['portable'] };\n",
+    ),
+    writeFile(
+      join(project, 'skills', 'review', 'SKILL.md'),
+      '---\nname: review\ndescription: Reviews changes\n---\n# Review\n',
+    ),
+  ]);
+  return { output, project };
+};
+
+const producerFrom = async (output: string): Promise<{ readonly name: string; readonly version: string }> => {
+  const manifest = JSON.parse(
+    await readFile(join(output, 'agent-bundle.manifest.json'), 'utf8'),
+  ) as { readonly producer: { readonly name: string; readonly version: string } };
+  return manifest.producer;
+};
+
 it('keeps package output filenames stable', async () => {
   const config = (await import('../../../rslib.config.ts')).default;
   expect(config).toMatchObject({ output: { filenameHash: false } });
@@ -153,6 +178,57 @@ it('publishes directly executable built entrypoints with declarations', async ()
   const { stdout } = await execFile(binPath, ['--version']);
   expect(stdout).toBe(`${manifest.version}\n`);
 });
+
+it('writes the package version as the producer of a built CLI manifest', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-built-manifest-'));
+  const manifest = await readPackageManifest();
+  try {
+    const project = await createBuildProject(root);
+    const binPath = join(packageRoot, manifest.bin['agent-bundle']);
+    await execFile(binPath, ['build', '--root', project.project, '--output', project.output], { cwd: project.project });
+
+    await expect(producerFrom(project.output)).resolves.toEqual({
+      name: 'agent-bundle',
+      version: manifest.version,
+    });
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('writes the package version as the producer of a packed CLI manifest', async () => {
+  const consumerRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-packed-manifest-'));
+  const manifest = await readPackageManifest();
+  try {
+    const { stdout: packedOutput } = await execFile(
+      'npm', ['pack', '--json', '--pack-destination', consumerRoot], { cwd: packageRoot },
+    );
+    const [packed] = JSON.parse(packedOutput) as Array<{ filename: string }>;
+    await writeFile(join(consumerRoot, 'package.json'), '{"type":"module"}\n');
+    await execFile(
+      'npm', ['install', '--ignore-scripts', '--no-audit', '--no-fund', join(consumerRoot, packed.filename)],
+      { cwd: consumerRoot },
+    );
+
+    const project = await createBuildProject(consumerRoot);
+    const packedCli = join(
+      consumerRoot,
+      'node_modules',
+      'agent-bundle',
+      manifest.bin['agent-bundle'],
+    );
+    await execFile(process.execPath, [packedCli, 'build', '--root', project.project, '--output', project.output], {
+      cwd: consumerRoot,
+    });
+
+    await expect(producerFrom(project.output)).resolves.toEqual({
+      name: 'agent-bundle',
+      version: manifest.version,
+    });
+  } finally {
+    await rm(consumerRoot, { force: true, recursive: true });
+  }
+}, 30_000);
 
 it('imports the externalized config entry from a packed npm consumer', async () => {
   const consumerRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-consumer-'));
