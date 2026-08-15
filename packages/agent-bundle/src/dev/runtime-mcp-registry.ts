@@ -897,7 +897,11 @@ export class RuntimeMcpRegistry implements DevRuntimeMcpRegistry {
     if (oldConnection !== undefined) await this.#closeOrRetain(oldConnection);
     const nextAbort = new AbortController();
     record.abort = nextAbort;
-    const connected = await this.#connectAndRelist(record.descriptor, record.id, nextAbort.signal);
+    const connected = await this.#connectAndRelist(
+      record.descriptor,
+      record.id,
+      combineSignals([this.#closeAbort.signal, nextAbort.signal]),
+    );
     record.connection = connected.connection;
     record.connectionState = connected.state;
     record.state = 'ready';

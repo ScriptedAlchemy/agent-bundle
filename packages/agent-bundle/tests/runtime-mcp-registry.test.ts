@@ -951,6 +951,61 @@ it('waits public closeSession and owned session close before closing their late 
   await run('owned-close');
 });
 
+it('synchronously aborts deferred public reconcile and restart replacement setup before joining them on close', async () => {
+  const run = async (kind: 'reconcile' | 'restart'): Promise<void> => {
+    const fixture = await createGenerationStore();
+    const old = new TestConnection();
+    const enteredSetup = deferred<void>();
+    const cleanupAbort = new AbortController();
+    let connects = 0;
+    let setupAborted = false;
+    const registry = createRegistry({
+      connector: Object.freeze({
+        connect: async (input: Parameters<RuntimeMcpConnector['connect']>[0]) => {
+          const { signal } = input;
+          connects += 1;
+          if (connects === 1) return old;
+          enteredSetup.resolve();
+          return new Promise<RuntimeMcpConnection>((_resolve, reject) => {
+            const rejectForAbort = (): void => { reject(signal.reason ?? new Error('setup aborted')); };
+            signal.addEventListener('abort', () => {
+              setupAborted = true;
+              rejectForAbort();
+            }, { once: true });
+            cleanupAbort.signal.addEventListener('abort', rejectForAbort, { once: true });
+          });
+        },
+      }),
+      store: fixture.store,
+    });
+    try {
+      await fixture.commit('g1');
+      const session = await registry.open({ serverName: 'timeline', target: 'portable' });
+      const changing = kind === 'reconcile'
+        ? registry.reconcile(registryInput({ definitionDigest: 'definition-2' }))
+        : registry.restart({
+          expectedSessionRevision: session.snapshot().binding.sessionRevision,
+          sessionId: session.snapshot().binding.sessionId,
+      });
+      await enteredSetup.promise;
+      const closing = registry.close();
+      const abortedSynchronously = setupAborted;
+      if (!abortedSynchronously) cleanupAbort.abort(new Error('test cleanup after missed close abort'));
+      if (kind === 'reconcile') await expect(changing).rejects.toThrow('closed');
+      else await expect(changing).resolves.toMatchObject({ action: 'restart-failed' });
+      await expect(closing).resolves.toBeUndefined();
+      expect(abortedSynchronously).toBe(true);
+    } finally {
+      cleanupAbort.abort(new Error('test cleanup'));
+      await registry.close().catch(() => undefined);
+      await fixture.close();
+    }
+  };
+
+  await run('reconcile');
+  await run('restart');
+});
+
 it('prepares private activation without public visibility, commits synchronously with buffered publish, and aborts without changes', async () => {
   const fixture = await createGenerationStore();
   const connector = connectorHarness({ deferAfter: 2 });
