@@ -46,8 +46,11 @@ const outputCard = (label: string, value: unknown, className: string): React.Rea
   {value === undefined ? <p>No {label.toLowerCase()} was returned for this run.</p> : <pre><code>{display(value)}</code></pre>}
 </section>;
 
-const sameGeneration = (left: DevRuntimeRun, right: DevRuntimeRun): boolean =>
-  left.vector.providerSessionId === right.vector.providerSessionId && left.vector.runtimeGenerationId === right.vector.runtimeGenerationId;
+const sameRuntimeIdentity = (left: DevRuntimeRun['vector'], right: DevRuntimeRun['vector']): boolean =>
+  left.providerSessionId === right.providerSessionId &&
+  left.runtimeGenerationId === right.runtimeGenerationId &&
+  left.stateStoreId === right.stateStoreId &&
+  left.stateVersion === right.stateVersion;
 
 const renderedApp = (
   run: DevRuntimeRun | undefined,
@@ -67,18 +70,23 @@ const renderedApp = (
 };
 
 export const RuntimeStage = ({ lastGoodRun, profile, profileId, renderAppPreview, run, status, surface }: RuntimeStageProps): React.ReactNode => {
-  const result = run?.status === 'succeeded' ? run.result : undefined;
-  const app = renderedApp(run, surface, profile, profileId, renderAppPreview);
-  const activeGeneration = status?.activeVector?.runtimeGenerationId;
-  const current = run !== undefined && activeGeneration !== undefined && run.vector.runtimeGenerationId === activeGeneration;
+  const retainedLastGood = run?.status === 'failed' ? lastGoodRun : undefined;
+  const evidenceRun = run?.status === 'succeeded' ? run : retainedLastGood;
+  const result = evidenceRun?.status === 'succeeded' ? evidenceRun.result : undefined;
+  const app = renderedApp(evidenceRun, surface, profile, profileId, renderAppPreview);
+  const activeVector = status?.activeVector;
+  const current = run !== undefined && activeVector !== undefined && sameRuntimeIdentity(run.vector, activeVector);
   const lastGood = lastGoodRun ?? (run?.status === 'succeeded' ? run : undefined);
 
   return <section aria-label="Runtime output stage" className="runtime-stage">
     <header className={`runtime-stage-generation ${current ? 'runtime-stage-generation--current' : 'runtime-stage-generation--stale'}`}>
-      {run === undefined ? <p>No runtime output selected.</p> : current
-        ? <p>All outputs are from the current runtime generation ({run.vector.runtimeGenerationId}). No stale views.</p>
-        : <p>Selected output is from runtime generation {run.vector.runtimeGenerationId}; current generation is {activeGeneration ?? 'unavailable'}.</p>}
-      {lastGood === undefined ? undefined : <p>Last good: {lastGood.vector.runtimeGenerationId}{run !== undefined && !sameGeneration(run, lastGood) ? ' (shown separately)' : ''}</p>}
+      {run === undefined ? <p>No runtime output selected.</p> : retainedLastGood !== undefined
+        ? <p>Selected run failed in runtime generation {run.vector.runtimeGenerationId}. Retained last-good output is shown below.</p>
+        : current
+          ? <p>All outputs are from the current runtime generation ({run.vector.runtimeGenerationId}). No stale views.</p>
+          : <p>Selected output is from runtime generation {run.vector.runtimeGenerationId}; current generation is {activeVector?.runtimeGenerationId ?? 'unavailable'}.</p>}
+      {lastGood === undefined ? undefined : <p>Last good: {lastGood.vector.runtimeGenerationId}{run !== undefined && !sameRuntimeIdentity(run.vector, lastGood.vector) ? ' (shown separately)' : ''}</p>}
+      {retainedLastGood === undefined ? undefined : <p>Retained last-good output (stale evidence): {retainedLastGood.vector.runtimeGenerationId}.</p>}
     </header>
     {run?.status === 'failed' ? <section aria-label="Runtime output diagnostics" className="runtime-stage-diagnostics" role="alert">
       <h2>Runtime run failed</h2>
