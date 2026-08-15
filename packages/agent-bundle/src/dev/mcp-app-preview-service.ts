@@ -27,6 +27,7 @@ import {
 } from './mcp-app-host-profiles.ts';
 import {
   createMcpAppConsentAuthority,
+  createMcpAppConsentActionDigest,
   createMcpAppSandboxFrame,
   type McpAppConsentAuthority,
   type McpAppConsentChallenge,
@@ -91,6 +92,9 @@ interface PreviewEntry {
   readonly binding: McpAppBinding;
   readonly bridge: McpAppBridge;
   readonly consent: McpAppConsentAuthority;
+  readonly host: McpAppHostContextInput;
+  readonly previewProfile: McpAppPreviewProfile;
+  resource?: McpAppBridgeResourceResolution;
   preview?: McpAppPreview;
   readonly outbound: McpAppBridgeMessage[];
   pendingTeardown?: McpAppBridgeMessage;
@@ -171,6 +175,13 @@ const hostContextRecord = (host: McpAppPreviewHostContext, tool: McpAppBridgeJso
 const capabilitiesOf = (permissions: McpAppSandboxPermissions | undefined): readonly string[] =>
   Object.freeze(permissions === undefined ? [] : Object.keys(permissions));
 
+const documentPermissions = (grants: readonly { readonly capability: string }[]): McpAppSandboxPermissions => Object.freeze({
+  ...(grants.some((grant) => grant.capability === 'camera') ? { camera: Object.freeze({}) } : {}),
+  ...(grants.some((grant) => grant.capability === 'clipboard-write') ? { clipboardWrite: Object.freeze({}) } : {}),
+  ...(grants.some((grant) => grant.capability === 'geolocation') ? { geolocation: Object.freeze({}) } : {}),
+  ...(grants.some((grant) => grant.capability === 'microphone') ? { microphone: Object.freeze({}) } : {}),
+});
+
 const resourceForProfile = (binding: McpAppBinding, resource: McpAppBridgeResourceResolution):
   | { readonly available: false }
   | { readonly mimeType: string; readonly uri: string } => {
@@ -223,7 +234,20 @@ export class McpAppPreviewService {
 
   decideConsent(bindingId: string, challengeId: string, approved: boolean): McpAppConsentGrant | undefined {
     const entry = this.#entries.get(bindingId);
-    return entry === undefined || entry.closed ? undefined : entry.consent.grant(challengeId, approved);
+    const grant = entry === undefined || entry.closed ? undefined : entry.consent.grant(challengeId, approved);
+    if (grant?.scope === 'document' && entry?.resource?.kind === 'resource') {
+      const permissions = documentPermissions(entry.consent.documentGrants(entry.binding.id, entry.previewProfile));
+      const profile = resolveMcpAppHostProfile({
+        consentedCapabilities: capabilitiesOf(permissions), declaredCapabilities: capabilitiesOf(entry.resource.permissions),
+        host: entry.host, profile: entry.previewProfile, resource: resourceForProfile(entry.binding, entry.resource),
+      });
+      const frame = profile.kind === 'apps' ? createMcpAppSandboxFrame({
+        consent: Object.freeze({ permissions }), declaration: { csp: entry.resource.csp, permissions: entry.resource.permissions },
+        hostOrigin: this.#hostOrigin, proxy: this.#sandboxProxy,
+      }) : undefined;
+      entry.preview = Object.freeze({ binding: entry.binding, bridge: entry.bridge, ...(frame === undefined ? {} : { frame }), profile, resource: entry.resource });
+    }
+    return grant;
   }
 
   async create(options: CreateMcpAppPreviewOptions): Promise<McpAppPreview> {
@@ -289,6 +313,8 @@ export class McpAppPreviewService {
         binding,
         bridge,
         consent: consentAuthority,
+        host,
+        previewProfile: options.previewProfile,
         closing: false,
         closed: false,
         outbound,
@@ -318,6 +344,18 @@ export class McpAppPreviewService {
         })
         : undefined;
       const preview = Object.freeze({ binding, bridge, ...(frame === undefined ? {} : { frame }), profile, resource });
+      entry.resource = resource;
+      if (resource.kind === 'resource') {
+        for (const [capability, permission] of [
+          ['camera', resource.permissions?.camera], ['clipboard-write', resource.permissions?.clipboardWrite],
+          ['geolocation', resource.permissions?.geolocation], ['microphone', resource.permissions?.microphone],
+        ] as const) {
+          if (permission !== undefined) consentAuthority.challenge({
+            actionDigest: createMcpAppConsentActionDigest(capability, {}), bindingId: binding.id,
+            capability, details: {}, profile: options.previewProfile,
+          });
+        }
+      }
       this.#assertCreateAvailable(control);
       entry.preview = preview;
       return preview;

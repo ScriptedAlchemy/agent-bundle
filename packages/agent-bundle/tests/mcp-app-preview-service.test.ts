@@ -374,6 +374,18 @@ it('preserves input-result FIFO order across one bounded outbound slot', async (
   expect(preview.bridge.lifecycle).toBe('initialized');
 });
 
+it('creates document permission challenges server-side and remounts only after an approved exact decision', async () => {
+  const service = serviceFor(authorityFor());
+  const preview = await createPreview(service);
+  expect(preview.frame?.allow).toBe('');
+  const challenge = service.consentChallenges(binding.id)?.find((candidate) => candidate.request.capability === 'geolocation');
+  expect(challenge).toBeDefined();
+  expect(service.decideConsent(binding.id, 'forged-camera', true)).toBeUndefined();
+  expect(service.get(binding.id)?.frame?.allow).toBe('');
+  expect(service.decideConsent(binding.id, challenge?.id ?? '', true)).toMatchObject({ capability: 'geolocation', scope: 'document' });
+  expect(service.get(binding.id)?.frame?.allow).toBe('geolocation');
+});
+
 it('reuses outbound byte capacity after each drain', async () => {
   const service = serviceFor(authorityFor(), { maxOutboundBytes: 2_048 });
   await createPreview(service);

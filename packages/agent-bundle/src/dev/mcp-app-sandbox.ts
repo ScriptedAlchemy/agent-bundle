@@ -174,6 +174,7 @@ export interface McpAppConsentAuthority {
     readonly profile: string;
   }>): boolean;
   grant(challengeId: string, approved: boolean): McpAppConsentGrant | undefined;
+  documentGrants(bindingId: string, profile: string): readonly McpAppConsentGrant[];
   pending(): readonly McpAppConsentChallenge[];
 }
 
@@ -297,7 +298,7 @@ export const createMcpAppConsentActionDigest = (capability: McpAppConsentCapabil
 export const createMcpAppConsentAuthority = (options: Readonly<{ readonly now?: () => number }> = {}): McpAppConsentAuthority => {
   const now = options.now ?? Date.now;
   const challenges = new Map<string, Readonly<{ actionDigest: string; bindingId: string; capability: McpAppConsentCapability; details: McpAppJsonValue; expiresAt: number; profile: string }>>();
-  const grants = new Map<string, Readonly<{ actionDigest: string; bindingId: string; capability: McpAppConsentCapability; expiresAt: number; profile: string; scope: 'action' | 'document' }>>();
+  const grants = new Map<string, Readonly<{ actionDigest: string; bindingId: string; capability: McpAppConsentCapability; challengeId: string; expiresAt: number; profile: string; scope: 'action' | 'document' }>>();
   let nextId = 1;
   return Object.freeze({
     challenge(input: Readonly<{ actionDigest: string; bindingId: string; capability: McpAppConsentCapability; details: McpAppJsonValue; profile: string }>) {
@@ -320,10 +321,24 @@ export const createMcpAppConsentAuthority = (options: Readonly<{ readonly now?: 
       if (!approved || challenge === undefined || challenge.expiresAt < now()) return undefined;
       const authorizationId = `grant-${nextId++}`;
       grants.set(authorizationId, Object.freeze({
-        actionDigest: challenge.actionDigest, bindingId: challenge.bindingId, capability: challenge.capability,
+        actionDigest: challenge.actionDigest, bindingId: challenge.bindingId, capability: challenge.capability, challengeId,
         expiresAt: challenge.expiresAt, profile: challenge.profile, scope: consentScope(challenge.capability),
       }));
       return Object.freeze({ authorizationId, bindingId: challenge.bindingId, capability: challenge.capability, challengeId, scope: consentScope(challenge.capability) });
+    },
+    documentGrants(bindingId: string, profile: string) {
+      const instant = now();
+      const result: McpAppConsentGrant[] = [];
+      for (const [authorizationId, grant] of grants) {
+        if (grant.expiresAt < instant) {
+          grants.delete(authorizationId);
+          continue;
+        }
+        if (grant.scope === 'document' && grant.bindingId === bindingId && grant.profile === profile) {
+          result.push(Object.freeze({ authorizationId, bindingId, capability: grant.capability, challengeId: grant.challengeId, scope: 'document' }));
+        }
+      }
+      return Object.freeze(result);
     },
     pending() {
       const instant = now();
