@@ -12,6 +12,15 @@ import { chromium } from 'playwright';
 const workspaceRoot = join(import.meta.dirname, '..', '..', '..');
 const pageComponent = join(workspaceRoot, 'packages', 'workbench', 'src', 'mcp', 'mcp-page.tsx');
 
+type McpPageAppFixtureGlobal = typeof globalThis & {
+  readonly __mcpPageAppFixture: {
+    readonly stats: () => {
+      readonly creates: readonly { readonly request: { readonly previewProfile: string } }[];
+      readonly messages: readonly { readonly bindingId: string; readonly message: { readonly method?: string } }[];
+    };
+  };
+};
+
 const listen = async (server: Server): Promise<string> => {
   server.listen(0, '127.0.0.1');
   await once(server, 'listening');
@@ -200,10 +209,16 @@ describe('MCP App page browser integration', () => {
       ]));
 
       await page.selectOption('#mcp-app-profile', 'chatgpt');
-      await page.waitForFunction(() => (globalThis as typeof globalThis & { __mcpPageAppFixture: { stats(): { creates: readonly { readonly request: { readonly previewProfile: string } }[]; readonly messages: readonly { readonly bindingId: string; readonly message: { readonly method?: string } }[] } } }).__mcpPageAppFixture.stats().creates.some(({ request }) => request.previewProfile === 'chatgpt') && __mcpPageAppFixture.stats().messages.some(({ bindingId, message }) => bindingId === 'binding-2' && message.method === 'ui/notifications/initialized'));
+      await page.waitForFunction(() => {
+        const stats = (globalThis as McpPageAppFixtureGlobal).__mcpPageAppFixture.stats();
+        return stats.creates.some(({ request }) => request.previewProfile === 'chatgpt') && stats.messages.some(({ bindingId, message }) => bindingId === 'binding-2' && message.method === 'ui/notifications/initialized');
+      });
       expect(await page.getByLabel('MCP App preview', { exact: true }).textContent()).toContain('chatgpt');
       await page.selectOption('#mcp-app-profile', 'claude');
-      await page.waitForFunction(() => (globalThis as typeof globalThis & { __mcpPageAppFixture: { stats(): { creates: readonly { readonly request: { readonly previewProfile: string } }[]; readonly messages: readonly { readonly bindingId: string; readonly message: { readonly method?: string } }[] } } }).__mcpPageAppFixture.stats().creates.some(({ request }) => request.previewProfile === 'claude') && __mcpPageAppFixture.stats().messages.some(({ bindingId, message }) => bindingId === 'binding-3' && message.method === 'ui/notifications/initialized'));
+      await page.waitForFunction(() => {
+        const stats = (globalThis as McpPageAppFixtureGlobal).__mcpPageAppFixture.stats();
+        return stats.creates.some(({ request }) => request.previewProfile === 'claude') && stats.messages.some(({ bindingId, message }) => bindingId === 'binding-3' && message.method === 'ui/notifications/initialized');
+      });
       expect(await page.getByLabel('MCP App preview', { exact: true }).textContent()).toContain('claude');
 
       await page.getByRole('button', { name: 'Close App preview' }).click();
