@@ -41,10 +41,18 @@ const requireSha256 = (value: unknown, field: string): string => {
   return value;
 };
 
-const record = (value: unknown): Record<string, unknown> | undefined =>
-  value !== null && typeof value === 'object' && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : undefined;
+const record = (value: unknown): Record<string, unknown> | undefined => {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  try {
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) return undefined;
+    const descriptors = Object.getOwnPropertyDescriptors(value);
+    if (Object.values(descriptors).some((descriptor) => !('value' in descriptor))) return undefined;
+    return Object.fromEntries(Object.entries(descriptors).map(([name, descriptor]) => [name, descriptor.value]));
+  } catch {
+    return undefined;
+  }
+};
 
 const isArtifactDocumentValidator = (value: unknown): value is TargetArtifactDocumentValidator =>
   typeof value === 'function';
@@ -101,12 +109,13 @@ const snapshotArtifactValidation = (
   adapter: TargetAdapter,
   metadata: TargetAdapterMetadata,
 ): TargetArtifactValidationContract => {
-  const validation = adapter.artifactValidation;
-  if (validation === undefined) {
+  const declaredValidation = adapter.artifactValidation;
+  if (declaredValidation === undefined) {
     if (metadata.schemas.length === 0) return emptyArtifactValidation;
     throw new Error(`Target adapter "${adapter.name}" must declare artifact validation for every metadata schema.`);
   }
-  if (validation === null || typeof validation !== 'object' ||
+  const validation = record(declaredValidation);
+  if (validation === undefined ||
     !Array.isArray(validation.schemas) || !Array.isArray(validation.documents)) {
     throw new Error('Target adapter artifact validation must declare schema and document arrays.');
   }

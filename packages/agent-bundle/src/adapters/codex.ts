@@ -82,7 +82,7 @@ const metadata = Object.freeze({
 const artifactValidation = Object.freeze({
   documents: Object.freeze([
     Object.freeze({ path: 'hooks/hooks.json', required: false, schema: 'hooks' }),
-    Object.freeze({ path: '.codex-plugin/marketplace.json', required: false, schema: 'marketplace' }),
+    Object.freeze({ path: '.agents/plugins/marketplace.json', required: false, schema: 'marketplace' }),
     Object.freeze({ path: '.mcp.json', required: false, schema: 'mcp' }),
     Object.freeze({ path: '.codex-plugin/plugin.json', required: true, schema: 'plugin' }),
   ]),
