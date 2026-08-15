@@ -1,6 +1,14 @@
 import { expect, it } from '@rstest/core';
 
-import { resolveMcpAppHostProfile } from '../src/dev/mcp-app-host-profiles.ts';
+import { createDefaultRegistry } from '../src/adapters/registry.ts';
+import type { NormalizedPlugin } from '../src/core/types.ts';
+import {
+  inspectMcpAppConfigExtensions,
+  MCP_APP_PROFILE_DESCRIPTORS,
+  resolveMcpAppHostProfile,
+} from '../src/dev/mcp-app-host-profiles.ts';
+
+const projectRoot = '/workspace/weather';
 
 const standardContext = Object.freeze({
   availableDisplayModes: ['inline', 'fullscreen'] as const,
@@ -17,161 +25,169 @@ const standardContext = Object.freeze({
   userAgent: 'host-test/1.0',
 });
 
-it('creates an immutable portable standard context without selecting legacy OpenAI metadata', () => {
-  const resolution = resolveMcpAppHostProfile({
-    host: standardContext,
-    profile: 'portable',
-    resource: {
-      mimeType: 'text/html;profile=mcp-app',
-      uri: 'ui://weather/forecast.html',
-    },
-    toolMetadata: { 'openai/outputTemplate': 'ui://legacy/template.html' },
-  });
-
-  expect(resolution).toMatchObject({
-    hostContext: standardContext,
-    kind: 'apps',
-    permissions: {},
-    profile: 'portable',
-    resourceUri: 'ui://weather/forecast.html',
-  });
-  expect('extensions' in resolution).toBe(false);
-  expect(JSON.stringify(resolution)).not.toContain('openai/outputTemplate');
-  expect(Object.isFrozen(resolution)).toBe(true);
-  if (resolution.kind === 'apps') {
-    expect(Object.isFrozen(resolution.hostContext)).toBe(true);
-    expect(Object.isFrozen(resolution.hostContext.styles)).toBe(true);
-    expect(Object.isFrozen(resolution.hostContext.styles.variables)).toBe(true);
-  }
+const resource = Object.freeze({
+  mimeType: 'text/html;profile=mcp-app',
+  uri: 'ui://weather/forecast.html',
 });
 
-it('adds ChatGPT widget state only when the window.openai feature is supplied', () => {
-  const widgetState = { selectedDay: '2026-08-14' };
-  const resolution = resolveMcpAppHostProfile({
-    chatgpt: { windowOpenAi: { widgetState } },
+const apps = (value: ReturnType<typeof resolveMcpAppHostProfile>) => {
+  if (value.kind !== 'apps') throw new Error('expected an Apps host profile');
+  return value;
+};
+
+const profileShape = (value: ReturnType<typeof resolveMcpAppHostProfile>) => {
+  const resolved = apps(value);
+  return {
+    bootstrap: resolved.bootstrap,
+    descriptor: resolved.descriptor,
+    metadata: resolved.metadata,
+    permissions: resolved.permissions,
+    warnings: resolved.warnings,
+  };
+};
+
+const descriptors = createDefaultRegistry().configExtensions();
+
+const configuredExtensions = (keys: readonly ('claude' | 'codex')[]): NormalizedPlugin['extensions'] =>
+  Object.freeze(Object.fromEntries(keys.map((key) => [key, Object.freeze({
+    id: `extension:${key}`,
+    key,
+    provenance: Object.freeze({ kind: 'config' as const, sourcePath: `${projectRoot}/agent-bundle.config.ts` }),
+    target: key,
+    value: Object.freeze({ nativeHooks: 'do-not-leak', privatePath: '/private/adapter-owned-value' }),
+  })])));
+
+const config = (extensions: NormalizedPlugin['extensions']) => Object.freeze({
+  descriptors,
+  extensions,
+  projectRoot,
+  sourceRevision: 'project-r42',
+});
+
+it('publishes frozen, versioned simulated descriptors and a fixed profile matrix', () => {
+  const cases = [
+    ['portable', undefined, 'none', undefined],
+    ['chatgpt', undefined, 'chatgpt-widget-state-v1', undefined],
+    ['claude', { publicMcpUrl: 'https://mcp.weather.example/v1' }, 'none', '5b1bc18b3cdb31bee3b9a12490be07ec.claudemcpcontent.com'],
+  ] as const;
+
+  for (const [profile, claude, bootstrapKind, expectedDomain] of cases) {
+    const resolution = apps(resolveMcpAppHostProfile({ claude, host: standardContext, profile, resource }));
+    expect(resolution.descriptor).toBe(MCP_APP_PROFILE_DESCRIPTORS[profile]);
+    expect(resolution.descriptor.evidence).toBe('simulated');
+    expect(resolution.descriptor.claimsRealHostParity).toBe(false);
+    expect(resolution.descriptor.label.includes('Simulation')).toBe(profile !== 'portable');
+    expect(resolution.bootstrap.kind).toBe(bootstrapKind);
+    expect(resolution.metadata.claudeDomain?.expectedDomain).toBe(expectedDomain);
+  }
+
+  expect(Object.isFrozen(MCP_APP_PROFILE_DESCRIPTORS)).toBe(true);
+  expect(Object.isFrozen(MCP_APP_PROFILE_DESCRIPTORS.chatgpt)).toBe(true);
+});
+
+it('uses a fixed dormant ChatGPT bootstrap without creating vendor globals', () => {
+  const first = apps(resolveMcpAppHostProfile({ host: standardContext, profile: 'chatgpt', resource }));
+  const second = apps(resolveMcpAppHostProfile({
+    chatgpt: { windowOpenAi: { widgetState: { injected: true } } },
+    host: { ...standardContext, userAgent: 'unrelated-host-agent/99' },
+    profile: 'chatgpt',
+    resource,
+    toolMetadata: { 'openai/widgetDescription': 'raw metadata cannot activate the simulation' },
+  }));
+
+  expect(first.bootstrap).toEqual(second.bootstrap);
+  expect(first.bootstrap).toMatchObject({ kind: 'chatgpt-widget-state-v1', script: expect.any(String) });
+  expect(first.bootstrap.script).toContain('agent-bundle:mcp-app:chatgpt-widget-state-v1');
+  expect(first.bootstrap.script).not.toContain('window.claude');
+  expect(first.bootstrap.script).not.toContain('window.openai =');
+  expect(first.metadata.extensions.openai).toEqual({});
+  expect(second.metadata.extensions.openai).toEqual({ 'openai/widgetDescription': 'raw metadata cannot activate the simulation' });
+});
+
+it('keeps profile behavior independent of user agent and registered config presence', () => {
+  const withoutConfig = resolveMcpAppHostProfile({ host: standardContext, profile: 'chatgpt', resource });
+  const withCodexConfig = resolveMcpAppHostProfile({
+    configExtensions: config(configuredExtensions(['codex'])),
     host: { ...standardContext, userAgent: 'Claude Desktop compatibility test' },
     profile: 'chatgpt',
-    resource: { mimeType: 'text/html;profile=mcp-app', uri: 'ui://weather/forecast.html' },
+    resource,
   });
+  expect(profileShape(withCodexConfig)).toEqual(profileShape(withoutConfig));
 
-  widgetState.selectedDay = 'mutated-after-resolution';
-
-  expect(resolution.kind).toBe('apps');
-  if (resolution.kind === 'apps') {
-    expect(resolution.extensions).toEqual({ windowOpenAi: { widgetState: { selectedDay: '2026-08-14' } } });
-    expect(Object.isFrozen(resolution.extensions)).toBe(true);
-    expect(Object.isFrozen(resolution.extensions?.windowOpenAi)).toBe(true);
-    expect(JSON.stringify(resolution)).not.toContain('openai/widget');
-  }
-});
-
-it('computes the Claude Apps domain from an exact canonical public HTTPS MCP URL', () => {
-  const resolution = resolveMcpAppHostProfile({
-    claude: { publicMcpUrl: 'https://mcp.example.com/v1/mcp' },
+  const claude = { publicMcpUrl: 'https://mcp.weather.example/v1' };
+  const withoutClaudeConfig = resolveMcpAppHostProfile({ claude, host: standardContext, profile: 'claude', resource });
+  const withClaudeConfig = resolveMcpAppHostProfile({
+    claude,
+    configExtensions: config(configuredExtensions(['claude'])),
     host: standardContext,
     profile: 'claude',
-    resource: { mimeType: 'text/html;profile=mcp-app', uri: 'ui://weather/forecast.html' },
+    resource,
   });
-
-  expect(resolution.kind).toBe('apps');
-  if (resolution.kind === 'apps') {
-    expect(resolution.extensions?.claude?.domain).toBe('6881888a0d5873fdb447c2edb4faa4b7.claudemcpcontent.com');
-    expect(Object.isFrozen(resolution.extensions?.claude)).toBe(true);
-  }
+  const plain = apps(withoutClaudeConfig);
+  const configured = apps(withClaudeConfig);
+  expect(configured.hostContext).toEqual(plain.hostContext);
+  expect(configured.metadata).toEqual(plain.metadata);
+  expect(configured.permissions).toEqual(plain.permissions);
+  expect(configured.bootstrap).toEqual(plain.bootstrap);
 });
 
-it('returns an immutable structured fallback when the Apps resource is unavailable', () => {
-  const resolution = resolveMcpAppHostProfile({
-    host: standardContext,
-    profile: 'portable',
-    resource: { available: false },
-  });
-
-  expect(resolution).toMatchObject({
-    kind: 'fallback',
-    permissions: {},
-    reason: 'apps-resource-unavailable',
-    warnings: [],
-  });
-  expect(Object.isFrozen(resolution)).toBe(true);
-  expect(Object.isFrozen(resolution.permissions)).toBe(true);
-  expect(Object.isFrozen(resolution.warnings)).toBe(true);
-});
-
-it('returns a structured fallback when the Apps resource is not an MCP App HTML resource', () => {
-  const resolution = resolveMcpAppHostProfile({
-    host: standardContext,
-    profile: 'portable',
-    resource: { mimeType: 'text/html', uri: 'ui://weather/forecast.html' },
-  });
-
-  expect(resolution).toMatchObject({ kind: 'fallback', reason: 'apps-resource-invalid' });
-});
-
-it('grants only capabilities that are both declared and explicitly consented', () => {
-  const resolution = resolveMcpAppHostProfile({
-    consentedCapabilities: ['camera', 'microphone'],
-    declaredCapabilities: ['camera', 'geolocation'],
-    host: standardContext,
-    profile: 'portable',
-    resource: { mimeType: 'text/html;profile=mcp-app', uri: 'ui://weather/forecast.html' },
-  });
-
-  expect(resolution).toMatchObject({ kind: 'apps', permissions: { camera: {} } });
-  expect(Object.isFrozen(resolution.permissions)).toBe(true);
-  expect(Object.isFrozen(resolution.permissions.camera)).toBe(true);
-});
-
-it('rejects wildcard capability declarations with a conservative fallback warning', () => {
-  const resolution = resolveMcpAppHostProfile({
-    consentedCapabilities: ['camera'],
-    declaredCapabilities: ['*'],
-    host: standardContext,
-    profile: 'portable',
-    resource: { mimeType: 'text/html;profile=mcp-app', uri: 'ui://weather/forecast.html' },
-  });
-
-  expect(resolution).toMatchObject({
-    kind: 'fallback',
-    reason: 'unsafe-capability-declaration',
-    warnings: ['Wildcard MCP App capability declarations are rejected.'],
-  });
-});
-
-it('rejects wildcard capability patterns with the same conservative fallback', () => {
-  const resolution = resolveMcpAppHostProfile({
-    consentedCapabilities: ['camera'],
-    declaredCapabilities: ['camera:*'],
-    host: standardContext,
-    profile: 'portable',
-    resource: { mimeType: 'text/html;profile=mcp-app', uri: 'ui://weather/forecast.html' },
-  });
-
-  expect(resolution).toMatchObject({
-    kind: 'fallback',
-    reason: 'unsafe-capability-declaration',
-    warnings: ['Wildcard MCP App capability declarations are rejected.'],
-  });
-});
-
-it('keeps the Claude profile standard-only when no public MCP URL is supplied', () => {
-  const resolution = resolveMcpAppHostProfile({
+it('derives Claude domain from the canonical complete public MCP URL only inside metadata', () => {
+  const canonical = apps(resolveMcpAppHostProfile({
+    claude: { publicMcpUrl: 'https://mcp.weather.example:443/v1?forecast=today' },
     host: standardContext,
     profile: 'claude',
-    resource: { mimeType: 'text/html;profile=mcp-app', uri: 'ui://weather/forecast.html' },
-  });
+    resource: {
+      ...resource,
+      metadata: { ui: { domain: 'declared.weather.example' } },
+    },
+  }));
+  const sameCanonicalUrl = apps(resolveMcpAppHostProfile({
+    claude: { publicMcpUrl: 'https://mcp.weather.example/v1?forecast=today' },
+    host: standardContext,
+    profile: 'claude',
+    resource,
+  }));
+  const differentPath = apps(resolveMcpAppHostProfile({
+    claude: { publicMcpUrl: 'https://mcp.weather.example/v2?forecast=today' },
+    host: standardContext,
+    profile: 'claude',
+    resource,
+  }));
 
-  expect(resolution).toMatchObject({ kind: 'apps', profile: 'claude' });
-  if (resolution.kind === 'apps') expect(resolution.extensions).toBeUndefined();
+  expect(canonical.metadata.claudeDomain).toEqual({
+    declaredDomain: 'declared.weather.example',
+    expectedDomain: '16d6f2ce55158df412c9709030c3823c.claudemcpcontent.com',
+    provenance: 'sha256-canonical-full-mcp-url',
+  });
+  expect(canonical.warnings).toContain('Declared MCP App ui.domain does not match the derived Claude domain.');
+  expect(canonical.metadata.claudeDomain?.expectedDomain).toBe(sameCanonicalUrl.metadata.claudeDomain?.expectedDomain);
+  expect(canonical.metadata.claudeDomain?.expectedDomain).not.toBe(differentPath.metadata.claudeDomain?.expectedDomain);
+  expect(JSON.stringify(canonical.hostContext)).not.toContain('claudemcpcontent.com');
+  expect(JSON.stringify(canonical.hostContext)).not.toContain('declared.weather.example');
 });
 
-it('omits the Claude domain for noncanonical or nonpublic MCP URLs', () => {
+it('warns and omits the Claude overlay for malformed, private, local, credentialed, or fragment URLs', () => {
   for (const publicMcpUrl of [
-    'http://mcp.example.com/v1/mcp',
-    'https://localhost/v1/mcp',
-    'https://localhost./v1/mcp',
-    'https://foo.localhost./v1/mcp',
-    'https://127.0.0.1/v1/mcp',
+    'http://mcp.weather.example/v1',
+    'https://localhost/v1',
+    'https://127.0.0.1/v1',
+    'https://user:password@mcp.weather.example/v1',
+    'https://mcp.weather.example/v1#fragment',
+    'not a URL',
+  ]) {
+    const resolution = apps(resolveMcpAppHostProfile({
+      claude: { publicMcpUrl },
+      host: standardContext,
+      profile: 'claude',
+      resource,
+    }));
+    expect(resolution.metadata.claudeDomain).toBeUndefined();
+    expect(resolution.warnings).toContain('Claude simulation requires a canonical public HTTPS MCP URL.');
+  }
+});
+
+it('keeps special-purpose IP ranges out of the Claude public-URL overlay', () => {
+  for (const publicMcpUrl of [
     'https://100.64.0.1/v1/mcp',
     'https://169.254.1.1/v1/mcp',
     'https://192.0.2.1/v1/mcp',
@@ -184,68 +200,145 @@ it('omits the Claude domain for noncanonical or nonpublic MCP URLs', () => {
     'https://[2001:db8::1]/v1/mcp',
     'https://[100:0:0:1::1]/mcp',
     'https://[3fff::1]/mcp',
-    'https://mcp.example.com:443/v1/mcp',
   ]) {
-    const resolution = resolveMcpAppHostProfile({
-      claude: { publicMcpUrl },
-      host: standardContext,
-      profile: 'claude',
-      resource: { mimeType: 'text/html;profile=mcp-app', uri: 'ui://weather/forecast.html' },
-    });
-
-    expect(resolution.kind).toBe('apps');
-    if (resolution.kind === 'apps') expect(resolution.extensions).toBeUndefined();
+    const resolution = apps(resolveMcpAppHostProfile({
+      claude: { publicMcpUrl }, host: standardContext, profile: 'claude', resource,
+    }));
+    expect(resolution.metadata.claudeDomain).toBeUndefined();
   }
-});
 
-it('computes a Claude domain for a canonical public IPv6 MCP URL', () => {
-  const resolution = resolveMcpAppHostProfile({
+  const global = apps(resolveMcpAppHostProfile({
     claude: { publicMcpUrl: 'https://[2606:4700:4700::1111]/v1/mcp' },
     host: standardContext,
     profile: 'claude',
-    resource: { mimeType: 'text/html;profile=mcp-app', uri: 'ui://weather/forecast.html' },
-  });
-
-  expect(resolution).toMatchObject({
-    kind: 'apps',
-    profile: 'claude',
-  });
-  if (resolution.kind === 'apps') {
-    expect(resolution.extensions?.claude?.domain).toBe('c3470553c91881a4d8ff703680224ea5.claudemcpcontent.com');
-  }
+    resource,
+  }));
+  expect(global.metadata.claudeDomain?.expectedDomain).toBe('c3470553c91881a4d8ff703680224ea5.claudemcpcontent.com');
 });
 
-it('accepts the IPv6 address immediately outside the 3fff::/20 registry prefix', () => {
-  const resolution = resolveMcpAppHostProfile({
-    claude: { publicMcpUrl: 'https://[3fff:1000::1]/mcp' },
+it('retains raw vendor metadata for inspection without allowing it to validate an invalid resource', () => {
+  const valid = apps(resolveMcpAppHostProfile({
     host: standardContext,
-    profile: 'claude',
-    resource: { mimeType: 'text/html;profile=mcp-app', uri: 'ui://weather/forecast.html' },
+    profile: 'portable',
+    resource,
+    toolMetadata: {
+      'claude/preferredDomain': 'untrusted.example',
+      'openai/outputTemplate': 'ui://legacy/template.html',
+    },
+  }));
+  const invalid = resolveMcpAppHostProfile({
+    host: standardContext,
+    profile: 'portable',
+    resource: { mimeType: 'text/html', uri: 'ui://weather/forecast.html' },
+    toolMetadata: { 'openai/outputTemplate': 'ui://legacy/template.html' },
   });
 
-  expect(resolution).toMatchObject({ kind: 'apps', profile: 'claude' });
-  if (resolution.kind === 'apps') {
-    expect(resolution.extensions?.claude?.domain).toBe('bd16cd0c446692b4b10444e43896d08c.claudemcpcontent.com');
-  }
+  expect(valid.metadata.extensions).toEqual({
+    claude: { 'claude/preferredDomain': 'untrusted.example' },
+    openai: { 'openai/outputTemplate': 'ui://legacy/template.html' },
+  });
+  expect(invalid).toMatchObject({ kind: 'fallback', reason: 'apps-resource-invalid' });
 });
 
-it('does not retain caller-owned nested standard context data', () => {
+it('projects only sorted frozen registered config identities and redacts adapter-owned values', () => {
+  const inspection = inspectMcpAppConfigExtensions(config(configuredExtensions(['codex', 'claude'])));
+
+  expect(inspection).toEqual({
+    entries: [
+      { configured: true, id: 'extension:claude', key: 'claude', provenance: { kind: 'config', sourcePath: 'agent-bundle.config.ts' }, target: 'claude' },
+      { configured: true, id: 'extension:codex', key: 'codex', provenance: { kind: 'config', sourcePath: 'agent-bundle.config.ts' }, target: 'codex' },
+    ],
+    sourceRevision: 'project-r42',
+  });
+  expect(Object.isFrozen(inspection)).toBe(true);
+  expect(Object.isFrozen(inspection.entries)).toBe(true);
+  expect(Object.isFrozen(inspection.entries[0]!)).toBe(true);
+  expect(JSON.stringify(inspection)).not.toContain('nativeHooks');
+  expect(JSON.stringify(inspection)).not.toContain('private/adapter-owned-value');
+  expect(JSON.stringify(inspection)).not.toContain(projectRoot);
+});
+
+it('keeps empty configuration inert and rejects forged, unregistered, duplicate, or mismatched extension records', () => {
+  const empty = inspectMcpAppConfigExtensions(config(Object.freeze({})));
+  expect(empty.entries).toEqual([]);
+  expect(Object.isFrozen(empty.entries)).toBe(true);
+
+  const forged = Object.freeze({
+    openai: Object.freeze({
+      id: 'extension:openai', key: 'openai', provenance: Object.freeze({ kind: 'config' as const, sourcePath: `${projectRoot}/agent-bundle.config.ts` }), target: 'openai', value: { secret: true },
+    }),
+  }) as NormalizedPlugin['extensions'];
+  expect(() => inspectMcpAppConfigExtensions(config(forged))).toThrow('not registered');
+
+  const mismatched = Object.freeze({
+    claude: Object.freeze({
+      id: 'extension:wrong', key: 'claude', provenance: Object.freeze({ kind: 'config' as const, sourcePath: `${projectRoot}/agent-bundle.config.ts` }), target: 'claude', value: undefined,
+    }),
+  }) as NormalizedPlugin['extensions'];
+  expect(() => inspectMcpAppConfigExtensions(config(mismatched))).toThrow('does not match');
+
+  expect(() => inspectMcpAppConfigExtensions({
+    ...config(Object.freeze({})),
+    descriptors: Object.freeze([{ key: 'claude', target: 'claude' }, { key: 'claude', target: 'claude' }]),
+  })).toThrow('duplicate');
+});
+
+it('redacts out-of-root config provenance and preserves immutable host context snapshots', () => {
+  const inspection = inspectMcpAppConfigExtensions({
+    ...config(configuredExtensions(['claude'])),
+    extensions: Object.freeze({
+      claude: Object.freeze({
+        id: 'extension:claude', key: 'claude', provenance: Object.freeze({ kind: 'config' as const, sourcePath: '/outside/agent-bundle.config.ts' }), target: 'claude', value: undefined,
+      }),
+    }),
+  });
   const host = {
     ...standardContext,
     deviceCapabilities: { screen: { width: 520 }, touch: false },
     styles: { variables: { '--color': '#fff' } },
   };
-  const resolution = resolveMcpAppHostProfile({
-    host,
-    profile: 'portable',
-    resource: { mimeType: 'text/html;profile=mcp-app', uri: 'ui://weather/forecast.html' },
-  });
+  const resolution = apps(resolveMcpAppHostProfile({ host, profile: 'portable', resource }));
 
   host.deviceCapabilities.screen = { width: 1 };
   host.styles.variables['--color'] = '#000';
 
-  if (resolution.kind !== 'apps') throw new Error('expected an Apps host profile');
+  expect(inspection.entries[0]?.provenance.sourcePath).toBe('<external-config>');
   expect(resolution.hostContext.deviceCapabilities).toEqual({ screen: { width: 520 }, touch: false });
   expect(resolution.hostContext.styles).toEqual({ variables: { '--color': '#fff' } });
   expect(Object.isFrozen(resolution.hostContext.deviceCapabilities.screen)).toBe(true);
+});
+
+it('returns a structured frozen fallback and never grants wildcard capabilities', () => {
+  const unavailable = resolveMcpAppHostProfile({ host: standardContext, profile: 'portable', resource: { available: false } });
+  const unsafe = resolveMcpAppHostProfile({
+    consentedCapabilities: ['camera'],
+    declaredCapabilities: ['camera:*'],
+    host: standardContext,
+    profile: 'portable',
+    resource,
+  });
+
+  expect(unavailable).toMatchObject({ kind: 'fallback', permissions: {}, reason: 'apps-resource-unavailable' });
+  expect(unsafe).toMatchObject({
+    kind: 'fallback',
+    permissions: {},
+    reason: 'unsafe-capability-declaration',
+    warnings: ['Wildcard MCP App capability declarations are rejected.'],
+  });
+  expect(Object.isFrozen(unavailable)).toBe(true);
+  expect(Object.isFrozen(unavailable.configExtensions.entries)).toBe(true);
+});
+
+it('grants only capabilities that are both declared and explicitly consented', () => {
+  const resolution = apps(resolveMcpAppHostProfile({
+    consentedCapabilities: ['camera', 'microphone'],
+    declaredCapabilities: ['camera', 'geolocation'],
+    host: standardContext,
+    profile: 'portable',
+    resource,
+  }));
+
+  expect(resolution.permissions).toEqual({ camera: {} });
+  expect(Object.isFrozen(resolution.permissions)).toBe(true);
+  expect(Object.isFrozen(resolution.permissions.camera)).toBe(true);
 });
