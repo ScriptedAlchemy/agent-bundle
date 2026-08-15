@@ -912,3 +912,43 @@ it('does not retain or auto-run activation replay for same, foreign, conflicted,
   expect(effectFor(conflicted)).toMatchObject({ kind: 'bootstrap' });
   expect(conflicted.pendingActivationReplay).toBeUndefined();
 });
+
+it('retains activation replay through replay-gap recovery without duplicating it later', () => {
+  const generationB = 'generation-b';
+  const gap = { earliestAvailableSequence: 4, latestDroppedSequence: 3, requestedAfterSequence: 1, type: 'replay.gap' } as const;
+  const generationBBootstrap = bootstrap({
+    status: status({
+      activeVector: vector({ runtimeGenerationId: generationB }),
+      lastGoodVector: vector({ runtimeGenerationId: generationB }),
+    }),
+  });
+  const foreground = reduce(model(), { type: 'run.request' }, { type: 'confirmation.confirm' });
+  const activated = reduce(foreground, {
+    event: event(2, 'runtime.generation.activated', undefined, 'provider-a', generationB),
+    type: 'event.received',
+  });
+  const recovered = reduce(activated, { event: gap, type: 'event.received' });
+  const activeForeground = effectFor(recovered);
+  if (activeForeground === undefined || activeForeground.kind !== 'create-run') throw new Error('Expected active foreground run.');
+  const booting = reduce(recovered, { id: activeForeground.id, type: 'effect.settled' });
+  const activeBootstrap = effectFor(booting);
+  if (activeBootstrap === undefined || activeBootstrap.kind !== 'bootstrap') throw new Error('Expected replay-gap bootstrap.');
+  const replayed = reduce(booting, { bootstrap: generationBBootstrap, type: 'bootstrap.received' });
+  const activationRun = effectFor(replayed);
+  if (activationRun === undefined) throw new Error('Expected selected-fixture activation run.');
+  const settled = reduce(replayed, { id: activationRun.id, type: 'effect.settled' });
+  const laterBootstrap = reduce(settled, { bootstrap: generationBBootstrap, type: 'bootstrap.received' });
+
+  expect(recovered.replayGap).toEqual(gap);
+  expect(recovered.replayDroppedThroughSequence).toBe(3);
+  expect(activeBootstrap.triggerSequence).toBe(3);
+  expect(activationRun).toMatchObject({
+    cause: 'activation',
+    kind: 'create-run',
+    request: { expectedGenerationId: generationB, fixtureId: 'fixture-a', input: { city: 'London' }, surfaceId: 'weather', target: 'portable' },
+  });
+  expect(replayed.pendingActivationReplay).toBeUndefined();
+  expect(effectFor(settled)).toBeUndefined();
+  expect(effectFor(laterBootstrap)).toBeUndefined();
+  expect(laterBootstrap.pendingActivationReplay).toBeUndefined();
+});

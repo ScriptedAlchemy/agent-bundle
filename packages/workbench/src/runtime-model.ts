@@ -623,12 +623,13 @@ const mergeRun = (model: RuntimeModel, run: DevRuntimeRun): RuntimeModel => {
 const receivedEvent = (model: RuntimeModel, message: ProjectEventMessage): RuntimeModel => {
   if (message.type === 'replay.gap') {
     if (message.latestDroppedSequence <= (model.replayDroppedThroughSequence ?? -1)) return model;
-    return queueBootstrap(update(model, {
+    const recovered = update(model, {
       hmrClientCountBySurface: emptyCounts,
       hmrClientCountKnownSurfaces: emptyStrings,
       replayGap: snapshot(message),
       replayDroppedThroughSequence: message.latestDroppedSequence,
-    }), message.latestDroppedSequence);
+    });
+    return queueBootstrap(withActivationRefreshCursor(recovered, message.latestDroppedSequence), message.latestDroppedSequence);
   }
   const consumedThrough = Math.max(model.lastConsumedEventSequence, model.replayDroppedThroughSequence ?? -1);
   if (message.type !== 'runtime.event' || message.sequence <= consumedThrough) return model;
