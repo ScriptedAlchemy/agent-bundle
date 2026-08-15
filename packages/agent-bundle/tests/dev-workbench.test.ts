@@ -47,6 +47,12 @@ const writeMcpProject = async (root: string): Promise<void> => {
       '',
       "const server = new McpServer({ name: 'workbench-fixture', version: '1.0.0' });",
       "server.registerTool('wait', { description: 'Wait for shutdown.' }, async () => new Promise(() => {}));",
+      "server.registerResource('app', 'ui://fixture/app.html', { mimeType: 'text/html;profile=mcp-app' }, async (uri) => ({",
+      "  contents: [{ mimeType: 'text/html;profile=mcp-app', text: '<main>Fixture App</main>', uri: uri.href }],",
+      '}));',
+      "server.registerTool('show-app', { _meta: { ui: { resourceUri: 'ui://fixture/app.html' } } }, async () => ({",
+      "  content: [{ type: 'text', text: 'Fixture App ready.' }],",
+      '}));',
       'await server.connect(new StdioServerTransport());',
       '',
     ].join('\n')),
@@ -63,6 +69,26 @@ const writeMcpProject = async (root: string): Promise<void> => {
     ].join('\n')),
   ]);
 };
+
+const appPreviewBody = () => ({
+  host: {
+    availableDisplayModes: ['inline'],
+    containerDimensions: { height: 360, width: 640 },
+    deviceCapabilities: {},
+    displayMode: 'inline',
+    locale: 'en-US',
+    platform: 'web',
+    safeAreaInsets: { bottom: 0, left: 0, right: 0, top: 0 },
+    styles: {},
+    theme: 'light',
+    timeZone: 'UTC',
+    userAgent: 'agent-bundle-dev-workbench-test/1.0',
+  },
+  input: { city: 'Paris' },
+  previewProfile: 'portable',
+  result: { content: [{ text: 'Fixture App ready.', type: 'text' }] },
+  toolName: 'show-app',
+});
 
 it('contains prebuilt workbench asset reads to their declared root', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-workbench-assets-'));
@@ -195,6 +221,68 @@ it('binds real epoch MCP sessions to the workbench lifecycle and drains trace re
   }
 }, 60_000);
 
+it('hosts real MCP App previews only on the foreground origin and closes their leases with the dev lifecycle', async () => {
+  const project = await createProjectFixture();
+  const assetsRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-workbench-mcp-app-'));
+  let server: Awaited<ReturnType<typeof startDevServer>> | undefined;
+  await Promise.all([
+    writeMcpProject(project.root),
+    writeFile(join(assetsRoot, 'index.html'), '<!doctype html><title>Agent Bundle workbench</title>'),
+  ]);
+  try {
+    server = await startDevServer({
+      assets: createWorkbenchAssetSource({ root: assetsRoot }),
+      open: false,
+      port: 0,
+      root: project.root,
+    });
+    const artifact = server.status().artifact;
+    if (artifact.state !== 'active') throw new Error('Expected the workbench to publish an active artifact epoch.');
+    const bootstrap = await fetch(`${server.url}/api/project/session`, {
+      headers: { 'sec-fetch-site': 'same-origin' },
+    });
+    const { token } = await bootstrap.json() as { readonly token: string };
+    const headers = { origin: server.url, 'x-agent-bundle-session': token };
+    const created = await fetch(`${server.url}/api/mcp/sessions`, {
+      body: JSON.stringify({ epochId: artifact.activeEpoch.id, serverName: 'fixture', target: 'portable' }),
+      headers: { ...headers, 'content-type': 'application/json' },
+      method: 'POST',
+    });
+    expect(created.status).toBe(200);
+    const { session } = await created.json() as { readonly session: { readonly id: string } };
+
+    const preview = await fetch(`${server.url}/api/mcp/sessions/${session.id}/apps`, {
+      body: JSON.stringify(appPreviewBody()),
+      headers: { ...headers, 'content-type': 'application/json' },
+      method: 'POST',
+    });
+    expect(preview.status).toBe(200);
+    const body = await preview.json() as { readonly preview: { readonly bindingId: string; readonly frame?: { readonly src: string } } };
+    expect(body.preview.bindingId).toMatch(/^[0-9a-f-]{36}$/u);
+    if (body.preview.frame === undefined) throw new Error('Expected the portable preview to include a sandbox frame.');
+    const sandboxOrigin = new URL(body.preview.frame.src).origin;
+    expect(sandboxOrigin).not.toBe(server.url);
+
+    await expect(fetch(`${sandboxOrigin}/api/project/session`, { headers }).then((response) => response.status)).resolves.toBe(404);
+    await expect(fetch(`${sandboxOrigin}/api/mcp/sessions`, { headers }).then((response) => response.status)).resolves.toBe(404);
+
+    await expect(fetch(`${server.url}/api/mcp/apps/${body.preview.bindingId}`, {
+      headers,
+      method: 'DELETE',
+    }).then((response) => response.status)).resolves.toBe(200);
+    await expect(fetch(`${server.url}/api/mcp/sessions/${session.id}`, {
+      headers,
+      method: 'DELETE',
+    }).then((response) => response.status)).resolves.toBe(200);
+    await expect(server.close()).resolves.toBeUndefined();
+    await expect(fetch(sandboxOrigin)).rejects.toThrow();
+    await expect(access(join(project.root, '.agent-bundle', 'epochs', artifact.activeEpoch.id))).resolves.toBeUndefined();
+  } finally {
+    await server?.close().catch(() => undefined);
+    await Promise.all([removeProjectFixture(project.root), rm(assetsRoot, { force: true, recursive: true })]);
+  }
+}, 60_000);
+
 it('keeps MCP and coordinator cleanup failures structural while releasing both resources', async () => {
   const mcpFailure = new Error('MCP cleanup failed.');
   const coordinatorFailure = new Error('Coordinator cleanup failed.');
@@ -213,6 +301,27 @@ it('keeps MCP and coordinator cleanup failures structural while releasing both r
   }));
   expect(mcpCloseCalls).toBe(1);
   expect(coordinatorCloseCalls).toBe(1);
+});
+
+it('closes MCP Apps before sessions and the coordinator while retaining every cleanup failure', async () => {
+  const appFailure = new Error('MCP App cleanup failed.');
+  const mcpFailure = new Error('MCP cleanup failed.');
+  const coordinatorFailure = new Error('Coordinator cleanup failed.');
+  const closeOrder: string[] = [];
+
+  await expect(closeDevServerLifecycle(
+    { close: async () => { closeOrder.push('mcp-sessions'); throw mcpFailure; } },
+    { close: async () => { closeOrder.push('coordinator'); throw coordinatorFailure; } },
+    { close: async () => { closeOrder.push('mcp-apps'); throw appFailure; } },
+  )).rejects.toEqual(expect.objectContaining({
+    failures: [
+      { error: appFailure, resource: 'mcp-apps' },
+      { error: mcpFailure, resource: 'mcp-sessions' },
+      { error: coordinatorFailure, resource: 'coordinator' },
+    ],
+    name: DevServerLifecycleCloseError.name,
+  }));
+  expect(closeOrder).toEqual(['mcp-apps', 'mcp-sessions', 'coordinator']);
 });
 
 it('passes --no-open and the requested port from the CLI to the public dev API', async () => {

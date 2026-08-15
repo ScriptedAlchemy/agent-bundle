@@ -4,6 +4,7 @@ import type { AddressInfo, Socket } from 'node:net';
 import { basename } from 'node:path';
 
 import type { ProjectEventHub, ProjectEventSubscription } from './events.ts';
+import { McpAppRoutes, type McpAppRoutePreviewService } from './mcp-app-routes.ts';
 import { McpSessionRoutes } from './mcp-session-routes.ts';
 import type { McpSessionService } from './mcp-session-service.ts';
 import { SkillDocumentError, type SkillDocumentService } from './skill-document-service.ts';
@@ -86,6 +87,8 @@ export interface ForegroundServerOptions {
   readonly coordinator: ForegroundCoordinator;
   readonly eventHub: ProjectEventHub;
   readonly host?: string;
+  /** Already-bound MCP App previews, never executable data supplied by a browser request. */
+  readonly mcpAppPreviews?: McpAppRoutePreviewService;
   /** Persistent MCP sessions are supplied by the workbench service, never by browser input. */
   readonly mcpSessions?: McpSessionService;
   readonly now?: () => Date;
@@ -343,6 +346,7 @@ export class ForegroundServer {
   readonly #coordinator: ForegroundCoordinator;
   readonly #eventHub: ProjectEventHub;
   readonly #host: string;
+  readonly #mcpAppRoutes: McpAppRoutes;
   readonly #mcpSessionRoutes: McpSessionRoutes;
   readonly #now: () => Date;
   readonly #port: number;
@@ -375,6 +379,10 @@ export class ForegroundServer {
     this.#port = port;
     this.#skillDocuments = options.skillDocuments;
     this.sessionToken = options.sessionToken ?? randomUUID();
+    this.#mcpAppRoutes = new McpAppRoutes({
+      authorize: (request) => this.#assertMutationSession(request),
+      ...(options.mcpAppPreviews === undefined ? {} : { service: options.mcpAppPreviews }),
+    });
     this.#mcpSessionRoutes = new McpSessionRoutes({
       authorize: (request) => this.#assertMutationSession(request),
       ...(options.mcpSessions === undefined ? {} : { service: options.mcpSessions }),
@@ -468,6 +476,7 @@ export class ForegroundServer {
 
   #releaseResources(): Promise<readonly ForegroundServerCloseFailure[]> {
     if (this.#releasePromise !== undefined) return this.#releasePromise;
+    this.#mcpAppRoutes.close();
     this.#mcpSessionRoutes.close();
     const releaseServer = this.#listenStarted
       ? (() => {
@@ -493,6 +502,7 @@ export class ForegroundServer {
     }
     const pathname = new URL(request.url ?? '/', this.url).pathname;
     const method = request.method ?? 'GET';
+    if (await this.#mcpAppRoutes.handle(request, response)) return;
     if (await this.#mcpSessionRoutes.handle(request, response)) return;
     const route = skillRoute(request.url);
     if (route !== undefined) return this.#serveSkill(route, response, method);
