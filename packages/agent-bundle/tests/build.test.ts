@@ -13,8 +13,11 @@ import { TargetRegistry } from '../src/adapters/registry.ts';
 import type { NormalizedPlugin } from '../src/core/types.ts';
 
 interface TestProject {
+  readonly localModulePath: string;
   readonly outputRoot: string;
+  readonly pythonScriptPath: string;
   readonly root: string;
+  readonly shellScriptPath: string;
   readonly scriptPath: string;
 }
 
@@ -27,6 +30,19 @@ interface FileDigest {
 
 const sha256 = (contents: Uint8Array): string =>
   createHash('sha256').update(contents).digest('hex');
+
+const skillFixture = {
+  markdown: '---\nname: review\ndescription: Review changes\n---\n# Review\n\nSee [guide](references/guide.md).\n',
+  module: "export const greeting = 'hello from skill bundle';\n",
+  python: "#!/usr/bin/env python3\nprint('review python resource')\n",
+  shell: "#!/bin/sh\nprintf 'review shell resource\\n'\n",
+  source: [
+    "import { greeting } from './local greeting module.ts';",
+    'export const emittedGreeting = greeting;',
+    'console.log(emittedGreeting);',
+    '',
+  ].join('\n'),
+} as const;
 
 const treeDigest = async (
   root: string,
@@ -63,37 +79,45 @@ const treeDigest = async (
 
 const createProject = async (): Promise<TestProject> => {
   const root = await mkdtemp(join(tmpdir(), 'agent bundle build with spaces '));
-  const sourceRoot = join(root, 'source files');
   const skillRoot = join(root, 'skills', 'review');
-  const scriptPath = join(sourceRoot, 'greeting script.ts');
+  const skillScriptsRoot = join(skillRoot, 'scripts');
+  const scriptPath = join(skillScriptsRoot, 'greeting script.ts');
+  const localModulePath = join(skillScriptsRoot, 'local greeting module.ts');
+  const shellScriptPath = join(skillScriptsRoot, 'review helper.sh');
+  const pythonScriptPath = join(skillScriptsRoot, 'review helper.py');
 
   await Promise.all([
     mkdir(join(skillRoot, 'assets'), { recursive: true }),
     mkdir(join(skillRoot, 'references'), { recursive: true }),
-    mkdir(sourceRoot, { recursive: true }),
+    mkdir(skillScriptsRoot, { recursive: true }),
   ]);
   await Promise.all([
-    writeFile(
-      scriptPath,
-      [
-        "import { greeting } from './local module.ts';",
-        'export const emittedGreeting = greeting;',
-        'console.log(emittedGreeting);',
-        '',
-      ].join('\n'),
-    ),
+    writeFile(scriptPath, skillFixture.source),
     writeFile(join(root, 'package.json'), '{"name":"build-fixture","type":"module"}\n'),
-    writeFile(join(sourceRoot, 'local module.ts'), "export const greeting = 'hello from bundle';\n"),
+    writeFile(localModulePath, skillFixture.module),
     writeFile(
       join(skillRoot, 'SKILL.md'),
-      '---\nname: review\ndescription: Review changes\n---\n# Review\n\nSee [guide](references/guide.md).\n',
+      skillFixture.markdown,
     ),
     writeFile(join(skillRoot, 'references', 'guide.md'), '# Guide\n'),
     writeFile(join(skillRoot, 'assets', 'icon.bin'), Buffer.from([0, 1, 2, 255])),
+    writeFile(shellScriptPath, skillFixture.shell),
+    writeFile(pythonScriptPath, skillFixture.python),
   ]);
-  await chmod(join(skillRoot, 'assets', 'icon.bin'), 0o751);
+  await Promise.all([
+    chmod(join(skillRoot, 'assets', 'icon.bin'), 0o751),
+    chmod(shellScriptPath, 0o751),
+    chmod(pythonScriptPath, 0o751),
+  ]);
 
-  return { outputRoot: join(root, 'dist'), root, scriptPath };
+  return {
+    localModulePath,
+    outputRoot: join(root, 'dist'),
+    pythonScriptPath,
+    root,
+    shellScriptPath,
+    scriptPath,
+  };
 };
 
 const modelFor = (project: TestProject): NormalizedPlugin => ({
@@ -127,7 +151,7 @@ const modelFor = (project: TestProject): NormalizedPlugin => ({
       provenance: { kind: 'conventional', sourcePath: join(project.root, 'skills', 'review', 'SKILL.md') },
       resources: [
         {
-          bytes: 93,
+          bytes: Buffer.byteLength(skillFixture.markdown),
           relativePath: 'SKILL.md',
           source: join(project.root, 'skills', 'review', 'SKILL.md'),
         },
@@ -140,6 +164,26 @@ const modelFor = (project: TestProject): NormalizedPlugin => ({
           bytes: 8,
           relativePath: 'references/guide.md',
           source: join(project.root, 'skills', 'review', 'references', 'guide.md'),
+        },
+        {
+          bytes: Buffer.byteLength(skillFixture.source),
+          relativePath: 'scripts/greeting script.ts',
+          source: project.scriptPath,
+        },
+        {
+          bytes: Buffer.byteLength(skillFixture.module),
+          relativePath: 'scripts/local greeting module.ts',
+          source: project.localModulePath,
+        },
+        {
+          bytes: Buffer.byteLength(skillFixture.shell),
+          relativePath: 'scripts/review helper.sh',
+          source: project.shellScriptPath,
+        },
+        {
+          bytes: Buffer.byteLength(skillFixture.python),
+          relativePath: 'scripts/review helper.py',
+          source: project.pythonScriptPath,
         },
       ],
       source: join(project.root, 'skills', 'review', 'SKILL.md'),
@@ -177,7 +221,7 @@ const cleanupProject = async (project: TestProject): Promise<void> => {
   await rm(project.root, { force: true, recursive: true });
 };
 
-it('builds a portable artifact from paths with spaces without repository dependencies', async () => {
+it('builds a configured TypeScript Skill script from paths with spaces without repository dependencies', async () => {
   const project = await createProject();
 
   try {
@@ -193,13 +237,13 @@ it('builds a portable artifact from paths with spaces without repository depende
       { name: 'greeting', output: emittedScript, source: project.scriptPath },
     ]);
     await expect(readFile(result.compiledEntries[0]!.output, 'utf8')).resolves.toContain(
-      'hello from bundle',
+      'hello from skill bundle',
     );
     const cleanDirectory = join(project.root, 'clean consumer');
     await mkdir(cleanDirectory);
     await expect(runModule(emittedScript, cleanDirectory)).resolves.toEqual({
       code: 0,
-      output: 'hello from bundle\n',
+      output: 'hello from skill bundle\n',
     });
     await expect(readFile(emittedScript, 'utf8')).resolves.not.toMatch(
       /from\s+['"]agent-bundle(?:\/[^'"]*)?['"]/,
@@ -208,14 +252,19 @@ it('builds a portable artifact from paths with spaces without repository depende
     const manifest = JSON.parse(
       await readFile(join(project.outputRoot, 'agent-bundle.manifest.json'), 'utf8'),
     ) as {
-      readonly files: readonly Omit<FileDigest, 'mode'>[];
+      readonly files: readonly {
+        readonly bytes: number;
+        readonly mode?: number;
+        readonly path: string;
+        readonly sha256: string;
+      }[];
       readonly targets: readonly string[];
       readonly version: number;
     };
     const files = (await treeDigest(project.outputRoot)).filter(
       (entry) => entry.path !== 'agent-bundle.manifest.json',
     );
-    expect(manifest).toEqual({
+    expect(manifest).toMatchObject({
       files: files.map(({ bytes, path, sha256 }) => ({ bytes, path, sha256 })),
       targets: ['portable'],
       version: 1,
@@ -232,6 +281,35 @@ it('builds a portable artifact from paths with spaces without repository depende
     expect(
       (await stat(join(project.outputRoot, 'portable', 'skills', 'review', 'assets', 'icon.bin'))).mode & 0o777,
     ).toBe(0o751);
+    await expect(
+      readFile(join(project.outputRoot, 'portable', 'skills', 'review', 'scripts', 'greeting script.ts')),
+    ).resolves.toEqual(await readFile(project.scriptPath));
+    await expect(
+      readFile(join(project.outputRoot, 'portable', 'skills', 'review', 'scripts', 'local greeting module.ts')),
+    ).resolves.toEqual(await readFile(project.localModulePath));
+
+    const copiedScriptResources = [
+      {
+        path: 'portable/skills/review/scripts/review helper.sh',
+        source: project.shellScriptPath,
+      },
+      {
+        path: 'portable/skills/review/scripts/review helper.py',
+        source: project.pythonScriptPath,
+      },
+    ] as const;
+    for (const resource of copiedScriptResources) {
+      const emittedResource = join(project.outputRoot, resource.path);
+      const contents = await readFile(resource.source);
+      await expect(readFile(emittedResource)).resolves.toEqual(contents);
+      expect((await stat(emittedResource)).mode & 0o777).toBe(0o751);
+      expect(manifest.files).toContainEqual({
+        bytes: contents.byteLength,
+        mode: 0o751,
+        path: resource.path,
+        sha256: sha256(contents),
+      });
+    }
   } finally {
     await cleanupProject(project);
   }
@@ -245,16 +323,25 @@ it('embeds a script dynamic import in its single planned output file', async () 
   );
 
   try {
-    await writeFile(
-      project.scriptPath,
-      [
-        "export const loadGreeting = async () => (await import('./local module.ts')).greeting;",
-        'console.log(await loadGreeting());',
-        '',
-      ].join('\n'),
-    );
+    const dynamicImportSource = [
+      "export const loadGreeting = async () => (await import('./local greeting module.ts')).greeting;",
+      'console.log(await loadGreeting());',
+      '',
+    ].join('\n');
+    await writeFile(project.scriptPath, dynamicImportSource);
+    const model = modelFor(project);
     await build({
-      model: modelFor(project),
+      model: {
+        ...model,
+        skills: model.skills.map((skill) => ({
+          ...skill,
+          resources: skill.resources.map((resource) =>
+            resource.source === project.scriptPath
+              ? { ...resource, bytes: Buffer.byteLength(dynamicImportSource) }
+              : resource,
+          ),
+        })),
+      },
       outputRoot: project.outputRoot,
       projectRoot: project.root,
       registry,
@@ -262,7 +349,7 @@ it('embeds a script dynamic import in its single planned output file', async () 
 
     await expect(runModule(join(project.outputRoot, 'portable', 'scripts', 'greeting.mjs'), project.root)).resolves.toEqual({
       code: 0,
-      output: 'hello from bundle\n',
+      output: 'hello from skill bundle\n',
     });
     expect(await readdir(join(project.outputRoot, 'portable', 'scripts'))).toEqual(['greeting.mjs']);
   } finally {
@@ -270,7 +357,7 @@ it('embeds a script dynamic import in its single planned output file', async () 
   }
 });
 
-it('emits deterministically and preserves the prior artifact after a failed staged rebuild', async () => {
+it('emits a configured Skill script deterministically and preserves the prior artifact after a failed staged rebuild', async () => {
   const project = await createProject();
   const registry = new TargetRegistry().register(
     (await import('../src/adapters/portable.ts')).portableAdapter,
@@ -431,7 +518,7 @@ it('rejects a script name that exits its target scripts directory', async () => 
   }
 });
 
-it('rejects canonical aliases and script-plan collisions before emission', async () => {
+it('rejects canonical aliases and adapter/root-script collisions before emission', async () => {
   const project = await createProject();
   const aliasesAdapter: TargetAdapter = {
     capabilities: {},
