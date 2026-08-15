@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { appendFile, lstat, mkdir, open, readFile, realpath, rename, unlink, writeFile } from 'node:fs/promises';
+import { appendFile, lstat, mkdir, open, readFile, realpath, rename, rm, unlink, writeFile } from 'node:fs/promises';
 import { basename, isAbsolute, join, relative, resolve } from 'node:path';
 
 export type PlaygroundJsonPrimitive = boolean | null | number | string;
@@ -134,6 +134,8 @@ export interface PlaygroundSubscribeOptions {
 }
 
 export interface PlaygroundServiceOptions {
+  /** Test seam for deterministic lifecycle admission tests. */
+  readonly beforeSessionInstall?: () => void | Promise<void>;
   readonly maxSubscriberQueue?: number;
   readonly now?: () => Date;
   readonly projectId: string;
@@ -428,30 +430,20 @@ const normalizeCursor = (value: PlaygroundReplayCursor | undefined): number => {
 
 const asErrorMessage = (error: unknown): string => error instanceof Error ? error.message : String(error);
 
-const redactSecrets = (value: PlaygroundJsonValue): PlaygroundJsonValue => {
-  if (Array.isArray(value)) return Object.freeze(value.map((item) => redactSecrets(item)));
-  if (!isRecord(value)) return value;
-  const copied: Record<string, PlaygroundJsonValue> = {};
-  for (const [key, item] of Object.entries(value)) {
-    if (!sensitiveKey(key)) copied[key] = redactSecrets(item);
-  }
-  return Object.freeze(copied);
-};
-
 const normalizeAssertion = (value: PlaygroundSelectedAssertion): PlaygroundSelectedAssertion => {
-  const evidence = json(value?.evidence, 'Playground assertion evidence');
-  const expectation = json(value?.expectation, 'Playground assertion expectation');
-  assertNoProviderCredentials(evidence);
-  assertNoProviderCredentials(expectation);
-  return Object.freeze({
-    evidence: redactSecrets(evidence),
-    expectation: redactSecrets(expectation),
+  const assertion = Object.freeze({
+    evidence: json(value?.evidence, 'Playground assertion evidence'),
+    expectation: json(value?.expectation, 'Playground assertion expectation'),
     id: nonempty(value?.id, 'Playground assertion id'),
     kind: nonempty(value?.kind, 'Playground assertion kind'),
   });
+  assertNoProviderCredentials(assertion as PlaygroundJsonValue);
+  return assertion;
 };
 
 export class PlaygroundService {
+  readonly #admissions = new Set<Promise<void>>();
+  readonly #beforeSessionInstall: (() => void | Promise<void>) | undefined;
   readonly #maxSubscriberQueue: number;
   readonly #now: () => Date;
   readonly #projectId: string;
@@ -464,9 +456,12 @@ export class PlaygroundService {
   #resolvedSessionsRoot: string | undefined;
 
   constructor(options: PlaygroundServiceOptions) {
-    this.#projectId = nonempty(options.projectId, 'Playground project id');
+    const projectId = nonempty(options.projectId, 'Playground project id');
+    assertNoProviderCredentials(projectId);
+    this.#projectId = projectId;
     this.#projectRoot = options.projectRoot;
     this.#storageRoot = options.storageRoot;
+    this.#beforeSessionInstall = options.beforeSessionInstall;
     this.#now = options.now ?? (() => new Date());
     const queue = options.maxSubscriberQueue ?? 64;
     if (!Number.isSafeInteger(queue) || queue < 1) {
@@ -476,89 +471,100 @@ export class PlaygroundService {
   }
 
   async openSession(input: PlaygroundSessionInput): Promise<PlaygroundSession> {
-    this.#assertAvailable();
-    await this.#ensureStore();
-    const identity = normalizeIdentity(input);
-    const id = safeSessionId(input.sessionId ?? randomUUID());
-    if (this.#sessions.has(id)) {
-      throw serviceError('PLAYGROUND_SESSION_CONFLICT', `Playground session ${JSON.stringify(id)} already exists.`);
-    }
-    const root = this.#sessionRoot(id);
-    try {
-      await mkdir(root);
-    } catch (error) {
-      if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'EEXIST') {
+    return this.#admit(async () => {
+      await this.#ensureStore();
+      this.#assertAvailable();
+      const identity = normalizeIdentity(input);
+      const id = safeSessionId(input.sessionId ?? randomUUID());
+      assertNoProviderCredentials(id);
+      if (this.#sessions.has(id)) {
         throw serviceError('PLAYGROUND_SESSION_CONFLICT', `Playground session ${JSON.stringify(id)} already exists.`);
       }
-      throw error;
-    }
-    await this.#assertSessionDirectory(root, id);
-    const ownerToken = await this.#acquireOwner(root, id);
-    const record: SessionRecord = {
-      cleanupFailures: [],
-      createdAt: this.#timestamp(),
-      events: [],
-      id,
-      identity,
-      nextSequence: 1,
-      outcome: undefined,
-      root,
-      state: 'open',
-      subscribers: new Set(),
-      tail: Promise.resolve(),
-      ownerToken,
-    };
-    try {
-      await writeFile(join(root, eventDocumentName), '', { encoding: 'utf8', flag: 'wx' });
-      await this.#persistSession(record);
-    } catch (error) {
-      await this.#releaseOwner(root, ownerToken).catch(() => undefined);
-      throw error;
-    }
-    this.#sessions.set(id, record);
-    return snapshotSession(record);
+      const root = this.#sessionRoot(id);
+      let record: SessionRecord | undefined;
+      try {
+        await mkdir(root);
+        await this.#assertSessionDirectory(root, id);
+        this.#assertAvailable();
+        const ownerToken = await this.#acquireOwner(root, id);
+        record = {
+          cleanupFailures: [],
+          createdAt: this.#timestamp(),
+          events: [],
+          id,
+          identity,
+          nextSequence: 1,
+          outcome: undefined,
+          root,
+          state: 'open',
+          subscribers: new Set(),
+          tail: Promise.resolve(),
+          ownerToken,
+        };
+        await writeFile(join(root, eventDocumentName), '', { encoding: 'utf8', flag: 'wx' });
+        await this.#persistSession(record);
+        await this.#beforeSessionInstall?.();
+        this.#assertAvailable();
+        this.#sessions.set(id, record);
+        return snapshotSession(record);
+      } catch (error) {
+        if (record !== undefined) await this.#discardUnadmittedSession(record).catch(() => undefined);
+        else if (this.#closing) await this.#removeSessionRoot(root, id).catch(() => undefined);
+        throw error;
+      }
+    });
   }
 
   async reopen(sessionId: string): Promise<PlaygroundSession> {
-    this.#assertAvailable();
-    await this.#ensureStore();
-    const id = safeSessionId(sessionId);
-    const existing = this.#sessions.get(id);
-    if (existing !== undefined) return snapshotSession(existing);
-    const root = this.#sessionRoot(id);
-    try {
-      await this.#assertSessionDirectory(root, id);
-    } catch (error) {
-      if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT') {
-        throw serviceError('PLAYGROUND_SESSION_NOT_FOUND', `Playground session ${JSON.stringify(id)} was not found.`);
+    return this.#admit(async () => {
+      await this.#ensureStore();
+      this.#assertAvailable();
+      const id = safeSessionId(sessionId);
+      assertNoProviderCredentials(id);
+      const existing = this.#sessions.get(id);
+      if (existing !== undefined) return snapshotSession(existing);
+      const root = this.#sessionRoot(id);
+      try {
+        await this.#assertSessionDirectory(root, id);
+      } catch (error) {
+        if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT') {
+          throw serviceError('PLAYGROUND_SESSION_NOT_FOUND', `Playground session ${JSON.stringify(id)} was not found.`);
+        }
+        throw error;
       }
-      throw error;
-    }
-    const document = await this.#readPersistedSession(root, id);
-    const ownerToken = document.state === 'open' ? await this.#acquireOwner(root, id) : undefined;
-    let events: readonly PlaygroundTraceEvent[];
-    try {
-      events = await this.#readEvents(root);
-    } catch (error) {
-      if (ownerToken !== undefined) await this.#releaseOwner(root, ownerToken).catch(() => undefined);
-      throw error;
-    }
-    const record: SessionRecord = {
-      cleanupFailures: [...document.cleanupFailures],
-      createdAt: document.createdAt,
-      events: [...events],
-      id,
-      identity: document.identity,
-      nextSequence: events.length + 1,
-      outcome: document.outcome,
-      root,
-      state: document.state,
-      subscribers: new Set(),
-      tail: Promise.resolve(),
-      ownerToken,
-    };
-    this.#sessions.set(id, record);
-    return snapshotSession(record);
+      const document = await this.#readPersistedSession(root, id);
+      const ownerToken = document.state === 'open' ? await this.#acquireOwner(root, id) : undefined;
+      let events: readonly PlaygroundTraceEvent[];
+      try {
+        events = await this.#readEvents(root);
+      } catch (error) {
+        if (ownerToken !== undefined) await this.#releaseOwner(root, ownerToken).catch(() => undefined);
+        throw error;
+      }
+      const record: SessionRecord = {
+        cleanupFailures: [...document.cleanupFailures],
+        createdAt: document.createdAt,
+        events: [...events],
+        id,
+        identity: document.identity,
+        nextSequence: events.length + 1,
+        outcome: document.outcome,
+        root,
+        state: document.state,
+        subscribers: new Set(),
+        tail: Promise.resolve(),
+        ownerToken,
+      };
+      try {
+        await this.#beforeSessionInstall?.();
+        this.#assertAvailable();
+        this.#sessions.set(id, record);
+        return snapshotSession(record);
+      } catch (error) {
+        await this.#closeRecord(record).catch(() => undefined);
+        throw error;
+      }
+    });
   }
 
   session(sessionId: string): PlaygroundSession | undefined {
@@ -670,16 +676,18 @@ export class PlaygroundService {
       if ((record.state !== 'finalized' && record.state !== 'closed') || record.outcome === undefined) {
         throw serviceError('PLAYGROUND_OUTCOME_REQUIRED', 'A durable playground outcome is required before promotion.');
       }
-      return Object.freeze({
+      const draft = Object.freeze({
         assertions: Object.freeze(selectedAssertions.map(normalizeAssertion)),
         epoch: clone(record.identity.epoch, 'Playground epoch') as PlaygroundEpochIdentity,
         fixture: clone(record.identity.fixture, 'Playground fixture') as PlaygroundFixtureIdentity,
         invocation: clone(record.identity.invocation, 'Playground invocation') as PlaygroundInvocation,
-        outcome: redactSecrets(clone(record.outcome, 'Playground durable outcome') as PlaygroundJsonValue) as PlaygroundDurableOutcome,
+        outcome: clone(record.outcome, 'Playground durable outcome') as PlaygroundDurableOutcome,
         schemaVersion,
         target: clone(record.identity.target, 'Playground target') as PlaygroundTarget,
         task: clone(record.identity.task, 'Playground task') as PlaygroundTask,
       });
+      assertNoProviderCredentials(draft as unknown as PlaygroundJsonValue);
+      return draft;
     });
   }
 
@@ -692,12 +700,14 @@ export class PlaygroundService {
     if (this.#closePromise !== undefined) return this.#closePromise;
     this.#closing = true;
     this.#closePromise = (async () => {
-      const settled = await Promise.allSettled([...this.#sessions.values()].map(async (record) => {
+      await Promise.allSettled([...this.#admissions]);
+      const sessions = [...this.#sessions.entries()];
+      const settled = await Promise.allSettled(sessions.map(async ([, record]) => {
         await this.#closeRecord(record);
       }));
       const failures = settled.flatMap((result, index): PlaygroundServiceCloseFailure[] =>
         result.status === 'rejected'
-          ? [Object.freeze({ error: result.reason, sessionId: [...this.#sessions.keys()][index]! })]
+          ? [Object.freeze({ error: result.reason, sessionId: sessions[index]![0] })]
           : []);
       if (failures.length > 0) throw new PlaygroundServiceCloseError(Object.freeze(failures));
     })();
@@ -733,6 +743,37 @@ export class PlaygroundService {
 
   #assertAvailable(): void {
     if (this.#closing) throw serviceError('PLAYGROUND_SERVICE_CLOSED', 'Playground service is closed.');
+  }
+
+  async #admit<T>(operation: () => Promise<T>): Promise<T> {
+    this.#assertAvailable();
+    let resolveAdmission!: () => void;
+    const admission = new Promise<void>((resolveAdmissionPromise) => { resolveAdmission = resolveAdmissionPromise; });
+    this.#admissions.add(admission);
+    try {
+      return await operation();
+    } finally {
+      this.#admissions.delete(admission);
+      resolveAdmission();
+    }
+  }
+
+  async #discardUnadmittedSession(record: SessionRecord): Promise<void> {
+    this.#sessions.delete(record.id);
+    try {
+      if (record.ownerToken !== undefined) {
+        const token = record.ownerToken;
+        record.ownerToken = undefined;
+        await this.#releaseOwner(record.root, token);
+      }
+    } finally {
+      await this.#removeSessionRoot(record.root, record.id);
+    }
+  }
+
+  async #removeSessionRoot(root: string, sessionId: string): Promise<void> {
+    await this.#assertSessionDirectory(root, sessionId);
+    await rm(root, { force: true, recursive: true });
   }
 
   #requireSession(sessionId: string): SessionRecord {
@@ -958,7 +999,15 @@ export class PlaygroundService {
     } catch {
       throw serviceError('PLAYGROUND_STORE_CORRUPT', `Playground session ${JSON.stringify(expectedId)} has malformed metadata.`);
     }
-    if (!isRecord(parsed) || parsed.kind !== 'agent-bundle-playground-session' || parsed.schemaVersion !== schemaVersion) {
+    if (!isRecord(parsed)) {
+      throw serviceError('PLAYGROUND_STORE_CORRUPT', `Playground session ${JSON.stringify(expectedId)} has unsupported metadata.`);
+    }
+    try {
+      assertNoProviderCredentials(parsed as PlaygroundJsonValue);
+    } catch {
+      throw serviceError('PLAYGROUND_STORE_CORRUPT', `Playground session ${JSON.stringify(expectedId)} has invalid persisted values.`);
+    }
+    if (parsed.kind !== 'agent-bundle-playground-session' || parsed.schemaVersion !== schemaVersion) {
       throw serviceError('PLAYGROUND_STORE_CORRUPT', `Playground session ${JSON.stringify(expectedId)} has unsupported metadata.`);
     }
     if (parsed.projectId !== this.#projectId) {
@@ -1021,6 +1070,7 @@ export class PlaygroundService {
       if (!isRecord(parsed)) throw serviceError('PLAYGROUND_STORE_CORRUPT', 'Playground event log contains a non-object record.');
       let event: PlaygroundTraceEvent;
       try {
+        assertNoProviderCredentials(parsed as PlaygroundJsonValue);
         const input = normalizeEventInput(parsed as PlaygroundEventInput);
         const sequence = parsed.sequence;
         if (!Number.isSafeInteger(sequence) || sequence !== index + 1 || typeof parsed.timestamp !== 'string'

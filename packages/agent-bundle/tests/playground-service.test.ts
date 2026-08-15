@@ -50,6 +50,7 @@ const event = (
 ): PlaygroundEventInput => Object.freeze({ kind, raw, source, summary });
 
 const createFixture = async (input: Readonly<{
+  readonly beforeSessionInstall?: () => void | Promise<void>;
   readonly maxSubscriberQueue?: number;
   readonly projectId?: string;
 }> = {}): Promise<Readonly<{
@@ -63,6 +64,7 @@ const createFixture = async (input: Readonly<{
   const storageRoot = join(projectRoot, '.agent-bundle', 'playground');
   await mkdir(projectRoot, { recursive: true });
   const service = new PlaygroundService({
+    ...(input.beforeSessionInstall === undefined ? {} : { beforeSessionInstall: input.beforeSessionInstall }),
     ...(input.maxSubscriberQueue === undefined ? {} : { maxSubscriberQueue: input.maxSubscriberQueue }),
     projectId: input.projectId ?? 'project-1',
     projectRoot,
@@ -592,6 +594,144 @@ it('does not admit sessions, subscriptions, replay, export, or promotion after c
     await expect(fixture.service.close()).resolves.toBeUndefined();
     expect(fixture.service.session('post-close')).toMatchObject({ state: 'closed' });
     expect(deliveries).toBe(0);
+  } finally {
+    await fixture.close();
+  }
+});
+
+it('rejects provider credential values in every identity and assertion scalar before promotion or persisted reopen can retain them', async () => {
+  const fixture = await createFixture();
+  const credential = 'sk-proj-abcdefghijklmnopqrstuvwxyz0123456789';
+  try {
+    const base = sessionInput();
+    const identityCases = [
+      { epoch: { ...base.epoch, digest: credential } },
+      { epoch: { ...base.epoch, id: credential } },
+      { fixture: { ...base.fixture, digest: credential } },
+      { fixture: { ...base.fixture, id: credential } },
+      { invocation: { ...base.invocation, intent: { note: credential } } },
+      { invocation: { ...base.invocation, kind: credential } },
+      { target: { ...base.target, digest: credential } },
+      { target: { ...base.target, name: credential } },
+      { task: { ...base.task, id: credential } },
+      { task: { ...base.task, text: credential } },
+      { sessionId: credential },
+    ];
+    for (const input of identityCases) {
+      const failure = await fixture.service.openSession({ ...base, ...input }).catch((error: unknown) => error);
+      expect(failure).toMatchObject({ code: 'PLAYGROUND_CREDENTIAL_REJECTED' });
+      expect(String(failure)).not.toContain(credential);
+    }
+
+    await fixture.service.openSession({ ...base, sessionId: 'scalar-credentials' });
+    await fixture.service.finalize('scalar-credentials', { status: 'passed' });
+    const assertionCases = [
+      { evidence: credential, expectation: { equals: 'passed' }, id: 'evidence', kind: 'durable-outcome' },
+      { evidence: { status: 'passed' }, expectation: credential, id: 'expectation', kind: 'durable-outcome' },
+      { evidence: { status: 'passed' }, expectation: { equals: 'passed' }, id: credential, kind: 'durable-outcome' },
+      { evidence: { status: 'passed' }, expectation: { equals: 'passed' }, id: 'kind', kind: credential },
+    ];
+    for (const assertion of assertionCases) {
+      const failure = await fixture.service.promoteToDraftEval('scalar-credentials', [assertion]).catch((error: unknown) => error);
+      expect(failure).toMatchObject({ code: 'PLAYGROUND_CREDENTIAL_REJECTED' });
+      expect(String(failure)).not.toContain(credential);
+    }
+    const draft = await fixture.service.promoteToDraftEval('scalar-credentials', [{
+      evidence: { status: 'passed' },
+      expectation: { equals: 'passed' },
+      id: 'durable-outcome',
+      kind: 'durable-outcome',
+    }]);
+    expect(JSON.stringify(draft)).not.toContain(credential);
+
+    await fixture.service.close();
+    const sessionPath = join(fixture.storageRoot, 'sessions', 'scalar-credentials', 'session.json');
+    const persisted = JSON.parse(await readFile(sessionPath, 'utf8')) as { createdAt: string };
+    persisted.createdAt = credential;
+    await writeFile(sessionPath, `${JSON.stringify(persisted)}\n`, 'utf8');
+    const corrupt = new PlaygroundService({
+      projectId: 'project-1',
+      projectRoot: fixture.projectRoot,
+      storageRoot: fixture.storageRoot,
+    });
+    try {
+      const failure = await corrupt.reopen('scalar-credentials').catch((error: unknown) => error);
+      expect(failure).toMatchObject({ code: 'PLAYGROUND_STORE_CORRUPT' });
+      expect(String(failure)).not.toContain(credential);
+    } finally {
+      await corrupt.close().catch(() => undefined);
+    }
+  } finally {
+    await fixture.close();
+  }
+});
+
+it('linearizes cold open and reopen admissions with close so completed cleanup cannot be bypassed', async () => {
+  const openEntered = deferred();
+  const releaseOpen = deferred();
+  const fixture = await createFixture({
+    beforeSessionInstall: () => {
+      openEntered.resolve();
+      return releaseOpen.promise;
+    },
+  });
+  try {
+    const opening = fixture.service.openSession({ ...sessionInput(), sessionId: 'cold-open' });
+    await openEntered.promise;
+    const openRoot = join(fixture.storageRoot, 'sessions', 'cold-open');
+    await expect(readFile(join(openRoot, '.owner.lock'), 'utf8')).resolves.toContain('token');
+    const closing = fixture.service.close();
+    let openCloseSettled = false;
+    void closing.then(() => { openCloseSettled = true; });
+    await new Promise<void>((resolve) => setTimeout(resolve, 1));
+    expect(openCloseSettled).toBe(false);
+    releaseOpen.resolve();
+    await expect(opening).rejects.toMatchObject({ code: 'PLAYGROUND_SERVICE_CLOSED' });
+    await expect(closing).resolves.toBeUndefined();
+    expect(fixture.service.session('cold-open')).toBeUndefined();
+    await expect(readFile(join(openRoot, '.owner.lock'), 'utf8')).rejects.toBeDefined();
+    await expect(readFile(join(openRoot, 'session.json'), 'utf8')).rejects.toBeDefined();
+    await expect(fixture.service.subscribe('cold-open', { onEvent: () => undefined })).rejects.toMatchObject({ code: 'PLAYGROUND_SERVICE_CLOSED' });
+    await expect(fixture.service.close()).resolves.toBeUndefined();
+
+    const seed = new PlaygroundService({
+      projectId: 'project-1',
+      projectRoot: fixture.projectRoot,
+      storageRoot: fixture.storageRoot,
+    });
+    await seed.openSession({ ...sessionInput(), sessionId: 'cold-reopen' });
+    await seed.finalize('cold-reopen', { status: 'passed' });
+    await seed.close();
+
+    const reopenEntered = deferred();
+    const releaseReopen = deferred();
+    const reopened = new PlaygroundService({
+      beforeSessionInstall: () => {
+        reopenEntered.resolve();
+        return releaseReopen.promise;
+      },
+      projectId: 'project-1',
+      projectRoot: fixture.projectRoot,
+      storageRoot: fixture.storageRoot,
+    });
+    try {
+      const reopening = reopened.reopen('cold-reopen');
+      await reopenEntered.promise;
+      const close = reopened.close();
+      let reopenCloseSettled = false;
+      void close.then(() => { reopenCloseSettled = true; });
+      await new Promise<void>((resolve) => setTimeout(resolve, 1));
+      expect(reopenCloseSettled).toBe(false);
+      releaseReopen.resolve();
+      await expect(reopening).rejects.toMatchObject({ code: 'PLAYGROUND_SERVICE_CLOSED' });
+      await expect(close).resolves.toBeUndefined();
+      expect(reopened.session('cold-reopen')).toBeUndefined();
+      await expect(reopened.subscribe('cold-reopen', { onEvent: () => undefined })).rejects.toMatchObject({ code: 'PLAYGROUND_SERVICE_CLOSED' });
+      await expect(reopened.close()).resolves.toBeUndefined();
+    } finally {
+      await reopened.close().catch(() => undefined);
+      await seed.close().catch(() => undefined);
+    }
   } finally {
     await fixture.close();
   }
