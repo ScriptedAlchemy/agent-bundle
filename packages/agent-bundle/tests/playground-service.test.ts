@@ -9,6 +9,7 @@ import {
   PlaygroundServiceCloseError,
   PlaygroundSessionCloseError,
   type PlaygroundEventInput,
+  type PlaygroundServiceOptions,
 } from '../src/services/playground-service.ts';
 
 const eventually = async (assertion: () => void, attempts = 100): Promise<void> => {
@@ -50,8 +51,8 @@ const event = (
 ): PlaygroundEventInput => Object.freeze({ kind, raw, source, summary });
 
 const createFixture = async (input: Readonly<{
-  readonly beforeSessionInstall?: () => void | Promise<void>;
   readonly maxSubscriberQueue?: number;
+  readonly now?: () => Date;
   readonly projectId?: string;
 }> = {}): Promise<Readonly<{
   readonly close: () => Promise<void>;
@@ -64,8 +65,8 @@ const createFixture = async (input: Readonly<{
   const storageRoot = join(projectRoot, '.agent-bundle', 'playground');
   await mkdir(projectRoot, { recursive: true });
   const service = new PlaygroundService({
-    ...(input.beforeSessionInstall === undefined ? {} : { beforeSessionInstall: input.beforeSessionInstall }),
     ...(input.maxSubscriberQueue === undefined ? {} : { maxSubscriberQueue: input.maxSubscriberQueue }),
+    ...(input.now === undefined ? {} : { now: input.now }),
     projectId: input.projectId ?? 'project-1',
     projectRoot,
     storageRoot,
@@ -667,27 +668,19 @@ it('rejects provider credential values in every identity and assertion scalar be
 });
 
 it('linearizes cold open and reopen admissions with close so completed cleanup cannot be bypassed', async () => {
-  const openEntered = deferred();
-  const releaseOpen = deferred();
+  const lifecycle: { closing?: Promise<void>; service?: PlaygroundService } = {};
   const fixture = await createFixture({
-    beforeSessionInstall: () => {
-      openEntered.resolve();
-      return releaseOpen.promise;
+    now: () => {
+      lifecycle.closing ??= lifecycle.service!.close();
+      return new Date('2026-08-15T00:00:00.000Z');
     },
   });
+  lifecycle.service = fixture.service;
   try {
     const opening = fixture.service.openSession({ ...sessionInput(), sessionId: 'cold-open' });
-    await openEntered.promise;
     const openRoot = join(fixture.storageRoot, 'sessions', 'cold-open');
-    await expect(readFile(join(openRoot, '.owner.lock'), 'utf8')).resolves.toContain('token');
-    const closing = fixture.service.close();
-    let openCloseSettled = false;
-    void closing.then(() => { openCloseSettled = true; });
-    await new Promise<void>((resolve) => setTimeout(resolve, 1));
-    expect(openCloseSettled).toBe(false);
-    releaseOpen.resolve();
     await expect(opening).rejects.toMatchObject({ code: 'PLAYGROUND_SERVICE_CLOSED' });
-    await expect(closing).resolves.toBeUndefined();
+    await expect(lifecycle.closing).resolves.toBeUndefined();
     expect(fixture.service.session('cold-open')).toBeUndefined();
     await expect(readFile(join(openRoot, '.owner.lock'), 'utf8')).rejects.toBeDefined();
     await expect(readFile(join(openRoot, 'session.json'), 'utf8')).rejects.toBeDefined();
@@ -703,26 +696,16 @@ it('linearizes cold open and reopen admissions with close so completed cleanup c
     await seed.finalize('cold-reopen', { status: 'passed' });
     await seed.close();
 
-    const reopenEntered = deferred();
-    const releaseReopen = deferred();
     const reopened = new PlaygroundService({
-      beforeSessionInstall: () => {
-        reopenEntered.resolve();
-        return releaseReopen.promise;
-      },
       projectId: 'project-1',
       projectRoot: fixture.projectRoot,
       storageRoot: fixture.storageRoot,
     });
     try {
+      await reopened.openSession({ ...sessionInput(), sessionId: 'reopen-warmup' });
       const reopening = reopened.reopen('cold-reopen');
-      await reopenEntered.promise;
+      await Promise.resolve();
       const close = reopened.close();
-      let reopenCloseSettled = false;
-      void close.then(() => { reopenCloseSettled = true; });
-      await new Promise<void>((resolve) => setTimeout(resolve, 1));
-      expect(reopenCloseSettled).toBe(false);
-      releaseReopen.resolve();
       await expect(reopening).rejects.toMatchObject({ code: 'PLAYGROUND_SERVICE_CLOSED' });
       await expect(close).resolves.toBeUndefined();
       expect(reopened.session('cold-reopen')).toBeUndefined();
@@ -733,6 +716,66 @@ it('linearizes cold open and reopen admissions with close so completed cleanup c
       await seed.close().catch(() => undefined);
     }
   } finally {
+    await fixture.close();
+  }
+});
+
+it('preserves pre-existing finalized and open session roots when a conflicting open races close', async () => {
+  for (const state of ['finalized', 'open'] as const) {
+    const fixture = await createFixture();
+    const sessionId = `existing-${state}`;
+    const root = join(fixture.storageRoot, 'sessions', sessionId);
+    let contender: PlaygroundService | undefined;
+    try {
+      await fixture.service.openSession({ ...sessionInput(), sessionId });
+      if (state === 'finalized') await fixture.service.finalize(sessionId, { status: 'passed' });
+      const sessionBefore = await readFile(join(root, 'session.json'), 'utf8');
+      const ownerBefore = state === 'open' ? await readFile(join(root, '.owner.lock'), 'utf8') : undefined;
+
+      contender = new PlaygroundService({
+        projectId: 'project-1',
+        projectRoot: fixture.projectRoot,
+        storageRoot: fixture.storageRoot,
+      });
+      await contender.openSession({ ...sessionInput(), sessionId: `warm-${state}` });
+      let close: Promise<void> | undefined;
+      const conflicting = contender.openSession({
+        ...sessionInput(),
+        get sessionId() {
+          queueMicrotask(() => { close ??= contender!.close(); });
+          return sessionId;
+        },
+      });
+
+      await expect(conflicting).rejects.toMatchObject({ code: 'PLAYGROUND_SESSION_CONFLICT' });
+      await expect(close).resolves.toBeUndefined();
+      await expect(readFile(join(root, 'session.json'), 'utf8')).resolves.toBe(sessionBefore);
+      if (ownerBefore !== undefined) {
+        await expect(readFile(join(root, '.owner.lock'), 'utf8')).resolves.toBe(ownerBefore);
+      }
+    } finally {
+      await contender?.close().catch(() => undefined);
+      await fixture.close();
+    }
+  }
+});
+
+it('ignores unknown callback-shaped constructor properties instead of letting them block shutdown', async () => {
+  const fixture = await createFixture();
+  let injected = false;
+  const options = {
+    beforeSessionInstall: () => { injected = true; },
+    projectId: 'project-1',
+    projectRoot: fixture.projectRoot,
+    storageRoot: fixture.storageRoot,
+  } as unknown as PlaygroundServiceOptions;
+  const service = new PlaygroundService(options);
+  try {
+    await service.openSession({ ...sessionInput(), sessionId: 'no-callback-injection' });
+    expect(injected).toBe(false);
+    await expect(service.close()).resolves.toBeUndefined();
+  } finally {
+    await service.close().catch(() => undefined);
     await fixture.close();
   }
 });
