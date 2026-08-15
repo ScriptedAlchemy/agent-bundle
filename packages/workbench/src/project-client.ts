@@ -1,4 +1,10 @@
-import type { ProjectStatus } from '../../agent-bundle/src/dev/types.ts';
+import {
+  freezeJsonValue,
+  type ProjectEvent,
+  type ProjectEventMessage,
+  type ProjectReplayGap,
+  type ProjectStatus,
+} from '../../agent-bundle/src/dev/types.ts';
 
 export interface EventSourceMessage {
   readonly data: string;
@@ -12,6 +18,7 @@ export interface EventSourceLike {
 
 export type EventSourceFactory = (url: string) => EventSourceLike;
 export type ProjectClientErrorListener = (reason: unknown) => void;
+export type ProjectEventListener = (event: ProjectEventMessage) => void;
 
 export interface ProjectClientOptions {
   readonly events?: EventSourceFactory;
@@ -25,6 +32,11 @@ interface ProjectStatusResponse {
 interface ProjectSessionResponse {
   readonly origin: string;
   readonly token: string;
+}
+
+interface QueuedProjectEvent {
+  readonly event: ProjectEventMessage;
+  readonly sequence: number | undefined;
 }
 
 export class ProjectClientError extends Error {
@@ -53,17 +65,61 @@ const readResponse = async <Result>(response: Response): Promise<Result> => {
   return response.json() as Promise<Result>;
 };
 
-const parseSequence = (event: EventSourceMessage): number | undefined => {
-  const lastEventId = Number(event.lastEventId);
-  if (Number.isSafeInteger(lastEventId) && lastEventId >= 0) return lastEventId;
+const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
+  value !== null && typeof value === 'object' && !Array.isArray(value);
+
+const isSequence = (value: unknown): value is number =>
+  typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+
+const parseEventSourceSequence = (lastEventId: string): number | undefined => {
+  if (lastEventId.trim() === '') return undefined;
+  const sequence = Number(lastEventId);
+  return isSequence(sequence) ? sequence : undefined;
+};
+
+const malformedProjectEvent = (): never => {
+  throw new ProjectClientError('Workbench received a malformed project event.');
+};
+
+const parseProjectEvent = (
+  expectedType: (typeof projectEventTypes)[number],
+  frame: EventSourceMessage,
+): QueuedProjectEvent => {
+  let value: unknown;
   try {
-    const value = JSON.parse(event.data) as { readonly sequence?: unknown };
-    return typeof value.sequence === 'number' && Number.isSafeInteger(value.sequence) && value.sequence >= 0
-      ? value.sequence
-      : undefined;
+    value = freezeJsonValue(JSON.parse(frame.data));
   } catch {
-    return undefined;
+    return malformedProjectEvent();
   }
+
+  if (!isRecord(value) || value.type !== expectedType) return malformedProjectEvent();
+
+  if (expectedType === 'replay.gap') {
+    if (
+      parseEventSourceSequence(frame.lastEventId) !== undefined
+      || !isSequence(value.requestedAfterSequence)
+      || !isSequence(value.latestDroppedSequence)
+      || !isSequence(value.earliestAvailableSequence)
+      || value.latestDroppedSequence < value.requestedAfterSequence
+      || value.earliestAvailableSequence <= value.latestDroppedSequence
+    ) {
+      return malformedProjectEvent();
+    }
+    return Object.freeze({ event: value as unknown as ProjectReplayGap, sequence: undefined });
+  }
+
+  if (
+    !isSequence(value.sequence)
+    || parseEventSourceSequence(frame.lastEventId) !== value.sequence
+    || typeof value.occurredAt !== 'string'
+    || !Object.hasOwn(value, 'payload')
+    || !isRecord(value.payload)
+    || (Object.hasOwn(value, 'epochId') && typeof value.epochId !== 'string')
+  ) {
+    return malformedProjectEvent();
+  }
+
+  return Object.freeze({ event: value as ProjectEvent, sequence: value.sequence });
 };
 
 const normalizePaths = (paths: readonly string[]): readonly string[] => Object.freeze(
@@ -79,9 +135,13 @@ export class ProjectClient {
   readonly #events: EventSourceFactory;
   readonly #fetch: typeof fetch;
   #closed = false;
+  #eventDrainPromise: Promise<void> | undefined;
+  #eventListener: ProjectEventListener | undefined;
+  #eventQueue: QueuedProjectEvent[] = [];
   #eventSource: EventSourceLike | undefined;
   #eventRefreshPromise: Promise<void> | undefined;
   #eventRefreshQueued = false;
+  #highestQueuedEventId = -1;
   #lastEventId = 0;
   #errorListener: ProjectClientErrorListener | undefined;
   #listener: ((status: ProjectStatus) => void) | undefined;
@@ -97,10 +157,15 @@ export class ProjectClient {
     return this.#lastEventId;
   }
 
-  async connect(listener: (status: ProjectStatus) => void, onError?: ProjectClientErrorListener): Promise<ProjectStatus> {
+  async connect(
+    listener: (status: ProjectStatus) => void,
+    onError?: ProjectClientErrorListener,
+    onEvent?: ProjectEventListener,
+  ): Promise<ProjectStatus> {
     if (this.#closed) throw new ProjectClientError('Workbench client is closed.');
     this.#listener = listener;
     this.#errorListener = onError;
+    this.#eventListener = onEvent;
     const status = await this.refresh();
     if (this.#closed) return status;
     const eventSource = this.#events('/api/project/events');
@@ -110,7 +175,9 @@ export class ProjectClient {
     }
     this.#eventSource?.close();
     this.#eventSource = eventSource;
-    for (const type of projectEventTypes) eventSource.addEventListener(type, (event) => this.#onEvent(event));
+    for (const type of projectEventTypes) {
+      eventSource.addEventListener(type, (event) => this.#onEvent(eventSource, type, event));
+    }
     return status;
   }
 
@@ -144,10 +211,12 @@ export class ProjectClient {
 
   close(): void {
     this.#closed = true;
+    this.#eventQueue.length = 0;
     this.#eventRefreshQueued = false;
     this.#eventSource?.close();
     this.#eventSource = undefined;
     this.#errorListener = undefined;
+    this.#eventListener = undefined;
     this.#listener = undefined;
   }
 
@@ -164,10 +233,51 @@ export class ProjectClient {
     return this.#session;
   }
 
-  #onEvent(event: EventSourceMessage): void {
-    const sequence = parseSequence(event);
-    if (sequence !== undefined) this.#lastEventId = Math.max(this.#lastEventId, sequence);
-    this.#queueEventRefresh();
+  #onEvent(
+    source: EventSourceLike,
+    expectedType: (typeof projectEventTypes)[number],
+    frame: EventSourceMessage,
+  ): void {
+    if (this.#closed || source !== this.#eventSource) return;
+
+    let queued: QueuedProjectEvent;
+    try {
+      queued = parseProjectEvent(expectedType, frame);
+    } catch (error) {
+      this.#reportError(error);
+      return;
+    }
+
+    if (queued.sequence !== undefined) {
+      if (queued.sequence <= this.#highestQueuedEventId) return;
+      this.#highestQueuedEventId = queued.sequence;
+    }
+    this.#eventQueue.push(queued);
+    this.#queueEventDrain();
+  }
+
+  #queueEventDrain(): void {
+    if (this.#closed || this.#eventDrainPromise !== undefined) return;
+    const operation = Promise.resolve().then(async () => {
+      while (!this.#closed) {
+        const queued = this.#eventQueue.shift();
+        if (queued === undefined) return;
+
+        try {
+          this.#eventListener?.(queued.event);
+        } catch (error) {
+          this.#reportError(error);
+        }
+
+        if (this.#closed) return;
+        if (queued.sequence !== undefined) this.#lastEventId = queued.sequence;
+        if (queued.event.type !== 'runtime.event') this.#queueEventRefresh();
+      }
+    }).finally(() => {
+      this.#eventDrainPromise = undefined;
+      if (this.#eventQueue.length > 0 && !this.#closed) this.#queueEventDrain();
+    });
+    this.#eventDrainPromise = operation;
   }
 
   #queueEventRefresh(): void {

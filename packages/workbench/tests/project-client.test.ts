@@ -65,6 +65,25 @@ const deferred = <Value>(): Deferred<Value> => {
   return { promise, reject, resolve };
 };
 
+const runtimeEvent = (sequence: number): { readonly data: string; readonly lastEventId: string } => ({
+  data: JSON.stringify({
+    occurredAt: '2026-08-14T12:00:00.000Z',
+    payload: {
+      providerSessionId: 'provider-session-1',
+      runtimeGenerationId: `generation-${sequence}`,
+      type: 'runtime.generation.activated',
+    },
+    sequence,
+    type: 'runtime.event',
+  }),
+  lastEventId: String(sequence),
+});
+
+const flushEvents = async (): Promise<void> => {
+  await new Promise<void>((resolvePromise) => setImmediate(resolvePromise));
+  await new Promise<void>((resolvePromise) => setImmediate(resolvePromise));
+};
+
 it('calls the default browser fetch with its global receiver', async () => {
   const originalFetch = globalThis.fetch;
   const browserFetch = async function (this: typeof globalThis, input: RequestInfo | URL): Promise<Response> {
@@ -133,7 +152,12 @@ it('refreshes Overview state after live named events and keeps the browser Event
 
   await client.connect((next) => observed.push(next.artifact.state));
   stream.emit('artifact.status', {
-    data: JSON.stringify({ payload: status('active').artifact, sequence: 7, type: 'artifact.status' }),
+    data: JSON.stringify({
+      occurredAt: '2026-08-14T12:00:00.000Z',
+      payload: status('active').artifact,
+      sequence: 7,
+      type: 'artifact.status',
+    }),
     lastEventId: '7',
   });
   await new Promise((resolvePromise) => setTimeout(resolvePromise, 0));
@@ -143,6 +167,140 @@ it('refreshes Overview state after live named events and keeps the browser Event
   expect(client.lastEventId).toBe(7);
   expect(stream.closed).toBe(false);
   client.close();
+  expect(stream.closed).toBe(true);
+});
+
+it('delivers synchronous runtime events once in FIFO order without refreshing project status', async () => {
+  const stream = new RecordingEventSource();
+  const requests: string[] = [];
+  const errors: unknown[] = [];
+  const received: number[] = [];
+  const frozen: boolean[] = [];
+  const client = new ProjectClient({
+    events: () => stream,
+    fetch: async (input) => {
+      requests.push(String(input));
+      return Response.json({ status: status() });
+    },
+  });
+
+  await client.connect(
+    () => undefined,
+    (reason) => errors.push(reason),
+    (event) => {
+      if (event.type !== 'runtime.event') return;
+      received.push(event.sequence);
+      frozen.push(Object.isFrozen(event) && Object.isFrozen(event.payload));
+    },
+  );
+  stream.emit('runtime.event', runtimeEvent(8));
+  stream.emit('runtime.event', runtimeEvent(9));
+  stream.emit('runtime.event', runtimeEvent(10));
+  await flushEvents();
+
+  expect(received).toEqual([8, 9, 10]);
+  expect(frozen).toEqual([true, true, true]);
+  expect(client.lastEventId).toBe(10);
+  expect(requests).toEqual(['/api/project/status']);
+
+  stream.emit('runtime.event', runtimeEvent(9));
+  stream.emit('runtime.event', runtimeEvent(7));
+  stream.emit('runtime.event', {
+    data: JSON.stringify({ occurredAt: '2026-08-14T12:00:00.000Z', sequence: 11, type: 'runtime.event' }),
+    lastEventId: '11',
+  });
+  await flushEvents();
+
+  expect(received).toEqual([8, 9, 10]);
+  expect(errors).toHaveLength(1);
+  expect(client.lastEventId).toBe(10);
+  expect(requests).toEqual(['/api/project/status']);
+});
+
+it('preserves a synchronous runtime event after replay gap delivery', async () => {
+  const stream = new RecordingEventSource();
+  const requests: string[] = [];
+  const received: string[] = [];
+  const client = new ProjectClient({
+    events: () => stream,
+    fetch: async (input) => {
+      requests.push(String(input));
+      return Response.json({ status: status() });
+    },
+  });
+
+  await client.connect(
+    () => undefined,
+    undefined,
+    (event) => received.push(event.type === 'replay.gap' ? event.type : `${event.type}:${event.sequence}`),
+  );
+  stream.emit('replay.gap', {
+    data: JSON.stringify({
+      earliestAvailableSequence: 14,
+      latestDroppedSequence: 13,
+      requestedAfterSequence: 10,
+      type: 'replay.gap',
+    }),
+    lastEventId: '',
+  });
+  stream.emit('runtime.event', runtimeEvent(14));
+  await flushEvents();
+
+  expect(received).toEqual(['replay.gap', 'runtime.event:14']);
+  expect(client.lastEventId).toBe(14);
+  expect(requests).toEqual(['/api/project/status', '/api/project/status']);
+});
+
+it('reports a runtime listener exception and still delivers later queued runtime events', async () => {
+  const stream = new RecordingEventSource();
+  const errors: unknown[] = [];
+  const received: number[] = [];
+  const client = new ProjectClient({
+    events: () => stream,
+    fetch: async () => Response.json({ status: status() }),
+  });
+
+  await client.connect(
+    () => undefined,
+    (reason) => errors.push(reason),
+    (event) => {
+      if (event.type !== 'runtime.event') return;
+      received.push(event.sequence);
+      if (event.sequence === 8) throw new Error('listener failure');
+    },
+  );
+  stream.emit('runtime.event', runtimeEvent(8));
+  stream.emit('runtime.event', runtimeEvent(9));
+  await flushEvents();
+
+  expect(received).toEqual([8, 9]);
+  expect(errors).toHaveLength(1);
+  expect(errors[0]).toMatchObject({ message: 'listener failure' });
+  expect(client.lastEventId).toBe(9);
+});
+
+it('clears queued runtime delivery and ignores late callbacks after close', async () => {
+  const stream = new RecordingEventSource();
+  const received: number[] = [];
+  const client = new ProjectClient({
+    events: () => stream,
+    fetch: async () => Response.json({ status: status() }),
+  });
+
+  await client.connect(
+    () => undefined,
+    undefined,
+    (event) => {
+      if (event.type === 'runtime.event') received.push(event.sequence);
+    },
+  );
+  stream.emit('runtime.event', runtimeEvent(8));
+  client.close();
+  stream.emit('runtime.event', runtimeEvent(9));
+  await flushEvents();
+
+  expect(received).toEqual([]);
+  expect(client.lastEventId).toBe(0);
   expect(stream.closed).toBe(true);
 });
 
@@ -167,11 +325,21 @@ it('reports one failed event refresh without an unhandled rejection and retains 
 
     await client.connect((next) => observed.push(next.artifact.state), (reason) => errors.push(reason));
     stream.emit('artifact.status', {
-      data: JSON.stringify({ payload: status().artifact, sequence: 7, type: 'artifact.status' }),
+      data: JSON.stringify({
+        occurredAt: '2026-08-14T12:00:00.000Z',
+        payload: status().artifact,
+        sequence: 7,
+        type: 'artifact.status',
+      }),
       lastEventId: '7',
     });
     stream.emit('source.changed', {
-      data: JSON.stringify({ payload: status().source, sequence: 8, type: 'source.changed' }),
+      data: JSON.stringify({
+        occurredAt: '2026-08-14T12:00:00.000Z',
+        payload: status().source,
+        sequence: 8,
+        type: 'source.changed',
+      }),
       lastEventId: '8',
     });
     await new Promise((resolvePromise) => setImmediate(resolvePromise));
@@ -205,7 +373,12 @@ it('suppresses a late event-refresh error after close', async () => {
 
     await client.connect(() => undefined, (reason) => errors.push(reason));
     stream.emit('artifact.status', {
-      data: JSON.stringify({ payload: status().artifact, sequence: 7, type: 'artifact.status' }),
+      data: JSON.stringify({
+        occurredAt: '2026-08-14T12:00:00.000Z',
+        payload: status().artifact,
+        sequence: 7,
+        type: 'artifact.status',
+      }),
       lastEventId: '7',
     });
     client.close();
