@@ -223,10 +223,11 @@ const cleanupProject = async (project: TestProject): Promise<void> => {
 
 it('builds a configured TypeScript Skill script from paths with spaces without repository dependencies', async () => {
   const project = await createProject();
+  const model = modelFor(project);
 
   try {
     const result = await build({
-      model: modelFor(project),
+      model,
       outputRoot: project.outputRoot,
       projectRoot: project.root,
       registry: new TargetRegistry().register((await import('../src/adapters/portable.ts')).portableAdapter, { default: true }),
@@ -281,12 +282,11 @@ it('builds a configured TypeScript Skill script from paths with spaces without r
     expect(
       (await stat(join(project.outputRoot, 'portable', 'skills', 'review', 'assets', 'icon.bin'))).mode & 0o777,
     ).toBe(0o751);
-    await expect(
-      readFile(join(project.outputRoot, 'portable', 'skills', 'review', 'scripts', 'greeting script.ts')),
-    ).resolves.toEqual(await readFile(project.scriptPath));
-    await expect(
-      readFile(join(project.outputRoot, 'portable', 'skills', 'review', 'scripts', 'local greeting module.ts')),
-    ).resolves.toEqual(await readFile(project.localModulePath));
+    for (const resource of model.skills[0]!.resources) {
+      await expect(
+        readFile(join(project.outputRoot, 'portable', 'skills', 'review', resource.relativePath)),
+      ).resolves.toEqual(await readFile(resource.source));
+    }
 
     const copiedScriptResources = [
       {
@@ -365,8 +365,9 @@ it('emits a configured Skill script deterministically and preserves the prior ar
   );
 
   try {
+    const model = modelFor(project);
     const options = {
-      model: modelFor(project),
+      model,
       outputRoot: project.outputRoot,
       projectRoot: project.root,
       registry,
@@ -376,8 +377,23 @@ it('emits a configured Skill script deterministically and preserves the prior ar
     await build(options);
     expect(await treeDigest(project.outputRoot)).toEqual(first);
 
-    await writeFile(project.scriptPath, 'export const = broken;\n');
-    await expect(build(options)).rejects.toThrow();
+    const brokenSource = 'export const = broken;\n';
+    await writeFile(project.scriptPath, brokenSource);
+    const brokenOptions = {
+      ...options,
+      model: {
+        ...model,
+        skills: model.skills.map((skill) => ({
+          ...skill,
+          resources: skill.resources.map((resource) =>
+            resource.source === project.scriptPath
+              ? { ...resource, bytes: Buffer.byteLength(brokenSource) }
+              : resource,
+          ),
+        })),
+      },
+    };
+    await expect(build(brokenOptions)).rejects.toThrow(/(Rslib|Rspack|SyntaxError)/iu);
     expect(await treeDigest(project.outputRoot)).toEqual(first);
   } finally {
     await cleanupProject(project);
