@@ -331,6 +331,7 @@ export class McpAppPreviewService {
     const entry = this.#entries.get(bindingId);
     if (entry === undefined) return false;
     void this.#closeEntry(entry, () => entry.bridge.close(options), false).catch(() => undefined);
+    this.#consumeTeardown(entry, options.id);
     return true;
   }
 
@@ -376,21 +377,43 @@ export class McpAppPreviewService {
     return result;
   }
 
-  #closeEntry(entry: PreviewEntry, operation: () => Promise<void>, discardOutbound: boolean): Promise<void> {
-    if (entry.closePromise !== undefined) return entry.closePromise;
+  #closeEntry(entry: PreviewEntry, operation: () => Promise<void>, discardOutbound: boolean, replace = false): Promise<void> {
+    if (!replace && entry.closePromise !== undefined) return entry.closePromise;
     entry.closing = true;
     if (discardOutbound) {
       entry.outbound.length = 0;
       entry.outboundBytes = 0;
     }
-    const close = this.#within(Promise.resolve().then(operation), 'MCP App preview binding close');
-    entry.closePromise = close.finally(() => {
-      entry.closed = true;
-      entry.outbound.length = 0;
-      entry.outboundBytes = 0;
-      if (this.#entries.get(entry.binding.id) === entry) this.#entries.delete(entry.binding.id);
-    });
-    return entry.closePromise;
+    let operationResult: Promise<void>;
+    try {
+      operationResult = operation();
+    } catch (error) {
+      operationResult = Promise.reject(error);
+    }
+    const close = this.#within(operationResult, 'MCP App preview binding close');
+    const pending = close.then(
+      () => {
+        if (entry.closePromise !== pending) return;
+        entry.closed = true;
+        entry.outbound.length = 0;
+        entry.outboundBytes = 0;
+        if (this.#entries.get(entry.binding.id) === entry) this.#entries.delete(entry.binding.id);
+      },
+      (error: unknown) => {
+        if (entry.closePromise === pending) entry.closePromise = undefined;
+        throw error;
+      },
+    );
+    entry.closePromise = pending;
+    return pending;
+  }
+
+  #consumeTeardown(entry: PreviewEntry, id: McpAppBridgeCloseOptions['id']): void {
+    const index = entry.outbound.findIndex((message) => message.id === id && message.method === 'ui/resource-teardown');
+    if (index < 0) return;
+    const [message] = entry.outbound.splice(index, 1);
+    const bytes = messageByteLength(message);
+    if (bytes !== undefined) entry.outboundBytes = Math.max(0, entry.outboundBytes - bytes);
   }
 
   #onBindingTeardown(bindingId: string | undefined): void {
@@ -446,10 +469,6 @@ export class McpAppPreviewService {
   }
 
   #forceCloseEntry(entry: PreviewEntry): Promise<void> {
-    if (entry.closePromise !== undefined) {
-      void entry.bridge.forceClose().catch(() => undefined);
-      return entry.closePromise;
-    }
-    return this.#closeEntry(entry, () => entry.bridge.forceClose(), true);
+    return this.#closeEntry(entry, () => entry.bridge.forceClose(), true, true);
   }
 }
