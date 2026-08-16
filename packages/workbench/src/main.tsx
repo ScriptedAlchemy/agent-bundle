@@ -546,6 +546,7 @@ const Workbench = () => {
   const [mcpController, setMcpController] = useState(() => createMcpController(mcpRoutes.current!));
   const [mcpModel, setMcpModel] = useState(() => mcpController.model);
   const [page, setPage] = useState<WorkbenchPage>(() => pageForHash(false));
+  const pageRef = useRef(page);
   const [runtimeCapability, setRuntimeCapability] = useState<RuntimeCapability>('unknown');
   const [runtimeControllerState, setRuntimeControllerState] = useState<RuntimePlaygroundController>();
   const [runtimeError, setRuntimeError] = useState<string>();
@@ -556,6 +557,8 @@ const Workbench = () => {
   const [mcpPresentation, setMcpPresentation] = useState(mcpPresentationForHash);
   const [status, setStatus] = useState<ProjectStatus>();
   const [changedFiles, setChangedFiles] = useState<readonly string[]>([]);
+
+  pageRef.current = page;
 
   if (client.current === undefined) client.current = new ProjectClient({ foreground: foreground.current! });
   if (mcpAppClient.current === undefined) mcpAppClient.current = new McpAppClient({ projectClient: client.current });
@@ -585,10 +588,27 @@ const Workbench = () => {
     });
   }
 
-  const navigate = useCallback((next: WorkbenchPage): void => {
+  const navigate = useCallback((next: WorkbenchPage, afterCommit?: () => void): void => {
+    const commit = (): void => {
+      commitNavigation(next);
+      afterCommit?.();
+    };
     if (next === 'runtime' && mcpPreviewDeparture.current!.request()) return;
     if (next === 'runtime') setMcpDepartureError(undefined);
-    commitNavigation(next);
+    if (next !== 'runtime' && pageRef.current === 'runtime') {
+      if (handoffCoordinator.current!.depart({
+        commit: () => {
+          setRuntimeHandoffError(undefined);
+          commit();
+        },
+        reject: (reason) => { setRuntimeHandoffError(`Runtime navigation could not close the Runtime App: ${errorMessage(reason)}`); },
+      })) {
+        // A hash/back navigation has already changed the URL; keep Runtime mounted until its exact close settles.
+        if (window.location.hash !== '#runtime') window.history.replaceState(undefined, '', '#runtime');
+        return;
+      }
+    }
+    commit();
   }, [commitNavigation]);
 
   if (handoffCoordinator.current === undefined) {
@@ -809,9 +829,7 @@ const Workbench = () => {
   useEffect(() => {
     const updatePage = (fromHashChange: boolean) => {
       if (window.location.hash === '#inspector') {
-        window.history.replaceState(undefined, '', '#mcp');
-        setMcpPresentation('inspector');
-        setPage('mcp');
+        navigate('mcp', () => { setMcpPresentation('inspector'); });
         return;
       }
       if (window.location.hash === '#runtime' && !runtimeAvailable) {
@@ -826,6 +844,10 @@ const Workbench = () => {
         setPage('mcp');
         return;
       }
+      if (next !== 'runtime' && pageRef.current === 'runtime') {
+        navigate(next);
+        return;
+      }
       setPage(next);
       if (fromHashChange && window.location.hash === '#mcp') setMcpPresentation('playground');
     };
@@ -833,7 +855,7 @@ const Workbench = () => {
     updatePage(false);
     window.addEventListener('hashchange', onHashChange);
     return () => window.removeEventListener('hashchange', onHashChange);
-  }, [runtimeAvailable, runtimeCapability]);
+  }, [navigate, runtimeAvailable, runtimeCapability]);
 
   useEffect(() => () => {
     // Root shutdown owns the active controller's ordered preview→controller

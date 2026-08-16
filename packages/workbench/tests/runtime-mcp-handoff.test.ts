@@ -178,6 +178,63 @@ it('fences a held A close when distinct B registers, leaving B eligible', async 
   expect(state.commits).toHaveLength(1);
 });
 
+it('coalesces one generic Runtime departure and commits its exact navigation only after the lifecycle closes', async () => {
+  const state = coordinator();
+  const current = authority('leave');
+  const held = deferred<void>();
+  const navigations: string[] = [];
+  let closes = 0;
+  state.value.register({ close: () => { closes += 1; return held.promise; } }, current);
+
+  expect(state.value.depart({ commit: () => { navigations.push('mcp'); }, reject: () => undefined })).toBe(true);
+  expect(state.value.depart({ commit: () => { navigations.push('overview'); }, reject: () => undefined })).toBe(true);
+  expect(closes).toBe(1);
+  expect(navigations).toEqual([]);
+  held.resolve();
+  await flush();
+  expect(navigations).toEqual(['mcp']);
+  expect(state.commits).toEqual([]);
+});
+
+it('retains one Runtime lifecycle after generic departure rejection for its exact retry', async () => {
+  const state = coordinator();
+  const current = authority('leave-retry');
+  const rejections: unknown[] = [];
+  const navigations: string[] = [];
+  let closes = 0;
+  state.value.register({
+    close: () => {
+      closes += 1;
+      return closes === 1 ? Promise.reject(new Error('Runtime departure close rejected')) : Promise.resolve();
+    },
+  }, current);
+
+  expect(state.value.depart({ commit: () => { navigations.push('mcp'); }, reject: (reason) => { rejections.push(reason); } })).toBe(true);
+  await flush();
+  expect(rejections).toHaveLength(1);
+  expect(state.value.canOpen(current)).toBe(true);
+  expect(state.value.depart({ commit: () => { navigations.push('mcp'); }, reject: () => undefined })).toBe(true);
+  await flush();
+  expect(closes).toBe(2);
+  expect(navigations).toEqual(['mcp']);
+});
+
+it('fences a held generic Runtime departure when a distinct lifecycle replaces its authority', async () => {
+  const state = coordinator();
+  const a = authority('leave-a');
+  const b = authority('leave-b');
+  const held = deferred<void>();
+  const navigations: string[] = [];
+  state.value.register({ close: () => held.promise }, a);
+
+  expect(state.value.depart({ commit: () => { navigations.push('mcp'); }, reject: () => undefined })).toBe(true);
+  state.value.register({ close: async () => undefined }, b);
+  held.resolve();
+  await flush();
+  expect(navigations).toEqual([]);
+  expect(state.value.canOpen(b)).toBe(true);
+});
+
 it('retains the exact authority after a rejected close and commits one retry', async () => {
   const state = coordinator();
   const current = authority('retry');

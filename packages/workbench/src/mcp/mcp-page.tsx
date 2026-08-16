@@ -176,9 +176,12 @@ type RuntimePreviewBinding = Readonly<{
 }>;
 
 type RuntimePageAdmission = Readonly<{
-  readonly appSurfaceId: string;
   readonly binding: RuntimeBindingSnapshot;
-  readonly selection: McpPageRuntimePreviewSelection;
+  /** A direct Runtime navigation has authoritative binding evidence but no preview to recreate. */
+  readonly selection?: Readonly<{
+    readonly appSurfaceId: string;
+    readonly preview: McpPageRuntimePreviewSelection;
+  }>;
 }>;
 
 const runtimePreviewDiagnostic = 'Runtime App preview is unavailable because its binding evidence is invalid.';
@@ -331,18 +334,24 @@ const runtimePreviewBinding = (preview: RuntimeAppPreviewProps): RuntimePreviewB
 
 const admitRuntimePage = (source: unknown, selection: unknown): RuntimePageAdmission | undefined => {
   const sourceDescriptors = ownDataDescriptors(source, false);
-  const selectionDescriptors = ownDataDescriptors(selection, false);
-  if (sourceDescriptors?.get('kind')?.value !== 'runtime' || selectionDescriptors?.get('kind')?.value !== 'runtime') return undefined;
+  if (sourceDescriptors?.get('kind')?.value !== 'runtime') return undefined;
   const sourceBinding = snapshotRuntimeBinding(sourceDescriptors.get('binding')?.value);
+  if (sourceBinding === undefined) return undefined;
+  if (selection === undefined) return Object.freeze({ binding: sourceBinding });
+
+  const selectionDescriptors = ownDataDescriptors(selection, false);
+  if (selectionDescriptors?.get('kind')?.value !== 'runtime') return undefined;
   const selectionBinding = snapshotRuntimeBinding(selectionDescriptors.get('binding')?.value);
   const preview = preparedRuntimePreview(selectionDescriptors.get('preview')?.value);
   const app = preview === undefined ? undefined : runtimePreviewBinding(preview);
-  if (sourceBinding === undefined || selectionBinding === undefined || preview === undefined || app === undefined) return undefined;
+  if (selectionBinding === undefined || preview === undefined || app === undefined) return undefined;
   if (!sameRuntimeBinding(sourceBinding, selectionBinding) || !sameRuntimeBinding(sourceBinding, app.binding)) return undefined;
   return Object.freeze({
-    appSurfaceId: app.appSurfaceId,
     binding: sourceBinding,
-    selection: Object.freeze({ binding: sourceBinding, kind: 'runtime', preview }),
+    selection: Object.freeze({
+      appSurfaceId: app.appSurfaceId,
+      preview: Object.freeze({ binding: sourceBinding, kind: 'runtime', preview }),
+    }),
   });
 };
 
@@ -932,7 +941,7 @@ export const McpPage = (props: McpPageProps) => {
   const [pendingActions, setPendingActions] = useState<readonly string[]>([]);
   const [traceTab, setTraceTab] = useState<TraceTab>('raw');
   const [appPreview, setAppPreview] = useState<McpPagePreviewSelection | undefined>(() =>
-    runtimeProps === undefined ? initialPreview : runtimeAdmission?.selection);
+    runtimeProps === undefined ? initialPreview : runtimeAdmission?.selection?.preview);
   const [appPreviewBusy, setAppPreviewBusy] = useState(false);
   const [appPreviewProfile, setAppPreviewProfile] = useState<McpAppPreviewProfile>('portable');
   const [appHost] = useState(browserMcpAppHost);
@@ -1288,7 +1297,7 @@ export const McpPage = (props: McpPageProps) => {
         host={appHost}
         key={appPreview.kind === 'artifact'
           ? `${appPreview.source.invocationId}-${appPreviewProfile}`
-          : `runtime:${appPreview.binding.sessionId}:${appPreview.binding.sessionRevision}:${runtimeAdmission?.appSurfaceId ?? ''}:${appPreview.preview.run.id}`}
+          : `runtime:${appPreview.binding.sessionId}:${appPreview.binding.sessionRevision}:${runtimeAdmission?.selection?.appSurfaceId ?? ''}:${appPreview.preview.run.id}`}
         onLifecycleChange={setActiveAppPreviewController}
         previewProfile={appPreviewProfile}
         runtimePreviewDependencies={runtimePreviewDependencies}

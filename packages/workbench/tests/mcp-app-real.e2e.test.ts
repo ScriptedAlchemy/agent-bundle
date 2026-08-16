@@ -755,7 +755,7 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
     if (thirdFrame === undefined) throw new Error('Third Runtime App frame was unavailable.');
     const thirdFrameHref = thirdFrame.url();
     const thirdDeletePath = `/api/runtime/apps/${encodeURIComponent(thirdBinding.id)}`;
-    await page.getByRole('link', { name: 'MCP playground', exact: true }).click();
+    await page.evaluate(() => { window.location.hash = '#mcp'; });
     const teardownRequestForThird = (): RuntimeAppMessage | undefined => appMessages.find((entry) =>
       entry.href === thirdFrameHref && entry.senderOrigin === fixture.url && entry.message !== null && typeof entry.message === 'object' &&
       (entry.message as Readonly<Record<string, unknown>>).method === 'ui/resource-teardown');
@@ -783,7 +783,7 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
     expect(artifactMcpSessionRequests).toEqual([]);
     expect(runtimeMcpSessionRequests).toEqual([]);
     expect(projectEventStreams).toEqual(['GET /api/project/events']);
-    expect(runtimeCreates()).toHaveLength(2);
+    expect(runtimeCreates()).toHaveLength(3);
     expect(runtimeAppRequests.filter((entry) => entry.method === 'DELETE' && entry.path === sourceDeletePath)).toHaveLength(1);
     expect(pageErrors).toEqual([]);
   } finally {

@@ -28,8 +28,19 @@ type RuntimeHandoffAttempt = Readonly<{
   readonly record: RuntimePreviewLifecycleRecord;
 }>;
 
+type RuntimeDepartureAttempt = Readonly<{
+  readonly generation: number;
+  readonly options: RuntimeMcpDepartureOptions;
+  readonly record: RuntimePreviewLifecycleRecord;
+}>;
+
 export interface RuntimeMcpHandoffCoordinatorOptions {
   readonly commit: (handoff: Required<RuntimeMcpHandoff>) => void;
+  readonly reject: (reason: unknown) => void;
+}
+
+export interface RuntimeMcpDepartureOptions {
+  readonly commit: () => void;
   readonly reject: (reason: unknown) => void;
 }
 
@@ -250,6 +261,7 @@ export class RuntimeMcpHandoffCoordinator {
   readonly #listeners = new Set<() => void>();
   readonly #options: RuntimeMcpHandoffCoordinatorOptions;
   #attempt: RuntimeHandoffAttempt | undefined;
+  #departure: RuntimeDepartureAttempt | undefined;
   #generation = 0;
   #registration = 0;
   #record: RuntimePreviewLifecycleRecord | undefined;
@@ -273,12 +285,12 @@ export class RuntimeMcpHandoffCoordinator {
   }
 
   canOpen(authority: RuntimeHandoffAuthority): boolean {
-    return this.#attempt === undefined && this.#record?.authority.key === authority.key;
+    return this.#attempt === undefined && this.#departure === undefined && this.#record?.authority.key === authority.key;
   }
 
   open(authority: RuntimeHandoffAuthority): void {
     const record = this.#record;
-    if (record === undefined || record.authority.key !== authority.key || this.#attempt !== undefined) return;
+    if (record === undefined || record.authority.key !== authority.key || this.#attempt !== undefined || this.#departure !== undefined) return;
     const attempt = Object.freeze({ generation: this.#generation, record });
     this.#attempt = attempt;
     this.#notify();
@@ -295,10 +307,39 @@ export class RuntimeMcpHandoffCoordinator {
     });
   }
 
+  /** Reuses the current lifecycle for a non-handoff departure without discarding a retryable failure. */
+  depart(options: RuntimeMcpDepartureOptions): boolean {
+    const record = this.#record;
+    if (record === undefined) return false;
+    if (this.#attempt !== undefined || this.#departure !== undefined) return true;
+    const departure = Object.freeze({ generation: this.#generation, options, record });
+    this.#departure = departure;
+    this.#notify();
+    let closing: Promise<void>;
+    try {
+      closing = record.handle.close();
+    } catch (reason) {
+      closing = Promise.reject(reason);
+    }
+    void closing.then(() => {
+      if (!this.#isCurrentDeparture(departure)) return;
+      this.#record = undefined;
+      departure.options.commit();
+    }, (reason: unknown) => {
+      if (this.#isCurrentDeparture(departure)) departure.options.reject(reason);
+    }).finally(() => {
+      if (this.#departure !== departure) return;
+      this.#departure = undefined;
+      this.#notify();
+    });
+    return true;
+  }
+
   /** Fences held closes and discards any current lifecycle on reset or navigation. */
   cancel(): void {
     this.#generation += 1;
     this.#attempt = undefined;
+    this.#departure = undefined;
     this.#record = undefined;
     this.#notify();
   }
@@ -314,8 +355,12 @@ export class RuntimeMcpHandoffCoordinator {
     return this.#attempt === attempt && this.#generation === attempt.generation && sameLifecycle(this.#record, attempt.record);
   }
 
+  #isCurrentDeparture(departure: RuntimeDepartureAttempt): boolean {
+    return this.#departure === departure && this.#generation === departure.generation && sameLifecycle(this.#record, departure.record);
+  }
+
   #unregister(record: RuntimePreviewLifecycleRecord): void {
-    if (this.#record !== record || sameLifecycle(this.#attempt?.record, record)) return;
+    if (this.#record !== record || sameLifecycle(this.#attempt?.record, record) || sameLifecycle(this.#departure?.record, record)) return;
     this.#generation += 1;
     this.#record = undefined;
     this.#notify();
