@@ -750,6 +750,70 @@ it('rejects private and unknown direct connection keys in raw runtime open snaps
   }
 });
 
+it('preserves opaque nested capability keys in a raw runtime connection snapshot', async () => {
+  const client = new McpRouteClient({
+    fetch: async (input) => {
+      const url = String(input);
+      if (url === '/api/project/session') return json(foregroundBootstrap);
+      if (url === '/api/runtime/mcp/sessions') return json({ session: {
+        binding: {
+          definitionDigest: 'definition-a', registryRevision: 7, serverDigest: 'server-a', serverName: 'weather',
+          sessionId: 'runtime-session-a', sessionRevision: 3, target: 'portable', transportDigest: 'transport-a',
+        },
+        connection: { ...connection, capabilities: { arbitrary: { nested: ['value'] } } },
+        state: 'ready',
+      } });
+      throw new Error(`Unexpected route request ${url}.`);
+    },
+  });
+
+  await expect(client.openRuntime({ serverName: 'weather', target: 'portable' })).resolves.toMatchObject({
+    connection: { capabilities: { arbitrary: { nested: ['value'] } } },
+  });
+});
+
+it('rejects malformed direct server keys in raw runtime open and restart snapshots', async () => {
+  const invalidFields = [
+    ['providerSessionId', 'provider-private'],
+    ['stateStoreId', 'state-private'],
+    ['unexpected', 'unexpected-value'],
+  ] as const;
+  const operations = ['open', 'restart'] as const;
+
+  for (const operation of operations) {
+    for (const [field, value] of invalidFields) {
+      const client = new McpRouteClient({
+        fetch: async (input) => {
+          const url = String(input);
+          if (url === '/api/project/session') return json(foregroundBootstrap);
+          const runtimeSession = {
+            binding: {
+              definitionDigest: 'definition-b', registryRevision: 8, serverDigest: 'server-b', serverName: 'weather',
+              sessionId: 'runtime-session-a', sessionRevision: operation === 'open' ? 3 : 4, target: 'portable', transportDigest: 'transport-b',
+            },
+            connection: { ...connection, server: { name: 'weather-fixture', version: '1.0.0', [field]: value } },
+            state: 'ready',
+          };
+          if (operation === 'open' && url === '/api/runtime/mcp/sessions') return json({ session: runtimeSession });
+          if (operation === 'restart' && url === '/api/runtime/mcp/sessions/runtime-session-a/restart') return json({
+            reconcile: {
+              action: 'sessions-restarted', invalidatedBindings: [{ sessionId: 'runtime-session-a', sessionRevision: 3 }], registryRevision: 8,
+              restartedSessionIds: ['runtime-session-a'], runtimeGenerationId: 'generation-b', sequence: 4,
+            },
+            session: runtimeSession,
+          });
+          throw new Error(`Unexpected route request ${url}.`);
+        },
+      });
+
+      const request = operation === 'open'
+        ? client.openRuntime({ serverName: 'weather', target: 'portable' })
+        : client.restartRuntime({ expectedSessionRevision: 3, sessionId: 'runtime-session-a' });
+      await expect(request).rejects.toMatchObject({ code: 'AB8019' });
+    }
+  }
+});
+
 it('rejects private and unknown direct keys in raw runtime restart success DTOs', async () => {
   const invalidFields = [
     ['providerSessionId', 'provider-private'],

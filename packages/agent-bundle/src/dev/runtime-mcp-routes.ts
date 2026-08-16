@@ -115,25 +115,28 @@ interface PublicRuntimeMcpSessionSnapshot {
   readonly state: DevRuntimeMcpSessionSnapshot['state'];
 }
 
-const publicSessionSnapshot = (snapshot: DevRuntimeMcpSessionSnapshot): PublicRuntimeMcpSessionSnapshot => Object.freeze({
-  binding: Object.freeze({
-    definitionDigest: snapshot.binding.definitionDigest,
-    registryRevision: snapshot.binding.registryRevision,
-    serverDigest: snapshot.binding.serverDigest,
-    serverName: snapshot.binding.serverName,
-    sessionId: snapshot.binding.sessionId,
-    sessionRevision: snapshot.binding.sessionRevision,
-    target: snapshot.binding.target,
-    transportDigest: snapshot.binding.transportDigest,
-  }),
-  connection: Object.freeze({
-    capabilities: snapshot.connection.capabilities,
-    protocolEra: snapshot.connection.protocolEra,
-    protocolVersion: snapshot.connection.protocolVersion,
-    server: snapshot.connection.server,
-  }),
-  state: snapshot.state,
-});
+const publicSessionSnapshot = (snapshot: DevRuntimeMcpSessionSnapshot): PublicRuntimeMcpSessionSnapshot => {
+  const server = snapshot.connection.server;
+  return Object.freeze({
+    binding: Object.freeze({
+      definitionDigest: snapshot.binding.definitionDigest,
+      registryRevision: snapshot.binding.registryRevision,
+      serverDigest: snapshot.binding.serverDigest,
+      serverName: snapshot.binding.serverName,
+      sessionId: snapshot.binding.sessionId,
+      sessionRevision: snapshot.binding.sessionRevision,
+      target: snapshot.binding.target,
+      transportDigest: snapshot.binding.transportDigest,
+    }),
+    connection: Object.freeze({
+      capabilities: snapshot.connection.capabilities,
+      protocolEra: snapshot.connection.protocolEra,
+      protocolVersion: snapshot.connection.protocolVersion,
+      server: server === undefined ? undefined : Object.freeze({ name: server.name, version: server.version }),
+    }),
+    state: snapshot.state,
+  });
+};
 
 const restartSnapshot = (
   snapshot: DevRuntimeMcpSessionSnapshot,

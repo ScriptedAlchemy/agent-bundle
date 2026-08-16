@@ -154,7 +154,7 @@ const routeConnection = (value: unknown): McpRouteConnection => {
   const server = connection.server;
   let serverSnapshot: Readonly<{ readonly name: string; readonly version: string }> | undefined;
   if (server !== undefined) {
-    if (!isRecord(server) || typeof server.name !== 'string' || typeof server.version !== 'string') {
+    if (!isRecord(server) || !hasExactKeys(server, ['name', 'version']) || typeof server.name !== 'string' || typeof server.version !== 'string') {
       throw new McpRouteClientError('AB8019', 'Foreground MCP route returned an invalid connection.');
     }
     serverSnapshot = Object.freeze({ name: server.name, version: server.version });

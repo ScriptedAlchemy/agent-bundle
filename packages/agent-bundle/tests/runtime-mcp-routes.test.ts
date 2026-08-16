@@ -21,7 +21,12 @@ it('delegates the fixed manual runtime MCP open route without becoming an App pr
       definitionDigest: 'definition-a', providerSessionId: 'provider-private', registryRevision: 3, serverDigest: 'server-a', serverName: 'weather',
       sessionId: 'session-a', sessionRevision: 2, stateStoreId: 'state-private', target: 'portable', transportDigest: 'transport-a',
     }),
-    connection: Object.freeze({ capabilities: Object.freeze({}), protocolEra: 'modern' as const, protocolVersion: '2026-01-26', server: undefined }),
+    connection: Object.freeze({
+      capabilities: Object.freeze({}),
+      protocolEra: 'modern' as const,
+      protocolVersion: '2026-01-26',
+      server: Object.freeze({ name: 'weather', providerSessionId: 'provider-private', stateStoreId: 'state-private', unexpected: 'unexpected-value', version: '1.0.0' }),
+    }),
     state: 'ready' as const,
   });
   const restartedSnapshot = Object.freeze({
@@ -29,7 +34,12 @@ it('delegates the fixed manual runtime MCP open route without becoming an App pr
       definitionDigest: 'definition-b', providerSessionId: 'provider-private', registryRevision: 4, serverDigest: 'server-b', serverName: 'weather',
       sessionId: 'session-a', sessionRevision: 3, stateStoreId: 'state-private', target: 'portable', transportDigest: 'transport-b',
     }),
-    connection: Object.freeze({ capabilities: Object.freeze({ tools: Object.freeze({ listChanged: true }) }), protocolEra: 'modern' as const, protocolVersion: '2026-02-09', server: Object.freeze({ name: 'weather-next', version: '2.0.0' }) }),
+    connection: Object.freeze({
+      capabilities: Object.freeze({ tools: Object.freeze({ listChanged: true }) }),
+      protocolEra: 'modern' as const,
+      protocolVersion: '2026-02-09',
+      server: Object.freeze({ name: 'weather-next', providerSessionId: 'provider-private', stateStoreId: 'state-private', unexpected: 'unexpected-value', version: '2.0.0' }),
+    }),
     state: 'ready' as const,
   });
   const runtime = {
@@ -80,7 +90,7 @@ it('delegates the fixed manual runtime MCP open route without becoming an App pr
     expect(opened).toEqual({ session: { binding: {
       definitionDigest: 'definition-a', registryRevision: 3, serverDigest: 'server-a', serverName: 'weather',
       sessionId: 'session-a', sessionRevision: 2, target: 'portable', transportDigest: 'transport-a',
-    }, connection: { capabilities: {}, protocolEra: 'modern', protocolVersion: '2026-01-26' }, state: 'ready' } });
+    }, connection: { capabilities: {}, protocolEra: 'modern', protocolVersion: '2026-01-26', server: { name: 'weather', version: '1.0.0' } }, state: 'ready' } });
     expect(JSON.stringify(opened)).not.toContain('provider-private');
     expect(JSON.stringify(opened)).not.toContain('state-private');
 
