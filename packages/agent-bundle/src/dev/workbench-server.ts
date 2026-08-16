@@ -449,6 +449,9 @@ export const startDevServer = async (options: StartDevServerOptions): Promise<De
     build: Object.freeze({ state: 'idle' }),
     source: Object.freeze({ diagnostics: Object.freeze([]), state: 'unknown' }),
   });
+  // A provider can start in `compiling`; event delivery retries the no-op
+  // placeholder only after the Workbench has installed its App lifecycle.
+  let ensureRuntimeAppPreviews: () => void = () => undefined;
   let runtime: DevRuntimeController | undefined;
   if (initialPreparedProject.devRuntime !== undefined || initialPreparedProject.devRuntimeDiagnostic !== undefined) {
     const preparedRuntime = initialPreparedProject.devRuntime ?? Object.freeze({
@@ -477,6 +480,9 @@ export const startDevServer = async (options: StartDevServerOptions): Promise<De
           payload: event,
           type: 'runtime.event',
         });
+        if (event.type === 'runtime.generation.activated' || event.type === 'runtime.generation.failed' || event.type === 'runtime.status') {
+          ensureRuntimeAppPreviews();
+        }
       },
       environment: process.env,
       preparedRuntime,
@@ -489,6 +495,7 @@ export const startDevServer = async (options: StartDevServerOptions): Promise<De
   const appPreviews = new DeferredMcpAppPreviewService();
   const clientSurfaces = new RuntimeClientSurfaceBindings(runtime, options.testing?.openRuntimeClientSurface);
   let foregroundClosing = false;
+  let installingRuntimePreviews = false;
   let mcpApps: McpAppLifecycle | undefined;
   let previews: McpAppPreviewService | undefined;
   /**
@@ -496,15 +503,16 @@ export const startDevServer = async (options: StartDevServerOptions): Promise<De
    * than the controller.  Register the service with its lifecycle before the
    * foreground facade publishes it, so close/reconcile races remain closed.
    */
-  const ensureRuntimeAppPreviews = (): void => {
+  ensureRuntimeAppPreviews = (): void => {
     const lifecycle = mcpApps;
     const prepared = latestValidPreparedProject;
     if (
       foregroundClosing || runtime === undefined || prepared === undefined || previews === undefined ||
-      lifecycle === undefined || !lifecycle.acceptsRuntimePreviews
+      lifecycle === undefined || !lifecycle.acceptsRuntimePreviews || installingRuntimePreviews
     ) return;
     const runtimeStatus = runtime.status();
     if (runtimeStatus.state !== 'active' && runtimeStatus.state !== 'degraded') return;
+    installingRuntimePreviews = true;
     try {
       // Reading this getter proves that the provider has exposed the stable
       // broker surface; a merely constructed controller is not enough.
@@ -542,6 +550,8 @@ export const startDevServer = async (options: StartDevServerOptions): Promise<De
       if (!appPreviews.attachRuntime(runtimePreviews)) void runtimePreviews.prepareClose().catch(() => undefined);
     } catch (error) {
       if (!(error instanceof DevRuntimeUnavailableError)) throw error;
+    } finally {
+      installingRuntimePreviews = false;
     }
   };
   const coordinator = new DevCoordinator({

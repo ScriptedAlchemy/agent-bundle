@@ -142,6 +142,67 @@ const appPreviewBody = () => ({
   toolName: 'show-app',
 });
 
+interface CompilingRuntimeAppState {
+  emit: ((event: { readonly type: 'runtime.generation.activated' | 'runtime.status' }) => void) | undefined;
+  phase: 'active' | 'compiling';
+  subscribes: number;
+  unsubscribes: number;
+}
+
+const writeCompilingRuntimeAppProject = async (root: string, stateKey: string): Promise<void> => {
+  await mkdir(join(root, 'src', 'dev'), { recursive: true });
+  await Promise.all([
+    writeFile(join(root, 'src', 'dev', 'provider.ts'), [
+      `const state = globalThis[${JSON.stringify(stateKey)}];`,
+      "if (state === undefined) throw new Error('Missing compiling Runtime Apps test state.');",
+      'const registry = {',
+      '  close: async () => undefined,',
+      '  closeSession: async () => undefined,',
+      '  open: async () => { throw new Error(\'unused\'); },',
+      '  reconcile: async () => ({ invalidatedBindings: [], registryRevision: 0 }),',
+      '  restart: async () => ({ invalidatedBindings: [], registryRevision: 0 }),',
+      '  session: () => undefined,',
+      '  snapshot: () => undefined,',
+      "  subscribe: () => { state.subscribes += 1; state.emit?.({ type: 'runtime.status' }); return { unsubscribe: () => { state.unsubscribes += 1; } }; },",
+      '};',
+      'export const createDevRuntimeProvider = () => ({',
+      "  descriptor: { environmentVariables: [], id: 'compiling-runtime-apps', label: 'Compiling Runtime Apps', schemaVersion: 1 },",
+      '  start: async (context) => {',
+      '    state.emit = context.emit;',
+      '    return {',
+      '      clientSurface: () => undefined,',
+      '      close: async () => undefined,',
+      '      invoke: async () => { throw new Error(\'unused\'); },',
+      '      mcpRegistry: registry,',
+      "      providerSessionId: 'provider-compiling-runtime-apps',",
+      '      readAsset: async () => undefined,',
+      '      readRunFlight: async () => undefined,',
+      '      reconcilePreparedRuntime: async () => undefined,',
+      '      replay: async () => { throw new Error(\'unused\'); },',
+      "      resetState: async () => ({ stateStoreId: 'state-compiling-runtime-apps', stateVersion: 0 }),",
+      '      run: () => undefined,',
+      '      runs: () => [],',
+      "      status: () => ({ descriptor: { environmentVariables: [], id: 'compiling-runtime-apps', label: 'Compiling Runtime Apps', schemaVersion: 1 }, diagnostics: [], hmrReady: true, state: state.phase }),",
+      '      surfaces: () => [],',
+      '    };',
+      '  },',
+      '});',
+      '',
+    ].join('\n')),
+    writeFile(join(root, 'agent-bundle.config.ts'), [
+      "import { defineConfig } from 'agent-bundle';",
+      '',
+      'export default defineConfig({',
+      "  dev: { runtime: { provider: './src/dev/provider.ts' } },",
+      "  plugin: { name: 'compiling-runtime-apps', version: '1.0.0' },",
+      "  skills: ['skills/review'],",
+      "  targets: ['portable'],",
+      '});',
+      '',
+    ].join('\n')),
+  ]);
+};
+
 const workbenchSyntheticAdapter: TargetAdapter = Object.freeze({
   artifactLayout: Object.freeze({
     scripts: Object.freeze({
@@ -555,6 +616,91 @@ it('fences a closing foreground before a held valid runtime reconcile can attach
     expect(runtimeState.unsubscribes).toBe(0);
   } finally {
     releaseReconcile();
+    delete runtimeGlobal[stateKey];
+    await server?.close().catch(() => undefined);
+    await Promise.all([removeProjectFixture(project.root), rm(assetsRoot, { force: true, recursive: true })]);
+  }
+}, 30_000);
+
+it('attaches Runtime App routes once when a compiling provider later activates, even if registry subscription re-enters status delivery', async () => {
+  const project = await createProjectFixture();
+  const assetsRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-workbench-compiling-runtime-apps-'));
+  const stateKey = `__agentBundleCompilingRuntimeApps${Date.now()}${Math.random().toString(16).slice(2)}`;
+  const runtimeState: CompilingRuntimeAppState = { emit: undefined, phase: 'compiling', subscribes: 0, unsubscribes: 0 };
+  const runtimeGlobal = globalThis as typeof globalThis & Record<string, CompilingRuntimeAppState | undefined>;
+  let server: Awaited<ReturnType<typeof startDevServer>> | undefined;
+  try {
+    runtimeGlobal[stateKey] = runtimeState;
+    await Promise.all([
+      writeCompilingRuntimeAppProject(project.root, stateKey),
+      writeFile(join(assetsRoot, 'index.html'), '<!doctype html><title>Agent Bundle workbench</title>'),
+    ]);
+    server = await startDevServer({
+      assets: createWorkbenchAssetSource({ root: assetsRoot }),
+      open: false,
+      port: 0,
+      root: project.root,
+    });
+    const bootstrap = await fetch(`${server.url}/api/project/session`, { headers: { 'sec-fetch-site': 'same-origin' } });
+    const { token } = await bootstrap.json() as { readonly token: string };
+    const create = () => fetch(`${server!.url}/api/runtime/apps`, {
+      body: JSON.stringify({ expectedGenerationId: 'missing-generation', profileId: 'portable', runId: 'missing-run' }),
+      headers: { 'content-type': 'application/json', origin: server!.url, 'x-agent-bundle-session': token },
+      method: 'POST',
+    });
+
+    await expect(create().then(async (response) => ({ body: await response.json(), status: response.status }))).resolves.toEqual({
+      body: { diagnostic: { code: 'AB8022', message: 'MCP App preview is not available.' } },
+      status: 404,
+    });
+    expect(runtimeState.subscribes).toBe(0);
+
+    runtimeState.phase = 'active';
+    runtimeState.emit?.({ type: 'runtime.generation.activated' });
+    await expect(create().then(async (response) => ({ body: await response.json(), status: response.status }))).resolves.toEqual({
+      body: { diagnostic: { code: 'AB8201', message: 'Runtime MCP App run is not available.' } },
+      status: 404,
+    });
+    expect(runtimeState.subscribes).toBe(1);
+    runtimeState.emit?.({ type: 'runtime.generation.activated' });
+    runtimeState.emit?.({ type: 'runtime.status' });
+    expect(runtimeState.subscribes).toBe(1);
+
+    await expect(server.close()).resolves.toBeUndefined();
+    expect(runtimeState.unsubscribes).toBe(1);
+  } finally {
+    delete runtimeGlobal[stateKey];
+    await server?.close().catch(() => undefined);
+    await Promise.all([removeProjectFixture(project.root), rm(assetsRoot, { force: true, recursive: true })]);
+  }
+}, 30_000);
+
+it('does not attach a compiling Runtime App preview service after foreground close fences a late activation', async () => {
+  const project = await createProjectFixture();
+  const assetsRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-workbench-compiling-runtime-close-'));
+  const stateKey = `__agentBundleCompilingRuntimeClose${Date.now()}${Math.random().toString(16).slice(2)}`;
+  const runtimeState: CompilingRuntimeAppState = { emit: undefined, phase: 'compiling', subscribes: 0, unsubscribes: 0 };
+  const runtimeGlobal = globalThis as typeof globalThis & Record<string, CompilingRuntimeAppState | undefined>;
+  let server: Awaited<ReturnType<typeof startDevServer>> | undefined;
+  try {
+    runtimeGlobal[stateKey] = runtimeState;
+    await Promise.all([
+      writeCompilingRuntimeAppProject(project.root, stateKey),
+      writeFile(join(assetsRoot, 'index.html'), '<!doctype html><title>Agent Bundle workbench</title>'),
+    ]);
+    server = await startDevServer({
+      assets: createWorkbenchAssetSource({ root: assetsRoot }),
+      open: false,
+      port: 0,
+      root: project.root,
+    });
+    const closing = server.close();
+    runtimeState.phase = 'active';
+    runtimeState.emit?.({ type: 'runtime.generation.activated' });
+    await expect(closing).resolves.toBeUndefined();
+    expect(runtimeState.subscribes).toBe(0);
+    expect(runtimeState.unsubscribes).toBe(0);
+  } finally {
     delete runtimeGlobal[stateKey];
     await server?.close().catch(() => undefined);
     await Promise.all([removeProjectFixture(project.root), rm(assetsRoot, { force: true, recursive: true })]);
