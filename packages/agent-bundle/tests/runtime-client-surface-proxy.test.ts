@@ -69,7 +69,14 @@ const serveBootstrapEntry = (
   return true;
 };
 
-const runtimeProxyShellHarness = async (binding: Awaited<ReturnType<typeof RuntimeClientSurfaceProxy.open>>) => {
+type RuntimeProxyShellHarnessOptions = Readonly<{
+  readonly fetch?: typeof globalThis.fetch;
+}>;
+
+const runtimeProxyShellHarness = async (
+  binding: Awaited<ReturnType<typeof RuntimeClientSurfaceProxy.open>>,
+  options: RuntimeProxyShellHarnessOptions = {},
+) => {
   const bootstrap = await fetch(binding.bootstrapUrl, { redirect: 'manual' });
   expect(bootstrap.status).toBe(200);
   const source = /<script>\n([\s\S]+)\n<\/script>$/u.exec(await bootstrap.text())?.[1];
@@ -159,9 +166,9 @@ const runtimeProxyShellHarness = async (binding: Awaited<ReturnType<typeof Runti
     Object.freeze({ origin: binding.origin }),
     FakeWebSocket,
     TextEncoder,
-    (async () => new Response('<!doctype html><main>replacement</main>', {
+    options.fetch ?? (async () => new Response('<!doctype html><main>replacement</main>', {
       headers: { 'content-type': 'text/html; charset=utf-8' },
-    })) as typeof fetch,
+    })) as typeof globalThis.fetch,
     addEventListener,
     setTimer,
     clearTimer,
@@ -276,6 +283,103 @@ it('reconnects one outer HMR socket and stops reconnecting after pagehide', asyn
     expect(shell.pendingTimers()).toBe(0);
     shell.runTimers();
     expect(shell.sockets).toHaveLength(2);
+  } finally {
+    await binding.close();
+    upstream.closeAllConnections();
+    await close(upstream);
+  }
+});
+
+it('does not reinstall the opaque child when a held refresh fetch resolves after pagehide', async () => {
+  const upstream = createServer((request, response) => {
+    if (serveBootstrapEntry(request, response)) return;
+    response.writeHead(404).end();
+  });
+  const origin = await listen(upstream);
+  const binding = await RuntimeClientSurfaceProxy.open({
+    entryPath: '/app/index.html',
+    httpOrigin: origin,
+    httpPathPrefixes: ['/app/'],
+    surfaceId: 'app.weather',
+    webSocketOrigin: origin.replace('http:', 'ws:'),
+    webSocketPath: '/rsbuild-hmr',
+    webSocketToken: 'rsbuild-token-1234',
+  }, () => undefined);
+  let resolveFetch: ((response: Response) => void) | undefined;
+  let refreshSignal: AbortSignal | null | undefined;
+  const heldFetch = new Promise<Response>((resolvePromise) => { resolveFetch = resolvePromise; });
+  try {
+    const shell = await runtimeProxyShellHarness(binding, {
+      fetch: (_input, init) => {
+        refreshSignal = init?.signal;
+        return heldFetch;
+      },
+    });
+    shell.sockets[0]!.emit('message', { data: JSON.stringify({ type: 'full-reload' }) });
+    shell.pagehide();
+    resolveFetch?.(new Response('<!doctype html><main>late fetch</main>', {
+      headers: { 'content-type': 'text/html; charset=utf-8' },
+    }));
+    await new Promise<void>((resolvePromise) => setTimeout(resolvePromise, 0));
+    expect(shell.entries).toHaveLength(1);
+    expect(refreshSignal?.aborted).toBe(true);
+    expect(shell.appPosts).toEqual([]);
+    expect(shell.parentPosts).toEqual([]);
+    expect(shell.pendingTimers()).toBe(0);
+    expect(shell.sockets).toHaveLength(1);
+  } finally {
+    await binding.close();
+    upstream.closeAllConnections();
+    await close(upstream);
+  }
+});
+
+it('does not reinstall the opaque child when held refresh text resolves after pagehide', async () => {
+  const upstream = createServer((request, response) => {
+    if (serveBootstrapEntry(request, response)) return;
+    response.writeHead(404).end();
+  });
+  const origin = await listen(upstream);
+  const binding = await RuntimeClientSurfaceProxy.open({
+    entryPath: '/app/index.html',
+    httpOrigin: origin,
+    httpPathPrefixes: ['/app/'],
+    surfaceId: 'app.weather',
+    webSocketOrigin: origin.replace('http:', 'ws:'),
+    webSocketPath: '/rsbuild-hmr',
+    webSocketToken: 'rsbuild-token-1234',
+  }, () => undefined);
+  let resolveText: ((entry: string) => void) | undefined;
+  let refreshSignal: AbortSignal | null | undefined;
+  let textStarted = false;
+  const heldText = new Promise<string>((resolvePromise) => { resolveText = resolvePromise; });
+  const response = Object.freeze({
+    headers: new Headers({ 'content-type': 'text/html; charset=utf-8' }),
+    ok: true,
+    text: () => {
+      textStarted = true;
+      return heldText;
+    },
+  }) as unknown as Response;
+  try {
+    const shell = await runtimeProxyShellHarness(binding, {
+      fetch: async (_input, init) => {
+        refreshSignal = init?.signal;
+        return response;
+      },
+    });
+    shell.sockets[0]!.emit('message', { data: JSON.stringify({ type: 'full-reload' }) });
+    await new Promise<void>((resolvePromise) => setTimeout(resolvePromise, 0));
+    expect(textStarted).toBe(true);
+    shell.pagehide();
+    resolveText?.('<!doctype html><main>late text</main>');
+    await new Promise<void>((resolvePromise) => setTimeout(resolvePromise, 0));
+    expect(shell.entries).toHaveLength(1);
+    expect(refreshSignal?.aborted).toBe(true);
+    expect(shell.appPosts).toEqual([]);
+    expect(shell.parentPosts).toEqual([]);
+    expect(shell.pendingTimers()).toBe(0);
+    expect(shell.sockets).toHaveLength(1);
   } finally {
     await binding.close();
     upstream.closeAllConnections();

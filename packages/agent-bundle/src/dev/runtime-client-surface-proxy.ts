@@ -132,6 +132,8 @@ const runtimeProxyShell = (entryPath: string, entryDocument: string, hostOrigin:
   let hmr;
   let hmrReconnectAttempts = 0;
   let hmrReconnectTimer;
+  let refreshController;
+  let refreshGeneration = 0;
   let refreshing = false;
   const isRecord = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
   const hasOwn = (value, key) => Object.prototype.hasOwnProperty.call(value, key);
@@ -155,7 +157,7 @@ const runtimeProxyShell = (entryPath: string, entryDocument: string, hostOrigin:
   };
   const isInitializeResponse = (value) => isRpc(value, maxHostToAppMessageBytes) && !hasOwn(value, 'method') && hasOwn(value, 'id') && value.id === initializeId && (hasOwn(value, 'result') || hasOwn(value, 'error'));
   const installEntry = (entry) => {
-    if (typeof entry !== 'string' || new TextEncoder().encode(entry).byteLength > maxEntryBytes) return false;
+    if (lifecycle === 'closed' || typeof entry !== 'string' || new TextEncoder().encode(entry).byteLength > maxEntryBytes) return false;
     initializeId = undefined;
     lifecycle = 'created';
     app.srcdoc = entry;
@@ -164,16 +166,28 @@ const runtimeProxyShell = (entryPath: string, entryDocument: string, hostOrigin:
   const refreshEntry = async () => {
     if (refreshing || lifecycle === 'closed') return;
     refreshing = true;
+    const generation = refreshGeneration;
+    const controller = new AbortController();
+    refreshController = controller;
+    const current = () => lifecycle !== 'closed' && refreshGeneration === generation && refreshController === controller && !controller.signal.aborted;
     try {
-      const response = await fetch(entryPath, { cache: 'no-store', credentials: 'same-origin' });
+      const response = await fetch(entryPath, { cache: 'no-store', credentials: 'same-origin', signal: controller.signal });
+      if (!current()) return;
       const length = response.headers.get('content-length');
       if (!response.ok || (length !== null && (!/^\\d+$/.test(length) || Number(length) > maxEntryBytes))) return;
       const type = response.headers.get('content-type') || '';
       if (!/^text\\/html(?:;|$)/i.test(type)) return;
-      installEntry(await response.text());
+      const entry = await response.text();
+      if (!current()) return;
+      installEntry(entry);
     } catch {
       // A failed reload must leave the already-admitted child and its bridge intact.
-    } finally { refreshing = false; }
+    } finally {
+      if (refreshController === controller) {
+        refreshController = undefined;
+        refreshing = false;
+      }
+    }
   };
   installEntry(initialEntry);
   const reconnectHmr = () => {
@@ -251,6 +265,10 @@ const runtimeProxyShell = (entryPath: string, entryDocument: string, hostOrigin:
     const activeHmr = hmr;
     hmr = undefined;
     try { activeHmr?.close(); } catch {}
+    const activeRefresh = refreshController;
+    refreshController = undefined;
+    try { activeRefresh?.abort(); } catch {}
+    refreshGeneration += 1;
   }, { once: true });
 </script>`;
 
