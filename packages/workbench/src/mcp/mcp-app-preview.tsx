@@ -802,6 +802,7 @@ export class McpAppPreviewController<State extends McpAppPreviewControllerState 
     if (this.#closed || invocation === undefined || this.#runtimeRendererDelivery !== undefined) return;
     const delivery = (async () => {
       await handle.sendToolInput(invocation.input);
+      if (this.#closed || this.#runtimeRenderer !== handle || this.#runtimeRendererClosed) return;
       await handle.sendToolResult(invocation.result);
     })();
     this.#runtimeRendererDelivery = delivery;
@@ -812,6 +813,8 @@ export class McpAppPreviewController<State extends McpAppPreviewControllerState 
 
   async #cleanupRuntime(): Promise<void> {
     const failures: unknown[] = [];
+    const delivery = this.#runtimeRendererDelivery;
+    if (delivery !== undefined) await delivery.catch(() => undefined);
     const renderer = this.#runtimeRenderer;
     if (!this.#runtimeRendererClosed && renderer !== undefined) {
       try {

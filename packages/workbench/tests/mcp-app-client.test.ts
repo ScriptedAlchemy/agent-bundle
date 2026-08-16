@@ -86,7 +86,7 @@ const runtimePreview = Object.freeze({
     kind: 'apps', metadata: runtimeMetadata, permissions: Object.freeze({ camera: Object.freeze({}), geolocation: Object.freeze({}) }), resourceUri: 'ui://weather/app.html', warnings: Object.freeze([]),
   }),
   resource: Object.freeze({ html: '<main>Weather</main>', permissions: Object.freeze({ camera: Object.freeze({}), geolocation: Object.freeze({}) }) }),
-  result: Object.freeze({ appVisible: Object.freeze({}), isError: false, modelVisible: Object.freeze({}) }),
+  result: Object.freeze({ appVisible: Object.freeze({ content: Object.freeze([]) }), isError: false, modelVisible: Object.freeze({}) }),
   session: Object.freeze({
     binding: Object.freeze({
       definitionDigest: 'definition-a', registryRevision: 3, serverDigest: 'server-a', serverName: 'weather',
@@ -229,6 +229,62 @@ describe('MCP App browser client', () => {
     });
     expect(JSON.parse(String(calls[5]?.[1]?.body))).toEqual({ decision: 'allow-once' });
     expect(calls[6]?.[1]?.method).toBe('DELETE');
+  });
+
+  it('admits only exact, frozen App-visible CallToolResults before installing a runtime policy', async () => {
+    const richResult = {
+      _meta: { 'io.modelcontextprotocol/ui': { invocationId: 'invocation-weather' } },
+      content: [
+        { _meta: { emphasis: 'high' }, text: 'Sunny', type: 'text' },
+        { data: 'aGVsbG8=', mimeType: 'image/png', type: 'image' },
+        { data: 'aGVsbG8=', mimeType: 'audio/wav', type: 'audio' },
+        { name: 'forecast', type: 'resource_link', uri: 'resource://weather/forecast' },
+        { resource: { _meta: { source: 'runtime' }, text: 'Forecast', uri: 'resource://weather/forecast' }, type: 'resource' },
+      ],
+      isError: false,
+      structuredContent: { forecast: { temperature: 22, unit: 'C' } },
+    };
+    const validPreview = JSON.parse(JSON.stringify(runtimePreview)) as Record<string, unknown>;
+    validPreview.result = {
+      appVisible: richResult,
+      isError: false,
+      modelVisible: { content: richResult.content, structuredContent: richResult.structuredContent },
+    };
+    const runtimeFor = (payload: unknown): McpAppClient => new McpAppClient({ fetch: (async (input: string | URL | Request) => {
+      if (String(input) === '/api/project/session') return json({ origin: 'http://127.0.0.1:43123', token: 'foreground-secret' });
+      if (String(input) === '/api/runtime/apps') return json({ preview: payload });
+      throw new Error(`Unexpected request ${String(input)}.`);
+    }) as typeof globalThis.fetch });
+
+    const valid = runtimeFor(validPreview);
+    const admitted = await valid.createRuntime({ expectedGenerationId: 'generation-a', profileId: 'portable', runId: 'run-a' });
+    expect(admitted).toMatchObject({
+      result: {
+        appVisible: richResult,
+        isError: false,
+      },
+    });
+    const appVisible = admitted.result.appVisible as Readonly<{ readonly content: readonly object[]; readonly structuredContent: Readonly<{ readonly forecast: object }> }>;
+    expect(Object.isFrozen(appVisible)).toBe(true);
+    expect(Object.isFrozen(appVisible.content)).toBe(true);
+    expect(Object.isFrozen(appVisible.structuredContent.forecast)).toBe(true);
+
+    const malformed = [
+      (result: Record<string, unknown>) => { delete (result.appVisible as Record<string, unknown>).content; },
+      (result: Record<string, unknown>) => { (result.appVisible as Record<string, unknown>).extra = true; },
+      (result: Record<string, unknown>) => { (result.appVisible as Record<string, unknown>).content = [{ text: 'missing type' }]; },
+      (result: Record<string, unknown>) => { (result.appVisible as Record<string, unknown>).content = [{ extra: true, text: 'extra field', type: 'text' }]; },
+      (result: Record<string, unknown>) => { (result.appVisible as Record<string, unknown>)._meta = []; },
+      (result: Record<string, unknown>) => { (result.appVisible as Record<string, unknown>).structuredContent = []; },
+      (result: Record<string, unknown>) => { (result.appVisible as Record<string, unknown>).isError = 'no'; },
+    ];
+    for (const mutate of malformed) {
+      const payload = JSON.parse(JSON.stringify(validPreview)) as Record<string, unknown>;
+      mutate(payload.result as Record<string, unknown>);
+      const rejected = runtimeFor(payload);
+      await expect(rejected.createRuntime({ expectedGenerationId: 'generation-a', profileId: 'portable', runId: 'run-a' })).rejects.toMatchObject({ code: 'AB8019' });
+      expect(() => rejected.currentDocumentPolicy('runtime-binding')).toThrow('Runtime MCP App document policy is not available.');
+    }
   });
 
   it('retains one exact trusted policy after a failed runtime close and revokes it only after a validated retry', async () => {

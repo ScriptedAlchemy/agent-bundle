@@ -840,6 +840,82 @@ describe('MCP App preview', () => {
     }
   });
 
+  it('waits for held runtime App input before teardown and suppresses its late result', async () => {
+    const delivery = deferred<void>();
+    const order: string[] = [];
+    const client = runtimeClient(Object.freeze({
+      closeRuntime: async () => { order.push('binding'); },
+      createRuntime: async () => runtimePreview,
+      currentDocumentPolicy: () => Object.freeze({ bindingId: runtimePreview.binding.id, snapshot: runtimePreview.documentPolicy }),
+    }));
+    const bridgeFactory = Object.assign(
+      () => { throw new Error('renderer installation is represented by its ref'); },
+      { close: async () => { order.push('bridge'); } },
+    ) as RuntimeAppBridgeFactory;
+    const controller = createMcpAppPreviewController(runtimeProps(client, () => bridgeFactory));
+
+    await controller.start();
+    controller.runtimeRendererRef?.(Object.freeze({
+      sendToolCancelled: async () => undefined,
+      sendToolInput: async () => {
+        order.push('input');
+        return delivery.promise;
+      },
+      sendToolResult: async () => { order.push('result'); },
+      teardown: async () => { order.push('renderer'); },
+    }));
+    const closing = controller.close();
+    let settled = false;
+    void closing.then(() => { settled = true; });
+    await new Promise<void>((resolve) => { setTimeout(resolve, 0); });
+    const settledBeforeInput = settled;
+
+    delivery.resolve();
+    await closing;
+    await Promise.resolve();
+
+    expect(settledBeforeInput).toBe(false);
+    expect(order).toEqual(['input', 'renderer', 'bridge', 'binding']);
+  });
+
+  it('waits for a held runtime App result before renderer teardown', async () => {
+    const delivery = deferred<void>();
+    const order: string[] = [];
+    const client = runtimeClient(Object.freeze({
+      closeRuntime: async () => { order.push('binding'); },
+      createRuntime: async () => runtimePreview,
+      currentDocumentPolicy: () => Object.freeze({ bindingId: runtimePreview.binding.id, snapshot: runtimePreview.documentPolicy }),
+    }));
+    const bridgeFactory = Object.assign(
+      () => { throw new Error('renderer installation is represented by its ref'); },
+      { close: async () => { order.push('bridge'); } },
+    ) as RuntimeAppBridgeFactory;
+    const controller = createMcpAppPreviewController(runtimeProps(client, () => bridgeFactory));
+
+    await controller.start();
+    controller.runtimeRendererRef?.(Object.freeze({
+      sendToolCancelled: async () => undefined,
+      sendToolInput: async () => { order.push('input'); },
+      sendToolResult: async () => {
+        order.push('result');
+        return delivery.promise;
+      },
+      teardown: async () => { order.push('renderer'); },
+    }));
+    await Promise.resolve();
+    const closing = controller.close();
+    let settled = false;
+    void closing.then(() => { settled = true; });
+    await new Promise<void>((resolve) => { setTimeout(resolve, 0); });
+    const settledBeforeResult = settled;
+
+    delivery.resolve();
+    await closing;
+
+    expect(settledBeforeResult).toBe(false);
+    expect(order).toEqual(['input', 'result', 'renderer', 'bridge', 'binding']);
+  });
+
   it('retains one frozen lifecycle handle across a held runtime create and closes its late binding without publishing ready state', async () => {
     const pending = deferred<McpAppPreviewAppsSnapshot>();
     const closedBindings: string[] = [];

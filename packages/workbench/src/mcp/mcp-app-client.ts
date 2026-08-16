@@ -1,3 +1,5 @@
+import { isCallToolResult } from '@modelcontextprotocol/client';
+
 import type { ProjectClient } from '../project-client.ts';
 import type { ProjectEventMessage } from '../../../agent-bundle/src/dev/types.ts';
 import type {
@@ -527,10 +529,53 @@ const runtimeResource = (value: unknown): unknown => {
   });
 };
 
+const runtimeAppMeta = (value: McpAppJsonValue | undefined): boolean =>
+  value === undefined || isRecord(value);
+
+const isSdkCallToolResult = (value: unknown): boolean => isCallToolResult(value);
+
+const runtimeAppContent = (value: McpAppJsonValue): boolean => {
+  if (!isRecord(value) || typeof value.type !== 'string') return false;
+  const hasAllowedKeys = (keys: readonly string[]): boolean => hasOnlyKeys(value, keys) && runtimeAppMeta(value._meta);
+  switch (value.type) {
+    case 'text':
+      return hasAllowedKeys(['type', 'text', 'annotations', '_meta']);
+    case 'image':
+    case 'audio':
+      return hasAllowedKeys(['type', 'data', 'mimeType', 'annotations', '_meta']);
+    case 'resource_link':
+      return hasAllowedKeys(['type', 'name', 'title', 'icons', 'uri', 'description', 'mimeType', 'size', 'annotations', '_meta']);
+    case 'resource': {
+      if (!hasAllowedKeys(['type', 'resource', 'annotations', '_meta']) || !isRecord(value.resource)) return false;
+      return hasOnlyKeys(value.resource, ['uri', 'mimeType', 'text', 'blob', '_meta']) && runtimeAppMeta(value.resource._meta);
+    }
+    default:
+      return false;
+  }
+};
+
+/** Projects the validated App transcript without exposing a mutable route body to the renderer. */
+const runtimeAppResult = (value: unknown): Readonly<Record<string, McpAppJsonValue>> => {
+  const result = runtimeOptionalRecord(value, ['_meta', 'content', 'isError', 'structuredContent']);
+  if (
+    !Object.hasOwn(result, 'content') ||
+    !Array.isArray(result.content) ||
+    !isSdkCallToolResult(result) ||
+    (result.isError !== undefined && typeof result.isError !== 'boolean') ||
+    !runtimeAppMeta(result._meta) ||
+    (result.structuredContent !== undefined && !isRecord(result.structuredContent)) ||
+    !result.content.every(runtimeAppContent)
+  ) runtimeInvalid('Runtime MCP App route returned an invalid App tool result.');
+  return result;
+};
+
 const runtimeResult = (value: unknown): unknown => {
   const record = runtimeRecord(value, ['appVisible', 'isError', 'modelVisible']);
-  if (typeof record.isError !== 'boolean') runtimeInvalid('Runtime MCP App route returned an invalid result inspection.');
-  return Object.freeze({ appVisible: record.appVisible, isError: record.isError, modelVisible: record.modelVisible });
+  const appVisible = runtimeAppResult(record.appVisible);
+  if (typeof record.isError !== 'boolean' || record.isError !== (appVisible.isError === true)) {
+    runtimeInvalid('Runtime MCP App route returned an invalid result inspection.');
+  }
+  return Object.freeze({ appVisible, isError: record.isError, modelVisible: record.modelVisible });
 };
 
 const runtimeOperationTrace = (value: unknown, binding: McpAppRuntimeBindingSnapshot): unknown => {
