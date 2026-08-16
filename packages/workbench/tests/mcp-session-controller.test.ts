@@ -342,6 +342,113 @@ it('reports a client factory failure cleanup once and remains retryable', async 
   await controller.close();
 });
 
+it('closes a transport returned after its factory closes admission without reviving the controller', async () => {
+  const events: string[] = [];
+  let clientFactories = 0;
+  let closeFromFactory: Promise<void> | undefined;
+  const transport: McpSessionControllerTransport = {
+    close: async () => { events.push('transport.close'); },
+    session: Object.freeze({ binding, connection, id: 'session-weather', timeoutMs: 5_000 }),
+    start: async () => undefined,
+  };
+  const controller = createMcpSessionController({
+    clientFactory: () => {
+      clientFactories += 1;
+      return fakeClient();
+    },
+    routes: {
+      catalog: async () => ({ prompts: [], resourceTemplates: [], resources: [], tools: [] }),
+      config: async () => ({ launch: { args: [], command: 'node', env: {}, kind: 'stdio' }, origin: 'artifact' }),
+      restart: async () => connection,
+      stream: async () => new Response(null),
+      trace: async () => ({ entries: [] }),
+    },
+    transportFactory: () => {
+      closeFromFactory = controller.close();
+      return transport;
+    },
+  });
+
+  const [opening] = await Promise.allSettled([controller.open(binding)]);
+  if (closeFromFactory === undefined) throw new Error('Expected transport factory to close the controller.');
+  await expect(closeFromFactory).resolves.toBeUndefined();
+
+  expect(opening).toMatchObject({
+    reason: {
+      failures: [],
+      message: 'MCP session controller failed: MCP session controller was closed while opening.',
+      name: 'McpSessionControllerFailureError',
+    },
+    status: 'rejected',
+  });
+  expect(clientFactories).toBe(0);
+  expect(events).toEqual(['transport.close']);
+  expect(controller.close()).toBe(closeFromFactory);
+  expect(controller.model.phase).toBe('closed');
+  expect(controller.model.binding).toBeUndefined();
+  expect(controller.session).toBeUndefined();
+  await expect(controller.open(binding)).rejects.toThrow('MCP session controller is already open.');
+});
+
+it('retains local client and transport cleanup failures when a client factory closes admission', async () => {
+  const clientCloseFailure = new Error('client cleanup failed');
+  const transportCloseFailure = new Error('transport cleanup failed');
+  const events: string[] = [];
+  let closeFromFactory: Promise<void> | undefined;
+  const transport: McpSessionControllerTransport = {
+    close: async () => {
+      events.push('transport.close');
+      throw transportCloseFailure;
+    },
+    session: Object.freeze({ binding, connection, id: 'session-weather', timeoutMs: 5_000 }),
+    start: async () => undefined,
+  };
+  const client: McpSessionControllerClient = {
+    close: async () => {
+      events.push('client.close');
+      throw clientCloseFailure;
+    },
+    connect: async () => undefined,
+    request: async () => undefined,
+  };
+  const controller = createMcpSessionController({
+    clientFactory: () => {
+      closeFromFactory = controller.close();
+      return client;
+    },
+    routes: {
+      catalog: async () => ({ prompts: [], resourceTemplates: [], resources: [], tools: [] }),
+      config: async () => ({ launch: { args: [], command: 'node', env: {}, kind: 'stdio' }, origin: 'artifact' }),
+      restart: async () => connection,
+      stream: async () => new Response(null),
+      trace: async () => ({ entries: [] }),
+    },
+    transportFactory: () => transport,
+  });
+
+  const [opening] = await Promise.allSettled([controller.open(binding)]);
+  if (closeFromFactory === undefined) throw new Error('Expected client factory to close the controller.');
+  await expect(closeFromFactory).resolves.toBeUndefined();
+
+  expect(opening).toMatchObject({
+    reason: {
+      failures: [
+        { reason: clientCloseFailure, resource: 'client' },
+        { reason: transportCloseFailure, resource: 'transport' },
+      ],
+      message: 'MCP session controller failed: MCP session controller was closed while opening. Cleanup failed for client, transport.',
+      name: 'McpSessionControllerFailureError',
+    },
+    status: 'rejected',
+  });
+  expect(events).toEqual(['client.close', 'transport.close']);
+  expect(controller.close()).toBe(closeFromFactory);
+  expect(controller.model.phase).toBe('closed');
+  expect(controller.model.binding).toBeUndefined();
+  expect(controller.session).toBeUndefined();
+  await expect(controller.open(binding)).rejects.toThrow('MCP session controller is already open.');
+});
+
 it('threads the admitted timeout through open while keeping it outside the immutable binding', async () => {
   const stream = traceStream();
   let received: unknown;

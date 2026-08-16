@@ -353,6 +353,8 @@ export class McpSessionController {
     if (this.#state !== 'idle' || this.#constructing) throw new McpSessionControllerError('MCP session controller is already open.');
     let transport: McpSessionControllerTransport | undefined;
     let client: McpSessionControllerClient | undefined;
+    let constructionFailed = false;
+    let constructionReason: unknown;
     this.#constructing = true;
     try {
       transport = this.#transportFactory({
@@ -360,11 +362,20 @@ export class McpSessionController {
         routes: this.#routes,
         ...(timeoutMs === undefined ? {} : { timeoutMs }),
       });
-      client = this.#clientFactory();
+      if (this.#state === 'idle' && !this.#closing) client = this.#clientFactory();
     } catch (reason) {
-      throw await this.#failConstruction(client, transport, reason);
+      constructionFailed = true;
+      constructionReason = reason;
     } finally {
       this.#constructing = false;
+    }
+    if (constructionFailed) throw await this.#failConstruction(client, transport, constructionReason);
+    if (this.#state !== 'idle' || this.#closing) {
+      throw await this.#failConstruction(
+        client,
+        transport,
+        new McpSessionControllerError('MCP session controller was closed while opening'),
+      );
     }
     this.#state = 'opening';
     const generation = ++this.#generation;
