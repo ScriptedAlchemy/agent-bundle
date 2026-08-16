@@ -81,6 +81,10 @@ interface RuntimeAppBridge extends AppRendererBridge {
     schema: typeof ListToolsRequestSchema,
     handler: (request: Readonly<{ readonly params: Readonly<Record<string, McpAppJsonValue>> }>, extra: AppBridgeHandlerExtra) => Promise<unknown>,
   ): void;
+  teardownResource(
+    params: Readonly<Record<string, never>>,
+    options?: Readonly<{ readonly maxTotalTimeout?: number; readonly timeout?: number }>,
+  ): Promise<Readonly<Record<string, never>>>;
 }
 
 export interface RuntimeAppBridgeFactory extends BridgeFactory {
@@ -90,6 +94,7 @@ export interface RuntimeAppBridgeFactory extends BridgeFactory {
 const maximumMessageBytes = 256 * 1024;
 const maximumQueuedMessages = 32;
 const maximumFailures = 3;
+const gracefulTeardownTimeoutMs = 1_000;
 
 const aggregateFailure = (message: string, reasons: readonly unknown[]): Error =>
   new AggregateError(reasons, message);
@@ -443,6 +448,15 @@ export const createRuntimeAppBridgeFactory = (options: RuntimeAppBridgeOptions):
         hostContext: safeHostContext(preview),
       }) as unknown as RuntimeAppBridge;
       rawBridgeClose = bridge.close.bind(bridge);
+      const rawTeardownResource = bridge.teardownResource.bind(bridge);
+      Object.defineProperty(bridge, 'teardownResource', {
+        configurable: false,
+        value: (params: Readonly<Record<string, never>>): Promise<Readonly<Record<string, never>>> => rawTeardownResource(params, {
+          maxTotalTimeout: gracefulTeardownTimeoutMs,
+          timeout: gracefulTeardownTimeoutMs,
+        }),
+        writable: false,
+      });
       Object.defineProperty(bridge, 'close', {
         configurable: false,
         value: close,

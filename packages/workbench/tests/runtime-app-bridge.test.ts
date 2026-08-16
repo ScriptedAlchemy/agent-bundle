@@ -191,6 +191,44 @@ it('shares the returned bridge cleanup outcome with the callable factory and clo
   });
 });
 
+it('sends one bounded resource-teardown request and awaits an App acknowledgement', async () => {
+  await withBrowser(async (browser) => {
+    const factory = runtimeFactory(async () => appAccess(async () => undefined));
+    const bridge = await invokeBridgeFactory(factory, browser);
+    const teardown = bridge.teardownResource({});
+
+    await eventually(() => browser.posts.some(({ message }) => (message as { readonly method?: unknown }).method === 'ui/resource-teardown'));
+    const request = browser.posts.find(({ message }) => (message as { readonly method?: unknown }).method === 'ui/resource-teardown')!
+      .message as { readonly id: string | number };
+    expect(browser.posts.filter(({ message }) => (message as { readonly method?: unknown }).method === 'ui/resource-teardown')).toHaveLength(1);
+    browser.emit({
+      data: { id: request.id, jsonrpc: '2.0', result: {} },
+      origin: 'https://apps.example.test',
+      source: browser.target,
+    });
+
+    await expect(teardown).resolves.toEqual({});
+    await factory.close();
+  });
+});
+
+it('bounds an unresponsive resource-teardown before the factory releases transport and access', async () => {
+  await withBrowser(async (browser) => {
+    let accessCloses = 0;
+    const factory = runtimeFactory(async () => appAccess(async () => { accessCloses += 1; }));
+    const bridge = await invokeBridgeFactory(factory, browser);
+    const started = Date.now();
+    const teardown = bridge.teardownResource({});
+
+    await eventually(() => browser.posts.some(({ message }) => (message as { readonly method?: unknown }).method === 'ui/resource-teardown'));
+    expect(browser.posts.filter(({ message }) => (message as { readonly method?: unknown }).method === 'ui/resource-teardown')).toHaveLength(1);
+    await expect(teardown).rejects.toThrow();
+    expect(Date.now() - started).toBeLessThan(2_500);
+    await expect(factory.close()).resolves.toBeUndefined();
+    expect(accessCloses).toBe(1);
+  });
+});
+
 it('uses the controller-owned attachment only for the exact preview session identity', async () => {
   const policy = Object.freeze({
     bindingId: 'runtime-binding',
