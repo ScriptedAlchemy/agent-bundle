@@ -255,6 +255,40 @@ export const mcpConfigDownload = (config: McpSessionInspectorConfig, sessionId: 
   filename: `mcp-${sessionId}-inspector.json`,
 });
 
+const environmentEntries = (environment: Readonly<Record<string, string>>): ReadonlyArray<readonly [string, string]> =>
+  Object.entries(environment).sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0);
+
+const McpLaunchConfiguration = ({ config }: { readonly config: McpSessionInspectorConfig | undefined }) => {
+  if (config === undefined) return <section aria-labelledby="mcp-launch-configuration-heading" className="mcp-page-launch-configuration">
+    <h3 id="mcp-launch-configuration-heading">Launch configuration</h3>
+    <p className="mcp-page-empty">No launch configuration is available for this session.</p>
+  </section>;
+
+  if (config.launch.kind === 'streamable-http') return <section aria-labelledby="mcp-launch-configuration-heading" className="mcp-page-launch-configuration">
+    <h3 id="mcp-launch-configuration-heading">Launch configuration</h3>
+    <dl>
+      <div><dt>Transport</dt><dd>streamable-http</dd></div>
+      <div><dt>URL</dt><dd><code>{config.launch.url}</code></dd></div>
+    </dl>
+  </section>;
+
+  const environment = environmentEntries(config.launch.env);
+  return <section aria-labelledby="mcp-launch-configuration-heading" className="mcp-page-launch-configuration">
+    <h3 id="mcp-launch-configuration-heading">Launch configuration</h3>
+    <dl>
+      <div><dt>Transport</dt><dd>stdio</dd></div>
+      <div><dt>Command</dt><dd><code>{config.launch.command}</code></dd></div>
+      <div><dt>Arguments</dt><dd>{config.launch.args.length === 0
+        ? <span className="mcp-page-empty">No arguments specified.</span>
+        : <ol aria-label="Launch arguments">{config.launch.args.map((argument, index) => <li key={`${argument}-${index}`}><code>{argument}</code></li>)}</ol>}</dd></div>
+      <div><dt>Working directory</dt><dd><code>{config.launch.cwd ?? 'Not specified'}</code></dd></div>
+      <div><dt>Environment</dt><dd>{environment.length === 0
+        ? <span className="mcp-page-empty">No environment variables specified.</span>
+        : <ul aria-label="Launch environment">{environment.map(([name, value]) => <li key={name}><code>{name}</code><span aria-hidden="true">=</span><code>{value}</code></li>)}</ul>}</dd></div>
+    </dl>
+  </section>;
+};
+
 const catalogList = (label: string, items: readonly CatalogItem[], action?: (item: CatalogItem) => void) => <section className="mcp-page-catalog" aria-label={label}>
   <h3>{label}</h3>
   {items.length === 0 ? <p className="mcp-page-empty">No {label.toLowerCase()} were advertised.</p> : <ol>
@@ -456,6 +490,7 @@ export const McpPage = ({ appPreviewClient, controller, epochOptions, initialBin
   const controls = mcpPageSessionControls(model.phase, pendingActions, onResetSession !== undefined);
   const isPending = (action: string): boolean => pendingActions.includes(action);
   const rawTrace = model.conciseTrace;
+  const config = model.config;
   const traceEntries = traceTab === 'raw' ? rawTrace : traceTab === 'logs' ? model.logs : model.progress;
   const traceLabel = traceTab === 'raw' ? 'Raw protocol' : traceTab === 'logs' ? 'Logs' : 'Progress';
   const tracePanelId = 'mcp-trace-panel';
@@ -537,6 +572,7 @@ export const McpPage = ({ appPreviewClient, controller, epochOptions, initialBin
         <p>{connectionSummary(model.connection)}</p>
         {model.connection === undefined ? undefined : <pre><code>{display({ capabilities: model.connection.serverCapabilities, server: model.connection.serverInfo })}</code></pre>}
       </div>
+      <McpLaunchConfiguration config={config} />
       {active.length === 0 ? undefined : <section aria-label="Active MCP operations" className="mcp-page-active">
         <h3>Active operations</h3>
         <ul>{active.map((request) => <li key={request.id}><span>{request.operation} · {request.id}</span><button disabled={cancelledRequests.includes(request.id)} onClick={() => {
@@ -677,8 +713,8 @@ export const McpPage = ({ appPreviewClient, controller, epochOptions, initialBin
     <section className="mcp-page-section mcp-page-config" aria-labelledby="mcp-config-heading">
       <h2 id="mcp-config-heading">Inspector config</h2>
       <p>Export the selected session’s resolved command and non-secret environment for the standalone Inspector.</p>
-      <button disabled={model.config === undefined || onDownloadConfig === undefined} onClick={() => {
-        if (model.config !== undefined && onDownloadConfig !== undefined) onDownloadConfig(mcpConfigDownload(model.config, model.sessionId));
+      <button disabled={config === undefined || onDownloadConfig === undefined} onClick={() => {
+        if (config !== undefined && onDownloadConfig !== undefined) onDownloadConfig(mcpConfigDownload(config, model.sessionId));
       }} type="button">Download Inspector config</button>
     </section>
 

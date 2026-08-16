@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 
 import { expect, test, type PlaywrightOptions } from '@rstest/playwright';
+import type { Page } from 'playwright';
 
 import { ArtifactService } from '../../agent-bundle/src/dev/artifact-service.ts';
 import { EpochStore } from '../../agent-bundle/src/dev/epoch-store.ts';
@@ -106,6 +107,23 @@ const writeMcpPlaygroundProject = async (root: string): Promise<void> => {
   ]);
 };
 
+const expectSafeLaunchConfiguration = async (page: Page, { command, compiledEntry, cwd }: {
+  readonly command: string;
+  readonly compiledEntry: string;
+  readonly cwd: string;
+}): Promise<void> => {
+  const launchConfiguration = page.locator('.mcp-page-launch-configuration');
+  await expect(launchConfiguration).toContainText('Launch configuration', { timeout: browserTimeout });
+  await expect(launchConfiguration).toContainText('stdio');
+  await expect(launchConfiguration).toContainText(command);
+  await expect(launchConfiguration).toContainText('[REDACTED]');
+  await expect(launchConfiguration).toContainText(cwd);
+  await expect(launchConfiguration).toContainText('NO_COLOR');
+  expect(await launchConfiguration.textContent()).not.toContain(compiledEntry);
+  expect(await launchConfiguration.textContent()).not.toContain('SECRET_TOKEN');
+  expect(await launchConfiguration.textContent()).not.toContain('fixture-secret');
+};
+
 e2e('opens one real epoch MCP session and keeps its playground operations responsive', { timeout: 90_000 }, async ({ page }) => {
   await buildWorkbench();
   let project: Awaited<ReturnType<typeof createProjectFixture>> | undefined;
@@ -153,6 +171,12 @@ e2e('opens one real epoch MCP session and keeps its playground operations respon
     await expect(prompts.getByRole('button', { name: 'fixture', exact: true })).toBeVisible({ timeout: browserTimeout });
     await expect(resources.getByText('fixture', { exact: true })).toBeVisible({ timeout: browserTimeout });
     await expect(resources.getByRole('button', { name: 'Read ui://fixture/resource.txt' })).toBeVisible({ timeout: browserTimeout });
+
+    await expectSafeLaunchConfiguration(page, {
+      command: manifest.mcpServers.fixture.command,
+      compiledEntry,
+      cwd: join(project.root, '.agent-bundle', 'epochs', epochId, 'portable'),
+    });
 
     await expect(page.getByRole('radio', { name: 'Form' })).toBeVisible({ timeout: browserTimeout });
     await page.locator('#mcp-tool-arguments-message').fill('equivalent');
@@ -246,6 +270,55 @@ e2e('opens one real epoch MCP session and keeps its playground operations respon
   }
   if (testFailure !== undefined) throw testFailure;
   if (cleanupFailure !== undefined) throw cleanupFailure;
+});
+
+e2e('renders the safe launch configuration for one real artifact MCP session', { timeout: 60_000 }, async ({ page }) => {
+  await buildWorkbench();
+  let project: Awaited<ReturnType<typeof createProjectFixture>> | undefined;
+  let server: Awaited<ReturnType<typeof startDevServer>> | undefined;
+  try {
+    project = await createProjectFixture();
+    await writeMcpPlaygroundProject(project.root);
+    server = await startDevServer({
+      assets: createWorkbenchAssetSource({ root: workbenchAssets }),
+      open: false,
+      port: 0,
+      root: project.root,
+    });
+    const artifact = server.status().artifact;
+    if (artifact.state === 'missing') throw new Error('Expected an active fixture artifact epoch.');
+    const epochId = artifact.activeEpoch.id;
+    const manifest = JSON.parse(await readFile(join(project.root, '.agent-bundle', 'epochs', epochId, 'portable', 'mcp.json'), 'utf8')) as {
+      readonly mcpServers: Readonly<{
+        readonly fixture: Readonly<{ readonly args?: readonly string[]; readonly command: string }>;
+      }>;
+    };
+    const compiledEntry = manifest.mcpServers.fixture.args?.[0];
+    if (compiledEntry === undefined) throw new Error('Expected the fixture MCP manifest to include its compiled entry.');
+    const pageErrors: Error[] = [];
+    page.on('pageerror', (error) => pageErrors.push(error));
+    await page.goto(`${server.url}#mcp`);
+    await expect(page.getByRole('heading', { name: 'MCP playground' })).toBeVisible({ timeout: browserTimeout });
+    await page.locator('#mcp-target').selectOption('portable');
+    await page.locator('#mcp-server-name').fill('fixture');
+    const opened = page.waitForResponse((response) =>
+      response.url() === `${server.url}/api/mcp/sessions` && response.request().method() === 'POST');
+    await page.getByRole('button', { name: 'Open MCP session' }).click();
+    await opened;
+    await expect(page.locator('.mcp-page-phase')).toContainText('Session ready', { timeout: browserTimeout });
+
+    await expectSafeLaunchConfiguration(page, {
+      command: manifest.mcpServers.fixture.command,
+      compiledEntry,
+      cwd: join(project.root, '.agent-bundle', 'epochs', epochId, 'portable'),
+    });
+    await page.setViewportSize({ height: 844, width: 390 });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    expect(pageErrors).toEqual([]);
+  } finally {
+    await Promise.allSettled(server === undefined ? [] : [server.close()]);
+    await Promise.allSettled(project === undefined ? [] : [removeProjectFixture(project.root)]);
+  }
 });
 
 e2e('renders and rebuilds the complete responsive Overview against a real foreground server', { timeout: 60_000 }, async ({ page }) => {
