@@ -132,6 +132,20 @@ interface RuntimeAppRouteRequest extends AppRouteRequest {
   readonly method: string;
 }
 
+interface RuntimeAppRouteResponse extends RuntimeAppRouteRequest {
+  readonly response: unknown;
+}
+
+interface RuntimeAppMessage {
+  readonly href: string;
+  readonly message: unknown;
+  readonly senderOrigin: string;
+}
+
+type RuntimeAppLifecycleEvent =
+  | Readonly<{ readonly kind: 'message'; readonly value: RuntimeAppMessage }>
+  | Readonly<{ readonly kind: 'request'; readonly value: RuntimeAppRouteRequest }>;
+
 const requestBody = (body: string | null): unknown => {
   if (body === null) return undefined;
   try {
@@ -364,15 +378,19 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
   const fixture = await startRuntimePlaygroundFixture();
   let clientPage: Page | undefined;
   let clientSurface: Awaited<ReturnType<typeof fixture.openRuntimeClientSurface>> | undefined;
-  const appMessages: Array<Readonly<{ readonly href: string; readonly message: unknown; readonly senderOrigin: string }>> = [];
+  const appMessages: RuntimeAppMessage[] = [];
   const pageErrors: Error[] = [];
   const artifactMcpSessionRequests: string[] = [];
   const projectEventStreams: string[] = [];
+  const runtimeAppLifecycleEvents: RuntimeAppLifecycleEvent[] = [];
   const runtimeAppRequests: RuntimeAppRouteRequest[] = [];
+  const runtimeAppResponses: RuntimeAppRouteResponse[] = [];
   const runtimeMcpSessionRequests: string[] = [];
   await page.exposeBinding('__recordRuntimeAppMessage', (_source, payload: unknown) => {
     if (payload !== null && typeof payload === 'object') {
-      appMessages.push(payload as Readonly<{ readonly href: string; readonly message: unknown; readonly senderOrigin: string }>);
+      const event = payload as RuntimeAppMessage;
+      appMessages.push(event);
+      runtimeAppLifecycleEvents.push(Object.freeze({ kind: 'message' as const, value: event }));
     }
   });
   await page.addInitScript(() => {
@@ -390,9 +408,19 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
     if (url.pathname.startsWith('/api/mcp/sessions')) artifactMcpSessionRequests.push(`${request.method()} ${url.pathname}`);
     if (url.pathname === '/api/project/events') projectEventStreams.push(`${request.method()} ${url.pathname}`);
     if (url.pathname.startsWith('/api/runtime/apps')) {
-      runtimeAppRequests.push({ body: requestBody(request.postData()), headers: request.headers(), method: request.method(), path: url.pathname });
+      const event: RuntimeAppRouteRequest = Object.freeze({ body: requestBody(request.postData()), headers: request.headers(), method: request.method(), path: url.pathname });
+      runtimeAppRequests.push(event);
+      runtimeAppLifecycleEvents.push(Object.freeze({ kind: 'request' as const, value: event }));
     }
     if (url.pathname.startsWith('/api/runtime/mcp/sessions')) runtimeMcpSessionRequests.push(`${request.method()} ${url.pathname}`);
+  });
+  page.on('response', (response) => {
+    const url = new URL(response.url());
+    if (url.origin !== fixture.url || !url.pathname.startsWith('/api/runtime/apps')) return;
+    void response.json().then((body) => {
+      const request = response.request();
+      runtimeAppResponses.push({ body: requestBody(request.postData()), headers: request.headers(), method: request.method(), path: url.pathname, response: body });
+    }).catch(() => undefined);
   });
   try {
     await page.goto(`${fixture.url}#runtime`);
@@ -427,7 +455,7 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
     expect(requestBody(createdRequest.postData())).toEqual({ expectedGenerationId, profileId: 'portable', runId });
 
     const created = await createdResponse.json() as Readonly<{ readonly preview: Readonly<{
-      readonly binding: Readonly<{ readonly id: string; readonly serverName: string; readonly sessionId: string; readonly sessionRevision: number }>;
+      readonly binding: Readonly<{ readonly id: string; readonly runVector: unknown; readonly serverName: string; readonly sessionId: string; readonly sessionRevision: number }>;
       readonly clientSurface: Readonly<{ readonly bootstrapUrl: string; readonly origin: string }>;
       readonly kind: string;
       readonly profile: Readonly<{ readonly hostContext: unknown; readonly resourceUri: string }>;
@@ -528,15 +556,153 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
       summary: 'Call MCP App tool',
     });
     await expect(page.getByRole('dialog', { name: 'Runtime App consent' })).toBeVisible({ timeout: 15_000 });
+    await expect.poll(() => runtimeAppResponses.find((entry) => entry.method === 'POST' && entry.path === consentPath), { timeout: 15_000 }).toBeDefined();
+    const consentCreated = runtimeAppResponses.find((entry) => entry.method === 'POST' && entry.path === consentPath);
+    const challenge = (consentCreated?.response as Readonly<{ readonly challenge?: Readonly<{ readonly id?: unknown }> }> | undefined)?.challenge;
+    if (typeof challenge?.id !== 'string') throw new Error('Runtime App consent create response omitted its challenge id.');
+    expect(consentCreated?.response).toMatchObject({
+      challenge: {
+        expiresAt: expect.any(Number),
+        id: challenge.id,
+        request: {
+          actionFingerprint: expect.stringMatching(/^act-[A-Za-z0-9_-]{12}$/u),
+          capability: 'call-tool',
+          details: { arguments: { limit: 10 }, name: 'render_edit_timeline' },
+          scope: 'action',
+          summary: 'Allow MCP App call tool?',
+        },
+      },
+      documentPolicy: expect.any(Object),
+    });
+
+    await page.getByRole('button', { name: 'Allow once' }).click();
+    const decisionPath = `${consentPath}/${encodeURIComponent(challenge.id)}`;
+    await expect.poll(() => runtimeAppRequests.filter((entry) => entry.method === 'POST' && entry.path === decisionPath), { timeout: 15_000 }).toHaveLength(1);
+    const consentDecision = runtimeAppRequests.find((entry) => entry.method === 'POST' && entry.path === decisionPath);
+    expect(consentDecision?.body).toEqual({ decision: 'allow-once' });
+    await expect.poll(() => runtimeAppResponses.find((entry) => entry.method === 'POST' && entry.path === decisionPath), { timeout: 15_000 }).toBeDefined();
+    const consentDecided = runtimeAppResponses.find((entry) => entry.method === 'POST' && entry.path === decisionPath);
+    const grant = (consentDecided?.response as Readonly<{ readonly grant?: Readonly<{ readonly authorizationId?: unknown }> }> | undefined)?.grant;
+    if (typeof grant?.authorizationId !== 'string') throw new Error('Runtime App consent decision response omitted its authorization identity.');
+    expect(consentDecided?.response).toMatchObject({
+      documentPolicy: expect.any(Object),
+      grant: {
+        authorizationId: grant.authorizationId,
+        bindingId: created.preview.binding.id,
+        capability: 'call-tool',
+        challengeId: challenge.id,
+        scope: 'action',
+      },
+    });
+
+    const operationPath = `/api/runtime/apps/${encodeURIComponent(created.preview.binding.id)}/operations`;
+    await expect.poll(() => runtimeAppRequests.filter((entry) => entry.method === 'POST' && entry.path === operationPath), { timeout: 15_000 }).toHaveLength(1);
+    const operation = runtimeAppRequests.find((entry) => entry.method === 'POST' && entry.path === operationPath);
+    expect(operation?.body).toEqual({
+      arguments: { limit: 10 },
+      consentId: grant.authorizationId,
+      kind: 'tools/call',
+      name: 'render_edit_timeline',
+    });
+    await expect.poll(() => runtimeAppResponses.find((entry) => entry.method === 'POST' && entry.path === operationPath), { timeout: 15_000 }).toBeDefined();
+    const operated = runtimeAppResponses.find((entry) => entry.method === 'POST' && entry.path === operationPath);
+    const operationResult = (operated?.response as Readonly<{ readonly result?: unknown }> | undefined)?.result;
+    expect(operationResult).toEqual({
+      operationId: expect.any(String),
+      sessionId: created.preview.binding.sessionId,
+      sessionRevision: created.preview.binding.sessionRevision,
+      value: {
+        content: [{ text: 'Showing 0 recorded edits.', type: 'text' }],
+        structuredContent: { edits: [], stateVersion: 0 },
+      },
+      vector: created.preview.binding.runVector,
+    });
+    const refreshRequest = messageFor(fixture.url, frameOrigin, (message) => message.method === 'tools/call');
+    expect(refreshRequest?.message).toEqual({
+      id: 1,
+      jsonrpc: '2.0',
+      method: 'tools/call',
+      params: { _meta: { progressToken: 1 }, arguments: { limit: 10 }, name: 'render_edit_timeline' },
+    });
+    await expect.poll(() => messageFor(frameOrigin, fixture.url, (message) => message.id === 1 && Object.hasOwn(message, 'result')), { timeout: 15_000 }).toBeDefined();
+    const refreshResult = messageFor(frameOrigin, fixture.url, (message) => message.id === 1 && Object.hasOwn(message, 'result'));
+    expect(refreshResult?.message).toEqual({ jsonrpc: '2.0', id: 1, result: (operationResult as Readonly<{ readonly value: unknown }>).value });
+    await expect(appFrame.getByText('State version 0')).toBeVisible();
+    await expect(appFrame.getByRole('status')).toHaveText('');
+
+    const sourceFrameHref = appFrame.url();
+    const sourceBindingId = created.preview.binding.id;
+    await page.getByRole('button', { name: 'Open in MCP playground' }).click({ timeout: browserTimeout });
+    await expect(page.getByRole('heading', { name: 'MCP playground' })).toBeVisible({ timeout: 15_000 });
+    const teardownRequestForSource = (): RuntimeAppMessage | undefined => appMessages.find((entry) =>
+      entry.href === sourceFrameHref && entry.senderOrigin === fixture.url && entry.message !== null && typeof entry.message === 'object' &&
+      (entry.message as Readonly<Record<string, unknown>>).method === 'ui/resource-teardown');
+    await expect.poll(teardownRequestForSource, { timeout: 15_000 }).toBeDefined();
+    const teardownRequest = teardownRequestForSource();
+    const teardownId = teardownRequest?.message !== null && typeof teardownRequest?.message === 'object'
+      ? (teardownRequest.message as Readonly<Record<string, unknown>>).id
+      : undefined;
+    if (typeof teardownId !== 'string' && typeof teardownId !== 'number') throw new Error('Runtime App teardown request omitted its JSON-RPC id.');
+    const teardownAcknowledgementForSource = () => messageFor(fixture.url, frameOrigin, (message) =>
+      message.id === teardownId && (Object.hasOwn(message, 'result') || Object.hasOwn(message, 'error')));
+    await expect.poll(teardownAcknowledgementForSource, { timeout: 15_000 }).toBeDefined();
+    const teardownAcknowledgement = teardownAcknowledgementForSource();
+    expect(teardownAcknowledgement?.message).toEqual({ id: teardownId, jsonrpc: '2.0', result: {} });
+
+    const sourceDeletePath = `/api/runtime/apps/${encodeURIComponent(sourceBindingId)}`;
+    await expect.poll(() => runtimeAppRequests.filter((entry) => entry.method === 'DELETE' && entry.path === sourceDeletePath), { timeout: 15_000 }).toHaveLength(1);
+    const sourceDelete = runtimeAppRequests.find((entry) => entry.method === 'DELETE' && entry.path === sourceDeletePath);
+    const lifecycleIndex = (kind: RuntimeAppLifecycleEvent['kind'], value: RuntimeAppMessage | RuntimeAppRouteRequest): number =>
+      runtimeAppLifecycleEvents.findIndex((entry) => entry.kind === kind && entry.value === value);
+    expect(lifecycleIndex('message', teardownRequest!)).toBeGreaterThan(-1);
+    expect(lifecycleIndex('message', teardownAcknowledgement!)).toBeGreaterThan(lifecycleIndex('message', teardownRequest!));
+    expect(lifecycleIndex('request', sourceDelete!)).toBeGreaterThan(lifecycleIndex('message', teardownAcknowledgement!));
+    await expect(outerFrame).toHaveCount(0, { timeout: 15_000 });
+
+    const runtimeCreates = (): readonly RuntimeAppRouteRequest[] => runtimeAppRequests.filter((entry) => entry.method === 'POST' && entry.path === '/api/runtime/apps');
+    await expect.poll(runtimeCreates, { timeout: 15_000 }).toHaveLength(2);
+    const destinationCreate = runtimeCreates()[1];
+    expect(destinationCreate?.body).toEqual({ expectedGenerationId, profileId: 'portable', runId });
+    const sourceDeleteIndex = runtimeAppRequests.indexOf(sourceDelete!);
+    const destinationCreateIndex = runtimeAppRequests.indexOf(destinationCreate!);
+    expect(sourceDeleteIndex).toBeGreaterThan(-1);
+    expect(destinationCreateIndex).toBeGreaterThan(sourceDeleteIndex);
+    await expect.poll(() => runtimeAppResponses.filter((entry) => entry.method === 'POST' && entry.path === '/api/runtime/apps'), { timeout: 15_000 }).toHaveLength(2);
+    const destinationResponse = runtimeAppResponses.filter((entry) => entry.method === 'POST' && entry.path === '/api/runtime/apps')[1]?.response as Readonly<{ readonly preview?: Readonly<{
+      readonly binding?: Readonly<{ readonly id?: unknown; readonly sessionId?: unknown; readonly sessionRevision?: unknown }>;
+      readonly clientSurface?: Readonly<{ readonly origin?: unknown }>;
+    }> }> | undefined;
+    const destinationBinding = destinationResponse?.preview?.binding;
+    const destinationOrigin = destinationResponse?.preview?.clientSurface?.origin;
+    if (typeof destinationBinding?.id !== 'string' || typeof destinationBinding.sessionId !== 'string' || typeof destinationBinding.sessionRevision !== 'number' || typeof destinationOrigin !== 'string') {
+      throw new Error('Destination Runtime App response omitted its binding authority.');
+    }
+    expect(destinationBinding).toMatchObject({
+      id: expect.any(String),
+      sessionId: created.preview.binding.sessionId,
+      sessionRevision: created.preview.binding.sessionRevision,
+    });
+    expect(destinationBinding.id).not.toBe(sourceBindingId);
+    await expect(page.locator('.mcp-page-app-preview iframe')).toHaveCount(1, { timeout: 15_000 });
+    await expect(page.locator('.runtime-stage .mcp-app-preview iframe')).toHaveCount(0);
+    await expect.poll(() => appMessages.filter((entry) =>
+      new URL(entry.href).origin === fixture.url && entry.senderOrigin === destinationOrigin && entry.message !== null && typeof entry.message === 'object' &&
+      (entry.message as Readonly<Record<string, unknown>>).method === 'ui/initialize').length, { timeout: 15_000 }).toBe(frameOrigin === destinationOrigin ? 2 : 1);
+
+    await page.setViewportSize({ height: 900, width: 390 });
+    await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth), { timeout: 15_000 }).toBe(true);
 
     expect(artifactMcpSessionRequests).toEqual([]);
     expect(runtimeMcpSessionRequests).toEqual([]);
     expect(projectEventStreams).toEqual(['GET /api/project/events']);
-    expect(runtimeAppRequests.filter((entry) => entry.path === '/api/runtime/apps')).toHaveLength(1);
+    expect(runtimeCreates()).toHaveLength(2);
+    expect(runtimeAppRequests.filter((entry) => entry.method === 'DELETE' && entry.path === sourceDeletePath)).toHaveLength(1);
     expect(pageErrors).toEqual([]);
   } finally {
     await clientPage?.close();
     await clientSurface?.close();
     await fixture.close();
+    await fixture.closed;
+    await expect(access(fixture.root)).rejects.toThrow();
   }
 });

@@ -92,6 +92,7 @@ export const App = () => {
     appInfo: { name: 'rsc-agent-runtime-timeline', version: '1.0.0' },
     capabilities: {},
     onAppCreated: (createdApp) => {
+      createdApp.onteardown = () => ({});
       createdApp.ontoolresult = (result) => {
         const state = asTimelineState(result.structuredContent);
         if (state !== undefined) {
