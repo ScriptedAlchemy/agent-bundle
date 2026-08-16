@@ -722,6 +722,80 @@ it('rejects private provider and state-store identifiers in a raw runtime sessio
   await expect(client.openRuntime({ serverName: 'weather', target: 'portable' })).rejects.toMatchObject({ code: 'AB8019' });
 });
 
+it('rejects private and unknown direct connection keys in raw runtime open snapshots', async () => {
+  const invalidFields = [
+    ['providerSessionId', 'provider-private'],
+    ['stateStoreId', 'state-private'],
+    ['unexpected', 'unexpected-value'],
+  ] as const;
+
+  for (const [field, value] of invalidFields) {
+    const client = new McpRouteClient({
+      fetch: async (input) => {
+        const url = String(input);
+        if (url === '/api/project/session') return json(foregroundBootstrap);
+        if (url === '/api/runtime/mcp/sessions') return json({ session: {
+          binding: {
+            definitionDigest: 'definition-a', registryRevision: 7, serverDigest: 'server-a', serverName: 'weather',
+            sessionId: 'runtime-session-a', sessionRevision: 3, target: 'portable', transportDigest: 'transport-a',
+          },
+          connection: { ...connection, [field]: value },
+          state: 'ready',
+        } });
+        throw new Error(`Unexpected route request ${url}.`);
+      },
+    });
+
+    await expect(client.openRuntime({ serverName: 'weather', target: 'portable' })).rejects.toMatchObject({ code: 'AB8019' });
+  }
+});
+
+it('rejects private and unknown direct keys in raw runtime restart success DTOs', async () => {
+  const invalidFields = [
+    ['providerSessionId', 'provider-private'],
+    ['stateStoreId', 'state-private'],
+    ['unexpected', 'unexpected-value'],
+  ] as const;
+  const levels = ['connection', 'reconcile', 'invalidatedBinding'] as const;
+
+  for (const level of levels) {
+    for (const [field, value] of invalidFields) {
+      const client = new McpRouteClient({
+        fetch: async (input) => {
+          const url = String(input);
+          if (url === '/api/project/session') return json(foregroundBootstrap);
+          if (url === '/api/runtime/mcp/sessions/runtime-session-a/restart') return json({
+            reconcile: {
+              action: 'sessions-restarted',
+              invalidatedBindings: [{
+                sessionId: 'runtime-session-a',
+                sessionRevision: 3,
+                ...(level === 'invalidatedBinding' ? { [field]: value } : {}),
+              }],
+              registryRevision: 8,
+              restartedSessionIds: ['runtime-session-a'],
+              runtimeGenerationId: 'generation-b',
+              sequence: 4,
+              ...(level === 'reconcile' ? { [field]: value } : {}),
+            },
+            session: {
+              binding: {
+                definitionDigest: 'definition-b', registryRevision: 8, serverDigest: 'server-b', serverName: 'weather',
+                sessionId: 'runtime-session-a', sessionRevision: 4, target: 'portable', transportDigest: 'transport-b',
+              },
+              connection: { ...connection, ...(level === 'connection' ? { [field]: value } : {}) },
+              state: 'ready',
+            },
+          });
+          throw new Error(`Unexpected route request ${url}.`);
+        },
+      });
+
+      await expect(client.restartRuntime({ expectedSessionRevision: 3, sessionId: 'runtime-session-a' })).rejects.toMatchObject({ code: 'AB8019' });
+    }
+  }
+});
+
 it('rejects a runtime restart snapshot that disagrees with the reconciliation evidence', async () => {
   const client = new McpRouteClient({
     fetch: async (input) => {

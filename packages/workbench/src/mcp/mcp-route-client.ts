@@ -133,6 +133,10 @@ const asArray = (value: unknown): readonly unknown[] => {
   return detachedJson(value) as readonly unknown[];
 };
 
+const hasOnlyKeys = (value: Readonly<Record<string, unknown>>, keys: readonly string[]): boolean => Object.keys(value).every((key) => keys.includes(key));
+
+const hasExactKeys = (value: Readonly<Record<string, unknown>>, keys: readonly string[]): boolean => Object.keys(value).length === keys.length && hasOnlyKeys(value, keys);
+
 const diagnostic = (value: unknown, status: number): Diagnostic => {
   if (isRecord(value) && isRecord(value.diagnostic) && typeof value.diagnostic.code === 'string' && typeof value.diagnostic.message === 'string') {
     return Object.freeze({
@@ -156,8 +160,9 @@ const routeConnection = (value: unknown): McpRouteConnection => {
     serverSnapshot = Object.freeze({ name: server.name, version: server.version });
   }
   if (
-    connection.protocolEra !== undefined && connection.protocolEra !== 'legacy' && connection.protocolEra !== 'modern' ||
-    connection.protocolVersion !== undefined && typeof connection.protocolVersion !== 'string'
+    !hasOnlyKeys(connection, ['capabilities', 'protocolEra', 'protocolVersion', 'server']) ||
+    (connection.protocolEra !== undefined && connection.protocolEra !== 'legacy' && connection.protocolEra !== 'modern') ||
+    (connection.protocolVersion !== undefined && typeof connection.protocolVersion !== 'string')
   ) {
     throw new McpRouteClientError('AB8019', 'Foreground MCP route returned an invalid connection.');
   }
@@ -238,12 +243,13 @@ const runtimeSession = (value: unknown): McpRouteRuntimeSession => {
 const runtimeReconcile = (value: unknown): DevRuntimeMcpRegistryReconcileResult => {
   const reconcile = asRecord(value);
   if (
+    !hasExactKeys(reconcile, ['action', 'invalidatedBindings', 'registryRevision', 'restartedSessionIds', 'runtimeGenerationId', 'sequence']) ||
     !['implementation-updated', 'sessions-restarted', 'restart-failed'].includes(reconcile.action as string) ||
     !positive(reconcile.registryRevision) || !nonempty(reconcile.runtimeGenerationId) || !positive(reconcile.sequence) ||
     !Array.isArray(reconcile.invalidatedBindings) || !Array.isArray(reconcile.restartedSessionIds) ||
     !reconcile.invalidatedBindings.every((binding) => {
       const current = isRecord(binding) ? binding : undefined;
-      return current !== undefined && nonempty(current.sessionId) && positive(current.sessionRevision);
+      return current !== undefined && hasExactKeys(current, ['sessionId', 'sessionRevision']) && nonempty(current.sessionId) && positive(current.sessionRevision);
     }) || !reconcile.restartedSessionIds.every(nonempty)
   ) throw new McpRouteClientError('AB8019', 'Runtime MCP route returned an invalid reconcile result.');
   return Object.freeze({
