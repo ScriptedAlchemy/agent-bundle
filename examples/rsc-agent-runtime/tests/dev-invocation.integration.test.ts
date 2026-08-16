@@ -931,6 +931,74 @@ test('preserves the Claude fixture seed in post-state while exact replay stays v
       binding: timeline.result.app.mcpBinding,
       state: 'ready',
     });
+    const broker = session.mcpRegistry.session(timeline.result.app.mcpBinding.sessionId);
+    if (broker === undefined) throw new Error('Timeline App broker was unavailable.');
+    const listedTools = await broker.execute({
+      expectedSessionRevision: timeline.result.app.mcpBinding.sessionRevision,
+      kind: 'list-tools',
+    });
+    const listedResources = await broker.execute({
+      expectedSessionRevision: timeline.result.app.mcpBinding.sessionRevision,
+      kind: 'list-resources',
+    });
+    expect(listedTools.value).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'render_edit_timeline' })]));
+    expect(listedResources.value).toEqual(expect.arrayContaining([expect.objectContaining({
+      mimeType: 'text/html;profile=mcp-app', uri: 'ui://rsc-agent-runtime/edit-timeline-v1.html',
+    })]));
+    await expect(broker.execute({
+      expectedSessionRevision: timeline.result.app.mcpBinding.sessionRevision,
+      kind: 'read-resource',
+      uri: 'ui://rsc-agent-runtime/edit-timeline-v1.html',
+    })).resolves.toEqual(expect.objectContaining({
+      value: {
+        contents: [{
+          _meta: {
+            'openai/widgetDescription': 'Interactive timeline of file edits recorded by agent hooks.',
+            'ui.csp': { connectDomains: [], resourceDomains: [] },
+            'ui.prefersBorder': true,
+          },
+          mimeType: 'text/html;profile=mcp-app',
+          text: expect.stringMatching(/^<!doctype html>/iu),
+          uri: 'ui://rsc-agent-runtime/edit-timeline-v1.html',
+        }],
+      },
+    }));
+    await expect(broker.execute({
+      arguments: { limit: 1 },
+      expectedSessionRevision: timeline.result.app.mcpBinding.sessionRevision,
+      kind: 'call-tool',
+      name: 'render_edit_timeline',
+    })).resolves.toMatchObject({
+      sessionId: timeline.result.app.mcpBinding.sessionId,
+      sessionRevision: timeline.result.app.mcpBinding.sessionRevision,
+      value: {
+        content: [{ text: 'Showing 1 recorded edits.', type: 'text' }],
+        structuredContent: { edits: [expect.objectContaining({ path: '/tmp/fixture-claude-post-tool-use.txt' })], stateVersion: 2 },
+      },
+      vector: { runtimeGenerationId: generationId, stateVersion: 2 },
+    });
+    await expect(broker.execute({
+      expectedSessionRevision: timeline.result.app.mcpBinding.sessionRevision,
+      kind: 'read-resource',
+      uri: 'ui://rsc-agent-runtime/foreign.html',
+    })).rejects.toThrow('not declared');
+    await expect(broker.execute({
+      arguments: {},
+      expectedSessionRevision: timeline.result.app.mcpBinding.sessionRevision,
+      kind: 'call-tool',
+      name: 'foreign_tool',
+    })).rejects.toThrow('not declared');
+    await expect(broker.execute({
+      arguments: { limit: 0 },
+      expectedSessionRevision: timeline.result.app.mcpBinding.sessionRevision,
+      kind: 'call-tool',
+      name: 'render_edit_timeline',
+    })).rejects.toThrow('arguments');
+    await expect(broker.execute({
+      expectedSessionRevision: timeline.result.app.mcpBinding.sessionRevision + 1,
+      kind: 'read-resource',
+      uri: 'ui://rsc-agent-runtime/edit-timeline-v1.html',
+    })).rejects.toThrow('revision');
     expect(session.clientSurface(timeline.result.app.surfaceId)).toMatchObject({ surfaceId: 'mcp.edit-timeline' });
     expect((timeline.result.protocol as Record<string, unknown>).structuredContent).not.toHaveProperty('seed');
 

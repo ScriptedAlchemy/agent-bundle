@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdtemp, mkdir, readFile, rm, unlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, symlink, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
@@ -44,6 +44,12 @@ const widgetFiles = {
   'static/js/rsc/index.js': 'client-reference',
 } as const;
 
+const appFiles = {
+  'edit-timeline-v1.html': '<!doctype html><main>Timeline</main>',
+  'edit-timeline-v2.html': '<!doctype html><main>Timeline v2</main>',
+  'activity-v1.html': '<!doctype html><main>Activity</main>',
+} as const;
+
 const writeTree = async (root: string, files: Readonly<Record<string, string>>): Promise<void> => {
   await Promise.all(Object.entries(files).map(async ([path, contents]) => {
     const destination = join(root, ...path.split('/'));
@@ -55,12 +61,15 @@ const writeTree = async (root: string, files: Readonly<Record<string, string>>):
 const writeCompilerCohort = async (
   compilerRoot: string,
   options: Readonly<{
+    readonly appFiles?: Readonly<Record<string, string>>;
     readonly rscFiles?: Readonly<Record<string, string>>;
     readonly widgetFiles?: Readonly<Record<string, string>>;
   }> = {},
 ): Promise<void> => {
   const rscRoot = join(compilerRoot, 'rsc');
   await writeTree(rscRoot, { ...runtimeFiles, ...options.rscFiles });
+  await mkdir(join(compilerRoot, 'app'), { recursive: true });
+  await writeTree(join(compilerRoot, 'app'), options.appFiles ?? appFiles);
   await writeTree(join(compilerRoot, 'widget'), { ...widgetFiles, ...options.widgetFiles });
   await writeFile(join(rscRoot, 'runtime-assets.json'), JSON.stringify({
     allFiles: Object.keys(runtimeFiles).map((path) => `/${path}`),
@@ -403,6 +412,99 @@ test('includes prepared App definitions in the captured runtime definition diges
   }
 });
 
+test('captures the canonical generated HTML asset for each prepared App surface', async () => {
+  const storageRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-app-html-'));
+  const compilerRoot = join(storageRoot, 'compiler');
+  const store = createStore(storageRoot);
+  const html = '<!doctype html><main>Timeline</main>';
+  try {
+    await writeCompilerCohort(compilerRoot, { appFiles: { 'edit-timeline-v1.html': html } });
+    const candidate = await store.begin({ id: 'app-html', sourceRevision: 'source-app-html' });
+    const snapshot = await captureRuntimeGenerationSnapshot({
+      attemptId: 'attempt-app-html',
+      candidate,
+      compilerRoot,
+      preparedRuntime: preparedRuntimeWithApp(),
+      rscCohortRevision: 1,
+      sourceRevision: 'source-app-html',
+    });
+    const prepared = await materializeRuntimeGeneration({ snapshot, store });
+
+    expect(prepared.generation.manifest.metadata.surfaceAssets['mcp.Timeline']).toEqual(expect.arrayContaining([{
+      bytes: Buffer.byteLength(html),
+      contentType: 'text/html',
+      generationPath: 'app/edit-timeline-v1.html',
+      requestPath: '/edit-timeline-v1.html',
+      sha256: sha256(html),
+    }]));
+  } finally {
+    await store.close().catch(() => undefined);
+    await rm(storageRoot, { force: true, recursive: true });
+  }
+});
+
+test('rejects a traversal-normalized App URI even when a matching generated HTML file exists', async () => {
+  const storageRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-app-html-traversal-'));
+  const compilerRoot = join(storageRoot, 'compiler');
+  const store = createStore(storageRoot);
+  try {
+    await writeCompilerCohort(compilerRoot, { appFiles: { 'escaped.html': '<!doctype html><main>Escaped</main>' } });
+    const candidate = await store.begin({ id: 'app-html-traversal', sourceRevision: 'source-app-html-traversal' });
+    const snapshot = await captureRuntimeGenerationSnapshot({
+      attemptId: 'attempt-app-html-traversal',
+      candidate,
+      compilerRoot,
+      preparedRuntime: preparedRuntimeWithApp({ resourceUri: 'ui://rsc-agent-runtime/../escaped.html' }),
+      rscCohortRevision: 1,
+      sourceRevision: 'source-app-html-traversal',
+    });
+    await expect(materializeRuntimeGeneration({ snapshot, store })).rejects.toThrow('resource URI is invalid');
+  } finally {
+    await store.close().catch(() => undefined);
+    await rm(storageRoot, { force: true, recursive: true });
+  }
+});
+
+test('rejects missing, duplicate, and symbolic-link App HTML capture inputs', async () => {
+  const storageRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-app-html-invalid-'));
+  const compilerRoot = join(storageRoot, 'compiler');
+  const store = createStore(storageRoot);
+  try {
+    await writeCompilerCohort(compilerRoot, { appFiles: {} });
+    const missingCandidate = await store.begin({ id: 'app-html-missing', sourceRevision: 'source-app-html-missing' });
+    const missingSnapshot = await captureRuntimeGenerationSnapshot({
+      attemptId: 'attempt-app-html-missing', candidate: missingCandidate, compilerRoot, preparedRuntime: preparedRuntimeWithApp(), rscCohortRevision: 1, sourceRevision: 'source-app-html-missing',
+    });
+    await expect(materializeRuntimeGeneration({ snapshot: missingSnapshot, store })).rejects.toThrow('no unique captured HTML asset');
+
+    await writeCompilerCohort(compilerRoot);
+    const [timelineApp] = preparedRuntimeWithApp().apps;
+    if (timelineApp === undefined) throw new Error('Timeline App fixture was unavailable.');
+    const duplicateCandidate = await store.begin({ id: 'app-html-duplicate', sourceRevision: 'source-app-html-duplicate' });
+    const duplicateSnapshot = await captureRuntimeGenerationSnapshot({
+      attemptId: 'attempt-app-html-duplicate',
+      candidate: duplicateCandidate,
+      compilerRoot,
+      preparedRuntime: Object.freeze({
+        ...preparedRuntimeWithApp(),
+        apps: Object.freeze([timelineApp, Object.freeze({ ...timelineApp, id: 'timeline-app-duplicate' })]),
+      }),
+      rscCohortRevision: 2,
+      sourceRevision: 'source-app-html-duplicate',
+    });
+    await expect(materializeRuntimeGeneration({ snapshot: duplicateSnapshot, store })).rejects.toThrow('duplicate App surface');
+
+    await symlink(join(compilerRoot, 'app', 'edit-timeline-v1.html'), join(compilerRoot, 'app', 'linked.html'));
+    const linkedCandidate = await store.begin({ id: 'app-html-link', sourceRevision: 'source-app-html-link' });
+    await expect(captureRuntimeGenerationSnapshot({
+      attemptId: 'attempt-app-html-link', candidate: linkedCandidate, compilerRoot, preparedRuntime: preparedRuntimeWithApp(), rscCohortRevision: 3, sourceRevision: 'source-app-html-link',
+    })).rejects.toThrow('symbolic links');
+  } finally {
+    await store.close().catch(() => undefined);
+    await rm(storageRoot, { force: true, recursive: true });
+  }
+});
+
 test('rejects a rewritten prepared App definition manifest on post-rename reload', async () => {
   const storageRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-persisted-app-definition-'));
   const compilerRoot = join(storageRoot, 'compiler');
@@ -444,6 +546,45 @@ test('rejects a rewritten prepared App definition manifest on post-rename reload
   }
 });
 
+test('rejects a persisted App surface manifest without its declared canonical HTML asset', async () => {
+  const storageRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-persisted-app-surface-'));
+  const compilerRoot = join(storageRoot, 'compiler');
+  const store = createStore(storageRoot);
+  try {
+    await writeCompilerCohort(compilerRoot);
+    const candidate = await store.begin({ id: 'persisted-app-surface', sourceRevision: 'source-persisted-app-surface' });
+    const snapshot = await captureRuntimeGenerationSnapshot({
+      attemptId: 'attempt-persisted-app-surface',
+      candidate,
+      compilerRoot,
+      preparedRuntime: preparedRuntimeWithApp(),
+      rscCohortRevision: 1,
+      sourceRevision: 'source-persisted-app-surface',
+    });
+    let waits = 0;
+    await expect(materializeRuntimeGeneration({
+      guard: {
+        check: () => true,
+        wait: async () => {
+          waits += 1;
+          if (waits !== 1) return;
+          await rewriteGenerationManifest(snapshot.candidate.root, (metadata) => ({
+            ...metadata,
+            surfaceAssets: Object.fromEntries(Object.entries(metadata.surfaceAssets as Readonly<Record<string, readonly Readonly<Record<string, unknown>>[]>>)
+              .map(([surfaceId, assets]) => [surfaceId, assets.filter((asset) => asset.contentType !== 'text/html')])),
+          }));
+        },
+      },
+      snapshot,
+      store,
+    })).rejects.toMatchObject({ code: 'RUNTIME_GENERATION_INVALID' });
+    expect(waits).toBe(1);
+  } finally {
+    await store.close().catch(() => undefined);
+    await rm(storageRoot, { force: true, recursive: true });
+  }
+});
+
 test('rejects a removed or replaced paired compiler asset after capture', async () => {
   const storageRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-generations-'));
   const compilerRoot = join(storageRoot, 'compiler');
@@ -463,6 +604,13 @@ test('rejects a removed or replaced paired compiler asset after capture', async 
     });
     await writeFile(join(replacedCandidate.root, 'widget', 'static', 'js', 'rsc', 'index.js'), 'replaced-client-reference', 'utf8');
     await expect(materializeRuntimeGeneration({ snapshot: replacedSnapshot, store })).rejects.toThrow('captured cohort');
+
+    const appCandidate = await store.begin({ id: 'app-replaced', sourceRevision: 'source-app-replaced' });
+    const appSnapshot = await captureRuntimeGenerationSnapshot({
+      attemptId: 'attempt-app-replaced', candidate: appCandidate, compilerRoot, preparedRuntime: preparedRuntimeWithApp(), rscCohortRevision: 3, sourceRevision: 'source-app-replaced',
+    });
+    await writeFile(join(appCandidate.root, 'app', 'edit-timeline-v1.html'), 'replaced-App-HTML', 'utf8');
+    await expect(materializeRuntimeGeneration({ snapshot: appSnapshot, store })).rejects.toThrow('captured cohort');
   } finally {
     await store.close().catch(() => undefined);
     await rm(storageRoot, { force: true, recursive: true });

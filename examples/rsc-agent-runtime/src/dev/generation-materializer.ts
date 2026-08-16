@@ -621,10 +621,71 @@ const surfaceAssets = (
       sha256: asset.sha256,
     })];
   });
-  return Object.freeze(Object.fromEntries(preparedRuntime.apps.map((app) => [
-    `mcp.${app.name}`,
-    Object.freeze(widgetAssets.map((asset) => Object.freeze({ ...asset }))),
-  ])));
+  const appHtmlAssets = assets.flatMap((asset): RscRuntimeSurfaceAsset[] => {
+    if (!asset.path.startsWith('app/') || !asset.path.endsWith('.html')) return [];
+    return [Object.freeze({
+      bytes: asset.bytes,
+      contentType: 'text/html',
+      generationPath: asset.path,
+      requestPath: asset.path.slice('app'.length),
+      sha256: asset.sha256,
+    })];
+  });
+  const surfaces: Record<string, readonly RscRuntimeSurfaceAsset[]> = {};
+  for (const app of preparedRuntime.apps) {
+    const surfaceId = `mcp.${app.name}`;
+    if (surfaces[surfaceId] !== undefined) throw new Error('Runtime generation has duplicate App surface definitions.');
+    const resourcePath = appResourcePath(app.resourceUri);
+    const html = appHtmlAssets.filter((asset) => asset.requestPath === resourcePath);
+    if (html.length !== 1) throw new Error(`Runtime generation App ${JSON.stringify(app.resourceUri)} has no unique captured HTML asset.`);
+    surfaces[surfaceId] = Object.freeze([
+      ...widgetAssets.map((asset) => Object.freeze({ ...asset })),
+      Object.freeze({ ...html[0]! }),
+    ]);
+  }
+  return Object.freeze(surfaces);
+};
+
+const appResourcePath = (uri: string): string => {
+  let parsed: URL;
+  try {
+    parsed = new URL(uri);
+  } catch {
+    throw new TypeError('Runtime generation App resource URI is invalid.');
+  }
+  if (parsed.protocol !== 'ui:' || parsed.host.length === 0 || parsed.search.length > 0 || parsed.hash.length > 0) {
+    throw new TypeError('Runtime generation App resource URI is invalid.');
+  }
+  const origin = `ui://${parsed.host}`;
+  if (!uri.startsWith(origin)) throw new TypeError('Runtime generation App resource URI is invalid.');
+  const path = uri.slice(origin.length);
+  const segments = path.startsWith('/') ? path.slice(1).split('/') : [];
+  if (segments.length === 0 || segments.some((segment) => !isSafeSegment(segment) || decodeURIComponent(segment) !== segment)) {
+    throw new TypeError('Runtime generation App resource URI is invalid.');
+  }
+  return `/${segments.join('/')}`;
+};
+
+const validateAppSurfaceAssets = (
+  apps: readonly RscRuntimeAppDefinition[],
+  surfaces: Readonly<Record<string, readonly RscRuntimeSurfaceAsset[]>>,
+): void => {
+  const expected = new Set<string>();
+  for (const app of apps) {
+    const surfaceId = `mcp.${app.name}`;
+    if (expected.has(surfaceId)) throw new TypeError('Runtime generation has duplicate App surface definitions.');
+    expected.add(surfaceId);
+    const resourcePath = appResourcePath(app.resourceUri);
+    const appHtml = surfaces[surfaceId]?.filter((asset) =>
+      asset.contentType === 'text/html' && asset.generationPath.startsWith('app/'),
+    ) ?? [];
+    if (appHtml.length !== 1 || appHtml[0]!.generationPath !== `app${resourcePath}` || appHtml[0]!.requestPath !== resourcePath) {
+      throw new TypeError(`Runtime generation App ${JSON.stringify(app.resourceUri)} has no canonical captured HTML asset.`);
+    }
+  }
+  if (Object.keys(surfaces).length !== expected.size || Object.keys(surfaces).some((surfaceId) => !expected.has(surfaceId))) {
+    throw new TypeError('Runtime generation App surface assets are not owned by App definitions.');
+  }
 };
 
 const transportProjection = (preparedRuntime: DevRuntimePreparedProject): JsonValue => freezeJson({
@@ -761,6 +822,7 @@ export const captureRuntimeGenerationSnapshot = async (
       runtimeAssets,
       checkpoint?.priorAssets,
     );
+    await copyTree(join(compilerRoot, 'app'), join(input.candidate.root, 'app'));
     await copyTree(join(compilerRoot, 'widget'), join(input.candidate.root, 'widget'));
     await fsync(input.candidate.root);
     const assets = await walkRegularFiles(input.candidate.root);
@@ -938,6 +1000,7 @@ export const validateRscRuntimeGenerationMetadata = async (
       requestPaths.add(asset.requestPath);
     }
   }
+  validateAppSurfaceAssets(metadata.appDefinitions, declaredSurfaceAssets);
   for (const descriptor of metadata.servers) {
     if (descriptor.definitionDigest !== metadata.definitionDigest || descriptor.serverDigest !== metadata.serverDigest || descriptor.transportDigest !== metadata.transportDigest) {
       throw new TypeError('Runtime generation server descriptor digest is inconsistent.');

@@ -2240,7 +2240,169 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
 
   async #executeMcp(execution: RuntimeMcpExecutionContext): Promise<Readonly<{ readonly stateVersion: number; readonly value: JsonValue }>> {
     execution.signal.throwIfAborted();
-    throw new Error(`Runtime MCP operation ${JSON.stringify(execution.request.kind)} is not available until the invocation lane is configured.`);
+    const generation = execution.generation as RuntimeGeneration<RscRuntimeGenerationMetadata>;
+    this.#assertMcpExecutionAuthority(execution, generation);
+    if (execution.request.kind === 'read-resource') {
+      const resource = this.#appResource(execution, generation, execution.request.uri);
+      const asset = await this.#readGenerationSurfaceHtml(generation, resource.surfaceId);
+      execution.signal.throwIfAborted();
+      this.#assertMcpExecutionAuthority(execution, generation);
+      return Object.freeze({
+        stateVersion: 0,
+        value: Object.freeze({
+          contents: Object.freeze([Object.freeze({
+            _meta: resource.metadata,
+            mimeType: resource.mimeType,
+            text: asset,
+            uri: resource.uri,
+          })]),
+        }),
+      });
+    }
+    if (execution.request.kind === 'call-tool') {
+      this.#appTool(execution, generation, execution.request.name);
+      return this.#executeTimelineTool(execution, generation, execution.request.arguments);
+    }
+    throw new Error(`Runtime MCP operation ${JSON.stringify(execution.request.kind)} is not available.`);
+  }
+
+  #assertMcpExecutionAuthority(
+    execution: RuntimeMcpExecutionContext,
+    generation: RuntimeGeneration<RscRuntimeGenerationMetadata>,
+  ): NonNullable<ReturnType<RuntimeMcpRegistry['snapshot']>> {
+    this.#assertInvocationOpen();
+    const registry = this.#mcpRegistry.snapshot();
+    const binding = this.#mcpRegistry.session(execution.sessionId)?.snapshot().binding;
+    if (
+      registry === undefined || binding === undefined || this.#active?.id !== generation.id ||
+      registry.runtimeGenerationId !== generation.id ||
+      registry.definitionDigest !== generation.manifest.metadata.definitionDigest ||
+      registry.transportDigest !== generation.manifest.metadata.transportDigest ||
+      binding.sessionId !== execution.sessionId || binding.registryRevision !== registry.registryRevision ||
+      !registry.servers.some((descriptor) => descriptor.name === execution.descriptor.name && descriptor.target === execution.descriptor.target &&
+        descriptor.definitionDigest === execution.descriptor.definitionDigest && descriptor.serverDigest === execution.descriptor.serverDigest &&
+        descriptor.transportDigest === execution.descriptor.transportDigest) ||
+      binding.definitionDigest !== execution.descriptor.definitionDigest || binding.serverDigest !== execution.descriptor.serverDigest ||
+      binding.serverName !== execution.descriptor.name || binding.target !== execution.descriptor.target ||
+      binding.transportDigest !== execution.descriptor.transportDigest
+    ) {
+      throw new DevRuntimeGenerationConflictError(generation.id, this.#active?.id);
+    }
+    return registry;
+  }
+
+  #appResource(
+    execution: RuntimeMcpExecutionContext,
+    generation: RuntimeGeneration<RscRuntimeGenerationMetadata>,
+    uri: string,
+  ): Readonly<{ readonly metadata: JsonObject; readonly mimeType: string; readonly surfaceId: string; readonly uri: string }> {
+    const resource = execution.descriptor.resources.filter((candidate) =>
+      candidate.uri === uri && candidate.mimeType === 'text/html;profile=mcp-app' && isJsonObject(candidate._meta),
+    );
+    const app = generation.manifest.metadata.appDefinitions.filter((candidate) =>
+      candidate.resourceUri === uri && candidate.serverName === execution.descriptor.name && candidate.targets.includes(execution.descriptor.target),
+    );
+    if (resource.length !== 1 || app.length !== 1) throw new Error('Runtime MCP App resource is not owned by the current generation.');
+    const surfaceId = `mcp.${app[0]!.name}`;
+    if (generation.manifest.metadata.surfaceAssets[surfaceId] === undefined) {
+      throw new Error('Runtime MCP App resource has no current-generation asset.');
+    }
+    return Object.freeze({ metadata: resource[0]!._meta as JsonObject, mimeType: resource[0]!.mimeType as string, surfaceId, uri });
+  }
+
+  #appTool(
+    execution: RuntimeMcpExecutionContext,
+    generation: RuntimeGeneration<RscRuntimeGenerationMetadata>,
+    name: string,
+  ): void {
+    const tool = execution.descriptor.tools.filter((candidate) => candidate.name === name);
+    if (tool.length !== 1 || tool[0]!.handlerId !== 'render_edit_timeline' || !isJsonObject(tool[0]!._meta)) {
+      throw new Error('Runtime MCP App tool is not owned by the current generation.');
+    }
+    const uri = tool[0]!._meta['openai/outputTemplate'];
+    if (typeof uri !== 'string') throw new Error('Runtime MCP App tool has no App resource binding.');
+    this.#appResource(execution, generation, uri);
+  }
+
+  #timelineLimit(argumentsValue: JsonValue | undefined): Readonly<{ readonly limit?: number }> {
+    if (argumentsValue === undefined) return Object.freeze({});
+    if (!isJsonObject(argumentsValue) || Object.keys(argumentsValue).some((key) => key !== 'limit')) {
+      throw new TypeError('Runtime MCP App tool arguments are invalid.');
+    }
+    const limit = argumentsValue.limit;
+    if (limit === undefined) return Object.freeze({});
+    if (typeof limit !== 'number' || !Number.isSafeInteger(limit) || limit < 1 || limit > 50) {
+      throw new TypeError('Runtime MCP App tool arguments are invalid.');
+    }
+    return Object.freeze({ limit });
+  }
+
+  async #executeTimelineTool(
+    execution: RuntimeMcpExecutionContext,
+    generation: RuntimeGeneration<RscRuntimeGenerationMetadata>,
+    argumentsValue: JsonObject,
+  ): Promise<Readonly<{ readonly stateVersion: number; readonly value: JsonValue }>> {
+    const release = this.#reserveInvocation();
+    const runId = `runtime-mcp-${randomUUID()}`;
+    const abort = (): void => this.#workers.get(runId)?.terminate(new Error('Runtime MCP operation was aborted.'));
+    execution.signal.addEventListener('abort', abort, { once: true });
+    try {
+      const snapshot = await this.#stateKernel.readSnapshot(this.#timelineLimit(argumentsValue));
+      execution.signal.throwIfAborted();
+      this.#assertMcpExecutionAuthority(execution, generation);
+      const response = await this.#runInvocationWorker({
+        generation,
+        input: Object.freeze({
+          snapshot: cloneJson(snapshot),
+          stateFile: this.#stateFile,
+          stateStoreId,
+          type: 'mcp/render-timeline',
+        }),
+        runId,
+        surfaceId: 'mcp.render_edit_timeline',
+      });
+      execution.signal.throwIfAborted();
+      this.#assertMcpExecutionAuthority(execution, generation);
+      const stateVersion = response.inspection.state.identity.stateVersion;
+      const durable = await this.#stateKernel.readSnapshot({ stateVersion });
+      const protocol = response.inspection.protocol;
+      if (durable.stateVersion !== stateVersion || protocol === undefined || !isJsonObject(protocol)) {
+        throw new Error('Runtime MCP App tool result is not a durable protocol response.');
+      }
+      execution.signal.throwIfAborted();
+      this.#assertMcpExecutionAuthority(execution, generation);
+      return Object.freeze({ stateVersion, value: cloneJson(protocol) });
+    } finally {
+      execution.signal.removeEventListener('abort', abort);
+      release();
+    }
+  }
+
+  async #readGenerationSurfaceHtml(
+    generation: RuntimeGeneration<RscRuntimeGenerationMetadata>,
+    surfaceId: string,
+  ): Promise<string> {
+    const matches = generation.manifest.metadata.surfaceAssets[surfaceId]?.filter((asset) =>
+      asset.contentType === 'text/html' && asset.requestPath === clientSurfaceEntry,
+    ) ?? [];
+    if (matches.length !== 1) throw new Error('Runtime MCP App resource has no canonical HTML asset.');
+    const asset = matches[0]!;
+    if (asset.bytes > maximumAssetBytes) throw new Error('Runtime MCP App HTML exceeds the asset limit.');
+    const segments = asset.generationPath.split('/');
+    if (segments.some((segment) => !safeSegment(segment))) throw new Error('Runtime MCP App HTML asset path is unsafe.');
+    const path = join(generation.root, ...segments);
+    if (!isInside(generation.root, path)) throw new Error('Runtime MCP App HTML asset escaped its generation root.');
+    const details = await lstat(path);
+    if (!details.isFile() || details.isSymbolicLink() || details.size !== asset.bytes) {
+      throw new Error('Runtime MCP App HTML asset changed.');
+    }
+    const body = await readFile(path);
+    if (body.byteLength !== asset.bytes || createHash('sha256').update(body).digest('hex') !== asset.sha256) {
+      throw new Error('Runtime MCP App HTML asset changed.');
+    }
+    const text = body.toString('utf8');
+    if (Buffer.byteLength(text, 'utf8') !== body.byteLength) throw new Error('Runtime MCP App HTML asset is not UTF-8.');
+    return text;
   }
 
   async #close(): Promise<void> {
