@@ -2,7 +2,15 @@ import { Buffer } from 'node:buffer';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
 import type { DevRuntimeSession } from './runtime-provider.ts';
-import type { DevRuntimeMcpOperationRequest, DevRuntimeMcpSessionControlRequest, DevRuntimeMcpSessionRequest } from './runtime-protocol.ts';
+import type {
+  DevRuntimeMcpAppRunBinding,
+  DevRuntimeMcpConnectionState,
+  DevRuntimeMcpOperationRequest,
+  DevRuntimeMcpRegistryReconcileResult,
+  DevRuntimeMcpSessionControlRequest,
+  DevRuntimeMcpSessionRequest,
+  DevRuntimeMcpSessionSnapshot,
+} from './runtime-protocol.ts';
 
 const bodyLimit = 64 * 1024;
 
@@ -101,6 +109,46 @@ const json = (value: unknown): value is null | boolean | number | string | reado
   value === null || typeof value === 'boolean' || typeof value === 'string' || typeof value === 'number' && Number.isFinite(value)
   || Array.isArray(value) && value.every(json) || isRecord(value) && Object.values(value).every(json);
 
+interface PublicRuntimeMcpSessionSnapshot {
+  readonly binding: DevRuntimeMcpAppRunBinding;
+  readonly connection: DevRuntimeMcpConnectionState;
+  readonly state: DevRuntimeMcpSessionSnapshot['state'];
+}
+
+const publicSessionSnapshot = (snapshot: DevRuntimeMcpSessionSnapshot): PublicRuntimeMcpSessionSnapshot => Object.freeze({
+  binding: Object.freeze({
+    definitionDigest: snapshot.binding.definitionDigest,
+    registryRevision: snapshot.binding.registryRevision,
+    serverDigest: snapshot.binding.serverDigest,
+    serverName: snapshot.binding.serverName,
+    sessionId: snapshot.binding.sessionId,
+    sessionRevision: snapshot.binding.sessionRevision,
+    target: snapshot.binding.target,
+    transportDigest: snapshot.binding.transportDigest,
+  }),
+  connection: Object.freeze({
+    capabilities: snapshot.connection.capabilities,
+    protocolEra: snapshot.connection.protocolEra,
+    protocolVersion: snapshot.connection.protocolVersion,
+    server: snapshot.connection.server,
+  }),
+  state: snapshot.state,
+});
+
+const restartSnapshot = (
+  snapshot: DevRuntimeMcpSessionSnapshot,
+  request: DevRuntimeMcpSessionControlRequest,
+  reconcile: DevRuntimeMcpRegistryReconcileResult,
+): PublicRuntimeMcpSessionSnapshot => {
+  if (
+    reconcile.action !== 'sessions-restarted' || !reconcile.restartedSessionIds.includes(request.sessionId) ||
+    !reconcile.invalidatedBindings.some((binding) => binding.sessionId === request.sessionId && binding.sessionRevision === request.expectedSessionRevision) ||
+    snapshot.state !== 'ready' || snapshot.binding.sessionId !== request.sessionId ||
+    snapshot.binding.sessionRevision !== request.expectedSessionRevision + 1 || snapshot.binding.registryRevision !== reconcile.registryRevision
+  ) throw requestError(diagnostic('AB8205', 'Runtime MCP session restart did not produce a valid replacement session.', 500));
+  return publicSessionSnapshot(snapshot);
+};
+
 const rpcRequest = (body: Record<string, unknown>, sessionId: string): DevRuntimeMcpOperationRequest => {
   if (!hasOnly(body, ['arguments', 'expectedSessionRevision', 'kind', 'name', 'uri']) || !positive(body.expectedSessionRevision)) {
     throw requestError(diagnostic('AB8203', 'Runtime request has an invalid shape.', 400));
@@ -146,17 +194,20 @@ export class RuntimeMcpRoutes {
       if (parsed.kind === 'open') {
         if (method !== 'POST') return responseDiagnostic(response, diagnostic('AB8007', 'Route does not accept this method.', 405)), true;
         const session = await registry.open(openRequest(await readBody(request)));
-        responseJson(response, { session: session.snapshot() });
+        responseJson(response, { session: publicSessionSnapshot(session.snapshot()) });
         return true;
       }
       if (parsed.kind === 'restart') {
         if (method !== 'POST') return responseDiagnostic(response, diagnostic('AB8007', 'Route does not accept this method.', 405)), true;
-        const reconcile = await registry.restart(controlRequest(await readBody(request), parsed.sessionId));
+        const control = controlRequest(await readBody(request), parsed.sessionId);
+        const reconcile = await registry.restart(control);
         await this.#awaitRegistryMutation?.();
         if (reconcile.action === 'restart-failed') {
           return responseDiagnostic(response, diagnostic('AB8205', 'Runtime MCP session restart failed.', 409)), true;
         }
-        responseJson(response, { reconcile });
+        const session = registry.session(parsed.sessionId);
+        if (session === undefined) throw requestError(diagnostic('AB8201', 'Runtime MCP session is not available.', 404));
+        responseJson(response, { reconcile, session: restartSnapshot(session.snapshot(), control, reconcile) });
         return true;
       }
       if (parsed.kind === 'close') {

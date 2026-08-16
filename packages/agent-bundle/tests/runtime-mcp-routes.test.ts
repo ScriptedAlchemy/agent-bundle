@@ -16,23 +16,45 @@ const authorize = (request: IncomingMessage): void => {
 
 it('delegates the fixed manual runtime MCP open route without becoming an App preview control path', async () => {
   const opens: unknown[] = [];
+  const openedSnapshot = Object.freeze({
+    binding: Object.freeze({
+      definitionDigest: 'definition-a', providerSessionId: 'provider-private', registryRevision: 3, serverDigest: 'server-a', serverName: 'weather',
+      sessionId: 'session-a', sessionRevision: 2, stateStoreId: 'state-private', target: 'portable', transportDigest: 'transport-a',
+    }),
+    connection: Object.freeze({ capabilities: Object.freeze({}), protocolEra: 'modern' as const, protocolVersion: '2026-01-26', server: undefined }),
+    state: 'ready' as const,
+  });
+  const restartedSnapshot = Object.freeze({
+    binding: Object.freeze({
+      definitionDigest: 'definition-b', providerSessionId: 'provider-private', registryRevision: 4, serverDigest: 'server-b', serverName: 'weather',
+      sessionId: 'session-a', sessionRevision: 3, stateStoreId: 'state-private', target: 'portable', transportDigest: 'transport-b',
+    }),
+    connection: Object.freeze({ capabilities: Object.freeze({ tools: Object.freeze({ listChanged: true }) }), protocolEra: 'modern' as const, protocolVersion: '2026-02-09', server: Object.freeze({ name: 'weather-next', version: '2.0.0' }) }),
+    state: 'ready' as const,
+  });
   const runtime = {
     mcpRegistry: {
       open: async (request: unknown) => {
         opens.push(request);
         return Object.freeze({
           execute: async () => { throw new Error('unused'); },
-          snapshot: () => Object.freeze({
-            binding: Object.freeze({
-              definitionDigest: 'definition-a', providerSessionId: 'provider-private', registryRevision: 3, serverDigest: 'server-a', serverName: 'weather',
-              sessionId: 'session-a', sessionRevision: 2, stateStoreId: 'state-private', target: 'portable', transportDigest: 'transport-a',
-            }),
-            connection: Object.freeze({ capabilities: Object.freeze({}), protocolEra: 'modern' as const, protocolVersion: '2026-01-26', server: undefined }),
-            state: 'ready' as const,
-          }),
+          snapshot: () => openedSnapshot,
           watchClosed: () => Object.freeze({ closed: false, unsubscribe: () => undefined }),
         });
       },
+      restart: async () => Object.freeze({
+        action: 'sessions-restarted' as const,
+        invalidatedBindings: Object.freeze([{ sessionId: 'session-a', sessionRevision: 2 }]),
+        registryRevision: 4,
+        restartedSessionIds: Object.freeze(['session-a']),
+        runtimeGenerationId: 'generation-b',
+        sequence: 5,
+      }),
+      session: (sessionId: string) => sessionId !== 'session-a' ? undefined : Object.freeze({
+        execute: async () => { throw new Error('unused'); },
+        snapshot: () => restartedSnapshot,
+        watchClosed: () => Object.freeze({ closed: false, unsubscribe: () => undefined }),
+      }),
     },
   } as unknown as DevRuntimeSession;
   const routes = new RuntimeMcpRoutes({ authorize, runtime });
@@ -54,10 +76,37 @@ it('delegates the fixed manual runtime MCP open route without becoming an App pr
       method: 'POST',
     });
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({ session: { binding: {
-      definitionDigest: 'definition-a', providerSessionId: 'provider-private', registryRevision: 3, serverDigest: 'server-a', serverName: 'weather',
-      sessionId: 'session-a', sessionRevision: 2, stateStoreId: 'state-private', target: 'portable', transportDigest: 'transport-a',
+    const opened = await response.json();
+    expect(opened).toEqual({ session: { binding: {
+      definitionDigest: 'definition-a', registryRevision: 3, serverDigest: 'server-a', serverName: 'weather',
+      sessionId: 'session-a', sessionRevision: 2, target: 'portable', transportDigest: 'transport-a',
     }, connection: { capabilities: {}, protocolEra: 'modern', protocolVersion: '2026-01-26' }, state: 'ready' } });
+    expect(JSON.stringify(opened)).not.toContain('provider-private');
+    expect(JSON.stringify(opened)).not.toContain('state-private');
+
+    const restarted = await fetch(`http://127.0.0.1:${address.port}/api/runtime/mcp/sessions/session-a/restart`, {
+      body: JSON.stringify({ expectedSessionRevision: 2, sessionId: 'session-a' }),
+      headers: { 'content-type': 'application/json', origin: 'http://127.0.0.1:4567', 'x-agent-bundle-session': 'runtime-token' },
+      method: 'POST',
+    });
+    expect(restarted.status).toBe(200);
+    const restartedBody = await restarted.json();
+    expect(restartedBody).toEqual({
+      reconcile: {
+        action: 'sessions-restarted', invalidatedBindings: [{ sessionId: 'session-a', sessionRevision: 2 }], registryRevision: 4,
+        restartedSessionIds: ['session-a'], runtimeGenerationId: 'generation-b', sequence: 5,
+      },
+      session: {
+        binding: {
+          definitionDigest: 'definition-b', registryRevision: 4, serverDigest: 'server-b', serverName: 'weather',
+          sessionId: 'session-a', sessionRevision: 3, target: 'portable', transportDigest: 'transport-b',
+        },
+        connection: { capabilities: { tools: { listChanged: true } }, protocolEra: 'modern', protocolVersion: '2026-02-09', server: { name: 'weather-next', version: '2.0.0' } },
+        state: 'ready',
+      },
+    });
+    expect(JSON.stringify(restartedBody)).not.toContain('provider-private');
+    expect(JSON.stringify(restartedBody)).not.toContain('state-private');
     expect(opens).toEqual([{ serverName: 'weather', target: 'portable' }]);
   } finally {
     await new Promise<void>((resolvePromise, rejectPromise) => server.close((error) => error === undefined ? resolvePromise() : rejectPromise(error)));

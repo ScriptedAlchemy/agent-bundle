@@ -32,6 +32,30 @@ const runtimeSession = Object.freeze({
 });
 
 const runtimeBinding = Object.freeze({ kind: 'runtime' as const, binding: runtimeSession.binding, session: runtimeSession });
+const restartedRuntimeSession = Object.freeze({
+  binding: Object.freeze({
+    definitionDigest: 'definition-b', registryRevision: 8, serverDigest: 'server-b', serverName: 'weather',
+    sessionId: 'runtime-session-a', sessionRevision: 4, target: 'portable', transportDigest: 'transport-b',
+  }),
+  connection: Object.freeze({
+    capabilities: Object.freeze({ resources: Object.freeze({ listChanged: true }), tools: Object.freeze({ listChanged: true }) }),
+    protocolEra: 'modern' as const,
+    protocolVersion: '2026-02-09',
+    server: Object.freeze({ name: 'weather-runtime-next', version: '5.0.0' }),
+  }),
+  state: 'ready' as const,
+});
+const unusedRuntimeRestart = Object.freeze({
+  reconcile: Object.freeze({
+    action: 'implementation-updated' as const,
+    invalidatedBindings: Object.freeze([]),
+    registryRevision: 7,
+    restartedSessionIds: Object.freeze([]),
+    runtimeGenerationId: 'generation-a',
+    sequence: 1,
+  }),
+  session: runtimeSession,
+});
 
 const deferred = <Value>() => {
   let reject: (reason?: unknown) => void = () => undefined;
@@ -184,7 +208,10 @@ it('attaches one non-owning runtime App client, routes only closed methods, and 
       restart: async () => connection,
       restartRuntime: async (request) => {
         calls.push(`runtime.restart:${request.expectedSessionRevision}`);
-        return { action: 'sessions-restarted', invalidatedBindings: [{ sessionId: 'runtime-session-a', sessionRevision: 3 }], registryRevision: 8, restartedSessionIds: ['runtime-session-a'], runtimeGenerationId: 'generation-a', sequence: 1 };
+        return {
+          reconcile: { action: 'sessions-restarted', invalidatedBindings: [{ sessionId: 'runtime-session-a', sessionRevision: 3 }], registryRevision: 8, restartedSessionIds: ['runtime-session-a'], runtimeGenerationId: 'generation-a', sequence: 1 },
+          session: restartedRuntimeSession,
+        };
       },
       stream: async () => new Response(null),
       trace: async () => ({ entries: [] }),
@@ -220,13 +247,31 @@ it('attaches one non-owning runtime App client, routes only closed methods, and 
   expect(controller.history).toEqual([expect.objectContaining({ vector })]);
 
   await controller.restart();
-  expect(controller.model.binding).toMatchObject({ kind: 'runtime', binding: { registryRevision: 8, sessionRevision: 4 } });
+  expect(controller.model).toMatchObject({
+    binding: { kind: 'runtime', binding: restartedRuntimeSession.binding },
+    connection: { protocolVersion: '2026-02-09', serverCapabilities: { resources: { listChanged: true }, tools: { listChanged: true } }, serverInfo: { name: 'weather-runtime-next', version: '5.0.0' } },
+  });
   expect(calls).toEqual(['runtime.execute:list-tools', 'app-client.close', 'runtime.restart:3']);
+
+  const replacement = await controller.attachApp();
+  if (attachedTransport === undefined) throw new Error('Expected replacement runtime transport.');
+  attachedTransport.onmessage = (message) => messages.push(message);
+  await attachedTransport.send({ id: 3, jsonrpc: '2.0', method: 'initialize' });
+  expect(replacement).toMatchObject({ sessionId: 'runtime-session-a', sessionRevision: 4 });
+  expect(messages.at(-1)).toEqual({
+    id: 3,
+    jsonrpc: '2.0',
+    result: {
+      capabilities: { resources: { listChanged: true }, tools: { listChanged: true } },
+      protocolVersion: '2026-02-09',
+      serverInfo: { name: 'weather-runtime-next', version: '5.0.0' },
+    },
+  });
 
   await app.close();
   expect(calls).toEqual(['runtime.execute:list-tools', 'app-client.close', 'runtime.restart:3']);
   await controller.close();
-  expect(calls).toEqual(['runtime.execute:list-tools', 'app-client.close', 'runtime.restart:3', 'runtime.close:4']);
+  expect(calls).toEqual(['runtime.execute:list-tools', 'app-client.close', 'runtime.restart:3', 'app-client.close', 'runtime.close:4']);
 });
 
 it('rejects a mismatched runtime preview session before it can open or attach an SDK client', async () => {
@@ -244,7 +289,7 @@ it('rejects a mismatched runtime preview session before it can open or attach an
       executeRuntime: async () => { throw new Error('Unexpected runtime operation.'); },
       openRuntime: async () => { throw new Error('Unexpected runtime session open.'); },
       restart: async () => connection,
-      restartRuntime: async () => ({ action: 'implementation-updated', invalidatedBindings: [], registryRevision: 7, restartedSessionIds: [], runtimeGenerationId: 'generation-a', sequence: 1 }),
+      restartRuntime: async () => unusedRuntimeRestart,
       stream: async () => new Response(null),
       trace: async () => ({ entries: [] }),
     },
@@ -288,7 +333,7 @@ it('serializes attached runtime App requests before admitting the next route ope
       },
       openRuntime: async () => { throw new Error('Unexpected runtime session open.'); },
       restart: async () => connection,
-      restartRuntime: async () => ({ action: 'implementation-updated', invalidatedBindings: [], registryRevision: 7, restartedSessionIds: [], runtimeGenerationId: 'generation-a', sequence: 1 }),
+      restartRuntime: async () => unusedRuntimeRestart,
       stream: async () => new Response(null),
       trace: async () => ({ entries: [] }),
     },
@@ -336,7 +381,7 @@ it('admits one runtime attachment, then clears only that closed attachment befor
       executeRuntime: async () => ({ operationId: 'operation-a', sessionId: 'runtime-session-a', sessionRevision: 3, value: [], vector: { providerSessionId: 'provider-a', runtimeGenerationId: 'generation-a', sourceRevision: 'source-a', stateStoreId: 'store-a', stateVersion: 2 } }),
       openRuntime: async () => { throw new Error('Unexpected runtime session open.'); },
       restart: async () => connection,
-      restartRuntime: async () => ({ action: 'implementation-updated', invalidatedBindings: [], registryRevision: 7, restartedSessionIds: [], runtimeGenerationId: 'generation-a', sequence: 1 }),
+      restartRuntime: async () => unusedRuntimeRestart,
       stream: async () => new Response(null),
       trace: async () => ({ entries: [] }),
     },
@@ -357,6 +402,52 @@ it('admits one runtime attachment, then clears only that closed attachment befor
   expect(clients).toHaveLength(2);
   expect(fresh.client).not.toBe(left.client);
   await controller.close();
+});
+
+it('retains a failed attached cleanup until controller close retries that exact attachment', async () => {
+  const firstFailure = new Error('first attached client cleanup failed');
+  const retryFailure = new Error('retry attached client cleanup failed');
+  let appClients = 0;
+  let closeAttempts = 0;
+  const controller = createMcpSessionController({
+    appClientFactory: () => {
+      appClients += 1;
+      return {
+        close: async () => {
+          closeAttempts += 1;
+          throw closeAttempts === 1 ? firstFailure : retryFailure;
+        },
+        connect: async (transport: Transport) => transport.start(),
+        request: async () => undefined,
+      } as unknown as Client;
+    },
+    clientFactory: fakeClient,
+    routes: {
+      catalog: async () => ({ prompts: [], resourceTemplates: [], resources: [], tools: [] }),
+      closeRuntime: async () => undefined,
+      config: async () => ({}),
+      executeRuntime: async () => ({ operationId: 'operation-a', sessionId: 'runtime-session-a', sessionRevision: 3, value: [], vector: { providerSessionId: 'provider-a', runtimeGenerationId: 'generation-a', sourceRevision: 'source-a', stateStoreId: 'store-a', stateVersion: 2 } }),
+      openRuntime: async () => { throw new Error('Unexpected runtime session open.'); },
+      restart: async () => connection,
+      restartRuntime: async () => unusedRuntimeRestart,
+      stream: async () => new Response(null),
+      trace: async () => ({ entries: [] }),
+    },
+    transportFactory: fakeTransport,
+  });
+
+  await controller.open(runtimeBinding);
+  const attached = await controller.attachApp();
+  await expect(attached.close()).rejects.toBe(firstFailure);
+  const retained = await controller.attachApp();
+  expect(retained.client).toBe(attached.client);
+  expect(appClients).toBe(1);
+
+  await expect(controller.close()).rejects.toMatchObject({
+    failures: [{ reason: retryFailure, resource: 'app-client' }],
+  });
+  expect(closeAttempts).toBe(2);
+  expect(appClients).toBe(1);
 });
 
 it('drains an old runtime attachment across restart without publishing its stale result', async () => {
@@ -388,7 +479,17 @@ it('drains an old runtime attachment across restart without publishing its stale
       },
       openRuntime: async () => { throw new Error('Unexpected runtime session open.'); },
       restart: async () => connection,
-      restartRuntime: async () => ({ action: 'sessions-restarted', invalidatedBindings: [{ sessionId: 'runtime-session-a', sessionRevision: 3 }], registryRevision: 8, restartedSessionIds: ['runtime-session-a'], runtimeGenerationId: 'generation-b', sequence: 1 }),
+      restartRuntime: async () => Object.freeze({
+        reconcile: Object.freeze({
+          action: 'sessions-restarted' as const,
+          invalidatedBindings: Object.freeze([{ sessionId: 'runtime-session-a', sessionRevision: 3 }]),
+          registryRevision: 8,
+          restartedSessionIds: Object.freeze(['runtime-session-a']),
+          runtimeGenerationId: 'generation-b',
+          sequence: 1,
+        }),
+        session: restartedRuntimeSession,
+      }),
       stream: async () => new Response(null),
       trace: async () => ({ entries: [] }),
     },

@@ -37,6 +37,11 @@ export interface McpRouteRuntimeSession {
   readonly state: 'connecting' | 'ready' | 'restarting' | 'failed' | 'closed';
 }
 
+export interface McpRouteRuntimeRestart {
+  readonly reconcile: DevRuntimeMcpRegistryReconcileResult;
+  readonly session: McpRouteRuntimeSession;
+}
+
 export interface McpRouteCatalog {
   readonly prompts: readonly unknown[];
   readonly resourceTemplates: readonly unknown[];
@@ -206,9 +211,11 @@ const runtimeSession = (value: unknown): McpRouteRuntimeSession => {
   const session = asRecord(value);
   const binding = asRecord(session.binding);
   if (
-    !nonempty(binding.definitionDigest) || !nonempty(binding.providerSessionId) || !positive(binding.registryRevision) ||
+    Object.keys(session).length !== 3 || Object.keys(binding).length !== 8 ||
+    Object.hasOwn(binding, 'providerSessionId') || Object.hasOwn(binding, 'stateStoreId') ||
+    !nonempty(binding.definitionDigest) || !positive(binding.registryRevision) ||
     !nonempty(binding.serverDigest) || !nonempty(binding.serverName) || !nonempty(binding.sessionId) ||
-    !positive(binding.sessionRevision) || !nonempty(binding.stateStoreId) || !nonempty(binding.target) ||
+    !positive(binding.sessionRevision) || !nonempty(binding.target) ||
     !nonempty(binding.transportDigest) ||
     !['connecting', 'ready', 'restarting', 'failed', 'closed'].includes(session.state as string)
   ) throw new McpRouteClientError('AB8019', 'Runtime MCP route returned an invalid session.');
@@ -250,6 +257,20 @@ const runtimeReconcile = (value: unknown): DevRuntimeMcpRegistryReconcileResult 
     runtimeGenerationId: reconcile.runtimeGenerationId,
     sequence: reconcile.sequence,
   });
+};
+
+const runtimeRestart = (value: unknown, request: DevRuntimeMcpSessionControlRequest): McpRouteRuntimeRestart => {
+  const response = asRecord(value);
+  if (Object.keys(response).length !== 2) throw new McpRouteClientError('AB8019', 'Runtime MCP route returned an invalid restart response.');
+  const reconcile = runtimeReconcile(response.reconcile);
+  const session = runtimeSession(response.session);
+  if (
+    reconcile.action !== 'sessions-restarted' || !reconcile.restartedSessionIds.includes(request.sessionId) ||
+    !reconcile.invalidatedBindings.some((binding) => binding.sessionId === request.sessionId && binding.sessionRevision === request.expectedSessionRevision) ||
+    session.state !== 'ready' || session.binding.sessionId !== request.sessionId ||
+    session.binding.sessionRevision !== request.expectedSessionRevision + 1 || session.binding.registryRevision !== reconcile.registryRevision
+  ) throw new McpRouteClientError('AB8019', 'Runtime MCP route returned a restart snapshot that does not match its reconciliation evidence.');
+  return Object.freeze({ reconcile, session });
 };
 
 const runtimeOperation = (value: unknown): DevRuntimeMcpOperationResult => {
@@ -537,13 +558,13 @@ export class McpRouteClient {
     })).session);
   }
 
-  async restartRuntime(request: DevRuntimeMcpSessionControlRequest): Promise<DevRuntimeMcpRegistryReconcileResult> {
+  async restartRuntime(request: DevRuntimeMcpSessionControlRequest): Promise<McpRouteRuntimeRestart> {
     const input = runtimeControlRequest(request);
-    return runtimeReconcile(asRecord(await this.#json(`${this.#runtimeSessionPath(input.sessionId)}/restart`, {
+    return runtimeRestart(asRecord(await this.#json(`${this.#runtimeSessionPath(input.sessionId)}/restart`, {
       body: JSON.stringify(input),
       headers: { 'content-type': 'application/json' },
       method: 'POST',
-    })).reconcile);
+    })), input);
   }
 
   async closeRuntime(request: DevRuntimeMcpSessionControlRequest): Promise<void> {

@@ -10,7 +10,6 @@ import type {
   DevRuntimeMcpAppRunBinding,
   DevRuntimeMcpOperationRequest,
   DevRuntimeMcpOperationResult,
-  DevRuntimeMcpRegistryReconcileResult,
   DevRuntimeMcpSessionControlRequest,
   DevRuntimeMcpSessionRequest,
 } from '../../../agent-bundle/src/dev/runtime-protocol.ts';
@@ -32,6 +31,7 @@ import type {
   McpRouteClient,
   McpRouteConnection,
   McpRouteOperation,
+  McpRouteRuntimeRestart,
   McpRouteRuntimeSession,
   McpRouteSession,
   McpRouteSessionBinding,
@@ -70,12 +70,12 @@ export interface McpSessionControllerRoutes {
   closeRuntime?(request: DevRuntimeMcpSessionControlRequest): Promise<void>;
   executeRuntime?(sessionId: string, request: DevRuntimeMcpOperationRequest): Promise<DevRuntimeMcpOperationResult>;
   openRuntime?(request: DevRuntimeMcpSessionRequest): Promise<McpRouteRuntimeSession>;
-  restartRuntime?(request: DevRuntimeMcpSessionControlRequest): Promise<DevRuntimeMcpRegistryReconcileResult>;
+  restartRuntime?(request: DevRuntimeMcpSessionControlRequest): Promise<McpRouteRuntimeRestart>;
 }
 
 export interface McpSessionControllerRuntimeRoutes {
   openRuntime(request: DevRuntimeMcpSessionRequest): Promise<McpRouteRuntimeSession>;
-  restartRuntime(request: DevRuntimeMcpSessionControlRequest): Promise<DevRuntimeMcpRegistryReconcileResult>;
+  restartRuntime(request: DevRuntimeMcpSessionControlRequest): Promise<McpRouteRuntimeRestart>;
   closeRuntime(request: DevRuntimeMcpSessionControlRequest): Promise<void>;
   executeRuntime(sessionId: string, request: DevRuntimeMcpOperationRequest): Promise<DevRuntimeMcpOperationResult>;
 }
@@ -596,27 +596,27 @@ export class McpSessionController {
         const failures = await this.#drainAttachedRuntimeWork(attachment);
         if (failures.length > 0) throw new McpSessionControllerCloseError(failures);
         if (!this.#runtimeCurrent(binding, generation)) return this.#model;
-        const reconciled = await routes.restartRuntime({ expectedSessionRevision: binding.binding.sessionRevision, sessionId: binding.binding.sessionId });
+        const restarted = await routes.restartRuntime({ expectedSessionRevision: binding.binding.sessionRevision, sessionId: binding.binding.sessionId });
+        const { reconcile: reconciled, session } = restarted;
         if (reconciled.action !== 'sessions-restarted' || !reconciled.restartedSessionIds.includes(binding.binding.sessionId)) {
           throw new McpSessionControllerError('Runtime MCP session restart did not produce a replacement session revision.');
         }
+        if (
+          !reconciled.invalidatedBindings.some((current) => current.sessionId === binding.binding.sessionId && current.sessionRevision === binding.binding.sessionRevision) ||
+          session.state !== 'ready' || session.binding.sessionId !== binding.binding.sessionId ||
+          session.binding.sessionRevision !== binding.binding.sessionRevision + 1 || session.binding.registryRevision !== reconciled.registryRevision
+        ) throw new McpSessionControllerError('Runtime MCP session restart returned a snapshot that does not match its reconciliation evidence.');
         if (!this.#current(generation)) return this.#model;
-        const nextRuntimeBinding = Object.freeze({
-          ...binding.binding,
-          registryRevision: reconciled.registryRevision,
-          sessionRevision: binding.binding.sessionRevision + 1,
-        });
         const nextBinding = Object.freeze({
           kind: 'runtime' as const,
-          binding: nextRuntimeBinding,
-          session: Object.freeze({
-            binding: nextRuntimeBinding,
-            connection: binding.session.connection,
-            state: 'ready' as const,
-          }),
+          binding: session.binding,
+          session,
         });
         this.#binding = nextBinding;
-        this.#publish({ binding: modelBindingFor(nextBinding), type: 'binding' });
+        this.#publish(
+          { binding: modelBindingFor(nextBinding), type: 'binding' },
+          { connection: connectionFor(session.connection), type: 'connection' },
+        );
         this.#state = 'ready';
         this.#publish({ type: 'ready' });
         return this.#model;
@@ -654,6 +654,9 @@ export class McpSessionController {
     const current = this.#attachedApp;
     if (current !== undefined) return this.#appAccess(current, binding.binding);
     if (this.#attachmentPromise !== undefined) return this.#attachmentPromise;
+    if (this.#attachingApp !== undefined) {
+      throw new McpSessionControllerError('MCP App attachment cleanup is incomplete.');
+    }
     const client = this.#appClientFactory();
     const transport = new RuntimeAttachedMcpTransport({
       connection: binding.session.connection,
@@ -710,7 +713,7 @@ export class McpSessionController {
     const binding = this.#binding;
     const attached = this.#attachedApp ?? this.#attachingApp;
     this.#closePromise = this.#drainResources(client, transport, binding, attached).then((failures) => {
-      this.#clearResources(client, transport, attached);
+      this.#clearResources(client, transport, attached, !this.#hasAttachmentCleanupFailure(failures));
       if (failures.length > 0) {
         this.#state = 'failed';
         const error = new McpSessionControllerCloseError(failures);
@@ -874,7 +877,7 @@ export class McpSessionController {
     void closing.catch(() => undefined);
     const attached = this.#attachedApp ?? this.#attachingApp;
     const failures = await this.#drainResources(client, transport, this.#binding, attached);
-    this.#clearResources(client, transport, attached);
+    this.#clearResources(client, transport, attached, !this.#hasAttachmentCleanupFailure(failures));
     const error = new McpSessionControllerFailureError(reason, failures);
     this.#publishTerminalFailure(code, error);
     rejectClose(error);
@@ -904,7 +907,6 @@ export class McpSessionController {
       ...(transport === undefined ? [] : [{ resource: 'transport' as const, run: () => transport.close() }]),
       ...appCloses,
     ]);
-    if (attached !== undefined) this.#releaseAttachment(attached);
     const runtime = binding?.kind !== 'runtime' ? Object.freeze([]) : await this.#settleCleanup([
       {
         resource: 'runtime' as const,
@@ -928,10 +930,11 @@ export class McpSessionController {
     client: McpSessionControllerClient | undefined,
     transport: McpSessionControllerTransport | undefined,
     attached: AttachedApp | undefined,
+    releaseAttachment = true,
   ): void {
     if (this.#client === client) this.#client = undefined;
     if (this.#transport === transport) this.#transport = undefined;
-    if (attached !== undefined) this.#releaseAttachment(attached);
+    if (attached !== undefined && releaseAttachment) this.#releaseAttachment(attached);
     if (this.#client === undefined && this.#transport === undefined && this.#attachedApp === undefined && this.#attachingApp === undefined) {
       this.#binding = undefined;
       this.#session = undefined;
@@ -1007,21 +1010,39 @@ export class McpSessionController {
   }
 
   #closeAttachedClient(attachment: AttachedApp): Promise<void> {
-    if (attachment.clientClosePromise === undefined) attachment.clientClosePromise = attachment.client.close();
+    if (attachment.clientClosePromise === undefined) {
+      const attempt = Promise.resolve().then(() => attachment.client.close());
+      attachment.clientClosePromise = attempt;
+      void attempt.catch(() => {
+        if (attachment.clientClosePromise === attempt) attachment.clientClosePromise = undefined;
+      });
+    }
     return attachment.clientClosePromise;
   }
 
   #closeAttachedTransport(attachment: AttachedApp): Promise<void> {
-    if (attachment.transportClosePromise === undefined) attachment.transportClosePromise = attachment.transport.close();
+    if (attachment.transportClosePromise === undefined) {
+      const attempt = Promise.resolve().then(() => attachment.transport.close());
+      attachment.transportClosePromise = attempt;
+      void attempt.catch(() => {
+        if (attachment.transportClosePromise === attempt) attachment.transportClosePromise = undefined;
+      });
+    }
     return attachment.transportClosePromise;
   }
 
   #closeAttached(attachment: AttachedApp): Promise<void> {
     if (attachment.closePromise === undefined) {
-      attachment.closePromise = Promise.all([
+      const close = Promise.all([
         this.#closeAttachedClient(attachment),
         this.#closeAttachedTransport(attachment),
-      ]).then(() => undefined).finally(() => this.#releaseAttachment(attachment));
+      ]).then(() => {
+        this.#releaseAttachment(attachment);
+      });
+      attachment.closePromise = close;
+      void close.catch(() => {
+        if (attachment.closePromise === close) attachment.closePromise = undefined;
+      });
     }
     return attachment.closePromise;
   }
@@ -1055,6 +1076,10 @@ export class McpSessionController {
     if (this.#attachingApp === attachment) this.#attachingApp = undefined;
   }
 
+  #hasAttachmentCleanupFailure(failures: readonly McpSessionControllerCloseFailure[]): boolean {
+    return failures.some(({ resource }) => resource === 'app-client' || resource === 'app-transport');
+  }
+
   async #drainAttachedRuntimeWork(attachment: AttachedApp | undefined): Promise<readonly McpSessionControllerCloseFailure[]> {
     const active = [...this.#requests.entries()];
     // Closing the runtime transport first prevents a stale request from emitting an error/result while it drains.
@@ -1066,7 +1091,7 @@ export class McpSessionController {
       ...(clientClose === undefined ? [] : [{ resource: 'app-client' as const, run: () => clientClose }]),
       ...(transportClose === undefined ? [] : [{ resource: 'app-transport' as const, run: () => transportClose }]),
     ]);
-    if (attachment !== undefined) this.#releaseAttachment(attachment);
+    if (attachment !== undefined && !this.#hasAttachmentCleanupFailure(closed)) this.#releaseAttachment(attachment);
     return Object.freeze([...closed, ...settled]);
   }
 
