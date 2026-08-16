@@ -4,7 +4,9 @@ import { describe, expect, it } from '@rstest/core';
 
 import {
   createMcpAppFrameRelay,
+  applyMcpAppFramePolicy,
   McpAppFrame,
+  SecureAppRenderer,
   type McpAppFrameMessageListener,
   type McpAppFrameRelayRoutes,
   type McpAppFrameWindow,
@@ -83,6 +85,44 @@ const proxyReady = (): Readonly<Record<string, unknown>> => Object.freeze({
 });
 
 describe('MCP App frame relay', () => {
+  it('exposes the distinct secure official AppRenderer boundary', () => {
+    expect(typeof SecureAppRenderer).toBe('function');
+    expect(typeof applyMcpAppFramePolicy).toBe('function');
+  });
+
+  it('rejects an untrusted copied document-policy handle before an AppRenderer can navigate', () => {
+    const copiedPolicy = Object.freeze({
+      bindingId: 'binding-weather',
+      snapshot: Object.freeze({ allow: 'camera', approvedPermissions: Object.freeze({ camera: Object.freeze({}) }), revision: 2, warnings: Object.freeze([]) }),
+    });
+    const policyClient = Object.freeze({ currentDocumentPolicy: () => copiedPolicy });
+    expect(() => renderToStaticMarkup(createElement(SecureAppRenderer, {
+      bindingId: 'binding-weather',
+      bootstrapUrl: 'https://apps.example.test/bootstrap',
+      bridgeFactory: (async () => ({ close: async () => undefined })) as never,
+      documentPolicy: copiedPolicy as never,
+      policyClient,
+      rendererProps: { tool: { inputSchema: { type: 'object' }, name: 'weather' } },
+    }))).toThrow('no longer current');
+  });
+
+  it('applies the exact server-issued policy to the one outer frame without widening it', () => {
+    const attributes = new Map<string, string>();
+    const iframe = {
+      getAttribute: (name: string) => attributes.get(name) ?? null,
+      setAttribute: (name: string, value: string) => { attributes.set(name, value); },
+    };
+    applyMcpAppFramePolicy(iframe as never, Object.freeze({
+      bindingId: 'binding-weather',
+      snapshot: Object.freeze({ allow: 'camera; microphone', approvedPermissions: Object.freeze({}), revision: 2, warnings: Object.freeze([]) }),
+    }) as never);
+    expect(Object.fromEntries(attributes)).toEqual({
+      allow: 'camera; microphone',
+      referrerpolicy: 'no-referrer',
+      sandbox: 'allow-scripts allow-same-origin',
+    });
+  });
+
   it('accepts only its exact proxy source and origin before providing the canonical resource without an authenticated route call', () => {
     const browser = fakeBrowser();
     const messages: unknown[] = [];

@@ -10,6 +10,7 @@
     "src/main.tsx",
     "src/mcp/mcp-route-client.ts",
     "src/inspector-closure.tsx",
+    "src/inspector/adapter/runtime-app-bridge.ts",
     "src/inspector/adapter/inspector-session-adapter-fixture.tsx",
     "src/inspector/adapter/inspector-session-adapter-model.ts",
     "src/inspector/adapter/inspector-session-adapter.tsx",
