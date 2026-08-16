@@ -473,9 +473,9 @@ const runtimeHostContext = (value: unknown): unknown => {
   });
 };
 
-const runtimeConfigExtensions = (value: unknown, sourceRevision: string): unknown => {
+const runtimeConfigExtensions = (value: unknown): unknown => {
   const record = runtimeRecord(value, ['entries', 'sourceRevision']);
-  if (record.sourceRevision !== sourceRevision) runtimeInvalid('Runtime MCP App configuration inspection is invalid.');
+  const sourceRevision = runtimeText(record.sourceRevision, 'configuration source revision');
   const rawEntries = runtimeArray(record.entries, 'Runtime MCP App configuration inspection is invalid.');
   const allowedKeys = new Set(['claude', 'codex', 'portable']);
   const seen = new Set<string>();
@@ -569,7 +569,7 @@ const runtimeProfile = (value: unknown, binding: McpAppRuntimeBindingSnapshot, k
     runtimeInvalid('Runtime MCP App route returned an invalid host profile.');
   }
   const common = {
-    configExtensions: runtimeConfigExtensions(record.configExtensions, binding.runVector.sourceRevision),
+    configExtensions: runtimeConfigExtensions(record.configExtensions),
     descriptor: runtimeDescriptor(record.descriptor, binding.profileId, binding.profileVersion),
     kind,
     permissions: runtimePermissions(record.permissions),

@@ -768,6 +768,24 @@ describe('MCP App browser client', () => {
     }
   });
 
+  it('preserves independent bounded configuration provenance revisions without weakening the closed registry', async () => {
+    const previewWithConfigSource = (sourceRevision: unknown): typeof globalThis.fetch => (async (input: string | URL | Request) => {
+      if (String(input) === '/api/project/session') return json({ origin: 'http://127.0.0.1:43123', token: 'foreground-secret' });
+      const copy = JSON.parse(JSON.stringify(runtimePreview)) as Record<string, unknown>;
+      ((copy.profile as Record<string, unknown>).configExtensions as Record<string, unknown>).sourceRevision = sourceRevision;
+      return json({ preview: copy });
+    }) as typeof globalThis.fetch;
+    const runtimeRequest = { expectedGenerationId: 'generation-a', profileId: 'portable' as const, runId: 'run-a' };
+
+    await expect(new McpAppClient({ fetch: previewWithConfigSource('source-project-config-b') }).createRuntime(runtimeRequest))
+      .resolves.toMatchObject({ profile: { configExtensions: { sourceRevision: 'source-project-config-b' } } });
+
+    for (const sourceRevision of ['', 'source\0project', null, 42]) {
+      await expect(new McpAppClient({ fetch: previewWithConfigSource(sourceRevision) }).createRuntime(runtimeRequest))
+        .rejects.toMatchObject({ code: 'AB8019' });
+    }
+  });
+
   it('uses a connected ProjectClient for exact runtime invalidations and revokes stale policy handles', async () => {
     const stream = new RuntimeEventSource();
     let streamCount = 0;
