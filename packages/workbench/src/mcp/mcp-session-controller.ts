@@ -92,7 +92,15 @@ export interface McpSessionControllerCloseFailure {
   readonly resource: McpSessionControllerCloseResource;
 }
 
-const reasonMessage = (reason: unknown): string => reason instanceof Error ? reason.message : String(reason);
+const reasonMessage = (reason: unknown): string => {
+  try {
+    if (!(reason instanceof Error)) return String(reason);
+    const message: unknown = reason.message;
+    return typeof message === 'string' ? message : String(message);
+  } catch {
+    return 'Unknown error';
+  }
+};
 
 const frozenCloseFailures = (
   failures: readonly McpSessionControllerCloseFailure[],
@@ -319,6 +327,7 @@ export class McpSessionController {
   #client: McpSessionControllerClient | undefined;
   #closePromise: Promise<void> | undefined;
   #closing = false;
+  #cleanupCloseReentry: Promise<void> | undefined;
   #constructing = false;
   #constructionDrain: ConstructionDrain | undefined;
   #generation = 0;
@@ -367,6 +376,7 @@ export class McpSessionController {
     let client: McpSessionControllerClient | undefined;
     let constructionFailed = false;
     let constructionReason: unknown;
+    let generation: number;
     const drain = constructionDrain();
     this.#constructionDrain = drain;
     this.#constructing = true;
@@ -383,26 +393,30 @@ export class McpSessionController {
     } finally {
       this.#constructing = false;
     }
-    if (constructionFailed) {
-      const error = await this.#failConstruction(client, transport, constructionReason);
-      this.#finishConstruction(drain);
-      throw error;
-    }
-    if (this.#state !== 'idle' || this.#closing) {
-      const error = await this.#failConstruction(
+    try {
+      if (constructionFailed) throw await this.#failConstruction(client, transport, constructionReason);
+      if (this.#state !== 'idle' || this.#closing) throw await this.#failConstruction(
         client,
         transport,
         new McpSessionControllerError('MCP session controller was closed while opening'),
       );
+      this.#state = 'opening';
+      generation = ++this.#generation;
+      this.#binding = requested;
+      this.#transport = transport;
+      this.#client = client;
+    } finally {
       this.#finishConstruction(drain);
-      throw error;
     }
-    this.#state = 'opening';
-    const generation = ++this.#generation;
-    this.#binding = requested;
-    this.#transport = transport;
-    this.#client = client;
-    this.#finishConstruction(drain);
+    return this.#connect(client, transport, requested, generation);
+  }
+
+  async #connect(
+    client: McpSessionControllerClient,
+    transport: McpSessionControllerTransport,
+    requested: McpSessionControllerBinding,
+    generation: number,
+  ): Promise<McpBrowserSessionModel> {
     try {
       await client.connect(transport);
       if (!this.#current(generation)) return this.#model;
@@ -473,6 +487,7 @@ export class McpSessionController {
   }
 
   close(): Promise<void> {
+    if (this.#cleanupCloseReentry !== undefined) return this.#cleanupCloseReentry;
     if (this.#closePromise !== undefined) return this.#closePromise;
     this.#state = 'closing';
     this.#closing = true;
@@ -684,7 +699,21 @@ export class McpSessionController {
   }
 
   async #settleCleanup(tasks: readonly CleanupTask[]): Promise<readonly McpSessionControllerCloseFailure[]> {
-    const results = await Promise.allSettled(tasks.map(({ run }) => Promise.resolve().then(run)));
+    const pending = tasks.map(({ run }) => {
+      let work: unknown;
+      this.#cleanupCloseReentry = Promise.resolve();
+      try {
+        work = run();
+      } catch (reason) {
+        return Promise.reject(reason);
+      } finally {
+        // Cleanup may synchronously reacquire its owner, but must not do so after yielding;
+        // a delayed call is indistinguishable from an external close that must await cleanup.
+        this.#cleanupCloseReentry = undefined;
+      }
+      return Promise.resolve(work);
+    });
+    const results = await Promise.allSettled(pending);
     return Object.freeze(results.flatMap((result, index) => result.status === 'rejected'
       ? [{ reason: result.reason, resource: tasks[index]!.resource }]
       : []));

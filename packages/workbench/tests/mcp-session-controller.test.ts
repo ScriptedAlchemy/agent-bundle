@@ -33,6 +33,19 @@ const eventually = async (predicate: () => boolean, timeout = 300): Promise<void
   }
 };
 
+const settledWithin = async <Value>(
+  promise: Promise<Value>,
+  timeout = 50,
+): Promise<PromiseSettledResult<Value> | Readonly<{ readonly status: 'pending' }>> => Promise.race([
+  promise.then<PromiseSettledResult<Value>>(
+    (value) => ({ status: 'fulfilled', value }),
+    (reason: unknown) => ({ reason, status: 'rejected' }),
+  ),
+  new Promise<Readonly<{ readonly status: 'pending' }>>((resolve) => {
+    setTimeout(() => resolve({ status: 'pending' }), timeout);
+  }),
+]);
+
 const traceStream = (): {
   readonly close: () => void;
   readonly response: Response;
@@ -72,6 +85,14 @@ const fakeClient = (): McpSessionControllerClient & { readonly events: string[] 
     events,
     request: async () => ({ content: [{ text: 'Rain' }] }),
   };
+};
+
+const emptyRoutes: McpSessionControllerRoutes = {
+  catalog: async () => ({ prompts: [], resourceTemplates: [], resources: [], tools: [] }),
+  config: async () => ({ launch: { args: [], command: 'node', env: {}, kind: 'stdio' }, origin: 'artifact' }),
+  restart: async () => connection,
+  stream: async () => new Response(null),
+  trace: async () => ({ entries: [] }),
 };
 
 it('connects the exact artifact binding then atomically publishes catalog and config while trace stays independently live', async () => {
@@ -340,6 +361,162 @@ it('reports a client factory failure cleanup once and remains retryable', async 
 
   stream.close();
   await controller.close();
+});
+
+const hostileConstructionReasons = [
+  {
+    createReason: () => ({ toString: () => { throw new Error('toString trap'); } }),
+    name: 'throwing toString',
+  },
+  {
+    createReason: () => ({ [Symbol.toPrimitive]: () => { throw new Error('primitive trap'); } }),
+    name: 'throwing Symbol.toPrimitive',
+  },
+  {
+    createReason: () => Object.defineProperty(new Error('hidden'), 'message', {
+      get: () => { throw new Error('message trap'); },
+    }),
+    name: 'throwing Error.message access',
+  },
+  {
+    createReason: () => new Proxy({}, {
+      getPrototypeOf: () => { throw new Error('prototype trap'); },
+    }),
+    name: 'throwing prototype access',
+  },
+] as const;
+
+for (const { createReason, name } of hostileConstructionReasons) {
+  it(`settles construction and preserves a ${name} reason without blocking close`, async () => {
+    const reason = createReason();
+    const controller = createMcpSessionController({
+      clientFactory: fakeClient,
+      routes: emptyRoutes,
+      transportFactory: () => { throw reason; },
+    });
+
+    const opening = controller.open(binding);
+    const closing = controller.close();
+    const [openingResult, closingResult] = await Promise.all([
+      settledWithin(opening),
+      settledWithin(closing),
+    ]);
+
+    expect(openingResult.status).toBe('rejected');
+    if (openingResult.status !== 'rejected') throw new Error('Expected construction to reject.');
+    const failure = openingResult.reason as Readonly<{
+      readonly failures: readonly unknown[];
+      readonly message: string;
+      readonly name: string;
+      readonly primary: unknown;
+    }>;
+    expect(failure.primary === reason).toBe(true);
+    expect(failure.failures).toEqual([]);
+    expect(failure.message).toBe('MCP session controller failed: Unknown error.');
+    expect(failure.name).toBe('McpSessionControllerFailureError');
+    expect(closingResult).toEqual({ status: 'fulfilled', value: undefined });
+    expect(controller.model.phase).toBe('closed');
+  });
+}
+
+const constructionCleanupReentries = [
+  { async: false, name: 'returns controller.close()' },
+  { async: true, name: 'awaits controller.close()' },
+] as const;
+
+for (const cleanup of constructionCleanupReentries) {
+  it(`does not deadlock when construction cleanup ${cleanup.name}`, async () => {
+    const factoryFailure = new Error('client factory failed');
+    let cleanupCalls = 0;
+    const controller = createMcpSessionController({
+      clientFactory: () => { throw factoryFailure; },
+      routes: emptyRoutes,
+      transportFactory: () => transport,
+    });
+    const transport = fakeTransport();
+    transport.close = cleanup.async
+      ? async () => {
+          cleanupCalls += 1;
+          await controller.close();
+        }
+      : () => {
+          cleanupCalls += 1;
+          return controller.close();
+        };
+
+    const openingResult = await settledWithin(controller.open(binding));
+
+    expect(openingResult).toMatchObject({
+      reason: {
+        failures: [],
+        name: 'McpSessionControllerFailureError',
+        primary: factoryFailure,
+      },
+      status: 'rejected',
+    });
+    expect(cleanupCalls).toBe(1);
+    expect(controller.model.phase).toBe('idle');
+    await expect(controller.close()).resolves.toBeUndefined();
+  });
+}
+
+it('keeps an external close pending behind gated construction cleanup and runs cleanup once', async () => {
+  const cleanupGate = deferred<void>();
+  const factoryFailure = new Error('client factory failed');
+  let cleanupCalls = 0;
+  const transport = fakeTransport();
+  transport.close = async () => {
+    cleanupCalls += 1;
+    await cleanupGate.promise;
+  };
+  const controller = createMcpSessionController({
+    clientFactory: () => { throw factoryFailure; },
+    routes: emptyRoutes,
+    transportFactory: () => transport,
+  });
+
+  const opening = controller.open(binding);
+  await eventually(() => cleanupCalls === 1);
+  const closing = controller.close();
+  expect(controller.close()).toBe(closing);
+  expect(await settledWithin(closing)).toEqual({ status: 'pending' });
+  expect(cleanupCalls).toBe(1);
+
+  cleanupGate.resolve();
+  await expect(opening).rejects.toMatchObject({ primary: factoryFailure });
+  await expect(closing).resolves.toBeUndefined();
+  expect(cleanupCalls).toBe(1);
+  expect(controller.model.phase).toBe('closed');
+});
+
+it('does not extend the construction drain across an in-flight client connection', async () => {
+  const connectGate = deferred<void>();
+  const events: string[] = [];
+  const transport = fakeTransport();
+  transport.close = async () => { events.push('transport.close'); };
+  const controller = createMcpSessionController({
+    clientFactory: () => ({
+      close: async () => { events.push('client.close'); },
+      connect: async () => {
+        events.push('client.connect');
+        await connectGate.promise;
+      },
+      request: async () => undefined,
+    }),
+    routes: emptyRoutes,
+    transportFactory: () => transport,
+  });
+
+  const opening = controller.open(binding);
+  await eventually(() => events.includes('client.connect'));
+  const closing = controller.close();
+
+  expect(await settledWithin(closing)).toEqual({ status: 'fulfilled', value: undefined });
+  expect(await settledWithin(opening)).toEqual({ status: 'pending' });
+  expect(events).toEqual(['client.connect', 'client.close', 'transport.close']);
+
+  connectGate.resolve();
+  await expect(opening).resolves.toMatchObject({ phase: 'closed' });
 });
 
 it('closes a transport returned after its factory closes admission without reviving the controller', async () => {
