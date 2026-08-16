@@ -329,6 +329,9 @@ const download = (value: unknown): McpAppValidatedDownload | undefined => {
   return Object.freeze({ contents: Object.freeze([...value]), embeddedBytes: encoded, itemCount: value.length });
 };
 
+/** Server-derived consent details, not a client fingerprint, bind the approved action. */
+const consentFingerprint = (capability: McpAppConsentCapability): string => `runtime-app:${capability}:v1`;
+
 const sideEffectConsent = async (
   options: RuntimeAppBridgeOptions,
   preview: McpAppPreviewAppsSnapshot,
@@ -337,7 +340,7 @@ const sideEffectConsent = async (
   summary: string,
 ): Promise<boolean> => {
   const request: McpAppConsentRequest = Object.freeze({
-    actionFingerprint: `runtime-app:${preview.binding.id}:${capability}:${JSON.stringify(details)}`,
+    actionFingerprint: consentFingerprint(capability),
     capability,
     details,
     scope: 'action',
@@ -360,7 +363,7 @@ const callToolConsent = async (
     name: operation.name,
   });
   const request: McpAppConsentRequest = Object.freeze({
-    actionFingerprint: `runtime-app:${preview.binding.id}:call-tool:${JSON.stringify(details)}`,
+    actionFingerprint: consentFingerprint('call-tool'),
     capability: 'call-tool',
     details,
     scope: 'action',

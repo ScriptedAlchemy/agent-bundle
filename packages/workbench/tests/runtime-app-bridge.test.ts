@@ -338,6 +338,94 @@ it('maps all runtime App MCP operations through its binding executor, gates tool
   })).rejects.toThrow('session identity');
 });
 
+it('keeps a maximum valid App binding and large tool arguments out of the bounded consent fingerprint', async () => {
+  const bindingId = 'b'.repeat(4_096);
+  const argumentsValue = Object.freeze({ payload: 'x'.repeat(128 * 1024) });
+  const policy = Object.freeze({
+    bindingId,
+    snapshot: Object.freeze({ allow: '', approvedPermissions: Object.freeze({}), revision: 1, warnings: Object.freeze([]) }),
+  });
+  let attached: McpSessionControllerAppAttachment | undefined;
+  let decision: 'allow-once' | 'deny' = 'allow-once';
+  const created: unknown[] = [];
+  const decided: unknown[] = [];
+  const operations: unknown[] = [];
+  const access = Object.freeze({
+    client: Object.freeze({}),
+    close: async () => undefined,
+    sessionId: 'runtime-session-a',
+    sessionRevision: 3,
+  });
+  const controller = Object.freeze({
+    attachApp: async (candidate: McpSessionControllerAppAttachment) => {
+      attached = candidate;
+      return access;
+    },
+  });
+  const client = Object.freeze({
+    createRuntimeConsent: async (_id: string, request: Readonly<{ readonly actionFingerprint?: unknown }>) => {
+      if (typeof request.actionFingerprint !== 'string' || request.actionFingerprint.length > 256) {
+        throw new Error('Runtime MCP App consent action fingerprint must be at most 256 characters.');
+      }
+      created.push(request);
+      return Object.freeze({
+        challenge: Object.freeze({ expiresAt: 10, id: 'consent-a', request: Object.freeze({}) }),
+        documentPolicy: policy.snapshot,
+      });
+    },
+    currentDocumentPolicy: () => policy,
+    decideRuntimeConsent: async (_id: string, consentId: string, decision: 'allow-once' | 'deny') => {
+      decided.push(Object.freeze({ consentId, decision }));
+      return Object.freeze({
+        documentPolicy: policy.snapshot,
+        grant: decision === 'allow-once' ? Object.freeze({ authorizationId: 'authorization-large' }) : undefined,
+      });
+    },
+    operateRuntime: async (_id: string, operation: McpAppBindingOperation) => {
+      operations.push(operation);
+      return Object.freeze({
+        operationId: 'operation-large',
+        sessionId: 'runtime-session-a',
+        sessionRevision: 3,
+        value: Object.freeze([]),
+        vector: Object.freeze({ runtimeGenerationId: 'generation-a', sourceRevision: 'source-a', stateVersion: 2 }),
+      });
+    },
+  });
+  const preview = Object.freeze({
+    binding: Object.freeze({ id: bindingId, sessionId: 'runtime-session-a', sessionRevision: 3 }),
+    documentPolicy: policy.snapshot,
+    kind: 'apps' as const,
+  });
+
+  await createBindingMcpClient(controller as never, client as never, preview as never, {
+    onTrace: () => undefined,
+    requestConsent: async () => decision,
+  });
+  if (attached === undefined) throw new Error('Expected one binding-scoped App attachment.');
+  await attached.execute(Object.freeze({ arguments: argumentsValue, kind: 'tools/call', name: 'forecast' }));
+
+  expect(created).toEqual([expect.objectContaining({
+    actionFingerprint: 'runtime-app:call-tool:v1',
+    details: { arguments: argumentsValue, name: 'forecast' },
+  })]);
+  expect(decided).toEqual([{ consentId: 'consent-a', decision: 'allow-once' }]);
+  expect(operations).toEqual([{
+    arguments: argumentsValue,
+    consentId: 'authorization-large',
+    kind: 'tools/call',
+    name: 'forecast',
+  }]);
+  decision = 'deny';
+  await expect(attached.execute(Object.freeze({ arguments: argumentsValue, kind: 'tools/call', name: 'forecast' }))).rejects.toThrow('not approved');
+  expect(decided).toEqual([
+    { consentId: 'consent-a', decision: 'allow-once' },
+    { consentId: 'consent-a', decision: 'deny' },
+  ]);
+  expect(created).toHaveLength(2);
+  expect(operations).toHaveLength(1);
+});
+
 it('closes the exact attachment once on bridge setup failure and leaves its retry to the controller owner', async () => {
   await withBrowser(async (browser) => {
     const policy = Object.freeze({
