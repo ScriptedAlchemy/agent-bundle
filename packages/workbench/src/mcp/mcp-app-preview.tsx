@@ -600,7 +600,7 @@ export class McpAppPreviewController<State extends McpAppPreviewControllerState 
   #runtimeRequest(): Readonly<{ readonly expectedGenerationId: string; readonly profileId: 'chatgpt' | 'claude' | 'portable'; readonly runId: string }> | undefined {
     const evidence = this.#runtimeEvidence;
     const profileId = evidence === undefined ? undefined : runtimeProfileId(evidence.profileId);
-    if (evidence === undefined || evidence.app === undefined || profileId === undefined || evidence.app.surfaceId !== evidence.runSurfaceId || evidence.runSurfaceId !== evidence.surfaceId) return undefined;
+    if (evidence === undefined || evidence.app === undefined || profileId === undefined || evidence.runSurfaceId !== evidence.surfaceId) return undefined;
     return Object.freeze({ expectedGenerationId: evidence.vector.runtimeGenerationId, profileId, runId: evidence.runId });
   }
 

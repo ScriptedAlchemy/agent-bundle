@@ -22,7 +22,6 @@ import {
   type RscRuntimeCapturedGenerationSnapshot,
 } from './generation-materializer.js';
 import type {
-  RscRuntimeAppDefinition,
   RscRuntimeGenerationMetadata,
   RuntimeSnapshot,
   SerializedRuntimeDefinition,
@@ -206,7 +205,6 @@ interface RuntimeAppBroker {
 }
 
 interface RuntimeAppLink {
-  readonly app: RscRuntimeAppDefinition;
   readonly descriptor: DevRuntimeMcpRegistryReconcileInput['servers'][number];
   readonly key: string;
   readonly resourceUri: string;
@@ -1353,11 +1351,10 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
     if (matches.length !== 1) throw new Error('Runtime App invocation has no unambiguous current-generation App definition.');
     const match = matches[0]!;
     return Object.freeze({
-      app: match.app,
       descriptor: match.descriptor,
       key: `${match.descriptor.name}\u0000${invocation.request.target}`,
       resourceUri: match.resourceUri,
-      surfaceId: `mcp.${match.app.name}`,
+      surfaceId: clientSurfaceId,
     });
   }
 

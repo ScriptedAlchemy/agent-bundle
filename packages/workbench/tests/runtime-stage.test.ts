@@ -39,7 +39,7 @@ const run = {
         definitionDigest: 'definition', registryRevision: 1, serverDigest: 'server', serverName: 'customer', sessionId: 'session', sessionRevision: 1, target: 'portable', transportDigest: 'transport',
       },
       resourceUri: 'ui://customer/app.html',
-      surfaceId: 'app/customer',
+      surfaceId: 'mcp.edit-customer',
     },
     modelVisible: { summary: 'Customer is active.' },
     native: { status: 200 },

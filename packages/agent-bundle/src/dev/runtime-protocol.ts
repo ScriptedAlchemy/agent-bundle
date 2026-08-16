@@ -81,6 +81,7 @@ export interface DevRuntimeInspectionEnvelope {
   readonly app?: Readonly<{
     readonly mcpBinding: DevRuntimeMcpAppRunBinding;
     readonly resourceUri: string;
+    /** Server-only client/HMR endpoint locator; it may differ from the invoked run surface. */
     readonly surfaceId: string;
   }>;
   readonly flight?: Readonly<{

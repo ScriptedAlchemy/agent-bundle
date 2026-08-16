@@ -906,7 +906,7 @@ test('preserves the Claude fixture seed in post-state while exact replay stays v
             transportDigest: expect.any(String),
           },
           resourceUri: 'ui://rsc-agent-runtime/edit-timeline-v1.html',
-          surfaceId: 'mcp.timeline',
+          surfaceId: 'mcp.edit-timeline',
         },
         protocol: {
           structuredContent: {
@@ -920,6 +920,8 @@ test('preserves the Claude fixture seed in post-state while exact replay stays v
     if (timeline.status !== 'succeeded' || timeline.result.protocol === null || typeof timeline.result.protocol !== 'object' || Array.isArray(timeline.result.protocol) || timeline.result.app === undefined) {
       throw new Error('Timeline protocol was unavailable.');
     }
+    expect(timeline.surfaceId).toBe('mcp.render_edit_timeline');
+    expect(timeline.result.app.surfaceId).toBe('mcp.edit-timeline');
     expect(Object.keys(timeline.result.app.mcpBinding).sort()).toEqual([
       'definitionDigest', 'registryRevision', 'serverDigest', 'serverName', 'sessionId', 'sessionRevision', 'target', 'transportDigest',
     ]);
@@ -929,7 +931,7 @@ test('preserves the Claude fixture seed in post-state while exact replay stays v
       binding: timeline.result.app.mcpBinding,
       state: 'ready',
     });
-    expect(session.clientSurface('mcp.edit-timeline')).toMatchObject({ surfaceId: 'mcp.edit-timeline' });
+    expect(session.clientSurface(timeline.result.app.surfaceId)).toMatchObject({ surfaceId: 'mcp.edit-timeline' });
     expect((timeline.result.protocol as Record<string, unknown>).structuredContent).not.toHaveProperty('seed');
 
     const timelineRequest = Object.freeze({

@@ -179,7 +179,7 @@ const runtimeProps = (client: McpAppClient & McpAppRuntimeClient, createBridgeFa
       app: Object.freeze({
         mcpBinding: runtimePreview.session.binding,
         resourceUri: 'ui://weather/app.html',
-        surfaceId: 'surface-weather',
+        surfaceId: 'mcp.edit-weather',
       }),
       modelVisible: Object.freeze({ temperature: 22 }),
       state: Object.freeze({ identity: Object.freeze({ stateStoreId: 'private-state', stateVersion: 1 }) }),

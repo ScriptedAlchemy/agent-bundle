@@ -25,7 +25,7 @@ const run = Object.freeze({
         sessionId: 'session-a', sessionRevision: 2, target: 'portable', transportDigest: 'transport-a',
       }),
       resourceUri: 'ui://weather/forecast.html',
-      surfaceId: 'app.weather',
+      surfaceId: 'mcp.edit-weather',
     }),
     protocol: Object.freeze({ content: Object.freeze([{ text: 'Sunny', type: 'text' }]) }),
     state: Object.freeze({ identity: Object.freeze({ stateStoreId: 'state-private', stateVersion: 0 }) }),
@@ -34,7 +34,7 @@ const run = Object.freeze({
   }),
   startedAt: '2026-08-15T00:00:00.000Z',
   status: 'succeeded' as const,
-  surfaceId: 'app.weather',
+  surfaceId: 'mcp.render_weather',
   target: 'portable',
   vector,
 } satisfies DevRuntimeRun);
@@ -85,6 +85,7 @@ const createRuntimeFixture = (options: Readonly<{
   readonly permissions?: JsonValue;
 }> = {}) => {
   const requests: DevRuntimeMcpOperationRequest[] = [];
+  const openedClientSurfaces: string[] = [];
   const controls: string[] = [];
   const emitted: unknown[] = [];
   let listener: ((message: DevRuntimeMcpRegistryMessage) => void) | undefined;
@@ -130,6 +131,7 @@ const createRuntimeFixture = (options: Readonly<{
     configExtensions: () => Object.freeze({ descriptors: [], extensions: Object.freeze({}), projectRoot: '/project', sourceRevision: 'source-a' }),
     emit: (details) => { emitted.push(details); },
     openRuntimeClientSurface: async (surfaceId) => {
+      openedClientSurfaces.push(surfaceId);
       if (options.failProxyOpen === true) throw new Error('proxy open failed');
       if (options.openRuntimeClientSurface !== undefined) return options.openRuntimeClientSurface(surfaceId);
       return Object.freeze({ bootstrapUrl: `http://proxy.test/${surfaceId}`, close: options.closeProxy ?? (async () => undefined), origin: 'http://proxy.test', surfaceId, webSocketPath: '/rsbuild-hmr' });
@@ -139,6 +141,7 @@ const createRuntimeFixture = (options: Readonly<{
   return Object.freeze({
     controls,
     emitted,
+    openedClientSurfaces,
     requests,
     service,
     deliver: (message: DevRuntimeMcpRegistryMessage) => listener?.(message),
@@ -153,14 +156,14 @@ const eventually = async (predicate: () => boolean): Promise<void> => {
   throw new Error('Timed out waiting for runtime MCP App preview state.');
 };
 
-it('derives an Apps preview only from one stored succeeded run and a non-owning stable session view', async () => {
-  const { controls, requests, service } = createRuntimeFixture();
+it('derives an Apps preview only from one stored succeeded run and opens its distinct client surface', async () => {
+  const { controls, openedClientSurfaces, requests, service } = createRuntimeFixture();
 
   const preview = await service.create({ expectedGenerationId: 'generation-a', profileId: 'portable', runId: 'run-a' });
 
   expect(preview).toMatchObject({
     binding: { sessionId: 'session-a', sessionRevision: 2 },
-    clientSurface: { bootstrapUrl: 'http://proxy.test/app.weather', origin: 'http://proxy.test', webSocketPath: '/rsbuild-hmr' },
+    clientSurface: { bootstrapUrl: 'http://proxy.test/mcp.edit-weather', origin: 'http://proxy.test', webSocketPath: '/rsbuild-hmr' },
     kind: 'apps',
     result: { isError: false, modelVisible: { content: [{ text: 'Sunny', type: 'text' }] } },
     session: { state: 'ready' },
@@ -172,6 +175,7 @@ it('derives an Apps preview only from one stored succeeded run and a non-owning 
     { expectedSessionRevision: 2, kind: 'read-resource', uri: 'ui://weather/forecast.html' },
   ]);
   expect(controls).toEqual([]);
+  expect(openedClientSurfaces).toEqual(['mcp.edit-weather']);
   expect(JSON.stringify(preview)).not.toContain('provider-private');
   expect(JSON.stringify(preview)).not.toContain('state-private');
   await expect(service.create({ expectedGenerationId: 'generation-b', profileId: 'portable', runId: 'run-a' })).rejects.toThrow('generation');

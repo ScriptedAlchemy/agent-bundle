@@ -370,6 +370,105 @@ it('derives all runtime identity attributes from provider, ordered HMR, and rese
   });
 });
 
+it('uses a succeeded App client surface, not its invoked surface, for HMR client counts', async () => {
+  const appSurface = Object.freeze({
+    ...mutableSurface,
+    id: 'mcp.render_edit_timeline',
+    label: 'Render edit timeline',
+  });
+  const succeeded = run('app-run');
+  if (succeeded.status !== 'succeeded') throw new Error('Expected a succeeded App run fixture.');
+  const appRun = Object.freeze({
+    ...succeeded,
+    result: Object.freeze({
+      agentVisible: Object.freeze({ city: 'London' }),
+      app: Object.freeze({
+        mcpBinding: Object.freeze({
+          definitionDigest: 'definition-app', registryRevision: 1, serverDigest: 'server-app', serverName: 'timeline',
+          sessionId: 'session-app', sessionRevision: 1, target: 'portable', transportDigest: 'transport-app',
+        }),
+        resourceUri: 'ui://rsc-agent-runtime/edit-timeline-v1.html',
+        surfaceId: 'mcp.edit-timeline',
+      }),
+      state: Object.freeze({ identity: Object.freeze({ stateStoreId: 'state-a', stateVersion: 1 }) }),
+      trace: Object.freeze([]),
+      tree: Object.freeze([]),
+    }),
+    surfaceId: 'mcp.render_edit_timeline',
+  }) satisfies DevRuntimeRun;
+  const controller = createRuntimePlaygroundController({
+    bootstrap: bootstrap({ history: Object.freeze([appRun]), surfaces: Object.freeze([appSurface]) }),
+    client: clientFor(),
+    profiles,
+  });
+
+  await controller.receive(Object.freeze({
+    occurredAt: '2026-08-15T12:00:00.000Z',
+    payload: Object.freeze({ details: Object.freeze({ connectionCount: 4, surfaceId: 'mcp.edit-timeline' }), providerSessionId: 'provider-a', type: 'runtime.hmr.client-connected' as const }),
+    sequence: 8,
+    type: 'runtime.event' as const,
+  }));
+
+  expect(runtimeDataAttributesFor(controller.model)).toMatchObject({
+    'data-runtime-hmr-client-count': '4',
+  });
+});
+
+it('retains a succeeded App client surface for HMR while the selected run has failed', async () => {
+  const appSurface = Object.freeze({
+    ...mutableSurface,
+    id: 'mcp.render_edit_timeline',
+    label: 'Render edit timeline',
+  });
+  const succeeded = run('app-run');
+  if (succeeded.status !== 'succeeded') throw new Error('Expected a succeeded App run fixture.');
+  const appRun = Object.freeze({
+    ...succeeded,
+    result: Object.freeze({
+      agentVisible: Object.freeze({ city: 'London' }),
+      app: Object.freeze({
+        mcpBinding: Object.freeze({
+          definitionDigest: 'definition-app', registryRevision: 1, serverDigest: 'server-app', serverName: 'timeline',
+          sessionId: 'session-app', sessionRevision: 1, target: 'portable', transportDigest: 'transport-app',
+        }),
+        resourceUri: 'ui://rsc-agent-runtime/edit-timeline-v1.html',
+        surfaceId: 'mcp.edit-timeline',
+      }),
+      state: Object.freeze({ identity: Object.freeze({ stateStoreId: 'state-a', stateVersion: 1 }) }),
+      trace: Object.freeze([]),
+      tree: Object.freeze([]),
+    }),
+    surfaceId: 'mcp.render_edit_timeline',
+  }) satisfies DevRuntimeRun;
+  const failed = Object.freeze({
+    completedAt: '2026-08-15T12:01:01.000Z',
+    diagnostics: Object.freeze([]),
+    id: 'failed-run',
+    input: Object.freeze({ city: 'London' }),
+    startedAt: '2026-08-15T12:01:00.000Z',
+    status: 'failed' as const,
+    surfaceId: 'mcp.render_edit_timeline',
+    target: 'portable',
+    vector,
+  }) satisfies DevRuntimeRun;
+  const controller = createRuntimePlaygroundController({
+    bootstrap: bootstrap({ history: Object.freeze([failed, appRun]), surfaces: Object.freeze([appSurface]) }),
+    client: clientFor(),
+    profiles,
+  });
+
+  await controller.receive(Object.freeze({
+    occurredAt: '2026-08-15T12:00:00.000Z',
+    payload: Object.freeze({ details: Object.freeze({ connectionCount: 5, surfaceId: 'mcp.edit-timeline' }), providerSessionId: 'provider-a', type: 'runtime.hmr.client-connected' as const }),
+    sequence: 8,
+    type: 'runtime.event' as const,
+  }));
+
+  expect(runtimeDataAttributesFor(controller.model)).toMatchObject({
+    'data-runtime-hmr-client-count': '5',
+  });
+});
+
 it('does not present unknown HMR clients as zero and keeps the visible state version aligned after reset', async () => {
   const controller = createRuntimePlaygroundController({
     bootstrap: bootstrap(),

@@ -93,7 +93,7 @@ const renderedLiveMcpPage = (
   }
   const app = run.result.app;
   const mcpBinding = app.mcpBinding;
-  if (Object.keys(mcpBinding).length === 0 || app.surfaceId !== surface.id || run.surfaceId !== surface.id || profile.id !== profileId) return undefined;
+  if (Object.keys(mcpBinding).length === 0 || run.surfaceId !== surface.id || profile.id !== profileId) return undefined;
   try {
     return adapter.render({
       mcpBinding,

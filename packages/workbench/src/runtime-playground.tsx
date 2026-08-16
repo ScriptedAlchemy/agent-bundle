@@ -353,7 +353,14 @@ type RuntimeDisplayIdentity = Readonly<{
 }>;
 
 const runtimeDisplayIdentityFor = (model: RuntimeModel): RuntimeDisplayIdentity => {
-  const surfaceId = model.selectedSurfaceId;
+  const run = selectedRun(model);
+  const retained = selectedLastGoodRun(model);
+  const appRun = run?.status === 'succeeded'
+    ? run
+    : run?.status === 'failed' && retained?.status === 'succeeded'
+      ? retained
+      : undefined;
+  const surfaceId = appRun?.result.app?.surfaceId ?? model.selectedSurfaceId;
   const hmrClientCount = surfaceId !== undefined && model.hmrClientCountKnownSurfaces.includes(surfaceId)
     ? model.hmrClientCountBySurface[surfaceId] ?? 0
     : 'Unknown';
