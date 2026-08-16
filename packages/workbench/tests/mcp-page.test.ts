@@ -128,7 +128,7 @@ const runtimePreview = Object.freeze({
     id: 'runtime-run-weather',
     input: Object.freeze({ city: 'Paris' }),
     result: Object.freeze({
-      app: Object.freeze({ mcpBinding: runtimeBinding, resourceUri: 'ui://weather/runtime.html', surfaceId: 'runtime-surface-weather' }),
+      app: Object.freeze({ mcpBinding: runtimeBinding, resourceUri: 'ui://weather/runtime.html', surfaceId: 'mcp.edit-weather' }),
       modelVisible: Object.freeze({ temperature: 22 }),
       state: Object.freeze({ identity: Object.freeze({ stateStoreId: 'private-state', stateVersion: 1 }) }),
       trace: Object.freeze([]),
@@ -136,11 +136,11 @@ const runtimePreview = Object.freeze({
     }),
     startedAt: '2026-08-16T00:00:00.000Z',
     status: 'succeeded' as const,
-    surfaceId: 'runtime-surface-weather',
+    surfaceId: 'mcp.render-weather',
     target: 'portable',
     vector: Object.freeze({ providerSessionId: 'private-provider', runtimeGenerationId: 'runtime-generation-weather', sourceRevision: 'runtime-source-weather', stateStoreId: 'private-state', stateVersion: 1 }),
   }),
-  surface: Object.freeze({ fixtures: Object.freeze([]), id: 'runtime-surface-weather', kind: 'mcp-app' as const, label: 'Runtime weather', readOnly: false, targets: Object.freeze(['portable']) }),
+  surface: Object.freeze({ fixtures: Object.freeze([]), id: 'mcp.render-weather', kind: 'mcp-app' as const, label: 'Runtime weather', readOnly: false, targets: Object.freeze(['portable']) }),
 }) as unknown as McpAppRuntimePreviewProps;
 
 const runtimePreviewForBinding = (binding: unknown): McpAppRuntimePreviewProps => Object.freeze({
@@ -359,6 +359,20 @@ describe('MCP page', () => {
       runtimeMarkup(runtimeBinding, runtimeBinding, Object.freeze({
         ...runtimePreview,
         run: Object.freeze({ ...runtimePreview.run, result: Object.freeze({ ...runtimePreview.run.result, app: undefined }) }),
+      }) as unknown as McpAppRuntimePreviewProps),
+      runtimeMarkup(runtimeBinding, runtimeBinding, Object.freeze({
+        ...runtimePreview,
+        run: Object.freeze({ ...runtimePreview.run, surfaceId: 'mcp.render-other-weather' }),
+      }) as unknown as McpAppRuntimePreviewProps),
+      runtimeMarkup(runtimeBinding, runtimeBinding, Object.freeze({
+        ...runtimePreview,
+        run: Object.freeze({
+          ...runtimePreview.run,
+          result: Object.freeze({
+            ...runtimePreview.run.result,
+            app: Object.freeze({ ...runtimePreview.run.result!.app!, surfaceId: 'mcp/invalid-weather' }),
+          }),
+        }),
       }) as unknown as McpAppRuntimePreviewProps),
     ]) {
       expect(markup).toContain('Runtime App preview is unavailable');

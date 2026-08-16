@@ -168,8 +168,13 @@ const runtimeBindingFields = Object.freeze([
 
 type RuntimeBindingField = typeof runtimeBindingFields[number];
 type RuntimeBindingSnapshot = Readonly<Pick<DevRuntimeMcpAppRunBinding, RuntimeBindingField>>;
+type RuntimePreviewBinding = Readonly<{
+  readonly appSurfaceId: string;
+  readonly binding: RuntimeBindingSnapshot;
+}>;
 
 type RuntimePageAdmission = Readonly<{
+  readonly appSurfaceId: string;
   readonly binding: RuntimeBindingSnapshot;
   readonly selection: McpPageRuntimePreviewSelection;
 }>;
@@ -286,6 +291,10 @@ const canonicalRuntimeResourceUri = (value: unknown): value is string => {
   }
 };
 
+/** Public App surface IDs are canonical server-side client-surface locators, not invocation surface IDs. */
+const canonicalRuntimeClientSurfaceId = (value: unknown): value is string =>
+  runtimeText(value) && /^mcp\.[a-z][a-z0-9-]*(?:\.[a-z][a-z0-9-]*)*$/u.test(value);
+
 const preparedRuntimePreview = (value: unknown): RuntimeAppPreviewProps | undefined => {
   const descriptors = ownDataDescriptors(value, false);
   if (descriptors === undefined) return undefined;
@@ -302,7 +311,7 @@ const preparedRuntimePreview = (value: unknown): RuntimeAppPreviewProps | undefi
   });
 };
 
-const runtimePreviewBinding = (preview: RuntimeAppPreviewProps): RuntimeBindingSnapshot | undefined => {
+const runtimePreviewBinding = (preview: RuntimeAppPreviewProps): RuntimePreviewBinding | undefined => {
   const run = ownDataDescriptors(preview.run);
   const surface = ownDataDescriptors(preview.surface);
   if (run === undefined || surface === undefined || run.get('status')?.value !== 'succeeded') return undefined;
@@ -314,8 +323,8 @@ const runtimePreviewBinding = (preview: RuntimeAppPreviewProps): RuntimeBindingS
   const runSurfaceId = run.get('surfaceId')?.value;
   const surfaceId = surface.get('id')?.value;
   const resourceUri = app.get('resourceUri')?.value;
-  if (!runtimeText(appSurfaceId) || appSurfaceId !== runSurfaceId || appSurfaceId !== surfaceId || !canonicalRuntimeResourceUri(resourceUri)) return undefined;
-  return appBinding;
+  if (appBinding === undefined || !canonicalRuntimeClientSurfaceId(appSurfaceId) || !runtimeText(runSurfaceId) || runSurfaceId !== surfaceId || !canonicalRuntimeResourceUri(resourceUri)) return undefined;
+  return Object.freeze({ appSurfaceId, binding: appBinding });
 };
 
 const admitRuntimePage = (source: unknown, selection: unknown): RuntimePageAdmission | undefined => {
@@ -325,10 +334,11 @@ const admitRuntimePage = (source: unknown, selection: unknown): RuntimePageAdmis
   const sourceBinding = snapshotRuntimeBinding(sourceDescriptors.get('binding')?.value);
   const selectionBinding = snapshotRuntimeBinding(selectionDescriptors.get('binding')?.value);
   const preview = preparedRuntimePreview(selectionDescriptors.get('preview')?.value);
-  const appBinding = preview === undefined ? undefined : runtimePreviewBinding(preview);
-  if (sourceBinding === undefined || selectionBinding === undefined || preview === undefined || appBinding === undefined) return undefined;
-  if (!sameRuntimeBinding(sourceBinding, selectionBinding) || !sameRuntimeBinding(sourceBinding, appBinding)) return undefined;
+  const app = preview === undefined ? undefined : runtimePreviewBinding(preview);
+  if (sourceBinding === undefined || selectionBinding === undefined || preview === undefined || app === undefined) return undefined;
+  if (!sameRuntimeBinding(sourceBinding, selectionBinding) || !sameRuntimeBinding(sourceBinding, app.binding)) return undefined;
   return Object.freeze({
+    appSurfaceId: app.appSurfaceId,
     binding: sourceBinding,
     selection: Object.freeze({ binding: sourceBinding, kind: 'runtime', preview }),
   });
@@ -1266,7 +1276,7 @@ export const McpPage = (props: McpPageProps) => {
         host={appHost}
         key={appPreview.kind === 'artifact'
           ? `${appPreview.source.invocationId}-${appPreviewProfile}`
-          : `runtime:${appPreview.binding.sessionId}:${appPreview.binding.sessionRevision}:${appPreview.preview.run.id}`}
+          : `runtime:${appPreview.binding.sessionId}:${appPreview.binding.sessionRevision}:${runtimeAdmission?.appSurfaceId ?? ''}:${appPreview.preview.run.id}`}
         onLifecycleChange={setActiveAppPreviewController}
         previewProfile={appPreviewProfile}
         runtimePreviewDependencies={runtimePreviewDependencies}
