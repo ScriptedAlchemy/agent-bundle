@@ -130,6 +130,11 @@ interface ActiveRequest {
   settle(): void;
 }
 
+interface ConstructionDrain {
+  readonly settled: Promise<void>;
+  settle(): void;
+}
+
 interface CleanupTask {
   readonly resource: McpSessionControllerCloseResource;
   run(): unknown;
@@ -143,6 +148,12 @@ interface TraceRefresh {
   readonly generation: number;
   readonly live: TraceMessage[];
 }
+
+const constructionDrain = (): ConstructionDrain => {
+  let settle: () => void = () => undefined;
+  const settled = new Promise<void>((resolve) => { settle = resolve; });
+  return { settled, settle };
+};
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -309,6 +320,7 @@ export class McpSessionController {
   #closePromise: Promise<void> | undefined;
   #closing = false;
   #constructing = false;
+  #constructionDrain: ConstructionDrain | undefined;
   #generation = 0;
   #model = createMcpBrowserSessionModel('mcp-session-controller');
   #requests = new Map<string, ActiveRequest>();
@@ -355,6 +367,8 @@ export class McpSessionController {
     let client: McpSessionControllerClient | undefined;
     let constructionFailed = false;
     let constructionReason: unknown;
+    const drain = constructionDrain();
+    this.#constructionDrain = drain;
     this.#constructing = true;
     try {
       transport = this.#transportFactory({
@@ -369,19 +383,26 @@ export class McpSessionController {
     } finally {
       this.#constructing = false;
     }
-    if (constructionFailed) throw await this.#failConstruction(client, transport, constructionReason);
+    if (constructionFailed) {
+      const error = await this.#failConstruction(client, transport, constructionReason);
+      this.#finishConstruction(drain);
+      throw error;
+    }
     if (this.#state !== 'idle' || this.#closing) {
-      throw await this.#failConstruction(
+      const error = await this.#failConstruction(
         client,
         transport,
         new McpSessionControllerError('MCP session controller was closed while opening'),
       );
+      this.#finishConstruction(drain);
+      throw error;
     }
     this.#state = 'opening';
     const generation = ++this.#generation;
     this.#binding = requested;
     this.#transport = transport;
     this.#client = client;
+    this.#finishConstruction(drain);
     try {
       await client.connect(transport);
       if (!this.#current(generation)) return this.#model;
@@ -458,7 +479,11 @@ export class McpSessionController {
     this.#generation += 1;
     const client = this.#client;
     const transport = this.#transport;
-    this.#closePromise = this.#drainResources(client, transport).then((failures) => {
+    const drain = this.#constructionDrain;
+    const resources = drain === undefined
+      ? this.#drainResources(client, transport)
+      : drain.settled.then(() => this.#drainResources(client, transport));
+    this.#closePromise = resources.then((failures) => {
       this.#clearResources(client, transport);
       if (failures.length > 0) {
         this.#state = 'failed';
@@ -632,6 +657,11 @@ export class McpSessionController {
       ...(transport === undefined ? [] : [{ resource: 'transport' as const, run: () => transport.close() }]),
     ]);
     return new McpSessionControllerFailureError(reason, failures);
+  }
+
+  #finishConstruction(drain: ConstructionDrain): void {
+    if (this.#constructionDrain === drain) this.#constructionDrain = undefined;
+    drain.settle();
   }
 
   async #drainResources(

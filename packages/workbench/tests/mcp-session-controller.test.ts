@@ -343,11 +343,17 @@ it('reports a client factory failure cleanup once and remains retryable', async 
 });
 
 it('closes a transport returned after its factory closes admission without reviving the controller', async () => {
+  const closeGate = deferred<void>();
   const events: string[] = [];
   let clientFactories = 0;
   let closeFromFactory: Promise<void> | undefined;
+  let closeSettled = false;
+  let openingSettled = false;
   const transport: McpSessionControllerTransport = {
-    close: async () => { events.push('transport.close'); },
+    close: async () => {
+      events.push('transport.close');
+      await closeGate.promise;
+    },
     session: Object.freeze({ binding, connection, id: 'session-weather', timeoutMs: 5_000 }),
     start: async () => undefined,
   };
@@ -369,8 +375,17 @@ it('closes a transport returned after its factory closes admission without reviv
     },
   });
 
-  const [opening] = await Promise.allSettled([controller.open(binding)]);
+  const openingPromise = controller.open(binding);
   if (closeFromFactory === undefined) throw new Error('Expected transport factory to close the controller.');
+  void openingPromise.then(() => { openingSettled = true; }, () => { openingSettled = true; });
+  void closeFromFactory.then(() => { closeSettled = true; }, () => { closeSettled = true; });
+  await eventually(() => events.includes('transport.close'));
+
+  expect(closeSettled).toBe(false);
+  expect(openingSettled).toBe(false);
+
+  closeGate.resolve();
+  const [opening] = await Promise.allSettled([openingPromise]);
   await expect(closeFromFactory).resolves.toBeUndefined();
 
   expect(opening).toMatchObject({
@@ -392,9 +407,12 @@ it('closes a transport returned after its factory closes admission without reviv
 
 it('retains local client and transport cleanup failures when a client factory closes admission', async () => {
   const clientCloseFailure = new Error('client cleanup failed');
+  const clientCloseGate = deferred<void>();
   const transportCloseFailure = new Error('transport cleanup failed');
   const events: string[] = [];
   let closeFromFactory: Promise<void> | undefined;
+  let closeSettled = false;
+  let openingSettled = false;
   const transport: McpSessionControllerTransport = {
     close: async () => {
       events.push('transport.close');
@@ -406,6 +424,7 @@ it('retains local client and transport cleanup failures when a client factory cl
   const client: McpSessionControllerClient = {
     close: async () => {
       events.push('client.close');
+      await clientCloseGate.promise;
       throw clientCloseFailure;
     },
     connect: async () => undefined,
@@ -426,8 +445,17 @@ it('retains local client and transport cleanup failures when a client factory cl
     transportFactory: () => transport,
   });
 
-  const [opening] = await Promise.allSettled([controller.open(binding)]);
+  const openingPromise = controller.open(binding);
   if (closeFromFactory === undefined) throw new Error('Expected client factory to close the controller.');
+  void openingPromise.then(() => { openingSettled = true; }, () => { openingSettled = true; });
+  void closeFromFactory.then(() => { closeSettled = true; }, () => { closeSettled = true; });
+  await eventually(() => events.length === 2);
+
+  expect(closeSettled).toBe(false);
+  expect(openingSettled).toBe(false);
+
+  clientCloseGate.resolve();
+  const [opening] = await Promise.allSettled([openingPromise]);
   await expect(closeFromFactory).resolves.toBeUndefined();
 
   expect(opening).toMatchObject({
