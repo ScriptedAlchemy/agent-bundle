@@ -875,6 +875,7 @@ test('preserves the Claude fixture seed in post-state while exact replay stays v
     expect(Object.isFrozen(postState)).toBe(true);
     expect(postStateSeed).not.toBe(fixture.seed);
     expect(Object.isFrozen(postStateSeed)).toBe(true);
+    expect(run.result).not.toHaveProperty('app');
 
     const replay = await session.replay({ mode: 'exact', runId: run.id });
     expect(replay).toMatchObject({
@@ -884,14 +885,29 @@ test('preserves the Claude fixture seed in post-state while exact replay stays v
       vector: { runtimeGenerationId: generationId, stateVersion: 2 },
     });
 
+    const timelineTarget = session.surfaces().find((surface) => surface.id === 'mcp.render_edit_timeline')!.targets[0]!;
     const timeline = await session.invoke({
       expectedGenerationId: generationId,
       input: {},
       surfaceId: 'mcp.render_edit_timeline',
-      target: session.surfaces().find((surface) => surface.id === 'mcp.render_edit_timeline')!.targets[0]!,
+      target: timelineTarget,
     });
     expect(timeline).toMatchObject({
       result: {
+        app: {
+          mcpBinding: {
+            definitionDigest: expect.any(String),
+            registryRevision: expect.any(Number),
+            serverDigest: expect.any(String),
+            serverName: 'timeline',
+            sessionId: expect.any(String),
+            sessionRevision: expect.any(Number),
+            target: timelineTarget,
+            transportDigest: expect.any(String),
+          },
+          resourceUri: 'ui://rsc-agent-runtime/edit-timeline-v1.html',
+          surfaceId: 'mcp.timeline',
+        },
         protocol: {
           structuredContent: {
             edits: [expect.objectContaining({ path: '/tmp/fixture-claude-post-tool-use.txt' })],
@@ -901,10 +917,54 @@ test('preserves the Claude fixture seed in post-state while exact replay stays v
       },
       status: 'succeeded',
     });
-    if (timeline.status !== 'succeeded' || timeline.result.protocol === null || typeof timeline.result.protocol !== 'object' || Array.isArray(timeline.result.protocol)) {
+    if (timeline.status !== 'succeeded' || timeline.result.protocol === null || typeof timeline.result.protocol !== 'object' || Array.isArray(timeline.result.protocol) || timeline.result.app === undefined) {
       throw new Error('Timeline protocol was unavailable.');
     }
+    expect(Object.keys(timeline.result.app.mcpBinding).sort()).toEqual([
+      'definitionDigest', 'registryRevision', 'serverDigest', 'serverName', 'sessionId', 'sessionRevision', 'target', 'transportDigest',
+    ]);
+    expect(Object.isFrozen(timeline.result.app)).toBe(true);
+    expect(Object.isFrozen(timeline.result.app.mcpBinding)).toBe(true);
+    expect(session.mcpRegistry.session(timeline.result.app.mcpBinding.sessionId)?.snapshot()).toMatchObject({
+      binding: timeline.result.app.mcpBinding,
+      state: 'ready',
+    });
+    expect(session.clientSurface('mcp.edit-timeline')).toMatchObject({ surfaceId: 'mcp.edit-timeline' });
     expect((timeline.result.protocol as Record<string, unknown>).structuredContent).not.toHaveProperty('seed');
+
+    const timelineRequest = Object.freeze({
+      expectedGenerationId: generationId,
+      input: Object.freeze({}),
+      surfaceId: 'mcp.render_edit_timeline',
+      target: timelineTarget,
+    });
+    const [repeatedTimeline, concurrentTimeline] = await Promise.all([
+      session.invoke(timelineRequest),
+      session.invoke(timelineRequest),
+    ]);
+    for (const candidate of [repeatedTimeline, concurrentTimeline]) {
+      expect(candidate).toMatchObject({ status: 'succeeded' });
+      if (candidate.status !== 'succeeded' || candidate.result.app === undefined) throw new Error('Repeated timeline App result was unavailable.');
+      expect(candidate.result.app.mcpBinding).toEqual(timeline.result.app.mcpBinding);
+    }
+
+    await session.mcpRegistry.closeSession({
+      expectedSessionRevision: timeline.result.app.mcpBinding.sessionRevision,
+      sessionId: timeline.result.app.mcpBinding.sessionId,
+    });
+    expect(session.mcpRegistry.session(timeline.result.app.mcpBinding.sessionId)).toBeUndefined();
+    const reopenedTimeline = await session.invoke(timelineRequest);
+    expect(reopenedTimeline).toMatchObject({ status: 'succeeded' });
+    if (reopenedTimeline.status !== 'succeeded' || reopenedTimeline.result.app === undefined) throw new Error('Reopened timeline App result was unavailable.');
+    expect(reopenedTimeline.result.app.mcpBinding).toMatchObject({
+      definitionDigest: timeline.result.app.mcpBinding.definitionDigest,
+      registryRevision: timeline.result.app.mcpBinding.registryRevision,
+      serverDigest: timeline.result.app.mcpBinding.serverDigest,
+      serverName: timeline.result.app.mcpBinding.serverName,
+      target: timeline.result.app.mcpBinding.target,
+      transportDigest: timeline.result.app.mcpBinding.transportDigest,
+    });
+    expect(reopenedTimeline.result.app.mcpBinding.sessionId).not.toBe(timeline.result.app.mcpBinding.sessionId);
 
     await expect(session.resetState({
       expectedGenerationId: generationId,
@@ -925,6 +985,7 @@ test('preserves the Claude fixture seed in post-state while exact replay stays v
       vector: { stateVersion: 2 },
     });
     if (status.status !== 'succeeded') throw new Error('Runtime status did not succeed.');
+    expect(status.result).not.toHaveProperty('app');
     expect(status.vector).toMatchObject(status.result.state.identity);
     expect(status.vector).toEqual(stateBeforeStatus);
     expect(session.status().activeVector).toEqual(stateBeforeStatus);
