@@ -659,7 +659,10 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
       context.signal.throwIfAborted();
 
       const connectionState: DevRuntimeMcpConnectionState = Object.freeze({
-        capabilities: Object.freeze({}),
+        capabilities: Object.freeze({
+          resources: Object.freeze({}),
+          tools: Object.freeze({}),
+        }),
         protocolEra: 'modern',
         protocolVersion: '2025-06-18',
         server: Object.freeze({ name: 'rsc-agent-runtime-demo', version: '1.0.0' }),

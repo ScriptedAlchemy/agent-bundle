@@ -513,6 +513,22 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
     });
     expect((initialized?.message.result as Readonly<{ readonly hostContext?: unknown }> | undefined)?.hostContext)
       .toMatchObject(created.preview.profile.hostContext as Record<string, unknown>);
+    expect((initialized?.message.result as Readonly<{ readonly hostCapabilities?: unknown }> | undefined)?.hostCapabilities)
+      .toMatchObject({ serverResources: {}, serverTools: {} });
+
+    await appFrame.getByRole('button', { name: 'Refresh' }).click();
+    const consentPath = `/api/runtime/apps/${encodeURIComponent(created.preview.binding.id)}/consents`;
+    await expect.poll(() => runtimeAppRequests.filter((entry) => entry.method === 'POST' && entry.path === consentPath), { timeout: 15_000 }).toHaveLength(1);
+    const consentCreate = runtimeAppRequests.find((entry) => entry.method === 'POST' && entry.path === consentPath);
+    expect(consentCreate?.body).toEqual({
+      actionFingerprint: 'runtime-app:call-tool:v1',
+      capability: 'call-tool',
+      details: { arguments: { limit: 10 }, name: 'render_edit_timeline' },
+      scope: 'action',
+      summary: 'Call MCP App tool',
+    });
+    await expect(page.getByRole('dialog', { name: 'Runtime App consent' })).toBeVisible({ timeout: 15_000 });
+
     expect(artifactMcpSessionRequests).toEqual([]);
     expect(runtimeMcpSessionRequests).toEqual([]);
     expect(projectEventStreams).toEqual(['GET /api/project/events']);

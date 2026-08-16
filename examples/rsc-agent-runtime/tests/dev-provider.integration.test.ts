@@ -269,6 +269,12 @@ test('declares an optional runtime while keeping Claude and Codex artifacts buil
       await writeFile(assetPath, originalAsset);
 
       const mcp = await session.mcpRegistry.open({ serverName: 'timeline', target: 'portable' });
+      const initialCapabilities = mcp.snapshot().connection.capabilities;
+      if (initialCapabilities === undefined) throw new Error('Expected runtime MCP capabilities.');
+      expect(initialCapabilities).toEqual({ resources: {}, tools: {} });
+      expect(Object.isFrozen(initialCapabilities)).toBe(true);
+      expect(Object.isFrozen(initialCapabilities.resources)).toBe(true);
+      expect(Object.isFrozen(initialCapabilities.tools)).toBe(true);
       const list = await mcp.execute({ expectedSessionRevision: mcp.snapshot().binding.sessionRevision, kind: 'list-tools' });
       expect(list.value).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'render_edit_timeline' })]));
       const originalBinding = mcp.snapshot().binding;
@@ -291,6 +297,7 @@ test('declares an optional runtime while keeping Claude and Codex artifacts buil
       await expect(mcp.execute({ expectedSessionRevision: mcp.snapshot().binding.sessionRevision, kind: 'list-tools' })).resolves.toMatchObject({
         vector: { runtimeGenerationId: registry!.runtimeGenerationId },
       });
+      expect(mcp.snapshot().connection.capabilities).toEqual({ resources: {}, tools: {} });
       await session.reconcilePreparedRuntime({
         ...prepared.devRuntime!,
         sourceRevision: `${prepared.devRuntime!.sourceRevision}-p1-revert`,
@@ -870,6 +877,7 @@ test('rejects MCP admission until a deferred public prepared-config restart has 
       await waitFor(() => session.status().state === 'active');
       const mcp = await session.mcpRegistry.open({ serverName: 'timeline', target: 'portable' });
       try {
+        expect(mcp.snapshot().connection.capabilities).toEqual({ resources: {}, tools: {} });
         const before = mcp.snapshot().binding;
         deferRelist = true;
         const reconciling = session.reconcilePreparedRuntime({
@@ -893,6 +901,12 @@ test('rejects MCP admission until a deferred public prepared-config restart has 
           binding: { sessionRevision: before.sessionRevision + 1 },
           state: 'ready',
         });
+        const restartedCapabilities = mcp.snapshot().connection.capabilities;
+        if (restartedCapabilities === undefined) throw new Error('Expected restarted runtime MCP capabilities.');
+        expect(restartedCapabilities).toEqual({ resources: {}, tools: {} });
+        expect(Object.isFrozen(restartedCapabilities)).toBe(true);
+        expect(Object.isFrozen(restartedCapabilities.resources)).toBe(true);
+        expect(Object.isFrozen(restartedCapabilities.tools)).toBe(true);
       } finally {
         await mcp.close();
       }

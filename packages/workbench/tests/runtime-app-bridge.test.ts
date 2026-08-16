@@ -124,6 +124,90 @@ it('exposes the controller-owned official runtime App bridge boundary', () => {
   expect(typeof createRuntimeAppBridgeFactory).toBe('function');
 });
 
+it('forwards an initialized App tools/call through the controller-owned client transport', async () => {
+  await withBrowser(async (browser) => {
+    const policy = Object.freeze({
+      bindingId: 'runtime-binding',
+      snapshot: Object.freeze({ allow: '', approvedPermissions: Object.freeze({}), revision: 1, warnings: Object.freeze([]) }),
+    });
+    const received: unknown[] = [];
+    const callResult = Object.freeze({
+      content: Object.freeze([Object.freeze({ text: 'Timeline refreshed.', type: 'text' })]),
+      structuredContent: Object.freeze({ edits: Object.freeze([]), stateVersion: 1 }),
+    });
+    const access = Object.freeze({
+      client: Object.freeze({
+        getServerCapabilities: () => Object.freeze({ resources: Object.freeze({}), tools: Object.freeze({}) }),
+        request: async (request: Readonly<{ readonly method: string; readonly params?: unknown }>) => {
+          received.push(Object.freeze({ method: request.method, params: request.params }));
+          if (request.method !== 'tools/call') throw new Error(`Unexpected attached request ${request.method}.`);
+          return callResult;
+        },
+        setNotificationHandler: () => undefined,
+      }),
+      close: async () => undefined,
+      sessionId: 'runtime-session-a',
+      sessionRevision: 3,
+    });
+    const factory = createRuntimeAppBridgeFactory({
+      client: Object.freeze({
+        closeRuntime: async () => undefined,
+        currentDocumentPolicy: () => policy,
+      }) as never,
+      controller: Object.freeze({ attachApp: async () => access }) as never,
+      installedHandlers: Object.freeze({}),
+      listChanged: Object.freeze({ resources: false, tools: false }),
+      onTrace: () => undefined,
+      preview: Object.freeze({
+        binding: Object.freeze({ id: 'runtime-binding', profileVersion: 'agent-bundle:mcp-apps:2026-01-26', sessionId: 'runtime-session-a', sessionRevision: 3 }),
+        clientSurface: Object.freeze({ bootstrapUrl: 'https://apps.example.test/proxy', origin: 'https://apps.example.test', webSocketPath: '/rsbuild-hmr' as const }),
+        documentPolicy: policy.snapshot,
+        kind: 'apps' as const,
+        profile: Object.freeze({ hostContext: Object.freeze({ availableDisplayModes: Object.freeze(['inline']), displayMode: 'inline', safeAreaInsets: Object.freeze({ bottom: 0, left: 0, right: 0, top: 0 }), theme: 'light' }) }),
+        resource: Object.freeze({ csp: Object.freeze({}), permissions: Object.freeze({}) }),
+      }) as never,
+      requestConsent: async () => 'deny',
+      simulationFeatures: Object.freeze({ chatGptWidgetState: 'disabled' as const }),
+    });
+    const bridge = await invokeBridgeFactory(factory, browser);
+
+    browser.emit({
+      data: { id: 'initialize', jsonrpc: '2.0', method: 'ui/initialize', params: { appCapabilities: {}, appInfo: { name: 'app', version: '1' }, protocolVersion: '2026-01-26' } },
+      origin: 'https://apps.example.test',
+      source: browser.target,
+    });
+    await eventually(() => browser.posts.length === 1);
+    browser.emit({
+      data: { jsonrpc: '2.0', method: 'ui/notifications/initialized', params: {} },
+      origin: 'https://apps.example.test',
+      source: browser.target,
+    });
+    browser.emit({
+      data: { id: 'timeline-refresh', jsonrpc: '2.0', method: 'tools/call', params: { arguments: { limit: 10 }, name: 'render_edit_timeline' } },
+      origin: 'https://apps.example.test',
+      source: browser.target,
+    });
+
+    await eventually(() => received.length === 1);
+    expect(received).toEqual([{
+      method: 'tools/call',
+      params: { arguments: { limit: 10 }, name: 'render_edit_timeline' },
+    }]);
+    await eventually(() => browser.posts.some((entry) => {
+      const message = entry.message;
+      return message !== null && typeof message === 'object' && (message as { readonly id?: unknown }).id === 'timeline-refresh';
+    }));
+    expect(browser.posts.find((entry) => {
+      const message = entry.message;
+      return message !== null && typeof message === 'object' && (message as { readonly id?: unknown }).id === 'timeline-refresh';
+    })).toEqual({
+      message: { id: 'timeline-refresh', jsonrpc: '2.0', result: callResult },
+      targetOrigin: 'https://apps.example.test',
+    });
+    await bridge.close();
+  });
+});
+
 it('closes admission before invocation and exposes one exact no-op factory cleanup promise', async () => {
   await withBrowser(async (browser) => {
     let attachments = 0;
