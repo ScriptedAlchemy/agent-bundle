@@ -378,7 +378,13 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
   const fixture = await startRuntimePlaygroundFixture();
   let clientPage: Page | undefined;
   let clientSurface: Awaited<ReturnType<typeof fixture.openRuntimeClientSurface>> | undefined;
+  const clientSurfaceConsole: string[] = [];
+  const clientSurfaceResponses: Array<Readonly<{ readonly status: number; readonly url: string }>> = [];
+  const clientSurfaceHmrRequests: Array<Readonly<{ readonly headers: Readonly<Record<string, string>>; readonly url: string }>> = [];
+  const clientSurfaceSockets: string[] = [];
+  const runtimePreviewSockets: string[] = [];
   const appMessages: RuntimeAppMessage[] = [];
+  const browserConsole: string[] = [];
   const pageErrors: Error[] = [];
   const artifactMcpSessionRequests: string[] = [];
   const projectEventStreams: string[] = [];
@@ -402,6 +408,10 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
     });
   });
   page.on('pageerror', (error) => pageErrors.push(error));
+  page.on('console', (message) => { browserConsole.push(`${message.type()}:${message.text()}`); });
+  page.on('websocket', (socket) => {
+    if (new URL(socket.url()).pathname === '/rsbuild-hmr') runtimePreviewSockets.push(socket.url());
+  });
   page.on('request', (request) => {
     const url = new URL(request.url());
     if (url.origin !== fixture.url) return;
@@ -433,9 +443,36 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
     if (clientSurface === undefined) throw new Error('Runtime client surface was not available.');
     clientPage = await page.context().newPage();
     clientPage.on('pageerror', (error) => pageErrors.push(error));
+    clientPage.on('console', (message) => { clientSurfaceConsole.push(`${message.type()}:${message.text()}`); });
+    clientPage.on('request', (request) => {
+      if (new URL(request.url()).pathname !== '/rsbuild-hmr') return;
+      clientSurfaceHmrRequests.push(Object.freeze({ headers: request.headers(), url: request.url() }));
+    });
+    clientPage.on('response', (response) => {
+      if (clientSurface !== undefined && new URL(response.url()).origin === clientSurface.origin) {
+        clientSurfaceResponses.push(Object.freeze({ status: response.status(), url: response.url() }));
+      }
+    });
+    clientPage.on('websocket', (socket) => { clientSurfaceSockets.push(socket.url()); });
     const bootstrap = await clientPage.goto(clientSurface.bootstrapUrl, { waitUntil: 'domcontentloaded' });
     expect(bootstrap?.status()).toBe(200);
-    await expect.poll(() => runtimeIdentity.getAttribute('data-runtime-hmr-client-count'), { timeout: 15_000 }).toBe('1');
+    try {
+      await expect.poll(() => runtimeIdentity.getAttribute('data-runtime-hmr-client-count'), { timeout: 3_000 }).toBe('1');
+    } catch {
+      throw new Error(`Runtime App HMR proxy did not connect: ${JSON.stringify({
+        console: clientSurfaceConsole,
+        frames: clientPage.frames().map((frame) => frame.url()),
+        requests: clientSurfaceHmrRequests,
+        responses: clientSurfaceResponses,
+        sockets: clientSurfaceSockets,
+      })}`);
+    }
+    expect(clientSurfaceSockets).toEqual([`${clientSurface.origin.replace('http:', 'ws:')}/rsbuild-hmr`]);
+    expect(clientSurfaceSockets.every((socket) => new URL(socket).search.length === 0)).toBe(true);
+    expect(clientSurfaceHmrRequests.every((request) => new URL(request.url).search.length === 0)).toBe(true);
+    await clientPage.close();
+    clientPage = undefined;
+    await expect.poll(() => runtimeIdentity.getAttribute('data-runtime-hmr-client-count'), { timeout: 3_000 }).toBe('0');
 
     await runtimeSurface.selectOption('mcp.render_edit_timeline');
     await page.getByLabel('Runtime target').selectOption('portable');
@@ -474,6 +511,8 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
 
     const outerFrame = page.locator('.runtime-stage .mcp-app-preview iframe');
     await expect(outerFrame).toBeVisible({ timeout: 15_000 });
+    await expect.poll(() => runtimeIdentity.getAttribute('data-runtime-hmr-client-count'), { timeout: 15_000 }).toBe('1');
+    expect(runtimePreviewSockets).toEqual([`${created.preview.clientSurface.origin.replace('http:', 'ws:')}/rsbuild-hmr`]);
     const runtimeAppFrame = async () => {
       for (const frame of page.frames()) {
         if (await frame.getByRole('heading', { name: 'Runtime edit timeline' }).count() === 1) return frame;
@@ -483,13 +522,46 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
     await expect.poll(runtimeAppFrame, { timeout: 15_000 }).toBeDefined();
     const appFrame = await runtimeAppFrame();
     if (appFrame === undefined) throw new Error('Runtime App frame was unavailable.');
+    const controllerFrame = appFrame.parentFrame();
+    if (controllerFrame === null) throw new Error('Runtime App trusted controller frame was unavailable.');
+    const controllerShape = await controllerFrame.evaluate(() => {
+      const nested = [...document.querySelectorAll('iframe')];
+      return Object.freeze({ nestedCount: nested.length, nestedSandbox: nested[0]?.getAttribute('sandbox') ?? undefined });
+    });
+    const isolation = await appFrame.evaluate(() => {
+      const parentDom = (() => {
+        try {
+          void window.parent.document.documentElement;
+          return 'available';
+        } catch {
+          return 'blocked';
+        }
+      })();
+      const storage = (() => {
+        try {
+          void window.localStorage.length;
+          return 'available';
+        } catch {
+          return 'blocked';
+        }
+      })();
+      return Object.freeze({ origin: window.origin, parentDom, storage });
+    });
+    expect({ ...controllerShape, ...isolation }).toEqual({
+      nestedCount: 1,
+      nestedSandbox: 'allow-scripts',
+      origin: 'null',
+      parentDom: 'blocked',
+      storage: 'blocked',
+    });
     const frameOrigin = new URL(appFrame.url()).origin;
+    const controllerOrigin = created.preview.clientSurface.origin;
     const outerSource = await outerFrame.getAttribute('src');
     const foregroundToken = createdRequest.headers()['x-agent-bundle-session'];
     if (outerSource === null || foregroundToken === undefined) throw new Error('Runtime App foreground transport evidence was unavailable.');
-    expect(frameOrigin).toBe(created.preview.clientSurface.origin);
-    expect(frameOrigin).not.toBe(fixture.url);
-    expect(new URL(created.preview.clientSurface.bootstrapUrl).origin).toBe(frameOrigin);
+    expect(frameOrigin).toBe('null');
+    expect(controllerOrigin).not.toBe(fixture.url);
+    expect(new URL(created.preview.clientSurface.bootstrapUrl).origin).toBe(controllerOrigin);
     expect(outerSource).not.toContain(foregroundToken);
     expect(await appFrame.content()).not.toContain(foregroundToken);
 
@@ -508,14 +580,14 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
     };
     const protocolOrder = (): readonly string[] | undefined => {
       const ordered = [
-        ['ui/initialize request', messageFor(fixture.url, frameOrigin, (message) => message.method === 'ui/initialize')],
-        ['ui/initialize result', messageFor(frameOrigin, fixture.url, (message) => {
+        ['ui/initialize request', messageFor(fixture.url, controllerOrigin, (message) => message.method === 'ui/initialize')],
+        ['ui/initialize result', messageFor(controllerOrigin, fixture.url, (message) => {
           const result = message.result;
           return result !== null && typeof result === 'object' && Object.hasOwn(result, 'hostContext');
         })],
-        ['ui/notifications/initialized', messageFor(fixture.url, frameOrigin, (message) => message.method === 'ui/notifications/initialized')],
-        ['ui/notifications/tool-input', messageFor(frameOrigin, fixture.url, (message) => message.method === 'ui/notifications/tool-input')],
-        ['ui/notifications/tool-result', messageFor(frameOrigin, fixture.url, (message) => message.method === 'ui/notifications/tool-result')],
+        ['ui/notifications/initialized', messageFor(fixture.url, controllerOrigin, (message) => message.method === 'ui/notifications/initialized')],
+        ['ui/notifications/tool-input', messageFor(controllerOrigin, fixture.url, (message) => message.method === 'ui/notifications/tool-input')],
+        ['ui/notifications/tool-result', messageFor(controllerOrigin, fixture.url, (message) => message.method === 'ui/notifications/tool-result')],
       ] as const;
       if (ordered.some(([, entry]) => entry === undefined)) return undefined;
       return ordered
@@ -530,12 +602,12 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
       'ui/notifications/tool-input',
       'ui/notifications/tool-result',
     ]);
-    const toolInput = messageFor(frameOrigin, fixture.url, (message) => message.method === 'ui/notifications/tool-input');
-    const toolResult = messageFor(frameOrigin, fixture.url, (message) => message.method === 'ui/notifications/tool-result');
+    const toolInput = messageFor(controllerOrigin, fixture.url, (message) => message.method === 'ui/notifications/tool-input');
+    const toolResult = messageFor(controllerOrigin, fixture.url, (message) => message.method === 'ui/notifications/tool-result');
     if (toolInput === undefined || toolResult === undefined) throw new Error('Runtime App invocation notifications were unavailable.');
     expect(toolInput.message).toEqual({ jsonrpc: '2.0', method: 'ui/notifications/tool-input', params: { arguments: {} } });
     expect(toolResult.message).toEqual({ jsonrpc: '2.0', method: 'ui/notifications/tool-result', params: created.preview.result.appVisible });
-    const initialized = messageFor(frameOrigin, fixture.url, (message) => {
+    const initialized = messageFor(controllerOrigin, fixture.url, (message) => {
       const result = message.result;
       return result !== null && typeof result === 'object' && Object.hasOwn(result, 'hostContext');
     });
@@ -546,7 +618,15 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
 
     await appFrame.getByRole('button', { name: 'Refresh' }).click();
     const consentPath = `/api/runtime/apps/${encodeURIComponent(created.preview.binding.id)}/consents`;
-    await expect.poll(() => runtimeAppRequests.filter((entry) => entry.method === 'POST' && entry.path === consentPath), { timeout: 15_000 }).toHaveLength(1);
+    try {
+      await expect.poll(() => runtimeAppRequests.filter((entry) => entry.method === 'POST' && entry.path === consentPath), { timeout: 3_000 }).toHaveLength(1);
+    } catch {
+      throw new Error(`Runtime App call relay did not reach consent: ${JSON.stringify({
+        console: browserConsole,
+        standalone: await appFrame.evaluate(() => window.parent === window),
+        status: await appFrame.getByRole('status').textContent(),
+      })}`);
+    }
     const consentCreate = runtimeAppRequests.find((entry) => entry.method === 'POST' && entry.path === consentPath);
     expect(consentCreate?.body).toEqual({
       actionFingerprint: 'runtime-app:call-tool:v1',
@@ -623,15 +703,15 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
       },
       vector: created.preview.binding.runVector,
     });
-    const refreshRequest = messageFor(fixture.url, frameOrigin, (message) => message.method === 'tools/call');
+    const refreshRequest = messageFor(fixture.url, controllerOrigin, (message) => message.method === 'tools/call');
     expect(refreshRequest?.message).toEqual({
       id: 1,
       jsonrpc: '2.0',
       method: 'tools/call',
       params: { _meta: { progressToken: 1 }, arguments: { limit: 10 }, name: 'render_edit_timeline' },
     });
-    await expect.poll(() => messageFor(frameOrigin, fixture.url, (message) => message.id === 1 && Object.hasOwn(message, 'result')), { timeout: 15_000 }).toBeDefined();
-    const refreshResult = messageFor(frameOrigin, fixture.url, (message) => message.id === 1 && Object.hasOwn(message, 'result'));
+    await expect.poll(() => messageFor(controllerOrigin, fixture.url, (message) => message.id === 1 && Object.hasOwn(message, 'result')), { timeout: 15_000 }).toBeDefined();
+    const refreshResult = messageFor(controllerOrigin, fixture.url, (message) => message.id === 1 && Object.hasOwn(message, 'result'));
     expect(refreshResult?.message).toEqual({ jsonrpc: '2.0', id: 1, result: (operationResult as Readonly<{ readonly value: unknown }>).value });
     await expect(appFrame.getByText('State version 0')).toBeVisible();
     await expect(appFrame.getByRole('status')).toHaveText('');
@@ -668,15 +748,15 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
     const resourceContent = resourceContents[0] as Readonly<{ readonly text?: unknown }>;
     if (typeof resourceContent?.text !== 'string') throw new Error('Runtime App resource operation omitted its canonical HTML.');
     expect(resourceContent.text).not.toContain(foregroundToken);
-    const resourceRequest = messageFor(fixture.url, frameOrigin, (message) => message.id === resourceRequestId && message.method === 'resources/read');
+    const resourceRequest = messageFor(fixture.url, controllerOrigin, (message) => message.id === resourceRequestId && message.method === 'resources/read');
     expect(resourceRequest?.message).toEqual({
       id: resourceRequestId,
       jsonrpc: '2.0',
       method: 'resources/read',
       params: { uri: resourceUri },
     });
-    await expect.poll(() => messageFor(frameOrigin, fixture.url, (message) => message.id === resourceRequestId && Object.hasOwn(message, 'result')), { timeout: 15_000 }).toBeDefined();
-    const resourceResponse = messageFor(frameOrigin, fixture.url, (message) => message.id === resourceRequestId && Object.hasOwn(message, 'result'));
+    await expect.poll(() => messageFor(controllerOrigin, fixture.url, (message) => message.id === resourceRequestId && Object.hasOwn(message, 'result')), { timeout: 15_000 }).toBeDefined();
+    const resourceResponse = messageFor(controllerOrigin, fixture.url, (message) => message.id === resourceRequestId && Object.hasOwn(message, 'result'));
     expect(resourceResponse?.message).toEqual({
       id: resourceRequestId,
       jsonrpc: '2.0',
@@ -686,7 +766,7 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
     expect(runtimeMcpSessionRequests).toEqual([]);
     expect(projectEventStreams).toEqual(['GET /api/project/events']);
 
-    const sourceFrameHref = appFrame.url();
+    const sourceFrameHref = controllerFrame.url();
     const sourceBindingId = created.preview.binding.id;
     await page.getByRole('button', { name: 'Open in MCP playground' }).click({ timeout: browserTimeout });
     await expect(page.getByRole('heading', { name: 'MCP playground' })).toBeVisible({ timeout: 15_000 });
@@ -699,7 +779,7 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
       ? (teardownRequest.message as Readonly<Record<string, unknown>>).id
       : undefined;
     if (typeof teardownId !== 'string' && typeof teardownId !== 'number') throw new Error('Runtime App teardown request omitted its JSON-RPC id.');
-    const teardownAcknowledgementForSource = () => messageFor(fixture.url, frameOrigin, (message) =>
+    const teardownAcknowledgementForSource = () => messageFor(fixture.url, controllerOrigin, (message) =>
       message.id === teardownId && (Object.hasOwn(message, 'result') || Object.hasOwn(message, 'error')));
     await expect.poll(teardownAcknowledgementForSource, { timeout: 15_000 }).toBeDefined();
     const teardownAcknowledgement = teardownAcknowledgementForSource();
@@ -743,21 +823,24 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
     await expect(page.locator('.runtime-stage .mcp-app-preview iframe')).toHaveCount(0);
     await expect.poll(() => appMessages.filter((entry) =>
       new URL(entry.href).origin === fixture.url && entry.senderOrigin === destinationOrigin && entry.message !== null && typeof entry.message === 'object' &&
-      (entry.message as Readonly<Record<string, unknown>>).method === 'ui/initialize').length, { timeout: 15_000 }).toBe(frameOrigin === destinationOrigin ? 2 : 1);
+      (entry.message as Readonly<Record<string, unknown>>).method === 'ui/initialize').length, { timeout: 15_000 }).toBe(controllerOrigin === destinationOrigin ? 2 : 1);
 
     await page.setViewportSize({ height: 900, width: 390 });
     await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth), { timeout: 15_000 }).toBe(true);
 
     const destinationAppFrame = async () => {
       for (const frame of page.frames()) {
-        if (new URL(frame.url()).origin === destinationOrigin && await frame.getByRole('heading', { name: 'Runtime edit timeline' }).count() === 1) return frame;
+        const parent = frame.parentFrame();
+        if (parent !== null && new URL(parent.url()).origin === destinationOrigin && await frame.getByRole('heading', { name: 'Runtime edit timeline' }).count() === 1) return frame;
       }
       return undefined;
     };
     await expect.poll(destinationAppFrame, { timeout: 15_000 }).toBeDefined();
     const destinationFrame = await destinationAppFrame();
     if (destinationFrame === undefined) throw new Error('Destination Runtime App frame was unavailable.');
-    const destinationFrameHref = destinationFrame.url();
+    const destinationController = destinationFrame.parentFrame();
+    if (destinationController === null) throw new Error('Destination Runtime App trusted controller frame was unavailable.');
+    const destinationFrameHref = destinationController.url();
     const destinationHistory = await page.getByRole('region', { name: 'Invocation history' }).textContent();
     const destinationDeletePath = `/api/runtime/apps/${encodeURIComponent(destinationBinding.id)}`;
     await page.evaluate(() => { window.location.hash = '#overview'; });
@@ -806,14 +889,17 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
 
     const thirdAppFrame = async () => {
       for (const frame of page.frames()) {
-        if (new URL(frame.url()).origin === thirdOrigin && await frame.getByRole('heading', { name: 'Runtime edit timeline' }).count() === 1) return frame;
+        const parent = frame.parentFrame();
+        if (parent !== null && new URL(parent.url()).origin === thirdOrigin && await frame.getByRole('heading', { name: 'Runtime edit timeline' }).count() === 1) return frame;
       }
       return undefined;
     };
     await expect.poll(thirdAppFrame, { timeout: 15_000 }).toBeDefined();
     const thirdFrame = await thirdAppFrame();
     if (thirdFrame === undefined) throw new Error('Third Runtime App frame was unavailable.');
-    const thirdFrameHref = thirdFrame.url();
+    const thirdController = thirdFrame.parentFrame();
+    if (thirdController === null) throw new Error('Third Runtime App trusted controller frame was unavailable.');
+    const thirdFrameHref = thirdController.url();
     const thirdDeletePath = `/api/runtime/apps/${encodeURIComponent(thirdBinding.id)}`;
     await page.evaluate(() => { window.location.hash = '#mcp'; });
     const teardownRequestForThird = (): RuntimeAppMessage | undefined => appMessages.find((entry) =>

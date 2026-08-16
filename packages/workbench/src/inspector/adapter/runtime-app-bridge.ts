@@ -5,6 +5,7 @@ import type {
   McpAppBridgeMessage,
   McpAppValidatedDownload,
 } from '../../../../agent-bundle/src/dev/mcp-app-bridge.ts';
+import { runtimeAppMessageLimits } from '../../../../agent-bundle/src/dev/runtime-app-message-limits.ts';
 import type { McpAppJsonValue } from '../../../../agent-bundle/src/dev/mcp-app-metadata.ts';
 import type { McpAppBoundOperationResult, McpAppPublicRuntimeVector } from '../../../../agent-bundle/src/dev/mcp-app-runtime-binding-service.ts';
 import type { McpAppBindingOperation, McpAppPreviewAppsSnapshot, McpAppPreviewSnapshot } from '../../../../agent-bundle/src/dev/mcp-app-runtime-preview-service.ts';
@@ -103,7 +104,8 @@ export interface RuntimeAppBridgeFactory extends BridgeFactory {
   close(): Promise<void>;
 }
 
-const maximumMessageBytes = 256 * 1024;
+const maximumInboundMessageBytes = runtimeAppMessageLimits.appToHostBytes;
+const maximumOutboundMessageBytes = runtimeAppMessageLimits.hostToAppBytes;
 const maximumQueuedMessages = 32;
 const maximumFailures = 3;
 const gracefulTeardownTimeoutMs = 1_000;
@@ -119,13 +121,18 @@ const runtimePreview = (preview: McpAppPreviewSnapshot): McpAppPreviewAppsSnapsh
 const ordinaryJson = (value: unknown): value is McpAppJsonValue =>
   finiteOrdinaryJsonByteLength(value) !== undefined;
 
-const messageBytes = (value: unknown): number | undefined => {
-  return finiteOrdinaryJsonByteLength(value, { maximumBytes: maximumMessageBytes });
+const messageBytes = (value: unknown, maximumBytes: number): number | undefined => {
+  return finiteOrdinaryJsonByteLength(value, { maximumBytes });
 };
 
-const boundedMessage = (value: unknown): boolean => {
-  const bytes = messageBytes(value);
-  return bytes !== undefined && bytes <= maximumMessageBytes;
+const boundedInboundMessage = (value: unknown): boolean => {
+  const bytes = messageBytes(value, maximumInboundMessageBytes);
+  return bytes !== undefined && bytes <= maximumInboundMessageBytes;
+};
+
+const boundedOutboundMessage = (value: unknown): boolean => {
+  const bytes = messageBytes(value, maximumOutboundMessageBytes);
+  return bytes !== undefined && bytes <= maximumOutboundMessageBytes;
 };
 
 const frozenJson = (value: McpAppJsonValue, ancestors = new WeakSet<object>()): McpAppJsonValue => {
@@ -184,7 +191,7 @@ class GuardedPostMessageTransport {
     // that one send operation to the server-issued client-surface origin.
     const target = Object.freeze({
       postMessage: (message: unknown) => {
-        if (!boundedMessage(message)) throw new Error('MCP App outbound message is invalid or exceeds its bound.');
+        if (!boundedOutboundMessage(message)) throw new Error('MCP App outbound message is invalid or exceeds its bound.');
         this.#source.postMessage(message, this.#expectedOrigin);
       },
     }) as unknown as Window;
@@ -199,7 +206,7 @@ class GuardedPostMessageTransport {
         // below is the single admission path, so matching traffic preserves
         // arrival order rather than racing on the window event loop.
         event.stopImmediatePropagation?.();
-        if (!boundedMessage(event.data)) {
+        if (!boundedInboundMessage(event.data)) {
           this.#failure(new Error('MCP App inbound message is invalid or exceeds its bound.'));
           return;
         }
@@ -238,7 +245,7 @@ class GuardedPostMessageTransport {
     if (this.#closed) {
       return Promise.reject(new Error('MCP App transport is closed.'));
     }
-    if (!boundedMessage(args[0])) {
+    if (!boundedOutboundMessage(args[0])) {
       this.#failure(new Error('MCP App outbound message is invalid or exceeds its bound.'));
       return Promise.reject(new Error('MCP App outbound message is invalid or exceeds its bound.'));
     }
@@ -324,8 +331,8 @@ const validDisplayMode = (value: unknown): value is 'inline' | 'fullscreen' => v
 
 const download = (value: unknown): McpAppValidatedDownload | undefined => {
   if (!Array.isArray(value) || value.length > 128 || !ordinaryJson(value)) return undefined;
-  const encoded = messageBytes(value);
-  if (encoded === undefined || encoded > maximumMessageBytes) return undefined;
+  const encoded = messageBytes(value, maximumInboundMessageBytes);
+  if (encoded === undefined || encoded > maximumInboundMessageBytes) return undefined;
   return Object.freeze({ contents: Object.freeze([...value]), embeddedBytes: encoded, itemCount: value.length });
 };
 

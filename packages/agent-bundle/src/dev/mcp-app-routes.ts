@@ -12,6 +12,7 @@ import type {
 } from './mcp-app-runtime-preview-service.ts';
 import type { McpAppConsentChallenge } from './mcp-app-sandbox.ts';
 import type { McpAppConsentRequest } from './mcp-app-sandbox.ts';
+import { runtimeAppMessageLimits } from './runtime-app-message-limits.ts';
 
 const bodyLimit = 64 * 1024;
 
@@ -110,6 +111,28 @@ const responseDiagnostic = (response: ServerResponse, value: RequestDiagnostic):
 const responseJson = (response: ServerResponse, body: unknown): void => {
   response.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
   response.end(JSON.stringify(body));
+};
+
+/** Runtime App operation results cross the bounded host-to-opaque-App channel. */
+const runtimeOperationResponseJson = (response: ServerResponse, body: unknown): void => {
+  let encoded: string;
+  try {
+    const serialized = JSON.stringify(body);
+    if (typeof serialized !== 'string') throw new TypeError('Runtime MCP App operation response is not JSON.');
+    encoded = serialized;
+  } catch {
+    throw requestError(diagnostic('AB8023', 'Runtime MCP App operation response could not be encoded.', 502));
+  }
+  const bytes = Buffer.byteLength(encoded, 'utf8');
+  if (bytes > runtimeAppMessageLimits.hostToAppBytes) {
+    throw requestError(diagnostic('AB8023', 'Runtime MCP App operation response exceeds its transport bound.', 413));
+  }
+  response.writeHead(200, {
+    'content-length': String(bytes),
+    'content-type': 'application/json; charset=utf-8',
+    'x-content-type-options': 'nosniff',
+  });
+  response.end(encoded);
 };
 
 const singleHeader = (value: string | readonly string[] | undefined): string | undefined =>
@@ -552,7 +575,7 @@ export class McpAppRoutes {
     if (parsed.kind === 'runtime-operation') {
       if (method !== 'POST') return responseDiagnostic(response, diagnostic('AB8007', 'Route does not accept this method.', 405));
       if (runtime.get(parsed.bindingId) === undefined) this.#runtimeUnavailable(runtime, parsed.bindingId);
-      return responseJson(response, await runtime.operate(parsed.bindingId, runtimeOperation(await jsonBody(request))));
+      return runtimeOperationResponseJson(response, await runtime.operate(parsed.bindingId, runtimeOperation(await jsonBody(request))));
     }
     if (parsed.kind === 'runtime-consent-create') {
       if (method !== 'POST') return responseDiagnostic(response, diagnostic('AB8007', 'Route does not accept this method.', 405));

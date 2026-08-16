@@ -1,4 +1,5 @@
 import { createServer, type IncomingMessage } from 'node:http';
+import { Buffer } from 'node:buffer';
 import type { AddressInfo } from 'node:net';
 
 import { expect, it } from '@rstest/core';
@@ -7,6 +8,7 @@ import {
   McpAppRoutes,
   type McpAppRoutePreviewService,
 } from '../src/dev/mcp-app-routes.ts';
+import { runtimeAppMessageLimits } from '../src/dev/runtime-app-message-limits.ts';
 import { McpAppRuntimePreviewError } from '../src/dev/mcp-app-runtime-preview-service.ts';
 import type { McpAppRuntimeRoutePreviewService } from '../src/dev/mcp-app-runtime-preview-service.ts';
 import type { McpAppBridgeLifecycle, McpAppBridgeMessage } from '../src/dev/mcp-app-bridge.ts';
@@ -331,6 +333,57 @@ it('classifies unavailable runtime App operations as unknown or revoked before d
       expect(response.status).toBe(status);
     }
     expect(operations).toEqual([]);
+  } finally {
+    await started.close();
+  }
+});
+
+it('serializes complete runtime App operation results within the directional UTF-8 transport bound', async () => {
+  const resultFor = (text: string) => ({ result: { content: [{ text, type: 'text' }] } });
+  const maximumBytes = runtimeAppMessageLimits.hostToAppBytes;
+  const fixedBytes = Buffer.byteLength(JSON.stringify(resultFor('')), 'utf8');
+  const exactText = 'x'.repeat(maximumBytes - fixedBytes);
+  const multibyteText = 'é'.repeat(Math.floor((maximumBytes - fixedBytes - 1) / 2));
+  let result = resultFor(exactText);
+  const runtime: McpAppRuntimeRoutePreviewService = {
+    close: async () => undefined,
+    create: async () => { throw new Error('unused'); },
+    createConsent: async () => { throw new Error('unused'); },
+    decideConsent: async () => { throw new Error('unused'); },
+    get: (bindingId) => bindingId === 'runtime-binding'
+      ? Object.freeze({ binding: Object.freeze({ id: bindingId }), kind: 'fallback' }) as never
+      : undefined,
+    operate: async () => result as never,
+  };
+  const started = await startRoutes(Object.assign(new RecordingPreviewService(), { runtime }));
+  const operation = () => fetch(`${started.url}/api/runtime/apps/runtime-binding/operations`, {
+    body: JSON.stringify({ kind: 'tools/list' }),
+    headers: { ...headers(), 'content-type': 'application/json' },
+    method: 'POST',
+  });
+  try {
+    expect(Buffer.byteLength(JSON.stringify(result), 'utf8')).toBe(maximumBytes);
+    const exact = await operation();
+    expect(exact.status).toBe(200);
+    expect(exact.headers.get('content-length')).toBe(String(maximumBytes));
+    await expect(exact.json()).resolves.toEqual(result);
+
+    result = resultFor(multibyteText);
+    const multibyteBytes = Buffer.byteLength(JSON.stringify(result), 'utf8');
+    expect(multibyteBytes).toBeLessThanOrEqual(maximumBytes);
+    expect(multibyteBytes).toBeGreaterThan(maximumBytes - 3);
+    const multibyte = await operation();
+    expect(multibyte.status).toBe(200);
+    expect(multibyte.headers.get('content-length')).toBe(String(multibyteBytes));
+    await expect(multibyte.json()).resolves.toEqual(result);
+
+    result = resultFor(`${exactText}x`);
+    const rejected = await operation();
+    expect(rejected.status).toBe(413);
+    expect(rejected.headers.get('content-length')).toBeNull();
+    await expect(rejected.json()).resolves.toEqual({
+      diagnostic: { code: 'AB8023', message: 'Runtime MCP App operation response exceeds its transport bound.' },
+    });
   } finally {
     await started.close();
   }

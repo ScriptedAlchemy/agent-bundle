@@ -29,6 +29,8 @@ export interface DevRuntimeClientSurfaceEndpoint {
   readonly surfaceId: string;
   readonly webSocketOrigin: string;
   readonly webSocketPath: '/rsbuild-hmr';
+  /** Rsbuild compiler credential; server-only and never serialized to a browser surface. */
+  readonly webSocketToken: string;
 }
 
 /** Core-owned, server-only proxy handle; the host plan may embed only bootstrapUrl. */

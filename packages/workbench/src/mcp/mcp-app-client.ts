@@ -2,6 +2,7 @@ import { isCallToolResult } from '@modelcontextprotocol/client';
 
 import type { ProjectClient } from '../project-client.ts';
 import type { ProjectEventMessage } from '../../../agent-bundle/src/dev/types.ts';
+import { runtimeAppMessageLimits } from '../../../agent-bundle/src/dev/runtime-app-message-limits.ts';
 import type {
   CreateMcpAppPreviewRequest as RuntimeCreateRequest,
   McpAppBindingOperation,
@@ -16,6 +17,8 @@ import type {
   McpAppRuntimeBindingSnapshot,
 } from '../../../agent-bundle/src/dev/mcp-app-runtime-binding-service.ts';
 import type { McpAppConsentRequest, McpAppDocumentPolicySnapshot } from '../../../agent-bundle/src/dev/mcp-app-sandbox.ts';
+
+import { finiteOrdinaryJsonByteLength } from './finite-json.ts';
 
 export type McpAppJsonPrimitive = null | boolean | number | string;
 
@@ -137,6 +140,48 @@ interface Diagnostic {
 }
 
 const maximumPathSegmentLength = 4_096;
+
+const runtimeResponseJson = async (response: Response): Promise<unknown> => {
+  const maximumBytes = runtimeAppMessageLimits.hostToAppBytes;
+  const declared = response.headers.get('content-length');
+  if (declared !== null && (!/^\d+$/u.test(declared) || Number(declared) > maximumBytes)) {
+    throw new McpAppClientError('AB8019', 'Runtime MCP App route response exceeds its transport bound.');
+  }
+  if (response.body === null) throw new McpAppClientError('AB8019', 'Runtime MCP App route returned an invalid response.');
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let bytes = 0;
+  try {
+    while (true) {
+      const next = await reader.read();
+      if (next.done) break;
+      bytes += next.value.byteLength;
+      if (bytes > maximumBytes) {
+        await reader.cancel().catch(() => undefined);
+        throw new McpAppClientError('AB8019', 'Runtime MCP App route response exceeds its transport bound.');
+      }
+      chunks.push(next.value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  let parsed: unknown;
+  try {
+    const body = new Uint8Array(bytes);
+    let offset = 0;
+    for (const chunk of chunks) {
+      body.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    parsed = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(body));
+  } catch {
+    throw new McpAppClientError('AB8019', 'Runtime MCP App route returned an invalid response.');
+  }
+  if (finiteOrdinaryJsonByteLength(parsed, { maximumBytes, maximumDepth: 32, maximumNodes: 4_096 }) === undefined) {
+    throw new McpAppClientError('AB8019', 'Runtime MCP App route returned an invalid response.');
+  }
+  return parsed;
+};
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -1053,7 +1098,7 @@ export class McpAppClient implements McpAppRuntimeClient {
       body: JSON.stringify(runtimeOperationRequest(operation)),
       headers: { 'content-type': 'application/json' },
       method: 'POST',
-    }, admission);
+    }, admission, undefined, true);
     this.#assertRuntimeAdmission(admission);
     const body = runtimeRecord(response, ['result']);
     this.#assertRuntimeAdmission(admission);
@@ -1485,11 +1530,14 @@ export class McpAppClient implements McpAppRuntimeClient {
     init: RequestInit = {},
     admission?: RuntimeAdmission,
     closeAttempt?: RuntimeCloseAttempt,
+    runtimeOperation = false,
   ): Promise<unknown> {
     const response = await this.#request(path, init, admission, closeAttempt);
-    const body: unknown = await response.json().catch(() => {
-      throw new McpAppClientError('AB8019', 'Foreground MCP App route returned an invalid response.');
-    });
+    const body: unknown = runtimeOperation
+      ? await runtimeResponseJson(response)
+      : await response.json().catch(() => {
+        throw new McpAppClientError('AB8019', 'Foreground MCP App route returned an invalid response.');
+      });
     if (!response.ok) {
       const detail = diagnostic(body, response.status);
       throw new McpAppClientError(detail.code, detail.message);

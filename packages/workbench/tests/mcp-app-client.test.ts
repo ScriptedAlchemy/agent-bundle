@@ -1,5 +1,7 @@
 import { describe, expect, it } from '@rstest/core';
 
+import { runtimeAppMessageLimits } from '../../agent-bundle/src/dev/runtime-app-message-limits.ts';
+
 import {
   assertCurrentMcpAppDocumentPolicy,
   isCurrentMcpAppDocumentPolicy,
@@ -101,6 +103,19 @@ const json = (body: unknown, status = 200): Response => new Response(JSON.string
   headers: { 'content-type': 'application/json' },
   status,
 });
+
+const streamedResponse = (body: string, headers: Readonly<Record<string, string>> = {}, chunks = 1): Response => {
+  const bytes = new TextEncoder().encode(body);
+  const width = Math.max(1, Math.ceil(bytes.byteLength / chunks));
+  return new Response(new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (let offset = 0; offset < bytes.byteLength; offset += width) {
+        controller.enqueue(bytes.slice(offset, Math.min(bytes.byteLength, offset + width)));
+      }
+      controller.close();
+    },
+  }), { headers: { 'content-type': 'application/json', ...headers }, status: 200 });
+};
 
 const runtimeAppUpdated = (details: Readonly<{
   readonly bindingId: string;
@@ -531,6 +546,74 @@ describe('MCP App browser client', () => {
     ((malformedTrace.operations as Record<string, unknown>[])[0]!).sessionRevision = 3;
     previewPayload = malformedTrace;
     await expect(new McpAppClient({ fetch: fetch as typeof globalThis.fetch }).createRuntime({ expectedGenerationId: 'generation-a', profileId: 'portable', runId: 'run-a' })).rejects.toMatchObject({ code: 'AB8019' });
+  });
+
+  it('caps streamed runtime App operation results before finite JSON admission', async () => {
+    const maximumBytes = runtimeAppMessageLimits.hostToAppBytes;
+    const operationFor = (text: string) => ({
+      result: {
+        operationId: 'operation-bounded',
+        sessionId: 'runtime-session-a',
+        sessionRevision: 2,
+        value: { content: [{ text, type: 'text' }] },
+        vector: { runtimeGenerationId: 'generation-a', sourceRevision: 'source-a', stateVersion: 1 },
+      },
+    });
+    const bodyFor = (text: string): string => JSON.stringify(operationFor(text));
+    const utf8Bytes = (value: string): number => new TextEncoder().encode(value).byteLength;
+    const fixedBytes = utf8Bytes(bodyFor(''));
+    const exactBody = bodyFor('x'.repeat(maximumBytes - fixedBytes));
+    const underBody = bodyFor('x'.repeat(maximumBytes - fixedBytes - 1));
+    const multibyteBody = bodyFor('é'.repeat(Math.floor((maximumBytes - fixedBytes - 1) / 2)));
+    expect(utf8Bytes(exactBody)).toBe(maximumBytes);
+    expect(utf8Bytes(underBody)).toBe(maximumBytes - 1);
+    expect(utf8Bytes(multibyteBody)).toBeLessThanOrEqual(maximumBytes);
+    expect(utf8Bytes(multibyteBody)).toBeGreaterThan(maximumBytes - 3);
+
+    let operationResponse: Response = streamedResponse(underBody, { 'content-length': String(utf8Bytes(underBody)) }, 3);
+    const fetch = async (input: string | URL | Request): Promise<Response> => {
+      if (String(input) === '/api/project/session') return json({ origin: 'http://127.0.0.1:43123', token: 'foreground-secret' });
+      if (String(input) === '/api/runtime/apps') return json({ preview: runtimePreview });
+      if (String(input) === '/api/runtime/apps/runtime-binding/operations') return operationResponse;
+      throw new Error(`Unexpected request ${String(input)}.`);
+    };
+    const runtime = new McpAppClient({ fetch: fetch as typeof globalThis.fetch });
+    await runtime.createRuntime({ expectedGenerationId: 'generation-a', profileId: 'portable', runId: 'run-a' });
+
+    await expect(runtime.operateRuntime('runtime-binding', { kind: 'tools/list' })).resolves.toMatchObject({ operationId: 'operation-bounded' });
+    operationResponse = streamedResponse(exactBody, { 'content-length': String(maximumBytes) }, 7);
+    await expect(runtime.operateRuntime('runtime-binding', { kind: 'tools/list' })).resolves.toMatchObject({ operationId: 'operation-bounded' });
+    operationResponse = streamedResponse(multibyteBody, { 'content-length': String(utf8Bytes(multibyteBody)) }, 5);
+    await expect(runtime.operateRuntime('runtime-binding', { kind: 'tools/list' })).resolves.toMatchObject({ operationId: 'operation-bounded' });
+
+    operationResponse = new Response('{}', { headers: { 'content-length': String(maximumBytes + 1) }, status: 200 });
+    await expect(runtime.operateRuntime('runtime-binding', { kind: 'tools/list' })).rejects.toMatchObject({ code: 'AB8019' });
+    operationResponse = new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(maximumBytes));
+        controller.enqueue(Uint8Array.of(0));
+        controller.close();
+      },
+    }), { headers: { 'content-type': 'application/json' }, status: 200 });
+    await expect(runtime.operateRuntime('runtime-binding', { kind: 'tools/list' })).rejects.toMatchObject({ code: 'AB8019' });
+
+    let deep: unknown = true;
+    for (let depth = 0; depth < 33; depth += 1) deep = { nested: deep };
+    operationResponse = streamedResponse(JSON.stringify({
+      result: {
+        operationId: 'operation-deep', sessionId: 'runtime-session-a', sessionRevision: 2, value: deep,
+        vector: { runtimeGenerationId: 'generation-a', sourceRevision: 'source-a', stateVersion: 1 },
+      },
+    }));
+    await expect(runtime.operateRuntime('runtime-binding', { kind: 'tools/list' })).rejects.toMatchObject({ code: 'AB8019' });
+    operationResponse = streamedResponse(JSON.stringify({
+      result: {
+        operationId: 'operation-nodes', sessionId: 'runtime-session-a', sessionRevision: 2,
+        value: { values: Array.from({ length: 4_097 }, () => true) },
+        vector: { runtimeGenerationId: 'generation-a', sourceRevision: 'source-a', stateVersion: 1 },
+      },
+    }));
+    await expect(runtime.operateRuntime('runtime-binding', { kind: 'tools/list' })).rejects.toMatchObject({ code: 'AB8019' });
   });
 
   it('keeps the prior policy current when a consent success has an invalid sibling or route identity', async () => {

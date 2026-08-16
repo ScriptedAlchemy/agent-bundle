@@ -91,6 +91,7 @@ interface DevServerTesting {
   readonly openRuntimeClientSurface?: (
     endpoint: DevRuntimeClientSurfaceEndpoint,
     listener: Parameters<typeof RuntimeClientSurfaceProxy.open>[1],
+    hostOrigin: string,
   ) => Promise<DevRuntimeClientSurfaceProxyBinding>;
   readonly startForegroundServer?: (options: ForegroundServerOptions) => Promise<DevServerForeground>;
 }
@@ -263,7 +264,7 @@ class DeferredMcpAppPreviewService implements McpAppRoutePreviewService {
 }
 
 /** Owns every fixed loopback proxy binding for the life of a Workbench session. */
-class RuntimeClientSurfaceBindings implements Closeable {
+export class RuntimeClientSurfaceBindings implements Closeable {
   readonly #openProxy: typeof RuntimeClientSurfaceProxy.open;
   readonly #runtime: DevRuntimeController | undefined;
   readonly #bindings = new Set<DevRuntimeClientSurfaceProxyBinding>();
@@ -271,6 +272,7 @@ class RuntimeClientSurfaceBindings implements Closeable {
   readonly #pending = new Set<Promise<DevRuntimeClientSurfaceProxyBinding | undefined>>();
   #closing = false;
   #closePromise: Promise<void> | undefined;
+  #hostOrigin: string | undefined;
 
   constructor(
     runtime: DevRuntimeController | undefined,
@@ -280,8 +282,25 @@ class RuntimeClientSurfaceBindings implements Closeable {
     this.#openProxy = openProxy;
   }
 
+  /** The foreground listener is the only authority allowed to embed a surface. */
+  bindHostOrigin(hostOrigin: string): void {
+    let parsed: URL;
+    try {
+      parsed = new URL(hostOrigin);
+    } catch {
+      throw new TypeError('Runtime client surfaces require a canonical foreground origin.');
+    }
+    if (
+      (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') || parsed.origin !== hostOrigin ||
+      parsed.username.length > 0 || parsed.password.length > 0 || parsed.pathname !== '/' ||
+      parsed.search.length > 0 || parsed.hash.length > 0 || this.#hostOrigin !== undefined
+    ) throw new TypeError('Runtime client surfaces require one canonical foreground origin binding.');
+    this.#hostOrigin = parsed.origin;
+  }
+
   async open(surfaceId: string): Promise<DevRuntimeClientSurfaceProxyBinding | undefined> {
     if (this.#closing) throw new Error('Development runtime client surfaces are closed.');
+    if (this.#hostOrigin === undefined) throw new Error('Development runtime client surfaces are not bound to a foreground origin.');
     let endpoint;
     try {
       endpoint = this.#runtime?.clientSurface(surfaceId);
@@ -295,7 +314,7 @@ class RuntimeClientSurfaceBindings implements Closeable {
         details: Object.freeze({ connectionCount: event.connectionCount, surfaceId: event.surfaceId }),
         type: event.type === 'connected' ? 'runtime.hmr.client-connected' : 'runtime.hmr.client-disconnected',
       } satisfies DevRuntimeEventInput));
-    }).then(async (binding) => {
+    }, this.#hostOrigin).then(async (binding) => {
       if (this.#closing) {
         try {
           await binding.close();
@@ -594,6 +613,7 @@ export const startDevServer = async (options: StartDevServerOptions): Promise<De
     ...(runtime === undefined ? {} : { runtime }),
     skillDocuments: new SkillDocumentService({ epochStore, projectService, root }),
   });
+  clientSurfaces.bindHostOrigin(foreground.url);
   // Linearize Workbench-owned runtime proxy acquisition before Foreground
   // begins its asynchronous App/SSE drain. The coordinator repeats this fence
   // defensively during lifecycle close, but that happens too late for a proxy

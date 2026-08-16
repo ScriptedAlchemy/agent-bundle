@@ -16,6 +16,7 @@ import type {
   DevRuntimeClientSurfaceEndpoint,
   DevRuntimeClientSurfaceProxyBinding,
 } from './runtime-provider.ts';
+import { runtimeAppMessageLimits } from './runtime-app-message-limits.ts';
 
 const appAssetLimit = 4 * 1024 * 1024;
 const headerLimit = 16 * 1024;
@@ -25,6 +26,16 @@ const pendingWebSocketMessageLimit = 64;
 const upstreamHandshakeTimeout = 15_000;
 const upstreamRequestTimeout = 15_000;
 const loopbackHosts = new Set(['127.0.0.1', '::1']);
+const hmrToken = /^[A-Za-z0-9_-]{16,128}$/u;
+const endpointKeys = Object.freeze([
+  'entryPath',
+  'httpOrigin',
+  'httpPathPrefixes',
+  'surfaceId',
+  'webSocketOrigin',
+  'webSocketPath',
+  'webSocketToken',
+] as const);
 
 export interface RuntimeClientSurfaceConnectionEvent {
   readonly connectionCount: number;
@@ -39,10 +50,30 @@ interface ValidatedEndpoint {
   readonly httpPathPrefixes: readonly string[];
   readonly surfaceId: string;
   readonly webSocketOrigin: URL;
+  readonly webSocketToken: string;
 }
 
 const invalidEndpoint = (message: string): never => {
   throw new TypeError(`Runtime client surface endpoint must use ${message}.`);
+};
+
+const endpointValue = <Key extends (typeof endpointKeys)[number]>(
+  input: DevRuntimeClientSurfaceEndpoint,
+  key: Key,
+): DevRuntimeClientSurfaceEndpoint[Key] => {
+  const descriptor = Object.getOwnPropertyDescriptor(input, key);
+  if (descriptor === undefined || !Object.hasOwn(descriptor, 'value')) invalidEndpoint(`an own data ${key} field`);
+  return descriptor!.value as DevRuntimeClientSurfaceEndpoint[Key];
+};
+
+const closedEndpoint = (input: DevRuntimeClientSurfaceEndpoint): void => {
+  if (typeof input !== 'object' || input === null || Array.isArray(input)) invalidEndpoint('a plain endpoint record');
+  const keys = Reflect.ownKeys(input);
+  if (
+    keys.length !== endpointKeys.length || keys.some((key) => typeof key !== 'string' || !endpointKeys.includes(key as (typeof endpointKeys)[number]))
+  ) {
+    invalidEndpoint('exactly the declared endpoint fields');
+  }
 };
 
 const response = (target: ServerResponse, status: number): void => {
@@ -50,6 +81,142 @@ const response = (target: ServerResponse, status: number): void => {
   target.writeHead(status, { 'content-type': 'text/plain; charset=utf-8', 'x-content-type-options': 'nosniff' });
   target.end(status === 403 ? 'Forbidden' : status === 413 ? 'Payload Too Large' : 'Not Found');
 };
+
+const runtimeProxyContentSecurityPolicy = (hostOrigin: string): string => [
+  "default-src 'none'",
+  "base-uri 'none'",
+  "connect-src 'self'",
+  `frame-ancestors ${hostOrigin}`,
+  "form-action 'none'",
+  "frame-src 'self'",
+  "img-src 'self' data:",
+  "script-src 'unsafe-inline'",
+  "style-src 'unsafe-inline'",
+].join('; ');
+
+const escapedScriptValue = (value: string): string => JSON.stringify(value).replace(/[<>&\u2028\u2029]/gu, (character) => ({
+  '<': '\\u003c',
+  '>': '\\u003e',
+  '&': '\\u0026',
+  '\u2028': '\\u2028',
+  '\u2029': '\\u2029',
+})[character] as string);
+
+/**
+ * The same-origin outer document is the sole relay. The compiler App is never
+ * granted that origin: it runs in this document's one opaque nested iframe.
+ */
+const runtimeProxyShell = (entryPath: string, entryDocument: string, hostOrigin: string): string => `<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Runtime App surface</title>
+<style>html,body,iframe{border:0;height:100%;margin:0;width:100%}</style>
+<iframe id="app" sandbox="allow-scripts" referrerpolicy="no-referrer"></iframe>
+<script>
+  'use strict';
+  const app = document.getElementById('app');
+  const entryPath = ${escapedScriptValue(entryPath)};
+  const initialEntry = ${escapedScriptValue(entryDocument)};
+  const hostOrigin = ${escapedScriptValue(hostOrigin)};
+  const maxAppToHostMessageBytes = ${String(runtimeAppMessageLimits.appToHostBytes)};
+  const maxHostToAppMessageBytes = ${String(runtimeAppMessageLimits.hostToAppBytes)};
+  const maxHmrMessageBytes = maxAppToHostMessageBytes;
+  const maxEntryBytes = ${String(appAssetLimit)};
+  const allowedKeys = new Set(['error', 'id', 'jsonrpc', 'method', 'params', 'result']);
+  let initializeId;
+  let lifecycle = 'created';
+  let initialHmrMessage = true;
+  let refreshing = false;
+  const isRecord = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
+  const hasOwn = (value, key) => Object.prototype.hasOwnProperty.call(value, key);
+  const byteLength = (value) => {
+    try {
+      const json = JSON.stringify(value);
+      return typeof json === 'string' ? new TextEncoder().encode(json).byteLength : Infinity;
+    } catch { return Infinity; }
+  };
+  const validId = (value) => value === null || (typeof value === 'string' && value.length <= 256) || (typeof value === 'number' && Number.isFinite(value));
+  const isRpc = (value, maximumBytes) => {
+    if (!isRecord(value) || value.jsonrpc !== '2.0' || byteLength(value) > maximumBytes) return false;
+    const keys = Object.keys(value);
+    if (keys.length === 0 || keys.some((key) => !allowedKeys.has(key))) return false;
+    if (hasOwn(value, 'id') && !validId(value.id)) return false;
+    if (hasOwn(value, 'method') && (typeof value.method !== 'string' || value.method.length === 0 || value.method.length > 256)) return false;
+    return hasOwn(value, 'method') || hasOwn(value, 'id');
+  };
+  const isNotification = (value, method, maximumBytes) => isRpc(value, maximumBytes) && value.method === method && !hasOwn(value, 'id');
+  const post = (target, targetOrigin, message, ports, maximumBytes) => {
+    if (!isRpc(message, maximumBytes) || ports.length > 1) return false;
+    try {
+      if (ports.length === 0) target.postMessage(message, targetOrigin);
+      else target.postMessage(message, targetOrigin, ports);
+      return true;
+    } catch { return false; }
+  };
+  const isInitializeResponse = (value) => isRpc(value, maxHostToAppMessageBytes) && !hasOwn(value, 'method') && hasOwn(value, 'id') && value.id === initializeId && (hasOwn(value, 'result') || hasOwn(value, 'error'));
+  const installEntry = (entry) => {
+    if (typeof entry !== 'string' || new TextEncoder().encode(entry).byteLength > maxEntryBytes) return false;
+    initializeId = undefined;
+    lifecycle = 'created';
+    app.srcdoc = entry;
+    return true;
+  };
+  const refreshEntry = async () => {
+    if (refreshing || lifecycle === 'closed') return;
+    refreshing = true;
+    try {
+      const response = await fetch(entryPath, { cache: 'no-store', credentials: 'same-origin' });
+      const length = response.headers.get('content-length');
+      if (!response.ok || (length !== null && (!/^\\d+$/.test(length) || Number(length) > maxEntryBytes))) return;
+      const type = response.headers.get('content-type') || '';
+      if (!/^text\\/html(?:;|$)/i.test(type)) return;
+      installEntry(await response.text());
+    } catch {
+      // A failed reload must leave the already-admitted child and its bridge intact.
+    } finally { refreshing = false; }
+  };
+  installEntry(initialEntry);
+  const hmr = new WebSocket(new URL('/rsbuild-hmr', location.origin).href);
+  hmr.addEventListener('message', (event) => {
+    if (typeof event.data !== 'string' || event.data.length > maxHmrMessageBytes) return;
+    let message;
+    try { message = JSON.parse(event.data); } catch { return; }
+    if (!isRecord(message) || typeof message.type !== 'string') return;
+    if (message.type === 'ok') {
+      if (initialHmrMessage) { initialHmrMessage = false; return; }
+      void refreshEntry();
+    } else if (message.type === 'full-reload') void refreshEntry();
+  });
+  addEventListener('message', (event) => {
+    if (lifecycle === 'closed') return;
+    if (event.source === parent) {
+      if (!isRpc(event.data, maxHostToAppMessageBytes)) return;
+      if (lifecycle === 'initializing') {
+        if (event.origin !== hostOrigin || !isInitializeResponse(event.data)) return;
+        lifecycle = 'initialize-responded';
+        post(app.contentWindow, '*', event.data, event.ports, maxHostToAppMessageBytes);
+        return;
+      }
+      if (lifecycle !== 'initialized' || event.origin !== hostOrigin) return;
+      post(app.contentWindow, '*', event.data, event.ports, maxHostToAppMessageBytes);
+      return;
+    }
+    if (event.source !== app.contentWindow || event.origin !== 'null' || !isRpc(event.data, maxAppToHostMessageBytes)) return;
+    if (lifecycle === 'created' && event.data.method === 'ui/initialize' && hasOwn(event.data, 'id')) {
+      initializeId = event.data.id;
+      lifecycle = 'initializing';
+      post(parent, hostOrigin, event.data, event.ports, maxAppToHostMessageBytes);
+      return;
+    }
+    if (lifecycle === 'initialize-responded' && isNotification(event.data, 'ui/notifications/initialized', maxAppToHostMessageBytes)) {
+      lifecycle = 'initialized';
+      post(parent, hostOrigin, event.data, event.ports, maxAppToHostMessageBytes);
+      return;
+    }
+    if (lifecycle === 'initialized') post(parent, hostOrigin, event.data, event.ports, maxAppToHostMessageBytes);
+  });
+  addEventListener('pagehide', () => { lifecycle = 'closed'; hmr.close(); }, { once: true });
+</script>`;
 
 const rawHeaderBytes = (request: IncomingMessage): number => request.rawHeaders.reduce(
   (size, value) => size + Buffer.byteLength(value),
@@ -128,24 +295,70 @@ const origin = (value: string, protocol: 'http:' | 'ws:'): URL => {
   return parsed;
 };
 
+const canonicalHostOrigin = (value: string): string => {
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    return invalidEndpoint('a canonical foreground HTTP origin');
+  }
+  if (
+    (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') || parsed.origin !== value ||
+    parsed.username.length > 0 || parsed.password.length > 0 || parsed.pathname !== '/' ||
+    parsed.search.length > 0 || parsed.hash.length > 0
+  ) {
+    return invalidEndpoint('a canonical foreground HTTP origin');
+  }
+  return parsed.origin;
+};
+
+const selfContainedEntry = (body: Uint8Array, contentType: string | undefined): string => {
+  if (contentType !== undefined && !/^text\/html(?:;|$)/iu.test(contentType)) {
+    throw new TypeError('Runtime client entry must be self-contained HTML.');
+  }
+  const entry = new TextDecoder('utf-8', { fatal: true }).decode(body);
+  // The App compiler explicitly emits inline scripts and styles.  A srcdoc
+  // child has an opaque origin, so allowing a linked executable resource here
+  // would silently change that compiler contract into a broken surface.
+  if (/<(?:base|script)\b[^>]*(?:\bhref|\bsrc)\s*=/iu.test(entry) || /<link\b[^>]*\bhref\s*=/iu.test(entry)) {
+    throw new TypeError('Runtime client entry must not require external executable resources.');
+  }
+  return entry;
+};
+
 const endpoint = (input: DevRuntimeClientSurfaceEndpoint): ValidatedEndpoint => {
-  if (typeof input.surfaceId !== 'string' || input.surfaceId.length === 0 || input.surfaceId.includes('\0')) {
+  closedEndpoint(input);
+  const surfaceId = endpointValue(input, 'surfaceId');
+  if (typeof surfaceId !== 'string' || surfaceId.length === 0 || surfaceId.includes('\0')) {
     invalidEndpoint('a nonempty surface id');
   }
-  const httpOrigin = origin(input.httpOrigin, 'http:');
-  const webSocketOrigin = origin(input.webSocketOrigin, 'ws:');
+  const httpOrigin = origin(endpointValue(input, 'httpOrigin'), 'http:');
+  const webSocketOrigin = origin(endpointValue(input, 'webSocketOrigin'), 'ws:');
   const host = literalHost(httpOrigin);
   if (host !== literalHost(webSocketOrigin) || httpOrigin.port !== webSocketOrigin.port) {
     invalidEndpoint('matching host and port for HTTP and WebSocket origins');
   }
-  if (!Array.isArray(input.httpPathPrefixes) || input.httpPathPrefixes.length === 0) {
+  const declaredPrefixes = endpointValue(input, 'httpPathPrefixes');
+  if (!Array.isArray(declaredPrefixes) || declaredPrefixes.length === 0) {
     invalidEndpoint('at least one declared HTTP path prefix');
   }
-  const httpPathPrefixes = Object.freeze([...new Set(input.httpPathPrefixes.map(prefix))]);
-  const entryPath = canonicalPath(input.entryPath).normalized;
+  const httpPathPrefixes = Object.freeze([...new Set(declaredPrefixes.map(prefix))]);
+  const entryPath = canonicalPath(endpointValue(input, 'entryPath')).normalized;
   if (!matchesPrefix(entryPath, httpPathPrefixes)) invalidEndpoint('an entry path within a declared HTTP prefix');
-  if (input.webSocketPath !== '/rsbuild-hmr') invalidEndpoint('the exact /rsbuild-hmr WebSocket path');
-  return Object.freeze({ entryPath, host, httpOrigin, httpPathPrefixes, surfaceId: input.surfaceId, webSocketOrigin });
+  if (endpointValue(input, 'webSocketPath') !== '/rsbuild-hmr') invalidEndpoint('the exact /rsbuild-hmr WebSocket path');
+  const webSocketToken = endpointValue(input, 'webSocketToken');
+  if (typeof webSocketToken !== 'string' || !hmrToken.test(webSocketToken)) {
+    invalidEndpoint('a bounded Rsbuild WebSocket token');
+  }
+  return Object.freeze({
+    entryPath,
+    host,
+    httpOrigin,
+    httpPathPrefixes,
+    surfaceId,
+    webSocketOrigin,
+    webSocketToken,
+  });
 };
 
 const cookieValue = (request: IncomingMessage, name: string): string | undefined => {
@@ -233,12 +446,14 @@ export class RuntimeClientSurfaceProxy {
   static async open(
     input: DevRuntimeClientSurfaceEndpoint,
     listener: (event: RuntimeClientSurfaceConnectionEvent) => void,
+    hostOrigin: string,
   ): Promise<DevRuntimeClientSurfaceProxyBinding> {
     const trusted = endpoint(input);
+    const trustedHostOrigin = canonicalHostOrigin(hostOrigin);
     const bootstrapCapability = randomBytes(32).toString('base64url');
     const sessionCapability = randomBytes(32).toString('base64url');
     const bootstrapPath = `/__agent_bundle_runtime/bootstrap/${bootstrapCapability}`;
-    const cookieName = `agent_bundle_runtime_${randomBytes(16).toString('hex')}`;
+    const cookieName = `__Host-agent_bundle_runtime_${randomBytes(16).toString('hex')}`;
     const sockets = new Set<Socket>();
     const upstreamAgent = new Agent({ keepAlive: true });
     const upstreamAborts = new Set<() => void>();
@@ -262,6 +477,57 @@ export class RuntimeClientSurfaceProxy {
     const isAuthenticated = (request: IncomingMessage): boolean =>
       cookieValue(request, cookieName) === sessionCapability;
 
+    const readCurrentEntry = (): Promise<string> => new Promise((resolvePromise, rejectPromise) => {
+      let released = false;
+      let receivedResponse = false;
+      const release = (): void => {
+        if (released) return;
+        released = true;
+        clearTimeout(deadline);
+        upstreamRequests.delete(upstreamRequest);
+        upstreamAborts.delete(abort);
+      };
+      const abort = (): void => {
+        release();
+        if (!upstreamRequest.destroyed) upstreamRequest.destroy();
+      };
+      const deadline = setTimeout(() => {
+        abort();
+        rejectPromise(new Error('Runtime client entry timed out.'));
+      }, upstreamRequestTimeout);
+      const upstreamRequest = requestUpstream({
+        agent: upstreamAgent,
+        headers: { accept: 'text/html' },
+        host: trusted.host,
+        method: 'GET',
+        path: trusted.entryPath,
+        port: trusted.httpOrigin.port,
+        protocol: trusted.httpOrigin.protocol,
+      }, async (upstream) => {
+        receivedResponse = true;
+        try {
+          if ((upstream.statusCode ?? 502) !== 200) throw new Error('Runtime client entry was not available.');
+          resolvePromise(selfContainedEntry(await responseChunks(upstream), upstream.headers['content-type']));
+        } catch (error) {
+          if (!upstream.destroyed) upstream.destroy();
+          rejectPromise(error);
+        } finally {
+          release();
+        }
+      });
+      upstreamRequests.add(upstreamRequest);
+      upstreamAborts.add(abort);
+      upstreamRequest.once('socket', (socket) => {
+        upstreamSockets.add(socket);
+        socket.once('close', () => upstreamSockets.delete(socket));
+      });
+      upstreamRequest.once('error', (error) => {
+        release();
+        if (!receivedResponse) rejectPromise(error);
+      });
+      upstreamRequest.end();
+    });
+
     const server = createServer((request, target) => {
       void (async () => {
         const requestUrl = new URL(request.url ?? '/', 'http://proxy.invalid');
@@ -276,12 +542,21 @@ export class RuntimeClientSurfaceProxy {
             return;
           }
           bootstrapUsed = true;
-          target.writeHead(302, {
-            location: trusted.entryPath,
-            'set-cookie': `${cookieName}=${sessionCapability}; HttpOnly; SameSite=Strict; Path=/`,
+          let entryDocument: string;
+          try {
+            entryDocument = await readCurrentEntry();
+          } catch {
+            response(target, 502);
+            return;
+          }
+          target.writeHead(200, {
+            'cache-control': 'no-store',
+            'content-security-policy': runtimeProxyContentSecurityPolicy(trustedHostOrigin),
+            'content-type': 'text/html; charset=utf-8',
+            'set-cookie': `${cookieName}=${sessionCapability}; HttpOnly; SameSite=None; Secure; Partitioned; Path=/`,
             'x-content-type-options': 'nosniff',
           });
-          target.end();
+          target.end(runtimeProxyShell(trusted.entryPath, entryDocument, trustedHostOrigin));
           return;
         }
         if (!isAuthenticated(request)) {
@@ -414,11 +689,13 @@ export class RuntimeClientSurfaceProxy {
       }
       if (!isAuthenticated(request)) return reject(403);
       if (requestUrl.pathname !== '/rsbuild-hmr') return reject(404);
+      if (requestUrl.search.length > 0) return reject(404);
+      if (request.headers.origin !== proxyOrigin) return reject(403);
       const requestedProtocols = typeof request.headers['sec-websocket-protocol'] === 'string'
         ? request.headers['sec-websocket-protocol'].split(',').map((protocol) => protocol.trim()).filter(Boolean)
         : [];
       webSocketServer.handleUpgrade(request, socket, head, (downstream) => {
-        const upstreamUrl = `${trusted.webSocketOrigin.origin}/rsbuild-hmr${requestUrl.search}`;
+        const upstreamUrl = `${trusted.webSocketOrigin.origin}/rsbuild-hmr?token=${trusted.webSocketToken}`;
         const upstream = new WebSocket(upstreamUrl, requestedProtocols.length > 0 ? requestedProtocols : undefined, {
           handshakeTimeout: upstreamHandshakeTimeout,
           maxPayload: webSocketMessageLimit,
@@ -501,7 +778,7 @@ export class RuntimeClientSurfaceProxy {
       await closeServer(server);
       throw new Error('Runtime client proxy did not report a TCP address.');
     }
-    const origin = `http://127.0.0.1:${address.port}`;
+    const proxyOrigin = `http://127.0.0.1:${address.port}`;
     const close = async (): Promise<void> => {
       if (closePromise !== undefined) return closePromise;
       closed = true;
@@ -518,9 +795,9 @@ export class RuntimeClientSurfaceProxy {
       return closePromise;
     };
     return Object.freeze({
-      bootstrapUrl: `${origin}${bootstrapPath}`,
+      bootstrapUrl: `${proxyOrigin}${bootstrapPath}`,
       close,
-      origin,
+      origin: proxyOrigin,
       surfaceId: trusted.surfaceId,
       webSocketPath: '/rsbuild-hmr',
     });

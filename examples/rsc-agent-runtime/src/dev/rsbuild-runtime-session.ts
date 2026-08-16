@@ -529,6 +529,7 @@ const sourceBuildDiagnostic = (): DevRuntimeDiagnostic => Object.freeze({
 });
 
 const abortReason = (signal: AbortSignal): unknown => signal.reason ?? new Error('RSC runtime provider startup was aborted.');
+const hmrToken = /^[A-Za-z0-9_-]{16,128}$/u;
 
 export interface RsbuildRuntimeSessionStartTesting {
   readonly createRsbuild?: typeof createRsbuild;
@@ -580,6 +581,7 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
   readonly #workers = new Map<string, InvocationWorker>();
   readonly #failedAttempts = new Set<string>();
   #active: RuntimeGeneration<RscRuntimeGenerationMetadata> | undefined;
+  #appWebSocketToken: string | undefined;
   #clientSurface: DevRuntimeClientSurfaceEndpoint | undefined;
   #closePromise: Promise<void> | undefined;
   #closed = false;
@@ -718,6 +720,7 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
         config: createRscRuntimeRsbuildConfig({
           compilerRoot: join(storageRoot, 'compiler'),
           mode: 'development',
+          onAppWebSocketToken: (token) => session.#captureAppWebSocketToken(token),
           onCompile: session.#compileObserver(),
         }),
         cwd: context.projectRoot,
@@ -1980,6 +1983,8 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
       devServer === undefined || devServer.hostname !== '127.0.0.1' || devServer.https ||
       !Number.isSafeInteger(devServer.port) || devServer.port < 1 || devServer.port > 65_535
     ) throw new Error('RSC runtime dev server did not expose a valid loopback HTTP origin.');
+    const webSocketToken = this.#appWebSocketToken;
+    if (webSocketToken === undefined) throw new Error('RSC runtime App compiler did not capture an HMR credential.');
     const origin = new URL(`http://${devServer.hostname}:${String(devServer.port)}`).origin;
     this.#server = started.server;
     this.#clientSurface = Object.freeze({
@@ -1989,9 +1994,18 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
       surfaceId: clientSurfaceId,
       webSocketOrigin: origin.replace(/^http:/u, 'ws:'),
       webSocketPath: '/rsbuild-hmr',
+      webSocketToken,
     });
     this.#hmrReady = true;
     this.#setStatus(this.#active === undefined ? 'compiling' : 'active');
+  }
+
+  #captureAppWebSocketToken(token: string): void {
+    if (!hmrToken.test(token)) throw new Error('RSC runtime App compiler exposed an invalid HMR credential.');
+    if (this.#appWebSocketToken !== undefined && this.#appWebSocketToken !== token) {
+      throw new Error('RSC runtime App compiler changed its HMR credential during startup.');
+    }
+    this.#appWebSocketToken = token;
   }
 
   #compileObserver(): NonNullable<Parameters<typeof createRscRuntimeRsbuildConfig>[0]['onCompile']> {

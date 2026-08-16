@@ -1,4 +1,5 @@
 import { expect, it } from '@rstest/core';
+import { runtimeAppMessageLimits } from '../../agent-bundle/src/dev/runtime-app-message-limits.ts';
 import type { McpAppBindingOperation } from '../../agent-bundle/src/dev/mcp-app-runtime-preview-service.ts';
 import type { McpSessionControllerAppAttachment } from '../src/mcp/mcp-session-controller.ts';
 
@@ -294,6 +295,54 @@ it('sends one bounded resource-teardown request and awaits an App acknowledgemen
     });
 
     await expect(teardown).resolves.toEqual({});
+    await factory.close();
+  });
+});
+
+it('keeps inbound App messages at 256 KiB while admitting a 1 MiB host result envelope by UTF-8 bytes', async () => {
+  await withBrowser(async (browser) => {
+    const factory = runtimeFactory(async () => Object.freeze({
+      client: Object.freeze({
+        getServerCapabilities: () => Object.freeze({ tools: Object.freeze({}) }),
+        request: async () => Object.freeze({ tools: Object.freeze([]) }),
+        setNotificationHandler: () => undefined,
+      }),
+      close: async () => undefined,
+      sessionId: 'runtime-session-a',
+      sessionRevision: 3,
+    }));
+    const bridge = await invokeBridgeFactory(factory, browser);
+    browser.emit({
+      data: { id: 'initialize', jsonrpc: '2.0', method: 'ui/initialize', params: { appCapabilities: {}, appInfo: { name: 'app', version: '1' }, protocolVersion: '2026-01-26' } },
+      origin: 'https://apps.example.test',
+      source: browser.target,
+    });
+    await eventually(() => browser.posts.length === 1);
+
+    const inbound = { id: 'oversized-tools', jsonrpc: '2.0', method: 'tools/list', params: { payload: 'x'.repeat(runtimeAppMessageLimits.appToHostBytes) } };
+    const postsBeforeInbound = browser.posts.length;
+    browser.emit({ data: inbound, origin: 'https://apps.example.test', source: browser.target });
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(browser.posts).toHaveLength(postsBeforeInbound);
+    browser.emit({ data: { id: 'accepted-tools', jsonrpc: '2.0', method: 'tools/list', params: {} }, origin: 'https://apps.example.test', source: browser.target });
+    await eventually(() => browser.posts.some(({ message }) => (message as { readonly id?: unknown }).id === 'accepted-tools'));
+
+    await bridge.sendToolInput({ arguments: { payload: '' } } as never);
+    const base = browser.posts.at(-1)!.message;
+    const utf8Bytes = (value: unknown): number => new TextEncoder().encode(JSON.stringify(value)).byteLength;
+    const maximumBytes = runtimeAppMessageLimits.hostToAppBytes;
+    const baseBytes = utf8Bytes(base);
+    const exactPayload = 'x'.repeat(maximumBytes - baseBytes);
+    await expect(bridge.sendToolInput({ arguments: { payload: exactPayload } } as never)).resolves.toBeUndefined();
+    expect(utf8Bytes(browser.posts.at(-1)!.message)).toBe(maximumBytes);
+
+    const multibytePayload = 'é'.repeat(Math.floor((maximumBytes - baseBytes - 1) / 2));
+    await expect(bridge.sendToolInput({ arguments: { payload: multibytePayload } } as never)).resolves.toBeUndefined();
+    const multibyteBytes = utf8Bytes(browser.posts.at(-1)!.message);
+    expect(multibyteBytes).toBeLessThanOrEqual(maximumBytes);
+    expect(multibyteBytes).toBeGreaterThan(maximumBytes - 3);
+    await expect(bridge.sendToolInput({ arguments: { payload: `${exactPayload}x` } } as never))
+      .rejects.toThrow('outbound message is invalid or exceeds its bound');
     await factory.close();
   });
 });

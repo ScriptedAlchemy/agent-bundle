@@ -14,6 +14,7 @@ import {
   closeDevServerLifecycle,
   DevServerLifecycleCloseError,
   DevServerStartError,
+  RuntimeClientSurfaceBindings,
   startDevServer,
 } from '../src/dev/workbench-server.ts';
 import { createProjectFixture, removeProjectFixture } from './helpers/project-fixture.ts';
@@ -34,6 +35,18 @@ const within = async <Value>(promise: Promise<Value>, milliseconds: number): Pro
     setTimeout(() => rejectPromise(new Error(`Timed out after ${milliseconds}ms.`)), milliseconds);
   }),
 ]);
+
+it('requires one canonical foreground origin before opening runtime client surfaces', async () => {
+  const bindings = new RuntimeClientSurfaceBindings(undefined, async () => {
+    throw new Error('Runtime lookup must not open a proxy without a bound foreground.');
+  });
+  await expect(bindings.open('mcp.edit-timeline')).rejects.toThrow('not bound');
+  expect(() => bindings.bindHostOrigin('http://127.0.0.1:42000/not-an-origin')).toThrow('canonical foreground');
+  bindings.bindHostOrigin('http://127.0.0.1:42000');
+  expect(() => bindings.bindHostOrigin('http://127.0.0.1:42000')).toThrow('one canonical foreground origin binding');
+  await expect(bindings.open('mcp.edit-timeline')).resolves.toBeUndefined();
+  await expect(bindings.close()).resolves.toBeUndefined();
+});
 
 const openProjectEventStream = (url: string, cookie: string): Readonly<{
   readonly close: () => void;
@@ -712,6 +725,7 @@ it('prepares the optional runtime once with the development config context befor
   const assetsRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-workbench-runtime-'));
   let server: Awaited<ReturnType<typeof startDevServer>> | undefined;
   let failedServer: Awaited<ReturnType<typeof startDevServer>> | undefined;
+  const boundOrigins: string[] = [];
   let resolveSurface: ((binding: { readonly bootstrapUrl: string; close(): Promise<void>; readonly origin: string; readonly surfaceId: string; readonly webSocketPath: '/rsbuild-hmr' }) => void) | undefined;
   const pendingSurface = new Promise<{ readonly bootstrapUrl: string; close(): Promise<void>; readonly origin: string; readonly surfaceId: string; readonly webSocketPath: '/rsbuild-hmr' }>((resolvePromise) => {
     resolveSurface = resolvePromise;
@@ -737,7 +751,7 @@ it('prepares the optional runtime once with the development config context befor
       '      storageRoot: context.storageRoot,',
       '    }));',
       '    return {',
-      "      clientSurface: (surfaceId) => surfaceId === 'timeline' ? { entryPath: '/', httpOrigin: 'http://127.0.0.1:41111', httpPathPrefixes: ['/'], surfaceId, webSocketOrigin: 'ws://127.0.0.1:41111', webSocketPath: '/rsbuild-hmr' } : undefined,",
+      "      clientSurface: (surfaceId) => surfaceId === 'timeline' ? { entryPath: '/', httpOrigin: 'http://127.0.0.1:41111', httpPathPrefixes: ['/'], surfaceId, webSocketOrigin: 'ws://127.0.0.1:41111', webSocketPath: '/rsbuild-hmr', webSocketToken: 'rsbuild-token-1234' } : undefined,",
       '      close: async () => undefined,',
       '      mcpRegistry: {},',
       '      providerSessionId: context.providerSessionId,',
@@ -771,8 +785,9 @@ it('prepares the optional runtime once with the development config context befor
       port: 0,
       root: project.root,
       testing: {
-        openRuntimeClientSurface: async () => {
+        openRuntimeClientSurface: async (_endpoint, _listener, hostOrigin) => {
           proxyCalls += 1;
+          boundOrigins.push(hostOrigin);
           return pendingSurface.then((binding) => binding);
         },
       },
@@ -799,6 +814,7 @@ it('prepares the optional runtime once with the development config context befor
     // The test seam records synchronously before returning its unresolved
     // promise, proving foreground shutdown races an actually pending open.
     expect(proxyCalls).toBe(1);
+    expect(boundOrigins).toEqual([server.url]);
     const closing = server.close();
     expect(surfaceCloseCalls).toBe(0);
     resolveSurface?.({

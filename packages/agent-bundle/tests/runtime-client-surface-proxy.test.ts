@@ -1,10 +1,19 @@
-import { createServer, get as httpGet, globalAgent, type IncomingMessage } from 'node:http';
+import { createServer, get as httpGet, globalAgent, type IncomingMessage, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 
 import { expect, it } from '@rstest/core';
 import WebSocket, { WebSocketServer } from 'ws';
 
-import { RuntimeClientSurfaceProxy, type DevRuntimeClientSurfaceEndpoint } from '../src/dev/index.ts';
+import { RuntimeClientSurfaceProxy as RuntimeClientSurfaceProxyImplementation, type DevRuntimeClientSurfaceEndpoint } from '../src/dev/index.ts';
+import { runtimeAppMessageLimits } from '../src/dev/runtime-app-message-limits.ts';
+
+const foregroundOrigin = 'http://127.0.0.1:41999';
+const RuntimeClientSurfaceProxy = Object.freeze({
+  open: (
+    input: DevRuntimeClientSurfaceEndpoint,
+    listener: Parameters<typeof RuntimeClientSurfaceProxyImplementation.open>[1],
+  ) => RuntimeClientSurfaceProxyImplementation.open(input, listener, foregroundOrigin),
+});
 
 const listen = async (server: ReturnType<typeof createServer>): Promise<string> => {
   await new Promise<void>((resolvePromise) => server.listen({ host: '127.0.0.1', port: 0 }, resolvePromise));
@@ -44,8 +53,20 @@ const within = async <T>(promise: Promise<T>, milliseconds: number): Promise<T> 
 
 const bootstrapCookie = async (binding: Awaited<ReturnType<typeof RuntimeClientSurfaceProxy.open>>): Promise<string> => {
   const response = await fetch(binding.bootstrapUrl, { redirect: 'manual' });
-  expect(response.status).toBe(302);
+  expect(response.status).toBe(200);
   return response.headers.get('set-cookie')!.split(';', 1)[0]!;
+};
+
+const canonicalEntry = '<!doctype html><main>runtime App</main>';
+
+const serveBootstrapEntry = (
+  request: IncomingMessage,
+  response: ServerResponse,
+  path = '/app/index.html',
+): boolean => {
+  if (request.url !== path) return false;
+  response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end(canonicalEntry);
+  return true;
 };
 
 it('uses a one-use bootstrap capability before proxying only the declared app and Rsbuild HMR endpoints', async () => {
@@ -75,14 +96,26 @@ it('uses a one-use bootstrap capability before proxying only the declared app an
     surfaceId: 'app.weather',
     webSocketOrigin: origin.replace('http:', 'ws:'),
     webSocketPath: '/rsbuild-hmr',
+    webSocketToken: 'rsbuild-token-1234',
   } satisfies DevRuntimeClientSurfaceEndpoint, (event) => events.push(event));
 
   try {
     const first = await fetch(binding.bootstrapUrl, { redirect: 'manual' });
-    expect(first.status).toBe(302);
+    expect(first.status).toBe(200);
+    expect(first.headers.get('content-security-policy')).toContain(`frame-ancestors ${foregroundOrigin}`);
+    expect(first.headers.get('set-cookie')).toMatch(/^__Host-agent_bundle_runtime_[a-f0-9]+=/u);
     expect(first.headers.get('set-cookie')).toContain('HttpOnly');
+    expect(first.headers.get('set-cookie')).toContain('Secure');
+    expect(first.headers.get('set-cookie')).toContain('SameSite=None');
+    expect(first.headers.get('set-cookie')).toContain('Partitioned');
+    expect(first.headers.get('set-cookie')).not.toContain('Domain=');
     const cookie = first.headers.get('set-cookie')!.split(';', 1)[0]!;
-    expect(first.headers.get('location')).toBe('/app/index.html');
+    const shell = await first.text();
+    expect(shell).toContain('<iframe id="app" sandbox="allow-scripts"');
+    expect(shell).toContain(`const maxAppToHostMessageBytes = ${runtimeAppMessageLimits.appToHostBytes};`);
+    expect(shell).toContain(`const maxHostToAppMessageBytes = ${runtimeAppMessageLimits.hostToAppBytes};`);
+    expect(shell).toContain("if (!isRpc(event.data, maxHostToAppMessageBytes)) return;");
+    expect(shell).toContain("!isRpc(event.data, maxAppToHostMessageBytes)");
 
     const second = await fetch(binding.bootstrapUrl, { redirect: 'manual' });
     expect(second.status).toBe(403);
@@ -92,8 +125,8 @@ it('uses a one-use bootstrap capability before proxying only the declared app an
     await expect(asset.text()).resolves.toContain('runtime app');
     expect((await fetch(`${binding.origin}/not-declared.js`, { headers: { cookie } })).status).toBe(404);
 
-    const proxied = new WebSocket(`${binding.origin.replace('http:', 'ws:')}/rsbuild-hmr?token=hmr-a`, 'rsbuild', {
-      headers: { cookie },
+    const proxied = new WebSocket(`${binding.origin.replace('http:', 'ws:')}/rsbuild-hmr`, 'rsbuild', {
+      headers: { cookie, origin: binding.origin },
     });
     const response = new Promise<string>((resolvePromise, rejectPromise) => {
       proxied.once('message', (message) => resolvePromise(message.toString()));
@@ -107,8 +140,90 @@ it('uses a one-use bootstrap capability before proxying only the declared app an
     await expect(response).resolves.toBe('refresh');
     proxied.close();
 
-    expect(receivedUpgrade).toEqual({ protocol: 'rsbuild', url: '/rsbuild-hmr?token=hmr-a' });
+    expect(receivedUpgrade).toEqual({ protocol: 'rsbuild', url: '/rsbuild-hmr?token=rsbuild-token-1234' });
     expect(events).toContainEqual({ connectionCount: 1, surfaceId: 'app.weather', type: 'connected' });
+  } finally {
+    await binding.close();
+    webSocketServer.clients.forEach((client) => client.terminate());
+    upstream.closeAllConnections();
+    await close(upstream);
+  }
+});
+
+it('rejects noncanonical foreground origins before exposing a bootstrap capability', async () => {
+  const endpoint = {
+    entryPath: '/app/index.html',
+    httpOrigin: 'http://127.0.0.1:39001',
+    httpPathPrefixes: ['/app/'],
+    surfaceId: 'app.weather',
+    webSocketOrigin: 'ws://127.0.0.1:39001',
+    webSocketPath: '/rsbuild-hmr' as const,
+    webSocketToken: 'rsbuild-token-1234',
+  };
+  await expect(RuntimeClientSurfaceProxyImplementation.open(endpoint, () => undefined, 'http://127.0.0.1:42000/not-origin'))
+    .rejects.toThrow('canonical foreground');
+});
+
+it('keeps the trusted HMR token out of the browser URL while authenticating an opaque child upgrade', async () => {
+  const upstream = createServer((request, response) => {
+    if (serveBootstrapEntry(request, response)) return;
+    response.writeHead(404).end();
+  });
+  const origin = await listen(upstream);
+  const webSocketServer = new WebSocketServer({ noServer: true });
+  let receivedUpgrade: Readonly<{
+    readonly cookie: string | undefined;
+    readonly origin: string | undefined;
+    readonly url: string | undefined;
+  }> | undefined;
+  let resolveUpgrade!: () => void;
+  const upgraded = new Promise<void>((resolvePromise) => { resolveUpgrade = resolvePromise; });
+  upstream.on('upgrade', (request, socket, head) => {
+    receivedUpgrade = Object.freeze({
+      cookie: request.headers.cookie,
+      origin: request.headers.origin,
+      url: request.url,
+    });
+    resolveUpgrade();
+    webSocketServer.handleUpgrade(request, socket, head, (client) => webSocketServer.emit('connection', client, request));
+  });
+  const binding = await RuntimeClientSurfaceProxy.open({
+    entryPath: '/app/index.html',
+    httpOrigin: origin,
+    httpPathPrefixes: ['/app/'],
+    surfaceId: 'app.weather',
+    webSocketOrigin: origin.replace('http:', 'ws:'),
+    webSocketPath: '/rsbuild-hmr',
+    webSocketToken: 'rsbuild-token-1234',
+  } as DevRuntimeClientSurfaceEndpoint, () => undefined);
+
+  try {
+    const cookie = await bootstrapCookie(binding);
+    const rejected = new WebSocket(`${binding.origin.replace('http:', 'ws:')}/rsbuild-hmr?token=leaked`, {
+      headers: { cookie, origin: 'null' },
+    });
+    const rejectedState = await new Promise<'close' | 'error' | 'open'>((resolvePromise) => {
+      rejected.once('close', () => resolvePromise('close'));
+      rejected.once('error', () => resolvePromise('error'));
+      rejected.once('open', () => resolvePromise('open'));
+    });
+    if (rejectedState === 'open') rejected.close();
+    expect(rejectedState).not.toBe('open');
+
+    const client = new WebSocket(`${binding.origin.replace('http:', 'ws:')}/rsbuild-hmr`, {
+      headers: { cookie, origin: binding.origin },
+    });
+    await new Promise<void>((resolvePromise, rejectPromise) => {
+      client.once('open', resolvePromise);
+      client.once('error', rejectPromise);
+    });
+    await upgraded;
+    client.close();
+    expect(receivedUpgrade).toEqual({
+      cookie: undefined,
+      origin: undefined,
+      url: '/rsbuild-hmr?token=rsbuild-token-1234',
+    });
   } finally {
     await binding.close();
     webSocketServer.clients.forEach((client) => client.terminate());
@@ -125,6 +240,7 @@ it('refuses non-loopback and mismatched compiler endpoints before opening a brow
     surfaceId: 'app.weather',
     webSocketOrigin: 'wss://compiler.example',
     webSocketPath: '/rsbuild-hmr',
+    webSocketToken: 'rsbuild-token-1234',
   }, () => undefined)).rejects.toThrow('loopback');
 
   await expect(RuntimeClientSurfaceProxy.open({
@@ -134,12 +250,17 @@ it('refuses non-loopback and mismatched compiler endpoints before opening a brow
     surfaceId: 'app.weather',
     webSocketOrigin: 'ws://127.0.0.1:3001',
     webSocketPath: '/rsbuild-hmr',
+    webSocketToken: 'rsbuild-token-1234',
   }, () => undefined)).rejects.toThrow('matching host and port');
 });
 
 it('never lets double-encoded traversal or delimiters escape a declared HTTP prefix', async () => {
   const paths: string[] = [];
   const upstream = createServer((request, response) => {
+    if (serveBootstrapEntry(request, response)) {
+      paths.push(request.url ?? '');
+      return;
+    }
     paths.push(request.url ?? '');
     response.writeHead(200).end('unexpected upstream reach');
   });
@@ -151,6 +272,7 @@ it('never lets double-encoded traversal or delimiters escape a declared HTTP pre
     surfaceId: 'app.weather',
     webSocketOrigin: origin.replace('http:', 'ws:'),
     webSocketPath: '/rsbuild-hmr',
+    webSocketToken: 'rsbuild-token-1234',
   }, () => undefined);
 
   try {
@@ -158,7 +280,7 @@ it('never lets double-encoded traversal or delimiters escape a declared HTTP pre
     for (const path of ['/app/%252e%252e/secret', '/app/%252fsecret', '/app/%253fsecret', '/app/%2523secret']) {
       expect((await fetch(`${binding.origin}${path}`, { headers: { cookie } })).status).toBe(404);
     }
-    expect(paths).toEqual([]);
+    expect(paths).toEqual(['/app/index.html']);
   } finally {
     await binding.close();
     upstream.closeAllConnections();
@@ -167,7 +289,10 @@ it('never lets double-encoded traversal or delimiters escape a declared HTTP pre
 });
 
 it('isolates browser cookie capabilities across concurrent client-surface bindings', async () => {
-  const upstream = createServer((_request, response) => response.writeHead(200).end('ok'));
+  const upstream = createServer((request, response) => {
+    if (serveBootstrapEntry(request, response)) return;
+    response.writeHead(200).end('ok');
+  });
   const origin = await listen(upstream);
   const webSocketServer = new WebSocketServer({ noServer: true });
   upstream.on('upgrade', (request, socket, head) => webSocketServer.handleUpgrade(request, socket, head, (client) => {
@@ -180,6 +305,7 @@ it('isolates browser cookie capabilities across concurrent client-surface bindin
     surfaceId: 'app.weather',
     webSocketOrigin: origin.replace('http:', 'ws:'),
     webSocketPath: '/rsbuild-hmr' as const,
+    webSocketToken: 'rsbuild-token-1234',
   };
   const [first, second] = await Promise.all([
     RuntimeClientSurfaceProxy.open(endpoint, () => undefined),
@@ -191,7 +317,7 @@ it('isolates browser cookie capabilities across concurrent client-surface bindin
     expect((await fetch(`${first.origin}/app/index.html`, { headers: { cookie } })).status).toBe(200);
     expect((await fetch(`${second.origin}/app/index.html`, { headers: { cookie } })).status).toBe(200);
     await Promise.all([first, second].map((binding) => new Promise<void>((resolvePromise, rejectPromise) => {
-      const client = new WebSocket(`${binding.origin.replace('http:', 'ws:')}/rsbuild-hmr`, { headers: { cookie } });
+      const client = new WebSocket(`${binding.origin.replace('http:', 'ws:')}/rsbuild-hmr`, { headers: { cookie, origin: binding.origin } });
       client.once('open', () => {
         client.close();
         resolvePromise();
@@ -209,15 +335,19 @@ it('isolates browser cookie capabilities across concurrent client-surface bindin
 it('aborts a hanging upstream request when the downstream closes or its binding is closed', async () => {
   const nextRequests: Array<(request: IncomingMessage) => void> = [];
   const nextRequest = (): Promise<IncomingMessage> => new Promise((resolvePromise) => nextRequests.push(resolvePromise));
-  const upstream = createServer((request) => nextRequests.shift()?.(request));
+  const upstream = createServer((request, response) => {
+    if (serveBootstrapEntry(request, response, '/app/entry.html')) return;
+    nextRequests.shift()?.(request);
+  });
   const origin = await listen(upstream);
   const binding = await RuntimeClientSurfaceProxy.open({
-    entryPath: '/app/index.html',
+    entryPath: '/app/entry.html',
     httpOrigin: origin,
     httpPathPrefixes: ['/app/'],
     surfaceId: 'app.weather',
     webSocketOrigin: origin.replace('http:', 'ws:'),
     webSocketPath: '/rsbuild-hmr',
+    webSocketToken: 'rsbuild-token-1234',
   }, () => undefined);
 
   try {
@@ -251,6 +381,7 @@ it('keeps an in-flight binding B request alive when binding A closes on the same
   let releaseB: (() => void) | undefined;
   const bReleased = new Promise<void>((resolvePromise) => { releaseB = resolvePromise; });
   const upstream = createServer(async (request, response) => {
+    if (serveBootstrapEntry(request, response)) return;
     if (request.url === '/app/a.js') {
       response.writeHead(200).end('a');
       return;
@@ -261,12 +392,13 @@ it('keeps an in-flight binding B request alive when binding A closes on the same
   });
   const origin = await listen(upstream);
   const endpoint = {
-    entryPath: '/app/a.js',
+    entryPath: '/app/index.html',
     httpOrigin: origin,
     httpPathPrefixes: ['/app/'],
     surfaceId: 'app.weather',
     webSocketOrigin: origin.replace('http:', 'ws:'),
     webSocketPath: '/rsbuild-hmr' as const,
+    webSocketToken: 'rsbuild-token-1234',
   };
   const originalMaxSockets = globalAgent.maxSockets;
   globalAgent.maxSockets = 1;
@@ -293,15 +425,18 @@ it('keeps an in-flight binding B request alive when binding A closes on the same
 });
 
 it('bounds an upstream HTTP request before headers arrive', async () => {
-  const upstream = createServer(() => undefined);
+  const upstream = createServer((request, response) => {
+    if (serveBootstrapEntry(request, response, '/app/entry.html')) return;
+  });
   const origin = await listen(upstream);
   const binding = await RuntimeClientSurfaceProxy.open({
-    entryPath: '/app/index.html',
+    entryPath: '/app/entry.html',
     httpOrigin: origin,
     httpPathPrefixes: ['/app/'],
     surfaceId: 'app.weather',
     webSocketOrigin: origin.replace('http:', 'ws:'),
     webSocketPath: '/rsbuild-hmr',
+    webSocketToken: 'rsbuild-token-1234',
   }, () => undefined);
 
   try {
@@ -318,7 +453,9 @@ it('bounds an upstream HTTP request before headers arrive', async () => {
 
 it('bounds an unacknowledged upstream HMR handshake and pre-open message floods', async () => {
   const upstreamSockets = new Set<import('node:stream').Duplex>();
-  const upstream = createServer();
+  const upstream = createServer((request, response) => {
+    serveBootstrapEntry(request, response);
+  });
   upstream.on('upgrade', (_request, socket) => {
     upstreamSockets.add(socket);
     socket.once('close', () => upstreamSockets.delete(socket));
@@ -331,13 +468,14 @@ it('bounds an unacknowledged upstream HMR handshake and pre-open message floods'
     surfaceId: 'app.weather',
     webSocketOrigin: origin.replace('http:', 'ws:'),
     webSocketPath: '/rsbuild-hmr' as const,
+    webSocketToken: 'rsbuild-token-1234',
   };
 
   const floodUntilClosed = async (payload: Buffer): Promise<void> => {
     const binding = await RuntimeClientSurfaceProxy.open(endpoint, () => undefined);
     try {
       const cookie = await bootstrapCookie(binding);
-      const client = new WebSocket(`${binding.origin.replace('http:', 'ws:')}/rsbuild-hmr`, { headers: { cookie } });
+      const client = new WebSocket(`${binding.origin.replace('http:', 'ws:')}/rsbuild-hmr`, { headers: { cookie, origin: binding.origin } });
       const closed = new Promise<void>((resolvePromise) => client.once('close', () => resolvePromise()));
       client.once('error', () => undefined);
       await new Promise<void>((resolvePromise, rejectPromise) => {
@@ -358,7 +496,7 @@ it('bounds an unacknowledged upstream HMR handshake and pre-open message floods'
     const binding = await RuntimeClientSurfaceProxy.open(endpoint, () => undefined);
     try {
       const cookie = await bootstrapCookie(binding);
-      const client = new WebSocket(`${binding.origin.replace('http:', 'ws:')}/rsbuild-hmr`, { headers: { cookie } });
+      const client = new WebSocket(`${binding.origin.replace('http:', 'ws:')}/rsbuild-hmr`, { headers: { cookie, origin: binding.origin } });
       const closed = new Promise<void>((resolvePromise) => client.once('close', () => resolvePromise()));
       client.once('error', () => undefined);
       await new Promise<void>((resolvePromise, rejectPromise) => {
@@ -380,6 +518,7 @@ it('destroys declared-oversize upstream bodies instead of releasing their bindin
   let resolveSocketClosed: (() => void) | undefined;
   const socketClosed = new Promise<void>((resolvePromise) => { resolveSocketClosed = resolvePromise; });
   const upstream = createServer((request, response) => {
+    if (serveBootstrapEntry(request, response)) return;
     request.socket.once('close', () => resolveSocketClosed?.());
     response.writeHead(200, { 'content-length': String((4 * 1024 * 1024) + 1) });
     response.write('never-ending');
@@ -392,6 +531,7 @@ it('destroys declared-oversize upstream bodies instead of releasing their bindin
     surfaceId: 'app.weather',
     webSocketOrigin: origin.replace('http:', 'ws:'),
     webSocketPath: '/rsbuild-hmr',
+    webSocketToken: 'rsbuild-token-1234',
   }, () => undefined);
 
   try {
@@ -409,18 +549,20 @@ it('destroys endless redirect bodies before releasing their binding', async () =
   let resolveSocketClosed: (() => void) | undefined;
   const socketClosed = new Promise<void>((resolvePromise) => { resolveSocketClosed = resolvePromise; });
   const upstream = createServer((request, response) => {
+    if (serveBootstrapEntry(request, response, '/app/entry.html')) return;
     request.socket.once('close', () => resolveSocketClosed?.());
     response.writeHead(302, { location: '/app/next' });
     response.write('never-ending');
   });
   const origin = await listen(upstream);
   const binding = await RuntimeClientSurfaceProxy.open({
-    entryPath: '/app/index.html',
+    entryPath: '/app/entry.html',
     httpOrigin: origin,
     httpPathPrefixes: ['/app/'],
     surfaceId: 'app.weather',
     webSocketOrigin: origin.replace('http:', 'ws:'),
     webSocketPath: '/rsbuild-hmr',
+    webSocketToken: 'rsbuild-token-1234',
   }, () => undefined);
 
   try {
@@ -438,6 +580,7 @@ it('keeps a completed 502 response intact when a response body stalls after head
   let resolveSocketClosed: (() => void) | undefined;
   const socketClosed = new Promise<void>((resolvePromise) => { resolveSocketClosed = resolvePromise; });
   const upstream = createServer((request, response) => {
+    if (serveBootstrapEntry(request, response)) return;
     request.socket.once('close', () => resolveSocketClosed?.());
     response.writeHead(200, { 'content-type': 'application/javascript' });
     response.write('stalled');
@@ -450,6 +593,7 @@ it('keeps a completed 502 response intact when a response body stalls after head
     surfaceId: 'app.weather',
     webSocketOrigin: origin.replace('http:', 'ws:'),
     webSocketPath: '/rsbuild-hmr',
+    webSocketToken: 'rsbuild-token-1234',
   }, () => undefined);
 
   try {
@@ -472,6 +616,7 @@ it('bounds chunked upstream assets and releases their socket immediately', async
   let resolveSocketClosed: (() => void) | undefined;
   const socketClosed = new Promise<void>((resolvePromise) => { resolveSocketClosed = resolvePromise; });
   const upstream = createServer((request, response) => {
+    if (serveBootstrapEntry(request, response)) return;
     request.socket.once('close', () => resolveSocketClosed?.());
     response.writeHead(200, { 'content-type': 'application/javascript' });
     response.write(Buffer.alloc((4 * 1024 * 1024) + 1));
@@ -484,6 +629,7 @@ it('bounds chunked upstream assets and releases their socket immediately', async
     surfaceId: 'app.weather',
     webSocketOrigin: origin.replace('http:', 'ws:'),
     webSocketPath: '/rsbuild-hmr',
+    webSocketToken: 'rsbuild-token-1234',
   }, () => undefined);
 
   try {
@@ -505,6 +651,7 @@ it('accepts matched literal IPv6 loopback endpoints and rejects other IPv6 hosts
     surfaceId: 'app.ipv6',
     webSocketOrigin: 'ws://[::1]:39201',
     webSocketPath: '/rsbuild-hmr',
+    webSocketToken: 'rsbuild-token-1234',
   }, () => undefined);
   await binding.close();
 
@@ -515,11 +662,15 @@ it('accepts matched literal IPv6 loopback endpoints and rejects other IPv6 hosts
     surfaceId: 'app.ipv6',
     webSocketOrigin: 'ws://[::2]:39201',
     webSocketPath: '/rsbuild-hmr',
+    webSocketToken: 'rsbuild-token-1234',
   }, () => undefined)).rejects.toThrow('loopback');
 });
 
 it('proxies through literal IPv6 loopback when the host supports it', async () => {
-  const upstream = createServer((_request, response) => response.writeHead(200).end('ipv6'));
+  const upstream = createServer((request, response) => {
+    if (serveBootstrapEntry(request, response)) return;
+    response.writeHead(200).end('ipv6');
+  });
   const origin = await listenIpv6(upstream);
   if (origin === undefined) return;
   const binding = await RuntimeClientSurfaceProxy.open({
@@ -529,6 +680,7 @@ it('proxies through literal IPv6 loopback when the host supports it', async () =
     surfaceId: 'app.ipv6',
     webSocketOrigin: origin.replace('http:', 'ws:'),
     webSocketPath: '/rsbuild-hmr',
+    webSocketToken: 'rsbuild-token-1234',
   }, () => undefined);
 
   try {

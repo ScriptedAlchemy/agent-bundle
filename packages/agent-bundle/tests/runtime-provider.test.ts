@@ -233,6 +233,7 @@ it('refreshes controller endpoint snapshots before publishing a later runtime ac
     surfaceId: surface.id,
     webSocketOrigin: 'ws://127.0.0.1:43111',
     webSocketPath: '/rsbuild-hmr' as const,
+    webSocketToken: 'rsbuild-token-1234',
   };
   const session = {
     clientSurface: () => activated ? endpoint : undefined,

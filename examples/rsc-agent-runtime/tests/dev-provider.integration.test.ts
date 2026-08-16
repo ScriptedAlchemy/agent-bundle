@@ -134,6 +134,36 @@ const introduceWorkerSyntaxError = async (projectRoot: string): Promise<void> =>
   await writeFile(path, `${source}\nconst = ;\n`);
 };
 
+test('captures the App compiler HMR credential only through the public Rsbuild environment hook', async () => {
+  const captured: string[] = [];
+  const config = createRscRuntimeRsbuildConfig({
+    compilerRoot: join(tmpdir(), 'rsc-provider-hmr-token'),
+    mode: 'development',
+    onAppWebSocketToken: (token: string) => { captured.push(token); },
+  } as Parameters<typeof createRscRuntimeRsbuildConfig>[0]);
+  const plugin = (config.plugins as readonly unknown[]).find((candidate): candidate is Readonly<{
+    readonly name: string;
+    setup(api: unknown): void;
+  }> => typeof candidate === 'object' && candidate !== null &&
+    (candidate as { readonly name?: unknown }).name === 'agent-bundle:rsc-runtime-app-hmr-token');
+  if (plugin === undefined) throw new Error('RSC App HMR token plugin is unavailable.');
+  let afterCreate: ((input: unknown) => void) | undefined;
+  plugin.setup({
+    onAfterCreateCompiler: (callback: unknown) => { afterCreate = callback as (input: unknown) => void; },
+  });
+  afterCreate?.({ environments: { app: { webSocketToken: 'rsbuild-token-1234' } } });
+  expect(captured).toEqual(['rsbuild-token-1234']);
+});
+
+test('keeps compiler-App HMR out of the opaque browser child', () => {
+  const config = createRscRuntimeRsbuildConfig({
+    compilerRoot: join(tmpdir(), 'rsc-provider-outer-hmr'),
+    mode: 'development',
+  });
+  const app = config.environments?.app as Readonly<{ readonly dev?: unknown }> | undefined;
+  expect(app?.dev).toMatchObject({ hmr: false, liveReload: false });
+});
+
 test('declares an optional runtime while keeping Claude and Codex artifacts buildable', async () => {
   const copied = await copyExample();
   try {
@@ -1086,16 +1116,29 @@ test('uses the bound Rsbuild dev-server context instead of a stale port-zero sta
   try {
     const prepared = await new ProjectService({ includeDevRuntime: true, mode: 'development', root: copied.projectRoot }).prepare('dev');
     let closeCalls = 0;
-    const create = async () => Object.freeze({
-      context: Object.freeze({
-        devServer: Object.freeze({ hostname: '127.0.0.1', https: false, port: 41_103 }),
-      }),
-      startDevServer: async () => Object.freeze({
-        port: 0,
-        server: Object.freeze({ close: async () => { closeCalls += 1; } }),
-        urls: Object.freeze(['http://127.0.0.1:0']),
-      }) as unknown as StartDevServerResult,
-    }) as unknown as Awaited<ReturnType<typeof createRsbuild>>;
+    const create = async (input: Readonly<{ readonly config: unknown }>) => {
+      const plugin = ((input.config as Readonly<{ readonly plugins?: readonly unknown[] }>).plugins ?? []).find((candidate): candidate is Readonly<{
+        readonly name: string;
+        setup(api: unknown): void;
+      }> => typeof candidate === 'object' && candidate !== null &&
+        (candidate as { readonly name?: unknown }).name === 'agent-bundle:rsc-runtime-app-hmr-token');
+      if (plugin === undefined) throw new Error('RSC App HMR token plugin is unavailable.');
+      let afterCreate: ((input: unknown) => void) | undefined;
+      plugin.setup({
+        onAfterCreateCompiler: (callback: unknown) => { afterCreate = callback as (input: unknown) => void; },
+      });
+      afterCreate?.({ environments: { app: { webSocketToken: 'rsbuild-token-1234' } } });
+      return Object.freeze({
+        context: Object.freeze({
+          devServer: Object.freeze({ hostname: '127.0.0.1', https: false, port: 41_103 }),
+        }),
+        startDevServer: async () => Object.freeze({
+          port: 0,
+          server: Object.freeze({ close: async () => { closeCalls += 1; } }),
+          urls: Object.freeze(['http://127.0.0.1:0']),
+        }) as unknown as StartDevServerResult,
+      }) as unknown as Awaited<ReturnType<typeof createRsbuild>>;
+    };
     const session = await RsbuildRuntimeSession.start(startContext({
       projectRoot: copied.projectRoot,
       preparedRuntime: prepared.devRuntime!,

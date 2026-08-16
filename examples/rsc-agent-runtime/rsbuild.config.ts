@@ -24,6 +24,8 @@ export type RscRuntimeCompileFailureKind = 'provider-lifecycle' | 'source-build'
 export interface RscRuntimeRsbuildConfigOptions {
   readonly compilerRoot?: string;
   readonly mode: 'development' | 'production';
+  /** Receives the App environment's server-only Rsbuild HMR credential. */
+  readonly onAppWebSocketToken?: (token: string) => void;
   readonly onCompile?: Readonly<{
     beforeAttempt(): string;
     capture(input: {
@@ -37,6 +39,19 @@ export interface RscRuntimeRsbuildConfigOptions {
     failAttempt(attemptId: string, error: unknown, kind: RscRuntimeCompileFailureKind): void;
   }>;
 }
+
+const runtimeAppHmrTokenPlugin = (
+  capture: NonNullable<RscRuntimeRsbuildConfigOptions['onAppWebSocketToken']>,
+): RsbuildPlugin => ({
+  name: 'agent-bundle:rsc-runtime-app-hmr-token',
+  setup(api) {
+    api.onAfterCreateCompiler(({ environments }) => {
+      const token = environments.app?.webSocketToken;
+      if (typeof token !== 'string') throw new Error('RSC runtime App compiler did not expose an HMR credential.');
+      capture(token);
+    });
+  },
+});
 
 const emitRuntimeManifest = (): RsbuildPlugin => ({
   apply: 'build',
@@ -151,6 +166,7 @@ export const createRscRuntimeRsbuildConfig = (
       pluginReact(),
       pluginRSC({ environments: { server: 'rsc', client: 'widget' } }),
       emitRuntimeManifest(),
+      ...(options.onAppWebSocketToken === undefined ? [] : [runtimeAppHmrTokenPlugin(options.onAppWebSocketToken)]),
       ...(options.onCompile === undefined ? [] : [runtimeCompileObserverPlugin(options.onCompile)]),
     ],
     environments: {
@@ -202,6 +218,15 @@ export const createRscRuntimeRsbuildConfig = (
         },
       },
       app: {
+        ...(development ? {
+          dev: {
+            // The trusted runtime-surface outer document owns the one HMR
+            // socket.  The compiler App itself runs in an opaque srcdoc child
+            // and must never receive a browser HMR credential or connection.
+            hmr: false,
+            liveReload: false,
+          },
+        } : {}),
         html: { inject: 'body' },
         output: {
           cleanDistPath: false,
