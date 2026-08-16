@@ -3,6 +3,7 @@ import { expect, it } from '@rstest/core';
 import {
   createBindingMcpClient,
   createRuntimeAppBridgeFactory,
+  type RuntimeAppBridgeFactory,
 } from '../src/inspector/adapter/runtime-app-bridge.ts';
 
 const eventually = async (predicate: () => boolean, timeout = 300): Promise<void> => {
@@ -60,9 +61,134 @@ const withBrowser = async <Value>(
   }
 };
 
+const deferred = <Value>() => {
+  let reject: (reason?: unknown) => void = () => undefined;
+  let resolve: (value: Value) => void = () => undefined;
+  const promise = new Promise<Value>((nextResolve, nextReject) => {
+    resolve = nextResolve;
+    reject = nextReject;
+  });
+  return { promise, reject, resolve };
+};
+
+const bridgeFactoryClose = (factory: unknown): (() => Promise<void>) | undefined => {
+  const close = Reflect.get(factory as object, 'close');
+  return typeof close === 'function' ? close as () => Promise<void> : undefined;
+};
+
+const appAccess = (close: () => Promise<void>) => Object.freeze({
+  client: Object.freeze({
+    getServerCapabilities: () => Object.freeze({}),
+    request: async () => Object.freeze({}),
+    setNotificationHandler: () => undefined,
+  }),
+  close,
+  sessionId: 'runtime-session-a',
+  sessionRevision: 3,
+});
+
+const runtimeFactory = (attachApp: () => Promise<ReturnType<typeof appAccess>>): RuntimeAppBridgeFactory => {
+  const policy = Object.freeze({
+    bindingId: 'runtime-binding',
+    snapshot: Object.freeze({ allow: '', approvedPermissions: Object.freeze({}), revision: 1, warnings: Object.freeze([]) }),
+  });
+  return createRuntimeAppBridgeFactory({
+    client: Object.freeze({
+      closeRuntime: async () => undefined,
+      currentDocumentPolicy: () => policy,
+    }) as never,
+    controller: Object.freeze({ attachApp }) as never,
+    installedHandlers: Object.freeze({}),
+    listChanged: Object.freeze({ resources: false, tools: false }),
+    onTrace: () => undefined,
+    preview: Object.freeze({
+      binding: Object.freeze({ id: 'runtime-binding', profileVersion: 'agent-bundle:mcp-apps:2026-01-26', sessionId: 'runtime-session-a', sessionRevision: 3 }),
+      clientSurface: Object.freeze({ bootstrapUrl: 'https://apps.example.test/proxy', origin: 'https://apps.example.test', webSocketPath: '/rsbuild-hmr' as const }),
+      documentPolicy: policy.snapshot,
+      kind: 'apps' as const,
+      profile: Object.freeze({ hostContext: Object.freeze({ availableDisplayModes: Object.freeze(['inline']), displayMode: 'inline', safeAreaInsets: Object.freeze({ bottom: 0, left: 0, right: 0, top: 0 }), theme: 'light' }) }),
+      resource: Object.freeze({ csp: Object.freeze({}), permissions: Object.freeze({}) }),
+    }) as never,
+    requestConsent: async () => 'deny',
+    simulationFeatures: Object.freeze({ chatGptWidgetState: 'disabled' as const }),
+  });
+};
+
+const invokeBridgeFactory = (factory: ReturnType<typeof createRuntimeAppBridgeFactory>, browser: ReturnType<typeof fakeBrowser>) =>
+  factory(Object.freeze({ contentWindow: browser.target }) as never, Object.freeze({ name: 'weather' }) as never);
+
 it('exposes the controller-owned official runtime App bridge boundary', () => {
   expect(typeof createBindingMcpClient).toBe('function');
   expect(typeof createRuntimeAppBridgeFactory).toBe('function');
+});
+
+it('closes admission before invocation and exposes one exact no-op factory cleanup promise', async () => {
+  await withBrowser(async (browser) => {
+    let attachments = 0;
+    const factory = runtimeFactory(async () => {
+      attachments += 1;
+      return appAccess(async () => undefined);
+    });
+    const close = bridgeFactoryClose(factory);
+
+    expect(typeof close).toBe('function');
+    if (close === undefined) return;
+    const first = close.call(factory);
+    const second = close.call(factory);
+    expect(second).toBe(first);
+    await first;
+
+    await expect(invokeBridgeFactory(factory, browser)).rejects.toThrow('closed');
+    expect(attachments).toBe(0);
+  });
+});
+
+it('joins a held attachment close and cleans its late controller access exactly once', async () => {
+  await withBrowser(async (browser) => {
+    const pending = deferred<ReturnType<typeof appAccess>>();
+    let attachments = 0;
+    let accessCloses = 0;
+    const factory = runtimeFactory(async () => {
+      attachments += 1;
+      return pending.promise;
+    });
+    const opening = invokeBridgeFactory(factory, browser);
+    const joinedOpening = invokeBridgeFactory(factory, browser);
+    expect(joinedOpening).toBe(opening);
+    await eventually(() => attachments === 1);
+    const close = bridgeFactoryClose(factory);
+
+    expect(typeof close).toBe('function');
+    if (close === undefined) return;
+    const closing = close.call(factory);
+    pending.resolve(appAccess(async () => { accessCloses += 1; }));
+
+    await expect(opening).rejects.toThrow('closed');
+    await expect(closing).resolves.toBeUndefined();
+    expect(accessCloses).toBe(1);
+    await expect(invokeBridgeFactory(factory, browser)).rejects.toThrow('closed');
+    expect(attachments).toBe(1);
+  });
+});
+
+it('shares the returned bridge cleanup outcome with the callable factory and closes its access once', async () => {
+  await withBrowser(async (browser) => {
+    let accessCloses = 0;
+    const factory = runtimeFactory(async () => appAccess(async () => { accessCloses += 1; }));
+    const close = bridgeFactoryClose(factory);
+
+    expect(typeof close).toBe('function');
+    if (close === undefined) return;
+    const bridge = await invokeBridgeFactory(factory, browser);
+    const bridgeCleanup = bridge.close();
+    const factoryCleanup = close.call(factory);
+    const repeated = close.call(factory);
+
+    expect(factoryCleanup).toBe(bridgeCleanup);
+    expect(repeated).toBe(bridgeCleanup);
+    await expect(factoryCleanup).resolves.toBeUndefined();
+    expect(accessCloses).toBe(1);
+  });
 });
 
 it('uses the controller-owned attachment only for the exact preview session identity', async () => {
@@ -107,6 +233,7 @@ it('closes the exact attachment once on bridge setup failure and leaves its retr
       bindingId: 'runtime-binding',
       snapshot: Object.freeze({ allow: '', approvedPermissions: Object.freeze({}), revision: 1, warnings: Object.freeze([]) }),
     });
+    let attachments = 0;
     let attachmentCloses = 0;
     const access = Object.freeze({
       client: Object.freeze({
@@ -126,7 +253,10 @@ it('closes the exact attachment once on bridge setup failure and leaves its retr
         closeRuntime: async () => undefined,
         currentDocumentPolicy: () => policy,
       }) as never,
-      controller: Object.freeze({ attachApp: async () => access }) as never,
+      controller: Object.freeze({ attachApp: async () => {
+        attachments += 1;
+        return access;
+      } }) as never,
       installedHandlers: Object.freeze({}),
       listChanged: Object.freeze({ resources: false, tools: false }),
       onTrace: () => undefined,
@@ -142,8 +272,18 @@ it('closes the exact attachment once on bridge setup failure and leaves its retr
       simulationFeatures: Object.freeze({ chatGptWidgetState: 'disabled' as const }),
     });
 
-    await expect(factory(Object.freeze({ contentWindow: browser.target }) as never, Object.freeze({ name: 'weather' }) as never)).rejects.toThrow('setup failed and cleanup was incomplete');
+    const opening = factory(Object.freeze({ contentWindow: browser.target }) as never, Object.freeze({ name: 'weather' }) as never);
+    expect(factory(Object.freeze({ contentWindow: browser.target }) as never, Object.freeze({ name: 'weather' }) as never)).toBe(opening);
+    await expect(opening).rejects.toThrow('setup failed and cleanup was incomplete');
     expect(attachmentCloses).toBe(1);
+    expect(attachments).toBe(1);
+    const cleanup = factory.close();
+    expect(factory.close()).toBe(cleanup);
+    await expect(cleanup).rejects.toMatchObject({
+      errors: [expect.objectContaining({ message: 'attached transport cleanup failed' })],
+    });
+    await expect(factory(Object.freeze({ contentWindow: browser.target }) as never, Object.freeze({ name: 'weather' }) as never)).rejects.toThrow('factory is closed');
+    expect(attachments).toBe(1);
     await expect(access.close()).resolves.toBeUndefined();
     expect(attachmentCloses).toBe(2);
   }, { failMessageRegistration: true });

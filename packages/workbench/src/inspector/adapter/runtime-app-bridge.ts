@@ -83,6 +83,10 @@ interface RuntimeAppBridge extends AppRendererBridge {
   ): void;
 }
 
+export interface RuntimeAppBridgeFactory extends BridgeFactory {
+  close(): Promise<void>;
+}
+
 const maximumMessageBytes = 256 * 1024;
 const maximumQueuedMessages = 32;
 const maximumFailures = 3;
@@ -352,42 +356,64 @@ export const createBindingMcpClient = async (
 };
 
 /** Creates the sole official bridge over the controller-owned attachment. */
-export const createRuntimeAppBridgeFactory = (options: RuntimeAppBridgeOptions): BridgeFactory => {
+export const createRuntimeAppBridgeFactory = (options: RuntimeAppBridgeOptions): RuntimeAppBridgeFactory => {
   const preview = runtimePreview(options.preview);
   const surface = new URL(preview.clientSurface.bootstrapUrl);
   if (surface.origin !== preview.clientSurface.origin) throw new Error('MCP App preview client surface origin is invalid.');
-  return async (iframe) => {
+  let admissionOpen = true;
+  let access: McpSessionControllerAppAccess | undefined;
+  let bridge: RuntimeAppBridge | undefined;
+  let transport: GuardedPostMessageTransport | undefined;
+  let rawBridgeClose: (() => Promise<void>) | undefined;
+  let resourceCleanupPromise: Promise<void> | undefined;
+  let setupPromise: Promise<RuntimeAppBridge> | undefined;
+  let closePromise: Promise<void> | undefined;
+  const closeAttachment = (): Promise<void> => {
+    if (resourceCleanupPromise !== undefined) return resourceCleanupPromise;
+    resourceCleanupPromise = (async () => {
+      const failures: unknown[] = [];
+      if (rawBridgeClose !== undefined) {
+        try { await rawBridgeClose(); } catch (reason) { failures.push(reason); }
+      }
+      if (transport !== undefined) {
+        try { await transport.close(); } catch (reason) { failures.push(reason); }
+      }
+      if (access !== undefined) {
+        try { await access.close(); } catch (reason) { failures.push(reason); }
+      }
+      if (failures.length > 0) throw aggregateFailure('MCP App bridge cleanup failed.', failures);
+    })();
+    return resourceCleanupPromise;
+  };
+  const close = (): Promise<void> => {
+    if (closePromise !== undefined) return closePromise;
+    admissionOpen = false;
+    const pendingSetup = setupPromise;
+    closePromise = pendingSetup === undefined
+      ? Promise.resolve()
+      : (async () => {
+        try {
+          await pendingSetup;
+        } catch {
+          // The factory call observes setup failure. Its close seam reports
+          // only the shared cleanup outcome below.
+        }
+        await closeAttachment();
+      })();
+    return closePromise;
+  };
+  const setup = async (iframe: Parameters<BridgeFactory>[0]): Promise<RuntimeAppBridge> => {
+    if (!admissionOpen) throw new Error('MCP App bridge factory is closed.');
     const target = iframe.contentWindow as unknown as PostMessageTarget | null;
     if (target === null) throw new Error('MCP App iframe is not available.');
     const policy = options.client.currentDocumentPolicy(preview.binding.id);
     if (policy.bindingId !== preview.binding.id || policy.snapshot !== preview.documentPolicy) {
       throw new Error('MCP App document policy is stale.');
     }
-    let access: McpSessionControllerAppAccess | undefined;
-    let bridge: RuntimeAppBridge | undefined;
-    let transport: GuardedPostMessageTransport | undefined;
-    let rawBridgeClose: (() => Promise<void>) | undefined;
-    let closePromise: Promise<void> | undefined;
-    const closeAttachment = (): Promise<void> => {
-      if (closePromise !== undefined) return closePromise;
-      closePromise = (async () => {
-        const failures: unknown[] = [];
-        if (rawBridgeClose !== undefined) {
-          try { await rawBridgeClose(); } catch (reason) { failures.push(reason); }
-        }
-        if (transport !== undefined) {
-          try { await transport.close(); } catch (reason) { failures.push(reason); }
-        }
-        if (access !== undefined) {
-          try { await access.close(); } catch (reason) { failures.push(reason); }
-        }
-        if (failures.length > 0) throw aggregateFailure('MCP App bridge cleanup failed.', failures);
-      })();
-      return closePromise;
-    };
     try {
       const attached = await createBindingMcpClient(options.controller, options.client, preview);
       access = attached;
+      if (!admissionOpen) throw new Error('MCP App bridge factory is closed.');
       if (options.client.currentDocumentPolicy(preview.binding.id) !== policy) {
         throw new Error('MCP App document policy changed while the controller attachment opened.');
       }
@@ -396,7 +422,7 @@ export const createRuntimeAppBridgeFactory = (options: RuntimeAppBridgeOptions):
         expectedOrigin: preview.clientSurface.origin,
         onFailClosed: () => {
           void options.client.closeRuntime(preview.binding.id).catch(() => undefined);
-          void closeAttachment().catch(() => undefined);
+          void close().catch(() => undefined);
         },
         source: target,
       });
@@ -419,7 +445,7 @@ export const createRuntimeAppBridgeFactory = (options: RuntimeAppBridgeOptions):
       rawBridgeClose = bridge.close.bind(bridge);
       Object.defineProperty(bridge, 'close', {
         configurable: false,
-        value: closeAttachment,
+        value: close,
         writable: false,
       });
       if (serverCapabilities?.tools !== undefined) {
@@ -493,6 +519,7 @@ export const createRuntimeAppBridgeFactory = (options: RuntimeAppBridgeOptions):
         };
       }
       await bridge.connect(transport);
+      if (!admissionOpen) throw new Error('MCP App bridge factory is closed.');
       // ext-apps automatically installs this handler if resources exist.  The
       // runtime dispatcher intentionally has no template route, so visibly
       // reject it instead of allowing an arbitrary method to reach the client.
@@ -508,4 +535,16 @@ export const createRuntimeAppBridgeFactory = (options: RuntimeAppBridgeOptions):
       throw reason;
     }
   };
+  const factory = ((iframe: Parameters<BridgeFactory>[0], _tool: Parameters<BridgeFactory>[1]) => {
+    if (!admissionOpen) return Promise.reject(new Error('MCP App bridge factory is closed.'));
+    if (setupPromise !== undefined) return setupPromise;
+    setupPromise = setup(iframe);
+    return setupPromise;
+  }) as RuntimeAppBridgeFactory;
+  Object.defineProperty(factory, 'close', {
+    configurable: false,
+    value: close,
+    writable: false,
+  });
+  return factory;
 };
