@@ -1,4 +1,6 @@
 import { expect, it } from '@rstest/core';
+import type { McpAppBindingOperation } from '../../agent-bundle/src/dev/mcp-app-runtime-preview-service.ts';
+import type { McpSessionControllerAppAttachment } from '../src/mcp/mcp-session-controller.ts';
 
 import {
   createBindingMcpClient,
@@ -229,12 +231,17 @@ it('bounds an unresponsive resource-teardown before the factory releases transpo
   });
 });
 
-it('uses the controller-owned attachment only for the exact preview session identity', async () => {
+it('maps all runtime App MCP operations through its binding executor, gates tool calls on consent, and emits only controller-validated public traces', async () => {
   const policy = Object.freeze({
     bindingId: 'runtime-binding',
     snapshot: Object.freeze({ allow: '', approvedPermissions: Object.freeze({}), revision: 1, warnings: Object.freeze([]) }),
   });
   let attachments = 0;
+  let attached: McpSessionControllerAppAttachment | undefined;
+  const operations: Array<Readonly<{ readonly bindingId: string; readonly operation: McpAppBindingOperation }>> = [];
+  const consentRequests: unknown[] = [];
+  const traces: unknown[] = [];
+  let decision: 'allow-once' | 'deny' | 'error' = 'allow-once';
   const access = Object.freeze({
     client: Object.freeze({}),
     close: async () => undefined,
@@ -242,13 +249,40 @@ it('uses the controller-owned attachment only for the exact preview session iden
     sessionRevision: 3,
   });
   const controller = {
-    attachApp: async () => {
+    attachApp: async (candidate: McpSessionControllerAppAttachment) => {
       attachments += 1;
+      attached = candidate;
       return access;
     },
   };
   const client = {
+    createRuntimeConsent: async (bindingId: string, request: unknown) => {
+      consentRequests.push(Object.freeze({ bindingId, request }));
+      return Object.freeze({
+        challenge: Object.freeze({ expiresAt: 10, id: 'consent-a', request: Object.freeze({}) }),
+        documentPolicy: policy.snapshot,
+      });
+    },
+    decideRuntimeConsent: async (_bindingId: string, _consentId: string, selected: 'allow-once' | 'deny') => {
+      if (decision === 'error') throw new Error('consent decision failed');
+      return Object.freeze({
+        documentPolicy: policy.snapshot,
+        grant: selected === 'allow-once' && decision === 'allow-once'
+          ? Object.freeze({ authorizationId: 'authorization-a' })
+          : undefined,
+      });
+    },
     currentDocumentPolicy: () => policy,
+    operateRuntime: async (bindingId: string, operation: McpAppBindingOperation) => {
+      operations.push(Object.freeze({ bindingId, operation }));
+      return Object.freeze({
+        operationId: `operation-${operations.length}`,
+        sessionId: 'runtime-session-a',
+        sessionRevision: 3,
+        value: operation.kind === 'tools/list' ? Object.freeze([{ name: 'forecast' }]) : Object.freeze([]),
+        vector: Object.freeze({ runtimeGenerationId: 'generation-a', sourceRevision: 'source-a', stateVersion: 2 }),
+      });
+    },
   };
   const preview = {
     binding: { id: 'runtime-binding', sessionId: 'runtime-session-a', sessionRevision: 3 },
@@ -256,13 +290,52 @@ it('uses the controller-owned attachment only for the exact preview session iden
     kind: 'apps',
   };
 
-  await expect(createBindingMcpClient(controller as never, client as never, preview as never)).resolves.toBe(access);
+  await expect(createBindingMcpClient(controller as never, client as never, preview as never, {
+    onTrace: (entry: unknown) => traces.push(entry),
+    requestConsent: async () => decision === 'error' ? 'allow-once' : decision,
+  })).resolves.toBe(access);
   expect(attachments).toBe(1);
+  if (attached === undefined) throw new Error('Expected one binding-scoped App attachment.');
+
+  const tools = await attached.execute(Object.freeze({ kind: 'tools/list' }));
+  await attached.execute(Object.freeze({ kind: 'resources/list' }));
+  await attached.execute(Object.freeze({ kind: 'resources/read', uri: 'weather://today' }));
+  await attached.execute(Object.freeze({ arguments: Object.freeze({ city: 'Paris' }), kind: 'tools/call', name: 'forecast' }));
+  attached.onResult?.(Object.freeze({ kind: 'tools/list' }), tools);
+
+  expect(operations).toEqual([
+    { bindingId: 'runtime-binding', operation: { kind: 'tools/list' } },
+    { bindingId: 'runtime-binding', operation: { kind: 'resources/list' } },
+    { bindingId: 'runtime-binding', operation: { kind: 'resources/read', uri: 'weather://today' } },
+    { bindingId: 'runtime-binding', operation: { arguments: { city: 'Paris' }, consentId: 'authorization-a', kind: 'tools/call', name: 'forecast' } },
+  ]);
+  expect(consentRequests).toEqual([expect.objectContaining({
+    bindingId: 'runtime-binding',
+    request: expect.objectContaining({ capability: 'call-tool', details: { arguments: { city: 'Paris' }, name: 'forecast' }, scope: 'action' }),
+  })]);
+  expect(traces).toEqual([{
+    kind: 'tools/list',
+    operationId: 'operation-1',
+    sessionId: 'runtime-session-a',
+    sessionRevision: 3,
+    vector: { runtimeGenerationId: 'generation-a', sourceRevision: 'source-a', stateVersion: 2 },
+  }]);
+  expect(Object.isFrozen(traces[0])).toBe(true);
+  expect(Object.isFrozen((traces[0] as Readonly<{ readonly vector: unknown }>).vector)).toBe(true);
+
+  decision = 'deny';
+  await expect(attached.execute(Object.freeze({ arguments: Object.freeze({ city: 'Rome' }), kind: 'tools/call', name: 'forecast' }))).rejects.toThrow('not approved');
+  decision = 'error';
+  await expect(attached.execute(Object.freeze({ arguments: Object.freeze({ city: 'Berlin' }), kind: 'tools/call', name: 'forecast' }))).rejects.toThrow('consent decision failed');
+  expect(operations).toHaveLength(4);
 
   await expect(createBindingMcpClient(controller as never, client as never, {
     ...preview,
     binding: { ...preview.binding, sessionRevision: 4 },
-  } as never)).rejects.toThrow('session identity');
+  } as never, {
+    onTrace: () => undefined,
+    requestConsent: async () => 'deny',
+  })).rejects.toThrow('session identity');
 });
 
 it('closes the exact attachment once on bridge setup failure and leaves its retry to the controller owner', async () => {

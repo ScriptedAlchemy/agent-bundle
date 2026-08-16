@@ -6,10 +6,11 @@ import type {
   McpAppValidatedDownload,
 } from '../../../../agent-bundle/src/dev/mcp-app-bridge.ts';
 import type { McpAppJsonValue } from '../../../../agent-bundle/src/dev/mcp-app-metadata.ts';
-import type { McpAppPreviewAppsSnapshot, McpAppPreviewSnapshot } from '../../../../agent-bundle/src/dev/mcp-app-runtime-preview-service.ts';
+import type { McpAppBoundOperationResult, McpAppPublicRuntimeVector } from '../../../../agent-bundle/src/dev/mcp-app-runtime-binding-service.ts';
+import type { McpAppBindingOperation, McpAppPreviewAppsSnapshot, McpAppPreviewSnapshot } from '../../../../agent-bundle/src/dev/mcp-app-runtime-preview-service.ts';
 import type { McpAppConsentCapability, McpAppConsentChallenge, McpAppConsentRequest } from '../../../../agent-bundle/src/dev/mcp-app-sandbox.ts';
 import type { McpAppClient, McpAppRuntimeClient } from '../../mcp/mcp-app-client.ts';
-import type { McpSessionController, McpSessionControllerAppAccess } from '../../mcp/mcp-session-controller.ts';
+import type { McpSessionController, McpSessionControllerAppAccess, McpSessionControllerAppAttachment } from '../../mcp/mcp-session-controller.ts';
 
 import { finiteOrdinaryJsonByteLength } from '../../mcp/finite-json.ts';
 import { snapshotHostContext, type AppRendererBridge, type BridgeFactory } from './closure-spike.ts';
@@ -24,12 +25,23 @@ export interface McpAppSimulationFeatures {
   readonly chatGptWidgetState: 'disabled' | 'enabled';
 }
 
+/** Public, binding-scoped runtime App operation evidence. */
+export interface RuntimeAppBridgeOperationTrace {
+  readonly kind: McpAppBindingOperation['kind'];
+  readonly operationId: string;
+  readonly sessionId: string;
+  readonly sessionRevision: number;
+  readonly vector: McpAppPublicRuntimeVector;
+}
+
+export type RuntimeAppBridgeTrace = McpAppBridgeMessage | RuntimeAppBridgeOperationTrace;
+
 export interface RuntimeAppBridgeOptions {
   readonly client: McpAppClient & McpAppRuntimeClient;
   readonly controller: McpSessionController;
   readonly installedHandlers: McpAppInstalledHostHandlers;
   readonly listChanged: Readonly<{ readonly resources: boolean; readonly tools: boolean }>;
-  readonly onTrace: (entry: McpAppBridgeMessage) => void;
+  readonly onTrace: (entry: RuntimeAppBridgeTrace) => void;
   readonly persistWidgetState?: (state: unknown) => Promise<void>;
   readonly preview: McpAppPreviewSnapshot;
   readonly requestConsent: (challenge: McpAppConsentChallenge) => Promise<'allow-once' | 'deny'>;
@@ -337,17 +349,72 @@ const sideEffectConsent = async (
   return resolved.grant !== undefined;
 };
 
+const callToolConsent = async (
+  client: McpAppClient & McpAppRuntimeClient,
+  preview: McpAppPreviewAppsSnapshot,
+  requestConsent: RuntimeAppBridgeOptions['requestConsent'],
+  operation: Extract<McpAppBindingOperation, { readonly kind: 'tools/call' }>,
+): Promise<string> => {
+  const details: McpAppJsonValue = Object.freeze({
+    arguments: operation.arguments ?? Object.freeze({}),
+    name: operation.name,
+  });
+  const request: McpAppConsentRequest = Object.freeze({
+    actionFingerprint: `runtime-app:${preview.binding.id}:call-tool:${JSON.stringify(details)}`,
+    capability: 'call-tool',
+    details,
+    scope: 'action',
+    summary: 'Call MCP App tool',
+  });
+  const created = await client.createRuntimeConsent(preview.binding.id, request);
+  const decision = await requestConsent(created.challenge);
+  const resolved = await client.decideRuntimeConsent(preview.binding.id, created.challenge.id, decision);
+  if (resolved.grant === undefined) throw new Error('Runtime MCP App tool call was not approved.');
+  return resolved.grant.authorizationId;
+};
+
+const appOperationTrace = (
+  operation: McpAppBindingOperation,
+  result: McpAppBoundOperationResult,
+): RuntimeAppBridgeOperationTrace => Object.freeze({
+  kind: operation.kind,
+  operationId: result.operationId,
+  sessionId: result.sessionId,
+  sessionRevision: result.sessionRevision,
+  vector: Object.freeze({
+    ...(result.vector.artifactEpochId === undefined ? {} : { artifactEpochId: result.vector.artifactEpochId }),
+    runtimeGenerationId: result.vector.runtimeGenerationId,
+    sourceRevision: result.vector.sourceRevision,
+    stateVersion: result.vector.stateVersion,
+  }),
+});
+
+export interface CreateBindingMcpClientOptions {
+  readonly onTrace: (entry: RuntimeAppBridgeOperationTrace) => void;
+  readonly requestConsent: RuntimeAppBridgeOptions['requestConsent'];
+}
+
 /** Obtains the one controller-owned SDK client only when it still matches the App snapshot. */
 export const createBindingMcpClient = async (
   controller: McpSessionController,
   client: McpAppClient & McpAppRuntimeClient,
   preview: McpAppPreviewAppsSnapshot,
+  options: CreateBindingMcpClientOptions,
 ): Promise<McpSessionControllerAppAccess> => {
   const policy = client.currentDocumentPolicy(preview.binding.id);
   if (policy.bindingId !== preview.binding.id || policy.snapshot.revision !== preview.documentPolicy.revision) {
     throw new Error('MCP App document policy is stale.');
   }
-  const access = await controller.attachApp();
+  const attachment: McpSessionControllerAppAttachment = Object.freeze({
+    bindingId: preview.binding.id,
+    execute: async (operation: McpAppBindingOperation) => {
+      if (operation.kind !== 'tools/call') return client.operateRuntime(preview.binding.id, operation);
+      const consentId = await callToolConsent(client, preview, options.requestConsent, operation);
+      return client.operateRuntime(preview.binding.id, Object.freeze({ ...operation, consentId }));
+    },
+    onResult: (operation: McpAppBindingOperation, result: McpAppBoundOperationResult) => options.onTrace(appOperationTrace(operation, result)),
+  });
+  const access = await controller.attachApp(attachment);
   if (access.sessionId !== preview.binding.sessionId || access.sessionRevision !== preview.binding.sessionRevision) {
     const mismatch = new Error('MCP App controller attachment does not match the preview session identity.');
     try {
@@ -416,7 +483,10 @@ export const createRuntimeAppBridgeFactory = (options: RuntimeAppBridgeOptions):
       throw new Error('MCP App document policy is stale.');
     }
     try {
-      const attached = await createBindingMcpClient(options.controller, options.client, preview);
+      const attached = await createBindingMcpClient(options.controller, options.client, preview, {
+        onTrace: options.onTrace,
+        requestConsent: options.requestConsent,
+      });
       access = attached;
       if (!admissionOpen) throw new Error('MCP App bridge factory is closed.');
       if (options.client.currentDocumentPolicy(preview.binding.id) !== policy) {

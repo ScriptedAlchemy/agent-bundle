@@ -14,6 +14,9 @@ import type {
   DevRuntimeMcpSessionRequest,
 } from '../../../agent-bundle/src/dev/runtime-protocol.ts';
 import type { JsonObject } from '../../../agent-bundle/src/dev/types.ts';
+import type { McpAppBoundOperationResult } from '../../../agent-bundle/src/dev/mcp-app-runtime-binding-service.ts';
+import type { McpAppJsonValue } from '../../../agent-bundle/src/dev/mcp-app-metadata.ts';
+import type { McpAppBindingOperation } from '../../../agent-bundle/src/dev/mcp-app-runtime-preview-service.ts';
 import { AgentBundleRemoteTransport, dispatchAgentBundleMcpRequest, type AgentBundleMcpDispatchResult } from './agent-bundle-remote-transport.ts';
 import {
   invocationHistoryFor,
@@ -102,6 +105,14 @@ export interface McpSessionControllerAppAccess {
   close(): Promise<void>;
 }
 
+/** One opaque runtime App authority. It has no access to the stable runtime session lifecycle. */
+export interface McpSessionControllerAppAttachment {
+  readonly bindingId: string;
+  execute(operation: McpAppBindingOperation): Promise<McpAppBoundOperationResult>;
+  /** Invoked only after the controller has revalidated the current session identity. */
+  onResult?(operation: McpAppBindingOperation, result: McpAppBoundOperationResult): void;
+}
+
 export interface McpSessionControllerOptions {
   readonly appClientFactory?: () => Client;
   readonly clientFactory?: () => McpSessionControllerClient;
@@ -186,6 +197,7 @@ interface CleanupTask {
 }
 
 interface AttachedApp {
+  readonly authority: McpSessionControllerAppAttachment;
   readonly binding: Extract<McpSessionControllerBinding, { readonly kind: 'runtime' }>;
   readonly client: Client;
   readonly transport: RuntimeAttachedMcpTransport;
@@ -417,6 +429,39 @@ const runtimeRouteOperationFor = (
   }
   throw new McpSessionControllerError(`MCP operation ${JSON.stringify(operation)} is not routed for runtime App access.`);
 };
+
+const appBindingOperationFor = (operation: McpRouteOperation): McpAppBindingOperation => {
+  if (operation.operation === 'tools/list') return Object.freeze({ kind: 'tools/list' });
+  if (operation.operation === 'resources/list') return Object.freeze({ kind: 'resources/list' });
+  if (operation.operation === 'resources/read') return Object.freeze({ kind: 'resources/read', uri: operation.uri });
+  if (operation.operation === 'tools/call') return Object.freeze({
+    arguments: operation.arguments as McpAppJsonValue,
+    kind: 'tools/call',
+    name: operation.name,
+  });
+  throw new McpSessionControllerError(`MCP operation ${JSON.stringify(operation.operation)} is not routed for runtime App access.`);
+};
+
+const appAttachment = (value: McpSessionControllerAppAttachment): McpSessionControllerAppAttachment => {
+  try {
+    if (
+      value === null || typeof value !== 'object' ||
+      typeof value.bindingId !== 'string' || value.bindingId.length === 0 || value.bindingId.length > 4_096 || value.bindingId.includes('\0') ||
+      typeof value.execute !== 'function' || (value.onResult !== undefined && typeof value.onResult !== 'function')
+    ) throw new McpSessionControllerError('MCP App attachment requires one valid opaque binding authority and executor.');
+    return Object.freeze({
+      bindingId: value.bindingId,
+      execute: value.execute,
+      ...(value.onResult === undefined ? {} : { onResult: value.onResult }),
+    });
+  } catch (reason) {
+    if (reason instanceof McpSessionControllerError) throw reason;
+    throw new McpSessionControllerError('MCP App attachment requires one valid opaque binding authority and executor.');
+  }
+};
+
+const sameAppAttachment = (left: McpSessionControllerAppAttachment, right: McpSessionControllerAppAttachment): boolean =>
+  left.bindingId === right.bindingId && left.execute === right.execute;
 
 const controllerOperationForRuntimeRoute = (operation: McpRouteOperation): McpSessionControllerOperation => {
   if (operation.operation === 'tools/list') return 'listTools';
@@ -753,7 +798,8 @@ export class McpSessionController {
     return this.#runInvocation(input);
   }
 
-  async attachApp(): Promise<McpSessionControllerAppAccess> {
+  async attachApp(input: McpSessionControllerAppAttachment): Promise<McpSessionControllerAppAccess> {
+    const authority = appAttachment(input);
     this.#assertReady('invoke');
     const binding = this.#binding;
     if (binding?.kind !== 'runtime') throw new McpSessionControllerError('MCP App access requires a runtime session binding.');
@@ -761,17 +807,27 @@ export class McpSessionController {
       throw new McpSessionControllerError('MCP App access requires the current ready runtime session snapshot.');
     }
     const current = this.#attachedApp;
-    if (current !== undefined) return this.#appAccess(current, binding.binding);
-    if (this.#attachmentPromise !== undefined) return this.#attachmentPromise;
+    if (current !== undefined) {
+      if (!sameAppAttachment(current.authority, authority)) {
+        throw new McpSessionControllerError('MCP App access is already attached to a different runtime App binding authority.');
+      }
+      return this.#appAccess(current, binding.binding);
+    }
+    if (this.#attachmentPromise !== undefined) {
+      if (this.#attachingApp === undefined || !sameAppAttachment(this.#attachingApp.authority, authority)) {
+        throw new McpSessionControllerError('MCP App attachment is already opening with a different runtime App binding authority.');
+      }
+      return this.#attachmentPromise;
+    }
     if (this.#attachingApp !== undefined) {
       throw new McpSessionControllerError('MCP App attachment cleanup is incomplete.');
     }
     const client = this.#appClientFactory();
     const transport = new RuntimeAttachedMcpTransport({
       connection: binding.session.connection,
-      execute: (operation) => this.#runRuntimeRouteOperation(`app:${this.#nextAppRequestId()}`, operation),
+      execute: (operation) => this.#runRuntimeAppOperation(`app:${this.#nextAppRequestId()}`, authority, operation),
     });
-    const attachment: AttachedApp = { binding, client, transport };
+    const attachment: AttachedApp = { authority, binding, client, transport };
     this.#attachingApp = attachment;
     const opening = this.#connectAttached(attachment, binding);
     this.#attachmentPromise = opening;
@@ -1338,6 +1394,71 @@ export class McpSessionController {
         this.#publish({ completedAt: Date.now(), id, result: result.value, type: 'request.settled', vector: result.vector });
       }
       return Object.freeze({ value: result.value, vector: result.vector });
+    } catch (reason) {
+      if (this.#runtimeCurrent(binding, generation)) {
+        this.#publish({ completedAt: Date.now(), error: invocationError(reason), id, type: 'request.settled' });
+      }
+      throw reason;
+    } finally {
+      this.#requests.delete(id);
+      active.settle();
+    }
+  }
+
+  async #runRuntimeAppOperation(
+    id: string,
+    authority: McpSessionControllerAppAttachment,
+    operation: McpRouteOperation,
+  ): Promise<AgentBundleMcpDispatchResult> {
+    this.#assertReady('invoke');
+    const binding = this.#binding;
+    if (binding?.kind !== 'runtime') throw new McpSessionControllerError('Runtime MCP operation requires a runtime session binding.');
+    const generation = this.#generation;
+    if (this.#requests.has(id)) throw new McpSessionControllerError(`MCP invocation ${JSON.stringify(id)} is already active.`);
+    let appOperation: McpAppBindingOperation;
+    try {
+      appOperation = appBindingOperationFor(operation);
+    } catch (reason) {
+      this.#publish({ diagnostic: diagnosticFor('mcp.operation.unsupported', reason), type: 'failed' });
+      throw reason;
+    }
+    const active = activeRequest();
+    this.#requests.set(id, active);
+    const controllerOperation = controllerOperationForRuntimeRoute(operation);
+    this.#publish({
+      request: {
+        id,
+        operation: controllerOperation,
+        request: controllerRequestForRuntimeRoute(operation),
+        startedAt: Date.now(),
+      },
+      type: 'request.start',
+    });
+    try {
+      const result = await authority.execute(appOperation);
+      if (
+        result === null || typeof result !== 'object' ||
+        result.sessionId !== binding.binding.sessionId || result.sessionRevision !== binding.binding.sessionRevision
+      ) throw new McpSessionControllerError('Runtime MCP App operation response belongs to a stale session revision.');
+      if (!this.#runtimeCurrent(binding, generation)) {
+        throw new McpSessionControllerError('Runtime MCP App operation completed after its session binding changed.');
+      }
+      if (active.abort.signal.aborted) throw active.abort.signal.reason ?? new DOMException('Aborted', 'AbortError');
+      if (!this.#runtimeCurrent(binding, generation)) {
+        throw new McpSessionControllerError('Runtime MCP App operation completed after its session binding changed.');
+      }
+      // The App operation vector is deliberately public-only. Retain the ordered request result
+      // without coercing it into the model's private RuntimeVector contract.
+      this.#publish({ completedAt: Date.now(), id, result: result.value, type: 'request.settled' });
+      if (!this.#runtimeCurrent(binding, generation)) {
+        throw new McpSessionControllerError('Runtime MCP App operation completed after its session binding changed.');
+      }
+      try {
+        authority.onResult?.(appOperation, result);
+      } catch {
+        // Observability must not affect the sole controller-owned SDK transport.
+      }
+      return Object.freeze({ value: result.value });
     } catch (reason) {
       if (this.#runtimeCurrent(binding, generation)) {
         this.#publish({ completedAt: Date.now(), error: invocationError(reason), id, type: 'request.settled' });
