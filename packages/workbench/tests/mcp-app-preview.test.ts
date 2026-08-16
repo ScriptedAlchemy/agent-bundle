@@ -1063,6 +1063,48 @@ describe('MCP App preview', () => {
     expect(closeCalls).toBe(2);
   });
 
+  it('retires the runtime renderer before backend policy revocation while retaining its retryable lifecycle', async () => {
+    let createCalls = 0;
+    let closeCalls = 0;
+    const controllerRef = {} as { current: ReturnType<typeof createMcpAppPreviewController> };
+    const cleanupOrder: string[] = [];
+    const phasesAtBackendClose: string[] = [];
+    const client = runtimeClient(Object.freeze({
+      closeRuntime: async () => {
+        closeCalls += 1;
+        cleanupOrder.push('backend');
+        phasesAtBackendClose.push(controllerRef.current.state.phase);
+        if (closeCalls === 1) throw new Error('runtime policy revocation failed');
+      },
+      createRuntime: async () => { createCalls += 1; return runtimePreview; },
+      currentDocumentPolicy: () => Object.freeze({ bindingId: runtimePreview.binding.id, snapshot: runtimePreview.documentPolicy }),
+    }));
+    const bridgeFactory = Object.assign(
+      () => { throw new Error('renderer mount is represented by its ref'); },
+      { close: async () => { cleanupOrder.push('bridge'); } },
+    ) as RuntimeAppBridgeFactory;
+    const controller = createMcpAppPreviewController(runtimeProps(client, () => bridgeFactory));
+    controllerRef.current = controller;
+    await controller.start();
+    controller.runtimeRendererRef?.(Object.freeze({
+      sendToolCancelled: async () => undefined,
+      sendToolInput: async () => undefined,
+      sendToolResult: async () => undefined,
+      teardown: async () => { cleanupOrder.push('renderer'); },
+    }));
+
+    const lifecycle = controller.runtimeLifecycle;
+    await expect(lifecycle?.close()).rejects.toThrow('runtime policy revocation failed');
+
+    expect(cleanupOrder).toEqual(['renderer', 'bridge', 'backend']);
+    expect(phasesAtBackendClose).toEqual(['closing']);
+    expect(controller.state).toMatchObject({ kind: 'runtime', phase: 'cleanup-failed' });
+    expect(controller.runtimeLifecycle).toBe(lifecycle);
+    await expect(lifecycle?.close()).resolves.toBeUndefined();
+    expect(phasesAtBackendClose).toEqual(['closing', 'cleanup-failed']);
+    expect(createCalls).toBe(1);
+  });
+
   it('turns renderer errors into an immutable runtime preview fallback and isolates throwing subscribers', async () => {
     const client = runtimeClient(Object.freeze({
       closeRuntime: async () => undefined,

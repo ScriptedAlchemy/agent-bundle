@@ -77,6 +77,7 @@ type McpAppArtifactPreviewState =
 
 export type McpAppRuntimePreviewState =
   | Readonly<{ readonly kind: 'runtime'; readonly phase: 'loading' }>
+  | Readonly<{ readonly kind: 'runtime'; readonly phase: 'closing' }>
   | Readonly<{ readonly fallback: McpAppPreviewFallback; readonly kind: 'runtime'; readonly phase: 'fallback' }>
   | Readonly<{ readonly fallback: McpAppPreviewFallback; readonly kind: 'runtime'; readonly message: string; readonly phase: 'error' | 'cleanup-failed' }>
   | Readonly<{
@@ -796,6 +797,10 @@ export class McpAppPreviewController<State extends McpAppPreviewControllerState 
     const bindingId = this.#runtimePreview?.binding.id;
     if (!this.#runtimeBackendClosed && bindingId !== undefined && this.#runtime !== undefined) {
       try {
+        const state = this.#state;
+        if (isRuntimeState(state) && state.phase === 'ready') {
+          this.#setState(Object.freeze({ kind: 'runtime', phase: 'closing' }));
+        }
         await this.#runtime.client.closeRuntime(bindingId);
         this.#runtimeBackendClosed = true;
       } catch (error) {
@@ -1060,9 +1065,10 @@ export function McpAppPreview(props: McpAppPreviewProps | McpAppRuntimePreviewPr
       ? runtimeState.fallback
       : undefined;
     return (
-      <section aria-busy={runtimeState?.phase === 'loading'} aria-label={title} className="mcp-app-preview">
+      <section aria-busy={runtimeState?.phase === 'loading' || runtimeState?.phase === 'closing'} aria-label={title} className="mcp-app-preview">
         <header className="mcp-app-preview__header"><h2>{title}</h2></header>
         {runtimeState?.phase === 'loading' ? <p role="status">Creating MCP App preview…</p> : null}
+        {runtimeState?.phase === 'closing' ? <p role="status">Closing MCP App preview…</p> : null}
         {runtimeState?.phase === 'error' || runtimeState?.phase === 'cleanup-failed' ? <p role="alert">{runtimeState.message}</p> : null}
         {fallback === undefined ? null : (
           <section aria-label="MCP App fallback" className="mcp-app-preview__fallback">
