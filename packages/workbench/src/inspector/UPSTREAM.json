@@ -531,7 +531,7 @@
     },
     {
       "path": "core/mcp/types.ts",
-      "sha256": "b8e68e59784b3372e8c9dede6cc3daa6f39ac982c851553a20305523c0c00abf",
+      "sha256": "8865170be96967328da27274f97c56a486224d37bec886f97b03198a4a6ba83a",
       "upstreamSha256": "b8e68e59784b3372e8c9dede6cc3daa6f39ac982c851553a20305523c0c00abf"
     }
   ],
@@ -544,6 +544,10 @@
     {
       "path": "patches/001-rstest-inspector-tabs-import.patch",
       "sha256": "eb679e8e02a5d89f631c99a9a6857be14a0a08fd5944cd0fa87e5dffbaf22574"
+    },
+    {
+      "path": "patches/002-remove-legacy-sse-mcp-types.patch",
+      "sha256": "39a8f6867ff90994fabeca26ee9a794f110a120ae776ac473dc8b7769953ead7"
     }
   ],
   "publicImports": [
