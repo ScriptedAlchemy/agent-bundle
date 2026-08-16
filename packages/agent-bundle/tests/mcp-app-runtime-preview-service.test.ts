@@ -61,13 +61,13 @@ const createSessionView = (
   execute: async (request) => {
     requests.push(request);
     const value: JsonValue = request.kind === 'list-tools'
-      ? { tools: [
+      ? [
         { _meta: { ui: { resourceUri: 'ui://weather/other.html', visibility: ['app'] } }, name: 'foreign-app' },
         { _meta: { ui: { resourceUri: 'ui://weather/forecast.html', visibility: ['model'] } }, name: 'model-only-app' },
         { _meta: { ui: { resourceUri: 'ui://weather/forecast.html', visibility: ['app'] } }, name: 'show-weather' },
-      ] }
+      ]
       : request.kind === 'list-resources'
-        ? { resources: [{ _meta: { ui: { resourceUri: 'ui://weather/forecast.html' } }, mimeType: 'text/html;profile=mcp-app', uri: 'ui://weather/forecast.html' }] }
+        ? [{ _meta: { ui: { resourceUri: 'ui://weather/forecast.html' } }, mimeType: 'text/html;profile=mcp-app', uri: 'ui://weather/forecast.html' }]
         : request.kind === 'read-resource'
           ? { contents: [{ _meta: { ui: options.permissions === undefined ? {} : { permissions: options.permissions } }, mimeType: 'text/html;profile=mcp-app', text: '<main>Weather</main>', uri: request.uri }] }
           : { content: [{ text: 'called', type: 'text' }] };

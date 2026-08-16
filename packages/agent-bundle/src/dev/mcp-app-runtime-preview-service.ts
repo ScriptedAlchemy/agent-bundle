@@ -232,6 +232,7 @@ const operation = (value: McpAppBoundOperationResult, kind: McpAppBindingOperati
 });
 
 const listItems = (value: McpAppJsonValue, key: 'tools' | 'resources'): readonly McpAppJsonValue[] => {
+  if (Array.isArray(value)) return value;
   if (!isRecord(value) || !Array.isArray(value[key])) throw new Error(`Runtime MCP ${key} response is invalid.`);
   return value[key] as readonly McpAppJsonValue[];
 };
