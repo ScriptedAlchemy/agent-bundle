@@ -75,6 +75,19 @@ const eventually = async (predicate: () => boolean, timeout = 300): Promise<void
   }
 };
 
+const settledWithin = async <Value>(
+  promise: Promise<Value>,
+  timeout = 50,
+): Promise<PromiseSettledResult<Value> | Readonly<{ readonly status: 'pending' }>> => Promise.race([
+  promise.then<PromiseSettledResult<Value>, PromiseSettledResult<Value>>(
+    (value) => ({ status: 'fulfilled', value }),
+    (reason: unknown) => ({ reason, status: 'rejected' }),
+  ),
+  new Promise<Readonly<{ readonly status: 'pending' }>>((resolve) => {
+    setTimeout(() => resolve({ status: 'pending' }), timeout);
+  }),
+]);
+
 const traceStream = (): {
   readonly close: () => void;
   readonly response: Response;
@@ -115,6 +128,14 @@ const fakeClient = (): McpSessionControllerClient & { readonly events: string[] 
     events,
     request: async () => ({ content: [{ text: 'Rain' }] }),
   };
+};
+
+const emptyRoutes: McpSessionControllerRoutes = {
+  catalog: async () => ({ prompts: [], resourceTemplates: [], resources: [], tools: [] }),
+  config: async () => ({ launch: { args: [], command: 'node', env: {}, kind: 'stdio' }, origin: 'artifact' }),
+  restart: async () => connection,
+  stream: async () => new Response(null),
+  trace: async () => ({ entries: [] }),
 };
 
 it('connects the exact artifact binding then atomically publishes catalog and config while trace stays independently live', async () => {
@@ -540,6 +561,95 @@ it('rejects command, path, and environment smuggling instead of widening the imm
   expect(controller.model).toMatchObject({ phase: 'idle' });
 });
 
+it('rejects accessor, symbol, inherited, and trapped bindings without constructing a transport', async () => {
+  let accessorReads = 0;
+  const accessorBinding: Record<string, unknown> = Object.create(Object.prototype, {
+    epochId: {
+      enumerable: true,
+      get: () => {
+        accessorReads += 1;
+        Object.assign(accessorBinding, { command: 'sh', env: { TOKEN: 'leak' } });
+        return binding.epochId;
+      },
+    },
+    serverName: { enumerable: true, get: () => binding.serverName },
+    target: { enumerable: true, get: () => binding.target },
+  }) as Record<string, unknown>;
+  const symbolBinding = Object.assign({ ...binding }, { [Symbol('command')]: 'sh' });
+  const inheritedBinding = Object.assign(Object.create({ command: 'sh', env: { TOKEN: 'leak' } }), binding);
+  const trappedBinding = new Proxy({ ...binding }, {
+    getOwnPropertyDescriptor: () => { throw new Error('descriptor trap'); },
+  });
+  let transportCalls = 0;
+  const controller = createMcpSessionController({
+    clientFactory: fakeClient,
+    routes: {
+      catalog: async () => ({ prompts: [], resourceTemplates: [], resources: [], tools: [] }),
+      config: async () => ({ launch: { args: [], command: 'node', env: {}, kind: 'stdio' }, origin: 'artifact' }),
+      restart: async () => connection,
+      stream: async () => new Response(null),
+      trace: async () => ({ entries: [] }),
+    },
+    transportFactory: () => {
+      transportCalls += 1;
+      return fakeTransport();
+    },
+  });
+
+  for (const invalid of [accessorBinding, symbolBinding, inheritedBinding, trappedBinding]) {
+    await expect(controller.open(invalid as typeof binding)).rejects.toThrow(
+      'MCP session binding must contain only epochId, target, and serverName.',
+    );
+  }
+
+  expect(accessorReads).toBe(0);
+  expect(transportCalls).toBe(0);
+  expect(controller.model.phase).toBe('idle');
+  expect(controller.model.binding).toBeUndefined();
+});
+
+it('creates one detached frozen binding snapshot before a proxy can smuggle command and environment', async () => {
+  const stream = traceStream();
+  const supplied = { ...binding } as Record<string, unknown>;
+  const descriptorReads: PropertyKey[] = [];
+  const smugglingBinding = new Proxy(supplied, {
+    getOwnPropertyDescriptor(target, key) {
+      descriptorReads.push(key);
+      const descriptor = Reflect.getOwnPropertyDescriptor(target, key);
+      if (key === 'epochId') {
+        Object.assign(target, { command: 'sh', env: { TOKEN: 'leak' }, epochId: 'epoch-mutated' });
+      }
+      return descriptor;
+    },
+  });
+  let receivedBinding: unknown;
+  const controller = createMcpSessionController({
+    clientFactory: fakeClient,
+    routes: {
+      catalog: async () => ({ prompts: [], resourceTemplates: [], resources: [], tools: [] }),
+      config: async () => ({ launch: { args: [], command: 'node', env: {}, kind: 'stdio' }, origin: 'artifact' }),
+      restart: async () => connection,
+      stream: async () => stream.response,
+      trace: async () => ({ entries: [] }),
+    },
+    transportFactory: (options) => {
+      receivedBinding = options.binding;
+      return fakeTransport();
+    },
+  });
+
+  await controller.open(smugglingBinding as typeof binding);
+
+  expect(descriptorReads).toEqual(['epochId', 'serverName', 'target']);
+  expect(receivedBinding).toEqual(binding);
+  expect(Object.isFrozen(receivedBinding)).toBe(true);
+  expect(controller.model.binding).toEqual(binding);
+  expect(controller.model.binding).not.toHaveProperty('command');
+  expect(controller.model.binding).not.toHaveProperty('env');
+  stream.close();
+  await controller.close();
+});
+
 it('turns a replay overflow into the inclusive replay-gap marker before applying later trace entries', async () => {
   const stream = traceStream();
   const controller = createMcpSessionController({
@@ -575,6 +685,390 @@ it('turns a replay overflow into the inclusive replay-gap marker before applying
 
   stream.close();
   await controller.close();
+});
+
+it('leaves the controller retryable when the transport factory throws before opening', async () => {
+  const factoryFailure = new Error('transport factory failed');
+  const stream = traceStream();
+  let clientFactories = 0;
+  let transportFactories = 0;
+  const controller = createMcpSessionController({
+    clientFactory: () => {
+      clientFactories += 1;
+      return fakeClient();
+    },
+    routes: {
+      catalog: async () => ({ prompts: [], resourceTemplates: [], resources: [], tools: [] }),
+      config: async () => ({ launch: { args: [], command: 'node', env: {}, kind: 'stdio' }, origin: 'artifact' }),
+      restart: async () => connection,
+      stream: async () => stream.response,
+      trace: async () => ({ entries: [] }),
+    },
+    transportFactory: () => {
+      transportFactories += 1;
+      if (transportFactories === 1) throw factoryFailure;
+      return fakeTransport();
+    },
+  });
+
+  await expect(controller.open(binding)).rejects.toThrow('transport factory failed');
+  expect({ clientFactories, transportFactories }).toEqual({ clientFactories: 0, transportFactories: 1 });
+  expect(controller.model.phase).toBe('idle');
+  expect(controller.model.binding).toBeUndefined();
+
+  await controller.open(binding);
+  expect({ clientFactories, transportFactories }).toEqual({ clientFactories: 1, transportFactories: 2 });
+
+  stream.close();
+  await controller.close();
+});
+
+it('reports a client factory failure cleanup once and remains retryable', async () => {
+  const cleanupFailure = new Error('transport cleanup failed');
+  const factoryFailure = new Error('client factory failed');
+  const stream = traceStream();
+  let clientFactories = 0;
+  let transportCloseCalls = 0;
+  let transportFactories = 0;
+  const controller = createMcpSessionController({
+    clientFactory: () => {
+      clientFactories += 1;
+      if (clientFactories === 1) throw factoryFailure;
+      return fakeClient();
+    },
+    routes: {
+      catalog: async () => ({ prompts: [], resourceTemplates: [], resources: [], tools: [] }),
+      config: async () => ({ launch: { args: [], command: 'node', env: {}, kind: 'stdio' }, origin: 'artifact' }),
+      restart: async () => connection,
+      stream: async () => stream.response,
+      trace: async () => ({ entries: [] }),
+    },
+    transportFactory: () => {
+      transportFactories += 1;
+      if (transportFactories > 1) return fakeTransport();
+      return {
+        ...fakeTransport(),
+        close: async () => {
+          transportCloseCalls += 1;
+          throw cleanupFailure;
+        },
+      };
+    },
+  });
+
+  const [firstOpening] = await Promise.allSettled([controller.open(binding)]);
+
+  expect(firstOpening).toMatchObject({
+    reason: {
+      failures: [{ reason: cleanupFailure, resource: 'transport' }],
+      message: 'MCP session controller failed: client factory failed. Cleanup failed for transport.',
+      name: 'McpSessionControllerFailureError',
+      primary: factoryFailure,
+    },
+    status: 'rejected',
+  });
+  expect(transportCloseCalls).toBe(1);
+  expect(controller.model.phase).toBe('idle');
+  expect(controller.model.binding).toBeUndefined();
+
+  await controller.open(binding);
+  expect({ clientFactories, transportFactories }).toEqual({ clientFactories: 2, transportFactories: 2 });
+
+  stream.close();
+  await controller.close();
+});
+
+const hostileConstructionReasons = [
+  {
+    createReason: () => ({ toString: () => { throw new Error('toString trap'); } }),
+    name: 'throwing toString',
+  },
+  {
+    createReason: () => ({ [Symbol.toPrimitive]: () => { throw new Error('primitive trap'); } }),
+    name: 'throwing Symbol.toPrimitive',
+  },
+  {
+    createReason: () => Object.defineProperty(new Error('hidden'), 'message', {
+      get: () => { throw new Error('message trap'); },
+    }),
+    name: 'throwing Error.message access',
+  },
+  {
+    createReason: () => new Proxy({}, {
+      getPrototypeOf: () => { throw new Error('prototype trap'); },
+    }),
+    name: 'throwing prototype access',
+  },
+] as const;
+
+for (const { createReason, name } of hostileConstructionReasons) {
+  it(`settles construction and preserves a ${name} reason without blocking close`, async () => {
+    const reason = createReason();
+    const controller = createMcpSessionController({
+      clientFactory: fakeClient,
+      routes: emptyRoutes,
+      transportFactory: () => { throw reason; },
+    });
+
+    const opening = controller.open(binding);
+    const closing = controller.close();
+    const [openingResult, closingResult] = await Promise.all([
+      settledWithin(opening),
+      settledWithin(closing),
+    ]);
+
+    expect(openingResult.status).toBe('rejected');
+    if (openingResult.status !== 'rejected') throw new Error('Expected construction to reject.');
+    const failure = openingResult.reason as Readonly<{
+      readonly failures: readonly unknown[];
+      readonly message: string;
+      readonly name: string;
+      readonly primary: unknown;
+    }>;
+    expect(failure.primary === reason).toBe(true);
+    expect(failure.failures).toEqual([]);
+    expect(failure.message).toBe('MCP session controller failed: Unknown error.');
+    expect(failure.name).toBe('McpSessionControllerFailureError');
+    expect(closingResult).toEqual({ status: 'fulfilled', value: undefined });
+    expect(controller.model.phase).toBe('closed');
+  });
+}
+
+const constructionCleanupReentries = [
+  { async: false, name: 'returns controller.close()' },
+  { async: true, name: 'awaits controller.close()' },
+] as const;
+
+for (const cleanup of constructionCleanupReentries) {
+  it(`does not deadlock when construction cleanup ${cleanup.name}`, async () => {
+    const factoryFailure = new Error('client factory failed');
+    let cleanupCalls = 0;
+    const controller = createMcpSessionController({
+      clientFactory: () => { throw factoryFailure; },
+      routes: emptyRoutes,
+      transportFactory: () => transport,
+    });
+    const transport = fakeTransport();
+    transport.close = cleanup.async
+      ? async () => {
+          cleanupCalls += 1;
+          await controller.close();
+        }
+      : () => {
+          cleanupCalls += 1;
+          return controller.close();
+        };
+
+    const openingResult = await settledWithin(controller.open(binding));
+
+    expect(openingResult).toMatchObject({
+      reason: {
+        failures: [],
+        name: 'McpSessionControllerFailureError',
+        primary: factoryFailure,
+      },
+      status: 'rejected',
+    });
+    expect(cleanupCalls).toBe(1);
+    expect(controller.model.phase).toBe('idle');
+    await expect(controller.close()).resolves.toBeUndefined();
+  });
+}
+
+it('keeps an external close pending behind gated construction cleanup and runs cleanup once', async () => {
+  const cleanupGate = deferred<void>();
+  const factoryFailure = new Error('client factory failed');
+  let cleanupCalls = 0;
+  const transport = fakeTransport();
+  transport.close = async () => {
+    cleanupCalls += 1;
+    await cleanupGate.promise;
+  };
+  const controller = createMcpSessionController({
+    clientFactory: () => { throw factoryFailure; },
+    routes: emptyRoutes,
+    transportFactory: () => transport,
+  });
+
+  const opening = controller.open(binding);
+  await eventually(() => cleanupCalls === 1);
+  const closing = controller.close();
+  expect(controller.close()).toBe(closing);
+  expect(await settledWithin(closing)).toEqual({ status: 'pending' });
+  expect(cleanupCalls).toBe(1);
+
+  cleanupGate.resolve();
+  await expect(opening).rejects.toMatchObject({ primary: factoryFailure });
+  await expect(closing).resolves.toBeUndefined();
+  expect(cleanupCalls).toBe(1);
+  expect(controller.model.phase).toBe('closed');
+});
+
+it('does not extend the construction drain across an in-flight client connection', async () => {
+  const connectGate = deferred<void>();
+  const events: string[] = [];
+  const transport = fakeTransport();
+  transport.close = async () => { events.push('transport.close'); };
+  const controller = createMcpSessionController({
+    clientFactory: () => ({
+      close: async () => { events.push('client.close'); },
+      connect: async () => {
+        events.push('client.connect');
+        await connectGate.promise;
+      },
+      request: async () => undefined,
+    }),
+    routes: emptyRoutes,
+    transportFactory: () => transport,
+  });
+
+  const opening = controller.open(binding);
+  await eventually(() => events.includes('client.connect'));
+  const closing = controller.close();
+
+  expect(await settledWithin(closing)).toEqual({ status: 'fulfilled', value: undefined });
+  expect(await settledWithin(opening)).toEqual({ status: 'pending' });
+  expect(events).toEqual(['client.connect', 'client.close', 'transport.close']);
+
+  connectGate.resolve();
+  await expect(opening).resolves.toMatchObject({ phase: 'closed' });
+});
+
+it('closes a transport returned after its factory closes admission without reviving the controller', async () => {
+  const closeGate = deferred<void>();
+  const events: string[] = [];
+  let clientFactories = 0;
+  let closeFromFactory: Promise<void> | undefined;
+  let closeSettled = false;
+  let openingSettled = false;
+  const transport: McpSessionControllerTransport = {
+    close: async () => {
+      events.push('transport.close');
+      await closeGate.promise;
+    },
+    send: async () => undefined,
+    session: Object.freeze({ binding, connection, id: 'session-weather', timeoutMs: 5_000 }),
+    start: async () => undefined,
+  };
+  const controller = createMcpSessionController({
+    clientFactory: () => {
+      clientFactories += 1;
+      return fakeClient();
+    },
+    routes: {
+      catalog: async () => ({ prompts: [], resourceTemplates: [], resources: [], tools: [] }),
+      config: async () => ({ launch: { args: [], command: 'node', env: {}, kind: 'stdio' }, origin: 'artifact' }),
+      restart: async () => connection,
+      stream: async () => new Response(null),
+      trace: async () => ({ entries: [] }),
+    },
+    transportFactory: () => {
+      closeFromFactory = controller.close();
+      return transport;
+    },
+  });
+
+  const openingPromise = controller.open(binding);
+  if (closeFromFactory === undefined) throw new Error('Expected transport factory to close the controller.');
+  void openingPromise.then(() => { openingSettled = true; }, () => { openingSettled = true; });
+  void closeFromFactory.then(() => { closeSettled = true; }, () => { closeSettled = true; });
+  await eventually(() => events.includes('transport.close'));
+
+  expect(closeSettled).toBe(false);
+  expect(openingSettled).toBe(false);
+
+  closeGate.resolve();
+  const [opening] = await Promise.allSettled([openingPromise]);
+  await expect(closeFromFactory).resolves.toBeUndefined();
+
+  expect(opening).toMatchObject({
+    reason: {
+      failures: [],
+      message: 'MCP session controller failed: MCP session controller was closed while opening.',
+      name: 'McpSessionControllerFailureError',
+    },
+    status: 'rejected',
+  });
+  expect(clientFactories).toBe(0);
+  expect(events).toEqual(['transport.close']);
+  expect(controller.close()).toBe(closeFromFactory);
+  expect(controller.model.phase).toBe('closed');
+  expect(controller.model.binding).toBeUndefined();
+  expect(controller.session).toBeUndefined();
+  await expect(controller.open(binding)).rejects.toThrow('MCP session controller is already open.');
+});
+
+it('retains local client and transport cleanup failures when a client factory closes admission', async () => {
+  const clientCloseFailure = new Error('client cleanup failed');
+  const clientCloseGate = deferred<void>();
+  const transportCloseFailure = new Error('transport cleanup failed');
+  const events: string[] = [];
+  let closeFromFactory: Promise<void> | undefined;
+  let closeSettled = false;
+  let openingSettled = false;
+  const transport: McpSessionControllerTransport = {
+    close: async () => {
+      events.push('transport.close');
+      throw transportCloseFailure;
+    },
+    send: async () => undefined,
+    session: Object.freeze({ binding, connection, id: 'session-weather', timeoutMs: 5_000 }),
+    start: async () => undefined,
+  };
+  const client: McpSessionControllerClient = {
+    close: async () => {
+      events.push('client.close');
+      await clientCloseGate.promise;
+      throw clientCloseFailure;
+    },
+    connect: async () => undefined,
+    request: async () => undefined,
+  };
+  const controller = createMcpSessionController({
+    clientFactory: () => {
+      closeFromFactory = controller.close();
+      return client;
+    },
+    routes: {
+      catalog: async () => ({ prompts: [], resourceTemplates: [], resources: [], tools: [] }),
+      config: async () => ({ launch: { args: [], command: 'node', env: {}, kind: 'stdio' }, origin: 'artifact' }),
+      restart: async () => connection,
+      stream: async () => new Response(null),
+      trace: async () => ({ entries: [] }),
+    },
+    transportFactory: () => transport,
+  });
+
+  const openingPromise = controller.open(binding);
+  if (closeFromFactory === undefined) throw new Error('Expected client factory to close the controller.');
+  void openingPromise.then(() => { openingSettled = true; }, () => { openingSettled = true; });
+  void closeFromFactory.then(() => { closeSettled = true; }, () => { closeSettled = true; });
+  await eventually(() => events.length === 2);
+
+  expect(closeSettled).toBe(false);
+  expect(openingSettled).toBe(false);
+
+  clientCloseGate.resolve();
+  const [opening] = await Promise.allSettled([openingPromise]);
+  await expect(closeFromFactory).resolves.toBeUndefined();
+
+  expect(opening).toMatchObject({
+    reason: {
+      failures: [
+        { reason: clientCloseFailure, resource: 'client' },
+        { reason: transportCloseFailure, resource: 'transport' },
+      ],
+      message: 'MCP session controller failed: MCP session controller was closed while opening. Cleanup failed for client, transport.',
+      name: 'McpSessionControllerFailureError',
+    },
+    status: 'rejected',
+  });
+  expect(events).toEqual(['client.close', 'transport.close']);
+  expect(controller.close()).toBe(closeFromFactory);
+  expect(controller.model.phase).toBe('closed');
+  expect(controller.model.binding).toBeUndefined();
+  expect(controller.session).toBeUndefined();
+  await expect(controller.open(binding)).rejects.toThrow('MCP session controller is already open.');
 });
 
 it('threads the admitted timeout through open while keeping it outside the immutable binding', async () => {
