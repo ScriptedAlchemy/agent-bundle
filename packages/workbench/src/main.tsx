@@ -51,13 +51,15 @@ const StateMark = ({ state }: { readonly state: string }) => (
   }</span>
 );
 
-type WorkbenchPage = 'inspector' | 'mcp' | 'overview' | 'skills';
+type WorkbenchPage = 'mcp' | 'overview' | 'skills';
+type McpPresentation = 'inspector' | 'playground';
 
 const pageForHash = (): WorkbenchPage => {
-  if (window.location.hash === '#mcp') return 'mcp';
-  if (window.location.hash === '#inspector') return 'inspector';
+  if (window.location.hash === '#mcp' || window.location.hash === '#inspector') return 'mcp';
   return window.location.hash === '#skills' ? 'skills' : 'overview';
 };
+
+const mcpPresentationForHash = (): McpPresentation => window.location.hash === '#inspector' ? 'inspector' : 'playground';
 
 const Navigation = ({ onNavigate, page }: {
   readonly onNavigate: (page: WorkbenchPage) => void;
@@ -90,15 +92,6 @@ const Navigation = ({ onNavigate, page }: {
   >
     <span aria-hidden="true" className="nav-glyph">⌁</span>
     MCP playground
-  </a>
-  <a
-    aria-current={page === 'inspector' ? 'page' : undefined}
-    className={page === 'inspector' ? 'nav-item nav-item--active' : 'nav-item'}
-    href="#inspector"
-    onClick={(event) => { event.preventDefault(); onNavigate('inspector'); }}
-  >
-    <span aria-hidden="true" className="nav-glyph">⌕</span>
-    Inspector
   </a>
 </aside>;
 
@@ -250,41 +243,75 @@ const WorkbenchScreen = ({ children, connectionError, onNavigate, page }: {
   </div>
 </div>;
 
-const McpScreen = ({ appPreviewClient, connectionError, controller, onNavigate, onResetSession, status }: {
+const McpScreen = ({ appPreviewClient, connectionError, controller, model, onNavigate, onResetSession, presentation, setPresentation, status }: {
   readonly appPreviewClient: McpAppClient;
   readonly connectionError?: string;
   readonly controller: ReturnType<typeof createMcpController>;
+  readonly model: ReturnType<typeof createMcpController>['model'];
   readonly onNavigate: (page: WorkbenchPage) => void;
   readonly onResetSession: () => void;
+  readonly presentation: McpPresentation;
+  readonly setPresentation: (presentation: McpPresentation) => void;
   readonly status: ProjectStatus;
 }) => {
   const activeEpoch = status.artifact.state === 'missing' ? undefined : status.artifact.activeEpoch;
   const targetOptions = mcpTargets.filter((target) => activeEpoch !== undefined && target in activeEpoch.targetDigests);
   return <WorkbenchScreen connectionError={connectionError} onNavigate={onNavigate} page="mcp">
     <div className="mcp-content">
-      <McpPage
-        appPreviewClient={appPreviewClient}
-        controller={controller}
-        epochOptions={activeEpoch === undefined ? [] : [activeEpoch.id]}
-        initialBinding={activeEpoch === undefined ? undefined : { epochId: activeEpoch.id }}
-        onDownloadConfig={downloadMcpConfig}
-        onResetSession={onResetSession}
-        targetOptions={targetOptions}
-      />
+      <div aria-label="MCP presentation" className="mcp-presentation-tabs" role="tablist">
+        <button
+          aria-controls="mcp-playground-presentation"
+          aria-selected={presentation === 'playground'}
+          className={presentation === 'playground' ? 'mcp-presentation-tab mcp-presentation-tab--active' : 'mcp-presentation-tab'}
+          id="mcp-playground-tab"
+          onClick={() => setPresentation('playground')}
+          role="tab"
+          type="button"
+        >
+          Playground
+        </button>
+        <button
+          aria-controls="mcp-inspector-presentation"
+          aria-selected={presentation === 'inspector'}
+          className={presentation === 'inspector' ? 'mcp-presentation-tab mcp-presentation-tab--active' : 'mcp-presentation-tab'}
+          id="mcp-inspector-tab"
+          onClick={() => setPresentation('inspector')}
+          role="tab"
+          type="button"
+        >
+          Inspector
+        </button>
+      </div>
+      <section
+        aria-labelledby="mcp-playground-tab"
+        hidden={presentation !== 'playground'}
+        id="mcp-playground-presentation"
+        inert={presentation !== 'playground'}
+        role="tabpanel"
+      >
+        <McpPage
+          appPreviewClient={appPreviewClient}
+          controller={controller}
+          epochOptions={activeEpoch === undefined ? [] : [activeEpoch.id]}
+          initialBinding={activeEpoch === undefined ? undefined : { epochId: activeEpoch.id }}
+          onDownloadConfig={downloadMcpConfig}
+          onResetSession={onResetSession}
+          targetOptions={targetOptions}
+        />
+      </section>
+      <section
+        aria-labelledby="mcp-inspector-tab"
+        className="inspector-content"
+        hidden={presentation !== 'inspector'}
+        id="mcp-inspector-presentation"
+        inert={presentation !== 'inspector'}
+        role="tabpanel"
+      >
+        <InspectorSessionAdapter controller={controller} model={model} />
+      </section>
     </div>
   </WorkbenchScreen>;
 };
-
-const InspectorScreen = ({ connectionError, controller, model, onNavigate }: {
-  readonly connectionError?: string;
-  readonly controller: ReturnType<typeof createMcpController>;
-  readonly model: ReturnType<typeof createMcpController>['model'];
-  readonly onNavigate: (page: WorkbenchPage) => void;
-}) => <WorkbenchScreen connectionError={connectionError} onNavigate={onNavigate} page="inspector">
-  <div className="inspector-content">
-    <InspectorSessionAdapter controller={controller} model={model} />
-  </div>
-</WorkbenchScreen>;
 
 const Workbench = () => {
   const client = useRef<ProjectClient>();
@@ -294,6 +321,7 @@ const Workbench = () => {
   const [error, setError] = useState<string>();
   const [mcpController, setMcpController] = useState(createMcpController);
   const [mcpModel, setMcpModel] = useState(() => mcpController.model);
+  const [mcpPresentation, setMcpPresentation] = useState(mcpPresentationForHash);
   const [page, setPage] = useState<WorkbenchPage>(pageForHash);
   const [status, setStatus] = useState<ProjectStatus>();
   const [changedFiles, setChangedFiles] = useState<readonly string[]>([]);
@@ -301,8 +329,9 @@ const Workbench = () => {
   if (mcpAppClient.current === undefined) mcpAppClient.current = new McpAppClient();
 
   const navigate = (next: WorkbenchPage): void => {
-    const hash = next === 'mcp' ? '#mcp' : next === 'inspector' ? '#inspector' : next === 'skills' ? '#skills' : '#overview';
+    const hash = next === 'mcp' ? '#mcp' : next === 'skills' ? '#skills' : '#overview';
     if (window.location.hash !== hash) window.history.pushState(undefined, '', hash);
+    if (next === 'mcp') setMcpPresentation('playground');
     setPage(next);
   };
 
@@ -341,7 +370,17 @@ const Workbench = () => {
   }, []);
 
   useEffect(() => {
-    const updatePage = () => setPage(pageForHash());
+    const updatePage = () => {
+      if (window.location.hash === '#inspector') {
+        window.history.replaceState(undefined, '', '#mcp');
+        setMcpPresentation('inspector');
+        setPage('mcp');
+        return;
+      }
+      setPage(pageForHash());
+      if (window.location.hash === '#mcp') setMcpPresentation('playground');
+    };
+    updatePage();
     window.addEventListener('hashchange', updatePage);
     return () => window.removeEventListener('hashchange', updatePage);
   }, []);
@@ -355,13 +394,13 @@ const Workbench = () => {
         appPreviewClient={mcpAppClient.current}
         connectionError={connectionError}
         controller={mcpController}
+        model={mcpModel}
         onNavigate={navigate}
         onResetSession={resetMcpSession}
+        presentation={mcpPresentation}
+        setPresentation={setMcpPresentation}
         status={status}
       />;
-    }
-    if (page === 'inspector') {
-      return <InspectorScreen connectionError={connectionError} controller={mcpController} model={mcpModel} onNavigate={navigate} />;
     }
     return page === 'skills'
       ? <SkillsScreen connectionError={connectionError} onNavigate={navigate} skillClient={skillClient.current} status={status} />

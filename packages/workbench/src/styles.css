@@ -26,7 +26,11 @@ button:focus-visible, a:focus-visible { outline: 3px solid #72a6ff; outline-offs
 .connection--error { color: #b31b23; }
 .connection--error > span { background: #c01d26; }
 .page-content { margin: 0 auto; max-width: 1320px; padding: 35px 34px 64px; }
-.mcp-content { background: #0d141e; min-height: calc(100vh - 78px); padding: 35px 34px 64px; }
+.mcp-content { background: #0d141e; min-height: calc(100vh - 78px); min-width: 0; padding: 35px 34px 64px; }
+.mcp-presentation-tabs { border-bottom: 1px solid #435268; display: flex; gap: 4px; margin: 0 auto 24px; max-width: 1320px; overflow-x: auto; width: 100%; }
+.mcp-presentation-tab { background: transparent; border: 0; border-bottom: 3px solid transparent; color: #c5d1df; cursor: pointer; flex: 0 0 auto; font-size: 14px; font-weight: 700; padding: 10px 15px; }
+.mcp-presentation-tab:hover { color: #fff; }
+.mcp-presentation-tab--active { border-bottom-color: #72a6ff; color: #fff; }
 .inspector-content { min-height: calc(100vh - 78px); min-width: 0; padding: 35px 34px 64px; }
 .page-heading { margin-bottom: 30px; }
 h1 { font-size: clamp(31px, 4vw, 40px); letter-spacing: -0.055em; line-height: 1.08; margin: 0; }
@@ -135,6 +139,8 @@ td { border-top: 1px solid #d9dee7; font-size: 14px; padding: 12px 10px; vertica
   .connection { font-size: 12px; }
   .page-content { padding: 27px 20px 45px; }
   .mcp-content { min-height: calc(100vh - 58px); padding: 27px 20px 45px; }
+  .mcp-presentation-tabs { margin-bottom: 18px; }
+  .mcp-presentation-tab { padding-inline: 12px; }
   .inspector-content { min-height: calc(100vh - 58px); padding: 27px 20px 45px; }
   .inspector-session-adapter > .mantine-Flex-root { flex-direction: column !important; height: auto !important; padding: 16px !important; }
   .inspector-session-adapter > .mantine-Flex-root > .mantine-Stack-root { flex: 0 1 auto !important; width: 100% !important; }
