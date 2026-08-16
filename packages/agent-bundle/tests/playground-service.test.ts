@@ -1,5 +1,5 @@
-import { readFileSync, renameSync, writeFileSync } from 'node:fs';
-import { appendFile, mkdtemp, mkdir, readdir, readFile, rename, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdirSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFile, mkdtemp, mkdir, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -10,8 +10,17 @@ import {
   PlaygroundServiceCloseError,
   PlaygroundSessionCloseError,
   type PlaygroundEventInput,
+  type PlaygroundJsonObject,
   type PlaygroundServiceOptions,
 } from '../src/services/playground-service.ts';
+
+interface SessionIndex {
+  readonly kind: 'agent-bundle-playground-session-index';
+  readonly objectId: string;
+  readonly projectId: string;
+  readonly schemaVersion: 2;
+  readonly sessionId: string;
+}
 
 const eventually = async (assertion: () => void, attempts = 100): Promise<void> => {
   let failure: unknown;
@@ -48,12 +57,43 @@ const event = (
   source: PlaygroundEventInput['source'],
   kind: string,
   summary: string,
-  raw: Record<string, unknown>,
+  raw: PlaygroundJsonObject,
 ): PlaygroundEventInput => Object.freeze({ kind, raw, source, summary });
 
 const snapshotDirectory = async (root: string): Promise<Readonly<Record<string, string>>> => Object.freeze(
   Object.fromEntries(await Promise.all((await readdir(root)).sort().map(async (name) => [name, await readFile(join(root, name), 'utf8')]))),
 );
+
+const indexPath = (storageRoot: string, sessionId: string): string =>
+  join(storageRoot, 'session-index', `${sessionId}.json`);
+
+const readIndex = async (storageRoot: string, sessionId: string): Promise<SessionIndex> =>
+  JSON.parse(await readFile(indexPath(storageRoot, sessionId), 'utf8')) as SessionIndex;
+
+const objectRoot = async (storageRoot: string, sessionId: string): Promise<string> =>
+  join(storageRoot, 'session-objects', (await readIndex(storageRoot, sessionId)).objectId);
+
+const writeLegacySession = async (
+  storageRoot: string,
+  sessionId: string,
+  input = sessionInput(),
+): Promise<string> => {
+  const root = join(storageRoot, 'sessions', sessionId);
+  await mkdir(root, { recursive: true });
+  await writeFile(join(root, 'events.jsonl'), '', 'utf8');
+  await writeFile(join(root, 'session.json'), `${JSON.stringify({
+    cleanupFailures: [],
+    createdAt: '2026-08-16T00:00:00.000Z',
+    identity: input,
+    kind: 'agent-bundle-playground-session',
+    outcome: { status: 'passed' },
+    projectId: 'project-1',
+    schemaVersion: 1,
+    sessionId,
+    state: 'finalized',
+  })}\n`, 'utf8');
+  return root;
+};
 
 const createFixture = async (input: Readonly<{
   readonly maxSubscriberQueue?: number;
@@ -174,7 +214,7 @@ it('persists a frozen, globally ordered whole-plugin timeline with raw replay re
     expect(JSON.stringify(draft)).not.toContain('events.jsonl');
     expect(JSON.stringify(draft)).not.toContain('sequence');
 
-    const persisted = await readFile(join(fixture.storageRoot, 'sessions', 'session-1', 'events.jsonl'), 'utf8');
+    const persisted = await readFile(join(await objectRoot(fixture.storageRoot, 'session-1'), 'events.jsonl'), 'utf8');
     expect(persisted.trim().split('\n').map((line) => JSON.parse(line).sequence)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
     expect(JSON.parse(persisted.trim().split('\n')[5]!).raw).toEqual({ tool: 'status' });
   } finally {
@@ -199,7 +239,7 @@ it('serializes concurrent writers into complete JSONL records and rejects invali
     const replay = await fixture.service.replay('concurrent');
     expect(replay.events).toHaveLength(48);
     expect(replay.cursor).toEqual({ afterSequence: 48 });
-    const persisted = await readFile(join(fixture.storageRoot, 'sessions', 'concurrent', 'events.jsonl'), 'utf8');
+    const persisted = await readFile(join(await objectRoot(fixture.storageRoot, 'concurrent'), 'events.jsonl'), 'utf8');
     expect(persisted.trim().split('\n')).toHaveLength(48);
     expect(persisted.trim().split('\n').every((line) => Number.isSafeInteger(JSON.parse(line).sequence))).toBe(true);
   } finally {
@@ -216,7 +256,7 @@ it('reopens completed sessions by cursor, recovers a trailing partial JSONL writ
     await fixture.service.finalize('reopen', { status: 'passed' });
     await fixture.service.close();
 
-    const eventPath = join(fixture.storageRoot, 'sessions', 'reopen', 'events.jsonl');
+    const eventPath = join(await objectRoot(fixture.storageRoot, 'reopen'), 'events.jsonl');
     await appendFile(eventPath, '{"sequence":3', 'utf8');
     const reopened = new PlaygroundService({
       projectId: 'project-1',
@@ -328,7 +368,7 @@ it('rejects arbitrary, symlinked, wrong-project, and unknown-session storage pat
     const owner = new PlaygroundService({ projectId: 'project-1', projectRoot, storageRoot });
     await owner.openSession({ ...sessionInput(), sessionId: 'owned' });
     const otherProject = new PlaygroundService({ projectId: 'project-2', projectRoot, storageRoot });
-    await expect(otherProject.reopen('owned')).rejects.toThrow('project');
+    await expect(otherProject.reopen('owned')).rejects.toMatchObject({ code: 'PLAYGROUND_STORE_CORRUPT' });
     await expect(owner.reopen('missing')).rejects.toThrow('not found');
     await expect(owner.openSession({ ...sessionInput(), sessionId: '../escape' })).rejects.toThrow('path-safe');
     await Promise.allSettled([outside.close(), symlinked.close(), owner.close(), otherProject.close()]);
@@ -391,8 +431,9 @@ it('fails closed on bounded provider credential values before identity, raw even
     await expect(fixture.service.append('credential-event', event('mcp', 'response', 'MCP responded.', { note: credential }))).rejects.toThrow('credential');
     await expect(fixture.service.finalize('credential-event', { response: credential, status: 'passed' })).rejects.toThrow('credential');
     await expect(fixture.service.promoteToDraftEval('credential-event', [])).rejects.toThrow('durable');
-    const sessionDocument = await readFile(join(fixture.storageRoot, 'sessions', 'credential-event', 'session.json'), 'utf8');
-    const eventDocument = await readFile(join(fixture.storageRoot, 'sessions', 'credential-event', 'events.jsonl'), 'utf8');
+    const credentialObject = await objectRoot(fixture.storageRoot, 'credential-event');
+    const sessionDocument = await readFile(join(credentialObject, 'session.json'), 'utf8');
+    const eventDocument = await readFile(join(credentialObject, 'events.jsonl'), 'utf8');
     expect(sessionDocument).not.toContain(credential);
     expect(eventDocument).not.toContain(credential);
   } finally {
@@ -429,7 +470,7 @@ it('rolls back a failed finalization metadata commit so promotion cannot observe
   const fixture = await createFixture();
   try {
     await fixture.service.openSession({ ...sessionInput(), sessionId: 'transactional' });
-    const metadataPath = join(fixture.storageRoot, 'sessions', 'transactional', 'session.json');
+    const metadataPath = join(await objectRoot(fixture.storageRoot, 'transactional'), 'session.json');
     const original = await readFile(metadataPath, 'utf8');
     await rm(metadataPath);
     await mkdir(metadataPath);
@@ -452,7 +493,7 @@ it('rejects a session metadata symlink during reopen without following its conte
     await fixture.service.openSession({ ...sessionInput(), sessionId: 'metadata-link' });
     await fixture.service.finalize('metadata-link', { status: 'passed' });
     await fixture.service.close();
-    const metadataPath = join(fixture.storageRoot, 'sessions', 'metadata-link', 'session.json');
+    const metadataPath = join(await objectRoot(fixture.storageRoot, 'metadata-link'), 'session.json');
     const outsidePath = join(fixture.projectRoot, 'outside-session.json');
     await writeFile(outsidePath, await readFile(metadataPath, 'utf8'), 'utf8');
     await rm(metadataPath);
@@ -521,8 +562,9 @@ it('rejects sensitive credential key names before metadata, event logs, outcomes
       id: 'durable-outcome',
       kind: 'durable-outcome',
     }]);
-    const sessionDocument = await readFile(join(fixture.storageRoot, 'sessions', 'credential-key', 'session.json'), 'utf8');
-    const eventDocument = await readFile(join(fixture.storageRoot, 'sessions', 'credential-key', 'events.jsonl'), 'utf8');
+    const credentialObject = await objectRoot(fixture.storageRoot, 'credential-key');
+    const sessionDocument = await readFile(join(credentialObject, 'session.json'), 'utf8');
+    const eventDocument = await readFile(join(credentialObject, 'events.jsonl'), 'utf8');
     expect(sessionDocument).not.toContain(credential);
     expect(eventDocument).not.toContain(credential);
     expect(JSON.stringify(draft)).not.toContain(credential);
@@ -540,8 +582,9 @@ it('rejects reopened metadata and event records that contain sensitive credentia
     await fixture.service.finalize('credential-corrupt', { status: 'passed' });
     await fixture.service.close();
 
-    const sessionPath = join(fixture.storageRoot, 'sessions', 'credential-corrupt', 'session.json');
-    const eventPath = join(fixture.storageRoot, 'sessions', 'credential-corrupt', 'events.jsonl');
+    const corruptObject = await objectRoot(fixture.storageRoot, 'credential-corrupt');
+    const sessionPath = join(corruptObject, 'session.json');
+    const eventPath = join(corruptObject, 'events.jsonl');
     const originalSession = await readFile(sessionPath, 'utf8');
     const originalEvents = await readFile(eventPath, 'utf8');
     const metadata = JSON.parse(originalSession) as { identity: { invocation: { intent: Record<string, unknown> } } };
@@ -651,7 +694,7 @@ it('rejects provider credential values in every identity and assertion scalar be
     expect(JSON.stringify(draft)).not.toContain(credential);
 
     await fixture.service.close();
-    const sessionPath = join(fixture.storageRoot, 'sessions', 'scalar-credentials', 'session.json');
+    const sessionPath = join(await objectRoot(fixture.storageRoot, 'scalar-credentials'), 'session.json');
     const persisted = JSON.parse(await readFile(sessionPath, 'utf8')) as { createdAt: string };
     persisted.createdAt = credential;
     await writeFile(sessionPath, `${JSON.stringify(persisted)}\n`, 'utf8');
@@ -725,214 +768,414 @@ it('linearizes cold open and reopen admissions with close so completed cleanup c
   }
 });
 
-it('preserves pre-existing finalized and open session roots when a conflicting open races close', async () => {
-  for (const state of ['finalized', 'open'] as const) {
-    const fixture = await createFixture();
-    const sessionId = `existing-${state}`;
-    const root = join(fixture.storageRoot, 'sessions', sessionId);
-    let contender: PlaygroundService | undefined;
-    try {
-      await fixture.service.openSession({ ...sessionInput(), sessionId });
-      if (state === 'finalized') await fixture.service.finalize(sessionId, { status: 'passed' });
-      const sessionBefore = await readFile(join(root, 'session.json'), 'utf8');
-      const ownerBefore = state === 'open' ? await readFile(join(root, '.owner.lock'), 'utf8') : undefined;
-
-      contender = new PlaygroundService({
-        projectId: 'project-1',
-        projectRoot: fixture.projectRoot,
-        storageRoot: fixture.storageRoot,
-      });
-      await contender.openSession({ ...sessionInput(), sessionId: `warm-${state}` });
-      let close: Promise<void> | undefined;
-      const conflicting = contender.openSession({
-        ...sessionInput(),
-        get sessionId() {
-          queueMicrotask(() => { close ??= contender!.close(); });
-          return sessionId;
-        },
-      });
-
-      await expect(conflicting).rejects.toMatchObject({ code: 'PLAYGROUND_SESSION_CONFLICT' });
-      await expect(close).resolves.toBeUndefined();
-      await expect(readFile(join(root, 'session.json'), 'utf8')).resolves.toBe(sessionBefore);
-      if (ownerBefore !== undefined) {
-        await expect(readFile(join(root, '.owner.lock'), 'utf8')).resolves.toBe(ownerBefore);
-      }
-    } finally {
-      await contender?.close().catch(() => undefined);
-      await fixture.close();
-    }
-  }
-});
-
-it('removes only its displaced admission root when a finalized or open session replaces its path during close', async () => {
-  for (const state of ['finalized', 'open'] as const) {
-    const fixture = await createFixture();
-    const victimId = `swap-victim-${state}`;
-    const targetId = `swap-target-${state}`;
-    const sessionsRoot = join(fixture.storageRoot, 'sessions');
-    const victimRoot = join(sessionsRoot, victimId);
-    const targetRoot = join(sessionsRoot, targetId);
-    const displacedRoot = join(sessionsRoot, `displaced-${state}`);
-    let contender: PlaygroundService | undefined;
-    let closing: Promise<void> | undefined;
-    try {
-      await fixture.service.openSession({ ...sessionInput(), sessionId: victimId });
-      if (state === 'finalized') await fixture.service.finalize(victimId, { status: 'passed' });
-      const victimBefore = await snapshotDirectory(victimRoot);
-      let swapped = false;
-      contender = new PlaygroundService({
-        now: () => {
-          if (!swapped) {
-            swapped = true;
-            renameSync(targetRoot, displacedRoot);
-            renameSync(victimRoot, targetRoot);
-            closing = contender!.close();
-          }
-          return new Date('2026-08-15T00:00:00.000Z');
-        },
-        projectId: 'project-1',
-        projectRoot: fixture.projectRoot,
-        storageRoot: fixture.storageRoot,
-      });
-
-      await expect(contender.openSession({ ...sessionInput(), sessionId: targetId })).rejects.toBeDefined();
-      await expect(closing).resolves.toBeUndefined();
-      await expect(snapshotDirectory(targetRoot)).resolves.toEqual(victimBefore);
-      await expect(readdir(displacedRoot)).rejects.toBeDefined();
-      await rename(targetRoot, victimRoot);
-    } finally {
-      await contender?.close().catch(() => undefined);
-      await fixture.close();
-    }
-  }
-});
-
-it('uses directory identity in addition to the owner token before deleting a displaced admission root', async () => {
+it('preserves legacy and v2 victims without any admission-directory move, deletion, or cleanup path', async () => {
   const fixture = await createFixture();
-  const victimId = 'same-token-victim';
-  const targetId = 'same-token-target';
-  const sessionsRoot = join(fixture.storageRoot, 'sessions');
-  const victimRoot = join(sessionsRoot, victimId);
-  const targetRoot = join(sessionsRoot, targetId);
-  const displacedRoot = join(sessionsRoot, 'same-token-displaced');
-  let contender: PlaygroundService | undefined;
-  let closing: Promise<void> | undefined;
+  const contender = new PlaygroundService({
+    projectId: 'project-1',
+    projectRoot: fixture.projectRoot,
+    storageRoot: fixture.storageRoot,
+  });
   try {
-    await fixture.service.openSession({ ...sessionInput(), sessionId: victimId });
-    let victimAfterImitation: Readonly<Record<string, string>> | undefined;
-    contender = new PlaygroundService({
-      now: () => {
-        renameSync(targetRoot, displacedRoot);
-        writeFileSync(join(victimRoot, '.owner.lock'), readFileSync(join(displacedRoot, '.owner.lock')));
-        victimAfterImitation = Object.freeze({
-          '.owner.lock': readFileSync(join(victimRoot, '.owner.lock'), 'utf8'),
-          'events.jsonl': readFileSync(join(victimRoot, 'events.jsonl'), 'utf8'),
-          'session.json': readFileSync(join(victimRoot, 'session.json'), 'utf8'),
-        });
-        renameSync(victimRoot, targetRoot);
-        closing = contender!.close();
-        return new Date('2026-08-15T00:00:00.000Z');
-      },
-      projectId: 'project-1',
-      projectRoot: fixture.projectRoot,
-      storageRoot: fixture.storageRoot,
-    });
+    await fixture.service.openSession({ ...sessionInput(), sessionId: 'v2-victim' });
+    await fixture.service.finalize('v2-victim', { status: 'passed' });
+    await fixture.service.openSession({ ...sessionInput(), sessionId: 'warmup' });
+    const legacyRoot = await writeLegacySession(fixture.storageRoot, 'legacy-victim');
+    const v2Root = await objectRoot(fixture.storageRoot, 'v2-victim');
+    const legacyBefore = await snapshotDirectory(legacyRoot);
+    const v2Before = await snapshotDirectory(v2Root);
+    const indexBefore = await readFile(indexPath(fixture.storageRoot, 'v2-victim'), 'utf8');
 
-    await expect(contender.openSession({ ...sessionInput(), sessionId: targetId })).rejects.toBeDefined();
-    await expect(closing).resolves.toBeUndefined();
-    await expect(snapshotDirectory(targetRoot)).resolves.toEqual(victimAfterImitation);
-    await expect(readdir(displacedRoot)).rejects.toBeDefined();
-    await rename(targetRoot, victimRoot);
+    await expect(contender.openSession({ ...sessionInput(), sessionId: 'legacy-victim' })).rejects.toMatchObject({ code: 'PLAYGROUND_SESSION_CONFLICT' });
+    await expect(contender.openSession({ ...sessionInput(), sessionId: 'v2-victim' })).rejects.toMatchObject({ code: 'PLAYGROUND_SESSION_CONFLICT' });
+
+    await expect(snapshotDirectory(legacyRoot)).resolves.toEqual(legacyBefore);
+    await expect(snapshotDirectory(v2Root)).resolves.toEqual(v2Before);
+    await expect(readFile(indexPath(fixture.storageRoot, 'v2-victim'), 'utf8')).resolves.toBe(indexBefore);
+    const sessionEntries = await readdir(join(fixture.storageRoot, 'sessions'));
+    expect(sessionEntries.some((name) => name.startsWith('.cleanup-'))).toBe(false);
   } finally {
-    await contender?.close().catch(() => undefined);
+    await contender.close().catch(() => undefined);
     await fixture.close();
   }
 });
 
-it('rolls back its owner token and displaced created root when substitution happens before ownership is established', async () => {
+it('leaves a path-swapped legacy victim untouched when close wins after v2 object creation and before publication', async () => {
   const fixture = await createFixture();
-  const victimId = 'pre-owner-victim';
-  const targetId = 'pre-owner-target';
-  const sessionsRoot = join(fixture.storageRoot, 'sessions');
-  const victimRoot = join(sessionsRoot, victimId);
-  const targetRoot = join(sessionsRoot, targetId);
-  const displacedRoot = join(sessionsRoot, 'pre-owner-displaced');
+  const victimId = 'path-swap-victim';
+  const targetId = 'path-swap-target';
   let contender: PlaygroundService | undefined;
+  let closing: Promise<void> | undefined;
   try {
-    await fixture.service.openSession({ ...sessionInput(), sessionId: victimId });
-    await fixture.service.finalize(victimId, { status: 'passed' });
-    await rm(join(victimRoot, '.owner.lock'));
+    await fixture.service.openSession({ ...sessionInput(), sessionId: 'warmup' });
+    const victimRoot = await writeLegacySession(fixture.storageRoot, victimId);
+    const targetRoot = join(fixture.storageRoot, 'sessions', targetId);
     const victimBefore = await snapshotDirectory(victimRoot);
+    let swapped = false;
     contender = new PlaygroundService({
-      projectId: 'project-1',
-      projectRoot: fixture.projectRoot,
-      storageRoot: fixture.storageRoot,
-    });
-    let scheduled = false;
-    const opening = contender.openSession({
-      ...sessionInput(),
-      get sessionId() {
-        if (!scheduled) {
-          scheduled = true;
-          queueMicrotask(() => {
-            renameSync(targetRoot, displacedRoot);
-            renameSync(victimRoot, targetRoot);
-          });
+      now: () => {
+        if (!swapped) {
+          swapped = true;
+          renameSync(victimRoot, targetRoot);
+          closing = contender!.close();
         }
-        return targetId;
-      },
-    });
-
-    await expect(opening).rejects.toMatchObject({ code: 'PLAYGROUND_SESSION_OWNED' });
-    await expect(snapshotDirectory(targetRoot)).resolves.toEqual(victimBefore);
-    await expect(readdir(displacedRoot)).rejects.toBeDefined();
-    await expect(contender.close()).resolves.toBeUndefined();
-    await rename(targetRoot, victimRoot);
-  } finally {
-    await contender?.close().catch(() => undefined);
-    await fixture.close();
-  }
-});
-
-it('aggregates an admission cleanup failure when its owned root is displaced beyond the sessions directory', async () => {
-  const fixture = await createFixture();
-  const victimId = 'cleanup-failure-victim';
-  const targetId = 'cleanup-failure-target';
-  const sessionsRoot = join(fixture.storageRoot, 'sessions');
-  const victimRoot = join(sessionsRoot, victimId);
-  const targetRoot = join(sessionsRoot, targetId);
-  const strandedRoot = join(fixture.storageRoot, 'stranded-admission');
-  let contender: PlaygroundService | undefined;
-  let closing: Promise<void> | undefined;
-  try {
-    await fixture.service.openSession({ ...sessionInput(), sessionId: victimId });
-    await fixture.service.finalize(victimId, { status: 'passed' });
-    const victimBefore = await snapshotDirectory(victimRoot);
-    contender = new PlaygroundService({
-      now: () => {
-        renameSync(targetRoot, strandedRoot);
-        renameSync(victimRoot, targetRoot);
-        closing = contender!.close();
-        return new Date('2026-08-15T00:00:00.000Z');
+        return new Date('2026-08-16T00:00:00.000Z');
       },
       projectId: 'project-1',
       projectRoot: fixture.projectRoot,
       storageRoot: fixture.storageRoot,
     });
 
-    const openingFailure = await contender.openSession({ ...sessionInput(), sessionId: targetId }).catch((error: unknown) => error);
-    expect(openingFailure).toBeInstanceOf(AggregateError);
-    expect((openingFailure as AggregateError).errors).toEqual(expect.arrayContaining([
-      expect.objectContaining({ sessionId: targetId }),
-    ]));
-    const closeFailure = await closing!.catch((error: unknown) => error);
-    expect(closeFailure).toBeInstanceOf(PlaygroundServiceCloseError);
-    expect(closeFailure).toMatchObject({ failures: [{ sessionId: targetId }] });
-    await expect(contender.close()).rejects.toBe(closeFailure);
+    await expect(contender.openSession({ ...sessionInput(), sessionId: targetId })).rejects.toMatchObject({ code: 'PLAYGROUND_SERVICE_CLOSED' });
+    await expect(closing).resolves.toBeUndefined();
     await expect(snapshotDirectory(targetRoot)).resolves.toEqual(victimBefore);
-    await expect(readFile(join(strandedRoot, '.owner.lock'), 'utf8')).resolves.toContain('token');
-    await rename(targetRoot, victimRoot);
+    expect((await readdir(join(fixture.storageRoot, 'sessions'))).some((name) => name.startsWith('.cleanup-'))).toBe(false);
+  } finally {
+    await contender?.close().catch(() => undefined);
+    await fixture.close();
+  }
+});
+
+it('reopens and exports strict v1 sessions only when no v2 index exists, and conflicts with both formats', async () => {
+  const fixture = await createFixture();
+  const contender = new PlaygroundService({
+    projectId: 'project-1',
+    projectRoot: fixture.projectRoot,
+    storageRoot: fixture.storageRoot,
+  });
+  try {
+    await fixture.service.openSession({ ...sessionInput(), sessionId: 'warmup' });
+    await writeLegacySession(fixture.storageRoot, 'legacy-reopen');
+    const reader = new PlaygroundService({
+      projectId: 'project-1',
+      projectRoot: fixture.projectRoot,
+      storageRoot: fixture.storageRoot,
+    });
+    try {
+      await expect(reader.reopen('legacy-reopen')).resolves.toMatchObject({ id: 'legacy-reopen', state: 'finalized' });
+      await expect(reader.replay('legacy-reopen')).resolves.toMatchObject({ events: [] });
+      await expect(reader.export('legacy-reopen')).resolves.toMatchObject({ session: { id: 'legacy-reopen' } });
+    } finally {
+      await reader.close().catch(() => undefined);
+    }
+    await expect(contender.openSession({ ...sessionInput(), sessionId: 'legacy-reopen' })).rejects.toMatchObject({ code: 'PLAYGROUND_SESSION_CONFLICT' });
+  } finally {
+    await contender.close().catch(() => undefined);
+    await fixture.close();
+  }
+});
+
+it('publishes one complete v2 session index for concurrent same-ID contenders and leaves the loser object unreachable', async () => {
+  const fixture = await createFixture();
+  const contender = new PlaygroundService({
+    projectId: 'project-1',
+    projectRoot: fixture.projectRoot,
+    storageRoot: fixture.storageRoot,
+  });
+  const sessionId = 'v2-concurrent';
+  try {
+    const results = await Promise.allSettled([
+      fixture.service.openSession({ ...sessionInput(), sessionId }),
+      contender.openSession({ ...sessionInput(), sessionId }),
+    ]);
+    const winner = results.find((result) => result.status === 'fulfilled');
+    const loser = results.find((result) => result.status === 'rejected');
+    expect(winner).toBeDefined();
+    expect(loser).toBeDefined();
+    if (loser?.status === 'rejected') {
+      expect(loser.reason).toMatchObject({ code: 'PLAYGROUND_SESSION_CONFLICT' });
+    }
+
+    const index = await readIndex(fixture.storageRoot, sessionId);
+    expect(index).toEqual({
+      kind: 'agent-bundle-playground-session-index',
+      objectId: expect.any(String),
+      projectId: 'project-1',
+      schemaVersion: 2,
+      sessionId,
+    });
+    const objects = await readdir(join(fixture.storageRoot, 'session-objects'));
+    expect(objects).toHaveLength(2);
+    expect(objects).toContain(index.objectId);
+    expect(objects.filter((objectId) => objectId !== index.objectId)).toHaveLength(1);
+
+    await fixture.service.close();
+    await contender.close();
+    const reader = new PlaygroundService({
+      projectId: 'project-1',
+      projectRoot: fixture.projectRoot,
+      storageRoot: fixture.storageRoot,
+    });
+    try {
+      await expect(reader.reopen(sessionId)).resolves.toMatchObject({ id: sessionId, state: 'closed' });
+    } finally {
+      await reader.close().catch(() => undefined);
+    }
+  } finally {
+    await contender.close().catch(() => undefined);
+    await fixture.close();
+  }
+});
+
+it('leaves a v2 object orphaned but unpublished when close wins before final index publication, then permits a retry', async () => {
+  const lifecycle: { closing?: Promise<void>; service?: PlaygroundService } = {};
+  const fixture = await createFixture({
+    now: () => {
+      lifecycle.closing ??= lifecycle.service!.close();
+      return new Date('2026-08-16T00:00:00.000Z');
+    },
+  });
+  lifecycle.service = fixture.service;
+  const sessionId = 'v2-close-before-publication';
+  try {
+    await expect(fixture.service.openSession({ ...sessionInput(), sessionId })).rejects.toMatchObject({ code: 'PLAYGROUND_SERVICE_CLOSED' });
+    await expect(lifecycle.closing).resolves.toBeUndefined();
+    expect(fixture.service.session(sessionId)).toBeUndefined();
+    await expect(readFile(indexPath(fixture.storageRoot, sessionId), 'utf8')).rejects.toBeDefined();
+    expect(await readdir(join(fixture.storageRoot, 'session-objects'))).toHaveLength(1);
+
+    const retry = new PlaygroundService({
+      projectId: 'project-1',
+      projectRoot: fixture.projectRoot,
+      storageRoot: fixture.storageRoot,
+    });
+    try {
+      await expect(retry.openSession({ ...sessionInput(), sessionId })).resolves.toMatchObject({ id: sessionId, state: 'open' });
+    } finally {
+      await retry.close().catch(() => undefined);
+    }
+  } finally {
+    await fixture.close();
+  }
+});
+
+it('rejects malformed or mismatched v2 indexes without falling back to a valid v1 session', async () => {
+  const fixture = await createFixture();
+  const sessionId = 'v2-index-fail-closed';
+  try {
+    await fixture.service.openSession({ ...sessionInput(), sessionId: 'warm-v2-index' });
+    await fixture.service.close();
+    await writeLegacySession(fixture.storageRoot, sessionId);
+    const cases = [
+      '{',
+      JSON.stringify({
+        kind: 'agent-bundle-playground-session-index',
+        objectId: 'missing-object',
+        projectId: 'other-project',
+        schemaVersion: 2,
+        sessionId,
+      }),
+      JSON.stringify({
+        kind: 'agent-bundle-playground-session-index',
+        objectId: 'missing-object',
+        projectId: 'project-1',
+        schemaVersion: 2,
+        sessionId: 'other-session',
+      }),
+    ];
+    for (const document of cases) {
+      await writeFile(indexPath(fixture.storageRoot, sessionId), `${document}\n`, 'utf8');
+      const reader = new PlaygroundService({
+        projectId: 'project-1',
+        projectRoot: fixture.projectRoot,
+        storageRoot: fixture.storageRoot,
+      });
+      try {
+        await expect(reader.reopen(sessionId)).rejects.toMatchObject({ code: 'PLAYGROUND_STORE_CORRUPT' });
+      } finally {
+        await reader.close().catch(() => undefined);
+      }
+    }
+    const outsideIndex = join(fixture.projectRoot, 'outside-index.json');
+    await rm(indexPath(fixture.storageRoot, sessionId));
+    await writeFile(outsideIndex, cases[1]!, 'utf8');
+    await symlink(outsideIndex, indexPath(fixture.storageRoot, sessionId), 'file');
+    const symlinked = new PlaygroundService({
+      projectId: 'project-1',
+      projectRoot: fixture.projectRoot,
+      storageRoot: fixture.storageRoot,
+    });
+    try {
+      await expect(symlinked.reopen(sessionId)).rejects.toMatchObject({ code: 'PLAYGROUND_STORE_CORRUPT' });
+    } finally {
+      await symlinked.close().catch(() => undefined);
+      await rm(indexPath(fixture.storageRoot, sessionId));
+    }
+
+    const objectSource = new PlaygroundService({
+      projectId: 'project-1',
+      projectRoot: fixture.projectRoot,
+      storageRoot: fixture.storageRoot,
+    });
+    await objectSource.openSession({ ...sessionInput(), sessionId: 'index-object-source' });
+    await objectSource.finalize('index-object-source', { status: 'passed' });
+    await objectSource.close();
+    const sourceIndex = await readIndex(fixture.storageRoot, 'index-object-source');
+    await writeFile(indexPath(fixture.storageRoot, sessionId), `${JSON.stringify({
+      ...sourceIndex,
+      sessionId,
+    })}\n`, 'utf8');
+    const objectMismatch = new PlaygroundService({
+      projectId: 'project-1',
+      projectRoot: fixture.projectRoot,
+      storageRoot: fixture.storageRoot,
+    });
+    try {
+      await expect(objectMismatch.reopen(sessionId)).rejects.toMatchObject({ code: 'PLAYGROUND_STORE_CORRUPT' });
+    } finally {
+      await objectMismatch.close().catch(() => undefined);
+    }
+    await rm(indexPath(fixture.storageRoot, sessionId));
+    const fallback = new PlaygroundService({
+      projectId: 'project-1',
+      projectRoot: fixture.projectRoot,
+      storageRoot: fixture.storageRoot,
+    });
+    try {
+      await expect(fallback.reopen(sessionId)).resolves.toMatchObject({ id: sessionId, state: 'finalized' });
+      await expect(fallback.export(sessionId)).resolves.toMatchObject({ session: { id: sessionId } });
+    } finally {
+      await fallback.close().catch(() => undefined);
+    }
+  } finally {
+    await fixture.close();
+  }
+});
+
+it('fails a v2 index that references no object without falling back to a legacy session', async () => {
+  const fixture = await createFixture();
+  const sessionId = 'v2-missing-object';
+  try {
+    await fixture.service.openSession({ ...sessionInput(), sessionId: 'warm-v2-object' });
+    await writeLegacySession(fixture.storageRoot, sessionId);
+    await writeFile(indexPath(fixture.storageRoot, sessionId), `${JSON.stringify({
+      kind: 'agent-bundle-playground-session-index',
+      objectId: 'missing-object',
+      projectId: 'project-1',
+      schemaVersion: 2,
+      sessionId,
+    })}\n`, 'utf8');
+    const reader = new PlaygroundService({
+      projectId: 'project-1',
+      projectRoot: fixture.projectRoot,
+      storageRoot: fixture.storageRoot,
+    });
+    try {
+      await expect(reader.reopen(sessionId)).rejects.toMatchObject({ code: 'PLAYGROUND_STORE_CORRUPT' });
+    } finally {
+      await reader.close().catch(() => undefined);
+    }
+  } finally {
+    await fixture.close();
+  }
+});
+
+it('retains unindexed objects and pending indexes across startup while readers observe only absent or complete final indexes', async () => {
+  const fixture = await createFixture();
+  const sessionId = 'v2-reader';
+  try {
+    await fixture.service.openSession({ ...sessionInput(), sessionId: 'warm-orphans' });
+    const orphanRoot = join(fixture.storageRoot, 'session-objects', 'unindexed-orphan');
+    const pendingPath = join(fixture.storageRoot, 'session-index', '.pending', 'abandoned.json');
+    await mkdir(orphanRoot);
+    await writeFile(join(orphanRoot, 'sentinel'), 'orphan\n', 'utf8');
+    await writeFile(pendingPath, '{"pending":true}\n', 'utf8');
+
+    const writer = new PlaygroundService({
+      projectId: 'project-1',
+      projectRoot: fixture.projectRoot,
+      storageRoot: fixture.storageRoot,
+    });
+    const observed: SessionIndex[] = [];
+    let writerDone = false;
+    const publishing = writer.openSession({ ...sessionInput(), sessionId }).finally(() => { writerDone = true; });
+    while (!writerDone) {
+      try {
+        observed.push(await readIndex(fixture.storageRoot, sessionId));
+      } catch (error) {
+        expect((error as NodeJS.ErrnoException).code).toBe('ENOENT');
+      }
+      await Promise.resolve();
+    }
+    await publishing;
+    observed.push(await readIndex(fixture.storageRoot, sessionId));
+    expect(observed.length).toBeGreaterThan(0);
+    for (const index of observed) {
+      expect(index).toEqual({
+        kind: 'agent-bundle-playground-session-index',
+        objectId: expect.any(String),
+        projectId: 'project-1',
+        schemaVersion: 2,
+        sessionId,
+      });
+    }
+    await expect(readFile(join(orphanRoot, 'sentinel'), 'utf8')).resolves.toBe('orphan\n');
+    await expect(readFile(pendingPath, 'utf8')).resolves.toBe('{"pending":true}\n');
+    await writer.close();
+  } finally {
+    await fixture.close();
+  }
+});
+
+it('leaves a failed pre-publication object orphaned without changing a legacy victim', async () => {
+  const fixture = await createFixture();
+  const targetId = 'blocked-pending-write';
+  try {
+    await fixture.service.openSession({ ...sessionInput(), sessionId: 'warm-pending-write' });
+    const legacyRoot = await writeLegacySession(fixture.storageRoot, 'pending-write-victim');
+    const victimBefore = await snapshotDirectory(legacyRoot);
+    const pendingRoot = join(fixture.storageRoot, 'session-index', '.pending');
+    const blocked = new PlaygroundService({
+      now: () => {
+        rmSync(pendingRoot, { force: true, recursive: true });
+        writeFileSync(pendingRoot, 'blocked\n', 'utf8');
+        return new Date('2026-08-16T00:00:00.000Z');
+      },
+      projectId: 'project-1',
+      projectRoot: fixture.projectRoot,
+      storageRoot: fixture.storageRoot,
+    });
+    try {
+      await expect(blocked.openSession({ ...sessionInput(), sessionId: targetId })).rejects.toBeDefined();
+      await expect(readFile(indexPath(fixture.storageRoot, targetId), 'utf8')).rejects.toBeDefined();
+      expect((await readdir(join(fixture.storageRoot, 'session-objects'))).length).toBeGreaterThan(1);
+      await expect(snapshotDirectory(legacyRoot)).resolves.toEqual(victimBefore);
+    } finally {
+      await blocked.close().catch(() => undefined);
+    }
+  } finally {
+    await fixture.close();
+  }
+});
+
+it('rejects a replaced v2 object before it can write or publish an unrelated victim', async () => {
+  const fixture = await createFixture();
+  const sessionId = 'replaced-v2-object';
+  const objectsRoot = join(fixture.storageRoot, 'session-objects');
+  const displacedRoot = join(fixture.storageRoot, 'displaced-owned-object');
+  let contender: PlaygroundService | undefined;
+  try {
+    let replaced = false;
+    contender = new PlaygroundService({
+      now: () => {
+        if (!replaced) {
+          replaced = true;
+          const objectId = readdirSync(objectsRoot)[0]!;
+          const root = join(objectsRoot, objectId);
+          renameSync(root, displacedRoot);
+          mkdirSync(root);
+          writeFileSync(join(root, 'unrelated'), 'unchanged\n', 'utf8');
+        }
+        return new Date('2026-08-16T00:00:00.000Z');
+      },
+      projectId: 'project-1',
+      projectRoot: fixture.projectRoot,
+      storageRoot: fixture.storageRoot,
+    });
+
+    await expect(contender.openSession({ ...sessionInput(), sessionId })).rejects.toMatchObject({ code: 'PLAYGROUND_SESSION_OWNED' });
+    await expect(readFile(join(objectsRoot, readdirSync(objectsRoot)[0]!, 'unrelated'), 'utf8')).resolves.toBe('unchanged\n');
+    await expect(readFile(indexPath(fixture.storageRoot, sessionId), 'utf8')).rejects.toBeDefined();
+    await expect(readFile(join(displacedRoot, '.owner.lock'), 'utf8')).resolves.toContain('token');
   } finally {
     await contender?.close().catch(() => undefined);
     await fixture.close();
