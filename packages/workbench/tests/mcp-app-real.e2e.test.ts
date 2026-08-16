@@ -596,16 +596,22 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
     });
 
     const operationPath = `/api/runtime/apps/${encodeURIComponent(created.preview.binding.id)}/operations`;
-    await expect.poll(() => runtimeAppRequests.filter((entry) => entry.method === 'POST' && entry.path === operationPath), { timeout: 15_000 }).toHaveLength(1);
-    const operation = runtimeAppRequests.find((entry) => entry.method === 'POST' && entry.path === operationPath);
+    const operationRequests = (kind: string): readonly RuntimeAppRouteRequest[] => runtimeAppRequests.filter((entry) =>
+      entry.method === 'POST' && entry.path === operationPath && entry.body !== null && typeof entry.body === 'object' &&
+      (entry.body as Readonly<{ readonly kind?: unknown }>).kind === kind);
+    const operationResponses = (kind: string): readonly RuntimeAppRouteResponse[] => runtimeAppResponses.filter((entry) =>
+      entry.method === 'POST' && entry.path === operationPath && entry.body !== null && typeof entry.body === 'object' &&
+      (entry.body as Readonly<{ readonly kind?: unknown }>).kind === kind);
+    await expect.poll(() => operationRequests('tools/call'), { timeout: 15_000 }).toHaveLength(1);
+    const operation = operationRequests('tools/call')[0];
     expect(operation?.body).toEqual({
       arguments: { limit: 10 },
       consentId: grant.authorizationId,
       kind: 'tools/call',
       name: 'render_edit_timeline',
     });
-    await expect.poll(() => runtimeAppResponses.find((entry) => entry.method === 'POST' && entry.path === operationPath), { timeout: 15_000 }).toBeDefined();
-    const operated = runtimeAppResponses.find((entry) => entry.method === 'POST' && entry.path === operationPath);
+    await expect.poll(() => operationResponses('tools/call')).toHaveLength(1);
+    const operated = operationResponses('tools/call')[0];
     const operationResult = (operated?.response as Readonly<{ readonly result?: unknown }> | undefined)?.result;
     expect(operationResult).toEqual({
       operationId: expect.any(String),
@@ -629,6 +635,56 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
     expect(refreshResult?.message).toEqual({ jsonrpc: '2.0', id: 1, result: (operationResult as Readonly<{ readonly value: unknown }>).value });
     await expect(appFrame.getByText('State version 0')).toBeVisible();
     await expect(appFrame.getByRole('status')).toHaveText('');
+
+    const resourceUri = 'ui://rsc-agent-runtime/edit-timeline-v1.html';
+    const resourceRequestId = 'runtime-resource-read-proof';
+    await appFrame.evaluate(({ id, uri }) => {
+      window.parent.postMessage({ id, jsonrpc: '2.0', method: 'resources/read', params: { uri } }, '*');
+    }, { id: resourceRequestId, uri: resourceUri });
+    await expect.poll(() => operationRequests('resources/read'), { timeout: 15_000 }).toHaveLength(1);
+    const resourceOperation = operationRequests('resources/read')[0];
+    expect(resourceOperation?.body).toEqual({ kind: 'resources/read', uri: resourceUri });
+    await expect.poll(() => operationResponses('resources/read'), { timeout: 15_000 }).toHaveLength(1);
+    const resourceOperationResult = (operationResponses('resources/read')[0]?.response as Readonly<{ readonly result?: unknown }> | undefined)?.result;
+    expect(resourceOperationResult).toMatchObject({
+      operationId: expect.any(String),
+      sessionId: created.preview.binding.sessionId,
+      sessionRevision: created.preview.binding.sessionRevision,
+      value: {
+        contents: [{
+          mimeType: 'text/html;profile=mcp-app',
+          text: expect.stringMatching(/^<!doctype html>/iu),
+          uri: resourceUri,
+        }],
+      },
+      vector: created.preview.binding.runVector,
+    });
+    const resourceValue = (resourceOperationResult as Readonly<{ readonly value?: unknown }> | undefined)?.value;
+    if (resourceValue === null || typeof resourceValue !== 'object') throw new Error('Runtime App resource operation omitted its result value.');
+    const resourceContents = (resourceValue as Readonly<{ readonly contents?: unknown }>).contents;
+    if (!Array.isArray(resourceContents) || resourceContents.length !== 1 || resourceContents[0] === null || typeof resourceContents[0] !== 'object') {
+      throw new Error('Runtime App resource operation omitted its canonical resource content.');
+    }
+    const resourceContent = resourceContents[0] as Readonly<{ readonly text?: unknown }>;
+    if (typeof resourceContent?.text !== 'string') throw new Error('Runtime App resource operation omitted its canonical HTML.');
+    expect(resourceContent.text).not.toContain(foregroundToken);
+    const resourceRequest = messageFor(fixture.url, frameOrigin, (message) => message.id === resourceRequestId && message.method === 'resources/read');
+    expect(resourceRequest?.message).toEqual({
+      id: resourceRequestId,
+      jsonrpc: '2.0',
+      method: 'resources/read',
+      params: { uri: resourceUri },
+    });
+    await expect.poll(() => messageFor(frameOrigin, fixture.url, (message) => message.id === resourceRequestId && Object.hasOwn(message, 'result')), { timeout: 15_000 }).toBeDefined();
+    const resourceResponse = messageFor(frameOrigin, fixture.url, (message) => message.id === resourceRequestId && Object.hasOwn(message, 'result'));
+    expect(resourceResponse?.message).toEqual({
+      id: resourceRequestId,
+      jsonrpc: '2.0',
+      result: (resourceOperationResult as Readonly<{ readonly value: unknown }>).value,
+    });
+    expect(artifactMcpSessionRequests).toEqual([]);
+    expect(runtimeMcpSessionRequests).toEqual([]);
+    expect(projectEventStreams).toEqual(['GET /api/project/events']);
 
     const sourceFrameHref = appFrame.url();
     const sourceBindingId = created.preview.binding.id;
