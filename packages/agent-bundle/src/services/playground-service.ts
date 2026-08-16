@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { lstatSync, mkdirSync } from 'node:fs';
-import { appendFile, lstat, mkdir, open, readdir, readFile, realpath, rename, rm, unlink, writeFile } from 'node:fs/promises';
+import { linkSync, lstatSync, mkdirSync } from 'node:fs';
+import { appendFile, lstat, mkdir, open, readFile, realpath, rename, unlink } from 'node:fs/promises';
 import { basename, isAbsolute, join, relative, resolve } from 'node:path';
 
 export type PlaygroundJsonPrimitive = boolean | null | number | string;
@@ -8,7 +8,7 @@ export type PlaygroundJsonArray = readonly PlaygroundJsonValue[];
 export interface PlaygroundJsonObject {
   readonly [key: string]: PlaygroundJsonValue;
 }
-export type PlaygroundJsonValue = PlaygroundJsonArray | PlaygroundJsonObject | PlaygroundJsonPrimitive;
+export type PlaygroundJsonValue = PlaygroundJsonPrimitive | PlaygroundJsonArray | PlaygroundJsonObject;
 
 export type PlaygroundTraceSource =
   | 'build'
@@ -208,7 +208,6 @@ interface SubscriptionRecord {
 }
 
 interface SessionRecord {
-  readonly admissionRootIdentity: DirectoryIdentity | undefined;
   readonly cleanupFailures: PlaygroundCleanupFailure[];
   readonly createdAt: string;
   readonly events: PlaygroundTraceEvent[];
@@ -217,22 +216,42 @@ interface SessionRecord {
   nextSequence: number;
   outcome: PlaygroundDurableOutcome | undefined;
   readonly root: string;
+  readonly storage: 'v1' | 'v2';
+  readonly storageObjectId: string | undefined;
   state: PlaygroundSession['state'];
   readonly subscribers: Set<SubscriptionRecord>;
   tail: Promise<void>;
   ownerToken: string | undefined;
 }
 
-interface PersistedSession {
+interface PersistedSessionBase {
   readonly cleanupFailures: readonly PlaygroundCleanupFailure[];
   readonly createdAt: string;
   readonly identity: PlaygroundSessionIdentity;
   readonly kind: 'agent-bundle-playground-session';
   readonly outcome?: PlaygroundDurableOutcome;
   readonly projectId: string;
-  readonly schemaVersion: 1;
   readonly sessionId: string;
   readonly state: PlaygroundSession['state'];
+}
+
+interface PersistedV1Session extends PersistedSessionBase {
+  readonly schemaVersion: 1;
+}
+
+interface PersistedV2Session extends PersistedSessionBase {
+  readonly schemaVersion: 2;
+  readonly storageObjectId: string;
+}
+
+type PersistedSession = PersistedV1Session | PersistedV2Session;
+
+interface PersistedSessionIndex {
+  readonly kind: 'agent-bundle-playground-session-index';
+  readonly objectId: string;
+  readonly projectId: string;
+  readonly schemaVersion: 2;
+  readonly sessionId: string;
 }
 
 interface OwnerLock {
@@ -241,17 +260,32 @@ interface OwnerLock {
   readonly version: 1;
 }
 
-interface DirectoryIdentity {
-  readonly device: number;
-  readonly inode: number;
-}
-
-const schemaVersion = 1 as const;
+const draftSchemaVersion = 1 as const;
+const legacySessionSchemaVersion = 1 as const;
+const objectSessionSchemaVersion = 2 as const;
 const sessionDirectoryName = 'sessions';
+const objectDirectoryName = 'session-objects';
+const indexDirectoryName = 'session-index';
+const pendingIndexDirectoryName = '.pending';
 const sessionDocumentName = 'session.json';
 const eventDocumentName = 'events.jsonl';
 const ownerLockName = '.owner.lock';
 const pathSegment = /^[a-z0-9][a-z0-9._-]*$/iu;
+const traceSources: ReadonlySet<string> = new Set<PlaygroundTraceSource>([
+  'build',
+  'diagnostics',
+  'hook',
+  'host-preflight',
+  'mcp',
+  'project',
+  'response',
+  'script',
+  'skill-evidence',
+  'workspace-change',
+]);
+
+const isTraceSource = (value: unknown): value is PlaygroundTraceSource =>
+  typeof value === 'string' && traceSources.has(value);
 const providerCredentialPatterns = Object.freeze([
   /\bsk-(?:proj-|ant-|live-)?[a-z0-9_-]{16,}\b/iu,
   /\b(?:gh[pousr]_[a-z0-9]{20,}|github_pat_[a-z0-9_]{20,}|xox[baprs]-[a-z0-9-]{16,}|akia[a-z0-9]{16})\b/iu,
@@ -470,7 +504,6 @@ const normalizeAssertion = (value: PlaygroundSelectedAssertion): PlaygroundSelec
 };
 
 export class PlaygroundService {
-  readonly #admissionFailures: PlaygroundServiceCloseFailure[] = [];
   readonly #admissions = new Set<Promise<void>>();
   readonly #maxSubscriberQueue: number;
   readonly #now: () => Date;
@@ -481,6 +514,9 @@ export class PlaygroundService {
   #closePromise: Promise<void> | undefined;
   #closing = false;
   #ready: Promise<void> | undefined;
+  #resolvedIndexRoot: string | undefined;
+  #resolvedObjectRoot: string | undefined;
+  #resolvedPendingIndexRoot: string | undefined;
   #resolvedSessionsRoot: string | undefined;
 
   constructor(options: PlaygroundServiceOptions) {
@@ -507,82 +543,44 @@ export class PlaygroundService {
       if (this.#sessions.has(id)) {
         throw serviceError('PLAYGROUND_SESSION_CONFLICT', `Playground session ${JSON.stringify(id)} already exists.`);
       }
-      const root = this.#sessionRoot(id);
-      let createdRoot = false;
-      let createdRootIdentity: DirectoryIdentity | undefined;
-      let provisionalOwnerToken: string | undefined;
-      let record: SessionRecord | undefined;
-      try {
-        try {
-          // Do not yield between creating the directory and recording its filesystem identity.
-          mkdirSync(root);
-          createdRoot = true;
-          const createdStat = lstatSync(root);
-          if (!createdStat.isDirectory() || createdStat.isSymbolicLink()) {
-            throw serviceError('PLAYGROUND_ROOT_INVALID', `Playground session ${JSON.stringify(id)} must be a real contained directory.`);
-          }
-          createdRootIdentity = Object.freeze({ device: createdStat.dev, inode: createdStat.ino });
-        } catch (error) {
-          if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'EEXIST') {
-            throw serviceError('PLAYGROUND_SESSION_CONFLICT', `Playground session ${JSON.stringify(id)} already exists.`);
-          }
-          throw error;
-        }
-        await this.#assertSessionDirectory(root, id);
-        this.#assertAvailable();
-        provisionalOwnerToken = await this.#acquireOwner(root, id);
-        const admissionRootIdentity = await this.#ownedDirectoryIdentity(root, id, createdRootIdentity, provisionalOwnerToken);
-        record = {
-          admissionRootIdentity,
-          cleanupFailures: [],
-          createdAt: this.#timestamp(),
-          events: [],
-          id,
-          identity,
-          nextSequence: 1,
-          outcome: undefined,
-          root,
-          state: 'open',
-          subscribers: new Set(),
-          tail: Promise.resolve(),
-          ownerToken: provisionalOwnerToken,
-        };
-        provisionalOwnerToken = undefined;
-        await writeFile(join(root, eventDocumentName), '', { encoding: 'utf8', flag: 'wx' });
-        await this.#persistSession(record);
-        this.#assertAvailable();
-        this.#sessions.set(id, record);
-        return snapshotSession(record);
-      } catch (error) {
-        let cleanupError: PlaygroundSessionCloseError | undefined;
-        try {
-          if (record !== undefined) await this.#discardUnadmittedSession(record);
-          else if (createdRoot) {
-            if (createdRootIdentity === undefined) {
-              throw new Error('Created session directory identity was not recorded.', { cause: error });
-            }
-            const settled = await Promise.allSettled([
-              ...(provisionalOwnerToken === undefined ? [] : [this.#releaseOwner(root, provisionalOwnerToken)]),
-              this.#removeCreatedSessionRoot(id, createdRootIdentity),
-            ]);
-            const failures = settled.flatMap((result) => result.status === 'rejected' ? [result.reason] : []);
-            if (failures.length > 0) {
-              throw new AggregateError(failures, 'Playground admission rollback failed.', { cause: error });
-            }
-          }
-        } catch (failure) {
-          cleanupError = this.#admissionCleanupError(id, failure);
-          this.#admissionFailures.push(Object.freeze({ error: cleanupError, sessionId: id }));
-        }
-        if (cleanupError !== undefined) {
-          throw new AggregateError(
-            [error, cleanupError],
-            `Playground session ${JSON.stringify(id)} admission and cleanup both failed.`,
-            { cause: error },
-          );
-        }
-        throw error;
+      const storageObjectId = safeSessionId(randomUUID());
+      const root = this.#objectRoot(storageObjectId);
+      mkdirSync(root);
+      const stat = lstatSync(root);
+      if (!stat.isDirectory() || stat.isSymbolicLink()) {
+        throw serviceError('PLAYGROUND_ROOT_INVALID', 'Playground session object must be a real contained directory.');
       }
+      await this.#assertObjectDirectory(root, storageObjectId);
+      this.#assertAvailable();
+      const ownerToken = await this.#acquireOwner(root, id);
+      const record: SessionRecord = {
+        cleanupFailures: [],
+        createdAt: this.#timestamp(),
+        events: [],
+        id,
+        identity,
+        nextSequence: 1,
+        outcome: undefined,
+        root,
+        state: 'open',
+        storage: 'v2',
+        storageObjectId,
+        subscribers: new Set(),
+        tail: Promise.resolve(),
+        ownerToken,
+      };
+      await this.#assertOwnedObject(root, storageObjectId, id, ownerToken);
+      await this.#writeNewFile(join(root, eventDocumentName), '');
+      await this.#persistSession(record);
+      await this.#assertOwnedObject(root, storageObjectId, id, ownerToken);
+      await this.#readPersistedSession(root, id, 'v2', storageObjectId);
+      await this.#readEvents(root);
+      const pendingIndex = this.#pendingIndexPath(safeSessionId(randomUUID()));
+      await this.#writePendingIndex(pendingIndex, id, storageObjectId);
+      await this.#assertOwnedObject(root, storageObjectId, id, ownerToken);
+      this.#assertAvailable();
+      this.#publishV2(record, pendingIndex);
+      return snapshotSession(record);
     });
   }
 
@@ -594,16 +592,23 @@ export class PlaygroundService {
       assertNoProviderCredentials(id);
       const existing = this.#sessions.get(id);
       if (existing !== undefined) return snapshotSession(existing);
-      const root = this.#sessionRoot(id);
+      const index = await this.#readV2Index(id);
+      const storage = index === undefined ? 'v1' : 'v2';
+      const storageObjectId = index?.objectId;
+      const root = storage === 'v1' ? this.#legacySessionRoot(id) : this.#objectRoot(storageObjectId!);
       try {
-        await this.#assertSessionDirectory(root, id);
+        if (storage === 'v1') await this.#assertSessionDirectory(root, id);
+        else await this.#assertObjectDirectory(root, storageObjectId!);
       } catch (error) {
-        if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT') {
+        if (storage === 'v1' && isErrno(error, 'ENOENT')) {
           throw serviceError('PLAYGROUND_SESSION_NOT_FOUND', `Playground session ${JSON.stringify(id)} was not found.`);
+        }
+        if (storage === 'v2' && isErrno(error, 'ENOENT')) {
+          throw serviceError('PLAYGROUND_STORE_CORRUPT', `Playground session ${JSON.stringify(id)} has a v2 index without a complete object.`);
         }
         throw error;
       }
-      const document = await this.#readPersistedSession(root, id);
+      const document = await this.#readPersistedSession(root, id, storage, storageObjectId);
       const ownerToken = document.state === 'open' ? await this.#acquireOwner(root, id) : undefined;
       let events: readonly PlaygroundTraceEvent[];
       try {
@@ -613,7 +618,6 @@ export class PlaygroundService {
         throw error;
       }
       const record: SessionRecord = {
-        admissionRootIdentity: undefined,
         cleanupFailures: [...document.cleanupFailures],
         createdAt: document.createdAt,
         events: [...events],
@@ -623,6 +627,8 @@ export class PlaygroundService {
         outcome: document.outcome,
         root,
         state: document.state,
+        storage,
+        storageObjectId,
         subscribers: new Set(),
         tail: Promise.resolve(),
         ownerToken,
@@ -737,7 +743,7 @@ export class PlaygroundService {
   async export(sessionId: string): Promise<PlaygroundExport> {
     this.#assertAvailable();
     const replay = await this.replay(sessionId);
-    return Object.freeze({ events: replay.events, schemaVersion, session: replay.session });
+    return Object.freeze({ events: replay.events, schemaVersion: draftSchemaVersion, session: replay.session });
   }
 
   async promoteToDraftEval(sessionId: string, selectedAssertions: readonly PlaygroundSelectedAssertion[]): Promise<DraftEvalCase> {
@@ -753,7 +759,7 @@ export class PlaygroundService {
         fixture: clone(record.identity.fixture, 'Playground fixture') as PlaygroundFixtureIdentity,
         invocation: clone(record.identity.invocation, 'Playground invocation') as PlaygroundInvocation,
         outcome: clone(record.outcome, 'Playground durable outcome') as PlaygroundDurableOutcome,
-        schemaVersion,
+        schemaVersion: draftSchemaVersion,
         target: clone(record.identity.target, 'Playground target') as PlaygroundTarget,
         task: clone(record.identity.task, 'Playground task') as PlaygroundTask,
       });
@@ -777,7 +783,6 @@ export class PlaygroundService {
         await this.#closeRecord(record);
       }));
       const failures = [
-        ...this.#admissionFailures,
         ...settled.flatMap((result, index): PlaygroundServiceCloseFailure[] =>
           result.status === 'rejected'
             ? [Object.freeze({ error: result.reason, sessionId: sessions[index]![0] })]
@@ -832,25 +837,24 @@ export class PlaygroundService {
     }
   }
 
-  async #discardUnadmittedSession(record: SessionRecord): Promise<void> {
-    this.#sessions.delete(record.id);
-    const identity = record.admissionRootIdentity;
-    const token = record.ownerToken;
-    if (identity === undefined || token === undefined) {
-      throw this.#admissionCleanupError(record.id, new Error('Admission ownership evidence is incomplete.'));
+  #publishV2(record: SessionRecord, pendingIndex: string): void {
+    this.#assertAvailable();
+    const legacyRoot = this.#legacySessionRoot(record.id);
+    try {
+      lstatSync(legacyRoot);
+      throw serviceError('PLAYGROUND_SESSION_CONFLICT', `Playground session ${JSON.stringify(record.id)} already exists.`);
+    } catch (error) {
+      if (!isErrno(error, 'ENOENT')) throw error;
     }
-    const ownedRoot = await this.#findOwnedAdmissionRoot(record.id, identity, token);
-    if (ownedRoot === undefined) {
-      throw this.#admissionCleanupError(record.id, new Error('Owned admission directory could not be located safely.'));
+    try {
+      linkSync(pendingIndex, this.#finalIndexPath(record.id));
+    } catch (error) {
+      if (isErrno(error, 'EEXIST')) {
+        throw serviceError('PLAYGROUND_SESSION_CONFLICT', `Playground session ${JSON.stringify(record.id)} already exists.`);
+      }
+      throw error;
     }
-    await this.#quarantineAndRemoveAdmissionRoot(ownedRoot, record.id, identity, token);
-    record.ownerToken = undefined;
-  }
-
-  async #removeCreatedSessionRoot(sessionId: string, identity: DirectoryIdentity): Promise<void> {
-    const root = await this.#findAdmissionRootByIdentity(sessionId, identity);
-    if (root === undefined) throw new Error('Created session directory could not be located safely.');
-    await this.#quarantineAndRemoveAdmissionRoot(root, sessionId, identity);
+    this.#sessions.set(record.id, record);
   }
 
   #requireSession(sessionId: string): SessionRecord {
@@ -906,13 +910,48 @@ export class PlaygroundService {
     if (!contained(resolvedStorageRoot, resolvedSessionsRoot)) {
       throw serviceError('PLAYGROUND_ROOT_INVALID', 'Playground session root resolves outside configured storage.');
     }
+    const objectRoot = join(requestedStorageRoot, objectDirectoryName);
+    await mkdir(objectRoot, { recursive: true });
+    const resolvedObjectRoot = await realpath(objectRoot);
+    if (!contained(resolvedStorageRoot, resolvedObjectRoot)) {
+      throw serviceError('PLAYGROUND_ROOT_INVALID', 'Playground session object root resolves outside configured storage.');
+    }
+    const indexRoot = join(requestedStorageRoot, indexDirectoryName);
+    const pendingIndexRoot = join(indexRoot, pendingIndexDirectoryName);
+    await mkdir(pendingIndexRoot, { recursive: true });
+    const resolvedIndexRoot = await realpath(indexRoot);
+    const resolvedPendingIndexRoot = await realpath(pendingIndexRoot);
+    if (!contained(resolvedStorageRoot, resolvedIndexRoot) || !contained(resolvedIndexRoot, resolvedPendingIndexRoot)) {
+      throw serviceError('PLAYGROUND_ROOT_INVALID', 'Playground session index root resolves outside configured storage.');
+    }
+    this.#resolvedIndexRoot = resolvedIndexRoot;
+    this.#resolvedObjectRoot = resolvedObjectRoot;
+    this.#resolvedPendingIndexRoot = resolvedPendingIndexRoot;
     this.#resolvedSessionsRoot = resolvedSessionsRoot;
   }
 
-  #sessionRoot(sessionId: string): string {
+  #legacySessionRoot(sessionId: string): string {
     const sessionsRoot = this.#resolvedSessionsRoot;
     if (sessionsRoot === undefined) throw serviceError('PLAYGROUND_ROOT_INVALID', 'Playground storage has not initialized.');
     return join(sessionsRoot, safeSessionId(sessionId));
+  }
+
+  #objectRoot(objectId: string): string {
+    const objectRoot = this.#resolvedObjectRoot;
+    if (objectRoot === undefined) throw serviceError('PLAYGROUND_ROOT_INVALID', 'Playground storage has not initialized.');
+    return join(objectRoot, safeSessionId(objectId));
+  }
+
+  #finalIndexPath(sessionId: string): string {
+    const indexRoot = this.#resolvedIndexRoot;
+    if (indexRoot === undefined) throw serviceError('PLAYGROUND_ROOT_INVALID', 'Playground storage has not initialized.');
+    return join(indexRoot, `${safeSessionId(sessionId)}.json`);
+  }
+
+  #pendingIndexPath(publicationId: string): string {
+    const pendingRoot = this.#resolvedPendingIndexRoot;
+    if (pendingRoot === undefined) throw serviceError('PLAYGROUND_ROOT_INVALID', 'Playground storage has not initialized.');
+    return join(pendingRoot, `${safeSessionId(publicationId)}.json`);
   }
 
   async #assertSessionDirectory(root: string, sessionId: string): Promise<void> {
@@ -927,113 +966,95 @@ export class PlaygroundService {
     }
   }
 
-  async #directoryIdentity(root: string, sessionId: string): Promise<DirectoryIdentity> {
-    await this.#assertSessionDirectory(root, sessionId);
+  async #assertObjectDirectory(root: string, objectId: string): Promise<void> {
     const stat = await lstat(root);
-    return Object.freeze({ device: stat.dev, inode: stat.ino });
-  }
-
-  async #ownedDirectoryIdentity(
-    root: string,
-    sessionId: string,
-    createdIdentity: DirectoryIdentity,
-    token: string,
-  ): Promise<DirectoryIdentity> {
-    const identity = await this.#directoryIdentity(root, sessionId);
-    if (identity.device !== createdIdentity.device || identity.inode !== createdIdentity.inode) {
-      throw serviceError('PLAYGROUND_SESSION_OWNED', `Playground session ${JSON.stringify(sessionId)} directory changed before ownership was established.`);
-    }
-    const owner = await this.#readOwnerLock(root);
-    if (owner.token !== token) {
-      throw serviceError('PLAYGROUND_SESSION_OWNED', `Playground session ${JSON.stringify(sessionId)} ownership changed during admission.`);
-    }
-    return identity;
-  }
-
-  async #assertImmediateDirectoryIdentity(root: string, sessionId: string, identity: DirectoryIdentity): Promise<void> {
-    const sessionsRoot = this.#resolvedSessionsRoot;
-    if (sessionsRoot === undefined) throw serviceError('PLAYGROUND_ROOT_INVALID', 'Playground storage has not initialized.');
-    const stat = await lstat(root);
-    if (!stat.isDirectory() || stat.isSymbolicLink() || stat.dev !== identity.device || stat.ino !== identity.inode) {
-      throw serviceError('PLAYGROUND_SESSION_OWNED', `Playground session ${JSON.stringify(sessionId)} cleanup ownership could not be proven.`);
+    if (!stat.isDirectory() || stat.isSymbolicLink()) {
+      throw serviceError('PLAYGROUND_ROOT_INVALID', 'Playground session object must be a real contained directory.');
     }
     const resolved = await realpath(root);
-    const child = relative(sessionsRoot, resolved);
-    if (!contained(sessionsRoot, resolved) || child.length === 0 || basename(child) !== child) {
-      throw serviceError('PLAYGROUND_ROOT_INVALID', `Playground session ${JSON.stringify(sessionId)} cleanup path is not an immediate session directory.`);
+    const objectRoot = this.#resolvedObjectRoot;
+    if (objectRoot === undefined || !contained(objectRoot, resolved) || basename(resolved) !== objectId) {
+      throw serviceError('PLAYGROUND_ROOT_INVALID', 'Playground session object resolves outside configured storage.');
     }
   }
 
-  async #assertOwnedDirectory(
-    root: string,
-    sessionId: string,
-    identity: DirectoryIdentity,
-    token: string,
-  ): Promise<void> {
-    await this.#assertImmediateDirectoryIdentity(root, sessionId, identity);
-    const owner = await this.#readOwnerLock(root);
-    if (owner.token !== token) {
-      throw serviceError('PLAYGROUND_SESSION_OWNED', `Playground session ${JSON.stringify(sessionId)} cleanup ownership changed.`);
-    }
-  }
-
-  async #findOwnedAdmissionRoot(
-    sessionId: string,
-    identity: DirectoryIdentity,
-    token: string,
-  ): Promise<string | undefined> {
-    const sessionsRoot = this.#resolvedSessionsRoot;
-    if (sessionsRoot === undefined) throw serviceError('PLAYGROUND_ROOT_INVALID', 'Playground storage has not initialized.');
-    for (const name of await readdir(sessionsRoot)) {
-      const candidate = join(sessionsRoot, name);
-      try {
-        await this.#assertOwnedDirectory(candidate, sessionId, identity, token);
-        return candidate;
-      } catch {
-        // Every candidate is independently proven; unrelated or replaced roots are left untouched.
+  async #assertOwnedObject(root: string, objectId: string, sessionId: string, token: string): Promise<void> {
+    try {
+      await this.#assertObjectDirectory(root, objectId);
+      const owner = await this.#readOwnerLock(root);
+      if (owner.token !== token) {
+        throw serviceError('PLAYGROUND_SESSION_OWNED', `Playground session ${JSON.stringify(sessionId)} object ownership changed during admission.`);
       }
+    } catch (error) {
+      if (error instanceof PlaygroundServiceError && error.code === 'PLAYGROUND_SESSION_OWNED') throw error;
+      throw serviceError('PLAYGROUND_SESSION_OWNED', `Playground session ${JSON.stringify(sessionId)} object ownership could not be proven during admission.`);
     }
-    return undefined;
   }
 
-  async #findAdmissionRootByIdentity(
-    sessionId: string,
-    identity: DirectoryIdentity,
-  ): Promise<string | undefined> {
-    const sessionsRoot = this.#resolvedSessionsRoot;
-    if (sessionsRoot === undefined) throw serviceError('PLAYGROUND_ROOT_INVALID', 'Playground storage has not initialized.');
-    for (const name of await readdir(sessionsRoot)) {
-      const candidate = join(sessionsRoot, name);
-      try {
-        await this.#assertImmediateDirectoryIdentity(candidate, sessionId, identity);
-        return candidate;
-      } catch {
-        // Directory identity is the ownership proof before an owner lock exists.
-      }
+  async #writeNewFile(path: string, contents: string): Promise<void> {
+    const handle = await open(path, 'wx', 0o600);
+    try {
+      await handle.writeFile(contents, 'utf8');
+      await handle.sync();
+    } finally {
+      await handle.close();
     }
-    return undefined;
   }
 
-  async #quarantineAndRemoveAdmissionRoot(
-    root: string,
-    sessionId: string,
-    identity: DirectoryIdentity,
-    token?: string,
-  ): Promise<void> {
-    const sessionsRoot = this.#resolvedSessionsRoot;
-    if (sessionsRoot === undefined) throw serviceError('PLAYGROUND_ROOT_INVALID', 'Playground storage has not initialized.');
-    const quarantine = join(sessionsRoot, `.cleanup-${randomUUID()}`);
-    await rename(root, quarantine);
-    if (token === undefined) await this.#assertImmediateDirectoryIdentity(quarantine, sessionId, identity);
-    else await this.#assertOwnedDirectory(quarantine, sessionId, identity, token);
-    await rm(quarantine, { force: true, recursive: true });
+  async #writePendingIndex(path: string, sessionId: string, objectId: string): Promise<void> {
+    const document: PersistedSessionIndex = Object.freeze({
+      kind: 'agent-bundle-playground-session-index',
+      objectId,
+      projectId: this.#projectId,
+      schemaVersion: objectSessionSchemaVersion,
+      sessionId,
+    });
+    await this.#writeNewFile(path, `${JSON.stringify(document)}\n`);
   }
 
-  #admissionCleanupError(sessionId: string, error: unknown): PlaygroundSessionCloseError {
-    if (error instanceof PlaygroundSessionCloseError) return error;
-    return new PlaygroundSessionCloseError(sessionId, Object.freeze([
-      Object.freeze({ message: 'Admission-owned session directory could not be safely removed.', operation: 'admission' }),
-    ]));
+  async #readV2Index(sessionId: string): Promise<PersistedSessionIndex | undefined> {
+    const path = this.#finalIndexPath(sessionId);
+    let stat: Awaited<ReturnType<typeof lstat>>;
+    try {
+      stat = await lstat(path);
+    } catch (error) {
+      if (isErrno(error, 'ENOENT')) return undefined;
+      throw error;
+    }
+    if (!stat.isFile() || stat.isSymbolicLink()) {
+      throw serviceError('PLAYGROUND_STORE_CORRUPT', `Playground session ${JSON.stringify(sessionId)} has an invalid v2 index.`);
+    }
+    const indexRoot = this.#resolvedIndexRoot;
+    const resolved = await realpath(path);
+    if (indexRoot === undefined || !contained(indexRoot, resolved) || basename(resolved) !== `${sessionId}.json`) {
+      throw serviceError('PLAYGROUND_STORE_CORRUPT', `Playground session ${JSON.stringify(sessionId)} has an invalid v2 index.`);
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(await readFile(path, 'utf8'));
+    } catch {
+      throw serviceError('PLAYGROUND_STORE_CORRUPT', `Playground session ${JSON.stringify(sessionId)} has malformed v2 index metadata.`);
+    }
+    if (!isRecord(parsed)
+      || parsed.kind !== 'agent-bundle-playground-session-index'
+      || parsed.schemaVersion !== objectSessionSchemaVersion
+      || parsed.projectId !== this.#projectId
+      || parsed.sessionId !== sessionId
+      || typeof parsed.objectId !== 'string') {
+      throw serviceError('PLAYGROUND_STORE_CORRUPT', `Playground session ${JSON.stringify(sessionId)} has invalid v2 index metadata.`);
+    }
+    try {
+      safeSessionId(parsed.objectId);
+    } catch {
+      throw serviceError('PLAYGROUND_STORE_CORRUPT', `Playground session ${JSON.stringify(sessionId)} has invalid v2 index metadata.`);
+    }
+    return Object.freeze({
+      kind: 'agent-bundle-playground-session-index',
+      objectId: parsed.objectId,
+      projectId: this.#projectId,
+      schemaVersion: objectSessionSchemaVersion,
+      sessionId,
+    });
   }
 
   async #assertSessionDocumentPath(root: string, missingAllowed = false): Promise<void> {
@@ -1125,14 +1146,11 @@ export class PlaygroundService {
     } catch {
       throw serviceError('PLAYGROUND_STORE_CORRUPT', 'Playground owner lock is malformed.');
     }
-    if (!isRecord(parsed) || parsed.version !== 1 || typeof parsed.token !== 'string') {
+    if (!isRecord(parsed) || parsed.version !== 1 || typeof parsed.pid !== 'number'
+      || !Number.isSafeInteger(parsed.pid) || parsed.pid < 1 || typeof parsed.token !== 'string') {
       throw serviceError('PLAYGROUND_STORE_CORRUPT', 'Playground owner lock is invalid.');
     }
-    const pid = parsed.pid;
-    if (typeof pid !== 'number' || !Number.isFinite(pid) || !Number.isSafeInteger(pid) || pid < 1) {
-      throw serviceError('PLAYGROUND_STORE_CORRUPT', 'Playground owner lock is invalid.');
-    }
-    return Object.freeze({ pid, token: parsed.token, version: 1 });
+    return Object.freeze({ pid: parsed.pid, token: parsed.token, version: 1 });
   }
 
   #ownerIsStale(owner: OwnerLock): boolean {
@@ -1163,25 +1181,36 @@ export class PlaygroundService {
   }
 
   async #persistSession(record: SessionRecord): Promise<void> {
-    const document: PersistedSession = Object.freeze({
+    const documentBase = {
       cleanupFailures: snapshotCleanupFailures(record.cleanupFailures),
       createdAt: record.createdAt,
       identity: record.identity,
       kind: 'agent-bundle-playground-session',
       ...(record.outcome === undefined ? {} : { outcome: record.outcome }),
       projectId: this.#projectId,
-      schemaVersion,
       sessionId: record.id,
       state: record.state,
-    });
+    } as const;
+    const document: PersistedSession = record.storage === 'v1'
+      ? Object.freeze({ ...documentBase, schemaVersion: legacySessionSchemaVersion })
+      : Object.freeze({
+        ...documentBase,
+         schemaVersion: objectSessionSchemaVersion,
+         storageObjectId: record.storageObjectId!,
+       });
     assertNoProviderCredentials(json(document, 'Playground persisted session'));
     await this.#assertSessionDocumentPath(record.root, true);
     const temporary = join(record.root, `.${sessionDocumentName}.${randomUUID()}.tmp`);
-    await writeFile(temporary, `${JSON.stringify(document)}\n`, { encoding: 'utf8', flag: 'wx' });
+    await this.#writeNewFile(temporary, `${JSON.stringify(document)}\n`);
     await rename(temporary, join(record.root, sessionDocumentName));
   }
 
-  async #readPersistedSession(root: string, expectedId: string): Promise<PersistedSession> {
+  async #readPersistedSession(
+    root: string,
+    expectedId: string,
+    storage: 'v1' | 'v2',
+    expectedObjectId?: string,
+  ): Promise<PersistedSession> {
     await this.#assertSessionDocumentPath(root);
     let parsed: unknown;
     try {
@@ -1197,7 +1226,8 @@ export class PlaygroundService {
     } catch {
       throw serviceError('PLAYGROUND_STORE_CORRUPT', `Playground session ${JSON.stringify(expectedId)} has invalid persisted values.`);
     }
-    if (parsed.kind !== 'agent-bundle-playground-session' || parsed.schemaVersion !== schemaVersion) {
+    const expectedSchemaVersion = storage === 'v1' ? legacySessionSchemaVersion : objectSessionSchemaVersion;
+    if (parsed.kind !== 'agent-bundle-playground-session' || parsed.schemaVersion !== expectedSchemaVersion) {
       throw serviceError('PLAYGROUND_STORE_CORRUPT', `Playground session ${JSON.stringify(expectedId)} has unsupported metadata.`);
     }
     if (parsed.projectId !== this.#projectId) {
@@ -1205,6 +1235,9 @@ export class PlaygroundService {
     }
     if (parsed.sessionId !== expectedId || typeof parsed.createdAt !== 'string') {
       throw serviceError('PLAYGROUND_STORE_CORRUPT', `Playground session ${JSON.stringify(expectedId)} has invalid identity metadata.`);
+    }
+    if (storage === 'v2' && (typeof parsed.storageObjectId !== 'string' || parsed.storageObjectId !== expectedObjectId)) {
+      throw serviceError('PLAYGROUND_STORE_CORRUPT', `Playground session ${JSON.stringify(expectedId)} has invalid v2 object metadata.`);
     }
     if (parsed.state !== 'open' && parsed.state !== 'finalized' && parsed.state !== 'closed') {
       throw serviceError('PLAYGROUND_STORE_CORRUPT', `Playground session ${JSON.stringify(expectedId)} has invalid state metadata.`);
@@ -1228,17 +1261,23 @@ export class PlaygroundService {
         return Object.freeze({ message: value.message, operation: 'subscriber' });
       })
       : (() => { throw serviceError('PLAYGROUND_STORE_CORRUPT', `Playground session ${JSON.stringify(expectedId)} has missing cleanup failures.`); })();
-    return Object.freeze({
+    const documentBase = {
       cleanupFailures: Object.freeze(cleanupFailures),
       createdAt: parsed.createdAt,
       identity,
       kind: 'agent-bundle-playground-session',
       ...(outcome === undefined ? {} : { outcome }),
       projectId: this.#projectId,
-      schemaVersion,
       sessionId: expectedId,
       state: parsed.state,
-    });
+    } as const;
+    return storage === 'v1'
+      ? Object.freeze({ ...documentBase, schemaVersion: legacySessionSchemaVersion })
+      : Object.freeze({
+        ...documentBase,
+        schemaVersion: objectSessionSchemaVersion,
+        storageObjectId: expectedObjectId!,
+      });
   }
 
   async #readEvents(root: string): Promise<readonly PlaygroundTraceEvent[]> {
