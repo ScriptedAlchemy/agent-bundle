@@ -846,6 +846,127 @@ describe('MCP App preview', () => {
     }
   });
 
+  it('requires the exact trusted policy snapshot, selected profile version, and ready session before constructing a runtime bridge', async () => {
+    const invalid = [
+      Object.freeze({ ...runtimePreview, session: Object.freeze({ ...runtimePreview.session, state: 'connecting' as const }) }),
+      Object.freeze({ ...runtimePreview, binding: Object.freeze({ ...runtimePreview.binding, profileVersion: 'agent-bundle:mcp-apps:other' }) }),
+      Object.freeze({ ...runtimePreview, profile: Object.freeze({ ...runtimePreview.profile, descriptor: Object.freeze({ ...runtimePreview.profile.descriptor, version: 'agent-bundle:mcp-apps:other' }) }) }),
+    ] as const;
+    for (const snapshot of invalid) {
+      const closedBindings: string[] = [];
+      let policies = 0;
+      let bridges = 0;
+      const client = runtimeClient(Object.freeze({
+        closeRuntime: async (bindingId: string) => { closedBindings.push(bindingId); },
+        // Deliberately cross the typed route boundary: this preview owner must
+        // still fail closed if a malformed success reaches it.
+        createRuntime: async () => snapshot as unknown as McpAppPreviewAppsSnapshot,
+        currentDocumentPolicy: () => {
+          policies += 1;
+          return Object.freeze({
+            bindingId: runtimePreview.binding.id,
+            snapshot: Object.freeze({ ...runtimePreview.documentPolicy, approvedPermissions: Object.freeze({ camera: Object.freeze({}) }) }),
+          });
+        },
+      }));
+      const controller = createMcpAppPreviewController(runtimeProps(client, () => {
+        bridges += 1;
+        return Object.assign(() => { throw new Error('untrusted previews must not mount'); }, { close: async () => undefined }) as RuntimeAppBridgeFactory;
+      }));
+
+      await controller.start();
+
+      expect(controller.state).toMatchObject({ kind: 'runtime', phase: 'fallback' });
+      expect(policies).toBe(0);
+      expect(bridges).toBe(0);
+      expect(closedBindings).toEqual(['runtime-binding-weather']);
+    }
+
+    const closedBindings: string[] = [];
+    let bridges = 0;
+    const client = runtimeClient(Object.freeze({
+      closeRuntime: async (bindingId: string) => { closedBindings.push(bindingId); },
+      createRuntime: async () => runtimePreview,
+      currentDocumentPolicy: () => Object.freeze({
+        bindingId: runtimePreview.binding.id,
+        snapshot: Object.freeze({ ...runtimePreview.documentPolicy, approvedPermissions: Object.freeze({ camera: Object.freeze({}) }) }),
+      }),
+    }));
+    const controller = createMcpAppPreviewController(runtimeProps(client, () => {
+      bridges += 1;
+      return Object.assign(() => { throw new Error('copied policies must not mount'); }, { close: async () => undefined }) as RuntimeAppBridgeFactory;
+    }));
+
+    await controller.start();
+
+    expect(controller.state).toMatchObject({ kind: 'runtime', phase: 'error' });
+    expect(bridges).toBe(0);
+    expect(closedBindings).toEqual(['runtime-binding-weather']);
+  });
+
+  it('fences a held runtime create before policy, bridge, renderer, or state work after close', async () => {
+    const pending = deferred<McpAppPreviewAppsSnapshot>();
+    const closedBindings: string[] = [];
+    let policies = 0;
+    let bridges = 0;
+    const client = runtimeClient(Object.freeze({
+      closeRuntime: async (bindingId: string) => { closedBindings.push(bindingId); },
+      createRuntime: async () => pending.promise,
+      currentDocumentPolicy: () => {
+        policies += 1;
+        return Object.freeze({ bindingId: runtimePreview.binding.id, snapshot: runtimePreview.documentPolicy });
+      },
+    }));
+    const controller = createMcpAppPreviewController(runtimeProps(client, () => {
+      bridges += 1;
+      return Object.assign(() => { throw new Error('closed creates must never mount'); }, { close: async () => undefined }) as RuntimeAppBridgeFactory;
+    }));
+    const states: string[] = [];
+    controller.subscribe((state) => { states.push(state.phase); });
+    const started = controller.start();
+    const firstClose = controller.close();
+    const secondClose = controller.runtimeLifecycle?.close();
+
+    expect(secondClose).toBe(firstClose);
+    pending.resolve(runtimePreview);
+    await Promise.all([started, firstClose]);
+
+    expect(policies).toBe(0);
+    expect(bridges).toBe(0);
+    expect(closedBindings).toEqual(['runtime-binding-weather']);
+    expect(states).toEqual(['loading']);
+  });
+
+  it('retains the detached renderer handle until its exact teardown succeeds', async () => {
+    let teardowns = 0;
+    const client = runtimeClient(Object.freeze({
+      closeRuntime: async () => undefined,
+      createRuntime: async () => runtimePreview,
+      currentDocumentPolicy: () => Object.freeze({ bindingId: runtimePreview.binding.id, snapshot: runtimePreview.documentPolicy }),
+    }));
+    const controller = createMcpAppPreviewController(runtimeProps(client, () => Object.assign(
+      () => { throw new Error('not mounted'); },
+      { close: async () => undefined },
+    ) as RuntimeAppBridgeFactory));
+    await controller.start();
+    const handle = Object.freeze({
+      sendToolCancelled: async () => undefined,
+      sendToolInput: async () => undefined,
+      sendToolResult: async () => undefined,
+      teardown: async () => {
+        teardowns += 1;
+        if (teardowns === 1) throw new Error('renderer teardown failed');
+      },
+    });
+    controller.runtimeRendererRef?.(handle);
+    controller.runtimeRendererRef?.(null);
+
+    await expect(controller.close()).rejects.toThrow('renderer teardown failed');
+    await expect(controller.close()).resolves.toBeUndefined();
+
+    expect(teardowns).toBe(2);
+  });
+
   it('deep-detaches runtime input and model-visible result before create and preserves immutable preview-error evidence', async () => {
     const input = { city: 'Paris', nested: { unit: 'celsius' } };
     const result = { temperature: 22 };
@@ -894,6 +1015,7 @@ describe('MCP App preview', () => {
     const successful = props.run as Extract<typeof props.run, Readonly<{ readonly status: 'succeeded' }>>;
     const mutable = {
       ...props,
+      profile: { ...props.profile },
       run: {
         ...successful,
         result: {
@@ -906,6 +1028,7 @@ describe('MCP App preview', () => {
     const mutableRun = mutable.run as Extract<typeof mutable.run, Readonly<{ readonly status: 'succeeded' }>>;
     (mutableRun.result.app as { resourceUri: string }).resourceUri = 'https://attacker.invalid/not-an-app';
     (mutableRun.result.app?.mcpBinding as { sessionRevision: number }).sessionRevision = 999;
+    (mutable.profile as { version: string }).version = 'agent-bundle:mcp-apps:attacker';
 
     await controller.start();
 

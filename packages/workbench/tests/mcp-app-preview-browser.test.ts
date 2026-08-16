@@ -11,15 +11,30 @@ import { chromium } from 'playwright';
 
 const workspaceRoot = join(import.meta.dirname, '..', '..', '..');
 const previewComponent = join(workspaceRoot, 'packages', 'workbench', 'src', 'mcp', 'mcp-app-preview.tsx');
+const runtimeClientSource = join(workspaceRoot, 'packages', 'workbench', 'src', 'mcp', 'mcp-app-client.ts');
+const vendorRoot = join(workspaceRoot, 'packages', 'workbench', 'src', 'inspector', 'vendor');
 
 const mountedPreviewFixture = async () => {
+  const bootstrapRequests: string[] = [];
+  const bootstrap = createServer((request, response) => {
+    bootstrapRequests.push(request.url ?? '/');
+    response.writeHead(200, { 'content-type': 'text/html' });
+    response.end('<!doctype html><title>Runtime App</title><main>Runtime App</main>');
+  });
+  bootstrap.listen(0, '127.0.0.1');
+  await once(bootstrap, 'listening');
+  const bootstrapAddress = bootstrap.address();
+  if (bootstrapAddress === null || typeof bootstrapAddress === 'string') throw new Error('Mounted runtime preview fixture did not receive a bootstrap TCP address.');
+  const bootstrapUrl = `http://127.0.0.1:${bootstrapAddress.port}/runtime-bootstrap`;
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-mcp-app-preview-'));
   const entry = join(root, 'preview.tsx');
   const dist = join(root, 'dist');
   await writeFile(entry, [
     "import React from 'react';",
     "import { createRoot } from 'react-dom/client';",
+    "import { MantineProvider } from '@mantine/core';",
     `import { McpAppPreview } from ${JSON.stringify(previewComponent)};`,
+    `import { McpAppClient } from ${JSON.stringify(runtimeClientSource)};`,
     '',
     "const frame = { allow: '', policy: { contentSecurityPolicy: \"default-src 'none'\", iframeAllow: '', permissionsPolicy: 'camera=()' }, referrerPolicy: 'no-referrer', relay: { maxMessageBytes: 4096, maxQueuedMessages: 4 }, sandbox: 'allow-scripts allow-same-origin', src: 'http://127.0.0.1:43124/#mcp-app-preview', targetOrigin: 'http://127.0.0.1:43124' };",
     "const resource = { csp: {}, html: '<main>Forecast</main>', kind: 'resource', permissions: {} };",
@@ -36,6 +51,24 @@ const mountedPreviewFixture = async () => {
     "root.render(React.createElement(McpAppPreview, { client, frameRelayFactory, host, input: { city: 'Paris' }, result: { text: 'Sunny' }, sessionId: 'session-weather', title: 'MCP App preview boundary', toolName: 'show-weather' }));",
     "globalThis.__mcpAppPreviewFixture = { reject: () => settle.reject(new Error('preview route failed')), resolve: (kind) => settle.resolve(kind === 'fallback' ? fallback : ready), stats: () => ({ forceClosed: [...forceClosed] }), unmount: () => root.unmount() };",
     '',
+    `const runtimeBootstrapUrl = ${JSON.stringify(bootstrapUrl)};`,
+    "const response = (body) => new Response(JSON.stringify(body), { headers: { 'content-type': 'application/json' }, status: 200 });",
+    "const runtimePolicy = { allow: '', approvedPermissions: {}, revision: 1, warnings: [] };",
+    "const runtimePreviewFor = (suffix) => { const generation = 'generation-' + suffix; const source = 'source-' + suffix; const sessionId = 'runtime-session-' + suffix; const bindingId = 'runtime-binding-' + suffix; const binding = { definitionDigest: 'definition-' + suffix, evidence: 'simulated', id: bindingId, profileId: 'portable', profileVersion: 'agent-bundle:mcp-apps:2026-01-26', registryRevision: 3, runVector: { runtimeGenerationId: generation, sourceRevision: source, stateVersion: suffix === 'a' ? 1 : 2 }, serverDigest: 'server-' + suffix, serverName: 'weather', sessionId, sessionRevision: suffix === 'a' ? 2 : 3, target: 'weather', transportDigest: 'transport-' + suffix }; const stable = { definitionDigest: binding.definitionDigest, registryRevision: binding.registryRevision, serverDigest: binding.serverDigest, serverName: binding.serverName, sessionId: binding.sessionId, sessionRevision: binding.sessionRevision, target: binding.target, transportDigest: binding.transportDigest }; const metadata = { extensions: { claude: {}, openai: {} }, provenance: {}, raw: {}, standard: {} }; return { binding, clientSurface: { bootstrapUrl: runtimeBootstrapUrl, origin: new URL(runtimeBootstrapUrl).origin, webSocketPath: '/rsbuild-hmr' }, documentPolicy: runtimePolicy, kind: 'apps', metadata: { resource: metadata, result: metadata, tool: metadata }, operations: [], profile: { bootstrap: { kind: 'none' }, configExtensions: { entries: [], sourceRevision: source }, descriptor: { claimsRealHostParity: false, evidence: 'simulated', id: 'portable', label: 'Portable MCP Apps', version: 'agent-bundle:mcp-apps:2026-01-26' }, hostContext: { availableDisplayModes: ['inline'], containerDimensions: { height: 720, width: 1024 }, deviceCapabilities: {}, displayMode: 'inline', locale: 'en-US', platform: 'agent-bundle-workbench', safeAreaInsets: { bottom: 0, left: 0, right: 0, top: 0 }, styles: {}, theme: 'light', timeZone: 'UTC', toolInfo: {}, userAgent: 'agent-bundle-runtime-mcp-app/1' }, kind: 'apps', metadata, permissions: {}, resourceUri: 'ui://weather/app.html', warnings: [] }, resource: { html: '<main>Weather</main>', permissions: {} }, result: { appVisible: {}, isError: false, modelVisible: {} }, session: { binding: stable, connection: { capabilities: { tools: {} }, protocolEra: 'modern', protocolVersion: '2026-01-26', server: { name: 'weather', version: '1.0.0' } }, state: 'ready' } }; };",
+    "let runtimePreview = runtimePreviewFor('a'); let heldCreate; const runtimeEvents = []; const runtimeIframes = new Set(); const runtimeTrace = [];",
+    "const originalSetAttribute = Element.prototype.setAttribute; Element.prototype.setAttribute = function(name, value) { if (this instanceof HTMLIFrameElement && ['allow', 'referrerpolicy', 'sandbox', 'src'].includes(name)) runtimeTrace.push({ name, value: String(value) }); return originalSetAttribute.call(this, name, value); };",
+    "const observer = new MutationObserver((records) => { for (const record of records) for (const node of record.addedNodes) { if (node instanceof HTMLIFrameElement) runtimeIframes.add(node); if (node instanceof Element) node.querySelectorAll('iframe').forEach((frame) => runtimeIframes.add(frame)); } }); observer.observe(document.documentElement, { childList: true, subtree: true });",
+    "const runtime = new McpAppClient({ fetch: async (input, init) => { const path = new URL(String(input), location.origin).pathname; if (path === '/api/project/session') return response({ origin: location.origin, token: 'foreground-secret' }); if (path === '/api/runtime/apps') { runtimeEvents.push('create:' + runtimePreview.binding.id); if (heldCreate !== undefined) return heldCreate.promise; return response({ preview: runtimePreview }); } if (path.startsWith('/api/runtime/apps/') && init?.method === 'DELETE') { runtimeEvents.push('backend:' + decodeURIComponent(path.slice('/api/runtime/apps/'.length))); return response({ closed: true }); } throw new Error('Unexpected runtime fixture request ' + path); } });",
+    "const currentDocumentPolicy = runtime.currentDocumentPolicy.bind(runtime); runtime.currentDocumentPolicy = (bindingId) => { runtimeEvents.push('policy:' + bindingId); return currentDocumentPolicy(bindingId); };",
+    "const bridge = { addEventListener: () => undefined, close: async () => { runtimeEvents.push('bridge'); }, sendHostContextChange: async () => undefined, sendToolCancelled: async () => undefined, sendToolInput: async () => undefined, sendToolInputPartial: async () => undefined, sendToolResult: async () => undefined, teardownResource: async () => { runtimeEvents.push('renderer'); return {}; } };",
+    "const bridgeFactory = Object.assign(() => { runtimeEvents.push('factory'); return bridge; }, { close: async () => { runtimeEvents.push('bridge-factory'); } }); const createBridgeFactory = () => bridgeFactory;",
+    "const runFor = (preview) => ({ completedAt: '2026-08-16T00:00:01.000Z', id: 'run-' + preview.binding.id, input: { city: 'Paris' }, result: { app: { mcpBinding: preview.session.binding, resourceUri: 'ui://weather/app.html', surfaceId: 'surface-weather' }, modelVisible: { temperature: 22 }, trace: [], tree: [] }, startedAt: '2026-08-16T00:00:00.000Z', status: 'succeeded', surfaceId: 'surface-weather', target: 'weather', vector: { runtimeGenerationId: preview.binding.runVector.runtimeGenerationId, sourceRevision: preview.binding.runVector.sourceRevision, stateVersion: preview.binding.runVector.stateVersion } });",
+    "const runtimeProfile = { claimsRealHostParity: false, evidence: 'simulated', id: 'portable', label: 'Portable MCP Apps', version: 'agent-bundle:mcp-apps:2026-01-26' }; const surface = { fixtures: [], id: 'surface-weather', kind: 'mcp-app', label: 'Weather App', readOnly: false, targets: ['weather'] };",
+    "const registrarFor = (name) => (handle) => { runtimeEvents.push('register:' + name); return () => runtimeEvents.push('unregister:' + name); }; let currentRegistrar = registrarFor('first');",
+    "const mountRuntime = () => root.render(React.createElement(MantineProvider, null, React.createElement(React.StrictMode, null, React.createElement(McpAppPreview, { client: runtime, createBridgeFactory, kind: 'runtime', profile: runtimeProfile, profileId: 'portable', registerLifecycle: currentRegistrar, run: runFor(runtimePreview), surface, title: 'Runtime MCP App preview boundary' }))));",
+    "const deferred = () => { let resolve; let reject; const promise = new Promise((nextResolve, nextReject) => { resolve = nextResolve; reject = nextReject; }); return { promise, reject, resolve }; };",
+    "globalThis.__mcpRuntimePreviewFixture = { mountRuntime, replace: () => { runtimePreview = runtimePreviewFor('b'); mountRuntime(); }, rerender: () => mountRuntime(), changeRegistrar: () => { currentRegistrar = registrarFor('second'); mountRuntime(); }, hold: () => { runtimePreview = runtimePreviewFor('c'); heldCreate = deferred(); mountRuntime(); }, resolveHeld: () => { const held = heldCreate; heldCreate = undefined; held.resolve(response({ preview: runtimePreview })); }, stats: () => ({ events: [...runtimeEvents], iframeNodes: runtimeIframes.size, trace: [...runtimeTrace] }), unmountRuntime: () => root.unmount() };",
+    '',
   ].join('\n'));
   const rsbuild = await createRsbuild({
     config: {
@@ -48,6 +81,11 @@ const mountedPreviewFixture = async () => {
       plugins: [pluginReact()],
       resolve: {
         alias: {
+          '@inspector/core/json/xMcpHeader.js': join(vendorRoot, 'core', 'json', 'xMcpHeader.ts'),
+          '@inspector/core/mcp/fetchTracking.js': join(vendorRoot, 'core', 'mcp', 'fetchTracking.ts'),
+          '@inspector/core/mcp/types.js': join(vendorRoot, 'core', 'mcp', 'types.ts'),
+          '@inspector/core': join(vendorRoot, 'core'),
+          '@mantine/core': join(workspaceRoot, 'node_modules', '@mantine', 'core', 'esm', 'index.mjs'),
           react: join(workspaceRoot, 'node_modules', 'react'),
           'react-dom/client': join(workspaceRoot, 'node_modules', 'react-dom', 'client.js'),
         },
@@ -84,9 +122,19 @@ const mountedPreviewFixture = async () => {
   const address = server.address();
   if (address === null || typeof address === 'string') throw new Error('Mounted preview fixture did not receive a TCP address.');
   return {
+    bootstrapRequests,
     close: async () => {
       await new Promise<void>((resolve, reject) => {
         server.close((error) => {
+          if (error === undefined) {
+            resolve();
+            return;
+          }
+          reject(error);
+        });
+      });
+      await new Promise<void>((resolve, reject) => {
+        bootstrap.close((error) => {
           if (error === undefined) {
             resolve();
             return;
@@ -164,4 +212,95 @@ describe('MCP App preview browser', () => {
       await fixture.close();
     }
   }, 30_000);
+
+  it('keeps one runtime owner across same-authority StrictMode renders and drains the old owner before replacement', async () => {
+    const fixture = await mountedPreviewFixture();
+    const browser = await chromium.launch({ channel: 'chrome' });
+    const page = await browser.newPage({ viewport: { height: 800, width: 390 } });
+    const browserErrors: string[] = [];
+    page.on('pageerror', (error) => { browserErrors.push(error.message); });
+    try {
+      await page.goto(fixture.url);
+      await page.waitForFunction(() => '__mcpRuntimePreviewFixture' in globalThis, undefined, { timeout: 5_000 });
+      const runtime = (method: 'mountRuntime' | 'replace' | 'rerender' | 'changeRegistrar' | 'hold' | 'resolveHeld' | 'unmountRuntime') => page.evaluate((next) => (globalThis as typeof globalThis & {
+        __mcpRuntimePreviewFixture: Record<string, () => void>;
+      }).__mcpRuntimePreviewFixture[next](), method);
+      const stats = () => page.evaluate(() => (globalThis as typeof globalThis & {
+        __mcpRuntimePreviewFixture: {
+          stats(): { readonly events: readonly string[]; readonly iframeNodes: number; readonly trace: readonly { readonly name: string; readonly value: string }[] };
+        };
+      }).__mcpRuntimePreviewFixture.stats());
+
+      await runtime('mountRuntime');
+      await page.waitForFunction(() => (globalThis as typeof globalThis & {
+        __mcpRuntimePreviewFixture: { stats(): { readonly events: readonly string[] } };
+      }).__mcpRuntimePreviewFixture.stats().events.includes('factory'), undefined, { timeout: 5_000 });
+
+      const initial = await stats();
+      expect(initial.events.indexOf('register:first')).toBeGreaterThanOrEqual(0);
+      expect(initial.events.indexOf('create:runtime-binding-a')).toBeGreaterThan(initial.events.indexOf('register:first'));
+      expect(initial.events.filter((entry) => entry === 'factory')).toHaveLength(1);
+      expect(await page.getByRole('alert').allTextContents()).toEqual([]);
+      expect(initial.events).not.toContain('bridge');
+      expect(initial.events).not.toContain('backend:runtime-binding-a');
+      expect(initial.iframeNodes).toBe(1);
+      const policyTrace = initial.trace.filter((entry) => ['allow', 'referrerpolicy', 'sandbox', 'src'].includes(entry.name));
+      expect(policyTrace.map((entry) => entry.name)).toEqual(['src', 'allow', 'referrerpolicy', 'sandbox', 'src']);
+      expect(policyTrace[0]?.value).toBe('about:blank');
+      expect(policyTrace.at(-1)?.value).toBeDefined();
+      expect(fixture.bootstrapRequests).toEqual(['/runtime-bootstrap']);
+
+      await runtime('rerender');
+      await page.waitForTimeout(100);
+      const same = await stats();
+      const lifecycleEvents = (events: readonly string[]) => events.filter((entry) =>
+        entry.startsWith('register:') || entry.startsWith('unregister:') || entry.startsWith('create:') || entry === 'factory' || entry === 'bridge' || entry === 'bridge-factory' || entry.startsWith('backend:'),
+      );
+      expect(lifecycleEvents(same.events)).toEqual(lifecycleEvents(initial.events));
+      expect(fixture.bootstrapRequests).toEqual(['/runtime-bootstrap']);
+
+      await runtime('changeRegistrar');
+      await page.waitForTimeout(100);
+      expect(lifecycleEvents((await stats()).events)).toEqual(lifecycleEvents(same.events));
+
+      await runtime('replace');
+      await page.waitForFunction(() => (globalThis as typeof globalThis & {
+        __mcpRuntimePreviewFixture: { stats(): { readonly events: readonly string[] } };
+      }).__mcpRuntimePreviewFixture.stats().events.includes('create:runtime-binding-b'), undefined, { timeout: 5_000 });
+      const replaced = await stats();
+      const oldRenderer = replaced.events.indexOf('renderer');
+      const oldFactory = replaced.events.indexOf('bridge-factory');
+      const oldBackend = replaced.events.indexOf('backend:runtime-binding-a');
+      const newCreate = replaced.events.indexOf('create:runtime-binding-b');
+      const oldUnregister = replaced.events.indexOf('unregister:first');
+      expect(oldRenderer).toBeGreaterThanOrEqual(0);
+      expect(oldFactory).toBeGreaterThan(oldRenderer);
+      expect(oldBackend).toBeGreaterThan(oldFactory);
+      expect(oldUnregister).toBeGreaterThan(oldBackend);
+      expect(newCreate).toBeGreaterThan(oldUnregister);
+      expect(replaced.events.filter((entry) => entry === 'register:first')).toHaveLength(1);
+      expect(replaced.events.filter((entry) => entry === 'register:second')).toHaveLength(1);
+      expect(fixture.bootstrapRequests).toEqual(['/runtime-bootstrap', '/runtime-bootstrap']);
+
+      const factoriesBeforeHeldCreate = replaced.events.filter((entry) => entry === 'factory').length;
+      await runtime('hold');
+      await page.waitForFunction(() => (globalThis as typeof globalThis & {
+        __mcpRuntimePreviewFixture: { stats(): { readonly events: readonly string[] } };
+      }).__mcpRuntimePreviewFixture.stats().events.includes('create:runtime-binding-c'), undefined, { timeout: 5_000 });
+      await runtime('unmountRuntime');
+      await runtime('resolveHeld');
+      await page.waitForFunction(() => (globalThis as typeof globalThis & {
+        __mcpRuntimePreviewFixture: { stats(): { readonly events: readonly string[] } };
+      }).__mcpRuntimePreviewFixture.stats().events.includes('backend:runtime-binding-c'), undefined, { timeout: 5_000 });
+      const held = await stats();
+      expect(held.events.filter((entry) => entry === 'factory')).toHaveLength(factoriesBeforeHeldCreate);
+      expect(held.events).not.toContain('policy:runtime-binding-c');
+      expect(fixture.bootstrapRequests).toEqual(['/runtime-bootstrap', '/runtime-bootstrap']);
+      expect(held.events.lastIndexOf('unregister:second')).toBeGreaterThan(held.events.lastIndexOf('backend:runtime-binding-c'));
+      expect(browserErrors).toEqual([]);
+    } finally {
+      await browser.close();
+      await fixture.close();
+    }
+  }, 45_000);
 });
