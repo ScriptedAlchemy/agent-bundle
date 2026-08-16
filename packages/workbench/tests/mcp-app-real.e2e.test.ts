@@ -738,6 +738,89 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
     await expect(appFrame.getByText('State version 0')).toBeVisible();
     await expect(appFrame.getByRole('status')).toHaveText('');
 
+    // A second real widget request must receive a distinct, server-created
+    // challenge.  Denial must stay on the App protocol lane: it cannot reach
+    // the binding operation endpoint or update the widget's model state.
+    const toolCallRequests = (): readonly RuntimeAppMessage[] => appMessages.filter((entry) =>
+      new URL(entry.href).origin === fixture.url && entry.senderOrigin === controllerOrigin && entry.message !== null && typeof entry.message === 'object' &&
+      (entry.message as Readonly<Record<string, unknown>>).method === 'tools/call');
+    await appFrame.getByRole('button', { name: 'Refresh' }).click();
+    await expect.poll(() => runtimeAppRequests.filter((entry) => entry.method === 'POST' && entry.path === consentPath), { timeout: 15_000 }).toHaveLength(2);
+    const deniedConsentCreate = runtimeAppRequests.filter((entry) => entry.method === 'POST' && entry.path === consentPath)[1];
+    expect(deniedConsentCreate?.body).toEqual({
+      actionFingerprint: 'runtime-app:call-tool:v1',
+      capability: 'call-tool',
+      details: { arguments: { limit: 10 }, name: 'render_edit_timeline' },
+      scope: 'action',
+      summary: 'Call MCP App tool',
+    });
+    await expect.poll(() => runtimeAppResponses.filter((entry) => entry.method === 'POST' && entry.path === consentPath), { timeout: 15_000 }).toHaveLength(2);
+    const deniedConsentCreated = runtimeAppResponses.filter((entry) => entry.method === 'POST' && entry.path === consentPath)[1];
+    const deniedChallenge = (deniedConsentCreated?.response as Readonly<{ readonly challenge?: Readonly<{ readonly id?: unknown }> }> | undefined)?.challenge;
+    if (typeof deniedChallenge?.id !== 'string') throw new Error('Denied Runtime App consent create response omitted its challenge id.');
+    expect(deniedChallenge.id).not.toBe(challenge.id);
+    expect(deniedConsentCreated?.response).toMatchObject({
+      challenge: {
+        id: deniedChallenge.id,
+        request: {
+          actionFingerprint: expect.stringMatching(/^act-[A-Za-z0-9_-]{12}$/u),
+          capability: 'call-tool',
+          details: { arguments: { limit: 10 }, name: 'render_edit_timeline' },
+          scope: 'action',
+        },
+      },
+    });
+    await expect(page.getByRole('dialog', { name: 'Runtime App consent' })).toBeVisible({ timeout: 15_000 });
+    await page.getByRole('button', { name: 'Deny' }).click();
+    const deniedDecisionPath = `${consentPath}/${encodeURIComponent(deniedChallenge.id)}`;
+    await expect.poll(() => runtimeAppRequests.filter((entry) => entry.method === 'POST' && entry.path === deniedDecisionPath), { timeout: 15_000 }).toHaveLength(1);
+    expect(runtimeAppRequests.find((entry) => entry.method === 'POST' && entry.path === deniedDecisionPath)?.body).toEqual({ decision: 'deny' });
+    await expect.poll(() => runtimeAppResponses.filter((entry) => entry.method === 'POST' && entry.path === deniedDecisionPath), { timeout: 15_000 }).toHaveLength(1);
+    const deniedDecision = runtimeAppResponses.find((entry) => entry.method === 'POST' && entry.path === deniedDecisionPath)?.response;
+    expect(deniedDecision).toMatchObject({ documentPolicy: expect.any(Object) });
+    expect(deniedDecision).not.toHaveProperty('grant');
+    await expect.poll(toolCallRequests, { timeout: 15_000 }).toHaveLength(2);
+    const deniedToolCall = toolCallRequests()[1];
+    const deniedToolCallId = deniedToolCall?.message !== null && typeof deniedToolCall?.message === 'object'
+      ? (deniedToolCall.message as Readonly<Record<string, unknown>>).id
+      : undefined;
+    if (typeof deniedToolCallId !== 'string' && typeof deniedToolCallId !== 'number') throw new Error('Denied Runtime App tool request omitted its JSON-RPC id.');
+    await expect.poll(() => messageFor(controllerOrigin, fixture.url, (message) => message.id === deniedToolCallId && Object.hasOwn(message, 'error')), { timeout: 15_000 }).toBeDefined();
+    expect(messageFor(controllerOrigin, fixture.url, (message) => message.id === deniedToolCallId && Object.hasOwn(message, 'error'))?.message).toMatchObject({
+      error: { code: expect.any(Number), message: expect.any(String) },
+      id: deniedToolCallId,
+      jsonrpc: '2.0',
+    });
+    await expect(appFrame.getByRole('status')).toHaveText('Unable to refresh timeline.');
+    await expect(appFrame.getByText('State version 0')).toBeVisible();
+    expect(operationRequests('tools/call')).toHaveLength(1);
+    expect(operationResponses('tools/call')).toHaveLength(1);
+
+    // The first grant was consumed by the successful widget call.  Replaying
+    // its captured canonical operation through the authenticated foreground
+    // must be rejected before another provider operation or vector result.
+    const replayBody = operation?.body;
+    if (replayBody === undefined) throw new Error('Successful Runtime App operation did not retain its canonical request body.');
+    const replay = await page.evaluate(async ({ body, path, sessionToken }) => {
+      const response = await fetch(path, {
+        body: JSON.stringify(body),
+        credentials: 'same-origin',
+        headers: { 'content-type': 'application/json', 'x-agent-bundle-session': sessionToken },
+        method: 'POST',
+      });
+      return Object.freeze({ body: await response.json(), status: response.status });
+    }, { body: replayBody, path: operationPath, sessionToken: foregroundToken });
+    expect(replay).toEqual({
+      body: { diagnostic: { code: 'AB8023', message: 'MCP App operation could not be completed.' } },
+      status: 502,
+    });
+    await expect.poll(() => operationRequests('tools/call')).toHaveLength(2);
+    await expect.poll(() => operationResponses('tools/call')).toHaveLength(2);
+    expect(operationResponses('tools/call').filter((entry) => {
+      const response = entry.response;
+      return response !== null && typeof response === 'object' && Object.hasOwn(response, 'result');
+    })).toHaveLength(1);
+
     const resourceUri = 'ui://rsc-agent-runtime/edit-timeline-v1.html';
     const resourceRequestId = 'runtime-resource-read-proof';
     await appFrame.evaluate(({ id, uri }) => {
