@@ -72,3 +72,21 @@ it('uses only real diagnostics to explain a stale epoch and its next rebuild act
   expect(overview.diagnostics).toEqual([{ code: 'AB4000', message: 'Plugin name is required.', severity: 'error' }]);
   expect(overview.nextAction).toEqual({ label: 'Rebuild', summary: 'Resolve 1 error, then rebuild' });
 });
+
+it('projects a detached immutable changed-file list and defaults absent browser activity to empty', () => {
+  const status = {
+    artifact: { state: 'missing' as const },
+    build: { state: 'idle' as const },
+    source: { diagnostics: [], state: 'unknown' as const },
+  };
+  const changedFiles = ['src/alpha.ts', 'src/beta.ts'];
+  const overview = overviewFor(status, changedFiles);
+  const withoutActivity = overviewFor(status);
+
+  expect(overview.changedFiles).toEqual(['src/alpha.ts', 'src/beta.ts']);
+  expect(overview.changedFiles).not.toBe(changedFiles);
+  expect(Object.isFrozen(overview.changedFiles)).toBe(true);
+  expect(() => (overview.changedFiles as string[]).push('src/gamma.ts')).toThrow(TypeError);
+  expect(withoutActivity.changedFiles).toEqual([]);
+  expect(Object.isFrozen(withoutActivity.changedFiles)).toBe(true);
+});

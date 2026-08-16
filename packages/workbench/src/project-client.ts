@@ -1,6 +1,8 @@
 import {
   freezeJsonValue,
+  type Invalidation,
   type ProjectEvent,
+  type ProjectEventOf,
   type ProjectEventMessage,
   type ProjectReplayGap,
   type ProjectStatus,
@@ -20,6 +22,12 @@ export interface EventSourceLike {
 export type EventSourceFactory = (url: string) => EventSourceLike;
 export type ProjectClientErrorListener = (reason: unknown) => void;
 export type ProjectEventListener = (event: ProjectEventMessage) => void;
+
+export interface ProjectActivitySnapshot {
+  readonly changedFiles: readonly string[];
+}
+
+export type ProjectActivityListener = (activity: ProjectActivitySnapshot) => void;
 
 export interface ProjectClientOptions {
   readonly events?: EventSourceFactory;
@@ -129,9 +137,38 @@ const parseProjectEvent = (
   return Object.freeze({ event: value as ProjectEvent, sequence: value.sequence });
 };
 
+const isInvalidationReason = (value: unknown): value is Invalidation['reason'] =>
+  value === 'initial' || value === 'manual' || value === 'source-change';
+
 const normalizePaths = (paths: readonly string[]): readonly string[] => Object.freeze(
   [...new Set(paths)].sort((left, right) => left.localeCompare(right)),
 );
+
+const parseSourceChangedEvent = (data: unknown): ProjectEventOf<'source.changed'> | undefined => {
+  if (!isRecord(data) || data.type !== 'source.changed' || typeof data.sequence !== 'number' ||
+    !Number.isSafeInteger(data.sequence) || data.sequence < 0 || typeof data.occurredAt !== 'string' || !isRecord(data.payload)) {
+    return undefined;
+  }
+  const { payload } = data;
+  if (!Array.isArray(payload.paths) || !payload.paths.every((path) => typeof path === 'string') ||
+    !isInvalidationReason(payload.reason) || typeof payload.occurredAt !== 'string') {
+    return undefined;
+  }
+  return {
+    occurredAt: data.occurredAt,
+    payload: {
+      occurredAt: payload.occurredAt,
+      paths: payload.paths,
+      reason: payload.reason,
+    },
+    sequence: data.sequence,
+    type: 'source.changed',
+  };
+};
+
+const activityFor = (paths: readonly string[]): ProjectActivitySnapshot => Object.freeze({
+  changedFiles: normalizePaths(paths),
+});
 
 /**
  * Browser-side transport for the W9 foreground routes. Native EventSource owns
@@ -142,6 +179,8 @@ export class ProjectClient {
   readonly #events: EventSourceFactory;
   readonly #foreground: ForegroundRouteClient;
   #closed = false;
+  #activity = activityFor([]);
+  readonly #activityListeners = new Set<ProjectActivityListener>();
   #eventDrainPromise: Promise<void> | undefined;
   #eventListener: ProjectEventListener | undefined;
   readonly #eventSubscribers = new Set<ProjectEventListener>();
@@ -151,6 +190,7 @@ export class ProjectClient {
   #eventRefreshQueued = false;
   #highestQueuedEventId = -1;
   #lastEventId = 0;
+  #lastSourceChangeSequence = -1;
   #errorListener: ProjectClientErrorListener | undefined;
   #listener: ((status: ProjectStatus) => void) | undefined;
   #refreshPromise: Promise<ProjectStatus> | undefined;
@@ -162,6 +202,15 @@ export class ProjectClient {
 
   get lastEventId(): number {
     return this.#lastEventId;
+  }
+
+  get activity(): ProjectActivitySnapshot {
+    return this.#activity;
+  }
+
+  onActivity(listener: ProjectActivityListener): () => void {
+    this.#activityListeners.add(listener);
+    return () => this.#activityListeners.delete(listener);
   }
 
   subscribeEvents(listener: ProjectEventListener): () => void {
@@ -236,6 +285,7 @@ export class ProjectClient {
     this.#eventRefreshQueued = false;
     this.#eventSource?.close();
     this.#eventSource = undefined;
+    this.#activityListeners.clear();
     this.#errorListener = undefined;
     this.#eventListener = undefined;
     this.#eventSubscribers.clear();
@@ -325,6 +375,7 @@ export class ProjectClient {
           synthesizedGap = true;
         }
 
+        this.#publishActivity(queued.event);
         this.#publishEvent(queued.event);
         if (this.#closed) return;
         if (queued.sequence !== undefined) this.#lastEventId = queued.sequence;
@@ -335,6 +386,20 @@ export class ProjectClient {
       if (this.#eventQueue.length > 0 && !this.#closed) this.#queueEventDrain();
     });
     this.#eventDrainPromise = operation;
+  }
+
+  #publishActivity(event: ProjectEventMessage): void {
+    const sourceChanged = parseSourceChangedEvent(event);
+    if (sourceChanged === undefined || sourceChanged.sequence <= this.#lastSourceChangeSequence) return;
+    this.#lastSourceChangeSequence = sourceChanged.sequence;
+    this.#activity = activityFor(sourceChanged.payload.paths);
+    for (const listener of this.#activityListeners) {
+      try {
+        listener(this.#activity);
+      } catch {
+        // Activity observers must not interrupt foreground event delivery.
+      }
+    }
   }
 
   #queueEventRefresh(): void {

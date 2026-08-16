@@ -387,6 +387,151 @@ it('clears queued runtime delivery and ignores late callbacks after close', asyn
   expect(stream.closed).toBe(true);
 });
 
+it('captures the latest valid source-change paths in an immutable browser activity snapshot', async () => {
+  const stream = new RecordingEventSource();
+  const client = new ProjectClient({
+    events: () => stream,
+    fetch: withForegroundSession(async () => Response.json({ status: status() })),
+  });
+
+  const observed: Array<readonly string[]> = [];
+  const unsubscribe = client.onActivity((activity) => observed.push(activity.changedFiles));
+  await client.connect(() => undefined);
+  stream.emit('source.changed', {
+    data: JSON.stringify({
+      occurredAt: '2026-08-16T12:00:00.000Z',
+      payload: {
+        occurredAt: '2026-08-16T12:00:00.000Z',
+        paths: ['src/z.ts', 'src/a.ts', 'src/a.ts'],
+        reason: 'source-change',
+      },
+      sequence: 12,
+      type: 'source.changed',
+    }),
+    lastEventId: '12',
+  });
+  await flushEvents();
+
+  const activity = client.activity;
+  expect(activity.changedFiles).toEqual(['src/a.ts', 'src/z.ts']);
+  expect(observed).toEqual([['src/a.ts', 'src/z.ts']]);
+  expect(Object.isFrozen(activity)).toBe(true);
+  expect(Object.isFrozen(activity.changedFiles)).toBe(true);
+  expect(() => (activity.changedFiles as string[]).push('src/other.ts')).toThrow(TypeError);
+  unsubscribe();
+});
+
+it('replaces changed-file activity only when a higher valid source-change sequence arrives', async () => {
+  const stream = new RecordingEventSource();
+  const client = new ProjectClient({
+    events: () => stream,
+    fetch: withForegroundSession(async () => Response.json({ status: status() })),
+  });
+  await client.connect(() => undefined);
+
+  for (const [sequence, paths] of [[18, ['src/old.ts']], [20, ['src/new.ts']], [19, ['src/stale.ts']]] as const) {
+    stream.emit('source.changed', {
+      data: JSON.stringify({
+        occurredAt: `2026-08-16T12:00:${sequence}.000Z`,
+        payload: {
+          occurredAt: `2026-08-16T12:00:${sequence}.000Z`,
+          paths,
+          reason: 'source-change',
+        },
+        sequence,
+        type: 'source.changed',
+      }),
+      lastEventId: String(sequence),
+    });
+  }
+  await flushEvents();
+
+  expect(client.activity.changedFiles).toEqual(['src/new.ts']);
+  expect(client.lastEventId).toBe(20);
+});
+
+it('retains the latest changed-file activity when a source-change envelope is malformed', async () => {
+  const stream = new RecordingEventSource();
+  const client = new ProjectClient({
+    events: () => stream,
+    fetch: withForegroundSession(async () => Response.json({ status: status() })),
+  });
+  await client.connect(() => undefined);
+  stream.emit('source.changed', {
+    data: JSON.stringify({
+      occurredAt: '2026-08-16T12:00:00.000Z',
+      payload: {
+        occurredAt: '2026-08-16T12:00:00.000Z',
+        paths: ['src/kept.ts'],
+        reason: 'source-change',
+      },
+      sequence: 22,
+      type: 'source.changed',
+    }),
+    lastEventId: '22',
+  });
+  stream.emit('source.changed', {
+    data: JSON.stringify({
+      occurredAt: '2026-08-16T12:01:00.000Z',
+      payload: { occurredAt: '2026-08-16T12:01:00.000Z', paths: ['src/lost.ts'], reason: 'manual-change' },
+      sequence: 23,
+      type: 'source.changed',
+    }),
+    lastEventId: '23',
+  });
+  await flushEvents();
+
+  expect(client.activity.changedFiles).toEqual(['src/kept.ts']);
+});
+
+it('retains activity across a failed event refresh and ignores post-close event delivery', async () => {
+  const stream = new RecordingEventSource();
+  const errors: unknown[] = [];
+  let requests = 0;
+  const client = new ProjectClient({
+    events: () => stream,
+    fetch: withForegroundSession(async () => {
+      requests += 1;
+      return requests === 1
+        ? Response.json({ status: status() })
+        : new Response(null, { status: 500 });
+      }),
+  });
+  await client.connect(() => undefined, (reason) => errors.push(reason));
+  stream.emit('source.changed', {
+    data: JSON.stringify({
+      occurredAt: '2026-08-16T12:00:00.000Z',
+      payload: {
+        occurredAt: '2026-08-16T12:00:00.000Z',
+        paths: ['src/persisted.ts'],
+        reason: 'source-change',
+      },
+      sequence: 24,
+      type: 'source.changed',
+    }),
+    lastEventId: '24',
+  });
+  await new Promise((resolvePromise) => setImmediate(resolvePromise));
+  await new Promise((resolvePromise) => setImmediate(resolvePromise));
+  client.close();
+  stream.emit('source.changed', {
+    data: JSON.stringify({
+      occurredAt: '2026-08-16T12:01:00.000Z',
+      payload: {
+        occurredAt: '2026-08-16T12:01:00.000Z',
+        paths: ['src/ignored.ts'],
+        reason: 'source-change',
+      },
+      sequence: 25,
+      type: 'source.changed',
+    }),
+    lastEventId: '25',
+  });
+
+  expect(errors).toHaveLength(1);
+  expect(client.activity.changedFiles).toEqual(['src/persisted.ts']);
+});
+
 it('reports one failed event refresh without an unhandled rejection and retains the last status', async () => {
   const stream = new RecordingEventSource();
   const errors: unknown[] = [];

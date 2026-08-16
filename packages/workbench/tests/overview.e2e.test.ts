@@ -49,7 +49,8 @@ const startFrozenEpochServer = async (root: string) => {
     build: { state: 'idle' },
     source: { diagnostics: [], revision: built.epoch.projectRevision, state: 'ready' },
   };
-  return startForegroundServer({
+  const eventHub = new ProjectEventHub();
+  const server = await startForegroundServer({
     assets: createWorkbenchAssetSource({ root: workbenchAssets }),
     coordinator: {
       close: async () => undefined,
@@ -57,10 +58,11 @@ const startFrozenEpochServer = async (root: string) => {
       start: async () => undefined,
       status: () => status,
     },
-    eventHub: new ProjectEventHub(),
+    eventHub,
     port: 0,
     skillDocuments: new SkillDocumentService({ epochStore, projectService, root }),
   });
+  return { eventHub, server };
 };
 
 const writeMcpPlaygroundProject = async (root: string): Promise<void> => {
@@ -340,6 +342,43 @@ e2e('renders and rebuilds the complete responsive Overview against a real foregr
   }
 });
 
+e2e('renders the latest changed files from a live foreground source event without mobile overflow', { timeout: 60_000 }, async ({ page }) => {
+  await buildWorkbench();
+  const project = await createProjectFixture();
+  const { eventHub, server } = await startFrozenEpochServer(project.root);
+  const pageErrors: Error[] = [];
+  page.on('pageerror', (error) => pageErrors.push(error));
+  try {
+    await page.goto(`${server.url}#overview`);
+    await expect(page.getByRole('heading', { name: 'Project overview' })).toBeVisible({ timeout: browserTimeout });
+    await page.waitForTimeout(100);
+    eventHub.publish({
+      payload: {
+        occurredAt: '2026-08-16T12:00:00.000Z',
+        paths: [
+          'src/very/deeply/nested/path/that/needs/to/wrap/without/causing/a/horizontal/scrollbar/on/a/narrow/viewport.ts',
+          'src/config.ts',
+        ],
+        reason: 'source-change',
+      },
+      type: 'source.changed',
+    });
+
+    const changedFiles = page.getByRole('region', { name: 'Latest changed files (2)' });
+    await expect(changedFiles).toBeVisible({ timeout: browserTimeout });
+    await expect(changedFiles.getByRole('listitem')).toHaveText([
+      'src/config.ts',
+      'src/very/deeply/nested/path/that/needs/to/wrap/without/causing/a/horizontal/scrollbar/on/a/narrow/viewport.ts',
+    ]);
+    await page.setViewportSize({ height: 844, width: 390 });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    expect(pageErrors).toEqual([]);
+  } finally {
+    await server.close();
+    await removeProjectFixture(project.root);
+  }
+});
+
 e2e('loads the lazy Shiki chunk only after a fenced non-Mermaid Skill is rendered', { timeout: 60_000 }, async ({ page }) => {
   await buildWorkbench();
   const project = await createProjectFixture();
@@ -407,7 +446,7 @@ e2e('delivers active Skill resources as downloads without letting their page scr
 e2e('lists an immutable epoch Skill tree even after the current source Skill is renamed', { timeout: 60_000 }, async ({ page }) => {
   await buildWorkbench();
   const project = await createProjectFixture();
-  const server = await startFrozenEpochServer(project.root);
+  const { server } = await startFrozenEpochServer(project.root);
   try {
     const renamed = join(project.root, 'skills', 'revised');
     await rename(project.skillDir, renamed);
