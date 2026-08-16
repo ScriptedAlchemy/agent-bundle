@@ -262,6 +262,10 @@ interface OwnerLock {
   readonly version: 1;
 }
 
+interface SessionPersistenceProgress {
+  metadataRenamed: boolean;
+}
+
 const draftSchemaVersion = 1 as const;
 const legacySessionSchemaVersion = 1 as const;
 const objectSessionSchemaVersion = 2 as const;
@@ -272,6 +276,23 @@ const pendingIndexDirectoryName = '.pending';
 const sessionDocumentName = 'session.json';
 const eventDocumentName = 'events.jsonl';
 const ownerLockName = '.owner.lock';
+type DirectorySyncReason =
+  | 'final-index-publication'
+  | 'new-file'
+  | 'object-created'
+  | 'owner-lock-create'
+  | 'owner-lock-create-recovery'
+  | 'owner-lock-recovery'
+  | 'owner-lock-release'
+  | 'pending-index-publication'
+  | 'session-metadata-rename';
+type DurabilityTestPhase =
+  | 'after-final-index-link'
+  | 'before-final-index-link'
+  | `before-directory-sync:${DirectorySyncReason}`;
+type DurabilityTestHook = (phase: DurabilityTestPhase, path: string) => void;
+/** Non-API test seam, unavailable unless the process explicitly runs in test mode. */
+const durabilityTestHookKey = Symbol.for('agent-bundle.playground-service.durability-test-hook');
 const pathSegment = /^[a-z0-9][a-z0-9._-]*$/iu;
 const traceSources: ReadonlySet<string> = new Set<PlaygroundTraceSource>([
   'build',
@@ -354,6 +375,12 @@ const serviceError = (code: PlaygroundServiceErrorCode, message: string): Playgr
 
 const isErrno = (error: unknown, code: string): boolean =>
   typeof error === 'object' && error !== null && 'code' in error && error.code === code;
+
+const runDurabilityTestHook = (phase: DurabilityTestPhase, path: string): void => {
+  if (process.env.NODE_ENV !== 'test') return;
+  const hooks = globalThis as typeof globalThis & Record<symbol, DurabilityTestHook | undefined>;
+  hooks[durabilityTestHookKey]?.(phase, path);
+};
 
 const nonempty = (value: unknown, label: string): string => {
   if (typeof value !== 'string' || value.length === 0) {
@@ -571,7 +598,7 @@ export class PlaygroundService {
       const storageObjectId = safeSessionId(randomUUID());
       const root = this.#objectRoot(storageObjectId);
       mkdirSync(root);
-      this.#syncDirectory(this.#requireObjectRoot());
+      this.#syncDirectory(this.#requireObjectRoot(), 'object-created');
       const stat = lstatSync(root);
       if (!stat.isDirectory() || stat.isSymbolicLink()) {
         throw serviceError('PLAYGROUND_ROOT_INVALID', 'Playground session object must be a real contained directory.');
@@ -896,7 +923,7 @@ export class PlaygroundService {
       if (!pendingBefore.isFile() || pendingBefore.nlink !== 1) {
         throw serviceError('PLAYGROUND_STORE_CORRUPT', 'Playground pending index could not be pinned safely.');
       }
-      this.#syncDirectory(this.#requirePendingIndexRoot());
+      this.#syncDirectory(this.#requirePendingIndexRoot(), 'pending-index-publication');
       this.#assertAvailable();
       const legacyRoot = this.#legacySessionRoot(record.id);
       try {
@@ -906,6 +933,7 @@ export class PlaygroundService {
         if (!isErrno(error, 'ENOENT')) throw error;
       }
       const finalPath = this.#finalIndexPath(record.id);
+      runDurabilityTestHook('before-final-index-link', pendingPath);
       try {
         linkSync(pendingPath, finalPath);
       } catch (error) {
@@ -914,6 +942,8 @@ export class PlaygroundService {
         }
         throw error;
       }
+      this.#sessions.set(record.id, record);
+      runDurabilityTestHook('after-final-index-link', finalPath);
       const finalDescriptor = openSync(finalPath, constants.O_RDONLY | constants.O_NOFOLLOW);
       try {
         const pendingAfter = fstatSync(pendingDescriptor);
@@ -930,8 +960,7 @@ export class PlaygroundService {
       } finally {
         closeSync(finalDescriptor);
       }
-      this.#sessions.set(record.id, record);
-      this.#syncDirectory(this.#requireIndexRoot());
+      this.#syncDirectory(this.#requireIndexRoot(), 'final-index-publication');
     } finally {
       closeSync(pendingDescriptor);
     }
@@ -1010,7 +1039,8 @@ export class PlaygroundService {
     this.#resolvedSessionsRoot = resolvedSessionsRoot;
   }
 
-  #syncDirectory(path: string): void {
+  #syncDirectory(path: string, reason: DirectorySyncReason): void {
+    runDurabilityTestHook(`before-directory-sync:${reason}`, path);
     try {
       const descriptor = openSync(path, constants.O_RDONLY);
       try {
@@ -1116,7 +1146,7 @@ export class PlaygroundService {
     } finally {
       await handle.close();
     }
-    this.#syncDirectory(dirname(path));
+    this.#syncDirectory(dirname(path), 'new-file');
   }
 
   async #readV2Index(sessionId: string): Promise<PersistedSessionIndex | undefined> {
@@ -1231,6 +1261,7 @@ export class PlaygroundService {
     const path = join(root, ownerLockName);
     const document = Object.freeze({ pid: process.pid, token, version: 1 as const });
     for (let attempt = 0; attempt < 3; attempt += 1) {
+      let createdAndSynced = false;
       try {
         const handle = await open(
           path,
@@ -1244,12 +1275,25 @@ export class PlaygroundService {
           }
           await handle.writeFile(`${JSON.stringify(document)}\n`, 'utf8');
           await handle.sync();
+          createdAndSynced = true;
         } finally {
           await handle.close();
         }
-        this.#syncDirectory(root);
+        this.#syncDirectory(root, 'owner-lock-create');
         return token;
       } catch (error) {
+        if (createdAndSynced) {
+          try {
+            await this.#removeJustCreatedOwnerLock(root, token);
+          } catch (cleanupError) {
+            throw new AggregateError(
+              [error, cleanupError],
+              'Playground owner-lock durability failure could not be cleaned up.',
+              { cause: cleanupError },
+            );
+          }
+          throw error;
+        }
         if (!isErrno(error, 'EEXIST')) throw error;
       }
       const owner = await this.#readOwnerLock(root);
@@ -1259,7 +1303,7 @@ export class PlaygroundService {
       try {
         await this.#assertMutableFile(root, ownerLockName);
         await unlink(path);
-        this.#syncDirectory(root);
+        this.#syncDirectory(root, 'owner-lock-recovery');
       } catch (error) {
         if (!isErrno(error, 'ENOENT')) throw error;
       }
@@ -1274,7 +1318,7 @@ export class PlaygroundService {
       if (owner.token === token) {
         await this.#assertMutableFile(root, ownerLockName);
         await unlink(path);
-        this.#syncDirectory(root);
+        this.#syncDirectory(root, 'owner-lock-release');
       }
     } catch (error) {
       if (!isErrno(error, 'ENOENT')) throw error;
@@ -1295,6 +1339,21 @@ export class PlaygroundService {
     return Object.freeze({ pid: parsed.pid, token: parsed.token, version: 1 });
   }
 
+  async #removeJustCreatedOwnerLock(root: string, token: string): Promise<void> {
+    const path = join(root, ownerLockName);
+    const owner = await this.#readOwnerLock(root);
+    if (owner.token !== token) {
+      throw serviceError('PLAYGROUND_SESSION_OWNED', 'Playground owner lock changed before durability cleanup.');
+    }
+    await this.#assertMutableFile(root, ownerLockName);
+    const currentOwner = await this.#readOwnerLock(root);
+    if (currentOwner.token !== token) {
+      throw serviceError('PLAYGROUND_SESSION_OWNED', 'Playground owner lock changed during durability cleanup.');
+    }
+    await unlink(path);
+    this.#syncDirectory(root, 'owner-lock-create-recovery');
+  }
+
   #ownerIsStale(owner: OwnerLock): boolean {
     try {
       process.kill(owner.pid, 0);
@@ -1311,18 +1370,21 @@ export class PlaygroundService {
   ): Promise<void> {
     const previousOutcome = record.outcome;
     const previousState = record.state;
+    const persistence: SessionPersistenceProgress = { metadataRenamed: false };
     record.outcome = outcome;
     record.state = state;
     try {
-      await this.#persistSession(record);
+      await this.#persistSession(record, persistence);
     } catch (error) {
-      record.outcome = previousOutcome;
-      record.state = previousState;
+      if (!persistence.metadataRenamed) {
+        record.outcome = previousOutcome;
+        record.state = previousState;
+      }
       throw error;
     }
   }
 
-  async #persistSession(record: SessionRecord): Promise<void> {
+  async #persistSession(record: SessionRecord, progress?: SessionPersistenceProgress): Promise<void> {
     const documentBase = {
       cleanupFailures: snapshotCleanupFailures(record.cleanupFailures),
       createdAt: record.createdAt,
@@ -1345,7 +1407,8 @@ export class PlaygroundService {
     const temporary = join(record.root, `.${sessionDocumentName}.${randomUUID()}.tmp`);
     await this.#writeNewFile(temporary, `${JSON.stringify(document)}\n`);
     await rename(temporary, join(record.root, sessionDocumentName));
-    this.#syncDirectory(record.root);
+    if (progress !== undefined) progress.metadataRenamed = true;
+    this.#syncDirectory(record.root, 'session-metadata-rename');
   }
 
   async #readPersistedSession(
