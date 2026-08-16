@@ -145,6 +145,7 @@ export class ProjectClient {
   #closed = false;
   #eventDrainPromise: Promise<void> | undefined;
   #eventListener: ProjectEventListener | undefined;
+  readonly #eventSubscribers = new Set<ProjectEventListener>();
   #eventQueue: QueuedProjectEvent[] = [];
   #eventSource: EventSourceLike | undefined;
   #eventRefreshPromise: Promise<void> | undefined;
@@ -163,6 +164,13 @@ export class ProjectClient {
 
   get lastEventId(): number {
     return this.#lastEventId;
+  }
+
+  subscribeEvents(listener: ProjectEventListener): () => void {
+    if (typeof listener !== 'function') throw new ProjectClientError('Workbench event listener is not valid.');
+    if (this.#closed) return () => undefined;
+    this.#eventSubscribers.add(listener);
+    return () => this.#eventSubscribers.delete(listener);
   }
 
   async connect(
@@ -234,6 +242,7 @@ export class ProjectClient {
     this.#eventSource = undefined;
     this.#errorListener = undefined;
     this.#eventListener = undefined;
+    this.#eventSubscribers.clear();
     this.#listener = undefined;
     this.#foreground.forgetAuthentication();
   }
@@ -275,16 +284,35 @@ export class ProjectClient {
       while (!this.#closed) {
         const queued = this.#eventQueue.shift();
         if (queued === undefined) return;
-
-        try {
-          this.#eventListener?.(queued.event);
-        } catch (error) {
-          this.#reportError(error);
+        if (queued.event.type === 'replay.gap') {
+          this.#publishEvent(queued.event);
+          if (this.#closed) return;
+          this.#lastEventId = Math.max(this.#lastEventId, queued.event.latestDroppedSequence);
+          this.#queueEventRefresh();
+          continue;
         }
 
+        if (queued.sequence !== undefined && queued.sequence <= this.#lastEventId) continue;
+
+        let synthesizedGap = false;
+        if (queued.sequence !== undefined && queued.sequence > this.#lastEventId + 1) {
+          const gap = Object.freeze({
+            earliestAvailableSequence: queued.sequence,
+            latestDroppedSequence: queued.sequence - 1,
+            requestedAfterSequence: this.#lastEventId,
+            type: 'replay.gap' as const,
+          });
+          this.#publishEvent(gap);
+          if (this.#closed) return;
+          this.#lastEventId = gap.latestDroppedSequence;
+          this.#queueEventRefresh();
+          synthesizedGap = true;
+        }
+
+        this.#publishEvent(queued.event);
         if (this.#closed) return;
         if (queued.sequence !== undefined) this.#lastEventId = queued.sequence;
-        if (queued.event.type !== 'runtime.event') this.#queueEventRefresh();
+        if (queued.event.type !== 'runtime.event' && !synthesizedGap) this.#queueEventRefresh();
       }
     }).finally(() => {
       this.#eventDrainPromise = undefined;
@@ -323,6 +351,20 @@ export class ProjectClient {
       this.#errorListener?.(reason);
     } catch {
       // Consumer callbacks must not reintroduce an unhandled background rejection.
+    }
+  }
+
+  #publishEvent(event: ProjectEventMessage): void {
+    const listeners = [
+      ...(this.#eventListener === undefined ? [] : [this.#eventListener]),
+      ...this.#eventSubscribers,
+    ];
+    for (const listener of listeners) {
+      try {
+        listener(event);
+      } catch (error) {
+        this.#reportError(error);
+      }
     }
   }
 }

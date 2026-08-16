@@ -201,7 +201,7 @@ it('refreshes Overview state after live named events and keeps the browser Event
   expect(stream.closed).toBe(true);
 });
 
-it('delivers synchronous runtime events once in FIFO order without refreshing project status', async () => {
+it('delivers synchronous runtime events once in FIFO order and refreshes after an unexplained sequence gap', async () => {
   const stream = new RecordingEventSource();
   const requests: string[] = [];
   const errors: unknown[] = [];
@@ -232,7 +232,7 @@ it('delivers synchronous runtime events once in FIFO order without refreshing pr
   expect(received).toEqual([8, 9, 10]);
   expect(frozen).toEqual([true, true, true]);
   expect(client.lastEventId).toBe(10);
-  expect(requests).toEqual(['/api/project/status']);
+  expect(requests).toEqual(['/api/project/status', '/api/project/status']);
 
   stream.emit('runtime.event', runtimeEvent(9));
   stream.emit('runtime.event', runtimeEvent(7));
@@ -245,7 +245,7 @@ it('delivers synchronous runtime events once in FIFO order without refreshing pr
   expect(received).toEqual([8, 9, 10]);
   expect(errors).toHaveLength(1);
   expect(client.lastEventId).toBe(10);
-  expect(requests).toEqual(['/api/project/status']);
+  expect(requests).toEqual(['/api/project/status', '/api/project/status']);
 });
 
 it('preserves a synchronous runtime event after replay gap delivery', async () => {
@@ -440,4 +440,95 @@ it('bootstraps a same-session token before posting an explicit rebuild through t
   expect(requests[0]?.input).toBe('/api/project/session');
   expect(requests[1]).toMatchObject({ body: '{"paths":["skills/review/SKILL.md"]}', input: '/api/project/rebuild' });
   expect(new Headers(requests[1]?.headers).get('x-agent-bundle-session')).toBe('token-1');
+});
+
+it('delivers subscribed replay and live events FIFO, exposing gaps before refresh without blocking peers', async () => {
+  const stream = new RecordingEventSource();
+  const received: string[] = [];
+  const errors: unknown[] = [];
+  const statuses: string[] = [];
+  let streamCount = 0;
+  let statusRequests = 0;
+  const client = new ProjectClient({
+    events: () => {
+      streamCount += 1;
+      return stream;
+    },
+    fetch: async () => {
+      statusRequests += 1;
+      return Response.json({ status: status() });
+    },
+  });
+  const subscribed = client as ProjectClient & {
+    subscribeEvents(listener: (event: { readonly sequence?: number; readonly type: string }) => void): () => void;
+  };
+  const eventName = (event: { readonly sequence?: number; readonly type: string }): string =>
+    event.type === 'replay.gap' ? `gap:${event.sequence ?? 'none'}` : `${event.type}:${event.sequence}`;
+
+  subscribed.subscribeEvents((event) => received.push(`first:${eventName(event)}`));
+  subscribed.subscribeEvents((event) => {
+    if (event.type === 'runtime.event' && event.sequence === 1) throw new Error('subscriber failure');
+  });
+  subscribed.subscribeEvents((event) => received.push(`third:${eventName(event)}`));
+  await client.connect(
+    () => statuses.push('status'),
+    (error) => errors.push(error),
+    (event) => received.push(`legacy:${eventName(event)}`),
+  );
+  received.length = 0;
+  statuses.length = 0;
+
+  stream.emit('runtime.event', runtimeEvent(1));
+  stream.emit('runtime.event', runtimeEvent(3));
+  stream.emit('runtime.event', runtimeEvent(3));
+  await flushEvents();
+
+  expect(received).toEqual([
+    'legacy:runtime.event:1', 'first:runtime.event:1', 'third:runtime.event:1',
+    'legacy:gap:none', 'first:gap:none', 'third:gap:none',
+    'legacy:runtime.event:3', 'first:runtime.event:3', 'third:runtime.event:3',
+  ]);
+  expect(errors).toHaveLength(1);
+  expect(errors[0]).toMatchObject({ message: 'subscriber failure' });
+  expect(statuses).toEqual(['status']);
+  expect(statusRequests).toBe(2);
+  expect(streamCount).toBe(1);
+  expect(client.lastEventId).toBe(3);
+});
+
+it('advances its replay cursor, unsubscribes snapshot listeners, and blocks late event delivery after close', async () => {
+  const stream = new RecordingEventSource();
+  const received: string[] = [];
+  const client = new ProjectClient({
+    events: () => stream,
+    fetch: async () => Response.json({ status: status() }),
+  });
+  const subscribed = client as ProjectClient & {
+    subscribeEvents(listener: (event: { readonly sequence?: number; readonly type: string }) => void): () => void;
+  };
+  const unsubscribe = subscribed.subscribeEvents((event) => received.push(event.type === 'replay.gap' ? 'gap' : `${event.type}:${event.sequence}`));
+  await client.connect(() => undefined);
+
+  stream.emit('replay.gap', {
+    data: JSON.stringify({
+      earliestAvailableSequence: 4,
+      latestDroppedSequence: 3,
+      requestedAfterSequence: 0,
+      type: 'replay.gap',
+    }),
+    lastEventId: '',
+  });
+  stream.emit('runtime.event', runtimeEvent(3));
+  stream.emit('runtime.event', runtimeEvent(4));
+  await flushEvents();
+  unsubscribe();
+  stream.emit('runtime.event', runtimeEvent(5));
+  await flushEvents();
+  client.close();
+  stream.emit('runtime.event', runtimeEvent(6));
+  await flushEvents();
+
+  expect(received).toEqual(['gap', 'runtime.event:4']);
+  expect(client.lastEventId).toBe(5);
+  expect(stream.closed).toBe(true);
 });
