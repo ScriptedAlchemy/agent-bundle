@@ -137,7 +137,7 @@ export const App = () => {
     }
 
     try {
-      const result = await app.callServerTool({ name: 'recent_edits', arguments: { limit: 10 } });
+      const result = await app.callServerTool({ name: 'render_edit_timeline', arguments: { limit: 10 } });
       const state = asTimelineState(result.structuredContent);
       if (state === undefined) {
         throw new Error('The runtime returned an invalid timeline.');

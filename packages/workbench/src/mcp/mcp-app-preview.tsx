@@ -1,5 +1,7 @@
 import React, { useEffect, useLayoutEffect, useRef, useState, type Ref, type RefCallback } from 'react';
 
+import type { CallToolResult } from '@modelcontextprotocol/client';
+
 import {
   type McpAppClient,
   type McpAppConsentChallenge,
@@ -98,6 +100,12 @@ type RuntimeRendererProps = Readonly<{
   readonly onError: (error: Error) => void;
   readonly ref: RefCallback<AppRendererHandle>;
   readonly tool: McpAppRendererTool;
+}>;
+
+/** Server-produced App evidence is detached once before it reaches the renderer handle. */
+type RuntimeRendererInvocation = Readonly<{
+  readonly input: Parameters<AppRendererHandle['sendToolInput']>[0];
+  readonly result: CallToolResult;
 }>;
 
 export type McpAppCanonicalResource = McpAppJsonObject & Readonly<{
@@ -230,6 +238,16 @@ const canonicalUiResourceUri = (value: McpAppJsonValue): boolean => {
 
 const hasCanonicalAppsProfile = (value: McpAppJsonValue): boolean =>
   isRecord(value) && value.kind === 'apps' && value.resourceUri !== undefined && canonicalUiResourceUri(value.resourceUri);
+
+const runtimeRendererInvocation = (input: McpAppJsonValue, appVisible: McpAppJsonValue): RuntimeRendererInvocation => {
+  if (!isRecord(input)) throw new McpAppPreviewDataError('runtime App tool input must be a JSON object');
+  return Object.freeze({
+    input: input as Parameters<AppRendererHandle['sendToolInput']>[0],
+    // The runtime preview service admits this field as a protocol CallToolResult.
+    // Detach its finite-JSON wire representation before handing it to the SDK UI.
+    result: detachedJson(appVisible) as unknown as CallToolResult,
+  });
+};
 
 const isRuntimeOptions = (
   options: McpAppPreviewControllerOptions | McpAppRuntimePreviewProps | PreparedRuntimePreviewControllerOptions,
@@ -452,6 +470,8 @@ export class McpAppPreviewController<State extends McpAppPreviewControllerState 
   #runtimePreview: McpAppPreviewSnapshot | undefined;
   #runtimeRenderer: AppRendererHandle | undefined;
   #runtimeRendererClosed = false;
+  #runtimeRendererDelivery: Promise<void> | undefined;
+  #runtimeRendererInvocation: RuntimeRendererInvocation | undefined;
   #runtimeRendererProps: RuntimeRendererProps | undefined;
   #started = false;
   #startPromise: Promise<void> | undefined;
@@ -474,6 +494,7 @@ export class McpAppPreviewController<State extends McpAppPreviewControllerState 
         if (this.#runtimeRenderer === undefined || this.#runtimeRendererClosed) {
           this.#runtimeRenderer = handle;
           this.#runtimeRendererClosed = false;
+          this.#deliverRuntimeRendererInvocation(handle);
         }
       };
       this.#runtimeRendererProps = undefined;
@@ -657,6 +678,7 @@ export class McpAppPreviewController<State extends McpAppPreviewControllerState 
       }
       const ref = this.#runtimeRendererRef;
       if (ref === undefined) throw new McpAppPreviewDataError('runtime renderer ref is unavailable');
+      this.#runtimeRendererInvocation = runtimeRendererInvocation(this.#input, preview.result.appVisible);
       this.#runtimeRendererProps = Object.freeze({
         onError: (error) => { this.reportRuntimeRendererError(error); },
         ref,
@@ -772,6 +794,20 @@ export class McpAppPreviewController<State extends McpAppPreviewControllerState 
     if (this.#runtime === undefined || this.#closed) return;
     this.#runtimeFailure('preview-error', error);
     void this.close().catch(() => undefined);
+  }
+
+  /** Delivers the admitted invocation once, in protocol order, to the first mounted renderer. */
+  #deliverRuntimeRendererInvocation(handle: AppRendererHandle): void {
+    const invocation = this.#runtimeRendererInvocation;
+    if (this.#closed || invocation === undefined || this.#runtimeRendererDelivery !== undefined) return;
+    const delivery = (async () => {
+      await handle.sendToolInput(invocation.input);
+      await handle.sendToolResult(invocation.result);
+    })();
+    this.#runtimeRendererDelivery = delivery;
+    void delivery.catch((error: unknown) => {
+      if (this.#runtimeRendererDelivery === delivery) this.reportRuntimeRendererError(error);
+    });
   }
 
   async #cleanupRuntime(): Promise<void> {

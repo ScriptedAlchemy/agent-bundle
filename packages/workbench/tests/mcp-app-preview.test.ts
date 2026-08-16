@@ -711,6 +711,135 @@ describe('MCP App preview', () => {
     await controller.close();
   });
 
+  it('delivers one detached full App invocation to an admitted renderer handle', async () => {
+    const input = { city: 'Paris', nested: { unit: 'celsius' } };
+    const appVisible = {
+      _meta: { 'io.modelcontextprotocol/ui': { invocationId: 'invocation-weather' } },
+      content: [{ _meta: { emphasis: 'high' }, text: 'Sunny', type: 'text' }],
+      isError: false,
+      structuredContent: { forecast: { temperature: 22, unit: 'C' } },
+    };
+    const snapshot = {
+      ...runtimePreview,
+      result: {
+        appVisible,
+        isError: false,
+        modelVisible: { ordinary: 'fallback only' },
+      },
+    } as McpAppPreviewAppsSnapshot;
+    const sent: unknown[] = [];
+    let creates = 0;
+    const client = runtimeClient(Object.freeze({
+      closeRuntime: async () => undefined,
+      createRuntime: async () => { creates += 1; return snapshot; },
+      currentDocumentPolicy: () => Object.freeze({ bindingId: snapshot.binding.id, snapshot: snapshot.documentPolicy }),
+    }));
+    const bridgeFactory = Object.assign(
+      () => { throw new Error('renderer installation is represented by its ref'); },
+      { close: async () => undefined },
+    ) as RuntimeAppBridgeFactory;
+    const initial = runtimeProps(client, () => bridgeFactory);
+    const props = {
+      ...initial,
+      run: {
+        ...initial.run,
+        input,
+      },
+    } as McpAppRuntimePreviewProps;
+    const controller = createMcpAppPreviewController(props);
+    input.nested.unit = 'fahrenheit';
+
+    await controller.start();
+    appVisible.content[0]!.text = 'Mutated';
+    appVisible.structuredContent.forecast.temperature = 99;
+    const handle = Object.freeze({
+      sendToolCancelled: async () => undefined,
+      sendToolInput: async (argumentsValue: unknown) => { sent.push(Object.freeze({ argumentsValue, kind: 'input' })); },
+      sendToolResult: async (result: unknown) => { sent.push(Object.freeze({ kind: 'result', result })); },
+      teardown: async () => undefined,
+    });
+    controller.runtimeRendererRef?.(handle);
+    controller.runtimeRendererRef?.(null);
+    controller.runtimeRendererRef?.(handle);
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(creates).toBe(1);
+    expect(sent).toEqual([
+      { argumentsValue: { city: 'Paris', nested: { unit: 'celsius' } }, kind: 'input' },
+      {
+        kind: 'result',
+        result: {
+          _meta: { 'io.modelcontextprotocol/ui': { invocationId: 'invocation-weather' } },
+          content: [{ _meta: { emphasis: 'high' }, text: 'Sunny', type: 'text' }],
+          isError: false,
+          structuredContent: { forecast: { temperature: 22, unit: 'C' } },
+        },
+      },
+    ]);
+    const inputDelivery = sent[0] as Readonly<{ readonly argumentsValue: Readonly<{ readonly nested: object }> }>;
+    const resultDelivery = sent[1] as Readonly<{ readonly result: Readonly<{ readonly content: readonly object[]; readonly structuredContent: Readonly<{ readonly forecast: object }> }> }>;
+    expect(Object.isFrozen(inputDelivery.argumentsValue)).toBe(true);
+    expect(Object.isFrozen(inputDelivery.argumentsValue.nested)).toBe(true);
+    expect(Object.isFrozen(resultDelivery.result)).toBe(true);
+    expect(Object.isFrozen(resultDelivery.result.content)).toBe(true);
+    expect(Object.isFrozen(resultDelivery.result.structuredContent.forecast)).toBe(true);
+    expect(controller.state).toMatchObject({ fallback: { result: { temperature: 22 } }, kind: 'runtime', phase: 'ready' });
+    await controller.close();
+  });
+
+  it('contains runtime App invocation delivery failures in the retryable renderer cleanup lifecycle', async () => {
+    const order: string[] = [];
+    let teardowns = 0;
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown): void => { unhandled.push(reason); };
+    process.on('unhandledRejection', onUnhandled);
+    try {
+      const client = runtimeClient(Object.freeze({
+        closeRuntime: async () => { order.push('binding'); },
+        createRuntime: async () => runtimePreview,
+        currentDocumentPolicy: () => Object.freeze({ bindingId: runtimePreview.binding.id, snapshot: runtimePreview.documentPolicy }),
+      }));
+      const bridgeFactory = Object.assign(
+        () => { throw new Error('renderer installation is represented by its ref'); },
+        { close: async () => { order.push('bridge'); } },
+      ) as RuntimeAppBridgeFactory;
+      const controller = createMcpAppPreviewController(runtimeProps(client, () => bridgeFactory));
+
+      await controller.start();
+      controller.runtimeRendererRef?.(Object.freeze({
+        sendToolCancelled: async () => undefined,
+        sendToolInput: async () => { order.push('input'); },
+        sendToolResult: async () => {
+          order.push('result');
+          throw new Error('runtime App invocation delivery failed');
+        },
+        teardown: async () => {
+          teardowns += 1;
+          order.push(`renderer:${teardowns}`);
+          if (teardowns === 1) throw new Error('renderer cleanup retry');
+        },
+      }));
+
+      await new Promise<void>((resolve) => { setTimeout(resolve, 0); });
+      await new Promise<void>((resolve) => { setTimeout(resolve, 0); });
+
+      expect(order).toEqual(['input', 'result', 'renderer:1', 'bridge', 'binding']);
+      expect(controller.state).toMatchObject({ kind: 'runtime', message: 'renderer cleanup retry', phase: 'cleanup-failed' });
+      expect(unhandled).toEqual([]);
+
+      const retry = controller.close();
+      expect(controller.close()).toBe(retry);
+      await expect(retry).resolves.toBeUndefined();
+
+      expect(order).toEqual(['input', 'result', 'renderer:1', 'bridge', 'binding', 'renderer:2']);
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+    }
+  });
+
   it('retains one frozen lifecycle handle across a held runtime create and closes its late binding without publishing ready state', async () => {
     const pending = deferred<McpAppPreviewAppsSnapshot>();
     const closedBindings: string[] = [];
