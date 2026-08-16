@@ -534,20 +534,53 @@ const runtimeAppMeta = (value: McpAppJsonValue | undefined): boolean =>
 
 const isSdkCallToolResult = (value: unknown): boolean => isCallToolResult(value);
 
+const runtimeAppAnnotations = (value: McpAppJsonValue | undefined): boolean => {
+  if (value === undefined) return true;
+  if (!isRecord(value) || !hasOnlyKeys(value, ['audience', 'lastModified', 'priority'])) return false;
+  if (value.audience !== undefined && (!Array.isArray(value.audience) || !value.audience.every((role) => role === 'assistant' || role === 'user'))) return false;
+  if (value.priority !== undefined && (typeof value.priority !== 'number' || value.priority < 0 || value.priority > 1)) return false;
+  return value.lastModified === undefined || typeof value.lastModified === 'string';
+};
+
+const runtimeAppIcon = (value: McpAppJsonValue): boolean => {
+  if (!isRecord(value) || !hasOnlyKeys(value, ['mimeType', 'sizes', 'src', 'theme']) || typeof value.src !== 'string') return false;
+  if (value.mimeType !== undefined && typeof value.mimeType !== 'string') return false;
+  if (value.sizes !== undefined && (!Array.isArray(value.sizes) || !value.sizes.every((size) => typeof size === 'string'))) return false;
+  return value.theme === undefined || value.theme === 'dark' || value.theme === 'light';
+};
+
+const runtimeAppIcons = (value: McpAppJsonValue | undefined): boolean =>
+  value === undefined || (Array.isArray(value) && value.every(runtimeAppIcon));
+
+const runtimeAppEmbeddedResource = (value: McpAppJsonValue): boolean => {
+  if (!isRecord(value) || !hasOnlyKeys(value, ['_meta', 'blob', 'mimeType', 'text', 'uri']) || typeof value.uri !== 'string' || !runtimeAppMeta(value._meta)) return false;
+  if (value.mimeType !== undefined && typeof value.mimeType !== 'string') return false;
+  const hasText = Object.hasOwn(value, 'text');
+  const hasBlob = Object.hasOwn(value, 'blob');
+  if (hasText === hasBlob) return false;
+  return hasText ? typeof value.text === 'string' : typeof value.blob === 'string';
+};
+
 const runtimeAppContent = (value: McpAppJsonValue): boolean => {
   if (!isRecord(value) || typeof value.type !== 'string') return false;
-  const hasAllowedKeys = (keys: readonly string[]): boolean => hasOnlyKeys(value, keys) && runtimeAppMeta(value._meta);
+  const hasAllowedKeys = (keys: readonly string[]): boolean =>
+    hasOnlyKeys(value, keys) && runtimeAppAnnotations(value.annotations) && runtimeAppMeta(value._meta);
   switch (value.type) {
     case 'text':
-      return hasAllowedKeys(['type', 'text', 'annotations', '_meta']);
+      return hasAllowedKeys(['type', 'text', 'annotations', '_meta']) && typeof value.text === 'string';
     case 'image':
     case 'audio':
-      return hasAllowedKeys(['type', 'data', 'mimeType', 'annotations', '_meta']);
-    case 'resource_link':
-      return hasAllowedKeys(['type', 'name', 'title', 'icons', 'uri', 'description', 'mimeType', 'size', 'annotations', '_meta']);
+      return hasAllowedKeys(['type', 'data', 'mimeType', 'annotations', '_meta']) && typeof value.data === 'string' && typeof value.mimeType === 'string';
+    case 'resource_link': {
+      if (!hasAllowedKeys(['type', 'name', 'title', 'icons', 'uri', 'description', 'mimeType', 'size', 'annotations', '_meta'])) return false;
+      if (typeof value.name !== 'string' || typeof value.uri !== 'string' || !runtimeAppIcons(value.icons)) return false;
+      if (value.title !== undefined && typeof value.title !== 'string') return false;
+      if (value.description !== undefined && typeof value.description !== 'string') return false;
+      if (value.mimeType !== undefined && typeof value.mimeType !== 'string') return false;
+      return value.size === undefined || typeof value.size === 'number';
+    }
     case 'resource': {
-      if (!hasAllowedKeys(['type', 'resource', 'annotations', '_meta']) || !isRecord(value.resource)) return false;
-      return hasOnlyKeys(value.resource, ['uri', 'mimeType', 'text', 'blob', '_meta']) && runtimeAppMeta(value.resource._meta);
+      return hasAllowedKeys(['type', 'resource', 'annotations', '_meta']) && runtimeAppEmbeddedResource(value.resource);
     }
     default:
       return false;

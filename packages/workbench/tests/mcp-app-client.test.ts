@@ -235,11 +235,12 @@ describe('MCP App browser client', () => {
     const richResult = {
       _meta: { 'io.modelcontextprotocol/ui': { invocationId: 'invocation-weather' } },
       content: [
-        { _meta: { emphasis: 'high' }, text: 'Sunny', type: 'text' },
-        { data: 'aGVsbG8=', mimeType: 'image/png', type: 'image' },
+        { _meta: { emphasis: 'high' }, annotations: { audience: ['assistant'], lastModified: '2026-08-16T00:00:00Z', priority: 0.8 }, text: 'Sunny', type: 'text' },
+        { annotations: { audience: ['user'] }, data: 'aGVsbG8=', mimeType: 'image/png', type: 'image' },
         { data: 'aGVsbG8=', mimeType: 'audio/wav', type: 'audio' },
-        { name: 'forecast', type: 'resource_link', uri: 'resource://weather/forecast' },
-        { resource: { _meta: { source: 'runtime' }, text: 'Forecast', uri: 'resource://weather/forecast' }, type: 'resource' },
+        { annotations: { priority: 0.5 }, icons: [{ mimeType: 'image/svg+xml', sizes: ['16x16'], src: 'https://example.test/weather.svg', theme: 'light' }], name: 'forecast', type: 'resource_link', uri: 'resource://weather/forecast' },
+        { annotations: { lastModified: '2026-08-16T00:00:00Z' }, resource: { _meta: { source: 'runtime' }, text: 'Forecast', uri: 'resource://weather/forecast' }, type: 'resource' },
+        { resource: { blob: 'aGVsbG8=', mimeType: 'text/plain', uri: 'resource://weather/blob' }, type: 'resource' },
       ],
       isError: false,
       structuredContent: { forecast: { temperature: 22, unit: 'C' } },
@@ -277,6 +278,13 @@ describe('MCP App browser client', () => {
       (result: Record<string, unknown>) => { (result.appVisible as Record<string, unknown>)._meta = []; },
       (result: Record<string, unknown>) => { (result.appVisible as Record<string, unknown>).structuredContent = []; },
       (result: Record<string, unknown>) => { (result.appVisible as Record<string, unknown>).isError = 'no'; },
+      (result: Record<string, unknown>) => { ((result.appVisible as Record<string, unknown>).content as Record<string, unknown>[])[0]!.annotations = { audience: ['assistant'], unexpected: true }; },
+      (result: Record<string, unknown>) => {
+        const icons = ((result.appVisible as Record<string, unknown>).content as Record<string, unknown>[])[3]!.icons as unknown[];
+        (icons[0] as Record<string, unknown>).unexpected = true;
+      },
+      (result: Record<string, unknown>) => { ((result.appVisible as Record<string, unknown>).content as Record<string, unknown>[])[4]!.resource = { uri: 'resource://weather/empty' }; },
+      (result: Record<string, unknown>) => { ((result.appVisible as Record<string, unknown>).content as Record<string, unknown>[])[4]!.resource = { blob: 'aGVsbG8=', text: 'Forecast', uri: 'resource://weather/both' }; },
     ];
     for (const mutate of malformed) {
       const payload = JSON.parse(JSON.stringify(validPreview)) as Record<string, unknown>;
