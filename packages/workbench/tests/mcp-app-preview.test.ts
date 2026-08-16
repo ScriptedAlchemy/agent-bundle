@@ -8,6 +8,7 @@ import {
   McpAppPreviewFrame,
   type McpAppFrameRelayFactory,
   type McpAppPreviewClient,
+  type McpAppPreviewState,
 } from '../src/mcp/mcp-app-preview.tsx';
 import type {
   McpAppHostContext,
@@ -269,6 +270,146 @@ describe('MCP App preview', () => {
       toolName: 'show-weather',
     })).toThrow('JSON');
     expect(creates).toHaveLength(1);
+  });
+
+  it('rejects nested non-ordinary JSON data before preview create without reading accessors', () => {
+    class CustomJsonLike {
+      readonly value = 'not-json';
+    }
+    let accessorReads = 0;
+    const accessor = Object.create(null) as Record<string, unknown>;
+    Object.defineProperty(accessor, 'value', {
+      enumerable: true,
+      get: () => {
+        accessorReads += 1;
+        return 'must-not-read';
+      },
+    });
+    const invalidValues: readonly unknown[] = Object.freeze([
+      new Date(0),
+      new CustomJsonLike(),
+      accessor,
+      () => undefined,
+      Symbol('not-json'),
+    ]);
+    const { client, creates } = fakeClient(Promise.resolve(preview()));
+
+    for (const invalid of invalidValues) {
+      for (const position of ['input', 'result'] as const) {
+        expect(() => createMcpAppPreviewController({
+          client,
+          frameRelayFactory: () => ({ async close() {}, start: () => true }),
+          host,
+          input: (position === 'input' ? { nested: invalid } : { city: 'Paris' }) as McpAppJsonValue,
+          result: (position === 'result' ? { nested: invalid } : { text: 'Sunny' }) as McpAppJsonValue,
+          sessionId: 'session-weather',
+          toolName: 'show-weather',
+        })).toThrow('JSON');
+      }
+    }
+
+    expect(accessorReads).toBe(0);
+    expect(creates).toEqual([]);
+  });
+
+  it('rejects nested NaN and infinities independently of cyclic JSON', () => {
+    const { client, creates } = fakeClient(Promise.resolve(preview()));
+
+    for (const invalid of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+      expect(() => createMcpAppPreviewController({
+        client,
+        frameRelayFactory: () => ({ async close() {}, start: () => true }),
+        host,
+        input: { nested: invalid } as unknown as McpAppJsonValue,
+        result: Object.freeze({ text: 'Sunny' }),
+        sessionId: 'session-weather',
+        toolName: 'show-weather',
+      })).toThrow('finite JSON numbers');
+    }
+
+    expect(creates).toEqual([]);
+  });
+
+  it('deep-detaches and freezes null-prototype JSON with an enumerable own __proto__ key', async () => {
+    const originalNested = { retained: true };
+    const input = Object.create(null) as Record<string, unknown>;
+    Object.defineProperty(input, '__proto__', { configurable: true, enumerable: true, value: originalNested, writable: true });
+    input.city = 'Paris';
+    const { client, creates } = fakeClient(Promise.resolve(preview()));
+    const controller = createMcpAppPreviewController({
+      client,
+      frameRelayFactory: () => ({ async close() {}, start: () => true }),
+      host,
+      input: input as McpAppJsonValue,
+      result: Object.freeze({ text: 'Sunny' }),
+      sessionId: 'session-weather',
+      toolName: 'show-weather',
+    });
+    originalNested.retained = false;
+
+    await controller.start();
+
+    const captured = creates[0]?.input as Record<string, unknown>;
+    expect(Object.getPrototypeOf(captured)).toBeNull();
+    expect(Object.hasOwn(captured, '__proto__')).toBe(true);
+    expect(captured.__proto__).toEqual({ retained: true });
+    expect(Object.isFrozen(captured)).toBe(true);
+    expect(Object.isFrozen(captured.__proto__)).toBe(true);
+  });
+
+  it('returns shared start and close promises while creating and cleaning up once', async () => {
+    const pending = deferred<Preview>();
+    const { client, creates, forceClosed } = fakeClient(pending.promise);
+    const controller = createMcpAppPreviewController({
+      client,
+      frameRelayFactory: () => ({ async close() {}, start: () => true }),
+      host,
+      input: Object.freeze({ city: 'Paris' }),
+      result: Object.freeze({ text: 'Sunny' }),
+      sessionId: 'session-weather',
+      toolName: 'show-weather',
+    });
+
+    const firstStart = controller.start();
+    const secondStart = controller.start();
+    const firstClose = controller.close();
+    const secondClose = controller.close();
+
+    expect(secondStart).toBe(firstStart);
+    expect(secondClose).toBe(firstClose);
+    expect(creates).toHaveLength(1);
+    pending.resolve(preview());
+    await Promise.all([firstStart, firstClose]);
+
+    expect(forceClosed).toEqual(['binding-weather']);
+  });
+
+  it('isolates a throwing subscriber from fallback publication and relay cleanup', async () => {
+    const { client } = fakeClient(Promise.resolve(preview()));
+    let relayCloseCalls = 0;
+    const observed: McpAppPreviewState['phase'][] = [];
+    const controller = createMcpAppPreviewController({
+      client,
+      frameRelayFactory: () => ({
+        async close() { relayCloseCalls += 1; },
+        start: () => false,
+      }),
+      host,
+      input: Object.freeze({ city: 'Paris' }),
+      result: Object.freeze({ text: 'Sunny' }),
+      sessionId: 'session-weather',
+      toolName: 'show-weather',
+    });
+
+    expect(() => controller.subscribe(() => { throw new Error('display subscriber failed'); })).not.toThrow();
+    controller.subscribe((state) => { observed.push(state.phase); });
+    await controller.start();
+    expect(controller.attachFrame(iframe(), browserWindow)).toBe(false);
+    await controller.close();
+
+    expect(observed).toEqual(['loading', 'ready', 'error']);
+    expect(controller.state).toMatchObject({ fallback: { reason: 'preview-error' }, phase: 'error' });
+    expect(relayCloseCalls).toBe(1);
   });
 
   it('commits a document-policy refresh only after the page has committed its keyed blank barrier', async () => {

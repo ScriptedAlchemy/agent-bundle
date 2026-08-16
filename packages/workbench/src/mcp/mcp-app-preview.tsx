@@ -108,13 +108,40 @@ const detachedJson = (value: unknown, ancestors = new WeakSet<object>()): McpApp
   if (ancestors.has(value)) throw new McpAppPreviewDataError('input and result must not be cyclic JSON');
   ancestors.add(value);
   try {
-    if (Array.isArray(value)) return Object.freeze(value.map((entry) => detachedJson(entry, ancestors)));
+    if (Array.isArray(value)) {
+      if (Object.getPrototypeOf(value) !== Array.prototype || Object.getOwnPropertySymbols(value).length > 0) {
+        throw new McpAppPreviewDataError('input and result must use ordinary JSON arrays');
+      }
+      const descriptors = Object.getOwnPropertyDescriptors(value);
+      const copy: McpAppJsonValue[] = [];
+      for (let index = 0; index < value.length; index += 1) {
+        const descriptor = descriptors[String(index)];
+        if (descriptor === undefined || !descriptor.enumerable || !('value' in descriptor)) {
+          throw new McpAppPreviewDataError('input and result must use enumerable JSON data properties');
+        }
+        copy.push(detachedJson(descriptor.value, ancestors));
+      }
+      for (const [key, descriptor] of Object.entries(descriptors)) {
+        if (key === 'length') continue;
+        const index = Number(key);
+        if (!Number.isSafeInteger(index) || index < 0 || index >= value.length || String(index) !== key || !descriptor.enumerable || !('value' in descriptor)) {
+          throw new McpAppPreviewDataError('input and result must use enumerable JSON data properties');
+        }
+      }
+      return Object.freeze(copy);
+    }
     const prototype = Object.getPrototypeOf(value);
-    if (prototype !== Object.prototype && prototype !== null) {
+    if ((prototype !== Object.prototype && prototype !== null) || Object.getOwnPropertySymbols(value).length > 0) {
       throw new McpAppPreviewDataError('input and result must use ordinary JSON objects');
     }
+    const descriptors = Object.getOwnPropertyDescriptors(value);
     const copy = Object.create(null) as Record<string, McpAppJsonValue>;
-    for (const [key, entry] of Object.entries(value)) copy[key] = detachedJson(entry, ancestors);
+    for (const [key, descriptor] of Object.entries(descriptors)) {
+      if (!descriptor.enumerable || !('value' in descriptor)) {
+        throw new McpAppPreviewDataError('input and result must use enumerable JSON data properties');
+      }
+      copy[key] = detachedJson(descriptor.value, ancestors);
+    }
     return Object.freeze(copy);
   } finally {
     ancestors.delete(value);
@@ -263,7 +290,11 @@ export class McpAppPreviewController {
 
   subscribe(listener: (state: McpAppPreviewState) => void): () => void {
     this.#listeners.add(listener);
-    listener(this.#state);
+    try {
+      listener(this.#state);
+    } catch {
+      // A display subscriber must never disrupt route cleanup.
+    }
     return () => { this.#listeners.delete(listener); };
   }
 
