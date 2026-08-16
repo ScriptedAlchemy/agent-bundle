@@ -5,7 +5,10 @@ import type {
   McpAppBridgeMessage,
   McpAppValidatedDownload,
 } from '../../../../agent-bundle/src/dev/mcp-app-bridge.ts';
-import { runtimeAppMessageLimits } from '../../../../agent-bundle/src/dev/runtime-app-message-limits.ts';
+import {
+  runtimeAppFiniteOrdinaryJsonByteLength,
+  runtimeAppMessageLimits,
+} from '../../../../agent-bundle/src/dev/runtime-app-message-limits.ts';
 import type { McpAppJsonValue } from '../../../../agent-bundle/src/dev/mcp-app-metadata.ts';
 import type { McpAppBoundOperationResult, McpAppPublicRuntimeVector } from '../../../../agent-bundle/src/dev/mcp-app-runtime-binding-service.ts';
 import type { McpAppBindingOperation, McpAppPreviewAppsSnapshot, McpAppPreviewSnapshot } from '../../../../agent-bundle/src/dev/mcp-app-runtime-preview-service.ts';
@@ -13,7 +16,6 @@ import type { McpAppConsentCapability, McpAppConsentChallenge, McpAppConsentRequ
 import type { McpAppClient, McpAppRuntimeClient } from '../../mcp/mcp-app-client.ts';
 import type { McpSessionController, McpSessionControllerAppAccess, McpSessionControllerAppAttachment } from '../../mcp/mcp-session-controller.ts';
 
-import { finiteOrdinaryJsonByteLength } from '../../mcp/finite-json.ts';
 import { snapshotHostContext, type AppRendererBridge, type BridgeFactory } from './closure-spike.ts';
 
 export interface McpAppInstalledHostHandlers {
@@ -119,10 +121,10 @@ const runtimePreview = (preview: McpAppPreviewSnapshot): McpAppPreviewAppsSnapsh
 };
 
 const ordinaryJson = (value: unknown): value is McpAppJsonValue =>
-  finiteOrdinaryJsonByteLength(value) !== undefined;
+  runtimeAppFiniteOrdinaryJsonByteLength(value) !== undefined;
 
 const messageBytes = (value: unknown, maximumBytes: number): number | undefined => {
-  return finiteOrdinaryJsonByteLength(value, { maximumBytes });
+  return runtimeAppFiniteOrdinaryJsonByteLength(value, { maximumBytes });
 };
 
 const boundedInboundMessage = (value: unknown): boolean => {

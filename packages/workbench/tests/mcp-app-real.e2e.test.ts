@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 
 import { expect, test, type PlaywrightOptions } from '@rstest/playwright';
-import type { Page } from 'playwright';
+import type { Page, WebSocketRoute } from 'playwright';
 
 import { createWorkbenchAssetSource } from '../../agent-bundle/src/dev/workbench-assets.ts';
 import { startDevServer } from '../../agent-bundle/src/dev/workbench-server.ts';
@@ -383,6 +383,7 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
   const clientSurfaceHmrRequests: Array<Readonly<{ readonly headers: Readonly<Record<string, string>>; readonly url: string }>> = [];
   const clientSurfaceSockets: string[] = [];
   const runtimePreviewSockets: string[] = [];
+  const runtimePreviewHmrRoutes: WebSocketRoute[] = [];
   const appMessages: RuntimeAppMessage[] = [];
   const browserConsole: string[] = [];
   const pageErrors: Error[] = [];
@@ -473,6 +474,10 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
     await clientPage.close();
     clientPage = undefined;
     await expect.poll(() => runtimeIdentity.getAttribute('data-runtime-hmr-client-count'), { timeout: 3_000 }).toBe('0');
+    await page.routeWebSocket((url) => url.pathname === '/rsbuild-hmr', (route) => {
+      runtimePreviewHmrRoutes.push(route);
+      route.connectToServer();
+    });
 
     await runtimeSurface.selectOption('mcp.render_edit_timeline');
     await page.getByLabel('Runtime target').selectOption('portable');
@@ -520,7 +525,7 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
       return undefined;
     };
     await expect.poll(runtimeAppFrame, { timeout: 15_000 }).toBeDefined();
-    const appFrame = await runtimeAppFrame();
+    let appFrame = await runtimeAppFrame();
     if (appFrame === undefined) throw new Error('Runtime App frame was unavailable.');
     const controllerFrame = appFrame.parentFrame();
     if (controllerFrame === null) throw new Error('Runtime App trusted controller frame was unavailable.');
@@ -615,6 +620,23 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
       .toMatchObject(created.preview.profile.hostContext as Record<string, unknown>);
     expect((initialized?.message.result as Readonly<{ readonly hostCapabilities?: unknown }> | undefined)?.hostCapabilities)
       .toMatchObject({ serverResources: {}, serverTools: {} });
+
+    const initializeRequests = () => appMessages.filter((entry) =>
+      new URL(entry.href).origin === fixture.url && entry.senderOrigin === controllerOrigin && entry.message !== null && typeof entry.message === 'object' &&
+      (entry.message as Readonly<Record<string, unknown>>).method === 'ui/initialize');
+    expect(runtimePreviewHmrRoutes).toHaveLength(1);
+    const initialInitializeCount = initializeRequests().length;
+    await runtimePreviewHmrRoutes[0]!.close();
+    await expect.poll(() => runtimeIdentity.getAttribute('data-runtime-hmr-client-count'), { timeout: 15_000 }).toBe('0');
+    await expect.poll(() => runtimePreviewHmrRoutes.length, { timeout: 15_000 }).toBe(2);
+    await expect.poll(() => runtimeIdentity.getAttribute('data-runtime-hmr-client-count'), { timeout: 15_000 }).toBe('1');
+    runtimePreviewHmrRoutes[1]!.send(JSON.stringify({ type: 'full-reload' }));
+    await expect.poll(() => initializeRequests().length, { timeout: 15_000 }).toBe(initialInitializeCount + 1);
+    await expect(outerFrame).toHaveCount(1);
+    await expect.poll(() => runtimeAppResponses.filter((entry) => entry.method === 'POST' && entry.path === '/api/runtime/apps').length, { timeout: 15_000 }).toBe(1);
+    await expect.poll(runtimeAppFrame, { timeout: 15_000 }).toBeDefined();
+    appFrame = await runtimeAppFrame();
+    if (appFrame === undefined) throw new Error('Runtime App frame did not reinitialize after HMR recovery.');
 
     await appFrame.getByRole('button', { name: 'Refresh' }).click();
     const consentPath = `/api/runtime/apps/${encodeURIComponent(created.preview.binding.id)}/consents`;

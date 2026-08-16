@@ -69,6 +69,220 @@ const serveBootstrapEntry = (
   return true;
 };
 
+const runtimeProxyShellHarness = async (binding: Awaited<ReturnType<typeof RuntimeClientSurfaceProxy.open>>) => {
+  const bootstrap = await fetch(binding.bootstrapUrl, { redirect: 'manual' });
+  expect(bootstrap.status).toBe(200);
+  const source = /<script>\n([\s\S]+)\n<\/script>$/u.exec(await bootstrap.text())?.[1];
+  if (source === undefined) throw new Error('Runtime proxy bootstrap did not contain its outer relay.');
+
+  type Listener = (event: Readonly<Record<string, unknown>>) => void;
+  type AddEventListener = (type: string, listener: Listener) => void;
+  const listeners = new Map<string, Set<Listener>>();
+  const addEventListener: AddEventListener = (type, listener) => {
+    const registered = listeners.get(type) ?? new Set<Listener>();
+    registered.add(listener);
+    listeners.set(type, registered);
+  };
+  const emit = (type: string, event: Readonly<Record<string, unknown>> = {}): void => {
+    for (const listener of listeners.get(type) ?? []) listener(event);
+  };
+  const timers = new Map<number, () => void>();
+  let nextTimer = 0;
+  const setTimer = (callback: () => void): number => {
+    const id = ++nextTimer;
+    timers.set(id, callback);
+    return id;
+  };
+  const clearTimer = (id: number): void => { timers.delete(id); };
+  const runTimers = (): void => {
+    const pending = [...timers.values()];
+    timers.clear();
+    for (const callback of pending) callback();
+  };
+  const appPosts: unknown[] = [];
+  const parentPosts: Array<Readonly<{ readonly message: unknown; readonly targetOrigin: string }>> = [];
+  const child = Object.freeze({
+    postMessage: (message: unknown, targetOrigin: string) => { appPosts.push(Object.freeze({ message, targetOrigin })); },
+  });
+  const entries: string[] = [];
+  const app = Object.create(null) as { readonly contentWindow: typeof child; srcdoc: string };
+  Object.defineProperty(app, 'contentWindow', { enumerable: true, value: child });
+  Object.defineProperty(app, 'srcdoc', { set: (entry: string) => { entries.push(entry); } });
+  const sockets: Array<{
+    readonly emit: (type: 'close' | 'error' | 'message' | 'open', event?: Readonly<Record<string, unknown>>) => void;
+    readonly url: string;
+    close(): void;
+  }> = [];
+  class FakeWebSocket {
+    readonly #listeners = new Map<string, Set<Listener>>();
+    readonly url: string;
+    #closed = false;
+
+    constructor(url: string) {
+      this.url = url;
+      sockets.push(this);
+    }
+
+    addEventListener(type: string, listener: Listener): void {
+      const registered = this.#listeners.get(type) ?? new Set<Listener>();
+      registered.add(listener);
+      this.#listeners.set(type, registered);
+    }
+
+    close(): void {
+      if (this.#closed) return;
+      this.#closed = true;
+      this.emit('close');
+    }
+
+    emit(type: 'close' | 'error' | 'message' | 'open', event: Readonly<Record<string, unknown>> = {}): void {
+      for (const listener of this.#listeners.get(type) ?? []) listener(event);
+    }
+  }
+  const execute = new Function(
+    'document', 'parent', 'location', 'WebSocket', 'TextEncoder', 'fetch', 'addEventListener', 'setTimeout', 'clearTimeout',
+    source,
+  ) as (
+    document: Readonly<{ getElementById(id: string): typeof app }> ,
+    parent: Readonly<{ postMessage(message: unknown, targetOrigin: string): void }> ,
+    location: Readonly<{ origin: string }> ,
+    WebSocket: typeof FakeWebSocket,
+    TextEncoder: typeof globalThis.TextEncoder,
+    fetch: typeof globalThis.fetch,
+    addEventListener: AddEventListener,
+    setTimeout: (callback: () => void, milliseconds?: number) => number,
+    clearTimeout: (id: number) => void,
+  ) => void;
+  execute(
+    Object.freeze({ getElementById: () => app }),
+    Object.freeze({ postMessage: (message, targetOrigin) => { parentPosts.push(Object.freeze({ message, targetOrigin })); } }),
+    Object.freeze({ origin: binding.origin }),
+    FakeWebSocket,
+    TextEncoder,
+    (async () => new Response('<!doctype html><main>replacement</main>', {
+      headers: { 'content-type': 'text/html; charset=utf-8' },
+    })) as typeof fetch,
+    addEventListener,
+    setTimer,
+    clearTimer,
+  );
+  return Object.freeze({
+    appPosts,
+    emitChild: (data: unknown) => { emit('message', Object.freeze({ data, origin: 'null', ports: Object.freeze([]), source: child })); },
+    entries,
+    pagehide: () => { emit('pagehide'); },
+    parentPosts,
+    pendingTimers: () => timers.size,
+    runTimers,
+    sockets,
+  });
+};
+
+it('keeps malformed opaque-child initialize messages from advancing the trusted outer relay', async () => {
+  const upstream = createServer((request, response) => {
+    if (serveBootstrapEntry(request, response)) return;
+    response.writeHead(404).end();
+  });
+  const origin = await listen(upstream);
+  const binding = await RuntimeClientSurfaceProxy.open({
+    entryPath: '/app/index.html',
+    httpOrigin: origin,
+    httpPathPrefixes: ['/app/'],
+    surfaceId: 'app.weather',
+    webSocketOrigin: origin.replace('http:', 'ws:'),
+    webSocketPath: '/rsbuild-hmr',
+    webSocketToken: 'rsbuild-token-1234',
+  }, () => undefined);
+  try {
+    const shell = await runtimeProxyShellHarness(binding);
+    const accessor = Object.create(null) as Record<string, unknown>;
+    Object.defineProperty(accessor, 'value', { enumerable: true, get: () => 'accessed' });
+    const custom = Object.create({ inherited: true }) as Record<string, unknown>;
+    custom.value = 'custom';
+    const proxy = new Proxy({ value: 'proxy' }, {
+      ownKeys: () => { throw new Error('untrusted ownKeys'); },
+    });
+    const cyclic: { self?: unknown } = {};
+    cyclic.self = cyclic;
+    let deep: unknown = { leaf: true };
+    for (let depth = 0; depth < 33; depth += 1) deep = { child: deep };
+    const nodes = Array.from({ length: 4_097 }, () => true);
+    const malformed = [
+      { value: new Date() },
+      { value: new Map([['entry', 'value']]) },
+      { value: custom },
+      { value: accessor },
+      { value: proxy },
+      { value: cyclic },
+      { value: deep },
+      { value: nodes },
+      { value: 'é'.repeat(runtimeAppMessageLimits.appToHostBytes) },
+    ];
+    for (const params of malformed) {
+      shell.emitChild({ id: 'malformed', jsonrpc: '2.0', method: 'ui/initialize', params });
+    }
+    expect(shell.parentPosts).toEqual([]);
+    shell.emitChild({
+      id: 'valid', jsonrpc: '2.0', method: 'ui/initialize',
+      params: { appCapabilities: {}, appInfo: { name: 'app', version: '1' }, protocolVersion: '2026-01-26' },
+    });
+    expect(shell.parentPosts).toEqual([{
+      message: {
+        id: 'valid', jsonrpc: '2.0', method: 'ui/initialize',
+        params: { appCapabilities: {}, appInfo: { name: 'app', version: '1' }, protocolVersion: '2026-01-26' },
+      },
+      targetOrigin: foregroundOrigin,
+    }]);
+  } finally {
+    await binding.close();
+    upstream.closeAllConnections();
+    await close(upstream);
+  }
+});
+
+it('reconnects one outer HMR socket and stops reconnecting after pagehide', async () => {
+  const upstream = createServer((request, response) => {
+    if (serveBootstrapEntry(request, response)) return;
+    response.writeHead(404).end();
+  });
+  const origin = await listen(upstream);
+  const binding = await RuntimeClientSurfaceProxy.open({
+    entryPath: '/app/index.html',
+    httpOrigin: origin,
+    httpPathPrefixes: ['/app/'],
+    surfaceId: 'app.weather',
+    webSocketOrigin: origin.replace('http:', 'ws:'),
+    webSocketPath: '/rsbuild-hmr',
+    webSocketToken: 'rsbuild-token-1234',
+  }, () => undefined);
+  try {
+    const shell = await runtimeProxyShellHarness(binding);
+    expect(shell.sockets.map((socket) => socket.url)).toEqual([`${binding.origin}/rsbuild-hmr`]);
+    shell.sockets[0]!.emit('close');
+    shell.sockets[0]!.emit('error');
+    expect(shell.pendingTimers()).toBe(1);
+    shell.runTimers();
+    expect(shell.sockets.map((socket) => socket.url)).toEqual([
+      `${binding.origin}/rsbuild-hmr`,
+      `${binding.origin}/rsbuild-hmr`,
+    ]);
+    shell.sockets[1]!.emit('open');
+    shell.sockets[1]!.emit('message', { data: JSON.stringify({ type: 'ok' }) });
+    shell.sockets[1]!.emit('message', { data: JSON.stringify({ type: 'ok' }) });
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(shell.entries).toHaveLength(2);
+    shell.pagehide();
+    shell.sockets[1]!.emit('close');
+    expect(shell.pendingTimers()).toBe(0);
+    shell.runTimers();
+    expect(shell.sockets).toHaveLength(2);
+  } finally {
+    await binding.close();
+    upstream.closeAllConnections();
+    await close(upstream);
+  }
+});
+
 it('uses a one-use bootstrap capability before proxying only the declared app and Rsbuild HMR endpoints', async () => {
   const upstream = createServer((request, response) => {
     if (request.url === '/app/index.html') {

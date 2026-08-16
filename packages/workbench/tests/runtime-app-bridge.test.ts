@@ -728,13 +728,19 @@ it('guards the official bridge to one source and origin while routing only tools
     cyclic.self = cyclic;
     const customPrototype = Object.create({ inherited: true });
     customPrototype.value = 'custom';
+    const accessor = Object.create(null) as Record<string, unknown>;
+    Object.defineProperty(accessor, 'value', { enumerable: true, get: () => 'untrusted' });
+    const throwingProxy = new Proxy({}, { ownKeys: () => { throw new Error('untrusted ownKeys'); } });
     const malformedValues: readonly unknown[] = [
       Number.NaN,
       Number.POSITIVE_INFINITY,
       () => undefined,
       Symbol('untrusted'),
       new Date(),
+      new Map(),
       customPrototype,
+      accessor,
+      throwingProxy,
       cyclic,
       deep(),
       Array.from({ length: 4_097 }, () => Object.freeze({})),

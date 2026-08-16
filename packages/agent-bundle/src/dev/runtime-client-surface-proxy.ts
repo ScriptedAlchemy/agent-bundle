@@ -16,7 +16,10 @@ import type {
   DevRuntimeClientSurfaceEndpoint,
   DevRuntimeClientSurfaceProxyBinding,
 } from './runtime-provider.ts';
-import { runtimeAppMessageLimits } from './runtime-app-message-limits.ts';
+import {
+  runtimeAppFiniteOrdinaryJsonByteLength,
+  runtimeAppMessageLimits,
+} from './runtime-app-message-limits.ts';
 
 const appAssetLimit = 4 * 1024 * 1024;
 const headerLimit = 16 * 1024;
@@ -122,22 +125,19 @@ const runtimeProxyShell = (entryPath: string, entryDocument: string, hostOrigin:
   const maxHostToAppMessageBytes = ${String(runtimeAppMessageLimits.hostToAppBytes)};
   const maxHmrMessageBytes = maxAppToHostMessageBytes;
   const maxEntryBytes = ${String(appAssetLimit)};
+  const finiteOrdinaryJsonByteLength = ${runtimeAppFiniteOrdinaryJsonByteLength.toString()};
   const allowedKeys = new Set(['error', 'id', 'jsonrpc', 'method', 'params', 'result']);
   let initializeId;
   let lifecycle = 'created';
-  let initialHmrMessage = true;
+  let hmr;
+  let hmrReconnectAttempts = 0;
+  let hmrReconnectTimer;
   let refreshing = false;
   const isRecord = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
   const hasOwn = (value, key) => Object.prototype.hasOwnProperty.call(value, key);
-  const byteLength = (value) => {
-    try {
-      const json = JSON.stringify(value);
-      return typeof json === 'string' ? new TextEncoder().encode(json).byteLength : Infinity;
-    } catch { return Infinity; }
-  };
   const validId = (value) => value === null || (typeof value === 'string' && value.length <= 256) || (typeof value === 'number' && Number.isFinite(value));
   const isRpc = (value, maximumBytes) => {
-    if (!isRecord(value) || value.jsonrpc !== '2.0' || byteLength(value) > maximumBytes) return false;
+    if (finiteOrdinaryJsonByteLength(value, { maximumBytes }) === undefined || !isRecord(value) || value.jsonrpc !== '2.0') return false;
     const keys = Object.keys(value);
     if (keys.length === 0 || keys.some((key) => !allowedKeys.has(key))) return false;
     if (hasOwn(value, 'id') && !validId(value.id)) return false;
@@ -176,17 +176,46 @@ const runtimeProxyShell = (entryPath: string, entryDocument: string, hostOrigin:
     } finally { refreshing = false; }
   };
   installEntry(initialEntry);
-  const hmr = new WebSocket(new URL('/rsbuild-hmr', location.origin).href);
-  hmr.addEventListener('message', (event) => {
-    if (typeof event.data !== 'string' || event.data.length > maxHmrMessageBytes) return;
-    let message;
-    try { message = JSON.parse(event.data); } catch { return; }
-    if (!isRecord(message) || typeof message.type !== 'string') return;
-    if (message.type === 'ok') {
-      if (initialHmrMessage) { initialHmrMessage = false; return; }
-      void refreshEntry();
-    } else if (message.type === 'full-reload') void refreshEntry();
-  });
+  const reconnectHmr = () => {
+    if (lifecycle === 'closed' || hmrReconnectTimer !== undefined) return;
+    const delay = Math.min(1_000, 100 * (2 ** Math.min(hmrReconnectAttempts, 4)));
+    hmrReconnectAttempts += 1;
+    hmrReconnectTimer = setTimeout(() => {
+      hmrReconnectTimer = undefined;
+      openHmr();
+    }, delay);
+  };
+  const openHmr = () => {
+    if (lifecycle === 'closed' || hmr !== undefined) return;
+    let socket;
+    try { socket = new WebSocket(new URL('/rsbuild-hmr', location.origin).href); }
+    catch { reconnectHmr(); return; }
+    hmr = socket;
+    let initialHmrMessage = true;
+    const reconnect = () => {
+      if (hmr !== socket) return;
+      hmr = undefined;
+      try { socket.close(); } catch {}
+      reconnectHmr();
+    };
+    socket.addEventListener('open', () => {
+      if (hmr !== socket || lifecycle === 'closed') return;
+      hmrReconnectAttempts = 0;
+    });
+    socket.addEventListener('message', (event) => {
+      if (hmr !== socket || lifecycle === 'closed' || typeof event.data !== 'string' || event.data.length > maxHmrMessageBytes) return;
+      let message;
+      try { message = JSON.parse(event.data); } catch { return; }
+      if (!isRecord(message) || typeof message.type !== 'string') return;
+      if (message.type === 'ok') {
+        if (initialHmrMessage) { initialHmrMessage = false; return; }
+        void refreshEntry();
+      } else if (message.type === 'full-reload') void refreshEntry();
+    });
+    socket.addEventListener('close', reconnect);
+    socket.addEventListener('error', reconnect);
+  };
+  openHmr();
   addEventListener('message', (event) => {
     if (lifecycle === 'closed') return;
     if (event.source === parent) {
@@ -215,7 +244,14 @@ const runtimeProxyShell = (entryPath: string, entryDocument: string, hostOrigin:
     }
     if (lifecycle === 'initialized') post(parent, hostOrigin, event.data, event.ports, maxAppToHostMessageBytes);
   });
-  addEventListener('pagehide', () => { lifecycle = 'closed'; hmr.close(); }, { once: true });
+  addEventListener('pagehide', () => {
+    lifecycle = 'closed';
+    if (hmrReconnectTimer !== undefined) clearTimeout(hmrReconnectTimer);
+    hmrReconnectTimer = undefined;
+    const activeHmr = hmr;
+    hmr = undefined;
+    try { activeHmr?.close(); } catch {}
+  }, { once: true });
 </script>`;
 
 const rawHeaderBytes = (request: IncomingMessage): number => request.rawHeaders.reduce(
