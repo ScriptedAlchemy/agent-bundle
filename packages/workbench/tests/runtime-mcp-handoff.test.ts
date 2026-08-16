@@ -163,6 +163,33 @@ it('does not let a registered App endpoint and resource authorize a distinct han
   expect(state.value.canOpen(b)).toBe(true);
 });
 
+it('rejects NUL-bearing handoff identity fields that would collide across adjacent tuple positions', () => {
+  const withBindingIdentity = (serverDigest: string, serverName: string): RuntimeAppPreviewProps => {
+    const current = preview('nul');
+    const run = current.run as Extract<typeof current.run, Readonly<{ readonly result: NonNullable<typeof current.run.result>; readonly status: 'succeeded' }>>;
+    const app = run.result.app;
+    if (app === undefined) throw new Error('NUL collision fixture has no App evidence.');
+    return {
+      ...current,
+      run: {
+        ...run,
+        result: {
+          ...run.result,
+          app: {
+            ...app,
+            mcpBinding: { ...app.mcpBinding, serverDigest, serverName },
+          },
+        },
+      },
+    } as RuntimeAppPreviewProps;
+  };
+  const a = prepareRuntimeMcpHandoffAuthority(withBindingIdentity('server-digest\0server-name', 'tail'), (value) => value === 'portable');
+  const b = prepareRuntimeMcpHandoffAuthority(withBindingIdentity('server-digest', 'server-name\0tail'), (value) => value === 'portable');
+
+  expect(a).toBeUndefined();
+  expect(b).toBeUndefined();
+});
+
 it('serializes double open and fences held completion after reset or navigation cancellation', async () => {
   const state = coordinator();
   const current = authority('cancel');

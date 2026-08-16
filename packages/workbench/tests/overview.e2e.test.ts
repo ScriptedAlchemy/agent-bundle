@@ -270,9 +270,13 @@ e2e('keeps runtime Inspector routing constrained after direct MCP navigation fro
   const fixture = await startRuntimePlaygroundFixture();
   let clientPage: Page | undefined;
   let clientSurface: Awaited<ReturnType<typeof fixture.openRuntimeClientSurface>> | undefined;
+  const artifactMcpSessionRequests: string[] = [];
   const unsupportedOperationRequests: string[] = [];
   page.on('request', (request) => {
     const requestUrl = new URL(request.url());
+    if (requestUrl.origin === fixture.url && requestUrl.pathname.startsWith('/api/mcp/sessions')) {
+      artifactMcpSessionRequests.push(`${request.method()} ${requestUrl.pathname}`);
+    }
     if (requestUrl.origin === fixture.url && requestUrl.pathname.startsWith('/api/runtime/apps/') && requestUrl.pathname.endsWith('/operations')) {
       unsupportedOperationRequests.push(`${request.method()} ${requestUrl.pathname}`);
     }
@@ -298,6 +302,10 @@ e2e('keeps runtime Inspector routing constrained after direct MCP navigation fro
     await page.locator('.runtime-stage .mcp-app-preview iframe').waitFor({ state: 'attached', timeout: 15_000 });
 
     await page.getByRole('link', { name: 'MCP playground' }).click();
+    await expect(page.getByLabel('Runtime-bound MCP session')).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator('#mcp-epoch')).toHaveCount(0, { timeout: 15_000 });
+    await expect(page.getByRole('button', { name: 'Open MCP session' })).toHaveCount(0, { timeout: 15_000 });
+    expect(artifactMcpSessionRequests).toEqual([]);
     await page.getByRole('tab', { name: 'Inspector' }).click();
     await expect(page.getByRole('button', { name: 'Prompts' })).toBeDisabled({ timeout: 15_000 });
     await expect(page.getByText('Prompts are unavailable for this runtime session.')).toBeVisible({ timeout: 15_000 });

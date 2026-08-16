@@ -35,18 +35,35 @@ export interface RuntimeMcpHandoffCoordinatorOptions {
 
 const maximumDepth = 32;
 const maximumNodes = 4_096;
+const maximumIdentityTextLength = 4_096;
+const maximumIdentityTextTotal = maximumIdentityTextLength * 16;
 
 const record = (value: unknown): Readonly<Record<string, unknown>> | undefined =>
   typeof value === 'object' && value !== null && !Array.isArray(value) ? value as Readonly<Record<string, unknown>> : undefined;
 
 const text = (value: unknown): value is string =>
-  typeof value === 'string' && value.length > 0;
+  typeof value === 'string' && value.length > 0 && value.length <= maximumIdentityTextLength && !value.includes('\0');
 
 const revision = (value: unknown): value is number =>
   typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
 
 const stateVersion = (value: unknown): value is number =>
   typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+
+/** The fixed identity tuple remains unambiguous even when new fields are added. */
+const handoffIdentity = (parts: readonly (string | number)[]): string | undefined => {
+  let textLength = 0;
+  for (const part of parts) {
+    if (typeof part === 'string') {
+      if (!text(part)) return undefined;
+      textLength += part.length;
+    } else if (!Number.isSafeInteger(part)) {
+      return undefined;
+    }
+  }
+  if (textLength > maximumIdentityTextTotal) return undefined;
+  return JSON.stringify(Object.freeze([...parts]));
+};
 
 /** Reads only authority evidence as own data descriptors; lifecycle callbacks never cross this boundary. */
 const authorityEvidence = (value: unknown): unknown | undefined => {
@@ -182,32 +199,34 @@ export const prepareRuntimeMcpHandoffAuthority = (
     run: preview.run,
     surface: preview.surface,
   }) as RuntimeAppPreviewProps;
+  const key = handoffIdentity([
+    preview.run.id,
+    preview.profile.id,
+    preview.profile.version,
+    preview.surface.id,
+    typedApp.surfaceId,
+    typedApp.resourceUri,
+    typedVector.providerSessionId,
+    typedVector.runtimeGenerationId,
+    typedVector.sourceRevision,
+    typedVector.stateStoreId,
+    typedVector.stateVersion,
+    typedBinding.definitionDigest,
+    typedBinding.registryRevision,
+    typedBinding.serverDigest,
+    typedBinding.serverName,
+    typedBinding.sessionId,
+    typedBinding.sessionRevision,
+    typedBinding.target,
+    typedBinding.transportDigest,
+  ]);
+  if (key === undefined) return undefined;
   return Object.freeze({
     handoff: Object.freeze({
       initialPreview: Object.freeze({ binding: handoffBinding, kind: 'runtime' as const, preview: handoffPreview }),
       source: Object.freeze({ binding: handoffBinding, kind: 'runtime' as const }),
     }),
-    key: [
-      preview.run.id,
-      preview.profile.id,
-      preview.profile.version,
-      preview.surface.id,
-      typedApp.surfaceId,
-      typedApp.resourceUri,
-      typedVector.providerSessionId,
-      typedVector.runtimeGenerationId,
-      typedVector.sourceRevision,
-      typedVector.stateStoreId,
-      typedVector.stateVersion,
-      typedBinding.definitionDigest,
-      typedBinding.registryRevision,
-      typedBinding.serverDigest,
-      typedBinding.serverName,
-      typedBinding.sessionId,
-      typedBinding.sessionRevision,
-      typedBinding.target,
-      typedBinding.transportDigest,
-    ].join('\u0000'),
+    key,
   });
 };
 

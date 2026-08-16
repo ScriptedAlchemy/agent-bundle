@@ -405,6 +405,13 @@ const McpScreen = ({ appPreviewClient, connectionError, controller, model, onNav
   }, [onRuntimeInitialPreviewConsumed, runtimeHandoff]);
   const activeEpoch = status.artifact.state === 'missing' ? undefined : status.artifact.activeEpoch;
   const targetOptions = mcpTargets.filter((target) => activeEpoch !== undefined && target in activeEpoch.targetDigests);
+  const runtimeSource = model.binding?.kind === 'runtime'
+    ? Object.freeze({ binding: model.binding.binding, kind: 'runtime' as const })
+    : undefined;
+  const runtimeInitialPreview = runtimeSource !== undefined && runtimeHandoff?.initialPreview !== undefined &&
+    sameRuntimeMcpAppBinding(runtimeHandoff.source.binding, runtimeSource.binding)
+    ? runtimeHandoff.initialPreview
+    : undefined;
   const runtimeAvailability = model.binding?.kind !== 'runtime' ? undefined : Object.freeze({
     prompts: 'not-routed' as const,
     resourceTemplates: 'not-routed' as const,
@@ -444,7 +451,7 @@ const McpScreen = ({ appPreviewClient, connectionError, controller, model, onNav
         inert={presentation !== 'playground'}
         role="tabpanel"
       >
-        {runtimeHandoff === undefined
+        {runtimeSource === undefined
           ? <McpPage
               appPreviewClient={appPreviewClient}
               controller={controller}
@@ -456,10 +463,10 @@ const McpScreen = ({ appPreviewClient, connectionError, controller, model, onNav
             />
           : <MantineProvider><McpPage
               controller={controller}
-              initialPreview={runtimeHandoff.initialPreview}
+              initialPreview={runtimeInitialPreview}
               onResetSession={onResetSession}
               runtimePreviewDependencies={runtimePreviewDependencies}
-              source={runtimeHandoff.source}
+              source={runtimeSource}
             /></MantineProvider>}
       </section>
       <section
