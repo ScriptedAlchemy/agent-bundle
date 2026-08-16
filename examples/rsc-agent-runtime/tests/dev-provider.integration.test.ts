@@ -150,9 +150,78 @@ test('captures the App compiler HMR credential only through the public Rsbuild e
   let afterCreate: ((input: unknown) => void) | undefined;
   plugin.setup({
     onAfterCreateCompiler: (callback: unknown) => { afterCreate = callback as (input: unknown) => void; },
+    onAfterEnvironmentCompile: () => undefined,
+    onBeforeStartDevServer: () => undefined,
+    onCloseDevServer: () => undefined,
   });
   afterCreate?.({ environments: { app: { webSocketToken: 'rsbuild-token-1234' } } });
   expect(captured).toEqual(['rsbuild-token-1234']);
+});
+
+test('sends one App-only full reload for each later successful App compilation', async () => {
+  const captured: string[] = [];
+  const config = createRscRuntimeRsbuildConfig({
+    compilerRoot: join(tmpdir(), 'rsc-provider-app-reload'),
+    mode: 'development',
+    onAppWebSocketToken: (token: string) => { captured.push(token); },
+  } as Parameters<typeof createRscRuntimeRsbuildConfig>[0]);
+  const plugin = (config.plugins as readonly unknown[]).find((candidate): candidate is Readonly<{
+    readonly name: string;
+    setup(api: unknown): void;
+  }> => typeof candidate === 'object' && candidate !== null &&
+    (candidate as { readonly name?: unknown }).name === 'agent-bundle:rsc-runtime-app-hmr-token');
+  if (plugin === undefined) throw new Error('RSC App HMR token plugin is unavailable.');
+
+  let afterCompiler: ((input: unknown) => void) | undefined;
+  let afterEnvironmentCompile: ((input: unknown) => void) | undefined;
+  let beforeStartDevServer: ((input: unknown) => unknown) | undefined;
+  let closeDevServer: (() => unknown) | undefined;
+  plugin.setup({
+    onAfterCreateCompiler: (callback: unknown) => { afterCompiler = callback as (input: unknown) => void; },
+    onAfterEnvironmentCompile: (callback: unknown) => { afterEnvironmentCompile = callback as (input: unknown) => void; },
+    onBeforeStartDevServer: (callback: unknown) => { beforeStartDevServer = callback as (input: unknown) => unknown; },
+    onCloseDevServer: (callback: unknown) => { closeDevServer = callback as () => unknown; },
+  });
+
+  const appSends: string[] = [];
+  const otherSends: string[] = [];
+  const appStats = { hasErrors: () => false, hash: 'app-change-a' };
+  const successfulAppUpdate = Object.freeze({ environment: { name: 'app' }, isFirstCompile: false, stats: appStats });
+  const duplicateSuccessfulAppUpdate = Object.freeze({ environment: { name: 'app' }, isFirstCompile: false, stats: { hasErrors: () => false, hash: 'app-change-a' } });
+  const firstAppUpdate = Object.freeze({ environment: { name: 'app' }, isFirstCompile: true, stats: { hasErrors: () => false, hash: 'app-initial' } });
+  const failedAppUpdate = Object.freeze({ environment: { name: 'app' }, isFirstCompile: false, stats: { hasErrors: () => true } });
+  const nonAppUpdate = Object.freeze({ environment: { name: 'widget' }, isFirstCompile: false, stats: { hasErrors: () => false } });
+
+  afterCompiler?.({ environments: { app: { webSocketToken: 'rsbuild-app-token-1234' }, widget: { webSocketToken: 'widget-token-must-not-leak' } } });
+  afterEnvironmentCompile?.(successfulAppUpdate);
+  expect(appSends).toEqual([]);
+
+  beforeStartDevServer?.({
+    server: {
+      environments: {
+        app: { hot: { send: (type: string) => { appSends.push(type); } } },
+        widget: { hot: { send: (type: string) => { otherSends.push(type); } } },
+      },
+    },
+  });
+  afterEnvironmentCompile?.(firstAppUpdate);
+  afterEnvironmentCompile?.(nonAppUpdate);
+  afterEnvironmentCompile?.(failedAppUpdate);
+  afterEnvironmentCompile?.(successfulAppUpdate);
+  afterEnvironmentCompile?.(duplicateSuccessfulAppUpdate);
+  expect(captured).toEqual(['rsbuild-app-token-1234']);
+  expect(appSends).toEqual(['full-reload']);
+  expect(otherSends).toEqual([]);
+
+  await closeDevServer?.();
+  afterEnvironmentCompile?.(successfulAppUpdate);
+  expect(appSends).toEqual(['full-reload']);
+
+  const replacementSends: string[] = [];
+  beforeStartDevServer?.({ server: { environments: { app: { hot: { send: (type: string) => { replacementSends.push(type); } } } } } });
+  afterEnvironmentCompile?.(firstAppUpdate);
+  afterEnvironmentCompile?.(successfulAppUpdate);
+  expect(replacementSends).toEqual(['full-reload']);
 });
 
 test('keeps compiler-App HMR out of the opaque browser child', () => {
@@ -1126,6 +1195,9 @@ test('uses the bound Rsbuild dev-server context instead of a stale port-zero sta
       let afterCreate: ((input: unknown) => void) | undefined;
       plugin.setup({
         onAfterCreateCompiler: (callback: unknown) => { afterCreate = callback as (input: unknown) => void; },
+        onAfterEnvironmentCompile: () => undefined,
+        onBeforeStartDevServer: () => undefined,
+        onCloseDevServer: () => undefined,
       });
       afterCreate?.({ environments: { app: { webSocketToken: 'rsbuild-token-1234' } } });
       return Object.freeze({

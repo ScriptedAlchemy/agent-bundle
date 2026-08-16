@@ -20,6 +20,7 @@ export interface RuntimePlaygroundFixture {
   readonly root: string;
   readonly serverComponentSource: string;
   readonly url: string;
+  readonly widgetAppSource: string;
 }
 
 const buildWorkbench = async (): Promise<void> => {
@@ -102,5 +103,6 @@ export const startRuntimePlaygroundFixture = async (): Promise<RuntimePlayground
     root,
     serverComponentSource: join(root, 'src', 'rsc', 'components.tsx'),
     url: server.url,
+    widgetAppSource: join(root, 'src', 'widget', 'App.tsx'),
   });
 };

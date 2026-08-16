@@ -135,7 +135,16 @@ e2e('offers the host-owned MCP playground handoff only after a selected Runtime 
   const runtimeAppRequests: string[] = [];
   const runtimeAppResponses: unknown[] = [];
   const runtimeMcpSessionRequests: string[] = [];
+  const runtimePreviewHmrSockets: string[] = [];
+  const runtimePreviewHmrMessages: string[] = [];
   page.on('pageerror', (error) => pageErrors.push(error));
+  page.on('websocket', (socket) => {
+    if (new URL(socket.url()).pathname !== '/rsbuild-hmr') return;
+    runtimePreviewHmrSockets.push(socket.url());
+    socket.on('framereceived', (frame) => {
+      runtimePreviewHmrMessages.push(typeof frame.payload === 'string' ? frame.payload : frame.payload.toString());
+    });
+  });
   page.on('request', (request) => {
     const requestUrl = new URL(request.url());
     if (requestUrl.origin !== fixture.url) return;
@@ -148,8 +157,10 @@ e2e('offers the host-owned MCP playground handoff only after a selected Runtime 
   });
   page.on('response', (response) => {
     const requestUrl = new URL(response.url());
-    if (requestUrl.origin !== fixture.url || requestUrl.pathname !== '/api/runtime/apps' || response.request().method() !== 'POST') return;
-    void response.json().then((body: unknown) => { runtimeAppResponses.push(body); }).catch(() => undefined);
+    if (requestUrl.origin !== fixture.url || response.request().method() !== 'POST') return;
+    if (requestUrl.pathname === '/api/runtime/apps') {
+      void response.json().then((body: unknown) => { runtimeAppResponses.push(body); }).catch(() => undefined);
+    }
   });
   try {
     await page.goto(`${fixture.url}#runtime`);
@@ -188,23 +199,80 @@ e2e('offers the host-owned MCP playground handoff only after a selected Runtime 
     expect(configInspection).toEqual({ entries: expectedRegisteredConfiguration, sourceRevision: expect.any(String) });
     const sourceRevision = (configInspection as { readonly sourceRevision: string }).sourceRevision;
     expect(sourceRevision.length).toBeGreaterThan(0);
-    const expectRuntimeProfileInspection = async (preview: Locator): Promise<void> => {
+    const expectRuntimeProfileInspection = async (preview: Locator, expectedSourceRevision: string): Promise<void> => {
       await expect(preview.getByLabel('Simulated MCP App profile')).toContainText('Portable MCP Apps');
       await expect(preview.getByLabel('Simulated MCP App profile')).toContainText('agent-bundle:mcp-apps:2026-01-26');
       await expect(preview.getByLabel('Simulated MCP App profile')).toContainText('Not certified for real-host parity');
       const configuration = preview.getByLabel('Registered configuration');
-      await expect(configuration).toContainText(sourceRevision);
+      await expect(configuration).toContainText(expectedSourceRevision);
       await expect(configuration.getByRole('listitem')).toHaveCount(3);
       await expect(configuration.getByRole('listitem').nth(0)).toContainText('extension:claude');
       await expect(configuration.getByRole('listitem').nth(1)).toContainText('extension:codex');
       await expect(configuration.getByRole('listitem').nth(2)).toContainText('extension:portable');
     };
     await page.locator('iframe').waitFor({ state: 'attached', timeout: 15_000 });
-    await expectRuntimeProfileInspection(page.locator('.runtime-stage .mcp-app-preview'));
+    await expectRuntimeProfileInspection(page.locator('.runtime-stage .mcp-app-preview'), sourceRevision);
+    const sourceBinding = (runtimeAppResponses[0] as {
+      readonly preview: { readonly binding: Readonly<{
+        readonly id: string;
+        readonly runVector: Readonly<{ readonly runtimeGenerationId: string; readonly sourceRevision: string; readonly stateVersion: number }>;
+        readonly sessionId: string;
+        readonly sessionRevision: number;
+      }> };
+    }).preview.binding;
+    expect(sourceBinding).toMatchObject({
+      id: expect.any(String),
+      runVector: { runtimeGenerationId: expect.any(String), sourceRevision: expect.any(String), stateVersion: expect.any(Number) },
+      sessionId: expect.any(String),
+      sessionRevision: expect.any(Number),
+    });
+    const sourcePreview = page.locator('.runtime-stage .mcp-app-preview iframe');
+    await expect(sourcePreview).toBeVisible({ timeout: 15_000 });
+    const sourcePreviewHandle = await sourcePreview.elementHandle();
+    if (sourcePreviewHandle === null) throw new Error('Runtime App outer preview iframe was unavailable.');
+    const sourcePreviewUrl = await sourcePreviewHandle.getAttribute('src');
+    if (sourcePreviewUrl === null) throw new Error('Runtime App outer preview iframe did not expose its binding source.');
+    const hmrSentinel = `runtime-hmr-sentinel-${Math.random().toString(36).slice(2)}`;
+    await sourcePreviewHandle.evaluate((element, value) => { element.setAttribute('data-runtime-hmr-sentinel', value); }, hmrSentinel);
+    const source = await readFile(fixture.widgetAppSource, 'utf8');
+    const styles = await readFile(fixture.appStyles, 'utf8');
+    const hmrMarker = `Runtime HMR marker ${Math.random().toString(36).slice(2)}`;
+    const editedSource = source.replace(
+      '<h1>Runtime edit timeline</h1>',
+      `<h1>Runtime edit timeline</h1><p data-testid="runtime-hmr-marker">${hmrMarker}</p>`,
+    );
+    const editedStyles = `${styles}\n.timeline__header [data-testid="runtime-hmr-marker"] { color: rgb(1, 2, 3); }\n`;
+    expect(editedSource).not.toBe(source);
+    await Promise.all([
+      writeFile(fixture.widgetAppSource, editedSource),
+      writeFile(fixture.appStyles, editedStyles),
+    ]);
+    await expect.poll(() => runtimePreviewHmrMessages.some((message) => message === JSON.stringify({ type: 'full-reload' })), { timeout: 15_000 })
+      .toBe(true);
+    const refreshedWidget = async () => {
+      for (const frame of page.frames()) {
+        if (await frame.getByTestId('runtime-hmr-marker').count() === 1) return frame;
+      }
+      return undefined;
+    };
+    await expect.poll(refreshedWidget, { timeout: 15_000 }).toBeDefined();
+    const refreshedFrame = await refreshedWidget();
+    if (refreshedFrame === undefined) throw new Error('Runtime App did not receive the App compiler full reload.');
+    await expect(refreshedFrame.getByTestId('runtime-hmr-marker')).toHaveText(hmrMarker);
+    await expect(refreshedFrame.getByTestId('runtime-hmr-marker')).toHaveCSS('color', 'rgb(1, 2, 3)');
+    expect(await sourcePreviewHandle.evaluate((element) => element.isConnected &&
+      document.querySelector('.runtime-stage .mcp-app-preview iframe') === element)).toBe(true);
+    expect(await sourcePreviewHandle.getAttribute('data-runtime-hmr-sentinel')).toBe(hmrSentinel);
+    expect(await sourcePreviewHandle.getAttribute('src')).toBe(sourcePreviewUrl);
+    expect(runtimePreviewHmrSockets).toHaveLength(1);
+    expect(runtimeAppRequests.filter((request) => request === 'POST /api/runtime/apps')).toHaveLength(1);
+    expect(runtimeAppRequests.filter((request) => request.startsWith('DELETE /api/runtime/apps/'))).toHaveLength(0);
+    expect(runtimeAppResponses).toHaveLength(1);
     const handoff = page.getByRole('button', { name: 'Open in MCP playground' });
     await handoff.click({ timeout: browserTimeout });
     await expect(page.getByRole('heading', { name: 'MCP playground' })).toBeVisible({ timeout: browserTimeout });
     await expect.poll(() => runtimeAppRequests.filter((request) => request === 'POST /api/runtime/apps').length, { timeout: 15_000 }).toBe(2);
+    await expect.poll(() => runtimeAppResponses.length, { timeout: 15_000 }).toBe(2);
     await expect.poll(() => runtimeAppRequests.findIndex((request) => request.startsWith('DELETE /api/runtime/apps/')), { timeout: 15_000 }).toBeGreaterThan(-1);
 
     const runtimeDelete = runtimeAppRequests.findIndex((request) => request.startsWith('DELETE /api/runtime/apps/'));
@@ -216,7 +284,10 @@ e2e('offers the host-owned MCP playground handoff only after a selected Runtime 
     expect(projectEventStreams).toEqual(['GET /api/project/events']);
     await page.locator('.mcp-page-app-preview iframe').waitFor({ state: 'attached', timeout: 15_000 });
     expect(await page.locator('.mcp-page-app-preview iframe').count()).toBe(1);
-    await expectRuntimeProfileInspection(page.locator('.mcp-page-app-preview'));
+    const handedOffConfigInspection = (runtimeAppResponses[1] as {
+      readonly preview: { readonly profile: { readonly configExtensions: { readonly sourceRevision: string } } };
+    }).preview.profile.configExtensions;
+    await expectRuntimeProfileInspection(page.locator('.mcp-page-app-preview'), handedOffConfigInspection.sourceRevision);
     expect(runtimeAppRequests.filter((request) => request === 'POST /api/runtime/apps')).toHaveLength(2);
     expect(runtimeAppRequests.filter((request) => request.startsWith('DELETE /api/runtime/apps/'))).toHaveLength(1);
     expect(pageErrors).toEqual([]);

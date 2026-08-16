@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { rm } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 
-import { defineConfig, type RsbuildConfig, type RsbuildPlugin } from '@rsbuild/core';
+import { defineConfig, type RsbuildConfig, type RsbuildDevServer, type RsbuildPlugin } from '@rsbuild/core';
 import { pluginReact } from '@rsbuild/plugin-react';
 import { Layers, pluginRSC } from 'rsbuild-plugin-rsc';
 
@@ -42,16 +42,42 @@ export interface RscRuntimeRsbuildConfigOptions {
 
 const runtimeAppHmrTokenPlugin = (
   capture: NonNullable<RscRuntimeRsbuildConfigOptions['onAppWebSocketToken']>,
-): RsbuildPlugin => ({
-  name: 'agent-bundle:rsc-runtime-app-hmr-token',
-  setup(api) {
-    api.onAfterCreateCompiler(({ environments }) => {
-      const token = environments.app?.webSocketToken;
-      if (typeof token !== 'string') throw new Error('RSC runtime App compiler did not expose an HMR credential.');
-      capture(token);
-    });
-  },
-});
+): RsbuildPlugin => {
+  let devServer: RsbuildDevServer | undefined;
+  let completedAppHashes = new Set<string>();
+  let completedAppStats = new WeakSet<object>();
+  return {
+    name: 'agent-bundle:rsc-runtime-app-hmr-token',
+    setup(api) {
+      api.onAfterCreateCompiler(({ environments }) => {
+        const token = environments.app?.webSocketToken;
+        if (typeof token !== 'string') throw new Error('RSC runtime App compiler did not expose an HMR credential.');
+        capture(token);
+      });
+      api.onBeforeStartDevServer(({ server }) => {
+        devServer = server;
+        completedAppHashes = new Set();
+        completedAppStats = new WeakSet();
+      });
+      api.onCloseDevServer(() => {
+        devServer = undefined;
+        completedAppHashes = new Set();
+        completedAppStats = new WeakSet();
+      });
+      api.onAfterEnvironmentCompile(({ environment, isFirstCompile, stats }) => {
+        if (environment.name !== 'app' || isFirstCompile || stats === undefined || stats.hasErrors()) return;
+        if (typeof stats.hash === 'string' && stats.hash.length > 0) {
+          if (completedAppHashes.has(stats.hash)) return;
+          completedAppHashes.add(stats.hash);
+        } else {
+          if (completedAppStats.has(stats)) return;
+          completedAppStats.add(stats);
+        }
+        devServer?.environments.app.hot.send('full-reload');
+      });
+    },
+  };
+};
 
 const emitRuntimeManifest = (): RsbuildPlugin => ({
   apply: 'build',
