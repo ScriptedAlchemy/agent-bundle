@@ -231,7 +231,7 @@ const hasCanonicalAppsProfile = (value: McpAppJsonValue): boolean =>
   isRecord(value) && value.kind === 'apps' && value.resourceUri !== undefined && canonicalUiResourceUri(value.resourceUri);
 
 const isRuntimeOptions = (
-  options: McpAppPreviewControllerOptions | McpAppRuntimePreviewProps,
+  options: McpAppPreviewControllerOptions | McpAppRuntimePreviewProps | PreparedRuntimePreviewControllerOptions,
 ): options is McpAppRuntimePreviewProps => 'kind' in options && options.kind === 'runtime';
 
 const isRuntimePreviewProps = (
@@ -328,11 +328,52 @@ type RuntimePreviewAuthority = Readonly<{
   readonly evidence: RuntimePreviewEvidence;
 }>;
 
-const runtimeAuthority = (options: McpAppRuntimePreviewProps): RuntimePreviewAuthority => Object.freeze({
-  client: options.client,
-  createBridgeFactory: options.createBridgeFactory,
-  evidence: runtimeEvidence(options),
+/**
+ * The only runtime payload permitted to outlive the commit that admitted it.
+ * It deliberately owns every value consumed by a delayed controller start.
+ */
+type RuntimePreviewPreparedSeed = Readonly<{
+  readonly client: McpAppClient & McpAppRuntimeClient;
+  readonly createBridgeFactory: McpAppRuntimePreviewProps['createBridgeFactory'];
+  readonly evidence: RuntimePreviewEvidence;
+  readonly fallback: McpAppPreviewFallback;
+  readonly input: McpAppJsonValue;
+  readonly registrar: RuntimeAppPreviewProps['registerLifecycle'];
+  readonly result: McpAppJsonValue;
+}>;
+
+type PreparedRuntimePreviewControllerOptions = Readonly<{
+  readonly kind: 'runtime-prepared';
+  readonly seed: RuntimePreviewPreparedSeed;
+}>;
+
+type RuntimePreviewDependencies = Pick<RuntimePreviewPreparedSeed, 'client' | 'createBridgeFactory'>;
+
+const prepareRuntimePreviewSeed = (options: McpAppRuntimePreviewProps): RuntimePreviewPreparedSeed => {
+  const input = detachedJson(options.run.input);
+  const result = detachedJson(options.run.status === 'succeeded'
+    ? options.run.result.modelVisible ?? options.run.result.agentVisible ?? options.run.result.native ?? null
+    : null);
+  return Object.freeze({
+    client: options.client,
+    createBridgeFactory: options.createBridgeFactory,
+    evidence: runtimeEvidence(options),
+    fallback: fallbackFor(undefined, input, result),
+    input,
+    registrar: options.registerLifecycle,
+    result,
+  });
+};
+
+const runtimeAuthority = (seed: RuntimePreviewPreparedSeed): RuntimePreviewAuthority => Object.freeze({
+  client: seed.client,
+  createBridgeFactory: seed.createBridgeFactory,
+  evidence: seed.evidence,
 });
+
+const isPreparedRuntimePreviewControllerOptions = (
+  options: McpAppPreviewControllerOptions | McpAppRuntimePreviewProps | PreparedRuntimePreviewControllerOptions,
+): options is PreparedRuntimePreviewControllerOptions => 'kind' in options && options.kind === 'runtime-prepared';
 
 const sameRuntimeEvidence = (left: RuntimePreviewEvidence, right: RuntimePreviewEvidence): boolean =>
   (left.app === undefined) === (right.app === undefined) &&
@@ -392,7 +433,7 @@ export class McpAppPreviewController<State extends McpAppPreviewControllerState 
   readonly #input: McpAppJsonValue;
   readonly #request: McpAppPreviewCreateRequest | undefined;
   readonly #result: McpAppJsonValue;
-  readonly #runtime: McpAppRuntimePreviewProps | undefined;
+  readonly #runtime: RuntimePreviewDependencies | undefined;
   readonly #runtimeEvidence: RuntimePreviewEvidence | undefined;
   readonly #runtimeFallback: McpAppPreviewFallback | undefined;
   readonly #runtimeLifecycle: RuntimeAppPreviewLifecycle | undefined;
@@ -415,15 +456,17 @@ export class McpAppPreviewController<State extends McpAppPreviewControllerState 
   #startPromise: Promise<void> | undefined;
   #state: McpAppPreviewControllerState = loadingState;
 
-  constructor(options: McpAppPreviewControllerOptions | McpAppRuntimePreviewProps) {
-    if (isRuntimeOptions(options)) {
-      this.#runtime = options;
-      this.#runtimeEvidence = runtimeEvidence(options);
-      this.#input = detachedJson(options.run.input);
-      this.#result = detachedJson(options.run.status === 'succeeded'
-        ? options.run.result.modelVisible ?? options.run.result.agentVisible ?? options.run.result.native ?? null
-        : null);
-      this.#runtimeFallback = fallbackFor(undefined, this.#input, this.#result);
+  constructor(options: McpAppPreviewControllerOptions | McpAppRuntimePreviewProps | PreparedRuntimePreviewControllerOptions) {
+    if (isRuntimeOptions(options) || isPreparedRuntimePreviewControllerOptions(options)) {
+      const seed = isPreparedRuntimePreviewControllerOptions(options) ? options.seed : prepareRuntimePreviewSeed(options);
+      this.#runtime = Object.freeze({
+        client: seed.client,
+        createBridgeFactory: seed.createBridgeFactory,
+      });
+      this.#runtimeEvidence = seed.evidence;
+      this.#input = seed.input;
+      this.#result = seed.result;
+      this.#runtimeFallback = seed.fallback;
       this.#runtimeLifecycle = Object.freeze({ close: () => this.close() });
       this.#runtimeRendererRef = (handle) => {
         if (handle === null) return;
@@ -787,7 +830,7 @@ type RuntimePreviewComponentOwner = {
   readonly authority: RuntimePreviewAuthority;
   readonly controller: McpAppPreviewController<McpAppRuntimePreviewState>;
   readonly lifecycle: RuntimeAppPreviewLifecycle;
-  readonly props: McpAppRuntimePreviewProps;
+  readonly seed: RuntimePreviewPreparedSeed;
   readonly registrar: RuntimeAppPreviewProps['registerLifecycle'];
   readonly completion: Promise<void>;
   readonly complete: () => void;
@@ -804,12 +847,15 @@ type MutableRuntimePreviewComponentOwner = Omit<RuntimePreviewComponentOwner, 'l
   lifecycle: RuntimeAppPreviewLifecycle;
 };
 
-const createRuntimePreviewComponentOwner = (props: McpAppRuntimePreviewProps, authority: RuntimePreviewAuthority): RuntimePreviewComponentOwner => {
-  const controller = createMcpAppPreviewController(props);
+const createPreparedRuntimePreviewController = (seed: RuntimePreviewPreparedSeed): McpAppPreviewController<McpAppRuntimePreviewState> =>
+  new McpAppPreviewController<McpAppRuntimePreviewState>(Object.freeze({ kind: 'runtime-prepared', seed }));
+
+const createRuntimePreviewComponentOwner = (seed: RuntimePreviewPreparedSeed): RuntimePreviewComponentOwner => {
+  const controller = createPreparedRuntimePreviewController(seed);
   let resolveCompletion: (() => void) | undefined;
   const completion = new Promise<void>((resolve) => { resolveCompletion = resolve; });
   const owner: MutableRuntimePreviewComponentOwner = {
-    authority,
+    authority: runtimeAuthority(seed),
     closeAttempt: undefined,
     cleanupToken: undefined,
     complete: () => { resolveCompletion?.(); },
@@ -817,8 +863,8 @@ const createRuntimePreviewComponentOwner = (props: McpAppRuntimePreviewProps, au
     completion,
     controller,
     lifecycle: undefined as unknown as RuntimeAppPreviewLifecycle,
-    props,
-    registrar: props.registerLifecycle,
+    seed,
+    registrar: seed.registrar,
     registered: false,
     resolvedClose: completed,
     unregistered: false,
@@ -898,16 +944,9 @@ export function McpAppPreview(props: McpAppPreviewProps | McpAppRuntimePreviewPr
   const runtimeProps = isRuntimePreviewProps(props) ? props : undefined;
   const artifactProps = isRuntimePreviewProps(props) ? undefined : props;
   const controller = useRef<McpAppPreviewController<McpAppPreviewControllerState> | undefined>(undefined);
-  const incomingRuntimeAuthority = runtimeProps === undefined ? undefined : runtimeAuthority(runtimeProps);
-  const incomingRuntimeRequest = runtimeProps === undefined || incomingRuntimeAuthority === undefined
-    ? undefined
-    : Object.freeze({ authority: incomingRuntimeAuthority, props: runtimeProps });
-  const [runtimeOwner, setRuntimeOwner] = useState<RuntimePreviewComponentOwner | undefined>(() =>
-    incomingRuntimeRequest === undefined
-      ? undefined
-      : createRuntimePreviewComponentOwner(incomingRuntimeRequest.props, incomingRuntimeRequest.authority),
-  );
-  const latestRuntimeRequest = useRef<typeof incomingRuntimeRequest>(incomingRuntimeRequest);
+  const [runtimeOwner, setRuntimeOwner] = useState<RuntimePreviewComponentOwner | undefined>(undefined);
+  const latestRuntimeProps = useRef<McpAppRuntimePreviewProps | undefined>(undefined);
+  const latestRuntimeSeed = useRef<RuntimePreviewPreparedSeed | undefined>(undefined);
   const runtimeManagerMounted = useRef(false);
   const runtimeRetiringOwner = useRef<RuntimePreviewComponentOwner | undefined>(undefined);
   const runtimeStateOwner = useRef<McpAppPreviewController<McpAppRuntimePreviewState> | undefined>(undefined);
@@ -924,24 +963,28 @@ export function McpAppPreview(props: McpAppPreviewProps | McpAppRuntimePreviewPr
   }, []);
 
   useLayoutEffect(() => {
-    latestRuntimeRequest.current = incomingRuntimeRequest;
+    if (latestRuntimeProps.current !== runtimeProps) {
+      latestRuntimeProps.current = runtimeProps;
+      latestRuntimeSeed.current = runtimeProps === undefined ? undefined : prepareRuntimePreviewSeed(runtimeProps);
+    }
+    const incomingRuntimeSeed = latestRuntimeSeed.current;
     if (runtimeOwner === undefined) {
-      if (incomingRuntimeRequest !== undefined) {
-        setRuntimeOwner(createRuntimePreviewComponentOwner(incomingRuntimeRequest.props, incomingRuntimeRequest.authority));
+      if (incomingRuntimeSeed !== undefined) {
+        setRuntimeOwner(createRuntimePreviewComponentOwner(incomingRuntimeSeed));
       }
       return;
     }
-    if (incomingRuntimeRequest !== undefined && sameRuntimeAuthority(runtimeOwner.authority, incomingRuntimeRequest.authority)) return;
+    if (incomingRuntimeSeed !== undefined && sameRuntimeAuthority(runtimeOwner.authority, runtimeAuthority(incomingRuntimeSeed))) return;
     if (runtimeRetiringOwner.current === runtimeOwner) return;
     runtimeRetiringOwner.current = runtimeOwner;
     void runtimeOwner.lifecycle.close().catch(() => undefined);
     void runtimeOwner.completion.then(() => {
       if (!runtimeManagerMounted.current || runtimeRetiringOwner.current !== runtimeOwner) return;
       runtimeRetiringOwner.current = undefined;
-      const next = latestRuntimeRequest.current;
-      setRuntimeOwner(next === undefined ? undefined : createRuntimePreviewComponentOwner(next.props, next.authority));
+      const next = latestRuntimeSeed.current;
+      setRuntimeOwner(next === undefined ? undefined : createRuntimePreviewComponentOwner(next));
     });
-  }, [incomingRuntimeRequest, runtimeOwner]);
+  }, [runtimeProps, runtimeOwner]);
 
   useLayoutEffect(() => {
     if (runtimeOwner === undefined) return;
@@ -1034,7 +1077,7 @@ export function McpAppPreview(props: McpAppPreviewProps | McpAppRuntimePreviewPr
             bootstrapUrl={runtimeState.preview.clientSurface.bootstrapUrl}
             bridgeFactory={runtimeState.bridgeFactory}
             documentPolicy={runtimeState.documentPolicy}
-            policyClient={runtimeOwner.props.client}
+            policyClient={runtimeOwner.seed.client}
             rendererProps={runtimeController.runtimeRendererProps}
           />
           <section aria-label="Runtime App result" className="mcp-app-preview__fallback">
