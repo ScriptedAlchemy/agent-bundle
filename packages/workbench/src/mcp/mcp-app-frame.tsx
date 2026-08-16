@@ -7,6 +7,7 @@ import type {
   McpAppRouteMessages,
 } from './mcp-app-client.ts';
 import { assertCurrentMcpAppDocumentPolicy, type McpAppRuntimeClient, type McpAppTrustedDocumentPolicy } from './mcp-app-client.ts';
+import { finiteOrdinaryJsonByteLength } from './finite-json.ts';
 import { AppRenderer, type BridgeFactory, type AppRendererProps } from '../inspector/adapter/closure-spike.ts';
 
 const proxyReadyMethod = 'ui/notifications/sandbox-proxy-ready';
@@ -89,22 +90,11 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value) &&
   (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null);
 
-const byteLength = (value: unknown): number | undefined => {
-  try {
-    const encoded = JSON.stringify(value);
-    return typeof encoded === 'string' ? new TextEncoder().encode(encoded).byteLength : undefined;
-  } catch {
-    return undefined;
-  }
-};
-
 const validRequestId = (value: unknown): boolean =>
   value === null || typeof value === 'string' || (typeof value === 'number' && Number.isFinite(value));
 
 const asMessage = (value: unknown, maximumBytes: number): RpcMessage | undefined => {
-  if (!isRecord(value) || value.jsonrpc !== '2.0' || Object.hasOwn(value, 'bindingId')) return undefined;
-  const size = byteLength(value);
-  if (size === undefined || size > maximumBytes) return undefined;
+  if (finiteOrdinaryJsonByteLength(value, { maximumBytes }) === undefined || !isRecord(value) || value.jsonrpc !== '2.0' || Object.hasOwn(value, 'bindingId')) return undefined;
   const hasMethod = typeof value.method === 'string' && value.method.length > 0;
   const hasId = Object.hasOwn(value, 'id') && validRequestId(value.id);
   const hasResponse = hasId && !hasMethod && (Object.hasOwn(value, 'result') || Object.hasOwn(value, 'error'));
@@ -339,7 +329,7 @@ export class McpAppFrameRelay {
 
   #post(message: RpcMessage): boolean {
     const proxy = this.#iframe.contentWindow;
-    if (proxy === null || byteLength(message) === undefined || byteLength(message)! > this.#frame.relay.maxMessageBytes) return false;
+    if (proxy === null || finiteOrdinaryJsonByteLength(message, { maximumBytes: this.#frame.relay.maxMessageBytes }) === undefined) return false;
     try {
       proxy.postMessage(message, this.#frame.targetOrigin);
       return true;

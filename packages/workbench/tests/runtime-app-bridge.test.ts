@@ -244,6 +244,47 @@ it('guards the official bridge to one source and origin while routing only tools
     const nullPrototype = Object.create(null) as Record<string, unknown>;
     Object.defineProperty(nullPrototype, '__proto__', { enumerable: true, value: 'literal-data' });
     await expect(bridge.sendToolInput({ arguments: nullPrototype } as never)).resolves.toBeUndefined();
+    const accepted = browser.posts.at(-1) as { readonly message: { readonly params: { readonly arguments: unknown } } };
+    expect(accepted.message.params.arguments).toBe(nullPrototype);
+
+    const deep = (): unknown => {
+      let value: unknown = Object.freeze({ leaf: true });
+      for (let depth = 0; depth < 64; depth += 1) value = Object.freeze({ child: value });
+      return value;
+    };
+    const cyclic: { self?: unknown } = {};
+    cyclic.self = cyclic;
+    const customPrototype = Object.create({ inherited: true });
+    customPrototype.value = 'custom';
+    const malformedValues: readonly unknown[] = [
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+      () => undefined,
+      Symbol('untrusted'),
+      new Date(),
+      customPrototype,
+      cyclic,
+      deep(),
+      Array.from({ length: 4_097 }, () => Object.freeze({})),
+    ];
+    const validNotification = () => browser.emit({
+      data: { jsonrpc: '2.0', method: 'notifications/initialized', params: {} },
+      origin: 'https://apps.example.test',
+      source: browser.target,
+    });
+    for (const nested of malformedValues) {
+      await expect(bridge.sendToolInput({ arguments: { nested } } as never)).rejects.toThrow('invalid or exceeds its bound');
+      validNotification();
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      expect(() => browser.emit({
+        data: { jsonrpc: '2.0', method: 'notifications/initialized', params: { nested } },
+        origin: 'https://apps.example.test',
+        source: browser.target,
+      })).not.toThrow();
+      validNotification();
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    }
+    expect(revoked).toBe(0);
 
     const displayBridge = bridge as typeof bridge & {
       onrequestdisplaymode?: (params: Readonly<{ readonly mode: 'inline' | 'fullscreen' | 'pip' }>) => Promise<Readonly<{ readonly mode: 'inline' | 'fullscreen' | 'pip' }>>;
@@ -264,11 +305,7 @@ it('guards the official bridge to one source and origin while routing only tools
     }
     await eventually(() => requests.length === 2);
     expect(requests).toEqual(['tools/list', 'resources/list']);
-    let nested: { child?: unknown; value?: string } = { value: 'leaf' };
-    for (let depth = 0; depth < 64; depth += 1) nested = { child: nested };
-    await expect(bridge.sendToolInput({ arguments: { nested } } as never)).rejects.toThrow('invalid or exceeds its bound');
-    const tooManyNodes = Array.from({ length: 4_097 }, () => Object.freeze({}));
-    await expect(bridge.sendToolInput({ arguments: { tooManyNodes } } as never)).rejects.toThrow('invalid or exceeds its bound');
+    const nested = deep();
     browser.emit({
       data: { jsonrpc: '2.0', method: 'notifications/initialized', params: { nested } },
       origin: 'https://apps.example.test',

@@ -11,6 +11,7 @@ import type { McpAppConsentCapability, McpAppConsentChallenge, McpAppConsentRequ
 import type { McpAppClient, McpAppRuntimeClient } from '../../mcp/mcp-app-client.ts';
 import type { McpSessionController, McpSessionControllerAppAccess } from '../../mcp/mcp-session-controller.ts';
 
+import { finiteOrdinaryJsonByteLength } from '../../mcp/finite-json.ts';
 import { snapshotHostContext, type AppRendererBridge, type BridgeFactory } from './closure-spike.ts';
 
 export interface McpAppInstalledHostHandlers {
@@ -85,8 +86,6 @@ interface RuntimeAppBridge extends AppRendererBridge {
 const maximumMessageBytes = 256 * 1024;
 const maximumQueuedMessages = 32;
 const maximumFailures = 3;
-const maximumJsonDepth = 32;
-const maximumJsonNodes = 4_096;
 
 const aggregateFailure = (message: string, reasons: readonly unknown[]): Error =>
   new AggregateError(reasons, message);
@@ -96,77 +95,11 @@ const runtimePreview = (preview: McpAppPreviewSnapshot): McpAppPreviewAppsSnapsh
   return preview;
 };
 
-/**
- * Validates the one JSON-shaped message domain shared by the browser ingress
- * and egress paths.  This deliberately avoids recursive traversal: an App
- * may send hostile but syntactically ordinary JSON that would otherwise blow
- * the browser stack before its byte bound can be calculated.
- */
-const ordinaryJson = (value: unknown): value is McpAppJsonValue => {
-  type Visit =
-    | Readonly<{ readonly kind: 'enter'; readonly value: unknown; readonly depth: number }>
-    | Readonly<{ readonly kind: 'leave'; readonly value: object }>;
-  const ancestors = new WeakSet<object>();
-  const stack: Visit[] = [Object.freeze({ depth: 0, kind: 'enter', value })];
-  let nodes = 0;
-  try {
-    while (stack.length > 0) {
-      const visit = stack.pop();
-      if (visit === undefined) continue;
-      if (visit.kind === 'leave') {
-        ancestors.delete(visit.value);
-        continue;
-      }
-      const candidate = visit.value;
-      if (candidate === null || typeof candidate === 'boolean' || typeof candidate === 'string') continue;
-      if (typeof candidate === 'number') {
-        if (!Number.isFinite(candidate)) return false;
-        continue;
-      }
-      if (typeof candidate !== 'object' || visit.depth > maximumJsonDepth || ancestors.has(candidate)) return false;
-      nodes += 1;
-      if (nodes > maximumJsonNodes) return false;
-      ancestors.add(candidate);
-      stack.push(Object.freeze({ kind: 'leave', value: candidate }));
-
-      if (Array.isArray(candidate)) {
-        if (Object.getOwnPropertySymbols(candidate).length > 0) return false;
-        const ownKeys = Object.keys(candidate);
-        if (ownKeys.length !== candidate.length) return false;
-        for (let index = candidate.length - 1; index >= 0; index -= 1) {
-          const descriptor = Object.getOwnPropertyDescriptor(candidate, String(index));
-          if (descriptor === undefined || !('value' in descriptor) || !descriptor.enumerable) return false;
-          stack.push(Object.freeze({ depth: visit.depth + 1, kind: 'enter', value: descriptor.value }));
-        }
-        continue;
-      }
-
-      const prototype = Object.getPrototypeOf(candidate);
-      if (prototype !== Object.prototype && prototype !== null) return false;
-      if (Object.getOwnPropertySymbols(candidate).length > 0) return false;
-      const keys = Object.keys(candidate);
-      for (let index = keys.length - 1; index >= 0; index -= 1) {
-        const key = keys[index];
-        if (key === undefined) return false;
-        const descriptor = Object.getOwnPropertyDescriptor(candidate, key);
-        if (descriptor === undefined || !('value' in descriptor) || !descriptor.enumerable) return false;
-        stack.push(Object.freeze({ depth: visit.depth + 1, kind: 'enter', value: descriptor.value }));
-      }
-    }
-    return true;
-  } catch {
-    return false;
-  }
-};
+const ordinaryJson = (value: unknown): value is McpAppJsonValue =>
+  finiteOrdinaryJsonByteLength(value) !== undefined;
 
 const messageBytes = (value: unknown): number | undefined => {
-  if (!ordinaryJson(value)) return undefined;
-  try {
-    const text = JSON.stringify(value);
-    return typeof text === 'string' ? new TextEncoder().encode(text).byteLength : undefined;
-  } catch {
-    return undefined;
-  }
+  return finiteOrdinaryJsonByteLength(value, { maximumBytes: maximumMessageBytes });
 };
 
 const boundedMessage = (value: unknown): boolean => {

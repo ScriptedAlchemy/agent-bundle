@@ -444,6 +444,86 @@ describe('MCP App frame relay', () => {
     first.resolve(messageResult());
   });
 
+  it('rejects nonordinary nested JSON at both proxy boundaries without throwing its message listener', async () => {
+    const deep = (): unknown => {
+      let value: unknown = Object.freeze({ leaf: true });
+      for (let depth = 0; depth < 64; depth += 1) value = Object.freeze({ child: value });
+      return value;
+    };
+    const cyclic: { self?: unknown } = {};
+    cyclic.self = cyclic;
+    const customPrototype = Object.create({ inherited: true });
+    customPrototype.value = 'custom';
+    const invalidValues: readonly unknown[] = [
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+      () => undefined,
+      Symbol('untrusted'),
+      new Date(),
+      customPrototype,
+      cyclic,
+      deep(),
+      Array.from({ length: 4_097 }, () => Object.freeze({})),
+    ];
+
+    for (const nested of invalidValues) {
+      const browser = fakeBrowser();
+      const messages: unknown[] = [];
+      const relay = createMcpAppFrameRelay({
+        bindingId: 'binding-weather', frame, iframe: browser.iframe, resource,
+        routes: {
+          close: async () => closeResult(),
+          forceClose: async () => true,
+          message: async (_bindingId, message) => {
+            messages.push(message);
+            return messageResult();
+          },
+        },
+        window: browser.window,
+      });
+      relay.start();
+      expect(relay.receive({ data: proxyReady(), origin: frame.targetOrigin, source: browser.child })).toBe(true);
+      const message = Object.freeze({ id: 'invalid', jsonrpc: '2.0' as const, method: 'ping', params: Object.freeze({ nested }) });
+      const event = Object.freeze({ data: message, origin: frame.targetOrigin, source: browser.child });
+
+      expect(relay.receive(event)).toBe(false);
+      expect(() => browser.emit(event)).not.toThrow();
+      expect(relay.deliverHostMessages([message as never])).toBe(false);
+      expect(messages).toEqual([]);
+    }
+  });
+
+  it('preserves null-prototype JSON with an enumerable own __proto__ value at both proxy boundaries', async () => {
+    const browser = fakeBrowser();
+    const messages: unknown[] = [];
+    const relay = createMcpAppFrameRelay({
+      bindingId: 'binding-weather', frame, iframe: browser.iframe, resource,
+      routes: {
+        close: async () => closeResult(),
+        forceClose: async () => true,
+        message: async (_bindingId, message) => {
+          messages.push(message);
+          return messageResult();
+        },
+      },
+      window: browser.window,
+    });
+    const payload = Object.create(null) as Record<string, unknown>;
+    Object.defineProperty(payload, '__proto__', { enumerable: true, value: 'literal-data' });
+    const inbound = Object.freeze({ id: 'inbound', jsonrpc: '2.0' as const, method: 'ping', params: payload });
+    const outbound = Object.freeze({ id: 'outbound', jsonrpc: '2.0' as const, method: 'ping', params: payload });
+    relay.start();
+    expect(relay.receive({ data: proxyReady(), origin: frame.targetOrigin, source: browser.child })).toBe(true);
+
+    expect(relay.receive({ data: inbound, origin: frame.targetOrigin, source: browser.child })).toBe(true);
+    await eventually(() => messages.length === 1);
+    expect(messages[0]).toBe(inbound);
+    expect(relay.deliverHostMessages([outbound as never])).toBe(true);
+    const delivered = browser.child.posts.at(-1) as { readonly message: unknown };
+    expect(delivered.message).toBe(outbound);
+    expect((delivered.message as { readonly params: object }).params).toBe(payload);
+  });
+
   it('always queues its close operation behind already accepted traffic even when normal relay capacity is exhausted', async () => {
     const browser = fakeBrowser();
     const active = deferred<McpAppRouteMessages>();
