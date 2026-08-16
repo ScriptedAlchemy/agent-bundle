@@ -8,7 +8,7 @@ import type {
   ResourceTemplateType as ResourceTemplate,
   Tool,
 } from '@modelcontextprotocol/client';
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useLayoutEffect, useMemo, useRef, useState } from 'react';
 
 import type { McpBrowserSessionModel, McpBrowserSessionTimelineEntry } from '../../mcp/mcp-session-model.ts';
 import type { McpSessionControllerRequest } from '../../mcp/mcp-session-controller.ts';
@@ -127,6 +127,7 @@ export const InspectorRuntimeEvidence = ({ evidence }: InspectorRuntimeEvidenceP
 export const InspectorSessionAdapter = ({ availability = allOperationsAvailable, controller, initialTab = 'tools', model, onExportTrace }: InspectorSessionAdapterProps) => {
   const bindingKey = inspectorSessionBindingKey(model.binding);
   const previousBindingKey = useRef(bindingKey);
+  const lastResetBindingKey = useRef(bindingKey);
   const requestNumber = useRef(0);
   const actionGeneration = useRef(0);
   const bindingChanged = previousBindingKey.current !== bindingKey;
@@ -152,9 +153,11 @@ export const InspectorSessionAdapter = ({ availability = allOperationsAvailable,
   const [compact, setCompact] = useState(false);
   const [protocolReplayUnavailable, setProtocolReplayUnavailable] = useState(false);
 
-  useEffect(() => {
-    if (!bindingChanged) return;
+  useLayoutEffect(() => {
+    if (lastResetBindingKey.current === bindingKey) return;
+    lastResetBindingKey.current = bindingKey;
     clearScrollMemory();
+    setTab(availableTab(initialTab, availability));
     setToolsUi(initialToolsUi);
     setResourcesUi(initialResourcesUi);
     setPromptsUi(initialPromptsUi);
@@ -168,8 +171,10 @@ export const InspectorSessionAdapter = ({ availability = allOperationsAvailable,
     setProtocolCleared(false);
     setLoggingCleared(false);
     setLoggingDiagnostic('Log-level changes are unavailable because this W13 session does not expose logging/setLevel.');
+    setSortDirection('oldest-first');
+    setCompact(false);
     setProtocolReplayUnavailable(false);
-  }, [bindingChanged, bindingKey]);
+  }, [availability, bindingKey, initialTab]);
 
   const protocolEntries = useMemo(() => inspectorProtocolEntries(model.timeline.entries), [model.timeline.entries]);
   const loggingEntries = useMemo(() => inspectorLogEntries(model.timeline.entries), [model.timeline.entries]);

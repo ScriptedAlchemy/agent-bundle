@@ -9,6 +9,11 @@ import { describe, expect, it } from '@rstest/core';
 
 import { createWorkbenchConfig } from '../rsbuild.config.ts';
 
+interface InspectorSessionAdapterFixtureHarness {
+  readonly resolveNextTool: (text: string) => void;
+  readonly setRuntimeBinding: (revision: number, definitionDigest: string) => void;
+}
+
 const contentType = (path: string): string => path.endsWith('.css')
   ? 'text/css'
   : path.endsWith('.js')
@@ -79,6 +84,84 @@ describe('Inspector session adapter production fixture', () => {
       expect(await page.getByText('Set Active Level', { exact: true }).count()).toBe(0);
       const runtimeTrace = await page.locator('[aria-label="Runtime render trace"]').textContent();
       expect(runtimeTrace!.indexOf('rsc-render')).toBeLessThan(runtimeTrace!.indexOf('flight-decode'));
+      expect(errors).toEqual([]);
+    } finally {
+      await browser.close();
+      await new Promise<void>((resolve, reject) => server.close((error) => error === undefined ? resolve() : reject(error)));
+      await rm(output, { force: true, recursive: true });
+    }
+  }, 30_000);
+
+  it('resets the committed runtime revision under StrictMode without admitting stale screen completions', async () => {
+    const output = await mkdtemp(join(tmpdir(), 'agent-bundle-inspector-fixture-'));
+    const config: RsbuildConfig = createWorkbenchConfig();
+    config.source = {
+      define: { 'process.env.NODE_ENV': JSON.stringify('development') },
+      entry: { 'inspector-session-adapter-fixture': join(process.cwd(), 'packages/workbench/src/inspector/adapter/inspector-session-adapter-fixture.tsx') },
+    };
+    config.output = { ...config.output, distPath: { root: output } };
+    const rsbuild = await createRsbuild({ rsbuildConfig: config });
+    await rsbuild.build();
+    const { server, url } = await startStaticServer(output);
+    const browser = await chromium.launch({ channel: 'chrome' });
+    try {
+      const page = await browser.newPage();
+      const errors: string[] = [];
+      page.on('pageerror', (error) => errors.push(error.stack ?? error.message));
+      await page.goto(url, { timeout: 5_000, waitUntil: 'domcontentloaded' });
+      await page.waitForTimeout(100);
+
+      const harnessAvailable = await page.evaluate(() => typeof (window as Window & {
+        __inspectorSessionAdapterFixture?: unknown;
+      }).__inspectorSessionAdapterFixture === 'object');
+      expect(harnessAvailable).toBe(true);
+
+      await page.evaluate(() => {
+        const harness = (window as Window & { __inspectorSessionAdapterFixture?: InspectorSessionAdapterFixtureHarness }).__inspectorSessionAdapterFixture;
+        if (harness === undefined) throw new Error('Inspector fixture harness was not installed.');
+        harness.setRuntimeBinding(3, 'definition-revision-3');
+      });
+      await page.getByText('fixture-tool', { exact: true }).click();
+      await page.getByRole('button', { name: 'Execute Tool' }).click();
+      await page.evaluate(() => {
+        const harness = (window as Window & { __inspectorSessionAdapterFixture?: InspectorSessionAdapterFixtureHarness }).__inspectorSessionAdapterFixture;
+        if (harness === undefined) throw new Error('Inspector fixture harness was not installed.');
+        harness.resolveNextTool('completed tool result');
+      });
+      await page.getByText('completed tool result', { exact: true }).waitFor({ timeout: 5_000 });
+      await page.getByRole('button', { name: 'Protocol' }).click();
+      await page.locator('[data-protocol-frame="request:tools/call"]').waitFor({ timeout: 5_000 });
+      await page.getByRole('button', { name: 'Clear', exact: true }).click();
+      await page.getByText('No request history', { exact: true }).waitFor({ timeout: 5_000 });
+
+      await page.evaluate(() => {
+        const harness = (window as Window & { __inspectorSessionAdapterFixture?: InspectorSessionAdapterFixtureHarness }).__inspectorSessionAdapterFixture;
+        if (harness === undefined) throw new Error('Inspector fixture harness was not installed.');
+        harness.setRuntimeBinding(3, 'definition-digest-only');
+      });
+      await page.getByText('No request history', { exact: true }).waitFor({ timeout: 5_000 });
+      await page.getByRole('button', { name: 'Tools' }).click();
+      await page.getByText('completed tool result', { exact: true }).waitFor({ timeout: 5_000 });
+      await page.getByRole('button', { name: 'Close results' }).click();
+      await page.getByRole('button', { name: 'Execute Tool' }).click();
+      await page.getByRole('button', { name: 'Cancel' }).waitFor({ timeout: 5_000 });
+
+      await page.evaluate(() => {
+        const harness = (window as Window & { __inspectorSessionAdapterFixture?: InspectorSessionAdapterFixtureHarness }).__inspectorSessionAdapterFixture;
+        if (harness === undefined) throw new Error('Inspector fixture harness was not installed.');
+        harness.setRuntimeBinding(4, 'definition-revision-4');
+      });
+      await page.getByText('Select a tool to view details', { exact: true }).waitFor({ timeout: 5_000 });
+      await page.getByRole('button', { name: 'Protocol' }).click();
+      await page.locator('[data-protocol-frame="request:tools/call"]').waitFor({ timeout: 5_000 });
+
+      await page.evaluate(() => {
+        const harness = (window as Window & { __inspectorSessionAdapterFixture?: InspectorSessionAdapterFixtureHarness }).__inspectorSessionAdapterFixture;
+        if (harness === undefined) throw new Error('Inspector fixture harness was not installed.');
+        harness.resolveNextTool('stale tool result');
+      });
+      await page.waitForTimeout(100);
+      expect(await page.getByText('stale tool result', { exact: true }).count()).toBe(0);
       expect(errors).toEqual([]);
     } finally {
       await browser.close();

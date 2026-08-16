@@ -1,3 +1,5 @@
+import { readFile } from 'node:fs/promises';
+
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, rs } from '@rstest/core';
@@ -309,95 +311,33 @@ describe('Inspector session adapter', () => {
     expect(controller.invoke).not.toHaveBeenCalled();
   });
 
-  it('preserves same-revision tool work but synchronously fences it when the runtime revision changes', async () => {
-    const dynamicScreens: { tools: undefined | Record<string, unknown> } = { tools: undefined };
-    const hooks: { value: unknown }[] = [];
-    const writes: unknown[] = [];
-    let hookIndex = 0;
-    const deferredOperation = (): Readonly<{ readonly promise: Promise<unknown>; readonly resolve: (value: unknown) => void }> => {
-      let resolve: (value: unknown) => void = () => undefined;
-      const promise = new Promise<unknown>((next) => { resolve = next; });
-      return Object.freeze({ promise, resolve });
-    };
-    let operation = deferredOperation();
-    const fakeReact = {
-      createElement: (type: unknown, props?: Record<string, unknown> | null, ...children: unknown[]): unknown => {
-        if (typeof type === 'function') return (type as (next: Record<string, unknown>) => unknown)({ ...(props ?? {}), children });
-        return { children, props, type };
-      },
-      useCallback: <T,>(callback: T): T => callback,
-      useEffect: (): void => undefined,
-      useMemo: <T,>(factory: () => T): T => factory(),
-      useRef: <T,>(initial: T): { current: T } => {
-        const slot = hooks[hookIndex++] ?? { value: { current: initial } };
-        hooks[hookIndex - 1] = slot;
-        return slot.value as { current: T };
-      },
-      useState: <T,>(initial: T | (() => T)): readonly [T, (next: T | ((current: T) => T)) => void] => {
-        const slot = hooks[hookIndex++] ?? { value: typeof initial === 'function' ? (initial as () => T)() : initial };
-        hooks[hookIndex - 1] = slot;
-        return [slot.value as T, (next: T | ((current: T) => T)): void => {
-          slot.value = typeof next === 'function' ? (next as (current: T) => T)(slot.value as T) : next;
-          writes.push(slot.value);
-        }];
-      },
-    };
-    const render = async (sessionRevision: number, definitionDigest = 'definition-runtime'): Promise<void> => {
-      hookIndex = 0;
-      const { InspectorSessionAdapter: DynamicAdapter } = await import('../src/inspector/adapter/inspector-session-adapter.tsx');
-      const runtimeModel = {
-        ...model,
-        binding: {
-          binding: {
-            definitionDigest,
-            registryRevision: 1,
-            serverDigest: 'server-runtime',
-            serverName: 'weather',
-            sessionId: 'runtime-session',
-            sessionRevision,
-            target: 'portable',
-            transportDigest: 'transport-runtime',
-          },
-          kind: 'runtime' as const,
-        },
-      } as McpBrowserSessionModel;
-      fakeReact.createElement(DynamicAdapter, {
-        controller: { cancel: () => false, invoke: () => operation.promise },
-        model: runtimeModel,
-      });
-    };
+  it('pins the complete effect-owned revision reset set', async () => {
+    const source = await readFile('packages/workbench/src/inspector/adapter/inspector-session-adapter.tsx', 'utf8');
+    const resetEffect = source.slice(source.indexOf('useLayoutEffect(() =>'), source.indexOf('  const protocolEntries'));
 
-    rs.resetModules();
-    rs.doMock('react', () => ({ default: fakeReact, ...fakeReact }));
-    rs.doMock('@mantine/core', () => ({ MantineProvider: ({ children }: { children?: unknown }) => children, createTheme: <T,>(theme: T): T => theme }));
-    rs.doMock('../src/mcp/mcp-page.tsx', () => ({ McpProtocolEvidence: () => undefined }));
-    rs.doMock('../src/inspector/adapter/inspector-session-adapter-vendor.js', () => ({
-      ALL_LEVELS_VISIBLE: {},
-      LoggingScreen: () => undefined,
-      PromptsScreen: () => undefined,
-      ProtocolScreen: () => undefined,
-      ResourcesScreen: () => undefined,
-      ToolsScreen: (props: Record<string, unknown>) => { dynamicScreens.tools = props; return undefined; },
-      clearScrollMemory: () => undefined,
-    }));
-
-    await render(3);
-    (dynamicScreens.tools!.onCallTool as (name: string, args: Record<string, unknown>) => void)('weather', { city: 'Berlin' });
-    const writesBeforeDigestChange = writes.length;
-    await render(3, 'definition-runtime-updated');
-    operation.resolve({ content: [] });
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(writes).toHaveLength(writesBeforeDigestChange + 1);
-
-    operation = deferredOperation();
-    (dynamicScreens.tools!.onCallTool as (name: string, args: Record<string, unknown>) => void)('weather', { city: 'Berlin' });
-    const writesBeforeRevisionChange = writes.length;
-    await render(4);
-    operation.resolve({ content: [] });
-    await Promise.resolve();
-    await Promise.resolve();
-
-    expect(writes).toHaveLength(writesBeforeRevisionChange);
+    expect(resetEffect).toContain('lastResetBindingKey.current = bindingKey');
+    expect(resetEffect).not.toContain('previousBindingKey.current');
+    expect(resetEffect).not.toContain('actionGeneration.current');
+    for (const resetter of [
+      'clearScrollMemory()',
+      'setTab(availableTab(initialTab, availability))',
+      'setToolsUi(initialToolsUi)',
+      'setResourcesUi(initialResourcesUi)',
+      'setPromptsUi(initialPromptsUi)',
+      'setProtocolUi(initialProtocolUi)',
+      'setLogsUi(initialLogsUi)',
+      'setToolCall(undefined)',
+      'setToolRequestId(undefined)',
+      'setReadResource(undefined)',
+      'setGetPrompt(undefined)',
+      'setPinnedIds(new Set())',
+      'setProtocolCleared(false)',
+      'setLoggingCleared(false)',
+      "setLoggingDiagnostic('Log-level changes are unavailable because this W13 session does not expose logging/setLevel.')",
+      "setSortDirection('oldest-first')",
+      'setCompact(false)',
+      'setProtocolReplayUnavailable(false)',
+    ]) expect(resetEffect).toContain(resetter);
   });
+
 });
