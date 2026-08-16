@@ -755,6 +755,7 @@ const trustedDocumentPolicies = new WeakSet<McpAppTrustedDocumentPolicy>();
 interface RuntimeAdmission {
   readonly binding?: McpAppPreviewSnapshot;
   readonly bindingGeneration: number | undefined;
+  readonly bindingInvalidationEpoch: number;
   readonly bindingId: string | undefined;
   readonly generation: number;
 }
@@ -919,6 +920,7 @@ export class McpAppClient implements McpAppRuntimeClient {
   readonly #unsubscribeProjectEvents: (() => void) | undefined;
   #authentication: Promise<ForegroundSession> | undefined;
   #lastRuntimeEventSequence = -1;
+  #runtimeBindingInvalidationEpoch = 0;
   #runtimeDisposed = false;
   #runtimeGeneration = 0;
 
@@ -946,7 +948,7 @@ export class McpAppClient implements McpAppRuntimeClient {
     if (snapshot.kind === 'apps' && !initialDocumentPolicy(snapshot.documentPolicy)) {
       runtimeInvalid('Runtime MCP App create preview must start with the initial document policy.');
     }
-    this.#assertRuntimeAdmission(admission);
+    this.#assertRuntimeCreateAdmission(admission, snapshot.binding.id);
     return this.#installRuntimePreview(snapshot);
   }
 
@@ -1150,6 +1152,7 @@ export class McpAppClient implements McpAppRuntimeClient {
     const admission: RuntimeAdmission = Object.freeze({
       binding: bindingId === undefined ? undefined : this.#runtimeBindings.get(bindingId),
       bindingGeneration: bindingId === undefined ? undefined : this.#runtimeBindingGeneration(bindingId),
+      bindingInvalidationEpoch: this.#runtimeBindingInvalidationEpoch,
       bindingId,
       generation: this.#runtimeGeneration,
     });
@@ -1189,6 +1192,13 @@ export class McpAppClient implements McpAppRuntimeClient {
     }
   }
 
+  #assertRuntimeCreateAdmission(admission: RuntimeAdmission, bindingId: string): void {
+    this.#assertRuntimeAdmission(admission);
+    if (this.#runtimeBindingGeneration(bindingId) > admission.bindingInvalidationEpoch) {
+      throw new McpAppClientError('AB8015', 'Runtime MCP App authority is no longer current.');
+    }
+  }
+
   #assertRuntimeCloseAdmission(attempt: RuntimeCloseAttempt): void {
     if (this.#runtimeDisposed || this.#runtimeCloseAttempts.get(attempt.bindingId) !== attempt) {
       throw new McpAppClientError('AB8015', 'Runtime MCP App close authority is no longer current.');
@@ -1210,8 +1220,8 @@ export class McpAppClient implements McpAppRuntimeClient {
   }
 
   #advanceRuntimeBinding(bindingId: string): void {
-    this.#runtimeGeneration += 1;
-    this.#runtimeBindingGenerations.set(bindingId, this.#runtimeBindingGeneration(bindingId) + 1);
+    this.#runtimeBindingInvalidationEpoch += 1;
+    this.#runtimeBindingGenerations.set(bindingId, this.#runtimeBindingInvalidationEpoch);
   }
 
   #storeRuntimeConsentChallenge(bindingId: string, challenge: McpAppConsentCreatedResponse['challenge'], binding: McpAppPreviewSnapshot): void {
@@ -1330,7 +1340,7 @@ export class McpAppClient implements McpAppRuntimeClient {
       state: 'revoked' as const,
     }) as McpAppRuntimeInvalidationDetails);
     for (const details of invalidations) {
-      this.#runtimeBindingGenerations.set(details.bindingId, this.#runtimeBindingGeneration(details.bindingId) + 1);
+      this.#advanceRuntimeBinding(details.bindingId);
       this.#runtimeBindings.delete(details.bindingId);
       this.#runtimePolicies.delete(details.bindingId);
       for (const listener of [...this.#invalidations]) {
@@ -1353,7 +1363,7 @@ export class McpAppClient implements McpAppRuntimeClient {
     this.#lastRuntimeEventSequence = event.sequence;
     const payload = event.payload;
     if (!isRecord(payload) || payload.type !== 'runtime.app.updated') return;
-    if (!hasExactKeys(payload, ['details', 'type'])) {
+    if (!hasExactKeys(payload, ['details', 'mcpSessionId', 'mcpSessionRevision', 'providerSessionId', 'type'])) {
       this.#invalidateAll('registry-replay-gap');
       return;
     }
@@ -1362,10 +1372,14 @@ export class McpAppClient implements McpAppRuntimeClient {
       const raw = runtimeRecord(payload.details, ['bindingId', 'reason', 'sessionId', 'sessionRevision', 'state']);
       if (raw.reason !== 'manual-close' && raw.reason !== 'registry-replay-gap' && raw.reason !== 'restart-failed' && raw.reason !== 'runtime-shutdown' && raw.reason !== 'session-closed' && raw.reason !== 'session-restarted' ||
         raw.state !== 'revoked' || !positiveInteger(raw.sessionRevision)) runtimeInvalid('Runtime MCP App invalidation is invalid.');
+      const sessionId = runtimeText(raw.sessionId, 'session id');
+      if (runtimeText(payload.mcpSessionId, 'MCP session id') !== sessionId ||
+        payload.mcpSessionRevision !== raw.sessionRevision || !positiveInteger(payload.mcpSessionRevision) ||
+        runtimeText(payload.providerSessionId, 'provider session id').length === 0) runtimeInvalid('Runtime MCP App invalidation does not match its runtime event envelope.');
       details = Object.freeze({
         bindingId: decodeURIComponent(opaqueSegment(runtimeText(raw.bindingId, 'binding id'), 'Runtime MCP App binding')),
         reason: raw.reason,
-        sessionId: runtimeText(raw.sessionId, 'session id'),
+        sessionId,
         sessionRevision: raw.sessionRevision,
         state: 'revoked',
       }) as McpAppRuntimeInvalidationDetails;

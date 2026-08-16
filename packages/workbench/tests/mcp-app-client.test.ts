@@ -102,6 +102,20 @@ const json = (body: unknown, status = 200): Response => new Response(JSON.string
   status,
 });
 
+const runtimeAppUpdated = (details: Readonly<{
+  readonly bindingId: string;
+  readonly reason: string;
+  readonly sessionId: string;
+  readonly sessionRevision: number;
+  readonly state: 'revoked';
+}>) => Object.freeze({
+  details: Object.freeze({ ...details }),
+  mcpSessionId: details.sessionId,
+  mcpSessionRevision: details.sessionRevision,
+  providerSessionId: 'provider-session-a',
+  type: 'runtime.app.updated' as const,
+});
+
 class RuntimeEventSource implements EventSourceLike {
   closed = false;
   readonly #listeners = new Map<string, (event: EventSourceMessage) => void>();
@@ -264,7 +278,13 @@ describe('MCP App browser client', () => {
     const runtime = new McpAppClient({ fetch: fetch as typeof globalThis.fetch, projectClient: project });
     const revoked = (sequence: number) => stream.emit('runtime.event', {
       occurredAt: '2026-08-16T00:00:00.000Z',
-      payload: { type: 'runtime.app.updated', details: { bindingId: 'runtime-binding', reason: 'manual-close', sessionId: 'runtime-session-a', sessionRevision: 2, state: 'revoked' } },
+      payload: {
+        details: { bindingId: 'runtime-binding', reason: 'manual-close', sessionId: 'runtime-session-a', sessionRevision: 2, state: 'revoked' },
+        mcpSessionId: 'runtime-session-a',
+        mcpSessionRevision: 2,
+        providerSessionId: 'provider-session-a',
+        type: 'runtime.app.updated',
+      },
       sequence,
       type: 'runtime.event',
     }, sequence);
@@ -287,6 +307,127 @@ describe('MCP App browser client', () => {
     await expect(failed).rejects.toMatchObject({ code: 'AB8204' });
     await expect(runtime.closeRuntime('runtime-binding')).resolves.toBeUndefined();
     expect(closeAttempts).toBe(3);
+    project.close();
+  });
+
+  it('fails closed when a runtime App invalidation envelope has mismatched or unexpected fields', async () => {
+    const stream = new RuntimeEventSource();
+    const fetch = async (input: string | URL | Request): Promise<Response> => {
+      if (String(input) === '/api/project/session') return json({ cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef', origin: 'http://127.0.0.1:43123', token: 'foreground-secret' });
+      if (String(input) === '/api/project/status') return json({ status: { artifact: { state: 'missing' } } });
+      if (String(input) === '/api/runtime/apps') return json({ preview: runtimePreview });
+      throw new Error(`Unexpected request ${String(input)}.`);
+    };
+    const project = new ProjectClient({ events: () => stream, fetch: fetch as typeof globalThis.fetch });
+    await project.connect(() => undefined);
+    const runtime = new McpAppClient({ fetch: fetch as typeof globalThis.fetch, projectClient: project });
+    const invalidation = { bindingId: 'runtime-binding', reason: 'manual-close', sessionId: 'runtime-session-a', sessionRevision: 2, state: 'revoked' as const };
+
+    await runtime.createRuntime({ expectedGenerationId: 'generation-a', profileId: 'portable', runId: 'run-a' });
+    stream.emit('runtime.event', {
+      occurredAt: '2026-08-16T00:00:00.000Z',
+      payload: Object.freeze({ ...runtimeAppUpdated(invalidation), mcpSessionRevision: 3 }),
+      sequence: 1,
+      type: 'runtime.event',
+    }, 1);
+    await flushEvents();
+    expect(() => runtime.currentDocumentPolicy('runtime-binding')).toThrow('Runtime MCP App document policy is not available.');
+
+    await runtime.createRuntime({ expectedGenerationId: 'generation-a', profileId: 'portable', runId: 'run-b' });
+    stream.emit('runtime.event', {
+      occurredAt: '2026-08-16T00:00:01.000Z',
+      payload: Object.freeze({ ...runtimeAppUpdated(invalidation), unexpected: true }),
+      sequence: 2,
+      type: 'runtime.event',
+    }, 2);
+    await flushEvents();
+    expect(() => runtime.currentDocumentPolicy('runtime-binding')).toThrow('Runtime MCP App document policy is not available.');
+    project.close();
+  });
+
+  it('does not fence a new runtime preview when a late manual-close event revokes an absent binding', async () => {
+    const stream = new RuntimeEventSource();
+    const secondCreate = deferred<Response>();
+    const secondCreateStarted = deferred<void>();
+    const previewB = JSON.parse(JSON.stringify(runtimePreview)) as {
+      binding: { id: string; sessionId: string };
+      session: { binding: { sessionId: string } };
+    };
+    previewB.binding.id = 'runtime-binding-b';
+    previewB.binding.sessionId = 'runtime-session-b';
+    previewB.session.binding.sessionId = 'runtime-session-b';
+    let creates = 0;
+    const fetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+      if (String(input) === '/api/project/session') return json({ cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef', origin: 'http://127.0.0.1:43123', token: 'foreground-secret' });
+      if (String(input) === '/api/project/status') return json({ status: { artifact: { state: 'missing' } } });
+      if (String(input) === '/api/runtime/apps') {
+        creates += 1;
+        if (creates === 1) return json({ preview: runtimePreview });
+        secondCreateStarted.resolve();
+        return secondCreate.promise;
+      }
+      if (String(input) === '/api/runtime/apps/runtime-binding' && init?.method === 'DELETE') return json({ closed: true });
+      throw new Error(`Unexpected request ${String(input)}.`);
+    };
+    const project = new ProjectClient({ events: () => stream, fetch: fetch as typeof globalThis.fetch });
+    await project.connect(() => undefined);
+    const runtime = new McpAppClient({ fetch: fetch as typeof globalThis.fetch, projectClient: project });
+
+    await runtime.createRuntime({ expectedGenerationId: 'generation-a', profileId: 'portable', runId: 'run-a' });
+    await runtime.closeRuntime('runtime-binding');
+    const createB = runtime.createRuntime({ expectedGenerationId: 'generation-a', profileId: 'portable', runId: 'run-b' });
+    void createB.catch(() => undefined);
+    await secondCreateStarted.promise;
+    stream.emit('runtime.event', {
+      occurredAt: '2026-08-16T00:00:00.000Z',
+      payload: runtimeAppUpdated({ bindingId: 'runtime-binding', reason: 'manual-close', sessionId: 'runtime-session-a', sessionRevision: 2, state: 'revoked' }),
+      sequence: 1,
+      type: 'runtime.event',
+    }, 1);
+    await flushEvents();
+    secondCreate.resolve(json({ preview: previewB }));
+
+    await expect(createB).resolves.toMatchObject({ binding: { id: 'runtime-binding-b', sessionId: 'runtime-session-b' } });
+    project.close();
+  });
+
+  it('rejects a created runtime preview when its exact binding is revoked while the response is pending', async () => {
+    const stream = new RuntimeEventSource();
+    const createResponse = deferred<Response>();
+    const createStarted = deferred<void>();
+    const previewB = JSON.parse(JSON.stringify(runtimePreview)) as {
+      binding: { id: string; sessionId: string };
+      session: { binding: { sessionId: string } };
+    };
+    previewB.binding.id = 'runtime-binding-b';
+    previewB.binding.sessionId = 'runtime-session-b';
+    previewB.session.binding.sessionId = 'runtime-session-b';
+    const fetch = async (input: string | URL | Request): Promise<Response> => {
+      if (String(input) === '/api/project/session') return json({ cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef', origin: 'http://127.0.0.1:43123', token: 'foreground-secret' });
+      if (String(input) === '/api/project/status') return json({ status: { artifact: { state: 'missing' } } });
+      if (String(input) === '/api/runtime/apps') {
+        createStarted.resolve();
+        return createResponse.promise;
+      }
+      throw new Error(`Unexpected request ${String(input)}.`);
+    };
+    const project = new ProjectClient({ events: () => stream, fetch: fetch as typeof globalThis.fetch });
+    await project.connect(() => undefined);
+    const runtime = new McpAppClient({ fetch: fetch as typeof globalThis.fetch, projectClient: project });
+    const createB = runtime.createRuntime({ expectedGenerationId: 'generation-a', profileId: 'portable', runId: 'run-b' });
+    void createB.catch(() => undefined);
+    await createStarted.promise;
+    stream.emit('runtime.event', {
+      occurredAt: '2026-08-16T00:00:00.000Z',
+      payload: runtimeAppUpdated({ bindingId: 'runtime-binding-b', reason: 'manual-close', sessionId: 'runtime-session-b', sessionRevision: 2, state: 'revoked' }),
+      sequence: 1,
+      type: 'runtime.event',
+    }, 1);
+    await flushEvents();
+    createResponse.resolve(json({ preview: previewB }));
+
+    await expect(createB).rejects.toMatchObject({ code: 'AB8015' });
+    expect(() => runtime.currentDocumentPolicy('runtime-binding-b')).toThrow('Runtime MCP App document policy is not available.');
     project.close();
   });
 
@@ -655,7 +796,7 @@ describe('MCP App browser client', () => {
       sequence += 1;
       stream.emit('runtime.event', {
         occurredAt: '2026-08-16T00:00:00.000Z',
-        payload: { type: 'runtime.app.updated', details: { bindingId: 'runtime-binding', reason: 'session-restarted', sessionId: 'runtime-session-a', sessionRevision: 2, state: 'revoked' } },
+        payload: runtimeAppUpdated({ bindingId: 'runtime-binding', reason: 'session-restarted', sessionId: 'runtime-session-a', sessionRevision: 2, state: 'revoked' }),
         sequence,
         type: 'runtime.event',
       }, sequence);
@@ -814,7 +955,7 @@ describe('MCP App browser client', () => {
 
     stream.emit('runtime.event', {
       occurredAt: '2026-08-16T00:00:00.000Z',
-      payload: { type: 'runtime.app.updated', details: { bindingId: 'runtime-binding', reason: 'session-restarted', sessionId: 'runtime-session-a', sessionRevision: 2, state: 'revoked' } },
+      payload: runtimeAppUpdated({ bindingId: 'runtime-binding', reason: 'session-restarted', sessionId: 'runtime-session-a', sessionRevision: 2, state: 'revoked' }),
       sequence: 1,
       type: 'runtime.event',
     }, 1);
@@ -879,7 +1020,7 @@ describe('MCP App browser client', () => {
     void lateGet.catch(() => undefined);
     await Promise.resolve();
     stream.emit('runtime.event', {
-      occurredAt: '2026-08-16T00:00:00.000Z', payload: { type: 'runtime.app.updated', details: { bindingId: 'runtime-binding', reason: 'session-restarted', sessionId: 'runtime-session-a', sessionRevision: 2, state: 'revoked' } }, sequence: 2, type: 'runtime.event',
+      occurredAt: '2026-08-16T00:00:00.000Z', payload: runtimeAppUpdated({ bindingId: 'runtime-binding', reason: 'session-restarted', sessionId: 'runtime-session-a', sessionRevision: 2, state: 'revoked' }), sequence: 2, type: 'runtime.event',
     }, 2);
     await flushEvents();
     pending.resolve(json({ preview: runtimePreview }));
