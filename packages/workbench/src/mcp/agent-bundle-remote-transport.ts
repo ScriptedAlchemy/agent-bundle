@@ -127,7 +127,14 @@ export const dispatchAgentBundleMcpRequest = async (
   }>,
 ): Promise<JSONRPCMessage | undefined> => {
   const nextRequest = request(message);
-  if (nextRequest === undefined) return undefined;
+  if (nextRequest === undefined) {
+    const nextNotification = notification(message);
+    if (nextNotification?.method === 'notifications/initialized') return undefined;
+    if (nextNotification !== undefined) {
+      throw new AgentBundleRemoteTransportError('MCP remote transport received an invalid notification.');
+    }
+    return undefined;
+  }
   if (nextRequest.method === 'initialize') {
     try {
       return { id: nextRequest.id, jsonrpc: '2.0', result: resultFor('initialize', options.connection) } as JSONRPCMessage;

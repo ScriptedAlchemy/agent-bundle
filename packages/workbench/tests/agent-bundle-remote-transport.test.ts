@@ -585,6 +585,9 @@ it('keeps the runtime App dispatcher closed: initialization and ping stay local 
     result: { capabilities: { tools: {} }, protocolVersion: '2025-11-25', serverInfo: { name: 'weather-fixture', version: '1.0.0' } },
   });
   await expect(dispatchAgentBundleMcpRequest({ jsonrpc: '2.0', method: 'notifications/initialized' }, options)).resolves.toBeUndefined();
+  await expect(dispatchAgentBundleMcpRequest({ jsonrpc: '2.0', method: 'notifications/progress', params: { progress: 1 } }, options)).rejects.toThrow(
+    'MCP remote transport received an invalid notification.',
+  );
   await expect(dispatchAgentBundleMcpRequest({ id: 2, jsonrpc: '2.0', method: 'ping' }, options)).resolves.toEqual({
     id: 2,
     jsonrpc: '2.0',
@@ -650,7 +653,16 @@ it('uses only exact runtime MCP routes and preserves the operation vector', asyn
   });
   await client.closeRuntime({ expectedSessionRevision: 3, sessionId: 'runtime-session-a' });
 
-  expect(opened).toMatchObject({ binding: runtimeBinding, state: 'ready' });
+  expect(opened).toEqual({
+    binding: {
+      definitionDigest: 'definition-a', registryRevision: 7, serverDigest: 'server-a', serverName: 'weather',
+      sessionId: 'runtime-session-a', sessionRevision: 3, target: 'portable', transportDigest: 'transport-a',
+    },
+    connection,
+    state: 'ready',
+  });
+  expect(Object.hasOwn(opened.binding, 'providerSessionId')).toBe(false);
+  expect(Object.hasOwn(opened.binding, 'stateStoreId')).toBe(false);
   expect(reconciled).toMatchObject({ action: 'implementation-updated', sequence: 4 });
   expect(operation).toMatchObject({ operationId: 'operation-a', sessionId: 'runtime-session-a', sessionRevision: 3, value: [{ name: 'forecast' }], vector });
   expect(called).toMatchObject({ operationId: 'operation-a', sessionId: 'runtime-session-a', sessionRevision: 3, value: [{ name: 'forecast' }], vector });

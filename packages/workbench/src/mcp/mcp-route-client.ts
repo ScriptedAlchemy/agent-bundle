@@ -1,11 +1,10 @@
 import type {
-  DevRuntimeMcpConnectionState,
+  DevRuntimeMcpAppRunBinding,
   DevRuntimeMcpOperationRequest,
   DevRuntimeMcpOperationResult,
   DevRuntimeMcpRegistryReconcileResult,
   DevRuntimeMcpSessionControlRequest,
   DevRuntimeMcpSessionRequest,
-  DevRuntimeMcpSessionSnapshot,
   RuntimeVector,
 } from '../../../agent-bundle/src/dev/runtime-protocol.ts';
 import type { JsonObject } from '../../../agent-bundle/src/dev/types.ts';
@@ -29,6 +28,13 @@ export interface McpRouteSession {
   readonly binding: McpRouteSessionBinding;
   readonly connection: McpRouteConnection;
   readonly id: string;
+}
+
+/** Browser-safe projection of a runtime session. Provider and state-store IDs remain server-owned. */
+export interface McpRouteRuntimeSession {
+  readonly binding: DevRuntimeMcpAppRunBinding;
+  readonly connection: McpRouteConnection;
+  readonly state: 'connecting' | 'ready' | 'restarting' | 'failed' | 'closed';
 }
 
 export interface McpRouteCatalog {
@@ -196,17 +202,7 @@ const runtimeVector = (value: unknown): RuntimeVector => {
   });
 };
 
-const runtimeConnection = (value: unknown): DevRuntimeMcpConnectionState => {
-  const connection = routeConnection(value);
-  return Object.freeze({
-    capabilities: connection.capabilities === undefined ? undefined : connection.capabilities as DevRuntimeMcpConnectionState['capabilities'],
-    protocolEra: connection.protocolEra,
-    protocolVersion: connection.protocolVersion,
-    server: connection.server,
-  });
-};
-
-const runtimeSession = (value: unknown): DevRuntimeMcpSessionSnapshot => {
+const runtimeSession = (value: unknown): McpRouteRuntimeSession => {
   const session = asRecord(value);
   const binding = asRecord(session.binding);
   if (
@@ -219,18 +215,16 @@ const runtimeSession = (value: unknown): DevRuntimeMcpSessionSnapshot => {
   return Object.freeze({
     binding: Object.freeze({
       definitionDigest: binding.definitionDigest,
-      providerSessionId: binding.providerSessionId,
       registryRevision: binding.registryRevision,
       serverDigest: binding.serverDigest,
       serverName: binding.serverName,
       sessionId: binding.sessionId,
       sessionRevision: binding.sessionRevision,
-      stateStoreId: binding.stateStoreId,
       target: binding.target,
       transportDigest: binding.transportDigest,
     }),
-    connection: runtimeConnection(session.connection),
-    state: session.state as DevRuntimeMcpSessionSnapshot['state'],
+    connection: routeConnection(session.connection),
+    state: session.state as McpRouteRuntimeSession['state'],
   });
 };
 
@@ -534,7 +528,7 @@ export class McpRouteClient {
     return response.closed;
   }
 
-  async openRuntime(request: DevRuntimeMcpSessionRequest): Promise<DevRuntimeMcpSessionSnapshot> {
+  async openRuntime(request: DevRuntimeMcpSessionRequest): Promise<McpRouteRuntimeSession> {
     const input = runtimeOpenRequest(request);
     return runtimeSession(asRecord(await this.#json('/api/runtime/mcp/sessions', {
       body: JSON.stringify(input),
