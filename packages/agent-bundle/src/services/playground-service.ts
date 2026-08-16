@@ -210,9 +210,10 @@ interface SubscriptionRecord {
 }
 
 interface SessionRecord {
+  admissionFailed: boolean;
   readonly cleanupFailures: PlaygroundCleanupFailure[];
   readonly createdAt: string;
-  durability: 'admission-failed' | 'terminal-uncertain' | undefined;
+  durability: 'terminal-uncertain' | undefined;
   readonly events: PlaygroundTraceEvent[];
   readonly id: string;
   readonly identity: PlaygroundSessionIdentity;
@@ -611,6 +612,7 @@ export class PlaygroundService {
       this.#assertAvailable();
       const ownerToken = await this.#acquireOwner(root, id);
       const record: SessionRecord = {
+        admissionFailed: false,
         cleanupFailures: [],
         createdAt: this.#timestamp(),
         durability: undefined,
@@ -638,7 +640,7 @@ export class PlaygroundService {
       try {
         this.#publishV2(record);
       } catch (error) {
-        if (this.#sessions.get(id) === record) record.durability = 'admission-failed';
+        if (this.#sessions.get(id) === record) record.admissionFailed = true;
         throw error;
       }
       return snapshotSession(record);
@@ -682,6 +684,7 @@ export class PlaygroundService {
         throw error;
       }
       const record: SessionRecord = {
+        admissionFailed: false,
         cleanupFailures: [...document.cleanupFailures],
         createdAt: document.createdAt,
         durability: undefined,
@@ -753,6 +756,7 @@ export class PlaygroundService {
     this.#assertAvailable();
     const record = this.#requireSession(sessionId);
     const durable = normalizeOutcome(outcome);
+    if (record.admissionFailed) this.#assertRecordUsable(record);
     if (record.durability === 'terminal-uncertain') {
       return this.#retryUncertainFinalization(record, durable);
     }
@@ -998,7 +1002,7 @@ export class PlaygroundService {
   }
 
   #assertRecordUsable(record: SessionRecord): void {
-    if (record.durability === 'admission-failed') {
+    if (record.admissionFailed) {
       throw serviceError('PLAYGROUND_STORE_CORRUPT', `Playground session ${JSON.stringify(record.id)} failed after publication and is available only for cleanup.`);
     }
     if (record.durability === 'terminal-uncertain') {
