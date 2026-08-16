@@ -123,6 +123,7 @@ export interface RuntimeModel {
 
 export interface RuntimeModelOptions {
   readonly bootstrap: RuntimeBootstrap;
+  readonly defaultProfileId?: string;
   readonly profiles: readonly RuntimeProfileOption[];
 }
 
@@ -610,8 +611,11 @@ const withActivationRefreshCursor = (model: RuntimeModel, triggerSequence: numbe
   });
 };
 
-export const createRuntimeModel = ({ bootstrap, profiles }: RuntimeModelOptions): RuntimeModel => {
+export const createRuntimeModel = ({ bootstrap, defaultProfileId, profiles }: RuntimeModelOptions): RuntimeModel => {
   const snapshots = snapshotProfiles(profiles);
+  if (defaultProfileId !== undefined && !snapshots.some((profile) => profile.id === defaultProfileId)) {
+    throw new TypeError('Runtime default profile must be one of the registered profiles.');
+  }
   const base: RuntimeModel = Object.freeze({
     announcements: emptyStrings,
     draft: runtimeDraftFor(undefined),
@@ -622,7 +626,7 @@ export const createRuntimeModel = ({ bootstrap, profiles }: RuntimeModelOptions)
     lastConsumedEventSequence: 0,
     nextEffectId: 1,
     profiles: snapshots.length === 0 ? emptyProfiles : snapshots,
-    selectedProfileId: snapshots[0]?.id,
+    selectedProfileId: defaultProfileId ?? snapshots[0]?.id,
     selectedTab: 'result',
     surfaces: emptySurfaces,
   });

@@ -6,6 +6,7 @@ import type { DevRuntimeRun, DevRuntimeSurface } from '../../agent-bundle/src/de
 import {
   RuntimeStage,
   type RuntimeAppPreviewRenderer,
+  type RuntimeLiveMcpPageAdapter,
 } from '../src/runtime-stage.tsx';
 import type { RuntimeProfileOption } from '../src/runtime-model.ts';
 import type { RuntimeAppPreviewLifecycleRegistrar } from '../src/runtime-playground.tsx';
@@ -143,6 +144,136 @@ describe('Runtime stage', () => {
     }
   });
 
+  it('keeps the disabled live MCP Page adapter inert', () => {
+    const renderer: RuntimeAppPreviewRenderer = () => createElement('div', { 'data-runtime-app-sentinel': 'preview' }, 'Injected App');
+    const disabled = Object.freeze({ kind: 'disabled' as const }) satisfies RuntimeLiveMcpPageAdapter;
+
+    const markup = renderToStaticMarkup(createElement(RuntimeStage, {
+      liveMcpPageAdapter: disabled,
+      profile,
+      profileId: 'portable',
+      renderAppPreview: renderer,
+      run,
+      surface,
+    }));
+
+    expect((markup.match(/data-runtime-app-sentinel/g) ?? [])).toHaveLength(1);
+    expect(markup).not.toContain('data-runtime-mcp-page-sentinel');
+  });
+
+  it('renders the host-owned handoff adjacent to one official preview with exact evidence and registrar identities', () => {
+    let previewCalls = 0;
+    let handoffCalls = 0;
+    let received: unknown;
+    const registrar: RuntimeAppPreviewLifecycleRegistrar = () => () => undefined;
+    const renderer: RuntimeAppPreviewRenderer = () => {
+      previewCalls += 1;
+      return createElement('div', { 'data-runtime-app-sentinel': 'preview' }, 'Injected App');
+    };
+    const adapter = Object.freeze({
+      kind: 'host-owned' as const,
+      render: (props) => {
+        handoffCalls += 1;
+        received = props;
+        return createElement('div', { 'data-runtime-mcp-page-sentinel': 'handoff' }, 'Host handoff');
+      },
+    }) satisfies RuntimeLiveMcpPageAdapter;
+
+    const markup = renderToStaticMarkup(createElement(RuntimeStage, {
+      liveMcpPageAdapter: adapter,
+      profile,
+      profileId: 'portable',
+      registerAppPreviewLifecycle: registrar,
+      renderAppPreview: renderer,
+      run,
+      surface,
+    }));
+
+    expect(previewCalls).toBe(1);
+    expect(handoffCalls).toBe(1);
+    const handoff = received as Record<string, unknown>;
+    expect(Object.keys(handoff).sort()).toEqual(['mcpBinding', 'profile', 'profileId', 'registerLifecycle', 'run', 'surface']);
+    expect(handoff.mcpBinding).toBe(run.result.app!.mcpBinding);
+    expect(handoff.profile).toBe(profile);
+    expect(handoff.profileId).toBe('portable');
+    expect(handoff.registerLifecycle).toBe(registrar);
+    expect(handoff.run).toBe(run);
+    expect(handoff.surface).toBe(surface);
+    expect(markup.indexOf('data-runtime-app-sentinel')).toBeLessThan(markup.indexOf('data-runtime-mcp-page-sentinel'));
+    expect((markup.match(/data-runtime-app-sentinel/g) ?? [])).toHaveLength(1);
+    expect((markup.match(/data-runtime-mcp-page-sentinel/g) ?? [])).toHaveLength(1);
+  });
+
+  it('fails closed for missing App evidence and throwing host handoffs without suppressing the official preview', () => {
+    let handoffCalls = 0;
+    const adapter = Object.freeze({
+      kind: 'host-owned' as const,
+      render: () => {
+        handoffCalls += 1;
+        throw new Error('handoff failed');
+      },
+    }) satisfies RuntimeLiveMcpPageAdapter;
+    const preview: RuntimeAppPreviewRenderer = () => createElement('div', { 'data-runtime-app-sentinel': 'preview' }, 'Injected App');
+    const noApp = Object.freeze({ ...run, result: Object.freeze({ ...run.result, app: undefined }) }) satisfies DevRuntimeRun;
+
+    const missing = renderToStaticMarkup(createElement(RuntimeStage, {
+      liveMcpPageAdapter: adapter,
+      profile,
+      profileId: 'portable',
+      renderAppPreview: preview,
+      run: noApp,
+      surface,
+    }));
+    const throwing = renderToStaticMarkup(createElement(RuntimeStage, {
+      liveMcpPageAdapter: adapter,
+      profile,
+      profileId: 'portable',
+      renderAppPreview: preview,
+      run,
+      surface,
+    }));
+
+    expect(handoffCalls).toBe(1);
+    expect(missing).toContain('Model-visible output');
+    expect(missing).not.toContain('data-runtime-app-sentinel');
+    expect(missing).not.toContain('data-runtime-mcp-page-sentinel');
+    expect(throwing).toContain('Model-visible output');
+    expect(throwing).toContain('data-runtime-app-sentinel');
+    expect(throwing).not.toContain('data-runtime-mcp-page-sentinel');
+  });
+
+  it('fails closed when the selected App evidence does not match the selected surface or profile', () => {
+    let handoffCalls = 0;
+    const adapter = Object.freeze({
+      kind: 'host-owned' as const,
+      render: () => {
+        handoffCalls += 1;
+        return createElement('div', { 'data-runtime-mcp-page-sentinel': 'mismatch' });
+      },
+    }) satisfies RuntimeLiveMcpPageAdapter;
+    const mismatchedSurface = Object.freeze({ ...surface, id: 'app/other' });
+    const mismatchedProfile = Object.freeze({ ...profile, id: 'chatgpt' });
+
+    const surfaceMismatch = renderToStaticMarkup(createElement(RuntimeStage, {
+      liveMcpPageAdapter: adapter,
+      profile,
+      profileId: 'portable',
+      run,
+      surface: mismatchedSurface,
+    }));
+    const profileMismatch = renderToStaticMarkup(createElement(RuntimeStage, {
+      liveMcpPageAdapter: adapter,
+      profile: mismatchedProfile,
+      profileId: 'portable',
+      run,
+      surface,
+    }));
+
+    expect(handoffCalls).toBe(0);
+    expect(surfaceMismatch).not.toContain('data-runtime-mcp-page-sentinel');
+    expect(profileMismatch).not.toContain('data-runtime-mcp-page-sentinel');
+  });
+
   it('retains last-good output and its one injected App after a selected failure', () => {
     const renderer: RuntimeAppPreviewRenderer = ({ run: rendered }) => createElement('div', { 'data-runtime-app-sentinel': 'retained' }, rendered.id);
     const markup = renderToStaticMarkup(createElement(RuntimeStage, {
@@ -163,6 +294,32 @@ describe('Runtime stage', () => {
     expect((markup.match(/data-runtime-app-sentinel/g) ?? [])).toHaveLength(1);
     expect(markup).toContain('run-customer');
     expect(markup).not.toContain('No model-visible output was returned for this run.');
+  });
+
+  it('never renders a host-owned MCP Page handoff from retained last-good evidence', () => {
+    let handoffCalls = 0;
+    const adapter = Object.freeze({
+      kind: 'host-owned' as const,
+      render: () => {
+        handoffCalls += 1;
+        return createElement('div', { 'data-runtime-mcp-page-sentinel': 'retained' });
+      },
+    }) satisfies RuntimeLiveMcpPageAdapter;
+    const preview: RuntimeAppPreviewRenderer = () => createElement('div', { 'data-runtime-app-sentinel': 'retained' }, 'Injected App');
+
+    const markup = renderToStaticMarkup(createElement(RuntimeStage, {
+      lastGoodRun: run,
+      liveMcpPageAdapter: adapter,
+      profile,
+      profileId: 'portable',
+      renderAppPreview: preview,
+      run: failedRun,
+      surface,
+    }));
+
+    expect(handoffCalls).toBe(0);
+    expect(markup).toContain('data-runtime-app-sentinel');
+    expect(markup).not.toContain('data-runtime-mcp-page-sentinel');
   });
 
   it('treats state and provider identity changes as stale while an exact authoritative vector is current', () => {

@@ -9,6 +9,7 @@ import type {
   RuntimeVector,
 } from '../../agent-bundle/src/dev/index.ts';
 import type { ProjectEventMessage } from '../../agent-bundle/src/dev/types.ts';
+import { MCP_APP_PROFILE_DESCRIPTORS } from '../../agent-bundle/src/dev/mcp-app-host-profiles.ts';
 import type { RuntimeBootstrap } from '../src/runtime-client.ts';
 import { ForegroundRouteClient } from '../src/mcp/mcp-route-client.ts';
 import { RuntimeClient } from '../src/runtime-client.ts';
@@ -151,6 +152,18 @@ it('bootstraps provider defaults and caps, deduplicates, orders, and snapshots h
   expect(Object.isFrozen(newest.result.protocol!)).toBe(true);
   expect(Object.isFrozen(newest.result.state)).toBe(true);
   expect(Object.isFrozen(newest.result.trace[0]!)).toBe(true);
+});
+
+it('snapshots a registered default profile while preserving first-profile fallback and rejecting unknown defaults', () => {
+  const hostProfiles = Object.values(MCP_APP_PROFILE_DESCRIPTORS) satisfies readonly RuntimeProfileOption[];
+  const portable = createRuntimeModel({ bootstrap: bootstrap(), defaultProfileId: 'portable', profiles: hostProfiles });
+  const fallback = createRuntimeModel({ bootstrap: bootstrap(), profiles: hostProfiles });
+
+  expect(portable.selectedProfileId).toBe('portable');
+  expect(portable.profiles).not.toBe(hostProfiles);
+  expect(Object.isFrozen(portable.profiles)).toBe(true);
+  expect(fallback.selectedProfileId).toBe('chatgpt');
+  expect(() => createRuntimeModel({ bootstrap: bootstrap(), defaultProfileId: 'unknown', profiles: hostProfiles })).toThrow(/default profile/i);
 });
 
 it('keeps fixture and historical inputs immutable while raw draft repair is controlled separately', () => {

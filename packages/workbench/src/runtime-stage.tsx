@@ -27,6 +27,7 @@ export type RuntimeLiveMcpPageAdapter =
 
 export interface RuntimeStageProps {
   readonly lastGoodRun?: DevRuntimeRun;
+  readonly liveMcpPageAdapter?: RuntimeLiveMcpPageAdapter;
   readonly profile?: RuntimeProfileOption;
   readonly profileId?: string;
   readonly renderAppPreview?: RuntimeAppPreviewRenderer;
@@ -79,11 +80,40 @@ const renderedApp = (
   }
 };
 
-export const RuntimeStage = ({ lastGoodRun, profile, profileId, renderAppPreview, registerAppPreviewLifecycle, run, status, surface }: RuntimeStageProps): React.ReactNode => {
+const renderedLiveMcpPage = (
+  run: DevRuntimeRun | undefined,
+  surface: DevRuntimeSurface | undefined,
+  profile: RuntimeProfileOption | undefined,
+  profileId: string | undefined,
+  adapter: RuntimeLiveMcpPageAdapter | undefined,
+  registerLifecycle: RuntimeAppPreviewLifecycleRegistrar | undefined,
+): React.ReactNode | undefined => {
+  if (adapter?.kind !== 'host-owned' || run?.status !== 'succeeded' || run.result.app === undefined || surface === undefined || profile === undefined || profileId === undefined) {
+    return undefined;
+  }
+  const app = run.result.app;
+  const mcpBinding = app.mcpBinding;
+  if (Object.keys(mcpBinding).length === 0 || app.surfaceId !== surface.id || run.surfaceId !== surface.id || profile.id !== profileId) return undefined;
+  try {
+    return adapter.render({
+      mcpBinding,
+      profile,
+      profileId,
+      ...(registerLifecycle === undefined ? {} : { registerLifecycle }),
+      run,
+      surface,
+    });
+  } catch {
+    return undefined;
+  }
+};
+
+export const RuntimeStage = ({ lastGoodRun, liveMcpPageAdapter, profile, profileId, renderAppPreview, registerAppPreviewLifecycle, run, status, surface }: RuntimeStageProps): React.ReactNode => {
   const retainedLastGood = run?.status === 'failed' ? lastGoodRun : undefined;
   const evidenceRun = run?.status === 'succeeded' ? run : retainedLastGood;
   const result = evidenceRun?.status === 'succeeded' ? evidenceRun.result : undefined;
   const app = renderedApp(evidenceRun, surface, profile, profileId, renderAppPreview, registerAppPreviewLifecycle);
+  const liveMcpPage = renderedLiveMcpPage(run, surface, profile, profileId, liveMcpPageAdapter, registerAppPreviewLifecycle);
   const activeVector = status?.activeVector;
   const evidenceCurrent = evidenceRun !== undefined && activeVector !== undefined && sameRuntimeIdentity(evidenceRun.vector, activeVector);
   const lastGood = lastGoodRun ?? (run?.status === 'succeeded' ? run : undefined);
@@ -107,6 +137,7 @@ export const RuntimeStage = ({ lastGoodRun, profile, profileId, renderAppPreview
       {outputCard('Native response', result?.native, 'runtime-stage-output--native')}
       {outputCard('Model-visible output', result?.modelVisible, 'runtime-stage-output--model')}
       {app}
+      {liveMcpPage}
     </div>
   </section>;
 };

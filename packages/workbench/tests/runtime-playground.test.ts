@@ -27,7 +27,7 @@ import {
   type RuntimePlaygroundClient,
 } from '../src/runtime-playground.tsx';
 import type { RuntimeProfileOption } from '../src/runtime-model.ts';
-import type { RuntimeAppPreviewRenderer } from '../src/runtime-stage.tsx';
+import type { RuntimeAppPreviewRenderer, RuntimeLiveMcpPageAdapter } from '../src/runtime-stage.tsx';
 
 const vector = Object.freeze({
   artifactEpochId: 'epoch-a',
@@ -157,6 +157,26 @@ it('keeps unavailable runtime absent and composes no live MCP page adapter', () 
   expect(runtimePlaygroundLiveMcpPageAdapter).toEqual({ kind: 'disabled' });
 });
 
+it('passes an explicit default profile through the Playground controller without reordering profiles', () => {
+  const chatgpt = Object.freeze({
+    claimsRealHostParity: false,
+    evidence: 'simulated' as const,
+    id: 'chatgpt',
+    label: 'ChatGPT Simulation',
+    version: 'agent-bundle:chatgpt-sim:1',
+  });
+  const orderedProfiles = Object.freeze([chatgpt, profiles[0]!]);
+  const controller = createRuntimePlaygroundController({
+    bootstrap: bootstrap(),
+    client: clientFor(),
+    defaultProfileId: 'portable',
+    profiles: orderedProfiles,
+  });
+
+  expect(controller.model.profiles.map((entry) => entry.id)).toEqual(['chatgpt', 'portable']);
+  expect(controller.model.selectedProfileId).toBe('portable');
+});
+
 it('renders the available Runtime playground controls, identity, and optional capability evidence', () => {
   const controller = createRuntimePlaygroundController({ bootstrap: bootstrap(), client: clientFor(), profiles });
 
@@ -165,7 +185,8 @@ it('renders the available Runtime playground controls, identity, and optional ca
   expect(markup).toContain('Runtime Playground');
   expect(markup).toContain('Optional development capability');
   expect(markup).toContain('Runtime identity');
-  expect(markup).toContain('Profile simulation is evidence-only');
+  expect(markup).toContain('Portable MCP Apps · agent-bundle:mcp-apps:2026-01-26 · Simulation');
+  expect(markup).toContain('Simulated locally — not host certification');
   expect(markup).toContain('Runtime input input mode');
   expect(markup).toContain('City');
   expect(markup).toContain('Raw JSON');
@@ -213,6 +234,8 @@ it('forwards the one preview renderer and exact lifecycle registrar to its sole 
     profiles,
   });
   let rendererCalls = 0;
+  let handoffCalls = 0;
+  let receivedHandoff: unknown;
   let registrarCalls = 0;
   let receivedRegistrar: unknown;
   const registrar: RuntimeAppPreviewLifecycleRegistrar = (_handle) => {
@@ -224,15 +247,37 @@ it('forwards the one preview renderer and exact lifecycle registrar to its sole 
     receivedRegistrar = props.registerLifecycle;
     return createElement('div', { 'data-runtime-app-sentinel': 'playground' }, 'Injected App');
   };
+  const liveMcpPageAdapter = Object.freeze({
+    kind: 'host-owned' as const,
+    render: (props) => {
+      handoffCalls += 1;
+      receivedHandoff = props;
+      return createElement('div', { 'data-runtime-mcp-page-sentinel': 'playground' }, 'Host handoff');
+    },
+  }) satisfies RuntimeLiveMcpPageAdapter;
 
   await renderWhenReady(createElement(RuntimePlayground, {
     controller,
+    liveMcpPageAdapter,
     registerAppPreviewLifecycle: registrar,
     renderAppPreview: renderer,
   }));
 
   expect(rendererCalls).toBe(1);
+  expect(handoffCalls).toBe(1);
   expect(receivedRegistrar).toBe(registrar);
+  const handoff = receivedHandoff as Record<string, unknown>;
+  const selectedRun = controller.model.history[0]!;
+  const selectedProfile = controller.model.profiles[0]!;
+  const selectedSurface = controller.model.surfaces[0]!;
+  if (selectedRun.status !== 'succeeded') throw new Error('Expected the selected Runtime App run to have succeeded.');
+  expect(Object.keys(handoff).sort()).toEqual(['mcpBinding', 'profile', 'profileId', 'registerLifecycle', 'run', 'surface']);
+  expect(handoff.mcpBinding).toBe(selectedRun.result.app!.mcpBinding);
+  expect(handoff.profile).toBe(selectedProfile);
+  expect(handoff.profileId).toBe('portable');
+  expect(handoff.registerLifecycle).toBe(registrar);
+  expect(handoff.run).toBe(selectedRun);
+  expect(handoff.surface).toBe(selectedSurface);
   expect(registrarCalls).toBe(0);
 });
 

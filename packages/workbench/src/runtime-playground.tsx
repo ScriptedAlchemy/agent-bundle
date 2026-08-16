@@ -85,6 +85,7 @@ export const runtimeBootstrapRetryPlan = (
 export interface RuntimePlaygroundControllerOptions {
   readonly bootstrap: RuntimeBootstrap;
   readonly client: RuntimePlaygroundClient;
+  readonly defaultProfileId?: string;
   readonly profiles: readonly RuntimeProfileOption[];
 }
 
@@ -117,9 +118,9 @@ class RuntimePlaygroundControllerImpl implements RuntimePlaygroundController {
   #model: RuntimeModel;
   #mounted = true;
 
-  constructor({ bootstrap, client, profiles }: RuntimePlaygroundControllerOptions) {
+  constructor({ bootstrap, client, defaultProfileId, profiles }: RuntimePlaygroundControllerOptions) {
     this.#client = client;
-    this.#model = createRuntimeModel({ bootstrap, profiles });
+    this.#model = createRuntimeModel({ bootstrap, defaultProfileId, profiles });
   }
 
   get error(): string | undefined {
@@ -331,6 +332,7 @@ export const createRuntimeEventBuffer = (options?: RuntimeEventBufferOptions): R
 
 export interface RuntimePlaygroundProps {
   readonly controller: RuntimePlaygroundController;
+  readonly liveMcpPageAdapter?: RuntimeLiveMcpPageAdapter;
   readonly registerAppPreviewLifecycle?: RuntimeAppPreviewLifecycleRegistrar;
   readonly renderAppPreview?: RuntimeAppPreviewRenderer;
 }
@@ -393,7 +395,7 @@ const historyLabel = (run: DevRuntimeRun): string => [
 const resetSeedLabel = (request: DevRuntimeStateResetRequest): string =>
   request.seed === undefined ? 'No fixture seed' : JSON.stringify(request.seed);
 
-export const RuntimePlayground = ({ controller, registerAppPreviewLifecycle, renderAppPreview }: RuntimePlaygroundProps): React.ReactNode => {
+export const RuntimePlayground = ({ controller, liveMcpPageAdapter = runtimePlaygroundLiveMcpPageAdapter, registerAppPreviewLifecycle, renderAppPreview }: RuntimePlaygroundProps): React.ReactNode => {
   const [model, setModel] = useState(controller.model);
   const cancelRef = useRef<HTMLButtonElement>(null);
   const confirmRef = useRef<HTMLButtonElement>(null);
@@ -527,9 +529,9 @@ export const RuntimePlayground = ({ controller, registerAppPreviewLifecycle, ren
         {(surface?.targets ?? []).map((target) => <option key={target} value={target}>{target}</option>)}
       </select></label>
       <label>Profile<select aria-label="Runtime profile" disabled={interactionLocked} onChange={(event) => controller.dispatch({ profileId: event.currentTarget.value, type: 'selection.profile' })} value={model.selectedProfileId ?? ''}>
-        {model.profiles.map((entry) => <option key={entry.id} value={entry.id}>{entry.label}</option>)}
+        {model.profiles.map((entry) => <option key={entry.id} value={entry.id}>{entry.label} · {entry.version} · Simulation</option>)}
       </select></label>
-      <p className="runtime-profile-disclaimer">Profile simulation is evidence-only and does not claim real host parity.</p>
+      <p className="runtime-profile-disclaimer">Simulated locally — not host certification</p>
     </div>
     <div className="runtime-input">
       <McpJsonInput
@@ -581,6 +583,7 @@ export const RuntimePlayground = ({ controller, registerAppPreviewLifecycle, ren
         <React.Suspense fallback={<p>Loading runtime evidence…</p>}>
           <RuntimeStage
             lastGoodRun={lastGoodRun}
+            liveMcpPageAdapter={liveMcpPageAdapter}
             profile={profile}
             profileId={model.selectedProfileId}
             registerAppPreviewLifecycle={registerAppPreviewLifecycle}
