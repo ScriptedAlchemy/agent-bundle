@@ -172,12 +172,6 @@ e2e('opens one real epoch MCP session and keeps its playground operations respon
     await expect(resources.getByText('fixture', { exact: true })).toBeVisible({ timeout: browserTimeout });
     await expect(resources.getByRole('button', { name: 'Read ui://fixture/resource.txt' })).toBeVisible({ timeout: browserTimeout });
 
-    await expectSafeLaunchConfiguration(page, {
-      command: manifest.mcpServers.fixture.command,
-      compiledEntry,
-      cwd: join(project.root, '.agent-bundle', 'epochs', epochId, 'portable'),
-    });
-
     await expect(page.getByRole('radio', { name: 'Form' })).toBeVisible({ timeout: browserTimeout });
     await page.locator('#mcp-tool-arguments-message').fill('equivalent');
     await page.getByRole('button', { name: 'Call echo' }).click();

@@ -21,8 +21,9 @@
 - `npm exec rslint -- packages/workbench/src/mcp/mcp-page.tsx packages/workbench/tests/mcp-page.test.ts packages/workbench/tests/overview.e2e.test.ts` — 0 errors, 0 warnings.
 - `npm run build --workspace agent-bundle-workbench` — production Rsbuild passed.
 - `git diff --check` — passed.
+- Review regression: `git diff --unified=0 bc25a0c -- packages/workbench/tests/overview.e2e.test.ts` shows only the dedicated helper and test outside the broad lifecycle body.
 - TraceDecay file diagnostics — 0 diagnostics; unsafe-pattern and redundancy scans found no production findings.
 
 ## Browser note
 
-The in-app Browser was unavailable, so the task-authorized Chrome fixture was used. The pre-existing broad lifecycle E2E remains unchanged, but its normal close-button click fails after the new assertions already pass. The same timeout reproduces with the Task 9A session subsection and assertions temporarily removed, so it is reported separately as baseline fixture instability rather than a change in this slice.
+The in-app Browser was unavailable, so the task-authorized Chrome fixture was used. Launch-configuration display, secret-absence, responsive-layout, and page-error coverage live solely in the dedicated Chrome test; the pre-existing broad lifecycle body was restored to its `bc25a0c` form. Its normal close-button click still has the independently reproduced baseline timeout, including when the Task 9A session subsection is temporarily removed.
