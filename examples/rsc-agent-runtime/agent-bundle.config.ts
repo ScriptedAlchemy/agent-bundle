@@ -1,6 +1,8 @@
 import { defineConfig } from 'agent-bundle/config';
 
 export default defineConfig({
+  claude: {},
+  codex: {},
   dev: { runtime: { provider: './src/dev/provider.ts' } },
   hooks: {
     afterTool: {
@@ -28,6 +30,7 @@ export default defineConfig({
       },
     },
   },
+  portable: {},
   plugin: {
     description: 'React Server Components agent runtime demonstration.',
     name: 'rsc-agent-runtime-demo',

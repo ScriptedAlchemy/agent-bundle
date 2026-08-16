@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 
 import { expect, test, type PlaywrightOptions } from '@rstest/playwright';
-import type { Page } from 'playwright';
+import type { Locator, Page } from 'playwright';
 
 import { ArtifactService } from '../../agent-bundle/src/dev/artifact-service.ts';
 import { EpochStore } from '../../agent-bundle/src/dev/epoch-store.ts';
@@ -176,8 +176,31 @@ e2e('offers the host-owned MCP playground handoff only after a selected Runtime 
     await expect(page.getByRole('button', { name: 'Open in MCP playground' })).toBeEnabled({ timeout: 15_000 });
     await expect.poll(() => runtimeAppRequests.filter((request) => request === 'POST /api/runtime/apps').length, { timeout: 15_000 }).toBe(1);
     await expect.poll(() => runtimeAppResponses.length, { timeout: 15_000 }).toBe(1);
+    const expectedRegisteredConfiguration = [
+      { configured: true, id: 'extension:claude', key: 'claude', provenance: { kind: 'config', sourcePath: 'agent-bundle.config.ts' }, target: 'claude' },
+      { configured: true, id: 'extension:codex', key: 'codex', provenance: { kind: 'config', sourcePath: 'agent-bundle.config.ts' }, target: 'codex' },
+      { configured: true, id: 'extension:portable', key: 'portable', provenance: { kind: 'config', sourcePath: 'agent-bundle.config.ts' }, target: 'portable' },
+    ] as const;
+    const configInspection = (runtimeAppResponses[0] as {
+      readonly preview: { readonly kind: string; readonly profile: { readonly configExtensions: unknown } };
+    }).preview.profile.configExtensions;
     expect(runtimeAppResponses[0]).toMatchObject({ preview: { kind: 'apps' } });
+    expect(configInspection).toEqual({ entries: expectedRegisteredConfiguration, sourceRevision: expect.any(String) });
+    const sourceRevision = (configInspection as { readonly sourceRevision: string }).sourceRevision;
+    expect(sourceRevision.length).toBeGreaterThan(0);
+    const expectRuntimeProfileInspection = async (preview: Locator): Promise<void> => {
+      await expect(preview.getByLabel('Simulated MCP App profile')).toContainText('Portable MCP Apps');
+      await expect(preview.getByLabel('Simulated MCP App profile')).toContainText('agent-bundle:mcp-apps:2026-01-26');
+      await expect(preview.getByLabel('Simulated MCP App profile')).toContainText('Not certified for real-host parity');
+      const configuration = preview.getByLabel('Registered configuration');
+      await expect(configuration).toContainText(sourceRevision);
+      await expect(configuration.getByRole('listitem')).toHaveCount(3);
+      await expect(configuration.getByRole('listitem').nth(0)).toContainText('extension:claude');
+      await expect(configuration.getByRole('listitem').nth(1)).toContainText('extension:codex');
+      await expect(configuration.getByRole('listitem').nth(2)).toContainText('extension:portable');
+    };
     await page.locator('iframe').waitFor({ state: 'attached', timeout: 15_000 });
+    await expectRuntimeProfileInspection(page.locator('.runtime-stage .mcp-app-preview'));
     const handoff = page.getByRole('button', { name: 'Open in MCP playground' });
     await handoff.click({ timeout: browserTimeout });
     await expect(page.getByRole('heading', { name: 'MCP playground' })).toBeVisible({ timeout: browserTimeout });
@@ -193,6 +216,7 @@ e2e('offers the host-owned MCP playground handoff only after a selected Runtime 
     expect(projectEventStreams).toEqual(['GET /api/project/events']);
     await page.locator('.mcp-page-app-preview iframe').waitFor({ state: 'attached', timeout: 15_000 });
     expect(await page.locator('.mcp-page-app-preview iframe').count()).toBe(1);
+    await expectRuntimeProfileInspection(page.locator('.mcp-page-app-preview'));
     expect(runtimeAppRequests.filter((request) => request === 'POST /api/runtime/apps')).toHaveLength(2);
     expect(runtimeAppRequests.filter((request) => request.startsWith('DELETE /api/runtime/apps/'))).toHaveLength(1);
     expect(pageErrors).toEqual([]);

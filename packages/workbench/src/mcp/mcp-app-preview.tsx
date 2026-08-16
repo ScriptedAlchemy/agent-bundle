@@ -942,6 +942,44 @@ const Profile = ({ profile }: Readonly<{ readonly profile: McpAppJsonValue }>) =
   );
 };
 
+/** Runtime configuration is already admitted and is rendered as inspection-only evidence. */
+const RuntimeProfileInspection = ({
+  configuration,
+  descriptor,
+}: Readonly<{
+  readonly configuration: McpAppPreviewAppsSnapshot['profile']['configExtensions'];
+  readonly descriptor: McpAppPreviewAppsSnapshot['profile']['descriptor'];
+}>) => {
+  return <>
+    <section aria-label="Simulated MCP App profile" className="mcp-app-preview__runtime-inspection">
+      <h3>Simulated MCP App profile</h3>
+      <dl className="mcp-app-preview__runtime-inspection-details">
+        <div><dt>Profile</dt><dd>{descriptor.label}</dd></div>
+        <div><dt>Version</dt><dd>{descriptor.version}</dd></div>
+        <div><dt>Evidence</dt><dd>{descriptor.evidence === 'simulated' ? 'Simulated' : descriptor.evidence}</dd></div>
+        <div><dt>Host parity</dt><dd>{descriptor.claimsRealHostParity ? 'Claims real-host parity' : 'Not certified for real-host parity'}</dd></div>
+      </dl>
+    </section>
+    <section aria-label="Registered configuration" className="mcp-app-preview__runtime-inspection">
+      <h3>Registered configuration</h3>
+      <dl className="mcp-app-preview__runtime-inspection-details">
+        <div><dt>Source revision</dt><dd>{configuration.sourceRevision}</dd></div>
+      </dl>
+      <ol className="mcp-app-preview__runtime-configurations">
+        {configuration.entries.map((entry) => <li key={entry.key} className="mcp-app-preview__runtime-configuration">
+          <dl className="mcp-app-preview__runtime-inspection-details">
+            <div><dt>Key</dt><dd>{entry.key}</dd></div>
+            <div><dt>Target</dt><dd>{entry.target}</dd></div>
+            <div><dt>ID</dt><dd>{entry.id}</dd></div>
+            <div><dt>Provenance</dt><dd>{entry.provenance.kind}</dd></div>
+            <div><dt>Source path</dt><dd>{entry.provenance.sourcePath}</dd></div>
+          </dl>
+        </li>)}
+      </ol>
+    </section>
+  </>;
+};
+
 export function McpAppPreview(props: McpAppPreviewProps): React.ReactNode;
 export function McpAppPreview(props: McpAppRuntimePreviewProps): React.ReactNode;
 export function McpAppPreview(props: McpAppPreviewProps | McpAppRuntimePreviewProps): React.ReactNode;
@@ -1085,6 +1123,10 @@ export function McpAppPreview(props: McpAppPreviewProps | McpAppRuntimePreviewPr
             documentPolicy={runtimeState.documentPolicy}
             policyClient={runtimeOwner.seed.client}
             rendererProps={runtimeController.runtimeRendererProps}
+          />
+          <RuntimeProfileInspection
+            configuration={runtimeState.preview.profile.configExtensions}
+            descriptor={runtimeState.preview.profile.descriptor}
           />
           <section aria-label="Runtime App result" className="mcp-app-preview__fallback">
             <details open><summary>Tool input</summary><pre>{json(runtimeState.fallback.input)}</pre></details>
