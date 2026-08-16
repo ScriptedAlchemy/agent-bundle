@@ -82,7 +82,7 @@ export type ServerType = "stdio" | "streamable-http";
  */
 export type StoredMCPServer = MCPServerConfig & {
   /**
-   * HTTP headers for SSE / streamable-http transports. Persisted as a flat
+   * HTTP headers for Streamable HTTP transports. Persisted as a flat
    * `Record<string, string>` matching the Claude Code / Cursor / Cline
    * `.mcp.json` convention. Lifted into `InspectorServerSettings.headers`
    * (pair-array form) when read into memory.
@@ -754,7 +754,7 @@ export interface InspectorServerJsonDraft {
 export interface CreateTransportOptions {
   /**
    * Optional fetch function. When provided, used as the base for transport HTTP requests
-   * (SSE, streamable-http). Enables proxy fetch in browser (CORS bypass).
+   * (Streamable HTTP). Enables proxy fetch in browser (CORS bypass).
    */
   fetchFn?: typeof fetch;
 
@@ -769,7 +769,7 @@ export interface CreateTransportOptions {
   pipeStderr?: boolean;
 
   /**
-   * Optional callback to track HTTP fetch requests (for SSE and streamable-http transports).
+   * Optional callback to track HTTP fetch requests for Streamable HTTP transports.
    * Receives entries without category; caller adds category when storing.
    */
   onFetchRequest?: (entry: FetchRequestEntryBase) => void;
@@ -783,14 +783,14 @@ export interface CreateTransportOptions {
   onFetchResponseBody?: (id: string, responseBody: string) => void;
 
   /**
-   * Optional OAuth client provider for Bearer authentication (SSE, streamable-http).
+   * Optional OAuth client provider for Streamable HTTP Bearer authentication.
    * When set, the SDK injects tokens and handles 401 via the provider.
    */
   authProvider?: OAuthClientProvider;
 
   /**
    * Optional per-server runtime settings. Currently used to source custom
-   * HTTP headers (settings.headers) for SSE / streamable-http transports.
+   * HTTP headers (settings.headers) for Streamable HTTP transports.
    * Stdio ignores this — headers are not applicable.
    */
   settings?: InspectorServerSettings;

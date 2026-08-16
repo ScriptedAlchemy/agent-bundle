@@ -277,7 +277,16 @@ const applyPatches = async ({ output, patches }) => {
   for (const patch of patches) {
     await execFile(
       'git',
-      ['-C', repositoryRoot, 'apply', '--whitespace=nowarn', '--directory', vendorDirectory, join(output, patch.path)],
+      [
+        '-C',
+        repositoryRoot,
+        'apply',
+        '--unidiff-zero',
+        '--whitespace=nowarn',
+        '--directory',
+        vendorDirectory,
+        join(output, patch.path),
+      ],
     );
   }
 };

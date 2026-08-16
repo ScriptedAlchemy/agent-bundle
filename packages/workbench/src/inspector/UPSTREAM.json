@@ -531,7 +531,7 @@
     },
     {
       "path": "core/mcp/types.ts",
-      "sha256": "8865170be96967328da27274f97c56a486224d37bec886f97b03198a4a6ba83a",
+      "sha256": "24cc496f63818123a7d2ecdcb39d6ccef36703d1e786e97fb3f33eb81e79f0d1",
       "upstreamSha256": "b8e68e59784b3372e8c9dede6cc3daa6f39ac982c851553a20305523c0c00abf"
     }
   ],
@@ -547,7 +547,7 @@
     },
     {
       "path": "patches/002-remove-legacy-sse-mcp-types.patch",
-      "sha256": "39a8f6867ff90994fabeca26ee9a794f110a120ae776ac473dc8b7769953ead7"
+      "sha256": "cde5921826bb9629dffc9827ba2f1ad6a6395f70e4ada64128b43781d03c8cf5"
     }
   ],
   "publicImports": [

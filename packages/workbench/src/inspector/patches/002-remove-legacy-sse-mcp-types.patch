@@ -1,11 +1,7 @@
 diff --git a/core/mcp/types.ts b/core/mcp/types.ts
 --- a/core/mcp/types.ts
 +++ b/core/mcp/types.ts
-@@ -46,14 +46,6 @@ export interface StdioServerConfig {
-   cwd?: string;
- }
--
-+
+@@ -49,8 +48,0 @@ export interface StdioServerConfig {
 -// SSE transport config
 -export interface SseServerConfig {
 -  type: "sse";
@@ -14,21 +10,23 @@ diff --git a/core/mcp/types.ts b/core/mcp/types.ts
 -  requestInit?: Record<string, unknown>;
 -}
 -
- // StreamableHTTP transport config
- export interface StreamableHttpServerConfig {
-   type: "streamable-http";
-@@ -63,10 +55,9 @@ export interface StreamableHttpServerConfig {
--
-+
- export type MCPServerConfig =
-   | StdioServerConfig
+@@ -66 +57,0 @@ export type MCPServerConfig =
 -  | SseServerConfig
-   | StreamableHttpServerConfig;
--
-+
+@@ -69 +60 @@ export type MCPServerConfig =
 -export type ServerType = "stdio" | "sse" | "streamable-http";
 +export type ServerType = "stdio" | "streamable-http";
--
-+
- /**
-  * On-disk shape for a single `mcp.json` server entry (post-#1358). The base
+@@ -94 +85 @@ export type StoredMCPServer = MCPServerConfig & {
+-   * HTTP headers for SSE / streamable-http transports. Persisted as a flat
++   * HTTP headers for Streamable HTTP transports. Persisted as a flat
+@@ -766 +757 @@ export interface CreateTransportOptions {
+-   * (SSE, streamable-http). Enables proxy fetch in browser (CORS bypass).
++   * (Streamable HTTP). Enables proxy fetch in browser (CORS bypass).
+@@ -781 +772 @@ export interface CreateTransportOptions {
+-   * Optional callback to track HTTP fetch requests (for SSE and streamable-http transports).
++   * Optional callback to track HTTP fetch requests for Streamable HTTP transports.
+@@ -795 +786 @@ export interface CreateTransportOptions {
+-   * Optional OAuth client provider for Bearer authentication (SSE, streamable-http).
++   * Optional OAuth client provider for Streamable HTTP Bearer authentication.
+@@ -802 +793 @@ export interface CreateTransportOptions {
+-   * HTTP headers (settings.headers) for SSE / streamable-http transports.
++   * HTTP headers (settings.headers) for Streamable HTTP transports.
