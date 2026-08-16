@@ -264,6 +264,13 @@ it('runs the retained upstream inspectorTabs test directly under Rstest', async 
   expect(stdout).toContain('inspectorTabs.test.ts');
 });
 
+it('verifies the checked-in Inspector snapshot provenance and patches', async () => {
+  await expect(sync(['--verify'])).resolves.toMatchObject({
+    stderr: '',
+    stdout: 'verified Inspector snapshot at packages/workbench/src/inspector\n',
+  });
+});
+
 it('keeps Inspector network sync behind an explicit maintainer command', async () => {
   const packageJson = JSON.parse(await readFile(join(workspaceRoot, 'package.json'), 'utf8')) as {
     readonly scripts: Readonly<Record<string, string>>;

@@ -7,9 +7,11 @@ runner; no assertion or production-source content is changed.
 
 `002-remove-legacy-sse-mcp-types.patch` removes the legacy `SseServerConfig`
 export, its `MCPServerConfig` union arm, and the `"sse"` `ServerType` literal.
-Workbench accepts only stdio and Streamable HTTP server configurations. Its
-scope is `core/mcp/types.ts`; `core/mcp/fetchTracking.ts` and the Network UI
-retain their `text/event-stream` tracing for modern Streamable HTTP responses.
+It also updates transport comments in that file so they no longer claim legacy
+SSE support. Workbench accepts only stdio and Streamable HTTP server
+configurations. Its scope is `core/mcp/types.ts`; `core/mcp/fetchTracking.ts`
+and the Network UI retain their `text/event-stream` tracing for modern
+Streamable HTTP responses.
 
 Apart from files explicitly targeted by these numbered patches, allowlisted
 Inspector files remain byte-identical. Every vendor change must be represented
