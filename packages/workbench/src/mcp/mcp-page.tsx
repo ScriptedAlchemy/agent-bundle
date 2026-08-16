@@ -1,13 +1,16 @@
 import React, { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react';
 
 import type { McpSessionBinding, McpSessionInspectorConfig, McpSessionOperation } from '../../../agent-bundle/src/dev/mcp-session-protocol.ts';
+import type { DevRuntimeMcpAppRunBinding } from '../../../agent-bundle/src/dev/runtime-protocol.ts';
 
 import { McpJsonInput, type ImmutableJsonRecord } from './mcp-json-input.tsx';
 import {
   createMcpAppPreviewController,
+  McpAppPreview,
   McpAppPreviewFrame,
   type McpAppPreviewClient,
   type McpAppPreviewController,
+  type McpAppRuntimePreviewProps,
   type McpAppPreviewState,
 } from './mcp-app-preview.tsx';
 import type {
@@ -23,6 +26,8 @@ import type {
   McpBrowserSessionTimelineEntry,
 } from './mcp-session-model.ts';
 import type { McpSessionControllerReplay, McpSessionControllerRequest } from './mcp-session-controller.ts';
+import type { RuntimeAppPreviewProps } from '../runtime-stage.tsx';
+import type { RuntimeAppPreviewLifecycle } from '../runtime-playground.tsx';
 
 import './mcp-page.css';
 
@@ -39,17 +44,44 @@ export interface McpPageController {
   subscribe(listener: (model: McpBrowserSessionModel) => void): () => void;
 }
 
-export interface McpPageProps {
-  /** Credential-owning foreground client; it is never passed to the sandbox frame. */
-  readonly appPreviewClient?: McpAppPreviewClient;
+interface McpPageCommonProps {
   readonly controller: McpPageController;
-  readonly epochOptions: readonly string[];
   readonly initialBinding?: Partial<McpSessionBinding>;
   readonly onDownloadConfig?: (download: McpConfigDownload) => void;
   /** Replaces the terminal controller with a fresh idle controller in the parent. */
   readonly onResetSession?: () => void;
+}
+
+export type McpPageSource =
+  | Readonly<{ readonly kind: 'artifact'; readonly epochOptions: readonly string[]; readonly targetOptions: readonly string[] }>
+  | Readonly<{ readonly kind: 'runtime'; readonly binding: DevRuntimeMcpAppRunBinding }>;
+
+export type McpPagePreviewSelection =
+  | Readonly<{ readonly kind: 'artifact'; readonly source: McpPageAppPreviewSource }>
+  | Readonly<{ readonly kind: 'runtime'; readonly preview: RuntimeAppPreviewProps; readonly binding: DevRuntimeMcpAppRunBinding }>;
+
+export type McpPagePreviewLifecycle = RuntimeAppPreviewLifecycle;
+
+/** The Page accepts only the two runtime dependencies its existing preview overload needs. */
+export type McpPageRuntimePreviewDependencies = Pick<McpAppRuntimePreviewProps, 'client' | 'createBridgeFactory'>;
+
+export interface McpPageArtifactProps extends McpPageCommonProps {
+  /** Credential-owning foreground client; it is never passed to the sandbox frame. */
+  readonly appPreviewClient?: McpAppPreviewClient;
+  readonly epochOptions: readonly string[];
+  readonly initialPreview?: McpPagePreviewSelection;
+  readonly source?: Extract<McpPageSource, { readonly kind: 'artifact' }>;
   readonly targetOptions: readonly string[];
 }
+
+export interface McpPageRuntimeProps extends McpPageCommonProps {
+  readonly initialPreview?: McpPagePreviewSelection;
+  readonly runtimePreviewDependencies: McpPageRuntimePreviewDependencies;
+  readonly source: Extract<McpPageSource, { readonly kind: 'runtime' }>;
+}
+
+/** Legacy artifact props remain source-compatible; runtime callers supply only the discriminated source. */
+export type McpPageProps = McpPageArtifactProps | McpPageRuntimeProps;
 
 export interface McpConfigDownload {
   readonly blob: Blob;
@@ -504,9 +536,18 @@ const traceValue = (entry: McpBrowserSessionTimelineEntry): unknown => {
 };
 
 interface McpPageAppPreviewProps {
+  readonly artifactClient?: McpAppPreviewClient;
+  readonly host: McpAppHostContext;
+  readonly onLifecycleChange: (lifecycle: McpPagePreviewLifecycle | undefined, current?: McpPagePreviewLifecycle) => void;
+  readonly previewProfile: McpAppPreviewProfile;
+  readonly runtimePreviewDependencies?: McpPageRuntimePreviewDependencies;
+  readonly selection: McpPagePreviewSelection;
+}
+
+interface McpPageArtifactPreviewProps {
   readonly client: McpAppPreviewClient;
   readonly host: McpAppHostContext;
-  readonly onControllerChange: (controller: McpAppPreviewController | undefined) => void;
+  readonly onLifecycleChange: (lifecycle: McpPagePreviewLifecycle | undefined, current?: McpPagePreviewLifecycle) => void;
   readonly previewProfile: McpAppPreviewProfile;
   readonly source: McpPageAppPreviewSource;
 }
@@ -517,8 +558,31 @@ const previewProfileName = (state: McpAppPreviewState, fallback: McpAppPreviewPr
   return profile ?? fallback;
 };
 
-/** Page-owned composition keeps the approved preview close promise ahead of session teardown. */
-const McpPageAppPreview = ({ client, host, onControllerChange, previewProfile, source }: McpPageAppPreviewProps) => {
+const McpPageRuntimeAppPreview = ({ dependencies, onLifecycleChange, preview }: Readonly<{
+  readonly dependencies: McpPageRuntimePreviewDependencies;
+  readonly onLifecycleChange: McpPageArtifactPreviewProps['onLifecycleChange'];
+  readonly preview: RuntimeAppPreviewProps;
+}>) => {
+  const registerLifecycle = (lifecycle: McpPagePreviewLifecycle): (() => void) => {
+    onLifecycleChange(lifecycle);
+    // Parent unmount cleanup must join this exact handle before a child effect
+    // can release the Page ref. The guarded microtask also makes late old
+    // unregisters inert after a replacement has installed its own lifecycle.
+    return () => { queueMicrotask(() => onLifecycleChange(undefined, lifecycle)); };
+  };
+  return <section className="mcp-page-app-preview">
+    <McpAppPreview
+      {...preview}
+      client={dependencies.client}
+      createBridgeFactory={dependencies.createBridgeFactory}
+      kind="runtime"
+      registerLifecycle={registerLifecycle}
+    />
+  </section>;
+};
+
+/** Page-owned artifact composition keeps the approved preview close promise ahead of session teardown. */
+const McpPageArtifactPreview = ({ client, host, onLifecycleChange, previewProfile, source }: McpPageArtifactPreviewProps) => {
   const [state, setState] = useState<McpAppPreviewState>(() => Object.freeze({ phase: 'loading' }));
   const [consentChallenges, setConsentChallenges] = useState<readonly McpAppConsentChallenge[]>(Object.freeze([]));
   const [consentPending, setConsentPending] = useState<string>();
@@ -538,7 +602,7 @@ const McpPageAppPreview = ({ client, host, onControllerChange, previewProfile, s
       toolName: source.toolName,
     });
     controller.current = current;
-    onControllerChange(current);
+    onLifecycleChange(current);
     const unsubscribe = current.subscribe(setState);
     let active = true;
     const refreshConsent = async (): Promise<void> => {
@@ -556,10 +620,10 @@ const McpPageAppPreview = ({ client, host, onControllerChange, previewProfile, s
       clearInterval(poll);
       unsubscribe();
       if (controller.current === current) controller.current = undefined;
-      onControllerChange(undefined);
+      queueMicrotask(() => onLifecycleChange(undefined, current));
       void current.close();
     };
-  }, [client, host, onControllerChange, previewProfile, source]);
+  }, [client, host, onLifecycleChange, previewProfile, source]);
 
   useEffect(() => {
     if (blankBarrier !== undefined || state.phase !== 'ready' || iframe.current === null || typeof window === 'undefined') return;
@@ -623,7 +687,39 @@ const McpPageAppPreview = ({ client, host, onControllerChange, previewProfile, s
   </section>;
 };
 
-export const McpPage = ({ appPreviewClient, controller, epochOptions, initialBinding, onDownloadConfig, onResetSession, targetOptions }: McpPageProps) => {
+/** The Page retains one preview placement while dispatching its artifact and runtime overloads. */
+const McpPageAppPreview = ({ artifactClient, host, onLifecycleChange, previewProfile, runtimePreviewDependencies, selection }: McpPageAppPreviewProps) => {
+  if (selection.kind === 'runtime') {
+    if (runtimePreviewDependencies === undefined) return null;
+    return <McpPageRuntimeAppPreview
+      dependencies={runtimePreviewDependencies}
+      onLifecycleChange={onLifecycleChange}
+      preview={selection.preview}
+    />;
+  }
+  if (artifactClient === undefined) return null;
+  return <McpPageArtifactPreview
+    client={artifactClient}
+    host={host}
+    onLifecycleChange={onLifecycleChange}
+    previewProfile={previewProfile}
+    source={selection.source}
+  />;
+};
+
+const isRuntimePageProps = (props: McpPageProps): props is McpPageRuntimeProps => props.source?.kind === 'runtime';
+
+export const McpPage = (props: McpPageProps) => {
+  const { controller, initialBinding, initialPreview, onDownloadConfig, onResetSession } = props;
+  const runtimeSource = isRuntimePageProps(props) ? props.source : undefined;
+  const artifactProps = isRuntimePageProps(props) ? undefined : props;
+  const artifactSource = artifactProps?.source ?? (artifactProps === undefined
+    ? undefined
+    : Object.freeze({ epochOptions: artifactProps.epochOptions, kind: 'artifact' as const, targetOptions: artifactProps.targetOptions }));
+  const appPreviewClient = artifactProps?.appPreviewClient;
+  const epochOptions = artifactSource?.epochOptions ?? Object.freeze([]);
+  const targetOptions = artifactSource?.targetOptions ?? Object.freeze([]);
+  const runtimePreviewDependencies = isRuntimePageProps(props) ? props.runtimePreviewDependencies : undefined;
   const [model, setModel] = useState(() => controller.model);
   const [epochId, setEpochId] = useState(initialBinding?.epochId ?? '');
   const [target, setTarget] = useState(initialBinding?.target ?? '');
@@ -639,13 +735,13 @@ export const McpPage = ({ appPreviewClient, controller, epochOptions, initialBin
   const [cancelledRequests, setCancelledRequests] = useState<readonly string[]>([]);
   const [pendingActions, setPendingActions] = useState<readonly string[]>([]);
   const [traceTab, setTraceTab] = useState<TraceTab>('raw');
-  const [appPreview, setAppPreview] = useState<McpPageAppPreviewSource>();
+  const [appPreview, setAppPreview] = useState<McpPagePreviewSelection | undefined>(() => initialPreview);
   const [appPreviewBusy, setAppPreviewBusy] = useState(false);
   const [appPreviewProfile, setAppPreviewProfile] = useState<McpAppPreviewProfile>('portable');
   const [appHost] = useState(browserMcpAppHost);
   const actionSession = useRef(createMcpPageActionSession());
   const appPreviewClosePromise = useRef<Promise<void> | undefined>(undefined);
-  const appPreviewController = useRef<McpAppPreviewController | undefined>(undefined);
+  const appPreviewController = useRef<McpPagePreviewLifecycle | undefined>(undefined);
   const appPreviewOpenGeneration = useRef(0);
   const controllerIdentity = useRef(controller);
   const requestNumber = useRef(0);
@@ -667,9 +763,9 @@ export const McpPage = ({ appPreviewClient, controller, epochOptions, initialBin
   useEffect(() => {
     setCancelledRequests((current) => current.filter((id) => Object.hasOwn(model.activeRequests, id)));
   }, [model.activeRequests]);
-  useEffect(() => () => { void appPreviewController.current?.close(); }, []);
 
-  const setActiveAppPreviewController = useCallback((next: McpAppPreviewController | undefined): void => {
+  const setActiveAppPreviewController = useCallback((next: McpPagePreviewLifecycle | undefined, current?: McpPagePreviewLifecycle): void => {
+    if (current !== undefined && appPreviewController.current !== current) return;
     appPreviewController.current = next;
   }, []);
   const closeCurrentAppPreview = (): Promise<void> => {
@@ -695,21 +791,25 @@ export const McpPage = ({ appPreviewClient, controller, epochOptions, initialBin
     appPreviewOpenGeneration.current += 1;
     return closeCurrentAppPreview();
   };
-  const openAppPreview = (source: McpPageAppPreviewSource, profile = appPreviewProfile): void => {
+  const openAppPreview = (selection: McpPagePreviewSelection, profile = appPreviewProfile): void => {
     const generation = ++appPreviewOpenGeneration.current;
     setAppPreviewBusy(true);
     void closeCurrentAppPreview().catch(() => undefined).finally(() => {
       if (appPreviewOpenGeneration.current !== generation) return;
       setAppPreviewProfile(profile);
-      setAppPreview(source);
+      setAppPreview(selection);
       setAppPreviewBusy(false);
     });
   };
+  useEffect(() => () => { void closeCurrentAppPreview(); }, []);
   useEffect(() => {
-    if (appPreview !== undefined && (appPreview.sessionId !== model.sessionId || model.phase === 'closed' || model.phase === 'error')) {
+    if (appPreview !== undefined && (
+      model.phase === 'closed' || model.phase === 'error' ||
+      (appPreview.kind === 'artifact' && appPreview.source.sessionId !== model.sessionId)
+    )) {
       void closeAppPreview();
     }
-  }, [appPreview?.sessionId, model.phase, model.sessionId]);
+  }, [appPreview, model.phase, model.sessionId]);
 
   const nextRequestId = (): string => {
     requestNumber.current += 1;
@@ -786,7 +886,28 @@ export const McpPage = ({ appPreviewClient, controller, epochOptions, initialBin
             onResetSession?.();
           })} type="button">Reset MCP session</button>
           : <button disabled type="button">New MCP session unavailable</button>}
-      </div> : <form className="mcp-page-binding" onSubmit={(event) => {
+      </div> : runtimeSource !== undefined ? <section aria-label="Runtime-bound MCP session" className="mcp-page-runtime-binding">
+        <h3>Runtime-bound MCP session</h3>
+        <dl>
+          <div><dt>Server</dt><dd>{runtimeSource.binding.serverName}</dd></div>
+          <div><dt>Target</dt><dd>{runtimeSource.binding.target}</dd></div>
+          <div><dt>Definition digest</dt><dd><code>{runtimeSource.binding.definitionDigest}</code></dd></div>
+          <div><dt>Transport digest</dt><dd><code>{runtimeSource.binding.transportDigest}</code></dd></div>
+          <div><dt>Server digest</dt><dd><code>{runtimeSource.binding.serverDigest}</code></dd></div>
+          <div><dt>Registry revision</dt><dd>{runtimeSource.binding.registryRevision}</dd></div>
+          <div><dt>Session</dt><dd>{runtimeSource.binding.sessionId} · revision {runtimeSource.binding.sessionRevision}</dd></div>
+        </dl>
+        <div className="mcp-page-actions">
+          <button disabled={!controls.restart} onClick={() => run('restart', async () => {
+            await closeAppPreview();
+            return controller.restart();
+          })} type="button">Restart MCP session</button>
+          <button disabled={!controls.close} onClick={() => run('close', async () => {
+            await closeAppPreview();
+            return controller.close();
+          })} type="button">Close MCP session</button>
+        </div>
+      </section> : <form className="mcp-page-binding" onSubmit={(event) => {
         event.preventDefault();
         const form = event.currentTarget;
         if (!form.reportValidity()) return;
@@ -841,13 +962,13 @@ export const McpPage = ({ appPreviewClient, controller, epochOptions, initialBin
           })} type="button">Close MCP session</button>
         </div>
       </form>}
-      {activeTimeoutMs === undefined ? undefined : <p className="mcp-page-session-timeout">Active session timeout: {activeTimeoutMs} ms.</p>}
+      {runtimeSource === undefined && activeTimeoutMs !== undefined ? <p className="mcp-page-session-timeout">Active session timeout: {activeTimeoutMs} ms.</p> : undefined}
       <div className="mcp-page-connection" aria-label="Negotiated connection">
         <h3>Negotiated connection</h3>
         <p>{connectionSummary(model.connection)}</p>
         {model.connection === undefined ? undefined : <pre><code>{display({ capabilities: model.connection.serverCapabilities, server: model.connection.serverInfo })}</code></pre>}
       </div>
-      <McpLaunchConfiguration config={config} />
+      {runtimeSource === undefined ? <McpLaunchConfiguration config={config} /> : undefined}
       {active.length === 0 ? undefined : <section aria-label="Active MCP operations" className="mcp-page-active">
         <h3>Active operations</h3>
         <ul>{active.map((request) => <li key={request.id}><span>{request.operation} · {request.id}</span><button disabled={cancelledRequests.includes(request.id)} onClick={() => {
@@ -937,13 +1058,23 @@ export const McpPage = ({ appPreviewClient, controller, epochOptions, initialBin
         </label>
         {appPreview === undefined ? <p className="mcp-page-empty">Select a completed tool call below to create an App preview.</p> : <button disabled={appPreviewBusy} onClick={() => { void closeAppPreview(); }} type="button">Close App preview</button>}
       </section>}
-      {appPreviewClient === undefined || appPreview === undefined ? undefined : <McpPageAppPreview
-        client={appPreviewClient}
+      {runtimeSource === undefined || appPreview?.kind !== 'runtime' ? undefined : <section aria-label="Runtime App preview controls" className="mcp-page-app-controls">
+        <div>
+          <h3>Runtime App preview</h3>
+          <p>This preview is bound to the selected runtime session evidence.</p>
+        </div>
+        <button disabled={appPreviewBusy} onClick={() => { void closeAppPreview(); }} type="button">Close App preview</button>
+      </section>}
+      {appPreview === undefined ? undefined : <McpPageAppPreview
+        artifactClient={appPreviewClient}
         host={appHost}
-        key={`${appPreview.invocationId}-${appPreviewProfile}`}
-        onControllerChange={setActiveAppPreviewController}
+        key={appPreview.kind === 'artifact'
+          ? `${appPreview.source.invocationId}-${appPreviewProfile}`
+          : `runtime:${appPreview.binding.sessionId}:${appPreview.binding.sessionRevision}:${appPreview.preview.run.id}`}
+        onLifecycleChange={setActiveAppPreviewController}
         previewProfile={appPreviewProfile}
-        source={appPreview}
+        runtimePreviewDependencies={runtimePreviewDependencies}
+        selection={appPreview}
       />}
       <section aria-label="Invocation history" className="mcp-page-history">
         <h3>Invocation history</h3>
@@ -953,7 +1084,7 @@ export const McpPage = ({ appPreviewClient, controller, epochOptions, initialBin
           <div><strong>{invocation.operation}</strong><span>{invocation.id}</span>{invocation.replayOf === undefined ? undefined : <span>Replay of {invocation.replayOf}</span>}</div>
           <pre><code>{display({ error: invocation.error, request: invocation.request, result: invocation.result, timing: invocation.timing })}</code></pre>
           <button disabled={model.phase !== 'ready' || isPending('replay')} onClick={() => run('replay', () => controller.replay({ id: nextRequestId(), invocationId: invocation.id }))} type="button">Replay {invocation.id}</button>
-          {appPreviewClient === undefined || previewSource === undefined ? undefined : <button disabled={appPreviewBusy} onClick={() => openAppPreview(previewSource)} type="button">Open App preview for {invocation.id}</button>}
+          {appPreviewClient === undefined || previewSource === undefined ? undefined : <button disabled={appPreviewBusy} onClick={() => openAppPreview({ kind: 'artifact', source: previewSource })} type="button">Open App preview for {invocation.id}</button>}
         </li>;
         })}</ol>}
       </section>

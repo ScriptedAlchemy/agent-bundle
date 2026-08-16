@@ -4,7 +4,7 @@ import { describe, expect, it } from '@rstest/core';
 
 import type { McpSessionInspectorConfig } from '../../agent-bundle/src/dev/mcp-session-protocol.ts';
 import { createMcpBrowserSessionModel, reduceMcpBrowserSession, type McpBrowserSessionModel } from '../src/mcp/mcp-session-model.ts';
-import type { McpAppPreviewClient } from '../src/mcp/mcp-app-preview.tsx';
+import type { McpAppPreviewClient, McpAppRuntimePreviewProps } from '../src/mcp/mcp-app-preview.tsx';
 import {
   McpPage,
   McpProtocolEvidence,
@@ -95,6 +95,51 @@ const appPreviewClient: McpAppPreviewClient = {
   forceClose: async () => true,
   message: async () => ({ accepted: true, lifecycle: 'initialized', messages: [] }),
 };
+
+const runtimeBinding = Object.freeze({
+  definitionDigest: 'definition-runtime-weather',
+  registryRevision: 4,
+  serverDigest: 'server-runtime-weather',
+  serverName: 'runtime-weather',
+  sessionId: 'runtime-session-weather',
+  sessionRevision: 2,
+  target: 'portable',
+  transportDigest: 'transport-runtime-weather',
+});
+
+const runtimePreview = Object.freeze({
+  client: appPreviewClient,
+  createBridgeFactory: (() => {
+    throw new Error('Runtime preview must not construct a bridge during static page rendering.');
+  }) as McpAppRuntimePreviewProps['createBridgeFactory'],
+  kind: 'runtime' as const,
+  profile: Object.freeze({
+    claimsRealHostParity: false,
+    evidence: 'simulated' as const,
+    id: 'portable',
+    label: 'Portable MCP Apps',
+    version: 'agent-bundle:mcp-apps:2026-01-26',
+  }),
+  profileId: 'portable',
+  run: Object.freeze({
+    completedAt: '2026-08-16T00:00:01.000Z',
+    id: 'runtime-run-weather',
+    input: Object.freeze({ city: 'Paris' }),
+    result: Object.freeze({
+      app: Object.freeze({ mcpBinding: runtimeBinding, resourceUri: 'ui://weather/runtime.html', surfaceId: 'runtime-surface-weather' }),
+      modelVisible: Object.freeze({ temperature: 22 }),
+      state: Object.freeze({ identity: Object.freeze({ stateStoreId: 'private-state', stateVersion: 1 }) }),
+      trace: Object.freeze([]),
+      tree: Object.freeze([]),
+    }),
+    startedAt: '2026-08-16T00:00:00.000Z',
+    status: 'succeeded' as const,
+    surfaceId: 'runtime-surface-weather',
+    target: 'portable',
+    vector: Object.freeze({ providerSessionId: 'private-provider', runtimeGenerationId: 'runtime-generation-weather', sourceRevision: 'runtime-source-weather', stateStoreId: 'private-state', stateVersion: 1 }),
+  }),
+  surface: Object.freeze({ fixtures: Object.freeze([]), id: 'runtime-surface-weather', kind: 'mcp-app' as const, label: 'Runtime weather', readOnly: false, targets: Object.freeze(['portable']) }),
+}) as unknown as McpAppRuntimePreviewProps;
 
 const reducedModelForConfig = (config: McpSessionInspectorConfig): McpBrowserSessionModel => {
   const opening = reduceMcpBrowserSession(createMcpBrowserSessionModel('sanitized-session'), {
@@ -240,6 +285,26 @@ describe('MCP page', () => {
     expect(markup).toContain('Session timeout (ms)');
     expect(markup).toContain('id="mcp-session-timeout"');
     expect(markup).toContain('value="5000"');
+  });
+
+  it('renders an initial runtime selection with immutable binding evidence and no artifact-open controls', () => {
+    const opens: unknown[] = [];
+    const markup = renderToStaticMarkup(createElement(McpPage, {
+      controller: { ...controller(), open: async (...input) => { opens.push(input); return model; } },
+      initialPreview: { binding: runtimeBinding, kind: 'runtime', preview: runtimePreview },
+      runtimePreviewDependencies: { client: runtimePreview.client, createBridgeFactory: runtimePreview.createBridgeFactory },
+      source: { binding: runtimeBinding, kind: 'runtime' },
+    }));
+
+    expect(markup).toContain('Runtime-bound MCP session');
+    expect(markup).toContain('runtime-weather');
+    expect(markup).toContain('definition-runtime-weather');
+    expect(markup).toContain('transport-runtime-weather');
+    expect(markup).toContain('runtime-session-weather');
+    expect(markup).not.toContain('id="mcp-epoch"');
+    expect(markup).not.toContain('Open MCP session');
+    expect(markup.match(/class="mcp-page-app-preview"/gu)).toHaveLength(1);
+    expect(opens).toEqual([]);
   });
 
   it('creates a named JSON blob for the injected config-download callback', async () => {
