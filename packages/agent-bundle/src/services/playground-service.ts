@@ -1,7 +1,9 @@
 import { randomUUID } from 'node:crypto';
-import { linkSync, lstatSync, mkdirSync } from 'node:fs';
-import { appendFile, lstat, mkdir, open, readFile, realpath, rename, unlink } from 'node:fs/promises';
-import { basename, isAbsolute, join, relative, resolve } from 'node:path';
+import { closeSync, constants, fsyncSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync, readFileSync, writeFileSync } from 'node:fs';
+import { lstat, mkdir, open, realpath, rename, unlink } from 'node:fs/promises';
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
+
+import { parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
 
 export type PlaygroundJsonPrimitive = boolean | null | number | string;
 export type PlaygroundJsonArray = readonly PlaygroundJsonValue[];
@@ -306,6 +308,42 @@ const sensitiveKey = (key: string): boolean => {
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
+const hasExactOwnKeys = (value: Record<string, unknown>, keys: readonly string[]): boolean => {
+  const actual = Object.keys(value).sort();
+  const expected = [...keys].sort();
+  return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
+};
+
+const hasOptionalOwnKey = (value: Record<string, unknown>, required: readonly string[], optional: string): boolean =>
+  hasExactOwnKeys(value, required) || hasExactOwnKeys(value, [...required, optional]);
+
+const hasPersistedIdentitySchema = (value: unknown): boolean => {
+  if (!isRecord(value)
+    || !hasExactOwnKeys(value, ['epoch', 'fixture', 'invocation', 'target', 'task'])
+    || !isRecord(value.epoch)
+    || !hasExactOwnKeys(value.epoch, ['digest', 'id'])
+    || !isRecord(value.fixture)
+    || !hasExactOwnKeys(value.fixture, ['digest', 'id'])
+    || !isRecord(value.invocation)
+    || !hasExactOwnKeys(value.invocation, ['intent', 'kind'])
+    || !isRecord(value.invocation.intent)
+    || !isRecord(value.target)
+    || !hasOptionalOwnKey(value.target, ['name'], 'digest')
+    || !isRecord(value.task)
+    || !hasExactOwnKeys(value.task, ['id', 'text'])) {
+    return false;
+  }
+  return true;
+};
+
+const hasPersistedOutcomeSchema = (value: unknown): boolean => {
+  if (!isRecord(value)) return false;
+  return hasExactOwnKeys(value, ['status'])
+    || hasExactOwnKeys(value, ['status', 'response'])
+    || hasExactOwnKeys(value, ['status', 'workspace'])
+    || hasExactOwnKeys(value, ['status', 'response', 'workspace']);
+};
+
 const contained = (root: string, candidate: string): boolean => {
   const path = relative(root, candidate);
   return path === '' || (!isAbsolute(path) && path !== '..' && !path.startsWith('..\\') && !path.startsWith('../'));
@@ -350,7 +388,7 @@ const json = (value: unknown, label: string, seen = new WeakSet<object>()): Play
     seen.delete(value);
     throw serviceError('PLAYGROUND_VALUE_INVALID', `${label} must be JSON-compatible.`);
   }
-  const copied: Record<string, PlaygroundJsonValue> = {};
+  const copied = Object.create(null) as Record<string, PlaygroundJsonValue>;
   for (const key of Object.keys(value).sort()) {
     const descriptor = Object.getOwnPropertyDescriptor(value, key);
     if (descriptor === undefined || descriptor.get !== undefined || descriptor.set !== undefined) {
@@ -533,6 +571,7 @@ export class PlaygroundService {
       const storageObjectId = safeSessionId(randomUUID());
       const root = this.#objectRoot(storageObjectId);
       mkdirSync(root);
+      this.#syncDirectory(this.#requireObjectRoot());
       const stat = lstatSync(root);
       if (!stat.isDirectory() || stat.isSymbolicLink()) {
         throw serviceError('PLAYGROUND_ROOT_INVALID', 'Playground session object must be a real contained directory.');
@@ -562,11 +601,9 @@ export class PlaygroundService {
       await this.#assertOwnedObject(root, storageObjectId, id, ownerToken);
       await this.#readPersistedSession(root, id, 'v2', storageObjectId);
       await this.#readEvents(root);
-      const pendingIndex = this.#pendingIndexPath(safeSessionId(randomUUID()));
-      await this.#writePendingIndex(pendingIndex, id, storageObjectId);
       await this.#assertOwnedObject(root, storageObjectId, id, ownerToken);
       this.#assertAvailable();
-      this.#publishV2(record, pendingIndex);
+      this.#publishV2(record);
       return snapshotSession(record);
     });
   }
@@ -651,8 +688,17 @@ export class PlaygroundService {
         sequence,
         timestamp: this.#timestamp(),
       });
-      await this.#assertEventPath(record.root);
-      await appendFile(join(record.root, eventDocumentName), `${JSON.stringify(stored)}\n`, 'utf8');
+      const eventFile = await this.#openPinnedMutableFile(
+        record.root,
+        eventDocumentName,
+        constants.O_WRONLY | constants.O_APPEND,
+      );
+      try {
+        await eventFile.writeFile(`${JSON.stringify(stored)}\n`, 'utf8');
+        await eventFile.sync();
+      } finally {
+        await eventFile.close();
+      }
       record.events.push(stored);
       record.nextSequence = sequence + 1;
       this.#publish(record, stored);
@@ -824,24 +870,71 @@ export class PlaygroundService {
     }
   }
 
-  #publishV2(record: SessionRecord, pendingIndex: string): void {
-    this.#assertAvailable();
-    const legacyRoot = this.#legacySessionRoot(record.id);
-    try {
-      lstatSync(legacyRoot);
-      throw serviceError('PLAYGROUND_SESSION_CONFLICT', `Playground session ${JSON.stringify(record.id)} already exists.`);
-    } catch (error) {
-      if (!isErrno(error, 'ENOENT')) throw error;
+  #publishV2(record: SessionRecord): void {
+    const objectId = record.storageObjectId;
+    if (objectId === undefined) {
+      throw serviceError('PLAYGROUND_STORE_CORRUPT', 'Playground v2 session is missing its immutable object id.');
     }
+    const document: PersistedSessionIndex = Object.freeze({
+      kind: 'agent-bundle-playground-session-index',
+      objectId,
+      projectId: this.#projectId,
+      schemaVersion: objectSessionSchemaVersion,
+      sessionId: record.id,
+    });
+    const bytes = `${JSON.stringify(document)}\n`;
+    const pendingPath = this.#pendingIndexPath(safeSessionId(randomUUID()));
+    const pendingDescriptor = openSync(
+      pendingPath,
+      constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
+      0o600,
+    );
     try {
-      linkSync(pendingIndex, this.#finalIndexPath(record.id));
-    } catch (error) {
-      if (isErrno(error, 'EEXIST')) {
-        throw serviceError('PLAYGROUND_SESSION_CONFLICT', `Playground session ${JSON.stringify(record.id)} already exists.`);
+      writeFileSync(pendingDescriptor, bytes, 'utf8');
+      fsyncSync(pendingDescriptor);
+      const pendingBefore = fstatSync(pendingDescriptor);
+      if (!pendingBefore.isFile() || pendingBefore.nlink !== 1) {
+        throw serviceError('PLAYGROUND_STORE_CORRUPT', 'Playground pending index could not be pinned safely.');
       }
-      throw error;
+      this.#syncDirectory(this.#requirePendingIndexRoot());
+      this.#assertAvailable();
+      const legacyRoot = this.#legacySessionRoot(record.id);
+      try {
+        lstatSync(legacyRoot);
+        throw serviceError('PLAYGROUND_SESSION_CONFLICT', `Playground session ${JSON.stringify(record.id)} already exists.`);
+      } catch (error) {
+        if (!isErrno(error, 'ENOENT')) throw error;
+      }
+      const finalPath = this.#finalIndexPath(record.id);
+      try {
+        linkSync(pendingPath, finalPath);
+      } catch (error) {
+        if (isErrno(error, 'EEXIST')) {
+          throw serviceError('PLAYGROUND_SESSION_CONFLICT', `Playground session ${JSON.stringify(record.id)} already exists.`);
+        }
+        throw error;
+      }
+      const finalDescriptor = openSync(finalPath, constants.O_RDONLY | constants.O_NOFOLLOW);
+      try {
+        const pendingAfter = fstatSync(pendingDescriptor);
+        const finalStat = fstatSync(finalDescriptor);
+        const finalBytes = readFileSync(finalDescriptor, 'utf8');
+        if (!finalStat.isFile()
+          || pendingAfter.dev !== finalStat.dev
+          || pendingAfter.ino !== finalStat.ino
+          || pendingAfter.nlink !== 2
+          || finalStat.nlink !== 2
+          || finalBytes !== bytes) {
+          throw serviceError('PLAYGROUND_STORE_CORRUPT', 'Playground final index did not preserve the pinned pending document.');
+        }
+      } finally {
+        closeSync(finalDescriptor);
+      }
+      this.#sessions.set(record.id, record);
+      this.#syncDirectory(this.#requireIndexRoot());
+    } finally {
+      closeSync(pendingDescriptor);
     }
-    this.#sessions.set(record.id, record);
   }
 
   #requireSession(sessionId: string): SessionRecord {
@@ -917,6 +1010,41 @@ export class PlaygroundService {
     this.#resolvedSessionsRoot = resolvedSessionsRoot;
   }
 
+  #syncDirectory(path: string): void {
+    try {
+      const descriptor = openSync(path, constants.O_RDONLY);
+      try {
+        fsyncSync(descriptor);
+      } finally {
+        closeSync(descriptor);
+      }
+    } catch (error) {
+      // Windows exposes no public directory-fsync primitive. Retained regular
+      // file descriptors are still synced; only this documented EINVAL is a
+      // capability limitation. Every other failure remains observable.
+      if (process.platform === 'win32' && isErrno(error, 'EINVAL')) return;
+      throw error;
+    }
+  }
+
+  #requireObjectRoot(): string {
+    const root = this.#resolvedObjectRoot;
+    if (root === undefined) throw serviceError('PLAYGROUND_ROOT_INVALID', 'Playground storage has not initialized.');
+    return root;
+  }
+
+  #requireIndexRoot(): string {
+    const root = this.#resolvedIndexRoot;
+    if (root === undefined) throw serviceError('PLAYGROUND_ROOT_INVALID', 'Playground storage has not initialized.');
+    return root;
+  }
+
+  #requirePendingIndexRoot(): string {
+    const root = this.#resolvedPendingIndexRoot;
+    if (root === undefined) throw serviceError('PLAYGROUND_ROOT_INVALID', 'Playground storage has not initialized.');
+    return root;
+  }
+
   #legacySessionRoot(sessionId: string): string {
     const sessionsRoot = this.#resolvedSessionsRoot;
     if (sessionsRoot === undefined) throw serviceError('PLAYGROUND_ROOT_INVALID', 'Playground storage has not initialized.');
@@ -924,21 +1052,15 @@ export class PlaygroundService {
   }
 
   #objectRoot(objectId: string): string {
-    const objectRoot = this.#resolvedObjectRoot;
-    if (objectRoot === undefined) throw serviceError('PLAYGROUND_ROOT_INVALID', 'Playground storage has not initialized.');
-    return join(objectRoot, safeSessionId(objectId));
+    return join(this.#requireObjectRoot(), safeSessionId(objectId));
   }
 
   #finalIndexPath(sessionId: string): string {
-    const indexRoot = this.#resolvedIndexRoot;
-    if (indexRoot === undefined) throw serviceError('PLAYGROUND_ROOT_INVALID', 'Playground storage has not initialized.');
-    return join(indexRoot, `${safeSessionId(sessionId)}.json`);
+    return join(this.#requireIndexRoot(), `${safeSessionId(sessionId)}.json`);
   }
 
   #pendingIndexPath(publicationId: string): string {
-    const pendingRoot = this.#resolvedPendingIndexRoot;
-    if (pendingRoot === undefined) throw serviceError('PLAYGROUND_ROOT_INVALID', 'Playground storage has not initialized.');
-    return join(pendingRoot, `${safeSessionId(publicationId)}.json`);
+    return join(this.#requirePendingIndexRoot(), `${safeSessionId(publicationId)}.json`);
   }
 
   async #assertSessionDirectory(root: string, sessionId: string): Promise<void> {
@@ -979,110 +1101,128 @@ export class PlaygroundService {
   }
 
   async #writeNewFile(path: string, contents: string): Promise<void> {
-    const handle = await open(path, 'wx', 0o600);
+    const handle = await open(
+      path,
+      constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
+      0o600,
+    );
     try {
+      const stat = await handle.stat();
+      if (!stat.isFile() || stat.nlink !== 1) {
+        throw serviceError('PLAYGROUND_ROOT_INVALID', 'Playground durable file could not be created safely.');
+      }
       await handle.writeFile(contents, 'utf8');
       await handle.sync();
     } finally {
       await handle.close();
     }
-  }
-
-  async #writePendingIndex(path: string, sessionId: string, objectId: string): Promise<void> {
-    const document: PersistedSessionIndex = Object.freeze({
-      kind: 'agent-bundle-playground-session-index',
-      objectId,
-      projectId: this.#projectId,
-      schemaVersion: objectSessionSchemaVersion,
-      sessionId,
-    });
-    await this.#writeNewFile(path, `${JSON.stringify(document)}\n`);
+    this.#syncDirectory(dirname(path));
   }
 
   async #readV2Index(sessionId: string): Promise<PersistedSessionIndex | undefined> {
     const path = this.#finalIndexPath(sessionId);
-    let stat: Awaited<ReturnType<typeof lstat>>;
+    let handle: Awaited<ReturnType<typeof open>>;
     try {
-      stat = await lstat(path);
+      handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
     } catch (error) {
       if (isErrno(error, 'ENOENT')) return undefined;
-      throw error;
-    }
-    if (!stat.isFile() || stat.isSymbolicLink()) {
       throw serviceError('PLAYGROUND_STORE_CORRUPT', `Playground session ${JSON.stringify(sessionId)} has an invalid v2 index.`);
     }
-    const indexRoot = this.#resolvedIndexRoot;
-    const resolved = await realpath(path);
-    if (indexRoot === undefined || !contained(indexRoot, resolved) || basename(resolved) !== `${sessionId}.json`) {
-      throw serviceError('PLAYGROUND_STORE_CORRUPT', `Playground session ${JSON.stringify(sessionId)} has an invalid v2 index.`);
-    }
-    let parsed: unknown;
     try {
-      parsed = JSON.parse(await readFile(path, 'utf8'));
-    } catch {
-      throw serviceError('PLAYGROUND_STORE_CORRUPT', `Playground session ${JSON.stringify(sessionId)} has malformed v2 index metadata.`);
+      const [fileStat, pathStat, contents] = await Promise.all([handle.stat(), lstat(path), handle.readFile()]);
+      const indexRoot = this.#resolvedIndexRoot;
+      const resolved = await realpath(path);
+      if (!fileStat.isFile()
+        || !pathStat.isFile()
+        || pathStat.isSymbolicLink()
+        || fileStat.dev !== pathStat.dev
+        || fileStat.ino !== pathStat.ino
+        || fileStat.nlink !== 2
+        || pathStat.nlink !== 2
+        || indexRoot === undefined
+        || !contained(indexRoot, resolved)
+        || basename(resolved) !== `${sessionId}.json`) {
+        throw serviceError('PLAYGROUND_STORE_CORRUPT', `Playground session ${JSON.stringify(sessionId)} has an invalid v2 index.`);
+      }
+      let parsed: unknown;
+      try {
+        parsed = parseJsonWithoutDuplicateKeys(contents.toString('utf8'));
+      } catch {
+        throw serviceError('PLAYGROUND_STORE_CORRUPT', `Playground session ${JSON.stringify(sessionId)} has malformed v2 index metadata.`);
+      }
+      if (!isRecord(parsed)
+        || !hasExactOwnKeys(parsed, ['kind', 'objectId', 'projectId', 'schemaVersion', 'sessionId'])
+        || parsed.kind !== 'agent-bundle-playground-session-index'
+        || parsed.schemaVersion !== objectSessionSchemaVersion
+        || parsed.projectId !== this.#projectId
+        || parsed.sessionId !== sessionId
+        || typeof parsed.objectId !== 'string') {
+        throw serviceError('PLAYGROUND_STORE_CORRUPT', `Playground session ${JSON.stringify(sessionId)} has invalid v2 index metadata.`);
+      }
+      try {
+        safeSessionId(parsed.objectId);
+      } catch {
+        throw serviceError('PLAYGROUND_STORE_CORRUPT', `Playground session ${JSON.stringify(sessionId)} has invalid v2 index metadata.`);
+      }
+      return Object.freeze({
+        kind: 'agent-bundle-playground-session-index',
+        objectId: parsed.objectId,
+        projectId: this.#projectId,
+        schemaVersion: objectSessionSchemaVersion,
+        sessionId,
+      });
+    } finally {
+      await handle.close();
     }
-    if (!isRecord(parsed)
-      || parsed.kind !== 'agent-bundle-playground-session-index'
-      || parsed.schemaVersion !== objectSessionSchemaVersion
-      || parsed.projectId !== this.#projectId
-      || parsed.sessionId !== sessionId
-      || typeof parsed.objectId !== 'string') {
-      throw serviceError('PLAYGROUND_STORE_CORRUPT', `Playground session ${JSON.stringify(sessionId)} has invalid v2 index metadata.`);
-    }
-    try {
-      safeSessionId(parsed.objectId);
-    } catch {
-      throw serviceError('PLAYGROUND_STORE_CORRUPT', `Playground session ${JSON.stringify(sessionId)} has invalid v2 index metadata.`);
-    }
-    return Object.freeze({
-      kind: 'agent-bundle-playground-session-index',
-      objectId: parsed.objectId,
-      projectId: this.#projectId,
-      schemaVersion: objectSessionSchemaVersion,
-      sessionId,
-    });
   }
 
-  async #assertSessionDocumentPath(root: string, missingAllowed = false): Promise<void> {
-    const path = join(root, sessionDocumentName);
-    let stat: Awaited<ReturnType<typeof lstat>>;
+  async #openPinnedMutableFile(
+    root: string,
+    name: typeof sessionDocumentName | typeof eventDocumentName | typeof ownerLockName,
+    flags: number,
+  ): Promise<Awaited<ReturnType<typeof open>>> {
+    const path = join(root, name);
+    const handle = await open(path, flags | constants.O_NOFOLLOW);
     try {
-      stat = await lstat(path);
+      const [fileStat, pathStat] = await Promise.all([handle.stat(), lstat(path)]);
+      const resolved = await realpath(path);
+      if (!fileStat.isFile()
+        || !pathStat.isFile()
+        || pathStat.isSymbolicLink()
+        || fileStat.nlink !== 1
+        || pathStat.nlink !== 1
+        || fileStat.dev !== pathStat.dev
+        || fileStat.ino !== pathStat.ino
+        || !contained(root, resolved)
+        || basename(resolved) !== name) {
+        throw serviceError('PLAYGROUND_ROOT_INVALID', `Playground ${name} must be a singly linked contained file.`);
+      }
+      return handle;
+    } catch (error) {
+      await handle.close();
+      throw error;
+    }
+  }
+
+  async #assertMutableFile(root: string, name: typeof sessionDocumentName | typeof eventDocumentName | typeof ownerLockName, missingAllowed = false): Promise<void> {
+    try {
+      const handle = await this.#openPinnedMutableFile(root, name, constants.O_RDONLY);
+      await handle.close();
     } catch (error) {
       if (missingAllowed && isErrno(error, 'ENOENT')) return;
       throw error;
     }
-    if (!stat.isFile() || stat.isSymbolicLink()) {
-      throw serviceError('PLAYGROUND_ROOT_INVALID', 'Playground session metadata must be a real contained file.');
-    }
-    const resolved = await realpath(path);
-    if (!contained(root, resolved) || basename(resolved) !== sessionDocumentName) {
-      throw serviceError('PLAYGROUND_ROOT_INVALID', 'Playground session metadata resolves outside its session.');
-    }
   }
 
-  async #assertEventPath(root: string): Promise<void> {
-    const path = join(root, eventDocumentName);
-    const stat = await lstat(path);
-    if (!stat.isFile() || stat.isSymbolicLink()) {
-      throw serviceError('PLAYGROUND_ROOT_INVALID', 'Playground event log must be a real contained file.');
-    }
-    const resolved = await realpath(path);
-    if (!contained(root, resolved) || basename(resolved) !== eventDocumentName) {
-      throw serviceError('PLAYGROUND_ROOT_INVALID', 'Playground event log resolves outside its session.');
-    }
-  }
-
-  async #assertOwnerLockPath(root: string): Promise<void> {
-    const path = join(root, ownerLockName);
-    const stat = await lstat(path);
-    if (!stat.isFile() || stat.isSymbolicLink()) {
-      throw serviceError('PLAYGROUND_ROOT_INVALID', 'Playground owner lock must be a real contained file.');
-    }
-    const resolved = await realpath(path);
-    if (!contained(root, resolved) || basename(resolved) !== ownerLockName) {
-      throw serviceError('PLAYGROUND_ROOT_INVALID', 'Playground owner lock resolves outside its session.');
+  async #readMutableFile(
+    root: string,
+    name: typeof sessionDocumentName | typeof eventDocumentName | typeof ownerLockName,
+  ): Promise<string> {
+    const handle = await this.#openPinnedMutableFile(root, name, constants.O_RDONLY);
+    try {
+      return (await handle.readFile()).toString('utf8');
+    } finally {
+      await handle.close();
     }
   }
 
@@ -1092,12 +1232,22 @@ export class PlaygroundService {
     const document = Object.freeze({ pid: process.pid, token, version: 1 as const });
     for (let attempt = 0; attempt < 3; attempt += 1) {
       try {
-        const handle = await open(path, 'wx', 0o600);
+        const handle = await open(
+          path,
+          constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
+          0o600,
+        );
         try {
+          const stat = await handle.stat();
+          if (!stat.isFile() || stat.nlink !== 1) {
+            throw serviceError('PLAYGROUND_ROOT_INVALID', 'Playground owner lock could not be created safely.');
+          }
           await handle.writeFile(`${JSON.stringify(document)}\n`, 'utf8');
+          await handle.sync();
         } finally {
           await handle.close();
         }
+        this.#syncDirectory(root);
         return token;
       } catch (error) {
         if (!isErrno(error, 'EEXIST')) throw error;
@@ -1107,7 +1257,9 @@ export class PlaygroundService {
         throw serviceError('PLAYGROUND_SESSION_OWNED', `Playground session ${JSON.stringify(sessionId)} is owned by another foreground service.`);
       }
       try {
+        await this.#assertMutableFile(root, ownerLockName);
         await unlink(path);
+        this.#syncDirectory(root);
       } catch (error) {
         if (!isErrno(error, 'ENOENT')) throw error;
       }
@@ -1119,21 +1271,24 @@ export class PlaygroundService {
     const path = join(root, ownerLockName);
     try {
       const owner = await this.#readOwnerLock(root);
-      if (owner.token === token) await unlink(path);
+      if (owner.token === token) {
+        await this.#assertMutableFile(root, ownerLockName);
+        await unlink(path);
+        this.#syncDirectory(root);
+      }
     } catch (error) {
       if (!isErrno(error, 'ENOENT')) throw error;
     }
   }
 
   async #readOwnerLock(root: string): Promise<OwnerLock> {
-    await this.#assertOwnerLockPath(root);
     let parsed: unknown;
     try {
-      parsed = JSON.parse(await readFile(join(root, ownerLockName), 'utf8'));
+      parsed = parseJsonWithoutDuplicateKeys(await this.#readMutableFile(root, ownerLockName));
     } catch {
       throw serviceError('PLAYGROUND_STORE_CORRUPT', 'Playground owner lock is malformed.');
     }
-    if (!isRecord(parsed) || parsed.version !== 1 || typeof parsed.pid !== 'number'
+    if (!isRecord(parsed) || !hasExactOwnKeys(parsed, ['pid', 'token', 'version']) || parsed.version !== 1 || typeof parsed.pid !== 'number'
       || !Number.isSafeInteger(parsed.pid) || parsed.pid < 1 || typeof parsed.token !== 'string') {
       throw serviceError('PLAYGROUND_STORE_CORRUPT', 'Playground owner lock is invalid.');
     }
@@ -1186,10 +1341,11 @@ export class PlaygroundService {
         storageObjectId: record.storageObjectId!,
       });
     assertNoProviderCredentials(document as unknown as PlaygroundJsonValue);
-    await this.#assertSessionDocumentPath(record.root, true);
+    await this.#assertMutableFile(record.root, sessionDocumentName, true);
     const temporary = join(record.root, `.${sessionDocumentName}.${randomUUID()}.tmp`);
     await this.#writeNewFile(temporary, `${JSON.stringify(document)}\n`);
     await rename(temporary, join(record.root, sessionDocumentName));
+    this.#syncDirectory(record.root);
   }
 
   async #readPersistedSession(
@@ -1198,10 +1354,9 @@ export class PlaygroundService {
     storage: 'v1' | 'v2',
     expectedObjectId?: string,
   ): Promise<PersistedSession> {
-    await this.#assertSessionDocumentPath(root);
     let parsed: unknown;
     try {
-      parsed = JSON.parse(await readFile(join(root, sessionDocumentName), 'utf8'));
+      parsed = parseJsonWithoutDuplicateKeys(await this.#readMutableFile(root, sessionDocumentName));
     } catch {
       throw serviceError('PLAYGROUND_STORE_CORRUPT', `Playground session ${JSON.stringify(expectedId)} has malformed metadata.`);
     }
@@ -1214,7 +1369,12 @@ export class PlaygroundService {
       throw serviceError('PLAYGROUND_STORE_CORRUPT', `Playground session ${JSON.stringify(expectedId)} has invalid persisted values.`);
     }
     const expectedSchemaVersion = storage === 'v1' ? legacySessionSchemaVersion : objectSessionSchemaVersion;
-    if (parsed.kind !== 'agent-bundle-playground-session' || parsed.schemaVersion !== expectedSchemaVersion) {
+    const expectedKeys = storage === 'v1'
+      ? ['cleanupFailures', 'createdAt', 'identity', 'kind', 'outcome', 'projectId', 'schemaVersion', 'sessionId', 'state']
+      : ['cleanupFailures', 'createdAt', 'identity', 'kind', 'outcome', 'projectId', 'schemaVersion', 'sessionId', 'state', 'storageObjectId'];
+    const optionalOutcomeKeys = expectedKeys.filter((key) => key !== 'outcome');
+    if ((!hasExactOwnKeys(parsed, expectedKeys) && !hasExactOwnKeys(parsed, optionalOutcomeKeys))
+      || parsed.kind !== 'agent-bundle-playground-session' || parsed.schemaVersion !== expectedSchemaVersion) {
       throw serviceError('PLAYGROUND_STORE_CORRUPT', `Playground session ${JSON.stringify(expectedId)} has unsupported metadata.`);
     }
     if (parsed.projectId !== this.#projectId) {
@@ -1229,6 +1389,10 @@ export class PlaygroundService {
     if (parsed.state !== 'open' && parsed.state !== 'finalized' && parsed.state !== 'closed') {
       throw serviceError('PLAYGROUND_STORE_CORRUPT', `Playground session ${JSON.stringify(expectedId)} has invalid state metadata.`);
     }
+    if (!hasPersistedIdentitySchema(parsed.identity)
+      || (parsed.outcome !== undefined && !hasPersistedOutcomeSchema(parsed.outcome))) {
+      throw serviceError('PLAYGROUND_STORE_CORRUPT', `Playground session ${JSON.stringify(expectedId)} has invalid persisted values.`);
+    }
     let identity: PlaygroundSessionIdentity;
     let outcome: PlaygroundDurableOutcome | undefined;
     try {
@@ -1242,7 +1406,8 @@ export class PlaygroundService {
     }
     const cleanupFailures = Array.isArray(parsed.cleanupFailures)
       ? parsed.cleanupFailures.map((value): PlaygroundCleanupFailure => {
-        if (!isRecord(value) || value.operation !== 'subscriber' || typeof value.message !== 'string') {
+        if (!isRecord(value) || !hasExactOwnKeys(value, ['message', 'operation'])
+          || value.operation !== 'subscriber' || typeof value.message !== 'string') {
           throw serviceError('PLAYGROUND_STORE_CORRUPT', `Playground session ${JSON.stringify(expectedId)} has invalid cleanup failures.`);
         }
         return Object.freeze({ message: value.message, operation: 'subscriber' });
@@ -1268,8 +1433,7 @@ export class PlaygroundService {
   }
 
   async #readEvents(root: string): Promise<readonly PlaygroundTraceEvent[]> {
-    await this.#assertEventPath(root);
-    const contents = await readFile(join(root, eventDocumentName), 'utf8');
+    const contents = await this.#readMutableFile(root, eventDocumentName);
     const lines = contents.split('\n');
     const completeLines = contents.endsWith('\n') ? lines.slice(0, -1) : lines.slice(0, -1);
     const events: PlaygroundTraceEvent[] = [];
@@ -1279,11 +1443,13 @@ export class PlaygroundService {
       }
       let parsed: unknown;
       try {
-        parsed = JSON.parse(line);
+        parsed = parseJsonWithoutDuplicateKeys(line);
       } catch {
         throw serviceError('PLAYGROUND_STORE_CORRUPT', 'Playground event log contains a malformed completed record.');
       }
-      if (!isRecord(parsed)) throw serviceError('PLAYGROUND_STORE_CORRUPT', 'Playground event log contains a non-object record.');
+      if (!isRecord(parsed) || !hasExactOwnKeys(parsed, ['kind', 'raw', 'rawEventRef', 'sequence', 'source', 'summary', 'timestamp'])) {
+        throw serviceError('PLAYGROUND_STORE_CORRUPT', 'Playground event log contains an invalid record envelope.');
+      }
       let event: PlaygroundTraceEvent;
       try {
         assertNoProviderCredentials(parsed as PlaygroundJsonValue);
