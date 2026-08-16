@@ -212,6 +212,7 @@ interface SubscriptionRecord {
 interface SessionRecord {
   readonly cleanupFailures: PlaygroundCleanupFailure[];
   readonly createdAt: string;
+  durability: 'admission-failed' | 'terminal-uncertain' | undefined;
   readonly events: PlaygroundTraceEvent[];
   readonly id: string;
   readonly identity: PlaygroundSessionIdentity;
@@ -494,6 +495,9 @@ const normalizeOutcome = (value: PlaygroundDurableOutcome): PlaygroundDurableOut
   return outcome;
 };
 
+const sameOutcome = (left: PlaygroundDurableOutcome, right: PlaygroundDurableOutcome): boolean =>
+  JSON.stringify(left) === JSON.stringify(right);
+
 const normalizeEventInput = (value: unknown): PlaygroundEventInput => {
   if (!isRecord(value)) {
     throw serviceError('PLAYGROUND_VALUE_INVALID', 'Playground event must be a JSON object.');
@@ -609,6 +613,7 @@ export class PlaygroundService {
       const record: SessionRecord = {
         cleanupFailures: [],
         createdAt: this.#timestamp(),
+        durability: undefined,
         events: [],
         id,
         identity,
@@ -630,7 +635,12 @@ export class PlaygroundService {
       await this.#readEvents(root);
       await this.#assertOwnedObject(root, storageObjectId, id, ownerToken);
       this.#assertAvailable();
-      this.#publishV2(record);
+      try {
+        this.#publishV2(record);
+      } catch (error) {
+        if (this.#sessions.get(id) === record) record.durability = 'admission-failed';
+        throw error;
+      }
       return snapshotSession(record);
     });
   }
@@ -642,7 +652,10 @@ export class PlaygroundService {
       const id = safeSessionId(sessionId);
       assertNoProviderCredentials(id);
       const existing = this.#sessions.get(id);
-      if (existing !== undefined) return snapshotSession(existing);
+      if (existing !== undefined) {
+        this.#assertRecordUsable(existing);
+        return snapshotSession(existing);
+      }
       const index = await this.#readV2Index(id);
       const storage = index === undefined ? 'v1' : 'v2';
       const storageObjectId = index?.objectId;
@@ -671,6 +684,7 @@ export class PlaygroundService {
       const record: SessionRecord = {
         cleanupFailures: [...document.cleanupFailures],
         createdAt: document.createdAt,
+        durability: undefined,
         events: [...events],
         id,
         identity: document.identity,
@@ -697,12 +711,14 @@ export class PlaygroundService {
 
   session(sessionId: string): PlaygroundSession | undefined {
     const record = this.#sessions.get(sessionId);
-    return record === undefined ? undefined : snapshotSession(record);
+    if (record === undefined) return undefined;
+    this.#assertRecordUsable(record);
+    return snapshotSession(record);
   }
 
   async append(sessionId: string, input: PlaygroundEventInput): Promise<PlaygroundTraceEvent> {
     this.#assertAvailable();
-    const record = this.#requireSession(sessionId);
+    const record = this.#requireUsableSession(sessionId);
     const event = normalizeEventInput(input);
     return this.#enqueue(record, async () => {
       if (record.state !== 'open') {
@@ -737,22 +753,22 @@ export class PlaygroundService {
     this.#assertAvailable();
     const record = this.#requireSession(sessionId);
     const durable = normalizeOutcome(outcome);
+    if (record.durability === 'terminal-uncertain') {
+      return this.#retryUncertainFinalization(record, durable);
+    }
+    this.#assertRecordUsable(record);
     await this.#enqueue(record, async () => {
       if (record.state !== 'open') {
         throw serviceError('PLAYGROUND_SESSION_FINALIZED', `Playground session ${JSON.stringify(record.id)} is finalized.`);
       }
       await this.#commitState(record, 'finalized', durable);
     });
-    await this.#drainSubscriptions(record);
-    return this.#enqueue(record, async () => {
-      await this.#persistSession(record);
-      return snapshotSession(record);
-    });
+    return this.#completeFinalization(record);
   }
 
   async replay(sessionId: string, cursor?: PlaygroundReplayCursor): Promise<PlaygroundReplay> {
     this.#assertAvailable();
-    const record = this.#requireSession(sessionId);
+    const record = this.#requireUsableSession(sessionId);
     const afterSequence = normalizeCursor(cursor);
     return this.#enqueue(record, async () => {
       const latest = record.nextSequence - 1;
@@ -769,7 +785,7 @@ export class PlaygroundService {
 
   async subscribe(sessionId: string, options: PlaygroundSubscribeOptions): Promise<PlaygroundSubscription> {
     this.#assertAvailable();
-    const record = this.#requireSession(sessionId);
+    const record = this.#requireUsableSession(sessionId);
     if (typeof options.onEvent !== 'function') {
       throw serviceError('PLAYGROUND_VALUE_INVALID', 'Playground subscription requires an event callback.');
     }
@@ -808,7 +824,7 @@ export class PlaygroundService {
 
   async promoteToDraftEval(sessionId: string, selectedAssertions: readonly PlaygroundSelectedAssertion[]): Promise<DraftEvalCase> {
     this.#assertAvailable();
-    const record = this.#requireSession(sessionId);
+    const record = this.#requireUsableSession(sessionId);
     return this.#enqueue(record, async () => {
       if ((record.state !== 'finalized' && record.state !== 'closed') || record.outcome === undefined) {
         throw serviceError('PLAYGROUND_OUTCOME_REQUIRED', 'A durable playground outcome is required before promotion.');
@@ -973,6 +989,42 @@ export class PlaygroundService {
       throw serviceError('PLAYGROUND_SESSION_NOT_FOUND', `Playground session ${JSON.stringify(id)} was not found; reopen it first if needed.`);
     }
     return record;
+  }
+
+  #requireUsableSession(sessionId: string): SessionRecord {
+    const record = this.#requireSession(sessionId);
+    this.#assertRecordUsable(record);
+    return record;
+  }
+
+  #assertRecordUsable(record: SessionRecord): void {
+    if (record.durability === 'admission-failed') {
+      throw serviceError('PLAYGROUND_STORE_CORRUPT', `Playground session ${JSON.stringify(record.id)} failed after publication and is available only for cleanup.`);
+    }
+    if (record.durability === 'terminal-uncertain') {
+      throw serviceError('PLAYGROUND_STORE_CORRUPT', `Playground session ${JSON.stringify(record.id)} has an uncertain durable outcome.`);
+    }
+  }
+
+  async #retryUncertainFinalization(record: SessionRecord, outcome: PlaygroundDurableOutcome): Promise<PlaygroundSession> {
+    await this.#enqueue(record, async () => {
+      if (record.durability !== 'terminal-uncertain'
+        || record.state !== 'finalized'
+        || record.outcome === undefined
+        || !sameOutcome(record.outcome, outcome)) {
+        throw serviceError('PLAYGROUND_SESSION_FINALIZED', `Playground session ${JSON.stringify(record.id)} is finalized.`);
+      }
+      await this.#persistSession(record);
+    });
+    return this.#completeFinalization(record);
+  }
+
+  async #completeFinalization(record: SessionRecord): Promise<PlaygroundSession> {
+    await this.#drainSubscriptions(record);
+    return this.#enqueue(record, async () => {
+      await this.#persistSession(record);
+      return snapshotSession(record);
+    });
   }
 
   #enqueue<T>(record: SessionRecord, operation: () => Promise<T>): Promise<T> {
@@ -1385,30 +1437,37 @@ export class PlaygroundService {
   }
 
   async #persistSession(record: SessionRecord, progress?: SessionPersistenceProgress): Promise<void> {
-    const documentBase = {
-      cleanupFailures: snapshotCleanupFailures(record.cleanupFailures),
-      createdAt: record.createdAt,
-      identity: record.identity,
-      kind: 'agent-bundle-playground-session',
-      ...(record.outcome === undefined ? {} : { outcome: record.outcome }),
-      projectId: this.#projectId,
-      sessionId: record.id,
-      state: record.state,
-    } as const;
-    const document: PersistedSession = record.storage === 'v1'
-      ? Object.freeze({ ...documentBase, schemaVersion: legacySessionSchemaVersion })
-      : Object.freeze({
-        ...documentBase,
-        schemaVersion: objectSessionSchemaVersion,
-        storageObjectId: record.storageObjectId!,
-      });
-    assertNoProviderCredentials(document as unknown as PlaygroundJsonValue);
-    await this.#assertMutableFile(record.root, sessionDocumentName, true);
-    const temporary = join(record.root, `.${sessionDocumentName}.${randomUUID()}.tmp`);
-    await this.#writeNewFile(temporary, `${JSON.stringify(document)}\n`);
-    await rename(temporary, join(record.root, sessionDocumentName));
-    if (progress !== undefined) progress.metadataRenamed = true;
-    this.#syncDirectory(record.root, 'session-metadata-rename');
+    const persistence = progress ?? { metadataRenamed: false };
+    try {
+      const documentBase = {
+        cleanupFailures: snapshotCleanupFailures(record.cleanupFailures),
+        createdAt: record.createdAt,
+        identity: record.identity,
+        kind: 'agent-bundle-playground-session',
+        ...(record.outcome === undefined ? {} : { outcome: record.outcome }),
+        projectId: this.#projectId,
+        sessionId: record.id,
+        state: record.state,
+      } as const;
+      const document: PersistedSession = record.storage === 'v1'
+        ? Object.freeze({ ...documentBase, schemaVersion: legacySessionSchemaVersion })
+        : Object.freeze({
+          ...documentBase,
+          schemaVersion: objectSessionSchemaVersion,
+          storageObjectId: record.storageObjectId!,
+        });
+      assertNoProviderCredentials(document as unknown as PlaygroundJsonValue);
+      await this.#assertMutableFile(record.root, sessionDocumentName, true);
+      const temporary = join(record.root, `.${sessionDocumentName}.${randomUUID()}.tmp`);
+      await this.#writeNewFile(temporary, `${JSON.stringify(document)}\n`);
+      await rename(temporary, join(record.root, sessionDocumentName));
+      persistence.metadataRenamed = true;
+      this.#syncDirectory(record.root, 'session-metadata-rename');
+      if (record.durability === 'terminal-uncertain') record.durability = undefined;
+    } catch (error) {
+      if (persistence.metadataRenamed && record.state !== 'open') record.durability = 'terminal-uncertain';
+      throw error;
+    }
   }
 
   async #readPersistedSession(

@@ -1231,7 +1231,7 @@ it('fails closed when a pending pathname is replaced before the final hard link'
     });
     const index = await readIndex(fixture.storageRoot, sessionId);
     expect(index.objectId).toBe('substituted-object');
-    expect(fixture.service.session(sessionId)).toMatchObject({ id: sessionId, state: 'open' });
+    expect(() => fixture.service.session(sessionId)).toThrow(expect.objectContaining({ code: 'PLAYGROUND_STORE_CORRUPT' }));
     await fixture.service.close();
     const reader = new PlaygroundService({
       projectId: 'project-1',
@@ -1259,9 +1259,28 @@ it('keeps a linked v2 session installed and closable when post-link verification
         .rejects.toMatchObject({ code: 'EIO' });
     });
     const index = await readIndex(fixture.storageRoot, sessionId);
-    expect(fixture.service.session(sessionId)).toMatchObject({ id: sessionId, state: 'open' });
     await expect(readFile(join(fixture.storageRoot, 'session-objects', index.objectId, 'session.json'), 'utf8'))
       .resolves.toContain(`"sessionId":"${sessionId}"`);
+    const blockedOperations = [
+      () => fixture.service.append(sessionId, event('project', 'loaded', 'Project loaded.', { revision: 'blocked' })),
+      () => fixture.service.finalize(sessionId, { status: 'passed' }),
+      () => fixture.service.reopen(sessionId),
+      () => fixture.service.replay(sessionId),
+      () => fixture.service.subscribe(sessionId, { onEvent: () => undefined }),
+      () => fixture.service.export(sessionId),
+      () => fixture.service.promoteToDraftEval(sessionId, []),
+    ];
+    for (const operation of blockedOperations) {
+      await expect(operation()).rejects.toMatchObject({ code: 'PLAYGROUND_STORE_CORRUPT' });
+    }
+    let sessionError: unknown;
+    try {
+      fixture.service.session(sessionId);
+    } catch (error) {
+      sessionError = error;
+    }
+    expect(sessionError).toMatchObject({ code: 'PLAYGROUND_STORE_CORRUPT' });
+    await fixture.service.closeSession(sessionId);
     await fixture.service.close();
     const reader = new PlaygroundService({
       projectId: 'project-1',
@@ -1281,6 +1300,7 @@ it('keeps a linked v2 session installed and closable when post-link verification
 it('keeps terminal memory aligned with metadata after a post-rename directory-sync failure', async () => {
   const fixture = await createFixture();
   const sessionId = 'metadata-rename-sync-failure';
+  const outcome = Object.freeze({ status: 'passed', workspace: Object.freeze({ alpha: 'a', beta: 'b' }) });
   try {
     await fixture.service.openSession({ ...sessionInput(), sessionId });
     const root = await objectRoot(fixture.storageRoot, sessionId);
@@ -1289,13 +1309,41 @@ it('keeps terminal memory aligned with metadata after a post-rename directory-sy
         throw injectedIoFailure('metadata directory sync failed');
       }
     }, async () => {
-      await expect(fixture.service.finalize(sessionId, { status: 'passed' })).rejects.toMatchObject({ code: 'EIO' });
+      await expect(fixture.service.finalize(sessionId, outcome)).rejects.toMatchObject({ code: 'EIO' });
     });
-    expect(fixture.service.session(sessionId)).toMatchObject({ outcome: { status: 'passed' }, state: 'finalized' });
     expect(JSON.parse(await readFile(join(root, 'session.json'), 'utf8'))).toMatchObject({
-      outcome: { status: 'passed' },
+      outcome,
       state: 'finalized',
     });
+    const blockedOperations = [
+      () => fixture.service.append(sessionId, event('project', 'loaded', 'Project loaded.', { revision: 'blocked' })),
+      () => fixture.service.reopen(sessionId),
+      () => fixture.service.replay(sessionId),
+      () => fixture.service.subscribe(sessionId, { onEvent: () => undefined }),
+      () => fixture.service.export(sessionId),
+      () => fixture.service.promoteToDraftEval(sessionId, []),
+    ];
+    for (const operation of blockedOperations) {
+      await expect(operation()).rejects.toMatchObject({ code: 'PLAYGROUND_STORE_CORRUPT' });
+    }
+    let sessionError: unknown;
+    try {
+      fixture.service.session(sessionId);
+    } catch (error) {
+      sessionError = error;
+    }
+    expect(sessionError).toMatchObject({ code: 'PLAYGROUND_STORE_CORRUPT' });
+    await expect(fixture.service.finalize(sessionId, { status: 'different' }))
+      .rejects.toMatchObject({ code: 'PLAYGROUND_SESSION_FINALIZED' });
+    const recovered = await fixture.service.finalize(sessionId, {
+      status: 'passed',
+      workspace: { beta: 'b', alpha: 'a' },
+    });
+    expect(recovered).toMatchObject({ outcome, state: 'finalized' });
+    expect(Object.isFrozen(recovered)).toBe(true);
+    expect(Object.isFrozen(recovered.outcome)).toBe(true);
+    await expect(fixture.service.export(sessionId)).resolves.toMatchObject({ session: { outcome, state: 'finalized' } });
+    await expect(fixture.service.promoteToDraftEval(sessionId, [])).resolves.toMatchObject({ outcome });
     await fixture.service.close();
   } finally {
     await fixture.close();
