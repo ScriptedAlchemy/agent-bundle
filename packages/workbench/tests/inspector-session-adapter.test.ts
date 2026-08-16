@@ -151,6 +151,19 @@ describe('Inspector session adapter', () => {
     );
   });
 
+  it('uses runtime session revision rather than implementation vectors as the Inspector scroll-memory boundary', () => {
+    const binding = {
+      kind: 'runtime' as const,
+      binding: {
+        definitionDigest: 'definition-a', registryRevision: 7, serverDigest: 'server-a', serverName: 'weather', sessionId: 'runtime-session-a', sessionRevision: 3, target: 'portable', transportDigest: 'transport-a',
+      },
+    };
+    expect(inspectorSessionBindingKey(binding)).toBe('runtime\u0000runtime-session-a\u00003\u0000portable\u0000weather');
+    expect(inspectorSessionBindingKey({ ...binding, binding: { ...binding.binding, sessionRevision: 4 } })).not.toBe(
+      inspectorSessionBindingKey(binding),
+    );
+  });
+
   it('exposes only the bounded Inspector screen set', () => {
     expect(inspectorSessionTabs.map((tab) => tab.label)).toEqual([
       'Tools',

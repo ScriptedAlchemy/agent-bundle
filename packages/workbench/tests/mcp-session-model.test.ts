@@ -62,6 +62,52 @@ it('snapshots and freezes the selected session binding, connection, catalogs, an
   expect(Object.isFrozen(model.catalogs.tools)).toBe(true);
 });
 
+it('retains the discriminated runtime binding and execution vector in immutable invocation history', () => {
+  const binding = {
+    kind: 'runtime' as const,
+    binding: {
+      definitionDigest: 'definition-a', registryRevision: 7, serverDigest: 'server-a', serverName: 'weather', sessionId: 'runtime-session-a', sessionRevision: 3, target: 'portable', transportDigest: 'transport-a',
+    },
+  };
+  const vector = { providerSessionId: 'provider-a', runtimeGenerationId: 'generation-a', sourceRevision: 'source-a', stateStoreId: 'store-a', stateVersion: 2 };
+  let model = createMcpBrowserSessionModel('runtime-session-a');
+  model = reduceMcpBrowserSession(model, { binding, type: 'open' });
+  model = reduceMcpBrowserSession(model, { type: 'ready' });
+  model = reduceMcpBrowserSession(model, {
+    request: { id: 'runtime-list-tools', operation: 'listTools', request: {}, startedAt: 1 }, type: 'request.start',
+  });
+  model = reduceMcpBrowserSession(model, {
+    completedAt: 2, id: 'runtime-list-tools', result: [{ name: 'forecast' }], vector, type: 'request.settled',
+  });
+
+  expect(model.binding).toEqual(binding);
+  expect(invocationHistoryFor(model)).toEqual([
+    expect.objectContaining({ binding, id: 'runtime-list-tools', result: [{ name: 'forecast' }], vector }),
+  ]);
+  expect(Object.isFrozen(invocationHistoryFor(model)[0]?.vector)).toBe(true);
+});
+
+it('updates a runtime binding revision without discarding prior timeline entries', () => {
+  const binding = {
+    kind: 'runtime' as const,
+    binding: {
+      definitionDigest: 'definition-a', registryRevision: 7, serverDigest: 'server-a', serverName: 'weather', sessionId: 'runtime-session-a', sessionRevision: 3, target: 'portable', transportDigest: 'transport-a',
+    },
+  };
+  let model = createMcpBrowserSessionModel('runtime-session-a');
+  model = reduceMcpBrowserSession(model, { binding, type: 'open' });
+  model = reduceMcpBrowserSession(model, { type: 'ready' });
+  model = reduceMcpBrowserSession(model, {
+    entry: { direction: 'server', kind: 'logging', occurredAt: 1, payload: { message: 'ready' }, sequence: 1 }, type: 'trace',
+  });
+  model = reduceMcpBrowserSession(model, {
+    binding: { ...binding, binding: { ...binding.binding, registryRevision: 8, sessionRevision: 4 } }, type: 'binding',
+  });
+
+  expect(model.binding).toMatchObject({ kind: 'runtime', binding: { registryRevision: 8, sessionRevision: 4 } });
+  expect(model.timeline.entries).toEqual([{ direction: 'server', kind: 'logging', occurredAt: 1, payload: { message: 'ready' }, sequence: 1 }]);
+});
+
 it('retains an ordered raw timeline with replay gaps and canonical invocation history', () => {
   const rawFrame = {
     direction: 'server' as const,

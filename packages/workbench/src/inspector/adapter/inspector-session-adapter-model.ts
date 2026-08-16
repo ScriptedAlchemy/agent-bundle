@@ -66,8 +66,15 @@ const logParams = (payload: unknown): InspectorLogEntry['params'] | undefined =>
   return payload as InspectorLogEntry['params'];
 };
 
-export const inspectorSessionBindingKey = (binding: McpBrowserSessionModel['binding']): string =>
-  binding === undefined ? '' : `${binding.epochId}\u0000${binding.target}\u0000${binding.serverName}`;
+export const inspectorSessionBindingKey = (binding: McpBrowserSessionModel['binding']): string => {
+  if (binding === undefined) return '';
+  if ('kind' in binding) {
+    return binding.kind === 'runtime'
+      ? `runtime\u0000${binding.binding.sessionId}\u0000${binding.binding.sessionRevision}\u0000${binding.binding.target}\u0000${binding.binding.serverName}`
+      : '';
+  }
+  return `${binding.epochId}\u0000${binding.target}\u0000${binding.serverName}`;
+};
 
 export const inspectorProtocolEntries = (
   timeline: readonly McpBrowserSessionTimelineEntry[],

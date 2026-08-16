@@ -1,4 +1,5 @@
 import { expect, it } from '@rstest/core';
+import type { Client } from '@modelcontextprotocol/client';
 
 import {
   createMcpSessionController,
@@ -141,6 +142,122 @@ it('connects the exact artifact binding then atomically publishes catalog and co
   expect(controller.model.progress).toEqual([{ kind: 'progress', occurredAt: 11, payload: { progress: 1 }, sequence: 2 }]);
 
   stream.close();
+  await controller.close();
+});
+
+it('attaches one non-owning runtime App client, routes only closed methods, and rejects a stale runtime response', async () => {
+  const runtimeBinding = {
+    kind: 'runtime' as const,
+    binding: Object.freeze({
+      definitionDigest: 'definition-a', registryRevision: 7, serverDigest: 'server-a', serverName: 'weather', sessionId: 'runtime-session-a', sessionRevision: 3, target: 'portable', transportDigest: 'transport-a',
+    }),
+  };
+  const vector = Object.freeze({ providerSessionId: 'provider-a', runtimeGenerationId: 'generation-a', sourceRevision: 'source-a', stateStoreId: 'store-a', stateVersion: 2 });
+  const calls: string[] = [];
+  let attachedTransport: McpSessionControllerTransport | undefined;
+  const controller = createMcpSessionController({
+    appClientFactory: () => ({
+      close: async () => { calls.push('app-client.close'); },
+      connect: async (transport) => { attachedTransport = transport as McpSessionControllerTransport; await transport.start(); },
+      request: async () => undefined,
+    }) as unknown as Client,
+    clientFactory: fakeClient,
+    routes: {
+      catalog: async () => ({ prompts: [], resourceTemplates: [], resources: [], tools: [] }),
+      closeRuntime: async (request) => { calls.push(`runtime.close:${request.expectedSessionRevision}`); },
+      config: async () => ({}),
+      executeRuntime: async (_sessionId, request) => {
+        calls.push(`runtime.execute:${request.kind}`);
+        return { operationId: 'operation-a', sessionId: 'runtime-session-a', sessionRevision: 3, value: [{ name: 'forecast' }], vector };
+      },
+      openRuntime: async () => { throw new Error('Runtime App attachment must not open a new backend session.'); },
+      restart: async () => connection,
+      restartRuntime: async (request) => {
+        calls.push(`runtime.restart:${request.expectedSessionRevision}`);
+        return { action: 'sessions-restarted', invalidatedBindings: [{ sessionId: 'runtime-session-a', sessionRevision: 3 }], registryRevision: 8, restartedSessionIds: ['runtime-session-a'], runtimeGenerationId: 'generation-a', sequence: 1 };
+      },
+      stream: async () => new Response(null),
+      trace: async () => ({ entries: [] }),
+    },
+    transportFactory: fakeTransport,
+  });
+
+  await controller.open(runtimeBinding);
+  const app = await controller.attachApp();
+  const messages: unknown[] = [];
+  if (attachedTransport === undefined) throw new Error('Expected controller-owned attached transport.');
+  attachedTransport.onmessage = (message) => messages.push(message);
+  await attachedTransport.send({ id: 1, jsonrpc: '2.0', method: 'tools/list' });
+  await attachedTransport.send({ id: 2, jsonrpc: '2.0', method: 'prompts/list' });
+
+  expect(app).toMatchObject({ sessionId: 'runtime-session-a', sessionRevision: 3 });
+  expect(messages).toEqual([
+    { id: 1, jsonrpc: '2.0', result: { tools: [{ name: 'forecast' }] } },
+    { error: { code: -32601, message: 'MCP method "prompts/list" is not supported by the Agent Bundle remote transport.' }, id: 2, jsonrpc: '2.0' },
+  ]);
+  expect(calls).toEqual(['runtime.execute:list-tools']);
+  expect(controller.history).toEqual([expect.objectContaining({ vector })]);
+
+  await controller.restart();
+  expect(controller.model.binding).toMatchObject({ kind: 'runtime', binding: { registryRevision: 8, sessionRevision: 4 } });
+  expect(calls).toEqual(['runtime.execute:list-tools', 'runtime.restart:3']);
+
+  await app.close();
+  expect(calls).toEqual(['runtime.execute:list-tools', 'runtime.restart:3', 'app-client.close']);
+  await controller.close();
+  expect(calls).toEqual(['runtime.execute:list-tools', 'runtime.restart:3', 'app-client.close', 'runtime.close:4']);
+});
+
+it('serializes attached runtime App requests before admitting the next route operation', async () => {
+  const runtimeBinding = {
+    kind: 'runtime' as const,
+    binding: Object.freeze({
+      definitionDigest: 'definition-a', registryRevision: 7, serverDigest: 'server-a', serverName: 'weather', sessionId: 'runtime-session-a', sessionRevision: 3, target: 'portable', transportDigest: 'transport-a',
+    }),
+  };
+  const first = deferred<Readonly<{ readonly operationId: string; readonly sessionId: string; readonly sessionRevision: number; readonly value: unknown; readonly vector: object }>>();
+  const calls: string[] = [];
+  let attachedTransport: McpSessionControllerTransport | undefined;
+  const result = Object.freeze({
+    operationId: 'operation-a', sessionId: 'runtime-session-a', sessionRevision: 3, value: [],
+    vector: Object.freeze({ providerSessionId: 'provider-a', runtimeGenerationId: 'generation-a', sourceRevision: 'source-a', stateStoreId: 'store-a', stateVersion: 2 }),
+  });
+  const controller = createMcpSessionController({
+    appClientFactory: () => ({
+      close: async () => undefined,
+      connect: async (transport) => { attachedTransport = transport as McpSessionControllerTransport; await transport.start(); },
+      request: async () => undefined,
+    }) as unknown as Client,
+    clientFactory: fakeClient,
+    routes: {
+      catalog: async () => ({ prompts: [], resourceTemplates: [], resources: [], tools: [] }),
+      closeRuntime: async () => undefined,
+      config: async () => ({}),
+      executeRuntime: async (_sessionId, request) => {
+        calls.push(request.kind);
+        return calls.length === 1 ? first.promise as never : result as never;
+      },
+      openRuntime: async () => { throw new Error('Unexpected runtime session open.'); },
+      restart: async () => connection,
+      restartRuntime: async () => ({ action: 'implementation-updated', invalidatedBindings: [], registryRevision: 7, restartedSessionIds: [], runtimeGenerationId: 'generation-a', sequence: 1 }),
+      stream: async () => new Response(null),
+      trace: async () => ({ entries: [] }),
+    },
+    transportFactory: fakeTransport,
+  });
+
+  await controller.open(runtimeBinding);
+  await controller.attachApp();
+  if (attachedTransport === undefined) throw new Error('Expected controller-owned attached transport.');
+  const tools = attachedTransport.send({ id: 1, jsonrpc: '2.0', method: 'tools/list' });
+  await eventually(() => calls.length === 1);
+  const resources = attachedTransport.send({ id: 2, jsonrpc: '2.0', method: 'resources/list' });
+  await Promise.resolve();
+  expect(calls).toEqual(['list-tools']);
+
+  first.resolve(result);
+  await Promise.all([tools, resources]);
+  expect(calls).toEqual(['list-tools', 'list-resources']);
   await controller.close();
 });
 
