@@ -12,8 +12,9 @@ import type {
   McpAppSandboxPermissions,
 } from './mcp-app-sandbox.ts';
 import { createMcpAppConsentActionDigest } from './mcp-app-sandbox.ts';
+import { MCP_APP_PROTOCOL_VERSION } from './mcp-app-profile-descriptors.ts';
 
-export const MCP_APP_PROTOCOL_VERSION = '2026-01-26';
+export { MCP_APP_PROTOCOL_VERSION } from './mcp-app-profile-descriptors.ts';
 
 export type McpAppBridgeRequestId = string | number | null;
 export type McpAppBridgeDisplayMode = 'inline' | 'fullscreen' | 'pip';

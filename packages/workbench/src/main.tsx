@@ -1,14 +1,26 @@
-import { type ReactNode, useEffect, useRef, useState } from 'react';
+import { type MutableRefObject, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
+import { MantineProvider } from '@mantine/core';
 
 import type { Diagnostic } from '../../agent-bundle/src/core/diagnostics.ts';
+import { MCP_APP_PROFILE_DESCRIPTORS, type McpAppProfileId } from '../../agent-bundle/src/dev/mcp-app-profile-descriptors.ts';
+import type { McpAppPreviewAppsSnapshot } from '../../agent-bundle/src/dev/mcp-app-runtime-preview-service.ts';
 import type { ProjectStatus } from '../../agent-bundle/src/dev/types.ts';
 
 import { InspectorSessionAdapter } from './inspector/adapter/inspector-session-adapter-entry.ts';
-import { McpAppClient } from './mcp/mcp-app-client.ts';
-import { McpPage, type McpConfigDownload } from './mcp/mcp-page.tsx';
+import { createRuntimeAppBridgeFactory, type RuntimeAppBridgeFactory } from './inspector/adapter/runtime-app-bridge.ts';
+import { McpAppClient, type McpAppConsentChallenge } from './mcp/mcp-app-client.ts';
+import { McpAppPreview } from './mcp/mcp-app-preview.tsx';
+import { McpPage, type McpConfigDownload, type McpPagePreviewSelection, type McpPageRuntimePreviewDependencies } from './mcp/mcp-page.tsx';
 import { ForegroundRouteClient, McpRouteClient } from './mcp/mcp-route-client.ts';
 import { createMcpSessionController } from './mcp/mcp-session-controller.ts';
+import {
+  prepareRuntimeMcpHandoffAuthority,
+  RuntimeMcpHandoffCoordinator,
+  sameRuntimeMcpAppBinding,
+  type RuntimeHandoffAuthority,
+  type RuntimeMcpHandoff,
+} from './mcp/runtime-mcp-handoff.ts';
 import { overviewFor } from './overview-model.ts';
 import { ProjectClient } from './project-client.ts';
 import { SkillClient } from './skill-client.ts';
@@ -22,6 +34,7 @@ import {
   type RuntimePlaygroundController,
 } from './runtime-playground.tsx';
 import type { RuntimeProfileOption } from './runtime-model.ts';
+import type { RuntimeAppPreviewRenderer, RuntimeLiveMcpPageAdapter } from './runtime-stage.tsx';
 import './styles.css';
 
 const dateTime = (value: string | undefined): string => value === undefined
@@ -41,22 +54,105 @@ const errorMessage = (reason: unknown): string =>
 
 const mcpTargets = ['portable', 'claude', 'codex'] as const;
 
-const runtimeProfiles = [{
-  claimsRealHostParity: false,
-  evidence: 'simulated',
-  id: 'portable',
-  label: 'Portable MCP Apps',
-  version: 'agent-bundle:mcp-apps:2026-01-26',
-}] satisfies readonly RuntimeProfileOption[];
+const runtimeProfiles = Object.values(MCP_APP_PROFILE_DESCRIPTORS) satisfies readonly RuntimeProfileOption[];
+const runtimeProfileIds = Object.freeze(Object.keys(MCP_APP_PROFILE_DESCRIPTORS) as McpAppProfileId[]);
+
+interface RuntimeHandoffHost {
+  canOpen(authority: RuntimeHandoffAuthority): boolean;
+  open(authority: RuntimeHandoffAuthority): void;
+  subscribe(listener: () => void): () => void;
+}
+
+const runtimeProfileId = (value: string): value is typeof runtimeProfileIds[number] =>
+  runtimeProfileIds.includes(value as typeof runtimeProfileIds[number]);
 
 /** The Workbench, rather than an individual MCP transport, owns this shared foreground credential. */
 class WorkbenchMcpRouteClient extends McpRouteClient {
   override forgetAuthentication(): void {}
 }
 
-const createMcpController = (foreground: ForegroundRouteClient) => createMcpSessionController({
-  routes: new WorkbenchMcpRouteClient({ foreground }),
+const createMcpController = (routes: WorkbenchMcpRouteClient) => createMcpSessionController({
+  routes,
 });
+
+type WorkbenchMcpController = ReturnType<typeof createMcpController>;
+
+const controllerMatchesRuntimePreview = (controller: WorkbenchMcpController, preview: McpAppPreviewAppsSnapshot): boolean => {
+  const binding = controller.model.binding;
+  return controller.model.phase === 'ready' && binding?.kind === 'runtime' && sameRuntimeMcpAppBinding(binding.binding, preview.session.binding);
+};
+
+/** The stable host callback admits only the existing controller's route-free runtime binding. */
+const createWorkbenchRuntimeBridgeFactory = (
+  appClient: McpAppClient,
+  controllerRef: MutableRefObject<WorkbenchMcpController>,
+  onTrace: (bindingId: string, entry: unknown) => void,
+  requestConsent: (challenge: McpAppConsentChallenge) => Promise<'allow-once' | 'deny'>,
+): ((preview: McpAppPreviewAppsSnapshot) => RuntimeAppBridgeFactory) => (preview) => {
+  const controller = controllerRef.current;
+  let admission: Promise<void> | undefined;
+  let inner: RuntimeAppBridgeFactory | undefined;
+  let setup: Promise<Awaited<ReturnType<RuntimeAppBridgeFactory>>> | undefined;
+  let close: Promise<void> | undefined;
+  let closed = false;
+  const admit = (): Promise<void> => {
+    if (admission !== undefined) return admission;
+    admission = Promise.resolve().then(async () => {
+      if (controllerRef.current !== controller) throw new Error('Runtime MCP controller changed before App admission.');
+      if (controller.model.phase === 'idle') {
+        await controller.open(Object.freeze({
+          binding: preview.session.binding,
+          kind: 'runtime' as const,
+          session: preview.session,
+        }));
+      } else if (!controllerMatchesRuntimePreview(controller, preview)) {
+        throw new Error('MCP controller is not ready for this exact runtime App session.');
+      }
+      if (controllerRef.current !== controller || !controllerMatchesRuntimePreview(controller, preview)) {
+        throw new Error('Runtime MCP controller admission became stale.');
+      }
+    });
+    return admission;
+  };
+  const factory = ((iframe: Parameters<RuntimeAppBridgeFactory>[0], tool: Parameters<RuntimeAppBridgeFactory>[1]) => {
+    if (closed) return Promise.reject(new Error('Runtime MCP App bridge factory is closed.'));
+    if (setup !== undefined) return setup;
+    setup = admit().then(() => {
+      if (closed) throw new Error('Runtime MCP App bridge factory is closed.');
+      inner ??= createRuntimeAppBridgeFactory({
+        client: appClient,
+        controller,
+        installedHandlers: Object.freeze({}),
+        listChanged: Object.freeze({ resources: false, tools: false }),
+        onTrace: (entry) => { onTrace(preview.binding.id, entry); },
+        preview,
+        requestConsent,
+        simulationFeatures: Object.freeze({ chatGptWidgetState: 'disabled' as const }),
+      });
+      return inner(iframe, tool);
+    });
+    return setup;
+  }) as RuntimeAppBridgeFactory;
+  Object.defineProperty(factory, 'close', {
+    configurable: false,
+    value: (): Promise<void> => {
+      if (close !== undefined) return close;
+      closed = true;
+      const pending = setup ?? admission;
+      close = (pending === undefined ? Promise.resolve() : pending.catch(() => undefined))
+        .then(() => inner?.close());
+      return close;
+    },
+    writable: false,
+  });
+  return factory;
+};
+
+const RuntimeMcpHandoffButton = ({ authority, host }: { readonly authority: RuntimeHandoffAuthority; readonly host: RuntimeHandoffHost }) => {
+  const [, render] = useState(0);
+  useEffect(() => host.subscribe(() => { render((version) => version + 1); }), [host]);
+  return <button disabled={!host.canOpen(authority)} onClick={() => { host.open(authority); }} type="button">Open in MCP playground</button>;
+};
 
 const downloadMcpConfig = ({ blob, filename }: McpConfigDownload): void => {
   const url = URL.createObjectURL(blob);
@@ -287,21 +383,34 @@ const WorkbenchScreen = ({ children, connectionError, onNavigate, page, runtimeA
   </div>
 </div>;
 
-const McpScreen = ({ appPreviewClient, connectionError, controller, model, onNavigate, onResetSession, presentation, runtimeAvailable = false, runtimeDiagnostic, setPresentation, status }: {
+const McpScreen = ({ appPreviewClient, connectionError, controller, model, onNavigate, onResetSession, onRuntimeInitialPreviewConsumed, presentation, runtimeAvailable = false, runtimeDiagnostic, runtimeHandoff, runtimePreviewDependencies, setPresentation, status }: {
   readonly appPreviewClient: McpAppClient;
   readonly connectionError?: string;
   readonly controller: ReturnType<typeof createMcpController>;
   readonly model: ReturnType<typeof createMcpController>['model'];
   readonly onNavigate: (page: WorkbenchPage) => void;
   readonly onResetSession: () => void;
+  readonly onRuntimeInitialPreviewConsumed: (selection: Extract<McpPagePreviewSelection, { readonly kind: 'runtime' }>) => void;
   readonly runtimeAvailable?: boolean;
   readonly runtimeDiagnostic?: string;
+  readonly runtimeHandoff?: RuntimeMcpHandoff;
+  readonly runtimePreviewDependencies: McpPageRuntimePreviewDependencies;
   readonly presentation: McpPresentation;
   readonly setPresentation: (presentation: McpPresentation) => void;
   readonly status: ProjectStatus;
 }) => {
+  useEffect(() => {
+    const selection = runtimeHandoff?.initialPreview;
+    if (selection !== undefined) onRuntimeInitialPreviewConsumed(selection);
+  }, [onRuntimeInitialPreviewConsumed, runtimeHandoff]);
   const activeEpoch = status.artifact.state === 'missing' ? undefined : status.artifact.activeEpoch;
   const targetOptions = mcpTargets.filter((target) => activeEpoch !== undefined && target in activeEpoch.targetDigests);
+  const runtimeAvailability = model.binding?.kind !== 'runtime' ? undefined : Object.freeze({
+    prompts: 'not-routed' as const,
+    resourceTemplates: 'not-routed' as const,
+    resources: 'available' as const,
+    tools: 'available' as const,
+  });
   return <WorkbenchScreen connectionError={connectionError} onNavigate={onNavigate} page="mcp" runtimeAvailable={runtimeAvailable} runtimeDiagnostic={runtimeDiagnostic}>
     <div className="mcp-content">
       <div aria-label="MCP presentation" className="mcp-presentation-tabs" role="tablist">
@@ -335,15 +444,23 @@ const McpScreen = ({ appPreviewClient, connectionError, controller, model, onNav
         inert={presentation !== 'playground'}
         role="tabpanel"
       >
-        <McpPage
-          appPreviewClient={appPreviewClient}
-          controller={controller}
-          epochOptions={activeEpoch === undefined ? [] : [activeEpoch.id]}
-          initialBinding={activeEpoch === undefined ? undefined : { epochId: activeEpoch.id }}
-          onDownloadConfig={downloadMcpConfig}
-          onResetSession={onResetSession}
-          targetOptions={targetOptions}
-        />
+        {runtimeHandoff === undefined
+          ? <McpPage
+              appPreviewClient={appPreviewClient}
+              controller={controller}
+              epochOptions={activeEpoch === undefined ? [] : [activeEpoch.id]}
+              initialBinding={activeEpoch === undefined ? undefined : { epochId: activeEpoch.id }}
+              onDownloadConfig={downloadMcpConfig}
+              onResetSession={onResetSession}
+              targetOptions={targetOptions}
+            />
+          : <MantineProvider><McpPage
+              controller={controller}
+              initialPreview={runtimeHandoff.initialPreview}
+              onResetSession={onResetSession}
+              runtimePreviewDependencies={runtimePreviewDependencies}
+              source={runtimeHandoff.source}
+            /></MantineProvider>}
       </section>
       <section
         aria-labelledby="mcp-inspector-tab"
@@ -353,62 +470,198 @@ const McpScreen = ({ appPreviewClient, connectionError, controller, model, onNav
         inert={presentation !== 'inspector'}
         role="tabpanel"
       >
-        <InspectorSessionAdapter controller={controller} model={model} />
+        <InspectorSessionAdapter availability={runtimeAvailability} controller={controller} model={model} />
       </section>
     </div>
   </WorkbenchScreen>;
 };
 
-const RuntimeScreen = ({ connectionError, controller, onNavigate, runtimeDiagnostic }: {
+const RuntimeScreen = ({ connectionError, controller, handoffDiagnostic, liveMcpPageAdapter, onNavigate, registerAppPreviewLifecycle, renderAppPreview, runtimeConsent, runtimeDiagnostic, resolveRuntimeConsent }: {
   readonly connectionError?: string;
   readonly controller: RuntimePlaygroundController;
+  readonly handoffDiagnostic?: string;
+  readonly liveMcpPageAdapter: RuntimeLiveMcpPageAdapter;
   readonly onNavigate: (page: WorkbenchPage) => void;
+  readonly registerAppPreviewLifecycle: (handle: Readonly<{ close(): Promise<void> }>) => () => void;
+  readonly renderAppPreview: RuntimeAppPreviewRenderer;
+  readonly resolveRuntimeConsent: (decision: 'allow-once' | 'deny') => void;
+  readonly runtimeConsent?: McpAppConsentChallenge;
   readonly runtimeDiagnostic?: string;
-}) => <WorkbenchScreen connectionError={connectionError} onNavigate={onNavigate} page="runtime" runtimeAvailable runtimeDiagnostic={runtimeDiagnostic}>
-  <div className="runtime-content"><RuntimePlayground controller={controller} /></div>
-</WorkbenchScreen>;
+}) => {
+  const diagnostic = useRef<HTMLParagraphElement>(null);
+  useEffect(() => { diagnostic.current?.focus(); }, [handoffDiagnostic]);
+  return <WorkbenchScreen connectionError={connectionError} onNavigate={onNavigate} page="runtime" runtimeAvailable runtimeDiagnostic={runtimeDiagnostic}>
+    <div className="runtime-content">
+      {handoffDiagnostic === undefined ? undefined : <p ref={diagnostic} role="alert" tabIndex={-1}>{handoffDiagnostic}</p>}
+      {runtimeConsent === undefined ? undefined : <section aria-label="Runtime App consent" role="dialog">
+        <h2>Runtime App permission request</h2>
+        <p>{typeof runtimeConsent.request === 'object' && runtimeConsent.request !== null && 'summary' in runtimeConsent.request && typeof runtimeConsent.request.summary === 'string'
+          ? runtimeConsent.request.summary
+          : 'Allow this Runtime App action?'}</p>
+        <button onClick={() => { resolveRuntimeConsent('allow-once'); }} type="button">Allow once</button>
+        <button onClick={() => { resolveRuntimeConsent('deny'); }} type="button">Deny</button>
+      </section>}
+      <RuntimePlayground
+        controller={controller}
+        liveMcpPageAdapter={liveMcpPageAdapter}
+        registerAppPreviewLifecycle={registerAppPreviewLifecycle}
+        renderAppPreview={renderAppPreview}
+      />
+    </div>
+  </WorkbenchScreen>;
+};
 
 const Workbench = () => {
   const client = useRef<ProjectClient>();
   const foreground = useRef<ForegroundRouteClient>();
+  const mcpRoutes = useRef<WorkbenchMcpRouteClient>();
+  const mcpControllerRef = useRef<WorkbenchMcpController>();
   const mcpAppClient = useRef<McpAppClient>();
   const runtimeClient = useRef<RuntimeClient>();
   const runtimeController = useRef<RuntimePlaygroundController>();
   const skillClient = useRef<SkillClient>();
+  const lifecycleAuthorities = useRef(new WeakMap<Readonly<{ close(): Promise<void> }>, RuntimeHandoffAuthority>());
+  const handoffCoordinator = useRef<RuntimeMcpHandoffCoordinator>();
+  const runtimeBridgeTrace = useRef(new Map<string, readonly unknown[]>());
+  const runtimeConsentQueue = useRef<Array<Readonly<{ readonly challenge: McpAppConsentChallenge; readonly resolve: (decision: 'allow-once' | 'deny') => void }>>>([]);
   const [connectionError, setConnectionError] = useState<string>();
   const [error, setError] = useState<string>();
   if (foreground.current === undefined) foreground.current = new ForegroundRouteClient();
+  if (mcpRoutes.current === undefined) mcpRoutes.current = new WorkbenchMcpRouteClient({ foreground: foreground.current });
 
-  const [mcpController, setMcpController] = useState(() => createMcpController(foreground.current!));
+  const [mcpController, setMcpController] = useState(() => createMcpController(mcpRoutes.current!));
   const [mcpModel, setMcpModel] = useState(() => mcpController.model);
   const [page, setPage] = useState<WorkbenchPage>(() => pageForHash(false));
   const [runtimeCapability, setRuntimeCapability] = useState<RuntimeCapability>('unknown');
   const [runtimeControllerState, setRuntimeControllerState] = useState<RuntimePlaygroundController>();
   const [runtimeError, setRuntimeError] = useState<string>();
+  const [runtimeHandoff, setRuntimeHandoff] = useState<RuntimeMcpHandoff>();
+  const [runtimeHandoffError, setRuntimeHandoffError] = useState<string>();
+  const [runtimeConsent, setRuntimeConsent] = useState<McpAppConsentChallenge>();
   const [mcpPresentation, setMcpPresentation] = useState(mcpPresentationForHash);
   const [status, setStatus] = useState<ProjectStatus>();
   const [changedFiles, setChangedFiles] = useState<readonly string[]>([]);
 
-  if (mcpAppClient.current === undefined) mcpAppClient.current = new McpAppClient();
+  if (client.current === undefined) client.current = new ProjectClient({ foreground: foreground.current! });
+  if (mcpAppClient.current === undefined) mcpAppClient.current = new McpAppClient({ projectClient: client.current });
+  if (mcpControllerRef.current !== mcpController) mcpControllerRef.current = mcpController;
   if (runtimeClient.current === undefined) runtimeClient.current = new RuntimeClient(foreground.current);
 
   const runtimeAvailable = runtimeCapability === 'available';
 
-  const navigate = (next: WorkbenchPage): void => {
+  const navigate = useCallback((next: WorkbenchPage): void => {
+    if (next !== 'runtime') handoffCoordinator.current?.cancel();
     const hash = next === 'mcp' ? '#mcp' : next === 'runtime' ? '#runtime' : next === 'skills' ? '#skills' : '#overview';
     if (window.location.hash !== hash) window.history.pushState(undefined, '', hash);
     if (next === 'mcp') setMcpPresentation('playground');
     setPage(next);
-  };
+  }, []);
 
-  const resetMcpSession = (): void => {
-    const replacement = createMcpController(foreground.current!);
+  if (handoffCoordinator.current === undefined) {
+    handoffCoordinator.current = new RuntimeMcpHandoffCoordinator({
+      commit: (handoff) => {
+        setRuntimeHandoff(handoff);
+        navigate('mcp');
+      },
+      reject: (reason) => { setRuntimeHandoffError(`MCP playground handoff could not close the Runtime App: ${errorMessage(reason)}`); },
+    });
+  }
+
+  const resetMcpSession = useCallback((): void => {
+    handoffCoordinator.current?.cancel();
+    setRuntimeHandoff(undefined);
+    setRuntimeHandoffError(undefined);
+    const replacement = createMcpController(mcpRoutes.current!);
+    mcpControllerRef.current = replacement;
     setMcpController(replacement);
     setMcpModel(replacement.model);
-  };
+  }, []);
+
+  const registerAppPreviewLifecycle = useCallback((handle: Readonly<{ close(): Promise<void> }>): (() => void) => {
+    const authority = lifecycleAuthorities.current.get(handle);
+    if (authority === undefined) return () => undefined;
+    return handoffCoordinator.current!.register(handle, authority);
+  }, []);
+
+  const canOpenRuntimeHandoff = useCallback((authority: RuntimeHandoffAuthority): boolean => {
+    return handoffCoordinator.current!.canOpen(authority);
+  }, []);
+
+  const openRuntimeHandoff = useCallback((authority: RuntimeHandoffAuthority): void => {
+    setRuntimeHandoffError(undefined);
+    handoffCoordinator.current!.open(authority);
+  }, []);
+
+  const handoffHost = useMemo<RuntimeHandoffHost>(() => Object.freeze({
+    canOpen: canOpenRuntimeHandoff,
+    open: openRuntimeHandoff,
+    subscribe: (listener) => handoffCoordinator.current!.subscribe(listener),
+  }), [canOpenRuntimeHandoff, openRuntimeHandoff]);
+
+  const requestRuntimeConsent = useCallback((challenge: McpAppConsentChallenge): Promise<'allow-once' | 'deny'> => new Promise((resolve) => {
+    const entry = Object.freeze({ challenge, resolve });
+    runtimeConsentQueue.current.push(entry);
+    if (runtimeConsentQueue.current.length === 1) setRuntimeConsent(challenge);
+  }), []);
+
+  const resolveRuntimeConsent = useCallback((decision: 'allow-once' | 'deny'): void => {
+    const [current, ...pending] = runtimeConsentQueue.current;
+    runtimeConsentQueue.current = pending;
+    if (current !== undefined) current.resolve(decision);
+    setRuntimeConsent(pending[0]?.challenge);
+  }, []);
+
+  const onRuntimeBridgeTrace = useCallback((bindingId: string, entry: unknown): void => {
+    const previous = runtimeBridgeTrace.current.get(bindingId) ?? [];
+    runtimeBridgeTrace.current.set(bindingId, Object.freeze([...previous.slice(-63), entry]));
+  }, []);
+
+  const createBridgeFactory = useCallback((preview: McpAppPreviewAppsSnapshot): RuntimeAppBridgeFactory => {
+    const appClient = mcpAppClient.current;
+    if (appClient === undefined) throw new Error('Runtime App client is not connected.');
+    return createWorkbenchRuntimeBridgeFactory(appClient, mcpControllerRef as MutableRefObject<WorkbenchMcpController>, onRuntimeBridgeTrace, requestRuntimeConsent)(preview);
+  }, [onRuntimeBridgeTrace, requestRuntimeConsent]);
+
+  const renderAppPreview = useCallback<RuntimeAppPreviewRenderer>((props) => {
+    const authority = prepareRuntimeMcpHandoffAuthority(props, runtimeProfileId);
+    const appClient = mcpAppClient.current;
+    if (authority === undefined || appClient === undefined) return undefined;
+    return <MantineProvider><McpAppPreview
+      client={appClient}
+      createBridgeFactory={createBridgeFactory}
+      kind="runtime"
+      profile={props.profile}
+      profileId={props.profileId}
+      registerLifecycle={(handle) => {
+        lifecycleAuthorities.current.set(handle, authority);
+        return props.registerLifecycle?.(handle) ?? (() => undefined);
+      }}
+      run={props.run}
+      surface={props.surface}
+    /></MantineProvider>;
+  }, [createBridgeFactory]);
+
+  const liveMcpPageAdapter = useMemo<RuntimeLiveMcpPageAdapter>(() => Object.freeze({
+    kind: 'host-owned',
+    render: (props) => {
+      const authority = prepareRuntimeMcpHandoffAuthority(props, runtimeProfileId);
+      return authority === undefined ? undefined : <RuntimeMcpHandoffButton authority={authority} host={handoffHost} />;
+    },
+  }), [handoffHost]);
+
+  const runtimePreviewDependencies = useMemo<McpPageRuntimePreviewDependencies>(() => Object.freeze({
+    client: mcpAppClient.current!,
+    createBridgeFactory,
+  }), [createBridgeFactory]);
+
+  const consumeRuntimeInitialPreview = useCallback((selection: Extract<McpPagePreviewSelection, { readonly kind: 'runtime' }>): void => {
+    setRuntimeHandoff((current) => current?.initialPreview === selection
+      ? Object.freeze({ source: current.source })
+      : current);
+  }, []);
 
   useEffect(() => {
-    const next = new ProjectClient({ foreground: foreground.current! });
+    const next = client.current!;
     const nextSkillClient = new SkillClient();
     const nextRuntimeClient = runtimeClient.current!;
     const runtimeEvents = createRuntimeEventBuffer();
@@ -435,7 +688,12 @@ const Workbench = () => {
       }
       const controller = runtimeController.current;
       if (controller === undefined) {
-        const nextController = createRuntimePlaygroundController({ bootstrap, client: nextRuntimeClient, profiles: runtimeProfiles });
+        const nextController = createRuntimePlaygroundController({
+          bootstrap,
+          client: nextRuntimeClient,
+          defaultProfileId: 'portable',
+          profiles: runtimeProfiles,
+        });
         runtimeController.current = nextController;
         runtimeEvents.install(nextController);
         setRuntimeControllerState(nextController);
@@ -488,7 +746,22 @@ const Workbench = () => {
       if (runtimeRetry !== undefined) clearTimeout(runtimeRetry);
       runtimeEvents.close();
       unsubscribeActivity();
-      next.close();
+      for (const pending of runtimeConsentQueue.current.splice(0)) pending.resolve('deny');
+      setRuntimeConsent(undefined);
+      void (async () => {
+        try {
+          await handoffCoordinator.current?.close();
+        } catch {
+          // Preview ownership remains retryable, but shutdown must proceed.
+        }
+        try {
+          await mcpControllerRef.current?.close();
+        } catch {
+          // Draining errors are surfaced by the owning controller while active.
+        }
+        mcpAppClient.current?.disposeRuntime();
+        next.close();
+      })();
       runtimeController.current?.close();
       runtimeController.current = undefined;
     };
@@ -516,7 +789,11 @@ const Workbench = () => {
     return () => window.removeEventListener('hashchange', onHashChange);
   }, [runtimeAvailable, runtimeCapability]);
 
-  useEffect(() => () => { void mcpController.close().catch(() => undefined); }, [mcpController]);
+  useEffect(() => () => {
+    // Root shutdown owns the active controller's ordered preview→controller
+    // close. This cleanup owns only a superseded controller after reset.
+    if (mcpControllerRef.current !== mcpController) void mcpController.close().catch(() => undefined);
+  }, [mcpController]);
   useEffect(() => mcpController.subscribe(setMcpModel), [mcpController]);
 
   if (status !== undefined && client.current !== undefined && skillClient.current !== undefined) {
@@ -527,16 +804,30 @@ const Workbench = () => {
         controller={mcpController}
         model={mcpModel}
         onNavigate={navigate}
+        onRuntimeInitialPreviewConsumed={consumeRuntimeInitialPreview}
         onResetSession={resetMcpSession}
         runtimeAvailable={runtimeAvailable}
         runtimeDiagnostic={runtimeError}
+        runtimeHandoff={runtimeHandoff}
+        runtimePreviewDependencies={runtimePreviewDependencies}
         presentation={mcpPresentation}
         setPresentation={setMcpPresentation}
         status={status}
       />;
     }
     if (page === 'runtime' && runtimeControllerState !== undefined) {
-      return <RuntimeScreen connectionError={connectionError} controller={runtimeControllerState} onNavigate={navigate} runtimeDiagnostic={runtimeError} />;
+      return <RuntimeScreen
+        connectionError={connectionError}
+        controller={runtimeControllerState}
+        handoffDiagnostic={runtimeHandoffError}
+        liveMcpPageAdapter={liveMcpPageAdapter}
+        onNavigate={navigate}
+        registerAppPreviewLifecycle={registerAppPreviewLifecycle}
+        renderAppPreview={renderAppPreview}
+        resolveRuntimeConsent={resolveRuntimeConsent}
+        runtimeConsent={runtimeConsent}
+        runtimeDiagnostic={runtimeError}
+      />;
     }
     return page === 'skills'
       ? <SkillsScreen connectionError={connectionError} onNavigate={navigate} runtimeAvailable={runtimeAvailable} runtimeDiagnostic={runtimeError} skillClient={skillClient.current} status={status} />
