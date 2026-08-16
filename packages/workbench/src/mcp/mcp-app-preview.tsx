@@ -1,6 +1,7 @@
-import React, { useEffect, useRef, useState, type Ref } from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useState, type Ref, type RefCallback } from 'react';
 
 import {
+  type McpAppClient,
   type McpAppConsentChallenge,
   type McpAppConsentDecision,
   type McpAppHostContext,
@@ -12,13 +13,21 @@ import {
   type McpAppRelayFrame,
   type McpAppRouteClose,
   type McpAppRouteMessages,
+  type McpAppRuntimeClient,
+  type McpAppTrustedDocumentPolicy,
 } from './mcp-app-client.ts';
 import {
   createMcpAppFrameRelay,
+  SecureAppRenderer,
   type McpAppFrameIframe,
   type McpAppFrameRelayOptions,
   type McpAppFrameWindow,
 } from './mcp-app-frame.tsx';
+import type { McpAppPreviewAppsSnapshot, McpAppPreviewSnapshot } from '../../../agent-bundle/src/dev/mcp-app-runtime-preview-service.ts';
+import type { AppRendererHandle, McpAppRendererTool } from '../inspector/adapter/closure-spike.ts';
+import type { RuntimeAppBridgeFactory } from '../inspector/adapter/runtime-app-bridge.ts';
+import type { RuntimeAppPreviewProps } from '../runtime-stage.tsx';
+import type { RuntimeAppPreviewLifecycle } from '../runtime-playground.tsx';
 
 import './mcp-app-preview.css';
 
@@ -60,11 +69,29 @@ export interface McpAppPreviewFallback {
   readonly result: McpAppJsonValue;
 }
 
-export type McpAppPreviewState =
+type McpAppArtifactPreviewState =
   | Readonly<{ readonly phase: 'loading' }>
   | Readonly<{ readonly fallback: McpAppPreviewFallback; readonly message: string; readonly phase: 'error' }>
   | Readonly<{ readonly fallback: McpAppPreviewFallback; readonly phase: 'fallback'; readonly preview: McpAppPreviewResponse }>
   | Readonly<{ readonly phase: 'ready'; readonly preview: McpAppPreviewResponse; readonly resource: McpAppCanonicalResource }>;
+
+export type McpAppRuntimePreviewState =
+  | Readonly<{ readonly kind: 'runtime'; readonly phase: 'loading' }>
+  | Readonly<{ readonly fallback: McpAppPreviewFallback; readonly kind: 'runtime'; readonly phase: 'fallback' }>
+  | Readonly<{ readonly fallback: McpAppPreviewFallback; readonly kind: 'runtime'; readonly message: string; readonly phase: 'error' | 'cleanup-failed' }>
+  | Readonly<{
+      readonly bridgeFactory: RuntimeAppBridgeFactory;
+      readonly documentPolicy: McpAppTrustedDocumentPolicy;
+      readonly fallback: McpAppPreviewFallback;
+      readonly kind: 'runtime';
+      readonly phase: 'ready';
+      readonly preview: McpAppPreviewAppsSnapshot;
+    }>;
+
+/** Artifact callers retain this exact state union. */
+export type McpAppPreviewState = McpAppArtifactPreviewState;
+
+type McpAppPreviewControllerState = McpAppArtifactPreviewState | McpAppRuntimePreviewState;
 
 export type McpAppCanonicalResource = McpAppJsonObject & Readonly<{
   readonly csp?: McpAppJsonValue;
@@ -77,6 +104,13 @@ export interface McpAppPreviewProps extends Omit<McpAppPreviewControllerOptions,
   readonly frameWindow?: McpAppFrameWindow;
   readonly frameRelayFactory?: McpAppFrameRelayFactory;
   readonly title?: string;
+}
+
+/** The runtime arm reuses this preview owner and never accepts an artifact relay. */
+export interface McpAppRuntimePreviewProps extends RuntimeAppPreviewProps {
+  readonly client: McpAppClient & McpAppRuntimeClient;
+  readonly createBridgeFactory: (preview: McpAppPreviewAppsSnapshot) => RuntimeAppBridgeFactory;
+  readonly kind: 'runtime';
 }
 
 export interface McpAppPreviewFrameProps {
@@ -190,6 +224,105 @@ const canonicalUiResourceUri = (value: McpAppJsonValue): boolean => {
 const hasCanonicalAppsProfile = (value: McpAppJsonValue): boolean =>
   isRecord(value) && value.kind === 'apps' && value.resourceUri !== undefined && canonicalUiResourceUri(value.resourceUri);
 
+const isRuntimeOptions = (
+  options: McpAppPreviewControllerOptions | McpAppRuntimePreviewProps,
+): options is McpAppRuntimePreviewProps => 'kind' in options && options.kind === 'runtime';
+
+const isRuntimePreviewProps = (
+  props: McpAppPreviewProps | McpAppRuntimePreviewProps,
+): props is McpAppRuntimePreviewProps => 'kind' in props && props.kind === 'runtime';
+
+const runtimeProfileId = (value: string): 'chatgpt' | 'claude' | 'portable' | undefined =>
+  value === 'chatgpt' || value === 'claude' || value === 'portable' ? value : undefined;
+
+const sameStableRuntimeBinding = (
+  left: Readonly<{ readonly definitionDigest: string; readonly registryRevision: number; readonly serverDigest: string; readonly serverName: string; readonly sessionId: string; readonly sessionRevision: number; readonly target: string; readonly transportDigest: string }>,
+  right: Readonly<{ readonly definitionDigest: string; readonly registryRevision: number; readonly serverDigest: string; readonly serverName: string; readonly sessionId: string; readonly sessionRevision: number; readonly target: string; readonly transportDigest: string }>,
+): boolean =>
+  left.definitionDigest === right.definitionDigest &&
+  left.registryRevision === right.registryRevision &&
+  left.serverDigest === right.serverDigest &&
+  left.serverName === right.serverName &&
+  left.sessionId === right.sessionId &&
+  left.sessionRevision === right.sessionRevision &&
+  left.target === right.target &&
+  left.transportDigest === right.transportDigest;
+
+const sameRuntimeVector = (
+  left: Readonly<{ readonly artifactEpochId?: string; readonly runtimeGenerationId: string; readonly sourceRevision: string; readonly stateVersion: number }>,
+  right: Readonly<{ readonly artifactEpochId?: string; readonly runtimeGenerationId: string; readonly sourceRevision: string; readonly stateVersion: number }>,
+): boolean =>
+  left.artifactEpochId === right.artifactEpochId &&
+  left.runtimeGenerationId === right.runtimeGenerationId &&
+  left.sourceRevision === right.sourceRevision &&
+  left.stateVersion === right.stateVersion;
+
+type RuntimePreviewEvidence = Readonly<{
+  readonly app: Readonly<{
+    readonly mcpBinding: Readonly<{
+      readonly definitionDigest: string;
+      readonly registryRevision: number;
+      readonly serverDigest: string;
+      readonly serverName: string;
+      readonly sessionId: string;
+      readonly sessionRevision: number;
+      readonly target: string;
+      readonly transportDigest: string;
+    }>;
+    readonly resourceUri: string;
+    readonly surfaceId: string;
+  }> | undefined;
+  readonly profileId: string;
+  readonly runId: string;
+  readonly runSurfaceId: string;
+  readonly surfaceId: string;
+  readonly vector: Readonly<{
+    readonly artifactEpochId?: string;
+    readonly runtimeGenerationId: string;
+    readonly sourceRevision: string;
+    readonly stateVersion: number;
+  }>;
+}>;
+
+const runtimeEvidence = (options: McpAppRuntimePreviewProps): RuntimePreviewEvidence => {
+  const app = options.run.status === 'succeeded' ? options.run.result.app : undefined;
+  return Object.freeze({
+    app: app === undefined ? undefined : Object.freeze({
+      mcpBinding: Object.freeze({
+        definitionDigest: app.mcpBinding.definitionDigest,
+        registryRevision: app.mcpBinding.registryRevision,
+        serverDigest: app.mcpBinding.serverDigest,
+        serverName: app.mcpBinding.serverName,
+        sessionId: app.mcpBinding.sessionId,
+        sessionRevision: app.mcpBinding.sessionRevision,
+        target: app.mcpBinding.target,
+        transportDigest: app.mcpBinding.transportDigest,
+      }),
+      resourceUri: app.resourceUri,
+      surfaceId: app.surfaceId,
+    }),
+    profileId: options.profileId,
+    runId: options.run.id,
+    runSurfaceId: options.run.surfaceId,
+    surfaceId: options.surface.id,
+    vector: Object.freeze({
+      ...(options.run.vector.artifactEpochId === undefined ? {} : { artifactEpochId: options.run.vector.artifactEpochId }),
+      runtimeGenerationId: options.run.vector.runtimeGenerationId,
+      sourceRevision: options.run.vector.sourceRevision,
+      stateVersion: options.run.vector.stateVersion,
+    }),
+  });
+};
+
+const runtimeFallbackState = (fallback: McpAppPreviewFallback): McpAppRuntimePreviewState =>
+  Object.freeze({ fallback, kind: 'runtime', phase: 'fallback' });
+
+const runtimeErrorState = (fallback: McpAppPreviewFallback, error: unknown, phase: 'error' | 'cleanup-failed' = 'error'): McpAppRuntimePreviewState =>
+  Object.freeze({ fallback, kind: 'runtime', message: messageFor(error), phase });
+
+const isRuntimeState = (state: McpAppPreviewControllerState): state is McpAppRuntimePreviewState =>
+  'kind' in state && state.kind === 'runtime';
+
 const stateFor = (preview: McpAppPreviewResponse, input: McpAppJsonValue, result: McpAppJsonValue): McpAppPreviewState => {
   const resource = canonicalResource(preview.resource);
   if (preview.frame !== undefined && resource !== undefined && hasCanonicalAppsProfile(preview.profile)) {
@@ -215,25 +348,56 @@ const createRequest = (
  * session credential private; the relay receives only the server-issued frame
  * and canonical resource.
  */
-export class McpAppPreviewController {
-  readonly #client: McpAppPreviewClient;
+export class McpAppPreviewController<State extends McpAppPreviewControllerState = McpAppPreviewState> {
+  readonly #client: McpAppPreviewClient | undefined;
   readonly #closeTimeoutMs: number | undefined;
-  readonly #frameRelayFactory: McpAppFrameRelayFactory;
+  readonly #frameRelayFactory: McpAppFrameRelayFactory | undefined;
   readonly #input: McpAppJsonValue;
-  readonly #request: McpAppPreviewCreateRequest;
+  readonly #request: McpAppPreviewCreateRequest | undefined;
   readonly #result: McpAppJsonValue;
-  readonly #sessionId: string;
-  readonly #listeners = new Set<(state: McpAppPreviewState) => void>();
+  readonly #runtime: McpAppRuntimePreviewProps | undefined;
+  readonly #runtimeEvidence: RuntimePreviewEvidence | undefined;
+  readonly #runtimeFallback: McpAppPreviewFallback | undefined;
+  readonly #runtimeLifecycle: RuntimeAppPreviewLifecycle | undefined;
+  readonly #runtimeRendererRef: RefCallback<AppRendererHandle> | undefined;
+  readonly #sessionId: string | undefined;
+  readonly #listeners = new Set<(state: McpAppPreviewControllerState) => void>();
   #closePromise: Promise<void> | undefined;
   #closed = false;
   #preview: McpAppPreviewResponse | undefined;
   #pendingDocumentPreview: McpAppPreviewResponse | undefined;
   #relay: McpAppFrameRelayLike | undefined;
+  #runtimeBackendClosed = false;
+  #runtimeBridgeClosed = false;
+  #runtimeBridgeFactory: RuntimeAppBridgeFactory | undefined;
+  #runtimePreview: McpAppPreviewSnapshot | undefined;
+  #runtimeRenderer: AppRendererHandle | undefined;
+  #runtimeRendererClosed = false;
   #started = false;
   #startPromise: Promise<void> | undefined;
-  #state: McpAppPreviewState = loadingState;
+  #state: McpAppPreviewControllerState = loadingState;
 
-  constructor(options: McpAppPreviewControllerOptions) {
+  constructor(options: McpAppPreviewControllerOptions | McpAppRuntimePreviewProps) {
+    if (isRuntimeOptions(options)) {
+      this.#runtime = options;
+      this.#runtimeEvidence = runtimeEvidence(options);
+      this.#input = detachedJson(options.run.input);
+      this.#result = detachedJson(options.run.status === 'succeeded'
+        ? options.run.result.modelVisible ?? options.run.result.agentVisible ?? options.run.result.native ?? null
+        : null);
+      this.#runtimeFallback = fallbackFor(undefined, this.#input, this.#result);
+      this.#runtimeLifecycle = Object.freeze({ close: () => this.close() });
+      this.#runtimeRendererRef = (handle) => { this.#runtimeRenderer = handle ?? undefined; };
+      this.#state = Object.freeze({ kind: 'runtime', phase: 'loading' });
+      this.#client = undefined;
+      this.#closeTimeoutMs = undefined;
+      this.#frameRelayFactory = undefined;
+      this.#request = undefined;
+      this.#sessionId = undefined;
+      return;
+    }
+    this.#runtime = undefined;
+    this.#runtimeEvidence = undefined;
     this.#client = options.client;
     this.#closeTimeoutMs = options.closeTimeoutMs;
     this.#frameRelayFactory = options.frameRelayFactory;
@@ -243,8 +407,18 @@ export class McpAppPreviewController {
     this.#sessionId = options.sessionId;
   }
 
-  get state(): McpAppPreviewState {
-    return this.#state;
+  get state(): State {
+    return this.#state as State;
+  }
+
+  /** The mounted runtime branch exposes only this stable close handle to its host. */
+  get runtimeLifecycle(): RuntimeAppPreviewLifecycle | undefined {
+    return this.#runtimeLifecycle;
+  }
+
+  /** The one AppRenderer ref is retained by this owner for canonical teardown. */
+  get runtimeRendererRef(): RefCallback<AppRendererHandle> | undefined {
+    return this.#runtimeRendererRef;
   }
 
   get pendingDocumentPolicyRevision(): number | undefined {
@@ -253,15 +427,17 @@ export class McpAppPreviewController {
 
   async consentChallenges(): Promise<readonly McpAppConsentChallenge[]> {
     const bindingId = this.#preview?.bindingId;
-    const list = this.#client.consentChallenges;
-    return bindingId === undefined || this.#closed || list === undefined ? Object.freeze([]) : list.call(this.#client, bindingId);
+    const client = this.#client;
+    const list = client?.consentChallenges;
+    return bindingId === undefined || this.#closed || list === undefined || client === undefined ? Object.freeze([]) : list.call(client, bindingId);
   }
 
   async decideConsent(challengeId: string, approved: boolean): Promise<boolean> {
     const previous = this.#preview;
-    const decide = this.#client.decideConsent;
-    if (previous === undefined || this.#closed || decide === undefined) return false;
-    const decision = await decide.call(this.#client, previous.bindingId, challengeId, approved);
+    const client = this.#client;
+    const decide = client?.decideConsent;
+    if (previous === undefined || this.#closed || decide === undefined || client === undefined) return false;
+    const decision = await decide.call(client, previous.bindingId, challengeId, approved);
     if (this.#closed) return false;
     if (!decision.approved) return decision.messages.length > 0 && this.#relay?.deliverHostMessages?.(decision.messages) === true;
     const documentChanged = previous.frame?.documentPolicy?.revision !== decision.preview.frame?.documentPolicy?.revision;
@@ -288,27 +464,32 @@ export class McpAppPreviewController {
     return true;
   }
 
-  subscribe(listener: (state: McpAppPreviewState) => void): () => void {
-    this.#listeners.add(listener);
+  subscribe(listener: (state: State) => void): () => void {
+    const published = listener as (state: McpAppPreviewControllerState) => void;
+    this.#listeners.add(published);
     try {
-      listener(this.#state);
+      listener(this.#state as State);
     } catch {
       // A display subscriber must never disrupt route cleanup.
     }
-    return () => { this.#listeners.delete(listener); };
+    return () => { this.#listeners.delete(published); };
   }
 
   start(): Promise<void> {
     if (this.#started) return this.#startPromise ?? completed;
     if (this.#closed) return completed;
     this.#started = true;
-    this.#startPromise = this.#start();
+    this.#startPromise = this.#runtime === undefined ? this.#startArtifact() : this.#startRuntime();
     return this.#startPromise;
   }
 
-  async #start(): Promise<void> {
+  async #startArtifact(): Promise<void> {
     try {
-      const preview = await this.#client.create(this.#sessionId, this.#request);
+      const client = this.#client;
+      const request = this.#request;
+      const sessionId = this.#sessionId;
+      if (client === undefined || request === undefined || sessionId === undefined) return;
+      const preview = await client.create(sessionId, request);
       this.#preview = preview;
       if (this.#closed) return;
       this.#setState(stateFor(preview, this.#input, this.#result));
@@ -323,20 +504,94 @@ export class McpAppPreviewController {
     }
   }
 
+  #runtimeRequest(): Readonly<{ readonly expectedGenerationId: string; readonly profileId: 'chatgpt' | 'claude' | 'portable'; readonly runId: string }> | undefined {
+    const evidence = this.#runtimeEvidence;
+    const profileId = evidence === undefined ? undefined : runtimeProfileId(evidence.profileId);
+    if (evidence === undefined || evidence.app === undefined || profileId === undefined || evidence.app.surfaceId !== evidence.runSurfaceId || evidence.runSurfaceId !== evidence.surfaceId) return undefined;
+    return Object.freeze({ expectedGenerationId: evidence.vector.runtimeGenerationId, profileId, runId: evidence.runId });
+  }
+
+  #runtimeReady(preview: McpAppPreviewSnapshot): preview is McpAppPreviewAppsSnapshot {
+    const evidence = this.#runtimeEvidence;
+    if (evidence === undefined || preview.kind !== 'apps') return false;
+    const app = evidence.app;
+    if (app === undefined || !canonicalUiResourceUri(app.resourceUri) || !canonicalUiResourceUri(preview.profile.resourceUri)) return false;
+    return preview.profile.resourceUri === app.resourceUri &&
+      preview.binding.profileId === evidence.profileId &&
+      preview.profile.descriptor.id === evidence.profileId &&
+      preview.binding.runVector.runtimeGenerationId === evidence.vector.runtimeGenerationId &&
+      sameRuntimeVector(preview.binding.runVector, evidence.vector) &&
+      sameStableRuntimeBinding(preview.binding, app.mcpBinding) &&
+      sameStableRuntimeBinding(preview.session.binding, app.mcpBinding);
+  }
+
+  #runtimeFailure(reason: string, error: unknown, phase: 'error' | 'cleanup-failed' = 'error'): void {
+    this.#setState(runtimeErrorState(fallbackFor(undefined, this.#input, this.#result, reason), error, phase));
+  }
+
+  async #startRuntime(): Promise<void> {
+    const runtime = this.#runtime;
+    const request = this.#runtimeRequest();
+    if (runtime === undefined || request === undefined) {
+      if (!this.#closed) this.#setState(runtimeFallbackState(this.#runtimeFallback ?? fallbackFor(undefined, this.#input, this.#result)));
+      return;
+    }
+    try {
+      const preview = await runtime.client.createRuntime(request);
+      this.#runtimePreview = preview;
+      if (!this.#runtimeReady(preview)) {
+        if (!this.#closed) this.#setState(runtimeFallbackState(this.#runtimeFallback ?? fallbackFor(undefined, this.#input, this.#result)));
+        await this.#cleanupRuntime();
+        return;
+      }
+      const policy = runtime.client.currentDocumentPolicy(preview.binding.id);
+      if (policy.bindingId !== preview.binding.id || policy.snapshot.revision !== preview.documentPolicy.revision || policy.snapshot.allow !== preview.documentPolicy.allow) {
+        throw new McpAppPreviewDataError('runtime document policy does not match the created binding');
+      }
+      const bridgeFactory = runtime.createBridgeFactory(preview);
+      this.#runtimeBridgeFactory = bridgeFactory;
+      if (this.#closed) {
+        await this.#cleanupRuntime();
+        return;
+      }
+      this.#setState(Object.freeze({
+        bridgeFactory,
+        documentPolicy: policy,
+        fallback: this.#runtimeFallback ?? fallbackFor(undefined, this.#input, this.#result),
+        kind: 'runtime',
+        phase: 'ready',
+        preview,
+      }));
+    } catch (error) {
+      if (!this.#closed) this.#runtimeFailure('preview-error', error);
+      if (this.#runtimePreview !== undefined) {
+        try {
+          await this.#cleanupRuntime();
+        } catch (cleanupError) {
+          if (!this.#closed) this.#runtimeFailure('preview-error', cleanupError, 'cleanup-failed');
+        }
+      }
+    }
+  }
+
   attachFrame(iframe: McpAppFrameIframe, frameWindow: McpAppFrameWindow): boolean {
-    if (this.#closed || this.#relay !== undefined || this.#state.phase !== 'ready') return false;
-    const { preview, resource } = this.#state;
+    const state = this.#state;
+    if (this.#closed || this.#relay !== undefined || isRuntimeState(state) || state.phase !== 'ready') return false;
+    const { preview, resource } = state;
     const frame = preview.frame;
     if (frame === undefined) return false;
     try {
-      const relay = this.#frameRelayFactory({
+      const factory = this.#frameRelayFactory;
+      const client = this.#client;
+      if (factory === undefined || client === undefined) return false;
+      const relay = factory({
         bindingId: preview.bindingId,
         ...(this.#closeTimeoutMs === undefined ? {} : { closeTimeoutMs: this.#closeTimeoutMs }),
         frame,
         iframe,
         onError: (error) => { this.#relayError(error); },
         resource,
-        routes: this.#client,
+        routes: client,
         window: frameWindow,
       });
       this.#relay = relay;
@@ -352,11 +607,26 @@ export class McpAppPreviewController {
     if (this.#closePromise !== undefined) return this.#closePromise;
     this.#closed = true;
     this.#closePromise = this.#close();
+    if (this.#runtime !== undefined) {
+      const attempt = this.#closePromise;
+      void attempt.catch(() => {
+        if (this.#closePromise === attempt) this.#closePromise = undefined;
+      });
+    }
     return this.#closePromise;
   }
 
   async #close(): Promise<void> {
     await this.#startPromise;
+    if (this.#runtime !== undefined) {
+      try {
+        await this.#cleanupRuntime();
+      } catch (error) {
+        this.#runtimeFailure('preview-error', error, 'cleanup-failed');
+        throw error;
+      }
+      return;
+    }
     const bindingId = this.#preview?.bindingId;
     if (bindingId === undefined) return;
     if (this.#relay !== undefined) {
@@ -373,7 +643,7 @@ export class McpAppPreviewController {
 
   async #forceClose(bindingId: string): Promise<void> {
     try {
-      await this.#client.forceClose(bindingId);
+      await this.#client?.forceClose(bindingId);
     } catch {
       // Unmount cleanup must not create an unhandled rejection.
     }
@@ -389,7 +659,45 @@ export class McpAppPreviewController {
     void this.close();
   }
 
-  #setState(state: McpAppPreviewState): void {
+  /** AppRenderer error callbacks flow through the same immutable fallback and close authority. */
+  reportRuntimeRendererError(error: unknown): void {
+    if (this.#runtime === undefined || this.#closed) return;
+    this.#runtimeFailure('preview-error', error);
+    void this.close().catch(() => undefined);
+  }
+
+  async #cleanupRuntime(): Promise<void> {
+    const failures: unknown[] = [];
+    if (!this.#runtimeRendererClosed && this.#runtimeRenderer !== undefined) {
+      try {
+        await this.#runtimeRenderer.teardown();
+        this.#runtimeRendererClosed = true;
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+    if (!this.#runtimeBridgeClosed && this.#runtimeBridgeFactory !== undefined) {
+      try {
+        await this.#runtimeBridgeFactory.close();
+        this.#runtimeBridgeClosed = true;
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+    const bindingId = this.#runtimePreview?.binding.id;
+    if (!this.#runtimeBackendClosed && bindingId !== undefined && this.#runtime !== undefined) {
+      try {
+        await this.#runtime.client.closeRuntime(bindingId);
+        this.#runtimeBackendClosed = true;
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+    if (failures.length === 1) throw failures[0];
+    if (failures.length > 1) throw new AggregateError(failures, 'MCP App runtime preview cleanup failed.');
+  }
+
+  #setState(state: McpAppPreviewControllerState): void {
     this.#state = state;
     for (const listener of this.#listeners) {
       try {
@@ -401,8 +709,13 @@ export class McpAppPreviewController {
   }
 }
 
-export const createMcpAppPreviewController = (options: McpAppPreviewControllerOptions): McpAppPreviewController =>
-  new McpAppPreviewController(options);
+export function createMcpAppPreviewController(options: McpAppPreviewControllerOptions): McpAppPreviewController<McpAppPreviewState>;
+export function createMcpAppPreviewController(options: McpAppRuntimePreviewProps): McpAppPreviewController<McpAppRuntimePreviewState>;
+export function createMcpAppPreviewController(options: McpAppPreviewControllerOptions | McpAppRuntimePreviewProps): McpAppPreviewController<McpAppPreviewState> | McpAppPreviewController<McpAppRuntimePreviewState> {
+  return isRuntimeOptions(options)
+    ? new McpAppPreviewController<McpAppRuntimePreviewState>(options)
+    : new McpAppPreviewController<McpAppPreviewState>(options);
+}
 
 const profileDisplay = (profile: McpAppJsonValue): Readonly<{ readonly extension: boolean; readonly name: string }> => {
   if (!isRecord(profile)) return Object.freeze({ extension: false, name: 'portable' });
@@ -436,19 +749,55 @@ const Profile = ({ profile }: Readonly<{ readonly profile: McpAppJsonValue }>) =
   );
 };
 
-export const McpAppPreview = ({
-  frameRelayFactory = createMcpAppFrameRelay,
-  frameWindow,
-  title = 'MCP App preview',
-  ...options
-}: McpAppPreviewProps) => {
-  const [state, setState] = useState<McpAppPreviewState>(loadingState);
-  const controller = useRef<McpAppPreviewController | undefined>(undefined);
+export function McpAppPreview(props: McpAppPreviewProps): React.ReactNode;
+export function McpAppPreview(props: McpAppRuntimePreviewProps): React.ReactNode;
+export function McpAppPreview(props: McpAppPreviewProps | McpAppRuntimePreviewProps): React.ReactNode;
+export function McpAppPreview(props: McpAppPreviewProps | McpAppRuntimePreviewProps): React.ReactNode {
+  const runtimeProps = isRuntimePreviewProps(props) ? props : undefined;
+  const artifactProps = isRuntimePreviewProps(props) ? undefined : props;
+  const controller = useRef<McpAppPreviewController<McpAppPreviewControllerState> | undefined>(undefined);
+  if (runtimeProps !== undefined && controller.current === undefined) controller.current = createMcpAppPreviewController(runtimeProps);
+  const runtimeController = runtimeProps === undefined ? undefined : controller.current as McpAppPreviewController<McpAppRuntimePreviewState>;
+  const [state, setState] = useState<McpAppPreviewControllerState>(runtimeController?.state ?? loadingState);
   const iframe = useRef<HTMLIFrameElement>(null);
-  const browserWindow = frameWindow ?? (typeof window === 'undefined' ? undefined : window);
+  const frameRelayFactory = artifactProps?.frameRelayFactory ?? createMcpAppFrameRelay;
+  const browserWindow = artifactProps?.frameWindow ?? (typeof window === 'undefined' ? undefined : window);
+  const title = artifactProps?.title ?? 'MCP App preview';
+
+  useLayoutEffect(() => {
+    if (runtimeController === undefined) return;
+    const lifecycle = runtimeController.runtimeLifecycle;
+    const unregister = lifecycle === undefined ? undefined : runtimeProps?.registerLifecycle?.(lifecycle);
+    return () => {
+      unregister?.();
+      void lifecycle?.close().catch(() => undefined);
+    };
+  }, [runtimeController, runtimeProps?.registerLifecycle]);
 
   useEffect(() => {
-    const current = createMcpAppPreviewController({ ...options, frameRelayFactory });
+    if (runtimeController !== undefined) {
+      let subscribed = true;
+      const unsubscribe = runtimeController.subscribe((next) => {
+        if (subscribed) setState(next);
+      });
+      void runtimeController.start();
+      return () => {
+        subscribed = false;
+        unsubscribe();
+      };
+    }
+    if (artifactProps === undefined) return;
+    const current = createMcpAppPreviewController({
+      client: artifactProps.client,
+      ...(artifactProps.closeTimeoutMs === undefined ? {} : { closeTimeoutMs: artifactProps.closeTimeoutMs }),
+      frameRelayFactory,
+      host: artifactProps.host,
+      input: artifactProps.input,
+      ...(artifactProps.previewProfile === undefined ? {} : { previewProfile: artifactProps.previewProfile }),
+      result: artifactProps.result,
+      sessionId: artifactProps.sessionId,
+      toolName: artifactProps.toolName,
+    });
     controller.current = current;
     let subscribed = true;
     const unsubscribe = current.subscribe((next) => {
@@ -461,20 +810,60 @@ export const McpAppPreview = ({
       if (controller.current === current) controller.current = undefined;
       void current.close();
     };
-  }, [frameRelayFactory, options.client, options.closeTimeoutMs, options.host, options.input, options.previewProfile, options.result, options.sessionId, options.toolName]);
+  }, [artifactProps?.client, artifactProps?.closeTimeoutMs, artifactProps?.host, artifactProps?.input, artifactProps?.previewProfile, artifactProps?.result, artifactProps?.sessionId, artifactProps?.toolName, frameRelayFactory, runtimeController]);
 
   useEffect(() => {
-    if (state.phase !== 'ready' || browserWindow === undefined || iframe.current === null) return;
+    if (runtimeController !== undefined || isRuntimeState(state) || state.phase !== 'ready' || browserWindow === undefined || iframe.current === null) return;
     controller.current?.attachFrame(iframe.current, browserWindow);
-  }, [browserWindow, state]);
+  }, [browserWindow, runtimeController, state]);
 
-  const fallback = state.phase === 'fallback' || state.phase === 'error' ? state.fallback : undefined;
-  const profile = state.phase === 'ready' || state.phase === 'fallback' ? <Profile profile={state.preview.profile} /> : null;
+  if (runtimeProps !== undefined) {
+    const runtimeState = isRuntimeState(state) ? state : runtimeController?.state;
+    const fallback = runtimeState !== undefined && (runtimeState.phase === 'fallback' || runtimeState.phase === 'error' || runtimeState.phase === 'cleanup-failed')
+      ? runtimeState.fallback
+      : undefined;
+    return (
+      <section aria-busy={runtimeState?.phase === 'loading'} aria-label={title} className="mcp-app-preview">
+        <header className="mcp-app-preview__header"><h2>{title}</h2></header>
+        {runtimeState?.phase === 'loading' ? <p role="status">Creating MCP App preview…</p> : null}
+        {runtimeState?.phase === 'error' || runtimeState?.phase === 'cleanup-failed' ? <p role="alert">{runtimeState.message}</p> : null}
+        {fallback === undefined ? null : (
+          <section aria-label="MCP App fallback" className="mcp-app-preview__fallback">
+            <p role="status">Interactive App rendering is unavailable ({fallback.reason}). Showing the ordinary tool result instead.</p>
+            <details open><summary>Tool input</summary><pre>{json(fallback.input)}</pre></details>
+            <details open><summary>Tool result</summary><pre>{json(fallback.result)}</pre></details>
+          </section>
+        )}
+        {runtimeState?.phase === 'ready' && runtimeController !== undefined ? <>
+          <SecureAppRenderer
+            bindingId={runtimeState.preview.binding.id}
+            bootstrapUrl={runtimeState.preview.clientSurface.bootstrapUrl}
+            bridgeFactory={runtimeState.bridgeFactory}
+            documentPolicy={runtimeState.documentPolicy}
+            policyClient={runtimeProps.client}
+            rendererProps={{
+              onError: (error) => { runtimeController.reportRuntimeRendererError(error); },
+              ref: runtimeController.runtimeRendererRef,
+              tool: Object.freeze({ name: runtimeState.preview.binding.serverName }) as McpAppRendererTool,
+            }}
+          />
+          <section aria-label="Runtime App result" className="mcp-app-preview__fallback">
+            <details open><summary>Tool input</summary><pre>{json(runtimeState.fallback.input)}</pre></details>
+            <details open><summary>Tool result</summary><pre>{json(runtimeState.fallback.result)}</pre></details>
+          </section>
+        </> : null}
+      </section>
+    );
+  }
+
+  const artifactState = state as McpAppArtifactPreviewState;
+  const fallback = artifactState.phase === 'fallback' || artifactState.phase === 'error' ? artifactState.fallback : undefined;
+  const profile = artifactState.phase === 'ready' || artifactState.phase === 'fallback' ? <Profile profile={artifactState.preview.profile} /> : null;
   return (
-    <section aria-busy={state.phase === 'loading'} aria-label={title} className="mcp-app-preview">
+    <section aria-busy={artifactState.phase === 'loading'} aria-label={title} className="mcp-app-preview">
       <header className="mcp-app-preview__header"><h2>{title}</h2>{profile}</header>
-      {state.phase === 'loading' ? <p role="status">Creating MCP App preview…</p> : null}
-      {state.phase === 'error' ? <p role="alert">{state.message}</p> : null}
+      {artifactState.phase === 'loading' ? <p role="status">Creating MCP App preview…</p> : null}
+      {artifactState.phase === 'error' ? <p role="alert">{artifactState.message}</p> : null}
       {fallback === undefined ? null : (
         <section aria-label="MCP App fallback" className="mcp-app-preview__fallback">
           <p role="status">Interactive App rendering is unavailable ({fallback.reason}). Showing the ordinary tool result instead.</p>
@@ -482,9 +871,9 @@ export const McpAppPreview = ({
           <details open><summary>Tool result</summary><pre>{json(fallback.result)}</pre></details>
         </section>
       )}
-      {state.phase === 'ready' && state.preview.frame !== undefined
-        ? <McpAppPreviewFrame key={state.preview.frame.documentPolicy?.revision ?? 0} frame={state.preview.frame} iframeRef={iframe} title={title} />
+      {artifactState.phase === 'ready' && artifactState.preview.frame !== undefined
+        ? <McpAppPreviewFrame key={artifactState.preview.frame.documentPolicy?.revision ?? 0} frame={artifactState.preview.frame} iframeRef={iframe} title={title} />
         : null}
     </section>
   );
-};
+}

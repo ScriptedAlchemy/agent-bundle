@@ -8,18 +8,24 @@ import {
   McpAppPreviewFrame,
   type McpAppFrameRelayFactory,
   type McpAppPreviewClient,
+  type McpAppRuntimePreviewProps,
   type McpAppPreviewState,
 } from '../src/mcp/mcp-app-preview.tsx';
 import type {
+  McpAppClient,
   McpAppHostContext,
   McpAppJsonValue,
   McpAppPreview as Preview,
   McpAppPreviewCreateRequest,
+  McpAppRuntimeClient,
+  McpAppTrustedDocumentPolicy,
   McpAppRelayFrame,
   McpAppRouteClose,
   McpAppRouteMessages,
 } from '../src/mcp/mcp-app-client.ts';
 import type { McpAppFrameIframe, McpAppFrameRelayOptions, McpAppFrameWindow } from '../src/mcp/mcp-app-frame.tsx';
+import type { McpAppPreviewAppsSnapshot } from '../../agent-bundle/src/dev/mcp-app-runtime-preview-service.ts';
+import type { RuntimeAppBridgeFactory } from '../src/inspector/adapter/runtime-app-bridge.ts';
 
 const host: McpAppHostContext = Object.freeze({
   availableDisplayModes: Object.freeze(['inline']),
@@ -113,6 +119,112 @@ const deferred = <Value>() => {
     reject = nextReject;
   });
   return { promise, reject, resolve };
+};
+
+const runtimePreview = Object.freeze({
+  binding: Object.freeze({
+    definitionDigest: 'definition-weather',
+    evidence: 'simulated' as const,
+    id: 'runtime-binding-weather',
+    profileId: 'portable' as const,
+    profileVersion: 'agent-bundle:mcp-apps:2026-01-26' as const,
+    registryRevision: 3,
+    runVector: Object.freeze({ runtimeGenerationId: 'generation-weather', sourceRevision: 'source-weather', stateVersion: 1 }),
+    serverDigest: 'server-weather',
+    serverName: 'weather',
+    sessionId: 'runtime-session-weather',
+    sessionRevision: 2,
+    target: 'weather',
+    transportDigest: 'transport-weather',
+  }),
+  clientSurface: Object.freeze({ bootstrapUrl: 'http://127.0.0.1:43124/runtime-app', origin: 'http://127.0.0.1:43124', webSocketPath: '/rsbuild-hmr' as const }),
+  documentPolicy: Object.freeze({ allow: '', approvedPermissions: Object.freeze({}), revision: 1, warnings: Object.freeze([]) }),
+  kind: 'apps' as const,
+  metadata: Object.freeze({ resource: Object.freeze({}), result: Object.freeze({}), tool: Object.freeze({}) }),
+  operations: Object.freeze([]),
+  profile: Object.freeze({
+    bootstrap: Object.freeze({ kind: 'none' as const, script: undefined }),
+    configExtensions: Object.freeze({ entries: Object.freeze([]), sourceRevision: 'source-weather' }),
+    descriptor: Object.freeze({ claimsRealHostParity: false as const, evidence: 'simulated' as const, id: 'portable' as const, label: 'Portable MCP Apps' as const, version: 'agent-bundle:mcp-apps:2026-01-26' as const }),
+    hostContext: Object.freeze({ availableDisplayModes: Object.freeze(['inline']), containerDimensions: Object.freeze({ height: 480, width: 640 }), deviceCapabilities: Object.freeze({}), displayMode: 'inline', locale: 'en-US', platform: 'agent-bundle-workbench', safeAreaInsets: Object.freeze({ bottom: 0, left: 0, right: 0, top: 0 }), styles: Object.freeze({}), theme: 'light' as const, timeZone: 'UTC', toolInfo: Object.freeze({}), userAgent: 'agent-bundle-runtime-mcp-app/1' }),
+    kind: 'apps' as const,
+    metadata: Object.freeze({}),
+    permissions: Object.freeze({}),
+    resourceUri: 'ui://weather/app.html',
+    warnings: Object.freeze([]),
+  }),
+  resource: Object.freeze({ html: '<main>Weather</main>', permissions: Object.freeze({}) }),
+  result: Object.freeze({ appVisible: Object.freeze({}), isError: false, modelVisible: Object.freeze({}) }),
+  session: Object.freeze({
+    binding: Object.freeze({ definitionDigest: 'definition-weather', registryRevision: 3, serverDigest: 'server-weather', serverName: 'weather', sessionId: 'runtime-session-weather', sessionRevision: 2, target: 'weather', transportDigest: 'transport-weather' }),
+    connection: Object.freeze({ capabilities: Object.freeze({ resources: Object.freeze({}), tools: Object.freeze({}) }), protocolEra: 'modern' as const, protocolVersion: '2026-01-26', server: Object.freeze({ name: 'weather', version: '1.0.0' }) }),
+    state: 'ready' as const,
+  }),
+}) as unknown as McpAppPreviewAppsSnapshot;
+
+const runtimeClient = (value: Partial<McpAppRuntimeClient> & Readonly<Record<string, unknown>>): McpAppClient & McpAppRuntimeClient =>
+  value as unknown as McpAppClient & McpAppRuntimeClient;
+
+const runtimeProps = (client: McpAppClient & McpAppRuntimeClient, createBridgeFactory: McpAppRuntimePreviewProps['createBridgeFactory']): McpAppRuntimePreviewProps => Object.freeze({
+  client,
+  createBridgeFactory,
+  kind: 'runtime' as const,
+  profile: Object.freeze({ claimsRealHostParity: false, evidence: 'simulated' as const, id: 'portable', label: 'Portable MCP Apps', version: 'agent-bundle:mcp-apps:2026-01-26' }),
+  profileId: 'portable',
+  run: Object.freeze({
+    completedAt: '2026-08-16T00:00:01.000Z',
+    id: 'run-weather',
+    input: Object.freeze({ city: 'Paris', nested: Object.freeze({ unit: 'celsius' }) }),
+    result: Object.freeze({
+      app: Object.freeze({
+        mcpBinding: runtimePreview.session.binding,
+        resourceUri: 'ui://weather/app.html',
+        surfaceId: 'surface-weather',
+      }),
+      modelVisible: Object.freeze({ temperature: 22 }),
+      state: Object.freeze({ identity: Object.freeze({ stateStoreId: 'private-state', stateVersion: 1 }) }),
+      trace: Object.freeze([]),
+      tree: Object.freeze([]),
+    }),
+    startedAt: '2026-08-16T00:00:00.000Z',
+    status: 'succeeded' as const,
+    surfaceId: 'surface-weather',
+    target: 'weather',
+    vector: Object.freeze({ providerSessionId: 'private-provider', runtimeGenerationId: 'generation-weather', sourceRevision: 'source-weather', stateStoreId: 'private-state', stateVersion: 1 }),
+  }),
+  surface: Object.freeze({ fixtures: Object.freeze([]), id: 'surface-weather', kind: 'mcp-app' as const, label: 'Weather App', readOnly: false, targets: Object.freeze(['weather']) }),
+});
+
+const runtimePreviewFor = (profileId: 'chatgpt' | 'claude' | 'portable'): McpAppPreviewAppsSnapshot => {
+  const descriptor = profileId === 'portable'
+    ? Object.freeze({ claimsRealHostParity: false as const, evidence: 'simulated' as const, id: 'portable' as const, label: 'Portable MCP Apps' as const, version: 'agent-bundle:mcp-apps:2026-01-26' as const })
+    : profileId === 'chatgpt'
+      ? Object.freeze({ claimsRealHostParity: false as const, evidence: 'simulated' as const, id: 'chatgpt' as const, label: 'ChatGPT Simulation' as const, version: 'agent-bundle:chatgpt-sim:1' as const })
+      : Object.freeze({ claimsRealHostParity: false as const, evidence: 'simulated' as const, id: 'claude' as const, label: 'Claude Simulation' as const, version: 'agent-bundle:claude-sim:1' as const });
+  return Object.freeze({
+    ...runtimePreview,
+    binding: Object.freeze({ ...runtimePreview.binding, profileId, profileVersion: descriptor.version }),
+    profile: Object.freeze({ ...runtimePreview.profile, descriptor }),
+  }) as McpAppPreviewAppsSnapshot;
+};
+
+const runtimePropsFor = (
+  profileId: 'chatgpt' | 'claude' | 'portable',
+  client: McpAppClient & McpAppRuntimeClient,
+  createBridgeFactory: McpAppRuntimePreviewProps['createBridgeFactory'],
+): McpAppRuntimePreviewProps => {
+  const initial = runtimeProps(client, createBridgeFactory);
+  return Object.freeze({
+    ...initial,
+    profile: Object.freeze({
+      claimsRealHostParity: false,
+      evidence: 'simulated' as const,
+      id: profileId,
+      label: profileId === 'portable' ? 'Portable MCP Apps' : profileId === 'chatgpt' ? 'ChatGPT Simulation' : 'Claude Simulation',
+      version: profileId === 'portable' ? 'agent-bundle:mcp-apps:2026-01-26' : `agent-bundle:${profileId}-sim:1`,
+    }),
+    profileId,
+  });
 };
 
 describe('MCP App preview', () => {
@@ -561,6 +673,293 @@ describe('MCP App preview', () => {
     });
     await relayFailure.close();
     expect(active.forceClosed).toEqual(['binding-weather']);
+  });
+
+  it('creates one runtime Apps preview from frozen run evidence without entering the artifact lane', async () => {
+    const creates: unknown[] = [];
+    const artifactCalls: string[] = [];
+    const bridgePreviews: McpAppPreviewAppsSnapshot[] = [];
+    const policy: McpAppTrustedDocumentPolicy = Object.freeze({ bindingId: runtimePreview.binding.id, snapshot: runtimePreview.documentPolicy });
+    const client = runtimeClient(Object.freeze({
+      close: async () => { artifactCalls.push('close'); return closed(); },
+      closeRuntime: async () => undefined,
+      create: async () => { artifactCalls.push('create'); return preview(); },
+      createRuntime: async (request: unknown) => { creates.push(request); return runtimePreview; },
+      currentDocumentPolicy: () => policy,
+      forceClose: async () => { artifactCalls.push('forceClose'); return true; },
+      message: async () => { artifactCalls.push('message'); return messages(); },
+    }));
+    const factory = Object.assign(
+      () => { throw new Error('the renderer has not mounted'); },
+      { close: async () => undefined },
+    ) as RuntimeAppBridgeFactory;
+    const controller = createMcpAppPreviewController(runtimeProps(client, (next) => {
+      bridgePreviews.push(next);
+      return factory;
+    }));
+
+    await controller.start();
+
+    expect(creates).toEqual([{
+      expectedGenerationId: 'generation-weather',
+      profileId: 'portable',
+      runId: 'run-weather',
+    }]);
+    expect(artifactCalls).toEqual([]);
+    expect(bridgePreviews).toEqual([runtimePreview]);
+    expect(controller.state).toMatchObject({ kind: 'runtime', phase: 'ready', preview: { binding: { id: 'runtime-binding-weather' } } });
+    await controller.close();
+  });
+
+  it('retains one frozen lifecycle handle across a held runtime create and closes its late binding without publishing ready state', async () => {
+    const pending = deferred<McpAppPreviewAppsSnapshot>();
+    const closedBindings: string[] = [];
+    const client = runtimeClient(Object.freeze({
+      closeRuntime: async (bindingId: string) => { closedBindings.push(bindingId); },
+      createRuntime: async () => pending.promise,
+      currentDocumentPolicy: () => Object.freeze({ bindingId: runtimePreview.binding.id, snapshot: runtimePreview.documentPolicy }),
+    }));
+    const controller = createMcpAppPreviewController(runtimeProps(client, () => {
+      throw new Error('closed creates must not construct a bridge');
+    }));
+    const lifecycle = controller.runtimeLifecycle;
+    const secondLifecycle = controller.runtimeLifecycle;
+
+    expect(lifecycle).toBeDefined();
+    expect(lifecycle).toBe(secondLifecycle);
+    expect(Object.isFrozen(lifecycle)).toBe(true);
+    const started = controller.start();
+    const firstClose = lifecycle?.close();
+    const secondClose = controller.close();
+
+    expect(firstClose).toBe(secondClose);
+    pending.resolve(runtimePreview);
+    await Promise.all([started, firstClose]);
+
+    expect(closedBindings).toEqual(['runtime-binding-weather']);
+    expect(controller.state).toEqual({ kind: 'runtime', phase: 'loading' });
+  });
+
+  it('falls back and authoritatively closes an invalid created runtime binding before any bridge factory runs', async () => {
+    const invalid = Object.freeze({
+      ...runtimePreview,
+      kind: 'fallback' as const,
+      profile: Object.freeze({ kind: 'fallback' as const, reason: 'apps-resource-invalid' as const }),
+    }) as unknown as McpAppPreviewAppsSnapshot;
+    const closedBindings: string[] = [];
+    let bridgeFactories = 0;
+    const client = runtimeClient(Object.freeze({
+      closeRuntime: async (bindingId: string) => { closedBindings.push(bindingId); },
+      createRuntime: async () => invalid,
+      currentDocumentPolicy: () => { throw new Error('invalid runtime previews have no policy'); },
+    }));
+    const controller = createMcpAppPreviewController(runtimeProps(client, () => {
+      bridgeFactories += 1;
+      throw new Error('invalid runtime previews must not construct a bridge');
+    }));
+
+    await controller.start();
+
+    expect(controller.state).toMatchObject({ fallback: { input: { city: 'Paris', nested: { unit: 'celsius' } }, result: { temperature: 22 } }, kind: 'runtime', phase: 'fallback' });
+    expect(bridgeFactories).toBe(0);
+    expect(closedBindings).toEqual(['runtime-binding-weather']);
+  });
+
+  it('tears down the runtime renderer then bridge and binding through one shared close promise', async () => {
+    const order: string[] = [];
+    const policy: McpAppTrustedDocumentPolicy = Object.freeze({ bindingId: runtimePreview.binding.id, snapshot: runtimePreview.documentPolicy });
+    const factory = Object.assign(
+      () => { throw new Error('renderer mount is represented by its ref'); },
+      { close: async () => { order.push('bridge'); } },
+    ) as RuntimeAppBridgeFactory;
+    const client = runtimeClient(Object.freeze({
+      closeRuntime: async (bindingId: string) => { order.push(`binding:${bindingId}`); },
+      createRuntime: async () => runtimePreview,
+      currentDocumentPolicy: () => policy,
+    }));
+    const controller = createMcpAppPreviewController(runtimeProps(client, () => factory));
+    await controller.start();
+    controller.runtimeRendererRef?.(Object.freeze({
+      sendToolCancelled: async () => undefined,
+      sendToolInput: async () => undefined,
+      sendToolResult: async () => undefined,
+      teardown: async () => { order.push('renderer'); },
+    }));
+
+    const first = controller.close();
+    const second = controller.close();
+
+    expect(second).toBe(first);
+    await first;
+    expect(order).toEqual(['renderer', 'bridge', 'binding:runtime-binding-weather']);
+  });
+
+  it('keeps the server-selected canonical ui resource across every simulation request', async () => {
+    for (const profileId of ['portable', 'chatgpt', 'claude'] as const) {
+      const requests: unknown[] = [];
+      const snapshot = runtimePreviewFor(profileId);
+      const client = runtimeClient(Object.freeze({
+        closeRuntime: async () => undefined,
+        createRuntime: async (request: unknown) => { requests.push(request); return snapshot; },
+        currentDocumentPolicy: () => Object.freeze({ bindingId: snapshot.binding.id, snapshot: snapshot.documentPolicy }),
+      }));
+      let factoryPreview: McpAppPreviewAppsSnapshot | undefined;
+      const controller = createMcpAppPreviewController(runtimePropsFor(profileId, client, (preview) => {
+        factoryPreview = preview;
+        return Object.assign(() => { throw new Error('not mounted'); }, { close: async () => undefined }) as RuntimeAppBridgeFactory;
+      }));
+
+      await controller.start();
+
+      expect(requests).toEqual([{ expectedGenerationId: 'generation-weather', profileId, runId: 'run-weather' }]);
+      expect(factoryPreview?.profile.resourceUri).toBe('ui://weather/app.html');
+      expect(controller.state).toMatchObject({ kind: 'runtime', phase: 'ready' });
+      await controller.close();
+    }
+  });
+
+  it('rejects a mismatched, noncanonical, or stale created runtime snapshot before bridge construction', async () => {
+    const malformed = [
+      Object.freeze({ ...runtimePreview, profile: Object.freeze({ ...runtimePreview.profile, resourceUri: 'https://weather/app.html' }) }),
+      Object.freeze({ ...runtimePreview, profile: Object.freeze({ ...runtimePreview.profile, resourceUri: 'ui://weather/other.html' }) }),
+      Object.freeze({ ...runtimePreview, binding: Object.freeze({ ...runtimePreview.binding, sessionRevision: 3 }) }),
+      Object.freeze({ ...runtimePreview, binding: Object.freeze({ ...runtimePreview.binding, runVector: Object.freeze({ ...runtimePreview.binding.runVector, runtimeGenerationId: 'generation-other' }) }) }),
+    ] as const;
+    for (const snapshot of malformed) {
+      const closedBindings: string[] = [];
+      let bridges = 0;
+      const client = runtimeClient(Object.freeze({
+        closeRuntime: async (bindingId: string) => { closedBindings.push(bindingId); },
+        createRuntime: async () => snapshot,
+        currentDocumentPolicy: () => Object.freeze({ bindingId: runtimePreview.binding.id, snapshot: runtimePreview.documentPolicy }),
+      }));
+      const controller = createMcpAppPreviewController(runtimeProps(client, () => {
+        bridges += 1;
+        return Object.assign(() => { throw new Error('invalid snapshots must not mount'); }, { close: async () => undefined }) as RuntimeAppBridgeFactory;
+      }));
+
+      await controller.start();
+
+      expect(controller.state).toMatchObject({ kind: 'runtime', phase: 'fallback' });
+      expect(bridges).toBe(0);
+      expect(closedBindings).toEqual(['runtime-binding-weather']);
+    }
+  });
+
+  it('deep-detaches runtime input and model-visible result before create and preserves immutable preview-error evidence', async () => {
+    const input = { city: 'Paris', nested: { unit: 'celsius' } };
+    const result = { temperature: 22 };
+    const requests: unknown[] = [];
+    const client = runtimeClient(Object.freeze({
+      createRuntime: async (request: unknown) => { requests.push(request); throw new Error('runtime create failed'); },
+    }));
+    const props = runtimeProps(client, () => { throw new Error('not reached'); });
+    const mutable = {
+      ...props,
+      run: {
+        ...props.run,
+        input,
+        result: { ...props.run.result, modelVisible: result },
+      },
+    } as McpAppRuntimePreviewProps;
+    const controller = createMcpAppPreviewController(mutable);
+    input.nested.unit = 'fahrenheit';
+    result.temperature = 23;
+
+    await controller.start();
+
+    expect(requests).toEqual([{ expectedGenerationId: 'generation-weather', profileId: 'portable', runId: 'run-weather' }]);
+    expect(controller.state).toMatchObject({
+      fallback: { input: { city: 'Paris', nested: { unit: 'celsius' } }, reason: 'preview-error', result: { temperature: 22 } },
+      kind: 'runtime',
+      phase: 'error',
+    });
+    const fallback = (controller.state as Extract<typeof controller.state, { readonly fallback: unknown }>).fallback;
+    expect(Object.isFrozen(fallback)).toBe(true);
+    expect(Object.isFrozen(fallback.input)).toBe(true);
+    expect(Object.isFrozen((fallback.input as { readonly nested: object }).nested)).toBe(true);
+  });
+
+  it('captures runtime App identity before caller mutation can alter the later create admission', async () => {
+    const snapshot = runtimePreview;
+    const client = runtimeClient(Object.freeze({
+      closeRuntime: async () => undefined,
+      createRuntime: async () => snapshot,
+      currentDocumentPolicy: () => Object.freeze({ bindingId: snapshot.binding.id, snapshot: snapshot.documentPolicy }),
+    }));
+    const props = runtimeProps(client, () => Object.assign(
+      () => { throw new Error('not mounted'); },
+      { close: async () => undefined },
+    ) as RuntimeAppBridgeFactory);
+    const successful = props.run as Extract<typeof props.run, Readonly<{ readonly status: 'succeeded' }>>;
+    const mutable = {
+      ...props,
+      run: {
+        ...successful,
+        result: {
+          ...successful.result,
+          app: { ...successful.result.app!, mcpBinding: { ...successful.result.app!.mcpBinding } },
+        },
+      },
+    } as McpAppRuntimePreviewProps;
+    const controller = createMcpAppPreviewController(mutable);
+    const mutableRun = mutable.run as Extract<typeof mutable.run, Readonly<{ readonly status: 'succeeded' }>>;
+    (mutableRun.result.app as { resourceUri: string }).resourceUri = 'https://attacker.invalid/not-an-app';
+    (mutableRun.result.app?.mcpBinding as { sessionRevision: number }).sessionRevision = 999;
+
+    await controller.start();
+
+    expect(controller.state).toMatchObject({ kind: 'runtime', phase: 'ready', preview: { profile: { resourceUri: 'ui://weather/app.html' } } });
+  });
+
+  it('retains retryable runtime cleanup failure without recreating the preview', async () => {
+    let createCalls = 0;
+    let closeCalls = 0;
+    const client = runtimeClient(Object.freeze({
+      closeRuntime: async () => {
+        closeCalls += 1;
+        if (closeCalls === 1) throw new Error('runtime release failed');
+      },
+      createRuntime: async () => { createCalls += 1; return runtimePreview; },
+      currentDocumentPolicy: () => Object.freeze({ bindingId: runtimePreview.binding.id, snapshot: runtimePreview.documentPolicy }),
+    }));
+    const controller = createMcpAppPreviewController(runtimeProps(client, () => Object.assign(
+      () => { throw new Error('not mounted'); },
+      { close: async () => undefined },
+    ) as RuntimeAppBridgeFactory));
+    await controller.start();
+
+    const first = controller.close();
+    const joined = controller.close();
+
+    expect(joined).toBe(first);
+    await expect(first).rejects.toThrow('runtime release failed');
+    expect(controller.state).toMatchObject({ kind: 'runtime', phase: 'cleanup-failed' });
+    await expect(controller.close()).resolves.toBeUndefined();
+    expect(createCalls).toBe(1);
+    expect(closeCalls).toBe(2);
+  });
+
+  it('turns renderer errors into an immutable runtime preview fallback and isolates throwing subscribers', async () => {
+    const client = runtimeClient(Object.freeze({
+      closeRuntime: async () => undefined,
+      createRuntime: async () => runtimePreview,
+      currentDocumentPolicy: () => Object.freeze({ bindingId: runtimePreview.binding.id, snapshot: runtimePreview.documentPolicy }),
+    }));
+    const controller = createMcpAppPreviewController(runtimeProps(client, () => Object.assign(
+      () => { throw new Error('not mounted'); },
+      { close: async () => undefined },
+    ) as RuntimeAppBridgeFactory));
+    const observed: string[] = [];
+    controller.subscribe(() => { throw new Error('display failed'); });
+    controller.subscribe((state) => { observed.push(state.phase); });
+    await controller.start();
+
+    controller.reportRuntimeRendererError(new Error('renderer failed'));
+    await Promise.resolve();
+
+    expect(controller.state).toMatchObject({ fallback: { reason: 'preview-error' }, kind: 'runtime', message: 'renderer failed', phase: 'error' });
+    expect(observed).toEqual(['loading', 'ready', 'error']);
   });
 
   it('has an SSR-safe accessible loading boundary and an exact credential-free sandbox iframe', () => {
