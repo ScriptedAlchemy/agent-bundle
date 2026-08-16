@@ -1,5 +1,5 @@
-import { mkdirSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
-import { appendFile, mkdtemp, mkdir, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdirSync, readdirSync, renameSync, rmSync, watch, writeFileSync } from 'node:fs';
+import { appendFile, link, mkdtemp, mkdir, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -1206,6 +1206,189 @@ it('rejects a replaced v2 object before it can write or publish an unrelated vic
     await expect(readFile(join(displacedRoot, '.owner.lock'), 'utf8')).resolves.toContain('token');
   } finally {
     await contender?.close().catch(() => undefined);
+    await fixture.close();
+  }
+});
+
+it('publishes the canonical v2 index even when a pending pathname is substituted after its write', async () => {
+  const fixture = await createFixture();
+  const sessionId = 'pending-substitution';
+  const pendingRoot = join(fixture.storageRoot, 'session-index', '.pending');
+  let watcher: ReturnType<typeof watch> | undefined;
+  let substituted = false;
+  try {
+    await fixture.service.openSession({ ...sessionInput(), sessionId: 'warm-pending-substitution' });
+    watcher = watch(pendingRoot, { persistent: false }, (_eventType, filename) => {
+      if (substituted || typeof filename !== 'string' || !filename.endsWith('.json')) return;
+      const pendingPath = join(pendingRoot, filename);
+      try {
+        renameSync(pendingPath, `${pendingPath}.moved`);
+        writeFileSync(pendingPath, `${JSON.stringify({
+          kind: 'agent-bundle-playground-session-index',
+          objectId: 'substituted-object',
+          projectId: 'project-1',
+          schemaVersion: 2,
+          sessionId,
+        })}\n`, 'utf8');
+        substituted = true;
+      } catch {
+        // The synchronous publisher may already have linked the original file.
+      }
+    });
+    await fixture.service.openSession({ ...sessionInput(), sessionId });
+    await eventually(() => expect(substituted).toBe(true));
+    const index = await readIndex(fixture.storageRoot, sessionId);
+    const warmIndex = await readIndex(fixture.storageRoot, 'warm-pending-substitution');
+    expect(index.objectId).not.toBe('substituted-object');
+    expect(index.objectId).toEqual((await readdir(join(fixture.storageRoot, 'session-objects'))).find((name) => name !== warmIndex.objectId));
+  } finally {
+    watcher?.close();
+    await fixture.close();
+  }
+});
+
+it('rejects hard-linked event logs before a mutable event can alter the linked file', async () => {
+  const fixture = await createFixture();
+  try {
+    await fixture.service.openSession({ ...sessionInput(), sessionId: 'hard-linked-event' });
+    const eventPath = join(await objectRoot(fixture.storageRoot, 'hard-linked-event'), 'events.jsonl');
+    const linkedPath = join(fixture.storageRoot, 'linked-events.jsonl');
+    await link(eventPath, linkedPath);
+    await expect(fixture.service.append('hard-linked-event', event('project', 'loaded', 'Project loaded.', { revision: 'a' })))
+      .rejects.toMatchObject({ code: 'PLAYGROUND_ROOT_INVALID' });
+    await expect(readFile(linkedPath, 'utf8')).resolves.toBe('');
+  } finally {
+    await fixture.close();
+  }
+});
+
+it('rejects hard-linked mutable session metadata and owner locks', async () => {
+  const fixture = await createFixture();
+  try {
+    await fixture.service.openSession({ ...sessionInput(), sessionId: 'hard-linked-metadata' });
+    const metadataPath = join(await objectRoot(fixture.storageRoot, 'hard-linked-metadata'), 'session.json');
+    const linkedMetadata = join(fixture.storageRoot, 'linked-session.json');
+    await link(metadataPath, linkedMetadata);
+    await expect(fixture.service.finalize('hard-linked-metadata', { status: 'passed' }))
+      .rejects.toMatchObject({ code: 'PLAYGROUND_ROOT_INVALID' });
+    await expect(readFile(linkedMetadata, 'utf8')).resolves.toContain('"state":"open"');
+
+    const owner = new PlaygroundService({
+      projectId: 'project-1',
+      projectRoot: fixture.projectRoot,
+      storageRoot: fixture.storageRoot,
+    });
+    await owner.openSession({ ...sessionInput(), sessionId: 'hard-linked-owner' });
+    const ownerPath = join(await objectRoot(fixture.storageRoot, 'hard-linked-owner'), '.owner.lock');
+    const linkedOwner = join(fixture.storageRoot, 'linked-owner.lock');
+    await link(ownerPath, linkedOwner);
+    const contender = new PlaygroundService({
+      projectId: 'project-1',
+      projectRoot: fixture.projectRoot,
+      storageRoot: fixture.storageRoot,
+    });
+    try {
+      await expect(contender.reopen('hard-linked-owner')).rejects.toMatchObject({ code: 'PLAYGROUND_STORE_CORRUPT' });
+      await expect(readFile(linkedOwner, 'utf8')).resolves.toContain('"token"');
+    } finally {
+      await Promise.allSettled([owner.close(), contender.close()]);
+    }
+  } finally {
+    await fixture.close();
+  }
+});
+
+it('rejects duplicate and extra persisted envelope keys before reopening', async () => {
+  const fixture = await createFixture();
+  const sessionId = 'strict-persisted-envelopes';
+  try {
+    await fixture.service.openSession({ ...sessionInput(), sessionId });
+    await fixture.service.append(sessionId, event('project', 'loaded', 'Project loaded.', { revision: 'a' }));
+    await fixture.service.finalize(sessionId, { status: 'passed' });
+    await fixture.service.close();
+    const root = await objectRoot(fixture.storageRoot, sessionId);
+    const metadataPath = join(root, 'session.json');
+    const eventPath = join(root, 'events.jsonl');
+    const indexDocument = await readFile(indexPath(fixture.storageRoot, sessionId), 'utf8');
+    const metadataDocument = await readFile(metadataPath, 'utf8');
+    const eventDocument = await readFile(eventPath, 'utf8');
+    const corruptions = [
+      [indexPath(fixture.storageRoot, sessionId), indexDocument.replace('"schemaVersion":2', '"schemaVersion":2,"schemaVersion":2')],
+      [indexPath(fixture.storageRoot, sessionId), `${JSON.stringify({ ...JSON.parse(indexDocument), extra: true })}\n`],
+      [metadataPath, metadataDocument.replace('"schemaVersion":2', '"schemaVersion":2,"schemaVersion":2')],
+      [metadataPath, `${JSON.stringify({ ...JSON.parse(metadataDocument), extra: true })}\n`],
+      [eventPath, eventDocument.replace('"sequence":1', '"sequence":1,"sequence":1')],
+      [eventPath, `${JSON.stringify({ ...JSON.parse(eventDocument), extra: true })}\n`],
+    ] as const;
+    for (const [path, document] of corruptions) {
+      await writeFile(path, document, 'utf8');
+      const reader = new PlaygroundService({
+        projectId: 'project-1',
+        projectRoot: fixture.projectRoot,
+        storageRoot: fixture.storageRoot,
+      });
+      try {
+        await expect(reader.reopen(sessionId)).rejects.toMatchObject({ code: 'PLAYGROUND_STORE_CORRUPT' });
+      } finally {
+        await reader.close().catch(() => undefined);
+      }
+    }
+
+    await writeFile(indexPath(fixture.storageRoot, sessionId), indexDocument, 'utf8');
+    await writeFile(metadataPath, metadataDocument, 'utf8');
+    await writeFile(eventPath, eventDocument, 'utf8');
+    for (const [session, corrupt] of [
+      ['strict-owner-extra', (document: string) => `${JSON.stringify({ ...JSON.parse(document), extra: true })}\n`],
+      ['strict-owner-duplicate', (document: string) => document.replace('"version":1', '"version":1,"version":1')],
+    ] as const) {
+      const owner = new PlaygroundService({
+        projectId: 'project-1',
+        projectRoot: fixture.projectRoot,
+        storageRoot: fixture.storageRoot,
+      });
+      await owner.openSession({ ...sessionInput(), sessionId: session });
+      const ownerPath = join(await objectRoot(fixture.storageRoot, session), '.owner.lock');
+      await writeFile(ownerPath, corrupt(await readFile(ownerPath, 'utf8')), 'utf8');
+      const contender = new PlaygroundService({
+        projectId: 'project-1',
+        projectRoot: fixture.projectRoot,
+        storageRoot: fixture.storageRoot,
+      });
+      try {
+        await expect(contender.reopen(session)).rejects.toMatchObject({ code: 'PLAYGROUND_STORE_CORRUPT' });
+      } finally {
+        await Promise.allSettled([owner.close(), contender.close()]);
+      }
+    }
+  } finally {
+    await fixture.close();
+  }
+});
+
+it('snapshots own __proto__ JSON keys without prototype mutation', async () => {
+  const fixture = await createFixture();
+  try {
+    await fixture.service.openSession({ ...sessionInput(), sessionId: 'own-proto' });
+    const raw = JSON.parse('{"__proto__":{"retained":true},"safe":1}') as PlaygroundJsonObject;
+    const stored = await fixture.service.append('own-proto', event('project', 'loaded', 'Project loaded.', raw));
+    const snapshot = stored.raw as PlaygroundJsonObject;
+    expect(Object.getPrototypeOf(snapshot)).toBeNull();
+    expect(Object.hasOwn(snapshot, '__proto__')).toBe(true);
+    expect(snapshot).toMatchObject({ __proto__: { retained: true }, safe: 1 });
+  } finally {
+    await fixture.close();
+  }
+});
+
+it('does not categorically reject durable persistence on a Windows platform', async () => {
+  const platformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform')!;
+  Object.defineProperty(process, 'platform', { ...platformDescriptor, value: 'win32' });
+  const fixture = await createFixture();
+  try {
+    await expect(fixture.service.openSession({ ...sessionInput(), sessionId: 'windows-directory-sync' }))
+      .resolves.toMatchObject({ id: 'windows-directory-sync', state: 'open' });
+  } finally {
+    Object.defineProperty(process, 'platform', platformDescriptor);
     await fixture.close();
   }
 });
