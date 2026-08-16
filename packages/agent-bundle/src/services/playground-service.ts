@@ -325,21 +325,8 @@ const nonempty = (value: unknown, label: string): string => {
 };
 
 const traceSource = (value: unknown): PlaygroundTraceSource => {
-  switch (value) {
-    case 'build':
-    case 'diagnostics':
-    case 'hook':
-    case 'host-preflight':
-    case 'mcp':
-    case 'project':
-    case 'response':
-    case 'script':
-    case 'skill-evidence':
-    case 'workspace-change':
-      return value;
-    default:
-      throw serviceError('PLAYGROUND_VALUE_INVALID', 'Playground event source must be supported.');
-  }
+  if (isTraceSource(value)) return value;
+  throw serviceError('PLAYGROUND_VALUE_INVALID', 'Playground event source must be supported.');
 };
 
 const safeSessionId = (value: string): string => {
