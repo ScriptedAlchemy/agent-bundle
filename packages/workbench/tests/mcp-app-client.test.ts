@@ -149,8 +149,8 @@ describe('MCP App browser client', () => {
     const calls: Array<readonly [string, RequestInit | undefined]> = [];
     const nextPolicy = Object.freeze({
       ...runtimePolicy,
-      allow: 'camera; geolocation',
-      approvedPermissions: Object.freeze({ camera: Object.freeze({}), geolocation: Object.freeze({}) }),
+      allow: 'camera',
+      approvedPermissions: Object.freeze({ camera: Object.freeze({}) }),
       revision: 2,
     });
     const fetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
@@ -168,7 +168,10 @@ describe('MCP App browser client', () => {
         challenge: { expiresAt: 31_000, id: 'consent-a', request: { actionFingerprint: 'fingerprint-a', capability: 'camera', details: {}, scope: 'document', summary: 'Use camera' } },
         documentPolicy: runtimePolicy,
       });
-      if (String(input) === '/api/runtime/apps/runtime-binding/consents/consent-a') return json({ documentPolicy: nextPolicy });
+      if (String(input) === '/api/runtime/apps/runtime-binding/consents/consent-a') return json({
+        documentPolicy: nextPolicy,
+        grant: { authorizationId: 'authorization-a', bindingId: 'runtime-binding', capability: 'camera', challengeId: 'consent-a', scope: 'document' },
+      });
       throw new Error(`Unexpected request ${String(input)}.`);
     };
     const runtime = new McpAppClient({ fetch: fetch as typeof globalThis.fetch }) as McpAppClient & {
@@ -239,6 +242,92 @@ describe('MCP App browser client', () => {
     expect(() => runtime.currentDocumentPolicy('runtime-binding')).toThrow('Runtime MCP App document policy is not available.');
   });
 
+  it('keeps manual-close cleanup admitted after its matching runtime invalidation', async () => {
+    const stream = new RuntimeEventSource();
+    const firstClose = deferred<Response>();
+    const failedClose = deferred<Response>();
+    let closeAttempts = 0;
+    const fetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+      if (String(input) === '/api/project/session') return json({ cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef', origin: 'http://127.0.0.1:43123', token: 'foreground-secret' });
+      if (String(input) === '/api/project/status') return json({ status: { artifact: { state: 'missing' } } });
+      if (String(input) === '/api/runtime/apps') return json({ preview: runtimePreview });
+      if (String(input) === '/api/runtime/apps/runtime-binding' && init?.method === 'DELETE') {
+        closeAttempts += 1;
+        if (closeAttempts === 1) return firstClose.promise;
+        if (closeAttempts === 2) return failedClose.promise;
+        return json({ closed: true });
+      }
+      throw new Error(`Unexpected request ${String(input)}.`);
+    };
+    const project = new ProjectClient({ events: () => stream, fetch: fetch as typeof globalThis.fetch });
+    await project.connect(() => undefined);
+    const runtime = new McpAppClient({ fetch: fetch as typeof globalThis.fetch, projectClient: project });
+    const revoked = (sequence: number) => stream.emit('runtime.event', {
+      occurredAt: '2026-08-16T00:00:00.000Z',
+      payload: { type: 'runtime.app.updated', details: { bindingId: 'runtime-binding', reason: 'manual-close', sessionId: 'runtime-session-a', sessionRevision: 2, state: 'revoked' } },
+      sequence,
+      type: 'runtime.event',
+    }, sequence);
+
+    await runtime.createRuntime({ expectedGenerationId: 'generation-a', profileId: 'portable', runId: 'run-a' });
+    const first = runtime.closeRuntime('runtime-binding');
+    await Promise.resolve();
+    revoked(1);
+    await flushEvents();
+    expect(() => runtime.currentDocumentPolicy('runtime-binding')).toThrow('Runtime MCP App document policy is not available.');
+    firstClose.resolve(json({ closed: true }));
+    await expect(first).resolves.toBeUndefined();
+
+    await runtime.createRuntime({ expectedGenerationId: 'generation-a', profileId: 'portable', runId: 'run-a' });
+    const failed = runtime.closeRuntime('runtime-binding');
+    await Promise.resolve();
+    revoked(2);
+    await flushEvents();
+    failedClose.resolve(json({ diagnostic: { code: 'AB8204', message: 'close pending' } }, 409));
+    await expect(failed).rejects.toMatchObject({ code: 'AB8204' });
+    await expect(runtime.closeRuntime('runtime-binding')).resolves.toBeUndefined();
+    expect(closeAttempts).toBe(3);
+    project.close();
+  });
+
+  it('accepts newer public operation vectors only for the bound stable session', async () => {
+    let operation: unknown = {
+      operationId: 'operation-newer', sessionId: 'runtime-session-a', sessionRevision: 2, value: { tools: [] },
+      vector: { runtimeGenerationId: 'generation-b', sourceRevision: 'source-b', stateVersion: 3 },
+    };
+    let previewPayload: unknown = (() => {
+      const copy = JSON.parse(JSON.stringify(runtimePreview)) as Record<string, unknown>;
+      copy.operations = [{
+        kind: 'tools/list', operationId: 'trace-newer', sessionId: 'runtime-session-a', sessionRevision: 2,
+        vector: { runtimeGenerationId: 'generation-b', sourceRevision: 'source-b', stateVersion: 3 },
+      }];
+      return copy;
+    })();
+    const fetch = async (input: string | URL | Request): Promise<Response> => {
+      if (String(input) === '/api/project/session') return json({ origin: 'http://127.0.0.1:43123', token: 'foreground-secret' });
+      if (String(input) === '/api/runtime/apps') return json({ preview: previewPayload });
+      if (String(input) === '/api/runtime/apps/runtime-binding/operations') return json({ result: operation });
+      throw new Error(`Unexpected request ${String(input)}.`);
+    };
+    const runtime = new McpAppClient({ fetch: fetch as typeof globalThis.fetch });
+    const preview = await runtime.createRuntime({ expectedGenerationId: 'generation-a', profileId: 'portable', runId: 'run-a' });
+    expect(preview.operations).toMatchObject([{ sessionId: 'runtime-session-a', sessionRevision: 2, vector: { runtimeGenerationId: 'generation-b', sourceRevision: 'source-b', stateVersion: 3 } }]);
+    await expect(runtime.operateRuntime('runtime-binding', { kind: 'tools/list' })).resolves.toMatchObject({ vector: { runtimeGenerationId: 'generation-b', sourceRevision: 'source-b', stateVersion: 3 } });
+
+    for (const mismatch of [
+      { ...operation as Record<string, unknown>, sessionId: 'runtime-session-other' },
+      { ...operation as Record<string, unknown>, sessionRevision: 3 },
+    ]) {
+      operation = mismatch;
+      await expect(runtime.operateRuntime('runtime-binding', { kind: 'tools/list' })).rejects.toMatchObject({ code: 'AB8019' });
+    }
+
+    const malformedTrace = JSON.parse(JSON.stringify(previewPayload)) as Record<string, unknown>;
+    ((malformedTrace.operations as Record<string, unknown>[])[0]!).sessionRevision = 3;
+    previewPayload = malformedTrace;
+    await expect(new McpAppClient({ fetch: fetch as typeof globalThis.fetch }).createRuntime({ expectedGenerationId: 'generation-a', profileId: 'portable', runId: 'run-a' })).rejects.toMatchObject({ code: 'AB8019' });
+  });
+
   it('keeps the prior policy current when a consent success has an invalid sibling or route identity', async () => {
     const approvedPolicy = Object.freeze({ allow: 'camera', approvedPermissions: Object.freeze({ camera: Object.freeze({}) }), revision: 2, warnings: Object.freeze([]) });
     const runtimeFor = (created: unknown, decided: unknown): McpAppClient => new McpAppClient({ fetch: (async (input: string | URL | Request) => {
@@ -266,6 +355,7 @@ describe('MCP App browser client', () => {
       const runtime = runtimeFor(validChallenge, response);
       await runtime.createRuntime({ expectedGenerationId: 'generation-a', profileId: 'portable', runId: 'run-a' });
       const policy = runtime.currentDocumentPolicy('runtime-binding');
+      await runtime.createRuntimeConsent('runtime-binding', consent);
       await expect(runtime.decideRuntimeConsent('runtime-binding', 'consent-a', decision)).rejects.toMatchObject({ code: 'AB8019' });
       expect(runtime.currentDocumentPolicy('runtime-binding')).toBe(policy);
       expect(isCurrentMcpAppDocumentPolicy(runtime, policy)).toBe(true);
@@ -299,33 +389,247 @@ describe('MCP App browser client', () => {
   });
 
   it('keeps the higher current policy when overlapping consent responses settle out of revision order', async () => {
-    const first = deferred<Response>();
-    const second = deferred<Response>();
+    const lowerResponse = deferred<Response>();
+    const higherResponse = deferred<Response>();
+    const challenges = [
+      { expiresAt: 31_000, id: 'consent-camera', request: { actionFingerprint: 'act-camera', capability: 'camera', details: {}, scope: 'document', summary: 'Allow camera?' } },
+      { expiresAt: 31_000, id: 'consent-low', request: { actionFingerprint: 'act-low', capability: 'geolocation', details: {}, scope: 'document', summary: 'Allow geolocation?' } },
+      { expiresAt: 31_000, id: 'consent-high', request: { actionFingerprint: 'act-high', capability: 'geolocation', details: {}, scope: 'document', summary: 'Allow geolocation?' } },
+    ];
     let consentCalls = 0;
     const fetch = async (input: string | URL | Request): Promise<Response> => {
-      if (String(input) === '/api/project/session') return json({ origin: 'http://127.0.0.1:43123', token: 'foreground-secret' });
-      if (String(input) === '/api/runtime/apps') return json({ preview: runtimePreview });
-      if (String(input) === '/api/runtime/apps/runtime-binding/consents') return consentCalls++ === 0 ? first.promise : second.promise;
-      throw new Error(`Unexpected request ${String(input)}.`);
+      const path = String(input);
+      if (path === '/api/project/session') return json({ origin: 'http://127.0.0.1:43123', token: 'foreground-secret' });
+      if (path === '/api/runtime/apps') return json({ preview: runtimePreview });
+      if (path === '/api/runtime/apps/runtime-binding/consents') return json({ challenge: challenges[consentCalls++]!, documentPolicy: consentCalls === 1 ? runtimePolicy : { allow: 'camera', approvedPermissions: { camera: {} }, revision: 2, warnings: [] } });
+      if (path.endsWith('/consent-camera')) return json({ documentPolicy: { allow: 'camera', approvedPermissions: { camera: {} }, revision: 2, warnings: [] }, grant: { authorizationId: 'authorization-camera', bindingId: 'runtime-binding', capability: 'camera', challengeId: 'consent-camera', scope: 'document' } });
+      if (path.endsWith('/consent-low')) return lowerResponse.promise;
+      if (path.endsWith('/consent-high')) return higherResponse.promise;
+      throw new Error(`Unexpected request ${path}.`);
     };
     const runtime = new McpAppClient({ fetch: fetch as typeof globalThis.fetch });
-    const request = { actionFingerprint: 'fingerprint-a', capability: 'camera' as const, details: {}, scope: 'document' as const, summary: 'Use camera' };
-    const response = (revision: number): Response => json({
-      challenge: { expiresAt: 31_000, id: 'consent-a', request },
-      documentPolicy: { allow: 'camera', approvedPermissions: { camera: {} }, revision, warnings: [] },
-    });
+    const camera = { actionFingerprint: 'fingerprint-a', capability: 'camera' as const, details: {}, scope: 'document' as const, summary: 'Use camera' };
+    const geolocation = { actionFingerprint: 'fingerprint-b', capability: 'geolocation' as const, details: {}, scope: 'document' as const, summary: 'Use location' };
     await runtime.createRuntime({ expectedGenerationId: 'generation-a', profileId: 'portable', runId: 'run-a' });
-    const lower = runtime.createRuntimeConsent('runtime-binding', request);
-    const higher = runtime.createRuntimeConsent('runtime-binding', request);
+    await runtime.createRuntimeConsent('runtime-binding', camera);
+    await runtime.decideRuntimeConsent('runtime-binding', 'consent-camera', 'allow-once');
+    await runtime.createRuntimeConsent('runtime-binding', geolocation);
+    await runtime.createRuntimeConsent('runtime-binding', geolocation);
+    const lower = runtime.decideRuntimeConsent('runtime-binding', 'consent-low', 'allow-once');
+    const higher = runtime.decideRuntimeConsent('runtime-binding', 'consent-high', 'allow-once');
     await Promise.resolve();
-    second.resolve(response(3));
+    higherResponse.resolve(json({ documentPolicy: { allow: 'camera; geolocation', approvedPermissions: { camera: {}, geolocation: {} }, revision: 3, warnings: [] }, grant: { authorizationId: 'authorization-high', bindingId: 'runtime-binding', capability: 'geolocation', challengeId: 'consent-high', scope: 'document' } }));
     await expect(higher).resolves.toMatchObject({ documentPolicy: { revision: 3 } });
     const current = runtime.currentDocumentPolicy('runtime-binding');
-    first.resolve(response(2));
+    lowerResponse.resolve(json({ documentPolicy: { allow: 'camera', approvedPermissions: { camera: {} }, revision: 2, warnings: [] }, grant: { authorizationId: 'authorization-low', bindingId: 'runtime-binding', capability: 'geolocation', challengeId: 'consent-low', scope: 'document' } }));
     await expect(lower).rejects.toMatchObject({ code: 'AB8019' });
     expect(runtime.currentDocumentPolicy('runtime-binding')).toBe(current);
     expect(current.snapshot.revision).toBe(3);
     expect(isCurrentMcpAppDocumentPolicy(runtime, current)).toBe(true);
+  });
+
+  it('reuses only semantic same-revision document policies', async () => {
+    let responsePolicy: unknown = { allow: 'camera', approvedPermissions: { camera: {} }, revision: 2, warnings: [] };
+    const fetch = async (input: string | URL | Request): Promise<Response> => {
+      if (String(input) === '/api/project/session') return json({ origin: 'http://127.0.0.1:43123', token: 'foreground-secret' });
+      if (String(input) === '/api/runtime/apps') return json({ preview: runtimePreview });
+      if (String(input) === '/api/runtime/apps/runtime-binding') {
+        const copy = JSON.parse(JSON.stringify(runtimePreview)) as Record<string, unknown>;
+        copy.documentPolicy = responsePolicy;
+        return json({ preview: copy });
+      }
+      throw new Error(`Unexpected request ${String(input)}.`);
+    };
+    const runtime = new McpAppClient({ fetch: fetch as typeof globalThis.fetch });
+    await runtime.createRuntime({ expectedGenerationId: 'generation-a', profileId: 'portable', runId: 'run-a' });
+
+    await runtime.getRuntime('runtime-binding');
+    const current = runtime.currentDocumentPolicy('runtime-binding');
+    await runtime.getRuntime('runtime-binding');
+    expect(runtime.currentDocumentPolicy('runtime-binding')).toBe(current);
+
+    for (const changed of [
+      { allow: 'camera ', approvedPermissions: { camera: {} }, revision: 2, warnings: [] },
+      { allow: 'camera; geolocation', approvedPermissions: { camera: {}, geolocation: {} }, revision: 2, warnings: [] },
+      { allow: 'camera', approvedPermissions: { camera: {} }, revision: 2, warnings: [{ code: 'permission-not-consented', value: 'camera' }] },
+    ]) {
+      responsePolicy = changed;
+      await expect(runtime.getRuntime('runtime-binding')).rejects.toMatchObject({ code: 'AB8019' });
+      expect(runtime.currentDocumentPolicy('runtime-binding')).toBe(current);
+      expect(isCurrentMcpAppDocumentPolicy(runtime, current)).toBe(true);
+    }
+  });
+
+  it('binds document-policy transitions to stored canonical runtime consents', async () => {
+    const previewWithPolicy = (documentPolicy: unknown): Record<string, unknown> => {
+      const copy = JSON.parse(JSON.stringify(runtimePreview)) as Record<string, unknown>;
+      copy.documentPolicy = documentPolicy;
+      return copy;
+    };
+    for (const policy of [
+      { allow: '', approvedPermissions: {}, revision: 2, warnings: [] },
+      { allow: 'camera', approvedPermissions: { camera: {} }, revision: 1, warnings: [] },
+      { allow: 'camera', approvedPermissions: {}, revision: 1, warnings: [] },
+    ]) {
+      const invalid = new McpAppClient({ fetch: (async (input: string | URL | Request) => {
+        if (String(input) === '/api/project/session') return json({ origin: 'http://127.0.0.1:43123', token: 'foreground-secret' });
+        return json({ preview: previewWithPolicy(policy) });
+      }) as typeof globalThis.fetch });
+      await expect(invalid.createRuntime({ expectedGenerationId: 'generation-a', profileId: 'portable', runId: 'run-a' })).rejects.toMatchObject({ code: 'AB8019' });
+    }
+
+    const cameraRequest = { actionFingerprint: 'browser-fingerprint', capability: 'camera' as const, details: { privateCandidate: true }, scope: 'document' as const, summary: 'Use local camera' };
+    const actionRequest = { actionFingerprint: 'browser-action', capability: 'call-tool' as const, details: { name: 'forecast' }, scope: 'action' as const, summary: 'Call forecast' };
+    let consentResponse: unknown;
+    let decisionResponse: unknown;
+    const fetch = async (input: string | URL | Request): Promise<Response> => {
+      if (String(input) === '/api/project/session') return json({ origin: 'http://127.0.0.1:43123', token: 'foreground-secret' });
+      if (String(input) === '/api/runtime/apps') return json({ preview: runtimePreview });
+      if (String(input) === '/api/runtime/apps/runtime-binding/consents') return json(consentResponse);
+      if (String(input).startsWith('/api/runtime/apps/runtime-binding/consents/')) return json(decisionResponse);
+      throw new Error(`Unexpected request ${String(input)}.`);
+    };
+    const runtime = new McpAppClient({ fetch: fetch as typeof globalThis.fetch });
+    const challenge = (id: string, capability: 'camera' | 'call-tool' | 'geolocation', scope: 'action' | 'document') => ({
+      expiresAt: 31_000,
+      id,
+      request: { actionFingerprint: `act-${id}`, capability, details: { resourceUri: 'ui://weather/app.html' }, scope, summary: `Allow MCP App weather to use ${capability}?` },
+    });
+    const policy = (revision: number, approvedPermissions: Record<string, unknown>) => ({
+      allow: Object.keys(approvedPermissions).map((key) => ({ camera: 'camera', geolocation: 'geolocation' } as Record<string, string>)[key]!).join('; '),
+      approvedPermissions,
+      revision,
+      warnings: [],
+    });
+
+    await runtime.createRuntime({ expectedGenerationId: 'generation-a', profileId: 'portable', runId: 'run-a' });
+    const initial = runtime.currentDocumentPolicy('runtime-binding');
+    consentResponse = { challenge: challenge('consent-camera', 'camera', 'document'), documentPolicy: runtimePolicy };
+    await expect(runtime.createRuntimeConsent('runtime-binding', cameraRequest)).resolves.toMatchObject({ challenge: { id: 'consent-camera', request: { actionFingerprint: 'act-consent-camera', details: { resourceUri: 'ui://weather/app.html' } } } });
+    decisionResponse = {
+      documentPolicy: policy(2, { camera: {} }),
+      grant: { authorizationId: 'authorization-camera', bindingId: 'runtime-binding', capability: 'camera', challengeId: 'consent-camera', scope: 'document' },
+    };
+    await expect(runtime.decideRuntimeConsent('runtime-binding', 'consent-camera', 'allow-once')).resolves.toMatchObject({ documentPolicy: { revision: 2 } });
+    const cameraPolicy = runtime.currentDocumentPolicy('runtime-binding');
+    expect(cameraPolicy).not.toBe(initial);
+    await expect(runtime.decideRuntimeConsent('runtime-binding', 'consent-camera', 'allow-once')).rejects.toMatchObject({ code: 'AB8015' });
+
+    consentResponse = { challenge: challenge('consent-deny', 'camera', 'document'), documentPolicy: policy(2, { camera: {} }) };
+    await runtime.createRuntimeConsent('runtime-binding', cameraRequest);
+    decisionResponse = { documentPolicy: policy(3, { camera: {}, geolocation: {} }) };
+    await expect(runtime.decideRuntimeConsent('runtime-binding', 'consent-deny', 'deny')).rejects.toMatchObject({ code: 'AB8019' });
+    expect(runtime.currentDocumentPolicy('runtime-binding')).toBe(cameraPolicy);
+
+    consentResponse = { challenge: challenge('consent-action', 'call-tool', 'action'), documentPolicy: policy(2, { camera: {} }) };
+    await runtime.createRuntimeConsent('runtime-binding', actionRequest);
+    decisionResponse = {
+      documentPolicy: policy(3, { camera: {}, geolocation: {} }),
+      grant: { authorizationId: 'authorization-action', bindingId: 'runtime-binding', capability: 'call-tool', challengeId: 'consent-action', scope: 'action' },
+    };
+    await expect(runtime.decideRuntimeConsent('runtime-binding', 'consent-action', 'allow-once')).rejects.toMatchObject({ code: 'AB8019' });
+    expect(runtime.currentDocumentPolicy('runtime-binding')).toBe(cameraPolicy);
+
+    consentResponse = { challenge: challenge('consent-invalid-scope', 'camera', 'action'), documentPolicy: policy(2, { camera: {} }) };
+    await expect(runtime.createRuntimeConsent('runtime-binding', cameraRequest)).rejects.toMatchObject({ code: 'AB8019' });
+    expect(runtime.currentDocumentPolicy('runtime-binding')).toBe(cameraPolicy);
+
+    consentResponse = { challenge: challenge('consent-mismatch', 'camera', 'document'), documentPolicy: policy(2, { camera: {} }) };
+    await runtime.createRuntimeConsent('runtime-binding', cameraRequest);
+    decisionResponse = {
+      documentPolicy: policy(3, { camera: {}, geolocation: {} }),
+      grant: { authorizationId: 'authorization-mismatch', bindingId: 'runtime-binding', capability: 'geolocation', challengeId: 'consent-mismatch', scope: 'document' },
+    };
+    await expect(runtime.decideRuntimeConsent('runtime-binding', 'consent-mismatch', 'allow-once')).rejects.toMatchObject({ code: 'AB8019' });
+    expect(runtime.currentDocumentPolicy('runtime-binding')).toBe(cameraPolicy);
+
+    consentResponse = { challenge: challenge('consent-no-change', 'geolocation', 'document'), documentPolicy: policy(2, { camera: {} }) };
+    await runtime.createRuntimeConsent('runtime-binding', { ...cameraRequest, capability: 'geolocation', summary: 'Use local location' });
+    decisionResponse = {
+      documentPolicy: policy(2, { camera: {} }),
+      grant: { authorizationId: 'authorization-no-change', bindingId: 'runtime-binding', capability: 'geolocation', challengeId: 'consent-no-change', scope: 'document' },
+    };
+    await expect(runtime.decideRuntimeConsent('runtime-binding', 'consent-no-change', 'allow-once')).rejects.toMatchObject({ code: 'AB8019' });
+    expect(runtime.currentDocumentPolicy('runtime-binding')).toBe(cameraPolicy);
+
+    consentResponse = { challenge: challenge('consent-geolocation', 'geolocation', 'document'), documentPolicy: policy(2, { camera: {} }) };
+    await runtime.createRuntimeConsent('runtime-binding', { ...cameraRequest, capability: 'geolocation', summary: 'Use local location' });
+    decisionResponse = {
+      documentPolicy: policy(3, { camera: {}, geolocation: {} }),
+      grant: { authorizationId: 'authorization-geolocation', bindingId: 'runtime-binding', capability: 'geolocation', challengeId: 'consent-geolocation', scope: 'document' },
+    };
+    await expect(runtime.decideRuntimeConsent('runtime-binding', 'consent-geolocation', 'allow-once')).resolves.toMatchObject({ documentPolicy: { revision: 3 } });
+  });
+
+  it('fences every runtime route before dispatch when bootstrap authority becomes stale', async () => {
+    const stream = new RuntimeEventSource();
+    let bootstrap: Deferred<Response> | undefined;
+    const protectedPaths: string[] = [];
+    const fetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+      const path = String(input);
+      if (path === '/api/project/session') return bootstrap?.promise ?? json({ cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef', origin: 'http://127.0.0.1:43123', token: 'foreground-secret' });
+      if (path === '/api/project/status') return json({ status: { artifact: { state: 'missing' } } });
+      protectedPaths.push(path);
+      if (path === '/api/runtime/apps') return json({ preview: runtimePreview });
+      if (path === '/api/runtime/apps/runtime-binding') return init?.method === 'DELETE' ? json({ closed: true }) : json({ preview: runtimePreview });
+      if (path === '/api/runtime/apps/runtime-binding/operations') return json({ result: { operationId: 'operation-a', sessionId: 'runtime-session-a', sessionRevision: 2, value: {}, vector: { runtimeGenerationId: 'generation-a', sourceRevision: 'source-a', stateVersion: 1 } } });
+      if (path === '/api/runtime/apps/runtime-binding/consents') return json({ challenge: { expiresAt: 31_000, id: 'consent-a', request: { actionFingerprint: 'fingerprint-a', capability: 'camera', details: {}, scope: 'document', summary: 'Use camera' } }, documentPolicy: runtimePolicy });
+      if (path === '/api/runtime/apps/runtime-binding/consents/consent-a') return json({ documentPolicy: runtimePolicy });
+      throw new Error(`Unexpected request ${path}.`);
+    };
+    const project = new ProjectClient({ events: () => stream, fetch: fetch as typeof globalThis.fetch });
+    await project.connect(() => undefined);
+    const request = { actionFingerprint: 'fingerprint-a', capability: 'camera' as const, details: {}, scope: 'document' as const, summary: 'Use camera' };
+    let sequence = 0;
+    const exactInvalidation = async (): Promise<void> => {
+      sequence += 1;
+      stream.emit('runtime.event', {
+        occurredAt: '2026-08-16T00:00:00.000Z',
+        payload: { type: 'runtime.app.updated', details: { bindingId: 'runtime-binding', reason: 'session-restarted', sessionId: 'runtime-session-a', sessionRevision: 2, state: 'revoked' } },
+        sequence,
+        type: 'runtime.event',
+      }, sequence);
+      await flushEvents();
+    };
+    const gap = async (): Promise<void> => {
+      sequence += 1;
+      stream.emit('replay.gap', { earliestAvailableSequence: sequence + 1, latestDroppedSequence: sequence, requestedAfterSequence: sequence - 1, type: 'replay.gap' }, '');
+      await flushEvents();
+    };
+    const seed = async (challenge = false): Promise<McpAppClient> => {
+      bootstrap = undefined;
+      const runtime = new McpAppClient({ fetch: fetch as typeof globalThis.fetch, projectClient: project });
+      await runtime.createRuntime({ expectedGenerationId: 'generation-a', profileId: 'portable', runId: 'run-a' });
+      if (challenge) await runtime.createRuntimeConsent('runtime-binding', request);
+      runtime.forgetAuthentication();
+      return runtime;
+    };
+    const fence = async (runtime: McpAppClient, work: () => Promise<unknown>, invalidate: () => void | Promise<void>): Promise<void> => {
+      protectedPaths.length = 0;
+      bootstrap = deferred<Response>();
+      const pending = work();
+      void pending.catch(() => undefined);
+      await Promise.resolve();
+      await invalidate();
+      bootstrap.resolve(json({ origin: 'http://127.0.0.1:43123', token: 'foreground-secret' }));
+      await expect(pending).rejects.toMatchObject({ code: 'AB8015' });
+      expect(protectedPaths).toEqual([]);
+      bootstrap = undefined;
+    };
+
+    const creating = new McpAppClient({ fetch: fetch as typeof globalThis.fetch, projectClient: project });
+    await fence(creating, () => creating.createRuntime({ expectedGenerationId: 'generation-a', profileId: 'portable', runId: 'run-a' }), () => creating.disposeRuntime());
+    const getting = await seed();
+    await fence(getting, () => getting.getRuntime('runtime-binding'), () => gap());
+    const operating = await seed();
+    await fence(operating, () => operating.operateRuntime('runtime-binding', { kind: 'tools/list' }), () => exactInvalidation());
+    const consenting = await seed();
+    await fence(consenting, () => consenting.createRuntimeConsent('runtime-binding', request), () => consenting.disposeRuntime());
+    const deciding = await seed(true);
+    await fence(deciding, () => deciding.decideRuntimeConsent('runtime-binding', 'consent-a', 'deny'), () => gap());
+    const closing = await seed();
+    await fence(closing, () => closing.closeRuntime('runtime-binding'), () => closing.disposeRuntime());
+    project.close();
   });
 
   it('rejects runtime previews that expose configuration values, private vectors, or mismatched stable session identities', async () => {
@@ -475,6 +779,7 @@ describe('MCP App browser client', () => {
 
     mode = 'create'; pending = deferred<Response>();
     const lateCreate = create();
+    void lateCreate.catch(() => undefined);
     await Promise.resolve();
     stream.emit('replay.gap', { earliestAvailableSequence: 2, latestDroppedSequence: 1, requestedAfterSequence: 0, type: 'replay.gap' }, '');
     pending.resolve(json({ preview: runtimePreview }));
@@ -483,6 +788,7 @@ describe('MCP App browser client', () => {
     mode = 'ready'; await create();
     mode = 'get'; pending = deferred<Response>();
     const lateGet = runtime.getRuntime('runtime-binding');
+    void lateGet.catch(() => undefined);
     await Promise.resolve();
     stream.emit('runtime.event', {
       occurredAt: '2026-08-16T00:00:00.000Z', payload: { type: 'runtime.app.updated', details: { bindingId: 'runtime-binding', reason: 'session-restarted', sessionId: 'runtime-session-a', sessionRevision: 2, state: 'revoked' } }, sequence: 2, type: 'runtime.event',
@@ -494,6 +800,7 @@ describe('MCP App browser client', () => {
     mode = 'ready'; await create();
     mode = 'consent'; pending = deferred<Response>();
     const lateConsent = runtime.createRuntimeConsent('runtime-binding', consent);
+    void lateConsent.catch(() => undefined);
     await Promise.resolve();
     stream.emit('runtime.event', {
       occurredAt: '2026-08-16T00:00:01.000Z', payload: { type: 'runtime.app.updated', extra: true }, sequence: 3, type: 'runtime.event',
@@ -505,6 +812,7 @@ describe('MCP App browser client', () => {
     mode = 'ready'; await create();
     mode = 'decision'; pending = deferred<Response>();
     const lateDecision = runtime.decideRuntimeConsent('runtime-binding', 'consent-a', 'allow-once');
+    void lateDecision.catch(() => undefined);
     await Promise.resolve();
     await runtime.closeRuntime('runtime-binding');
     pending.resolve(json({ documentPolicy: runtimePolicy }));
@@ -512,6 +820,7 @@ describe('MCP App browser client', () => {
 
     mode = 'create'; pending = deferred<Response>();
     const disposedCreate = create();
+    void disposedCreate.catch(() => undefined);
     await Promise.resolve();
     runtime.disposeRuntime();
     pending.resolve(json({ preview: runtimePreview }));
