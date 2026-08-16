@@ -162,6 +162,12 @@ describe('Inspector session adapter', () => {
     expect(inspectorSessionBindingKey({ ...binding, binding: { ...binding.binding, sessionRevision: 4 } })).not.toBe(
       inspectorSessionBindingKey(binding),
     );
+    expect(inspectorSessionBindingKey({ ...binding, binding: {
+      ...binding.binding,
+      definitionDigest: 'definition-b',
+      serverDigest: 'server-b',
+      transportDigest: 'transport-b',
+    } })).toBe(inspectorSessionBindingKey(binding));
   });
 
   it('exposes only the bounded Inspector screen set', () => {
@@ -184,6 +190,7 @@ describe('Inspector session adapter', () => {
     expect(markup).toContain('MCP Inspector presentation');
     expect(markup).toContain('Negotiated protocol: 2026-06-01');
     expect(markup).toContain('tools-screen');
+    for (const label of ['Tools', 'Resources', 'Prompts', 'Protocol', 'Logging']) expect(markup).toContain(`>${label}<`);
     expect(agentBundleInspectorTheme.primaryColor).toBe('violet');
     expect(screens.tools).toBeDefined();
 
@@ -212,5 +219,185 @@ describe('Inspector session adapter', () => {
     }));
     expect(screens.logging!.embedded).toBe(true);
     expect(markup).not.toContain('Set Active Level');
+  });
+
+  it('disables unrouted prompts and strips unavailable templates without installing prompt callbacks', async () => {
+    screens.prompts = undefined;
+    screens.resources = undefined;
+    const controller = {
+      cancel: rs.fn(),
+      invoke: rs.fn(async () => ({ content: [] })),
+    };
+    const unavailable = {
+      prompts: 'not-routed' as const,
+      resourceTemplates: 'not-routed' as const,
+      resources: 'available' as const,
+      tools: 'available' as const,
+    };
+    const promptMarkup = renderToStaticMarkup(createElement(InspectorSessionAdapter, {
+      availability: unavailable,
+      controller,
+      initialTab: 'prompts',
+      model,
+    } as never));
+
+    expect(promptMarkup).toContain('Prompts are unavailable for this runtime session.');
+    expect(promptMarkup).toMatch(/<button[^>]*disabled=""[^>]*>Prompts<\/button>/u);
+    expect(promptMarkup).toContain('tools-screen');
+    expect(screens.prompts).toBeUndefined();
+    expect(controller.invoke).not.toHaveBeenCalled();
+
+    const resourceMarkup = renderToStaticMarkup(createElement(InspectorSessionAdapter, {
+      availability: unavailable,
+      controller,
+      initialTab: 'resources',
+      model,
+    } as never));
+    expect(resourceMarkup).toContain('Resource templates are unavailable for this runtime session.');
+    expect(screens.resources!.templates).toEqual([]);
+
+    const onReadResource = screens.resources!.onReadResource as (uri: string) => void;
+    onReadResource('weather://berlin');
+    await Promise.resolve();
+    expect(controller.invoke).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      operation: 'readResource',
+      request: { uri: 'weather://berlin' },
+    }));
+    controller.invoke.mockClear();
+    (screens.resources!.onRefreshList as () => void)();
+    await Promise.resolve();
+    expect(controller.invoke).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      operation: 'listResources',
+      request: {},
+    }));
+  });
+
+  it('keeps artifact prompt callbacks routed by default', async () => {
+    screens.prompts = undefined;
+    const controller = { cancel: rs.fn(), invoke: rs.fn(async () => ({ messages: [] })) };
+    renderToStaticMarkup(createElement(InspectorSessionAdapter, { controller, initialTab: 'prompts', model }));
+
+    expect(screens.prompts).toBeDefined();
+    const onGetPrompt = screens.prompts!.onGetPrompt as (name: string, args: Record<string, string>) => void;
+    onGetPrompt('greet', { name: 'Ada' });
+    await Promise.resolve();
+    expect(controller.invoke).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      operation: 'getPrompt',
+      request: { arguments: { name: 'Ada' }, name: 'greet' },
+    }));
+  });
+
+  it('exports a frozen timeline and retains local replay and log-level diagnostics without controller calls', () => {
+    screens.protocol = undefined;
+    screens.logging = undefined;
+    const controller = { cancel: rs.fn(), invoke: rs.fn(async () => ({ content: [] })) };
+    const exports: readonly unknown[][] = [];
+    renderToStaticMarkup(createElement(InspectorSessionAdapter, {
+      controller,
+      initialTab: 'protocol',
+      model,
+      onExportTrace: (entries) => { (exports as unknown[][]).push(entries as unknown[]); },
+    }));
+    (screens.protocol!.onExport as () => void)();
+    (screens.protocol!.onReplay as (id: string) => void)('trace-7');
+
+    renderToStaticMarkup(createElement(InspectorSessionAdapter, { controller, initialTab: 'logging', model }));
+    (screens.logging!.onSetLevel as (level: string) => void)('debug');
+
+    expect(exports).toHaveLength(1);
+    expect(Object.isFrozen(exports[0]!)).toBe(true);
+    expect(controller.invoke).not.toHaveBeenCalled();
+  });
+
+  it('preserves same-revision tool work but synchronously fences it when the runtime revision changes', async () => {
+    const dynamicScreens: { tools: undefined | Record<string, unknown> } = { tools: undefined };
+    const hooks: { value: unknown }[] = [];
+    const writes: unknown[] = [];
+    let hookIndex = 0;
+    const deferredOperation = (): Readonly<{ readonly promise: Promise<unknown>; readonly resolve: (value: unknown) => void }> => {
+      let resolve: (value: unknown) => void = () => undefined;
+      const promise = new Promise<unknown>((next) => { resolve = next; });
+      return Object.freeze({ promise, resolve });
+    };
+    let operation = deferredOperation();
+    const fakeReact = {
+      createElement: (type: unknown, props?: Record<string, unknown> | null, ...children: unknown[]): unknown => {
+        if (typeof type === 'function') return (type as (next: Record<string, unknown>) => unknown)({ ...(props ?? {}), children });
+        return { children, props, type };
+      },
+      useCallback: <T,>(callback: T): T => callback,
+      useEffect: (): void => undefined,
+      useMemo: <T,>(factory: () => T): T => factory(),
+      useRef: <T,>(initial: T): { current: T } => {
+        const slot = hooks[hookIndex++] ?? { value: { current: initial } };
+        hooks[hookIndex - 1] = slot;
+        return slot.value as { current: T };
+      },
+      useState: <T,>(initial: T | (() => T)): readonly [T, (next: T | ((current: T) => T)) => void] => {
+        const slot = hooks[hookIndex++] ?? { value: typeof initial === 'function' ? (initial as () => T)() : initial };
+        hooks[hookIndex - 1] = slot;
+        return [slot.value as T, (next: T | ((current: T) => T)): void => {
+          slot.value = typeof next === 'function' ? (next as (current: T) => T)(slot.value as T) : next;
+          writes.push(slot.value);
+        }];
+      },
+    };
+    const render = async (sessionRevision: number, definitionDigest = 'definition-runtime'): Promise<void> => {
+      hookIndex = 0;
+      const { InspectorSessionAdapter: DynamicAdapter } = await import('../src/inspector/adapter/inspector-session-adapter.tsx');
+      const runtimeModel = {
+        ...model,
+        binding: {
+          binding: {
+            definitionDigest,
+            registryRevision: 1,
+            serverDigest: 'server-runtime',
+            serverName: 'weather',
+            sessionId: 'runtime-session',
+            sessionRevision,
+            target: 'portable',
+            transportDigest: 'transport-runtime',
+          },
+          kind: 'runtime' as const,
+        },
+      } as McpBrowserSessionModel;
+      fakeReact.createElement(DynamicAdapter, {
+        controller: { cancel: () => false, invoke: () => operation.promise },
+        model: runtimeModel,
+      });
+    };
+
+    rs.resetModules();
+    rs.doMock('react', () => ({ default: fakeReact, ...fakeReact }));
+    rs.doMock('@mantine/core', () => ({ MantineProvider: ({ children }: { children?: unknown }) => children, createTheme: <T,>(theme: T): T => theme }));
+    rs.doMock('../src/mcp/mcp-page.tsx', () => ({ McpProtocolEvidence: () => undefined }));
+    rs.doMock('../src/inspector/adapter/inspector-session-adapter-vendor.js', () => ({
+      ALL_LEVELS_VISIBLE: {},
+      LoggingScreen: () => undefined,
+      PromptsScreen: () => undefined,
+      ProtocolScreen: () => undefined,
+      ResourcesScreen: () => undefined,
+      ToolsScreen: (props: Record<string, unknown>) => { dynamicScreens.tools = props; return undefined; },
+      clearScrollMemory: () => undefined,
+    }));
+
+    await render(3);
+    (dynamicScreens.tools!.onCallTool as (name: string, args: Record<string, unknown>) => void)('weather', { city: 'Berlin' });
+    const writesBeforeDigestChange = writes.length;
+    await render(3, 'definition-runtime-updated');
+    operation.resolve({ content: [] });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(writes).toHaveLength(writesBeforeDigestChange + 1);
+
+    operation = deferredOperation();
+    (dynamicScreens.tools!.onCallTool as (name: string, args: Record<string, unknown>) => void)('weather', { city: 'Berlin' });
+    const writesBeforeRevisionChange = writes.length;
+    await render(4);
+    operation.resolve({ content: [] });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(writes).toHaveLength(writesBeforeRevisionChange);
   });
 });

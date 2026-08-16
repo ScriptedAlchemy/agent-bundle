@@ -54,7 +54,15 @@ export interface InspectorSessionAdapterController {
   invoke(input: McpSessionControllerRequest): Promise<unknown>;
 }
 
+export interface InspectorSessionOperationAvailability {
+  readonly prompts: 'available' | 'not-routed';
+  readonly resourceTemplates: 'available' | 'not-routed';
+  readonly resources: 'available';
+  readonly tools: 'available';
+}
+
 export interface InspectorSessionAdapterProps {
+  readonly availability?: InspectorSessionOperationAvailability;
   readonly controller: InspectorSessionAdapterController;
   readonly initialTab?: InspectorTab;
   readonly model: McpBrowserSessionModel;
@@ -82,6 +90,16 @@ const initialProtocolUi: ProtocolUiState = {
 };
 const initialLogsUi: LogsUiState = { filterText: '', visibleLevels: ALL_LEVELS_VISIBLE };
 
+const allOperationsAvailable: InspectorSessionOperationAvailability = Object.freeze({
+  prompts: 'available',
+  resourceTemplates: 'available',
+  resources: 'available',
+  tools: 'available',
+});
+
+const availableTab = (tab: InspectorTab, availability: InspectorSessionOperationAvailability): InspectorTab =>
+  tab === 'prompts' && availability.prompts === 'not-routed' ? 'tools' : tab;
+
 export const agentBundleInspectorTheme = createTheme({
   defaultRadius: 'sm',
   fontFamily: 'Inter, ui-sans-serif, system-ui, sans-serif',
@@ -106,12 +124,17 @@ export const InspectorRuntimeEvidence = ({ evidence }: InspectorRuntimeEvidenceP
   </section>;
 };
 
-export const InspectorSessionAdapter = ({ controller, initialTab = 'tools', model, onExportTrace }: InspectorSessionAdapterProps) => {
+export const InspectorSessionAdapter = ({ availability = allOperationsAvailable, controller, initialTab = 'tools', model, onExportTrace }: InspectorSessionAdapterProps) => {
   const bindingKey = inspectorSessionBindingKey(model.binding);
   const previousBindingKey = useRef(bindingKey);
   const requestNumber = useRef(0);
   const actionGeneration = useRef(0);
-  const [tab, setTab] = useState<InspectorTab>(initialTab);
+  const bindingChanged = previousBindingKey.current !== bindingKey;
+  if (bindingChanged) {
+    previousBindingKey.current = bindingKey;
+    actionGeneration.current += 1;
+  }
+  const [tab, setTab] = useState<InspectorTab>(() => availableTab(initialTab, availability));
   const [toolsUi, setToolsUi] = useState<ToolsUiState>(initialToolsUi);
   const [resourcesUi, setResourcesUi] = useState<ResourcesUiState>(initialResourcesUi);
   const [promptsUi, setPromptsUi] = useState<PromptsUiState>(initialPromptsUi);
@@ -130,9 +153,7 @@ export const InspectorSessionAdapter = ({ controller, initialTab = 'tools', mode
   const [protocolReplayUnavailable, setProtocolReplayUnavailable] = useState(false);
 
   useEffect(() => {
-    if (previousBindingKey.current === bindingKey) return;
-    previousBindingKey.current = bindingKey;
-    actionGeneration.current += 1;
+    if (!bindingChanged) return;
     clearScrollMemory();
     setToolsUi(initialToolsUi);
     setResourcesUi(initialResourcesUi);
@@ -148,16 +169,20 @@ export const InspectorSessionAdapter = ({ controller, initialTab = 'tools', mode
     setLoggingCleared(false);
     setLoggingDiagnostic('Log-level changes are unavailable because this W13 session does not expose logging/setLevel.');
     setProtocolReplayUnavailable(false);
-  }, [bindingKey]);
+  }, [bindingChanged, bindingKey]);
 
   const protocolEntries = useMemo(() => inspectorProtocolEntries(model.timeline.entries), [model.timeline.entries]);
   const loggingEntries = useMemo(() => inspectorLogEntries(model.timeline.entries), [model.timeline.entries]);
   const tools = useMemo(() => [...model.catalogs.tools] as unknown as Tool[], [model.catalogs.tools]);
   const resources = useMemo(() => [...model.catalogs.resources] as unknown as Resource[], [model.catalogs.resources]);
-  const templates = useMemo(() => [...model.catalogs.resourceTemplates] as unknown as ResourceTemplate[], [model.catalogs.resourceTemplates]);
+  const templates = useMemo(() => availability.resourceTemplates === 'available'
+    ? [...model.catalogs.resourceTemplates] as unknown as ResourceTemplate[]
+    : [], [availability.resourceTemplates, model.catalogs.resourceTemplates]);
   const prompts = useMemo(() => [...model.catalogs.prompts] as unknown as Prompt[], [model.catalogs.prompts]);
   const displayedProtocol = protocolCleared ? [] : protocolEntries;
   const displayedLogs = loggingCleared ? [] : loggingEntries;
+  const exportedTimeline = useMemo(() => Object.freeze([...model.timeline.entries]), [model.timeline.entries]);
+  const currentTab = availableTab(tab, availability);
 
   const nextRequest = (operation: McpSessionControllerRequest['operation'], request: Readonly<Record<string, unknown>>): McpSessionControllerRequest => {
     requestNumber.current += 1;
@@ -208,10 +233,14 @@ export const InspectorSessionAdapter = ({ controller, initialTab = 'tools', mode
         <h2>Inspector</h2>
         <p>Negotiated protocol: {negotiatedProtocol}</p>
         <nav aria-label="Inspector screens">
-          {inspectorSessionTabs.map(({ id, label }) => <button aria-current={tab === id ? 'page' : undefined} key={id} onClick={() => setTab(id)} type="button">{label}</button>)}
+          {inspectorSessionTabs.map(({ id, label }) => {
+            const unavailable = id === 'prompts' && availability.prompts === 'not-routed';
+            return <button aria-current={currentTab === id ? 'page' : undefined} disabled={unavailable} key={id} onClick={() => setTab(id)} type="button">{label}</button>;
+          })}
         </nav>
       </header>
-      {tab === 'tools' ? <ToolsScreen
+      {availability.prompts === 'not-routed' ? <p role="status">Prompts are unavailable for this runtime session.</p> : undefined}
+      {currentTab === 'tools' ? <ToolsScreen
         callState={toolCall}
         listChanged={false}
         onCallTool={runTool}
@@ -231,7 +260,9 @@ export const InspectorSessionAdapter = ({ controller, initialTab = 'tools', mode
         tools={tools}
         ui={toolsUi}
       /> : undefined}
-      {tab === 'resources' ? <ResourcesScreen
+      {currentTab === 'resources' ? <>
+        {availability.resourceTemplates === 'not-routed' ? <p role="note">Resource templates are unavailable for this runtime session.</p> : undefined}
+        <ResourcesScreen
         compact={compact}
         listChanged={false}
         onCompactChange={setCompact}
@@ -247,8 +278,9 @@ export const InspectorSessionAdapter = ({ controller, initialTab = 'tools', mode
         subscriptionsSupported={false}
         templates={templates}
         ui={resourcesUi}
-      /> : undefined}
-      {tab === 'prompts' ? <PromptsScreen
+      />
+      </> : undefined}
+      {currentTab === 'prompts' ? <PromptsScreen
         getPromptState={getPrompt}
         listChanged={false}
         onGetPrompt={runGetPrompt}
@@ -258,13 +290,13 @@ export const InspectorSessionAdapter = ({ controller, initialTab = 'tools', mode
         prompts={prompts}
         ui={promptsUi}
       /> : undefined}
-      {tab === 'protocol' ? <ProtocolScreen
+      {currentTab === 'protocol' ? <ProtocolScreen
         compact={compact}
         entries={displayedProtocol}
         onClearAll={() => setProtocolCleared(true)}
         onClearSection={(section) => section === 'history' ? setProtocolCleared(true) : setPinnedIds(new Set())}
-        onExport={() => onExportTrace?.(model.timeline.entries)}
-        onExportSection={() => onExportTrace?.(model.timeline.entries)}
+        onExport={() => onExportTrace?.(exportedTimeline)}
+        onExportSection={() => onExportTrace?.(exportedTimeline)}
         onReplay={() => setProtocolReplayUnavailable(true)}
         onSortChange={setSortDirection}
         onToggleCompact={() => setCompact((value) => !value)}
@@ -279,7 +311,7 @@ export const InspectorSessionAdapter = ({ controller, initialTab = 'tools', mode
         ui={protocolUi}
       /> : undefined}
       {protocolReplayUnavailable ? <p role="status">Replay is unavailable for raw W13 trace frames.</p> : undefined}
-      {tab === 'logging' ? <section aria-label="Logging inspector">
+      {currentTab === 'logging' ? <section aria-label="Logging inspector">
         <p role="note">{loggingDiagnostic}</p>
         <LoggingScreen
           currentLevel={'info' as LoggingLevel}
