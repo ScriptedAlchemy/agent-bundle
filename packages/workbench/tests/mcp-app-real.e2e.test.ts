@@ -4,10 +4,12 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 
 import { expect, test, type PlaywrightOptions } from '@rstest/playwright';
+import type { Page } from 'playwright';
 
 import { createWorkbenchAssetSource } from '../../agent-bundle/src/dev/workbench-assets.ts';
 import { startDevServer } from '../../agent-bundle/src/dev/workbench-server.ts';
 import { createProjectFixture, removeProjectFixture } from '../../agent-bundle/tests/helpers/project-fixture.ts';
+import { startRuntimePlaygroundFixture } from './helpers/runtime-playground-fixture.ts';
 
 const workspaceRoot = process.cwd();
 const workbenchAssets = join(workspaceRoot, 'packages', 'workbench', 'dist');
@@ -123,6 +125,11 @@ interface AppRouteRequest {
 
 interface AppRouteResponse extends AppRouteRequest {
   readonly response: unknown;
+}
+
+interface RuntimeAppRouteRequest extends AppRouteRequest {
+  readonly headers: Readonly<Record<string, string>>;
+  readonly method: string;
 }
 
 const requestBody = (body: string | null): unknown => {
@@ -351,4 +358,169 @@ e2e('runs a generated SDK-v2 App through the real foreground session and separat
   }
   if (testFailure !== undefined) throw testFailure;
   if (cleanupFailure !== undefined) throw cleanupFailure;
+});
+
+e2e('opens the real RSC runtime timeline App from provider-owned run evidence', { timeout: 120_000 }, async ({ page }) => {
+  const fixture = await startRuntimePlaygroundFixture();
+  let clientPage: Page | undefined;
+  let clientSurface: Awaited<ReturnType<typeof fixture.openRuntimeClientSurface>> | undefined;
+  const appMessages: Array<Readonly<{ readonly href: string; readonly message: unknown; readonly senderOrigin: string }>> = [];
+  const pageErrors: Error[] = [];
+  const artifactMcpSessionRequests: string[] = [];
+  const projectEventStreams: string[] = [];
+  const runtimeAppRequests: RuntimeAppRouteRequest[] = [];
+  const runtimeMcpSessionRequests: string[] = [];
+  await page.exposeBinding('__recordRuntimeAppMessage', (_source, payload: unknown) => {
+    if (payload !== null && typeof payload === 'object') {
+      appMessages.push(payload as Readonly<{ readonly href: string; readonly message: unknown; readonly senderOrigin: string }>);
+    }
+  });
+  await page.addInitScript(() => {
+    window.addEventListener('message', (event) => {
+      const message = event.data;
+      if (message === null || typeof message !== 'object' || (message as { readonly jsonrpc?: unknown }).jsonrpc !== '2.0') return;
+      const record = (globalThis as typeof globalThis & { __recordRuntimeAppMessage?: (payload: unknown) => Promise<void> }).__recordRuntimeAppMessage;
+      if (record !== undefined) void record({ href: window.location.href, message, senderOrigin: event.origin });
+    });
+  });
+  page.on('pageerror', (error) => pageErrors.push(error));
+  page.on('request', (request) => {
+    const url = new URL(request.url());
+    if (url.origin !== fixture.url) return;
+    if (url.pathname.startsWith('/api/mcp/sessions')) artifactMcpSessionRequests.push(`${request.method()} ${url.pathname}`);
+    if (url.pathname === '/api/project/events') projectEventStreams.push(`${request.method()} ${url.pathname}`);
+    if (url.pathname.startsWith('/api/runtime/apps')) {
+      runtimeAppRequests.push({ body: requestBody(request.postData()), headers: request.headers(), method: request.method(), path: url.pathname });
+    }
+    if (url.pathname.startsWith('/api/runtime/mcp/sessions')) runtimeMcpSessionRequests.push(`${request.method()} ${url.pathname}`);
+  });
+  try {
+    await page.goto(`${fixture.url}#runtime`);
+    await expect(page.getByRole('heading', { name: 'Runtime Playground' })).toBeVisible({ timeout: 15_000 });
+    const runtimeIdentity = page.locator('[data-runtime-provider-session]');
+    const runtimeSurface = page.getByLabel('Runtime surface');
+    await expect(runtimeIdentity).toHaveAttribute('data-runtime-hmr-ready', 'true', { timeout: 15_000 });
+    await runtimeSurface.selectOption('mcp.edit-timeline');
+    clientSurface = await fixture.openRuntimeClientSurface('mcp.edit-timeline');
+    if (clientSurface === undefined) throw new Error('Runtime client surface was not available.');
+    clientPage = await page.context().newPage();
+    clientPage.on('pageerror', (error) => pageErrors.push(error));
+    const bootstrap = await clientPage.goto(clientSurface.bootstrapUrl, { waitUntil: 'domcontentloaded' });
+    expect(bootstrap?.status()).toBe(200);
+    await expect.poll(() => runtimeIdentity.getAttribute('data-runtime-hmr-client-count'), { timeout: 15_000 }).toBe('1');
+
+    await runtimeSurface.selectOption('mcp.render_edit_timeline');
+    await page.getByLabel('Runtime target').selectOption('portable');
+    await page.getByRole('radio', { name: 'Raw JSON' }).check();
+    await page.locator('#runtime-input-raw').fill('{}');
+    const createRequest = page.waitForRequest((request) =>
+      request.url() === `${fixture.url}/api/runtime/apps` && request.method() === 'POST');
+    const createResponse = page.waitForResponse((response) =>
+      response.url() === `${fixture.url}/api/runtime/apps` && response.request().method() === 'POST');
+    await page.getByRole('button', { name: 'Run', exact: true }).click();
+    const [createdRequest, createdResponse] = await Promise.all([createRequest, createResponse]);
+    const history = page.getByRole('region', { name: 'Runtime run history' }).locator('ol > li');
+    await expect(history).toHaveCount(1, { timeout: 15_000 });
+    const runId = await history.first().getAttribute('data-runtime-run-id');
+    const expectedGenerationId = await runtimeIdentity.getAttribute('data-runtime-generation');
+    if (runId === null || expectedGenerationId === null) throw new Error('Expected selected Runtime run identity.');
+    expect(requestBody(createdRequest.postData())).toEqual({ expectedGenerationId, profileId: 'portable', runId });
+
+    const created = await createdResponse.json() as Readonly<{ readonly preview: Readonly<{
+      readonly binding: Readonly<{ readonly id: string; readonly serverName: string; readonly sessionId: string; readonly sessionRevision: number }>;
+      readonly clientSurface: Readonly<{ readonly bootstrapUrl: string; readonly origin: string }>;
+      readonly kind: string;
+      readonly profile: Readonly<{ readonly hostContext: unknown; readonly resourceUri: string }>;
+      readonly result: Readonly<{ readonly appVisible: unknown; readonly modelVisible: unknown }>;
+    }> }>;
+    expect(created.preview).toMatchObject({
+      binding: { serverName: 'timeline', sessionId: expect.any(String), sessionRevision: expect.any(Number) },
+      clientSurface: { bootstrapUrl: expect.any(String), origin: expect.any(String) },
+      kind: 'apps',
+      profile: { hostContext: { platform: 'web' }, resourceUri: 'ui://rsc-agent-runtime/edit-timeline-v1.html' },
+    });
+    expect(created.preview.result.appVisible).toMatchObject({
+      content: [expect.objectContaining({ type: 'text' })],
+      structuredContent: { edits: [], stateVersion: 0 },
+    });
+
+    const outerFrame = page.locator('.runtime-stage .mcp-app-preview iframe');
+    await expect(outerFrame).toBeVisible({ timeout: 15_000 });
+    const runtimeAppFrame = async () => {
+      for (const frame of page.frames()) {
+        if (await frame.getByRole('heading', { name: 'Runtime edit timeline' }).count() === 1) return frame;
+      }
+      return undefined;
+    };
+    await expect.poll(runtimeAppFrame, { timeout: 15_000 }).toBeDefined();
+    const appFrame = await runtimeAppFrame();
+    if (appFrame === undefined) throw new Error('Runtime App frame was unavailable.');
+    const frameOrigin = new URL(appFrame.url()).origin;
+    const outerSource = await outerFrame.getAttribute('src');
+    const foregroundToken = createdRequest.headers()['x-agent-bundle-session'];
+    if (outerSource === null || foregroundToken === undefined) throw new Error('Runtime App foreground transport evidence was unavailable.');
+    expect(frameOrigin).toBe(created.preview.clientSurface.origin);
+    expect(frameOrigin).not.toBe(fixture.url);
+    expect(new URL(created.preview.clientSurface.bootstrapUrl).origin).toBe(frameOrigin);
+    expect(outerSource).not.toContain(foregroundToken);
+    expect(await appFrame.content()).not.toContain(foregroundToken);
+
+    const messageFor = (
+      receiverOrigin: string,
+      senderOrigin: string,
+      matches: (message: Readonly<Record<string, unknown>>) => boolean,
+    ): Readonly<{ readonly href: string; readonly message: Readonly<Record<string, unknown>>; readonly senderOrigin: string }> | undefined => {
+      const entry = appMessages.find((candidate) => {
+        if (new URL(candidate.href).origin !== receiverOrigin || candidate.senderOrigin !== senderOrigin || candidate.message === null || typeof candidate.message !== 'object') {
+          return false;
+        }
+        return matches(candidate.message as Readonly<Record<string, unknown>>);
+      });
+      return entry === undefined ? undefined : entry as Readonly<{ readonly href: string; readonly message: Readonly<Record<string, unknown>>; readonly senderOrigin: string }>;
+    };
+    const protocolOrder = (): readonly string[] | undefined => {
+      const ordered = [
+        ['ui/initialize request', messageFor(fixture.url, frameOrigin, (message) => message.method === 'ui/initialize')],
+        ['ui/initialize result', messageFor(frameOrigin, fixture.url, (message) => {
+          const result = message.result;
+          return result !== null && typeof result === 'object' && Object.hasOwn(result, 'hostContext');
+        })],
+        ['ui/notifications/initialized', messageFor(fixture.url, frameOrigin, (message) => message.method === 'ui/notifications/initialized')],
+        ['ui/notifications/tool-input', messageFor(frameOrigin, fixture.url, (message) => message.method === 'ui/notifications/tool-input')],
+        ['ui/notifications/tool-result', messageFor(frameOrigin, fixture.url, (message) => message.method === 'ui/notifications/tool-result')],
+      ] as const;
+      if (ordered.some(([, entry]) => entry === undefined)) return undefined;
+      return ordered
+        .map(([name, entry]) => Object.freeze({ index: appMessages.indexOf(entry as typeof appMessages[number]), name }))
+        .sort((left, right) => left.index - right.index)
+        .map(({ name }) => name);
+    };
+    await expect.poll(protocolOrder, { timeout: 15_000 }).toEqual([
+      'ui/initialize request',
+      'ui/initialize result',
+      'ui/notifications/initialized',
+      'ui/notifications/tool-input',
+      'ui/notifications/tool-result',
+    ]);
+    const toolInput = messageFor(frameOrigin, fixture.url, (message) => message.method === 'ui/notifications/tool-input');
+    const toolResult = messageFor(frameOrigin, fixture.url, (message) => message.method === 'ui/notifications/tool-result');
+    if (toolInput === undefined || toolResult === undefined) throw new Error('Runtime App invocation notifications were unavailable.');
+    expect(toolInput.message).toEqual({ jsonrpc: '2.0', method: 'ui/notifications/tool-input', params: { arguments: {} } });
+    expect(toolResult.message).toEqual({ jsonrpc: '2.0', method: 'ui/notifications/tool-result', params: created.preview.result.appVisible });
+    const initialized = messageFor(frameOrigin, fixture.url, (message) => {
+      const result = message.result;
+      return result !== null && typeof result === 'object' && Object.hasOwn(result, 'hostContext');
+    });
+    expect((initialized?.message.result as Readonly<{ readonly hostContext?: unknown }> | undefined)?.hostContext)
+      .toMatchObject(created.preview.profile.hostContext as Record<string, unknown>);
+    expect(artifactMcpSessionRequests).toEqual([]);
+    expect(runtimeMcpSessionRequests).toEqual([]);
+    expect(projectEventStreams).toEqual(['GET /api/project/events']);
+    expect(runtimeAppRequests.filter((entry) => entry.path === '/api/runtime/apps')).toHaveLength(1);
+    expect(pageErrors).toEqual([]);
+  } finally {
+    await clientPage?.close();
+    await clientSurface?.close();
+    await fixture.close();
+  }
 });

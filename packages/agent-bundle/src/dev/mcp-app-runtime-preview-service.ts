@@ -214,7 +214,7 @@ const defaultHost = (tool: McpAppJsonValue) => Object.freeze({
   deviceCapabilities: Object.freeze({}),
   displayMode: 'inline',
   locale: 'en-US',
-  platform: 'agent-bundle-workbench',
+  platform: 'web',
   safeAreaInsets: Object.freeze({ bottom: 0, left: 0, right: 0, top: 0 }),
   styles: Object.freeze({}),
   theme: 'light' as const,

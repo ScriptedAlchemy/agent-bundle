@@ -168,7 +168,9 @@ it('derives an Apps preview only from one stored succeeded run and opens its dis
     result: { isError: false, modelVisible: { content: [{ text: 'Sunny', type: 'text' }] } },
     session: { state: 'ready' },
   });
+  if (preview.profile.kind !== 'apps') throw new Error('Expected an admitted Apps host profile.');
   expect(preview.metadata.tool.standard.ui).toEqual({ resourceUri: 'ui://weather/forecast.html', visibility: ['app'] });
+  expect(preview.profile.hostContext.platform).toBe('web');
   expect(requests).toEqual([
     { expectedSessionRevision: 2, kind: 'list-tools' },
     { expectedSessionRevision: 2, kind: 'list-resources' },

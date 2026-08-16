@@ -146,7 +146,7 @@ const runtimePreview = Object.freeze({
     bootstrap: Object.freeze({ kind: 'none' as const, script: undefined }),
     configExtensions: Object.freeze({ entries: Object.freeze([]), sourceRevision: 'source-weather' }),
     descriptor: Object.freeze({ claimsRealHostParity: false as const, evidence: 'simulated' as const, id: 'portable' as const, label: 'Portable MCP Apps' as const, version: 'agent-bundle:mcp-apps:2026-01-26' as const }),
-    hostContext: Object.freeze({ availableDisplayModes: Object.freeze(['inline']), containerDimensions: Object.freeze({ height: 480, width: 640 }), deviceCapabilities: Object.freeze({}), displayMode: 'inline', locale: 'en-US', platform: 'agent-bundle-workbench', safeAreaInsets: Object.freeze({ bottom: 0, left: 0, right: 0, top: 0 }), styles: Object.freeze({}), theme: 'light' as const, timeZone: 'UTC', toolInfo: Object.freeze({}), userAgent: 'agent-bundle-runtime-mcp-app/1' }),
+    hostContext: Object.freeze({ availableDisplayModes: Object.freeze(['inline']), containerDimensions: Object.freeze({ height: 480, width: 640 }), deviceCapabilities: Object.freeze({}), displayMode: 'inline', locale: 'en-US', platform: 'web', safeAreaInsets: Object.freeze({ bottom: 0, left: 0, right: 0, top: 0 }), styles: Object.freeze({}), theme: 'light' as const, timeZone: 'UTC', toolInfo: Object.freeze({}), userAgent: 'agent-bundle-runtime-mcp-app/1' }),
     kind: 'apps' as const,
     metadata: Object.freeze({}),
     permissions: Object.freeze({}),

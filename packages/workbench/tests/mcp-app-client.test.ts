@@ -80,7 +80,7 @@ const runtimePreview = Object.freeze({
     descriptor: Object.freeze({ claimsRealHostParity: false, evidence: 'simulated', id: 'portable', label: 'Portable MCP Apps', version: 'agent-bundle:mcp-apps:2026-01-26' }),
     hostContext: Object.freeze({
       availableDisplayModes: Object.freeze(['inline']), containerDimensions: Object.freeze({ height: 720, width: 1024 }),
-      deviceCapabilities: Object.freeze({}), displayMode: 'inline', locale: 'en-US', platform: 'agent-bundle-workbench',
+      deviceCapabilities: Object.freeze({}), displayMode: 'inline', locale: 'en-US', platform: 'web',
       safeAreaInsets: Object.freeze({ bottom: 0, left: 0, right: 0, top: 0 }), styles: Object.freeze({}), theme: 'light', timeZone: 'UTC', toolInfo: Object.freeze({}), userAgent: 'agent-bundle-runtime-mcp-app/1',
     }),
     kind: 'apps', metadata: runtimeMetadata, permissions: Object.freeze({ camera: Object.freeze({}), geolocation: Object.freeze({}) }), resourceUri: 'ui://weather/app.html', warnings: Object.freeze([]),
