@@ -787,25 +787,76 @@ type RuntimePreviewComponentOwner = {
   readonly authority: RuntimePreviewAuthority;
   readonly controller: McpAppPreviewController<McpAppRuntimePreviewState>;
   readonly lifecycle: RuntimeAppPreviewLifecycle;
+  readonly props: McpAppRuntimePreviewProps;
   readonly registrar: RuntimeAppPreviewProps['registerLifecycle'];
+  readonly completion: Promise<void>;
+  readonly complete: () => void;
+  readonly resolvedClose: Promise<void>;
+  closeAttempt: Promise<void> | undefined;
   cleanupToken: { cancelled: boolean } | undefined;
+  completed: boolean;
   registered: boolean;
+  unregistered: boolean;
   unregister: (() => void) | undefined;
+};
+
+type MutableRuntimePreviewComponentOwner = Omit<RuntimePreviewComponentOwner, 'lifecycle'> & {
+  lifecycle: RuntimeAppPreviewLifecycle;
 };
 
 const createRuntimePreviewComponentOwner = (props: McpAppRuntimePreviewProps, authority: RuntimePreviewAuthority): RuntimePreviewComponentOwner => {
   const controller = createMcpAppPreviewController(props);
-  const lifecycle = controller.runtimeLifecycle;
-  if (lifecycle === undefined) throw new McpAppPreviewDataError('runtime lifecycle is unavailable');
-  return {
+  let resolveCompletion: (() => void) | undefined;
+  const completion = new Promise<void>((resolve) => { resolveCompletion = resolve; });
+  const owner: MutableRuntimePreviewComponentOwner = {
     authority,
+    closeAttempt: undefined,
     cleanupToken: undefined,
+    complete: () => { resolveCompletion?.(); },
+    completed: false,
+    completion,
     controller,
-    lifecycle,
+    lifecycle: undefined as unknown as RuntimeAppPreviewLifecycle,
+    props,
     registrar: props.registerLifecycle,
     registered: false,
+    resolvedClose: completed,
+    unregistered: false,
     unregister: undefined,
   };
+  const lifecycle: RuntimeAppPreviewLifecycle = Object.freeze({
+    close: () => {
+      if (owner.completed) return owner.resolvedClose;
+      if (owner.closeAttempt !== undefined) return owner.closeAttempt;
+      const attempt = owner.controller.close();
+      owner.closeAttempt = attempt;
+      void attempt.then(
+        () => {
+          if (owner.closeAttempt !== attempt) return;
+          owner.closeAttempt = undefined;
+          owner.completed = true;
+          try {
+            if (!owner.unregistered) {
+              owner.unregistered = true;
+              const unregister = owner.unregister;
+              owner.unregister = undefined;
+              unregister?.();
+            }
+          } catch {
+            // Host unregister errors cannot retain the completed resource owner.
+          } finally {
+            owner.complete();
+          }
+        },
+        () => {
+          if (owner.closeAttempt === attempt) owner.closeAttempt = undefined;
+        },
+      );
+      return attempt;
+    },
+  });
+  owner.lifecycle = lifecycle;
+  return owner;
 };
 
 const profileDisplay = (profile: McpAppJsonValue): Readonly<{ readonly extension: boolean; readonly name: string }> => {
@@ -847,26 +898,50 @@ export function McpAppPreview(props: McpAppPreviewProps | McpAppRuntimePreviewPr
   const runtimeProps = isRuntimePreviewProps(props) ? props : undefined;
   const artifactProps = isRuntimePreviewProps(props) ? undefined : props;
   const controller = useRef<McpAppPreviewController<McpAppPreviewControllerState> | undefined>(undefined);
-  const runtimeOwnerRef = useRef<RuntimePreviewComponentOwner | undefined>(undefined);
-  const runtimeTransitionTail = useRef<Promise<void>>(completed);
+  const incomingRuntimeAuthority = runtimeProps === undefined ? undefined : runtimeAuthority(runtimeProps);
+  const incomingRuntimeRequest = runtimeProps === undefined || incomingRuntimeAuthority === undefined
+    ? undefined
+    : Object.freeze({ authority: incomingRuntimeAuthority, props: runtimeProps });
+  const [runtimeOwner, setRuntimeOwner] = useState<RuntimePreviewComponentOwner | undefined>(() =>
+    incomingRuntimeRequest === undefined
+      ? undefined
+      : createRuntimePreviewComponentOwner(incomingRuntimeRequest.props, incomingRuntimeRequest.authority),
+  );
+  const latestRuntimeRequest = useRef<typeof incomingRuntimeRequest>(incomingRuntimeRequest);
+  const runtimeManagerMounted = useRef(false);
+  const runtimeRetiringOwner = useRef<RuntimePreviewComponentOwner | undefined>(undefined);
   const runtimeStateOwner = useRef<McpAppPreviewController<McpAppRuntimePreviewState> | undefined>(undefined);
-  let runtimeOwner: RuntimePreviewComponentOwner | undefined;
-  if (runtimeProps !== undefined) {
-    const authority = runtimeAuthority(runtimeProps);
-    const current = runtimeOwnerRef.current;
-    runtimeOwner = current !== undefined && sameRuntimeAuthority(current.authority, authority)
-      ? current
-      : createRuntimePreviewComponentOwner(runtimeProps, authority);
-    runtimeOwnerRef.current = runtimeOwner;
-    controller.current = runtimeOwner.controller;
-    if (runtimeStateOwner.current === undefined) runtimeStateOwner.current = runtimeOwner.controller;
-  }
   const runtimeController = runtimeOwner?.controller;
   const [state, setState] = useState<McpAppPreviewControllerState>(runtimeController?.state ?? loadingState);
   const iframe = useRef<HTMLIFrameElement>(null);
   const frameRelayFactory = artifactProps?.frameRelayFactory ?? createMcpAppFrameRelay;
   const browserWindow = artifactProps?.frameWindow ?? (typeof window === 'undefined' ? undefined : window);
   const title = artifactProps?.title ?? 'MCP App preview';
+
+  useLayoutEffect(() => {
+    runtimeManagerMounted.current = true;
+    return () => { runtimeManagerMounted.current = false; };
+  }, []);
+
+  useLayoutEffect(() => {
+    latestRuntimeRequest.current = incomingRuntimeRequest;
+    if (runtimeOwner === undefined) {
+      if (incomingRuntimeRequest !== undefined) {
+        setRuntimeOwner(createRuntimePreviewComponentOwner(incomingRuntimeRequest.props, incomingRuntimeRequest.authority));
+      }
+      return;
+    }
+    if (incomingRuntimeRequest !== undefined && sameRuntimeAuthority(runtimeOwner.authority, incomingRuntimeRequest.authority)) return;
+    if (runtimeRetiringOwner.current === runtimeOwner) return;
+    runtimeRetiringOwner.current = runtimeOwner;
+    void runtimeOwner.lifecycle.close().catch(() => undefined);
+    void runtimeOwner.completion.then(() => {
+      if (!runtimeManagerMounted.current || runtimeRetiringOwner.current !== runtimeOwner) return;
+      runtimeRetiringOwner.current = undefined;
+      const next = latestRuntimeRequest.current;
+      setRuntimeOwner(next === undefined ? undefined : createRuntimePreviewComponentOwner(next.props, next.authority));
+    });
+  }, [incomingRuntimeRequest, runtimeOwner]);
 
   useLayoutEffect(() => {
     if (runtimeOwner === undefined) return;
@@ -881,21 +956,10 @@ export function McpAppPreview(props: McpAppPreviewProps | McpAppRuntimePreviewPr
     return () => {
       const token = { cancelled: false };
       runtimeOwner.cleanupToken = token;
-      const cleanup = runtimeTransitionTail.current.then(() => new Promise<void>((resolve, reject) => {
-        setTimeout(() => {
-          if (token.cancelled) {
-            resolve();
-            return;
-          }
-          void runtimeOwner.lifecycle.close().then(() => {
-            runtimeOwner.unregister?.();
-            runtimeOwner.unregister = undefined;
-            resolve();
-          }, reject);
-        }, 0);
-      }));
-      runtimeTransitionTail.current = cleanup;
-      void cleanup.catch(() => undefined);
+      setTimeout(() => {
+        if (token.cancelled) return;
+        void runtimeOwner.lifecycle.close().catch(() => undefined);
+      }, 0);
     };
   }, [runtimeOwner]);
 
@@ -908,9 +972,7 @@ export function McpAppPreview(props: McpAppPreviewProps | McpAppRuntimePreviewPr
           setState(next);
         }
       });
-      void runtimeTransitionTail.current.then(async () => {
-        if (subscribed) await runtimeOwner.controller.start();
-      }).catch(() => undefined);
+      void runtimeOwner.controller.start().catch(() => undefined);
       return () => {
         subscribed = false;
         unsubscribe();
@@ -947,7 +1009,7 @@ export function McpAppPreview(props: McpAppPreviewProps | McpAppRuntimePreviewPr
     controller.current?.attachFrame(iframe.current, browserWindow);
   }, [browserWindow, runtimeController, state]);
 
-  if (runtimeProps !== undefined) {
+  if (runtimeProps !== undefined || runtimeOwner !== undefined) {
     const runtimeState = runtimeController !== undefined && runtimeStateOwner.current !== runtimeController
       ? runtimeController.state
       : isRuntimeState(state) ? state : runtimeController?.state;
@@ -966,13 +1028,13 @@ export function McpAppPreview(props: McpAppPreviewProps | McpAppRuntimePreviewPr
             <details open><summary>Tool result</summary><pre>{json(fallback.result)}</pre></details>
           </section>
         )}
-        {runtimeState?.phase === 'ready' && runtimeController !== undefined && runtimeController.runtimeRendererProps !== undefined ? <>
+        {runtimeState?.phase === 'ready' && runtimeController !== undefined && runtimeOwner !== undefined && runtimeController.runtimeRendererProps !== undefined ? <>
           <SecureAppRenderer
             bindingId={runtimeState.preview.binding.id}
             bootstrapUrl={runtimeState.preview.clientSurface.bootstrapUrl}
             bridgeFactory={runtimeState.bridgeFactory}
             documentPolicy={runtimeState.documentPolicy}
-            policyClient={runtimeProps.client}
+            policyClient={runtimeOwner.props.client}
             rendererProps={runtimeController.runtimeRendererProps}
           />
           <section aria-label="Runtime App result" className="mcp-app-preview__fallback">

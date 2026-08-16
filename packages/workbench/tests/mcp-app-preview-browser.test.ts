@@ -55,19 +55,19 @@ const mountedPreviewFixture = async () => {
     "const response = (body) => new Response(JSON.stringify(body), { headers: { 'content-type': 'application/json' }, status: 200 });",
     "const runtimePolicy = { allow: '', approvedPermissions: {}, revision: 1, warnings: [] };",
     "const runtimePreviewFor = (suffix) => { const generation = 'generation-' + suffix; const source = 'source-' + suffix; const sessionId = 'runtime-session-' + suffix; const bindingId = 'runtime-binding-' + suffix; const binding = { definitionDigest: 'definition-' + suffix, evidence: 'simulated', id: bindingId, profileId: 'portable', profileVersion: 'agent-bundle:mcp-apps:2026-01-26', registryRevision: 3, runVector: { runtimeGenerationId: generation, sourceRevision: source, stateVersion: suffix === 'a' ? 1 : 2 }, serverDigest: 'server-' + suffix, serverName: 'weather', sessionId, sessionRevision: suffix === 'a' ? 2 : 3, target: 'weather', transportDigest: 'transport-' + suffix }; const stable = { definitionDigest: binding.definitionDigest, registryRevision: binding.registryRevision, serverDigest: binding.serverDigest, serverName: binding.serverName, sessionId: binding.sessionId, sessionRevision: binding.sessionRevision, target: binding.target, transportDigest: binding.transportDigest }; const metadata = { extensions: { claude: {}, openai: {} }, provenance: {}, raw: {}, standard: {} }; return { binding, clientSurface: { bootstrapUrl: runtimeBootstrapUrl, origin: new URL(runtimeBootstrapUrl).origin, webSocketPath: '/rsbuild-hmr' }, documentPolicy: runtimePolicy, kind: 'apps', metadata: { resource: metadata, result: metadata, tool: metadata }, operations: [], profile: { bootstrap: { kind: 'none' }, configExtensions: { entries: [], sourceRevision: source }, descriptor: { claimsRealHostParity: false, evidence: 'simulated', id: 'portable', label: 'Portable MCP Apps', version: 'agent-bundle:mcp-apps:2026-01-26' }, hostContext: { availableDisplayModes: ['inline'], containerDimensions: { height: 720, width: 1024 }, deviceCapabilities: {}, displayMode: 'inline', locale: 'en-US', platform: 'agent-bundle-workbench', safeAreaInsets: { bottom: 0, left: 0, right: 0, top: 0 }, styles: {}, theme: 'light', timeZone: 'UTC', toolInfo: {}, userAgent: 'agent-bundle-runtime-mcp-app/1' }, kind: 'apps', metadata, permissions: {}, resourceUri: 'ui://weather/app.html', warnings: [] }, resource: { html: '<main>Weather</main>', permissions: {} }, result: { appVisible: {}, isError: false, modelVisible: {} }, session: { binding: stable, connection: { capabilities: { tools: {} }, protocolEra: 'modern', protocolVersion: '2026-01-26', server: { name: 'weather', version: '1.0.0' } }, state: 'ready' } }; };",
-    "let runtimePreview = runtimePreviewFor('a'); let heldCreate; const runtimeEvents = []; const runtimeIframes = new Set(); const runtimeTrace = [];",
+    "let runtimePreview = runtimePreviewFor('a'); let heldCreate; let bridgeCloseFailures = 0; let backendCloseFailures = 0; let unregisterThrows = 0; let currentHandle; let suspendedTransition; const runtimeEvents = []; const runtimeIframes = new Set(); const runtimeTrace = [];",
     "const originalSetAttribute = Element.prototype.setAttribute; Element.prototype.setAttribute = function(name, value) { if (this instanceof HTMLIFrameElement && ['allow', 'referrerpolicy', 'sandbox', 'src'].includes(name)) runtimeTrace.push({ name, value: String(value) }); return originalSetAttribute.call(this, name, value); };",
     "const observer = new MutationObserver((records) => { for (const record of records) for (const node of record.addedNodes) { if (node instanceof HTMLIFrameElement) runtimeIframes.add(node); if (node instanceof Element) node.querySelectorAll('iframe').forEach((frame) => runtimeIframes.add(frame)); } }); observer.observe(document.documentElement, { childList: true, subtree: true });",
-    "const runtime = new McpAppClient({ fetch: async (input, init) => { const path = new URL(String(input), location.origin).pathname; if (path === '/api/project/session') return response({ origin: location.origin, token: 'foreground-secret' }); if (path === '/api/runtime/apps') { runtimeEvents.push('create:' + runtimePreview.binding.id); if (heldCreate !== undefined) return heldCreate.promise; return response({ preview: runtimePreview }); } if (path.startsWith('/api/runtime/apps/') && init?.method === 'DELETE') { runtimeEvents.push('backend:' + decodeURIComponent(path.slice('/api/runtime/apps/'.length))); return response({ closed: true }); } throw new Error('Unexpected runtime fixture request ' + path); } });",
+    "const runtime = new McpAppClient({ fetch: async (input, init) => { const path = new URL(String(input), location.origin).pathname; if (path === '/api/project/session') return response({ origin: location.origin, token: 'foreground-secret' }); if (path === '/api/runtime/apps') { runtimeEvents.push('create:' + runtimePreview.binding.id); if (heldCreate !== undefined) return heldCreate.promise; return response({ preview: runtimePreview }); } if (path.startsWith('/api/runtime/apps/') && init?.method === 'DELETE') { const bindingId = decodeURIComponent(path.slice('/api/runtime/apps/'.length)); runtimeEvents.push('backend:' + bindingId); if (backendCloseFailures > 0) { backendCloseFailures -= 1; runtimeEvents.push('backend-failed:' + bindingId); throw new Error('backend release failed'); } return response({ closed: true }); } throw new Error('Unexpected runtime fixture request ' + path); } });",
     "const currentDocumentPolicy = runtime.currentDocumentPolicy.bind(runtime); runtime.currentDocumentPolicy = (bindingId) => { runtimeEvents.push('policy:' + bindingId); return currentDocumentPolicy(bindingId); };",
     "const bridge = { addEventListener: () => undefined, close: async () => { runtimeEvents.push('bridge'); }, sendHostContextChange: async () => undefined, sendToolCancelled: async () => undefined, sendToolInput: async () => undefined, sendToolInputPartial: async () => undefined, sendToolResult: async () => undefined, teardownResource: async () => { runtimeEvents.push('renderer'); return {}; } };",
-    "const bridgeFactory = Object.assign(() => { runtimeEvents.push('factory'); return bridge; }, { close: async () => { runtimeEvents.push('bridge-factory'); } }); const createBridgeFactory = () => bridgeFactory;",
+    "const bridgeFactory = Object.assign(() => { runtimeEvents.push('factory'); return bridge; }, { close: async () => { runtimeEvents.push('bridge-factory'); if (bridgeCloseFailures > 0) { bridgeCloseFailures -= 1; runtimeEvents.push('bridge-factory-failed'); throw new Error('bridge release failed'); } } }); const createBridgeFactory = () => bridgeFactory;",
     "const runFor = (preview) => ({ completedAt: '2026-08-16T00:00:01.000Z', id: 'run-' + preview.binding.id, input: { city: 'Paris' }, result: { app: { mcpBinding: preview.session.binding, resourceUri: 'ui://weather/app.html', surfaceId: 'surface-weather' }, modelVisible: { temperature: 22 }, trace: [], tree: [] }, startedAt: '2026-08-16T00:00:00.000Z', status: 'succeeded', surfaceId: 'surface-weather', target: 'weather', vector: { runtimeGenerationId: preview.binding.runVector.runtimeGenerationId, sourceRevision: preview.binding.runVector.sourceRevision, stateVersion: preview.binding.runVector.stateVersion } });",
     "const runtimeProfile = { claimsRealHostParity: false, evidence: 'simulated', id: 'portable', label: 'Portable MCP Apps', version: 'agent-bundle:mcp-apps:2026-01-26' }; const surface = { fixtures: [], id: 'surface-weather', kind: 'mcp-app', label: 'Weather App', readOnly: false, targets: ['weather'] };",
-    "const registrarFor = (name) => (handle) => { runtimeEvents.push('register:' + name); return () => runtimeEvents.push('unregister:' + name); }; let currentRegistrar = registrarFor('first');",
-    "const mountRuntime = () => root.render(React.createElement(MantineProvider, null, React.createElement(React.StrictMode, null, React.createElement(McpAppPreview, { client: runtime, createBridgeFactory, kind: 'runtime', profile: runtimeProfile, profileId: 'portable', registerLifecycle: currentRegistrar, run: runFor(runtimePreview), surface, title: 'Runtime MCP App preview boundary' }))));",
+    "const registrarFor = (name) => (handle) => { if (currentHandle !== undefined) throw new Error('host registrar received a second lifecycle handle'); currentHandle = handle; runtimeEvents.push('register:' + name); return () => { if (currentHandle === handle) currentHandle = undefined; runtimeEvents.push('unregister:' + name); if (unregisterThrows > 0) { unregisterThrows -= 1; throw new Error('host unregister failed'); } }; }; let currentRegistrar = registrarFor('first');",
+    "const SuspendedRuntimePreview = ({ preview, suspended }) => { if (!suspended) return null; runtimeEvents.push('suspend:' + preview.binding.id); throw suspendedTransition.promise; }; const runtimeTree = (preview, suspended = false) => React.createElement(MantineProvider, null, React.createElement(React.StrictMode, null, React.createElement(React.Suspense, { fallback: null }, React.createElement(React.Fragment, null, React.createElement(McpAppPreview, { client: runtime, createBridgeFactory, kind: 'runtime', profile: runtimeProfile, profileId: 'portable', registerLifecycle: currentRegistrar, run: runFor(preview), surface, title: 'Runtime MCP App preview boundary' }), React.createElement(SuspendedRuntimePreview, { preview, suspended }))))); const mountRuntime = () => root.render(runtimeTree(runtimePreview));",
     "const deferred = () => { let resolve; let reject; const promise = new Promise((nextResolve, nextReject) => { resolve = nextResolve; reject = nextReject; }); return { promise, reject, resolve }; };",
-    "globalThis.__mcpRuntimePreviewFixture = { mountRuntime, replace: () => { runtimePreview = runtimePreviewFor('b'); mountRuntime(); }, rerender: () => mountRuntime(), changeRegistrar: () => { currentRegistrar = registrarFor('second'); mountRuntime(); }, hold: () => { runtimePreview = runtimePreviewFor('c'); heldCreate = deferred(); mountRuntime(); }, resolveHeld: () => { const held = heldCreate; heldCreate = undefined; held.resolve(response({ preview: runtimePreview })); }, stats: () => ({ events: [...runtimeEvents], iframeNodes: runtimeIframes.size, trace: [...runtimeTrace] }), unmountRuntime: () => root.unmount() };",
+    "globalThis.__mcpRuntimePreviewFixture = { mountRuntime, replace: () => { runtimePreview = runtimePreviewFor('b'); mountRuntime(); }, rerender: () => mountRuntime(), changeRegistrar: () => { currentRegistrar = registrarFor('second'); mountRuntime(); }, hold: () => { runtimePreview = runtimePreviewFor('c'); heldCreate = deferred(); mountRuntime(); }, resolveHeld: () => { const held = heldCreate; heldCreate = undefined; held.resolve(response({ preview: runtimePreview })); }, failClose: () => { bridgeCloseFailures = 1; backendCloseFailures = 1; }, throwUnregister: () => { unregisterThrows = 1; }, retryCurrent: () => currentHandle?.close(), beginAbandonedTransition: () => { const preview = runtimePreviewFor('transition'); suspendedTransition = deferred(); React.startTransition(() => root.render(runtimeTree(preview, true))); }, abandonTransition: () => { root.render(runtimeTree(runtimePreview)); }, stats: () => ({ currentHandle: currentHandle === undefined ? undefined : 'present', events: [...runtimeEvents], iframeNodes: runtimeIframes.size, trace: [...runtimeTrace] }), unmountRuntime: () => root.unmount() };",
     '',
   ].join('\n'));
   const rsbuild = await createRsbuild({
@@ -297,6 +297,85 @@ describe('MCP App preview browser', () => {
       expect(held.events).not.toContain('policy:runtime-binding-c');
       expect(fixture.bootstrapRequests).toEqual(['/runtime-bootstrap', '/runtime-bootstrap']);
       expect(held.events.lastIndexOf('unregister:second')).toBeGreaterThan(held.events.lastIndexOf('backend:runtime-binding-c'));
+      expect(browserErrors).toEqual([]);
+    } finally {
+      await browser.close();
+      await fixture.close();
+    }
+  }, 45_000);
+
+  it('retains a failed runtime lifecycle tombstone until its exact host handle retries, and ignores an abandoned concurrent authority', async () => {
+    const fixture = await mountedPreviewFixture();
+    const browser = await chromium.launch({ channel: 'chrome' });
+    const page = await browser.newPage({ viewport: { height: 800, width: 390 } });
+    const browserErrors: string[] = [];
+    page.on('pageerror', (error) => { browserErrors.push(error.message); });
+    try {
+      await page.goto(fixture.url);
+      await page.waitForFunction(() => '__mcpRuntimePreviewFixture' in globalThis, undefined, { timeout: 5_000 });
+      const runtime = (method: 'mountRuntime' | 'replace' | 'failClose' | 'throwUnregister' | 'retryCurrent' | 'beginAbandonedTransition' | 'abandonTransition' | 'unmountRuntime') => page.evaluate(async (next) => (globalThis as typeof globalThis & {
+        __mcpRuntimePreviewFixture: Record<string, () => unknown>;
+      }).__mcpRuntimePreviewFixture[next](), method);
+      const stats = () => page.evaluate(() => (globalThis as typeof globalThis & {
+        __mcpRuntimePreviewFixture: {
+          stats(): {
+            readonly currentHandle: 'present' | undefined;
+            readonly events: readonly string[];
+            readonly iframeNodes: number;
+          };
+        };
+      }).__mcpRuntimePreviewFixture.stats());
+      const waitFor = async (entry: string) => page.waitForFunction((expected) => (globalThis as typeof globalThis & {
+        __mcpRuntimePreviewFixture: { stats(): { readonly events: readonly string[] } };
+      }).__mcpRuntimePreviewFixture.stats().events.includes(expected), entry, { timeout: 5_000 });
+
+      await runtime('mountRuntime');
+      await waitFor('factory');
+      const stable = await stats();
+      const lifecycleEvents = (events: readonly string[]) => events.filter((entry) =>
+        entry.startsWith('register:') || entry.startsWith('unregister:') || entry.startsWith('create:') || entry === 'factory' || entry === 'bridge-factory' || entry.startsWith('backend:'),
+      );
+
+      await runtime('beginAbandonedTransition');
+      await waitFor('suspend:runtime-binding-transition');
+      await runtime('abandonTransition');
+      await page.waitForTimeout(100);
+      const abandoned = await stats();
+      expect(lifecycleEvents(abandoned.events)).toEqual(lifecycleEvents(stable.events));
+      expect(abandoned.iframeNodes).toBe(stable.iframeNodes);
+      expect(fixture.bootstrapRequests).toEqual(['/runtime-bootstrap']);
+
+      await runtime('failClose');
+      await runtime('throwUnregister');
+      await runtime('replace');
+      await waitFor('bridge-factory-failed');
+      await waitFor('backend-failed:runtime-binding-a');
+      await page.waitForTimeout(100);
+      const failedReplacement = await stats();
+      expect(failedReplacement.currentHandle).toBe('present');
+      expect(failedReplacement.events).not.toContain('register:second');
+      expect(failedReplacement.events).not.toContain('create:runtime-binding-b');
+      expect(fixture.bootstrapRequests).toEqual(['/runtime-bootstrap']);
+
+      await runtime('retryCurrent');
+      await waitFor('create:runtime-binding-b');
+      const retried = await stats();
+      expect(retried.events.filter((entry) => entry === 'unregister:first')).toHaveLength(1);
+      expect(retried.events.indexOf('create:runtime-binding-b')).toBeGreaterThan(retried.events.indexOf('unregister:first'));
+      expect(retried.events.filter((entry) => entry === 'register:first')).toHaveLength(2);
+      expect(fixture.bootstrapRequests).toEqual(['/runtime-bootstrap', '/runtime-bootstrap']);
+
+      await runtime('failClose');
+      await runtime('unmountRuntime');
+      await waitFor('backend-failed:runtime-binding-b');
+      const failedUnmount = await stats();
+      expect(failedUnmount.currentHandle).toBe('present');
+      await runtime('retryCurrent');
+      await page.waitForFunction(() => (globalThis as typeof globalThis & {
+        __mcpRuntimePreviewFixture: { stats(): { readonly currentHandle: 'present' | undefined } };
+      }).__mcpRuntimePreviewFixture.stats().currentHandle === undefined, undefined, { timeout: 5_000 });
+      const retriedUnmount = await stats();
+      expect(retriedUnmount.events.filter((entry) => entry === 'unregister:first')).toHaveLength(2);
       expect(browserErrors).toEqual([]);
     } finally {
       await browser.close();
