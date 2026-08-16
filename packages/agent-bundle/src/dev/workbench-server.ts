@@ -129,6 +129,7 @@ class McpAppLifecycleCloseError extends Error {
 class McpAppLifecycle implements Closeable {
   readonly #sandbox: McpAppSandboxProxy;
   #closePromise: Promise<void> | undefined;
+  #closing = false;
   #prepareClosePromise: Promise<void> | undefined;
   #previews: McpAppPreviewService | undefined;
   #runtimePreviews: McpAppRuntimePreviewService | undefined;
@@ -139,16 +140,29 @@ class McpAppLifecycle implements Closeable {
 
   attach(previews: McpAppPreviewService, runtimePreviews?: McpAppRuntimePreviewService): void {
     if (this.#previews !== undefined) throw new Error('MCP App previews are already attached.');
+    if (this.#closing) throw new Error('MCP App previews are closing.');
     this.#previews = previews;
     this.#runtimePreviews = runtimePreviews;
   }
 
+  /** The runtime App lane can arrive after its initial model becomes valid. */
+  attachRuntime(runtimePreviews: McpAppRuntimePreviewService): boolean {
+    if (this.#previews === undefined) throw new Error('MCP App previews are not attached.');
+    if (this.#closing || this.#runtimePreviews !== undefined) return false;
+    this.#runtimePreviews = runtimePreviews;
+    return true;
+  }
+
+  get acceptsRuntimePreviews(): boolean { return !this.#closing && this.#previews !== undefined && this.#runtimePreviews === undefined; }
+
   close(): Promise<void> {
+    this.#closing = true;
     this.#closePromise ??= this.#close();
     return this.#closePromise;
   }
 
   prepareClose(): Promise<void> {
+    this.#closing = true;
     this.#prepareClosePromise ??= this.#runtimePreviews?.prepareClose() ?? Promise.resolve();
     return this.#prepareClosePromise;
   }
@@ -179,20 +193,36 @@ class McpAppLifecycle implements Closeable {
 
 /** Connects foreground-owned App routes after the listener reveals its loopback origin. */
 class DeferredMcpAppPreviewService implements McpAppRoutePreviewService {
+  #closing = false;
   #service: McpAppRoutePreviewService | undefined;
   #runtime: McpAppRuntimePreviewService | undefined;
   #prepareClose: (() => Promise<void>) | undefined;
 
   attach(service: McpAppRoutePreviewService, runtime?: McpAppRuntimePreviewService, lifecycle?: McpAppLifecycle): void {
     if (this.#service !== undefined) throw new Error('MCP App preview route service is already attached.');
+    if (this.#closing) throw new Error('MCP App preview route service is closing.');
     this.#service = service;
     this.#runtime = runtime;
     this.#prepareClose = lifecycle === undefined ? undefined : () => lifecycle.prepareClose();
   }
 
+  /** Publishes one lifecycle-owned runtime lane only after it is fully registered. */
+  attachRuntime(runtime: McpAppRuntimePreviewService): boolean {
+    if (this.#service === undefined) throw new Error('MCP App preview route service is not ready.');
+    if (this.#closing || this.#runtime !== undefined) return false;
+    this.#runtime = runtime;
+    return true;
+  }
+
   get runtime(): McpAppRuntimePreviewService | undefined { return this.#runtime; }
 
-  prepareClose(): Promise<void> { return this.#prepareClose?.() ?? Promise.resolve(); }
+  prepareClose(): Promise<void> {
+    // The route facade must fail closed synchronously, before the foreground
+    // begins draining the runtime preview lane it no longer exposes.
+    this.#closing = true;
+    this.#runtime = undefined;
+    return this.#prepareClose?.() ?? Promise.resolve();
+  }
 
   get(bindingId: string) {
     return this.#service?.get(bindingId);
@@ -456,6 +486,64 @@ export const startDevServer = async (options: StartDevServerOptions): Promise<De
       storageRoot: join(root, '.agent-bundle', 'runtime'),
     });
   }
+  const appPreviews = new DeferredMcpAppPreviewService();
+  const clientSurfaces = new RuntimeClientSurfaceBindings(runtime, options.testing?.openRuntimeClientSurface);
+  let foregroundClosing = false;
+  let mcpApps: McpAppLifecycle | undefined;
+  let previews: McpAppPreviewService | undefined;
+  /**
+   * Runtime topology is fixed at startup, but a valid model can arrive later
+   * than the controller.  Register the service with its lifecycle before the
+   * foreground facade publishes it, so close/reconcile races remain closed.
+   */
+  const ensureRuntimeAppPreviews = (): void => {
+    const lifecycle = mcpApps;
+    const prepared = latestValidPreparedProject;
+    if (
+      foregroundClosing || runtime === undefined || prepared === undefined || previews === undefined ||
+      lifecycle === undefined || !lifecycle.acceptsRuntimePreviews
+    ) return;
+    const runtimeStatus = runtime.status();
+    if (runtimeStatus.state !== 'active' && runtimeStatus.state !== 'degraded') return;
+    try {
+      // Reading this getter proves that the provider has exposed the stable
+      // broker surface; a merely constructed controller is not enough.
+      const registry = runtime.mcpRegistry;
+      if (typeof registry.session !== 'function' || typeof registry.subscribe !== 'function') return;
+      const runtimePreviews = new McpAppRuntimePreviewService({
+        bindingAuthority: new McpAppRuntimeBindingService(),
+        configExtensions: () => {
+          const current = latestValidPreparedProject;
+          if (current === undefined || current.source.state !== 'ready' || current.source.revision === undefined || current.model === undefined) {
+            throw new Error('No valid prepared project is available for Runtime MCP App inspection.');
+          }
+          return Object.freeze({
+            descriptors: current.registry.configExtensions(),
+            extensions: current.model.extensions,
+            projectRoot: current.root,
+            sourceRevision: current.source.revision,
+          });
+        },
+        emit: (details) => runtime.emit(Object.freeze({
+          details: Object.freeze({ ...details }),
+          mcpSessionId: details.sessionId,
+          mcpSessionRevision: details.sessionRevision,
+          type: 'runtime.app.updated',
+        })),
+        openRuntimeClientSurface: (surfaceId) => clientSurfaces.open(surfaceId),
+        runtime,
+      });
+      if (!lifecycle.attachRuntime(runtimePreviews)) {
+        void runtimePreviews.closeAll().catch(() => undefined);
+        return;
+      }
+      // `attachRuntime` is synchronous and immediately follows lifecycle
+      // registration, so a foreground close cannot expose a half-owned lane.
+      if (!appPreviews.attachRuntime(runtimePreviews)) void runtimePreviews.prepareClose().catch(() => undefined);
+    } catch (error) {
+      if (!(error instanceof DevRuntimeUnavailableError)) throw error;
+    }
+  };
   const coordinator = new DevCoordinator({
     epochStore,
     eventHub,
@@ -464,6 +552,7 @@ export const startDevServer = async (options: StartDevServerOptions): Promise<De
       if (prepared.source.state === 'ready' && prepared.model !== undefined) latestValidPreparedProject = prepared;
       if (runtime !== undefined) {
         await runtime.reconcileDeclaration(prepared.devRuntime, prepared.devRuntimeDiagnostic);
+        if (prepared.source.state === 'ready' && prepared.model !== undefined) ensureRuntimeAppPreviews();
         return;
       }
       if (!runtimeTopologyChanged && (prepared.devRuntime !== undefined || prepared.devRuntimeDiagnostic !== undefined)) {
@@ -485,9 +574,6 @@ export const startDevServer = async (options: StartDevServerOptions): Promise<De
   });
   status = () => coordinator.status();
   const mcpSessions = new McpSessionService({ epochStore, projectRoot: root, registry });
-  const appPreviews = new DeferredMcpAppPreviewService();
-  const clientSurfaces = new RuntimeClientSurfaceBindings(runtime, options.testing?.openRuntimeClientSurface);
-  let mcpApps: McpAppLifecycle | undefined;
   const foreground = await (options.testing?.startForegroundServer ?? startForegroundServer)({
     assets: options.assets ?? createWorkbenchAssetSource(),
     coordinator: withMcpSessionLifecycle(coordinator, mcpSessions, () => mcpApps, runtime, clientSurfaces),
@@ -503,6 +589,11 @@ export const startDevServer = async (options: StartDevServerOptions): Promise<De
   // defensively during lifecycle close, but that happens too late for a proxy
   // open already pending when callers request server.close().
   const closeForeground = (): Promise<void> => {
+    foregroundClosing = true;
+    // Fence authenticated runtime routes before the foreground begins closing;
+    // the lifecycle retains the service for its ordered preview cleanup.
+    void appPreviews.prepareClose().catch(() => undefined);
+    void mcpApps?.prepareClose().catch(() => undefined);
     clientSurfaces.beginClose();
     return foreground.close();
   };
@@ -510,7 +601,7 @@ export const startDevServer = async (options: StartDevServerOptions): Promise<De
     const sandbox = await (options.testing?.createSandboxProxy ?? createMcpAppSandboxProxy)({ hostOrigin: foreground.url });
     mcpApps = new McpAppLifecycle(sandbox);
     const bindings = new McpAppBindingService({ sessionAuthority: mcpSessions });
-    const previews = new McpAppPreviewService({
+    previews = new McpAppPreviewService({
       bindingAuthority: bindings,
       host: {
         onDisplayMode: (mode) => mode,
@@ -544,41 +635,9 @@ export const startDevServer = async (options: StartDevServerOptions): Promise<De
         },
       },
     });
-    let runtimePreviews: McpAppRuntimePreviewService | undefined;
-    if (runtime !== undefined && latestValidPreparedProject !== undefined && (runtime.status().state === 'active' || runtime.status().state === 'degraded')) {
-      try {
-        // Reading this getter proves that the provider has exposed the stable
-        // broker surface; a merely constructed controller is not enough.
-        const registry = runtime.mcpRegistry;
-        if (typeof registry.session === 'function' && typeof registry.subscribe === 'function') runtimePreviews = new McpAppRuntimePreviewService({
-        bindingAuthority: new McpAppRuntimeBindingService(),
-        configExtensions: () => {
-          const prepared = latestValidPreparedProject;
-          if (prepared === undefined || prepared.source.state !== 'ready' || prepared.source.revision === undefined || prepared.model === undefined) {
-            throw new Error('No valid prepared project is available for Runtime MCP App inspection.');
-          }
-          return Object.freeze({
-            descriptors: prepared.registry.configExtensions(),
-            extensions: prepared.model.extensions,
-            projectRoot: prepared.root,
-            sourceRevision: prepared.source.revision,
-          });
-        },
-        emit: (details) => runtime.emit(Object.freeze({
-          details: Object.freeze({ ...details }),
-          mcpSessionId: details.sessionId,
-          mcpSessionRevision: details.sessionRevision,
-          type: 'runtime.app.updated',
-        })),
-        openRuntimeClientSurface: (surfaceId) => clientSurfaces.open(surfaceId),
-        runtime,
-        });
-      } catch (error) {
-        if (!(error instanceof DevRuntimeUnavailableError)) throw error;
-      }
-    }
-    mcpApps.attach(previews, runtimePreviews);
-    appPreviews.attach(previews, runtimePreviews, mcpApps);
+    mcpApps.attach(previews);
+    appPreviews.attach(previews, undefined, mcpApps);
+    ensureRuntimeAppPreviews();
     if (options.open === true) await openBrowser(foreground.url);
   } catch (error) {
     const [cleanup] = await Promise.allSettled([closeForeground()]);

@@ -336,7 +336,226 @@ it('keeps the ordinary foreground and artifact lane available when provider star
     await expect(fetch(`${server.url}/api/runtime/status`).then((response) => response.json())).resolves.toMatchObject({
       status: { diagnostics: [{ phase: 'provider-lifecycle' }], state: 'failed' },
     });
+    const bootstrap = await fetch(`${server.url}/api/project/session`, { headers: { 'sec-fetch-site': 'same-origin' } });
+    const { token } = await bootstrap.json() as { readonly token: string };
+    await expect(fetch(`${server.url}/api/runtime/apps`, {
+      body: JSON.stringify({ expectedGenerationId: 'missing-generation', profileId: 'portable', runId: 'missing-run' }),
+      headers: { 'content-type': 'application/json', origin: server.url, 'x-agent-bundle-session': token },
+      method: 'POST',
+    }).then(async (response) => ({ body: await response.json(), status: response.status }))).resolves.toEqual({
+      body: { diagnostic: { code: 'AB8022', message: 'MCP App preview is not available.' } },
+      status: 404,
+    });
   } finally {
+    await server?.close().catch(() => undefined);
+    await Promise.all([removeProjectFixture(project.root), rm(assetsRoot, { force: true, recursive: true })]);
+  }
+}, 30_000);
+
+it('attaches Runtime App routes only after a later valid reconcile and releases their registry subscription once', async () => {
+  const project = await createProjectFixture();
+  const assetsRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-workbench-late-runtime-apps-'));
+  const stateKey = `__agentBundleLateRuntimeApps${Date.now()}${Math.random().toString(16).slice(2)}`;
+  const runtimeState = { reconciles: 0, subscribes: 0, unsubscribes: 0 };
+  const runtimeGlobal = globalThis as typeof globalThis & Record<string, typeof runtimeState | undefined>;
+  let server: Awaited<ReturnType<typeof startDevServer>> | undefined;
+  const config = (targets: string[], marker: string): string => [
+    "import { defineConfig } from 'agent-bundle';",
+    '',
+    'export default defineConfig({',
+    "  dev: { runtime: { provider: './src/dev/provider.ts' } },",
+    `  fixtureMarker: ${JSON.stringify(marker)},`,
+    "  plugin: { name: 'late-runtime-apps', version: '1.0.0' },",
+    "  skills: ['skills/review'],",
+    `  targets: ${JSON.stringify(targets)},`,
+    '});',
+    '',
+  ].join('\n');
+  try {
+    runtimeGlobal[stateKey] = runtimeState;
+    await mkdir(join(project.root, 'src', 'dev'), { recursive: true });
+    await Promise.all([
+      writeFile(join(assetsRoot, 'index.html'), '<!doctype html><title>Agent Bundle workbench</title>'),
+      writeFile(join(project.root, 'src', 'dev', 'provider.ts'), [
+        `const state = globalThis[${JSON.stringify(stateKey)}];`,
+        "if (state === undefined) throw new Error('Missing late Runtime Apps test state.');",
+        'const registry = {',
+        '  close: async () => undefined,',
+        '  closeSession: async () => undefined,',
+        '  open: async () => { throw new Error(\'unused\'); },',
+        '  reconcile: async () => ({ invalidatedBindings: [], registryRevision: 0 }),',
+        '  restart: async () => ({ invalidatedBindings: [], registryRevision: 0 }),',
+        '  session: () => undefined,',
+        '  snapshot: () => undefined,',
+        '  subscribe: () => { state.subscribes += 1; return { unsubscribe: () => { state.unsubscribes += 1; } }; },',
+        '};',
+        'export const createDevRuntimeProvider = () => ({',
+        "  descriptor: { environmentVariables: [], id: 'late-runtime-apps', label: 'Late Runtime Apps', schemaVersion: 1 },",
+        '  start: async () => ({',
+        '    clientSurface: () => undefined,',
+        '    close: async () => undefined,',
+        '    invoke: async () => { throw new Error(\'unused\'); },',
+        '    mcpRegistry: registry,',
+        "    providerSessionId: 'provider-late-runtime-apps',",
+        '    readAsset: async () => undefined,',
+        '    readRunFlight: async () => undefined,',
+        '    reconcilePreparedRuntime: async () => { state.reconciles += 1; },',
+        '    replay: async () => { throw new Error(\'unused\'); },',
+        "    resetState: async () => ({ stateStoreId: 'state-late-runtime-apps', stateVersion: 0 }),",
+        '    run: () => undefined,',
+        '    runs: () => [],',
+        "    status: () => ({ descriptor: { environmentVariables: [], id: 'late-runtime-apps', label: 'Late Runtime Apps', schemaVersion: 1 }, diagnostics: [], hmrReady: true, state: 'active' }),",
+        '    surfaces: () => [],',
+        '  }),',
+        '});',
+        '',
+      ].join('\n')),
+      // An unknown target is a model failure, but the valid development
+      // declaration still constructs the fixed runtime controller.
+      writeFile(project.configPath, config(['portable', 'unknown-target'], 'invalid-initial')),
+    ]);
+    server = await startDevServer({
+      assets: createWorkbenchAssetSource({ root: assetsRoot }),
+      open: false,
+      port: 0,
+      root: project.root,
+    });
+    await expect(fetch(`${server.url}/api/runtime/status`).then((response) => response.json())).resolves.toMatchObject({
+      status: { descriptor: { id: 'late-runtime-apps' }, state: 'active' },
+    });
+    const bootstrap = await fetch(`${server.url}/api/project/session`, { headers: { 'sec-fetch-site': 'same-origin' } });
+    const { token } = await bootstrap.json() as { readonly token: string };
+    const headers = { 'content-type': 'application/json', origin: server.url, 'x-agent-bundle-session': token };
+    const create = () => fetch(`${server!.url}/api/runtime/apps`, {
+      body: JSON.stringify({ expectedGenerationId: 'missing-generation', profileId: 'portable', runId: 'missing-run' }),
+      headers,
+      method: 'POST',
+    });
+
+    await expect(create().then(async (response) => ({ body: await response.json(), status: response.status }))).resolves.toEqual({
+      body: { diagnostic: { code: 'AB8022', message: 'MCP App preview is not available.' } },
+      status: 404,
+    });
+    expect(runtimeState.subscribes).toBe(0);
+
+    await writeFile(project.configPath, config(['portable'], 'valid-first'));
+    await expect(fetch(`${server.url}/api/project/rebuild`, {
+      body: JSON.stringify({ paths: ['agent-bundle.config.ts'] }),
+      headers,
+      method: 'POST',
+    }).then((response) => response.status)).resolves.toBe(200);
+    await expect(create().then(async (response) => ({ body: await response.json(), status: response.status }))).resolves.toEqual({
+      body: { diagnostic: { code: 'AB8201', message: 'Runtime MCP App run is not available.' } },
+      status: 404,
+    });
+    expect(runtimeState.subscribes).toBe(1);
+
+    await writeFile(project.configPath, config(['portable'], 'valid-repeat'));
+    await expect(fetch(`${server.url}/api/project/rebuild`, {
+      body: JSON.stringify({ paths: ['agent-bundle.config.ts'] }),
+      headers,
+      method: 'POST',
+    }).then((response) => response.status)).resolves.toBe(200);
+    expect(runtimeState.reconciles).toBeGreaterThanOrEqual(1);
+    expect(runtimeState.subscribes).toBe(1);
+
+    await expect(server.close()).resolves.toBeUndefined();
+    expect(runtimeState.unsubscribes).toBe(1);
+  } finally {
+    delete runtimeGlobal[stateKey];
+    await server?.close().catch(() => undefined);
+    await Promise.all([removeProjectFixture(project.root), rm(assetsRoot, { force: true, recursive: true })]);
+  }
+}, 30_000);
+
+it('fences a closing foreground before a held valid runtime reconcile can attach an App preview service', async () => {
+  const project = await createProjectFixture();
+  const assetsRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-workbench-late-runtime-close-'));
+  const stateKey = `__agentBundleLateRuntimeClose${Date.now()}${Math.random().toString(16).slice(2)}`;
+  let enteredReconcile: () => void = () => undefined;
+  let releaseReconcile: () => void = () => undefined;
+  const reconcileEntered = new Promise<void>((resolvePromise) => { enteredReconcile = resolvePromise; });
+  const reconcileReleased = new Promise<void>((resolvePromise) => { releaseReconcile = resolvePromise; });
+  const runtimeState = { subscribes: 0, unsubscribes: 0, enteredReconcile, reconcileReleased };
+  const runtimeGlobal = globalThis as typeof globalThis & Record<string, typeof runtimeState | undefined>;
+  let server: Awaited<ReturnType<typeof startDevServer>> | undefined;
+  const config = (targets: string[]): string => [
+    "import { defineConfig } from 'agent-bundle';",
+    '',
+    'export default defineConfig({',
+    "  dev: { runtime: { provider: './src/dev/provider.ts' } },",
+    "  plugin: { name: 'late-runtime-close', version: '1.0.0' },",
+    "  skills: ['skills/review'],",
+    `  targets: ${JSON.stringify(targets)},`,
+    '});',
+    '',
+  ].join('\n');
+  try {
+    runtimeGlobal[stateKey] = runtimeState;
+    await mkdir(join(project.root, 'src', 'dev'), { recursive: true });
+    await Promise.all([
+      writeFile(join(assetsRoot, 'index.html'), '<!doctype html><title>Agent Bundle workbench</title>'),
+      writeFile(join(project.root, 'src', 'dev', 'provider.ts'), [
+        `const state = globalThis[${JSON.stringify(stateKey)}];`,
+        "if (state === undefined) throw new Error('Missing late Runtime Apps close state.');",
+        'const registry = {',
+        '  close: async () => undefined,',
+        '  closeSession: async () => undefined,',
+        '  open: async () => { throw new Error(\'unused\'); },',
+        '  reconcile: async () => ({ invalidatedBindings: [], registryRevision: 0 }),',
+        '  restart: async () => ({ invalidatedBindings: [], registryRevision: 0 }),',
+        '  session: () => undefined,',
+        '  snapshot: () => undefined,',
+        '  subscribe: () => { state.subscribes += 1; return { unsubscribe: () => { state.unsubscribes += 1; } }; },',
+        '};',
+        'export const createDevRuntimeProvider = () => ({',
+        "  descriptor: { environmentVariables: [], id: 'late-runtime-close', label: 'Late Runtime Close', schemaVersion: 1 },",
+        '  start: async () => ({',
+        '    clientSurface: () => undefined,',
+        '    close: async () => undefined,',
+        '    invoke: async () => { throw new Error(\'unused\'); },',
+        '    mcpRegistry: registry,',
+        "    providerSessionId: 'provider-late-runtime-close',",
+        '    readAsset: async () => undefined,',
+        '    readRunFlight: async () => undefined,',
+        '    reconcilePreparedRuntime: async () => { state.enteredReconcile(); await state.reconcileReleased; },',
+        '    replay: async () => { throw new Error(\'unused\'); },',
+        "    resetState: async () => ({ stateStoreId: 'state-late-runtime-close', stateVersion: 0 }),",
+        '    run: () => undefined,',
+        '    runs: () => [],',
+        "    status: () => ({ descriptor: { environmentVariables: [], id: 'late-runtime-close', label: 'Late Runtime Close', schemaVersion: 1 }, diagnostics: [], hmrReady: true, state: 'active' }),",
+        '    surfaces: () => [],',
+        '  }),',
+        '});',
+        '',
+      ].join('\n')),
+      writeFile(project.configPath, config(['portable', 'unknown-target'])),
+    ]);
+    server = await startDevServer({
+      assets: createWorkbenchAssetSource({ root: assetsRoot }),
+      open: false,
+      port: 0,
+      root: project.root,
+    });
+    const bootstrap = await fetch(`${server.url}/api/project/session`, { headers: { 'sec-fetch-site': 'same-origin' } });
+    const { token } = await bootstrap.json() as { readonly token: string };
+    const headers = { 'content-type': 'application/json', origin: server.url, 'x-agent-bundle-session': token };
+    await writeFile(project.configPath, config(['portable']));
+    const rebuilding = fetch(`${server.url}/api/project/rebuild`, {
+      body: JSON.stringify({ paths: ['agent-bundle.config.ts'] }),
+      headers,
+      method: 'POST',
+    });
+    await within(reconcileEntered, 5_000);
+    const closing = server.close();
+    releaseReconcile();
+    await Promise.allSettled([rebuilding]);
+    await expect(closing).resolves.toBeUndefined();
+    expect(runtimeState.subscribes).toBe(0);
+    expect(runtimeState.unsubscribes).toBe(0);
+  } finally {
+    releaseReconcile();
+    delete runtimeGlobal[stateKey];
     await server?.close().catch(() => undefined);
     await Promise.all([removeProjectFixture(project.root), rm(assetsRoot, { force: true, recursive: true })]);
   }
