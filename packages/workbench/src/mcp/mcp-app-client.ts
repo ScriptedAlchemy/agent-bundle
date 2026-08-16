@@ -780,9 +780,12 @@ const sameDocumentPolicy = (left: McpAppDocumentPolicySnapshot, right: McpAppDoc
   return left.allow === right.allow &&
     left.revision === right.revision &&
     permissionKeys.every((key) => (left.approvedPermissions[key] === undefined) === (right.approvedPermissions[key] === undefined)) &&
-    left.warnings.length === right.warnings.length &&
-    left.warnings.every((warning, index) => warning.code === right.warnings[index]?.code && warning.value === right.warnings[index]?.value);
+    sameDocumentPolicyWarnings(left, right);
 };
+
+const sameDocumentPolicyWarnings = (left: McpAppDocumentPolicySnapshot, right: McpAppDocumentPolicySnapshot): boolean =>
+  left.warnings.length === right.warnings.length &&
+  left.warnings.every((warning, index) => warning.code === right.warnings[index]?.code && warning.value === right.warnings[index]?.value);
 
 const runtimeConsentScope = (capability: McpAppConsentRequest['capability']): 'action' | 'document' =>
   capability === 'camera' || capability === 'clipboard-write' || capability === 'geolocation' || capability === 'microphone'
@@ -1242,9 +1245,12 @@ export class McpAppClient implements McpAppRuntimeClient {
     const permission = runtimePolicyPermission(capability);
     if (permission === undefined) return false;
     if (sameDocumentPolicy(current, next)) return current.approvedPermissions[permission] !== undefined;
-    if (next.revision !== current.revision + 1) return false;
+    if (current.approvedPermissions[permission] !== undefined || next.approvedPermissions[permission] === undefined ||
+      next.revision !== current.revision + 1 || !sameDocumentPolicyWarnings(current, next)) return false;
     const keys = ['camera', 'clipboardWrite', 'geolocation', 'microphone'] as const;
-    return keys.every((key) => (next.approvedPermissions[key] !== undefined) === (current.approvedPermissions[key] !== undefined || key === permission));
+    return keys.every((key) => key === permission
+      ? current.approvedPermissions[key] === undefined && next.approvedPermissions[key] !== undefined
+      : (next.approvedPermissions[key] !== undefined) === (current.approvedPermissions[key] !== undefined));
   }
 
   #policyForBinding(

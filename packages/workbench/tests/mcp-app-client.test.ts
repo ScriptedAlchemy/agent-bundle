@@ -460,6 +460,76 @@ describe('MCP App browser client', () => {
     }
   });
 
+  it('reuses an already-approved document consent only at its current policy revision', async () => {
+    const previewWithPolicy = (documentPolicy: unknown): Record<string, unknown> => {
+      const copy = JSON.parse(JSON.stringify(runtimePreview)) as Record<string, unknown>;
+      copy.documentPolicy = documentPolicy;
+      return copy;
+    };
+    const policy = (revision: number) => ({ allow: 'camera', approvedPermissions: { camera: {} }, revision, warnings: [] });
+    const challenge = (id: string) => ({
+      expiresAt: 31_000,
+      id,
+      request: {
+        actionFingerprint: `act-${id}`,
+        capability: 'camera',
+        details: { resourceUri: 'ui://weather/app.html' },
+        scope: 'document',
+        summary: 'Allow MCP App weather to use camera?',
+      },
+    });
+    const grant = (id: string) => ({
+      authorizationId: `authorization-${id}`,
+      bindingId: 'runtime-binding',
+      capability: 'camera',
+      challengeId: id,
+      scope: 'document',
+    });
+    let consentResponse: unknown;
+    let decisionResponse: unknown;
+    let getResponsePolicy: unknown = runtimePolicy;
+    const fetch = async (input: string | URL | Request): Promise<Response> => {
+      const path = String(input);
+      if (path === '/api/project/session') return json({ origin: 'http://127.0.0.1:43123', token: 'foreground-secret' });
+      if (path === '/api/runtime/apps') return json({ preview: runtimePreview });
+      if (path === '/api/runtime/apps/runtime-binding') return json({ preview: previewWithPolicy(getResponsePolicy) });
+      if (path === '/api/runtime/apps/runtime-binding/consents') return json(consentResponse);
+      if (path.startsWith('/api/runtime/apps/runtime-binding/consents/')) return json(decisionResponse);
+      throw new Error(`Unexpected request ${path}.`);
+    };
+    const runtime = new McpAppClient({ fetch: fetch as typeof globalThis.fetch });
+    const cameraRequest = {
+      actionFingerprint: 'browser-camera',
+      capability: 'camera' as const,
+      details: {},
+      scope: 'document' as const,
+      summary: 'Use local camera',
+    };
+    await runtime.createRuntime({ expectedGenerationId: 'generation-a', profileId: 'portable', runId: 'run-a' });
+
+    consentResponse = { challenge: challenge('consent-camera-first'), documentPolicy: runtimePolicy };
+    await runtime.createRuntimeConsent('runtime-binding', cameraRequest);
+    decisionResponse = { documentPolicy: policy(2), grant: grant('consent-camera-first') };
+    await runtime.decideRuntimeConsent('runtime-binding', 'consent-camera-first', 'allow-once');
+    const cameraPolicy = runtime.currentDocumentPolicy('runtime-binding');
+
+    consentResponse = { challenge: challenge('consent-camera-repeat'), documentPolicy: policy(2) };
+    await runtime.createRuntimeConsent('runtime-binding', cameraRequest);
+    decisionResponse = { documentPolicy: policy(2), grant: grant('consent-camera-repeat') };
+    await expect(runtime.decideRuntimeConsent('runtime-binding', 'consent-camera-repeat', 'allow-once')).resolves.toMatchObject({ documentPolicy: { revision: 2 } });
+    expect(runtime.currentDocumentPolicy('runtime-binding')).toBe(cameraPolicy);
+
+    consentResponse = { challenge: challenge('consent-camera-malformed'), documentPolicy: policy(2) };
+    await runtime.createRuntimeConsent('runtime-binding', cameraRequest);
+    decisionResponse = { documentPolicy: policy(3), grant: grant('consent-camera-malformed') };
+    await expect(runtime.decideRuntimeConsent('runtime-binding', 'consent-camera-malformed', 'allow-once')).rejects.toMatchObject({ code: 'AB8019' });
+    expect(runtime.currentDocumentPolicy('runtime-binding')).toBe(cameraPolicy);
+
+    getResponsePolicy = policy(2);
+    await runtime.getRuntime('runtime-binding');
+    expect(runtime.currentDocumentPolicy('runtime-binding')).toBe(cameraPolicy);
+  });
+
   it('binds document-policy transitions to stored canonical runtime consents', async () => {
     const previewWithPolicy = (documentPolicy: unknown): Record<string, unknown> => {
       const copy = JSON.parse(JSON.stringify(runtimePreview)) as Record<string, unknown>;
