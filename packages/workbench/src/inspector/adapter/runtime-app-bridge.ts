@@ -85,24 +85,77 @@ interface RuntimeAppBridge extends AppRendererBridge {
 const maximumMessageBytes = 256 * 1024;
 const maximumQueuedMessages = 32;
 const maximumFailures = 3;
+const maximumJsonDepth = 32;
+const maximumJsonNodes = 4_096;
+
+const aggregateFailure = (message: string, reasons: readonly unknown[]): Error =>
+  new AggregateError(reasons, message);
 
 const runtimePreview = (preview: McpAppPreviewSnapshot): McpAppPreviewAppsSnapshot => {
   if (preview.kind !== 'apps') throw new Error('MCP App bridge requires an Apps preview snapshot.');
   return preview;
 };
 
-const ordinaryJson = (value: unknown, ancestors = new WeakSet<object>()): value is McpAppJsonValue => {
-  if (value === null || typeof value === 'boolean' || typeof value === 'string') return true;
-  if (typeof value === 'number') return Number.isFinite(value);
-  if (typeof value !== 'object' || ancestors.has(value)) return false;
-  ancestors.add(value);
+/**
+ * Validates the one JSON-shaped message domain shared by the browser ingress
+ * and egress paths.  This deliberately avoids recursive traversal: an App
+ * may send hostile but syntactically ordinary JSON that would otherwise blow
+ * the browser stack before its byte bound can be calculated.
+ */
+const ordinaryJson = (value: unknown): value is McpAppJsonValue => {
+  type Visit =
+    | Readonly<{ readonly kind: 'enter'; readonly value: unknown; readonly depth: number }>
+    | Readonly<{ readonly kind: 'leave'; readonly value: object }>;
+  const ancestors = new WeakSet<object>();
+  const stack: Visit[] = [Object.freeze({ depth: 0, kind: 'enter', value })];
+  let nodes = 0;
   try {
-    if (Array.isArray(value)) return value.every((entry) => ordinaryJson(entry, ancestors));
-    const prototype = Object.getPrototypeOf(value);
-    if (prototype !== Object.prototype && prototype !== null) return false;
-    return Object.values(value).every((entry) => ordinaryJson(entry, ancestors));
-  } finally {
-    ancestors.delete(value);
+    while (stack.length > 0) {
+      const visit = stack.pop();
+      if (visit === undefined) continue;
+      if (visit.kind === 'leave') {
+        ancestors.delete(visit.value);
+        continue;
+      }
+      const candidate = visit.value;
+      if (candidate === null || typeof candidate === 'boolean' || typeof candidate === 'string') continue;
+      if (typeof candidate === 'number') {
+        if (!Number.isFinite(candidate)) return false;
+        continue;
+      }
+      if (typeof candidate !== 'object' || visit.depth > maximumJsonDepth || ancestors.has(candidate)) return false;
+      nodes += 1;
+      if (nodes > maximumJsonNodes) return false;
+      ancestors.add(candidate);
+      stack.push(Object.freeze({ kind: 'leave', value: candidate }));
+
+      if (Array.isArray(candidate)) {
+        if (Object.getOwnPropertySymbols(candidate).length > 0) return false;
+        const ownKeys = Object.keys(candidate);
+        if (ownKeys.length !== candidate.length) return false;
+        for (let index = candidate.length - 1; index >= 0; index -= 1) {
+          const descriptor = Object.getOwnPropertyDescriptor(candidate, String(index));
+          if (descriptor === undefined || !('value' in descriptor) || !descriptor.enumerable) return false;
+          stack.push(Object.freeze({ depth: visit.depth + 1, kind: 'enter', value: descriptor.value }));
+        }
+        continue;
+      }
+
+      const prototype = Object.getPrototypeOf(candidate);
+      if (prototype !== Object.prototype && prototype !== null) return false;
+      if (Object.getOwnPropertySymbols(candidate).length > 0) return false;
+      const keys = Object.keys(candidate);
+      for (let index = keys.length - 1; index >= 0; index -= 1) {
+        const key = keys[index];
+        if (key === undefined) return false;
+        const descriptor = Object.getOwnPropertyDescriptor(candidate, key);
+        if (descriptor === undefined || !('value' in descriptor) || !descriptor.enumerable) return false;
+        stack.push(Object.freeze({ depth: visit.depth + 1, kind: 'enter', value: descriptor.value }));
+      }
+    }
+    return true;
+  } catch {
+    return false;
   }
 };
 
@@ -183,27 +236,31 @@ class GuardedPostMessageTransport {
     }) as unknown as Window;
     this.#delegate = new PostMessageTransport(target, options.source as unknown as MessageEventSource);
     this.#inbound = (event) => {
-      if (this.#closed || event.source !== this.#source || event.origin !== this.#expectedOrigin) {
+      try {
+        if (this.#closed || event.source !== this.#source || event.origin !== this.#expectedOrigin) {
+          event.stopImmediatePropagation?.();
+          return;
+        }
+        // Stop the public transport's independent listener.  The guarded queue
+        // below is the single admission path, so matching traffic preserves
+        // arrival order rather than racing on the window event loop.
         event.stopImmediatePropagation?.();
-        return;
+        if (!boundedMessage(event.data)) {
+          this.#failure(new Error('MCP App inbound message is invalid or exceeds its bound.'));
+          return;
+        }
+        if (this.#inboundQueued >= maximumQueuedMessages) {
+          this.#failure(new Error('MCP App inbound message queue is full.'));
+          return;
+        }
+        this.#inboundQueued += 1;
+        this.#inboundTail = this.#inboundTail.then(() => {
+          if (!this.#closed) this.#delegate.onmessage?.(event.data as Parameters<NonNullable<PostMessageTransport['onmessage']>>[0]);
+        }).catch((error: unknown) => { this.#failure(error instanceof Error ? error : new Error(String(error))); })
+          .finally(() => { this.#inboundQueued -= 1; });
+      } catch (reason) {
+        this.#failure(reason instanceof Error ? reason : new Error(String(reason)));
       }
-      // Stop the public transport's independent listener.  The guarded queue
-      // below is the single admission path, so matching traffic preserves
-      // arrival order rather than racing on the window event loop.
-      event.stopImmediatePropagation?.();
-      if (!boundedMessage(event.data)) {
-        this.#failure(new Error('MCP App inbound message is invalid or exceeds its bound.'));
-        return;
-      }
-      if (this.#inboundQueued >= maximumQueuedMessages) {
-        this.#failure(new Error('MCP App inbound message queue is full.'));
-        return;
-      }
-      this.#inboundQueued += 1;
-      this.#inboundTail = this.#inboundTail.then(() => {
-        if (!this.#closed) this.#delegate.onmessage?.(event.data as Parameters<NonNullable<PostMessageTransport['onmessage']>>[0]);
-      }).catch((error: unknown) => { this.#failure(error instanceof Error ? error : new Error(String(error))); })
-        .finally(() => { this.#inboundQueued -= 1; });
     };
   }
 
@@ -224,9 +281,12 @@ class GuardedPostMessageTransport {
   }
 
   send(...args: Parameters<PostMessageTransport['send']>): Promise<void> {
-    if (this.#closed || !boundedMessage(args[0])) {
-      this.#failure(new Error('MCP App outbound message is invalid or exceeds its bound.'));
+    if (this.#closed) {
       return Promise.reject(new Error('MCP App transport is closed.'));
+    }
+    if (!boundedMessage(args[0])) {
+      this.#failure(new Error('MCP App outbound message is invalid or exceeds its bound.'));
+      return Promise.reject(new Error('MCP App outbound message is invalid or exceeds its bound.'));
     }
     if (this.#queued >= maximumQueuedMessages) {
       this.#failure(new Error('MCP App outbound message queue is full.'));
@@ -347,8 +407,13 @@ export const createBindingMcpClient = async (
   }
   const access = await controller.attachApp();
   if (access.sessionId !== preview.binding.sessionId || access.sessionRevision !== preview.binding.sessionRevision) {
-    await access.close().catch(() => undefined);
-    throw new Error('MCP App controller attachment does not match the preview session identity.');
+    const mismatch = new Error('MCP App controller attachment does not match the preview session identity.');
+    try {
+      await access.close();
+    } catch (reason) {
+      throw aggregateFailure('MCP App controller attachment mismatch cleanup failed.', [mismatch, reason]);
+    }
+    throw mismatch;
   }
   return access;
 };
@@ -365,106 +430,149 @@ export const createRuntimeAppBridgeFactory = (options: RuntimeAppBridgeOptions):
     if (policy.bindingId !== preview.binding.id || policy.snapshot !== preview.documentPolicy) {
       throw new Error('MCP App document policy is stale.');
     }
-    const access = await createBindingMcpClient(options.controller, options.client, preview);
-    if (options.client.currentDocumentPolicy(preview.binding.id) !== policy) {
-      await access.close().catch(() => undefined);
-      throw new Error('MCP App document policy changed while the controller attachment opened.');
-    }
-    const serverCapabilities = access.client.getServerCapabilities();
-    const transport = new GuardedPostMessageTransport({
-      expectedOrigin: preview.clientSurface.origin,
-      onFailClosed: () => {
-        void options.client.closeRuntime(preview.binding.id).catch(() => undefined);
-        void bridge.close().catch(() => undefined);
-      },
-      source: target,
-    });
-    // This is the one intentionally isolated compatibility cast: ext-apps
-    // 1.x consumes the SDK-v1 Client shape, while the controller owns v2.
-    const officialClient = Object.freeze({
-      getServerCapabilities: () => {
-        const capabilities = access.client.getServerCapabilities();
-        return Object.freeze({
-          ...(capabilities?.tools === undefined ? {} : { tools: capabilities.tools }),
-          ...(capabilities?.resources === undefined ? {} : { resources: capabilities.resources }),
-        });
-      },
-      request: access.client.request.bind(access.client),
-      setNotificationHandler: access.client.setNotificationHandler.bind(access.client),
-    }) as unknown as NonNullable<ConstructorParameters<typeof AppBridge>[0]>;
-    const bridge = new AppBridge(officialClient, { name: 'Agent Bundle Workbench', version: preview.binding.profileVersion }, bridgeCapabilities(options, preview, serverCapabilities), {
-      hostContext: safeHostContext(preview),
-    }) as unknown as RuntimeAppBridge;
-    if (serverCapabilities?.tools !== undefined) {
-      bridge.setRequestHandler(ListToolsRequestSchema, async (request, extra) => officialClient.request(
-        { method: 'tools/list', params: request.params },
-        ListToolsResultSchema,
-        { signal: extra.signal },
-      ));
-    }
-    bridge.addEventListener('loggingmessage', (entry) => {
-      const data = ordinaryJson(entry.data) ? entry.data : undefined;
-      options.onTrace(Object.freeze({
-        jsonrpc: '2.0',
-        method: 'notifications/message',
-        params: Object.freeze({
-          ...(data === undefined ? {} : { data }),
-          level: entry.level,
-          ...(entry.logger === undefined ? {} : { logger: entry.logger }),
-        }),
-      }) as McpAppBridgeMessage);
-    });
-    bridge.onopenlink = async ({ url }) => {
-      if (!validExternalUrl(url) || options.installedHandlers.openExternalLink === undefined) return { isError: true };
-      const approved = await sideEffectConsent(options, preview, 'open-external-link', Object.freeze({ url }), 'Open MCP App link');
-      if (!approved) return { isError: true };
-      await options.installedHandlers.openExternalLink(url);
-      return {};
-    };
-    bridge.ondownloadfile = async ({ contents }) => {
-      const candidate = download(contents);
-      if (candidate === undefined || options.installedHandlers.downloadFile === undefined) return { isError: true };
-      const approved = await sideEffectConsent(options, preview, 'download-file', candidate.contents, 'Download MCP App file');
-      if (!approved) return { isError: true };
-      await options.installedHandlers.downloadFile(candidate);
-      return {};
-    };
-    let displayFallback = bridge.onrequestdisplaymode;
-    const protectedDisplayHandler: DisplayHandler = async ({ mode }) => {
-      if (!validDisplayMode(mode) || options.installedHandlers.requestDisplayMode === undefined) {
-        return displayFallback === undefined ? { mode: 'inline' } : displayFallback({ mode } as never, {} as never);
-      }
-      const approved = await sideEffectConsent(options, preview, 'request-display-mode', Object.freeze({ mode }), 'Change MCP App display mode');
-      if (!approved) return displayFallback === undefined ? { mode: 'inline' } : displayFallback({ mode } as never, {} as never);
-      return { mode: await options.installedHandlers.requestDisplayMode(mode) };
-    };
-    // Register the protected handler through the official accessor before
-    // shielding that accessor from AppRenderer's later fallback assignment.
-    bridge.onrequestdisplaymode = protectedDisplayHandler as never;
-    Object.defineProperty(bridge, 'onrequestdisplaymode', {
-      configurable: false,
-      get: () => protectedDisplayHandler,
-      set: (fallback: unknown) => {
-        if (typeof fallback === 'function') {
-          // AppRenderer sets this after the bridge is constructed.  Preserve
-          // its behavior as the unapproved/unsupported fallback.
-          displayFallback = fallback as typeof displayFallback;
+    let access: McpSessionControllerAppAccess | undefined;
+    let bridge: RuntimeAppBridge | undefined;
+    let transport: GuardedPostMessageTransport | undefined;
+    let rawBridgeClose: (() => Promise<void>) | undefined;
+    let closePromise: Promise<void> | undefined;
+    const closeAttachment = (): Promise<void> => {
+      if (closePromise !== undefined) return closePromise;
+      closePromise = (async () => {
+        const failures: unknown[] = [];
+        if (rawBridgeClose !== undefined) {
+          try { await rawBridgeClose(); } catch (reason) { failures.push(reason); }
         }
-      },
-    });
-    if (options.simulationFeatures.chatGptWidgetState === 'enabled' && options.persistWidgetState !== undefined) {
-      bridge.onupdatemodelcontext = async ({ structuredContent }) => {
-        if (!ordinaryJson(structuredContent)) return {};
-        await options.persistWidgetState!(structuredContent);
+        if (transport !== undefined) {
+          try { await transport.close(); } catch (reason) { failures.push(reason); }
+        }
+        if (access !== undefined) {
+          try { await access.close(); } catch (reason) { failures.push(reason); }
+        }
+        if (failures.length > 0) throw aggregateFailure('MCP App bridge cleanup failed.', failures);
+      })();
+      return closePromise;
+    };
+    try {
+      const attached = await createBindingMcpClient(options.controller, options.client, preview);
+      access = attached;
+      if (options.client.currentDocumentPolicy(preview.binding.id) !== policy) {
+        throw new Error('MCP App document policy changed while the controller attachment opened.');
+      }
+      const serverCapabilities = attached.client.getServerCapabilities();
+      transport = new GuardedPostMessageTransport({
+        expectedOrigin: preview.clientSurface.origin,
+        onFailClosed: () => {
+          void options.client.closeRuntime(preview.binding.id).catch(() => undefined);
+          void closeAttachment().catch(() => undefined);
+        },
+        source: target,
+      });
+      // This is the one intentionally isolated compatibility cast: ext-apps
+      // 1.x consumes the SDK-v1 Client shape, while the controller owns v2.
+      const officialClient = Object.freeze({
+        getServerCapabilities: () => {
+          const capabilities = attached.client.getServerCapabilities();
+          return Object.freeze({
+            ...(capabilities?.tools === undefined ? {} : { tools: capabilities.tools }),
+            ...(capabilities?.resources === undefined ? {} : { resources: capabilities.resources }),
+          });
+        },
+        request: attached.client.request.bind(attached.client),
+        setNotificationHandler: attached.client.setNotificationHandler.bind(attached.client),
+      }) as unknown as NonNullable<ConstructorParameters<typeof AppBridge>[0]>;
+      bridge = new AppBridge(officialClient, { name: 'Agent Bundle Workbench', version: preview.binding.profileVersion }, bridgeCapabilities(options, preview, serverCapabilities), {
+        hostContext: safeHostContext(preview),
+      }) as unknown as RuntimeAppBridge;
+      rawBridgeClose = bridge.close.bind(bridge);
+      Object.defineProperty(bridge, 'close', {
+        configurable: false,
+        value: closeAttachment,
+        writable: false,
+      });
+      if (serverCapabilities?.tools !== undefined) {
+        bridge.setRequestHandler(ListToolsRequestSchema, async (request, extra) => officialClient.request(
+          { method: 'tools/list', params: request.params },
+          ListToolsResultSchema,
+          { signal: extra.signal },
+        ));
+      }
+      bridge.addEventListener('loggingmessage', (entry) => {
+        const data = ordinaryJson(entry.data) ? entry.data : undefined;
+        options.onTrace(Object.freeze({
+          jsonrpc: '2.0',
+          method: 'notifications/message',
+          params: Object.freeze({
+            ...(data === undefined ? {} : { data }),
+            level: entry.level,
+            ...(entry.logger === undefined ? {} : { logger: entry.logger }),
+          }),
+        }) as McpAppBridgeMessage);
+      });
+      bridge.onopenlink = async ({ url }) => {
+        if (!validExternalUrl(url) || options.installedHandlers.openExternalLink === undefined) return { isError: true };
+        const approved = await sideEffectConsent(options, preview, 'open-external-link', Object.freeze({ url }), 'Open MCP App link');
+        if (!approved) return { isError: true };
+        await options.installedHandlers.openExternalLink(url);
         return {};
       };
+      bridge.ondownloadfile = async ({ contents }) => {
+        const candidate = download(contents);
+        if (candidate === undefined || options.installedHandlers.downloadFile === undefined) return { isError: true };
+        const approved = await sideEffectConsent(options, preview, 'download-file', candidate.contents, 'Download MCP App file');
+        if (!approved) return { isError: true };
+        await options.installedHandlers.downloadFile(candidate);
+        return {};
+      };
+      let displayFallback = bridge.onrequestdisplaymode;
+      const safeDisplayMode = validDisplayMode(preview.profile.hostContext.displayMode)
+        ? preview.profile.hostContext.displayMode
+        : 'inline';
+      const protectedDisplayHandler: DisplayHandler = async ({ mode }, extra) => {
+        if (!validDisplayMode(mode) || options.installedHandlers.requestDisplayMode === undefined) return { mode: safeDisplayMode };
+        const approved = await sideEffectConsent(options, preview, 'request-display-mode', Object.freeze({ mode }), 'Change MCP App display mode');
+        if (!approved) return { mode: safeDisplayMode };
+        const applied = await options.installedHandlers.requestDisplayMode(mode);
+        if (!validDisplayMode(applied)) return { mode: safeDisplayMode };
+        const rendered = displayFallback === undefined
+          ? { mode: applied }
+          : await displayFallback({ mode: applied } as never, extra);
+        return validDisplayMode(rendered.mode) ? { mode: rendered.mode } : { mode: applied };
+      };
+      // Register the protected handler through the official accessor before
+      // shielding that accessor from AppRenderer's later fallback assignment.
+      bridge.onrequestdisplaymode = protectedDisplayHandler as never;
+      Object.defineProperty(bridge, 'onrequestdisplaymode', {
+        configurable: false,
+        get: () => protectedDisplayHandler,
+        set: (fallback: unknown) => {
+          if (typeof fallback === 'function') {
+            // AppRenderer sets this after the bridge is constructed.  Preserve
+            // its behavior as the approved renderer composition.
+            displayFallback = fallback as typeof displayFallback;
+          }
+        },
+      });
+      if (options.simulationFeatures.chatGptWidgetState === 'enabled' && options.persistWidgetState !== undefined) {
+        bridge.onupdatemodelcontext = async ({ structuredContent }) => {
+          if (!ordinaryJson(structuredContent)) return {};
+          await options.persistWidgetState!(structuredContent);
+          return {};
+        };
+      }
+      await bridge.connect(transport);
+      // ext-apps automatically installs this handler if resources exist.  The
+      // runtime dispatcher intentionally has no template route, so visibly
+      // reject it instead of allowing an arbitrary method to reach the client.
+      bridge.onlistresourcetemplates = async () => { throw new Error('MCP App resource templates are unsupported.'); };
+      bridge.onlistprompts = async () => { throw new Error('MCP App prompts are unsupported.'); };
+      return bridge;
+    } catch (reason) {
+      try {
+        await closeAttachment();
+      } catch (cleanupReason) {
+        throw aggregateFailure('MCP App bridge setup failed and cleanup was incomplete.', [reason, cleanupReason]);
+      }
+      throw reason;
     }
-    await bridge.connect(transport);
-    // ext-apps automatically installs this handler if resources exist.  The
-    // runtime dispatcher intentionally has no template route, so visibly
-    // reject it instead of allowing an arbitrary method to reach the client.
-    bridge.onlistresourcetemplates = async () => { throw new Error('MCP App resource templates are unsupported.'); };
-    bridge.onlistprompts = async () => { throw new Error('MCP App prompts are unsupported.'); };
-    return bridge;
   };
 };
