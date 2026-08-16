@@ -1,7 +1,7 @@
 import { mkdirSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { appendFile, link, mkdtemp, mkdir, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 import { expect, it } from '@rstest/core';
 
@@ -22,16 +22,42 @@ interface SessionIndex {
   readonly sessionId: string;
 }
 
+type PlaygroundDirectorySyncReason =
+  | 'final-index-publication'
+  | 'layout-index-entry'
+  | 'layout-object-entry'
+  | 'layout-pending-index-entry'
+  | 'layout-project-entry'
+  | 'layout-sessions-entry'
+  | 'layout-storage-entry'
+  | 'new-file'
+  | 'object-created'
+  | 'owner-lock-create'
+  | 'owner-lock-create-recovery'
+  | 'owner-lock-recovery'
+  | 'owner-lock-release'
+  | 'pending-index-publication'
+  | 'session-metadata-rename';
+
+type PlaygroundDurableFilePhase = 'event' | 'owner' | 'pending-index' | 'session-metadata';
+
 type PlaygroundDurabilityTestPhase =
   | 'after-final-index-link'
   | 'before-directory-sync:owner-lock-create'
   | 'before-directory-sync:session-metadata-rename'
-  | 'before-final-index-link';
+  | 'before-final-index-link'
+  | `before-directory-fsync:${PlaygroundDirectorySyncReason}`
+  | `before-directory-open:${PlaygroundDirectorySyncReason}`
+  | `before-directory-sync:${PlaygroundDirectorySyncReason}`
+  | `before-file-fsync:${PlaygroundDurableFilePhase}`
+  | `before-file-write:${PlaygroundDurableFilePhase}`;
 
 type PlaygroundDurabilityTestHook = (phase: PlaygroundDurabilityTestPhase, path: string) => void;
 
 const playgroundDurabilityTestHookKey = Symbol.for('agent-bundle.playground-service.durability-test-hook');
+const playgroundDurabilityTestPlatformKey = Symbol.for('agent-bundle.playground-service.durability-test-platform');
 const durabilityTestHooks = globalThis as typeof globalThis & Record<symbol, PlaygroundDurabilityTestHook | undefined>;
+const durabilityTestPlatforms = globalThis as typeof globalThis & Record<symbol, NodeJS.Platform | undefined>;
 
 const withDurabilityTestHook = async <T>(hook: PlaygroundDurabilityTestHook, operation: () => Promise<T>): Promise<T> => {
   const previous = durabilityTestHooks[playgroundDurabilityTestHookKey];
@@ -49,6 +75,22 @@ const withDurabilityTestHook = async <T>(hook: PlaygroundDurabilityTestHook, ope
 };
 
 const injectedIoFailure = (message: string): NodeJS.ErrnoException => Object.assign(new Error(message), { code: 'EIO' });
+const injectedErrnoFailure = (code: string, message: string): NodeJS.ErrnoException => Object.assign(new Error(message), { code });
+
+const withDurabilityTestPlatform = async <T>(platform: NodeJS.Platform, operation: () => Promise<T>): Promise<T> => {
+  const previous = durabilityTestPlatforms[playgroundDurabilityTestPlatformKey];
+  const previousNodeEnvironment = process.env.NODE_ENV;
+  durabilityTestPlatforms[playgroundDurabilityTestPlatformKey] = platform;
+  process.env.NODE_ENV = 'test';
+  try {
+    return await operation();
+  } finally {
+    if (previous === undefined) delete durabilityTestPlatforms[playgroundDurabilityTestPlatformKey];
+    else durabilityTestPlatforms[playgroundDurabilityTestPlatformKey] = previous;
+    if (previousNodeEnvironment === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = previousNodeEnvironment;
+  }
+};
 
 const eventually = async (assertion: () => void, attempts = 100): Promise<void> => {
   let failure: unknown;
@@ -154,6 +196,121 @@ const createFixture = async (input: Readonly<{
     storageRoot,
   });
 };
+
+it('tolerates only unsupported Windows directory fsync errors', async () => {
+  for (const code of ['EACCES', 'EINVAL'] as const) {
+    const fixture = await createFixture();
+    let observed = false;
+    try {
+      await withDurabilityTestPlatform('win32', async () => {
+        await withDurabilityTestHook((phase) => {
+          if (phase === 'before-directory-fsync:object-created') {
+            observed = true;
+            throw injectedErrnoFailure(code, `Windows directory fsync ${code}`);
+          }
+        }, async () => {
+          await expect(fixture.service.openSession({ ...sessionInput(), sessionId: `windows-directory-${code}` })).resolves.toMatchObject({ state: 'open' });
+        });
+      });
+      expect(observed).toBe(true);
+    } finally {
+      await fixture.close();
+    }
+  }
+
+  for (const [phase, code] of [
+    ['before-directory-open:object-created', 'EACCES'],
+    ['before-directory-fsync:object-created', 'EIO'],
+    ['before-file-fsync:event', 'EACCES'],
+  ] as const) {
+    const fixture = await createFixture();
+    let observed = false;
+    try {
+      await withDurabilityTestPlatform('win32', async () => {
+        await withDurabilityTestHook((candidate) => {
+          if (candidate === phase) {
+            observed = true;
+            throw injectedErrnoFailure(code, `unexpected durability error ${code}`);
+          }
+        }, async () => {
+          await expect(fixture.service.openSession({ ...sessionInput(), sessionId: `windows-propagated-${phase.replaceAll(':', '-')}` }))
+            .rejects.toMatchObject({ code });
+        });
+      });
+      expect(observed).toBe(true);
+    } finally {
+      await fixture.close();
+    }
+  }
+});
+
+it('anchors every first-use layout directory with a parent sync', async () => {
+  const fixture = await createFixture();
+  const observed: Array<readonly [PlaygroundDurabilityTestPhase, string]> = [];
+  try {
+    await withDurabilityTestHook((phase, path) => {
+      if (phase.startsWith('before-directory-sync:layout-')) observed.push([phase, path]);
+    }, async () => {
+      await fixture.service.openSession({ ...sessionInput(), sessionId: 'layout-syncs' });
+    });
+    expect(observed).toEqual([
+      ['before-directory-sync:layout-project-entry', fixture.projectRoot],
+      ['before-directory-sync:layout-storage-entry', dirname(fixture.storageRoot)],
+      ['before-directory-sync:layout-sessions-entry', fixture.storageRoot],
+      ['before-directory-sync:layout-object-entry', fixture.storageRoot],
+      ['before-directory-sync:layout-index-entry', fixture.storageRoot],
+      ['before-directory-sync:layout-pending-index-entry', join(fixture.storageRoot, 'session-index')],
+    ]);
+  } finally {
+    await fixture.close();
+  }
+});
+
+const prepublicationFailurePhases = [
+  'before-file-write:owner',
+  'before-file-fsync:owner',
+  'before-file-write:event',
+  'before-file-fsync:event',
+  'before-file-write:session-metadata',
+  'before-file-fsync:session-metadata',
+  'before-file-write:pending-index',
+  'before-file-fsync:pending-index',
+] as const;
+
+for (const phase of prepublicationFailurePhases) {
+  it(`leaves an unreachable object and unchanged legacy session when ${phase} fails before publication`, async () => {
+    const fixture = await createFixture();
+    const sessionId = `prepublication-${phase.replaceAll(':', '-')}`;
+    let reader: PlaygroundService | undefined;
+    try {
+      const legacyRoot = await writeLegacySession(fixture.storageRoot, sessionId);
+      const legacyBefore = await snapshotDirectory(legacyRoot);
+      let observed = false;
+      await withDurabilityTestHook((candidate) => {
+        if (candidate === phase) {
+          observed = true;
+          throw injectedIoFailure(`${phase} failed`);
+        }
+      }, async () => {
+        await expect(fixture.service.openSession({ ...sessionInput(), sessionId })).rejects.toMatchObject({ code: 'EIO' });
+      });
+      expect(observed).toBe(true);
+      await expect(readFile(indexPath(fixture.storageRoot, sessionId), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(readdir(join(fixture.storageRoot, 'session-objects'))).resolves.toHaveLength(1);
+      await expect(snapshotDirectory(legacyRoot)).resolves.toEqual(legacyBefore);
+      await expect(fixture.service.close()).resolves.toBeUndefined();
+      reader = new PlaygroundService({
+        projectId: 'project-1',
+        projectRoot: fixture.projectRoot,
+        storageRoot: fixture.storageRoot,
+      });
+      await expect(reader.reopen(sessionId)).resolves.toMatchObject({ id: sessionId, state: 'finalized' });
+    } finally {
+      await reader?.close().catch(() => undefined);
+      await fixture.close();
+    }
+  });
+}
 
 it('persists a frozen, globally ordered whole-plugin timeline with raw replay references and promotes only durable assertions', async () => {
   const fixture = await createFixture();
