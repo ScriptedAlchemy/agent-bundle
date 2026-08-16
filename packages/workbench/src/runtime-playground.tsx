@@ -18,7 +18,10 @@ import {
   type RuntimeModelAction,
   type RuntimeProfileOption,
 } from './runtime-model.ts';
-import type { RuntimeLiveMcpPageAdapter } from './runtime-stage.tsx';
+import type {
+  RuntimeAppPreviewRenderer,
+  RuntimeLiveMcpPageAdapter,
+} from './runtime-stage.tsx';
 
 const RuntimeStage = React.lazy(async () => ({ default: (await import('./runtime-stage.tsx')).RuntimeStage }));
 const RuntimeInspector = React.lazy(async () => ({ default: (await import('./runtime-inspector.tsx')).RuntimeInspector }));
@@ -40,6 +43,12 @@ export interface RuntimePlaygroundController {
   subscribe(listener: (model: RuntimeModel) => void): () => void;
   whenIdle(): Promise<void>;
 }
+
+export interface RuntimeAppPreviewLifecycle {
+  close(): Promise<void>;
+}
+
+export type RuntimeAppPreviewLifecycleRegistrar = (handle: RuntimeAppPreviewLifecycle) => () => void;
 
 export interface RuntimeEventReceiver {
   receive(event: ProjectEventMessage): Promise<void>;
@@ -322,6 +331,8 @@ export const createRuntimeEventBuffer = (options?: RuntimeEventBufferOptions): R
 
 export interface RuntimePlaygroundProps {
   readonly controller: RuntimePlaygroundController;
+  readonly registerAppPreviewLifecycle?: RuntimeAppPreviewLifecycleRegistrar;
+  readonly renderAppPreview?: RuntimeAppPreviewRenderer;
 }
 
 const selectedRun = (model: RuntimeModel): DevRuntimeRun | undefined =>
@@ -382,7 +393,7 @@ const historyLabel = (run: DevRuntimeRun): string => [
 const resetSeedLabel = (request: DevRuntimeStateResetRequest): string =>
   request.seed === undefined ? 'No fixture seed' : JSON.stringify(request.seed);
 
-export const RuntimePlayground = ({ controller }: RuntimePlaygroundProps): React.ReactNode => {
+export const RuntimePlayground = ({ controller, registerAppPreviewLifecycle, renderAppPreview }: RuntimePlaygroundProps): React.ReactNode => {
   const [model, setModel] = useState(controller.model);
   const cancelRef = useRef<HTMLButtonElement>(null);
   const confirmRef = useRef<HTMLButtonElement>(null);
@@ -568,7 +579,16 @@ export const RuntimePlayground = ({ controller }: RuntimePlaygroundProps): React
       </li>)}</ol></section>
       <div className="runtime-evidence">
         <React.Suspense fallback={<p>Loading runtime evidence…</p>}>
-          <RuntimeStage lastGoodRun={lastGoodRun} profile={profile} profileId={model.selectedProfileId} run={run} status={model.status} surface={surface} />
+          <RuntimeStage
+            lastGoodRun={lastGoodRun}
+            profile={profile}
+            profileId={model.selectedProfileId}
+            registerAppPreviewLifecycle={registerAppPreviewLifecycle}
+            renderAppPreview={renderAppPreview}
+            run={run}
+            status={model.status}
+            surface={surface}
+          />
           <RuntimeInspector onTabChange={(tab) => controller.dispatch({ tab, type: 'selection.tab' })} run={run} status={model.status} surface={evidenceSurface} tab={model.selectedTab} />
         </React.Suspense>
       </div>

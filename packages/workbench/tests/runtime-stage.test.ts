@@ -3,8 +3,12 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from '@rstest/core';
 
 import type { DevRuntimeRun, DevRuntimeSurface } from '../../agent-bundle/src/dev/runtime-protocol.ts';
-import { RuntimeStage, type RuntimeAppPreviewRenderer } from '../src/runtime-stage.tsx';
+import {
+  RuntimeStage,
+  type RuntimeAppPreviewRenderer,
+} from '../src/runtime-stage.tsx';
 import type { RuntimeProfileOption } from '../src/runtime-model.ts';
+import type { RuntimeAppPreviewLifecycleRegistrar } from '../src/runtime-playground.tsx';
 
 const profile = {
   claimsRealHostParity: false,
@@ -70,6 +74,47 @@ const runtimeStatus = (activeVector: DevRuntimeRun['vector']) => ({
 } as const);
 
 describe('Runtime stage', () => {
+  it('forwards one exact lifecycle registrar to the injected preview without becoming its owner', () => {
+    let registrarCalls = 0;
+    const registrar: RuntimeAppPreviewLifecycleRegistrar = (_handle) => {
+      registrarCalls += 1;
+      return () => undefined;
+    };
+    let rendererCalls = 0;
+    let receivedRegistrar: unknown;
+    const renderer: RuntimeAppPreviewRenderer = (props) => {
+      rendererCalls += 1;
+      receivedRegistrar = props.registerLifecycle;
+      return createElement('div', { 'data-runtime-app-sentinel': 'lifecycle' }, 'Injected App');
+    };
+
+    const markup = renderToStaticMarkup(createElement(RuntimeStage, {
+      profile,
+      profileId: 'portable',
+      renderAppPreview: renderer,
+      run,
+      registerAppPreviewLifecycle: registrar,
+      surface,
+    }));
+
+    expect(rendererCalls).toBe(1);
+    expect(receivedRegistrar).toBe(registrar);
+    expect(registrarCalls).toBe(0);
+    expect((markup.match(/data-runtime-app-sentinel/g) ?? [])).toHaveLength(1);
+  });
+
+  it('keeps the existing four preview fields when no lifecycle registrar is supplied', () => {
+    let keys: readonly string[] = [];
+    const renderer: RuntimeAppPreviewRenderer = (props) => {
+      keys = Object.keys(props).sort();
+      return createElement('div', { 'data-runtime-app-sentinel': 'without-lifecycle' });
+    };
+
+    renderToStaticMarkup(createElement(RuntimeStage, { profile, profileId: 'portable', renderAppPreview: renderer, run, surface }));
+
+    expect(keys).toEqual(['profile', 'profileId', 'run', 'surface']);
+  });
+
   it('places one injected App renderer beside model-visible output without Runtime App chrome', () => {
     const renderer: RuntimeAppPreviewRenderer = () => createElement('div', { 'data-runtime-app-sentinel': 'one' }, 'Injected App');
     const markup = renderToStaticMarkup(createElement(RuntimeStage, { profile, profileId: 'portable', renderAppPreview: renderer, run, surface }));

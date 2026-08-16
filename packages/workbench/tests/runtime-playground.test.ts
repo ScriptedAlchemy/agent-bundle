@@ -3,7 +3,7 @@ import { join } from 'node:path';
 
 import { expect, it } from '@rstest/core';
 import { createElement } from 'react';
-import { renderToStaticMarkup } from 'react-dom/server';
+import { renderToReadableStream, renderToStaticMarkup } from 'react-dom/server';
 
 import type {
   DevRuntimeInvocationRequest,
@@ -23,9 +23,11 @@ import {
   runtimeDataAttributesFor,
   runtimePlaygroundLiveMcpPageAdapter,
   RuntimePlayground,
+  type RuntimeAppPreviewLifecycleRegistrar,
   type RuntimePlaygroundClient,
 } from '../src/runtime-playground.tsx';
 import type { RuntimeProfileOption } from '../src/runtime-model.ts';
+import type { RuntimeAppPreviewRenderer } from '../src/runtime-stage.tsx';
 
 const vector = Object.freeze({
   artifactEpochId: 'epoch-a',
@@ -133,6 +135,12 @@ const runtimeEvent = (sequence: number, type: RuntimeEvent['type'], runId?: stri
   type: 'runtime.event',
 });
 
+const renderWhenReady = async (node: React.ReactNode): Promise<string> => {
+  const stream = await renderToReadableStream(node);
+  await stream.allReady;
+  return new Response(stream).text();
+};
+
 it('includes the Runtime Playground unit contract in its dedicated coverage selection', async () => {
   const config = await readFile(join(process.cwd(), 'rstest.runtime-playground.config.ts'), 'utf8');
 
@@ -164,6 +172,68 @@ it('renders the available Runtime playground controls, identity, and optional ca
   expect(markup).toContain('Run history');
   expect(markup).toContain('data-runtime-provider-session="provider-a"');
   expect(markup).toContain('Loading runtime evidence…');
+});
+
+it('forwards the one preview renderer and exact lifecycle registrar to its sole Stage boundary without invoking either lifecycle owner', async () => {
+  const appSurface = Object.freeze({ ...surface, id: 'app/customer', kind: 'mcp-app' as const, label: 'Customer App' });
+  const appRun = Object.freeze({
+    completedAt: '2026-08-15T12:00:01.000Z',
+    fixtureId: 'fixture-a',
+    id: '01',
+    input: Object.freeze({ city: 'London' }),
+    result: Object.freeze({
+      agentVisible: Object.freeze({ city: 'London' }),
+      app: Object.freeze({
+        mcpBinding: Object.freeze({
+          definitionDigest: 'definition',
+          registryRevision: 1,
+          serverDigest: 'server',
+          serverName: 'customer',
+          sessionId: 'session',
+          sessionRevision: 1,
+          target: 'portable',
+          transportDigest: 'transport',
+        }),
+        resourceUri: 'ui://customer/app.html',
+        surfaceId: 'app/customer',
+      }),
+      state: Object.freeze({ identity: Object.freeze({ stateStoreId: 'state-a', stateVersion: 1 }) }),
+      trace: Object.freeze([]),
+      tree: Object.freeze([]),
+    }),
+    startedAt: '2026-08-15T12:01:00.000Z',
+    status: 'succeeded' as const,
+    surfaceId: 'app/customer',
+    target: 'portable',
+    vector,
+  } satisfies DevRuntimeRun);
+  const controller = createRuntimePlaygroundController({
+    bootstrap: bootstrap({ history: Object.freeze([appRun]), surfaces: Object.freeze([appSurface]) }),
+    client: clientFor(),
+    profiles,
+  });
+  let rendererCalls = 0;
+  let registrarCalls = 0;
+  let receivedRegistrar: unknown;
+  const registrar: RuntimeAppPreviewLifecycleRegistrar = (_handle) => {
+    registrarCalls += 1;
+    return () => undefined;
+  };
+  const renderer: RuntimeAppPreviewRenderer = (props): React.ReactNode => {
+    rendererCalls += 1;
+    receivedRegistrar = props.registerLifecycle;
+    return createElement('div', { 'data-runtime-app-sentinel': 'playground' }, 'Injected App');
+  };
+
+  await renderWhenReady(createElement(RuntimePlayground, {
+    controller,
+    registerAppPreviewLifecycle: registrar,
+    renderAppPreview: renderer,
+  }));
+
+  expect(rendererCalls).toBe(1);
+  expect(receivedRegistrar).toBe(registrar);
+  expect(registrarCalls).toBe(0);
 });
 
 it('renders each ordered Runtime history item with its stable run ID', () => {

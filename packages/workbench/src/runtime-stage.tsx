@@ -2,10 +2,12 @@ import React from 'react';
 
 import type { DevRuntimeInspectionEnvelope, DevRuntimeRun, DevRuntimeStatus, DevRuntimeSurface } from '../../agent-bundle/src/dev/runtime-protocol.ts';
 import type { RuntimeProfileOption } from './runtime-model.ts';
+import type { RuntimeAppPreviewLifecycleRegistrar } from './runtime-playground.tsx';
 
 export interface RuntimeAppPreviewProps {
   readonly profile: RuntimeProfileOption;
   readonly profileId: string;
+  readonly registerLifecycle?: RuntimeAppPreviewLifecycleRegistrar;
   readonly run: DevRuntimeRun;
   readonly surface: DevRuntimeSurface;
 }
@@ -28,6 +30,7 @@ export interface RuntimeStageProps {
   readonly profile?: RuntimeProfileOption;
   readonly profileId?: string;
   readonly renderAppPreview?: RuntimeAppPreviewRenderer;
+  readonly registerAppPreviewLifecycle?: RuntimeAppPreviewLifecycleRegistrar;
   readonly run?: DevRuntimeRun;
   readonly status?: DevRuntimeStatus;
   readonly surface?: DevRuntimeSurface;
@@ -58,22 +61,29 @@ const renderedApp = (
   profile: RuntimeProfileOption | undefined,
   profileId: string | undefined,
   renderer: RuntimeAppPreviewRenderer | undefined,
+  registerLifecycle: RuntimeAppPreviewLifecycleRegistrar | undefined,
 ): React.ReactNode | undefined => {
   if (run?.status !== 'succeeded' || run.result.app === undefined || surface === undefined || profile === undefined || profileId === undefined || renderer === undefined) {
     return undefined;
   }
   try {
-    return renderer({ profile, profileId, run, surface });
+    return renderer({
+      profile,
+      profileId,
+      ...(registerLifecycle === undefined ? {} : { registerLifecycle }),
+      run,
+      surface,
+    });
   } catch {
     return undefined;
   }
 };
 
-export const RuntimeStage = ({ lastGoodRun, profile, profileId, renderAppPreview, run, status, surface }: RuntimeStageProps): React.ReactNode => {
+export const RuntimeStage = ({ lastGoodRun, profile, profileId, renderAppPreview, registerAppPreviewLifecycle, run, status, surface }: RuntimeStageProps): React.ReactNode => {
   const retainedLastGood = run?.status === 'failed' ? lastGoodRun : undefined;
   const evidenceRun = run?.status === 'succeeded' ? run : retainedLastGood;
   const result = evidenceRun?.status === 'succeeded' ? evidenceRun.result : undefined;
-  const app = renderedApp(evidenceRun, surface, profile, profileId, renderAppPreview);
+  const app = renderedApp(evidenceRun, surface, profile, profileId, renderAppPreview, registerAppPreviewLifecycle);
   const activeVector = status?.activeVector;
   const evidenceCurrent = evidenceRun !== undefined && activeVector !== undefined && sameRuntimeIdentity(evidenceRun.vector, activeVector);
   const lastGood = lastGoodRun ?? (run?.status === 'succeeded' ? run : undefined);
