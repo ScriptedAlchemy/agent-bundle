@@ -147,11 +147,34 @@ interface TraceRefresh {
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
-const isBinding = (value: unknown): value is McpSessionControllerBinding =>
-  isRecord(value) && Object.keys(value).length === 3 &&
-  typeof value.epochId === 'string' && value.epochId.length > 0 &&
-  typeof value.serverName === 'string' && value.serverName.length > 0 &&
-  (value.target === 'claude' || value.target === 'codex' || value.target === 'portable');
+const isDataDescriptor = (value: PropertyDescriptor | undefined): value is PropertyDescriptor & { readonly value: unknown } =>
+  value !== undefined && Object.hasOwn(value, 'value') && !Object.hasOwn(value, 'get') && !Object.hasOwn(value, 'set');
+
+const bindingSnapshot = (value: unknown): McpSessionControllerBinding | undefined => {
+  try {
+    if (!isRecord(value)) return undefined;
+    const descriptors = Object.getOwnPropertyDescriptors(value);
+    const keys = Reflect.ownKeys(descriptors);
+    const prototype = Object.getPrototypeOf(value);
+    if (
+      keys.length !== 3 ||
+      keys.some((key) => key !== 'epochId' && key !== 'serverName' && key !== 'target') ||
+      (prototype !== Object.prototype && prototype !== null)
+    ) return undefined;
+    const epochId = descriptors.epochId;
+    const serverName = descriptors.serverName;
+    const target = descriptors.target;
+    if (!isDataDescriptor(epochId) || !isDataDescriptor(serverName) || !isDataDescriptor(target)) return undefined;
+    if (
+      typeof epochId.value !== 'string' || epochId.value.length === 0 ||
+      typeof serverName.value !== 'string' || serverName.value.length === 0 ||
+      (target.value !== 'claude' && target.value !== 'codex' && target.value !== 'portable')
+    ) return undefined;
+    return Object.freeze({ epochId: epochId.value, serverName: serverName.value, target: target.value });
+  } catch {
+    return undefined;
+  }
+};
 
 const sameBinding = (left: McpSessionControllerBinding, right: McpSessionControllerBinding): boolean =>
   left.epochId === right.epochId && left.serverName === right.serverName && left.target === right.target;
@@ -285,6 +308,7 @@ export class McpSessionController {
   #client: McpSessionControllerClient | undefined;
   #closePromise: Promise<void> | undefined;
   #closing = false;
+  #constructing = false;
   #generation = 0;
   #model = createMcpBrowserSessionModel('mcp-session-controller');
   #requests = new Map<string, ActiveRequest>();
@@ -320,21 +344,30 @@ export class McpSessionController {
   }
 
   async open(binding: McpSessionControllerBinding, timeoutMs?: number): Promise<McpBrowserSessionModel> {
-    if (!isBinding(binding)) throw new McpSessionControllerError('MCP session binding must contain only epochId, target, and serverName.');
+    const requested = bindingSnapshot(binding);
+    if (requested === undefined) throw new McpSessionControllerError('MCP session binding must contain only epochId, target, and serverName.');
     if (timeoutMs !== undefined && (!Number.isFinite(timeoutMs) || timeoutMs <= 0)) {
       throw new McpSessionControllerError('MCP session timeout must be a positive finite number.');
     }
     if (this.#state === 'closing') throw new McpSessionControllerError('MCP session controller is closing.');
-    if (this.#state !== 'idle') throw new McpSessionControllerError('MCP session controller is already open.');
+    if (this.#state !== 'idle' || this.#constructing) throw new McpSessionControllerError('MCP session controller is already open.');
+    let transport: McpSessionControllerTransport | undefined;
+    let client: McpSessionControllerClient | undefined;
+    this.#constructing = true;
+    try {
+      transport = this.#transportFactory({
+        binding: requested,
+        routes: this.#routes,
+        ...(timeoutMs === undefined ? {} : { timeoutMs }),
+      });
+      client = this.#clientFactory();
+    } catch (reason) {
+      throw await this.#failConstruction(client, transport, reason);
+    } finally {
+      this.#constructing = false;
+    }
     this.#state = 'opening';
     const generation = ++this.#generation;
-    const requested = Object.freeze({ ...binding });
-    const transport = this.#transportFactory({
-      binding: requested,
-      routes: this.#routes,
-      ...(timeoutMs === undefined ? {} : { timeoutMs }),
-    });
-    const client = this.#clientFactory();
     this.#binding = requested;
     this.#transport = transport;
     this.#client = client;
@@ -576,6 +609,18 @@ export class McpSessionController {
     this.#publishTerminalFailure(code, error);
     rejectClose(error);
     return error;
+  }
+
+  async #failConstruction(
+    client: McpSessionControllerClient | undefined,
+    transport: McpSessionControllerTransport | undefined,
+    reason: unknown,
+  ): Promise<McpSessionControllerFailureError> {
+    const failures = await this.#settleCleanup([
+      ...(client === undefined ? [] : [{ resource: 'client' as const, run: () => client.close() }]),
+      ...(transport === undefined ? [] : [{ resource: 'transport' as const, run: () => transport.close() }]),
+    ]);
+    return new McpSessionControllerFailureError(reason, failures);
   }
 
   async #drainResources(
