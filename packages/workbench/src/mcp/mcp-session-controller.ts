@@ -72,6 +72,7 @@ export interface McpSessionControllerOptions {
   readonly transportFactory?: (options: Readonly<{
     readonly binding: McpSessionControllerBinding;
     readonly routes: McpSessionControllerRoutes;
+    readonly timeoutMs?: number;
   }>) => McpSessionControllerTransport;
 }
 
@@ -263,9 +264,11 @@ const defaultClient = (): McpSessionControllerClient =>
 const defaultTransport = (options: Readonly<{
   readonly binding: McpSessionControllerBinding;
   readonly routes: McpSessionControllerRoutes;
+  readonly timeoutMs?: number;
 }>): McpSessionControllerTransport => new AgentBundleRemoteTransport({
   binding: options.binding,
   routes: options.routes as McpRouteClient,
+  ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
 });
 
 /** Browser-facing lifecycle owner for one epoch-bound MCP session. */
@@ -276,6 +279,7 @@ export class McpSessionController {
   readonly #transportFactory: (options: Readonly<{
     readonly binding: McpSessionControllerBinding;
     readonly routes: McpSessionControllerRoutes;
+    readonly timeoutMs?: number;
   }>) => McpSessionControllerTransport;
   #binding: McpSessionControllerBinding | undefined;
   #client: McpSessionControllerClient | undefined;
@@ -305,20 +309,31 @@ export class McpSessionController {
     return this.#model;
   }
 
+  get session(): McpRouteSession | undefined {
+    return this.#session;
+  }
+
   subscribe(listener: McpSessionControllerListener): () => void {
     this.#listeners.add(listener);
     listener(this.#model);
     return () => this.#listeners.delete(listener);
   }
 
-  async open(binding: McpSessionControllerBinding): Promise<McpBrowserSessionModel> {
+  async open(binding: McpSessionControllerBinding, timeoutMs?: number): Promise<McpBrowserSessionModel> {
     if (!isBinding(binding)) throw new McpSessionControllerError('MCP session binding must contain only epochId, target, and serverName.');
+    if (timeoutMs !== undefined && (!Number.isFinite(timeoutMs) || timeoutMs <= 0)) {
+      throw new McpSessionControllerError('MCP session timeout must be a positive finite number.');
+    }
     if (this.#state === 'closing') throw new McpSessionControllerError('MCP session controller is closing.');
     if (this.#state !== 'idle') throw new McpSessionControllerError('MCP session controller is already open.');
     this.#state = 'opening';
     const generation = ++this.#generation;
     const requested = Object.freeze({ ...binding });
-    const transport = this.#transportFactory({ binding: requested, routes: this.#routes });
+    const transport = this.#transportFactory({
+      binding: requested,
+      routes: this.#routes,
+      ...(timeoutMs === undefined ? {} : { timeoutMs }),
+    });
     const client = this.#clientFactory();
     this.#binding = requested;
     this.#transport = transport;

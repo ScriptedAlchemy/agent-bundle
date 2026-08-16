@@ -83,6 +83,7 @@ const connection = Object.freeze({
 const routeFetch = (options: {
   readonly operation?: (body: Record<string, unknown>) => unknown;
   readonly streams: readonly Response[];
+  readonly timeoutMs?: number;
 }): { readonly fetch: typeof fetch; readonly requests: RecordedRequest[] } => {
   const requests: RecordedRequest[] = [];
   let streamIndex = 0;
@@ -92,7 +93,7 @@ const routeFetch = (options: {
       const body = init?.body?.toString();
       requests.push({ body, headers: new Headers(init?.headers), url });
       if (url === '/api/project/session') return json({ origin: 'http://127.0.0.1:4100', token: 'token-a' });
-      if (url === '/api/mcp/sessions') return json({ session: { binding, connection, id: 'session-a' } });
+      if (url === '/api/mcp/sessions') return json({ session: { binding, connection, id: 'session-a', timeoutMs: options.timeoutMs ?? 5_000 } });
       if (url.startsWith('/api/mcp/sessions/session-a/stream?after=')) {
         const response = options.streams[streamIndex];
         streamIndex += 1;
@@ -148,6 +149,21 @@ it('maps supported SDK requests to authenticated operations and delivers same-id
   }
   expect(fixture.requests[3]?.body).toBe('{"operation":"initialize"}');
   expect(fixture.requests[4]?.body).toBe('{"operation":"tools/list"}');
+
+  await transport.close();
+});
+
+it('threads one session timeout through the foreground create boundary without widening the binding', async () => {
+  const stream = heldStream();
+  const fixture = routeFetch({ streams: [stream.response], timeoutMs: 12_345 });
+  const transport = new AgentBundleRemoteTransport({ binding, routes: new McpRouteClient({ fetch: fixture.fetch }), timeoutMs: 12_345 });
+
+  await transport.start();
+
+  expect(fixture.requests[1]?.body).toBe('{"epochId":"epoch-a","serverName":"weather","target":"portable","timeoutMs":12345}');
+  expect((transport.session as unknown as { readonly timeoutMs?: number }).timeoutMs).toBe(12_345);
+  expect(transport.session.binding).toEqual(binding);
+  expect('timeoutMs' in transport.session.binding).toBe(false);
 
   await transport.close();
 });
@@ -232,7 +248,7 @@ it('uses one foreground bootstrap for the model-facing session, catalog, config,
       const url = String(input);
       requests.push({ body: init?.body?.toString(), headers: new Headers(init?.headers), url });
       if (url === '/api/project/session') return json({ origin: 'http://127.0.0.1:4100', token: 'token-a' });
-      if (url === '/api/mcp/sessions/session-a') return json({ session: { binding, connection, id: 'session-a' } });
+      if (url === '/api/mcp/sessions/session-a') return json({ session: { binding, connection, id: 'session-a', timeoutMs: 5_000 } });
       if (url === '/api/mcp/sessions/session-a/connection') return json({ connection });
       if (url === '/api/mcp/sessions/session-a/catalog') return json({
         prompts: [{ name: 'weather' }],
@@ -318,7 +334,7 @@ it('sends MCP cancellation to its typed route while a serialized tool call remai
         const url = String(input);
         requests.push({ body: init?.body?.toString(), headers: new Headers(init?.headers), url });
         if (url === '/api/project/session') return json({ origin: 'http://127.0.0.1:4100', token: 'token-a' });
-        if (url === '/api/mcp/sessions') return json({ session: { binding, connection, id: 'session-a' } });
+        if (url === '/api/mcp/sessions') return json({ session: { binding, connection, id: 'session-a', timeoutMs: 5_000 } });
         if (url.includes('/stream?')) return stream.response;
         if (url.endsWith('/operations')) {
           operationStarted = true;
@@ -370,7 +386,7 @@ it('closes a session created concurrently without re-bootstrap and notifies only
   const starting = transport.start();
   await eventually(() => bootstraps === 1);
   const closing = transport.close();
-  created.resolve(json({ session: { binding, connection, id: 'session-a' } }));
+  created.resolve(json({ session: { binding, connection, id: 'session-a', timeoutMs: 5_000 } }));
   await Promise.all([starting, closing]);
 
   expect(bootstraps).toBe(1);
@@ -391,7 +407,7 @@ it('linearizes close by aborting active work, cancelling the reader, waiting cle
         const url = String(input);
         requests.push({ body: init?.body?.toString(), headers: new Headers(init?.headers), url });
         if (url === '/api/project/session') return json({ origin: 'http://127.0.0.1:4100', token: 'token-a' });
-        if (url === '/api/mcp/sessions') return json({ session: { binding, connection, id: 'session-a' } });
+        if (url === '/api/mcp/sessions') return json({ session: { binding, connection, id: 'session-a', timeoutMs: 5_000 } });
         if (url.includes('/stream?')) return stream.response;
         if (url.endsWith('/operations')) {
           operationStarted = true;
@@ -436,7 +452,7 @@ it('deletes a mismatched created session using its held foreground token before 
         requests.push({ body: init?.body?.toString(), headers: new Headers(init?.headers), url });
         if (url === '/api/project/session') return json({ origin: 'http://127.0.0.1:4100', token: 'token-a' });
         if (url === '/api/mcp/sessions') return json({
-          session: { binding: { ...binding, epochId: 'wrong-epoch' }, connection, id: 'session-wrong' },
+          session: { binding: { ...binding, epochId: 'wrong-epoch' }, connection, id: 'session-wrong', timeoutMs: 5_000 },
         });
         if (url === '/api/mcp/sessions/session-wrong' && init?.method === 'DELETE') return json({ closed: true });
         throw new Error(`Unexpected route request ${url}.`);
@@ -494,7 +510,7 @@ it('aborts and waits for a bypassed cancellation before releasing its session', 
       fetch: async (input, init) => {
         const url = String(input);
         if (url === '/api/project/session') return json({ origin: 'http://127.0.0.1:4100', token: 'token-a' });
-        if (url === '/api/mcp/sessions') return json({ session: { binding, connection, id: 'session-a' } });
+        if (url === '/api/mcp/sessions') return json({ session: { binding, connection, id: 'session-a', timeoutMs: 5_000 } });
         if (url.includes('/stream?')) return stream.response;
         if (url.endsWith('/cancel')) {
           cancellationStarted = true;

@@ -17,6 +17,7 @@ export interface McpRouteSession {
   readonly binding: McpRouteSessionBinding;
   readonly connection: McpRouteConnection;
   readonly id: string;
+  readonly timeoutMs: number;
 }
 
 export interface McpRouteCatalog {
@@ -127,7 +128,8 @@ const routeSession = (value: unknown): McpRouteSession => {
   const binding = asRecord(session.binding);
   if (
     typeof session.id !== 'string' || session.id.length === 0 ||
-    typeof binding.epochId !== 'string' || typeof binding.serverName !== 'string' || !isTarget(binding.target)
+    typeof binding.epochId !== 'string' || typeof binding.serverName !== 'string' || !isTarget(binding.target) ||
+    typeof session.timeoutMs !== 'number' || !Number.isFinite(session.timeoutMs) || session.timeoutMs <= 0
   ) {
     throw new McpRouteClientError('AB8019', 'Foreground MCP route returned an invalid session.');
   }
@@ -135,6 +137,7 @@ const routeSession = (value: unknown): McpRouteSession => {
     binding: Object.freeze({ epochId: binding.epochId, serverName: binding.serverName, target: binding.target }),
     connection: routeConnection(session.connection),
     id: session.id,
+    timeoutMs: session.timeoutMs,
   });
 };
 
@@ -149,9 +152,12 @@ export class McpRouteClient {
     this.#fetch = options.fetch ?? globalThis.fetch.bind(globalThis);
   }
 
-  async create(binding: McpRouteSessionBinding): Promise<McpRouteSession> {
+  async create(binding: McpRouteSessionBinding, timeoutMs?: number): Promise<McpRouteSession> {
+    if (timeoutMs !== undefined && (!Number.isFinite(timeoutMs) || timeoutMs <= 0)) {
+      throw new McpRouteClientError('AB8016', 'MCP session timeout must be a positive finite number.');
+    }
     return routeSession(await this.#json('/api/mcp/sessions', {
-      body: JSON.stringify(binding),
+      body: JSON.stringify({ ...binding, ...(timeoutMs === undefined ? {} : { timeoutMs }) }),
       headers: { 'content-type': 'application/json' },
       method: 'POST',
     }));

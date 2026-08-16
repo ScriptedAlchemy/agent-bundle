@@ -28,10 +28,11 @@ import './mcp-page.css';
 export interface McpPageController {
   readonly history: readonly McpBrowserSessionInvocation[];
   readonly model: McpBrowserSessionModel;
+  readonly session?: Readonly<{ readonly timeoutMs: number }>;
   cancel(id: string): boolean;
   close(): Promise<void>;
   invoke(input: McpSessionControllerRequest): Promise<unknown>;
-  open(binding: McpSessionBinding): Promise<McpBrowserSessionModel>;
+  open(binding: McpSessionBinding, timeoutMs?: number): Promise<McpBrowserSessionModel>;
   replay(input: McpSessionControllerReplay): Promise<unknown>;
   restart(): Promise<McpBrowserSessionModel>;
   subscribe(listener: (model: McpBrowserSessionModel) => void): () => void;
@@ -382,6 +383,9 @@ export const McpPage = ({ appPreviewClient, controller, epochOptions, initialBin
   const [epochId, setEpochId] = useState(initialBinding?.epochId ?? '');
   const [target, setTarget] = useState(initialBinding?.target ?? '');
   const [serverName, setServerName] = useState(initialBinding?.serverName ?? '');
+  const [timeoutMs, setTimeoutMs] = useState('5000');
+  const [timeoutError, setTimeoutError] = useState<string>();
+  const [activeTimeoutMs, setActiveTimeoutMs] = useState(controller.session?.timeoutMs);
   const [toolName, setToolName] = useState('');
   const [toolArguments, setToolArguments] = useState<ImmutableJsonRecord>({});
   const [promptName, setPromptName] = useState('');
@@ -411,7 +415,10 @@ export const McpPage = ({ appPreviewClient, controller, epochOptions, initialBin
     if (pendingActions.length > 0) setPendingActions(replacement.pendingActions);
   }
 
-  useEffect(() => controller.subscribe(setModel), [controller]);
+  useEffect(() => controller.subscribe((next) => {
+    setModel(next);
+    setActiveTimeoutMs(controller.session?.timeoutMs);
+  }), [controller]);
   useEffect(() => {
     setCancelledRequests((current) => current.filter((id) => Object.hasOwn(model.activeRequests, id)));
   }, [model.activeRequests]);
@@ -538,7 +545,13 @@ export const McpPage = ({ appPreviewClient, controller, epochOptions, initialBin
         event.preventDefault();
         const form = event.currentTarget;
         if (!form.reportValidity()) return;
-        run('open', () => controller.open({ epochId, serverName, target }));
+        const parsedTimeoutMs = Number(timeoutMs);
+        if (!Number.isFinite(parsedTimeoutMs) || parsedTimeoutMs <= 0) {
+          setTimeoutError('Session timeout must be a positive finite number.');
+          return;
+        }
+        setTimeoutError(undefined);
+        run('open', () => controller.open({ epochId, serverName, target }, parsedTimeoutMs));
       }}>
         <label htmlFor="mcp-epoch">Artifact epoch
           <select disabled={!controls.open} id="mcp-epoch" onChange={(event) => setEpochId(event.currentTarget.value)} required value={epochId}>
@@ -555,6 +568,22 @@ export const McpPage = ({ appPreviewClient, controller, epochOptions, initialBin
         <label htmlFor="mcp-server-name">Server name
           <input disabled={!controls.open} id="mcp-server-name" onChange={(event) => setServerName(event.currentTarget.value)} required value={serverName} />
         </label>
+        <label htmlFor="mcp-session-timeout">Session timeout (ms)
+          <input
+            aria-describedby={timeoutError === undefined ? undefined : 'mcp-session-timeout-error'}
+            aria-invalid={timeoutError === undefined ? undefined : true}
+            disabled={!controls.open}
+            id="mcp-session-timeout"
+            inputMode="numeric"
+            onChange={(event) => {
+              setTimeoutMs(event.currentTarget.value);
+              setTimeoutError(undefined);
+            }}
+            type="number"
+            value={timeoutMs}
+          />
+          {timeoutError === undefined ? undefined : <span id="mcp-session-timeout-error" role="alert">{timeoutError}</span>}
+        </label>
         <div className="mcp-page-actions">
           {controls.open ? <button type="submit">Open MCP session</button> : undefined}
           <button disabled={!controls.restart} onClick={() => run('restart', async () => {
@@ -567,6 +596,7 @@ export const McpPage = ({ appPreviewClient, controller, epochOptions, initialBin
           })} type="button">Close MCP session</button>
         </div>
       </form>}
+      {activeTimeoutMs === undefined ? undefined : <p className="mcp-page-session-timeout">Active session timeout: {activeTimeoutMs} ms.</p>}
       <div className="mcp-page-connection" aria-label="Negotiated connection">
         <h3>Negotiated connection</h3>
         <p>{connectionSummary(model.connection)}</p>

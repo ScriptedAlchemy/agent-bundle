@@ -153,6 +153,11 @@
   gap: 0.5rem;
 }
 
+.mcp-page-session-timeout {
+  color: #c5d7ea;
+  min-width: 0;
+}
+
 .mcp-page-connection,
 .mcp-page-launch-configuration,
 .mcp-page-active,

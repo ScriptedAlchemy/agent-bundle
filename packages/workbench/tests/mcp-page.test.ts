@@ -138,6 +138,19 @@ describe('MCP page', () => {
     expect(markup).toContain('Trace delivery is delayed.');
   });
 
+  it('renders one labeled session timeout control beside the immutable open binding', () => {
+    const markup = renderToStaticMarkup(createElement(McpPage, {
+      controller: controller(),
+      epochOptions: ['epoch-1'],
+      targetOptions: ['codex'],
+    }));
+
+    expect(markup).toContain('for="mcp-session-timeout"');
+    expect(markup).toContain('Session timeout (ms)');
+    expect(markup).toContain('id="mcp-session-timeout"');
+    expect(markup).toContain('value="5000"');
+  });
+
   it('creates a named JSON blob for the injected config-download callback', async () => {
     const download = mcpConfigDownload(model.config!, model.sessionId);
 
