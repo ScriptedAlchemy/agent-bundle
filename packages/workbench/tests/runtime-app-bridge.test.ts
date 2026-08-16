@@ -16,7 +16,7 @@ const eventually = async (predicate: () => boolean, timeout = 300): Promise<void
 
 const fakeBrowser = (options: Readonly<{ readonly failMessageRegistration?: boolean }> = {}) => {
   const listeners = new Set<(event: MessageEvent) => void>();
-  const posts: unknown[] = [];
+  const posts: Array<Readonly<{ readonly message: unknown; readonly targetOrigin: string }>> = [];
   const target = {
     postMessage(message: unknown, targetOrigin: string): void {
       posts.push(Object.freeze({ message, targetOrigin }));
