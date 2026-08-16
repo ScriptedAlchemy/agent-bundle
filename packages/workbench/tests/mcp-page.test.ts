@@ -16,7 +16,9 @@ import {
   mcpPageControllerReplacementState,
   mcpPageSessionControls,
   supportedMcpAppPreviewProfiles,
+  type McpPageArtifactProps,
   type McpPageController,
+  type McpPageRuntimeProps,
 } from '../src/mcp/mcp-page.tsx';
 
 const model = {
@@ -140,6 +142,26 @@ const runtimePreview = Object.freeze({
   }),
   surface: Object.freeze({ fixtures: Object.freeze([]), id: 'runtime-surface-weather', kind: 'mcp-app' as const, label: 'Runtime weather', readOnly: false, targets: Object.freeze(['portable']) }),
 }) as unknown as McpAppRuntimePreviewProps;
+
+const runtimePreviewForBinding = (binding: unknown): McpAppRuntimePreviewProps => Object.freeze({
+  ...runtimePreview,
+  run: Object.freeze({
+    ...runtimePreview.run,
+    result: Object.freeze({
+      ...runtimePreview.run.result!,
+      app: Object.freeze({ ...runtimePreview.run.result!.app!, mcpBinding: binding }),
+    }),
+  }),
+}) as unknown as McpAppRuntimePreviewProps;
+
+const runtimeMarkup = (sourceBinding: unknown, selectionBinding: unknown, preview = runtimePreview, selectionKind: 'artifact' | 'runtime' = 'runtime'): string => renderToStaticMarkup(createElement(McpPage, {
+  controller: controller(),
+  initialPreview: selectionKind === 'runtime'
+    ? { binding: selectionBinding, kind: 'runtime', preview }
+    : { kind: 'artifact', source: { input: {}, invocationId: 'artifact', result: {}, sessionId: 'artifact-session', toolName: 'artifact-tool' } },
+  runtimePreviewDependencies: { client: runtimePreview.client, createBridgeFactory: runtimePreview.createBridgeFactory },
+  source: { binding: sourceBinding, kind: 'runtime' },
+} as unknown as McpPageRuntimeProps));
 
 const reducedModelForConfig = (config: McpSessionInspectorConfig): McpBrowserSessionModel => {
   const opening = reduceMcpBrowserSession(createMcpBrowserSessionModel('sanitized-session'), {
@@ -305,6 +327,89 @@ describe('MCP page', () => {
     expect(markup).not.toContain('Open MCP session');
     expect(markup.match(/class="mcp-page-app-preview"/gu)).toHaveLength(1);
     expect(opens).toEqual([]);
+  });
+
+  it('keeps artifact and runtime initial-preview prop arms disjoint at compile time', () => {
+    const artifactProps: McpPageArtifactProps = {
+      controller: controller(),
+      epochOptions: [],
+      // @ts-expect-error artifact Page props cannot select the runtime preview arm.
+      initialPreview: { binding: runtimeBinding, kind: 'runtime', preview: runtimePreview },
+      targetOptions: [],
+    };
+    const runtimeProps: McpPageRuntimeProps = {
+      controller: controller(),
+      // @ts-expect-error runtime Page props cannot select the artifact preview arm.
+      initialPreview: { kind: 'artifact', source: { input: {}, invocationId: 'artifact', result: {}, sessionId: 'artifact-session', toolName: 'artifact-tool' } },
+      runtimePreviewDependencies: { client: runtimePreview.client, createBridgeFactory: runtimePreview.createBridgeFactory },
+      source: { binding: runtimeBinding, kind: 'runtime' },
+    };
+
+    expect(artifactProps.source).toBeUndefined();
+    expect(runtimeProps.source.kind).toBe('runtime');
+  });
+
+  it('admits only matching source, selection, and run-App runtime binding evidence before rendering', () => {
+    const changedSelection = Object.freeze({ ...runtimeBinding, sessionRevision: runtimeBinding.sessionRevision + 1 });
+    const changedApp = Object.freeze({ ...runtimeBinding, transportDigest: 'changed-transport-digest' });
+
+    for (const markup of [
+      runtimeMarkup(runtimeBinding, changedSelection),
+      runtimeMarkup(runtimeBinding, runtimeBinding, runtimePreviewForBinding(changedApp)),
+      runtimeMarkup(runtimeBinding, runtimeBinding, Object.freeze({
+        ...runtimePreview,
+        run: Object.freeze({ ...runtimePreview.run, result: Object.freeze({ ...runtimePreview.run.result, app: undefined }) }),
+      }) as unknown as McpAppRuntimePreviewProps),
+    ]) {
+      expect(markup).toContain('Runtime App preview is unavailable');
+      expect(markup).not.toContain('class="mcp-page-app-preview"');
+    }
+  });
+
+  it('rejects a wrong selection kind, null-prototype binding, and invalid stable leaves before rendering', () => {
+    const nullPrototypeBinding = Object.assign(Object.create(null), runtimeBinding);
+
+    for (const markup of [
+      runtimeMarkup(runtimeBinding, runtimeBinding, runtimePreview, 'artifact'),
+      runtimeMarkup(nullPrototypeBinding, nullPrototypeBinding, runtimePreviewForBinding(nullPrototypeBinding)),
+      runtimeMarkup({ ...runtimeBinding, registryRevision: Number.NaN }, runtimeBinding),
+      runtimeMarkup(runtimeBinding, { ...runtimeBinding, sessionRevision: -1 }),
+      runtimeMarkup(runtimeBinding, { ...runtimeBinding, registryRevision: 0 }),
+      runtimeMarkup(runtimeBinding, runtimeBinding, runtimePreviewForBinding({ ...runtimeBinding, target: '' })),
+    ]) {
+      expect(markup).toContain('Runtime App preview is unavailable');
+      expect(markup).not.toContain('class="mcp-page-app-preview"');
+    }
+  });
+
+  it('rejects extra, accessor, nonordinary, and trapped runtime binding evidence without invoking getters', () => {
+    let getterReads = 0;
+    const accessor = Object.create(Object.prototype, {
+      ...Object.getOwnPropertyDescriptors(runtimeBinding),
+      serverName: {
+        configurable: true,
+        enumerable: true,
+        get: () => {
+          getterReads += 1;
+          return 'accessor-runtime-weather';
+        },
+      },
+    });
+    const inherited = Object.assign(Object.create({ inherited: true }), runtimeBinding);
+    const trapped = new Proxy({ ...runtimeBinding }, { ownKeys: () => { throw new Error('binding ownKeys trap'); } });
+
+    for (const binding of [
+      Object.freeze({ ...runtimeBinding, unexpected: true }),
+      Object.assign({ ...runtimeBinding }, { [Symbol('runtime-binding')]: true }),
+      accessor,
+      inherited,
+      trapped,
+    ]) {
+      const markup = runtimeMarkup(binding, binding, runtimePreviewForBinding(binding));
+      expect(markup).toContain('Runtime App preview is unavailable');
+      expect(markup).not.toContain('class="mcp-page-app-preview"');
+    }
+    expect(getterReads).toBe(0);
   });
 
   it('creates a named JSON blob for the injected config-download callback', async () => {
