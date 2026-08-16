@@ -55,6 +55,18 @@ const status = (state: 'active' | 'missing' | 'stale' = 'active') => ({
   source: { diagnostics: [], revision: 'revision-1', state: 'ready' },
 });
 
+const foregroundSession = Object.freeze({
+  cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef',
+  origin: 'http://127.0.0.1:3100',
+  token: 'foreground-token',
+});
+
+const withForegroundSession = (
+  handler: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>,
+): typeof fetch => async (input, init) => String(input) === '/api/project/session'
+  ? Response.json(foregroundSession)
+  : handler(input, init);
+
 const deferred = <Value>(): Deferred<Value> => {
   let reject!: (reason: unknown) => void;
   let resolve!: (value: Value) => void;
@@ -109,14 +121,14 @@ it('does not publish initial status or retain an event stream when closed during
       eventStreams += 1;
       return stream;
     },
-    fetch: async () => response.promise,
+    fetch: withForegroundSession(async () => response.promise),
   });
 
   const connecting = client.connect((next) => observed.push(next.artifact.state));
   client.close();
   response.resolve(Response.json({ status: status() }));
 
-  await expect(connecting).resolves.toMatchObject({ artifact: { state: 'active' } });
+  await expect(connecting).rejects.toThrow();
   expect(observed).toEqual([]);
   expect(eventStreams).toBe(0);
   expect(stream.closed).toBe(false);
@@ -129,7 +141,7 @@ it('closes an event stream constructed concurrently with client shutdown', async
       client.close();
       return stream;
     },
-    fetch: async () => Response.json({ status: status() }),
+    fetch: withForegroundSession(async () => Response.json({ status: status() })),
   });
 
   await expect(client.connect(() => undefined)).resolves.toMatchObject({ artifact: { state: 'active' } });
@@ -167,17 +179,57 @@ it('completes the shared foreground session bootstrap before constructing its so
   }
 });
 
+it('bootstraps an injected EventSource factory before status and leaves no stream when closed during bootstrap', async () => {
+  const session = deferred<Response>();
+  const stream = new RecordingEventSource();
+  const requests: string[] = [];
+  let streams = 0;
+  const client = new ProjectClient({
+    events: () => {
+      streams += 1;
+      return stream;
+    },
+    fetch: async (input) => {
+      requests.push(String(input));
+      return String(input) === '/api/project/session' ? session.promise : Response.json({ status: status() });
+    },
+  });
+  const connecting = client.connect(() => undefined);
+  await new Promise<void>((resolvePromise) => setImmediate(resolvePromise));
+  expect(requests).toEqual(['/api/project/session']);
+  expect(streams).toBe(0);
+  session.resolve(Response.json(foregroundSession));
+  await expect(connecting).resolves.toMatchObject({ artifact: { state: 'active' } });
+  expect(requests).toEqual(['/api/project/session', '/api/project/status']);
+  expect(streams).toBe(1);
+
+  const pending = deferred<Response>();
+  let lateStreams = 0;
+  const closed = new ProjectClient({
+    events: () => {
+      lateStreams += 1;
+      return new RecordingEventSource();
+    },
+    fetch: async (input) => String(input) === '/api/project/session' ? pending.promise : Response.json({ status: status() }),
+  });
+  const closing = closed.connect(() => undefined);
+  closed.close();
+  pending.resolve(Response.json(foregroundSession));
+  await expect(closing).rejects.toThrow();
+  expect(lateStreams).toBe(0);
+});
+
 it('refreshes Overview state after live named events and keeps the browser EventSource transport open', async () => {
   const stream = new RecordingEventSource();
   const requests: string[] = [];
   let sequence = 0;
   const client = new ProjectClient({
     events: (() => stream) satisfies EventSourceFactory,
-    fetch: async (input) => {
+    fetch: withForegroundSession(async (input) => {
       requests.push(String(input));
       sequence += 1;
       return Response.json({ status: status(sequence === 1 ? 'missing' : 'active') });
-    },
+    }),
   });
   const observed: string[] = [];
 
@@ -209,10 +261,10 @@ it('delivers synchronous runtime events once in FIFO order and refreshes after a
   const frozen: boolean[] = [];
   const client = new ProjectClient({
     events: () => stream,
-    fetch: async (input) => {
+    fetch: withForegroundSession(async (input) => {
       requests.push(String(input));
       return Response.json({ status: status() });
-    },
+    }),
   });
 
   await client.connect(
@@ -244,8 +296,8 @@ it('delivers synchronous runtime events once in FIFO order and refreshes after a
 
   expect(received).toEqual([8, 9, 10]);
   expect(errors).toHaveLength(1);
-  expect(client.lastEventId).toBe(10);
-  expect(requests).toEqual(['/api/project/status', '/api/project/status']);
+  expect(client.lastEventId).toBe(11);
+  expect(requests).toEqual(['/api/project/status', '/api/project/status', '/api/project/status']);
 });
 
 it('preserves a synchronous runtime event after replay gap delivery', async () => {
@@ -254,10 +306,10 @@ it('preserves a synchronous runtime event after replay gap delivery', async () =
   const received: string[] = [];
   const client = new ProjectClient({
     events: () => stream,
-    fetch: async (input) => {
+    fetch: withForegroundSession(async (input) => {
       requests.push(String(input));
       return Response.json({ status: status() });
-    },
+    }),
   });
 
   await client.connect(
@@ -288,7 +340,7 @@ it('reports a runtime listener exception and still delivers later queued runtime
   const received: number[] = [];
   const client = new ProjectClient({
     events: () => stream,
-    fetch: async () => Response.json({ status: status() }),
+    fetch: withForegroundSession(async () => Response.json({ status: status() })),
   });
 
   await client.connect(
@@ -315,7 +367,7 @@ it('clears queued runtime delivery and ignores late callbacks after close', asyn
   const received: number[] = [];
   const client = new ProjectClient({
     events: () => stream,
-    fetch: async () => Response.json({ status: status() }),
+    fetch: withForegroundSession(async () => Response.json({ status: status() })),
   });
 
   await client.connect(
@@ -346,12 +398,12 @@ it('reports one failed event refresh without an unhandled rejection and retains 
   try {
     const client = new ProjectClient({
       events: () => stream,
-      fetch: async () => {
+      fetch: withForegroundSession(async () => {
         requests += 1;
         return requests === 1
           ? Response.json({ status: status() })
           : new Response(JSON.stringify({ diagnostic: { code: 'AB8007', message: 'Request could not be completed.' } }), { status: 500 });
-      },
+      }),
     });
 
     await client.connect((next) => observed.push(next.artifact.state), (reason) => errors.push(reason));
@@ -396,10 +448,10 @@ it('suppresses a late event-refresh error after close', async () => {
   try {
     const client = new ProjectClient({
       events: () => stream,
-      fetch: async () => {
+      fetch: withForegroundSession(async () => {
         requests += 1;
         return requests === 1 ? Response.json({ status: status() }) : response.promise;
-      },
+      }),
     });
 
     await client.connect(() => undefined, (reason) => errors.push(reason));
@@ -454,10 +506,10 @@ it('delivers subscribed replay and live events FIFO, exposing gaps before refres
       streamCount += 1;
       return stream;
     },
-    fetch: async () => {
+    fetch: withForegroundSession(async () => {
       statusRequests += 1;
       return Response.json({ status: status() });
-    },
+    }),
   });
   const subscribed = client as ProjectClient & {
     subscribeEvents(listener: (event: { readonly sequence?: number; readonly type: string }) => void): () => void;
@@ -501,7 +553,7 @@ it('advances its replay cursor, unsubscribes snapshot listeners, and blocks late
   const received: string[] = [];
   const client = new ProjectClient({
     events: () => stream,
-    fetch: async () => Response.json({ status: status() }),
+    fetch: withForegroundSession(async () => Response.json({ status: status() })),
   });
   const subscribed = client as ProjectClient & {
     subscribeEvents(listener: (event: { readonly sequence?: number; readonly type: string }) => void): () => void;

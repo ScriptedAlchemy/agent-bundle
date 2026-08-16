@@ -55,8 +55,8 @@ const runtimeMetadata = Object.freeze({
 });
 
 const runtimePolicy = Object.freeze({
-  allow: 'camera',
-  approvedPermissions: Object.freeze({ camera: Object.freeze({}) }),
+  allow: '',
+  approvedPermissions: Object.freeze({}),
   revision: 1,
   warnings: Object.freeze([]),
 });
@@ -83,9 +83,9 @@ const runtimePreview = Object.freeze({
       deviceCapabilities: Object.freeze({}), displayMode: 'inline', locale: 'en-US', platform: 'agent-bundle-workbench',
       safeAreaInsets: Object.freeze({ bottom: 0, left: 0, right: 0, top: 0 }), styles: Object.freeze({}), theme: 'light', timeZone: 'UTC', toolInfo: Object.freeze({}), userAgent: 'agent-bundle-runtime-mcp-app/1',
     }),
-    kind: 'apps', metadata: runtimeMetadata, permissions: Object.freeze({ camera: Object.freeze({}) }), resourceUri: 'ui://weather/app.html', warnings: Object.freeze([]),
+    kind: 'apps', metadata: runtimeMetadata, permissions: Object.freeze({ camera: Object.freeze({}), geolocation: Object.freeze({}) }), resourceUri: 'ui://weather/app.html', warnings: Object.freeze([]),
   }),
-  resource: Object.freeze({ html: '<main>Weather</main>', permissions: Object.freeze({ camera: Object.freeze({}) }) }),
+  resource: Object.freeze({ html: '<main>Weather</main>', permissions: Object.freeze({ camera: Object.freeze({}), geolocation: Object.freeze({}) }) }),
   result: Object.freeze({ appVisible: Object.freeze({}), isError: false, modelVisible: Object.freeze({}) }),
   session: Object.freeze({
     binding: Object.freeze({
@@ -124,13 +124,38 @@ const flushEvents = async (): Promise<void> => {
   await new Promise((resolve) => setTimeout(resolve, 0));
 };
 
+interface Deferred<Value> {
+  readonly promise: Promise<Value>;
+  reject(reason?: unknown): void;
+  resolve(value: Value): void;
+}
+
+const deferred = <Value>(): Deferred<Value> => {
+  let rejectPromise: ((reason?: unknown) => void) | undefined;
+  let resolvePromise: ((value: Value) => void) | undefined;
+  const promise = new Promise<Value>((resolve, reject) => {
+    resolvePromise = resolve;
+    rejectPromise = reject;
+  });
+  return {
+    promise,
+    reject: (reason) => rejectPromise?.(reason),
+    resolve: (value) => resolvePromise?.(value),
+  };
+};
+
 describe('MCP App browser client', () => {
   it('uses only the closed runtime App routes and rotates one trusted policy per binding', async () => {
     const calls: Array<readonly [string, RequestInit | undefined]> = [];
-    const nextPolicy = Object.freeze({ ...runtimePolicy, allow: 'camera; geolocation', revision: 2 });
+    const nextPolicy = Object.freeze({
+      ...runtimePolicy,
+      allow: 'camera; geolocation',
+      approvedPermissions: Object.freeze({ camera: Object.freeze({}), geolocation: Object.freeze({}) }),
+      revision: 2,
+    });
     const fetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
       calls.push([String(input), init]);
-      if (String(input) === '/api/project/session') return json({ origin: 'http://127.0.0.1:43123', token: 'foreground-secret' });
+      if (String(input) === '/api/project/session') return json({ cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef', origin: 'http://127.0.0.1:43123', token: 'foreground-secret' });
       if (String(input) === '/api/runtime/apps') return json({ preview: runtimePreview });
       if (String(input) === '/api/runtime/apps/runtime-binding') return init?.method === 'DELETE'
         ? json({ closed: true })
@@ -189,6 +214,120 @@ describe('MCP App browser client', () => {
     expect(calls[6]?.[1]?.method).toBe('DELETE');
   });
 
+  it('retains one exact trusted policy after a failed runtime close and revokes it only after a validated retry', async () => {
+    let closeAttempts = 0;
+    const fetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+      if (String(input) === '/api/project/session') return json({ origin: 'http://127.0.0.1:43123', token: 'foreground-secret' });
+      if (String(input) === '/api/runtime/apps') return json({ preview: runtimePreview });
+      if (String(input) === '/api/runtime/apps/runtime-binding' && init?.method === 'DELETE') {
+        closeAttempts += 1;
+        return closeAttempts === 1 ? json({ diagnostic: { code: 'AB8204', message: 'close not yet accepted' } }, 409) : json({ closed: true });
+      }
+      throw new Error(`Unexpected request ${String(input)}.`);
+    };
+    const runtime = new McpAppClient({ fetch: fetch as typeof globalThis.fetch });
+    await runtime.createRuntime({ expectedGenerationId: 'generation-a', profileId: 'portable', runId: 'run-a' });
+    const policy = runtime.currentDocumentPolicy('runtime-binding');
+
+    await expect(runtime.closeRuntime('runtime-binding')).rejects.toMatchObject({ code: 'AB8204' });
+    expect(runtime.currentDocumentPolicy('runtime-binding')).toBe(policy);
+    expect(isCurrentMcpAppDocumentPolicy(runtime, policy)).toBe(true);
+
+    await expect(runtime.closeRuntime('runtime-binding')).resolves.toBeUndefined();
+    expect(closeAttempts).toBe(2);
+    expect(isCurrentMcpAppDocumentPolicy(runtime, policy)).toBe(false);
+    expect(() => runtime.currentDocumentPolicy('runtime-binding')).toThrow('Runtime MCP App document policy is not available.');
+  });
+
+  it('keeps the prior policy current when a consent success has an invalid sibling or route identity', async () => {
+    const approvedPolicy = Object.freeze({ allow: 'camera', approvedPermissions: Object.freeze({ camera: Object.freeze({}) }), revision: 2, warnings: Object.freeze([]) });
+    const runtimeFor = (created: unknown, decided: unknown): McpAppClient => new McpAppClient({ fetch: (async (input: string | URL | Request) => {
+      if (String(input) === '/api/project/session') return json({ origin: 'http://127.0.0.1:43123', token: 'foreground-secret' });
+      if (String(input) === '/api/runtime/apps') return json({ preview: runtimePreview });
+      if (String(input) === '/api/runtime/apps/runtime-binding/consents') return json(created);
+      if (String(input) === '/api/runtime/apps/runtime-binding/consents/consent-a') return json(decided);
+      throw new Error(`Unexpected request ${String(input)}.`);
+    }) as typeof globalThis.fetch });
+    const consent = { actionFingerprint: 'fingerprint-a', capability: 'camera' as const, details: {}, scope: 'document' as const, summary: 'Use camera' };
+    const malformedChallenge = { challenge: { expiresAt: 31_000, id: 'consent-a', request: { actionFingerprint: 'fingerprint-a', capability: 'camera', details: {}, scope: 'document' } }, documentPolicy: approvedPolicy };
+    const validChallenge = { challenge: { expiresAt: 31_000, id: 'consent-a', request: consent }, documentPolicy: runtimePolicy };
+
+    const malformedCreate = runtimeFor(malformedChallenge, { documentPolicy: runtimePolicy });
+    await malformedCreate.createRuntime({ expectedGenerationId: 'generation-a', profileId: 'portable', runId: 'run-a' });
+    const initial = malformedCreate.currentDocumentPolicy('runtime-binding');
+    await expect(malformedCreate.createRuntimeConsent('runtime-binding', consent)).rejects.toMatchObject({ code: 'AB8019' });
+    expect(malformedCreate.currentDocumentPolicy('runtime-binding')).toBe(initial);
+    expect(isCurrentMcpAppDocumentPolicy(malformedCreate, initial)).toBe(true);
+
+    for (const [decision, response] of [
+      ['allow-once', { documentPolicy: approvedPolicy, grant: { authorizationId: 'authorization-a', bindingId: 'runtime-binding', capability: 'camera', challengeId: 'consent-other', scope: 'document' } }],
+      ['deny', { documentPolicy: approvedPolicy, grant: { authorizationId: 'authorization-a', bindingId: 'runtime-binding', capability: 'camera', challengeId: 'consent-a', scope: 'document' } }],
+    ] as const) {
+      const runtime = runtimeFor(validChallenge, response);
+      await runtime.createRuntime({ expectedGenerationId: 'generation-a', profileId: 'portable', runId: 'run-a' });
+      const policy = runtime.currentDocumentPolicy('runtime-binding');
+      await expect(runtime.decideRuntimeConsent('runtime-binding', 'consent-a', decision)).rejects.toMatchObject({ code: 'AB8019' });
+      expect(runtime.currentDocumentPolicy('runtime-binding')).toBe(policy);
+      expect(isCurrentMcpAppDocumentPolicy(runtime, policy)).toBe(true);
+    }
+  });
+
+  it('admits document policies only when allow and approved permissions match the bound resource', async () => {
+    const invalidPreview = new McpAppClient({ fetch: (async (input: string | URL | Request) => {
+      if (String(input) === '/api/project/session') return json({ origin: 'http://127.0.0.1:43123', token: 'foreground-secret' });
+      const copy = JSON.parse(JSON.stringify(runtimePreview)) as Record<string, unknown>;
+      copy.documentPolicy = { allow: 'camera; microphone', approvedPermissions: { camera: {} }, revision: 2, warnings: [] };
+      return json({ preview: copy });
+    }) as typeof globalThis.fetch });
+    await expect(invalidPreview.createRuntime({ expectedGenerationId: 'generation-a', profileId: 'portable', runId: 'run-a' })).rejects.toMatchObject({ code: 'AB8019' });
+
+    const invalidConsent = new McpAppClient({ fetch: (async (input: string | URL | Request) => {
+      if (String(input) === '/api/project/session') return json({ origin: 'http://127.0.0.1:43123', token: 'foreground-secret' });
+      if (String(input) === '/api/runtime/apps') return json({ preview: runtimePreview });
+      if (String(input) === '/api/runtime/apps/runtime-binding/consents') return json({
+        challenge: { expiresAt: 31_000, id: 'consent-a', request: { actionFingerprint: 'fingerprint-a', capability: 'camera', details: {}, scope: 'document', summary: 'Use camera' } },
+        documentPolicy: { allow: 'camera; microphone', approvedPermissions: { camera: {}, microphone: {} }, revision: 2, warnings: [] },
+      });
+      throw new Error(`Unexpected request ${String(input)}.`);
+    }) as typeof globalThis.fetch });
+    await invalidConsent.createRuntime({ expectedGenerationId: 'generation-a', profileId: 'portable', runId: 'run-a' });
+    const current = invalidConsent.currentDocumentPolicy('runtime-binding');
+    await expect(invalidConsent.createRuntimeConsent('runtime-binding', {
+      actionFingerprint: 'fingerprint-a', capability: 'camera', details: {}, scope: 'document', summary: 'Use camera',
+    })).rejects.toMatchObject({ code: 'AB8019' });
+    expect(invalidConsent.currentDocumentPolicy('runtime-binding')).toBe(current);
+  });
+
+  it('keeps the higher current policy when overlapping consent responses settle out of revision order', async () => {
+    const first = deferred<Response>();
+    const second = deferred<Response>();
+    let consentCalls = 0;
+    const fetch = async (input: string | URL | Request): Promise<Response> => {
+      if (String(input) === '/api/project/session') return json({ origin: 'http://127.0.0.1:43123', token: 'foreground-secret' });
+      if (String(input) === '/api/runtime/apps') return json({ preview: runtimePreview });
+      if (String(input) === '/api/runtime/apps/runtime-binding/consents') return consentCalls++ === 0 ? first.promise : second.promise;
+      throw new Error(`Unexpected request ${String(input)}.`);
+    };
+    const runtime = new McpAppClient({ fetch: fetch as typeof globalThis.fetch });
+    const request = { actionFingerprint: 'fingerprint-a', capability: 'camera' as const, details: {}, scope: 'document' as const, summary: 'Use camera' };
+    const response = (revision: number): Response => json({
+      challenge: { expiresAt: 31_000, id: 'consent-a', request },
+      documentPolicy: { allow: 'camera', approvedPermissions: { camera: {} }, revision, warnings: [] },
+    });
+    await runtime.createRuntime({ expectedGenerationId: 'generation-a', profileId: 'portable', runId: 'run-a' });
+    const lower = runtime.createRuntimeConsent('runtime-binding', request);
+    const higher = runtime.createRuntimeConsent('runtime-binding', request);
+    await Promise.resolve();
+    second.resolve(response(3));
+    await expect(higher).resolves.toMatchObject({ documentPolicy: { revision: 3 } });
+    const current = runtime.currentDocumentPolicy('runtime-binding');
+    first.resolve(response(2));
+    await expect(lower).rejects.toMatchObject({ code: 'AB8019' });
+    expect(runtime.currentDocumentPolicy('runtime-binding')).toBe(current);
+    expect(current.snapshot.revision).toBe(3);
+    expect(isCurrentMcpAppDocumentPolicy(runtime, current)).toBe(true);
+  });
+
   it('rejects runtime previews that expose configuration values, private vectors, or mismatched stable session identities', async () => {
     const malformed = (mutate: (preview: Record<string, unknown>) => void): typeof globalThis.fetch => (async (input: string | URL | Request) => {
       if (String(input) === '/api/project/session') return json({ origin: 'http://127.0.0.1:43123', token: 'foreground-secret' });
@@ -213,13 +352,53 @@ describe('MCP App browser client', () => {
       (((preview.session as Record<string, unknown>).binding as Record<string, unknown>).sessionRevision = 99);
     }) });
     await expect(mismatchedSession.createRuntime({ expectedGenerationId: 'generation-a', profileId: 'portable', runId: 'run-a' })).rejects.toMatchObject({ code: 'AB8019' });
+
+    const mismatchedGeneration = new McpAppClient({ fetch: malformed((preview) => {
+      ((preview.binding as Record<string, unknown>).runVector as Record<string, unknown>).runtimeGenerationId = 'generation-other';
+    }) });
+    await expect(mismatchedGeneration.createRuntime({ expectedGenerationId: 'generation-a', profileId: 'portable', runId: 'run-a' })).rejects.toMatchObject({ code: 'AB8019' });
+
+    const mismatchedProfile = new McpAppClient({ fetch: malformed((preview) => {
+      const binding = preview.binding as Record<string, unknown>;
+      binding.profileId = 'chatgpt';
+      binding.profileVersion = 'agent-bundle:chatgpt-sim:1';
+      const profile = preview.profile as Record<string, unknown>;
+      profile.descriptor = { claimsRealHostParity: false, evidence: 'simulated', id: 'chatgpt', label: 'ChatGPT Simulation', version: 'agent-bundle:chatgpt-sim:1' };
+    }) });
+    await expect(mismatchedProfile.createRuntime({ expectedGenerationId: 'generation-a', profileId: 'portable', runId: 'run-a' })).rejects.toMatchObject({ code: 'AB8019' });
+  });
+
+  it('admits only canonical closed-registry configuration inspection rows', async () => {
+    const previewWithEntries = (entries: readonly unknown[]): typeof globalThis.fetch => (async (input: string | URL | Request) => {
+      if (String(input) === '/api/project/session') return json({ origin: 'http://127.0.0.1:43123', token: 'foreground-secret' });
+      const copy = JSON.parse(JSON.stringify(runtimePreview)) as Record<string, unknown>;
+      ((copy.profile as Record<string, unknown>).configExtensions as Record<string, unknown>).entries = entries;
+      return json({ preview: copy });
+    }) as typeof globalThis.fetch;
+    const entry = (key: 'portable' | 'codex' | 'claude', sourcePath: string): Record<string, unknown> => ({
+      configured: true, id: `extension:${key}`, key, provenance: { kind: 'config', sourcePath }, target: key,
+    });
+    const request = { expectedGenerationId: 'generation-a', profileId: 'portable' as const, runId: 'run-a' };
+
+    await expect(new McpAppClient({ fetch: previewWithEntries([
+      entry('portable', 'agent-bundle.config.ts'), entry('codex', 'config/codex.ts'), entry('claude', '<external-config>'),
+    ]) }).createRuntime(request)).resolves.toMatchObject({ binding: { id: 'runtime-binding' } });
+
+    for (const entries of [
+      [{ configured: true, id: 'extension:openai', key: 'openai', provenance: { kind: 'config', sourcePath: 'agent-bundle.config.ts' }, target: 'openai' }],
+      [entry('codex', 'agent-bundle.config.ts'), entry('codex', 'config/codex.ts')],
+      [entry('codex', '../agent-bundle.config.ts')], [entry('codex', './agent-bundle.config.ts')],
+      [entry('codex', 'config\\codex.ts')], [entry('codex', 'file:///agent-bundle.config.ts')],
+    ]) {
+      await expect(new McpAppClient({ fetch: previewWithEntries(entries) }).createRuntime(request)).rejects.toMatchObject({ code: 'AB8019' });
+    }
   });
 
   it('uses a connected ProjectClient for exact runtime invalidations and revokes stale policy handles', async () => {
     const stream = new RuntimeEventSource();
     let streamCount = 0;
     const fetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
-      if (String(input) === '/api/project/session') return json({ origin: 'http://127.0.0.1:43123', token: 'foreground-secret' });
+      if (String(input) === '/api/project/session') return json({ cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef', origin: 'http://127.0.0.1:43123', token: 'foreground-secret' });
       if (String(input) === '/api/project/status') return json({ status: { artifact: { state: 'missing' } } });
       if (String(input) === '/api/runtime/apps') return json({ preview: runtimePreview });
       if (String(input) === '/api/runtime/apps/runtime-binding' && init?.method === 'DELETE') return json({ closed: true });
@@ -258,7 +437,86 @@ describe('MCP App browser client', () => {
     stream.emit('replay.gap', { earliestAvailableSequence: 3, latestDroppedSequence: 2, requestedAfterSequence: 1, type: 'replay.gap' }, '');
     await flushEvents();
     expect(() => runtime.currentDocumentPolicy('runtime-binding')).toThrow('Runtime MCP App document policy is not available.');
+    await runtime.createRuntime({ expectedGenerationId: 'generation-a', profileId: 'portable', runId: 'run-a' });
+    const malformedPolicy = runtime.currentDocumentPolicy('runtime-binding');
+    stream.emit('runtime.event', {
+      occurredAt: '2026-08-16T00:00:01.000Z', payload: 'not-a-runtime-event', sequence: 4, type: 'runtime.event',
+    }, 4);
+    await flushEvents();
+    expect(isCurrentMcpAppDocumentPolicy(runtime, malformedPolicy)).toBe(false);
+    expect(() => runtime.currentDocumentPolicy('runtime-binding')).toThrow('Runtime MCP App document policy is not available.');
     unsubscribe();
+    project.close();
+  });
+
+  it('rejects every late runtime response after its authority is invalidated or disposed', async () => {
+    const stream = new RuntimeEventSource();
+    let mode: 'create' | 'get' | 'consent' | 'decision' | 'ready' = 'ready';
+    let pending: Deferred<Response> | undefined;
+    const fetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+      const path = String(input);
+      if (path === '/api/project/session') return json({ cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef', origin: 'http://127.0.0.1:43123', token: 'foreground-secret' });
+      if (path === '/api/project/status') return json({ status: { artifact: { state: 'missing' } } });
+      if (path === '/api/runtime/apps') return mode === 'create' ? pending!.promise : json({ preview: runtimePreview });
+      if (path === '/api/runtime/apps/runtime-binding' && init?.method === 'DELETE') return json({ closed: true });
+      if (path === '/api/runtime/apps/runtime-binding') return mode === 'get' ? pending!.promise : json({ preview: runtimePreview });
+      if (path === '/api/runtime/apps/runtime-binding/consents') return mode === 'consent' ? pending!.promise : json({
+        challenge: { expiresAt: 31_000, id: 'consent-a', request: { actionFingerprint: 'fingerprint-a', capability: 'camera', details: {}, scope: 'document', summary: 'Use camera' } },
+        documentPolicy: runtimePolicy,
+      });
+      if (path === '/api/runtime/apps/runtime-binding/consents/consent-a') return mode === 'decision' ? pending!.promise : json({ documentPolicy: runtimePolicy });
+      throw new Error(`Unexpected request ${path}.`);
+    };
+    const project = new ProjectClient({ events: () => stream, fetch: fetch as typeof globalThis.fetch });
+    await project.connect(() => undefined);
+    const runtime = new McpAppClient({ fetch: fetch as typeof globalThis.fetch, projectClient: project });
+    const create = () => runtime.createRuntime({ expectedGenerationId: 'generation-a', profileId: 'portable', runId: 'run-a' });
+    const consent = { actionFingerprint: 'fingerprint-a', capability: 'camera' as const, details: {}, scope: 'document' as const, summary: 'Use camera' };
+
+    mode = 'create'; pending = deferred<Response>();
+    const lateCreate = create();
+    await Promise.resolve();
+    stream.emit('replay.gap', { earliestAvailableSequence: 2, latestDroppedSequence: 1, requestedAfterSequence: 0, type: 'replay.gap' }, '');
+    pending.resolve(json({ preview: runtimePreview }));
+    await expect(lateCreate).rejects.toMatchObject({ code: 'AB8015' });
+
+    mode = 'ready'; await create();
+    mode = 'get'; pending = deferred<Response>();
+    const lateGet = runtime.getRuntime('runtime-binding');
+    await Promise.resolve();
+    stream.emit('runtime.event', {
+      occurredAt: '2026-08-16T00:00:00.000Z', payload: { type: 'runtime.app.updated', details: { bindingId: 'runtime-binding', reason: 'session-restarted', sessionId: 'runtime-session-a', sessionRevision: 2, state: 'revoked' } }, sequence: 2, type: 'runtime.event',
+    }, 2);
+    await flushEvents();
+    pending.resolve(json({ preview: runtimePreview }));
+    await expect(lateGet).rejects.toMatchObject({ code: 'AB8015' });
+
+    mode = 'ready'; await create();
+    mode = 'consent'; pending = deferred<Response>();
+    const lateConsent = runtime.createRuntimeConsent('runtime-binding', consent);
+    await Promise.resolve();
+    stream.emit('runtime.event', {
+      occurredAt: '2026-08-16T00:00:01.000Z', payload: { type: 'runtime.app.updated', extra: true }, sequence: 3, type: 'runtime.event',
+    }, 3);
+    await flushEvents();
+    pending.resolve(json({ challenge: { expiresAt: 31_000, id: 'consent-a', request: consent }, documentPolicy: runtimePolicy }));
+    await expect(lateConsent).rejects.toMatchObject({ code: 'AB8015' });
+
+    mode = 'ready'; await create();
+    mode = 'decision'; pending = deferred<Response>();
+    const lateDecision = runtime.decideRuntimeConsent('runtime-binding', 'consent-a', 'allow-once');
+    await Promise.resolve();
+    await runtime.closeRuntime('runtime-binding');
+    pending.resolve(json({ documentPolicy: runtimePolicy }));
+    await expect(lateDecision).rejects.toMatchObject({ code: 'AB8015' });
+
+    mode = 'create'; pending = deferred<Response>();
+    const disposedCreate = create();
+    await Promise.resolve();
+    runtime.disposeRuntime();
+    pending.resolve(json({ preview: runtimePreview }));
+    await expect(disposedCreate).rejects.toMatchObject({ code: 'AB8015' });
+    await expect(create()).rejects.toMatchObject({ code: 'AB8015' });
     project.close();
   });
 
@@ -266,7 +524,7 @@ describe('MCP App browser client', () => {
     const calls: readonly [string, RequestInit | undefined][] = [];
     const fetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
       (calls as [string, RequestInit | undefined][]).push([String(input), init]);
-      if (String(input) === '/api/project/session') return json({ origin: 'http://127.0.0.1:43123', token: 'foreground-secret' });
+      if (String(input) === '/api/project/session') return json({ cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef', origin: 'http://127.0.0.1:43123', token: 'foreground-secret' });
       return json({ lifecycle: 'created', preview });
     };
     const client = new McpAppClient({ fetch: fetch as typeof globalThis.fetch });

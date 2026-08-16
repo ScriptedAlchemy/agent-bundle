@@ -141,7 +141,6 @@ const normalizePaths = (paths: readonly string[]): readonly string[] => Object.f
 export class ProjectClient {
   readonly #events: EventSourceFactory;
   readonly #foreground: ForegroundRouteClient;
-  readonly #usesNativeEvents: boolean;
   #closed = false;
   #eventDrainPromise: Promise<void> | undefined;
   #eventListener: ProjectEventListener | undefined;
@@ -159,7 +158,6 @@ export class ProjectClient {
   constructor(options: ProjectClientOptions = {}) {
     this.#events = options.events ?? browserEvents;
     this.#foreground = options.foreground ?? new ForegroundRouteClient({ fetch: options.fetch });
-    this.#usesNativeEvents = options.events === undefined;
   }
 
   get lastEventId(): number {
@@ -182,12 +180,10 @@ export class ProjectClient {
     this.#listener = listener;
     this.#errorListener = onError;
     this.#eventListener = onEvent;
-    if (this.#usesNativeEvents) {
-      try {
-        await this.#foreground.ensureSession();
-      } catch (error) {
-        throw projectError(error);
-      }
+    try {
+      await this.#foreground.ensureSession();
+    } catch (error) {
+      throw projectError(error);
     }
     if (this.#closed) throw new ProjectClientError('Workbench client is closed.');
     const status = await this.refresh();
@@ -267,6 +263,7 @@ export class ProjectClient {
       queued = parseProjectEvent(expectedType, frame);
     } catch (error) {
       this.#reportError(error);
+      this.#enqueueMalformedEvent(frame);
       return;
     }
 
@@ -275,6 +272,25 @@ export class ProjectClient {
       this.#highestQueuedEventId = queued.sequence;
     }
     this.#eventQueue.push(queued);
+    this.#queueEventDrain();
+  }
+
+  #enqueueMalformedEvent(frame: EventSourceMessage): void {
+    const sequence = parseEventSourceSequence(frame.lastEventId);
+    if (sequence !== undefined) {
+      if (sequence <= this.#highestQueuedEventId) return;
+      this.#highestQueuedEventId = sequence;
+    }
+    const latestDroppedSequence = sequence ?? this.#lastEventId;
+    this.#eventQueue.push(Object.freeze({
+      event: Object.freeze({
+        earliestAvailableSequence: latestDroppedSequence + 1,
+        latestDroppedSequence,
+        requestedAfterSequence: this.#lastEventId,
+        type: 'replay.gap' as const,
+      }),
+      sequence: undefined,
+    }));
     this.#queueEventDrain();
   }
 
