@@ -704,7 +704,7 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
     const destinationFrameHref = destinationFrame.url();
     const destinationHistory = await page.getByRole('region', { name: 'Invocation history' }).textContent();
     const destinationDeletePath = `/api/runtime/apps/${encodeURIComponent(destinationBinding.id)}`;
-    await page.evaluate(() => { window.location.hash = '#runtime'; });
+    await page.evaluate(() => { window.location.hash = '#overview'; });
     const teardownRequestForDestination = (): RuntimeAppMessage | undefined => appMessages.find((entry) =>
       entry.href === destinationFrameHref && entry.senderOrigin === fixture.url && entry.message !== null && typeof entry.message === 'object' &&
       (entry.message as Readonly<Record<string, unknown>>).method === 'ui/resource-teardown');
@@ -720,6 +720,10 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
     expect(destinationAcknowledgement()?.message).toEqual({ id: destinationTeardownId, jsonrpc: '2.0', result: {} });
     await expect.poll(() => runtimeAppRequests.filter((entry) => entry.method === 'DELETE' && entry.path === destinationDeletePath), { timeout: 15_000 }).toHaveLength(1);
     const destinationDelete = runtimeAppRequests.find((entry) => entry.method === 'DELETE' && entry.path === destinationDeletePath);
+    await expect(page.getByRole('heading', { name: 'Project overview' })).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator('.mcp-page-app-preview iframe')).toHaveCount(0);
+    expect(runtimeCreates()).toHaveLength(2);
+    await page.evaluate(() => { window.location.hash = '#runtime'; });
     await expect.poll(runtimeCreates, { timeout: 15_000 }).toHaveLength(3);
     const thirdCreate = runtimeCreates()[2];
     expect(thirdCreate?.body).toEqual({ expectedGenerationId, profileId: 'portable', runId });

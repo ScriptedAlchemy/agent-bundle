@@ -4,6 +4,7 @@ import {
   McpPreviewDepartureCoordinator,
   prepareRuntimeMcpHandoffAuthority,
   RuntimeMcpHandoffCoordinator,
+  type McpPreviewDepartureOptions,
   type RuntimeHandoffLifecycle,
 } from '../src/mcp/runtime-mcp-handoff.ts';
 import type { RuntimeAppPreviewProps } from '../src/runtime-stage.tsx';
@@ -143,6 +144,91 @@ it('fences a held stale Page close when replacement registration takes ownership
   replacementUnregister();
 });
 
+it('serializes every Page departure behind one held close and commits the first destination only', async () => {
+  const state = departureCoordinator();
+  const held = deferred<void>();
+  const destinations: string[] = [];
+  let closes = 0;
+  state.value.register(() => { closes += 1; return held.promise; });
+
+  expect(state.value.depart({ commit: () => { destinations.push('overview'); }, reject: () => undefined } satisfies McpPreviewDepartureOptions)).toBe(true);
+  expect(state.value.depart({ commit: () => { destinations.push('skills'); }, reject: () => undefined } satisfies McpPreviewDepartureOptions)).toBe(true);
+  expect(closes).toBe(1);
+  expect(destinations).toEqual([]);
+  held.resolve();
+  await flush();
+  expect(destinations).toEqual(['overview']);
+});
+
+it('retains the exact Page close facade after rejection and commits only its retry destination', async () => {
+  const state = departureCoordinator();
+  const rejections: unknown[] = [];
+  const destinations: string[] = [];
+  let closes = 0;
+  state.value.register(() => {
+    closes += 1;
+    return closes === 1 ? Promise.reject(new Error('Page close rejected')) : Promise.resolve();
+  });
+
+  expect(state.value.depart({ commit: () => { destinations.push('overview'); }, reject: (reason) => { rejections.push(reason); } } satisfies McpPreviewDepartureOptions)).toBe(true);
+  await flush();
+  expect(rejections).toHaveLength(1);
+  expect(state.value.depart({ commit: () => { destinations.push('skills'); }, reject: () => undefined } satisfies McpPreviewDepartureOptions)).toBe(true);
+  await flush();
+  expect(closes).toBe(2);
+  expect(destinations).toEqual(['skills']);
+});
+
+it('cancels a held Page departure without discarding its facade or admitting a stale destination', async () => {
+  const state = departureCoordinator();
+  const held = deferred<void>();
+  const destinations: string[] = [];
+  let closes = 0;
+  state.value.register(() => {
+    closes += 1;
+    return closes === 1 ? held.promise : Promise.resolve();
+  });
+
+  expect(state.value.depart({ commit: () => { destinations.push('overview'); }, reject: () => undefined } satisfies McpPreviewDepartureOptions)).toBe(true);
+  state.value.cancelDeparture(); // The user returns to the still-mounted MCP page before its close settles.
+  held.resolve();
+  await flush();
+  expect(destinations).toEqual([]);
+  expect(state.value.depart({ commit: () => { destinations.push('skills'); }, reject: () => undefined } satisfies McpPreviewDepartureOptions)).toBe(true);
+  await flush();
+  expect(closes).toBe(2);
+  expect(destinations).toEqual(['skills']);
+});
+
+it('captures and joins the terminal Page close before revoking its facade', async () => {
+  const state = departureCoordinator();
+  const held = deferred<void>();
+  state.value.register(() => held.promise);
+
+  const closing = state.value.close();
+  let settled = false;
+  void closing.then(() => { settled = true; });
+  await flush();
+  expect(settled).toBe(false);
+  expect(state.value.request()).toBe(false);
+  held.resolve();
+  await closing;
+  expect(settled).toBe(true);
+});
+
+it('joins an active Page departure during terminal shutdown without a second close owner', async () => {
+  const state = departureCoordinator();
+  const held = deferred<void>();
+  let closes = 0;
+  state.value.register(() => { closes += 1; return held.promise; });
+
+  expect(state.value.depart({ commit: () => undefined, reject: () => undefined } satisfies McpPreviewDepartureOptions)).toBe(true);
+  const closing = state.value.close();
+  expect(closes).toBe(1);
+  held.resolve();
+  await closing;
+});
+
 it('keeps a replayed same-handle registration after its deferred prior unregister', async () => {
   const state = coordinator();
   const current = authority('same');
@@ -233,6 +319,31 @@ it('fences a held generic Runtime departure when a distinct lifecycle replaces i
   await flush();
   expect(navigations).toEqual([]);
   expect(state.value.canOpen(b)).toBe(true);
+});
+
+it('cancels a held Runtime departure without discarding its exact lifecycle or committing stale navigation', async () => {
+  const state = coordinator();
+  const current = authority('leave-cancel');
+  const held = deferred<void>();
+  const navigations: string[] = [];
+  let closes = 0;
+  state.value.register({
+    close: () => {
+      closes += 1;
+      return closes === 1 ? held.promise : Promise.resolve();
+    },
+  }, current);
+
+  expect(state.value.depart({ commit: () => { navigations.push('mcp'); }, reject: () => undefined })).toBe(true);
+  state.value.cancelDeparture();
+  held.resolve();
+  await flush();
+  expect(navigations).toEqual([]);
+  expect(state.value.canOpen(current)).toBe(true);
+  expect(state.value.depart({ commit: () => { navigations.push('overview'); }, reject: () => undefined })).toBe(true);
+  await flush();
+  expect(closes).toBe(2);
+  expect(navigations).toEqual(['overview']);
 });
 
 it('retains the exact authority after a rejected close and commits one retry', async () => {

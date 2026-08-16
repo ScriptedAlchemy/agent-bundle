@@ -29,6 +29,7 @@ type RuntimeHandoffAttempt = Readonly<{
 }>;
 
 type RuntimeDepartureAttempt = Readonly<{
+  readonly closing: Promise<void>;
   readonly generation: number;
   readonly options: RuntimeMcpDepartureOptions;
   readonly record: RuntimePreviewLifecycleRecord;
@@ -49,13 +50,20 @@ export interface McpPreviewDepartureCoordinatorOptions {
   readonly reject: (reason: unknown) => void;
 }
 
+export interface McpPreviewDepartureOptions {
+  readonly commit: () => void;
+  readonly reject: (reason: unknown) => void;
+}
+
 type McpPreviewCloseRecord = Readonly<{
   readonly close: () => Promise<void>;
   readonly registration: number;
 }>;
 
 type McpPreviewDepartureAttempt = Readonly<{
+  readonly closing: Promise<void>;
   readonly generation: number;
+  readonly options: McpPreviewDepartureOptions;
   readonly record: McpPreviewCloseRecord;
 }>;
 
@@ -312,16 +320,16 @@ export class RuntimeMcpHandoffCoordinator {
     const record = this.#record;
     if (record === undefined) return false;
     if (this.#attempt !== undefined || this.#departure !== undefined) return true;
-    const departure = Object.freeze({ generation: this.#generation, options, record });
-    this.#departure = departure;
-    this.#notify();
     let closing: Promise<void>;
     try {
       closing = record.handle.close();
     } catch (reason) {
       closing = Promise.reject(reason);
     }
-    void closing.then(() => {
+    const departure = Object.freeze({ closing, generation: this.#generation, options, record });
+    this.#departure = departure;
+    this.#notify();
+    void departure.closing.then(() => {
       if (!this.#isCurrentDeparture(departure)) return;
       this.#record = undefined;
       departure.options.commit();
@@ -333,6 +341,14 @@ export class RuntimeMcpHandoffCoordinator {
       this.#notify();
     });
     return true;
+  }
+
+  /** Cancels only the requested destination; the exact Runtime lifecycle remains available for retry. */
+  cancelDeparture(): void {
+    if (this.#departure === undefined) return;
+    this.#generation += 1;
+    this.#departure = undefined;
+    this.#notify();
   }
 
   /** Fences held closes and discards any current lifecycle on reset or navigation. */
@@ -347,8 +363,10 @@ export class RuntimeMcpHandoffCoordinator {
   /** Shutdown revokes future admission before awaiting the latest retained lifecycle close. */
   close(): Promise<void> {
     const record = this.#record;
+    const departure = this.#departure;
+    const closing = departure !== undefined && departure.record === record ? departure.closing : undefined;
     this.cancel();
-    return record === undefined ? Promise.resolve() : record.handle.close();
+    return closing ?? (record === undefined ? Promise.resolve() : record.handle.close());
   }
 
   #isCurrent(attempt: RuntimeHandoffAttempt): boolean {
@@ -399,27 +417,39 @@ export class McpPreviewDepartureCoordinator {
 
   /** Returns true when Page-owned cleanup now controls the requested departure. */
   request(): boolean {
+    return this.depart(this.#options);
+  }
+
+  /** Reuses the mounted Page's exact close facade before any destination may commit. */
+  depart(options: McpPreviewDepartureOptions): boolean {
     const record = this.#record;
     if (record === undefined) return false;
     if (this.#attempt !== undefined) return true;
-    const attempt = Object.freeze({ generation: this.#generation, record });
-    this.#attempt = attempt;
     let closing: Promise<void>;
     try {
       closing = record.close();
     } catch (reason) {
       closing = Promise.reject(reason);
     }
-    void closing.then(() => {
+    const attempt = Object.freeze({ closing, generation: this.#generation, options, record });
+    this.#attempt = attempt;
+    void attempt.closing.then(() => {
       if (!this.#isCurrent(attempt)) return;
       this.#record = undefined;
-      this.#options.commit();
+      attempt.options.commit();
     }, (reason: unknown) => {
-      if (this.#isCurrent(attempt)) this.#options.reject(reason);
+      if (this.#isCurrent(attempt)) attempt.options.reject(reason);
     }).finally(() => {
       if (this.#attempt === attempt) this.#attempt = undefined;
     });
     return true;
+  }
+
+  /** Cancels only a pending destination, preserving the mounted Page facade for a later retry. */
+  cancelDeparture(): void {
+    if (this.#attempt === undefined) return;
+    this.#generation += 1;
+    this.#attempt = undefined;
   }
 
   /** Fences a held Page close when another navigation owns the transition. */
@@ -427,6 +457,15 @@ export class McpPreviewDepartureCoordinator {
     this.#generation += 1;
     this.#attempt = undefined;
     this.#record = undefined;
+  }
+
+  /** Shutdown captures the mounted Page facade before terminally revoking its registration. */
+  close(): Promise<void> {
+    const record = this.#record;
+    const attempt = this.#attempt;
+    const closing = attempt !== undefined && attempt.record === record ? attempt.closing : undefined;
+    this.cancel();
+    return closing ?? (record === undefined ? Promise.resolve() : record.close());
   }
 
   #isCurrent(attempt: McpPreviewDepartureAttempt): boolean {

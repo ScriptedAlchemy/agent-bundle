@@ -593,9 +593,33 @@ const Workbench = () => {
       commitNavigation(next);
       afterCommit?.();
     };
-    if (next === 'runtime' && mcpPreviewDeparture.current!.request()) return;
-    if (next === 'runtime') setMcpDepartureError(undefined);
-    if (next !== 'runtime' && pageRef.current === 'runtime') {
+    const current = pageRef.current;
+    if (next === current) {
+      if (current === 'mcp') {
+        mcpPreviewDeparture.current!.cancelDeparture();
+        if (window.location.hash === '#inspector') window.history.replaceState(undefined, '', '#mcp');
+      } else if (current === 'runtime') {
+        handoffCoordinator.current!.cancelDeparture();
+      }
+      afterCommit?.();
+      return;
+    }
+    if (current === 'mcp') {
+      setMcpDepartureError(undefined);
+      if (mcpPreviewDeparture.current!.depart({
+        commit: () => {
+          setMcpDepartureError(undefined);
+          commit();
+        },
+        reject: (reason) => { setMcpDepartureError(`Navigation could not close the MCP App preview: ${errorMessage(reason)}`); },
+      })) {
+        // A hash/back navigation has changed the URL already; the mounted Page remains authoritative until close settles.
+        if (window.location.hash !== '#mcp') window.history.replaceState(undefined, '', '#mcp');
+        return;
+      }
+    }
+    if (current === 'runtime') {
+      setRuntimeHandoffError(undefined);
       if (handoffCoordinator.current!.depart({
         commit: () => {
           setRuntimeHandoffError(undefined);
@@ -740,7 +764,7 @@ const Workbench = () => {
         setRuntimeCapability('unavailable');
         if (window.location.hash === '#runtime') {
           window.history.replaceState(undefined, '', '#overview');
-          setPage('overview');
+          navigate('overview');
         }
         return;
       }
@@ -804,7 +828,7 @@ const Workbench = () => {
       if (runtimeRetry !== undefined) clearTimeout(runtimeRetry);
       runtimeEvents.close();
       unsubscribeActivity();
-      mcpPreviewDeparture.current?.cancel();
+      const pagePreviewClose = mcpPreviewDeparture.current?.close();
       for (const pending of runtimeConsentQueue.current.splice(0)) pending.resolve('deny');
       setRuntimeConsent(undefined);
       void (async () => {
@@ -812,6 +836,11 @@ const Workbench = () => {
           await handoffCoordinator.current?.close();
         } catch {
           // Preview ownership remains retryable, but shutdown must proceed.
+        }
+        try {
+          await pagePreviewClose;
+        } catch {
+          // The Page owns its retryable preview diagnostic while mounted; shutdown still drains the controller.
         }
         try {
           await mcpControllerRef.current?.close();
@@ -834,22 +863,13 @@ const Workbench = () => {
       }
       if (window.location.hash === '#runtime' && !runtimeAvailable) {
         if (runtimeCapability === 'unavailable') window.history.replaceState(undefined, '', '#overview');
-        setPage('overview');
+        navigate('overview');
         return;
       }
       const next = pageForHash(runtimeAvailable);
-      if (next === 'runtime' && mcpPreviewDeparture.current!.request()) {
-        window.history.replaceState(undefined, '', '#mcp');
-        setMcpPresentation('playground');
-        setPage('mcp');
-        return;
-      }
-      if (next !== 'runtime' && pageRef.current === 'runtime') {
-        navigate(next);
-        return;
-      }
-      setPage(next);
-      if (fromHashChange && window.location.hash === '#mcp') setMcpPresentation('playground');
+      if (!fromHashChange && next === pageRef.current) return;
+      navigate(next);
+      if (fromHashChange && next === 'mcp' && pageRef.current !== 'mcp') setMcpPresentation('playground');
     };
     const onHashChange = () => updatePage(true);
     updatePage(false);
