@@ -288,6 +288,98 @@ it('keeps one generated server and plugin-data directory bound to the selected e
   }
 }, 30_000);
 
+it('uses the admitted session timeout for initialization, catalog, operations, and restart', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-persistent-mcp-timeout-'));
+  const observed: Array<readonly [string, number | undefined]> = [];
+  const capture = (operation: string, options: { readonly timeout?: number } | undefined): void => {
+    observed.push([operation, options?.timeout]);
+  };
+  let service: McpSessionService | undefined;
+  try {
+    const epochStore = await publishFixtureEpoch(root, 'epoch-timeout');
+    service = new McpSessionService({
+      createClient: () => ({
+        callTool: async (_params, options) => {
+          capture('callTool', options);
+          return { content: [] };
+        },
+        close: async () => undefined,
+        connect: async (_transport, options) => {
+          capture('connect', options);
+        },
+        getPrompt: async (_params, options) => {
+          capture('getPrompt', options);
+          return { messages: [] };
+        },
+        getServerCapabilities: () => undefined,
+        getServerVersion: () => undefined,
+        listPrompts: async (_params, options) => {
+          capture('listPrompts', options);
+          return { prompts: [] };
+        },
+        listResources: async (_params, options) => {
+          capture('listResources', options);
+          return { resources: [] };
+        },
+        listResourceTemplates: async (_params, options) => {
+          capture('listResourceTemplates', options);
+          return { resourceTemplates: [] };
+        },
+        listTools: async (_params, options) => {
+          capture('listTools', options);
+          return { tools: [] };
+        },
+        readResource: async (_params, options) => {
+          capture('readResource', options);
+          return { contents: [] };
+        },
+      }),
+      createStdioTransport: () => ({ close: async () => undefined, send: async () => undefined, start: async () => undefined, stderr: null }) as never,
+      epochStore,
+      projectRoot: root,
+    });
+
+    const defaultSession = await service.open({ epochId: 'epoch-timeout', serverName: 'fixture', target: 'portable' });
+    expect((defaultSession as unknown as { readonly timeoutMs?: number }).timeoutMs).toBe(5_000);
+    await defaultSession.listTools();
+    await defaultSession.close();
+
+    const session = await service.open({ epochId: 'epoch-timeout', serverName: 'fixture', target: 'portable', timeoutMs: 12_345 });
+    expect((session as unknown as { readonly timeoutMs?: number }).timeoutMs).toBe(12_345);
+    await session.listTools();
+    await session.listResources();
+    await session.listResourceTemplates();
+    await session.listPrompts();
+    await session.getPrompt({ name: 'fixture' });
+    await session.readResource({ uri: 'ui://fixture/resource.txt' });
+    await session.callTool({ arguments: {}, name: 'fixture' });
+    await session.listTools({ timeoutMs: 321 });
+    await session.restart();
+    await expect(session.listTools({ timeoutMs: Number.NaN })).rejects.toThrow(
+      'MCP session timeoutMs must be a positive finite number.',
+    );
+
+    expect(observed).toEqual([
+      ['connect', 5_000],
+      ['listTools', 5_000],
+      ['connect', 12_345],
+      ['listTools', 12_345],
+      ['listResources', 12_345],
+      ['listResourceTemplates', 12_345],
+      ['listPrompts', 12_345],
+      ['getPrompt', 12_345],
+      ['readResource', 12_345],
+      ['callTool', 12_345],
+      ['listTools', 321],
+      ['connect', 12_345],
+    ]);
+    await session.close();
+  } finally {
+    await service?.close();
+    await rm(root, { force: true, recursive: true });
+  }
+}, 30_000);
+
 it('uses the configured project root as the default workspace from a decoy cwd', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-mcp-workspace-root-'));
   const decoy = await mkdtemp(join(tmpdir(), 'agent-bundle-mcp-workspace-decoy-'));

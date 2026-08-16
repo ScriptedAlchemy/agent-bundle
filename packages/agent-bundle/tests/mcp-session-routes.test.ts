@@ -72,6 +72,7 @@ class RecordingSession implements McpSessionRouteSession {
   readonly binding = Object.freeze({ epochId: 'epoch-a', serverName: 'weather', target: 'portable' });
   readonly connection = Object.freeze({ capabilities: { tools: {} }, protocolEra: 'modern' as const, protocolVersion: '2025-11-25', server: { name: 'fixture', version: '1.0.0' } });
   readonly id = 'session-a';
+  readonly timeoutMs = 5_000;
   readonly calls: unknown[] = [];
   readonly #listeners = new Set<McpSessionTraceListener>();
   readonly #replay: McpSessionTraceEntry[] = [];
@@ -245,24 +246,13 @@ const readAbortedStream = async (url: string): Promise<string> => new Promise((r
   request.once('error', () => resolvePromise(output));
 });
 
-it('accepts only an epoch target and server name when creating a session', async () => {
+it('admits one positive session timeout with the immutable session snapshot', async () => {
   const service = new RecordingService();
   const started = await startRoutes(service);
 
   try {
-    const rejected = await fetch(`${started.url}/api/mcp/sessions`, {
-      body: JSON.stringify({ command: '/tmp/untrusted', epochId: 'epoch-a', serverName: 'weather', target: 'portable' }),
-      headers: { ...headers(), 'content-type': 'application/json' },
-      method: 'POST',
-    });
-    expect(rejected.status).toBe(400);
-    await expect(rejected.json()).resolves.toEqual({
-      diagnostic: { code: 'AB8016', message: 'MCP session request has an invalid shape.' },
-    });
-    expect(service.opens).toEqual([]);
-
     const created = await fetch(`${started.url}/api/mcp/sessions`, {
-      body: JSON.stringify({ epochId: 'epoch-a', serverName: 'weather', target: 'portable' }),
+      body: JSON.stringify({ epochId: 'epoch-a', serverName: 'weather', target: 'portable', timeoutMs: 12_345 }),
       headers: { ...headers(), 'content-type': 'application/json' },
       method: 'POST',
     });
@@ -272,9 +262,62 @@ it('accepts only an epoch target and server name when creating a session', async
         binding: { epochId: 'epoch-a', serverName: 'weather', target: 'portable' },
         connection: service.session.connection,
         id: 'session-a',
+        timeoutMs: 5_000,
       },
     });
-    expect(service.opens).toEqual([{ epochId: 'epoch-a', serverName: 'weather', target: 'portable' }]);
+    expect(service.opens).toEqual([{ epochId: 'epoch-a', serverName: 'weather', target: 'portable', timeoutMs: 12_345 }]);
+  } finally {
+    await started.close();
+  }
+});
+
+it('rejects invalid and smuggled session timeout request shapes', async () => {
+  const service = new RecordingService();
+  const started = await startRoutes(service);
+
+  try {
+    const invalidBodies = [
+      { epochId: 'epoch-a', serverName: 'weather', target: 'portable', timeoutMs: 0 },
+      { epochId: 'epoch-a', serverName: 'weather', target: 'portable', timeoutMs: -1 },
+      { epochId: 'epoch-a', serverName: 'weather', target: 'portable', timeoutMs: '5000' },
+      { epochId: 'epoch-a', serverName: 'weather', target: 'portable', timeoutMs: [] },
+      { epochId: 'epoch-a', serverName: 'weather', target: 'portable', timeoutMs: {} },
+      { command: '/tmp/untrusted', epochId: 'epoch-a', serverName: 'weather', target: 'portable' },
+      { env: { TOKEN: 'untrusted' }, epochId: 'epoch-a', serverName: 'weather', target: 'portable' },
+      { headers: { authorization: 'untrusted' }, epochId: 'epoch-a', serverName: 'weather', target: 'portable' },
+    ];
+    for (const body of invalidBodies) {
+      const rejected = await fetch(`${started.url}/api/mcp/sessions`, {
+        body: JSON.stringify(body),
+        headers: { ...headers(), 'content-type': 'application/json' },
+        method: 'POST',
+      });
+      expect(rejected.status).toBe(400);
+      await expect(rejected.json()).resolves.toEqual({
+        diagnostic: { code: 'AB8016', message: 'MCP session request has an invalid shape.' },
+      });
+    }
+
+    const prototypeSmuggling = await fetch(`${started.url}/api/mcp/sessions`, {
+      body: '{"epochId":"epoch-a","serverName":"weather","target":"portable","__proto__":{"timeoutMs":12345}}',
+      headers: { ...headers(), 'content-type': 'application/json' },
+      method: 'POST',
+    });
+    expect(prototypeSmuggling.status).toBe(400);
+    await expect(prototypeSmuggling.json()).resolves.toEqual({
+      diagnostic: { code: 'AB8016', message: 'MCP session request has an invalid shape.' },
+    });
+
+    const nonFinite = await fetch(`${started.url}/api/mcp/sessions`, {
+      body: '{"epochId":"epoch-a","serverName":"weather","target":"portable","timeoutMs":1e999}',
+      headers: { ...headers(), 'content-type': 'application/json' },
+      method: 'POST',
+    });
+    expect(nonFinite.status).toBe(400);
+    await expect(nonFinite.json()).resolves.toEqual({
+      diagnostic: { code: 'AB8016', message: 'MCP session request has an invalid shape.' },
+    });
+    expect(service.opens).toEqual([]);
 
     const synthetic = await fetch(`${started.url}/api/mcp/sessions`, {
       body: JSON.stringify({ epochId: 'epoch-a', serverName: 'weather', target: 'synthetic-mcp' }),
@@ -282,10 +325,7 @@ it('accepts only an epoch target and server name when creating a session', async
       method: 'POST',
     });
     expect(synthetic.status).toBe(200);
-    expect(service.opens).toEqual([
-      { epochId: 'epoch-a', serverName: 'weather', target: 'portable' },
-      { epochId: 'epoch-a', serverName: 'weather', target: 'synthetic-mcp' },
-    ]);
+    expect(service.opens).toEqual([{ epochId: 'epoch-a', serverName: 'weather', target: 'synthetic-mcp' }]);
   } finally {
     await started.close();
   }
