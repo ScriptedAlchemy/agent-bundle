@@ -50,6 +50,8 @@ interface McpPageCommonProps {
   readonly onDownloadConfig?: (download: McpConfigDownload) => void;
   /** Replaces the terminal controller with a fresh idle controller in the parent. */
   readonly onResetSession?: () => void;
+  /** Lets the host serialize a Runtime departure through this Page's existing preview lifecycle. */
+  readonly registerPreviewClose?: (close: () => Promise<void>) => () => void;
 }
 
 export type McpPageSource =
@@ -900,7 +902,7 @@ const McpPageAppPreview = ({ artifactClient, host, onLifecycleChange, previewPro
 };
 
 export const McpPage = (props: McpPageProps) => {
-  const { controller, initialBinding, initialPreview, onDownloadConfig, onResetSession } = props;
+  const { controller, initialBinding, initialPreview, onDownloadConfig, onResetSession, registerPreviewClose } = props;
   const runtimeProps: McpPageRuntimeProps | undefined = 'runtimePreviewDependencies' in props ? props : undefined;
   const artifactProps: McpPageArtifactProps | undefined = 'runtimePreviewDependencies' in props ? undefined : props;
   const [runtimeAdmission] = useState<RuntimePageAdmission | undefined>(() => runtimeProps === undefined
@@ -938,6 +940,8 @@ export const McpPage = (props: McpPageProps) => {
   const appPreviewClosePromise = useRef<Promise<void> | undefined>(undefined);
   const appPreviewController = useRef<McpPagePreviewLifecycle | undefined>(undefined);
   const appPreviewOpenGeneration = useRef(0);
+  const closeAppPreviewRef = useRef<() => Promise<void>>(() => Promise.resolve());
+  const previewCloseFacade = useRef<(() => Promise<void>) | undefined>(undefined);
   const controllerIdentity = useRef(controller);
   const requestNumber = useRef(0);
   const traceTabsByName = useRef<Partial<Record<TraceTab, HTMLButtonElement | null>>>({});
@@ -993,6 +997,10 @@ export const McpPage = (props: McpPageProps) => {
     appPreviewOpenGeneration.current += 1;
     return closeCurrentAppPreview();
   };
+  closeAppPreviewRef.current = closeAppPreview;
+  if (previewCloseFacade.current === undefined) {
+    previewCloseFacade.current = () => closeAppPreviewRef.current();
+  }
   const openAppPreview = (selection: McpPagePreviewSelection, profile = appPreviewProfile): void => {
     const generation = ++appPreviewOpenGeneration.current;
     setAppPreviewBusy(true);
@@ -1005,6 +1013,10 @@ export const McpPage = (props: McpPageProps) => {
       if (appPreviewOpenGeneration.current === generation) setAppPreviewBusy(false);
     });
   };
+  useEffect(() => {
+    if (registerPreviewClose === undefined) return undefined;
+    return registerPreviewClose(previewCloseFacade.current!);
+  }, [registerPreviewClose]);
   useEffect(() => () => { void closeCurrentAppPreview().catch(() => undefined); }, []);
   useEffect(() => {
     if (appPreview !== undefined && (

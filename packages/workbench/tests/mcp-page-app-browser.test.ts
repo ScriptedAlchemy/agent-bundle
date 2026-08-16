@@ -135,10 +135,10 @@ const mountedPageFixture = async (mode: 'artifact' | 'runtime' = 'artifact') => 
       "const runtimeResponseBinding = { ...runtimeStableBinding }; const runtimePreview = { binding: runtimeBinding, clientSurface: { bootstrapUrl: runtimeBootstrapUrl, origin: new URL(runtimeBootstrapUrl).origin, webSocketPath: '/rsbuild-hmr' }, documentPolicy: runtimePolicy, kind: 'apps', metadata: { resource: runtimeMetadata, result: runtimeMetadata, tool: runtimeMetadata }, operations: [], profile: { bootstrap: { kind: 'none' }, configExtensions: { entries: [], sourceRevision: 'source-runtime-weather' }, descriptor: { claimsRealHostParity: false, evidence: 'simulated', id: 'portable', label: 'Portable MCP Apps', version: 'agent-bundle:mcp-apps:2026-01-26' }, hostContext: { availableDisplayModes: ['inline'], containerDimensions: { height: 720, width: 1024 }, deviceCapabilities: {}, displayMode: 'inline', locale: 'en-US', platform: 'web', safeAreaInsets: { bottom: 0, left: 0, right: 0, top: 0 }, styles: {}, theme: 'light', timeZone: 'UTC', toolInfo: {}, userAgent: 'agent-bundle-runtime-mcp-app/1' }, kind: 'apps', metadata: runtimeMetadata, permissions: {}, resourceUri: 'ui://weather/runtime.html', warnings: [] }, resource: { html: '<main>Runtime weather</main>', permissions: {} }, result: { appVisible: { content: [] }, isError: false, modelVisible: {} }, session: { binding: runtimeResponseBinding, connection: { capabilities: { tools: {} }, protocolEra: 'modern', protocolVersion: '2026-01-26', server: { name: 'runtime-weather', version: '1.0.0' } }, state: 'ready' } };",
       "const runtimeRun = { completedAt: '2026-08-16T00:00:01.000Z', id: 'runtime-run-weather', input: { city: 'Paris' }, result: { app: { mcpBinding: runtimeStableBinding, resourceUri: 'ui://weather/runtime.html', surfaceId: 'mcp.edit-weather' }, modelVisible: { temperature: 22 }, trace: [], tree: [] }, startedAt: '2026-08-16T00:00:00.000Z', status: 'succeeded', surfaceId: 'mcp.render-weather', target: 'portable', vector: { runtimeGenerationId: 'generation-runtime-weather', sourceRevision: 'source-runtime-weather', stateVersion: 1 } };",
       "const runtimeProfile = { claimsRealHostParity: false, evidence: 'simulated', id: 'portable', label: 'Portable MCP Apps', version: 'agent-bundle:mcp-apps:2026-01-26' }; const runtimeSurface = { fixtures: [], id: 'mcp.render-weather', kind: 'mcp-app', label: 'Runtime weather', readOnly: false, targets: ['portable'] };",
-      "const runtimeEvents = []; let heldCreate = deferred(); let bridgeCloseFailures = 0; let backendCloseFailures = 0; const runtime = new McpAppClient({ fetch: async (input, init) => { const path = new URL(String(input), location.origin).pathname; if (path === '/api/project/session') { runtimeEvents.push('bootstrap'); return response({ origin: location.origin, token: 'foreground-secret' }); } if (path === '/api/runtime/apps' && init?.method === 'POST') { const request = JSON.parse(String(init?.body)); runtimeEvents.push('create:' + request.runId + ':' + request.profileId + ':' + request.expectedGenerationId); return heldCreate.promise; } if (path.startsWith('/api/runtime/apps/') && init?.method === 'DELETE') { const bindingId = decodeURIComponent(path.slice('/api/runtime/apps/'.length)); runtimeEvents.push('backend:' + bindingId); if (backendCloseFailures > 0) { backendCloseFailures -= 1; runtimeEvents.push('backend-failed:' + bindingId); throw new Error('runtime backend close failed'); } return response({ closed: true }); } throw new Error('Unexpected runtime fixture request ' + path); } });",
-      "const bridge = { addEventListener: () => undefined, close: async () => { runtimeEvents.push('bridge'); }, sendHostContextChange: async () => undefined, sendToolCancelled: async () => undefined, sendToolInput: async () => undefined, sendToolInputPartial: async () => undefined, sendToolResult: async () => undefined, teardownResource: async () => { runtimeEvents.push('renderer'); return {}; } }; const bridgeFactory = Object.assign(() => { runtimeEvents.push('factory'); return bridge; }, { close: async () => { runtimeEvents.push('bridge-factory'); if (bridgeCloseFailures > 0) { bridgeCloseFailures -= 1; runtimeEvents.push('bridge-factory-failed'); throw new Error('runtime bridge close failed'); } } }); const createBridgeFactory = () => bridgeFactory;",
-      "const root = createRoot(document.getElementById('root')); root.render(React.createElement(MantineProvider, null, React.createElement(McpPage, { controller, initialPreview: { binding: runtimeStableBinding, kind: 'runtime', preview: { kind: 'runtime', profile: runtimeProfile, profileId: 'portable', run: runtimeRun, surface: runtimeSurface } }, runtimePreviewDependencies: { client: runtime, createBridgeFactory }, source: { binding: runtimeStableBinding, kind: 'runtime' } })));",
-      "globalThis.__mcpPageAppFixture = { failRuntimeClose: () => { bridgeCloseFailures = 1; backendCloseFailures = 1; }, mutateRuntimeInputs: () => { runtimeStableBinding.serverName = 'mutated-runtime-weather'; runtimeStableBinding.sessionRevision = 99; runtimeRun.id = 'mutated-runtime-run'; runtimeRun.input.city = 'Mutated'; runtimeRun.result.app.resourceUri = 'ui://mutated/runtime.html'; runtimeRun.result.app.surfaceId = 'mcp.edit-mutated-weather'; runtimeRun.vector.runtimeGenerationId = 'mutated-runtime-generation'; runtimeRun.surfaceId = 'mcp.render-mutated-weather'; runtimeSurface.id = 'mcp.render-mutated-weather'; model = { ...model }; emit(); }, resolveRuntimeCreate: () => { const current = heldCreate; heldCreate = undefined; current.resolve(response({ preview: runtimePreview })); }, stats: () => ({ closes: structuredClone(closes), controllerEvents: structuredClone(controllerEvents), creates: structuredClone(creates), messages: structuredClone(messages), runtimeEvents: structuredClone(runtimeEvents), sandboxOrigin }), terminateAndClickClose: (phase) => { model = { ...model, phase }; emit(); [...document.querySelectorAll('button')].find((button) => button.textContent === 'Close App preview')?.click(); }, unmount: () => root.unmount() };",
+      "const runtimeEvents = []; let heldCreate = deferred(); let bridgeCloseFailures = 0; let backendCloseFailures = 0; let registeredPreviewClose; const runtime = new McpAppClient({ fetch: async (input, init) => { const path = new URL(String(input), location.origin).pathname; if (path === '/api/project/session') { runtimeEvents.push('bootstrap'); return response({ origin: location.origin, token: 'foreground-secret' }); } if (path === '/api/runtime/apps' && init?.method === 'POST') { const request = JSON.parse(String(init?.body)); runtimeEvents.push('create:' + request.runId + ':' + request.profileId + ':' + request.expectedGenerationId); return heldCreate.promise; } if (path.startsWith('/api/runtime/apps/') && init?.method === 'DELETE') { const bindingId = decodeURIComponent(path.slice('/api/runtime/apps/'.length)); runtimeEvents.push('backend:' + bindingId); if (backendCloseFailures > 0) { backendCloseFailures -= 1; runtimeEvents.push('backend-failed:' + bindingId); throw new Error('runtime backend close failed'); } return response({ closed: true }); } throw new Error('Unexpected runtime fixture request ' + path); } });",
+      "let heldBridgeClose; const bridge = { addEventListener: () => undefined, close: async () => { runtimeEvents.push('bridge'); }, sendHostContextChange: async () => undefined, sendToolCancelled: async () => undefined, sendToolInput: async () => undefined, sendToolInputPartial: async () => undefined, sendToolResult: async () => undefined, teardownResource: async () => { runtimeEvents.push('renderer'); return {}; } }; const bridgeFactory = Object.assign(() => { runtimeEvents.push('factory'); return bridge; }, { close: async () => { runtimeEvents.push('bridge-factory'); if (heldBridgeClose !== undefined) { const held = heldBridgeClose; await held.promise; if (heldBridgeClose === held) heldBridgeClose = undefined; } if (bridgeCloseFailures > 0) { bridgeCloseFailures -= 1; runtimeEvents.push('bridge-factory-failed'); throw new Error('runtime bridge close failed'); } } }); const createBridgeFactory = () => bridgeFactory;",
+      "const root = createRoot(document.getElementById('root')); root.render(React.createElement(MantineProvider, null, React.createElement(McpPage, { controller, initialPreview: { binding: runtimeStableBinding, kind: 'runtime', preview: { kind: 'runtime', profile: runtimeProfile, profileId: 'portable', run: runtimeRun, surface: runtimeSurface } }, registerPreviewClose: (close) => { registeredPreviewClose = close; return () => { if (registeredPreviewClose === close) registeredPreviewClose = undefined; }; }, runtimePreviewDependencies: { client: runtime, createBridgeFactory }, source: { binding: runtimeStableBinding, kind: 'runtime' } })));",
+      "globalThis.__mcpPageAppFixture = { beginRegisteredPreviewClose: () => { if (registeredPreviewClose === undefined) return false; void registeredPreviewClose().catch(() => undefined); return true; }, failRuntimeClose: () => { bridgeCloseFailures = 1; backendCloseFailures = 1; }, holdRuntimeClose: () => { heldBridgeClose = deferred(); }, mutateRuntimeInputs: () => { runtimeStableBinding.serverName = 'mutated-runtime-weather'; runtimeStableBinding.sessionRevision = 99; runtimeRun.id = 'mutated-runtime-run'; runtimeRun.input.city = 'Mutated'; runtimeRun.result.app.resourceUri = 'ui://mutated/runtime.html'; runtimeRun.result.app.surfaceId = 'mcp.edit-mutated-weather'; runtimeRun.vector.runtimeGenerationId = 'mutated-runtime-generation'; runtimeRun.surfaceId = 'mcp.render-mutated-weather'; runtimeSurface.id = 'mcp.render-mutated-weather'; model = { ...model }; emit(); }, resolveRuntimeCreate: () => { const current = heldCreate; heldCreate = undefined; current.resolve(response({ preview: runtimePreview })); }, resolveRuntimeClose: () => { const current = heldBridgeClose; heldBridgeClose = undefined; current.resolve(); }, stats: () => ({ closes: structuredClone(closes), controllerEvents: structuredClone(controllerEvents), creates: structuredClone(creates), messages: structuredClone(messages), previewCloseRegistered: registeredPreviewClose !== undefined, runtimeEvents: structuredClone(runtimeEvents), sandboxOrigin }), terminateAndClickClose: (phase) => { model = { ...model, phase }; emit(); [...document.querySelectorAll('button')].find((button) => button.textContent === 'Close App preview')?.click(); }, unmount: () => root.unmount() };",
     ] : [
       "createRoot(document.getElementById('root')).render(React.createElement(McpPage, { appPreviewClient: appClient, controller, epochOptions: ['epoch-1'], targetOptions: ['portable'] }));",
       "globalThis.__mcpPageAppFixture = { stats: () => ({ closes: structuredClone(closes), controllerEvents: structuredClone(controllerEvents), creates: structuredClone(creates), messages: structuredClone(messages), sandboxOrigin }), terminateAndClickClose: (phase) => { model = { ...model, phase }; emit(); [...document.querySelectorAll('button')].find((button) => button.textContent === 'Close App preview')?.click(); } };",
@@ -241,7 +241,7 @@ describe('MCP App page browser integration', () => {
     }
   }, 45_000);
 
-  it('retains a failed runtime lifecycle for the next restart retry before admitting controller work', async () => {
+  it('retains a failed runtime lifecycle behind the registered Page close facade until its exact retry succeeds', async () => {
     const fixture = await mountedPageFixture('runtime');
     const browser = await chromium.launch({ channel: 'chrome' });
     const page = await browser.newPage({ viewport: { height: 800, width: 390 } });
@@ -273,23 +273,87 @@ describe('MCP App page browser integration', () => {
       await page.evaluate(() => (globalThis as typeof globalThis & {
         __mcpPageAppFixture: { failRuntimeClose(): void };
       }).__mcpPageAppFixture.failRuntimeClose());
-      await page.getByRole('button', { name: 'Restart MCP session' }).click();
+      expect(await page.evaluate(() => (globalThis as typeof globalThis & {
+        __mcpPageAppFixture: { beginRegisteredPreviewClose(): boolean };
+      }).__mcpPageAppFixture.beginRegisteredPreviewClose())).toBe(true);
       await page.waitForFunction(() => (globalThis as typeof globalThis & {
         __mcpPageAppFixture: { stats(): RuntimeStats };
       }).__mcpPageAppFixture.stats().runtimeEvents.includes('backend-failed:runtime-binding-weather'), undefined, { timeout: 5_000 });
       const failed = await stats();
+      expect((failed as RuntimeStats & { readonly previewCloseRegistered: boolean }).previewCloseRegistered).toBe(true);
       expect(failed.controllerEvents.filter(({ type }) => type === 'restart')).toEqual([]);
       expect(failed.runtimeEvents.filter((event) => event === 'factory')).toHaveLength(1);
       expect(await page.locator('.mcp-page-app-preview').count()).toBe(1);
 
-      await page.getByRole('button', { name: 'Restart MCP session' }).click();
+      expect(await page.evaluate(() => (globalThis as typeof globalThis & {
+        __mcpPageAppFixture: { beginRegisteredPreviewClose(): boolean };
+      }).__mcpPageAppFixture.beginRegisteredPreviewClose())).toBe(true);
       await page.waitForFunction(() => (globalThis as typeof globalThis & {
         __mcpPageAppFixture: { stats(): RuntimeStats };
-      }).__mcpPageAppFixture.stats().controllerEvents.filter(({ type }) => type === 'restart').length === 1, undefined, { timeout: 5_000 });
+      }).__mcpPageAppFixture.stats().runtimeEvents.filter((event) => event === 'backend:runtime-binding-weather').length === 2, undefined, { timeout: 5_000 });
       const retried = await stats();
       expect(retried.runtimeEvents.filter((event) => event === 'factory')).toHaveLength(1);
       expect(retried.runtimeEvents.filter((event) => event === 'backend:runtime-binding-weather')).toHaveLength(2);
       expect(await page.locator('.mcp-page-app-preview').count()).toBe(0);
+      expect((retried as RuntimeStats & { readonly previewCloseRegistered: boolean }).previewCloseRegistered).toBe(true);
+      await page.evaluate(() => (globalThis as typeof globalThis & {
+        __mcpPageAppFixture: { unmount(): void };
+      }).__mcpPageAppFixture.unmount());
+      await page.waitForFunction(() => !(globalThis as typeof globalThis & {
+        __mcpPageAppFixture: { stats(): { readonly previewCloseRegistered: boolean } };
+      }).__mcpPageAppFixture.stats().previewCloseRegistered, undefined, { timeout: 5_000 });
+      expect(pageErrors).toEqual([]);
+    } finally {
+      await browser.close();
+      await fixture.close();
+    }
+  }, 45_000);
+
+  it('holds the selected runtime preview behind the registered Page close facade until child cleanup settles', async () => {
+    const fixture = await mountedPageFixture('runtime');
+    const browser = await chromium.launch({ channel: 'chrome' });
+    const page = await browser.newPage({ viewport: { height: 800, width: 390 } });
+    const pageErrors: string[] = [];
+    page.on('pageerror', (error) => { pageErrors.push(error.message); });
+    type RuntimeStats = Readonly<{ readonly previewCloseRegistered: boolean; readonly runtimeEvents: readonly string[] }>;
+    const stats = (): Promise<RuntimeStats> => page.evaluate(() => (globalThis as typeof globalThis & {
+      __mcpPageAppFixture: { stats(): RuntimeStats };
+    }).__mcpPageAppFixture.stats());
+    try {
+      await page.goto(`${fixture.outerOrigin}/page.html`);
+      await page.waitForFunction(() => '__mcpPageAppFixture' in globalThis);
+      await page.waitForFunction(() => (globalThis as typeof globalThis & {
+        __mcpPageAppFixture: { stats(): RuntimeStats };
+      }).__mcpPageAppFixture.stats().runtimeEvents.some((event) => event.startsWith('create:')), undefined, { timeout: 5_000 });
+      await page.evaluate(() => (globalThis as typeof globalThis & {
+        __mcpPageAppFixture: { resolveRuntimeCreate(): void };
+      }).__mcpPageAppFixture.resolveRuntimeCreate());
+      await page.waitForFunction(() => (globalThis as typeof globalThis & {
+        __mcpPageAppFixture: { stats(): RuntimeStats };
+      }).__mcpPageAppFixture.stats().runtimeEvents.includes('factory'), undefined, { timeout: 5_000 });
+      await page.locator('.mcp-page-app-preview iframe').waitFor({ timeout: 5_000 });
+
+      await page.evaluate(() => (globalThis as typeof globalThis & {
+        __mcpPageAppFixture: { holdRuntimeClose(): void };
+      }).__mcpPageAppFixture.holdRuntimeClose());
+      expect(await page.evaluate(() => (globalThis as typeof globalThis & {
+        __mcpPageAppFixture: { beginRegisteredPreviewClose(): boolean };
+      }).__mcpPageAppFixture.beginRegisteredPreviewClose())).toBe(true);
+      await page.waitForFunction(() => (globalThis as typeof globalThis & {
+        __mcpPageAppFixture: { stats(): RuntimeStats };
+      }).__mcpPageAppFixture.stats().runtimeEvents.includes('bridge-factory'), undefined, { timeout: 5_000 });
+      const held = await stats();
+      expect(held.runtimeEvents).not.toContain('backend:runtime-binding-weather');
+      expect(held.previewCloseRegistered).toBe(true);
+      expect(await page.locator('.mcp-page-app-preview iframe').count()).toBe(1);
+
+      await page.evaluate(() => (globalThis as typeof globalThis & {
+        __mcpPageAppFixture: { resolveRuntimeClose(): void };
+      }).__mcpPageAppFixture.resolveRuntimeClose());
+      await page.waitForFunction(() => (globalThis as typeof globalThis & {
+        __mcpPageAppFixture: { stats(): RuntimeStats };
+      }).__mcpPageAppFixture.stats().runtimeEvents.includes('backend:runtime-binding-weather'), undefined, { timeout: 5_000 });
+      await page.waitForFunction(() => document.querySelector('.mcp-page-app-preview iframe') === null, undefined, { timeout: 5_000 });
       expect(pageErrors).toEqual([]);
     } finally {
       await browser.close();

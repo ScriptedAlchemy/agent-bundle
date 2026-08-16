@@ -15,6 +15,7 @@ import { McpPage, type McpConfigDownload, type McpPagePreviewSelection, type Mcp
 import { ForegroundRouteClient, McpRouteClient } from './mcp/mcp-route-client.ts';
 import { createMcpSessionController } from './mcp/mcp-session-controller.ts';
 import {
+  McpPreviewDepartureCoordinator,
   prepareRuntimeMcpHandoffAuthority,
   RuntimeMcpHandoffCoordinator,
   sameRuntimeMcpAppBinding,
@@ -383,10 +384,11 @@ const WorkbenchScreen = ({ children, connectionError, onNavigate, page, runtimeA
   </div>
 </div>;
 
-const McpScreen = ({ appPreviewClient, connectionError, controller, model, onNavigate, onResetSession, onRuntimeInitialPreviewConsumed, presentation, runtimeAvailable = false, runtimeDiagnostic, runtimeHandoff, runtimePreviewDependencies, setPresentation, status }: {
+const McpScreen = ({ appPreviewClient, connectionError, controller, mcpDepartureDiagnostic, model, onNavigate, onResetSession, onRuntimeInitialPreviewConsumed, presentation, registerPreviewClose, runtimeAvailable = false, runtimeDiagnostic, runtimeHandoff, runtimePreviewDependencies, setPresentation, status }: {
   readonly appPreviewClient: McpAppClient;
   readonly connectionError?: string;
   readonly controller: ReturnType<typeof createMcpController>;
+  readonly mcpDepartureDiagnostic?: string;
   readonly model: ReturnType<typeof createMcpController>['model'];
   readonly onNavigate: (page: WorkbenchPage) => void;
   readonly onResetSession: () => void;
@@ -396,6 +398,7 @@ const McpScreen = ({ appPreviewClient, connectionError, controller, model, onNav
   readonly runtimeHandoff?: RuntimeMcpHandoff;
   readonly runtimePreviewDependencies: McpPageRuntimePreviewDependencies;
   readonly presentation: McpPresentation;
+  readonly registerPreviewClose: (close: () => Promise<void>) => () => void;
   readonly setPresentation: (presentation: McpPresentation) => void;
   readonly status: ProjectStatus;
 }) => {
@@ -420,6 +423,7 @@ const McpScreen = ({ appPreviewClient, connectionError, controller, model, onNav
   });
   return <WorkbenchScreen connectionError={connectionError} onNavigate={onNavigate} page="mcp" runtimeAvailable={runtimeAvailable} runtimeDiagnostic={runtimeDiagnostic}>
     <div className="mcp-content">
+      {mcpDepartureDiagnostic === undefined ? undefined : <p role="alert">{mcpDepartureDiagnostic}</p>}
       <div aria-label="MCP presentation" className="mcp-presentation-tabs" role="tablist">
         <button
           aria-controls="mcp-playground-presentation"
@@ -459,12 +463,14 @@ const McpScreen = ({ appPreviewClient, connectionError, controller, model, onNav
               initialBinding={activeEpoch === undefined ? undefined : { epochId: activeEpoch.id }}
               onDownloadConfig={downloadMcpConfig}
               onResetSession={onResetSession}
+              registerPreviewClose={registerPreviewClose}
               targetOptions={targetOptions}
             />
           : <MantineProvider><McpPage
               controller={controller}
               initialPreview={runtimeInitialPreview}
               onResetSession={onResetSession}
+              registerPreviewClose={registerPreviewClose}
               runtimePreviewDependencies={runtimePreviewDependencies}
               source={runtimeSource}
             /></MantineProvider>}
@@ -529,6 +535,7 @@ const Workbench = () => {
   const skillClient = useRef<SkillClient>();
   const lifecycleAuthorities = useRef(new WeakMap<Readonly<{ close(): Promise<void> }>, RuntimeHandoffAuthority>());
   const handoffCoordinator = useRef<RuntimeMcpHandoffCoordinator>();
+  const mcpPreviewDeparture = useRef<McpPreviewDepartureCoordinator>();
   const runtimeBridgeTrace = useRef(new Map<string, readonly unknown[]>());
   const runtimeConsentQueue = useRef<Array<Readonly<{ readonly challenge: McpAppConsentChallenge; readonly resolve: (decision: 'allow-once' | 'deny') => void }>>>([]);
   const [connectionError, setConnectionError] = useState<string>();
@@ -544,6 +551,7 @@ const Workbench = () => {
   const [runtimeError, setRuntimeError] = useState<string>();
   const [runtimeHandoff, setRuntimeHandoff] = useState<RuntimeMcpHandoff>();
   const [runtimeHandoffError, setRuntimeHandoffError] = useState<string>();
+  const [mcpDepartureError, setMcpDepartureError] = useState<string>();
   const [runtimeConsent, setRuntimeConsent] = useState<McpAppConsentChallenge>();
   const [mcpPresentation, setMcpPresentation] = useState(mcpPresentationForHash);
   const [status, setStatus] = useState<ProjectStatus>();
@@ -556,13 +564,32 @@ const Workbench = () => {
 
   const runtimeAvailable = runtimeCapability === 'available';
 
-  const navigate = useCallback((next: WorkbenchPage): void => {
-    if (next !== 'runtime') handoffCoordinator.current?.cancel();
+  const commitNavigation = useCallback((next: WorkbenchPage): void => {
+    if (next !== 'runtime') {
+      handoffCoordinator.current?.cancel();
+      mcpPreviewDeparture.current?.cancel();
+    }
     const hash = next === 'mcp' ? '#mcp' : next === 'runtime' ? '#runtime' : next === 'skills' ? '#skills' : '#overview';
     if (window.location.hash !== hash) window.history.pushState(undefined, '', hash);
     if (next === 'mcp') setMcpPresentation('playground');
     setPage(next);
   }, []);
+
+  if (mcpPreviewDeparture.current === undefined) {
+    mcpPreviewDeparture.current = new McpPreviewDepartureCoordinator({
+      commit: () => {
+        setMcpDepartureError(undefined);
+        commitNavigation('runtime');
+      },
+      reject: (reason) => { setMcpDepartureError(`Runtime navigation could not close the MCP App preview: ${errorMessage(reason)}`); },
+    });
+  }
+
+  const navigate = useCallback((next: WorkbenchPage): void => {
+    if (next === 'runtime' && mcpPreviewDeparture.current!.request()) return;
+    if (next === 'runtime') setMcpDepartureError(undefined);
+    commitNavigation(next);
+  }, [commitNavigation]);
 
   if (handoffCoordinator.current === undefined) {
     handoffCoordinator.current = new RuntimeMcpHandoffCoordinator({
@@ -588,6 +615,10 @@ const Workbench = () => {
     const authority = lifecycleAuthorities.current.get(handle);
     if (authority === undefined) return () => undefined;
     return handoffCoordinator.current!.register(handle, authority);
+  }, []);
+
+  const registerMcpPreviewClose = useCallback((close: () => Promise<void>): (() => void) => {
+    return mcpPreviewDeparture.current!.register(close);
   }, []);
 
   const canOpenRuntimeHandoff = useCallback((authority: RuntimeHandoffAuthority): boolean => {
@@ -709,7 +740,7 @@ const Workbench = () => {
       }
       setRuntimeCapability('available');
       setRuntimeError(undefined);
-      if (window.location.hash === '#runtime') setPage('runtime');
+      if (window.location.hash === '#runtime') navigate('runtime');
       if (bootstrap.status.activeVector === undefined && bootstrap.status.state !== 'failed' && bootstrap.status.state !== 'closed') {
         scheduleRuntimeBootstrap();
       } else {
@@ -753,6 +784,7 @@ const Workbench = () => {
       if (runtimeRetry !== undefined) clearTimeout(runtimeRetry);
       runtimeEvents.close();
       unsubscribeActivity();
+      mcpPreviewDeparture.current?.cancel();
       for (const pending of runtimeConsentQueue.current.splice(0)) pending.resolve('deny');
       setRuntimeConsent(undefined);
       void (async () => {
@@ -772,7 +804,7 @@ const Workbench = () => {
       runtimeController.current?.close();
       runtimeController.current = undefined;
     };
-  }, []);
+  }, [navigate]);
 
   useEffect(() => {
     const updatePage = (fromHashChange: boolean) => {
@@ -787,7 +819,14 @@ const Workbench = () => {
         setPage('overview');
         return;
       }
-      setPage(pageForHash(runtimeAvailable));
+      const next = pageForHash(runtimeAvailable);
+      if (next === 'runtime' && mcpPreviewDeparture.current!.request()) {
+        window.history.replaceState(undefined, '', '#mcp');
+        setMcpPresentation('playground');
+        setPage('mcp');
+        return;
+      }
+      setPage(next);
       if (fromHashChange && window.location.hash === '#mcp') setMcpPresentation('playground');
     };
     const onHashChange = () => updatePage(true);
@@ -809,10 +848,12 @@ const Workbench = () => {
         appPreviewClient={mcpAppClient.current}
         connectionError={connectionError}
         controller={mcpController}
+        mcpDepartureDiagnostic={mcpDepartureError}
         model={mcpModel}
         onNavigate={navigate}
         onRuntimeInitialPreviewConsumed={consumeRuntimeInitialPreview}
         onResetSession={resetMcpSession}
+        registerPreviewClose={registerMcpPreviewClose}
         runtimeAvailable={runtimeAvailable}
         runtimeDiagnostic={runtimeError}
         runtimeHandoff={runtimeHandoff}

@@ -692,6 +692,94 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
     await page.setViewportSize({ height: 900, width: 390 });
     await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth), { timeout: 15_000 }).toBe(true);
 
+    const destinationAppFrame = async () => {
+      for (const frame of page.frames()) {
+        if (new URL(frame.url()).origin === destinationOrigin && await frame.getByRole('heading', { name: 'Runtime edit timeline' }).count() === 1) return frame;
+      }
+      return undefined;
+    };
+    await expect.poll(destinationAppFrame, { timeout: 15_000 }).toBeDefined();
+    const destinationFrame = await destinationAppFrame();
+    if (destinationFrame === undefined) throw new Error('Destination Runtime App frame was unavailable.');
+    const destinationFrameHref = destinationFrame.url();
+    const destinationHistory = await page.getByRole('region', { name: 'Invocation history' }).textContent();
+    const destinationDeletePath = `/api/runtime/apps/${encodeURIComponent(destinationBinding.id)}`;
+    await page.evaluate(() => { window.location.hash = '#runtime'; });
+    const teardownRequestForDestination = (): RuntimeAppMessage | undefined => appMessages.find((entry) =>
+      entry.href === destinationFrameHref && entry.senderOrigin === fixture.url && entry.message !== null && typeof entry.message === 'object' &&
+      (entry.message as Readonly<Record<string, unknown>>).method === 'ui/resource-teardown');
+    await expect.poll(teardownRequestForDestination, { timeout: 15_000 }).toBeDefined();
+    const destinationTeardown = teardownRequestForDestination();
+    const destinationTeardownId = destinationTeardown?.message !== null && typeof destinationTeardown?.message === 'object'
+      ? (destinationTeardown.message as Readonly<Record<string, unknown>>).id
+      : undefined;
+    if (typeof destinationTeardownId !== 'string' && typeof destinationTeardownId !== 'number') throw new Error('Destination Runtime App teardown request omitted its JSON-RPC id.');
+    const destinationAcknowledgement = () => messageFor(fixture.url, destinationOrigin, (message) =>
+      message.id === destinationTeardownId && (Object.hasOwn(message, 'result') || Object.hasOwn(message, 'error')));
+    await expect.poll(destinationAcknowledgement, { timeout: 15_000 }).toBeDefined();
+    expect(destinationAcknowledgement()?.message).toEqual({ id: destinationTeardownId, jsonrpc: '2.0', result: {} });
+    await expect.poll(() => runtimeAppRequests.filter((entry) => entry.method === 'DELETE' && entry.path === destinationDeletePath), { timeout: 15_000 }).toHaveLength(1);
+    const destinationDelete = runtimeAppRequests.find((entry) => entry.method === 'DELETE' && entry.path === destinationDeletePath);
+    await expect.poll(runtimeCreates, { timeout: 15_000 }).toHaveLength(3);
+    const thirdCreate = runtimeCreates()[2];
+    expect(thirdCreate?.body).toEqual({ expectedGenerationId, profileId: 'portable', runId });
+    expect(lifecycleIndex('message', destinationTeardown!)).toBeGreaterThan(-1);
+    expect(lifecycleIndex('message', destinationAcknowledgement()!)).toBeGreaterThan(lifecycleIndex('message', destinationTeardown!));
+    expect(lifecycleIndex('request', destinationDelete!)).toBeGreaterThan(lifecycleIndex('message', destinationAcknowledgement()!));
+    expect(lifecycleIndex('request', thirdCreate!)).toBeGreaterThan(lifecycleIndex('request', destinationDelete!));
+    await expect(page.getByRole('heading', { name: 'Runtime Playground' })).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator('.mcp-page-app-preview iframe')).toHaveCount(0);
+    await expect(page.locator('.runtime-stage .mcp-app-preview iframe')).toHaveCount(1, { timeout: 15_000 });
+    await expect.poll(() => runtimeAppResponses.filter((entry) => entry.method === 'POST' && entry.path === '/api/runtime/apps'), { timeout: 15_000 }).toHaveLength(3);
+    const thirdResponse = runtimeAppResponses.filter((entry) => entry.method === 'POST' && entry.path === '/api/runtime/apps')[2]?.response as Readonly<{ readonly preview?: Readonly<{
+      readonly binding?: Readonly<{ readonly id?: unknown; readonly sessionId?: unknown; readonly sessionRevision?: unknown }>;
+      readonly clientSurface?: Readonly<{ readonly origin?: unknown }>;
+    }> }> | undefined;
+    const thirdBinding = thirdResponse?.preview?.binding;
+    const thirdOrigin = thirdResponse?.preview?.clientSurface?.origin;
+    if (typeof thirdBinding?.id !== 'string' || typeof thirdBinding.sessionId !== 'string' || typeof thirdBinding.sessionRevision !== 'number' || typeof thirdOrigin !== 'string') {
+      throw new Error('Third Runtime App response omitted its binding authority.');
+    }
+    expect(thirdBinding).toMatchObject({ sessionId: created.preview.binding.sessionId, sessionRevision: created.preview.binding.sessionRevision });
+    expect(thirdBinding.id).not.toBe(sourceBindingId);
+    expect(thirdBinding.id).not.toBe(destinationBinding.id);
+
+    const thirdAppFrame = async () => {
+      for (const frame of page.frames()) {
+        if (new URL(frame.url()).origin === thirdOrigin && await frame.getByRole('heading', { name: 'Runtime edit timeline' }).count() === 1) return frame;
+      }
+      return undefined;
+    };
+    await expect.poll(thirdAppFrame, { timeout: 15_000 }).toBeDefined();
+    const thirdFrame = await thirdAppFrame();
+    if (thirdFrame === undefined) throw new Error('Third Runtime App frame was unavailable.');
+    const thirdFrameHref = thirdFrame.url();
+    const thirdDeletePath = `/api/runtime/apps/${encodeURIComponent(thirdBinding.id)}`;
+    await page.getByRole('link', { name: 'MCP playground', exact: true }).click();
+    const teardownRequestForThird = (): RuntimeAppMessage | undefined => appMessages.find((entry) =>
+      entry.href === thirdFrameHref && entry.senderOrigin === fixture.url && entry.message !== null && typeof entry.message === 'object' &&
+      (entry.message as Readonly<Record<string, unknown>>).method === 'ui/resource-teardown');
+    await expect.poll(teardownRequestForThird, { timeout: 15_000 }).toBeDefined();
+    const thirdTeardown = teardownRequestForThird();
+    const thirdTeardownId = thirdTeardown?.message !== null && typeof thirdTeardown?.message === 'object'
+      ? (thirdTeardown.message as Readonly<Record<string, unknown>>).id
+      : undefined;
+    if (typeof thirdTeardownId !== 'string' && typeof thirdTeardownId !== 'number') throw new Error('Third Runtime App teardown request omitted its JSON-RPC id.');
+    const thirdAcknowledgement = () => messageFor(fixture.url, thirdOrigin, (message) =>
+      message.id === thirdTeardownId && (Object.hasOwn(message, 'result') || Object.hasOwn(message, 'error')));
+    await expect.poll(thirdAcknowledgement, { timeout: 15_000 }).toBeDefined();
+    await expect.poll(() => runtimeAppRequests.filter((entry) => entry.method === 'DELETE' && entry.path === thirdDeletePath), { timeout: 15_000 }).toHaveLength(1);
+    const thirdDelete = runtimeAppRequests.find((entry) => entry.method === 'DELETE' && entry.path === thirdDeletePath);
+    expect(lifecycleIndex('message', thirdAcknowledgement()!)).toBeGreaterThan(lifecycleIndex('message', thirdTeardown!));
+    expect(lifecycleIndex('request', thirdDelete!)).toBeGreaterThan(lifecycleIndex('message', thirdAcknowledgement()!));
+    await expect(page.getByRole('heading', { name: 'MCP playground' })).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator('.runtime-stage .mcp-app-preview iframe')).toHaveCount(0);
+    await expect(page.locator('.mcp-page-app-preview iframe')).toHaveCount(0);
+    await expect(page.getByLabel('Runtime-bound MCP session')).toContainText(`${created.preview.binding.sessionId} · revision ${created.preview.binding.sessionRevision}`);
+    await expect(page.getByRole('region', { name: 'Invocation history' })).toHaveText(destinationHistory ?? '');
+    expect(runtimeCreates()).toHaveLength(3);
+    await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth), { timeout: 15_000 }).toBe(true);
+
     expect(artifactMcpSessionRequests).toEqual([]);
     expect(runtimeMcpSessionRequests).toEqual([]);
     expect(projectEventStreams).toEqual(['GET /api/project/events']);

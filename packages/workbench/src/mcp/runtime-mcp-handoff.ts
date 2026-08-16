@@ -33,6 +33,21 @@ export interface RuntimeMcpHandoffCoordinatorOptions {
   readonly reject: (reason: unknown) => void;
 }
 
+export interface McpPreviewDepartureCoordinatorOptions {
+  readonly commit: () => void;
+  readonly reject: (reason: unknown) => void;
+}
+
+type McpPreviewCloseRecord = Readonly<{
+  readonly close: () => Promise<void>;
+  readonly registration: number;
+}>;
+
+type McpPreviewDepartureAttempt = Readonly<{
+  readonly generation: number;
+  readonly record: McpPreviewCloseRecord;
+}>;
+
 const maximumDepth = 32;
 const maximumNodes = 4_096;
 const maximumIdentityTextLength = 4_096;
@@ -314,5 +329,68 @@ export class RuntimeMcpHandoffCoordinator {
         // An observer cannot break lifecycle authority for another observer.
       }
     }
+  }
+}
+
+/** Serializes the one Page-owned preview close that must precede MCP→Runtime navigation. */
+export class McpPreviewDepartureCoordinator {
+  readonly #options: McpPreviewDepartureCoordinatorOptions;
+  #attempt: McpPreviewDepartureAttempt | undefined;
+  #generation = 0;
+  #registration = 0;
+  #record: McpPreviewCloseRecord | undefined;
+
+  constructor(options: McpPreviewDepartureCoordinatorOptions) {
+    this.#options = options;
+  }
+
+  register(close: () => Promise<void>): () => void {
+    const previous = this.#record;
+    const record = Object.freeze({ close, registration: ++this.#registration });
+    if (previous?.close !== close) this.#generation += 1;
+    this.#record = record;
+    return () => { queueMicrotask(() => this.#unregister(record)); };
+  }
+
+  /** Returns true when Page-owned cleanup now controls the requested departure. */
+  request(): boolean {
+    const record = this.#record;
+    if (record === undefined) return false;
+    if (this.#attempt !== undefined) return true;
+    const attempt = Object.freeze({ generation: this.#generation, record });
+    this.#attempt = attempt;
+    let closing: Promise<void>;
+    try {
+      closing = record.close();
+    } catch (reason) {
+      closing = Promise.reject(reason);
+    }
+    void closing.then(() => {
+      if (!this.#isCurrent(attempt)) return;
+      this.#record = undefined;
+      this.#options.commit();
+    }, (reason: unknown) => {
+      if (this.#isCurrent(attempt)) this.#options.reject(reason);
+    }).finally(() => {
+      if (this.#attempt === attempt) this.#attempt = undefined;
+    });
+    return true;
+  }
+
+  /** Fences a held Page close when another navigation owns the transition. */
+  cancel(): void {
+    this.#generation += 1;
+    this.#attempt = undefined;
+    this.#record = undefined;
+  }
+
+  #isCurrent(attempt: McpPreviewDepartureAttempt): boolean {
+    return this.#attempt === attempt && this.#generation === attempt.generation && this.#record?.close === attempt.record.close;
+  }
+
+  #unregister(record: McpPreviewCloseRecord): void {
+    if (this.#record !== record || this.#attempt?.record === record) return;
+    this.#generation += 1;
+    this.#record = undefined;
   }
 }

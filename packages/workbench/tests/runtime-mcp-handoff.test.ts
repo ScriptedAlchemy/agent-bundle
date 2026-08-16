@@ -1,6 +1,7 @@
 import { expect, it } from '@rstest/core';
 
 import {
+  McpPreviewDepartureCoordinator,
   prepareRuntimeMcpHandoffAuthority,
   RuntimeMcpHandoffCoordinator,
   type RuntimeHandoffLifecycle,
@@ -75,6 +76,72 @@ const coordinator = () => {
     }),
   });
 };
+
+const departureCoordinator = () => {
+  const commits: string[] = [];
+  const rejections: unknown[] = [];
+  return Object.freeze({
+    commits,
+    rejections,
+    value: new McpPreviewDepartureCoordinator({
+      commit: () => { commits.push('runtime'); },
+      reject: (reason) => { rejections.push(reason); },
+    }),
+  });
+};
+
+it('does not commit Runtime navigation until one held Page preview close settles', async () => {
+  const state = departureCoordinator();
+  const held = deferred<void>();
+  let closes = 0;
+  state.value.register(() => {
+    closes += 1;
+    return held.promise;
+  });
+
+  expect(state.value.request()).toBe(true);
+  expect(state.value.request()).toBe(true);
+  expect(closes).toBe(1);
+  expect(state.commits).toEqual([]);
+  held.resolve();
+  await flush();
+  expect(state.commits).toEqual(['runtime']);
+});
+
+it('retains a rejected Page preview close for one exact retry', async () => {
+  const state = departureCoordinator();
+  let closes = 0;
+  state.value.register(() => {
+    closes += 1;
+    return closes === 1 ? Promise.reject(new Error('Page preview close rejected')) : Promise.resolve();
+  });
+
+  expect(state.value.request()).toBe(true);
+  await flush();
+  expect(state.rejections).toHaveLength(1);
+  expect(state.commits).toEqual([]);
+  expect(state.value.request()).toBe(true);
+  await flush();
+  expect(closes).toBe(2);
+  expect(state.commits).toEqual(['runtime']);
+});
+
+it('fences a held stale Page close when replacement registration takes ownership', async () => {
+  const state = departureCoordinator();
+  const held = deferred<void>();
+  const staleUnregister = state.value.register(() => held.promise);
+  expect(state.value.request()).toBe(true);
+  staleUnregister();
+  const replacementUnregister = state.value.register(async () => undefined);
+  held.resolve();
+
+  await flush();
+  expect(state.commits).toEqual([]);
+  expect(state.value.request()).toBe(true);
+  await flush();
+  expect(state.commits).toEqual(['runtime']);
+  replacementUnregister();
+});
 
 it('keeps a replayed same-handle registration after its deferred prior unregister', async () => {
   const state = coordinator();
