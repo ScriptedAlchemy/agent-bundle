@@ -26,6 +26,7 @@ export interface OverviewNextAction {
 }
 
 export interface OverviewModel {
+  readonly changedFiles: readonly string[];
   readonly diagnostics: readonly Diagnostic[];
   readonly epoch: OverviewEpoch;
   readonly nextAction: OverviewNextAction;
@@ -89,9 +90,10 @@ const nextActionFor = (status: ProjectStatus, diagnostics: readonly Diagnostic[]
   return { label: 'Rebuild', summary: 'Artifact epoch is current' };
 };
 
-export const overviewFor = (status: ProjectStatus): OverviewModel => {
+export const overviewFor = (status: ProjectStatus, changedFiles: readonly string[] = []): OverviewModel => {
   const diagnostics = uniqueDiagnostics([...status.source.diagnostics, ...buildDiagnostics(status)]);
   return Object.freeze({
+    changedFiles: Object.freeze([...changedFiles]),
     diagnostics,
     epoch: Object.freeze(epochFor(status)),
     nextAction: Object.freeze(nextActionFor(status, diagnostics)),

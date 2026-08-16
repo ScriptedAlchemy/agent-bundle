@@ -1,4 +1,4 @@
-import type { ProjectStatus } from '../../agent-bundle/src/dev/types.ts';
+import type { Invalidation, ProjectEventOf, ProjectStatus } from '../../agent-bundle/src/dev/types.ts';
 
 export interface EventSourceMessage {
   readonly data: string;
@@ -12,6 +12,12 @@ export interface EventSourceLike {
 
 export type EventSourceFactory = (url: string) => EventSourceLike;
 export type ProjectClientErrorListener = (reason: unknown) => void;
+
+export interface ProjectActivitySnapshot {
+  readonly changedFiles: readonly string[];
+}
+
+export type ProjectActivityListener = (activity: ProjectActivitySnapshot) => void;
 
 export interface ProjectClientOptions {
   readonly events?: EventSourceFactory;
@@ -53,22 +59,57 @@ const readResponse = async <Result>(response: Response): Promise<Result> => {
   return response.json() as Promise<Result>;
 };
 
-const parseSequence = (event: EventSourceMessage): number | undefined => {
-  const lastEventId = Number(event.lastEventId);
-  if (Number.isSafeInteger(lastEventId) && lastEventId >= 0) return lastEventId;
+const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+const isInvalidationReason = (value: unknown): value is Invalidation['reason'] =>
+  value === 'initial' || value === 'manual' || value === 'source-change';
+
+const parseEventData = (event: EventSourceMessage): unknown => {
   try {
-    const value = JSON.parse(event.data) as { readonly sequence?: unknown };
-    return typeof value.sequence === 'number' && Number.isSafeInteger(value.sequence) && value.sequence >= 0
-      ? value.sequence
-      : undefined;
+    return JSON.parse(event.data);
   } catch {
     return undefined;
   }
 };
 
+const parseSequence = (event: EventSourceMessage, data: unknown): number | undefined => {
+  const lastEventId = Number(event.lastEventId);
+  if (Number.isSafeInteger(lastEventId) && lastEventId >= 0) return lastEventId;
+  return isRecord(data) && typeof data.sequence === 'number' && Number.isSafeInteger(data.sequence) && data.sequence >= 0
+    ? data.sequence
+    : undefined;
+};
+
 const normalizePaths = (paths: readonly string[]): readonly string[] => Object.freeze(
   [...new Set(paths)].sort((left, right) => left.localeCompare(right)),
 );
+
+const parseSourceChangedEvent = (data: unknown): ProjectEventOf<'source.changed'> | undefined => {
+  if (!isRecord(data) || data.type !== 'source.changed' || typeof data.sequence !== 'number' ||
+    !Number.isSafeInteger(data.sequence) || data.sequence < 0 || typeof data.occurredAt !== 'string' || !isRecord(data.payload)) {
+    return undefined;
+  }
+  const { payload } = data;
+  if (!Array.isArray(payload.paths) || !payload.paths.every((path) => typeof path === 'string') ||
+    !isInvalidationReason(payload.reason) || typeof payload.occurredAt !== 'string') {
+    return undefined;
+  }
+  return {
+    occurredAt: data.occurredAt,
+    payload: {
+      occurredAt: payload.occurredAt,
+      paths: payload.paths,
+      reason: payload.reason,
+    },
+    sequence: data.sequence,
+    type: 'source.changed',
+  };
+};
+
+const activityFor = (paths: readonly string[]): ProjectActivitySnapshot => Object.freeze({
+  changedFiles: normalizePaths(paths),
+});
 
 /**
  * Browser-side transport for the W9 foreground routes. Native EventSource owns
@@ -79,10 +120,13 @@ export class ProjectClient {
   readonly #events: EventSourceFactory;
   readonly #fetch: typeof fetch;
   #closed = false;
+  #activity = activityFor([]);
+  readonly #activityListeners = new Set<ProjectActivityListener>();
   #eventSource: EventSourceLike | undefined;
   #eventRefreshPromise: Promise<void> | undefined;
   #eventRefreshQueued = false;
   #lastEventId = 0;
+  #lastSourceChangeSequence = -1;
   #errorListener: ProjectClientErrorListener | undefined;
   #listener: ((status: ProjectStatus) => void) | undefined;
   #refreshPromise: Promise<ProjectStatus> | undefined;
@@ -95,6 +139,15 @@ export class ProjectClient {
 
   get lastEventId(): number {
     return this.#lastEventId;
+  }
+
+  get activity(): ProjectActivitySnapshot {
+    return this.#activity;
+  }
+
+  onActivity(listener: ProjectActivityListener): () => void {
+    this.#activityListeners.add(listener);
+    return () => this.#activityListeners.delete(listener);
   }
 
   async connect(listener: (status: ProjectStatus) => void, onError?: ProjectClientErrorListener): Promise<ProjectStatus> {
@@ -147,6 +200,7 @@ export class ProjectClient {
     this.#eventRefreshQueued = false;
     this.#eventSource?.close();
     this.#eventSource = undefined;
+    this.#activityListeners.clear();
     this.#errorListener = undefined;
     this.#listener = undefined;
   }
@@ -165,7 +219,21 @@ export class ProjectClient {
   }
 
   #onEvent(event: EventSourceMessage): void {
-    const sequence = parseSequence(event);
+    if (this.#closed) return;
+    const data = parseEventData(event);
+    const sourceChanged = parseSourceChangedEvent(data);
+    if (sourceChanged !== undefined && sourceChanged.sequence > this.#lastSourceChangeSequence) {
+      this.#lastSourceChangeSequence = sourceChanged.sequence;
+      this.#activity = activityFor(sourceChanged.payload.paths);
+      for (const listener of this.#activityListeners) {
+        try {
+          listener(this.#activity);
+        } catch {
+          // Activity observers must not interrupt the foreground status refresh.
+        }
+      }
+    }
+    const sequence = parseSequence(event, data);
     if (sequence !== undefined) this.#lastEventId = Math.max(this.#lastEventId, sequence);
     this.#queueEventRefresh();
   }

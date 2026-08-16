@@ -102,14 +102,15 @@ const Navigation = ({ onNavigate, page }: {
   </a>
 </aside>;
 
-const Overview = ({ client, connectionError, onNavigate, status, onStatus }: {
+const Overview = ({ changedFiles, client, connectionError, onNavigate, status, onStatus }: {
+  readonly changedFiles: readonly string[];
   readonly client: ProjectClient;
   readonly connectionError?: string;
   readonly onNavigate: (page: WorkbenchPage) => void;
   readonly onStatus: (status: ProjectStatus) => void;
   readonly status: ProjectStatus;
 }) => {
-  const overview = overviewFor(status);
+  const overview = overviewFor(status, changedFiles);
   const [error, setError] = useState<string>();
   const [rebuilding, setRebuilding] = useState(false);
 
@@ -186,6 +187,15 @@ const Overview = ({ client, connectionError, onNavigate, status, onStatus }: {
                   <td className="identifier">{sourceFor(diagnostic)}</td>
                 </tr>)}</tbody>
               </table></div>
+            )}
+          </section>
+
+          <section aria-labelledby="changed-files-heading" className="section">
+            <h2 id="changed-files-heading">Latest changed files ({overview.changedFiles.length})</h2>
+            {overview.changedFiles.length === 0 ? <p className="empty-row">No source changes have been reported in this browser session.</p> : (
+              <ul className="changed-file-list">
+                {overview.changedFiles.map((path) => <li className="identifier" key={path}>{path}</li>)}
+              </ul>
             )}
           </section>
 
@@ -286,6 +296,7 @@ const Workbench = () => {
   const [mcpModel, setMcpModel] = useState(() => mcpController.model);
   const [page, setPage] = useState<WorkbenchPage>(pageForHash);
   const [status, setStatus] = useState<ProjectStatus>();
+  const [changedFiles, setChangedFiles] = useState<readonly string[]>([]);
 
   if (mcpAppClient.current === undefined) mcpAppClient.current = new McpAppClient();
 
@@ -307,6 +318,9 @@ const Workbench = () => {
     let mounted = true;
     client.current = next;
     skillClient.current = nextSkillClient;
+    const unsubscribeActivity = next.onActivity((activity) => {
+      if (mounted) setChangedFiles(activity.changedFiles);
+    });
     void next.connect(
       (nextStatus) => {
         if (!mounted) return;
@@ -321,6 +335,7 @@ const Workbench = () => {
     });
     return () => {
       mounted = false;
+      unsubscribeActivity();
       next.close();
     };
   }, []);
@@ -350,7 +365,7 @@ const Workbench = () => {
     }
     return page === 'skills'
       ? <SkillsScreen connectionError={connectionError} onNavigate={navigate} skillClient={skillClient.current} status={status} />
-      : <Overview client={client.current} connectionError={connectionError} onNavigate={navigate} onStatus={setStatus} status={status} />;
+      : <Overview changedFiles={changedFiles} client={client.current} connectionError={connectionError} onNavigate={navigate} onStatus={setStatus} status={status} />;
   }
   return <main className="loading-state" aria-live="polite"><strong>Loading project state…</strong>{error === undefined ? undefined : <p role="alert">{error}</p>}</main>;
 };
