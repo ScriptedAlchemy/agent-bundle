@@ -1045,3 +1045,229 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
     await expect(access(fixture.root)).rejects.toThrow();
   }
 });
+
+e2e('keeps Portable, ChatGPT, and Claude simulated App profiles isolated over one real Runtime run', { timeout: 180_000 }, async ({ page }) => {
+  const fixture = await startRuntimePlaygroundFixture();
+  const appMessages: RuntimeAppMessage[] = [];
+  const artifactMcpSessionRequests: string[] = [];
+  const pageErrors: Error[] = [];
+  const projectEventStreams: string[] = [];
+  const runtimeAppRequests: RuntimeAppRouteRequest[] = [];
+  const runtimeAppResponses: RuntimeAppRouteResponse[] = [];
+  const runtimeMcpSessionRequests: string[] = [];
+  await page.exposeBinding('__recordRuntimeProfileMessage', (_source, payload: unknown) => {
+    if (payload !== null && typeof payload === 'object') appMessages.push(payload as RuntimeAppMessage);
+  });
+  await page.addInitScript(() => {
+    window.addEventListener('message', (event) => {
+      const message = event.data;
+      if (message === null || typeof message !== 'object' || (message as { readonly jsonrpc?: unknown }).jsonrpc !== '2.0') return;
+      const record = (globalThis as typeof globalThis & { __recordRuntimeProfileMessage?: (payload: unknown) => Promise<void> }).__recordRuntimeProfileMessage;
+      if (record !== undefined) void record({ href: window.location.href, message, senderOrigin: event.origin });
+    });
+  });
+  page.on('pageerror', (error) => pageErrors.push(error));
+  page.on('request', (request) => {
+    const url = new URL(request.url());
+    if (url.origin !== fixture.url) return;
+    if (url.pathname.startsWith('/api/mcp/sessions')) artifactMcpSessionRequests.push(`${request.method()} ${url.pathname}`);
+    if (url.pathname === '/api/project/events') projectEventStreams.push(`${request.method()} ${url.pathname}`);
+    if (url.pathname.startsWith('/api/runtime/apps')) runtimeAppRequests.push(Object.freeze({ body: requestBody(request.postData()), headers: request.headers(), method: request.method(), path: url.pathname }));
+    if (url.pathname.startsWith('/api/runtime/mcp/sessions')) runtimeMcpSessionRequests.push(`${request.method()} ${url.pathname}`);
+  });
+  page.on('response', (response) => {
+    const url = new URL(response.url());
+    if (url.origin !== fixture.url || !url.pathname.startsWith('/api/runtime/apps')) return;
+    void response.json().then((responseBody) => {
+      const request = response.request();
+      runtimeAppResponses.push(Object.freeze({ body: requestBody(request.postData()), headers: request.headers(), method: request.method(), path: url.pathname, response: responseBody }));
+    }).catch(() => undefined);
+  });
+  try {
+    await page.goto(`${fixture.url}#runtime`);
+    await expect(page.getByRole('heading', { name: 'Runtime Playground' })).toBeVisible({ timeout: 15_000 });
+    const runtimeIdentity = page.locator('[data-runtime-provider-session]');
+    const runtimeSurface = page.getByLabel('Runtime surface');
+    const runtimeProfile = page.getByLabel('Runtime profile');
+    await expect(runtimeIdentity).toHaveAttribute('data-runtime-hmr-ready', 'true', { timeout: 15_000 });
+    await runtimeSurface.selectOption('mcp.render_edit_timeline');
+    await page.getByLabel('Runtime target').selectOption('portable');
+    await expect(runtimeProfile).toHaveValue('portable');
+    await expect(runtimeProfile.locator('option:checked')).toHaveText('Portable MCP Apps · agent-bundle:mcp-apps:2026-01-26 · Simulation');
+    await expect(page.locator('.runtime-profile-disclaimer')).toHaveText('Simulated locally — not host certification');
+    await page.getByRole('radio', { name: 'Raw JSON' }).check();
+    await page.locator('#runtime-input-raw').fill('{}');
+    await page.getByRole('button', { name: 'Run', exact: true }).click();
+    const history = page.getByRole('region', { name: 'Runtime run history' }).locator('ol > li');
+    await expect(history).toHaveCount(1, { timeout: 15_000 });
+    const runId = await history.first().getAttribute('data-runtime-run-id');
+    const expectedGenerationId = await runtimeIdentity.getAttribute('data-runtime-generation');
+    if (runId === null || expectedGenerationId === null) throw new Error('Runtime profile matrix did not expose the selected run authority.');
+
+    const profiles = [
+      { id: 'portable', label: 'Portable MCP Apps', version: 'agent-bundle:mcp-apps:2026-01-26' },
+      { id: 'chatgpt', label: 'ChatGPT Simulation', version: 'agent-bundle:chatgpt-sim:1' },
+      { id: 'claude', label: 'Claude Simulation', version: 'agent-bundle:claude-sim:1' },
+    ] as const;
+    const expectedConfiguration = [
+      { configured: true, id: 'extension:claude', key: 'claude', provenance: { kind: 'config', sourcePath: 'agent-bundle.config.ts' }, target: 'claude' },
+      { configured: true, id: 'extension:codex', key: 'codex', provenance: { kind: 'config', sourcePath: 'agent-bundle.config.ts' }, target: 'codex' },
+      { configured: true, id: 'extension:portable', key: 'portable', provenance: { kind: 'config', sourcePath: 'agent-bundle.config.ts' }, target: 'portable' },
+    ] as const;
+    const creates = (): readonly RuntimeAppRouteRequest[] => runtimeAppRequests.filter((entry) => entry.method === 'POST' && entry.path === '/api/runtime/apps');
+    const createResponses = (): readonly RuntimeAppRouteResponse[] => runtimeAppResponses.filter((entry) => entry.method === 'POST' && entry.path === '/api/runtime/apps');
+    const responseFor = (index: number) => createResponses()[index]?.response as Readonly<{ readonly preview?: Readonly<{
+      readonly binding?: Readonly<{ readonly id?: unknown; readonly profileId?: unknown; readonly profileVersion?: unknown; readonly runVector?: unknown; readonly sessionId?: unknown; readonly sessionRevision?: unknown }>;
+      readonly clientSurface?: Readonly<{ readonly origin?: unknown }>;
+      readonly profile?: Readonly<{ readonly configExtensions?: unknown; readonly descriptor?: unknown }>;
+    }> }> | undefined;
+    const messageFor = (
+      receiverOrigin: string,
+      senderOrigin: string,
+      matches: (message: Readonly<Record<string, unknown>>) => boolean,
+    ): RuntimeAppMessage | undefined => appMessages.find((entry) =>
+      new URL(entry.href).origin === receiverOrigin && entry.senderOrigin === senderOrigin && entry.message !== null && typeof entry.message === 'object' &&
+      matches(entry.message as Readonly<Record<string, unknown>>));
+    const runtimeFrameFor = async (origin: string) => {
+      for (const frame of page.frames()) {
+        const parent = frame.parentFrame();
+        if (parent !== null && new URL(parent.url()).origin === origin && await frame.getByRole('heading', { name: 'Runtime edit timeline' }).count() === 1) return frame;
+      }
+      return undefined;
+    };
+    let configurationSnapshot: unknown;
+    let previous: Readonly<{ readonly bindingId: string; readonly controllerHref: string; readonly origin: string; readonly runVector: unknown; readonly sessionId: string; readonly sessionRevision: number }> | undefined;
+
+    for (const [index, profile] of profiles.entries()) {
+      if (index > 0) {
+        const retiring = previous;
+        if (retiring === undefined) throw new Error('Runtime profile matrix lost its retiring App authority.');
+        await runtimeProfile.selectOption(profile.id);
+        await expect(runtimeProfile).toHaveValue(profile.id);
+        await expect(runtimeProfile.locator('option:checked')).toHaveText(`${profile.label} · ${profile.version} · Simulation`);
+        await expect(page.locator('.runtime-profile-disclaimer')).toHaveText('Simulated locally — not host certification');
+        const teardown = () => appMessages.find((entry) =>
+          entry.href === retiring.controllerHref && entry.senderOrigin === fixture.url && entry.message !== null && typeof entry.message === 'object' &&
+          (entry.message as Readonly<Record<string, unknown>>).method === 'ui/resource-teardown');
+        await expect.poll(teardown, { timeout: 15_000 }).toBeDefined();
+        const teardownId = teardown()?.message !== null && typeof teardown()?.message === 'object'
+          ? (teardown()!.message as Readonly<Record<string, unknown>>).id
+          : undefined;
+        if (typeof teardownId !== 'string' && typeof teardownId !== 'number') throw new Error('Retiring Runtime App teardown omitted its JSON-RPC id.');
+        await expect.poll(() => messageFor(fixture.url, retiring.origin, (message) =>
+          message.id === teardownId && (Object.hasOwn(message, 'result') || Object.hasOwn(message, 'error'))), { timeout: 15_000 }).toBeDefined();
+        const deletePath = `/api/runtime/apps/${encodeURIComponent(retiring.bindingId)}`;
+        await expect.poll(() => runtimeAppRequests.filter((entry) => entry.method === 'DELETE' && entry.path === deletePath), { timeout: 15_000 }).toHaveLength(1);
+        await expect.poll(creates, { timeout: 15_000 }).toHaveLength(index + 1);
+        const replacement = creates()[index];
+        const retired = runtimeAppRequests.find((entry) => entry.method === 'DELETE' && entry.path === deletePath);
+        if (replacement === undefined || retired === undefined) throw new Error('Runtime profile replacement routes were not recorded.');
+        expect(runtimeAppRequests.indexOf(retired)).toBeLessThan(runtimeAppRequests.indexOf(replacement));
+      }
+
+      await expect.poll(createResponses, { timeout: 15_000 }).toHaveLength(index + 1);
+      const create = creates()[index];
+      expect(create?.body).toEqual({ expectedGenerationId, profileId: profile.id, runId });
+      const snapshot = responseFor(index)?.preview;
+      const binding = snapshot?.binding;
+      const origin = snapshot?.clientSurface?.origin;
+      if (typeof binding?.id !== 'string' || typeof binding.sessionId !== 'string' || typeof binding.sessionRevision !== 'number' || typeof origin !== 'string') {
+        throw new Error(`Runtime ${profile.id} profile response omitted its binding authority.`);
+      }
+      expect(binding).toMatchObject({ profileId: profile.id, profileVersion: profile.version });
+      expect(snapshot?.profile?.descriptor).toEqual({ claimsRealHostParity: false, evidence: 'simulated', id: profile.id, label: profile.label, version: profile.version });
+      const configuration = snapshot?.profile?.configExtensions;
+      if (index === 0) {
+        expect(configuration).toEqual({ entries: expectedConfiguration, sourceRevision: expect.any(String) });
+        configurationSnapshot = configuration;
+      } else {
+        expect(configuration).toEqual(configurationSnapshot);
+      }
+      const sourceRevision = (configuration as Readonly<{ readonly sourceRevision?: unknown }> | undefined)?.sourceRevision;
+      if (typeof sourceRevision !== 'string' || sourceRevision.length === 0) throw new Error(`Runtime ${profile.id} configuration inspection omitted its source revision.`);
+      if (previous !== undefined) {
+        expect(binding.id).not.toBe(previous.bindingId);
+        expect(binding.sessionId).toBe(previous.sessionId);
+        expect(binding.sessionRevision).toBe(previous.sessionRevision);
+        expect(binding.runVector).toEqual(previous.runVector);
+      }
+
+      const preview = page.locator('.runtime-stage .mcp-app-preview');
+      await expect(preview.getByLabel('Simulated MCP App profile')).toContainText(profile.label);
+      await expect(preview.getByLabel('Simulated MCP App profile')).toContainText(profile.version);
+      await expect(preview.getByLabel('Simulated MCP App profile')).toContainText('Simulated');
+      await expect(preview.getByLabel('Simulated MCP App profile')).toContainText('Not certified for real-host parity');
+      const registered = preview.getByLabel('Registered configuration');
+      await expect(registered).toContainText(sourceRevision);
+      await expect(registered.getByRole('listitem')).toHaveCount(3);
+      expect(await registered.getByRole('listitem').nth(0).locator('dd').allTextContents()).toEqual(['claude', 'claude', 'extension:claude', 'config', 'agent-bundle.config.ts']);
+      expect(await registered.getByRole('listitem').nth(1).locator('dd').allTextContents()).toEqual(['codex', 'codex', 'extension:codex', 'config', 'agent-bundle.config.ts']);
+      expect(await registered.getByRole('listitem').nth(2).locator('dd').allTextContents()).toEqual(['portable', 'portable', 'extension:portable', 'config', 'agent-bundle.config.ts']);
+      const registeredText = await registered.textContent() ?? '';
+      for (const hidden of ['nativeHooks', 'raw', 'secret', 'token', 'handler', 'providerSessionId', 'stateStoreId', 'value']) {
+        expect(registeredText).not.toContain(hidden);
+      }
+
+      await expect(page.locator('.runtime-stage .mcp-app-preview iframe')).toHaveCount(1, { timeout: 15_000 });
+      await expect.poll(() => runtimeFrameFor(origin), { timeout: 15_000 }).toBeDefined();
+      const appFrame = await runtimeFrameFor(origin);
+      if (appFrame === undefined) throw new Error(`Runtime ${profile.id} profile App frame was unavailable.`);
+      const controller = appFrame.parentFrame();
+      if (controller === null) throw new Error(`Runtime ${profile.id} profile trusted controller was unavailable.`);
+      const frameShape = await controller.evaluate(() => Object.freeze({
+        nestedCount: document.querySelectorAll('iframe').length,
+        nestedSandbox: document.querySelector('iframe')?.getAttribute('sandbox') ?? undefined,
+      }));
+      const controllerGlobals = await controller.evaluate(() => Object.freeze({
+        chatgpt: Object.hasOwn(globalThis, 'chatgpt'),
+        claude: Object.hasOwn(globalThis, 'claude'),
+        codex: Object.hasOwn(globalThis, 'codex'),
+        openai: Object.hasOwn(globalThis, 'openai'),
+        widgetState: Object.hasOwn(globalThis, '__openai_widget_state__'),
+      }));
+      const isolation = await appFrame.evaluate(() => Object.freeze({
+        chatgpt: Object.hasOwn(globalThis, 'chatgpt'),
+        claude: Object.hasOwn(globalThis, 'claude'),
+        codex: Object.hasOwn(globalThis, 'codex'),
+        openai: Object.hasOwn(globalThis, 'openai'),
+        origin: window.origin,
+        widgetState: Object.hasOwn(globalThis, '__openai_widget_state__'),
+      }));
+      expect(frameShape).toEqual({ nestedCount: 1, nestedSandbox: 'allow-scripts' });
+      expect(controllerGlobals).toEqual({ chatgpt: false, claude: false, codex: false, openai: false, widgetState: false });
+      expect(isolation).toEqual({ chatgpt: false, claude: false, codex: false, openai: false, origin: 'null', widgetState: false });
+
+      const resourceId = `runtime-profile-${profile.id}-resource-read`;
+      const operationPath = `/api/runtime/apps/${encodeURIComponent(binding.id)}/operations`;
+      await appFrame.evaluate(({ id }) => {
+        window.parent.postMessage({ id, jsonrpc: '2.0', method: 'resources/read', params: { uri: 'ui://rsc-agent-runtime/edit-timeline-v1.html' } }, '*');
+      }, { id: resourceId });
+      const resourceRequests = (): readonly RuntimeAppRouteRequest[] => runtimeAppRequests.filter((entry) =>
+        entry.method === 'POST' && entry.path === operationPath && entry.body !== null && typeof entry.body === 'object' &&
+        (entry.body as Readonly<{ readonly kind?: unknown }>).kind === 'resources/read');
+      await expect.poll(resourceRequests, { timeout: 15_000 }).toHaveLength(1);
+      expect(resourceRequests()[0]?.body).toEqual({ kind: 'resources/read', uri: 'ui://rsc-agent-runtime/edit-timeline-v1.html' });
+      const resourceResponses = (): readonly RuntimeAppRouteResponse[] => runtimeAppResponses.filter((entry) =>
+        entry.method === 'POST' && entry.path === operationPath && entry.body !== null && typeof entry.body === 'object' &&
+        (entry.body as Readonly<{ readonly kind?: unknown }>).kind === 'resources/read');
+      await expect.poll(resourceResponses, { timeout: 15_000 }).toHaveLength(1);
+      expect((resourceResponses()[0]?.response as Readonly<{ readonly result?: unknown }> | undefined)?.result).toMatchObject({
+        sessionId: binding.sessionId,
+        sessionRevision: binding.sessionRevision,
+        value: { contents: [{ mimeType: 'text/html;profile=mcp-app', uri: 'ui://rsc-agent-runtime/edit-timeline-v1.html' }] },
+        vector: binding.runVector,
+      });
+      previous = Object.freeze({ bindingId: binding.id, controllerHref: controller.url(), origin, runVector: binding.runVector, sessionId: binding.sessionId, sessionRevision: binding.sessionRevision });
+    }
+
+    expect(artifactMcpSessionRequests).toEqual([]);
+    expect(runtimeMcpSessionRequests).toEqual([]);
+    expect(projectEventStreams).toEqual(['GET /api/project/events']);
+    expect(runtimeAppRequests.filter((entry) => entry.method === 'DELETE')).toHaveLength(2);
+    expect(pageErrors).toEqual([]);
+  } finally {
+    await fixture.close();
+    await fixture.closed;
+    await expect(access(fixture.root)).rejects.toThrow();
+  }
+});
