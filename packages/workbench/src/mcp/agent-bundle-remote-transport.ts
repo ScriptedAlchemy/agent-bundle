@@ -20,6 +20,7 @@ interface JsonRpcRequest {
 export interface AgentBundleRemoteTransportOptions {
   readonly binding: McpRouteSessionBinding;
   readonly routes: McpRouteClient;
+  readonly timeoutMs?: number;
 }
 
 export class AgentBundleRemoteTransportError extends Error {
@@ -184,6 +185,7 @@ export class AgentBundleRemoteTransport implements Transport {
 
   readonly #binding: McpRouteSessionBinding;
   readonly #routes: McpRouteClient;
+  readonly #timeoutMs: number | undefined;
   #closed = false;
   #cancellations = new Map<AbortController, Promise<void>>();
   #closePromise: Promise<void> | undefined;
@@ -200,6 +202,7 @@ export class AgentBundleRemoteTransport implements Transport {
   constructor(options: AgentBundleRemoteTransportOptions) {
     this.#binding = Object.freeze({ ...options.binding });
     this.#routes = options.routes;
+    this.#timeoutMs = options.timeoutMs;
   }
 
   get session(): McpRouteSession {
@@ -257,7 +260,7 @@ export class AgentBundleRemoteTransport implements Transport {
 
   async #start(): Promise<void> {
     try {
-      const session = await this.#routes.create(this.#binding);
+      const session = await this.#routes.create(this.#binding, this.#timeoutMs);
       if (
         session.binding.epochId !== this.#binding.epochId || session.binding.serverName !== this.#binding.serverName ||
         session.binding.target !== this.#binding.target

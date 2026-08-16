@@ -440,11 +440,18 @@ const safeArtifactPath = (path: string): boolean =>
 const resolveContained = (root: string, path: string): string =>
   isAbsolute(path) ? path : assertInside(root, resolve(root, path));
 
-const requestOptions = (options: McpSessionRequestOptions | undefined): RequestOptions => {
-  const timeout = options?.timeoutMs ?? defaultTimeoutMs;
+const resolveTimeoutMs = (timeout: number): number => {
   if (!Number.isFinite(timeout) || timeout <= 0) {
     throw new RangeError('MCP session timeoutMs must be a positive finite number.');
   }
+  return timeout;
+};
+
+const requestOptions = (
+  options: McpSessionRequestOptions | undefined,
+  sessionTimeoutMs = defaultTimeoutMs,
+): RequestOptions => {
+  const timeout = resolveTimeoutMs(options?.timeoutMs ?? sessionTimeoutMs);
   return { ...(options?.signal === undefined ? {} : { signal: options.signal }), timeout };
 };
 
@@ -596,6 +603,7 @@ export class McpSession {
   readonly #pluginData: string;
   readonly #resolved: ResolvedSessionServer;
   readonly #launch: ResolvedLaunch;
+  readonly #timeoutMs: number;
   readonly #workspaceRoot: string;
   readonly #frames: McpSessionFrame[] = [];
   readonly #events: McpSessionEvent[] = [];
@@ -628,6 +636,7 @@ export class McpSession {
     readonly onClosing?: () => void;
     readonly pluginData: string;
     readonly resolved: ResolvedSessionServer;
+    readonly timeoutMs?: number;
     readonly workspaceRoot: string;
   }) {
     this.#binding = Object.freeze({ ...options.binding });
@@ -640,6 +649,7 @@ export class McpSession {
     this.#onClosing = options.onClosing ?? (() => undefined);
     this.#pluginData = options.pluginData;
     this.#resolved = options.resolved;
+    this.#timeoutMs = resolveTimeoutMs(options.timeoutMs ?? defaultTimeoutMs);
     this.#workspaceRoot = options.workspaceRoot;
     this.#launch = this.#resolveLaunch();
   }
@@ -650,6 +660,10 @@ export class McpSession {
 
   get id(): McpSessionId {
     return this.#id;
+  }
+
+  get timeoutMs(): number {
+    return this.#timeoutMs;
   }
 
   get connection(): McpSessionConnectionState {
@@ -779,28 +793,28 @@ export class McpSession {
 
   async listTools(options?: McpSessionRequestOptions): Promise<readonly Tool[]> {
     return this.#operation('listTools', async () => {
-      const listed = await this.#clientFor(options).listTools(undefined, requestOptions(options));
+      const listed = await this.#clientFor(options).listTools(undefined, requestOptions(options, this.#timeoutMs));
       return Object.freeze([...listed.tools]);
     });
   }
 
   async listResources(options?: McpSessionRequestOptions): Promise<readonly Resource[]> {
     return this.#operation('listResources', async () => {
-      const listed = await this.#clientFor(options).listResources(undefined, requestOptions(options));
+      const listed = await this.#clientFor(options).listResources(undefined, requestOptions(options, this.#timeoutMs));
       return Object.freeze([...listed.resources]);
     });
   }
 
   async listResourceTemplates(options?: McpSessionRequestOptions): Promise<readonly ResourceTemplateType[]> {
     return this.#operation('listResourceTemplates', async () => {
-      const listed = await this.#clientFor(options).listResourceTemplates(undefined, requestOptions(options));
+      const listed = await this.#clientFor(options).listResourceTemplates(undefined, requestOptions(options, this.#timeoutMs));
       return Object.freeze([...listed.resourceTemplates]);
     });
   }
 
   async listPrompts(options?: McpSessionRequestOptions): Promise<readonly Prompt[]> {
     return this.#operation('listPrompts', async () => {
-      const listed = await this.#clientFor(options).listPrompts(undefined, requestOptions(options));
+      const listed = await this.#clientFor(options).listPrompts(undefined, requestOptions(options, this.#timeoutMs));
       return Object.freeze([...listed.prompts]);
     });
   }
@@ -809,12 +823,12 @@ export class McpSession {
     return this.#operation('getPrompt', () => this.#clientFor(options).getPrompt({
       ...(options.arguments === undefined ? {} : { arguments: options.arguments }),
       name: options.name,
-    }, requestOptions(options)));
+    }, requestOptions(options, this.#timeoutMs)));
   }
 
   async readResource(options: McpSessionResourceOptions): Promise<{ readonly contents: readonly unknown[] }> {
     return this.#operation('readResource', () =>
-      this.#clientFor(options).readResource({ uri: options.uri }, requestOptions(options)));
+      this.#clientFor(options).readResource({ uri: options.uri }, requestOptions(options, this.#timeoutMs)));
   }
 
   async callTool(options: McpSessionToolCallOptions): Promise<CallToolResult> {
@@ -832,7 +846,7 @@ export class McpSession {
       try {
         const result = await this.#clientFor(options).callTool({ arguments: options.arguments, name: options.name }, {
           signal: controller.signal,
-          timeout: requestOptions(options).timeout,
+          timeout: requestOptions(options, this.#timeoutMs).timeout,
         });
         this.#throwIfStderrExceeded();
         return result;
@@ -952,7 +966,7 @@ export class McpSession {
         capture = nextCapture;
       });
       const recording = new RecordingTransport(transport, (direction, message) => this.#recordFrame(direction, message));
-      await client.connect(recording, requestOptions(options));
+      await client.connect(recording, requestOptions(options, this.#timeoutMs));
       this.#throwIfStderrExceeded(capture);
       this.#assertOpen();
       this.#client = client;
@@ -1223,6 +1237,7 @@ export class McpSessionService {
 
   async open(options: OpenMcpSessionOptions): Promise<McpSession> {
     if (this.#closed) throw new Error('MCP session service is closed.');
+    const timeoutMs = requestOptions(options).timeout;
     const opening = openingSession();
     this.#openingSessions.add(opening);
     const signal = options.signal === undefined
@@ -1231,7 +1246,7 @@ export class McpSessionService {
     let cleanupFailed = false;
     let cleanupFailure: unknown;
     try {
-      return await this.#open({ ...options, signal }, (error) => {
+      return await this.#open({ ...options, signal, timeoutMs }, (error) => {
         if (!cleanupFailed) {
           cleanupFailed = true;
           cleanupFailure = error;
@@ -1279,9 +1294,10 @@ export class McpSessionService {
         onClosing: () => this.#invalidateSession(sessionId, new Error('MCP session is closing.')),
         pluginData,
         resolved: { runtime, server, target, targetRoot },
+        timeoutMs: options.timeoutMs,
         workspaceRoot: resolve(options.workspaceRoot ?? this.#projectRoot),
       });
-      await session.initialize(options);
+      await session.initialize({ signal: options.signal });
       if (this.#closed) throw new Error('MCP session service is closed.');
       this.#sessions.set(sessionId, {
         appLeaseCount: 0,

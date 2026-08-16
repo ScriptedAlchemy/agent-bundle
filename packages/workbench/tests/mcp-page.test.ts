@@ -2,7 +2,8 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from '@rstest/core';
 
-import type { McpBrowserSessionModel } from '../src/mcp/mcp-session-model.ts';
+import type { McpSessionInspectorConfig } from '../../agent-bundle/src/dev/mcp-session-protocol.ts';
+import { createMcpBrowserSessionModel, reduceMcpBrowserSession, type McpBrowserSessionModel } from '../src/mcp/mcp-session-model.ts';
 import type { McpAppPreviewClient } from '../src/mcp/mcp-app-preview.tsx';
 import {
   McpPage,
@@ -93,6 +94,15 @@ const appPreviewClient: McpAppPreviewClient = {
   }),
   forceClose: async () => true,
   message: async () => ({ accepted: true, lifecycle: 'initialized', messages: [] }),
+};
+
+const reducedModelForConfig = (config: McpSessionInspectorConfig): McpBrowserSessionModel => {
+  const opening = reduceMcpBrowserSession(createMcpBrowserSessionModel('sanitized-session'), {
+    binding: { epochId: 'epoch-1', serverName: 'weather', target: 'codex' },
+    type: 'open',
+  });
+  const configured = reduceMcpBrowserSession(opening, { config, type: 'config' });
+  return reduceMcpBrowserSession(configured, { type: 'ready' });
 };
 
 describe('MCP page', () => {
@@ -219,12 +229,104 @@ describe('MCP page', () => {
     expect(markup).toContain('Trace delivery is delayed.');
   });
 
+  it('renders one labeled session timeout control beside the immutable open binding', () => {
+    const markup = renderToStaticMarkup(createElement(McpPage, {
+      controller: controller(),
+      epochOptions: ['epoch-1'],
+      targetOptions: ['codex'],
+    }));
+
+    expect(markup).toContain('for="mcp-session-timeout"');
+    expect(markup).toContain('Session timeout (ms)');
+    expect(markup).toContain('id="mcp-session-timeout"');
+    expect(markup).toContain('value="5000"');
+  });
+
   it('creates a named JSON blob for the injected config-download callback', async () => {
     const download = mcpConfigDownload(model.config!, model.sessionId);
 
     expect(download.filename).toBe('mcp-session-1-inspector.json');
     expect(download.blob.type).toBe('application/json');
     await expect(download.blob.text()).resolves.toContain('"command": "node"');
+  });
+
+  it('renders the sanitized stdio launch configuration in deterministic environment order', () => {
+    const session = reducedModelForConfig({
+      launch: {
+        args: ['server.mjs', '--watch'],
+        command: 'node',
+        cwd: '/workspace/weather',
+        env: { ZEBRA: 'last', API_TOKEN: 'foreground-secret', ALPHA: 'first' },
+        kind: 'stdio',
+      },
+      origin: 'artifact',
+    });
+    const markup = renderToStaticMarkup(createElement(McpPage, {
+      controller: { ...controller(), model: session },
+      epochOptions: ['epoch-1'],
+      onDownloadConfig: () => undefined,
+      targetOptions: ['codex'],
+    }));
+
+    expect(markup).toContain('Launch configuration');
+    expect(markup).toContain('stdio');
+    expect(markup).toContain('node');
+    expect(markup).toContain('server.mjs');
+    expect(markup).toContain('--watch');
+    expect(markup).toContain('/workspace/weather');
+    expect(markup.indexOf('ALPHA')).toBeLessThan(markup.indexOf('ZEBRA'));
+    expect(markup).toContain('API_TOKEN');
+    expect(markup).toContain('[redacted]');
+    expect(markup).not.toContain('foreground-secret');
+  });
+
+  it('renders empty stdio launch fields explicitly', () => {
+    const session = reducedModelForConfig({
+      launch: { args: [], command: 'node', env: {}, kind: 'stdio' },
+      origin: 'artifact',
+    });
+    const markup = renderToStaticMarkup(createElement(McpPage, {
+      controller: { ...controller(), model: session },
+      epochOptions: ['epoch-1'],
+      targetOptions: ['codex'],
+    }));
+
+    expect(markup).toContain('No arguments specified.');
+    expect(markup).toContain('Not specified');
+    expect(markup).toContain('No environment variables specified.');
+  });
+
+  it('renders only the sanitized streamable HTTP transport details', () => {
+    const session = reducedModelForConfig({
+      launch: { kind: 'streamable-http', url: 'https://username:password@mcp.example.test/launch?token=query-secret#fragment-secret' },
+      origin: 'artifact',
+    });
+    const markup = renderToStaticMarkup(createElement(McpPage, {
+      controller: { ...controller(), model: session },
+      epochOptions: ['epoch-1'],
+      targetOptions: ['codex'],
+    }));
+
+    expect(markup).toContain('Launch configuration');
+    expect(markup).toContain('streamable-http');
+    expect(markup).toContain('https://mcp.example.test/launch');
+    expect(markup).not.toContain('username');
+    expect(markup).not.toContain('password');
+    expect(markup).not.toContain('query-secret');
+    expect(markup).not.toContain('fragment-secret');
+    expect(markup).not.toContain('Launch arguments');
+    expect(markup).not.toContain('Launch environment');
+  });
+
+  it('renders a clear empty launch configuration state when the controller has none', () => {
+    const markup = renderToStaticMarkup(createElement(McpPage, {
+      controller: { ...controller(), model: { ...model, config: undefined } },
+      epochOptions: ['epoch-1'],
+      targetOptions: ['codex'],
+    }));
+
+    expect(markup).toContain('Launch configuration');
+    expect(markup).toContain('No launch configuration is available for this session.');
   });
 
   it('derives an App preview only from the current successful tool invocation', () => {

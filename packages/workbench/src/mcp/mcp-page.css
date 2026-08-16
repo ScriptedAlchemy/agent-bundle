@@ -17,6 +17,7 @@
 .mcp-page-section,
 .mcp-page-catalog,
 .mcp-page-connection,
+.mcp-page-launch-configuration,
 .mcp-page-active,
 .mcp-page-history,
 .mcp-page-trace,
@@ -157,7 +158,13 @@
   gap: 0.5rem;
 }
 
+.mcp-page-session-timeout {
+  color: #c5d7ea;
+  min-width: 0;
+}
+
 .mcp-page-connection,
+.mcp-page-launch-configuration,
 .mcp-page-active,
 .mcp-page-history,
 .mcp-page-trace,
@@ -171,6 +178,8 @@
 }
 
 .mcp-page-catalog ol,
+.mcp-page-launch-configuration ol,
+.mcp-page-launch-configuration ul,
 .mcp-page-active ul,
 .mcp-page-history ol,
 .mcp-page-trace ol {
@@ -182,6 +191,7 @@
 }
 
 .mcp-page-catalog li,
+.mcp-page-launch-configuration li,
 .mcp-page-active li,
 .mcp-page-history li,
 .mcp-page-trace li {
@@ -194,6 +204,44 @@
   display: flex;
   gap: 0.6rem;
   justify-content: space-between;
+}
+
+.mcp-page-launch-configuration dl,
+.mcp-page-launch-configuration dl > div,
+.mcp-page-launch-configuration dd,
+.mcp-page-launch-configuration li {
+  min-width: 0;
+}
+
+.mcp-page-launch-configuration dl,
+.mcp-page-launch-configuration dl > div {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.mcp-page-launch-configuration dl {
+  margin: 0;
+}
+
+.mcp-page-launch-configuration dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.mcp-page-launch-configuration ol,
+.mcp-page-launch-configuration ul {
+  padding-left: 1.25rem;
+}
+
+.mcp-page-launch-configuration li {
+  overflow-wrap: anywhere;
+}
+
+.mcp-page-launch-configuration ul li {
+  align-items: baseline;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
 }
 
 .mcp-page-catalog li p,

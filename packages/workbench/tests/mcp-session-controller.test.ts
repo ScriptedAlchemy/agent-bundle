@@ -99,7 +99,7 @@ const fakeTransport = (): McpSessionControllerTransport & { readonly events: str
     close: async () => { events.push('transport.close'); },
     events,
     send: async () => undefined,
-    session: Object.freeze({ binding, connection, id: 'session-weather' }),
+    session: Object.freeze({ binding, connection, id: 'session-weather', timeoutMs: 5_000 }),
     start: async () => { events.push('transport.start'); },
   };
 };
@@ -534,7 +534,7 @@ it('rejects command, path, and environment smuggling instead of widening the imm
     transportFactory: fakeTransport,
   });
 
-  await expect(controller.open({ ...binding, command: 'sh', env: { TOKEN: 'leak' }, path: '/tmp/other' } as typeof binding)).rejects.toThrow(
+  await expect(controller.open({ ...binding, command: 'sh', env: { TOKEN: 'leak' }, headers: { authorization: 'leak' }, path: '/tmp/other' } as typeof binding)).rejects.toThrow(
     'MCP session binding must contain only epochId, target, and serverName.',
   );
   expect(controller.model).toMatchObject({ phase: 'idle' });
@@ -572,6 +572,41 @@ it('turns a replay overflow into the inclusive replay-gap marker before applying
     ],
     lastSequence: 7,
   });
+
+  stream.close();
+  await controller.close();
+});
+
+it('threads the admitted timeout through open while keeping it outside the immutable binding', async () => {
+  const stream = traceStream();
+  let received: unknown;
+  const transport: McpSessionControllerTransport = {
+    close: async () => undefined,
+    send: async () => undefined,
+    session: Object.freeze({ binding, connection, id: 'session-weather', timeoutMs: 12_345 }),
+    start: async () => undefined,
+  };
+  const controller = createMcpSessionController({
+    clientFactory: fakeClient,
+    routes: {
+      catalog: async () => ({ prompts: [], resourceTemplates: [], resources: [], tools: [] }),
+      config: async () => ({ launch: { args: [], command: 'node', env: {}, kind: 'stdio' }, origin: 'artifact' }),
+      restart: async () => connection,
+      stream: async () => stream.response,
+      trace: async () => ({ entries: [] }),
+    },
+    transportFactory: (options) => {
+      received = options;
+      return transport;
+    },
+  });
+
+  await controller.open(binding, 12_345);
+
+  expect(received).toMatchObject({ binding, timeoutMs: 12_345 });
+  expect(controller.session?.timeoutMs).toBe(12_345);
+  expect(controller.model.binding).toEqual(binding);
+  expect('timeoutMs' in (controller.model.binding ?? {})).toBe(false);
 
   stream.close();
   await controller.close();
@@ -681,7 +716,7 @@ it('cancels active SDK work through its transport signal and closes trace before
   const transport: McpSessionControllerTransport = {
     close: async () => { events.push('transport.close'); },
     send: async () => undefined,
-    session: Object.freeze({ binding, connection, id: 'session-weather' }),
+    session: Object.freeze({ binding, connection, id: 'session-weather', timeoutMs: 5_000 }),
     start: async () => undefined,
   };
   const client: McpSessionControllerClient = {
@@ -729,7 +764,7 @@ it('fails an active session when its transport reports a real fault during a req
     close: async () => { events.push('transport.close'); },
     events,
     send: async () => undefined,
-    session: Object.freeze({ binding, connection, id: 'session-weather' }),
+    session: Object.freeze({ binding, connection, id: 'session-weather', timeoutMs: 5_000 }),
     start: async () => undefined,
   };
   const client: McpSessionControllerClient = {
@@ -863,7 +898,7 @@ it('admits one opening session and disposes that exact client and transport when
       return {
         close: async () => { events.push('transport.close'); },
         send: async () => undefined,
-        session: Object.freeze({ binding, connection, id: 'session-weather' }),
+        session: Object.freeze({ binding, connection, id: 'session-weather', timeoutMs: 5_000 }),
         start: async () => undefined,
       };
     },
@@ -906,7 +941,7 @@ it('retains a failed connection and both cleanup failures for every subsequent c
         throw transportCloseFailure;
       },
       send: async () => undefined,
-      session: Object.freeze({ binding, connection, id: 'session-weather' }),
+      session: Object.freeze({ binding, connection, id: 'session-weather', timeoutMs: 5_000 }),
       start: async () => undefined,
     }),
   });
@@ -996,7 +1031,7 @@ it('gates post-close operations before their routes or client calls and drains a
   const transport: McpSessionControllerTransport = {
     close: async () => { events.push('transport.close'); },
     send: async () => undefined,
-    session: Object.freeze({ binding, connection, id: 'session-weather' }),
+    session: Object.freeze({ binding, connection, id: 'session-weather', timeoutMs: 5_000 }),
     start: async () => undefined,
   };
   const client: McpSessionControllerClient = {
@@ -1097,7 +1132,7 @@ it('rejects one shared close outcome after every delayed resource cleanup is att
       throw transportCloseFailure;
     },
     send: async () => undefined,
-    session: Object.freeze({ binding, connection, id: 'session-weather' }),
+    session: Object.freeze({ binding, connection, id: 'session-weather', timeoutMs: 5_000 }),
     start: async () => undefined,
   };
   const client: McpSessionControllerClient = {

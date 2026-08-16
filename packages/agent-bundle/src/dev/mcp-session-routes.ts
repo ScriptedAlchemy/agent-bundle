@@ -40,6 +40,7 @@ export interface McpSessionRouteSession {
   readonly binding: McpSessionBinding;
   readonly connection: McpSessionConnectionState;
   readonly id: string;
+  readonly timeoutMs: number;
   callTool(options: { readonly arguments: Record<string, unknown>; readonly name: string; readonly requestId?: string }): Promise<unknown>;
   cancel(requestId: string): boolean;
   getPrompt(options: { readonly arguments?: Record<string, string>; readonly name: string }): Promise<unknown>;
@@ -60,7 +61,7 @@ export interface McpSessionRouteSession {
 export interface McpSessionRouteService {
   closeSession(id: string): Promise<boolean>;
   get(id: string): McpSessionRouteSession | undefined;
-  open(options: { readonly epochId: string; readonly serverName: string; readonly target: string }): Promise<McpSessionRouteSession>;
+  open(options: { readonly epochId: string; readonly serverName: string; readonly target: string; readonly timeoutMs?: number }): Promise<McpSessionRouteSession>;
 }
 
 export interface McpSessionRoutesOptions {
@@ -215,13 +216,18 @@ const jsonBody = async (request: IncomingMessage): Promise<JsonObject> => {
   return isRecord(parsed) ? parsed : invalidShape();
 };
 
-const createRequest = (value: JsonObject): { readonly epochId: string; readonly serverName: string; readonly target: string } => {
-  if (!hasOnly(value, ['epochId', 'serverName', 'target'])) return invalidShape();
+const createRequest = (value: JsonObject): { readonly epochId: string; readonly serverName: string; readonly target: string; readonly timeoutMs?: number } => {
+  if (!hasOnly(value, ['epochId', 'serverName', 'target', 'timeoutMs'])) return invalidShape();
   const { epochId, serverName, target } = value;
   if (!nonemptyString(epochId)) return invalidShape();
   if (!nonemptyString(serverName)) return invalidShape();
   if (!nonemptyString(target)) return invalidShape();
-  return Object.freeze({ epochId, serverName, target });
+  if (!Object.hasOwn(value, 'timeoutMs')) return Object.freeze({ epochId, serverName, target });
+  const descriptor = Object.getOwnPropertyDescriptor(value, 'timeoutMs');
+  if (descriptor === undefined || !('value' in descriptor)) return invalidShape();
+  const timeoutMs = descriptor.value;
+  if (typeof timeoutMs !== 'number' || !Number.isFinite(timeoutMs) || timeoutMs <= 0) return invalidShape();
+  return Object.freeze({ epochId, serverName, target, timeoutMs });
 };
 
 type Operation =
@@ -298,7 +304,8 @@ const sessionSnapshot = (session: McpSessionRouteSession): Readonly<{
   readonly binding: McpSessionBinding;
   readonly connection: McpSessionConnectionState;
   readonly id: string;
-}> => Object.freeze({ binding: session.binding, connection: session.connection, id: session.id });
+  readonly timeoutMs: number;
+}> => Object.freeze({ binding: session.binding, connection: session.connection, id: session.id, timeoutMs: session.timeoutMs });
 
 const traceCursorError = (error: unknown): RequestDiagnostic | undefined =>
   error instanceof RangeError && error.message === 'MCP session trace cursor cannot be ahead of the current trace.'
