@@ -98,14 +98,14 @@ it('updates a runtime binding revision without discarding prior timeline entries
   model = reduceMcpBrowserSession(model, { binding, type: 'open' });
   model = reduceMcpBrowserSession(model, { type: 'ready' });
   model = reduceMcpBrowserSession(model, {
-    entry: { direction: 'server', kind: 'logging', occurredAt: 1, payload: { message: 'ready' }, sequence: 1 }, type: 'trace',
+    entry: { kind: 'logging', occurredAt: 1, payload: { message: 'ready' }, sequence: 1 }, type: 'trace',
   });
   model = reduceMcpBrowserSession(model, {
     binding: { ...binding, binding: { ...binding.binding, registryRevision: 8, sessionRevision: 4 } }, type: 'binding',
   });
 
   expect(model.binding).toMatchObject({ kind: 'runtime', binding: { registryRevision: 8, sessionRevision: 4 } });
-  expect(model.timeline.entries).toEqual([{ direction: 'server', kind: 'logging', occurredAt: 1, payload: { message: 'ready' }, sequence: 1 }]);
+  expect(model.timeline.entries).toEqual([{ kind: 'logging', occurredAt: 1, payload: { message: 'ready' }, sequence: 1 }]);
 });
 
 it('retains an ordered raw timeline with replay gaps and canonical invocation history', () => {

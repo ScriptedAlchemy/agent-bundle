@@ -1,5 +1,5 @@
 import { expect, it } from '@rstest/core';
-import type { Client } from '@modelcontextprotocol/client';
+import type { Client, Transport } from '@modelcontextprotocol/client';
 
 import {
   createMcpSessionController,
@@ -154,11 +154,11 @@ it('attaches one non-owning runtime App client, routes only closed methods, and 
   };
   const vector = Object.freeze({ providerSessionId: 'provider-a', runtimeGenerationId: 'generation-a', sourceRevision: 'source-a', stateStoreId: 'store-a', stateVersion: 2 });
   const calls: string[] = [];
-  let attachedTransport: McpSessionControllerTransport | undefined;
+  let attachedTransport: Transport | undefined;
   const controller = createMcpSessionController({
     appClientFactory: () => ({
       close: async () => { calls.push('app-client.close'); },
-      connect: async (transport) => { attachedTransport = transport as McpSessionControllerTransport; await transport.start(); },
+      connect: async (transport: Transport) => { attachedTransport = transport; await transport.start(); },
       request: async () => undefined,
     }) as unknown as Client,
     clientFactory: fakeClient,
@@ -217,7 +217,7 @@ it('serializes attached runtime App requests before admitting the next route ope
   };
   const first = deferred<Readonly<{ readonly operationId: string; readonly sessionId: string; readonly sessionRevision: number; readonly value: unknown; readonly vector: object }>>();
   const calls: string[] = [];
-  let attachedTransport: McpSessionControllerTransport | undefined;
+  let attachedTransport: Transport | undefined;
   const result = Object.freeze({
     operationId: 'operation-a', sessionId: 'runtime-session-a', sessionRevision: 3, value: [],
     vector: Object.freeze({ providerSessionId: 'provider-a', runtimeGenerationId: 'generation-a', sourceRevision: 'source-a', stateStoreId: 'store-a', stateVersion: 2 }),
@@ -225,7 +225,7 @@ it('serializes attached runtime App requests before admitting the next route ope
   const controller = createMcpSessionController({
     appClientFactory: () => ({
       close: async () => undefined,
-      connect: async (transport) => { attachedTransport = transport as McpSessionControllerTransport; await transport.start(); },
+      connect: async (transport: Transport) => { attachedTransport = transport; await transport.start(); },
       request: async () => undefined,
     }) as unknown as Client,
     clientFactory: fakeClient,
