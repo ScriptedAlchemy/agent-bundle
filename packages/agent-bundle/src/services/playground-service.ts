@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { closeSync, constants, fsyncSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync, readFileSync, writeFileSync } from 'node:fs';
 import { lstat, mkdir, open, realpath, rename, unlink } from 'node:fs/promises';
-import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 import { parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
 
@@ -280,6 +280,12 @@ const eventDocumentName = 'events.jsonl';
 const ownerLockName = '.owner.lock';
 type DirectorySyncReason =
   | 'final-index-publication'
+  | 'layout-index-entry'
+  | 'layout-object-entry'
+  | 'layout-pending-index-entry'
+  | 'layout-project-entry'
+  | 'layout-sessions-entry'
+  | 'layout-storage-entry'
   | 'new-file'
   | 'object-created'
   | 'owner-lock-create'
@@ -288,13 +294,19 @@ type DirectorySyncReason =
   | 'owner-lock-release'
   | 'pending-index-publication'
   | 'session-metadata-rename';
+type DurableFilePhase = 'event' | 'owner' | 'pending-index' | 'session-metadata';
 type DurabilityTestPhase =
   | 'after-final-index-link'
   | 'before-final-index-link'
-  | `before-directory-sync:${DirectorySyncReason}`;
+  | `before-directory-fsync:${DirectorySyncReason}`
+  | `before-directory-open:${DirectorySyncReason}`
+  | `before-directory-sync:${DirectorySyncReason}`
+  | `before-file-fsync:${DurableFilePhase}`
+  | `before-file-write:${DurableFilePhase}`;
 type DurabilityTestHook = (phase: DurabilityTestPhase, path: string) => void;
 /** Non-API test seam, unavailable unless the process explicitly runs in test mode. */
 const durabilityTestHookKey = Symbol.for('agent-bundle.playground-service.durability-test-hook');
+const durabilityTestPlatformKey = Symbol.for('agent-bundle.playground-service.durability-test-platform');
 const pathSegment = /^[a-z0-9][a-z0-9._-]*$/iu;
 const traceSources: ReadonlySet<string> = new Set<PlaygroundTraceSource>([
   'build',
@@ -382,6 +394,12 @@ const runDurabilityTestHook = (phase: DurabilityTestPhase, path: string): void =
   if (process.env.NODE_ENV !== 'test') return;
   const hooks = globalThis as typeof globalThis & Record<symbol, DurabilityTestHook | undefined>;
   hooks[durabilityTestHookKey]?.(phase, path);
+};
+
+const durabilityPlatform = (): NodeJS.Platform => {
+  if (process.env.NODE_ENV !== 'test') return process.platform;
+  const platforms = globalThis as typeof globalThis & Record<symbol, NodeJS.Platform | undefined>;
+  return platforms[durabilityTestPlatformKey] ?? process.platform;
 };
 
 const nonempty = (value: unknown, label: string): string => {
@@ -630,7 +648,7 @@ export class PlaygroundService {
         ownerToken,
       };
       await this.#assertOwnedObject(root, storageObjectId, id, ownerToken);
-      await this.#writeNewFile(join(root, eventDocumentName), '');
+      await this.#writeNewFile(join(root, eventDocumentName), '', 'event');
       await this.#persistSession(record);
       await this.#assertOwnedObject(root, storageObjectId, id, ownerToken);
       await this.#readPersistedSession(root, id, 'v2', storageObjectId);
@@ -937,7 +955,9 @@ export class PlaygroundService {
       0o600,
     );
     try {
+      runDurabilityTestHook('before-file-write:pending-index', pendingPath);
       writeFileSync(pendingDescriptor, bytes, 'utf8');
+      runDurabilityTestHook('before-file-fsync:pending-index', pendingPath);
       fsyncSync(pendingDescriptor);
       const pendingBefore = fstatSync(pendingDescriptor);
       if (!pendingBefore.isFile() || pendingBefore.nlink !== 1) {
@@ -1060,7 +1080,7 @@ export class PlaygroundService {
       throw serviceError('PLAYGROUND_ROOT_INVALID', 'Playground storage root must be contained by the configured project root.');
     }
     const resolvedProjectRoot = await realpath(requestedProjectRoot);
-    await mkdir(requestedStorageRoot, { recursive: true });
+    await this.#createStorageRoot(requestedProjectRoot, requestedStorageRoot);
     const storageStat = await lstat(requestedStorageRoot);
     if (storageStat.isSymbolicLink()) {
       throw serviceError('PLAYGROUND_ROOT_INVALID', 'Playground storage root must not be a symbolic link.');
@@ -1070,20 +1090,21 @@ export class PlaygroundService {
       throw serviceError('PLAYGROUND_ROOT_INVALID', 'Playground storage root resolves outside the configured project root.');
     }
     const sessionsRoot = join(requestedStorageRoot, sessionDirectoryName);
-    await mkdir(sessionsRoot, { recursive: true });
+    await this.#createLayoutDirectory(sessionsRoot, requestedStorageRoot, 'layout-sessions-entry');
     const resolvedSessionsRoot = await realpath(sessionsRoot);
     if (!contained(resolvedStorageRoot, resolvedSessionsRoot)) {
       throw serviceError('PLAYGROUND_ROOT_INVALID', 'Playground session root resolves outside configured storage.');
     }
     const objectRoot = join(requestedStorageRoot, objectDirectoryName);
-    await mkdir(objectRoot, { recursive: true });
+    await this.#createLayoutDirectory(objectRoot, requestedStorageRoot, 'layout-object-entry');
     const resolvedObjectRoot = await realpath(objectRoot);
     if (!contained(resolvedStorageRoot, resolvedObjectRoot)) {
       throw serviceError('PLAYGROUND_ROOT_INVALID', 'Playground session object root resolves outside configured storage.');
     }
     const indexRoot = join(requestedStorageRoot, indexDirectoryName);
     const pendingIndexRoot = join(indexRoot, pendingIndexDirectoryName);
-    await mkdir(pendingIndexRoot, { recursive: true });
+    await this.#createLayoutDirectory(indexRoot, requestedStorageRoot, 'layout-index-entry');
+    await this.#createLayoutDirectory(pendingIndexRoot, indexRoot, 'layout-pending-index-entry');
     const resolvedIndexRoot = await realpath(indexRoot);
     const resolvedPendingIndexRoot = await realpath(pendingIndexRoot);
     if (!contained(resolvedStorageRoot, resolvedIndexRoot) || !contained(resolvedIndexRoot, resolvedPendingIndexRoot)) {
@@ -1095,21 +1116,55 @@ export class PlaygroundService {
     this.#resolvedSessionsRoot = resolvedSessionsRoot;
   }
 
+  async #createStorageRoot(projectRoot: string, storageRoot: string): Promise<void> {
+    const storageRelativePath = relative(projectRoot, storageRoot);
+    if (storageRelativePath === '') return;
+    const segments = storageRelativePath.split(sep);
+    if (segments.some((segment) => segment === '' || segment === '.' || segment === '..')) {
+      throw serviceError('PLAYGROUND_ROOT_INVALID', 'Playground storage root must be a contained directory path.');
+    }
+    let parent = projectRoot;
+    for (let index = 0; index < segments.length; index += 1) {
+      const path = join(parent, segments[index]!);
+      await this.#createLayoutDirectory(
+        path,
+        parent,
+        index === segments.length - 1 ? 'layout-storage-entry' : 'layout-project-entry',
+      );
+      parent = path;
+    }
+  }
+
+  async #createLayoutDirectory(path: string, parent: string, reason: DirectorySyncReason): Promise<void> {
+    let created = false;
+    try {
+      await mkdir(path);
+      created = true;
+    } catch (error) {
+      if (!isErrno(error, 'EEXIST')) throw error;
+    }
+    const stat = await lstat(path);
+    if (!stat.isDirectory() && !stat.isSymbolicLink()) {
+      throw serviceError('PLAYGROUND_ROOT_INVALID', 'Playground storage layout must contain real directories.');
+    }
+    if (created) this.#syncDirectory(parent, reason);
+  }
+
   #syncDirectory(path: string, reason: DirectorySyncReason): void {
     runDurabilityTestHook(`before-directory-sync:${reason}`, path);
+    runDurabilityTestHook(`before-directory-open:${reason}`, path);
+    const descriptor = openSync(path, constants.O_RDONLY);
     try {
-      const descriptor = openSync(path, constants.O_RDONLY);
-      try {
-        fsyncSync(descriptor);
-      } finally {
-        closeSync(descriptor);
-      }
+      runDurabilityTestHook(`before-directory-fsync:${reason}`, path);
+      fsyncSync(descriptor);
     } catch (error) {
-      // Windows exposes no public directory-fsync primitive. Retained regular
-      // file descriptors are still synced; only this documented EINVAL is a
-      // capability limitation. Every other failure remains observable.
-      if (process.platform === 'win32' && isErrno(error, 'EINVAL')) return;
+      // Windows has no public directory-fsync primitive. Only documented
+      // directory FlushFileBuffers capability failures are tolerated here;
+      // opening a directory and every retained regular-file sync still fail.
+      if (durabilityPlatform() === 'win32' && (isErrno(error, 'EACCES') || isErrno(error, 'EINVAL'))) return;
       throw error;
+    } finally {
+      closeSync(descriptor);
     }
   }
 
@@ -1186,7 +1241,7 @@ export class PlaygroundService {
     }
   }
 
-  async #writeNewFile(path: string, contents: string): Promise<void> {
+  async #writeNewFile(path: string, contents: string, phase: Exclude<DurableFilePhase, 'owner' | 'pending-index'>): Promise<void> {
     const handle = await open(
       path,
       constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
@@ -1197,7 +1252,9 @@ export class PlaygroundService {
       if (!stat.isFile() || stat.nlink !== 1) {
         throw serviceError('PLAYGROUND_ROOT_INVALID', 'Playground durable file could not be created safely.');
       }
+      runDurabilityTestHook(`before-file-write:${phase}`, path);
       await handle.writeFile(contents, 'utf8');
+      runDurabilityTestHook(`before-file-fsync:${phase}`, path);
       await handle.sync();
     } finally {
       await handle.close();
@@ -1329,7 +1386,9 @@ export class PlaygroundService {
           if (!stat.isFile() || stat.nlink !== 1) {
             throw serviceError('PLAYGROUND_ROOT_INVALID', 'Playground owner lock could not be created safely.');
           }
+          runDurabilityTestHook('before-file-write:owner', path);
           await handle.writeFile(`${JSON.stringify(document)}\n`, 'utf8');
+          runDurabilityTestHook('before-file-fsync:owner', path);
           await handle.sync();
           createdAndSynced = true;
         } finally {
@@ -1463,7 +1522,7 @@ export class PlaygroundService {
       assertNoProviderCredentials(document as unknown as PlaygroundJsonValue);
       await this.#assertMutableFile(record.root, sessionDocumentName, true);
       const temporary = join(record.root, `.${sessionDocumentName}.${randomUUID()}.tmp`);
-      await this.#writeNewFile(temporary, `${JSON.stringify(document)}\n`);
+      await this.#writeNewFile(temporary, `${JSON.stringify(document)}\n`, 'session-metadata');
       await rename(temporary, join(record.root, sessionDocumentName));
       persistence.metadataRenamed = true;
       this.#syncDirectory(record.root, 'session-metadata-rename');
