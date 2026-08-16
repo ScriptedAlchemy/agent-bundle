@@ -203,6 +203,7 @@ it('shares one injected foreground bootstrap across MCP, Runtime, and Project cl
             binding: { epochId: 'epoch-a', serverName: 'weather', target: 'portable' },
             connection: {},
             id: 'session-a',
+            timeoutMs: 5_000,
           },
         });
       }
