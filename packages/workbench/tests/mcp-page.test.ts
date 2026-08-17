@@ -17,6 +17,7 @@ import {
   type McpSessionControllerTransport,
 } from '../src/mcp/mcp-session-controller.ts';
 import {
+  mcpTraceEvent,
   McpPage,
   createMcpPageActionTracker,
   createMcpPageActionSession,
@@ -522,5 +523,49 @@ describe('MCP page', () => {
     expect(actions.pending).toEqual(['open']);
     expect(actions.isCurrent(replacementOpen)).toBe(true);
     expect(mcpPageSessionControls('idle', actions.pending, false)).toMatchObject({ close: true, open: false });
+  });
+});
+
+it('records a completed MCP invocation as one ordered trace event citing its epoch', () => {
+  const event = mcpTraceEvent({
+    binding: { epochId: 'epoch-a', serverName: 'weather', target: 'claude' },
+    operation: 'callTool',
+    request: { arguments: { city: 'Berlin' }, name: 'forecast' },
+    requestId: 'mcp-page-1',
+    result: { content: [{ text: 'Sunny', type: 'text' }] },
+    sessionId: 'session-a',
+  });
+
+  expect(event.source).toBe('mcp');
+  expect(event.kind).toBe('mcp.callTool');
+  expect(event.summary).toBe('Completed callTool against weather on claude from epoch epoch-a.');
+  expect(event.raw).toEqual({
+    binding: { epochId: 'epoch-a', serverName: 'weather', target: 'claude' },
+    operation: 'callTool',
+    request: { arguments: { city: 'Berlin' }, name: 'forecast' },
+    requestId: 'mcp-page-1',
+    result: { content: [{ text: 'Sunny', type: 'text' }] },
+    sessionId: 'session-a',
+  });
+  expect(Object.isFrozen(event.raw)).toBe(true);
+});
+
+it('records a failed MCP invocation without a result and without losing the reason', () => {
+  const event = mcpTraceEvent({
+    error: new Error('Tool call timed out.'),
+    operation: 'callTool',
+    request: { arguments: {}, name: 'forecast' },
+    requestId: 'mcp-page-2',
+    sessionId: 'session-a',
+  });
+
+  expect(event.kind).toBe('mcp.failed');
+  expect(event.summary).toBe('Failed callTool against session-a.');
+  expect(event.raw).toEqual({
+    error: 'Tool call timed out.',
+    operation: 'callTool',
+    request: { arguments: {}, name: 'forecast' },
+    requestId: 'mcp-page-2',
+    sessionId: 'session-a',
   });
 });

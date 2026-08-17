@@ -363,12 +363,13 @@ const HooksScreen = ({ connectionError, hookClient, onNavigate, onRecordTrace, s
   />
 </WorkbenchScreen>;
 
-const McpScreen = ({ appPreviewClient, connectionError, controller, model, onNavigate, onResetSession, presentation, setPresentation, status }: {
+const McpScreen = ({ appPreviewClient, connectionError, controller, model, onNavigate, onRecordTrace, onResetSession, presentation, setPresentation, status }: {
   readonly appPreviewClient: McpAppClient;
   readonly connectionError?: string;
   readonly controller: ReturnType<typeof createMcpController>;
   readonly model: ReturnType<typeof createMcpController>['model'];
   readonly onNavigate: (page: WorkbenchPage) => void;
+  readonly onRecordTrace?: (input: PlaygroundEventInput) => Promise<void>;
   readonly onResetSession: () => void;
   readonly presentation: McpPresentation;
   readonly setPresentation: (presentation: McpPresentation) => void;
@@ -443,6 +444,7 @@ const McpScreen = ({ appPreviewClient, connectionError, controller, model, onNav
           initialBinding={activeEpoch === undefined ? undefined : { epochId: activeEpoch.id }}
           onDownloadConfig={downloadMcpFile}
           onDownloadTrace={downloadMcpFile}
+          {...(onRecordTrace === undefined ? {} : { onRecordTrace })}
           onResetSession={onResetSession}
           targetOptions={targetOptions}
         />
@@ -565,6 +567,7 @@ const Workbench = () => {
         controller={mcpController}
         model={mcpModel}
         onNavigate={navigate}
+        {...(recordPlaygroundEvent === undefined ? {} : { onRecordTrace: recordPlaygroundEvent })}
         onResetSession={resetMcpSession}
         presentation={mcpPresentation}
         setPresentation={setMcpPresentation}
