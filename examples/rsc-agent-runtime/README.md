@@ -119,7 +119,17 @@ AGENT_RUNTIME_STATE_FILE=/tmp/rsc-events.jsonl PORT=3000 \
 
 ## Native packages and evaluation
 
-Claude Code uses the native compact manifest, `${CLAUDE_PLUGIN_ROOT}` paths, and a `Write|Edit` `PostToolUse` hook:
+Claude Code has a native compact manifest, `${CLAUDE_PLUGIN_ROOT}` paths, and a
+`Write|Edit` `PostToolUse` hook contract. Codex has a separate native manifest,
+marketplace entry, `cwd: "./"` MCP path, and `apply_patch` hook contract.
+
+**Current status:** Claude Code: unavailable/not run in this repository snapshot.
+Codex CLI: unavailable/not run in this repository snapshot. No attached tracked
+schema-v2 native-evidence artifact exists in this repository snapshot, so this
+README makes no successful native-host observation claim.
+
+To exercise the Claude package manually when an external host run is separately
+authorized, use its native shell contract:
 
 ```bash
 claude -p "Create host-created.txt, then use recent_edits and render_edit_timeline." \
@@ -128,17 +138,39 @@ claude -p "Create host-created.txt, then use recent_edits and render_edit_timeli
   --no-session-persistence --dangerously-skip-permissions
 ```
 
-Codex uses a separate native manifest, marketplace entry, `cwd: "./"` MCP path, and `apply_patch` hook. The deterministic evaluator adds that marketplace to a temporary Codex home, copies an existing `auth.json` only opaquely when present, and removes the temporary home afterwards:
+For a future real-run evidence capture, first make the package artifacts, then
+run each selected terminal host explicitly:
 
 ```bash
-npm run eval:hosts -w @agent-bundle/rsc-agent-runtime-demo -- --host all
+npm run build -w @agent-bundle/rsc-agent-runtime-demo
+npm run eval:hosts -w @agent-bundle/rsc-agent-runtime-demo -- --host claude
+npm run eval:hosts -w @agent-bundle/rsc-agent-runtime-demo -- --host codex
 ```
 
-It requires exactly Claude Code `2.1.232` and Codex CLI `0.147.0`, creates a temporary Git workspace, and emits one sanitized schema-v2 JSON evidence document. Each native envelope contains only its host/version and six claim-level observations: package activation, hook dispatch, MCP read, RSC render, shared hook/MCP state, and MCP App iframe support. Hook proof comes from the value-free hook launch probe; MCP tool proof requires a matching non-error native `tool_result`. Native CLI children receive only an ordinary-session environment allowlist plus owned temporary paths; the evaluator never forwards provider credential, token, routing, module-path, or caught-error text, stores raw transcripts, or prints authentication content. Any unavailable or incomplete selected native run exits nonzero while still emitting its complete truthful evidence envelope.
+The evaluator requires exactly Claude Code `2.1.232` and Codex CLI `0.147.0`, creates a temporary Git workspace, and emits one sanitized schema-v2 JSON evidence document. Attach that stdout document as tracked evidence before
+stating a native observation. Each native envelope contains only its
+host/version and six claim-level observations: package activation, hook
+dispatch, MCP read, RSC render, shared hook/MCP state, and MCP App iframe
+support. Hook proof comes from the value-free hook launch probe; MCP tool proof
+requires one exact non-error native `tool_result` correlated to its matching
+tool use. Native CLI children receive only an ordinary-session environment
+allowlist plus owned temporary paths; the evaluator never forwards provider
+credential, token, routing, module-path, or caught-error text, stores raw
+transcripts, or prints authentication content. Any unavailable or incomplete
+selected native run exits nonzero while still emitting its complete truthful
+evidence envelope.
 
-Codex CLI is not the ChatGPT UI host. Claude fully proves hook→MCP/RSC shared behavior. Codex proves package installation, MCP invocation, RSC render, and the final marker only: native PostToolUse/shared state is unproven under pinned `codex exec --ephemeral`, so its evaluator intentionally exits nonzero. The pinned host emits `apply_patch` command-shaped hook payloads, but the observed run did not dispatch the native hook; [the upstream Codex issue is analogous evidence](https://github.com/openai/codex/issues/26729), not proof of the exact cause. Neither CLI claim means that it renders the timeline iframe.
+The terminal boundary is unchanged: MCP App iframe evidence is unavailable from either terminal CLI. Codex CLI is not the ChatGPT UI host, and native
+PostToolUse/shared state remains unproven under pinned `codex exec --ephemeral`.
+The packaged matcher accepts `apply_patch` command-shaped hook payloads in
+deterministic contract tests, but that parser compatibility does not certify
+native hook dispatch; [the upstream Codex issue is analogous
+evidence](https://github.com/openai/codex/issues/26729), not proof of the exact
+cause.
 
-Portable, ChatGPT/OpenAI, and Claude Workbench profiles are local compatibility simulations, not vendor certification. ChatGPT Developer Mode remains unavailable in this evidence matrix unless a user separately captures a real public HTTPS-host result.
+Portable, ChatGPT/OpenAI, and Claude Workbench profiles are local compatibility simulations, and deterministic evaluator tests are not native certification.
+ChatGPT Developer Mode remains unavailable in this evidence matrix unless a user
+separately captures a real public HTTPS-host result.
 
 ## ChatGPT Developer Mode and local browser evidence
 
@@ -163,8 +195,8 @@ Host/Origin allowlists mitigate DNS rebinding and cross-origin requests, but the
 | Portable MCP Apps simulation | `ui://` resource, MCP Apps bridge, Refresh through `tools/call`, local selected row | Local simulation only; no vendor browser global or host domain required |
 | ChatGPT/OpenAI simulation | `openai/outputTemplate` descriptor alias and feature-detected `window.openai.widgetState` / `setWidgetState` | Local simulation only; selection stays React-instance-local without both documented capabilities |
 | Claude MCP Apps simulation | Standard bridge, `useHostStyles`, standard dark/light variables, font CSS, safe-area insets, optional deterministic resource domain | Local simulation only; no `window.claude`, user-agent, or product-name branch |
-| Claude Code | Native plugin, `${CLAUDE_PLUGIN_ROOT}` MCP/hook paths, `Write|Edit` hook | CLI tool/hook proof only; not an iframe renderer |
-| Codex CLI | Native plugin/marketplace, relative MCP path, `${PLUGIN_ROOT}` hook, `apply_patch` matcher | MCP/RSC/final-marker evidence only; native PostToolUse/shared state is unproven under `exec --ephemeral` |
+| Claude Code | Native package contract: `${CLAUDE_PLUGIN_ROOT}` MCP/hook paths and `Write|Edit` hook | Unavailable/not run in this repository snapshot; no attached native evidence; never an iframe renderer |
+| Codex CLI | Native package contract: marketplace, relative MCP path, `${PLUGIN_ROOT}` hook, and `apply_patch` matcher | Unavailable/not run in this repository snapshot; no attached native evidence; native PostToolUse/shared state remains unproven under `exec --ephemeral` |
 
 ## Extension-author guide
 
