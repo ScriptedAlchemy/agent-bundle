@@ -1881,6 +1881,140 @@ test('keeps the oldest artifact and terminal history owned when eviction release
   }
 }, 60_000);
 
+test('reserves an evicting terminal run before draining its admitted Flight readers', async () => {
+  const storageRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-session-eviction-reader-'));
+  const projectRoot = process.cwd();
+  const prepared = await new ProjectService({ includeDevRuntime: true, mode: 'development', root: projectRoot }).prepare('dev');
+  const readerEntered = deferred<void>();
+  const releaseReader = deferred<void>();
+  const evictionReserved = deferred<void>();
+  let firstRunId: string | undefined;
+  let holdFirstReader = false;
+  let firstReaderAdmissions = 0;
+  const session = await RsbuildRuntimeSession.start({
+    artifactStatus: () => Object.freeze({ state: 'missing' as const }),
+    emit: () => undefined,
+    environment: Object.freeze({}),
+    projectRoot,
+    preparedRuntime: prepared.devRuntime!,
+    providerSessionId: 'session-eviction-reader-test',
+    signal: new AbortController().signal,
+    storageRoot,
+  }, {
+    afterRunArtifactEvictionReserved: ({ runId }: Readonly<{ readonly runId: string }>) => {
+      if (runId === firstRunId) evictionReserved.resolve();
+    },
+    beforeRunFlightRead: async ({ runId }: Readonly<{ readonly runId: string }>) => {
+      if (!holdFirstReader || runId !== firstRunId) return;
+      firstReaderAdmissions += 1;
+      if (firstReaderAdmissions !== 1) return;
+      readerEntered.resolve();
+      await releaseReader.promise;
+    },
+  });
+
+  try {
+    await waitFor(() => session.status().activeVector !== undefined, 'Timed out waiting for an active runtime generation', 15_000);
+    const generationId = session.status().activeVector!.runtimeGenerationId;
+    const target = session.surfaces().find((surface) => surface.id === 'mcp.runtime_status')!.targets[0]!;
+    const request = {
+      expectedGenerationId: generationId,
+      input: {},
+      surfaceId: 'mcp.runtime_status',
+      target,
+    } as const;
+    const first = await session.invoke(request);
+    if (first.status !== 'succeeded') throw new Error(JSON.stringify(first.diagnostics));
+    firstRunId = first.id;
+
+    holdFirstReader = true;
+    const admittedReader = session.readRunFlight(first.id);
+    await readerEntered.promise;
+    for (let index = 0; index < 49; index += 1) await expect(session.invoke(request)).resolves.toMatchObject({ status: 'succeeded' });
+
+    const evicting = session.invoke(request);
+    await evictionReserved.promise;
+    await expect(session.readRunFlight(first.id)).resolves.toBeUndefined();
+    expect(firstReaderAdmissions).toBe(1);
+
+    releaseReader.resolve();
+    await expect(admittedReader).resolves.toMatchObject({ body: expect.any(Buffer) });
+    await expect(evicting).resolves.toMatchObject({ status: 'succeeded' });
+    await expect(session.readRunFlight(first.id)).resolves.toBeUndefined();
+  } finally {
+    releaseReader.resolve();
+    await session.close().catch(() => undefined);
+    await rm(storageRoot, { force: true, recursive: true });
+  }
+}, 90_000);
+
+test('finalizes successful history before a failed evicted run-directory removal', async () => {
+  const storageRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-session-eviction-directory-'));
+  const projectRoot = process.cwd();
+  const prepared = await new ProjectService({ includeDevRuntime: true, mode: 'development', root: projectRoot }).prepare('dev');
+  let firstRunId: string | undefined;
+  let failFirstDirectoryRemoval = true;
+  let firstArtifactReleaseAttempts = 0;
+  let firstDirectoryRemovalAttempts = 0;
+  const session = await RsbuildRuntimeSession.start({
+    artifactStatus: () => Object.freeze({ state: 'missing' as const }),
+    emit: () => undefined,
+    environment: Object.freeze({}),
+    projectRoot,
+    preparedRuntime: prepared.devRuntime!,
+    providerSessionId: 'session-eviction-directory-test',
+    signal: new AbortController().signal,
+    storageRoot,
+  }, {
+    beforeRunArtifactRelease: ({ runId }: Readonly<{ readonly runId: string }>) => {
+      if (runId === firstRunId) firstArtifactReleaseAttempts += 1;
+    },
+    beforeRunDirectoryRemoval: ({ runId }: Readonly<{ readonly runId: string }>) => {
+      if (runId === firstRunId) firstDirectoryRemovalAttempts += 1;
+      if (failFirstDirectoryRemoval && runId === firstRunId) {
+        failFirstDirectoryRemoval = false;
+        throw new Error('do-not-expose-evicted-run-directory-removal-secret');
+      }
+    },
+  });
+
+  try {
+    await waitFor(() => session.status().activeVector !== undefined, 'Timed out waiting for an active runtime generation', 15_000);
+    const generationId = session.status().activeVector!.runtimeGenerationId;
+    const target = session.surfaces().find((surface) => surface.id === 'mcp.runtime_status')!.targets[0]!;
+    const request = {
+      expectedGenerationId: generationId,
+      input: {},
+      surfaceId: 'mcp.runtime_status',
+      target,
+    } as const;
+    const first = await session.invoke(request);
+    if (first.status !== 'succeeded') throw new Error(JSON.stringify(first.diagnostics));
+    firstRunId = first.id;
+
+    for (let index = 0; index < 49; index += 1) await expect(session.invoke(request)).resolves.toMatchObject({ status: 'succeeded' });
+    const evictionFailure = await session.invoke(request);
+
+    expect(evictionFailure).toMatchObject({
+      diagnostics: [expect.objectContaining({ message: 'RSC runtime run artifact cleanup failed; cleanup failures: run-artifact.' })],
+      status: 'failed',
+    });
+    expect(evictionFailure.status === 'failed' && evictionFailure.diagnostics[0]!.message)
+      .not.toContain('do-not-expose-evicted-run-directory-removal-secret');
+    expect(session.run(first.id)).toBeUndefined();
+    await expect(session.readRunFlight(first.id)).resolves.toBeUndefined();
+    expect(await readdir(join(storageRoot, 'runs'))).toEqual(expect.arrayContaining([first.id]));
+    expect(firstArtifactReleaseAttempts).toBe(1);
+
+    await expect(session.close()).resolves.toBeUndefined();
+    expect(firstArtifactReleaseAttempts).toBe(1);
+    expect(firstDirectoryRemovalAttempts).toBe(2);
+  } finally {
+    await session.close().catch(() => undefined);
+    await rm(storageRoot, { force: true, recursive: true });
+  }
+}, 60_000);
+
 test('rejects a fifth blocked generation worker and settles every leased worker on close', async () => {
   const storageRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-session-bound-'));
   const projectRoot = process.cwd();

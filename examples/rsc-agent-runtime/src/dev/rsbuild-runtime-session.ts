@@ -589,6 +589,9 @@ export interface RsbuildRuntimeSessionStartTesting {
   }>) => Promise<void> | void;
   /** Test-only live-session cleanup seams; never used by the public provider. */
   readonly beforeRunArtifactRelease?: (input: Readonly<{ readonly runId: string }>) => Promise<void> | void;
+  readonly afterRunArtifactEvictionReserved?: (input: Readonly<{ readonly runId: string }>) => Promise<void> | void;
+  readonly beforeRunDirectoryRemoval?: (input: Readonly<{ readonly runId: string }>) => Promise<void> | void;
+  readonly beforeRunFlightRead?: (input: Readonly<{ readonly runId: string }>) => Promise<void> | void;
   readonly afterLiveSessionCleanupResource?: (input: Readonly<{
     readonly resource: LiveSessionCleanupResource;
   }>) => Promise<void> | void;
@@ -612,6 +615,8 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
   readonly #invocationAbort = new AbortController();
   readonly #runReadTasks = new Map<string, Set<Promise<unknown>>>();
   readonly #runArtifacts = new Map<string, RunArtifact>();
+  readonly #evictingTerminalRuns = new Set<string>();
+  readonly #pendingRunDirectoryRemovals = new Set<string>();
   readonly #runRoot: string;
   readonly #ownedRunsRoot: OwnedRunsRoot;
   readonly #stateFile: string;
@@ -630,7 +635,6 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
   #clientSurface: DevRuntimeClientSurfaceEndpoint | undefined;
   #closePromise: Promise<void> | undefined;
   #closed = false;
-  #evictionFailures: LabeledCleanupFailure[] = [];
   #evictionTail: Promise<void> = Promise.resolve();
   #generationSequence = 0;
   #failureTail: Promise<void> = Promise.resolve();
@@ -891,12 +895,14 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
 
   async readRunFlight(runId: string): Promise<DevRuntimeAsset | undefined> {
     if (this.#closed || !safeSegment(runId)) return undefined;
+    if (this.#evictingTerminalRuns.has(runId)) return undefined;
     const run = this.#terminalRuns.get(runId);
     if (run?.status !== 'succeeded' || run.vector.providerSessionId !== this.providerSessionId) return undefined;
     const artifact = this.#runArtifacts.get(runId);
     if (artifact?.digest === undefined || artifact.size === undefined || artifact.dev === undefined || artifact.ino === undefined) return undefined;
     const task = (async (): Promise<DevRuntimeAsset | undefined> => {
       try {
+        await this.#testing.beforeRunFlightRead?.(Object.freeze({ runId }));
         await this.#assertCurrentOwnedRunsRoot();
         const details = await artifact.file.stat();
         if (!details.isFile() || details.size !== artifact.size || details.dev !== artifact.dev || details.ino !== artifact.ino) return undefined;
@@ -1314,15 +1320,7 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
 
   async #recordTerminal(run: DevRuntimeRun): Promise<void> {
     this.#terminalRuns.set(run.id, run);
-    const eviction = this.#evictionTail.then(async () => {
-      try {
-        await this.#evictTerminalRuns();
-        this.#evictionFailures = [];
-      } catch (error) {
-        this.#evictionFailures = [Object.freeze({ error, label: 'run-artifact' })];
-        throw error;
-      }
-    });
+    const eviction = this.#evictionTail.then(() => this.#evictTerminalRuns());
     this.#evictionTail = eviction.catch(() => undefined);
     await eviction;
   }
@@ -1331,20 +1329,27 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
     while (this.#terminalRuns.size > maximumRunHistory) {
       const oldestId = this.#terminalRuns.keys().next().value as string | undefined;
       if (oldestId === undefined) return;
-      const reads = this.#runReadTasks.get(oldestId);
-      if (reads !== undefined) await Promise.allSettled([...reads]);
+      this.#evictingTerminalRuns.add(oldestId);
       try {
+        await this.#testing.afterRunArtifactEvictionReserved?.(Object.freeze({ runId: oldestId }));
+        const reads = this.#runReadTasks.get(oldestId);
+        if (reads !== undefined) await Promise.allSettled([...reads]);
         await this.#releaseRunArtifact(oldestId);
+        this.#terminalRuns.delete(oldestId);
+        this.#pendingRunDirectoryRemovals.add(oldestId);
         await this.#removeRunDirectory(oldestId);
+        this.#pendingRunDirectoryRemovals.delete(oldestId);
       } catch (error) {
         throw cleanupAggregate('RSC runtime run artifact cleanup failed', [Object.freeze({ error, label: 'run-artifact' })]);
+      } finally {
+        this.#evictingTerminalRuns.delete(oldestId);
       }
-      this.#terminalRuns.delete(oldestId);
     }
   }
 
   async #removeRunDirectory(runId: string | undefined): Promise<void> {
     if (runId === undefined || !safeSegment(runId)) return;
+    await this.#testing.beforeRunDirectoryRemoval?.(Object.freeze({ runId }));
     await this.#assertCurrentOwnedRunsRoot();
     const directory = join(this.#runRoot, runId);
     if (!isInside(this.#runRoot, directory)) throw new Error('RSC runtime run directory escaped its provider storage root.');
@@ -2554,15 +2559,20 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
     }
     await this.#evictionTail;
     await Promise.all([this.#providerTail.catch(() => undefined), this.#failureTail]);
+    const runArtifactCleanup = this.#closeRunArtifacts();
+    void runArtifactCleanup.catch(() => undefined);
     const resources: readonly Readonly<{
       readonly close: () => Promise<void>;
       readonly label: LiveSessionCleanupResource;
     }>[] = Object.freeze([
-      Object.freeze({ label: 'run-artifact' as const, close: () => this.#closeRunArtifacts() }),
-      Object.freeze({ label: 'owned-runs-root' as const, close: () => this.#closeLiveSessionResource(
-        'owned-runs-root',
-        () => RsbuildRuntimeSession.#removeOwnedRunsRoot(this.#ownedRunsRoot),
-      ) }),
+      Object.freeze({ label: 'run-artifact' as const, close: () => runArtifactCleanup }),
+      Object.freeze({ label: 'owned-runs-root' as const, close: async () => {
+        await runArtifactCleanup.catch(() => undefined);
+        await this.#closeLiveSessionResource(
+          'owned-runs-root',
+          () => RsbuildRuntimeSession.#removeOwnedRunsRoot(this.#ownedRunsRoot),
+        );
+      } }),
       Object.freeze({ label: 'rsbuild-dev-server' as const, close: () => this.#closeLiveSessionResource(
         'rsbuild-dev-server',
         () => this.#server?.close() ?? Promise.resolve(),
@@ -2581,10 +2591,16 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
   }
 
   async #closeRunArtifacts(): Promise<void> {
-    const results = await Promise.allSettled([...this.#runArtifacts.keys()].map((runId) => this.#releaseRunArtifact(runId)));
+    const artifactResults = await Promise.allSettled([...this.#runArtifacts.keys()].map((runId) => this.#releaseRunArtifact(runId)));
+    const directoryResults = await Promise.allSettled([...this.#pendingRunDirectoryRemovals].map(async (runId) => {
+      await this.#removeRunDirectory(runId);
+      this.#pendingRunDirectoryRemovals.delete(runId);
+    }));
     const failures = [
-      ...this.#evictionFailures,
-      ...results.flatMap((result) => result.status === 'rejected'
+      ...artifactResults.flatMap((result) => result.status === 'rejected'
+        ? [Object.freeze({ error: result.reason, label: 'run-artifact' })]
+        : []),
+      ...directoryResults.flatMap((result) => result.status === 'rejected'
         ? [Object.freeze({ error: result.reason, label: 'run-artifact' })]
         : []),
     ];
