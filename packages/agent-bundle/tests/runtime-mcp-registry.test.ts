@@ -646,10 +646,12 @@ it('repairs a failed visible session through private activation without consumin
     const committed = registry.commitActivationReconcile(prepared);
     expect(session.snapshot()).toMatchObject({
       binding: { registryRevision: 3, sessionRevision: 3 },
-      state: 'ready',
+      state: 'restarting',
     });
+    await expect(session.execute(request('list-tools', 3))).rejects.toThrow('restarting');
     expect(recovered.relisted).toBe(true);
     committed.publish();
+    expect(session.snapshot().state).toBe('ready');
     await committed.finalize();
   } finally {
     await registry.close().catch(() => undefined);
@@ -1151,8 +1153,9 @@ it('prepares private activation without public visibility, commits synchronously
     const committed = registry.commitActivationReconcile(prepared);
     expect(session.snapshot()).toMatchObject({
       binding: { registryRevision: 2, sessionRevision: 2 },
-      state: 'ready',
+      state: 'restarting',
     });
+    await expect(session.execute(request('list-tools', 2))).rejects.toThrow('restarting');
     expect(events).toEqual([{
       mcpRegistryRevision: before.binding.registryRevision + 1,
       mcpSessionId: before.binding.sessionId,
@@ -1161,6 +1164,7 @@ it('prepares private activation without public visibility, commits synchronously
       type: 'runtime.mcp.restarting',
     }]);
     committed.publish();
+    expect(session.snapshot().state).toBe('ready');
     expect(events.map((event) => event.type)).toEqual(['runtime.mcp.restarting', 'runtime.mcp.ready']);
     release.resolve();
     expect(await running).toMatchObject({
@@ -1192,8 +1196,13 @@ it('emits an activation restart with the replacement binding before publishing i
     const session = await registry.open({ serverName: 'timeline', target: 'portable' });
     const before = session.snapshot();
     const publications: string[] = [];
+    let reentrantExecution: Promise<unknown> | undefined;
     registry.subscribe({ afterSequence: 0 }, (message) => {
-      if ('sequence' in message) publications.push(message.action);
+      if (!('sequence' in message)) return;
+      publications.push(message.action);
+      if (message.action === 'sessions-restarted') {
+        reentrantExecution = session.execute(request('list-tools', session.snapshot().binding.sessionRevision));
+      }
     });
 
     const prepared = await registry.prepareActivationReconcile(registryInput({
@@ -1214,7 +1223,63 @@ it('emits an activation restart with the replacement binding before publishing i
     committed.publish();
     committed.publish();
     expect(publications).toEqual(['sessions-restarted']);
+    await expect(reentrantExecution).rejects.toThrow('restarting');
+    expect(session.snapshot().state).toBe('ready');
     expect(events.map((event) => event.type)).toEqual(['runtime.mcp.restarting', 'runtime.mcp.ready']);
+  } finally {
+    await registry.close().catch(() => undefined);
+    await fixture.close();
+  }
+});
+
+it('does not resurrect a prepared replacement when close precedes or interrupts publication', async () => {
+  const fixture = await createGenerationStore();
+  const events: DevRuntimeEventInput[] = [];
+  const registry = createRegistry({ events, store: fixture.store });
+  try {
+    await fixture.commit('g1');
+    await fixture.commit('g2');
+    const session = await registry.open({ serverName: 'timeline', target: 'portable' });
+    const beforeClose = registry.commitActivationReconcile(await registry.prepareActivationReconcile(registryInput({
+      definitionDigest: 'definition-2',
+      runtimeGenerationId: 'g2',
+    })));
+    expect(session.snapshot().state).toBe('restarting');
+    const closing = registry.close();
+    beforeClose.publish();
+    beforeClose.publish();
+    await closing;
+    expect(session.snapshot().state).toBe('closed');
+    expect(events.map((event) => event.type)).toEqual(['runtime.mcp.restarting']);
+
+    const duringFixture = await createGenerationStore();
+    const duringEvents: DevRuntimeEventInput[] = [];
+    const duringRegistry = createRegistry({ events: duringEvents, store: duringFixture.store });
+    try {
+      await duringFixture.commit('g1');
+      await duringFixture.commit('g2');
+      const duringSession = await duringRegistry.open({ serverName: 'timeline', target: 'portable' });
+      const publications: string[] = [];
+      let interruptedClose: Promise<void> | undefined;
+      duringRegistry.subscribe({ afterSequence: 0 }, (message) => {
+        if (!('sequence' in message)) return;
+        publications.push(message.action);
+        if (message.action === 'sessions-restarted') interruptedClose ??= duringRegistry.close();
+      });
+      const duringClose = duringRegistry.commitActivationReconcile(await duringRegistry.prepareActivationReconcile(registryInput({
+        definitionDigest: 'definition-2',
+        runtimeGenerationId: 'g2',
+      })));
+      duringClose.publish();
+      duringClose.publish();
+      await interruptedClose;
+      expect(publications).toEqual(['sessions-restarted']);
+      expect(duringSession.snapshot().state).toBe('closed');
+      expect(duringEvents.map((event) => event.type)).toEqual(['runtime.mcp.restarting']);
+    } finally {
+      await duringRegistry.close().catch(() => undefined);
+      await duringFixture.close();
+    }
   } finally {
     await registry.close().catch(() => undefined);
     await fixture.close();

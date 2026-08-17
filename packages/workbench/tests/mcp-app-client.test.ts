@@ -389,6 +389,80 @@ describe('MCP App browser client', () => {
     project.close();
   });
 
+  it('settles a dispatched runtime close after its matching session restart revokes the binding', async () => {
+    const stream = new RuntimeEventSource();
+    const closeResponse = deferred<Response>();
+    let closeAttempts = 0;
+    const fetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+      if (String(input) === '/api/project/session') return json({ cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef', origin: 'http://127.0.0.1:43123', token: 'foreground-secret' });
+      if (String(input) === '/api/project/status') return json({ status: { artifact: { state: 'missing' } } });
+      if (String(input) === '/api/runtime/apps') return json({ preview: runtimePreview });
+      if (String(input) === '/api/runtime/apps/runtime-binding' && init?.method === 'DELETE') {
+        closeAttempts += 1;
+        return closeResponse.promise;
+      }
+      throw new Error(`Unexpected request ${String(input)}.`);
+    };
+    const project = new ProjectClient({ events: () => stream, fetch: fetch as typeof globalThis.fetch });
+    await project.connect(() => undefined);
+    const runtime = new McpAppClient({ fetch: fetch as typeof globalThis.fetch, projectClient: project });
+    await runtime.createRuntime({ expectedGenerationId: 'generation-a', profileId: 'portable', runId: 'run-a' });
+
+    const closing = runtime.closeRuntime('runtime-binding');
+    await Promise.resolve();
+    stream.emit('runtime.event', {
+      occurredAt: '2026-08-16T00:00:00.000Z',
+      payload: runtimeAppUpdated({ bindingId: 'runtime-binding', reason: 'session-restarted', sessionId: 'runtime-session-a', sessionRevision: 2, state: 'revoked' }),
+      sequence: 1,
+      type: 'runtime.event',
+    }, 1);
+    await flushEvents();
+    closeResponse.resolve(json({ diagnostic: { code: 'AB8022', message: 'Runtime MCP App preview was revoked.' } }, 410));
+
+    await expect(closing).resolves.toBeUndefined();
+    expect(closeAttempts).toBe(1);
+    expect(() => runtime.currentDocumentPolicy('runtime-binding')).toThrow('Runtime MCP App document policy is not available.');
+    project.close();
+  });
+
+  it('retains a restarted dispatched runtime close for an ordinary 500 retry', async () => {
+    const stream = new RuntimeEventSource();
+    const firstClose = deferred<Response>();
+    let closeAttempts = 0;
+    const fetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+      if (String(input) === '/api/project/session') return json({ cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef', origin: 'http://127.0.0.1:43123', token: 'foreground-secret' });
+      if (String(input) === '/api/project/status') return json({ status: { artifact: { state: 'missing' } } });
+      if (String(input) === '/api/runtime/apps') return json({ preview: runtimePreview });
+      if (String(input) === '/api/runtime/apps/runtime-binding' && init?.method === 'DELETE') {
+        closeAttempts += 1;
+        return closeAttempts === 1
+          ? firstClose.promise
+          : json({ diagnostic: { code: 'AB8022', message: 'Runtime MCP App preview was revoked.' } }, 410);
+      }
+      throw new Error(`Unexpected request ${String(input)}.`);
+    };
+    const project = new ProjectClient({ events: () => stream, fetch: fetch as typeof globalThis.fetch });
+    await project.connect(() => undefined);
+    const runtime = new McpAppClient({ fetch: fetch as typeof globalThis.fetch, projectClient: project });
+    await runtime.createRuntime({ expectedGenerationId: 'generation-a', profileId: 'portable', runId: 'run-a' });
+
+    const first = runtime.closeRuntime('runtime-binding');
+    await Promise.resolve();
+    stream.emit('runtime.event', {
+      occurredAt: '2026-08-16T00:00:00.000Z',
+      payload: runtimeAppUpdated({ bindingId: 'runtime-binding', reason: 'session-restarted', sessionId: 'runtime-session-a', sessionRevision: 2, state: 'revoked' }),
+      sequence: 1,
+      type: 'runtime.event',
+    }, 1);
+    await flushEvents();
+    firstClose.resolve(json({ diagnostic: { code: 'AB7001', message: 'temporary close failure' } }, 500));
+    await expect(first).rejects.toMatchObject({ code: 'AB7001' });
+
+    await expect(runtime.closeRuntime('runtime-binding')).resolves.toBeUndefined();
+    expect(closeAttempts).toBe(2);
+    project.close();
+  });
+
   it('fails closed when a runtime App invalidation envelope has mismatched or unexpected fields', async () => {
     const stream = new RuntimeEventSource();
     const fetch = async (input: string | URL | Request): Promise<Response> => {

@@ -821,11 +821,13 @@ export class McpAppPreviewController<State extends McpAppPreviewControllerState 
     const runtime = this.#runtime;
     if (runtime === undefined || this.#closed || this.#runtimeInvalidationUnsubscribe !== undefined) return;
     const unsubscribe = runtime.client.subscribeInvalidations((details) => {
-      if (this.#closed || !this.#matchesRuntimeInvalidation(preview, details)) return;
+      if (!this.#matchesRuntimeInvalidation(preview, details) || this.#runtimeBackendClosed) return;
+      const closing = this.#closed && this.#closePromise !== undefined;
+      if (this.#closed && !closing) return;
       this.#runtimeBackendClosed = true;
       this.#runtimeInvalidationReason = 'session-restarted';
+      if (closing) return;
       this.#closed = true;
-      this.#clearRuntimeInvalidationSubscription();
       this.#runtimeFailure('session-restarted', new Error('Runtime MCP App session restarted. Run again to create a new preview.'));
       const cleanup = this.#cleanupRuntime();
       this.#closePromise = cleanup;
@@ -862,7 +864,6 @@ export class McpAppPreviewController<State extends McpAppPreviewControllerState 
   }
 
   async #cleanupRuntime(): Promise<void> {
-    this.#clearRuntimeInvalidationSubscription();
     const failures: unknown[] = [];
     const delivery = this.#runtimeRendererDelivery;
     if (delivery !== undefined) await delivery.catch(() => undefined);
@@ -899,6 +900,7 @@ export class McpAppPreviewController<State extends McpAppPreviewControllerState 
     }
     if (failures.length === 1) throw failures[0];
     if (failures.length > 1) throw new AggregateError(failures, 'MCP App runtime preview cleanup failed.');
+    this.#clearRuntimeInvalidationSubscription();
   }
 
   #setState(state: McpAppPreviewControllerState): void {

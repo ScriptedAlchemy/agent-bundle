@@ -636,11 +636,8 @@ export class RuntimeMcpRegistry implements DevRuntimeMcpRegistry {
     }
     this.#state = nextState;
     if (record.requiresRestart) {
-      // This is the sole public transition boundary for activation replacement:
-      // observers see the replacement identity before the invalidated binding or
-      // its ready state becomes visible through the committed publication.
+      // Keep the replacement fenced until its revocation publication is visible.
       for (const session of this.#sessions.values()) this.#emit('runtime.mcp.restarting', session);
-      for (const session of this.#sessions.values()) session.state = 'ready';
     }
     const result = this.#result(
       record.requiresRestart ? 'sessions-restarted' : 'implementation-updated',
@@ -662,8 +659,12 @@ export class RuntimeMcpRegistry implements DevRuntimeMcpRegistry {
         if (published || this.#closed) return;
         published = true;
         this.#publishResult(result);
-        if (record.requiresRestart) {
-          for (const session of this.#sessions.values()) this.#emit('runtime.mcp.ready', session);
+        if (!record.requiresRestart || this.#closed) return;
+        for (const { session } of transitions) {
+          if (this.#closed) return;
+          if (this.#sessions.get(session.id) !== session || session.closed || session.state !== 'restarting') continue;
+          session.state = 'ready';
+          this.#emit('runtime.mcp.ready', session);
         }
       },
       result,

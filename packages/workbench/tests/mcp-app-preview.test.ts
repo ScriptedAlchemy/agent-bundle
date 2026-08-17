@@ -1002,6 +1002,58 @@ describe('MCP App preview', () => {
     expect(order).toEqual(['renderer', 'bridge', 'binding:runtime-binding-weather']);
   });
 
+  it('keeps matching restart invalidation admitted through a held normal close and skips the revoked backend delete', async () => {
+    const order: string[] = [];
+    const rendererTeardown = deferred<void>();
+    let invalidation: ((details: {
+      readonly bindingId: string;
+      readonly reason: 'session-restarted';
+      readonly sessionId: string;
+      readonly sessionRevision: number;
+      readonly state: 'revoked';
+    }) => void) | undefined;
+    let unsubscribes = 0;
+    const client = runtimeClient(Object.freeze({
+      closeRuntime: async () => { order.push('binding'); },
+      createRuntime: async () => runtimePreview,
+      currentDocumentPolicy: () => Object.freeze({ bindingId: runtimePreview.binding.id, snapshot: runtimePreview.documentPolicy }),
+      subscribeInvalidations: (listener: typeof invalidation) => {
+        invalidation = listener;
+        return () => { unsubscribes += 1; invalidation = undefined; };
+      },
+    }));
+    const bridgeFactory = Object.assign(
+      () => { throw new Error('renderer installation is represented by its ref'); },
+      { close: async () => { order.push('bridge'); } },
+    ) as RuntimeAppBridgeFactory;
+    const controller = createMcpAppPreviewController(runtimeProps(client, () => bridgeFactory));
+    await controller.start();
+    controller.runtimeRendererRef?.(Object.freeze({
+      sendToolCancelled: async () => undefined,
+      sendToolInput: async () => undefined,
+      sendToolResult: async () => undefined,
+      teardown: async () => { order.push('renderer'); await rendererTeardown.promise; },
+    }));
+    const listener = invalidation;
+    if (listener === undefined) throw new Error('Expected runtime invalidation subscription.');
+
+    const closing = controller.close();
+    await expect.poll(() => order).toEqual(['renderer']);
+    expect(unsubscribes).toBe(0);
+    listener({
+      bindingId: runtimePreview.binding.id,
+      reason: 'session-restarted',
+      sessionId: runtimePreview.binding.sessionId,
+      sessionRevision: runtimePreview.binding.sessionRevision,
+      state: 'revoked',
+    });
+    rendererTeardown.resolve();
+    await closing;
+
+    expect(order).toEqual(['renderer', 'bridge']);
+    expect(unsubscribes).toBe(1);
+  });
+
   it('locally closes exactly the matching revoked runtime App without a redundant backend close', async () => {
     const order: string[] = [];
     let invalidation: ((details: {

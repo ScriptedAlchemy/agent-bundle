@@ -890,6 +890,7 @@ interface RuntimeCloseAttempt {
   dispatched: boolean;
   readonly generation: number;
   manuallyClosed: boolean;
+  serverRestarted: boolean;
 }
 
 interface RuntimeConsentChallenge {
@@ -1183,12 +1184,23 @@ export class McpAppClient implements McpAppRuntimeClient {
   async closeRuntime(bindingId: string): Promise<void> {
     const id = decodeURIComponent(opaqueSegment(bindingId, 'Runtime MCP App binding'));
     const attempt = this.#admitRuntimeClose(id);
-    const response = await this.#json(`/api/runtime/apps/${opaqueSegment(id, 'Runtime MCP App binding')}`, { method: 'DELETE' }, undefined, attempt);
-    this.#assertRuntimeCloseAdmission(attempt);
-    const body = runtimeRecord(response, ['closed']);
-    if (body.closed !== true) runtimeInvalid('Runtime MCP App route returned an invalid close response.');
-    this.#assertRuntimeCloseAdmission(attempt);
-    this.#completeRuntimeClose(attempt);
+    try {
+      const response = await this.#json(`/api/runtime/apps/${opaqueSegment(id, 'Runtime MCP App binding')}`, { method: 'DELETE' }, undefined, attempt);
+      this.#assertRuntimeCloseAdmission(attempt);
+      const body = runtimeRecord(response, ['closed']);
+      if (body.closed !== true) runtimeInvalid('Runtime MCP App route returned an invalid close response.');
+      this.#assertRuntimeCloseAdmission(attempt);
+      this.#completeRuntimeClose(attempt);
+    } catch (error) {
+      if (
+        attempt.serverRestarted &&
+        (!attempt.dispatched || (error instanceof McpAppClientError && error.code === 'AB8022'))
+      ) {
+        this.#completeRuntimeClose(attempt);
+        return;
+      }
+      throw error;
+    }
   }
 
   /** Releases the optional shared event subscription and revokes every local runtime authority. */
@@ -1299,6 +1311,7 @@ export class McpAppClient implements McpAppRuntimeClient {
       dispatched: false,
       generation: admission.generation,
       manuallyClosed: false,
+      serverRestarted: false,
     };
     this.#runtimeCloseAttempts.set(bindingId, attempt);
     return attempt;
@@ -1326,7 +1339,7 @@ export class McpAppClient implements McpAppRuntimeClient {
     if (this.#runtimeDisposed || this.#runtimeCloseAttempts.get(attempt.bindingId) !== attempt) {
       throw new McpAppClientError('AB8015', 'Runtime MCP App close authority is no longer current.');
     }
-    if (attempt.manuallyClosed) return;
+    if (attempt.manuallyClosed || attempt.serverRestarted) return;
     if (attempt.generation !== this.#runtimeGeneration || attempt.bindingGeneration !== this.#runtimeBindingGeneration(attempt.bindingId) ||
       this.#runtimeBindings.get(attempt.bindingId) !== attempt.binding) {
       throw new McpAppClientError('AB8015', 'Runtime MCP App close authority is no longer current.');
@@ -1335,7 +1348,7 @@ export class McpAppClient implements McpAppRuntimeClient {
 
   #completeRuntimeClose(attempt: RuntimeCloseAttempt): void {
     this.#runtimeCloseAttempts.delete(attempt.bindingId);
-    if (!attempt.manuallyClosed) this.#revokeRuntimeBinding(attempt.bindingId);
+    if (!attempt.manuallyClosed && !attempt.serverRestarted) this.#revokeRuntimeBinding(attempt.bindingId);
   }
 
   #runtimeBindingGeneration(bindingId: string): number {
@@ -1520,8 +1533,10 @@ export class McpAppClient implements McpAppRuntimeClient {
       return;
     }
     const attempt = this.#runtimeCloseAttempts.get(details.bindingId);
-    const preserveCloseAttempt = details.reason === 'manual-close' && attempt !== undefined && attempt.binding === known && attempt.dispatched;
-    if (preserveCloseAttempt) attempt.manuallyClosed = true;
+    const preserveCloseAttempt = attempt !== undefined && attempt.binding === known &&
+      ((details.reason === 'manual-close' && attempt.dispatched) || details.reason === 'session-restarted');
+    if (preserveCloseAttempt && details.reason === 'manual-close') attempt.manuallyClosed = true;
+    if (preserveCloseAttempt && details.reason === 'session-restarted') attempt.serverRestarted = true;
     this.#revokeRuntimeBinding(details.bindingId, details, preserveCloseAttempt);
   }
 
@@ -1559,6 +1574,9 @@ export class McpAppClient implements McpAppRuntimeClient {
     if (admission !== undefined) this.#assertRuntimeAdmission(admission);
     if (closeAttempt !== undefined) {
       this.#assertRuntimeCloseAdmission(closeAttempt);
+      if (closeAttempt.serverRestarted && !closeAttempt.dispatched) {
+        throw new McpAppClientError('AB8022', 'Runtime MCP App preview was revoked.');
+      }
       closeAttempt.dispatched = true;
     }
     const headers = new Headers(init.headers);
