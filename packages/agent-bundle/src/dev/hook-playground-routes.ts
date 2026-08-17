@@ -44,7 +44,11 @@ export class HookPlaygroundCloseError extends Error {
 
 interface RunningOperation {
   readonly controller: AbortController;
-  /** Never rejects: it resolves to the failure that must survive shutdown, or to undefined. */
+  /**
+   * Never rejects: it resolves to the failure that must survive shutdown, or to
+   * undefined. Admission creates it unsettled so shutdown can already await an
+   * operation whose service call has not returned its own promise yet.
+   */
   readonly drained: Promise<{ readonly error: unknown } | undefined>;
   readonly operation: HookPlaygroundOperation;
 }
@@ -250,14 +254,15 @@ const replayRequest = (value: JsonObject): HookPlaygroundReplay => {
 
 /**
  * Shutdown cancels the operation itself, so the executor's cancellation is the
- * expected outcome. Anything else — a wrapper process tree that refused to settle,
- * or a simulation clone that could not be removed — is a real shutdown failure.
+ * expected outcome, identified by the reason this route raised or by an error that
+ * types itself as an abort. A message is not an identity: a wrapper process tree
+ * that refused to settle, or a simulation clone that could not be removed, is a
+ * real shutdown failure even when it reports the same text.
  */
 const isExpectedCancellation = (error: unknown, signal: AbortSignal): boolean => {
   if (!signal.aborted) return false;
   if (error === signal.reason) return true;
-  return error instanceof Error &&
-    (error.name === 'AbortError' || error.message === 'Hook simulation aborted.');
+  return error instanceof Error && error.name === 'AbortError';
 };
 
 const simulationResponse = (
@@ -283,11 +288,21 @@ export class HookPlaygroundRoutes {
   /**
    * Shutdown must not outlive the wrapper processes and simulation clones it
    * cancels, so every admitted operation is aborted once and then drained. All
-   * callers share the single outcome of the first close.
+   * callers share the single outcome of the first close, including a caller that
+   * re-enters shutdown from an abort callback: the shared promise is published
+   * before the first abort, so no re-entrant close can start a second drain.
    */
   close(): Promise<void> {
-    if (this.#closePromise !== undefined) return this.#closePromise;
-    this.#closePromise = this.#drain([...this.#running]);
+    const closing = this.#closePromise;
+    if (closing !== undefined) return closing;
+    const operations = [...this.#running];
+    let resolveClose!: () => void;
+    let rejectClose!: (error: unknown) => void;
+    this.#closePromise = new Promise<void>((resolvePromise, rejectPromise) => {
+      resolveClose = resolvePromise;
+      rejectClose = rejectPromise;
+    });
+    this.#drain(operations).then(resolveClose, rejectClose);
     return this.#closePromise;
   }
 
@@ -350,7 +365,10 @@ export class HookPlaygroundRoutes {
    * Abandoning a request must release the simulation clone and its wrapper
    * process. The response is the observable stream here: a fully read request
    * body has already emitted its own close. Shutdown drains the same operation,
-   * so a request that only reaches here after close began is never admitted.
+   * so a request that only reaches here after close began is never admitted, and
+   * one admitted before it is registered ahead of the service call — a service
+   * that starts shutdown itself still finds its own operation admitted, aborted,
+   * and awaited. Every settlement, including a synchronous throw, drains once.
    */
   async #cancellable<T>(
     operation: HookPlaygroundOperation,
@@ -360,24 +378,27 @@ export class HookPlaygroundRoutes {
     if (this.#closePromise !== undefined) throw this.#unavailable(503);
     const controller = new AbortController();
     const abort = (): void => controller.abort();
+    let drain!: (failure: { readonly error: unknown } | undefined) => void;
+    const running: RunningOperation = Object.freeze({
+      controller,
+      drained: new Promise<{ readonly error: unknown } | undefined>((resolvePromise) => {
+        drain = resolvePromise;
+      }),
+      operation,
+    });
+    this.#running.add(running);
     response.once('close', abort);
-    let running: RunningOperation | undefined;
     try {
       if (response.destroyed || response.writableEnded) abort();
-      const run = action(controller.signal);
-      running = Object.freeze({
-        controller,
-        drained: run.then(
-          () => undefined,
-          (error: unknown) => isExpectedCancellation(error, controller.signal) ? undefined : Object.freeze({ error }),
-        ),
-        operation,
-      });
-      this.#running.add(running);
-      return await run;
+      const result = await action(controller.signal);
+      drain(undefined);
+      return result;
+    } catch (error) {
+      drain(isExpectedCancellation(error, controller.signal) ? undefined : Object.freeze({ error }));
+      throw error;
     } finally {
       response.off('close', abort);
-      if (running !== undefined) this.#running.delete(running);
+      this.#running.delete(running);
     }
   }
 

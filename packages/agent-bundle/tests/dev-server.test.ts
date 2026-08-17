@@ -1051,7 +1051,7 @@ class GatedHookPlayground implements HookPlaygroundRouteService {
       signal?.addEventListener('abort', () => {
         this.#release = () => {
           this.settlements.push('simulation');
-          rejectPromise(this.failure ?? new Error('Hook simulation aborted.'));
+          rejectPromise(this.failure ?? signal?.reason);
         };
       });
     });

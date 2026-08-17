@@ -45,6 +45,20 @@ export interface HookServiceOptions {
   readonly taskkill?: Taskkill;
 }
 
+/**
+ * Cancellation is an outcome callers act on, not a message they parse: the route
+ * drain that aborted the simulation identifies it by name so a wrapper failure or
+ * a cleanup failure reporting the same text stays a real failure.
+ */
+class HookSimulationAbortError extends Error {
+  readonly code = 'hook.simulation.aborted';
+
+  constructor() {
+    super('Hook simulation aborted.');
+    this.name = 'AbortError';
+  }
+}
+
 class HookSimulationTerminationError extends Error {
   readonly code = 'hook.simulation.termination.unsettled';
 
@@ -121,7 +135,7 @@ const runWrapper = async (options: {
     return;
   }
   if (options.signal?.aborted) {
-    reject(new Error('Hook simulation aborted.'));
+    reject(new HookSimulationAbortError());
     return;
   }
 
@@ -174,7 +188,7 @@ const runWrapper = async (options: {
       }, terminationSettlementMs);
     }, terminationGraceMs);
   };
-  const onAbort = () => terminate(new Error('Hook simulation aborted.'));
+  const onAbort = () => terminate(new HookSimulationAbortError());
   const timeoutTimer = setTimeout(() => terminate(new Error('Hook simulation timed out.')), options.timeoutMs);
   options.signal?.addEventListener('abort', onAbort, { once: true });
   const append = (current: string, chunk: Buffer): string => {

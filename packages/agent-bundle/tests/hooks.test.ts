@@ -540,6 +540,7 @@ it('escalates timed-out and aborted wrapper process trees from TERM to KILL befo
     });
     setTimeout(() => controller.abort(), 25);
     await expect(pending).rejects.toThrow('Hook simulation aborted.');
+    await expect(pending).rejects.toMatchObject({ code: 'hook.simulation.aborted', name: 'AbortError' });
 
     let taskkillCalls = 0;
     const failedWindowsTaskkill = new HookService({

@@ -149,7 +149,7 @@ class RecordingService implements HookPlaygroundRouteService {
       return new Promise<HookPlaygroundSimulation>((_resolvePromise, rejectPromise) => {
         signal?.addEventListener('abort', () => {
           this.aborted = true;
-          rejectPromise(new Error('Hook simulation aborted.'));
+          rejectPromise(signal?.reason);
         });
         entered(simulationFixture);
       });
@@ -549,7 +549,7 @@ class DrainingService implements HookPlaygroundRouteService {
         this.aborts.push(operation);
         setTimeout(() => {
           this.settlements.push(operation);
-          rejectPromise(this.failures.get(operation) ?? new Error('Hook simulation aborted.'));
+          rejectPromise(this.failures.get(operation) ?? signal?.reason);
         }, 20);
       });
     });
@@ -684,6 +684,177 @@ it('refuses hook operations admitted once shutdown has begun', async () => {
     const rejected = await post(`${started.url}/api/hooks/simulations`, simulationBody);
     expect(rejected.status).toBe(503);
     expect(service.calls).toEqual([]);
+  } finally {
+    await started.close();
+  }
+});
+
+/** Re-enters shutdown from its own abort callback, as a cleanup listener would. */
+class ReentrantCloseService implements HookPlaygroundRouteService {
+  nested: Promise<void> | undefined;
+  routes: HookPlaygroundRoutes | undefined;
+  readonly #admitted: Promise<void>;
+  #admit!: () => void;
+
+  constructor() {
+    this.#admitted = new Promise<void>((resolvePromise) => { this.#admit = resolvePromise; });
+  }
+
+  get admitted(): Promise<void> {
+    return this.#admitted;
+  }
+
+  async list(_options: HookPlaygroundListOptions): Promise<readonly HookPlaygroundHook[]> {
+    return Object.freeze([hookFixture]);
+  }
+
+  async replay(
+    _replay: HookPlaygroundReplay,
+    options?: { readonly signal?: AbortSignal },
+  ): Promise<never> {
+    return this.#run(options?.signal);
+  }
+
+  async simulate(options: HookPlaygroundSimulationOptions): Promise<never> {
+    return this.#run(options.signal);
+  }
+
+  #run(signal: AbortSignal | undefined): Promise<never> {
+    this.#admit();
+    return new Promise<never>((_resolvePromise, rejectPromise) => {
+      const cancel = (): void => {
+        this.nested = this.routes?.close();
+        rejectPromise(signal?.reason);
+      };
+      if (signal === undefined || signal.aborted) cancel();
+      else signal.addEventListener('abort', cancel, { once: true });
+    });
+  }
+}
+
+it('publishes one shutdown outcome before any abort callback can re-enter close', async () => {
+  const service = new ReentrantCloseService();
+  const started = await startRoutes(service);
+  service.routes = started.routes;
+
+  try {
+    const simulation = post(`${started.url}/api/hooks/simulations`, simulationBody);
+    await service.admitted;
+
+    const first = started.routes.close();
+    expect(service.nested).toBe(first);
+    await first;
+    expect((await simulation).status).toBe(502);
+  } finally {
+    await started.close();
+  }
+});
+
+/** Begins shutdown synchronously while the route is still admitting the operation. */
+class ShutdownDuringAdmissionService implements HookPlaygroundRouteService {
+  aborted = false;
+  closing: Promise<void> | undefined;
+  routes: HookPlaygroundRoutes | undefined;
+  readonly #admitted: Promise<void>;
+  #admit!: () => void;
+
+  constructor() {
+    this.#admitted = new Promise<void>((resolvePromise) => { this.#admit = resolvePromise; });
+  }
+
+  get admitted(): Promise<void> {
+    return this.#admitted;
+  }
+
+  async list(_options: HookPlaygroundListOptions): Promise<readonly HookPlaygroundHook[]> {
+    return Object.freeze([hookFixture]);
+  }
+
+  async replay(
+    _replay: HookPlaygroundReplay,
+    options?: { readonly signal?: AbortSignal },
+  ): Promise<never> {
+    return this.#run(options?.signal);
+  }
+
+  async simulate(options: HookPlaygroundSimulationOptions): Promise<never> {
+    return this.#run(options.signal);
+  }
+
+  #run(signal: AbortSignal | undefined): Promise<never> {
+    this.closing = this.routes?.close();
+    this.#admit();
+    return new Promise<never>((_resolvePromise, rejectPromise) => {
+      const cancel = (): void => {
+        this.aborted = true;
+        rejectPromise(signal?.reason);
+      };
+      if (signal === undefined || signal.aborted) cancel();
+      else signal.addEventListener('abort', cancel, { once: true });
+    });
+  }
+}
+
+it('drains an operation whose service begins shutdown during its own admission', async () => {
+  const service = new ShutdownDuringAdmissionService();
+  const started = await startRoutes(service);
+  service.routes = started.routes;
+  const client = new AbortController();
+
+  try {
+    const simulation = fetch(`${started.url}/api/hooks/simulations`, {
+      body: JSON.stringify(simulationBody),
+      headers: jsonHeaders(),
+      method: 'POST',
+      signal: client.signal,
+    }).then((response) => response.status, () => undefined);
+    await service.admitted;
+
+    await service.closing;
+
+    expect(service.aborted).toBe(true);
+    expect(await simulation).toBe(502);
+  } finally {
+    client.abort();
+    await started.close();
+  }
+});
+
+it('reports a cleanup failure that reuses the executor cancellation message', async () => {
+  const service = new DrainingService();
+  const failure = new Error('Hook simulation aborted.');
+  service.failures.set('simulation', failure);
+  const started = await startRoutes(service);
+  const admitted = service.admitted('simulation');
+
+  try {
+    const simulation = post(`${started.url}/api/hooks/simulations`, simulationBody);
+    await admitted;
+
+    await expect(started.routes.close()).rejects.toMatchObject({
+      code: 'AB8034',
+      failures: [{ error: failure, operation: 'simulation' }],
+      name: 'HookPlaygroundCloseError',
+    });
+    expect((await simulation).status).toBe(502);
+  } finally {
+    await started.close().catch(() => undefined);
+  }
+});
+
+it('keeps a typed executor cancellation silent even when shutdown races its settlement', async () => {
+  const service = new DrainingService();
+  service.failures.set('simulation', Object.assign(new Error('Hook simulation aborted.'), { name: 'AbortError' }));
+  const started = await startRoutes(service);
+  const admitted = service.admitted('simulation');
+
+  try {
+    const simulation = post(`${started.url}/api/hooks/simulations`, simulationBody);
+    await admitted;
+
+    await expect(started.routes.close()).resolves.toBeUndefined();
+    expect(service.settlements).toEqual(['simulation']);
+    expect((await simulation).status).toBe(502);
   } finally {
     await started.close();
   }
