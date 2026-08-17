@@ -251,7 +251,11 @@ const traceEntry = (value: unknown): McpSessionTraceEntry | McpSessionTraceRepla
 
 const traceOverflow = (value: unknown): McpSessionTraceReplayGap | undefined => {
   if (value === undefined) return undefined;
-  if (!isRecord(value) || !Number.isSafeInteger(value.afterSequence) || !Number.isSafeInteger(value.droppedThroughSequence)) {
+  if (
+    !isRecord(value) ||
+    typeof value.afterSequence !== 'number' || !Number.isSafeInteger(value.afterSequence) ||
+    typeof value.droppedThroughSequence !== 'number' || !Number.isSafeInteger(value.droppedThroughSequence)
+  ) {
     throw invalidTrace();
   }
   if (value.afterSequence < 0 || value.droppedThroughSequence < value.afterSequence) throw invalidTrace();
@@ -395,7 +399,7 @@ export class McpSessionController {
     }
     try {
       if (constructionFailed) throw await this.#failConstruction(client, transport, constructionReason);
-      if (this.#state !== 'idle' || this.#closing) throw await this.#failConstruction(
+      if (this.#state !== 'idle' || this.#closing || client === undefined || transport === undefined) throw await this.#failConstruction(
         client,
         transport,
         new McpSessionControllerError('MCP session controller was closed while opening'),

@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState, type Ref } from 'react';
 
 import {
   type McpAppHostContext,
+  type McpAppJsonObject,
   type McpAppJsonValue,
   type McpAppPreview as McpAppPreviewResponse,
   type McpAppPreviewCreateRequest,
@@ -13,7 +14,6 @@ import {
 import {
   createMcpAppFrameRelay,
   type McpAppFrameIframe,
-  type McpAppFrameRelayError,
   type McpAppFrameRelayOptions,
   type McpAppFrameWindow,
 } from './mcp-app-frame.tsx';
@@ -61,11 +61,9 @@ export type McpAppPreviewState =
   | Readonly<{ readonly fallback: McpAppPreviewFallback; readonly phase: 'fallback'; readonly preview: McpAppPreviewResponse }>
   | Readonly<{ readonly phase: 'ready'; readonly preview: McpAppPreviewResponse; readonly resource: McpAppCanonicalResource }>;
 
-export interface McpAppCanonicalResource {
-  readonly csp?: McpAppJsonValue;
+export interface McpAppCanonicalResource extends McpAppJsonObject {
   readonly html: string;
   readonly kind: 'resource';
-  readonly permissions?: McpAppJsonValue;
 }
 
 export interface McpAppPreviewProps extends Omit<McpAppPreviewControllerOptions, 'frameRelayFactory'> {
@@ -135,7 +133,7 @@ const fallbackFor = (
   result: McpAppJsonValue,
   reason = 'invalid-resource',
 ): McpAppPreviewFallback => {
-  if (isRecord(resource) && resource.kind === 'fallback' && typeof resource.reason === 'string') {
+  if (resource !== undefined && isRecord(resource) && resource.kind === 'fallback' && typeof resource.reason === 'string') {
     return Object.freeze({
       input: resource.input ?? input,
       reason: resource.reason,
@@ -302,7 +300,7 @@ export class McpAppPreviewController {
     }
   }
 
-  #relayError(error: McpAppFrameRelayError | Error): void {
+  #relayError(error: unknown): void {
     if (this.#closed) return;
     this.#setState(Object.freeze({
       fallback: fallbackFor(this.#preview?.resource, this.#input, this.#result, 'preview-error'),

@@ -74,7 +74,7 @@ describe('MCP JSON input', () => {
   });
 
   it('blocks invalid raw JSON from submitting stale canonical input', () => {
-    const submitted: readonly Readonly<Record<string, unknown>>[] = [];
+    const submitted: Readonly<Record<string, unknown>>[] = [];
     const submit = (value: Readonly<Record<string, unknown>>) => submitted.push(value);
 
     expect(submitJsonRecord({ stale: true }, submit, '{"next":')).toBe(false);
@@ -92,7 +92,7 @@ describe('MCP JSON input', () => {
   });
 
   it('renders an accessible mode group and submits equivalent form and raw payloads through one callback', () => {
-    const submitted: readonly Readonly<Record<string, unknown>>[] = [];
+    const submitted: Readonly<Record<string, unknown>>[] = [];
     const submit = (value: Readonly<Record<string, unknown>>) => submitted.push(value);
     const formValue = applyFormEdit({}, 'count', 2);
     const rawValue = parseRawJsonRecord('{"count":2}');

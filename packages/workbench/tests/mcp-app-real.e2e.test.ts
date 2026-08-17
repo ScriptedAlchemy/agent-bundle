@@ -151,8 +151,8 @@ e2e('runs a generated SDK-v2 App through the real foreground session and separat
     page.on('pageerror', (error) => pageErrors.push(error));
     page.on('request', (request) => {
       const requestUrl = new URL(request.url());
-      const token = request.headerValue('x-agent-bundle-session');
-      if (token !== null) foregroundToken = token;
+      const token = request.headers()['x-agent-bundle-session'];
+      if (token !== undefined) foregroundToken = token;
       if (requestUrl.origin !== foregroundOrigin || !requestUrl.pathname.startsWith('/api/mcp/apps/')) return;
       appRequests.push({ body: requestBody(request.postData()), path: requestUrl.pathname });
     });

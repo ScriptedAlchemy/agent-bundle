@@ -625,13 +625,14 @@ it('rejects non-browser provenance and wrong tokens even when a canonical Host t
   });
 
   try {
-    for (const headers of [
+    const rejectedHeaders: readonly Readonly<Record<string, string>>[] = [
       { 'sec-fetch-site': 'cross-site', 'x-agent-bundle-session': server.sessionToken },
       { 'sec-fetch-site': 'none', 'x-agent-bundle-session': server.sessionToken },
       { 'x-agent-bundle-session': server.sessionToken },
       { 'sec-fetch-site': 'same-origin', 'x-agent-bundle-session': 'wrong-token' },
       { origin: 'http://invalid.example', 'sec-fetch-site': 'same-origin', 'x-agent-bundle-session': server.sessionToken },
-    ]) {
+    ];
+    for (const headers of rejectedHeaders) {
       const response = await request(headers);
       expect(response.status).toBe(403);
     }

@@ -338,7 +338,7 @@ const previewProfileName = (state: McpAppPreviewState, fallback: McpAppPreviewPr
 /** Page-owned composition keeps the approved preview close promise ahead of session teardown. */
 const McpPageAppPreview = ({ client, host, onControllerChange, previewProfile, source }: McpPageAppPreviewProps) => {
   const [state, setState] = useState<McpAppPreviewState>(() => Object.freeze({ phase: 'loading' }));
-  const controller = useRef<McpAppPreviewController>();
+  const controller = useRef<McpAppPreviewController | undefined>(undefined);
   const iframe = useRef<HTMLIFrameElement>(null);
 
   useEffect(() => {
@@ -409,8 +409,8 @@ export const McpPage = ({ appPreviewClient, controller, epochOptions, initialBin
   const [appPreviewProfile, setAppPreviewProfile] = useState<McpAppPreviewProfile>('portable');
   const [appHost] = useState(browserMcpAppHost);
   const actionSession = useRef(createMcpPageActionSession());
-  const appPreviewClosePromise = useRef<Promise<void>>();
-  const appPreviewController = useRef<McpAppPreviewController>();
+  const appPreviewClosePromise = useRef<Promise<void> | undefined>(undefined);
+  const appPreviewController = useRef<McpAppPreviewController | undefined>(undefined);
   const appPreviewOpenGeneration = useRef(0);
   const controllerIdentity = useRef(controller);
   const requestNumber = useRef(0);
@@ -442,17 +442,12 @@ export const McpPage = ({ appPreviewClient, controller, epochOptions, initialBin
     const current = appPreviewController.current;
     appPreviewController.current = undefined;
     setAppPreviewBusy(true);
-    const close = (async (): Promise<void> => {
-      try {
-        await current?.close();
-      } finally {
-        if (appPreviewClosePromise.current === close) {
-          appPreviewClosePromise.current = undefined;
-          setAppPreview(undefined);
-          setAppPreviewBusy(false);
-        }
-      }
-    })();
+    const close: Promise<void> = Promise.resolve(current?.close()).finally(() => {
+      if (appPreviewClosePromise.current !== close) return;
+      appPreviewClosePromise.current = undefined;
+      setAppPreview(undefined);
+      setAppPreviewBusy(false);
+    });
     appPreviewClosePromise.current = close;
     return close;
   };

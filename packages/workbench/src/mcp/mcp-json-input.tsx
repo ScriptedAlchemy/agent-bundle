@@ -65,6 +65,9 @@ const hasOnlyKeys = (value: Record<string, unknown>, allowed: ReadonlySet<string
 const isFiniteNumber = (value: unknown): value is number =>
   typeof value === 'number' && Number.isFinite(value);
 
+const isNonNegativeInteger = (value: unknown): value is number =>
+  isFiniteNumber(value) && Number.isInteger(value) && value >= 0;
+
 const isSupportedDefault = (type: string, value: unknown): boolean => {
   switch (type) {
     case 'string':
@@ -93,8 +96,8 @@ const isSupportedFieldSchema = (value: unknown): value is FormFieldSchema => {
 
   if (value.minimum !== undefined && !isFiniteNumber(value.minimum)) return false;
   if (value.maximum !== undefined && !isFiniteNumber(value.maximum)) return false;
-  if (value.minLength !== undefined && (!Number.isInteger(value.minLength) || value.minLength < 0)) return false;
-  if (value.maxLength !== undefined && (!Number.isInteger(value.maxLength) || value.maxLength < 0)) return false;
+  if (value.minLength !== undefined && !isNonNegativeInteger(value.minLength)) return false;
+  if (value.maxLength !== undefined && !isNonNegativeInteger(value.maxLength)) return false;
   return true;
 };
 

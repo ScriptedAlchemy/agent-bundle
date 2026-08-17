@@ -139,6 +139,7 @@ e2e('opens one real epoch MCP session and keeps its playground operations respon
       port: 0,
       root: project.root,
     });
+    const foregroundOrigin = server.url;
     const artifact = server.status().artifact;
     if (artifact.state === 'missing') throw new Error('Expected an active fixture artifact epoch.');
     const epochId = artifact.activeEpoch.id;
@@ -151,12 +152,12 @@ e2e('opens one real epoch MCP session and keeps its playground operations respon
     if (compiledEntry === undefined) throw new Error('Expected the fixture MCP manifest to include its compiled entry.');
     const pageErrors: Error[] = [];
     page.on('pageerror', (error) => pageErrors.push(error));
-    await page.goto(`${server.url}#mcp`);
+    await page.goto(`${foregroundOrigin}#mcp`);
     await expect(page.getByRole('heading', { name: 'MCP playground' })).toBeVisible({ timeout: browserTimeout });
     await page.locator('#mcp-target').selectOption('portable');
     await page.locator('#mcp-server-name').fill('fixture');
     const opened = page.waitForResponse((response) =>
-      response.url() === `${server.url}/api/mcp/sessions` && response.request().method() === 'POST');
+      response.url() === `${foregroundOrigin}/api/mcp/sessions` && response.request().method() === 'POST');
     await page.getByRole('button', { name: 'Open MCP session' }).click();
     const openedSession = await (await opened).json() as { readonly session: Readonly<{
       readonly binding: Readonly<{ readonly epochId: string; readonly serverName: string; readonly target: string }>;
@@ -208,7 +209,8 @@ e2e('opens one real epoch MCP session and keeps its playground operations respon
       }>;
       return trace.direction === 'client' && trace.kind === 'frame' && trace.message?.jsonrpc === '2.0' &&
         trace.message.method === 'tools/call' && trace.message.params?.name === 'echo' &&
-        trace.message.params.arguments?.message === 'equivalent' && Number.isSafeInteger(trace.sequence) && trace.sequence > 0;
+        trace.message.params.arguments?.message === 'equivalent' && trace.sequence !== undefined &&
+        Number.isSafeInteger(trace.sequence) && trace.sequence > 0;
     }), { timeout: browserTimeout }).toBe(true);
 
     const download = page.waitForEvent('download');
@@ -246,7 +248,7 @@ e2e('opens one real epoch MCP session and keeps its playground operations respon
     await expect(page.getByRole('button', { name: 'Open MCP session' })).toBeEnabled({ timeout: browserTimeout });
     await expect(history).toContainText('No completed invocations yet.', { timeout: browserTimeout });
     const reopened = page.waitForResponse((response) =>
-      response.url() === `${server.url}/api/mcp/sessions` && response.request().method() === 'POST');
+      response.url() === `${foregroundOrigin}/api/mcp/sessions` && response.request().method() === 'POST');
     await page.getByRole('button', { name: 'Open MCP session' }).click();
     const reopenedSession = await (await reopened).json() as { readonly session: Readonly<{ readonly id: string }> };
     expect(reopenedSession.session.id).not.toBe(openedSession.session.id);
@@ -279,6 +281,7 @@ e2e('renders the safe launch configuration for one real artifact MCP session', {
       port: 0,
       root: project.root,
     });
+    const foregroundOrigin = server.url;
     const artifact = server.status().artifact;
     if (artifact.state === 'missing') throw new Error('Expected an active fixture artifact epoch.');
     const epochId = artifact.activeEpoch.id;
@@ -291,12 +294,12 @@ e2e('renders the safe launch configuration for one real artifact MCP session', {
     if (compiledEntry === undefined) throw new Error('Expected the fixture MCP manifest to include its compiled entry.');
     const pageErrors: Error[] = [];
     page.on('pageerror', (error) => pageErrors.push(error));
-    await page.goto(`${server.url}#mcp`);
+    await page.goto(`${foregroundOrigin}#mcp`);
     await expect(page.getByRole('heading', { name: 'MCP playground' })).toBeVisible({ timeout: browserTimeout });
     await page.locator('#mcp-target').selectOption('portable');
     await page.locator('#mcp-server-name').fill('fixture');
     const opened = page.waitForResponse((response) =>
-      response.url() === `${server.url}/api/mcp/sessions` && response.request().method() === 'POST');
+      response.url() === `${foregroundOrigin}/api/mcp/sessions` && response.request().method() === 'POST');
     await page.getByRole('button', { name: 'Open MCP session' }).click();
     await opened;
     await expect(page.locator('.mcp-page-phase')).toContainText('Session ready', { timeout: browserTimeout });

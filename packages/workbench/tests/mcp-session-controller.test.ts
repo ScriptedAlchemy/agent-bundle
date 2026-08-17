@@ -6,6 +6,7 @@ import {
   type McpSessionControllerRoutes,
   type McpSessionControllerTransport,
 } from '../src/mcp/mcp-session-controller.ts';
+import type { McpRouteCatalog } from '../src/mcp/mcp-route-client.ts';
 
 const binding = Object.freeze({ epochId: 'epoch-a', serverName: 'weather', target: 'portable' as const });
 const connection = Object.freeze({
@@ -37,7 +38,7 @@ const settledWithin = async <Value>(
   promise: Promise<Value>,
   timeout = 50,
 ): Promise<PromiseSettledResult<Value> | Readonly<{ readonly status: 'pending' }>> => Promise.race([
-  promise.then<PromiseSettledResult<Value>>(
+  promise.then<PromiseSettledResult<Value>, PromiseSettledResult<Value>>(
     (value) => ({ status: 'fulfilled', value }),
     (reason: unknown) => ({ reason, status: 'rejected' }),
   ),
@@ -69,6 +70,7 @@ const fakeTransport = (): McpSessionControllerTransport & { readonly events: str
   return {
     close: async () => { events.push('transport.close'); },
     events,
+    send: async () => undefined,
     session: Object.freeze({ binding, connection, id: 'session-weather', timeoutMs: 5_000 }),
     start: async () => { events.push('transport.start'); },
   };
@@ -96,7 +98,7 @@ const emptyRoutes: McpSessionControllerRoutes = {
 };
 
 it('connects the exact artifact binding then atomically publishes catalog and config while trace stays independently live', async () => {
-  const catalog = deferred<Readonly<Record<string, readonly unknown[]>>>();
+  const catalog = deferred<McpRouteCatalog>();
   const config = deferred<unknown>();
   const stream = traceStream();
   const routes: McpSessionControllerRoutes = {
@@ -531,6 +533,7 @@ it('closes a transport returned after its factory closes admission without reviv
       events.push('transport.close');
       await closeGate.promise;
     },
+    send: async () => undefined,
     session: Object.freeze({ binding, connection, id: 'session-weather', timeoutMs: 5_000 }),
     start: async () => undefined,
   };
@@ -595,6 +598,7 @@ it('retains local client and transport cleanup failures when a client factory cl
       events.push('transport.close');
       throw transportCloseFailure;
     },
+    send: async () => undefined,
     session: Object.freeze({ binding, connection, id: 'session-weather', timeoutMs: 5_000 }),
     start: async () => undefined,
   };
@@ -659,6 +663,7 @@ it('threads the admitted timeout through open while keeping it outside the immut
   let received: unknown;
   const transport: McpSessionControllerTransport = {
     close: async () => undefined,
+    send: async () => undefined,
     session: Object.freeze({ binding, connection, id: 'session-weather', timeoutMs: 12_345 }),
     start: async () => undefined,
   };
@@ -791,6 +796,7 @@ it('cancels active SDK work through its transport signal and closes trace before
   };
   const transport: McpSessionControllerTransport = {
     close: async () => { events.push('transport.close'); },
+    send: async () => undefined,
     session: Object.freeze({ binding, connection, id: 'session-weather', timeoutMs: 5_000 }),
     start: async () => undefined,
   };
@@ -922,6 +928,7 @@ it('admits one opening session and disposes that exact client and transport when
       if (transports > 1) throw new Error('A second transport must not be created.');
       return {
         close: async () => { events.push('transport.close'); },
+        send: async () => undefined,
         session: Object.freeze({ binding, connection, id: 'session-weather', timeoutMs: 5_000 }),
         start: async () => undefined,
       };
@@ -964,6 +971,7 @@ it('retains a failed connection and both cleanup failures for every subsequent c
         events.push('transport.close');
         throw transportCloseFailure;
       },
+      send: async () => undefined,
       session: Object.freeze({ binding, connection, id: 'session-weather', timeoutMs: 5_000 }),
       start: async () => undefined,
     }),
@@ -1053,6 +1061,7 @@ it('gates post-close operations before their routes or client calls and drains a
   };
   const transport: McpSessionControllerTransport = {
     close: async () => { events.push('transport.close'); },
+    send: async () => undefined,
     session: Object.freeze({ binding, connection, id: 'session-weather', timeoutMs: 5_000 }),
     start: async () => undefined,
   };
@@ -1153,6 +1162,7 @@ it('rejects one shared close outcome after every delayed resource cleanup is att
       events.push('transport.close.reject');
       throw transportCloseFailure;
     },
+    send: async () => undefined,
     session: Object.freeze({ binding, connection, id: 'session-weather', timeoutMs: 5_000 }),
     start: async () => undefined,
   };
