@@ -273,6 +273,45 @@ it('queues one latest selected-fixture run only after a same-provider generation
   expect(effectFor(reduce(conflicted, { bootstrap: nextGeneration, type: 'bootstrap.received' }))).toBeUndefined();
 });
 
+it('announces each runtime generation failure once without replacing the selected last-good presentation', () => {
+  const selected = reduce(model(), { runId: 'run-a', type: 'selection.run' }, { tab: 'result', type: 'selection.tab' });
+  const failedWithoutGeneration = Object.freeze({
+    occurredAt: '2026-08-15T12:00:00.000Z',
+    payload: Object.freeze({ providerSessionId: 'provider-a', type: 'runtime.generation.failed' as const }),
+    sequence: 1,
+    type: 'runtime.event' as const,
+  }) satisfies ProjectEventMessage;
+  const failed = reduce(selected, { event: failedWithoutGeneration, type: 'event.received' });
+  const repeated = reduce(failed, { event: Object.freeze({ ...failedWithoutGeneration, sequence: 2 }), type: 'event.received' });
+  const generationBVector = vector({ runtimeGenerationId: 'generation-b' });
+  const recovered = reduce(repeated, {
+    bootstrap: bootstrap({
+      history: [run('run-generation-b', { vector: generationBVector })],
+      status: status({ activeVector: generationBVector, lastGoodVector: generationBVector }),
+    }),
+    type: 'bootstrap.received',
+  });
+  const nextFailure = reduce(recovered, { event: Object.freeze({ ...failedWithoutGeneration, sequence: 3 }), type: 'event.received' });
+
+  expect(failed.announcements).toEqual([{
+    id: 'runtime-generation-failed:provider-a:generation-a',
+    message: 'Runtime generation failed. The last good result remains available.',
+    politeness: 'assertive',
+  }]);
+  expect(failed.selectedRunId).toBe(selected.selectedRunId);
+  expect(failed.selectedTab).toBe('result');
+  expect(failed.lastGoodRunId).toBe(selected.lastGoodRunId);
+  expect(repeated.announcements).toEqual(failed.announcements);
+  expect(nextFailure.announcements).toEqual([
+    ...failed.announcements,
+    {
+      id: 'runtime-generation-failed:provider-a:generation-b',
+      message: 'Runtime generation failed. The last good result remains available.',
+      politeness: 'assertive',
+    },
+  ]);
+});
+
 it('turns a replay gap into exactly one bootstrap and clears HMR connection knowledge', () => {
   const connected = reduce(model(), { event: event(1, 'runtime.hmr.client-connected', { connectionCount: 2, surfaceId: 'weather' }), type: 'event.received' });
   const gap = { earliestAvailableSequence: 6, latestDroppedSequence: 5, requestedAfterSequence: 1, type: 'replay.gap' } as const;
@@ -353,7 +392,7 @@ it('preserves valid selection through HMR and falls back with a visible announce
   expect(preserved.staleIdentity).toMatchObject({ selected: { runtimeGenerationId: 'generation-a' }, current: { runtimeGenerationId: 'generation-b' } });
   expect(fallback.selectedSurfaceId).toBe('other');
   expect(fallback.selectedTarget).toBe('claude');
-  expect(fallback.announcements.at(-1)).toMatch(/surface/i);
+  expect(fallback.announcements.at(-1)?.message).toMatch(/surface/i);
 });
 
 it('clears incompatible provider history and retains a labelled previous last-good snapshot until the new provider succeeds', () => {
@@ -373,6 +412,8 @@ it('clears incompatible provider history and retains a labelled previous last-go
 
   expect(restarted.history.map((entry) => entry.id)).toEqual(['new-running']);
   expect(restarted.previousProviderLastGood).toMatchObject({ label: 'Previous provider session', run: { id: 'last-good' } });
+  expect(Object.isFrozen(restarted.previousProviderLastGood)).toBe(true);
+  expect(Object.isFrozen(restarted.previousProviderLastGood?.run)).toBe(true);
   expect(restarted.hmrClientCountKnownSurfaces).toEqual([]);
   expect(recovered.previousProviderLastGood).toBeUndefined();
 });

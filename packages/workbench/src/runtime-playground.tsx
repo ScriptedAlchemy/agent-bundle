@@ -6,6 +6,7 @@ import type {
   DevRuntimeRun,
   DevRuntimeStateIdentity,
   DevRuntimeStateResetRequest,
+  DevRuntimeSurface,
 } from '../../agent-bundle/src/dev/runtime-protocol.ts';
 import type { ProjectEventMessage, ProjectReplayGap } from '../../agent-bundle/src/dev/types.ts';
 import { RuntimeClientError, type RuntimeBootstrap } from './runtime-client.ts';
@@ -389,7 +390,16 @@ export const runtimeDataAttributesFor = (model: RuntimeModel): Readonly<Record<s
   });
 };
 
-const historyLabel = (run: DevRuntimeRun): string => [
+const operationKindLabel = (surface: DevRuntimeSurface | undefined): string => {
+  if (surface?.kind === 'hook') return 'Hook operation';
+  if (surface?.kind === 'mcp-app') return 'MCP App operation';
+  if (surface?.kind === 'mcp-tool') return 'MCP tool operation';
+  return 'Runtime operation';
+};
+
+const historyLabel = (run: DevRuntimeRun, surface: DevRuntimeSurface | undefined): string => [
+  operationKindLabel(surface),
+  'Session-only / ephemeral — not durable artifact history',
   run.status,
   run.surfaceId,
   run.target,
@@ -398,6 +408,17 @@ const historyLabel = (run: DevRuntimeRun): string => [
   `state ${run.vector.stateVersion}`,
   new Intl.DateTimeFormat(undefined, { dateStyle: 'short', timeStyle: 'medium' }).format(new Date(run.startedAt)),
 ].join(' · ');
+
+const previousProviderOutput = (run: DevRuntimeRun): string => {
+  if (run.status !== 'succeeded' || run.result === undefined) return 'No agent-visible output was retained for this prior provider run.';
+  const output = run.result.agentVisible ?? run.result.modelVisible ?? run.result.native;
+  if (output === undefined) return 'No agent-visible output was retained for this prior provider run.';
+  try {
+    return JSON.stringify(output, null, 2) ?? 'No agent-visible output was retained for this prior provider run.';
+  } catch {
+    return '[Unserializable prior provider output]';
+  }
+};
 
 const resetSeedLabel = (request: DevRuntimeStateResetRequest): string =>
   request.seed === undefined ? 'No fixture seed' : JSON.stringify(request.seed);
@@ -524,7 +545,9 @@ export const RuntimePlayground = ({ controller, liveMcpPageAdapter = runtimePlay
       <div><dt>Evidence</dt><dd>{profile?.evidence ?? 'Not available'}</dd></div>
     </dl>
     {model.replayGap === undefined ? undefined : <p className="runtime-gap" role="alert">Events {model.replayGap.requestedAfterSequence + 1}–{model.replayGap.latestDroppedSequence} were unavailable.</p>}
-    {model.announcements.map((message, index) => <p aria-live="polite" className="runtime-announcement" key={`${message}-${index}`}>{message}</p>)}
+    {model.announcements.map((announcement) => announcement.politeness === 'assertive'
+      ? <p className="runtime-announcement" key={announcement.id} role="alert">{announcement.message}</p>
+      : <p aria-live="polite" className="runtime-announcement" key={announcement.id}>{announcement.message}</p>)}
     <div className="runtime-controls">
       <label>Surface<select aria-label="Runtime surface" disabled={interactionLocked} onChange={(event) => controller.dispatch({ surfaceId: event.currentTarget.value, type: 'selection.surface' })} value={surface?.id ?? ''}>
         {model.surfaces.map((entry) => <option key={entry.id} value={entry.id}>{entry.label}</option>)}
@@ -579,9 +602,15 @@ export const RuntimePlayground = ({ controller, liveMcpPageAdapter = runtimePlay
     </div>}
     <div inert={interactionLocked || undefined}>
     {requestError === undefined ? undefined : <p className="runtime-request-error" ref={requestErrorRef} role="alert" tabIndex={-1}>{requestError}</p>}
+    {model.previousProviderLastGood === undefined ? undefined : <section aria-label="Previous provider session" className="runtime-previous-provider">
+      <h2>Previous provider session</h2>
+      <p>Last-good output from the prior provider session is retained for comparison. It is session-only / ephemeral — not durable artifact history.</p>
+      <p><strong>Operation:</strong> {operationKindLabel(model.surfaces.find((entry) => entry.id === model.previousProviderLastGood?.run.surfaceId))} · {model.previousProviderLastGood.run.surfaceId}</p>
+      <pre><code>{previousProviderOutput(model.previousProviderLastGood.run)}</code></pre>
+    </section>}
     <div className="runtime-layout">
       <section aria-label="Runtime run history" className="runtime-history"><h2>Run history</h2><ol>{model.history.map((entry) => <li data-runtime-run-id={entry.id} key={entry.id}>
-        <button aria-pressed={entry.id === model.selectedRunId} disabled={interactionLocked} onClick={controller.dispatch.bind(controller, { runId: entry.id, type: 'selection.run' })} type="button">{historyLabel(entry)}</button>
+        <button aria-pressed={entry.id === model.selectedRunId} disabled={interactionLocked} onClick={controller.dispatch.bind(controller, { runId: entry.id, type: 'selection.run' })} type="button">{historyLabel(entry, model.surfaces.find((surfaceEntry) => surfaceEntry.id === entry.surfaceId))}</button>
         <button disabled={interactionLocked} onClick={controller.dispatch.bind(controller, { runId: entry.id, type: 'draft.from-run' })} type="button">Edit as new draft</button>
         <button disabled={interactionLocked} onClick={controller.dispatch.bind(controller, { mode: 'exact', runId: entry.id, type: 'replay.request' })} type="button">Replay exact</button>
         <button disabled={interactionLocked} onClick={controller.dispatch.bind(controller, { mode: 'latest', runId: entry.id, type: 'replay.request' })} type="button">Replay latest</button>

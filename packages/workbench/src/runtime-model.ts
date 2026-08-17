@@ -34,6 +34,12 @@ export interface RuntimeDraft {
   readonly raw: string;
 }
 
+export interface RuntimeAnnouncement {
+  readonly id: string;
+  readonly message: string;
+  readonly politeness: 'assertive' | 'polite';
+}
+
 export interface RuntimeStaleIdentity {
   readonly current: RuntimeVector;
   readonly selected: RuntimeVector;
@@ -87,7 +93,7 @@ export type RuntimeConfirmation =
 
 export interface RuntimeModel {
   readonly activeEffect?: RuntimeQueuedEffect;
-  readonly announcements: readonly string[];
+  readonly announcements: readonly RuntimeAnnouncement[];
   readonly confirmation?: RuntimeConfirmation;
   readonly deferredOperation?: RuntimeDeferredForegroundIntent;
   readonly draft: RuntimeDraft;
@@ -149,6 +155,7 @@ export type RuntimeModelAction =
   | Readonly<{ readonly spanId: string; readonly type: 'trace.toggle' }>;
 
 const emptyStrings = Object.freeze([]) as readonly string[];
+const emptyAnnouncements = Object.freeze([]) as readonly RuntimeAnnouncement[];
 const emptyHistory = Object.freeze([]) as readonly DevRuntimeRun[];
 const emptySurfaces = Object.freeze([]) as readonly DevRuntimeSurface[];
 const emptyProfiles = Object.freeze([]) as readonly RuntimeProfileOption[];
@@ -365,8 +372,23 @@ const selectedRunIdFor = (history: readonly DevRuntimeRun[], selectedRunId: stri
 
 const update = (model: RuntimeModel, change: Partial<RuntimeModel>): RuntimeModel => Object.freeze({ ...model, ...change });
 
-const announced = (model: RuntimeModel, message: string): RuntimeModel => update(model, {
-  announcements: Object.freeze([...model.announcements, message]),
+const announced = (model: RuntimeModel, announcement: RuntimeAnnouncement): RuntimeModel => {
+  if (model.announcements.some((entry) => entry.id === announcement.id)) return model;
+  return update(model, {
+    announcements: Object.freeze([...model.announcements, Object.freeze(announcement)]),
+  });
+};
+
+const fallbackAnnouncement = (model: RuntimeModel, message: string): RuntimeAnnouncement => Object.freeze({
+  id: `runtime-fallback:${model.lastConsumedEventSequence}:${model.announcements.length}`,
+  message,
+  politeness: 'polite',
+});
+
+const generationFailureAnnouncement = (providerSessionId: string, runtimeGenerationId: string | undefined): RuntimeAnnouncement => Object.freeze({
+  id: `runtime-generation-failed:${providerSessionId}:${runtimeGenerationId ?? 'unknown'}`,
+  message: 'Runtime generation failed. The last good result remains available.',
+  politeness: 'assertive',
 });
 
 const currentSurface = (model: RuntimeModel): DevRuntimeSurface | undefined =>
@@ -439,7 +461,7 @@ const operationForDeferredIntent = (model: RuntimeModel, intent: RuntimeDeferred
 
 const deferForegroundOperation = (model: RuntimeModel, operation: RuntimeForegroundEffect): RuntimeModel => {
   if (model.deferredOperation !== undefined) {
-    return announced(model, 'A foreground runtime operation is already queued; wait for it to drain.');
+    return announced(model, fallbackAnnouncement(model, 'A foreground runtime operation is already queued; wait for it to drain.'));
   }
   return update(model, { deferredOperation: deferredIntentFor(operation) });
 };
@@ -580,8 +602,8 @@ const bootstrapModel = (model: RuntimeModel, bootstrap: RuntimeBootstrap): Runti
     status: nextStatus,
     surfaces: nextSurfaces,
   });
-  if (model.selectedSurfaceId !== undefined && model.selectedSurfaceId !== surface?.id) next = announced(next, 'Selected runtime surface is no longer available; provider defaults were selected.');
-  else if (model.selectedTarget !== undefined && model.selectedTarget !== target) next = announced(next, 'Selected runtime target is no longer available; provider defaults were selected.');
+  if (model.selectedSurfaceId !== undefined && model.selectedSurfaceId !== surface?.id) next = announced(next, fallbackAnnouncement(next, 'Selected runtime surface is no longer available; provider defaults were selected.'));
+  else if (model.selectedTarget !== undefined && model.selectedTarget !== target) next = announced(next, fallbackAnnouncement(next, 'Selected runtime target is no longer available; provider defaults were selected.'));
   return next;
 };
 
@@ -617,7 +639,7 @@ export const createRuntimeModel = ({ bootstrap, defaultProfileId, profiles }: Ru
     throw new TypeError('Runtime default profile must be one of the registered profiles.');
   }
   const base: RuntimeModel = Object.freeze({
-    announcements: emptyStrings,
+    announcements: emptyAnnouncements,
     draft: runtimeDraftFor(undefined),
     expandedTraceSpanIds: emptyStrings,
     history: emptyHistory,
@@ -703,6 +725,12 @@ const receivedEvent = (model: RuntimeModel, message: ProjectEventMessage): Runti
         triggerSequence: message.sequence,
       }),
     }), message.sequence);
+  }
+  if (event.type === 'runtime.generation.failed') {
+    return queueBootstrap(announced(advanced, generationFailureAnnouncement(
+      event.providerSessionId,
+      event.runtimeGenerationId ?? advanced.status?.activeVector?.runtimeGenerationId,
+    )), message.sequence);
   }
   return queueBootstrap(withActivationRefreshCursor(advanced, message.sequence), message.sequence);
 };

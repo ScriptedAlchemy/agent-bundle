@@ -526,6 +526,39 @@ it('renders provider-default fallback controls and retained announcements withou
   expect(markup).not.toContain('<iframe');
 });
 
+it('renders a generation-failure alert without replacing the Result selection', () => {
+  const controller = createRuntimePlaygroundController({ bootstrap: bootstrap(), client: clientFor(), profiles });
+
+  controller.dispatch({ event: runtimeEvent(1, 'runtime.generation.failed'), type: 'event.received' });
+  const markup = renderToStaticMarkup(createElement(RuntimePlayground, { controller }));
+
+  expect(controller.model.selectedTab).toBe('result');
+  expect(controller.model.selectedRunId).toBe('01');
+  expect(markup).toContain('role="alert"');
+  expect(markup).toContain('Runtime generation failed. The last good result remains available.');
+});
+
+it('renders previous-provider last-good output separately from session-only runtime history', () => {
+  const controller = createRuntimePlaygroundController({ bootstrap: bootstrap(), client: clientFor(), profiles });
+  const beforeRestartMarkup = renderToStaticMarkup(createElement(RuntimePlayground, { controller }));
+  const providerBVector = Object.freeze({ ...vector, providerSessionId: 'provider-b', runtimeGenerationId: 'generation-b' });
+  controller.dispatch({
+    bootstrap: bootstrap({
+      history: Object.freeze([]),
+      providerSessionId: 'provider-b',
+      status: Object.freeze({ ...status, activeVector: providerBVector, lastGoodVector: providerBVector }),
+    }),
+    type: 'bootstrap.received',
+  });
+  const markup = renderToStaticMarkup(createElement(RuntimePlayground, { controller }));
+
+  expect(markup).toContain('Previous provider session');
+  expect(markup).toContain('Last-good output from the prior provider session');
+  expect(markup).toContain('Hook operation');
+  expect(beforeRestartMarkup).toContain('Session-only / ephemeral — not durable artifact history');
+  expect(markup).toContain('&quot;city&quot;: &quot;London&quot;');
+});
+
 it('initializes all provider history items without truncating the server-owned fifty item window', () => {
   const history = Object.freeze(Array.from({ length: 50 }, (_, index) => run(String(50 - index).padStart(2, '0'))));
   const controller = createRuntimePlaygroundController({ bootstrap: bootstrap({ history }), client: clientFor(), profiles });

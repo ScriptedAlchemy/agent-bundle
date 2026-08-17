@@ -244,7 +244,9 @@ e2e('activates an edited RSC generation and replays the selected hook without re
     await raw.fill('{"repair":');
     await expect(page.locator('#runtime-input-raw-error')).toBeVisible();
     const diagnostics = page.getByRole('tab', { name: 'Diagnostics', exact: true });
-    await diagnostics.click();
+    const result = page.getByRole('tab', { name: 'Result', exact: true });
+    await result.click();
+    await expect(result).toHaveAttribute('aria-selected', 'true');
     const selectedHistory = history.locator('button[aria-pressed="true"]');
     await expect(selectedHistory).toHaveCount(1);
     const selectedHistoryLabel = await selectedHistory.textContent();
@@ -289,7 +291,6 @@ e2e('activates an edited RSC generation and replays the selected hook without re
       { timeout: browserTimeout },
     );
 
-    const sourceBuildDiagnostic = page.getByLabel('Runtime diagnostics evidence');
     const sourceBuildFailed = await identity.evaluate((element) => Object.fromEntries([...element.attributes]
       .filter((attribute) => attribute.name.startsWith('data-runtime-'))
       .map((attribute) => [attribute.name, attribute.value])));
@@ -297,6 +298,14 @@ e2e('activates an edited RSC generation and replays the selected hook without re
     await writeFile(fixture.serverComponentSource, `${editedSource}\nconst = ;\n`);
     await expect.poll(async () => identity.getAttribute('data-runtime-event-sequence'), { timeout: browserTimeout })
       .toBe(String(Number(sourceBuildFailed['data-runtime-event-sequence']) + 1));
+    await expect(page.locator('.runtime-announcement[role="alert"]')).toHaveText('Runtime generation failed. The last good result remains available.');
+    await expect(result).toHaveAttribute('aria-selected', 'true');
+    await expect(diagnostics).toBeVisible();
+    await expect(page.locator('[aria-label="Runtime output stage"] .runtime-stage-output--agent code')).toContainText(
+      activatedHookText,
+    );
+    await diagnostics.click();
+    const sourceBuildDiagnostic = page.getByLabel('Runtime diagnostics evidence');
     await expect(sourceBuildDiagnostic).toContainText('source/build');
     await expect(sourceBuildDiagnostic).toContainText('AB8206');
     await expect(sourceBuildDiagnostic).toContainText('RSC runtime source build failed.');

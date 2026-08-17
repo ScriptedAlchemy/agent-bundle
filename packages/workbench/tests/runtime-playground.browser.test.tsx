@@ -12,6 +12,7 @@ import type {
   DevRuntimeStatus,
   DevRuntimeSurface,
 } from '../../agent-bundle/src/dev/runtime-protocol.ts';
+import type { ProjectEventMessage } from '../../agent-bundle/src/dev/types.ts';
 import { createRuntimePlaygroundController, RuntimePlayground, type RuntimePlaygroundClient } from '../src/runtime-playground.tsx';
 import type { RuntimeProfileOption } from '../src/runtime-model.ts';
 import type { RuntimeBootstrap } from '../src/runtime-client.ts';
@@ -82,6 +83,17 @@ const bootstrap = (): RuntimeBootstrap => Object.freeze({
   surfaces: Object.freeze([surface]),
 });
 
+const generationFailedEvent = Object.freeze({
+  occurredAt: '2026-08-15T12:00:00.000Z',
+  payload: Object.freeze({
+    providerSessionId: vector.providerSessionId,
+    runtimeGenerationId: vector.runtimeGenerationId,
+    type: 'runtime.generation.failed' as const,
+  }),
+  sequence: 1,
+  type: 'runtime.event' as const,
+}) satisfies ProjectEventMessage;
+
 const client = (resetState: () => Promise<DevRuntimeStateIdentity>): RuntimePlaygroundClient => ({
   bootstrap: async () => bootstrap(),
   createRun: async (_request: DevRuntimeInvocationRequest) => run('created'),
@@ -105,11 +117,15 @@ test('mounts Runtime controls in a supported browser and fences reset interactio
     await render(<RuntimePlayground controller={controller} />);
     await expect.element(page.getByRole('heading', { name: 'Runtime Playground' })).toBeVisible();
     await expect.element(page.locator('[data-runtime-run-id="initial"]')).toBeVisible();
+    controller.dispatch({ event: generationFailedEvent, type: 'event.received' });
+    await expect.element(page.locator('.runtime-announcement[role="alert"]')).toHaveText('Runtime generation failed. The last good result remains available.');
+    await expect.element(page.getByRole('tab', { name: 'Result', exact: true })).toHaveAttribute('aria-selected', 'true');
+    await expect.element(page.getByLabel('Runtime output stage')).toContainText('Agent-visible output');
 
     await page.getByRole('radio', { name: 'Raw JSON' }).click();
     const raw = page.locator('#runtime-input-raw');
     await raw.fill('{"city":');
-    await expect.element(page.getByRole('alert')).toHaveText('Draft JSON is invalid. Repair the raw input before running.');
+    await expect.element(page.locator('#runtime-input-raw-error')).toHaveText('Draft JSON is invalid. Repair the raw input before running.');
     await raw.fill('{"city":"Paris"}');
     await page.getByRole('button', { name: 'Run', exact: true }).click();
     await expect.element(page.getByRole('dialog')).toBeVisible();
@@ -124,7 +140,7 @@ test('mounts Runtime controls in a supported browser and fences reset interactio
     await expect.element(page.getByRole('button', { name: 'Reset fixture state' })).toBeDisabled();
     await expect.element(page.getByLabel('Runtime surface')).toBeDisabled();
     await page.getByRole('button', { name: 'Confirm' }).click();
-    const failure = page.getByRole('alert');
+    const failure = page.locator('.runtime-request-error');
     await expect.element(failure).toHaveText('The provider rejected this reset.');
     await expect.element(failure).toBeFocused();
     await expect.element(page.locator('.runtime-status')).not.toBeFocused();
