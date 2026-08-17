@@ -92,6 +92,8 @@ packages/
     src/mcp/mcp-page.tsx
     src/mcp/mcp-session-controller.ts
     src/mcp/mcp-session-model.ts
+    src/mcp/runtime-consent-dialog.tsx
+    src/mcp/runtime-consent-queue.ts
     src/mcp/runtime-mcp-handoff.ts
     src/project-client.ts
     src/runtime-client.ts

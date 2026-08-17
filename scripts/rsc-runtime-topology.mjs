@@ -95,6 +95,8 @@ const workbenchSource = new Set([
   'packages/workbench/src/mcp/mcp-page.tsx',
   'packages/workbench/src/mcp/mcp-session-controller.ts',
   'packages/workbench/src/mcp/mcp-session-model.ts',
+  'packages/workbench/src/mcp/runtime-consent-dialog.tsx',
+  'packages/workbench/src/mcp/runtime-consent-queue.ts',
   'packages/workbench/src/mcp/runtime-mcp-handoff.ts',
   'packages/workbench/src/inspector/adapter/inspector-session-adapter-entry.ts',
   'packages/workbench/src/inspector/adapter/inspector-session-adapter-model.ts',
