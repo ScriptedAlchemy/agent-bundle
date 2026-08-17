@@ -182,8 +182,40 @@ e2e('shares one real session between the MCP Playground and Inspector presentati
     await expect(protocolHistory).toContainText('tools/call');
     await expect(protocolHistory).toContainText('inspector');
 
+    await playgroundTab.click();
+    const playgroundDownload = page.waitForEvent('download');
+    await page.getByRole('button', { name: 'Download current protocol trace' }).click();
+    const playgroundDownloadPath = await (await playgroundDownload).path();
+    if (playgroundDownloadPath === null) throw new Error('The MCP trace download did not provide a local file.');
+    const playgroundTrace = JSON.parse(await readFile(playgroundDownloadPath, 'utf8')) as {
+      readonly kind: string;
+      readonly schemaVersion: number;
+      readonly session: Readonly<{ readonly binding: unknown; readonly id: string | null }>;
+      readonly timeline: Readonly<{ readonly entries: readonly unknown[] }>;
+    };
+    expect(playgroundTrace).toMatchObject({
+      kind: 'agent-bundle.mcp-protocol-trace',
+      schemaVersion: 1,
+      session: { binding: { epochId: expect.any(String), serverName: 'fixture', target: 'portable' }, id: expect.any(String) },
+    });
+    expect(JSON.stringify(playgroundTrace.timeline.entries)).toContain('tools/call');
+    expect(JSON.stringify(playgroundTrace.timeline.entries)).toContain('inspector');
+
+    await inspectorTab.click();
+    await screens.getByRole('button', { name: 'Protocol' }).click();
+    const protocolDownload = page.waitForEvent('download');
+    await inspector.getByRole('button', { name: 'Export' }).click();
+    const protocolDownloadPath = await (await protocolDownload).path();
+    if (protocolDownloadPath === null) throw new Error('The Inspector Protocol download did not provide a local file.');
+    expect(JSON.parse(await readFile(protocolDownloadPath, 'utf8'))).toEqual(playgroundTrace);
+
     await screens.getByRole('button', { name: 'Logging' }).click();
     await expect(inspector.getByRole('region', { name: 'Logging inspector' })).toContainText('echo inspector', { timeout: browserTimeout });
+    const loggingDownload = page.waitForEvent('download');
+    await inspector.getByRole('button', { name: 'Export' }).click();
+    const loggingDownloadPath = await (await loggingDownload).path();
+    if (loggingDownloadPath === null) throw new Error('The Inspector Logging download did not provide a local file.');
+    expect(JSON.parse(await readFile(loggingDownloadPath, 'utf8'))).toEqual(playgroundTrace);
     await playgroundTab.click();
     await expect(playgroundTab).toHaveAttribute('aria-selected', 'true');
     await expect(page.locator('#mcp-server-name')).toHaveValue('fixture');

@@ -3,12 +3,18 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from '@rstest/core';
 
 import type { McpSessionInspectorConfig } from '../../agent-bundle/src/dev/mcp-session-protocol.ts';
-import { createMcpBrowserSessionModel, reduceMcpBrowserSession, type McpBrowserSessionModel } from '../src/mcp/mcp-session-model.ts';
+import {
+  createMcpBrowserSessionModel,
+  reduceMcpBrowserSession,
+  type McpBrowserSessionInvocation,
+  type McpBrowserSessionModel,
+} from '../src/mcp/mcp-session-model.ts';
 import type { McpAppPreviewClient } from '../src/mcp/mcp-app-preview.tsx';
 import {
   McpPage,
   createMcpPageActionTracker,
   createMcpPageActionSession,
+  downloadCurrentMcpProtocolTrace,
   mcpConfigDownload,
   mcpAppPreviewSourceFor,
   mcpPageControllerReplacementState,
@@ -16,6 +22,7 @@ import {
   supportedMcpAppPreviewProfiles,
   type McpPageController,
 } from '../src/mcp/mcp-page.tsx';
+import { mcpProtocolTraceDownload } from '../src/mcp/mcp-protocol-trace.ts';
 
 const model = {
   activeRequests: {
@@ -134,8 +141,114 @@ describe('MCP page', () => {
     expect(markup).toContain('Progress');
     expect(markup).toContain('role="tablist"');
     expect(markup).toContain('role="tabpanel"');
+    expect(markup).toContain('Download current protocol trace');
+    expect(markup).toContain('current browser MCP trace, not a durable Playground session export');
     expect(markup).toContain('Download Inspector config');
     expect(markup).toContain('Trace delivery is delayed.');
+  });
+
+  it('builds a detached, versioned export of the complete current protocol trace without launch credentials', async () => {
+    const mutableHistory = [{
+      binding: { epochId: 'epoch-1', serverName: 'weather', target: 'codex' },
+      id: 'tool-1',
+      operation: 'callTool',
+      request: { arguments: { city: 'Berlin' }, name: 'weather' },
+      result: { content: [{ text: 'Sunny', type: 'text' }] },
+      timing: { completedAt: 1_700_000_000_020, durationMs: 10, startedAt: 1_700_000_000_010 },
+    }];
+    const mutableModel = {
+      ...model,
+      config: {
+        launch: { args: ['private-server.mjs'], command: 'node', env: { API_TOKEN: 'foreground-secret' }, kind: 'stdio' },
+        origin: 'artifact',
+      },
+      sessionId: 'opaque-session-1',
+      sessionToken: 'browser-session-token',
+      timeline: {
+        droppedThroughSequence: 2,
+        entries: [
+          { earliestAvailableSequence: 3, latestDroppedSequence: 2, requestedAfterSequence: 0, type: 'replay.gap' },
+          { direction: 'server', kind: 'frame', message: { jsonrpc: '2.0', method: 'notifications/progress', params: { progress: 1 } }, occurredAt: 1_700_000_000_003, sequence: 3 },
+          { invocation: mutableHistory[0], type: 'invocation' },
+          { direction: 'client', kind: 'frame', message: { id: 2, jsonrpc: '2.0', method: 'tools/call', params: { arguments: { city: 'Berlin' }, name: 'weather' } }, occurredAt: 1_700_000_000_004, sequence: 4 },
+        ],
+        lastSequence: 4,
+      },
+    } as unknown as McpBrowserSessionModel;
+
+    const download = mcpProtocolTraceDownload({
+      history: mutableHistory as unknown as readonly McpBrowserSessionInvocation[],
+      model: mutableModel,
+    });
+    mutableHistory[0]!.request.arguments.city = 'Mutated';
+    (mutableModel.timeline.entries[3] as { message: { params: { arguments: { city: string } } } }).message.params.arguments.city = 'Mutated';
+    const trace = JSON.parse(await download.blob.text());
+
+    expect(download.filename).toBe('mcp-opaque-session-1-protocol-trace.json');
+    expect(download.blob.type).toBe('application/json');
+    expect(await download.blob.text()).toMatch(/\n$/u);
+    expect(trace).toEqual({
+      history: [{
+        binding: { epochId: 'epoch-1', serverName: 'weather', target: 'codex' },
+        id: 'tool-1',
+        operation: 'callTool',
+        request: { arguments: { city: 'Berlin' }, name: 'weather' },
+        result: { content: [{ text: 'Sunny', type: 'text' }] },
+        timing: { completedAt: 1_700_000_000_020, durationMs: 10, startedAt: 1_700_000_000_010 },
+      }],
+      kind: 'agent-bundle.mcp-protocol-trace',
+      schemaVersion: 1,
+      session: {
+        binding: { epochId: 'epoch-1', serverName: 'weather', target: 'codex' },
+        connection: { protocolVersion: '2025-06-18', serverCapabilities: { tools: {} }, serverInfo: { name: 'Weather Server' } },
+        id: 'opaque-session-1',
+        phase: 'idle',
+      },
+      timeline: {
+        droppedThroughSequence: 2,
+        entries: [
+          { earliestAvailableSequence: 3, latestDroppedSequence: 2, requestedAfterSequence: 0, type: 'replay.gap' },
+          { direction: 'server', kind: 'frame', message: { jsonrpc: '2.0', method: 'notifications/progress', params: { progress: 1 } }, occurredAt: 1_700_000_000_003, sequence: 3 },
+          { invocation: {
+            binding: { epochId: 'epoch-1', serverName: 'weather', target: 'codex' },
+            id: 'tool-1',
+            operation: 'callTool',
+            request: { arguments: { city: 'Berlin' }, name: 'weather' },
+            result: { content: [{ text: 'Sunny', type: 'text' }] },
+            timing: { completedAt: 1_700_000_000_020, durationMs: 10, startedAt: 1_700_000_000_010 },
+          }, type: 'invocation' },
+          { direction: 'client', kind: 'frame', message: { id: 2, jsonrpc: '2.0', method: 'tools/call', params: { arguments: { city: 'Berlin' }, name: 'weather' } }, occurredAt: 1_700_000_000_004, sequence: 4 },
+        ],
+        lastSequence: 4,
+      },
+    });
+    expect(JSON.stringify(trace)).not.toContain('private-server.mjs');
+    expect(JSON.stringify(trace)).not.toContain('foreground-secret');
+    expect(JSON.stringify(trace)).not.toContain('browser-session-token');
+  });
+
+  it('uses explicit null session facts and an idle filename when no session is present', async () => {
+    const download = mcpProtocolTraceDownload({
+      history: [],
+      model: { ...model, binding: undefined, connection: undefined, sessionId: '' },
+    });
+
+    expect(download.filename).toBe('mcp-idle-protocol-trace.json');
+    await expect(download.blob.text()).resolves.toContain('"binding": null');
+    await expect(download.blob.text()).resolves.toContain('"connection": null');
+    await expect(download.blob.text()).resolves.toContain('"id": null');
+  });
+
+  it('passes the canonical full trace through the supplied download sink', async () => {
+    const downloads: Blob[] = [];
+
+    downloadCurrentMcpProtocolTrace((download) => { downloads.push(download.blob); }, {
+      history: controller().history,
+      model,
+    });
+
+    expect(downloads).toHaveLength(1);
+    await expect(downloads[0]!.text()).resolves.toContain('"kind": "agent-bundle.mcp-protocol-trace"');
   });
 
   it('renders one labeled session timeout control beside the immutable open binding', () => {

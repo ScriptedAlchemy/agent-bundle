@@ -8,7 +8,8 @@ import { HookClient } from './hooks/hook-client.ts';
 import { HooksPage } from './hooks/hooks-page.tsx';
 import { InspectorSessionAdapter } from './inspector/adapter/inspector-session-adapter-entry.ts';
 import { McpAppClient } from './mcp/mcp-app-client.ts';
-import { McpPage, type McpConfigDownload } from './mcp/mcp-page.tsx';
+import { McpPage } from './mcp/mcp-page.tsx';
+import { mcpProtocolTraceDownload, type McpDownload } from './mcp/mcp-protocol-trace.ts';
 import { McpRouteClient } from './mcp/mcp-route-client.ts';
 import { createMcpSessionController } from './mcp/mcp-session-controller.ts';
 import { overviewFor } from './overview-model.ts';
@@ -39,7 +40,7 @@ const mcpTargets = ['portable', 'claude', 'codex'] as const;
 
 const createMcpController = () => createMcpSessionController({ routes: new McpRouteClient() });
 
-const downloadMcpConfig = ({ blob, filename }: McpConfigDownload): void => {
+const downloadMcpFile = ({ blob, filename }: McpDownload): void => {
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.download = filename;
@@ -295,6 +296,12 @@ const McpScreen = ({ appPreviewClient, connectionError, controller, model, onNav
     event.preventDefault();
     selectPresentation(next);
   };
+  const exportInspectorTrace = (entries: typeof model.timeline.entries): void => {
+    downloadMcpFile(mcpProtocolTraceDownload({
+      history: controller.history,
+      model: { ...model, timeline: { ...model.timeline, entries } },
+    }));
+  };
   return <WorkbenchScreen connectionError={connectionError} onNavigate={onNavigate} page="mcp">
     <div className="mcp-content">
       <div aria-label="MCP presentation" className="mcp-presentation-tabs" role="tablist">
@@ -339,7 +346,8 @@ const McpScreen = ({ appPreviewClient, connectionError, controller, model, onNav
           controller={controller}
           epochOptions={activeEpoch === undefined ? [] : [activeEpoch.id]}
           initialBinding={activeEpoch === undefined ? undefined : { epochId: activeEpoch.id }}
-          onDownloadConfig={downloadMcpConfig}
+          onDownloadConfig={downloadMcpFile}
+          onDownloadTrace={downloadMcpFile}
           onResetSession={onResetSession}
           targetOptions={targetOptions}
         />
@@ -352,17 +360,17 @@ const McpScreen = ({ appPreviewClient, connectionError, controller, model, onNav
         inert={presentation !== 'inspector'}
         role="tabpanel"
       >
-        <InspectorSessionAdapter controller={controller} model={model} />
+        <InspectorSessionAdapter controller={controller} model={model} onExportTrace={exportInspectorTrace} />
       </section>
     </div>
   </WorkbenchScreen>;
 };
 
 const Workbench = () => {
-  const client = useRef<ProjectClient>();
+  const client = useRef<ProjectClient | undefined>(undefined);
   const hookClient = useRef<HookClient | undefined>(undefined);
-  const mcpAppClient = useRef<McpAppClient>();
-  const skillClient = useRef<SkillClient>();
+  const mcpAppClient = useRef<McpAppClient | undefined>(undefined);
+  const skillClient = useRef<SkillClient | undefined>(undefined);
   const [connectionError, setConnectionError] = useState<string>();
   const [error, setError] = useState<string>();
   const [mcpController, setMcpController] = useState(createMcpController);

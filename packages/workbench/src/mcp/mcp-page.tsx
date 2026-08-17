@@ -22,6 +22,11 @@ import type {
   McpBrowserSessionTimelineEntry,
 } from './mcp-session-model.ts';
 import type { McpSessionControllerReplay, McpSessionControllerRequest } from './mcp-session-controller.ts';
+import {
+  mcpProtocolTraceDownload,
+  type McpDownload,
+  type McpProtocolTraceSource,
+} from './mcp-protocol-trace.ts';
 
 import './mcp-page.css';
 
@@ -45,15 +50,13 @@ export interface McpPageProps {
   readonly epochOptions: readonly string[];
   readonly initialBinding?: Partial<McpSessionBinding>;
   readonly onDownloadConfig?: (download: McpConfigDownload) => void;
+  readonly onDownloadTrace?: (download: McpDownload) => void;
   /** Replaces the terminal controller with a fresh idle controller in the parent. */
   readonly onResetSession?: () => void;
   readonly targetOptions: readonly string[];
 }
 
-export interface McpConfigDownload {
-  readonly blob: Blob;
-  readonly filename: string;
-}
+export type McpConfigDownload = McpDownload;
 
 type TraceTab = 'raw' | 'logs' | 'progress';
 
@@ -256,6 +259,13 @@ export const mcpConfigDownload = (config: McpSessionInspectorConfig, sessionId: 
   filename: `mcp-${sessionId}-inspector.json`,
 });
 
+export const downloadCurrentMcpProtocolTrace = (
+  onDownload: ((download: McpDownload) => void) | undefined,
+  source: McpProtocolTraceSource,
+): void => {
+  if (onDownload !== undefined) onDownload(mcpProtocolTraceDownload(source));
+};
+
 const environmentEntries = (environment: Readonly<Record<string, string>>): ReadonlyArray<readonly [string, string]> =>
   Object.entries(environment).sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0);
 
@@ -378,7 +388,7 @@ const McpPageAppPreview = ({ client, host, onControllerChange, previewProfile, s
   </section>;
 };
 
-export const McpPage = ({ appPreviewClient, controller, epochOptions, initialBinding, onDownloadConfig, onResetSession, targetOptions }: McpPageProps) => {
+export const McpPage = ({ appPreviewClient, controller, epochOptions, initialBinding, onDownloadConfig, onDownloadTrace, onResetSession, targetOptions }: McpPageProps) => {
   const [model, setModel] = useState(() => controller.model);
   const [epochId, setEpochId] = useState(initialBinding?.epochId ?? '');
   const [target, setTarget] = useState(initialBinding?.target ?? '');
@@ -716,6 +726,8 @@ export const McpPage = ({ appPreviewClient, controller, epochOptions, initialBin
 
     <section className="mcp-page-section" aria-labelledby="mcp-trace-heading">
       <h2 id="mcp-trace-heading">Trace</h2>
+      <p>Download the current browser MCP trace, not a durable Playground session export.</p>
+      <button disabled={onDownloadTrace === undefined} onClick={() => downloadCurrentMcpProtocolTrace(onDownloadTrace, { history: controller.history, model })} type="button">Download current protocol trace</button>
       <div aria-label="Trace-derived views" className="mcp-page-tabs" role="tablist">
         {traceTabs.map((candidate) => <button
           aria-controls={tracePanelId}
