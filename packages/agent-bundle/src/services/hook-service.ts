@@ -46,18 +46,32 @@ export interface HookServiceOptions {
 }
 
 /**
- * Cancellation is an outcome callers act on, not a message they parse: the route
- * drain that aborted the simulation identifies it by name so a wrapper failure or
- * a cleanup failure reporting the same text stays a real failure.
+ * Membership is granted only by this executor, at construction, and cannot be
+ * reached from outside this module, so no error can join it by copying a name,
+ * message, or code.
  */
-class HookSimulationAbortError extends Error {
+const cancellations = new WeakSet<object>();
+
+/**
+ * Cancellation is an outcome callers act on, not a name or a message they parse:
+ * the route drain that aborted the simulation identifies it by the brand this
+ * executor granted, so a wrapper failure, a termination failure, or a simulation
+ * clone that could not be removed stays a real failure even when it reports the
+ * same surface.
+ */
+export class HookSimulationAbortError extends Error {
   readonly code = 'hook.simulation.aborted';
 
   constructor() {
     super('Hook simulation aborted.');
     this.name = 'AbortError';
+    cancellations.add(this);
   }
 }
+
+/** True only for a cancellation this executor itself raised. */
+export const isHookSimulationCancellation = (error: unknown): boolean =>
+  typeof error === 'object' && error !== null && cancellations.has(error);
 
 class HookSimulationTerminationError extends Error {
   readonly code = 'hook.simulation.termination.unsettled';

@@ -1122,3 +1122,82 @@ it('aggregates a hook playground drain failure while still releasing the server 
   expect(coordinator.closeCalls).toBe(1);
   await simulation;
 });
+
+/** Re-enters the foreground close from its own abort callback, as a cleanup listener would. */
+class ReentrantHookPlayground implements HookPlaygroundRouteService {
+  nested: Promise<void> | undefined;
+  server: ForegroundServer | undefined;
+  readonly #admitted: Promise<void>;
+  #admit!: () => void;
+
+  constructor() {
+    this.#admitted = new Promise<void>((resolvePromise) => { this.#admit = resolvePromise; });
+  }
+
+  get admitted(): Promise<void> {
+    return this.#admitted;
+  }
+
+  async list(): Promise<readonly HookPlaygroundHook[]> {
+    return Object.freeze([]);
+  }
+
+  async replay(_replay: HookPlaygroundReplay, options?: { readonly signal?: AbortSignal }): Promise<never> {
+    return this.#run(options?.signal);
+  }
+
+  async simulate(options: HookPlaygroundSimulationOptions): Promise<never> {
+    return this.#run(options.signal);
+  }
+
+  #run(signal: AbortSignal | undefined): Promise<never> {
+    this.#admit();
+    return new Promise<never>((_resolvePromise, rejectPromise) => {
+      const cancel = (): void => {
+        this.nested = this.server?.close();
+        rejectPromise(signal?.reason);
+      };
+      if (signal === undefined || signal.aborted) cancel();
+      else signal.addEventListener('abort', cancel, { once: true });
+    });
+  }
+}
+
+it('publishes one foreground shutdown outcome before any abort callback can re-enter close', async () => {
+  const coordinator = new RecordingCoordinator();
+  coordinator.failClose = true;
+  const hookPlayground = new ReentrantHookPlayground();
+  const server = await startForegroundServer({
+    coordinator,
+    eventHub: new ProjectEventHub(),
+    hookPlayground,
+    port: 0,
+  });
+  hookPlayground.server = server;
+  const unhandled: unknown[] = [];
+  const recordUnhandled = (error: unknown): void => { unhandled.push(error); };
+  process.on('unhandledRejection', recordUnhandled);
+
+  try {
+    const simulation = startSimulation(server);
+    await hookPlayground.admitted;
+
+    const closing = server.close();
+    expect(hookPlayground.nested).toBe(closing);
+    expect(server.close()).toBe(closing);
+
+    await expect(closing).rejects.toMatchObject({
+      failures: [{ error: expect.objectContaining({ message: 'coordinator close failure' }), resource: 'coordinator' }],
+      name: 'ForegroundServerCloseError',
+    });
+    expect(coordinator.closeCalls).toBe(1);
+    await simulation;
+
+    await new Promise<void>((resolvePromise) => { setTimeout(resolvePromise, 20); });
+    expect(unhandled).toEqual([]);
+  } finally {
+    process.off('unhandledRejection', recordUnhandled);
+    await hookPlayground.nested?.catch(() => undefined);
+    await server.close().catch(() => undefined);
+  }
+});

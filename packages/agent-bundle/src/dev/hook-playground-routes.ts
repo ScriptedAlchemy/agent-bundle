@@ -1,6 +1,7 @@
 import { Buffer } from 'node:buffer';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
+import { isHookSimulationCancellation } from '../services/hook-service.ts';
 import type {
   HookPlaygroundDiagnosticResult,
   HookPlaygroundHook,
@@ -254,15 +255,15 @@ const replayRequest = (value: JsonObject): HookPlaygroundReplay => {
 
 /**
  * Shutdown cancels the operation itself, so the executor's cancellation is the
- * expected outcome, identified by the reason this route raised or by an error that
- * types itself as an abort. A message is not an identity: a wrapper process tree
- * that refused to settle, or a simulation clone that could not be removed, is a
- * real shutdown failure even when it reports the same text.
+ * expected outcome, identified by the reason this route raised or by the brand the
+ * executor seam grants its own cancellation. Neither a name nor a message is an
+ * identity: a wrapper process tree that refused to settle, or a simulation clone
+ * that could not be removed, is a real shutdown failure even when it reports the
+ * same surface.
  */
 const isExpectedCancellation = (error: unknown, signal: AbortSignal): boolean => {
   if (!signal.aborted) return false;
-  if (error === signal.reason) return true;
-  return error instanceof Error && error.name === 'AbortError';
+  return error === signal.reason || isHookSimulationCancellation(error);
 };
 
 const simulationResponse = (

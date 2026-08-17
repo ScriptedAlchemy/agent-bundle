@@ -15,6 +15,7 @@ import type {
   HookPlaygroundSimulation,
   HookPlaygroundSimulationOptions,
 } from '../src/dev/hook-playground-service.ts';
+import { HookSimulationAbortError } from '../src/services/hook-service.ts';
 
 interface StartedRoutes {
   readonly close: () => Promise<void>;
@@ -842,9 +843,49 @@ it('reports a cleanup failure that reuses the executor cancellation message', as
   }
 });
 
-it('keeps a typed executor cancellation silent even when shutdown races its settlement', async () => {
+/**
+ * A name is not an identity either. A simulation clone that could not be removed,
+ * or a wrapper process tree that refused to settle, stays a real shutdown failure
+ * even when it reproduces the executor cancellation's name, message, and code.
+ */
+it('retains a cleanup failure that reproduces the executor cancellation surface', async () => {
+  const forged = [
+    Object.assign(new Error('Hook simulation aborted.'), {
+      code: 'hook.simulation.aborted',
+      name: 'AbortError',
+    }),
+    Object.assign(new Error('Hook simulation aborted. Wrapper process tree did not settle after termination.'), {
+      code: 'hook.simulation.termination.unsettled',
+      name: 'HookSimulationTerminationError',
+    }),
+  ];
+
+  for (const failure of forged) {
+    const service = new DrainingService();
+    service.failures.set('simulation', failure);
+    const started = await startRoutes(service);
+    const admitted = service.admitted('simulation');
+
+    try {
+      const simulation = post(`${started.url}/api/hooks/simulations`, simulationBody);
+      await admitted;
+
+      await expect(started.routes.close()).rejects.toMatchObject({
+        code: 'AB8034',
+        failures: [{ error: failure, operation: 'simulation' }],
+        name: 'HookPlaygroundCloseError',
+      });
+      expect(service.settlements).toEqual(['simulation']);
+      expect((await simulation).status).toBe(502);
+    } finally {
+      await started.close().catch(() => undefined);
+    }
+  }
+});
+
+it('keeps the executor cancellation itself silent even when shutdown races its settlement', async () => {
   const service = new DrainingService();
-  service.failures.set('simulation', Object.assign(new Error('Hook simulation aborted.'), { name: 'AbortError' }));
+  service.failures.set('simulation', new HookSimulationAbortError());
   const started = await startRoutes(service);
   const admitted = service.admitted('simulation');
 

@@ -122,6 +122,23 @@ type SkillRoute =
   | Readonly<{ readonly epochId: string; readonly kind: 'generated-document'; readonly skillId: string; readonly target: string }>
   | Readonly<{ readonly epochId: string; readonly kind: 'generated-resource'; readonly resource: readonly string[]; readonly skillId: string; readonly target: string }>;
 
+interface Settlement<T> {
+  readonly promise: Promise<T>;
+  readonly reject: (error: unknown) => void;
+  readonly resolve: (value: T) => void;
+}
+
+/** Publishes a result a caller can hand out before the work that settles it begins. */
+const settlement = <T>(): Settlement<T> => {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return Object.freeze({ promise, reject, resolve });
+};
+
 const diagnostic = (code: string, message: string, status: number): RequestDiagnostic => ({ code, message, status });
 
 const requestError = (value: RequestDiagnostic): RequestDiagnostic & Error => Object.assign(
@@ -452,11 +469,25 @@ export class ForegroundServer {
     return this.#startPromise;
   }
 
+  /**
+   * Releasing a resource can re-enter shutdown: a cancelled hook simulation runs
+   * its abort callback synchronously, and that callback may close this server. The
+   * single outcome is therefore published before any resource is asked to release,
+   * so every nested, concurrent, and repeated caller receives the identical promise
+   * and no resource is released twice.
+   */
   close(): Promise<void> {
-    if (this.#closePromise !== undefined) return this.#closePromise;
+    const closing = this.#closePromise;
+    if (closing !== undefined) return closing;
     this.#closing = true;
-    this.#closePromise = this.#close();
-    return this.#closePromise;
+    const published = settlement<void>();
+    this.#closePromise = published.promise;
+    try {
+      this.#close().then(published.resolve, published.reject);
+    } catch (error) {
+      published.reject(error);
+    }
+    return published.promise;
   }
 
   async #start(): Promise<void> {
@@ -508,8 +539,21 @@ export class ForegroundServer {
     if (failures.length > 0) throw new ForegroundServerCloseError(failures);
   }
 
+  /** Published before the first release for the same reason close() is. */
   #releaseResources(): Promise<readonly ForegroundServerCloseFailure[]> {
-    if (this.#releasePromise !== undefined) return this.#releasePromise;
+    const releasing = this.#releasePromise;
+    if (releasing !== undefined) return releasing;
+    const published = settlement<readonly ForegroundServerCloseFailure[]>();
+    this.#releasePromise = published.promise;
+    try {
+      this.#release().then(published.resolve, published.reject);
+    } catch (error) {
+      published.reject(error);
+    }
+    return published.promise;
+  }
+
+  #release(): Promise<readonly ForegroundServerCloseFailure[]> {
     this.#mcpAppRoutes.close();
     this.#mcpSessionRoutes.close();
     // Cancelled hook simulations own wrapper processes and clones, so their
@@ -526,7 +570,7 @@ export class ForegroundServer {
           return closeServer(this.#server);
         })()
       : Promise.resolve();
-    this.#releasePromise = Promise.allSettled([releaseServer, this.#coordinator.close(), releaseHookPlayground])
+    return Promise.allSettled([releaseServer, this.#coordinator.close(), releaseHookPlayground])
       .then(([server, coordinator, hookPlayground]) => {
         const failures: ForegroundServerCloseFailure[] = [];
         if (server.status === 'rejected') failures.push(Object.freeze({ error: server.reason, resource: 'server' }));
@@ -536,7 +580,6 @@ export class ForegroundServer {
         }
         return Object.freeze(failures);
       });
-    return this.#releasePromise;
   }
 
   async #handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
