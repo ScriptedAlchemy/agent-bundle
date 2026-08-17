@@ -30,6 +30,11 @@ export interface RuntimePlaygroundFixture {
   readonly widgetAppSource: string;
 }
 
+/** A narrow pre-start hook for a copied example configuration in real-browser tests. */
+export interface RuntimePlaygroundFixtureOptions {
+  readonly prepare?: (fixture: Readonly<{ readonly configSource: string; readonly root: string }>) => Promise<void> | void;
+}
+
 const buildWorkbench = async (): Promise<void> => {
   const { RSTEST: _rstest, ...environment } = process.env;
   await execFile('npm', ['run', 'build', '--workspace', 'agent-bundle-workbench'], {
@@ -39,7 +44,9 @@ const buildWorkbench = async (): Promise<void> => {
 };
 
 /** Starts the real RSC example in an isolated workspace-local copy. */
-export const startRuntimePlaygroundFixture = async (): Promise<RuntimePlaygroundFixture> => {
+export const startRuntimePlaygroundFixture = async (
+  options: RuntimePlaygroundFixtureOptions = {},
+): Promise<RuntimePlaygroundFixture> => {
   await buildWorkbench();
   // The real example resolves workspace modules two levels above its project.
   // Copy that topology, including only workspace-local symlinks, into one root.
@@ -58,6 +65,7 @@ export const startRuntimePlaygroundFixture = async (): Promise<RuntimePlayground
       symlink(join(workspaceRoot, 'packages'), join(fixtureWorkspace, 'packages'), 'dir'),
       symlink(join(workspaceRoot, 'tsconfig.json'), join(fixtureWorkspace, 'tsconfig.json')),
     ]);
+    await options.prepare?.(Object.freeze({ configSource: join(root, 'agent-bundle.config.ts'), root }));
     server = await startDevServer({
       assets: createWorkbenchAssetSource({ root: workbenchAssets }),
       open: false,

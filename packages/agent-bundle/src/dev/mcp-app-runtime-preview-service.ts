@@ -27,12 +27,15 @@ import {
   createMcpAppConsentActionDigest,
   createMcpAppConsentAuthority,
   createMcpAppDocumentPolicySnapshot,
+  deriveMcpAppSandboxPolicy,
   type McpAppConsentAuthority,
   type McpAppConsentChallenge,
   type McpAppConsentGrant,
   type McpAppConsentRequest,
   type McpAppDocumentPolicySnapshot,
+  type McpAppSandboxDeclaration,
 } from './mcp-app-sandbox.ts';
+import type { RuntimeClientSurfaceContentPolicy } from './runtime-client-surface-proxy.ts';
 import type { DevRuntimeClientSurfaceProxyBinding, DevRuntimeMcpRegistryMessage, DevRuntimeMcpSessionView, DevRuntimeSession } from './runtime-provider.ts';
 import type { DevRuntimeMcpAppRunBinding, DevRuntimeMcpConnectionState, RuntimeVector } from './runtime-protocol.ts';
 
@@ -137,7 +140,10 @@ export interface McpAppRuntimePreviewServiceOptions {
   readonly bindingAuthority: McpAppRuntimeBindingService;
   readonly configExtensions: () => McpAppConfigExtensionInspectionOptions;
   /** This opens the foreground-owned proxy; the runtime service never receives a provider endpoint. */
-  readonly openRuntimeClientSurface: (surfaceId: string) => Promise<DevRuntimeClientSurfaceProxyBinding | undefined>;
+  readonly openRuntimeClientSurface: (
+    surfaceId: string,
+    policy: RuntimeClientSurfaceContentPolicy,
+  ) => Promise<DevRuntimeClientSurfaceProxyBinding | undefined>;
   readonly runtime: DevRuntimeSession;
   readonly emit?: (details: McpAppRuntimeInvalidationDetails) => void;
 }
@@ -201,6 +207,11 @@ const nonempty = (value: unknown, label: string): string => {
 };
 
 const frozenJson = (value: unknown, label: string): McpAppJsonValue => cloneMcpAppFiniteJson(value, label);
+
+const sandboxDeclaration = (resource: McpAppParsedResource): McpAppSandboxDeclaration => Object.freeze({
+  ...(resource.csp === undefined ? {} : { csp: resource.csp }),
+  ...(resource.permissions === undefined ? {} : { permissions: resource.permissions }),
+});
 
 const runBindingEquals = (stored: DevRuntimeMcpAppRunBinding, live: DevRuntimeMcpAppRunBinding): boolean =>
   stored.definitionDigest === live.definitionDigest && stored.registryRevision === live.registryRevision &&
@@ -385,6 +396,14 @@ export class McpAppRuntimePreviewService implements McpAppRuntimeRoutePreviewSer
       this.#assertCreateStillValid(binding.id, runBinding, run.vector, session);
       const parsed = parseMcpAppResource(read.value, run.result.app.resourceUri);
       if (parsed === undefined) throw new Error('Stored Runtime MCP App resource is not canonical Apps HTML.');
+      const declaration = sandboxDeclaration(parsed);
+      const documentPolicy = createMcpAppDocumentPolicySnapshot(1, declaration, []);
+      const clientSurfacePolicy: RuntimeClientSurfaceContentPolicy = Object.freeze({
+        contentSecurityPolicy: deriveMcpAppSandboxPolicy(
+          declaration,
+          Object.freeze({ permissions: documentPolicy.approvedPermissions }),
+        ).contentSecurityPolicy,
+      });
       const listedMetadata = metadataOf(resource);
       const contents = isRecord(read.value) && Array.isArray(read.value.contents) ? read.value.contents : [];
       const readContent = contents.find((candidate) =>
@@ -406,13 +425,12 @@ export class McpAppRuntimePreviewService implements McpAppRuntimeRoutePreviewSer
       if (profile.kind === 'apps') {
         // Store the promise before yielding. A concurrent DELETE therefore
         // joins the acquisition and closes a proxy that resolves afterward.
-        const proxyAcquisition = this.#openRuntimeClientSurface(run.result.app.surfaceId);
+        const proxyAcquisition = this.#openRuntimeClientSurface(run.result.app.surfaceId, clientSurfacePolicy);
         cleanup.proxyAcquisition = proxyAcquisition;
         proxy = await proxyAcquisition;
         cleanup.proxy = proxy;
       }
       this.#assertCreateStillValid(binding.id, runBinding, run.vector, session);
-      const documentPolicy = createMcpAppDocumentPolicySnapshot(1, { permissions: parsed.permissions }, []);
       const base = Object.freeze({
         binding,
         metadata: Object.freeze({ resource: resourceMetadata.merged, result: inspectMcpAppMetadata(result.appVisible), tool: inspectMcpAppMetadata(metadataOf(appTool)) }),
@@ -531,7 +549,8 @@ export class McpAppRuntimePreviewService implements McpAppRuntimeRoutePreviewSer
     if (grant?.scope === 'document') {
       const documentGrants = Object.freeze([...entry.documentGrants, grant]);
       const candidate = createMcpAppDocumentPolicySnapshot(entry.documentPolicy.revision + 1, {
-        permissions: entry.snapshot.kind === 'apps' ? entry.snapshot.resource.permissions : undefined,
+        ...(entry.snapshot.kind !== 'apps' || entry.snapshot.resource.csp === undefined ? {} : { csp: entry.snapshot.resource.csp }),
+        ...(entry.snapshot.kind !== 'apps' || entry.snapshot.resource.permissions === undefined ? {} : { permissions: entry.snapshot.resource.permissions }),
       }, documentGrants);
       if (!sameDocumentPolicy(entry.documentPolicy, candidate)) {
         entry.documentGrants = documentGrants;

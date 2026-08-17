@@ -39,6 +39,17 @@ const endpointKeys = Object.freeze([
   'webSocketPath',
   'webSocketToken',
 ] as const);
+const contentPolicyKeys = Object.freeze(['contentSecurityPolicy'] as const);
+
+/** Trusted server-only policy for the one opaque child installed by this proxy. */
+export interface RuntimeClientSurfaceContentPolicy {
+  readonly contentSecurityPolicy: string;
+}
+
+/** Direct fixture access receives the same strict no-network child policy. */
+export const strictRuntimeClientSurfaceContentPolicy: RuntimeClientSurfaceContentPolicy = Object.freeze({
+  contentSecurityPolicy: "default-src 'none'; base-uri 'self'; connect-src 'none'; frame-src 'none'; img-src data:; media-src 'none'; font-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'",
+});
 
 export interface RuntimeClientSurfaceConnectionEvent {
   readonly connectionCount: number;
@@ -60,6 +71,10 @@ const invalidEndpoint = (message: string): never => {
   throw new TypeError(`Runtime client surface endpoint must use ${message}.`);
 };
 
+const invalidContentPolicy = (message: string): never => {
+  throw new TypeError(`Runtime client surface content policy must use ${message}.`);
+};
+
 const endpointValue = <Key extends (typeof endpointKeys)[number]>(
   input: DevRuntimeClientSurfaceEndpoint,
   key: Key,
@@ -77,6 +92,44 @@ const closedEndpoint = (input: DevRuntimeClientSurfaceEndpoint): void => {
   ) {
     invalidEndpoint('exactly the declared endpoint fields');
   }
+};
+
+const contentSecurityPolicy = (input: RuntimeClientSurfaceContentPolicy): string => {
+  if (typeof input !== 'object' || input === null || Array.isArray(input)) invalidContentPolicy('a plain policy record');
+  const prototype = (() => {
+    try {
+      return Object.getPrototypeOf(input);
+    } catch {
+      return invalidContentPolicy('a plain policy record');
+    }
+  })();
+  if (prototype !== Object.prototype && prototype !== null) invalidContentPolicy('a plain policy record');
+  const keys = (() => {
+    try {
+      return Reflect.ownKeys(input);
+    } catch {
+      return invalidContentPolicy('an inspectable policy record');
+    }
+  })();
+  if (keys.length !== contentPolicyKeys.length || keys.some((key) => typeof key !== 'string' || !contentPolicyKeys.includes(key as typeof contentPolicyKeys[number]))) {
+    invalidContentPolicy('exactly the declared policy field');
+  }
+  const descriptor: PropertyDescriptor = (() => {
+    try {
+      const current = Object.getOwnPropertyDescriptor(input, 'contentSecurityPolicy');
+      if (current === undefined || !Object.hasOwn(current, 'value')) {
+        return invalidContentPolicy('an own data contentSecurityPolicy field');
+      }
+      return current;
+    } catch {
+      return invalidContentPolicy('an own data contentSecurityPolicy field');
+    }
+  })();
+  const value = descriptor.value;
+  if (typeof value !== 'string' || value.length === 0 || value.length > 16_384 || value.includes('\0')) {
+    invalidContentPolicy('a bounded nonempty contentSecurityPolicy string');
+  }
+  return value;
 };
 
 const response = (target: ServerResponse, status: number): void => {
@@ -105,11 +158,19 @@ const escapedScriptValue = (value: string): string => JSON.stringify(value).repl
   '\u2029': '\\u2029',
 })[character] as string);
 
+const escapedHtmlAttribute = (value: string): string => value.replace(/[&<>"']/gu, (character) => ({
+  '&': '&amp;',
+  '<': '&lt;',
+  '>': '&gt;',
+  '"': '&quot;',
+  "'": '&#39;',
+})[character] as string);
+
 /**
  * The same-origin outer document is the sole relay. The compiler App is never
  * granted that origin: it runs in this document's one opaque nested iframe.
  */
-const runtimeProxyShell = (entryPath: string, entryDocument: string, hostOrigin: string): string => `<!doctype html>
+const runtimeProxyShell = (entryPath: string, entryDocument: string, hostOrigin: string, childContentSecurityPolicy: string): string => `<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Runtime App surface</title>
@@ -121,6 +182,7 @@ const runtimeProxyShell = (entryPath: string, entryDocument: string, hostOrigin:
   const entryPath = ${escapedScriptValue(entryPath)};
   const initialEntry = ${escapedScriptValue(entryDocument)};
   const hostOrigin = ${escapedScriptValue(hostOrigin)};
+  const childContentSecurityPolicy = ${escapedScriptValue(childContentSecurityPolicy)};
   const maxAppToHostMessageBytes = ${String(runtimeAppMessageLimits.appToHostBytes)};
   const maxHostToAppMessageBytes = ${String(runtimeAppMessageLimits.hostToAppBytes)};
   const maxHmrMessageBytes = maxAppToHostMessageBytes;
@@ -135,6 +197,7 @@ const runtimeProxyShell = (entryPath: string, entryDocument: string, hostOrigin:
   let refreshController;
   let refreshGeneration = 0;
   let refreshing = false;
+  const childDocument = (entry) => '<!doctype html><meta http-equiv="Content-Security-Policy" content="' + ${escapedScriptValue(escapedHtmlAttribute(childContentSecurityPolicy))} + '">' + entry;
   const isRecord = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
   const hasOwn = (value, key) => Object.prototype.hasOwnProperty.call(value, key);
   const validId = (value) => value === null || (typeof value === 'string' && value.length <= 256) || (typeof value === 'number' && Number.isFinite(value));
@@ -160,7 +223,7 @@ const runtimeProxyShell = (entryPath: string, entryDocument: string, hostOrigin:
     if (lifecycle === 'closed' || typeof entry !== 'string' || new TextEncoder().encode(entry).byteLength > maxEntryBytes) return false;
     initializeId = undefined;
     lifecycle = 'created';
-    app.srcdoc = entry;
+    app.srcdoc = childDocument(entry);
     return true;
   };
   const refreshEntry = async () => {
@@ -501,9 +564,11 @@ export class RuntimeClientSurfaceProxy {
     input: DevRuntimeClientSurfaceEndpoint,
     listener: (event: RuntimeClientSurfaceConnectionEvent) => void,
     hostOrigin: string,
+    policy: RuntimeClientSurfaceContentPolicy = strictRuntimeClientSurfaceContentPolicy,
   ): Promise<DevRuntimeClientSurfaceProxyBinding> {
     const trusted = endpoint(input);
     const trustedHostOrigin = canonicalHostOrigin(hostOrigin);
+    const trustedContentSecurityPolicy = contentSecurityPolicy(policy);
     const bootstrapCapability = randomBytes(32).toString('base64url');
     const sessionCapability = randomBytes(32).toString('base64url');
     const bootstrapPath = `/__agent_bundle_runtime/bootstrap/${bootstrapCapability}`;
@@ -591,7 +656,12 @@ export class RuntimeClientSurfaceProxy {
           return;
         }
         if (requestUrl.pathname === bootstrapPath) {
-          if (request.method !== 'GET' || requestUrl.search.length > 0 || bootstrapUsed || closed) {
+          if (request.method !== 'GET' || requestUrl.search.length > 0 || closed) {
+            response(target, 403);
+            return;
+          }
+          const initialBootstrap = !bootstrapUsed;
+          if (!initialBootstrap && !isAuthenticated(request)) {
             response(target, 403);
             return;
           }
@@ -603,14 +673,17 @@ export class RuntimeClientSurfaceProxy {
             response(target, 502);
             return;
           }
-          target.writeHead(200, {
+          const headers: Record<string, string> = {
             'cache-control': 'no-store',
             'content-security-policy': runtimeProxyContentSecurityPolicy(trustedHostOrigin),
             'content-type': 'text/html; charset=utf-8',
-            'set-cookie': `${cookieName}=${sessionCapability}; HttpOnly; SameSite=None; Secure; Partitioned; Path=/`,
             'x-content-type-options': 'nosniff',
-          });
-          target.end(runtimeProxyShell(trusted.entryPath, entryDocument, trustedHostOrigin));
+          };
+          if (initialBootstrap) {
+            headers['set-cookie'] = `${cookieName}=${sessionCapability}; HttpOnly; SameSite=None; Secure; Partitioned; Path=/`;
+          }
+          target.writeHead(200, headers);
+          target.end(runtimeProxyShell(trusted.entryPath, entryDocument, trustedHostOrigin, trustedContentSecurityPolicy));
           return;
         }
         if (!isAuthenticated(request)) {

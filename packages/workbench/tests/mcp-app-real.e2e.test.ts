@@ -1,5 +1,5 @@
 import { execFile as executeFile } from 'node:child_process';
-import { access, mkdir, symlink, writeFile } from 'node:fs/promises';
+import { access, mkdir, readFile, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 
@@ -375,13 +375,25 @@ e2e('runs a generated SDK-v2 App through the real foreground session and separat
 });
 
 e2e('opens the real RSC runtime timeline App from provider-owned run evidence', { timeout: 120_000 }, async ({ page }) => {
-  const fixture = await startRuntimePlaygroundFixture();
+  const fixture = await startRuntimePlaygroundFixture({
+    prepare: async ({ root }) => {
+      const definitionSource = join(root, 'src', 'definition.ts');
+      const source = await readFile(definitionSource, 'utf8');
+      const updated = source.replace(
+        "        'ui.prefersBorder': true,",
+        "        'ui.prefersBorder': true,\n        ui: { permissions: { camera: {}, clipboardWrite: {} } },",
+      );
+      if (updated === source) throw new Error('Runtime App fixture did not find the timeline resource metadata.');
+      await writeFile(definitionSource, updated);
+    },
+  });
   let clientPage: Page | undefined;
   let clientSurface: Awaited<ReturnType<typeof fixture.openRuntimeClientSurface>> | undefined;
   const clientSurfaceConsole: string[] = [];
   const clientSurfaceResponses: Array<Readonly<{ readonly status: number; readonly url: string }>> = [];
   const clientSurfaceHmrRequests: Array<Readonly<{ readonly headers: Readonly<Record<string, string>>; readonly url: string }>> = [];
   const clientSurfaceSockets: string[] = [];
+  const runtimePreviewBootstraps: Array<Readonly<{ readonly status: number; readonly url: string }>> = [];
   const runtimePreviewSockets: string[] = [];
   const runtimePreviewHmrRoutes: WebSocketRoute[] = [];
   const appMessages: RuntimeAppMessage[] = [];
@@ -393,6 +405,9 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
   const runtimeAppRequests: RuntimeAppRouteRequest[] = [];
   const runtimeAppResponses: RuntimeAppRouteResponse[] = [];
   const runtimeMcpSessionRequests: string[] = [];
+  const opaqueSandboxRequestFailures: string[] = [];
+  const opaqueSandboxRouteHits: string[] = [];
+  const opaqueSandboxProbeOrigin = 'https://runtime-app-sandbox-probe.invalid';
   await page.exposeBinding('__recordRuntimeAppMessage', (_source, payload: unknown) => {
     if (payload !== null && typeof payload === 'object') {
       const event = payload as RuntimeAppMessage;
@@ -410,6 +425,15 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
   });
   page.on('pageerror', (error) => pageErrors.push(error));
   page.on('console', (message) => { browserConsole.push(`${message.type()}:${message.text()}`); });
+  page.on('requestfailed', (request) => {
+    if (new URL(request.url()).origin === opaqueSandboxProbeOrigin) {
+      opaqueSandboxRequestFailures.push(`${request.url()}:${request.failure()?.errorText ?? 'unknown'}`);
+    }
+  });
+  await page.route(`${opaqueSandboxProbeOrigin}/**`, async (route) => {
+    opaqueSandboxRouteHits.push(route.request().url());
+    await route.abort();
+  });
   page.on('websocket', (socket) => {
     if (new URL(socket.url()).pathname === '/rsbuild-hmr') runtimePreviewSockets.push(socket.url());
   });
@@ -427,6 +451,9 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
   });
   page.on('response', (response) => {
     const url = new URL(response.url());
+    if (url.pathname.startsWith('/__agent_bundle_runtime/bootstrap/')) {
+      runtimePreviewBootstraps.push(Object.freeze({ status: response.status(), url: response.url() }));
+    }
     if (url.origin !== fixture.url || !url.pathname.startsWith('/api/runtime/apps')) return;
     void response.json().then((body) => {
       const request = response.request();
@@ -506,15 +533,19 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
         readonly sessionRevision: number;
       }>;
       readonly clientSurface: Readonly<{ readonly bootstrapUrl: string; readonly origin: string }>;
+      readonly documentPolicy: Readonly<{ readonly approvedPermissions: unknown; readonly revision: number }>;
       readonly kind: string;
       readonly profile: Readonly<{ readonly hostContext: unknown; readonly resourceUri: string }>;
+      readonly resource: Readonly<{ readonly permissions: unknown }>;
       readonly result: Readonly<{ readonly appVisible: unknown; readonly modelVisible: unknown }>;
     }> }>;
     expect(created.preview).toMatchObject({
       binding: { serverName: 'timeline', sessionId: expect.any(String), sessionRevision: expect.any(Number) },
       clientSurface: { bootstrapUrl: expect.any(String), origin: expect.any(String) },
+      documentPolicy: { approvedPermissions: {}, revision: 1 },
       kind: 'apps',
       profile: { hostContext: { platform: 'web' }, resourceUri: 'ui://rsc-agent-runtime/edit-timeline-v1.html' },
+      resource: { permissions: { camera: {}, clipboardWrite: {} } },
     });
     expect(created.preview.result.appVisible).toMatchObject({
       content: [expect.objectContaining({ type: 'text' })],
@@ -523,6 +554,8 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
 
     const outerFrame = page.locator('.runtime-stage .mcp-app-preview iframe');
     await expect(outerFrame).toBeVisible({ timeout: 15_000 });
+    await expect(outerFrame).toHaveAttribute('sandbox', 'allow-scripts allow-same-origin');
+    await expect(outerFrame).toHaveAttribute('referrerpolicy', 'no-referrer');
     await expect.poll(() => runtimeIdentity.getAttribute('data-runtime-hmr-client-count'), { timeout: 15_000 }).toBe('1');
     expect(runtimePreviewSockets).toEqual([`${created.preview.clientSurface.origin.replace('http:', 'ws:')}/rsbuild-hmr`]);
     const runtimeAppFrame = async () => {
@@ -534,7 +567,7 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
     await expect.poll(runtimeAppFrame, { timeout: 15_000 }).toBeDefined();
     let appFrame = await runtimeAppFrame();
     if (appFrame === undefined) throw new Error('Runtime App frame was unavailable.');
-    const controllerFrame = appFrame.parentFrame();
+    let controllerFrame = appFrame.parentFrame();
     if (controllerFrame === null) throw new Error('Runtime App trusted controller frame was unavailable.');
     const controllerShape = await controllerFrame.evaluate(() => {
       const nested = [...document.querySelectorAll('iframe')];
@@ -566,6 +599,125 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
       parentDom: 'blocked',
       storage: 'blocked',
     });
+    const topUrlBeforeOpaqueSandboxProbes = page.url();
+    const opaqueSandboxProbes = await appFrame.evaluate(async (probeOrigin) => {
+      const blocked = async (operation: () => unknown | Promise<unknown>): Promise<'blocked' | 'available'> => {
+        try {
+          await operation();
+          return 'available';
+        } catch {
+          return 'blocked';
+        }
+      };
+      const observeElement = async (tagName: 'iframe' | 'img', path: string): Promise<void> => new Promise((resolvePromise) => {
+        const element = document.createElement(tagName);
+        let settled = false;
+        const settle = (): void => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timeout);
+          element.remove();
+          resolvePromise();
+        };
+        element.addEventListener('error', settle, { once: true });
+        element.addEventListener('load', settle, { once: true });
+        const timeout = setTimeout(settle, 500);
+        if (tagName === 'iframe') (element as HTMLIFrameElement).src = `${probeOrigin}${path}`;
+        else (element as HTMLImageElement).src = `${probeOrigin}${path}`;
+        document.body.append(element);
+      });
+      const form = document.createElement('form');
+      form.action = `${probeOrigin}/form`;
+      form.method = 'get';
+      form.target = '_top';
+      document.body.append(form);
+      const formTopNavigation = (() => {
+        try {
+          form.submit();
+          return 'blocked' as const;
+        } catch {
+          return 'blocked' as const;
+        } finally {
+          setTimeout(() => form.remove(), 0);
+        }
+      })();
+      const cookie = (() => {
+        try {
+          document.cookie = 'runtime-app-sandbox-probe=1';
+          return document.cookie.length === 0 ? 'blocked' : 'available';
+        } catch {
+          return 'blocked';
+        }
+      })();
+      const sessionStorage = (() => {
+        try {
+          window.sessionStorage.setItem('runtime-app-sandbox-probe', '1');
+          window.sessionStorage.removeItem('runtime-app-sandbox-probe');
+          return 'available';
+        } catch {
+          return 'blocked';
+        }
+      })();
+      const indexedDb = await new Promise<'blocked' | 'available'>((resolvePromise) => {
+        try {
+          const request = indexedDB.open('runtime-app-sandbox-probe');
+          request.onerror = () => resolvePromise('blocked');
+          request.onsuccess = () => {
+            request.result.close();
+            indexedDB.deleteDatabase('runtime-app-sandbox-probe');
+            resolvePromise('available');
+          };
+        } catch {
+          resolvePromise('blocked');
+        }
+      });
+      const topNavigation = (() => {
+        try {
+          window.top?.location.assign(`${probeOrigin}/top-navigation`);
+          return 'available';
+        } catch {
+          return 'blocked';
+        }
+      })();
+      const popup = (() => {
+        try {
+          const opened = window.open(`${probeOrigin}/popup`);
+          opened?.close();
+          return opened === null ? 'blocked' : 'available';
+        } catch {
+          return 'blocked';
+        }
+      })();
+      const clipboard = navigator.clipboard === undefined
+        ? 'blocked'
+        : await blocked(() => navigator.clipboard.writeText('runtime-app-sandbox-probe'));
+      const media = navigator.mediaDevices === undefined
+        ? 'blocked'
+        : await blocked(() => navigator.mediaDevices.getUserMedia({ video: true }));
+      const [fetch] = await Promise.all([
+        blocked(() => globalThis.fetch(`${probeOrigin}/fetch`)),
+        observeElement('iframe', '/frame'),
+        observeElement('img', '/image'),
+      ]);
+      return Object.freeze({ clipboard, cookie, fetch, formTopNavigation, indexedDb, media, popup, sessionStorage, topNavigation });
+    }, opaqueSandboxProbeOrigin);
+    expect(opaqueSandboxRouteHits).toEqual([]);
+    expect(
+      opaqueSandboxRequestFailures.some((failure) => failure.includes(opaqueSandboxProbeOrigin)) ||
+      browserConsole.some((entry) => entry.includes(opaqueSandboxProbeOrigin) && /content security policy|refused to load/iu.test(entry)),
+    ).toBe(true);
+    expect(opaqueSandboxProbes).toEqual({
+      clipboard: 'blocked',
+      cookie: 'blocked',
+      fetch: 'blocked',
+      formTopNavigation: 'blocked',
+      indexedDb: 'blocked',
+      media: 'blocked',
+      popup: 'blocked',
+      sessionStorage: 'blocked',
+      topNavigation: 'blocked',
+    });
+    expect(page.url()).toBe(topUrlBeforeOpaqueSandboxProbes);
     const frameOrigin = new URL(appFrame.url()).origin;
     const controllerOrigin = created.preview.clientSurface.origin;
     const outerSource = await outerFrame.getAttribute('src');
@@ -576,6 +728,36 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
     expect(new URL(created.preview.clientSurface.bootstrapUrl).origin).toBe(controllerOrigin);
     expect(outerSource).not.toContain(foregroundToken);
     expect(await appFrame.content()).not.toContain(foregroundToken);
+    const assertOpaqueChild = async (): Promise<void> => {
+      const currentFrame = appFrame;
+      if (currentFrame === undefined) throw new Error('Runtime App frame was unavailable.');
+      const currentController = currentFrame.parentFrame();
+      if (currentController === null) throw new Error('Runtime App trusted controller was unavailable.');
+      await expect.poll(async () => currentController.evaluate(() => {
+        const nested = [...document.querySelectorAll('iframe')];
+        return Object.freeze({ nestedCount: nested.length, nestedSandbox: nested[0]?.getAttribute('sandbox') ?? undefined });
+      }), { timeout: 15_000 }).toEqual({ nestedCount: 1, nestedSandbox: 'allow-scripts' });
+      expect(await currentFrame.evaluate(() => Object.freeze({
+        origin: window.origin,
+        parentDom: (() => {
+          try {
+            void window.parent.document.documentElement;
+            return 'available';
+          } catch {
+            return 'blocked';
+          }
+        })(),
+        storage: (() => {
+          try {
+            void window.localStorage.length;
+            return 'available';
+          } catch {
+            return 'blocked';
+          }
+        })(),
+      }))).toEqual({ origin: 'null', parentDom: 'blocked', storage: 'blocked' });
+      expect(await currentFrame.content()).not.toContain(foregroundToken);
+    };
 
     const messageFor = (
       receiverOrigin: string,
@@ -631,6 +813,11 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
     const initializeRequests = () => appMessages.filter((entry) =>
       new URL(entry.href).origin === fixture.url && entry.senderOrigin === controllerOrigin && entry.message !== null && typeof entry.message === 'object' &&
       (entry.message as Readonly<Record<string, unknown>>).method === 'ui/initialize');
+    const initializeResults = () => appMessages.filter((entry) => {
+      if (new URL(entry.href).origin !== controllerOrigin || entry.senderOrigin !== fixture.url || entry.message === null || typeof entry.message !== 'object') return false;
+      const message = entry.message as Readonly<Record<string, unknown>>;
+      return message.result !== null && typeof message.result === 'object' && Object.hasOwn(message.result, 'hostContext');
+    });
     expect(runtimePreviewHmrRoutes).toHaveLength(1);
     const initialInitializeCount = initializeRequests().length;
     await runtimePreviewHmrRoutes[0]!.close();
@@ -645,10 +832,165 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
     appFrame = await runtimeAppFrame();
     if (appFrame === undefined) throw new Error('Runtime App frame did not reinitialize after HMR recovery.');
 
-    await appFrame.getByRole('button', { name: 'Refresh' }).click();
     const consentPath = `/api/runtime/apps/${encodeURIComponent(created.preview.binding.id)}/consents`;
+    const previewPath = `/api/runtime/apps/${encodeURIComponent(created.preview.binding.id)}`;
+    const consentRequests = (scope: 'action' | 'document'): readonly RuntimeAppRouteRequest[] => runtimeAppRequests.filter((entry) =>
+      entry.method === 'POST' && entry.path === consentPath && entry.body !== null && typeof entry.body === 'object' &&
+      (entry.body as Readonly<{ readonly scope?: unknown }>).scope === scope);
+    const consentResponses = (scope: 'action' | 'document'): readonly RuntimeAppRouteResponse[] => runtimeAppResponses.filter((entry) =>
+      entry.method === 'POST' && entry.path === consentPath && entry.body !== null && typeof entry.body === 'object' &&
+      (entry.body as Readonly<{ readonly scope?: unknown }>).scope === scope);
+    const previewRefreshes = (): readonly RuntimeAppRouteRequest[] => runtimeAppRequests.filter((entry) => entry.method === 'GET' && entry.path === previewPath);
+    const documentTeardowns = (): readonly RuntimeAppMessage[] => appMessages.filter((entry) =>
+      new URL(entry.href).origin === controllerOrigin && entry.senderOrigin === fixture.url && entry.message !== null && typeof entry.message === 'object' &&
+      (entry.message as Readonly<Record<string, unknown>>).method === 'ui/resource-teardown');
+    const documentPermissionControl = page.getByLabel('Runtime App document permissions');
+    await expect(documentPermissionControl).toContainText('Permissions declared by this App can be approved from the Workbench.');
+    await expect(documentPermissionControl.getByRole('button', { name: 'Allow camera' })).toHaveCount(1);
+    await expect(documentPermissionControl.getByRole('button', { name: 'Allow clipboard write' })).toHaveCount(1);
+
+    // Document permissions are a host-only control. A denial returns the
+    // original policy and must leave the exact renderer/bridge in place.
+    const initialInitializeCountAfterHmr = initializeRequests().length;
+    const initialInitializeResultCountAfterHmr = initializeResults().length;
+    const initialTeardownCount = documentTeardowns().length;
+    await documentPermissionControl.getByRole('button', { name: 'Allow camera' }).click();
+    await expect.poll(() => consentRequests('document'), { timeout: 15_000 }).toHaveLength(1);
+    const deniedCameraRequest = consentRequests('document')[0];
+    expect(deniedCameraRequest?.body).toEqual({
+      actionFingerprint: 'runtime-app:document-permission:v1',
+      capability: 'camera',
+      details: { resourceUri: 'ui://rsc-agent-runtime/edit-timeline-v1.html' },
+      scope: 'document',
+      summary: 'Allow MCP App camera?',
+    });
+    await expect(page.getByRole('dialog', { name: 'Runtime App consent' })).toBeVisible({ timeout: 15_000 });
+    await expect.poll(() => consentResponses('document')).toHaveLength(1);
+    const deniedCamera = consentResponses('document')[0]?.response as Readonly<{ readonly challenge?: Readonly<{ readonly id?: unknown }> }> | undefined;
+    const deniedCameraChallenge = deniedCamera?.challenge;
+    if (typeof deniedCameraChallenge?.id !== 'string') throw new Error('Runtime App camera consent omitted its challenge id.');
+    await page.getByRole('button', { name: 'Deny' }).click();
+    const deniedCameraDecisionPath = `${consentPath}/${encodeURIComponent(deniedCameraChallenge.id)}`;
+    await expect.poll(() => runtimeAppRequests.filter((entry) => entry.method === 'POST' && entry.path === deniedCameraDecisionPath), { timeout: 15_000 }).toHaveLength(1);
+    expect(runtimeAppRequests.find((entry) => entry.method === 'POST' && entry.path === deniedCameraDecisionPath)?.body).toEqual({ decision: 'deny' });
+    await expect.poll(() => runtimeAppResponses.filter((entry) => entry.method === 'POST' && entry.path === deniedCameraDecisionPath), { timeout: 15_000 }).toHaveLength(1);
+    expect(runtimeAppResponses.find((entry) => entry.method === 'POST' && entry.path === deniedCameraDecisionPath)?.response).toMatchObject({
+      documentPolicy: { allow: '', approvedPermissions: {}, revision: 1 },
+    });
+    expect(previewRefreshes()).toHaveLength(0);
+    expect(documentTeardowns()).toHaveLength(initialTeardownCount);
+    expect(initializeRequests()).toHaveLength(initialInitializeCountAfterHmr);
+    await expect(outerFrame).toHaveCount(1);
+    expect(runtimeAppRequests.filter((entry) => entry.method === 'DELETE')).toHaveLength(0);
+
+    const cameraOuter = await outerFrame.elementHandle();
+    const cameraTeardownCount = documentTeardowns().length;
+    const cameraBootstrapCount = runtimePreviewBootstraps.length;
+    const cameraHmrConnectionCount = runtimePreviewHmrRoutes.length;
+    await documentPermissionControl.getByRole('button', { name: 'Allow camera' }).click();
+    await expect.poll(() => consentRequests('document'), { timeout: 15_000 }).toHaveLength(2);
+    const allowedCameraRequest = consentRequests('document')[1];
+    expect(allowedCameraRequest?.body).toEqual(deniedCameraRequest?.body);
+    await expect.poll(() => consentResponses('document')).toHaveLength(2);
+    const allowedCamera = consentResponses('document')[1]?.response as Readonly<{ readonly challenge?: Readonly<{ readonly id?: unknown }> }> | undefined;
+    const allowedCameraChallenge = allowedCamera?.challenge;
+    if (typeof allowedCameraChallenge?.id !== 'string') throw new Error('Runtime App approved camera consent omitted its challenge id.');
+    await expect(page.getByRole('dialog', { name: 'Runtime App consent' })).toBeVisible({ timeout: 15_000 });
+    await page.getByRole('button', { name: 'Allow once' }).click();
+    const allowedCameraDecisionPath = `${consentPath}/${encodeURIComponent(allowedCameraChallenge.id)}`;
+    await expect.poll(() => runtimeAppRequests.filter((entry) => entry.method === 'POST' && entry.path === allowedCameraDecisionPath), { timeout: 15_000 }).toHaveLength(1);
+    await expect.poll(() => runtimeAppResponses.filter((entry) => entry.method === 'POST' && entry.path === allowedCameraDecisionPath), { timeout: 15_000 }).toHaveLength(1);
+    expect(runtimeAppResponses.find((entry) => entry.method === 'POST' && entry.path === allowedCameraDecisionPath)?.response).toMatchObject({
+      documentPolicy: { allow: 'camera', approvedPermissions: { camera: {} }, revision: 2 },
+      grant: { bindingId: created.preview.binding.id, capability: 'camera', challengeId: allowedCameraChallenge.id, scope: 'document' },
+    });
+    await expect.poll(previewRefreshes, { timeout: 15_000 }).toHaveLength(1);
+    await expect.poll(documentTeardowns, { timeout: 15_000 }).toHaveLength(cameraTeardownCount + 1);
+    const cameraTeardown = documentTeardowns().at(-1);
+    const cameraTeardownId = cameraTeardown?.message !== null && typeof cameraTeardown?.message === 'object'
+      ? (cameraTeardown.message as Readonly<Record<string, unknown>>).id
+      : undefined;
+    if (typeof cameraTeardownId !== 'string' && typeof cameraTeardownId !== 'number') throw new Error('Runtime App camera policy remount omitted its teardown id.');
+    await expect.poll(() => messageFor(fixture.url, controllerOrigin, (message) => message.id === cameraTeardownId && Object.hasOwn(message, 'result')), { timeout: 15_000 }).toBeDefined();
+    await expect.poll(() => runtimePreviewBootstraps.length, { timeout: 15_000 }).toBe(cameraBootstrapCount + 1);
+    expect(runtimePreviewBootstraps.at(-1)).toEqual({ status: 200, url: created.preview.clientSurface.bootstrapUrl });
+    await expect.poll(() => runtimePreviewHmrRoutes.length, { timeout: 15_000 }).toBe(cameraHmrConnectionCount + 1);
+    await expect.poll(() => runtimeIdentity.getAttribute('data-runtime-hmr-client-count'), { timeout: 15_000 }).toBe('1');
+    await expect.poll(() => initializeRequests().length, { timeout: 15_000 }).toBe(initialInitializeCountAfterHmr + 1);
+    await expect.poll(() => initializeResults().length, { timeout: 15_000 }).toBe(initialInitializeResultCountAfterHmr + 1);
+    await expect(outerFrame).toHaveCount(1);
+    await expect(outerFrame).toHaveAttribute('sandbox', 'allow-scripts allow-same-origin');
+    await expect(outerFrame).toHaveAttribute('referrerpolicy', 'no-referrer');
+    await expect(outerFrame).toHaveAttribute('allow', 'camera');
+    expect((initializeResults().at(-1)?.message as Readonly<{ readonly result?: unknown }> | undefined)?.result).toMatchObject({
+      hostCapabilities: { sandbox: { permissions: { camera: {} } } },
+    });
+    if (cameraOuter !== null) await expect.poll(() => cameraOuter.evaluate((element) => element.isConnected), { timeout: 15_000 }).toBe(false);
+    appFrame = await runtimeAppFrame();
+    if (appFrame === undefined) throw new Error('Runtime App frame did not remount after camera approval.');
+    controllerFrame = appFrame.parentFrame();
+    if (controllerFrame === null) throw new Error('Runtime App trusted controller was unavailable after camera approval.');
+    await assertOpaqueChild();
+
+    const clipboardOuter = await outerFrame.elementHandle();
+    const clipboardTeardownCount = documentTeardowns().length;
+    const clipboardBootstrapCount = runtimePreviewBootstraps.length;
+    const clipboardHmrConnectionCount = runtimePreviewHmrRoutes.length;
+    await documentPermissionControl.getByRole('button', { name: 'Allow clipboard write' }).click();
+    await expect.poll(() => consentRequests('document'), { timeout: 15_000 }).toHaveLength(3);
+    const allowedClipboardRequest = consentRequests('document')[2];
+    expect(allowedClipboardRequest?.body).toEqual({
+      actionFingerprint: 'runtime-app:document-permission:v1',
+      capability: 'clipboard-write',
+      details: { resourceUri: 'ui://rsc-agent-runtime/edit-timeline-v1.html' },
+      scope: 'document',
+      summary: 'Allow MCP App clipboard-write?',
+    });
+    await expect.poll(() => consentResponses('document')).toHaveLength(3);
+    const allowedClipboard = consentResponses('document')[2]?.response as Readonly<{ readonly challenge?: Readonly<{ readonly id?: unknown }> }> | undefined;
+    const allowedClipboardChallenge = allowedClipboard?.challenge;
+    if (typeof allowedClipboardChallenge?.id !== 'string') throw new Error('Runtime App clipboard consent omitted its challenge id.');
+    await expect(page.getByRole('dialog', { name: 'Runtime App consent' })).toBeVisible({ timeout: 15_000 });
+    await page.getByRole('button', { name: 'Allow once' }).click();
+    const allowedClipboardDecisionPath = `${consentPath}/${encodeURIComponent(allowedClipboardChallenge.id)}`;
+    await expect.poll(() => runtimeAppRequests.filter((entry) => entry.method === 'POST' && entry.path === allowedClipboardDecisionPath), { timeout: 15_000 }).toHaveLength(1);
+    await expect.poll(() => runtimeAppResponses.filter((entry) => entry.method === 'POST' && entry.path === allowedClipboardDecisionPath), { timeout: 15_000 }).toHaveLength(1);
+    expect(runtimeAppResponses.find((entry) => entry.method === 'POST' && entry.path === allowedClipboardDecisionPath)?.response).toMatchObject({
+      documentPolicy: { allow: 'camera; clipboard-write', approvedPermissions: { camera: {}, clipboardWrite: {} }, revision: 3 },
+      grant: { bindingId: created.preview.binding.id, capability: 'clipboard-write', challengeId: allowedClipboardChallenge.id, scope: 'document' },
+    });
+    await expect.poll(previewRefreshes, { timeout: 15_000 }).toHaveLength(2);
+    await expect.poll(documentTeardowns, { timeout: 15_000 }).toHaveLength(clipboardTeardownCount + 1);
+    const clipboardTeardown = documentTeardowns().at(-1);
+    const clipboardTeardownId = clipboardTeardown?.message !== null && typeof clipboardTeardown?.message === 'object'
+      ? (clipboardTeardown.message as Readonly<Record<string, unknown>>).id
+      : undefined;
+    if (typeof clipboardTeardownId !== 'string' && typeof clipboardTeardownId !== 'number') throw new Error('Runtime App clipboard policy remount omitted its teardown id.');
+    await expect.poll(() => messageFor(fixture.url, controllerOrigin, (message) => message.id === clipboardTeardownId && Object.hasOwn(message, 'result')), { timeout: 15_000 }).toBeDefined();
+    await expect.poll(() => runtimePreviewBootstraps.length, { timeout: 15_000 }).toBe(clipboardBootstrapCount + 1);
+    expect(runtimePreviewBootstraps.at(-1)).toEqual({ status: 200, url: created.preview.clientSurface.bootstrapUrl });
+    await expect.poll(() => runtimePreviewHmrRoutes.length, { timeout: 15_000 }).toBe(clipboardHmrConnectionCount + 1);
+    await expect.poll(() => runtimeIdentity.getAttribute('data-runtime-hmr-client-count'), { timeout: 15_000 }).toBe('1');
+    await expect.poll(() => initializeRequests().length, { timeout: 15_000 }).toBe(initialInitializeCountAfterHmr + 2);
+    await expect.poll(() => initializeResults().length, { timeout: 15_000 }).toBe(initialInitializeResultCountAfterHmr + 2);
+    await expect(outerFrame).toHaveCount(1);
+    await expect(outerFrame).toHaveAttribute('sandbox', 'allow-scripts allow-same-origin');
+    await expect(outerFrame).toHaveAttribute('referrerpolicy', 'no-referrer');
+    await expect(outerFrame).toHaveAttribute('allow', 'camera; clipboard-write');
+    expect((initializeResults().at(-1)?.message as Readonly<{ readonly result?: unknown }> | undefined)?.result).toMatchObject({
+      hostCapabilities: { sandbox: { permissions: { camera: {}, clipboardWrite: {} } } },
+    });
+    if (clipboardOuter !== null) await expect.poll(() => clipboardOuter.evaluate((element) => element.isConnected), { timeout: 15_000 }).toBe(false);
+    await expect(documentPermissionControl).toHaveCount(0);
+    appFrame = await runtimeAppFrame();
+    if (appFrame === undefined) throw new Error('Runtime App frame did not remount after clipboard approval.');
+    controllerFrame = appFrame.parentFrame();
+    if (controllerFrame === null) throw new Error('Runtime App trusted controller was unavailable after clipboard approval.');
+    await assertOpaqueChild();
+
+    await appFrame.getByRole('button', { name: 'Refresh' }).click();
     try {
-      await expect.poll(() => runtimeAppRequests.filter((entry) => entry.method === 'POST' && entry.path === consentPath), { timeout: 3_000 }).toHaveLength(1);
+      await expect.poll(() => consentRequests('action'), { timeout: 3_000 }).toHaveLength(1);
     } catch {
       throw new Error(`Runtime App call relay did not reach consent: ${JSON.stringify({
         console: browserConsole,
@@ -656,7 +998,7 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
         status: await appFrame.getByRole('status').textContent(),
       })}`);
     }
-    const consentCreate = runtimeAppRequests.find((entry) => entry.method === 'POST' && entry.path === consentPath);
+    const consentCreate = consentRequests('action')[0];
     expect(consentCreate?.body).toEqual({
       actionFingerprint: 'runtime-app:call-tool:v1',
       capability: 'call-tool',
@@ -665,8 +1007,8 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
       summary: 'Call MCP App tool',
     });
     await expect(page.getByRole('dialog', { name: 'Runtime App consent' })).toBeVisible({ timeout: 15_000 });
-    await expect.poll(() => runtimeAppResponses.find((entry) => entry.method === 'POST' && entry.path === consentPath), { timeout: 15_000 }).toBeDefined();
-    const consentCreated = runtimeAppResponses.find((entry) => entry.method === 'POST' && entry.path === consentPath);
+    await expect.poll(() => consentResponses('action')).toHaveLength(1);
+    const consentCreated = consentResponses('action')[0];
     const challenge = (consentCreated?.response as Readonly<{ readonly challenge?: Readonly<{ readonly id?: unknown }> }> | undefined)?.challenge;
     if (typeof challenge?.id !== 'string') throw new Error('Runtime App consent create response omitted its challenge id.');
     expect(consentCreated?.response).toMatchObject({
@@ -768,8 +1110,8 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
       new URL(entry.href).origin === fixture.url && entry.senderOrigin === controllerOrigin && entry.message !== null && typeof entry.message === 'object' &&
       (entry.message as Readonly<Record<string, unknown>>).method === 'tools/call');
     await appFrame.getByRole('button', { name: 'Refresh' }).click();
-    await expect.poll(() => runtimeAppRequests.filter((entry) => entry.method === 'POST' && entry.path === consentPath), { timeout: 15_000 }).toHaveLength(2);
-    const deniedConsentCreate = runtimeAppRequests.filter((entry) => entry.method === 'POST' && entry.path === consentPath)[1];
+    await expect.poll(() => consentRequests('action'), { timeout: 15_000 }).toHaveLength(2);
+    const deniedConsentCreate = consentRequests('action')[1];
     expect(deniedConsentCreate?.body).toEqual({
       actionFingerprint: 'runtime-app:call-tool:v1',
       capability: 'call-tool',
@@ -777,8 +1119,8 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
       scope: 'action',
       summary: 'Call MCP App tool',
     });
-    await expect.poll(() => runtimeAppResponses.filter((entry) => entry.method === 'POST' && entry.path === consentPath), { timeout: 15_000 }).toHaveLength(2);
-    const deniedConsentCreated = runtimeAppResponses.filter((entry) => entry.method === 'POST' && entry.path === consentPath)[1];
+    await expect.poll(() => consentResponses('action')).toHaveLength(2);
+    const deniedConsentCreated = consentResponses('action')[1];
     const deniedChallenge = (deniedConsentCreated?.response as Readonly<{ readonly challenge?: Readonly<{ readonly id?: unknown }> }> | undefined)?.challenge;
     if (typeof deniedChallenge?.id !== 'string') throw new Error('Denied Runtime App consent create response omitted its challenge id.');
     expect(deniedChallenge.id).not.toBe(challenge.id);

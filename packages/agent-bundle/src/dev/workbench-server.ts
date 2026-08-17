@@ -25,7 +25,11 @@ import {
 import { McpSessionService } from './mcp-session-service.ts';
 import { ProjectService } from './project-service.ts';
 import { DevRuntimeController } from './runtime-controller.ts';
-import { RuntimeClientSurfaceProxy } from './runtime-client-surface-proxy.ts';
+import {
+  RuntimeClientSurfaceProxy,
+  strictRuntimeClientSurfaceContentPolicy,
+  type RuntimeClientSurfaceContentPolicy,
+} from './runtime-client-surface-proxy.ts';
 import { resolveDevRuntimeProvider } from './runtime-provider-loader.ts';
 import {
   DevRuntimeUnavailableError,
@@ -298,7 +302,10 @@ export class RuntimeClientSurfaceBindings implements Closeable {
     this.#hostOrigin = parsed.origin;
   }
 
-  async open(surfaceId: string): Promise<DevRuntimeClientSurfaceProxyBinding | undefined> {
+  async open(
+    surfaceId: string,
+    policy: RuntimeClientSurfaceContentPolicy = strictRuntimeClientSurfaceContentPolicy,
+  ): Promise<DevRuntimeClientSurfaceProxyBinding | undefined> {
     if (this.#closing) throw new Error('Development runtime client surfaces are closed.');
     if (this.#hostOrigin === undefined) throw new Error('Development runtime client surfaces are not bound to a foreground origin.');
     let endpoint;
@@ -314,7 +321,7 @@ export class RuntimeClientSurfaceBindings implements Closeable {
         details: Object.freeze({ connectionCount: event.connectionCount, surfaceId: event.surfaceId }),
         type: event.type === 'connected' ? 'runtime.hmr.client-connected' : 'runtime.hmr.client-disconnected',
       } satisfies DevRuntimeEventInput));
-    }, this.#hostOrigin).then(async (binding) => {
+    }, this.#hostOrigin, policy).then(async (binding) => {
       if (this.#closing) {
         try {
           await binding.close();

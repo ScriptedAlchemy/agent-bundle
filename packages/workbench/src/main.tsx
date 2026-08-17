@@ -825,6 +825,7 @@ const Workbench = () => {
       operationTraces={runtimeOperationTraces}
       profile={props.profile}
       profileId={props.profileId}
+      requestDocumentConsent={requestRuntimeConsent}
       registerLifecycle={(handle) => {
         lifecycleAuthorities.current.set(handle, authority);
         return props.registerLifecycle?.(handle) ?? (() => undefined);
@@ -832,7 +833,7 @@ const Workbench = () => {
       run={props.run}
       surface={props.surface}
     /></MantineProvider>;
-  }, [createBridgeFactory, runtimeOperationTraces]);
+  }, [createBridgeFactory, requestRuntimeConsent, runtimeOperationTraces]);
 
   const liveMcpPageAdapter = useMemo<RuntimeLiveMcpPageAdapter>(() => Object.freeze({
     kind: 'host-owned',

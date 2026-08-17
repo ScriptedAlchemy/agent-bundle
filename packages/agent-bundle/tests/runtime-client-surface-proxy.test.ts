@@ -182,6 +182,7 @@ const runtimeProxyShellHarness = async (
     pendingTimers: () => timers.size,
     runTimers,
     sockets,
+    source,
   });
 };
 
@@ -290,6 +291,91 @@ it('reconnects one outer HMR socket and stops reconnecting after pagehide', asyn
   }
 });
 
+it('prefixes every opaque child entry with the closed CSP supplied by its trusted binding', async () => {
+  const initialEntry = '<style>main{color:green}</style><script>window.inline=true</script><img src="data:image/png;base64,AA==">';
+  const refreshedEntry = '<style>main{color:blue}</style><script>window.refreshed=true</script><img src="data:image/png;base64,AA==">';
+  const upstream = createServer((request, response) => {
+    if (request.url === '/app/index.html') {
+      response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end(initialEntry);
+      return;
+    }
+    response.writeHead(404).end();
+  });
+  const origin = await listen(upstream);
+  const childPolicy = "default-src 'none'; script-src 'unsafe-inline' \"<&";
+  const binding = await RuntimeClientSurfaceProxyImplementation.open({
+    entryPath: '/app/index.html',
+    httpOrigin: origin,
+    httpPathPrefixes: ['/app/'],
+    surfaceId: 'app.weather',
+    webSocketOrigin: origin.replace('http:', 'ws:'),
+    webSocketPath: '/rsbuild-hmr',
+    webSocketToken: 'rsbuild-token-1234',
+  }, () => undefined, foregroundOrigin, Object.freeze({ contentSecurityPolicy: childPolicy }) as never);
+  try {
+    const shell = await runtimeProxyShellHarness(binding, {
+      fetch: async () => new Response(refreshedEntry, {
+        headers: { 'content-type': 'text/html; charset=utf-8' },
+      }),
+    });
+    const prefix = '<!doctype html><meta http-equiv="Content-Security-Policy" content="default-src &#39;none&#39;; script-src &#39;unsafe-inline&#39; &quot;&lt;&amp;">';
+    expect(shell.entries).toEqual([`${prefix}${initialEntry}`]);
+    expect(shell.source).not.toContain('rsbuild-token-1234');
+
+    shell.sockets[0]!.emit('message', { data: JSON.stringify({ type: 'full-reload' }) });
+    await new Promise<void>((resolvePromise) => setTimeout(resolvePromise, 0));
+    expect(shell.entries).toEqual([`${prefix}${initialEntry}`, `${prefix}${refreshedEntry}`]);
+  } finally {
+    await binding.close();
+    upstream.closeAllConnections();
+    await close(upstream);
+  }
+});
+
+it('uses an exact empty-domain child CSP for direct non-MCP surface opens', async () => {
+  const upstream = createServer((request, response) => {
+    if (serveBootstrapEntry(request, response)) return;
+    response.writeHead(404).end();
+  });
+  const origin = await listen(upstream);
+  const binding = await RuntimeClientSurfaceProxy.open({
+    entryPath: '/app/index.html',
+    httpOrigin: origin,
+    httpPathPrefixes: ['/app/'],
+    surfaceId: 'app.weather',
+    webSocketOrigin: origin.replace('http:', 'ws:'),
+    webSocketPath: '/rsbuild-hmr',
+    webSocketToken: 'rsbuild-token-1234',
+  }, () => undefined);
+  try {
+    const shell = await runtimeProxyShellHarness(binding);
+    expect(shell.entries).toEqual([
+      '<!doctype html><meta http-equiv="Content-Security-Policy" content="default-src &#39;none&#39;; base-uri &#39;self&#39;; connect-src &#39;none&#39;; frame-src &#39;none&#39;; img-src data:; media-src &#39;none&#39;; font-src &#39;none&#39;; style-src &#39;unsafe-inline&#39;; script-src &#39;unsafe-inline&#39;"><!doctype html><main>runtime App</main>',
+    ]);
+  } finally {
+    await binding.close();
+    upstream.closeAllConnections();
+    await close(upstream);
+  }
+});
+
+it('rejects a custom-prototype child policy before opening a proxy binding', async () => {
+  const policy = Object.create({ inherited: true }) as Record<string, unknown>;
+  Object.defineProperty(policy, 'contentSecurityPolicy', {
+    enumerable: true,
+    value: "default-src 'none'",
+  });
+  await expect(RuntimeClientSurfaceProxyImplementation.open({
+    entryPath: '/app/index.html',
+    httpOrigin: 'http://127.0.0.1:41998',
+    httpPathPrefixes: ['/app/'],
+    surfaceId: 'app.weather',
+    webSocketOrigin: 'ws://127.0.0.1:41998',
+    webSocketPath: '/rsbuild-hmr',
+    webSocketToken: 'rsbuild-token-1234',
+  }, () => undefined, foregroundOrigin, policy as never)).rejects.toThrow('plain policy record');
+});
+
 it('does not reinstall the opaque child when a held refresh fetch resolves after pagehide', async () => {
   const upstream = createServer((request, response) => {
     if (serveBootstrapEntry(request, response)) return;
@@ -388,9 +474,10 @@ it('does not reinstall the opaque child when held refresh text resolves after pa
 });
 
 it('uses a one-use bootstrap capability before proxying only the declared app and Rsbuild HMR endpoints', async () => {
+  let entry = '<main>runtime app</main>';
   const upstream = createServer((request, response) => {
     if (request.url === '/app/index.html') {
-      response.writeHead(200, { 'content-type': 'text/html' }).end('<main>runtime app</main>');
+      response.writeHead(200, { 'content-type': 'text/html' }).end(entry);
       return;
     }
     response.writeHead(404).end();
@@ -438,6 +525,14 @@ it('uses a one-use bootstrap capability before proxying only the declared app an
     const second = await fetch(binding.bootstrapUrl, { redirect: 'manual' });
     expect(second.status).toBe(403);
 
+    entry = '<main>runtime app remounted</main>';
+    const rebootstrap = await fetch(binding.bootstrapUrl, { headers: { cookie }, redirect: 'manual' });
+    expect(rebootstrap.status).toBe(200);
+    expect(rebootstrap.headers.get('set-cookie')).toBeNull();
+    await expect(rebootstrap.text()).resolves.toContain('runtime app remounted');
+    expect((await fetch(`${binding.bootstrapUrl}?capability=forbidden`, { headers: { cookie }, redirect: 'manual' })).status).toBe(403);
+    expect((await fetch(binding.bootstrapUrl, { headers: { cookie: `${cookie}wrong` }, redirect: 'manual' })).status).toBe(403);
+
     const asset = await fetch(`${binding.origin}/app/index.html`, { headers: { cookie } });
     expect(asset.status).toBe(200);
     await expect(asset.text()).resolves.toContain('runtime app');
@@ -463,6 +558,33 @@ it('uses a one-use bootstrap capability before proxying only the declared app an
   } finally {
     await binding.close();
     webSocketServer.clients.forEach((client) => client.terminate());
+    upstream.closeAllConnections();
+    await close(upstream);
+  }
+});
+
+it('stops serving the bootstrap path after its binding closes', async () => {
+  const upstream = createServer((request, response) => {
+    if (serveBootstrapEntry(request, response)) return;
+    response.writeHead(404).end();
+  });
+  const origin = await listen(upstream);
+  const binding = await RuntimeClientSurfaceProxy.open({
+    entryPath: '/app/index.html',
+    httpOrigin: origin,
+    httpPathPrefixes: ['/app/'],
+    surfaceId: 'app.weather',
+    webSocketOrigin: origin.replace('http:', 'ws:'),
+    webSocketPath: '/rsbuild-hmr',
+    webSocketToken: 'rsbuild-token-1234',
+  }, () => undefined);
+
+  try {
+    await bootstrapCookie(binding);
+    await binding.close();
+    await expect(fetch(binding.bootstrapUrl, { redirect: 'manual' })).rejects.toThrow();
+  } finally {
+    await binding.close();
     upstream.closeAllConnections();
     await close(upstream);
   }

@@ -807,7 +807,9 @@ describe('MCP App browser client', () => {
 
     await runtime.getRuntime('runtime-binding');
     const current = runtime.currentDocumentPolicy('runtime-binding');
-    await runtime.getRuntime('runtime-binding');
+    const refreshed = await runtime.getRuntime('runtime-binding');
+    expect(refreshed).toMatchObject({ documentPolicy: current.snapshot });
+    expect((refreshed as Extract<typeof refreshed, { readonly kind: 'apps' }>).documentPolicy).toBe(current.snapshot);
     expect(runtime.currentDocumentPolicy('runtime-binding')).toBe(current);
 
     for (const changed of [

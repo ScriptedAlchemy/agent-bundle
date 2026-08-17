@@ -56,7 +56,7 @@ const snapshot = (): DevRuntimeMcpSessionSnapshot => Object.freeze({
 
 const createSessionView = (
   requests: DevRuntimeMcpOperationRequest[],
-  options: Readonly<{ readonly permissions?: JsonValue }> = {},
+  options: Readonly<{ readonly csp?: JsonValue; readonly permissions?: JsonValue }> = {},
 ): DevRuntimeMcpSessionView => ({
   execute: async (request) => {
     requests.push(request);
@@ -69,7 +69,10 @@ const createSessionView = (
       : request.kind === 'list-resources'
         ? [{ _meta: { ui: { resourceUri: 'ui://weather/forecast.html' } }, mimeType: 'text/html;profile=mcp-app', uri: 'ui://weather/forecast.html' }]
         : request.kind === 'read-resource'
-          ? { contents: [{ _meta: { ui: options.permissions === undefined ? {} : { permissions: options.permissions } }, mimeType: 'text/html;profile=mcp-app', text: '<main>Weather</main>', uri: request.uri }] }
+          ? { contents: [{ _meta: { ui: {
+            ...(options.csp === undefined ? {} : { csp: options.csp }),
+            ...(options.permissions === undefined ? {} : { permissions: options.permissions }),
+          } }, mimeType: 'text/html;profile=mcp-app', text: '<main>Weather</main>', uri: request.uri }] }
           : { content: [{ text: 'called', type: 'text' }] };
     return Object.freeze({ operationId: `op-${requests.length}`, sessionId: 'session-a', sessionRevision: 2, value, vector });
   },
@@ -80,12 +83,14 @@ const createSessionView = (
 const createRuntimeFixture = (options: Readonly<{
   readonly closeBinding?: () => Promise<void>;
   readonly closeProxy?: () => Promise<void>;
+  readonly csp?: JsonValue;
   readonly failProxyOpen?: boolean;
-  readonly openRuntimeClientSurface?: (surfaceId: string) => Promise<DevRuntimeClientSurfaceProxyBinding | undefined>;
+  readonly openRuntimeClientSurface?: (surfaceId: string, ...policy: readonly unknown[]) => Promise<DevRuntimeClientSurfaceProxyBinding | undefined>;
   readonly permissions?: JsonValue;
 }> = {}) => {
   const requests: DevRuntimeMcpOperationRequest[] = [];
   const openedClientSurfaces: string[] = [];
+  const openedClientSurfacePolicies: unknown[] = [];
   const controls: string[] = [];
   const emitted: unknown[] = [];
   let listener: ((message: DevRuntimeMcpRegistryMessage) => void) | undefined;
@@ -130,10 +135,11 @@ const createRuntimeFixture = (options: Readonly<{
     bindingAuthority,
     configExtensions: () => Object.freeze({ descriptors: [], extensions: Object.freeze({}), projectRoot: '/project', sourceRevision: 'source-a' }),
     emit: (details) => { emitted.push(details); },
-    openRuntimeClientSurface: async (surfaceId) => {
+    openRuntimeClientSurface: async (surfaceId, ...policy) => {
       openedClientSurfaces.push(surfaceId);
+      openedClientSurfacePolicies.push(policy[0]);
       if (options.failProxyOpen === true) throw new Error('proxy open failed');
-      if (options.openRuntimeClientSurface !== undefined) return options.openRuntimeClientSurface(surfaceId);
+      if (options.openRuntimeClientSurface !== undefined) return options.openRuntimeClientSurface(surfaceId, ...policy);
       return Object.freeze({ bootstrapUrl: `http://proxy.test/${surfaceId}`, close: options.closeProxy ?? (async () => undefined), origin: 'http://proxy.test', surfaceId, webSocketPath: '/rsbuild-hmr' });
     },
     runtime,
@@ -141,6 +147,7 @@ const createRuntimeFixture = (options: Readonly<{
   return Object.freeze({
     controls,
     emitted,
+    openedClientSurfacePolicies,
     openedClientSurfaces,
     requests,
     service,
@@ -181,6 +188,27 @@ it('derives an Apps preview only from one stored succeeded run and opens its dis
   expect(JSON.stringify(preview)).not.toContain('provider-private');
   expect(JSON.stringify(preview)).not.toContain('state-private');
   await expect(service.create({ expectedGenerationId: 'generation-b', profileId: 'portable', runId: 'run-a' })).rejects.toThrow('generation');
+});
+
+it('derives one closed child CSP before proxy acquisition and retains CSP warnings across document policy revisions', async () => {
+  const { openedClientSurfacePolicies, service } = createRuntimeFixture({
+    csp: { connectDomains: ['https://api.weather.test', 'not-a-canonical-origin'] },
+    permissions: { camera: {} },
+  });
+
+  const preview = await service.create({ expectedGenerationId: 'generation-a', profileId: 'portable', runId: 'run-a' });
+  expect(openedClientSurfacePolicies).toEqual([{
+    contentSecurityPolicy: "default-src 'none'; base-uri 'self'; connect-src https://api.weather.test; frame-src 'none'; img-src data:; media-src 'none'; font-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'",
+  }]);
+  if (preview.kind !== 'apps') throw new Error('Expected an admitted Apps preview.');
+  expect(preview.documentPolicy.warnings).toEqual([{ code: 'csp-source-rejected', value: 'not-a-canonical-origin' }]);
+
+  const consent = await service.createConsent(preview.binding.id, {
+    actionFingerprint: 'runtime-app:document-permission:v1', capability: 'camera', details: {}, scope: 'document', summary: 'Allow MCP App camera?',
+  });
+  const approved = await service.decideConsent(preview.binding.id, consent.challenge.id, 'allow-once');
+  expect(approved.documentPolicy).toMatchObject({ approvedPermissions: { camera: {} }, revision: 2 });
+  expect(approved.documentPolicy.warnings).toEqual(preview.documentPolicy.warnings);
 });
 
 it('subscribes to registry invalidations, revokes exactly once, and fails closed after a replay gap', async () => {
