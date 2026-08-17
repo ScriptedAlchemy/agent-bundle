@@ -4,6 +4,8 @@ import { createRoot } from 'react-dom/client';
 import type { Diagnostic } from '../../agent-bundle/src/core/diagnostics.ts';
 import type { ProjectStatus } from '../../agent-bundle/src/dev/types.ts';
 
+import { HookClient } from './hooks/hook-client.ts';
+import { HooksPage } from './hooks/hooks-page.tsx';
 import { InspectorSessionAdapter } from './inspector/adapter/inspector-session-adapter-entry.ts';
 import { McpAppClient } from './mcp/mcp-app-client.ts';
 import { McpPage, type McpConfigDownload } from './mcp/mcp-page.tsx';
@@ -30,6 +32,9 @@ const sourceFor = (diagnostic: Diagnostic): string =>
 const errorMessage = (reason: unknown): string =>
   reason instanceof Error ? reason.message : 'Foreground project state could not be refreshed.';
 
+const activeEpochId = (status: ProjectStatus): string | undefined =>
+  status.artifact.state === 'missing' ? undefined : status.artifact.activeEpoch?.id;
+
 const mcpTargets = ['portable', 'claude', 'codex'] as const;
 
 const createMcpController = () => createMcpSessionController({ routes: new McpRouteClient() });
@@ -51,11 +56,12 @@ const StateMark = ({ state }: { readonly state: string }) => (
   }</span>
 );
 
-type WorkbenchPage = 'mcp' | 'overview' | 'skills';
+type WorkbenchPage = 'hooks' | 'mcp' | 'overview' | 'skills';
 type McpPresentation = 'inspector' | 'playground';
 
 const pageForHash = (): WorkbenchPage => {
   if (window.location.hash === '#mcp' || window.location.hash === '#inspector') return 'mcp';
+  if (window.location.hash === '#hooks') return 'hooks';
   return window.location.hash === '#skills' ? 'skills' : 'overview';
 };
 
@@ -83,6 +89,15 @@ const Navigation = ({ onNavigate, page }: {
   >
     <span aria-hidden="true" className="nav-glyph">⌘</span>
     Skills
+  </a>
+  <a
+    aria-current={page === 'hooks' ? 'page' : undefined}
+    className={page === 'hooks' ? 'nav-item nav-item--active' : 'nav-item'}
+    href="#hooks"
+    onClick={(event) => { event.preventDefault(); onNavigate('hooks'); }}
+  >
+    <span aria-hidden="true" className="nav-glyph">⌥</span>
+    Hooks
   </a>
   <a
     aria-current={page === 'mcp' ? 'page' : undefined}
@@ -243,6 +258,15 @@ const WorkbenchScreen = ({ children, connectionError, onNavigate, page }: {
   </div>
 </div>;
 
+const HooksScreen = ({ connectionError, hookClient, onNavigate, status }: {
+  readonly connectionError?: string;
+  readonly hookClient: HookClient;
+  readonly onNavigate: (page: WorkbenchPage) => void;
+  readonly status: ProjectStatus;
+}) => <WorkbenchScreen connectionError={connectionError} onNavigate={onNavigate} page="hooks">
+  <HooksPage client={hookClient} epochId={activeEpochId(status)} />
+</WorkbenchScreen>;
+
 const McpScreen = ({ appPreviewClient, connectionError, controller, model, onNavigate, onResetSession, presentation, setPresentation, status }: {
   readonly appPreviewClient: McpAppClient;
   readonly connectionError?: string;
@@ -336,6 +360,7 @@ const McpScreen = ({ appPreviewClient, connectionError, controller, model, onNav
 
 const Workbench = () => {
   const client = useRef<ProjectClient>();
+  const hookClient = useRef<HookClient | undefined>(undefined);
   const mcpAppClient = useRef<McpAppClient>();
   const skillClient = useRef<SkillClient>();
   const [connectionError, setConnectionError] = useState<string>();
@@ -347,10 +372,11 @@ const Workbench = () => {
   const [status, setStatus] = useState<ProjectStatus>();
   const [changedFiles, setChangedFiles] = useState<readonly string[]>([]);
 
+  if (hookClient.current === undefined) hookClient.current = new HookClient();
   if (mcpAppClient.current === undefined) mcpAppClient.current = new McpAppClient();
 
   const navigate = (next: WorkbenchPage): void => {
-    const hash = next === 'mcp' ? '#mcp' : next === 'skills' ? '#skills' : '#overview';
+    const hash = next === 'hooks' ? '#hooks' : next === 'mcp' ? '#mcp' : next === 'skills' ? '#skills' : '#overview';
     if (window.location.hash !== hash) window.history.pushState(undefined, '', hash);
     if (next === 'mcp') setMcpPresentation('playground');
     setPage(next);
@@ -422,6 +448,9 @@ const Workbench = () => {
         setPresentation={setMcpPresentation}
         status={status}
       />;
+    }
+    if (page === 'hooks') {
+      return <HooksScreen connectionError={connectionError} hookClient={hookClient.current} onNavigate={navigate} status={status} />;
     }
     return page === 'skills'
       ? <SkillsScreen connectionError={connectionError} onNavigate={navigate} skillClient={skillClient.current} status={status} />
