@@ -97,6 +97,18 @@ e2e('canonicalizes the legacy Inspector hash into the internal MCP Inspector pre
     await expect(page.getByRole('heading', { name: 'Inspector' })).toBeVisible({ timeout: browserTimeout });
     await expect(page.getByText('Negotiated protocol: Not negotiated')).toBeVisible({ timeout: browserTimeout });
     await expect(page.getByRole('navigation', { name: 'Inspector screens' })).toHaveText(/Tools.*Resources.*Prompts.*Protocol.*Logging/u);
+    const playgroundTab = page.getByRole('tab', { name: 'Playground' });
+    const inspectorTab = page.getByRole('tab', { name: 'Inspector' });
+    await expect(inspectorTab).toHaveAttribute('tabindex', '0');
+    await expect(playgroundTab).toHaveAttribute('tabindex', '-1');
+    await inspectorTab.focus();
+    await page.keyboard.press('Home');
+    await expect(playgroundTab).toBeFocused({ timeout: browserTimeout });
+    await expect(playgroundTab).toHaveAttribute('aria-selected', 'true');
+    await expect(page).toHaveURL(/#mcp$/u);
+    await page.keyboard.press('End');
+    await expect(inspectorTab).toBeFocused({ timeout: browserTimeout });
+    await expect(inspectorTab).toHaveAttribute('aria-selected', 'true');
     expect(sessionPosts).toBe(0);
     expect(pageErrors).toEqual([]);
   } finally {
@@ -124,7 +136,26 @@ e2e('shares one real session between the MCP Playground and Inspector presentati
     });
 
     await page.goto(`${server.url}#mcp`);
-    await expect(page.getByRole('tab', { name: 'Playground' })).toHaveAttribute('aria-selected', 'true');
+    const playgroundTab = page.getByRole('tab', { name: 'Playground' });
+    const inspectorTab = page.getByRole('tab', { name: 'Inspector' });
+    await expect(playgroundTab).toHaveAttribute('aria-selected', 'true');
+    await expect(playgroundTab).toHaveAttribute('tabindex', '0');
+    await expect(inspectorTab).toHaveAttribute('tabindex', '-1');
+    await playgroundTab.focus();
+    await page.keyboard.press('ArrowRight');
+    await expect(inspectorTab).toBeFocused({ timeout: browserTimeout });
+    await expect(inspectorTab).toHaveAttribute('aria-selected', 'true');
+    await expect(page).toHaveURL(/#mcp$/u);
+    await page.keyboard.press('ArrowDown');
+    await expect(playgroundTab).toBeFocused({ timeout: browserTimeout });
+    await expect(playgroundTab).toHaveAttribute('aria-selected', 'true');
+    await page.keyboard.press('ArrowLeft');
+    await expect(inspectorTab).toBeFocused({ timeout: browserTimeout });
+    await expect(inspectorTab).toHaveAttribute('aria-selected', 'true');
+    await page.keyboard.press('ArrowUp');
+    await expect(playgroundTab).toBeFocused({ timeout: browserTimeout });
+    await expect(playgroundTab).toHaveAttribute('aria-selected', 'true');
+    expect(sessionPosts).toBe(0);
     await page.locator('#mcp-target').selectOption('portable');
     await page.locator('#mcp-server-name').fill('fixture');
     await page.getByRole('button', { name: 'Open MCP session' }).click();

@@ -879,6 +879,18 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
       summary: 'Call MCP App tool',
     });
     await expect(page.getByRole('dialog', { name: 'Runtime App consent' })).toBeVisible({ timeout: 15_000 });
+    const runtimeConsentDialog = page.getByRole('dialog', { name: 'Runtime App consent' });
+    const denyRuntimeConsent = runtimeConsentDialog.getByRole('button', { name: 'Deny' });
+    const allowRuntimeConsent = runtimeConsentDialog.getByRole('button', { name: 'Allow once' });
+    await expect(runtimeConsentDialog).toHaveAttribute('aria-modal', 'true');
+    await expect(page.locator('.workbench-shell')).toHaveAttribute('inert', '');
+    await expect(denyRuntimeConsent).toBeFocused({ timeout: 15_000 });
+    await page.keyboard.press('Tab');
+    await expect(allowRuntimeConsent).toBeFocused({ timeout: 15_000 });
+    await page.keyboard.press('Tab');
+    await expect(denyRuntimeConsent).toBeFocused({ timeout: 15_000 });
+    await page.keyboard.press('Shift+Tab');
+    await expect(allowRuntimeConsent).toBeFocused({ timeout: 15_000 });
     await expect.poll(() => consentResponses('action')).toHaveLength(1);
     const consentCreated = consentResponses('action')[0];
     const challenge = (consentCreated?.response as Readonly<{ readonly challenge?: Readonly<{ readonly id?: unknown }> }> | undefined)?.challenge;
@@ -898,7 +910,7 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
       documentPolicy: expect.any(Object),
     });
 
-    await page.getByRole('button', { name: 'Allow once' }).click();
+    await allowRuntimeConsent.click();
     const decisionPath = `${consentPath}/${encodeURIComponent(challenge.id)}`;
     await expect.poll(() => runtimeAppRequests.filter((entry) => entry.method === 'POST' && entry.path === decisionPath), { timeout: 15_000 }).toHaveLength(1);
     const consentDecision = runtimeAppRequests.find((entry) => entry.method === 'POST' && entry.path === decisionPath);
@@ -1008,7 +1020,8 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
       },
     });
     await expect(page.getByRole('dialog', { name: 'Runtime App consent' })).toBeVisible({ timeout: 15_000 });
-    await page.getByRole('button', { name: 'Deny' }).click();
+    await expect(denyRuntimeConsent).toBeFocused({ timeout: 15_000 });
+    await page.keyboard.press('Escape');
     const deniedDecisionPath = `${consentPath}/${encodeURIComponent(deniedChallenge.id)}`;
     await expect.poll(() => runtimeAppRequests.filter((entry) => entry.method === 'POST' && entry.path === deniedDecisionPath), { timeout: 15_000 }).toHaveLength(1);
     expect(runtimeAppRequests.find((entry) => entry.method === 'POST' && entry.path === deniedDecisionPath)?.body).toEqual({ decision: 'deny' });
@@ -1016,6 +1029,9 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
     const deniedDecision = runtimeAppResponses.find((entry) => entry.method === 'POST' && entry.path === deniedDecisionPath)?.response;
     expect(deniedDecision).toMatchObject({ documentPolicy: expect.any(Object) });
     expect(deniedDecision).not.toHaveProperty('grant');
+    await expect(runtimeConsentDialog).toBeHidden({ timeout: 15_000 });
+    await expect(page.locator('.workbench-shell')).not.toHaveAttribute('inert', '');
+    await expect(outerFrame).toBeFocused({ timeout: 15_000 });
     await expect.poll(toolCallRequests, { timeout: 15_000 }).toHaveLength(2);
     const deniedToolCall = toolCallRequests()[1];
     const deniedToolCallId = deniedToolCall?.message !== null && typeof deniedToolCall?.message === 'object'

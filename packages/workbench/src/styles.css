@@ -75,6 +75,12 @@ td { border-top: 1px solid #d9dee7; font-size: 14px; padding: 12px 10px; vertica
 .runtime-stage,
 .runtime-inspector { border: 1px solid #d9dee7; display: grid; gap: 14px; min-width: 0; padding: 14px; }
 .runtime-content { margin: 0 auto; max-width: 1460px; min-width: 0; padding: 30px 34px 64px; width: 100%; }
+.runtime-consent-backdrop { align-items: center; background: #08111acc; display: flex; inset: 0; justify-content: center; padding: 24px; position: fixed; z-index: 20; }
+.runtime-consent-dialog { background: #fff; border: 1px solid #0b5bd3; box-shadow: 0 14px 38px #041a3d5c; display: grid; gap: 12px; max-width: 430px; padding: 20px; width: min(100%, 430px); }
+.runtime-consent-dialog h2, .runtime-consent-dialog p { margin: 0; }
+.runtime-consent-dialog p { color: #374151; }
+.runtime-consent-dialog button { background: #fff; border: 1px solid #bfc8d5; border-radius: 4px; color: #1e2938; cursor: pointer; min-height: 40px; padding: 7px 10px; }
+.runtime-consent-dialog button:last-child { background: #0b5bd3; border-color: #06459e; color: #fff; font-weight: 750; }
 .runtime-playground { display: grid; gap: 18px; grid-template-columns: minmax(0, 1fr); min-width: 0; }
 .runtime-playground > div, .runtime-playground-heading, .runtime-playground-heading > div { min-width: 0; }
 .runtime-playground-heading { align-items: flex-start; border-bottom: 1px solid #d9dee7; display: flex; gap: 20px; justify-content: space-between; padding-bottom: 18px; }

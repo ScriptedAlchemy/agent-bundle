@@ -1,4 +1,4 @@
-import { type MutableRefObject, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { type KeyboardEvent as ReactKeyboardEvent, type MutableRefObject, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { MantineProvider } from '@mantine/core';
 
@@ -15,6 +15,7 @@ import {
   type RuntimeAppBridgeTrace,
 } from './inspector/adapter/runtime-app-bridge.ts';
 import { McpAppClient, type McpAppConsentChallenge } from './mcp/mcp-app-client.ts';
+import { RuntimeConsentDialog } from './mcp/runtime-consent-dialog.tsx';
 import { createRuntimeConsentQueue, type RuntimeConsentQueue } from './mcp/runtime-consent-queue.ts';
 import { McpAppPreview } from './mcp/mcp-app-preview.tsx';
 import { McpPage, type McpConfigDownload, type McpPagePreviewSelection, type McpPageRuntimePreviewDependencies } from './mcp/mcp-page.tsx';
@@ -434,14 +435,15 @@ const SkillsScreen = ({ connectionError, onNavigate, runtimeAvailable = false, r
   </main>
 </div>;
 
-const WorkbenchScreen = ({ children, connectionError, onNavigate, page, runtimeAvailable = false, runtimeDiagnostic }: {
+const WorkbenchScreen = ({ children, connectionError, inert = false, onNavigate, page, runtimeAvailable = false, runtimeDiagnostic }: {
   readonly children: ReactNode;
   readonly connectionError?: string;
+  readonly inert?: boolean;
   readonly onNavigate: (page: WorkbenchPage) => void;
   readonly page: WorkbenchPage;
   readonly runtimeAvailable?: boolean;
   readonly runtimeDiagnostic?: string;
-}) => <div className="workbench-shell">
+}) => <div className="workbench-shell" inert={inert || undefined}>
   <Navigation onNavigate={onNavigate} page={page} runtimeAvailable={runtimeAvailable} runtimeDiagnostic={runtimeDiagnostic} />
   <div className="canvas" id={page}>
     <header className="topbar">
@@ -492,6 +494,27 @@ const McpScreen = ({ appPreviewClient, connectionError, controller, mcpDeparture
     resources: 'available' as const,
     tools: 'available' as const,
   });
+  const presentationTabs = useRef<Partial<Record<McpPresentation, HTMLButtonElement | null>>>({});
+  const selectPresentation = (next: McpPresentation): void => {
+    setPresentation(next);
+    presentationTabs.current[next]?.focus();
+  };
+  const onPresentationKeyDown = (event: ReactKeyboardEvent<HTMLButtonElement>, current: McpPresentation): void => {
+    const presentations: readonly McpPresentation[] = ['playground', 'inspector'];
+    const index = presentations.indexOf(current);
+    const next = event.key === 'ArrowRight' || event.key === 'ArrowDown'
+      ? presentations[(index + 1) % presentations.length]
+      : event.key === 'ArrowLeft' || event.key === 'ArrowUp'
+        ? presentations[(index + presentations.length - 1) % presentations.length]
+        : event.key === 'Home'
+          ? presentations[0]
+          : event.key === 'End'
+            ? presentations[presentations.length - 1]
+            : undefined;
+    if (next === undefined) return;
+    event.preventDefault();
+    selectPresentation(next);
+  };
   return <WorkbenchScreen connectionError={connectionError} onNavigate={onNavigate} page="mcp" runtimeAvailable={runtimeAvailable} runtimeDiagnostic={runtimeDiagnostic}>
     <div className="mcp-content">
       {mcpDepartureDiagnostic === undefined ? undefined : <p role="alert">{mcpDepartureDiagnostic}</p>}
@@ -501,8 +524,11 @@ const McpScreen = ({ appPreviewClient, connectionError, controller, mcpDeparture
           aria-selected={presentation === 'playground'}
           className={presentation === 'playground' ? 'mcp-presentation-tab mcp-presentation-tab--active' : 'mcp-presentation-tab'}
           id="mcp-playground-tab"
-          onClick={() => setPresentation('playground')}
+          onClick={() => selectPresentation('playground')}
+          onKeyDown={(event) => onPresentationKeyDown(event, 'playground')}
+          ref={(element) => { presentationTabs.current.playground = element; }}
           role="tab"
+          tabIndex={presentation === 'playground' ? 0 : -1}
           type="button"
         >
           Playground
@@ -512,8 +538,11 @@ const McpScreen = ({ appPreviewClient, connectionError, controller, mcpDeparture
           aria-selected={presentation === 'inspector'}
           className={presentation === 'inspector' ? 'mcp-presentation-tab mcp-presentation-tab--active' : 'mcp-presentation-tab'}
           id="mcp-inspector-tab"
-          onClick={() => setPresentation('inspector')}
+          onClick={() => selectPresentation('inspector')}
+          onKeyDown={(event) => onPresentationKeyDown(event, 'inspector')}
+          ref={(element) => { presentationTabs.current.inspector = element; }}
           role="tab"
+          tabIndex={presentation === 'inspector' ? 0 : -1}
           type="button"
         >
           Inspector
@@ -574,25 +603,20 @@ const RuntimeScreen = ({ connectionError, controller, handoffDiagnostic, liveMcp
 }) => {
   const diagnostic = useRef<HTMLParagraphElement>(null);
   useEffect(() => { diagnostic.current?.focus(); }, [handoffDiagnostic]);
-  return <WorkbenchScreen connectionError={connectionError} onNavigate={onNavigate} page="runtime" runtimeAvailable runtimeDiagnostic={runtimeDiagnostic}>
-    <div className="runtime-content">
-      {handoffDiagnostic === undefined ? undefined : <p ref={diagnostic} role="alert" tabIndex={-1}>{handoffDiagnostic}</p>}
-      {runtimeConsent === undefined ? undefined : <section aria-label="Runtime App consent" role="dialog">
-        <h2>Runtime App permission request</h2>
-        <p>{typeof runtimeConsent.request === 'object' && runtimeConsent.request !== null && 'summary' in runtimeConsent.request && typeof runtimeConsent.request.summary === 'string'
-          ? runtimeConsent.request.summary
-          : 'Allow this Runtime App action?'}</p>
-        <button onClick={() => { resolveRuntimeConsent('allow-once'); }} type="button">Allow once</button>
-        <button onClick={() => { resolveRuntimeConsent('deny'); }} type="button">Deny</button>
-      </section>}
-      <RuntimePlayground
-        controller={controller}
-        liveMcpPageAdapter={liveMcpPageAdapter}
-        registerAppPreviewLifecycle={registerAppPreviewLifecycle}
-        renderAppPreview={renderAppPreview}
-      />
-    </div>
-  </WorkbenchScreen>;
+  return <>
+    <WorkbenchScreen connectionError={connectionError} inert={runtimeConsent !== undefined} onNavigate={onNavigate} page="runtime" runtimeAvailable runtimeDiagnostic={runtimeDiagnostic}>
+      <div className="runtime-content">
+        {handoffDiagnostic === undefined ? undefined : <p ref={diagnostic} role="alert" tabIndex={-1}>{handoffDiagnostic}</p>}
+        <RuntimePlayground
+          controller={controller}
+          liveMcpPageAdapter={liveMcpPageAdapter}
+          registerAppPreviewLifecycle={registerAppPreviewLifecycle}
+          renderAppPreview={renderAppPreview}
+        />
+      </div>
+    </WorkbenchScreen>
+    {runtimeConsent === undefined ? undefined : <RuntimeConsentDialog challenge={runtimeConsent} onResolve={resolveRuntimeConsent} />}
+  </>;
 };
 
 const Workbench = () => {
