@@ -552,6 +552,100 @@ it('maps all runtime App MCP operations through its binding executor, gates tool
   })).rejects.toThrow('session identity');
 });
 
+it('aborts each held tools/call consent phase without a late decision or runtime operation', async () => {
+  const policy = Object.freeze({
+    bindingId: 'runtime-binding',
+    snapshot: Object.freeze({ allow: '', approvedPermissions: Object.freeze({}), revision: 1, warnings: Object.freeze([]) }),
+  });
+  const created = Object.freeze({
+    challenge: Object.freeze({ expiresAt: 10, id: 'consent-a', request: Object.freeze({}) }),
+    documentPolicy: policy.snapshot,
+  });
+  const decided = Object.freeze({
+    documentPolicy: policy.snapshot,
+    grant: Object.freeze({ authorizationId: 'authorization-a' }),
+  });
+  const operation = Object.freeze({ arguments: Object.freeze({ city: 'Paris' }), kind: 'tools/call' as const, name: 'forecast' });
+
+  for (const phase of ['create', 'prompt', 'decide'] as const) {
+    const heldCreate = deferred<typeof created>();
+    const heldPrompt = deferred<'allow-once' | 'deny'>();
+    const heldDecision = deferred<typeof decided>();
+    const abort = new AbortController();
+    const reason = new DOMException(`Cancelled during ${phase}.`, 'AbortError');
+    const signals: Partial<Record<typeof phase, AbortSignal | undefined>> = {};
+    const started: Partial<Record<typeof phase, boolean>> = {};
+    let decisionCalls = 0;
+    let operationCalls = 0;
+    let attached: McpSessionControllerAppAttachment | undefined;
+    const pending = <Value>(held: ReturnType<typeof deferred<Value>>, signal: AbortSignal | undefined): Promise<Value> => new Promise((resolve, reject) => {
+      signal?.addEventListener('abort', () => reject(signal.reason), { once: true });
+      void held.promise.then(resolve, reject);
+    });
+    const controller = Object.freeze({
+      attachApp: async (candidate: McpSessionControllerAppAttachment) => {
+        attached = candidate;
+        return Object.freeze({ client: Object.freeze({}), close: async () => undefined, sessionId: 'runtime-session-a', sessionRevision: 3 });
+      },
+    });
+    const client = Object.freeze({
+      createRuntimeConsent: async (_bindingId: string, _request: unknown, signal?: AbortSignal) => {
+        signals.create = signal;
+        started.create = true;
+        return phase === 'create' ? pending(heldCreate, signal) : created;
+      },
+      currentDocumentPolicy: () => policy,
+      decideRuntimeConsent: async (_bindingId: string, _consentId: string, _decision: 'allow-once' | 'deny', signal?: AbortSignal) => {
+        decisionCalls += 1;
+        signals.decide = signal;
+        started.decide = true;
+        return phase === 'decide' ? pending(heldDecision, signal) : decided;
+      },
+      operateRuntime: async () => {
+        operationCalls += 1;
+        return Object.freeze({
+          operationId: 'operation-a', sessionId: 'runtime-session-a', sessionRevision: 3, value: Object.freeze([]),
+          vector: Object.freeze({ runtimeGenerationId: 'generation-a', sourceRevision: 'source-a', stateVersion: 2 }),
+        });
+      },
+    });
+    await createBindingMcpClient(controller as never, client as never, {
+      binding: { id: 'runtime-binding', registryRevision: 3, runVector: { runtimeGenerationId: 'generation-a', sourceRevision: 'source-a', stateVersion: 2 }, sessionId: 'runtime-session-a', sessionRevision: 3 },
+      documentPolicy: policy.snapshot,
+      kind: 'apps',
+    } as never, {
+      onTrace: () => undefined,
+      requestConsent: async (_challenge, signal?: AbortSignal) => {
+        signals.prompt = signal;
+        started.prompt = true;
+        return phase === 'prompt' ? pending(heldPrompt, signal) : 'allow-once';
+      },
+    });
+    if (attached === undefined) throw new Error('Expected runtime App attachment.');
+    const executing = attached.execute(operation, abort.signal);
+
+    try {
+      await eventually(() => started[phase] === true);
+      abort.abort(reason);
+      expect(signals[phase]).toBe(abort.signal);
+      await expect(executing).rejects.toBe(reason);
+      const decisionsAtCancellation = decisionCalls;
+      heldCreate.resolve(created);
+      heldPrompt.resolve('allow-once');
+      heldDecision.resolve(decided);
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(decisionCalls).toBe(decisionsAtCancellation);
+      expect(operationCalls).toBe(0);
+    } finally {
+      heldCreate.resolve(created);
+      heldPrompt.resolve('allow-once');
+      heldDecision.resolve(decided);
+      await executing.catch(() => undefined);
+    }
+  }
+});
+
 it('keeps a maximum valid App binding and large tool arguments out of the bounded consent fingerprint', async () => {
   const bindingId = 'b'.repeat(4_096);
   const argumentsValue = Object.freeze({ payload: 'x'.repeat(128 * 1024) });

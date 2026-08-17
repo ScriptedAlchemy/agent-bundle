@@ -122,9 +122,9 @@ export interface McpAppTrustedDocumentPolicy {
 export interface McpAppRuntimeClient {
   closeRuntime(bindingId: string): Promise<void>;
   createRuntime(request: RuntimeCreateRequest): Promise<McpAppPreviewSnapshot>;
-  createRuntimeConsent(bindingId: string, request: McpAppConsentRequest): Promise<McpAppConsentCreatedResponse>;
+  createRuntimeConsent(bindingId: string, request: McpAppConsentRequest, signal?: AbortSignal): Promise<McpAppConsentCreatedResponse>;
   currentDocumentPolicy(bindingId: string): McpAppTrustedDocumentPolicy;
-  decideRuntimeConsent(bindingId: string, consentId: string, decision: 'allow-once' | 'deny'): Promise<McpAppConsentDecisionResponse>;
+  decideRuntimeConsent(bindingId: string, consentId: string, decision: 'allow-once' | 'deny', signal?: AbortSignal): Promise<McpAppConsentDecisionResponse>;
   getRuntime(bindingId: string): Promise<McpAppPreviewSnapshot>;
   operateRuntime(bindingId: string, operation: McpAppBindingOperation, signal?: AbortSignal): Promise<McpAppBoundOperationResult>;
   subscribeInvalidations(listener: (details: McpAppRuntimeInvalidationDetails) => void): () => void;
@@ -141,6 +141,10 @@ interface Diagnostic {
 }
 
 const maximumPathSegmentLength = 4_096;
+
+const throwIfAborted = (signal: AbortSignal | undefined): void => {
+  if (signal?.aborted) throw signal.reason ?? new DOMException('Aborted', 'AbortError');
+};
 
 const runtimeResponseJson = async (response: Response): Promise<unknown> => {
   const maximumBytes = runtimeAppMessageLimits.hostToAppBytes;
@@ -1102,7 +1106,8 @@ export class McpAppClient implements McpAppRuntimeClient {
     return runtimeOperationResult(body.result, binding);
   }
 
-  async createRuntimeConsent(bindingId: string, request: McpAppConsentRequest): Promise<McpAppConsentCreatedResponse> {
+  async createRuntimeConsent(bindingId: string, request: McpAppConsentRequest, signal?: AbortSignal): Promise<McpAppConsentCreatedResponse> {
+    throwIfAborted(signal);
     const id = decodeURIComponent(opaqueSegment(bindingId, 'Runtime MCP App binding'));
     const admission = this.#admitRuntime(id);
     const binding = admission.binding;
@@ -1112,7 +1117,9 @@ export class McpAppClient implements McpAppRuntimeClient {
       body: JSON.stringify(submitted),
       headers: { 'content-type': 'application/json' },
       method: 'POST',
+      ...(signal === undefined ? {} : { signal }),
     }, admission);
+    throwIfAborted(signal);
     this.#assertRuntimeAdmission(admission);
     const body = runtimeRecord(response, ['challenge', 'documentPolicy']);
     const policy = runtimeDocumentPolicy(body.documentPolicy);
@@ -1129,7 +1136,9 @@ export class McpAppClient implements McpAppRuntimeClient {
     bindingId: string,
     consentId: string,
     decision: 'allow-once' | 'deny',
+    signal?: AbortSignal,
   ): Promise<McpAppConsentDecisionResponse> {
+    throwIfAborted(signal);
     const id = decodeURIComponent(opaqueSegment(bindingId, 'Runtime MCP App binding'));
     const admission = this.#admitRuntime(id);
     const binding = admission.binding;
@@ -1139,7 +1148,9 @@ export class McpAppClient implements McpAppRuntimeClient {
     const challenge = this.#claimRuntimeConsentChallenge(id, consent, binding);
     const response = await this.#json(`/api/runtime/apps/${opaqueSegment(id, 'Runtime MCP App binding')}/consents/${opaqueSegment(consent, 'Runtime MCP App consent')}`, {
       body: JSON.stringify({ decision }), headers: { 'content-type': 'application/json' }, method: 'POST',
+      ...(signal === undefined ? {} : { signal }),
     }, admission);
+    throwIfAborted(signal);
     this.#assertRuntimeAdmission(admission);
     const body = runtimeOptionalRecord(response, ['documentPolicy', 'grant']);
     if (!hasExactKeys(body, body.grant === undefined ? ['documentPolicy'] : ['documentPolicy', 'grant'])) runtimeInvalid();

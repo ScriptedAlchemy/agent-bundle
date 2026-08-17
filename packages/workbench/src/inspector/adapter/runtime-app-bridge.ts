@@ -54,7 +54,7 @@ export interface RuntimeAppBridgeOptions {
   readonly onTrace: (entry: RuntimeAppBridgeTrace) => void;
   readonly persistWidgetState?: (state: unknown) => Promise<void>;
   readonly preview: McpAppPreviewSnapshot;
-  readonly requestConsent: (challenge: McpAppConsentChallenge) => Promise<'allow-once' | 'deny'>;
+  readonly requestConsent: (challenge: McpAppConsentChallenge, signal?: AbortSignal) => Promise<'allow-once' | 'deny'>;
   readonly simulationFeatures: McpAppSimulationFeatures;
 }
 
@@ -331,6 +331,10 @@ const validDisplayMode = (value: unknown): value is 'inline' | 'fullscreen' => v
 /** Server-derived consent details, not a client fingerprint, bind the approved action. */
 const consentFingerprint = (capability: McpAppConsentCapability): string => `runtime-app:${capability}:v1`;
 
+const throwIfAborted = (signal: AbortSignal | undefined): void => {
+  if (signal?.aborted) throw signal.reason ?? new DOMException('Aborted', 'AbortError');
+};
+
 const sideEffectConsent = async (
   options: RuntimeAppBridgeOptions,
   preview: McpAppPreviewAppsSnapshot,
@@ -356,6 +360,7 @@ const callToolConsent = async (
   preview: McpAppPreviewAppsSnapshot,
   requestConsent: RuntimeAppBridgeOptions['requestConsent'],
   operation: Extract<McpAppBindingOperation, { readonly kind: 'tools/call' }>,
+  signal?: AbortSignal,
 ): Promise<string> => {
   const details: McpAppJsonValue = Object.freeze({
     arguments: operation.arguments ?? Object.freeze({}),
@@ -368,9 +373,13 @@ const callToolConsent = async (
     scope: 'action',
     summary: 'Call MCP App tool',
   });
-  const created = await client.createRuntimeConsent(preview.binding.id, request);
-  const decision = await requestConsent(created.challenge);
-  const resolved = await client.decideRuntimeConsent(preview.binding.id, created.challenge.id, decision);
+  throwIfAborted(signal);
+  const created = await client.createRuntimeConsent(preview.binding.id, request, signal);
+  throwIfAborted(signal);
+  const decision = await requestConsent(created.challenge, signal);
+  throwIfAborted(signal);
+  const resolved = await client.decideRuntimeConsent(preview.binding.id, created.challenge.id, decision, signal);
+  throwIfAborted(signal);
   if (resolved.grant === undefined) throw new Error('Runtime MCP App tool call was not approved.');
   return resolved.grant.authorizationId;
 };
@@ -415,8 +424,8 @@ export const createBindingMcpClient = async (
     bindingId: preview.binding.id,
     execute: async (operation: McpAppBindingOperation, signal?: AbortSignal) => {
       if (operation.kind !== 'tools/call') return client.operateRuntime(preview.binding.id, operation, signal);
-      const consentId = await callToolConsent(client, preview, options.requestConsent, operation);
-      if (signal?.aborted) throw signal.reason ?? new DOMException('Aborted', 'AbortError');
+      const consentId = await callToolConsent(client, preview, options.requestConsent, operation, signal);
+      throwIfAborted(signal);
       return client.operateRuntime(preview.binding.id, Object.freeze({ ...operation, consentId }), signal);
     },
     onResult: (operation: McpAppBindingOperation, result: McpAppBoundOperationResult) => options.onTrace(appOperationTrace(preview, operation, result)),

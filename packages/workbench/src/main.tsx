@@ -15,6 +15,7 @@ import {
   type RuntimeAppBridgeTrace,
 } from './inspector/adapter/runtime-app-bridge.ts';
 import { McpAppClient, type McpAppConsentChallenge } from './mcp/mcp-app-client.ts';
+import { createRuntimeConsentQueue, type RuntimeConsentQueue } from './mcp/runtime-consent-queue.ts';
 import { McpAppPreview } from './mcp/mcp-app-preview.tsx';
 import { McpPage, type McpConfigDownload, type McpPagePreviewSelection, type McpPageRuntimePreviewDependencies } from './mcp/mcp-page.tsx';
 import { ForegroundRouteClient, McpRouteClient } from './mcp/mcp-route-client.ts';
@@ -157,7 +158,7 @@ const createWorkbenchRuntimeBridgeFactory = (
   controllerRef: MutableRefObject<WorkbenchMcpController>,
   onClosed: (binding: McpAppPreviewAppsSnapshot['binding']) => void,
   onTrace: (binding: McpAppPreviewAppsSnapshot['binding'], entry: RuntimeAppBridgeTrace) => void,
-  requestConsent: (challenge: McpAppConsentChallenge) => Promise<'allow-once' | 'deny'>,
+  requestConsent: (challenge: McpAppConsentChallenge, signal?: AbortSignal) => Promise<'allow-once' | 'deny'>,
 ): ((preview: McpAppPreviewAppsSnapshot) => RuntimeAppBridgeFactory) => (preview) => {
   const controller = controllerRef.current;
   let admission: Promise<void> | undefined;
@@ -607,7 +608,6 @@ const Workbench = () => {
   const handoffCoordinator = useRef<RuntimeMcpHandoffCoordinator>();
   const mcpPreviewDeparture = useRef<McpPreviewDepartureCoordinator>();
   const runtimeOperationTraceAuthorities = useRef(new Map<string, RuntimeOperationTraceAuthority>());
-  const runtimeConsentQueue = useRef<Array<Readonly<{ readonly challenge: McpAppConsentChallenge; readonly resolve: (decision: 'allow-once' | 'deny') => void }>>>([]);
   const [connectionError, setConnectionError] = useState<string>();
   const [error, setError] = useState<string>();
   if (foreground.current === undefined) foreground.current = new ForegroundRouteClient();
@@ -624,6 +624,10 @@ const Workbench = () => {
   const [runtimeHandoffError, setRuntimeHandoffError] = useState<string>();
   const [mcpDepartureError, setMcpDepartureError] = useState<string>();
   const [runtimeConsent, setRuntimeConsent] = useState<McpAppConsentChallenge>();
+  const runtimeConsentQueue = useRef<RuntimeConsentQueue>();
+  if (runtimeConsentQueue.current === undefined) {
+    runtimeConsentQueue.current = createRuntimeConsentQueue(setRuntimeConsent);
+  }
   const [mcpPresentation, setMcpPresentation] = useState(mcpPresentationForHash);
   const [status, setStatus] = useState<ProjectStatus>();
   const [changedFiles, setChangedFiles] = useState<readonly string[]>([]);
@@ -778,17 +782,11 @@ const Workbench = () => {
     subscribe: (listener) => handoffCoordinator.current!.subscribe(listener),
   }), [canOpenRuntimeHandoff, openRuntimeHandoff]);
 
-  const requestRuntimeConsent = useCallback((challenge: McpAppConsentChallenge): Promise<'allow-once' | 'deny'> => new Promise((resolve) => {
-    const entry = Object.freeze({ challenge, resolve });
-    runtimeConsentQueue.current.push(entry);
-    if (runtimeConsentQueue.current.length === 1) setRuntimeConsent(challenge);
-  }), []);
+  const requestRuntimeConsent = useCallback((challenge: McpAppConsentChallenge, signal?: AbortSignal): Promise<'allow-once' | 'deny'> =>
+    runtimeConsentQueue.current!.request(challenge, signal), []);
 
   const resolveRuntimeConsent = useCallback((decision: 'allow-once' | 'deny'): void => {
-    const [current, ...pending] = runtimeConsentQueue.current;
-    runtimeConsentQueue.current = pending;
-    if (current !== undefined) current.resolve(decision);
-    setRuntimeConsent(pending[0]?.challenge);
+    runtimeConsentQueue.current!.resolve(decision);
   }, []);
 
   const onRuntimeBridgeTrace = useCallback((binding: McpAppPreviewAppsSnapshot['binding'], entry: RuntimeAppBridgeTrace): void => {
@@ -959,8 +957,7 @@ const Workbench = () => {
       runtimeEvents.close();
       unsubscribeActivity();
       const pagePreviewClose = mcpPreviewDeparture.current?.close();
-      for (const pending of runtimeConsentQueue.current.splice(0)) pending.resolve('deny');
-      setRuntimeConsent(undefined);
+      runtimeConsentQueue.current?.resolveAll('deny');
       void (async () => {
         try {
           await handoffCoordinator.current?.close();

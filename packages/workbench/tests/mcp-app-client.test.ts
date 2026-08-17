@@ -206,9 +206,9 @@ describe('MCP App browser client', () => {
     const runtime = new McpAppClient({ fetch: fetch as typeof globalThis.fetch }) as McpAppClient & {
       closeRuntime(bindingId: string): Promise<void>;
       createRuntime(request: unknown): Promise<unknown>;
-      createRuntimeConsent(bindingId: string, request: unknown): Promise<unknown>;
+      createRuntimeConsent(bindingId: string, request: unknown, signal?: AbortSignal): Promise<unknown>;
       currentDocumentPolicy(bindingId: string): Readonly<{ readonly bindingId: string; readonly snapshot: Readonly<{ readonly revision: number }> }>;
-      decideRuntimeConsent(bindingId: string, consentId: string, decision: 'allow-once' | 'deny'): Promise<unknown>;
+      decideRuntimeConsent(bindingId: string, consentId: string, decision: 'allow-once' | 'deny', signal?: AbortSignal): Promise<unknown>;
       getRuntime(bindingId: string): Promise<unknown>;
       operateRuntime(bindingId: string, operation: unknown, signal?: AbortSignal): Promise<unknown>;
     };
@@ -218,10 +218,12 @@ describe('MCP App browser client', () => {
     await expect(runtime.getRuntime('runtime-binding')).resolves.toMatchObject({ binding: { id: 'runtime-binding' } });
     const operationAbort = new AbortController();
     await expect(runtime.operateRuntime('runtime-binding', { kind: 'tools/list' }, operationAbort.signal)).resolves.toMatchObject({ operationId: 'operation-a' });
+    const createConsentAbort = new AbortController();
     await expect(runtime.createRuntimeConsent('runtime-binding', {
       actionFingerprint: 'fingerprint-a', capability: 'camera', details: {}, scope: 'document', summary: 'Use camera',
-    })).resolves.toMatchObject({ challenge: { id: 'consent-a' } });
-    await expect(runtime.decideRuntimeConsent('runtime-binding', 'consent-a', 'allow-once')).resolves.toMatchObject({ documentPolicy: { revision: 2 } });
+    }, createConsentAbort.signal)).resolves.toMatchObject({ challenge: { id: 'consent-a' } });
+    const decideConsentAbort = new AbortController();
+    await expect(runtime.decideRuntimeConsent('runtime-binding', 'consent-a', 'allow-once', decideConsentAbort.signal)).resolves.toMatchObject({ documentPolicy: { revision: 2 } });
     const currentPolicy = runtime.currentDocumentPolicy('runtime-binding');
     expect(currentPolicy).not.toBe(initialPolicy);
     expect(currentPolicy).toMatchObject({ bindingId: 'runtime-binding', snapshot: { revision: 2 } });
@@ -244,7 +246,9 @@ describe('MCP App browser client', () => {
     expect(JSON.parse(String(calls[4]?.[1]?.body))).toEqual({
       actionFingerprint: 'fingerprint-a', capability: 'camera', details: {}, scope: 'document', summary: 'Use camera',
     });
+    expect(calls[4]?.[1]?.signal).toBe(createConsentAbort.signal);
     expect(JSON.parse(String(calls[5]?.[1]?.body))).toEqual({ decision: 'allow-once' });
+    expect(calls[5]?.[1]?.signal).toBe(decideConsentAbort.signal);
     expect(calls[6]?.[1]?.method).toBe('DELETE');
   });
 
