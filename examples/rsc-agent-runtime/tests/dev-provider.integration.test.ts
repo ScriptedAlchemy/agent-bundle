@@ -1449,3 +1449,55 @@ test('closes a server returned immediately after startup abort', async () => {
     await rm(copied.workspaceRoot, { force: true, recursive: true });
   }
 });
+
+test('preserves an aborted startup cause with every acquired cleanup failure', async () => {
+  const copied = await copyExample();
+  try {
+    const prepared = await new ProjectService({ includeDevRuntime: true, mode: 'development', root: copied.projectRoot }).prepare('dev');
+    const controller = new AbortController();
+    const reason = new Error('startup aborted after acquiring the dev server');
+    const cleanupSecret = 'do-not-expose-startup-cleanup-secret';
+    const storageRoot = join(copied.projectRoot, '.agent-bundle', 'runtime-startup-cleanup-failure');
+    let serverCloseCalls = 0;
+    const create = async () => Object.freeze({
+      startDevServer: async () => {
+        await writeFile(join(storageRoot, 'runs', '.agent-bundle-runtime-owner'), 'tampered-owner-marker');
+        controller.abort(reason);
+        return Object.freeze({
+          port: 41_003,
+          server: Object.freeze({ close: async () => {
+            serverCloseCalls += 1;
+            throw new Error(cleanupSecret);
+          } }),
+          urls: Object.freeze(['http://127.0.0.1:41003']),
+        }) as unknown as StartDevServerResult;
+      },
+    }) as unknown as Awaited<ReturnType<typeof createRsbuild>>;
+
+    const outcome = await RsbuildRuntimeSession.start(startContext({
+      projectRoot: copied.projectRoot,
+      preparedRuntime: prepared.devRuntime!,
+      providerSessionId: 'provider-startup-cleanup-failure',
+      signal: controller.signal,
+      storageRoot,
+    }), { createRsbuild: create as typeof createRsbuild }).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+
+    expect(serverCloseCalls).toBe(1);
+    expect(outcome).toBeInstanceOf(AggregateError);
+    const failure = outcome as AggregateError;
+    expect(failure.message).toBe('RSC runtime startup failed; cleanup failures: owned-runs-root, rsbuild-dev-server.');
+    expect(failure.message).not.toContain(cleanupSecret);
+    expect(failure.errors[0]).toBe(reason);
+    expect(failure.errors).toEqual(expect.arrayContaining([
+      reason,
+      expect.objectContaining({ message: cleanupSecret }),
+      expect.objectContaining({ message: 'RSC runtime invocation root ownership marker changed during this provider session.' }),
+    ]));
+    expect((await lstat(join(storageRoot, 'runs'))).isDirectory()).toBe(true);
+  } finally {
+    await rm(copied.workspaceRoot, { force: true, recursive: true });
+  }
+});

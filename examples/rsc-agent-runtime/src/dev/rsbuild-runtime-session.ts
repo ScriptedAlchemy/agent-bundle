@@ -255,38 +255,49 @@ interface AttemptBarrier {
 }
 
 export class ResourceLedger {
-  readonly #closers: Array<() => Promise<void>> = [];
-  readonly #failures: unknown[] = [];
+  readonly #closers: Array<Readonly<{ readonly close: () => Promise<void>; readonly label: string }>> = [];
+  readonly #failures: Array<Readonly<{ readonly error: unknown; readonly label: string }>> = [];
   readonly #running = new Set<Promise<void>>();
   #closed = false;
   #closePromise: Promise<void> | undefined;
 
-  add(close: () => Promise<void>): Promise<void> | undefined {
+  add(close: () => Promise<void>, label = 'resource'): Promise<void> | undefined {
+    const resourceLabel = /^[a-z0-9-]{1,64}$/u.test(label) ? label : 'resource';
     if (!this.#closed) {
-      this.#closers.push(close);
+      this.#closers.push(Object.freeze({ close, label: resourceLabel }));
       return undefined;
     }
-    return this.#run(close);
+    return this.#run(close, resourceLabel);
   }
 
-  #run(close: () => Promise<void>): Promise<void> {
+  failures(): readonly Readonly<{ readonly error: unknown; readonly label: string }>[] {
+    return Object.freeze([...this.#failures]);
+  }
+
+  #run(close: () => Promise<void>, label = 'resource'): Promise<void> {
     const task = Promise.resolve().then(close);
     this.#running.add(task);
     void task.then(
       () => undefined,
-      (error: unknown) => { this.#failures.push(error); },
+      (error: unknown) => { this.#failures.push(Object.freeze({ error, label })); },
     ).finally(() => { this.#running.delete(task); });
     return task;
   }
 
   async #drain(): Promise<void> {
-    while (this.#closers.length > 0) this.#run(this.#closers.shift()!);
+    while (this.#closers.length > 0) {
+      const closer = this.#closers.shift()!;
+      this.#run(closer.close, closer.label);
+    }
     while (this.#running.size > 0) {
       await Promise.allSettled([...this.#running]);
-      while (this.#closers.length > 0) this.#run(this.#closers.shift()!);
+      while (this.#closers.length > 0) {
+        const closer = this.#closers.shift()!;
+        this.#run(closer.close, closer.label);
+      }
     }
     if (this.#failures.length > 0) {
-      throw new AggregateError([...this.#failures], 'RSC runtime startup cleanup failed.');
+      throw new AggregateError(this.#failures.map((failure) => failure.error), 'RSC runtime startup cleanup failed.');
     }
   }
 
@@ -633,10 +644,15 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
     const preparedRuntime = clonePrepared(context.preparedRuntime);
     RsbuildRuntimeSession.#validateStartContext(context, preparedRuntime);
     const ledger = new ResourceLedger();
+    let startupCleanup: Promise<void> | undefined;
+    const closeStartupLedger = (): Promise<void> => {
+      startupCleanup ??= ledger.close();
+      return startupCleanup;
+    };
     let aborting = false;
     const abort = (): void => {
       aborting = true;
-      void ledger.close();
+      void closeStartupLedger().catch(() => undefined);
     };
     context.signal.addEventListener('abort', abort, { once: true });
 
@@ -649,15 +665,15 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
         storageRoot: join(storageRoot, 'generation-store'),
         validateMetadata: validateRscRuntimeGenerationMetadata,
       });
-      ledger.add(() => generationStore.close());
+      ledger.add(() => generationStore.close(), 'generation-store');
       const checkpointTracker = createRscCompilerAssetCheckpointTracker();
-      ledger.add(async () => { checkpointTracker.close(); });
+      ledger.add(async () => { checkpointTracker.close(); }, 'compiler-asset-checkpoints');
       await Promise.all([
         mkdir(join(storageRoot, 'compiler'), { recursive: true }),
         mkdir(join(storageRoot, 'state'), { recursive: true }),
       ]);
       const ownedRunsRoot = await RsbuildRuntimeSession.#createOwnedRunsRoot(storageRoot, context.providerSessionId);
-      ledger.add(() => RsbuildRuntimeSession.#removeOwnedRunsRoot(ownedRunsRoot));
+      ledger.add(() => RsbuildRuntimeSession.#removeOwnedRunsRoot(ownedRunsRoot), 'owned-runs-root');
       context.signal.throwIfAborted();
 
       const connectionState: DevRuntimeMcpConnectionState = Object.freeze({
@@ -702,7 +718,7 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
         providerSessionId: context.providerSessionId,
         stateStoreId,
       });
-      ledger.add(() => mcpRegistry.close());
+      ledger.add(() => mcpRegistry.close(), 'runtime-mcp-registry');
       const session = new RsbuildRuntimeSession({
         checkpointTracker,
         context,
@@ -727,7 +743,7 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
       });
       context.signal.throwIfAborted();
       const started = await rsbuild.startDevServer({ getPortSilently: true });
-      await ledger.add(() => started.server.close());
+      await ledger.add(() => started.server.close(), 'rsbuild-dev-server');
       context.signal.throwIfAborted();
       session.#attachServer(started, rsbuild.context.devServer);
       await session.#providerTail;
@@ -736,9 +752,16 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
       return session;
     } catch (error) {
       context.signal.removeEventListener('abort', abort);
-      await ledger.close().catch(() => undefined);
-      if (aborting || context.signal.aborted) throw abortReason(context.signal);
-      throw error;
+      await closeStartupLedger().catch(() => undefined);
+      const primary = aborting || context.signal.aborted ? abortReason(context.signal) : error;
+      const failures = ledger.failures();
+      if (failures.length === 0) throw primary;
+      const labels = [...new Set(failures.map((failure) => failure.label))].sort();
+      throw new AggregateError(
+        [primary, ...failures.map((failure) => failure.error)],
+        `RSC runtime startup failed; cleanup failures: ${labels.join(', ')}.`,
+        { cause: error },
+      );
     }
   }
 
