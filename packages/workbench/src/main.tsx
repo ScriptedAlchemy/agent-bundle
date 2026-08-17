@@ -2,6 +2,7 @@ import { type KeyboardEvent, type ReactNode, useEffect, useRef, useState } from 
 import { createRoot } from 'react-dom/client';
 
 import type { Diagnostic } from '../../agent-bundle/src/core/diagnostics.ts';
+import type { PlaygroundSession } from '../../agent-bundle/src/services/playground-service.ts';
 import type { ProjectStatus } from '../../agent-bundle/src/dev/types.ts';
 
 import { ArtifactClient } from './artifacts/artifact-client.ts';
@@ -14,6 +15,9 @@ import { McpPage } from './mcp/mcp-page.tsx';
 import { mcpProtocolTraceDownload, type McpDownload } from './mcp/mcp-protocol-trace.ts';
 import { McpRouteClient } from './mcp/mcp-route-client.ts';
 import { createMcpSessionController } from './mcp/mcp-session-controller.ts';
+import { LogsPage } from './playground/logs-page.tsx';
+import { PlaygroundClient } from './playground/playground-client.ts';
+import { PlaygroundPage } from './playground/playground-page.tsx';
 import { overviewFor } from './overview-model.ts';
 import { ProjectClient } from './project-client.ts';
 import { SkillClient } from './skill-client.ts';
@@ -35,8 +39,23 @@ const sourceFor = (diagnostic: Diagnostic): string =>
 const errorMessage = (reason: unknown): string =>
   reason instanceof Error ? reason.message : 'Foreground project state could not be refreshed.';
 
-const activeEpochId = (status: ProjectStatus): string | undefined =>
-  status.artifact.state === 'missing' ? undefined : status.artifact.activeEpoch?.id;
+const activeEpochFor = (status: ProjectStatus) =>
+  status.artifact.state === 'missing' ? undefined : status.artifact.activeEpoch;
+
+const activeEpochId = (status: ProjectStatus): string | undefined => activeEpochFor(status)?.id;
+
+/** The normalized model digest identifies the epoch's content for durable playground identity. */
+const playgroundEpochFor = (status: ProjectStatus) => {
+  const epoch = activeEpochFor(status);
+  return epoch === undefined ? undefined : { digest: epoch.modelDigest, id: epoch.id };
+};
+
+const playgroundTargetsFor = (status: ProjectStatus) => {
+  const epoch = activeEpochFor(status);
+  return epoch === undefined
+    ? []
+    : Object.entries(epoch.targetDigests).map(([name, digest]) => ({ digest, name }));
+};
 
 const mcpTargets = ['portable', 'claude', 'codex'] as const;
 
@@ -59,13 +78,15 @@ const StateMark = ({ state }: { readonly state: string }) => (
   }</span>
 );
 
-type WorkbenchPage = 'artifacts' | 'hooks' | 'mcp' | 'overview' | 'skills';
+type WorkbenchPage = 'artifacts' | 'hooks' | 'logs' | 'mcp' | 'overview' | 'playground' | 'skills';
 type McpPresentation = 'inspector' | 'playground';
 
 const pageForHash = (): WorkbenchPage => {
   if (window.location.hash === '#mcp' || window.location.hash === '#inspector') return 'mcp';
   if (window.location.hash === '#hooks') return 'hooks';
   if (window.location.hash === '#artifacts') return 'artifacts';
+  if (window.location.hash === '#playground') return 'playground';
+  if (window.location.hash === '#logs') return 'logs';
   return window.location.hash === '#skills' ? 'skills' : 'overview';
 };
 
@@ -120,6 +141,24 @@ const Navigation = ({ onNavigate, page }: {
   >
     <span aria-hidden="true" className="nav-glyph">▤</span>
     Artifacts
+  </a>
+  <a
+    aria-current={page === 'playground' ? 'page' : undefined}
+    className={page === 'playground' ? 'nav-item nav-item--active' : 'nav-item'}
+    href="#playground"
+    onClick={(event) => { event.preventDefault(); onNavigate('playground'); }}
+  >
+    <span aria-hidden="true" className="nav-glyph">◇</span>
+    Playground
+  </a>
+  <a
+    aria-current={page === 'logs' ? 'page' : undefined}
+    className={page === 'logs' ? 'nav-item nav-item--active' : 'nav-item'}
+    href="#logs"
+    onClick={(event) => { event.preventDefault(); onNavigate('logs'); }}
+  >
+    <span aria-hidden="true" className="nav-glyph">≡</span>
+    Logs
   </a>
 </aside>;
 
@@ -280,6 +319,31 @@ const ArtifactsScreen = ({ artifactClient, connectionError, onNavigate, status }
   <ArtifactsPage client={artifactClient} epochId={activeEpochId(status)} />
 </WorkbenchScreen>;
 
+const PlaygroundScreen = ({ connectionError, onNavigate, onSessionChange, playgroundClient, status }: {
+  readonly connectionError?: string;
+  readonly onNavigate: (page: WorkbenchPage) => void;
+  readonly onSessionChange: (session: PlaygroundSession | undefined) => void;
+  readonly playgroundClient: PlaygroundClient;
+  readonly status: ProjectStatus;
+}) => <WorkbenchScreen connectionError={connectionError} onNavigate={onNavigate} page="playground">
+  <PlaygroundPage
+    client={playgroundClient}
+    epoch={playgroundEpochFor(status)}
+    onSessionChange={onSessionChange}
+    targets={playgroundTargetsFor(status)}
+  />
+</WorkbenchScreen>;
+
+const LogsScreen = ({ connectionError, onNavigate, playgroundClient, sessionId, status }: {
+  readonly connectionError?: string;
+  readonly onNavigate: (page: WorkbenchPage) => void;
+  readonly playgroundClient: PlaygroundClient;
+  readonly sessionId?: string;
+  readonly status: ProjectStatus;
+}) => <WorkbenchScreen connectionError={connectionError} onNavigate={onNavigate} page="logs">
+  <LogsPage client={playgroundClient} epoch={playgroundEpochFor(status)} sessionId={sessionId} />
+</WorkbenchScreen>;
+
 const HooksScreen = ({ connectionError, hookClient, onNavigate, status }: {
   readonly connectionError?: string;
   readonly hookClient: HookClient;
@@ -391,6 +455,7 @@ const Workbench = () => {
   const client = useRef<ProjectClient | undefined>(undefined);
   const artifactClient = useRef<ArtifactClient | undefined>(undefined);
   const hookClient = useRef<HookClient | undefined>(undefined);
+  const playgroundClient = useRef<PlaygroundClient | undefined>(undefined);
   const mcpAppClient = useRef<McpAppClient | undefined>(undefined);
   const skillClient = useRef<SkillClient | undefined>(undefined);
   const [connectionError, setConnectionError] = useState<string>();
@@ -401,16 +466,20 @@ const Workbench = () => {
   const [page, setPage] = useState<WorkbenchPage>(pageForHash);
   const [status, setStatus] = useState<ProjectStatus>();
   const [changedFiles, setChangedFiles] = useState<readonly string[]>([]);
+  const [playgroundSession, setPlaygroundSession] = useState<PlaygroundSession>();
 
   if (artifactClient.current === undefined) artifactClient.current = new ArtifactClient();
   if (hookClient.current === undefined) hookClient.current = new HookClient();
+  if (playgroundClient.current === undefined) playgroundClient.current = new PlaygroundClient();
   if (mcpAppClient.current === undefined) mcpAppClient.current = new McpAppClient();
 
   const navigate = (next: WorkbenchPage): void => {
     const hash = next === 'artifacts' ? '#artifacts'
       : next === 'hooks' ? '#hooks'
-        : next === 'mcp' ? '#mcp'
-          : next === 'skills' ? '#skills' : '#overview';
+        : next === 'logs' ? '#logs'
+          : next === 'mcp' ? '#mcp'
+            : next === 'playground' ? '#playground'
+              : next === 'skills' ? '#skills' : '#overview';
     if (window.location.hash !== hash) window.history.pushState(undefined, '', hash);
     if (next === 'mcp') setMcpPresentation('playground');
     setPage(next);
@@ -480,6 +549,24 @@ const Workbench = () => {
         onResetSession={resetMcpSession}
         presentation={mcpPresentation}
         setPresentation={setMcpPresentation}
+        status={status}
+      />;
+    }
+    if (page === 'playground') {
+      return <PlaygroundScreen
+        connectionError={connectionError}
+        onNavigate={navigate}
+        onSessionChange={setPlaygroundSession}
+        playgroundClient={playgroundClient.current}
+        status={status}
+      />;
+    }
+    if (page === 'logs') {
+      return <LogsScreen
+        connectionError={connectionError}
+        onNavigate={navigate}
+        playgroundClient={playgroundClient.current}
+        sessionId={playgroundSession?.id}
         status={status}
       />;
     }
