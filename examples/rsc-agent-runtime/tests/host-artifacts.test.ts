@@ -1,9 +1,10 @@
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { access, cp, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import { access, chmod, cp, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { once } from 'node:events';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { Readable } from 'node:stream';
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
@@ -24,6 +25,31 @@ const readJson = async <T>(path: string): Promise<T> => JSON.parse(await readFil
 const runtimeAssets = async (): Promise<string[]> => {
   const manifest = await readJson<{ allFiles: string[] }>(join(exampleRoot, 'dist/runtime/runtime-assets.json'));
   return manifest.allFiles.map((asset) => asset.replace(/^\//, ''));
+};
+
+const runDeclaredHook = async (
+  command: string,
+  environment: Readonly<Record<string, string>>,
+  input: Readonly<Record<string, unknown>>,
+): Promise<Readonly<{ exitCode: number | null; signal: NodeJS.Signals | null; stderr: string; stdout: string }>> => {
+  const child = spawn('/bin/sh', ['-c', command], {
+    env: { ...process.env, ...environment },
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+  child.stdin.end(JSON.stringify(input));
+  const collect = (stream: Readable): Promise<string> => new Promise((resolve, reject) => {
+    let text = '';
+    stream.setEncoding('utf8');
+    stream.on('data', (chunk: string) => { text += chunk; });
+    stream.once('error', reject);
+    stream.once('end', () => resolve(text));
+  });
+  const [stdout, stderr, outcome] = await Promise.all([
+    collect(child.stdout),
+    collect(child.stderr),
+    once(child, 'close') as Promise<[number | null, NodeJS.Signals | null]>,
+  ]);
+  return Object.freeze({ exitCode: outcome[0], signal: outcome[1], stderr, stdout });
 };
 
 type ArtifactDigestEntry = Readonly<{
@@ -140,6 +166,73 @@ test('runs the packaged MCP server after its artifact is isolated from the examp
     });
   } finally {
     await client.close();
+    await rm(temporaryRoot, { force: true, recursive: true });
+  }
+});
+
+test('runs each packaged native hook from one shell argv path when its plugin root contains spaces and metacharacters', async () => {
+  await runPackageHosts();
+  const temporaryRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-hook-root-'));
+  try {
+    const nodeBin = join(temporaryRoot, 'bin');
+    const argvFile = join(temporaryRoot, 'hook-argv.bin');
+    await mkdir(nodeBin);
+    await writeFile(join(nodeBin, 'node'), '#!/bin/sh\nprintf \'%s\\0\' "$@" > "$AGENT_RUNTIME_HOOK_ARGV_FILE"\nexec "$AGENT_RUNTIME_NODE" "$@"\n', 'utf8');
+    await chmod(join(nodeBin, 'node'), 0o755);
+
+    for (const host of ['claude', 'codex'] as const) {
+      const pluginRoot = join(temporaryRoot, `${host} plugin root ; ordinary`);
+      const workspace = join(temporaryRoot, `${host}-workspace`);
+      const stateFile = join(temporaryRoot, `${host}-events.jsonl`);
+      const manifestPath = join(pluginRoot, 'hooks/hooks.json');
+      const rootVariable = host === 'claude' ? 'CLAUDE_PLUGIN_ROOT' : 'PLUGIN_ROOT';
+      const filename = `${host}-note.txt`;
+      await cp(join(pluginsRoot, host), pluginRoot, { recursive: true });
+      await mkdir(workspace);
+      const manifest = await readJson<{ hooks: { PostToolUse: Array<{ hooks: Array<{ command: string }> }> } }>(manifestPath);
+      const command = manifest.hooks.PostToolUse[0]?.hooks[0]?.command;
+      expect(command).toBeTypeOf('string');
+      const input = host === 'claude'
+        ? {
+            cwd: workspace,
+            hook_event_name: 'PostToolUse',
+            session_id: `${host}-session`,
+            tool_input: { file_path: join(workspace, filename) },
+            tool_name: 'Write',
+            tool_use_id: `${host}-tool`,
+          }
+        : {
+            cwd: workspace,
+            event_id: `${host}-event`,
+            hook_event_name: 'PostToolUse',
+            session_id: `${host}-session`,
+            tool_input: { command: `*** Begin Patch\n*** Add File: ${filename}\n+recorded\n*** End Patch` },
+            tool_name: 'apply_patch',
+          };
+      const result = await runDeclaredHook(command!, {
+        [rootVariable]: pluginRoot,
+        AGENT_RUNTIME_HOOK_ARGV_FILE: argvFile,
+        AGENT_RUNTIME_NODE: process.execPath,
+        AGENT_RUNTIME_STATE_FILE: stateFile,
+        PATH: `${nodeBin}:${process.env.PATH ?? ''}`,
+      }, input);
+
+      expect(result.signal).toBeNull();
+      expect(result.exitCode, result.stderr).toBe(0);
+      expect(JSON.parse(result.stdout)).toEqual({
+        hookSpecificOutput: {
+          additionalContext: `Recorded ${filename} from ${host}. Shared state now contains 1 edit.`,
+          hookEventName: 'PostToolUse',
+        },
+      });
+      expect((await readFile(argvFile)).toString('utf8').split('\0').filter(Boolean)).toEqual([
+        join(pluginRoot, 'runtime/hook/index.js'), '--host', host,
+      ]);
+      expect((await readFile(stateFile, 'utf8')).trim()).toContain(`"host":"${host}"`);
+      expect(command).toBe(`node "\${${rootVariable}}/runtime/hook/index.js" --host ${host}`);
+      expect(command).not.toMatch(/(?:api[ _-]?key|echo|printenv|AGENT_RUNTIME_)/iu);
+    }
+  } finally {
     await rm(temporaryRoot, { force: true, recursive: true });
   }
 });
