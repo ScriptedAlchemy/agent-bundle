@@ -2,8 +2,13 @@ import type { McpAppConsentChallenge } from './mcp-app-client.ts';
 
 export type RuntimeConsentDecision = 'allow-once' | 'deny';
 
-interface RuntimeConsentQueueEntry {
+/** Opaque Workbench-only identity for one currently visible FIFO consent entry. */
+export interface RuntimeConsentQueueCurrent {
   readonly challenge: McpAppConsentChallenge;
+}
+
+interface RuntimeConsentQueueEntry {
+  readonly current: RuntimeConsentQueueCurrent;
   readonly onAbort: () => void;
   readonly reject: (reason: unknown) => void;
   readonly resolve: (decision: RuntimeConsentDecision) => void;
@@ -11,9 +16,9 @@ interface RuntimeConsentQueueEntry {
 }
 
 export interface RuntimeConsentQueue {
-  readonly current: McpAppConsentChallenge | undefined;
+  readonly current: RuntimeConsentQueueCurrent | undefined;
   request(challenge: McpAppConsentChallenge, signal?: AbortSignal): Promise<RuntimeConsentDecision>;
-  resolve(decision: RuntimeConsentDecision): boolean;
+  resolve(current: RuntimeConsentQueueCurrent, decision: RuntimeConsentDecision): boolean;
   resolveAll(decision: RuntimeConsentDecision): void;
 }
 
@@ -21,10 +26,10 @@ const aborted = (signal: AbortSignal): unknown => signal.reason ?? new DOMExcept
 
 /** Workbench-owned FIFO for visible action-consent prompts. Aborted entries never reach a decision route. */
 export const createRuntimeConsentQueue = (
-  onCurrentChange: (challenge: McpAppConsentChallenge | undefined) => void,
+  onCurrentChange: (current: RuntimeConsentQueueCurrent | undefined) => void,
 ): RuntimeConsentQueue => {
   const entries: RuntimeConsentQueueEntry[] = [];
-  const publish = (): void => onCurrentChange(entries[0]?.challenge);
+  const publish = (): void => onCurrentChange(entries[0]?.current);
   const remove = (entry: RuntimeConsentQueueEntry): boolean => {
     const index = entries.indexOf(entry);
     if (index < 0) return false;
@@ -35,14 +40,14 @@ export const createRuntimeConsentQueue = (
   };
 
   return Object.freeze({
-    get current(): McpAppConsentChallenge | undefined {
-      return entries[0]?.challenge;
+    get current(): RuntimeConsentQueueCurrent | undefined {
+      return entries[0]?.current;
     },
     request: (challenge: McpAppConsentChallenge, signal?: AbortSignal): Promise<RuntimeConsentDecision> => new Promise((resolve, reject) => {
       const onAbort = () => {
         if (remove(entry)) reject(aborted(signal!));
       };
-      const entry = { challenge, onAbort, reject, resolve, signal };
+      const entry = { current: Object.freeze({ challenge }), onAbort, reject, resolve, signal };
       if (signal?.aborted) {
         reject(aborted(signal));
         return;
@@ -51,9 +56,9 @@ export const createRuntimeConsentQueue = (
       signal?.addEventListener('abort', onAbort, { once: true });
       if (entries.length === 1) publish();
     }),
-    resolve: (decision: RuntimeConsentDecision): boolean => {
+    resolve: (current: RuntimeConsentQueueCurrent, decision: RuntimeConsentDecision): boolean => {
       const entry = entries[0];
-      if (entry === undefined) return false;
+      if (entry === undefined || entry.current !== current) return false;
       remove(entry);
       entry.resolve(decision);
       return true;

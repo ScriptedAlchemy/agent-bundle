@@ -30,24 +30,25 @@ const mountedConsentFixture = async () => {
     `import { RuntimeConsentDialog } from ${JSON.stringify(dialogComponent)};`,
     `import { createRuntimeConsentQueue } from ${JSON.stringify(queueComponent)};`,
     '',
-    "const challenge = (id) => ({ expiresAt: 10, id, request: { actionFingerprint: `runtime-app:${id}:v1`, capability: 'call-tool', details: {}, scope: 'action', summary: `Call ${id}` } });",
+    "const challenge = (id) => ({ expiresAt: 10, id, request: { actionFingerprint: `runtime-app:${id}:v1`, capability: 'call-tool', details: {}, scope: 'action', summary: 'Call Runtime App tool' } });",
     'const App = () => {',
     '  const [current, setCurrent] = useState();',
     '  const [decisions, setDecisions] = useState([]);',
     '  const queue = useRef();',
     '  if (queue.current === undefined) queue.current = createRuntimeConsentQueue(setCurrent);',
-    '  const request = () => {',
-    '    const second = new AbortController();',
-    '    globalThis.__abortSecondConsent = () => second.abort(new DOMException(\'Second request cancelled.\', \'AbortError\'));',
+    '  const enqueue = (first, second) => {',
     '    const settle = (id, promise) => { void promise.then((decision) => setDecisions((entries) => [...entries, `${id}:${decision}`])).catch(() => undefined); };',
-    '    settle(\'first\', queue.current.request(challenge(\'first\')));',
-    '    settle(\'second\', queue.current.request(challenge(\'second\'), second.signal));',
-    '    settle(\'third\', queue.current.request(challenge(\'third\')));',
+    '    settle(first, queue.current.request(challenge(first)));',
+    '    settle(second, queue.current.request(challenge(second)));',
     '  };',
     '  return <>',
-    '    <main id="background" inert={current !== undefined || undefined}><button id="request" onClick={request} type="button">Request actions</button></main>',
-    '    {current === undefined ? undefined : <RuntimeConsentDialog challenge={current} onResolve={(decision) => { queue.current.resolve(decision); }} />}',
+    '    <main id="background" inert={current !== undefined || undefined}>',
+    '      <button id="request-allows" onClick={() => enqueue(\'allow-first\', \'allow-second\')} type="button">Request allows</button>',
+    '      <button id="request-denies" onClick={() => enqueue(\'deny-first\', \'deny-second\')} type="button">Request denies</button>',
+    '    </main>',
+    '    {current === undefined ? undefined : <RuntimeConsentDialog current={current} onResolve={(entry, decision) => queue.current.resolve(entry, decision)} />}',
     '    <output id="decisions">{decisions.join(\',\')}</output>',
+    '    <output id="visible-position">{current === undefined ? \'none\' : current.challenge.id.endsWith(\'second\') ? \'second\' : \'first\'}</output>',
     '  </>;',
     '};',
     "createRoot(document.getElementById('root')).render(<App />);",
@@ -92,21 +93,29 @@ const mountedConsentFixture = async () => {
 const isFocused = async (locator: Locator): Promise<boolean> =>
   locator.evaluate((element) => document.activeElement === element);
 
-it('keeps the queue-driven Runtime App consent dialog modal, focus-contained, and focused on its original trigger after the final settlement', async () => {
+const waitForDenyFocus = async (page: import('playwright').Page): Promise<void> => {
+  await page.waitForFunction(() => {
+    const dialog = document.querySelector('[role="dialog"]');
+    return dialog?.querySelector('button') === document.activeElement;
+  });
+};
+
+it('keeps each indistinguishable Runtime App consent gesture bound to its displayed FIFO entry', async () => {
   const fixture = await mountedConsentFixture();
   const browser = await chromium.launch({ channel: 'chrome' });
   const page = await browser.newPage({ viewport: { height: 844, width: 390 } });
   try {
     await page.goto(fixture.url);
-    const trigger = page.getByRole('button', { name: 'Request actions' });
+    const allowTrigger = page.getByRole('button', { name: 'Request allows' });
+    const denyTrigger = page.getByRole('button', { name: 'Request denies' });
     const background = page.locator('#background');
-    await trigger.focus();
-    await trigger.click();
+    await allowTrigger.focus();
+    await allowTrigger.click();
     const dialog = page.getByRole('dialog', { name: 'Runtime App consent' });
     const deny = dialog.getByRole('button', { name: 'Deny' });
     const allow = dialog.getByRole('button', { name: 'Allow once' });
     await page.locator('#runtime-consent-summary').waitFor({ state: 'visible' });
-    expect(await page.locator('#runtime-consent-summary').textContent()).toBe('Call first');
+    expect(await page.locator('#runtime-consent-summary').textContent()).toBe('Call Runtime App tool');
     expect(await dialog.getAttribute('aria-modal')).toBe('true');
     expect(await background.getAttribute('inert')).toBe('');
     expect(await isFocused(deny)).toBe(true);
@@ -117,20 +126,35 @@ it('keeps the queue-driven Runtime App consent dialog modal, focus-contained, an
     await page.keyboard.press('Shift+Tab');
     expect(await isFocused(allow)).toBe(true);
 
+    await allow.dblclick();
+    await page.waitForFunction(() => document.querySelector('#decisions')?.textContent === 'allow-first:allow-once');
+    expect(await background.getAttribute('inert')).toBe('');
+    await waitForDenyFocus(page);
+    expect(await isFocused(deny)).toBe(true);
+    expect(await dialog.isVisible()).toBe(true);
+    expect(await page.locator('#decisions').textContent()).toBe('allow-first:allow-once');
     await allow.click();
-    await page.waitForFunction(() => document.querySelector('#runtime-consent-summary')?.textContent === 'Call second');
-    expect(await background.getAttribute('inert')).toBe('');
-    expect(await isFocused(deny)).toBe(true);
+    await dialog.waitFor({ state: 'hidden' });
+    expect(await page.locator('#decisions').textContent()).toBe('allow-first:allow-once,allow-second:allow-once');
 
-    await page.evaluate(() => (globalThis as typeof globalThis & { __abortSecondConsent?: () => void }).__abortSecondConsent?.());
-    await page.waitForFunction(() => document.querySelector('#runtime-consent-summary')?.textContent === 'Call third');
+    await denyTrigger.focus();
+    await denyTrigger.click();
+    await page.locator('#runtime-consent-summary').waitFor({ state: 'visible' });
+    await page.keyboard.down('Escape');
+    await page.keyboard.down('Escape');
+    await page.keyboard.up('Escape');
+    await page.waitForFunction(() => document.querySelector('#decisions')?.textContent?.includes('deny-first:deny'));
+    expect(await page.locator('#decisions').textContent()).toBe('allow-first:allow-once,allow-second:allow-once,deny-first:deny');
+    expect(await page.locator('#visible-position').textContent()).toBe('second');
     expect(await background.getAttribute('inert')).toBe('');
+    await waitForDenyFocus(page);
     expect(await isFocused(deny)).toBe(true);
-    await page.keyboard.press('Escape');
+    expect(await deny.isDisabled()).toBe(false);
+    await page.evaluate(() => { window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })); });
     await dialog.waitFor({ state: 'hidden' });
     expect(await background.getAttribute('inert')).toBeNull();
-    expect(await isFocused(trigger)).toBe(true);
-    expect(await page.locator('#decisions').textContent()).toBe('first:allow-once,third:deny');
+    expect(await isFocused(denyTrigger)).toBe(true);
+    expect(await page.locator('#decisions').textContent()).toBe('allow-first:allow-once,allow-second:allow-once,deny-first:deny,deny-second:deny');
   } finally {
     await browser.close();
     await fixture.close();

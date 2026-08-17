@@ -16,7 +16,7 @@ import {
 } from './inspector/adapter/runtime-app-bridge.ts';
 import { McpAppClient, type McpAppConsentChallenge } from './mcp/mcp-app-client.ts';
 import { RuntimeConsentDialog } from './mcp/runtime-consent-dialog.tsx';
-import { createRuntimeConsentQueue, type RuntimeConsentQueue } from './mcp/runtime-consent-queue.ts';
+import { createRuntimeConsentQueue, type RuntimeConsentQueue, type RuntimeConsentQueueCurrent } from './mcp/runtime-consent-queue.ts';
 import { McpAppPreview } from './mcp/mcp-app-preview.tsx';
 import { McpPage, type McpConfigDownload, type McpPagePreviewSelection, type McpPageRuntimePreviewDependencies } from './mcp/mcp-page.tsx';
 import { ForegroundRouteClient, McpRouteClient } from './mcp/mcp-route-client.ts';
@@ -597,8 +597,8 @@ const RuntimeScreen = ({ connectionError, controller, handoffDiagnostic, liveMcp
   readonly onNavigate: (page: WorkbenchPage) => void;
   readonly registerAppPreviewLifecycle: (handle: Readonly<{ close(): Promise<void> }>) => () => void;
   readonly renderAppPreview: RuntimeAppPreviewRenderer;
-  readonly resolveRuntimeConsent: (decision: 'allow-once' | 'deny') => void;
-  readonly runtimeConsent?: McpAppConsentChallenge;
+  readonly resolveRuntimeConsent: (current: RuntimeConsentQueueCurrent, decision: 'allow-once' | 'deny') => boolean;
+  readonly runtimeConsent?: RuntimeConsentQueueCurrent;
   readonly runtimeDiagnostic?: string;
 }) => {
   const diagnostic = useRef<HTMLParagraphElement>(null);
@@ -615,7 +615,7 @@ const RuntimeScreen = ({ connectionError, controller, handoffDiagnostic, liveMcp
         />
       </div>
     </WorkbenchScreen>
-    {runtimeConsent === undefined ? undefined : <RuntimeConsentDialog challenge={runtimeConsent} onResolve={resolveRuntimeConsent} />}
+    {runtimeConsent === undefined ? undefined : <RuntimeConsentDialog current={runtimeConsent} onResolve={resolveRuntimeConsent} />}
   </>;
 };
 
@@ -647,7 +647,7 @@ const Workbench = () => {
   const [runtimeHandoff, setRuntimeHandoff] = useState<RuntimeMcpHandoff>();
   const [runtimeHandoffError, setRuntimeHandoffError] = useState<string>();
   const [mcpDepartureError, setMcpDepartureError] = useState<string>();
-  const [runtimeConsent, setRuntimeConsent] = useState<McpAppConsentChallenge>();
+  const [runtimeConsent, setRuntimeConsent] = useState<RuntimeConsentQueueCurrent>();
   const runtimeConsentQueue = useRef<RuntimeConsentQueue>();
   if (runtimeConsentQueue.current === undefined) {
     runtimeConsentQueue.current = createRuntimeConsentQueue(setRuntimeConsent);
@@ -809,8 +809,8 @@ const Workbench = () => {
   const requestRuntimeConsent = useCallback((challenge: McpAppConsentChallenge, signal?: AbortSignal): Promise<'allow-once' | 'deny'> =>
     runtimeConsentQueue.current!.request(challenge, signal), []);
 
-  const resolveRuntimeConsent = useCallback((decision: 'allow-once' | 'deny'): void => {
-    runtimeConsentQueue.current!.resolve(decision);
+  const resolveRuntimeConsent = useCallback((current: RuntimeConsentQueueCurrent, decision: 'allow-once' | 'deny'): boolean => {
+    return runtimeConsentQueue.current!.resolve(current, decision);
   }, []);
 
   const onRuntimeBridgeTrace = useCallback((binding: McpAppPreviewAppsSnapshot['binding'], entry: RuntimeAppBridgeTrace): void => {
