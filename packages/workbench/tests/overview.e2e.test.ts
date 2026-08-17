@@ -22,6 +22,27 @@ const workspaceRoot = process.cwd();
 const workbenchAssets = join(workspaceRoot, 'packages', 'workbench', 'dist');
 const browserTimeout = 5_000;
 
+interface RuntimeAppOperation {
+  readonly body: unknown;
+  readonly path: string;
+  readonly response?: unknown;
+}
+
+interface RuntimeAppWireMessage {
+  readonly href: string;
+  readonly message: unknown;
+  readonly senderOrigin: string;
+}
+
+const requestBody = (body: string | null): unknown => {
+  if (body === null) return undefined;
+  try {
+    return JSON.parse(body);
+  } catch {
+    return undefined;
+  }
+};
+
 const e2e = test.extend({
   playwright: {
     launchOptions: { channel: 'chrome' },
@@ -134,9 +155,25 @@ e2e('offers the host-owned MCP playground handoff only after a selected Runtime 
   const projectEventStreams: string[] = [];
   const runtimeAppRequests: string[] = [];
   const runtimeAppResponses: unknown[] = [];
+  const runtimeAppOperationRequests: RuntimeAppOperation[] = [];
+  const runtimeAppOperationResponses: RuntimeAppOperation[] = [];
+  const runtimeAppWireMessages: RuntimeAppWireMessage[] = [];
   const runtimeMcpSessionRequests: string[] = [];
   const runtimePreviewHmrSockets: string[] = [];
   const runtimePreviewHmrMessages: string[] = [];
+  await page.exposeBinding('__recordOverviewRuntimeAppMessage', (_source, payload: unknown) => {
+    if (payload !== null && typeof payload === 'object') runtimeAppWireMessages.push(payload as RuntimeAppWireMessage);
+  });
+  await page.addInitScript(() => {
+    window.addEventListener('message', (event) => {
+      const message = event.data;
+      if (message === null || typeof message !== 'object' || (message as { readonly jsonrpc?: unknown }).jsonrpc !== '2.0') return;
+      const record = (globalThis as typeof globalThis & {
+        __recordOverviewRuntimeAppMessage?: (payload: unknown) => Promise<void>;
+      }).__recordOverviewRuntimeAppMessage;
+      if (record !== undefined) void record({ href: window.location.href, message, senderOrigin: event.origin });
+    });
+  });
   page.on('pageerror', (error) => pageErrors.push(error));
   page.on('websocket', (socket) => {
     if (new URL(socket.url()).pathname !== '/rsbuild-hmr') return;
@@ -150,7 +187,12 @@ e2e('offers the host-owned MCP playground handoff only after a selected Runtime 
     if (requestUrl.origin !== fixture.url) return;
     if (requestUrl.pathname.startsWith('/api/mcp/sessions')) artifactMcpSessionRequests.push(`${request.method()} ${requestUrl.pathname}`);
     if (requestUrl.pathname === '/api/project/events') projectEventStreams.push(`${request.method()} ${requestUrl.pathname}`);
-    if (requestUrl.pathname.startsWith('/api/runtime/apps')) runtimeAppRequests.push(`${request.method()} ${requestUrl.pathname}`);
+    if (requestUrl.pathname.startsWith('/api/runtime/apps')) {
+      runtimeAppRequests.push(`${request.method()} ${requestUrl.pathname}`);
+      if (request.method() === 'POST' && requestUrl.pathname.endsWith('/operations')) {
+        runtimeAppOperationRequests.push(Object.freeze({ body: requestBody(request.postData()), path: requestUrl.pathname }));
+      }
+    }
     if (requestUrl.pathname.startsWith('/api/runtime/mcp/sessions')) {
       runtimeMcpSessionRequests.push(`${request.method()} ${requestUrl.pathname}`);
     }
@@ -160,6 +202,15 @@ e2e('offers the host-owned MCP playground handoff only after a selected Runtime 
     if (requestUrl.origin !== fixture.url || response.request().method() !== 'POST') return;
     if (requestUrl.pathname === '/api/runtime/apps') {
       void response.json().then((body: unknown) => { runtimeAppResponses.push(body); }).catch(() => undefined);
+    }
+    if (requestUrl.pathname.endsWith('/operations')) {
+      void response.json().then((body: unknown) => {
+        runtimeAppOperationResponses.push(Object.freeze({
+          body: requestBody(response.request().postData()),
+          path: requestUrl.pathname,
+          response: body,
+        }));
+      }).catch(() => undefined);
     }
   });
   try {
@@ -209,6 +260,16 @@ e2e('offers the host-owned MCP playground handoff only after a selected Runtime 
       const response = await fetch(new URL('/api/project/status', origin));
       if (!response.ok) throw new Error(`Project status failed with ${String(response.status)}.`);
       return (await response.json() as { readonly status: { readonly source: ProjectSourceStatus } }).status.source;
+    }, fixture.url);
+    type RuntimeStatus = Readonly<{
+      readonly activeVector?: Readonly<{ readonly providerSessionId: string }>;
+      readonly diagnostics: readonly Readonly<{ readonly code?: string; readonly message?: string }>[];
+      readonly state: string;
+    }>;
+    const readRuntimeStatus = async (): Promise<RuntimeStatus> => page.evaluate(async (origin) => {
+      const response = await fetch(new URL('/api/runtime/status', origin));
+      if (!response.ok) throw new Error(`Runtime status failed with ${String(response.status)}.`);
+      return (await response.json() as { readonly status: RuntimeStatus }).status;
     }, fixture.url);
     const initialProjectSource = await readProjectSource();
     expect(initialProjectSource).toEqual({ diagnostics: [], revision: sourceRevision, state: 'ready' });
@@ -310,6 +371,13 @@ e2e('offers the host-owned MCP playground handoff only after a selected Runtime 
       expect(runtimeAppRequests.filter((request) => request.startsWith('DELETE /api/runtime/apps/'))).toHaveLength(0);
       expect(runtimeAppResponses).toHaveLength(1);
     };
+    const expectRetainedRuntime = async (): Promise<void> => {
+      const status = await readRuntimeStatus();
+      expect(status.state).toBe('active');
+      expect(status.activeVector?.providerSessionId).toBe(sourceRuntimeIdentity.providerSession);
+      expect(status.diagnostics.map((diagnostic) => diagnostic.code)).not.toContain('AB8200');
+      expect(status.diagnostics.map((diagnostic) => diagnostic.message)).not.toContain('Development runtime declaration changed; restart required.');
+    };
     const sourceConfig = await readFile(fixture.configSource, 'utf8');
     const finiteConfigMarker = `config-reconcile-finite-${Math.random().toString(36).slice(2)}`;
     const finiteConfig = sourceConfig.replace('  codex: {},', `  codex: { configReconcileMarker: '${finiteConfigMarker}' },`);
@@ -345,10 +413,65 @@ e2e('offers the host-owned MCP playground handoff only after a selected Runtime 
     });
     const invalidSource = await readProjectSource();
     expect(invalidSource.diagnostics.map((diagnostic) => diagnostic.code)).not.toContain('AB7001');
-    expect(invalidSource.diagnostics.map((diagnostic) => diagnostic.code)).not.toContain('AB8200');
     await expect(page.getByRole('button', { name: 'Open in MCP playground' })).toBeEnabled();
     await expect(refreshedFrame.getByRole('button', { name: 'Refresh' })).toBeEnabled();
     await expectOriginalPreview();
+    await expectRetainedRuntime();
+    const sourceControllerOrigin = new URL(sourcePreviewUrl).origin;
+    const resourceUri = 'ui://rsc-agent-runtime/edit-timeline-v1.html';
+    const resourceRequestId = `config-reconcile-resource-${Math.random().toString(36).slice(2)}`;
+    const resourceOperationPath = `/api/runtime/apps/${encodeURIComponent(sourceBinding.id)}/operations`;
+    const resourceOperationRequests = (): readonly RuntimeAppOperation[] => runtimeAppOperationRequests.filter((operation) =>
+      operation.path === resourceOperationPath && JSON.stringify(operation.body) === JSON.stringify({ kind: 'resources/read', uri: resourceUri }));
+    const resourceOperationResponses = (): readonly RuntimeAppOperation[] => runtimeAppOperationResponses.filter((operation) =>
+      operation.path === resourceOperationPath && JSON.stringify(operation.body) === JSON.stringify({ kind: 'resources/read', uri: resourceUri }));
+    const wireMessage = (
+      receiverOrigin: string,
+      senderOrigin: string,
+      matches: (message: Readonly<Record<string, unknown>>) => boolean,
+    ): RuntimeAppWireMessage | undefined => runtimeAppWireMessages.find((candidate) =>
+      new URL(candidate.href).origin === receiverOrigin && candidate.senderOrigin === senderOrigin && candidate.message !== null && typeof candidate.message === 'object' &&
+      matches(candidate.message as Readonly<Record<string, unknown>>));
+    await refreshedFrame.evaluate(({ id, uri }) => {
+      window.parent.postMessage({ id, jsonrpc: '2.0', method: 'resources/read', params: { uri } }, '*');
+    }, { id: resourceRequestId, uri: resourceUri });
+    await expect.poll(resourceOperationRequests, { timeout: 15_000 }).toHaveLength(1);
+    expect(resourceOperationRequests()[0]?.body).toEqual({ kind: 'resources/read', uri: resourceUri });
+    await expect.poll(resourceOperationResponses, { timeout: 15_000 }).toHaveLength(1);
+    const resourceOperationResult = (resourceOperationResponses()[0]?.response as Readonly<{ readonly result?: unknown }> | undefined)?.result;
+    expect(resourceOperationResult).toMatchObject({
+      operationId: expect.any(String),
+      sessionId: sourceBinding.sessionId,
+      sessionRevision: sourceBinding.sessionRevision,
+      value: {
+        contents: [{
+          mimeType: 'text/html;profile=mcp-app',
+          text: expect.stringMatching(/^<!doctype html>/iu),
+          uri: resourceUri,
+        }],
+      },
+      vector: sourceBinding.runVector,
+    });
+    const resourceValue = (resourceOperationResult as Readonly<{ readonly value?: unknown }> | undefined)?.value;
+    if (resourceValue === null || typeof resourceValue !== 'object') throw new Error('Retained Runtime App resource operation omitted its result value.');
+    await expect.poll(() => wireMessage(fixture.url, sourceControllerOrigin, (message) =>
+      message.id === resourceRequestId && message.method === 'resources/read'), { timeout: 15_000 }).toBeDefined();
+    expect(wireMessage(fixture.url, sourceControllerOrigin, (message) =>
+      message.id === resourceRequestId && message.method === 'resources/read')?.message).toEqual({
+      id: resourceRequestId,
+      jsonrpc: '2.0',
+      method: 'resources/read',
+      params: { uri: resourceUri },
+    });
+    await expect.poll(() => wireMessage(sourceControllerOrigin, fixture.url, (message) =>
+      message.id === resourceRequestId && Object.hasOwn(message, 'result')), { timeout: 15_000 }).toBeDefined();
+    expect(wireMessage(sourceControllerOrigin, fixture.url, (message) =>
+      message.id === resourceRequestId && Object.hasOwn(message, 'result'))?.message).toEqual({
+      id: resourceRequestId,
+      jsonrpc: '2.0',
+      result: resourceValue,
+    });
+    await expectRetainedRuntime();
     const repairedConfigMarker = `config-reconcile-repaired-${Math.random().toString(36).slice(2)}`;
     const repairedConfig = invalidConfig.replace(
       'configReconcileMarker: Number.NaN',
