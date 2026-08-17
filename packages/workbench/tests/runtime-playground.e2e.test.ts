@@ -201,6 +201,62 @@ e2e('keeps Runtime controls at least 40px tall and inside the 390px viewport wit
     await page.goto(`${fixture.url}#runtime`);
     await expect(page.getByRole('heading', { name: 'Runtime Playground' })).toBeVisible({ timeout: browserTimeout });
     await expect(page.locator('[data-runtime-provider-session]')).toHaveCount(1, { timeout: browserTimeout });
+    await page.getByLabel('Runtime surface').selectOption('mcp.recent_edits');
+    await page.getByLabel('Schema form').check();
+    await expect(page.locator('#runtime-input-limit')).toBeVisible({ timeout: browserTimeout });
+    const schemaForm = await page.evaluate(() => {
+      const { body, documentElement } = globalThis.document;
+      documentElement.scrollLeft = 0;
+      if (body !== null) body.scrollLeft = 0;
+      globalThis.scrollTo({ left: 0, top: globalThis.scrollY });
+      const textInputs = [...globalThis.document.querySelectorAll<HTMLInputElement>([
+        '.runtime-input input:not([type])',
+        '.runtime-input input[type="email"]',
+        '.runtime-input input[type="number"]',
+        '.runtime-input input[type="password"]',
+        '.runtime-input input[type="search"]',
+        '.runtime-input input[type="tel"]',
+        '.runtime-input input[type="text"]',
+        '.runtime-input input[type="url"]',
+      ].join(','))].filter((element) => element.getClientRects().length > 0).map((element) => {
+        const rect = element.getBoundingClientRect();
+        return Object.freeze({
+          height: rect.height,
+          label: element.getAttribute('aria-label') ?? element.labels?.[0]?.textContent?.trim() ?? element.id,
+          left: rect.left,
+          right: rect.right,
+        });
+      });
+      const choiceLabels = [...globalThis.document.querySelectorAll<HTMLInputElement>('.runtime-input input[type="checkbox"], .runtime-input input[type="radio"]')]
+        .filter((element) => element.getClientRects().length > 0)
+        .map((element) => {
+          const label = element.labels?.[0];
+          if (!(label instanceof globalThis.HTMLLabelElement)) throw new Error('Runtime Schema form choice omitted its associated label.');
+          const labelRect = label.getBoundingClientRect();
+          const controlRect = element.getBoundingClientRect();
+          return Object.freeze({
+            associated: [...element.labels ?? []].includes(label),
+            controlBottom: controlRect.bottom,
+            controlLeft: controlRect.left,
+            controlRight: controlRect.right,
+            controlTop: controlRect.top,
+            height: labelRect.height,
+            label: label.textContent?.trim() ?? element.id,
+            labelBottom: labelRect.bottom,
+            left: labelRect.left,
+            right: labelRect.right,
+            top: labelRect.top,
+          });
+        });
+      return Object.freeze({
+        bodyScrollLeft: body?.scrollLeft ?? 0,
+        choiceLabels: Object.freeze(choiceLabels),
+        documentScrollLeft: documentElement.scrollLeft,
+        textInputs: Object.freeze(textInputs),
+        viewportWidth: globalThis.innerWidth,
+        windowScrollX: globalThis.scrollX,
+      });
+    });
     const run = page.getByRole('button', { name: 'Run', exact: true });
     const history = page.getByRole('region', { name: 'Runtime run history' }).locator('ol > li');
     await page.getByLabel('Runtime surface').selectOption('mcp.runtime_status');
@@ -257,6 +313,28 @@ e2e('keeps Runtime controls at least 40px tall and inside the 390px viewport wit
     expect(layout.documentScrollLeft).toBe(0);
     expect(layout.bodyScrollLeft).toBe(0);
     expect(layout.viewportWidth).toBe(390);
+    expect(schemaForm.windowScrollX).toBe(0);
+    expect(schemaForm.documentScrollLeft).toBe(0);
+    expect(schemaForm.bodyScrollLeft).toBe(0);
+    expect(schemaForm.viewportWidth).toBe(390);
+    expect(schemaForm.textInputs.length).toBeGreaterThan(0);
+    expect(schemaForm.choiceLabels.length).toBeGreaterThan(0);
+    for (const input of schemaForm.textInputs) {
+      expect(input.height, input.label).toBeGreaterThanOrEqual(40);
+      expect(input.left, input.label).toBeGreaterThanOrEqual(0);
+      expect(input.right, input.label).toBeLessThanOrEqual(schemaForm.viewportWidth);
+    }
+    for (const choice of schemaForm.choiceLabels) {
+      expect(choice.associated, choice.label).toBe(true);
+      expect(choice.label.length).toBeGreaterThan(0);
+      expect(choice.height, choice.label).toBeGreaterThanOrEqual(40);
+      expect(choice.left, choice.label).toBeGreaterThanOrEqual(0);
+      expect(choice.right, choice.label).toBeLessThanOrEqual(schemaForm.viewportWidth);
+      expect(choice.controlLeft, choice.label).toBeGreaterThanOrEqual(choice.left);
+      expect(choice.controlRight, choice.label).toBeLessThanOrEqual(choice.right);
+      expect(choice.controlTop, choice.label).toBeGreaterThanOrEqual(choice.top);
+      expect(choice.controlBottom, choice.label).toBeLessThanOrEqual(choice.labelBottom);
+    }
     expect(layout.controls.length).toBeGreaterThan(0);
     for (const box of layout.boxes) {
       expect(box.left).toBeGreaterThanOrEqual(0);
