@@ -346,12 +346,21 @@ const freezeDeep = <Value>(value: Value): Value => {
   return Object.freeze(value);
 };
 
+const isDuplicateJsonKeyError = (error: unknown): boolean =>
+  error instanceof SyntaxError && error.message.startsWith('JSON has duplicate key ');
+
+const manifestJsonSyntaxError = (message: string): SyntaxError =>
+  new SyntaxError(message, { cause: new SyntaxError('Artifact manifest JSON parsing failed.') });
+
 export const parseArtifactManifest = (bytes: string): ArtifactManifestV2 => {
   let value: unknown;
   try {
     value = parseJsonWithoutDuplicateKeys(bytes);
-  } catch {
-    throw new SyntaxError('Artifact manifest is not valid JSON.');
+  } catch (error) {
+    if (isDuplicateJsonKeyError(error)) {
+      throw manifestJsonSyntaxError('Artifact manifest contains a duplicate JSON key.');
+    }
+    throw manifestJsonSyntaxError('Artifact manifest is not valid JSON.');
   }
   const manifest = validateManifest(value);
   if (bytes !== `${stableJson(manifest)}\n`) {
