@@ -344,8 +344,15 @@ export class HookPlaygroundService {
     });
   }
 
-  async replay(replay: HookPlaygroundReplay): Promise<HookPlaygroundSimulation | HookPlaygroundDiagnosticResult> {
-    return this.simulate({ ...replay.binding, input: { fixture: replay.input } });
+  async replay(
+    replay: HookPlaygroundReplay,
+    options?: { readonly signal?: AbortSignal },
+  ): Promise<HookPlaygroundSimulation | HookPlaygroundDiagnosticResult> {
+    return this.simulate({
+      ...replay.binding,
+      input: { fixture: replay.input },
+      ...(options?.signal === undefined ? {} : { signal: options.signal }),
+    });
   }
 
   async #withEpoch<T>(epochId: string, action: (artifact: string, reference: EpochReference) => Promise<T>): Promise<T> {

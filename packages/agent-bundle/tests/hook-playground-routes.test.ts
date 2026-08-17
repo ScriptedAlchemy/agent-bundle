@@ -1,0 +1,501 @@
+import { createServer, type IncomingMessage } from 'node:http';
+import type { AddressInfo } from 'node:net';
+
+import { expect, it } from '@rstest/core';
+
+import {
+  HookPlaygroundRoutes,
+  type HookPlaygroundRouteService,
+} from '../src/dev/hook-playground-routes.ts';
+import type {
+  HookPlaygroundDiagnosticResult,
+  HookPlaygroundHook,
+  HookPlaygroundListOptions,
+  HookPlaygroundReplay,
+  HookPlaygroundSimulation,
+  HookPlaygroundSimulationOptions,
+} from '../src/dev/hook-playground-service.ts';
+
+interface StartedRoutes {
+  readonly close: () => Promise<void>;
+  readonly routes: HookPlaygroundRoutes;
+  readonly url: string;
+}
+
+const routeError = (code: string, message: string, status: number): Error & {
+  readonly code: string;
+  readonly message: string;
+  readonly status: number;
+} => Object.assign(new Error(message), { code, message, status });
+
+const authorize = (request: IncomingMessage): void => {
+  if (request.headers.origin !== 'http://127.0.0.1:4567') {
+    throw routeError('AB8003', 'Request origin is not this foreground server.', 403);
+  }
+  if (request.headers['x-agent-bundle-session'] !== 'test-session-token') {
+    throw routeError('AB8004', 'A valid same-session token is required.', 403);
+  }
+};
+
+const startRoutes = async (service?: HookPlaygroundRouteService): Promise<StartedRoutes> => {
+  const routes = new HookPlaygroundRoutes({ authorize, ...(service === undefined ? {} : { service }) });
+  const server = createServer((request, response) => {
+    void routes.handle(request, response).then((handled) => {
+      if (!handled) response.writeHead(404).end();
+    }).catch((error: unknown) => {
+      const diagnostic = error as Partial<{ code: string; message: string; status: number }>;
+      if (response.headersSent || response.writableEnded) {
+        response.destroy();
+        return;
+      }
+      response.writeHead(diagnostic.status ?? 500, { 'content-type': 'application/json; charset=utf-8' });
+      response.end(JSON.stringify({ diagnostic: {
+        code: diagnostic.code ?? 'AB8007',
+        message: diagnostic.message ?? 'Request could not be completed.',
+      } }));
+    });
+  });
+  await new Promise<void>((resolvePromise) => server.listen({ host: '127.0.0.1', port: 0 }, resolvePromise));
+  const address = server.address() as AddressInfo;
+  return Object.freeze({
+    close: async () => {
+      routes.close();
+      await new Promise<void>((resolvePromise, rejectPromise) => server.close((error) => {
+        if (error === undefined) resolvePromise();
+        else rejectPromise(error);
+      }));
+    },
+    routes,
+    url: `http://127.0.0.1:${address.port}`,
+  });
+};
+
+const hookFixture: HookPlaygroundHook = Object.freeze({
+  binding: Object.freeze({ epochId: 'epoch-a', hook: 'hook-a', target: 'claude' }),
+  hook: Object.freeze({
+    event: 'sessionStart',
+    id: 'hook-a',
+    name: 'guard',
+    path: 'hooks/guard.mjs',
+    target: 'claude',
+  }),
+});
+
+const simulationFixture: HookPlaygroundSimulation = Object.freeze({
+  binding: Object.freeze({ epochId: 'epoch-a', hook: 'hook-a', target: 'claude' }),
+  canonicalIntent: Object.freeze({
+    event: 'sessionStart',
+    hook: 'hook-a',
+    input: Object.freeze({ prompt: 'hello' }),
+  }),
+  canonicalResult: Object.freeze({ decision: 'allow' }),
+  hostMapping: Object.freeze({
+    canonicalEvent: 'sessionStart',
+    nativeEvent: 'SessionStart',
+    nativeProjection: 'deterministic',
+    nativeSelector: 'hooks.SessionStart[0]',
+    target: 'claude',
+    wrapperPath: 'hooks/guard.mjs',
+  }),
+  nativeInput: Object.freeze({ prompt: 'hello' }),
+  nativeOutput: Object.freeze({ decision: 'approve' }),
+  replay: Object.freeze({
+    binding: Object.freeze({ epochId: 'epoch-a', hook: 'hook-a', target: 'claude' }),
+    input: Object.freeze({ prompt: 'hello' }),
+  }),
+});
+
+const diagnosticFixture: HookPlaygroundDiagnosticResult = Object.freeze({
+  diagnostics: Object.freeze([Object.freeze({
+    code: 'hook.playground.target.unsupported' as const,
+    event: 'sessionStart',
+    message: 'Target "codex" does not support this hook event.',
+    severity: 'error' as const,
+    target: 'codex',
+  })]),
+});
+
+class RecordingService implements HookPlaygroundRouteService {
+  readonly calls: unknown[] = [];
+  diagnose = false;
+  failure: Error | undefined;
+  /** Resolves the pending simulation so abort behavior is observable. */
+  pending: ((value: HookPlaygroundSimulation) => void) | undefined;
+  aborted = false;
+
+  async list(options: HookPlaygroundListOptions): Promise<readonly HookPlaygroundHook[]> {
+    this.calls.push({ kind: 'list', options: { ...options } });
+    if (this.failure !== undefined) throw this.failure;
+    return Object.freeze([hookFixture]);
+  }
+
+  async simulate(options: HookPlaygroundSimulationOptions): Promise<HookPlaygroundSimulation | HookPlaygroundDiagnosticResult> {
+    const { signal, ...recorded } = options;
+    this.calls.push({ kind: 'simulate', options: recorded, signalled: signal !== undefined });
+    if (this.failure !== undefined) throw this.failure;
+    if (this.diagnose) return diagnosticFixture;
+    if (this.pending !== undefined) {
+      const entered = this.pending;
+      this.pending = undefined;
+      return new Promise<HookPlaygroundSimulation>((_resolvePromise, rejectPromise) => {
+        signal?.addEventListener('abort', () => {
+          this.aborted = true;
+          rejectPromise(new Error('Hook simulation was aborted.'));
+        });
+        entered(simulationFixture);
+      });
+    }
+    return simulationFixture;
+  }
+
+  async replay(
+    replay: HookPlaygroundReplay,
+    options?: { readonly signal?: AbortSignal },
+  ): Promise<HookPlaygroundSimulation | HookPlaygroundDiagnosticResult> {
+    this.calls.push({
+      kind: 'replay',
+      replay: { binding: { ...replay.binding }, input: replay.input },
+      signalled: options?.signal !== undefined,
+    });
+    if (this.failure !== undefined) throw this.failure;
+    if (this.diagnose) return diagnosticFixture;
+    return simulationFixture;
+  }
+}
+
+const headers = (): Readonly<Record<string, string>> => ({
+  origin: 'http://127.0.0.1:4567',
+  'x-agent-bundle-session': 'test-session-token',
+});
+
+const jsonHeaders = (): Readonly<Record<string, string>> => ({ ...headers(), 'content-type': 'application/json' });
+
+const post = (url: string, body: unknown): Promise<Response> => fetch(url, {
+  body: JSON.stringify(body),
+  headers: jsonHeaders(),
+  method: 'POST',
+});
+
+it('lists epoch-bound hooks and forwards only the declared filter', async () => {
+  const service = new RecordingService();
+  const started = await startRoutes(service);
+
+  try {
+    const listed = await fetch(`${started.url}/api/hooks?epochId=epoch-a&target=claude`, { headers: headers() });
+    expect(listed.status).toBe(200);
+    await expect(listed.json()).resolves.toEqual({ hooks: [hookFixture] });
+
+    const unfiltered = await fetch(`${started.url}/api/hooks?epochId=epoch-a`, { headers: headers() });
+    expect(unfiltered.status).toBe(200);
+    expect(service.calls).toEqual([
+      { kind: 'list', options: { epochId: 'epoch-a', target: 'claude' } },
+      { kind: 'list', options: { epochId: 'epoch-a' } },
+    ]);
+  } finally {
+    await started.close();
+  }
+});
+
+it('rejects hook list queries that omit or smuggle parameters', async () => {
+  const service = new RecordingService();
+  const started = await startRoutes(service);
+
+  try {
+    const queries = [
+      '',
+      '?target=claude',
+      '?epochId=',
+      '?epochId=epoch-a&epochId=epoch-b',
+      '?epochId=epoch-a&artifact=/tmp/untrusted',
+      '?epochId=epoch-a&target=claude&command=/tmp/untrusted',
+    ];
+    for (const query of queries) {
+      const rejected = await fetch(`${started.url}/api/hooks${query}`, { headers: headers() });
+      expect(rejected.status).toBe(400);
+      await expect(rejected.json()).resolves.toEqual({
+        diagnostic: { code: 'AB8032', message: 'Hook playground request has an invalid shape.' },
+      });
+    }
+    expect(service.calls).toEqual([]);
+  } finally {
+    await started.close();
+  }
+});
+
+it('simulates equivalently from inline and fixture canonical input', async () => {
+  const service = new RecordingService();
+  const started = await startRoutes(service);
+
+  try {
+    const inline = await post(`${started.url}/api/hooks/simulations`, {
+      epochId: 'epoch-a',
+      hook: 'hook-a',
+      input: { inline: { prompt: 'hello' } },
+      target: 'claude',
+    });
+    expect(inline.status).toBe(200);
+    const inlineBody = await inline.json();
+    expect(inlineBody).toEqual({ simulation: simulationFixture });
+
+    const fixture = await post(`${started.url}/api/hooks/simulations`, {
+      epochId: 'epoch-a',
+      hook: 'hook-a',
+      input: { fixture: { prompt: 'hello' } },
+      target: 'claude',
+    });
+    expect(fixture.status).toBe(200);
+    await expect(fixture.json()).resolves.toEqual(inlineBody);
+
+    expect(service.calls).toEqual([
+      {
+        kind: 'simulate',
+        options: { epochId: 'epoch-a', hook: 'hook-a', input: { inline: { prompt: 'hello' } }, target: 'claude' },
+        signalled: true,
+      },
+      {
+        kind: 'simulate',
+        options: { epochId: 'epoch-a', hook: 'hook-a', input: { fixture: { prompt: 'hello' } }, target: 'claude' },
+        signalled: true,
+      },
+    ]);
+  } finally {
+    await started.close();
+  }
+});
+
+it('returns unsupported mapping diagnostics as a visible result rather than an error', async () => {
+  const service = new RecordingService();
+  service.diagnose = true;
+  const started = await startRoutes(service);
+
+  try {
+    const simulated = await post(`${started.url}/api/hooks/simulations`, {
+      epochId: 'epoch-a',
+      hook: 'hook-a',
+      input: { inline: { prompt: 'hello' } },
+      target: 'codex',
+    });
+    expect(simulated.status).toBe(200);
+    await expect(simulated.json()).resolves.toEqual(diagnosticFixture);
+  } finally {
+    await started.close();
+  }
+});
+
+it('replays a saved case against its original epoch binding', async () => {
+  const service = new RecordingService();
+  const started = await startRoutes(service);
+
+  try {
+    const replayed = await post(`${started.url}/api/hooks/replays`, {
+      binding: { epochId: 'epoch-a', hook: 'hook-a', target: 'claude' },
+      input: { prompt: 'hello' },
+    });
+    expect(replayed.status).toBe(200);
+    await expect(replayed.json()).resolves.toEqual({ simulation: simulationFixture });
+    expect(service.calls).toEqual([{
+      kind: 'replay',
+      replay: { binding: { epochId: 'epoch-a', hook: 'hook-a', target: 'claude' }, input: { prompt: 'hello' } },
+      signalled: true,
+    }]);
+  } finally {
+    await started.close();
+  }
+});
+
+it('rejects invalid and smuggled hook simulation and replay bodies', async () => {
+  const service = new RecordingService();
+  const started = await startRoutes(service);
+
+  try {
+    const simulations = [
+      { epochId: 'epoch-a', hook: 'hook-a', target: 'claude' },
+      { epochId: 'epoch-a', hook: 'hook-a', input: {}, target: 'claude' },
+      { epochId: 'epoch-a', hook: 'hook-a', input: { fixture: { a: 1 }, inline: { a: 1 } }, target: 'claude' },
+      { epochId: 'epoch-a', hook: 'hook-a', input: { inline: [] }, target: 'claude' },
+      { epochId: 'epoch-a', hook: 'hook-a', input: { inline: 'prompt' }, target: 'claude' },
+      { epochId: 'epoch-a', hook: 'hook-a', input: { inline: { a: 1 }, path: '/tmp/untrusted' }, target: 'claude' },
+      { epochId: '', hook: 'hook-a', input: { inline: { a: 1 } }, target: 'claude' },
+      { epochId: 'epoch-a', hook: 'hook-a', input: { inline: { a: 1 } }, target: '' },
+      { command: '/tmp/untrusted', epochId: 'epoch-a', hook: 'hook-a', input: { inline: {} }, target: 'claude' },
+      { artifact: '/tmp/untrusted', epochId: 'epoch-a', hook: 'hook-a', input: { inline: { a: 1 } }, target: 'claude' },
+    ];
+    for (const body of simulations) {
+      const rejected = await post(`${started.url}/api/hooks/simulations`, body);
+      expect(rejected.status).toBe(400);
+      await expect(rejected.json()).resolves.toEqual({
+        diagnostic: { code: 'AB8032', message: 'Hook playground request has an invalid shape.' },
+      });
+    }
+
+    const replays = [
+      { binding: { epochId: 'epoch-a', hook: 'hook-a', target: 'claude' } },
+      { input: { prompt: 'hello' } },
+      { binding: { epochId: 'epoch-a', hook: 'hook-a' }, input: { prompt: 'hello' } },
+      { binding: { epochId: 'epoch-a', hook: 'hook-a', target: 'claude' }, input: [] },
+      { binding: { command: '/tmp/untrusted', epochId: 'epoch-a', hook: 'hook-a', target: 'claude' }, input: {} },
+      { binding: { epochId: 'epoch-a', hook: 'hook-a', target: 'claude' }, input: {}, artifact: '/tmp/untrusted' },
+    ];
+    for (const body of replays) {
+      const rejected = await post(`${started.url}/api/hooks/replays`, body);
+      expect(rejected.status).toBe(400);
+      await expect(rejected.json()).resolves.toEqual({
+        diagnostic: { code: 'AB8032', message: 'Hook playground request has an invalid shape.' },
+      });
+    }
+    expect(service.calls).toEqual([]);
+  } finally {
+    await started.close();
+  }
+});
+
+it('rejects unsupported hook playground methods, media types, and paths', async () => {
+  const service = new RecordingService();
+  const started = await startRoutes(service);
+
+  try {
+    const method = await fetch(`${started.url}/api/hooks?epochId=epoch-a`, { headers: headers(), method: 'DELETE' });
+    expect(method.status).toBe(405);
+    await expect(method.json()).resolves.toEqual({
+      diagnostic: { code: 'AB8007', message: 'Route does not accept this method.' },
+    });
+
+    const listPost = await post(`${started.url}/api/hooks`, {});
+    expect(listPost.status).toBe(405);
+
+    const media = await fetch(`${started.url}/api/hooks/simulations`, {
+      body: 'epochId=epoch-a',
+      headers: { ...headers(), 'content-type': 'application/x-www-form-urlencoded' },
+      method: 'POST',
+    });
+    expect(media.status).toBe(415);
+    await expect(media.json()).resolves.toEqual({
+      diagnostic: { code: 'AB8009', message: 'Request body must use application/json.' },
+    });
+
+    const invalidJson = await fetch(`${started.url}/api/hooks/simulations`, {
+      body: '{',
+      headers: jsonHeaders(),
+      method: 'POST',
+    });
+    expect(invalidJson.status).toBe(400);
+    await expect(invalidJson.json()).resolves.toEqual({
+      diagnostic: { code: 'AB8001', message: 'Request body must be valid JSON.' },
+    });
+
+    const oversized = await fetch(`${started.url}/api/hooks/simulations`, {
+      body: JSON.stringify({
+        epochId: 'epoch-a',
+        hook: 'hook-a',
+        input: { inline: { prompt: 'x'.repeat(70 * 1024) } },
+        target: 'claude',
+      }),
+      headers: jsonHeaders(),
+      method: 'POST',
+    });
+    expect(oversized.status).toBe(413);
+    await expect(oversized.json()).resolves.toEqual({
+      diagnostic: { code: 'AB8010', message: 'Request body exceeds 64 KiB.' },
+    });
+
+    const unknownPath = await fetch(`${started.url}/api/hooks/simulations/extra`, { headers: headers() });
+    expect(unknownPath.status).toBe(400);
+    await expect(unknownPath.json()).resolves.toEqual({
+      diagnostic: { code: 'AB8030', message: 'Hook playground route path is not valid.' },
+    });
+
+    expect(service.calls).toEqual([]);
+  } finally {
+    await started.close();
+  }
+});
+
+it('requires the same-session guard before reading any hook state', async () => {
+  const service = new RecordingService();
+  const started = await startRoutes(service);
+
+  try {
+    const unauthorized = await fetch(`${started.url}/api/hooks?epochId=epoch-a`, {
+      headers: { origin: 'http://127.0.0.1:4567' },
+    });
+    expect(unauthorized.status).toBe(403);
+    expect(service.calls).toEqual([]);
+  } finally {
+    await started.close();
+  }
+});
+
+it('reports an absent or closed hook playground service without leaking internals', async () => {
+  const absent = await startRoutes();
+  try {
+    const unavailable = await fetch(`${absent.url}/api/hooks?epochId=epoch-a`, { headers: headers() });
+    expect(unavailable.status).toBe(404);
+    await expect(unavailable.json()).resolves.toEqual({
+      diagnostic: { code: 'AB8031', message: 'Hook playground routes are not available.' },
+    });
+  } finally {
+    await absent.close();
+  }
+
+  const service = new RecordingService();
+  service.failure = new Error('/private/epoch/path could not be read');
+  const started = await startRoutes(service);
+  try {
+    const failed = await post(`${started.url}/api/hooks/simulations`, {
+      epochId: 'epoch-a',
+      hook: 'hook-a',
+      input: { inline: { prompt: 'hello' } },
+      target: 'claude',
+    });
+    expect(failed.status).toBe(502);
+    const body = await failed.json();
+    expect(body).toEqual({
+      diagnostic: { code: 'AB8033', message: 'Hook playground operation could not be completed.' },
+    });
+
+    started.routes.close();
+    const closed = await fetch(`${started.url}/api/hooks?epochId=epoch-a`, { headers: headers() });
+    expect(closed.status).toBe(503);
+    await expect(closed.json()).resolves.toEqual({
+      diagnostic: { code: 'AB8031', message: 'Hook playground routes are not available.' },
+    });
+  } finally {
+    await started.close();
+  }
+});
+
+it('cancels an in-flight simulation when its request is abandoned', async () => {
+  const service = new RecordingService();
+  const started = await startRoutes(service);
+  const reached = new Promise<void>((resolvePromise) => {
+    service.pending = () => resolvePromise();
+  });
+
+  try {
+    const controller = new AbortController();
+    const request = fetch(`${started.url}/api/hooks/simulations`, {
+      body: JSON.stringify({
+        epochId: 'epoch-a',
+        hook: 'hook-a',
+        input: { inline: { prompt: 'hello' } },
+        target: 'claude',
+      }),
+      headers: jsonHeaders(),
+      method: 'POST',
+      signal: controller.signal,
+    });
+    const settled = request.catch(() => undefined);
+    await reached;
+    controller.abort();
+    await settled;
+
+    const deadline = Date.now() + 2_000;
+    while (!service.aborted) {
+      if (Date.now() >= deadline) throw new Error('Hook simulation was not aborted.');
+      await new Promise<void>((resolvePromise) => setTimeout(resolvePromise, 5));
+    }
+    expect(service.aborted).toBe(true);
+  } finally {
+    await started.close();
+  }
+});

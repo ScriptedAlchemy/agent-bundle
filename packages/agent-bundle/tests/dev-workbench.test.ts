@@ -74,6 +74,31 @@ const writeMcpProject = async (root: string): Promise<void> => {
   ]);
 };
 
+const writeHookProject = async (root: string): Promise<void> => {
+  await mkdir(join(root, 'src', 'hooks'), { recursive: true });
+  await Promise.all([
+    writeFile(join(root, 'package.json'), '{"type":"module"}\n'),
+    writeFile(join(root, 'src', 'hooks', 'session-start.ts'), [
+      'export default (event: { source?: string }) => ({',
+      "  additionalContext: `workbench:${event.source}`,",
+      "  outcome: 'continue' as const,",
+      '});',
+      '',
+    ].join('\n')),
+    writeFile(join(root, 'agent-bundle.config.ts'), [
+      "import { defineConfig } from 'agent-bundle';",
+      '',
+      'export default defineConfig({',
+      "  hooks: { sessionStart: './src/hooks/session-start.ts' },",
+      "  plugin: { name: 'workbench-hook-fixture', version: '1.0.0' },",
+      "  skills: ['skills/review'],",
+      "  targets: ['claude'],",
+      '});',
+      '',
+    ].join('\n')),
+  ]);
+};
+
 const appPreviewBody = () => ({
   host: {
     availableDisplayModes: ['inline'],
@@ -340,6 +365,88 @@ it('hosts real MCP App previews only on the foreground origin and closes their l
     await expect(server.close()).resolves.toBeUndefined();
     await expect(fetch(sandboxOrigin)).rejects.toThrow();
     await expect(access(join(project.root, '.agent-bundle', 'epochs', artifact.activeEpoch.id))).resolves.toBeUndefined();
+  } finally {
+    await server?.close().catch(() => undefined);
+    await Promise.all([removeProjectFixture(project.root), rm(assetsRoot, { force: true, recursive: true })]);
+  }
+}, 60_000);
+
+it('simulates and replays real epoch-bound hooks through the packaged foreground server', async () => {
+  const project = await createProjectFixture();
+  const assetsRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-workbench-hooks-'));
+  let server: Awaited<ReturnType<typeof startDevServer>> | undefined;
+  await Promise.all([
+    writeHookProject(project.root),
+    writeFile(join(assetsRoot, 'index.html'), '<!doctype html><title>Agent Bundle workbench</title>'),
+  ]);
+  try {
+    server = await startDevServer({
+      assets: createWorkbenchAssetSource({ root: assetsRoot }),
+      open: false,
+      port: 0,
+      root: project.root,
+    });
+    const artifact = server.status().artifact;
+    if (artifact.state !== 'active') throw new Error('Expected the workbench to publish an active artifact epoch.');
+    const epochId = artifact.activeEpoch.id;
+    const bootstrap = await fetch(`${server.url}/api/project/session`, {
+      headers: { 'sec-fetch-site': 'same-origin' },
+    });
+    const { token } = await bootstrap.json() as { readonly token: string };
+    const headers = { origin: server.url, 'x-agent-bundle-session': token };
+
+    const unauthorized = await fetch(`${server.url}/api/hooks?epochId=${epochId}`, { headers: { origin: server.url } });
+    expect(unauthorized.status).toBe(403);
+
+    const listed = await fetch(`${server.url}/api/hooks?epochId=${epochId}&target=claude`, { headers });
+    expect(listed.status).toBe(200);
+    const { hooks } = await listed.json() as {
+      readonly hooks: readonly { readonly binding: { readonly epochId: string; readonly hook: string; readonly target: string } }[];
+    };
+    expect(hooks).toHaveLength(1);
+    const binding = hooks[0]!.binding;
+    expect(binding.epochId).toBe(epochId);
+    expect(binding.target).toBe('claude');
+
+    const simulated = await fetch(`${server.url}/api/hooks/simulations`, {
+      body: JSON.stringify({
+        ...binding,
+        input: {
+          inline: {
+            cwd: '/workspace',
+            sessionId: 'session-1',
+            source: 'startup',
+            transcriptPath: '/workspace/transcript.json',
+          },
+        },
+      }),
+      headers: { ...headers, 'content-type': 'application/json' },
+      method: 'POST',
+    });
+    expect(simulated.status).toBe(200);
+    const { simulation } = await simulated.json() as {
+      readonly simulation: {
+        readonly binding: typeof binding;
+        readonly canonicalResult?: Readonly<Record<string, unknown>>;
+        readonly hostMapping: { readonly canonicalEvent: string; readonly nativeEvent: string; readonly wrapperPath: string };
+        readonly replay: { readonly binding: typeof binding; readonly input: Readonly<Record<string, unknown>> };
+      };
+    };
+    expect(simulation.binding).toEqual(binding);
+    expect(simulation.hostMapping.canonicalEvent).toBe('sessionStart');
+    expect(simulation.hostMapping.nativeEvent).toBe('SessionStart');
+    expect(simulation.canonicalResult).toMatchObject({ additionalContext: 'workbench:startup' });
+
+    const replayed = await fetch(`${server.url}/api/hooks/replays`, {
+      body: JSON.stringify(simulation.replay),
+      headers: { ...headers, 'content-type': 'application/json' },
+      method: 'POST',
+    });
+    expect(replayed.status).toBe(200);
+    await expect(replayed.json()).resolves.toEqual({ simulation });
+
+    await expect(server.close()).resolves.toBeUndefined();
+    await expect(fetch(`${server.url}/api/hooks?epochId=${epochId}`, { headers })).rejects.toThrow();
   } finally {
     await server?.close().catch(() => undefined);
     await Promise.all([removeProjectFixture(project.root), rm(assetsRoot, { force: true, recursive: true })]);

@@ -5,6 +5,7 @@ import { createDefaultRegistry, type TargetRegistry } from '../adapters/registry
 import { DevCoordinator } from './coordinator.ts';
 import { EpochStore } from './epoch-store.ts';
 import { ProjectEventHub } from './events.ts';
+import { HookPlaygroundService } from './hook-playground-service.ts';
 import {
   startForegroundServer,
   type ForegroundCoordinator,
@@ -253,6 +254,7 @@ export const startDevServer = async (options: StartDevServerOptions): Promise<De
     assets: options.assets ?? createWorkbenchAssetSource(),
     coordinator: withMcpSessionLifecycle(coordinator, mcpSessions, () => mcpApps),
     eventHub,
+    hookPlayground: new HookPlaygroundService({ epochStore, registry }),
     mcpAppPreviews: appPreviews,
     mcpSessions,
     port: options.port,
