@@ -1,0 +1,40 @@
+.artifacts-content { margin: 0 auto; max-width: 1180px; min-width: 0; padding: 35px 34px 64px; width: 100%; }
+.artifacts-page-heading p { color: #596372; font-size: 15px; margin: 8px 0 0; }
+.artifact-controls { border-top: 1px solid #d9dee7; display: grid; gap: 8px; justify-items: start; padding-top: 24px; }
+.artifact-controls label { color: #596372; font-size: 12px; font-weight: 750; letter-spacing: .03em; margin-top: 12px; text-transform: uppercase; }
+.artifact-controls select { background: #fff; border: 1px solid #bfc8d5; border-radius: 4px; color: #1e2938; font-size: 14px; font-weight: 600; max-width: 100%; min-height: 37px; padding: 0 32px 0 10px; }
+.artifact-controls input { background: #fff; border: 1px solid #bfc8d5; border-radius: 4px; color: #1e2938; font: 13px/1.55 "SFMono-Regular", Consolas, "Liberation Mono", monospace; max-width: 100%; min-height: 37px; padding: 0 11px; width: 360px; }
+.artifact-actions { display: flex; gap: 12px; margin-top: 16px; }
+.artifact-actions button { background: #0b5bd3; border: 1px solid #06459e; border-radius: 4px; color: #fff; cursor: pointer; font-weight: 700; min-height: 43px; padding: 0 22px; }
+.artifact-actions button:hover:not(:disabled) { background: #084eb9; }
+.artifact-actions button:disabled { background: #7f95b8; border-color: #7f95b8; cursor: not-allowed; }
+.artifact-inspection { margin-top: 30px; }
+.artifact-summary { color: #4f5866; font-size: 15px; margin: 0 0 22px; }
+.artifact-diagnostics { background: #fff7f7; border-left: 3px solid #c01d26; color: #78242a; margin: 0 0 22px; padding: 9px 14px; }
+.artifact-diagnostics h2 { color: #78242a; margin-bottom: 6px; }
+.artifact-diagnostics p { font-size: 13px; margin: 5px 0; }
+.artifact-diagnostics em { font-style: normal; font-weight: 600; text-transform: uppercase; }
+.artifact-recovery { color: #8a4a4f; display: block; font-size: 12px; margin-top: 3px; }
+.artifact-detail { border-top: 1px solid #d9dee7; margin-bottom: 21px; padding-top: 18px; }
+.artifact-detail h3 { color: #384354; font-size: 13px; letter-spacing: .03em; margin: 18px 0 8px; text-transform: uppercase; }
+.artifact-detail-rows { display: grid; gap: 0; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); margin: 0; }
+.artifact-detail-rows div { border-right: 1px solid #d9dee7; min-width: 0; padding: 12px 14px 12px 0; }
+.artifact-detail-rows div:last-child { border-right: 0; }
+.artifact-detail-rows dt { color: #596372; font-size: 12px; font-weight: 750; margin: 0 0 6px; }
+.artifact-detail-rows dd { font-size: 13px; font-weight: 500; overflow-wrap: anywhere; }
+.artifact-table { border-collapse: collapse; display: block; font-size: 13px; margin: 0; overflow-x: auto; width: 100%; }
+.artifact-table th, .artifact-table td { border-bottom: 1px solid #e4e8ef; padding: 8px 14px 8px 12px; text-align: left; vertical-align: top; white-space: nowrap; }
+.artifact-table thead th { color: #596372; font-size: 12px; font-weight: 750; letter-spacing: .03em; text-transform: uppercase; }
+.artifact-table tbody th { font-weight: 600; }
+.artifact-digest { color: #5c6676; font: 12px/1.5 "SFMono-Regular", Consolas, "Liberation Mono", monospace; overflow-wrap: anywhere; }
+.artifact-source-inputs { list-style: none; margin: 0; padding: 0; }
+.artifact-source-inputs li { margin: 0 0 4px; }
+.artifact-diff-group { margin-bottom: 18px; }
+
+@media (max-width: 820px) {
+  .artifacts-content { padding: 27px 20px 45px; }
+  .artifact-controls input { width: 100%; }
+  .artifact-detail-rows { grid-template-columns: 1fr; }
+  .artifact-detail-rows div { border-bottom: 1px solid #d9dee7; border-right: 0; }
+  .artifact-detail-rows div:last-child { border-bottom: 0; }
+}

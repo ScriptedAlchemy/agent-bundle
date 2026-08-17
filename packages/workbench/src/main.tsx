@@ -4,6 +4,8 @@ import { createRoot } from 'react-dom/client';
 import type { Diagnostic } from '../../agent-bundle/src/core/diagnostics.ts';
 import type { ProjectStatus } from '../../agent-bundle/src/dev/types.ts';
 
+import { ArtifactClient } from './artifacts/artifact-client.ts';
+import { ArtifactsPage } from './artifacts/artifacts-page.tsx';
 import { HookClient } from './hooks/hook-client.ts';
 import { HooksPage } from './hooks/hooks-page.tsx';
 import { InspectorSessionAdapter } from './inspector/adapter/inspector-session-adapter-entry.ts';
@@ -57,12 +59,13 @@ const StateMark = ({ state }: { readonly state: string }) => (
   }</span>
 );
 
-type WorkbenchPage = 'hooks' | 'mcp' | 'overview' | 'skills';
+type WorkbenchPage = 'artifacts' | 'hooks' | 'mcp' | 'overview' | 'skills';
 type McpPresentation = 'inspector' | 'playground';
 
 const pageForHash = (): WorkbenchPage => {
   if (window.location.hash === '#mcp' || window.location.hash === '#inspector') return 'mcp';
   if (window.location.hash === '#hooks') return 'hooks';
+  if (window.location.hash === '#artifacts') return 'artifacts';
   return window.location.hash === '#skills' ? 'skills' : 'overview';
 };
 
@@ -108,6 +111,15 @@ const Navigation = ({ onNavigate, page }: {
   >
     <span aria-hidden="true" className="nav-glyph">⌁</span>
     MCP playground
+  </a>
+  <a
+    aria-current={page === 'artifacts' ? 'page' : undefined}
+    className={page === 'artifacts' ? 'nav-item nav-item--active' : 'nav-item'}
+    href="#artifacts"
+    onClick={(event) => { event.preventDefault(); onNavigate('artifacts'); }}
+  >
+    <span aria-hidden="true" className="nav-glyph">▤</span>
+    Artifacts
   </a>
 </aside>;
 
@@ -259,6 +271,15 @@ const WorkbenchScreen = ({ children, connectionError, onNavigate, page }: {
   </div>
 </div>;
 
+const ArtifactsScreen = ({ artifactClient, connectionError, onNavigate, status }: {
+  readonly artifactClient: ArtifactClient;
+  readonly connectionError?: string;
+  readonly onNavigate: (page: WorkbenchPage) => void;
+  readonly status: ProjectStatus;
+}) => <WorkbenchScreen connectionError={connectionError} onNavigate={onNavigate} page="artifacts">
+  <ArtifactsPage client={artifactClient} epochId={activeEpochId(status)} />
+</WorkbenchScreen>;
+
 const HooksScreen = ({ connectionError, hookClient, onNavigate, status }: {
   readonly connectionError?: string;
   readonly hookClient: HookClient;
@@ -368,6 +389,7 @@ const McpScreen = ({ appPreviewClient, connectionError, controller, model, onNav
 
 const Workbench = () => {
   const client = useRef<ProjectClient | undefined>(undefined);
+  const artifactClient = useRef<ArtifactClient | undefined>(undefined);
   const hookClient = useRef<HookClient | undefined>(undefined);
   const mcpAppClient = useRef<McpAppClient | undefined>(undefined);
   const skillClient = useRef<SkillClient | undefined>(undefined);
@@ -380,11 +402,15 @@ const Workbench = () => {
   const [status, setStatus] = useState<ProjectStatus>();
   const [changedFiles, setChangedFiles] = useState<readonly string[]>([]);
 
+  if (artifactClient.current === undefined) artifactClient.current = new ArtifactClient();
   if (hookClient.current === undefined) hookClient.current = new HookClient();
   if (mcpAppClient.current === undefined) mcpAppClient.current = new McpAppClient();
 
   const navigate = (next: WorkbenchPage): void => {
-    const hash = next === 'hooks' ? '#hooks' : next === 'mcp' ? '#mcp' : next === 'skills' ? '#skills' : '#overview';
+    const hash = next === 'artifacts' ? '#artifacts'
+      : next === 'hooks' ? '#hooks'
+        : next === 'mcp' ? '#mcp'
+          : next === 'skills' ? '#skills' : '#overview';
     if (window.location.hash !== hash) window.history.pushState(undefined, '', hash);
     if (next === 'mcp') setMcpPresentation('playground');
     setPage(next);
@@ -456,6 +482,9 @@ const Workbench = () => {
         setPresentation={setMcpPresentation}
         status={status}
       />;
+    }
+    if (page === 'artifacts') {
+      return <ArtifactsScreen artifactClient={artifactClient.current} connectionError={connectionError} onNavigate={navigate} status={status} />;
     }
     if (page === 'hooks') {
       return <HooksScreen connectionError={connectionError} hookClient={hookClient.current} onNavigate={navigate} status={status} />;

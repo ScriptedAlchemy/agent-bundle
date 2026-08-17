@@ -135,13 +135,23 @@ const isRequestDiagnostic = (value: unknown): value is RequestDiagnostic =>
   typeof (value as Partial<RequestDiagnostic>).message === 'string' &&
   typeof (value as Partial<RequestDiagnostic>).status === 'number';
 
+/** Route groups may attach structured diagnostics that are the answer, not an internal detail. */
+const attachedDiagnostics = (value: RequestDiagnostic): readonly unknown[] | undefined => {
+  const diagnostics = (value as Partial<{ readonly diagnostics: unknown }>).diagnostics;
+  return Array.isArray(diagnostics) ? diagnostics : undefined;
+};
+
 const responseDiagnostic = (response: ServerResponse, value: RequestDiagnostic): void => {
   if (response.headersSent || response.writableEnded) {
     response.destroy();
     return;
   }
+  const diagnostics = attachedDiagnostics(value);
   response.writeHead(value.status, { 'content-type': 'application/json; charset=utf-8' });
-  response.end(JSON.stringify({ diagnostic: { code: value.code, message: value.message } }));
+  response.end(JSON.stringify({
+    diagnostic: { code: value.code, message: value.message },
+    ...(diagnostics === undefined ? {} : { diagnostics }),
+  }));
 };
 
 const responseJson = (response: ServerResponse, body: unknown): void => {
