@@ -413,10 +413,11 @@ export const createBindingMcpClient = async (
   }
   const attachment: McpSessionControllerAppAttachment = Object.freeze({
     bindingId: preview.binding.id,
-    execute: async (operation: McpAppBindingOperation) => {
-      if (operation.kind !== 'tools/call') return client.operateRuntime(preview.binding.id, operation);
+    execute: async (operation: McpAppBindingOperation, signal?: AbortSignal) => {
+      if (operation.kind !== 'tools/call') return client.operateRuntime(preview.binding.id, operation, signal);
       const consentId = await callToolConsent(client, preview, options.requestConsent, operation);
-      return client.operateRuntime(preview.binding.id, Object.freeze({ ...operation, consentId }));
+      if (signal?.aborted) throw signal.reason ?? new DOMException('Aborted', 'AbortError');
+      return client.operateRuntime(preview.binding.id, Object.freeze({ ...operation, consentId }), signal);
     },
     onResult: (operation: McpAppBindingOperation, result: McpAppBoundOperationResult) => options.onTrace(appOperationTrace(preview, operation, result)),
   });

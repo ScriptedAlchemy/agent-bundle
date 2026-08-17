@@ -171,6 +171,30 @@ it('rejects absolute, protocol-relative, credentialed, and fragmented protected 
   expect(requests).toEqual([]);
 });
 
+it('passes the exact runtime MCP operation cancellation signal to the authenticated route fetch', async () => {
+  const abort = new AbortController();
+  let observed: AbortSignal | undefined;
+  const client = new McpRouteClient({
+    fetch: async (input, init) => {
+      const path = String(input);
+      if (path === '/api/project/session') return json(foregroundSession);
+      if (path === '/api/runtime/mcp/sessions/runtime-session-a/rpc') {
+        observed = init?.signal as AbortSignal | undefined;
+        return json({ result: {
+          operationId: 'runtime-operation-a', sessionId: 'runtime-session-a', sessionRevision: 3, value: [], vector,
+        } });
+      }
+      throw new Error(`Unexpected route request ${path}.`);
+    },
+  });
+
+  await expect(client.executeRuntime('runtime-session-a', {
+    expectedSessionRevision: 3,
+    kind: 'list-tools',
+  }, abort.signal)).resolves.toMatchObject({ operationId: 'runtime-operation-a' });
+  expect(observed).toBe(abort.signal);
+});
+
 it('bootstraps available runtime history through one shared foreground authentication session', async () => {
   const fixture = runtimeFetch();
   const foreground = new ForegroundRouteClient({ fetch: fixture.fetch });

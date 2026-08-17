@@ -126,7 +126,7 @@ export interface McpAppRuntimeClient {
   currentDocumentPolicy(bindingId: string): McpAppTrustedDocumentPolicy;
   decideRuntimeConsent(bindingId: string, consentId: string, decision: 'allow-once' | 'deny'): Promise<McpAppConsentDecisionResponse>;
   getRuntime(bindingId: string): Promise<McpAppPreviewSnapshot>;
-  operateRuntime(bindingId: string, operation: McpAppBindingOperation): Promise<McpAppBoundOperationResult>;
+  operateRuntime(bindingId: string, operation: McpAppBindingOperation, signal?: AbortSignal): Promise<McpAppBoundOperationResult>;
   subscribeInvalidations(listener: (details: McpAppRuntimeInvalidationDetails) => void): () => void;
 }
 
@@ -1085,7 +1085,7 @@ export class McpAppClient implements McpAppRuntimeClient {
     return this.#installRuntimePreview(snapshot);
   }
 
-  async operateRuntime(bindingId: string, operation: McpAppBindingOperation): Promise<McpAppBoundOperationResult> {
+  async operateRuntime(bindingId: string, operation: McpAppBindingOperation, signal?: AbortSignal): Promise<McpAppBoundOperationResult> {
     const id = decodeURIComponent(opaqueSegment(bindingId, 'Runtime MCP App binding'));
     const admission = this.#admitRuntime(id);
     const binding = admission.binding;
@@ -1094,6 +1094,7 @@ export class McpAppClient implements McpAppRuntimeClient {
       body: JSON.stringify(runtimeOperationRequest(operation)),
       headers: { 'content-type': 'application/json' },
       method: 'POST',
+      ...(signal === undefined ? {} : { signal }),
     }, admission, undefined, true);
     this.#assertRuntimeAdmission(admission);
     const body = runtimeRecord(response, ['result']);

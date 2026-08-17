@@ -431,6 +431,7 @@ it('maps all runtime App MCP operations through its binding executor, gates tool
   let attachments = 0;
   let attached: McpSessionControllerAppAttachment | undefined;
   const operations: Array<Readonly<{ readonly bindingId: string; readonly operation: McpAppBindingOperation }>> = [];
+  const operationSignals: Array<AbortSignal | undefined> = [];
   const consentRequests: unknown[] = [];
   const traces: unknown[] = [];
   let decision: 'allow-once' | 'deny' | 'error' = 'allow-once';
@@ -465,8 +466,9 @@ it('maps all runtime App MCP operations through its binding executor, gates tool
       });
     },
     currentDocumentPolicy: () => policy,
-    operateRuntime: async (bindingId: string, operation: McpAppBindingOperation) => {
+    operateRuntime: async (bindingId: string, operation: McpAppBindingOperation, signal?: AbortSignal) => {
       operations.push(Object.freeze({ bindingId, operation }));
+      operationSignals.push(signal);
       return Object.freeze({
         operationId: `operation-${operations.length}`,
         sessionId: 'runtime-session-a',
@@ -495,7 +497,8 @@ it('maps all runtime App MCP operations through its binding executor, gates tool
   expect(attachments).toBe(1);
   if (attached === undefined) throw new Error('Expected one binding-scoped App attachment.');
 
-  const tools = await attached.execute(Object.freeze({ kind: 'tools/list' }));
+  const operationAbort = new AbortController();
+  const tools = await attached.execute(Object.freeze({ kind: 'tools/list' }), operationAbort.signal);
   await attached.execute(Object.freeze({ kind: 'resources/list' }));
   await attached.execute(Object.freeze({ kind: 'resources/read', uri: 'weather://today' }));
   const toolCall = await attached.execute(Object.freeze({ arguments: Object.freeze({ city: 'Paris' }), kind: 'tools/call', name: 'forecast' }));
@@ -508,6 +511,7 @@ it('maps all runtime App MCP operations through its binding executor, gates tool
     { bindingId: 'runtime-binding', operation: { kind: 'resources/read', uri: 'weather://today' } },
     { bindingId: 'runtime-binding', operation: { arguments: { city: 'Paris' }, consentId: 'authorization-a', kind: 'tools/call', name: 'forecast' } },
   ]);
+  expect(operationSignals).toEqual([operationAbort.signal, undefined, undefined, undefined]);
   expect(consentRequests).toEqual([expect.objectContaining({
     bindingId: 'runtime-binding',
     request: expect.objectContaining({ capability: 'call-tool', details: { arguments: { city: 'Paris' }, name: 'forecast' }, scope: 'action' }),

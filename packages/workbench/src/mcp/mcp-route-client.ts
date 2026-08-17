@@ -589,13 +589,14 @@ export class McpRouteClient {
     if (response.closed !== true) throw new McpRouteClientError('AB8019', 'Runtime MCP route returned an invalid close response.');
   }
 
-  async executeRuntime(sessionId: string, request: DevRuntimeMcpOperationRequest): Promise<DevRuntimeMcpOperationResult> {
+  async executeRuntime(sessionId: string, request: DevRuntimeMcpOperationRequest, signal?: AbortSignal): Promise<DevRuntimeMcpOperationResult> {
     const path = this.#runtimeSessionPath(sessionId);
     const input = runtimeOperationRequest(request);
     const result = runtimeOperation(asRecord(await this.#json(`${path}/rpc`, {
       body: JSON.stringify(input),
       headers: { 'content-type': 'application/json' },
       method: 'POST',
+      ...(signal === undefined ? {} : { signal }),
     })).result);
     if (result.sessionId !== sessionId || result.sessionRevision !== input.expectedSessionRevision) {
       throw new McpRouteClientError('AB8204', 'Runtime MCP operation response does not match the requested session revision.');

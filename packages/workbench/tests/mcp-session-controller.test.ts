@@ -52,7 +52,7 @@ const runtimeAppResult = (
   vector: runtimeAppVector,
 });
 const runtimeAppAttachment = (
-  execute: (operation: McpAppBindingOperation) => Promise<McpAppBoundOperationResult>,
+  execute: (operation: McpAppBindingOperation, signal?: AbortSignal) => Promise<McpAppBoundOperationResult>,
   onResult?: (operation: McpAppBindingOperation, result: McpAppBoundOperationResult) => void,
 ) => Object.freeze({
   bindingId: 'runtime-app-binding-a',
@@ -682,6 +682,130 @@ it('drains an old runtime attachment across restart without publishing its stale
   expect(requests).toEqual(['tools/list', 'tools/list']);
   await controller.close();
   await old.close();
+});
+
+it('aborts an in-flight runtime route operation before the coalesced controller close publishes a stale result', async () => {
+  const completed = deferred<Awaited<ReturnType<NonNullable<McpSessionControllerRoutes['executeRuntime']>>>>();
+  const started = deferred<void>();
+  const closeCalls: string[] = [];
+  let routeSignal: AbortSignal | undefined;
+  const controller = createMcpSessionController({
+    clientFactory: fakeClient,
+    routes: {
+      catalog: async () => ({ prompts: [], resourceTemplates: [], resources: [], tools: [] }),
+      closeRuntime: async () => { closeCalls.push('runtime.close'); },
+      config: async () => ({}),
+      executeRuntime: (async (_sessionId: string, _request: unknown, signal?: AbortSignal) => {
+        routeSignal = signal;
+        started.resolve();
+        return new Promise((resolve, reject) => {
+          signal?.addEventListener('abort', () => reject(signal.reason), { once: true });
+          void completed.promise.then(resolve, reject);
+        });
+      }) as McpSessionControllerRoutes['executeRuntime'],
+      openRuntime: async () => { throw new Error('Unexpected runtime session open.'); },
+      restart: async () => connection,
+      restartRuntime: async () => unusedRuntimeRestart,
+      stream: async () => new Response(null),
+      trace: async () => ({ entries: [] }),
+    },
+    transportFactory: fakeTransport,
+  });
+  const cancellation = new AbortController();
+  let invoking: Promise<unknown> | undefined;
+  let closing: Promise<void> | undefined;
+
+  try {
+    await controller.open(runtimeBinding);
+    invoking = controller.invoke({ id: 'runtime-route-cancel', operation: 'listTools', request: {}, signal: cancellation.signal });
+    await started.promise;
+
+    cancellation.abort(new DOMException('Runtime route invocation cancelled.', 'AbortError'));
+    expect(routeSignal).toBeInstanceOf(AbortSignal);
+    expect(routeSignal).not.toBe(cancellation.signal);
+    expect(routeSignal?.aborted).toBe(true);
+    closing = controller.close();
+    expect(controller.close()).toBe(closing);
+
+    await expect(invoking).rejects.toBe(cancellation.signal.reason);
+    await expect(closing).resolves.toBeUndefined();
+    expect(closeCalls).toEqual(['runtime.close']);
+    expect(controller.history.some((entry) => entry.id === 'runtime-route-cancel')).toBe(false);
+  } finally {
+    completed.resolve(Object.freeze({
+      operationId: 'runtime-route-operation-a',
+      sessionId: 'runtime-session-a',
+      sessionRevision: 3,
+      value: Object.freeze([{ name: 'forecast' }]),
+      vector: Object.freeze({
+        providerSessionId: 'provider-a', runtimeGenerationId: 'generation-a', sourceRevision: 'source-a', stateStoreId: 'store-a', stateVersion: 2,
+      }),
+    }));
+    await invoking?.catch(() => undefined);
+    await closing?.catch(() => undefined);
+    await controller.close().catch(() => undefined);
+  }
+});
+
+it('aborts an attached runtime App operation during a coalesced controller close without publishing a stale result', async () => {
+  const completed = deferred<McpAppBoundOperationResult>();
+  const started = deferred<void>();
+  const closeCalls: string[] = [];
+  let appSignal: AbortSignal | undefined;
+  let attachedTransport: Transport | undefined;
+  const controller = createMcpSessionController({
+    appClientFactory: () => ({
+      close: async () => undefined,
+      connect: async (transport: Transport) => { attachedTransport = transport; await transport.start(); },
+      request: async () => undefined,
+    }) as unknown as Client,
+    clientFactory: fakeClient,
+    routes: {
+      catalog: async () => ({ prompts: [], resourceTemplates: [], resources: [], tools: [] }),
+      closeRuntime: async () => { closeCalls.push('runtime.close'); },
+      config: async () => ({}),
+      executeRuntime: async () => { throw new Error('Attached App must not use the legacy runtime route executor.'); },
+      openRuntime: async () => { throw new Error('Unexpected runtime session open.'); },
+      restart: async () => connection,
+      restartRuntime: async () => unusedRuntimeRestart,
+      stream: async () => new Response(null),
+      trace: async () => ({ entries: [] }),
+    },
+    transportFactory: fakeTransport,
+  });
+  let sending: Promise<void> | undefined;
+  let closing: Promise<void> | undefined;
+
+  try {
+    await controller.open(runtimeBinding);
+    await controller.attachApp(runtimeAppAttachment(async (operation, signal?: AbortSignal) => {
+      appSignal = signal;
+      started.resolve();
+      return new Promise((resolve, reject) => {
+        signal?.addEventListener('abort', () => reject(signal.reason), { once: true });
+        void completed.promise.then(resolve, reject);
+      });
+    }));
+    if (attachedTransport === undefined) throw new Error('Expected controller-owned attached transport.');
+    sending = attachedTransport.send({ id: 1, jsonrpc: '2.0', method: 'tools/list' });
+    await started.promise;
+
+    closing = controller.close();
+    expect(controller.cancel('app:1')).toBe(true);
+    expect(controller.close()).toBe(closing);
+    expect(appSignal).toBeInstanceOf(AbortSignal);
+    expect(appSignal?.aborted).toBe(true);
+
+    await expect(sending).resolves.toBeUndefined();
+    await expect(closing).resolves.toBeUndefined();
+    expect(closeCalls).toEqual(['runtime.close']);
+    expect(controller.history.some((entry) => entry.id === 'app:1')).toBe(false);
+  } finally {
+    completed.resolve(runtimeAppResult({ kind: 'tools/list' }));
+    await sending?.catch(() => undefined);
+    await closing?.catch(() => undefined);
+    await controller.close().catch(() => undefined);
+  }
 });
 
 it('adopts an authoritative higher runtime session revision without reopening the stable session', async () => {

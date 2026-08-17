@@ -71,7 +71,7 @@ export interface McpSessionControllerRoutes {
   stream(id: string, after: number, signal?: AbortSignal): Promise<Response>;
   trace(id: string, after?: number): Promise<McpRouteTrace>;
   closeRuntime?(request: DevRuntimeMcpSessionControlRequest): Promise<void>;
-  executeRuntime?(sessionId: string, request: DevRuntimeMcpOperationRequest): Promise<DevRuntimeMcpOperationResult>;
+  executeRuntime?(sessionId: string, request: DevRuntimeMcpOperationRequest, signal?: AbortSignal): Promise<DevRuntimeMcpOperationResult>;
   openRuntime?(request: DevRuntimeMcpSessionRequest): Promise<McpRouteRuntimeSession>;
   restartRuntime?(request: DevRuntimeMcpSessionControlRequest): Promise<McpRouteRuntimeRestart>;
 }
@@ -80,7 +80,7 @@ export interface McpSessionControllerRuntimeRoutes {
   openRuntime(request: DevRuntimeMcpSessionRequest): Promise<McpRouteRuntimeSession>;
   restartRuntime(request: DevRuntimeMcpSessionControlRequest): Promise<McpRouteRuntimeRestart>;
   closeRuntime(request: DevRuntimeMcpSessionControlRequest): Promise<void>;
-  executeRuntime(sessionId: string, request: DevRuntimeMcpOperationRequest): Promise<DevRuntimeMcpOperationResult>;
+  executeRuntime(sessionId: string, request: DevRuntimeMcpOperationRequest, signal?: AbortSignal): Promise<DevRuntimeMcpOperationResult>;
 }
 
 export interface McpSessionControllerTransport extends Transport {
@@ -108,7 +108,7 @@ export interface McpSessionControllerAppAccess {
 /** One opaque runtime App authority. It has no access to the stable runtime session lifecycle. */
 export interface McpSessionControllerAppAttachment {
   readonly bindingId: string;
-  execute(operation: McpAppBindingOperation): Promise<McpAppBoundOperationResult>;
+  execute(operation: McpAppBindingOperation, signal?: AbortSignal): Promise<McpAppBoundOperationResult>;
   /** Invoked only after the controller has revalidated the current session identity. */
   onResult?(operation: McpAppBindingOperation, result: McpAppBoundOperationResult): void;
 }
@@ -1446,13 +1446,14 @@ export class McpSessionController {
       this.#publish({ diagnostic: diagnosticFor('mcp.operation.unsupported', reason), type: 'failed' });
       throw reason;
     }
-    return (await this.#runRuntimeRouteOperation(input.id, operation, replayOf)).value;
+    return (await this.#runRuntimeRouteOperation(input.id, operation, replayOf, input.signal)).value;
   }
 
   async #runRuntimeRouteOperation(
     id: string,
     operation: McpRouteOperation,
     replayOf?: string,
+    signal?: AbortSignal,
   ): Promise<AgentBundleMcpDispatchResult> {
     this.#assertReady('invoke');
     const binding = this.#binding;
@@ -1460,6 +1461,9 @@ export class McpSessionController {
     const generation = this.#generation;
     if (this.#requests.has(id)) throw new McpSessionControllerError(`MCP invocation ${JSON.stringify(id)} is already active.`);
     const active = activeRequest();
+    const onAbort = () => active.abort.abort(signal?.reason);
+    signal?.addEventListener('abort', onAbort, { once: true });
+    if (signal?.aborted) onAbort();
     this.#requests.set(id, active);
     const controllerOperation = controllerOperationForRuntimeRoute(operation);
     this.#publish({
@@ -1476,6 +1480,7 @@ export class McpSessionController {
       const result = await this.#runtimeRoutes().executeRuntime(
         binding.binding.sessionId,
         runtimeRequestForRoute(operation, binding.binding.sessionRevision),
+        active.abort.signal,
       );
       if (result.sessionId !== binding.binding.sessionId || result.sessionRevision !== binding.binding.sessionRevision) {
         throw new McpSessionControllerError('Runtime MCP operation response belongs to a stale session revision.');
@@ -1494,6 +1499,7 @@ export class McpSessionController {
       }
       throw reason;
     } finally {
+      signal?.removeEventListener('abort', onAbort);
       this.#requests.delete(id);
       active.settle();
     }
@@ -1529,7 +1535,7 @@ export class McpSessionController {
       type: 'request.start',
     });
     try {
-      const result = await authority.execute(appOperation);
+      const result = await authority.execute(appOperation, active.abort.signal);
       if (
         result === null || typeof result !== 'object' ||
         result.sessionId !== binding.binding.sessionId || result.sessionRevision !== binding.binding.sessionRevision

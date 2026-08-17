@@ -210,13 +210,14 @@ describe('MCP App browser client', () => {
       currentDocumentPolicy(bindingId: string): Readonly<{ readonly bindingId: string; readonly snapshot: Readonly<{ readonly revision: number }> }>;
       decideRuntimeConsent(bindingId: string, consentId: string, decision: 'allow-once' | 'deny'): Promise<unknown>;
       getRuntime(bindingId: string): Promise<unknown>;
-      operateRuntime(bindingId: string, operation: unknown): Promise<unknown>;
+      operateRuntime(bindingId: string, operation: unknown, signal?: AbortSignal): Promise<unknown>;
     };
 
     await expect(runtime.createRuntime({ expectedGenerationId: 'generation-a', profileId: 'portable', runId: 'run-a' })).resolves.toMatchObject({ binding: { id: 'runtime-binding' }, kind: 'apps' });
     const initialPolicy = runtime.currentDocumentPolicy('runtime-binding');
     await expect(runtime.getRuntime('runtime-binding')).resolves.toMatchObject({ binding: { id: 'runtime-binding' } });
-    await expect(runtime.operateRuntime('runtime-binding', { kind: 'tools/list' })).resolves.toMatchObject({ operationId: 'operation-a' });
+    const operationAbort = new AbortController();
+    await expect(runtime.operateRuntime('runtime-binding', { kind: 'tools/list' }, operationAbort.signal)).resolves.toMatchObject({ operationId: 'operation-a' });
     await expect(runtime.createRuntimeConsent('runtime-binding', {
       actionFingerprint: 'fingerprint-a', capability: 'camera', details: {}, scope: 'document', summary: 'Use camera',
     })).resolves.toMatchObject({ challenge: { id: 'consent-a' } });
@@ -239,6 +240,7 @@ describe('MCP App browser client', () => {
     expect(JSON.parse(String(calls[1]?.[1]?.body))).toEqual({ expectedGenerationId: 'generation-a', profileId: 'portable', runId: 'run-a' });
     expect(calls[2]?.[1]?.method).toBeUndefined();
     expect(JSON.parse(String(calls[3]?.[1]?.body))).toEqual({ kind: 'tools/list' });
+    expect(calls[3]?.[1]?.signal).toBe(operationAbort.signal);
     expect(JSON.parse(String(calls[4]?.[1]?.body))).toEqual({
       actionFingerprint: 'fingerprint-a', capability: 'camera', details: {}, scope: 'document', summary: 'Use camera',
     });
