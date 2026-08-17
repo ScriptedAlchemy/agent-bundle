@@ -197,8 +197,21 @@ e2e('offers the host-owned MCP playground handoff only after a selected Runtime 
     }).preview.profile.configExtensions;
     expect(runtimeAppResponses[0]).toMatchObject({ preview: { kind: 'apps' } });
     expect(configInspection).toEqual({ entries: expectedRegisteredConfiguration, sourceRevision: expect.any(String) });
+    const configInspectionSnapshot = JSON.stringify(configInspection);
     const sourceRevision = (configInspection as { readonly sourceRevision: string }).sourceRevision;
     expect(sourceRevision.length).toBeGreaterThan(0);
+    type ProjectSourceStatus = Readonly<{
+      readonly diagnostics: readonly Readonly<{ readonly code: string; readonly message: string }>[];
+      readonly revision?: string;
+      readonly state: string;
+    }>;
+    const readProjectSource = async (): Promise<ProjectSourceStatus> => page.evaluate(async (origin) => {
+      const response = await fetch(new URL('/api/project/status', origin));
+      if (!response.ok) throw new Error(`Project status failed with ${String(response.status)}.`);
+      return (await response.json() as { readonly status: { readonly source: ProjectSourceStatus } }).status.source;
+    }, fixture.url);
+    const initialProjectSource = await readProjectSource();
+    expect(initialProjectSource).toEqual({ diagnostics: [], revision: sourceRevision, state: 'ready' });
     const expectRuntimeProfileInspection = async (preview: Locator, expectedSourceRevision: string): Promise<void> => {
       await expect(preview.getByLabel('Simulated MCP App profile')).toContainText('Portable MCP Apps');
       await expect(preview.getByLabel('Simulated MCP App profile')).toContainText('agent-bundle:mcp-apps:2026-01-26');
@@ -268,6 +281,89 @@ e2e('offers the host-owned MCP playground handoff only after a selected Runtime 
     expect(runtimeAppRequests.filter((request) => request === 'POST /api/runtime/apps')).toHaveLength(1);
     expect(runtimeAppRequests.filter((request) => request.startsWith('DELETE /api/runtime/apps/'))).toHaveLength(0);
     expect(runtimeAppResponses).toHaveLength(1);
+    const hmrMessagesBeforeConfigReconcile = [...runtimePreviewHmrMessages];
+    const runtimeAttribute = async (name: string): Promise<string> => {
+      const value = await runtimeIdentity.getAttribute(name);
+      if (value === null) throw new Error(`Runtime identity omitted ${name}.`);
+      return value;
+    };
+    const sourceRuntimeIdentity = {
+      hmrClients: await runtimeAttribute('data-runtime-hmr-client-count'),
+      providerSession: await runtimeAttribute('data-runtime-provider-session'),
+      sourceRevision: await runtimeAttribute('data-runtime-source-revision'),
+      stateVersion: await runtimeAttribute('data-runtime-state-version'),
+    };
+    const expectOriginalPreview = async (): Promise<void> => {
+      await expectRuntimeProfileInspection(page.locator('.runtime-stage .mcp-app-preview'), sourceRevision);
+      expect(JSON.stringify((runtimeAppResponses[0] as {
+        readonly preview: { readonly profile: { readonly configExtensions: unknown } };
+      }).preview.profile.configExtensions)).toBe(configInspectionSnapshot);
+      expect(await sourcePreviewHandle.evaluate((element) => element.isConnected &&
+        document.querySelector('.runtime-stage .mcp-app-preview iframe') === element)).toBe(true);
+      await expect(runtimeIdentity).toHaveAttribute('data-runtime-hmr-client-count', sourceRuntimeIdentity.hmrClients);
+      await expect(runtimeIdentity).toHaveAttribute('data-runtime-provider-session', sourceRuntimeIdentity.providerSession);
+      await expect(runtimeIdentity).toHaveAttribute('data-runtime-source-revision', sourceRuntimeIdentity.sourceRevision);
+      await expect(runtimeIdentity).toHaveAttribute('data-runtime-state-version', sourceRuntimeIdentity.stateVersion);
+      expect(runtimePreviewHmrSockets).toHaveLength(1);
+      expect(runtimePreviewHmrMessages).toEqual(hmrMessagesBeforeConfigReconcile);
+      expect(runtimeAppRequests.filter((request) => request === 'POST /api/runtime/apps')).toHaveLength(1);
+      expect(runtimeAppRequests.filter((request) => request.startsWith('DELETE /api/runtime/apps/'))).toHaveLength(0);
+      expect(runtimeAppResponses).toHaveLength(1);
+    };
+    const sourceConfig = await readFile(fixture.configSource, 'utf8');
+    const finiteConfigMarker = `config-reconcile-finite-${Math.random().toString(36).slice(2)}`;
+    const finiteConfig = sourceConfig.replace('  codex: {},', `  codex: { configReconcileMarker: '${finiteConfigMarker}' },`);
+    expect(finiteConfig).not.toBe(sourceConfig);
+    await writeFile(fixture.configSource, finiteConfig);
+    await expect.poll(async () => {
+      const source = await readProjectSource();
+      return source.state === 'ready' && source.revision !== sourceRevision ? source.revision : undefined;
+    }, { timeout: 15_000 }).toEqual(expect.any(String));
+    const finiteSource = await readProjectSource();
+    const finiteSourceRevision = finiteSource.revision;
+    if (finiteSourceRevision === undefined) throw new Error('Finite configuration update did not expose a source revision.');
+    expect(finiteSource.diagnostics).toEqual([]);
+    await expectOriginalPreview();
+    const invalidConfig = finiteConfig.replace(
+      `configReconcileMarker: '${finiteConfigMarker}'`,
+      'configReconcileMarker: Number.NaN',
+    );
+    expect(invalidConfig).not.toBe(finiteConfig);
+    await writeFile(fixture.configSource, invalidConfig);
+    await expect.poll(async () => {
+      const source = await readProjectSource();
+      const diagnostic = source.diagnostics.find((candidate) => candidate.code === 'AB4500');
+      return source.state === 'invalid' && diagnostic?.message === 'A registered config extension must contain strict finite JSON data.'
+        ? source
+        : undefined;
+    }, { timeout: 15_000 }).toMatchObject({
+      diagnostics: [expect.objectContaining({
+        code: 'AB4500',
+        message: 'A registered config extension must contain strict finite JSON data.',
+      })],
+      state: 'invalid',
+    });
+    const invalidSource = await readProjectSource();
+    expect(invalidSource.diagnostics.map((diagnostic) => diagnostic.code)).not.toContain('AB7001');
+    expect(invalidSource.diagnostics.map((diagnostic) => diagnostic.code)).not.toContain('AB8200');
+    await expect(page.getByRole('button', { name: 'Open in MCP playground' })).toBeEnabled();
+    await expect(refreshedFrame.getByRole('button', { name: 'Refresh' })).toBeEnabled();
+    await expectOriginalPreview();
+    const repairedConfigMarker = `config-reconcile-repaired-${Math.random().toString(36).slice(2)}`;
+    const repairedConfig = invalidConfig.replace(
+      'configReconcileMarker: Number.NaN',
+      `configReconcileMarker: '${repairedConfigMarker}'`,
+    );
+    await writeFile(fixture.configSource, repairedConfig);
+    await expect.poll(async () => {
+      const source = await readProjectSource();
+      return source.state === 'ready' && source.revision !== finiteSourceRevision ? source.revision : undefined;
+    }, { timeout: 15_000 }).toEqual(expect.any(String));
+    const repairedSource = await readProjectSource();
+    const repairedSourceRevision = repairedSource.revision;
+    if (repairedSourceRevision === undefined) throw new Error('Repaired configuration update did not expose a source revision.');
+    expect(repairedSource.diagnostics).toEqual([]);
+    await expectOriginalPreview();
     const handoff = page.getByRole('button', { name: 'Open in MCP playground' });
     await handoff.click({ timeout: browserTimeout });
     await expect(page.getByRole('heading', { name: 'MCP playground' })).toBeVisible({ timeout: browserTimeout });
@@ -287,7 +383,21 @@ e2e('offers the host-owned MCP playground handoff only after a selected Runtime 
     const handedOffConfigInspection = (runtimeAppResponses[1] as {
       readonly preview: { readonly profile: { readonly configExtensions: { readonly sourceRevision: string } } };
     }).preview.profile.configExtensions;
-    await expectRuntimeProfileInspection(page.locator('.mcp-page-app-preview'), handedOffConfigInspection.sourceRevision);
+    expect(handedOffConfigInspection).toEqual({ entries: expectedRegisteredConfiguration, sourceRevision: repairedSourceRevision });
+    expect(JSON.stringify(handedOffConfigInspection)).not.toContain(repairedConfigMarker);
+    await expectRuntimeProfileInspection(page.locator('.mcp-page-app-preview'), repairedSourceRevision);
+    const handedOffBinding = (runtimeAppResponses[1] as {
+      readonly preview: { readonly binding: Readonly<{
+        readonly id: string;
+        readonly runVector: typeof sourceBinding.runVector;
+        readonly sessionId: string;
+        readonly sessionRevision: number;
+      }> };
+    }).preview.binding;
+    expect(handedOffBinding.id).not.toBe(sourceBinding.id);
+    expect(handedOffBinding.runVector).toEqual(sourceBinding.runVector);
+    expect(handedOffBinding.sessionId).toBe(sourceBinding.sessionId);
+    expect(handedOffBinding.sessionRevision).toBe(sourceBinding.sessionRevision);
     expect(runtimeAppRequests.filter((request) => request === 'POST /api/runtime/apps')).toHaveLength(2);
     expect(runtimeAppRequests.filter((request) => request.startsWith('DELETE /api/runtime/apps/'))).toHaveLength(1);
     expect(pageErrors).toEqual([]);
