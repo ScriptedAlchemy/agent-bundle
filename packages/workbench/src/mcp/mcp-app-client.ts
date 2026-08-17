@@ -120,6 +120,7 @@ export interface McpAppTrustedDocumentPolicy {
 }
 
 export interface McpAppRuntimeClient {
+  abandonRuntimeConsent(bindingId: string, consentId: string): void;
   closeRuntime(bindingId: string): Promise<void>;
   createRuntime(request: RuntimeCreateRequest): Promise<McpAppPreviewSnapshot>;
   createRuntimeConsent(bindingId: string, request: McpAppConsentRequest, signal?: AbortSignal): Promise<McpAppConsentCreatedResponse>;
@@ -1132,6 +1133,12 @@ export class McpAppClient implements McpAppRuntimeClient {
     return Object.freeze({ challenge, documentPolicy: policy }) as McpAppConsentCreatedResponse;
   }
 
+  abandonRuntimeConsent(bindingId: string, consentId: string): void {
+    const binding = this.#runtimeBindings.get(bindingId);
+    if (binding === undefined) return;
+    this.#discardRuntimeConsentChallenge(bindingId, consentId, binding);
+  }
+
   async decideRuntimeConsent(
     bindingId: string,
     consentId: string,
@@ -1388,6 +1395,13 @@ export class McpAppClient implements McpAppRuntimeClient {
     challenges!.delete(consentId);
     if (challenges!.size === 0) this.#runtimeConsentChallenges.delete(bindingId);
     return challenge;
+  }
+
+  #discardRuntimeConsentChallenge(bindingId: string, consentId: string, binding: McpAppPreviewSnapshot): void {
+    const challenges = this.#runtimeConsentChallenges.get(bindingId);
+    if (challenges?.get(consentId)?.binding !== binding) return;
+    challenges.delete(consentId);
+    if (challenges.size === 0) this.#runtimeConsentChallenges.delete(bindingId);
   }
 
   #isDocumentPolicyAdvance(

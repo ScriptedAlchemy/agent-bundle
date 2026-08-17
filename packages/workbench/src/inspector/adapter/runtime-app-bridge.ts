@@ -350,9 +350,13 @@ const sideEffectConsent = async (
     summary,
   });
   const created = await options.client.createRuntimeConsent(preview.binding.id, request);
-  const decision = await options.requestConsent(created.challenge);
-  const resolved = await options.client.decideRuntimeConsent(preview.binding.id, created.challenge.id, decision);
-  return resolved.grant !== undefined;
+  try {
+    const decision = await options.requestConsent(created.challenge);
+    const resolved = await options.client.decideRuntimeConsent(preview.binding.id, created.challenge.id, decision);
+    return resolved.grant !== undefined;
+  } finally {
+    options.client.abandonRuntimeConsent(preview.binding.id, created.challenge.id);
+  }
 };
 
 const callToolConsent = async (
@@ -375,13 +379,17 @@ const callToolConsent = async (
   });
   throwIfAborted(signal);
   const created = await client.createRuntimeConsent(preview.binding.id, request, signal);
-  throwIfAborted(signal);
-  const decision = await requestConsent(created.challenge, signal);
-  throwIfAborted(signal);
-  const resolved = await client.decideRuntimeConsent(preview.binding.id, created.challenge.id, decision, signal);
-  throwIfAborted(signal);
-  if (resolved.grant === undefined) throw new Error('Runtime MCP App tool call was not approved.');
-  return resolved.grant.authorizationId;
+  try {
+    throwIfAborted(signal);
+    const decision = await requestConsent(created.challenge, signal);
+    throwIfAborted(signal);
+    const resolved = await client.decideRuntimeConsent(preview.binding.id, created.challenge.id, decision, signal);
+    throwIfAborted(signal);
+    if (resolved.grant === undefined) throw new Error('Runtime MCP App tool call was not approved.');
+    return resolved.grant.authorizationId;
+  } finally {
+    client.abandonRuntimeConsent(preview.binding.id, created.challenge.id);
+  }
 };
 
 const appOperationTrace = (

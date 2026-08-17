@@ -106,6 +106,7 @@ const runtimeFactory = (
   });
   return createRuntimeAppBridgeFactory({
     client: Object.freeze({
+      abandonRuntimeConsent: () => undefined,
       closeRuntime: async () => undefined,
       createRuntimeConsent: async () => Object.freeze({
         challenge: Object.freeze({ expiresAt: 10, id: 'consent-a', request: Object.freeze({}) }),
@@ -449,6 +450,7 @@ it('maps all runtime App MCP operations through its binding executor, gates tool
     },
   };
   const client = {
+    abandonRuntimeConsent: () => undefined,
     createRuntimeConsent: async (bindingId: string, request: unknown) => {
       consentRequests.push(Object.freeze({ bindingId, request }));
       return Object.freeze({
@@ -575,6 +577,7 @@ it('aborts each held tools/call consent phase without a late decision or runtime
     const reason = new DOMException(`Cancelled during ${phase}.`, 'AbortError');
     const signals: Partial<Record<typeof phase, AbortSignal | undefined>> = {};
     const started: Partial<Record<typeof phase, boolean>> = {};
+    const abandoned: string[] = [];
     let decisionCalls = 0;
     let operationCalls = 0;
     let attached: McpSessionControllerAppAttachment | undefined;
@@ -595,6 +598,7 @@ it('aborts each held tools/call consent phase without a late decision or runtime
         return phase === 'create' ? pending(heldCreate, signal) : created;
       },
       currentDocumentPolicy: () => policy,
+      abandonRuntimeConsent: (_bindingId: string, consentId: string) => { abandoned.push(consentId); },
       decideRuntimeConsent: async (_bindingId: string, _consentId: string, _decision: 'allow-once' | 'deny', signal?: AbortSignal) => {
         decisionCalls += 1;
         signals.decide = signal;
@@ -637,6 +641,7 @@ it('aborts each held tools/call consent phase without a late decision or runtime
       await Promise.resolve();
       expect(decisionCalls).toBe(decisionsAtCancellation);
       expect(operationCalls).toBe(0);
+      expect(abandoned).toEqual(phase === 'create' ? [] : ['consent-a']);
     } finally {
       heldCreate.resolve(created);
       heldPrompt.resolve('allow-once');
@@ -671,6 +676,7 @@ it('keeps a maximum valid App binding and large tool arguments out of the bounde
     },
   });
   const client = Object.freeze({
+    abandonRuntimeConsent: () => undefined,
     createRuntimeConsent: async (_id: string, request: Readonly<{ readonly actionFingerprint?: unknown }>) => {
       if (typeof request.actionFingerprint !== 'string' || request.actionFingerprint.length > 256) {
         throw new Error('Runtime MCP App consent action fingerprint must be at most 256 characters.');
@@ -830,6 +836,7 @@ it('guards the official bridge to one source and origin while routing only tools
     });
     const factory = createRuntimeAppBridgeFactory({
       client: {
+        abandonRuntimeConsent: () => undefined,
         closeRuntime: async () => { revoked += 1; },
         createRuntimeConsent: async () => Object.freeze({
           challenge: Object.freeze({ id: 'display-consent' }),

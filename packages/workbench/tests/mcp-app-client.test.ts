@@ -6,8 +6,10 @@ import {
   assertCurrentMcpAppDocumentPolicy,
   isCurrentMcpAppDocumentPolicy,
   McpAppClient,
+  type McpAppConsentChallenge,
   type McpAppPreviewCreateRequest,
 } from '../src/mcp/mcp-app-client.ts';
+import { createRuntimeConsentQueue } from '../src/mcp/runtime-consent-queue.ts';
 import { ProjectClient, type EventSourceLike, type EventSourceMessage } from '../src/project-client.ts';
 
 const request: McpAppPreviewCreateRequest = Object.freeze({
@@ -115,6 +117,14 @@ const streamedResponse = (body: string, headers: Readonly<Record<string, string>
       controller.close();
     },
   }), { headers: { 'content-type': 'application/json', ...headers }, status: 200 });
+};
+
+const eventually = async (predicate: () => boolean, timeout = 300): Promise<void> => {
+  const deadline = Date.now() + timeout;
+  while (!predicate()) {
+    if (Date.now() >= deadline) throw new Error(`Timed out after ${timeout}ms.`);
+    await new Promise<void>((resolve) => setTimeout(resolve, 1));
+  }
 };
 
 const runtimeAppUpdated = (details: Readonly<{
@@ -250,6 +260,86 @@ describe('MCP App browser client', () => {
     expect(JSON.parse(String(calls[5]?.[1]?.body))).toEqual({ decision: 'allow-once' });
     expect(calls[5]?.[1]?.signal).toBe(decideConsentAbort.signal);
     expect(calls[6]?.[1]?.method).toBe('DELETE');
+  });
+
+  it('abandons cancelled runtime consent challenges before a late decision can dispatch or replay', async () => {
+    const decisionPaths: string[] = [];
+    let nextConsent = 0;
+    let holdDecision = false;
+    let failDecision = false;
+    const request = Object.freeze({
+      actionFingerprint: 'fingerprint-a', capability: 'call-tool' as const, details: Object.freeze({ arguments: Object.freeze({}), name: 'forecast' }),
+      scope: 'action' as const, summary: 'Call MCP App tool',
+    });
+    const fetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+      const path = String(input);
+      if (path === '/api/project/session') return json({ origin: 'http://127.0.0.1:43123', token: 'foreground-secret' });
+      if (path === '/api/runtime/apps') return json({ preview: runtimePreview });
+      if (path === '/api/runtime/apps/runtime-binding/consents') return json({
+        challenge: { expiresAt: 31_000, id: `consent-${++nextConsent}`, request }, documentPolicy: runtimePolicy,
+      });
+      if (path.startsWith('/api/runtime/apps/runtime-binding/consents/')) {
+        decisionPaths.push(path);
+        if (holdDecision) {
+          return new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener('abort', () => reject(init.signal?.reason), { once: true });
+          });
+        }
+        if (failDecision) throw new Error('decision transport failed');
+        const consentId = decodeURIComponent(path.slice(path.lastIndexOf('/') + 1));
+        const decision = JSON.parse(String(init?.body)) as Readonly<{ readonly decision: 'allow-once' | 'deny' }>;
+        return json({
+          documentPolicy: runtimePolicy,
+          ...(decision.decision === 'allow-once' ? {
+            grant: { authorizationId: `authorization-${consentId}`, bindingId: 'runtime-binding', capability: 'call-tool', challengeId: consentId, scope: 'action' },
+          } : {}),
+        });
+      }
+      throw new Error(`Unexpected request ${path}.`);
+    };
+    const runtime = new McpAppClient({ fetch: fetch as typeof globalThis.fetch }) as McpAppClient & {
+      abandonRuntimeConsent(bindingId: string, consentId: string): void;
+    };
+    const queue = createRuntimeConsentQueue(() => undefined);
+    await runtime.createRuntime({ expectedGenerationId: 'generation-a', profileId: 'portable', runId: 'run-a' });
+
+    for (let index = 0; index < 2; index += 1) {
+      const created = await runtime.createRuntimeConsent('runtime-binding', request);
+      const abort = new AbortController();
+      const promptChallenge: McpAppConsentChallenge = Object.freeze({
+        expiresAt: created.challenge.expiresAt,
+        id: created.challenge.id,
+        request: Object.freeze({}),
+      });
+      const prompting = queue.request(promptChallenge, abort.signal);
+      const reason = new DOMException(`Prompt ${index} cancelled.`, 'AbortError');
+      abort.abort(reason);
+      await expect(prompting).rejects.toBe(reason);
+      expect(runtime.abandonRuntimeConsent).toBeTypeOf('function');
+      runtime.abandonRuntimeConsent('runtime-binding', created.challenge.id);
+      await expect(runtime.decideRuntimeConsent('runtime-binding', created.challenge.id, 'allow-once')).rejects.toMatchObject({ code: 'AB8015' });
+    }
+    expect(decisionPaths).toEqual([]);
+
+    const denied = await runtime.createRuntimeConsent('runtime-binding', request);
+    await expect(runtime.decideRuntimeConsent('runtime-binding', denied.challenge.id, 'deny')).resolves.toEqual({ documentPolicy: runtimePolicy });
+
+    holdDecision = true;
+    const abortedDecision = await runtime.createRuntimeConsent('runtime-binding', request);
+    const decisionAbort = new AbortController();
+    const deciding = runtime.decideRuntimeConsent('runtime-binding', abortedDecision.challenge.id, 'allow-once', decisionAbort.signal);
+    await eventually(() => decisionPaths.length === 2);
+    const decisionReason = new DOMException('Decision cancelled.', 'AbortError');
+    decisionAbort.abort(decisionReason);
+    await expect(deciding).rejects.toBe(decisionReason);
+    await expect(runtime.decideRuntimeConsent('runtime-binding', abortedDecision.challenge.id, 'allow-once')).rejects.toMatchObject({ code: 'AB8015' });
+
+    holdDecision = false;
+    failDecision = true;
+    const failedDecision = await runtime.createRuntimeConsent('runtime-binding', request);
+    await expect(runtime.decideRuntimeConsent('runtime-binding', failedDecision.challenge.id, 'deny')).rejects.toThrow('decision transport failed');
+    await expect(runtime.decideRuntimeConsent('runtime-binding', failedDecision.challenge.id, 'deny')).rejects.toMatchObject({ code: 'AB8015' });
+    expect(decisionPaths).toHaveLength(3);
   });
 
   it('admits only exact, frozen App-visible CallToolResults before installing a runtime policy', async () => {
