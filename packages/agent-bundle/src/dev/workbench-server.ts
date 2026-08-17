@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 
 import { createDefaultRegistry, type TargetRegistry } from '../adapters/registry.ts';
 import { DevCoordinator } from './coordinator.ts';
@@ -21,6 +21,7 @@ import {
   type McpAppSandboxProxy,
 } from './mcp-app-sandbox.ts';
 import { McpSessionService } from './mcp-session-service.ts';
+import { PlaygroundService } from '../services/playground-service.ts';
 import { ProjectService } from './project-service.ts';
 import { SkillDocumentService } from './skill-document-service.ts';
 import { createWorkbenchAssetSource } from './workbench-assets.ts';
@@ -40,7 +41,7 @@ interface Closeable {
 
 export interface DevServerLifecycleCloseFailure {
   readonly error: unknown;
-  readonly resource: 'coordinator' | 'mcp-apps' | 'mcp-sessions';
+  readonly resource: 'coordinator' | 'mcp-apps' | 'mcp-sessions' | 'playground';
 }
 
 /** Reports session and coordinator cleanup failures without hiding either resource. */
@@ -190,9 +191,11 @@ export const closeDevServerLifecycle = async (
   mcpSessions: Closeable,
   coordinator: Closeable,
   mcpApps?: Closeable,
+  playground?: Closeable,
 ): Promise<void> => {
   const appResults = mcpApps === undefined ? [] : await Promise.allSettled([mcpApps.close()]);
   const sessionResults = await Promise.allSettled([mcpSessions.close()]);
+  const playgroundResults = playground === undefined ? [] : await Promise.allSettled([playground.close()]);
   const coordinatorResults = await Promise.allSettled([coordinator.close()]);
   const failures = [
     ...appResults.flatMap((result): readonly DevServerLifecycleCloseFailure[] =>
@@ -203,6 +206,11 @@ export const closeDevServerLifecycle = async (
     ...sessionResults.flatMap((result): readonly DevServerLifecycleCloseFailure[] =>
       result.status === 'rejected'
         ? [Object.freeze({ error: result.reason, resource: 'mcp-sessions' as const })]
+        : [],
+    ),
+    ...playgroundResults.flatMap((result): readonly DevServerLifecycleCloseFailure[] =>
+      result.status === 'rejected'
+        ? [Object.freeze({ error: result.reason, resource: 'playground' as const })]
         : [],
     ),
     ...coordinatorResults.flatMap((result): readonly DevServerLifecycleCloseFailure[] =>
@@ -218,8 +226,9 @@ const withMcpSessionLifecycle = (
   coordinator: DevCoordinator,
   mcpSessions: McpSessionService,
   mcpApps: () => Closeable | undefined,
+  playground: Closeable,
 ): ForegroundCoordinator => Object.freeze({
-  close: () => closeDevServerLifecycle(mcpSessions, coordinator, mcpApps()),
+  close: () => closeDevServerLifecycle(mcpSessions, coordinator, mcpApps(), playground),
   rebuild: (invalidation: Invalidation) => coordinator.rebuild(invalidation),
   start: () => coordinator.start(),
   status: () => coordinator.status(),
@@ -249,14 +258,21 @@ export const startDevServer = async (options: StartDevServerOptions): Promise<De
   const coordinator = new DevCoordinator({ epochStore, eventHub, projectService, root });
   const mcpSessions = new McpSessionService({ epochStore, projectRoot: root, registry });
   const appPreviews = new DeferredMcpAppPreviewService();
+  // The resolved root is the project's stable identity: a store copied elsewhere must not reopen.
+  const playground = new PlaygroundService({
+    projectId: root,
+    projectRoot: root,
+    storageRoot: join(root, '.agent-bundle', 'playground'),
+  });
   let mcpApps: McpAppLifecycle | undefined;
   const foreground = await (options.testing?.startForegroundServer ?? startForegroundServer)({
     assets: options.assets ?? createWorkbenchAssetSource(),
-    coordinator: withMcpSessionLifecycle(coordinator, mcpSessions, () => mcpApps),
+    coordinator: withMcpSessionLifecycle(coordinator, mcpSessions, () => mcpApps, playground),
     eventHub,
     hookPlayground: new HookPlaygroundService({ epochStore, registry }),
     mcpAppPreviews: appPreviews,
     mcpSessions,
+    playground,
     port: options.port,
     skillDocuments: new SkillDocumentService({ epochStore, projectService, root }),
   });

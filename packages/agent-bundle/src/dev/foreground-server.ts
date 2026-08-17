@@ -8,6 +8,7 @@ import { HookPlaygroundRoutes, type HookPlaygroundRouteService } from './hook-pl
 import { McpAppRoutes, type McpAppRoutePreviewService } from './mcp-app-routes.ts';
 import { McpSessionRoutes } from './mcp-session-routes.ts';
 import type { McpSessionService } from './mcp-session-service.ts';
+import { PlaygroundRoutes, type PlaygroundRouteService } from './playground-routes.ts';
 import { SkillDocumentError, type SkillDocumentService } from './skill-document-service.ts';
 import type { Invalidation, ProjectEventMessage, ProjectStatus } from './types.ts';
 
@@ -95,6 +96,8 @@ export interface ForegroundServerOptions {
   /** Persistent MCP sessions are supplied by the workbench service, never by browser input. */
   readonly mcpSessions?: McpSessionService;
   readonly now?: () => Date;
+  /** Durable playground trace store; the browser never selects its storage root or project identity. */
+  readonly playground?: PlaygroundRouteService;
   readonly port?: number;
   /** Read-only Skill document/resource service for the workbench. */
   readonly skillDocuments?: SkillDocumentService;
@@ -353,6 +356,7 @@ export class ForegroundServer {
   readonly #mcpAppRoutes: McpAppRoutes;
   readonly #mcpSessionRoutes: McpSessionRoutes;
   readonly #now: () => Date;
+  readonly #playgroundRoutes: PlaygroundRoutes;
   readonly #port: number;
   readonly #server: Server;
   readonly #skillDocuments: SkillDocumentService | undefined;
@@ -394,6 +398,10 @@ export class ForegroundServer {
     this.#hookPlaygroundRoutes = new HookPlaygroundRoutes({
       authorize: (request) => this.#assertMutationSession(request),
       ...(options.hookPlayground === undefined ? {} : { service: options.hookPlayground }),
+    });
+    this.#playgroundRoutes = new PlaygroundRoutes({
+      authorize: (request) => this.#assertMutationSession(request),
+      ...(options.playground === undefined ? {} : { service: options.playground }),
     });
     this.#server = createServer((request, response) => {
       void this.#handle(request, response).catch((error: unknown) => {
@@ -487,6 +495,7 @@ export class ForegroundServer {
     this.#mcpAppRoutes.close();
     this.#mcpSessionRoutes.close();
     this.#hookPlaygroundRoutes.close();
+    this.#playgroundRoutes.close();
     const releaseServer = this.#listenStarted
       ? (() => {
           this.#listenStarted = false;
@@ -514,6 +523,7 @@ export class ForegroundServer {
     if (await this.#mcpAppRoutes.handle(request, response)) return;
     if (await this.#mcpSessionRoutes.handle(request, response)) return;
     if (await this.#hookPlaygroundRoutes.handle(request, response)) return;
+    if (await this.#playgroundRoutes.handle(request, response)) return;
     const route = skillRoute(request.url);
     if (route !== undefined) return this.#serveSkill(route, response, method);
     if (pathname === '/api/project/status') {
