@@ -8,7 +8,12 @@ import type { McpAppPreviewAppsSnapshot } from '../../agent-bundle/src/dev/mcp-a
 import type { ProjectStatus } from '../../agent-bundle/src/dev/types.ts';
 
 import { InspectorSessionAdapter } from './inspector/adapter/inspector-session-adapter-entry.ts';
-import { createRuntimeAppBridgeFactory, type RuntimeAppBridgeFactory } from './inspector/adapter/runtime-app-bridge.ts';
+import {
+  createRuntimeAppBridgeFactory,
+  type RuntimeAppBridgeFactory,
+  type RuntimeAppBridgeOperationTrace,
+  type RuntimeAppBridgeTrace,
+} from './inspector/adapter/runtime-app-bridge.ts';
 import { McpAppClient, type McpAppConsentChallenge } from './mcp/mcp-app-client.ts';
 import { McpAppPreview } from './mcp/mcp-app-preview.tsx';
 import { McpPage, type McpConfigDownload, type McpPagePreviewSelection, type McpPageRuntimePreviewDependencies } from './mcp/mcp-page.tsx';
@@ -83,11 +88,71 @@ const controllerMatchesRuntimePreview = (controller: WorkbenchMcpController, pre
   return controller.model.phase === 'ready' && binding?.kind === 'runtime' && sameRuntimeMcpAppBinding(binding.binding, preview.session.binding);
 };
 
+type RuntimeOperationTraceAuthority = Readonly<{
+  readonly bindingId: string;
+  readonly registryRevision: number;
+  readonly sessionId: string;
+  readonly sessionRevision: number;
+  readonly vector: RuntimeAppBridgeOperationTrace['vector'];
+}>;
+
+const emptyRuntimeOperationTraces: readonly RuntimeAppBridgeOperationTrace[] = Object.freeze([]);
+
+const runtimeOperationTraceAuthority = (binding: McpAppPreviewAppsSnapshot['binding']): RuntimeOperationTraceAuthority => Object.freeze({
+  bindingId: binding.id,
+  registryRevision: binding.registryRevision,
+  sessionId: binding.sessionId,
+  sessionRevision: binding.sessionRevision,
+  vector: Object.freeze({
+    runtimeGenerationId: binding.runVector.runtimeGenerationId,
+    sourceRevision: binding.runVector.sourceRevision,
+    stateVersion: binding.runVector.stateVersion,
+  }),
+});
+
+const sameRuntimeOperationTraceAuthority = (left: RuntimeOperationTraceAuthority, right: RuntimeOperationTraceAuthority): boolean =>
+  left.bindingId === right.bindingId &&
+  left.registryRevision === right.registryRevision &&
+  left.sessionId === right.sessionId &&
+  left.sessionRevision === right.sessionRevision &&
+  left.vector.runtimeGenerationId === right.vector.runtimeGenerationId &&
+  left.vector.sourceRevision === right.vector.sourceRevision &&
+  left.vector.stateVersion === right.vector.stateVersion;
+
+const isRuntimeOperationTrace = (entry: RuntimeAppBridgeTrace): entry is RuntimeAppBridgeOperationTrace => {
+  if (entry === null || typeof entry !== 'object') return false;
+  const candidate = entry as Readonly<Record<string, unknown>>;
+  const vector = candidate.vector;
+  return typeof candidate.bindingId === 'string' && candidate.bindingId.length > 0 &&
+    (candidate.kind === 'resources/list' || candidate.kind === 'resources/read' || candidate.kind === 'tools/call' || candidate.kind === 'tools/list') &&
+    (candidate.name === undefined || typeof candidate.name === 'string') &&
+    typeof candidate.operationId === 'string' && candidate.operationId.length > 0 &&
+    typeof candidate.registryRevision === 'number' && Number.isSafeInteger(candidate.registryRevision) && candidate.registryRevision > 0 &&
+    typeof candidate.sessionId === 'string' && candidate.sessionId.length > 0 &&
+    typeof candidate.sessionRevision === 'number' && Number.isSafeInteger(candidate.sessionRevision) && candidate.sessionRevision > 0 &&
+    vector !== null && typeof vector === 'object' && !Array.isArray(vector) &&
+    typeof (vector as Readonly<Record<string, unknown>>).runtimeGenerationId === 'string' &&
+    typeof (vector as Readonly<Record<string, unknown>>).sourceRevision === 'string' &&
+    typeof (vector as Readonly<Record<string, unknown>>).stateVersion === 'number' &&
+    Number.isSafeInteger((vector as Readonly<Record<string, unknown>>).stateVersion) &&
+    (vector as Readonly<Record<string, unknown>>).stateVersion >= 0;
+};
+
+const traceMatchesAuthority = (trace: RuntimeAppBridgeOperationTrace, authority: RuntimeOperationTraceAuthority): boolean =>
+  trace.bindingId === authority.bindingId &&
+  trace.registryRevision === authority.registryRevision &&
+  trace.sessionId === authority.sessionId &&
+  trace.sessionRevision === authority.sessionRevision &&
+  trace.vector.runtimeGenerationId === authority.vector.runtimeGenerationId &&
+  trace.vector.sourceRevision === authority.vector.sourceRevision &&
+  trace.vector.stateVersion === authority.vector.stateVersion;
+
 /** The stable host callback admits only the existing controller's route-free runtime binding. */
 const createWorkbenchRuntimeBridgeFactory = (
   appClient: McpAppClient,
   controllerRef: MutableRefObject<WorkbenchMcpController>,
-  onTrace: (bindingId: string, entry: unknown) => void,
+  onClosed: (binding: McpAppPreviewAppsSnapshot['binding']) => void,
+  onTrace: (binding: McpAppPreviewAppsSnapshot['binding'], entry: RuntimeAppBridgeTrace) => void,
   requestConsent: (challenge: McpAppConsentChallenge) => Promise<'allow-once' | 'deny'>,
 ): ((preview: McpAppPreviewAppsSnapshot) => RuntimeAppBridgeFactory) => (preview) => {
   const controller = controllerRef.current;
@@ -125,7 +190,7 @@ const createWorkbenchRuntimeBridgeFactory = (
         controller,
         installedHandlers: Object.freeze({}),
         listChanged: Object.freeze({ resources: false, tools: false }),
-        onTrace: (entry) => { onTrace(preview.binding.id, entry); },
+        onTrace: (entry) => { onTrace(preview.binding, entry); },
         preview,
         requestConsent,
         simulationFeatures: Object.freeze({ chatGptWidgetState: 'disabled' as const }),
@@ -141,7 +206,8 @@ const createWorkbenchRuntimeBridgeFactory = (
       closed = true;
       const pending = setup ?? admission;
       close = (pending === undefined ? Promise.resolve() : pending.catch(() => undefined))
-        .then(() => inner?.close());
+        .then(() => inner?.close())
+        .then(() => { onClosed(preview.binding); });
       return close;
     },
     writable: false,
@@ -536,7 +602,7 @@ const Workbench = () => {
   const lifecycleAuthorities = useRef(new WeakMap<Readonly<{ close(): Promise<void> }>, RuntimeHandoffAuthority>());
   const handoffCoordinator = useRef<RuntimeMcpHandoffCoordinator>();
   const mcpPreviewDeparture = useRef<McpPreviewDepartureCoordinator>();
-  const runtimeBridgeTrace = useRef(new Map<string, readonly unknown[]>());
+  const runtimeOperationTraceAuthorities = useRef(new Map<string, RuntimeOperationTraceAuthority>());
   const runtimeConsentQueue = useRef<Array<Readonly<{ readonly challenge: McpAppConsentChallenge; readonly resolve: (decision: 'allow-once' | 'deny') => void }>>>([]);
   const [connectionError, setConnectionError] = useState<string>();
   const [error, setError] = useState<string>();
@@ -557,6 +623,7 @@ const Workbench = () => {
   const [mcpPresentation, setMcpPresentation] = useState(mcpPresentationForHash);
   const [status, setStatus] = useState<ProjectStatus>();
   const [changedFiles, setChangedFiles] = useState<readonly string[]>([]);
+  const [runtimeOperationTraces, setRuntimeOperationTraces] = useState<readonly RuntimeAppBridgeOperationTrace[]>(emptyRuntimeOperationTraces);
 
   pageRef.current = page;
 
@@ -645,15 +712,42 @@ const Workbench = () => {
     });
   }
 
+  const activateRuntimeOperationTraceAuthority = useCallback((binding: McpAppPreviewAppsSnapshot['binding']): RuntimeOperationTraceAuthority => {
+    const next = runtimeOperationTraceAuthority(binding);
+    const previous = runtimeOperationTraceAuthorities.current.get(next.bindingId);
+    if (previous !== undefined && sameRuntimeOperationTraceAuthority(previous, next)) return previous;
+    runtimeOperationTraceAuthorities.current.set(next.bindingId, next);
+    setRuntimeOperationTraces((current) => {
+      const retained = current.filter((trace) => trace.bindingId !== next.bindingId);
+      return retained.length === current.length ? current : Object.freeze(retained);
+    });
+    return next;
+  }, []);
+
+  const clearRuntimeOperationTrace = useCallback((authority: RuntimeOperationTraceAuthority): void => {
+    if (runtimeOperationTraceAuthorities.current.get(authority.bindingId) !== authority) return;
+    runtimeOperationTraceAuthorities.current.delete(authority.bindingId);
+    setRuntimeOperationTraces((current) => {
+      const retained = current.filter((trace) => trace.bindingId !== authority.bindingId);
+      return retained.length === current.length ? current : Object.freeze(retained);
+    });
+  }, []);
+
+  const clearRuntimeOperationTraces = useCallback((): void => {
+    runtimeOperationTraceAuthorities.current.clear();
+    setRuntimeOperationTraces(emptyRuntimeOperationTraces);
+  }, []);
+
   const resetMcpSession = useCallback((): void => {
     handoffCoordinator.current?.cancel();
+    clearRuntimeOperationTraces();
     setRuntimeHandoff(undefined);
     setRuntimeHandoffError(undefined);
     const replacement = createMcpController(mcpRoutes.current!);
     mcpControllerRef.current = replacement;
     setMcpController(replacement);
     setMcpModel(replacement.model);
-  }, []);
+  }, [clearRuntimeOperationTraces]);
 
   const registerAppPreviewLifecycle = useCallback((handle: Readonly<{ close(): Promise<void> }>): (() => void) => {
     const authority = lifecycleAuthorities.current.get(handle);
@@ -693,16 +787,28 @@ const Workbench = () => {
     setRuntimeConsent(pending[0]?.challenge);
   }, []);
 
-  const onRuntimeBridgeTrace = useCallback((bindingId: string, entry: unknown): void => {
-    const previous = runtimeBridgeTrace.current.get(bindingId) ?? [];
-    runtimeBridgeTrace.current.set(bindingId, Object.freeze([...previous.slice(-63), entry]));
+  const onRuntimeBridgeTrace = useCallback((binding: McpAppPreviewAppsSnapshot['binding'], entry: RuntimeAppBridgeTrace): void => {
+    const authority = runtimeOperationTraceAuthorities.current.get(binding.id);
+    if (authority === undefined || !sameRuntimeOperationTraceAuthority(authority, runtimeOperationTraceAuthority(binding)) ||
+      !isRuntimeOperationTrace(entry) || !traceMatchesAuthority(entry, authority)) return;
+    setRuntimeOperationTraces((current) => Object.freeze([
+      ...current.filter((trace) => trace.bindingId !== authority.bindingId).slice(-63),
+      entry,
+    ]));
   }, []);
+
+  const onRuntimeBridgeClosed = useCallback((binding: McpAppPreviewAppsSnapshot['binding']): void => {
+    const authority = runtimeOperationTraceAuthorities.current.get(binding.id);
+    if (authority === undefined || !sameRuntimeOperationTraceAuthority(authority, runtimeOperationTraceAuthority(binding))) return;
+    clearRuntimeOperationTrace(authority);
+  }, [clearRuntimeOperationTrace]);
 
   const createBridgeFactory = useCallback((preview: McpAppPreviewAppsSnapshot): RuntimeAppBridgeFactory => {
     const appClient = mcpAppClient.current;
     if (appClient === undefined) throw new Error('Runtime App client is not connected.');
-    return createWorkbenchRuntimeBridgeFactory(appClient, mcpControllerRef as MutableRefObject<WorkbenchMcpController>, onRuntimeBridgeTrace, requestRuntimeConsent)(preview);
-  }, [onRuntimeBridgeTrace, requestRuntimeConsent]);
+    activateRuntimeOperationTraceAuthority(preview.binding);
+    return createWorkbenchRuntimeBridgeFactory(appClient, mcpControllerRef as MutableRefObject<WorkbenchMcpController>, onRuntimeBridgeClosed, onRuntimeBridgeTrace, requestRuntimeConsent)(preview);
+  }, [activateRuntimeOperationTraceAuthority, onRuntimeBridgeClosed, onRuntimeBridgeTrace, requestRuntimeConsent]);
 
   const renderAppPreview = useCallback<RuntimeAppPreviewRenderer>((props) => {
     const authority = prepareRuntimeMcpHandoffAuthority(props, runtimeProfileId);
@@ -712,6 +818,7 @@ const Workbench = () => {
       client={appClient}
       createBridgeFactory={createBridgeFactory}
       kind="runtime"
+      operationTraces={runtimeOperationTraces}
       profile={props.profile}
       profileId={props.profileId}
       registerLifecycle={(handle) => {
@@ -721,7 +828,7 @@ const Workbench = () => {
       run={props.run}
       surface={props.surface}
     /></MantineProvider>;
-  }, [createBridgeFactory]);
+  }, [createBridgeFactory, runtimeOperationTraces]);
 
   const liveMcpPageAdapter = useMemo<RuntimeLiveMcpPageAdapter>(() => Object.freeze({
     kind: 'host-owned',
@@ -760,6 +867,7 @@ const Workbench = () => {
       if (bootstrap.kind === 'unavailable') {
         runtimeEvents.close();
         runtimeRetryCount = 0;
+        clearRuntimeOperationTraces();
         setRuntimeError(undefined);
         setRuntimeCapability('unavailable');
         if (window.location.hash === '#runtime') {
@@ -825,6 +933,7 @@ const Workbench = () => {
     bootstrapRuntime();
     return () => {
       mounted = false;
+      clearRuntimeOperationTraces();
       if (runtimeRetry !== undefined) clearTimeout(runtimeRetry);
       runtimeEvents.close();
       unsubscribeActivity();
@@ -853,7 +962,7 @@ const Workbench = () => {
       runtimeController.current?.close();
       runtimeController.current = undefined;
     };
-  }, [navigate]);
+  }, [clearRuntimeOperationTraces, navigate]);
 
   useEffect(() => {
     const updatePage = (fromHashChange: boolean) => {

@@ -418,7 +418,13 @@ it('maps all runtime App MCP operations through its binding executor, gates tool
     },
   };
   const preview = {
-    binding: { id: 'runtime-binding', sessionId: 'runtime-session-a', sessionRevision: 3 },
+    binding: {
+      id: 'runtime-binding',
+      registryRevision: 5,
+      runVector: { runtimeGenerationId: 'generation-a', sourceRevision: 'source-a', stateVersion: 2 },
+      sessionId: 'runtime-session-a',
+      sessionRevision: 3,
+    },
     documentPolicy: { revision: 1 },
     kind: 'apps',
   };
@@ -433,8 +439,9 @@ it('maps all runtime App MCP operations through its binding executor, gates tool
   const tools = await attached.execute(Object.freeze({ kind: 'tools/list' }));
   await attached.execute(Object.freeze({ kind: 'resources/list' }));
   await attached.execute(Object.freeze({ kind: 'resources/read', uri: 'weather://today' }));
-  await attached.execute(Object.freeze({ arguments: Object.freeze({ city: 'Paris' }), kind: 'tools/call', name: 'forecast' }));
+  const toolCall = await attached.execute(Object.freeze({ arguments: Object.freeze({ city: 'Paris' }), kind: 'tools/call', name: 'forecast' }));
   attached.onResult?.(Object.freeze({ kind: 'tools/list' }), tools);
+  attached.onResult?.(Object.freeze({ arguments: Object.freeze({ city: 'Paris' }), kind: 'tools/call', name: 'forecast' }), toolCall);
 
   expect(operations).toEqual([
     { bindingId: 'runtime-binding', operation: { kind: 'tools/list' } },
@@ -447,8 +454,19 @@ it('maps all runtime App MCP operations through its binding executor, gates tool
     request: expect.objectContaining({ capability: 'call-tool', details: { arguments: { city: 'Paris' }, name: 'forecast' }, scope: 'action' }),
   })]);
   expect(traces).toEqual([{
+    bindingId: 'runtime-binding',
     kind: 'tools/list',
     operationId: 'operation-1',
+    registryRevision: 5,
+    sessionId: 'runtime-session-a',
+    sessionRevision: 3,
+    vector: { runtimeGenerationId: 'generation-a', sourceRevision: 'source-a', stateVersion: 2 },
+  }, {
+    bindingId: 'runtime-binding',
+    kind: 'tools/call',
+    name: 'forecast',
+    operationId: 'operation-4',
+    registryRevision: 5,
     sessionId: 'runtime-session-a',
     sessionRevision: 3,
     vector: { runtimeGenerationId: 'generation-a', sourceRevision: 'source-a', stateVersion: 2 },

@@ -30,8 +30,11 @@ export interface McpAppSimulationFeatures {
 
 /** Public, binding-scoped runtime App operation evidence. */
 export interface RuntimeAppBridgeOperationTrace {
+  readonly bindingId: string;
   readonly kind: McpAppBindingOperation['kind'];
+  readonly name?: string;
   readonly operationId: string;
+  readonly registryRevision: number;
   readonly sessionId: string;
   readonly sessionRevision: number;
   readonly vector: McpAppPublicRuntimeVector;
@@ -386,11 +389,15 @@ const callToolConsent = async (
 };
 
 const appOperationTrace = (
+  preview: McpAppPreviewAppsSnapshot,
   operation: McpAppBindingOperation,
   result: McpAppBoundOperationResult,
 ): RuntimeAppBridgeOperationTrace => Object.freeze({
+  bindingId: preview.binding.id,
   kind: operation.kind,
+  ...(operation.kind === 'tools/call' ? { name: operation.name } : {}),
   operationId: result.operationId,
+  registryRevision: preview.binding.registryRevision,
   sessionId: result.sessionId,
   sessionRevision: result.sessionRevision,
   vector: Object.freeze({
@@ -424,7 +431,7 @@ export const createBindingMcpClient = async (
       const consentId = await callToolConsent(client, preview, options.requestConsent, operation);
       return client.operateRuntime(preview.binding.id, Object.freeze({ ...operation, consentId }));
     },
-    onResult: (operation: McpAppBindingOperation, result: McpAppBoundOperationResult) => options.onTrace(appOperationTrace(operation, result)),
+    onResult: (operation: McpAppBindingOperation, result: McpAppBoundOperationResult) => options.onTrace(appOperationTrace(preview, operation, result)),
   });
   const access = await controller.attachApp(attachment);
   if (access.sessionId !== preview.binding.sessionId || access.sessionRevision !== preview.binding.sessionRevision) {

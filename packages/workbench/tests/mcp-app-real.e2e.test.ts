@@ -497,7 +497,14 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
     expect(requestBody(createdRequest.postData())).toEqual({ expectedGenerationId, profileId: 'portable', runId });
 
     const created = await createdResponse.json() as Readonly<{ readonly preview: Readonly<{
-      readonly binding: Readonly<{ readonly id: string; readonly runVector: unknown; readonly serverName: string; readonly sessionId: string; readonly sessionRevision: number }>;
+      readonly binding: Readonly<{
+        readonly id: string;
+        readonly registryRevision: number;
+        readonly runVector: Readonly<{ readonly runtimeGenerationId: string; readonly sourceRevision: string; readonly stateVersion: number }>;
+        readonly serverName: string;
+        readonly sessionId: string;
+        readonly sessionRevision: number;
+      }>;
       readonly clientSurface: Readonly<{ readonly bootstrapUrl: string; readonly origin: string }>;
       readonly kind: string;
       readonly profile: Readonly<{ readonly hostContext: unknown; readonly resourceUri: string }>;
@@ -725,6 +732,22 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
       },
       vector: created.preview.binding.runVector,
     });
+    const implementationEvidence = page.getByLabel('Executed by current implementation');
+    await expect(implementationEvidence).toBeVisible({ timeout: 15_000 });
+    const operationId = (operationResult as Readonly<{ readonly operationId?: unknown }>).operationId;
+    if (typeof operationId !== 'string') throw new Error('Runtime App operation result omitted its public operation identity.');
+    expect(await implementationEvidence.locator('dd').allTextContents()).toEqual([
+      operationId,
+      'tools/call',
+      'render_edit_timeline',
+      created.preview.binding.sessionId,
+      String(created.preview.binding.sessionRevision),
+      String(created.preview.binding.registryRevision),
+      created.preview.binding.runVector.runtimeGenerationId,
+      created.preview.binding.runVector.sourceRevision,
+      String(created.preview.binding.runVector.stateVersion),
+    ]);
+    expect((operationResult as Readonly<{ readonly vector: unknown }>).vector).toEqual(created.preview.binding.runVector);
     const refreshRequest = messageFor(fixture.url, controllerOrigin, (message) => message.method === 'tools/call');
     expect(refreshRequest?.message).toEqual({
       id: 1,

@@ -27,7 +27,7 @@ import {
 } from './mcp-app-frame.tsx';
 import type { McpAppPreviewAppsSnapshot, McpAppPreviewSnapshot } from '../../../agent-bundle/src/dev/mcp-app-runtime-preview-service.ts';
 import type { AppRendererHandle, McpAppRendererTool } from '../inspector/adapter/closure-spike.ts';
-import type { RuntimeAppBridgeFactory } from '../inspector/adapter/runtime-app-bridge.ts';
+import type { RuntimeAppBridgeFactory, RuntimeAppBridgeOperationTrace } from '../inspector/adapter/runtime-app-bridge.ts';
 import type { RuntimeAppPreviewProps } from '../runtime-stage.tsx';
 import type { RuntimeAppPreviewLifecycle } from '../runtime-playground.tsx';
 
@@ -126,6 +126,8 @@ export interface McpAppRuntimePreviewProps extends RuntimeAppPreviewProps {
   readonly client: McpAppClient & McpAppRuntimeClient;
   readonly createBridgeFactory: (preview: McpAppPreviewAppsSnapshot) => RuntimeAppBridgeFactory;
   readonly kind: 'runtime';
+  /** Validated public operation evidence; it never participates in preview authority. */
+  readonly operationTraces?: readonly RuntimeAppBridgeOperationTrace[];
 }
 
 export interface McpAppPreviewFrameProps {
@@ -1019,6 +1021,40 @@ const RuntimeProfileInspection = ({
   </>;
 };
 
+/** Renders only the validated public result from the currently admitted App binding. */
+const RuntimeOperationInspection = ({
+  preview,
+  traces,
+}: Readonly<{
+  readonly preview: McpAppPreviewAppsSnapshot;
+  readonly traces: readonly RuntimeAppBridgeOperationTrace[];
+}>) => {
+  const trace = [...traces].reverse().find((candidate) =>
+    candidate.bindingId === preview.binding.id &&
+    candidate.sessionId === preview.binding.sessionId &&
+    candidate.sessionRevision === preview.binding.sessionRevision &&
+    candidate.registryRevision === preview.binding.registryRevision &&
+    candidate.vector.runtimeGenerationId === preview.binding.runVector.runtimeGenerationId &&
+    candidate.vector.sourceRevision === preview.binding.runVector.sourceRevision &&
+    candidate.vector.stateVersion === preview.binding.runVector.stateVersion,
+  );
+  if (trace === undefined) return null;
+  return <section aria-label="Executed by current implementation" className="mcp-app-preview__runtime-inspection">
+    <h3>Executed by current implementation</h3>
+    <dl className="mcp-app-preview__runtime-inspection-details">
+      <div><dt>Operation ID</dt><dd>{trace.operationId}</dd></div>
+      <div><dt>Operation</dt><dd>{trace.kind}</dd></div>
+      {trace.name === undefined ? null : <div><dt>Tool</dt><dd>{trace.name}</dd></div>}
+      <div><dt>Session ID</dt><dd>{trace.sessionId}</dd></div>
+      <div><dt>Session revision</dt><dd>{trace.sessionRevision}</dd></div>
+      <div><dt>Registry revision</dt><dd>{trace.registryRevision}</dd></div>
+      <div><dt>Generation ID</dt><dd>{trace.vector.runtimeGenerationId}</dd></div>
+      <div><dt>Source revision</dt><dd>{trace.vector.sourceRevision}</dd></div>
+      <div><dt>State version</dt><dd>{trace.vector.stateVersion}</dd></div>
+    </dl>
+  </section>;
+};
+
 export function McpAppPreview(props: McpAppPreviewProps): React.ReactNode;
 export function McpAppPreview(props: McpAppRuntimePreviewProps): React.ReactNode;
 export function McpAppPreview(props: McpAppPreviewProps | McpAppRuntimePreviewProps): React.ReactNode;
@@ -1166,6 +1202,10 @@ export function McpAppPreview(props: McpAppPreviewProps | McpAppRuntimePreviewPr
           <RuntimeProfileInspection
             configuration={runtimeState.preview.profile.configExtensions}
             descriptor={runtimeState.preview.profile.descriptor}
+          />
+          <RuntimeOperationInspection
+            preview={runtimeState.preview}
+            traces={runtimeProps?.operationTraces ?? []}
           />
           <section aria-label="Runtime App result" className="mcp-app-preview__fallback">
             <details open><summary>Tool input</summary><pre>{json(runtimeState.fallback.input)}</pre></details>
