@@ -1,0 +1,171 @@
+import { execFile as executeFile } from 'node:child_process';
+import { mkdtemp, readFile, readdir, rm, stat } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { promisify } from 'node:util';
+
+import { expect, test } from '@rstest/core';
+
+const execFile = promisify(executeFile);
+const workspaceRoot = process.cwd();
+const captureScript = join(workspaceRoot, 'packages', 'workbench', 'scripts', 'capture-runtime-playground.mjs');
+const pngSignature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
+type HorizontalBounds = Readonly<{
+  readonly left: number;
+  readonly right: number;
+  readonly viewportWidth: number;
+}>;
+
+type CaptureEvidence = Readonly<{
+  readonly appMarkerVisible: boolean;
+  readonly appRefreshPreservedDocument: boolean;
+  readonly appVisibleAfter: boolean;
+  readonly appVisibleBefore: boolean;
+  readonly appVisibleRecovered: boolean;
+  readonly documentTimeOriginAfter: number;
+  readonly documentTimeOriginBefore: number;
+  readonly desktopControlColumns: number;
+  readonly generationAfter: string;
+  readonly generationBefore: string;
+  readonly generationRecovered: string;
+  readonly hmrWithoutReload: boolean;
+  readonly lastGoodGenerationDuringError: string;
+  readonly lastGoodPreserved: boolean;
+  readonly mobileLayout: Readonly<{
+    readonly bodyScrollLeft: number;
+    readonly childHeading: HorizontalBounds;
+    readonly childHeadingWithinViewport: boolean;
+    readonly childMarker: HorizontalBounds;
+    readonly childMarkerWithinViewport: boolean;
+    readonly childScrollX: number;
+    readonly documentScrollLeft: number;
+    readonly controls: HorizontalBounds;
+    readonly controlsWithinViewport: boolean;
+    readonly host: HorizontalBounds;
+    readonly hostWithinViewport: boolean;
+    readonly hostScrollerScrollLefts: readonly number[];
+    readonly outerFrame: HorizontalBounds;
+    readonly outerFrameWithinViewport: boolean;
+    readonly playground: HorizontalBounds;
+    readonly playgroundWithinViewport: boolean;
+    readonly stage: HorizontalBounds;
+    readonly stageWithinViewport: boolean;
+    readonly windowScrollX: number;
+  }>;
+  readonly mobileWithoutHorizontalOverflow: boolean;
+  readonly providerSessionId: string;
+  readonly recovered: boolean;
+  readonly runAfter: string;
+  readonly runBefore: string;
+  readonly sandboxOpaqueOrigin: boolean;
+  readonly viewports: Readonly<{
+    readonly desktop: Readonly<{ readonly height: number; readonly width: number }>;
+    readonly mobile: Readonly<{ readonly height: number; readonly width: number }>;
+  }>;
+}>;
+
+const expectPng = async (path: string, width: number, height: number): Promise<void> => {
+  const [contents, details] = await Promise.all([readFile(path), stat(path)]);
+  expect(details.size).toBeGreaterThan(pngSignature.length);
+  expect(contents.subarray(0, pngSignature.length)).toEqual(pngSignature);
+  expect(contents.readUInt32BE(16)).toBe(width);
+  expect(contents.readUInt32BE(20)).toBe(height);
+};
+
+test('captures identity-backed HMR, last-good, recovery, and responsive browser evidence', { timeout: 300_000 }, async () => {
+  const outputRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-runtime-capture-'));
+  const outputs = Object.freeze({
+    compileError: join(outputRoot, 'compile-error.png'),
+    desktop: join(outputRoot, 'desktop.png'),
+    evidence: join(outputRoot, 'evidence.json'),
+    hmrAfter: join(outputRoot, 'hmr-after.png'),
+    hmrBefore: join(outputRoot, 'hmr-before.png'),
+    mobile: join(outputRoot, 'mobile.png'),
+    recovered: join(outputRoot, 'recovered.png'),
+  });
+  try {
+    await execFile(process.execPath, [captureScript,
+      '--desktop', outputs.desktop,
+      '--mobile', outputs.mobile,
+      '--hmr-before', outputs.hmrBefore,
+      '--hmr-after', outputs.hmrAfter,
+      '--compile-error', outputs.compileError,
+      '--recovered', outputs.recovered,
+      '--evidence', outputs.evidence,
+    ], { cwd: workspaceRoot, timeout: 270_000 });
+
+    await Promise.all([
+      expectPng(outputs.desktop, 1440, 900),
+      expectPng(outputs.mobile, 390, 844),
+      expectPng(outputs.hmrBefore, 1440, 900),
+      expectPng(outputs.hmrAfter, 1440, 900),
+      expectPng(outputs.compileError, 1440, 900),
+      expectPng(outputs.recovered, 1440, 900),
+    ]);
+    expect((await readdir(outputRoot)).sort()).toEqual([
+      'compile-error.png',
+      'desktop.png',
+      'evidence.json',
+      'hmr-after.png',
+      'hmr-before.png',
+      'mobile.png',
+      'recovered.png',
+    ]);
+
+    const evidence = JSON.parse(await readFile(outputs.evidence, 'utf8')) as CaptureEvidence;
+    expect(evidence).toMatchObject({
+      appMarkerVisible: true,
+      appRefreshPreservedDocument: true,
+      appVisibleAfter: true,
+      appVisibleBefore: true,
+      appVisibleRecovered: true,
+      desktopControlColumns: 4,
+      hmrWithoutReload: true,
+      lastGoodPreserved: true,
+      mobileLayout: {
+        bodyScrollLeft: 0,
+        childHeadingWithinViewport: true,
+        childMarkerWithinViewport: true,
+        childScrollX: 0,
+        controlsWithinViewport: true,
+        documentScrollLeft: 0,
+        hostWithinViewport: true,
+        outerFrameWithinViewport: true,
+        playgroundWithinViewport: true,
+        stageWithinViewport: true,
+        windowScrollX: 0,
+      },
+      mobileWithoutHorizontalOverflow: true,
+      recovered: true,
+      sandboxOpaqueOrigin: true,
+      viewports: {
+        desktop: { height: 900, width: 1440 },
+        mobile: { height: 844, width: 390 },
+      },
+    });
+    expect(evidence.mobileLayout.hostScrollerScrollLefts.every((value) => value === 0)).toBe(true);
+    for (const bounds of [
+      evidence.mobileLayout.host,
+      evidence.mobileLayout.playground,
+      evidence.mobileLayout.controls,
+      evidence.mobileLayout.stage,
+      evidence.mobileLayout.outerFrame,
+      evidence.mobileLayout.childHeading,
+      evidence.mobileLayout.childMarker,
+    ]) {
+      expect(bounds.left).toBeGreaterThanOrEqual(0);
+      expect(bounds.right).toBeLessThanOrEqual(bounds.viewportWidth);
+      expect(bounds.viewportWidth).toBeGreaterThan(0);
+    }
+    expect(evidence.providerSessionId).toEqual(expect.any(String));
+    expect(evidence.providerSessionId.length).toBeGreaterThan(0);
+    expect(evidence.generationAfter).not.toBe(evidence.generationBefore);
+    expect(evidence.runAfter).not.toBe(evidence.runBefore);
+    expect(evidence.documentTimeOriginAfter).toBe(evidence.documentTimeOriginBefore);
+    expect(evidence.generationRecovered).not.toBe(evidence.lastGoodGenerationDuringError);
+    expect(JSON.stringify(evidence)).not.toContain(outputRoot);
+  } finally {
+    await rm(outputRoot, { force: true, recursive: true });
+  }
+});
