@@ -60,7 +60,14 @@ For contributor Workbench/HMR evidence, use the repository fixture rather than
 the published package:
 
 ```bash
-node packages/workbench/scripts/capture-runtime-playground.mjs
+node packages/workbench/scripts/capture-runtime-playground.mjs \
+  --desktop "$PWD/docs/assets/rsc-runtime-workbench/desktop.png" \
+  --mobile "$PWD/docs/assets/rsc-runtime-workbench/mobile.png" \
+  --hmr-before "$PWD/docs/assets/rsc-runtime-workbench/hmr-before.png" \
+  --hmr-after "$PWD/docs/assets/rsc-runtime-workbench/hmr-after.png" \
+  --compile-error "$PWD/docs/assets/rsc-runtime-workbench/compile-error.png" \
+  --recovered "$PWD/docs/assets/rsc-runtime-workbench/recovered.png" \
+  --evidence /tmp/rsc-runtime-delivery/evidence.json
 ```
 
 The published Agent Bundle library is built with Rslib. This example's separate

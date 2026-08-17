@@ -69,6 +69,7 @@ packages/
     tests/portable-adapter.test.ts
     tests/public-api.test.ts
     tests/rsc-runtime-optional-packaging.test.ts
+    tests/rsc-runtime-topology-script.test.ts
     tests/runtime-client-surface-proxy.test.ts
     tests/runtime-generation-store.test.ts
     tests/runtime-mcp-registry.test.ts
