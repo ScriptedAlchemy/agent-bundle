@@ -53,7 +53,24 @@ npm run build -w @agent-bundle/rsc-agent-runtime-demo
 npm test -w @agent-bundle/rsc-agent-runtime-demo
 npm run typecheck -w @agent-bundle/rsc-agent-runtime-demo
 npm run capture:widget -w @agent-bundle/rsc-agent-runtime-demo -- --output /tmp/rsc-agent-runtime-widget.png
+npm run docs:runtime-topology
 ```
+
+For contributor Workbench/HMR evidence, use the repository fixture rather than
+the published package:
+
+```bash
+node packages/workbench/scripts/capture-runtime-playground.mjs
+```
+
+The published Agent Bundle library is built with Rslib. This example's separate
+production RSC/runtime artifacts are built by its explicit Rsbuild production
+command (`npm run build -w @agent-bundle/rsc-agent-runtime-demo`); its provider
+uses a separate long-lived Rsbuild development/HMR session only when an
+`agent-bundle dev` project opts into `dev.runtime.provider`. Installing
+`agent-bundle` alone does not install or activate this example provider. See
+[the optional RSC Runtime topology](../../docs/architecture/rsc-runtime-workbench.md)
+for the full ownership boundary.
 
 The build emits `dist/runtime` (including `dist/runtime/agent-runtime.manifest.json`), self-contained `dist/app` MCP App documents, and two self-contained native plugin artifacts under `dist/plugins`. It runs `package:hosts` automatically; it can also be run directly:
 
@@ -155,6 +172,12 @@ For ordinary MCP Apps, prefer Agent Bundle's standard non-RSC `mcp.servers.<serv
 The demo kernel is append-only JSONL: it is appropriate for a small local example, not concurrent/distributed production storage. The RSC-facing packages are exact pins because their framework-facing surface is not treated as stable here: React `19.2.8`, `react-dom` `19.2.8`, `react-server-dom-rspack` `0.0.3`, Rsbuild `2.1.13`, and `rsbuild-plugin-rsc` `0.1.1`.
 
 Existing Agent Bundle skills, static MCPs, evaluations, and normal hooks neither require nor activate this runtime. Nothing under `packages/agent-bundle` imports the example or React/RSC runtime packages.
+
+`PlaygroundService` is the landed, provider-neutral durable whole-plugin
+authoring timeline foundation. Current Runtime Playground history is
+provider-session-scoped and ephemeral; this example does not yet wire a provider
+adapter, authenticated API, timeline UI, durable Runtime export, or evaluation
+promotion for that history.
 
 ## Sources
 
