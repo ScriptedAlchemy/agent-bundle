@@ -1,5 +1,6 @@
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { basename, dirname, extname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { chromium } from 'playwright';
 
@@ -54,7 +55,7 @@ const temporaryOutput = (path) => {
   return join(dirname(path), `.${basename(path, extension)}.${process.pid}.${temporaryOutputSequence += 1}.tmp${extension}`);
 };
 
-const atomically = async (path, write) => {
+export const atomically = async (path, write) => {
   await mkdir(dirname(path), { recursive: true });
   const temporary = temporaryOutput(path);
   try {
@@ -70,6 +71,36 @@ const screenshot = (page, path) => atomically(path, async (temporary) => page.sc
 const writeEvidence = (path, evidence) => atomically(path, async (temporary) => {
   await writeFile(temporary, `${JSON.stringify(evidence, null, 2)}\n`, 'utf8');
 });
+
+export const cleanupCaptureResources = async ({ browser, fixture, restores }) => {
+  const settledRestores = await Promise.allSettled(restores.map(async (restore) => restore()));
+  const failedSteps = settledRestores.flatMap((result, index) => result.status === 'rejected' ? [`restore-${index + 1}`] : []);
+  if (browser !== undefined) {
+    try {
+      await browser.close();
+    } catch {
+      failedSteps.push('browser.close');
+    }
+  }
+  if (fixture !== undefined) {
+    try {
+      await fixture.close();
+    } catch {
+      failedSteps.push('fixture.close');
+    }
+  }
+  return Object.freeze({
+    attemptedRestores: restores.length,
+    failedSteps: Object.freeze(failedSteps),
+  });
+};
+
+export const captureFailureAfterCleanup = (primaryFailure, cleanup) => {
+  if (cleanup.failedSteps.length === 0) return primaryFailure;
+  const cleanupFailure = new Error(`Capture cleanup failed: ${cleanup.failedSteps.join(', ')}.`);
+  if (primaryFailure === undefined) return cleanupFailure;
+  return new AggregateError([primaryFailure, cleanupFailure], primaryFailure instanceof Error ? primaryFailure.message : 'Runtime capture failed.');
+};
 
 const attributes = async (identity) => identity.evaluate((element) => Object.freeze(Object.fromEntries(
   [...element.attributes]
@@ -338,14 +369,18 @@ const restore = async (path, contents) => {
 };
 
 const capture = async (outputs) => {
-  const fixture = await startRuntimePlaygroundFixture();
-  const originals = await Promise.all([
-    readFile(fixture.serverComponentSource, 'utf8'),
-    readFile(fixture.widgetAppSource, 'utf8'),
-    readFile(fixture.appStyles, 'utf8'),
-  ]);
+  let fixture;
+  let originals = [];
   let browser;
+  let primaryFailure;
+  let evidence;
   try {
+    fixture = await startRuntimePlaygroundFixture();
+    originals = await Promise.all([
+      readFile(fixture.serverComponentSource, 'utf8'),
+      readFile(fixture.widgetAppSource, 'utf8'),
+      readFile(fixture.appStyles, 'utf8'),
+    ]);
     browser = await chromium.launch({ channel: 'chrome', headless: true });
     const context = await browser.newContext({ viewport: desktopViewport });
     const page = await context.newPage();
@@ -510,7 +545,7 @@ const capture = async (outputs) => {
       restore(fixture.appStyles, originals[2]),
     ]);
     if (pageErrors.length > 0) throw new Error('Runtime capture encountered a browser page error.');
-    const evidence = Object.freeze({
+    evidence = Object.freeze({
       appMarkerVisible,
       appRefreshPreservedDocument,
       appVisibleAfter,
@@ -535,16 +570,21 @@ const capture = async (outputs) => {
       viewports: Object.freeze({ desktop: desktopViewport, mobile: mobileViewport }),
     });
     await writeEvidence(outputs.evidence, evidence);
-    return evidence;
-  } finally {
-    await Promise.allSettled([
-      restore(fixture.serverComponentSource, originals[0]),
-      restore(fixture.widgetAppSource, originals[1]),
-      restore(fixture.appStyles, originals[2]),
-    ]);
-    await browser?.close();
-    await fixture.close();
+  } catch (error) {
+    primaryFailure = error;
   }
+  const cleanup = await cleanupCaptureResources({
+    browser,
+    fixture,
+    restores: fixture === undefined || originals.length !== 3 ? [] : [
+      () => restore(fixture.serverComponentSource, originals[0]),
+      () => restore(fixture.widgetAppSource, originals[1]),
+      () => restore(fixture.appStyles, originals[2]),
+    ],
+  });
+  const failure = captureFailureAfterCleanup(primaryFailure, cleanup);
+  if (failure !== undefined) throw failure;
+  return evidence;
 };
 
 const run = async () => {
@@ -553,7 +593,9 @@ const run = async () => {
   process.stdout.write(`${JSON.stringify(evidence)}\n`);
 };
 
-run().catch((error) => {
-  process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
-  process.exitCode = 1;
-});
+if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  run().catch((error) => {
+    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+    process.exitCode = 1;
+  });
+}

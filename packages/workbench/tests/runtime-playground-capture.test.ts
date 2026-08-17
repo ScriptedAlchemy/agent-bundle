@@ -1,10 +1,13 @@
 import { execFile as executeFile } from 'node:child_process';
-import { mkdtemp, readFile, readdir, rm, stat } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 
 import { expect, test } from '@rstest/core';
+
+// @ts-expect-error The executable capture script is intentionally imported as the cleanup-boundary test seam.
+import { atomically, cleanupCaptureResources, captureFailureAfterCleanup } from '../scripts/capture-runtime-playground.mjs';
 
 const execFile = promisify(executeFile);
 const workspaceRoot = process.cwd();
@@ -72,6 +75,57 @@ const expectPng = async (path: string, width: number, height: number): Promise<v
   expect(contents.readUInt32BE(16)).toBe(width);
   expect(contents.readUInt32BE(20)).toBe(height);
 };
+
+test('settles every capture cleanup action without masking the primary failure', async () => {
+  const outputRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-runtime-capture-cleanup-'));
+  const temporary = join(outputRoot, '.desktop.png.temporary');
+  const primary = new Error('primary capture failed');
+  const order: string[] = [];
+  let fixtureCloseCount = 0;
+  try {
+    await expect(atomically(temporary, async (path: string) => {
+      await writeFile(path, 'partial output', 'utf8');
+      throw primary;
+    })).rejects.toBe(primary);
+
+    const cleanup = await cleanupCaptureResources({
+      browser: {
+        close: async () => {
+          order.push('browser.close');
+          throw new Error('browser close rejected');
+        },
+      },
+      fixture: {
+        close: async () => {
+          fixtureCloseCount += 1;
+          order.push('fixture.close');
+        },
+      },
+      restores: [
+        async () => {
+          order.push('restore-one');
+          throw new Error('restore one rejected');
+        },
+        async () => {
+          order.push('restore-two');
+        },
+      ],
+    });
+
+    expect(order).toEqual(['restore-one', 'restore-two', 'browser.close', 'fixture.close']);
+    expect(fixtureCloseCount).toBe(1);
+    expect(cleanup).toEqual({ attemptedRestores: 2, failedSteps: ['restore-1', 'browser.close'] });
+    await expect(stat(temporary)).rejects.toMatchObject({ code: 'ENOENT' });
+
+    const failure = captureFailureAfterCleanup(primary, cleanup);
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect(failure).toMatchObject({ message: 'primary capture failed' });
+    expect((failure as AggregateError).errors[0]).toBe(primary);
+    expect((failure as AggregateError).errors[1]).toMatchObject({ message: 'Capture cleanup failed: restore-1, browser.close.' });
+  } finally {
+    await rm(outputRoot, { force: true, recursive: true });
+  }
+});
 
 test('captures identity-backed HMR, last-good, recovery, and responsive browser evidence', { timeout: 300_000 }, async () => {
   const outputRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-runtime-capture-'));
