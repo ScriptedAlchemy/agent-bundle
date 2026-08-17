@@ -30,24 +30,30 @@ e2e('renders the capability-gated Runtime sibling in the real RSC workbench', { 
   try {
     await page.goto(`${fixture.url}#overview`);
     await expect(page.getByRole('link', { name: 'MCP playground' })).toBeVisible({ timeout: browserTimeout });
-    await expect(page.getByRole('link', { name: 'Inspector' })).toBeVisible({ timeout: browserTimeout });
+    await expect(page.getByRole('link', { name: 'Inspector' })).toHaveCount(0, { timeout: browserTimeout });
     await expect(page.getByRole('link', { name: 'Runtime' })).toBeVisible({ timeout: browserTimeout });
 
     await page.goto(`${fixture.url}#mcp`);
     await expect(page.getByRole('heading', { name: 'MCP playground' })).toBeVisible({ timeout: browserTimeout });
-    await expect(page.getByLabel('MCP App preview controls')).toHaveCount(1);
+    await expect(page.getByLabel('MCP App preview controls')).toHaveCount(1, { timeout: browserTimeout });
     await page.goto(`${fixture.url}#inspector`);
+    await expect(page).toHaveURL(/#mcp$/u, { timeout: browserTimeout });
+    await expect(page.getByRole('tab', { name: 'Inspector' })).toHaveAttribute('aria-selected', 'true');
     await expect(page.getByRole('heading', { name: 'Inspector' })).toBeVisible({ timeout: browserTimeout });
     await page.goto(`${fixture.url}#runtime`);
     await expect(page.getByRole('heading', { name: 'Runtime Playground' })).toBeVisible({ timeout: browserTimeout });
     await page.goto(`${fixture.url}#inspector`);
+    await expect(page).toHaveURL(/#mcp$/u, { timeout: browserTimeout });
+    await expect(page.getByRole('tab', { name: 'Inspector' })).toHaveAttribute('aria-selected', 'true');
     await expect(page.getByRole('heading', { name: 'Inspector' })).toBeVisible({ timeout: browserTimeout });
-    await page.goto(`${fixture.url}#mcp`);
-    await expect(page.getByLabel('MCP App preview controls')).toHaveCount(1);
+    await page.getByRole('tab', { name: 'Playground' }).click();
+    await expect(page.getByRole('tab', { name: 'Playground' })).toHaveAttribute('aria-selected', 'true');
+    await expect(page.getByRole('heading', { name: 'MCP playground' })).toBeVisible({ timeout: browserTimeout });
+    await expect(page.getByLabel('MCP App preview controls')).toHaveCount(1, { timeout: browserTimeout });
 
     await page.goto(`${fixture.url}#runtime`);
     await expect(page.getByRole('heading', { name: 'Runtime Playground' })).toBeVisible({ timeout: browserTimeout });
-    await expect(page.locator('[data-runtime-provider-session]')).toHaveCount(1);
+    await expect(page.locator('[data-runtime-provider-session]')).toHaveCount(1, { timeout: browserTimeout });
     const runtimeIdentity = await page.evaluate(async () => {
       const response = await fetch('/api/runtime/status');
       const { status } = await response.json() as { readonly status: Readonly<{
@@ -88,8 +94,12 @@ e2e('renders the capability-gated Runtime sibling in the real RSC workbench', { 
     await input.fill('{"broken":');
     await expect(page.locator('#runtime-input-raw-error')).toBeVisible();
     await page.goto(`${fixture.url}#inspector`);
+    await expect(page).toHaveURL(/#mcp$/u, { timeout: browserTimeout });
+    await expect(page.getByRole('tab', { name: 'Inspector' })).toHaveAttribute('aria-selected', 'true');
     await expect(page.getByRole('heading', { name: 'Inspector' })).toBeVisible({ timeout: browserTimeout });
     await page.goto(`${fixture.url}#runtime`);
+    await expect(page.getByRole('heading', { name: 'Runtime Playground' })).toBeVisible({ timeout: browserTimeout });
+    await expect(page.locator('[data-runtime-provider-session]')).toHaveCount(1, { timeout: browserTimeout });
     await expect(input).toHaveValue('{"broken":');
     await expect(page.locator('#runtime-input-raw-error')).toBeVisible();
 
@@ -173,7 +183,8 @@ e2e('renders the capability-gated Runtime sibling in the real RSC workbench', { 
     await stateTab.click();
     await expect(stateTab).toHaveAttribute('aria-selected', 'true');
     await page.goto(`${fixture.url}#mcp`);
-    await expect(page.getByLabel('MCP App preview controls')).toHaveCount(1);
+    await expect(page.getByRole('heading', { name: 'MCP playground' })).toBeVisible({ timeout: browserTimeout });
+    await expect(page.getByLabel('MCP App preview controls')).toHaveCount(1, { timeout: browserTimeout });
     expect(forbiddenRequests).toEqual([]);
     expect(pageErrors).toEqual([]);
   } finally {
@@ -204,7 +215,7 @@ e2e('resets the selected Claude fixture to its seed without replacing prior runt
     await page.goto(`${fixture.url}#runtime`);
     await expect(page.getByRole('heading', { name: 'Runtime Playground' })).toBeVisible({ timeout: browserTimeout });
     const identity = page.locator('[data-runtime-provider-session]');
-    await expect(identity).toHaveCount(1);
+    await expect(identity).toHaveCount(1, { timeout: browserTimeout });
     const runtimeSessionToken = await page.evaluate(async () => {
       const response = await fetch('/api/project/session', { credentials: 'same-origin' });
       const body: unknown = await response.json();
@@ -365,7 +376,7 @@ e2e('retains real MCP runtime history across reload and isolates a fresh provide
     await page.goto(`${firstFixture.url}#runtime`);
     await expect(page.getByRole('heading', { name: 'Runtime Playground' })).toBeVisible({ timeout: browserTimeout });
     const identity = page.locator('[data-runtime-provider-session]');
-    await expect(identity).toHaveCount(1);
+    await expect(identity).toHaveCount(1, { timeout: browserTimeout });
     const runtimeSessionToken = await page.evaluate(async () => {
       const response = await fetch('/api/project/session', { credentials: 'same-origin' });
       const body: unknown = await response.json();
@@ -503,6 +514,7 @@ e2e('retains real MCP runtime history across reload and isolates a fresh provide
     secondFixture = await startRuntimePlaygroundFixture();
     await page.goto(`${secondFixture.url}#runtime`);
     await expect(page.getByRole('heading', { name: 'Runtime Playground' })).toBeVisible({ timeout: browserTimeout });
+    await expect(identity).toHaveCount(1, { timeout: browserTimeout });
     await expect.poll(() => identity.getAttribute('data-runtime-provider-session'), { timeout: browserTimeout }).not.toBe(firstHistory.providerSessionId);
     const freshSessionToken = await page.evaluate(async () => {
       const response = await fetch('/api/project/session', { credentials: 'same-origin' });
