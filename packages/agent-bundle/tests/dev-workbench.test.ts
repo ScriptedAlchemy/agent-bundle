@@ -17,6 +17,7 @@ import {
   RuntimeClientSurfaceBindings,
   startDevServer,
 } from '../src/dev/workbench-server.ts';
+import type { ForegroundCoordinator } from '../src/dev/foreground-server.ts';
 import { createProjectFixture, removeProjectFixture } from './helpers/project-fixture.ts';
 
 const readToEnd = async (reader: ReadableStreamDefaultReader<Uint8Array>): Promise<string> => {
@@ -550,7 +551,7 @@ it('retains Runtime App routes through invalid config updates and reconciles onl
           source: {
             diagnostics: [{
               code: 'AB4500',
-              message: 'Config extension "portable" must contain strict finite JSON data.',
+              message: 'A registered config extension must contain strict finite JSON data.',
               sourcePath: project.configPath,
             }],
             state: 'invalid',
@@ -710,6 +711,210 @@ it('fences a closing foreground before a held valid runtime reconcile can attach
     delete runtimeGlobal[stateKey];
     await server?.close().catch(() => undefined);
     await Promise.all([removeProjectFixture(project.root), rm(assetsRoot, { force: true, recursive: true })]);
+  }
+}, 30_000);
+
+it('does not reconcile a valid preparation released after foreground close begins', async () => {
+  const project = await createProjectFixture();
+  const assetsRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-workbench-prepared-runtime-close-'));
+  const stateKey = `__agentBundlePreparedRuntimeClose${Date.now()}${Math.random().toString(16).slice(2)}`;
+  let enteredPrepare: () => void = () => undefined;
+  let releasePrepare: () => void = () => undefined;
+  const preparationEntered = new Promise<void>((resolvePromise) => { enteredPrepare = resolvePromise; });
+  const preparationReleased = new Promise<void>((resolvePromise) => { releasePrepare = resolvePromise; });
+  const runtimeState = {
+    calls: [] as string[],
+    closes: 0,
+    enteredPrepare,
+    preparationReleased,
+    reconciles: 0,
+    subscribes: 0,
+    unsubscribes: 0,
+  };
+  const runtimeGlobal = globalThis as typeof globalThis & Record<string, typeof runtimeState | undefined>;
+  let server: Awaited<ReturnType<typeof startDevServer>> | undefined;
+  const config = (marker: string, holdPreparation = false): string => {
+    const declaration = [
+      "  dev: { runtime: { provider: './src/dev/provider.ts' } },",
+      `  fixtureMarker: ${JSON.stringify(marker)},`,
+      "  plugin: { name: 'prepared-runtime-close', version: '1.0.0' },",
+      "  skills: ['skills/review'],",
+      "  targets: ['portable'],",
+    ];
+    return [
+      "import { defineConfig } from 'agent-bundle';",
+      '',
+      ...(holdPreparation ? [
+        `const state = globalThis[${JSON.stringify(stateKey)}];`,
+        "if (state === undefined) throw new Error('Missing prepared Runtime Apps close state.');",
+        'export default async () => {',
+        '  state.enteredPrepare();',
+        '  await state.preparationReleased;',
+        '  return defineConfig({',
+        ...declaration,
+        '  });',
+        '};',
+      ] : [
+        'export default defineConfig({',
+        ...declaration,
+        '});',
+      ]),
+      '',
+    ].join('\n');
+  };
+  try {
+    runtimeGlobal[stateKey] = runtimeState;
+    await mkdir(join(project.root, 'src', 'dev'), { recursive: true });
+    await Promise.all([
+      writeFile(join(assetsRoot, 'index.html'), '<!doctype html><title>Agent Bundle workbench</title>'),
+      writeFile(join(project.root, 'src', 'dev', 'provider.ts'), [
+        `const state = globalThis[${JSON.stringify(stateKey)}];`,
+        "if (state === undefined) throw new Error('Missing prepared Runtime Apps close state.');",
+        'const registry = {',
+        '  close: async () => undefined,',
+        '  closeSession: async () => undefined,',
+        '  open: async () => { throw new Error(\'unused\'); },',
+        '  reconcile: async () => ({ invalidatedBindings: [], registryRevision: 0 }),',
+        '  restart: async () => ({ invalidatedBindings: [], registryRevision: 0 }),',
+        '  session: () => undefined,',
+        '  snapshot: () => undefined,',
+        "  subscribe: () => { state.calls.push('subscribe'); state.subscribes += 1; return { unsubscribe: () => { state.calls.push('unsubscribe'); state.unsubscribes += 1; } }; },",
+        '};',
+        'export const createDevRuntimeProvider = () => ({',
+        "  descriptor: { environmentVariables: [], id: 'prepared-runtime-close', label: 'Prepared Runtime Close', schemaVersion: 1 },",
+        '  start: async () => ({',
+        '    clientSurface: () => undefined,',
+        "    close: async () => { state.calls.push('close'); state.closes += 1; },",
+        '    invoke: async () => { throw new Error(\'unused\'); },',
+        '    mcpRegistry: registry,',
+        "    providerSessionId: 'provider-prepared-runtime-close',",
+        '    readAsset: async () => undefined,',
+        '    readRunFlight: async () => undefined,',
+        "    reconcilePreparedRuntime: async () => { state.calls.push('reconcile'); state.reconciles += 1; },",
+        '    replay: async () => { throw new Error(\'unused\'); },',
+        "    resetState: async () => ({ stateStoreId: 'state-prepared-runtime-close', stateVersion: 0 }),",
+        '    run: () => undefined,',
+        '    runs: () => [],',
+        "    status: () => ({ descriptor: { environmentVariables: [], id: 'prepared-runtime-close', label: 'Prepared Runtime Close', schemaVersion: 1 }, diagnostics: [], hmrReady: true, state: 'active' }),",
+        '    surfaces: () => [],',
+        '  }),',
+        '});',
+        '',
+      ].join('\n')),
+      writeFile(project.configPath, config('initial')),
+    ]);
+    server = await startDevServer({
+      assets: createWorkbenchAssetSource({ root: assetsRoot }),
+      open: false,
+      port: 0,
+      root: project.root,
+    });
+    const bootstrap = await fetch(`${server.url}/api/project/session`, { headers: { 'sec-fetch-site': 'same-origin' } });
+    const { token } = await bootstrap.json() as { readonly token: string };
+    const headers = { 'content-type': 'application/json', origin: server.url, 'x-agent-bundle-session': token };
+    const stableRuntime = {
+      closes: runtimeState.closes,
+      reconciles: runtimeState.reconciles,
+      subscribes: runtimeState.subscribes,
+    };
+
+    await writeFile(project.configPath, config('held-after-close', true));
+    const rebuilding = fetch(`${server.url}/api/project/rebuild`, {
+      body: JSON.stringify({ paths: ['agent-bundle.config.ts'] }),
+      headers,
+      method: 'POST',
+    });
+    await within(preparationEntered, 5_000);
+    const closing = server.close();
+    releasePrepare();
+    await Promise.allSettled([rebuilding]);
+    await expect(closing).resolves.toBeUndefined();
+    expect(runtimeState).toMatchObject({
+      closes: stableRuntime.closes + 1,
+      reconciles: stableRuntime.reconciles,
+      subscribes: stableRuntime.subscribes,
+      unsubscribes: 1,
+    });
+    expect(runtimeState.calls).not.toContain('reconcile');
+  } finally {
+    releasePrepare();
+    delete runtimeGlobal[stateKey];
+    await server?.close().catch(() => undefined);
+    await Promise.all([removeProjectFixture(project.root), rm(assetsRoot, { force: true, recursive: true })]);
+  }
+}, 30_000);
+
+it('does not publish a prepared runtime topology after foreground close begins', async () => {
+  const project = await createProjectFixture();
+  const stateKey = `__agentBundlePreparedTopologyClose${Date.now()}${Math.random().toString(16).slice(2)}`;
+  let enteredPrepare: () => void = () => undefined;
+  let releasePrepare: () => void = () => undefined;
+  const preparationEntered = new Promise<void>((resolvePromise) => { enteredPrepare = resolvePromise; });
+  const preparationReleased = new Promise<void>((resolvePromise) => { releasePrepare = resolvePromise; });
+  const preparationState = { enteredPrepare, preparationReleased };
+  const runtimeGlobal = globalThis as typeof globalThis & Record<string, typeof preparationState | undefined>;
+  let coordinator: ForegroundCoordinator | undefined;
+  let unsubscribeEvents: (() => void) | undefined;
+  let server: Awaited<ReturnType<typeof startDevServer>> | undefined;
+  let restartRequiredEvents = 0;
+  try {
+    runtimeGlobal[stateKey] = preparationState;
+    server = await startDevServer({
+      open: false,
+      port: 0,
+      root: project.root,
+      testing: {
+        startForegroundServer: async (options) => {
+          await options.coordinator.start();
+          coordinator = options.coordinator;
+          const subscription = options.eventHub.subscribe((event) => {
+            if (
+              event.type === 'runtime.event' && event.payload.type === 'runtime.status' &&
+              event.payload.details?.restartRequired === true
+            ) restartRequiredEvents += 1;
+          });
+          unsubscribeEvents = () => subscription.unsubscribe();
+          return {
+            close: () => options.coordinator.close(),
+            url: 'http://127.0.0.1:49123',
+          };
+        },
+      },
+    });
+    await writeFile(project.configPath, [
+      "import { defineConfig } from 'agent-bundle';",
+      `const state = globalThis[${JSON.stringify(stateKey)}];`,
+      "if (state === undefined) throw new Error('Missing prepared topology close state.');",
+      'export default async () => {',
+      '  state.enteredPrepare();',
+      '  await state.preparationReleased;',
+      '  return defineConfig({',
+      "    dev: { runtime: { provider: './src/dev/provider.ts' } },",
+      "    plugin: { name: 'prepared-topology-close', version: '1.0.0' },",
+      "    skills: ['skills/review'],",
+      "    targets: ['portable'],",
+      '  });',
+      '};',
+      '',
+    ].join('\n'));
+    const rebuilding = coordinator?.rebuild({
+      occurredAt: new Date().toISOString(),
+      paths: ['agent-bundle.config.ts'],
+      reason: 'manual',
+    });
+    if (rebuilding === undefined) throw new Error('Foreground coordinator was not captured.');
+    await within(preparationEntered, 5_000);
+    const closing = server.close();
+    releasePrepare();
+    await Promise.allSettled([rebuilding]);
+    await expect(closing).resolves.toBeUndefined();
+    expect(restartRequiredEvents).toBe(0);
+  } finally {
+    releasePrepare();
+    unsubscribeEvents?.();
+    delete runtimeGlobal[stateKey];
+    await server?.close().catch(() => undefined);
+    await removeProjectFixture(project.root);
   }
 }, 30_000);
 

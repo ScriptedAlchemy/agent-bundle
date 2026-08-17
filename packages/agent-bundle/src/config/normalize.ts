@@ -316,23 +316,27 @@ const deepFreeze = <Value>(value: Value): Value => {
   return Object.freeze(value);
 };
 
-export class ConfigExtensionFiniteJsonError extends Error {
-  readonly diagnosticMessage: string;
+export const configExtensionFiniteJsonDiagnosticMessage = 'A registered config extension must contain strict finite JSON data.';
 
-  constructor(key: string) {
-    const diagnosticMessage = `Config extension "${key}" must contain strict finite JSON data.`;
-    super(`AB4500: ${diagnosticMessage}`);
-    this.diagnosticMessage = diagnosticMessage;
+const finiteJsonExtensionErrors = new WeakSet<object>();
+
+class ConfigExtensionFiniteJsonError extends Error {
+  constructor() {
+    super(`AB4500: ${configExtensionFiniteJsonDiagnosticMessage}`);
     this.name = 'ConfigExtensionFiniteJsonError';
+    finiteJsonExtensionErrors.add(this);
   }
 }
 
-const invalidExtensionValue = (key: string): never => {
-  throw new ConfigExtensionFiniteJsonError(key);
+/** Identifies only finite-JSON failures constructed by this module. */
+export const isConfigExtensionFiniteJsonError = (value: unknown): boolean =>
+  typeof value === 'object' && value !== null && finiteJsonExtensionErrors.has(value);
+
+const invalidExtensionValue = (): never => {
+  throw new ConfigExtensionFiniteJsonError();
 };
 
 const cloneExtensionValue = (
-  key: string,
   value: unknown,
   ancestors = new Set<object>(),
 ): unknown => {
@@ -340,10 +344,10 @@ const cloneExtensionValue = (
     return value;
   }
   if (typeof value === 'number') {
-    return Number.isFinite(value) ? value : invalidExtensionValue(key);
+    return Number.isFinite(value) ? value : invalidExtensionValue();
   }
   if (typeof value !== 'object' || ancestors.has(value)) {
-    return invalidExtensionValue(key);
+    return invalidExtensionValue();
   }
 
   ancestors.add(value);
@@ -353,14 +357,14 @@ const cloneExtensionValue = (
       for (let index = 0; index < value.length; index += 1) {
         const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
         if (descriptor === undefined || !descriptor.enumerable || !('value' in descriptor)) {
-          return invalidExtensionValue(key);
+          return invalidExtensionValue();
         }
-        clone.push(cloneExtensionValue(key, descriptor.value, ancestors));
+        clone.push(cloneExtensionValue(descriptor.value, ancestors));
       }
       for (const property of Reflect.ownKeys(value)) {
         if (property === 'length') continue;
         if (typeof property !== 'string' || !/^(?:0|[1-9]\d*)$/u.test(property) || Number(property) >= value.length) {
-          return invalidExtensionValue(key);
+          return invalidExtensionValue();
         }
       }
       return clone;
@@ -368,16 +372,16 @@ const cloneExtensionValue = (
 
     const prototype = Object.getPrototypeOf(value);
     if (prototype !== Object.prototype && prototype !== null) {
-      return invalidExtensionValue(key);
+      return invalidExtensionValue();
     }
     const clone = Object.create(null) as Record<string, unknown>;
     for (const property of Reflect.ownKeys(value)) {
-      if (typeof property !== 'string') return invalidExtensionValue(key);
+      if (typeof property !== 'string') return invalidExtensionValue();
       const descriptor = Object.getOwnPropertyDescriptor(value, property);
       if (descriptor === undefined || !descriptor.enumerable || !('value' in descriptor)) {
-        return invalidExtensionValue(key);
+        return invalidExtensionValue();
       }
-      clone[property] = cloneExtensionValue(key, descriptor.value, ancestors);
+      clone[property] = cloneExtensionValue(descriptor.value, ancestors);
     }
     return clone;
   } finally {
@@ -401,7 +405,7 @@ const normalizeExtensions = (
       key: descriptor.key,
       provenance: { ...provenance },
       target: descriptor.target,
-      value: cloneExtensionValue(descriptor.key, value),
+      value: cloneExtensionValue(value),
     };
   }
 

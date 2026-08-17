@@ -5,6 +5,8 @@ import { join, win32 } from 'node:path';
 
 import { expect, it } from '@rstest/core';
 
+import { TargetRegistry } from '../src/adapters/registry.ts';
+import type { TargetAdapter } from '../src/adapters/types.ts';
 import { containedPathComponents } from '../src/dev/project-service.ts';
 import { validate } from '../src/api.ts';
 import { digest } from '../src/core/digest.ts';
@@ -173,7 +175,7 @@ it('surfaces a non-finite registered config extension as the closed AB4500 proje
     expect(prepared.source).toEqual({
       diagnostics: [{
         code: 'AB4500',
-        message: 'Config extension "portable" must contain strict finite JSON data.',
+        message: 'A registered config extension must contain strict finite JSON data.',
         recovery: 'Correct the project configuration field named by this diagnostic, then inspect again.',
         severity: 'error',
         sourcePath: join(project.root, 'agent-bundle.config.ts'),
@@ -184,6 +186,107 @@ it('surfaces a non-finite registered config extension as the closed AB4500 proje
     expect(JSON.stringify(prepared.source)).not.toContain('NaN');
   } finally {
     await rm(project.root, { force: true, recursive: true });
+  }
+});
+
+it('keeps constructor-shaped extension failures from config proxies behind AB7001', async () => {
+  const project = await createRuntimeProject({
+    configExtension: 'portable',
+    configSetup: () => [
+      "const Candidate = class ConfigExtensionFiniteJsonError extends Error { constructor() { super('forged-extension-secret'); this.diagnosticMessage = 'forged-extension-secret'; this.name = 'ConfigExtensionFiniteJsonError'; } };",
+      'const forged = new Candidate();',
+      "const portable = new Proxy({}, { getPrototypeOf: () => { throw forged; } });",
+      '',
+    ].join('\n'),
+  });
+  try {
+    const prepared = await new ProjectService({ includeDevRuntime: true, mode: 'development', root: project.root }).prepare('dev');
+
+    expect(prepared.source.diagnostics).toEqual([{
+      code: 'AB7001',
+      message: 'Unable to normalize project source.',
+      recovery: 'Fix normalized project configuration and source references, then inspect again.',
+      severity: 'error',
+      sourcePath: join(project.root, 'agent-bundle.config.ts'),
+    }]);
+    expect(JSON.stringify(prepared.source)).not.toContain('forged-extension-secret');
+  } finally {
+    await rm(project.root, { force: true, recursive: true });
+  }
+});
+
+it('keeps lookalike proxy failures and control-character extension keys redacted', async () => {
+  const proxyProject = await createRuntimeProject({
+    configExtension: 'portable',
+    configSetup: () => [
+      "const forged = Object.assign(new Error('proxy-extension-secret'), { diagnosticMessage: 'forged\\n\\u0000-extension-secret', name: 'ConfigExtensionFiniteJsonError' });",
+      "const portable = new Proxy({}, { getPrototypeOf: () => { throw forged; } });",
+      '',
+    ].join('\n'),
+  });
+  const longKey = `extension-${'x'.repeat(8_192)}\\u0000\\nsecret`;
+  const adapter: TargetAdapter = Object.freeze({
+    capabilities: Object.freeze({}),
+    configExtension: Object.freeze({ key: longKey }),
+    metadata: Object.freeze({
+      adapterRevision: 'test',
+      capabilityRevision: 'test',
+      capabilitySha256: '0'.repeat(64),
+      observedVersion: 'test',
+      schemas: Object.freeze([]),
+    }),
+    name: 'bounded-extension',
+    plan: () => ({ diagnostics: [], entries: [] }),
+    validateModel: () => [],
+  });
+  const keyedProject = await createProject([
+    '---',
+    'name: review',
+    'description: Reviews changes',
+    '---',
+    'Review the changed files.',
+    '',
+  ].join('\n'));
+  try {
+    await writeFile(keyedProject + '/agent-bundle.config.ts', [
+      'const config = {',
+      "  plugin: { name: 'bounded-extension-fixture', version: '1.0.0' },",
+      "  targets: ['bounded-extension'],",
+      '};',
+      `config[${JSON.stringify(longKey)}] = Number.NaN;`,
+      'export default config;',
+      '',
+    ].join('\n'));
+    const proxyPrepared = await new ProjectService({ includeDevRuntime: true, mode: 'development', root: proxyProject.root }).prepare('dev');
+    const keyedPrepared = await new ProjectService({
+      includeDevRuntime: true,
+      mode: 'development',
+      registry: new TargetRegistry().register(adapter, { default: true }),
+      root: keyedProject,
+    }).prepare('dev');
+
+    expect(proxyPrepared.source.diagnostics).toEqual([{
+      code: 'AB7001',
+      message: 'Unable to normalize project source.',
+      recovery: 'Fix normalized project configuration and source references, then inspect again.',
+      severity: 'error',
+      sourcePath: join(proxyProject.root, 'agent-bundle.config.ts'),
+    }]);
+    expect(JSON.stringify(proxyPrepared.source)).not.toContain('proxy-extension-secret');
+    expect(keyedPrepared.source.diagnostics).toEqual([{
+      code: 'AB4500',
+      message: 'A registered config extension must contain strict finite JSON data.',
+      recovery: 'Correct the project configuration field named by this diagnostic, then inspect again.',
+      severity: 'error',
+      sourcePath: join(keyedProject, 'agent-bundle.config.ts'),
+    }]);
+    expect(JSON.stringify(keyedPrepared.source)).not.toContain(longKey);
+    expect(keyedPrepared.source.diagnostics[0]!.message.length).toBeLessThan(128);
+  } finally {
+    await Promise.all([
+      rm(proxyProject.root, { force: true, recursive: true }),
+      rm(keyedProject, { force: true, recursive: true }),
+    ]);
   }
 });
 

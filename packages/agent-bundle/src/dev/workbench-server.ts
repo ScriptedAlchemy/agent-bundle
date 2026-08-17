@@ -579,7 +579,7 @@ export const startDevServer = async (options: StartDevServerOptions): Promise<De
     initialPreparedProject,
     onPreparedProject: async (prepared) => {
       const validPreparedProject = prepared.source.state === 'ready' && prepared.model !== undefined;
-      if (!validPreparedProject) return;
+      if (foregroundClosing || !validPreparedProject) return;
       latestValidPreparedProject = prepared;
       if (runtime !== undefined) {
         await runtime.reconcileDeclaration(prepared.devRuntime, prepared.devRuntimeDiagnostic);

@@ -6,7 +6,11 @@ import { createDefaultRegistry, type TargetRegistry } from '../adapters/registry
 import { discoverProject } from '../config/discover.ts';
 import { isProjectPathIgnored, readProjectIgnoreRules } from '../config/ignore.ts';
 import { loadConfig } from '../config/load.ts';
-import { ConfigExtensionFiniteJsonError, normalizeProject } from '../config/normalize.ts';
+import {
+  configExtensionFiniteJsonDiagnosticMessage,
+  isConfigExtensionFiniteJsonError,
+  normalizeProject,
+} from '../config/normalize.ts';
 import { validateModel, validateSource } from '../config/validate.ts';
 import { deduplicateDiagnostics, type Diagnostic, withDiagnosticRecovery } from '../core/diagnostics.ts';
 import { digest } from '../core/digest.ts';
@@ -624,10 +628,10 @@ export class ProjectService {
         registry,
       );
     } catch (error) {
-      if (error instanceof ConfigExtensionFiniteJsonError) {
+      if (isConfigExtensionFiniteJsonError(error)) {
         return failedPreparation(
           'AB4500',
-          error.diagnosticMessage,
+          configExtensionFiniteJsonDiagnosticMessage,
           loaded.configPath,
           'project.prepared',
           snapshot,

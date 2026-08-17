@@ -1,5 +1,6 @@
 import { expect, it } from '@rstest/core';
 
+import * as normalizeModule from '../src/config/normalize.ts';
 import {
   normalizeProject,
   validateModel,
@@ -26,6 +27,10 @@ const extensionRegistry: NormalizationTargetRegistry = {
   has: (name) => name === 'example',
   supports: (name, capability) => name === 'example' && capability === 'hooks',
 };
+
+it('keeps internal config-extension finite JSON failures non-constructible', () => {
+  expect(normalizeModule).not.toHaveProperty('ConfigExtensionFiniteJsonError');
+});
 
 const loadedProject = (
   config: AgentBundleConfig,
@@ -164,6 +169,7 @@ it('rejects non-JSON values in registered config extensions before normalization
   }
   const cyclic: { self?: unknown } = {};
   cyclic.self = cyclic;
+  const prototypeMutated = Object.setPrototypeOf({ enabled: true }, { inherited: true });
   const values: readonly unknown[] = [
     new Map([['value', true]]),
     new Set(['value']),
@@ -177,6 +183,7 @@ it('rejects non-JSON values in registered config extensions before normalization
     Number.NaN,
     Number.POSITIVE_INFINITY,
     cyclic,
+    prototypeMutated,
   ];
 
   for (const value of values) {
@@ -184,7 +191,7 @@ it('rejects non-JSON values in registered config extensions before normalization
       example: value,
       plugin: { name: 'extension-json-fixture', version: '1.0.0' },
     }), { skills: [] }, extensionRegistry)).rejects.toThrow(
-      'AB4500: Config extension "example" must contain strict finite JSON data.',
+      'AB4500: A registered config extension must contain strict finite JSON data.',
     );
   }
 });
