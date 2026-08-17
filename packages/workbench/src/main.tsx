@@ -176,7 +176,7 @@ const createWorkbenchRuntimeBridgeFactory = (
           session: preview.session,
         }));
       } else if (!controllerMatchesRuntimePreview(controller, preview)) {
-        throw new Error('MCP controller is not ready for this exact runtime App session.');
+        await controller.adoptRuntimeSession(preview.session);
       }
       if (controllerRef.current !== controller || !controllerMatchesRuntimePreview(controller, preview)) {
         throw new Error('Runtime MCP controller admission became stale.');

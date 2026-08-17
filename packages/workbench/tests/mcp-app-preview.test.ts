@@ -163,7 +163,10 @@ const runtimePreview = Object.freeze({
 }) as unknown as McpAppPreviewAppsSnapshot;
 
 const runtimeClient = (value: Partial<McpAppRuntimeClient> & Readonly<Record<string, unknown>>): McpAppClient & McpAppRuntimeClient =>
-  value as unknown as McpAppClient & McpAppRuntimeClient;
+  Object.freeze({
+    subscribeInvalidations: () => () => undefined,
+    ...value,
+  }) as unknown as McpAppClient & McpAppRuntimeClient;
 
 const runtimeProps = (client: McpAppClient & McpAppRuntimeClient, createBridgeFactory: McpAppRuntimePreviewProps['createBridgeFactory']): McpAppRuntimePreviewProps => Object.freeze({
   client,
@@ -997,6 +1000,154 @@ describe('MCP App preview', () => {
     expect(second).toBe(first);
     await first;
     expect(order).toEqual(['renderer', 'bridge', 'binding:runtime-binding-weather']);
+  });
+
+  it('locally closes exactly the matching revoked runtime App without a redundant backend close', async () => {
+    const order: string[] = [];
+    let invalidation: ((details: {
+      readonly bindingId: string;
+      readonly reason: 'session-restarted';
+      readonly sessionId: string;
+      readonly sessionRevision: number;
+      readonly state: 'revoked';
+    }) => void) | undefined;
+    let unsubscribes = 0;
+    const client = runtimeClient(Object.freeze({
+      closeRuntime: async () => { order.push('binding'); },
+      createRuntime: async () => runtimePreview,
+      currentDocumentPolicy: () => Object.freeze({ bindingId: runtimePreview.binding.id, snapshot: runtimePreview.documentPolicy }),
+      subscribeInvalidations: (listener: typeof invalidation) => {
+        invalidation = listener;
+        return () => { unsubscribes += 1; };
+      },
+    }));
+    const bridgeFactory = Object.assign(
+      () => { throw new Error('renderer installation is represented by its ref'); },
+      { close: async () => { order.push('bridge'); } },
+    ) as RuntimeAppBridgeFactory;
+    const controller = createMcpAppPreviewController(runtimeProps(client, () => bridgeFactory));
+    await controller.start();
+    controller.runtimeRendererRef?.(Object.freeze({
+      sendToolCancelled: async () => undefined,
+      sendToolInput: async () => undefined,
+      sendToolResult: async () => undefined,
+      teardown: async () => { order.push('renderer'); },
+    }));
+    await Promise.resolve();
+
+    invalidation?.({
+      bindingId: 'foreign-binding',
+      reason: 'session-restarted',
+      sessionId: runtimePreview.binding.sessionId,
+      sessionRevision: runtimePreview.binding.sessionRevision,
+      state: 'revoked',
+    });
+    await Promise.resolve();
+    expect(order).toEqual([]);
+    expect(controller.state).toMatchObject({ kind: 'runtime', phase: 'ready' });
+
+    invalidation?.({
+      bindingId: runtimePreview.binding.id,
+      reason: 'session-restarted',
+      sessionId: runtimePreview.binding.sessionId,
+      sessionRevision: runtimePreview.binding.sessionRevision,
+      state: 'revoked',
+    });
+    await expect.poll(() => order).toEqual(['renderer', 'bridge']);
+
+    expect(unsubscribes).toBe(1);
+    expect(controller.state).toMatchObject({ fallback: { reason: 'session-restarted' }, kind: 'runtime', phase: 'error' });
+    await expect(controller.close()).resolves.toBeUndefined();
+    expect(order).toEqual(['renderer', 'bridge']);
+    expect(unsubscribes).toBe(1);
+  });
+
+  it('retains a matching invalidation cleanup failure for the same lifecycle retry without recreating or closing its revoked binding', async () => {
+    let creates = 0;
+    let teardowns = 0;
+    let invalidation: ((details: {
+      readonly bindingId: string;
+      readonly reason: 'session-restarted';
+      readonly sessionId: string;
+      readonly sessionRevision: number;
+      readonly state: 'revoked';
+    }) => void) | undefined;
+    let backendCloses = 0;
+    const client = runtimeClient(Object.freeze({
+      closeRuntime: async () => { backendCloses += 1; },
+      createRuntime: async () => { creates += 1; return runtimePreview; },
+      currentDocumentPolicy: () => Object.freeze({ bindingId: runtimePreview.binding.id, snapshot: runtimePreview.documentPolicy }),
+      subscribeInvalidations: (listener: typeof invalidation) => {
+        invalidation = listener;
+        return () => undefined;
+      },
+    }));
+    const controller = createMcpAppPreviewController(runtimeProps(client, () => Object.assign(
+      () => { throw new Error('renderer installation is represented by its ref'); },
+      { close: async () => undefined },
+    ) as RuntimeAppBridgeFactory));
+    await controller.start();
+    controller.runtimeRendererRef?.(Object.freeze({
+      sendToolCancelled: async () => undefined,
+      sendToolInput: async () => undefined,
+      sendToolResult: async () => undefined,
+      teardown: async () => {
+        teardowns += 1;
+        if (teardowns === 1) throw new Error('local renderer cleanup failed');
+      },
+    }));
+
+    invalidation?.({
+      bindingId: runtimePreview.binding.id,
+      reason: 'session-restarted',
+      sessionId: runtimePreview.binding.sessionId,
+      sessionRevision: runtimePreview.binding.sessionRevision,
+      state: 'revoked',
+    });
+    await expect.poll(() => controller.state.phase).toBe('cleanup-failed');
+    expect(backendCloses).toBe(0);
+    await expect(controller.close()).resolves.toBeUndefined();
+    expect(creates).toBe(1);
+    expect(teardowns).toBe(2);
+    expect(backendCloses).toBe(0);
+  });
+
+  it('fences a matching invalidation delivered during runtime preview admission before bridge creation', async () => {
+    let bridges = 0;
+    let backendCloses = 0;
+    let unsubscribes = 0;
+    const client = runtimeClient(Object.freeze({
+      closeRuntime: async () => { backendCloses += 1; },
+      createRuntime: async () => runtimePreview,
+      currentDocumentPolicy: () => Object.freeze({ bindingId: runtimePreview.binding.id, snapshot: runtimePreview.documentPolicy }),
+      subscribeInvalidations: (listener: (details: {
+        readonly bindingId: string;
+        readonly reason: 'session-restarted';
+        readonly sessionId: string;
+        readonly sessionRevision: number;
+        readonly state: 'revoked';
+      }) => void) => {
+        listener({
+          bindingId: runtimePreview.binding.id,
+          reason: 'session-restarted',
+          sessionId: runtimePreview.binding.sessionId,
+          sessionRevision: runtimePreview.binding.sessionRevision,
+          state: 'revoked',
+        });
+        return () => { unsubscribes += 1; };
+      },
+    }));
+    const controller = createMcpAppPreviewController(runtimeProps(client, () => {
+      bridges += 1;
+      throw new Error('a revoked preview must not create a bridge');
+    }));
+
+    await controller.start();
+
+    expect(bridges).toBe(0);
+    expect(backendCloses).toBe(0);
+    expect(unsubscribes).toBe(1);
+    expect(controller.state).toMatchObject({ fallback: { reason: 'session-restarted' }, kind: 'runtime', phase: 'error' });
   });
 
   it('keeps the server-selected canonical ui resource across every simulation request', async () => {

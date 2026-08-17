@@ -25,7 +25,11 @@ import {
   type McpAppFrameRelayOptions,
   type McpAppFrameWindow,
 } from './mcp-app-frame.tsx';
-import type { McpAppPreviewAppsSnapshot, McpAppPreviewSnapshot } from '../../../agent-bundle/src/dev/mcp-app-runtime-preview-service.ts';
+import type {
+  McpAppPreviewAppsSnapshot,
+  McpAppPreviewSnapshot,
+  McpAppRuntimeInvalidationDetails,
+} from '../../../agent-bundle/src/dev/mcp-app-runtime-preview-service.ts';
 import type { AppRendererHandle, McpAppRendererTool } from '../inspector/adapter/closure-spike.ts';
 import type { RuntimeAppBridgeFactory, RuntimeAppBridgeOperationTrace } from '../inspector/adapter/runtime-app-bridge.ts';
 import type { RuntimeAppPreviewProps } from '../runtime-stage.tsx';
@@ -470,6 +474,8 @@ export class McpAppPreviewController<State extends McpAppPreviewControllerState 
   #runtimeBridgeClosed = false;
   #runtimeBridgeFactory: RuntimeAppBridgeFactory | undefined;
   #runtimePreview: McpAppPreviewSnapshot | undefined;
+  #runtimeInvalidationReason: 'session-restarted' | undefined;
+  #runtimeInvalidationUnsubscribe: (() => void) | undefined;
   #runtimeRenderer: AppRendererHandle | undefined;
   #runtimeRendererClosed = false;
   #runtimeRendererDelivery: Promise<void> | undefined;
@@ -668,6 +674,8 @@ export class McpAppPreviewController<State extends McpAppPreviewControllerState 
         await this.#cleanupRuntime();
         return;
       }
+      this.#subscribeRuntimeInvalidations(preview);
+      if (this.#closed) return;
       const policy = runtime.client.currentDocumentPolicy(preview.binding.id);
       if (policy.bindingId !== preview.binding.id || policy.snapshot !== preview.documentPolicy) {
         throw new McpAppPreviewDataError('runtime document policy does not match the created binding');
@@ -754,7 +762,7 @@ export class McpAppPreviewController<State extends McpAppPreviewControllerState 
       try {
         await this.#cleanupRuntime();
       } catch (error) {
-        this.#runtimeFailure('preview-error', error, 'cleanup-failed');
+        this.#runtimeFailure(this.#runtimeInvalidationReason ?? 'preview-error', error, 'cleanup-failed');
         throw error;
       }
       return;
@@ -791,6 +799,46 @@ export class McpAppPreviewController<State extends McpAppPreviewControllerState 
     void this.close();
   }
 
+  #clearRuntimeInvalidationSubscription(): void {
+    const unsubscribe = this.#runtimeInvalidationUnsubscribe;
+    this.#runtimeInvalidationUnsubscribe = undefined;
+    unsubscribe?.();
+  }
+
+  #matchesRuntimeInvalidation(
+    preview: McpAppPreviewSnapshot,
+    details: McpAppRuntimeInvalidationDetails,
+  ): boolean {
+    return details.bindingId === preview.binding.id &&
+      details.reason === 'session-restarted' &&
+      details.sessionId === preview.binding.sessionId &&
+      details.sessionRevision === preview.binding.sessionRevision &&
+      details.state === 'revoked';
+  }
+
+  /** A server-side revocation owns the backend binding; only local resources remain to close. */
+  #subscribeRuntimeInvalidations(preview: McpAppPreviewSnapshot): void {
+    const runtime = this.#runtime;
+    if (runtime === undefined || this.#closed || this.#runtimeInvalidationUnsubscribe !== undefined) return;
+    const unsubscribe = runtime.client.subscribeInvalidations((details) => {
+      if (this.#closed || !this.#matchesRuntimeInvalidation(preview, details)) return;
+      this.#runtimeBackendClosed = true;
+      this.#runtimeInvalidationReason = 'session-restarted';
+      this.#closed = true;
+      this.#clearRuntimeInvalidationSubscription();
+      this.#runtimeFailure('session-restarted', new Error('Runtime MCP App session restarted. Run again to create a new preview.'));
+      const cleanup = this.#cleanupRuntime();
+      this.#closePromise = cleanup;
+      void cleanup.catch((error: unknown) => {
+        if (this.#closePromise !== cleanup) return;
+        this.#runtimeFailure('session-restarted', error, 'cleanup-failed');
+        this.#closePromise = undefined;
+      });
+    });
+    this.#runtimeInvalidationUnsubscribe = unsubscribe;
+    if (this.#closed) this.#clearRuntimeInvalidationSubscription();
+  }
+
   /** AppRenderer error callbacks flow through the same immutable fallback and close authority. */
   reportRuntimeRendererError(error: unknown): void {
     if (this.#runtime === undefined || this.#closed) return;
@@ -814,6 +862,7 @@ export class McpAppPreviewController<State extends McpAppPreviewControllerState 
   }
 
   async #cleanupRuntime(): Promise<void> {
+    this.#clearRuntimeInvalidationSubscription();
     const failures: unknown[] = [];
     const delivery = this.#runtimeRendererDelivery;
     if (delivery !== undefined) await delivery.catch(() => undefined);

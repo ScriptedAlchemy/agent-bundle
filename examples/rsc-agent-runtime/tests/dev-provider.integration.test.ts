@@ -957,6 +957,137 @@ test('restarts and relists an open MCP session after a warm-cache definition cha
   }
 }, 30_000);
 
+test('uses the live registry authority after a transport-only runtime MCP reconciliation', async () => {
+  const copied = await copyExample();
+  try {
+    const prepared = await new ProjectService({ includeDevRuntime: true, mode: 'development', root: copied.projectRoot }).prepare('dev');
+    const session = await RsbuildRuntimeSession.start(startContext({
+      projectRoot: copied.projectRoot,
+      preparedRuntime: prepared.devRuntime!,
+      providerSessionId: 'provider-live-transport-authority',
+      signal: new AbortController().signal,
+      storageRoot: join(copied.projectRoot, '.agent-bundle', 'runtime-live-transport-authority'),
+    }));
+    try {
+      await waitFor(() => session.status().state === 'active');
+      const initialRegistry = session.mcpRegistry.snapshot()!;
+      const mcp = await session.mcpRegistry.open({ serverName: 'timeline', target: 'portable' });
+      try {
+        const initialBinding = mcp.snapshot().binding;
+        const definitionPrepared = Object.freeze({
+          ...prepared.devRuntime!,
+          apps: prepared.devRuntime!.apps.map((app) => Object.freeze({
+            ...app,
+            _meta: Object.freeze({ ...app._meta, 'openai/widgetDescription': 'Live definition authority.' }),
+          })),
+          sourceRevision: `${prepared.devRuntime!.sourceRevision}-definition-v2`,
+        });
+        await session.reconcilePreparedRuntime(definitionPrepared);
+        const definitionRegistry = session.mcpRegistry.snapshot()!;
+        const definitionBinding = mcp.snapshot().binding;
+        expect(definitionRegistry).toMatchObject({
+          registryRevision: initialRegistry.registryRevision + 1,
+          runtimeGenerationId: initialRegistry.runtimeGenerationId,
+          transportDigest: initialRegistry.transportDigest,
+        });
+        expect(definitionRegistry.definitionDigest).not.toBe(initialRegistry.definitionDigest);
+        expect(definitionBinding).toMatchObject({
+          definitionDigest: definitionRegistry.definitionDigest,
+          registryRevision: definitionRegistry.registryRevision,
+          sessionId: initialBinding.sessionId,
+          sessionRevision: initialBinding.sessionRevision + 1,
+        });
+        await expect(mcp.execute({ expectedSessionRevision: initialBinding.sessionRevision, kind: 'list-tools' })).rejects.toThrow();
+        const definitionRun = await session.invoke({
+          expectedGenerationId: definitionRegistry.runtimeGenerationId,
+          input: {},
+          surfaceId: 'mcp.render_edit_timeline',
+          target: 'portable',
+        });
+        expect(definitionRun).toMatchObject({
+          status: 'succeeded', vector: { runtimeGenerationId: definitionRegistry.runtimeGenerationId },
+        });
+        if (definitionRun.status !== 'succeeded' || definitionRun.result.app === undefined) throw new Error('Definition reconciliation run omitted its Runtime App binding.');
+        const definitionAppBinding = definitionRun.result.app.mcpBinding;
+        expect(definitionAppBinding).toMatchObject({
+          definitionDigest: definitionRegistry.definitionDigest,
+          registryRevision: definitionRegistry.registryRevision,
+          sessionId: expect.any(String),
+          sessionRevision: expect.any(Number),
+          transportDigest: definitionRegistry.transportDigest,
+        });
+
+        await session.reconcilePreparedRuntime({
+          ...definitionPrepared,
+          servers: definitionPrepared.servers.map((server) => Object.freeze({
+            ...server,
+            env: Object.freeze({ ...(server.env ?? {}), TIMELINE_TRANSPORT_SENTINEL: 'transport-v2' }),
+          })),
+          sourceRevision: `${prepared.devRuntime!.sourceRevision}-transport-v2`,
+        });
+        const registry = session.mcpRegistry.snapshot()!;
+        const currentBinding = mcp.snapshot().binding;
+        expect(registry).toMatchObject({
+          definitionDigest: definitionRegistry.definitionDigest,
+          registryRevision: definitionRegistry.registryRevision + 1,
+          runtimeGenerationId: definitionRegistry.runtimeGenerationId,
+        });
+        expect(registry.transportDigest).not.toBe(definitionRegistry.transportDigest);
+        expect(currentBinding).toMatchObject({
+          registryRevision: registry.registryRevision,
+          sessionId: definitionBinding.sessionId,
+          sessionRevision: definitionBinding.sessionRevision + 1,
+          transportDigest: registry.transportDigest,
+        });
+        await expect(mcp.execute({ expectedSessionRevision: definitionBinding.sessionRevision, kind: 'list-tools' })).rejects.toThrow();
+
+        const appRun = await session.invoke({
+          expectedGenerationId: registry.runtimeGenerationId,
+          input: {},
+          surfaceId: 'mcp.render_edit_timeline',
+          target: 'portable',
+        });
+        expect(appRun).toMatchObject({
+          status: 'succeeded', vector: { runtimeGenerationId: registry.runtimeGenerationId },
+        });
+        if (appRun.status !== 'succeeded' || appRun.result.app === undefined) throw new Error('Transport reconciliation run omitted its Runtime App binding.');
+        expect(appRun.result.app.mcpBinding).toMatchObject({
+          definitionDigest: registry.definitionDigest,
+          registryRevision: registry.registryRevision,
+          sessionId: definitionAppBinding.sessionId,
+          sessionRevision: definitionAppBinding.sessionRevision + 1,
+          transportDigest: registry.transportDigest,
+        });
+        await expect(mcp.execute({
+          expectedSessionRevision: currentBinding.sessionRevision,
+          kind: 'read-resource',
+          uri: 'ui://rsc-agent-runtime/edit-timeline-v1.html',
+        })).resolves.toMatchObject({
+          sessionId: currentBinding.sessionId,
+          sessionRevision: currentBinding.sessionRevision,
+          vector: { runtimeGenerationId: registry.runtimeGenerationId },
+        });
+        await expect(mcp.execute({
+          arguments: { limit: 1 },
+          expectedSessionRevision: currentBinding.sessionRevision,
+          kind: 'call-tool',
+          name: 'render_edit_timeline',
+        })).resolves.toMatchObject({
+          sessionId: currentBinding.sessionId,
+          sessionRevision: currentBinding.sessionRevision,
+          vector: { runtimeGenerationId: registry.runtimeGenerationId },
+        });
+      } finally {
+        await mcp.close();
+      }
+    } finally {
+      await session.close();
+    }
+  } finally {
+    await rm(copied.workspaceRoot, { force: true, recursive: true });
+  }
+}, 30_000);
+
 test('rejects MCP admission until a deferred public prepared-config restart has relisted', async () => {
   const copied = await copyExample();
   try {

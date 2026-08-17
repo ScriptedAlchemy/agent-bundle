@@ -1153,9 +1153,15 @@ it('prepares private activation without public visibility, commits synchronously
       binding: { registryRevision: 2, sessionRevision: 2 },
       state: 'ready',
     });
-    expect(events).toEqual([]);
+    expect(events).toEqual([{
+      mcpRegistryRevision: before.binding.registryRevision + 1,
+      mcpSessionId: before.binding.sessionId,
+      mcpSessionRevision: before.binding.sessionRevision + 1,
+      runtimeGenerationId: 'g2',
+      type: 'runtime.mcp.restarting',
+    }]);
     committed.publish();
-    expect(events.map((event) => event.type)).toContain('runtime.mcp.ready');
+    expect(events.map((event) => event.type)).toEqual(['runtime.mcp.restarting', 'runtime.mcp.ready']);
     release.resolve();
     expect(await running).toMatchObject({
       sessionRevision: before.binding.sessionRevision,
@@ -1172,6 +1178,94 @@ it('prepares private activation without public visibility, commits synchronously
     expect(session.snapshot().binding.serverDigest).toBe('server-g1');
   } finally {
     await registry.close().catch(() => undefined);
+    await fixture.close();
+  }
+});
+
+it('emits an activation restart with the replacement binding before publishing its revocation', async () => {
+  const fixture = await createGenerationStore();
+  const events: DevRuntimeEventInput[] = [];
+  const registry = createRegistry({ events, store: fixture.store });
+  try {
+    await fixture.commit('g1');
+    await fixture.commit('g2');
+    const session = await registry.open({ serverName: 'timeline', target: 'portable' });
+    const before = session.snapshot();
+    const publications: string[] = [];
+    registry.subscribe({ afterSequence: 0 }, (message) => {
+      if ('sequence' in message) publications.push(message.action);
+    });
+
+    const prepared = await registry.prepareActivationReconcile(registryInput({
+      definitionDigest: 'definition-2',
+      runtimeGenerationId: 'g2',
+    }));
+    expect(events).toEqual([]);
+    const committed = registry.commitActivationReconcile(prepared);
+
+    expect(events).toEqual([{
+      mcpRegistryRevision: before.binding.registryRevision + 1,
+      mcpSessionId: before.binding.sessionId,
+      mcpSessionRevision: before.binding.sessionRevision + 1,
+      runtimeGenerationId: 'g2',
+      type: 'runtime.mcp.restarting',
+    }]);
+    expect(publications).toEqual([]);
+    committed.publish();
+    committed.publish();
+    expect(publications).toEqual(['sessions-restarted']);
+    expect(events.map((event) => event.type)).toEqual(['runtime.mcp.restarting', 'runtime.mcp.ready']);
+  } finally {
+    await registry.close().catch(() => undefined);
+    await fixture.close();
+  }
+});
+
+it('does not emit activation restarts for opening, implementation-only commits, failed staging, or a close race', async () => {
+  const fixture = await createGenerationStore();
+  const events: DevRuntimeEventInput[] = [];
+  const registry = createRegistry({ events, store: fixture.store });
+  const failingEvents: DevRuntimeEventInput[] = [];
+  const failing = createRegistry({
+    connector: connectorHarness({ failAfter: 2 }).connector,
+    events: failingEvents,
+    store: fixture.store,
+  });
+  try {
+    await fixture.commit('g1');
+    await fixture.commit('g2');
+    await fixture.commit('g3');
+    await registry.open({ serverName: 'timeline', target: 'portable' });
+    expect(events).toEqual([]);
+
+    const implementation = registry.commitActivationReconcile(await registry.prepareActivationReconcile(registryInput({
+      runtimeGenerationId: 'g2',
+      serverDigest: 'implementation-only',
+    })));
+    expect(events).toEqual([]);
+    implementation.publish();
+    expect(events).toEqual([]);
+
+    await failing.open({ serverName: 'timeline', target: 'portable' });
+    await expect(failing.prepareActivationReconcile(registryInput({
+      definitionDigest: 'definition-2',
+      runtimeGenerationId: 'g2',
+    }))).rejects.toThrow('fixture connector failed');
+    expect(failingEvents).toEqual([]);
+
+    const prepared = await registry.prepareActivationReconcile(registryInput({
+      definitionDigest: 'definition-2',
+      runtimeGenerationId: 'g3',
+    }));
+    const closing = registry.close();
+    expect(() => registry.commitActivationReconcile(prepared)).toThrow('closed');
+    await closing;
+    expect(events).toEqual([]);
+  } finally {
+    await Promise.all([
+      registry.close().catch(() => undefined),
+      failing.close().catch(() => undefined),
+    ]);
     await fixture.close();
   }
 });

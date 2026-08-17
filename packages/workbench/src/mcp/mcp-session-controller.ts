@@ -206,6 +206,11 @@ interface AttachedApp {
   transportClosePromise?: Promise<void>;
 }
 
+interface RuntimeSessionAdoption {
+  readonly binding: Extract<McpSessionControllerBinding, { readonly kind: 'runtime' }>;
+  readonly promise: Promise<McpBrowserSessionModel>;
+}
+
 type ControllerState = 'closed' | 'closing' | 'failed' | 'idle' | 'opening' | 'ready' | 'restarting';
 
 type TraceMessage = McpSessionTraceEntry | McpSessionTraceReplayGap;
@@ -280,6 +285,12 @@ const sameRuntimeBinding = (left: DevRuntimeMcpAppRunBinding, right: DevRuntimeM
   left.definitionDigest === right.definitionDigest && left.registryRevision === right.registryRevision &&
   left.serverDigest === right.serverDigest && left.serverName === right.serverName && left.sessionId === right.sessionId &&
   left.sessionRevision === right.sessionRevision && left.target === right.target && left.transportDigest === right.transportDigest;
+
+const runtimeControllerBinding = (value: unknown): Extract<McpSessionControllerBinding, { readonly kind: 'runtime' }> | undefined => {
+  if (!isRuntimeSession(value)) return undefined;
+  const binding = controllerBinding(Object.freeze({ binding: value.binding, kind: 'runtime' as const, session: value }));
+  return binding?.kind === 'runtime' ? binding : undefined;
+};
 
 const controllerBinding = (value: unknown): McpSessionControllerBinding | undefined => {
   const artifact = artifactBindingSnapshot(value);
@@ -615,6 +626,7 @@ export class McpSessionController {
   #generation = 0;
   #model = createMcpBrowserSessionModel('mcp-session-controller');
   #requests = new Map<string, ActiveRequest>();
+  #runtimeAdoption: RuntimeSessionAdoption | undefined;
   #traceRefresh: TraceRefresh | undefined;
   #session: McpRouteSession | undefined;
   #state: ControllerState = 'idle';
@@ -792,6 +804,67 @@ export class McpSessionController {
       if (this.#current(generation)) throw await this.#failSession(generation, this.#client, this.#transport, 'mcp.restart.failed', reason);
       throw reason;
     }
+  }
+
+  adoptRuntimeSession(session: McpRouteRuntimeSession): Promise<McpBrowserSessionModel> {
+    const next = runtimeControllerBinding(session);
+    if (next === undefined || next.session.state !== 'ready') {
+      return Promise.reject(new McpSessionControllerError('Runtime MCP session adoption requires a current ready runtime session snapshot.'));
+    }
+    const pending = this.#runtimeAdoption;
+    if (pending !== undefined) {
+      if (sameRuntimeBinding(pending.binding.binding, next.binding)) return pending.promise;
+      return Promise.reject(new McpSessionControllerError('MCP runtime session adoption is already running for a different session authority.'));
+    }
+    try {
+      this.#assertReady('restart');
+    } catch (reason) {
+      return Promise.reject(reason);
+    }
+    const previous = this.#binding;
+    if (previous?.kind !== 'runtime' || previous.session.state !== 'ready') {
+      return Promise.reject(new McpSessionControllerError('MCP session controller does not have a ready runtime session to adopt.'));
+    }
+    if (
+      next.binding.sessionId !== previous.binding.sessionId ||
+      next.binding.serverName !== previous.binding.serverName ||
+      next.binding.target !== previous.binding.target ||
+      next.binding.sessionRevision <= previous.binding.sessionRevision ||
+      next.binding.registryRevision <= previous.binding.registryRevision
+    ) return Promise.reject(new McpSessionControllerError('Runtime MCP session adoption does not advance the current stable session authority.'));
+
+    const generation = ++this.#generation;
+    this.#state = 'restarting';
+    this.#publish({ type: 'restart' });
+    const promise = (async (): Promise<McpBrowserSessionModel> => {
+      try {
+        const attachment = this.#attachedApp ?? this.#attachingApp;
+        const failures = await this.#drainAttachedRuntimeWork(attachment);
+        if (failures.length > 0) throw new McpSessionControllerCloseError(failures);
+        if (!this.#runtimeCurrent(previous, generation)) return this.#model;
+        this.#binding = next;
+        this.#publish(
+          { binding: modelBindingFor(next), type: 'binding' },
+          { connection: connectionFor(next.session.connection), type: 'connection' },
+        );
+        this.#state = 'ready';
+        this.#publish({ type: 'ready' });
+        return this.#model;
+      } catch (reason) {
+        if (this.#runtimeCurrent(previous, generation)) {
+          this.#state = 'ready';
+          this.#publish({ type: 'ready' });
+        }
+        throw reason;
+      }
+    })();
+    const adoption = { binding: next, promise };
+    this.#runtimeAdoption = adoption;
+    void promise.then(
+      () => { if (this.#runtimeAdoption === adoption) this.#runtimeAdoption = undefined; },
+      () => { if (this.#runtimeAdoption === adoption) this.#runtimeAdoption = undefined; },
+    );
+    return promise;
   }
 
   async invoke(input: McpSessionControllerRequest): Promise<unknown> {

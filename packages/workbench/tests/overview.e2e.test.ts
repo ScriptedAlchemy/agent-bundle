@@ -650,6 +650,367 @@ e2e('keeps runtime Inspector routing constrained after direct MCP navigation fro
   }
 });
 
+e2e('restarts the real Runtime MCP App session when definition or transport authority changes', { timeout: 150_000 }, async ({ page }) => {
+  const fixture = await startRuntimePlaygroundFixture();
+  const pageErrors: Error[] = [];
+  const artifactMcpSessionRequests: string[] = [];
+  const projectEventStreams: string[] = [];
+  const runtimeMcpSessionRequests: string[] = [];
+  const runtimeAppRequests: string[] = [];
+  const runtimeRunRequests: string[] = [];
+  const runtimeAppCreates: Array<{ readonly body: unknown; response?: unknown; readonly sessionToken: string | undefined }> = [];
+  const runtimeRuns: Array<{ readonly body: unknown; response?: unknown }> = [];
+  let runtimeAppResponseCount = 0;
+  const runtimeAppResponseWaiters = new Map<number, () => void>();
+  const awaitRuntimeAppResponse = (count: number): Promise<void> => {
+    if (runtimeAppResponseCount >= count) return Promise.resolve();
+    return new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        if (runtimeAppResponseWaiters.get(count) !== settle) return;
+        runtimeAppResponseWaiters.delete(count);
+        reject(new Error(`Runtime App create ${String(count)} did not return a response.`));
+      }, 15_000);
+      const settle = () => {
+        clearTimeout(timeout);
+        runtimeAppResponseWaiters.delete(count);
+        resolve();
+      };
+      runtimeAppResponseWaiters.set(count, settle);
+    });
+  };
+  const runtimeEvents: Array<Readonly<{
+    readonly payload: Readonly<{
+      readonly details?: Readonly<Record<string, unknown>>;
+      readonly mcpRegistryRevision?: number;
+      readonly mcpSessionId?: string;
+      readonly mcpSessionRevision?: number;
+      readonly runtimeGenerationId?: string;
+      readonly type?: string;
+    }>;
+    readonly type?: string;
+  }>> = [];
+  await page.exposeBinding('__recordRuntimeRestartEvent', (_source, payload: unknown) => {
+    if (typeof payload !== 'string') return;
+    try {
+      const parsed = JSON.parse(payload) as Readonly<{
+        readonly payload?: unknown;
+        readonly type?: unknown;
+      }>;
+      if (parsed.type !== 'runtime.event' || parsed.payload === null || typeof parsed.payload !== 'object') return;
+      runtimeEvents.push(parsed as (typeof runtimeEvents)[number]);
+    } catch {
+      // The real EventSource listener remains authoritative; malformed test observation is ignored.
+    }
+  });
+  await page.addInitScript(() => {
+    const addEventListener = EventSource.prototype.addEventListener;
+    Object.defineProperty(EventSource.prototype, 'addEventListener', { value: function (
+      type: string,
+      listener: EventListenerOrEventListenerObject,
+      options?: boolean | AddEventListenerOptions,
+    ): void {
+      const wrapped = function (this: EventSource, event: Event): void {
+        const data = (event as Event & Readonly<{ readonly data?: unknown }>).data;
+        if (type === 'runtime.event' && typeof data === 'string') {
+          const record = (globalThis as typeof globalThis & {
+            __recordRuntimeRestartEvent?: (payload: string) => Promise<void>;
+          }).__recordRuntimeRestartEvent;
+          if (record !== undefined) void record(data);
+        }
+        if (typeof listener === 'function') listener.call(this, event);
+        else listener.handleEvent(event);
+      };
+      Reflect.apply(addEventListener, this, [type, wrapped, options]);
+    } });
+  });
+  page.on('pageerror', (error) => pageErrors.push(error));
+  page.on('request', (request) => {
+    const url = new URL(request.url());
+    if (url.origin !== fixture.url) return;
+    if (url.pathname.startsWith('/api/mcp/sessions')) artifactMcpSessionRequests.push(`${request.method()} ${url.pathname}`);
+    if (url.pathname === '/api/project/events') projectEventStreams.push(`${request.method()} ${url.pathname}`);
+    if (url.pathname.startsWith('/api/runtime/mcp/sessions')) runtimeMcpSessionRequests.push(`${request.method()} ${url.pathname}`);
+    if (url.pathname === '/api/runtime/runs') {
+      runtimeRunRequests.push(`${request.method()} ${url.pathname}`);
+      if (request.method() === 'POST') runtimeRuns.push({ body: requestBody(request.postData()) });
+    }
+    if (!url.pathname.startsWith('/api/runtime/apps')) return;
+    runtimeAppRequests.push(`${request.method()} ${url.pathname}`);
+    if (request.method() === 'POST' && url.pathname === '/api/runtime/apps') {
+      runtimeAppCreates.push({ body: requestBody(request.postData()), sessionToken: request.headers()['x-agent-bundle-session'] });
+    }
+  });
+  page.on('response', (response) => {
+    const url = new URL(response.url());
+    if (url.origin !== fixture.url || response.request().method() !== 'POST' || url.pathname !== '/api/runtime/apps') return;
+    const index = runtimeAppCreates.findIndex((candidate) => candidate.response === undefined && JSON.stringify(candidate.body) === response.request().postData());
+    if (index < 0) return;
+    void response.json().then((body: unknown) => {
+      runtimeAppCreates[index]!.response = body;
+      runtimeAppResponseCount += 1;
+      for (const [count, settle] of runtimeAppResponseWaiters) {
+        if (runtimeAppResponseCount >= count) settle();
+      }
+    }).catch(() => undefined);
+  });
+  page.on('response', (response) => {
+    const url = new URL(response.url());
+    if (url.origin !== fixture.url || response.request().method() !== 'POST' || url.pathname !== '/api/runtime/runs') return;
+    const index = runtimeRuns.findIndex((candidate) => candidate.response === undefined && JSON.stringify(candidate.body) === response.request().postData());
+    if (index < 0) return;
+    void response.json().then((body: unknown) => { runtimeRuns[index]!.response = body; }).catch(() => undefined);
+  });
+  type Binding = Readonly<{
+    readonly definitionDigest: string;
+    readonly id: string;
+    readonly registryRevision: number;
+    readonly runVector: Readonly<{ readonly runtimeGenerationId: string; readonly sourceRevision: string }>;
+    readonly sessionId: string;
+    readonly sessionRevision: number;
+    readonly transportDigest: string;
+  }>;
+  type RunOutcome = Readonly<{
+    readonly diagnostics: readonly Readonly<{ readonly code: string; readonly message: string; readonly phase: string; readonly severity: string }>[];
+    readonly id: string;
+    readonly status: 'failed' | 'succeeded';
+    readonly vector: Readonly<{ readonly runtimeGenerationId: string }>;
+  }>;
+  const binding = (index: number): Binding => {
+    const body = runtimeAppCreates[index]?.response as { readonly preview?: { readonly binding?: Binding } } | undefined;
+    const value = body?.preview?.binding;
+    if (value === undefined) throw new Error(`Runtime App create ${String(index)} omitted its binding.`);
+    return value;
+  };
+  const eventsSince = (index: number, type: string, session: Binding): readonly (typeof runtimeEvents)[number][] => runtimeEvents.slice(index).filter((event) =>
+    event.payload.type === type && event.payload.mcpSessionId === session.sessionId,
+  );
+  type RuntimeStatus = Readonly<{
+    readonly activeVector?: Readonly<{
+      readonly providerSessionId: string;
+      readonly runtimeGenerationId: string;
+    }>;
+    readonly state: string;
+  }>;
+  const readRuntimeStatus = async (): Promise<RuntimeStatus> => page.evaluate(async (origin) => {
+    const response = await fetch(new URL('/api/runtime/status', origin));
+    if (!response.ok) throw new Error(`Runtime status failed with ${String(response.status)}.`);
+    const body = await response.json() as Readonly<{ readonly status?: RuntimeStatus }>;
+    if (body.status === undefined) throw new Error('Runtime status is unavailable.');
+    return body.status;
+  }, fixture.url);
+  const run = async (runCount: number, previewCreateCount?: number): Promise<Readonly<{ readonly binding?: Binding; readonly run: RunOutcome }>> => {
+    const initialAppCreateResponse = runCount === 1 && previewCreateCount !== undefined
+      ? awaitRuntimeAppResponse(previewCreateCount)
+      : undefined;
+    await expect(page.getByRole('button', { name: 'Run', exact: true })).toBeEnabled({ timeout: 15_000 });
+    await page.getByRole('button', { name: 'Run', exact: true }).click();
+    const confirmation = page.getByRole('dialog', { name: 'Run mutable runtime surface?' }).getByRole('button', { name: 'Confirm' });
+    if (await confirmation.count() === 1) await confirmation.click();
+    await expect.poll(() => runtimeRunRequests.filter((request) => request === 'POST /api/runtime/runs').length, { timeout: 15_000 }).toBe(runCount);
+    await expect.poll(() => runtimeRuns.filter((candidate) => candidate.response !== undefined).length, { timeout: 15_000 }).toBe(runCount);
+    const response = runtimeRuns[runCount - 1]?.response as { readonly run?: RunOutcome } | undefined;
+    const outcome = response?.run;
+    if (outcome === undefined || typeof outcome.id !== 'string' || (outcome.status !== 'succeeded' && outcome.status !== 'failed')) {
+      throw new Error('Explicit Runtime run omitted a canonical history result.');
+    }
+    let appCreateResponse = initialAppCreateResponse;
+    if (runCount > 1) {
+      await expect.poll(() => runtimeAppCreates.length, { timeout: 1_000 }).toBe((previewCreateCount ?? 3) - 1);
+      const runId = outcome.id;
+      const history = page.locator(`[data-runtime-run-id="${runId}"]`);
+      await expect(history).toHaveCount(1, { timeout: 15_000 });
+      if (outcome.status === 'succeeded' && previewCreateCount !== undefined) appCreateResponse = awaitRuntimeAppResponse(previewCreateCount);
+      await history.getByRole('button').first().click();
+      await expect(history.getByRole('button').first()).toHaveAttribute('aria-pressed', 'true');
+    }
+    if (appCreateResponse === undefined) return Object.freeze({ run: outcome });
+    await appCreateResponse;
+    if (previewCreateCount === undefined) throw new Error('Runtime App preview response lacks a create count.');
+    expect(runtimeAppCreates).toHaveLength(previewCreateCount);
+    expect(runtimeAppCreates.filter((candidate) => candidate.response !== undefined)).toHaveLength(previewCreateCount);
+    await page.locator('.runtime-stage .mcp-app-preview iframe').waitFor({ state: 'attached', timeout: 15_000 });
+    expect(await page.locator('.runtime-stage .mcp-app-preview iframe').count()).toBe(1);
+    return Object.freeze({ binding: binding(previewCreateCount - 1), run: outcome });
+  };
+  try {
+    await page.goto(`${fixture.url}#runtime`);
+    await expect(page.getByRole('heading', { name: 'Runtime Playground' })).toBeVisible({ timeout: browserTimeout });
+    const runtimeIdentity = page.locator('[data-runtime-provider-session]');
+    await expect(runtimeIdentity).toHaveAttribute('data-runtime-hmr-ready', 'true', { timeout: 15_000 });
+    await page.getByLabel('Runtime surface').selectOption('mcp.render_edit_timeline');
+    await page.getByLabel('Runtime target').selectOption('portable');
+    await page.getByRole('radio', { name: 'Raw JSON' }).check();
+    await page.locator('#runtime-input-raw').fill('{}');
+
+    const initialResult = await run(1, 1);
+    const initial = initialResult.binding;
+    if (initial === undefined) throw new Error('Initial Runtime run did not create an App binding.');
+    expect(runtimeAppCreates[0]?.body).toEqual({
+      expectedGenerationId: initial.runVector.runtimeGenerationId,
+      profileId: 'portable',
+      runId: expect.any(String),
+    });
+    const resourceUri = 'ui://rsc-agent-runtime/edit-timeline-v1.html';
+    const resourceOperationPath = `/api/runtime/apps/${encodeURIComponent(initial.id)}/operations`;
+    const initialSessionToken = runtimeAppCreates[0]?.sessionToken;
+    if (initialSessionToken === undefined) throw new Error('Initial Runtime App create omitted the foreground session token.');
+    const initialProviderSession = await runtimeIdentity.getAttribute('data-runtime-provider-session');
+    if (initialProviderSession === null) throw new Error('Runtime identity omitted the provider session.');
+    const definitionSource = await readFile(fixture.definitionSource, 'utf8');
+    const changedDefinitionDescription = `Render the timeline after definition restart ${Math.random().toString(36).slice(2)}.`;
+    const changedDefinition = definitionSource.replace(
+      "description: 'Render the interactive file edit timeline.'",
+      `description: '${changedDefinitionDescription}'`,
+    );
+    expect(changedDefinition).not.toBe(definitionSource);
+    const definitionEventStart = runtimeEvents.length;
+    await writeFile(fixture.definitionSource, changedDefinition);
+    await expect.poll(() => eventsSince(definitionEventStart, 'runtime.mcp.restarting', initial), { timeout: 15_000 }).not.toEqual([]);
+    await expect.poll(() => eventsSince(definitionEventStart, 'runtime.mcp.ready', initial), { timeout: 15_000 }).not.toEqual([]);
+    expect(runtimeEvents.findIndex((event, index) => index >= definitionEventStart && event.payload.type === 'runtime.mcp.restarting')).toBeLessThan(
+      runtimeEvents.findIndex((event, index) => index >= definitionEventStart && event.payload.type === 'runtime.mcp.ready'),
+    );
+    await expect.poll(() => runtimeEvents.slice(definitionEventStart).find((event) =>
+      event.payload.type === 'runtime.app.updated' && event.payload.details?.bindingId === initial.id &&
+      event.payload.details.reason === 'session-restarted' && event.payload.details.state === 'revoked'), { timeout: 15_000 }).toBeDefined();
+    await page.locator('.runtime-stage .mcp-app-preview iframe').waitFor({ state: 'detached', timeout: 15_000 });
+    expect(await page.locator('.runtime-stage .mcp-app-preview iframe').count()).toBe(0);
+    expect(runtimeAppRequests.filter((request) => request === `DELETE /api/runtime/apps/${encodeURIComponent(initial.id)}`)).toEqual([]);
+    const revokedInitialOperation = await page.evaluate(async ({ body, path, sessionToken }) => {
+      const response = await fetch(path, {
+        body: JSON.stringify(body),
+        credentials: 'same-origin',
+        headers: { 'content-type': 'application/json', 'x-agent-bundle-session': sessionToken },
+        method: 'POST',
+      });
+      return Object.freeze({ body: await response.json(), status: response.status });
+    }, { body: { kind: 'resources/read', uri: resourceUri }, path: resourceOperationPath, sessionToken: initialSessionToken });
+    expect(revokedInitialOperation).toEqual({
+      body: { diagnostic: { code: 'AB8022', message: 'Runtime MCP App preview was revoked.' } },
+      status: 410,
+    });
+    await expect.poll(() => runtimeAppCreates.length, { timeout: 1_000 }).toBe(1);
+    const definitionReady = eventsSince(definitionEventStart, 'runtime.mcp.ready', initial).at(-1);
+    expect(definitionReady?.payload.mcpSessionRevision).toBeGreaterThan(initial.sessionRevision);
+    expect(definitionReady?.payload.mcpRegistryRevision).toBeGreaterThan(initial.registryRevision);
+
+    const definitionResult = await run(2, 2);
+    const definitionRun = definitionResult.binding;
+    if (definitionRun === undefined) throw new Error('Definition Runtime run did not create an App binding.');
+    expect(definitionRun.id).not.toBe(initial.id);
+    expect(definitionRun.sessionId).toBe(initial.sessionId);
+    expect(definitionRun.sessionRevision).toBeGreaterThan(initial.sessionRevision);
+    expect(definitionRun.registryRevision).toBeGreaterThan(initial.registryRevision);
+    expect(definitionRun.runVector.runtimeGenerationId).not.toBe(initial.runVector.runtimeGenerationId);
+    expect(definitionRun.runVector.sourceRevision).not.toBe(initial.runVector.sourceRevision);
+    expect(definitionRun.definitionDigest).not.toBe(initial.definitionDigest);
+    expect(definitionRun.transportDigest).toBe(initial.transportDigest);
+    expect(await runtimeIdentity.getAttribute('data-runtime-provider-session')).toBe(initialProviderSession);
+
+    const configSource = await readFile(fixture.configSource, 'utf8');
+    const transportMarker = `transport-restart-${Math.random().toString(36).slice(2)}`;
+    const changedTransport = configSource.replace(
+      "entry: './src/mcp/stdio.ts',",
+      `entry: './src/mcp/stdio.ts',\n        env: { TIMELINE_TRANSPORT_SENTINEL: '${transportMarker}' },`,
+    );
+    expect(changedTransport).not.toBe(configSource);
+    const transportEventStart = runtimeEvents.length;
+    await writeFile(fixture.configSource, changedTransport);
+    await expect.poll(() => eventsSince(transportEventStart, 'runtime.mcp.restarting', definitionRun), { timeout: 15_000 }).not.toEqual([]);
+    await expect.poll(() => eventsSince(transportEventStart, 'runtime.mcp.ready', definitionRun), { timeout: 15_000 }).not.toEqual([]);
+    const transportRestartEvents = eventsSince(transportEventStart, 'runtime.mcp.restarting', definitionRun);
+    const transportReadyEvents = eventsSince(transportEventStart, 'runtime.mcp.ready', definitionRun);
+    expect(transportRestartEvents).toHaveLength(1);
+    expect(transportReadyEvents).toHaveLength(1);
+    expect(runtimeEvents.indexOf(transportRestartEvents[0]!)).toBeLessThan(runtimeEvents.indexOf(transportReadyEvents[0]!));
+    await expect.poll(() => runtimeEvents.slice(transportEventStart).find((event) =>
+      event.payload.type === 'runtime.app.updated' && event.payload.details?.bindingId === definitionRun.id &&
+      event.payload.details.reason === 'session-restarted' && event.payload.details.state === 'revoked'), { timeout: 15_000 }).toBeDefined();
+    await page.locator('.runtime-stage .mcp-app-preview iframe').waitFor({ state: 'detached', timeout: 15_000 });
+    expect(await page.locator('.runtime-stage .mcp-app-preview iframe').count()).toBe(0);
+    expect(runtimeAppRequests.filter((request) => request.startsWith('DELETE /api/runtime/apps/'))).toEqual([]);
+    await expect.poll(() => runtimeAppCreates.length, { timeout: 1_000 }).toBe(2);
+    const transportReady = transportReadyEvents[0];
+    expect(transportReady?.payload.mcpSessionRevision).toBeGreaterThan(definitionRun.sessionRevision);
+    expect(transportReady?.payload.mcpRegistryRevision).toBeGreaterThan(definitionRun.registryRevision);
+
+    const runButton = page.getByRole('button', { name: 'Run', exact: true });
+    await expect.poll(async () => {
+      const status = await readRuntimeStatus();
+      const latestActivation = runtimeEvents.slice(transportEventStart).filter((event) =>
+        event.payload.type === 'runtime.generation.activated' && typeof event.payload.runtimeGenerationId === 'string'
+      ).at(-1);
+      const activatedGeneration = latestActivation?.payload.runtimeGenerationId;
+      const statusGeneration = status.activeVector?.runtimeGenerationId;
+      const uiGeneration = await runtimeIdentity.getAttribute('data-runtime-generation');
+      return (await runButton.isEnabled()) && statusGeneration !== undefined && statusGeneration === uiGeneration &&
+        (activatedGeneration === undefined || activatedGeneration === statusGeneration);
+    }, { timeout: 15_000 }).toBe(true);
+    const authoritativeStatus = await readRuntimeStatus();
+    const activeGenerationId = authoritativeStatus.activeVector?.runtimeGenerationId;
+    if (typeof activeGenerationId !== 'string') throw new Error('Transport restart did not expose an active runtime generation.');
+    expect(authoritativeStatus.state).toBe('active');
+    expect(authoritativeStatus.activeVector?.providerSessionId).toBe(initialProviderSession);
+    expect(await runtimeIdentity.getAttribute('data-runtime-generation')).toBe(activeGenerationId);
+    await expect(runButton).toBeEnabled();
+
+    const firstTransportResult = await run(3, 3);
+    let transportRun: Binding | undefined = firstTransportResult.binding;
+    if (firstTransportResult.run.status === 'failed') {
+      const conflict = firstTransportResult.run.diagnostics.find((diagnostic) => diagnostic.phase === 'rsc-render');
+      expect(conflict?.code).toBe('AB8203');
+      expect(conflict?.message).toBe(`Expected runtime generation ${JSON.stringify(firstTransportResult.run.vector.runtimeGenerationId)} is not active.`);
+      await expect.poll(() => runtimeAppCreates.length, { timeout: 1_000 }).toBe(2);
+      expect(runtimeRunRequests.filter((request) => request === 'POST /api/runtime/runs')).toHaveLength(3);
+      await expect(page.locator('#runtime-input-raw')).toHaveValue('{}');
+      await expect(runButton).toBeEnabled();
+      const failedGenerationId = firstTransportResult.run.vector.runtimeGenerationId;
+      let stableSnapshots = 0;
+      let stableGenerationId: string | undefined;
+      await expect.poll(async () => {
+        const status = await readRuntimeStatus();
+        const generationId = status.activeVector?.runtimeGenerationId;
+        const uiGeneration = await runtimeIdentity.getAttribute('data-runtime-generation');
+        const runEnabled = await runButton.isEnabled();
+        if (!runEnabled || generationId === undefined || uiGeneration !== generationId) {
+          stableSnapshots = 0;
+          stableGenerationId = undefined;
+          return 0;
+        }
+        stableSnapshots = stableGenerationId === generationId ? stableSnapshots + 1 : 1;
+        stableGenerationId = generationId;
+        return stableSnapshots;
+      }, { interval: 200, timeout: 15_000 }).toBeGreaterThanOrEqual(3);
+      expect(stableGenerationId).toBe(failedGenerationId);
+      const retryResult = await run(4, 3);
+      expect(retryResult.run.status).toBe('succeeded');
+      transportRun = retryResult.binding;
+    }
+    if (transportRun === undefined) throw new Error('Transport Runtime run did not create an App binding.');
+    expect(transportRun.id).not.toBe(definitionRun.id);
+    expect(transportRun.sessionId).toBe(initial.sessionId);
+    expect(transportRun.sessionRevision).toBeGreaterThan(definitionRun.sessionRevision);
+    expect(transportRun.registryRevision).toBeGreaterThan(definitionRun.registryRevision);
+    await expect.poll(async () => {
+      const status = await readRuntimeStatus();
+      return status.activeVector?.runtimeGenerationId === transportRun.runVector.runtimeGenerationId &&
+        await runtimeIdentity.getAttribute('data-runtime-generation') === transportRun.runVector.runtimeGenerationId;
+    }, { timeout: 15_000 }).toBe(true);
+    const finalRuntimeStatus = await readRuntimeStatus();
+    expect(transportRun.runVector.runtimeGenerationId).toBe(finalRuntimeStatus.activeVector?.runtimeGenerationId);
+    expect(transportRun.definitionDigest).toBe(definitionRun.definitionDigest);
+    expect(transportRun.transportDigest).not.toBe(definitionRun.transportDigest);
+    expect(await runtimeIdentity.getAttribute('data-runtime-provider-session')).toBe(initialProviderSession);
+    expect(artifactMcpSessionRequests).toEqual([]);
+    expect(runtimeMcpSessionRequests.filter((request) => request === 'POST /api/runtime/mcp/sessions')).toEqual([]);
+    expect(projectEventStreams).toEqual(['GET /api/project/events']);
+    expect(await page.locator('.runtime-stage .mcp-app-preview iframe').count()).toBe(1);
+    expect(pageErrors).toEqual([]);
+  } finally {
+    await fixture.close();
+  }
+});
+
 e2e('opens one real epoch MCP session and keeps its playground operations responsive', { timeout: 90_000 }, async ({ page }) => {
   await buildWorkbench();
   let project: Awaited<ReturnType<typeof createProjectFixture>> | undefined;

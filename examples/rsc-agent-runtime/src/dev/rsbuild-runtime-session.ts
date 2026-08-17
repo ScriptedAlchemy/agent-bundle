@@ -1335,14 +1335,16 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
     const registry = this.#mcpRegistry.snapshot();
     const metadata = generation.manifest.metadata;
     if (
-      this.#active?.id !== generation.id || registry?.runtimeGenerationId !== generation.id ||
-      registry.definitionDigest !== metadata.definitionDigest || registry.transportDigest !== metadata.transportDigest
+      this.#active?.id !== generation.id || registry?.runtimeGenerationId !== generation.id
     ) {
       throw new DevRuntimeGenerationConflictError(generation.id, this.#active?.id);
     }
     const toolName = invocation.surface.id.slice('mcp.'.length);
     const matches = registry.servers.flatMap((descriptor) => {
-      if (descriptor.target !== invocation.request.target || descriptor.definitionDigest !== metadata.definitionDigest || descriptor.transportDigest !== metadata.transportDigest) return [];
+      if (
+        descriptor.target !== invocation.request.target || descriptor.definitionDigest !== registry.definitionDigest ||
+        descriptor.transportDigest !== registry.transportDigest || descriptor.serverDigest !== metadata.serverDigest
+      ) return [];
       const tool = descriptor.tools.find((candidate) => candidate.name === toolName);
       const toolMeta = tool?._meta;
       const outputTemplate = toolMeta === null || typeof toolMeta !== 'object' || Array.isArray(toolMeta)
@@ -1372,10 +1374,10 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
     const registry = this.#mcpRegistry.snapshot();
     if (
       registry === undefined || this.#active?.id !== generation.id || registry.runtimeGenerationId !== generation.id ||
-      registry.definitionDigest !== generation.manifest.metadata.definitionDigest || registry.transportDigest !== generation.manifest.metadata.transportDigest ||
+      link.descriptor.definitionDigest !== registry.definitionDigest || link.descriptor.transportDigest !== registry.transportDigest ||
       !registry.servers.some((descriptor) => descriptor.name === link.descriptor.name && descriptor.target === link.descriptor.target &&
         descriptor.definitionDigest === link.descriptor.definitionDigest && descriptor.serverDigest === link.descriptor.serverDigest &&
-        descriptor.transportDigest === link.descriptor.transportDigest)
+        descriptor.transportDigest === link.descriptor.transportDigest && descriptor.serverDigest === generation.manifest.metadata.serverDigest)
     ) {
       throw new DevRuntimeGenerationConflictError(generation.id, this.#active?.id);
     }
@@ -2293,12 +2295,11 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
     if (
       registry === undefined || binding === undefined || this.#active?.id !== generation.id ||
       registry.runtimeGenerationId !== generation.id ||
-      registry.definitionDigest !== generation.manifest.metadata.definitionDigest ||
-      registry.transportDigest !== generation.manifest.metadata.transportDigest ||
       binding.sessionId !== execution.sessionId || binding.registryRevision !== registry.registryRevision ||
       !registry.servers.some((descriptor) => descriptor.name === execution.descriptor.name && descriptor.target === execution.descriptor.target &&
         descriptor.definitionDigest === execution.descriptor.definitionDigest && descriptor.serverDigest === execution.descriptor.serverDigest &&
-        descriptor.transportDigest === execution.descriptor.transportDigest) ||
+        descriptor.transportDigest === execution.descriptor.transportDigest && descriptor.definitionDigest === registry.definitionDigest &&
+        descriptor.transportDigest === registry.transportDigest && descriptor.serverDigest === generation.manifest.metadata.serverDigest) ||
       binding.definitionDigest !== execution.descriptor.definitionDigest || binding.serverDigest !== execution.descriptor.serverDigest ||
       binding.serverName !== execution.descriptor.name || binding.target !== execution.descriptor.target ||
       binding.transportDigest !== execution.descriptor.transportDigest

@@ -18,6 +18,7 @@ export interface RuntimePlaygroundFixture {
   readonly appStyles: string;
   readonly closed: Promise<void>;
   readonly configSource: string;
+  readonly definitionSource: string;
   readonly root: string;
   readonly serverComponentSource: string;
   readonly url: string;
@@ -101,6 +102,7 @@ export const startRuntimePlaygroundFixture = async (): Promise<RuntimePlayground
     close,
     closed: closedPromise,
     configSource: join(root, 'agent-bundle.config.ts'),
+    definitionSource: join(root, 'src', 'definition.ts'),
     openRuntimeClientSurface,
     root,
     serverComponentSource: join(root, 'src', 'rsc', 'components.tsx'),

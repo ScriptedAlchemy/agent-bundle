@@ -673,6 +673,186 @@ it('drains an old runtime attachment across restart without publishing its stale
   await old.close();
 });
 
+it('adopts an authoritative higher runtime session revision without reopening the stable session', async () => {
+  let runtimeRouteCalls = 0;
+  const controller = createMcpSessionController({
+    clientFactory: fakeClient,
+    routes: {
+      catalog: async () => ({ prompts: [], resourceTemplates: [], resources: [], tools: [] }),
+      closeRuntime: async () => { runtimeRouteCalls += 1; },
+      config: async () => ({}),
+      executeRuntime: async () => { runtimeRouteCalls += 1; throw new Error('Unexpected runtime operation.'); },
+      openRuntime: async () => { runtimeRouteCalls += 1; throw new Error('Unexpected runtime session open.'); },
+      restart: async () => connection,
+      restartRuntime: async () => { runtimeRouteCalls += 1; throw new Error('Unexpected runtime session restart.'); },
+      stream: async () => new Response(null),
+      trace: async () => ({ entries: [] }),
+    },
+    transportFactory: fakeTransport,
+  });
+
+  await controller.open(runtimeBinding);
+  await controller.adoptRuntimeSession(restartedRuntimeSession);
+
+  expect(controller.model).toMatchObject({
+    binding: { binding: restartedRuntimeSession.binding, kind: 'runtime' },
+    connection: {
+      protocolVersion: restartedRuntimeSession.connection.protocolVersion,
+      serverInfo: restartedRuntimeSession.connection.server,
+    },
+    phase: 'ready',
+  });
+  expect(runtimeRouteCalls).toBe(0);
+  await controller.close();
+});
+
+it('coalesces an exact authoritative adoption while its old App attachment drains', async () => {
+  const appClose = deferred<void>();
+  let appCloses = 0;
+  const controller = createMcpSessionController({
+    appClientFactory: () => ({
+      close: async () => { appCloses += 1; await appClose.promise; },
+      connect: async (transport: Transport) => transport.start(),
+      request: async () => undefined,
+    }) as unknown as Client,
+    clientFactory: fakeClient,
+    routes: {
+      catalog: async () => ({ prompts: [], resourceTemplates: [], resources: [], tools: [] }),
+      closeRuntime: async () => undefined,
+      config: async () => ({}),
+      executeRuntime: async () => { throw new Error('Unexpected runtime operation.'); },
+      openRuntime: async () => { throw new Error('Unexpected runtime session open.'); },
+      restart: async () => connection,
+      restartRuntime: async () => { throw new Error('Unexpected runtime session restart.'); },
+      stream: async () => new Response(null),
+      trace: async () => ({ entries: [] }),
+    },
+    transportFactory: fakeTransport,
+  });
+
+  await controller.open(runtimeBinding);
+  await controller.attachApp(runtimeAppAttachment(async (operation) => runtimeAppResult(operation)));
+  const first = controller.adoptRuntimeSession(restartedRuntimeSession);
+  const second = controller.adoptRuntimeSession(restartedRuntimeSession);
+  expect(second).toBe(first);
+  await eventually(() => appCloses === 1);
+  expect(controller.model.phase).toBe('restarting');
+
+  appClose.resolve();
+  await first;
+  expect(controller.model.binding).toEqual({ binding: restartedRuntimeSession.binding, kind: 'runtime' });
+  await controller.close();
+});
+
+it('retains the old ready runtime authority when attached cleanup rejects, then permits an exact retry', async () => {
+  const cleanupFailure = new Error('attached App cleanup failed');
+  let closeAttempts = 0;
+  const controller = createMcpSessionController({
+    appClientFactory: () => ({
+      close: async () => {
+        closeAttempts += 1;
+        if (closeAttempts === 1) throw cleanupFailure;
+      },
+      connect: async (transport: Transport) => transport.start(),
+      request: async () => undefined,
+    }) as unknown as Client,
+    clientFactory: fakeClient,
+    routes: {
+      catalog: async () => ({ prompts: [], resourceTemplates: [], resources: [], tools: [] }),
+      closeRuntime: async () => undefined,
+      config: async () => ({}),
+      executeRuntime: async () => { throw new Error('Unexpected runtime operation.'); },
+      openRuntime: async () => { throw new Error('Unexpected runtime session open.'); },
+      restart: async () => connection,
+      restartRuntime: async () => { throw new Error('Unexpected runtime session restart.'); },
+      stream: async () => new Response(null),
+      trace: async () => ({ entries: [] }),
+    },
+    transportFactory: fakeTransport,
+  });
+
+  await controller.open(runtimeBinding);
+  await controller.attachApp(runtimeAppAttachment(async (operation) => runtimeAppResult(operation)));
+  await expect(controller.adoptRuntimeSession(restartedRuntimeSession)).rejects.toMatchObject({
+    failures: [{ reason: cleanupFailure, resource: 'app-client' }],
+  });
+  expect(controller.model).toMatchObject({ binding: { binding: runtimeSession.binding, kind: 'runtime' }, phase: 'ready' });
+
+  await controller.adoptRuntimeSession(restartedRuntimeSession);
+  expect(closeAttempts).toBe(2);
+  expect(controller.model).toMatchObject({ binding: { binding: restartedRuntimeSession.binding, kind: 'runtime' }, phase: 'ready' });
+  await controller.close();
+});
+
+it('rejects foreign, equal, and downgraded runtime snapshots without disturbing the ready authority', async () => {
+  const foreign = Object.freeze({
+    ...restartedRuntimeSession,
+    binding: Object.freeze({ ...restartedRuntimeSession.binding, sessionId: 'runtime-session-foreign' }),
+  });
+  const wrongServer = Object.freeze({
+    ...restartedRuntimeSession,
+    binding: Object.freeze({ ...restartedRuntimeSession.binding, serverName: 'foreign-runtime' }),
+  });
+  const controller = createMcpSessionController({
+    clientFactory: fakeClient,
+    routes: {
+      catalog: async () => ({ prompts: [], resourceTemplates: [], resources: [], tools: [] }),
+      closeRuntime: async () => undefined,
+      config: async () => ({}),
+      executeRuntime: async () => { throw new Error('Unexpected runtime operation.'); },
+      openRuntime: async () => { throw new Error('Unexpected runtime session open.'); },
+      restart: async () => connection,
+      restartRuntime: async () => { throw new Error('Unexpected runtime session restart.'); },
+      stream: async () => new Response(null),
+      trace: async () => ({ entries: [] }),
+    },
+    transportFactory: fakeTransport,
+  });
+
+  await controller.open(runtimeBinding);
+  for (const invalid of [foreign, wrongServer, runtimeSession]) {
+    await expect(controller.adoptRuntimeSession(invalid)).rejects.toThrow('does not advance the current stable session authority');
+    expect(controller.model).toMatchObject({ binding: { binding: runtimeSession.binding, kind: 'runtime' }, phase: 'ready' });
+  }
+  await controller.close();
+});
+
+it('fences an in-flight runtime adoption when the controller closes', async () => {
+  const appClose = deferred<void>();
+  const closeCalls: Array<Readonly<{ readonly expectedSessionRevision: number; readonly sessionId: string }>> = [];
+  const controller = createMcpSessionController({
+    appClientFactory: () => ({
+      close: async () => appClose.promise,
+      connect: async (transport: Transport) => transport.start(),
+      request: async () => undefined,
+    }) as unknown as Client,
+    clientFactory: fakeClient,
+    routes: {
+      catalog: async () => ({ prompts: [], resourceTemplates: [], resources: [], tools: [] }),
+      closeRuntime: async (request) => { closeCalls.push(request); },
+      config: async () => ({}),
+      executeRuntime: async () => { throw new Error('Unexpected runtime operation.'); },
+      openRuntime: async () => { throw new Error('Unexpected runtime session open.'); },
+      restart: async () => connection,
+      restartRuntime: async () => { throw new Error('Unexpected runtime session restart.'); },
+      stream: async () => new Response(null),
+      trace: async () => ({ entries: [] }),
+    },
+    transportFactory: fakeTransport,
+  });
+
+  await controller.open(runtimeBinding);
+  await controller.attachApp(runtimeAppAttachment(async (operation) => runtimeAppResult(operation)));
+  const adoption = controller.adoptRuntimeSession(restartedRuntimeSession);
+  const closing = controller.close();
+  appClose.resolve();
+  await Promise.all([adoption, closing]);
+
+  expect(controller.model.phase).toBe('closed');
+  expect(controller.model.binding).not.toEqual({ binding: restartedRuntimeSession.binding, kind: 'runtime' });
+  expect(closeCalls).toEqual([{ expectedSessionRevision: 3, sessionId: 'runtime-session-a' }]);
+});
+
 it('rejects command, path, and environment smuggling instead of widening the immutable binding', async () => {
   const controller = createMcpSessionController({
     clientFactory: fakeClient,

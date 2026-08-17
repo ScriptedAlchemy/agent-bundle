@@ -578,6 +578,7 @@ export class RuntimeMcpRegistry implements DevRuntimeMcpRegistry {
   }
 
   commitActivationReconcile(prepared: RuntimeMcpPreparedActivationReconcile): RuntimeMcpCommittedActivationReconcile {
+    if (this.#closed) throw registryClosed();
     const record = this.#activation.get(prepared);
     if (record === undefined || record.reservationRevision !== prepared.reservationRevision || this.#mutation !== 'activation') {
       throw registryConflict('Runtime MCP activation reconciliation is no longer reserved.');
@@ -625,7 +626,7 @@ export class RuntimeMcpRegistry implements DevRuntimeMcpRegistry {
         session.connectionState = replacement!.state;
         session.descriptor = descriptor;
         session.binding = this.#binding(session.id, session.binding.sessionRevision + 1, nextState, descriptor);
-        session.state = 'ready';
+        session.state = 'restarting';
       }
     } else {
       for (const { descriptor, session } of transitions) {
@@ -634,6 +635,13 @@ export class RuntimeMcpRegistry implements DevRuntimeMcpRegistry {
       }
     }
     this.#state = nextState;
+    if (record.requiresRestart) {
+      // This is the sole public transition boundary for activation replacement:
+      // observers see the replacement identity before the invalidated binding or
+      // its ready state becomes visible through the committed publication.
+      for (const session of this.#sessions.values()) this.#emit('runtime.mcp.restarting', session);
+      for (const session of this.#sessions.values()) session.state = 'ready';
+    }
     const result = this.#result(
       record.requiresRestart ? 'sessions-restarted' : 'implementation-updated',
       record.invalidatedBindings,
@@ -651,7 +659,7 @@ export class RuntimeMcpRegistry implements DevRuntimeMcpRegistry {
         return retirement === undefined ? Promise.resolve() : this.#finalizeRetirement(retirement);
       },
       publish: () => {
-        if (published) return;
+        if (published || this.#closed) return;
         published = true;
         this.#publishResult(result);
         if (record.requiresRestart) {
