@@ -5,6 +5,7 @@
 - Initial audited candidate base: `acce996a2550d642abc50eca639d01d6e3741137`.
 - Initial reviewed head: `d4657a2f671200058c34dd8d239aa0ff1d5b1720`.
 - Resolution head before this report: `fe1c3b4c82188ee2d53314c011da508933e74699`.
+- Final reviewed evidence head: `9fb7e130440fc80ff185de10bd0f333f80162c9d`.
 - The initial inventory was 0 Critical, 17 Important, and 3 Minor findings.
   Targeted fixes and originating re-reviews leave 0 unresolved findings.
 
@@ -23,9 +24,19 @@ candidate and retained under `/tmp/rsc-runtime-delivery/final/20260817T132607Z-a
 - root/example/Workbench build and typecheck, root lint, and topology each exited
   zero in separately named logs.
 
-The later `d4657a2` commit contains only the six independently approved
-Workbench PNGs. Task 6 evidence below consists of targeted gates for each
-repair; it is not a claim that a new post-Task-6 full root suite ran.
+Post-remediation release verification through
+`9fb7e130440fc80ff185de10bd0f333f80162c9d` is retained under
+`/tmp/rsc-runtime-delivery/final/20260817T214017Z-task6-final`:
+
+- root direct Rstest: 103 passed / 1 skipped files and 1318 passed / 4 skipped
+  tests;
+- example direct Rstest: 15 passed files and 167 passed / 6 skipped tests;
+- focused core: 25 passed / 1 skipped files and 425 passed / 1 skipped tests;
+- focused Workbench, coverage, browser, and example: 22 files / 358 tests,
+  5 files / 89 tests, 8 files / 35 tests, and 8 files / 113 passed / 6 skipped
+  tests respectively;
+- root/example/Workbench build and typecheck, root lint, and topology each
+  exited zero; capture and widget capture also exited zero.
 
 ## Native Host Evidence
 
@@ -35,12 +46,16 @@ report does not reuse prior native output as fresh evidence.
 
 ## Browser and HMR Evidence
 
-`browser-capture.log` and `browser-evidence.json` record an atomically refreshed
-desktop/mobile/HMR/error/recovery capture: generation 1 → 2 → 3, unchanged
-Workbench document time origin across HMR, retained last-good output during the
-intentional AB8206 build error, opaque sandbox origin, and 390px bounds/zero
-scroll observations. The six PNGs were independently reviewed and committed in
-`d4657a2`; `widget-capture.log` also exited zero.
+`2b1cd44` adds the composition contract recorded by
+`26-capture-contract-green.log`, `27-runtime-playground-hmr.log`, and
+`30-capture-tracked-evidence.json` in the post-remediation log directory. It
+requires the compile-error raster to contain the selected generation-2 compact
+run, `Last good: generation-2`, and AB8206 simultaneously. The capture records
+generation 1 → 2 across HMR and generation 3 on recovery, preserves the
+Workbench document time origin and opaque sandbox origin, and observes 390×844
+bounds/zero scroll. `9fb7e13` contains the six refreshed rasters, visually
+approved and superseding `d4657a2`; `30-capture-tracked.log` records their final
+hashes. Widget capture also exited zero.
 
 ## Architecture and Ownership
 
@@ -73,7 +88,7 @@ last-good presentation, 40px Runtime interaction targets, accessible consent
 behavior, and a roving MCP presentation tablist. Fidelity conclusions remain
 limited to the approved 1440×900 desktop and 390×844 mobile evidence; the
 initial 1536×1024 viewport allegation was rejected/narrowed, while the accepted
-the fidelity-evidence closure row remains Important because it governs the accuracy of
+fidelity-evidence closure row remains Important because it governs the accuracy of
 the delivery ledger itself.
 
 ## Packaging
@@ -105,7 +120,7 @@ simulation is represented as vendor certification.
 | FE-02 | frontend/DX/accessibility | Important | `packages/workbench/src/runtime-model.ts`; `packages/workbench/src/runtime-playground.tsx` | Previous-provider last-good presentation lacked explicit transition behavior. | resolved | `44c282e` | Session-only prior-provider output remains labelled until new-provider success; model/UI regression coverage green. | Fixture has no truthful in-place provider-restart control. |
 | FE-03 | frontend/DX/accessibility | Important | `packages/workbench/src/styles.css`; `packages/workbench/src/mcp/mcp-json-input.tsx`; `packages/workbench/tests/mcp-json-input.test.ts`; `packages/workbench/tests/runtime-playground.e2e.test.ts` | Runtime controls could fall below the 40px target at mobile width. | resolved | `3a6dd11`, `0e64c58`, `5ddec84` | Real 390px flow measures selects, text/number inputs, radio/checkbox labels, Run, reset, history, and confirmation controls at >=40px with no clipping; boolean glyph stays inside its semantic label. | Scoped Runtime sizing does not redefine global button sizing. |
 | FE-04 | frontend/DX/accessibility | Important | `packages/workbench/src/main.tsx`; `packages/workbench/src/mcp/runtime-consent-queue.ts`; `packages/workbench/src/mcp/runtime-consent-dialog.tsx`; `packages/workbench/tests/runtime-consent-dialog.test.ts`; `packages/workbench/tests/mcp-app-real.e2e.test.ts` | Action-consent modal accessibility and same-layout queue correlation needed adversarial review. | resolved | `e2abb5c`, `1f607de` | Named modal, inert background, focus wrap/restore, Escape deny, FIFO advancement, and exact-entry gesture latching pass focused and real-App coverage. | The cancellation/FIFO contract remains controlling. |
-| FE-05 | frontend/DX/accessibility | Important | `docs/assets/rsc-runtime-workbench/fidelity-ledger.md`; `packages/workbench/scripts/capture-runtime-playground.mjs` | Capture fidelity, image size, and evidence dispositions needed accurate delivery closure. | resolved | `7e62e6b`, `fa745d9`, `a0ebe2a` | Approved PNGs remain unchanged; every ledger row is evidence-limited as Verified, Intentional deviation, or Not visually evidenced. | Fidelity rows explicitly marked Not visually evidenced remain limited; the rejected 1536×1024 allegation is not represented as a validated capture requirement. |
+| FE-05 | frontend/DX/accessibility | Important | `docs/assets/rsc-runtime-workbench/fidelity-ledger.md`; `packages/workbench/scripts/capture-runtime-playground.mjs` | Capture fidelity, image size, and evidence dispositions needed accurate delivery closure. | resolved | `7e62e6b`, `fa745d9`, `a0ebe2a`, `2b1cd44`, `9fb7e13` | Refreshed approved PNGs and the capture contract prove exact 1440×900 and 390×844 states; every ledger row is evidence-limited as Verified, Intentional deviation, or Not visually evidenced. | Fidelity rows explicitly marked Not visually evidenced remain limited; the rejected 1536×1024 allegation is not represented as a validated capture requirement. |
 | PKG-01 | packaging/cross-host | Important | `examples/rsc-agent-runtime/README.md`; `examples/rsc-agent-runtime/tests/docs-contract.test.ts` | README native-host wording could overstate certification without attached real-host evidence. | resolved | `28d92fd` | Docs contract 2/2; docs/evaluator/host-artifacts 24/24; full example 15 files, 167 passed / 6 skipped. | Real Claude/Codex evaluation was not run by retained authority. |
 | PKG-02 | packaging/cross-host | Important | `examples/rsc-agent-runtime/scripts/eval-evidence.mjs`; `examples/rsc-agent-runtime/scripts/eval-hosts.mjs` | Native evidence attribution could credit lookalikes, mixed results, or unrelated state. | resolved | `e95483e` | Exact tool/result IDs, bounded content, and per-run marker correlation; evaluator/docs/host-artifacts/empty-PATH 24/24; full example 15 files, 167 passed / 6 skipped. | Deterministic evaluator success is not native certification. |
 | PKG-03 | packaging/cross-host | Important | `examples/rsc-agent-runtime/packaging/claude/hooks/hooks.json`; `examples/rsc-agent-runtime/packaging/codex/hooks/hooks.json`; `examples/rsc-agent-runtime/tests/host-artifacts.test.ts` | Packaged hook roots were unquoted and could split an executable path. | resolved | `2c853ab` | Claude/Codex copied packages execute via declared `/bin/sh -c` from roots containing spaces and `;`; host artifacts 4/4. | No real native host was contacted. |
