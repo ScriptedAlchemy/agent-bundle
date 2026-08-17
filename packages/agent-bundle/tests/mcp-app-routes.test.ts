@@ -1,4 +1,4 @@
-import { createServer, type IncomingMessage } from 'node:http';
+import { createServer, request as httpRequest, type IncomingMessage } from 'node:http';
 import { Buffer } from 'node:buffer';
 import type { AddressInfo } from 'node:net';
 
@@ -333,6 +333,69 @@ it('classifies unavailable runtime App operations as unknown or revoked before d
       expect(response.status).toBe(status);
     }
     expect(operations).toEqual([]);
+  } finally {
+    await started.close();
+  }
+});
+
+it('forwards one request-owned abort signal to each admitted runtime App operation', async () => {
+  const signals: Array<AbortSignal | undefined> = [];
+  const runtime: McpAppRuntimeRoutePreviewService = {
+    close: async () => undefined,
+    create: async () => { throw new Error('unused'); },
+    createConsent: async () => { throw new Error('unused'); },
+    decideConsent: async () => { throw new Error('unused'); },
+    get: (bindingId) => bindingId === 'runtime-binding'
+      ? Object.freeze({ binding: Object.freeze({ id: bindingId }), kind: 'fallback' }) as never
+      : undefined,
+    operate: async (_bindingId, _operation, options?: Readonly<{ readonly signal?: AbortSignal }>) => {
+      signals.push(options?.signal);
+      return Object.freeze({ result: Object.freeze({ content: Object.freeze([]) }) }) as never;
+    },
+  };
+  const started = await startRoutes(Object.assign(new RecordingPreviewService(), { runtime }));
+  try {
+    const response = await fetch(`${started.url}/api/runtime/apps/runtime-binding/operations`, {
+      body: JSON.stringify({ kind: 'tools/list' }),
+      headers: { ...headers(), 'content-type': 'application/json' },
+      method: 'POST',
+    });
+    expect(response.status).toBe(200);
+    expect(signals).toEqual([expect.any(AbortSignal)]);
+    expect(signals[0]?.aborted).toBe(false);
+  } finally {
+    await started.close();
+  }
+});
+
+it('aborts an admitted runtime App operation when its HTTP client disconnects', async () => {
+  let operationSignal: AbortSignal | undefined;
+  const runtime: McpAppRuntimeRoutePreviewService = {
+    close: async () => undefined,
+    create: async () => { throw new Error('unused'); },
+    createConsent: async () => { throw new Error('unused'); },
+    decideConsent: async () => { throw new Error('unused'); },
+    get: (bindingId) => bindingId === 'runtime-binding'
+      ? Object.freeze({ binding: Object.freeze({ id: bindingId }), kind: 'fallback' }) as never
+      : undefined,
+    operate: async (_bindingId, _operation, options?: Readonly<{ readonly signal?: AbortSignal }>) => new Promise((_resolve, reject) => {
+      operationSignal = options?.signal;
+      operationSignal?.addEventListener('abort', () => reject(operationSignal?.reason), { once: true });
+    }),
+  };
+  const started = await startRoutes(Object.assign(new RecordingPreviewService(), { runtime }));
+  try {
+    const target = new URL(`/api/runtime/apps/runtime-binding/operations`, started.url);
+    const pending = httpRequest(target, {
+      headers: { ...headers(), 'content-type': 'application/json' },
+      method: 'POST',
+    });
+    pending.on('error', () => undefined);
+    pending.end(JSON.stringify({ kind: 'tools/list' }));
+    await eventually(() => operationSignal !== undefined);
+    pending.destroy();
+    await eventually(() => operationSignal?.aborted === true);
+    expect(operationSignal?.reason).toBeInstanceOf(Error);
   } finally {
     await started.close();
   }

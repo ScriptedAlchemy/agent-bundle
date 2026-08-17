@@ -5,6 +5,7 @@ import type {
   DevRuntimeMcpRegistrySubscription,
   DevRuntimeMcpSession,
   DevRuntimeMcpSessionCloseObservation,
+  DevRuntimeMcpSessionExecuteOptions,
   DevRuntimeMcpSessionView,
 } from './runtime-provider.ts';
 import type {
@@ -744,7 +745,7 @@ export class RuntimeMcpRegistry implements DevRuntimeMcpRegistry {
 
   #view(record: SessionRecord): DevRuntimeMcpSessionView {
     return Object.freeze({
-      execute: async (request: DevRuntimeMcpOperationRequest) => this.#execute(record, request),
+      execute: async (request: DevRuntimeMcpOperationRequest, options: DevRuntimeMcpSessionExecuteOptions | undefined) => this.#execute(record, request, options?.signal),
       snapshot: () => this.#sessionSnapshot(record),
       watchClosed: (listener: (reason?: unknown) => Promise<void> | void) => this.#watchClosed(record, listener),
     });
@@ -786,7 +787,7 @@ export class RuntimeMcpRegistry implements DevRuntimeMcpRegistry {
     });
   }
 
-  async #execute(record: SessionRecord, request: DevRuntimeMcpOperationRequest): Promise<DevRuntimeMcpOperationResult> {
+  async #execute(record: SessionRecord, request: DevRuntimeMcpOperationRequest, operationSignal?: AbortSignal): Promise<DevRuntimeMcpOperationResult> {
     this.#assertSessionReady(record, request.expectedSessionRevision);
     const binding = record.binding;
     const descriptor = record.descriptor;
@@ -794,12 +795,22 @@ export class RuntimeMcpRegistry implements DevRuntimeMcpRegistry {
     const state = this.#requireState();
     const generationId = state.input.runtimeGenerationId;
     const lease = await this.#options.generationStore.lease(generationId);
-    if (sessionAbort.signal.aborted) {
+    const cancellation = sessionAbort.signal.aborted
+      ? sessionAbort.signal
+      : operationSignal?.aborted
+        ? operationSignal
+        : undefined;
+    if (cancellation !== undefined) {
       await lease.release();
-      throw sessionAbort.signal.reason ?? registryConflict('Runtime MCP session is restarting.');
+      throw cancellation.reason ?? registryConflict('Runtime MCP session is restarting.');
     }
     const controller = new AbortController();
-    const combined = combineSignals([this.#closeAbort.signal, sessionAbort.signal, controller.signal]);
+    const combined = combineSignals([
+      this.#closeAbort.signal,
+      sessionAbort.signal,
+      controller.signal,
+      ...(operationSignal === undefined ? [] : [operationSignal]),
+    ]);
     const signal = combined.signal;
     let resolveDone!: () => void;
     const done = new Promise<void>((resolve) => { resolveDone = resolve; });

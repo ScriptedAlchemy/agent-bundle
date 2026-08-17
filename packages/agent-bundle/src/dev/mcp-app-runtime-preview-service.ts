@@ -120,13 +120,17 @@ export interface McpAppRuntimeRoutePreviewService {
   get(bindingId: string): McpAppPreviewSnapshot | undefined;
   /** A bounded local tombstone only; it distinguishes revoked from unknown IDs. */
   isRevoked?(bindingId: string): boolean;
-  operate(bindingId: string, operation: McpAppBindingOperation): Promise<McpAppOperationResponse>;
+  operate(bindingId: string, operation: McpAppBindingOperation, options?: McpAppRuntimeOperationOptions): Promise<McpAppOperationResponse>;
+}
+
+export interface McpAppRuntimeOperationOptions {
+  readonly signal?: AbortSignal;
 }
 
 /** Closed, phase-safe diagnostics intended for the authenticated runtime App route. */
 export class McpAppRuntimePreviewError extends Error {
-  readonly code: 'AB8201' | 'AB8203' | 'AB8204';
-  readonly status: 400 | 404 | 409;
+  readonly code: 'AB8023' | 'AB8201' | 'AB8203' | 'AB8204';
+  readonly status: 400 | 404 | 409 | 502;
 
   constructor(code: McpAppRuntimePreviewError['code'], message: string, status: McpAppRuntimePreviewError['status']) {
     super(message);
@@ -146,6 +150,20 @@ export interface McpAppRuntimePreviewServiceOptions {
   ) => Promise<DevRuntimeClientSurfaceProxyBinding | undefined>;
   readonly runtime: DevRuntimeSession;
   readonly emit?: (details: McpAppRuntimeInvalidationDetails) => void;
+  /** Injected only by deterministic service tests; production uses the system timer. */
+  readonly operationClock?: McpAppRuntimeOperationClock;
+}
+
+export interface McpAppRuntimeOperationClock {
+  clearTimeout(timer: ReturnType<typeof setTimeout>): void;
+  setTimeout(callback: () => void, milliseconds: number): ReturnType<typeof setTimeout>;
+}
+
+interface PreviewOperation {
+  readonly controller: AbortController;
+  dispose(): void;
+  timedOut: boolean;
+  timer: ReturnType<typeof setTimeout> | undefined;
 }
 
 interface PreviewEntry {
@@ -162,6 +180,7 @@ interface PreviewEntry {
   readonly session: DevRuntimeMcpSessionView;
   snapshot: McpAppPreviewSnapshot;
   activeOperations: number;
+  readonly operations: Set<PreviewOperation>;
   documentGrants: readonly McpAppConsentGrant[];
   documentPolicy: McpAppDocumentPolicySnapshot;
   revoked: boolean;
@@ -181,6 +200,11 @@ interface PreviewCleanup {
 }
 
 const maxConcurrentOperations = 4;
+const operationTimeoutMs = 30_000;
+const systemOperationClock: McpAppRuntimeOperationClock = Object.freeze({
+  clearTimeout: (timer: ReturnType<typeof setTimeout>) => clearTimeout(timer),
+  setTimeout: (callback: () => void, milliseconds: number) => setTimeout(callback, milliseconds),
+});
 
 const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
   typeof value === 'object' && value !== null && !Array.isArray(value) &&
@@ -282,6 +306,7 @@ export class McpAppRuntimePreviewService implements McpAppRuntimeRoutePreviewSer
   readonly #entries = new Map<string, PreviewEntry>();
   readonly #invalidationReasons = new Map<string, McpAppRuntimeInvalidationDetails['reason']>();
   readonly #openRuntimeClientSurface: McpAppRuntimePreviewServiceOptions['openRuntimeClientSurface'];
+  readonly #operationClock: McpAppRuntimeOperationClock;
   readonly #runtime: DevRuntimeSession;
   readonly #subscription: ReturnType<DevRuntimeSession['mcpRegistry']['subscribe']>;
   readonly #revokedBindings = new Set<string>();
@@ -295,6 +320,7 @@ export class McpAppRuntimePreviewService implements McpAppRuntimeRoutePreviewSer
     this.#configExtensions = options.configExtensions;
     this.#emit = options.emit;
     this.#openRuntimeClientSurface = options.openRuntimeClientSurface;
+    this.#operationClock = options.operationClock ?? systemOperationClock;
     this.#runtime = options.runtime;
     this.#subscription = this.#runtime.mcpRegistry.subscribe({ afterSequence: 0 }, (message) => {
       const operation = this.#registryTail.then(
@@ -474,6 +500,7 @@ export class McpAppRuntimePreviewService implements McpAppRuntimeRoutePreviewSer
         consent: createMcpAppConsentAuthority(),
         documentGrants: Object.freeze([]),
         documentPolicy,
+        operations: new Set(),
         revoked: false,
         runBinding,
         session,
@@ -491,18 +518,24 @@ export class McpAppRuntimePreviewService implements McpAppRuntimeRoutePreviewSer
     }
   }
 
-  async operate(bindingId: string, request: McpAppBindingOperation): Promise<McpAppOperationResponse> {
+  async operate(
+    bindingId: string,
+    request: McpAppBindingOperation,
+    options: McpAppRuntimeOperationOptions = {},
+  ): Promise<McpAppOperationResponse> {
     const entry = this.#entry(bindingId);
     if (entry.activeOperations >= maxConcurrentOperations) throw new Error('Runtime MCP App operation limit reached.');
     entry.activeOperations += 1;
+    const operation = this.#startOperation(entry, options.signal);
     try {
+      if (operation.controller.signal.aborted) throw operation.controller.signal.reason ?? new Error('Runtime MCP App operation was cancelled.');
       let result: McpAppBoundOperationResult;
       if (request.kind === 'tools/list') result = entry.catalog.tools;
       else if (request.kind === 'resources/list') result = entry.catalog.resources;
       else if (request.kind === 'resources/read') {
         const uri = nonempty(request.uri, 'Runtime MCP App resource URI');
         if (!entry.catalog.resourceUris.includes(uri)) throw new Error('Runtime MCP App resource is not in the binding catalog.');
-        result = await this.#bindingAuthority.execute(bindingId, { kind: 'read-resource', uri });
+        result = await this.#bindingAuthority.execute(bindingId, { kind: 'read-resource', uri }, Object.freeze({ signal: operation.controller.signal }));
       }
       else {
         const name = nonempty(request.name, 'Runtime MCP App tool name');
@@ -510,10 +543,16 @@ export class McpAppRuntimePreviewService implements McpAppRuntimeRoutePreviewSer
         if (request.consentId === undefined || !entry.consent.consume({ actionDigest: createMcpAppConsentActionDigest('call-tool', Object.freeze({ arguments: request.arguments ?? {}, name })), authorizationId: request.consentId, bindingId, capability: 'call-tool', profile: entry.binding.profileId })) {
           throw new Error('Runtime MCP App tool call requires an approved consent grant.');
         }
-        result = await this.#bindingAuthority.execute(bindingId, { arguments: request.arguments, kind: 'call-tool', name });
+        result = await this.#bindingAuthority.execute(bindingId, { arguments: request.arguments, kind: 'call-tool', name }, Object.freeze({ signal: operation.controller.signal }));
       }
       return Object.freeze({ result });
+    } catch (error) {
+      if (operation.timedOut) {
+        throw new McpAppRuntimePreviewError('AB8023', 'Runtime MCP App operation exceeded its 30 second deadline.', 502);
+      }
+      throw error;
     } finally {
+      operation.dispose();
       entry.activeOperations -= 1;
     }
   }
@@ -660,6 +699,9 @@ export class McpAppRuntimePreviewService implements McpAppRuntimeRoutePreviewSer
 
   #revoke(entry: PreviewEntry, reason: McpAppRuntimeInvalidationDetails['reason']): void {
     if (entry.revoked) return;
+    for (const operation of entry.operations) {
+      operation.controller.abort(new Error('Runtime MCP App operation was cancelled.'));
+    }
     entry.revoked = true;
     this.#invalidationReasons.delete(entry.binding.id);
     this.#revokedBindings.add(entry.binding.id);
@@ -668,6 +710,31 @@ export class McpAppRuntimePreviewService implements McpAppRuntimeRoutePreviewSer
     // subscriber may tear down its bridge before the lookup disappears.
     this.#emit?.(Object.freeze({ bindingId: entry.binding.id, reason, sessionId: entry.binding.sessionId, sessionRevision: entry.binding.sessionRevision, state: 'revoked' }));
     this.#entries.delete(entry.binding.id);
+  }
+
+  #startOperation(entry: PreviewEntry, external: AbortSignal | undefined): PreviewOperation {
+    const controller = new AbortController();
+    const abort = (): void => {
+      if (!controller.signal.aborted) controller.abort(external?.reason ?? new Error('Runtime MCP App operation was cancelled.'));
+    };
+    if (external?.aborted) abort();
+    else external?.addEventListener('abort', abort, { once: true });
+    const operation: PreviewOperation = {
+      controller,
+      dispose: () => {
+        external?.removeEventListener('abort', abort);
+        if (operation.timer !== undefined) this.#operationClock.clearTimeout(operation.timer);
+        entry.operations.delete(operation);
+      },
+      timedOut: false,
+      timer: undefined,
+    };
+    operation.timer = this.#operationClock.setTimeout(() => {
+      operation.timedOut = true;
+      controller.abort(new Error('Runtime MCP App operation exceeded its 30 second deadline.'));
+    }, operationTimeoutMs);
+    entry.operations.add(operation);
+    return operation;
   }
 
   async #cleanup(cleanup: PreviewCleanup): Promise<void> {

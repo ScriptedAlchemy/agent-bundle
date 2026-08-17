@@ -1,9 +1,13 @@
 import { expect, it } from '@rstest/core';
 
-import { McpAppRuntimePreviewService } from '../src/dev/mcp-app-runtime-preview-service.ts';
+import {
+  McpAppRuntimePreviewService,
+  type McpAppRuntimeOperationClock,
+  type McpAppRuntimePreviewServiceOptions,
+} from '../src/dev/mcp-app-runtime-preview-service.ts';
 import { McpAppRuntimeBindingService } from '../src/dev/mcp-app-runtime-binding-service.ts';
 import type { DevRuntimeClientSurfaceProxyBinding, DevRuntimeMcpRegistryMessage, DevRuntimeMcpSessionView, DevRuntimeSession } from '../src/dev/runtime-provider.ts';
-import type { DevRuntimeMcpOperationRequest, DevRuntimeMcpSessionSnapshot, DevRuntimeRun, RuntimeVector } from '../src/dev/runtime-protocol.ts';
+import type { DevRuntimeMcpOperationRequest, DevRuntimeMcpOperationResult, DevRuntimeMcpSessionSnapshot, DevRuntimeRun, RuntimeVector } from '../src/dev/runtime-protocol.ts';
 import type { JsonValue } from '../src/dev/types.ts';
 
 const vector: RuntimeVector = Object.freeze({
@@ -54,11 +58,21 @@ const snapshot = (): DevRuntimeMcpSessionSnapshot => Object.freeze({
   state: 'ready' as const,
 });
 
+type SessionViewOptions = Readonly<{
+  readonly csp?: JsonValue;
+  readonly execute?: (
+    request: DevRuntimeMcpOperationRequest,
+    options: Readonly<{ readonly signal?: AbortSignal }> | undefined,
+    fallback: () => DevRuntimeMcpOperationResult,
+  ) => Promise<DevRuntimeMcpOperationResult>;
+  readonly permissions?: JsonValue;
+}>;
+
 const createSessionView = (
   requests: DevRuntimeMcpOperationRequest[],
-  options: Readonly<{ readonly csp?: JsonValue; readonly permissions?: JsonValue }> = {},
+  options: SessionViewOptions = {},
 ): DevRuntimeMcpSessionView => ({
-  execute: async (request) => {
+  execute: async (request, operationOptions) => {
     requests.push(request);
     const value: JsonValue = request.kind === 'list-tools'
       ? [
@@ -74,7 +88,8 @@ const createSessionView = (
             ...(options.permissions === undefined ? {} : { permissions: options.permissions }),
           } }, mimeType: 'text/html;profile=mcp-app', text: '<main>Weather</main>', uri: request.uri }] }
           : { content: [{ text: 'called', type: 'text' }] };
-    return Object.freeze({ operationId: `op-${requests.length}`, sessionId: 'session-a', sessionRevision: 2, value, vector });
+    const fallback = (): DevRuntimeMcpOperationResult => Object.freeze({ operationId: `op-${requests.length}`, sessionId: 'session-a', sessionRevision: 2, value, vector });
+    return options.execute === undefined ? fallback() : options.execute(request, operationOptions, fallback);
   },
   snapshot,
   watchClosed: () => Object.freeze({ closed: false, unsubscribe: () => undefined }),
@@ -84,8 +99,10 @@ const createRuntimeFixture = (options: Readonly<{
   readonly closeBinding?: () => Promise<void>;
   readonly closeProxy?: () => Promise<void>;
   readonly csp?: JsonValue;
+  readonly execute?: SessionViewOptions['execute'];
   readonly failProxyOpen?: boolean;
   readonly openRuntimeClientSurface?: (surfaceId: string, ...policy: readonly unknown[]) => Promise<DevRuntimeClientSurfaceProxyBinding | undefined>;
+  readonly operationClock?: McpAppRuntimeOperationClock;
   readonly permissions?: JsonValue;
 }> = {}) => {
   const requests: DevRuntimeMcpOperationRequest[] = [];
@@ -131,7 +148,7 @@ const createRuntimeFixture = (options: Readonly<{
       return closeBinding(bindingId);
     };
   }
-  const service = new McpAppRuntimePreviewService({
+  const serviceOptions: McpAppRuntimePreviewServiceOptions = {
     bindingAuthority,
     configExtensions: () => Object.freeze({ descriptors: [], extensions: Object.freeze({}), projectRoot: '/project', sourceRevision: 'source-a' }),
     emit: (details) => { emitted.push(details); },
@@ -143,7 +160,9 @@ const createRuntimeFixture = (options: Readonly<{
       return Object.freeze({ bootstrapUrl: `http://proxy.test/${surfaceId}`, close: options.closeProxy ?? (async () => undefined), origin: 'http://proxy.test', surfaceId, webSocketPath: '/rsbuild-hmr' });
     },
     runtime,
-  });
+    ...(options.operationClock === undefined ? {} : { operationClock: options.operationClock }),
+  };
+  const service = new McpAppRuntimePreviewService(serviceOptions);
   return Object.freeze({
     controls,
     emitted,
@@ -162,6 +181,51 @@ const eventually = async (predicate: () => boolean): Promise<void> => {
   }
   throw new Error('Timed out waiting for runtime MCP App preview state.');
 };
+
+const deferred = <Value>(): Readonly<{
+  readonly promise: Promise<Value>;
+  readonly reject: (reason?: unknown) => void;
+  readonly resolve: (value: Value) => void;
+}> => {
+  let reject!: (reason?: unknown) => void;
+  let resolve!: (value: Value) => void;
+  const promise = new Promise<Value>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return Object.freeze({ promise, reject, resolve });
+};
+
+class ControlledClock {
+  #now = 0;
+  #next = 0;
+  readonly #timers = new Map<number, Readonly<{ readonly callback: () => void; readonly due: number }>>();
+  readonly delays: number[] = [];
+
+  clearTimeout(id: ReturnType<typeof setTimeout>): void { this.#timers.delete(id as unknown as number); }
+
+  setTimeout(callback: () => void, milliseconds: number): ReturnType<typeof setTimeout> {
+    const id = ++this.#next;
+    this.delays.push(milliseconds);
+    this.#timers.set(id, Object.freeze({ callback, due: this.#now + milliseconds }));
+    return id as unknown as ReturnType<typeof setTimeout>;
+  }
+
+  advance(milliseconds: number): void {
+    const deadline = this.#now + milliseconds;
+    while (true) {
+      const next = [...this.#timers.entries()]
+        .filter(([, timer]) => timer.due <= deadline)
+        .sort(([left], [right]) => left - right)[0];
+      if (next === undefined) break;
+      const [id, timer] = next;
+      this.#timers.delete(id);
+      this.#now = timer.due;
+      timer.callback();
+    }
+    this.#now = deadline;
+  }
+}
 
 it('derives an Apps preview only from one stored succeeded run and opens its distinct client surface', async () => {
   const { controls, openedClientSurfaces, requests, service } = createRuntimeFixture();
@@ -257,6 +321,105 @@ it('binds a call-tool consent grant to one exact operation and rejects a browser
     name: 'show-weather',
   })).rejects.toThrow('requires an approved consent');
   expect(requests.at(-1)).toEqual({ arguments: {}, expectedSessionRevision: 2, kind: 'call-tool', name: 'show-weather' });
+});
+
+it('times out and releases hung Runtime App operations without waiting for late provider settlement', async () => {
+  const clock = new ControlledClock();
+  const signals: Array<AbortSignal | undefined> = [];
+  const late = Array.from({ length: 5 }, () => deferred<DevRuntimeMcpOperationResult>());
+  let initial = 0;
+  let pending = 0;
+  const { service } = createRuntimeFixture({
+    execute: async (_request, options, fallback) => {
+      if (initial < 3) {
+        initial += 1;
+        return fallback();
+      }
+      const held = late[pending]!;
+      pending += 1;
+      signals.push(options?.signal);
+      return held.promise;
+    },
+    operationClock: clock,
+  });
+  const preview = await service.create({ expectedGenerationId: 'generation-a', profileId: 'portable', runId: 'run-a' });
+  const operations = Array.from({ length: 4 }, () => service.operate(preview.binding.id, {
+    kind: 'resources/read' as const,
+    uri: 'ui://weather/forecast.html',
+  }));
+
+  await eventually(() => signals.length === 4);
+  expect(clock.delays).toEqual([30_000, 30_000, 30_000, 30_000]);
+  await expect(service.operate(preview.binding.id, {
+    kind: 'resources/read', uri: 'ui://weather/forecast.html',
+  })).rejects.toThrow('operation limit reached');
+
+  clock.advance(30_000);
+  for (const operation of operations) {
+    await expect(operation).rejects.toMatchObject({
+      code: 'AB8023',
+      message: 'Runtime MCP App operation exceeded its 30 second deadline.',
+      status: 502,
+    });
+  }
+  expect(signals).toEqual([expect.any(AbortSignal), expect.any(AbortSignal), expect.any(AbortSignal), expect.any(AbortSignal)]);
+  expect(signals.every((signal) => signal?.aborted === true)).toBe(true);
+
+  const reclaimed = service.operate(preview.binding.id, { kind: 'resources/read', uri: 'ui://weather/forecast.html' });
+  await eventually(() => signals.length === 5);
+  await expect(service.close(preview.binding.id)).resolves.toBeUndefined();
+  await expect(reclaimed).rejects.toThrow('cancelled');
+  expect(signals.every((signal) => signal?.aborted === true)).toBe(true);
+
+  late[0]!.reject(new Error('late provider rejection'));
+  for (const held of late.slice(1)) held.resolve(Object.freeze({
+    operationId: 'late-operation', sessionId: 'session-a', sessionRevision: 2, value: Object.freeze({ content: [] }), vector,
+  }));
+  await Promise.allSettled(late.map((held) => held.promise));
+  expect(service.get(preview.binding.id)).toBeUndefined();
+});
+
+it('reclaims a hung Runtime App operation when its caller aborts', async () => {
+  const clock = new ControlledClock();
+  const held = Array.from({ length: 2 }, () => deferred<DevRuntimeMcpOperationResult>());
+  const signals: AbortSignal[] = [];
+  let aborts = 0;
+  let initial = 0;
+  let pending = 0;
+  const { service } = createRuntimeFixture({
+    execute: async (_request, options, fallback) => {
+      if (initial < 3) {
+        initial += 1;
+        return fallback();
+      }
+      const signal = options?.signal;
+      if (signal === undefined) throw new Error('Runtime App operation did not receive a cancellation signal.');
+      signals.push(signal);
+      signal.addEventListener('abort', () => { aborts += 1; }, { once: true });
+      return held[pending++]!.promise;
+    },
+    operationClock: clock,
+  });
+  const preview = await service.create({ expectedGenerationId: 'generation-a', profileId: 'portable', runId: 'run-a' });
+  const caller = new AbortController();
+  const operation = service.operate(preview.binding.id, {
+    kind: 'resources/read', uri: 'ui://weather/forecast.html',
+  }, Object.freeze({ signal: caller.signal }));
+  await eventually(() => signals.length === 1);
+  const reason = new DOMException('Caller cancelled the Runtime App operation.', 'AbortError');
+  caller.abort(reason);
+  await expect(operation).rejects.toBe(reason);
+  expect(aborts).toBe(1);
+
+  const reclaimed = service.operate(preview.binding.id, { kind: 'resources/read', uri: 'ui://weather/forecast.html' });
+  await eventually(() => signals.length === 2);
+  await expect(service.close(preview.binding.id)).resolves.toBeUndefined();
+  await expect(reclaimed).rejects.toThrow('cancelled');
+  expect(aborts).toBe(2);
+
+  held[0]!.resolve(Object.freeze({ operationId: 'late-cancelled', sessionId: 'session-a', sessionRevision: 2, value: Object.freeze({ content: [] }), vector }));
+  held[1]!.reject(new Error('late cancelled provider rejection'));
+  await Promise.allSettled(held.map((pendingOperation) => pendingOperation.promise));
 });
 
 it('retains only the frozen App-visible catalog and rejects hidden actions before provider execution', async () => {

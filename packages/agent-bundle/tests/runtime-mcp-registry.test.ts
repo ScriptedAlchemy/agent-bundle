@@ -1113,6 +1113,66 @@ it('disposes successful composite signal listeners and propagates close abort on
   }
 });
 
+it('forwards a caller abort signal to an active Runtime MCP executor exactly once', async () => {
+  const fixture = await createGenerationStore();
+  const entered = deferred<void>();
+  let aborts = 0;
+  const registry = createRegistry({
+    executor: async (context) => {
+      entered.resolve();
+      return new Promise<RuntimeMcpExecutionValue>((_resolve, reject) => {
+        context.signal.addEventListener('abort', () => {
+          aborts += 1;
+          reject(context.signal.reason);
+        }, { once: true });
+      });
+    },
+    store: fixture.store,
+  });
+  try {
+    await fixture.commit('g1');
+    const session = await registry.open({ serverName: 'timeline', target: 'portable' });
+    const caller = new AbortController();
+    const running = session.execute(request('call-tool', session.snapshot().binding.sessionRevision), Object.freeze({ signal: caller.signal }));
+    await entered.promise;
+    const reason = new DOMException('Caller cancelled the Runtime MCP operation.', 'AbortError');
+    caller.abort(reason);
+    await expect(running).rejects.toBe(reason);
+    expect(aborts).toBe(1);
+  } finally {
+    await registry.close().catch(() => undefined);
+    await fixture.close();
+  }
+});
+
+it('does not execute an already cancelled Runtime MCP operation after leasing its generation', async () => {
+  const fixture = await createGenerationStore();
+  let executions = 0;
+  const registry = createRegistry({
+    executor: async () => {
+      executions += 1;
+      return Object.freeze({ stateVersion: 1, value: Object.freeze({ unexpected: true }) });
+    },
+    store: fixture.store,
+  });
+  try {
+    await fixture.commit('g1');
+    const session = await registry.open({ serverName: 'timeline', target: 'portable' });
+    const caller = new AbortController();
+    const reason = new DOMException('Caller cancelled the Runtime MCP operation.', 'AbortError');
+    caller.abort(reason);
+
+    await expect(session.execute(
+      request('call-tool', session.snapshot().binding.sessionRevision),
+      Object.freeze({ signal: caller.signal }),
+    )).rejects.toBe(reason);
+    expect(executions).toBe(0);
+  } finally {
+    await registry.close().catch(() => undefined);
+    await fixture.close();
+  }
+});
+
 it('prepares private activation without public visibility, commits synchronously with buffered publish, and aborts without changes', async () => {
   const fixture = await createGenerationStore();
   const connector = connectorHarness({ deferAfter: 2 });

@@ -79,9 +79,18 @@ export interface McpAppRuntimeBindingInvalidation {
   readonly sessionRevision: number;
 }
 
+export interface McpAppRuntimeBindingOperationOptions {
+  readonly signal?: AbortSignal;
+}
+
+interface McpAppRuntimeBindingOperation {
+  readonly controller: AbortController;
+  readonly settled: Promise<void>;
+}
+
 interface McpAppRuntimeBinding {
   closing: boolean;
-  readonly operations: Set<Promise<void>>;
+  readonly operations: Set<McpAppRuntimeBindingOperation>;
   readonly privateRunVector: RuntimeVector;
   releaseAttempt: Promise<void> | undefined;
   readonly session: DevRuntimeMcpSessionView;
@@ -184,6 +193,28 @@ const canonicalOperation = (request: McpAppRuntimeOperationRequest, expectedSess
   throw new TypeError('Unsupported Runtime MCP App operation.');
 };
 
+const abortReason = (signal: AbortSignal): unknown => signal.reason ?? new Error('Runtime MCP App operation was cancelled.');
+
+const settleOnAbort = <Value>(operation: Promise<Value>, signal: AbortSignal): Promise<Value> => new Promise((resolve, reject) => {
+  let settled = false;
+  const finish = (outcome: () => void): void => {
+    if (settled) return;
+    settled = true;
+    signal.removeEventListener('abort', onAbort);
+    outcome();
+  };
+  const onAbort = (): void => finish(() => reject(abortReason(signal)));
+  if (signal.aborted) {
+    onAbort();
+    return;
+  }
+  signal.addEventListener('abort', onAbort, { once: true });
+  void operation.then(
+    (value) => finish(() => resolve(value)),
+    (error: unknown) => finish(() => reject(error)),
+  );
+});
+
 export class McpAppRuntimeBindingService {
   readonly #entries = new Map<string, McpAppRuntimeBinding>();
   readonly #pendingReleases = new Map<string, McpAppRuntimeBinding>();
@@ -249,20 +280,36 @@ export class McpAppRuntimeBindingService {
     }
   }
 
-  async execute(bindingId: string, request: McpAppRuntimeOperationRequest): Promise<McpAppBoundOperationResult> {
+  async execute(
+    bindingId: string,
+    request: McpAppRuntimeOperationRequest,
+    options: McpAppRuntimeBindingOperationOptions = {},
+  ): Promise<McpAppBoundOperationResult> {
     const entry = this.#entry(bindingId);
     const canonical = canonicalOperation(request, entry.snapshot.sessionRevision);
     let finish: (() => void) | undefined;
     const settled = new Promise<void>((resolve) => {
       finish = resolve;
     });
-    entry.operations.add(settled);
+    const controller = new AbortController();
+    const parent = options.signal;
+    const abortFromParent = (): void => {
+      if (!controller.signal.aborted) controller.abort(abortReason(parent!));
+    };
+    if (parent?.aborted) abortFromParent();
+    else parent?.addEventListener('abort', abortFromParent, { once: true });
+    const active = Object.freeze({ controller, settled });
+    entry.operations.add(active);
     try {
-      const operation = await entry.session.execute(canonical);
+      const operation = await settleOnAbort(Promise.resolve().then(async () => {
+        if (controller.signal.aborted) throw abortReason(controller.signal);
+        return entry.session.execute(canonical, Object.freeze({ signal: controller.signal }));
+      }), controller.signal);
       this.#assertActive(entry);
       return this.#operationResult(entry, operation);
     } finally {
-      entry.operations.delete(settled);
+      parent?.removeEventListener('abort', abortFromParent);
+      entry.operations.delete(active);
       finish?.();
     }
   }
@@ -348,7 +395,10 @@ export class McpAppRuntimeBindingService {
     entry.unsubscribe();
     this.#entries.delete(entry.snapshot.id);
     const release = (async () => {
-      await Promise.allSettled([...entry.operations]);
+      for (const operation of entry.operations) {
+        operation.controller.abort(new Error('Runtime MCP App binding was closed.'));
+      }
+      await Promise.allSettled([...entry.operations].map(async (operation) => operation.settled));
       if (entry.teardown !== undefined) await entry.teardown(Object.freeze({ binding: entry.snapshot, reason }));
     })();
     entry.releaseAttempt = release;

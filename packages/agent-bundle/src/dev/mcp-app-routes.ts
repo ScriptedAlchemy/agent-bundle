@@ -282,6 +282,25 @@ const jsonBody = async (request: IncomingMessage): Promise<JsonObject> => {
   return parsed;
 };
 
+const requestAbort = (request: IncomingMessage, response: ServerResponse): Readonly<{ readonly dispose: () => void; readonly signal: AbortSignal }> => {
+  const controller = new AbortController();
+  const abort = (): void => {
+    if (!controller.signal.aborted) controller.abort(new Error('Runtime MCP App request was cancelled.'));
+  };
+  const abortResponse = (): void => {
+    if (!response.writableEnded) abort();
+  };
+  request.once('aborted', abort);
+  response.once('close', abortResponse);
+  return Object.freeze({
+    dispose: () => {
+      request.removeListener('aborted', abort);
+      response.removeListener('close', abortResponse);
+    },
+    signal: controller.signal,
+  });
+};
+
 const exactRecord = (value: unknown, fields: readonly string[]): JsonObject | undefined =>
   isRecord(value) && hasOnly(value, fields) ? value : undefined;
 
@@ -575,7 +594,12 @@ export class McpAppRoutes {
     if (parsed.kind === 'runtime-operation') {
       if (method !== 'POST') return responseDiagnostic(response, diagnostic('AB8007', 'Route does not accept this method.', 405));
       if (runtime.get(parsed.bindingId) === undefined) this.#runtimeUnavailable(runtime, parsed.bindingId);
-      return runtimeOperationResponseJson(response, await runtime.operate(parsed.bindingId, runtimeOperation(await jsonBody(request))));
+      const cancellation = requestAbort(request, response);
+      try {
+        return runtimeOperationResponseJson(response, await runtime.operate(parsed.bindingId, runtimeOperation(await jsonBody(request)), Object.freeze({ signal: cancellation.signal })));
+      } finally {
+        cancellation.dispose();
+      }
     }
     if (parsed.kind === 'runtime-consent-create') {
       if (method !== 'POST') return responseDiagnostic(response, diagnostic('AB8007', 'Route does not accept this method.', 405));

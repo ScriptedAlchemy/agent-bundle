@@ -126,8 +126,12 @@ export interface DevRuntimeMcpSessionCloseObservation {
   unsubscribe(): void;
 }
 
+export interface DevRuntimeMcpSessionExecuteOptions {
+  readonly signal?: AbortSignal;
+}
+
 export interface DevRuntimeMcpSessionView {
-  execute(request: DevRuntimeMcpOperationRequest): Promise<DevRuntimeMcpOperationResult>;
+  execute(request: DevRuntimeMcpOperationRequest, options?: DevRuntimeMcpSessionExecuteOptions): Promise<DevRuntimeMcpOperationResult>;
   snapshot(): DevRuntimeMcpSessionSnapshot;
   watchClosed(listener: (reason?: unknown) => Promise<void> | void): DevRuntimeMcpSessionCloseObservation;
 }
