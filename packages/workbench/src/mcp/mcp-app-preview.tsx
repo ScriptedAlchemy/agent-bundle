@@ -106,6 +106,8 @@ type RuntimeRendererProps = Readonly<{
   readonly tool: McpAppRendererTool;
 }>;
 
+type RuntimeInvalidationReason = 'registry-replay-gap' | 'session-restarted';
+
 /** Server-produced App evidence is detached once before it reaches the renderer handle. */
 type RuntimeRendererInvocation = Readonly<{
   readonly input: Parameters<AppRendererHandle['sendToolInput']>[0];
@@ -474,7 +476,7 @@ export class McpAppPreviewController<State extends McpAppPreviewControllerState 
   #runtimeBridgeClosed = false;
   #runtimeBridgeFactory: RuntimeAppBridgeFactory | undefined;
   #runtimePreview: McpAppPreviewSnapshot | undefined;
-  #runtimeInvalidationReason: 'session-restarted' | undefined;
+  #runtimeInvalidationReason: RuntimeInvalidationReason | undefined;
   #runtimeInvalidationUnsubscribe: (() => void) | undefined;
   #runtimeRenderer: AppRendererHandle | undefined;
   #runtimeRendererClosed = false;
@@ -808,9 +810,9 @@ export class McpAppPreviewController<State extends McpAppPreviewControllerState 
   #matchesRuntimeInvalidation(
     preview: McpAppPreviewSnapshot,
     details: McpAppRuntimeInvalidationDetails,
-  ): boolean {
+  ): details is McpAppRuntimeInvalidationDetails & Readonly<{ readonly reason: RuntimeInvalidationReason }> {
     return details.bindingId === preview.binding.id &&
-      details.reason === 'session-restarted' &&
+      (details.reason === 'session-restarted' || details.reason === 'registry-replay-gap') &&
       details.sessionId === preview.binding.sessionId &&
       details.sessionRevision === preview.binding.sessionRevision &&
       details.state === 'revoked';
@@ -825,15 +827,19 @@ export class McpAppPreviewController<State extends McpAppPreviewControllerState 
       const closing = this.#closed && this.#closePromise !== undefined;
       if (this.#closed && !closing) return;
       this.#runtimeBackendClosed = true;
-      this.#runtimeInvalidationReason = 'session-restarted';
+      this.#runtimeInvalidationReason = details.reason;
       if (closing) return;
       this.#closed = true;
-      this.#runtimeFailure('session-restarted', new Error('Runtime MCP App session restarted. Run again to create a new preview.'));
+      this.#runtimeFailure(details.reason, new Error(
+        details.reason === 'registry-replay-gap'
+          ? 'Runtime MCP App event replay gap. Run again to create a new preview.'
+          : 'Runtime MCP App session restarted. Run again to create a new preview.',
+      ));
       const cleanup = this.#cleanupRuntime();
       this.#closePromise = cleanup;
       void cleanup.catch((error: unknown) => {
         if (this.#closePromise !== cleanup) return;
-        this.#runtimeFailure('session-restarted', error, 'cleanup-failed');
+        this.#runtimeFailure(details.reason, error, 'cleanup-failed');
         this.#closePromise = undefined;
       });
     });

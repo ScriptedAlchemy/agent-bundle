@@ -75,6 +75,16 @@ export interface ForegroundCoordinator {
   status(): ProjectStatus;
 }
 
+/** Test-only ownership of one already-authenticated SSE response. */
+export interface ForegroundProjectEventStreamHandle {
+  disconnect(): void;
+}
+
+export interface ForegroundServerTesting {
+  /** Observes the current stream only after its subscription and close listeners exist. */
+  readonly onProjectEventStream?: (stream: ForegroundProjectEventStreamHandle) => void;
+}
+
 export interface WorkbenchAsset {
   readonly body: string | Uint8Array;
   readonly contentType: string;
@@ -102,6 +112,8 @@ export interface ForegroundServerOptions {
   readonly skillDocuments?: SkillDocumentService;
   /** Injectable only to make integration contracts deterministic. */
   readonly sessionToken?: string;
+  /** Test-only foreground stream observation; production callers never supply this. */
+  readonly testing?: ForegroundServerTesting;
 }
 
 interface RequestDiagnostic {
@@ -375,6 +387,7 @@ export class ForegroundServer {
   readonly #skillDocuments: SkillDocumentService | undefined;
   readonly #sockets = new Set<Socket>();
   readonly #streamSubscriptions = new Set<ProjectEventSubscription>();
+  readonly #testing: ForegroundServerTesting | undefined;
   #closePromise: Promise<void> | undefined;
   #closing = false;
   #listenStarted = false;
@@ -401,6 +414,7 @@ export class ForegroundServer {
     this.#port = port;
     this.#sessionCookieName = `agent-bundle-foreground-session-${randomUUID().replaceAll('-', '')}`;
     this.#skillDocuments = options.skillDocuments;
+    this.#testing = options.testing;
     this.sessionToken = options.sessionToken ?? randomUUID();
     this.#mcpAppRoutes = new McpAppRoutes({
       authorize: (request) => this.#assertMutationSession(request),
@@ -744,6 +758,17 @@ export class ForegroundServer {
     this.#streamSubscriptions.add(subscription);
     request.once('close', closeStream);
     response.once('close', closeStream);
+    const handle = Object.freeze({
+      disconnect: () => {
+        if (closed) return;
+        closeSlowStream();
+      },
+    });
+    try {
+      this.#testing?.onProjectEventStream?.(handle);
+    } catch {
+      // Test observation cannot perturb an authenticated project stream.
+    }
   }
 
   async #serveAsset(request: IncomingMessage, response: ServerResponse, method: string): Promise<void> {

@@ -679,6 +679,7 @@ e2e('restarts the real Runtime MCP App session when definition or transport auth
     });
   };
   const runtimeEvents: Array<Readonly<{
+    readonly lastEventId: string;
     readonly payload: Readonly<{
       readonly details?: Readonly<Record<string, unknown>>;
       readonly mcpRegistryRevision?: number;
@@ -689,18 +690,27 @@ e2e('restarts the real Runtime MCP App session when definition or transport auth
     }>;
     readonly type?: string;
   }>> = [];
-  await page.exposeBinding('__recordRuntimeRestartEvent', (_source, payload: unknown) => {
-    if (typeof payload !== 'string') return;
+  const replayGaps: Array<Readonly<{ readonly data: string; readonly lastEventId: string }>> = [];
+  await page.exposeBinding('__recordRuntimeRestartEvent', (_source, value: unknown) => {
+    if (value === null || typeof value !== 'object') return;
+    const payload = value as Readonly<{ readonly data?: unknown; readonly lastEventId?: unknown }>;
+    if (typeof payload.data !== 'string' || typeof payload.lastEventId !== 'string') return;
     try {
-      const parsed = JSON.parse(payload) as Readonly<{
+      const parsed = JSON.parse(payload.data) as Readonly<{
         readonly payload?: unknown;
         readonly type?: unknown;
       }>;
       if (parsed.type !== 'runtime.event' || parsed.payload === null || typeof parsed.payload !== 'object') return;
-      runtimeEvents.push(parsed as (typeof runtimeEvents)[number]);
+      runtimeEvents.push(Object.freeze({ ...parsed, lastEventId: payload.lastEventId }) as (typeof runtimeEvents)[number]);
     } catch {
       // The real EventSource listener remains authoritative; malformed test observation is ignored.
     }
+  });
+  await page.exposeBinding('__recordRuntimeReplayGap', (_source, payload: unknown) => {
+    if (payload === null || typeof payload !== 'object') return;
+    const value = payload as Readonly<{ readonly data?: unknown; readonly lastEventId?: unknown }>;
+    if (typeof value.data !== 'string' || typeof value.lastEventId !== 'string') return;
+    replayGaps.push(Object.freeze({ data: value.data, lastEventId: value.lastEventId }));
   });
   await page.addInitScript(() => {
     const addEventListener = EventSource.prototype.addEventListener;
@@ -713,9 +723,29 @@ e2e('restarts the real Runtime MCP App session when definition or transport auth
         const data = (event as Event & Readonly<{ readonly data?: unknown }>).data;
         if (type === 'runtime.event' && typeof data === 'string') {
           const record = (globalThis as typeof globalThis & {
-            __recordRuntimeRestartEvent?: (payload: string) => Promise<void>;
+            __recordRuntimeRestartEvent?: (payload: Readonly<{ readonly data: string; readonly lastEventId: string }>) => Promise<void>;
           }).__recordRuntimeRestartEvent;
-          if (record !== undefined) void record(data);
+          if (record !== undefined) {
+            void record(Object.freeze({
+              data,
+              lastEventId: (event as Event & Readonly<{ readonly lastEventId?: unknown }>).lastEventId === undefined
+                ? ''
+                : String((event as Event & Readonly<{ readonly lastEventId?: unknown }>).lastEventId),
+            }));
+          }
+        }
+        if (type === 'replay.gap' && typeof data === 'string') {
+          const record = (globalThis as typeof globalThis & {
+            __recordRuntimeReplayGap?: (payload: Readonly<{ readonly data: string; readonly lastEventId: string }>) => Promise<void>;
+          }).__recordRuntimeReplayGap;
+          if (record !== undefined) {
+            void record(Object.freeze({
+              data,
+              lastEventId: (event as Event & Readonly<{ readonly lastEventId?: unknown }>).lastEventId === undefined
+                ? ''
+                : String((event as Event & Readonly<{ readonly lastEventId?: unknown }>).lastEventId),
+            }));
+          }
         }
         if (typeof listener === 'function') listener.call(this, event);
         else listener.handleEvent(event);
@@ -728,7 +758,6 @@ e2e('restarts the real Runtime MCP App session when definition or transport auth
     const url = new URL(request.url());
     if (url.origin !== fixture.url) return;
     if (url.pathname.startsWith('/api/mcp/sessions')) artifactMcpSessionRequests.push(`${request.method()} ${url.pathname}`);
-    if (url.pathname === '/api/project/events') projectEventStreams.push(`${request.method()} ${url.pathname}`);
     if (url.pathname.startsWith('/api/runtime/mcp/sessions')) runtimeMcpSessionRequests.push(`${request.method()} ${url.pathname}`);
     if (url.pathname === '/api/runtime/runs') {
       runtimeRunRequests.push(`${request.method()} ${url.pathname}`);
@@ -742,6 +771,9 @@ e2e('restarts the real Runtime MCP App session when definition or transport auth
   });
   page.on('response', (response) => {
     const url = new URL(response.url());
+    if (url.origin === fixture.url && response.request().method() === 'GET' && response.status() === 200 && url.pathname === '/api/project/events') {
+      projectEventStreams.push(`${response.request().method()} ${url.pathname}`);
+    }
     if (url.origin !== fixture.url || response.request().method() !== 'POST' || url.pathname !== '/api/runtime/apps') return;
     const index = runtimeAppCreates.findIndex((candidate) => candidate.response === undefined && JSON.stringify(candidate.body) === response.request().postData());
     if (index < 0) return;
@@ -915,24 +947,63 @@ e2e('restarts the real Runtime MCP App session when definition or transport auth
     );
     expect(changedTransport).not.toBe(configSource);
     const transportEventStart = runtimeEvents.length;
+    const replayCursor = runtimeEvents.at(-1)?.lastEventId;
+    if (replayCursor === undefined || !/^(0|[1-9]\d*)$/u.test(replayCursor)) {
+      throw new Error('Runtime event stream did not expose a canonical cursor before replay disconnect.');
+    }
+    await expect.poll(() => fixture.eventHubState.subscriptionCount, { timeout: 15_000 }).toBe(1);
+    await page.context().setOffline(true);
+    fixture.disconnectProjectEventStream();
+    await expect.poll(() => fixture.eventHubState.subscriptionCount, { timeout: 15_000 }).toBe(0);
     await writeFile(fixture.configSource, changedTransport);
-    await expect.poll(() => eventsSince(transportEventStart, 'runtime.mcp.restarting', definitionRun), { timeout: 15_000 }).not.toEqual([]);
-    await expect.poll(() => eventsSince(transportEventStart, 'runtime.mcp.ready', definitionRun), { timeout: 15_000 }).not.toEqual([]);
-    const transportRestartEvents = eventsSince(transportEventStart, 'runtime.mcp.restarting', definitionRun);
-    const transportReadyEvents = eventsSince(transportEventStart, 'runtime.mcp.ready', definitionRun);
-    expect(transportRestartEvents).toHaveLength(1);
-    expect(transportReadyEvents).toHaveLength(1);
-    expect(runtimeEvents.indexOf(transportRestartEvents[0]!)).toBeLessThan(runtimeEvents.indexOf(transportReadyEvents[0]!));
-    await expect.poll(() => runtimeEvents.slice(transportEventStart).find((event) =>
-      event.payload.type === 'runtime.app.updated' && event.payload.details?.bindingId === definitionRun.id &&
-      event.payload.details.reason === 'session-restarted' && event.payload.details.state === 'revoked'), { timeout: 15_000 }).toBeDefined();
+    const definitionOperationPath = `/api/runtime/apps/${encodeURIComponent(definitionRun.id)}/operations`;
+    await expect.poll(async () => {
+      const response = await fetch(new URL(definitionOperationPath, fixture.url), {
+        body: JSON.stringify({ kind: 'resources/read', uri: resourceUri }),
+        headers: {
+          'content-type': 'application/json',
+          origin: fixture.url,
+          'x-agent-bundle-session': initialSessionToken,
+        },
+        method: 'POST',
+      });
+      return Object.freeze({ body: await response.json(), status: response.status });
+    }, { timeout: 15_000 }).toEqual({
+      body: { diagnostic: { code: 'AB8022', message: 'Runtime MCP App preview was revoked.' } },
+      status: 410,
+    });
+    await expect.poll(async () => {
+      const response = await fetch(new URL('/api/runtime/status', fixture.url), {
+        headers: { origin: fixture.url, 'x-agent-bundle-session': initialSessionToken },
+      });
+      if (!response.ok) return false;
+      const body = await response.json() as Readonly<{ readonly status?: RuntimeStatus }>;
+      return body.status?.state === 'active' && body.status.activeVector?.providerSessionId === initialProviderSession;
+    }, { timeout: 15_000 }).toBe(true);
+    const sequenceBeforeReplayNoise = fixture.eventHubState.latestSequence;
+    fixture.publishReplayNoise();
+    expect(fixture.eventHubState.latestSequence).toBe(sequenceBeforeReplayNoise + 257);
+    await page.context().setOffline(false);
+    await expect.poll(() => fixture.eventHubState.subscriptionCount, { timeout: 15_000 }).toBe(1);
+    await expect.poll(() => projectEventStreams, { timeout: 15_000 }).toEqual([
+      'GET /api/project/events',
+      'GET /api/project/events',
+    ]);
+    await expect.poll(() => replayGaps.length, { timeout: 15_000 }).toBe(1);
+    const replayGap = replayGaps[0];
+    if (replayGap === undefined) throw new Error('Project EventSource did not deliver a replay gap.');
+    // An id-less SSE frame preserves the prior EventSource cursor rather than advancing it.
+    expect(replayGap.lastEventId).toBe(replayCursor);
+    expect(JSON.parse(replayGap.data)).toMatchObject({
+      latestDroppedSequence: expect.any(Number),
+      requestedAfterSequence: Number(replayCursor),
+      type: 'replay.gap',
+    });
     await page.locator('.runtime-stage .mcp-app-preview iframe').waitFor({ state: 'detached', timeout: 15_000 });
     expect(await page.locator('.runtime-stage .mcp-app-preview iframe').count()).toBe(0);
+    await expect(page.getByText('Interactive App rendering is unavailable (registry-replay-gap). Showing the ordinary tool result instead.')).toBeVisible();
     expect(runtimeAppRequests.filter((request) => request.startsWith('DELETE /api/runtime/apps/'))).toEqual([]);
     await expect.poll(() => runtimeAppCreates.length, { timeout: 1_000 }).toBe(2);
-    const transportReady = transportReadyEvents[0];
-    expect(transportReady?.payload.mcpSessionRevision).toBeGreaterThan(definitionRun.sessionRevision);
-    expect(transportReady?.payload.mcpRegistryRevision).toBeGreaterThan(definitionRun.registryRevision);
 
     const runButton = page.getByRole('button', { name: 'Run', exact: true });
     await expect.poll(async () => {
@@ -1003,7 +1074,10 @@ e2e('restarts the real Runtime MCP App session when definition or transport auth
     expect(await runtimeIdentity.getAttribute('data-runtime-provider-session')).toBe(initialProviderSession);
     expect(artifactMcpSessionRequests).toEqual([]);
     expect(runtimeMcpSessionRequests.filter((request) => request === 'POST /api/runtime/mcp/sessions')).toEqual([]);
-    expect(projectEventStreams).toEqual(['GET /api/project/events']);
+    expect(projectEventStreams).toEqual([
+      'GET /api/project/events',
+      'GET /api/project/events',
+    ]);
     expect(await page.locator('.runtime-stage .mcp-app-preview iframe').count()).toBe(1);
     expect(pageErrors).toEqual([]);
   } finally {

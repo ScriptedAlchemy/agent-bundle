@@ -1068,6 +1068,40 @@ it('closes and releases a paused SSE client after its outstanding bytes exceed t
   }
 });
 
+it('test-only event stream handles disconnect only their current foreground SSE subscription', async () => {
+  const eventHub = new ProjectEventHub();
+  const handles: Array<Readonly<{ readonly disconnect: () => void }>> = [];
+  const server = await startForegroundServer({
+    coordinator: new RecordingCoordinator(),
+    eventHub,
+    port: 0,
+    testing: { onProjectEventStream: (handle) => handles.push(handle) },
+  });
+  const first = openLiveStream(server.url);
+
+  try {
+    await expect(within(first.opened, 250)).resolves.toBeUndefined();
+    await expect(eventually(() => handles.length === 1, 250)).resolves.toBeUndefined();
+    const stale = handles[0];
+    if (stale === undefined) throw new Error('Expected first stream handle.');
+    stale.disconnect();
+    stale.disconnect();
+    await expect(eventually(() => eventHub.subscriptionCount === 0, 250)).resolves.toBeUndefined();
+
+    const replacement = openLiveStream(server.url);
+    await expect(within(replacement.opened, 250)).resolves.toBeUndefined();
+    await expect(eventually(() => handles.length === 2 && eventHub.subscriptionCount === 1, 250)).resolves.toBeUndefined();
+    stale.disconnect();
+    expect(eventHub.subscriptionCount).toBe(1);
+    handles[1]?.disconnect();
+    await expect(eventually(() => eventHub.subscriptionCount === 0, 250)).resolves.toBeUndefined();
+    replacement.close();
+  } finally {
+    first.close();
+    await server.close();
+  }
+});
+
 it('retains both startup and cleanup failures structurally', async () => {
   const coordinator = new FailingStartCoordinator();
   const server = new ForegroundServer({ coordinator, eventHub: new ProjectEventHub(), port: 0 });

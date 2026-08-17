@@ -1114,6 +1114,69 @@ describe('MCP App preview', () => {
     expect(unsubscribes).toBe(1);
   });
 
+  it('locally tears down an exact runtime preview after a registry replay gap without deleting its revoked binding', async () => {
+    const order: string[] = [];
+    let invalidation: ((details: {
+      readonly bindingId: string;
+      readonly reason: 'registry-replay-gap';
+      readonly sessionId: string;
+      readonly sessionRevision: number;
+      readonly state: 'revoked';
+    }) => void) | undefined;
+    let unsubscribes = 0;
+    const client = runtimeClient(Object.freeze({
+      closeRuntime: async () => { order.push('binding'); },
+      createRuntime: async () => runtimePreview,
+      currentDocumentPolicy: () => Object.freeze({ bindingId: runtimePreview.binding.id, snapshot: runtimePreview.documentPolicy }),
+      subscribeInvalidations: (listener: typeof invalidation) => {
+        invalidation = listener;
+        return () => { unsubscribes += 1; };
+      },
+    }));
+    const bridgeFactory = Object.assign(
+      () => { throw new Error('renderer installation is represented by its ref'); },
+      { close: async () => { order.push('bridge'); } },
+    ) as RuntimeAppBridgeFactory;
+    const controller = createMcpAppPreviewController(runtimeProps(client, () => bridgeFactory));
+    await controller.start();
+    controller.runtimeRendererRef?.(Object.freeze({
+      sendToolCancelled: async () => undefined,
+      sendToolInput: async () => undefined,
+      sendToolResult: async () => undefined,
+      teardown: async () => { order.push('renderer'); },
+    }));
+    const listener = invalidation;
+    if (listener === undefined) throw new Error('Expected runtime invalidation subscription.');
+
+    listener({
+      bindingId: 'foreign-binding',
+      reason: 'registry-replay-gap',
+      sessionId: runtimePreview.binding.sessionId,
+      sessionRevision: runtimePreview.binding.sessionRevision,
+      state: 'revoked',
+    });
+    await Promise.resolve();
+    expect(order).toEqual([]);
+
+    const revoked = Object.freeze({
+      bindingId: runtimePreview.binding.id,
+      reason: 'registry-replay-gap' as const,
+      sessionId: runtimePreview.binding.sessionId,
+      sessionRevision: runtimePreview.binding.sessionRevision,
+      state: 'revoked' as const,
+    });
+    listener(revoked);
+    await expect.poll(() => order).toEqual(['renderer', 'bridge']);
+    listener(revoked);
+    await Promise.resolve();
+
+    expect(order).toEqual(['renderer', 'bridge']);
+    expect(unsubscribes).toBe(1);
+    expect(controller.state).toMatchObject({ fallback: { reason: 'registry-replay-gap' }, kind: 'runtime', phase: 'error' });
+    await expect(controller.close()).resolves.toBeUndefined();
+    expect(order).toEqual(['renderer', 'bridge']);
+  });
+
   it('retains a matching invalidation cleanup failure for the same lifecycle retry without recreating or closing its revoked binding', async () => {
     let creates = 0;
     let teardowns = 0;
