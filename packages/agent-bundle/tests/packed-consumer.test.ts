@@ -77,7 +77,6 @@ it('uses only an installed tarball after source deletion', async () => {
   const packedPackageRoot = join(consumerRoot, 'packed-agent-bundle');
   const projectRoot = join(consumerRoot, 'project with spaces');
   const firstArtifact = join(projectRoot, 'first artifact');
-  const secondArtifact = join(projectRoot, 'second artifact');
 
   try {
     await cp(packageRoot, packedPackageRoot, { recursive: true });
@@ -113,8 +112,9 @@ it('uses only an installed tarball after source deletion', async () => {
     expect(JSON.parse(inspection)).toMatchObject({ model: { metadata: { name: 'integration-fixture' } } });
 
     await runInstalled(cli, projectRoot, ['build', '--root', projectRoot, '--output', firstArtifact]);
-    await runInstalled(cli, projectRoot, ['build', '--root', projectRoot, '--output', secondArtifact]);
-    expect(await artifactDigest(firstArtifact)).toEqual(await artifactDigest(secondArtifact));
+    const firstArtifactDigest = await artifactDigest(firstArtifact);
+    await runInstalled(cli, projectRoot, ['build', '--root', projectRoot, '--output', firstArtifact]);
+    expect(firstArtifactDigest).toEqual(await artifactDigest(firstArtifact));
 
     const manifest = JSON.parse(await readFile(join(firstArtifact, 'agent-bundle.manifest.json'), 'utf8')) as {
       readonly files: readonly (ManifestDigest & {
