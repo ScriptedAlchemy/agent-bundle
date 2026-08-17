@@ -1,6 +1,12 @@
+import { realpathSync } from 'node:fs';
+import { resolve } from 'node:path';
+
 import { pluginReact } from '@rsbuild/plugin-react';
 import { withRslibConfig } from '@rstest/adapter-rslib';
 import { defineConfig } from '@rstest/core';
+
+const browserReactRoot = realpathSync(resolve('node_modules/react'));
+const browserReactDomRoot = realpathSync(resolve('node_modules/react-dom'));
 
 export default defineConfig({
   browser: {
@@ -20,6 +26,8 @@ export default defineConfig({
       '@inspector/core/mcp/fetchTracking.js': resolve('packages/workbench/src/inspector/vendor/core/mcp/fetchTracking.ts'),
       '@inspector/core/mcp/types.js': resolve('packages/workbench/src/inspector/vendor/core/mcp/types.ts'),
       '@inspector/core': resolve('packages/workbench/src/inspector/vendor/core'),
+      react: browserReactRoot,
+      'react-dom': browserReactDomRoot,
     },
   },
   tools: {
@@ -30,4 +38,3 @@ export default defineConfig({
     },
   },
 });
-import { resolve } from 'node:path';
