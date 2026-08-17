@@ -18,6 +18,13 @@ type HookProbeSummary = {
   launches: number;
 };
 
+type NativeEvidenceEnvelope = {
+  capturedAt: string;
+  claims: Array<{ basis: string; evidence: 'inferred' | 'observed' | 'unavailable'; id: string }>;
+  host: 'claude' | 'codex';
+  hostVersion: string;
+};
+
 const marker = (host: 'claude' | 'codex'): string => `HOST_EVAL_FINAL host=${host} path=host-created.txt`;
 
 const parseEvidence = async (host: 'claude' | 'codex', transcript: string): Promise<TranscriptEvidence> => {
@@ -59,6 +66,72 @@ const parseHookProbe = async (records: unknown[]): Promise<HookProbeSummary & { 
   expect(exitCode).toBe(0);
   expect(stderr).toBe('');
   return JSON.parse(stdout) as HookProbeSummary & { hookObserved: boolean };
+};
+
+const classifyEvidence = async (
+  host: 'claude' | 'codex',
+  result: Record<string, unknown>,
+  capturedAt: string,
+): Promise<NativeEvidenceEnvelope> => {
+  const moduleUrl = pathToFileURL(join(process.cwd(), 'scripts/eval-evidence.mjs')).href;
+  const source = [
+    `import { classifyNativeEvidence } from ${JSON.stringify(moduleUrl)};`,
+    `process.stdout.write(JSON.stringify(classifyNativeEvidence(${JSON.stringify(host)}, ${JSON.stringify(result)}, { capturedAt: ${JSON.stringify(capturedAt)} })));`,
+  ].join('\n');
+  const child = spawn(process.execPath, ['--input-type=module', '--eval', source], { stdio: ['ignore', 'pipe', 'pipe'] });
+  let stdout = '';
+  let stderr = '';
+  child.stdout.setEncoding('utf8');
+  child.stderr.setEncoding('utf8');
+  child.stdout.on('data', (chunk: string) => { stdout += chunk; });
+  child.stderr.on('data', (chunk: string) => { stderr += chunk; });
+  const [exitCode] = (await once(child, 'close')) as [number | null];
+
+  expect(exitCode).toBe(0);
+  expect(stderr).toBe('');
+  return JSON.parse(stdout) as NativeEvidenceEnvelope;
+};
+
+const sanitizeEnvironment = async (
+  environment: Record<string, string | undefined>,
+  owned: { codexHome: string; hookProbeFile: string; stateFile: string },
+): Promise<Record<string, string>> => {
+  const moduleUrl = pathToFileURL(join(process.cwd(), 'scripts/eval-host-environment.mjs')).href;
+  const source = [
+    `import { sanitizedHostEnvironment } from ${JSON.stringify(moduleUrl)};`,
+    `process.stdout.write(JSON.stringify(sanitizedHostEnvironment(${JSON.stringify(environment)}, ${JSON.stringify(owned)})));`,
+  ].join('\n');
+  const child = spawn(process.execPath, ['--input-type=module', '--eval', source], { stdio: ['ignore', 'pipe', 'pipe'] });
+  let stdout = '';
+  let stderr = '';
+  child.stdout.setEncoding('utf8');
+  child.stderr.setEncoding('utf8');
+  child.stdout.on('data', (chunk: string) => { stdout += chunk; });
+  child.stderr.on('data', (chunk: string) => { stderr += chunk; });
+  const [exitCode] = (await once(child, 'close')) as [number | null];
+
+  expect(exitCode).toBe(0);
+  expect(stderr).toBe('');
+  return JSON.parse(stdout) as Record<string, string>;
+};
+
+const unavailableHostEnvelope = async (): Promise<{ capturedAt: string; hosts: NativeEvidenceEnvelope[]; schemaVersion: number }> => {
+  const child = spawn(process.execPath, ['scripts/eval-hosts.mjs', '--host', 'claude'], {
+    cwd: process.cwd(),
+    env: { HOME: '/tmp', LANG: 'C', PATH: '', TERM: 'dumb' },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let stdout = '';
+  let stderr = '';
+  child.stdout.setEncoding('utf8');
+  child.stderr.setEncoding('utf8');
+  child.stdout.on('data', (chunk: string) => { stdout += chunk; });
+  child.stderr.on('data', (chunk: string) => { stderr += chunk; });
+  const [exitCode] = (await once(child, 'close')) as [number | null];
+
+  expect(exitCode).toBe(1);
+  expect(stderr).toBe('');
+  return JSON.parse(stdout) as { capturedAt: string; hosts: NativeEvidenceEnvelope[]; schemaVersion: number };
 };
 
 test('does not treat Claude prompt, prose, or tool listings as host evidence', async () => {
@@ -178,4 +251,129 @@ test('accepts only completed Codex MCP calls and its terminal agent result', asy
     mcpReadObserved: true,
     rscRenderToolObserved: true,
   });
+});
+
+test('classifies complete Claude native evidence as literal claim-level observations', async () => {
+  const capturedAt = '2026-08-14T20:00:00.000Z';
+  const completeClaude = {
+    editObservedByHook: true,
+    editObservedByMcp: true,
+    finalMarkerObserved: true,
+    rscRenderToolObserved: true,
+    sessionAvailable: true,
+    version: '2.1.232',
+  };
+
+  await expect(classifyEvidence('claude', completeClaude, capturedAt)).resolves.toEqual({
+    capturedAt,
+    claims: [
+      { basis: 'native terminal marker and loaded plugin session', evidence: 'observed', id: 'package-activation' },
+      { basis: 'value-free hook launch probe exited 0', evidence: 'observed', id: 'hook-dispatch' },
+      { basis: 'completed recent_edits call with native success result', evidence: 'observed', id: 'mcp-read' },
+      { basis: 'completed render_edit_timeline call with native success result', evidence: 'observed', id: 'rsc-render' },
+      { basis: 'hook-recorded state was returned by recent_edits', evidence: 'observed', id: 'shared-hook-mcp-state' },
+      { basis: 'Claude Code CLI is not an MCP Apps iframe host', evidence: 'unavailable', id: 'mcp-app-iframe' },
+    ],
+    host: 'claude',
+    hostVersion: '2.1.232',
+  });
+});
+
+test('keeps Codex hook claims unavailable under exec ephemeral despite completed MCP calls', async () => {
+  const capturedAt = '2026-08-14T20:00:00.000Z';
+  const incompleteCodex = {
+    editObservedByHook: true,
+    editObservedByMcp: true,
+    finalMarkerObserved: true,
+    rscRenderToolObserved: true,
+    sessionAvailable: true,
+    version: '0.147.0',
+  };
+
+  await expect(classifyEvidence('codex', incompleteCodex, capturedAt)).resolves.toEqual({
+    capturedAt,
+    claims: [
+      { basis: 'native terminal marker and loaded plugin session', evidence: 'observed', id: 'package-activation' },
+      { basis: 'Codex exec --ephemeral does not prove native hook dispatch', evidence: 'unavailable', id: 'hook-dispatch' },
+      { basis: 'completed recent_edits call with native success result', evidence: 'observed', id: 'mcp-read' },
+      { basis: 'completed render_edit_timeline call with native success result', evidence: 'observed', id: 'rsc-render' },
+      { basis: 'Codex exec --ephemeral has no native hook-recorded state correlation', evidence: 'unavailable', id: 'shared-hook-mcp-state' },
+      { basis: 'Codex CLI is not an MCP Apps iframe host', evidence: 'unavailable', id: 'mcp-app-iframe' },
+    ],
+    host: 'codex',
+    hostVersion: '0.147.0',
+  });
+});
+
+test('keeps unavailable-host claims bounded and removes ambient credentials from child environments', async () => {
+  const capturedAt = '2026-08-14T20:00:00.000Z';
+  const missing = await classifyEvidence('claude', {}, capturedAt);
+  expect(missing).toEqual({
+    capturedAt,
+    claims: [
+      { basis: 'installed host/version/session unavailable', evidence: 'unavailable', id: 'package-activation' },
+      { basis: 'installed host/version/session unavailable', evidence: 'unavailable', id: 'hook-dispatch' },
+      { basis: 'installed host/version/session unavailable', evidence: 'unavailable', id: 'mcp-read' },
+      { basis: 'installed host/version/session unavailable', evidence: 'unavailable', id: 'rsc-render' },
+      { basis: 'installed host/version/session unavailable', evidence: 'unavailable', id: 'shared-hook-mcp-state' },
+      { basis: 'Claude Code CLI is not an MCP Apps iframe host', evidence: 'unavailable', id: 'mcp-app-iframe' },
+    ],
+    host: 'claude',
+    hostVersion: 'unavailable',
+  });
+  expect(JSON.stringify(missing)).not.toMatch(/secret|auth|prompt|transcript|\/private/iu);
+
+  const environment = {
+    ANTHROPIC_API_KEY: 'anthropic-secret',
+    ANTHROPIC_AUTH_TOKEN: 'anthropic-auth',
+    ANTHROPIC_BASE_URL: 'https://private.example',
+    CLAUDE_CODE_USE_BEDROCK: '1',
+    CLAUDE_CODE_USE_FOUNDRY: '1',
+    CLAUDE_CODE_USE_VERTEX: '1',
+    EXAMPLE_API_KEY: 'example-secret',
+    LANG: 'en_US.UTF-8',
+    NODE_OPTIONS: '--require /private/module.cjs',
+    NODE_PATH: '/private/modules',
+    OPENAI_API_KEY: 'openai-secret',
+    PATH: '/safe/bin',
+    TERM: 'xterm-256color',
+    openai_api_key: 'case-insensitive-secret',
+  };
+  const before = { ...environment };
+  await expect(sanitizeEnvironment(environment, {
+    codexHome: '/tmp/owned-codex-home',
+    hookProbeFile: '/tmp/owned-hook-probe.jsonl',
+    stateFile: '/tmp/owned-state.jsonl',
+  })).resolves.toEqual({
+    AGENT_RUNTIME_HOOK_PROBE_FILE: '/tmp/owned-hook-probe.jsonl',
+    AGENT_RUNTIME_STATE_FILE: '/tmp/owned-state.jsonl',
+    CODEX_HOME: '/tmp/owned-codex-home',
+    LANG: 'en_US.UTF-8',
+    PATH: '/safe/bin',
+    TERM: 'xterm-256color',
+  });
+  expect(environment).toEqual(before);
+});
+
+test('emits one schema-v2 envelope and fails truthfully when the selected native host is unavailable', async () => {
+  const envelope = await unavailableHostEnvelope();
+
+  expect(Object.keys(envelope).sort()).toEqual(['capturedAt', 'hosts', 'schemaVersion']);
+  expect(envelope.schemaVersion).toBe(2);
+  expect(envelope.capturedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/u);
+  expect(envelope.hosts).toEqual([
+    {
+      capturedAt: envelope.capturedAt,
+      claims: [
+        { basis: 'installed host/version/session unavailable', evidence: 'unavailable', id: 'package-activation' },
+        { basis: 'installed host/version/session unavailable', evidence: 'unavailable', id: 'hook-dispatch' },
+        { basis: 'installed host/version/session unavailable', evidence: 'unavailable', id: 'mcp-read' },
+        { basis: 'installed host/version/session unavailable', evidence: 'unavailable', id: 'rsc-render' },
+        { basis: 'installed host/version/session unavailable', evidence: 'unavailable', id: 'shared-hook-mcp-state' },
+        { basis: 'Claude Code CLI is not an MCP Apps iframe host', evidence: 'unavailable', id: 'mcp-app-iframe' },
+      ],
+      host: 'claude',
+      hostVersion: 'unavailable',
+    },
+  ]);
 });

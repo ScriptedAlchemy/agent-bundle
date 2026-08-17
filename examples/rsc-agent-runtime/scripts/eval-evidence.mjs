@@ -61,6 +61,56 @@ const claudeEvidence = (events, marker) => {
 
 const distinct = (values) => [...new Set(values)].sort();
 
+const terminalHostCanRenderIframe = false;
+const evidence = (condition, observedBasis, unavailableBasis) => ({
+  basis: condition ? observedBasis : unavailableBasis,
+  evidence: condition ? 'observed' : 'unavailable',
+});
+
+const observed = (result, key) => isRecord(result) && result[key] === true;
+
+/** Converts bounded native-run observations into explicit, non-browser host claims. */
+export const classifyNativeEvidence = (host, result, { capturedAt }) => {
+  const hostAvailable = isRecord(result) && typeof result.version === 'string';
+  const unavailableBasis = hostAvailable ? 'selected native run did not produce the required evidence' : 'installed host/version/session unavailable';
+  const packageActivated = hostAvailable && observed(result, 'sessionAvailable') && observed(result, 'finalMarkerObserved');
+  const hookDispatched = host === 'claude' && hostAvailable && observed(result, 'editObservedByHook');
+  const mcpRead = hostAvailable && observed(result, 'editObservedByMcp');
+  const rscRender = hostAvailable && observed(result, 'rscRenderToolObserved');
+  const sharedHookState = host === 'claude' && hookDispatched && mcpRead;
+  const iframeBasis = host === 'claude'
+    ? 'Claude Code CLI is not an MCP Apps iframe host'
+    : 'Codex CLI is not an MCP Apps iframe host';
+
+  return {
+    capturedAt,
+    claims: [
+      { id: 'package-activation', ...evidence(packageActivated, 'native terminal marker and loaded plugin session', unavailableBasis) },
+      {
+        id: 'hook-dispatch',
+        ...evidence(
+          hookDispatched,
+          'value-free hook launch probe exited 0',
+          host === 'codex' && hostAvailable ? 'Codex exec --ephemeral does not prove native hook dispatch' : unavailableBasis,
+        ),
+      },
+      { id: 'mcp-read', ...evidence(mcpRead, 'completed recent_edits call with native success result', unavailableBasis) },
+      { id: 'rsc-render', ...evidence(rscRender, 'completed render_edit_timeline call with native success result', unavailableBasis) },
+      {
+        id: 'shared-hook-mcp-state',
+        ...evidence(
+          sharedHookState,
+          'hook-recorded state was returned by recent_edits',
+          host === 'codex' && hostAvailable ? 'Codex exec --ephemeral has no native hook-recorded state correlation' : unavailableBasis,
+        ),
+      },
+      { id: 'mcp-app-iframe', ...evidence(terminalHostCanRenderIframe, 'terminal host iframe rendering is not supported', iframeBasis) },
+    ],
+    host,
+    hostVersion: hostAvailable ? result.version : 'unavailable',
+  };
+};
+
 /** Reduces hook probe records to key/type/exit-status evidence without returning input values. */
 export const summarizeHookProbe = (records) => {
   const probeRecords = Array.isArray(records) ? records.filter(isRecord) : [];

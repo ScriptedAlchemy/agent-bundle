@@ -110,9 +110,11 @@ Codex uses a separate native manifest, marketplace entry, `cwd: "./"` MCP path, 
 npm run eval:hosts -w @agent-bundle/rsc-agent-runtime-demo -- --host all
 ```
 
-It requires exactly Claude Code `2.1.232` and Codex CLI `0.147.0`, creates a temporary Git workspace, and emits sanitized JSON only: version, required-evidence booleans, event counts, and elapsed time. Hook proof comes from the value-free hook launch probe; MCP tool proof requires a matching non-error native `tool_result`. It inherits existing CLI sessions and never adds provider credential variables, stores raw transcripts, or prints authentication content. Any unavailable or incomplete selected native run exits nonzero with incomplete evidence; the evaluator does not classify authentication failures separately.
+It requires exactly Claude Code `2.1.232` and Codex CLI `0.147.0`, creates a temporary Git workspace, and emits one sanitized schema-v2 JSON evidence document. Each native envelope contains only its host/version and six claim-level observations: package activation, hook dispatch, MCP read, RSC render, shared hook/MCP state, and MCP App iframe support. Hook proof comes from the value-free hook launch probe; MCP tool proof requires a matching non-error native `tool_result`. Native CLI children receive only an ordinary-session environment allowlist plus owned temporary paths; the evaluator never forwards provider credential, token, routing, module-path, or caught-error text, stores raw transcripts, or prints authentication content. Any unavailable or incomplete selected native run exits nonzero while still emitting its complete truthful evidence envelope.
 
 Codex CLI is not the ChatGPT UI host. Claude fully proves hook→MCP/RSC shared behavior. Codex proves package installation, MCP invocation, RSC render, and the final marker only: native PostToolUse/shared state is unproven under pinned `codex exec --ephemeral`, so its evaluator intentionally exits nonzero. The pinned host emits `apply_patch` command-shaped hook payloads, but the observed run did not dispatch the native hook; [the upstream Codex issue is analogous evidence](https://github.com/openai/codex/issues/26729), not proof of the exact cause. Neither CLI claim means that it renders the timeline iframe.
+
+Portable, ChatGPT/OpenAI, and Claude Workbench profiles are local compatibility simulations, not vendor certification. ChatGPT Developer Mode remains unavailable in this evidence matrix unless a user separately captures a real public HTTPS-host result.
 
 ## ChatGPT Developer Mode and local browser evidence
 
@@ -126,7 +128,7 @@ AGENT_RUNTIME_PUBLIC_MCP_URL=https://tunnel.example/mcp \
 PORT=3000 node examples/rsc-agent-runtime/dist/runtime/mcp/http.js
 ```
 
-In ChatGPT Developer Mode, add the public HTTPS MCP URL, authorize the connection as prompted, and refresh/reconnect after descriptor changes so the host discovers the static tool/resource registry again. This repository validates local Streamable HTTP, resource delivery, the standard MCP Apps bridge, and browser behavior; it does **not** claim a live ChatGPT Developer Mode connection unless you perform that external connection yourself.
+In ChatGPT Developer Mode, add the public HTTPS MCP URL, authorize the connection as prompted, and refresh/reconnect after descriptor changes so the host discovers the static tool/resource registry again. This repository validates local Streamable HTTP, resource delivery, the standard MCP Apps bridge, and browser behavior; it does **not** claim a live ChatGPT Developer Mode connection unless you perform and separately capture that external HTTPS-host result.
 
 Host/Origin allowlists mitigate DNS rebinding and cross-origin requests, but they do **not** authenticate a public tunnel. Production exposure still needs the deployment's authentication and authorization layer.
 
@@ -134,9 +136,9 @@ Host/Origin allowlists mitigate DNS rebinding and cross-origin requests, but the
 
 | Host/lane | Supported behavior | Fallback/boundary |
 | --- | --- | --- |
-| Portable MCP Apps | `ui://` resource, MCP Apps bridge, Refresh through `tools/call`, local selected row | No vendor browser global or host domain required |
-| ChatGPT/OpenAI aliases | `openai/outputTemplate` descriptor alias and feature-detected `window.openai.widgetState` / `setWidgetState` | Selection stays React-instance-local without both documented capabilities |
-| Claude MCP Apps | Standard bridge, `useHostStyles`, standard dark/light variables, font CSS, safe-area insets, optional deterministic resource domain | No `window.claude`, user-agent, or product-name branch |
+| Portable MCP Apps simulation | `ui://` resource, MCP Apps bridge, Refresh through `tools/call`, local selected row | Local simulation only; no vendor browser global or host domain required |
+| ChatGPT/OpenAI simulation | `openai/outputTemplate` descriptor alias and feature-detected `window.openai.widgetState` / `setWidgetState` | Local simulation only; selection stays React-instance-local without both documented capabilities |
+| Claude MCP Apps simulation | Standard bridge, `useHostStyles`, standard dark/light variables, font CSS, safe-area insets, optional deterministic resource domain | Local simulation only; no `window.claude`, user-agent, or product-name branch |
 | Claude Code | Native plugin, `${CLAUDE_PLUGIN_ROOT}` MCP/hook paths, `Write|Edit` hook | CLI tool/hook proof only; not an iframe renderer |
 | Codex CLI | Native plugin/marketplace, relative MCP path, `${PLUGIN_ROOT}` hook, `apply_patch` matcher | MCP/RSC/final-marker evidence only; native PostToolUse/shared state is unproven under `exec --ephemeral` |
 
