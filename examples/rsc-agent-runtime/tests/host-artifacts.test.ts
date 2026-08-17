@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { access, cp, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { once } from 'node:events';
 import { tmpdir } from 'node:os';
@@ -23,6 +24,30 @@ const readJson = async <T>(path: string): Promise<T> => JSON.parse(await readFil
 const runtimeAssets = async (): Promise<string[]> => {
   const manifest = await readJson<{ allFiles: string[] }>(join(exampleRoot, 'dist/runtime/runtime-assets.json'));
   return manifest.allFiles.map((asset) => asset.replace(/^\//, ''));
+};
+
+type ArtifactDigestEntry = Readonly<{
+  readonly bytes: number;
+  readonly path: string;
+  readonly sha256: string;
+}>;
+
+const artifactDigest = async (root: string): Promise<readonly ArtifactDigestEntry[]> => {
+  const entries = (await readdir(root, { recursive: true }))
+    .filter((entry): entry is string => typeof entry === 'string')
+    .sort();
+  const digest: ArtifactDigestEntry[] = [];
+  for (const path of entries) {
+    const absolutePath = join(root, path);
+    if (!(await stat(absolutePath)).isFile()) continue;
+    const content = await readFile(absolutePath);
+    digest.push({
+      bytes: content.byteLength,
+      path,
+      sha256: createHash('sha256').update(content).digest('hex'),
+    });
+  }
+  return digest;
 };
 
 test('materializes self-contained Claude and Codex native plugin artifacts', async () => {
@@ -67,15 +92,24 @@ test('materializes self-contained Claude and Codex native plugin artifacts', asy
   expect(codexHooks.hooks.PostToolUse[0].hooks[0].command).toContain('--host codex');
   expect(JSON.stringify({ claudeMcp, claudeHooks, codexMcp, codexHooks })).not.toMatch(/api[ _-]?key/i);
 
+  const runtimeRoot = join(exampleRoot, 'dist/runtime');
+  const runtimeDigest = await artifactDigest(runtimeRoot);
+  expect(await artifactDigest(join(claudeRoot, 'runtime'))).toEqual(runtimeDigest);
+  expect(await artifactDigest(join(codexRoot, 'runtime'))).toEqual(runtimeDigest);
+
+  const assets = await runtimeAssets();
+  expect(assets.some((asset) => /^chunks\/.+\.js$/u.test(asset))).toBe(true);
   for (const root of [claudeRoot, codexRoot]) {
-    const assets = await runtimeAssets();
     for (const asset of assets) {
       await access(join(root, 'runtime', asset));
     }
-    await access(join(root, 'app/edit-timeline-v1.html'));
     const asyncChunk = assets.find((asset) => /^chunks\/.+\.js$/.test(asset));
     expect(asyncChunk).toBeDefined();
     expect((await stat(join(root, 'runtime', asyncChunk!))).isFile()).toBe(true);
+  }
+  for (const relative of ['dist/app/edit-timeline-v1.html', 'dist/app/standalone.html']) {
+    const appHtml = await readFile(join(exampleRoot, relative), 'utf8');
+    expect(appHtml).not.toMatch(/<script[^>]+src=|<link[^>]+rel=["']stylesheet["']/iu);
   }
   for (const relative of ['.agents/plugins/marketplace.json', '.codex-plugin/plugin.json', '.mcp.json', 'hooks/hooks.json', 'skills']) {
     await access(join(codexRoot, relative));
