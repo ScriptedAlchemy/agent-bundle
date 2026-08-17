@@ -250,16 +250,21 @@ export const createRscRuntimeRsbuildConfig = (
         html: { inject: 'body' },
         output: {
           cleanDistPath: false,
-          distPath: { root: root('app', 'dist/app') },
-          filename: {
-            assets: '[name][ext]',
-            css: '[name].css',
-            js: '[name].js',
+          distPath: {
+            ...(development ? {} : { js: './' }),
+            root: root('app', 'dist/app'),
           },
-          filenameHash: false,
+          ...(development ? {} : {
+            filename: {
+              assets: '[name][ext]',
+              css: '[name].css',
+              js: '[name].js',
+            },
+            filenameHash: false,
+            legalComments: 'linked',
+          }),
           inlineScripts: true,
           inlineStyles: true,
-          legalComments: 'linked',
           target: 'web',
         },
         source: {
