@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useRef, useState } from 'react';
+import { type KeyboardEvent, type ReactNode, useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 
 import type { Diagnostic } from '../../agent-bundle/src/core/diagnostics.ts';
@@ -254,8 +254,23 @@ const McpScreen = ({ appPreviewClient, connectionError, controller, model, onNav
   readonly setPresentation: (presentation: McpPresentation) => void;
   readonly status: ProjectStatus;
 }) => {
+  const presentationTabs = useRef<Record<McpPresentation, HTMLButtonElement | null>>({ inspector: null, playground: null });
   const activeEpoch = status.artifact.state === 'missing' ? undefined : status.artifact.activeEpoch;
   const targetOptions = mcpTargets.filter((target) => activeEpoch !== undefined && target in activeEpoch.targetDigests);
+  const selectPresentation = (next: McpPresentation): void => {
+    setPresentation(next);
+    presentationTabs.current[next]?.focus();
+  };
+  const handlePresentationKeyDown = (event: KeyboardEvent<HTMLButtonElement>): void => {
+    const next = event.key === 'Home' ? 'playground'
+      : event.key === 'End' ? 'inspector'
+        : event.key === 'ArrowLeft' || event.key === 'ArrowRight'
+          ? presentation === 'playground' ? 'inspector' : 'playground'
+          : undefined;
+    if (next === undefined) return;
+    event.preventDefault();
+    selectPresentation(next);
+  };
   return <WorkbenchScreen connectionError={connectionError} onNavigate={onNavigate} page="mcp">
     <div className="mcp-content">
       <div aria-label="MCP presentation" className="mcp-presentation-tabs" role="tablist">
@@ -264,8 +279,11 @@ const McpScreen = ({ appPreviewClient, connectionError, controller, model, onNav
           aria-selected={presentation === 'playground'}
           className={presentation === 'playground' ? 'mcp-presentation-tab mcp-presentation-tab--active' : 'mcp-presentation-tab'}
           id="mcp-playground-tab"
-          onClick={() => setPresentation('playground')}
+          onClick={() => selectPresentation('playground')}
+          onKeyDown={handlePresentationKeyDown}
+          ref={(element) => { presentationTabs.current.playground = element; }}
           role="tab"
+          tabIndex={presentation === 'playground' ? 0 : -1}
           type="button"
         >
           Playground
@@ -275,8 +293,11 @@ const McpScreen = ({ appPreviewClient, connectionError, controller, model, onNav
           aria-selected={presentation === 'inspector'}
           className={presentation === 'inspector' ? 'mcp-presentation-tab mcp-presentation-tab--active' : 'mcp-presentation-tab'}
           id="mcp-inspector-tab"
-          onClick={() => setPresentation('inspector')}
+          onClick={() => selectPresentation('inspector')}
+          onKeyDown={handlePresentationKeyDown}
+          ref={(element) => { presentationTabs.current.inspector = element; }}
           role="tab"
+          tabIndex={presentation === 'inspector' ? 0 : -1}
           type="button"
         >
           Inspector
