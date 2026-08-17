@@ -53,6 +53,7 @@ const createProject = async (skillMarkdown: string): Promise<string> => {
 const createRuntimeProject = async (options: Readonly<{
   readonly appMeta?: string;
   readonly appDeclaration?: string;
+  readonly configExtension?: string;
   readonly configSetup?: (metadataSentinel: string) => string;
   readonly provider?: string;
 }> = {}): Promise<{
@@ -94,6 +95,7 @@ const createRuntimeProject = async (options: Readonly<{
       "  mcp: { servers: { timeline: { apps: { dashboard: " + appDeclaration + " }, entry: './src/server.ts', targets: ['portable'] } } },",
       "  plugin: { name: 'dev-runtime-fixture', version: '1.0.0' },",
       "  targets: ['portable'],",
+      ...(options.configExtension === undefined ? [] : ["  portable: " + options.configExtension + ',']),
       '};',
       '',
     ].join('\n')),
@@ -160,6 +162,55 @@ it('keeps supplemental runtime declaration and App metadata failures out of the 
       rm(malformedDeclaration.root, { force: true, recursive: true }),
       rm(nonfiniteMetadata.root, { force: true, recursive: true }),
     ]);
+  }
+});
+
+it('surfaces a non-finite registered config extension as the closed AB4500 project diagnostic', async () => {
+  const project = await createRuntimeProject({ configExtension: 'Number.NaN' });
+  try {
+    const prepared = await new ProjectService({ includeDevRuntime: true, mode: 'development', root: project.root }).prepare('dev');
+
+    expect(prepared.source).toEqual({
+      diagnostics: [{
+        code: 'AB4500',
+        message: 'Config extension "portable" must contain strict finite JSON data.',
+        recovery: 'Correct the project configuration field named by this diagnostic, then inspect again.',
+        severity: 'error',
+        sourcePath: join(project.root, 'agent-bundle.config.ts'),
+      }],
+      revision: expect.any(String),
+      state: 'invalid',
+    });
+    expect(JSON.stringify(prepared.source)).not.toContain('NaN');
+  } finally {
+    await rm(project.root, { force: true, recursive: true });
+  }
+});
+
+it('keeps hostile config-extension accessors redacted behind AB7001', async () => {
+  const project = await createRuntimeProject();
+  try {
+    await writeFile(project.root + '/agent-bundle.config.ts', [
+      'const config = {',
+      "  plugin: { name: 'hostile-extension-fixture', version: '1.0.0' },",
+      "  targets: ['portable'],",
+      '};',
+      "Object.defineProperty(config, 'portable', { enumerable: true, get: () => { throw new Error('hostile-extension-secret'); } });",
+      'export default config;',
+      '',
+    ].join('\n'));
+    const prepared = await new ProjectService({ includeDevRuntime: true, mode: 'development', root: project.root }).prepare('dev');
+
+    expect(prepared.source.diagnostics).toEqual([{
+      code: 'AB7001',
+      message: 'Unable to normalize project source.',
+      recovery: 'Fix normalized project configuration and source references, then inspect again.',
+      severity: 'error',
+      sourcePath: join(project.root, 'agent-bundle.config.ts'),
+    }]);
+    expect(JSON.stringify(prepared.source)).not.toContain('hostile-extension-secret');
+  } finally {
+    await rm(project.root, { force: true, recursive: true });
   }
 });
 

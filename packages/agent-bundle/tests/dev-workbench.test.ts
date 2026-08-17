@@ -426,22 +426,23 @@ it('keeps the ordinary foreground and artifact lane available when provider star
   }
 }, 30_000);
 
-it('attaches Runtime App routes only after a later valid reconcile and releases their registry subscription once', async () => {
+it('retains Runtime App routes through invalid config updates and reconciles only repaired or removed declarations', async () => {
   const project = await createProjectFixture();
   const assetsRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-workbench-late-runtime-apps-'));
   const stateKey = `__agentBundleLateRuntimeApps${Date.now()}${Math.random().toString(16).slice(2)}`;
-  const runtimeState = { reconciles: 0, subscribes: 0, unsubscribes: 0 };
+  const runtimeState = { calls: [] as string[], closes: 0, reconciles: 0, subscribes: 0, unsubscribes: 0 };
   const runtimeGlobal = globalThis as typeof globalThis & Record<string, typeof runtimeState | undefined>;
   let server: Awaited<ReturnType<typeof startDevServer>> | undefined;
-  const config = (targets: string[], marker: string): string => [
+  const config = (targets: string[], marker: string, extension?: string, includeRuntime = true): string => [
     "import { defineConfig } from 'agent-bundle';",
     '',
     'export default defineConfig({',
-    "  dev: { runtime: { provider: './src/dev/provider.ts' } },",
+    ...(includeRuntime ? ["  dev: { runtime: { provider: './src/dev/provider.ts' } },"] : []),
     `  fixtureMarker: ${JSON.stringify(marker)},`,
     "  plugin: { name: 'late-runtime-apps', version: '1.0.0' },",
     "  skills: ['skills/review'],",
     `  targets: ${JSON.stringify(targets)},`,
+    ...(extension === undefined ? [] : [`  portable: ${extension},`]),
     '});',
     '',
   ].join('\n');
@@ -461,19 +462,19 @@ it('attaches Runtime App routes only after a later valid reconcile and releases 
         '  restart: async () => ({ invalidatedBindings: [], registryRevision: 0 }),',
         '  session: () => undefined,',
         '  snapshot: () => undefined,',
-        '  subscribe: () => { state.subscribes += 1; return { unsubscribe: () => { state.unsubscribes += 1; } }; },',
+        "  subscribe: () => { state.calls.push('subscribe'); state.subscribes += 1; return { unsubscribe: () => { state.calls.push('unsubscribe'); state.unsubscribes += 1; } }; },",
         '};',
         'export const createDevRuntimeProvider = () => ({',
         "  descriptor: { environmentVariables: [], id: 'late-runtime-apps', label: 'Late Runtime Apps', schemaVersion: 1 },",
         '  start: async () => ({',
         '    clientSurface: () => undefined,',
-        '    close: async () => undefined,',
+        "    close: async () => { state.calls.push('close'); state.closes += 1; },",
         '    invoke: async () => { throw new Error(\'unused\'); },',
         '    mcpRegistry: registry,',
         "    providerSessionId: 'provider-late-runtime-apps',",
         '    readAsset: async () => undefined,',
         '    readRunFlight: async () => undefined,',
-        '    reconcilePreparedRuntime: async () => { state.reconciles += 1; },',
+        "    reconcilePreparedRuntime: async () => { state.calls.push('reconcile'); state.reconciles += 1; },",
         '    replay: async () => { throw new Error(\'unused\'); },',
         "    resetState: async () => ({ stateStoreId: 'state-late-runtime-apps', stateVersion: 0 }),",
         '    run: () => undefined,',
@@ -505,6 +506,7 @@ it('attaches Runtime App routes only after a later valid reconcile and releases 
       headers,
       method: 'POST',
     });
+    const history = () => fetch(`${server!.url}/api/runtime/runs`, { headers }).then(async (response) => ({ body: await response.json(), status: response.status }));
 
     await expect(create().then(async (response) => ({ body: await response.json(), status: response.status }))).resolves.toEqual({
       body: { diagnostic: { code: 'AB8022', message: 'MCP App preview is not available.' } },
@@ -512,26 +514,102 @@ it('attaches Runtime App routes only after a later valid reconcile and releases 
     });
     expect(runtimeState.subscribes).toBe(0);
 
-    await writeFile(project.configPath, config(['portable'], 'valid-first'));
-    await expect(fetch(`${server.url}/api/project/rebuild`, {
+    await writeFile(project.configPath, config(['portable'], 'valid-first', '{}'));
+    await within((async () => {
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        const response = await create();
+        const result = { body: await response.json(), status: response.status };
+        if (result.status === 404 && result.body.diagnostic?.code === 'AB8201') return;
+        await new Promise<void>((resolvePromise) => { setTimeout(resolvePromise, 25); });
+      }
+      throw new Error('Runtime MCP App preview did not attach after the valid config update.');
+    })(), 5_000);
+    expect(runtimeState.subscribes).toBe(1);
+    const stableHistory = await history();
+    expect(stableHistory).toEqual({
+      body: { providerSessionId: expect.any(String), runs: [] },
+      status: 200,
+    });
+    const stableRuntime = {
+      calls: [...runtimeState.calls],
+      closes: runtimeState.closes,
+      reconciles: runtimeState.reconciles,
+      subscribes: runtimeState.subscribes,
+      unsubscribes: runtimeState.unsubscribes,
+    };
+
+    await writeFile(project.configPath, config(['portable'], 'invalid-nonfinite', 'Number.NaN'));
+    const invalid = await fetch(`${server.url}/api/project/rebuild`, {
       body: JSON.stringify({ paths: ['agent-bundle.config.ts'] }),
       headers,
       method: 'POST',
-    }).then((response) => response.status)).resolves.toBe(200);
+    }).then(async (response) => ({ body: await response.json(), status: response.status }));
+    expect(invalid).toMatchObject({
+      body: {
+        status: {
+          source: {
+            diagnostics: [{
+              code: 'AB4500',
+              message: 'Config extension "portable" must contain strict finite JSON data.',
+              sourcePath: project.configPath,
+            }],
+            state: 'invalid',
+          },
+        },
+      },
+      status: 200,
+    });
+    expect(runtimeState).toEqual(stableRuntime);
+    await expect(history()).resolves.toEqual(stableHistory);
     await expect(create().then(async (response) => ({ body: await response.json(), status: response.status }))).resolves.toEqual({
       body: { diagnostic: { code: 'AB8201', message: 'Runtime MCP App run is not available.' } },
       status: 404,
     });
-    expect(runtimeState.subscribes).toBe(1);
 
-    await writeFile(project.configPath, config(['portable'], 'valid-repeat'));
     await expect(fetch(`${server.url}/api/project/rebuild`, {
       body: JSON.stringify({ paths: ['agent-bundle.config.ts'] }),
       headers,
       method: 'POST',
     }).then((response) => response.status)).resolves.toBe(200);
-    expect(runtimeState.reconciles).toBeGreaterThanOrEqual(1);
-    expect(runtimeState.subscribes).toBe(1);
+    expect(runtimeState).toEqual(stableRuntime);
+
+    await writeFile(project.configPath, config(['portable'], 'valid-repair', '{}'));
+    await expect(fetch(`${server.url}/api/project/rebuild`, {
+      body: JSON.stringify({ paths: ['agent-bundle.config.ts'] }),
+      headers,
+      method: 'POST',
+    }).then((response) => response.status)).resolves.toBe(200);
+    expect(runtimeState).toEqual({
+      calls: [...stableRuntime.calls, 'reconcile'],
+      closes: stableRuntime.closes,
+      reconciles: stableRuntime.reconciles + 1,
+      subscribes: stableRuntime.subscribes,
+      unsubscribes: stableRuntime.unsubscribes,
+    });
+
+    await writeFile(project.configPath, config(['portable'], 'valid-removal', undefined, false));
+    await expect(fetch(`${server.url}/api/project/rebuild`, {
+      body: JSON.stringify({ paths: ['agent-bundle.config.ts'] }),
+      headers,
+      method: 'POST',
+    }).then((response) => response.status)).resolves.toBe(200);
+    expect(runtimeState).toEqual({
+      calls: [...stableRuntime.calls, 'reconcile'],
+      closes: stableRuntime.closes,
+      reconciles: stableRuntime.reconciles + 1,
+      subscribes: stableRuntime.subscribes,
+      unsubscribes: stableRuntime.unsubscribes,
+    });
+    await expect(fetch(`${server.url}/api/runtime/status`).then((response) => response.json())).resolves.toMatchObject({
+      status: {
+        diagnostics: [{ code: 'AB8200', message: 'Development runtime declaration changed; restart required.', phase: 'provider-lifecycle' }],
+        state: 'failed',
+      },
+    });
+    await expect(create().then(async (response) => ({ body: await response.json(), status: response.status }))).resolves.toEqual({
+      body: { diagnostic: { code: 'AB8023', message: 'MCP App operation could not be completed.' } },
+      status: 502,
+    });
 
     await expect(server.close()).resolves.toBeUndefined();
     expect(runtimeState.unsubscribes).toBe(1);

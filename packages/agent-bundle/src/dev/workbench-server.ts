@@ -578,10 +578,12 @@ export const startDevServer = async (options: StartDevServerOptions): Promise<De
     eventHub,
     initialPreparedProject,
     onPreparedProject: async (prepared) => {
-      if (prepared.source.state === 'ready' && prepared.model !== undefined) latestValidPreparedProject = prepared;
+      const validPreparedProject = prepared.source.state === 'ready' && prepared.model !== undefined;
+      if (!validPreparedProject) return;
+      latestValidPreparedProject = prepared;
       if (runtime !== undefined) {
         await runtime.reconcileDeclaration(prepared.devRuntime, prepared.devRuntimeDiagnostic);
-        if (prepared.source.state === 'ready' && prepared.model !== undefined) ensureRuntimeAppPreviews();
+        ensureRuntimeAppPreviews();
         return;
       }
       if (!runtimeTopologyChanged && (prepared.devRuntime !== undefined || prepared.devRuntimeDiagnostic !== undefined)) {

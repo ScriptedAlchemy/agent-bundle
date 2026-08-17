@@ -316,8 +316,19 @@ const deepFreeze = <Value>(value: Value): Value => {
   return Object.freeze(value);
 };
 
+export class ConfigExtensionFiniteJsonError extends Error {
+  readonly diagnosticMessage: string;
+
+  constructor(key: string) {
+    const diagnosticMessage = `Config extension "${key}" must contain strict finite JSON data.`;
+    super(`AB4500: ${diagnosticMessage}`);
+    this.diagnosticMessage = diagnosticMessage;
+    this.name = 'ConfigExtensionFiniteJsonError';
+  }
+}
+
 const invalidExtensionValue = (key: string): never => {
-  throw new Error(`AB4500: Config extension "${key}" must contain strict finite JSON data.`);
+  throw new ConfigExtensionFiniteJsonError(key);
 };
 
 const cloneExtensionValue = (

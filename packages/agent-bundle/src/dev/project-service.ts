@@ -6,7 +6,7 @@ import { createDefaultRegistry, type TargetRegistry } from '../adapters/registry
 import { discoverProject } from '../config/discover.ts';
 import { isProjectPathIgnored, readProjectIgnoreRules } from '../config/ignore.ts';
 import { loadConfig } from '../config/load.ts';
-import { normalizeProject } from '../config/normalize.ts';
+import { ConfigExtensionFiniteJsonError, normalizeProject } from '../config/normalize.ts';
 import { validateModel, validateSource } from '../config/validate.ts';
 import { deduplicateDiagnostics, type Diagnostic, withDiagnosticRecovery } from '../core/diagnostics.ts';
 import { digest } from '../core/digest.ts';
@@ -476,9 +476,10 @@ const preparedProject = (
   source,
 });
 
-export type ProjectDiagnosticCode = 'AB7000' | 'AB7001' | 'AB7002' | 'AB7003' | 'AB7004';
+export type ProjectDiagnosticCode = 'AB4500' | 'AB7000' | 'AB7001' | 'AB7002' | 'AB7003' | 'AB7004';
 
 export const projectDiagnosticRecoveries: Readonly<Record<ProjectDiagnosticCode, string>> = Object.freeze({
+  AB4500: 'Correct the project configuration field named by this diagnostic, then inspect again.',
   AB7000: 'Fix the Agent Bundle configuration and source files, then inspect again.',
   AB7001: 'Fix normalized project configuration and source references, then inspect again.',
   AB7002: 'Ensure the project root and configured output roots are readable and remain inside the project root, then inspect again.',
@@ -622,7 +623,16 @@ export class ProjectService {
         discovered,
         registry,
       );
-    } catch {
+    } catch (error) {
+      if (error instanceof ConfigExtensionFiniteJsonError) {
+        return failedPreparation(
+          'AB4500',
+          error.diagnosticMessage,
+          loaded.configPath,
+          'project.prepared',
+          snapshot,
+        );
+      }
       return failedPreparation(
         'AB7001',
         'Unable to normalize project source.',
