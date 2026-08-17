@@ -44,8 +44,7 @@ const runtimeAppHmrTokenPlugin = (
   capture: NonNullable<RscRuntimeRsbuildConfigOptions['onAppWebSocketToken']>,
 ): RsbuildPlugin => {
   let devServer: RsbuildDevServer | undefined;
-  let completedAppHashes = new Set<string>();
-  let completedAppStats = new WeakSet<object>();
+  let lastAppCompilation: object | string | undefined;
   return {
     name: 'agent-bundle:rsc-runtime-app-hmr-token',
     setup(api) {
@@ -56,23 +55,18 @@ const runtimeAppHmrTokenPlugin = (
       });
       api.onBeforeStartDevServer(({ server }) => {
         devServer = server;
-        completedAppHashes = new Set();
-        completedAppStats = new WeakSet();
+        lastAppCompilation = undefined;
       });
       api.onCloseDevServer(() => {
         devServer = undefined;
-        completedAppHashes = new Set();
-        completedAppStats = new WeakSet();
+        lastAppCompilation = undefined;
       });
       api.onAfterEnvironmentCompile(({ environment, isFirstCompile, stats }) => {
-        if (environment.name !== 'app' || isFirstCompile || stats === undefined || stats.hasErrors()) return;
-        if (typeof stats.hash === 'string' && stats.hash.length > 0) {
-          if (completedAppHashes.has(stats.hash)) return;
-          completedAppHashes.add(stats.hash);
-        } else {
-          if (completedAppStats.has(stats)) return;
-          completedAppStats.add(stats);
-        }
+        if (devServer === undefined || environment.name !== 'app' || stats === undefined || stats.hasErrors()) return;
+        const compilation = typeof stats.hash === 'string' && stats.hash.length > 0 ? stats.hash : stats;
+        if (lastAppCompilation === compilation) return;
+        lastAppCompilation = compilation;
+        if (isFirstCompile) return;
         devServer?.environments.app.hot.send('full-reload');
       });
     },

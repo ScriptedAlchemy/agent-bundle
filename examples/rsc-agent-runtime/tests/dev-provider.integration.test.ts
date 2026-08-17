@@ -185,17 +185,17 @@ test('sends one App-only full reload for each later successful App compilation',
 
   const appSends: string[] = [];
   const otherSends: string[] = [];
-  const appStats = { hasErrors: () => false, hash: 'app-change-a' };
-  const successfulAppUpdate = Object.freeze({ environment: { name: 'app' }, isFirstCompile: false, stats: appStats });
-  const duplicateSuccessfulAppUpdate = Object.freeze({ environment: { name: 'app' }, isFirstCompile: false, stats: { hasErrors: () => false, hash: 'app-change-a' } });
-  const firstAppUpdate = Object.freeze({ environment: { name: 'app' }, isFirstCompile: true, stats: { hasErrors: () => false, hash: 'app-initial' } });
+  const firstAppUpdate = Object.freeze({ environment: { name: 'app' }, isFirstCompile: true, stats: { hasErrors: () => false, hash: 'app-change-a' } });
+  const duplicateFirstAppUpdate = Object.freeze({ environment: { name: 'app' }, isFirstCompile: false, stats: { hasErrors: () => false, hash: 'app-change-a' } });
+  const appBUpdate = Object.freeze({ environment: { name: 'app' }, isFirstCompile: false, stats: { hasErrors: () => false, hash: 'app-change-b' } });
+  const appAUpdate = Object.freeze({ environment: { name: 'app' }, isFirstCompile: false, stats: { hasErrors: () => false, hash: 'app-change-a' } });
+  const repeatedAppBUpdate = Object.freeze({ environment: { name: 'app' }, isFirstCompile: false, stats: { hasErrors: () => false, hash: 'app-change-b' } });
   const failedAppUpdate = Object.freeze({ environment: { name: 'app' }, isFirstCompile: false, stats: { hasErrors: () => true } });
   const nonAppUpdate = Object.freeze({ environment: { name: 'widget' }, isFirstCompile: false, stats: { hasErrors: () => false } });
 
   afterCompiler?.({ environments: { app: { webSocketToken: 'rsbuild-app-token-1234' }, widget: { webSocketToken: 'widget-token-must-not-leak' } } });
-  afterEnvironmentCompile?.(successfulAppUpdate);
+  afterEnvironmentCompile?.(appBUpdate);
   expect(appSends).toEqual([]);
-
   beforeStartDevServer?.({
     server: {
       environments: {
@@ -207,20 +207,25 @@ test('sends one App-only full reload for each later successful App compilation',
   afterEnvironmentCompile?.(firstAppUpdate);
   afterEnvironmentCompile?.(nonAppUpdate);
   afterEnvironmentCompile?.(failedAppUpdate);
-  afterEnvironmentCompile?.(successfulAppUpdate);
-  afterEnvironmentCompile?.(duplicateSuccessfulAppUpdate);
+  afterEnvironmentCompile?.(duplicateFirstAppUpdate);
   expect(captured).toEqual(['rsbuild-app-token-1234']);
+  expect(appSends).toEqual([]);
+
+  afterEnvironmentCompile?.(appBUpdate);
   expect(appSends).toEqual(['full-reload']);
+  afterEnvironmentCompile?.(appAUpdate);
+  expect(appSends).toEqual(['full-reload', 'full-reload']);
+  afterEnvironmentCompile?.(repeatedAppBUpdate);
+  expect(appSends).toEqual(['full-reload', 'full-reload', 'full-reload']);
   expect(otherSends).toEqual([]);
 
   await closeDevServer?.();
-  afterEnvironmentCompile?.(successfulAppUpdate);
-  expect(appSends).toEqual(['full-reload']);
+  afterEnvironmentCompile?.(appAUpdate);
+  expect(appSends).toEqual(['full-reload', 'full-reload', 'full-reload']);
 
   const replacementSends: string[] = [];
   beforeStartDevServer?.({ server: { environments: { app: { hot: { send: (type: string) => { replacementSends.push(type); } } } } } });
-  afterEnvironmentCompile?.(firstAppUpdate);
-  afterEnvironmentCompile?.(successfulAppUpdate);
+  afterEnvironmentCompile?.(appBUpdate);
   expect(replacementSends).toEqual(['full-reload']);
 });
 
