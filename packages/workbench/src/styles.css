@@ -94,12 +94,13 @@ td { border-top: 1px solid #d9dee7; font-size: 14px; padding: 12px 10px; vertica
 .runtime-previous-provider pre { background: #fff; border: 1px solid #d9dee7; font: 12px/1.45 "SFMono-Regular", Consolas, monospace; margin: 0; max-height: 180px; overflow: auto; padding: 10px; white-space: pre-wrap; word-break: break-word; }
 .runtime-controls { align-items: end; display: grid; gap: 12px; grid-template-columns: repeat(4, minmax(0, 1fr)); min-width: 0; }
 .runtime-controls label, .runtime-input { color: #374151; display: grid; font-size: 12px; font-weight: 800; gap: 6px; letter-spacing: .03em; min-width: 0; text-transform: uppercase; }
-.runtime-controls select, .runtime-input textarea { background: #fff; border: 1px solid #bfc8d5; border-radius: 4px; box-sizing: border-box; color: #1e2938; font: 14px/1.45 "SFMono-Regular", Consolas, monospace; min-height: 39px; padding: 8px 10px; text-transform: none; }
-.runtime-controls select { max-width: 100%; min-width: 0; width: 100%; }
+.runtime-controls select, .runtime-input select, .runtime-input textarea { background: #fff; border: 1px solid #bfc8d5; border-radius: 4px; box-sizing: border-box; color: #1e2938; font: 14px/1.45 "SFMono-Regular", Consolas, monospace; min-height: 40px; padding: 8px 10px; text-transform: none; }
+.runtime-controls select, .runtime-input select { max-width: 100%; min-width: 0; width: 100%; }
 .runtime-profile-disclaimer { color: #596372; font-size: 12px; grid-column: 1 / -1; margin: 0; }
 .runtime-input textarea { min-height: 135px; resize: vertical; }
 .runtime-actions { display: flex; flex-wrap: wrap; gap: 9px; }
-.runtime-actions button, .runtime-confirmation button, .runtime-history button { background: #fff; border: 1px solid #bfc8d5; border-radius: 4px; color: #1e2938; cursor: pointer; min-height: 38px; padding: 7px 10px; }
+.runtime-actions button, .runtime-confirmation button, .runtime-history button { background: #fff; border: 1px solid #bfc8d5; border-radius: 4px; color: #1e2938; cursor: pointer; min-height: 40px; padding: 7px 10px; }
+.runtime-input button { min-height: 40px; }
 .runtime-actions button:first-child, .runtime-confirmation button:last-child { background: #0b5bd3; border-color: #06459e; color: #fff; font-weight: 750; }
 .runtime-actions button:disabled { cursor: not-allowed; opacity: .55; }
 .runtime-confirmation { background: #fff; border: 1px solid #0b5bd3; box-shadow: 0 8px 24px #041a3d20; display: flex; flex-wrap: wrap; gap: 10px; padding: 16px; }

@@ -192,7 +192,7 @@ e2e('renders the capability-gated Runtime sibling in the real RSC workbench', { 
   }
 });
 
-e2e('keeps the Runtime controls and stage inside the 390px viewport without horizontal scrolling', { timeout: 120_000 }, async ({ page }) => {
+e2e('keeps Runtime controls at least 40px tall and inside the 390px viewport without horizontal scrolling', { timeout: 120_000 }, async ({ page }) => {
   const fixture = await startRuntimePlaygroundFixture();
   const pageErrors: Error[] = [];
   page.on('pageerror', (error) => pageErrors.push(error));
@@ -201,6 +201,15 @@ e2e('keeps the Runtime controls and stage inside the 390px viewport without hori
     await page.goto(`${fixture.url}#runtime`);
     await expect(page.getByRole('heading', { name: 'Runtime Playground' })).toBeVisible({ timeout: browserTimeout });
     await expect(page.locator('[data-runtime-provider-session]')).toHaveCount(1, { timeout: browserTimeout });
+    const run = page.getByRole('button', { name: 'Run', exact: true });
+    const history = page.getByRole('region', { name: 'Runtime run history' }).locator('ol > li');
+    await page.getByLabel('Runtime surface').selectOption('mcp.runtime_status');
+    await run.click();
+    await expect.poll(async () => history.count(), { timeout: browserTimeout }).toBeGreaterThan(0);
+    await page.getByLabel('Runtime surface').selectOption('hook.claude');
+    await page.getByLabel('Runtime fixture').selectOption('claude-post-tool-use-write');
+    await run.click();
+    await expect(page.getByRole('dialog')).toBeVisible({ timeout: browserTimeout });
     const layout = await page.evaluate(() => {
       const { body, documentElement } = globalThis.document;
       documentElement.scrollLeft = 0;
@@ -213,6 +222,14 @@ e2e('keeps the Runtime controls and stage inside the 390px viewport without hori
         ...[...globalThis.document.querySelectorAll('.runtime-controls label, .runtime-controls select')]
           .filter((element) => element.getClientRects().length > 0),
       ];
+      const controls = [...globalThis.document.querySelectorAll<HTMLElement>([
+        '.runtime-controls select',
+        '.runtime-input select',
+        '.runtime-input button',
+        '.runtime-actions button',
+        '.runtime-history button',
+        '.runtime-confirmation button',
+      ].join(','))].filter((element) => element.getClientRects().length > 0);
       return Object.freeze({
         bodyScrollLeft: body?.scrollLeft ?? 0,
         boxes: Object.freeze(elements.map((element) => {
@@ -221,6 +238,15 @@ e2e('keeps the Runtime controls and stage inside the 390px viewport without hori
           }
           const rect = element.getBoundingClientRect();
           return Object.freeze({ left: rect.left, right: rect.right });
+        })),
+        controls: Object.freeze(controls.map((element) => {
+          const rect = element.getBoundingClientRect();
+          return Object.freeze({
+            height: rect.height,
+            label: element.getAttribute('aria-label') ?? element.textContent?.trim() ?? element.tagName,
+            left: rect.left,
+            right: rect.right,
+          });
         })),
         documentScrollLeft: documentElement.scrollLeft,
         viewportWidth: globalThis.innerWidth,
@@ -231,9 +257,15 @@ e2e('keeps the Runtime controls and stage inside the 390px viewport without hori
     expect(layout.documentScrollLeft).toBe(0);
     expect(layout.bodyScrollLeft).toBe(0);
     expect(layout.viewportWidth).toBe(390);
+    expect(layout.controls.length).toBeGreaterThan(0);
     for (const box of layout.boxes) {
       expect(box.left).toBeGreaterThanOrEqual(0);
       expect(box.right).toBeLessThanOrEqual(layout.viewportWidth);
+    }
+    for (const control of layout.controls) {
+      expect(control.height, control.label).toBeGreaterThanOrEqual(40);
+      expect(control.left, control.label).toBeGreaterThanOrEqual(0);
+      expect(control.right, control.label).toBeLessThanOrEqual(layout.viewportWidth);
     }
     expect(pageErrors).toEqual([]);
   } finally {
