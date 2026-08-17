@@ -1431,13 +1431,10 @@ export class McpAppClient implements McpAppRuntimeClient {
 
   #installRuntimePreview(snapshot: McpAppPreviewSnapshot): McpAppPreviewSnapshot {
     const policy = snapshot.kind === 'apps' ? this.#policyForBinding(snapshot.binding.id, snapshot.documentPolicy, snapshot) : undefined;
-    const installed = snapshot.kind === 'apps' && policy !== undefined && snapshot.documentPolicy !== policy.snapshot
-      ? Object.freeze({ ...snapshot, documentPolicy: policy.snapshot }) as McpAppPreviewSnapshot
-      : snapshot;
-    this.#runtimeBindings.set(installed.binding.id, installed);
+    this.#runtimeBindings.set(snapshot.binding.id, snapshot);
     if (policy !== undefined) this.#runtimePolicies.set(snapshot.binding.id, policy);
     else this.#runtimePolicies.delete(snapshot.binding.id);
-    return installed;
+    return snapshot;
   }
 
   #installDocumentPolicy(bindingId: string, snapshot: McpAppDocumentPolicySnapshot, binding: McpAppPreviewSnapshot): McpAppTrustedDocumentPolicy {

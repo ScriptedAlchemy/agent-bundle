@@ -656,12 +656,7 @@ export class RuntimeClientSurfaceProxy {
           return;
         }
         if (requestUrl.pathname === bootstrapPath) {
-          if (request.method !== 'GET' || requestUrl.search.length > 0 || closed) {
-            response(target, 403);
-            return;
-          }
-          const initialBootstrap = !bootstrapUsed;
-          if (!initialBootstrap && !isAuthenticated(request)) {
+          if (request.method !== 'GET' || requestUrl.search.length > 0 || bootstrapUsed || closed) {
             response(target, 403);
             return;
           }
@@ -679,9 +674,7 @@ export class RuntimeClientSurfaceProxy {
             'content-type': 'text/html; charset=utf-8',
             'x-content-type-options': 'nosniff',
           };
-          if (initialBootstrap) {
-            headers['set-cookie'] = `${cookieName}=${sessionCapability}; HttpOnly; SameSite=None; Secure; Partitioned; Path=/`;
-          }
+          headers['set-cookie'] = `${cookieName}=${sessionCapability}; HttpOnly; SameSite=None; Secure; Partitioned; Path=/`;
           target.writeHead(200, headers);
           target.end(runtimeProxyShell(trusted.entryPath, entryDocument, trustedHostOrigin, trustedContentSecurityPolicy));
           return;

@@ -833,159 +833,31 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
     if (appFrame === undefined) throw new Error('Runtime App frame did not reinitialize after HMR recovery.');
 
     const consentPath = `/api/runtime/apps/${encodeURIComponent(created.preview.binding.id)}/consents`;
-    const previewPath = `/api/runtime/apps/${encodeURIComponent(created.preview.binding.id)}`;
     const consentRequests = (scope: 'action' | 'document'): readonly RuntimeAppRouteRequest[] => runtimeAppRequests.filter((entry) =>
       entry.method === 'POST' && entry.path === consentPath && entry.body !== null && typeof entry.body === 'object' &&
       (entry.body as Readonly<{ readonly scope?: unknown }>).scope === scope);
     const consentResponses = (scope: 'action' | 'document'): readonly RuntimeAppRouteResponse[] => runtimeAppResponses.filter((entry) =>
       entry.method === 'POST' && entry.path === consentPath && entry.body !== null && typeof entry.body === 'object' &&
       (entry.body as Readonly<{ readonly scope?: unknown }>).scope === scope);
-    const previewRefreshes = (): readonly RuntimeAppRouteRequest[] => runtimeAppRequests.filter((entry) => entry.method === 'GET' && entry.path === previewPath);
-    const documentTeardowns = (): readonly RuntimeAppMessage[] => appMessages.filter((entry) =>
-      new URL(entry.href).origin === controllerOrigin && entry.senderOrigin === fixture.url && entry.message !== null && typeof entry.message === 'object' &&
-      (entry.message as Readonly<Record<string, unknown>>).method === 'ui/resource-teardown');
     const documentPermissionControl = page.getByLabel('Runtime App document permissions');
-    await expect(documentPermissionControl).toContainText('Permissions declared by this App can be approved from the Workbench.');
-    await expect(documentPermissionControl.getByRole('button', { name: 'Allow camera' })).toHaveCount(1);
-    await expect(documentPermissionControl.getByRole('button', { name: 'Allow clipboard write' })).toHaveCount(1);
-
-    // Document permissions are a host-only control. A denial returns the
-    // original policy and must leave the exact renderer/bridge in place.
-    const initialInitializeCountAfterHmr = initializeRequests().length;
-    const initialInitializeResultCountAfterHmr = initializeResults().length;
-    const initialTeardownCount = documentTeardowns().length;
-    await documentPermissionControl.getByRole('button', { name: 'Allow camera' }).click();
-    await expect.poll(() => consentRequests('document'), { timeout: 15_000 }).toHaveLength(1);
-    const deniedCameraRequest = consentRequests('document')[0];
-    expect(deniedCameraRequest?.body).toEqual({
-      actionFingerprint: 'runtime-app:document-permission:v1',
-      capability: 'camera',
-      details: { resourceUri: 'ui://rsc-agent-runtime/edit-timeline-v1.html' },
-      scope: 'document',
-      summary: 'Allow MCP App camera?',
-    });
-    await expect(page.getByRole('dialog', { name: 'Runtime App consent' })).toBeVisible({ timeout: 15_000 });
-    await expect.poll(() => consentResponses('document')).toHaveLength(1);
-    const deniedCamera = consentResponses('document')[0]?.response as Readonly<{ readonly challenge?: Readonly<{ readonly id?: unknown }> }> | undefined;
-    const deniedCameraChallenge = deniedCamera?.challenge;
-    if (typeof deniedCameraChallenge?.id !== 'string') throw new Error('Runtime App camera consent omitted its challenge id.');
-    await page.getByRole('button', { name: 'Deny' }).click();
-    const deniedCameraDecisionPath = `${consentPath}/${encodeURIComponent(deniedCameraChallenge.id)}`;
-    await expect.poll(() => runtimeAppRequests.filter((entry) => entry.method === 'POST' && entry.path === deniedCameraDecisionPath), { timeout: 15_000 }).toHaveLength(1);
-    expect(runtimeAppRequests.find((entry) => entry.method === 'POST' && entry.path === deniedCameraDecisionPath)?.body).toEqual({ decision: 'deny' });
-    await expect.poll(() => runtimeAppResponses.filter((entry) => entry.method === 'POST' && entry.path === deniedCameraDecisionPath), { timeout: 15_000 }).toHaveLength(1);
-    expect(runtimeAppResponses.find((entry) => entry.method === 'POST' && entry.path === deniedCameraDecisionPath)?.response).toMatchObject({
-      documentPolicy: { allow: '', approvedPermissions: {}, revision: 1 },
-    });
-    expect(previewRefreshes()).toHaveLength(0);
-    expect(documentTeardowns()).toHaveLength(initialTeardownCount);
-    expect(initializeRequests()).toHaveLength(initialInitializeCountAfterHmr);
-    await expect(outerFrame).toHaveCount(1);
+    await expect(documentPermissionControl).toContainText('Declared document permissions are unavailable in this isolated Runtime App surface.');
+    await expect(documentPermissionControl).toContainText('Camera unavailable');
+    await expect(documentPermissionControl).toContainText('Clipboard write unavailable');
+    await expect(documentPermissionControl.getByRole('button')).toHaveCount(0);
+    expect(consentRequests('action')).toHaveLength(0);
+    expect(consentRequests('document')).toHaveLength(0);
+    expect(runtimeAppRequests.filter((entry) => entry.method === 'GET' && entry.path === `/api/runtime/apps/${encodeURIComponent(created.preview.binding.id)}`)).toHaveLength(0);
+    expect(runtimePreviewBootstraps).toHaveLength(1);
     expect(runtimeAppRequests.filter((entry) => entry.method === 'DELETE')).toHaveLength(0);
-
-    const cameraOuter = await outerFrame.elementHandle();
-    const cameraTeardownCount = documentTeardowns().length;
-    const cameraBootstrapCount = runtimePreviewBootstraps.length;
-    const cameraHmrConnectionCount = runtimePreviewHmrRoutes.length;
-    await documentPermissionControl.getByRole('button', { name: 'Allow camera' }).click();
-    await expect.poll(() => consentRequests('document'), { timeout: 15_000 }).toHaveLength(2);
-    const allowedCameraRequest = consentRequests('document')[1];
-    expect(allowedCameraRequest?.body).toEqual(deniedCameraRequest?.body);
-    await expect.poll(() => consentResponses('document')).toHaveLength(2);
-    const allowedCamera = consentResponses('document')[1]?.response as Readonly<{ readonly challenge?: Readonly<{ readonly id?: unknown }> }> | undefined;
-    const allowedCameraChallenge = allowedCamera?.challenge;
-    if (typeof allowedCameraChallenge?.id !== 'string') throw new Error('Runtime App approved camera consent omitted its challenge id.');
-    await expect(page.getByRole('dialog', { name: 'Runtime App consent' })).toBeVisible({ timeout: 15_000 });
-    await page.getByRole('button', { name: 'Allow once' }).click();
-    const allowedCameraDecisionPath = `${consentPath}/${encodeURIComponent(allowedCameraChallenge.id)}`;
-    await expect.poll(() => runtimeAppRequests.filter((entry) => entry.method === 'POST' && entry.path === allowedCameraDecisionPath), { timeout: 15_000 }).toHaveLength(1);
-    await expect.poll(() => runtimeAppResponses.filter((entry) => entry.method === 'POST' && entry.path === allowedCameraDecisionPath), { timeout: 15_000 }).toHaveLength(1);
-    expect(runtimeAppResponses.find((entry) => entry.method === 'POST' && entry.path === allowedCameraDecisionPath)?.response).toMatchObject({
-      documentPolicy: { allow: 'camera', approvedPermissions: { camera: {} }, revision: 2 },
-      grant: { bindingId: created.preview.binding.id, capability: 'camera', challengeId: allowedCameraChallenge.id, scope: 'document' },
-    });
-    await expect.poll(previewRefreshes, { timeout: 15_000 }).toHaveLength(1);
-    await expect.poll(documentTeardowns, { timeout: 15_000 }).toHaveLength(cameraTeardownCount + 1);
-    const cameraTeardown = documentTeardowns().at(-1);
-    const cameraTeardownId = cameraTeardown?.message !== null && typeof cameraTeardown?.message === 'object'
-      ? (cameraTeardown.message as Readonly<Record<string, unknown>>).id
-      : undefined;
-    if (typeof cameraTeardownId !== 'string' && typeof cameraTeardownId !== 'number') throw new Error('Runtime App camera policy remount omitted its teardown id.');
-    await expect.poll(() => messageFor(fixture.url, controllerOrigin, (message) => message.id === cameraTeardownId && Object.hasOwn(message, 'result')), { timeout: 15_000 }).toBeDefined();
-    await expect.poll(() => runtimePreviewBootstraps.length, { timeout: 15_000 }).toBe(cameraBootstrapCount + 1);
-    expect(runtimePreviewBootstraps.at(-1)).toEqual({ status: 200, url: created.preview.clientSurface.bootstrapUrl });
-    await expect.poll(() => runtimePreviewHmrRoutes.length, { timeout: 15_000 }).toBe(cameraHmrConnectionCount + 1);
-    await expect.poll(() => runtimeIdentity.getAttribute('data-runtime-hmr-client-count'), { timeout: 15_000 }).toBe('1');
-    await expect.poll(() => initializeRequests().length, { timeout: 15_000 }).toBe(initialInitializeCountAfterHmr + 1);
-    await expect.poll(() => initializeResults().length, { timeout: 15_000 }).toBe(initialInitializeResultCountAfterHmr + 1);
     await expect(outerFrame).toHaveCount(1);
     await expect(outerFrame).toHaveAttribute('sandbox', 'allow-scripts allow-same-origin');
     await expect(outerFrame).toHaveAttribute('referrerpolicy', 'no-referrer');
-    await expect(outerFrame).toHaveAttribute('allow', 'camera');
+    await expect(outerFrame).toHaveAttribute('allow', '');
     expect((initializeResults().at(-1)?.message as Readonly<{ readonly result?: unknown }> | undefined)?.result).toMatchObject({
-      hostCapabilities: { sandbox: { permissions: { camera: {} } } },
+      hostCapabilities: { sandbox: { permissions: {} } },
     });
-    if (cameraOuter !== null) await expect.poll(() => cameraOuter.evaluate((element) => element.isConnected), { timeout: 15_000 }).toBe(false);
-    appFrame = await runtimeAppFrame();
-    if (appFrame === undefined) throw new Error('Runtime App frame did not remount after camera approval.');
     controllerFrame = appFrame.parentFrame();
-    if (controllerFrame === null) throw new Error('Runtime App trusted controller was unavailable after camera approval.');
-    await assertOpaqueChild();
-
-    const clipboardOuter = await outerFrame.elementHandle();
-    const clipboardTeardownCount = documentTeardowns().length;
-    const clipboardBootstrapCount = runtimePreviewBootstraps.length;
-    const clipboardHmrConnectionCount = runtimePreviewHmrRoutes.length;
-    await documentPermissionControl.getByRole('button', { name: 'Allow clipboard write' }).click();
-    await expect.poll(() => consentRequests('document'), { timeout: 15_000 }).toHaveLength(3);
-    const allowedClipboardRequest = consentRequests('document')[2];
-    expect(allowedClipboardRequest?.body).toEqual({
-      actionFingerprint: 'runtime-app:document-permission:v1',
-      capability: 'clipboard-write',
-      details: { resourceUri: 'ui://rsc-agent-runtime/edit-timeline-v1.html' },
-      scope: 'document',
-      summary: 'Allow MCP App clipboard-write?',
-    });
-    await expect.poll(() => consentResponses('document')).toHaveLength(3);
-    const allowedClipboard = consentResponses('document')[2]?.response as Readonly<{ readonly challenge?: Readonly<{ readonly id?: unknown }> }> | undefined;
-    const allowedClipboardChallenge = allowedClipboard?.challenge;
-    if (typeof allowedClipboardChallenge?.id !== 'string') throw new Error('Runtime App clipboard consent omitted its challenge id.');
-    await expect(page.getByRole('dialog', { name: 'Runtime App consent' })).toBeVisible({ timeout: 15_000 });
-    await page.getByRole('button', { name: 'Allow once' }).click();
-    const allowedClipboardDecisionPath = `${consentPath}/${encodeURIComponent(allowedClipboardChallenge.id)}`;
-    await expect.poll(() => runtimeAppRequests.filter((entry) => entry.method === 'POST' && entry.path === allowedClipboardDecisionPath), { timeout: 15_000 }).toHaveLength(1);
-    await expect.poll(() => runtimeAppResponses.filter((entry) => entry.method === 'POST' && entry.path === allowedClipboardDecisionPath), { timeout: 15_000 }).toHaveLength(1);
-    expect(runtimeAppResponses.find((entry) => entry.method === 'POST' && entry.path === allowedClipboardDecisionPath)?.response).toMatchObject({
-      documentPolicy: { allow: 'camera; clipboard-write', approvedPermissions: { camera: {}, clipboardWrite: {} }, revision: 3 },
-      grant: { bindingId: created.preview.binding.id, capability: 'clipboard-write', challengeId: allowedClipboardChallenge.id, scope: 'document' },
-    });
-    await expect.poll(previewRefreshes, { timeout: 15_000 }).toHaveLength(2);
-    await expect.poll(documentTeardowns, { timeout: 15_000 }).toHaveLength(clipboardTeardownCount + 1);
-    const clipboardTeardown = documentTeardowns().at(-1);
-    const clipboardTeardownId = clipboardTeardown?.message !== null && typeof clipboardTeardown?.message === 'object'
-      ? (clipboardTeardown.message as Readonly<Record<string, unknown>>).id
-      : undefined;
-    if (typeof clipboardTeardownId !== 'string' && typeof clipboardTeardownId !== 'number') throw new Error('Runtime App clipboard policy remount omitted its teardown id.');
-    await expect.poll(() => messageFor(fixture.url, controllerOrigin, (message) => message.id === clipboardTeardownId && Object.hasOwn(message, 'result')), { timeout: 15_000 }).toBeDefined();
-    await expect.poll(() => runtimePreviewBootstraps.length, { timeout: 15_000 }).toBe(clipboardBootstrapCount + 1);
-    expect(runtimePreviewBootstraps.at(-1)).toEqual({ status: 200, url: created.preview.clientSurface.bootstrapUrl });
-    await expect.poll(() => runtimePreviewHmrRoutes.length, { timeout: 15_000 }).toBe(clipboardHmrConnectionCount + 1);
-    await expect.poll(() => runtimeIdentity.getAttribute('data-runtime-hmr-client-count'), { timeout: 15_000 }).toBe('1');
-    await expect.poll(() => initializeRequests().length, { timeout: 15_000 }).toBe(initialInitializeCountAfterHmr + 2);
-    await expect.poll(() => initializeResults().length, { timeout: 15_000 }).toBe(initialInitializeResultCountAfterHmr + 2);
-    await expect(outerFrame).toHaveCount(1);
-    await expect(outerFrame).toHaveAttribute('sandbox', 'allow-scripts allow-same-origin');
-    await expect(outerFrame).toHaveAttribute('referrerpolicy', 'no-referrer');
-    await expect(outerFrame).toHaveAttribute('allow', 'camera; clipboard-write');
-    expect((initializeResults().at(-1)?.message as Readonly<{ readonly result?: unknown }> | undefined)?.result).toMatchObject({
-      hostCapabilities: { sandbox: { permissions: { camera: {}, clipboardWrite: {} } } },
-    });
-    if (clipboardOuter !== null) await expect.poll(() => clipboardOuter.evaluate((element) => element.isConnected), { timeout: 15_000 }).toBe(false);
-    await expect(documentPermissionControl).toHaveCount(0);
-    appFrame = await runtimeAppFrame();
-    if (appFrame === undefined) throw new Error('Runtime App frame did not remount after clipboard approval.');
-    controllerFrame = appFrame.parentFrame();
-    if (controllerFrame === null) throw new Error('Runtime App trusted controller was unavailable after clipboard approval.');
+    if (controllerFrame === null) throw new Error('Runtime App trusted controller was unavailable after HMR recovery.');
     await assertOpaqueChild();
 
     await appFrame.getByRole('button', { name: 'Refresh' }).click();
@@ -1399,6 +1271,7 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
     expect(artifactMcpSessionRequests).toEqual([]);
     expect(runtimeMcpSessionRequests).toEqual([]);
     expect(projectEventStreams).toEqual(['GET /api/project/events']);
+    expect(consentRequests('document')).toHaveLength(0);
     expect(runtimeCreates()).toHaveLength(3);
     expect(runtimeAppRequests.filter((entry) => entry.method === 'DELETE' && entry.path === sourceDeletePath)).toHaveLength(1);
     expect(pageErrors).toEqual([]);

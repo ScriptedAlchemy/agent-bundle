@@ -474,10 +474,9 @@ it('does not reinstall the opaque child when held refresh text resolves after pa
 });
 
 it('uses a one-use bootstrap capability before proxying only the declared app and Rsbuild HMR endpoints', async () => {
-  let entry = '<main>runtime app</main>';
   const upstream = createServer((request, response) => {
     if (request.url === '/app/index.html') {
-      response.writeHead(200, { 'content-type': 'text/html' }).end(entry);
+      response.writeHead(200, { 'content-type': 'text/html' }).end('<main>runtime app</main>');
       return;
     }
     response.writeHead(404).end();
@@ -525,11 +524,8 @@ it('uses a one-use bootstrap capability before proxying only the declared app an
     const second = await fetch(binding.bootstrapUrl, { redirect: 'manual' });
     expect(second.status).toBe(403);
 
-    entry = '<main>runtime app remounted</main>';
     const rebootstrap = await fetch(binding.bootstrapUrl, { headers: { cookie }, redirect: 'manual' });
-    expect(rebootstrap.status).toBe(200);
-    expect(rebootstrap.headers.get('set-cookie')).toBeNull();
-    await expect(rebootstrap.text()).resolves.toContain('runtime app remounted');
+    expect(rebootstrap.status).toBe(403);
     expect((await fetch(`${binding.bootstrapUrl}?capability=forbidden`, { headers: { cookie }, redirect: 'manual' })).status).toBe(403);
     expect((await fetch(binding.bootstrapUrl, { headers: { cookie: `${cookie}wrong` }, redirect: 'manual' })).status).toBe(403);
 

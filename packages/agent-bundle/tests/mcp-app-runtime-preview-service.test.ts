@@ -190,7 +190,7 @@ it('derives an Apps preview only from one stored succeeded run and opens its dis
   await expect(service.create({ expectedGenerationId: 'generation-b', profileId: 'portable', runId: 'run-a' })).rejects.toThrow('generation');
 });
 
-it('derives one closed child CSP before proxy acquisition and retains CSP warnings across document policy revisions', async () => {
+it('derives one closed child CSP before proxy acquisition while retaining declared permissions as unapproved evidence', async () => {
   const { openedClientSurfacePolicies, service } = createRuntimeFixture({
     csp: { connectDomains: ['https://api.weather.test', 'not-a-canonical-origin'] },
     permissions: { camera: {} },
@@ -201,14 +201,8 @@ it('derives one closed child CSP before proxy acquisition and retains CSP warnin
     contentSecurityPolicy: "default-src 'none'; base-uri 'self'; connect-src https://api.weather.test; frame-src 'none'; img-src data:; media-src 'none'; font-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'",
   }]);
   if (preview.kind !== 'apps') throw new Error('Expected an admitted Apps preview.');
+  expect(preview.documentPolicy).toMatchObject({ allow: '', approvedPermissions: {}, revision: 1 });
   expect(preview.documentPolicy.warnings).toEqual([{ code: 'csp-source-rejected', value: 'not-a-canonical-origin' }]);
-
-  const consent = await service.createConsent(preview.binding.id, {
-    actionFingerprint: 'runtime-app:document-permission:v1', capability: 'camera', details: {}, scope: 'document', summary: 'Allow MCP App camera?',
-  });
-  const approved = await service.decideConsent(preview.binding.id, consent.challenge.id, 'allow-once');
-  expect(approved.documentPolicy).toMatchObject({ approvedPermissions: { camera: {} }, revision: 2 });
-  expect(approved.documentPolicy.warnings).toEqual(preview.documentPolicy.warnings);
 });
 
 it('subscribes to registry invalidations, revokes exactly once, and fails closed after a replay gap', async () => {

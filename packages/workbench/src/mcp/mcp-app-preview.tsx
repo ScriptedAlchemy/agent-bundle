@@ -30,7 +30,6 @@ import type {
   McpAppPreviewSnapshot,
   McpAppRuntimeInvalidationDetails,
 } from '../../../agent-bundle/src/dev/mcp-app-runtime-preview-service.ts';
-import type { McpAppConsentRequest } from '../../../agent-bundle/src/dev/mcp-app-sandbox.ts';
 import type { AppRendererHandle, McpAppRendererTool } from '../inspector/adapter/closure-spike.ts';
 import type { RuntimeAppBridgeFactory, RuntimeAppBridgeOperationTrace } from '../inspector/adapter/runtime-app-bridge.ts';
 import type { RuntimeAppPreviewProps } from '../runtime-stage.tsx';
@@ -135,8 +134,6 @@ export interface McpAppRuntimePreviewProps extends RuntimeAppPreviewProps {
   readonly kind: 'runtime';
   /** Validated public operation evidence; it never participates in preview authority. */
   readonly operationTraces?: readonly RuntimeAppBridgeOperationTrace[];
-  /** The Workbench-owned consent queue; Runtime Apps never request document permission over their bridge. */
-  readonly requestDocumentConsent?: (challenge: McpAppConsentChallenge) => Promise<'allow-once' | 'deny'>;
 }
 
 export interface McpAppPreviewFrameProps {
@@ -266,27 +263,15 @@ const runtimeDocumentPermissionNames = (preview: McpAppPreviewAppsSnapshot): rea
   const available: RuntimeDocumentPermission[] = [];
   const permissions = preview.resource.permissions;
   for (const permission of ['camera', 'clipboardWrite', 'geolocation', 'microphone'] as const) {
-    if (permissions?.[permission] !== undefined && preview.documentPolicy.approvedPermissions[permission] === undefined) {
+    if (permissions?.[permission] !== undefined) {
       available.push(permission);
     }
   }
   return Object.freeze(available);
 };
 
-const runtimeDocumentPermissionRequest = (
-  preview: McpAppPreviewAppsSnapshot,
-  permission: RuntimeDocumentPermission,
-): McpAppConsentRequest | undefined => {
-  if (!runtimeDocumentPermissionNames(preview).includes(permission)) return undefined;
-  const capability = permission === 'clipboardWrite' ? 'clipboard-write' : permission;
-  return Object.freeze({
-    actionFingerprint: 'runtime-app:document-permission:v1',
-    capability,
-    details: Object.freeze({ resourceUri: preview.profile.resourceUri }),
-    scope: 'document',
-    summary: `Allow MCP App ${capability}?`,
-  });
-};
+const runtimeDocumentPermissionLabel = (permission: RuntimeDocumentPermission): string =>
+  permission === 'clipboardWrite' ? 'Clipboard write' : `${permission.slice(0, 1).toUpperCase()}${permission.slice(1)}`;
 
 const isRuntimeOptions = (
   options: McpAppPreviewControllerOptions | McpAppRuntimePreviewProps | PreparedRuntimePreviewControllerOptions,
@@ -397,7 +382,6 @@ type RuntimePreviewPreparedSeed = Readonly<{
   readonly fallback: McpAppPreviewFallback;
   readonly input: McpAppJsonValue;
   readonly registrar: RuntimeAppPreviewProps['registerLifecycle'];
-  readonly requestDocumentConsent: McpAppRuntimePreviewProps['requestDocumentConsent'];
   readonly result: McpAppJsonValue;
 }>;
 
@@ -406,7 +390,7 @@ type PreparedRuntimePreviewControllerOptions = Readonly<{
   readonly seed: RuntimePreviewPreparedSeed;
 }>;
 
-type RuntimePreviewDependencies = Pick<RuntimePreviewPreparedSeed, 'client' | 'createBridgeFactory' | 'requestDocumentConsent'>;
+type RuntimePreviewDependencies = Pick<RuntimePreviewPreparedSeed, 'client' | 'createBridgeFactory'>;
 
 const prepareRuntimePreviewSeed = (options: McpAppRuntimePreviewProps): RuntimePreviewPreparedSeed => {
   const input = detachedJson(options.run.input);
@@ -420,7 +404,6 @@ const prepareRuntimePreviewSeed = (options: McpAppRuntimePreviewProps): RuntimeP
     fallback: fallbackFor(undefined, input, result),
     input,
     registrar: options.registerLifecycle,
-    requestDocumentConsent: options.requestDocumentConsent,
     result,
   });
 };
@@ -516,7 +499,6 @@ export class McpAppPreviewController<State extends McpAppPreviewControllerState 
   #runtimeRendererDelivery: Promise<void> | undefined;
   #runtimeRendererInvocation: RuntimeRendererInvocation | undefined;
   #runtimeRendererProps: RuntimeRendererProps | undefined;
-  #runtimeDocumentPermissionAttempt: Promise<boolean> | undefined;
   #started = false;
   #startPromise: Promise<void> | undefined;
   #state: McpAppPreviewControllerState = loadingState;
@@ -527,7 +509,6 @@ export class McpAppPreviewController<State extends McpAppPreviewControllerState 
       this.#runtime = Object.freeze({
         client: seed.client,
         createBridgeFactory: seed.createBridgeFactory,
-        requestDocumentConsent: seed.requestDocumentConsent,
       });
       this.#runtimeEvidence = seed.evidence;
       this.#input = seed.input;
@@ -583,61 +564,6 @@ export class McpAppPreviewController<State extends McpAppPreviewControllerState 
 
   get pendingDocumentPolicyRevision(): number | undefined {
     return this.#pendingDocumentPreview?.frame?.documentPolicy?.revision;
-  }
-
-  /**
-   * Requests one declared document permission through the Workbench-owned
-   * consent UI. Runtime Apps cannot initiate this over the App bridge.
-   */
-  requestRuntimeDocumentPermission(permission: RuntimeDocumentPermission): Promise<boolean> {
-    const existing = this.#runtimeDocumentPermissionAttempt;
-    if (existing !== undefined) return existing;
-    const attempt = this.#requestRuntimeDocumentPermission(permission);
-    this.#runtimeDocumentPermissionAttempt = attempt;
-    void attempt.then(
-      () => { if (this.#runtimeDocumentPermissionAttempt === attempt) this.#runtimeDocumentPermissionAttempt = undefined; },
-      () => { if (this.#runtimeDocumentPermissionAttempt === attempt) this.#runtimeDocumentPermissionAttempt = undefined; },
-    );
-    return attempt;
-  }
-
-  async #requestRuntimeDocumentPermission(permission: RuntimeDocumentPermission): Promise<boolean> {
-    const runtime = this.#runtime;
-    const requestConsent = runtime?.requestDocumentConsent;
-    const state = this.#state;
-    if (runtime === undefined || requestConsent === undefined || this.#closed || !isRuntimeState(state) || state.phase !== 'ready') return false;
-    const previous = state.preview;
-    const request = runtimeDocumentPermissionRequest(previous, permission);
-    if (request === undefined) return false;
-    try {
-      const created = await runtime.client.createRuntimeConsent(previous.binding.id, request);
-      if (!this.#isCurrentRuntimePreview(previous)) return false;
-      const challenge: McpAppConsentChallenge = Object.freeze({
-        expiresAt: created.challenge.expiresAt,
-        id: created.challenge.id,
-        request: detachedJson(created.challenge.request),
-      });
-      const selected = await requestConsent(challenge);
-      if (!this.#isCurrentRuntimePreview(previous)) return false;
-      const resolved = await runtime.client.decideRuntimeConsent(previous.binding.id, created.challenge.id, selected);
-      if (!this.#isCurrentRuntimePreview(previous) || selected === 'deny') return false;
-      if (resolved.grant === undefined) throw new McpAppPreviewDataError('runtime document consent did not produce a grant');
-      const refreshed = await runtime.client.getRuntime(previous.binding.id);
-      if (!this.#isCurrentRuntimePreview(previous) || !this.#runtimeDocumentRemountReady(previous, refreshed)) {
-        throw new McpAppPreviewDataError('runtime document policy refresh does not match the current binding');
-      }
-      const policy = runtime.client.currentDocumentPolicy(refreshed.binding.id);
-      if (policy.bindingId !== refreshed.binding.id || policy.snapshot !== refreshed.documentPolicy) {
-        throw new McpAppPreviewDataError('runtime document policy refresh is not trusted');
-      }
-      return await this.#replaceRuntimeDocumentPreview(refreshed, policy);
-    } catch (error) {
-      if (!this.#closed && this.#runtimePreview === previous) {
-        this.#runtimeFailure('preview-error', error);
-        void this.close().catch(() => undefined);
-      }
-      return false;
-    }
   }
 
   async consentChallenges(): Promise<readonly McpAppConsentChallenge[]> {
@@ -741,76 +667,6 @@ export class McpAppPreviewController<State extends McpAppPreviewControllerState 
       sameRuntimeVector(preview.binding.runVector, evidence.vector) &&
       sameStableRuntimeBinding(preview.binding, app.mcpBinding) &&
       sameStableRuntimeBinding(preview.session.binding, app.mcpBinding);
-  }
-
-  #isCurrentRuntimePreview(preview: McpAppPreviewAppsSnapshot): boolean {
-    const state = this.#state;
-    return !this.#closed && this.#runtimePreview === preview && isRuntimeState(state) && state.phase === 'ready' && state.preview === preview;
-  }
-
-  #runtimeDocumentRemountReady(
-    previous: McpAppPreviewAppsSnapshot,
-    next: McpAppPreviewSnapshot,
-  ): next is McpAppPreviewAppsSnapshot {
-    if (!this.#runtimeReady(next) || next.binding.id !== previous.binding.id || next.documentPolicy.revision <= previous.documentPolicy.revision) return false;
-    return next.binding.profileId === previous.binding.profileId &&
-      next.binding.profileVersion === previous.binding.profileVersion &&
-      sameRuntimeVector(next.binding.runVector, previous.binding.runVector) &&
-      sameStableRuntimeBinding(next.binding, previous.binding) &&
-      sameStableRuntimeBinding(next.session.binding, previous.session.binding) &&
-      next.profile.resourceUri === previous.profile.resourceUri &&
-      next.profile.descriptor.id === previous.profile.descriptor.id &&
-      next.profile.descriptor.version === previous.profile.descriptor.version;
-  }
-
-  async #replaceRuntimeDocumentPreview(
-    preview: McpAppPreviewAppsSnapshot,
-    policy: McpAppTrustedDocumentPolicy,
-  ): Promise<boolean> {
-    const current = this.#runtimePreview;
-    const runtime = this.#runtime;
-    if (current === undefined || current.kind !== 'apps' || runtime === undefined || !this.#isCurrentRuntimePreview(current)) {
-      throw new McpAppPreviewDataError('runtime document policy replacement is stale');
-    }
-    const delivery = this.#runtimeRendererDelivery;
-    if (delivery !== undefined) await delivery.catch(() => undefined);
-    if (!this.#isCurrentRuntimePreview(current)) return false;
-    const renderer = this.#runtimeRenderer;
-    const bridgeFactory = this.#runtimeBridgeFactory;
-    if (!this.#runtimeRendererClosed && renderer !== undefined) {
-      await renderer.teardown();
-      if (!this.#isCurrentRuntimePreview(current)) return false;
-      this.#runtimeRendererClosed = true;
-      if (this.#runtimeRenderer === renderer) this.#runtimeRenderer = undefined;
-    }
-    if (!this.#isCurrentRuntimePreview(current)) return false;
-    this.#setState(Object.freeze({ kind: 'runtime', phase: 'closing' }));
-    if (!this.#runtimeBridgeClosed && bridgeFactory !== undefined) {
-      await bridgeFactory.close();
-      this.#runtimeBridgeClosed = true;
-    }
-    if (this.#closed || this.#runtimePreview !== current) return false;
-    const nextBridgeFactory = runtime.createBridgeFactory(preview);
-    this.#runtimePreview = preview;
-    this.#runtimeBridgeFactory = nextBridgeFactory;
-    this.#runtimeBridgeClosed = false;
-    this.#runtimeRendererClosed = false;
-    this.#runtimeRendererDelivery = undefined;
-    this.#runtimeRendererInvocation = runtimeRendererInvocation(this.#input, preview.result.appVisible);
-    this.#runtimeRendererProps = Object.freeze({
-      onError: (error) => { this.reportRuntimeRendererError(error); },
-      ref: this.#runtimeRendererRef!,
-      tool: Object.freeze({ inputSchema: Object.freeze({ type: 'object' }), name: preview.binding.serverName }) as McpAppRendererTool,
-    });
-    this.#setState(Object.freeze({
-      bridgeFactory: nextBridgeFactory,
-      documentPolicy: policy,
-      fallback: this.#runtimeFallback ?? fallbackFor(undefined, this.#input, this.#result),
-      kind: 'runtime',
-      phase: 'ready',
-      preview,
-    }));
-    return true;
   }
 
   #runtimeFailure(reason: string, error: unknown, phase: 'error' | 'cleanup-failed' = 'error'): void {
@@ -1405,12 +1261,10 @@ export function McpAppPreview(props: McpAppPreviewProps | McpAppRuntimePreviewPr
         {runtimeState?.phase === 'loading' ? <p role="status">Creating MCP App preview…</p> : null}
         {runtimeState?.phase === 'closing' ? <p role="status">Closing MCP App preview…</p> : null}
         {runtimeState?.phase === 'error' || runtimeState?.phase === 'cleanup-failed' ? <p role="alert">{runtimeState.message}</p> : null}
-        {runtimeState?.phase === 'ready' && runtimeController !== undefined && documentPermissions.length > 0 ? <section aria-label="Runtime App document permissions" className="mcp-app-preview__runtime-inspection">
+        {runtimeState?.phase === 'ready' && documentPermissions.length > 0 ? <section aria-label="Runtime App document permissions" className="mcp-app-preview__runtime-inspection">
           <h3>Runtime App permissions</h3>
-          <p>Permissions declared by this App can be approved from the Workbench.</p>
-          <ul>{documentPermissions.map((permission) => <li key={permission}>
-            <button onClick={() => { void runtimeController.requestRuntimeDocumentPermission(permission).catch(() => undefined); }} type="button">Allow {permission === 'clipboardWrite' ? 'clipboard write' : permission}</button>
-          </li>)}</ul>
+          <p>Declared document permissions are unavailable in this isolated Runtime App surface.</p>
+          <ul>{documentPermissions.map((permission) => <li key={permission}>{runtimeDocumentPermissionLabel(permission)} unavailable</li>)}</ul>
         </section> : null}
         {fallback === undefined ? null : (
           <section aria-label="MCP App fallback" className="mcp-app-preview__fallback">
