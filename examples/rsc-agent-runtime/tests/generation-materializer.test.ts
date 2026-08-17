@@ -248,7 +248,7 @@ test('resolves the coherent development compiler configuration through Rsbuild',
     expect(rscBundler?.module?.rules?.some((rule) =>
       typeof rule === 'object' && rule !== null && 'test' in rule && String(rule.test).includes('request-render'))).toBe(true);
     expect(appBundler?.target).toEqual(expect.arrayContaining(['web']));
-    expect(appBundler?.plugins?.some((plugin) => plugin?.constructor?.name.includes('ReactRefresh'))).toBe(true);
+    expect(appBundler?.plugins?.some((plugin) => plugin?.constructor?.name.includes('ReactRefresh'))).toBe(false);
 
     const production = await createRsbuild({
       config: createRscRuntimeRsbuildConfig({ mode: 'production' }),
