@@ -251,8 +251,15 @@ export const createRscRuntimeRsbuildConfig = (
         output: {
           cleanDistPath: false,
           distPath: { root: root('app', 'dist/app') },
+          filename: {
+            assets: '[name][ext]',
+            css: '[name].css',
+            js: '[name].js',
+          },
+          filenameHash: false,
           inlineScripts: true,
           inlineStyles: true,
+          legalComments: 'linked',
           target: 'web',
         },
         source: {

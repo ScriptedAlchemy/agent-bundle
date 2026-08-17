@@ -20,6 +20,14 @@ const runPackageHosts = async (): Promise<void> => {
   expect(exitCode).toBe(0);
 };
 
+const runProductionBuild = async (): Promise<void> => {
+  await rm(join(exampleRoot, 'dist/app'), { force: true, recursive: true });
+  const child = spawn('npm', ['run', 'build'], { cwd: exampleRoot, stdio: 'pipe' });
+  const [exitCode, signal] = (await once(child, 'close')) as [number | null, NodeJS.Signals | null];
+  expect(signal).toBeNull();
+  expect(exitCode).toBe(0);
+};
+
 const readJson = async <T>(path: string): Promise<T> => JSON.parse(await readFile(path, 'utf8')) as T;
 
 const runtimeAssets = async (): Promise<string[]> => {
@@ -139,6 +147,31 @@ test('materializes self-contained Claude and Codex native plugin artifacts', asy
   }
   for (const relative of ['.agents/plugins/marketplace.json', '.codex-plugin/plugin.json', '.mcp.json', 'hooks/hooks.json', 'skills']) {
     await access(join(codexRoot, relative));
+  }
+});
+
+test('keeps fresh production App legal payload names stable and package-identical', async () => {
+  await runProductionBuild();
+  const appDigest = await artifactDigest(join(exampleRoot, 'dist/app'));
+  expect(appDigest.map((entry) => entry.path)).toEqual([
+    'edit-timeline-v1.html',
+    'standalone.html',
+    'static/js/lib-react.js.LICENSE.txt',
+  ]);
+  const legalNotice = appDigest.find((entry) => entry.path === 'static/js/lib-react.js.LICENSE.txt');
+  expect(legalNotice).toMatchObject({ path: 'static/js/lib-react.js.LICENSE.txt' });
+  expect(await readFile(join(exampleRoot, 'dist/app/static/js/lib-react.js.LICENSE.txt'), 'utf8')).toContain('LICENSE file');
+
+  for (const entry of appDigest) {
+    expect(entry.path).not.toMatch(/(?:^|\/)[^/]*\.[a-f\d]{8,}\.(?:js|css)(?:\.LICENSE\.txt)?$/iu);
+  }
+  for (const host of ['claude', 'codex']) {
+    expect(await artifactDigest(join(pluginsRoot, host, 'app'))).toEqual(appDigest);
+    for (const html of ['edit-timeline-v1.html', 'standalone.html']) {
+      const source = await readFile(join(pluginsRoot, host, 'app', html), 'utf8');
+      expect(source).toContain('LICENSE: lib-react.js.LICENSE.txt');
+      expect(source).not.toMatch(/<script[^>]+src=|<link[^>]+rel=["']stylesheet["']/iu);
+    }
   }
 });
 
