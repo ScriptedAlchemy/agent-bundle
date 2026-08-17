@@ -1564,3 +1564,65 @@ test('joins a late owned-runs cleanup after abort has already drained startup cl
     await rm(copied.workspaceRoot, { force: true, recursive: true });
   }
 });
+
+test('drains every live-session cleanup group once when independent closers reject', async () => {
+  const copied = await copyExample();
+  const storageRoot = join(copied.projectRoot, '.agent-bundle', 'runtime-live-close-failures');
+  const attempted: string[] = [];
+  const secrets = new Map([
+    ['owned-runs-root', 'do-not-expose-live-root-secret'],
+    ['rsbuild-dev-server', 'do-not-expose-live-server-secret'],
+    ['run-artifact', 'do-not-expose-live-artifact-secret'],
+  ]);
+  let session: RsbuildRuntimeSession | undefined;
+  try {
+    const prepared = await new ProjectService({ includeDevRuntime: true, mode: 'development', root: copied.projectRoot }).prepare('dev');
+    session = await RsbuildRuntimeSession.start(startContext({
+      projectRoot: copied.projectRoot,
+      preparedRuntime: prepared.devRuntime!,
+      providerSessionId: 'provider-live-close-failures',
+      signal: new AbortController().signal,
+      storageRoot,
+    }), {
+      afterLiveSessionCleanupResource: ({ resource }: Readonly<{ readonly resource: string }>) => {
+        attempted.push(resource);
+        const secret = secrets.get(resource);
+        if (secret !== undefined) throw new Error(secret);
+      },
+    });
+    await waitFor(() => session!.status().state === 'active');
+    const activeVector = session.status().activeVector;
+    if (activeVector === undefined) throw new Error('Expected an active runtime generation.');
+    const target = session.surfaces().find((surface) => surface.id === 'mcp.runtime_status')!.targets[0]!;
+    await expect(session.invoke({
+      expectedGenerationId: activeVector.runtimeGenerationId,
+      input: {},
+      surfaceId: 'mcp.runtime_status',
+      target,
+    })).resolves.toMatchObject({ status: 'succeeded' });
+
+    const closing = session.close();
+    expect(session.close()).toBe(closing);
+    const failure = await closing.then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    expect(failure).toBeInstanceOf(AggregateError);
+    const aggregate = failure as AggregateError;
+    expect(aggregate.message).toBe('RSC runtime session close failed; cleanup failures: owned-runs-root, rsbuild-dev-server, run-artifact.');
+    for (const secret of secrets.values()) expect(aggregate.message).not.toContain(secret);
+    expect(aggregate.errors).toEqual(expect.arrayContaining([...secrets.values()].map((secret) => expect.objectContaining({ message: secret }))));
+    expect(attempted).toEqual(expect.arrayContaining([
+      'generation-store',
+      'owned-runs-root',
+      'rsbuild-dev-server',
+      'run-artifact',
+      'runtime-mcp-registry',
+    ]));
+    expect(new Set(attempted).size).toBe(attempted.length);
+    expect(session.close()).toBe(closing);
+  } finally {
+    await session?.close().catch(() => undefined);
+    await rm(copied.workspaceRoot, { force: true, recursive: true });
+  }
+}, 45_000);

@@ -1766,6 +1766,121 @@ test('keeps the newest fifty immutable run artifacts and evicts the oldest compl
   }
 }, 45_000);
 
+test('retains a failed invocation Flight artifact until its explicit session-close release succeeds', async () => {
+  const storageRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-session-artifact-release-'));
+  const projectRoot = process.cwd();
+  const prepared = await new ProjectService({ includeDevRuntime: true, mode: 'development', root: projectRoot }).prepare('dev');
+  let failRelease = true;
+  let releaseAttempts = 0;
+  const session = await RsbuildRuntimeSession.start({
+    artifactStatus: () => Object.freeze({ state: 'missing' as const }),
+    emit: () => undefined,
+    environment: Object.freeze({}),
+    projectRoot,
+    preparedRuntime: prepared.devRuntime!,
+    providerSessionId: 'session-artifact-release-test',
+    signal: new AbortController().signal,
+    storageRoot,
+  }, {
+    afterInvocationWorkerResponse: () => { throw new Error('forced invocation failure'); },
+    beforeRunArtifactRelease: () => {
+      releaseAttempts += 1;
+      if (failRelease) throw new Error('do-not-expose-run-artifact-release-secret');
+    },
+  });
+
+  try {
+    await waitFor(() => session.status().activeVector !== undefined, 'Timed out waiting for an active runtime generation', 15_000);
+    const generationId = session.status().activeVector!.runtimeGenerationId;
+    const target = session.surfaces().find((surface) => surface.id === 'mcp.runtime_status')!.targets[0]!;
+    const run = await session.invoke({
+      expectedGenerationId: generationId,
+      input: {},
+      surfaceId: 'mcp.runtime_status',
+      target,
+    });
+
+    expect(run).toMatchObject({
+      diagnostics: [expect.objectContaining({
+        message: 'RSC runtime invocation cleanup failed; cleanup failures: run-artifact.',
+      })],
+      status: 'failed',
+    });
+    expect(run.status === 'failed' && run.diagnostics[0]!.message).not.toContain('do-not-expose-run-artifact-release-secret');
+    expect(releaseAttempts).toBe(1);
+    expect(await readdir(join(storageRoot, 'runs'))).toEqual(expect.arrayContaining([run.id]));
+
+    failRelease = false;
+    const closing = session.close();
+    expect(session.close()).toBe(closing);
+    await expect(closing).resolves.toBeUndefined();
+    expect(releaseAttempts).toBe(2);
+  } finally {
+    await session.close().catch(() => undefined);
+    await rm(storageRoot, { force: true, recursive: true });
+  }
+}, 45_000);
+
+test('keeps the oldest artifact and terminal history owned when eviction release fails', async () => {
+  const storageRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-session-eviction-release-'));
+  const projectRoot = process.cwd();
+  const prepared = await new ProjectService({ includeDevRuntime: true, mode: 'development', root: projectRoot }).prepare('dev');
+  let firstRunId: string | undefined;
+  let failedReleaseAttempts = 0;
+  const session = await RsbuildRuntimeSession.start({
+    artifactStatus: () => Object.freeze({ state: 'missing' as const }),
+    emit: () => undefined,
+    environment: Object.freeze({}),
+    projectRoot,
+    preparedRuntime: prepared.devRuntime!,
+    providerSessionId: 'session-eviction-release-test',
+    signal: new AbortController().signal,
+    storageRoot,
+  }, {
+    beforeRunArtifactRelease: ({ runId }: Readonly<{ readonly runId: string }>) => {
+      if (runId !== firstRunId) return;
+      failedReleaseAttempts += 1;
+      throw new Error('do-not-expose-eviction-release-secret');
+    },
+  });
+
+  try {
+    await waitFor(() => session.status().activeVector !== undefined, 'Timed out waiting for an active runtime generation', 15_000);
+    const generationId = session.status().activeVector!.runtimeGenerationId;
+    const target = session.surfaces().find((surface) => surface.id === 'mcp.runtime_status')!.targets[0]!;
+    const request = {
+      expectedGenerationId: generationId,
+      input: {},
+      surfaceId: 'mcp.runtime_status',
+      target,
+    } as const;
+    const first = await session.invoke(request);
+    if (first.status !== 'succeeded') throw new Error(JSON.stringify(first.diagnostics));
+    firstRunId = first.id;
+
+    for (let index = 0; index < 49; index += 1) {
+      await expect(session.invoke(request)).resolves.toMatchObject({ status: 'succeeded' });
+    }
+    await expect(session.invoke(request)).rejects.toThrow('RSC runtime run artifact cleanup failed; cleanup failures: run-artifact.');
+
+    expect(failedReleaseAttempts).toBeGreaterThan(0);
+    expect(session.run(first.id)).toEqual(first);
+    await expect(session.readRunFlight(first.id)).resolves.toMatchObject({ body: expect.any(Buffer) });
+    expect(await readdir(join(storageRoot, 'runs'))).toEqual(expect.arrayContaining([first.id]));
+
+    const closing = session.close();
+    expect(session.close()).toBe(closing);
+    await expect(closing).rejects.toMatchObject({
+      message: 'RSC runtime session close failed; cleanup failures: run-artifact.',
+    });
+    await expect(closing).rejects.not.toThrow('do-not-expose-eviction-release-secret');
+    expect(failedReleaseAttempts).toBeGreaterThan(1);
+  } finally {
+    await session.close().catch(() => undefined);
+    await rm(storageRoot, { force: true, recursive: true });
+  }
+}, 60_000);
+
 test('rejects a fifth blocked generation worker and settles every leased worker on close', async () => {
   const storageRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-session-bound-'));
   const projectRoot = process.cwd();
