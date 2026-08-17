@@ -1,6 +1,7 @@
 /* global URL, process */
 
 import { spawn } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { copyFile, chmod, mkdir, mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import { once } from 'node:events';
 import { homedir, tmpdir } from 'node:os';
@@ -64,29 +65,29 @@ const hookProbeSummary = async (probeFile) => {
   return summarizeHookProbe(records);
 };
 
-const evidenceFrom = async (host, fixture, stateFile, probeFile, transcript) => {
+const evidenceFrom = async (host, fixture, stateFile, probeFile, transcript, correlation) => {
   const stateRecords = await readFile(stateFile, 'utf8')
     .then((contents) => contents.split('\n').filter(Boolean).map((line) => JSON.parse(line)))
     .catch(() => []);
-  const transcriptEvidence = evidenceFromTranscript(host, transcript);
-  const stateRecorded = stateRecords.some((record) => record.host === host && String(record.path).endsWith('host-created.txt'));
-  const editObserved = await stat(join(fixture, 'host-created.txt')).then(() => true).catch(() => false);
+  const transcriptEvidence = evidenceFromTranscript(host, transcript, { ...correlation, stateRecords });
+  const editObserved = await stat(join(fixture, correlation.editPath)).then(() => true).catch(() => false);
   const hookProbe = await hookProbeSummary(probeFile);
   return {
-    editObservedByHook: editObserved && stateRecorded && hookEvidenceFromProbe(hookProbe),
-    editObservedByMcp: transcriptEvidence.mcpReadObserved && stateRecorded,
+    editObservedByHook: editObserved && transcriptEvidence.stateMarkerObserved && hookEvidenceFromProbe(hookProbe),
     eventCounts: { ...transcriptEvidence.eventCounts, hook: hookProbe.launches, state: stateRecords.length },
     finalMarkerObserved: transcriptEvidence.finalMarkerObserved,
     hookProbe,
+    mcpReadObserved: transcriptEvidence.mcpReadObserved,
     rscRenderToolObserved: transcriptEvidence.rscRenderToolObserved,
+    sharedHookStateObserved: transcriptEvidence.sharedHookStateObserved,
   };
 };
 
-const promptFor = (host) => {
+const promptFor = (host, { editPath, finalMarker }) => {
   const nativeEdit = host === 'codex'
     ? 'Use the apply_patch tool for that file edit; do not use a shell command.'
     : 'Use the Write tool for that file edit.';
-  return `In this workspace, create exactly one file named host-created.txt containing the word ${host}. ${nativeEdit} Then call the rsc-agent-runtime MCP tool recent_edits, pass its snapshot to render_edit_timeline, and finish with this exact marker on its own line: HOST_EVAL_FINAL host=${host} path=host-created.txt. Do not create any other files.`;
+  return `In this workspace, create exactly one file named ${editPath} containing the word ${host}. ${nativeEdit} Then call the rsc-agent-runtime MCP tool recent_edits, pass its snapshot to render_edit_timeline, and finish with this exact marker on its own line: ${finalMarker}. Do not create any other files.`;
 };
 
 const evaluateHost = async (host, capturedAt) => {
@@ -95,6 +96,12 @@ const evaluateHost = async (host, capturedAt) => {
   const pluginRoot = join(exampleRoot, 'dist', 'plugins', host);
   await stat(pluginRoot);
   const fixture = await mkdtemp(join(tmpdir(), `rsc-agent-runtime-${host}-fixture-`));
+  const marker = `rsc-eval-${randomBytes(16).toString('hex')}`;
+  const correlation = {
+    editPath: `host-created-${marker}.txt`,
+    finalMarker: `HOST_EVAL_FINAL host=${host} marker=${marker}`,
+    marker,
+  };
   const stateFile = join(fixture, '.agent-runtime-demo', 'events.jsonl');
   const probeFile = join(fixture, 'hook-probe.jsonl');
   const sharedEnv = sanitizedHostEnvironment(process.env, { hookProbeFile: probeFile, stateFile });
@@ -106,7 +113,7 @@ const evaluateHost = async (host, capturedAt) => {
     let result;
     if (host === 'claude') {
       result = await runProcess('claude', [
-        '-p', promptFor(host), '--plugin-dir', pluginRoot, '--output-format', 'stream-json', '--verbose', '--include-hook-events',
+        '-p', promptFor(host, correlation), '--plugin-dir', pluginRoot, '--output-format', 'stream-json', '--verbose', '--include-hook-events',
         '--no-session-persistence', '--dangerously-skip-permissions',
       ], { cwd: fixture, env: sharedEnv });
     } else {
@@ -125,11 +132,11 @@ const evaluateHost = async (host, capturedAt) => {
         : { exitCode: 1, stderr: '', stdout: '' };
       result = pluginAdd.exitCode === 0
         ? await runProcess('codex', [
-          '-a', 'never', 'exec', '--ephemeral', '--json', '--dangerously-bypass-hook-trust', '-s', 'workspace-write', '-C', fixture, promptFor(host),
+          '-a', 'never', 'exec', '--ephemeral', '--json', '--dangerously-bypass-hook-trust', '-s', 'workspace-write', '-C', fixture, promptFor(host, correlation),
         ], { cwd: fixture, env: codexEnv })
         : { exitCode: 1, stderr: '', stdout: '' };
     }
-    const evidence = await evidenceFrom(host, fixture, stateFile, probeFile, `${result.stdout}\n${result.stderr}`);
+    const evidence = await evidenceFrom(host, fixture, stateFile, probeFile, `${result.stdout}\n${result.stderr}`, correlation);
     return classifyNativeEvidence(host, {
       ...evidence,
       sessionAvailable: result.exitCode === 0 && evidence.finalMarkerObserved,

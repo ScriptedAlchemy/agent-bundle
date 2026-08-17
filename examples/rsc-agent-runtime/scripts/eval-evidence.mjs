@@ -12,50 +12,105 @@ const jsonEvents = (output) => output.split('\n').flatMap((line) => {
 const markerOnOwnLine = (value, marker) =>
   typeof value === 'string' && value.split(/\r?\n/).some((line) => line.trim() === marker);
 
+const MAX_RESULT_CONTENT_CHARACTERS = 16_384;
+const MAX_RESULT_CONTENT_BLOCKS = 20;
+
+const boundedText = (value) => typeof value === 'string' && value.length <= MAX_RESULT_CONTENT_CHARACTERS
+  ? value
+  : undefined;
+
+const boundedClaudeResultContent = (value) => {
+  const text = boundedText(value);
+  if (text !== undefined) return text;
+  if (!Array.isArray(value) || value.length === 0 || value.length > MAX_RESULT_CONTENT_BLOCKS) return undefined;
+  const blocks = [];
+  let length = 0;
+  for (const block of value) {
+    if (!isRecord(block) || block.type !== 'text' || typeof block.text !== 'string') return undefined;
+    length += block.text.length + (blocks.length === 0 ? 0 : 1);
+    if (length > MAX_RESULT_CONTENT_CHARACTERS) return undefined;
+    blocks.push(block.text);
+  }
+  return blocks.join('\n');
+};
+
 const claudeToolUses = (event) => {
   if (event.type !== 'assistant' || !isRecord(event.message) || event.message.role !== 'assistant' || !Array.isArray(event.message.content)) {
     return [];
   }
-  return event.message.content.flatMap(
-    (content) =>
-      isRecord(content) &&
-      content.type === 'tool_use' &&
-      typeof content.id === 'string' &&
-      typeof content.name === 'string' &&
-      [content],
+  return event.message.content.flatMap((content) =>
+    isRecord(content) &&
+    content.type === 'tool_use' &&
+    typeof content.id === 'string' &&
+    typeof content.name === 'string'
+      ? [content]
+      : [],
   );
 };
 
-const successfulClaudeToolResults = (event) => {
+const claudeToolResults = (event) => {
   if (event.type !== 'user' || !isRecord(event.message) || event.message.role !== 'user' || !Array.isArray(event.message.content)) {
     return [];
   }
-  return event.message.content.flatMap(
-    (content) =>
-      isRecord(content) &&
-      content.type === 'tool_result' &&
-      typeof content.tool_use_id === 'string' &&
-      content.is_error !== true &&
-      [content.tool_use_id],
+  return event.message.content.flatMap((content) =>
+    isRecord(content) &&
+    content.type === 'tool_result' &&
+    typeof content.tool_use_id === 'string'
+      ? [{
+        content: content.is_error === true ? undefined : boundedClaudeResultContent(content.content),
+        id: content.tool_use_id,
+        succeeded: content.is_error !== true,
+      }]
+      : [],
   );
 };
 
-const isRequestedClaudeTool = (name, toolName) => name === toolName || name.endsWith(`__${toolName}`);
+const claudeRuntimeToolName = (toolName) => `mcp__rsc-agent-runtime__${toolName}`;
 
-const claudeEvidence = (events, marker) => {
-  const successfulResults = new Set(events.flatMap(successfulClaudeToolResults));
-  const completedToolUses = events.flatMap(claudeToolUses).filter((toolUse) => successfulResults.has(toolUse.id));
-  const recentEdits = completedToolUses.filter((toolUse) => isRequestedClaudeTool(toolUse.name, 'recent_edits')).length;
-  const renderTimeline = completedToolUses.filter((toolUse) => isRequestedClaudeTool(toolUse.name, 'render_edit_timeline')).length;
+const completedClaudeToolUses = (events) => {
+  const uses = events.flatMap(claudeToolUses);
+  const useCounts = new Map();
+  for (const toolUse of uses) useCounts.set(toolUse.id, (useCounts.get(toolUse.id) ?? 0) + 1);
+
+  const results = new Map();
+  const duplicateResults = new Set();
+  for (const result of events.flatMap(claudeToolResults)) {
+    if (results.has(result.id)) duplicateResults.add(result.id);
+    else results.set(result.id, result);
+  }
+
+  return uses.flatMap((toolUse) => {
+    const result = results.get(toolUse.id);
+    if (useCounts.get(toolUse.id) !== 1 || duplicateResults.has(toolUse.id) || result?.succeeded !== true || result.content === undefined) {
+      return [];
+    }
+    return [{ content: result.content, toolUse }];
+  });
+};
+
+const stateHasMarker = (host, records, marker) =>
+  typeof marker === 'string' && marker.length > 0 && Array.isArray(records) && records.some((record) =>
+    isRecord(record) &&
+    record.kind === 'edit' &&
+    isRecord(record.event) &&
+    record.event.host === host &&
+    typeof record.event.path === 'string' &&
+    record.event.path.includes(marker));
+
+const claudeEvidence = (events, marker, finalMarker) => {
+  const completed = completedClaudeToolUses(events);
+  const recentEdits = completed.filter(({ toolUse }) => toolUse.name === claudeRuntimeToolName('recent_edits'));
+  const renderTimeline = completed.filter(({ toolUse }) => toolUse.name === claudeRuntimeToolName('render_edit_timeline'));
   const finalMarkerObserved = events.some(
-    (event) => event.type === 'result' && event.is_error === false && markerOnOwnLine(event.result, marker),
+    (event) => event.type === 'result' && event.is_error === false && markerOnOwnLine(event.result, finalMarker),
   );
 
   return {
-    eventCounts: { hook: 0, json: events.length, mcp: recentEdits, rscRender: renderTimeline },
+    eventCounts: { hook: 0, json: events.length, mcp: recentEdits.length, rscRender: renderTimeline.length },
     finalMarkerObserved,
-    mcpReadObserved: recentEdits > 0,
-    rscRenderToolObserved: renderTimeline > 0,
+    mcpReadMarkerObserved: typeof marker === 'string' && recentEdits.some(({ content }) => content.includes(marker)),
+    mcpReadObserved: recentEdits.length > 0,
+    rscRenderToolObserved: renderTimeline.length > 0,
   };
 };
 
@@ -75,9 +130,9 @@ export const classifyNativeEvidence = (host, result, { capturedAt }) => {
   const unavailableBasis = hostAvailable ? 'selected native run did not produce the required evidence' : 'installed host/version/session unavailable';
   const packageActivated = hostAvailable && observed(result, 'sessionAvailable') && observed(result, 'finalMarkerObserved');
   const hookDispatched = host === 'claude' && hostAvailable && observed(result, 'editObservedByHook');
-  const mcpRead = hostAvailable && observed(result, 'editObservedByMcp');
+  const mcpRead = hostAvailable && observed(result, 'mcpReadObserved');
   const rscRender = hostAvailable && observed(result, 'rscRenderToolObserved');
-  const sharedHookState = host === 'claude' && hookDispatched && mcpRead;
+  const sharedHookState = host === 'claude' && hookDispatched && observed(result, 'sharedHookStateObserved');
   const iframeBasis = host === 'claude'
     ? 'Claude Code CLI is not an MCP Apps iframe host'
     : 'Codex CLI is not an MCP Apps iframe host';
@@ -136,10 +191,12 @@ const isCodexMcpCall = (event, toolName) =>
   isRecord(event.item) &&
   event.item.type === 'mcp_tool_call' &&
   event.item.status === 'completed' &&
+  event.item.is_error !== true &&
+  !(isRecord(event.item.result) && event.item.result.is_error === true) &&
   event.item.server === 'rsc-agent-runtime' &&
   event.item.tool === toolName;
 
-const codexEvidence = (events, marker) => {
+const codexEvidence = (events, finalMarker) => {
   const recentEdits = events.filter((event) => isCodexMcpCall(event, 'recent_edits')).length;
   const renderTimeline = events.filter((event) => isCodexMcpCall(event, 'render_edit_timeline')).length;
   const finalMarkerObserved = events.some(
@@ -147,21 +204,32 @@ const codexEvidence = (events, marker) => {
       event.type === 'item.completed' &&
       isRecord(event.item) &&
       event.item.type === 'agent_message' &&
-      markerOnOwnLine(event.item.text, marker) &&
+      markerOnOwnLine(event.item.text, finalMarker) &&
       events[index + 1]?.type === 'turn.completed',
   );
 
   return {
     eventCounts: { hook: 0, json: events.length, mcp: recentEdits, rscRender: renderTimeline },
     finalMarkerObserved,
+    mcpReadMarkerObserved: false,
     mcpReadObserved: recentEdits > 0,
     rscRenderToolObserved: renderTimeline > 0,
   };
 };
 
 /** Parses only known JSONL event discriminants and returns no host-supplied values. */
-export const evidenceFromTranscript = (host, transcript) => {
+export const evidenceFromTranscript = (host, transcript, correlation = {}) => {
   const events = jsonEvents(transcript);
-  const marker = `HOST_EVAL_FINAL host=${host} path=host-created.txt`;
-  return host === 'claude' ? claudeEvidence(events, marker) : codexEvidence(events, marker);
+  const safeCorrelation = isRecord(correlation) ? correlation : {};
+  const finalMarker = typeof safeCorrelation.finalMarker === 'string'
+    ? safeCorrelation.finalMarker
+    : `HOST_EVAL_FINAL host=${host} path=host-created.txt`;
+  const evidence = host === 'claude'
+    ? claudeEvidence(events, safeCorrelation.marker, finalMarker)
+    : codexEvidence(events, finalMarker);
+  return {
+    ...evidence,
+    sharedHookStateObserved: host === 'claude' && evidence.mcpReadMarkerObserved && stateHasMarker(host, safeCorrelation.stateRecords, safeCorrelation.marker),
+    stateMarkerObserved: stateHasMarker(host, safeCorrelation.stateRecords, safeCorrelation.marker),
+  };
 };

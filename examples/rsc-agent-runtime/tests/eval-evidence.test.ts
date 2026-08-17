@@ -9,7 +9,9 @@ type TranscriptEvidence = {
   eventCounts: { hook: number; json: number; mcp: number; rscRender: number };
   finalMarkerObserved: boolean;
   mcpReadObserved: boolean;
+  mcpReadMarkerObserved: boolean;
   rscRenderToolObserved: boolean;
+  sharedHookStateObserved: boolean;
 };
 
 type HookProbeSummary = {
@@ -27,11 +29,15 @@ type NativeEvidenceEnvelope = {
 
 const marker = (host: 'claude' | 'codex'): string => `HOST_EVAL_FINAL host=${host} path=host-created.txt`;
 
-const parseEvidence = async (host: 'claude' | 'codex', transcript: string): Promise<TranscriptEvidence> => {
+const parseEvidence = async (
+  host: 'claude' | 'codex',
+  transcript: string,
+  correlation?: Readonly<{ finalMarker?: string; marker?: string; stateRecords?: readonly unknown[] }>,
+): Promise<TranscriptEvidence> => {
   const moduleUrl = pathToFileURL(join(process.cwd(), 'scripts/eval-evidence.mjs')).href;
   const source = [
     `import { evidenceFromTranscript } from ${JSON.stringify(moduleUrl)};`,
-    `process.stdout.write(JSON.stringify(evidenceFromTranscript(${JSON.stringify(host)}, ${JSON.stringify(transcript)})));`,
+    `process.stdout.write(JSON.stringify(evidenceFromTranscript(${JSON.stringify(host)}, ${JSON.stringify(transcript)}, ${JSON.stringify(correlation)})));`,
   ].join('\n');
   const child = spawn(process.execPath, ['--input-type=module', '--eval', source], { stdio: ['ignore', 'pipe', 'pipe'] });
   let stdout = '';
@@ -167,8 +173,8 @@ test('accepts only correlated Claude tool-use and successful result events', asy
       message: { content: [{ id: 'tool-render', input: {}, name: 'mcp__rsc-agent-runtime__render_edit_timeline', type: 'tool_use' }], role: 'assistant' },
       type: 'assistant',
     }),
-    JSON.stringify({ message: { content: [{ is_error: false, tool_use_id: 'tool-recent', type: 'tool_result' }], role: 'user' }, type: 'user' }),
-    JSON.stringify({ message: { content: [{ is_error: false, tool_use_id: 'tool-render', type: 'tool_result' }], role: 'user' }, type: 'user' }),
+    JSON.stringify({ message: { content: [{ content: 'snapshot', is_error: false, tool_use_id: 'tool-recent', type: 'tool_result' }], role: 'user' }, type: 'user' }),
+    JSON.stringify({ message: { content: [{ content: 'rendered', is_error: false, tool_use_id: 'tool-render', type: 'tool_result' }], role: 'user' }, type: 'user' }),
     JSON.stringify({ is_error: false, result: `${marker('claude')}\n`, subtype: 'success', type: 'result' }),
   ].join('\n');
 
@@ -197,6 +203,166 @@ test('rejects Claude tool uses without matching successful tool results', async 
     eventCounts: { mcp: 0, rscRender: 0 },
     mcpReadObserved: false,
     rscRenderToolObserved: false,
+  });
+});
+
+test('rejects lookalike, failed, malformed, and oversized Claude recent_edits results', async () => {
+  const oversized = 'x'.repeat(16_385);
+  const transcript = [
+    JSON.stringify({
+      message: {
+        content: [
+          { id: 'other', input: {}, name: 'mcp__other__recent_edits', type: 'tool_use' },
+          { id: 'suffix', input: {}, name: 'mcp__rsc-agent-runtime__recent_edits_suffix', type: 'tool_use' },
+          { id: 'failed', input: {}, name: 'mcp__rsc-agent-runtime__recent_edits', type: 'tool_use' },
+          { id: 'malformed', input: {}, name: 'mcp__rsc-agent-runtime__recent_edits', type: 'tool_use' },
+          { id: 'oversized', input: {}, name: 'mcp__rsc-agent-runtime__recent_edits', type: 'tool_use' },
+          { id: 'too-many-blocks', input: {}, name: 'mcp__rsc-agent-runtime__recent_edits', type: 'tool_use' },
+          { id: 'joined-too-large', input: {}, name: 'mcp__rsc-agent-runtime__recent_edits', type: 'tool_use' },
+        ],
+        role: 'assistant',
+      },
+      type: 'assistant',
+    }),
+    JSON.stringify({
+      message: {
+        content: [
+          { content: 'unrelated', is_error: false, tool_use_id: 'other', type: 'tool_result' },
+          { content: 'unrelated', is_error: false, tool_use_id: 'suffix', type: 'tool_result' },
+          { content: 'owned marker', is_error: true, tool_use_id: 'failed', type: 'tool_result' },
+          { content: { text: 'owned marker' }, is_error: false, tool_use_id: 'malformed', type: 'tool_result' },
+          { content: oversized, is_error: false, tool_use_id: 'oversized', type: 'tool_result' },
+          { content: Array.from({ length: 21 }, () => ({ text: 'owned marker', type: 'text' })), is_error: false, tool_use_id: 'too-many-blocks', type: 'tool_result' },
+          { content: Array.from({ length: 20 }, () => ({ text: 'x'.repeat(819), type: 'text' })), is_error: false, tool_use_id: 'joined-too-large', type: 'tool_result' },
+        ],
+        role: 'user',
+      },
+      type: 'user',
+    }),
+  ].join('\n');
+
+  await expect(parseEvidence('claude', transcript, { marker: 'owned marker' })).resolves.toMatchObject({
+    eventCounts: { mcp: 0 },
+    mcpReadMarkerObserved: false,
+    mcpReadObserved: false,
+    sharedHookStateObserved: false,
+  });
+});
+
+test('correlates one exact Claude result marker to one matching owned hook-state record', async () => {
+  const correlation = {
+    marker: 'rsc-eval-marker-1234567890abcdef',
+    stateRecords: [{
+      event: { host: 'claude', path: '/owned/host-created-rsc-eval-marker-1234567890abcdef.txt' },
+      kind: 'edit',
+    }],
+  };
+  const transcript = [
+    JSON.stringify({
+      message: { content: [{ id: 'recent', input: {}, name: 'mcp__rsc-agent-runtime__recent_edits', type: 'tool_use' }], role: 'assistant' },
+      type: 'assistant',
+    }),
+    JSON.stringify({
+      message: {
+        content: [{ content: [{ text: `state returned\n${correlation.marker}`, type: 'text' }], is_error: false, tool_use_id: 'recent', type: 'tool_result' }],
+        role: 'user',
+      },
+      type: 'user',
+    }),
+  ].join('\n');
+
+  await expect(parseEvidence('claude', transcript, correlation)).resolves.toMatchObject({
+    eventCounts: { mcp: 1 },
+    mcpReadMarkerObserved: true,
+    mcpReadObserved: true,
+    sharedHookStateObserved: true,
+  });
+});
+
+test('keeps an exact successful Claude read observed without upgrading unmarked hook state', async () => {
+  const correlation = {
+    marker: 'rsc-eval-marker-unmarked',
+    stateRecords: [{
+      event: { host: 'claude', path: '/owned/host-created-rsc-eval-marker-unmarked.txt' },
+      kind: 'edit',
+    }],
+  };
+  const transcript = [
+    JSON.stringify({
+      message: { content: [{ id: 'recent', input: {}, name: 'mcp__rsc-agent-runtime__recent_edits', type: 'tool_use' }], role: 'assistant' },
+      type: 'assistant',
+    }),
+    JSON.stringify({
+      message: { content: [{ content: 'snapshot without the owned marker', is_error: false, tool_use_id: 'recent', type: 'tool_result' }], role: 'user' },
+      type: 'user',
+    }),
+  ].join('\n');
+
+  await expect(parseEvidence('claude', transcript, correlation)).resolves.toMatchObject({
+    eventCounts: { mcp: 1 },
+    mcpReadMarkerObserved: false,
+    mcpReadObserved: true,
+    sharedHookStateObserved: false,
+  });
+});
+
+test('does not borrow a duplicate result marker or unrelated state record for shared-hook evidence', async () => {
+  const marker = 'rsc-eval-marker-borrowed';
+  const transcript = [
+    JSON.stringify({
+      message: { content: [{ id: 'recent', input: {}, name: 'mcp__rsc-agent-runtime__recent_edits', type: 'tool_use' }], role: 'assistant' },
+      type: 'assistant',
+    }),
+    JSON.stringify({
+      message: {
+        content: [
+          { content: 'ordinary response', is_error: false, tool_use_id: 'recent', type: 'tool_result' },
+          { content: marker, is_error: false, tool_use_id: 'recent', type: 'tool_result' },
+        ],
+        role: 'user',
+      },
+      type: 'user',
+    }),
+  ].join('\n');
+
+  await expect(parseEvidence('claude', transcript, {
+    marker,
+    stateRecords: [{ event: { host: 'claude', path: '/owned/unrelated.txt' }, kind: 'edit' }],
+  })).resolves.toMatchObject({
+    eventCounts: { mcp: 0 },
+    mcpReadMarkerObserved: false,
+    mcpReadObserved: false,
+    sharedHookStateObserved: false,
+  });
+});
+
+test('does not borrow a marker from a different Claude tool-result ID', async () => {
+  const marker = 'rsc-eval-marker-mixed';
+  const transcript = [
+    JSON.stringify({
+      message: { content: [{ id: 'recent', input: {}, name: 'mcp__rsc-agent-runtime__recent_edits', type: 'tool_use' }], role: 'assistant' },
+      type: 'assistant',
+    }),
+    JSON.stringify({
+      message: {
+        content: [
+          { content: 'ordinary snapshot', is_error: false, tool_use_id: 'recent', type: 'tool_result' },
+          { content: marker, is_error: false, tool_use_id: 'foreign', type: 'tool_result' },
+        ],
+        role: 'user',
+      },
+      type: 'user',
+    }),
+  ].join('\n');
+
+  await expect(parseEvidence('claude', transcript, {
+    marker,
+    stateRecords: [{ event: { host: 'claude', path: `/owned/${marker}.txt` }, kind: 'edit' }],
+  })).resolves.toMatchObject({
+    eventCounts: { mcp: 1 },
+    mcpReadMarkerObserved: false,
+    mcpReadObserved: true,
+    sharedHookStateObserved: false,
   });
 });
 
@@ -253,14 +419,34 @@ test('accepts only completed Codex MCP calls and its terminal agent result', asy
   });
 });
 
+test('does not count a failed Codex runtime MCP call', async () => {
+  const transcript = JSON.stringify({
+    item: {
+      is_error: true,
+      result: { is_error: true },
+      server: 'rsc-agent-runtime',
+      status: 'completed',
+      tool: 'recent_edits',
+      type: 'mcp_tool_call',
+    },
+    type: 'item.completed',
+  });
+
+  await expect(parseEvidence('codex', transcript)).resolves.toMatchObject({
+    eventCounts: { mcp: 0 },
+    mcpReadObserved: false,
+  });
+});
+
 test('classifies complete Claude native evidence as literal claim-level observations', async () => {
   const capturedAt = '2026-08-14T20:00:00.000Z';
   const completeClaude = {
     editObservedByHook: true,
-    editObservedByMcp: true,
     finalMarkerObserved: true,
+    mcpReadObserved: true,
     rscRenderToolObserved: true,
     sessionAvailable: true,
+    sharedHookStateObserved: true,
     version: '2.1.232',
   };
 
@@ -283,8 +469,8 @@ test('keeps Codex hook claims unavailable under exec ephemeral despite completed
   const capturedAt = '2026-08-14T20:00:00.000Z';
   const incompleteCodex = {
     editObservedByHook: true,
-    editObservedByMcp: true,
     finalMarkerObserved: true,
+    mcpReadObserved: true,
     rscRenderToolObserved: true,
     sessionAvailable: true,
     version: '0.147.0',
