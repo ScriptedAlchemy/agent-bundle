@@ -50,6 +50,7 @@ const traceController = (connect: () => Promise<void> = async () => undefined) =
   } satisfies McpSessionControllerRoutes,
   transportFactory: (): McpSessionControllerTransport => ({
     close: async () => undefined,
+    send: async () => undefined,
     session: Object.freeze({ binding: traceBinding, connection: traceConnection, id: 'real-trace-session', timeoutMs: 5_000 }),
     start: async () => undefined,
   }),

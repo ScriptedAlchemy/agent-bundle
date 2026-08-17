@@ -141,6 +141,8 @@ const draftFixture: DraftEvalCase = Object.freeze({
 
 class RecordingService implements PlaygroundRouteService {
   readonly calls: unknown[] = [];
+  /** Persisted history the real service replays from inside subscribe(). */
+  backlog: readonly PlaygroundTraceEvent[] = [];
   readonly listeners = new Set<(event: PlaygroundTraceEvent) => void | Promise<void>>();
   failure: Error | undefined;
   missing = false;
@@ -184,6 +186,7 @@ class RecordingService implements PlaygroundRouteService {
   async subscribe(sessionId: string, options: PlaygroundSubscribeOptions): Promise<PlaygroundSubscription> {
     this.calls.push({ afterSequence: options.afterSequence, kind: 'subscribe', sessionId });
     if (this.failure !== undefined) throw this.failure;
+    for (const event of this.backlog) await options.onEvent(event);
     this.listeners.add(options.onEvent);
     const record = { closed: false };
     return Object.freeze({
@@ -429,6 +432,25 @@ it('streams appended events and releases the subscription when the reader leaves
     await expect(readLines(stream, 1)).resolves.toEqual([eventFixture]);
     await eventually(() => service.subscriptionsClosed === 1, 1_000);
     expect(service.calls).toEqual([{ afterSequence: 0, kind: 'subscribe', sessionId: 'session-a' }]);
+  } finally {
+    await started.close();
+  }
+});
+
+it('delivers a persisted backlog before live events on a reconnecting stream', async () => {
+  const service = new RecordingService();
+  // The service replays history from inside subscribe(), before headers are committed.
+  service.backlog = [eventFixture];
+  const started = await startRoutes(service);
+
+  try {
+    const stream = await fetch(`${started.url}/api/playground/sessions/session-a/stream?after=0`, { headers: headers() });
+    expect(stream.status).toBe(200);
+    expect(stream.headers.get('content-type')).toBe('application/x-ndjson; charset=utf-8');
+    const later = Object.freeze({ ...eventFixture, rawEventRef: 'session-a/2', sequence: 2 });
+    await eventually(() => service.listeners.size === 1, 1_000);
+    service.emit(later);
+    await expect(readLines(stream, 2)).resolves.toEqual([eventFixture, later]);
   } finally {
     await started.close();
   }

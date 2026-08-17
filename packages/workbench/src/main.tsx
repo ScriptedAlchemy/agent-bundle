@@ -2,7 +2,10 @@ import { type KeyboardEvent, type ReactNode, useEffect, useRef, useState } from 
 import { createRoot } from 'react-dom/client';
 
 import type { Diagnostic } from '../../agent-bundle/src/core/diagnostics.ts';
-import type { PlaygroundSession } from '../../agent-bundle/src/services/playground-service.ts';
+import type {
+  PlaygroundEventInput,
+  PlaygroundSession,
+} from '../../agent-bundle/src/services/playground-service.ts';
 import type { ProjectStatus } from '../../agent-bundle/src/dev/types.ts';
 
 import { ArtifactClient } from './artifacts/artifact-client.ts';
@@ -319,17 +322,19 @@ const ArtifactsScreen = ({ artifactClient, connectionError, onNavigate, status }
   <ArtifactsPage client={artifactClient} epochId={activeEpochId(status)} />
 </WorkbenchScreen>;
 
-const PlaygroundScreen = ({ connectionError, onNavigate, onSessionChange, playgroundClient, status }: {
+const PlaygroundScreen = ({ connectionError, onNavigate, onSessionChange, playgroundClient, session, status }: {
   readonly connectionError?: string;
   readonly onNavigate: (page: WorkbenchPage) => void;
   readonly onSessionChange: (session: PlaygroundSession | undefined) => void;
   readonly playgroundClient: PlaygroundClient;
+  readonly session: PlaygroundSession | undefined;
   readonly status: ProjectStatus;
 }) => <WorkbenchScreen connectionError={connectionError} onNavigate={onNavigate} page="playground">
   <PlaygroundPage
     client={playgroundClient}
     epoch={playgroundEpochFor(status)}
     onSessionChange={onSessionChange}
+    session={session}
     targets={playgroundTargetsFor(status)}
   />
 </WorkbenchScreen>;
@@ -344,13 +349,18 @@ const LogsScreen = ({ connectionError, onNavigate, playgroundClient, sessionId, 
   <LogsPage client={playgroundClient} epoch={playgroundEpochFor(status)} sessionId={sessionId} />
 </WorkbenchScreen>;
 
-const HooksScreen = ({ connectionError, hookClient, onNavigate, status }: {
+const HooksScreen = ({ connectionError, hookClient, onNavigate, onRecordTrace, status }: {
   readonly connectionError?: string;
   readonly hookClient: HookClient;
   readonly onNavigate: (page: WorkbenchPage) => void;
+  readonly onRecordTrace?: (input: PlaygroundEventInput) => Promise<void>;
   readonly status: ProjectStatus;
 }) => <WorkbenchScreen connectionError={connectionError} onNavigate={onNavigate} page="hooks">
-  <HooksPage client={hookClient} epochId={activeEpochId(status)} />
+  <HooksPage
+    client={hookClient}
+    epochId={activeEpochId(status)}
+    {...(onRecordTrace === undefined ? {} : { onRecordTrace })}
+  />
 </WorkbenchScreen>;
 
 const McpScreen = ({ appPreviewClient, connectionError, controller, model, onNavigate, onResetSession, presentation, setPresentation, status }: {
@@ -473,6 +483,15 @@ const Workbench = () => {
   if (playgroundClient.current === undefined) playgroundClient.current = new PlaygroundClient();
   if (mcpAppClient.current === undefined) mcpAppClient.current = new McpAppClient();
 
+  /** Only an open session records; a finalized or absent session leaves other pages unchanged. */
+  const recordPlaygroundEvent = playgroundSession?.state === 'open'
+    ? async (input: PlaygroundEventInput): Promise<void> => {
+        const client = playgroundClient.current;
+        if (client === undefined) return;
+        await client.append(playgroundSession.id, input);
+      }
+    : undefined;
+
   const navigate = (next: WorkbenchPage): void => {
     const hash = next === 'artifacts' ? '#artifacts'
       : next === 'hooks' ? '#hooks'
@@ -558,6 +577,7 @@ const Workbench = () => {
         onNavigate={navigate}
         onSessionChange={setPlaygroundSession}
         playgroundClient={playgroundClient.current}
+        session={playgroundSession}
         status={status}
       />;
     }
@@ -574,7 +594,13 @@ const Workbench = () => {
       return <ArtifactsScreen artifactClient={artifactClient.current} connectionError={connectionError} onNavigate={navigate} status={status} />;
     }
     if (page === 'hooks') {
-      return <HooksScreen connectionError={connectionError} hookClient={hookClient.current} onNavigate={navigate} status={status} />;
+      return <HooksScreen
+        connectionError={connectionError}
+        hookClient={hookClient.current}
+        onNavigate={navigate}
+        {...(recordPlaygroundEvent === undefined ? {} : { onRecordTrace: recordPlaygroundEvent })}
+        status={status}
+      />;
     }
     return page === 'skills'
       ? <SkillsScreen connectionError={connectionError} onNavigate={navigate} skillClient={skillClient.current} status={status} />

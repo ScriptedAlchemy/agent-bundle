@@ -91,7 +91,7 @@ it('states why promotion is refused while the session is still open', () => {
 
 it('renders no session controls and no request state when no epoch is active', () => {
   const client = new PlaygroundClient({ fetch: async () => { throw new Error('No epoch may issue a playground request.'); } });
-  const markup = renderToStaticMarkup(createElement(PlaygroundPage, { client, epoch: undefined, targets: [] }));
+  const markup = renderToStaticMarkup(createElement(PlaygroundPage, { client, epoch: undefined, onSessionChange: () => undefined, session: undefined, targets: [] }));
 
   expect(markup).toContain('No artifact epoch is active');
   expect(markup).not.toContain('id="playground-task-text"');
@@ -103,6 +103,8 @@ it('offers session identity controls without any natural-language host action', 
   const markup = renderToStaticMarkup(createElement(PlaygroundPage, {
     client,
     epoch,
+    onSessionChange: () => undefined,
+    session: undefined,
     targets: [{ digest: 'sha256-claude', name: 'claude' }],
   }));
 

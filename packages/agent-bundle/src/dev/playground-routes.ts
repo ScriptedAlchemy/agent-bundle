@@ -468,16 +468,16 @@ export class PlaygroundRoutes {
   ): Promise<void> {
     let closed = false;
     let pendingBytes = 0;
+    let started = false;
+    let backlogBytes = 0;
+    const backlog: string[] = [];
     const stream = { subscription: undefined as PlaygroundSubscription | undefined };
     let cleanup = (): void => undefined;
     const finishStream = (): void => {
       cleanup();
       if (!response.writableEnded && !response.destroyed) response.end();
     };
-    // The service awaits this callback, so returning a drain promise is the backpressure signal.
-    const deliver = async (event: PlaygroundTraceEvent): Promise<void> => {
-      if (closed || response.writableEnded || response.destroyed) return;
-      const frame = `${JSON.stringify(event)}\n`;
+    const write = async (frame: string): Promise<void> => {
       const bytes = Buffer.byteLength(frame);
       if (pendingBytes + bytes > streamQueueByteLimit) {
         cleanup();
@@ -494,6 +494,26 @@ export class PlaygroundRoutes {
         response.once('drain', settle);
         response.once('close', settle);
       });
+    };
+    /**
+     * The service delivers any backlog from inside subscribe(), before the cursor
+     * has been accepted and headers committed. Those frames are held rather than
+     * written, because an implicit header write here would lose the diagnostic.
+     */
+    const deliver = async (event: PlaygroundTraceEvent): Promise<void> => {
+      if (closed || response.writableEnded || response.destroyed) return;
+      const frame = `${JSON.stringify(event)}\n`;
+      if (!started) {
+        backlogBytes += Buffer.byteLength(frame);
+        if (backlogBytes > streamQueueByteLimit) {
+          cleanup();
+          response.destroy();
+          return;
+        }
+        backlog.push(frame);
+        return;
+      }
+      await write(frame);
     };
     cleanup = (): void => {
       if (closed) return;
@@ -519,5 +539,11 @@ export class PlaygroundRoutes {
     this.#streamClosers.add(finishStream);
     request.once('close', cleanup);
     response.once('close', cleanup);
+    started = true;
+    for (const frame of backlog.splice(0)) {
+      if (closed || response.writableEnded || response.destroyed) return;
+      await write(frame);
+    }
+    backlogBytes = 0;
   }
 }

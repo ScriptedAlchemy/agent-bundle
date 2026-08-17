@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 
 import type {
   DraftEvalCase,
@@ -33,8 +33,12 @@ export interface PlaygroundTraceViewProps {
 export interface PlaygroundPageProps {
   readonly client: PlaygroundClient;
   readonly epoch: PlaygroundEpochIdentity | undefined;
-  /** Lets the host lift the opened session id to the Logs page without a second transport. */
-  readonly onSessionChange?: (session: PlaygroundSession | undefined) => void;
+  /**
+   * The shell owns the session so one ordered trace survives navigation and other
+   * pages can record into it. The page never keeps a private copy.
+   */
+  readonly onSessionChange: (session: PlaygroundSession | undefined) => void;
+  readonly session: PlaygroundSession | undefined;
   readonly targets: readonly PlaygroundTarget[];
 }
 
@@ -142,7 +146,9 @@ export const PlaygroundTraceView = ({ onToggle, view }: PlaygroundTraceViewProps
  * The page never dispatches a natural-language action to a host: until the
  * native harness exists, every trace event arrives from an executed operation.
  */
-export const PlaygroundPage = ({ client, epoch, onSessionChange, targets }: PlaygroundPageProps) => {
+export const PlaygroundPage = ({ client, epoch, onSessionChange, session, targets }: PlaygroundPageProps) => {
+  const setSession = onSessionChange;
+  const openedEpochId = useRef(epoch?.id);
   const [busy, setBusy] = useState(false);
   const [draftEvalCase, setDraftEvalCase] = useState<DraftEvalCase>();
   const [error, setError] = useState<string>();
@@ -155,7 +161,6 @@ export const PlaygroundPage = ({ client, epoch, onSessionChange, targets }: Play
   const [outcomeResponse, setOutcomeResponse] = useState('');
   const [outcomeStatus, setOutcomeStatus] = useState('succeeded');
   const [selectedRefs, setSelectedRefs] = useState<readonly string[]>([]);
-  const [session, setSession] = useState<PlaygroundSession>();
   const [targetName, setTargetName] = useState('');
   const [taskId, setTaskId] = useState('');
   const [taskText, setTaskText] = useState('');
@@ -163,18 +168,19 @@ export const PlaygroundPage = ({ client, epoch, onSessionChange, targets }: Play
   const intent = parseRawJsonRecord(intentDraft);
   const sessionId = session?.id;
 
+  // A session belongs to the epoch it was opened against, so only a genuine epoch
+  // change starts over. Resetting on mount would discard the shell's session every
+  // time the user navigates back to this page.
   useEffect(() => {
+    if (openedEpochId.current === epoch?.id) return;
+    openedEpochId.current = epoch?.id;
     setDraftEvalCase(undefined);
     setError(undefined);
     setEvents([]);
     setExported(undefined);
     setSelectedRefs([]);
     setSession(undefined);
-  }, [epoch?.id]);
-
-  useEffect(() => {
-    onSessionChange?.(session);
-  }, [onSessionChange, session]);
+  }, [epoch?.id, setSession]);
 
   useEffect(() => {
     if (sessionId === undefined) return;
