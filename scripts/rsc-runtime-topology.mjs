@@ -60,6 +60,7 @@ const agentBundleBuild = new Set([
 const agentBundleDev = new Set([
   'packages/agent-bundle/src/dev/foreground-server.ts',
   'packages/agent-bundle/src/dev/hook-playground-service.ts',
+  'packages/agent-bundle/src/dev/mcp-app-action-validation.ts',
   'packages/agent-bundle/src/dev/mcp-app-binding-service.ts',
   'packages/agent-bundle/src/dev/mcp-app-preview-service.ts',
   'packages/agent-bundle/src/dev/mcp-app-runtime-binding-service.ts',

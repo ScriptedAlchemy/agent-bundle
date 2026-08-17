@@ -29,6 +29,7 @@ packages/
     src/core/types.ts
     src/dev/foreground-server.ts
     src/dev/hook-playground-service.ts
+    src/dev/mcp-app-action-validation.ts
     src/dev/mcp-app-binding-service.ts
     src/dev/mcp-app-preview-service.ts
     src/dev/mcp-app-routes.ts

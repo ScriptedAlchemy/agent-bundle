@@ -24,6 +24,7 @@ const expectedTree = `packages/
     src/adapters/registry.ts
     src/config/normalize.ts
     src/core/types.ts
+    src/dev/mcp-app-action-validation.ts
     src/dev/runtime-provider.ts
     src/index.ts
     src/services/playground-service.ts
@@ -31,9 +32,11 @@ const expectedTree = `packages/
     tests/playground-service.test.ts
     tests/runtime-provider.test.ts
   workbench/
+    src/inspector/adapter/runtime-app-bridge.ts
     src/mcp/runtime-consent-dialog.tsx
     src/mcp/runtime-consent-queue.ts
     src/runtime-model.ts
+    tests/runtime-app-bridge.test.ts
     tests/runtime-consent-dialog.test.ts
     tests/runtime-consent-queue.test.ts
 examples/
@@ -73,15 +76,18 @@ describe('rsc runtime topology script', () => {
         'packages/agent-bundle/src/adapters/registry.ts',
         'packages/agent-bundle/src/config/normalize.ts',
         'packages/agent-bundle/src/core/types.ts',
+        'packages/agent-bundle/src/dev/mcp-app-action-validation.ts',
         'packages/agent-bundle/src/dev/runtime-provider.ts',
         'packages/agent-bundle/src/index.ts',
         'packages/agent-bundle/src/services/playground-service.ts',
         'packages/agent-bundle/tests/normalization.test.ts',
         'packages/agent-bundle/tests/playground-service.test.ts',
         'packages/agent-bundle/tests/runtime-provider.test.ts',
+        'packages/workbench/src/inspector/adapter/runtime-app-bridge.ts',
         'packages/workbench/src/mcp/runtime-consent-dialog.tsx',
         'packages/workbench/src/mcp/runtime-consent-queue.ts',
         'packages/workbench/src/runtime-model.ts',
+        'packages/workbench/tests/runtime-app-bridge.test.ts',
         'packages/workbench/tests/runtime-consent-dialog.test.ts',
         'packages/workbench/tests/runtime-consent-queue.test.ts',
         'examples/rsc-agent-runtime/src/dev/provider.ts',
