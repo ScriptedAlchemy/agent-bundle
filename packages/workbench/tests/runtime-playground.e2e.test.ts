@@ -192,6 +192,55 @@ e2e('renders the capability-gated Runtime sibling in the real RSC workbench', { 
   }
 });
 
+e2e('keeps the Runtime controls and stage inside the 390px viewport without horizontal scrolling', { timeout: 120_000 }, async ({ page }) => {
+  const fixture = await startRuntimePlaygroundFixture();
+  const pageErrors: Error[] = [];
+  page.on('pageerror', (error) => pageErrors.push(error));
+  try {
+    await page.setViewportSize({ height: 844, width: 390 });
+    await page.goto(`${fixture.url}#runtime`);
+    await expect(page.getByRole('heading', { name: 'Runtime Playground' })).toBeVisible({ timeout: browserTimeout });
+    await expect(page.locator('[data-runtime-provider-session]')).toHaveCount(1, { timeout: browserTimeout });
+    const layout = await page.evaluate(() => {
+      const { body, documentElement } = globalThis.document;
+      documentElement.scrollLeft = 0;
+      if (body !== null) body.scrollLeft = 0;
+      globalThis.scrollTo({ left: 0, top: globalThis.scrollY });
+      const elements = [
+        globalThis.document.querySelector('.runtime-playground'),
+        globalThis.document.querySelector('.runtime-controls'),
+        globalThis.document.querySelector('.runtime-stage'),
+        ...[...globalThis.document.querySelectorAll('.runtime-controls label, .runtime-controls select')]
+          .filter((element) => element.getClientRects().length > 0),
+      ];
+      return Object.freeze({
+        bodyScrollLeft: body?.scrollLeft ?? 0,
+        boxes: Object.freeze(elements.map((element) => {
+          if (!(element instanceof globalThis.HTMLElement)) {
+            throw new Error('Runtime mobile layout omitted a required visible control or stage.');
+          }
+          const rect = element.getBoundingClientRect();
+          return Object.freeze({ left: rect.left, right: rect.right });
+        })),
+        documentScrollLeft: documentElement.scrollLeft,
+        viewportWidth: globalThis.innerWidth,
+        windowScrollX: globalThis.scrollX,
+      });
+    });
+    expect(layout.windowScrollX).toBe(0);
+    expect(layout.documentScrollLeft).toBe(0);
+    expect(layout.bodyScrollLeft).toBe(0);
+    expect(layout.viewportWidth).toBe(390);
+    for (const box of layout.boxes) {
+      expect(box.left).toBeGreaterThanOrEqual(0);
+      expect(box.right).toBeLessThanOrEqual(layout.viewportWidth);
+    }
+    expect(pageErrors).toEqual([]);
+  } finally {
+    await fixture.close();
+  }
+});
+
 e2e('resets the selected Claude fixture to its seed without replacing prior runtime evidence', { timeout: 120_000 }, async ({ page }) => {
   const fixture = await startRuntimePlaygroundFixture();
   const resetRequests: unknown[] = [];
