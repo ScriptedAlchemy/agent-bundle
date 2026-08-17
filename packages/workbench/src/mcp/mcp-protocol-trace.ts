@@ -31,7 +31,8 @@ export interface McpProtocolTraceExport {
   readonly timeline: McpBrowserSessionTimeline;
 }
 
-const sessionId = (value: string): string | null => value.length === 0 ? null : value;
+const sessionId = (model: Pick<McpBrowserSessionModel, 'binding' | 'sessionId'>): string | null =>
+  model.binding === undefined || model.sessionId.length === 0 ? null : model.sessionId;
 
 export const mcpProtocolTraceExport = ({ history, model }: McpProtocolTraceSource): McpProtocolTraceExport => ({
   history,
@@ -40,7 +41,7 @@ export const mcpProtocolTraceExport = ({ history, model }: McpProtocolTraceSourc
   session: {
     binding: model.binding ?? null,
     connection: model.connection ?? null,
-    id: sessionId(model.sessionId),
+    id: sessionId(model),
     phase: model.phase,
   },
   timeline: model.timeline,

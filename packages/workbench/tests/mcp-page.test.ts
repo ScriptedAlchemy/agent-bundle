@@ -11,6 +11,12 @@ import {
 } from '../src/mcp/mcp-session-model.ts';
 import type { McpAppPreviewClient } from '../src/mcp/mcp-app-preview.tsx';
 import {
+  createMcpSessionController,
+  type McpSessionControllerClient,
+  type McpSessionControllerRoutes,
+  type McpSessionControllerTransport,
+} from '../src/mcp/mcp-session-controller.ts';
+import {
   McpPage,
   createMcpPageActionTracker,
   createMcpPageActionSession,
@@ -23,6 +29,42 @@ import {
   type McpPageController,
 } from '../src/mcp/mcp-page.tsx';
 import { mcpProtocolTraceDownload } from '../src/mcp/mcp-protocol-trace.ts';
+
+const traceBinding = Object.freeze({ epochId: 'epoch-trace', serverName: 'weather', target: 'portable' as const });
+const traceConnection = Object.freeze({ capabilities: { tools: {} }, protocolVersion: '2025-06-18', server: { name: 'weather', version: '1.0.0' } });
+
+const traceController = (connect: () => Promise<void> = async () => undefined) => createMcpSessionController({
+  clientFactory: (): McpSessionControllerClient => ({
+    close: async () => undefined,
+    connect: async () => connect(),
+    request: async () => undefined,
+  }),
+  routes: {
+    catalog: async () => ({ prompts: [], resourceTemplates: [], resources: [], tools: [] }),
+    config: async () => ({ launch: { args: [], command: 'node', env: {}, kind: 'stdio' }, origin: 'artifact' }),
+    restart: async () => traceConnection,
+    stream: async (_id, _after, signal) => new Response(new ReadableStream<Uint8Array>({
+      start: (stream) => signal?.addEventListener('abort', () => stream.close(), { once: true }),
+    }), { headers: { 'content-type': 'application/x-ndjson' } }),
+    trace: async () => ({ entries: [] }),
+  } satisfies McpSessionControllerRoutes,
+  transportFactory: (): McpSessionControllerTransport => ({
+    close: async () => undefined,
+    session: Object.freeze({ binding: traceBinding, connection: traceConnection, id: 'real-trace-session', timeoutMs: 5_000 }),
+    start: async () => undefined,
+  }),
+});
+
+const downloadedProtocolTrace = async (session: ReturnType<typeof traceController>) => {
+  const downloads: { readonly blob: Blob; readonly filename: string }[] = [];
+  downloadCurrentMcpProtocolTrace((download) => { downloads.push(download); }, {
+    history: session.history,
+    model: session.model,
+  });
+  const [download] = downloads;
+  if (download === undefined) throw new Error('Expected a current protocol trace download.');
+  return { filename: download.filename, trace: JSON.parse(await download.blob.text()) };
+};
 
 const model = {
   activeRequests: {
@@ -237,6 +279,36 @@ describe('MCP page', () => {
     await expect(download.blob.text()).resolves.toContain('"binding": null');
     await expect(download.blob.text()).resolves.toContain('"connection": null');
     await expect(download.blob.text()).resolves.toContain('"id": null');
+  });
+
+  it('exports an unnegotiated fresh controller through the download callback without a fabricated session identity', async () => {
+    const fresh = traceController();
+    const download = await downloadedProtocolTrace(fresh);
+
+    expect(download.filename).toBe('mcp-idle-protocol-trace.json');
+    expect(download.trace.session).toEqual({ binding: null, connection: null, id: null, phase: 'idle' });
+  });
+
+  it('returns to an identity-less idle export after replacing a real controller on reset', async () => {
+    const active = traceController();
+    await active.open(traceBinding);
+    const activeDownload = await downloadedProtocolTrace(active);
+    await active.close();
+    const resetDownload = await downloadedProtocolTrace(traceController());
+
+    expect(activeDownload.filename).toBe('mcp-real-trace-session-protocol-trace.json');
+    expect(activeDownload.trace.session).toMatchObject({ binding: traceBinding, id: 'real-trace-session' });
+    expect(resetDownload.filename).toBe('mcp-idle-protocol-trace.json');
+    expect(resetDownload.trace.session).toEqual({ binding: null, connection: null, id: null, phase: 'idle' });
+  });
+
+  it('keeps a connect failure before session negotiation identity-less in its download callback', async () => {
+    const failed = traceController(async () => { throw new Error('connection refused'); });
+    await expect(failed.open(traceBinding)).rejects.toThrow('connection refused');
+    const download = await downloadedProtocolTrace(failed);
+
+    expect(download.filename).toBe('mcp-idle-protocol-trace.json');
+    expect(download.trace.session).toEqual({ binding: null, connection: null, id: null, phase: 'error' });
   });
 
   it('passes the canonical full trace through the supplied download sink', async () => {
