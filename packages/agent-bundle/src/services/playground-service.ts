@@ -311,6 +311,7 @@ type DirectorySyncReason =
 type DurableFilePhase = 'event' | 'owner' | 'pending-index' | 'session-metadata';
 type DurabilityTestPhase =
   | 'after-final-index-link'
+  | 'after-object-admission-ownership-check'
   | 'before-object-admission-cleanup'
   | 'before-final-index-link'
   | `before-directory-fsync:${DirectorySyncReason}`
@@ -642,6 +643,8 @@ export class PlaygroundService {
   #ready: Promise<void> | undefined;
   #resolvedIndexRoot: string | undefined;
   #resolvedObjectRoot: string | undefined;
+  #resolvedObjectRootDevice: number | undefined;
+  #resolvedObjectRootInode: number | undefined;
   #resolvedPendingIndexRoot: string | undefined;
   #resolvedSessionsRoot: string | undefined;
 
@@ -1045,13 +1048,26 @@ export class PlaygroundService {
     }
     const attempt = (async () => {
       runDurabilityTestHook('before-object-admission-cleanup', admission.root);
-      await this.#assertColdAdmissionOwnership(admission);
-      await rm(admission.root, { force: false, recursive: true });
-      admission.rootRemoved = true;
+      const quarantine = await this.#quarantineColdAdmission(admission);
       try {
+        await this.#assertQuarantinedColdAdmission(admission, quarantine);
+        await rm(quarantine, { force: false, recursive: true });
+        admission.rootRemoved = true;
         this.#syncDirectory(this.#requireObjectRoot(), 'object-admission-cleanup');
       } catch (error) {
-        admission.cleanupFailure = error;
+        if (!admission.rootRemoved) {
+          try {
+            await this.#restoreQuarantinedColdAdmission(admission, quarantine);
+          } catch (restoreError) {
+            throw new AggregateError(
+              [error, restoreError],
+              'Playground admission quarantine cleanup could not be restored safely.',
+              { cause: restoreError },
+            );
+          }
+        } else {
+          admission.cleanupFailure = error;
+        }
         throw error;
       }
       this.#coldAdmissions.delete(admission);
@@ -1078,6 +1094,62 @@ export class PlaygroundService {
     if (owner.token !== admission.ownerToken) {
       throw serviceError('PLAYGROUND_SESSION_OWNED', `Playground session ${JSON.stringify(admission.sessionId)} object ownership changed before cleanup.`);
     }
+  }
+
+  async #quarantineColdAdmission(admission: ColdAdmission): Promise<string> {
+    await this.#assertColdAdmissionOwnership(admission);
+    runDurabilityTestHook('after-object-admission-ownership-check', admission.root);
+    await this.#assertObjectRootIdentity();
+    const quarantine = join(this.#requireObjectRoot(), `.admission-cleanup-${randomUUID()}`);
+    await rename(admission.root, quarantine);
+    try {
+      await this.#assertQuarantinedColdAdmission(admission, quarantine);
+      return quarantine;
+    } catch (error) {
+      try {
+        await this.#restoreQuarantinedColdAdmission(admission, quarantine);
+      } catch (restoreError) {
+        throw new AggregateError(
+          [error, restoreError],
+          'Playground admission quarantine ownership could not be restored safely.',
+          { cause: restoreError },
+        );
+      }
+      throw error;
+    }
+  }
+
+  async #assertQuarantinedColdAdmission(admission: ColdAdmission, quarantine: string): Promise<void> {
+    await this.#assertObjectRootIdentity();
+    const [stat, resolved] = await Promise.all([lstat(quarantine), realpath(quarantine)]);
+    if (!stat.isDirectory()
+      || stat.isSymbolicLink()
+      || stat.dev !== admission.rootDevice
+      || stat.ino !== admission.rootInode
+      || dirname(resolved) !== this.#requireObjectRoot()) {
+      throw serviceError('PLAYGROUND_ROOT_INVALID', 'Playground admission quarantine identity could not be proven.');
+    }
+    if (admission.ownerToken === undefined) return;
+    const owner = await this.#readOwnerLock(quarantine);
+    if (owner.token !== admission.ownerToken) {
+      throw serviceError('PLAYGROUND_SESSION_OWNED', `Playground session ${JSON.stringify(admission.sessionId)} quarantine ownership changed before cleanup.`);
+    }
+  }
+
+  async #restoreQuarantinedColdAdmission(admission: ColdAdmission, quarantine: string): Promise<void> {
+    await this.#assertObjectRootIdentity();
+    const [parent, original] = await Promise.all([realpath(dirname(quarantine)), lstat(quarantine)]);
+    if (parent !== this.#requireObjectRoot() || !original.isDirectory() || original.isSymbolicLink()) {
+      throw serviceError('PLAYGROUND_ROOT_INVALID', 'Playground admission quarantine cannot be restored safely.');
+    }
+    try {
+      await lstat(admission.root);
+      throw serviceError('PLAYGROUND_ROOT_INVALID', 'Playground admission cleanup slot is no longer empty.');
+    } catch (error) {
+      if (!isErrno(error, 'ENOENT')) throw error;
+    }
+    await this.#assertObjectRootIdentity();
+    await rename(quarantine, admission.root);
   }
 
   #publishV2(record: SessionRecord): void {
@@ -1246,6 +1318,10 @@ export class PlaygroundService {
     if (!contained(resolvedStorageRoot, resolvedObjectRoot)) {
       throw serviceError('PLAYGROUND_ROOT_INVALID', 'Playground session object root resolves outside configured storage.');
     }
+    const objectRootStat = await lstat(resolvedObjectRoot);
+    if (!objectRootStat.isDirectory() || objectRootStat.isSymbolicLink()) {
+      throw serviceError('PLAYGROUND_ROOT_INVALID', 'Playground session object root must be a real contained directory.');
+    }
     const indexRoot = join(requestedStorageRoot, indexDirectoryName);
     const pendingIndexRoot = join(indexRoot, pendingIndexDirectoryName);
     await this.#createLayoutDirectory(indexRoot, requestedStorageRoot, 'layout-index-entry');
@@ -1257,6 +1333,8 @@ export class PlaygroundService {
     }
     this.#resolvedIndexRoot = resolvedIndexRoot;
     this.#resolvedObjectRoot = resolvedObjectRoot;
+    this.#resolvedObjectRootDevice = objectRootStat.dev;
+    this.#resolvedObjectRootInode = objectRootStat.ino;
     this.#resolvedPendingIndexRoot = resolvedPendingIndexRoot;
     this.#resolvedSessionsRoot = resolvedSessionsRoot;
   }
@@ -1317,6 +1395,28 @@ export class PlaygroundService {
     const root = this.#resolvedObjectRoot;
     if (root === undefined) throw serviceError('PLAYGROUND_ROOT_INVALID', 'Playground storage has not initialized.');
     return root;
+  }
+
+  async #assertObjectRootIdentity(): Promise<void> {
+    const root = this.#requireObjectRoot();
+    const device = this.#resolvedObjectRootDevice;
+    const inode = this.#resolvedObjectRootInode;
+    if (device === undefined || inode === undefined) {
+      throw serviceError('PLAYGROUND_ROOT_INVALID', 'Playground storage has not initialized.');
+    }
+    try {
+      const [stat, resolved] = await Promise.all([lstat(root), realpath(root)]);
+      if (!stat.isDirectory()
+        || stat.isSymbolicLink()
+        || stat.dev !== device
+        || stat.ino !== inode
+        || resolved !== root) {
+        throw serviceError('PLAYGROUND_ROOT_INVALID', 'Playground session object root identity changed during cleanup.');
+      }
+    } catch (error) {
+      if (error instanceof PlaygroundServiceError) throw error;
+      throw serviceError('PLAYGROUND_ROOT_INVALID', 'Playground session object root identity could not be proven during cleanup.');
+    }
   }
 
   #requireIndexRoot(): string {

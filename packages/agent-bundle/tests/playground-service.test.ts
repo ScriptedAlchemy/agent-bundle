@@ -1,4 +1,4 @@
-import { mkdirSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { appendFile, link, mkdtemp, mkdir, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -44,6 +44,7 @@ type PlaygroundDurableFilePhase = 'event' | 'owner' | 'pending-index' | 'session
 
 type PlaygroundDurabilityTestPhase =
   | 'after-final-index-link'
+  | 'after-object-admission-ownership-check'
   | 'before-object-admission-cleanup'
   | 'before-directory-sync:owner-lock-create'
   | 'before-directory-sync:session-metadata-rename'
@@ -1307,6 +1308,68 @@ it('refuses to roll back a path-swapped cold-admission root', async () => {
     await expect(readFile(join(swappedRoot!, 'victim.txt'), 'utf8')).resolves.toBe('preserve this victim');
     await expect(fixture.service.close()).rejects.toBeInstanceOf(PlaygroundServiceCloseError);
     await expect(readFile(join(swappedRoot!, 'victim.txt'), 'utf8')).resolves.toBe('preserve this victim');
+  } finally {
+    await fixture.close();
+  }
+});
+
+it('preserves a foreign root swapped after cold-admission ownership verification', async () => {
+  const fixture = await createFixture();
+  let foreignRoot: string | undefined;
+  try {
+    await withDurabilityTestHook((phase, root) => {
+      if (phase === 'before-file-write:event') throw injectedIoFailure('admission write failed');
+      if (phase === 'after-object-admission-ownership-check' && foreignRoot === undefined) {
+        renameSync(root, `${root}.owned`);
+        mkdirSync(root);
+        writeFileSync(join(root, 'foreign.txt'), 'foreign admission root', 'utf8');
+        foreignRoot = root;
+      }
+    }, async () => {
+      const failure = await fixture.service.openSession({ ...sessionInput(), sessionId: 'post-check-root-swap' }).catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(AggregateError);
+      expect((failure as AggregateError).errors).toMatchObject([
+        { code: 'EIO', message: 'admission write failed' },
+        { code: 'PLAYGROUND_ROOT_INVALID' },
+      ]);
+    });
+    expect(foreignRoot).toBeDefined();
+    await expect(readFile(join(foreignRoot!, 'foreign.txt'), 'utf8')).resolves.toBe('foreign admission root');
+    await expect(fixture.service.close()).rejects.toBeInstanceOf(PlaygroundServiceCloseError);
+    await expect(readFile(join(foreignRoot!, 'foreign.txt'), 'utf8')).resolves.toBe('foreign admission root');
+  } finally {
+    await fixture.close();
+  }
+});
+
+it('does not descend through a parent symlink swapped after cold-admission ownership verification', async () => {
+  const fixture = await createFixture();
+  let foreignRoot: string | undefined;
+  try {
+    await withDurabilityTestHook((phase, root) => {
+      if (phase === 'before-file-write:event') throw injectedIoFailure('admission write failed');
+      if (phase === 'after-object-admission-ownership-check' && foreignRoot === undefined) {
+        const objectParent = dirname(root);
+        const foreignParent = join(fixture.projectRoot, 'foreign-session-objects');
+        renameSync(objectParent, `${objectParent}.owned`);
+        mkdirSync(foreignParent);
+        symlinkSync(foreignParent, objectParent, 'dir');
+        foreignRoot = join(foreignParent, root.slice(objectParent.length + 1));
+        mkdirSync(foreignRoot);
+        writeFileSync(join(foreignRoot, 'foreign.txt'), 'foreign symlink root', 'utf8');
+      }
+    }, async () => {
+      const failure = await fixture.service.openSession({ ...sessionInput(), sessionId: 'post-check-parent-symlink' }).catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(AggregateError);
+      expect((failure as AggregateError).errors).toMatchObject([
+        { code: 'EIO', message: 'admission write failed' },
+        { code: 'PLAYGROUND_ROOT_INVALID' },
+      ]);
+    });
+    expect(foreignRoot).toBeDefined();
+    await expect(readFile(join(foreignRoot!, 'foreign.txt'), 'utf8')).resolves.toBe('foreign symlink root');
+    await expect(fixture.service.close()).rejects.toBeInstanceOf(PlaygroundServiceCloseError);
+    await expect(readFile(join(foreignRoot!, 'foreign.txt'), 'utf8')).resolves.toBe('foreign symlink root');
   } finally {
     await fixture.close();
   }
