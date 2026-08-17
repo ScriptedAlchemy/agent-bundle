@@ -315,8 +315,10 @@ const FormEditor = ({
       if (field.type === 'boolean') {
         return (
           <p key={name}>
-            <input {...validation} checked={current === true} disabled={disabled} id={fieldId} onChange={(event) => change(event.currentTarget.checked)} type="checkbox" />
-            <label htmlFor={fieldId}>{fieldLabel}</label>
+            <label className="mcp-json-input-boolean">
+              <input {...validation} checked={current === true} disabled={disabled} id={fieldId} onChange={(event) => change(event.currentTarget.checked)} type="checkbox" />
+              {fieldLabel}
+            </label>
             {unset}
             {field.description === undefined ? undefined : <small>{field.description}</small>}
             {fieldError}

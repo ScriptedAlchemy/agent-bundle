@@ -27,6 +27,7 @@ import {
 
 const workspaceRoot = join(import.meta.dirname, '..', '..', '..');
 const inputComponent = join(workspaceRoot, 'packages', 'workbench', 'src', 'mcp', 'mcp-json-input.tsx');
+const workbenchStyles = join(workspaceRoot, 'packages', 'workbench', 'src', 'styles.css');
 
 const listen = async (server: Server): Promise<string> => {
   server.listen(0, '127.0.0.1');
@@ -36,24 +37,11 @@ const listen = async (server: Server): Promise<string> => {
   return `http://127.0.0.1:${address.port}`;
 };
 
-const mountedControlledInputFixture = async () => {
+const mountedInputFixture = async (source: readonly string[]) => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-mcp-json-input-'));
   const entry = join(root, 'input.tsx');
   const dist = join(root, 'dist');
-  await writeFile(entry, [
-    "import React, { useState } from 'react';",
-    "import { createRoot } from 'react-dom/client';",
-    `import { McpJsonInput } from ${JSON.stringify(inputComponent)};`,
-    '',
-    'const edits = [];',
-    'const App = () => {',
-    "  const [rawDraft, setRawDraft] = useState('{\\\"name\\\":');",
-    "  const [value, setValue] = useState({ name: 'initial' });",
-    "  return <><McpJsonInput id=\"controlled-input\" label=\"Controlled input\" onChange={setValue} onRawDraftChange={(draft) => { edits.push(draft); setRawDraft(draft); }} onSubmit={() => undefined} rawDraft={rawDraft} value={value} /><button onClick={() => setValue({ name: 'canonical replacement' })} type=\"button\">Replace canonical</button><button onClick={() => setRawDraft('{\\\"intentional\\\":true}')} type=\"button\">Replace draft</button></>;",
-    '};',
-    "createRoot(document.getElementById('root')).render(<App />);",
-    'globalThis.__mcpJsonInputFixture = { edits: () => [...edits] };',
-  ].join('\n'));
+  await writeFile(entry, source.join('\n'));
   const rsbuild = await createRsbuild({
     config: {
       output: {
@@ -87,7 +75,8 @@ const mountedControlledInputFixture = async () => {
     if (relative(dist, file).startsWith('..')) return response.writeHead(404).end();
     try {
       const body = await readFile(file);
-      response.writeHead(200, { 'content-type': asset.endsWith('.js') ? 'text/javascript' : 'text/html' }).end(body);
+      const contentType = asset.endsWith('.js') ? 'text/javascript' : asset.endsWith('.css') ? 'text/css' : 'text/html';
+      response.writeHead(200, { 'content-type': contentType }).end(body);
     } catch {
       response.writeHead(404).end();
     }
@@ -101,6 +90,21 @@ const mountedControlledInputFixture = async () => {
     url: `${origin}/input.html`,
   };
 };
+
+const mountedControlledInputFixture = async () => mountedInputFixture([
+    "import React, { useState } from 'react';",
+    "import { createRoot } from 'react-dom/client';",
+    `import { McpJsonInput } from ${JSON.stringify(inputComponent)};`,
+    '',
+    'const edits = [];',
+    'const App = () => {',
+    "  const [rawDraft, setRawDraft] = useState('{\\\"name\\\":');",
+    "  const [value, setValue] = useState({ name: 'initial' });",
+    "  return <><McpJsonInput id=\"controlled-input\" label=\"Controlled input\" onChange={setValue} onRawDraftChange={(draft) => { edits.push(draft); setRawDraft(draft); }} onSubmit={() => undefined} rawDraft={rawDraft} value={value} /><button onClick={() => setValue({ name: 'canonical replacement' })} type=\"button\">Replace canonical</button><button onClick={() => setRawDraft('{\\\"intentional\\\":true}')} type=\"button\">Replace draft</button></>;",
+    '};',
+    "createRoot(document.getElementById('root')).render(<App />);",
+    'globalThis.__mcpJsonInputFixture = { edits: () => [...edits] };',
+]);
 
 describe('MCP JSON input', () => {
   it('falls back to raw input for unsupported schema shapes and keywords', () => {
@@ -246,6 +250,79 @@ describe('MCP JSON input', () => {
       }).__mcpJsonInputFixture.edits())).toContain('{"name":"edited"');
       await page.getByRole('button', { name: 'Replace draft' }).click();
       expect(await raw.inputValue()).toBe('{"intentional":true}');
+    } finally {
+      await browser.close();
+      await fixture.close();
+    }
+  }, 30_000);
+
+  it('keeps boolean schema controls accessible and wholly inside their 40px Runtime input label target', async () => {
+    const fixture = await mountedInputFixture([
+      "import React, { useState } from 'react';",
+      "import { createRoot } from 'react-dom/client';",
+      `import ${JSON.stringify(workbenchStyles)};`,
+      `import { McpJsonInput } from ${JSON.stringify(inputComponent)};`,
+      '',
+      "const schema = { type: 'object', properties: { enabled: { title: 'Enable notifications', type: 'boolean' } } };",
+      'const App = () => {',
+      '  const [disabled, setDisabled] = useState(false);',
+      '  const [value, setValue] = useState({ enabled: false });',
+      '  return <main className="runtime-input"><McpJsonInput disabled={disabled} id="boolean-input" label="Boolean input" onChange={setValue} onSubmit={() => undefined} schema={schema} value={value} /><output data-testid="boolean-value">{String(value.enabled)}</output><button onClick={() => setDisabled(true)} type="button">Disable checkbox</button></main>;',
+      '};',
+      "createRoot(document.getElementById('root')).render(<App />);",
+    ]);
+    const browser = await chromium.launch({ channel: 'chrome' });
+    const page = await browser.newPage({ viewport: { height: 844, width: 390 } });
+    try {
+      await page.goto(fixture.url);
+      const checkbox = page.getByRole('checkbox', { name: 'Enable notifications' });
+      const label = page.locator('label.mcp-json-input-boolean');
+      await checkbox.waitFor({ state: 'visible' });
+      await label.waitFor({ state: 'visible' });
+      const geometry = await page.evaluate(() => {
+        const checkbox = globalThis.document.querySelector('#boolean-input-enabled');
+        if (!(checkbox instanceof globalThis.HTMLInputElement)) throw new Error('Boolean input was absent.');
+        const label = checkbox.closest('label');
+        if (!(label instanceof globalThis.HTMLLabelElement)) throw new Error('Boolean input label was absent.');
+        const control = checkbox.getBoundingClientRect();
+        const target = label.getBoundingClientRect();
+        return Object.freeze({
+          associated: [...checkbox.labels ?? []].includes(label),
+          controlBottom: control.bottom,
+          controlLeft: control.left,
+          controlRight: control.right,
+          controlTop: control.top,
+          label: label.textContent?.trim(),
+          targetBottom: target.bottom,
+          targetHeight: target.height,
+          targetLeft: target.left,
+          targetRight: target.right,
+          targetTop: target.top,
+          viewportWidth: globalThis.innerWidth,
+        });
+      });
+
+      expect(geometry.associated).toBe(true);
+      expect(geometry.label).toBe('Enable notifications');
+      expect(geometry.targetHeight).toBeGreaterThanOrEqual(40);
+      expect(geometry.targetLeft).toBeGreaterThanOrEqual(0);
+      expect(geometry.targetRight).toBeLessThanOrEqual(geometry.viewportWidth);
+      expect(geometry.controlLeft).toBeGreaterThanOrEqual(geometry.targetLeft);
+      expect(geometry.controlRight).toBeLessThanOrEqual(geometry.targetRight);
+      expect(geometry.controlTop).toBeGreaterThanOrEqual(geometry.targetTop);
+      expect(geometry.controlBottom).toBeLessThanOrEqual(geometry.targetBottom);
+
+      await label.click();
+      expect(await checkbox.isChecked()).toBe(true);
+      await checkbox.focus();
+      await page.keyboard.press('Space');
+      expect(await checkbox.isChecked()).toBe(false);
+      await page.getByRole('button', { name: 'Disable checkbox' }).click();
+      expect(await checkbox.isDisabled()).toBe(true);
+      await label.evaluate((element) => (element as HTMLLabelElement).click());
+      expect(await checkbox.isChecked()).toBe(false);
+      await page.keyboard.press('Space');
+      expect(await checkbox.isChecked()).toBe(false);
     } finally {
       await browser.close();
       await fixture.close();

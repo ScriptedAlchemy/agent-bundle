@@ -99,10 +99,8 @@ td { border-top: 1px solid #d9dee7; font-size: 14px; padding: 12px 10px; vertica
 .runtime-profile-disclaimer { color: #596372; font-size: 12px; grid-column: 1 / -1; margin: 0; }
 .runtime-input textarea { min-height: 135px; resize: vertical; }
 .runtime-input input:not([type]), .runtime-input input[type='email'], .runtime-input input[type='number'], .runtime-input input[type='password'], .runtime-input input[type='search'], .runtime-input input[type='tel'], .runtime-input input[type='text'], .runtime-input input[type='url'] { box-sizing: border-box; min-height: 40px; max-width: 100%; }
-.runtime-input fieldset > label, .runtime-input p:has(> input[type='checkbox']) { align-items: center; display: inline-flex; gap: 6px; min-height: 40px; min-width: 0; }
-.runtime-input p:has(> input[type='checkbox']) { display: flex; }
-.runtime-input fieldset > label > input, .runtime-input p:has(> input[type='checkbox']) > input { flex: none; margin: 0; }
-.runtime-input p:has(> input[type='checkbox']) > label { align-items: center; display: inline-flex; min-height: 40px; }
+.runtime-input fieldset > label, .runtime-input .mcp-json-input-boolean { align-items: center; display: inline-flex; gap: 6px; min-height: 40px; min-width: 0; }
+.runtime-input fieldset > label > input, .runtime-input .mcp-json-input-boolean > input { flex: none; margin: 0; }
 .runtime-actions { display: flex; flex-wrap: wrap; gap: 9px; }
 .runtime-actions button, .runtime-confirmation button, .runtime-history button { background: #fff; border: 1px solid #bfc8d5; border-radius: 4px; color: #1e2938; cursor: pointer; min-height: 40px; padding: 7px 10px; }
 .runtime-input button { min-height: 40px; }
