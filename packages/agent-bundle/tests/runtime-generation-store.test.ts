@@ -261,6 +261,10 @@ const deferred = <T = void>(): Readonly<{
   return Object.freeze({ promise, reject, resolve });
 };
 
+const flushMicrotasks = async (): Promise<void> => {
+  for (let index = 0; index < 8; index += 1) await Promise.resolve();
+};
+
 it('prepares an opaque validated generation without publishing it before synchronous commit', async () => {
   const { root, store } = await createStore();
   const value = fixture('g1');
@@ -760,6 +764,120 @@ it('keeps a candidate non-public when the post-rename guard changes in its wait/
     await expectMissing(join(root, 'generations', 'post-guard-race'));
   } finally {
     await store.close().catch(() => undefined);
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('drains an admitted post-rename prepare before close removes its owned roots', async () => {
+  const postRename = deferred<void>();
+  const releasePrepare = deferred<void>();
+  let closing = false;
+  const closeRemovals: string[] = [];
+  const created = await createStore({
+    remove: async (path) => {
+      if (closing) closeRemovals.push(path);
+      await rm(path, { force: true, recursive: true });
+    },
+  });
+  const { root, store } = created;
+  const value = fixture('late-close');
+  let prepare: Promise<unknown> | undefined;
+  let close: Promise<void> | undefined;
+  try {
+    const candidate = await store.begin({ id: 'late-close', sourceRevision: 'source-late-close' });
+    await writeGeneration(candidate.root, value);
+    let waits = 0;
+    prepare = store.prepare(candidate, value.manifest, {
+      guard: {
+        check: () => true,
+        wait: async () => {
+          waits += 1;
+          if (waits !== 2) return;
+          postRename.resolve();
+          await releasePrepare.promise;
+        },
+      },
+    });
+    await postRename.promise;
+
+    closing = true;
+    close = store.close();
+    expect(store.close()).toBe(close);
+    let settled = false;
+    void close.then(() => { settled = true; }, () => { settled = true; });
+    await flushMicrotasks();
+    expect(closeRemovals).toEqual([]);
+    expect(settled).toBe(false);
+    await expect(store.begin({ id: 'after-close', sourceRevision: 'source-after-close' }))
+      .rejects.toMatchObject({ code: 'RUNTIME_GENERATION_CLOSED' });
+
+    releasePrepare.resolve();
+    await expect(prepare).rejects.toMatchObject({ code: 'RUNTIME_GENERATION_CLOSED' });
+    await expect(close).resolves.toBeUndefined();
+    await expectMissing(join(root, 'generations', 'late-close'));
+    await expectMissing(join(root, 'staging'));
+    expect(closeRemovals).toEqual(expect.arrayContaining([
+      join(root, 'generations', 'late-close'),
+      join(root, 'staging'),
+    ]));
+  } finally {
+    releasePrepare.resolve();
+    await prepare?.catch(() => undefined);
+    await close?.catch(() => undefined);
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('reports a late post-rename prepare cleanup failure from the close that drains it', async () => {
+  const postRename = deferred<void>();
+  const releasePrepare = deferred<void>();
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-runtime-generations-close-late-failure-'));
+  let closing = false;
+  const closeRemovals: string[] = [];
+  const store = new RuntimeGenerationStore<TestMetadata>({
+    metadataCodec,
+    remove: async (path) => {
+      if (closing) closeRemovals.push(path);
+      if (path === join(root, 'generations', 'late-failure')) throw new Error('late cleanup refused');
+      await rm(path, { force: true, recursive: true });
+    },
+    storageRoot: root,
+    validateMetadata: (input) => input.metadata,
+  });
+  const value = fixture('late-failure');
+  let prepare: Promise<unknown> | undefined;
+  let close: Promise<void> | undefined;
+  try {
+    const candidate = await store.begin({ id: 'late-failure', sourceRevision: 'source-late-failure' });
+    await writeGeneration(candidate.root, value);
+    let waits = 0;
+    prepare = store.prepare(candidate, value.manifest, {
+      guard: {
+        check: () => true,
+        wait: async () => {
+          waits += 1;
+          if (waits !== 2) return;
+          postRename.resolve();
+          await releasePrepare.promise;
+        },
+      },
+    });
+    await postRename.promise;
+
+    closing = true;
+    close = store.close();
+    await flushMicrotasks();
+    expect(closeRemovals).toEqual([]);
+    releasePrepare.resolve();
+    await expect(prepare).rejects.toMatchObject({ code: 'RUNTIME_GENERATION_CLOSED' });
+    await expect(close).rejects.toMatchObject({
+      failures: [expect.objectContaining({ path: join(root, 'generations', 'late-failure') })],
+    });
+    await expect(store.close()).resolves.toBeUndefined();
+  } finally {
+    releasePrepare.resolve();
+    await prepare?.catch(() => undefined);
+    await close?.catch(() => undefined);
     await rm(root, { force: true, recursive: true });
   }
 });

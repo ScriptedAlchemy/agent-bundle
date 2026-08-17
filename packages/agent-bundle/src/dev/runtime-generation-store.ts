@@ -290,6 +290,7 @@ export class RuntimeGenerationStore<TMetadata = unknown> {
   readonly #generationsRoot: string;
   readonly #metadataCodec: RuntimeGenerationMetadataCodec<TMetadata>;
   readonly #now: () => Date;
+  readonly #preparing = new Set<Promise<RuntimeGenerationPreparedActivation<TMetadata>>>();
   #prepared = new Map<RuntimeGenerationPreparedActivation<TMetadata>, PreparedRecord<TMetadata>>();
   readonly #remove: (path: string) => Promise<void>;
   readonly #retainInactive: number;
@@ -374,6 +375,21 @@ export class RuntimeGenerationStore<TMetadata = unknown> {
     if (record.state !== 'staging') throw conflict('Runtime generation candidate is not available for preparation.');
     record.state = 'preparing';
 
+    const preparation = Promise.resolve().then(() => this.#prepareCandidate(record, candidate, input, options));
+    this.#preparing.add(preparation);
+    try {
+      return await preparation;
+    } finally {
+      this.#preparing.delete(preparation);
+    }
+  }
+
+  async #prepareCandidate(
+    record: CandidateRecord,
+    candidate: RuntimeGenerationCandidate,
+    input: RuntimeGenerationManifestInput<TMetadata>,
+    options: RuntimeGenerationPrepareOptions<TMetadata>,
+  ): Promise<RuntimeGenerationPreparedActivation<TMetadata>> {
     let renamedRoot: string | undefined;
     try {
       const assets = freezeAssets(input.assets);
@@ -543,6 +559,8 @@ export class RuntimeGenerationStore<TMetadata = unknown> {
         failures.push(Object.freeze({ error, path: this.#storageRoot }));
       }
     }
+
+    await Promise.allSettled(Array.from(this.#preparing));
 
     const prepared = Array.from(this.#prepared.values());
     this.#prepared = new Map<RuntimeGenerationPreparedActivation<TMetadata>, PreparedRecord<TMetadata>>();
