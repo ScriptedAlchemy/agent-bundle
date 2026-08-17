@@ -1,5 +1,8 @@
+import { Buffer } from 'node:buffer';
+
 import { expect, it } from '@rstest/core';
 import { runtimeAppMessageLimits } from '../../agent-bundle/src/dev/runtime-app-message-limits.ts';
+import type { McpAppValidatedDownload } from '../../agent-bundle/src/dev/mcp-app-action-validation.ts';
 import type { McpAppBindingOperation } from '../../agent-bundle/src/dev/mcp-app-runtime-preview-service.ts';
 import type { McpSessionControllerAppAttachment } from '../src/mcp/mcp-session-controller.ts';
 
@@ -90,7 +93,13 @@ const appAccess = (close: () => Promise<void>) => Object.freeze({
   sessionRevision: 3,
 });
 
-const runtimeFactory = (attachApp: () => Promise<ReturnType<typeof appAccess>>): RuntimeAppBridgeFactory => {
+const runtimeFactory = (
+  attachApp: () => Promise<ReturnType<typeof appAccess>>,
+  options: Readonly<{
+    readonly installedHandlers?: Parameters<typeof createRuntimeAppBridgeFactory>[0]['installedHandlers'];
+    readonly requestConsent?: Parameters<typeof createRuntimeAppBridgeFactory>[0]['requestConsent'];
+  }> = {},
+): RuntimeAppBridgeFactory => {
   const policy = Object.freeze({
     bindingId: 'runtime-binding',
     snapshot: Object.freeze({ allow: '', approvedPermissions: Object.freeze({}), revision: 1, warnings: Object.freeze([]) }),
@@ -98,10 +107,18 @@ const runtimeFactory = (attachApp: () => Promise<ReturnType<typeof appAccess>>):
   return createRuntimeAppBridgeFactory({
     client: Object.freeze({
       closeRuntime: async () => undefined,
+      createRuntimeConsent: async () => Object.freeze({
+        challenge: Object.freeze({ expiresAt: 10, id: 'consent-a', request: Object.freeze({}) }),
+        documentPolicy: policy.snapshot,
+      }),
       currentDocumentPolicy: () => policy,
+      decideRuntimeConsent: async (_bindingId: string, _consentId: string, decision: 'allow-once' | 'deny') => Object.freeze({
+        documentPolicy: policy.snapshot,
+        ...(decision === 'allow-once' ? { grant: Object.freeze({ authorizationId: 'authorization-a' }) } : {}),
+      }),
     }) as never,
     controller: Object.freeze({ attachApp }) as never,
-    installedHandlers: Object.freeze({}),
+    installedHandlers: options.installedHandlers ?? Object.freeze({}),
     listChanged: Object.freeze({ resources: false, tools: false }),
     onTrace: () => undefined,
     preview: Object.freeze({
@@ -112,7 +129,7 @@ const runtimeFactory = (attachApp: () => Promise<ReturnType<typeof appAccess>>):
       profile: Object.freeze({ hostContext: Object.freeze({ availableDisplayModes: Object.freeze(['inline']), displayMode: 'inline', safeAreaInsets: Object.freeze({ bottom: 0, left: 0, right: 0, top: 0 }), theme: 'light' }) }),
       resource: Object.freeze({ csp: Object.freeze({}), permissions: Object.freeze({}) }),
     }) as never,
-    requestConsent: async () => 'deny',
+    requestConsent: options.requestConsent ?? (async () => 'deny'),
     simulationFeatures: Object.freeze({ chatGptWidgetState: 'disabled' as const }),
   });
 };
@@ -206,6 +223,48 @@ it('forwards an initialized App tools/call through the controller-owned client t
       targetOrigin: 'https://apps.example.test',
     });
     await bridge.close();
+  });
+});
+
+it('rejects noncanonical links and noncanonical bounded downloads before consent or host actions', async () => {
+  await withBrowser(async (browser) => {
+    const opened: string[] = [];
+    const downloads: unknown[] = [];
+    let consentRequests = 0;
+    const factory = runtimeFactory(
+      async () => appAccess(async () => undefined),
+      {
+        installedHandlers: Object.freeze({
+          downloadFile: async (download: McpAppValidatedDownload) => { downloads.push(download); },
+          openExternalLink: async (url: string) => { opened.push(url); },
+        }),
+        requestConsent: async () => {
+          consentRequests += 1;
+          return 'allow-once';
+        },
+      },
+    );
+    const bridge = await invokeBridgeFactory(factory, browser) as unknown as Readonly<{
+      readonly ondownloadfile?: (params: Readonly<{ readonly contents: unknown }>) => Promise<Readonly<{ readonly isError?: true }>>;
+      readonly onopenlink?: (params: Readonly<{ readonly url: unknown }>) => Promise<Readonly<{ readonly isError?: true }>>;
+    }>;
+    if (bridge.onopenlink === undefined || bridge.ondownloadfile === undefined) throw new Error('Expected external action handlers.');
+
+    for (const url of ['https://user:password@weather.example/forecast', 'https://weather.example/forecast#today', 'https://weather.example:443/']) {
+      await expect(bridge.onopenlink({ url })).resolves.toEqual({ isError: true });
+    }
+    for (const contents of [
+      [{ type: 'unsupported' }],
+      Array.from({ length: 21 }, () => ({ text: 'weather', type: 'text' })),
+      [{ data: Buffer.alloc(10 * 1024 * 1024 + 1).toString('base64'), mimeType: 'application/octet-stream', type: 'image' }],
+    ]) {
+      await expect(bridge.ondownloadfile({ contents })).resolves.toEqual({ isError: true });
+    }
+
+    expect(consentRequests).toBe(0);
+    expect(opened).toEqual([]);
+    expect(downloads).toEqual([]);
+    await factory.close();
   });
 });
 

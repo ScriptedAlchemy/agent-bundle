@@ -1,6 +1,11 @@
 import { Buffer } from 'node:buffer';
 
 import {
+  validateMcpAppDownloadRequest,
+  validateMcpAppExternalLink,
+  type McpAppValidatedDownload,
+} from './mcp-app-action-validation.ts';
+import {
   selectMcpAppResourceUri,
   type McpAppBinding,
   type McpAppJsonValue,
@@ -15,6 +20,11 @@ import { createMcpAppConsentActionDigest } from './mcp-app-sandbox.ts';
 import { MCP_APP_PROTOCOL_VERSION } from './mcp-app-profile-descriptors.ts';
 
 export { MCP_APP_PROTOCOL_VERSION } from './mcp-app-profile-descriptors.ts';
+export {
+  validateMcpAppDownloadRequest,
+  validateMcpAppExternalLink,
+} from './mcp-app-action-validation.ts';
+export type { McpAppValidatedDownload } from './mcp-app-action-validation.ts';
 
 export type McpAppBridgeRequestId = string | number | null;
 export type McpAppBridgeDisplayMode = 'inline' | 'fullscreen' | 'pip';
@@ -114,12 +124,6 @@ export interface McpAppBridgeResource {
   readonly html: string;
   readonly kind: 'resource';
   readonly permissions?: McpAppSandboxPermissions;
-}
-
-export interface McpAppValidatedDownload {
-  readonly contents: readonly McpAppJsonValue[];
-  readonly embeddedBytes: number;
-  readonly itemCount: number;
 }
 
 export interface McpAppFailClosedSender<Message> {
@@ -646,19 +650,6 @@ const validResourceRead = (params: McpAppJsonValue | undefined): McpAppBridgeRes
   return record === undefined || !nonempty(record.uri) ? undefined : Object.freeze({ uri: record.uri });
 };
 
-export const validateMcpAppExternalLink = (params: McpAppJsonValue | undefined): Readonly<{ readonly url: string }> | undefined => {
-  const record = jsonRecord(params);
-  if (record === undefined || !nonempty(record.url)) return undefined;
-  try {
-    const url = new URL(record.url);
-    if (url.protocol !== 'http:' && url.protocol !== 'https:') return undefined;
-    if (url.username || url.password || url.hash || url.href !== record.url) return undefined;
-    return Object.freeze({ url: url.href });
-  } catch {
-    return undefined;
-  }
-};
-
 const validOpenLink = (params: McpAppJsonValue | undefined): string | undefined => validateMcpAppExternalLink(params)?.url;
 
 const validMessage = (params: McpAppJsonValue | undefined): McpAppBridgeMessageEvent | undefined => {
@@ -676,31 +667,6 @@ export const validateMcpAppDisplayModeRequest = (params: McpAppJsonValue | undef
 };
 
 const validDisplayMode = (params: McpAppJsonValue | undefined): McpAppBridgeDisplayMode | undefined => validateMcpAppDisplayModeRequest(params)?.mode;
-
-const decodedEmbeddedBytes = (block: McpAppJsonValue): number | undefined => {
-  const record = jsonRecord(block);
-  if (record === undefined) return undefined;
-  if (record.type === 'text') return 0;
-  const encoded = record.type === 'image' || record.type === 'audio' ? record.data : record.type === 'resource' ? jsonRecord(record.resource)?.blob : undefined;
-  if (encoded === undefined) return 0;
-  if (typeof encoded !== 'string' || encoded.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/u.test(encoded)) return undefined;
-  const bytes = Buffer.from(encoded, 'base64');
-  return bytes.toString('base64') === encoded ? bytes.length : undefined;
-};
-
-export const validateMcpAppDownloadRequest = (value: McpAppJsonValue | undefined): McpAppValidatedDownload | undefined => {
-  const record = jsonRecord(value);
-  const contents = record === undefined ? undefined : validContentBlocks(record.contents);
-  if (contents === undefined || contents.length === 0 || contents.length > 20) return undefined;
-  let embeddedBytes = 0;
-  for (const content of contents) {
-    const bytes = decodedEmbeddedBytes(content);
-    if (bytes === undefined) return undefined;
-    embeddedBytes += bytes;
-    if (embeddedBytes > 10 * 1024 * 1024) return undefined;
-  }
-  return Object.freeze({ contents, embeddedBytes, itemCount: contents.length });
-};
 
 const createMcpAppFailClosedSenderInternal = <Message>(options: Readonly<{
   readonly onClose?: () => void;

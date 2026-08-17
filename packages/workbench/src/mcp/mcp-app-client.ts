@@ -2,6 +2,7 @@ import { isCallToolResult } from '@modelcontextprotocol/client';
 
 import type { ProjectClient } from '../project-client.ts';
 import type { ProjectEventMessage } from '../../../agent-bundle/src/dev/types.ts';
+import { validateMcpAppUiUri } from '../../../agent-bundle/src/dev/mcp-app-action-validation.ts';
 import { runtimeAppMessageLimits } from '../../../agent-bundle/src/dev/runtime-app-message-limits.ts';
 import type {
   CreateMcpAppPreviewRequest as RuntimeCreateRequest,
@@ -709,13 +710,7 @@ const runtimeProfile = (value: unknown, binding: McpAppRuntimeBindingSnapshot, k
     (bootstrap.kind !== 'none' && bootstrap.kind !== 'chatgpt-widget-state-v1') ||
     (bootstrap.kind === 'chatgpt-widget-state-v1' && typeof bootstrap.script !== 'string')) runtimeInvalid('Runtime MCP App route returned an invalid App bootstrap.');
   const resourceUri = runtimeText(record.resourceUri, 'resource URI');
-  try {
-    const parsed = new URL(resourceUri);
-    if (parsed.protocol !== 'ui:' || parsed.toString() !== resourceUri) runtimeInvalid('Runtime MCP App route returned an invalid resource URI.');
-  } catch (error) {
-    if (error instanceof McpAppClientError) throw error;
-    runtimeInvalid('Runtime MCP App route returned an invalid resource URI.');
-  }
+  if (validateMcpAppUiUri(resourceUri) === undefined) runtimeInvalid('Runtime MCP App route returned an invalid resource URI.');
   return Object.freeze({
     ...common,
     bootstrap: Object.freeze({ kind: bootstrap.kind, ...(bootstrap.script === undefined ? {} : { script: bootstrap.script }) }),

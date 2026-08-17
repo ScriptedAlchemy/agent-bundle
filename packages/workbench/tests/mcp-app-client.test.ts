@@ -310,6 +310,21 @@ describe('MCP App browser client', () => {
     }
   });
 
+  it('rejects hostless ui resource URIs before installing a runtime document policy', async () => {
+    for (const resourceUri of ['ui:/weather/app.html', 'ui:///weather/app.html']) {
+      const malformed = JSON.parse(JSON.stringify(runtimePreview)) as Record<string, unknown>;
+      (malformed.profile as Record<string, unknown>).resourceUri = resourceUri;
+      const client = new McpAppClient({ fetch: (async (input: string | URL | Request) => {
+        if (String(input) === '/api/project/session') return json({ origin: 'http://127.0.0.1:43123', token: 'foreground-secret' });
+        if (String(input) === '/api/runtime/apps') return json({ preview: malformed });
+        throw new Error(`Unexpected request ${String(input)}.`);
+      }) as typeof globalThis.fetch });
+
+      await expect(client.createRuntime({ expectedGenerationId: 'generation-a', profileId: 'portable', runId: 'run-a' })).rejects.toMatchObject({ code: 'AB8019' });
+      expect(() => client.currentDocumentPolicy('runtime-binding')).toThrow('Runtime MCP App document policy is not available.');
+    }
+  });
+
   it('retains one exact trusted policy after a failed runtime close and revokes it only after a validated retry', async () => {
     let closeAttempts = 0;
     const fetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {

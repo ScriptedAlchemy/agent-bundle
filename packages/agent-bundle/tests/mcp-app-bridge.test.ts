@@ -810,6 +810,7 @@ it('strictly validates external actions, bounded downloads, and exact MCP App re
     url: 'https://weather.example/forecast?day=today',
   });
   expect(validateMcpAppExternalLink({ url: 'https://weather.example:443/' })).toBeUndefined();
+  expect(validateMcpAppExternalLink({ url: 'https://user:password@weather.example/forecast' })).toBeUndefined();
   expect(validateMcpAppExternalLink({ url: 'https://weather.example/#fragment' })).toBeUndefined();
   expect(validateMcpAppDisplayModeRequest({ mode: 'fullscreen' })).toEqual({ mode: 'fullscreen' });
   expect(validateMcpAppDisplayModeRequest({ mode: 'windowed' })).toBeUndefined();
@@ -819,6 +820,9 @@ it('strictly validates external actions, bounded downloads, and exact MCP App re
   })).toEqual({ contents: [{ text: '', type: 'text' }], embeddedBytes: 0, itemCount: 1 });
   expect(validateMcpAppDownloadRequest({
     contents: Array.from({ length: 21 }, () => ({ text: 'x', type: 'text' })),
+  })).toBeUndefined();
+  expect(validateMcpAppDownloadRequest({
+    contents: [{ type: 'unsupported' }],
   })).toBeUndefined();
   expect(validateMcpAppDownloadRequest({
     contents: [{ data: Buffer.alloc(10 * 1024 * 1024 + 1).toString('base64'), mimeType: 'image/png', type: 'image' }],

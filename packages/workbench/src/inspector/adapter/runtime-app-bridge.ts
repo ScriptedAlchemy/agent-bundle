@@ -3,8 +3,12 @@ import { ListToolsRequestSchema, ListToolsResultSchema } from '@modelcontextprot
 
 import type {
   McpAppBridgeMessage,
-  McpAppValidatedDownload,
 } from '../../../../agent-bundle/src/dev/mcp-app-bridge.ts';
+import {
+  validateMcpAppDownloadContents,
+  validateMcpAppExternalUrl,
+  type McpAppValidatedDownload,
+} from '../../../../agent-bundle/src/dev/mcp-app-action-validation.ts';
 import {
   runtimeAppFiniteOrdinaryJsonByteLength,
   runtimeAppMessageLimits,
@@ -322,24 +326,7 @@ const safeHostContext = (preview: McpAppPreviewAppsSnapshot): Readonly<Record<st
   return frozenJson(combined) as Readonly<Record<string, unknown>>;
 };
 
-const validExternalUrl = (value: unknown): value is string => {
-  if (typeof value !== 'string' || value.length === 0 || value.length > 4_096 || value.includes('\0')) return false;
-  try {
-    const url = new URL(value);
-    return url.protocol === 'https:' || url.protocol === 'http:';
-  } catch {
-    return false;
-  }
-};
-
 const validDisplayMode = (value: unknown): value is 'inline' | 'fullscreen' => value === 'inline' || value === 'fullscreen';
-
-const download = (value: unknown): McpAppValidatedDownload | undefined => {
-  if (!Array.isArray(value) || value.length > 128 || !ordinaryJson(value)) return undefined;
-  const encoded = messageBytes(value, maximumInboundMessageBytes);
-  if (encoded === undefined || encoded > maximumInboundMessageBytes) return undefined;
-  return Object.freeze({ contents: Object.freeze([...value]), embeddedBytes: encoded, itemCount: value.length });
-};
 
 /** Server-derived consent details, not a client fingerprint, bind the approved action. */
 const consentFingerprint = (capability: McpAppConsentCapability): string => `runtime-app:${capability}:v1`;
@@ -571,14 +558,15 @@ export const createRuntimeAppBridgeFactory = (options: RuntimeAppBridgeOptions):
         }) as McpAppBridgeMessage);
       });
       bridge.onopenlink = async ({ url }) => {
-        if (!validExternalUrl(url) || options.installedHandlers.openExternalLink === undefined) return { isError: true };
-        const approved = await sideEffectConsent(options, preview, 'open-external-link', Object.freeze({ url }), 'Open MCP App link');
+        const candidate = validateMcpAppExternalUrl(url);
+        if (candidate === undefined || options.installedHandlers.openExternalLink === undefined) return { isError: true };
+        const approved = await sideEffectConsent(options, preview, 'open-external-link', Object.freeze({ url: candidate }), 'Open MCP App link');
         if (!approved) return { isError: true };
-        await options.installedHandlers.openExternalLink(url);
+        await options.installedHandlers.openExternalLink(candidate);
         return {};
       };
       bridge.ondownloadfile = async ({ contents }) => {
-        const candidate = download(contents);
+        const candidate = validateMcpAppDownloadContents(contents);
         if (candidate === undefined || options.installedHandlers.downloadFile === undefined) return { isError: true };
         const approved = await sideEffectConsent(options, preview, 'download-file', candidate.contents, 'Download MCP App file');
         if (!approved) return { isError: true };
