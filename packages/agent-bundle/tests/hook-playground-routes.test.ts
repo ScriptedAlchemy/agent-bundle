@@ -1,4 +1,4 @@
-import { createServer, type IncomingMessage } from 'node:http';
+import { createServer, request as httpRequest, type IncomingMessage } from 'node:http';
 import type { AddressInfo } from 'node:net';
 
 import { expect, it } from '@rstest/core';
@@ -37,8 +37,17 @@ const authorize = (request: IncomingMessage): void => {
   }
 };
 
-const startRoutes = async (service?: HookPlaygroundRouteService): Promise<StartedRoutes> => {
-  const routes = new HookPlaygroundRoutes({ authorize, ...(service === undefined ? {} : { service }) });
+const startRoutes = async (
+  service?: HookPlaygroundRouteService,
+  onAuthorize?: () => void,
+): Promise<StartedRoutes> => {
+  const routes = new HookPlaygroundRoutes({
+    authorize: (request) => {
+      authorize(request);
+      onAuthorize?.();
+    },
+    ...(service === undefined ? {} : { service }),
+  });
   const server = createServer((request, response) => {
     void routes.handle(request, response).then((handled) => {
       if (!handled) response.writeHead(404).end();
@@ -59,7 +68,7 @@ const startRoutes = async (service?: HookPlaygroundRouteService): Promise<Starte
   const address = server.address() as AddressInfo;
   return Object.freeze({
     close: async () => {
-      routes.close();
+      await routes.close();
       await new Promise<void>((resolvePromise, rejectPromise) => server.close((error) => {
         if (error === undefined) resolvePromise();
         else rejectPromise(error);
@@ -140,7 +149,7 @@ class RecordingService implements HookPlaygroundRouteService {
       return new Promise<HookPlaygroundSimulation>((_resolvePromise, rejectPromise) => {
         signal?.addEventListener('abort', () => {
           this.aborted = true;
-          rejectPromise(new Error('Hook simulation was aborted.'));
+          rejectPromise(new Error('Hook simulation aborted.'));
         });
         entered(simulationFixture);
       });
@@ -453,7 +462,7 @@ it('reports an absent or closed hook playground service without leaking internal
       diagnostic: { code: 'AB8033', message: 'Hook playground operation could not be completed.' },
     });
 
-    started.routes.close();
+    await started.routes.close();
     const closed = await fetch(`${started.url}/api/hooks?epochId=epoch-a`, { headers: headers() });
     expect(closed.status).toBe(503);
     await expect(closed.json()).resolves.toEqual({
@@ -495,6 +504,186 @@ it('cancels an in-flight simulation when its request is abandoned', async () => 
       await new Promise<void>((resolvePromise) => setTimeout(resolvePromise, 5));
     }
     expect(service.aborted).toBe(true);
+  } finally {
+    await started.close();
+  }
+});
+
+/**
+ * Every operation settles only after shutdown aborts it, so a close that does not
+ * drain its wrapper processes and simulation clones is directly observable.
+ */
+class DrainingService implements HookPlaygroundRouteService {
+  readonly aborts: string[] = [];
+  readonly calls: string[] = [];
+  readonly failures = new Map<string, Error>();
+  readonly settlements: string[] = [];
+  readonly #admissions = new Map<string, () => void>();
+
+  /** Resolves once the named operation has reached the service. */
+  admitted(operation: string): Promise<void> {
+    return new Promise<void>((resolvePromise) => this.#admissions.set(operation, resolvePromise));
+  }
+
+  async list(_options: HookPlaygroundListOptions): Promise<readonly HookPlaygroundHook[]> {
+    this.calls.push('list');
+    return Object.freeze([hookFixture]);
+  }
+
+  async replay(
+    _replay: HookPlaygroundReplay,
+    options?: { readonly signal?: AbortSignal },
+  ): Promise<HookPlaygroundSimulation | HookPlaygroundDiagnosticResult> {
+    return this.#run('replay', options?.signal);
+  }
+
+  async simulate(options: HookPlaygroundSimulationOptions): Promise<HookPlaygroundSimulation | HookPlaygroundDiagnosticResult> {
+    return this.#run('simulation', options.signal);
+  }
+
+  async #run(operation: string, signal: AbortSignal | undefined): Promise<HookPlaygroundSimulation> {
+    this.calls.push(operation);
+    this.#admissions.get(operation)?.();
+    return new Promise<HookPlaygroundSimulation>((_resolvePromise, rejectPromise) => {
+      signal?.addEventListener('abort', () => {
+        this.aborts.push(operation);
+        setTimeout(() => {
+          this.settlements.push(operation);
+          rejectPromise(this.failures.get(operation) ?? new Error('Hook simulation aborted.'));
+        }, 20);
+      });
+    });
+  }
+}
+
+const simulationBody = Object.freeze({
+  epochId: 'epoch-a',
+  hook: 'hook-a',
+  input: Object.freeze({ inline: Object.freeze({ prompt: 'hello' }) }),
+  target: 'claude',
+});
+
+const replayBody = Object.freeze({
+  binding: Object.freeze({ epochId: 'epoch-a', hook: 'hook-a', target: 'claude' }),
+  input: Object.freeze({ prompt: 'hello' }),
+});
+
+/** Sends a hook simulation whose body is completed only when the test releases it. */
+const streamedSimulation = (url: string): {
+  readonly finish: (tail: string) => void;
+  readonly response: Promise<{ readonly body: string; readonly status: number }>;
+} => {
+  const target = new URL(`${url}/api/hooks/simulations`);
+  const client = httpRequest({
+    headers: jsonHeaders(),
+    host: target.hostname,
+    method: 'POST',
+    path: target.pathname,
+    port: target.port,
+  });
+  const response = new Promise<{ readonly body: string; readonly status: number }>((resolvePromise, rejectPromise) => {
+    client.once('response', (message) => {
+      let body = '';
+      message.setEncoding('utf8');
+      message.on('data', (chunk: string) => { body += chunk; });
+      message.once('end', () => resolvePromise({ body, status: message.statusCode ?? 0 }));
+    });
+    client.once('error', rejectPromise);
+  });
+  client.write('{"epochId":"epoch-a","hook":"hook-a",');
+  return Object.freeze({ finish: (tail: string) => client.end(tail), response });
+};
+
+it('drains a delayed simulation and replay before shutdown resolves', async () => {
+  const service = new DrainingService();
+  const started = await startRoutes(service);
+  const admitted = Promise.all([service.admitted('simulation'), service.admitted('replay')]);
+
+  try {
+    const simulation = post(`${started.url}/api/hooks/simulations`, simulationBody);
+    const replay = post(`${started.url}/api/hooks/replays`, replayBody);
+    await admitted;
+
+    await started.routes.close();
+
+    expect(service.aborts).toEqual(['simulation', 'replay']);
+    expect(service.settlements).toEqual(['simulation', 'replay']);
+    expect((await simulation).status).toBe(502);
+    expect((await replay).status).toBe(502);
+  } finally {
+    await started.close();
+  }
+});
+
+it('reports a drained simulation failure with a stable structured identity', async () => {
+  const service = new DrainingService();
+  service.failures.set('simulation', new Error('/tmp/agent-bundle-hook-playground-a could not be removed'));
+  const started = await startRoutes(service);
+  const admitted = service.admitted('simulation');
+
+  try {
+    const simulation = post(`${started.url}/api/hooks/simulations`, simulationBody);
+    await admitted;
+
+    await expect(started.routes.close()).rejects.toMatchObject({
+      code: 'AB8034',
+      failures: [{ error: service.failures.get('simulation'), operation: 'simulation' }],
+      name: 'HookPlaygroundCloseError',
+    });
+    expect(service.settlements).toEqual(['simulation']);
+    expect((await simulation).status).toBe(502);
+  } finally {
+    await started.close().catch(() => undefined);
+  }
+});
+
+it('shares one shutdown outcome across concurrent and repeated close calls', async () => {
+  const service = new DrainingService();
+  service.failures.set('simulation', new Error('simulation clone could not be released'));
+  const started = await startRoutes(service);
+  const admitted = service.admitted('simulation');
+
+  try {
+    const simulation = post(`${started.url}/api/hooks/simulations`, simulationBody);
+    await admitted;
+
+    const first = started.routes.close().catch((error: unknown) => error);
+    const second = started.routes.close().catch((error: unknown) => error);
+    const [firstOutcome, secondOutcome] = await Promise.all([first, second]);
+    const third = await started.routes.close().catch((error: unknown) => error);
+
+    expect(secondOutcome).toBe(firstOutcome);
+    expect(third).toBe(firstOutcome);
+    expect(service.aborts).toEqual(['simulation']);
+    expect(service.settlements).toEqual(['simulation']);
+    expect((await simulation).status).toBe(502);
+  } finally {
+    await started.close().catch(() => undefined);
+  }
+});
+
+it('refuses hook operations admitted once shutdown has begun', async () => {
+  const service = new DrainingService();
+  let reachedAuthorize!: () => void;
+  const authorized = new Promise<void>((resolvePromise) => { reachedAuthorize = resolvePromise; });
+  const started = await startRoutes(service, () => reachedAuthorize());
+
+  try {
+    const streamed = streamedSimulation(started.url);
+    await authorized;
+    const closing = started.routes.close();
+    streamed.finish('"input":{"inline":{"prompt":"hello"}},"target":"claude"}');
+    await closing;
+
+    const raced = await streamed.response;
+    expect(raced.status).toBe(503);
+    expect(JSON.parse(raced.body)).toEqual({
+      diagnostic: { code: 'AB8031', message: 'Hook playground routes are not available.' },
+    });
+
+    const rejected = await post(`${started.url}/api/hooks/simulations`, simulationBody);
+    expect(rejected.status).toBe(503);
+    expect(service.calls).toEqual([]);
   } finally {
     await started.close();
   }

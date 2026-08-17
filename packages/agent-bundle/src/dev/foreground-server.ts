@@ -37,7 +37,7 @@ export class ForegroundServerError extends Error {
 
 export interface ForegroundServerCloseFailure {
   readonly error: unknown;
-  readonly resource: 'coordinator' | 'server';
+  readonly resource: 'coordinator' | 'hook-playground' | 'server';
 }
 
 export interface ForegroundServerStartFailure {
@@ -512,7 +512,9 @@ export class ForegroundServer {
     if (this.#releasePromise !== undefined) return this.#releasePromise;
     this.#mcpAppRoutes.close();
     this.#mcpSessionRoutes.close();
-    this.#hookPlaygroundRoutes.close();
+    // Cancelled hook simulations own wrapper processes and clones, so their
+    // drain is released alongside the other resources and awaited with them.
+    const releaseHookPlayground = this.#hookPlaygroundRoutes.close();
     this.#playgroundRoutes.close();
     this.#artifactRoutes.close();
     const releaseServer = this.#listenStarted
@@ -524,12 +526,16 @@ export class ForegroundServer {
           return closeServer(this.#server);
         })()
       : Promise.resolve();
-    this.#releasePromise = Promise.allSettled([releaseServer, this.#coordinator.close()]).then(([server, coordinator]) => {
-      const failures: ForegroundServerCloseFailure[] = [];
-      if (server.status === 'rejected') failures.push(Object.freeze({ error: server.reason, resource: 'server' }));
-      if (coordinator.status === 'rejected') failures.push(Object.freeze({ error: coordinator.reason, resource: 'coordinator' }));
-      return Object.freeze(failures);
-    });
+    this.#releasePromise = Promise.allSettled([releaseServer, this.#coordinator.close(), releaseHookPlayground])
+      .then(([server, coordinator, hookPlayground]) => {
+        const failures: ForegroundServerCloseFailure[] = [];
+        if (server.status === 'rejected') failures.push(Object.freeze({ error: server.reason, resource: 'server' }));
+        if (coordinator.status === 'rejected') failures.push(Object.freeze({ error: coordinator.reason, resource: 'coordinator' }));
+        if (hookPlayground.status === 'rejected') {
+          failures.push(Object.freeze({ error: hookPlayground.reason, resource: 'hook-playground' }));
+        }
+        return Object.freeze(failures);
+      });
     return this.#releasePromise;
   }
 
