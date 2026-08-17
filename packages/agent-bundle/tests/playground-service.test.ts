@@ -432,6 +432,73 @@ it('serializes concurrent writers into complete JSONL records and rejects invali
   }
 });
 
+it('rejects exotic JSON arrays without evaluating indexed accessors', async () => {
+  const fixture = await createFixture();
+  let accessorReads = 0;
+  try {
+    await fixture.service.openSession({ ...sessionInput(), sessionId: 'exotic-arrays' });
+    const sparse = new Array<unknown>(1);
+    const accessor = ['safe'];
+    Object.defineProperty(accessor, '0', {
+      configurable: true,
+      enumerable: true,
+      get: () => {
+        accessorReads += 1;
+        return 'getter-value';
+      },
+    });
+    const augmented = ['safe'];
+    Object.defineProperty(augmented, 'hidden', { enumerable: false, value: 'hidden' });
+    Object.defineProperty(augmented, 'extra', { enumerable: true, value: 'extra' });
+    Object.defineProperty(augmented, Symbol('extra'), { enumerable: true, value: 'symbol' });
+    const nonordinary = ['safe'];
+    Object.setPrototypeOf(nonordinary, Object.create(Array.prototype));
+
+    for (const value of [sparse, accessor, augmented, nonordinary]) {
+      await expect(fixture.service.append(
+        'exotic-arrays',
+        event('mcp', 'invalid', 'Invalid JSON array.', { value } as unknown as PlaygroundJsonObject),
+      )).rejects.toMatchObject({ code: 'PLAYGROUND_VALUE_INVALID' });
+    }
+    expect(accessorReads).toBe(0);
+    expect((await fixture.service.replay('exotic-arrays')).events).toEqual([]);
+  } finally {
+    await fixture.close();
+  }
+});
+
+it('rejects hidden, symbolic, and accessor JSON object properties without evaluating accessors', async () => {
+  const fixture = await createFixture();
+  let accessorReads = 0;
+  try {
+    await fixture.service.openSession({ ...sessionInput(), sessionId: 'exotic-objects' });
+    const hidden = { safe: 'value' } as Record<string, unknown>;
+    Object.defineProperty(hidden, 'hidden', { enumerable: false, value: 'hidden' });
+    const symbolic = { safe: 'value' } as Record<string | symbol, unknown>;
+    symbolic[Symbol('extra')] = 'symbol';
+    const accessor = Object.create(null) as Record<string, unknown>;
+    Object.defineProperty(accessor, 'computed', {
+      configurable: true,
+      enumerable: true,
+      get: () => {
+        accessorReads += 1;
+        return 'getter-value';
+      },
+    });
+
+    for (const value of [hidden, symbolic, accessor]) {
+      await expect(fixture.service.append(
+        'exotic-objects',
+        event('mcp', 'invalid', 'Invalid JSON object.', value as PlaygroundJsonObject),
+      )).rejects.toMatchObject({ code: 'PLAYGROUND_VALUE_INVALID' });
+    }
+    expect(accessorReads).toBe(0);
+    expect((await fixture.service.replay('exotic-objects')).events).toEqual([]);
+  } finally {
+    await fixture.close();
+  }
+});
+
 it('reopens completed sessions by cursor, recovers a trailing partial JSONL write, and rejects malformed completed records', async () => {
   const fixture = await createFixture();
   try {

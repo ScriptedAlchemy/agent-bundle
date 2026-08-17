@@ -431,9 +431,35 @@ const json = (value: unknown, label: string, seen = new WeakSet<object>()): Play
   if (seen.has(value)) throw serviceError('PLAYGROUND_VALUE_INVALID', `${label} must not contain cycles.`);
   seen.add(value);
   if (Array.isArray(value)) {
-    const copied = Object.freeze(value.map((item) => json(item, label, seen)));
+    const prototype = Object.getPrototypeOf(value);
+    const names = Object.getOwnPropertyNames(value);
+    const symbols = Object.getOwnPropertySymbols(value);
+    const lengthDescriptor = Object.getOwnPropertyDescriptor(value, 'length');
+    if (prototype !== Array.prototype
+      || symbols.length !== 0
+      || lengthDescriptor === undefined
+      || !('value' in lengthDescriptor)
+      || !Number.isInteger(lengthDescriptor.value)
+      || lengthDescriptor.value < 0
+      || names.length !== lengthDescriptor.value + 1) {
+      seen.delete(value);
+      throw serviceError('PLAYGROUND_VALUE_INVALID', `${label} must be JSON-compatible.`);
+    }
+    const copied = new Array<PlaygroundJsonValue>(lengthDescriptor.value);
+    for (let index = 0; index < lengthDescriptor.value; index += 1) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+      if (descriptor === undefined || !('value' in descriptor)) {
+        seen.delete(value);
+        throw serviceError('PLAYGROUND_VALUE_INVALID', `${label} must not contain accessors.`);
+      }
+      if (!descriptor.enumerable) {
+        seen.delete(value);
+        throw serviceError('PLAYGROUND_VALUE_INVALID', `${label} must be JSON-compatible.`);
+      }
+      copied[index] = json(descriptor.value, label, seen);
+    }
     seen.delete(value);
-    return copied;
+    return Object.freeze(copied);
   }
   const prototype = Object.getPrototypeOf(value);
   if (prototype !== Object.prototype && prototype !== null) {
@@ -441,11 +467,20 @@ const json = (value: unknown, label: string, seen = new WeakSet<object>()): Play
     throw serviceError('PLAYGROUND_VALUE_INVALID', `${label} must be JSON-compatible.`);
   }
   const copied = Object.create(null) as Record<string, PlaygroundJsonValue>;
-  for (const key of Object.keys(value).sort()) {
+  const names = Object.getOwnPropertyNames(value);
+  if (Object.getOwnPropertySymbols(value).length !== 0) {
+    seen.delete(value);
+    throw serviceError('PLAYGROUND_VALUE_INVALID', `${label} must be JSON-compatible.`);
+  }
+  for (const key of names.sort()) {
     const descriptor = Object.getOwnPropertyDescriptor(value, key);
-    if (descriptor === undefined || descriptor.get !== undefined || descriptor.set !== undefined) {
+    if (descriptor === undefined || !('value' in descriptor)) {
       seen.delete(value);
       throw serviceError('PLAYGROUND_VALUE_INVALID', `${label} must not contain accessors.`);
+    }
+    if (!descriptor.enumerable) {
+      seen.delete(value);
+      throw serviceError('PLAYGROUND_VALUE_INVALID', `${label} must be JSON-compatible.`);
     }
     copied[key] = json(descriptor.value, label, seen);
   }
