@@ -859,6 +859,8 @@ const Workbench = () => {
     const nextRuntimeClient = runtimeClient.current!;
     const runtimeEvents = createRuntimeEventBuffer();
     let mounted = true;
+    let runtimeTopologyPresent = false;
+    let runtimeBootstrapStarted = false;
     let runtimeRetry: ReturnType<typeof setTimeout> | undefined;
     let runtimeRetryCount = 0;
     client.current = next;
@@ -915,6 +917,8 @@ const Workbench = () => {
       }, retry.delay);
     };
     const bootstrapRuntime = (): void => {
+      if (!mounted || !runtimeTopologyPresent) return;
+      runtimeBootstrapStarted = true;
       void nextRuntimeClient.bootstrap().then(resolveRuntimeCapability).catch((reason: unknown) => {
         if (!mounted) return;
         setRuntimeError(errorMessage(reason));
@@ -926,6 +930,20 @@ const Workbench = () => {
         if (!mounted) return;
         setConnectionError(undefined);
         setStatus(nextStatus);
+        if (nextStatus.runtime?.state === 'configured') {
+          runtimeTopologyPresent = true;
+          if (!runtimeBootstrapStarted) bootstrapRuntime();
+          return;
+        }
+        runtimeEvents.close();
+        runtimeRetryCount = 0;
+        clearRuntimeOperationTraces();
+        setRuntimeError(undefined);
+        setRuntimeCapability('unavailable');
+        if (window.location.hash === '#runtime') {
+          window.history.replaceState(undefined, '', '#overview');
+          navigate('overview');
+        }
       },
       (reason) => {
         if (mounted) setConnectionError(errorMessage(reason));
@@ -934,7 +952,6 @@ const Workbench = () => {
     ).catch((reason: unknown) => {
       if (mounted) setError(errorMessage(reason));
     });
-    bootstrapRuntime();
     return () => {
       mounted = false;
       clearRuntimeOperationTraces();

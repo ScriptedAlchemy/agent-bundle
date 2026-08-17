@@ -119,7 +119,10 @@ const writeMcpPlaygroundProject = async (root: string): Promise<void> => {
       "import { defineConfig } from 'agent-bundle';",
       '',
       'export default defineConfig({',
+      '  claude: {},',
+      '  codex: {},',
       "  mcp: { servers: { fixture: { entry: './src/server.ts', env: { NO_COLOR: '1', SECRET_TOKEN: 'fixture-secret' } } } },",
+      "  portable: { fixtureMarker: 'artifact-extension-initial' },",
       "  plugin: { name: 'workbench-mcp-fixture', version: '1.0.0' },",
       "  skills: ['skills/review'],",
       "  targets: ['portable'],",
@@ -667,6 +670,8 @@ e2e('opens one real epoch MCP session and keeps its playground operations respon
     const artifact = server.status().artifact;
     if (artifact.state === 'missing') throw new Error('Expected an active fixture artifact epoch.');
     const epochId = artifact.activeEpoch.id;
+    const modelDigest = artifact.activeEpoch.modelDigest;
+    await expect(server.openRuntimeClientSurface('mcp.edit-timeline')).resolves.toBeUndefined();
     const manifest = JSON.parse(await readFile(join(project.root, '.agent-bundle', 'epochs', epochId, 'portable', 'mcp.json'), 'utf8')) as {
       readonly mcpServers: Readonly<{
         readonly fixture: Readonly<{ readonly args?: readonly string[]; readonly command: string }>;
@@ -676,8 +681,8 @@ e2e('opens one real epoch MCP session and keeps its playground operations respon
     if (compiledEntry === undefined) throw new Error('Expected the fixture MCP manifest to include its compiled entry.');
     const pageErrors: Error[] = [];
     const artifactMcpSessionRequests: string[] = [];
-    const runtimeAssetRequests: string[] = [];
-    const runtimeMcpSessionRequests: string[] = [];
+    const projectEventRequests: string[] = [];
+    const runtimeRequests: string[] = [];
     page.on('pageerror', (error) => pageErrors.push(error));
     page.on('request', (request) => {
       const requestUrl = new URL(request.url());
@@ -685,8 +690,8 @@ e2e('opens one real epoch MCP session and keeps its playground operations respon
       if (requestUrl.pathname.startsWith('/api/mcp/sessions')) {
         artifactMcpSessionRequests.push(`${request.method()} ${requestUrl.pathname}`);
       }
-      if (requestUrl.pathname.startsWith('/api/runtime/assets/')) runtimeAssetRequests.push(requestUrl.pathname);
-      if (requestUrl.pathname.startsWith('/api/runtime/mcp/sessions')) runtimeMcpSessionRequests.push(requestUrl.pathname);
+      if (requestUrl.pathname === '/api/project/events') projectEventRequests.push(`${request.method()} ${requestUrl.pathname}`);
+      if (requestUrl.pathname.startsWith('/api/runtime/')) runtimeRequests.push(`${request.method()} ${requestUrl.pathname}`);
     });
     await page.goto(`${serverUrl}#mcp`);
     await expect(page.getByRole('heading', { name: 'MCP playground' })).toBeVisible({ timeout: browserTimeout });
@@ -790,10 +795,32 @@ e2e('opens one real epoch MCP session and keeps its playground operations respon
     const reopenedSession = await (await reopened).json() as { readonly session: Readonly<{ readonly id: string }> };
     expect(reopenedSession.session.id).not.toBe(openedSession.session.id);
     await expect(page.locator('.mcp-page-phase')).toContainText('Session ready', { timeout: browserTimeout });
+
+    const initialConfigValue = 'artifact-extension-initial';
+    const changedConfigValue = `artifact-extension-${Math.random().toString(36).slice(2)}`;
+    const configPath = join(project.root, 'agent-bundle.config.ts');
+    const sourceConfig = await readFile(configPath, 'utf8');
+    const changedConfig = sourceConfig.replace(initialConfigValue, changedConfigValue);
+    expect(changedConfig).not.toBe(sourceConfig);
+    await writeFile(configPath, changedConfig);
+    await expect.poll(() => {
+      const next = server!.status().artifact;
+      return next.state === 'active' && next.activeEpoch.id !== epochId && next.activeEpoch.modelDigest !== modelDigest
+        ? next.activeEpoch
+        : undefined;
+    }, { timeout: 15_000 }).toEqual(expect.objectContaining({ modelDigest: expect.any(String) }));
+    const changedArtifact = server.status().artifact;
+    if (changedArtifact.state === 'missing') throw new Error('Registered extension update removed the active artifact epoch.');
+    expect(changedArtifact.activeEpoch.id).not.toBe(epochId);
+    expect(changedArtifact.activeEpoch.modelDigest).not.toBe(modelDigest);
+    await expect(server.openRuntimeClientSurface('mcp.edit-timeline')).resolves.toBeUndefined();
+    expect(await page.locator('body').textContent()).not.toContain(initialConfigValue);
+    expect(await page.locator('body').textContent()).not.toContain(changedConfigValue);
+    await expect(page.getByRole('heading', { name: 'MCP playground' })).toBeVisible();
     expect(artifactMcpSessionRequests).toContain('POST /api/mcp/sessions');
     expect(artifactMcpSessionRequests.some((request) => request.startsWith('POST /api/mcp/sessions/'))).toBe(true);
-    expect(runtimeAssetRequests).toEqual([]);
-    expect(runtimeMcpSessionRequests).toEqual([]);
+    expect(runtimeRequests).toEqual([]);
+    expect(projectEventRequests).toEqual(['GET /api/project/events']);
     await page.setViewportSize({ height: 844, width: 390 });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     expect(pageErrors).toEqual([]);

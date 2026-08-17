@@ -422,6 +422,7 @@ const withMcpSessionLifecycle = (
   mcpApps: () => Closeable | undefined,
   runtime: DevRuntimeController | undefined,
   clientSurfaces: RuntimeClientSurfaceBindings,
+  status: () => ProjectStatus,
 ): ForegroundCoordinator => Object.freeze({
   close: () => {
     clientSurfaces.beginClose();
@@ -432,7 +433,7 @@ const withMcpSessionLifecycle = (
     await coordinator.start();
     await runtime?.start();
   },
-  status: () => coordinator.status(),
+  status,
 });
 
 const openInBrowser: OpenBrowser = (url) => new Promise((resolvePromise, rejectPromise) => {
@@ -513,6 +514,9 @@ export const startDevServer = async (options: StartDevServerOptions): Promise<De
   }
   const appPreviews = new DeferredMcpAppPreviewService();
   const clientSurfaces = new RuntimeClientSurfaceBindings(runtime, options.testing?.openRuntimeClientSurface);
+  const runtimeTopology = runtime === undefined
+    ? undefined
+    : Object.freeze({ state: 'configured' as const });
   let foregroundClosing = false;
   let installingRuntimePreviews = false;
   let mcpApps: McpAppLifecycle | undefined;
@@ -603,11 +607,14 @@ export const startDevServer = async (options: StartDevServerOptions): Promise<De
     projectService,
     root,
   });
-  status = () => coordinator.status();
+  status = () => Object.freeze({
+    ...coordinator.status(),
+    ...(runtimeTopology === undefined ? {} : { runtime: runtimeTopology }),
+  });
   const mcpSessions = new McpSessionService({ epochStore, projectRoot: root, registry });
   const foreground = await (options.testing?.startForegroundServer ?? startForegroundServer)({
     assets: options.assets ?? createWorkbenchAssetSource(),
-    coordinator: withMcpSessionLifecycle(coordinator, mcpSessions, () => mcpApps, runtime, clientSurfaces),
+    coordinator: withMcpSessionLifecycle(coordinator, mcpSessions, () => mcpApps, runtime, clientSurfaces, status),
     eventHub,
     mcpAppPreviews: appPreviews,
     mcpSessions,

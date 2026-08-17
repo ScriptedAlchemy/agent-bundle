@@ -219,9 +219,19 @@ export type ActiveArtifactStatus = Extract<ArtifactStatus, { state: 'active' }>;
 export type StaleArtifactStatus = Extract<ArtifactStatus, { state: 'stale' }>;
 export type ArtifactState = ArtifactStatus['state'];
 
+/**
+ * A non-secret, foreground-topology capability. It is present only when this
+ * foreground owns a fixed development Runtime controller; it is not Runtime
+ * state and deliberately carries no provider or declaration details.
+ */
+export interface ProjectRuntimeTopology {
+  readonly state: 'configured';
+}
+
 export interface ProjectStatus {
   readonly artifact: ArtifactStatus;
   readonly build: BuildStatus;
+  readonly runtime?: ProjectRuntimeTopology;
   readonly source: SourceStatus;
 }
 

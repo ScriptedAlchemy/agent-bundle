@@ -339,6 +339,13 @@ it('latches a runtime declaration added to an ordinary Workbench session as rest
       port: 0,
       root: project.root,
     });
+    await expect(fetch(`${server.url}/api/project/status`).then((response) => response.json())).resolves.toMatchObject({
+      status: { artifact: { state: 'active' } },
+    });
+    const initialProjectStatus = await fetch(`${server.url}/api/project/status`).then((response) => response.json()) as {
+      readonly status: Record<string, unknown>;
+    };
+    expect(Object.hasOwn(initialProjectStatus.status, 'runtime')).toBe(false);
     await expect(fetch(`${server.url}/api/runtime/status`).then((response) => response.json())).resolves.toEqual({ status: null });
     const bootstrap = await fetch(`${server.url}/api/project/session`, { headers: { 'sec-fetch-site': 'same-origin' } });
     const { token } = await bootstrap.json() as { readonly token: string };
@@ -363,6 +370,10 @@ it('latches a runtime declaration added to an ordinary Workbench session as rest
     }).then((response) => response.status)).resolves.toBe(200);
     const received = await within(events.until('"restartRequired":true'), 5_000);
     expect(received).toContain('"state":"failed"');
+    const afterTopologyChangeStatus = await fetch(`${server.url}/api/project/status`).then((response) => response.json()) as {
+      readonly status: Record<string, unknown>;
+    };
+    expect(Object.hasOwn(afterTopologyChangeStatus.status, 'runtime')).toBe(false);
     await expect(fetch(`${server.url}/api/runtime/status`).then((response) => response.json())).resolves.toEqual({ status: null });
   } finally {
     events?.close();
@@ -1076,10 +1087,11 @@ it('prepares the optional runtime once with the development config context befor
       },
     });
 
-    const [calls, context, runtimeStatus] = await Promise.all([
+    const [calls, context, runtimeStatus, projectStatus] = await Promise.all([
       readFile(join(project.root, 'config-calls.ndjson'), 'utf8'),
       readFile(join(project.root, 'provider-context.json'), 'utf8').then(JSON.parse) as Promise<Record<string, unknown>>,
       fetch(`${server.url}/api/runtime/status`).then((response) => response.json()),
+      fetch(`${server.url}/api/project/status`).then((response) => response.json()),
     ]);
     expect(calls.trim().split('\n').map((line) => JSON.parse(line))).toEqual([
       { command: 'dev', mode: 'development' },
@@ -1092,6 +1104,8 @@ it('prepares the optional runtime once with the development config context befor
       storageRoot: expect.stringMatching(new RegExp(`^${join(project.root, '.agent-bundle', 'runtime').replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')}/`)),
     });
     expect(runtimeStatus).toMatchObject({ status: { descriptor: { id: 'fixture-runtime' }, state: 'active' } });
+    expect(projectStatus).toMatchObject({ status: { runtime: { state: 'configured' } } });
+    expect((projectStatus as { readonly status: { readonly runtime?: unknown } }).status.runtime).toEqual({ state: 'configured' });
     await expect(server.openRuntimeClientSurface('unknown-surface')).resolves.toBeUndefined();
     const opening = server.openRuntimeClientSurface('timeline');
     // The test seam records synchronously before returning its unresolved
