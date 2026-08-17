@@ -556,6 +556,72 @@ it('records a durable playground trace and promotes it through the packaged fore
   }
 }, 60_000);
 
+it('inspects and diffs published epochs through the packaged foreground server', async () => {
+  const project = await createProjectFixture();
+  const assetsRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-workbench-artifacts-'));
+  let server: Awaited<ReturnType<typeof startDevServer>> | undefined;
+  await Promise.all([
+    writeHookProject(project.root),
+    writeFile(join(assetsRoot, 'index.html'), '<!doctype html><title>Agent Bundle workbench</title>'),
+  ]);
+  try {
+    server = await startDevServer({
+      assets: createWorkbenchAssetSource({ root: assetsRoot }),
+      open: false,
+      port: 0,
+      root: project.root,
+    });
+    const artifact = server.status().artifact;
+    if (artifact.state !== 'active') throw new Error('Expected the workbench to publish an active artifact epoch.');
+    const epochId = artifact.activeEpoch.id;
+    const bootstrap = await fetch(`${server.url}/api/project/session`, {
+      headers: { 'sec-fetch-site': 'same-origin' },
+    });
+    const { token } = await bootstrap.json() as { readonly token: string };
+    const headers = { origin: server.url, 'x-agent-bundle-session': token };
+
+    const inspected = await fetch(`${server.url}/api/artifacts/epochs/${epochId}`, { headers });
+    expect(inspected.status).toBe(200);
+    const { inspection } = await inspected.json() as {
+      readonly inspection: {
+        readonly epochId: string;
+        readonly provenance: readonly { readonly outputPath: string }[];
+        readonly runtime: {
+          readonly hooks: readonly { readonly event: string; readonly file: { readonly sha256: string }; readonly path: string }[];
+        };
+        readonly targets: readonly { readonly name: string }[];
+      };
+    };
+    expect(inspection.epochId).toBe(epochId);
+    expect(inspection.targets.map((target) => target.name)).toEqual(['claude']);
+    expect(inspection.runtime.hooks.map((hook) => hook.event)).toEqual(['sessionStart']);
+    const hookPath = inspection.runtime.hooks[0]!.path;
+    expect(inspection.runtime.hooks[0]!.file.sha256).toMatch(/^[0-9a-f]{64}$/u);
+    expect(inspection.provenance.map((entry) => entry.outputPath)).toContain(hookPath);
+
+    const selfDiff = await fetch(`${server.url}/api/artifacts/diff?base=${epochId}&candidate=${epochId}`, { headers });
+    expect(selfDiff.status).toBe(200);
+    const { diff } = await selfDiff.json() as {
+      readonly diff: { readonly added: readonly unknown[]; readonly changed: readonly unknown[]; readonly removed: readonly unknown[] };
+    };
+    expect(diff.added).toEqual([]);
+    expect(diff.changed).toEqual([]);
+    expect(diff.removed).toEqual([]);
+
+    const missing = await fetch(`${server.url}/api/artifacts/epochs/epoch-does-not-exist`, { headers });
+    expect(missing.status).toBe(404);
+    await expect(missing.json()).resolves.toEqual({
+      diagnostic: { code: 'AB8067', message: 'Artifact epoch was not found.' },
+    });
+
+    const unauthorized = await fetch(`${server.url}/api/artifacts/epochs/${epochId}`, { headers: { origin: server.url } });
+    expect(unauthorized.status).toBe(403);
+  } finally {
+    await server?.close().catch(() => undefined);
+    await Promise.all([removeProjectFixture(project.root), rm(assetsRoot, { force: true, recursive: true })]);
+  }
+}, 60_000);
+
 it('retains a playground cleanup failure alongside every other lifecycle resource', async () => {
   const playgroundFailure = new Error('Playground cleanup failed.');
   const closeOrder: string[] = [];
