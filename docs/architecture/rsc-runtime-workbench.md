@@ -116,6 +116,8 @@ packages/
     tests/mcp-session-timeout.e2e.test.ts
     tests/runtime-app-bridge.test.ts
     tests/runtime-client.test.ts
+    tests/runtime-consent-dialog.test.ts
+    tests/runtime-consent-queue.test.ts
     tests/runtime-contract-compile.test.ts
     tests/runtime-inspector.test.ts
     tests/runtime-mcp-handoff.test.ts
