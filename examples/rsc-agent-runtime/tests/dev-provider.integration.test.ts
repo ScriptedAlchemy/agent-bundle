@@ -1501,3 +1501,66 @@ test('preserves an aborted startup cause with every acquired cleanup failure', a
     await rm(copied.workspaceRoot, { force: true, recursive: true });
   }
 });
+
+test('joins a late owned-runs cleanup after abort has already drained startup cleanup', async () => {
+  const copied = await copyExample();
+  try {
+    const prepared = await new ProjectService({ includeDevRuntime: true, mode: 'development', root: copied.projectRoot }).prepare('dev');
+    const controller = new AbortController();
+    const reason = new Error('startup aborted while acquiring owned runs root');
+    const cleanupSecret = 'do-not-expose-late-owned-runs-secret';
+    const storageRoot = join(copied.projectRoot, '.agent-bundle', 'runtime-late-owned-runs-root');
+    const ownedRunsRootCreated = deferred<void>();
+    const releaseOwnedRunsRoot = deferred<void>();
+    const startupCleanupClosed = deferred<void>();
+    const ownedRunsCleanupEntered = deferred<void>();
+    const releaseOwnedRunsCleanup = deferred<void>();
+    let settled = false;
+    const starting = RsbuildRuntimeSession.start(startContext({
+      projectRoot: copied.projectRoot,
+      preparedRuntime: prepared.devRuntime!,
+      providerSessionId: 'provider-late-owned-runs-root',
+      signal: controller.signal,
+      storageRoot,
+    }), {
+      afterOwnedRunsRootCreated: async () => {
+        ownedRunsRootCreated.resolve();
+        await releaseOwnedRunsRoot.promise;
+      },
+      beforeOwnedRunsRootCleanup: async () => {
+        ownedRunsCleanupEntered.resolve();
+        await releaseOwnedRunsCleanup.promise;
+        await writeFile(join(storageRoot, 'runs', '.agent-bundle-runtime-owner'), cleanupSecret);
+      },
+      onStartupCleanupClosed: () => { startupCleanupClosed.resolve(); },
+    });
+    const outcome = starting.then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    void outcome.then(() => { settled = true; });
+
+    await ownedRunsRootCreated.promise;
+    controller.abort(reason);
+    await startupCleanupClosed.promise;
+    releaseOwnedRunsRoot.resolve();
+    await ownedRunsCleanupEntered.promise;
+    await new Promise<void>((resolve) => { setTimeout(resolve, 0); });
+    expect(settled).toBe(false);
+    releaseOwnedRunsCleanup.resolve();
+
+    const failure = await outcome;
+    expect(failure).toBeInstanceOf(AggregateError);
+    const aggregate = failure as AggregateError;
+    expect(aggregate.message).toBe('RSC runtime startup failed; cleanup failures: owned-runs-root.');
+    expect(aggregate.message).not.toContain(cleanupSecret);
+    expect(aggregate.errors[0]).toBe(reason);
+    expect(aggregate.errors).toEqual(expect.arrayContaining([
+      reason,
+      expect.objectContaining({ message: 'RSC runtime invocation root ownership marker changed during this provider session.' }),
+    ]));
+    expect((await lstat(join(storageRoot, 'runs'))).isDirectory()).toBe(true);
+  } finally {
+    await rm(copied.workspaceRoot, { force: true, recursive: true });
+  }
+});

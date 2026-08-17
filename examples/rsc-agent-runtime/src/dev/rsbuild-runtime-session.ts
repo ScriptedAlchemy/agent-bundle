@@ -544,6 +544,10 @@ const hmrToken = /^[A-Za-z0-9_-]{16,128}$/u;
 
 export interface RsbuildRuntimeSessionStartTesting {
   readonly createRsbuild?: typeof createRsbuild;
+  /** Test-only startup resource seams; never used by the public provider. */
+  readonly afterOwnedRunsRootCreated?: () => Promise<void> | void;
+  readonly beforeOwnedRunsRootCleanup?: () => Promise<void> | void;
+  readonly onStartupCleanupClosed?: () => void;
   readonly beforeGenerationCapture?: () => Promise<void> | void;
   readonly afterActivationPrepare?: (input: Readonly<{
     readonly phase: 'store' | 'registry';
@@ -646,7 +650,16 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
     const ledger = new ResourceLedger();
     let startupCleanup: Promise<void> | undefined;
     const closeStartupLedger = (): Promise<void> => {
-      startupCleanup ??= ledger.close();
+      if (startupCleanup !== undefined) return startupCleanup;
+      startupCleanup = ledger.close();
+      const notifyClosed = (): void => {
+        try {
+          testing.onStartupCleanupClosed?.();
+        } catch {
+          // Test observation cannot affect startup cleanup ownership.
+        }
+      };
+      void startupCleanup.then(notifyClosed, notifyClosed);
       return startupCleanup;
     };
     let aborting = false;
@@ -673,7 +686,20 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
         mkdir(join(storageRoot, 'state'), { recursive: true }),
       ]);
       const ownedRunsRoot = await RsbuildRuntimeSession.#createOwnedRunsRoot(storageRoot, context.providerSessionId);
-      ledger.add(() => RsbuildRuntimeSession.#removeOwnedRunsRoot(ownedRunsRoot), 'owned-runs-root');
+      const closeOwnedRunsRoot = async (): Promise<void> => {
+        await testing.beforeOwnedRunsRootCleanup?.();
+        await RsbuildRuntimeSession.#removeOwnedRunsRoot(ownedRunsRoot);
+      };
+      const afterOwnedRunsRootCreated = testing.afterOwnedRunsRootCreated;
+      if (afterOwnedRunsRootCreated === undefined) {
+        await ledger.add(closeOwnedRunsRoot, 'owned-runs-root');
+      } else {
+        try {
+          await afterOwnedRunsRootCreated();
+        } finally {
+          await ledger.add(closeOwnedRunsRoot, 'owned-runs-root');
+        }
+      }
       context.signal.throwIfAborted();
 
       const connectionState: DevRuntimeMcpConnectionState = Object.freeze({
