@@ -687,6 +687,62 @@ it('aborts prepared roots, removes abandoned session roots on reopen, and report
   }
 });
 
+it('drains an in-flight abort cleanup before the same close aggregates its failure', async () => {
+  const abortRemovalStarted = deferred<void>();
+  const releaseAbortRemoval = deferred<void>();
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-runtime-generations-abort-close-race-'));
+  const generationRoot = join(root, 'generations', 'abort-race');
+  let closing = false;
+  let abortRemovals = 0;
+  const closeRemovals: string[] = [];
+  const store = new RuntimeGenerationStore<TestMetadata>({
+    metadataCodec,
+    remove: async (path) => {
+      if (closing) closeRemovals.push(path);
+      if (path === generationRoot) {
+        abortRemovals += 1;
+        abortRemovalStarted.resolve();
+        await releaseAbortRemoval.promise;
+        throw new Error('abort cleanup refused');
+      }
+      await rm(path, { force: true, recursive: true });
+    },
+    storageRoot: root,
+    validateMetadata: (input) => input.metadata,
+  });
+  let abort: Promise<void> | undefined;
+  let close: Promise<void> | undefined;
+  try {
+    const candidate = await store.begin({ id: 'abort-race', sourceRevision: 'source-abort-race' });
+    const value = fixture('abort-race');
+    await writeGeneration(candidate.root, value);
+    const prepared = await store.prepare(candidate, value.manifest);
+
+    abort = store.abort(prepared);
+    await abortRemovalStarted.promise;
+    await expect(store.abort(prepared)).resolves.toBeUndefined();
+    expect(abortRemovals).toBe(1);
+    closing = true;
+    close = store.close();
+    expect(store.close()).toBe(close);
+    await flushMicrotasks();
+    expect(closeRemovals).toEqual([]);
+
+    releaseAbortRemoval.resolve();
+    await expect(abort).resolves.toBeUndefined();
+    await expect(close).rejects.toMatchObject({
+      failures: [expect.objectContaining({ path: generationRoot })],
+    });
+    await expect(access(generationRoot)).resolves.toBeUndefined();
+    await expect(store.close()).resolves.toBeUndefined();
+  } finally {
+    releaseAbortRemoval.resolve();
+    await abort?.catch(() => undefined);
+    await close?.catch(() => undefined);
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
 it('runs synchronous guard checks directly after both asynchronous guard waits', async () => {
   const { root, store } = await createStore();
   const value = fixture('guarded');

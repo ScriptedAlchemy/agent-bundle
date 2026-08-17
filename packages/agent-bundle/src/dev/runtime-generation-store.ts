@@ -291,6 +291,7 @@ export class RuntimeGenerationStore<TMetadata = unknown> {
   readonly #metadataCodec: RuntimeGenerationMetadataCodec<TMetadata>;
   readonly #now: () => Date;
   readonly #preparing = new Set<Promise<RuntimeGenerationPreparedActivation<TMetadata>>>();
+  readonly #terminalCleanups = new Set<Promise<void>>();
   #prepared = new Map<RuntimeGenerationPreparedActivation<TMetadata>, PreparedRecord<TMetadata>>();
   readonly #remove: (path: string) => Promise<void>;
   readonly #retainInactive: number;
@@ -493,7 +494,13 @@ export class RuntimeGenerationStore<TMetadata = unknown> {
     if (record === undefined) return;
     this.#prepared.delete(prepared);
     record.candidate.state = 'failed';
-    await this.#removeNeverPublic(prepared.generation.root);
+    const cleanup = Promise.resolve().then(() => this.#removeNeverPublic(prepared.generation.root));
+    this.#terminalCleanups.add(cleanup);
+    try {
+      await cleanup;
+    } finally {
+      this.#terminalCleanups.delete(cleanup);
+    }
   }
 
   async fail(candidate: RuntimeGenerationCandidate): Promise<void> {
@@ -560,7 +567,7 @@ export class RuntimeGenerationStore<TMetadata = unknown> {
       }
     }
 
-    await Promise.allSettled(Array.from(this.#preparing));
+    await Promise.allSettled([...this.#preparing, ...this.#terminalCleanups]);
 
     const prepared = Array.from(this.#prepared.values());
     this.#prepared = new Map<RuntimeGenerationPreparedActivation<TMetadata>, PreparedRecord<TMetadata>>();
