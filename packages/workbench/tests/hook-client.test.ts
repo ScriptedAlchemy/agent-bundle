@@ -5,6 +5,7 @@ import { HookClient } from '../src/hooks/hook-client.ts';
 interface RecordedRequest {
   readonly body: unknown;
   readonly method: string;
+  readonly signal?: AbortSignal;
   readonly token: string | null;
   readonly url: string;
 }
@@ -38,9 +39,11 @@ const recordingFetch = (calls: RecordedRequest[], reply: () => Response): typeof
   async (input, init) => {
     const url = String(input);
     if (url === '/api/project/session') return response({ origin: 'http://127.0.0.1:5173', token: 'foreground-token' });
+    const signal = init?.signal;
     calls.push({
       body: typeof init?.body === 'string' ? JSON.parse(init.body) : undefined,
       method: init?.method ?? 'GET',
+      ...(signal === null || signal === undefined ? {} : { signal }),
       token: new Headers(init?.headers).get('x-agent-bundle-session'),
       url,
     });
@@ -75,6 +78,16 @@ it('omits an unselected target from the hook list query', async () => {
 
   await expect(client.list({ epochId: 'epoch-1' })).resolves.toEqual([]);
   expect(calls[0]?.url).toBe('/api/hooks?epochId=epoch-1');
+});
+
+it('passes a cancellation signal to an epoch-bound hook list', async () => {
+  const calls: RecordedRequest[] = [];
+  const client = new HookClient({ fetch: recordingFetch(calls, () => response({ hooks: [] })) });
+  const controller = new AbortController();
+
+  await client.list({ epochId: 'epoch-1' }, controller.signal);
+
+  expect(calls[0]?.signal).toBe(controller.signal);
 });
 
 it('posts inline canonical input as a simulation and returns the simulation', async () => {

@@ -41,12 +41,63 @@ const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
 const invalidResponse = (): HookClientError =>
   new HookClientError('AB8033', 'Hook playground route returned an invalid response.');
 
-const frozenJson = (value: unknown): unknown => {
-  if (Array.isArray(value)) return Object.freeze(value.map(frozenJson));
-  if (isRecord(value)) {
-    return Object.freeze(Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, frozenJson(entry)])));
+const dataValue = (descriptor: PropertyDescriptor): unknown => {
+  if (!('value' in descriptor)) throw new TypeError('Hook playground response values must not expose accessors.');
+  return descriptor.value;
+};
+
+/** Clones JSON-shaped values without reading untrusted property accessors or sharing mutable response data. */
+export const deeplyFrozenHookValue = (value: unknown, ancestors = new WeakSet<object>()): unknown => {
+  if (value === undefined || value === null || typeof value === 'boolean' || typeof value === 'number' || typeof value === 'string') {
+    return value;
   }
-  return value;
+  if (typeof value !== 'object') throw new TypeError('Hook playground response values must be JSON-compatible.');
+  if (ancestors.has(value)) throw new TypeError('Hook playground response values must not contain cycles.');
+  ancestors.add(value);
+  try {
+    const descriptors = Object.getOwnPropertyDescriptors(value);
+    if (Array.isArray(value)) {
+      const length = dataValue(descriptors.length!);
+      if (typeof length !== 'number') throw new TypeError('Hook playground response arrays must have a numeric length.');
+      const clone: unknown[] = new Array(length);
+      for (const key of Reflect.ownKeys(descriptors)) {
+        if (key === 'length') continue;
+        const descriptor = dataValue(Object.getOwnPropertyDescriptor(descriptors, key)!) as PropertyDescriptor;
+        Object.defineProperty(clone, key, {
+          configurable: true,
+          enumerable: descriptor.enumerable ?? false,
+          value: deeplyFrozenHookValue(dataValue(descriptor), ancestors),
+          writable: true,
+        });
+      }
+      return Object.freeze(clone);
+    }
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== null && prototype !== Object.prototype) {
+      throw new TypeError('Hook playground response objects must have a standard or null prototype.');
+    }
+    const clone = Object.create(prototype) as Record<PropertyKey, unknown>;
+    for (const key of Reflect.ownKeys(descriptors)) {
+      const descriptor = dataValue(Object.getOwnPropertyDescriptor(descriptors, key)!) as PropertyDescriptor;
+      Object.defineProperty(clone, key, {
+        configurable: true,
+        enumerable: descriptor.enumerable ?? false,
+        value: deeplyFrozenHookValue(dataValue(descriptor), ancestors),
+        writable: true,
+      });
+    }
+    return Object.freeze(clone);
+  } finally {
+    ancestors.delete(value);
+  }
+};
+
+const frozenJson = (value: unknown): unknown => {
+  try {
+    return deeplyFrozenHookValue(value);
+  } catch {
+    throw invalidResponse();
+  }
 };
 
 const asRecord = (value: unknown): Readonly<Record<string, unknown>> => {
@@ -87,10 +138,12 @@ export class HookClient {
     this.#fetch = options.fetch ?? globalThis.fetch.bind(globalThis);
   }
 
-  async list(options: HookPlaygroundListOptions): Promise<readonly HookPlaygroundHook[]> {
+  async list(options: HookPlaygroundListOptions, signal?: AbortSignal): Promise<readonly HookPlaygroundHook[]> {
     const query = new URLSearchParams({ epochId: options.epochId });
     if (options.target !== undefined) query.set('target', options.target);
-    return hookList(await this.#json(`/api/hooks?${query.toString()}`));
+    return hookList(await this.#json(`/api/hooks?${query.toString()}`, {
+      ...(signal === undefined ? {} : { signal }),
+    }));
   }
 
   async simulate(options: HookSimulationOptions, signal?: AbortSignal): Promise<HookSimulationResult> {

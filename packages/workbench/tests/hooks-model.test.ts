@@ -148,3 +148,84 @@ it('reports the ready, empty, and no-active-epoch states', () => {
   expect(missing.state).toBe('no-epoch');
   expect(missing.summary).toContain('No artifact epoch is active');
 });
+
+it('keeps loading and a list failure distinct from an empty hook list', () => {
+  const loading = hookPlaygroundViewFor({ epochId: 'epoch-1', hooks: [], listState: 'loading', result: undefined, selectedKey: undefined });
+  const failed = hookPlaygroundViewFor({ epochId: 'epoch-1', hooks: [], listState: 'error', result: undefined, selectedKey: undefined });
+
+  expect(loading.state).toBe('loading');
+  expect(loading.summary).not.toContain('no generated hooks');
+  expect(failed.state).toBe('list-error');
+  expect(failed.summary).not.toContain('no generated hooks');
+});
+
+it('returns a deeply detached frozen view without invoking response accessors', () => {
+  const input: Record<string, unknown> = Object.create(null);
+  const nested: Record<string, unknown> = Object.create(null);
+  nested.items = [{ value: 'original' }];
+  Object.defineProperty(input, '__proto__', { configurable: true, enumerable: true, value: nested, writable: true });
+  input.nested = nested;
+  const mutable = {
+    ...simulation,
+    canonicalIntent: { ...simulation.canonicalIntent, input: input as HookPlaygroundSimulation['canonicalIntent']['input'] },
+    canonicalResult: { nested: { value: 'original' } },
+    nativeInput: { nested: { value: 'original' } },
+    nativeOutput: { nested: { value: 'original' } },
+    replay: { ...simulation.replay, binding: { ...simulation.replay.binding }, input: input as HookPlaygroundSimulation['replay']['input'] },
+  } as HookPlaygroundSimulation;
+
+  const view = hookPlaygroundViewFor({ epochId: 'epoch-1', hooks, result: mutable, selectedKey: 'claude/hook:session-start' });
+  const viewInput = view.canonicalInput as Record<string, unknown>;
+  const viewNested = viewInput.nested as Record<string, unknown>;
+
+  nested.items = [{ value: 'changed' }];
+  (mutable.canonicalResult as Record<string, unknown>).nested = { value: 'changed' };
+
+  expect(view.canonicalInput).not.toBe(input);
+  expect(Object.getPrototypeOf(view.canonicalInput!)).toBeNull();
+  expect(Object.hasOwn(viewInput, '__proto__')).toBe(true);
+  expect(viewInput.__proto__).not.toBe(nested);
+  expect(((viewNested.items as Array<Record<string, string>>)[0]?.value)).toBe('original');
+  expect((view.canonicalResult?.nested as Record<string, string>).value).toBe('original');
+  expect(view.replay?.binding).not.toBe(mutable.replay.binding);
+  expect(view.selected?.binding).not.toBe(hooks[0]?.binding);
+  expect(Object.isFrozen(viewInput)).toBe(true);
+  expect(Object.isFrozen(viewInput.__proto__ as object)).toBe(true);
+  expect(Object.isFrozen(viewNested.items as object)).toBe(true);
+
+  let accessorReads = 0;
+  const accessorSimulation = { ...simulation } as HookPlaygroundSimulation;
+  Object.defineProperty(accessorSimulation, 'canonicalResult', {
+    configurable: true,
+    enumerable: true,
+    get: () => {
+      accessorReads += 1;
+      return { unsafe: true };
+    },
+  });
+
+  expect(() => hookPlaygroundViewFor({ epochId: 'epoch-1', hooks, result: accessorSimulation, selectedKey: undefined })).toThrow('accessors');
+  expect(accessorReads).toBe(0);
+});
+
+it('detaches and freezes diagnostic arrays and entries', () => {
+  const sourceDiagnostics: Array<{ code: 'hook.playground.event.unsupported'; event: string; message: string; severity: 'error'; target: string }> = [{
+      code: 'hook.playground.event.unsupported',
+      event: 'sessionStart',
+      message: 'Original diagnostic',
+      severity: 'error',
+      target: 'codex',
+    }];
+  const result: HookPlaygroundDiagnosticResult = {
+    diagnostics: sourceDiagnostics,
+  };
+
+  const view = hookPlaygroundViewFor({ epochId: 'epoch-1', hooks, result, selectedKey: undefined });
+  sourceDiagnostics[0]!.message = 'Changed diagnostic';
+
+  expect(view.diagnostics).not.toBe(result.diagnostics);
+  expect(view.diagnostics[0]).not.toBe(result.diagnostics[0]);
+  expect(view.diagnostics[0]?.message).toBe('Original diagnostic');
+  expect(Object.isFrozen(view.diagnostics)).toBe(true);
+  expect(Object.isFrozen(view.diagnostics[0]!)).toBe(true);
+});

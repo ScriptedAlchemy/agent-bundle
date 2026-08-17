@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 
 import type {
   HookPlaygroundBinding,
@@ -38,22 +38,66 @@ const draftError = 'Canonical hook input must be a JSON object.';
 const errorMessage = (reason: unknown): string =>
   reason instanceof Error ? reason.message : 'The hook playground request could not be completed.';
 
+const isAbortError = (reason: unknown): boolean =>
+  reason instanceof Error && reason.name === 'AbortError';
+
+export type HookInputMode = 'fixture' | 'inline';
+
+type HookRequestKind = 'list' | 'run';
+
+interface HookRequest {
+  readonly generation: number;
+  readonly kind: HookRequestKind;
+  readonly signal: AbortSignal;
+}
+
+/** Owns request cancellation and makes late completions harmless after a page epoch or run changes. */
+export class HookRequestLifecycle {
+  readonly #active = new Map<HookRequestKind, { readonly controller: AbortController; readonly request: HookRequest }>();
+  #generation = 0;
+
+  begin(kind: HookRequestKind): HookRequest {
+    this.#active.get(kind)?.controller.abort();
+    const controller = new AbortController();
+    const request = Object.freeze({ generation: this.#generation, kind, signal: controller.signal });
+    this.#active.set(kind, { controller, request });
+    return request;
+  }
+
+  complete(request: HookRequest): void {
+    if (this.#active.get(request.kind)?.request === request) this.#active.delete(request.kind);
+  }
+
+  invalidate(): void {
+    this.#generation += 1;
+    for (const { controller } of this.#active.values()) controller.abort();
+    this.#active.clear();
+  }
+
+  isCurrent(request: HookRequest): boolean {
+    return request.generation === this.#generation && !request.signal.aborted && this.#active.get(request.kind)?.request === request;
+  }
+}
+
 export const runHookSimulation = async (
   client: HookClient,
   binding: HookPlaygroundBinding,
   input: ImmutableJsonRecord,
+  mode: HookInputMode = 'inline',
+  signal?: AbortSignal,
 ): Promise<HookSimulationResult> => client.simulate({
   epochId: binding.epochId,
   hook: binding.hook,
-  input: { inline: input },
+  input: mode === 'fixture' ? { fixture: input } : { inline: input },
   target: binding.target,
-});
+}, signal);
 
 /** A saved replay carries its own epoch binding, so the page never rebinds it to the selected epoch. */
 export const runHookReplay = async (
   client: HookClient,
   replay: HookPlaygroundReplay,
-): Promise<HookSimulationResult> => client.replay(replay);
+  signal?: AbortSignal,
+): Promise<HookSimulationResult> => client.replay(replay, signal);
 
 /** One hook run becomes one ordered trace event citing the epoch it was bound to. */
 export const hookTraceEvent = (
@@ -101,6 +145,7 @@ export const HookSimulationView = ({ view }: HookSimulationViewProps) => <div cl
     <h2>Hook playground diagnostics</h2>
     {view.diagnostics.map((diagnostic, index) => <p key={`${diagnostic.code}-${index}`}>
       <strong>{diagnostic.code}</strong> {diagnostic.message}
+      <span className="hook-diagnostic-metadata">Severity: {diagnostic.severity} · Event: {diagnostic.event} · Target: {diagnostic.target}</span>
     </p>)}
   </div>}
   {view.state !== 'simulated' ? undefined : <>
@@ -119,67 +164,100 @@ export const HooksPage = ({ client, epochId, onRecordTrace }: HooksPageProps) =>
   const [draft, setDraft] = useState(() => serializeJsonRecord({}));
   const [error, setError] = useState<string>();
   const [hooks, setHooks] = useState<readonly HookPlaygroundHook[]>([]);
+  const [inputMode, setInputMode] = useState<HookInputMode>('inline');
+  const [listedEpochId, setListedEpochId] = useState<string>();
+  const [listState, setListState] = useState<'error' | 'loading' | 'ready'>(() => epochId === undefined ? 'ready' : 'loading');
   const [result, setResult] = useState<HookPlaygroundResult>();
   const [selectedKey, setSelectedKey] = useState<string>();
-  const view = hookPlaygroundViewFor({ epochId, hooks, result, selectedKey });
+  const lifecycle = useRef<HookRequestLifecycle>(new HookRequestLifecycle()).current;
+  const currentEpochIsListed = listedEpochId === epochId;
+  const view = hookPlaygroundViewFor({
+    epochId,
+    hooks: currentEpochIsListed ? hooks : [],
+    listState: epochId === undefined ? 'ready' : currentEpochIsListed ? listState : 'loading',
+    result: currentEpochIsListed ? result : undefined,
+    selectedKey,
+  });
   const parsed = parseRawJsonRecord(draft);
 
   useEffect(() => {
-    let current = true;
+    lifecycle.invalidate();
+    setBusy(false);
     setError(undefined);
     setResult(undefined);
+    setListedEpochId(undefined);
     if (epochId === undefined) {
       setHooks([]);
-      return () => { current = false; };
+      setListState('ready');
+      return () => lifecycle.invalidate();
     }
-    void client.list({ epochId }).then(
-      (next) => { if (current) setHooks(next); },
+    setHooks([]);
+    setListState('loading');
+    const request = lifecycle.begin('list');
+    void client.list({ epochId }, request.signal).then(
+      (next) => {
+        if (!lifecycle.isCurrent(request)) return;
+        lifecycle.complete(request);
+        setHooks(next);
+        setListedEpochId(epochId);
+        setListState('ready');
+      },
       (reason) => {
-        if (!current) return;
+        if (!lifecycle.isCurrent(request)) return;
+        lifecycle.complete(request);
+        if (isAbortError(reason)) return;
         setHooks([]);
+        setListedEpochId(epochId);
+        setListState('error');
         setError(errorMessage(reason));
       },
     );
-    return () => { current = false; };
-  }, [client, epochId]);
+    return () => lifecycle.invalidate();
+  }, [client, epochId, lifecycle]);
 
   const run = async (
-    action: () => Promise<HookSimulationResult>,
+    action: (signal: AbortSignal) => Promise<HookSimulationResult>,
     binding: HookPlaygroundBinding,
   ): Promise<void> => {
+    const request = lifecycle.begin('run');
     setBusy(true);
     setError(undefined);
     try {
-      const next = await action();
+      const next = await action(request.signal);
+      if (!lifecycle.isCurrent(request)) return;
       setResult(next);
       // A failed recording must not discard the run the user just saw.
       if (onRecordTrace !== undefined) {
         try {
+          if (!lifecycle.isCurrent(request)) return;
           await onRecordTrace(hookTraceEvent(binding, next));
         } catch (reason) {
-          setError(errorMessage(reason));
+          if (lifecycle.isCurrent(request) && !isAbortError(reason)) setError(errorMessage(reason));
         }
       }
     } catch (reason) {
-      setError(errorMessage(reason));
+      if (lifecycle.isCurrent(request) && !isAbortError(reason)) setError(errorMessage(reason));
     } finally {
-      setBusy(false);
+      if (lifecycle.isCurrent(request)) {
+        setBusy(false);
+        lifecycle.complete(request);
+      }
     }
   };
 
   const simulate = async (): Promise<void> => {
     const binding = view.selected?.binding;
     if (binding === undefined || parsed === null) return;
-    await run(() => runHookSimulation(client, binding, parsed), binding);
+    await run((signal) => runHookSimulation(client, binding, parsed, inputMode, signal), binding);
   };
 
   const replay = async (): Promise<void> => {
     const saved = view.replay;
     if (saved === undefined) return;
-    await run(() => runHookReplay(client, saved), saved.binding);
+    await run((signal) => runHookReplay(client, saved, signal), saved.binding);
   };
 
-  return <div className="hooks-content">
+  return <main className="hooks-content">
     <div className="page-heading hooks-page-heading">
       <div>
         <h1>Hooks</h1>
@@ -200,6 +278,11 @@ export const HooksPage = ({ client, epochId, onRecordTrace }: HooksPageProps) =>
           >
             {view.hooks.map((option) => <option key={option.key} value={option.key}>{option.label}</option>)}
           </select>
+          <fieldset className="hook-input-mode">
+            <legend>Canonical input mode</legend>
+            <label><input checked={inputMode === 'inline'} name="hook-input-mode" onChange={() => setInputMode('inline')} type="radio" value="inline" /> Inline JSON</label>
+            <label><input checked={inputMode === 'fixture'} name="hook-input-mode" onChange={() => setInputMode('fixture')} type="radio" value="fixture" /> Fixture JSON</label>
+          </fieldset>
           <label htmlFor="hook-canonical-input">Canonical input (JSON)</label>
           <textarea
             aria-describedby={parsed === null ? 'hook-canonical-input-error' : undefined}
@@ -226,5 +309,5 @@ export const HooksPage = ({ client, epochId, onRecordTrace }: HooksPageProps) =>
         </section>
         <HookSimulationView view={view} />
       </>}
-  </div>;
+  </main>;
 };

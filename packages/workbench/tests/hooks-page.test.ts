@@ -9,7 +9,7 @@ import type {
   HookPlaygroundSimulation,
 } from '../../agent-bundle/src/dev/hook-playground-service.ts';
 import { HookClient } from '../src/hooks/hook-client.ts';
-import { HookSimulationView, HooksPage, runHookReplay } from '../src/hooks/hooks-page.tsx';
+import { HookRequestLifecycle, HookSimulationView, HooksPage, runHookReplay, runHookSimulation } from '../src/hooks/hooks-page.tsx';
 import { hookPlaygroundViewFor } from '../src/hooks/hooks-model.ts';
 
 const hooks: readonly HookPlaygroundHook[] = [{
@@ -99,6 +99,9 @@ it('renders returned diagnostics as a visible alert', () => {
   expect(markup).toContain('role="alert"');
   expect(markup).toContain('hook.playground.event.unsupported');
   expect(markup).toContain('cannot map canonical event');
+  expect(markup).toContain('Severity: error');
+  expect(markup).toContain('Event: sessionStart');
+  expect(markup).toContain('Target: codex');
 });
 
 it('renders the hook controls and no request state when no epoch is active', () => {
@@ -108,6 +111,7 @@ it('renders the hook controls and no request state when no epoch is active', () 
   expect(markup).toContain('No artifact epoch is active');
   expect(markup).not.toContain('id="hook-binding"');
   expect(markup).not.toContain('Run simulation');
+  expect(markup).toContain('<main');
 });
 
 it('renders the simulation and replay controls for an active epoch', () => {
@@ -118,6 +122,46 @@ it('renders the simulation and replay controls for an active epoch', () => {
   expect(markup).toContain('id="hook-canonical-input"');
   expect(markup).toContain('Run simulation');
   expect(markup).toContain('Replay saved simulation');
+  expect(markup).toContain('name="hook-input-mode"');
+  expect(markup).toContain('value="inline"');
+  expect(markup).toContain('value="fixture"');
+  expect(markup).not.toContain('value="path"');
+});
+
+it('posts fixture input with the strict simulation request body', async () => {
+  const bodies: unknown[] = [];
+  const client = new HookClient({
+    fetch: async (request, init) => {
+      if (String(request) === '/api/project/session') return response({ origin: 'http://127.0.0.1:5173', token: 'foreground-token' });
+      bodies.push(typeof init?.body === 'string' ? JSON.parse(init.body) : undefined);
+      return response({ simulation });
+    },
+  });
+
+  await runHookSimulation(client, simulation.binding, { cwd: '/fixture' }, 'fixture');
+
+  expect(bodies).toEqual([{
+    epochId: 'epoch-1',
+    hook: 'hook:session-start',
+    input: { fixture: { cwd: '/fixture' } },
+    target: 'claude',
+  }]);
+});
+
+it('makes stale and superseded simulation requests unable to update current page state', () => {
+  const lifecycle = new HookRequestLifecycle();
+  const stale = lifecycle.begin('run');
+  const current = lifecycle.begin('run');
+  const applied: string[] = [];
+
+  if (lifecycle.isCurrent(stale)) applied.push('stale');
+  if (lifecycle.isCurrent(current)) applied.push('current');
+  lifecycle.invalidate();
+  if (lifecycle.isCurrent(current)) applied.push('after-epoch-change');
+
+  expect(stale.signal.aborted).toBe(true);
+  expect(current.signal.aborted).toBe(true);
+  expect(applied).toEqual(['current']);
 });
 
 it('replays a saved simulation against its original epoch, not the selected one', async () => {
