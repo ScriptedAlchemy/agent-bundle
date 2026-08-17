@@ -104,6 +104,7 @@ const runtimeOperationTraceAuthority = (binding: McpAppPreviewAppsSnapshot['bind
   sessionId: binding.sessionId,
   sessionRevision: binding.sessionRevision,
   vector: Object.freeze({
+    ...(binding.runVector.artifactEpochId === undefined ? {} : { artifactEpochId: binding.runVector.artifactEpochId }),
     runtimeGenerationId: binding.runVector.runtimeGenerationId,
     sourceRevision: binding.runVector.sourceRevision,
     stateVersion: binding.runVector.stateVersion,
@@ -115,6 +116,7 @@ const sameRuntimeOperationTraceAuthority = (left: RuntimeOperationTraceAuthority
   left.registryRevision === right.registryRevision &&
   left.sessionId === right.sessionId &&
   left.sessionRevision === right.sessionRevision &&
+  left.vector.artifactEpochId === right.vector.artifactEpochId &&
   left.vector.runtimeGenerationId === right.vector.runtimeGenerationId &&
   left.vector.sourceRevision === right.vector.sourceRevision &&
   left.vector.stateVersion === right.vector.stateVersion;
@@ -131,6 +133,7 @@ const isRuntimeOperationTrace = (entry: RuntimeAppBridgeTrace): entry is Runtime
     typeof candidate.sessionId === 'string' && candidate.sessionId.length > 0 &&
     typeof candidate.sessionRevision === 'number' && Number.isSafeInteger(candidate.sessionRevision) && candidate.sessionRevision > 0 &&
     vector !== null && typeof vector === 'object' && !Array.isArray(vector) &&
+    ((vector as Readonly<Record<string, unknown>>).artifactEpochId === undefined || typeof (vector as Readonly<Record<string, unknown>>).artifactEpochId === 'string') &&
     typeof (vector as Readonly<Record<string, unknown>>).runtimeGenerationId === 'string' &&
     typeof (vector as Readonly<Record<string, unknown>>).sourceRevision === 'string' &&
     typeof (vector as Readonly<Record<string, unknown>>).stateVersion === 'number' &&
@@ -143,6 +146,7 @@ const traceMatchesAuthority = (trace: RuntimeAppBridgeOperationTrace, authority:
   trace.registryRevision === authority.registryRevision &&
   trace.sessionId === authority.sessionId &&
   trace.sessionRevision === authority.sessionRevision &&
+  trace.vector.artifactEpochId === authority.vector.artifactEpochId &&
   trace.vector.runtimeGenerationId === authority.vector.runtimeGenerationId &&
   trace.vector.sourceRevision === authority.vector.sourceRevision &&
   trace.vector.stateVersion === authority.vector.stateVersion;

@@ -1034,6 +1034,7 @@ const RuntimeOperationInspection = ({
     candidate.sessionId === preview.binding.sessionId &&
     candidate.sessionRevision === preview.binding.sessionRevision &&
     candidate.registryRevision === preview.binding.registryRevision &&
+    candidate.vector.artifactEpochId === preview.binding.runVector.artifactEpochId &&
     candidate.vector.runtimeGenerationId === preview.binding.runVector.runtimeGenerationId &&
     candidate.vector.sourceRevision === preview.binding.runVector.sourceRevision &&
     candidate.vector.stateVersion === preview.binding.runVector.stateVersion,
@@ -1050,6 +1051,7 @@ const RuntimeOperationInspection = ({
       <div><dt>Registry revision</dt><dd>{trace.registryRevision}</dd></div>
       <div><dt>Generation ID</dt><dd>{trace.vector.runtimeGenerationId}</dd></div>
       <div><dt>Source revision</dt><dd>{trace.vector.sourceRevision}</dd></div>
+      {trace.vector.artifactEpochId === undefined ? null : <div><dt>Artifact epoch</dt><dd>{trace.vector.artifactEpochId}</dd></div>}
       <div><dt>State version</dt><dd>{trace.vector.stateVersion}</dd></div>
     </dl>
   </section>;
