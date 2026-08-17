@@ -31,6 +31,7 @@ type PlaygroundDirectorySyncReason =
   | 'layout-sessions-entry'
   | 'layout-storage-entry'
   | 'new-file'
+  | 'object-admission-cleanup'
   | 'object-created'
   | 'owner-lock-create'
   | 'owner-lock-create-recovery'
@@ -43,6 +44,7 @@ type PlaygroundDurableFilePhase = 'event' | 'owner' | 'pending-index' | 'session
 
 type PlaygroundDurabilityTestPhase =
   | 'after-final-index-link'
+  | 'before-object-admission-cleanup'
   | 'before-directory-sync:owner-lock-create'
   | 'before-directory-sync:session-metadata-rename'
   | 'before-final-index-link'
@@ -278,7 +280,7 @@ const prepublicationFailurePhases = [
 ] as const;
 
 for (const phase of prepublicationFailurePhases) {
-  it(`leaves an unreachable object and unchanged legacy session when ${phase} fails before publication`, async () => {
+  it(`rolls back its unpublished object and preserves an existing legacy session when ${phase} fails before publication`, async () => {
     const fixture = await createFixture();
     const sessionId = `prepublication-${phase.replaceAll(':', '-')}`;
     let reader: PlaygroundService | undefined;
@@ -296,7 +298,7 @@ for (const phase of prepublicationFailurePhases) {
       });
       expect(observed).toBe(true);
       await expect(readFile(indexPath(fixture.storageRoot, sessionId), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
-      await expect(readdir(join(fixture.storageRoot, 'session-objects'))).resolves.toHaveLength(1);
+      await expect(readdir(join(fixture.storageRoot, 'session-objects'))).resolves.toHaveLength(0);
       await expect(snapshotDirectory(legacyRoot)).resolves.toEqual(legacyBefore);
       await expect(fixture.service.close()).resolves.toBeUndefined();
       reader = new PlaygroundService({
@@ -1144,7 +1146,7 @@ it('reopens and exports strict v1 sessions only when no v2 index exists, and con
   }
 });
 
-it('publishes one complete v2 session index for concurrent same-ID contenders and leaves the loser object unreachable', async () => {
+it('publishes one complete v2 session index for concurrent same-ID contenders and rolls back the losing object', async () => {
   const fixture = await createFixture();
   const contender = new PlaygroundService({
     projectId: 'project-1',
@@ -1174,9 +1176,8 @@ it('publishes one complete v2 session index for concurrent same-ID contenders an
       sessionId,
     });
     const objects = await readdir(join(fixture.storageRoot, 'session-objects'));
-    expect(objects).toHaveLength(2);
+    expect(objects).toHaveLength(1);
     expect(objects).toContain(index.objectId);
-    expect(objects.filter((objectId) => objectId !== index.objectId)).toHaveLength(1);
 
     await fixture.service.close();
     await contender.close();
@@ -1196,11 +1197,18 @@ it('publishes one complete v2 session index for concurrent same-ID contenders an
   }
 });
 
-it('leaves a v2 object orphaned but unpublished when close wins before final index publication, then permits a retry', async () => {
-  const lifecycle: { closing?: Promise<void>; service?: PlaygroundService } = {};
+it('drains and rolls back a held v2 admission when close wins before publication, then permits a retry', async () => {
+  const lifecycle: { closeSettled: boolean; closing?: Promise<void>; observedPending: boolean; service?: PlaygroundService } = {
+    closeSettled: false,
+    observedPending: false,
+  };
   const fixture = await createFixture({
     now: () => {
-      lifecycle.closing ??= lifecycle.service!.close();
+      if (lifecycle.closing === undefined) {
+        lifecycle.closing = lifecycle.service!.close();
+        void lifecycle.closing.then(() => { lifecycle.closeSettled = true; });
+        queueMicrotask(() => { lifecycle.observedPending = !lifecycle.closeSettled; });
+      }
       return new Date('2026-08-16T00:00:00.000Z');
     },
   });
@@ -1209,9 +1217,10 @@ it('leaves a v2 object orphaned but unpublished when close wins before final ind
   try {
     await expect(fixture.service.openSession({ ...sessionInput(), sessionId })).rejects.toMatchObject({ code: 'PLAYGROUND_SERVICE_CLOSED' });
     await expect(lifecycle.closing).resolves.toBeUndefined();
+    expect(lifecycle.observedPending).toBe(true);
     expect(fixture.service.session(sessionId)).toBeUndefined();
     await expect(readFile(indexPath(fixture.storageRoot, sessionId), 'utf8')).rejects.toBeDefined();
-    expect(await readdir(join(fixture.storageRoot, 'session-objects'))).toHaveLength(1);
+    expect(await readdir(join(fixture.storageRoot, 'session-objects'))).toHaveLength(0);
 
     const retry = new PlaygroundService({
       projectId: 'project-1',
@@ -1223,6 +1232,81 @@ it('leaves a v2 object orphaned but unpublished when close wins before final ind
     } finally {
       await retry.close().catch(() => undefined);
     }
+  } finally {
+    await fixture.close();
+  }
+});
+
+it('surfaces and retains a failed cold-admission rollback for the same service close retry', async () => {
+  const fixture = await createFixture();
+  let failCleanup = true;
+  try {
+    await withDurabilityTestHook((phase) => {
+      if (phase === 'before-file-write:event') throw injectedIoFailure('admission write failed');
+      if (phase === 'before-object-admission-cleanup' && failCleanup) {
+        failCleanup = false;
+        throw injectedIoFailure('admission cleanup failed');
+      }
+    }, async () => {
+      const failure = await fixture.service.openSession({ ...sessionInput(), sessionId: 'cleanup-retry' }).catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(AggregateError);
+      expect((failure as AggregateError).errors).toHaveLength(2);
+      expect(await readdir(join(fixture.storageRoot, 'session-objects'))).toHaveLength(1);
+      await expect(fixture.service.close()).resolves.toBeUndefined();
+    });
+    await expect(readdir(join(fixture.storageRoot, 'session-objects'))).resolves.toHaveLength(0);
+  } finally {
+    await fixture.close();
+  }
+});
+
+it('retains a post-removal cold-admission cleanup failure for service-close aggregation', async () => {
+  const fixture = await createFixture();
+  try {
+    await withDurabilityTestHook((phase) => {
+      if (phase === 'before-file-write:event') throw injectedIoFailure('admission write failed');
+      if (phase === 'before-directory-sync:object-admission-cleanup') {
+        throw injectedIoFailure('post-removal cleanup sync failed');
+      }
+    }, async () => {
+      const admission = await fixture.service.openSession({ ...sessionInput(), sessionId: 'cleanup-sync-failure' }).catch((error: unknown) => error);
+      expect(admission).toBeInstanceOf(AggregateError);
+      await expect(readdir(join(fixture.storageRoot, 'session-objects'))).resolves.toHaveLength(0);
+
+      const closing = await fixture.service.close().catch((error: unknown) => error);
+      expect(closing).toBeInstanceOf(PlaygroundServiceCloseError);
+      expect((closing as PlaygroundServiceCloseError).failures).toMatchObject([
+        { error: { code: 'EIO', message: 'post-removal cleanup sync failed' }, sessionId: 'cleanup-sync-failure' },
+      ]);
+    });
+  } finally {
+    await fixture.close();
+  }
+});
+
+it('refuses to roll back a path-swapped cold-admission root', async () => {
+  const fixture = await createFixture();
+  const sessionId = 'swapped-cold-admission';
+  let swappedRoot: string | undefined;
+  try {
+    await withDurabilityTestHook((phase, root) => {
+      if (phase === 'before-file-write:event') throw injectedIoFailure('admission write failed');
+      if (phase === 'before-object-admission-cleanup' && swappedRoot === undefined) {
+        const moved = `${root}.owned`;
+        renameSync(root, moved);
+        mkdirSync(root);
+        writeFileSync(join(root, 'victim.txt'), 'preserve this victim', 'utf8');
+        swappedRoot = root;
+      }
+    }, async () => {
+      const failure = await fixture.service.openSession({ ...sessionInput(), sessionId }).catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(AggregateError);
+      expect((failure as AggregateError).errors).toHaveLength(2);
+    });
+    expect(swappedRoot).toBeDefined();
+    await expect(readFile(join(swappedRoot!, 'victim.txt'), 'utf8')).resolves.toBe('preserve this victim');
+    await expect(fixture.service.close()).rejects.toBeInstanceOf(PlaygroundServiceCloseError);
+    await expect(readFile(join(swappedRoot!, 'victim.txt'), 'utf8')).resolves.toBe('preserve this victim');
   } finally {
     await fixture.close();
   }
@@ -1396,7 +1480,7 @@ it('retains unindexed objects and pending indexes across startup while readers o
   }
 });
 
-it('leaves a failed pre-publication object orphaned without changing a legacy victim', async () => {
+it('rolls back a failed pre-publication object without changing a legacy victim', async () => {
   const fixture = await createFixture();
   const targetId = 'blocked-pending-write';
   try {
@@ -1417,7 +1501,7 @@ it('leaves a failed pre-publication object orphaned without changing a legacy vi
     try {
       await expect(blocked.openSession({ ...sessionInput(), sessionId: targetId })).rejects.toBeDefined();
       await expect(readFile(indexPath(fixture.storageRoot, targetId), 'utf8')).rejects.toBeDefined();
-      expect((await readdir(join(fixture.storageRoot, 'session-objects'))).length).toBeGreaterThan(1);
+      expect(await readdir(join(fixture.storageRoot, 'session-objects'))).toHaveLength(1);
       await expect(snapshotDirectory(legacyRoot)).resolves.toEqual(victimBefore);
     } finally {
       await blocked.close().catch(() => undefined);
@@ -1452,7 +1536,12 @@ it('rejects a replaced v2 object before it can write or publish an unrelated vic
       storageRoot: fixture.storageRoot,
     });
 
-    await expect(contender.openSession({ ...sessionInput(), sessionId })).rejects.toMatchObject({ code: 'PLAYGROUND_SESSION_OWNED' });
+    const failure = await contender.openSession({ ...sessionInput(), sessionId }).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect((failure as AggregateError).errors).toMatchObject([
+      { code: 'PLAYGROUND_SESSION_OWNED' },
+      { code: 'PLAYGROUND_ROOT_INVALID' },
+    ]);
     await expect(readFile(join(objectsRoot, readdirSync(objectsRoot)[0]!, 'unrelated'), 'utf8')).resolves.toBe('unchanged\n');
     await expect(readFile(indexPath(fixture.storageRoot, sessionId), 'utf8')).rejects.toBeDefined();
     await expect(readFile(join(displacedRoot, '.owner.lock'), 'utf8')).resolves.toContain('token');

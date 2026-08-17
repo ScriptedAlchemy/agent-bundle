@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { closeSync, constants, fsyncSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync, readFileSync, writeFileSync } from 'node:fs';
-import { lstat, mkdir, open, realpath, rename, unlink } from 'node:fs/promises';
+import { lstat, mkdir, open, realpath, rename, rm, unlink } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 import { parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
@@ -268,6 +268,19 @@ interface SessionPersistenceProgress {
   metadataRenamed: boolean;
 }
 
+interface ColdAdmission {
+  cleanupAttempt: Promise<void> | undefined;
+  cleanupFailure: unknown | undefined;
+  readonly objectId: string;
+  ownerToken: string | undefined;
+  published: boolean;
+  readonly root: string;
+  readonly rootDevice: number;
+  readonly rootInode: number;
+  rootRemoved: boolean;
+  readonly sessionId: string;
+}
+
 const draftSchemaVersion = 1 as const;
 const legacySessionSchemaVersion = 1 as const;
 const objectSessionSchemaVersion = 2 as const;
@@ -287,6 +300,7 @@ type DirectorySyncReason =
   | 'layout-sessions-entry'
   | 'layout-storage-entry'
   | 'new-file'
+  | 'object-admission-cleanup'
   | 'object-created'
   | 'owner-lock-create'
   | 'owner-lock-create-recovery'
@@ -297,6 +311,7 @@ type DirectorySyncReason =
 type DurableFilePhase = 'event' | 'owner' | 'pending-index' | 'session-metadata';
 type DurabilityTestPhase =
   | 'after-final-index-link'
+  | 'before-object-admission-cleanup'
   | 'before-final-index-link'
   | `before-directory-fsync:${DirectorySyncReason}`
   | `before-directory-open:${DirectorySyncReason}`
@@ -615,6 +630,7 @@ const normalizeAssertion = (value: PlaygroundSelectedAssertion): PlaygroundSelec
 
 export class PlaygroundService {
   readonly #admissions = new Set<Promise<void>>();
+  readonly #coldAdmissions = new Set<ColdAdmission>();
   readonly #maxSubscriberQueue: number;
   readonly #now: () => Date;
   readonly #projectId: string;
@@ -656,44 +672,63 @@ export class PlaygroundService {
       const storageObjectId = safeSessionId(randomUUID());
       const root = this.#objectRoot(storageObjectId);
       mkdirSync(root);
-      this.#syncDirectory(this.#requireObjectRoot(), 'object-created');
       const stat = lstatSync(root);
       if (!stat.isDirectory() || stat.isSymbolicLink()) {
         throw serviceError('PLAYGROUND_ROOT_INVALID', 'Playground session object must be a real contained directory.');
       }
-      await this.#assertObjectDirectory(root, storageObjectId);
-      this.#assertAvailable();
-      const ownerToken = await this.#acquireOwner(root, id);
-      const record: SessionRecord = {
-        admissionFailed: false,
-        cleanupFailures: [],
-        createdAt: this.#timestamp(),
-        durability: undefined,
-        events: [],
-        id,
-        identity,
-        nextSequence: 1,
-        outcome: undefined,
-        root,
-        state: 'open',
-        storage: 'v2',
-        storageObjectId,
-        subscribers: new Set(),
-        tail: Promise.resolve(),
-        ownerToken,
-      };
-      await this.#assertOwnedObject(root, storageObjectId, id, ownerToken);
-      await this.#writeNewFile(join(root, eventDocumentName), '', 'event');
-      await this.#persistSession(record);
-      await this.#assertOwnedObject(root, storageObjectId, id, ownerToken);
-      await this.#readPersistedSession(root, id, 'v2', storageObjectId);
-      await this.#readEvents(root);
-      await this.#assertOwnedObject(root, storageObjectId, id, ownerToken);
-      this.#assertAvailable();
+      const admission = this.#beginColdAdmission(root, storageObjectId, id, stat.dev, stat.ino);
+      let record: SessionRecord | undefined;
       try {
+        this.#syncDirectory(this.#requireObjectRoot(), 'object-created');
+        await this.#assertObjectDirectory(root, storageObjectId);
+        this.#assertAvailable();
+        const ownerToken = await this.#acquireOwner(root, id);
+        admission.ownerToken = ownerToken;
+        record = {
+          admissionFailed: false,
+          cleanupFailures: [],
+          createdAt: this.#timestamp(),
+          durability: undefined,
+          events: [],
+          id,
+          identity,
+          nextSequence: 1,
+          outcome: undefined,
+          root,
+          state: 'open',
+          storage: 'v2',
+          storageObjectId,
+          subscribers: new Set(),
+          tail: Promise.resolve(),
+          ownerToken,
+        };
+        await this.#assertOwnedObject(root, storageObjectId, id, ownerToken);
+        await this.#writeNewFile(join(root, eventDocumentName), '', 'event');
+        await this.#persistSession(record);
+        await this.#assertOwnedObject(root, storageObjectId, id, ownerToken);
+        await this.#readPersistedSession(root, id, 'v2', storageObjectId);
+        await this.#readEvents(root);
+        await this.#assertOwnedObject(root, storageObjectId, id, ownerToken);
+        this.#assertAvailable();
         this.#publishV2(record);
+        admission.published = true;
+        this.#coldAdmissions.delete(admission);
       } catch (error) {
-        if (this.#sessions.get(id) === record) record.admissionFailed = true;
+        if (record !== undefined && this.#sessions.get(id) === record) {
+          record.admissionFailed = true;
+          admission.published = true;
+          this.#coldAdmissions.delete(admission);
+          throw error;
+        }
+        try {
+          await this.#rollbackColdAdmission(admission);
+        } catch (cleanupError) {
+          throw new AggregateError(
+            [error, cleanupError],
+            'Playground session admission and cleanup both failed.',
+            { cause: cleanupError },
+          );
+        }
         throw error;
       }
       return snapshotSession(record);
@@ -911,11 +946,19 @@ export class PlaygroundService {
     this.#closing = true;
     this.#closePromise = (async () => {
       await Promise.allSettled([...this.#admissions]);
+      const coldAdmissions = [...this.#coldAdmissions];
+      const coldSettled = await Promise.allSettled(coldAdmissions.map(async (admission) => {
+        await this.#rollbackColdAdmission(admission);
+      }));
       const sessions = [...this.#sessions.entries()];
       const settled = await Promise.allSettled(sessions.map(async ([, record]) => {
         await this.#closeRecord(record);
       }));
       const failures = [
+        ...coldSettled.flatMap((result, index): PlaygroundServiceCloseFailure[] =>
+          result.status === 'rejected'
+            ? [Object.freeze({ error: result.reason, sessionId: coldAdmissions[index]!.sessionId })]
+            : []),
         ...settled.flatMap((result, index): PlaygroundServiceCloseFailure[] =>
           result.status === 'rejected'
             ? [Object.freeze({ error: result.reason, sessionId: sessions[index]![0] })]
@@ -967,6 +1010,73 @@ export class PlaygroundService {
     } finally {
       this.#admissions.delete(admission);
       resolveAdmission();
+    }
+  }
+
+  #beginColdAdmission(
+    root: string,
+    objectId: string,
+    sessionId: string,
+    rootDevice: number,
+    rootInode: number,
+  ): ColdAdmission {
+    const admission: ColdAdmission = {
+      cleanupAttempt: undefined,
+      cleanupFailure: undefined,
+      objectId,
+      ownerToken: undefined,
+      published: false,
+      root,
+      rootDevice,
+      rootInode,
+      rootRemoved: false,
+      sessionId,
+    };
+    this.#coldAdmissions.add(admission);
+    return admission;
+  }
+
+  async #rollbackColdAdmission(admission: ColdAdmission): Promise<void> {
+    if (admission.published) return;
+    if (admission.cleanupAttempt !== undefined) return admission.cleanupAttempt;
+    if (admission.rootRemoved) {
+      if (admission.cleanupFailure !== undefined) throw admission.cleanupFailure;
+      return;
+    }
+    const attempt = (async () => {
+      runDurabilityTestHook('before-object-admission-cleanup', admission.root);
+      await this.#assertColdAdmissionOwnership(admission);
+      await rm(admission.root, { force: false, recursive: true });
+      admission.rootRemoved = true;
+      try {
+        this.#syncDirectory(this.#requireObjectRoot(), 'object-admission-cleanup');
+      } catch (error) {
+        admission.cleanupFailure = error;
+        throw error;
+      }
+      this.#coldAdmissions.delete(admission);
+    })();
+    admission.cleanupAttempt = attempt;
+    try {
+      await attempt;
+    } finally {
+      if (admission.cleanupAttempt === attempt) admission.cleanupAttempt = undefined;
+    }
+  }
+
+  async #assertColdAdmissionOwnership(admission: ColdAdmission): Promise<void> {
+    const stat = await lstat(admission.root);
+    if (!stat.isDirectory()
+      || stat.isSymbolicLink()
+      || stat.dev !== admission.rootDevice
+      || stat.ino !== admission.rootInode) {
+      throw serviceError('PLAYGROUND_ROOT_INVALID', 'Playground admission object identity changed before cleanup.');
+    }
+    await this.#assertObjectDirectory(admission.root, admission.objectId);
+    if (admission.ownerToken === undefined) return;
+    const owner = await this.#readOwnerLock(admission.root);
+    if (owner.token !== admission.ownerToken) {
+      throw serviceError('PLAYGROUND_SESSION_OWNED', `Playground session ${JSON.stringify(admission.sessionId)} object ownership changed before cleanup.`);
     }
   }
 
