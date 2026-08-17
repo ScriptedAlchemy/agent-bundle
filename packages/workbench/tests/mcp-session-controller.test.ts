@@ -72,6 +72,17 @@ const restartedRuntimeSession = Object.freeze({
   }),
   state: 'ready' as const,
 });
+const implementationUpdatedRuntimeSession = Object.freeze({
+  binding: Object.freeze({
+    ...runtimeSession.binding,
+    serverDigest: 'server-implementation-b',
+  }),
+  connection: Object.freeze({
+    ...runtimeSession.connection,
+    server: Object.freeze({ name: 'weather-runtime-implementation', version: '4.2.1' }),
+  }),
+  state: 'ready' as const,
+});
 const unusedRuntimeRestart = Object.freeze({
   reconcile: Object.freeze({
     action: 'implementation-updated' as const,
@@ -706,6 +717,39 @@ it('adopts an authoritative higher runtime session revision without reopening th
   await controller.close();
 });
 
+it('adopts a same-revision implementation update without reopening the stable runtime session', async () => {
+  let runtimeRouteCalls = 0;
+  const controller = createMcpSessionController({
+    clientFactory: fakeClient,
+    routes: {
+      catalog: async () => ({ prompts: [], resourceTemplates: [], resources: [], tools: [] }),
+      closeRuntime: async () => { runtimeRouteCalls += 1; },
+      config: async () => ({}),
+      executeRuntime: async () => { runtimeRouteCalls += 1; throw new Error('Unexpected runtime operation.'); },
+      openRuntime: async () => { runtimeRouteCalls += 1; throw new Error('Unexpected runtime session open.'); },
+      restart: async () => connection,
+      restartRuntime: async () => { runtimeRouteCalls += 1; throw new Error('Unexpected runtime session restart.'); },
+      stream: async () => new Response(null),
+      trace: async () => ({ entries: [] }),
+    },
+    transportFactory: fakeTransport,
+  });
+
+  await controller.open(runtimeBinding);
+  await controller.adoptRuntimeSession(implementationUpdatedRuntimeSession);
+
+  expect(controller.model).toMatchObject({
+    binding: { binding: implementationUpdatedRuntimeSession.binding, kind: 'runtime' },
+    connection: {
+      protocolVersion: implementationUpdatedRuntimeSession.connection.protocolVersion,
+      serverInfo: implementationUpdatedRuntimeSession.connection.server,
+    },
+    phase: 'ready',
+  });
+  expect(runtimeRouteCalls).toBe(0);
+  await controller.close();
+});
+
 it('coalesces an exact authoritative adoption while its old App attachment drains', async () => {
   const appClose = deferred<void>();
   let appCloses = 0;
@@ -741,6 +785,45 @@ it('coalesces an exact authoritative adoption while its old App attachment drain
   appClose.resolve();
   await first;
   expect(controller.model.binding).toEqual({ binding: restartedRuntimeSession.binding, kind: 'runtime' });
+  await controller.close();
+});
+
+it('drains the attached App before one implementation-only adoption and fences a conflicting authority', async () => {
+  const appClose = deferred<void>();
+  let appCloses = 0;
+  const controller = createMcpSessionController({
+    appClientFactory: () => ({
+      close: async () => { appCloses += 1; await appClose.promise; },
+      connect: async (transport: Transport) => transport.start(),
+      request: async () => undefined,
+    }) as unknown as Client,
+    clientFactory: fakeClient,
+    routes: {
+      catalog: async () => ({ prompts: [], resourceTemplates: [], resources: [], tools: [] }),
+      closeRuntime: async () => undefined,
+      config: async () => ({}),
+      executeRuntime: async () => { throw new Error('Unexpected runtime operation.'); },
+      openRuntime: async () => { throw new Error('Unexpected runtime session open.'); },
+      restart: async () => connection,
+      restartRuntime: async () => { throw new Error('Unexpected runtime session restart.'); },
+      stream: async () => new Response(null),
+      trace: async () => ({ entries: [] }),
+    },
+    transportFactory: fakeTransport,
+  });
+
+  await controller.open(runtimeBinding);
+  await controller.attachApp(runtimeAppAttachment(async (operation) => runtimeAppResult(operation)));
+  const first = controller.adoptRuntimeSession(implementationUpdatedRuntimeSession);
+  const second = controller.adoptRuntimeSession(implementationUpdatedRuntimeSession);
+  expect(second).toBe(first);
+  await expect(controller.adoptRuntimeSession(restartedRuntimeSession)).rejects.toThrow('already running for a different session authority');
+  await eventually(() => appCloses === 1);
+  expect(controller.model).toMatchObject({ binding: { binding: runtimeSession.binding, kind: 'runtime' }, phase: 'restarting' });
+
+  appClose.resolve();
+  await first;
+  expect(controller.model).toMatchObject({ binding: { binding: implementationUpdatedRuntimeSession.binding, kind: 'runtime' }, phase: 'ready' });
   await controller.close();
 });
 
@@ -784,7 +867,7 @@ it('retains the old ready runtime authority when attached cleanup rejects, then 
   await controller.close();
 });
 
-it('rejects foreign, equal, and downgraded runtime snapshots without disturbing the ready authority', async () => {
+it('rejects non-authoritative runtime adoption lanes without disturbing the ready authority', async () => {
   const foreign = Object.freeze({
     ...restartedRuntimeSession,
     binding: Object.freeze({ ...restartedRuntimeSession.binding, sessionId: 'runtime-session-foreign' }),
@@ -792,6 +875,39 @@ it('rejects foreign, equal, and downgraded runtime snapshots without disturbing 
   const wrongServer = Object.freeze({
     ...restartedRuntimeSession,
     binding: Object.freeze({ ...restartedRuntimeSession.binding, serverName: 'foreign-runtime' }),
+  });
+  const wrongTarget = Object.freeze({
+    ...restartedRuntimeSession,
+    binding: Object.freeze({ ...restartedRuntimeSession.binding, target: 'codex' as const }),
+  });
+  const registryOnly = Object.freeze({
+    ...implementationUpdatedRuntimeSession,
+    binding: Object.freeze({ ...implementationUpdatedRuntimeSession.binding, registryRevision: 8 }),
+  });
+  const sessionOnly = Object.freeze({
+    ...implementationUpdatedRuntimeSession,
+    binding: Object.freeze({ ...implementationUpdatedRuntimeSession.binding, sessionRevision: 4 }),
+  });
+  const mixedRevision = Object.freeze({
+    ...restartedRuntimeSession,
+    binding: Object.freeze({ ...restartedRuntimeSession.binding, registryRevision: 6 }),
+  });
+  const downgraded = Object.freeze({
+    ...implementationUpdatedRuntimeSession,
+    binding: Object.freeze({ ...implementationUpdatedRuntimeSession.binding, registryRevision: 6, sessionRevision: 2 }),
+  });
+  const sameRevisionDefinition = Object.freeze({
+    ...implementationUpdatedRuntimeSession,
+    binding: Object.freeze({ ...implementationUpdatedRuntimeSession.binding, definitionDigest: 'definition-b' }),
+  });
+  const sameRevisionTransport = Object.freeze({
+    ...implementationUpdatedRuntimeSession,
+    binding: Object.freeze({ ...implementationUpdatedRuntimeSession.binding, transportDigest: 'transport-b' }),
+  });
+  const nonReady = Object.freeze({ ...implementationUpdatedRuntimeSession, state: 'restarting' as const });
+  const malformed = Object.freeze({
+    ...implementationUpdatedRuntimeSession,
+    binding: Object.freeze({ ...implementationUpdatedRuntimeSession.binding, serverDigest: '' }),
   });
   const controller = createMcpSessionController({
     clientFactory: fakeClient,
@@ -810,8 +926,23 @@ it('rejects foreign, equal, and downgraded runtime snapshots without disturbing 
   });
 
   await controller.open(runtimeBinding);
-  for (const invalid of [foreign, wrongServer, runtimeSession]) {
+  for (const invalid of [
+    foreign,
+    wrongServer,
+    wrongTarget,
+    runtimeSession,
+    registryOnly,
+    sessionOnly,
+    mixedRevision,
+    downgraded,
+    sameRevisionDefinition,
+    sameRevisionTransport,
+  ]) {
     await expect(controller.adoptRuntimeSession(invalid)).rejects.toThrow('does not advance the current stable session authority');
+    expect(controller.model).toMatchObject({ binding: { binding: runtimeSession.binding, kind: 'runtime' }, phase: 'ready' });
+  }
+  for (const invalid of [nonReady, malformed]) {
+    await expect(controller.adoptRuntimeSession(invalid)).rejects.toThrow('requires a current ready runtime session snapshot');
     expect(controller.model).toMatchObject({ binding: { binding: runtimeSession.binding, kind: 'runtime' }, phase: 'ready' });
   }
   await controller.close();

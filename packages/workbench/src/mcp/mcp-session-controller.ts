@@ -286,6 +286,31 @@ const sameRuntimeBinding = (left: DevRuntimeMcpAppRunBinding, right: DevRuntimeM
   left.serverDigest === right.serverDigest && left.serverName === right.serverName && left.sessionId === right.sessionId &&
   left.sessionRevision === right.sessionRevision && left.target === right.target && left.transportDigest === right.transportDigest;
 
+type RuntimeSessionAdoptionLane = 'implementation' | 'restart';
+
+const runtimeSessionAdoptionLane = (
+  previous: DevRuntimeMcpAppRunBinding,
+  next: DevRuntimeMcpAppRunBinding,
+): RuntimeSessionAdoptionLane | undefined => {
+  if (
+    next.sessionId !== previous.sessionId ||
+    next.serverName !== previous.serverName ||
+    next.target !== previous.target
+  ) return undefined;
+  if (
+    next.sessionRevision > previous.sessionRevision &&
+    next.registryRevision > previous.registryRevision
+  ) return 'restart';
+  if (
+    next.sessionRevision === previous.sessionRevision &&
+    next.registryRevision === previous.registryRevision &&
+    next.definitionDigest === previous.definitionDigest &&
+    next.transportDigest === previous.transportDigest &&
+    next.serverDigest !== previous.serverDigest
+  ) return 'implementation';
+  return undefined;
+};
+
 const runtimeControllerBinding = (value: unknown): Extract<McpSessionControllerBinding, { readonly kind: 'runtime' }> | undefined => {
   if (!isRuntimeSession(value)) return undefined;
   const binding = controllerBinding(Object.freeze({ binding: value.binding, kind: 'runtime' as const, session: value }));
@@ -825,13 +850,9 @@ export class McpSessionController {
     if (previous?.kind !== 'runtime' || previous.session.state !== 'ready') {
       return Promise.reject(new McpSessionControllerError('MCP session controller does not have a ready runtime session to adopt.'));
     }
-    if (
-      next.binding.sessionId !== previous.binding.sessionId ||
-      next.binding.serverName !== previous.binding.serverName ||
-      next.binding.target !== previous.binding.target ||
-      next.binding.sessionRevision <= previous.binding.sessionRevision ||
-      next.binding.registryRevision <= previous.binding.registryRevision
-    ) return Promise.reject(new McpSessionControllerError('Runtime MCP session adoption does not advance the current stable session authority.'));
+    if (runtimeSessionAdoptionLane(previous.binding, next.binding) === undefined) {
+      return Promise.reject(new McpSessionControllerError('Runtime MCP session adoption does not advance the current stable session authority.'));
+    }
 
     const generation = ++this.#generation;
     this.#state = 'restarting';
