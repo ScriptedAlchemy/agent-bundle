@@ -20,12 +20,29 @@ type HorizontalBounds = Readonly<{
   readonly viewportWidth: number;
 }>;
 
+type VerticalBounds = Readonly<{
+  readonly bottom: number;
+  readonly top: number;
+  readonly viewportHeight: number;
+}>;
+
 type CaptureEvidence = Readonly<{
   readonly appMarkerVisible: boolean;
   readonly appRefreshPreservedDocument: boolean;
   readonly appVisibleAfter: boolean;
   readonly appVisibleBefore: boolean;
   readonly appVisibleRecovered: boolean;
+  readonly compactRunGeneration: string;
+  readonly compactRunId: string;
+  readonly compileErrorDiagnosticsVisible: boolean;
+  readonly compileErrorGeneration: string;
+  readonly compileErrorHistoryUnchanged: boolean;
+  readonly compileErrorLastGoodVisible: boolean;
+  readonly compileErrorLayout: Readonly<{
+    readonly diagnostics: VerticalBounds;
+    readonly lastGood: VerticalBounds;
+  }>;
+  readonly compileErrorRunId: string;
   readonly documentTimeOriginAfter: number;
   readonly documentTimeOriginBefore: number;
   readonly desktopControlColumns: number;
@@ -188,6 +205,9 @@ test('captures identity-backed HMR, last-good, recovery, and responsive browser 
       appVisibleAfter: true,
       appVisibleBefore: true,
       appVisibleRecovered: true,
+      compileErrorDiagnosticsVisible: true,
+      compileErrorHistoryUnchanged: true,
+      compileErrorLastGoodVisible: true,
       desktopControlColumns: 4,
       hmrWithoutReload: true,
       lastGoodPreserved: true,
@@ -228,6 +248,15 @@ test('captures identity-backed HMR, last-good, recovery, and responsive browser 
     }
     expect(evidence.providerSessionId).toEqual(expect.any(String));
     expect(evidence.providerSessionId.length).toBeGreaterThan(0);
+    expect(evidence.compactRunId).toEqual(expect.any(String));
+    expect(evidence.compactRunGeneration).toEqual(expect.any(String));
+    expect(evidence.compileErrorRunId).toBe(evidence.compactRunId);
+    expect(evidence.compileErrorGeneration).toBe(evidence.compactRunGeneration);
+    for (const bounds of [evidence.compileErrorLayout.lastGood, evidence.compileErrorLayout.diagnostics]) {
+      expect(bounds.top).toBeGreaterThanOrEqual(0);
+      expect(bounds.bottom).toBeLessThanOrEqual(bounds.viewportHeight);
+      expect(bounds.viewportHeight).toBeGreaterThan(0);
+    }
     expect(evidence.generationAfter).not.toBe(evidence.generationBefore);
     expect(evidence.runAfter).not.toBe(evidence.runBefore);
     expect(evidence.documentTimeOriginAfter).toBe(evidence.documentTimeOriginBefore);

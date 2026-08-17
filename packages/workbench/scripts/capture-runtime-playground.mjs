@@ -208,6 +208,15 @@ const selectRun = async (page, id) => {
   const index = (await runtimeRunIds(page)).indexOf(id);
   if (index < 0) throw new Error('Runtime history omitted the requested immutable run.');
   await rows.nth(index).locator('button[aria-pressed]').click();
+  await page.waitForFunction(
+    ({ expected, selector }) => {
+      const selected = [...globalThis.document.querySelectorAll(selector)]
+        .find((row) => row.querySelector('button[aria-pressed="true"]') !== null);
+      return selected?.getAttribute('data-runtime-run-id') === expected;
+    },
+    { expected: id, selector: '[data-runtime-run-id]' },
+    { timeout: browserTimeout },
+  );
 };
 
 const runSurface = async (page, id, input) => {
@@ -268,6 +277,16 @@ const boundedHorizontalBounds = (value, label) => {
   const viewportWidth = boundedLayoutNumber(candidate.viewportWidth, `${label} viewport width`);
   if (viewportWidth <= 0) throw new Error(`Runtime capture ${label} viewport width was not positive.`);
   return Object.freeze({ left, right, viewportWidth });
+};
+
+const boundedVerticalBounds = (value, label) => {
+  if (typeof value !== 'object' || value === null) throw new Error(`Runtime capture ${label} bounds were absent.`);
+  const candidate = value;
+  const top = boundedLayoutNumber(candidate.top, `${label} top`);
+  const bottom = boundedLayoutNumber(candidate.bottom, `${label} bottom`);
+  const viewportHeight = boundedLayoutNumber(candidate.viewportHeight, `${label} viewport height`);
+  if (viewportHeight <= 0) throw new Error(`Runtime capture ${label} viewport height was not positive.`);
+  return Object.freeze({ bottom, top, viewportHeight });
 };
 
 const captureMobileLayout = async (page, frame) => {
@@ -378,6 +397,59 @@ const captureMobileLayout = async (page, frame) => {
   return mobileLayout;
 };
 
+const captureCompileErrorLayout = async (page, generation) => {
+  const layout = await page.evaluate(({ diagnosticsSelector, lastGoodText }) => {
+    const diagnostics = globalThis.document.querySelector(diagnosticsSelector);
+    const lastGood = [...globalThis.document.querySelectorAll('.runtime-stage-generation')]
+      .find((element) => element.textContent?.includes(lastGoodText) === true);
+    if (!(diagnostics instanceof globalThis.HTMLElement) || !(lastGood instanceof globalThis.HTMLElement)) {
+      throw new Error('Runtime capture compile-error landmarks were absent.');
+    }
+    const bounds = (element) => {
+      const rect = element.getBoundingClientRect();
+      return Object.freeze({ bottom: rect.bottom, top: rect.top, viewportHeight: globalThis.innerHeight });
+    };
+    const initialLastGood = bounds(lastGood);
+    const initialDiagnostics = bounds(diagnostics);
+    const unionTop = Math.min(initialLastGood.top, initialDiagnostics.top);
+    const unionBottom = Math.max(initialLastGood.bottom, initialDiagnostics.bottom);
+    if (unionBottom - unionTop > globalThis.innerHeight) {
+      throw new Error('Runtime capture compile-error landmarks exceed the desktop viewport.');
+    }
+    const nextTop = unionTop < 0
+      ? globalThis.scrollY + unionTop
+      : unionBottom > globalThis.innerHeight
+        ? globalThis.scrollY + unionBottom - globalThis.innerHeight
+        : globalThis.scrollY;
+    globalThis.scrollTo({ left: 0, top: Math.max(0, nextTop) });
+    const visible = (element) => {
+      const style = globalThis.getComputedStyle(element);
+      return style.display !== 'none' && style.visibility !== 'hidden' && element.getClientRects().length > 0;
+    };
+    return Object.freeze({
+      diagnostics: bounds(diagnostics),
+      diagnosticsVisible: visible(diagnostics),
+      lastGood: bounds(lastGood),
+      lastGoodVisible: visible(lastGood),
+    });
+  }, {
+    diagnosticsSelector: '[aria-label="Runtime diagnostics evidence"]',
+    lastGoodText: `Last good: ${generation}`,
+  });
+  const diagnostics = boundedVerticalBounds(layout.diagnostics, 'compile-error diagnostics');
+  const lastGood = boundedVerticalBounds(layout.lastGood, 'compile-error last-good');
+  const diagnosticsVisible = layout.diagnosticsVisible === true
+    && diagnostics.top >= 0
+    && diagnostics.bottom <= diagnostics.viewportHeight;
+  const lastGoodVisible = layout.lastGoodVisible === true
+    && lastGood.top >= 0
+    && lastGood.bottom <= lastGood.viewportHeight;
+  if (!diagnosticsVisible || !lastGoodVisible) {
+    throw new Error('Runtime capture compile-error landmarks were outside the desktop viewport.');
+  }
+  return Object.freeze({ diagnostics, diagnosticsVisible, lastGood, lastGoodVisible });
+};
+
 const restore = async (path, contents) => {
   await writeFile(path, contents, 'utf8');
   if (await readFile(path, 'utf8') !== contents) throw new Error(`Capture fixture did not restore ${basename(path)}.`);
@@ -445,7 +517,18 @@ const capture = async (outputs) => {
     const appVisibleAfter = true;
     await screenshot(page, outputs.hmrAfter);
 
-    const lastGoodGenerationDuringError = await identity.getAttribute('data-runtime-generation');
+    const compactRunId = await runSurface(page, 'mcp.recent_edits', {});
+    await selectRun(page, compactRunId);
+    await page.waitForFunction(
+      (selector) => globalThis.document.querySelector(selector) === null,
+      '.runtime-stage .mcp-app-preview iframe',
+      { timeout: browserTimeout },
+    );
+    const compactRunGeneration = await identity.getAttribute('data-runtime-generation');
+    if (compactRunGeneration === null || compactRunGeneration === '') {
+      throw new Error('Runtime capture compact run omitted its generation.');
+    }
+    const lastGoodGenerationDuringError = compactRunGeneration;
     const historyBeforeError = await history.count();
     await page.getByRole('tab', { name: 'Diagnostics', exact: true }).click();
     await writeFile(fixture.serverComponentSource, `${editedServer}\nconst = ;\n`, 'utf8');
@@ -458,10 +541,12 @@ const capture = async (outputs) => {
     );
     const generationDuringError = await identity.getAttribute('data-runtime-generation');
     const retainedRun = await currentRunId(page);
+    const compileErrorHistoryUnchanged = await history.count() === historyBeforeError;
     const lastGoodPreserved = generationDuringError === lastGoodGenerationDuringError
-      && retainedRun === runAfter
-      && await history.count() === historyBeforeError;
+      && retainedRun === compactRunId
+      && compileErrorHistoryUnchanged;
     if (!lastGoodPreserved) throw new Error('Runtime source-build failure did not retain the exact last-good run.');
+    const compileErrorLayout = await captureCompileErrorLayout(page, compactRunGeneration);
     await screenshot(page, outputs.compileError);
 
     await writeFile(fixture.serverComponentSource, editedServer, 'utf8');
@@ -566,6 +651,17 @@ const capture = async (outputs) => {
       appVisibleAfter,
       appVisibleBefore,
       appVisibleRecovered,
+      compactRunGeneration,
+      compactRunId,
+      compileErrorDiagnosticsVisible: compileErrorLayout.diagnosticsVisible,
+      compileErrorGeneration: generationDuringError,
+      compileErrorHistoryUnchanged,
+      compileErrorLastGoodVisible: compileErrorLayout.lastGoodVisible,
+      compileErrorLayout: Object.freeze({
+        diagnostics: compileErrorLayout.diagnostics,
+        lastGood: compileErrorLayout.lastGood,
+      }),
+      compileErrorRunId: retainedRun,
       documentTimeOriginAfter,
       documentTimeOriginBefore,
       desktopControlColumns,
