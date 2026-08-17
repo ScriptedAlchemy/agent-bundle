@@ -96,16 +96,18 @@ const appAccess = (close: () => Promise<void>) => Object.freeze({
 const runtimeFactory = (
   attachApp: () => Promise<ReturnType<typeof appAccess>>,
   options: Readonly<{
+    readonly client?: Parameters<typeof createRuntimeAppBridgeFactory>[0]['client'];
     readonly installedHandlers?: Parameters<typeof createRuntimeAppBridgeFactory>[0]['installedHandlers'];
+    readonly policy?: Readonly<{ readonly bindingId: string; readonly snapshot: Readonly<{ readonly allow: string; readonly approvedPermissions: Readonly<Record<string, unknown>>; readonly revision: number; readonly warnings: readonly unknown[] }> }>;
     readonly requestConsent?: Parameters<typeof createRuntimeAppBridgeFactory>[0]['requestConsent'];
   }> = {},
 ): RuntimeAppBridgeFactory => {
-  const policy = Object.freeze({
+  const policy = options.policy ?? Object.freeze({
     bindingId: 'runtime-binding',
     snapshot: Object.freeze({ allow: '', approvedPermissions: Object.freeze({}), revision: 1, warnings: Object.freeze([]) }),
   });
   return createRuntimeAppBridgeFactory({
-    client: Object.freeze({
+    client: options.client ?? Object.freeze({
       abandonRuntimeConsent: () => undefined,
       closeRuntime: async () => undefined,
       createRuntimeConsent: async () => Object.freeze({
@@ -265,6 +267,127 @@ it('rejects noncanonical links and noncanonical bounded downloads before consent
     expect(consentRequests).toBe(0);
     expect(opened).toEqual([]);
     expect(downloads).toEqual([]);
+    await factory.close();
+  });
+});
+
+it('aborts valid runtime App side effects before a late consent decision or host action', async () => {
+  await withBrowser(async (browser) => {
+    const policy = Object.freeze({
+      bindingId: 'runtime-binding',
+      snapshot: Object.freeze({ allow: '', approvedPermissions: Object.freeze({}), revision: 1, warnings: Object.freeze([]) }),
+    });
+    const created = (id: string) => Object.freeze({
+      challenge: Object.freeze({ expiresAt: 10, id, request: Object.freeze({}) }),
+      documentPolicy: policy.snapshot,
+    });
+    const decided = Object.freeze({
+      documentPolicy: policy.snapshot,
+      grant: Object.freeze({ authorizationId: 'authorization-a' }),
+    });
+    const withAbort = <Value>(held: ReturnType<typeof deferred<Value>>, signal: AbortSignal | undefined): Promise<Value> => new Promise((resolve, reject) => {
+      signal?.addEventListener('abort', () => reject(signal.reason), { once: true });
+      void held.promise.then(resolve, reject);
+    });
+    const createSignals: Array<AbortSignal | undefined> = [];
+    const decisionSignals: Array<AbortSignal | undefined> = [];
+    const promptSignals: Array<AbortSignal | undefined> = [];
+    const abandoned: string[] = [];
+    const opened: string[] = [];
+    const downloads: unknown[] = [];
+    const displays: string[] = [];
+    let nextConsent = 0;
+    let holdCreate = false;
+    let holdDecision = false;
+    let prompt = deferred<'allow-once' | 'deny'>();
+    const createdHold = deferred<ReturnType<typeof created>>();
+    const decisionHold = deferred<typeof decided>();
+    const factory = runtimeFactory(
+      async () => appAccess(async () => undefined),
+      {
+        client: Object.freeze({
+          abandonRuntimeConsent: (_bindingId: string, consentId: string) => { abandoned.push(consentId); },
+          closeRuntime: async () => undefined,
+          createRuntimeConsent: async (_bindingId: string, _request: unknown, signal?: AbortSignal) => {
+            createSignals.push(signal);
+            if (holdCreate) return withAbort(createdHold, signal);
+            return created(`consent-${++nextConsent}`);
+          },
+          currentDocumentPolicy: () => policy,
+          decideRuntimeConsent: async (_bindingId: string, _consentId: string, _decision: 'allow-once' | 'deny', signal?: AbortSignal) => {
+            decisionSignals.push(signal);
+            if (holdDecision) return withAbort(decisionHold, signal);
+            return decided;
+          },
+        }) as never,
+        installedHandlers: Object.freeze({
+          downloadFile: async (candidate: McpAppValidatedDownload) => { downloads.push(candidate); },
+          openExternalLink: async (url: string) => { opened.push(url); },
+          requestDisplayMode: async (mode: 'inline' | 'fullscreen') => { displays.push(mode); return mode; },
+        }),
+        requestConsent: async (_challenge, signal?: AbortSignal) => {
+          promptSignals.push(signal);
+          return withAbort(prompt, signal);
+        },
+        policy,
+      },
+    );
+    const bridge = await invokeBridgeFactory(factory, browser) as unknown as Readonly<{
+      readonly ondownloadfile?: (params: Readonly<{ readonly contents: unknown }>, extra: Readonly<{ readonly signal: AbortSignal }>) => Promise<Readonly<{ readonly isError?: true }>>;
+      readonly onopenlink?: (params: Readonly<{ readonly url: unknown }>, extra: Readonly<{ readonly signal: AbortSignal }>) => Promise<Readonly<{ readonly isError?: true }>>;
+      readonly onrequestdisplaymode?: (params: Readonly<{ readonly mode: 'inline' | 'fullscreen' | 'pip' }>, extra: Readonly<{ readonly signal: AbortSignal }>) => Promise<Readonly<{ readonly mode: 'inline' | 'fullscreen' | 'pip' }>>;
+    }>;
+    if (bridge.onopenlink === undefined || bridge.ondownloadfile === undefined || bridge.onrequestdisplaymode === undefined) {
+      throw new Error('Expected side-effect handlers.');
+    }
+
+    for (const index of [0, 1, 2] as const) {
+      const abort = new AbortController();
+      prompt = deferred<'allow-once' | 'deny'>();
+      const pending = index === 0
+        ? bridge.onopenlink({ url: 'https://weather.example/forecast' }, Object.freeze({ signal: abort.signal }))
+        : index === 1
+          ? bridge.ondownloadfile({ contents: [{ text: 'forecast', type: 'text' }] }, Object.freeze({ signal: abort.signal }))
+          : bridge.onrequestdisplaymode({ mode: 'fullscreen' }, Object.freeze({ signal: abort.signal }));
+      await eventually(() => promptSignals.at(-1) === abort.signal);
+      const reason = new DOMException(`Cancelled side effect ${index}.`, 'AbortError');
+      abort.abort(reason);
+      await expect(pending).rejects.toBe(reason);
+      prompt.resolve('allow-once');
+      await Promise.resolve();
+      await Promise.resolve();
+    }
+    expect(createSignals).toEqual([expect.any(AbortSignal), expect.any(AbortSignal), expect.any(AbortSignal)]);
+    expect(decisionSignals).toEqual([]);
+    expect(abandoned).toEqual(['consent-1', 'consent-2', 'consent-3']);
+    expect(opened).toEqual([]);
+    expect(downloads).toEqual([]);
+    expect(displays).toEqual([]);
+
+    holdCreate = true;
+    const createAbort = new AbortController();
+    const heldCreate = bridge.onopenlink({ url: 'https://weather.example/forecast' }, Object.freeze({ signal: createAbort.signal }));
+    await eventually(() => createSignals.at(-1) === createAbort.signal);
+    const createReason = new DOMException('Cancelled creation.', 'AbortError');
+    createAbort.abort(createReason);
+    await expect(heldCreate).rejects.toBe(createReason);
+    createdHold.resolve(created('consent-late'));
+    await Promise.resolve();
+    holdCreate = false;
+
+    holdDecision = true;
+    prompt = deferred<'allow-once' | 'deny'>();
+    prompt.resolve('allow-once');
+    const decisionAbort = new AbortController();
+    const heldDecision = bridge.onopenlink({ url: 'https://weather.example/forecast' }, Object.freeze({ signal: decisionAbort.signal }));
+    await eventually(() => decisionSignals.at(-1) === decisionAbort.signal);
+    const decisionReason = new DOMException('Cancelled decision.', 'AbortError');
+    decisionAbort.abort(decisionReason);
+    await expect(heldDecision).rejects.toBe(decisionReason);
+    decisionHold.resolve(decided);
+    await Promise.resolve();
+    expect(abandoned).toEqual(['consent-1', 'consent-2', 'consent-3', 'consent-4']);
+    expect(opened).toEqual([]);
     await factory.close();
   });
 });

@@ -341,6 +341,7 @@ const sideEffectConsent = async (
   capability: McpAppConsentCapability,
   details: McpAppJsonValue,
   summary: string,
+  signal?: AbortSignal,
 ): Promise<boolean> => {
   const request: McpAppConsentRequest = Object.freeze({
     actionFingerprint: consentFingerprint(capability),
@@ -349,10 +350,14 @@ const sideEffectConsent = async (
     scope: 'action',
     summary,
   });
-  const created = await options.client.createRuntimeConsent(preview.binding.id, request);
+  throwIfAborted(signal);
+  const created = await options.client.createRuntimeConsent(preview.binding.id, request, signal);
   try {
-    const decision = await options.requestConsent(created.challenge);
-    const resolved = await options.client.decideRuntimeConsent(preview.binding.id, created.challenge.id, decision);
+    throwIfAborted(signal);
+    const decision = await options.requestConsent(created.challenge, signal);
+    throwIfAborted(signal);
+    const resolved = await options.client.decideRuntimeConsent(preview.binding.id, created.challenge.id, decision, signal);
+    throwIfAborted(signal);
     return resolved.grant !== undefined;
   } finally {
     options.client.abandonRuntimeConsent(preview.binding.id, created.challenge.id);
@@ -575,19 +580,21 @@ export const createRuntimeAppBridgeFactory = (options: RuntimeAppBridgeOptions):
           }),
         }) as McpAppBridgeMessage);
       });
-      bridge.onopenlink = async ({ url }) => {
+      bridge.onopenlink = async ({ url }, extra) => {
         const candidate = validateMcpAppExternalUrl(url);
         if (candidate === undefined || options.installedHandlers.openExternalLink === undefined) return { isError: true };
-        const approved = await sideEffectConsent(options, preview, 'open-external-link', Object.freeze({ url: candidate }), 'Open MCP App link');
+        const approved = await sideEffectConsent(options, preview, 'open-external-link', Object.freeze({ url: candidate }), 'Open MCP App link', extra.signal);
         if (!approved) return { isError: true };
+        throwIfAborted(extra.signal);
         await options.installedHandlers.openExternalLink(candidate);
         return {};
       };
-      bridge.ondownloadfile = async ({ contents }) => {
+      bridge.ondownloadfile = async ({ contents }, extra) => {
         const candidate = validateMcpAppDownloadContents(contents);
         if (candidate === undefined || options.installedHandlers.downloadFile === undefined) return { isError: true };
-        const approved = await sideEffectConsent(options, preview, 'download-file', candidate.contents, 'Download MCP App file');
+        const approved = await sideEffectConsent(options, preview, 'download-file', candidate.contents, 'Download MCP App file', extra.signal);
         if (!approved) return { isError: true };
+        throwIfAborted(extra.signal);
         await options.installedHandlers.downloadFile(candidate);
         return {};
       };
@@ -597,8 +604,9 @@ export const createRuntimeAppBridgeFactory = (options: RuntimeAppBridgeOptions):
         : 'inline';
       const protectedDisplayHandler: DisplayHandler = async ({ mode }, extra) => {
         if (!validDisplayMode(mode) || options.installedHandlers.requestDisplayMode === undefined) return { mode: safeDisplayMode };
-        const approved = await sideEffectConsent(options, preview, 'request-display-mode', Object.freeze({ mode }), 'Change MCP App display mode');
+        const approved = await sideEffectConsent(options, preview, 'request-display-mode', Object.freeze({ mode }), 'Change MCP App display mode', extra?.signal);
         if (!approved) return { mode: safeDisplayMode };
+        throwIfAborted(extra?.signal);
         const applied = await options.installedHandlers.requestDisplayMode(mode);
         if (!validDisplayMode(applied)) return { mode: safeDisplayMode };
         const rendered = displayFallback === undefined
