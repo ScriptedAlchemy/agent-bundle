@@ -20,6 +20,7 @@ const outputFlags = Object.freeze([
 ]);
 
 let temporaryOutputSequence = 0;
+const cleanupFailureSteps = new WeakMap();
 
 const requiredPath = (value, flag) => {
   if (typeof value !== 'string' || value.trim() === '') throw new Error(`${flag} requires a nonempty output path.`);
@@ -97,9 +98,23 @@ export const cleanupCaptureResources = async ({ browser, fixture, restores }) =>
 
 export const captureFailureAfterCleanup = (primaryFailure, cleanup) => {
   if (cleanup.failedSteps.length === 0) return primaryFailure;
-  const cleanupFailure = new Error(`Capture cleanup failed: ${cleanup.failedSteps.join(', ')}.`);
+  const failedSteps = Object.freeze(cleanup.failedSteps.filter((step) => /^(?:restore-[1-3]|browser\.close|fixture\.close)$/u.test(step)).slice(0, 5));
+  const cleanupFailure = new Error(`Capture cleanup failed: ${failedSteps.join(', ')}.`);
+  cleanupFailureSteps.set(cleanupFailure, failedSteps);
   if (primaryFailure === undefined) return cleanupFailure;
   return new AggregateError([primaryFailure, cleanupFailure], primaryFailure instanceof Error ? primaryFailure.message : 'Runtime capture failed.');
+};
+
+export const formatCaptureFailure = (failure) => {
+  if (failure instanceof AggregateError && failure.errors.length === 2) {
+    const [primaryFailure, cleanupFailure] = failure.errors;
+    const failedSteps = cleanupFailure instanceof Error ? cleanupFailureSteps.get(cleanupFailure) : undefined;
+    if (failedSteps !== undefined) {
+      const primaryMessage = primaryFailure instanceof Error ? primaryFailure.message : String(primaryFailure);
+      return `${primaryMessage}\nCapture cleanup failed: ${failedSteps.join(', ')}.`;
+    }
+  }
+  return failure instanceof Error ? failure.message : String(failure);
 };
 
 const attributes = async (identity) => identity.evaluate((element) => Object.freeze(Object.fromEntries(
@@ -595,7 +610,7 @@ const run = async () => {
 
 if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   run().catch((error) => {
-    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+    process.stderr.write(`${formatCaptureFailure(error)}\n`);
     process.exitCode = 1;
   });
 }

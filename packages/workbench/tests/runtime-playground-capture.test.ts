@@ -7,7 +7,7 @@ import { promisify } from 'node:util';
 import { expect, test } from '@rstest/core';
 
 // @ts-expect-error The executable capture script is intentionally imported as the cleanup-boundary test seam.
-import { atomically, cleanupCaptureResources, captureFailureAfterCleanup } from '../scripts/capture-runtime-playground.mjs';
+import { atomically, cleanupCaptureResources, captureFailureAfterCleanup, formatCaptureFailure } from '../scripts/capture-runtime-playground.mjs';
 
 const execFile = promisify(executeFile);
 const workspaceRoot = process.cwd();
@@ -99,6 +99,7 @@ test('settles every capture cleanup action without masking the primary failure',
         close: async () => {
           fixtureCloseCount += 1;
           order.push('fixture.close');
+          throw new Error('fixture close rejected with fixture-secret');
         },
       },
       restores: [
@@ -114,14 +115,19 @@ test('settles every capture cleanup action without masking the primary failure',
 
     expect(order).toEqual(['restore-one', 'restore-two', 'browser.close', 'fixture.close']);
     expect(fixtureCloseCount).toBe(1);
-    expect(cleanup).toEqual({ attemptedRestores: 2, failedSteps: ['restore-1', 'browser.close'] });
+    expect(cleanup).toEqual({ attemptedRestores: 2, failedSteps: ['restore-1', 'browser.close', 'fixture.close'] });
     await expect(stat(temporary)).rejects.toMatchObject({ code: 'ENOENT' });
 
     const failure = captureFailureAfterCleanup(primary, cleanup);
     expect(failure).toBeInstanceOf(AggregateError);
     expect(failure).toMatchObject({ message: 'primary capture failed' });
     expect((failure as AggregateError).errors[0]).toBe(primary);
-    expect((failure as AggregateError).errors[1]).toMatchObject({ message: 'Capture cleanup failed: restore-1, browser.close.' });
+    expect((failure as AggregateError).errors[1]).toMatchObject({ message: 'Capture cleanup failed: restore-1, browser.close, fixture.close.' });
+    const formatted = formatCaptureFailure(failure);
+    expect(formatted).toBe('primary capture failed\nCapture cleanup failed: restore-1, browser.close, fixture.close.');
+    expect(formatted).not.toContain('restore one rejected');
+    expect(formatted).not.toContain('browser close rejected');
+    expect(formatted).not.toContain('fixture-secret');
   } finally {
     await rm(outputRoot, { force: true, recursive: true });
   }
@@ -139,7 +145,7 @@ test('captures identity-backed HMR, last-good, recovery, and responsive browser 
     recovered: join(outputRoot, 'recovered.png'),
   });
   try {
-    await execFile(process.execPath, [captureScript,
+    const { stdout } = await execFile(process.execPath, [captureScript,
       '--desktop', outputs.desktop,
       '--mobile', outputs.mobile,
       '--hmr-before', outputs.hmrBefore,
@@ -168,6 +174,14 @@ test('captures identity-backed HMR, last-good, recovery, and responsive browser 
     ]);
 
     const evidence = JSON.parse(await readFile(outputs.evidence, 'utf8')) as CaptureEvidence;
+    const cliEvidence = JSON.parse(stdout.trim().split(/\r?\n/u).at(-1) ?? '');
+    expect(cliEvidence).toMatchObject({
+      appVisibleAfter: true,
+      appVisibleBefore: true,
+      appVisibleRecovered: true,
+      hmrWithoutReload: true,
+      sandboxOpaqueOrigin: true,
+    });
     expect(evidence).toMatchObject({
       appMarkerVisible: true,
       appRefreshPreservedDocument: true,
