@@ -204,3 +204,22 @@ it('does not deliver a stream callback after its shared generation signal aborts
   await expect(stream.done).resolves.toBeUndefined();
   expect(received).toEqual([]);
 });
+
+it('stops before the next frame when a callback aborts within one buffered chunk', async () => {
+  const bytes = new TextEncoder().encode(`${JSON.stringify(record)}\n${JSON.stringify({ ...record, sequence: 2 })}\n`);
+  const client = clientFor(ndjson([bytes]));
+  const controller = new AbortController();
+  const received: number[] = [];
+  const stream = client.stream({
+    afterSequence: 0,
+    onMessage: (message) => {
+      if (!('sequence' in message)) return;
+      received.push(message.sequence);
+      controller.abort();
+    },
+    signal: controller.signal,
+  });
+
+  await expect(stream.done).resolves.toBeUndefined();
+  expect(received).toEqual([1]);
+});

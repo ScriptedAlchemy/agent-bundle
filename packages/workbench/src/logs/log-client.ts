@@ -242,6 +242,7 @@ export class LogClient {
       }
       frameParts.length = 0;
       frameBytes = 0;
+      if (signal.aborted) return;
       const line = decoder.decode(bytes).trim();
       if (line.length === 0) return;
       const message = messageFor(line);
