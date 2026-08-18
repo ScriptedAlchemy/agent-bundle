@@ -1,5 +1,5 @@
-import { link, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { link, lstat, mkdir, mkdtemp, open, readFile, realpath, rm } from 'node:fs/promises';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 
 import { digest, stableJson } from '../core/digest.ts';
 import { parseJsonWithoutDuplicateKeys, snapshotStrictJsonValue, type JsonValue } from '../core/strict-json.ts';
@@ -88,6 +88,8 @@ export interface NativePlaygroundRunResult {
 export interface NativePlaygroundServiceOptions {
   /** Test-only storage override; production snapshots live beside retained epoch metadata. */
   readonly catalogDirectory?: string;
+  /** @internal Fault-injection seam for durable epoch-sidecar publication. */
+  readonly catalogStorage?: NativePlaygroundCatalogStorage;
   /** Test seams preserve the same production discovery and harness contracts. */
   readonly discover?: (projectRoot: string) => Promise<readonly DiscoveredEvalSuite[]>;
   readonly environment?: Readonly<NodeJS.ProcessEnv>;
@@ -97,6 +99,27 @@ export interface NativePlaygroundServiceOptions {
     readonly codexRun?: CodexCommandRunner;
   }>;
   readonly planFixture?: (options: { readonly baseDir: string; readonly fixture: EvalCase['fixture'] }) => Promise<EvalFixturePlan>;
+  readonly projectRoot: string;
+}
+
+export interface NativePlaygroundCatalogStorage {
+  readonly link: typeof link;
+  readonly mkdir: typeof mkdir;
+  readonly open: typeof open;
+  readonly remove: typeof rm;
+}
+
+/**
+ * Publication-time authority. Artifact publication calls this before flipping
+ * active epoch metadata, so an unvisited epoch never lazily observes a later
+ * authored eval configuration.
+ */
+export interface NativePlaygroundCatalogPublicationOptions {
+  readonly catalogDirectory?: string;
+  readonly catalogStorage?: NativePlaygroundCatalogStorage;
+  readonly discover?: NativePlaygroundServiceOptions['discover'];
+  readonly epoch: ArtifactEpoch;
+  readonly planFixture?: NativePlaygroundServiceOptions['planFixture'];
   readonly projectRoot: string;
 }
 
@@ -113,13 +136,32 @@ interface CatalogSelection {
   readonly suiteDir: string;
 }
 
+/** Persisted paths are deliberately relative to their owning project/suite. */
+interface PersistedFixturePlan {
+  readonly digest: string;
+  readonly entries: readonly EvalFixturePlan['entries'][number][];
+  readonly git: boolean;
+  readonly sourcePath: string;
+}
+
+interface PersistedCatalogSelection {
+  readonly caseId: string;
+  readonly caseLabel: string;
+  readonly evalCase: EvalCase;
+  readonly fixtureId: string;
+  readonly fixtureLabel: string;
+  readonly fixturePlan: PersistedFixturePlan;
+  readonly host: NativePlaygroundHost;
+  readonly modelPinId: string;
+  readonly modelPinLabel: string;
+  readonly suiteDir: string;
+}
+
 interface CatalogSnapshot {
   readonly artifact: Pick<PreparedEvalArtifact, 'binding' | 'root'>;
   readonly catalog: NativePlaygroundCatalog;
   readonly selections: ReadonlyMap<string, CatalogSelection>;
 }
-
-type PersistedCatalogSelection = CatalogSelection;
 
 interface PersistedCatalogSnapshot {
   readonly epochId: string;
@@ -142,9 +184,48 @@ const nativeHosts = new Set<NativePlaygroundHost>(['claude', 'codex']);
 const catalogSnapshotVersion = 1 as const;
 const maximumCatalogSelections = 256;
 const maximumFixtureEntries = 4_096;
-const maximumSnapshotDepth = 16;
 const maximumSnapshotStringLength = 16_384;
 const safeEpochSegment = /^[a-z0-9][a-z0-9._-]*$/iu;
+const safeDigestText = /^[a-z0-9._:-]+$/iu;
+
+const isErrno = (error: unknown, code: string): boolean =>
+  typeof error === 'object' && error !== null && 'code' in error && error.code === code;
+
+const isContainedOrEqual = (root: string, candidate: string): boolean => {
+  const path = relative(root, candidate);
+  return path === '' || (!isAbsolute(path) && path !== '..' && !path.startsWith('..\\') && !path.startsWith('../'));
+};
+
+const isSafeRelativePath = (value: JsonValue | undefined, allowCurrentDirectory = false): value is string =>
+  nonemptySnapshotText(value) &&
+  !isAbsolute(value) &&
+  (allowCurrentDirectory && value === '.' ||
+    value !== '.' &&
+    !value.split(/[\\/]/u).some((part) => part.length === 0 || part === '.' || part === '..'));
+
+const relativePathInside = (root: string, path: string, allowCurrentDirectory = false): string => {
+  const normalizedRoot = resolve(root);
+  const candidate = resolve(path);
+  if (!isContainedOrEqual(normalizedRoot, candidate)) {
+    throw new Error('Native Playground catalog snapshot contains an invalid path.');
+  }
+  const value = relative(normalizedRoot, candidate) || '.';
+  if (!isSafeRelativePath(value, allowCurrentDirectory)) {
+    throw new Error('Native Playground catalog snapshot contains an invalid path.');
+  }
+  return value;
+};
+
+const resolveContainedPath = (root: string, value: string, allowCurrentDirectory = false): string => {
+  if (!isSafeRelativePath(value, allowCurrentDirectory)) {
+    throw new Error('Native Playground catalog snapshot is invalid.');
+  }
+  const candidate = resolve(root, value);
+  if (!isContainedOrEqual(resolve(root), candidate)) {
+    throw new Error('Native Playground catalog snapshot is invalid.');
+  }
+  return candidate;
+};
 
 const opaqueId = (epoch: ArtifactEpoch, kind: string, content: unknown): string =>
   digest({
@@ -282,16 +363,6 @@ const selectionKey = (selection: NativePlaygroundCatalogSelection): string =>
 const isRecord = (value: JsonValue): value is Readonly<Record<string, JsonValue>> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
-const boundedJson = (value: JsonValue, depth = 0): boolean => {
-  if (depth > maximumSnapshotDepth) return false;
-  if (typeof value === 'string') return value.length <= maximumSnapshotStringLength;
-  if (value === null || typeof value === 'boolean' || typeof value === 'number') return true;
-  if (Array.isArray(value)) return value.length <= maximumFixtureEntries && value.every((entry) => boundedJson(entry, depth + 1));
-  const entries = Object.entries(value);
-  return entries.length <= maximumFixtureEntries && entries.every(([key, entry]) =>
-    key.length <= 256 && boundedJson(entry, depth + 1));
-};
-
 const nonemptySnapshotText = (value: JsonValue | undefined): value is string =>
   typeof value === 'string' && value.length > 0 && value.length <= maximumSnapshotStringLength;
 
@@ -301,34 +372,94 @@ const exactKeys = (value: Readonly<Record<string, JsonValue>>, keys: readonly st
   return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
 };
 
+const activationEvidence = (value: JsonValue | undefined): value is 'inferred' | 'observed' | 'unavailable' =>
+  value === 'inferred' || value === 'observed' || value === 'unavailable';
+
+const safeInteger = (value: JsonValue | undefined): value is number =>
+  typeof value === 'number' && Number.isSafeInteger(value);
+
+const persistedAssertion = (value: JsonValue): EvalCase['assertions'][number] | undefined => {
+  if (!isRecord(value) || !nonemptySnapshotText(value.id) || !activationEvidence(value.minimumEvidence) || typeof value.kind !== 'string') return undefined;
+  if (value.kind === 'exit-code' && exactKeys(value, ['expected', 'id', 'kind', 'minimumEvidence']) && safeInteger(value.expected)) {
+    return Object.freeze({ expected: value.expected, id: value.id, kind: value.kind, minimumEvidence: value.minimumEvidence });
+  }
+  if (value.kind === 'mcp-call' && exactKeys(value, ['atLeast', 'id', 'kind', 'minimumEvidence', 'server', 'tool']) &&
+    safeInteger(value.atLeast) && value.atLeast >= 0 && nonemptySnapshotText(value.server) && nonemptySnapshotText(value.tool)) {
+    return Object.freeze({ atLeast: value.atLeast, id: value.id, kind: value.kind, minimumEvidence: value.minimumEvidence, server: value.server, tool: value.tool });
+  }
+  if (value.kind === 'no-skill-activation' &&
+    ((exactKeys(value, ['id', 'kind', 'minimumEvidence'])) || (exactKeys(value, ['id', 'kind', 'minimumEvidence', 'skill']) && nonemptySnapshotText(value.skill)))) {
+    return Object.freeze({ ...(value.skill === undefined ? {} : { skill: value.skill as string }), id: value.id, kind: value.kind, minimumEvidence: value.minimumEvidence });
+  }
+  if (value.kind === 'outcome' && exactKeys(value, ['id', 'kind', 'minimumEvidence', 'script']) && nonemptySnapshotText(value.script)) {
+    return Object.freeze({ id: value.id, kind: value.kind, minimumEvidence: value.minimumEvidence, script: value.script });
+  }
+  if (value.kind === 'skill-activation' && exactKeys(value, ['id', 'kind', 'minimumEvidence', 'skill']) && nonemptySnapshotText(value.skill)) {
+    return Object.freeze({ id: value.id, kind: value.kind, minimumEvidence: value.minimumEvidence, skill: value.skill });
+  }
+  return undefined;
+};
+
+const persistedEvalCase = (value: JsonValue): EvalCase | undefined => {
+  if (!isRecord(value) || !exactKeys(value, ['assertions', 'digest', 'fixture', 'hosts', 'id', 'invocation', 'prompt', 'trials']) ||
+    !Array.isArray(value.assertions) || value.assertions.length > maximumFixtureEntries ||
+    !nonemptySnapshotText(value.digest) || !nonemptySnapshotText(value.id) || !nonemptySnapshotText(value.prompt) ||
+    !safeInteger(value.trials) || value.trials < 1 || !isRecord(value.fixture) || !isRecord(value.hosts) || !isRecord(value.invocation)) return undefined;
+  if (!exactKeys(value.fixture, ['git', 'include', 'path']) || typeof value.fixture.git !== 'boolean' ||
+    !Array.isArray(value.fixture.include) || value.fixture.include.length > maximumFixtureEntries ||
+    !value.fixture.include.every(nonemptySnapshotText) || !isSafeRelativePath(value.fixture.path, true)) return undefined;
+  const hostEntries = Object.entries(value.hosts);
+  if (hostEntries.length > maximumFixtureEntries || hostEntries.some(([host, binding]) => !nonemptySnapshotText(host) ||
+    !isRecord(binding) || !exactKeys(binding, ['model']) || !nonemptySnapshotText(binding.model))) return undefined;
+  const invocation = value.invocation;
+  if (!((invocation.mode === 'automatic' || invocation.mode === 'none') && exactKeys(invocation, ['mode'])) &&
+    !(invocation.mode === 'explicit' && exactKeys(invocation, ['mode', 'skill']) && nonemptySnapshotText(invocation.skill))) return undefined;
+  const assertions = value.assertions.map(persistedAssertion);
+  if (assertions.some((assertion) => assertion === undefined)) return undefined;
+  return Object.freeze({
+    assertions: Object.freeze(assertions as EvalCase['assertions'][number][]),
+    digest: value.digest,
+    fixture: Object.freeze({ git: value.fixture.git, include: Object.freeze([...value.fixture.include] as string[]), path: value.fixture.path }),
+    hosts: Object.freeze(Object.fromEntries(hostEntries.map(([host, binding]) => [host, Object.freeze({ model: (binding as Readonly<Record<string, string>>).model })]))),
+    id: value.id,
+    invocation: Object.freeze(invocation.mode === 'explicit' ? { mode: 'explicit' as const, skill: invocation.skill as string } : { mode: invocation.mode }),
+    prompt: value.prompt,
+    trials: value.trials,
+  });
+};
+
+const persistedFixturePlan = (value: JsonValue): PersistedFixturePlan | undefined => {
+  if (!isRecord(value) || !exactKeys(value, ['digest', 'entries', 'git', 'sourcePath']) ||
+    !nonemptySnapshotText(value.digest) || typeof value.git !== 'boolean' || !isSafeRelativePath(value.sourcePath, true) ||
+    !Array.isArray(value.entries) || value.entries.length > maximumFixtureEntries) return undefined;
+  const entries = value.entries.map((entry) => {
+    if (!isRecord(entry) || !exactKeys(entry, ['executable', 'path', 'sha256']) || typeof entry.executable !== 'boolean' ||
+      !isSafeRelativePath(entry.path) || !nonemptySnapshotText(entry.sha256) || !safeDigestText.test(entry.sha256)) return undefined;
+    return Object.freeze({ executable: entry.executable, path: entry.path, sha256: entry.sha256 });
+  });
+  if (entries.some((entry) => entry === undefined) || new Set(entries.map((entry) => entry?.path)).size !== entries.length) return undefined;
+  return Object.freeze({ digest: value.digest, entries: Object.freeze(entries as EvalFixturePlan['entries'][number][]), git: value.git, sourcePath: value.sourcePath });
+};
+
 const persistedSelection = (value: JsonValue): PersistedCatalogSelection | undefined => {
   if (!isRecord(value) || !exactKeys(value, [
     'caseId', 'caseLabel', 'evalCase', 'fixtureId', 'fixtureLabel', 'fixturePlan', 'host', 'modelPinId', 'modelPinLabel', 'suiteDir',
-  ])) return undefined;
-  if (
-    !nonemptySnapshotText(value.caseId) || !nonemptySnapshotText(value.caseLabel) ||
-    !nonemptySnapshotText(value.fixtureId) || !nonemptySnapshotText(value.fixtureLabel) ||
-    !nonemptySnapshotText(value.modelPinId) || !nonemptySnapshotText(value.modelPinLabel) ||
-    !nonemptySnapshotText(value.suiteDir) ||
-    (value.host !== 'claude' && value.host !== 'codex') ||
-    !isRecord(value.evalCase) || !isRecord(value.fixturePlan) ||
-    !boundedJson(value.evalCase) || !boundedJson(value.fixturePlan)
-  ) return undefined;
-  const evalCase = value.evalCase as unknown as EvalCase;
-  const fixturePlan = value.fixturePlan as unknown as EvalFixturePlan;
-  if (
-    !nonemptySnapshotText((evalCase as unknown as Record<string, JsonValue>).digest) ||
-    !Array.isArray(fixturePlan.entries) || fixturePlan.entries.length > maximumFixtureEntries ||
-    !nonemptySnapshotText(fixturePlan.digest) || !nonemptySnapshotText(fixturePlan.sourcePath) ||
-    typeof fixturePlan.git !== 'boolean'
-  ) return undefined;
+  ]) ||
+  !nonemptySnapshotText(value.caseId) || !nonemptySnapshotText(value.caseLabel) ||
+  !nonemptySnapshotText(value.fixtureId) || !nonemptySnapshotText(value.fixtureLabel) ||
+  !nonemptySnapshotText(value.modelPinId) || !nonemptySnapshotText(value.modelPinLabel) ||
+  !isSafeRelativePath(value.suiteDir, true) ||
+  (value.host !== 'claude' && value.host !== 'codex')) return undefined;
+  const evalCase = persistedEvalCase(value.evalCase);
+  const fixturePlan = persistedFixturePlan(value.fixturePlan);
+  if (evalCase === undefined || fixturePlan === undefined || evalCase.hosts[value.host] === undefined) return undefined;
   return Object.freeze({
     caseId: value.caseId,
     caseLabel: value.caseLabel,
-    evalCase: Object.freeze(evalCase),
+    evalCase,
     fixtureId: value.fixtureId,
     fixtureLabel: value.fixtureLabel,
-    fixturePlan: Object.freeze(fixturePlan),
+    fixturePlan,
     host: value.host,
     modelPinId: value.modelPinId,
     modelPinLabel: value.modelPinLabel,
@@ -344,6 +475,7 @@ const persistedSelection = (value: JsonValue): PersistedCatalogSelection | undef
  */
 export class NativePlaygroundService {
   readonly #catalogDirectory: string | undefined;
+  readonly #catalogStorage: NativePlaygroundCatalogStorage;
   readonly #catalogs = new Map<string, Promise<CatalogSnapshot>>();
   readonly #controllers = new Set<AbortController>();
   readonly #runs = new Set<Promise<NativePlaygroundRunResult>>();
@@ -358,6 +490,7 @@ export class NativePlaygroundService {
 
   constructor(options: NativePlaygroundServiceOptions) {
     this.#catalogDirectory = options.catalogDirectory;
+    this.#catalogStorage = options.catalogStorage ?? Object.freeze({ link, mkdir, open, remove: rm });
     this.#projectRoot = options.projectRoot;
     this.#environment = options.environment;
     this.#native = options.native;
@@ -508,7 +641,7 @@ export class NativePlaygroundService {
   async #close(): Promise<void> {
     this.#closed = true;
     for (const controller of this.#controllers) controller.abort(new Error('Native Playground service is closed.'));
-    await Promise.allSettled([...this.#runs]);
+    await Promise.allSettled([...this.#runs, ...this.#catalogs.values()]);
     this.#catalogs.clear();
   }
 
@@ -527,7 +660,11 @@ export class NativePlaygroundService {
   async #createSnapshot(reference: NativePlaygroundEpochReference): Promise<CatalogSnapshot> {
     const artifact = await this.#inspectArtifact(reference);
     const persisted = await this.#readSnapshot(reference);
-    const snapshot = persisted ?? await this.#persistSnapshot(reference, await this.#discoverSnapshot(reference));
+    this.#assertOpen();
+    const discovered = persisted ?? await this.#discoverSnapshot(reference);
+    this.#assertOpen();
+    const snapshot = persisted ?? await this.#persistSnapshot(reference, discovered);
+    this.#assertOpen();
     return this.#hydrateSnapshot(artifact, snapshot);
   }
 
@@ -546,14 +683,25 @@ export class NativePlaygroundService {
           selections.push(Object.freeze({
             caseId,
             caseLabel,
-            evalCase,
+            evalCase: Object.freeze({
+              ...evalCase,
+              fixture: Object.freeze({
+                ...evalCase.fixture,
+                path: relativePathInside(suiteDir, resolve(suiteDir, evalCase.fixture.path), true),
+              }),
+            }),
             fixtureId,
             fixtureLabel: caseLabel,
-            fixturePlan,
+            fixturePlan: Object.freeze({
+              digest: fixturePlan.digest,
+              entries: Object.freeze(fixturePlan.entries.map((entry) => Object.freeze({ ...entry }))),
+              git: fixturePlan.git,
+              sourcePath: relativePathInside(suiteDir, fixturePlan.sourcePath, true),
+            }),
             host,
             modelPinId,
             modelPinLabel: `${host} pinned model`,
-            suiteDir,
+            suiteDir: relativePathInside(this.#projectRoot, suiteDir, true),
           }));
         }
       }
@@ -568,15 +716,16 @@ export class NativePlaygroundService {
     });
   }
 
-  #hydrateSnapshot(
+  async #hydrateSnapshot(
     artifact: Pick<PreparedEvalArtifact, 'binding' | 'root'>,
     snapshot: PersistedCatalogSnapshot,
-  ): CatalogSnapshot {
+  ): Promise<CatalogSnapshot> {
     const cases = new Map<string, NativePlaygroundCatalogItem>();
     const fixtures = new Map<string, NativePlaygroundCatalogItem>();
     const modelPins = new Map<string, NativePlaygroundModelPin>();
     const selections = new Map<string, CatalogSelection>();
-    for (const selection of snapshot.selections) {
+    for (const persisted of snapshot.selections) {
+      const selection = await this.#hydrateSelection(persisted);
       const key = selectionKey(selection);
       if (selections.has(key)) throw new Error('Native Playground catalog snapshot contains duplicate selections.');
       cases.set(selection.caseId, Object.freeze({ id: selection.caseId, label: selection.caseLabel }));
@@ -604,6 +753,57 @@ export class NativePlaygroundService {
       }),
       selections,
     });
+  }
+
+  async #hydrateSelection(persisted: PersistedCatalogSelection): Promise<CatalogSelection> {
+    const suiteDir = resolveContainedPath(this.#projectRoot, persisted.suiteDir, true);
+    const sourcePath = resolveContainedPath(suiteDir, persisted.fixturePlan.sourcePath, true);
+    await this.#assertLivePath(suiteDir, 'directory', this.#projectRoot);
+    await this.#assertLivePath(sourcePath, 'directory', suiteDir);
+    const entries = await Promise.all(persisted.fixturePlan.entries.map(async (entry) => {
+      const source = resolveContainedPath(sourcePath, entry.path);
+      await this.#assertLivePath(source, 'file', sourcePath);
+      return Object.freeze({ ...entry });
+    }));
+    return Object.freeze({
+      caseId: persisted.caseId,
+      caseLabel: persisted.caseLabel,
+      evalCase: persisted.evalCase,
+      fixtureId: persisted.fixtureId,
+      fixtureLabel: persisted.fixtureLabel,
+      fixturePlan: Object.freeze({
+        digest: persisted.fixturePlan.digest,
+        entries: Object.freeze(entries),
+        git: persisted.fixturePlan.git,
+        sourcePath,
+      }),
+      host: persisted.host,
+      modelPinId: persisted.modelPinId,
+      modelPinLabel: persisted.modelPinLabel,
+      suiteDir,
+    });
+  }
+
+  async #assertLivePath(path: string, kind: 'directory' | 'file', root: string): Promise<void> {
+    let metadata;
+    try { metadata = await lstat(path); }
+    catch (error) {
+      // A retained catalog remains browseable after authored sources disappear;
+      // materialization will report its existing stable fixture failure later.
+      if (isErrno(error, 'ENOENT')) return;
+      throw new Error('Native Playground catalog snapshot is invalid.', { cause: error });
+    }
+    if (metadata.isSymbolicLink() || (kind === 'directory' ? !metadata.isDirectory() : !metadata.isFile())) {
+      throw new Error('Native Playground catalog snapshot is invalid.');
+    }
+    try {
+      if (!isContainedOrEqual(await realpath(root), await realpath(path))) {
+        throw new Error('Native Playground catalog snapshot is invalid.');
+      }
+    } catch (error) {
+      if (error instanceof Error && error.message === 'Native Playground catalog snapshot is invalid.') throw error;
+      throw new Error('Native Playground catalog snapshot is invalid.', { cause: error });
+    }
   }
 
   async #readSnapshot(reference: NativePlaygroundEpochReference): Promise<PersistedCatalogSnapshot | undefined> {
@@ -634,17 +834,41 @@ export class NativePlaygroundService {
   ): Promise<PersistedCatalogSnapshot> {
     const path = this.#snapshotPath(reference);
     const directory = dirname(path);
-    await mkdir(directory, { recursive: true });
+    await this.#catalogStorage.mkdir(directory, { recursive: true });
     const temporary = join(directory, `.${reference.epoch.id}.stage-${process.pid}-${Math.random().toString(16).slice(2)}`);
+    let handle: Awaited<ReturnType<typeof open>> | undefined;
+    let primary: unknown;
+    const cleanupFailures: unknown[] = [];
     try {
-      await writeFile(temporary, `${stableJson(snapshot)}\n`, 'utf8');
-      try { await link(temporary, path); }
+      handle = await this.#catalogStorage.open(temporary, 'wx', 0o600);
+      await handle.writeFile(`${stableJson(snapshot)}\n`, 'utf8');
+      await handle.sync();
+      await handle.close();
+      handle = undefined;
+      try { await this.#catalogStorage.link(temporary, path); }
       catch (error) {
-        if (!(typeof error === 'object' && error !== null && 'code' in error && error.code === 'EEXIST')) throw error;
+        if (!isErrno(error, 'EEXIST')) throw error;
       }
+      const directoryHandle = await this.#catalogStorage.open(directory, 'r');
+      try { await directoryHandle.sync(); }
+      finally { await directoryHandle.close(); }
+    } catch (error) {
+      primary = error;
     } finally {
-      await rm(temporary, { force: true });
+      if (handle !== undefined) {
+        try { await handle.close(); }
+        catch (error) { cleanupFailures.push(error); }
+      }
+      try { await this.#catalogStorage.remove(temporary, { force: true }); }
+      catch (error) { cleanupFailures.push(error); }
     }
+    if (primary !== undefined) {
+      if (cleanupFailures.length > 0) {
+        throw new AggregateError([primary, ...cleanupFailures], 'Native Playground catalog publication and cleanup both failed.', { cause: primary });
+      }
+      throw primary;
+    }
+    if (cleanupFailures.length > 0) throw new AggregateError(cleanupFailures, 'Native Playground catalog staging cleanup failed.', { cause: cleanupFailures[0] });
     const persisted = await this.#readSnapshot(reference);
     if (persisted === undefined) throw new Error('Native Playground catalog snapshot could not be persisted.');
     return persisted;
@@ -680,3 +904,30 @@ export class NativePlaygroundService {
     if (this.#closed) throw new Error('Native Playground service is closed.');
   }
 }
+
+/** Captures the complete native selection set while its artifact epoch publishes. */
+export const publishNativePlaygroundCatalogSnapshot = async (
+  options: NativePlaygroundCatalogPublicationOptions,
+): Promise<void> => {
+  const root = join(resolve(options.projectRoot), '.agent-bundle', 'epochs', options.epoch.id);
+  const service = new NativePlaygroundService({
+    ...(options.catalogDirectory === undefined ? {} : { catalogDirectory: options.catalogDirectory }),
+    ...(options.catalogStorage === undefined ? {} : { catalogStorage: options.catalogStorage }),
+    ...(options.discover === undefined ? {} : { discover: options.discover }),
+    inspectArtifact: async (reference) => Object.freeze({
+      binding: Object.freeze({
+        manifestPath: join(reference.root, 'agent-bundle.manifest.json'),
+        source: 'explicit' as const,
+        targetDigests: reference.epoch.targetDigests,
+      }),
+      root: reference.root,
+    }),
+    ...(options.planFixture === undefined ? {} : { planFixture: options.planFixture }),
+    projectRoot: options.projectRoot,
+  });
+  try {
+    await service.catalog(Object.freeze({ close: async () => undefined, epoch: options.epoch, root }));
+  } finally {
+    await service.close();
+  }
+};

@@ -17,11 +17,12 @@ export interface CreateStagingEpochOptions {
 }
 
 export type StagingValidator = (stagingRoot: string) => Promise<void>;
+export type EpochPreActivation = (epoch: ArtifactEpoch) => Promise<void>;
 
 /** Opaque, store-created staging root that can be published at most once. */
 export interface EpochStaging {
   close(): Promise<void>;
-  publish(validate: StagingValidator): Promise<ArtifactEpoch>;
+  publish(validate: StagingValidator, beforeActivate?: EpochPreActivation): Promise<ArtifactEpoch>;
   readonly root: string;
 }
 
@@ -36,7 +37,7 @@ export type EpochStoreErrorCode =
   | 'EPOCH_TARGET_INVALID'
   | 'EPOCH_TARGET_SET_INVALID';
 
-export type EpochCleanupResource = 'directory' | 'metadata';
+export type EpochCleanupResource = 'directory' | 'metadata' | 'native-playground-catalog';
 
 export interface EpochCleanupFailure {
   readonly epochId: string;
@@ -201,12 +202,12 @@ const cleanupFailure = (
 
 class EpochStagingHandle implements EpochStaging {
   readonly #close: () => Promise<void>;
-  readonly #publish: (validate: StagingValidator) => Promise<ArtifactEpoch>;
+  readonly #publish: (validate: StagingValidator, beforeActivate?: EpochPreActivation) => Promise<ArtifactEpoch>;
   #closed = false;
 
   constructor(
     root: string,
-    publish: (validate: StagingValidator) => Promise<ArtifactEpoch>,
+    publish: (validate: StagingValidator, beforeActivate?: EpochPreActivation) => Promise<ArtifactEpoch>,
     close: () => Promise<void>,
   ) {
     this.root = root;
@@ -222,12 +223,12 @@ class EpochStagingHandle implements EpochStaging {
     await this.#close();
   }
 
-  async publish(validate: StagingValidator): Promise<ArtifactEpoch> {
+  async publish(validate: StagingValidator, beforeActivate?: EpochPreActivation): Promise<ArtifactEpoch> {
     if (this.#closed) {
       throw new EpochStoreError('EPOCH_STAGING_CLOSED', 'Epoch staging is already closed.');
     }
     this.#closed = true;
-    return this.#publish(validate);
+    return this.#publish(validate, beforeActivate);
   }
 }
 
@@ -295,7 +296,7 @@ export class EpochStore {
       });
       return new EpochStagingHandle(
         root,
-        async (validate) => this.#publishStaging(token, validate),
+        async (validate, beforeActivate) => this.#publishStaging(token, validate, beforeActivate),
         async () => this.#closeStaging(token),
       );
     });
@@ -425,12 +426,16 @@ export class EpochStore {
       metadata
         .filter((entry) => !protectedIds.has(entry.epoch.id))
         .map(async (entry) => {
-          let resource: EpochCleanupResource = 'directory';
+          let resource: EpochCleanupResource = 'native-playground-catalog';
           try {
+            // Keep epoch metadata and the immutable epoch itself discoverable
+            // until its paired native catalog sidecar is gone, so a failed
+            // sidecar deletion can be retried rather than orphaned.
+            await this.#cleanupRemove(this.#nativePlaygroundCatalogPathFor(entry.epoch.id), { force: true });
+            resource = 'directory';
             await this.#cleanupRemove(join(this.#epochsPath, entry.epoch.id), { force: true, recursive: true });
             resource = 'metadata';
             await this.#cleanupRemove(this.#metadataPathFor(entry.epoch.id), { force: true });
-            await this.#cleanupRemove(this.#nativePlaygroundCatalogPathFor(entry.epoch.id), { force: true });
           } catch (reason) {
             throw cleanupFailure(entry.epoch.id, resource, reason);
           }
@@ -453,7 +458,11 @@ export class EpochStore {
     });
   }
 
-  async #publishStaging(token: symbol, validate: StagingValidator): Promise<ArtifactEpoch> {
+  async #publishStaging(
+    token: symbol,
+    validate: StagingValidator,
+    beforeActivate: EpochPreActivation | undefined,
+  ): Promise<ArtifactEpoch> {
     return this.#withTransition(async () => {
       const record = this.#staging.get(token);
       if (record === undefined) {
@@ -463,31 +472,41 @@ export class EpochStore {
       try {
         await validate(record.root);
         await this.#verifyStaging(record);
-        return await this.#publishVerifiedStaging(record);
+        return await this.#publishVerifiedStaging(record, beforeActivate);
       } finally {
         await rm(record.root, { force: true, recursive: true });
       }
     });
   }
 
-  async #publishVerifiedStaging(record: StagingRecord): Promise<ArtifactEpoch> {
+  async #publishVerifiedStaging(record: StagingRecord, beforeActivate: EpochPreActivation | undefined): Promise<ArtifactEpoch> {
     const epochRoot = join(this.#epochsPath, record.epoch.id);
     if (await pathExists(epochRoot)) {
       throw new EpochStoreError('EPOCH_ALREADY_EXISTS', `Epoch ${JSON.stringify(record.epoch.id)} already exists.`);
     }
 
     let moved = false;
+    let nativeCatalogPublicationAttempted = false;
     try {
+      if (beforeActivate !== undefined) {
+        nativeCatalogPublicationAttempted = true;
+        await beforeActivate(record.epoch);
+      }
       await rename(record.root, epochRoot);
       moved = true;
       await this.#writeEpochMetadata(record.epoch);
       await this.#writeActiveMetadata(record.epoch);
     } catch (error) {
-      if (moved) {
-        await Promise.all([
+      const cleanupResults = await Promise.allSettled([
+        ...(moved ? [
           rm(epochRoot, { force: true, recursive: true }),
           rm(this.#metadataPathFor(record.epoch.id), { force: true }),
-        ]);
+        ] : []),
+        ...(nativeCatalogPublicationAttempted ? [rm(this.#nativePlaygroundCatalogPathFor(record.epoch.id), { force: true })] : []),
+      ]);
+      const cleanupFailures = cleanupResults.flatMap((result) => result.status === 'rejected' ? [result.reason] : []);
+      if (cleanupFailures.length > 0) {
+        throw new AggregateError([error, ...cleanupFailures], 'Epoch publication and rollback both failed.', { cause: error });
       }
       throw error;
     }

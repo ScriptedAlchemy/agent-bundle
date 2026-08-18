@@ -1,6 +1,6 @@
 import { chmod, mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 import { expect, it } from '@rstest/core';
 
@@ -35,6 +35,8 @@ const publishEpoch = async (store: EpochStore, epoch: ArtifactEpoch): Promise<vo
 const activeMetadataPathFor = (root: string): string => join(root, '.agent-bundle', 'active-epoch.json');
 const epochMetadataPathFor = (root: string, epochId: string): string =>
   join(root, '.agent-bundle', 'epochs', '.metadata', `${epochId}.json`);
+const nativeCatalogPathFor = (root: string, epochId: string): string =>
+  join(root, '.agent-bundle', 'epochs', '.metadata', 'native-playground', `${epochId}.json`);
 
 const settleMicrotasks = async (): Promise<void> => {
   for (let step = 0; step < 16; step += 1) await Promise.resolve();
@@ -753,6 +755,71 @@ it('continues processing later state transitions after a failed cleanup', async 
     await writeFile(activeMetadataPathFor(root), `${JSON.stringify({ epoch, version: 1 })}\n`);
     await expect(store.cleanup()).resolves.toBeUndefined();
     await expect(store.readActiveEpoch()).resolves.toEqual(epoch);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('keeps epoch metadata and contents retryable when native catalog sidecar deletion fails', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent bundle native catalog cleanup retry '));
+  let failSidecarRemoval = true;
+  const sidecarFailure = new Error('native catalog deletion failed');
+  try {
+    const store = new EpochStore({
+      cleanupRemove: async (path, options) => {
+        if (failSidecarRemoval && path === nativeCatalogPathFor(root, 'epoch-1')) throw sidecarFailure;
+        await rm(path, options);
+      },
+      projectRoot: root,
+    });
+    await publishEpoch(store, epochFor(root, 'epoch-1', '2026-08-14T12:00:01.000Z'));
+    await mkdir(dirname(nativeCatalogPathFor(root, 'epoch-1')), { recursive: true });
+    await writeFile(nativeCatalogPathFor(root, 'epoch-1'), '{"epochId":"epoch-1","selections":[],"version":1}\n');
+    let cleanupError: unknown;
+    for (let sequence = 2; sequence <= 7; sequence += 1) {
+      try { await publishEpoch(store, epochFor(root, `epoch-${sequence}`, `2026-08-14T12:00:0${sequence}.000Z`)); }
+      catch (error) { cleanupError = error; }
+    }
+    expect(cleanupError).toMatchObject({
+      failures: [expect.objectContaining({ epochId: 'epoch-1', reason: sidecarFailure, resource: 'native-playground-catalog' })],
+    });
+    await expect(readFile(nativeCatalogPathFor(root, 'epoch-1'), 'utf8')).resolves.toContain('epoch-1');
+    await expect(readFile(epochMetadataPathFor(root, 'epoch-1'), 'utf8')).resolves.toContain('epoch-1');
+    await expect(readFile(join(root, '.agent-bundle', 'epochs', 'epoch-1', 'claude', 'plugin.json'), 'utf8')).resolves.toBe('epoch-1\n');
+
+    failSidecarRemoval = false;
+    await expect(store.cleanup()).resolves.toBeUndefined();
+    await expect(readFile(nativeCatalogPathFor(root, 'epoch-1'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(readFile(epochMetadataPathFor(root, 'epoch-1'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(readFile(join(root, '.agent-bundle', 'epochs', 'epoch-1', 'claude', 'plugin.json'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('removes a publication-bound catalog sidecar when pre-activation publication fails', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent bundle native catalog publication rollback '));
+  const epoch = epochFor(root, 'epoch-sidecar-rollback');
+  try {
+    const store = new EpochStore({ projectRoot: root });
+    const staging = await store.createStagingEpoch({ epoch, targets: ['claude', 'codex'] });
+    await Promise.all([
+      mkdir(join(staging.root, 'claude'), { recursive: true }),
+      mkdir(join(staging.root, 'codex'), { recursive: true }),
+      writeFile(join(staging.root, 'agent-bundle.manifest.json'), '{}\n'),
+    ]);
+    await Promise.all([
+      writeFile(join(staging.root, 'claude', 'plugin.json'), 'claude\n'),
+      writeFile(join(staging.root, 'codex', 'plugin.json'), 'codex\n'),
+    ]);
+    const publicationFailure = new Error('catalog publication failed');
+    await expect(staging.publish(async () => undefined, async () => {
+      await mkdir(dirname(nativeCatalogPathFor(root, epoch.id)), { recursive: true });
+      await writeFile(nativeCatalogPathFor(root, epoch.id), '{"epochId":"epoch-sidecar-rollback","selections":[],"version":1}\n');
+      throw publicationFailure;
+    })).rejects.toBe(publicationFailure);
+    await expect(readFile(nativeCatalogPathFor(root, epoch.id), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(store.readActiveEpoch()).resolves.toBeUndefined();
   } finally {
     await rm(root, { force: true, recursive: true });
   }

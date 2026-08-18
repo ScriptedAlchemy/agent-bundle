@@ -464,7 +464,7 @@ it('exports and promotes the real durable response event reference from a native
   }
 });
 
-it('publishes the Playground close promise before a native abort handler re-enters close', async () => {
+it('does not deadlock when a native abort handler awaits a reentrant close', async () => {
   const trace = new RecordingTraceStore();
   const nativeEpoch = Object.freeze({
     configDigest: 'native-config-digest',
@@ -478,6 +478,7 @@ it('publishes the Playground close promise before a native abort handler re-ente
   });
   const reference = Object.freeze({ close: async () => undefined, epoch: nativeEpoch, root: '/epochs/native-reentrant-close' });
   let reentrant: Promise<void> | undefined;
+  let abortHandlerCompleted = false;
   const serviceOptions = {
     coordinator: { status: currentStatus },
     createRunId: () => 'run-native-reentrant-close',
@@ -491,8 +492,12 @@ it('publishes the Playground close promise before a native abort handler re-ente
       prepare: async () => Object.freeze({ epochId: nativeEpoch.id, fixtureDigest: 'fixture-content-digest', host: 'claude', prompt: 'Review the fixture.', target: 'claude' }),
       run: async (_prepared: unknown, options: { readonly signal: AbortSignal }) => new Promise((resolvePromise) => {
         options.signal.addEventListener('abort', () => {
-          reentrant = service.close();
-          resolvePromise(Object.freeze({ events: Object.freeze([]), status: 'failed' as const }));
+          void (async () => {
+            reentrant = service.close();
+            await reentrant;
+            abortHandlerCompleted = true;
+            resolvePromise(Object.freeze({ events: Object.freeze([]), status: 'failed' as const }));
+          })();
         }, { once: true });
       }),
     },
@@ -504,12 +509,15 @@ it('publishes the Playground close promise before a native abort handler re-ente
     operation: 'native.prompt', prompt: 'Review the fixture.', target: 'claude',
   });
   const closing = service.close();
+  await eventually(() => expect(reentrant).toBeDefined());
+  expect(service.close()).toBe(closing);
   const settled = await Promise.race([
     closing.then(() => true, () => true),
     new Promise<boolean>((resolvePromise) => { setTimeout(() => resolvePromise(false), 50); }),
   ]);
   expect(settled).toBe(true);
-  expect(reentrant).toBe(closing);
+  expect(reentrant).not.toBe(closing);
+  expect(abortHandlerCompleted).toBe(true);
 });
 
 it('keeps a native prepare failure primary when releasing its epoch lease also fails', async () => {
