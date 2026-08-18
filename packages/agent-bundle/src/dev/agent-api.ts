@@ -758,21 +758,22 @@ export class AgentApi {
           : await this.#epochs.acquireEpochReference(requestedEpochId);
         const lifecycle = new AbortController();
         const lifecycleSettled = settlement<void>();
-        this.#evalLifecycles.set(lifecycle, lifecycleSettled.promise);
         const completeLifecycle = (): void => {
-          this.#evalLifecycles.delete(lifecycle);
-          lifecycleSettled.resolve();
+          if (this.#evalLifecycles.delete(lifecycle)) lifecycleSettled.resolve();
         };
         let releaseStarted = false;
         let subscription: Awaited<ReturnType<AgentApiOptions['evals']['subscribeEvents']>> | undefined;
         try {
+          // Request cancellation governs admission only; an admitted run belongs to its lifecycle.
+          signal.throwIfAborted();
+          this.#evalLifecycles.set(lifecycle, lifecycleSettled.promise);
           const admission = await this.#evals.start({
             artifact: reference.root,
             ...(caseIds === undefined ? {} : { caseIds }),
             harness: 'deterministic',
             ...(suites === undefined ? {} : { suites }),
             ...(trials === undefined ? {} : { trials }),
-            signal: AbortSignal.any([lifecycle.signal, signal]),
+            signal: lifecycle.signal,
           });
           subscription = await this.#evals.subscribeEvents(admission.run.id, 0);
           const eventSubscription = subscription;
