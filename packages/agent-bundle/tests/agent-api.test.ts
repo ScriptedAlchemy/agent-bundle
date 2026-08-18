@@ -2,10 +2,11 @@ import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
+import type { McpHttpHandler, McpServerFactory } from '@modelcontextprotocol/server';
 import { expect, it } from '@rstest/core';
 
 import { stableJson } from '../src/core/digest.ts';
-import { AgentApi, agentApiToolNames, type AgentApiOptions } from '../src/dev/agent-api.ts';
+import { AgentApi, AgentApiCloseError, agentApiTokenEquals, agentApiToolNames, type AgentApiOptions } from '../src/dev/agent-api.ts';
 import { ForegroundServerCloseError, ProjectEventHub, startForegroundServer } from '../src/dev/index.ts';
 import type { ProjectStatus } from '../src/dev/types.ts';
 
@@ -15,7 +16,11 @@ const projectStatus = (): ProjectStatus => ({
   source: { diagnostics: [], state: 'unknown' },
 });
 
-const createApi = (overrides: Partial<AgentApiOptions> = {}): AgentApi => new AgentApi({
+type TestAgentApiOptions = Partial<AgentApiOptions> & Readonly<{
+  readonly handlerFactory?: (factory: McpServerFactory) => McpHttpHandler;
+}>;
+
+const createApi = (overrides: TestAgentApiOptions = {}): AgentApi => new AgentApi({
     artifacts: { inspect: async (epochId) => ({ epochId }) },
     coordinator: {
       status: () => projectStatus(),
@@ -57,7 +62,7 @@ const createApi = (overrides: Partial<AgentApiOptions> = {}): AgentApi => new Ag
     },
   ...overrides,
   token: overrides.token ?? 'test-agent-api-token',
-});
+} as AgentApiOptions);
 
 const startApi = async (options: Readonly<{ readonly api?: AgentApi; readonly port?: number }> = {}): Promise<Readonly<{
   api: AgentApi;
@@ -95,6 +100,20 @@ const deferred = <Value>(): Readonly<{
     reject = rejectPromise;
   });
   return Object.freeze({ promise, reject, resolve });
+};
+
+const within = async <Value>(promise: Promise<Value>, timeoutMs = 1_000): Promise<Value> => {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, rejectPromise) => {
+        timeout = setTimeout(() => rejectPromise(new Error('Timed out waiting for the requested operation.')), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout !== undefined) clearTimeout(timeout);
+  }
 };
 
 it('uses the official stateless MCP handler to expose the fixed ordered tool set', async () => {
@@ -421,6 +440,188 @@ it('rejects a missing or changed bearer token without disclosing it', async () =
   }
 });
 
+it('compares every bearer token shape through a fixed-width verification path', () => {
+  const expected = 'test-agent-api-token';
+  const cases = [
+    ['', false],
+    ['short', false],
+    ['test-agent-api-wrong', false],
+    ['a token that is much longer than the configured token', false],
+    [expected, true],
+  ] as const;
+
+  for (const [candidate, accepted] of cases) {
+    expect(agentApiTokenEquals(expected, candidate)).toBe(accepted);
+  }
+});
+
+it('redacts hostile thrown values without reading arbitrary error fields', async () => {
+  const secretPath = '/private/agent-api-secret/manifest.json';
+  const hostile = new Proxy({}, {
+    get: () => { throw new Error(secretPath); },
+    getOwnPropertyDescriptor: () => { throw new Error(secretPath); },
+  });
+  const started = await startApi({
+    api: createApi({ artifacts: { inspect: async () => { throw hostile; } } }),
+  });
+  const client = new Client({ name: 'agent-api-hostile-error-client', version: '1.0.0' });
+  const transport = new StreamableHTTPClientTransport(new URL(`${started.url}/mcp`), {
+    authProvider: { token: async () => 'test-agent-api-token' },
+  });
+  try {
+    await client.connect(transport);
+    const result = await client.callTool({ name: 'artifact_inspect' });
+    expect(result).toMatchObject({
+      isError: true,
+      structuredContent: { error: { code: 'AGENT_API_OPERATION_FAILED', message: 'The requested operation could not be completed.' } },
+    });
+    expect(stableJson(result.structuredContent as never)).not.toContain(secretPath);
+  } finally {
+    await client.close();
+    await started.close();
+  }
+});
+
+it('projects project and epoch summaries without recursively exposing filesystem paths', async () => {
+  const secretPath = '/private/agent-api-secret/manifest.json';
+  const unsafeStatus = {
+    artifact: {
+      activeEpoch: { id: 'epoch-a', manifestPath: secretPath, root: '/private/agent-api-secret', sourcePath: secretPath },
+      state: 'active',
+    },
+    build: { details: { nested: { manifestPath: secretPath, sourcePath: secretPath } }, state: 'idle' },
+    source: { diagnostics: [], root: '/private/agent-api-secret', state: 'unknown' },
+  } as unknown as ProjectStatus;
+  const started = await startApi({
+    api: createApi({
+      coordinator: { status: () => unsafeStatus },
+      epochs: {
+        acquireActiveEpochReference: async () => ({ close: async () => undefined, epoch: { id: 'epoch-a' }, root: '/private/agent-api-secret' }),
+        acquireEpochReference: async (epochId) => ({ close: async () => undefined, epoch: { id: epochId }, root: '/private/agent-api-secret' }),
+        listEpochs: async () => [{ id: 'epoch-a', manifestPath: secretPath, nested: { root: '/private/agent-api-secret', sourcePath: secretPath } }],
+      },
+    }),
+  });
+  const client = new Client({ name: 'agent-api-safe-projection-client', version: '1.0.0' });
+  const transport = new StreamableHTTPClientTransport(new URL(`${started.url}/mcp`), {
+    authProvider: { token: async () => 'test-agent-api-token' },
+  });
+  try {
+    await client.connect(transport);
+    const [status, artifacts] = await Promise.all([
+      client.callTool({ name: 'project_status' }),
+      client.callTool({ name: 'artifacts_list' }),
+    ]);
+    for (const result of [status, artifacts]) {
+      const wire = stableJson(result.structuredContent as never);
+      expect(wire).not.toContain(secretPath);
+      expect(wire).not.toContain('/private/agent-api-secret');
+      expect(wire).not.toContain('manifestPath');
+      expect(wire).not.toContain('sourcePath');
+    }
+  } finally {
+    await client.close();
+    await started.close();
+  }
+});
+
+it('combines the client disconnect signal with API shutdown for long-running tools', async () => {
+  const startedRun = deferred<void>();
+  const aborted = deferred<void>();
+  const api = createApi({
+    evals: {
+      list: async () => [],
+      read: async (runId) => ({ id: runId }),
+      run: async (request) => new Promise((resolvePromise) => {
+        startedRun.resolve();
+        (request.signal as AbortSignal).addEventListener('abort', () => {
+          aborted.resolve();
+          resolvePromise({ id: 'aborted' });
+        }, { once: true });
+      }),
+      suites: async () => ({ diagnostics: [], suites: [] }),
+    },
+  });
+  const started = await startApi({ api });
+  const client = new Client({ name: 'agent-api-disconnect-client', version: '1.0.0' });
+  const transport = new StreamableHTTPClientTransport(new URL(`${started.url}/mcp`), {
+    authProvider: { token: async () => 'test-agent-api-token' },
+  });
+  let pending: Promise<unknown> | undefined;
+  try {
+    await client.connect(transport);
+    pending = client.callTool({ name: 'eval_run' });
+    void pending.catch(() => undefined);
+    await startedRun.promise;
+    await client.close().catch(() => undefined);
+    await within(aborted.promise);
+    await api.close();
+  } finally {
+    await pending?.catch(() => undefined);
+    await client.close().catch(() => undefined);
+    await started.close();
+  }
+});
+
+it('publishes one reentrant close promise before aborted operations observe shutdown', async () => {
+  const startedRun = deferred<void>();
+  const holder: { api?: AgentApi } = {};
+  let nestedClose: Promise<void> | undefined;
+  const api = createApi({
+    evals: {
+      list: async () => [],
+      read: async (runId) => ({ id: runId }),
+      run: async (request) => new Promise((resolvePromise) => {
+        startedRun.resolve();
+        (request.signal as AbortSignal).addEventListener('abort', () => {
+          if (holder.api === undefined) throw new Error('Agent API is not ready.');
+          nestedClose = holder.api.close();
+          resolvePromise({ id: 'closed' });
+        }, { once: true });
+      }),
+      suites: async () => ({ diagnostics: [], suites: [] }),
+    },
+  });
+  holder.api = api;
+  const started = await startApi({ api });
+  const client = new Client({ name: 'agent-api-reentrant-close-client', version: '1.0.0' });
+  const transport = new StreamableHTTPClientTransport(new URL(`${started.url}/mcp`), {
+    authProvider: { token: async () => 'test-agent-api-token' },
+  });
+  try {
+    await client.connect(transport);
+    const pending = client.callTool({ name: 'eval_run' });
+    await startedRun.promise;
+    const closing = api.close();
+    await closing;
+    expect(nestedClose).toBe(closing);
+    await pending;
+  } finally {
+    await client.close();
+    await started.close();
+  }
+});
+
+it('closes its official handler once and preserves the handler cleanup failure', async () => {
+  const failure = new Error('Handler cleanup failed.');
+  let closeCalls = 0;
+  const api = createApi({
+    handlerFactory: () => ({
+      close: async () => { closeCalls += 1; throw failure; },
+      fetch: async () => new Response(null, { status: 503 }),
+    } as unknown as McpHttpHandler),
+  });
+
+  const first = api.close();
+  const second = api.close();
+  expect(second).toBe(first);
+  await expect(first).rejects.toEqual(expect.objectContaining({
+    failures: [{ error: failure, resource: 'handler' }],
+    name: AgentApiCloseError.name,
+  }));
+  expect(closeCalls).toBe(1);
+});
+
 it('mounts the optional API only at /mcp and applies the foreground origin guard before bearer auth', async () => {
   const coordinator = {
     close: async () => undefined,
@@ -457,6 +658,7 @@ it('mounts the optional API only at /mcp and applies the foreground origin guard
 it('aggregates an Agent API shutdown failure after closing its admissions before the coordinator', async () => {
   const agentApiFailure = new Error('Agent API cleanup failed.');
   const closeOrder: string[] = [];
+  let agentApiCloseCalls = 0;
   const coordinator = {
     close: async () => { closeOrder.push('coordinator'); },
     rebuild: async () => ({ outcome: 'failed' as const }),
@@ -464,7 +666,7 @@ it('aggregates an Agent API shutdown failure after closing its admissions before
     status: () => projectStatus(),
   };
   const agentApi = {
-    close: async () => { closeOrder.push('agent-api'); throw agentApiFailure; },
+    close: async () => { agentApiCloseCalls += 1; closeOrder.push('agent-api'); throw agentApiFailure; },
     handle: async () => undefined,
   } as unknown as AgentApi;
   const foreground = await startForegroundServer({ agentApi, coordinator, eventHub: new ProjectEventHub(), port: 0 });
@@ -472,5 +674,6 @@ it('aggregates an Agent API shutdown failure after closing its admissions before
     failures: [{ error: agentApiFailure, resource: 'agent-api' }],
     name: ForegroundServerCloseError.name,
   }));
+  expect(agentApiCloseCalls).toBe(1);
   expect(closeOrder).toEqual(['agent-api', 'coordinator']);
 });

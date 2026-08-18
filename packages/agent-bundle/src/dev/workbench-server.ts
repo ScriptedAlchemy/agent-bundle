@@ -48,7 +48,7 @@ interface Closeable {
 
 export interface DevServerLifecycleCloseFailure {
   readonly error: unknown;
-  readonly resource: 'agent-api' | 'coordinator' | 'mcp-apps' | 'mcp-sessions' | 'playground';
+  readonly resource: 'coordinator' | 'mcp-apps' | 'mcp-sessions' | 'playground';
 }
 
 /** Reports session and coordinator cleanup failures without hiding either resource. */
@@ -203,21 +203,14 @@ export const closeDevServerLifecycle = async (
   coordinator: Closeable,
   mcpApps?: Closeable,
   playground?: Closeable,
-  agentApi?: Closeable,
 ): Promise<void> => {
-  // Agent API and Playground both own admissions over shared services. Publish
-  // and drain each gate before closing those shared services or the coordinator.
-  const agentApiResults = agentApi === undefined ? [] : await Promise.allSettled([agentApi.close()]);
+  // ForegroundServer owns the Agent API admission gate. This lifecycle owns
+  // only the shared services that are released after foreground routing ends.
   const playgroundResults = playground === undefined ? [] : await Promise.allSettled([playground.close()]);
   const appResults = mcpApps === undefined ? [] : await Promise.allSettled([mcpApps.close()]);
   const sessionResults = await Promise.allSettled([mcpSessions.close()]);
   const coordinatorResults = await Promise.allSettled([coordinator.close()]);
   const failures = [
-    ...agentApiResults.flatMap((result): readonly DevServerLifecycleCloseFailure[] =>
-      result.status === 'rejected'
-        ? [Object.freeze({ error: result.reason, resource: 'agent-api' as const })]
-        : [],
-    ),
     ...playgroundResults.flatMap((result): readonly DevServerLifecycleCloseFailure[] =>
       result.status === 'rejected'
         ? [Object.freeze({ error: result.reason, resource: 'playground' as const })]
@@ -247,9 +240,8 @@ const withMcpSessionLifecycle = (
   mcpSessions: McpSessionService,
   mcpApps: () => Closeable | undefined,
   playground: Closeable,
-  agentApi: () => Closeable | undefined,
 ): ForegroundCoordinator => Object.freeze({
-  close: () => closeDevServerLifecycle(mcpSessions, coordinator, mcpApps(), playground, agentApi()),
+  close: () => closeDevServerLifecycle(mcpSessions, coordinator, mcpApps(), playground),
   rebuild: (invalidation: Invalidation) => coordinator.rebuild(invalidation),
   start: () => coordinator.start(),
   status: () => coordinator.status(),
@@ -336,7 +328,7 @@ export const startDevServer = async (options: StartDevServerOptions): Promise<De
     ...(agentApi === undefined ? {} : { agentApi }),
     artifacts,
     assets: options.assets ?? createWorkbenchAssetSource(),
-    coordinator: withMcpSessionLifecycle(coordinator, mcpSessions, () => mcpApps, playground, () => agentApi),
+    coordinator: withMcpSessionLifecycle(coordinator, mcpSessions, () => mcpApps, playground),
     evals,
     eventHub,
     hookPlayground,

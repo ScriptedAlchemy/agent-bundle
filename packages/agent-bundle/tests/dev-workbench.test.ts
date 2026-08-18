@@ -743,21 +743,18 @@ it('closes MCP Apps before sessions and the coordinator while retaining every cl
   expect(closeOrder).toEqual(['mcp-apps', 'mcp-sessions', 'coordinator']);
 });
 
-it('closes the Agent API admission gate before shared lifecycle resources and retains its failure', async () => {
+it('leaves Agent API ownership to the foreground release rather than closing it a second time', async () => {
   const agentApiFailure = new Error('Agent API cleanup failed.');
   const closeOrder: string[] = [];
 
-  await expect(closeDevServerLifecycle(
+  await expect((closeDevServerLifecycle as (...resources: readonly unknown[]) => Promise<void>)(
     { close: async () => { closeOrder.push('mcp-sessions'); } },
     { close: async () => { closeOrder.push('coordinator'); } },
     { close: async () => { closeOrder.push('mcp-apps'); } },
     { close: async () => { closeOrder.push('playground'); } },
     { close: async () => { closeOrder.push('agent-api'); throw agentApiFailure; } },
-  )).rejects.toEqual(expect.objectContaining({
-    failures: [{ error: agentApiFailure, resource: 'agent-api' }],
-    name: DevServerLifecycleCloseError.name,
-  }));
-  expect(closeOrder).toEqual(['agent-api', 'playground', 'mcp-apps', 'mcp-sessions', 'coordinator']);
+  )).resolves.toBeUndefined();
+  expect(closeOrder).toEqual(['playground', 'mcp-apps', 'mcp-sessions', 'coordinator']);
 });
 
 it('retains sandbox startup and foreground cleanup failures structurally', async () => {

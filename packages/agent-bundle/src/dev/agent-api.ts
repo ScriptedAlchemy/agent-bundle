@@ -1,4 +1,4 @@
-import { timingSafeEqual } from 'node:crypto';
+import { createHash, timingSafeEqual } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
 import {
@@ -11,6 +11,8 @@ import {
   verifyBearerToken,
   type AuthInfo,
   type JsonSchemaType,
+  type McpHttpHandler,
+  type McpServerFactory,
 } from '@modelcontextprotocol/server';
 import { toNodeHandler, type NodeMcpRequestHandler } from '@modelcontextprotocol/node';
 
@@ -45,7 +47,18 @@ export interface AgentApiEpochReference {
 export interface AgentApiEpochStore {
   acquireActiveEpochReference(): Promise<AgentApiEpochReference>;
   acquireEpochReference(epochId: string): Promise<AgentApiEpochReference>;
-  listEpochs(): Promise<readonly unknown[]>;
+  listEpochs(): Promise<readonly AgentApiEpochSummary[]>;
+}
+
+/** Deliberately path-free epoch identity permitted on the Agent API wire. */
+export interface AgentApiEpochSummary {
+  readonly configDigest?: string;
+  readonly createdAt?: string;
+  readonly diagnostics?: Readonly<{ readonly errors: number; readonly infos: number; readonly warnings: number }>;
+  readonly id: string;
+  readonly modelDigest?: string;
+  readonly projectRevision?: string;
+  readonly targetDigests?: Readonly<Record<string, string>>;
 }
 
 export interface AgentApiMcpSession {
@@ -84,6 +97,8 @@ export interface AgentApiOptions {
     readonly generated: (epochId: string, target: string, skillId: string) => Promise<unknown>;
     readonly generatedTree: (epochId: string, target: string) => Promise<unknown>;
   }>;
+  /** @internal Trusted test seam for verifying handler shutdown behavior. */
+  readonly handlerFactory?: (factory: McpServerFactory) => McpHttpHandler;
   /** Trusted test seam. Production callers obtain the token from AGENT_BUNDLE_AGENT_API_TOKEN. */
   readonly token?: string;
   readonly version?: string;
@@ -103,6 +118,23 @@ export class AgentApiCloseError extends Error {
 
 const apiError = (code: string, message: string): Error & Readonly<{ readonly code: string }> =>
   Object.assign(new Error(message), { code });
+
+interface Settlement<T> {
+  readonly promise: Promise<T>;
+  readonly reject: (error: unknown) => void;
+  readonly resolve: (value: T) => void;
+}
+
+/** Publishes a close result before synchronous abort listeners can reenter close(). */
+const settlement = <T>(): Settlement<T> => {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return Object.freeze({ promise, reject, resolve });
+};
 
 const objectSchema = (
   properties: Record<string, JsonSchemaType>,
@@ -213,12 +245,62 @@ const stableErrorCodes = new Set([
   'EVAL_TRIALS_INVALID',
 ] as const);
 
+/** Reads only an own data descriptor: hostile accessors and Proxy traps are never evaluated. */
+const ownDataProperty = (value: unknown, key: string): unknown => {
+  if (typeof value !== 'object' || value === null) return undefined;
+  try {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    return descriptor !== undefined && 'value' in descriptor ? descriptor.value : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
 const safeErrorCode = (error: unknown): string => {
-  const candidate = error as Partial<{ readonly code: unknown }>;
-  return typeof candidate?.code === 'string' && stableErrorCodes.has(candidate.code as never)
-    ? candidate.code
+  const code = ownDataProperty(error, 'code');
+  return typeof code === 'string' && stableErrorCodes.has(code as never)
+    ? code
     : 'AGENT_API_OPERATION_FAILED';
 };
+
+const sensitiveWireKey = (key: string): boolean => {
+  const normalized = key.toLowerCase();
+  return normalized === 'root' || normalized === 'cwd' || normalized === 'env' ||
+    normalized === 'command' || normalized.includes('path');
+};
+
+const absolutePathValue = (value: string): boolean =>
+  value.startsWith('/') || /^[a-z]:[\\/]/iu.test(value);
+
+/** Removes filesystem identities from nested status/list payloads before JSON snapshotting. */
+const wireSafeProjection = (value: unknown): unknown => {
+  const snapshot = snapshotStrictJsonValue(value);
+  const project = (candidate: typeof snapshot): typeof snapshot => {
+    if (typeof candidate === 'string') return absolutePathValue(candidate) ? '[redacted]' : candidate;
+    if (candidate === null || typeof candidate !== 'object') return candidate;
+    if (Array.isArray(candidate)) return Object.freeze(candidate.map(project));
+    return Object.freeze(Object.fromEntries(Object.entries(candidate)
+      .filter(([key]) => !sensitiveWireKey(key))
+      .map(([key, nested]) => [key, project(nested)])));
+  };
+  return project(snapshot);
+};
+
+const epochWireIdentity = (epoch: AgentApiEpochSummary): AgentApiEpochSummary => Object.freeze({
+  ...(typeof epoch.configDigest === 'string' ? { configDigest: epoch.configDigest } : {}),
+  ...(typeof epoch.createdAt === 'string' ? { createdAt: epoch.createdAt } : {}),
+  ...(epoch.diagnostics === undefined ? {} : { diagnostics: Object.freeze({
+    errors: epoch.diagnostics.errors,
+    infos: epoch.diagnostics.infos,
+    warnings: epoch.diagnostics.warnings,
+  }) }),
+  id: epoch.id,
+  ...(typeof epoch.modelDigest === 'string' ? { modelDigest: epoch.modelDigest } : {}),
+  ...(typeof epoch.projectRevision === 'string' ? { projectRevision: epoch.projectRevision } : {}),
+  ...(epoch.targetDigests === undefined ? {} : { targetDigests: Object.freeze(Object.fromEntries(
+    Object.entries(epoch.targetDigests).filter(([, digest]) => typeof digest === 'string'),
+  )) }),
+});
 
 const safeToolResult = (value: unknown) => {
   const snapshot = snapshotStrictJsonValue(value === undefined ? null : value);
@@ -240,12 +322,11 @@ const failedToolResult = (error: unknown) => {
   };
 };
 
-const equalTokens = (expected: string, received: string): boolean => {
-  const expectedBytes = Buffer.from(expected, 'utf8');
-  const receivedBytes = Buffer.alloc(expectedBytes.byteLength);
-  Buffer.from(received, 'utf8').copy(receivedBytes);
-  return expectedBytes.byteLength === Buffer.byteLength(received, 'utf8') && timingSafeEqual(expectedBytes, receivedBytes);
-};
+const tokenDigest = (token: string): Buffer => createHash('sha256').update(token, 'utf8').digest();
+
+/** Always compares same-size digests so bearer length is not an early branch. */
+export const agentApiTokenEquals = (expected: string, received: string): boolean =>
+  timingSafeEqual(tokenDigest(expected), tokenDigest(received));
 
 const writeWebResponse = async (response: ServerResponse, result: Response): Promise<void> => {
   const headers = Object.fromEntries(result.headers.entries());
@@ -271,7 +352,7 @@ export class AgentApi {
   readonly #diagnostics: AgentApiOptions['diagnostics'];
   readonly #epochs: AgentApiEpochStore;
   readonly #evals: AgentApiOptions['evals'];
-  readonly #handler;
+  readonly #handler: McpHttpHandler;
   readonly #hooks: AgentApiOptions['hooks'];
   readonly #nodeHandler: NodeMcpRequestHandler;
   readonly #operations = new Map<AbortController, Promise<void>>();
@@ -298,7 +379,8 @@ export class AgentApi {
     this.#skills = options.skills;
     this.#token = token;
     this.#version = options.version ?? '0.1.0';
-    this.#handler = createMcpHandler(() => this.#createServer(), { legacy: 'stateless' });
+    this.#handler = options.handlerFactory?.(() => this.#createServer()) ??
+      createMcpHandler(() => this.#createServer(), { legacy: 'stateless' });
     this.#nodeHandler = toNodeHandler(this.#handler);
   }
 
@@ -313,7 +395,7 @@ export class AgentApi {
       auth = await verifyBearerToken(request.headers.authorization, {
         verifier: {
           verifyAccessToken: async (candidate) => {
-            if (!equalTokens(this.#token, candidate)) {
+            if (!agentApiTokenEquals(this.#token, candidate)) {
               throw new OAuthError(OAuthErrorCode.InvalidToken, 'Bearer token is invalid.');
             }
             return {
@@ -339,12 +421,16 @@ export class AgentApi {
   }
 
   close(): Promise<void> {
-    this.#closePromise ??= this.#close();
-    return this.#closePromise;
+    const closing = this.#closePromise;
+    if (closing !== undefined) return closing;
+    this.#closing = true;
+    const published = settlement<void>();
+    this.#closePromise = published.promise;
+    void this.#close().then(published.resolve, published.reject);
+    return published.promise;
   }
 
   async #close(): Promise<void> {
-    this.#closing = true;
     for (const operation of this.#operations.keys()) {
       operation.abort(apiError('AGENT_API_CLOSED', 'Agent API is closed.'));
     }
@@ -358,32 +444,32 @@ export class AgentApi {
 
   #createServer(): McpServer {
     const server = new McpServer({ name: 'agent-bundle', version: this.#version });
-    server.registerTool('project_status', { inputSchema: noArguments }, async () =>
-      this.#tool(() => Promise.resolve({ status: this.#coordinator.status() })));
-    server.registerTool('skills_list', { inputSchema: skillListSchema }, async (arguments_) =>
-      this.#tool(async () => this.#withEpoch(optionalStringArgument(asRecord(arguments_), 'epoch'), async (epochId) => ({
+    server.registerTool('project_status', { inputSchema: noArguments }, async (_arguments, context) =>
+      this.#tool(context.mcpReq.signal, () => Promise.resolve({ status: wireSafeProjection(this.#coordinator.status()) })));
+    server.registerTool('skills_list', { inputSchema: skillListSchema }, async (arguments_, context) =>
+      this.#tool(context.mcpReq.signal, async () => this.#withEpoch(optionalStringArgument(asRecord(arguments_), 'epoch'), async (epochId) => ({
         skills: await this.#skills.generatedTree(epochId, stringArgument(asRecord(arguments_), 'target')),
       }))));
-    server.registerTool('skill_inspect', { inputSchema: skillInspectSchema }, async (arguments_) =>
-      this.#tool(async () => this.#withEpoch(optionalStringArgument(asRecord(arguments_), 'epoch'), async (epochId) => ({
+    server.registerTool('skill_inspect', { inputSchema: skillInspectSchema }, async (arguments_, context) =>
+      this.#tool(context.mcpReq.signal, async () => this.#withEpoch(optionalStringArgument(asRecord(arguments_), 'epoch'), async (epochId) => ({
         skill: await this.#skills.generated(
           epochId,
           stringArgument(asRecord(arguments_), 'target'),
           stringArgument(asRecord(arguments_), 'skill_id'),
         ),
       }))));
-    server.registerTool('artifacts_list', { inputSchema: noArguments }, async () =>
-      this.#tool(async () => ({ epochs: await this.#epochs.listEpochs() })));
-    server.registerTool('artifact_inspect', { inputSchema: artifactInspectSchema }, async (arguments_) =>
-      this.#tool(async () => this.#withEpoch(optionalStringArgument(asRecord(arguments_), 'epoch'), async (epochId) => ({
+    server.registerTool('artifacts_list', { inputSchema: noArguments }, async (_arguments, context) =>
+      this.#tool(context.mcpReq.signal, async () => ({ epochs: (await this.#epochs.listEpochs()).map(epochWireIdentity) })));
+    server.registerTool('artifact_inspect', { inputSchema: artifactInspectSchema }, async (arguments_, context) =>
+      this.#tool(context.mcpReq.signal, async () => this.#withEpoch(optionalStringArgument(asRecord(arguments_), 'epoch'), async (epochId) => ({
         artifact: await this.#artifacts.inspect(epochId),
       }))));
-    server.registerTool('mcp_servers_list', { inputSchema: mcpServersListSchema }, async (arguments_) =>
-      this.#tool(async () => this.#withEpoch(optionalStringArgument(asRecord(arguments_), 'epoch'), async (epochId) => ({
+    server.registerTool('mcp_servers_list', { inputSchema: mcpServersListSchema }, async (arguments_, context) =>
+      this.#tool(context.mcpReq.signal, async () => this.#withEpoch(optionalStringArgument(asRecord(arguments_), 'epoch'), async (epochId) => ({
         servers: await this.#mcpServers(epochId, stringArgument(asRecord(arguments_), 'target')),
       }))));
-    server.registerTool('mcp_invoke', { inputSchema: mcpInvokeSchema }, async (arguments_) =>
-      this.#tool(async (signal) => this.#withEpoch(optionalStringArgument(asRecord(arguments_), 'epoch'), async (epochId) => {
+    server.registerTool('mcp_invoke', { inputSchema: mcpInvokeSchema }, async (arguments_, context) =>
+      this.#tool(context.mcpReq.signal, async (signal) => this.#withEpoch(optionalStringArgument(asRecord(arguments_), 'epoch'), async (epochId) => {
         const args = asRecord(arguments_);
         const session = await this.#mcpSessions.open({
           epochId,
@@ -397,8 +483,8 @@ export class AgentApi {
           await session.close();
         }
       })));
-    server.registerTool('hooks_list', { inputSchema: hooksListSchema }, async (arguments_) =>
-      this.#tool(async () => this.#withEpoch(optionalStringArgument(asRecord(arguments_), 'epoch'), async (epochId) => ({
+    server.registerTool('hooks_list', { inputSchema: hooksListSchema }, async (arguments_, context) =>
+      this.#tool(context.mcpReq.signal, async () => this.#withEpoch(optionalStringArgument(asRecord(arguments_), 'epoch'), async (epochId) => ({
         hooks: await this.#hooks.list({
           epochId,
           ...(optionalStringArgument(asRecord(arguments_), 'target') === undefined
@@ -406,8 +492,8 @@ export class AgentApi {
             : { target: optionalStringArgument(asRecord(arguments_), 'target') }),
         }),
       }))));
-    server.registerTool('hook_simulate', { inputSchema: hookSimulateSchema }, async (arguments_) =>
-      this.#tool(async (signal) => this.#withEpoch(optionalStringArgument(asRecord(arguments_), 'epoch'), async (epochId) => {
+    server.registerTool('hook_simulate', { inputSchema: hookSimulateSchema }, async (arguments_, context) =>
+      this.#tool(context.mcpReq.signal, async (signal) => this.#withEpoch(optionalStringArgument(asRecord(arguments_), 'epoch'), async (epochId) => {
         const args = asRecord(arguments_);
         return {
           simulation: await this.#hooks.simulate({
@@ -419,10 +505,10 @@ export class AgentApi {
           }),
         };
       })));
-    server.registerTool('evals_list', { inputSchema: noArguments }, async () =>
-      this.#tool(async () => ({ runs: await this.#evals.list(), suites: await this.#evals.suites() })));
-    server.registerTool('eval_run', { inputSchema: evalRunSchema }, async (arguments_) =>
-      this.#tool(async (signal) => this.#withEpoch(optionalStringArgument(asRecord(arguments_), 'epoch'), async (_epochId, root) => {
+    server.registerTool('evals_list', { inputSchema: noArguments }, async (_arguments, context) =>
+      this.#tool(context.mcpReq.signal, async () => ({ runs: await this.#evals.list(), suites: await this.#evals.suites() })));
+    server.registerTool('eval_run', { inputSchema: evalRunSchema }, async (arguments_, context) =>
+      this.#tool(context.mcpReq.signal, async (signal) => this.#withEpoch(optionalStringArgument(asRecord(arguments_), 'epoch'), async (_epochId, root) => {
         const args = asRecord(arguments_);
         const caseIds = stringListArgument(args, 'case_ids');
         const suites = stringListArgument(args, 'suites');
@@ -437,10 +523,10 @@ export class AgentApi {
           }),
         };
       })));
-    server.registerTool('eval_get', { inputSchema: evalGetSchema }, async (arguments_) =>
-      this.#tool(async () => ({ run: await this.#evals.read(stringArgument(asRecord(arguments_), 'run_id')) })));
-    server.registerTool('diagnostics_list', { inputSchema: noArguments }, async () =>
-      this.#tool(async () => ({ diagnostics: await this.#diagnostics.list() })));
+    server.registerTool('eval_get', { inputSchema: evalGetSchema }, async (arguments_, context) =>
+      this.#tool(context.mcpReq.signal, async () => ({ run: await this.#evals.read(stringArgument(asRecord(arguments_), 'run_id')) })));
+    server.registerTool('diagnostics_list', { inputSchema: noArguments }, async (_arguments, context) =>
+      this.#tool(context.mcpReq.signal, async () => ({ diagnostics: await this.#diagnostics.list() })));
     return server;
   }
 
@@ -451,22 +537,23 @@ export class AgentApi {
     return inspection.runtime?.mcpServers.filter((server) => server.target === target) ?? [];
   }
 
-  async #tool(operation: (signal: AbortSignal) => Promise<unknown>) {
+  async #tool(requestSignal: AbortSignal, operation: (signal: AbortSignal) => Promise<unknown>) {
     try {
-      return safeToolResult(await this.#operation(operation));
+      return safeToolResult(await this.#operation(requestSignal, operation));
     } catch (error) {
       return failedToolResult(error);
     }
   }
 
-  async #operation<Result>(operation: (signal: AbortSignal) => Promise<Result>): Promise<Result> {
+  async #operation<Result>(requestSignal: AbortSignal, operation: (signal: AbortSignal) => Promise<Result>): Promise<Result> {
     if (this.#closing) throw apiError('AGENT_API_CLOSED', 'Agent API is closed.');
     const controller = new AbortController();
+    const signal = AbortSignal.any([controller.signal, requestSignal]);
     let settle!: () => void;
     const completed = new Promise<void>((resolvePromise) => { settle = resolvePromise; });
     this.#operations.set(controller, completed);
     try {
-      return await operation(controller.signal);
+      return await operation(signal);
     } finally {
       this.#operations.delete(controller);
       settle();
