@@ -54,11 +54,15 @@ export interface EvalComparisonUsage {
   readonly totalTokens: number;
 }
 
+export interface EvalUnrecordedConditionSemanticGrader {
+  readonly state: 'unrecorded';
+}
+
 /** Literal persisted alignment details for one condition side, without commands or filesystem paths. */
 export interface EvalConditionProvenance {
   readonly hostCliVersion?: string;
   readonly invocation?: string;
-  readonly semanticGrader?: string;
+  readonly semanticGrader?: string | EvalUnrecordedConditionSemanticGrader;
 }
 
 /** One side of a comparison, derived solely from its durable run and trial records. */
@@ -197,6 +201,7 @@ const facetReasons: Readonly<Record<EvalAlignmentFacet, EvalNonComparableReason>
 
 const noFacets: readonly EvalAlignmentFacet[] = Object.freeze([]);
 const unrecorded = 'unrecorded';
+const unrecordedSemanticGrader = Object.freeze({ state: 'unrecorded' as const });
 
 const round = (value: number, places: number): number => Number.parseFloat(value.toFixed(places));
 
@@ -287,7 +292,10 @@ const recordedConditionValue = (values: readonly (string | undefined)[]): string
 const conditionProvenanceFor = (condition: Condition): EvalConditionProvenance => {
   const hostCliVersion = recordedConditionValue(condition.trials.map((trial) => trial.provenance?.hostCliVersion));
   const invocation = recordedConditionValue(condition.trials.map((trial) => invocationIdentity(trial.provenance)));
-  const semanticGrader = recordedConditionValue(condition.trials.map((trial) => semanticGraderVersion(trial.provenance)));
+  const graders = condition.trials.map((trial) => trial.provenance?.semanticGrader);
+  const semanticGrader = graders.every((grader) => grader !== undefined && grader !== null && 'state' in grader)
+    ? unrecordedSemanticGrader
+    : recordedConditionValue(condition.trials.map((trial) => semanticGraderVersion(trial.provenance)));
   return Object.freeze({
     ...(hostCliVersion === undefined ? {} : { hostCliVersion }),
     ...(invocation === undefined ? {} : { invocation }),
@@ -387,6 +395,7 @@ const ungradableCause = (
 const deltaFor = (baseline: EvalConditionMetrics, candidate: EvalConditionMetrics): EvalComparisonDelta => {
   const baselineTotal = baseline.usage?.totalTokens;
   const candidateTotal = candidate.usage?.totalTokens;
+  const completeUsage = baseline.usage?.recordedTrials === baseline.trials && candidate.usage?.recordedTrials === candidate.trials;
   const reliability = baseline.reliability === undefined || candidate.reliability === undefined
     ? undefined
     : Object.freeze({
@@ -399,7 +408,7 @@ const deltaFor = (baseline: EvalConditionMetrics, candidate: EvalConditionMetric
     passRate: round(candidate.passRate - baseline.passRate, 6),
     passes: candidate.passes - baseline.passes,
     ...(reliability === undefined ? {} : { reliability }),
-    ...(baselineTotal === undefined || candidateTotal === undefined
+    ...(baselineTotal === undefined || candidateTotal === undefined || !completeUsage
       ? {}
       : { totalTokens: candidateTotal - baselineTotal }),
     trials: candidate.trials - baseline.trials,

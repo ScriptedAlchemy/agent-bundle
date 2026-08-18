@@ -1,4 +1,4 @@
-.comparisons-content { margin: 0 auto; max-width: 1180px; min-width: 0; padding: 35px 34px 64px; width: 100%; }
+.comparisons-content { box-sizing: border-box; margin: 0 auto; max-width: 1180px; min-width: 0; padding: 35px 34px 64px; width: 100%; }
 .comparisons-page-heading p { color: #596372; font-size: 15px; margin: 8px 0 0; }
 .comparison-controls { border-top: 1px solid #d9dee7; display: grid; gap: 8px; justify-items: start; padding-top: 24px; }
 .comparison-controls label { color: #596372; font-size: 12px; font-weight: 750; letter-spacing: .03em; margin-top: 12px; text-transform: uppercase; }
@@ -9,7 +9,8 @@
 .comparison-actions button:disabled { background: #7f95b8; border-color: #7f95b8; cursor: not-allowed; }
 .comparison-matrix { margin-top: 30px; overflow-x: auto; }
 .comparison-summary { color: #4f5866; font-size: 15px; margin: 0 0 22px; }
-.comparison-matrix table { border-collapse: collapse; min-width: 900px; width: 100%; }
+.comparison-matrix table { border-collapse: collapse; min-width: 900px; table-layout: fixed; width: 100%; }
+.comparison-cell { min-width: 0; }
 .comparison-matrix th, .comparison-matrix td { border-bottom: 1px solid #d9dee7; padding: 14px 16px 14px 0; text-align: left; vertical-align: top; }
 .comparison-matrix thead th { border-bottom: 2px solid #bfc8d5; color: #596372; font-size: 12px; font-weight: 750; letter-spacing: .03em; text-transform: uppercase; }
 .comparison-matrix tbody th { max-width: 250px; }
@@ -29,7 +30,7 @@
 .comparison-cell-rows { display: grid; gap: 4px; margin: 0; }
 .comparison-cell-rows div { display: flex; gap: 8px; justify-content: space-between; min-width: 0; }
 .comparison-cell-rows dt { color: #596372; font-size: 12px; font-weight: 700; margin: 0; }
-.comparison-cell-rows dd { font-size: 12px; font-weight: 500; margin: 0; overflow-wrap: anywhere; text-align: right; }
+.comparison-cell-rows dd { flex: 1 1 0; font-size: 12px; font-weight: 500; margin: 0; min-width: 0; overflow-wrap: anywhere; text-align: right; }
 .comparison-evidence { font-size: 11px; font-weight: 700; letter-spacing: .03em; margin: 10px 0 0; text-transform: uppercase; }
 .comparison-evidence--reliability { color: #1d7a33; }
 .comparison-evidence--smoke { color: #96660a; }

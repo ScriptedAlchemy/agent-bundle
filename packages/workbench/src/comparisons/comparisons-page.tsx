@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 
 import type { EvalComparison } from '../../../agent-bundle/src/eval/compare.ts';
 import type { EvalRunRecord } from '../../../agent-bundle/src/eval/run-store.ts';
@@ -41,7 +41,44 @@ export const runComparison = async (
   client: ComparisonClient,
   base: string,
   candidate: string,
-): Promise<EvalComparison> => client.compare({ base, candidate });
+  signal?: AbortSignal,
+): Promise<EvalComparison> => client.compare({ base, candidate }, signal);
+
+interface ComparisonRequest {
+  readonly client: ComparisonClient;
+  readonly generation: number;
+  readonly signal: AbortSignal;
+}
+
+/** Cancels a replaced comparison immediately and makes every late completion inert. */
+export class ComparisonRequestLifecycle {
+  #active: { readonly controller: AbortController; readonly request: ComparisonRequest } | undefined;
+  #generation = 0;
+
+  begin(client: ComparisonClient): ComparisonRequest {
+    this.#active?.controller.abort();
+    const controller = new AbortController();
+    const request = Object.freeze({ client, generation: this.#generation, signal: controller.signal });
+    this.#active = { controller, request };
+    return request;
+  }
+
+  complete(request: ComparisonRequest): void {
+    if (this.#active?.request === request) this.#active = undefined;
+  }
+
+  invalidate(): void {
+    this.#generation += 1;
+    this.#active?.controller.abort();
+    this.#active = undefined;
+  }
+
+  isCurrent(request: ComparisonRequest, client: ComparisonClient): boolean {
+    return request.client === client && request.generation === this.#generation && !request.signal.aborted && this.#active?.request === request;
+  }
+}
+
+const isAbortError = (reason: unknown): boolean => reason instanceof Error && reason.name === 'AbortError';
 
 const MetricCell = ({ cell }: { readonly cell: ComparisonMetricCell | undefined }) => cell === undefined
   ? <td className="comparison-cell"><p className="empty-row">Not recorded in this run.</p></td>
@@ -145,12 +182,29 @@ export const ComparisonMatrix = ({ view }: ComparisonMatrixProps) => <div classN
 /** Aligns two recorded eval runs and shows the reliability matrix of every shared condition. */
 export const ComparisonsPage = ({ comparisonClient, evalClient }: ComparisonsPageProps) => {
   const [baseRunId, setBaseRunId] = useState<string>();
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState<ComparisonRequest>();
   const [candidateRunId, setCandidateRunId] = useState<string>();
-  const [comparison, setComparison] = useState<EvalComparison>();
-  const [error, setError] = useState<string>();
+  const [comparison, setComparison] = useState<{ readonly client: ComparisonClient; readonly result: EvalComparison }>();
+  const [error, setError] = useState<{ readonly client: ComparisonClient; readonly message: string }>();
   const [runs, setRuns] = useState<readonly EvalRunRecord[]>([]);
-  const view = comparisonsViewFor({ baseRunId, candidateRunId, comparison, runs });
+  const lifecycle = useRef<ComparisonRequestLifecycle>(new ComparisonRequestLifecycle()).current;
+  const currentClient = useRef(comparisonClient);
+  if (currentClient.current !== comparisonClient) {
+    currentClient.current = comparisonClient;
+    lifecycle.invalidate();
+  }
+  const currentComparison = comparison?.client === comparisonClient ? comparison.result : undefined;
+  const currentError = error?.client === comparisonClient ? error.message : undefined;
+  const busyForClient = busy !== undefined && lifecycle.isCurrent(busy, comparisonClient);
+  const view = comparisonsViewFor({ baseRunId, candidateRunId, comparison: currentComparison, runs });
+
+  useEffect(() => () => lifecycle.invalidate(), [lifecycle]);
+
+  useEffect(() => {
+    setBusy(undefined);
+    setComparison(undefined);
+    setError(undefined);
+  }, [comparisonClient]);
 
   useEffect(() => {
     let current = true;
@@ -160,7 +214,7 @@ export const ComparisonsPage = ({ comparisonClient, evalClient }: ComparisonsPag
       (reason) => {
         if (!current) return;
         setRuns([]);
-        setError(errorMessage(reason));
+        setError({ client: comparisonClient, message: errorMessage(reason) });
       },
     );
     return () => { current = false; };
@@ -170,15 +224,23 @@ export const ComparisonsPage = ({ comparisonClient, evalClient }: ComparisonsPag
     const base = view.base?.key;
     const candidate = view.candidate?.key;
     if (base === undefined || candidate === undefined) return;
-    setBusy(true);
+    const request = lifecycle.begin(comparisonClient);
+    setBusy(request);
     setError(undefined);
+    setComparison(undefined);
     try {
-      setComparison(await runComparison(comparisonClient, base, candidate));
+      const result = await runComparison(comparisonClient, base, candidate, request.signal);
+      if (!lifecycle.isCurrent(request, comparisonClient)) return;
+      setComparison({ client: comparisonClient, result });
     } catch (reason) {
-      setComparison(undefined);
-      setError(errorMessage(reason));
+      if (lifecycle.isCurrent(request, comparisonClient) && !isAbortError(reason)) {
+        setError({ client: comparisonClient, message: errorMessage(reason) });
+      }
     } finally {
-      setBusy(false);
+      if (lifecycle.isCurrent(request, comparisonClient)) {
+        lifecycle.complete(request);
+        setBusy(undefined);
+      }
     }
   };
 
@@ -189,12 +251,12 @@ export const ComparisonsPage = ({ comparisonClient, evalClient }: ComparisonsPag
         <p>Aligned baseline and candidate runs, with the actual k/n beside pass@k and pass^k.</p>
       </div>
     </div>
-    {error === undefined ? undefined : <p className="request-error" role="alert">{error}</p>}
+    {currentError === undefined ? undefined : <p className="request-error" role="alert">{currentError}</p>}
     {view.state === 'insufficient-runs'
       ? <p className="empty-row" role="status">{view.summary}</p>
       : <>
         <ComparisonControls
-          busy={busy}
+          busy={busyForClient}
           onCompare={() => void compare()}
           onSelectBase={setBaseRunId}
           onSelectCandidate={setCandidateRunId}
