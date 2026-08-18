@@ -367,8 +367,10 @@ export const runClaudeTrial = async (options: RunClaudeTrialOptions): Promise<Ev
 
   if (failure === undefined && outcome !== undefined && stream !== undefined && workspacePath !== undefined) {
     grading = await gradeTrial(options, workspacePath, stream, environment, processOptions);
+    const completeTrace = stream.incompleteTrailingRecord === undefined &&
+      stream.trace.some((event) => event.kind === 'result');
     evidence = Object.freeze({
-      mcp: Object.freeze({ calls: stream.mcpCalls, level: 'observed' }),
+      mcp: Object.freeze({ calls: stream.mcpCalls, level: completeTrace ? 'observed' : 'unavailable' }),
       process: Object.freeze({
         ...(outcome.exitCode === undefined ? {} : { exitCode: outcome.exitCode }),
         level: 'observed',

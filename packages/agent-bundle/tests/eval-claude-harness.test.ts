@@ -13,6 +13,7 @@ import {
   defineEvalSuite,
   expectExitCode,
   expectMcpCall,
+  expectNoMcpCall,
   expectOutcome,
   expectSkillActivation,
   planEvalFixture,
@@ -294,6 +295,37 @@ it('does not persist zero token usage when Claude omits usage from an otherwise 
     expect(trial.rawArtifacts).not.toContain('artifacts/direct-review--claude-1/usage.json');
   });
 }, 240_000);
+
+it.each([
+  ['nonterminal', [
+    '{"type":"system","subtype":"init","plugins":[{"name":"review"}]}',
+    '{"type":"assistant","message":{"content":[{"type":"text","text":"Still working."}]}}',
+    '',
+  ].join('\n')],
+  ['truncated', [
+    '{"type":"system","subtype":"init","plugins":[{"name":"review"}]}',
+    '{"type":"assistant","message":{"content":[{"type":"text","text":"Still working."}]}}',
+    '{"type":"assistant","message":{"content":[{"type":"tool_use"',
+  ].join('\n')],
+] as const)(
+  'keeps forbidden MCP-call assertions inconclusive for a %s Claude trace',
+  async (_kind, stdout) => {
+    await withClaudeContext([expectNoMcpCall({ server: 'payments' })], async (context) => {
+      const trial = await runTrial(context, {
+        run: (_request, index) => index === 0
+          ? versionResult
+          : index === 1
+            ? authenticatedResult
+            : { exitCode: 0, stderr: '', stdout },
+      });
+
+      expect(trial.evidence.mcp).toEqual({ calls: [], level: 'unavailable' });
+      expect(trial.assertions).toMatchObject([{ kind: 'no-mcp-call', outcome: 'inconclusive' }]);
+      expect(trial.outcome).toBe('inconclusive');
+    });
+  },
+  240_000,
+);
 
 it('turns a missing CLI into a harness-failure trial without a workspace or plugin failure', async () => {
   await withClaudeContext(defaultAssertions, async (context) => {
