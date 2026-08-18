@@ -1,4 +1,4 @@
-import { access, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { access, appendFile, link, mkdir, readFile, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { expect, it } from '@rstest/core';
@@ -168,6 +168,289 @@ it('reports a missing or unreadable run instead of inventing an empty one', asyn
       code: 'EVAL_RUN_NOT_FOUND',
     });
     await expect(service(project.root).read('../escape')).rejects.toMatchObject({ code: 'EVAL_RUN_NOT_FOUND' });
+  } finally {
+    await removeProjectFixture(project.root);
+  }
+}, 120_000);
+
+it('replays only complete persisted events with a frozen durable cursor', async () => {
+  const project = await createProjectFixture();
+  try {
+    await seedEvalProject(project.root);
+    const evals = service(project.root);
+    const created = await evals.run({ caseIds: ['reads-result'] });
+    const eventsPath = join(project.root, '.agent-bundle', 'runs', created.run.id, 'events.jsonl');
+    await appendFile(eventsPath, '{"kind":"trial.completed","payl');
+
+    const replay = await evals.events(created.run.id, 0);
+    const continued = await evals.events(created.run.id, 1);
+
+    expect(replay.events.map((event) => event.sequence)).toEqual([1, 2, 3]);
+    expect(replay.events.map((event) => event.kind)).toEqual(['run.started', 'trial.completed', 'run.completed']);
+    expect(replay.cursor).toEqual({ afterSequence: 3 });
+    expect(replay.incompleteTrailingRecord).toBe(true);
+    expect(continued.events.map((event) => event.sequence)).toEqual([2, 3]);
+    expect(continued.cursor).toEqual({ afterSequence: 3 });
+    expect(Object.isFrozen(replay)).toBe(true);
+    expect(Object.isFrozen(replay.cursor)).toBe(true);
+    expect(Object.isFrozen(replay.events)).toBe(true);
+    expect(Object.isFrozen(replay.events[0]?.payload)).toBe(true);
+    await expect(evals.events(created.run.id, 4)).rejects.toMatchObject({ code: 'EVAL_EVENTS_CURSOR_INVALID' });
+  } finally {
+    await removeProjectFixture(project.root);
+  }
+}, 120_000);
+
+it('queues durable events published after the replay snapshot without skipping or reordering them', async () => {
+  const project = await createProjectFixture();
+  const createdAt = new Date('2026-08-18T08:00:00.000Z');
+  let running: Promise<unknown> | undefined;
+  try {
+    await seedEvalProject(project.root);
+    const evals = new EvalService({ now: () => createdAt, projectRoot: project.root, targets: ['portable'] });
+    running = evals.run({ caseIds: ['reads-result'], trials: 3 });
+    let subscription: Awaited<ReturnType<typeof evals.subscribeEvents>> | undefined;
+    for (let attempt = 0; attempt < 800 && subscription === undefined; attempt += 1) {
+      const run = (await evals.list())[0];
+      if (run !== undefined) subscription = await evals.subscribeEvents(run.id, 0);
+      else await new Promise<void>((resolvePromise) => setTimeout(resolvePromise, 10));
+    }
+    if (subscription === undefined) throw new Error('The run never became available for durable event observation.');
+    const observed = [...subscription.replay.events];
+    subscription.activate((event) => { observed.push(event); });
+    await running;
+
+    expect(observed.map((event) => event.sequence)).toEqual([1, 2, 3, 4, 5]);
+    expect(observed.map((event) => event.kind)).toEqual([
+      'run.started', 'trial.completed', 'trial.completed', 'trial.completed', 'run.completed',
+    ]);
+    expect(observed[0]).toBeDefined();
+    expect(Object.isFrozen(observed[0]!)).toBe(true);
+    subscription.close();
+  } finally {
+    await running?.catch(() => undefined);
+    await removeProjectFixture(project.root);
+  }
+}, 120_000);
+
+it('opens only an artifact reference persisted by a recorded trial', async () => {
+  const project = await createProjectFixture();
+  try {
+    await seedEvalProject(project.root);
+    const evals = service(project.root);
+    const created = await evals.run({ caseIds: ['reads-result'] });
+    const ref = created.trials[0]?.rawArtifacts[0];
+    if (ref === undefined) throw new Error('The deterministic fixture must produce raw evidence.');
+
+    const opened = await evals.openArtifact(created.run.id, ref);
+    try {
+      expect(opened.ref).toBe(ref);
+      expect(opened.size).toBeGreaterThan(0);
+    } finally {
+      await opened.close();
+    }
+    await expect(evals.openArtifact(created.run.id, 'artifacts/unrecorded.json')).rejects.toMatchObject({
+      code: 'EVAL_ARTIFACT_NOT_FOUND',
+    });
+  } finally {
+    await removeProjectFixture(project.root);
+  }
+}, 120_000);
+
+it('fails closed when a persisted raw artifact becomes linked or exceeds the evidence limit', async () => {
+  const corruptions = [
+    async (path: string, root: string): Promise<void> => {
+      const outside = join(root, 'outside-evidence.json');
+      await writeFile(outside, '{}\n');
+      await rm(path);
+      await symlink(outside, path);
+    },
+    async (path: string, root: string): Promise<void> => {
+      await link(path, join(root, 'evidence-hardlink.json'));
+    },
+    async (path: string): Promise<void> => {
+      await writeFile(path, Buffer.alloc(8 * 1024 * 1024 + 1));
+    },
+  ] as const;
+
+  for (const corrupt of corruptions) {
+    const project = await createProjectFixture();
+    try {
+      await seedEvalProject(project.root);
+      const evals = service(project.root);
+      const created = await evals.run({ caseIds: ['reads-result'] });
+      const ref = created.trials[0]?.rawArtifacts[0];
+      if (ref === undefined) throw new Error('The deterministic fixture must produce raw evidence.');
+      const path = join(project.root, '.agent-bundle', 'runs', created.run.id, ...ref.split('/'));
+      await corrupt(path, project.root);
+
+      await expect(evals.openArtifact(created.run.id, ref)).rejects.toMatchObject({
+        code: 'EVAL_ARTIFACT_UNAVAILABLE',
+        message: 'Recorded raw evidence is not available.',
+      });
+    } finally {
+      await removeProjectFixture(project.root);
+    }
+  }
+}, 120_000);
+
+it('fails closed when an ancestor of a persisted raw artifact becomes a symlink', async () => {
+  const project = await createProjectFixture();
+  try {
+    await seedEvalProject(project.root);
+    const evals = service(project.root);
+    const created = await evals.run({ caseIds: ['reads-result'] });
+    const ref = created.trials[0]?.rawArtifacts[0];
+    if (ref === undefined) throw new Error('The deterministic fixture must produce raw evidence.');
+    const runDirectory = join(project.root, '.agent-bundle', 'runs', created.run.id);
+    const artifactDirectory = join(runDirectory, ...ref.split('/').slice(0, -1));
+    const outside = join(project.root, 'outside-artifacts');
+    await mkdir(outside);
+    await writeFile(join(outside, 'evidence.json'), '{"substituted":true}\n');
+    await rm(artifactDirectory, { force: true, recursive: true });
+    await symlink(outside, artifactDirectory);
+
+    let opened: Awaited<ReturnType<typeof evals.openArtifact>> | undefined;
+    const opening = evals.openArtifact(created.run.id, ref).then((reader) => {
+      opened = reader;
+      return reader;
+    });
+    try {
+      await expect(opening).rejects.toMatchObject({
+        code: 'EVAL_ARTIFACT_UNAVAILABLE',
+        message: 'Recorded raw evidence is not available.',
+      });
+    } finally {
+      await opened?.close();
+    }
+  } finally {
+    await removeProjectFixture(project.root);
+  }
+}, 120_000);
+
+it('keeps a verified artifact reader pinned to its original inode after a pathname swap', async () => {
+  const project = await createProjectFixture();
+  try {
+    await seedEvalProject(project.root);
+    const evals = service(project.root);
+    const created = await evals.run({ caseIds: ['reads-result'] });
+    const ref = created.trials[0]?.rawArtifacts[0];
+    if (ref === undefined) throw new Error('The deterministic fixture must produce raw evidence.');
+    const path = join(project.root, '.agent-bundle', 'runs', created.run.id, ...ref.split('/'));
+    const expected = await readFile(path);
+    const opened = await evals.openArtifact(created.run.id, ref);
+    await writeFile(`${path}.replacement`, 'attacker replacement');
+    await rename(`${path}.replacement`, path);
+    try {
+      const chunks: Buffer[] = [];
+      for await (const chunk of opened.read()) chunks.push(Buffer.from(chunk));
+      expect(Buffer.concat(chunks)).toEqual(expected);
+    } finally {
+      await opened.close();
+    }
+  } finally {
+    await removeProjectFixture(project.root);
+  }
+}, 120_000);
+
+it('serves the exact bytes that were hashed even if the same inode is mutated after open', async () => {
+  const project = await createProjectFixture();
+  try {
+    await seedEvalProject(project.root);
+    const evals = service(project.root);
+    const created = await evals.run({ caseIds: ['reads-result'] });
+    const ref = created.trials[0]?.rawArtifacts[0];
+    if (ref === undefined) throw new Error('The deterministic fixture must produce raw evidence.');
+    const path = join(project.root, '.agent-bundle', 'runs', created.run.id, ...ref.split('/'));
+    const expected = await readFile(path);
+    const opened = await evals.openArtifact(created.run.id, ref);
+    await writeFile(path, Buffer.alloc(expected.length, 0x78));
+    try {
+      const chunks: Buffer[] = [];
+      for await (const chunk of opened.read()) chunks.push(Buffer.from(chunk));
+      expect(Buffer.concat(chunks)).toEqual(expected);
+    } finally {
+      await opened.close();
+    }
+  } finally {
+    await removeProjectFixture(project.root);
+  }
+}, 120_000);
+
+it('rejects a trial-reference authority record reached through a substituted cases symlink', async () => {
+  const project = await createProjectFixture();
+  try {
+    await seedEvalProject(project.root);
+    const evals = service(project.root);
+    const created = await evals.run({ caseIds: ['reads-result'] });
+    const ref = created.trials[0]?.rawArtifacts[0];
+    if (ref === undefined) throw new Error('The deterministic fixture must produce raw evidence.');
+    const directory = join(project.root, '.agent-bundle', 'runs', created.run.id);
+    const cases = join(directory, 'cases');
+    const outside = join(project.root, 'substituted-cases');
+    await rename(cases, outside);
+    await symlink(outside, cases);
+
+    let opened: Awaited<ReturnType<typeof evals.openArtifact>> | undefined;
+    const opening = evals.openArtifact(created.run.id, ref).then((reader) => {
+      opened = reader;
+      return reader;
+    });
+    try {
+      await expect(opening).rejects.toMatchObject({
+        code: 'EVAL_ARTIFACT_UNAVAILABLE',
+        message: 'Recorded raw evidence is not available.',
+      });
+    } finally {
+      await opened?.close();
+    }
+  } finally {
+    await removeProjectFixture(project.root);
+  }
+}, 120_000);
+
+it('fails closed without a filesystem path when a run root is swapped after persistence', async () => {
+  const project = await createProjectFixture();
+  try {
+    await seedEvalProject(project.root);
+    const evals = service(project.root);
+    const created = await evals.run({ caseIds: ['reads-result'] });
+    const ref = created.trials[0]?.rawArtifacts[0];
+    if (ref === undefined) throw new Error('The deterministic fixture must produce raw evidence.');
+    const directory = join(project.root, '.agent-bundle', 'runs', created.run.id);
+    const outside = join(project.root, 'swapped-run');
+    await mkdir(outside);
+    await rm(directory, { force: true, recursive: true });
+    await symlink(outside, directory);
+
+    await expect(evals.openArtifact(created.run.id, ref)).rejects.toMatchObject({
+      code: 'EVAL_ARTIFACT_UNAVAILABLE',
+      message: 'Recorded raw evidence is not available.',
+    });
+  } finally {
+    await removeProjectFixture(project.root);
+  }
+}, 120_000);
+
+it('drains opened evidence readers through one reentrant service close promise', async () => {
+  const project = await createProjectFixture();
+  try {
+    await seedEvalProject(project.root);
+    const evals = service(project.root);
+    const created = await evals.run({ caseIds: ['reads-result'] });
+    const ref = created.trials[0]?.rawArtifacts[0];
+    if (ref === undefined) throw new Error('The deterministic fixture must produce raw evidence.');
+    const opened = await evals.openArtifact(created.run.id, ref);
+
+    const first = evals.close();
+    const second = evals.close();
+    expect(first).toBe(second);
+    await first;
+    expect(() => opened.read()).toThrow('Raw evidence reader is closed.');
+    await expect(evals.openArtifact(created.run.id, ref)).rejects.toMatchObject({
+      code: 'EVAL_ARTIFACT_UNAVAILABLE',
+      message: 'Recorded raw evidence is not available.',
+    });
   } finally {
     await removeProjectFixture(project.root);
   }

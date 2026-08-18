@@ -412,9 +412,17 @@ const evalDiagnostics: Readonly<Record<EvalServiceErrorCode, Readonly<{
   readonly code: string;
   readonly recovery: string;
 }>>> = Object.freeze({
-  EVAL_ARTIFACT_OUTSIDE_PROJECT: Object.freeze({
-    code: 'AB9006',
-    recovery: 'Evaluate an artifact inside the project so its run record records no absolute path.',
+  EVAL_ARTIFACT_NOT_FOUND: Object.freeze({
+    code: 'AB9009',
+    recovery: 'Select raw evidence that the recorded eval trial persisted.',
+  }),
+  EVAL_ARTIFACT_UNAVAILABLE: Object.freeze({
+    code: 'AB9010',
+    recovery: 'Regenerate the recorded eval run before reading its raw evidence.',
+  }),
+  EVAL_EVENTS_CURSOR_INVALID: Object.freeze({
+    code: 'AB9011',
+    recovery: 'Reconnect from a non-negative cursor no later than the durable event sequence.',
   }),
   EVAL_HARNESS_UNSUPPORTED: Object.freeze({
     code: 'AB9001',

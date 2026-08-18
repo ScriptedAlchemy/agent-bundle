@@ -46,7 +46,7 @@ export class ForegroundServerError extends Error {
 
 export interface ForegroundServerCloseFailure {
   readonly error: unknown;
-  readonly resource: 'agent-api' | 'coordinator' | 'hook-playground' | 'logs' | 'mcp-apps' | 'server';
+  readonly resource: 'agent-api' | 'coordinator' | 'eval-routes' | 'hook-playground' | 'logs' | 'mcp-apps' | 'server';
 }
 
 export interface ForegroundServerStartFailure {
@@ -646,54 +646,52 @@ export class ForegroundServer {
     void releaseHookPlayground.catch(() => undefined);
     this.#playgroundRoutes.close();
     this.#artifactRoutes.close();
-    this.#evalRoutes.close();
+    const releaseEvals = this.#evalRoutes.close();
+    void releaseEvals.catch(() => undefined);
     // Fence all authenticated log streams before the shared coordinator begins
     // producer shutdown.  Observe an early rejection until the all-settled
     // aggregation below can report it with its fixed resource label.
     const releaseLogs = this.#devLogRoutes.close();
     void releaseLogs.catch(() => undefined);
-    const release = (async () => {
-      // The Agent API owns admissions over every shared foreground service. It
-      // must publish closure and drain active handlers before those services or
-      // the epoch-owning coordinator begin their own shutdown.
-      const [agentApi] = await Promise.allSettled([this.#agentApi?.close() ?? Promise.resolve()]);
-      // Publish runtime App tombstones while authenticated event streams are
-      // still subscribed. Lifecycle close below owns proxies and sandboxes.
-      const appPreparation = await Promise.allSettled([this.#mcpAppPreviews?.prepareClose?.() ?? Promise.resolve()]);
-      // EventHub delivery is synchronous, while a socket write may need one
-      // turn to leave Node's stream buffer before shutdown destroys sockets.
-      await new Promise<void>((resolvePromise) => setImmediate(resolvePromise));
-      const releaseServer = this.#listenStarted
-        ? (() => {
-            this.#listenStarted = false;
-            for (const subscription of this.#streamSubscriptions) subscription.unsubscribe();
-            this.#streamSubscriptions.clear();
-            for (const socket of this.#sockets) socket.destroy();
-            return closeServer(this.#server);
-          })()
-        : Promise.resolve();
-      // Cancelled hook simulations own wrapper processes and clones, so their
-      // drain is released alongside the Runtime App lifecycle and awaited.
-      const [server, coordinator, hookPlayground, logs] = await Promise.allSettled([
-        releaseServer,
-        this.#coordinator.close(),
-        releaseHookPlayground,
-        releaseLogs,
-      ]);
-      const failures: ForegroundServerCloseFailure[] = [];
-      if (agentApi.status === 'rejected') failures.push(Object.freeze({ error: agentApi.reason, resource: 'agent-api' }));
-      for (const result of appPreparation) {
-        if (result.status === 'rejected') failures.push(Object.freeze({ error: result.reason, resource: 'mcp-apps' }));
-      }
-      if (server.status === 'rejected') failures.push(Object.freeze({ error: server.reason, resource: 'server' }));
-      if (coordinator.status === 'rejected') failures.push(Object.freeze({ error: coordinator.reason, resource: 'coordinator' }));
-      if (hookPlayground.status === 'rejected') {
-        failures.push(Object.freeze({ error: hookPlayground.reason, resource: 'hook-playground' }));
-      }
-      if (logs.status === 'rejected') failures.push(Object.freeze({ error: logs.reason, resource: 'logs' }));
-      return Object.freeze(failures);
-    })();
-    return release;
+    // The Agent API owns admissions over every shared foreground service. It
+    // must publish closure and drain active handlers before those services or
+    // the epoch-owning coordinator begin their own shutdown.
+    const [agentApi] = await Promise.allSettled([this.#agentApi?.close() ?? Promise.resolve()]);
+    // Publish runtime App tombstones while authenticated event streams are
+    // still subscribed. Lifecycle close below owns proxies and sandboxes.
+    const appPreparation = await Promise.allSettled([this.#mcpAppPreviews?.prepareClose?.() ?? Promise.resolve()]);
+    // EventHub delivery is synchronous, while a socket write may need one
+    // turn to leave Node's stream buffer before shutdown destroys sockets.
+    await new Promise<void>((resolvePromise) => setImmediate(resolvePromise));
+    const releaseServer = this.#listenStarted
+      ? (() => {
+          this.#listenStarted = false;
+          for (const subscription of this.#streamSubscriptions) subscription.unsubscribe();
+          this.#streamSubscriptions.clear();
+          for (const socket of this.#sockets) socket.destroy();
+          return closeServer(this.#server);
+        })()
+      : Promise.resolve();
+    const [server, coordinator, evalRoutes, hookPlayground, logs] = await Promise.allSettled([
+      releaseServer,
+      this.#coordinator.close(),
+      releaseEvals,
+      releaseHookPlayground,
+      releaseLogs,
+    ]);
+    const failures: ForegroundServerCloseFailure[] = [];
+    if (agentApi.status === 'rejected') failures.push(Object.freeze({ error: agentApi.reason, resource: 'agent-api' }));
+    for (const result of appPreparation) {
+      if (result.status === 'rejected') failures.push(Object.freeze({ error: result.reason, resource: 'mcp-apps' }));
+    }
+    if (server.status === 'rejected') failures.push(Object.freeze({ error: server.reason, resource: 'server' }));
+    if (coordinator.status === 'rejected') failures.push(Object.freeze({ error: coordinator.reason, resource: 'coordinator' }));
+    if (evalRoutes.status === 'rejected') failures.push(Object.freeze({ error: evalRoutes.reason, resource: 'eval-routes' }));
+    if (hookPlayground.status === 'rejected') {
+      failures.push(Object.freeze({ error: hookPlayground.reason, resource: 'hook-playground' }));
+    }
+    if (logs.status === 'rejected') failures.push(Object.freeze({ error: logs.reason, resource: 'logs' }));
+    return Object.freeze(failures);
   }
 
   async #handle(request: IncomingMessage, response: ServerResponse): Promise<void> {

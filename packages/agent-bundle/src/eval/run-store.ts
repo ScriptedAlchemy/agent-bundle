@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { appendFile, lstat, mkdir, readFile, readdir, realpath, rename, rm, writeFile } from 'node:fs/promises';
+import { constants, type Stats } from 'node:fs';
+import { lstat, mkdir, open, readFile, readdir, realpath, rename, rm, writeFile } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, resolve, win32 } from 'node:path';
 
 import { stableJson } from '../core/digest.ts';
@@ -115,6 +116,7 @@ const ownerFileName = 'owner.json';
 const runFileName = 'run.json';
 const safeSegment = /^[a-z0-9][a-z0-9._-]*$/iu;
 const safeRelativeSegment = /^(?!\.{1,2}$)[a-z0-9._-]+$/iu;
+const maximumTrialRecordBytes = 1024 * 1024;
 
 const storeError = (
   code: ConstructorParameters<typeof EvalRunStoreError>[0],
@@ -123,6 +125,8 @@ const storeError = (
 
 const isErrno = (error: unknown, code: string): boolean =>
   typeof error === 'object' && error !== null && 'code' in error && error.code === code;
+
+const sameFile = (left: Stats, right: Stats): boolean => left.dev === right.dev && left.ino === right.ino;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -790,8 +794,15 @@ export class EvalRunWriter {
         sequence: this.#sequence,
         timestamp: new Date().toISOString(),
       });
-      await ensureWritablePath(this.#directory, join(this.#directory, eventsFileName));
-      await appendFile(join(this.#directory, eventsFileName), `${stableJson(record)}\n`, 'utf8');
+      const eventPath = join(this.#directory, eventsFileName);
+      await ensureWritablePath(this.#directory, eventPath);
+      const journal = await open(eventPath, constants.O_APPEND | constants.O_NOFOLLOW | constants.O_WRONLY);
+      try {
+        await journal.writeFile(`${stableJson(record)}\n`, 'utf8');
+        await journal.sync();
+      } finally {
+        await journal.close();
+      }
       return record;
     });
   }
@@ -979,7 +990,10 @@ export const readEvalRunEvents = async (directory: string): Promise<EvalRunEvent
   }
   const lines = contents.split('\n');
   const trailing = lines.pop() ?? '';
-  const events = lines.filter((line) => line.length > 0).map((line) => {
+  const events = lines.map((line) => {
+    if (line.length === 0) {
+      throw storeError('EVAL_RUN_CORRUPT', 'Eval run event log contains an empty complete record.');
+    }
     let parsed: unknown;
     try {
       parsed = parseJsonWithoutDuplicateKeys(line);
@@ -992,29 +1006,75 @@ export const readEvalRunEvents = async (directory: string): Promise<EvalRunEvent
     }
     return event;
   });
+  for (const [index, event] of events.entries()) {
+    if (event.sequence !== index + 1) {
+      throw storeError('EVAL_RUN_CORRUPT', 'Eval run event log sequences must be exactly 1 through N.');
+    }
+  }
   return Object.freeze({
     events: Object.freeze(events),
     ...(trailing.length === 0 ? {} : { incompleteTrailingRecord: trailing }),
   });
 };
 
+const trialDirectory = async (path: string): Promise<void> => {
+  const entry = await lstat(path);
+  if (entry.isSymbolicLink() || !entry.isDirectory()) {
+    throw storeError('EVAL_RUN_CORRUPT', 'Eval trial records must remain in real run directories.');
+  }
+};
+
+const readTrialRecordFile = async (sourcePath: string): Promise<unknown> => {
+  const before = await lstat(sourcePath);
+  if (before.isSymbolicLink() || !before.isFile() || before.nlink !== 1 || before.size > maximumTrialRecordBytes) {
+    throw storeError('EVAL_RUN_CORRUPT', 'Eval trial record is not a safe regular file.');
+  }
+  const file = await open(sourcePath, constants.O_RDONLY | constants.O_NOFOLLOW);
+  try {
+    const descriptor = await file.stat();
+    if (!descriptor.isFile() || descriptor.nlink !== 1 || descriptor.size > maximumTrialRecordBytes || !sameFile(before, descriptor)) {
+      throw storeError('EVAL_RUN_CORRUPT', 'Eval trial record changed while opening.');
+    }
+    const bytes = await file.readFile({ encoding: 'utf8' });
+    const [after, final] = await Promise.all([lstat(sourcePath), file.stat()]);
+    if (after.isSymbolicLink() || !after.isFile() || after.nlink !== 1 || !sameFile(before, after) || !sameFile(descriptor, final) ||
+      final.size !== descriptor.size || Buffer.byteLength(bytes, 'utf8') !== descriptor.size) {
+      throw storeError('EVAL_RUN_CORRUPT', 'Eval trial record changed while reading.');
+    }
+    return parseJsonWithoutDuplicateKeys(bytes);
+  } finally {
+    await file.close();
+  }
+};
+
 export const readEvalTrials = async (directory: string): Promise<readonly EvalTrialRecord[]> => {
   const casesRoot = join(resolve(directory), 'cases');
   let caseEntries;
   try {
+    await trialDirectory(casesRoot);
     caseEntries = await readdir(casesRoot, { withFileTypes: true });
   } catch (error) {
     if (isErrno(error, 'ENOENT')) return Object.freeze([]);
     throw error;
   }
   const trials: EvalTrialRecord[] = [];
-  for (const caseEntry of caseEntries.filter((entry) => entry.isDirectory())) {
-    const trialFiles = await readdir(join(casesRoot, caseEntry.name), { withFileTypes: true });
-    for (const trialFile of trialFiles.filter((entry) => entry.isFile() && entry.name.endsWith('.json'))) {
+  for (const caseEntry of caseEntries) {
+    if (caseEntry.isSymbolicLink()) {
+      throw storeError('EVAL_RUN_CORRUPT', 'Eval trial records must not traverse a symbolic link.');
+    }
+    if (!caseEntry.isDirectory()) continue;
+    const caseDirectory = join(casesRoot, caseEntry.name);
+    await trialDirectory(caseDirectory);
+    const trialFiles = await readdir(caseDirectory, { withFileTypes: true });
+    for (const trialFile of trialFiles) {
+      if (trialFile.isSymbolicLink() && trialFile.name.endsWith('.json')) {
+        throw storeError('EVAL_RUN_CORRUPT', 'Eval trial records must not traverse a symbolic link.');
+      }
+      if (!trialFile.isFile() || !trialFile.name.endsWith('.json')) continue;
       const sourcePath = join(casesRoot, caseEntry.name, trialFile.name);
       let parsed: unknown;
       try {
-        parsed = parseJsonWithoutDuplicateKeys(await readFile(sourcePath, 'utf8'));
+        parsed = await readTrialRecordFile(sourcePath);
       } catch {
         throw storeError('EVAL_RUN_CORRUPT', `Eval trial record ${JSON.stringify(sourcePath)} cannot be parsed as JSON.`);
       }

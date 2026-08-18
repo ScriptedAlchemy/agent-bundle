@@ -1,5 +1,8 @@
-import { rm } from 'node:fs/promises';
-import { dirname, join, relative, resolve } from 'node:path';
+import { createHash } from 'node:crypto';
+import { constants, type Stats } from 'node:fs';
+import { lstat, open, realpath, rm } from 'node:fs/promises';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { Readable } from 'node:stream';
 
 import { createDefaultRegistry, type TargetRegistry } from '../adapters/registry.ts';
 import { loadConfig } from '../config/load.ts';
@@ -23,6 +26,7 @@ import {
   readEvalRun,
   readEvalRunEvents,
   readEvalTrials,
+  type EvalRunEvent,
   type EvalRunRecord,
   type EvalTrialRecord,
 } from '../eval/run-store.ts';
@@ -30,6 +34,9 @@ import type { EvalAssertionKind, EvalCase, EvalInvocation } from '../eval/types.
 import type { DevLogKindFor, DevLogSink } from './dev-log-service.ts';
 
 export type EvalServiceErrorCode =
+  | 'EVAL_ARTIFACT_NOT_FOUND'
+  | 'EVAL_ARTIFACT_UNAVAILABLE'
+  | 'EVAL_EVENTS_CURSOR_INVALID'
   | 'EVAL_HARNESS_UNSUPPORTED'
   | 'EVAL_RUN_NOT_FOUND'
   | 'EVAL_SELECTION_EMPTY'
@@ -96,6 +103,31 @@ export interface EvalRunResult {
   readonly trials: readonly EvalTrialRecord[];
 }
 
+/** A durable event replay never includes an incomplete append record. */
+export interface EvalRunEventsReplay {
+  readonly cursor: Readonly<{ readonly afterSequence: number }>;
+  readonly events: readonly EvalRunEvent[];
+  /** True when the event file ends with an incomplete record that was not replayed. */
+  readonly incompleteTrailingRecord?: true;
+}
+
+/** A run-pinned raw-evidence descriptor. Call close when its response stream ends. */
+export interface EvalArtifactReader {
+  readonly digest: string;
+  readonly filename: string;
+  readonly ref: string;
+  readonly size: number;
+  close(): Promise<void>;
+  read(start?: number, end?: number): Readable;
+}
+
+/** A replay snapshot followed by durable, ordered events published after its cursor. */
+export interface EvalEventSubscription {
+  readonly replay: EvalRunEventsReplay;
+  activate(listener: (event: EvalRunEvent) => void): void;
+  close(): void;
+}
+
 export interface EvalServiceOptions {
   readonly configPath?: string;
   readonly mode?: string;
@@ -131,7 +163,9 @@ interface PlannedEvalTrial {
 }
 
 const maximumTrials = 100;
+const maximumArtifactBytes = 8 * 1024 * 1024;
 const safeRunId = /^[a-z0-9][a-z0-9._-]*$/u;
+const safeArtifactSegment = /^[a-z0-9][a-z0-9._-]*$/iu;
 
 const serviceError = (code: EvalServiceErrorCode, message: string): EvalServiceError =>
   new EvalServiceError(code, message);
@@ -205,12 +239,145 @@ const requestedTrials = (value: number | undefined): number | undefined => {
   return value;
 };
 
+const requestedAfterSequence = (value: number): number => {
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw serviceError('EVAL_EVENTS_CURSOR_INVALID', 'Eval event cursor must be a non-negative safe integer.');
+  }
+  return value;
+};
+
+class PendingEvalEventSubscription implements EvalEventSubscription {
+  #closed = false;
+  #listener: ((event: EvalRunEvent) => void) | undefined;
+  readonly #onClose: () => void;
+  #queued: EvalRunEvent[] = [];
+  #replay: EvalRunEventsReplay | undefined;
+
+  constructor(onClose: () => void) {
+    this.#onClose = onClose;
+  }
+
+  get replay(): EvalRunEventsReplay {
+    if (this.#replay === undefined) throw new Error('Eval event subscription has not finished replaying.');
+    return this.#replay;
+  }
+
+  bind(replay: EvalRunEventsReplay): void {
+    this.#replay = replay;
+    this.#queued = this.#queued.filter((event) => event.sequence > replay.cursor.afterSequence);
+  }
+
+  publish(event: EvalRunEvent): void {
+    if (this.#closed) return;
+    const listener = this.#listener;
+    if (listener === undefined) this.#queued.push(event);
+    else listener(event);
+  }
+
+  activate(listener: (event: EvalRunEvent) => void): void {
+    if (this.#closed || this.#listener !== undefined) return;
+    this.#listener = listener;
+    const queued = this.#queued;
+    this.#queued = [];
+    for (const event of queued) listener(event);
+  }
+
+  close(): void {
+    if (this.#closed) return;
+    this.#closed = true;
+    this.#listener = undefined;
+    this.#queued = [];
+    this.#onClose();
+  }
+}
+
+const isWithin = (root: string, candidate: string): boolean => {
+  const path = relative(root, candidate);
+  return path.length === 0 || (!path.startsWith(`..${sep}`) && path !== '..' && !isAbsolute(path));
+};
+
+const artifactSegments = (value: unknown): readonly string[] | undefined => {
+  if (typeof value !== 'string' || /%(?:2f|5c)/iu.test(value) || value.includes('\\') || value.includes('\0')) {
+    return undefined;
+  }
+  const segments = value.split('/');
+  if (
+    segments.length < 2 || segments[0] !== 'artifacts' ||
+    segments.some((segment) => !safeArtifactSegment.test(segment))
+  ) return undefined;
+  return Object.freeze(segments);
+};
+
+const sameFile = (left: Stats, right: Stats): boolean => left.dev === right.dev && left.ino === right.ino;
+
+const isErrno = (error: unknown, code: string): boolean =>
+  typeof error === 'object' && error !== null && 'code' in error && error.code === code;
+
+const assertNoSymlinkedArtifactPath = async (projectRoot: string, target: string): Promise<void> => {
+  const root = resolve(projectRoot);
+  const resolvedTarget = resolve(target);
+  if (!isWithin(root, resolvedTarget)) throw new Error('Raw evidence path escaped the project.');
+  const segments = relative(root, resolvedTarget).split(/[/\\]/u);
+  let current = root;
+  for (const [index, segment] of segments.entries()) {
+    current = join(current, segment);
+    const entry = await lstat(current);
+    if (entry.isSymbolicLink() || index < segments.length - 1 && !entry.isDirectory()) {
+      throw new Error('Raw evidence path must contain only real directories and a real file.');
+    }
+  }
+};
+
+class OpenedEvalArtifact implements EvalArtifactReader {
+  readonly digest: string;
+  readonly filename: string;
+  readonly ref: string;
+  readonly size: number;
+  readonly #bytes: Buffer;
+  readonly #onClose: () => void;
+  #closePromise: Promise<void> | undefined;
+
+  constructor(options: {
+    readonly bytes: Buffer;
+    readonly digest: string;
+    readonly filename: string;
+    readonly onClose: () => void;
+    readonly ref: string;
+    readonly size: number;
+  }) {
+    this.digest = options.digest;
+    this.filename = options.filename;
+    this.#bytes = options.bytes;
+    this.#onClose = options.onClose;
+    this.ref = options.ref;
+    this.size = options.size;
+  }
+
+  read(start = 0, end = this.size - 1): Readable {
+    if (this.#closePromise !== undefined) throw new Error('Raw evidence reader is closed.');
+    if (this.size === 0 && start === 0 && end === -1) return Readable.from([]);
+    if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || end < start || end >= this.size) {
+      throw new RangeError('Raw evidence read range is not valid.');
+    }
+    return Readable.from([Buffer.from(this.#bytes.subarray(start, end + 1))]);
+  }
+
+  close(): Promise<void> {
+    if (this.#closePromise !== undefined) return this.#closePromise;
+    this.#closePromise = Promise.resolve().then(async () => {
+      this.#onClose();
+    });
+    return this.#closePromise;
+  }
+}
+
 /**
  * The one eval path the CLI, the programmatic API, and the workbench browser all
  * use. It resolves every filesystem location itself: a caller names
  * suites, cases, and a trial count, never a run directory, artifact copy, or command.
  */
 export class EvalService {
+  readonly #artifactReaders = new Set<OpenedEvalArtifact>();
   readonly #configPath: string | undefined;
   readonly #mode: string;
   readonly #logger: DevLogSink | undefined;
@@ -219,6 +386,8 @@ export class EvalService {
   readonly #projectRoot: string;
   readonly #registry: TargetRegistry;
   readonly #targets: readonly string[] | undefined;
+  readonly #eventSubscriptions = new Map<string, Set<PendingEvalEventSubscription>>();
+  #closePromise: Promise<void> | undefined;
 
   constructor(options: EvalServiceOptions) {
     this.#configPath = options.configPath;
@@ -263,6 +432,92 @@ export class EvalService {
       run,
       trials,
     });
+  }
+
+  async events(runId: string, afterSequence: number): Promise<EvalRunEventsReplay> {
+    if (!safeRunId.test(runId)) {
+      throw serviceError('EVAL_RUN_NOT_FOUND', `Eval run ${JSON.stringify(runId)} is not a run identifier.`);
+    }
+    const after = requestedAfterSequence(afterSequence);
+    const config = await this.#config();
+    const directory = this.#runDirectory(config, runId);
+    await readEvalRun(directory);
+    const persisted = await readEvalRunEvents(directory);
+    const latest = persisted.events.at(-1)?.sequence ?? 0;
+    if (after > latest) {
+      throw serviceError('EVAL_EVENTS_CURSOR_INVALID', 'Eval event cursor is ahead of the durable event log.');
+    }
+    return Object.freeze({
+      cursor: Object.freeze({ afterSequence: latest }),
+      events: Object.freeze(persisted.events.filter((event) => event.sequence > after)),
+      ...(persisted.incompleteTrailingRecord === undefined ? {} : { incompleteTrailingRecord: true as const }),
+    });
+  }
+
+  async subscribeEvents(runId: string, afterSequence: number): Promise<EvalEventSubscription> {
+    if (!safeRunId.test(runId)) {
+      throw serviceError('EVAL_RUN_NOT_FOUND', `Eval run ${JSON.stringify(runId)} is not a run identifier.`);
+    }
+    const after = requestedAfterSequence(afterSequence);
+    const subscriptions = this.#eventSubscriptions.get(runId) ?? new Set<PendingEvalEventSubscription>();
+    const subscription = new PendingEvalEventSubscription(() => {
+      subscriptions.delete(subscription);
+      if (subscriptions.size === 0) this.#eventSubscriptions.delete(runId);
+    });
+    subscriptions.add(subscription);
+    this.#eventSubscriptions.set(runId, subscriptions);
+    try {
+      subscription.bind(await this.events(runId, after));
+      return subscription;
+    } catch (error) {
+      subscription.close();
+      throw error;
+    }
+  }
+
+  async openArtifact(runId: string, artifactRef: string): Promise<EvalArtifactReader> {
+    if (!safeRunId.test(runId)) {
+      throw serviceError('EVAL_RUN_NOT_FOUND', `Eval run ${JSON.stringify(runId)} is not a run identifier.`);
+    }
+    if (this.#closePromise !== undefined) {
+      throw serviceError('EVAL_ARTIFACT_UNAVAILABLE', 'Recorded raw evidence is not available.');
+    }
+    const config = await this.#config();
+    const directory = this.#runDirectory(config, runId);
+    let trials: readonly EvalTrialRecord[];
+    try {
+      await assertNoSymlinkedArtifactPath(this.#projectRoot, join(directory, 'run.json'));
+      await readEvalRun(directory);
+      trials = await readEvalTrials(directory);
+    } catch (error) {
+      if (isErrno(error, 'ENOENT')) {
+        throw serviceError('EVAL_RUN_NOT_FOUND', `Eval run ${JSON.stringify(runId)} was not found.`);
+      }
+      throw serviceError('EVAL_ARTIFACT_UNAVAILABLE', 'Recorded raw evidence is not available.');
+    }
+    const segments = artifactSegments(artifactRef);
+    if (segments === undefined || !trials.some((trial) => trial.rawArtifacts.includes(artifactRef))) {
+      throw serviceError('EVAL_ARTIFACT_NOT_FOUND', 'Recorded raw evidence was not found.');
+    }
+    try {
+      return await this.#openArtifact(directory, artifactRef, segments);
+    } catch (error) {
+      if (error instanceof EvalServiceError) throw error;
+      throw serviceError('EVAL_ARTIFACT_UNAVAILABLE', 'Recorded raw evidence is not available.');
+    }
+  }
+
+  close(): Promise<void> {
+    if (this.#closePromise !== undefined) return this.#closePromise;
+    this.#closePromise = Promise.resolve().then(async () => {
+      const results = await Promise.allSettled([...this.#artifactReaders].map(async (reader) => reader.close()));
+      this.#artifactReaders.clear();
+      const failures = results.filter((result): result is PromiseRejectedResult => result.status === 'rejected');
+      if (failures.length > 0) {
+        throw new AggregateError(failures.map((failure) => failure.reason), 'Eval evidence readers could not close.');
+      }
+    });
+    return this.#closePromise;
   }
 
   /**
@@ -337,7 +592,7 @@ export class EvalService {
       runsDir: config.runsDir,
     });
     try {
-      await writer.appendEvent({
+      await this.#appendEvent(writer, runId, {
         kind: 'run.started',
         payload: { cases: new Set(planned.map((trial) => trial.evalCase.id)).size, harness: harness.name, trials: planned.length },
       });
@@ -364,15 +619,20 @@ export class EvalService {
           writer,
         });
         completed.push(trial);
-        await writer.appendEvent({
+        await this.#appendEvent(writer, runId, {
           kind: 'trial.completed',
           payload: { caseId: trial.caseId, id: trial.id, outcome: trial.outcome },
         });
         if (wasCancelled()) cancelled = true;
       }
       if (cancelled || completed.length !== planned.length) {
-        await writer.appendEvent({
+        await this.#appendEvent(writer, runId, {
           kind: 'run.cancelled',
+          payload: { completed: completed.length, planned: planned.length },
+        });
+      } else {
+        await this.#appendEvent(writer, runId, {
+          kind: 'run.completed',
           payload: { completed: completed.length, planned: planned.length },
         });
       }
@@ -389,6 +649,7 @@ export class EvalService {
       });
       return result;
     } catch (error) {
+      await this.#appendEvent(writer, runId, { kind: 'run.failed', payload: {} }).catch(() => undefined);
       this.#log('eval.run.failed', 'error', 'Eval run failed.', runId, {
         failure: 'unavailable',
       });
@@ -402,6 +663,22 @@ export class EvalService {
     try {
       this.#logger?.log({ context: { runId }, details, kind, level, producer: 'eval', summary });
     } catch { /* Diagnostics cannot affect durable eval execution. */ }
+  }
+
+  async #appendEvent(
+    writer: Awaited<ReturnType<typeof createEvalRun>>,
+    runId: string,
+    event: { readonly kind: string; readonly payload: unknown },
+  ): Promise<EvalRunEvent> {
+    const persisted = await writer.appendEvent(event);
+    const subscriptions = this.#eventSubscriptions.get(runId);
+    if (subscriptions !== undefined) {
+      for (const subscription of [...subscriptions]) {
+        try { subscription.publish(persisted); }
+        catch { subscription.close(); }
+      }
+    }
+    return persisted;
   }
 
   async #config(): Promise<NormalizedEvalConfig> {
@@ -512,5 +789,58 @@ export class EvalService {
 
   #runDirectory(config: NormalizedEvalConfig, runId: string): string {
     return join(this.#projectRoot, config.runsDir, runId);
+  }
+
+  async #openArtifact(
+    directory: string,
+    ref: string,
+    segments: readonly string[],
+  ): Promise<EvalArtifactReader> {
+    const artifactRoot = join(directory, 'artifacts');
+    const target = join(directory, ...segments);
+    await assertNoSymlinkedArtifactPath(this.#projectRoot, target);
+    const before = await lstat(target);
+    if (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1 || before.size > maximumArtifactBytes) {
+      throw new Error('Raw evidence file metadata is not safe.');
+    }
+    const [physicalRoot, physicalTarget] = await Promise.all([realpath(artifactRoot), realpath(target)]);
+    if (!isWithin(physicalRoot, physicalTarget)) throw new Error('Raw evidence file escaped its run artifacts directory.');
+    const file = await open(target, constants.O_RDONLY | constants.O_NOFOLLOW);
+    try {
+      const [after, descriptor] = await Promise.all([lstat(target), file.stat()]);
+      if (
+        !after.isFile() || after.isSymbolicLink() || after.nlink !== 1 || after.size > maximumArtifactBytes ||
+        !descriptor.isFile() || descriptor.nlink !== 1 || descriptor.size > maximumArtifactBytes ||
+        !sameFile(before, descriptor) || !sameFile(after, descriptor)
+      ) {
+        throw new Error('Raw evidence file changed while opening.');
+      }
+      const bytes = Buffer.alloc(Math.min(descriptor.size, maximumArtifactBytes) + 1);
+      const { bytesRead } = await file.read(bytes, 0, bytes.length, 0);
+      const final = await file.stat();
+      if (!sameFile(descriptor, final) || final.size !== descriptor.size || bytesRead !== descriptor.size || bytesRead > maximumArtifactBytes) {
+        throw new Error('Raw evidence file changed while hashing.');
+      }
+      const snapshot = Buffer.from(bytes.subarray(0, bytesRead));
+      const digest = createHash('sha256').update(snapshot).digest('hex');
+      await file.close();
+      const reader = new OpenedEvalArtifact({
+        bytes: snapshot,
+        digest,
+        filename: basename(ref),
+        onClose: () => this.#artifactReaders.delete(reader),
+        ref,
+        size: descriptor.size,
+      });
+      this.#artifactReaders.add(reader);
+      if (this.#closePromise !== undefined) {
+        await reader.close();
+        throw serviceError('EVAL_ARTIFACT_UNAVAILABLE', 'Recorded raw evidence is not available.');
+      }
+      return reader;
+    } catch (error) {
+      await file.close().catch(() => undefined);
+      throw error;
+    }
   }
 }

@@ -153,6 +153,20 @@ it('stores trials and raw artifacts under the run directory without a database',
   });
 });
 
+it('retains safe generated artifact segments that begin with punctuation', async () => {
+  await withProject(async (root) => {
+    const writer = await createEvalRun(runOptions(root));
+    try {
+      await expect(writer.writeArtifactFile('_meta/evidence.json', '{}\n'))
+        .resolves.toBe('artifacts/_meta/evidence.json');
+      await expect(writer.writeArtifactFile('.trace/evidence.json', '{}\n'))
+        .resolves.toBe('artifacts/.trace/evidence.json');
+    } finally {
+      await writer.close();
+    }
+  });
+});
+
 it('publishes JSON documents by rename and leaves no staging file behind', async () => {
   await withProject(async (root) => {
     const writer = await createEvalRun(runOptions(root));
@@ -197,6 +211,32 @@ it('reports a malformed complete JSONL record as a corrupt run', async () => {
     await writeFile(join(writer.directory, 'events.jsonl'), 'not json\n{"kind":"trial.started"}\n');
 
     await expect(readEvalRunEvents(writer.directory)).rejects.toMatchObject({ code: 'EVAL_RUN_CORRUPT' });
+  });
+});
+
+it('rejects any complete event log whose sequence is not exactly 1 through N', async () => {
+  await withProject(async (root) => {
+    const writer = await createEvalRun(runOptions(root));
+    await writer.close();
+    const eventsPath = join(writer.directory, 'events.jsonl');
+    const event = (sequence: number): string => JSON.stringify({
+      kind: 'trial.started',
+      payload: {},
+      schemaVersion: 1,
+      sequence,
+      timestamp: '2026-08-17T12:00:00.000Z',
+    });
+
+    for (const records of [
+      [event(2)],
+      [event(1), event(3)],
+      [event(1), event(1)],
+      [event(2), event(1)],
+      [event(1), '', event(2)],
+    ]) {
+      await writeFile(eventsPath, `${records.join('\n')}\n`);
+      await expect(readEvalRunEvents(writer.directory)).rejects.toMatchObject({ code: 'EVAL_RUN_CORRUPT' });
+    }
   });
 });
 
