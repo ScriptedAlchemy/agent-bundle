@@ -477,7 +477,6 @@ const persistedSelection = (
   const suiteCaseDigests = value.suiteCaseDigests;
   if (suiteCaseDigests.some((entry) => typeof entry !== 'string' || !sha256.test(entry)) ||
     new Set(suiteCaseDigests).size !== suiteCaseDigests.length ||
-    suiteCaseDigests.some((entry, index) => index > 0 && suiteCaseDigests[index - 1]!.localeCompare(entry) >= 0) ||
     digest({ cases: suiteCaseDigests, name: value.suiteName }) !== value.suiteDigest) return undefined;
   let evalCase: EvalCase;
   try { evalCase = normalizeEvalCase(value.evalCase as unknown as EvalCase); }
@@ -793,7 +792,7 @@ export class NativePlaygroundService {
     const selections: PersistedCatalogSelection[] = [];
     for (const discovered of suites) {
       const suiteSourcePath = projectRelativePath(this.#projectRoot, discovered.sourcePath);
-      const suiteCaseDigests = Object.freeze(discovered.suite.cases.map((entry) => entry.digest).sort());
+      const suiteCaseDigests = Object.freeze(discovered.suite.cases.map((entry) => entry.digest));
       if (suiteSourcePath === undefined || digest({ cases: suiteCaseDigests, name: discovered.suite.name }) !== discovered.suite.digest) {
         throw new Error('Native Playground discovered an invalid eval suite.');
       }

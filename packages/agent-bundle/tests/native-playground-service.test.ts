@@ -119,6 +119,47 @@ const dualHostSuite = (sourcePath = '/project/evals/review.eval.ts'): readonly D
   }),
 })]);
 
+it('persists a canonical suite whose authored case order differs from digest order', async () => {
+  const catalogDirectory = testCatalogDirectory();
+  const cases = ['alpha-case', 'beta-case'].map((id) => normalizeEvalCase({
+    assertions: Object.freeze([expectExitCode(0)]),
+    fixture: Object.freeze({ git: false, include: Object.freeze(['**/*']), path: './fixture' }),
+    hosts: Object.freeze({ claude: Object.freeze({ model: 'pinned-claude-model' }) }),
+    id,
+    invocation: Object.freeze({ mode: 'automatic' as const }),
+    prompt: `Review ${id}.`,
+    trials: 1,
+  })).sort((left, right) => right.digest.localeCompare(left.digest));
+  expect(cases[0]!.digest.localeCompare(cases[1]!.digest)).toBeGreaterThan(0);
+  const discovered = Object.freeze([Object.freeze({
+    sourcePath: '/project/evals/ordered.eval.ts',
+    suite: defineEvalSuite({ cases: Object.freeze(cases), name: 'ordered-review' }),
+  })]);
+  const reference = epoch('epoch-authored-order', '/epochs/authored-order');
+  const service = new NativePlaygroundService({
+    catalogDirectory,
+    discover: async () => discovered,
+    planFixture: async ({ baseDir }) => fixturePlanAt(baseDir),
+    projectRoot: '/project',
+  });
+
+  const catalog = await service.catalog(reference);
+  expect(catalog.cases.map((entry) => entry.label).sort()).toEqual([
+    'ordered-review / alpha-case',
+    'ordered-review / beta-case',
+  ]);
+  await service.close();
+
+  const restarted = new NativePlaygroundService({
+    catalogDirectory,
+    discover: async () => { throw new Error('The persisted catalog must not rediscover authored cases.'); },
+    planFixture: async ({ baseDir }) => fixturePlanAt(baseDir),
+    projectRoot: '/project',
+  });
+  await expect(restarted.catalog(reference)).resolves.toEqual(catalog);
+  await restarted.close();
+});
+
 it('pins opaque native catalog selections to their catalog epoch and never resolves them across epochs', async () => {
   const service = new NativePlaygroundService({
     catalogDirectory: testCatalogDirectory(),
