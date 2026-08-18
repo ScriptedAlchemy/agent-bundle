@@ -762,6 +762,7 @@ it('builds one deterministic self-contained MCP App view and injects it through 
     expect(html).toContain('dashboard-ready');
     expect(html).toContain('<script');
     expect(html).toContain('<style');
+    expect(html.indexOf('<script')).toBeGreaterThan(html.indexOf('<main id="view"'));
     expect(html).not.toMatch(/<(?:script|link)\b[^>]+(?:src|href)=/iu);
     expect(await readdir(join(outputRoot, 'portable', 'mcp-apps'))).toEqual(['dashboard.html']);
     for (const target of ['claude', 'codex']) {

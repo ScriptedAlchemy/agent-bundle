@@ -21,7 +21,7 @@ export const createWorkbenchConfig = (apiProxyTarget = process.env.AGENT_BUNDLE_
       root: 'dist',
     },
     filenameHash: false,
-    legalComments: 'none' as const,
+    legalComments: 'linked' as const,
     filename: {
       assets: '[name][ext]',
       css: '[name].css',

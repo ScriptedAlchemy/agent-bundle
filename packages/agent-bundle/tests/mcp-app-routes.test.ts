@@ -61,7 +61,11 @@ class RecordingPreviewService implements McpAppRoutePreviewService {
   });
   closeResult: McpAppBridgeMessage | true = this.closeFrame;
   expiredConsentConsumed = false;
+  blockClose = false;
+  forceCloseFailure: Error | undefined;
+  forceCloseResult = true;
   previewAvailable = true;
+  #releaseClose: (() => void) | undefined;
   #releaseFirstReceive: (() => void) | undefined;
 
   consentChallenges(bindingId: string) {
@@ -121,11 +125,22 @@ class RecordingPreviewService implements McpAppRoutePreviewService {
   async close(bindingId: string, options: { readonly id: string | number | null; readonly reason?: string }): Promise<McpAppBridgeMessage | true> {
     this.calls.push({ bindingId, kind: 'close', options });
     this.bridge.lifecycle = 'closing';
+    if (this.blockClose) {
+      await new Promise<void>((resolvePromise) => {
+        this.#releaseClose = resolvePromise;
+      });
+    }
     return this.closeResult;
+  }
+
+  releaseClose(): void {
+    this.#releaseClose?.();
   }
 
   async forceClose(bindingId: string): Promise<boolean> {
     this.calls.push({ bindingId, kind: 'force-close' });
+    if (this.forceCloseFailure !== undefined) throw this.forceCloseFailure;
+    if (!this.forceCloseResult) return false;
     this.bridge.lifecycle = 'closed';
     return true;
   }
@@ -825,6 +840,115 @@ it('force closes an App preview on DELETE', async () => {
     expect(closed.status).toBe(200);
     await expect(closed.json()).resolves.toEqual({ closed: true, lifecycle: 'closed' });
     expect(started.service.calls).toContainEqual({ bindingId: 'binding-a', kind: 'force-close' });
+  } finally {
+    await started.close();
+  }
+});
+
+it('uses a graceful-close receipt for one fallback DELETE after its binding releases', async () => {
+  const started = await startRoutes();
+  try {
+    const closing = await fetch(`${started.url}/api/mcp/apps/binding-a/close`, {
+      body: JSON.stringify({ id: 'close-a' }),
+      headers: { ...headers(), 'content-type': 'application/json' },
+      method: 'POST',
+    });
+    expect(closing.status).toBe(200);
+
+    started.service.forceCloseResult = false;
+    const fallback = await fetch(`${started.url}/api/mcp/apps/binding-a`, {
+      headers: headers(),
+      method: 'DELETE',
+    });
+    expect(fallback.status).toBe(200);
+    await expect(fallback.json()).resolves.toEqual({ closed: true, lifecycle: 'closed' });
+
+    const retry = await fetch(`${started.url}/api/mcp/apps/binding-a`, {
+      headers: headers(),
+      method: 'DELETE',
+    });
+    expect(retry.status).toBe(404);
+    await expect(retry.json()).resolves.toEqual({
+      diagnostic: { code: 'AB8022', message: 'MCP App preview is not available.' },
+    });
+    expect(started.service.calls.filter((call) => (call as { readonly kind?: string }).kind === 'force-close')).toHaveLength(2);
+
+    const unknown = await fetch(`${started.url}/api/mcp/apps/forged-binding`, {
+      headers: headers(),
+      method: 'DELETE',
+    });
+    expect(unknown.status).toBe(404);
+  } finally {
+    await started.close();
+  }
+});
+
+it('serializes a fallback DELETE behind an accepted graceful close', async () => {
+  const started = await startRoutes();
+  try {
+    started.service.blockClose = true;
+    started.service.forceCloseResult = false;
+    const closing = fetch(`${started.url}/api/mcp/apps/binding-a/close`, {
+      body: JSON.stringify({ id: 'close-a' }),
+      headers: { ...headers(), 'content-type': 'application/json' },
+      method: 'POST',
+    });
+    await eventually(() => started.service.calls.some((call) => (call as { readonly kind?: string }).kind === 'close'));
+    const fallback = fetch(`${started.url}/api/mcp/apps/binding-a`, { headers: headers(), method: 'DELETE' });
+    await new Promise<void>((resolvePromise) => setTimeout(resolvePromise, 25));
+    const forceCloseCalls = started.service.calls.filter((call) => (call as { readonly kind?: string }).kind === 'force-close');
+    started.service.releaseClose();
+
+    expect(forceCloseCalls).toHaveLength(0);
+    expect((await closing).status).toBe(200);
+    expect((await fallback).status).toBe(200);
+  } finally {
+    started.service.releaseClose();
+    await started.close();
+  }
+});
+
+it('expires a graceful-close receipt before a later fallback DELETE', async () => {
+  const started = await startRoutes();
+  try {
+    const closing = await fetch(`${started.url}/api/mcp/apps/binding-a/close`, {
+      body: JSON.stringify({ id: 'close-a' }),
+      headers: { ...headers(), 'content-type': 'application/json' },
+      method: 'POST',
+    });
+    expect(closing.status).toBe(200);
+
+    started.service.forceCloseResult = false;
+    await new Promise<void>((resolvePromise) => setTimeout(resolvePromise, 5_100));
+    const fallback = await fetch(`${started.url}/api/mcp/apps/binding-a`, {
+      headers: headers(),
+      method: 'DELETE',
+    });
+    expect(fallback.status).toBe(404);
+  } finally {
+    await started.close();
+  }
+}, 7_000);
+
+it('does not treat a rejected force close as a completed graceful close', async () => {
+  const started = await startRoutes();
+  try {
+    const closing = await fetch(`${started.url}/api/mcp/apps/binding-a/close`, {
+      body: JSON.stringify({ id: 'close-a' }),
+      headers: { ...headers(), 'content-type': 'application/json' },
+      method: 'POST',
+    });
+    expect(closing.status).toBe(200);
+
+    started.service.forceCloseFailure = new Error('binding release rejected');
+    const fallback = await fetch(`${started.url}/api/mcp/apps/binding-a`, {
+      headers: headers(),
+      method: 'DELETE',
+    });
+    expect(fallback.status).toBe(502);
+    await expect(fallback.json()).resolves.toEqual({
+      diagnostic: { code: 'AB8023', message: 'MCP App operation could not be completed.' },
+    });
   } finally {
     await started.close();
   }

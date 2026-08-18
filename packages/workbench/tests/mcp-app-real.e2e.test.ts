@@ -32,7 +32,7 @@ const buildWorkbench = async (): Promise<void> => {
 };
 
 const appFixtureHtml = [
-  '<main data-testid="app-state">waiting</main>',
+  '<!doctype html><html><body><main data-testid="app-state">waiting</main>',
   '<script>',
   "const state = Object.create(null);",
   "const post = (message) => parent.postMessage(message, '*');",
@@ -74,7 +74,7 @@ const appFixtureHtml = [
   "  params: { appCapabilities: { availableDisplayModes: ['inline'] }, appInfo: { name: 'real-app-fixture', version: '1.0.0' }, protocolVersion: '2026-01-26' },",
   "});",
   'render();',
-  '</script>',
+  '</script></body></html>',
 ].join('');
 
 const writeRealAppProject = async (root: string): Promise<void> => {
@@ -110,6 +110,52 @@ const writeRealAppProject = async (root: string): Promise<void> => {
       'export default defineConfig({',
       "  mcp: { servers: { fixture: { entry: './src/server.ts' } } },",
       "  plugin: { name: 'real-app-e2e-fixture', version: '1.0.0' },",
+      "  skills: ['skills/review'],",
+      "  targets: ['portable'],",
+      '});',
+      '',
+    ].join('\n')),
+  ]);
+};
+
+const writeBundledAppProject = async (root: string): Promise<void> => {
+  await Promise.all([
+    mkdir(join(root, 'src'), { recursive: true }),
+    mkdir(join(root, 'views'), { recursive: true }),
+    symlink(join(workspaceRoot, 'node_modules', '@modelcontextprotocol'), join(root, 'node_modules', '@modelcontextprotocol'), 'dir'),
+  ]);
+  await Promise.all([
+    writeFile(join(root, 'package.json'), '{"type":"module"}\n'),
+    writeFile(join(root, 'views', 'dashboard.ts'), "document.querySelector('#view')!.textContent = 'packed release dashboard';\n"),
+    writeFile(join(root, 'views', 'shell.html'), '<!doctype html><html><body><main id="view"></main></body></html>\n'),
+    writeFile(join(root, 'src', 'server.ts'), [
+      "import { McpServer } from '@modelcontextprotocol/server';",
+      "import { StdioServerTransport } from '@modelcontextprotocol/server/stdio';",
+      "import apps from 'agent-bundle/mcp-apps';",
+      '',
+      "const server = new McpServer({ name: 'bundled-app-fixture', version: '1.0.0' });",
+      'for (const app of apps) {',
+      '  server.registerResource(app.name, app.resourceUri, { mimeType: app.mimeType }, async (uri) => ({',
+      '    contents: [{ mimeType: app.mimeType, text: app.html, uri: uri.href }],',
+      '  }));',
+      '}',
+      'const [app] = apps;',
+      "if (app === undefined) throw new Error('Expected one bundled MCP App.');",
+      "server.registerTool('show-dashboard', { _meta: { ui: { resourceUri: app.resourceUri } } }, async () => ({",
+      "  content: [{ text: 'Packed release dashboard.', type: 'text' }],",
+      '}));',
+      'await server.connect(new StdioServerTransport());',
+      '',
+    ].join('\n')),
+    writeFile(join(root, 'agent-bundle.config.ts'), [
+      "import { defineConfig } from 'agent-bundle';",
+      '',
+      'export default defineConfig({',
+      '  mcp: { servers: { fixture: {',
+      "    apps: { dashboard: { entry: './views/dashboard.ts', resourceUri: 'ui://packed-release/dashboard-v1.html', template: './views/shell.html' } },",
+      "    entry: './src/server.ts',",
+      '  } } },',
+      "  plugin: { name: 'bundled-app-e2e-fixture', version: '1.0.0' },",
       "  skills: ['skills/review'],",
       "  targets: ['portable'],",
       '});',
@@ -176,10 +222,14 @@ e2e('runs a generated SDK-v2 App through the real foreground session and separat
     if (artifact.state !== 'active') throw new Error('Expected a generated fixture artifact epoch.');
     const foregroundOrigin = server.url;
     const epochRoot = join(project.root, '.agent-bundle', 'epochs', artifact.activeEpoch.id);
+    const consoleErrors: string[] = [];
     const pageErrors: Error[] = [];
     const appRequests: AppRouteRequest[] = [];
     const appResponses: AppRouteResponse[] = [];
     const consentSnapshots: unknown[] = [];
+    page.on('console', (message) => {
+      if (message.type() === 'error') consoleErrors.push(message.text());
+    });
     page.on('pageerror', (error) => pageErrors.push(error));
     page.on('request', (request) => {
       const requestUrl = new URL(request.url());
@@ -281,24 +331,59 @@ e2e('runs a generated SDK-v2 App through the real foreground session and separat
     await expect(consent).toContainText('External link: https://example.test/real-app-link');
     await expect(consent).toContainText('Download 1 file (1: text 17 B).');
     await expect(consent).toContainText('Display mode: inline');
-    await page.getByRole('button', { name: 'Allow call tool' }).click();
-    await page.getByRole('button', { name: 'Allow open external link' }).click();
-    await page.getByRole('button', { name: 'Allow download file' }).click();
-    await page.getByRole('button', { name: 'Allow request display mode' }).click();
     await expect.poll(() => page.frames().filter((frame) => frame.url() === 'about:blank').length, { timeout: browserTimeout }).toBe(1);
-    const appFrame = page.frames().find((frame) => frame.url() === 'about:blank');
-    if (appFrame === undefined) throw new Error('Expected the sandbox proxy to create the App srcdoc frame.');
-    const appState = appFrame.getByTestId('app-state');
-    await expect(appState).toContainText('real-sdk-v2', { timeout: browserTimeout });
-    const appSnapshot = JSON.parse(await appState.textContent() ?? 'null') as Readonly<Record<string, unknown>>;
+    const initialAppFrame = page.frames().find((frame) => frame.url() === 'about:blank');
+    if (initialAppFrame === undefined) throw new Error('Expected the sandbox proxy to create the App srcdoc frame.');
+    const initialAppState = initialAppFrame.getByTestId('app-state');
+    await expect(initialAppState).toContainText('real-sdk-v2', { timeout: browserTimeout });
+    const consentDecisions = () => consentSnapshots.filter((snapshot) =>
+      snapshot !== null && typeof snapshot === 'object' && Object.hasOwn(snapshot, 'approved'));
+    const consentDecisionRequests = () => appRequests.filter((request) =>
+      request.path.endsWith('/consent') && request.body !== null && typeof request.body === 'object' && Object.hasOwn(request.body, 'approved'));
+    const consentDecisionsBeforeCall = consentDecisions().length;
+    const consentRequestsBeforeCall = consentDecisionRequests().length;
+    const allowCallTool = page.getByRole('button', { name: 'Allow call tool' });
+    await expect(allowCallTool).toBeEnabled({ timeout: browserTimeout });
+    await allowCallTool.scrollIntoViewIfNeeded();
+    await allowCallTool.click();
+    await expect.poll(() => consentDecisionRequests().length, { timeout: browserTimeout }).toBe(consentRequestsBeforeCall + 1);
+    await expect.poll(() => consentDecisions().length, { timeout: browserTimeout }).toBe(consentDecisionsBeforeCall + 1);
+    expect(consentDecisions().at(-1)).toMatchObject({
+      approved: true,
+      messages: expect.arrayContaining([expect.objectContaining({ id: 'app-tool' })]),
+    });
+    await expect.poll(async () => JSON.parse(await initialAppState.textContent() ?? 'null').toolReply, { timeout: browserTimeout }).toEqual({
+      content: [{ text: 'Inner echo: from-real-sandbox', type: 'text' }],
+    });
+    const allowOpenLink = page.getByRole('button', { name: 'Allow open external link' });
+    await expect(allowOpenLink).toBeEnabled({ timeout: browserTimeout });
+    await allowOpenLink.scrollIntoViewIfNeeded();
+    await allowOpenLink.click();
+    await expect.poll(async () => JSON.parse(await initialAppState.textContent() ?? 'null').linkReply, { timeout: browserTimeout }).toEqual({});
+    const allowDownload = page.getByRole('button', { name: 'Allow download file' });
+    await expect(allowDownload).toBeEnabled({ timeout: browserTimeout });
+    await allowDownload.scrollIntoViewIfNeeded();
+    await allowDownload.click();
+    await expect.poll(async () => JSON.parse(await initialAppState.textContent() ?? 'null').downloadReply, { timeout: browserTimeout }).toEqual({});
+    await expect.poll(async () => JSON.parse(await initialAppState.textContent() ?? 'null').resourceReply, { timeout: browserTimeout }).toMatchObject({
+      contents: [{ mimeType: 'text/html;profile=mcp-app', uri: 'ui://fixture/app.html' }],
+    });
+    const appSnapshot = JSON.parse(await initialAppState.textContent() ?? 'null') as Readonly<Record<string, unknown>>;
     expect(appSnapshot.hostContext).toMatchObject({ availableDisplayModes: ['inline'], displayMode: 'inline' });
     expect(appSnapshot.originalInput).toEqual(originalInput.arguments);
     expect(appSnapshot.originalResult).toEqual(originalResult);
     expect(appSnapshot.toolReply).toEqual({ content: [{ text: 'Inner echo: from-real-sandbox', type: 'text' }] });
     expect(appSnapshot.resourceReply).toMatchObject({ contents: [{ mimeType: 'text/html;profile=mcp-app', uri: 'ui://fixture/app.html' }] });
-    await expect.poll(async () => JSON.parse(await appState.textContent() ?? 'null').linkReply, { timeout: browserTimeout }).toEqual({});
-    await expect.poll(async () => JSON.parse(await appState.textContent() ?? 'null').downloadReply, { timeout: browserTimeout }).toEqual({});
-    await expect.poll(async () => JSON.parse(await appState.textContent() ?? 'null').displayReply, { timeout: browserTimeout }).toEqual({ mode: 'inline' });
+    const allowDisplayMode = page.getByRole('button', { name: 'Allow request display mode' });
+    await expect(allowDisplayMode).toBeEnabled({ timeout: browserTimeout });
+    await allowDisplayMode.scrollIntoViewIfNeeded();
+    await allowDisplayMode.click();
+    await expect.poll(async () => {
+      const current = page.frames().find((frame) => frame.url() === 'about:blank');
+      return current === undefined ? undefined : JSON.parse(await current.getByTestId('app-state').textContent() ?? 'null').displayReply;
+    }, { timeout: browserTimeout }).toEqual({ mode: 'inline' });
+    const appFrame = page.frames().find((frame) => frame.url() === 'about:blank');
+    if (appFrame === undefined) throw new Error('Expected the sandbox proxy to retain the App srcdoc frame.');
     expect(browserOpens).toContain('https://example.test/real-app-link');
     expect(browserOpens.some((url) => url.startsWith('data:application/json;charset=utf-8,'))).toBe(true);
     await expect.poll(() => appRequests.some((request) => {
@@ -352,6 +437,7 @@ e2e('runs a generated SDK-v2 App through the real foreground session and separat
     await closedSession;
     await expect(page.locator('.mcp-page-phase')).toContainText('Session closed', { timeout: browserTimeout });
     await expect(outerFrame).toBeHidden({ timeout: browserTimeout });
+    expect(consoleErrors).toEqual([]);
     expect(pageErrors).toEqual([]);
 
     await server.close();
@@ -1524,4 +1610,78 @@ e2e('keeps Portable, ChatGPT, and Claude simulated App profiles isolated over on
     await fixture.closed;
     await expect(access(fixture.root)).rejects.toThrow();
   }
+});
+
+e2e('renders a compiler-bundled App template through the canonical sandbox URL', { timeout: 90_000 }, async ({ page }) => {
+  let project: Awaited<ReturnType<typeof createProjectFixture>> | undefined;
+  let server: Awaited<ReturnType<typeof startDevServer>> | undefined;
+  let testFailure: unknown;
+  let cleanupFailure: unknown;
+  const consoleErrors: string[] = [];
+  const pageErrors: Error[] = [];
+  const appRequests: Array<{ readonly method: string; readonly path: string }> = [];
+  try {
+    await buildWorkbench();
+    project = await createProjectFixture();
+    await writeBundledAppProject(project.root);
+    server = await startDevServer({
+      assets: createWorkbenchAssetSource({ root: workbenchAssets }),
+      open: false,
+      port: 0,
+      root: project.root,
+    });
+    const foregroundOrigin = server.url;
+    page.on('console', (message) => {
+      if (message.type() === 'error') consoleErrors.push(message.text());
+    });
+    page.on('pageerror', (error) => pageErrors.push(error));
+    page.on('request', (request) => {
+      const url = new URL(request.url());
+      if (url.origin === foregroundOrigin && url.pathname.startsWith('/api/mcp/apps/')) {
+        appRequests.push({ method: request.method(), path: url.pathname });
+      }
+    });
+
+    await page.goto(`${foregroundOrigin}#mcp`);
+    await expect(page.getByRole('heading', { name: 'MCP playground' })).toBeVisible({ timeout: browserTimeout });
+    await page.locator('#mcp-target').selectOption('portable');
+    await page.locator('#mcp-server-name').fill('fixture');
+    await page.getByRole('button', { name: 'Open MCP session' }).click();
+    await expect(page.locator('.mcp-page-phase')).toContainText('Session ready', { timeout: browserTimeout });
+    await page.getByRole('button', { name: 'show-dashboard', exact: true }).click();
+    await page.getByRole('button', { name: 'Call show-dashboard' }).click();
+    await expect(page.getByRole('region', { name: 'Invocation history' }).locator('ol > li')).toHaveCount(1, { timeout: browserTimeout });
+    await page.getByRole('button', { name: 'Open App preview for mcp-page-1' }).click();
+
+    const outerFrame = page.locator('iframe[title="MCP App preview: show-dashboard"]');
+    await expect(outerFrame).toBeVisible({ timeout: browserTimeout });
+    const source = await outerFrame.getAttribute('src');
+    if (source === null) throw new Error('Expected the bundled App preview iframe to have a source.');
+    expect(new URL(source).origin).not.toBe(foregroundOrigin);
+    await expect.poll(() => page.frames().filter((frame) => frame.url() === 'about:blank').length, { timeout: browserTimeout }).toBe(1);
+    const appFrame = page.frames().find((frame) => frame.url() === 'about:blank');
+    if (appFrame === undefined) throw new Error('Expected the sandbox proxy to create the bundled App srcdoc frame.');
+    await expect(appFrame.locator('#view')).toHaveText('packed release dashboard', { timeout: browserTimeout });
+    expect(appRequests.some((request) => request.method === 'GET' && /^\/api\/mcp\/apps\/[^/]+$/u.test(request.path))).toBe(false);
+
+    const fallbackClosed = page.waitForResponse((response) => {
+      const request = response.request();
+      const url = new URL(response.url());
+      return request.method() === 'DELETE' && url.origin === foregroundOrigin && /^\/api\/mcp\/apps\/[^/]+$/u.test(url.pathname);
+    });
+    await page.getByRole('button', { name: 'Close App preview' }).click();
+    expect((await fallbackClosed).status()).toBe(200);
+    await expect(outerFrame).toBeHidden({ timeout: browserTimeout });
+    expect(consoleErrors).toEqual([]);
+    expect(pageErrors).toEqual([]);
+  } catch (error) {
+    testFailure = error;
+  } finally {
+    const serverCleanup = await Promise.allSettled(server === undefined ? [] : [server.close()]);
+    const projectCleanup = await Promise.allSettled(project === undefined ? [] : [removeProjectFixture(project.root)]);
+    const failedCleanup = [...serverCleanup, ...projectCleanup].find((result) => result.status === 'rejected');
+    if (failedCleanup?.status === 'rejected') cleanupFailure = failedCleanup.reason;
+  }
+  if (testFailure !== undefined) throw testFailure;
+  if (cleanupFailure !== undefined) throw cleanupFailure;
 });

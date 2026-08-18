@@ -20,6 +20,12 @@ export default defineConfig({
       { from: './packages/workbench/src/inspector/PATCHES.md', to: 'workbench/src/inspector/PATCHES.md', toType: 'file' },
     ],
     filenameHash: false,
+    legalComments: 'linked',
+    minify: {
+      jsOptions: {
+        exclude: /^workbench[\\/]/u,
+      },
+    },
     distPath: {
       root: './packages/agent-bundle/dist',
     },
