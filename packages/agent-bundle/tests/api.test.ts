@@ -531,11 +531,34 @@ it('reports skipped target/component pairs with intersection-rule reasons', asyn
     const planFor = (target: string) => result.plans.find((plan) => plan.target === target);
 
     expect(planFor('portable')?.skipped).toEqual([
-      expect.objectContaining({ kind: 'hook', name: 'sessionStart', reason: 'unsupported-capability' }),
+      expect.objectContaining({ kind: 'hook', name: 'sessionStart', reason: 'excluded-by-targets' }),
       expect.objectContaining({ kind: 'script', name: 'report', reason: 'excluded-by-targets' }),
     ]);
     expect(planFor('codex')?.skipped).toEqual([]);
     expect(Object.isFrozen(planFor('portable')?.skipped)).toBe(true);
+  } finally {
+    await rm(join(root, '..'), { force: true, recursive: true });
+  }
+});
+
+it('reports target exclusion before unsupported capability when both omit a component', async () => {
+  const root = await createProject();
+  try {
+    await writeFile(join(root, 'agent-bundle.config.ts'), [
+      'export default {',
+      "  hooks: { sessionStart: { handler: './src/hook.ts', targets: ['codex'] } },",
+      "  plugin: { name: 'api-fixture', version: '1.0.0' },",
+      "  targets: ['portable', 'codex'],",
+      '};',
+      '',
+    ].join('\n'));
+
+    const result = await readyInspection({ root });
+    const skippedHook = result.plans
+      .find((plan) => plan.target === 'portable')
+      ?.skipped.find((component) => component.kind === 'hook' && component.name === 'sessionStart');
+
+    expect(skippedHook).toMatchObject({ reason: 'excluded-by-targets' });
   } finally {
     await rm(join(root, '..'), { force: true, recursive: true });
   }

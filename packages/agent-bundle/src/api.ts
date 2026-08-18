@@ -369,9 +369,9 @@ const skippedComponentsFor = (
     id: component.id,
     kind: component.kind,
     name: component.name,
-    reason: (component.capability !== undefined && capabilities[component.capability] !== true
-      ? 'unsupported-capability'
-      : 'excluded-by-targets') satisfies InspectionSkipReason,
+    reason: (!component.targets.includes(target)
+      ? 'excluded-by-targets'
+      : 'unsupported-capability') satisfies InspectionSkipReason,
   })));
 
 export const inspect = async (options: InspectOptions): Promise<InspectResult> => {
