@@ -476,23 +476,31 @@ export class DevLogService {
     if (this.#dispatching) return;
     this.#dispatching = true;
     try {
-      while (this.#undelivered.length > 0) {
-        const record = this.#undelivered.shift();
-        if (record === undefined) continue;
-        this.#undeliveredBytes -= byteLength(record);
-        for (const subscription of this.#subscriptions) {
-          if (!subscription.replaying) this.#deliver(subscription, record);
+      while (this.#undelivered.length > 0 || this.#undeliveredOverflowed) {
+        while (this.#undelivered.length > 0) {
+          const record = this.#undelivered.shift();
+          if (record === undefined) continue;
+          this.#undeliveredBytes -= byteLength(record);
+          for (const subscription of this.#subscriptions) {
+            if (!subscription.replaying) this.#deliver(subscription, record);
+          }
         }
-      }
-      if (this.#undeliveredOverflowed) {
-        this.#undeliveredOverflowed = false;
-        // The producer that overflowed the bounded reentrant queue is gone;
-        // healthy subscribers catch up from retained immutable history.
-        for (const subscription of this.#subscriptions) {
-          if (subscription.replaying) continue;
-          const gap = this.#gapFor(subscription.lastDeliveredSequence);
-          if (gap !== undefined) this.#deliver(subscription, gap);
-          for (const record of this.#history) this.#deliver(subscription, record);
+        if (this.#undeliveredOverflowed) {
+          this.#undeliveredOverflowed = false;
+          // Snapshot both gap and retained tail before invoking a listener: a
+          // listener may publish and evict history, but cannot mutate this pass.
+          const recovery = Object.freeze([...this.#history]);
+          const subscriptions = Object.freeze([...this.#subscriptions]);
+          const recoveryGaps = new Map<Subscription, DevLogReplayGap | undefined>(subscriptions.map((subscription) => [
+            subscription,
+            subscription.replaying ? undefined : this.#gapFor(subscription.lastDeliveredSequence),
+          ]));
+          for (const subscription of subscriptions) {
+            if (subscription.replaying || subscription.closed) continue;
+            const gap = recoveryGaps.get(subscription);
+            if (gap !== undefined) this.#deliver(subscription, gap);
+            for (const record of recovery) this.#deliver(subscription, record);
+          }
         }
       }
     } finally {

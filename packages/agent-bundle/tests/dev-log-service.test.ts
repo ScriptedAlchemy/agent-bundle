@@ -272,3 +272,31 @@ it('reports a truthful recovery gap to healthy subscribers after a flood exceeds
 
   expect(healthy).toEqual([2, 3, 4, 'gap', 8, 9, 10]);
 });
+
+it('snapshots recovered history before callbacks so a new record cannot skip its retained predecessor', () => {
+  const service = new DevLogService({
+    projectRoot: '/work/project',
+    recordLimit: 3,
+    subscriberByteLimit: 4_096,
+    subscriberRecordLimit: 2,
+  });
+  service.log({ kind: 'project.load', level: 'info', producer: 'project', summary: 'one' });
+  service.subscribe({ afterSequence: 1 }, (message) => {
+    if ('sequence' in message && message.sequence === 2) {
+      for (let index = 0; index < 8; index += 1) {
+        service.log({ kind: 'project.prepared', level: 'info', producer: 'project', summary: `flood-${index}` });
+      }
+    }
+  });
+  const healthy: Array<number | 'gap'> = [];
+  service.subscribe({ afterSequence: 1 }, (message) => {
+    healthy.push('type' in message ? 'gap' : message.sequence);
+    if ('sequence' in message && message.sequence === 9) {
+      service.log({ kind: 'project.load', level: 'info', producer: 'project', summary: 'eleven' });
+    }
+  });
+
+  service.log({ kind: 'project.invalid-source', level: 'error', producer: 'project', summary: 'two' });
+
+  expect(healthy).toEqual([2, 3, 4, 'gap', 8, 9, 10, 11]);
+});
