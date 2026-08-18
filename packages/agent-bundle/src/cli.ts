@@ -5,6 +5,7 @@ import { resolve } from 'node:path';
 
 import {
   build,
+  compareEvals,
   inspect,
   invokeMcp,
   listHooks,
@@ -58,6 +59,11 @@ interface EvalCommandOptions extends SourceCommandOptions {
   readonly harness?: string;
   readonly suite?: readonly string[];
   readonly trials?: number;
+}
+
+interface EvalCompareCommandOptions extends SourceCommandOptions {
+  readonly base: string;
+  readonly candidate: string;
 }
 
 interface InspectCommandOptions {
@@ -217,6 +223,15 @@ const writeHumanEval = (output: Output, result: Awaited<ReturnType<typeof runEva
   ].join(''));
 };
 
+const writeHumanEvalComparison = (output: Output, result: Awaited<ReturnType<typeof compareEvals>>): void => {
+  const { summary } = result;
+  output.write([
+    `Compared ${result.baselineRunId} to ${result.candidateRunId}: `,
+    `${summary.comparable} comparable, ${summary.nonComparable} non-comparable `,
+    `(${summary.reliability} reliability, ${summary.smoke} smoke)\n`,
+  ].join(''));
+};
+
 const writeHumanValidate = (output: Output, result: Awaited<ReturnType<typeof validate>>): void => {
   output.write(result.diagnostics.some((diagnostic) => diagnostic.severity === 'error')
     ? `Validation reported ${result.diagnostics.length} diagnostic(s)\n`
@@ -317,6 +332,22 @@ export const runCli = async (
     const summary = result.run.summary ?? emptyEvalSummary;
     // Inconclusive trials produced no evidence, so they cannot report success either.
     if (summary.fail > 0 || summary.inconclusive > 0) exitCode = 1;
+  });
+
+  const evalCompareCommand = configureSourceOptions(
+    evalCommand.command('compare').description('Compare two persisted eval runs'),
+  )
+    .requiredOption('--base <runId>', 'Baseline eval run id')
+    .requiredOption('--candidate <runId>', 'Candidate eval run id');
+  evalCompareCommand.action(async (options: EvalCompareCommandOptions) => {
+    const sourceOptions = evalCommand.opts<EvalCommandOptions>();
+    const result = await compareEvals({
+      ...projectOptions(sourceOptions),
+      baseRunId: options.base,
+      candidateRunId: options.candidate,
+    });
+    if (sourceOptions.json === true) writeMachine(stdout, result);
+    else writeHumanEvalComparison(stdout, result);
   });
 
   const inspectCommand = configureInspectOptions(

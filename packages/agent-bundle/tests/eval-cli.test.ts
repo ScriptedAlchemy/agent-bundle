@@ -3,8 +3,9 @@ import { join } from 'node:path';
 
 import { expect, it } from '@rstest/core';
 
-import { build, runEvals } from '../src/api.ts';
+import { build, compareEvals, runEvals } from '../src/api.ts';
 import { runCli } from '../src/cli.ts';
+import { createEvalRun, type EvalTrialRecordInput } from '../src/eval/index.ts';
 import type { EvalRunResult } from '../src/dev/eval-service.ts';
 import { createProjectFixture, removeProjectFixture } from './helpers/project-fixture.ts';
 import { seedEvalProject } from './support/eval-project.ts';
@@ -22,6 +23,55 @@ const runCliWithOutput = async (args: readonly string[]): Promise<{
     stdout: { write: (chunk: string) => stdout.push(chunk) },
   });
   return { code, stderr: stderr.join(''), stdout: stdout.join('') };
+};
+
+const persistComparisonRun = async (projectRoot: string, runId: string): Promise<string> => {
+  const writer = await createEvalRun({
+    artifact: {
+      manifestPath: 'artifacts/target/agent-bundle.manifest.json',
+      source: 'run-owned',
+      targetDigests: { portable: 'a'.repeat(64) },
+    },
+    projectRoot,
+    provenance: {
+      agentBundleVersion: '0.1.0',
+      harness: 'deterministic',
+      projectRevision: 'b'.repeat(64),
+    },
+    runId,
+  });
+  const evidence = {
+    mcp: { calls: [], level: 'unavailable' as const },
+    process: { exitCode: 0, level: 'observed' as const, timedOut: false },
+    scripts: { level: 'unavailable' as const, results: {} },
+    skillActivation: { activated: [], level: 'unavailable' as const },
+  };
+  try {
+    for (let index = 1; index <= 3; index += 1) {
+      await writer.writeTrial({
+        assertions: [],
+        caseDigest: 'c'.repeat(64),
+        caseId: 'reads-result',
+        completedAt: '2026-08-17T12:00:01.000Z',
+        durationMs: 1000,
+        evidence,
+        fixtureDigest: 'd'.repeat(64),
+        host: 'portable',
+        id: `portable-${index}`,
+        model: 'deterministic',
+        outcome: 'pass',
+        prompt: 'Read the result.',
+        rawArtifacts: [],
+        startedAt: '2026-08-17T12:00:00.000Z',
+        targetDigest: 'a'.repeat(64),
+        trialIndex: index - 1,
+      } satisfies EvalTrialRecordInput);
+    }
+    await writer.finish({ cases: 1, fail: 0, inconclusive: 0, pass: 3, trials: 3 });
+    return writer.record.id;
+  } finally {
+    await writer.close();
+  }
 };
 
 it('runs a selected case through the same service the workbench uses', async () => {
@@ -145,6 +195,88 @@ it('prints a configured semantic grader as a warning beside the completed run', 
     expect(result.code).toBe(0);
     expect(result.stdout).toContain('AB9000');
     expect(result.stdout).toContain('1 passed');
+  } finally {
+    await removeProjectFixture(project.root);
+  }
+}, 120_000);
+
+it('compares persisted runs through the public API and both CLI output modes', async () => {
+  const project = await createProjectFixture();
+  try {
+    await seedEvalProject(project.root);
+    const baselineRunId = await persistComparisonRun(project.root, 'baseline');
+    const candidateRunId = await persistComparisonRun(project.root, 'candidate');
+
+    const comparison = await compareEvals({
+      baseRunId: baselineRunId,
+      candidateRunId: candidateRunId,
+      root: project.root,
+    });
+    expect(comparison).toMatchObject({
+      baselineRunId,
+      candidateRunId,
+      summary: { comparable: 1, nonComparable: 0, reliability: 1, smoke: 0 },
+    });
+
+    const machine = await runCliWithOutput([
+      'eval',
+      'compare',
+      '--root',
+      project.root,
+      '--base',
+      baselineRunId,
+      '--candidate',
+      candidateRunId,
+      '--json',
+    ]);
+    expect(machine.code).toBe(0);
+    expect(JSON.parse(machine.stdout)).toMatchObject({
+      baselineRunId,
+      candidateRunId,
+      summary: { comparable: 1, nonComparable: 0 },
+    });
+
+    const human = await runCliWithOutput([
+      'eval',
+      'compare',
+      '--root',
+      project.root,
+      '--base',
+      baselineRunId,
+      '--candidate',
+      candidateRunId,
+    ]);
+    expect(human.code).toBe(0);
+    expect(human.stdout).toContain(`Compared ${baselineRunId} to ${candidateRunId}`);
+    expect(human.stdout).toContain('1 comparable, 0 non-comparable');
+  } finally {
+    await removeProjectFixture(project.root);
+  }
+}, 120_000);
+
+it('reports invalid or missing comparison run ids with the existing eval diagnostic', async () => {
+  const project = await createProjectFixture();
+  try {
+    await seedEvalProject(project.root);
+    const candidateRunId = await persistComparisonRun(project.root, 'candidate');
+
+    for (const baseRunId of ['../escape', 'absent-run']) {
+      const result = await runCliWithOutput([
+        'eval',
+        'compare',
+        '--root',
+        project.root,
+        '--base',
+        baseRunId,
+        '--candidate',
+        candidateRunId,
+      ]);
+
+      expect(result.code).toBe(1);
+      const diagnostics = JSON.parse(result.stderr) as readonly { readonly code: string; readonly recovery?: string }[];
+      expect(diagnostics).toMatchObject([{ code: 'AB9003', severity: 'error' }]);
+      expect(diagnostics[0]?.recovery).toContain('start a new one');
+    }
   } finally {
     await removeProjectFixture(project.root);
   }
