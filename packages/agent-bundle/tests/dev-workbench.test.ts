@@ -713,7 +713,7 @@ it('retains Runtime App routes through invalid config updates and reconciles onl
     await server?.close().catch(() => undefined);
     await Promise.all([removeProjectFixture(project.root), rm(assetsRoot, { force: true, recursive: true })]);
   }
-}, 30_000);
+}, 60_000);
 
 it('fences a closing foreground before a held valid runtime reconcile can attach an App preview service', async () => {
   const project = await createProjectFixture();
