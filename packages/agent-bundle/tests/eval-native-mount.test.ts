@@ -536,3 +536,38 @@ it('persists an inconclusive, path-free Claude fixture failure instead of reject
     await removeProjectFixture(project.root);
   }
 }, 240_000);
+
+it('keeps a thrown native grader fixture path out of mounted and browser-visible trial output', async () => {
+  const project = await createProjectFixture();
+  try {
+    await seedNativeProject(project.root);
+    await writeFile(join(project.root, 'evals', 'graders', 'reads-result.ts'), [
+      'export default async ({ fixturePath }) => {',
+      '  throw new Error(fixturePath);',
+      '};',
+      '',
+    ].join('\n'));
+    const service = nativeService(project.root, {
+      claudeRun: claudeRunner({ requests: [] }),
+      environment: { PATH: process.env.PATH ?? '/usr/bin' },
+    });
+
+    const result = await service.run({ harness: 'claude', suites: ['native-suite'] });
+    const trial = result.trials[0];
+    expect(trial?.harnessFailure).toMatchObject({ code: 'EVAL_GRADER_FAILED', stage: 'grader' });
+    expect(trial?.evidence.scripts.results['./graders/reads-result.ts']).toEqual({
+      detail: 'The grader could not complete.',
+      outcome: 'inconclusive',
+    });
+    const persisted = await readFile(
+      join(project.root, '.agent-bundle', 'runs', result.run.id, 'cases', 'native-review', 'native-review--claude-1.json'),
+      'utf8',
+    );
+    const reread = JSON.stringify(await service.read(result.run.id));
+    const browser = await readBrowserRun(service, result.run.id);
+
+    expectPathFreeNativeOutput([JSON.stringify(result), persisted, reread, browser], [project.root]);
+  } finally {
+    await removeProjectFixture(project.root);
+  }
+}, 240_000);
