@@ -4,6 +4,7 @@ import type { AddressInfo, Socket } from 'node:net';
 import { basename } from 'node:path';
 
 import { ArtifactRoutes, type ArtifactRouteService } from './artifact-routes.ts';
+import { EvalRoutes, type EvalRouteService } from './eval-routes.ts';
 import type { ProjectEventHub, ProjectEventSubscription } from './events.ts';
 import { HookPlaygroundRoutes, type HookPlaygroundRouteService } from './hook-playground-routes.ts';
 import { McpAppRoutes, type McpAppRoutePreviewService } from './mcp-app-routes.ts';
@@ -90,6 +91,8 @@ export interface ForegroundServerOptions {
   readonly artifacts?: ArtifactRouteService;
   readonly assets?: WorkbenchAssetSource;
   readonly coordinator: ForegroundCoordinator;
+  /** Deterministic eval runs; the browser names discovered suites, never a path or command. */
+  readonly evals?: EvalRouteService;
   readonly eventHub: ProjectEventHub;
   readonly host?: string;
   /** Already-bound MCP App previews, never executable data supplied by a browser request. */
@@ -381,6 +384,7 @@ export class ForegroundServer {
   readonly #artifactRoutes: ArtifactRoutes;
   readonly #assets: WorkbenchAssetSource | undefined;
   readonly #coordinator: ForegroundCoordinator;
+  readonly #evalRoutes: EvalRoutes;
   readonly #eventHub: ProjectEventHub;
   readonly #hookPlaygroundRoutes: HookPlaygroundRoutes;
   readonly #host: string;
@@ -437,6 +441,10 @@ export class ForegroundServer {
     this.#artifactRoutes = new ArtifactRoutes({
       authorize: (request) => this.#assertMutationSession(request),
       ...(options.artifacts === undefined ? {} : { service: options.artifacts }),
+    });
+    this.#evalRoutes = new EvalRoutes({
+      authorize: (request) => this.#assertMutationSession(request),
+      ...(options.evals === undefined ? {} : { service: options.evals }),
     });
     this.#server = createServer((request, response) => {
       void this.#handle(request, response).catch((error: unknown) => {
@@ -561,6 +569,7 @@ export class ForegroundServer {
     const releaseHookPlayground = this.#hookPlaygroundRoutes.close();
     this.#playgroundRoutes.close();
     this.#artifactRoutes.close();
+    this.#evalRoutes.close();
     const releaseServer = this.#listenStarted
       ? (() => {
           this.#listenStarted = false;
@@ -593,6 +602,7 @@ export class ForegroundServer {
     if (await this.#hookPlaygroundRoutes.handle(request, response)) return;
     if (await this.#playgroundRoutes.handle(request, response)) return;
     if (await this.#artifactRoutes.handle(request, response)) return;
+    if (await this.#evalRoutes.handle(request, response)) return;
     const route = skillRoute(request.url);
     if (route !== undefined) return this.#serveSkill(route, response, method);
     if (pathname === '/api/project/status') {

@@ -9,6 +9,10 @@ import type {
 import type { ProjectStatus } from '../../agent-bundle/src/dev/types.ts';
 
 import { ArtifactClient } from './artifacts/artifact-client.ts';
+import { ComparisonClient } from './comparisons/comparison-client.ts';
+import { ComparisonsPage } from './comparisons/comparisons-page.tsx';
+import { EvalClient } from './evals/eval-client.ts';
+import { EvalsPage } from './evals/evals-page.tsx';
 import { ArtifactsPage } from './artifacts/artifacts-page.tsx';
 import { HookClient } from './hooks/hook-client.ts';
 import { HooksPage } from './hooks/hooks-page.tsx';
@@ -81,7 +85,7 @@ const StateMark = ({ state }: { readonly state: string }) => (
   }</span>
 );
 
-type WorkbenchPage = 'artifacts' | 'hooks' | 'logs' | 'mcp' | 'overview' | 'playground' | 'skills';
+type WorkbenchPage = 'artifacts' | 'comparisons' | 'evals' | 'hooks' | 'logs' | 'mcp' | 'overview' | 'playground' | 'skills';
 type McpPresentation = 'inspector' | 'playground';
 
 const pageForHash = (): WorkbenchPage => {
@@ -90,6 +94,8 @@ const pageForHash = (): WorkbenchPage => {
   if (window.location.hash === '#artifacts') return 'artifacts';
   if (window.location.hash === '#playground') return 'playground';
   if (window.location.hash === '#logs') return 'logs';
+  if (window.location.hash === '#evals') return 'evals';
+  if (window.location.hash === '#comparisons') return 'comparisons';
   return window.location.hash === '#skills' ? 'skills' : 'overview';
 };
 
@@ -162,6 +168,24 @@ const Navigation = ({ onNavigate, page }: {
   >
     <span aria-hidden="true" className="nav-glyph">≡</span>
     Logs
+  </a>
+  <a
+    aria-current={page === 'evals' ? 'page' : undefined}
+    className={page === 'evals' ? 'nav-item nav-item--active' : 'nav-item'}
+    href="#evals"
+    onClick={(event) => { event.preventDefault(); onNavigate('evals'); }}
+  >
+    <span aria-hidden="true" className="nav-glyph">✓</span>
+    Evals
+  </a>
+  <a
+    aria-current={page === 'comparisons' ? 'page' : undefined}
+    className={page === 'comparisons' ? 'nav-item nav-item--active' : 'nav-item'}
+    href="#comparisons"
+    onClick={(event) => { event.preventDefault(); onNavigate('comparisons'); }}
+  >
+    <span aria-hidden="true" className="nav-glyph">⇄</span>
+    Comparisons
   </a>
 </aside>;
 
@@ -312,6 +336,22 @@ const WorkbenchScreen = ({ children, connectionError, onNavigate, page }: {
     {children}
   </div>
 </div>;
+
+const EvalsScreen = ({ connectionError, evalClient, onNavigate }: {
+  readonly connectionError?: string;
+  readonly evalClient: EvalClient;
+  readonly onNavigate: (page: WorkbenchPage) => void;
+}) => <WorkbenchScreen connectionError={connectionError} onNavigate={onNavigate} page="evals">
+  <EvalsPage client={evalClient} />
+</WorkbenchScreen>;
+
+const ComparisonsScreen = ({ comparisonClient, connectionError, onNavigate }: {
+  readonly comparisonClient: ComparisonClient;
+  readonly connectionError?: string;
+  readonly onNavigate: (page: WorkbenchPage) => void;
+}) => <WorkbenchScreen connectionError={connectionError} onNavigate={onNavigate} page="comparisons">
+  <ComparisonsPage client={comparisonClient} />
+</WorkbenchScreen>;
 
 const ArtifactsScreen = ({ artifactClient, connectionError, onNavigate, status }: {
   readonly artifactClient: ArtifactClient;
@@ -466,6 +506,8 @@ const McpScreen = ({ appPreviewClient, connectionError, controller, model, onNav
 const Workbench = () => {
   const client = useRef<ProjectClient | undefined>(undefined);
   const artifactClient = useRef<ArtifactClient | undefined>(undefined);
+  const comparisonClient = useRef<ComparisonClient | undefined>(undefined);
+  const evalClient = useRef<EvalClient | undefined>(undefined);
   const hookClient = useRef<HookClient | undefined>(undefined);
   const playgroundClient = useRef<PlaygroundClient | undefined>(undefined);
   const mcpAppClient = useRef<McpAppClient | undefined>(undefined);
@@ -481,6 +523,8 @@ const Workbench = () => {
   const [playgroundSession, setPlaygroundSession] = useState<PlaygroundSession>();
 
   if (artifactClient.current === undefined) artifactClient.current = new ArtifactClient();
+  if (comparisonClient.current === undefined) comparisonClient.current = new ComparisonClient();
+  if (evalClient.current === undefined) evalClient.current = new EvalClient();
   if (hookClient.current === undefined) hookClient.current = new HookClient();
   if (playgroundClient.current === undefined) playgroundClient.current = new PlaygroundClient();
   if (mcpAppClient.current === undefined) mcpAppClient.current = new McpAppClient();
@@ -496,11 +540,13 @@ const Workbench = () => {
 
   const navigate = (next: WorkbenchPage): void => {
     const hash = next === 'artifacts' ? '#artifacts'
-      : next === 'hooks' ? '#hooks'
-        : next === 'logs' ? '#logs'
-          : next === 'mcp' ? '#mcp'
-            : next === 'playground' ? '#playground'
-              : next === 'skills' ? '#skills' : '#overview';
+      : next === 'comparisons' ? '#comparisons'
+        : next === 'evals' ? '#evals'
+          : next === 'hooks' ? '#hooks'
+            : next === 'logs' ? '#logs'
+              : next === 'mcp' ? '#mcp'
+                : next === 'playground' ? '#playground'
+                  : next === 'skills' ? '#skills' : '#overview';
     if (window.location.hash !== hash) window.history.pushState(undefined, '', hash);
     if (next === 'mcp') setMcpPresentation('playground');
     setPage(next);
@@ -592,6 +638,12 @@ const Workbench = () => {
         sessionId={playgroundSession?.id}
         status={status}
       />;
+    }
+    if (page === 'evals') {
+      return <EvalsScreen connectionError={connectionError} evalClient={evalClient.current} onNavigate={navigate} />;
+    }
+    if (page === 'comparisons') {
+      return <ComparisonsScreen comparisonClient={comparisonClient.current} connectionError={connectionError} onNavigate={navigate} />;
     }
     if (page === 'artifacts') {
       return <ArtifactsScreen artifactClient={artifactClient.current} connectionError={connectionError} onNavigate={navigate} status={status} />;

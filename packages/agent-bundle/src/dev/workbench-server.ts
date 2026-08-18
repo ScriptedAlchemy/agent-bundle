@@ -5,6 +5,7 @@ import { createDefaultRegistry, type TargetRegistry } from '../adapters/registry
 import { ArtifactInspectionService } from './artifact-inspection-service.ts';
 import { DevCoordinator } from './coordinator.ts';
 import { EpochStore } from './epoch-store.ts';
+import { EvalService } from './eval-service.ts';
 import { ProjectEventHub } from './events.ts';
 import { HookPlaygroundService } from './hook-playground-service.ts';
 import {
@@ -270,6 +271,7 @@ export const startDevServer = async (options: StartDevServerOptions): Promise<De
     artifacts: new ArtifactInspectionService(epochStore, registry),
     assets: options.assets ?? createWorkbenchAssetSource(),
     coordinator: withMcpSessionLifecycle(coordinator, mcpSessions, () => mcpApps, playground),
+    evals: new EvalService({ projectRoot: root, registry }),
     eventHub,
     hookPlayground: new HookPlaygroundService({ epochStore, registry }),
     mcpAppPreviews: appPreviews,

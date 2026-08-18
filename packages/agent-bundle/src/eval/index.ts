@@ -1,3 +1,23 @@
+export { compareEvalRuns, EvalComparisonError, evalReliabilityMinimumTrials } from './compare.ts';
+export type {
+  EvalAlignmentFacet,
+  EvalComparableRow,
+  EvalComparison,
+  EvalComparisonDelta,
+  EvalComparisonErrorCode,
+  EvalComparisonEvidence,
+  EvalComparisonOptions,
+  EvalComparisonRow,
+  EvalComparisonSide,
+  EvalComparisonSummary,
+  EvalComparisonUsage,
+  EvalConditionMetrics,
+  EvalNonComparableCause,
+  EvalNonComparableReason,
+  EvalNonComparableRow,
+  EvalRecordedUsage,
+  EvalReliability,
+} from './compare.ts';
 export {
   evidenceRank,
   expectExitCode,
