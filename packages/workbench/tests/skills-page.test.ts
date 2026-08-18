@@ -32,12 +32,18 @@ it('renders independent document and view selectors for the generated Markdown d
   const markup = renderToStaticMarkup(createElement(SkillDocumentPanel, {
     document: 'generated',
     onDocumentChange: () => undefined,
+    onTargetChange: () => undefined,
     onViewChange: () => undefined,
     selected: generatedDocument,
+    target: 'portable',
+    targetNames: ['portable'],
     view: 'markdown',
   }));
 
   expect([...markup.matchAll(/role="tablist"/gu)]).toHaveLength(2);
+  expect(markup).toContain('>Document<');
+  expect(markup).toContain('>View<');
+  expect(markup).toContain('>Target<');
   expect(markup).toContain('aria-label="Skill document"');
   expect(markup).toContain('aria-label="Document view"');
   expect(markup).toContain('Generated document · epoch-01/portable');
