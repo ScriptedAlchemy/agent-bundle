@@ -294,7 +294,9 @@ const EventTimeline = ({ discardedThroughSequence, events }: {
   {discardedThroughSequence === undefined ? undefined : <p className="eval-timeline-notice" role="status">
     Earlier durable events through #{discardedThroughSequence} are not shown because this view is bounded.
   </p>}
-  {events.length === 0 ? <p className="empty-row">No persisted event is available for this run.</p> : <ol>
+  {events.length === 0
+    ? discardedThroughSequence === undefined ? <p className="empty-row">No persisted event is available for this run.</p> : undefined
+    : <ol>
     {events.map((event) => <li key={event.sequence}>
       <span className="eval-event-sequence">#{event.sequence}</span><time>{event.timestamp}</time><strong>{event.kind}</strong>
       <pre><code>{JSON.stringify(event.payload, undefined, 2)}</code></pre>

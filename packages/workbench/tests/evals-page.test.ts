@@ -215,6 +215,21 @@ it('labels a bounded timeline when earlier durable events are not shown', () => 
   expect(markup).toContain('Earlier durable events through #12 are not shown');
 });
 
+it('does not claim that no persisted event exists when every event exceeded the view bound', () => {
+  const bounded = evalRunViewFor({
+    discardedThroughSequence: 1,
+    events: [],
+    listing,
+    result,
+    selectedSuite: 'review-change',
+  });
+
+  const markup = renderToStaticMarkup(createElement(EvalRunReport, { view: bounded }));
+
+  expect(markup).toContain('Earlier durable events through #1 are not shown');
+  expect(markup).not.toContain('No persisted event is available for this run.');
+});
+
 it('keys raw artifact state by run identity and creates no URL when safe-text decoding fails', async () => {
   expect(evalArtifactPresentationKey('run-a', 'artifacts/trial/evidence.json'))
     .not.toBe(evalArtifactPresentationKey('run-b', 'artifacts/trial/evidence.json'));
