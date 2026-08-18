@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process';
-import { access, chmod, cp, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { access, chmod, cp, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { delimiter, dirname, isAbsolute, join, relative } from 'node:path';
@@ -13,6 +13,11 @@ const workspaceRoot = process.cwd();
 const packageRoot = join(workspaceRoot, 'packages', 'agent-bundle');
 const fixtureRoot = join(workspaceRoot, 'fixtures', 'integration', 'packed-release');
 const browserTimeout = 12_000;
+const productTemporaryRootPrefixes = [
+  'agent-bundle-hook-playground-',
+  'agent-bundle-mcp-',
+  'agent-bundle-playground-script-',
+] as const;
 let builtPackage: Promise<void> | undefined;
 
 const expectedAgentApiToolNames = [
@@ -79,14 +84,51 @@ const awaitReady = async (origin: string, child: ChildProcess, output: () => str
   throw new Error(`Timed out waiting for the packed dev server: ${output()}`);
 };
 
+const childExitedWithin = (child: ChildProcess, timeoutMs: number): Promise<boolean> => {
+  if (child.exitCode !== null) return Promise.resolve(true);
+  return new Promise((resolvePromise, rejectPromise) => {
+    const finish = (exited: boolean): void => {
+      clearTimeout(timeout);
+      child.off('exit', onExit);
+      child.off('error', onError);
+      resolvePromise(exited);
+    };
+    const onExit = (): void => { finish(true); };
+    const onError = (error: Error): void => {
+      clearTimeout(timeout);
+      child.off('exit', onExit);
+      rejectPromise(error);
+    };
+    child.once('exit', onExit);
+    child.once('error', onError);
+    const timeout = setTimeout(() => { finish(false); }, timeoutMs);
+    if (child.exitCode !== null) finish(true);
+  });
+};
+
 const closeChild = async (child: ChildProcess): Promise<void> => {
   if (child.exitCode !== null) return;
-  child.kill('SIGTERM');
-  await new Promise<void>((resolvePromise, rejectPromise) => {
-    const timeout = setTimeout(() => rejectPromise(new Error('The packed dev server did not exit.')), 5_000);
-    child.once('exit', () => { clearTimeout(timeout); resolvePromise(); });
-    child.once('error', (error) => { clearTimeout(timeout); rejectPromise(error); });
-  });
+  const signalAndWait = async (signal: NodeJS.Signals): Promise<boolean> => {
+    if (child.exitCode !== null) return true;
+    if (!child.kill(signal)) {
+      if (child.exitCode !== null) return true;
+      throw new Error(`The packed dev server could not receive ${signal}.`);
+    }
+    return childExitedWithin(child, 5_000);
+  };
+  const closeFailures: unknown[] = [];
+  try {
+    if (await signalAndWait('SIGTERM')) return;
+    closeFailures.push(new Error('The packed dev server did not exit after SIGTERM.'));
+  } catch (error) {
+    closeFailures.push(error);
+  }
+  let forceExited = false;
+  try { forceExited = await signalAndWait('SIGKILL'); }
+  catch (error) { closeFailures.push(error); }
+  if (forceExited) throw new AggregateError(closeFailures, 'The packed dev server required SIGKILL after SIGTERM.');
+  closeFailures.push(new Error('The packed dev server remained alive after SIGKILL.'));
+  throw new AggregateError(closeFailures, 'The packed dev server could not be stopped.');
 };
 
 const writeFakeClaude = async (root: string): Promise<string> => {
@@ -174,6 +216,8 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 }
   let child: ChildProcess | undefined;
   let phase = 'package setup';
   const trackedProcessIds = new Set<number>();
+  const observedOperationDescendantProcessIds = new Set<number>();
+  const productTemporaryRootsBefore = new Set<string>();
   let cleanupFailure: AggregateError | undefined;
   let primaryFailure: Error | undefined;
   try {
@@ -202,7 +246,10 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 }
       expect(isWithin(workspaceRoot, installedDependency)).toBe(false);
     }
     await expect(access(forbiddenStagedPackage)).rejects.toMatchObject({ code: 'ENOENT' });
-    await cp(fixtureRoot, project, { recursive: true });
+    await cp(fixtureRoot, project, {
+      filter: (source) => source !== join(fixtureRoot, '.agent-bundle') && source !== join(fixtureRoot, 'node_modules'),
+      recursive: true,
+    });
     await expect(access(join(project, 'node_modules'))).rejects.toMatchObject({ code: 'ENOENT' });
     const configSource = join(project, 'agent-bundle.config.ts');
     const skillSource = join(project, 'skills', 'review', 'SKILL.md');
@@ -237,6 +284,9 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 }
       commandStderr += text;
     });
     await awaitReady(origin, child, () => commandOutput);
+    for (const root of await readdir(tmpdir())) {
+      if (productTemporaryRootPrefixes.some((prefix) => root.startsWith(prefix))) productTemporaryRootsBefore.add(root);
+    }
     phase = 'browser startup status';
     const consoleErrors: string[] = [];
     const pageErrors: Error[] = [];
@@ -519,6 +569,14 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 }
       await page.getByRole('button', { name: 'Start native prompt' }).click();
       expect(record(await (await nativeAAdmitted).json(), 'native epoch A admission').run).toEqual(expect.any(Object));
       await expect(page.getByText('native.host.started')).toBeVisible({ timeout: browserTimeout });
+      if (child?.pid === undefined) throw new Error('The packed dev server process did not expose a PID.');
+      const nativeOperationDescendants = await descendantProcessIds(child.pid);
+      expect(nativeOperationDescendants).not.toHaveLength(0);
+      for (const processId of nativeOperationDescendants) {
+        expect(processId).not.toBe(child.pid);
+        observedOperationDescendantProcessIds.add(processId);
+        trackedProcessIds.add(processId);
+      }
       const nativeRequestA = nativeRequests.at(-1);
       if (nativeRequestA === undefined) throw new Error('The packed epoch-A native operation did not issue a request.');
       const nativeEpochA = string(nativeRequestA.epochId, 'epoch-A native request epoch id');
@@ -771,7 +829,7 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 }
         trackedProcessIds.add(child.pid);
         for (const processId of await descendantProcessIds(child.pid)) trackedProcessIds.add(processId);
       }
-      expect(trackedProcessIds.size).toBeGreaterThan(0);
+      expect(observedOperationDescendantProcessIds.size).toBeGreaterThan(0);
       await closeChild(child);
       expect(child.exitCode).not.toBeNull();
       for (const shutdownOrigin of new Set([origin, appProxyOrigin].filter((value): value is string => value !== undefined))) {
@@ -785,6 +843,12 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 }
         }, { timeout: browserTimeout }).toBe(true);
       }
       await expect(access(join(project, '.agent-bundle', 'dev.lock'))).rejects.toMatchObject({ code: 'ENOENT' });
+      const leakedProductTemporaryRoots = (await readdir(tmpdir())).filter((root) =>
+        productTemporaryRootPrefixes.some((prefix) => root.startsWith(prefix)) && !productTemporaryRootsBefore.has(root),
+      );
+      expect(leakedProductTemporaryRoots).toEqual([]);
+      const nativeWorkspaceEntries = await readdir(join(project, '.agent-bundle'));
+      expect(nativeWorkspaceEntries.filter((entry) => entry.startsWith('native-playground-'))).toEqual([]);
       for (const processId of trackedProcessIds) {
         await expect.poll(() => {
           try {
