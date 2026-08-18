@@ -586,14 +586,7 @@ const Workbench = () => {
   if (mcpAppClient.current === undefined) mcpAppClient.current = new McpAppClient();
 
   const navigate = (next: WorkbenchPage): void => {
-    const hash = next === 'artifacts' ? '#artifacts'
-      : next === 'comparisons' ? '#comparisons'
-        : next === 'evals' ? '#evals'
-          : next === 'hooks' ? '#hooks'
-            : next === 'logs' ? '#logs'
-              : next === 'mcp' ? '#mcp'
-                : next === 'playground' ? '#playground'
-                  : next === 'skills' ? '#skills' : '#overview';
+    const hash = `#${next}`;
     if (window.location.hash !== hash) window.history.pushState(undefined, '', hash);
     if (next === 'mcp') setMcpPresentation('playground');
     setPage(next);
