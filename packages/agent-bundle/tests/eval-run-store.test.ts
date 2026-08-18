@@ -1,9 +1,11 @@
-import { appendFile, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { Buffer } from 'node:buffer';
+import { appendFile, mkdir, mkdtemp, readFile, readdir, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { expect, it } from '@rstest/core';
 
+import { stableJson } from '../src/core/digest.ts';
 import {
   createEvalRun,
   EvalRunStoreError,
@@ -227,6 +229,56 @@ it('rejects a trial record whose identifiers are not path safe', async () => {
       await expect(writer.writeArtifactFile('../escape.json', '{}')).rejects.toMatchObject({ code: 'EVAL_RUN_RECORD_INVALID' });
     } finally {
       await writer.close();
+    }
+  });
+});
+
+it('enforces the persisted trial byte limit before atomically publishing the record', async () => {
+  await withProject(async (root) => {
+    const writer = await createEvalRun(runOptions(root));
+    const emptyPrompt = { ...trialInput(), prompt: '', schemaVersion: 1 };
+    const allowedPromptBytes = 1024 * 1024 - Buffer.byteLength(`${stableJson(emptyPrompt)}\n`, 'utf8');
+    const exact = trialInput({ prompt: 'x'.repeat(allowedPromptBytes) });
+    const tooLarge = trialInput({ id: 'trial-2', prompt: 'x'.repeat(allowedPromptBytes + 1), trialIndex: 1 });
+    try {
+      expect(Buffer.byteLength(`${stableJson({ ...exact, schemaVersion: 1 })}\n`, 'utf8')).toBe(1024 * 1024);
+      await expect(writer.writeTrial(exact)).resolves.toMatchObject({ id: 'trial-1' });
+      await expect(writer.writeTrial(tooLarge)).rejects.toMatchObject({
+        code: 'EVAL_RUN_RECORD_INVALID',
+        message: 'Eval trial record exceeds the 1 MiB storage limit.',
+      });
+      await expect(readEvalTrials(writer.directory)).resolves.toHaveLength(1);
+    } finally {
+      await writer.close().catch(() => undefined);
+    }
+  });
+});
+
+it('rejects trial authority when the cases root changes after its directory snapshot', async () => {
+  await withProject(async (root) => {
+    const writer = await createEvalRun(runOptions(root));
+    const outside = `${root}-outside`;
+    try {
+      await writer.writeTrial(trialInput());
+      await writer.close();
+      const cases = join(writer.directory, 'cases');
+      const original = join(writer.directory, 'cases-before-swap');
+      await mkdir(join(outside, 'direct-review'), { recursive: true });
+      await writeFile(join(outside, 'direct-review', 'trial-1.json'), await readFile(join(cases, 'direct-review', 'trial-1.json')));
+      const readWithSnapshot = readEvalTrials as unknown as (
+        directory: string,
+        options: { readonly afterCasesSnapshot: () => Promise<void> },
+      ) => Promise<readonly unknown[]>;
+
+      await expect(readWithSnapshot(writer.directory, {
+        afterCasesSnapshot: async () => {
+          await rename(cases, original);
+          await symlink(outside, cases);
+        },
+      })).rejects.toMatchObject({ code: 'EVAL_RUN_CORRUPT' });
+    } finally {
+      await rm(outside, { force: true, recursive: true });
+      await writer.close().catch(() => undefined);
     }
   });
 });

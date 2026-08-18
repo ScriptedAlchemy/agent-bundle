@@ -362,7 +362,7 @@ const comparisonQuery = (
  */
 export class EvalRoutes {
   readonly #authorize: (request: IncomingMessage) => void;
-  readonly #artifactAdmissions = new Set<Promise<void>>();
+  readonly #admissions = new Set<Promise<void>>();
   readonly #closeFailures = new Set<unknown>();
   readonly #closeReaders = new Set<() => Promise<void>>();
   readonly #readerCloses = new Set<Promise<void>>();
@@ -380,7 +380,7 @@ export class EvalRoutes {
     for (const controller of this.#running) controller.abort();
     this.#running.clear();
     this.#closePromise = Promise.resolve().then(async () => {
-      await Promise.allSettled([...this.#artifactAdmissions]);
+      await Promise.allSettled([...this.#admissions]);
       const results = await Promise.allSettled([...this.#closeReaders].map(async (close) => close()));
       await Promise.allSettled([...this.#readerCloses]);
       this.#closeReaders.clear();
@@ -470,12 +470,12 @@ export class EvalRoutes {
     return requestError(diagnostic('AB8071', 'Eval routes are not available.', status));
   }
 
-  #beginArtifactAdmission(): () => void {
+  #beginAdmission(): () => void {
     let settle!: () => void;
     const admission = new Promise<void>((resolvePromise) => { settle = resolvePromise; });
-    this.#artifactAdmissions.add(admission);
+    this.#admissions.add(admission);
     return (): void => {
-      this.#artifactAdmissions.delete(admission);
+      this.#admissions.delete(admission);
       settle();
     };
   }
@@ -498,69 +498,102 @@ export class EvalRoutes {
     runId: string,
     afterSequence: number,
   ): Promise<void> {
-    const subscription = await service.subscribeEvents(runId, afterSequence);
-    let buffered = 0;
-    let closed = false;
-    let closePromise: Promise<void> | undefined;
-    let terminalQueued = false;
-    const frames: string[] = [];
-    const close = (abortResponse = false): Promise<void> => {
-      if (closePromise !== undefined) return closePromise;
-      closed = true;
-      this.#closeReaders.delete(closeFromShutdown);
-      response.off('close', closeFromPeer);
-      subscription.close();
-      if (abortResponse && !response.destroyed && !response.writableEnded) response.destroy();
-      closePromise = Promise.resolve();
-      return closePromise;
-    };
-    const closeFromPeer = (): void => { void close().catch(() => undefined); };
-    const closeFromShutdown = (): Promise<void> => close(true);
-    const flush = (): void => {
-      if (closed || response.destroyed || response.writableEnded) return;
-      while (frames.length > 0) {
-        const frame = frames.shift()!;
-        buffered -= Buffer.byteLength(frame, 'utf8');
-        if (!response.write(frame)) {
-          response.once('drain', flush);
+    const finishAdmission = this.#beginAdmission();
+    let responseClosed = response.destroyed || response.writableEnded;
+    const markResponseClosed = (): void => { responseClosed = true; };
+    response.once('close', markResponseClosed);
+    try {
+      const subscription = await service.subscribeEvents(runId, afterSequence);
+      if (responseClosed || this.#closePromise !== undefined) {
+        subscription.close();
+        throw this.#unavailable(503);
+      }
+      let buffered = 0;
+      let blocked = false;
+      let blockedBytes = 0;
+      let closed = false;
+      let closePromise: Promise<void> | undefined;
+      let flushing = false;
+      let terminalQueued = false;
+      const frames: Array<Readonly<{ readonly frame: string; readonly size: number }>> = [];
+      const onDrain = (): void => {
+        if (closed || !blocked) return;
+        blocked = false;
+        buffered -= blockedBytes;
+        blockedBytes = 0;
+        flush();
+      };
+      const close = (abortResponse = false): Promise<void> => {
+        if (closePromise !== undefined) return closePromise;
+        closed = true;
+        frames.length = 0;
+        buffered = 0;
+        blockedBytes = 0;
+        this.#closeReaders.delete(closeFromShutdown);
+        response.off('close', closeFromPeer);
+        response.off('drain', onDrain);
+        subscription.close();
+        if (abortResponse && !response.destroyed && !response.writableEnded) response.destroy();
+        closePromise = Promise.resolve();
+        return closePromise;
+      };
+      const closeFromPeer = (): void => { void close().catch(() => undefined); };
+      const closeFromShutdown = (): Promise<void> => close(true);
+      const flush = (): void => {
+        if (flushing || blocked || closed || response.destroyed || response.writableEnded) return;
+        flushing = true;
+        try {
+          while (!blocked && frames.length > 0) {
+            const next = frames.shift()!;
+            if (response.write(next.frame)) {
+              buffered -= next.size;
+              continue;
+            }
+            blocked = true;
+            blockedBytes = next.size;
+            response.once('drain', onDrain);
+          }
+          if (!blocked && terminalQueued && frames.length === 0) {
+            response.end();
+            void close().catch(() => undefined);
+          }
+        } finally {
+          flushing = false;
+        }
+      };
+      const enqueue = (event: EvalRunEventsReplay['events'][number]): void => {
+        if (closed || terminalQueued) return;
+        const frame = `${JSON.stringify(event)}\n`;
+        const size = Buffer.byteLength(frame, 'utf8');
+        if (buffered + size > streamByteLimit) {
+          void close(true).catch(() => undefined);
           return;
         }
-      }
-      if (terminalQueued) {
-        response.end();
-        void close().catch(() => undefined);
-      }
-    };
-    const enqueue = (event: EvalRunEventsReplay['events'][number]): void => {
-      if (closed || terminalQueued) return;
-      const frame = `${JSON.stringify(event)}\n`;
-      const size = Buffer.byteLength(frame, 'utf8');
-      if (buffered + size > streamByteLimit) {
-        void close(true).catch(() => undefined);
+        frames.push(Object.freeze({ frame, size }));
+        buffered += size;
+        terminalQueued = terminalEvent(event);
+        flush();
+      };
+      const replayBytes = subscription.replay.events.reduce((total, event) =>
+        total + Buffer.byteLength(`${JSON.stringify(event)}\n`, 'utf8'), 0);
+      if (replayBytes > streamByteLimit) {
+        subscription.close();
+        responseDiagnostic(response, diagnostic('AB8088', 'Eval event replay exceeds the stream limit.', 413));
         return;
       }
-      frames.push(frame);
-      buffered += size;
-      terminalQueued = terminalEvent(event);
+      response.writeHead(200, {
+        'cache-control': 'no-store',
+        'content-type': 'application/x-ndjson; charset=utf-8',
+      });
+      this.#closeReaders.add(closeFromShutdown);
+      response.once('close', closeFromPeer);
+      for (const event of subscription.replay.events) enqueue(event);
+      if (!closed && !terminalQueued) subscription.activate(enqueue);
       flush();
-    };
-    const replayBytes = subscription.replay.events.reduce((total, event) =>
-      total + Buffer.byteLength(`${JSON.stringify(event)}\n`, 'utf8'), 0);
-    if (replayBytes > streamByteLimit) {
-      subscription.close();
-      responseDiagnostic(response, diagnostic('AB8088', 'Eval event replay exceeds the stream limit.', 413));
-      return;
+    } finally {
+      response.off('close', markResponseClosed);
+      finishAdmission();
     }
-    response.writeHead(200, {
-      'cache-control': 'no-store',
-      'content-type': 'application/x-ndjson; charset=utf-8',
-    });
-    this.#closeReaders.add(closeFromShutdown);
-    response.once('close', closeFromPeer);
-    for (const event of subscription.replay.events) enqueue(event);
-    if (closed || terminalQueued) return;
-    subscription.activate(enqueue);
-    flush();
   }
 
   async #artifact(
@@ -574,7 +607,7 @@ export class EvalRoutes {
       responseDiagnostic(response, diagnostic('AB8007', 'Route does not accept this method.', 405));
       return;
     }
-    const finishAdmission = this.#beginArtifactAdmission();
+    const finishAdmission = this.#beginAdmission();
     let responseClosed = response.destroyed || response.writableEnded;
     const markResponseClosed = (): void => { responseClosed = true; };
     response.once('close', markResponseClosed);

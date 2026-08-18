@@ -823,6 +823,9 @@ export class EvalRunWriter {
   async writeTrial(trial: EvalTrialRecordInput): Promise<EvalTrialRecord> {
     this.#assertOpen();
     const record = parseTrialInput(trial);
+    if (Buffer.byteLength(`${stableJson(record)}\n`, 'utf8') > maximumTrialRecordBytes) {
+      throw storeError('EVAL_RUN_RECORD_INVALID', 'Eval trial record exceeds the 1 MiB storage limit.');
+    }
     return this.#serialize(async () => {
       await writeJsonAtomically(this.#directory, join(this.#directory, 'cases', record.caseId, `${record.id}.json`), record);
       return record;
@@ -1016,14 +1019,34 @@ export const readEvalRunEvents = async (directory: string): Promise<EvalRunEvent
   });
 };
 
-const trialDirectory = async (path: string): Promise<void> => {
+const trialDirectory = async (path: string): Promise<Stats> => {
   const entry = await lstat(path);
   if (entry.isSymbolicLink() || !entry.isDirectory()) {
     throw storeError('EVAL_RUN_CORRUPT', 'Eval trial records must remain in real run directories.');
   }
+  return entry;
 };
 
-const readTrialRecordFile = async (sourcePath: string): Promise<unknown> => {
+const assertTrialDirectory = async (path: string, expected: Stats): Promise<void> => {
+  if (!sameFile(expected, await trialDirectory(path))) {
+    throw storeError('EVAL_RUN_CORRUPT', 'Eval trial records changed while being read.');
+  }
+};
+
+interface TrialDirectoryIdentity {
+  readonly path: string;
+  readonly stats: Stats;
+}
+
+const assertTrialDirectories = async (directories: readonly TrialDirectoryIdentity[]): Promise<void> => {
+  for (const directory of directories) await assertTrialDirectory(directory.path, directory.stats);
+};
+
+const readTrialRecordFile = async (
+  sourcePath: string,
+  directories: readonly TrialDirectoryIdentity[],
+): Promise<unknown> => {
+  await assertTrialDirectories(directories);
   const before = await lstat(sourcePath);
   if (before.isSymbolicLink() || !before.isFile() || before.nlink !== 1 || before.size > maximumTrialRecordBytes) {
     throw storeError('EVAL_RUN_CORRUPT', 'Eval trial record is not a safe regular file.');
@@ -1036,6 +1059,7 @@ const readTrialRecordFile = async (sourcePath: string): Promise<unknown> => {
     }
     const bytes = await file.readFile({ encoding: 'utf8' });
     const [after, final] = await Promise.all([lstat(sourcePath), file.stat()]);
+    await assertTrialDirectories(directories);
     if (after.isSymbolicLink() || !after.isFile() || after.nlink !== 1 || !sameFile(before, after) || !sameFile(descriptor, final) ||
       final.size !== descriptor.size || Buffer.byteLength(bytes, 'utf8') !== descriptor.size) {
       throw storeError('EVAL_RUN_CORRUPT', 'Eval trial record changed while reading.');
@@ -1046,12 +1070,23 @@ const readTrialRecordFile = async (sourcePath: string): Promise<unknown> => {
   }
 };
 
-export const readEvalTrials = async (directory: string): Promise<readonly EvalTrialRecord[]> => {
+interface ReadEvalTrialsOptions {
+  /** Internal deterministic seam for verifying that a directory snapshot remains authoritative. */
+  readonly afterCasesSnapshot?: () => Promise<void>;
+}
+
+export const readEvalTrials = async (
+  directory: string,
+  options: ReadEvalTrialsOptions = {},
+): Promise<readonly EvalTrialRecord[]> => {
   const casesRoot = join(resolve(directory), 'cases');
+  let cases: TrialDirectoryIdentity;
   let caseEntries;
   try {
-    await trialDirectory(casesRoot);
+    cases = { path: casesRoot, stats: await trialDirectory(casesRoot) };
     caseEntries = await readdir(casesRoot, { withFileTypes: true });
+    await options.afterCasesSnapshot?.();
+    await assertTrialDirectory(cases.path, cases.stats);
   } catch (error) {
     if (isErrno(error, 'ENOENT')) return Object.freeze([]);
     throw error;
@@ -1062,9 +1097,11 @@ export const readEvalTrials = async (directory: string): Promise<readonly EvalTr
       throw storeError('EVAL_RUN_CORRUPT', 'Eval trial records must not traverse a symbolic link.');
     }
     if (!caseEntry.isDirectory()) continue;
+    await assertTrialDirectory(cases.path, cases.stats);
     const caseDirectory = join(casesRoot, caseEntry.name);
-    await trialDirectory(caseDirectory);
+    const caseIdentity: TrialDirectoryIdentity = { path: caseDirectory, stats: await trialDirectory(caseDirectory) };
     const trialFiles = await readdir(caseDirectory, { withFileTypes: true });
+    await assertTrialDirectories([cases, caseIdentity]);
     for (const trialFile of trialFiles) {
       if (trialFile.isSymbolicLink() && trialFile.name.endsWith('.json')) {
         throw storeError('EVAL_RUN_CORRUPT', 'Eval trial records must not traverse a symbolic link.');
@@ -1073,7 +1110,7 @@ export const readEvalTrials = async (directory: string): Promise<readonly EvalTr
       const sourcePath = join(casesRoot, caseEntry.name, trialFile.name);
       let parsed: unknown;
       try {
-        parsed = await readTrialRecordFile(sourcePath);
+        parsed = await readTrialRecordFile(sourcePath, [cases, caseIdentity]);
       } catch {
         throw storeError('EVAL_RUN_CORRUPT', `Eval trial record ${JSON.stringify(sourcePath)} cannot be parsed as JSON.`);
       }

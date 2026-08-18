@@ -1,6 +1,7 @@
 import { createServer, type IncomingMessage } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { Readable } from 'node:stream';
+import { EventEmitter } from 'node:events';
 
 import { expect, it } from '@rstest/core';
 
@@ -131,6 +132,11 @@ class RecordingService implements EvalRouteService {
   artifactReadRelease: (() => void) | undefined;
   failure: unknown;
   holdArtifact = false;
+  streamOpening = false;
+  streamOpeningRelease: (() => void) | undefined;
+  streamOpeningStarted: (() => void) | undefined;
+  streamSubscriptionCloses = 0;
+  streamEvents: readonly EvalRunEvent[] | undefined;
   /** Holds a run open until its request signal aborts, so cancellation is observable. */
   pending = false;
 
@@ -192,12 +198,20 @@ class RecordingService implements EvalRouteService {
   }
 
   async subscribeEvents(runId: string, afterSequence: number) {
+    if (this.streamOpening) {
+      this.streamOpeningStarted?.();
+      await new Promise<void>((resolvePromise) => { this.streamOpeningRelease = resolvePromise; });
+    }
     const replay = await this.events(runId, afterSequence);
     return Object.freeze({
       activate: (listener: (event: EvalRunEvent) => void): void => {
+        if (this.streamEvents !== undefined) {
+          for (const event of this.streamEvents) listener(event);
+          return;
+        }
         listener(Object.freeze({ kind: 'run.completed', payload: Object.freeze({}), schemaVersion: 1 as const, sequence: 3, timestamp: '2026-08-17T00:00:02.000Z' }));
       },
-      close: (): void => undefined,
+      close: (): void => { this.streamSubscriptionCloses += 1; },
       replay,
     });
   }
@@ -225,6 +239,37 @@ class RecordingService implements EvalRouteService {
     this.calls.push({ kind: 'suites' });
     if (this.failure !== undefined) throw this.failure;
     return suiteListing;
+  }
+}
+
+class BlockedStreamResponse extends EventEmitter {
+  destroyed = false;
+  headersSent = false;
+  readonly writes: string[] = [];
+  writableEnded = false;
+
+  destroy(): this {
+    this.destroyed = true;
+    this.emit('close');
+    return this;
+  }
+
+  end(): this {
+    this.writableEnded = true;
+    this.emit('close');
+    return this;
+  }
+
+  flushHeaders(): void {}
+
+  write(frame: string): boolean {
+    this.writes.push(frame);
+    return false;
+  }
+
+  writeHead(): this {
+    this.headersSent = true;
+    return this;
   }
 }
 
@@ -326,6 +371,65 @@ it('writes a bounded NDJSON replay from the requested eval event cursor', async 
   } finally {
     await started.close();
   }
+});
+
+it('keeps route close pending until a stream subscription admitted before it resolves has closed', async () => {
+  const service = new RecordingService();
+  service.streamOpening = true;
+  service.streamEvents = Object.freeze([]);
+  const opening = new Promise<void>((resolvePromise) => { service.streamOpeningStarted = resolvePromise; });
+  const started = await startRoutes(service);
+  const controller = new AbortController();
+  let pending: Promise<Response> | undefined;
+  try {
+    pending = fetch(`${started.url}/api/evals/runs/run-a/stream?after=0`, { headers, signal: controller.signal });
+    await opening;
+
+    let settled = false;
+    const first = started.routes.close();
+    const second = started.routes.close();
+    expect(first).toBe(second);
+    void first.then(() => { settled = true; });
+    await new Promise<void>((resolvePromise) => setImmediate(resolvePromise));
+    expect(settled).toBe(false);
+
+    service.streamOpeningRelease?.();
+    controller.abort();
+    await first;
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    expect(service.streamSubscriptionCloses).toBe(1);
+  } finally {
+    service.streamOpeningRelease?.();
+    controller.abort();
+    await pending?.catch(() => undefined);
+    await started.close().catch(() => undefined);
+  }
+});
+
+it('keeps one bounded stream writer while a blocked response receives reentrant live events', async () => {
+  const service = new RecordingService();
+  service.streamEvents = Object.freeze(Array.from({ length: 300 }, (_, index) => Object.freeze({
+    kind: 'trial.progress',
+    payload: Object.freeze({ detail: 'x'.repeat(2048) }),
+    schemaVersion: 1 as const,
+    sequence: index + 3,
+    timestamp: '2026-08-17T00:00:02.000Z',
+  })));
+  const routes = new EvalRoutes({ authorize, service });
+  const response = new BlockedStreamResponse();
+  const request = {
+    headers,
+    method: 'GET',
+    url: '/api/evals/runs/run-a/stream?after=0',
+  } as unknown as IncomingMessage;
+
+  await routes.handle(request, response as unknown as import('node:http').ServerResponse);
+
+  expect(response.destroyed).toBe(true);
+  expect(response.writes.length).toBeLessThanOrEqual(1);
+  expect(response.listenerCount('drain')).toBeLessThanOrEqual(1);
+  expect(service.streamSubscriptionCloses).toBe(1);
+  await expect(routes.close()).resolves.toBeUndefined();
 });
 
 it('serves an opaque persisted artifact as a safe attachment with one byte range', async () => {

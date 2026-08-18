@@ -1,4 +1,4 @@
-import { access, appendFile, link, mkdir, readFile, rename, rm, symlink, writeFile } from 'node:fs/promises';
+import { access, appendFile, link, mkdir, readFile, readdir, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { expect, it } from '@rstest/core';
@@ -6,7 +6,6 @@ import { expect, it } from '@rstest/core';
 import { build } from '../src/api.ts';
 import { EvalService, EvalServiceError } from '../src/dev/eval-service.ts';
 import { evalCaseFromDraft } from '../src/eval/index.ts';
-import { mintRunId } from '../src/eval/run-store.ts';
 import { createProjectFixture, removeProjectFixture } from './helpers/project-fixture.ts';
 import { seedEvalProject, writeEvalSuite } from './support/eval-project.ts';
 
@@ -181,16 +180,16 @@ it('replays only complete persisted events with a frozen durable cursor', async 
     const replay = await evals.events(created.run.id, 0);
     const continued = await evals.events(created.run.id, 1);
 
-    expect(replay.events.map((event) => event.sequence)).toEqual([1, 2]);
-    expect(replay.cursor).toEqual({ afterSequence: 2 });
+    expect(replay.events.map((event) => event.sequence)).toEqual([1, 2, 3]);
+    expect(replay.cursor).toEqual({ afterSequence: 3 });
     expect(replay.incompleteTrailingRecord).toBe(true);
-    expect(continued.events.map((event) => event.sequence)).toEqual([2]);
-    expect(continued.cursor).toEqual({ afterSequence: 2 });
+    expect(continued.events.map((event) => event.sequence)).toEqual([2, 3]);
+    expect(continued.cursor).toEqual({ afterSequence: 3 });
     expect(Object.isFrozen(replay)).toBe(true);
     expect(Object.isFrozen(replay.cursor)).toBe(true);
     expect(Object.isFrozen(replay.events)).toBe(true);
     expect(Object.isFrozen(replay.events[0]?.payload)).toBe(true);
-    await expect(evals.events(created.run.id, 3)).rejects.toMatchObject({ code: 'EVAL_EVENTS_CURSOR_INVALID' });
+    await expect(evals.events(created.run.id, 4)).rejects.toMatchObject({ code: 'EVAL_EVENTS_CURSOR_INVALID' });
   } finally {
     await removeProjectFixture(project.root);
   }
@@ -203,16 +202,20 @@ it('queues durable events published after the replay snapshot without skipping o
   try {
     await seedEvalProject(project.root);
     const evals = new EvalService({ now: () => createdAt, projectRoot: project.root, targets: ['portable'] });
-    const runId = mintRunId(createdAt);
     running = evals.run({ caseIds: ['reads-result'], trials: 3 });
     let subscription: Awaited<ReturnType<typeof evals.subscribeEvents>> | undefined;
+    const runsDirectory = join(project.root, '.agent-bundle', 'runs');
     for (let attempt = 0; attempt < 800 && subscription === undefined; attempt += 1) {
-      try {
-        subscription = await evals.subscribeEvents(runId, 0);
-      } catch (error) {
-        if (typeof error !== 'object' || error === null || !('code' in error) || error.code !== 'EVAL_RUN_NOT_FOUND') throw error;
-        await new Promise<void>((resolvePromise) => setTimeout(resolvePromise, 10));
+      const runIds = await readdir(runsDirectory).catch(() => [] as string[]);
+      for (const runId of runIds) {
+        try {
+          subscription = await evals.subscribeEvents(runId, 0);
+          break;
+        } catch (error) {
+          if (typeof error !== 'object' || error === null || !('code' in error) || error.code !== 'EVAL_RUN_NOT_FOUND') throw error;
+        }
       }
+      if (subscription === undefined) await new Promise<void>((resolvePromise) => setTimeout(resolvePromise, 10));
     }
     if (subscription === undefined) throw new Error('The run never became available for durable event observation.');
     const observed = [...subscription.replay.events];
