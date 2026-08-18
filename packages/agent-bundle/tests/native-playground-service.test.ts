@@ -887,8 +887,7 @@ it('does not deadlock when a direct native Codex abort listener awaits a reentra
     const spawned = new Promise<void>((resolvePromise) => { started = resolvePromise; });
     let reentrant: Promise<void> | undefined;
     let abortHandlerCompleted = false;
-    let service!: NativePlaygroundService;
-    service = new NativePlaygroundService({
+    const service = new NativePlaygroundService({
       discover: async () => nativeSuite('codex', join(suiteDir, 'review.eval.ts')),
       environment: Object.freeze({ CODEX_HOME: normalCodexHome }),
       inspectArtifact: async (candidate) => Object.freeze({

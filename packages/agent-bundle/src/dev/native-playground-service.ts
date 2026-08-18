@@ -1068,7 +1068,7 @@ export class NativePlaygroundService {
   ): Promise<never> {
     if (!receipt.created) throw primary;
     try { await receipt.rollback(); }
-    catch (rollbackFailure) { throw new AggregateError([primary, rollbackFailure], message, { cause: primary }); }
+    catch (rollbackFailure) { throw new AggregateError([primary, rollbackFailure], message, { cause: rollbackFailure }); }
     throw primary;
   }
 
