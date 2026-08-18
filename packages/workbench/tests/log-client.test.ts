@@ -257,10 +257,15 @@ it('settles a pending stream read when its shared generation signal aborts', asy
   await reading;
   controller.abort();
 
-  await expect(Promise.race([
-    stream.done.then(() => 'settled'),
-    new Promise<'timed out'>((resolve) => setTimeout(() => resolve('timed out'), 50)),
-  ])).resolves.toBe('settled');
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await expect(Promise.race([
+      stream.done.then(() => 'settled'),
+      new Promise<'timed out'>((resolve) => { timeout = setTimeout(() => resolve('timed out'), 50); }),
+    ])).resolves.toBe('settled');
+  } finally {
+    if (timeout !== undefined) clearTimeout(timeout);
+  }
 });
 
 it('stops processing later records from the same chunk after its callback aborts', async () => {
