@@ -1204,7 +1204,8 @@ export class McpSessionService {
 
   constructor(options: McpSessionServiceOptions) {
     if (!isAbsolute(options.projectRoot)) throw new Error('MCP session service project root must be absolute.');
-    this.#createClient = options.createClient ?? (() => new Client({ name: 'agent-bundle', version: '0.1.0' }));
+    this.#createClient = options.createClient ??
+      (() => new Client({ name: 'agent-bundle', version: '0.1.0' }, { capabilities: mcpAppClientCapabilities }));
     this.#createStdioTransport = options.createStdioTransport ?? ((stdioOptions) => new StdioClientTransport(stdioOptions));
     this.#createStreamableHttpTransport = options.createStreamableHttpTransport ?? ((url, transportOptions) =>
       new StreamableHTTPClientTransport(url, {
@@ -1297,23 +1298,19 @@ export class McpSessionService {
           throw cleanupError;
         }
       } else {
-        let cleanupFailed = false;
-        let cleanupFailure: unknown;
+        const cleanupFailures: unknown[] = [];
         try {
           if (pluginData !== undefined) await rm(pluginData, { force: true, recursive: true });
         } catch (cleanupError) {
-          reportCleanupFailure(cleanupError);
-          cleanupFailed = true;
-          cleanupFailure = cleanupError;
+          cleanupFailures.push(cleanupError);
         }
         try {
           await epochReference.close();
         } catch (cleanupError) {
-          reportCleanupFailure(cleanupError);
-          cleanupFailed = true;
-          cleanupFailure = cleanupError;
+          cleanupFailures.push(cleanupError);
         }
-        if (cleanupFailed) throw cleanupFailure;
+        for (const failure of cleanupFailures) reportCleanupFailure(failure);
+        if (cleanupFailures.length > 0) throw cleanupFailures[cleanupFailures.length - 1];
       }
       throw error;
     }
