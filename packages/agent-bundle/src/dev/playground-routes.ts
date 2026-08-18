@@ -1,24 +1,22 @@
 import { Buffer } from 'node:buffer';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
+import { parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
+import type { PlaygroundOperationRequest, PlaygroundRun } from './playground-contract.ts';
+import { ScriptPlaygroundExecutionUnavailableError } from './script-playground-service.ts';
 import {
   PlaygroundServiceError,
   type DraftEvalCase,
-  type PlaygroundDurableOutcome,
-  type PlaygroundEventInput,
   type PlaygroundExport,
   type PlaygroundJsonObject,
   type PlaygroundJsonValue,
   type PlaygroundReplay,
   type PlaygroundReplayCursor,
-  type PlaygroundSelectedAssertion,
   type PlaygroundServiceErrorCode,
   type PlaygroundSession,
-  type PlaygroundSessionInput,
   type PlaygroundSubscribeOptions,
   type PlaygroundSubscription,
   type PlaygroundTraceEvent,
-  type PlaygroundTraceSource,
 } from '../services/playground-service.ts';
 
 /**
@@ -37,33 +35,30 @@ interface RequestDiagnostic {
 }
 
 type SessionRouteKind =
-  | 'session'
   | 'draft-eval'
-  | 'events'
   | 'export'
-  | 'finalize'
-  | 'reopen'
   | 'replay'
   | 'stream';
 
 type Route =
-  | Readonly<{ readonly kind: 'sessions' }>
+  | Readonly<{ readonly kind: 'runs' }>
+  | Readonly<{ readonly id: string; readonly kind: 'cancel' }>
+  | Readonly<{ readonly id: string; readonly kind: 'session' }>
   | Readonly<{ readonly id: string; readonly kind: SessionRouteKind }>;
 
 type JsonObject = Record<string, unknown>;
 
 export interface PlaygroundRouteService {
-  append(sessionId: string, input: PlaygroundEventInput): Promise<PlaygroundTraceEvent>;
-  closeSession(sessionId: string): Promise<void>;
+  cancel(runId: string): Promise<boolean>;
   export(sessionId: string): Promise<PlaygroundExport>;
-  finalize(sessionId: string, outcome: PlaygroundDurableOutcome): Promise<PlaygroundSession>;
-  openSession(input: PlaygroundSessionInput): Promise<PlaygroundSession>;
-  promoteToDraftEval(sessionId: string, selectedAssertions: readonly PlaygroundSelectedAssertion[]): Promise<DraftEvalCase>;
-  reopen(sessionId: string): Promise<PlaygroundSession>;
+  promoteToDraftEval(sessionId: string, rawEventRefs: readonly string[]): Promise<DraftEvalCase>;
   replay(sessionId: string, cursor?: PlaygroundReplayCursor): Promise<PlaygroundReplay>;
+  run(input: PlaygroundOperationRequest, options?: { readonly signal?: AbortSignal }): Promise<PlaygroundRun>;
   session(sessionId: string): PlaygroundSession | undefined;
   subscribe(sessionId: string, options: PlaygroundSubscribeOptions): Promise<PlaygroundSubscription>;
 }
+
+export type { PlaygroundOperationRequest, PlaygroundRun } from './playground-contract.ts';
 
 export interface PlaygroundRoutesOptions {
   /** The foreground server injects its existing same-origin, same-session guard. */
@@ -192,10 +187,7 @@ const decodedSegment = (segment: string): string => {
 
 const sessionRouteKinds: readonly SessionRouteKind[] = Object.freeze([
   'draft-eval',
-  'events',
   'export',
-  'finalize',
-  'reopen',
   'replay',
   'stream',
 ]);
@@ -206,14 +198,17 @@ const route = (requestTarget: string | undefined): Route | undefined => {
   const parts = pathname.split('/');
   if (parts[0] !== '' || parts[1] !== 'api' || parts[2] !== 'playground') return pathError();
   const segments = parts.slice(3).map(decodedSegment);
-  if (segments[0] !== 'sessions') return pathError();
-  if (segments.length === 1) return Object.freeze({ kind: 'sessions' });
+  if (segments[0] === 'runs') {
+    if (segments.length === 1) return Object.freeze({ kind: 'runs' });
+    if (segments.length === 3 && segments[2] === 'cancel') return Object.freeze({ id: segments[1]!, kind: 'cancel' });
+    return undefined;
+  }
+  if (segments[0] !== 'sessions' || segments.length < 2) return undefined;
   const id = segments[1]!;
   if (segments.length === 2) return Object.freeze({ id, kind: 'session' });
-  if (segments.length !== 3) return pathError();
+  if (segments.length !== 3) return undefined;
   const kind = segments[2] as SessionRouteKind;
-  if (!sessionRouteKinds.includes(kind)) return pathError();
-  return Object.freeze({ id, kind });
+  return sessionRouteKinds.includes(kind) ? Object.freeze({ id, kind }) : undefined;
 };
 
 const isRecord = (value: unknown): value is JsonObject =>
@@ -251,7 +246,7 @@ const jsonBody = async (request: IncomingMessage): Promise<JsonObject> => {
   }
   let parsed: unknown;
   try {
-    parsed = JSON.parse(await readBody(request));
+    parsed = parseJsonWithoutDuplicateKeys(await readBody(request));
   } catch (error) {
     if (isRequestDiagnostic(error)) throw error;
     throw requestError(diagnostic('AB8001', 'Request body must be valid JSON.', 400));
@@ -259,87 +254,35 @@ const jsonBody = async (request: IncomingMessage): Promise<JsonObject> => {
   return isRecord(parsed) ? parsed : invalidShape();
 };
 
-const digestIdentity = (value: unknown): Readonly<{ readonly digest: string; readonly id: string }> => {
-  if (!isRecord(value) || !hasOnly(value, ['digest', 'id'])) return invalidShape();
-  const { digest, id } = value;
-  if (!nonemptyString(digest) || !nonemptyString(id)) return invalidShape();
-  return Object.freeze({ digest, id });
-};
-
-const sessionInput = (value: JsonObject): PlaygroundSessionInput => {
-  if (!hasOnly(value, ['epoch', 'fixture', 'invocation', 'sessionId', 'target', 'task'])) return invalidShape();
-  const { invocation, target, task } = value;
-  if (!isRecord(invocation) || !hasOnly(invocation, ['intent', 'kind']) || !nonemptyString(invocation.kind)) {
-    return invalidShape();
+const operationInput = (value: JsonObject): PlaygroundOperationRequest => {
+  const operation = value.operation;
+  const target = value.target;
+  if (!nonemptyString(operation) || !nonemptyString(target)) return invalidShape();
+  if (operation === 'skill.inspect') {
+    if (!hasOnly(value, ['operation', 'skillId', 'target']) || !nonemptyString(value.skillId)) return invalidShape();
+    return Object.freeze({ operation, skillId: value.skillId, target });
   }
-  if (!isRecord(target) || !hasOnly(target, ['digest', 'name']) || !nonemptyString(target.name)) return invalidShape();
-  if (target.digest !== undefined && !nonemptyString(target.digest)) return invalidShape();
-  if (!isRecord(task) || !hasOnly(task, ['id', 'text']) || !nonemptyString(task.id) || !nonemptyString(task.text)) {
-    return invalidShape();
+  if (operation === 'hook.simulate') {
+    if (!hasOnly(value, ['hook', 'input', 'operation', 'target']) || !nonemptyString(value.hook) || !Object.hasOwn(value, 'input')) return invalidShape();
+    return Object.freeze({ hook: value.hook, input: jsonObject(value.input), operation, target });
   }
-  if (value.sessionId !== undefined && !nonemptyString(value.sessionId)) return invalidShape();
-  return Object.freeze({
-    epoch: digestIdentity(value.epoch),
-    fixture: digestIdentity(value.fixture),
-    invocation: Object.freeze({ intent: jsonObject(invocation.intent), kind: invocation.kind }),
-    ...(value.sessionId === undefined ? {} : { sessionId: value.sessionId as string }),
-    target: Object.freeze({
-      ...(target.digest === undefined ? {} : { digest: target.digest }),
-      name: target.name,
-    }),
-    task: Object.freeze({ id: task.id, text: task.text }),
-  });
+  if (operation === 'mcp.call-tool') {
+    if (!hasOnly(value, ['arguments', 'operation', 'serverName', 'target', 'tool']) ||
+      !nonemptyString(value.serverName) || !nonemptyString(value.tool) || !Object.hasOwn(value, 'arguments')) return invalidShape();
+    return Object.freeze({ arguments: jsonObject(value.arguments), operation, serverName: value.serverName, target, tool: value.tool });
+  }
+  if (operation === 'script.run') {
+    if (!hasOnly(value, ['operation', 'script', 'target']) || !nonemptyString(value.script)) return invalidShape();
+    return Object.freeze({ operation, script: value.script, target });
+  }
+  return invalidShape();
 };
 
-const traceSources: readonly PlaygroundTraceSource[] = Object.freeze([
-  'build',
-  'diagnostics',
-  'hook',
-  'host-preflight',
-  'mcp',
-  'project',
-  'response',
-  'script',
-  'skill-evidence',
-  'workspace-change',
-]);
-
-const eventInput = (value: JsonObject): PlaygroundEventInput => {
-  if (!hasOnly(value, ['kind', 'raw', 'source', 'summary'])) return invalidShape();
-  const { kind, source, summary } = value;
-  if (!nonemptyString(kind) || !nonemptyString(summary)) return invalidShape();
-  if (typeof source !== 'string' || !traceSources.includes(source as PlaygroundTraceSource)) return invalidShape();
-  if (!Object.hasOwn(value, 'raw')) return invalidShape();
-  return Object.freeze({ kind, raw: jsonValue(value.raw), source: source as PlaygroundTraceSource, summary });
-};
-
-const outcomeInput = (value: JsonObject): PlaygroundDurableOutcome => {
-  if (!hasOnly(value, ['response', 'status', 'workspace'])) return invalidShape();
-  const { response, status, workspace } = value;
-  if (!nonemptyString(status)) return invalidShape();
-  if (response !== undefined && typeof response !== 'string') return invalidShape();
-  return Object.freeze({
-    ...(response === undefined ? {} : { response }),
-    status,
-    ...(workspace === undefined ? {} : { workspace: jsonObject(workspace) }),
-  });
-};
-
-const assertionsInput = (value: JsonObject): readonly PlaygroundSelectedAssertion[] => {
-  if (!hasOnly(value, ['assertions'])) return invalidShape();
-  const assertions = value.assertions;
-  if (!Array.isArray(assertions)) return invalidShape();
-  return Object.freeze(assertions.map((entry: unknown) => {
-    if (!isRecord(entry) || !hasOnly(entry, ['evidence', 'expectation', 'id', 'kind'])) return invalidShape();
-    if (!nonemptyString(entry.id) || !nonemptyString(entry.kind)) return invalidShape();
-    if (!Object.hasOwn(entry, 'evidence') || !Object.hasOwn(entry, 'expectation')) return invalidShape();
-    return Object.freeze({
-      evidence: jsonValue(entry.evidence),
-      expectation: jsonValue(entry.expectation),
-      id: entry.id,
-      kind: entry.kind,
-    });
-  }));
+const rawEventRefsInput = (value: JsonObject): readonly string[] => {
+  if (!hasOnly(value, ['rawEventRefs']) || !Array.isArray(value.rawEventRefs)) return invalidShape();
+  const refs = value.rawEventRefs;
+  if (refs.some((ref) => !nonemptyString(ref)) || new Set(refs).size !== refs.length) return invalidShape();
+  return Object.freeze([...refs]);
 };
 
 const queryCursor = (requestTarget: string | undefined): number => {
@@ -364,9 +307,10 @@ const noQuery = (requestTarget: string | undefined): void => {
 };
 
 /**
- * HTTP boundary for the durable playground trace store. The browser supplies
- * only task, fixture, epoch, and invocation identity plus JSON trace payloads;
- * it never selects a storage root, project identity, or executable.
+ * HTTP boundary for server-owned playground operations. The browser requests a
+ * small typed operation and may read its resulting durable trace; it cannot
+ * supply epoch identity, trace evidence, outcome, session ids, or execution
+ * parameters such as paths, commands, working directories, or environments.
  */
 export class PlaygroundRoutes {
   readonly #authorize: (request: IncomingMessage) => void;
@@ -397,6 +341,9 @@ export class PlaygroundRoutes {
       await this.#dispatch(parsed, request, response, service);
     } catch (error) {
       if (isRequestDiagnostic(error)) throw error;
+      if (error instanceof ScriptPlaygroundExecutionUnavailableError) {
+        throw requestError(diagnostic('AB8086', 'OS-contained script execution is not configured.', 503));
+      }
       if (error instanceof PlaygroundServiceError) throw requestError(serviceDiagnostics[error.code]);
       throw requestError(diagnostic('AB8043', 'Playground operation could not be completed.', 502));
     }
@@ -410,9 +357,14 @@ export class PlaygroundRoutes {
     service: PlaygroundRouteService,
   ): Promise<void> {
     const method = request.method ?? 'GET';
-    if (parsed.kind === 'sessions') {
+    if (parsed.kind === 'runs') {
       if (method !== 'POST') return this.#methodNotAllowed(response);
-      return responseJson(response, { session: await service.openSession(sessionInput(await jsonBody(request))) });
+      return responseJson(response, { run: await service.run(operationInput(await jsonBody(request))) });
+    }
+    if (parsed.kind === 'cancel') {
+      if (method !== 'POST') return this.#methodNotAllowed(response);
+      if (!hasOnly(await jsonBody(request), [])) invalidShape();
+      return responseJson(response, { cancelled: await service.cancel(parsed.id) });
     }
     if (parsed.kind === 'session') {
       if (method === 'GET') {
@@ -421,9 +373,7 @@ export class PlaygroundRoutes {
         if (session === undefined) throw requestError(serviceDiagnostics.PLAYGROUND_SESSION_NOT_FOUND);
         return responseJson(response, { session });
       }
-      if (method !== 'DELETE') return this.#methodNotAllowed(response);
-      await service.closeSession(parsed.id);
-      return responseJson(response, { closed: true });
+      return this.#methodNotAllowed(response);
     }
     if (parsed.kind === 'replay') {
       if (method !== 'GET') return this.#methodNotAllowed(response);
@@ -441,17 +391,7 @@ export class PlaygroundRoutes {
     }
     if (method !== 'POST') return this.#methodNotAllowed(response);
     const body = await jsonBody(request);
-    if (parsed.kind === 'events') {
-      return responseJson(response, { event: await service.append(parsed.id, eventInput(body)) });
-    }
-    if (parsed.kind === 'finalize') {
-      return responseJson(response, { session: await service.finalize(parsed.id, outcomeInput(body)) });
-    }
-    if (parsed.kind === 'reopen') {
-      if (!hasOnly(body, [])) invalidShape();
-      return responseJson(response, { session: await service.reopen(parsed.id) });
-    }
-    const draftEvalCase = await service.promoteToDraftEval(parsed.id, assertionsInput(body));
+    const draftEvalCase = await service.promoteToDraftEval(parsed.id, rawEventRefsInput(body));
     return responseJson(response, { draftEvalCase });
   }
 
