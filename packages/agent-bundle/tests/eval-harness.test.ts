@@ -106,10 +106,12 @@ const runTrial = async (options: {
   writer: options.writer,
 });
 
-it('rejects a model-backed harness until the native harnesses exist', () => {
+it('routes each host to its native harness and rejects an unknown one', () => {
   expect(createEvalHarness('deterministic').name).toBe('deterministic');
-  expect(() => createEvalHarness('claude')).toThrow(EvalHarnessError);
-  expect(() => createEvalHarness('codex')).toThrow(/not supported yet/iu);
+  expect(createEvalHarness('claude').kind).toBe('native-claude');
+  expect(createEvalHarness('codex').kind).toBe('native-codex');
+  expect(() => createEvalHarness('gemini')).toThrow(EvalHarnessError);
+  expect(() => createEvalHarness('gemini')).toThrow(/not supported yet/iu);
 });
 
 it('validates and reads an explicit artifact exactly and builds one run-owned copy otherwise', async () => {
@@ -185,6 +187,22 @@ it('records deterministic evidence whose raw artifacts reproduce every conclusio
       for (let index = 0; index < evalCase.trials; index += 1) {
         trials.push(await runTrial({ artifact, evalCase, root, suiteDir, trialIndex: index, writer }));
       }
+      const secondCase = Object.freeze({
+        ...evalCase,
+        digest: 'b'.repeat(64),
+        id: 'indirect-review',
+      });
+      const secondCaseTrial = await runDeterministicTrial({
+        artifact,
+        evalCase: secondCase,
+        fixturePlan: await planEvalFixture({ baseDir: suiteDir, fixture: secondCase.fixture }),
+        host: 'portable',
+        probe: { args: ['-c', 'exit 3'], command: '/bin/sh' },
+        suiteDir,
+        trialIndex: 0,
+        workspaceRoot: join(root, 'workspaces'),
+        writer,
+      });
       await writer.close();
 
       const [first, second] = trials;
@@ -208,6 +226,8 @@ it('records deterministic evidence whose raw artifacts reproduce every conclusio
       for (const assertion of evalCase.assertions) {
         expect(first.prompt).not.toContain(assertion.id);
       }
+      expect(first.id).not.toBe(secondCaseTrial.id);
+      expect(first.rawArtifacts[0]).not.toBe(secondCaseTrial.rawArtifacts[0]);
 
       const reproduced = await reproduceEvalTrialAssertions({
         directory: writer.directory,
@@ -219,6 +239,55 @@ it('records deterministic evidence whose raw artifacts reproduce every conclusio
       await rm(project.root, { force: true, recursive: true });
     }
   });
+}, 240_000);
+
+it('does not persist inherited credentials and marks a malformed MCP log unavailable', async () => {
+  const project = await createProjectFixture();
+  const credential = 'sk-proj-abcdefghijklmnopqrstuvwxyz123456';
+  const previousCredential = process.env.REVIEW_PARENT_SECRET;
+  process.env.REVIEW_PARENT_SECRET = credential;
+  try {
+    await withWorkspace(async (root) => {
+      try {
+        const suiteDir = await seedSuiteDirectory(root);
+        const suite = suiteFor([expectMcpCall({ server: 'project', tool: 'status' })]);
+        const evalCase = suite.cases[0];
+        if (evalCase === undefined) throw new Error('The suite must define a case.');
+        const writer = await createEvalRun({
+          artifact: { manifestPath: 'pending', source: 'run-owned', targetDigests: { portable: 'pending' } },
+          projectRoot: project.root,
+          provenance: { agentBundleVersion: '0.1.0', harness: 'deterministic', projectRevision: 'unknown' },
+        });
+        const artifact = await prepareEvalArtifact({ projectRoot: project.root, runDirectory: writer.directory });
+        const trial = await runDeterministicTrial({
+          artifact,
+          evalCase,
+          fixturePlan: await planEvalFixture({ baseDir: suiteDir, fixture: evalCase.fixture }),
+          host: 'portable',
+          probe: {
+            args: ['-c', 'printf %s "$REVIEW_PARENT_SECRET"; printf \'{"server":\n\' > calls.jsonl'],
+            command: '/bin/sh',
+            mcpCallLog: 'calls.jsonl',
+          },
+          suiteDir,
+          trialIndex: 0,
+          workspaceRoot: join(root, 'workspaces'),
+          writer,
+        });
+        await writer.close();
+
+        expect(trial.evidence.mcp).toEqual({ calls: [], level: 'unavailable' });
+        const stdout = trial.rawArtifacts.find((path) => path.endsWith('/stdout.log'));
+        if (stdout === undefined) throw new Error('The deterministic trial must record stdout.');
+        expect(await readFile(join(writer.directory, stdout), 'utf8')).not.toContain(credential);
+      } finally {
+        await rm(project.root, { force: true, recursive: true });
+      }
+    });
+  } finally {
+    if (previousCredential === undefined) delete process.env.REVIEW_PARENT_SECRET;
+    else process.env.REVIEW_PARENT_SECRET = previousCredential;
+  }
 }, 240_000);
 
 it('separates a harness failure from a plugin failure', async () => {

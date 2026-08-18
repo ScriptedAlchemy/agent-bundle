@@ -1,0 +1,9 @@
+{"type":"thread.started","thread_id":"00000000-0000-4000-8000-000000000001"}
+{"type":"turn.started"}
+{"type":"item.started","item":{"id":"item_0","type":"mcp_tool_call","server":"project","tool":"status","status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_0","type":"mcp_tool_call","server":"project","tool":"status","status":"completed"}}
+{"type":"item.completed","item":{"id":"item_1","type":"mcp_tool_call","server":"project","tool":"status","status":"completed"}}
+{"type":"item.started","item":{"id":"item_2","type":"mcp_tool_call","server":"project","tool":"lint","status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_3","type":"mcp_tool_call","status":"failed"}}
+{"type":"item.completed","item":{"id":"item_4","type":"agent_message","text":"Reported the repository status."}}
+{"type":"turn.completed","usage":{"cached_input_tokens":0,"input_tokens":0,"output_tokens":0}}

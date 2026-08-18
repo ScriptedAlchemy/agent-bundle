@@ -21,7 +21,7 @@ import type {
 } from './types.ts';
 
 export interface EvalHarness {
-  readonly kind: 'deterministic';
+  readonly kind: 'deterministic' | 'native-claude' | 'native-codex';
   readonly name: string;
 }
 
@@ -76,15 +76,22 @@ const harnessError = (
   message: string,
 ): EvalHarnessError => new EvalHarnessError(code, message);
 
-/** The native Claude and Codex harnesses do not exist yet; asking for one is an explicit error. */
+const harnessKinds: Readonly<Record<string, EvalHarness['kind']>> = Object.freeze({
+  claude: 'native-claude',
+  codex: 'native-codex',
+  deterministic: 'deterministic',
+});
+
+/** An unknown host has no harness, and asking for one is an explicit error rather than a stub. */
 export const createEvalHarness = (name: string): EvalHarness => {
-  if (name !== 'deterministic') {
+  const kind = harnessKinds[name];
+  if (kind === undefined) {
     throw harnessError(
       'EVAL_MODEL_BACKED_UNSUPPORTED',
-      `Model-backed eval harness ${JSON.stringify(name)} is not supported yet; only the deterministic harness is available.`,
+      `Model-backed eval harness ${JSON.stringify(name)} is not supported yet; only the deterministic, native Claude, and native Codex harnesses are available.`,
     );
   }
-  return Object.freeze({ kind: 'deterministic', name });
+  return Object.freeze({ kind, name });
 };
 
 const runProbe = async (probe: EvalProcessProbe, cwd: string): Promise<ProbeResult> =>

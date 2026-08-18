@@ -1,0 +1,4 @@
+{"type":"system","subtype":"init","session_id":"<redacted>","plugins":[{"name":"review-tools"}],"mcp_servers":[]}
+{"type":"assistant","message":{"content":[{"type":"text","text":"Reading the plugin guidance first."},{"type":"tool_use","id":"<redacted>","name":"Read","input":{"file_path":"<plugin-root>/skills/review-change/SKILL.md"}}],"usage":{"input_tokens":8,"output_tokens":3}}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"<redacted>","content":"<redacted>"}]}}
+{"type":"result","subtype":"success","is_error":false,"duration_ms":900,"num_turns":2,"result":"Reviewed the change.","usage":{"input_tokens":8,"output_tokens":3}}
