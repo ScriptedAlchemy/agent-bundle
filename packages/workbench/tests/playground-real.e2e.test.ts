@@ -153,6 +153,15 @@ const writePlaygroundProject = async (root: string): Promise<void> => {
 const runRequest = (origin: string) => (response: { readonly request: () => { readonly method: () => string }; readonly url: () => string }): boolean =>
   response.url() === `${origin}/api/playground/runs` && response.request().method() === 'POST';
 
+interface PlaygroundAdmission {
+  readonly run: {
+    readonly session: {
+      readonly id: string;
+      readonly identity: { readonly epoch: { readonly digest: string; readonly id: string } };
+    };
+  };
+}
+
 e2e('executes server-owned Playground operations with pinned traces, export, promotion, and cancellation', { timeout: 120_000 }, async ({ page }) => {
   await buildWorkbench();
   let project: Awaited<ReturnType<typeof createProjectFixture>> | undefined;
@@ -316,6 +325,8 @@ e2e('executes catalog-admitted native prompts through the real host harness', { 
     });
 
     const nativeRequests: Array<Record<string, unknown>> = [];
+    let nativeAdmissionA: PlaygroundAdmission | undefined;
+    let nativeAdmissionB: PlaygroundAdmission | undefined;
     const consoleErrors: string[] = [];
     const pageErrors: Error[] = [];
     page.on('console', (message) => {
@@ -383,7 +394,9 @@ e2e('executes catalog-admitted native prompts through the real host harness', { 
       await expect(page.getByRole('heading', { name: 'Playground' })).toBeVisible({ timeout: browserTimeout });
       await selectNativePrompt('Gate native Playground run until cancellation.');
       mark('click native start');
+      const admitted = page.waitForResponse(runRequest(server!.url));
       await page.getByRole('button', { name: 'Start native prompt' }).click();
+      nativeAdmissionA = await (await admitted).json() as PlaygroundAdmission;
       mark('wait for native host started evidence');
       await expect(page.getByText('native.host.started')).toBeVisible({ timeout: browserTimeout });
     });
@@ -393,6 +406,8 @@ e2e('executes catalog-admitted native prompts through the real host harness', { 
     const epochA = firstRequest.epochId;
     const pinA = firstRequest.modelPinId;
     if (typeof epochA !== 'string' || typeof pinA !== 'string') throw new Error('The native request did not retain epoch-A provenance.');
+    if (nativeAdmissionA === undefined) throw new Error('The epoch-A native admission did not return a durable run identity.');
+    expect(nativeAdmissionA.run.session.identity.epoch.id).toBe(epochA);
 
     await phase('rebuild B and cancel the admitted epoch-A native run', async () => {
       await page.getByRole('link', { name: 'Overview' }).click();
@@ -416,7 +431,9 @@ e2e('executes catalog-admitted native prompts through the real host harness', { 
     await phase('complete a rebuilt catalog-native prompt and retain normalized evidence', async () => {
       await selectNativePrompt('Complete the native Playground fixture.');
       mark('click completed native prompt');
+      const admitted = page.waitForResponse(runRequest(server!.url));
       await page.getByRole('button', { name: 'Start native prompt' }).click();
+      nativeAdmissionB = await (await admitted).json() as PlaygroundAdmission;
       mark('wait for normalized native evidence');
       for (const kind of ['native.activation', 'native.mcp', 'native.assertions', 'native.hooks', 'native.scripts', 'native.response', 'native.workspace']) {
         await expect(page.getByText(kind)).toBeVisible({ timeout: browserTimeout });
@@ -424,12 +441,65 @@ e2e('executes catalog-admitted native prompts through the real host harness', { 
       await expect(page.getByText('Native fixture completed.', { exact: true })).toBeVisible({ timeout: browserTimeout });
     });
 
-    await phase('server-owned export and promotion', async () => {
+    const secondRequest = nativeRequests[1];
+    if (secondRequest === undefined || typeof secondRequest.epochId !== 'string') throw new Error('The completed native prompt did not retain epoch-B admission provenance.');
+    const epochB = secondRequest.epochId;
+    if (nativeAdmissionB === undefined) throw new Error('The epoch-B native admission did not return a durable run identity.');
+    const completedNativeSession = nativeAdmissionB.run.session;
+    expect(epochB).not.toBe(epochA);
+    expect(completedNativeSession.identity.epoch.id).toBe(epochB);
+
+    await phase('server-owned native export and promotion provenance', async () => {
+      const nativeResponseCard = page.locator('details.playground-event-card').filter({
+        has: page.getByText('native.response', { exact: true }),
+      }).last();
+      await expect(nativeResponseCard).toBeVisible({ timeout: browserTimeout });
+      const nativeResponseCheckbox = nativeResponseCard.getByRole('checkbox');
+      const nativeResponseLabel = await nativeResponseCheckbox.getAttribute('aria-label');
+      const nativeResponseRef = /^Select (events\.jsonl#\d+) for the draft eval case$/u.exec(nativeResponseLabel ?? '')?.[1];
+      if (nativeResponseRef === undefined) throw new Error('The persisted native response card did not expose one raw event reference.');
+      const exportedResponse = page.waitForResponse((response) =>
+        response.url() === `${server!.url}/api/playground/sessions/${encodeURIComponent(completedNativeSession.id)}/export` &&
+        response.request().method() === 'GET',
+      );
       await page.getByRole('button', { name: 'Export trace' }).click();
+      const exportedBody = await (await exportedResponse).json() as { readonly export: {
+        readonly events: readonly { readonly kind: string; readonly rawEventRef: string }[];
+        readonly session: { readonly id: string; readonly identity: { readonly epoch: { readonly id: string } } };
+      } };
+      expect(exportedBody.export.session.id).toBe(completedNativeSession.id);
+      expect(exportedBody.export.session.identity.epoch.id).toBe(epochB);
+      expect(exportedBody.export.events).toEqual(expect.arrayContaining([
+        expect.objectContaining({ kind: 'native.response', rawEventRef: nativeResponseRef }),
+      ]));
       await expect(page.getByRole('heading', { name: /Exported trace/u })).toBeVisible({ timeout: browserTimeout });
-      await page.getByRole('checkbox').first().check();
+      const exportSection = page.getByRole('heading', { name: /Exported trace/u }).locator('..');
+      await expect(exportSection).toContainText(epochB);
+      await expect(exportSection).toContainText(nativeResponseRef);
+      await nativeResponseCheckbox.check();
+      const draftResponse = page.waitForResponse((response) =>
+        response.url() === `${server!.url}/api/playground/sessions/${encodeURIComponent(completedNativeSession.id)}/draft-eval` &&
+        response.request().method() === 'POST',
+      );
       await page.getByRole('button', { name: 'Promote to draft eval case' }).click();
+      const draftResult = await draftResponse;
+      expect(draftResult.request().postDataJSON()).toEqual({ rawEventRefs: [nativeResponseRef] });
+      const draftBody = await draftResult.json() as { readonly draftEvalCase: {
+        readonly assertions: readonly { readonly evidence: { readonly rawEventRef: string }; readonly expectation: { readonly kind: string }; readonly id: string }[];
+        readonly epoch: { readonly id: string };
+      } };
+      expect(draftBody.draftEvalCase.epoch.id).toBe(epochB);
+      expect(draftBody.draftEvalCase.assertions).toEqual([
+        expect.objectContaining({
+          evidence: expect.objectContaining({ rawEventRef: nativeResponseRef }),
+          expectation: expect.objectContaining({ kind: 'native.response' }),
+          id: nativeResponseRef,
+        }),
+      ]);
       await expect(page.getByRole('heading', { name: /Draft eval case/u })).toBeVisible({ timeout: browserTimeout });
+      const draftSection = page.getByRole('heading', { name: /Draft eval case/u }).locator('..');
+      await expect(draftSection).toContainText(epochB);
+      await expect(draftSection).toContainText(nativeResponseRef);
     });
 
     expect(nativeRequests).toHaveLength(2);
