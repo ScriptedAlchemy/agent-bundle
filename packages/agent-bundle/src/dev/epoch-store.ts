@@ -17,7 +17,13 @@ export interface CreateStagingEpochOptions {
 }
 
 export type StagingValidator = (stagingRoot: string) => Promise<void>;
-export type EpochPreActivation = (epoch: ArtifactEpoch) => Promise<void>;
+
+/** A publication-bound resource is rolled back only by the publisher that created it. */
+export interface EpochPublicationReceipt {
+  rollback(): Promise<void>;
+}
+
+export type EpochPreActivation = (epoch: ArtifactEpoch) => Promise<EpochPublicationReceipt | void>;
 
 /** Opaque, store-created staging root that can be published at most once. */
 export interface EpochStaging {
@@ -486,11 +492,10 @@ export class EpochStore {
     }
 
     let moved = false;
-    let nativeCatalogPublicationAttempted = false;
+    let publication: EpochPublicationReceipt | undefined;
     try {
       if (beforeActivate !== undefined) {
-        nativeCatalogPublicationAttempted = true;
-        await beforeActivate(record.epoch);
+        publication = (await beforeActivate(record.epoch)) ?? undefined;
       }
       await rename(record.root, epochRoot);
       moved = true;
@@ -502,7 +507,7 @@ export class EpochStore {
           rm(epochRoot, { force: true, recursive: true }),
           rm(this.#metadataPathFor(record.epoch.id), { force: true }),
         ] : []),
-        ...(nativeCatalogPublicationAttempted ? [rm(this.#nativePlaygroundCatalogPathFor(record.epoch.id), { force: true })] : []),
+        ...(publication === undefined ? [] : [publication.rollback()]),
       ]);
       const cleanupFailures = cleanupResults.flatMap((result) => result.status === 'rejected' ? [result.reason] : []);
       if (cleanupFailures.length > 0) {

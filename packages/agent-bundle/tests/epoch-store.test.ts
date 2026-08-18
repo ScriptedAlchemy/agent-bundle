@@ -5,6 +5,7 @@ import { dirname, join } from 'node:path';
 import { expect, it } from '@rstest/core';
 
 import { EpochStore } from '../src/dev/epoch-store.ts';
+import { publishNativePlaygroundCatalogSnapshot } from '../src/dev/native-playground-service.ts';
 import type { ArtifactEpoch } from '../src/dev/types.ts';
 
 const epochFor = (
@@ -797,7 +798,7 @@ it('keeps epoch metadata and contents retryable when native catalog sidecar dele
   }
 });
 
-it('removes a publication-bound catalog sidecar when pre-activation publication fails', async () => {
+it('rolls back a publisher-owned catalog sidecar when activation fails after publication', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent bundle native catalog publication rollback '));
   const epoch = epochFor(root, 'epoch-sidecar-rollback');
   try {
@@ -812,14 +813,76 @@ it('removes a publication-bound catalog sidecar when pre-activation publication 
       writeFile(join(staging.root, 'claude', 'plugin.json'), 'claude\n'),
       writeFile(join(staging.root, 'codex', 'plugin.json'), 'codex\n'),
     ]);
-    const publicationFailure = new Error('catalog publication failed');
     await expect(staging.publish(async () => undefined, async () => {
       await mkdir(dirname(nativeCatalogPathFor(root, epoch.id)), { recursive: true });
       await writeFile(nativeCatalogPathFor(root, epoch.id), '{"epochId":"epoch-sidecar-rollback","selections":[],"version":1}\n');
-      throw publicationFailure;
-    })).rejects.toBe(publicationFailure);
+      await rm(staging.root, { force: true, recursive: true });
+      return Object.freeze({ rollback: async () => rm(nativeCatalogPathFor(root, epoch.id), { force: true }) });
+    })).rejects.toMatchObject({ code: 'ENOENT' });
     await expect(readFile(nativeCatalogPathFor(root, epoch.id), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
     await expect(store.readActiveEpoch()).resolves.toBeUndefined();
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('never rolls back an accepted native catalog sidecar winner from a concurrent epoch publisher', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent bundle native catalog publication race '));
+  const epoch = epochFor(root, 'epoch-sidecar-race');
+  let markFirstReady: (() => void) | undefined;
+  let markSecondReady: (() => void) | undefined;
+  let permitSecondFinish: (() => void) | undefined;
+  const firstReady = new Promise<void>((resolve) => { markFirstReady = resolve; });
+  const secondReady = new Promise<void>((resolve) => { markSecondReady = resolve; });
+  const secondMayFinish = new Promise<void>((resolve) => { permitSecondFinish = resolve; });
+  let firstReceipt: Awaited<ReturnType<typeof publishNativePlaygroundCatalogSnapshot>> | undefined;
+  let secondReceipt: Awaited<ReturnType<typeof publishNativePlaygroundCatalogSnapshot>> | undefined;
+  try {
+    const firstStore = new EpochStore({ projectRoot: root });
+    const secondStore = new EpochStore({ projectRoot: root });
+    const first = await firstStore.createStagingEpoch({ epoch, targets: ['claude', 'codex'] });
+    const second = await secondStore.createStagingEpoch({ epoch, targets: ['claude', 'codex'] });
+    for (const staging of [first, second]) {
+      await Promise.all([
+        mkdir(join(staging.root, 'claude'), { recursive: true }),
+        mkdir(join(staging.root, 'codex'), { recursive: true }),
+        writeFile(join(staging.root, 'agent-bundle.manifest.json'), '{}\n'),
+      ]);
+      await Promise.all([
+        writeFile(join(staging.root, 'claude', 'plugin.json'), 'claude\n'),
+        writeFile(join(staging.root, 'codex', 'plugin.json'), 'codex\n'),
+      ]);
+    }
+
+    const firstPublication = first.publish(async () => undefined, async (publishingEpoch) => {
+      firstReceipt = await publishNativePlaygroundCatalogSnapshot({
+        discover: async () => Object.freeze([]),
+        epoch: publishingEpoch,
+        projectRoot: root,
+      });
+      markFirstReady!();
+      await secondReady;
+      return firstReceipt;
+    });
+    await firstReady;
+    const secondPublication = second.publish(async () => undefined, async (publishingEpoch) => {
+      secondReceipt = await publishNativePlaygroundCatalogSnapshot({
+        discover: async () => Object.freeze([]),
+        epoch: publishingEpoch,
+        projectRoot: root,
+      });
+      markSecondReady!();
+      await secondMayFinish;
+      return secondReceipt;
+    });
+    await secondReady;
+    await expect(firstPublication).resolves.toEqual(epoch);
+    permitSecondFinish!();
+    await expect(secondPublication).rejects.toBeDefined();
+
+    expect(firstReceipt?.created).toBe(true);
+    expect(secondReceipt?.created).toBe(false);
+    await expect(readFile(nativeCatalogPathFor(root, epoch.id), 'utf8')).resolves.toContain('epoch-sidecar-race');
   } finally {
     await rm(root, { force: true, recursive: true });
   }

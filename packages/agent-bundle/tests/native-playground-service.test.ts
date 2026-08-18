@@ -4,14 +4,17 @@ import { join } from 'node:path';
 
 import { expect, it } from '@rstest/core';
 
+import { digest } from '../src/core/digest.ts';
 import {
   NativePlaygroundService,
   publishNativePlaygroundCatalogSnapshot,
   type NativePlaygroundCatalogStorage,
   type NativePlaygroundEpochReference,
 } from '../src/dev/native-playground-service.ts';
+import { expectExitCode } from '../src/eval/assertions.ts';
 import type { DiscoveredEvalSuite } from '../src/eval/discovery.ts';
 import type { EvalFixturePlan } from '../src/eval/fixtures.ts';
+import { defineEvalSuite } from '../src/eval/suite.ts';
 
 const epoch = (id: string, root: string, target = 'claude') => Object.freeze({
   close: async () => undefined,
@@ -30,24 +33,22 @@ const epoch = (id: string, root: string, target = 'claude') => Object.freeze({
 
 const suite = (): readonly DiscoveredEvalSuite[] => Object.freeze([Object.freeze({
   sourcePath: '/project/evals/review.eval.ts',
-  suite: Object.freeze({
-    cases: Object.freeze([Object.freeze({
-      assertions: Object.freeze([]),
-      digest: 'authored-case-digest',
-      fixture: Object.freeze({ git: false, include: Object.freeze(['**/*']), path: './fixture' }),
-      hosts: Object.freeze({ claude: Object.freeze({ model: 'author-pinned-model' }) }),
+  suite: defineEvalSuite({
+    cases: [{
+      assertions: [expectExitCode(0)],
+      fixture: { git: false, include: ['**/*'], path: './fixture' },
+      hosts: { claude: { model: 'author-pinned-model' } },
       id: 'review-case',
-      invocation: Object.freeze({ mode: 'automatic' as const }),
+      invocation: { mode: 'automatic' },
       prompt: 'Original authored prompt.',
       trials: 1,
-    })]),
-    digest: 'suite-digest',
+    }],
     name: 'review',
   }),
 })]);
 
 const fixturePlan: EvalFixturePlan = Object.freeze({
-  digest: 'fixture-content-digest',
+  digest: digest({ entries: [], git: false }),
   entries: Object.freeze([]),
   git: false,
   sourcePath: '/project/evals/fixture',
@@ -67,39 +68,35 @@ const claudeStream = [
 
 const nativeSuite = (host: 'claude' | 'codex', sourcePath: string): readonly DiscoveredEvalSuite[] => Object.freeze([Object.freeze({
   sourcePath,
-  suite: Object.freeze({
-    cases: Object.freeze([Object.freeze({
-      assertions: Object.freeze([]),
-      digest: `authored-${host}-case`,
-      fixture: Object.freeze({ git: false, include: Object.freeze(['**/*']), path: './fixture' }),
-      hosts: Object.freeze({ [host]: Object.freeze({ model: `pinned-${host}-model` }) }),
+  suite: defineEvalSuite({
+    cases: [{
+      assertions: [expectExitCode(0)],
+      fixture: { git: false, include: ['**/*'], path: './fixture' },
+      hosts: { [host]: { model: `pinned-${host}-model` } },
       id: `${host}-case`,
-      invocation: Object.freeze({ mode: 'automatic' as const }),
+      invocation: { mode: 'automatic' },
       prompt: 'Original authored prompt.',
       trials: 1,
-    })]),
-    digest: `suite-${host}-digest`,
+    }],
     name: `${host}-review`,
   }),
 })]);
 
 const dualHostSuite = (sourcePath: string): readonly DiscoveredEvalSuite[] => Object.freeze([Object.freeze({
   sourcePath,
-  suite: Object.freeze({
-    cases: Object.freeze([Object.freeze({
-      assertions: Object.freeze([]),
-      digest: 'authored-dual-host-case',
-      fixture: Object.freeze({ git: false, include: Object.freeze(['**/*']), path: './fixture' }),
-      hosts: Object.freeze({
-        claude: Object.freeze({ model: 'pinned-claude-model' }),
-        codex: Object.freeze({ model: 'pinned-codex-model' }),
-      }),
+  suite: defineEvalSuite({
+    cases: [{
+      assertions: [expectExitCode(0)],
+      fixture: { git: false, include: ['**/*'], path: './fixture' },
+      hosts: {
+        claude: { model: 'pinned-claude-model' },
+        codex: { model: 'pinned-codex-model' },
+      },
       id: 'dual-host-case',
-      invocation: Object.freeze({ mode: 'automatic' as const }),
+      invocation: { mode: 'automatic' },
       prompt: 'Original authored prompt.',
       trials: 1,
-    })]),
-    digest: 'dual-host-suite-digest',
+    }],
     name: 'dual-host-review',
   }),
 })]);
@@ -310,7 +307,7 @@ it('eagerly captures every epoch catalog before a later build can replace author
   }
 });
 
-it('rejects corrupt, escaping, extra-key, and symlinked durable catalog paths without exposing them', async () => {
+it('rejects forged, escaping, extra-key, and symlinked durable catalog sidecars without exposing them', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-native-playground-sidecar-'));
   try {
     const epochRoot = join(root, '.agent-bundle', 'epochs', 'epoch-sidecar');
@@ -356,9 +353,27 @@ it('rejects corrupt, escaping, extra-key, and symlinked durable catalog paths wi
     await assertRejected((snapshot) => {
       (snapshot.selections as Record<string, unknown>[])[0]!.unexpected = 'smuggled';
     });
+    await assertRejected((snapshot) => {
+      (snapshot.selections as Record<string, unknown>[])[0]!.caseId = 'forged-case-id';
+    });
+    await assertRejected((snapshot) => {
+      (snapshot.selections as Record<string, unknown>[])[0]!.modelPinId = 'forged-model-id';
+    });
+    await assertRejected((snapshot) => {
+      ((((snapshot.selections as Record<string, unknown>[])[0]!.evalCase as Record<string, unknown>).hosts as Record<string, Record<string, unknown>>).claude!).model = 'unreviewed-model';
+    });
     await writeFile(sidecar, baseline);
     const outside = join(root, 'outside');
     await mkdir(outside);
+    const sidecarTarget = join(outside, 'catalog.json');
+    await writeFile(sidecarTarget, baseline);
+    await rm(sidecar, { force: true });
+    await symlink(sidecarTarget, sidecar, 'file');
+    const sidecarSymlinked = new NativePlaygroundService(options);
+    await expect(sidecarSymlinked.catalog(reference)).rejects.toThrow('catalog snapshot is invalid');
+    await sidecarSymlinked.close();
+    await rm(sidecar, { force: true });
+    await writeFile(sidecar, baseline);
     await rm(fixtureDir, { force: true, recursive: true });
     await symlink(outside, fixtureDir, 'dir');
     const symlinked = new NativePlaygroundService(options);
@@ -846,6 +861,84 @@ it('awaits a cancelled Codex child, preserves its harness failure, and removes a
     expect(JSON.stringify(result)).not.toContain('sk-proj-1234567890abcdef');
     expect((await readdir(join(root, '.agent-bundle'))).filter((entry) => entry.startsWith('native-playground-'))).toEqual([]);
     await service.close();
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('does not deadlock when a direct native Codex abort listener awaits a reentrant close', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-native-playground-direct-close-'));
+  try {
+    const artifact = join(root, 'artifact');
+    const suiteDir = join(root, 'evals');
+    const normalCodexHome = join(root, 'normal-codex-home');
+    await Promise.all([
+      mkdir(join(artifact, 'codex', '.agents', 'plugins'), { recursive: true }),
+      mkdir(join(suiteDir, 'fixture'), { recursive: true }),
+      mkdir(normalCodexHome, { recursive: true }),
+    ]);
+    await Promise.all([
+      writeFile(join(artifact, 'codex', '.agents', 'plugins', 'marketplace.json'), JSON.stringify({ name: 'native-marketplace', plugins: [{ name: 'native-review', source: { path: './', source: 'local' } }] })),
+      writeFile(join(suiteDir, 'fixture', 'input.txt'), 'baseline only\n'),
+      writeFile(join(normalCodexHome, 'auth.json'), '{"opaque":"session"}\n'),
+    ]);
+    const reference = epoch('epoch-native-direct-close', artifact, 'codex');
+    let started!: () => void;
+    const spawned = new Promise<void>((resolvePromise) => { started = resolvePromise; });
+    let reentrant: Promise<void> | undefined;
+    let abortHandlerCompleted = false;
+    let service!: NativePlaygroundService;
+    service = new NativePlaygroundService({
+      discover: async () => nativeSuite('codex', join(suiteDir, 'review.eval.ts')),
+      environment: Object.freeze({ CODEX_HOME: normalCodexHome }),
+      inspectArtifact: async (candidate) => Object.freeze({
+        binding: Object.freeze({ manifestPath: 'agent-bundle.manifest.json', source: 'explicit' as const, targetDigests: candidate.epoch.targetDigests }),
+        root: candidate.root,
+      }),
+      native: {
+        codexRun: async (command) => {
+          const step = command.args[0] === 'plugin' ? `${command.args[0]}.${command.args[1]}` : command.args[0];
+          if (step === 'plugin.list') return Object.freeze({ exitCode: 0, stderr: '', stdout: '{"installed":[{"name":"native-review","marketplaceName":"native-marketplace","installed":true,"enabled":true}]}' });
+          if (step !== 'exec') return Object.freeze({ exitCode: 0, stderr: '', stdout: 'codex-cli 0.147.0\n' });
+          started();
+          return new Promise((resolvePromise) => {
+            command.signal?.addEventListener('abort', () => {
+              void (async () => {
+                reentrant = service.close();
+                await reentrant;
+                abortHandlerCompleted = true;
+                resolvePromise(Object.freeze({ exitCode: 1, failure: 'cancelled', stderr: '', stdout: '' }));
+              })();
+            }, { once: true });
+          });
+        },
+      },
+      projectRoot: root,
+    });
+    const catalog = await service.catalog(reference);
+    const running = service.run(await service.prepare(reference, {
+      caseId: catalog.cases[0]!.id,
+      fixtureId: catalog.fixtures[0]!.id,
+      host: 'codex',
+      modelPinId: catalog.modelPins[0]!.id,
+      operation: 'native.prompt',
+      prompt: 'Review the fixture.',
+      target: 'codex',
+    }), { emit: async () => undefined, signal: new AbortController().signal });
+    await spawned;
+    const closing = service.close();
+    await Promise.resolve();
+    expect(reentrant).toBeDefined();
+    expect(service.close()).toBe(closing);
+    const settled = await Promise.race([
+      closing.then(() => true, () => true),
+      new Promise<boolean>((resolvePromise) => { setTimeout(() => resolvePromise(false), 50); }),
+    ]);
+    expect(settled).toBe(true);
+    expect(reentrant).not.toBe(closing);
+    expect(abortHandlerCompleted).toBe(true);
+    await running;
+    expect((await readdir(join(root, '.agent-bundle'))).filter((entry) => entry.startsWith('native-playground-'))).toEqual([]);
   } finally {
     await rm(root, { force: true, recursive: true });
   }
