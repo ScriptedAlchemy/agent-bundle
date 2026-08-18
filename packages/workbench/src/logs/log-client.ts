@@ -5,7 +5,8 @@ import type {
   DevLogReplayGap,
 } from '../../../agent-bundle/src/dev/dev-log-service.ts';
 import { parseJsonWithoutDuplicateKeys, snapshotStrictJsonValue, type JsonValue } from '../../../agent-bundle/src/core/strict-json.ts';
-import { ForegroundTransport } from '../foreground-session.ts';
+import { isCredentialKey, redactEvalCredentialText } from '../../../agent-bundle/src/eval/credentials.ts';
+import { awaitWithAbort, ForegroundTransport } from '../foreground-session.ts';
 
 export interface LogClientOptions {
   readonly fetch?: typeof fetch;
@@ -64,14 +65,13 @@ const hasExactKeys = (value: unknown, keys: readonly string[]): value is Readonl
 const hasControlOrSeparators = (value: string): boolean => [...value].some((character) =>
   character === '/' || character === '\\' || character <= '\u001F' || character === '\u007F');
 const safeProjectRelativePath = /<project>(?:\/[A-Za-z0-9._@+-]+)*/gu;
-const credentialLikeText = /(?:api[-_ ]?(?:key|token)|access[-_ ]?token|authorization|credential(?:s)?|password|secret|token)/iu;
 const isSafeWireText = (value: unknown, maximum = maximumLogFrameBytes): value is string => {
-  if (typeof value !== 'string' || value.length === 0 || value.length > maximum || credentialLikeText.test(value)) return false;
+  if (typeof value !== 'string' || value.length === 0 || value.length > maximum || redactEvalCredentialText(value) !== value) return false;
   const withoutProjectPaths = value.replace(safeProjectRelativePath, '');
   return !hasControlOrSeparators(withoutProjectPaths) && !/(?:file:|[A-Za-z]:|\\\\)/iu.test(withoutProjectPaths);
 };
 const isSafeDetailKey = (value: string): boolean =>
-  !credentialLikeText.test(value) && !hasControlOrSeparators(value);
+  !isCredentialKey(value) && !hasControlOrSeparators(value);
 const isSafeDetail = (value: JsonValue): boolean => {
   if (value === null || typeof value === 'boolean' || typeof value === 'number') return true;
   if (typeof value === 'string') return isSafeWireText(value);
@@ -147,26 +147,6 @@ const messageFor = (line: string): DevLogMessage => {
   throw invalid();
 };
 const isAbort = (error: unknown): boolean => error instanceof Error && error.name === 'AbortError';
-const abortError = (): Error => Object.assign(new Error('The operation was aborted.'), { name: 'AbortError' });
-const awaitWithAbort = <T>(operation: Promise<T>, signal: AbortSignal | undefined): Promise<T> => {
-  if (signal === undefined) return operation;
-  if (signal.aborted) return Promise.reject(abortError());
-  return new Promise<T>((resolve, reject) => {
-    let settled = false;
-    const settle = (callback: () => void): void => {
-      if (settled) return;
-      settled = true;
-      signal.removeEventListener('abort', onAbort);
-      callback();
-    };
-    const onAbort = (): void => settle(() => reject(abortError()));
-    signal.addEventListener('abort', onAbort, { once: true });
-    void operation.then(
-      (value) => settle(() => resolve(value)),
-      (error: unknown) => settle(() => reject(error)),
-    );
-  });
-};
 const diagnosticMessages = new Map<string, string>([
   ['AB8090', 'Dev Log route path is not valid.'],
   ['AB8091', 'Dev Log cursor is not valid.'],
@@ -216,7 +196,8 @@ export class LogClient {
   async #json(path: string, init: RequestInit): Promise<JsonValue> {
     try {
       const response = await this.#response(path, init);
-      return parseResponseJson(new Uint8Array(await response.arrayBuffer()));
+      const bytes = await awaitWithAbort(init.signal, () => response.arrayBuffer());
+      return parseResponseJson(new Uint8Array(bytes));
     } catch (error) {
       if (error instanceof LogClientError || isAbort(error) || init.signal?.aborted) throw error;
       throw invalid();
@@ -225,10 +206,10 @@ export class LogClient {
 
   async #response(path: string, init: RequestInit): Promise<Response> {
     try {
-      const response = await awaitWithAbort(this.#transport.request(path, init), init.signal ?? undefined);
-      if (init.signal?.aborted) throw abortError();
+      const response = await this.#transport.request(path, init);
       if (response.ok) return response;
-      throw diagnosticFor(parseResponseJson(new Uint8Array(await response.arrayBuffer())));
+      const bytes = await awaitWithAbort(init.signal, () => response.arrayBuffer());
+      throw diagnosticFor(parseResponseJson(new Uint8Array(bytes)));
     } catch (error) {
       if (error instanceof LogClientError || isAbort(error) || init.signal?.aborted) throw error;
       throw invalid();
@@ -244,6 +225,9 @@ export class LogClient {
     }
     if (response.body === null) throw invalid();
     const reader = response.body.getReader();
+    const cancelReader = (): void => { void reader.cancel().catch(() => undefined); };
+    signal.addEventListener('abort', cancelReader, { once: true });
+    if (signal.aborted) cancelReader();
     const decoder = new TextDecoder('utf-8', { fatal: true });
     const frameParts: Uint8Array[] = [];
     let frameBytes = 0;
@@ -286,6 +270,7 @@ export class LogClient {
           if (chunk.value[index] !== 0x0a) continue;
           append(chunk.value.subarray(start, index));
           consumeFrame();
+          if (signal.aborted) return;
           start = index + 1;
         }
         append(chunk.value.subarray(start));
@@ -296,6 +281,7 @@ export class LogClient {
       if (error instanceof LogClientError) throw error;
       throw invalid();
     } finally {
+      signal.removeEventListener('abort', cancelReader);
       await reader.cancel().catch(() => undefined);
     }
   }

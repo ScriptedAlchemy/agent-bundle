@@ -18,6 +18,33 @@ export interface ForegroundTransportOptions {
 const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
+const abortError = (): Error => Object.assign(new Error('The operation was aborted.'), { name: 'AbortError' });
+
+/** Waits for an operation without allowing one caller's signal to cancel shared work. */
+export const awaitWithAbort = <T>(signal: AbortSignal | null | undefined, operation: () => Promise<T>): Promise<T> => {
+  if (signal === undefined || signal === null) return operation();
+  if (signal.aborted) return Promise.reject(abortError());
+  return new Promise<T>((resolve, reject) => {
+    let settled = false;
+    const settle = (callback: () => void): void => {
+      if (settled) return;
+      settled = true;
+      signal.removeEventListener('abort', onAbort);
+      callback();
+    };
+    const onAbort = (): void => settle(() => reject(abortError()));
+    signal.addEventListener('abort', onAbort, { once: true });
+    if (signal.aborted) {
+      onAbort();
+      return;
+    }
+    void operation().then(
+      (value) => settle(() => resolve(value)),
+      (error: unknown) => settle(() => reject(error)),
+    );
+  });
+};
+
 /**
  * One same-origin session handshake for every workbench client. Origin pinning is a
  * security boundary, so it lives in one place rather than once per page's client.
@@ -38,21 +65,21 @@ export class ForegroundTransport {
 
   /** Sends one authenticated same-session request and decodes a diagnostic body into the client's error. */
   async json(path: string, init: RequestInit = {}): Promise<unknown> {
-    const authentication = await this.#authenticate();
+    const authentication = await awaitWithAbort(init.signal, () => this.#authenticate());
     const headers = new Headers(init.headers);
     headers.set('x-agent-bundle-session', authentication.token);
-    const response = await this.#fetch(path, { ...init, headers });
-    const body: unknown = await response.json().catch(() => undefined);
+    const response = await awaitWithAbort(init.signal, () => this.#fetch(path, { ...init, headers }));
+    const body: unknown = await awaitWithAbort(init.signal, () => response.json().catch(() => undefined));
     if (!response.ok) throw this.diagnosticError(body, response.status);
     return body;
   }
 
   /** Authenticated raw response, for callers that read a stream body themselves. */
   async request(path: string, init: RequestInit = {}): Promise<Response> {
-    const authentication = await this.#authenticate();
+    const authentication = await awaitWithAbort(init.signal, () => this.#authenticate());
     const headers = new Headers(init.headers);
     headers.set('x-agent-bundle-session', authentication.token);
-    return this.#fetch(path, { ...init, headers });
+    return awaitWithAbort(init.signal, () => this.#fetch(path, { ...init, headers }));
   }
 
   diagnosticError(value: unknown, status: number): Error {
