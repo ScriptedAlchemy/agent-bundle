@@ -808,6 +808,59 @@ it('keeps the blocking run API cancellable through its admitted background execu
   }
 }, 120_000);
 
+it('does not publish a second cancellation when an abort listener cancels reentrantly', async () => {
+  const project = await createProjectFixture();
+  let markTrialEntered!: () => void;
+  let releaseTrial!: () => void;
+  let reentrantCancellation: Promise<boolean> | undefined;
+  let evals: EvalService | undefined;
+  const trialEntered = new Promise<void>((resolvePromise) => { markTrialEntered = resolvePromise; });
+  const trialRelease = new Promise<void>((resolvePromise) => { releaseTrial = resolvePromise; });
+  try {
+    await seedEvalProject(project.root, { marketplace: true, targets: ['codex'] });
+    await writeEvalSuite(project.root, 'reentrant-cancellation.eval.ts', {
+      cases: [{ hosts: { codex: { model: 'gpt-5-codex' } }, id: 'reentrant-review', kind: 'pass' }],
+      name: 'reentrant-cancellation-suite',
+    });
+    const controller = new AbortController();
+    const home = join(project.root, 'normal-codex-home');
+    await mkdir(home, { recursive: true });
+    await writeFile(join(home, 'auth.json'), '{"opaque":"session"}\n');
+    const service = new EvalService({
+      native: {
+        codexRun: async (command) => {
+          command.signal?.addEventListener('abort', () => {
+            reentrantCancellation = service.cancel(runId);
+            releaseTrial();
+          }, { once: true });
+          markTrialEntered();
+          await trialRelease;
+          return { exitCode: 0, stderr: '', stdout: 'codex-cli 0.147.0\n' };
+        },
+        environment: { CODEX_HOME: home, PATH: process.env.PATH ?? '/usr/bin' },
+      },
+      projectRoot: project.root,
+      targets: ['codex'],
+    });
+    evals = service;
+
+    const admission = await service.start({ harness: 'codex', signal: controller.signal, suites: ['reentrant-cancellation-suite'] });
+    const runId = admission.run.id;
+    await trialEntered;
+    controller.abort();
+
+    if (reentrantCancellation === undefined) throw new Error('The native abort listener did not run.');
+    await expect(reentrantCancellation).resolves.toBe(false);
+    const events = await service.events(admission.run.id, 0);
+    expect(events.events.filter((event) => event.kind === 'run.cancelling')).toHaveLength(1);
+    await service.close();
+  } finally {
+    releaseTrial?.();
+    await evals?.close().catch(() => undefined);
+    await removeProjectFixture(project.root);
+  }
+}, 120_000);
+
 it('finishes a failed background run so its partial summary remains readable', async () => {
   const project = await createProjectFixture();
   let evals: EvalService | undefined;

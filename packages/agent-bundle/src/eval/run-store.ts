@@ -951,6 +951,7 @@ export class EvalRunWriter implements EvalTrialWriter {
   #record: EvalRunRecord;
   #sequence = 0;
   #tail: Promise<void> = Promise.resolve();
+  #uncertainEventWrite = false;
 
   constructor(directory: string, record: EvalRunRecord) {
     this.#directory = directory;
@@ -1026,6 +1027,7 @@ export class EvalRunWriter implements EvalTrialWriter {
       if (failures.length > 0) {
         if (written) throw new EvalRunEventDurabilityError(record, failures);
         if (rollbackUncertain) {
+          this.#uncertainEventWrite = true;
           this.#closed = true;
           throw new EvalRunEventWriteUncertainError(record, failures);
         }
@@ -1109,6 +1111,7 @@ export class EvalRunWriter implements EvalTrialWriter {
     });
     await previous;
     try {
+      if (this.#uncertainEventWrite) this.#assertOpen();
       return await operation();
     } catch (error) {
       this.#closeFailures.push(error);
