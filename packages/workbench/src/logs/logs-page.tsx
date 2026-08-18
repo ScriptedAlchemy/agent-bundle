@@ -103,6 +103,16 @@ export const LogsPage = ({ client, records: suppliedRecords }: LogsPageProps) =>
     const connect = async (): Promise<void> => {
       const attempt = generation + 1;
       generation = attempt;
+      const handleFailure = (reason: unknown): void => {
+        if (!current || attempt !== generation) return;
+        if (isCursorAhead(reason)) {
+          resetCursor();
+          void connect();
+          return;
+        }
+        setError(errorMessage(reason));
+        reconnectLater();
+      };
       stream?.close();
       generationController?.abort();
       generationController = new AbortController();
@@ -127,26 +137,10 @@ export const LogsPage = ({ client, records: suppliedRecords }: LogsPageProps) =>
         });
         void stream.done.then(
           () => { if (attempt === generation) reconnectLater(); },
-          (reason: unknown) => {
-            if (!current || attempt !== generation) return;
-            if (isCursorAhead(reason)) {
-              resetCursor();
-              void connect();
-              return;
-            }
-            setError(errorMessage(reason));
-            reconnectLater();
-          },
+          handleFailure,
         );
       } catch (reason) {
-        if (!current || attempt !== generation) return;
-        if (isCursorAhead(reason)) {
-          resetCursor();
-          void connect();
-          return;
-        }
-        setError(errorMessage(reason));
-        reconnectLater();
+        handleFailure(reason);
       }
     };
     void connect();
