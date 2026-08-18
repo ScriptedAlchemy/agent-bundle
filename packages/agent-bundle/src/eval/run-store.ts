@@ -202,7 +202,7 @@ const requireSafeRelativePath = (value: string, label: string): string => {
   if (
     value.length === 0 ||
     value.includes('\\') ||
-    segments.some((segment) => !safeSegment.test(segment))
+    segments.some((segment) => segment !== '.agent-bundle' && !safeSegment.test(segment))
   ) {
     throw storeError('EVAL_RUN_RECORD_INVALID', `${label} must be a path-safe relative path.`);
   }

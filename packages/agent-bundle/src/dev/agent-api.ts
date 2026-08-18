@@ -253,10 +253,14 @@ const ownDataProperty = (value: unknown, key: string): unknown => {
 };
 
 const safeErrorCode = (error: unknown): string => {
-  const code = ownDataProperty(error, 'code');
-  return typeof code === 'string' && stableErrorCodes.has(code as never)
-    ? code
-    : 'AGENT_API_OPERATION_FAILED';
+  let current = error;
+  for (let depth = 0; depth < 2; depth += 1) {
+    const code = ownDataProperty(current, 'code');
+    if (typeof code === 'string' && stableErrorCodes.has(code as never)) return code;
+    current = ownDataProperty(current, 'cause');
+    if (current === undefined) break;
+  }
+  return 'AGENT_API_OPERATION_FAILED';
 };
 
 type AgentApiJsonRecord = Readonly<Record<string, unknown>>;

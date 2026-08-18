@@ -1,14 +1,19 @@
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { join } from 'node:path';
 
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 import type { McpHttpHandler, McpServerFactory } from '@modelcontextprotocol/server';
 import { expect, it } from '@rstest/core';
 
+import { build } from '../src/api.ts';
 import { stableJson } from '../src/core/digest.ts';
 import { AgentApi, AgentApiCloseError, agentApiTokenEquals, agentApiToolNames, type AgentApiOptions } from '../src/dev/agent-api.ts';
+import { EvalService } from '../src/dev/eval-service.ts';
 import { ForegroundServerCloseError, ProjectEventHub, startForegroundServer } from '../src/dev/index.ts';
 import type { ProjectStatus } from '../src/dev/types.ts';
+import { createProjectFixture, removeProjectFixture } from './helpers/project-fixture.ts';
+import { seedEvalProject } from './support/eval-project.ts';
 
 const projectStatus = (): ProjectStatus => ({
   artifact: { state: 'missing' },
@@ -372,6 +377,117 @@ it('admits deterministic evals against an atomically leased epoch until their te
     await started.close();
   }
 });
+
+it('retains an eval admission refusal when the leased epoch also fails to release', async () => {
+  const admissionFailure = Object.assign(new Error('No selected eval case matched.'), { code: 'EVAL_SELECTION_EMPTY' });
+  const releaseFailure = new Error('Epoch release failed.');
+  let referenceCloses = 0;
+  const api = createApi({
+    epochs: {
+      acquireActiveEpochReference: async () => ({
+        close: async () => {
+          referenceCloses += 1;
+          throw releaseFailure;
+        },
+        epoch: { id: 'epoch-release-failure' },
+        root: '/test/epoch-release-failure',
+      }),
+      acquireEpochReference: async () => { throw new Error('Only the active epoch should be acquired.'); },
+      listEpochs: async () => [{ id: 'epoch-release-failure' }],
+    },
+    evals: {
+      list: async () => [],
+      read: async (runId: string) => ({ run: { id: runId } }),
+      start: async () => { throw admissionFailure; },
+      subscribeEvents: async () => { throw new Error('Subscription must not open after a refused admission.'); },
+      suites: async () => ({ diagnostics: [], suites: [] }),
+    } as unknown as AgentApiOptions['evals'],
+  });
+  const started = await startApi({ api });
+  const client = new Client({ name: 'agent-api-eval-release-failure-client', version: '1.0.0' });
+  const transport = new StreamableHTTPClientTransport(new URL(`${started.url}/mcp`), {
+    authProvider: { token: async () => 'test-agent-api-token' },
+  });
+  try {
+    await client.connect(transport);
+    await expect(client.callTool({ name: 'eval_run' })).resolves.toMatchObject({
+      isError: true,
+      structuredContent: { error: { code: 'EVAL_SELECTION_EMPTY' } },
+    });
+    expect(referenceCloses).toBe(1);
+  } finally {
+    await client.close();
+    await started.close();
+  }
+});
+
+it('admits a deterministic eval against a real leased artifact epoch', async () => {
+  const project = await createProjectFixture();
+  const artifact = join(project.root, '.agent-bundle', 'epochs', 'epoch-real');
+  const evals = new EvalService({ projectRoot: project.root, targets: ['portable'] });
+  let referenceCloses = 0;
+  let serviceFailure: unknown;
+  let started: Awaited<ReturnType<typeof startApi>> | undefined;
+  const client = new Client({ name: 'agent-api-real-eval-client', version: '1.0.0' });
+  try {
+    await seedEvalProject(project.root);
+    await build({ output: artifact, root: project.root });
+    const api = createApi({
+      epochs: {
+        acquireActiveEpochReference: async () => ({
+          close: async () => { referenceCloses += 1; },
+          epoch: { id: 'epoch-real' },
+          root: artifact,
+        }),
+        acquireEpochReference: async () => { throw new Error('Only the active epoch should be acquired.'); },
+        listEpochs: async () => [{ id: 'epoch-real' }],
+      },
+      evals: {
+        list: () => evals.list(),
+        read: (runId) => evals.read(runId),
+        start: async (request) => {
+          try {
+            return await evals.start(request);
+          } catch (error) {
+            serviceFailure = error;
+            throw error;
+          }
+        },
+        subscribeEvents: (runId, afterSequence) => evals.subscribeEvents(runId, afterSequence),
+        suites: () => evals.suites(),
+      },
+    });
+    started = await startApi({ api });
+    const transport = new StreamableHTTPClientTransport(new URL(`${started.url}/mcp`), {
+      authProvider: { token: async () => 'test-agent-api-token' },
+    });
+
+    await client.connect(transport);
+    const admitted = await client.callTool({
+      arguments: { case_ids: ['reads-result'], suites: ['review-change'], trials: 1 },
+      name: 'eval_run',
+    });
+
+    expect(serviceFailure).toBeUndefined();
+    expect(admitted.isError).not.toBe(true);
+    expect(admitted).toMatchObject({
+      structuredContent: { run: { harness: 'deterministic' } },
+    });
+    await evals.close();
+    await within(new Promise<void>((resolvePromise) => {
+      const interval = setInterval(() => {
+        if (referenceCloses !== 1) return;
+        clearInterval(interval);
+        resolvePromise();
+      }, 10);
+    }));
+  } finally {
+    await client.close().catch(() => undefined);
+    await started?.close().catch(() => undefined);
+    await evals.close().catch(() => undefined);
+    await removeProjectFixture(project.root);
+  }
+}, 30_000);
 
 it('rejects unknown and forbidden tool fields with the SDK-owned strict schemas', async () => {
   const started = await startApi();
