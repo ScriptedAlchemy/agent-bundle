@@ -25,29 +25,69 @@ export class CodexEvalHarnessError extends Error {
 
 const failureShapes: Readonly<Record<
   CodexEvalHarnessErrorCode,
-  Readonly<{ readonly code: EvalHarnessFailureCode; readonly stage: EvalHarnessFailureStage }>
+  Readonly<{ readonly code: EvalHarnessFailureCode; readonly message: string; readonly stage: EvalHarnessFailureStage }>
 >> = Object.freeze({
-  CODEX_ARTIFACT_INVALID: Object.freeze({ code: 'EVAL_ARTIFACT_UNAVAILABLE', stage: 'artifact' }),
-  CODEX_AUTH_UNAVAILABLE: Object.freeze({ code: 'EVAL_PROCESS_UNAVAILABLE', stage: 'preflight' }),
-  CODEX_CLI_INCOMPATIBLE: Object.freeze({ code: 'EVAL_PROCESS_UNAVAILABLE', stage: 'preflight' }),
-  CODEX_CLI_MISSING: Object.freeze({ code: 'EVAL_PROCESS_UNAVAILABLE', stage: 'preflight' }),
-  CODEX_CLI_UNAUTHENTICATED: Object.freeze({ code: 'EVAL_PROCESS_UNAVAILABLE', stage: 'preflight' }),
-  CODEX_FIXTURE_UNAVAILABLE: Object.freeze({ code: 'EVAL_FIXTURE_UNAVAILABLE', stage: 'fixture' }),
-  CODEX_HOME_MUTATED: Object.freeze({ code: 'EVAL_PROCESS_UNAVAILABLE', stage: 'preflight' }),
-  CODEX_PLUGIN_UNAVAILABLE: Object.freeze({ code: 'EVAL_PROCESS_UNAVAILABLE', stage: 'preflight' }),
-  CODEX_TRACE_INVALID: Object.freeze({ code: 'EVAL_TRACE_UNAVAILABLE', stage: 'trace' }),
-  CODEX_TRIAL_CANCELLED: Object.freeze({ code: 'EVAL_TRACE_UNAVAILABLE', stage: 'trace' }),
+  CODEX_ARTIFACT_INVALID: Object.freeze({
+    code: 'EVAL_ARTIFACT_UNAVAILABLE',
+    message: 'The Codex candidate artifact is unavailable.',
+    stage: 'artifact',
+  }),
+  CODEX_AUTH_UNAVAILABLE: Object.freeze({
+    code: 'EVAL_PROCESS_UNAVAILABLE',
+    message: 'The Codex CLI has no signed-in session.',
+    stage: 'preflight',
+  }),
+  CODEX_CLI_INCOMPATIBLE: Object.freeze({
+    code: 'EVAL_PROCESS_UNAVAILABLE',
+    message: 'The installed Codex CLI is not compatible with this eval harness.',
+    stage: 'preflight',
+  }),
+  CODEX_CLI_MISSING: Object.freeze({
+    code: 'EVAL_PROCESS_UNAVAILABLE',
+    message: 'The Codex CLI is not installed.',
+    stage: 'preflight',
+  }),
+  CODEX_CLI_UNAUTHENTICATED: Object.freeze({
+    code: 'EVAL_PROCESS_UNAVAILABLE',
+    message: 'The Codex CLI has no signed-in session.',
+    stage: 'preflight',
+  }),
+  CODEX_FIXTURE_UNAVAILABLE: Object.freeze({
+    code: 'EVAL_FIXTURE_UNAVAILABLE',
+    message: 'The trial fixture could not be materialized.',
+    stage: 'fixture',
+  }),
+  CODEX_HOME_MUTATED: Object.freeze({
+    code: 'EVAL_PROCESS_UNAVAILABLE',
+    message: 'The normal Codex session state changed during the trial.',
+    stage: 'preflight',
+  }),
+  CODEX_PLUGIN_UNAVAILABLE: Object.freeze({
+    code: 'EVAL_PROCESS_UNAVAILABLE',
+    message: 'The candidate is unavailable in the temporary Codex environment.',
+    stage: 'preflight',
+  }),
+  CODEX_TRACE_INVALID: Object.freeze({
+    code: 'EVAL_TRACE_UNAVAILABLE',
+    message: 'The Codex event stream could not be verified.',
+    stage: 'trace',
+  }),
+  CODEX_TRIAL_CANCELLED: Object.freeze({
+    code: 'EVAL_TRACE_UNAVAILABLE',
+    message: 'The Codex trial was cancelled before a complete trace was recorded.',
+    stage: 'trace',
+  }),
 });
 
 /** Everything the native harness can go wrong at is a harness failure, so no trial blames the plugin. */
 export const codexHarnessFailure = (error: unknown): EvalHarnessFailure => {
   if (error instanceof CodexEvalHarnessError) {
     const shape = failureShapes[error.code];
-    return Object.freeze({ code: shape.code, message: `${error.code}: ${error.message}`, stage: shape.stage });
+    return Object.freeze({ code: shape.code, message: `${error.code}: ${shape.message}`, stage: shape.stage });
   }
   return Object.freeze({
     code: 'EVAL_PROCESS_UNAVAILABLE',
-    message: `CODEX_TRIAL_FAILED: ${error instanceof Error ? error.message : String(error)}`,
+    message: 'CODEX_TRIAL_FAILED: The native Codex trial could not be completed.',
     stage: 'preflight',
   });
 };

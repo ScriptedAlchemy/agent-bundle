@@ -25,7 +25,7 @@ agent-bundle dev --root .
 | `agent-bundle inspect` | Inspect normalized targets and adapter plans from source. |
 | `agent-bundle mcp list` / `mcp invoke` | List or invoke one MCP tool from an artifact. |
 | `agent-bundle hooks list` / `hooks simulate` | List generated hooks, or run one emitted wrapper. |
-| `agent-bundle eval` | Run deterministic eval suites and record a run. |
+| `agent-bundle eval` | Run deterministic or native Claude/Codex eval suites and record a run. |
 | `agent-bundle dev` | Serve the packaged developer workbench on loopback. |
 
 `validate --artifact`, `mcp`, and `hooks` work against a built artifact with project sources deleted.

@@ -26,8 +26,10 @@ model-provider API keys.
    hooks, deterministic evals, native Claude and Codex harnesses, host-backed playground, then
    comparison and the optional agent MCP.
 3. Natural-language playground runs arrive only after at least one real native harness. Before
-   that, the playground supports deterministic script, MCP, and hook operations plus Skill
-   inspect/render/validate/select; Skills do not gain a fake executor.
+   that, the playground supports MCP and hook operations plus Skill inspect/render/validate/select.
+   `script.run` remains in the typed contract for a future host-provided OS-contained executor,
+   but is capability-gated and rejected before admission until that executor is configured;
+   Skills do not gain a fake executor.
 4. Codex and Claude path-token expansion is capability-gated. Agent Bundle expands only the
    tokens supported by the selected adapter and never claims unsupported native host behavior.
 5. Inspector protocol state, controlled Inspector source vendoring, hook UI, and MCP Apps

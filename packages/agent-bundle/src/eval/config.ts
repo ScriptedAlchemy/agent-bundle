@@ -60,14 +60,13 @@ const requireRunsDirectory = (value: unknown): string => {
 };
 
 /**
- * Native model-backed harnesses do not exist yet, so a configured semantic grader
- * is surfaced as an unsupported diagnostic instead of silently degrading to a
- * deterministic-only run that looks configured.
+ * Native model-backed execution does not run configured semantic graders yet, so
+ * one is surfaced as an unsupported diagnostic instead of silently being ignored.
  */
 const semanticGraderDiagnostic = (): Diagnostic => Object.freeze({
   code: 'AB9000',
-  message: 'Model-backed eval semantic grader configuration is not supported yet and was ignored.',
-  recovery: 'Remove evals.semanticGrader until a native Claude or Codex harness is available.',
+  message: 'Configured eval semantic graders are not supported yet and were ignored.',
+  recovery: 'Remove evals.semanticGrader until configured semantic grading is available.',
   severity: 'warning',
 });
 

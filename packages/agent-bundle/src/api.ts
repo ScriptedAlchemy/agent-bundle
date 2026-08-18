@@ -51,6 +51,7 @@ export type {
   EvalRunResult,
   EvalRunSelection,
   EvalServiceErrorCode,
+  EvalServiceNativeOptions,
   EvalServiceOptions,
   EvalSuiteListing,
   EvalSuiteSummary,
@@ -417,7 +418,7 @@ const evalDiagnostics: Readonly<Record<EvalServiceErrorCode, Readonly<{
   }),
   EVAL_HARNESS_UNSUPPORTED: Object.freeze({
     code: 'AB9001',
-    recovery: 'Run the deterministic harness until a native Claude or Codex harness is available.',
+    recovery: 'Use deterministic, claude, or codex, or correct an unknown harness name.',
   }),
   EVAL_RUN_NOT_FOUND: Object.freeze({
     code: 'AB9003',
@@ -470,7 +471,7 @@ const evalService = (options: ProjectOptions): EvalService => new EvalService({
   ...(options.targets === undefined ? {} : { targets: options.targets }),
 });
 
-/** Runs deterministic eval suites through the service the CLI and workbench browser also use. */
+/** Runs deterministic or native eval suites through the service the CLI and workbench browser also use. */
 export const runEvals = async (options: RunEvalsOptions): Promise<EvalRunResult> => {
   log(options.logger, 'eval.run', { root: resolve(options.root) });
   try {

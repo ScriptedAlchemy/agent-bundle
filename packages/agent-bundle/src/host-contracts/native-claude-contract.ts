@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 
 export interface NativeClaudeCommandOptions {
+  readonly model?: string;
   readonly pluginDirectory: string;
   readonly prompt: string;
 }
@@ -15,6 +16,7 @@ export const createNativeClaudeCommand = (options: NativeClaudeCommandOptions): 
     '-p',
     '--plugin-dir',
     options.pluginDirectory,
+    ...(options.model === undefined ? [] : ['--model', options.model]),
     '--output-format',
     'stream-json',
     '--verbose',

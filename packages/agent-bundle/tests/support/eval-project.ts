@@ -14,7 +14,10 @@ export interface EvalSuiteSpec {
 }
 
 export interface SeedEvalProjectOptions {
+  readonly marketplace?: boolean;
   readonly semanticGrader?: boolean;
+  /** Extra host targets to build, so a native harness has a candidate to evaluate. */
+  readonly targets?: readonly string[];
 }
 
 const evalEntryPoint = resolve(process.cwd(), 'packages/agent-bundle/src/eval/index.ts');
@@ -109,9 +112,10 @@ export const seedEvalProject = async (
       ...(options.semanticGrader === true
         ? ["  evals: { semanticGrader: { harness: 'claude', model: 'unpinned' } },"]
         : []),
+      ...(options.marketplace === true ? ['  marketplace: true,'] : []),
       "  plugin: { name: 'review', version: '1.0.0' },",
       "  skills: ['skills/review'],",
-      "  targets: ['portable'],",
+      `  targets: ${JSON.stringify(options.targets ?? ['portable'])},`,
       '});',
       '',
     ].join('\n')),

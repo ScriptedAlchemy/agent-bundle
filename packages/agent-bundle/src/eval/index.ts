@@ -84,6 +84,21 @@ export type {
   ReproduceEvalTrialAssertionsOptions,
   RunDeterministicTrialOptions,
 } from './harness.ts';
+export { runClaudeTrial } from './claude-harness.ts';
+export type {
+  EvalSemanticGrader,
+  EvalSemanticGraderContext,
+  EvalSemanticGraderSpec,
+  RunClaudeTrialOptions,
+} from './claude-harness.ts';
+export { createCodexEvalHarness, runCodexEvalTrial } from './codex-harness.ts';
+export type {
+  CodexCommandInput,
+  CodexCommandResult,
+  CodexCommandRunner,
+  CodexEvalHarness,
+  RunCodexEvalTrialOptions,
+} from './codex-harness.ts';
 export type {
   EvalFixturePlan,
   EvalFixturePlanEntry,

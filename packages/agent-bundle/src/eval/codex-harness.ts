@@ -280,6 +280,8 @@ export const runCodexEvalTrial = async (options: RunCodexEvalTrialOptions): Prom
 
       const result = await execute('exec', [
         'exec',
+        '-m',
+        options.evalCase.hosts[host]?.model ?? 'unpinned',
         '--strict-config',
         '--ephemeral',
         '--json',

@@ -245,7 +245,7 @@ const writeCompilingRuntimeAppProject = async (root: string, stateKey: string): 
 const workbenchSyntheticAdapter: TargetAdapter = Object.freeze({
   artifactLayout: Object.freeze({
     scripts: Object.freeze({
-      allowedSuffixes: Object.freeze(['.txt']),
+      allowedSuffixes: Object.freeze(['.mjs']),
       directory: 'scripts',
     }),
   }),
@@ -262,11 +262,11 @@ const workbenchSyntheticAdapter: TargetAdapter = Object.freeze({
   plan: (model: NormalizedPlugin) => Object.freeze({
     diagnostics: Object.freeze([]),
     entries: Object.freeze([{
-      content: 'synthetic workbench target\n',
+      content: 'export {};\n',
       kind: 'write' as const,
       // Custom target plans use the same declared compiled-script namespace
       // as production adapters; root files are deliberately rejected.
-      relativePath: 'scripts/synthetic.txt',
+      relativePath: 'scripts/synthetic.mjs',
       sourceInputs: [model.metadata.provenance.sourcePath],
     }]),
   }),
@@ -1435,43 +1435,44 @@ it('records a durable playground trace and promotes it through the packaged fore
     const headers = { origin: server.url, 'x-agent-bundle-session': token };
     const jsonHeaders = { ...headers, 'content-type': 'application/json' };
 
-    const opened = await fetch(`${server.url}/api/playground/sessions`, {
+    const hooks = await fetch(`${server.url}/api/hooks?epochId=${epoch.id}&target=claude`, { headers });
+    expect(hooks.status).toBe(200);
+    const listed = await hooks.json() as {
+      readonly hooks: readonly { readonly binding: { readonly hook: string; readonly target: string } }[];
+    };
+    const binding = listed.hooks[0]?.binding;
+    if (binding === undefined) throw new Error('Expected an emitted Hook binding.');
+
+    const started = await fetch(`${server.url}/api/playground/runs`, {
       body: JSON.stringify({
-        epoch: { digest: epoch.targetDigests.claude, id: epoch.id },
-        fixture: { digest: 'sha256-fixture', id: 'fixture-a' },
-        invocation: { intent: { hook: 'session-start' }, kind: 'hook' },
-        target: { digest: epoch.targetDigests.claude, name: 'claude' },
-        task: { id: 'task-a', text: 'Record one hook simulation.' },
+        hook: binding.hook,
+        input: {
+          cwd: '/workspace',
+          sessionId: 'session-1',
+          source: 'startup',
+          transcriptPath: '/workspace/transcript.json',
+        },
+        operation: 'hook.simulate',
+        target: binding.target,
       }),
       headers: jsonHeaders,
       method: 'POST',
     });
-    expect(opened.status).toBe(200);
-    const { session } = await opened.json() as { readonly session: { readonly id: string; readonly state: string } };
-    expect(session.state).toBe('open');
+    expect(started.status).toBe(200);
+    const { run } = await started.json() as { readonly run: { readonly id: string; readonly session: { readonly id: string; readonly state: string } } };
+    expect(run.id).not.toBe(binding.hook);
+    expect(run.session.state).toBe('open');
+    let terminal: string | undefined;
+    for (let attempt = 0; attempt < 25; attempt += 1) {
+      const session = await fetch(`${server.url}/api/playground/sessions/${run.session.id}`, { headers });
+      const body = await session.json() as { readonly session: { readonly state: string } };
+      terminal = body.session.state;
+      if (terminal === 'finalized') break;
+      await new Promise<void>((resolvePromise) => { setTimeout(resolvePromise, 10); });
+    }
+    expect(terminal).toBe('finalized');
 
-    const appended = await fetch(`${server.url}/api/playground/sessions/${session.id}/events`, {
-      body: JSON.stringify({
-        kind: 'hook.simulated',
-        raw: { outcome: 'continue' },
-        source: 'hook',
-        summary: 'Simulated the session start hook.',
-      }),
-      headers: jsonHeaders,
-      method: 'POST',
-    });
-    expect(appended.status).toBe(200);
-    const { event } = await appended.json() as { readonly event: { readonly rawEventRef: string; readonly sequence: number } };
-    expect(event.sequence).toBe(1);
-
-    const finalized = await fetch(`${server.url}/api/playground/sessions/${session.id}/finalize`, {
-      body: JSON.stringify({ response: 'continued', status: 'passed' }),
-      headers: jsonHeaders,
-      method: 'POST',
-    });
-    expect(finalized.status).toBe(200);
-
-    const exported = await fetch(`${server.url}/api/playground/sessions/${session.id}/export`, { headers });
+    const exported = await fetch(`${server.url}/api/playground/sessions/${run.session.id}/export`, { headers });
     expect(exported.status).toBe(200);
     const exportBody = await exported.json() as {
       readonly export: {
@@ -1482,11 +1483,13 @@ it('records a durable playground trace and promotes it through the packaged fore
     };
     expect(exportBody.export.schemaVersion).toBe(1);
     expect(exportBody.export.session.identity.epoch.id).toBe(epoch.id);
-    expect(exportBody.export.events.map((entry) => entry.rawEventRef)).toEqual([event.rawEventRef]);
+    expect(exportBody.export.events).toHaveLength(2);
+    const evidence = exportBody.export.events[1]?.rawEventRef;
+    if (evidence === undefined) throw new Error('Expected server-owned hook evidence.');
 
-    const promoted = await fetch(`${server.url}/api/playground/sessions/${session.id}/draft-eval`, {
+    const promoted = await fetch(`${server.url}/api/playground/sessions/${run.session.id}/draft-eval`, {
       body: JSON.stringify({
-        assertions: [{ evidence: event.rawEventRef, expectation: 'continue', id: 'assertion-a', kind: 'hook-outcome' }],
+        rawEventRefs: [evidence],
       }),
       headers: jsonHeaders,
       method: 'POST',
@@ -1506,7 +1509,7 @@ it('records a durable playground trace and promotes it through the packaged fore
     });
 
     await expect(server.close()).resolves.toBeUndefined();
-    await expect(fetch(`${server.url}/api/playground/sessions/${session.id}`, { headers })).rejects.toThrow();
+    await expect(fetch(`${server.url}/api/playground/sessions/${run.session.id}`, { headers })).rejects.toThrow();
   } finally {
     await server?.close().catch(() => undefined);
     await Promise.all([removeProjectFixture(project.root), rm(assetsRoot, { force: true, recursive: true })]);
@@ -1592,7 +1595,7 @@ it('retains a playground cleanup failure alongside every other lifecycle resourc
     failures: [{ error: playgroundFailure, resource: 'playground' }],
     name: DevServerLifecycleCloseError.name,
   }));
-  expect(closeOrder).toEqual(['mcp-apps', 'mcp-sessions', 'playground', 'coordinator']);
+  expect(closeOrder).toEqual(['playground', 'mcp-apps', 'mcp-sessions', 'coordinator']);
 });
 
 it('keeps MCP and coordinator cleanup failures structural while releasing both resources', async () => {
@@ -1656,21 +1659,21 @@ it('closes every named lifecycle resource in ownership order without losing fail
     playground: { close: async () => { closeOrder.push('playground'); throw playgroundFailure; } },
   })).rejects.toEqual(expect.objectContaining({
     failures: [
+      { error: playgroundFailure, resource: 'playground' },
       { error: appFailure, resource: 'mcp-apps' },
       { error: clientFailure, resource: 'runtime-client-surfaces' },
       { error: runtimeFailure, resource: 'runtime' },
       { error: mcpFailure, resource: 'mcp-sessions' },
-      { error: playgroundFailure, resource: 'playground' },
       { error: coordinatorFailure, resource: 'coordinator' },
     ],
     name: DevServerLifecycleCloseError.name,
   }));
   expect(closeOrder).toEqual([
+    'playground',
     'mcp-apps',
     'runtime-client-surfaces',
     'runtime',
     'mcp-sessions',
-    'playground',
     'coordinator',
   ]);
 });

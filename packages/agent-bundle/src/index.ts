@@ -6,6 +6,24 @@ import type { AgentBundleConfig as CoreAgentBundleConfig } from './core/types.ts
 export { defineConfig, pathTokens } from './core/types.ts';
 export { compareEvals, runEvals, startDevServer } from './api.ts';
 export {
+  createCodexEvalHarness,
+  createEvalHarness,
+  runClaudeTrial,
+  runCodexEvalTrial,
+} from './eval/index.ts';
+export type {
+  CodexCommandInput,
+  CodexCommandResult,
+  CodexCommandRunner,
+  CodexEvalHarness,
+  EvalHarness,
+  EvalSemanticGrader,
+  EvalSemanticGraderContext,
+  EvalSemanticGraderSpec,
+  RunClaudeTrialOptions,
+  RunCodexEvalTrialOptions,
+} from './eval/index.ts';
+export {
   assembleArtifactManifest,
   parseArtifactManifest,
   serializeArtifactManifest,
@@ -16,6 +34,7 @@ export type {
   EvalComparison,
   EvalRunResult,
   EvalRunSelection,
+  EvalServiceNativeOptions,
   EvalSuiteListing,
   EvalSuiteSummary,
   CompareEvalsOptions,
