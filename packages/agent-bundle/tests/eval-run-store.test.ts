@@ -71,10 +71,11 @@ const withProject = async (task: (root: string) => Promise<void>): Promise<void>
 };
 
 type EvalRunStoreDurabilityTestHook = (
-  phase: 'after-event-write',
+  phase: 'after-event-write' | 'before-event-open' | 'before-event-write',
   event: Readonly<{ readonly kind: string }>,
   path: string,
-) => void;
+  journal: Readonly<{ close(): Promise<void>; writeFile(contents: string, options?: string): Promise<void> }> | undefined,
+) => void | Promise<void>;
 
 const evalRunStoreDurabilityTestHookKey = Symbol.for('agent-bundle.eval-run-store.durability-test-hook');
 
@@ -219,6 +220,95 @@ it('retains a full event line when post-write durability fails', async () => {
 
       expect(injected).toBe(true);
       expect((await readEvalRunEvents(writer.directory)).events.map((event) => event.kind)).toEqual(['run.completed']);
+      await expect(writer.close()).rejects.toThrow('closed with admitted write failures');
+    } finally {
+      await writer.close().catch(() => undefined);
+    }
+  });
+});
+
+it('reuses an uncommitted event sequence after an open failure', async () => {
+  await withProject(async (root) => {
+    const writer = await createEvalRun(runOptions(root));
+    const openFailure = new Error('event journal open failed');
+    let injected = false;
+    try {
+      await withEvalRunStoreDurabilityTestHook((phase, event) => {
+        if (phase === 'before-event-open' && event.kind === 'run.completed' && !injected) {
+          injected = true;
+          throw openFailure;
+        }
+      }, async () => {
+        await expect(writer.appendEvent({ kind: 'run.completed', payload: {} })).rejects.toThrow(openFailure);
+      });
+
+      const fallback = await writer.appendEvent({ kind: 'run.failed', payload: {} });
+      expect(injected).toBe(true);
+      expect(fallback.sequence).toBe(1);
+      expect(await readEvalRunEvents(writer.directory)).toMatchObject({
+        events: [{ kind: 'run.failed', sequence: 1 }],
+      });
+      await expect(writer.close()).rejects.toThrow('closed with admitted write failures');
+    } finally {
+      await writer.close().catch(() => undefined);
+    }
+  });
+});
+
+it('restores partial event bytes before retrying the uncommitted sequence', async () => {
+  await withProject(async (root) => {
+    const writer = await createEvalRun(runOptions(root));
+    const partialWriteFailure = new Error('event journal partial write failed');
+    let injected = false;
+    try {
+      await withEvalRunStoreDurabilityTestHook(async (phase, event, _path, journal) => {
+        if (phase === 'before-event-write' && event.kind === 'run.completed' && !injected) {
+          if (journal === undefined) throw new Error('The partial-write hook did not receive the event journal.');
+          injected = true;
+          await journal.writeFile('{"kind":"run.completed"', 'utf8');
+          throw partialWriteFailure;
+        }
+      }, async () => {
+        await expect(writer.appendEvent({ kind: 'run.completed', payload: {} })).rejects.toThrow(partialWriteFailure);
+      });
+
+      const fallback = await writer.appendEvent({ kind: 'run.failed', payload: {} });
+      expect(injected).toBe(true);
+      expect(fallback.sequence).toBe(1);
+      expect(await readEvalRunEvents(writer.directory)).toMatchObject({
+        events: [{ kind: 'run.failed', sequence: 1 }],
+      });
+      await expect(writer.close()).rejects.toThrow('closed with admitted write failures');
+    } finally {
+      await writer.close().catch(() => undefined);
+    }
+  });
+});
+
+it('closes an event writer when partial-write rollback is uncertain', async () => {
+  await withProject(async (root) => {
+    const writer = await createEvalRun(runOptions(root));
+    const partialWriteFailure = new Error('event journal partial write failed');
+    let injected = false;
+    try {
+      await withEvalRunStoreDurabilityTestHook(async (phase, event, _path, journal) => {
+        if (phase === 'before-event-write' && event.kind === 'run.completed' && !injected) {
+          if (journal === undefined) throw new Error('The partial-write hook did not receive the event journal.');
+          injected = true;
+          await journal.writeFile('{"kind":"run.completed"', 'utf8');
+          await journal.close();
+          throw partialWriteFailure;
+        }
+      }, async () => {
+        await expect(writer.appendEvent({ kind: 'run.completed', payload: {} })).rejects.toMatchObject({
+          event: { kind: 'run.completed' },
+          name: 'EvalRunEventWriteUncertainError',
+        });
+      });
+
+      expect(injected).toBe(true);
+      await expect(writer.appendEvent({ kind: 'run.failed', payload: {} })).rejects.toMatchObject({ code: 'EVAL_RUN_CLOSED' });
+      expect((await readFile(join(writer.directory, 'events.jsonl'), 'utf8'))).toBe('{"kind":"run.completed"');
       await expect(writer.close()).rejects.toThrow('closed with admitted write failures');
     } finally {
       await writer.close().catch(() => undefined);
