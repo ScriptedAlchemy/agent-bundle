@@ -15,6 +15,7 @@ import type { EvalRunRecord } from '../eval/run-store.ts';
 import {
   type EvalArtifactReader,
   EvalServiceError,
+  type EvalRunAdmission,
   type EvalRunEventsReplay,
   type EvalRunRequest,
   type EvalRunResult,
@@ -34,6 +35,7 @@ interface RequestDiagnostic {
 
 type Route =
   | Readonly<{ readonly artifactRef: string; readonly kind: 'artifact'; readonly runId: string }>
+  | Readonly<{ readonly kind: 'cancel'; readonly runId: string }>
   | Readonly<{ readonly kind: 'comparisons' }>
   | Readonly<{ readonly kind: 'events'; readonly runId: string }>
   | Readonly<{ readonly kind: 'run'; readonly runId: string }>
@@ -49,7 +51,8 @@ export interface EvalRouteService {
   list(): Promise<readonly EvalRunRecord[]>;
   openArtifact(runId: string, artifactRef: string): Promise<EvalArtifactReader>;
   read(runId: string): Promise<EvalRunResult>;
-  run(request: EvalRunRequest): Promise<EvalRunResult>;
+  start(request: EvalRunRequest): Promise<EvalRunAdmission>;
+  cancel(runId: string): Promise<boolean>;
   subscribeEvents(runId: string, afterSequence: number): Promise<{
     readonly replay: EvalRunEventsReplay;
     activate(listener: (event: EvalRunEventsReplay['events'][number]) => void): void;
@@ -119,12 +122,12 @@ const responseDiagnostic = (response: ServerResponse, value: RequestDiagnostic):
   response.end(JSON.stringify({ diagnostic: { code: value.code, message: value.message } }));
 };
 
-const responseJson = (response: ServerResponse, body: unknown): void => {
+const responseJson = (response: ServerResponse, body: unknown, status = 200): void => {
   if (response.headersSent || response.writableEnded) {
     response.destroy();
     return;
   }
-  response.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+  response.writeHead(status, { 'content-type': 'application/json; charset=utf-8' });
   response.end(JSON.stringify(body));
 };
 
@@ -223,6 +226,9 @@ const route = (requestTarget: string | undefined): Route | undefined => {
   if (segments.length === 3 && segments[0] === 'runs' && segments[2] === 'stream') {
     return Object.freeze({ kind: 'stream', runId: segments[1] ?? pathError() });
   }
+  if (segments.length === 3 && segments[0] === 'runs' && segments[2] === 'cancel') {
+    return Object.freeze({ kind: 'cancel', runId: segments[1] ?? pathError() });
+  }
   if (segments.length === 4 && segments[0] === 'runs' && segments[2] === 'artifacts') {
     return Object.freeze({
       artifactRef: opaqueArtifactRef(segments[3] ?? pathError()),
@@ -271,15 +277,23 @@ const jsonBody = async (request: IncomingMessage): Promise<JsonObject> => {
 
 /**
  * A browser selects authored suites, authored cases, and a trial count. Artifact
- * roots, harness names, run directories, and commands stay service-owned.
+ * roots, run directories, models, and commands stay service-owned.
  */
-const runRequest = (value: JsonObject): Omit<EvalRunRequest, 'artifact' | 'harness' | 'signal'> => {
-  if (!hasOnly(value, ['caseIds', 'suites', 'trials'])) return invalidShape();
+const runRequest = (value: JsonObject): Omit<EvalRunRequest, 'artifact' | 'signal'> => {
+  if (!hasOnly(value, ['caseIds', 'harness', 'suites', 'trials'])) return invalidShape();
+  if (value.harness !== undefined && value.harness !== 'deterministic' && value.harness !== 'claude' && value.harness !== 'codex') {
+    return invalidShape();
+  }
   return Object.freeze({
     ...(value.caseIds === undefined ? {} : { caseIds: nameList(value.caseIds) }),
+    ...(value.harness === undefined ? {} : { harness: value.harness }),
     ...(value.suites === undefined ? {} : { suites: nameList(value.suites) }),
     ...(value.trials === undefined ? {} : { trials: trials(value.trials) }),
   });
+};
+
+const cancelRequest = async (request: IncomingMessage): Promise<void> => {
+  if (!hasOnly(await jsonBody(request), [])) invalidShape();
 };
 
 const noQuery = (requestTarget: string | undefined): void => {
@@ -366,7 +380,6 @@ export class EvalRoutes {
   readonly #closeFailures = new Set<unknown>();
   readonly #closeReaders = new Set<() => Promise<void>>();
   readonly #readerCloses = new Set<Promise<void>>();
-  readonly #running = new Set<AbortController>();
   readonly #service: EvalRouteService | undefined;
   #closePromise: Promise<void> | undefined;
 
@@ -377,8 +390,6 @@ export class EvalRoutes {
 
   close(): Promise<void> {
     if (this.#closePromise !== undefined) return this.#closePromise;
-    for (const controller of this.#running) controller.abort();
-    this.#running.clear();
     this.#closePromise = Promise.resolve().then(async () => {
       await Promise.allSettled([...this.#admissions]);
       const results = await Promise.allSettled([...this.#closeReaders].map(async (close) => close()));
@@ -422,9 +433,19 @@ export class EvalRoutes {
     const method = request.method ?? 'GET';
     if (parsed.kind === 'runs' && method === 'POST') {
       const selection = runRequest(await jsonBody(request));
-      return responseJson(response, {
-        run: await this.#cancellable(response, (signal) => service.run({ ...selection, signal })),
-      });
+      const finishAdmission = this.#beginAdmission();
+      try {
+        const admission = await service.start(selection);
+        return responseJson(response, { run: admission.run }, 202);
+      } finally {
+        finishAdmission();
+      }
+    }
+    if (parsed.kind === 'cancel' && method === 'POST') {
+      noQuery(request.url);
+      await cancelRequest(request);
+      const cancelled = await service.cancel(parsed.runId);
+      return responseJson(response, { cancelled, runId: parsed.runId }, 202);
     }
     if (method !== 'GET' && !(parsed.kind === 'artifact' && method === 'HEAD')) {
       return responseDiagnostic(response, diagnostic('AB8007', 'Route does not accept this method.', 405));
@@ -446,24 +467,6 @@ export class EvalRoutes {
     if (parsed.kind === 'suites') return responseJson(response, await service.suites());
     if (parsed.kind === 'runs') return responseJson(response, { runs: await service.list() });
     return responseJson(response, { run: await service.read(parsed.runId) });
-  }
-
-  /**
-   * Abandoning a request must stop the run it started; the service finishes the
-   * trials it already completed rather than tearing its record.
-   */
-  async #cancellable<T>(response: ServerResponse, action: (signal: AbortSignal) => Promise<T>): Promise<T> {
-    const controller = new AbortController();
-    const abort = (): void => controller.abort();
-    this.#running.add(controller);
-    response.once('close', abort);
-    try {
-      if (this.#closePromise !== undefined || response.destroyed || response.writableEnded) abort();
-      return await action(controller.signal);
-    } finally {
-      response.off('close', abort);
-      this.#running.delete(controller);
-    }
   }
 
   #unavailable(status: number): Error {

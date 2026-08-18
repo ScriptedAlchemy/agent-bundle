@@ -126,6 +126,7 @@ class RecordingService implements EvalRouteService {
   readonly calls: unknown[] = [];
   artifactCloseCalls = 0;
   artifactCloseFailure: unknown;
+  cancelCalls = 0;
   artifactOpening = false;
   artifactOpeningStarted: (() => void) | undefined;
   artifactOpeningRelease: (() => void) | undefined;
@@ -137,8 +138,6 @@ class RecordingService implements EvalRouteService {
   streamOpeningStarted: (() => void) | undefined;
   streamSubscriptionCloses = 0;
   streamEvents: readonly EvalRunEvent[] | undefined;
-  /** Holds a run open until its request signal aborts, so cancellation is observable. */
-  pending = false;
 
   async compare(baseRunId: string, candidateRunId: string): Promise<EvalComparison> {
     this.calls.push({ baseRunId, candidateRunId, kind: 'compare' });
@@ -197,6 +196,26 @@ class RecordingService implements EvalRouteService {
     return runResult;
   }
 
+  async start(request: EvalRunRequest) {
+    this.calls.push({
+      caseIds: request.caseIds,
+      harness: request.harness,
+      kind: 'start',
+      named: Object.keys(request).sort(),
+      suites: request.suites,
+      trials: request.trials,
+    });
+    if (this.failure !== undefined) throw this.failure;
+    return Object.freeze({ run: runRecord });
+  }
+
+  async cancel(runId: string): Promise<boolean> {
+    this.calls.push({ kind: 'cancel', runId });
+    if (this.failure !== undefined) throw this.failure;
+    this.cancelCalls += 1;
+    return this.cancelCalls === 1;
+  }
+
   async subscribeEvents(runId: string, afterSequence: number) {
     if (this.streamOpening) {
       this.streamOpeningStarted?.();
@@ -214,25 +233,6 @@ class RecordingService implements EvalRouteService {
       close: (): void => { this.streamSubscriptionCloses += 1; },
       replay,
     });
-  }
-
-  async run(request: EvalRunRequest): Promise<EvalRunResult> {
-    this.calls.push({
-      caseIds: request.caseIds,
-      kind: 'run',
-      named: Object.keys(request).sort(),
-      suites: request.suites,
-      trials: request.trials,
-    });
-    if (this.failure !== undefined) throw this.failure;
-    const signal = request.signal;
-    if (this.pending && signal !== undefined) {
-      await new Promise<void>((resolvePromise) => {
-        if (signal.aborted) resolvePromise();
-        else signal.addEventListener('abort', () => resolvePromise(), { once: true });
-      });
-    }
-    return runResult;
   }
 
   async suites(): Promise<EvalSuiteListing> {
@@ -585,38 +585,49 @@ it('rejects an unauthorized eval request before it reaches the service', async (
   }
 });
 
-it('starts a deterministic run from a suite, case, and trial selection only', async () => {
+it('admits each supported browser harness from the strict selection only', async () => {
   const service = new RecordingService();
   const started = await startRoutes(service);
   try {
-    const response = await fetch(`${started.url}/api/evals/runs`, {
-      body: JSON.stringify({ caseIds: ['reads-result'], suites: ['review-change'], trials: 2 }),
-      headers,
-      method: 'POST',
-    });
+    for (const harness of ['deterministic', 'claude', 'codex'] as const) {
+      const response = await fetch(`${started.url}/api/evals/runs`, {
+        body: JSON.stringify({ caseIds: ['reads-result'], harness, suites: ['review-change'], trials: 2 }),
+        headers,
+        method: 'POST',
+      });
 
-    expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({ run: { ...runResult } });
-    expect(service.calls).toEqual([{
+      expect(response.status).toBe(202);
+      await expect(response.json()).resolves.toEqual({ run: { ...runRecord } });
+    }
+    expect(service.calls).toEqual(['deterministic', 'claude', 'codex'].map((harness) => ({
       caseIds: ['reads-result'],
-      kind: 'run',
-      named: ['caseIds', 'signal', 'suites', 'trials'],
+      harness,
+      kind: 'start',
+      named: ['caseIds', 'harness', 'suites', 'trials'],
       suites: ['review-change'],
       trials: 2,
-    }]);
+    })));
   } finally {
     await started.close();
   }
 });
 
-it('never lets a browser name an artifact, harness, or filesystem path', async () => {
+it('accepts only the three browser harnesses and rejects every smuggled execution field before admission', async () => {
   const service = new RecordingService();
   const started = await startRoutes(service);
   try {
     for (const body of [
       { artifact: '/tmp/artifact' },
-      { harness: 'claude' },
-      { runsDir: '../escape' },
+      { path: '/tmp/artifact' },
+      { command: 'claude --dangerously-skip-permissions' },
+      { cwd: '/tmp' },
+      { env: { SECRET: 'value' } },
+      { key: 'secret' },
+      { model: 'arbitrary-model' },
+      { evidence: { forged: true } },
+      { outcome: 'pass' },
+      { extra: true },
+      { harness: 'other' },
       { trials: 0 },
       { trials: '2' },
       { caseIds: 'reads-result' },
@@ -628,6 +639,49 @@ it('never lets a browser name an artifact, harness, or filesystem path', async (
         method: 'POST',
       });
 
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toMatchObject({ diagnostic: { code: 'AB8072' } });
+    }
+    expect(service.calls).toEqual([]);
+  } finally {
+    await started.close();
+  }
+});
+
+it('requests cancellation through the canonical run-id route with a stable response', async () => {
+  const service = new RecordingService();
+  const started = await startRoutes(service);
+  try {
+    const first = await fetch(`${started.url}/api/evals/runs/run-a/cancel`, { body: '{}', headers, method: 'POST' });
+    const second = await fetch(`${started.url}/api/evals/runs/run-a/cancel`, { body: '{}', headers, method: 'POST' });
+
+    expect(first.status).toBe(202);
+    await expect(first.json()).resolves.toEqual({ cancelled: true, runId: 'run-a' });
+    expect(second.status).toBe(202);
+    await expect(second.json()).resolves.toEqual({ cancelled: false, runId: 'run-a' });
+    expect(service.calls).toEqual([{ kind: 'cancel', runId: 'run-a' }, { kind: 'cancel', runId: 'run-a' }]);
+  } finally {
+    await started.close();
+  }
+});
+
+it('requires an exact empty JSON body to cancel a run', async () => {
+  const service = new RecordingService();
+  const started = await startRoutes(service);
+  try {
+    for (const body of [
+      [],
+      null,
+      { command: 'claude --dangerously-skip-permissions' },
+      { model: 'arbitrary-model' },
+      { path: '/tmp/artifact' },
+      { extra: true },
+    ]) {
+      const response = await fetch(`${started.url}/api/evals/runs/run-a/cancel`, {
+        body: JSON.stringify(body),
+        headers,
+        method: 'POST',
+      });
       expect(response.status).toBe(400);
       await expect(response.json()).resolves.toMatchObject({ diagnostic: { code: 'AB8072' } });
     }
@@ -789,16 +843,22 @@ it('reports missing and closed eval routes distinctly', async () => {
   }
 });
 
-it('aborts an in-flight run when the routes close', async () => {
+it('does not cancel an already admitted service run when routes close', async () => {
   const service = new RecordingService();
-  service.pending = true;
   const started = await startRoutes(service);
   try {
-    const pending = fetch(`${started.url}/api/evals/runs`, { body: JSON.stringify({}), headers, method: 'POST' });
-    await new Promise<void>((resolvePromise) => setTimeout(resolvePromise, 50));
-    started.routes.close();
+    const admitted = await fetch(`${started.url}/api/evals/runs`, { body: JSON.stringify({}), headers, method: 'POST' });
+    await started.routes.close();
 
-    await expect(pending.then((response) => response.status)).resolves.toBe(200);
+    expect(admitted.status).toBe(202);
+    expect(service.calls).toEqual([{
+      caseIds: undefined,
+      harness: undefined,
+      kind: 'start',
+      named: [],
+      suites: undefined,
+      trials: undefined,
+    }]);
   } finally {
     await started.close();
   }

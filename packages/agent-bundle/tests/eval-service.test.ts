@@ -180,16 +180,16 @@ it('replays only complete persisted events with a frozen durable cursor', async 
     const replay = await evals.events(created.run.id, 0);
     const continued = await evals.events(created.run.id, 1);
 
-    expect(replay.events.map((event) => event.sequence)).toEqual([1, 2, 3]);
-    expect(replay.cursor).toEqual({ afterSequence: 3 });
+    expect(replay.events.map((event) => event.sequence)).toEqual([1, 2, 3, 4]);
+    expect(replay.cursor).toEqual({ afterSequence: 4 });
     expect(replay.incompleteTrailingRecord).toBe(true);
-    expect(continued.events.map((event) => event.sequence)).toEqual([2, 3]);
-    expect(continued.cursor).toEqual({ afterSequence: 3 });
+    expect(continued.events.map((event) => event.sequence)).toEqual([2, 3, 4]);
+    expect(continued.cursor).toEqual({ afterSequence: 4 });
     expect(Object.isFrozen(replay)).toBe(true);
     expect(Object.isFrozen(replay.cursor)).toBe(true);
     expect(Object.isFrozen(replay.events)).toBe(true);
     expect(Object.isFrozen(replay.events[0]?.payload)).toBe(true);
-    await expect(evals.events(created.run.id, 4)).rejects.toMatchObject({ code: 'EVAL_EVENTS_CURSOR_INVALID' });
+    await expect(evals.events(created.run.id, 5)).rejects.toMatchObject({ code: 'EVAL_EVENTS_CURSOR_INVALID' });
   } finally {
     await removeProjectFixture(project.root);
   }
@@ -222,9 +222,13 @@ it('queues durable events published after the replay snapshot without skipping o
     subscription.activate((event) => { observed.push(event); });
     await running;
 
-    expect(observed.map((event) => event.sequence)).toEqual([1, 2, 3, 4, 5]);
+    expect(observed.map((event) => event.sequence)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
     expect(observed.map((event) => event.kind)).toEqual([
-      'run.started', 'trial.completed', 'trial.completed', 'trial.completed', 'run.completed',
+      'run.started',
+      'trial.started', 'trial.completed',
+      'trial.started', 'trial.completed',
+      'trial.started', 'trial.completed',
+      'run.completed',
     ]);
     expect(observed[0]).toBeDefined();
     expect(Object.isFrozen(observed[0]!)).toBe(true);
@@ -617,6 +621,215 @@ it('finishes a cancelled run with the trials it completed instead of tearing the
     const events = await readFile(join(project.root, '.agent-bundle', 'runs', result.run.id, 'events.jsonl'), 'utf8');
     expect(events).toContain('"run.cancelled"');
   } finally {
+    await removeProjectFixture(project.root);
+  }
+}, 120_000);
+
+it('admits a native run before its gated trial completes and records one cancelled terminal outcome', async () => {
+  const project = await createProjectFixture();
+  let markTrialEntered!: () => void;
+  let releaseTrial!: () => void;
+  const trialEntered = new Promise<void>((resolvePromise) => { markTrialEntered = resolvePromise; });
+  const trialRelease = new Promise<void>((resolvePromise) => { releaseTrial = resolvePromise; });
+  try {
+    await seedEvalProject(project.root, { marketplace: true, targets: ['claude'] });
+    await writeEvalSuite(project.root, 'gated.eval.ts', {
+      cases: [{ hosts: { claude: { model: 'claude-sonnet-4-5' } }, id: 'gated-review', kind: 'pass' }],
+      name: 'gated-suite',
+    });
+    const evals = new EvalService({
+      native: {
+        claudeRun: async (request) => {
+          if (request.args[0] === '--version') return { exitCode: 0, stderr: '', stdout: '2.1.240 (Claude Code)\n' };
+          if (request.args[0] === 'auth') {
+            return { exitCode: 0, stderr: '', stdout: '{"authMethod":"claude.ai","loggedIn":true,"subscriptionType":"max"}' };
+          }
+          markTrialEntered();
+          await trialRelease;
+          return { exitCode: null, signal: 'SIGTERM', stderr: '', stdout: '', termination: 'aborted' as const };
+        },
+        environment: { PATH: process.env.PATH ?? '/usr/bin' },
+      },
+      projectRoot: project.root,
+      targets: ['claude'],
+    });
+
+    const admission = await evals.start({ harness: 'claude', suites: ['gated-suite'] });
+
+    expect(admission.run.id).toMatch(/^[a-z0-9][a-z0-9._-]*$/u);
+    expect(admission.run.completedAt).toBeUndefined();
+    await trialEntered;
+    const beforeCancellation = await evals.events(admission.run.id, 0);
+    expect(beforeCancellation.events.map((event) => event.kind)).toEqual(['run.started', 'trial.started']);
+
+    const first = evals.cancel(admission.run.id);
+    const second = evals.cancel(admission.run.id);
+    let cancelled = false;
+    void first.then(() => { cancelled = true; });
+    const cancelling = await evals.events(admission.run.id, 0);
+    expect(cancelling.events.map((event) => event.kind)).toEqual(['run.started', 'trial.started', 'run.cancelling']);
+    try {
+      await new Promise<void>((resolvePromise) => setTimeout(resolvePromise, 50));
+      expect(cancelled).toBe(false);
+    } finally {
+      releaseTrial();
+      await expect(Promise.all([first, second])).resolves.toEqual([true, false]);
+      await evals.close();
+    }
+
+    const persisted = await evals.events(admission.run.id, 0);
+    expect(persisted.events.filter((event) => event.kind === 'run.cancelled')).toHaveLength(1);
+    expect(persisted.events.filter((event) => event.kind.startsWith('run.')).map((event) => event.kind))
+      .toEqual(['run.started', 'run.cancelling', 'run.cancelled']);
+    await expect(evals.cancel(admission.run.id)).resolves.toBe(false);
+  } finally {
+    releaseTrial?.();
+    await removeProjectFixture(project.root);
+  }
+}, 120_000);
+
+it('closes by cancelling and draining an admitted native run', async () => {
+  const project = await createProjectFixture();
+  let markTrialEntered!: () => void;
+  let releaseTrial!: () => void;
+  const trialEntered = new Promise<void>((resolvePromise) => { markTrialEntered = resolvePromise; });
+  const trialRelease = new Promise<void>((resolvePromise) => { releaseTrial = resolvePromise; });
+  try {
+    await seedEvalProject(project.root, { marketplace: true, targets: ['claude'] });
+    await writeEvalSuite(project.root, 'close-gated.eval.ts', {
+      cases: [{ hosts: { claude: { model: 'claude-sonnet-4-5' } }, id: 'close-gated-review', kind: 'pass' }],
+      name: 'close-gated-suite',
+    });
+    const evals = new EvalService({
+      native: {
+        claudeRun: async (request) => {
+          if (request.args[0] === '--version') return { exitCode: 0, stderr: '', stdout: '2.1.240 (Claude Code)\n' };
+          if (request.args[0] === 'auth') {
+            return { exitCode: 0, stderr: '', stdout: '{"authMethod":"claude.ai","loggedIn":true,"subscriptionType":"max"}' };
+          }
+          markTrialEntered();
+          await trialRelease;
+          return { exitCode: null, signal: 'SIGTERM', stderr: '', stdout: '', termination: 'aborted' as const };
+        },
+        environment: { PATH: process.env.PATH ?? '/usr/bin' },
+      },
+      projectRoot: project.root,
+      targets: ['claude'],
+    });
+
+    const admission = await evals.start({ harness: 'claude', suites: ['close-gated-suite'] });
+    await trialEntered;
+    const first = evals.close();
+    const second = evals.close();
+    expect(first).toBe(second);
+    releaseTrial();
+    await first;
+
+    const events = await evals.events(admission.run.id, 0);
+    expect(events.events.filter((event) => event.kind === 'run.cancelled')).toHaveLength(1);
+  } finally {
+    releaseTrial?.();
+    await removeProjectFixture(project.root);
+  }
+}, 120_000);
+
+it('keeps the blocking run API cancellable through its admitted background execution', async () => {
+  const project = await createProjectFixture();
+  let markTrialEntered!: () => void;
+  let releaseTrial!: () => void;
+  const trialEntered = new Promise<void>((resolvePromise) => { markTrialEntered = resolvePromise; });
+  const trialRelease = new Promise<void>((resolvePromise) => { releaseTrial = resolvePromise; });
+  try {
+    await seedEvalProject(project.root, { marketplace: true, targets: ['claude'] });
+    await writeEvalSuite(project.root, 'blocking-gated.eval.ts', {
+      cases: [{ hosts: { claude: { model: 'claude-sonnet-4-5' } }, id: 'blocking-gated-review', kind: 'pass' }],
+      name: 'blocking-gated-suite',
+    });
+    const evals = new EvalService({
+      native: {
+        claudeRun: async (request) => {
+          if (request.args[0] === '--version') return { exitCode: 0, stderr: '', stdout: '2.1.240 (Claude Code)\n' };
+          if (request.args[0] === 'auth') {
+            return { exitCode: 0, stderr: '', stdout: '{"authMethod":"claude.ai","loggedIn":true,"subscriptionType":"max"}' };
+          }
+          markTrialEntered();
+          await trialRelease;
+          return { exitCode: null, signal: 'SIGTERM', stderr: '', stdout: '', termination: 'aborted' as const };
+        },
+        environment: { PATH: process.env.PATH ?? '/usr/bin' },
+      },
+      projectRoot: project.root,
+      targets: ['claude'],
+    });
+    const controller = new AbortController();
+    const result = evals.run({ harness: 'claude', signal: controller.signal, suites: ['blocking-gated-suite'] });
+    await trialEntered;
+    controller.abort();
+    releaseTrial();
+
+    const completed = await result;
+    expect(completed.run.summary).toEqual({ cases: 1, fail: 0, inconclusive: 1, pass: 0, trials: 1 });
+    const events = await evals.events(completed.run.id, 0);
+    expect(events.events.map((event) => event.kind)).toEqual([
+      'run.started', 'trial.started', 'run.cancelling', 'trial.completed', 'run.cancelled',
+    ]);
+  } finally {
+    releaseTrial?.();
+    await removeProjectFixture(project.root);
+  }
+}, 120_000);
+
+it('finishes a failed background run so its partial summary remains readable', async () => {
+  const project = await createProjectFixture();
+  let evals: EvalService | undefined;
+  let markTrialEntered!: () => void;
+  let releaseTrial!: () => void;
+  const trialEntered = new Promise<void>((resolvePromise) => { markTrialEntered = resolvePromise; });
+  const trialRelease = new Promise<void>((resolvePromise) => { releaseTrial = resolvePromise; });
+  try {
+    await seedEvalProject(project.root, { marketplace: true, targets: ['claude'] });
+    await writeEvalSuite(project.root, 'failed-run.eval.ts', {
+      cases: [{ hosts: { claude: { model: 'claude-sonnet-4-5' } }, id: 'failed-review', kind: 'pass' }],
+      name: 'failed-run-suite',
+    });
+    const service = new EvalService({
+      native: {
+        claudeRun: async (request) => {
+          if (request.args[0] === '--version') return { exitCode: 0, stderr: '', stdout: '2.1.240 (Claude Code)\n' };
+          if (request.args[0] === 'auth') {
+            return { exitCode: 0, stderr: '', stdout: '{"authMethod":"claude.ai","loggedIn":true,"subscriptionType":"max"}' };
+          }
+          markTrialEntered();
+          await trialRelease;
+          return { exitCode: 0, stderr: '', stdout: '{"type":"result","result":"done"}\n' };
+        },
+        environment: { PATH: process.env.PATH ?? '/usr/bin' },
+      },
+      projectRoot: project.root,
+      targets: ['claude'],
+    });
+    evals = service;
+
+    const admission = await service.start({ harness: 'claude', suites: ['failed-run-suite'] });
+    await trialEntered;
+    await writeFile(join(project.root, '.agent-bundle', 'runs', admission.run.id, 'cases', 'failed-review'), 'blocked\n');
+    releaseTrial();
+
+    let completed: Awaited<ReturnType<typeof service.read>> | undefined;
+    for (let attempt = 0; attempt < 100 && completed === undefined; attempt += 1) {
+      const read = await service.read(admission.run.id);
+      if (read.run.completedAt !== undefined) completed = read;
+      else await new Promise<void>((resolvePromise) => setTimeout(resolvePromise, 10));
+    }
+    if (completed === undefined) throw new Error('The failed run was not finalized.');
+
+    expect(completed.run.summary).toEqual({ cases: 0, fail: 0, inconclusive: 0, pass: 0, trials: 0 });
+    const events = await service.events(admission.run.id, 0);
+    expect(events.events.filter((event) => event.kind === 'run.failed')).toHaveLength(1);
+    await expect(service.close()).rejects.toThrow('Eval service could not close.');
+  } finally {
+    releaseTrial?.();
+    await evals?.close().catch(() => undefined);
     await removeProjectFixture(project.root);
   }
 }, 120_000);
