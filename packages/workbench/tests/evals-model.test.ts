@@ -217,6 +217,38 @@ it('reports the loading, empty, and completed states', () => {
   expect(Object.isFrozen(ran)).toBe(true);
 });
 
+it('derives admitting, active, and terminal run states from durable events', () => {
+  const admitted: EvalRunRecord = {
+    ...runRecord,
+    completedAt: undefined,
+    summary: undefined,
+  };
+  const event = (kind: string) => ({
+    kind,
+    payload: {},
+    schemaVersion: 1 as const,
+    sequence: 1,
+    timestamp: '2026-08-17T00:00:00.000Z',
+  });
+  const status = (events: readonly ReturnType<typeof event>[], admitting = false) => evalRunViewFor({
+    admitting,
+    admittedRun: admitted,
+    events,
+    listing,
+    result: undefined,
+    selectedSuite: 'review-change',
+  }).runStatus;
+
+  expect(status([], true)).toBe('admitting');
+  expect(status([])).toBe('queued');
+  expect(status([event('run.started')])).toBe('queued');
+  expect(status([event('trial.started')])).toBe('running');
+  expect(status([event('run.cancelling')])).toBe('cancelling');
+  expect(status([event('run.completed')])).toBe('completed');
+  expect(status([event('run.failed')])).toBe('failed');
+  expect(status([event('run.cancelled')])).toBe('cancelled');
+});
+
 it('surfaces configuration diagnostics beside the suites they came from', () => {
   const view = evalRunViewFor({
     listing: {

@@ -4,7 +4,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { expect, it } from '@rstest/core';
 
 import type { EvalRunResult, EvalSuiteListing } from '../../agent-bundle/src/dev/eval-service.ts';
-import type { EvalRunRecord, EvalTrialRecord } from '../../agent-bundle/src/eval/run-store.ts';
+import type { EvalRunEvent, EvalRunRecord, EvalTrialRecord } from '../../agent-bundle/src/eval/run-store.ts';
 import { EvalClient } from '../src/evals/eval-client.ts';
 import { ForegroundRouteClient } from '../src/mcp/mcp-route-client.ts';
 import { evalRunSelectionFor, evalRunViewFor } from '../src/evals/evals-model.ts';
@@ -138,6 +138,20 @@ const response = (body: unknown): Response => new Response(JSON.stringify(body),
 
 const client = (fetch: typeof globalThis.fetch): EvalClient => new EvalClient({
   foreground: new ForegroundRouteClient({ fetch }),
+});
+
+const deferred = (): { readonly promise: Promise<void>; readonly resolve: () => void } => {
+  let resolve!: () => void;
+  const promise = new Promise<void>((resolvePromise) => { resolve = resolvePromise; });
+  return { promise, resolve };
+};
+
+const observedEvent = (sequence: number, kind: string): EvalRunEvent => Object.freeze({
+  kind,
+  payload: Object.freeze({}),
+  schemaVersion: 1,
+  sequence,
+  timestamp: `2026-08-17T00:00:0${String(sequence)}.000Z`,
 });
 
 const view = (result_: EvalRunResult | undefined) =>
@@ -335,6 +349,106 @@ it('reconnects a cleanly ended stream from the last cursor but treats stream rej
   })).rejects.toThrow('malformed frame');
 });
 
+it('refreshes results only for newly accepted completion events and serializes a live burst', async () => {
+  const firstRefreshStarted = deferred();
+  const releaseFirstRefresh = deferred();
+  const secondRefreshStarted = deferred();
+  const releaseSecondRefresh = deferred();
+  const unrelatedEventPublished = deferred();
+  const releaseCompletionBurst = deferred();
+  let activeRefreshes = 0;
+  let maximumActiveRefreshes = 0;
+  let refreshes = 0;
+  const signal = new AbortController();
+  const options = {
+    client: {
+      events: async () => ({ cursor: { afterSequence: 1 }, events: [observedEvent(1, 'run.started')] }),
+      stream: ({ onEvent }: Parameters<EvalClient['stream']>[0]) => ({
+        close: () => undefined,
+        done: (async () => {
+          onEvent(observedEvent(2, 'trial.completed'));
+          await firstRefreshStarted.promise;
+          onEvent(observedEvent(3, 'trial.started'));
+          unrelatedEventPublished.resolve();
+          await releaseCompletionBurst.promise;
+          onEvent(observedEvent(4, 'trial.completed'));
+          onEvent(observedEvent(5, 'run.completed'));
+        })(),
+      }),
+    },
+    onEvents: () => undefined,
+    onRefresh: async () => {
+      refreshes += 1;
+      activeRefreshes += 1;
+      maximumActiveRefreshes = Math.max(maximumActiveRefreshes, activeRefreshes);
+      if (refreshes === 1) {
+        firstRefreshStarted.resolve();
+        await releaseFirstRefresh.promise;
+      } else {
+        secondRefreshStarted.resolve();
+        await releaseSecondRefresh.promise;
+      }
+      activeRefreshes -= 1;
+    },
+    runId: runRecord.id,
+    signal: signal.signal,
+    wait: async () => undefined,
+  };
+
+  const observation = observeEvalRunEvents(options);
+  await unrelatedEventPublished.promise;
+  expect(refreshes).toBe(1);
+  releaseCompletionBurst.resolve();
+  await Promise.resolve();
+  expect(refreshes).toBe(1);
+  releaseFirstRefresh.resolve();
+  await secondRefreshStarted.promise;
+  expect(refreshes).toBe(2);
+  expect(maximumActiveRefreshes).toBe(1);
+  releaseSecondRefresh.resolve();
+  await observation;
+  signal.abort();
+});
+
+it('discards a queued result refresh when observation is replaced', async () => {
+  const firstRefreshStarted = deferred();
+  const releaseFirstRefresh = deferred();
+  const eventsPublished = deferred();
+  const signal = new AbortController();
+  let refreshes = 0;
+  const options = {
+    client: {
+      events: async () => ({ cursor: { afterSequence: 1 }, events: [observedEvent(1, 'run.started')] }),
+      stream: ({ onEvent }: Parameters<EvalClient['stream']>[0]) => ({
+        close: () => undefined,
+        done: (async () => {
+          onEvent(observedEvent(2, 'trial.completed'));
+          await firstRefreshStarted.promise;
+          onEvent(observedEvent(3, 'trial.completed'));
+          eventsPublished.resolve();
+        })(),
+      }),
+    },
+    onEvents: () => undefined,
+    onRefresh: async () => {
+      refreshes += 1;
+      firstRefreshStarted.resolve();
+      await releaseFirstRefresh.promise;
+    },
+    runId: runRecord.id,
+    signal: signal.signal,
+    wait: async () => undefined,
+  };
+
+  const observation = observeEvalRunEvents(options);
+  await eventsPublished.promise;
+  signal.abort();
+  releaseFirstRefresh.resolve();
+  await observation;
+  await Promise.resolve();
+  expect(refreshes).toBe(1);
+});
+
 it('lists the cases of the selected suite before any run exists', () => {
   const markup = renderToStaticMarkup(createElement(EvalRunReport, { view: view(undefined) }));
 
@@ -369,6 +483,9 @@ it('renders unsupported configuration diagnostics as a visible alert', () => {
 it('renders the suite, trial, and recorded run controls of a project that declares suites', () => {
   const markup = renderToStaticMarkup(createElement(EvalRunControls, {
     busy: false,
+    harness: 'deterministic',
+    onCancelRun: () => undefined,
+    onHarnessChange: () => undefined,
     onOpenRun: () => undefined,
     onSelectRun: () => undefined,
     onSelectSuite: () => undefined,
@@ -389,9 +506,62 @@ it('renders the suite, trial, and recorded run controls of a project that declar
   expect(markup).toContain('evals/review.eval.ts');
 });
 
+it('renders a closed harness selector, keeps authored model pins read-only, and offers cancellation only for an active run', () => {
+  const admitted: EvalRunRecord = { ...runRecord, completedAt: undefined, summary: undefined };
+  const activeView = evalRunViewFor({
+    admittedRun: admitted,
+    events: [{ kind: 'trial.started', payload: {}, schemaVersion: 1, sequence: 1, timestamp: '2026-08-17T00:00:00.000Z' }],
+    listing,
+    result: undefined,
+    selectedSuite: 'review-change',
+  });
+  const markup = renderToStaticMarkup(createElement(EvalRunControls, {
+    busy: false,
+    harness: 'codex',
+    onCancelRun: () => undefined,
+    onHarnessChange: () => undefined,
+    onOpenRun: () => undefined,
+    onSelectRun: () => undefined,
+    onSelectSuite: () => undefined,
+    onStartRun: () => undefined,
+    onTrialsChange: () => undefined,
+    openableRun: runRecord.id,
+    recorded: [runRecord],
+    runnable: true,
+    trials: '2',
+    view: activeView,
+  }));
+
+  expect(markup).toContain('id="eval-harness"');
+  expect(markup).toContain('Deterministic');
+  expect(markup).toContain('Claude');
+  expect(markup).toContain('Codex');
+  expect(markup).toContain('Authored model pins are read-only');
+  expect(markup).toContain('Cancel run');
+});
+
+it('renders an admitted run state and its durable replay before trial records refresh', () => {
+  const admitted: EvalRunRecord = { ...runRecord, completedAt: undefined, summary: undefined };
+  const activeView = evalRunViewFor({
+    admittedRun: admitted,
+    events: [{ kind: 'run.started', payload: {}, schemaVersion: 1, sequence: 1, timestamp: '2026-08-17T00:00:00.000Z' }],
+    listing,
+    result: undefined,
+    selectedSuite: 'review-change',
+  });
+  const markup = renderToStaticMarkup(createElement(EvalRunReport, { view: activeView }));
+
+  expect(markup).toContain(`Run ${runRecord.id} is queued.`);
+  expect(markup).toContain('Durable event timeline');
+  expect(markup).toContain('run.started');
+});
+
 it('marks an invalid trial count instead of letting the run start', () => {
   const markup = renderToStaticMarkup(createElement(EvalRunControls, {
     busy: false,
+    harness: 'deterministic',
+    onCancelRun: () => undefined,
+    onHarnessChange: () => undefined,
     onOpenRun: () => undefined,
     onSelectRun: () => undefined,
     onSelectSuite: () => undefined,
@@ -418,26 +588,29 @@ it('states that no eval evidence exists before the suites have loaded', () => {
   expect(markup).not.toContain('id="eval-suite"');
 });
 
-it('starts a run from the selected suite and trial count only', async () => {
+it('starts a durable run from the selected suite, trial count, and closed harness only', async () => {
   const bodies: unknown[] = [];
   const evalClient = client(async (input, init) => {
-      const url = String(input);
-      if (url === '/api/project/session') return response({
-        cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef',
-        origin: 'http://127.0.0.1:5173',
-        token: 'foreground-token',
-      });
-      bodies.push(typeof init?.body === 'string' ? JSON.parse(init.body) : undefined);
-      return response({ run: result });
+    const url = String(input);
+    if (url === '/api/project/session') return response({
+      cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef',
+      origin: 'http://127.0.0.1:5173',
+      token: 'foreground-token',
     });
+    bodies.push(typeof init?.body === 'string' ? JSON.parse(init.body) : undefined);
+    return new Response(JSON.stringify({ run: { ...runRecord, completedAt: undefined, summary: undefined } }), {
+      headers: { 'content-type': 'application/json' },
+      status: 202,
+    });
+  });
   const selection = evalRunSelectionFor(view(undefined), '2');
   if (selection === undefined) throw new Error('Expected a runnable selection.');
 
-  const started = await startEvalRun(evalClient, selection);
+  const started = await startEvalRun(evalClient, { ...selection, harness: 'claude' });
 
-  expect(bodies).toEqual([{ suites: ['review-change'], trials: 2 }]);
+  expect(bodies).toEqual([{ harness: 'claude', suites: ['review-change'], trials: 2 }]);
   expect(started.run.id).toBe(runRecord.id);
-  expect(started.trials).toHaveLength(3);
+  expect(started.run.completedAt).toBeUndefined();
 });
 
 it('reopens a recorded run by identifier without restarting it', async () => {

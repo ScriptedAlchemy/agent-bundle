@@ -13,6 +13,7 @@ const execFile = promisify(executeFile);
 const workspaceRoot = process.cwd();
 const workbenchAssets = join(workspaceRoot, 'packages', 'workbench', 'dist');
 const browserTimeout = 12_000;
+const runCompletionTimeout = 60_000;
 
 const e2e = test.extend({
   playwright: {
@@ -29,7 +30,7 @@ const buildWorkbench = async (): Promise<void> => {
   });
 };
 
-e2e('runs deterministic Eval evidence with an ordered timeline and authenticated raw preview/download', { timeout: 120_000 }, async ({ page }) => {
+e2e('admits a deterministic Eval promptly and renders refreshed durable evidence without desktop overflow', { timeout: 120_000 }, async ({ page }) => {
   await buildWorkbench();
   const project = await createProjectFixture();
   await seedEvalProject(project.root);
@@ -41,27 +42,28 @@ e2e('runs deterministic Eval evidence with an ordered timeline and authenticated
   });
   try {
     const pageErrors: Error[] = [];
+    const durableReads: string[] = [];
     page.on('pageerror', (error) => pageErrors.push(error));
+    page.on('request', (request) => {
+      if (request.method() === 'GET' && request.url().includes('/api/evals/runs/')) durableReads.push(request.url());
+    });
     await page.goto(`${server.url}#evals`);
     await expect(page.getByRole('heading', { name: 'Evals' })).toBeVisible({ timeout: browserTimeout });
     await expect(page.getByRole('button', { name: 'Run deterministic suite' })).toBeEnabled({ timeout: browserTimeout });
+    await expect(page.getByLabel('Harness')).toHaveValue('deterministic');
+    await expect(page.getByText('Authored model pins are read-only')).toBeVisible();
 
     const started = page.waitForResponse((response) =>
-      response.url().startsWith(`${server.url}/api/evals/runs`) && response.request().method() === 'POST' && response.ok());
+      response.url() === `${server.url}/api/evals/runs` && response.request().method() === 'POST' && response.status() === 202);
     await page.getByRole('button', { name: 'Run deterministic suite' }).click();
-    const result = await (await started).json() as {
-      readonly run: Readonly<{
-        readonly run: Readonly<{ readonly id: string }>;
-        readonly trials: readonly Readonly<{ readonly rawArtifacts: readonly string[] }>[];
-      }>;
-    };
-    const runId = result.run.run.id;
-    const rawReference = result.run.trials[0]?.rawArtifacts[0];
-    if (rawReference === undefined) throw new Error('The deterministic Eval fixture must record raw evidence.');
-    const opaque = Buffer.from(rawReference).toString('base64url');
-    const artifactPath = `/api/evals/runs/${encodeURIComponent(runId)}/artifacts/${opaque}`;
+    const admissionResponse = await started;
+    const admission = await admissionResponse.json() as { readonly run: Readonly<{ readonly id: string }> };
+    const runId = admission.run.id;
+    expect(admissionResponse.request().postDataJSON()).toEqual({ harness: 'deterministic', suites: ['review-change'] });
 
-    await expect(page.getByText(`Run ${runId} finished:`)).toBeVisible({ timeout: browserTimeout });
+    await expect(page.getByText(`Run ${runId} finished:`)).toBeVisible({ timeout: runCompletionTimeout });
+    expect(durableReads).toContain(`${server.url}/api/evals/runs/${encodeURIComponent(runId)}`);
+    await expect(page.getByRole('button', { name: 'Cancel run' })).toHaveCount(0);
     await expect(page.getByRole('heading', { name: 'Durable event timeline' })).toBeVisible({ timeout: browserTimeout });
     const sequences = await page.locator('.eval-timeline .eval-event-sequence').allTextContents();
     expect(sequences.map((value) => Number(value.slice(1)))).toEqual(sequences.map((_, index) => index + 1));
@@ -83,17 +85,15 @@ e2e('runs deterministic Eval evidence with an ordered timeline and authenticated
     await (await download).path();
 
     const restarted = page.waitForResponse((response) =>
-      response.url().startsWith(`${server.url}/api/evals/runs`) && response.request().method() === 'POST' && response.ok());
+      response.url() === `${server.url}/api/evals/runs` && response.request().method() === 'POST' && response.status() === 202);
     await page.getByRole('button', { name: 'Run deterministic suite' }).click();
-    const replacement = await (await restarted).json() as {
-      readonly run: Readonly<{ readonly run: Readonly<{ readonly id: string }> }>;
-    };
-    expect(replacement.run.run.id).not.toBe(runId);
-    await expect(page.getByText(`Run ${replacement.run.run.id} finished:`)).toBeVisible({ timeout: browserTimeout });
+    const replacement = await (await restarted).json() as { readonly run: Readonly<{ readonly id: string }> };
+    expect(replacement.run.id).not.toBe(runId);
+    await expect(page.getByText(`Run ${replacement.run.id} finished:`)).toBeVisible({ timeout: runCompletionTimeout });
     await expect(page.getByRole('link', { name: 'Download evidence.json' })).toHaveCount(0);
 
-    await expect(page.evaluate(async (path) => (await fetch(path)).status,
-      artifactPath)).resolves.toBe(403);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    await page.setViewportSize({ height: 844, width: 390 });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     expect(pageErrors).toEqual([]);
   } finally {

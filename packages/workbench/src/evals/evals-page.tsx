@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 
-import type { EvalArtifact, EvalClient, EvalRunStart } from './eval-client.ts';
+import type { EvalArtifact, EvalClient, EvalHarness, EvalRunAdmission, EvalRunStart } from './eval-client.ts';
 import type { EvalRunEventsReplay, EvalRunResult, EvalSuiteListing } from '../../../agent-bundle/src/dev/eval-service.ts';
 import type { EvalRunEvent, EvalRunRecord } from '../../../agent-bundle/src/eval/run-store.ts';
 import {
@@ -16,6 +16,9 @@ import './evals-page.css';
 
 export interface EvalRunControlsProps {
   readonly busy: boolean;
+  readonly harness: EvalHarness;
+  readonly onCancelRun: () => void;
+  readonly onHarnessChange: (harness: EvalHarness) => void;
   readonly onOpenRun: () => void;
   readonly onSelectRun: (runId: string) => void;
   readonly onSelectSuite: (suite: string) => void;
@@ -63,7 +66,7 @@ export const startEvalRun = async (
   client: EvalClient,
   selection: EvalRunStart,
   signal?: AbortSignal,
-): Promise<EvalRunResult> => client.start(selection, signal);
+): Promise<EvalRunAdmission> => client.start(selection, signal);
 
 /** Reopens a recorded run exactly as it was persisted, without running anything again. */
 export const openEvalRun = async (client: EvalClient, runId: string, signal?: AbortSignal): Promise<EvalRunResult> =>
@@ -109,7 +112,7 @@ const CaseTable = ({ rows }: { readonly rows: readonly EvalCaseRow[] }) => <sect
   <h2>Cases</h2>
   {rows.length === 0
     ? <p className="empty-row">This suite declares no cases.</p>
-    : <table className="eval-cases">
+    : <div className="eval-cases-wrap"><table className="eval-cases">
       <thead>
         <tr><th>Case</th><th>Invocation</th><th>Hosts</th><th>Assertions</th><th>Trials</th><th>Prompt</th></tr>
       </thead>
@@ -123,7 +126,7 @@ const CaseTable = ({ rows }: { readonly rows: readonly EvalCaseRow[] }) => <sect
           <td>{row.prompt}</td>
         </tr>)}
       </tbody>
-    </table>}
+    </table></div>}
 </section>;
 
 const maximumPreviewBytes = 256 * 1024;
@@ -291,6 +294,9 @@ const TrialCard = ({ client, row, runId }: {
 /** Everything a browser may choose: an authored suite, a trial count, and a recorded run to reopen. */
 export const EvalRunControls = ({
   busy,
+  harness,
+  onCancelRun,
+  onHarnessChange,
   onOpenRun,
   onSelectRun,
   onSelectSuite,
@@ -301,7 +307,9 @@ export const EvalRunControls = ({
   runnable,
   trials,
   view,
-}: EvalRunControlsProps) => <section aria-label="Deterministic eval run" className="eval-controls">
+}: EvalRunControlsProps) => {
+  const active = view.runStatus === 'queued' || view.runStatus === 'running' || view.runStatus === 'cancelling';
+  return <section aria-label="Eval run" className="eval-controls">
   <label htmlFor="eval-suite">Suite</label>
   <select
     disabled={busy || view.suites.length === 0}
@@ -311,6 +319,18 @@ export const EvalRunControls = ({
   >
     {view.suites.map((option) => <option key={option.key} value={option.key}>{option.label}</option>)}
   </select>
+  <label htmlFor="eval-harness">Harness</label>
+  <select
+    disabled={busy}
+    id="eval-harness"
+    onChange={(event) => onHarnessChange(event.currentTarget.value as EvalHarness)}
+    value={harness}
+  >
+    <option value="deterministic">Deterministic</option>
+    <option value="claude">Claude</option>
+    <option value="codex">Codex</option>
+  </select>
+  <p className="eval-model-pin">Authored model pins are read-only and shown with recorded trials.</p>
   <label htmlFor="eval-trials">Trials (authored count when empty)</label>
   <input
     aria-describedby={runnable ? undefined : 'eval-trials-error'}
@@ -334,10 +354,14 @@ export const EvalRunControls = ({
     </select>
   </>}
   <div className="eval-actions">
-    <button disabled={busy || !runnable} onClick={onStartRun} type="button">Run deterministic suite</button>
+    <button disabled={busy || !runnable} onClick={onStartRun} type="button">Run {harness} suite</button>
     <button disabled={busy || openableRun === undefined} onClick={onOpenRun} type="button">Open recorded run</button>
+    {active ? <button disabled={busy || view.runStatus === 'cancelling'} onClick={onCancelRun} type="button">
+      {view.runStatus === 'cancelling' ? 'Cancelling…' : 'Cancel run'}
+    </button> : undefined}
   </div>
 </section>;
+};
 
 const EventTimeline = ({ discardedThroughSequence, events }: {
   readonly discardedThroughSequence: number | undefined;
@@ -387,7 +411,7 @@ export const EvalRunReport = ({ client, view }: EvalRunReportProps) => <div clas
       {view.trials.map((row) => <TrialCard client={client} key={`${row.caseId}/${row.id}`} row={row} runId={view.runId} />)}
     </ul>
   </section>}
-  {view.state !== 'ran' ? undefined : <EventTimeline discardedThroughSequence={view.discardedThroughSequence} events={view.events} />}
+  {view.runId === undefined ? undefined : <EventTimeline discardedThroughSequence={view.discardedThroughSequence} events={view.events} />}
 </div>;
 
 const terminalEvent = (event: EvalRunEvent): boolean =>
@@ -417,6 +441,7 @@ interface EvalObservationClient {
 export interface EvalRunObserverOptions {
   readonly client: EvalObservationClient;
   readonly onEvents: (events: readonly EvalRunEvent[], discardedThroughSequence: number | undefined) => void;
+  readonly onRefresh?: () => Promise<void>;
   readonly runId: string;
   readonly signal: AbortSignal;
   readonly wait?: (milliseconds: number, signal: AbortSignal) => Promise<void>;
@@ -426,6 +451,7 @@ export interface EvalRunObserverOptions {
 export const observeEvalRunEvents = async ({
   client,
   onEvents,
+  onRefresh,
   runId,
   signal,
   wait = waitForReconnect,
@@ -433,19 +459,41 @@ export const observeEvalRunEvents = async ({
   let discardedThroughSequence: number | undefined;
   let events: readonly EvalRunEvent[] = [];
   let latestSequence = 0;
+  let refreshRequested = false;
+  let refreshRunning = false;
+  const requestRefresh = (): void => {
+    if (onRefresh === undefined || signal.aborted) return;
+    refreshRequested = true;
+    if (refreshRunning) return;
+    refreshRunning = true;
+    void (async () => {
+      try {
+        while (refreshRequested && !signal.aborted) {
+          refreshRequested = false;
+          await onRefresh();
+        }
+      } finally {
+        refreshRunning = false;
+        if (refreshRequested && !signal.aborted) requestRefresh();
+      }
+    })().catch(() => undefined);
+  };
   const accept = (incoming: readonly EvalRunEvent[]): boolean => {
     if (signal.aborted) return false;
+    const knownSequences = new Set(events.map((event) => event.sequence));
     const merged = mergeEvalEvents(events, incoming);
     if (merged.conflictSequence !== undefined || merged.discontinuitySequence !== undefined) {
       throw new Error('Persisted eval events could not be read.');
     }
+    const accepted = incoming.filter((event) => !knownSequences.has(event.sequence));
     events = merged.events;
     latestSequence = Math.max(latestSequence, merged.cursor);
     if (merged.discardedThroughSequence !== undefined) {
       discardedThroughSequence = Math.max(discardedThroughSequence ?? 0, merged.discardedThroughSequence);
     }
     onEvents(events, discardedThroughSequence);
-    return incoming.some(terminalEvent);
+    if (accepted.some((event) => event.kind === 'trial.completed' || terminalEvent(event))) requestRefresh();
+    return accepted.some(terminalEvent);
   };
   while (!signal.aborted) {
     const replay = await client.events(runId, latestSequence, signal);
@@ -472,8 +520,13 @@ export const observeEvalRunEvents = async ({
 
 /** Runs authored deterministic suites and shows the evidence every trial recorded. */
 export const EvalsPage = ({ client }: EvalsPageProps) => {
+  const [admittedRun, setAdmittedRun] = useState<EvalRunRecord>();
+  const [admitting, setAdmitting] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
+  const [cancellationNote, setCancellationNote] = useState<string>();
   const [error, setError] = useState<string>();
+  const [harness, setHarness] = useState<EvalHarness>('deterministic');
   const [listing, setListing] = useState<EvalSuiteListing>();
   const [recorded, setRecorded] = useState<readonly EvalRunRecord[]>([]);
   const [result, setResult] = useState<EvalRunResult>();
@@ -486,14 +539,17 @@ export const EvalsPage = ({ client }: EvalsPageProps) => {
   const [selectedSuite, setSelectedSuite] = useState<string>();
   const [trials, setTrials] = useState('');
   const lifecycle = useRef<EvalsRequestLifecycle>(new EvalsRequestLifecycle()).current;
+  const observedRunId = admittedRun?.id ?? result?.run.id;
   const discardedThroughSequence = discardedSequenceForActiveEvalRun(
-    result?.run.id,
+    observedRunId,
     eventTimeline.runId,
     eventTimeline.discardedThroughSequence,
   );
   const view = evalRunViewFor({
+    admittedRun,
+    admitting,
     discardedThroughSequence,
-    events: eventsForActiveEvalRun(result?.run.id, eventTimeline.runId, eventTimeline.events),
+    events: eventsForActiveEvalRun(observedRunId, eventTimeline.runId, eventTimeline.events),
     listing,
     result,
     selectedSuite,
@@ -530,7 +586,7 @@ export const EvalsPage = ({ client }: EvalsPageProps) => {
   }, [client, lifecycle]);
 
   useEffect(() => {
-    const runId = result?.run.id;
+    const runId = observedRunId;
     if (runId === undefined) {
       setEventTimeline(Object.freeze({
         discardedThroughSequence: undefined,
@@ -555,43 +611,126 @@ export const EvalsPage = ({ client }: EvalsPageProps) => {
           runId,
         }));
       },
+      onRefresh: async () => {
+        try {
+          const nextResult = await client.read(runId, controller.signal);
+          if (controller.signal.aborted) return;
+          if (nextResult.run.id !== runId) {
+            setError('Recorded eval results did not match the active run.');
+            return;
+          }
+          setResult(nextResult);
+          setAdmittedRun(nextResult.run);
+        } catch {
+          if (!controller.signal.aborted) setError('Recorded eval results could not be refreshed.');
+        }
+      },
       runId,
       signal: controller.signal,
     }).catch(() => {
-      if (!controller.signal.aborted) setError('Persisted eval events could not be read.');
+      if (!controller.signal.aborted) setError('Live eval observation stopped because persisted events could not be read.');
     });
     return () => {
       controller.abort();
     };
-  }, [client, result?.run.id]);
+  }, [client, observedRunId]);
 
-  const load = async (action: (signal: AbortSignal) => Promise<EvalRunResult>): Promise<void> => {
-    const request = lifecycle.begin('action');
+  const refreshRuns = async (action: EvalsRequest): Promise<void> => {
+    const refresh = lifecycle.begin('runs');
+    try {
+      const next = await client.runs(refresh.signal);
+      if (lifecycle.isCurrent(action) && lifecycle.isCurrent(refresh)) setRecorded(next);
+    } catch (reason) {
+      if (lifecycle.isCurrent(action) && lifecycle.isCurrent(refresh)) setError(errorMessage(reason));
+    } finally {
+      if (lifecycle.isCurrent(refresh)) lifecycle.complete(refresh);
+    }
+  };
+
+  const start = async (): Promise<void> => {
+    if (selection === undefined) return;
+    const action = lifecycle.begin('action');
     setBusy(true);
+    setAdmitting(true);
+    setCancelling(false);
+    setError(undefined);
+    setCancellationNote(undefined);
+    try {
+      const admission = await startEvalRun(client, { ...selection, harness }, action.signal);
+      if (!lifecycle.isCurrent(action)) return;
+      setResult(undefined);
+      setAdmittedRun(admission.run);
+      setSelectedRun(admission.run.id);
+      await refreshRuns(action);
+    } catch (reason) {
+      if (lifecycle.isCurrent(action)) setError(errorMessage(reason));
+    } finally {
+      if (lifecycle.isCurrent(action)) {
+        lifecycle.complete(action);
+        setAdmitting(false);
+        setBusy(false);
+      }
+    }
+  };
+
+  const open = async (): Promise<void> => {
+    if (openable === undefined) return;
+    const runId = openable;
+    const action = lifecycle.begin('action');
+    setBusy(true);
+    setAdmitting(false);
+    setCancelling(false);
+    setError(undefined);
+    setCancellationNote(undefined);
+    const recordedRun = recorded.find((entry) => entry.id === runId);
+    if (recordedRun !== undefined) {
+      setResult(undefined);
+      setAdmittedRun(recordedRun);
+    }
+    try {
+      const next = await openEvalRun(client, runId, action.signal);
+      if (!lifecycle.isCurrent(action)) return;
+      if (next.run.id !== runId) throw new Error('Recorded eval results did not match the selected run.');
+      setResult(next);
+      setAdmittedRun(next.run);
+      await refreshRuns(action);
+    } catch (reason) {
+      if (lifecycle.isCurrent(action)) setError(errorMessage(reason));
+    } finally {
+      if (lifecycle.isCurrent(action)) {
+        lifecycle.complete(action);
+        setBusy(false);
+      }
+    }
+  };
+
+  const cancel = async (): Promise<void> => {
+    const runId = view.runId;
+    if (runId === undefined || view.runStatus !== 'queued' && view.runStatus !== 'running') return;
+    const action = lifecycle.begin('action');
+    setBusy(true);
+    setAdmitting(false);
+    setCancelling(true);
+    setCancellationNote(undefined);
     setError(undefined);
     try {
-      const next = await action(request.signal);
-      if (!lifecycle.isCurrent(request)) return;
+      const response = await client.cancel(runId, action.signal);
+      if (!lifecycle.isCurrent(action)) return;
+      setCancellationNote(response.cancelled
+        ? 'Cancellation was recorded for this run.'
+        : 'This run had already reached a terminal state; no cancellation was made.');
+      const next = await client.read(runId, action.signal);
+      if (!lifecycle.isCurrent(action)) return;
+      if (next.run.id !== runId) throw new Error('Recorded eval results did not match the cancelled run.');
       setResult(next);
-      // A failed listing refresh must not discard the run the user just saw.
-      const refresh = lifecycle.begin('runs');
-      try {
-        const recorded = await client.runs(refresh.signal);
-        if (lifecycle.isCurrent(request) && lifecycle.isCurrent(refresh)) {
-          lifecycle.complete(refresh);
-          setRecorded(recorded);
-        }
-      } catch (reason) {
-        if (lifecycle.isCurrent(request) && lifecycle.isCurrent(refresh)) {
-          lifecycle.complete(refresh);
-          setError(errorMessage(reason));
-        }
-      }
+      setAdmittedRun(next.run);
+      await refreshRuns(action);
     } catch (reason) {
-      if (lifecycle.isCurrent(request)) setError(errorMessage(reason));
+      if (lifecycle.isCurrent(action)) setError(errorMessage(reason));
     } finally {
-      if (lifecycle.isCurrent(request)) {
-        lifecycle.complete(request);
+      if (lifecycle.isCurrent(action)) {
+        lifecycle.complete(action);
+        setCancelling(false);
         setBusy(false);
       }
     }
@@ -601,19 +740,23 @@ export const EvalsPage = ({ client }: EvalsPageProps) => {
     <div className="page-heading evals-page-heading">
       <div>
         <h1>Evals</h1>
-        <p>Authored deterministic suites, their cases, and the evidence every trial recorded.</p>
+        <p>Authored suites, their cases, and the evidence every trial recorded.</p>
       </div>
     </div>
     {error === undefined ? undefined : <p className="request-error" role="alert">{error}</p>}
+    {cancellationNote === undefined ? undefined : <p className="eval-cancel-note" role="status">{cancellationNote}</p>}
     {view.state === 'empty' || view.state === 'loading'
       ? <p className="empty-row" role="status">{view.summary}</p>
       : <>
         <EvalRunControls
           busy={busy}
-          onOpenRun={() => { if (openable !== undefined) void load((signal) => openEvalRun(client, openable, signal)); }}
+          harness={harness}
+          onCancelRun={() => { void cancel(); }}
+          onHarnessChange={setHarness}
+          onOpenRun={() => { void open(); }}
           onSelectRun={setSelectedRun}
           onSelectSuite={setSelectedSuite}
-          onStartRun={() => { if (selection !== undefined) void load((signal) => startEvalRun(client, selection, signal)); }}
+          onStartRun={() => { void start(); }}
           onTrialsChange={setTrials}
           openableRun={openable}
           recorded={recorded}
