@@ -254,7 +254,7 @@ it('delegates every fixed tool through the official MCP transport with stable st
       { runs: [{ id: 'run-a' }], suites: { diagnostics: [], suites: [{ name: 'suite-a' }] } },
       { run: { id: 'run-b' } },
       { run: { id: 'run-a' } },
-      { diagnostics: { diagnostics: [{ code: 'AB1000', message: 'Known diagnostic', severity: 'warning' }] } },
+      { diagnostics: [{ code: 'AB1000', message: 'Known diagnostic', severity: 'warning' }] },
     ]);
     expect(calls).toEqual(expect.arrayContaining([
       ['skills.generatedTree', 'epoch-a', 'portable'],
@@ -518,6 +518,151 @@ it('projects project and epoch summaries without recursively exposing filesystem
       expect(wire).not.toContain('/private/agent-api-secret');
       expect(wire).not.toContain('manifestPath');
       expect(wire).not.toContain('sourcePath');
+    }
+  } finally {
+    await client.close();
+    await started.close();
+  }
+});
+
+it('projects status, epoch, and diagnostic DTOs without leaking embedded paths or secret fields', async () => {
+  const sensitive = [
+    '/private/agent-api-secret/manifest.json',
+    'C:\\private\\agent-api-secret\\manifest.json',
+    '\\\\server\\share\\agent-api-secret\\manifest.json',
+    'file:///private/agent-api-secret/manifest.json',
+    'diagnostic-secret',
+    'epoch-secret',
+  ];
+  const unsafeDiagnostic = (message: string) => ({
+    code: 'AB9000',
+    generatedPath: '/private/agent-api-secret/generated.ts',
+    message,
+    recovery: 'Repair file:///private/agent-api-secret/config.ts; secret: diagnostic-secret',
+    secret: 'diagnostic-secret',
+    severity: 'error',
+    sourcePath: '/private/agent-api-secret/source.ts',
+    target: 'portable',
+  });
+  const unsafeStatus = {
+    artifact: {
+      activeEpoch: {
+        configDigest: '/private/agent-api-secret/config-digest',
+        createdAt: '2026-08-18T00:00:00.000Z',
+        diagnostics: { errors: 0, infos: 0, warnings: 0 },
+        id: 'epoch-a',
+        manifestPath: '/private/agent-api-secret/manifest.json',
+        modelDigest: 'C:\\private\\agent-api-secret\\model-digest',
+        projectRevision: 'file:///private/agent-api-secret/revision',
+        secret: 'epoch-secret',
+        targetDigests: { portable: '\\\\server\\share\\agent-api-secret\\target-digest' },
+      },
+      currentSourceRevision: 'file:///private/agent-api-secret/current-revision',
+      state: 'active',
+    },
+    build: {
+      lastAttempt: {
+        completedAt: '2026-08-18T00:01:00.000Z',
+        diagnostics: [unsafeDiagnostic('Could not read /private/agent-api-secret/build.ts; secret: diagnostic-secret')],
+        id: 'attempt-a',
+        outcome: 'failed',
+        sourceRevision: 'C:\\private\\agent-api-secret\\source-revision',
+        startedAt: '2026-08-18T00:00:00.000Z',
+      },
+      state: 'failed',
+    },
+    source: {
+      diagnostics: [unsafeDiagnostic('Could not read \\\\server\\share\\agent-api-secret\\source.ts or file:///private/agent-api-secret/source.ts; secret: diagnostic-secret')],
+      revision: 'file:///private/agent-api-secret/source-revision',
+      state: 'invalid',
+    },
+  } as unknown as ProjectStatus;
+  const started = await startApi({
+    api: createApi({
+      coordinator: { status: () => unsafeStatus },
+      diagnostics: {
+        list: async () => ({
+          diagnostics: [unsafeDiagnostic('Could not read C:\\private\\agent-api-secret\\diagnostic.ts; secret: diagnostic-secret')],
+          secret: 'diagnostic-secret',
+        }),
+      },
+      epochs: {
+        acquireActiveEpochReference: async () => ({ close: async () => undefined, epoch: { id: 'epoch-a' }, root: '/private/agent-api-secret' }),
+        acquireEpochReference: async (epochId) => ({ close: async () => undefined, epoch: { id: epochId }, root: '/private/agent-api-secret' }),
+        listEpochs: async () => [{
+          configDigest: '/private/agent-api-secret/config-digest',
+          createdAt: '2026-08-18T00:00:00.000Z',
+          diagnostics: { errors: 0, infos: 0, warnings: 0 },
+          id: 'epoch-a',
+          modelDigest: 'C:\\private\\agent-api-secret\\model-digest',
+          projectRevision: 'file:///private/agent-api-secret/revision',
+          secret: 'epoch-secret',
+          targetDigests: { portable: '\\\\server\\share\\agent-api-secret\\target-digest' },
+        }],
+      },
+    }),
+  });
+  const client = new Client({ name: 'agent-api-wire-dto-client', version: '1.0.0' });
+  const transport = new StreamableHTTPClientTransport(new URL(`${started.url}/mcp`), {
+    authProvider: { token: async () => 'test-agent-api-token' },
+  });
+  try {
+    await client.connect(transport);
+    const results = await Promise.all([
+      client.callTool({ name: 'project_status' }),
+      client.callTool({ name: 'artifacts_list' }),
+      client.callTool({ name: 'diagnostics_list' }),
+    ]);
+    expect(results[0].structuredContent).toMatchObject({ status: { artifact: { activeEpoch: { id: 'epoch-a' } } } });
+    expect(results[1].structuredContent).toEqual({ epochs: [{ createdAt: '2026-08-18T00:00:00.000Z', diagnostics: { errors: 0, infos: 0, warnings: 0 }, id: 'epoch-a' }] });
+    expect(results[2].structuredContent).toMatchObject({
+      diagnostics: [{ code: 'AB9000', recovery: expect.any(String), severity: 'error', target: 'portable' }],
+    });
+    for (const result of results) {
+      const wire = stableJson(result.structuredContent as never);
+      for (const value of sensitive) expect(wire).not.toContain(value);
+      expect(wire).not.toContain('manifestPath');
+      expect(wire).not.toContain('generatedPath');
+      expect(wire).not.toContain('sourcePath');
+      expect(wire).not.toContain('"secret"');
+    }
+  } finally {
+    await client.close();
+    await started.close();
+  }
+});
+
+it('falls back to path-free DTOs when projection receives a hostile proxy', async () => {
+  const secret = '/private/agent-api-secret/proxy.txt';
+  const hostile = new Proxy({}, {
+    getOwnPropertyDescriptor: () => { throw new Error(secret); },
+    ownKeys: () => { throw new Error(secret); },
+  });
+  const started = await startApi({
+    api: createApi({
+      coordinator: { status: () => hostile as ProjectStatus },
+      diagnostics: { list: async () => hostile },
+      epochs: {
+        acquireActiveEpochReference: async () => ({ close: async () => undefined, epoch: { id: 'epoch-a' }, root: '/private/agent-api-secret' }),
+        acquireEpochReference: async (epochId) => ({ close: async () => undefined, epoch: { id: epochId }, root: '/private/agent-api-secret' }),
+        listEpochs: async () => hostile as unknown as readonly { readonly id: string }[],
+      },
+    }),
+  });
+  const client = new Client({ name: 'agent-api-hostile-wire-dto-client', version: '1.0.0' });
+  const transport = new StreamableHTTPClientTransport(new URL(`${started.url}/mcp`), {
+    authProvider: { token: async () => 'test-agent-api-token' },
+  });
+  try {
+    await client.connect(transport);
+    const results = await Promise.all([
+      client.callTool({ name: 'project_status' }),
+      client.callTool({ name: 'artifacts_list' }),
+      client.callTool({ name: 'diagnostics_list' }),
+    ]);
+    for (const result of results) {
+      expect(result.isError).not.toBe(true);
+      expect(stableJson(result.structuredContent as never)).not.toContain(secret);
     }
   } finally {
     await client.close();

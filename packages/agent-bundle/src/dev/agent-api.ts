@@ -263,44 +263,236 @@ const safeErrorCode = (error: unknown): string => {
     : 'AGENT_API_OPERATION_FAILED';
 };
 
-const sensitiveWireKey = (key: string): boolean => {
-  const normalized = key.toLowerCase();
-  return normalized === 'root' || normalized === 'cwd' || normalized === 'env' ||
-    normalized === 'command' || normalized.includes('path');
+type AgentApiJsonRecord = Readonly<Record<string, unknown>>;
+
+interface AgentApiDiagnostic {
+  readonly code: string;
+  readonly message: string;
+  readonly recovery?: string;
+  readonly severity: 'error' | 'info' | 'warning';
+  readonly target?: string;
+}
+
+interface AgentApiProjectStatus {
+  readonly artifact: unknown;
+  readonly build: unknown;
+  readonly source: Readonly<{ readonly diagnostics: readonly AgentApiDiagnostic[]; readonly revision?: string; readonly state: string }>;
+}
+
+const maximumDiagnosticTextLength = 4_096;
+const safeDiagnosticCodePattern = /^[a-z0-9][a-z0-9._-]{0,127}$/iu;
+const safeDigestPattern = /^[a-f0-9]{64}$/iu;
+const safeEpochIdPattern = /^[a-z0-9][a-z0-9._-]{0,127}$/iu;
+const safeTargetPattern = /^[a-z0-9][a-z0-9._-]{0,127}$/iu;
+const safeTimestampPattern = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u;
+const pathTextPattern = /file:\/\/\/[^\s"'`<>()\],;]+|\\\\[^\s\\/"'`<>()\],;]+\\[^\s"'`<>()\],;]+(?:\\[^\s"'`<>()\],;]+)*|[A-Za-z]:[\\/][^\s"'`<>()\],;]+|(?<![A-Za-z0-9/])\/(?!\/)[^\s"'`<>()\],;]+(?:\/[^\s"'`<>()\],;]+)*/gu;
+const secretTextPattern = /\b(?:api[_ -]?key|authorization|password|secret|token)\s*(?:=|:)\s*[^,;\s]+/giu;
+
+const snapshotValue = (value: unknown): unknown => {
+  try {
+    return snapshotStrictJsonValue(value);
+  } catch {
+    return undefined;
+  }
 };
 
-const absolutePathValue = (value: string): boolean =>
-  value.startsWith('/') || /^[a-z]:[\\/]/iu.test(value);
-
-/** Removes filesystem identities from nested status/list payloads before JSON snapshotting. */
-const wireSafeProjection = (value: unknown): unknown => {
-  const snapshot = snapshotStrictJsonValue(value);
-  const project = (candidate: typeof snapshot): typeof snapshot => {
-    if (typeof candidate === 'string') return absolutePathValue(candidate) ? '[redacted]' : candidate;
-    if (candidate === null || typeof candidate !== 'object') return candidate;
-    if (Array.isArray(candidate)) return Object.freeze(candidate.map(project));
-    return Object.freeze(Object.fromEntries(Object.entries(candidate)
-      .filter(([key]) => !sensitiveWireKey(key))
-      .map(([key, nested]) => [key, project(nested)])));
-  };
-  return project(snapshot);
+const snapshotRecord = (value: unknown): AgentApiJsonRecord | undefined => {
+  const snapshot = snapshotValue(value);
+  return typeof snapshot === 'object' && snapshot !== null && !Array.isArray(snapshot)
+    ? snapshot as AgentApiJsonRecord
+    : undefined;
 };
 
-const epochWireIdentity = (epoch: AgentApiEpochSummary): AgentApiEpochSummary => Object.freeze({
-  ...(typeof epoch.configDigest === 'string' ? { configDigest: epoch.configDigest } : {}),
-  ...(typeof epoch.createdAt === 'string' ? { createdAt: epoch.createdAt } : {}),
-  ...(epoch.diagnostics === undefined ? {} : { diagnostics: Object.freeze({
-    errors: epoch.diagnostics.errors,
-    infos: epoch.diagnostics.infos,
-    warnings: epoch.diagnostics.warnings,
-  }) }),
-  id: epoch.id,
-  ...(typeof epoch.modelDigest === 'string' ? { modelDigest: epoch.modelDigest } : {}),
-  ...(typeof epoch.projectRevision === 'string' ? { projectRevision: epoch.projectRevision } : {}),
-  ...(epoch.targetDigests === undefined ? {} : { targetDigests: Object.freeze(Object.fromEntries(
-    Object.entries(epoch.targetDigests).filter(([, digest]) => typeof digest === 'string'),
-  )) }),
-});
+const snapshotArray = (value: unknown): readonly unknown[] | undefined => {
+  const snapshot = snapshotValue(value);
+  return Array.isArray(snapshot) ? snapshot : undefined;
+};
+
+const safeDigest = (value: unknown): string | undefined =>
+  typeof value === 'string' && safeDigestPattern.test(value) ? value : undefined;
+
+const safeDiagnosticCode = (value: unknown): string | undefined =>
+  typeof value === 'string' && safeDiagnosticCodePattern.test(value) ? value : undefined;
+
+const safeEpochId = (value: unknown): string | undefined =>
+  typeof value === 'string' && safeEpochIdPattern.test(value) ? value : undefined;
+
+const safeTarget = (value: unknown): string | undefined =>
+  typeof value === 'string' && safeTargetPattern.test(value) ? value : undefined;
+
+const safeTimestamp = (value: unknown): string | undefined =>
+  typeof value === 'string' && safeTimestampPattern.test(value) && Number.isFinite(Date.parse(value))
+    ? value
+    : undefined;
+
+const safeDiagnosticText = (value: unknown, fallback: string): string => {
+  if (typeof value !== 'string' || value.length > maximumDiagnosticTextLength) return fallback;
+  return value.replace(pathTextPattern, '[path redacted]').replace(secretTextPattern, '[secret redacted]');
+};
+
+/** Dedicated, detached DTO: only diagnostic fields that can be safely named reach the wire. */
+const diagnosticWireDto = (value: unknown): AgentApiDiagnostic | undefined => {
+  const diagnostic = snapshotRecord(value);
+  if (diagnostic === undefined) return undefined;
+  const code = safeDiagnosticCode(diagnostic.code);
+  const severity = diagnostic.severity;
+  if (code === undefined || (severity !== 'error' && severity !== 'info' && severity !== 'warning')) return undefined;
+  const recovery = typeof diagnostic.recovery === 'string'
+    ? safeDiagnosticText(diagnostic.recovery, 'Recovery guidance is unavailable.')
+    : undefined;
+  const target = safeTarget(diagnostic.target);
+  return Object.freeze({
+    code,
+    message: safeDiagnosticText(diagnostic.message, 'Diagnostic details are unavailable.'),
+    ...(recovery === undefined ? {} : { recovery }),
+    severity,
+    ...(target === undefined ? {} : { target }),
+  });
+};
+
+const diagnosticWireDtos = (value: unknown): readonly AgentApiDiagnostic[] => Object.freeze(
+  (snapshotArray(value) ?? []).flatMap((diagnostic) => {
+    const projected = diagnosticWireDto(diagnostic);
+    return projected === undefined ? [] : [projected];
+  }),
+);
+
+const diagnosticSummaryWireDto = (value: unknown): AgentApiEpochSummary['diagnostics'] | undefined => {
+  const summary = snapshotRecord(value);
+  if (summary === undefined) return undefined;
+  const errors = summary.errors;
+  const infos = summary.infos;
+  const warnings = summary.warnings;
+  if (![errors, infos, warnings].every((count) => Number.isSafeInteger(count) && (count as number) >= 0)) return undefined;
+  return Object.freeze({ errors: errors as number, infos: infos as number, warnings: warnings as number });
+};
+
+const targetDigestsWireDto = (value: unknown): Readonly<Record<string, string>> | undefined => {
+  const targetDigests = snapshotRecord(value);
+  if (targetDigests === undefined) return undefined;
+  const entries = Object.entries(targetDigests);
+  if (entries.length === 0 || entries.some(([target, digest]) => safeTarget(target) === undefined || safeDigest(digest) === undefined)) {
+    return undefined;
+  }
+  return Object.freeze(Object.fromEntries(entries.map(([target, digest]) => [target, digest as string])));
+};
+
+/** Explicit safe epoch identity; manifest/root/source fields are intentionally not represented. */
+const epochWireIdentity = (value: unknown): AgentApiEpochSummary | undefined => {
+  const epoch = snapshotRecord(value);
+  if (epoch === undefined) return undefined;
+  const id = safeEpochId(epoch.id);
+  if (id === undefined) return undefined;
+  const configDigest = safeDigest(epoch.configDigest);
+  const createdAt = safeTimestamp(epoch.createdAt);
+  const diagnostics = diagnosticSummaryWireDto(epoch.diagnostics);
+  const modelDigest = safeDigest(epoch.modelDigest);
+  const projectRevision = safeDigest(epoch.projectRevision);
+  const targetDigests = targetDigestsWireDto(epoch.targetDigests);
+  return Object.freeze({
+    ...(configDigest === undefined ? {} : { configDigest }),
+    ...(createdAt === undefined ? {} : { createdAt }),
+    ...(diagnostics === undefined ? {} : { diagnostics }),
+    id,
+    ...(modelDigest === undefined ? {} : { modelDigest }),
+    ...(projectRevision === undefined ? {} : { projectRevision }),
+    ...(targetDigests === undefined ? {} : { targetDigests }),
+  });
+};
+
+const epochWireIdentities = (value: unknown): readonly AgentApiEpochSummary[] => Object.freeze(
+  (snapshotArray(value) ?? []).flatMap((epoch) => {
+    const projected = epochWireIdentity(epoch);
+    return projected === undefined ? [] : [projected];
+  }),
+);
+
+const sourceWireDto = (value: unknown): AgentApiProjectStatus['source'] => {
+  const source = snapshotRecord(value);
+  const state = source?.state;
+  const revision = safeDigest(source?.revision);
+  return Object.freeze({
+    diagnostics: diagnosticWireDtos(source?.diagnostics),
+    ...(revision === undefined ? {} : { revision }),
+    state: state === 'invalid' || state === 'ready' || state === 'unknown' ? state : 'unknown',
+  });
+};
+
+const buildAttemptWireDto = (value: unknown): unknown | undefined => {
+  const attempt = snapshotRecord(value);
+  if (attempt === undefined) return undefined;
+  const outcome = attempt.outcome;
+  const id = safeEpochId(attempt.id);
+  const sourceRevision = safeDigest(attempt.sourceRevision);
+  const startedAt = safeTimestamp(attempt.startedAt);
+  if (id === undefined || sourceRevision === undefined || startedAt === undefined ||
+    (outcome !== 'failed' && outcome !== 'running' && outcome !== 'succeeded')) return undefined;
+  const completedAt = safeTimestamp(attempt.completedAt);
+  if (outcome === 'running') {
+    return Object.freeze({ diagnostics: diagnosticWireDtos(attempt.diagnostics), id, outcome, sourceRevision, startedAt });
+  }
+  if (completedAt === undefined) return undefined;
+  const result = snapshotRecord(attempt.result);
+  const epoch = epochWireIdentity(result?.epoch);
+  return Object.freeze({
+    completedAt,
+    diagnostics: diagnosticWireDtos(attempt.diagnostics),
+    id,
+    outcome,
+    ...(outcome === 'succeeded' && epoch !== undefined ? { result: Object.freeze({ epoch }) } : {}),
+    sourceRevision,
+    startedAt,
+  });
+};
+
+const artifactWireDto = (value: unknown): unknown => {
+  const artifact = snapshotRecord(value);
+  const state = artifact?.state;
+  if (artifact === undefined || (state !== 'active' && state !== 'stale')) return Object.freeze({ state: 'missing' });
+  const activeEpoch = epochWireIdentity(artifact.activeEpoch);
+  const currentSourceRevision = safeDigest(artifact.currentSourceRevision);
+  if (activeEpoch === undefined || currentSourceRevision === undefined) return Object.freeze({ state: 'missing' });
+  return Object.freeze({ activeEpoch, currentSourceRevision, state });
+};
+
+const buildWireDto = (value: unknown): unknown => {
+  const build = snapshotRecord(value);
+  const state = build?.state;
+  const activeAttempt = buildAttemptWireDto(build?.activeAttempt);
+  const lastAttempt = buildAttemptWireDto(build?.lastAttempt);
+  if (state === 'building' && activeAttempt !== undefined) {
+    return Object.freeze({ activeAttempt, ...(lastAttempt === undefined ? {} : { lastAttempt }), state });
+  }
+  if (state === 'failed' && lastAttempt !== undefined) return Object.freeze({ lastAttempt, state });
+  return Object.freeze({ ...(lastAttempt === undefined ? {} : { lastAttempt }), state: 'idle' });
+};
+
+/** Explicit status DTO that carries only safe state, epoch identity, and projected diagnostics. */
+const projectStatusWireDto = (value: unknown): AgentApiProjectStatus => {
+  const status = snapshotRecord(value);
+  return Object.freeze({
+    artifact: artifactWireDto(status?.artifact),
+    build: buildWireDto(status?.build),
+    source: sourceWireDto(status?.source),
+  });
+};
+
+/** Flattens only known diagnostic arrays from a direct service result or a ProjectStatus-shaped result. */
+const diagnosticsListWireDto = (value: unknown): readonly AgentApiDiagnostic[] => {
+  const result = snapshotRecord(value);
+  if (result === undefined) return Object.freeze([]);
+  const direct = snapshotArray(result.diagnostics);
+  if (direct !== undefined) return diagnosticWireDtos(direct);
+  const source = snapshotRecord(result.source);
+  const build = snapshotRecord(result.build);
+  const activeAttempt = snapshotRecord(build?.activeAttempt);
+  const lastAttempt = snapshotRecord(build?.lastAttempt);
+  return Object.freeze([
+    ...diagnosticWireDtos(source?.diagnostics),
+    ...diagnosticWireDtos(activeAttempt?.diagnostics),
+    ...diagnosticWireDtos(lastAttempt?.diagnostics),
+  ]);
+};
 
 const safeToolResult = (value: unknown) => {
   const snapshot = snapshotStrictJsonValue(value === undefined ? null : value);
@@ -445,7 +637,7 @@ export class AgentApi {
   #createServer(): McpServer {
     const server = new McpServer({ name: 'agent-bundle', version: this.#version });
     server.registerTool('project_status', { inputSchema: noArguments }, async (_arguments, context) =>
-      this.#tool(context.mcpReq.signal, () => Promise.resolve({ status: wireSafeProjection(this.#coordinator.status()) })));
+      this.#tool(context.mcpReq.signal, () => Promise.resolve({ status: projectStatusWireDto(this.#coordinator.status()) })));
     server.registerTool('skills_list', { inputSchema: skillListSchema }, async (arguments_, context) =>
       this.#tool(context.mcpReq.signal, async () => this.#withEpoch(optionalStringArgument(asRecord(arguments_), 'epoch'), async (epochId) => ({
         skills: await this.#skills.generatedTree(epochId, stringArgument(asRecord(arguments_), 'target')),
@@ -459,7 +651,7 @@ export class AgentApi {
         ),
       }))));
     server.registerTool('artifacts_list', { inputSchema: noArguments }, async (_arguments, context) =>
-      this.#tool(context.mcpReq.signal, async () => ({ epochs: (await this.#epochs.listEpochs()).map(epochWireIdentity) })));
+      this.#tool(context.mcpReq.signal, async () => ({ epochs: epochWireIdentities(await this.#epochs.listEpochs()) })));
     server.registerTool('artifact_inspect', { inputSchema: artifactInspectSchema }, async (arguments_, context) =>
       this.#tool(context.mcpReq.signal, async () => this.#withEpoch(optionalStringArgument(asRecord(arguments_), 'epoch'), async (epochId) => ({
         artifact: await this.#artifacts.inspect(epochId),
@@ -526,7 +718,7 @@ export class AgentApi {
     server.registerTool('eval_get', { inputSchema: evalGetSchema }, async (arguments_, context) =>
       this.#tool(context.mcpReq.signal, async () => ({ run: await this.#evals.read(stringArgument(asRecord(arguments_), 'run_id')) })));
     server.registerTool('diagnostics_list', { inputSchema: noArguments }, async (_arguments, context) =>
-      this.#tool(context.mcpReq.signal, async () => ({ diagnostics: await this.#diagnostics.list() })));
+      this.#tool(context.mcpReq.signal, async () => ({ diagnostics: diagnosticsListWireDto(await this.#diagnostics.list()) })));
     return server;
   }
 
