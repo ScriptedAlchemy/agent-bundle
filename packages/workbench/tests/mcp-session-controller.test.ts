@@ -895,6 +895,36 @@ it('keeps generic and non-operation route transport failures terminal', async ()
   }
 });
 
+it('snapshots terminal transport classification before notifying a mutating observer', async () => {
+  const stream = traceStream();
+  const transport = fakeTransport();
+  const failure = new McpRouteClientError('AB8018', 'MCP session is not available.');
+  transport.onerror = (reason) => {
+    Object.defineProperties(reason, {
+      code: { configurable: true, value: 'AB8019' },
+      message: { configurable: true, value: 'MCP session operation could not be completed.' },
+    });
+  };
+  const controller = createMcpSessionController({
+    clientFactory: fakeClient,
+    routes: {
+      ...emptyRoutes,
+      stream: async () => stream.response,
+    },
+    transportFactory: () => transport,
+  });
+  await controller.open(binding);
+
+  transport.onerror(failure);
+  const invocation = controller.invoke({ id: 'after-terminal-error', operation: 'listTools', request: {} });
+  stream.close();
+
+  await expect(invocation).rejects.toThrow('MCP session controller cannot invoke while failed.');
+  await eventually(() => controller.model.phase === 'error');
+  expect(controller.model.diagnostics).toContainEqual(expect.objectContaining({ code: 'mcp.transport.error' }));
+  await expect(controller.close()).rejects.toMatchObject({ primary: failure });
+});
+
 it('preserves binding, trace, and history through restart while refreshing connection and catalogs', async () => {
   const stream = traceStream();
   let catalogCount = 0;

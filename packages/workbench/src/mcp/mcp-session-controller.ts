@@ -633,8 +633,9 @@ export class McpSessionController {
     const onclose = transport.onclose;
     const onerror = transport.onerror;
     transport.onerror = (reason) => {
+      const operationRouteFailure = isOperationRouteFailure(reason);
       onerror?.(reason);
-      if (isOperationRouteFailure(reason)) return;
+      if (operationRouteFailure) return;
       void this.#failSession(generation, transport === this.#transport ? this.#client : undefined, transport, 'mcp.transport.error', reason);
     };
     transport.onclose = () => {
