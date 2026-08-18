@@ -238,6 +238,30 @@ it('discovers an explicit non-conventional skill path relative to the project ro
   }
 });
 
+it('expands glob patterns in explicit skills entries and deduplicates overlapping matches', async () => {
+  const fixture = await createProjectFixture();
+  const extraSkillDir = join(fixture.root, 'custom/selected');
+
+  try {
+    await mkdir(extraSkillDir, { recursive: true });
+    await writeFile(
+      join(extraSkillDir, 'SKILL.md'),
+      '---\nname: selected\n---\n# Selected\n',
+    );
+
+    const discovered = await discoverProject(fixture.root, {
+      plugin: { name: 'review', version: '1.0.0' },
+      skills: ['skills/*', 'custom/*/SKILL.md', 'custom/selected'],
+    });
+
+    expect(discovered.skills.map((skill) => skill.dir).sort()).toEqual(
+      [extraSkillDir, fixture.skillDir].sort(),
+    );
+  } finally {
+    await removeProjectFixture(fixture.root);
+  }
+});
+
 it('parses a skill directly with project-relative ignore rules', async () => {
   const fixture = await createProjectFixture();
 
