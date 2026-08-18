@@ -152,6 +152,9 @@ e2e('executes server-owned Playground operations with pinned traces, export, pro
     const waiting = await waitingStarted;
     const pinnedEpoch = waiting.run.session.identity.epoch.id;
     await expect(page.getByRole('button', { name: 'Cancel run' })).toBeEnabled({ timeout: browserTimeout });
+    await page.getByRole('button', { name: 'Cancel run' }).click();
+    await expect(page.getByText('operation.cancelled')).toBeVisible({ timeout: browserTimeout });
+    await expect(page.getByText('epoch.bound')).toBeVisible({ timeout: browserTimeout });
 
     await page.getByRole('link', { name: 'Overview' }).click();
     const rebuildCompleted = page.waitForResponse((response) =>
@@ -164,7 +167,6 @@ e2e('executes server-owned Playground operations with pinned traces, export, pro
     await expect(page.getByRole('heading', { name: 'Project overview' })).toBeVisible({ timeout: browserTimeout });
     await page.getByRole('link', { name: 'Playground', exact: true }).click();
     await expect(page.getByText(pinnedEpoch, { exact: true })).toBeVisible({ timeout: browserTimeout });
-    await page.getByRole('button', { name: 'Cancel run' }).click();
     await expect(page.getByText('operation.cancelled')).toBeVisible({ timeout: browserTimeout });
     await expect(page.getByText('epoch.bound')).toBeVisible({ timeout: browserTimeout });
 
