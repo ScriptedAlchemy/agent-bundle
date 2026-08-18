@@ -7,6 +7,7 @@ import type { McpAppPreviewCloseResult, McpAppPreviewHostContext } from './mcp-a
 import type { McpAppSandboxConsent } from './mcp-app-sandbox.ts';
 
 const bodyLimit = 64 * 1024;
+const gracefulCloseReceiptTimeoutMs = 5_000;
 
 interface RequestDiagnostic {
   readonly code: string;
@@ -330,8 +331,7 @@ export class McpAppRoutes {
   readonly #authorize: (request: IncomingMessage) => void;
   readonly #service: McpAppRoutePreviewService | undefined;
   readonly #tails = new Map<string, Promise<void>>();
-  readonly #teardowns = new Set<string>();
-  readonly #closedBindings = new Set<string>();
+  readonly #teardowns = new Map<string, ReturnType<typeof setTimeout>>();
   #closed = false;
 
   constructor(options: McpAppRoutesOptions) {
@@ -342,8 +342,8 @@ export class McpAppRoutes {
   close(): void {
     this.#closed = true;
     this.#tails.clear();
+    for (const receipt of this.#teardowns.values()) clearTimeout(receipt);
     this.#teardowns.clear();
-    this.#closedBindings.clear();
   }
 
   async handle(request: IncomingMessage, response: ServerResponse): Promise<boolean> {
@@ -376,25 +376,24 @@ export class McpAppRoutes {
     }
     if (parsed.kind === 'force-close') {
       if (method !== 'DELETE') return responseDiagnostic(response, diagnostic('AB8007', 'Route does not accept this method.', 405));
-      const gracefulCloseAccepted = this.#teardowns.has(parsed.bindingId);
-      const closed = this.#closedBindings.has(parsed.bindingId) || await service.forceClose(parsed.bindingId);
-      if (!closed && !gracefulCloseAccepted) this.#unavailable();
-      this.#tails.delete(parsed.bindingId);
-      this.#teardowns.delete(parsed.bindingId);
-      this.#closedBindings.add(parsed.bindingId);
+      await this.#serialize(parsed.bindingId, async () => {
+        const gracefulCloseAccepted = this.#teardowns.has(parsed.bindingId);
+        const closed = await service.forceClose(parsed.bindingId);
+        if (!closed && !gracefulCloseAccepted) this.#unavailable();
+        this.#clearTeardown(parsed.bindingId);
+      });
       return responseJson(response, { closed: true, lifecycle: 'closed' });
     }
     if (method !== 'POST') return responseDiagnostic(response, diagnostic('AB8007', 'Route does not accept this method.', 405));
     if (parsed.kind === 'close') {
-      const options = closeRequest(await jsonBody(request));
       const result = await this.#serialize(parsed.bindingId, async () => {
+        const options = closeRequest(await jsonBody(request));
         const preview = this.#preview(service, parsed.bindingId);
         if (this.#teardowns.has(parsed.bindingId)) return Object.freeze({ lifecycle: preview.bridge.lifecycle, started: false });
         const close = await service.close(parsed.bindingId, options);
         if (close === false) this.#unavailable();
-        this.#teardowns.add(parsed.bindingId);
+        this.#rememberTeardown(parsed.bindingId);
         const lifecycle = preview.bridge.lifecycle === 'closed' ? 'closed' : 'closing';
-        if (lifecycle === 'closed') this.#closedBindings.add(parsed.bindingId);
         return Object.freeze({
           lifecycle,
           ...(close === true ? {} : { message: close }),
@@ -413,8 +412,7 @@ export class McpAppRoutes {
       const accepted = await service.receive(parsed.bindingId, messageRequest(await jsonBody(request)));
       const messages = await service.takeOutbound(parsed.bindingId);
       if (preview.bridge.lifecycle === 'closed') {
-        this.#teardowns.delete(parsed.bindingId);
-        this.#closedBindings.add(parsed.bindingId);
+        this.#clearTeardown(parsed.bindingId);
       }
       return Object.freeze({ accepted, actions: Object.freeze([]), lifecycle: preview.bridge.lifecycle, messages });
       });
@@ -437,6 +435,19 @@ export class McpAppRoutes {
 
   #unavailable(): never {
     throw requestError(diagnostic('AB8022', 'MCP App preview is not available.', 404));
+  }
+
+  #clearTeardown(bindingId: string): void {
+    const receipt = this.#teardowns.get(bindingId);
+    if (receipt !== undefined) clearTimeout(receipt);
+    this.#teardowns.delete(bindingId);
+  }
+
+  #rememberTeardown(bindingId: string): void {
+    const receipt = setTimeout(() => {
+      if (this.#teardowns.get(bindingId) === receipt) this.#teardowns.delete(bindingId);
+    }, gracefulCloseReceiptTimeoutMs);
+    this.#teardowns.set(bindingId, receipt);
   }
 
   #serialize<T>(bindingId: string, operation: () => Promise<T>): Promise<T> {
