@@ -106,6 +106,8 @@ it('publishes one validated prepared project as an immutable epoch and removes i
     expect(await store.readActiveEpoch()).toEqual(result.epoch);
     await expect(readFile(join(root, '.agent-bundle', 'epochs', 'epoch-one', 'portable', 'plugin.json'), 'utf8'))
       .resolves.toContain('artifact-service-fixture');
+    await expect(readFile(join(root, '.agent-bundle', 'epochs', '.metadata', 'native-playground', 'epoch-one.json'), 'utf8'))
+      .resolves.toBe('{"epochId":"epoch-one","selections":[],"version":1}\n');
     expect(removedAttempts).toEqual([attemptRoot]);
     await expect(readFile(attemptRoot, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
   } finally {

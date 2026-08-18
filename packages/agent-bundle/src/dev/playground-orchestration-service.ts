@@ -174,6 +174,14 @@ export class PlaygroundOrchestrationService {
   readonly #admitting = new Set<RunningPlaygroundOperation>();
   readonly #running = new Map<string, RunningPlaygroundOperation>();
   readonly #backgroundFailures: unknown[] = [];
+  /**
+   * A close invoked synchronously from AbortSignal dispatch cannot await the
+   * public close promise: the outer close is waiting for that listener's run
+   * to settle. This stable completion breaks that unavoidable cycle while
+   * ordinary callers still share the public drain promise.
+   */
+  readonly #abortReentryCompletion = Promise.resolve();
+  #abortDispatchDepth = 0;
   #closePromise: Promise<void> | undefined;
   #closed = false;
 
@@ -390,7 +398,10 @@ export class PlaygroundOrchestrationService {
   }
 
   close(): Promise<void> {
-    if (this.#closePromise !== undefined) return this.#closePromise;
+    if (this.#closePromise !== undefined) {
+      if (this.#abortDispatchDepth > 0) return this.#abortReentryCompletion;
+      return this.#closePromise;
+    }
     let resolvePromise!: () => void;
     let rejectPromise!: (reason: unknown) => void;
     const closing = new Promise<void>((resolve, reject) => {
@@ -404,8 +415,12 @@ export class PlaygroundOrchestrationService {
 
   async #close(): Promise<void> {
     this.#closed = true;
-    const operations = [...this.#admitting, ...this.#running.values()];
-    for (const operation of new Set(operations)) operation.controller.abort(new Error('Playground orchestration service is closed.'));
+    const operations = [...new Set([...this.#admitting, ...this.#running.values()])];
+    for (const operation of operations) {
+      this.#abortDispatchDepth += 1;
+      try { operation.controller.abort(new Error('Playground orchestration service is closed.')); }
+      finally { this.#abortDispatchDepth -= 1; }
+    }
     const operationResults = await Promise.allSettled(operations.map((operation) => operation.done));
     let nativeFailure: unknown;
     try { await this.#native?.close(); }

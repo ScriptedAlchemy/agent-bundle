@@ -10,6 +10,7 @@ import { digest } from '../core/digest.ts';
 import type { ProjectSourceInput, ProjectSourceSnapshotInput } from '../core/project-context.ts';
 import type { NormalizedPlugin } from '../core/types.ts';
 import { EpochStore, type EpochStaging } from './epoch-store.ts';
+import { publishNativePlaygroundCatalogSnapshot, type NativePlaygroundCatalogPublicationOptions } from './native-playground-service.ts';
 import { snapshotProjectSource, type PreparedProject } from './project-service.ts';
 import { freezeArtifactEpoch, type ArtifactEpoch, type DiagnosticSummary } from './types.ts';
 
@@ -35,6 +36,8 @@ export interface ArtifactServiceOptions {
   readonly createEpochId?: () => string;
   readonly epochStore: EpochStore;
   readonly move?: (source: string, destination: string) => Promise<void>;
+  /** Captures server-owned native Playground choices before this epoch becomes active. */
+  readonly publishNativeCatalog?: (options: NativePlaygroundCatalogPublicationOptions) => Promise<void>;
   readonly now?: () => Date;
   readonly removeAttempt?: (path: string) => Promise<void>;
   readonly validateArtifact?: ArtifactValidator;
@@ -142,6 +145,7 @@ export class ArtifactService {
   readonly #createEpochId: () => string;
   readonly #epochStore: EpochStore;
   readonly #move: (source: string, destination: string) => Promise<void>;
+  readonly #publishNativeCatalog: (options: NativePlaygroundCatalogPublicationOptions) => Promise<void>;
   readonly #now: () => Date;
   readonly #removeAttempt: (path: string) => Promise<void>;
   readonly #validateArtifact: ArtifactValidator;
@@ -152,6 +156,7 @@ export class ArtifactService {
     this.#createEpochId = options.createEpochId ?? randomUUID;
     this.#epochStore = options.epochStore;
     this.#move = options.move ?? rename;
+    this.#publishNativeCatalog = options.publishNativeCatalog ?? publishNativePlaygroundCatalogSnapshot;
     this.#now = options.now ?? (() => new Date());
     this.#removeAttempt = options.removeAttempt ?? ((path) => rm(path, { force: true, recursive: true }));
     this.#validateArtifact = options.validateArtifact ?? validateArtifact;
@@ -229,6 +234,8 @@ export class ArtifactService {
           registry: prepared.registry,
         }));
         if (hasErrors(stagedDiagnostics)) throw new DiagnosticError(stagedDiagnostics);
+      }, async (publishingEpoch) => {
+        await this.#publishNativeCatalog(Object.freeze({ epoch: publishingEpoch, projectRoot: prepared.root }));
       });
       stagingClosed = true;
       result = Object.freeze({ diagnostics, epoch: published, outcome: 'succeeded' });

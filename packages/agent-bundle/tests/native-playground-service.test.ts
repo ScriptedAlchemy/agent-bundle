@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { link, mkdir, mkdtemp, open, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -6,7 +6,12 @@ import { afterEach, expect, it } from '@rstest/core';
 
 import { expectExitCode } from '../src/eval/assertions.ts';
 import { digest } from '../src/core/digest.ts';
-import { NativePlaygroundService, type NativePlaygroundEpochReference } from '../src/dev/native-playground-service.ts';
+import {
+  NativePlaygroundService,
+  publishNativePlaygroundCatalogSnapshot,
+  type NativePlaygroundCatalogStorage,
+  type NativePlaygroundEpochReference,
+} from '../src/dev/native-playground-service.ts';
 import type { DiscoveredEvalSuite } from '../src/eval/discovery.ts';
 import type { EvalFixturePlan } from '../src/eval/fixtures.ts';
 import { defineEvalSuite, normalizeEvalCase } from '../src/eval/suite.ts';
@@ -991,4 +996,223 @@ it('awaits a cancelled Codex child, preserves its harness failure, and removes a
   } finally {
     await rm(root, { force: true, recursive: true });
   }
+});
+
+it('eagerly captures every epoch catalog before a later build can replace authored selections', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-native-playground-eager-'));
+  try {
+    const suiteDir = join(root, 'evals');
+    const fixtureFile = join(suiteDir, 'fixture', 'input.txt');
+    const epochARoot = join(root, '.agent-bundle', 'epochs', 'epoch-eager-a');
+    const epochBRoot = join(root, '.agent-bundle', 'epochs', 'epoch-eager-b');
+    await Promise.all([
+      mkdir(join(epochARoot, 'claude', '.claude-plugin'), { recursive: true }),
+      mkdir(join(epochBRoot, 'claude', '.claude-plugin'), { recursive: true }),
+      mkdir(join(suiteDir, 'fixture'), { recursive: true }),
+    ]);
+    await Promise.all([
+      writeFile(join(epochARoot, 'claude', '.claude-plugin', 'plugin.json'), '{"name":"review"}\n'),
+      writeFile(join(epochBRoot, 'claude', '.claude-plugin', 'plugin.json'), '{"name":"review"}\n'),
+      writeFile(fixtureFile, 'epoch A fixture bytes\n'),
+    ]);
+    const referenceA = epoch('epoch-eager-a', epochARoot);
+    const referenceB = Object.freeze({
+      ...epoch('epoch-eager-b', epochBRoot),
+      epoch: Object.freeze({ ...epoch('epoch-eager-b', epochBRoot).epoch, targetDigests: Object.freeze({ claude: 'target-b-claude', codex: 'target-b-codex' }) }),
+    });
+    let authoredGeneration: 'a' | 'b' = 'a';
+    let discoveryCalls = 0;
+    const discover = async () => {
+      discoveryCalls += 1;
+      return authoredGeneration === 'a'
+        ? nativeSuite('claude', join(suiteDir, 'review.eval.ts'))
+        : dualHostSuite(join(suiteDir, 'review.eval.ts'));
+    };
+
+    // This is the artifact-publication hook: neither epoch has been browsed.
+    await publishNativePlaygroundCatalogSnapshot({ discover, epoch: referenceA.epoch, projectRoot: root });
+    authoredGeneration = 'b';
+    await writeFile(fixtureFile, 'epoch B fixture bytes\n');
+    await publishNativePlaygroundCatalogSnapshot({ discover, epoch: referenceB.epoch, projectRoot: root });
+    discoveryCalls = 0;
+
+    const restarted = new NativePlaygroundService({
+      discover,
+      inspectArtifact: async (reference) => Object.freeze({
+        binding: Object.freeze({ manifestPath: 'agent-bundle.manifest.json', source: 'explicit' as const, targetDigests: reference.epoch.targetDigests }),
+        root: reference.root,
+      }),
+      native: {
+        claudeRun: async (request) => request.args[0] === '--version'
+          ? Object.freeze({ exitCode: 0, stderr: '', stdout: '2.1.232\n' })
+          : Object.freeze({ exitCode: 0, stderr: '', stdout: '{"loggedIn":true,"authMethod":"claude.ai","apiProvider":"firstParty","subscriptionType":"max"}\n' }),
+      },
+      projectRoot: root,
+    });
+    const [catalogA, catalogB] = await Promise.all([restarted.catalog(referenceA), restarted.catalog(referenceB)]);
+    expect(discoveryCalls).toBe(0);
+    expect(catalogA.selections).toHaveLength(1);
+    expect(catalogA.selections[0]?.host).toBe('claude');
+    expect(catalogB.selections).toHaveLength(2);
+    expect(catalogB.selections.map((selection) => selection.host)).toEqual(['claude', 'codex']);
+
+    const prepared = await restarted.prepare(referenceA, {
+      caseId: catalogA.cases[0]!.id,
+      fixtureId: catalogA.fixtures[0]!.id,
+      host: 'claude',
+      modelPinId: catalogA.modelPins[0]!.id,
+      operation: 'native.prompt',
+      prompt: 'Review the fixture.',
+      target: 'claude',
+    });
+    const result = await restarted.run(prepared, { emit: async () => undefined, signal: new AbortController().signal });
+    expect(result.events).toContainEqual(expect.objectContaining({
+      kind: 'native.harness.failed', raw: { code: 'EVAL_FIXTURE_UNAVAILABLE', stage: 'fixture' },
+    }));
+    await restarted.close();
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('fsyncs durable catalog publication, validates a no-replace winner, and retains every staging cleanup failure', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-native-playground-durable-'));
+  const catalogDirectory = join(root, 'catalog');
+  const reference = epoch('epoch-durable', join(root, 'artifact'));
+  const failures = new Map<string, Error>([
+    ['write', new Error('write failed')],
+    ['file', new Error('file sync failed')],
+    ['link', new Error('link failed')],
+    ['directory', new Error('directory sync failed')],
+  ]);
+  const serviceFor = (failure: 'directory' | 'file' | 'link' | 'write' | undefined, removeFailure?: Error): NativePlaygroundService => {
+    const storage: NativePlaygroundCatalogStorage = {
+      link: async (source, destination) => {
+        if (failure === 'link') throw failures.get('link')!;
+        await link(source, destination);
+      },
+      mkdir,
+      open: async (path, flags, mode) => {
+        const handle = await open(path, flags, mode);
+        return new Proxy(handle, {
+          get(target, property) {
+            if (property === 'writeFile') {
+              return async (...args: unknown[]) => {
+                if (failure === 'write') throw failures.get('write')!;
+                await (target.writeFile as (...input: unknown[]) => Promise<void>)(...args);
+              };
+            }
+            if (property === 'sync') {
+              return async () => {
+                if (failure === 'file' && String(path).includes('.stage-')) throw failures.get('file')!;
+                if (failure === 'directory' && String(path) === catalogDirectory) throw failures.get('directory')!;
+                await target.sync();
+              };
+            }
+            const value = Reflect.get(target, property, target);
+            return typeof value === 'function' ? value.bind(target) : value;
+          },
+        });
+      },
+      remove: async (path, options) => {
+        if (removeFailure !== undefined && String(path).includes('.stage-')) throw removeFailure;
+        await rm(path, options);
+      },
+    } as NativePlaygroundCatalogStorage;
+    return new NativePlaygroundService({
+      catalogDirectory,
+      catalogStorage: storage,
+      discover: async () => suite(),
+      inspectArtifact: async (candidate) => Object.freeze({
+        binding: Object.freeze({ manifestPath: 'agent-bundle.manifest.json', source: 'explicit' as const, targetDigests: candidate.epoch.targetDigests }),
+        root: candidate.root,
+      }),
+      planFixture: async () => fixturePlan,
+      projectRoot: '/project',
+    });
+  };
+  try {
+    for (const failure of ['write', 'file', 'link', 'directory'] as const) {
+      await rm(catalogDirectory, { force: true, recursive: true });
+      const service = serviceFor(failure);
+      await expect(service.catalog(reference)).rejects.toThrow(failures.get(failure)!.message);
+      expect((await readdir(catalogDirectory)).filter((name) => name.includes('.stage-'))).toEqual([]);
+      await service.close();
+    }
+    await rm(catalogDirectory, { force: true, recursive: true });
+    const cleanupFailure = new Error('stage cleanup failed');
+    const cleanupService = serviceFor('file', cleanupFailure);
+    await expect(cleanupService.catalog(reference)).rejects.toMatchObject({ errors: [failures.get('file'), cleanupFailure] });
+    await cleanupService.close();
+    await rm(catalogDirectory, { force: true, recursive: true });
+
+    // Two independent services race on the same epoch: the loser validates the
+    // link winner rather than replacing it.
+    const [left, right] = [serviceFor(undefined), serviceFor(undefined)];
+    const [leftCatalog, rightCatalog] = await Promise.all([left.catalog(reference), right.catalog(reference)]);
+    expect(leftCatalog).toEqual(rightCatalog);
+    expect((await readdir(catalogDirectory)).filter((name) => name.includes('.stage-'))).toEqual([]);
+    await Promise.all([left.close(), right.close()]);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('drains a gated catalog discovery before close and never publishes it after close begins', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-native-playground-catalog-close-'));
+  try {
+    let releaseDiscovery!: () => void;
+    let discoveryStarted!: () => void;
+    const discovery = new Promise<void>((resolvePromise) => { releaseDiscovery = resolvePromise; });
+    const started = new Promise<void>((resolvePromise) => { discoveryStarted = resolvePromise; });
+    const service = new NativePlaygroundService({
+      discover: async () => {
+        discoveryStarted();
+        await discovery;
+        return nativeSuite('claude', join(root, 'evals', 'review.eval.ts'));
+      },
+      inspectArtifact: async (reference) => Object.freeze({
+        binding: Object.freeze({ manifestPath: 'agent-bundle.manifest.json', source: 'explicit' as const, targetDigests: reference.epoch.targetDigests }),
+        root: reference.root,
+      }),
+      planFixture: async () => Object.freeze({ ...fixturePlan, sourcePath: join(root, 'evals', 'fixture') }),
+      projectRoot: root,
+    });
+    const reference = epoch('epoch-catalog-close', join(root, '.agent-bundle', 'epochs', 'epoch-catalog-close'));
+    const pending = service.catalog(reference);
+    await started;
+    let closed = false;
+    const closing = service.close().then(() => { closed = true; });
+    await Promise.resolve();
+    expect(closed).toBe(false);
+    releaseDiscovery();
+    await expect(pending).rejects.toThrow('closed');
+    await closing;
+    await expect(service.catalog(reference)).rejects.toThrow('closed');
+    await expect(readFile(join(root, '.agent-bundle', 'epochs', '.metadata', 'native-playground', 'epoch-catalog-close.json'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('retains a genuine admitted catalog failure in the stable close result', async () => {
+  let rejectDiscovery!: (reason: unknown) => void;
+  let discoveryStarted!: () => void;
+  const discovery = new Promise<readonly DiscoveredEvalSuite[]>((_, reject) => { rejectDiscovery = reject; });
+  const started = new Promise<void>((resolvePromise) => { discoveryStarted = resolvePromise; });
+  const failure = new Error('catalog discovery failed');
+  const service = new NativePlaygroundService({
+    catalogDirectory: testCatalogDirectory(),
+    discover: async () => {
+      discoveryStarted();
+      return discovery;
+    },
+    projectRoot: '/project',
+  });
+  const pending = service.catalog(epoch('epoch-catalog-failure', '/epochs/catalog-failure'));
+  await started;
+  const closing = service.close();
+  rejectDiscovery(failure);
+  await expect(pending).rejects.toBe(failure);
+  await expect(closing).rejects.toMatchObject({ errors: [failure] });
 });
