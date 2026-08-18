@@ -19,6 +19,7 @@ const PROXY_CONTENT_SECURITY_POLICY = [
   "frame-src 'self'",
   'img-src data:',
   "script-src 'unsafe-inline'",
+  "style-src 'sha256-9kMTjdnsu6JTVyJ5Ypiyx8E5kewvUVarbjptSSH/2bM='",
 ].join('; ');
 
 const SHELL = `<!doctype html>

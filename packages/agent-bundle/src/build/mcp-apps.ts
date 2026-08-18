@@ -115,7 +115,10 @@ export const compileMcpApps = async (
       cwd: options.cwd,
       rsbuildConfig: {
         ...(usesReactSyntax(source.source) ? { plugins: [pluginReact()] } : {}),
-        ...(source.template === undefined ? {} : { html: { template: source.template } }),
+        html: {
+          inject: 'body',
+          ...(source.template === undefined ? {} : { template: source.template }),
+        },
         logLevel: 'silent',
         mode: 'production',
         output: {
