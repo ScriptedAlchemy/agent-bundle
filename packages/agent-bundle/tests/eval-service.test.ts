@@ -1,4 +1,4 @@
-import { access, appendFile, link, mkdir, readFile, rename, rm, symlink, writeFile } from 'node:fs/promises';
+import { access, appendFile, link, mkdir, readFile, readdir, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { expect, it } from '@rstest/core';
@@ -210,10 +210,18 @@ it('queues durable events published after the replay snapshot without skipping o
     const evals = new EvalService({ now: () => createdAt, projectRoot: project.root, targets: ['portable'] });
     running = evals.run({ caseIds: ['reads-result'], trials: 3 });
     let subscription: Awaited<ReturnType<typeof evals.subscribeEvents>> | undefined;
+    const runsDirectory = join(project.root, '.agent-bundle', 'runs');
     for (let attempt = 0; attempt < 800 && subscription === undefined; attempt += 1) {
-      const run = (await evals.list())[0];
-      if (run !== undefined) subscription = await evals.subscribeEvents(run.id, 0);
-      else await new Promise<void>((resolvePromise) => setTimeout(resolvePromise, 10));
+      const runIds = await readdir(runsDirectory).catch(() => [] as string[]);
+      for (const runId of runIds) {
+        try {
+          subscription = await evals.subscribeEvents(runId, 0);
+          break;
+        } catch (error) {
+          if (typeof error !== 'object' || error === null || !('code' in error) || error.code !== 'EVAL_RUN_NOT_FOUND') throw error;
+        }
+      }
+      if (subscription === undefined) await new Promise<void>((resolvePromise) => setTimeout(resolvePromise, 10));
     }
     if (subscription === undefined) throw new Error('The run never became available for durable event observation.');
     const observed = [...subscription.replay.events];

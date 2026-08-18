@@ -361,7 +361,7 @@ const comparisonQuery = (
  */
 export class EvalRoutes {
   readonly #authorize: (request: IncomingMessage) => void;
-  readonly #readerAdmissions = new Set<Promise<void>>();
+  readonly #admissions = new Set<Promise<void>>();
   readonly #closeFailures = new Set<unknown>();
   readonly #closeReaders = new Set<() => Promise<void>>();
   readonly #readerCloses = new Set<Promise<void>>();
@@ -379,7 +379,7 @@ export class EvalRoutes {
     for (const controller of this.#running) controller.abort();
     this.#running.clear();
     this.#closePromise = Promise.resolve().then(async () => {
-      await Promise.allSettled([...this.#readerAdmissions]);
+      await Promise.allSettled([...this.#admissions]);
       const results = await Promise.allSettled([...this.#closeReaders].map(async (close) => close()));
       await Promise.allSettled([...this.#readerCloses]);
       this.#closeReaders.clear();
@@ -469,12 +469,12 @@ export class EvalRoutes {
     return requestError(diagnostic('AB8071', 'Eval routes are not available.', status));
   }
 
-  #beginReaderAdmission(): () => void {
+  #beginAdmission(): () => void {
     let settle!: () => void;
     const admission = new Promise<void>((resolvePromise) => { settle = resolvePromise; });
-    this.#readerAdmissions.add(admission);
+    this.#admissions.add(admission);
     return (): void => {
-      this.#readerAdmissions.delete(admission);
+      this.#admissions.delete(admission);
       settle();
     };
   }
@@ -497,23 +497,37 @@ export class EvalRoutes {
     runId: string,
     afterSequence: number,
   ): Promise<void> {
-    const finishAdmission = this.#beginReaderAdmission();
+    const finishAdmission = this.#beginAdmission();
     let responseClosed = response.destroyed || response.writableEnded;
     const markResponseClosed = (): void => { responseClosed = true; };
     response.once('close', markResponseClosed);
     try {
       const subscription = await service.subscribeEvents(runId, afterSequence);
       let buffered = 0;
+      let blocked = false;
+      let blockedBytes = 0;
       let closed = false;
       let closePromise: Promise<void> | undefined;
+      let flushing = false;
       let terminalQueued = false;
-      const frames: string[] = [];
+      const frames: Array<Readonly<{ readonly frame: string; readonly size: number }>> = [];
+      const onDrain = (): void => {
+        if (closed || !blocked) return;
+        blocked = false;
+        buffered -= blockedBytes;
+        blockedBytes = 0;
+        flush();
+      };
       const close = (abortResponse = false): Promise<void> => {
         if (closePromise !== undefined) return closePromise;
         closed = true;
+        frames.length = 0;
+        buffered = 0;
+        blockedBytes = 0;
         this.#closeReaders.delete(closeFromShutdown);
         response.off('close', closeFromPeer);
         response.off('close', markResponseClosed);
+        response.off('drain', onDrain);
         if (abortResponse && !response.destroyed && !response.writableEnded) response.destroy();
         closePromise = this.#trackReaderClose(Promise.resolve().then(() => subscription.close()));
         return closePromise;
@@ -525,18 +539,25 @@ export class EvalRoutes {
         throw this.#unavailable(503);
       }
       const flush = (): void => {
-        if (closed || response.destroyed || response.writableEnded) return;
-        while (frames.length > 0) {
-          const frame = frames.shift()!;
-          buffered -= Buffer.byteLength(frame, 'utf8');
-          if (!response.write(frame)) {
-            response.once('drain', flush);
-            return;
+        if (flushing || blocked || closed || response.destroyed || response.writableEnded) return;
+        flushing = true;
+        try {
+          while (!blocked && frames.length > 0) {
+            const next = frames.shift()!;
+            if (response.write(next.frame)) {
+              buffered -= next.size;
+              continue;
+            }
+            blocked = true;
+            blockedBytes = next.size;
+            response.once('drain', onDrain);
           }
-        }
-        if (terminalQueued) {
-          response.end();
-          void close().catch(() => undefined);
+          if (!blocked && terminalQueued && frames.length === 0) {
+            response.end();
+            void close().catch(() => undefined);
+          }
+        } finally {
+          flushing = false;
         }
       };
       const enqueue = (event: EvalRunEventsReplay['events'][number]): void => {
@@ -547,7 +568,7 @@ export class EvalRoutes {
           void close(true).catch(() => undefined);
           return;
         }
-        frames.push(frame);
+        frames.push(Object.freeze({ frame, size }));
         buffered += size;
         terminalQueued = terminalEvent(event);
         flush();
@@ -567,8 +588,7 @@ export class EvalRoutes {
       response.once('close', closeFromPeer);
       response.off('close', markResponseClosed);
       for (const event of subscription.replay.events) enqueue(event);
-      if (closed || terminalQueued) return;
-      subscription.activate(enqueue);
+      if (!closed && !terminalQueued) subscription.activate(enqueue);
       flush();
     } finally {
       response.off('close', markResponseClosed);
@@ -587,7 +607,7 @@ export class EvalRoutes {
       responseDiagnostic(response, diagnostic('AB8007', 'Route does not accept this method.', 405));
       return;
     }
-    const finishAdmission = this.#beginReaderAdmission();
+    const finishAdmission = this.#beginAdmission();
     let responseClosed = response.destroyed || response.writableEnded;
     const markResponseClosed = (): void => { responseClosed = true; };
     response.once('close', markResponseClosed);

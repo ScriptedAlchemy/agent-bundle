@@ -13,6 +13,7 @@ import {
   EvalRunReport,
   EvalsPage,
   EvalsRequestLifecycle,
+  eventsForActiveEvalRun,
   openEvalRun,
   startEvalRun,
 } from '../src/evals/evals-page.tsx';
@@ -166,6 +167,38 @@ it('summarizes passed, failed, and inconclusive counts separately', () => {
   expect(markup).toContain('1 passed');
   expect(markup).toContain('1 failed');
   expect(markup).toContain('1 inconclusive');
+});
+
+it('renders the persisted timeline, server evidence channels, host/model matrix, and raw evidence controls', () => {
+  const evidenceView = evalRunViewFor({
+    events: [
+      { kind: 'run.started', payload: { trials: 3 }, schemaVersion: 1, sequence: 1, timestamp: '2026-08-17T00:00:00.000Z' },
+      { kind: 'trial.completed', payload: { outcome: 'pass' }, schemaVersion: 1, sequence: 2, timestamp: '2026-08-17T00:00:01.000Z' },
+    ],
+    listing,
+    result,
+    selectedSuite: 'review-change',
+  });
+
+  const markup = renderToStaticMarkup(createElement(EvalRunReport, { view: evidenceView }));
+
+  expect(markup).toContain('Durable event timeline');
+  expect(markup).toContain('#1');
+  expect(markup).toContain('run.started');
+  expect(markup).toContain('Host / model matrix');
+  expect(markup).toContain('Evidence channels');
+  expect(markup).toContain('unavailable evidence');
+  expect(markup).toContain('Raw evidence');
+  expect(markup).toContain('evidence.json');
+});
+
+it('does not paint held prior-run events while a replacement run waits for replay', () => {
+  const priorRunEvents = Object.freeze([
+    Object.freeze({ kind: 'run.started', payload: Object.freeze({ trials: 3 }), schemaVersion: 1, sequence: 1, timestamp: '2026-08-17T00:00:00.000Z' }),
+  ]);
+
+  expect(eventsForActiveEvalRun('run-b', 'run-a', priorRunEvents)).toEqual([]);
+  expect(eventsForActiveEvalRun('run-a', 'run-a', priorRunEvents)).toEqual(priorRunEvents);
 });
 
 it('lists the cases of the selected suite before any run exists', () => {
