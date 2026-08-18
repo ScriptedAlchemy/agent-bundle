@@ -1,4 +1,5 @@
 import { Buffer } from 'node:buffer';
+import { appendFileSync } from 'node:fs';
 import { appendFile, mkdir, mkdtemp, readFile, readdir, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -71,7 +72,7 @@ const withProject = async (task: (root: string) => Promise<void>): Promise<void>
 };
 
 type EvalRunStoreDurabilityTestHook = (
-  phase: 'after-event-write',
+  phase: 'after-event-write' | 'before-event-rollback' | 'before-event-write',
   event: Readonly<{ readonly kind: string }>,
   path: string,
 ) => void;
@@ -252,6 +253,78 @@ it('retains a full event line when post-write durability fails', async () => {
 
       expect(injected).toBe(true);
       expect((await readEvalRunEvents(writer.directory)).events.map((event) => event.kind)).toEqual(['run.completed']);
+      await expect(writer.close()).rejects.toThrow('closed with admitted write failures');
+    } finally {
+      await writer.close().catch(() => undefined);
+    }
+  });
+});
+
+it('rolls back a partial event write before admitting one fallback terminal', async () => {
+  await withProject(async (root) => {
+    const writer = await createEvalRun(runOptions(root));
+    const writeFailure = new Error('event write failed after a prefix');
+    let injected = false;
+    try {
+      await withEvalRunStoreDurabilityTestHook((phase, event, path) => {
+        if (phase === 'before-event-write' && event.kind === 'run.completed' && !injected) {
+          injected = true;
+          appendFileSync(path, '{"kind":"run.comp');
+          throw writeFailure;
+        }
+      }, async () => {
+        await expect(writer.appendEvent({ kind: 'run.completed', payload: {} })).rejects.toBe(writeFailure);
+      });
+
+      expect(injected).toBe(true);
+      expect(await readEvalRunEvents(writer.directory)).toEqual({ events: [] });
+      await writer.appendEvent({ kind: 'run.failed', payload: {} });
+      const replay = await readEvalRunEvents(writer.directory);
+      expect(replay.events.map((event) => ({ kind: event.kind, sequence: event.sequence })))
+        .toEqual([{ kind: 'run.failed', sequence: 1 }]);
+      await expect(writer.close()).rejects.toThrow('closed with admitted write failures');
+    } finally {
+      await writer.close().catch(() => undefined);
+    }
+  });
+});
+
+it('poisons event append when a partial write cannot be rolled back', async () => {
+  await withProject(async (root) => {
+    const writer = await createEvalRun(runOptions(root));
+    const writeFailure = new Error('event write failed after a prefix');
+    const rollbackFailure = new Error('event rollback failed');
+    const partial = '{"kind":"run.comp';
+    let writeInjected = false;
+    let rollbackInjected = false;
+    try {
+      await withEvalRunStoreDurabilityTestHook((phase, event, path) => {
+        if (phase === 'before-event-write' && event.kind === 'run.completed' && !writeInjected) {
+          writeInjected = true;
+          appendFileSync(path, partial);
+          throw writeFailure;
+        }
+        if (phase === 'before-event-rollback' && event.kind === 'run.completed' && !rollbackInjected) {
+          rollbackInjected = true;
+          throw rollbackFailure;
+        }
+      }, async () => {
+        await expect(writer.appendEvent({ kind: 'run.completed', payload: {} })).rejects.toMatchObject({
+          event: { kind: 'run.completed' },
+          failures: [writeFailure, rollbackFailure],
+          name: 'EvalRunEventWriteUncertainError',
+        });
+      });
+
+      expect(writeInjected).toBe(true);
+      expect(rollbackInjected).toBe(true);
+      await expect(writer.appendEvent({ kind: 'run.failed', payload: {} })).rejects.toMatchObject({
+        name: 'EvalRunEventWriteUncertainError',
+      });
+      expect(await readEvalRunEvents(writer.directory)).toEqual({
+        events: [],
+        incompleteTrailingRecord: partial,
+      });
       await expect(writer.close()).rejects.toThrow('closed with admitted write failures');
     } finally {
       await writer.close().catch(() => undefined);

@@ -1,3 +1,4 @@
+import { appendFileSync } from 'node:fs';
 import { access, appendFile, link, mkdir, readFile, readdir, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
@@ -13,7 +14,7 @@ import { seedEvalProject, writeEvalSuite } from './support/eval-project.ts';
 const service = (root: string): EvalService => new EvalService({ projectRoot: root, targets: ['portable'] });
 
 type EvalRunStoreDurabilityTestHook = (
-  phase: 'after-event-write',
+  phase: 'after-event-write' | 'before-event-rollback' | 'before-event-write',
   event: Readonly<{ readonly kind: string }>,
   path: string,
 ) => void;
@@ -940,6 +941,52 @@ it('does not append a fallback terminal after a full terminal line reports a syn
       await expect(service.close()).rejects.toThrow('Eval service could not close.');
     });
     expect(injected).toBe(true);
+  } finally {
+    await evals?.close().catch(() => undefined);
+    await removeProjectFixture(project.root);
+  }
+}, 120_000);
+
+it('does not append a fallback terminal when a partial terminal write cannot be rolled back', async () => {
+  const project = await createProjectFixture();
+  const writeFailure = new Error('run.completed write failed after a prefix');
+  const rollbackFailure = new Error('run.completed rollback failed');
+  const partial = '{"kind":"run.completed"';
+  let evals: EvalService | undefined;
+  let writeInjected = false;
+  let rollbackInjected = false;
+  try {
+    await seedEvalProject(project.root);
+    await withEvalRunStoreDurabilityTestHook((phase, event, path) => {
+      if (phase === 'before-event-write' && event.kind === 'run.completed' && !writeInjected) {
+        writeInjected = true;
+        appendFileSync(path, partial);
+        throw writeFailure;
+      }
+      if (phase === 'before-event-rollback' && event.kind === 'run.completed' && !rollbackInjected) {
+        rollbackInjected = true;
+        throw rollbackFailure;
+      }
+    }, async () => {
+      const service = new EvalService({ projectRoot: project.root, targets: ['portable'] });
+      evals = service;
+      const admission = await service.start({ caseIds: ['reads-result'] });
+
+      let completed = false;
+      for (let attempt = 0; attempt < 100 && !completed; attempt += 1) {
+        completed = (await service.read(admission.run.id)).run.completedAt !== undefined;
+        if (!completed) await new Promise<void>((resolvePromise) => setTimeout(resolvePromise, 10));
+      }
+      if (!completed) throw new Error('The partial terminal run was not finalized.');
+
+      const events = await service.events(admission.run.id, 0);
+      expect(events.events.filter((event) => event.kind.startsWith('run.')).map((event) => event.kind))
+        .toEqual(['run.started']);
+      expect(events.incompleteTrailingRecord).toBe(true);
+      await expect(service.close()).rejects.toThrow('Eval service could not close.');
+    });
+    expect(writeInjected).toBe(true);
+    expect(rollbackInjected).toBe(true);
   } finally {
     await evals?.close().catch(() => undefined);
     await removeProjectFixture(project.root);

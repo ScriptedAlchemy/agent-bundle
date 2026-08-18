@@ -22,6 +22,7 @@ import type { NativeClaudeProcessRunner } from '../host-contracts/native-claude-
 import {
   createEvalRun,
   EvalRunEventDurabilityError,
+  EvalRunEventWriteUncertainError,
   listEvalRuns,
   mintRunId,
   readEvalRun,
@@ -176,7 +177,7 @@ interface ActiveEvalRun {
   readonly requestSignal: AbortSignal | undefined;
   result: Promise<EvalRunResult> | undefined;
   readonly runId: string;
-  terminal: 'finishing' | 'open' | 'persisted' | 'written';
+  terminal: 'finishing' | 'open' | 'persisted' | 'uncertain' | 'written';
   readonly writer: Awaited<ReturnType<typeof createEvalRun>>;
 }
 
@@ -798,7 +799,8 @@ export class EvalService {
       ) {
         active.terminal = 'written';
       }
-      if (active.terminal !== 'persisted' && active.terminal !== 'written') {
+      if (error instanceof EvalRunEventWriteUncertainError) active.terminal = 'uncertain';
+      if (active.terminal !== 'persisted' && active.terminal !== 'uncertain' && active.terminal !== 'written') {
         active.terminal = 'finishing';
         try {
           await this.#appendEvent(active.writer, active.runId, {

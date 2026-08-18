@@ -97,6 +97,19 @@ export class EvalRunEventDurabilityError extends Error {
   }
 }
 
+/** An event write may have changed the journal, and rollback could not be confirmed. */
+export class EvalRunEventWriteUncertainError extends Error {
+  readonly event: EvalRunEvent;
+  readonly failures: readonly unknown[];
+
+  constructor(event: EvalRunEvent, failures: readonly unknown[]) {
+    super(`Eval run event ${JSON.stringify(event.kind)} may be partially written.`, { cause: failures[0] });
+    this.name = 'EvalRunEventWriteUncertainError';
+    this.event = event;
+    this.failures = Object.freeze([...failures]);
+  }
+}
+
 export interface EvalRunEventsRead {
   readonly events: readonly EvalRunEvent[];
   readonly incompleteTrailingRecord?: string;
@@ -130,7 +143,11 @@ const runFileName = 'run.json';
 const safeSegment = /^[a-z0-9][a-z0-9._-]*$/iu;
 const safeRelativeSegment = /^(?!\.{1,2}$)[a-z0-9._-]+$/iu;
 const maximumTrialRecordBytes = 1024 * 1024;
-type EvalRunStoreDurabilityTestHook = (phase: 'after-event-write', event: EvalRunEvent, path: string) => void;
+type EvalRunStoreDurabilityTestHook = (
+  phase: 'after-event-write' | 'before-event-rollback' | 'before-event-write',
+  event: EvalRunEvent,
+  path: string,
+) => void;
 const evalRunStoreDurabilityTestHookKey = Symbol.for('agent-bundle.eval-run-store.durability-test-hook');
 
 const storeError = (
@@ -142,7 +159,11 @@ const isErrno = (error: unknown, code: string): boolean =>
   typeof error === 'object' && error !== null && 'code' in error && error.code === code;
 
 /** Non-API test seam, unavailable unless the process explicitly runs in test mode. */
-const runEvalRunStoreDurabilityTestHook = (phase: 'after-event-write', event: EvalRunEvent, path: string): void => {
+const runEvalRunStoreDurabilityTestHook = (
+  phase: 'after-event-write' | 'before-event-rollback' | 'before-event-write',
+  event: EvalRunEvent,
+  path: string,
+): void => {
   if (process.env.NODE_ENV !== 'test') return;
   const hooks = globalThis as typeof globalThis & Record<symbol, EvalRunStoreDurabilityTestHook | undefined>;
   hooks[evalRunStoreDurabilityTestHookKey]?.(phase, event, path);
@@ -780,6 +801,7 @@ export class EvalRunWriter {
   #closed = false;
   #closeFailures: unknown[] = [];
   #closePromise: Promise<void> | undefined;
+  #eventJournalFailure: EvalRunEventWriteUncertainError | undefined;
   #record: EvalRunRecord;
   #sequence = 0;
   #tail: Promise<void> = Promise.resolve();
@@ -808,7 +830,22 @@ export class EvalRunWriter {
       sequence: 1,
       timestamp: new Date().toISOString(),
     }, 'EVAL_RUN_RECORD_INVALID');
+    if (this.#eventJournalFailure !== undefined) throw this.#eventJournalFailure;
     return this.#serialize(async () => {
+      if (this.#eventJournalFailure !== undefined) throw this.#eventJournalFailure;
+      const eventPath = join(this.#directory, eventsFileName);
+      await ensureWritablePath(this.#directory, eventPath);
+      const journal = await open(eventPath, constants.O_APPEND | constants.O_NOFOLLOW | constants.O_WRONLY);
+      let originalSize: number;
+      try {
+        originalSize = (await journal.stat()).size;
+      } catch (error) {
+        const failures = [error];
+        try { await journal.close(); }
+        catch (closeFailure) { failures.push(closeFailure); }
+        if (failures.length === 1) throw error;
+        throw new AggregateError(failures, 'Eval run event journal could not be inspected.', { cause: error });
+      }
       this.#sequence += 1;
       const record: EvalRunEvent = Object.freeze({
         ...input,
@@ -816,24 +853,45 @@ export class EvalRunWriter {
         sequence: this.#sequence,
         timestamp: new Date().toISOString(),
       });
-      const eventPath = join(this.#directory, eventsFileName);
-      await ensureWritablePath(this.#directory, eventPath);
-      const journal = await open(eventPath, constants.O_APPEND | constants.O_NOFOLLOW | constants.O_WRONLY);
       const failures: unknown[] = [];
       let written = false;
+      let rollbackConfirmed = false;
       try {
+        runEvalRunStoreDurabilityTestHook('before-event-write', record, eventPath);
         await journal.writeFile(`${stableJson(record)}\n`, 'utf8');
         written = true;
         runEvalRunStoreDurabilityTestHook('after-event-write', record, eventPath);
         await journal.sync();
       }
-      catch (error) { failures.push(error); }
+      catch (error) {
+        failures.push(error);
+        if (!written) {
+          try {
+            runEvalRunStoreDurabilityTestHook('before-event-rollback', record, eventPath);
+            await journal.truncate(originalSize);
+            await journal.sync();
+            rollbackConfirmed = true;
+            this.#sequence -= 1;
+          } catch (rollbackFailure) {
+            failures.push(rollbackFailure);
+          }
+        }
+      }
       try { await journal.close(); }
       catch (error) { failures.push(error); }
       if (failures.length > 0) {
         if (written) throw new EvalRunEventDurabilityError(record, failures);
+        if (!rollbackConfirmed) {
+          const uncertain = new EvalRunEventWriteUncertainError(record, failures);
+          this.#eventJournalFailure = uncertain;
+          throw uncertain;
+        }
         if (failures.length === 1) throw failures[0];
-        throw new AggregateError(failures, `Eval run event ${JSON.stringify(record.kind)} could not be written.`);
+        throw new AggregateError(
+          failures,
+          `Eval run event ${JSON.stringify(record.kind)} could not be written and was rolled back.`,
+          { cause: failures[0] },
+        );
       }
       return record;
     });
