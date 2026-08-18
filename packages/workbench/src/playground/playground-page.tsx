@@ -192,6 +192,54 @@ export const createPlaygroundCancelFlight = (): PlaygroundCancelFlightLifecycle 
   });
 };
 
+export interface PlaygroundActionLease {
+  abort(): void;
+  current(): boolean;
+  release(): void;
+  readonly key: Readonly<{ readonly client: PlaygroundClient; readonly generation: number }>;
+  readonly signal: AbortSignal;
+}
+
+export interface PlaygroundActionLifecycle {
+  begin(client: PlaygroundClient): PlaygroundActionLease;
+  invalidate(): void;
+  replace(client: PlaygroundClient): void;
+}
+
+/** Client changes retire every action synchronously, before a late response can write page or shell state. */
+export const createPlaygroundActionLifecycle = (initialClient: PlaygroundClient): PlaygroundActionLifecycle => {
+  let client = initialClient;
+  let generation = 0;
+  const controllers = new Set<AbortController>();
+  const invalidate = (): void => {
+    generation += 1;
+    for (const controller of controllers) controller.abort();
+    controllers.clear();
+  };
+  const replace = (nextClient: PlaygroundClient): void => {
+    if (client === nextClient) return;
+    client = nextClient;
+    invalidate();
+  };
+  return Object.freeze({
+    begin: (actionClient: PlaygroundClient): PlaygroundActionLease => {
+      replace(actionClient);
+      const controller = new AbortController();
+      const key = Object.freeze({ client: actionClient, generation });
+      controllers.add(controller);
+      return Object.freeze({
+        abort: () => controller.abort(),
+        current: () => client === key.client && generation === key.generation && !controller.signal.aborted,
+        key,
+        release: () => controllers.delete(controller),
+        signal: controller.signal,
+      });
+    },
+    invalidate,
+    replace,
+  });
+};
+
 export interface PlaygroundCatalogKey {
   readonly client: PlaygroundClient;
   readonly epochId: string;
@@ -564,11 +612,14 @@ export const PlaygroundPage = ({ catalog, catalogError, catalogLoading = false, 
   const cancelPresentation = useRef<Promise<void> | undefined>(undefined);
   const clientOwner = useRef(client);
   const clientResetPending = useRef(false);
+  const actionLifecycle = useRef(createPlaygroundActionLifecycle(client));
   const observationLifecycle = useRef(createPlaygroundObservationLifecycle());
   const clientReplaced = clientOwner.current !== client;
   if (clientReplaced) {
     clientOwner.current = client;
     clientResetPending.current = true;
+    actionLifecycle.current.replace(client);
+    cancelFlight.current.invalidate();
     observationLifecycle.current.invalidate();
   }
   const activeRun = clientReplaced ? undefined : run;
@@ -606,8 +657,12 @@ export const PlaygroundPage = ({ catalog, catalogError, catalogLoading = false, 
     setEvents([]);
     setExported(undefined);
     setSelectedRefs([]);
+    setBusy(false);
+    setCancelling(false);
     onRunChange(undefined);
   }, [client, onRunChange]);
+
+  useEffect(() => () => actionLifecycle.current.invalidate(), []);
 
   useEffect(() => {
     if (selectedTargetName !== targetName) setTargetName(selectedTargetName);
@@ -646,15 +701,21 @@ export const PlaygroundPage = ({ catalog, catalogError, catalogLoading = false, 
     cancelFlight.current.invalidate();
   }, []);
 
-  const runAction = async (action: () => Promise<void>): Promise<void> => {
+  const runAction = async (action: (lease: PlaygroundActionLease) => Promise<void>): Promise<void> => {
+    const lease = actionLifecycle.current.begin(client);
+    if (!lease.current()) {
+      lease.release();
+      return;
+    }
     setBusy(true);
     setError(undefined);
     try {
-      await action();
+      await action(lease);
     } catch (reason) {
-      setError(errorMessage(reason));
+      if (lease.current()) setError(errorMessage(reason));
     } finally {
-      setBusy(false);
+      if (lease.current()) setBusy(false);
+      lease.release();
     }
   };
 
@@ -692,8 +753,9 @@ export const PlaygroundPage = ({ catalog, catalogError, catalogLoading = false, 
   const start = async (): Promise<void> => {
     const input = operationInput();
     if (input === undefined) return;
-    await runAction(async () => {
-      const started = await client.run(input);
+    await runAction(async (lease) => {
+      const started = await client.run(input, lease.signal);
+      if (!lease.current()) return;
       observationLifecycle.current.invalidate();
       setDraftEvalCase(undefined);
       setEvents([]);
@@ -739,12 +801,18 @@ export const PlaygroundPage = ({ catalog, catalogError, catalogLoading = false, 
 
   const exportTrace = async (): Promise<void> => {
     if (sessionId === undefined) return;
-    await runAction(async () => { setExported(await client.export(sessionId)); });
+    await runAction(async (lease) => {
+      const next = await client.export(sessionId, lease.signal);
+      if (lease.current()) setExported(next);
+    });
   };
 
   const promote = async (): Promise<void> => {
     if (sessionId === undefined || !view.canPromote) return;
-    await runAction(async () => { setDraftEvalCase(await client.promoteToDraftEval(sessionId, view.rawEventRefs)); });
+    await runAction(async (lease) => {
+      const next = await client.promoteToDraftEval(sessionId, view.rawEventRefs, lease.signal);
+      if (lease.current()) setDraftEvalCase(next);
+    });
   };
 
   const toggle = (rawEventRef: string): void => {
@@ -753,7 +821,9 @@ export const PlaygroundPage = ({ catalog, catalogError, catalogLoading = false, 
       : [...previous, rawEventRef]);
   };
 
-  const controlsDisabled = busy || cancelling || (session !== undefined && !terminal(session));
+  const actionBusy = clientReplaced ? false : busy;
+  const actionCancelling = clientReplaced ? false : cancelling;
+  const controlsDisabled = actionBusy || actionCancelling || (session !== undefined && !terminal(session));
   const startDisabled = controlsDisabled || epoch === undefined || operationInput() === undefined;
 
   return <div className="playground-content">
@@ -854,9 +924,9 @@ export const PlaygroundPage = ({ catalog, catalogError, catalogLoading = false, 
         </section>
         {session === undefined ? undefined : <section aria-label="Server-owned run controls" className="playground-controls">
           <div className="playground-actions">
-            <button disabled={busy || cancelling || terminal(session)} onClick={() => void cancel()} type="button">{cancelling ? 'Cancelling…' : 'Cancel run'}</button>
-            <button disabled={busy || cancelling} onClick={() => void exportTrace()} type="button">Export trace</button>
-            <button disabled={busy || cancelling || !view.canPromote} onClick={() => void promote()} type="button">Promote to draft eval case</button>
+            <button disabled={actionBusy || actionCancelling || terminal(session)} onClick={() => void cancel()} type="button">{actionCancelling ? 'Cancelling…' : 'Cancel run'}</button>
+            <button disabled={actionBusy || actionCancelling} onClick={() => void exportTrace()} type="button">Export trace</button>
+            <button disabled={actionBusy || actionCancelling || !view.canPromote} onClick={() => void promote()} type="button">Promote to draft eval case</button>
           </div>
         </section>}
         <PlaygroundTraceView onToggle={toggle} view={view} />

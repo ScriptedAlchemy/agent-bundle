@@ -161,6 +161,26 @@ it('shares one foreground bootstrap across catalog admission and run admission',
   expect(routeCalls).toEqual(['/api/playground/catalog?epochId=epoch%2Fnative', '/api/playground/runs']);
 });
 
+it('forwards catalog cancellation through the authenticated foreground transport', async () => {
+  const controller = new AbortController();
+  let catalogSignal: AbortSignal | null | undefined;
+  const client = new PlaygroundClient({
+    foreground: foreground(async (input, init) => {
+      if (String(input) === '/api/project/session') return response({
+        cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef',
+        origin: 'http://127.0.0.1:5173',
+        token: 'foreground-token',
+      });
+      expect(String(input)).toBe('/api/playground/catalog?epochId=epoch%2Fnative');
+      catalogSignal = init?.signal;
+      return response({ catalog: nativeCatalog });
+    }),
+  });
+
+  await expect(client.catalog('epoch/native', controller.signal)).resolves.toEqual(nativeCatalog);
+  expect(catalogSignal).toBe(controller.signal);
+});
+
 it('sends an exact native prompt admission body without arbitrary browser execution fields', async () => {
   const calls: RecordedRequest[] = [];
   const client = new PlaygroundClient({
@@ -230,7 +250,6 @@ it('bounds the catalog response stream before parsing or calling Response.json',
   await expect(client.catalog('epoch/native')).rejects.toMatchObject({ code: 'AB8043' });
   expect(jsonCalls).toBe(0);
 });
-
 it('cancels a run then reads its server-owned session by encoded identity', async () => {
   const calls: RecordedRequest[] = [];
   const client = new PlaygroundClient({ foreground: foreground(recordingFetch(calls, () => response(calls.length === 1 ? { cancelled: true } : { session }))) });

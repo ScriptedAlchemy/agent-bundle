@@ -79,6 +79,7 @@ const detachedJson = (
       const length = Object.getOwnPropertyDescriptor(value, 'length');
       if (length === undefined || !('value' in length) || !Number.isSafeInteger(length.value) || length.value < 0 ||
         (limits !== undefined && length.value > limits.maxArrayLength) ||
+        keys.length !== length.value + 1 ||
         keys.some((key) => typeof key !== 'string' || (key !== 'length' && !/^(0|[1-9]\d*)$/u.test(key)))) return invalidJson;
       const detached: unknown[] = [];
       for (let index = 0; index < length.value; index += 1) {
@@ -410,18 +411,20 @@ export class PlaygroundClient {
     return replayBody(await this.#json(`${this.#path(sessionId)}/replay${query}`, { signal }));
   }
 
-  async export(sessionId: string): Promise<PlaygroundExport> {
-    return exportBody(await this.#json(`${this.#path(sessionId)}/export`));
+  async export(sessionId: string, signal?: AbortSignal): Promise<PlaygroundExport> {
+    return exportBody(await this.#json(`${this.#path(sessionId)}/export`, { signal }));
   }
 
   async promoteToDraftEval(
     sessionId: string,
     rawEventRefs: readonly string[],
+    signal?: AbortSignal,
   ): Promise<DraftEvalCase> {
     return draftEvalBody(await this.#json(`${this.#path(sessionId)}/draft-eval`, {
       body: JSON.stringify({ rawEventRefs }),
       headers: { 'content-type': 'application/json' },
       method: 'POST',
+      signal,
     }));
   }
 

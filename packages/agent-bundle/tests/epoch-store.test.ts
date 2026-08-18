@@ -1,10 +1,10 @@
-import { chmod, mkdtemp, mkdir, readFile, readdir, rename, rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, mkdir, open, readFile, readdir, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
 import { expect, it } from '@rstest/core';
 
-import { EpochStore } from '../src/dev/epoch-store.ts';
+import { EpochStore, type EpochStaging } from '../src/dev/epoch-store.ts';
 import type { ArtifactEpoch } from '../src/dev/types.ts';
 
 const epochFor = (
@@ -99,6 +99,66 @@ it('publishes a validated staging directory as the active immutable epoch', asyn
     await rm(root, { force: true, recursive: true });
   }
 });
+
+it.each(['marker removal', 'marker file sync', 'marker directory sync'] as const)(
+  'does not activate a new epoch when %s fails and can retry from truth',
+  async (failureKind) => {
+    const root = await mkdtemp(join(tmpdir(), 'agent bundle staging marker durability '));
+    const marker = '.agent-bundle-epoch-stage.json';
+    const failure = new Error(`${failureKind} failed`);
+    let failMarkerBoundary = false;
+    const controlledOpen = async (path: string, flags: string | number, mode?: number) => {
+      const handle = await open(path, flags as Parameters<typeof open>[1], mode);
+      return new Proxy(handle, {
+        get(target, property) {
+          if (property === 'sync') return async () => {
+            if (failMarkerBoundary && (
+              failureKind === 'marker file sync' && path.endsWith(marker) ||
+              failureKind === 'marker directory sync' && path.includes(`${join('.agent-bundle', 'epochs')}${path.includes('\\') ? '\\' : '/'}.stage-`)
+            )) throw failure;
+            await target.sync();
+          };
+          const value = Reflect.get(target, property, target);
+          return typeof value === 'function' ? value.bind(target) : value;
+        },
+      });
+    };
+    const controlledRemove: typeof rm = async (path, options) => {
+      if (failMarkerBoundary && failureKind === 'marker removal' && String(path).endsWith(marker)) throw failure;
+      await rm(path, options);
+    };
+    const store = new EpochStore({
+      projectRoot: root,
+      stagingMarkerStorage: Object.freeze({ open: controlledOpen as typeof open, remove: controlledRemove }),
+    });
+    const stage = async (epoch: ArtifactEpoch): Promise<EpochStaging> => {
+      const staging = await store.createStagingEpoch({ epoch, targets: Object.keys(epoch.targetDigests) });
+      await Promise.all(Object.keys(epoch.targetDigests).map(async (target) => {
+        await mkdir(join(staging.root, target), { recursive: true });
+        await writeFile(join(staging.root, target, 'plugin.json'), `${epoch.id}\n`);
+      }));
+      await writeFile(join(staging.root, 'agent-bundle.manifest.json'), '{}\n');
+      return staging;
+    };
+    try {
+      const active = epochFor(root, 'epoch-marker-active', '2026-08-14T12:00:01.000Z');
+      const replacement = epochFor(root, 'epoch-marker-replacement', '2026-08-14T12:00:02.000Z');
+      await (await stage(active)).publish(async () => undefined);
+      failMarkerBoundary = true;
+      const failed = await stage(replacement);
+      await expect(failed.publish(async () => undefined)).rejects.toBe(failure);
+      await expect(store.readActiveEpoch()).resolves.toEqual(active);
+      await expect(readFile(join(root, '.agent-bundle', 'epochs', replacement.id, marker), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+
+      failMarkerBoundary = false;
+      await (await stage(replacement)).publish(async () => undefined);
+      await expect(store.readActiveEpoch()).resolves.toEqual(replacement);
+      await expect(readFile(join(root, '.agent-bundle', 'epochs', replacement.id, marker), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  },
+);
 
 it('exposes the validated immutable epoch directory on an acquired reference', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent bundle epoch reference root '));
