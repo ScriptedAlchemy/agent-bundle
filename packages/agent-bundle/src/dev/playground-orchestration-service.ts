@@ -428,7 +428,19 @@ export class PlaygroundOrchestrationService {
       const result = await this.#operation(operation, epochId, targetDigest, runId, signal, sessionId, preparedNative);
       const events = result.events ?? (result.event === undefined ? [] : [result.event]);
       for (const event of events) await this.#trace.append(sessionId, event);
-      await this.#trace.finalize(sessionId, Object.freeze({ ...(result.outcome ?? {}), status: result.status }));
+      const cancelled = signal.aborted;
+      if (cancelled) {
+        await this.#trace.append(sessionId, Object.freeze({
+          kind: 'operation.cancelled',
+          raw: Object.freeze({ operation: operation.operation }),
+          source: 'diagnostics',
+          summary: 'Server-owned playground operation was cancelled.',
+        }));
+      }
+      await this.#trace.finalize(sessionId, Object.freeze({
+        ...(result.outcome ?? {}),
+        status: cancelled ? 'cancelled' : result.status,
+      }));
     } catch (error) {
       const cancelled = signal.aborted;
       const failure = scriptFailureEvidence(operation, error);
@@ -496,7 +508,6 @@ export class PlaygroundOrchestrationService {
         emit: async (event) => { await this.#trace.append(sessionId, event); },
         signal,
       });
-      signal.throwIfAborted();
       return Object.freeze({
         events: result.events,
         ...(result.response === undefined && result.workspace === undefined

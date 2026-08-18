@@ -71,6 +71,9 @@ export interface RunClaudeTrialOptions extends ClaudeProcessOptions {
   readonly graders?: readonly EvalGraderSpec[];
   readonly host?: string;
   readonly now?: () => Date;
+  /** Narrow server-owned native Playground seam; no raw process output crosses it. */
+  readonly onCompleted?: (result: Readonly<{ readonly response?: string; readonly workspacePath?: string }>) => Promise<void> | void;
+  readonly onProgress?: (phase: 'fixture.materialized' | 'host.started' | 'preflight') => Promise<void> | void;
   readonly semanticGrader?: EvalSemanticGraderSpec;
   readonly suiteDir: string;
   readonly target?: string;
@@ -286,6 +289,7 @@ export const runClaudeTrial = async (options: RunClaudeTrialOptions): Promise<Ev
     cwd: options.artifact.root,
     ...(options.environment === undefined ? {} : { environment: options.environment }),
   });
+  await options.onProgress?.('preflight');
 
   let evidence = unavailableEvidence;
   let failure = preflight.failure;
@@ -311,6 +315,7 @@ export const runClaudeTrial = async (options: RunClaudeTrialOptions): Promise<Ev
         });
         workspacePath = fixture.path;
         fixtureDigest = fixture.digest;
+        await options.onProgress?.('fixture.materialized');
       } catch {
         failure = harnessFailure(
           'EVAL_FIXTURE_UNAVAILABLE',
@@ -330,10 +335,12 @@ export const runClaudeTrial = async (options: RunClaudeTrialOptions): Promise<Ev
             'The Claude eval command must never pass --bare, which bypasses saved subscription authentication.',
           );
         }
-        outcome = await runClaudeStreamProcess(
+        const process = runClaudeStreamProcess(
           Object.freeze({ ...command, cwd: workspacePath, environment }),
           processOptions,
         );
+        await options.onProgress?.('host.started');
+        outcome = await process;
         if (outcome.failure === undefined) {
           try {
             stream = normalizeClaudeStream(outcome.stdout, { skills: candidateSkills(options.evalCase) });
@@ -410,7 +417,7 @@ export const runClaudeTrial = async (options: RunClaudeTrialOptions): Promise<Ev
   ];
 
   const completedAt = now();
-  return options.writer.writeTrial({
+  const trial = await options.writer.writeTrial({
     assertions,
     caseDigest: options.evalCase.digest,
     caseId: options.evalCase.id,
@@ -430,4 +437,9 @@ export const runClaudeTrial = async (options: RunClaudeTrialOptions): Promise<Ev
     targetDigest,
     trialIndex: options.trialIndex,
   });
+  await options.onCompleted?.(Object.freeze({
+    ...(stream === undefined ? {} : { response: stream.finalResponse }),
+    ...(workspacePath === undefined ? {} : { workspacePath }),
+  }));
+  return trial;
 };

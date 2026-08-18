@@ -7,9 +7,9 @@ import type { PreparedEvalArtifact } from '../eval/artifact.ts';
 import { runClaudeTrial } from '../eval/claude-harness.ts';
 import { runCodexEvalTrial, type CodexCommandRunner } from '../eval/codex-harness.ts';
 import { normalizeEvalConfig } from '../eval/config.ts';
+import { redactEvalCredentialText } from '../eval/credentials.ts';
 import { discoverEvalSuites, type DiscoveredEvalSuite } from '../eval/discovery.ts';
 import { planEvalFixture, type EvalFixturePlan } from '../eval/fixtures.ts';
-import { evalTrialId } from '../eval/harness.ts';
 import type { EvalTrialRecord, EvalTrialWriter } from '../eval/run-store.ts';
 import type { EvalCase } from '../eval/types.ts';
 import type { NativeClaudeProcessRunner } from '../host-contracts/native-claude-contract.ts';
@@ -155,6 +155,11 @@ const hardcodedProgress = (phase: NativePlaygroundProgress): PlaygroundEventInpu
         : 'Native host process started.',
 });
 
+/** A completed response is user-facing evidence, but never a raw host stream. */
+const safeResponse = (value: string): string => redactEvalCredentialText(value)
+  .replace(/(?:[A-Za-z]:)?(?:[/\\][^\s`'"<>|]*)+/gu, '[path]')
+  .replaceAll('\0', '');
+
 const workspaceEvidence = (diff: WorkspaceDiff): PlaygroundJsonObject => Object.freeze({
   changes: Object.freeze(diff.changes.map((change) => Object.freeze({
     digest: change.digest,
@@ -227,6 +232,7 @@ const normalizedTrialEvents = (trial: EvalTrialRecord, diff: WorkspaceDiff | und
  */
 export class NativePlaygroundService {
   readonly #catalogs = new Map<string, Promise<CatalogSnapshot>>();
+  readonly #cleanupFailures = new Set<unknown>();
   readonly #discover: NonNullable<NativePlaygroundServiceOptions['discover']>;
   readonly #environment: Readonly<NodeJS.ProcessEnv> | undefined;
   readonly #inspectArtifact: NonNullable<NativePlaygroundServiceOptions['inspectArtifact']>;
@@ -319,9 +325,17 @@ export class NativePlaygroundService {
     this.#operations.add(operation);
     const signal = AbortSignal.any([controller.signal, options.signal]);
     let nativeRoot: string | undefined;
+    let completedResponse: string | undefined;
+    let completedWorkspace: WorkspaceDiff | undefined;
+    const onProgress = async (phase: NativePlaygroundProgress): Promise<void> => {
+      await options.emit(hardcodedProgress(phase));
+    };
+    const onCompleted = async (result: Readonly<{ readonly response?: string; readonly workspacePath?: string }>): Promise<void> => {
+      if (result.response !== undefined) completedResponse = safeResponse(result.response);
+      if (result.workspacePath !== undefined) completedWorkspace = await this.#workspaceDiff(result.workspacePath, prepared);
+    };
     try {
       nativeRoot = await this.#createWorkspaceRoot();
-      await options.emit(hardcodedProgress('preflight'));
       const writer = new MemoryTrialWriter();
       let trial: EvalTrialRecord;
       if (prepared.host === 'claude') {
@@ -332,6 +346,8 @@ export class NativePlaygroundService {
           fixturePlan: prepared.fixturePlan,
           host: prepared.host,
           ...(this.#native?.claudeRun === undefined ? {} : { run: this.#native.claudeRun }),
+          onCompleted,
+          onProgress,
           signal,
           suiteDir: prepared.suiteDir,
           target: prepared.target,
@@ -340,7 +356,6 @@ export class NativePlaygroundService {
           writer,
         });
       } else {
-        await options.emit(hardcodedProgress('codex.setup'));
         trial = await runCodexEvalTrial({
           artifact: prepared.artifact,
           ...(this.#environment === undefined ? {} : { environment: this.#environment }),
@@ -348,6 +363,8 @@ export class NativePlaygroundService {
           fixturePlan: prepared.fixturePlan,
           host: prepared.host,
           ...(this.#native?.codexRun === undefined ? {} : { run: this.#native.codexRun }),
+          onCompleted: async (result) => onCompleted(result),
+          onProgress,
           signal,
           suiteDir: prepared.suiteDir,
           target: prepared.target,
@@ -356,17 +373,15 @@ export class NativePlaygroundService {
           writer,
         });
       }
-      const workspace = prepared.host === 'claude'
-        ? await this.#workspaceDiff(nativeRoot, prepared)
-        : undefined;
       return Object.freeze({
-        events: normalizedTrialEvents(trial, workspace),
+        events: normalizedTrialEvents(trial, completedWorkspace),
+        ...(completedResponse === undefined ? {} : { response: completedResponse }),
         status: trial.harnessFailure === undefined && trial.outcome === 'pass' ? 'passed' : 'failed',
-        ...(workspace === undefined ? {} : { workspace: workspaceEvidence(workspace) }),
+        ...(completedWorkspace === undefined ? {} : { workspace: workspaceEvidence(completedWorkspace) }),
       });
     } finally {
       try {
-        if (nativeRoot !== undefined) await this.#removeWorkspace(nativeRoot);
+        if (nativeRoot !== undefined) await this.#cleanupWorkspace(nativeRoot);
       } finally {
         this.#operations.delete(operation);
         operation.settle();
@@ -385,6 +400,18 @@ export class NativePlaygroundService {
     for (const operation of operations) operation.controller.abort(new Error('Native Playground service is closed.'));
     await Promise.allSettled(operations.map((operation) => operation.settled));
     this.#catalogs.clear();
+    if (this.#cleanupFailures.size > 0) {
+      throw new AggregateError([...this.#cleanupFailures], 'Native Playground workspace cleanup failed.');
+    }
+  }
+
+  async #cleanupWorkspace(root: string): Promise<void> {
+    try {
+      await this.#removeWorkspace(root);
+    } catch (error) {
+      this.#cleanupFailures.add(error);
+      throw error;
+    }
   }
 
   async #snapshot(reference: NativePlaygroundEpochReference): Promise<CatalogSnapshot> {
@@ -447,11 +474,11 @@ export class NativePlaygroundService {
     return mkdtemp(join(root, 'native-playground-'));
   }
 
-  async #workspaceDiff(root: string, prepared: NativePlaygroundPrepared): Promise<WorkspaceDiff | undefined> {
+  async #workspaceDiff(workspace: string, prepared: NativePlaygroundPrepared): Promise<WorkspaceDiff | undefined> {
     try {
       return await workspaceDiff({
         plan: prepared.fixturePlan,
-        workspace: join(root, evalTrialId(prepared.evalCase.id, prepared.host, 0)),
+        workspace,
       });
     } catch { return undefined; }
   }

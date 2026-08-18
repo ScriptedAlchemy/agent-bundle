@@ -69,6 +69,9 @@ export interface RunCodexEvalTrialOptions {
   readonly host?: string;
   readonly normalCodexHome?: string;
   readonly now?: () => Date;
+  /** Narrow server-owned native Playground seam; no raw process output crosses it. */
+  readonly onCompleted?: (result: Readonly<{ readonly response?: string; readonly workspacePath: string }>) => Promise<void> | void;
+  readonly onProgress?: (phase: 'codex.setup' | 'fixture.materialized' | 'host.started' | 'preflight') => Promise<void> | void;
   readonly run?: CodexCommandRunner;
   readonly signal?: AbortSignal;
   readonly suiteDir: string;
@@ -246,6 +249,7 @@ export const runCodexEvalTrial = async (options: RunCodexEvalTrialOptions): Prom
       try {
         const fixture = await materializeEvalFixture({ destination: temporary.workspace, plan: options.fixturePlan });
         fixtureDigest = fixture.digest;
+        await options.onProgress?.('fixture.materialized');
       } catch (error) {
         throw new CodexEvalHarnessError(
           'CODEX_FIXTURE_UNAVAILABLE',
@@ -254,6 +258,7 @@ export const runCodexEvalTrial = async (options: RunCodexEvalTrialOptions): Prom
       }
 
       const version = await execute('--version', ['--version']);
+      await options.onProgress?.('preflight');
       if (version.exitCode !== 0 || !codexVersionCompatible(version.stdout)) {
         throw new CodexEvalHarnessError(
           'CODEX_CLI_INCOMPATIBLE',
@@ -261,6 +266,7 @@ export const runCodexEvalTrial = async (options: RunCodexEvalTrialOptions): Prom
         );
       }
       await adoptCodexAuthState(normalCodexHome, temporary.home);
+      await options.onProgress?.('codex.setup');
 
       for (const step of codexPluginInstallPlan(candidate, temporary.candidate)) {
         const result = await execute(step.id, step.args);
@@ -278,7 +284,7 @@ export const runCodexEvalTrial = async (options: RunCodexEvalTrialOptions): Prom
         }
       }
 
-      const result = await execute('exec', [
+      const executionResult = execute('exec', [
         'exec',
         '-m',
         options.evalCase.hosts[host]?.model ?? 'unpinned',
@@ -292,6 +298,8 @@ export const runCodexEvalTrial = async (options: RunCodexEvalTrialOptions): Prom
         temporary.workspace,
         options.evalCase.prompt,
       ]);
+      await options.onProgress?.('host.started');
+      const result = await executionResult;
       const run = normalizeCodexEventStream(result.stdout);
       if (result.failure !== 'timeout' && (run.malformedLines > 0 || run.envelopes.length === 0)) {
         throw new CodexEvalHarnessError(
@@ -369,7 +377,7 @@ export const runCodexEvalTrial = async (options: RunCodexEvalTrialOptions): Prom
     const failure = harnessFailure ?? isolationFailure ?? graderFailure;
     const pluginFailure = failure === undefined ? pluginFailureFor(evidence, assertions) : undefined;
     const completedAt = now();
-    return await options.writer.writeTrial({
+    const trial = await options.writer.writeTrial({
       assertions,
       caseDigest: options.evalCase.digest,
       caseId: options.evalCase.id,
@@ -389,6 +397,11 @@ export const runCodexEvalTrial = async (options: RunCodexEvalTrialOptions): Prom
       targetDigest,
       trialIndex: options.trialIndex,
     });
+    await options.onCompleted?.(Object.freeze({
+      ...(execution === undefined || execution.run.messages.length === 0 ? {} : { response: execution.run.messages.at(-1) }),
+      workspacePath: temporary.workspace,
+    }));
+    return trial;
   } finally {
     await removeTemporaryCodexTrialHome(temporary.root);
   }
