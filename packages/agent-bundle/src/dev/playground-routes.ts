@@ -1,6 +1,7 @@
 import { Buffer } from 'node:buffer';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
+import { parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
 import type { PlaygroundOperationRequest, PlaygroundRun } from './playground-contract.ts';
 import {
   PlaygroundServiceError,
@@ -244,7 +245,7 @@ const jsonBody = async (request: IncomingMessage): Promise<JsonObject> => {
   }
   let parsed: unknown;
   try {
-    parsed = JSON.parse(await readBody(request));
+    parsed = parseJsonWithoutDuplicateKeys(await readBody(request));
   } catch (error) {
     if (isRequestDiagnostic(error)) throw error;
     throw requestError(diagnostic('AB8001', 'Request body must be valid JSON.', 400));
@@ -354,14 +355,7 @@ export class PlaygroundRoutes {
     const method = request.method ?? 'GET';
     if (parsed.kind === 'runs') {
       if (method !== 'POST') return this.#methodNotAllowed(response);
-      const controller = new AbortController();
-      const abort = (): void => controller.abort();
-      response.once('close', abort);
-      try {
-        return responseJson(response, { run: await service.run(operationInput(await jsonBody(request)), { signal: controller.signal }) });
-      } finally {
-        response.off('close', abort);
-      }
+      return responseJson(response, { run: await service.run(operationInput(await jsonBody(request))) });
     }
     if (parsed.kind === 'cancel') {
       if (method !== 'POST') return this.#methodNotAllowed(response);

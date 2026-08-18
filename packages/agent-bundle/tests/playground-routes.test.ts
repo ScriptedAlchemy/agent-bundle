@@ -188,6 +188,7 @@ it('admits only a typed server-owned operation and mints its run identity', asyn
       input: { operation: 'skill.inspect', skillId: 'skill:review', target: 'codex' },
       kind: 'run',
     });
+    expect(service.calls[0]).toMatchObject({ signal: undefined });
   } finally {
     await started.close();
   }
@@ -213,6 +214,22 @@ it('rejects forged epochs, browser evidence, outcomes, and executable fields bef
   } finally {
     await started.close();
   }
+});
+
+it('rejects duplicate operation, target, and nested JSON keys before admission', async () => {
+  const service = new RecordingService();
+  const started = await startRoutes(service);
+  try {
+    for (const body of [
+      '{"operation":"skill.inspect","operation":"script.run","skillId":"skill:review","target":"codex"}',
+      '{"operation":"skill.inspect","skillId":"skill:review","target":"codex","target":"other"}',
+      '{"operation":"hook.simulate","hook":"session-start","input":{"value":1,"value":2},"target":"codex"}',
+    ]) {
+      const response = await fetch(`${started.url}/api/playground/runs`, { body, headers: jsonHeaders(), method: 'POST' });
+      expect(response.status).toBe(400);
+    }
+    expect(service.calls).toEqual([]);
+  } finally { await started.close(); }
 });
 
 it('rejects retired browser-authored event, finalize, reopen, and session creation endpoints', async () => {

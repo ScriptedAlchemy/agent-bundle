@@ -38,6 +38,15 @@ const currentStatus = (): ProjectStatus => Object.freeze({
   source: Object.freeze({ diagnostics: Object.freeze([]), state: 'ready' as const }),
 });
 
+const eventually = async (assertion: () => void): Promise<void> => {
+  let failure: unknown;
+  for (let attempt = 0; attempt < 25; attempt += 1) {
+    try { assertion(); return; } catch (error) { failure = error; }
+    await new Promise<void>((resolvePromise) => { setTimeout(resolvePromise, 2); });
+  }
+  throw failure;
+};
+
 class RecordingTraceStore implements PlaygroundDurableTraceStore {
   readonly appended: PlaygroundEventInput[] = [];
   closed = 0;
@@ -84,7 +93,11 @@ class RecordingTraceStore implements PlaygroundDurableTraceStore {
   async replay(_sessionId: string, _cursor?: PlaygroundReplayCursor): Promise<PlaygroundReplay> {
     const session = this.#session;
     if (session === undefined) throw new Error('Expected a session.');
-    return Object.freeze({ cursor: Object.freeze({ afterSequence: this.appended.length }), events: Object.freeze([]), session });
+    return Object.freeze({
+      cursor: Object.freeze({ afterSequence: this.appended.length }),
+      events: Object.freeze(this.appended.map((input, index) => Object.freeze({ ...input, rawEventRef: `events.jsonl#${index + 1}`, sequence: index + 1, timestamp: '2026-08-18T00:00:01.000Z' }))),
+      session,
+    });
   }
 
   async subscribe(_sessionId: string, _options: PlaygroundSubscribeOptions): Promise<PlaygroundSubscription> {
@@ -144,7 +157,8 @@ it('mints a run and session from the active epoch while deriving every durable i
     target: 'codex',
   } as unknown as Parameters<typeof service.run>[0]);
 
-  expect(run).toMatchObject({ id: 'run-server-owned', session: { id: 'session-server-owned', state: 'finalized' } });
+  expect(run).toMatchObject({ id: 'run-server-owned', session: { id: 'session-server-owned', state: 'open' } });
+  await eventually(() => expect(trace.finalized).toEqual({ status: 'passed' }));
   expect(references).toEqual(['epoch-active', 'close:epoch-active']);
   expect(trace.input).toMatchObject({
     epoch: { id: 'epoch-active' },
@@ -161,7 +175,7 @@ it('mints a run and session from the active epoch while deriving every durable i
   expect(trace.finalized).toEqual({ status: 'passed' });
 });
 
-it('cancels the actual script operation, finalizes its server-owned trace, and releases its epoch reference', async () => {
+it('admits a gated operation promptly, replays its epoch binding, and cancels the actual script work', async () => {
   const trace = new RecordingTraceStore();
   const references: string[] = [];
   let entered!: () => void;
@@ -179,11 +193,12 @@ it('cancels the actual script operation, finalizes its server-owned trace, and r
     } },
     trace,
   });
-  const running = service.run({ operation: 'script.run', script: 'review.mjs', target: 'codex' });
+  const admitted = await service.run({ operation: 'script.run', script: 'review.mjs', target: 'codex' });
+  expect(admitted.session.state).toBe('open');
+  await expect(service.replay(admitted.session.id)).resolves.toMatchObject({ events: [expect.objectContaining({ kind: 'epoch.bound' })] });
   await enteredScript;
 
   await expect(service.cancel('run-server-owned')).resolves.toBe(true);
-  await expect(running).resolves.toMatchObject({ session: { state: 'finalized' } });
   expect(observed?.aborted).toBe(true);
   expect(trace.finalized).toEqual({ status: 'cancelled' });
   expect(references).toEqual(['epoch-active', 'close:epoch-active']);
@@ -200,6 +215,7 @@ it('promotes only persisted raw event references and closes admission before dra
     trace,
   });
   await service.run({ operation: 'skill.inspect', skillId: 'skill:review', target: 'codex' });
+  await eventually(() => expect(trace.finalized).toEqual({ status: 'passed' }));
 
   await expect(service.promoteToDraftEval('session-server-owned', ['events.jsonl#2'])).resolves.toMatchObject({ schemaVersion: 1 });
   expect(trace.promoted).toEqual([[{
@@ -213,4 +229,58 @@ it('promotes only persisted raw event references and closes admission before dra
   await service.close();
   await expect(service.run({ operation: 'skill.inspect', skillId: 'skill:review', target: 'codex' })).rejects.toThrow('closed');
   expect(trace.closed).toBe(1);
+});
+
+it('derives failed outcomes from script exits, hook diagnostics, and MCP error results while preserving the canonical epoch target digest', async () => {
+  const cases = [
+    {
+      operation: { operation: 'script.run' as const, script: 'review.mjs', target: 'codex' },
+      services: { scripts: { run: async () => Object.freeze({ exitCode: 17, script: 'review.mjs', stderr: 'failed', stdout: '' }) } },
+    },
+    {
+      operation: { hook: 'session-start', input: {}, operation: 'hook.simulate' as const, target: 'codex' },
+      services: { hookPlayground: { simulate: async () => Object.freeze({ diagnostics: Object.freeze([{ severity: 'error' as const }]) }) } },
+    },
+    {
+      operation: { arguments: {}, operation: 'mcp.call-tool' as const, serverName: 'fixture', target: 'codex', tool: 'fail' },
+      services: { mcpSessions: { closeSession: async () => true, open: async () => Object.freeze({ callTool: async () => Object.freeze({ isError: true }), id: 'mcp-server-owned' }) } },
+    },
+  ] as const;
+  for (const { operation, services } of cases) {
+    const trace = new RecordingTraceStore();
+    const service = new PlaygroundOrchestrationService({ coordinator: { status: currentStatus }, createRunId: () => 'run-server-owned', createSessionId: () => 'session-server-owned', epochStore: epochAuthority([]), trace, ...services } as unknown as ConstructorParameters<typeof PlaygroundOrchestrationService>[0]);
+    await service.run(operation);
+    await eventually(() => expect(trace.finalized).toEqual({ status: 'failed' }));
+    if (operation.operation === 'script.run') {
+      expect(trace.appended[1]).toMatchObject({ raw: { targetDigest: 'target-sha256' } });
+    }
+  }
+});
+
+it('contains failed epoch binding append without retaining an open usable session', async () => {
+  const trace = new RecordingTraceStore();
+  const append = trace.append.bind(trace);
+  trace.append = async (_sessionId, input) => {
+    if (input.kind === 'epoch.bound') throw new Error('epoch append failed');
+    return append('session-server-owned', input);
+  };
+  const service = new PlaygroundOrchestrationService({ coordinator: { status: currentStatus }, createRunId: () => 'run-server-owned', createSessionId: () => 'session-server-owned', epochStore: epochAuthority([]), trace });
+  await expect(service.run({ operation: 'skill.inspect', skillId: 'skill:review', target: 'codex' })).rejects.toThrow('epoch append failed');
+  expect(trace.session('session-server-owned')).toMatchObject({ outcome: { status: 'failed' }, state: 'finalized' });
+});
+
+it('turns hostile getter, proxy, and cyclic operation evidence into an unavailable marker without evaluating it', async () => {
+  let getterRead = 0;
+  const getter = Object.create(null) as { readonly value: unknown };
+  Object.defineProperty(getter, 'value', { enumerable: true, get: () => { getterRead += 1; return 'leak'; } });
+  const proxy = new Proxy({}, { ownKeys: () => { throw new Error('proxy trap'); } });
+  const cyclic: Record<string, unknown> = {}; cyclic.self = cyclic;
+  for (const result of [getter, proxy, cyclic]) {
+    const trace = new RecordingTraceStore();
+    const service = new PlaygroundOrchestrationService({ coordinator: { status: currentStatus }, createRunId: () => 'run-server-owned', createSessionId: () => 'session-server-owned', epochStore: epochAuthority([]), mcpSessions: { closeSession: async () => true, open: async () => Object.freeze({ callTool: async () => result as never, id: 'mcp-server-owned' }) }, trace });
+    await service.run({ arguments: {}, operation: 'mcp.call-tool', serverName: 'fixture', target: 'codex', tool: 'inspect' });
+    await eventually(() => expect(trace.finalized).toEqual({ status: 'passed' }));
+    expect(trace.appended[1]).toMatchObject({ raw: { result: '[unavailable evidence]' } });
+  }
+  expect(getterRead).toBe(0);
 });

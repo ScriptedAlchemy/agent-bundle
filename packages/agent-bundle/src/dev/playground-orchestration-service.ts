@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import { digest } from '../core/digest.ts';
+import { snapshotStrictJsonValue } from '../core/strict-json.ts';
 import type { HookPlaygroundRouteService } from './hook-playground-routes.ts';
 import type { McpSession } from './mcp-session-service.ts';
 import type { PlaygroundOperationRequest, PlaygroundRun } from './playground-contract.ts';
@@ -11,7 +12,6 @@ import type {
   PlaygroundDurableOutcome,
   PlaygroundEventInput,
   PlaygroundExport,
-  PlaygroundJsonObject,
   PlaygroundJsonValue,
   PlaygroundReplay,
   PlaygroundReplayCursor,
@@ -22,8 +22,6 @@ import type {
   PlaygroundSubscription,
   PlaygroundTraceEvent,
 } from '../services/playground-service.ts';
-
-const maxEvidenceDepth = 32;
 
 export interface PlaygroundEpochReference {
   close(): Promise<void>;
@@ -77,25 +75,24 @@ interface RunningPlaygroundOperation {
   readonly done: Promise<void>;
 }
 
-const plainRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value);
+interface PlaygroundOperationResult {
+  readonly event: PlaygroundEventInput;
+  readonly status: 'failed' | 'passed';
+}
 
 /** Snapshots executor output as data; inherited values, getters, functions, and cycles never enter trace storage. */
-const evidenceValue = (value: unknown, depth = 0, seen = new WeakSet<object>()): PlaygroundJsonValue => {
-  if (depth > maxEvidenceDepth) return '[evidence depth exceeded]';
-  if (value === null || typeof value === 'boolean' || typeof value === 'number' || typeof value === 'string') {
-    return typeof value === 'number' && !Number.isFinite(value) ? '[invalid number]' : value;
-  }
-  if (typeof value !== 'object') return '[unavailable evidence]';
-  if (seen.has(value)) return '[cyclic evidence]';
-  seen.add(value);
+const evidenceValue = (value: unknown): PlaygroundJsonValue => {
   try {
-    if (Array.isArray(value)) return Object.freeze(value.map((item) => evidenceValue(item, depth + 1, seen)));
-    if (!plainRecord(value)) return '[unavailable evidence]';
-    return Object.freeze(Object.fromEntries(Object.entries(value).map(([key, item]) => [key, evidenceValue(item, depth + 1, seen)]))) as PlaygroundJsonObject;
-  } finally {
-    seen.delete(value);
-  }
+    return snapshotStrictJsonValue(value) as PlaygroundJsonValue;
+  } catch { return '[unavailable evidence]'; }
+};
+
+const resultHasError = (value: unknown): boolean => {
+  if (typeof value !== 'object' || value === null) return false;
+  try {
+    const descriptor = Object.getOwnPropertyDescriptor(value, 'isError');
+    return descriptor !== undefined && 'value' in descriptor && descriptor.value === true;
+  } catch { return true; }
 };
 
 const operationIntent = (operation: PlaygroundOperationRequest): PlaygroundSessionInput['invocation'] => {
@@ -157,18 +154,54 @@ export class PlaygroundOrchestrationService {
     const id = this.#createRunId();
     const controller = new AbortController();
     const signal = options.signal === undefined ? controller.signal : AbortSignal.any([options.signal, controller.signal]);
-    let settle!: () => void;
-    const running: RunningPlaygroundOperation = Object.freeze({
-      controller,
-      done: new Promise<void>((resolvePromise) => { settle = resolvePromise; }),
+    const artifact = this.#coordinator.status().artifact;
+    if (artifact.state === 'missing') throw new Error('Playground requires an active artifact epoch.');
+    const epoch = artifact.activeEpoch;
+    const targetDigest = epoch.targetDigests[input.target];
+    if (typeof targetDigest !== 'string') throw new Error('Playground operation target is not in the active artifact epoch.');
+    const reference = await this.#epochStore.acquireEpochReference(epoch.id);
+    const sessionId = this.#createSessionId();
+    const epochDigest = digest({
+      configDigest: epoch.configDigest,
+      id: epoch.id,
+      modelDigest: epoch.modelDigest,
+      projectRevision: epoch.projectRevision,
+      targetDigests: epoch.targetDigests,
     });
-    this.#running.set(id, running);
+    const fixtureDigest = digest({ epochDigest, kind: 'server-owned-workspace', target: input.target });
+    let opened = false;
     try {
       if (this.#closed) throw new Error('Playground orchestration service is closed.');
-      return await this.#run(id, input, signal);
-    } finally {
-      settle();
-      this.#running.delete(id);
+      const session = await this.#trace.openSession(Object.freeze({
+        epoch: Object.freeze({ digest: epochDigest, id: epoch.id }),
+        fixture: Object.freeze({ digest: fixtureDigest, id: 'server-owned-workspace' }),
+        invocation: operationIntent(input),
+        sessionId,
+        target: Object.freeze({ digest: targetDigest, name: input.target }),
+        task: Object.freeze({ id, text: taskText(input) }),
+      }));
+      opened = true;
+      await this.#trace.append(sessionId, Object.freeze({
+        kind: 'epoch.bound',
+        raw: Object.freeze({ epochId: epoch.id, target: input.target, targetDigest }),
+        source: 'build',
+        summary: 'Bound playground run to the current active artifact epoch.',
+      }));
+      const done = this.#finish(sessionId, input, epoch.id, targetDigest, id, signal).finally(async () => {
+        this.#running.delete(id);
+        await reference.close();
+      });
+      this.#running.set(id, Object.freeze({ controller, done }));
+      return Object.freeze({ id, session });
+    } catch (error) {
+      let containment: unknown;
+      if (opened) {
+        try { await this.#trace.finalize(sessionId, Object.freeze({ status: 'failed' })); }
+        catch (finalizeError) { containment = finalizeError; }
+      }
+      await reference.close();
+      if (containment !== undefined) throw new AggregateError([error, containment], 'Playground admission and containment both failed.', { cause: error });
+      throw error;
     }
   }
 
@@ -225,106 +258,59 @@ export class PlaygroundOrchestrationService {
     await this.#trace.close();
   }
 
-  async #run(id: string, operation: PlaygroundOperationRequest, signal: AbortSignal): Promise<PlaygroundRun> {
-    const artifact = this.#coordinator.status().artifact;
-    if (artifact.state === 'missing') throw new Error('Playground requires an active artifact epoch.');
-    const epoch = artifact.activeEpoch;
-    const targetDigest = epoch.targetDigests[operation.target];
-    if (typeof targetDigest !== 'string') throw new Error('Playground operation target is not in the active artifact epoch.');
-    const reference = await this.#epochStore.acquireEpochReference(epoch.id);
-    const sessionId = this.#createSessionId();
-    const epochDigest = digest({
-      configDigest: epoch.configDigest,
-      id: epoch.id,
-      modelDigest: epoch.modelDigest,
-      projectRevision: epoch.projectRevision,
-      targetDigests: epoch.targetDigests,
-    });
-    const fixtureDigest = digest({ epochDigest, kind: 'server-owned-workspace', target: operation.target });
+  async #finish(
+    sessionId: string,
+    operation: PlaygroundOperationRequest,
+    epochId: string,
+    targetDigest: string,
+    runId: string,
+    signal: AbortSignal,
+  ): Promise<void> {
     try {
-      await this.#trace.openSession(Object.freeze({
-        epoch: Object.freeze({ digest: epochDigest, id: epoch.id }),
-        fixture: Object.freeze({ digest: fixtureDigest, id: 'server-owned-workspace' }),
-        invocation: operationIntent(operation),
-        sessionId,
-        target: Object.freeze({ digest: targetDigest, name: operation.target }),
-        task: Object.freeze({ id, text: taskText(operation) }),
-      }));
+      const result = await this.#operation(operation, epochId, targetDigest, runId, signal);
+      await this.#trace.append(sessionId, result.event);
+      await this.#trace.finalize(sessionId, Object.freeze({ status: result.status }));
+    } catch {
+      const cancelled = signal.aborted;
       await this.#trace.append(sessionId, Object.freeze({
-        kind: 'epoch.bound',
-        raw: Object.freeze({ epochId: epoch.id, target: operation.target, targetDigest }),
-        source: 'build',
-        summary: 'Bound playground run to the current active artifact epoch.',
+        kind: cancelled ? 'operation.cancelled' : 'operation.failed',
+        raw: Object.freeze({ operation: operation.operation }),
+        source: 'diagnostics',
+        summary: cancelled ? 'Server-owned playground operation was cancelled.' : 'Server-owned playground operation failed.',
       }));
-      try {
-        const event = await this.#operation(operation, epoch.id, id, signal);
-        await this.#trace.append(sessionId, event);
-        const session = await this.#trace.finalize(sessionId, Object.freeze({ status: 'passed' }));
-        return Object.freeze({ id, session });
-      } catch {
-        const cancelled = signal.aborted;
-        await this.#trace.append(sessionId, Object.freeze({
-          kind: cancelled ? 'operation.cancelled' : 'operation.failed',
-          raw: Object.freeze({ operation: operation.operation }),
-          source: 'diagnostics',
-          summary: cancelled ? 'Server-owned playground operation was cancelled.' : 'Server-owned playground operation failed.',
-        }));
-        const session = await this.#trace.finalize(sessionId, Object.freeze({ status: cancelled ? 'cancelled' : 'failed' }));
-        return Object.freeze({ id, session });
-      }
-    } finally {
-      await reference.close();
+      await this.#trace.finalize(sessionId, Object.freeze({ status: cancelled ? 'cancelled' : 'failed' }));
     }
   }
 
   async #operation(
     operation: PlaygroundOperationRequest,
     epochId: string,
+    targetDigest: string,
     runId: string,
     signal: AbortSignal,
-  ): Promise<PlaygroundEventInput> {
+  ): Promise<PlaygroundOperationResult> {
     if (operation.operation === 'skill.inspect') {
       const service = this.#skillDocuments ?? unavailable('Skill document');
       await service.generated(epochId, operation.target, operation.skillId);
-      return Object.freeze({
-        kind: 'skill.inspected',
-        raw: Object.freeze({ skillId: operation.skillId }),
-        source: 'skill-evidence',
-        summary: 'Inspected emitted Skill.',
-      });
+      return Object.freeze({ event: Object.freeze({ kind: 'skill.inspected', raw: Object.freeze({ skillId: operation.skillId }), source: 'skill-evidence', summary: 'Inspected emitted Skill.' }), status: 'passed' });
     }
     if (operation.operation === 'hook.simulate') {
       const service = this.#hookPlayground ?? unavailable('Hook playground');
       const result = await service.simulate({ epochId, hook: operation.hook, input: { inline: operation.input }, signal, target: operation.target });
-      return Object.freeze({
-        kind: 'hook.simulated',
-        raw: Object.freeze({ hook: operation.hook, result: evidenceValue(result) }),
-        source: 'hook',
-        summary: 'Simulated emitted Hook.',
-      });
+      return Object.freeze({ event: Object.freeze({ kind: 'hook.simulated', raw: Object.freeze({ hook: operation.hook, result: evidenceValue(result) }), source: 'hook', summary: 'Simulated emitted Hook.' }), status: 'diagnostics' in result ? 'failed' : 'passed' });
     }
     if (operation.operation === 'mcp.call-tool') {
       const service = this.#mcpSessions ?? unavailable('MCP session');
       const session = await service.open({ epochId, serverName: operation.serverName, signal, target: operation.target });
       try {
         const result = await session.callTool({ arguments: operation.arguments, name: operation.tool, requestId: runId, signal });
-        return Object.freeze({
-          kind: 'mcp.tool.called',
-          raw: Object.freeze({ result: evidenceValue(result), serverName: operation.serverName, tool: operation.tool }),
-          source: 'mcp',
-          summary: 'Called emitted MCP tool.',
-        });
+        return Object.freeze({ event: Object.freeze({ kind: 'mcp.tool.called', raw: Object.freeze({ result: evidenceValue(result), serverName: operation.serverName, tool: operation.tool }), source: 'mcp', summary: 'Called emitted MCP tool.' }), status: resultHasError(result) ? 'failed' : 'passed' });
       } finally {
         await service.closeSession(session.id);
       }
     }
     const service = this.#scripts ?? unavailable('Script');
     const result = await service.run({ epochId, script: operation.script, signal, target: operation.target });
-    return Object.freeze({
-      kind: 'script.completed',
-      raw: evidenceValue(result),
-      source: 'script',
-      summary: 'Ran emitted script.',
-    });
+    return Object.freeze({ event: Object.freeze({ kind: 'script.completed', raw: Object.freeze({ result: evidenceValue(result), targetDigest }), source: 'script', summary: 'Ran emitted script.' }), status: result.exitCode === 0 ? 'passed' : 'failed' });
   }
 }

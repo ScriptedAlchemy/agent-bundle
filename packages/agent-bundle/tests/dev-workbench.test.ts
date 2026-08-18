@@ -507,7 +507,16 @@ it('records a durable playground trace and promotes it through the packaged fore
     expect(started.status).toBe(200);
     const { run } = await started.json() as { readonly run: { readonly id: string; readonly session: { readonly id: string; readonly state: string } } };
     expect(run.id).not.toBe(binding.hook);
-    expect(run.session.state).toBe('finalized');
+    expect(run.session.state).toBe('open');
+    let terminal: string | undefined;
+    for (let attempt = 0; attempt < 25; attempt += 1) {
+      const session = await fetch(`${server.url}/api/playground/sessions/${run.session.id}`, { headers });
+      const body = await session.json() as { readonly session: { readonly state: string } };
+      terminal = body.session.state;
+      if (terminal === 'finalized') break;
+      await new Promise<void>((resolvePromise) => { setTimeout(resolvePromise, 10); });
+    }
+    expect(terminal).toBe('finalized');
 
     const exported = await fetch(`${server.url}/api/playground/sessions/${run.session.id}/export`, { headers });
     expect(exported.status).toBe(200);
