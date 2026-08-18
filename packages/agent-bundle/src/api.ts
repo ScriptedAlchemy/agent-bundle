@@ -395,6 +395,10 @@ const evalDiagnostics: Readonly<Record<EvalServiceErrorCode, Readonly<{
   readonly code: string;
   readonly recovery: string;
 }>>> = Object.freeze({
+  EVAL_ARTIFACT_OUTSIDE_PROJECT: Object.freeze({
+    code: 'AB9006',
+    recovery: 'Evaluate an artifact inside the project so its run record records no absolute path.',
+  }),
   EVAL_HARNESS_UNSUPPORTED: Object.freeze({
     code: 'AB9001',
     recovery: 'Run the deterministic harness until a native Claude or Codex harness is available.',
