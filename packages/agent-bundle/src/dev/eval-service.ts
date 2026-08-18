@@ -178,6 +178,7 @@ interface ActiveEvalRun {
   result: Promise<EvalRunResult> | undefined;
   readonly runId: string;
   terminal: 'finishing' | 'open' | 'persisted' | 'uncertain' | 'written';
+  uncertainty: EvalRunEventWriteUncertainError | undefined;
   readonly writer: Awaited<ReturnType<typeof createEvalRun>>;
 }
 
@@ -662,6 +663,7 @@ export class EvalService {
       result: undefined,
       runId,
       terminal: 'open',
+      uncertainty: undefined,
       writer,
     };
     let resolveResult!: (result: EvalRunResult) => void;
@@ -756,6 +758,7 @@ export class EvalService {
             payload: { caseId: trial.caseId, id: trial.id, outcome: trial.outcome },
           });
         } catch (error) {
+          if (error instanceof EvalRunEventWriteUncertainError) throw error;
           if (active.cancelled || active.controller.signal.aborted) {
             await this.#appendEvent(active.writer, active.runId, {
               kind: 'trial.cancelled',
@@ -769,6 +772,9 @@ export class EvalService {
           });
           throw error;
         }
+      }
+      if (active.terminal === 'uncertain') {
+        throw active.uncertainty ?? new Error('Eval run event write became uncertain without a recorded failure.');
       }
       const cancelled = active.cancelled || active.controller.signal.aborted || completed.length !== options.planned.length;
       active.terminal = 'finishing';
@@ -799,7 +805,10 @@ export class EvalService {
       ) {
         active.terminal = 'written';
       }
-      if (error instanceof EvalRunEventWriteUncertainError) active.terminal = 'uncertain';
+      if (error instanceof EvalRunEventWriteUncertainError) {
+        active.terminal = 'uncertain';
+        active.uncertainty = error;
+      }
       if (active.terminal !== 'persisted' && active.terminal !== 'uncertain' && active.terminal !== 'written') {
         active.terminal = 'finishing';
         try {
@@ -809,16 +818,18 @@ export class EvalService {
           });
           active.terminal = 'persisted';
         } catch (terminalFailure) {
-          if (
-            terminalFailure instanceof EvalRunEventDurabilityError
-            && (terminalFailure.event.kind === 'run.cancelled' || terminalFailure.event.kind === 'run.failed')
-          ) {
+          if (terminalFailure instanceof EvalRunEventDurabilityError
+            && (terminalFailure.event.kind === 'run.cancelled' || terminalFailure.event.kind === 'run.failed')) {
             active.terminal = 'written';
+          }
+          if (terminalFailure instanceof EvalRunEventWriteUncertainError) {
+            active.terminal = 'uncertain';
+            active.uncertainty = terminalFailure;
           }
           executionFailure = new AggregateError([executionFailure, terminalFailure], 'Eval run execution and terminal persistence both failed.', { cause: executionFailure });
         }
       }
-      if (!finalizationAttempted) {
+      if (!finalizationAttempted && active.terminal !== 'uncertain') {
         try {
           await active.writer.finish(summarizeEvalRun(aggregateEvalTrials(completed)));
         } catch (finalizationFailure) {
@@ -855,7 +866,13 @@ export class EvalService {
     const cancellation = this.#appendEvent(active.writer, active.runId, {
       kind: 'run.cancelling',
       payload: {},
-    }).then(() => undefined).finally(() => active.controller.abort());
+    }).then(() => undefined).catch((error: unknown) => {
+      if (error instanceof EvalRunEventWriteUncertainError) {
+        active.terminal = 'uncertain';
+        active.uncertainty = error;
+      }
+      throw error;
+    }).finally(() => active.controller.abort());
     active.cancellation = cancellation;
     return cancellation;
   }

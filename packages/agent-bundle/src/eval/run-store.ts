@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { constants, type Stats } from 'node:fs';
-import { lstat, mkdir, open, readFile, readdir, realpath, rename, rm, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, open, readFile, readdir, realpath, rename, rm, writeFile, type FileHandle } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, resolve, win32 } from 'node:path';
 
 import { stableJson } from '../core/digest.ts';
@@ -97,13 +97,13 @@ export class EvalRunEventDurabilityError extends Error {
   }
 }
 
-/** An event write may have changed the journal, and rollback could not be confirmed. */
+/** A failed append may have left bytes that could not be durably rolled back to the prior journal boundary. */
 export class EvalRunEventWriteUncertainError extends Error {
   readonly event: EvalRunEvent;
   readonly failures: readonly unknown[];
 
   constructor(event: EvalRunEvent, failures: readonly unknown[]) {
-    super(`Eval run event ${JSON.stringify(event.kind)} may be partially written.`, { cause: failures[0] });
+    super(`Eval run event ${JSON.stringify(event.kind)} could not be safely rolled back.`, { cause: failures[0] });
     this.name = 'EvalRunEventWriteUncertainError';
     this.event = event;
     this.failures = Object.freeze([...failures]);
@@ -144,10 +144,11 @@ const safeSegment = /^[a-z0-9][a-z0-9._-]*$/iu;
 const safeRelativeSegment = /^(?!\.{1,2}$)[a-z0-9._-]+$/iu;
 const maximumTrialRecordBytes = 1024 * 1024;
 type EvalRunStoreDurabilityTestHook = (
-  phase: 'after-event-write' | 'before-event-rollback' | 'before-event-write',
+  phase: 'after-event-write' | 'before-event-open' | 'before-event-rollback' | 'before-event-write',
   event: EvalRunEvent,
   path: string,
-) => void;
+  journal: FileHandle | undefined,
+) => void | Promise<void>;
 const evalRunStoreDurabilityTestHookKey = Symbol.for('agent-bundle.eval-run-store.durability-test-hook');
 
 const storeError = (
@@ -159,14 +160,15 @@ const isErrno = (error: unknown, code: string): boolean =>
   typeof error === 'object' && error !== null && 'code' in error && error.code === code;
 
 /** Non-API test seam, unavailable unless the process explicitly runs in test mode. */
-const runEvalRunStoreDurabilityTestHook = (
-  phase: 'after-event-write' | 'before-event-rollback' | 'before-event-write',
+const runEvalRunStoreDurabilityTestHook = async (
+  phase: 'after-event-write' | 'before-event-open' | 'before-event-rollback' | 'before-event-write',
   event: EvalRunEvent,
   path: string,
-): void => {
+  journal: FileHandle | undefined,
+): Promise<void> => {
   if (process.env.NODE_ENV !== 'test') return;
   const hooks = globalThis as typeof globalThis & Record<symbol, EvalRunStoreDurabilityTestHook | undefined>;
-  hooks[evalRunStoreDurabilityTestHookKey]?.(phase, event, path);
+  await hooks[evalRunStoreDurabilityTestHookKey]?.(phase, event, path, journal);
 };
 
 const sameFile = (left: Stats, right: Stats): boolean => left.dev === right.dev && left.ino === right.ino;
@@ -833,45 +835,45 @@ export class EvalRunWriter {
     if (this.#eventJournalFailure !== undefined) throw this.#eventJournalFailure;
     return this.#serialize(async () => {
       if (this.#eventJournalFailure !== undefined) throw this.#eventJournalFailure;
+      const sequence = this.#sequence + 1;
+      const record: EvalRunEvent = Object.freeze({
+        ...input,
+        schemaVersion: 1,
+        sequence,
+        timestamp: new Date().toISOString(),
+      });
       const eventPath = join(this.#directory, eventsFileName);
       await ensureWritablePath(this.#directory, eventPath);
+      await runEvalRunStoreDurabilityTestHook('before-event-open', record, eventPath, undefined);
       const journal = await open(eventPath, constants.O_APPEND | constants.O_NOFOLLOW | constants.O_WRONLY);
+      const failures: unknown[] = [];
       let originalSize: number;
       try {
         originalSize = (await journal.stat()).size;
       } catch (error) {
-        const failures = [error];
+        failures.push(error);
         try { await journal.close(); }
         catch (closeFailure) { failures.push(closeFailure); }
         if (failures.length === 1) throw error;
         throw new AggregateError(failures, 'Eval run event journal could not be inspected.', { cause: error });
       }
-      this.#sequence += 1;
-      const record: EvalRunEvent = Object.freeze({
-        ...input,
-        schemaVersion: 1,
-        sequence: this.#sequence,
-        timestamp: new Date().toISOString(),
-      });
-      const failures: unknown[] = [];
       let written = false;
       let rollbackConfirmed = false;
       try {
-        runEvalRunStoreDurabilityTestHook('before-event-write', record, eventPath);
+        await runEvalRunStoreDurabilityTestHook('before-event-write', record, eventPath, journal);
         await journal.writeFile(`${stableJson(record)}\n`, 'utf8');
         written = true;
-        runEvalRunStoreDurabilityTestHook('after-event-write', record, eventPath);
+        this.#sequence = sequence;
+        await runEvalRunStoreDurabilityTestHook('after-event-write', record, eventPath, journal);
         await journal.sync();
-      }
-      catch (error) {
+      } catch (error) {
         failures.push(error);
         if (!written) {
           try {
-            runEvalRunStoreDurabilityTestHook('before-event-rollback', record, eventPath);
+            await runEvalRunStoreDurabilityTestHook('before-event-rollback', record, eventPath, journal);
             await journal.truncate(originalSize);
             await journal.sync();
             rollbackConfirmed = true;
-            this.#sequence -= 1;
           } catch (rollbackFailure) {
             failures.push(rollbackFailure);
           }
@@ -884,6 +886,7 @@ export class EvalRunWriter {
         if (!rollbackConfirmed) {
           const uncertain = new EvalRunEventWriteUncertainError(record, failures);
           this.#eventJournalFailure = uncertain;
+          this.#closed = true;
           throw uncertain;
         }
         if (failures.length === 1) throw failures[0];
@@ -956,6 +959,7 @@ export class EvalRunWriter {
   }
 
   #assertOpen(): void {
+    if (this.#eventJournalFailure !== undefined) throw this.#eventJournalFailure;
     if (this.#closed) {
       throw storeError('EVAL_RUN_CLOSED', `Eval run ${JSON.stringify(this.#record.id)} is closed.`);
     }
@@ -970,6 +974,7 @@ export class EvalRunWriter {
     });
     await previous;
     try {
+      if (this.#eventJournalFailure !== undefined) throw this.#eventJournalFailure;
       return await operation();
     } catch (error) {
       this.#closeFailures.push(error);

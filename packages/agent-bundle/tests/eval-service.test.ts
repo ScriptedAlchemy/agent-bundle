@@ -1,4 +1,3 @@
-import { appendFileSync } from 'node:fs';
 import { access, appendFile, link, mkdir, readFile, readdir, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
@@ -14,10 +13,11 @@ import { seedEvalProject, writeEvalSuite } from './support/eval-project.ts';
 const service = (root: string): EvalService => new EvalService({ projectRoot: root, targets: ['portable'] });
 
 type EvalRunStoreDurabilityTestHook = (
-  phase: 'after-event-write' | 'before-event-rollback' | 'before-event-write',
+  phase: 'after-event-write' | 'before-event-open' | 'before-event-rollback' | 'before-event-write',
   event: Readonly<{ readonly kind: string }>,
   path: string,
-) => void;
+  journal: Readonly<{ close(): Promise<void>; writeFile(contents: string, options?: string): Promise<void> }> | undefined,
+) => void | Promise<void>;
 
 const evalRunStoreDurabilityTestHookKey = Symbol.for('agent-bundle.eval-run-store.durability-test-hook');
 
@@ -947,25 +947,17 @@ it('does not append a fallback terminal after a full terminal line reports a syn
   }
 }, 120_000);
 
-it('does not append a fallback terminal when a partial terminal write cannot be rolled back', async () => {
+it('uses the uncommitted sequence for a terminal fallback after an open failure', async () => {
   const project = await createProjectFixture();
-  const writeFailure = new Error('run.completed write failed after a prefix');
-  const rollbackFailure = new Error('run.completed rollback failed');
-  const partial = '{"kind":"run.completed"';
+  const openFailure = new Error('run.completed event journal open failed');
   let evals: EvalService | undefined;
-  let writeInjected = false;
-  let rollbackInjected = false;
+  let injected = false;
   try {
     await seedEvalProject(project.root);
-    await withEvalRunStoreDurabilityTestHook((phase, event, path) => {
-      if (phase === 'before-event-write' && event.kind === 'run.completed' && !writeInjected) {
-        writeInjected = true;
-        appendFileSync(path, partial);
-        throw writeFailure;
-      }
-      if (phase === 'before-event-rollback' && event.kind === 'run.completed' && !rollbackInjected) {
-        rollbackInjected = true;
-        throw rollbackFailure;
+    await withEvalRunStoreDurabilityTestHook((phase, event) => {
+      if (phase === 'before-event-open' && event.kind === 'run.completed' && !injected) {
+        injected = true;
+        throw openFailure;
       }
     }, async () => {
       const service = new EvalService({ projectRoot: project.root, targets: ['portable'] });
@@ -977,16 +969,69 @@ it('does not append a fallback terminal when a partial terminal write cannot be 
         completed = (await service.read(admission.run.id)).run.completedAt !== undefined;
         if (!completed) await new Promise<void>((resolvePromise) => setTimeout(resolvePromise, 10));
       }
-      if (!completed) throw new Error('The partial terminal run was not finalized.');
+      if (!completed) throw new Error('The fallback run was not finalized.');
 
       const events = await service.events(admission.run.id, 0);
-      expect(events.events.filter((event) => event.kind.startsWith('run.')).map((event) => event.kind))
-        .toEqual(['run.started']);
-      expect(events.incompleteTrailingRecord).toBe(true);
+      expect(injected).toBe(true);
+      expect(events.events.map((event) => event.sequence)).toEqual([1, 2, 3, 4]);
+      expect(events.events.map((event) => event.kind)).toEqual([
+        'run.started',
+        'trial.started',
+        'trial.completed',
+        'run.failed',
+      ]);
       await expect(service.close()).rejects.toThrow('Eval service could not close.');
     });
-    expect(writeInjected).toBe(true);
-    expect(rollbackInjected).toBe(true);
+  } finally {
+    await evals?.close().catch(() => undefined);
+    await removeProjectFixture(project.root);
+  }
+}, 120_000);
+
+it('does not finalize or append a fallback terminal when partial-write rollback is uncertain', async () => {
+  const project = await createProjectFixture();
+  const writeFailure = new Error('run.completed event journal partial write failed');
+  const rollbackFailure = new Error('run.completed event journal rollback failed');
+  const partial = '{"kind":"run.completed"';
+  let evals: EvalService | undefined;
+  let writeInjected = false;
+  let rollbackInjected = false;
+  try {
+    await seedEvalProject(project.root);
+    await withEvalRunStoreDurabilityTestHook(async (phase, event, _path, journal) => {
+      if (phase === 'before-event-write' && event.kind === 'run.completed' && !writeInjected) {
+        if (journal === undefined) throw new Error('The partial-write hook did not receive the event journal.');
+        writeInjected = true;
+        await journal.writeFile(partial, 'utf8');
+        throw writeFailure;
+      }
+      if (phase === 'before-event-rollback' && event.kind === 'run.completed' && !rollbackInjected) {
+        rollbackInjected = true;
+        throw rollbackFailure;
+      }
+    }, async () => {
+      const service = new EvalService({ projectRoot: project.root, targets: ['portable'] });
+      evals = service;
+      const admission = await service.start({ caseIds: ['reads-result'] });
+
+      let replay: Awaited<ReturnType<typeof service.events>> | undefined;
+      for (let attempt = 0; attempt < 100 && replay === undefined; attempt += 1) {
+        const events = await service.events(admission.run.id, 0);
+        if (events.incompleteTrailingRecord) replay = events;
+        else await new Promise<void>((resolvePromise) => setTimeout(resolvePromise, 10));
+      }
+      if (replay === undefined) throw new Error('The uncertain partial terminal was not observed.');
+
+      expect(writeInjected).toBe(true);
+      expect(rollbackInjected).toBe(true);
+      expect(replay.events.map((event) => event.kind)).toEqual([
+        'run.started',
+        'trial.started',
+        'trial.completed',
+      ]);
+      expect((await service.read(admission.run.id)).run.completedAt).toBeUndefined();
+      await expect(service.close()).rejects.toThrow('Eval service could not close.');
+    });
   } finally {
     await evals?.close().catch(() => undefined);
     await removeProjectFixture(project.root);
