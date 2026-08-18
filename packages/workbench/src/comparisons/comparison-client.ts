@@ -53,7 +53,7 @@ const conditionProvenanceSchema = z.strictObject({
 const comparisonUsageSchema = z.strictObject({
   inputTokens: nonnegativeIntegerSchema,
   outputTokens: nonnegativeIntegerSchema,
-  recordedTrials: nonnegativeIntegerSchema,
+  recordedTrials: nonnegativeIntegerSchema.refine((value) => value >= 1),
   totalTokens: nonnegativeIntegerSchema,
 }).refine((usage) => usage.totalTokens === usage.inputTokens + usage.outputTokens);
 const reliabilitySchema = z.strictObject({

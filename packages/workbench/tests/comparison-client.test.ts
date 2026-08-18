@@ -119,6 +119,7 @@ it('rejects extra, path-shaped, or negative nested comparison data', async () =>
     { provenance: { hostCliVersion: '2.1.232', invocation: 'automatic', semanticGrader: 'none', unexpected: true } },
     { provenance: { hostCliVersion: '/private/bin/claude', invocation: 'automatic', semanticGrader: 'none' } },
     { usage: { inputTokens: 300, outputTokens: -1, recordedTrials: 3, totalTokens: 299 } },
+    { usage: { inputTokens: 0, outputTokens: 0, recordedTrials: 0, totalTokens: 0 } },
     { usage: { inputTokens: 300, outputTokens: 25, recordedTrials: 4, totalTokens: 325 } },
   ];
 
