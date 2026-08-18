@@ -50,6 +50,20 @@ export interface EvalsPageProps {
 
 const trialsError = 'Trials must be a whole number between 1 and 100.';
 
+const evalClientScopeKeys = new WeakMap<EvalClient, number>();
+
+let nextEvalClientScopeKey = 0;
+
+/** A weak, stable identity lets React discard all page state when the transport client changes. */
+const evalClientScopeKeyFor = (client: EvalClient): number => {
+  const existing = evalClientScopeKeys.get(client);
+  if (existing !== undefined) return existing;
+  const key = nextEvalClientScopeKey + 1;
+  nextEvalClientScopeKey = key;
+  evalClientScopeKeys.set(client, key);
+  return key;
+};
+
 const errorMessage = (reason: unknown): string =>
   reason instanceof Error ? reason.message : 'The eval request could not be completed.';
 
@@ -458,8 +472,8 @@ export const observeEvalRunEvents = async ({
   }
 };
 
-/** Runs authored suites and shows the evidence every trial recorded. */
-export const EvalsPage = ({ client }: EvalsPageProps) => {
+/** All mutable Eval state is scoped to exactly one foreground client identity. */
+const EvalsClientPage = ({ client }: EvalsPageProps) => {
   const [runLifecycle, setRunLifecycle] = useState<EvalRunLifecycle>(createEvalRunLifecycle);
   const [admittingGeneration, setAdmittingGeneration] = useState<number>();
   const [cancellingGeneration, setCancellingGeneration] = useState<number>();
@@ -698,3 +712,7 @@ export const EvalsPage = ({ client }: EvalsPageProps) => {
       </>}
   </div>;
 };
+
+/** Runs authored suites and shows the evidence every trial recorded. */
+export const EvalsPage = ({ client }: EvalsPageProps) =>
+  <EvalsClientPage client={client} key={evalClientScopeKeyFor(client)} />;

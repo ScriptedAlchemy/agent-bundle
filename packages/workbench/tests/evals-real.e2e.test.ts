@@ -1,9 +1,14 @@
 import { execFile as executeFile } from 'node:child_process';
-import { writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { createServer, type Server } from 'node:http';
+import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { once } from 'node:events';
+import { tmpdir } from 'node:os';
+import { join, relative } from 'node:path';
 import { promisify } from 'node:util';
 
 import { expect, test, type PlaywrightOptions } from '@rstest/playwright';
+import { createRsbuild } from '@rsbuild/core';
+import { pluginReact } from '@rsbuild/plugin-react';
 
 import { createWorkbenchAssetSource } from '../../agent-bundle/src/dev/workbench-assets.ts';
 import { startDevServer } from '../../agent-bundle/src/dev/workbench-server.ts';
@@ -13,6 +18,7 @@ import { seedEvalProject, writeEvalSuite } from '../../agent-bundle/tests/suppor
 const execFile = promisify(executeFile);
 const workspaceRoot = process.cwd();
 const workbenchAssets = join(workspaceRoot, 'packages', 'workbench', 'dist');
+const evalsPage = join(workspaceRoot, 'packages', 'workbench', 'src', 'evals', 'evals-page.tsx');
 const browserTimeout = 12_000;
 
 const e2e = test.extend({
@@ -28,6 +34,128 @@ const buildWorkbench = async (): Promise<void> => {
     cwd: workspaceRoot,
     env: { ...environment, NODE_ENV: 'production' },
   });
+};
+
+const listen = async (server: Server): Promise<string> => {
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const address = server.address();
+  if (address === null || typeof address === 'string') throw new Error('Eval client-scope fixture did not receive a TCP address.');
+  return `http://127.0.0.1:${address.port}`;
+};
+
+const closeServer = async (server: Server): Promise<void> => {
+  await new Promise<void>((resolve, reject) => {
+    server.close((error) => error === undefined ? resolve() : reject(error));
+  });
+};
+
+const mountedEvalClientScopeFixture = async (): Promise<{ readonly close: () => Promise<void>; readonly url: string }> => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-eval-client-scope-'));
+  const entry = join(root, 'page.tsx');
+  const dist = join(root, 'dist');
+  await writeFile(entry, [
+    "import React from 'react';",
+    "import { flushSync } from 'react-dom';",
+    "import { createRoot } from 'react-dom/client';",
+    `import { EvalsPage } from ${JSON.stringify(evalsPage)};`,
+    '',
+    "const deferred = () => { let resolve; const promise = new Promise((nextResolve) => { resolve = nextResolve; }); return { promise, resolve }; };",
+    "const digest = 'a'.repeat(64);",
+    "const event = (kind, sequence) => ({ kind, payload: {}, schemaVersion: 1, sequence, timestamp: `2026-08-18T00:00:0${sequence}.000Z` });",
+    "const run = (id) => ({ agentBundleVersion: '0.1.0', artifact: { manifestPath: 'manifest.json', source: 'run-owned', targetDigests: { portable: digest } }, createdAt: '2026-08-18T00:00:00.000Z', harness: 'deterministic', id, projectRevision: digest, schemaVersion: 1 });",
+    "const listing = (name, caseId) => ({ diagnostics: [], suites: [{ cases: [{ assertions: [], digest, hosts: ['portable'], id: caseId, invocation: { mode: 'none' }, prompt: `Prompt for ${caseId}`, trials: 1 }], digest, name, sourcePath: `evals/${name}.eval.ts` }] });",
+    "const result = (record, caseId) => ({ aggregates: [], diagnostics: [], run: record, trials: [{ assertions: [], caseDigest: digest, caseId, completedAt: '2026-08-18T00:00:02.000Z', durationMs: 1, evidence: { mcp: { calls: [], level: 'unavailable' }, process: { level: 'unavailable', timedOut: false }, scripts: { level: 'unavailable', results: {} }, skillActivation: { activated: [], level: 'unavailable' } }, fixtureDigest: digest, host: 'portable', id: `${record.id}-trial`, model: 'deterministic', outcome: 'pass', prompt: `Prompt for ${caseId}`, rawArtifacts: [], schemaVersion: 1, startedAt: '2026-08-18T00:00:01.000Z', targetDigest: digest, trialIndex: 0 }] });",
+    "const emptyStream = () => ({ close: () => undefined, done: new Promise(() => undefined) });",
+    '',
+    "const runA = run('run-a'); const resultA = result(runA, 'case-a');",
+    'const lateRunsA = deferred(); const lateReadA = deferred(); const lateCancelA = deferred(); let streamA; let readsA = 0; let runsA = 0; let cancelsA = 0; const eventsA = [];',
+    'const clientA = {',
+    "  artifact: async () => ({ blob: new Blob([]), filename: 'none', mediaType: 'text/plain' }),",
+    '  cancel: () => { cancelsA += 1; return lateCancelA.promise; },',
+    '  events: async (runId) => { eventsA.push(runId); return { cursor: { afterSequence: 2 }, events: [event(\'run.started\', 1), event(\'trial.completed\', 2)] }; },',
+    '  read: () => readsA++ === 0 ? Promise.resolve(resultA) : lateReadA.promise,',
+    '  runs: () => runsA++ === 0 ? lateRunsA.promise : Promise.resolve([runA]),',
+    '  start: async () => ({ run: runA }),',
+    '  stream: (options) => { streamA = options; return emptyStream(); },',
+    "  suites: async () => listing('suite-a', 'case-a'),",
+    '};',
+    '',
+    "const runB = run('run-b'); const resultB = result(runB, 'case-b');",
+    'const suitesB = deferred(); const runsB = deferred(); let cancelsB = 0; const eventsB = [];',
+    'const clientB = {',
+    "  artifact: async () => ({ blob: new Blob([]), filename: 'none', mediaType: 'text/plain' }),",
+    "  cancel: (runId) => { cancelsB += 1; return Promise.resolve({ cancelled: true, runId }); },",
+    '  events: async (runId) => { eventsB.push(runId); return { cursor: { afterSequence: 0 }, events: [] }; },',
+    '  read: async () => resultB,',
+    '  runs: () => runsB.promise,',
+    '  start: async () => ({ run: runB }),',
+    '  stream: () => emptyStream(),',
+    '  suites: () => suitesB.promise,',
+    '};',
+    '',
+    "const slowSuitesA = deferred(); const slowRunsA = deferred(); const slowA = { ...clientA, runs: () => slowRunsA.promise, suites: () => slowSuitesA.promise };",
+    'const root = createRoot(document.getElementById(\'root\'));',
+    'const mount = (client) => flushSync(() => root.render(React.createElement(EvalsPage, { client })));',
+    'mount(clientA);',
+    'globalThis.__evalClientScopeFixture = {',
+    '  emitLateA: () => streamA?.onEvent(event(\'trial.completed\', 3)),',
+    '  mountSlowA: () => mount(slowA),',
+    '  replaceWithB: () => mount(clientB),',
+    '  resolveB: () => { suitesB.resolve(listing(\'suite-b\', \'case-b\')); runsB.resolve([]); },',
+    '  resolveLateA: () => { lateRunsA.resolve([runA]); lateReadA.resolve(resultA); lateCancelA.resolve({ cancelled: true, runId: runA.id }); streamA?.onEvent(event(\'run.failed\', 4)); },',
+    '  resolveSlowA: () => { slowSuitesA.resolve(listing(\'suite-slow-a\', \'case-slow-a\')); slowRunsA.resolve([runA]); },',
+    '  stats: () => ({ cancelsA, cancelsB, eventsA: [...eventsA], eventsB: [...eventsB], readsA, runsA }),',
+    '};',
+    '',
+  ].join('\n'));
+  const rsbuild = await createRsbuild({
+    config: {
+      output: {
+        cleanDistPath: false,
+        distPath: { css: 'assets', js: 'assets', root: dist },
+        filename: { css: '[name].css', js: '[name].js' },
+        filenameHash: false,
+      },
+      plugins: [pluginReact()],
+      resolve: {
+        alias: {
+          react: join(workspaceRoot, 'node_modules', 'react'),
+          'react-dom': join(workspaceRoot, 'node_modules', 'react-dom'),
+          'react-dom/client': join(workspaceRoot, 'node_modules', 'react-dom', 'client.js'),
+        },
+      },
+      source: {
+        define: { 'process.env.NODE_ENV': JSON.stringify('production') },
+        entry: { page: entry },
+      },
+    },
+    cwd: workspaceRoot,
+  });
+  const build = await rsbuild.build();
+  await build.close();
+  const assets = await readdir(dist, { recursive: true });
+  if (!assets.includes('page.html')) throw new Error('Eval client-scope fixture did not produce its browser document.');
+  const server = createServer(async (request, response) => {
+    const pathname = new URL(request.url ?? '/', 'http://127.0.0.1').pathname;
+    const asset = pathname === '/' ? 'page.html' : pathname.slice(1);
+    const file = join(dist, asset);
+    if (relative(dist, file).startsWith('..')) return response.writeHead(404).end();
+    try {
+      const body = await readFile(file);
+      response.writeHead(200, { 'content-type': asset.endsWith('.css') ? 'text/css' : asset.endsWith('.js') ? 'text/javascript' : 'text/html' }).end(body);
+    } catch {
+      response.writeHead(404).end();
+    }
+  });
+  const origin = await listen(server);
+  return {
+    close: async () => {
+      await closeServer(server);
+      await rm(root, { force: true, recursive: true });
+    },
+    url: `${origin}/page.html`,
+  };
 };
 
 const seedGatedEvalProject = async (root: string): Promise<{ readonly release: () => Promise<void> }> => {
@@ -251,5 +379,93 @@ e2e('does not cancel a gated run when a newer admission replaces it or the Eval 
     await gate.release();
     await server.close();
     await removeProjectFixture(project.root);
+  }
+});
+
+e2e('fails closed while replacing an active Eval client and ignores every late client-A completion', { timeout: 120_000 }, async ({ page }) => {
+  const fixture = await mountedEvalClientScopeFixture();
+  const pageErrors: Error[] = [];
+  page.on('pageerror', (error) => pageErrors.push(error));
+  try {
+    await page.goto(fixture.url);
+    await page.waitForFunction(() => '__evalClientScopeFixture' in globalThis);
+    await expect(page.getByRole('button', { name: 'Run deterministic suite' })).toBeEnabled({ timeout: browserTimeout });
+    await page.getByRole('button', { name: 'Run deterministic suite' }).click();
+    await expect(page.getByText('Run run-a is running.')).toBeVisible({ timeout: browserTimeout });
+    await expect(page.getByText('Evidence channels')).toBeVisible({ timeout: browserTimeout });
+    await page.evaluate(() => (globalThis as typeof globalThis & {
+      __evalClientScopeFixture: { emitLateA(): void; stats(): { readonly readsA: number } };
+    }).__evalClientScopeFixture.emitLateA());
+    await page.waitForFunction(() => (globalThis as typeof globalThis & {
+      __evalClientScopeFixture: { stats(): { readonly readsA: number } };
+    }).__evalClientScopeFixture.stats().readsA === 2);
+    await page.getByRole('button', { name: 'Cancel run' }).click();
+    await expect(page.getByRole('button', { name: 'Cancelling…' })).toBeDisabled();
+
+    await page.evaluate(() => (globalThis as typeof globalThis & {
+      __evalClientScopeFixture: { replaceWithB(): void };
+    }).__evalClientScopeFixture.replaceWithB());
+    const firstBRender = await page.locator('body').innerText();
+    expect(firstBRender).toContain('Looking for authored eval suites…');
+    expect(firstBRender).not.toContain('Run run-a is running.');
+    expect(firstBRender).not.toContain('Evidence channels');
+    expect(firstBRender).not.toContain('evals/suite-a.eval.ts');
+    const beforeB = await page.evaluate(() => (globalThis as typeof globalThis & {
+      __evalClientScopeFixture: { stats(): { readonly cancelsA: number; readonly cancelsB: number; readonly eventsB: readonly string[] } };
+    }).__evalClientScopeFixture.stats());
+    expect(beforeB).toMatchObject({ cancelsA: 1, cancelsB: 0, eventsB: [] });
+
+    await page.evaluate(() => (globalThis as typeof globalThis & {
+      __evalClientScopeFixture: { resolveB(): void };
+    }).__evalClientScopeFixture.resolveB());
+    await page.waitForTimeout(50);
+    expect(await page.locator('body').innerText()).toContain('evals/suite-b.eval.ts');
+    await page.getByRole('button', { name: 'Run deterministic suite' }).click();
+    await expect(page.getByRole('button', { name: 'Cancel run' })).toBeVisible({ timeout: browserTimeout });
+    await page.getByRole('button', { name: 'Cancel run' }).click();
+    await page.waitForFunction(() => (globalThis as typeof globalThis & {
+      __evalClientScopeFixture: { stats(): { readonly cancelsB: number } };
+    }).__evalClientScopeFixture.stats().cancelsB === 1);
+
+    await page.evaluate(() => (globalThis as typeof globalThis & {
+      __evalClientScopeFixture: { resolveLateA(): void };
+    }).__evalClientScopeFixture.resolveLateA());
+    await page.waitForTimeout(50);
+    await expect(page.getByText('Run run-a is running.')).toHaveCount(0);
+    expect(await page.evaluate(() => (globalThis as typeof globalThis & {
+      __evalClientScopeFixture: { stats(): { readonly eventsB: readonly string[] } };
+    }).__evalClientScopeFixture.stats().eventsB)).toEqual(['run-b']);
+    expect(pageErrors).toEqual([]);
+  } finally {
+    await fixture.close();
+  }
+});
+
+e2e('ignores delayed client-A suite and run-list completions after the client scope changes', { timeout: 120_000 }, async ({ page }) => {
+  const fixture = await mountedEvalClientScopeFixture();
+  try {
+    await page.goto(fixture.url);
+    await page.waitForFunction(() => '__evalClientScopeFixture' in globalThis);
+    await page.evaluate(() => (globalThis as typeof globalThis & {
+      __evalClientScopeFixture: { mountSlowA(): void; replaceWithB(): void };
+    }).__evalClientScopeFixture.mountSlowA());
+    await page.evaluate(() => (globalThis as typeof globalThis & {
+      __evalClientScopeFixture: { replaceWithB(): void };
+    }).__evalClientScopeFixture.replaceWithB());
+    expect(await page.locator('body').innerText()).toContain('Looking for authored eval suites…');
+
+    await page.evaluate(() => (globalThis as typeof globalThis & {
+      __evalClientScopeFixture: { resolveB(): void; resolveSlowA(): void };
+    }).__evalClientScopeFixture.resolveSlowA());
+    await page.evaluate(() => (globalThis as typeof globalThis & {
+      __evalClientScopeFixture: { resolveB(): void };
+    }).__evalClientScopeFixture.resolveB());
+    await page.waitForTimeout(50);
+    const body = await page.locator('body').innerText();
+    expect(body).toContain('evals/suite-b.eval.ts');
+    expect(body).not.toContain('evals/suite-slow-a.eval.ts');
+    expect(body).not.toContain('run-a');
+  } finally {
+    await fixture.close();
   }
 });
