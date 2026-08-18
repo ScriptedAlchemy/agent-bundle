@@ -35,7 +35,7 @@ import {
   type ArtifactHookIndex,
   type ManifestFile,
 } from './emit.ts';
-import { parseArtifactManifest, type ArtifactManifestV2 } from './manifest.ts';
+import { parseArtifactManifest, type ArtifactManifest } from './manifest.ts';
 
 const epochStagingMarkerName = '.agent-bundle-epoch-stage.json';
 const artifactRootMetadata = new Set([artifactHookIndexName]);
@@ -65,7 +65,7 @@ export interface ValidatedArtifactMcpServerEvidence {
 
 /** Deeply frozen artifact evidence that passed one complete validation pass. */
 export interface ValidatedArtifactSnapshot {
-  readonly manifest: ArtifactManifestV2;
+  readonly manifest: ArtifactManifest;
   readonly runtime: ValidatedArtifactRuntimeEvidence;
 }
 
@@ -98,7 +98,7 @@ export type ArtifactDiagnosticCode =
 
 export const artifactDiagnosticRecoveries: Readonly<Record<ArtifactDiagnosticCode, string>> = Object.freeze({
   AB6000: 'Restore a readable artifact root and canonical manifest, then rebuild the artifact.',
-  AB6001: 'Regenerate the strict canonical v2 manifest without concurrent writes, then rerun validation.',
+  AB6001: 'Regenerate the strict canonical manifest without concurrent writes, then rerun validation.',
   AB6002: 'Rebuild the artifact from complete project source, then rerun validation.',
   AB6003: 'Rebuild the artifact with canonical generated output, then rerun validation.',
   AB6004: 'Rebuild the artifact so its file table and contents match the manifest.',
@@ -509,7 +509,7 @@ const finalEvidenceDiagnostics = (options: {
 };
 
 const sameSchemas = (
-  manifest: ArtifactManifestV2['targets'][number]['schemas'],
+  manifest: ArtifactManifest['targets'][number]['schemas'],
   registered: ReturnType<TargetRegistry['metadata']>['schemas'],
 ): boolean => {
   const expected = [...registered].sort((left, right) => left.name.localeCompare(right.name));
@@ -523,7 +523,7 @@ const sameSchemas = (
 };
 
 const matchesTargetMetadata = (
-  target: ArtifactManifestV2['targets'][number],
+  target: ArtifactManifest['targets'][number],
   metadata: ReturnType<TargetRegistry['metadata']>,
 ): boolean => target.adapterRevision === metadata.adapterRevision &&
   target.capabilityRevision === metadata.capabilityRevision &&
@@ -595,7 +595,7 @@ const validateSchemaDocument = (
 const validateTargetContracts = async (options: {
   readonly artifactRoot: string;
   readonly files: readonly ArtifactFile[];
-  readonly manifest: ArtifactManifestV2;
+  readonly manifest: ArtifactManifest;
   readonly registry: TargetRegistry;
 }): Promise<readonly Diagnostic[]> => {
   const diagnostics: Diagnostic[] = [];
@@ -784,7 +784,7 @@ const validateMcpArtifactReference = (options: {
 const validateMcpCoherence = async (options: {
   readonly artifactRoot: string;
   readonly files: readonly ArtifactFile[];
-  readonly manifest: ArtifactManifestV2;
+  readonly manifest: ArtifactManifest;
   readonly registry: TargetRegistry;
   readonly runtimeEvidence: RuntimeEvidenceBuilder;
 }): Promise<readonly Diagnostic[]> => {
@@ -973,7 +973,7 @@ const readArtifactHookIndex = async (artifactRoot: string): Promise<ArtifactHook
 const validateHookCoherence = async (options: {
   readonly artifactRoot: string;
   readonly files: readonly ArtifactFile[];
-  readonly manifest: ArtifactManifestV2;
+  readonly manifest: ArtifactManifest;
   readonly registry: TargetRegistry;
   readonly runtimeEvidence: RuntimeEvidenceBuilder;
 }): Promise<readonly Diagnostic[]> => {
@@ -1114,7 +1114,7 @@ const validateHookCoherence = async (options: {
 
 const ownershipRecovery = artifactDiagnosticRecoveries.AB6014;
 
-const targetNamespaces = (manifest: ArtifactManifestV2): ReadonlySet<string> =>
+const targetNamespaces = (manifest: ArtifactManifest): ReadonlySet<string> =>
   new Set(manifest.targets.map((target) => target.name));
 
 const pathTarget = (path: string, targets: ReadonlySet<string>): string | undefined => {
@@ -1162,7 +1162,7 @@ const isTargetArtifactPath = (
 const validateArtifactOwnership = (options: {
   readonly filesystem: ArtifactFilesystemSnapshot;
   readonly files: readonly ArtifactFile[];
-  readonly manifest: ArtifactManifestV2;
+  readonly manifest: ArtifactManifest;
   readonly registry: TargetRegistry;
 }): readonly Diagnostic[] => {
   const diagnostics: Diagnostic[] = [];
@@ -1223,7 +1223,7 @@ const validateArtifactOwnership = (options: {
 const validateArtifactStructure = (options: {
   readonly changedFrom?: readonly ArtifactFile[];
   readonly inspection: ArtifactInspection;
-  readonly manifest: ArtifactManifestV2;
+  readonly manifest: ArtifactManifest;
   readonly registry: TargetRegistry;
 }): readonly Diagnostic[] => {
   const diagnostics: Diagnostic[] = [...filesystemDiagnostics(options.inspection.filesystem)];
@@ -1288,7 +1288,7 @@ const skillRecovery = artifactDiagnosticRecoveries.AB6015;
 const validateEmittedSkills = async (options: {
   readonly artifactRoot: string;
   readonly files: readonly ArtifactFile[];
-  readonly manifest: ArtifactManifestV2;
+  readonly manifest: ArtifactManifest;
   readonly registry: TargetRegistry;
 }): Promise<readonly Diagnostic[]> => {
   const diagnostics: Diagnostic[] = [];
@@ -1473,7 +1473,7 @@ const invalidArtifactSnapshot = (diagnostics: readonly Diagnostic[]): ValidateAr
 });
 
 const validArtifactSnapshot = (
-  manifest: ArtifactManifestV2,
+  manifest: ArtifactManifest,
   runtimeEvidence: RuntimeEvidenceBuilder,
 ): ValidateArtifactSnapshotResult => Object.freeze({
   diagnostics: Object.freeze([]),
@@ -1527,11 +1527,11 @@ export const validateArtifactWithSnapshot = async (
     return invalidArtifactSnapshot([diagnostic('AB6000', 'Artifact manifest is missing or cannot be read.', artifactManifestName)]);
   }
 
-  let manifest: ArtifactManifestV2;
+  let manifest: ArtifactManifest;
   try {
     manifest = parseArtifactManifest(manifestSnapshot.bytes.toString('utf8'));
   } catch {
-    return invalidArtifactSnapshot([diagnostic('AB6001', 'Artifact manifest is not a strict canonical v2 manifest.', artifactManifestName)]);
+    return invalidArtifactSnapshot([diagnostic('AB6001', 'Artifact manifest is not a strict canonical manifest.', artifactManifestName)]);
   }
 
   const runtimeEvidence = runtimeEvidenceBuilder();

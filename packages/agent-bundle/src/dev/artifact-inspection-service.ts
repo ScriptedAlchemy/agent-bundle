@@ -1,6 +1,6 @@
 import { createDefaultRegistry, type TargetRegistry } from '../adapters/registry.ts';
 import { artifactManifestName } from '../build/emit.ts';
-import type { ArtifactManifestV2 } from '../build/manifest.ts';
+import type { ArtifactManifest } from '../build/manifest.ts';
 import {
   validateArtifactWithSnapshot,
   type ValidatedArtifactSnapshot,
@@ -218,7 +218,7 @@ export class ArtifactInspectionService {
   }
 
   #file(
-    file: ArtifactManifestV2['files'][number],
+    file: ArtifactManifest['files'][number],
     sourceInputs: ReadonlyMap<string, ArtifactInspectionSourceInput>,
   ): ArtifactInspectionFile {
     const inputs = file.sourceInputs.map((path) => sourceInputs.get(path));
@@ -240,7 +240,7 @@ export class ArtifactInspectionService {
   }
 
   #project(
-    project: ArtifactManifestV2['project'],
+    project: ArtifactManifest['project'],
     sourceInputs: ReadonlyMap<string, ArtifactInspectionSourceInput>,
   ): ProjectContext {
     const inputs = project.sourceInputs.map((input) => sourceInputs.get(input.path));
@@ -261,7 +261,7 @@ export class ArtifactInspectionService {
   }
 
   #targets(
-    manifest: ArtifactManifestV2,
+    manifest: ArtifactManifest,
     files: readonly ArtifactInspectionFile[],
   ): readonly ArtifactInspectionTarget[] {
     return Object.freeze(manifest.targets.map((target): ArtifactInspectionTarget => {
@@ -289,7 +289,7 @@ export class ArtifactInspectionService {
 
   #runtime(
     filesByPath: ReadonlyMap<string, ArtifactInspectionFile>,
-    manifest: ArtifactManifestV2,
+    manifest: ArtifactManifest,
     runtime: ValidatedArtifactSnapshot['runtime'],
   ): ArtifactInspectionRuntime {
     const hooks = this.#hooks(filesByPath, runtime);
@@ -303,7 +303,7 @@ export class ArtifactInspectionService {
 
   #scripts(
     filesByPath: ReadonlyMap<string, ArtifactInspectionFile>,
-    manifest: ArtifactManifestV2,
+    manifest: ArtifactManifest,
   ): readonly ArtifactInspectionScript[] {
     try {
       return Object.freeze(artifactScriptCatalog(manifest, this.#registry).map((script) => {

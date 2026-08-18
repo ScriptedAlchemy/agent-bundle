@@ -4,20 +4,20 @@ import {
   assembleArtifactManifest as assembleArtifactManifestFromApi,
   parseArtifactManifest as parseArtifactManifestFromApi,
   serializeArtifactManifest as serializeArtifactManifestFromApi,
-  type ArtifactManifestV2 as ApiArtifactManifestV2,
+  type ArtifactManifest as ApiArtifactManifest,
 } from '../src/api.ts';
 import {
   assembleArtifactManifest,
   parseArtifactManifest,
   serializeArtifactManifest,
-  type ArtifactManifestV2,
+  type ArtifactManifest,
 } from '../src/build/manifest.ts';
 import { digest, stableJson } from '../src/core/digest.ts';
 import {
   assembleArtifactManifest as assembleArtifactManifestFromIndex,
   parseArtifactManifest as parseArtifactManifestFromIndex,
   serializeArtifactManifest as serializeArtifactManifestFromIndex,
-  type ArtifactManifestV2 as PublicArtifactManifestV2,
+  type ArtifactManifest as PublicArtifactManifest,
 } from '../src/index.ts';
 
 const hash = (character: string): string => character.repeat(64);
@@ -27,7 +27,7 @@ const sourceInputs = Object.freeze([
   Object.freeze({ path: 'skills/review/SKILL.md', sha256: hash('b') }),
 ]);
 
-const validManifest = (): ArtifactManifestV2 => ({
+const validManifest = (): ArtifactManifest => ({
   agentSkills: {
     schemaSha256: 'b9079c0c10b7930e8c6a20ff2bc10cda2a3343c55185120e3f1116a1a529b220',
     sourceRevision: '69ef37e9424c0a7ea9dd2293b559e43ec8176379',
@@ -83,7 +83,6 @@ const validManifest = (): ArtifactManifestV2 => ({
     source: { status: 'passed' },
     targets: [{ name: 'codex', status: 'passed' }],
   },
-  version: 2,
 });
 
 const canonicalBytes = (manifest: unknown): string => `${stableJson(manifest)}\n`;
@@ -94,17 +93,17 @@ type Mutable<Value> = Value extends readonly (infer Item)[]
     ? { -readonly [Key in keyof Value]: Mutable<Value[Key]> }
     : Value;
 
-type MutableArtifactManifestV2 = Mutable<ArtifactManifestV2>;
+type MutableArtifactManifest = Mutable<ArtifactManifest>;
 
 const expectInvalid = (manifest: unknown, message?: RegExp): void => {
   const bytes = canonicalBytes(manifest);
   expect(() => parseArtifactManifest(bytes)).toThrow(message ?? /manifest/i);
 };
 
-const clone = (): MutableArtifactManifestV2 =>
-  structuredClone(validManifest()) as unknown as MutableArtifactManifestV2;
+const clone = (): MutableArtifactManifest =>
+  structuredClone(validManifest()) as unknown as MutableArtifactManifest;
 
-it('serializes the exact canonical v2 fixture and accepts its Agent Skills and adapter records', () => {
+it('serializes the exact canonical fixture and accepts its Agent Skills and adapter records', () => {
   const manifest = validManifest();
   const expected = `${stableJson(manifest)}\n`;
 
@@ -118,8 +117,8 @@ it('serializes the exact canonical v2 fixture and accepts its Agent Skills and a
 
 it('returns a deeply frozen manifest and exports the public manifest type', () => {
   const manifest = parseArtifactManifest(serializeArtifactManifest(validManifest()));
-  const apiManifest: ApiArtifactManifestV2 = manifest;
-  const publicManifest: PublicArtifactManifestV2 = manifest;
+  const apiManifest: ApiArtifactManifest = manifest;
+  const publicManifest: PublicArtifactManifest = manifest;
 
   expect(apiManifest).toBe(publicManifest);
   expect(Object.isFrozen(manifest)).toBe(true);
@@ -156,10 +155,8 @@ it('produces root-independent canonical bytes without silently sorting caller ar
   expect(() => assembleArtifactManifest(unsorted)).toThrow(/sorted/i);
 });
 
-it('rejects versions, object shapes, JSON containers, and duplicate JSON keys strictly', () => {
+it('rejects object shapes, JSON containers, and duplicate JSON keys strictly', () => {
   const cases: readonly [string, (manifest: Record<string, unknown>) => void][] = [
-    ['unknown version', (manifest) => { manifest.version = 3; }],
-    ['v1', (manifest) => { manifest.version = 1; }],
     ['extra root key', (manifest) => { manifest.extra = true; }],
     ['missing root key', (manifest) => { delete manifest.validation; }],
     ['extra Agent Skills key', (manifest) => { (manifest.agentSkills as Record<string, unknown>).extra = true; }],
@@ -185,21 +182,21 @@ it('rejects versions, object shapes, JSON containers, and duplicate JSON keys st
   for (const [, mutate] of cases) {
     const manifest = clone() as unknown as Record<string, unknown>;
     mutate(manifest);
-    expectInvalid(manifest, /keys|version|status/i);
+    expectInvalid(manifest, /keys|status/i);
   }
 
   const arrayManifest = clone() as unknown as Record<string, unknown>;
   arrayManifest.project = [];
   expectInvalid(arrayManifest, /object/i);
-  expect(() => assembleArtifactManifest(new (class { readonly version = 2; })() as ArtifactManifestV2)).toThrow(/plain object/i);
-  expect(() => parseArtifactManifest('{"version":2,"version":2}')).toThrow(
+  expect(() => assembleArtifactManifest(new (class {})() as ArtifactManifest)).toThrow(/plain object/i);
+  expect(() => parseArtifactManifest('{"runtime":{},"runtime":{}}')).toThrow(
     /^Artifact manifest JSON has a duplicate key\.$/u,
   );
   expect(() => parseArtifactManifest('{')).toThrow(/^Artifact manifest is not valid JSON\.$/u);
 });
 
 it('rejects malformed scalar fields, unsafe paths, and manifest self-listing', () => {
-  const mutations: readonly [(manifest: MutableArtifactManifestV2) => void, RegExp][] = [
+  const mutations: readonly [(manifest: MutableArtifactManifest) => void, RegExp][] = [
     [(manifest) => { manifest.agentSkills.schemaSha256 = 'A'.repeat(64); }, /sha256/i],
     [(manifest) => { manifest.agentSkills.sourceRevision = ''; }, /non-empty string/i],
     [(manifest) => { manifest.producer.version = ''; }, /non-empty string/i],

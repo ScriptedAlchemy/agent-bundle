@@ -53,7 +53,7 @@ export type {
   ArtifactManifestTarget,
   ArtifactManifestTargetSchema,
   ArtifactManifestTargetValidation,
-  ArtifactManifestV2,
+  ArtifactManifest,
   ArtifactManifestValidation,
   ArtifactManifestValidationRecord,
   ArtifactManifestValidationStatus,

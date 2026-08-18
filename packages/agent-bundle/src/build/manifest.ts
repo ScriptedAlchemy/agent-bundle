@@ -71,7 +71,7 @@ export interface ArtifactManifestValidation {
   readonly targets: readonly ArtifactManifestTargetValidation[];
 }
 
-export interface ArtifactManifestV2 {
+export interface ArtifactManifest {
   readonly agentSkills: ArtifactManifestAgentSkills;
   readonly files: readonly ArtifactManifestFile[];
   readonly producer: ArtifactManifestProducer;
@@ -79,12 +79,11 @@ export interface ArtifactManifestV2 {
   readonly runtime: ArtifactManifestRuntime;
   readonly targets: readonly ArtifactManifestTarget[];
   readonly validation: ArtifactManifestValidation;
-  readonly version: 2;
 }
 
 export interface AssembledArtifactManifest {
   readonly bytes: string;
-  readonly manifest: ArtifactManifestV2;
+  readonly manifest: ArtifactManifest;
 }
 
 type JsonRecord = Record<string, unknown>;
@@ -94,7 +93,7 @@ const sha256Pattern = /^[a-f0-9]{64}$/u;
 const runtimeVersionPattern = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u;
 
 const fail = (message: string): never => {
-  throw new TypeError(`Artifact manifest v2 ${message}`);
+  throw new TypeError(`Artifact manifest ${message}`);
 };
 
 const isPlainObject = (value: unknown): value is JsonRecord => {
@@ -285,10 +284,9 @@ const parseRuntime = (value: unknown): ArtifactManifestRuntime => {
   return { node };
 };
 
-const validateManifest = (value: unknown): ArtifactManifestV2 => {
+const validateManifest = (value: unknown): ArtifactManifest => {
   const manifest = requireRecord(value, 'root');
-  requireExactKeys(manifest, 'root', ['agentSkills', 'files', 'producer', 'project', 'runtime', 'targets', 'validation', 'version']);
-  if (manifest.version !== 2) fail('version must be 2.');
+  requireExactKeys(manifest, 'root', ['agentSkills', 'files', 'producer', 'project', 'runtime', 'targets', 'validation']);
 
   const agentSkills = requireRecord(manifest.agentSkills, 'agentSkills');
   requireExactKeys(agentSkills, 'agentSkills', ['schemaSha256', 'sourceRevision', 'specification']);
@@ -351,7 +349,6 @@ const validateManifest = (value: unknown): ArtifactManifestV2 => {
     runtime: parseRuntime(manifest.runtime),
     targets,
     validation,
-    version: 2,
   };
 };
 
@@ -364,7 +361,7 @@ const freezeDeep = <Value>(value: Value): Value => {
   return Object.freeze(value);
 };
 
-export const parseArtifactManifest = (bytes: string): ArtifactManifestV2 => {
+export const parseArtifactManifest = (bytes: string): ArtifactManifest => {
   let value: unknown;
   try {
     value = parseJsonWithoutDuplicateKeys(bytes);
@@ -382,15 +379,15 @@ export const parseArtifactManifest = (bytes: string): ArtifactManifestV2 => {
 };
 
 /**
- * Serializes a valid v2 manifest. Caller arrays must already be sorted and unique;
+ * Serializes a valid manifest. Caller arrays must already be sorted and unique;
  * this function validates rather than reordering them.
  */
-export const serializeArtifactManifest = (manifest: ArtifactManifestV2): string => {
+export const serializeArtifactManifest = (manifest: ArtifactManifest): string => {
   const validated = validateManifest(manifest);
   return `${stableJson(validated)}\n`;
 };
 
-export const assembleArtifactManifest = (manifest: ArtifactManifestV2): AssembledArtifactManifest => {
+export const assembleArtifactManifest = (manifest: ArtifactManifest): AssembledArtifactManifest => {
   const bytes = serializeArtifactManifest(manifest);
   return Object.freeze({ bytes, manifest: parseArtifactManifest(bytes) });
 };

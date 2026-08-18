@@ -3,7 +3,7 @@ import { isAbsolute, join, relative, resolve } from 'node:path';
 
 import { build } from '../api.ts';
 import { createDefaultRegistry, type TargetRegistry } from '../adapters/registry.ts';
-import { parseArtifactManifest, type ArtifactManifestV2 } from '../build/manifest.ts';
+import { parseArtifactManifest, type ArtifactManifest } from '../build/manifest.ts';
 import { validateArtifact } from '../build/validate-artifact.ts';
 import { digest } from '../core/digest.ts';
 import { EvalHarnessError } from './errors.ts';
@@ -22,7 +22,7 @@ export interface PrepareEvalArtifactOptions {
 
 export interface PreparedEvalArtifact {
   readonly binding: EvalArtifactBinding;
-  readonly manifest: ArtifactManifestV2;
+  readonly manifest: ArtifactManifest;
   readonly root: string;
 }
 
@@ -35,7 +35,7 @@ const harnessError = (
 ): EvalHarnessError => new EvalHarnessError(code, message);
 
 /** One digest per generated target, derived from the manifest's own recorded file hashes. */
-export const evalTargetDigests = (manifest: ArtifactManifestV2): Readonly<Record<string, string>> => {
+export const evalTargetDigests = (manifest: ArtifactManifest): Readonly<Record<string, string>> => {
   const buckets = new Map<string, { path: string; sha256: string }[]>(
     manifest.targets.map((target) => [target.name, []]),
   );
@@ -81,7 +81,7 @@ const readValidatedArtifact = async (
   }
 
   const manifestPath = join(artifactRoot, manifestName);
-  let manifest: ArtifactManifestV2;
+  let manifest: ArtifactManifest;
   try {
     manifest = parseArtifactManifest(await readFile(manifestPath, 'utf8'));
   } catch (error) {

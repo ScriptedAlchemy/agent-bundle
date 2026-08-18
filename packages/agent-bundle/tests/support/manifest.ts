@@ -1,6 +1,6 @@
 import { createDefaultRegistry } from '../../src/adapters/registry.ts';
 import { listArtifactFiles, writeHookIndex, writeManifest } from '../../src/build/emit.ts';
-import type { ArtifactManifestV2 } from '../../src/build/manifest.ts';
+import type { ArtifactManifest } from '../../src/build/manifest.ts';
 import { digest } from '../../src/core/digest.ts';
 import { agentSkillsSchemaRevision } from '../../src/schemas/agent-skills/contract.ts';
 
@@ -13,7 +13,7 @@ const fixtureSourceInputs = Object.freeze([Object.freeze({
 export const writeFixtureManifest = async (options: {
   readonly artifactRoot: string;
   readonly targets: readonly string[];
-}): Promise<ArtifactManifestV2> => {
+}): Promise<ArtifactManifest> => {
   const registry = createDefaultRegistry();
   const targets = options.targets
     .map((name) => {
@@ -59,7 +59,6 @@ export const writeFixtureManifest = async (options: {
         source: { status: 'passed' },
         targets: targets.map(({ name }) => ({ name, status: 'passed' as const })),
       },
-      version: 2,
     },
   });
 };

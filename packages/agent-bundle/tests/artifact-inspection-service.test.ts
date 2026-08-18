@@ -7,7 +7,7 @@ import { expect, it } from '@rstest/core';
 
 import { TargetRegistry } from '../src/adapters/registry.ts';
 import type { TargetAdapter, TargetAdapterMetadata } from '../src/adapters/types.ts';
-import { assembleArtifactManifest, type ArtifactManifestFileKind, type ArtifactManifestV2 } from '../src/build/manifest.ts';
+import { assembleArtifactManifest, type ArtifactManifestFileKind, type ArtifactManifest } from '../src/build/manifest.ts';
 import { validateArtifact, validateArtifactWithSnapshot } from '../src/build/validate-artifact.ts';
 import { digest } from '../src/core/digest.ts';
 import { ArtifactInspectionService } from '../src/dev/index.ts';
@@ -146,7 +146,7 @@ const statefulResolverRuntimeRegistry = (calls: string[]): TargetRegistry => run
   },
 } satisfies TargetMcpRuntimeContract));
 
-const targetRecord = (registry: TargetRegistry): ArtifactManifestV2['targets'][number] => {
+const targetRecord = (registry: TargetRegistry): ArtifactManifest['targets'][number] => {
   const metadata = registry.metadata(fixtureTarget);
   return {
     ...metadata,
@@ -166,7 +166,7 @@ const manifestFor = (
   registry: TargetRegistry,
   files: readonly FixtureFile[],
   sourceInputs = fixtureInputs,
-): ArtifactManifestV2 => {
+): ArtifactManifest => {
   const target = targetRecord(registry);
   return {
     agentSkills: agentSkillsSchemaRevision,
@@ -195,7 +195,6 @@ const manifestFor = (
       source: { status: 'passed' },
       targets: [{ name: target.name, status: 'passed' }],
     },
-    version: 2,
   };
 };
 
