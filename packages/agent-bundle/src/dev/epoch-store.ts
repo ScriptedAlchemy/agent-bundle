@@ -81,6 +81,7 @@ interface StagingRecord {
 
 const activeEpochFileName = 'active-epoch.json';
 const metadataDirectoryName = '.metadata';
+const nativePlaygroundCatalogDirectoryName = 'native-playground';
 const stagingMarkerFileName = '.agent-bundle-epoch-stage.json';
 const stagingPrefix = '.stage-';
 
@@ -429,6 +430,7 @@ export class EpochStore {
             await this.#cleanupRemove(join(this.#epochsPath, entry.epoch.id), { force: true, recursive: true });
             resource = 'metadata';
             await this.#cleanupRemove(this.#metadataPathFor(entry.epoch.id), { force: true });
+            await this.#cleanupRemove(this.#nativePlaygroundCatalogPathFor(entry.epoch.id), { force: true });
           } catch (reason) {
             throw cleanupFailure(entry.epoch.id, resource, reason);
           }
@@ -693,6 +695,10 @@ export class EpochStore {
 
   #metadataPathFor(epochId: string): string {
     return join(this.#epochMetadataPath, `${epochId}.json`);
+  }
+
+  #nativePlaygroundCatalogPathFor(epochId: string): string {
+    return join(this.#epochMetadataPath, nativePlaygroundCatalogDirectoryName, `${epochId}.json`);
   }
 
   async #writeEpochMetadata(epoch: ArtifactEpoch): Promise<void> {

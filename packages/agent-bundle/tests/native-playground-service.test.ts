@@ -4,7 +4,7 @@ import { join } from 'node:path';
 
 import { expect, it } from '@rstest/core';
 
-import { NativePlaygroundService } from '../src/dev/native-playground-service.ts';
+import { NativePlaygroundService, type NativePlaygroundEpochReference } from '../src/dev/native-playground-service.ts';
 import type { DiscoveredEvalSuite } from '../src/eval/discovery.ts';
 import type { EvalFixturePlan } from '../src/eval/fixtures.ts';
 
@@ -48,6 +48,9 @@ const fixturePlan: EvalFixturePlan = Object.freeze({
   sourcePath: '/project/evals/fixture',
 });
 
+let catalogDirectoryIndex = 0;
+const testCatalogDirectory = (): string => join(tmpdir(), `agent-bundle-native-playground-catalog-${process.pid}-${catalogDirectoryIndex++}`);
+
 const claudeStream = [
   '{"type":"system","subtype":"init","plugins":[{"name":"review"}],"mcp_servers":[{"name":"project"}]}',
   '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Skill","input":{"skill":"review:review"}}]}}',
@@ -74,8 +77,30 @@ const nativeSuite = (host: 'claude' | 'codex', sourcePath: string): readonly Dis
   }),
 })]);
 
+const dualHostSuite = (sourcePath: string): readonly DiscoveredEvalSuite[] => Object.freeze([Object.freeze({
+  sourcePath,
+  suite: Object.freeze({
+    cases: Object.freeze([Object.freeze({
+      assertions: Object.freeze([]),
+      digest: 'authored-dual-host-case',
+      fixture: Object.freeze({ git: false, include: Object.freeze(['**/*']), path: './fixture' }),
+      hosts: Object.freeze({
+        claude: Object.freeze({ model: 'pinned-claude-model' }),
+        codex: Object.freeze({ model: 'pinned-codex-model' }),
+      }),
+      id: 'dual-host-case',
+      invocation: Object.freeze({ mode: 'automatic' as const }),
+      prompt: 'Original authored prompt.',
+      trials: 1,
+    })]),
+    digest: 'dual-host-suite-digest',
+    name: 'dual-host-review',
+  }),
+})]);
+
 it('pins opaque native catalog selections to their catalog epoch and never resolves them across epochs', async () => {
   const service = new NativePlaygroundService({
+    catalogDirectory: testCatalogDirectory(),
     discover: async () => suite(),
     inspectArtifact: async (reference) => Object.freeze({
       binding: Object.freeze({ manifestPath: `${reference.root}/agent-bundle.manifest.json`, source: 'explicit' as const, targetDigests: reference.epoch.targetDigests }),
@@ -106,9 +131,97 @@ it('pins opaque native catalog selections to their catalog epoch and never resol
   await service.close();
 });
 
+it('advertises and resolves every exact native case/fixture/host/model tuple without host overwrite', async () => {
+  const service = new NativePlaygroundService({
+    catalogDirectory: testCatalogDirectory(),
+    discover: async () => dualHostSuite('/project/evals/review.eval.ts'),
+    inspectArtifact: async (reference) => Object.freeze({
+      binding: Object.freeze({ manifestPath: `${reference.root}/agent-bundle.manifest.json`, source: 'explicit' as const, targetDigests: reference.epoch.targetDigests }),
+      manifest: Object.freeze({}),
+      root: reference.root,
+    }),
+    planFixture: async () => fixturePlan,
+    projectRoot: '/project',
+  });
+  const reference = Object.freeze({
+    ...epoch('epoch-dual-host', '/epochs/dual-host'),
+    epoch: Object.freeze({ ...epoch('epoch-dual-host', '/epochs/dual-host').epoch, targetDigests: Object.freeze({ claude: 'target-claude', codex: 'target-codex' }) }),
+  });
+  const catalog = await service.catalog(reference);
+  const selections = (catalog as typeof catalog & { readonly selections?: readonly { readonly caseId: string; readonly fixtureId: string; readonly host: 'claude' | 'codex'; readonly modelPinId: string }[] }).selections;
+  expect(selections).toEqual(expect.arrayContaining([
+    expect.objectContaining({ host: 'claude' }),
+    expect.objectContaining({ host: 'codex' }),
+  ]));
+  for (const host of ['claude', 'codex'] as const) {
+    const modelPin = catalog.modelPins.find((candidate) => candidate.host === host);
+    await expect(service.prepare(reference, {
+      caseId: catalog.cases[0]!.id,
+      fixtureId: catalog.fixtures[0]!.id,
+      host,
+      modelPinId: modelPin!.id,
+      operation: 'native.prompt',
+      prompt: 'Browser prompt.',
+      target: host,
+    })).resolves.toMatchObject({ host });
+  }
+  await service.close();
+});
+
+it('retains an exact epoch catalog across service restart after fixture source changes', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-native-playground-restart-'));
+  try {
+    const epochRoot = join(root, '.agent-bundle', 'epochs', 'epoch-retained');
+    const suiteDir = join(root, 'evals');
+    const fixtureFile = join(suiteDir, 'fixture', 'input.txt');
+    await mkdir(join(epochRoot, 'claude', '.claude-plugin'), { recursive: true });
+    await mkdir(join(suiteDir, 'fixture'), { recursive: true });
+    await writeFile(join(epochRoot, 'claude', '.claude-plugin', 'plugin.json'), '{"name":"review"}\n');
+    await writeFile(fixtureFile, 'first fixture bytes\n');
+    const reference = epoch('epoch-retained', epochRoot);
+    const options = {
+      discover: async () => nativeSuite('claude', join(suiteDir, 'review.eval.ts')),
+      inspectArtifact: async (candidate: NativePlaygroundEpochReference) => Object.freeze({
+        binding: Object.freeze({ manifestPath: 'agent-bundle.manifest.json', source: 'explicit' as const, targetDigests: candidate.epoch.targetDigests }),
+        root: candidate.root,
+      }),
+      native: {
+        claudeRun: async (request: Readonly<{ readonly args: readonly string[] }>) => request.args[0] === '--version'
+          ? Object.freeze({ exitCode: 0, stderr: '', stdout: '2.1.232\n' })
+          : Object.freeze({ exitCode: 0, stderr: '', stdout: '{"loggedIn":true,"authMethod":"claude.ai","apiProvider":"firstParty","subscriptionType":"max"}\n' }),
+      },
+      projectRoot: root,
+    } as const;
+    const first = new NativePlaygroundService(options);
+    const catalogA = await first.catalog(reference);
+    await first.close();
+    await writeFile(fixtureFile, 'second fixture bytes after retained epoch\n');
+    const restarted = new NativePlaygroundService(options);
+    const catalogB = await restarted.catalog(reference);
+    expect(catalogB).toEqual(catalogA);
+    const prepared = await restarted.prepare(reference, {
+      caseId: catalogB.cases[0]!.id,
+      fixtureId: catalogB.fixtures[0]!.id,
+      host: 'claude',
+      modelPinId: catalogB.modelPins[0]!.id,
+      operation: 'native.prompt',
+      prompt: 'Review the fixture.',
+      target: 'claude',
+    });
+    const result = await restarted.run(prepared, { emit: async () => undefined, signal: new AbortController().signal });
+    expect(result.events).toContainEqual(expect.objectContaining({
+      kind: 'native.harness.failed', raw: { code: 'EVAL_FIXTURE_UNAVAILABLE', stage: 'fixture' },
+    }));
+    await restarted.close();
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
 it('caches the catalog fixture plan for later opaque selection preparation', async () => {
   let planCalls = 0;
   const service = new NativePlaygroundService({
+    catalogDirectory: testCatalogDirectory(),
     discover: async () => suite(),
     inspectArtifact: async (reference) => Object.freeze({
       binding: Object.freeze({ manifestPath: `${reference.root}/agent-bundle.manifest.json`, source: 'explicit' as const, targetDigests: reference.epoch.targetDigests }),
