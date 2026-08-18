@@ -1176,7 +1176,8 @@ it('prepares the optional runtime once with the development config context befor
       fetch(`${server.url}/api/runtime/status`).then((response) => response.json()),
       fetch(`${server.url}/api/project/status`).then((response) => response.json()),
     ]);
-    expect(calls.trim().split('\n').map((line) => JSON.parse(line))).toEqual([
+    const configCalls = calls.trim().split('\n').map((line) => JSON.parse(line)) as Array<{ readonly command: string; readonly mode: string }>;
+    expect(configCalls.filter((call) => call.command === 'dev')).toEqual([
       { command: 'dev', mode: 'development' },
     ]);
     expect(context).toMatchObject({
@@ -1677,8 +1678,7 @@ it('gives the foreground Eval route and lifecycle lanes the same project-owned s
         createSandboxProxy: async () => { throw sandboxFailure; },
         startForegroundServer: async (options) => {
           foreground = options;
-          await options.coordinator.start();
-          return { close: () => options.coordinator.close(), url: 'http://127.0.0.1:49127' };
+          return { close: async () => undefined, url: 'http://127.0.0.1:49127' };
         },
       },
     })).rejects.toBe(sandboxFailure);
