@@ -16,7 +16,7 @@ import type { EvalRunStart } from './eval-client.ts';
 
 export type EvalPageState = 'empty' | 'loading' | 'ran' | 'ready';
 
-export type EvalRunStatus = 'admitting' | 'cancelled' | 'cancelling' | 'completed' | 'failed' | 'queued' | 'running';
+export type EvalRunStatus = 'admitting' | 'cancelled' | 'cancelling' | 'completed' | 'failed' | 'queued' | 'replaying' | 'running';
 
 export interface EvalSuiteOption {
   readonly cases: number;
@@ -74,8 +74,14 @@ export interface EvalOutcomeCounts {
 export interface EvalRunViewOptions {
   readonly admittedRun?: EvalRunRecord;
   readonly admitting?: boolean;
+  /** A locally sent cancellation is visible until durable replay establishes a terminal state. */
+  readonly cancelling?: boolean;
+  /** The only run whose results and timeline are allowed to render. */
+  readonly currentRunId?: string;
   readonly discardedThroughSequence?: number;
   readonly events?: readonly EvalRunEvent[];
+  /** Associates events with a run, so a previous observer cannot leak into a replacement. */
+  readonly eventsRunId?: string;
   readonly listing: EvalSuiteListing | undefined;
   readonly result: EvalRunResult | undefined;
   readonly selectedSuite: string | undefined;
@@ -97,6 +103,74 @@ export interface EvalRunView {
   readonly trials: readonly EvalTrialRow[];
 }
 
+/** A generation-scoped durable run snapshot. Replacements must clear all old evidence synchronously. */
+export interface EvalRunLifecycle {
+  readonly admittedRun?: EvalRunRecord;
+  readonly discardedThroughSequence?: number;
+  readonly events: readonly EvalRunEvent[];
+  readonly generation: number;
+  readonly result?: EvalRunResult;
+  readonly runId?: string;
+}
+
+export interface EvalRunLifecycleToken {
+  readonly generation: number;
+  readonly runId?: string;
+}
+
+/** One async durable-evidence read is allowed to publish for the active run lifecycle. */
+export interface EvalRunEvidenceReadClaim {
+  readonly signal: AbortSignal;
+  readonly token: EvalRunLifecycleToken;
+}
+
+interface ActiveEvalRunEvidenceRead {
+  readonly claim: EvalRunEvidenceReadClaim;
+  readonly controller: AbortController;
+  readonly parentSignal?: AbortSignal;
+  readonly onParentAbort?: () => void;
+}
+
+/**
+ * Serializes observer, open, and cancellation reads for a run generation.
+ * A later read cancels the prior transport and is the only read allowed to publish.
+ */
+export class EvalRunEvidenceReadCoordinator {
+  #active: ActiveEvalRunEvidenceRead | undefined;
+
+  claim(token: EvalRunLifecycleToken, parentSignal?: AbortSignal): EvalRunEvidenceReadClaim {
+    this.#release(this.#active, true);
+    const controller = new AbortController();
+    const claim = Object.freeze({ signal: controller.signal, token });
+    const onParentAbort = (): void => controller.abort();
+    if (parentSignal?.aborted === true) controller.abort();
+    else parentSignal?.addEventListener('abort', onParentAbort, { once: true });
+    const active: ActiveEvalRunEvidenceRead = { claim, controller, ...(parentSignal === undefined ? {} : { parentSignal, onParentAbort }) };
+    this.#active = active;
+    return claim;
+  }
+
+  complete(claim: EvalRunEvidenceReadClaim): void {
+    if (this.#active?.claim !== claim) return;
+    this.#release(this.#active, false);
+  }
+
+  invalidate(): void {
+    this.#release(this.#active, true);
+  }
+
+  isCurrent(claim: EvalRunEvidenceReadClaim): boolean {
+    return this.#active?.claim === claim && !claim.signal.aborted;
+  }
+
+  #release(active: ActiveEvalRunEvidenceRead | undefined, abort: boolean): void {
+    if (active === undefined) return;
+    if (this.#active === active) this.#active = undefined;
+    active.parentSignal?.removeEventListener('abort', active.onParentAbort!);
+    if (abort) active.controller.abort();
+  }
+}
+
 const maximumTrials = 100;
 
 const noCases: readonly EvalCaseRow[] = Object.freeze([]);
@@ -106,6 +180,55 @@ const noDiagnostics: readonly Diagnostic[] = Object.freeze([]);
 const noTrials: readonly EvalTrialRow[] = Object.freeze([]);
 
 const noEvents: readonly EvalRunEvent[] = Object.freeze([]);
+
+export const createEvalRunLifecycle = (): EvalRunLifecycle => Object.freeze({
+  events: noEvents,
+  generation: 0,
+});
+
+/** Starts a new admission/open lifecycle before any asynchronous work can settle. */
+export const replaceEvalRunLifecycle = (
+  lifecycle: EvalRunLifecycle,
+  runId?: string,
+  admittedRun?: EvalRunRecord,
+): EvalRunLifecycle => Object.freeze({
+  ...(admittedRun === undefined ? {} : { admittedRun }),
+  events: noEvents,
+  generation: lifecycle.generation + 1,
+  ...(runId === undefined ? {} : { runId }),
+});
+
+/** Commits a successful admission into the generation that initiated it. */
+export const admitEvalRunLifecycle = (
+  lifecycle: EvalRunLifecycle,
+  admittedRun: EvalRunRecord,
+): EvalRunLifecycle => Object.freeze({
+  admittedRun,
+  events: noEvents,
+  generation: lifecycle.generation,
+  runId: admittedRun.id,
+});
+
+export const evalRunLifecycleToken = (lifecycle: EvalRunLifecycle): EvalRunLifecycleToken => Object.freeze({
+  generation: lifecycle.generation,
+  ...(lifecycle.runId === undefined ? {} : { runId: lifecycle.runId }),
+});
+
+/** Applies observer/read data only when it belongs to the currently rendered run generation. */
+export const updateEvalRunLifecycle = (
+  lifecycle: EvalRunLifecycle,
+  token: EvalRunLifecycleToken,
+  update: Pick<Partial<EvalRunLifecycle>, 'admittedRun' | 'discardedThroughSequence' | 'events' | 'result'>,
+): EvalRunLifecycle => {
+  if (lifecycle.generation !== token.generation || lifecycle.runId !== token.runId) return lifecycle;
+  if (update.result !== undefined && update.result.run.id !== lifecycle.runId) return lifecycle;
+  if (update.admittedRun !== undefined && update.admittedRun.id !== lifecycle.runId) return lifecycle;
+  return Object.freeze({
+    ...lifecycle,
+    ...update,
+    ...(update.events === undefined ? {} : { events: Object.freeze([...update.events]) }),
+  });
+};
 
 export const maximumEvalTimelineEvents = 512;
 
@@ -295,6 +418,7 @@ const summaryFor = (
   if (run !== undefined && runStatus === 'queued') return `Run ${run.id} is queued.`;
   if (run !== undefined && runStatus === 'running') return `Run ${run.id} is running.`;
   if (run !== undefined && runStatus === 'cancelling') return `Run ${run.id} is cancelling.`;
+  if (run !== undefined && runStatus === 'replaying') return `Run ${run.id} has recorded terminal results; loading durable events.`;
   if (run !== undefined && result === undefined && runStatus !== undefined) {
     return `Run ${run.id} is ${runStatus}; refreshing its durable results.`;
   }
@@ -308,11 +432,12 @@ const summaryFor = (
       `${outcomes.inconclusive} inconclusive across ${result.trials.length} trial(s).`,
     ].join('');
   }
-  return 'Select an authored suite and run it deterministically to record evidence.';
+  return 'Select an authored suite and choose a harness to record evidence.';
 };
 
 const runStatusFor = (
   admitting: boolean,
+  cancelling: boolean,
   run: EvalRunRecord | undefined,
   events: readonly EvalRunEvent[],
 ): EvalRunStatus | undefined => {
@@ -321,27 +446,36 @@ const runStatusFor = (
   const kinds = new Set(events.map((event) => event.kind));
   if (kinds.has('run.cancelled')) return 'cancelled';
   if (kinds.has('run.failed')) return 'failed';
-  if (kinds.has('run.completed') || run.completedAt !== undefined) return 'completed';
+  if (kinds.has('run.completed')) return 'completed';
+  if (cancelling) return 'cancelling';
   if (kinds.has('run.cancelling')) return 'cancelling';
   if (kinds.has('trial.started') || kinds.has('trial.completed') || kinds.has('trial.failed') || kinds.has('trial.cancelled')) {
     return 'running';
   }
-  return 'queued';
+  return run.completedAt === undefined ? 'queued' : 'replaying';
 };
 
 /** Derives every Eval page section from the discovered suites and the latest run. */
 export const evalRunViewFor = (options: EvalRunViewOptions): EvalRunView => {
   const suites = options.listing === undefined ? [] : evalSuiteOptionsFor(options.listing.suites);
   const selected = suites.find((option) => option.key === options.selectedSuite) ?? suites[0];
-  const trials = options.result === undefined ? noTrials : evalTrialRowsFor(options.result.trials);
+  const result = options.currentRunId === undefined || options.result?.run.id === options.currentRunId
+    ? options.result
+    : undefined;
+  const admittedRun = options.currentRunId === undefined || options.admittedRun?.id === options.currentRunId
+    ? options.admittedRun
+    : undefined;
+  const events = options.eventsRunId === undefined || options.eventsRunId === options.currentRunId
+    ? options.events === undefined ? noEvents : Object.freeze([...options.events])
+    : noEvents;
+  const trials = result === undefined ? noTrials : evalTrialRowsFor(result.trials);
   const outcomes = outcomeCountsFor(trials);
-  const events = options.events === undefined ? noEvents : Object.freeze([...options.events]);
-  const run = options.result?.run ?? options.admittedRun;
-  const runStatus = runStatusFor(options.admitting === true, run, events);
+  const run = admittedRun ?? result?.run;
+  const runStatus = runStatusFor(options.admitting === true, options.cancelling === true, run, events);
   const state: EvalPageState = options.listing === undefined ? 'loading'
     : suites.length === 0 ? 'empty'
-      : options.result === undefined ? 'ready' : 'ran';
-  const summary = summaryFor(state, outcomes, options.result, run, runStatus);
+      : result === undefined ? 'ready' : 'ran';
+  const summary = summaryFor(state, outcomes, result, run, runStatus);
   return Object.freeze({
     cases: selected === undefined || options.listing === undefined
       ? noCases
