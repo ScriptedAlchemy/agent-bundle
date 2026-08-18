@@ -2,10 +2,11 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { expect, it } from '@rstest/core';
 
-import type { PlaygroundSession, PlaygroundTraceEvent } from '../../agent-bundle/src/services/playground-service.ts';
+import type { PlaygroundReplay, PlaygroundSession, PlaygroundTraceEvent } from '../../agent-bundle/src/services/playground-service.ts';
+import type { PlaygroundRun } from '../../agent-bundle/src/dev/playground-contract.ts';
 import { PlaygroundClient } from '../src/playground/playground-client.ts';
 import { playgroundViewFor } from '../src/playground/playground-model.ts';
-import { PlaygroundPage, PlaygroundTraceView } from '../src/playground/playground-page.tsx';
+import { observePlaygroundRun, PlaygroundPage, PlaygroundTraceView } from '../src/playground/playground-page.tsx';
 
 const epoch = { digest: 'sha256-current', id: 'epoch-current' };
 const identity = {
@@ -17,6 +18,18 @@ const session: PlaygroundSession = { cleanupFailures: [], createdAt: '2026-08-14
 const event = (sequence: number): PlaygroundTraceEvent => ({
   kind: sequence === 1 ? 'epoch.bound' : 'skill.inspected', raw: { sequence }, rawEventRef: `events.jsonl#${sequence}`,
   sequence, source: sequence === 1 ? 'build' : 'skill-evidence', summary: `Event ${sequence}`, timestamp: `2026-08-14T10:00:0${sequence}.000Z`,
+});
+
+const run: PlaygroundRun = { id: 'run-1', session };
+
+const deferred = <Value,>() => {
+  let resolvePromise: (value: Value) => void = () => undefined;
+  const promise = new Promise<Value>((resolve) => { resolvePromise = resolve; });
+  return { promise, resolve: resolvePromise };
+};
+
+const replay = (nextSession: PlaygroundSession, events: readonly PlaygroundTraceEvent[] = []): PlaygroundReplay => ({
+  cursor: { afterSequence: events.at(-1)?.sequence ?? 0 }, events, session: nextSession,
 });
 
 it('renders only typed server-owned operation drafts and a visibly unavailable script capability', () => {
@@ -42,4 +55,100 @@ it('renders the pinned server epoch and persisted event references, not a rebuil
   expect(markup).toContain('epoch-pinned');
   expect(markup).toContain('events.jsonl#2');
   expect(markup).not.toContain('epoch-current');
+});
+
+it('reconnects a cleanly ended open stream from the last accepted sequence before final replay', async () => {
+  const terminal: PlaygroundSession = { ...session, outcome: { status: 'passed' }, state: 'finalized' };
+  const reconnectingStream = deferred<void>();
+  const streamCursors: number[] = [];
+  const replayCursors: number[] = [];
+  const requestSignals: AbortSignal[] = [];
+  const eventSnapshots: (readonly PlaygroundTraceEvent[])[] = [];
+  const delays: number[] = [];
+  let streamCount = 0;
+  let sessionCount = 0;
+  await observePlaygroundRun({
+    client: {
+      replay: async (_sessionId, after, signal) => {
+        replayCursors.push(after ?? 0);
+        requestSignals.push(signal!);
+        return replay(after === 2 ? terminal : session, after === 0 ? [event(1)] : []);
+      },
+      session: async (_sessionId, signal) => {
+        requestSignals.push(signal!);
+        sessionCount += 1;
+        return sessionCount === 1 ? session : terminal;
+      },
+      stream: (_sessionId, options) => {
+        streamCursors.push(options.afterSequence ?? 0);
+        streamCount += 1;
+        options.onEvent(event(streamCount));
+        return streamCount === 1
+          ? { close: () => undefined, done: Promise.resolve() }
+          : { close: () => reconnectingStream.resolve(), done: reconnectingStream.promise };
+      },
+    },
+    onEvents: (events) => { eventSnapshots.push(events); },
+    onSession: () => undefined,
+    run,
+    signal: new AbortController().signal,
+    wait: async (milliseconds, signal) => { delays.push(milliseconds); requestSignals.push(signal); },
+  });
+
+  expect(streamCursors).toEqual([0, 1]);
+  expect(replayCursors).toEqual([1, 2]);
+  expect(eventSnapshots.at(-1)?.map((entry) => entry.sequence)).toEqual([1, 2]);
+  expect(delays).toContain(100);
+  expect(delays).toContain(250);
+  expect(requestSignals.every((signal) => !signal.aborted)).toBe(true);
+});
+
+it('suppresses a replaced run after its abort signal resolves a stale replay', async () => {
+  const firstReplay = deferred<PlaygroundReplay>();
+  const staleEvents: (readonly PlaygroundTraceEvent[])[] = [];
+  const staleSessions: PlaygroundSession[] = [];
+  const firstController = new AbortController();
+  const first = observePlaygroundRun({
+    client: {
+      replay: async () => firstReplay.promise,
+      session: async () => session,
+      stream: () => ({ close: () => undefined, done: new Promise<void>(() => undefined) }),
+    },
+    onEvents: (events) => { staleEvents.push(events); },
+    onSession: (next) => { staleSessions.push(next); },
+    run,
+    signal: firstController.signal,
+    wait: async () => undefined,
+  });
+  firstController.abort();
+  firstReplay.resolve(replay(session, [event(1)]));
+  await first;
+
+  expect(staleEvents).toEqual([]);
+  expect(staleSessions).toEqual([]);
+});
+
+it('closes the live stream and suppresses stale callbacks after Playground unmount aborts', async () => {
+  const blockedReplay = deferred<PlaygroundReplay>();
+  const controller = new AbortController();
+  let closeCount = 0;
+  const events: (readonly PlaygroundTraceEvent[])[] = [];
+  const observer = observePlaygroundRun({
+    client: {
+      replay: async () => blockedReplay.promise,
+      session: async () => session,
+      stream: () => ({ close: () => { closeCount += 1; }, done: new Promise<void>(() => undefined) }),
+    },
+    onEvents: (next) => { events.push(next); },
+    onSession: () => undefined,
+    run,
+    signal: controller.signal,
+    wait: async () => undefined,
+  });
+  controller.abort();
+  blockedReplay.resolve(replay(session, [event(1)]));
+  await observer;
+
+  expect(closeCount).toBe(1);
+  expect(events).toEqual([]);
 });

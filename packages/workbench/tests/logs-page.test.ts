@@ -31,7 +31,7 @@ const events: readonly PlaygroundTraceEvent[] = [
   {
     kind: 'build.started',
     raw: { target: 'claude' },
-    rawEventRef: 'session-1/1',
+    rawEventRef: 'events.jsonl#1',
     sequence: 1,
     source: 'build',
     summary: 'Build started',
@@ -40,7 +40,7 @@ const events: readonly PlaygroundTraceEvent[] = [
   {
     kind: 'mcp.request',
     raw: { method: 'tools/list' },
-    rawEventRef: 'session-1/2',
+    rawEventRef: 'events.jsonl#2',
     sequence: 2,
     source: 'mcp',
     summary: 'Listed tools',
@@ -58,7 +58,7 @@ it('renders log entries most recent first with their raw payload inspectable', (
     view: playgroundLogsViewFor({ epoch, events, kind: undefined, session, source: undefined }),
   }));
 
-  expect(markup.indexOf('session-1/2')).toBeLessThan(markup.indexOf('session-1/1'));
+  expect(markup.indexOf('events.jsonl#2')).toBeLessThan(markup.indexOf('events.jsonl#1'));
   expect(markup).toContain('<details');
   expect(markup).toContain('tools/list');
   expect(markup).toContain('epoch-1');
@@ -70,8 +70,8 @@ it('renders only the entries that pass the source and kind filters', () => {
     view: playgroundLogsViewFor({ epoch, events, kind: 'mcp.request', session, source: 'mcp' }),
   }));
 
-  expect(markup).toContain('session-1/2');
-  expect(markup).not.toContain('session-1/1');
+  expect(markup).toContain('events.jsonl#2');
+  expect(markup).not.toContain('events.jsonl#1');
   expect(markup).toContain('1 of 2');
 });
 
@@ -105,5 +105,5 @@ it('reads the log through the shared playground replay route', async () => {
   const replay = await loadPlaygroundLogTrace(client, 'session-1');
 
   expect(urls).toEqual(['/api/playground/sessions/session-1/replay']);
-  expect(replay.events.map((entry) => entry.rawEventRef)).toEqual(['session-1/1', 'session-1/2']);
+  expect(replay.events.map((entry) => entry.rawEventRef)).toEqual(['events.jsonl#1', 'events.jsonl#2']);
 });

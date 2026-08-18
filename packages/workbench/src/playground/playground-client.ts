@@ -39,18 +39,94 @@ const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
 const invalidResponse = (): PlaygroundClientError =>
   new PlaygroundClientError('AB8043', 'Playground route returned an invalid response.');
 
-const frozenJson = (value: unknown): unknown => {
-  if (Array.isArray(value)) return Object.freeze(value.map(frozenJson));
-  if (isRecord(value)) {
-    return Object.freeze(Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, frozenJson(entry)])));
+const invalidJson = Symbol('invalid playground JSON');
+
+/** Decodes only own data properties, so boundary values cannot retain getters, prototypes, or mutable references. */
+const detachedJson = (value: unknown, seen = new WeakSet<object>()): unknown | typeof invalidJson => {
+  if (value === null || typeof value === 'boolean' || typeof value === 'string') return value;
+  if (typeof value === 'number') return Number.isFinite(value) ? value : invalidJson;
+  if (typeof value !== 'object') return invalidJson;
+  try {
+    if (seen.has(value)) return invalidJson;
+    seen.add(value);
+    if (Array.isArray(value)) {
+      if (Object.getPrototypeOf(value) !== Array.prototype) return invalidJson;
+      const keys = Reflect.ownKeys(value);
+      const length = Object.getOwnPropertyDescriptor(value, 'length');
+      if (length === undefined || !('value' in length) || !Number.isSafeInteger(length.value) || length.value < 0 ||
+        keys.some((key) => typeof key !== 'string' || (key !== 'length' && !/^(0|[1-9]\d*)$/u.test(key)))) return invalidJson;
+      const detached: unknown[] = [];
+      for (let index = 0; index < length.value; index += 1) {
+        const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+        if (descriptor === undefined || !descriptor.enumerable || !('value' in descriptor)) return invalidJson;
+        const entry = detachedJson(descriptor.value, seen);
+        if (entry === invalidJson) return invalidJson;
+        detached.push(entry);
+      }
+      return Object.freeze(detached);
+    }
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) return invalidJson;
+    const detached = Object.create(null) as Record<string, unknown>;
+    for (const key of Reflect.ownKeys(value)) {
+      if (typeof key !== 'string') return invalidJson;
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (descriptor === undefined || !descriptor.enumerable || !('value' in descriptor)) return invalidJson;
+      const entry = detachedJson(descriptor.value, seen);
+      if (entry === invalidJson) return invalidJson;
+      Object.defineProperty(detached, key, { configurable: false, enumerable: true, value: entry, writable: false });
+    }
+    return Object.freeze(detached);
+  } catch {
+    return invalidJson;
   }
-  return value;
 };
 
-const asRecord = (value: unknown): Readonly<Record<string, unknown>> => {
-  if (!isRecord(value)) throw invalidResponse();
-  return value;
+const exactKeys = (value: Readonly<Record<string, unknown>>, keys: readonly string[]): boolean => {
+  const actual = Object.keys(value).sort();
+  const expected = [...keys].sort();
+  return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
 };
+
+const optionalKeys = (value: Readonly<Record<string, unknown>>, required: readonly string[], optional: readonly string[]): boolean =>
+  optional.some((key) => exactKeys(value, [...required, key])) || exactKeys(value, required) ||
+  (optional.length === 2 && exactKeys(value, [...required, ...optional]));
+
+const nonemptyString = (value: unknown): value is string => typeof value === 'string' && value.length > 0;
+
+const jsonObject = (value: unknown): value is Readonly<Record<string, unknown>> => isRecord(value);
+
+const isIdentity = (value: unknown): boolean => {
+  if (!isRecord(value) || !exactKeys(value, ['epoch', 'fixture', 'invocation', 'target', 'task'])) return false;
+  const { epoch, fixture, invocation, target, task } = value;
+  return isRecord(epoch) && exactKeys(epoch, ['digest', 'id']) && nonemptyString(epoch.digest) && nonemptyString(epoch.id) &&
+    isRecord(fixture) && exactKeys(fixture, ['digest', 'id']) && nonemptyString(fixture.digest) && nonemptyString(fixture.id) &&
+    isRecord(invocation) && exactKeys(invocation, ['intent', 'kind']) && jsonObject(invocation.intent) && nonemptyString(invocation.kind) &&
+    isRecord(target) && optionalKeys(target, ['name'], ['digest']) && nonemptyString(target.name) &&
+      (target.digest === undefined || nonemptyString(target.digest)) &&
+    isRecord(task) && exactKeys(task, ['id', 'text']) && nonemptyString(task.id) && nonemptyString(task.text);
+};
+
+const isOutcome = (value: unknown): boolean => {
+  if (!isRecord(value) || !optionalKeys(value, ['status'], ['response', 'workspace']) || !nonemptyString(value.status)) return false;
+  return (value.response === undefined || nonemptyString(value.response)) && (value.workspace === undefined || jsonObject(value.workspace));
+};
+
+const traceSources = new Set([
+  'build', 'diagnostics', 'hook', 'host-preflight', 'mcp', 'project', 'response', 'script', 'skill-evidence', 'workspace-change',
+]);
+
+const isTraceEvent = (value: unknown): value is PlaygroundTraceEvent => {
+  if (!isRecord(value) || !exactKeys(value, ['kind', 'raw', 'rawEventRef', 'sequence', 'source', 'summary', 'timestamp'])) return false;
+  const sequence = value.sequence;
+  return nonemptyString(value.kind) && nonemptyString(value.summary) && nonemptyString(value.timestamp) &&
+    typeof value.source === 'string' && traceSources.has(value.source) && typeof sequence === 'number' &&
+    Number.isSafeInteger(sequence) && sequence > 0 && value.rawEventRef === `events.jsonl#${String(sequence)}` && Object.hasOwn(value, 'raw');
+};
+
+const isCleanupFailure = (value: unknown): boolean =>
+  isRecord(value) && exactKeys(value, ['message', 'operation']) && nonemptyString(value.message) &&
+  (value.operation === 'admission' || value.operation === 'subscriber');
 
 const diagnosticError = (value: unknown, status: number): PlaygroundClientError => {
   if (isRecord(value) && isRecord(value.diagnostic) &&
@@ -61,62 +137,97 @@ const diagnosticError = (value: unknown, status: number): PlaygroundClientError 
 };
 
 const isSession = (value: unknown): boolean =>
-  isRecord(value) && typeof value.id === 'string' && typeof value.state === 'string' && isRecord(value.identity);
+  isRecord(value) && optionalKeys(value, ['cleanupFailures', 'createdAt', 'id', 'identity', 'state'], ['outcome']) &&
+  nonemptyString(value.id) && nonemptyString(value.createdAt) && isIdentity(value.identity) &&
+  Array.isArray(value.cleanupFailures) && value.cleanupFailures.every(isCleanupFailure) &&
+  (value.state === 'open' || value.state === 'closed' || value.state === 'finalized') &&
+  (value.outcome === undefined || isOutcome(value.outcome));
 
 const isRun = (value: unknown): boolean =>
-  isRecord(value) && typeof value.id === 'string' && isSession(value.session);
+  isRecord(value) && exactKeys(value, ['id', 'session']) && nonemptyString(value.id) && isSession(value.session);
 
-const isTraceEvent = (value: unknown): boolean =>
-  isRecord(value) && typeof value.kind === 'string' && typeof value.rawEventRef === 'string' &&
-  typeof value.sequence === 'number' && typeof value.source === 'string' &&
-  typeof value.summary === 'string' && typeof value.timestamp === 'string' && Object.hasOwn(value, 'raw');
+const detachedRecord = (value: unknown): Readonly<Record<string, unknown>> => {
+  const detached = detachedJson(value);
+  if (detached === invalidJson || !isRecord(detached)) throw invalidResponse();
+  return detached;
+};
 
 const sessionBody = (value: unknown): PlaygroundSession => {
-  const session = asRecord(value).session;
+  const body = detachedRecord(value);
+  const session = body.session;
+  if (!exactKeys(body, ['session'])) throw invalidResponse();
   if (!isSession(session)) throw invalidResponse();
-  return frozenJson(session) as PlaygroundSession;
+  return session as PlaygroundSession;
 };
 
 const runBody = (value: unknown): PlaygroundRun => {
-  const run = asRecord(value).run;
+  const body = detachedRecord(value);
+  const run = body.run;
+  if (!exactKeys(body, ['run'])) throw invalidResponse();
   if (!isRun(run)) throw invalidResponse();
-  return frozenJson(run) as PlaygroundRun;
+  return run as PlaygroundRun;
 };
 
 const cancelledBody = (value: unknown): boolean => {
-  const cancelled = asRecord(value).cancelled;
+  const body = detachedRecord(value);
+  const cancelled = body.cancelled;
+  if (!exactKeys(body, ['cancelled'])) throw invalidResponse();
   if (typeof cancelled !== 'boolean') throw invalidResponse();
   return cancelled;
 };
 
 const traceEvents = (value: unknown): readonly PlaygroundTraceEvent[] => {
   if (!Array.isArray(value) || !value.every(isTraceEvent)) throw invalidResponse();
-  return frozenJson(value) as readonly PlaygroundTraceEvent[];
+  const sequences = new Set<number>();
+  const refs = new Set<string>();
+  for (const event of value) {
+    if (sequences.has(event.sequence) || refs.has(event.rawEventRef)) throw invalidResponse();
+    sequences.add(event.sequence);
+    refs.add(event.rawEventRef);
+  }
+  return value as readonly PlaygroundTraceEvent[];
 };
 
 const replayBody = (value: unknown): PlaygroundReplay => {
-  const replay = asRecord(value).replay;
-  const body = asRecord(replay);
-  if (!isRecord(body.cursor) || typeof body.cursor.afterSequence !== 'number' || !isSession(body.session)) {
+  const envelope = detachedRecord(value);
+  const replay = envelope.replay;
+  const cursor = isRecord(replay) ? replay.cursor : undefined;
+  const afterSequence = isRecord(cursor) ? cursor.afterSequence : undefined;
+  if (!exactKeys(envelope, ['replay']) || !isRecord(replay) || !exactKeys(replay, ['cursor', 'events', 'session']) ||
+    !isRecord(cursor) || !exactKeys(cursor, ['afterSequence']) || typeof afterSequence !== 'number' ||
+    !Number.isSafeInteger(afterSequence) || afterSequence < 0 || !isSession(replay.session)) {
     throw invalidResponse();
   }
-  traceEvents(body.events);
-  return frozenJson(body) as PlaygroundReplay;
+  traceEvents(replay.events);
+  return replay as unknown as PlaygroundReplay;
 };
 
 const exportBody = (value: unknown): PlaygroundExport => {
-  const body = asRecord(asRecord(value).export);
-  if (body.schemaVersion !== 1 || !isSession(body.session)) throw invalidResponse();
+  const envelope = detachedRecord(value);
+  const body = envelope.export;
+  if (!exactKeys(envelope, ['export']) || !isRecord(body) || !exactKeys(body, ['events', 'schemaVersion', 'session']) ||
+    body.schemaVersion !== 1 || !isSession(body.session)) throw invalidResponse();
   traceEvents(body.events);
-  return frozenJson(body) as PlaygroundExport;
+  return body as unknown as PlaygroundExport;
 };
 
 const draftEvalBody = (value: unknown): DraftEvalCase => {
-  const body = asRecord(asRecord(value).draftEvalCase);
-  if (body.schemaVersion !== 1 || !Array.isArray(body.assertions) || !isRecord(body.epoch) || !isRecord(body.outcome)) {
+  const envelope = detachedRecord(value);
+  const body = envelope.draftEvalCase;
+  if (!exactKeys(envelope, ['draftEvalCase']) || !isRecord(body) ||
+    !exactKeys(body, ['assertions', 'epoch', 'fixture', 'invocation', 'outcome', 'schemaVersion', 'target', 'task']) ||
+    body.schemaVersion !== 1 || !Array.isArray(body.assertions) || !isRecord(body.epoch) || !exactKeys(body.epoch, ['digest', 'id']) ||
+    !nonemptyString(body.epoch.digest) || !nonemptyString(body.epoch.id) || !isRecord(body.fixture) || !exactKeys(body.fixture, ['digest', 'id']) ||
+    !nonemptyString(body.fixture.digest) || !nonemptyString(body.fixture.id) || !isRecord(body.invocation) ||
+    !exactKeys(body.invocation, ['intent', 'kind']) || !jsonObject(body.invocation.intent) || !nonemptyString(body.invocation.kind) ||
+    !isRecord(body.target) || !optionalKeys(body.target, ['name'], ['digest']) || !nonemptyString(body.target.name) ||
+    (body.target.digest !== undefined && !nonemptyString(body.target.digest)) || !isRecord(body.task) ||
+    !exactKeys(body.task, ['id', 'text']) || !nonemptyString(body.task.id) || !nonemptyString(body.task.text) || !isOutcome(body.outcome) ||
+    !body.assertions.every((assertion) => isRecord(assertion) && exactKeys(assertion, ['evidence', 'expectation', 'id', 'kind']) &&
+      Object.hasOwn(assertion, 'evidence') && Object.hasOwn(assertion, 'expectation') && nonemptyString(assertion.id) && nonemptyString(assertion.kind))) {
     throw invalidResponse();
   }
-  return frozenJson(body) as DraftEvalCase;
+  return body as unknown as DraftEvalCase;
 };
 
 const traceEventLine = (line: string): PlaygroundTraceEvent => {
@@ -126,8 +237,9 @@ const traceEventLine = (line: string): PlaygroundTraceEvent => {
   } catch {
     throw invalidResponse();
   }
-  if (!isTraceEvent(parsed)) throw invalidResponse();
-  return frozenJson(parsed) as PlaygroundTraceEvent;
+  const detached = detachedJson(parsed);
+  if (detached === invalidJson || !isTraceEvent(detached)) throw invalidResponse();
+  return detached;
 };
 
 const isAbort = (error: unknown): boolean => error instanceof Error && error.name === 'AbortError';

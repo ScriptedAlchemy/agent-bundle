@@ -1,10 +1,11 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 
 import type {
   DraftEvalCase,
   PlaygroundEpochIdentity,
   PlaygroundExport,
   PlaygroundJsonObject,
+  PlaygroundReplay,
   PlaygroundSession,
   PlaygroundTarget,
   PlaygroundTraceEvent,
@@ -12,7 +13,7 @@ import type {
 import type { PlaygroundOperationRequest, PlaygroundRun } from '../../../agent-bundle/src/dev/playground-contract.ts';
 
 import { parseRawJsonRecord, serializeJsonRecord } from '../mcp/mcp-json-input.tsx';
-import type { PlaygroundClient } from './playground-client.ts';
+import { PlaygroundClientError, type PlaygroundClient } from './playground-client.ts';
 import {
   formatPlaygroundJson,
   mergePlaygroundEvents,
@@ -48,9 +49,115 @@ const asJsonObject = (value: Readonly<Record<string, unknown>>): PlaygroundJsonO
 
 const terminal = (session: PlaygroundSession): boolean => session.state === 'closed' || session.state === 'finalized';
 
-const delay = async (milliseconds: number): Promise<void> => new Promise((resolvePromise) => {
-  setTimeout(resolvePromise, milliseconds);
+const abortError = (): Error => Object.assign(new Error('Playground observation was aborted.'), { name: 'AbortError' });
+
+const delay = async (milliseconds: number, signal: AbortSignal): Promise<void> => new Promise((resolvePromise, rejectPromise) => {
+  if (signal.aborted) {
+    rejectPromise(abortError());
+    return;
+  }
+  const timeout = setTimeout(() => {
+    signal.removeEventListener('abort', abort);
+    resolvePromise();
+  }, milliseconds);
+  const abort = (): void => {
+    clearTimeout(timeout);
+    rejectPromise(abortError());
+  };
+  signal.addEventListener('abort', abort, { once: true });
 });
+
+const maxStreamReconnects = 3;
+const pollDelayMilliseconds = 250;
+const reconnectDelayMilliseconds = 100;
+
+export interface PlaygroundRunObserverOptions {
+  readonly client: Pick<PlaygroundClient, 'replay' | 'session' | 'stream'>;
+  readonly onEvents: (events: readonly PlaygroundTraceEvent[]) => void;
+  readonly onSession: (session: PlaygroundSession) => void;
+  readonly run: PlaygroundRun;
+  readonly signal: AbortSignal;
+  readonly wait?: (milliseconds: number, signal: AbortSignal) => Promise<void>;
+}
+
+/** Observes one immutable run identity; callers abort it before replacing the run or unmounting the page. */
+export const observePlaygroundRun = async ({ client, onEvents, onSession, run, signal, wait = delay }: PlaygroundRunObserverOptions): Promise<void> => {
+  const sessionId = run.session.id;
+  let events: readonly PlaygroundTraceEvent[] = [];
+  let lastSequence = 0;
+  let reconnects = 0;
+  let stream: ReturnType<PlaygroundClient['stream']> | undefined;
+  const current = (): boolean => !signal.aborted;
+  const accept = (incoming: readonly PlaygroundTraceEvent[]): void => {
+    if (!current()) return;
+    const merged = mergePlaygroundEvents(events, incoming);
+    if (!current()) return;
+    events = merged;
+    lastSequence = merged.at(-1)?.sequence ?? 0;
+    onEvents(merged);
+  };
+  const updateSession = (next: PlaygroundSession): void => {
+    if (current()) onSession(next);
+  };
+  const beginStream = (): ReturnType<PlaygroundClient['stream']> => {
+    const next = client.stream(sessionId, {
+      afterSequence: lastSequence,
+      onEvent: (event) => accept([event]),
+    });
+    stream = next;
+    return next;
+  };
+  const close = (): void => stream?.close();
+  signal.addEventListener('abort', close, { once: true });
+  const finalReplay = async (): Promise<void> => {
+    const final = await client.replay(sessionId, lastSequence, signal);
+    if (!current()) return;
+    accept(final.events);
+    updateSession(final.session);
+    close();
+    await stream?.done;
+  };
+  try {
+    let activeStream = beginStream();
+    const initial = await client.replay(sessionId, lastSequence, signal);
+    if (!current()) return;
+    accept(initial.events);
+    let observed = initial.session;
+    updateSession(observed);
+    for (;;) {
+      if (terminal(observed)) {
+        await finalReplay();
+        return;
+      }
+      const next = await Promise.race([
+        activeStream.done.then(() => 'stream-ended' as const),
+        wait(pollDelayMilliseconds, signal).then(() => 'poll' as const),
+      ]);
+      if (!current()) return;
+      const refreshed = await client.session(sessionId, signal);
+      if (!current()) return;
+      observed = refreshed;
+      updateSession(refreshed);
+      if (terminal(refreshed)) {
+        await finalReplay();
+        return;
+      }
+      if (next === 'stream-ended') {
+        if (reconnects >= maxStreamReconnects) {
+          throw new PlaygroundClientError('AB8043', 'Playground stream ended before the run reached a terminal state.');
+        }
+        reconnects += 1;
+        await wait(reconnectDelayMilliseconds * (2 ** (reconnects - 1)), signal);
+        if (!current()) return;
+        activeStream = beginStream();
+      }
+    }
+  } catch (reason) {
+    if (!signal.aborted) throw reason;
+  } finally {
+    signal.removeEventListener('abort', close);
+  }
+};
 
 const DetailRows = ({ label, rows }: {
   readonly label: string;
@@ -131,6 +238,7 @@ export const PlaygroundPage = ({ client, epoch, onRunChange, run, targets }: Pla
   const [selectedRefs, setSelectedRefs] = useState<readonly string[]>([]);
   const [skillId, setSkillId] = useState('');
   const [targetName, setTargetName] = useState('');
+  const observerGeneration = useRef(0);
   const session = run?.session;
   const sessionId = session?.id;
   const runId = run?.id;
@@ -139,51 +247,28 @@ export const PlaygroundPage = ({ client, epoch, onRunChange, run, targets }: Pla
   const view = playgroundViewFor({ epoch, events, exported, selectedRefs, session });
 
   useEffect(() => {
-    if (runId === undefined || sessionId === undefined) return;
-    let current = true;
-    const merge = (incoming: readonly PlaygroundTraceEvent[]): void => {
-      if (current) setEvents((previous) => mergePlaygroundEvents(previous, incoming));
-    };
-    const updateSession = (next: PlaygroundSession): void => {
-      if (current) onRunChange({ id: runId, session: next });
-    };
-    const stream = client.stream(sessionId, {
-      afterSequence: 0,
-      onEvent: (event) => merge([event]),
-    });
-    const observe = async (): Promise<void> => {
-      try {
-        const replayed = await client.replay(sessionId, 0);
-        if (!current) return;
-        merge(replayed.events);
-        updateSession(replayed.session);
-        for (;;) {
-          const refreshed = await client.session(sessionId);
-          if (!current) return;
-          updateSession(refreshed);
-          if (terminal(refreshed)) {
-            const finalReplay = await client.replay(sessionId, 0);
-            if (!current) return;
-            merge(finalReplay.events);
-            updateSession(finalReplay.session);
-            stream.close();
-            await stream.done;
-            return;
-          }
-          await delay(250);
-          if (!current) return;
-        }
-      } catch (reason) {
-        if (current) setError(errorMessage(reason));
-      }
-    };
-    void observe();
-    stream.done.catch((reason: unknown) => {
-      if (current) setError(errorMessage(reason));
+    if (run === undefined || runId === undefined || sessionId === undefined) return;
+    const observedRun = run;
+    const controller = new AbortController();
+    const generation = observerGeneration.current + 1;
+    observerGeneration.current = generation;
+    const current = (): boolean => !controller.signal.aborted && observerGeneration.current === generation;
+    void observePlaygroundRun({
+      client,
+      onEvents: (next) => {
+        if (current()) setEvents(next);
+      },
+      onSession: (next) => {
+        if (current()) onRunChange({ id: runId, session: next });
+      },
+      run: observedRun,
+      signal: controller.signal,
+    }).catch((reason: unknown) => {
+      if (current()) setError(errorMessage(reason));
     });
     return () => {
-      current = false;
-      stream.close();
+      controller.abort();
+      observerGeneration.current += 1;
     };
   }, [client, onRunChange, runId, sessionId]);
 

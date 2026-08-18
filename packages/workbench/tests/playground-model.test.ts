@@ -25,6 +25,19 @@ it('merges replayed and streamed events into one ordered, deduplicated trace', (
   expect(Object.isFrozen(merged)).toBe(true);
 });
 
+it('rejects a conflicting duplicate without replacing the trusted persisted event', () => {
+  const trusted = event(1, 'build', 'epoch.bound');
+  const conflicts = [
+    { ...trusted, raw: { position: 99 }, summary: 'Forged replacement.' },
+    { ...trusted, sequence: 2 },
+  ];
+
+  for (const conflicting of conflicts) {
+    expect(() => mergePlaygroundEvents([trusted], [conflicting])).toThrow(/conflicting playground trace event/iu);
+  }
+  expect(trusted).toMatchObject({ raw: { position: 1 }, rawEventRef: 'events.jsonl#1', summary: 'Event 1' });
+});
+
 it('shows the server-pinned epoch for each persisted trace event', () => {
   const rows = playgroundTraceRowsFor(epoch, events);
   expect(rows.map((row) => row.rawEventRef)).toEqual(['events.jsonl#1', 'events.jsonl#2']);
