@@ -9,7 +9,16 @@ import type { PlaygroundRun } from '../../agent-bundle/src/dev/playground-contra
 import { PlaygroundClient } from '../src/playground/playground-client.ts';
 import { ForegroundRouteClient } from '../src/mcp/mcp-route-client.ts';
 import { playgroundViewFor } from '../src/playground/playground-model.ts';
-import { createPlaygroundObservationLifecycle, observePlaygroundRun, PlaygroundPage, PlaygroundTraceView } from '../src/playground/playground-page.tsx';
+import {
+  cancelPlaygroundRun,
+  createPlaygroundCancelFlight,
+  createPlaygroundCatalogLifecycle,
+  createPlaygroundObservationLifecycle,
+  observePlaygroundRun,
+  PlaygroundNativePromptControls,
+  PlaygroundPage,
+  PlaygroundTraceView,
+} from '../src/playground/playground-page.tsx';
 
 const epoch = { digest: 'sha256-current', id: 'epoch-current' };
 const identity = {
@@ -42,6 +51,14 @@ it('renders every trace row with its sequence, source, kind, epoch, and raw even
 
 const run: PlaygroundRun = { id: 'run-1', session };
 
+const nativeCatalog = {
+  cases: [{ id: 'case:review', label: 'Review fixture' }],
+  epochId: 'epoch-current',
+  fixtures: [{ id: 'fixture:empty', label: 'Empty workspace' }],
+  modelPins: [{ host: 'claude' as const, id: 'pin:sonnet', label: 'Sonnet — authored pin' }],
+  selections: [{ caseId: 'case:review', fixtureId: 'fixture:empty', host: 'claude' as const, modelPinId: 'pin:sonnet' }],
+} as const;
+
 const deferred = <Value,>() => {
   let resolvePromise: (value: Value) => void = () => undefined;
   const promise = new Promise<Value>((resolve) => { resolvePromise = resolve; });
@@ -64,8 +81,38 @@ it('renders typed server-owned operation drafts including a catalog-selected scr
   expect(markup).toContain('Hook simulation');
   expect(markup).toContain('MCP tool call');
   expect(markup).toContain('Script execution');
+  expect(markup).toContain('Native host prompt');
   expect(markup).not.toContain('Script execution is unavailable');
   for (const forbidden of ['playground-fixture', 'playground-task', 'playground-invocation', 'playground-outcome', 'playground-epoch']) {
+    expect(markup).not.toContain(forbidden);
+  }
+});
+
+it('renders a compact catalog-backed native prompt grid with no browser execution or model-value input', () => {
+  const markup = renderToStaticMarkup(createElement(PlaygroundNativePromptControls, {
+    catalog: nativeCatalog,
+    catalogError: undefined,
+    catalogLoading: false,
+    disabled: false,
+    onCaseChange: () => undefined,
+    onFixtureChange: () => undefined,
+    onHostChange: () => undefined,
+    onPromptChange: () => undefined,
+    onModelPinChange: () => undefined,
+    onTargetChange: () => undefined,
+    prompt: 'Review this fixture.',
+    selection: { caseId: 'case:review', epochId: 'epoch-current', fixtureId: 'fixture:empty', host: 'claude', modelPinId: 'pin:sonnet' },
+    target: 'claude',
+    targets: [{ digest: 'sha256-claude', name: 'claude' }],
+  }));
+
+  for (const control of [
+    'playground-native-target', 'playground-native-host', 'playground-native-case', 'playground-native-fixture',
+    'playground-native-model-pin', 'playground-native-prompt',
+  ]) expect(markup).toContain(control);
+  expect(markup).toContain('Catalog epoch: epoch-current');
+  expect(markup).toContain('Sonnet — authored pin');
+  for (const forbidden of ['playground-native-command', 'playground-native-cwd', 'playground-native-env', 'playground-native-model-value', 'playground-native-path']) {
     expect(markup).not.toContain(forbidden);
   }
 });
@@ -114,6 +161,135 @@ it('constrains raw trace evidence so one capped output line cannot widen the des
   expect(css).toContain('max-width: min(36rem, calc(100vw - 120px));');
   expect(css).toContain('overflow: auto;');
   expect(css).toContain('overflow-wrap: anywhere;');
+  expect(css).toContain('.playground-event-card');
+  expect(css).toContain('.playground-native-grid');
+});
+
+it('renders ordered durable evidence as bounded disclosure cards instead of a widening trace table', () => {
+  const markup = renderToStaticMarkup(createElement(PlaygroundTraceView, {
+    view: playgroundViewFor({ epoch, events: [event(1), event(2)], exported: undefined, selectedRefs: ['events.jsonl#2'], session }),
+  }));
+
+  expect(markup).toContain('<details');
+  expect(markup).toContain('playground-event-card');
+  expect(markup).not.toContain('playground-table');
+  expect(markup).toContain('events.jsonl#2');
+});
+
+it('starts exactly one synchronous cancel flight until server drain and replay settle', async () => {
+  const lifecycle = createPlaygroundCancelFlight();
+  const blocked = deferred<void>();
+  let calls = 0;
+  const first = lifecycle.start(async () => {
+    calls += 1;
+    await blocked.promise;
+  });
+  const duplicate = lifecycle.start(async () => { calls += 1; });
+
+  expect(first.started).toBe(true);
+  expect(duplicate.started).toBe(false);
+  expect(duplicate.done).toBe(first.done);
+  blocked.resolve();
+  await first.done;
+  expect(lifecycle.start(async () => { calls += 1; }).started).toBe(true);
+  expect(calls).toBe(2);
+});
+
+it('invalidates a held cancel flight before a replacement run can accept its replay', async () => {
+  const lifecycle = createPlaygroundCancelFlight();
+  const blocked = deferred<void>();
+  let accepted = false;
+  const stale = lifecycle.start(async (lease) => {
+    await blocked.promise;
+    if (lease.current()) accepted = true;
+  });
+
+  lifecycle.invalidate();
+  blocked.resolve();
+  await stale.done;
+
+  expect(stale.signal.aborted).toBe(true);
+  expect(accepted).toBe(false);
+});
+
+it('lets a cancel claim supersede held observer evidence before terminal replay commits', async () => {
+  const observationLifecycle = createPlaygroundObservationLifecycle();
+  const observation = observationLifecycle.begin();
+  const heldSession = deferred<PlaygroundSession>();
+  const terminalSession: PlaygroundSession = {
+    ...session,
+    outcome: { status: 'cancelled' },
+    state: 'finalized',
+  };
+  const acceptedStates: string[] = [];
+  const staleCommit = heldSession.promise.then((next) => {
+    if (observation.current()) acceptedStates.push(next.state);
+  });
+  const cancellation = createPlaygroundCancelFlight().start((lease) => cancelPlaygroundRun({
+    client: {
+      cancel: async () => {
+        expect(observation.current()).toBe(false);
+        return true;
+      },
+      replay: async () => replay(terminalSession, [event(1)]),
+    },
+    lease,
+    observation: observationLifecycle,
+    onEvents: () => undefined,
+    onObservationRestart: () => undefined,
+    onSession: (next) => acceptedStates.push(next.state),
+    runId: 'run-1',
+    sessionId: 'session-1',
+  }));
+
+  await cancellation.done;
+  heldSession.resolve(session);
+  await staleCommit;
+
+  expect(observation.signal.aborted).toBe(true);
+  expect(acceptedStates).toEqual(['finalized']);
+});
+
+it('requests a fresh observation when a current cancel attempt fails', async () => {
+  const observationLifecycle = createPlaygroundObservationLifecycle();
+  const original = observationLifecycle.begin();
+  let replacement: ReturnType<typeof observationLifecycle.begin> | undefined;
+  const cancellation = createPlaygroundCancelFlight().start((lease) => cancelPlaygroundRun({
+    client: {
+      cancel: async () => { throw new Error('cancel unavailable'); },
+      replay: async () => replay(session),
+    },
+    lease,
+    observation: observationLifecycle,
+    onEvents: () => undefined,
+    onObservationRestart: () => { replacement = observationLifecycle.begin(); },
+    onSession: () => undefined,
+    runId: 'run-1',
+    sessionId: 'session-1',
+  }));
+
+  await expect(cancellation.done).rejects.toThrow('cancel unavailable');
+
+  expect(original.signal.aborted).toBe(true);
+  expect(replacement?.current()).toBe(true);
+});
+
+it('aborts and rejects a stale catalog completion before accepting a replacement client or epoch', () => {
+  const lifecycle = createPlaygroundCatalogLifecycle();
+  const clientA = {} as PlaygroundClient;
+  const clientB = {} as PlaygroundClient;
+  const a = lifecycle.begin({ client: clientA, epochId: 'epoch-A' });
+  const b = lifecycle.begin({ client: clientB, epochId: 'epoch-B' });
+  const accepted: string[] = [];
+
+  if (a.current()) accepted.push('A');
+  if (b.current()) accepted.push('B');
+
+  expect(a.signal.aborted).toBe(true);
+  expect(a.current()).toBe(false);
+  expect(b.current()).toBe(true);
+  expect(b.key).toEqual({ client: clientB, epochId: 'epoch-B', generation: 2 });
+  expect(accepted).toEqual(['B']);
 });
 
 it('renders the pinned server epoch and persisted event references, not a rebuilt current epoch', () => {

@@ -41,6 +41,14 @@ const identity = {
 
 const session = { cleanupFailures: [], createdAt: '2026-08-14T10:00:00.000Z', id: 'session-1', identity, state: 'open' } as const;
 
+const nativeCatalog = {
+  cases: [{ id: 'case:review', label: 'Review the fixture' }],
+  epochId: 'epoch/native',
+  fixtures: [{ id: 'fixture:clean', label: 'Clean workspace' }],
+  modelPins: [{ host: 'claude', id: 'pin:claude-sonnet', label: 'Claude Sonnet (authored pin)' }],
+  selections: [{ caseId: 'case:review', fixtureId: 'fixture:clean', host: 'claude', modelPinId: 'pin:claude-sonnet' }],
+} as const;
+
 const event = (sequence: number, summary: string): PlaygroundTraceEvent => ({
   kind: sequence === 1 ? 'epoch.bound' : 'skill.inspected',
   raw: { sequence },
@@ -105,6 +113,122 @@ it('starts only the exact hook and MCP operation shapes that the server accepts'
     { hook: 'beforeTool', input: { tool: 'read' }, operation: 'hook.simulate', target: 'portable' },
     { arguments: { city: 'Berlin' }, operation: 'mcp.call-tool', serverName: 'weather', target: 'portable', tool: 'forecast' },
   ]);
+});
+
+it('loads a detached exact native catalog for the requested epoch through the authenticated foreground lifecycle', async () => {
+  const calls: RecordedRequest[] = [];
+  const client = new PlaygroundClient({ foreground: foreground(recordingFetch(calls, () => response({ catalog: nativeCatalog }))) });
+
+  const catalog = await client.catalog('epoch/native');
+
+  expect(calls).toEqual([{
+    body: undefined,
+    method: 'GET',
+    token: 'foreground-token',
+    url: '/api/playground/catalog?epochId=epoch%2Fnative',
+  }]);
+  expect(catalog).toEqual(nativeCatalog);
+  expect(Object.isFrozen(catalog)).toBe(true);
+  expect(Object.isFrozen(catalog.selections[0])).toBe(true);
+});
+
+it('shares one foreground bootstrap across catalog admission and run admission', async () => {
+  let bootstraps = 0;
+  const routeCalls: string[] = [];
+  const sharedForeground = new ForegroundRouteClient({
+    fetch: async (input) => {
+      const url = String(input);
+      if (url === '/api/project/session') {
+        bootstraps += 1;
+        return response({
+          cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef',
+          origin: 'http://127.0.0.1:5173',
+          token: 'foreground-token',
+        });
+      }
+      routeCalls.push(url);
+      return url.startsWith('/api/playground/catalog')
+        ? response({ catalog: nativeCatalog })
+        : response({ run: { id: 'run-1', session } });
+    },
+  });
+  const client = new PlaygroundClient({ foreground: sharedForeground });
+
+  await client.catalog('epoch/native');
+  await client.run({ operation: 'skill.inspect', skillId: 'review', target: 'portable' });
+
+  expect(bootstraps).toBe(1);
+  expect(routeCalls).toEqual(['/api/playground/catalog?epochId=epoch%2Fnative', '/api/playground/runs']);
+});
+
+it('sends an exact native prompt admission body without arbitrary browser execution fields', async () => {
+  const calls: RecordedRequest[] = [];
+  const client = new PlaygroundClient({
+    foreground: foreground(recordingFetch(calls, () => response({ run: { id: 'run-1', session } }))),
+  });
+
+  await client.run({
+    caseId: 'case:review', epochId: 'epoch-native', fixtureId: 'fixture:clean', host: 'claude', modelPinId: 'pin:claude-sonnet',
+    operation: 'native.prompt', prompt: 'Review the fixture.', target: 'claude',
+  });
+
+  expect(calls[0]?.body).toEqual({
+    caseId: 'case:review', epochId: 'epoch-native', fixtureId: 'fixture:clean', host: 'claude', modelPinId: 'pin:claude-sonnet',
+    operation: 'native.prompt', prompt: 'Review the fixture.', target: 'claude',
+  });
+  expect(Object.keys(calls[0]?.body as object).sort()).toEqual([
+    'caseId', 'epochId', 'fixtureId', 'host', 'modelPinId', 'operation', 'prompt', 'target',
+  ]);
+});
+
+it('rejects malformed native catalogs, catalog tuple incoherence, and an epoch response that does not match the request', async () => {
+  const malformed: readonly unknown[] = [
+    { catalog: { ...nativeCatalog, epochId: 'other-epoch' } },
+    { catalog: { ...nativeCatalog, unexpected: true } },
+    { catalog: { ...nativeCatalog, modelPins: [{ ...nativeCatalog.modelPins[0], host: 'other' }] } },
+    { catalog: { ...nativeCatalog, selections: [{ ...nativeCatalog.selections[0], fixtureId: 'fixture:missing' }] } },
+    { catalog: { ...nativeCatalog, selections: [...nativeCatalog.selections, nativeCatalog.selections[0]] } },
+    { catalog: { ...nativeCatalog, modelPins: [...nativeCatalog.modelPins, nativeCatalog.modelPins[0]] } },
+  ];
+
+  for (const body of malformed) {
+    const client = new PlaygroundClient({ foreground: foreground(recordingFetch([], () => response(body))) });
+    await expect(client.catalog('epoch/native')).rejects.toMatchObject({ code: 'AB8043' });
+  }
+});
+
+it('rejects native catalogs that exceed the server selection and text bounds', async () => {
+  const tooManyCases = Array.from({ length: 257 }, (_, index) => ({ id: `case:${String(index)}`, label: `Case ${String(index)}` }));
+  let tooDeep: unknown = 'label';
+  for (let depth = 0; depth < 8; depth += 1) tooDeep = { nested: tooDeep };
+  const oversized: readonly unknown[] = [
+    { catalog: { ...nativeCatalog, cases: tooManyCases } },
+    { catalog: { ...nativeCatalog, cases: [{ ...nativeCatalog.cases[0], label: 'x'.repeat(16_385) }] } },
+    { catalog: { ...nativeCatalog, cases: [{ ...nativeCatalog.cases[0], label: tooDeep }] } },
+  ];
+
+  for (const body of oversized) {
+    const client = new PlaygroundClient({ foreground: foreground(recordingFetch([], () => response(body))) });
+    await expect(client.catalog('epoch/native')).rejects.toMatchObject({ code: 'AB8043' });
+  }
+});
+
+it('bounds the catalog response stream before parsing or calling Response.json', async () => {
+  let jsonCalls = 0;
+  const oversizedResponse = new Response(new Uint8Array((8 * 1024 * 1024) + 1), {
+    headers: { 'content-type': 'application/json' },
+    status: 200,
+  });
+  Object.defineProperty(oversizedResponse, 'json', {
+    value: async () => {
+      jsonCalls += 1;
+      return { catalog: nativeCatalog };
+    },
+  });
+  const client = new PlaygroundClient({ foreground: foreground(recordingFetch([], () => oversizedResponse)) });
+
+  await expect(client.catalog('epoch/native')).rejects.toMatchObject({ code: 'AB8043' });
+  expect(jsonCalls).toBe(0);
 });
 
 it('cancels a run then reads its server-owned session by encoded identity', async () => {
@@ -172,6 +296,18 @@ it('decodes NDJSON trace frames split across transport chunks', async () => {
 
   expect(received.map((entry) => entry.rawEventRef)).toEqual(['events.jsonl#1', 'events.jsonl#2']);
   expect(Object.isFrozen(received[0])).toBe(true);
+});
+
+it('rejects one NDJSON frame that exceeds the foreground stream queue bound', async () => {
+  const received: PlaygroundTraceEvent[] = [];
+  const oversizedEvent = { ...event(1, 'x'), summary: 'x'.repeat((1024 * 1024) + 1) };
+  const client = new PlaygroundClient({
+    foreground: foreground(recordingFetch([], () => ndjson([`${JSON.stringify(oversizedEvent)}\n`]))),
+  });
+  const stream = client.stream('session-1', { onEvent: (entry) => received.push(entry) });
+
+  await expect(stream.done).rejects.toMatchObject({ code: 'AB8043' });
+  expect(received).toEqual([]);
 });
 
 it('ends a stream without delivering more events once it is closed', async () => {

@@ -7,6 +7,7 @@ import { MCP_APP_PROFILE_DESCRIPTORS, type McpAppProfileId } from '../../agent-b
 import type { McpAppPreviewAppsSnapshot } from '../../agent-bundle/src/dev/mcp-app-runtime-preview-service.ts';
 import type { PlaygroundRun } from '../../agent-bundle/src/dev/playground-contract.ts';
 import type { ProjectStatus } from '../../agent-bundle/src/dev/types.ts';
+import type { NativePlaygroundCatalog } from '../../agent-bundle/src/dev/native-playground-service.ts';
 
 import { ArtifactClient } from './artifacts/artifact-client.ts';
 import { ComparisonClient } from './comparisons/comparison-client.ts';
@@ -45,6 +46,7 @@ import { LogsPage } from './logs/logs-page.tsx';
 import { PlaygroundClient } from './playground/playground-client.ts';
 import {
   PlaygroundPage,
+  createPlaygroundCatalogLifecycle,
   playgroundScriptsForEpoch,
   type PlaygroundScriptCatalog,
 } from './playground/playground-page.tsx';
@@ -608,8 +610,36 @@ const PlaygroundScreen = ({ artifactClient, connectionError, onNavigate, onRunCh
   readonly status: ProjectStatus;
 }) => {
   const epoch = activeEpochFor(status);
+  const [nativeCatalog, setNativeCatalog] = useState<NativePlaygroundCatalog>();
+  const [nativeCatalogError, setNativeCatalogError] = useState<string>();
+  const [nativeCatalogLoading, setNativeCatalogLoading] = useState(false);
   const [scriptCatalog, setScriptCatalog] = useState<PlaygroundScriptCatalog>();
+  const catalogLifecycle = useRef(createPlaygroundCatalogLifecycle());
+  const catalogClient = useRef(playgroundClient);
+  const clientReplaced = catalogClient.current !== playgroundClient;
+  if (clientReplaced) {
+    catalogClient.current = playgroundClient;
+    catalogLifecycle.current.invalidate();
+  }
+  const visibleNativeCatalog = !clientReplaced && nativeCatalog?.epochId === epoch?.id ? nativeCatalog : undefined;
   const scripts = playgroundScriptsForEpoch(scriptCatalog, epoch?.id);
+
+  useEffect(() => {
+    const requestedEpochId = epoch?.id;
+    const lease = catalogLifecycle.current.begin({ client: playgroundClient, epochId: requestedEpochId ?? '' });
+    setNativeCatalog(undefined);
+    setNativeCatalogError(undefined);
+    setNativeCatalogLoading(requestedEpochId !== undefined);
+    if (requestedEpochId === undefined) return () => lease.abort();
+    void playgroundClient.catalog(requestedEpochId, lease.signal).then((catalog) => {
+      if (lease.current() && catalog.epochId === requestedEpochId) setNativeCatalog(catalog);
+    }).catch((reason: unknown) => {
+      if (lease.current() && !(reason instanceof Error && reason.name === 'AbortError')) setNativeCatalogError(errorMessage(reason));
+    }).finally(() => {
+      if (lease.current()) setNativeCatalogLoading(false);
+    });
+    return () => lease.abort();
+  }, [epoch?.id, playgroundClient]);
 
   useEffect(() => {
     let current = true;
@@ -628,6 +658,9 @@ const PlaygroundScreen = ({ artifactClient, connectionError, onNavigate, onRunCh
 
   return <WorkbenchScreen connectionError={connectionError} onNavigate={onNavigate} page="playground">
     <PlaygroundPage
+      catalog={visibleNativeCatalog}
+      catalogError={nativeCatalogError}
+      catalogLoading={nativeCatalogLoading || (epoch !== undefined && visibleNativeCatalog === undefined && nativeCatalogError === undefined)}
       client={playgroundClient}
       epoch={playgroundEpochFor(status)}
       onRunChange={onRunChange}
