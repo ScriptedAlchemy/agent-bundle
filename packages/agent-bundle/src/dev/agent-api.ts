@@ -285,10 +285,17 @@ const safeDigestPattern = /^[a-f0-9]{64}$/iu;
 const safeEpochIdPattern = /^[a-z0-9][a-z0-9._-]{0,127}$/iu;
 const safeTargetPattern = /^[a-z0-9][a-z0-9._-]{0,127}$/iu;
 const safeTimestampPattern = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u;
-const controlCharacterPattern = /[\u0000-\u001f\u007f-\u009f]/u;
 const secretAssignmentPattern = /\b(?:api[_ -]?key|authorization|password|secret|token)\s*(?:=|:)/iu;
 const diagnosticMessageFallback = 'Diagnostic details are available in the local workbench.';
 const diagnosticRecoveryFallback = 'Recovery guidance is available in the local workbench.';
+
+const hasControlCharacter = (value: string): boolean => {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code <= 0x1f || (code >= 0x7f && code <= 0x9f)) return true;
+  }
+  return false;
+};
 
 const snapshotValue = (value: unknown): unknown => {
   try {
@@ -330,7 +337,7 @@ const safeTimestamp = (value: unknown): string | undefined =>
 /** Messages fail closed: any path-like, control, or secret-assignment text is never partially redacted. */
 const safeDiagnosticText = (value: unknown, fallback: string): string =>
   typeof value === 'string' && value.length <= maximumDiagnosticTextLength &&
-    !value.includes('/') && !value.includes('\\') && !controlCharacterPattern.test(value) &&
+    !value.includes('/') && !value.includes('\\') && !hasControlCharacter(value) &&
     !secretAssignmentPattern.test(value)
     ? value
     : fallback;
