@@ -102,14 +102,14 @@ it('lists discovered suites over the same foreground session', async () => {
   expect(calls).toEqual([{ body: undefined, method: 'GET', token: 'foreground-token', url: '/api/evals/suites' }]);
 });
 
-it('posts only a suite, case, and trial selection when starting a run', async () => {
+it('admits a run with the selected closed harness and keeps the response detached', async () => {
   const calls: RecordedRequest[] = [];
-  const client = new EvalClient({ fetch: recordingFetch(calls, () => response({ run: runResult })) });
+  const client = new EvalClient({ fetch: recordingFetch(calls, () => response({ run: runRecord }, 202)) });
 
-  await expect(client.start({ caseIds: ['reads-result'], suites: ['review-change'], trials: 2 }))
+  await expect(client.start({ caseIds: ['reads-result'], harness: 'codex', suites: ['review-change'], trials: 2 }))
     .resolves.toMatchObject({ run: { id: runRecord.id } });
   expect(calls).toEqual([{
-    body: { caseIds: ['reads-result'], suites: ['review-change'], trials: 2 },
+    body: { caseIds: ['reads-result'], harness: 'codex', suites: ['review-change'], trials: 2 },
     method: 'POST',
     token: 'foreground-token',
     url: '/api/evals/runs',
@@ -118,11 +118,30 @@ it('posts only a suite, case, and trial selection when starting a run', async ()
 
 it('omits an absent selection field instead of sending an empty one', async () => {
   const calls: RecordedRequest[] = [];
-  const client = new EvalClient({ fetch: recordingFetch(calls, () => response({ run: runResult })) });
+  const client = new EvalClient({ fetch: recordingFetch(calls, () => response({ run: runRecord }, 202)) });
 
   await client.start({ suites: ['review-change'] });
 
   expect(calls[0]?.body).toEqual({ suites: ['review-change'] });
+});
+
+it('requires the documented 202 admission status', async () => {
+  const client = new EvalClient({ fetch: recordingFetch([], () => response({ run: runRecord })) });
+
+  await expect(client.start({ suites: ['review-change'] })).rejects.toMatchObject({ code: 'AB8073' });
+});
+
+it('posts an exact empty body to cancel a server-owned run and decodes the idempotent result', async () => {
+  const calls: RecordedRequest[] = [];
+  const client = new EvalClient({ fetch: recordingFetch(calls, () => response({ cancelled: false, runId: runRecord.id }, 202)) });
+
+  await expect(client.cancel(runRecord.id)).resolves.toEqual({ cancelled: false, runId: runRecord.id });
+  expect(calls).toEqual([{
+    body: {},
+    method: 'POST',
+    token: 'foreground-token',
+    url: `/api/evals/runs/${runRecord.id}/cancel`,
+  }]);
 });
 
 it('reads one recorded run and lists every recorded run', async () => {

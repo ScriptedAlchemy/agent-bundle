@@ -5,8 +5,7 @@ import type {
   EvalSuiteListing,
   EvalSuiteSummary,
 } from '../../../agent-bundle/src/dev/eval-service.ts';
-import type { EvalTrialRecord } from '../../../agent-bundle/src/eval/run-store.ts';
-import type { EvalRunEvent } from '../../../agent-bundle/src/eval/run-store.ts';
+import type { EvalRunEvent, EvalRunRecord, EvalTrialRecord } from '../../../agent-bundle/src/eval/run-store.ts';
 import type {
   ActivationEvidence,
   EvalAssertionKind,
@@ -16,6 +15,8 @@ import type {
 import type { EvalRunStart } from './eval-client.ts';
 
 export type EvalPageState = 'empty' | 'loading' | 'ran' | 'ready';
+
+export type EvalRunStatus = 'admitting' | 'cancelled' | 'cancelling' | 'completed' | 'failed' | 'queued' | 'running';
 
 export interface EvalSuiteOption {
   readonly cases: number;
@@ -71,6 +72,8 @@ export interface EvalOutcomeCounts {
 }
 
 export interface EvalRunViewOptions {
+  readonly admittedRun?: EvalRunRecord;
+  readonly admitting?: boolean;
   readonly discardedThroughSequence?: number;
   readonly events?: readonly EvalRunEvent[];
   readonly listing: EvalSuiteListing | undefined;
@@ -86,6 +89,7 @@ export interface EvalRunView {
   readonly hostModels: readonly EvalHostModelRow[];
   readonly outcomes: EvalOutcomeCounts;
   readonly runId: string | undefined;
+  readonly runStatus: EvalRunStatus | undefined;
   readonly selected: EvalSuiteOption | undefined;
   readonly state: EvalPageState;
   readonly suites: readonly EvalSuiteOption[];
@@ -284,10 +288,21 @@ const summaryFor = (
   state: EvalPageState,
   outcomes: EvalOutcomeCounts,
   result: EvalRunResult | undefined,
+  run: EvalRunRecord | undefined,
+  runStatus: EvalRunStatus | undefined,
 ): string => {
+  if (runStatus === 'admitting') return 'Admitting a durable eval run…';
+  if (run !== undefined && runStatus === 'queued') return `Run ${run.id} is queued.`;
+  if (run !== undefined && runStatus === 'running') return `Run ${run.id} is running.`;
+  if (run !== undefined && runStatus === 'cancelling') return `Run ${run.id} is cancelling.`;
+  if (run !== undefined && result === undefined && runStatus !== undefined) {
+    return `Run ${run.id} is ${runStatus}; refreshing its durable results.`;
+  }
   if (state === 'loading') return 'Looking for authored eval suites…';
   if (state === 'empty') return 'This project declares no eval suites yet.';
   if (state === 'ran' && result !== undefined) {
+    if (runStatus === 'cancelled') return `Run ${result.run.id} was cancelled after recording ${result.trials.length} trial(s).`;
+    if (runStatus === 'failed') return `Run ${result.run.id} failed after recording ${result.trials.length} trial(s).`;
     return [
       `Run ${result.run.id} finished: ${outcomes.pass} passed, ${outcomes.fail} failed, `,
       `${outcomes.inconclusive} inconclusive across ${result.trials.length} trial(s).`,
@@ -296,26 +311,48 @@ const summaryFor = (
   return 'Select an authored suite and run it deterministically to record evidence.';
 };
 
+const runStatusFor = (
+  admitting: boolean,
+  run: EvalRunRecord | undefined,
+  events: readonly EvalRunEvent[],
+): EvalRunStatus | undefined => {
+  if (admitting) return 'admitting';
+  if (run === undefined) return undefined;
+  const kinds = new Set(events.map((event) => event.kind));
+  if (kinds.has('run.cancelled')) return 'cancelled';
+  if (kinds.has('run.failed')) return 'failed';
+  if (kinds.has('run.completed') || run.completedAt !== undefined) return 'completed';
+  if (kinds.has('run.cancelling')) return 'cancelling';
+  if (kinds.has('trial.started') || kinds.has('trial.completed') || kinds.has('trial.failed') || kinds.has('trial.cancelled')) {
+    return 'running';
+  }
+  return 'queued';
+};
+
 /** Derives every Eval page section from the discovered suites and the latest run. */
 export const evalRunViewFor = (options: EvalRunViewOptions): EvalRunView => {
   const suites = options.listing === undefined ? [] : evalSuiteOptionsFor(options.listing.suites);
   const selected = suites.find((option) => option.key === options.selectedSuite) ?? suites[0];
   const trials = options.result === undefined ? noTrials : evalTrialRowsFor(options.result.trials);
   const outcomes = outcomeCountsFor(trials);
+  const events = options.events === undefined ? noEvents : Object.freeze([...options.events]);
+  const run = options.result?.run ?? options.admittedRun;
+  const runStatus = runStatusFor(options.admitting === true, run, events);
   const state: EvalPageState = options.listing === undefined ? 'loading'
     : suites.length === 0 ? 'empty'
       : options.result === undefined ? 'ready' : 'ran';
-  const summary = summaryFor(state, outcomes, options.result);
+  const summary = summaryFor(state, outcomes, options.result, run, runStatus);
   return Object.freeze({
     cases: selected === undefined || options.listing === undefined
       ? noCases
       : evalCaseRowsFor(options.listing.suites.find((suite) => suite.name === selected.name)?.cases ?? []),
     diagnostics: options.listing?.diagnostics ?? noDiagnostics,
     discardedThroughSequence: options.discardedThroughSequence,
-    events: options.events === undefined ? noEvents : Object.freeze([...options.events]),
+    events,
     hostModels: hostModelsFor(trials),
     outcomes,
-    runId: options.result?.run.id,
+    runId: run?.id,
+    runStatus,
     selected,
     state,
     suites,

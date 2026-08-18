@@ -350,6 +350,9 @@ it('renders unsupported configuration diagnostics as a visible alert', () => {
 it('renders the suite, trial, and recorded run controls of a project that declares suites', () => {
   const markup = renderToStaticMarkup(createElement(EvalRunControls, {
     busy: false,
+    harness: 'deterministic',
+    onCancelRun: () => undefined,
+    onHarnessChange: () => undefined,
     onOpenRun: () => undefined,
     onSelectRun: () => undefined,
     onSelectSuite: () => undefined,
@@ -370,9 +373,62 @@ it('renders the suite, trial, and recorded run controls of a project that declar
   expect(markup).toContain('evals/review.eval.ts');
 });
 
+it('renders a closed harness selector, keeps authored model pins read-only, and offers cancellation only for an active run', () => {
+  const admitted: EvalRunRecord = { ...runRecord, completedAt: undefined, summary: undefined };
+  const activeView = evalRunViewFor({
+    admittedRun: admitted,
+    events: [{ kind: 'trial.started', payload: {}, schemaVersion: 1, sequence: 1, timestamp: '2026-08-17T00:00:00.000Z' }],
+    listing,
+    result: undefined,
+    selectedSuite: 'review-change',
+  });
+  const markup = renderToStaticMarkup(createElement(EvalRunControls, {
+    busy: false,
+    harness: 'codex',
+    onCancelRun: () => undefined,
+    onHarnessChange: () => undefined,
+    onOpenRun: () => undefined,
+    onSelectRun: () => undefined,
+    onSelectSuite: () => undefined,
+    onStartRun: () => undefined,
+    onTrialsChange: () => undefined,
+    openableRun: runRecord.id,
+    recorded: [runRecord],
+    runnable: true,
+    trials: '2',
+    view: activeView,
+  }));
+
+  expect(markup).toContain('id="eval-harness"');
+  expect(markup).toContain('Deterministic');
+  expect(markup).toContain('Claude');
+  expect(markup).toContain('Codex');
+  expect(markup).toContain('Authored model pins are read-only');
+  expect(markup).toContain('Cancel run');
+});
+
+it('renders an admitted run state and its durable replay before trial records refresh', () => {
+  const admitted: EvalRunRecord = { ...runRecord, completedAt: undefined, summary: undefined };
+  const activeView = evalRunViewFor({
+    admittedRun: admitted,
+    events: [{ kind: 'run.started', payload: {}, schemaVersion: 1, sequence: 1, timestamp: '2026-08-17T00:00:00.000Z' }],
+    listing,
+    result: undefined,
+    selectedSuite: 'review-change',
+  });
+  const markup = renderToStaticMarkup(createElement(EvalRunReport, { view: activeView }));
+
+  expect(markup).toContain(`Run ${runRecord.id} is queued.`);
+  expect(markup).toContain('Durable event timeline');
+  expect(markup).toContain('run.started');
+});
+
 it('marks an invalid trial count instead of letting the run start', () => {
   const markup = renderToStaticMarkup(createElement(EvalRunControls, {
     busy: false,
+    harness: 'deterministic',
+    onCancelRun: () => undefined,
+    onHarnessChange: () => undefined,
     onOpenRun: () => undefined,
     onSelectRun: () => undefined,
     onSelectSuite: () => undefined,
@@ -399,24 +455,27 @@ it('states that no eval evidence exists before the suites have loaded', () => {
   expect(markup).not.toContain('id="eval-suite"');
 });
 
-it('starts a run from the selected suite and trial count only', async () => {
+it('starts a durable run from the selected suite, trial count, and closed harness only', async () => {
   const bodies: unknown[] = [];
   const client = new EvalClient({
     fetch: async (input, init) => {
       const url = String(input);
       if (url === '/api/project/session') return response({ origin: 'http://127.0.0.1:5173', token: 'foreground-token' });
       bodies.push(typeof init?.body === 'string' ? JSON.parse(init.body) : undefined);
-      return response({ run: result });
+      return new Response(JSON.stringify({ run: { ...runRecord, completedAt: undefined, summary: undefined } }), {
+        headers: { 'content-type': 'application/json' },
+        status: 202,
+      });
     },
   });
   const selection = evalRunSelectionFor(view(undefined), '2');
   if (selection === undefined) throw new Error('Expected a runnable selection.');
 
-  const started = await startEvalRun(client, selection);
+  const started = await startEvalRun(client, { ...selection, harness: 'claude' });
 
-  expect(bodies).toEqual([{ suites: ['review-change'], trials: 2 }]);
+  expect(bodies).toEqual([{ harness: 'claude', suites: ['review-change'], trials: 2 }]);
   expect(started.run.id).toBe(runRecord.id);
-  expect(started.trials).toHaveLength(3);
+  expect(started.run.completedAt).toBeUndefined();
 });
 
 it('reopens a recorded run by identifier without restarting it', async () => {

@@ -14,9 +14,23 @@ export interface EvalClientOptions {
   readonly fetch?: typeof fetch;
 }
 
+export type EvalHarness = 'claude' | 'codex' | 'deterministic';
+
 /** Exactly what a browser may choose: authored suites, authored cases, and a trial count. */
 export interface EvalRunStart extends EvalRunSelection {
+  readonly harness?: EvalHarness;
   readonly trials?: number;
+}
+
+/** The server-owned run identity persisted before background execution starts. */
+export interface EvalRunAdmission {
+  readonly run: EvalRunRecord;
+}
+
+/** The exact durable result of one idempotent cancellation request. */
+export interface EvalRunCancellation {
+  readonly cancelled: boolean;
+  readonly runId: string;
 }
 
 export interface EvalEventStream {
@@ -50,6 +64,7 @@ export class EvalClientError extends Error {
 const maximumArtifactBytes = 8 * 1024 * 1024;
 const maximumEventFrameBytes = 256 * 1024;
 const safeArtifactSegment = /^[A-Za-z0-9][A-Za-z0-9._-]*$/u;
+const evalHarnesses = new Set<EvalHarness>(['deterministic', 'claude', 'codex']);
 const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 const exactKeys = (value: unknown, keys: readonly string[]): value is Readonly<Record<string, unknown>> =>
@@ -262,6 +277,18 @@ const runResult = (value: unknown): EvalRunResult => {
   return value.run as unknown as EvalRunResult;
 };
 
+const runAdmission = (value: unknown): EvalRunAdmission => {
+  if (!exactKeys(value, ['run']) || !conforms(runRecordSchema, value.run)) throw invalidResponse();
+  return Object.freeze({ run: value.run as unknown as EvalRunRecord });
+};
+
+const runCancellation = (value: unknown, runId: string): EvalRunCancellation => {
+  if (!exactKeys(value, ['cancelled', 'runId']) || typeof value.cancelled !== 'boolean' || value.runId !== runId) {
+    throw invalidResponse();
+  }
+  return Object.freeze({ cancelled: value.cancelled, runId: value.runId });
+};
+
 const runRecords = (value: unknown): readonly EvalRunRecord[] => {
   if (!exactKeys(value, ['runs']) || !Array.isArray(value.runs) || !value.runs.every((entry) => conforms(runRecordSchema, entry))) throw invalidResponse();
   return Object.freeze([...value.runs]) as readonly EvalRunRecord[];
@@ -309,17 +336,28 @@ export class EvalClient {
     return runResult(await this.#json(`/api/evals/runs/${encodeURIComponent(runId)}`, { signal }));
   }
 
-  async start(selection: EvalRunStart, signal?: AbortSignal): Promise<EvalRunResult> {
-    return runResult(await this.#json('/api/evals/runs', {
+  async start(selection: EvalRunStart, signal?: AbortSignal): Promise<EvalRunAdmission> {
+    if (selection.harness !== undefined && !evalHarnesses.has(selection.harness)) throw invalidResponse();
+    return runAdmission(await this.#json('/api/evals/runs', {
       body: JSON.stringify({
         ...(selection.caseIds === undefined ? {} : { caseIds: selection.caseIds }),
+        ...(selection.harness === undefined ? {} : { harness: selection.harness }),
         ...(selection.suites === undefined ? {} : { suites: selection.suites }),
         ...(selection.trials === undefined ? {} : { trials: selection.trials }),
       }),
       headers: { 'content-type': 'application/json' },
       method: 'POST',
       signal,
-    }));
+    }, 202));
+  }
+
+  async cancel(runId: string, signal?: AbortSignal): Promise<EvalRunCancellation> {
+    return runCancellation(await this.#json(`/api/evals/runs/${encodeURIComponent(runId)}/cancel`, {
+      body: JSON.stringify({}),
+      headers: { 'content-type': 'application/json' },
+      method: 'POST',
+      signal,
+    }, 202), runId);
   }
 
   async events(runId: string, afterSequence = 0, signal?: AbortSignal): Promise<EvalRunEventsReplay> {
@@ -363,9 +401,9 @@ export class EvalClient {
   /** Erases the short-lived foreground token once the owning page stops using it. */
   forgetAuthentication(): void { this.#transport.forget(); }
 
-  async #json(path: string, init: RequestInit = {}): Promise<JsonValue> {
+  async #json(path: string, init: RequestInit = {}, expectedStatus?: number): Promise<JsonValue> {
     try {
-      const response = await this.#response(path, init);
+      const response = await this.#response(path, init, expectedStatus);
       return parseResponseJson(new Uint8Array(await awaitWithAbort(init.signal, () => response.arrayBuffer())));
     } catch (error) {
       if (error instanceof EvalClientError || isAbort(error) || init.signal?.aborted) throw error;
@@ -373,10 +411,11 @@ export class EvalClient {
     }
   }
 
-  async #response(path: string, init: RequestInit = {}): Promise<Response> {
+  async #response(path: string, init: RequestInit = {}, expectedStatus?: number): Promise<Response> {
     try {
       const response = await this.#transport.request(path, init);
-      if (response.ok) return response;
+      if (response.ok && (expectedStatus === undefined || response.status === expectedStatus)) return response;
+      if (response.ok) throw invalidResponse();
       const body = parseResponseJson(new Uint8Array(await awaitWithAbort(init.signal, () => response.arrayBuffer())));
       if (exactKeys(body, ['diagnostic']) && exactKeys(body.diagnostic, ['code', 'message']) &&
         typeof body.diagnostic.code === 'string' && typeof body.diagnostic.message === 'string') {
