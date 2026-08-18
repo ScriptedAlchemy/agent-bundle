@@ -80,6 +80,18 @@ it('filters the server catalog to the selected target in stable script-id order'
   ]);
 });
 
+it('clears a stale script selection when its target catalog changes', async () => {
+  const { playgroundSelectedScriptId } = await import('../src/playground/playground-page.tsx');
+  const scripts = [
+    { id: 'script:review', name: 'review', target: 'portable' },
+    { id: 'script:verify', name: 'verify', target: 'claude' },
+  ];
+
+  expect(playgroundSelectedScriptId('script:review', scripts, 'portable')).toBe('script:review');
+  expect(playgroundSelectedScriptId('script:review', scripts, 'claude')).toBe('');
+  expect(playgroundSelectedScriptId('script:missing', scripts, 'portable')).toBe('');
+});
+
 it('renders the pinned server epoch and persisted event references, not a rebuilt current epoch', () => {
   const markup = renderToStaticMarkup(createElement(PlaygroundTraceView, {
     view: playgroundViewFor({ epoch, events: [event(1), event(2)], exported: undefined, selectedRefs: ['events.jsonl#2'], session }),
@@ -87,6 +99,25 @@ it('renders the pinned server epoch and persisted event references, not a rebuil
   expect(markup).toContain('epoch-pinned');
   expect(markup).toContain('events.jsonl#2');
   expect(markup).not.toContain('epoch-current');
+});
+
+it('renders persisted script stdout, stderr, and exit evidence from the server trace', () => {
+  const scriptEvent: PlaygroundTraceEvent = {
+    kind: 'script.completed',
+    raw: { result: { exitCode: 17, script: 'review', stderr: 'script stderr', stdout: 'script stdout' } },
+    rawEventRef: 'events.jsonl#3',
+    sequence: 3,
+    source: 'script',
+    summary: 'Ran emitted script.',
+    timestamp: '2026-08-14T10:00:03.000Z',
+  };
+  const markup = renderToStaticMarkup(createElement(PlaygroundTraceView, {
+    view: playgroundViewFor({ epoch, events: [scriptEvent], exported: undefined, selectedRefs: [], session }),
+  }));
+
+  expect(markup).toContain('script stdout');
+  expect(markup).toContain('script stderr');
+  expect(markup).toContain('17');
 });
 
 it('reconnects a cleanly ended open stream from the last accepted sequence before final replay', async () => {

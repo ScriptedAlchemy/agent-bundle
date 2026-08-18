@@ -40,6 +40,28 @@ export interface ScriptPlaygroundResult {
   readonly stdout: string;
 }
 
+export type ScriptPlaygroundFailureCode =
+  | 'cleanup-failed'
+  | 'interpreter-unavailable'
+  | 'output-limit'
+  | 'spawn-failed'
+  | 'timeout';
+
+/** Stable script infrastructure failure with bounded captured output safe for durable evidence. */
+export class ScriptPlaygroundFailure extends Error {
+  readonly code: ScriptPlaygroundFailureCode;
+  readonly stderr: string;
+  readonly stdout: string;
+
+  constructor(code: ScriptPlaygroundFailureCode, message: string, output: Pick<ScriptPlaygroundResult, 'stderr' | 'stdout'>) {
+    super(message);
+    this.name = 'ScriptPlaygroundFailure';
+    this.code = code;
+    this.stderr = output.stderr;
+    this.stdout = output.stdout;
+  }
+}
+
 export interface PlaygroundWorkspaceLease {
   close(): Promise<void>;
   readonly path: string;
@@ -101,11 +123,11 @@ const environment = (cwd: string): Readonly<Record<string, string>> => Object.fr
   PATH: process.env.PATH ?? '/usr/bin:/bin',
 });
 
-const spawnFailure = (error: unknown): Error => {
+const spawnFailure = (error: unknown, output: Pick<ScriptPlaygroundResult, 'stderr' | 'stdout'>): ScriptPlaygroundFailure => {
   if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT') {
-    return new Error('Script interpreter is not available.');
+    return new ScriptPlaygroundFailure('interpreter-unavailable', 'Script interpreter is not available.', output);
   }
-  return new Error('Script execution could not be spawned.');
+  return new ScriptPlaygroundFailure('spawn-failed', 'Script execution could not be spawned.', output);
 };
 
 const execute = async (options: {
@@ -119,6 +141,12 @@ const execute = async (options: {
     rejectPromise(new ScriptPlaygroundAbortError());
     return;
   }
+  const stdout: Buffer[] = [];
+  const stderr: Buffer[] = [];
+  const capturedOutput = (): Pick<ScriptPlaygroundResult, 'stderr' | 'stdout'> => Object.freeze({
+    stderr: Buffer.concat(stderr).toString('utf8'),
+    stdout: Buffer.concat(stdout).toString('utf8'),
+  });
   let child: ChildProcess;
   try {
     child = spawn(options.resolved.interpreter.command, [...options.resolved.interpreter.args, options.resolved.path], {
@@ -129,18 +157,17 @@ const execute = async (options: {
       stdio: ['ignore', 'pipe', 'pipe'],
     });
   } catch (error) {
-    rejectPromise(spawnFailure(error));
+    rejectPromise(spawnFailure(error, capturedOutput()));
     return;
   }
 
-  let closed = false;
+  let childClosed = false;
+  let forceKillSent = false;
   let settled = false;
-  let spawnError: Error | undefined;
-  let termination: Error | undefined;
+  let spawnError: ScriptPlaygroundFailure | undefined;
+  let termination: ScriptPlaygroundAbortError | Readonly<{ readonly code: ScriptPlaygroundFailureCode; readonly message: string }> | undefined;
   let forceKillTimer: NodeJS.Timeout | undefined;
   let terminationSettlementTimer: NodeJS.Timeout | undefined;
-  const stdout: Buffer[] = [];
-  const stderr: Buffer[] = [];
   let outputBytes = 0;
   const cleanup = () => {
     clearTimeout(timeoutTimer);
@@ -154,9 +181,17 @@ const execute = async (options: {
     cleanup();
     action();
   };
-  const terminate = (error: Error): void => {
-    if (closed || termination !== undefined) return;
-    termination = error;
+  const terminationError = (): Error => {
+    if (termination instanceof ScriptPlaygroundAbortError) return termination;
+    return new ScriptPlaygroundFailure(termination!.code, termination!.message, capturedOutput());
+  };
+  const settleTermination = (): void => {
+    if (!childClosed || !forceKillSent) return;
+    settle(() => rejectPromise(terminationError()));
+  };
+  const terminate = (failure: typeof termination): void => {
+    if (childClosed || termination !== undefined || failure === undefined) return;
+    termination = failure;
     const terminateTree = (signal: NodeJS.Signals): void => terminateProcessTree(child, signal, {
       onTreeTerminationFailure: () => undefined,
       platform: process.platform,
@@ -164,26 +199,43 @@ const execute = async (options: {
     });
     terminateTree('SIGTERM');
     forceKillTimer = setTimeout(() => {
-      if (closed) return;
+      forceKillSent = true;
       terminateTree('SIGKILL');
+      if (childClosed) {
+        settleTermination();
+        return;
+      }
       terminationSettlementTimer = setTimeout(() => {
-        if (closed) return;
+        if (childClosed) {
+          settleTermination();
+          return;
+        }
         child.stdin?.destroy();
         child.stdout?.destroy();
         child.stderr?.destroy();
-        settle(() => rejectPromise(new Error('Script process tree did not settle after termination.')));
+        settle(() => rejectPromise(new ScriptPlaygroundFailure(
+          'cleanup-failed',
+          'Script process tree did not settle after termination.',
+          capturedOutput(),
+        )));
       }, terminationSettlementMs);
     }, terminationGraceMs);
   };
   const onAbort = (): void => terminate(new ScriptPlaygroundAbortError());
-  const timeoutTimer = setTimeout(() => terminate(new Error('Script execution timed out.')), options.timeoutMs);
+  const timeoutTimer = setTimeout(() => terminate(Object.freeze({
+    code: 'timeout' as const,
+    message: 'Script execution timed out.',
+  })), options.timeoutMs);
   const append = (destination: Buffer[], chunk: Buffer): void => {
     const remaining = options.outputLimit - outputBytes;
     if (remaining <= 0) return;
     if (chunk.length > remaining) {
       destination.push(chunk.subarray(0, remaining));
       outputBytes += remaining;
-      terminate(new Error('Script execution output exceeded the configured limit.'));
+      terminate(Object.freeze({
+        code: 'output-limit' as const,
+        message: 'Script execution output exceeded the configured limit.',
+      }));
       return;
     }
     destination.push(chunk);
@@ -191,13 +243,13 @@ const execute = async (options: {
   };
 
   options.signal?.addEventListener('abort', onAbort, { once: true });
-  child.once('error', (error) => { spawnError = spawnFailure(error); });
+  child.once('error', (error) => { spawnError = spawnFailure(error, capturedOutput()); });
   child.stdout?.on('data', (chunk: Buffer) => append(stdout, chunk));
   child.stderr?.on('data', (chunk: Buffer) => append(stderr, chunk));
   child.once('close', (exitCode) => {
-    closed = true;
+    childClosed = true;
     if (termination !== undefined) {
-      settle(() => rejectPromise(termination!));
+      settleTermination();
       return;
     }
     if (spawnError !== undefined) {
@@ -205,13 +257,16 @@ const execute = async (options: {
       return;
     }
     if (exitCode === null) {
-      settle(() => rejectPromise(new Error('Script process exited without an exit code.')));
+      settle(() => rejectPromise(new ScriptPlaygroundFailure(
+        'spawn-failed',
+        'Script process exited without an exit code.',
+        capturedOutput(),
+      )));
       return;
     }
     settle(() => resolvePromise(Object.freeze({
       exitCode,
-      stderr: Buffer.concat(stderr).toString('utf8'),
-      stdout: Buffer.concat(stdout).toString('utf8'),
+      ...capturedOutput(),
     })));
   });
 });

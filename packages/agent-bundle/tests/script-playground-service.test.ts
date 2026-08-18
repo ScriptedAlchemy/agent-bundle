@@ -99,24 +99,53 @@ it('terminates a script after the combined stdout and stderr cap is exceeded', a
     });
     await expect(service.run({
       epochId: 'epoch-server-owned', scriptId: 'script:review', target: 'codex',
-    } as unknown as Parameters<typeof service.run>[0])).rejects.toThrow('Script execution output exceeded the configured limit.');
+    } as unknown as Parameters<typeof service.run>[0])).rejects.toMatchObject({
+      code: 'output-limit',
+      message: 'Script execution output exceeded the configured limit.',
+      stderr: '',
+      stdout: 'x'.repeat(128),
+    });
   } finally { await emitted.close(); }
 }, 10_000);
 
-it('terminates a script that exceeds its server-owned timeout', async () => {
-  const emitted = await temporaryScript('setInterval(() => undefined, 1_000);\n');
+it('terminates a script that exceeds its server-owned timeout with partial evidence', async () => {
+  const emitted = await temporaryScript("process.stdout.write('before timeout'); process.stderr.write('timeout stderr'); setInterval(() => undefined, 1_000);\n");
   try {
     const service = new ScriptPlaygroundService({
       resolveScript: async () => Object.freeze({
         interpreter: Object.freeze({ args: Object.freeze([]), command: process.execPath }), name: 'review', path: emitted.path,
       }),
-      timeoutMs: 25,
+      timeoutMs: 250,
     });
     await expect(service.run({
       epochId: 'epoch-server-owned', scriptId: 'script:review', target: 'codex',
-    } as unknown as Parameters<typeof service.run>[0])).rejects.toThrow('Script execution timed out.');
+    } as unknown as Parameters<typeof service.run>[0])).rejects.toMatchObject({
+      code: 'timeout',
+      message: 'Script execution timed out.',
+      stderr: 'timeout stderr',
+      stdout: 'before timeout',
+    });
   } finally { await emitted.close(); }
 }, 10_000);
+
+it('reports a stable interpreter-unavailable failure without exposing a command path', async () => {
+  const service = new ScriptPlaygroundService({
+    resolveScript: async () => Object.freeze({
+      interpreter: Object.freeze({ args: Object.freeze([]), command: join(tmpdir(), 'agent-bundle-missing-script-interpreter') }),
+      name: 'review',
+      path: join(tmpdir(), 'agent-bundle-unreached-script.mjs'),
+    }),
+  });
+
+  await expect(service.run({
+    epochId: 'epoch-server-owned', scriptId: 'script:review', target: 'codex',
+  } as unknown as Parameters<typeof service.run>[0])).rejects.toMatchObject({
+    code: 'interpreter-unavailable',
+    message: 'Script interpreter is not available.',
+    stderr: '',
+    stdout: '',
+  });
+});
 
 it('cancels and drains the emitted script process group before its workspace is released', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-script-playground-tree-'));
@@ -157,5 +186,45 @@ it('cancels and drains the emitted script process group before its workspace is 
     await eventually(() => expect(() => process.kill(descendant, 0)).toThrow());
   } finally {
     await Promise.allSettled([emitted.close(), rm(root, { force: true, recursive: true }), rm(workspace, { force: true, recursive: true })]);
+  }
+}, 10_000);
+
+it('keeps SIGKILL process-group cleanup alive after the direct child closes', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-script-playground-stubborn-tree-'));
+  const pidPath = join(root, 'descendant.pid');
+  const readyPath = join(root, 'descendant-ready');
+  const descendantProgram = "require('node:fs').writeFileSync(" + JSON.stringify(readyPath) + ", 'ready'); process.on('SIGTERM', () => undefined); setInterval(() => undefined, 1_000);";
+  const emitted = await temporaryScript([
+    "import { spawn } from 'node:child_process';",
+    "import { writeFile } from 'node:fs/promises';",
+    'const descendant = spawn(process.execPath, [\'--eval\', ' + JSON.stringify(descendantProgram) + '], { stdio: \'ignore\' });',
+    'await writeFile(' + JSON.stringify(pidPath) + ', String(descendant.pid));',
+    'setInterval(() => undefined, 1_000);',
+    '',
+  ].join('\n'));
+  let descendant: number | undefined;
+  try {
+    const service = new ScriptPlaygroundService({
+      resolveScript: async () => Object.freeze({
+        interpreter: Object.freeze({ args: Object.freeze([]), command: process.execPath }), name: 'review', path: emitted.path,
+      }),
+    });
+    const controller = new AbortController();
+    const running = service.run({
+      epochId: 'epoch-server-owned', scriptId: 'script:review', signal: controller.signal, target: 'codex',
+    } as unknown as Parameters<typeof service.run>[0]);
+    await eventually(async () => { await readFile(pidPath); });
+    descendant = Number(await readFile(pidPath, 'utf8'));
+    await eventually(async () => { await readFile(readyPath); });
+    controller.abort();
+
+    await expect(running).rejects.toMatchObject({ name: 'AbortError' });
+    await eventually(() => expect(() => process.kill(descendant!, 0)).toThrow());
+  } finally {
+    if (descendant !== undefined) {
+      try { process.kill(descendant, 'SIGKILL'); }
+      catch { /* The cleanup contract already terminated it. */ }
+    }
+    await Promise.allSettled([emitted.close(), rm(root, { force: true, recursive: true })]);
   }
 }, 10_000);

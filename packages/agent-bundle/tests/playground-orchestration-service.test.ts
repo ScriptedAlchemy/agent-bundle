@@ -6,6 +6,7 @@ import {
   type PlaygroundDurableTraceStore,
   type PlaygroundEpochAuthority,
 } from '../src/dev/playground-orchestration-service.ts';
+import { ScriptPlaygroundFailure } from '../src/dev/script-playground-service.ts';
 import type {
   DraftEvalCase,
   PlaygroundDurableOutcome,
@@ -473,6 +474,32 @@ it('records the selected script id and its nonzero exit as durable failed script
     raw: { result: { exitCode: 17, script: 'review', stderr: 'failed', stdout: 'reviewed' }, targetDigest: 'target-sha256' },
     source: 'script',
   }));
+});
+
+it('persists stable admitted script infrastructure failures with safe partial output', async () => {
+  for (const code of ['timeout', 'output-limit', 'interpreter-unavailable'] as const) {
+    const trace = new RecordingTraceStore();
+    const failure = new ScriptPlaygroundFailure(
+      code,
+      'Script ' + code + ' failure.',
+      { stderr: 'partial stderr', stdout: 'partial stdout' },
+    );
+    const service = new PlaygroundOrchestrationService({
+      coordinator: { status: currentStatus }, createRunId: () => 'run-server-owned', createSessionId: () => 'session-server-owned',
+      epochStore: epochAuthority([]), scripts: { run: async () => { throw failure; } }, trace,
+    });
+
+    await service.run({ operation: 'script.run', scriptId: 'script:review', target: 'codex' } as unknown as Parameters<typeof service.run>[0]);
+    await eventually(() => expect(trace.finalized).toEqual({ status: 'failed' }));
+    expect(trace.appended).toContainEqual(expect.objectContaining({
+      kind: 'operation.failed',
+      raw: {
+        failure: { code, stderr: 'partial stderr', stdout: 'partial stdout' },
+        operation: 'script.run',
+      },
+      source: 'diagnostics',
+    }));
+  }
 });
 
 it('promotes only persisted raw event references and closes admission before draining active work', async () => {

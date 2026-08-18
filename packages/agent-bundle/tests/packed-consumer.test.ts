@@ -3,6 +3,7 @@ import { execFile as executeFile } from 'node:child_process';
 import {
   access,
   cp,
+  mkdir,
   mkdtemp,
   readFile,
   readdir,
@@ -76,6 +77,7 @@ it('uses only an installed tarball after source deletion', async () => {
   const consumerRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-packed-consumer-'));
   const packedPackageRoot = join(consumerRoot, 'packed-agent-bundle');
   const projectRoot = join(consumerRoot, 'project with spaces');
+  const scriptProjectRoot = join(consumerRoot, 'script-run-project');
   const artifact = join(projectRoot, 'artifact with spaces');
 
   try {
@@ -102,11 +104,77 @@ it('uses only an installed tarball after source deletion', async () => {
       cwd: projectRoot,
       env: installedEnvironment(),
     });
+    await mkdir(scriptProjectRoot, { recursive: true });
+    await Promise.all([
+      writeFile(join(scriptProjectRoot, 'package.json'), '{"type":"module"}\n'),
+      writeFile(
+        join(scriptProjectRoot, 'agent-bundle.config.ts'),
+        "export default { plugin: { name: 'packed-script-run', version: '1.0.0' }, scripts: { shell: './shell.sh' }, targets: ['portable'] };\n",
+      ),
+      writeFile(join(scriptProjectRoot, 'shell.sh'), "printf 'packed script stdout\\n'\nprintf 'packed script stderr\\n' >&2\n"),
+    ]);
+    await execFile('npm', ['install', '--ignore-scripts', '--no-audit', '--no-fund', tarball], {
+      cwd: scriptProjectRoot,
+      env: installedEnvironment(),
+    });
 
     const cli = join(projectRoot, 'node_modules', '.bin', 'agent-bundle');
     const installedPackage = await realpath(join(projectRoot, 'node_modules', 'agent-bundle'));
     expect(installedPackage.startsWith(workspaceRoot)).toBe(false);
     expect(installedEnvironment().NODE_PATH).toBeUndefined();
+    await rm(packedPackageRoot, { force: true, recursive: true });
+
+    const scriptPackage = await realpath(join(scriptProjectRoot, 'node_modules', 'agent-bundle'));
+    expect(scriptPackage.startsWith(workspaceRoot)).toBe(false);
+    const installed = await import(pathToFileURL(join(scriptPackage, 'dist', 'index.js')).href) as {
+      readonly startDevServer: (options: { readonly open: false; readonly port: number; readonly root: string }) => Promise<{
+        close(): Promise<void>;
+        readonly url: string;
+      }>;
+    };
+    const devServer = await installed.startDevServer({ open: false, port: 0, root: scriptProjectRoot });
+    try {
+      const bootstrap = await fetch(`${devServer.url}/api/project/session`, {
+        headers: { 'sec-fetch-site': 'same-origin' },
+      });
+      expect(bootstrap.status).toBe(200);
+      const session = await bootstrap.json() as { readonly token: string };
+      const runResponse = await fetch(`${devServer.url}/api/playground/runs`, {
+        body: JSON.stringify({ operation: 'script.run', scriptId: 'script:shell', target: 'portable' }),
+        headers: {
+          'content-type': 'application/json',
+          origin: devServer.url,
+          'x-agent-bundle-session': session.token,
+        },
+        method: 'POST',
+      });
+      expect(runResponse.status).toBe(200);
+      const run = await runResponse.json() as { readonly run: { readonly session: { readonly id: string } } };
+      let trace: { readonly events: readonly { readonly kind: string; readonly raw: unknown }[]; readonly session: { readonly state: string } } | undefined;
+      for (let attempt = 0; attempt < 25; attempt += 1) {
+        const response = await fetch(`${devServer.url}/api/playground/sessions/${encodeURIComponent(run.run.session.id)}/export`, {
+          headers: { origin: devServer.url, 'x-agent-bundle-session': session.token },
+        });
+        if (response.ok) {
+          const body = await response.json() as { readonly export: typeof trace };
+          trace = body.export;
+          if (trace?.session.state === 'finalized') break;
+        }
+        await new Promise<void>((resolvePromise) => { setTimeout(resolvePromise, 20); });
+      }
+      expect(trace?.session.state).toBe('finalized');
+      expect(trace?.events).toContainEqual(expect.objectContaining({
+        kind: 'script.completed',
+        raw: expect.objectContaining({ result: expect.objectContaining({
+          exitCode: 0,
+          script: 'shell',
+          stderr: 'packed script stderr\n',
+          stdout: 'packed script stdout\n',
+        }) }),
+      }));
+    } finally {
+      await devServer.close();
+    }
 
     const { stdout: inspection } = await runInstalled(cli, projectRoot, ['inspect', '--json', '--root', projectRoot]);
     expect(JSON.parse(inspection)).toMatchObject({ model: { metadata: { name: 'integration-fixture' } } });

@@ -5,7 +5,7 @@ import { snapshotStrictJsonValue } from '../core/strict-json.ts';
 import type { HookPlaygroundRouteService } from './hook-playground-routes.ts';
 import type { McpSession } from './mcp-session-service.ts';
 import type { PlaygroundOperationRequest, PlaygroundRun } from './playground-contract.ts';
-import type { ScriptPlaygroundService } from './script-playground-service.ts';
+import { ScriptPlaygroundFailure, type ScriptPlaygroundService } from './script-playground-service.ts';
 import type { ProjectStatus } from './types.ts';
 import type {
   DraftEvalCase,
@@ -95,6 +95,14 @@ const resultHasError = (value: unknown): boolean => {
     return descriptor !== undefined && 'value' in descriptor && descriptor.value === true;
   } catch { return true; }
 };
+
+const scriptFailureEvidence = (operation: PlaygroundOperationRequest, error: unknown): Readonly<{
+  readonly code: string;
+  readonly stderr: string;
+  readonly stdout: string;
+}> | undefined => operation.operation === 'script.run' && error instanceof ScriptPlaygroundFailure
+  ? Object.freeze({ code: error.code, stderr: error.stderr, stdout: error.stdout })
+  : undefined;
 
 const operationIntent = (operation: PlaygroundOperationRequest): PlaygroundSessionInput['invocation'] => {
   if (operation.operation === 'skill.inspect') {
@@ -327,11 +335,15 @@ export class PlaygroundOrchestrationService {
       await this.#trace.finalize(sessionId, Object.freeze({ status: result.status }));
     } catch (error) {
       const cancelled = signal.aborted;
+      const failure = scriptFailureEvidence(operation, error);
       const terminalFailures: unknown[] = [];
       try {
         await this.#trace.append(sessionId, Object.freeze({
           kind: cancelled ? 'operation.cancelled' : 'operation.failed',
-          raw: Object.freeze({ operation: operation.operation }),
+          raw: Object.freeze({
+            ...(failure === undefined ? {} : { failure }),
+            operation: operation.operation,
+          }),
           source: 'diagnostics',
           summary: cancelled ? 'Server-owned playground operation was cancelled.' : 'Server-owned playground operation failed.',
         }));
