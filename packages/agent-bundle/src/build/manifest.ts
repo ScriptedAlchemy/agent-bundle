@@ -350,8 +350,11 @@ export const parseArtifactManifest = (bytes: string): ArtifactManifestV2 => {
   let value: unknown;
   try {
     value = parseJsonWithoutDuplicateKeys(bytes);
-  } catch {
-    throw new SyntaxError('Artifact manifest is not valid JSON.');
+  } catch (error) {
+    if (error instanceof SyntaxError && error.message.startsWith('JSON has duplicate key ')) {
+      throw new SyntaxError('Artifact manifest JSON has a duplicate key.', { cause: error });
+    }
+    throw new SyntaxError('Artifact manifest is not valid JSON.', { cause: error });
   }
   const manifest = validateManifest(value);
   if (bytes !== `${stableJson(manifest)}\n`) {

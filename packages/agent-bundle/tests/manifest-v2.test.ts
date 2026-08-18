@@ -189,7 +189,10 @@ it('rejects versions, object shapes, JSON containers, and duplicate JSON keys st
   arrayManifest.project = [];
   expectInvalid(arrayManifest, /object/i);
   expect(() => assembleArtifactManifest(new (class { readonly version = 2; })() as ArtifactManifestV2)).toThrow(/plain object/i);
-  expect(() => parseArtifactManifest('{"version":2,"version":2}')).toThrow(/duplicate key/i);
+  expect(() => parseArtifactManifest('{"version":2,"version":2}')).toThrow(
+    /^Artifact manifest JSON has a duplicate key\.$/u,
+  );
+  expect(() => parseArtifactManifest('{')).toThrow(/^Artifact manifest is not valid JSON\.$/u);
 });
 
 it('rejects malformed scalar fields, unsafe paths, and manifest self-listing', () => {
