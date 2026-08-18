@@ -297,19 +297,39 @@ it('does not persist zero token usage when Claude omits usage from an otherwise 
 }, 240_000);
 
 it.each([
-  ['nonterminal', [
-    '{"type":"system","subtype":"init","plugins":[{"name":"review"}]}',
-    '{"type":"assistant","message":{"content":[{"type":"text","text":"Still working."}]}}',
-    '',
-  ].join('\n')],
-  ['truncated', [
-    '{"type":"system","subtype":"init","plugins":[{"name":"review"}]}',
-    '{"type":"assistant","message":{"content":[{"type":"text","text":"Still working."}]}}',
-    '{"type":"assistant","message":{"content":[{"type":"tool_use"',
-  ].join('\n')],
+  {
+    calls: [],
+    kind: 'nonterminal',
+    outcome: 'inconclusive',
+    stdout: [
+      '{"type":"system","subtype":"init","plugins":[{"name":"review"}]}',
+      '{"type":"assistant","message":{"content":[{"type":"text","text":"Still working."}]}}',
+      '',
+    ].join('\n'),
+  },
+  {
+    calls: [],
+    kind: 'truncated',
+    outcome: 'inconclusive',
+    stdout: [
+      '{"type":"system","subtype":"init","plugins":[{"name":"review"}]}',
+      '{"type":"assistant","message":{"content":[{"type":"text","text":"Still working."}]}}',
+      '{"type":"assistant","message":{"content":[{"type":"tool_use"',
+    ].join('\n'),
+  },
+  {
+    calls: [{ server: 'payments', tool: 'charge' }],
+    kind: 'truncated trace with an observed violation',
+    outcome: 'fail',
+    stdout: [
+      '{"type":"system","subtype":"init","plugins":[{"name":"review"}]}',
+      '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"mcp__payments__charge","input":{}}]}}',
+      '{"type":"assistant","message":{"content":[{"type":"tool_use"',
+    ].join('\n'),
+  },
 ] as const)(
-  'keeps forbidden MCP-call assertions inconclusive for a %s Claude trace',
-  async (_kind, stdout) => {
+  'resolves forbidden MCP-call assertions conservatively for $kind',
+  async ({ calls, outcome, stdout }) => {
     await withClaudeContext([expectNoMcpCall({ server: 'payments' })], async (context) => {
       const trial = await runTrial(context, {
         run: (_request, index) => index === 0
@@ -319,9 +339,9 @@ it.each([
             : { exitCode: 0, stderr: '', stdout },
       });
 
-      expect(trial.evidence.mcp).toEqual({ calls: [], level: 'unavailable' });
-      expect(trial.assertions).toMatchObject([{ kind: 'no-mcp-call', outcome: 'inconclusive' }]);
-      expect(trial.outcome).toBe('inconclusive');
+      expect(trial.evidence.mcp).toEqual({ calls, level: 'unavailable' });
+      expect(trial.assertions).toMatchObject([{ kind: 'no-mcp-call', outcome }]);
+      expect(trial.outcome).toBe(outcome);
     });
   },
   240_000,

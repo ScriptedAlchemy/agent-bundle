@@ -202,13 +202,14 @@ const resolveNoMcpCall = (
   evidence: EvalTrialEvidence,
 ): EvalAssertionResult => {
   const { calls, level } = evidence.mcp;
-  if (!satisfiesEvidence(level, assertion.minimumEvidence)) return insufficient(assertion, level);
   const matches = calls.filter((call) =>
     call.server === assertion.server && (assertion.tool === undefined || call.tool === assertion.tool)).length;
   const scope = assertion.tool === undefined ? assertion.server : `${assertion.server}/${assertion.tool}`;
-  return matches === 0
-    ? result(assertion, level, 'pass', `${scope} was never called.`)
-    : result(assertion, level, 'fail', `${scope} was called ${matches} time(s), expected none.`);
+  if (matches > 0) {
+    return result(assertion, level, 'fail', `${scope} was called ${matches} time(s), expected none.`);
+  }
+  if (!satisfiesEvidence(level, assertion.minimumEvidence)) return insufficient(assertion, level);
+  return result(assertion, level, 'pass', `${scope} was never called.`);
 };
 
 const resolveOutcomeScript = (
