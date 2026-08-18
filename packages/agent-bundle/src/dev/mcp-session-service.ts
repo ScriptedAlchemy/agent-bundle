@@ -714,25 +714,9 @@ export class McpSession {
   subscribeTrace(
     options: McpSessionTraceSubscriptionOptions,
     listener: McpSessionTraceListener,
-  ): McpSessionTraceSubscription;
-  subscribeTrace(
-    listener: McpSessionTraceListener,
-    options?: McpSessionTraceSubscriptionOptions,
-  ): McpSessionTraceSubscription;
-  subscribeTrace(
-    first: McpSessionTraceSubscriptionOptions | McpSessionTraceListener,
-    second?: McpSessionTraceListener | McpSessionTraceSubscriptionOptions,
   ): McpSessionTraceSubscription {
-    const listener = typeof first === 'function'
-      ? first
-      : typeof second === 'function'
-        ? second
-        : undefined;
-    const options = typeof first === 'function'
-      ? typeof second === 'function' ? undefined : second
-      : first;
     if (typeof listener !== 'function') throw new TypeError('An MCP session trace listener is required.');
-    const afterSequence = options?.afterSequence ?? 0;
+    const afterSequence = options.afterSequence ?? 0;
     this.#assertTraceCursor(afterSequence);
     const boundary = this.#traceSequence;
     const subscription: TraceSubscription = {

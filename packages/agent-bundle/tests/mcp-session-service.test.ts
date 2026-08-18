@@ -1393,7 +1393,7 @@ it('exposes one opaque, epoch-bound session handle with a bounded ordered wire t
     });
 
     const received: unknown[] = [];
-    const subscription = session.subscribeTrace((entry) => received.push(entry));
+    const subscription = session.subscribeTrace({}, (entry) => received.push(entry));
     await session.callTool({ arguments: {}, name: 'fixture' });
     subscription.unsubscribe();
     const replay = session.trace(0);
