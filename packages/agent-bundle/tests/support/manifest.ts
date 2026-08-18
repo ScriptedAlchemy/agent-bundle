@@ -1,5 +1,5 @@
 import { createDefaultRegistry } from '../../src/adapters/registry.ts';
-import { listArtifactFiles, writeManifest } from '../../src/build/emit.ts';
+import { listArtifactFiles, writeHookIndex, writeManifest } from '../../src/build/emit.ts';
 import type { ArtifactManifestV2 } from '../../src/build/manifest.ts';
 import { digest } from '../../src/core/digest.ts';
 import { agentSkillsSchemaRevision } from '../../src/schemas/agent-skills/contract.ts';
@@ -28,6 +28,7 @@ export const writeFixtureManifest = async (options: {
       };
     })
     .sort((left, right) => left.name.localeCompare(right.name));
+  await writeHookIndex({ artifactRoot: options.artifactRoot, hooks: [] });
   const files = (await listArtifactFiles(options.artifactRoot))
     .map((file) => ({
       bytes: file.bytes,

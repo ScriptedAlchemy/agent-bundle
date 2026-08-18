@@ -290,9 +290,9 @@ it('invokes a prebuilt MCP server from a clean packed consumer', async () => {
   const consumerRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-mcp-consumer-'));
   try {
     const artifact = join(consumerRoot, 'artifact');
-    await mkdir(join(artifact, 'portable'), { recursive: true });
+    await mkdir(join(artifact, 'portable', 'mcp'), { recursive: true });
     await writeFile(
-      join(artifact, 'server.mjs'),
+      join(artifact, 'portable', 'mcp', 'server.mjs'),
       [
         "let buffer = '';",
         'const send = (id, result) => process.stdout.write(`${JSON.stringify({ jsonrpc: \'2.0\', id, result })}\\n`);',
@@ -312,13 +312,17 @@ it('invokes a prebuilt MCP server from a clean packed consumer', async () => {
         '',
       ].join('\n'),
     );
-    await writeFile(join(artifact, 'portable', 'plugin.json'), '{"name":"packed-fixture","version":"1.0.0"}\n');
+    await writeFile(
+      join(artifact, 'portable', 'plugin.json'),
+      '{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"packed-fixture","version":"1.0.0"}\n',
+    );
     await writeFile(
       join(artifact, 'portable', 'mcp.json'),
       `${JSON.stringify({
+        $schema: 'https://agent-plugins.org/schemas/1.0.0/mcp.schema.json',
         mcpServers: {
           fixture: {
-            args: ['../server.mjs'],
+            args: ['mcp/server.mjs'],
             command: process.execPath,
             cwd: '${PLUGIN_ROOT}',
             type: 'stdio',
