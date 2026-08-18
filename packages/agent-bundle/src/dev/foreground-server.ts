@@ -208,7 +208,7 @@ const readBody = async (request: IncomingMessage): Promise<string> => new Promis
       tooLarge = true;
       return;
     }
-    if (!tooLarge) chunks.push(chunk);
+    chunks.push(chunk);
   });
   request.once('end', () => {
     if (tooLarge) {

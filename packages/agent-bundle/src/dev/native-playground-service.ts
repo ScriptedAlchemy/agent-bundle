@@ -742,7 +742,7 @@ export class NativePlaygroundService {
           fixturePlan: prepared.fixturePlan,
           host: prepared.host,
           ...(this.#native?.codexRun === undefined ? {} : { run: this.#native.codexRun }),
-          onCompleted: async (result) => onCompleted(result),
+          onCompleted,
           onProgress,
           signal,
           suiteDir: prepared.suiteDir,

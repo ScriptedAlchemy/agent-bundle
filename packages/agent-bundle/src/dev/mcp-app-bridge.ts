@@ -642,7 +642,7 @@ const validLog = (params: McpAppJsonValue | undefined): McpAppBridgeLogEvent | u
   if (record === undefined || record.data === undefined || typeof record.level !== 'string' || !loggingLevels.has(record.level)) return undefined;
   if (record.logger !== undefined && !nonempty(record.logger)) return undefined;
   return Object.freeze({
-    ...(record.data === undefined ? {} : { data: cloneJson(record.data) }),
+    data: cloneJson(record.data),
     level: record.level,
     ...(record.logger === undefined ? {} : { logger: record.logger }),
   });

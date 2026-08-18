@@ -1626,7 +1626,8 @@ export class PlaygroundService {
   async #readEvents(root: string): Promise<readonly PlaygroundTraceEvent[]> {
     const contents = await this.#readMutableFile(root, eventDocumentName);
     const lines = contents.split('\n');
-    const completeLines = contents.endsWith('\n') ? lines.slice(0, -1) : lines.slice(0, -1);
+    // The final element is the empty string after a trailing newline or a torn tail append; both are dropped.
+    const completeLines = lines.slice(0, -1);
     const events: PlaygroundTraceEvent[] = [];
     for (const [index, line] of completeLines.entries()) {
       if (line.length === 0) {
