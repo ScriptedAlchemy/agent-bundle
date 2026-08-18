@@ -77,5 +77,5 @@ it('uses the caller AbortSignal for the real process and releases its workspace 
 
 it('refuses script execution without an explicit contained executor', async () => {
   const service = new ScriptPlaygroundService({ resolveScript: async () => script });
-  await expect(service.run({ epochId: 'epoch-server-owned', script: 'review.mjs', target: 'codex' })).rejects.toThrow('contained executor');
+  await expect(service.run({ epochId: 'epoch-server-owned', script: 'review.mjs', target: 'codex' })).rejects.toThrow('OS-contained script execution is not configured.');
 });

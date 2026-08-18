@@ -56,6 +56,14 @@ export interface ScriptExecutionOutput {
   readonly stdout: string;
 }
 
+/** Stable pre-admission failure: this host has not configured an OS-contained executor. */
+export class ScriptPlaygroundExecutionUnavailableError extends Error {
+  constructor() {
+    super('OS-contained script execution is not configured.');
+    this.name = 'ScriptPlaygroundExecutionUnavailableError';
+  }
+}
+
 /**
  * Production executors must provide an OS-level containment boundary that can
  * prove all descendants are gone before resolving. Node process groups cannot
@@ -138,9 +146,13 @@ export class ScriptPlaygroundService {
     this.#timeoutMs = timeoutMs;
   }
 
+  isAvailable(): boolean {
+    return this.#executor !== undefined;
+  }
+
   async run(request: ScriptPlaygroundRunRequest): Promise<ScriptPlaygroundResult> {
     const executor = this.#executor;
-    if (executor === undefined) throw new Error('Script playground execution is unavailable without a contained executor.');
+    if (executor === undefined) throw new ScriptPlaygroundExecutionUnavailableError();
     const resolved = await this.#resolve({ epochId: request.epochId, script: request.script, target: request.target });
     const lease = await this.#createWorkspace();
     try {

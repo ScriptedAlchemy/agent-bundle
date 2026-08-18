@@ -3,6 +3,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 
 import { parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
 import type { PlaygroundOperationRequest, PlaygroundRun } from './playground-contract.ts';
+import { ScriptPlaygroundExecutionUnavailableError } from './script-playground-service.ts';
 import {
   PlaygroundServiceError,
   type DraftEvalCase,
@@ -340,6 +341,9 @@ export class PlaygroundRoutes {
       await this.#dispatch(parsed, request, response, service);
     } catch (error) {
       if (isRequestDiagnostic(error)) throw error;
+      if (error instanceof ScriptPlaygroundExecutionUnavailableError) {
+        throw requestError(diagnostic('AB8086', 'OS-contained script execution is not configured.', 503));
+      }
       if (error instanceof PlaygroundServiceError) throw requestError(serviceDiagnostics[error.code]);
       throw requestError(diagnostic('AB8043', 'Playground operation could not be completed.', 502));
     }

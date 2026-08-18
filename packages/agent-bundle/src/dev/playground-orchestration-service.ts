@@ -5,7 +5,10 @@ import { snapshotStrictJsonValue } from '../core/strict-json.ts';
 import type { HookPlaygroundRouteService } from './hook-playground-routes.ts';
 import type { McpSession } from './mcp-session-service.ts';
 import type { PlaygroundOperationRequest, PlaygroundRun } from './playground-contract.ts';
-import type { ScriptPlaygroundService } from './script-playground-service.ts';
+import {
+  ScriptPlaygroundExecutionUnavailableError,
+  type ScriptPlaygroundService,
+} from './script-playground-service.ts';
 import type { ProjectStatus } from './types.ts';
 import type {
   DraftEvalCase,
@@ -64,7 +67,7 @@ export interface PlaygroundOrchestrationServiceOptions {
   readonly epochStore: PlaygroundEpochAuthority;
   readonly hookPlayground?: Pick<HookPlaygroundRouteService, 'simulate'>;
   readonly mcpSessions?: PlaygroundMcpSessionService;
-  readonly scripts?: Pick<ScriptPlaygroundService, 'run'>;
+  readonly scripts?: Pick<ScriptPlaygroundService, 'run'> & Readonly<{ isAvailable?(): boolean }>;
   readonly skillDocuments?: Readonly<{
     generated(epochId: string, target: string, skillId: string): Promise<unknown>;
   }>;
@@ -153,6 +156,9 @@ export class PlaygroundOrchestrationService {
 
   async run(input: PlaygroundOperationRequest, options: { readonly signal?: AbortSignal } = {}): Promise<PlaygroundRun> {
     if (this.#closed) throw new Error('Playground orchestration service is closed.');
+    if (input.operation === 'script.run' && (this.#scripts === undefined || this.#scripts.isAvailable?.() === false)) {
+      throw new ScriptPlaygroundExecutionUnavailableError();
+    }
     const id = this.#createRunId();
     const controller = new AbortController();
     const signal = options.signal === undefined ? controller.signal : AbortSignal.any([options.signal, controller.signal]);
@@ -193,9 +199,9 @@ export class PlaygroundOrchestrationService {
         try { await this.#finish(sessionId, input, epoch.id, targetDigest, id, signal); }
         catch (error) { this.#backgroundFailures.push(error); }
         finally {
-          this.#running.delete(id);
           try { await reference.close(); }
           catch (error) { this.#backgroundFailures.push(error); }
+          finally { this.#running.delete(id); }
         }
       })();
       this.#running.set(id, Object.freeze({ controller, done }));
@@ -270,7 +276,7 @@ export class PlaygroundOrchestrationService {
     try { await this.#trace.close(); }
     catch (error) { traceFailure = error; }
     const failures = traceFailure === undefined ? this.#backgroundFailures : [...this.#backgroundFailures, traceFailure];
-    if (failures.length > 0) throw new AggregateError(failures, 'Playground background operations could not be contained.');
+    if (failures.length > 0) throw new AggregateError(failures, 'Playground background operations could not be contained.', { cause: failures[0] });
   }
 
   async #finish(

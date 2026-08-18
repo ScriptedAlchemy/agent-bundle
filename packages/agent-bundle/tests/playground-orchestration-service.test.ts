@@ -233,6 +233,52 @@ it('gives cancellation precedence when a gated Skill ignores its AbortSignal', a
   expect(trace.appended.some((event) => event.kind === 'skill.inspected')).toBe(false);
 });
 
+it('keeps close pending through epoch-reference release and reports its contained failure', async () => {
+  const trace = new RecordingTraceStore();
+  let entered!: () => void;
+  const enteredRelease = new Promise<void>((resolvePromise) => { entered = resolvePromise; });
+  let failRelease!: (error: Error) => void;
+  const release = new Promise<void>((_resolvePromise, rejectPromise) => { failRelease = rejectPromise; });
+  const references: string[] = [];
+  const service = new PlaygroundOrchestrationService({
+    coordinator: { status: currentStatus }, createRunId: () => 'run-server-owned', createSessionId: () => 'session-server-owned',
+    epochStore: {
+      acquireEpochReference: async (epochId) => {
+        references.push(epochId);
+        return Object.freeze({ close: async () => { entered(); await release; }, root: `/epochs/${epochId}` });
+      },
+    },
+    skillDocuments: { generated: async () => undefined }, trace,
+  });
+  const rejections: unknown[] = [];
+  const onUnhandled = (reason: unknown): void => { rejections.push(reason); };
+  process.on('unhandledRejection', onUnhandled);
+  try {
+    await service.run({ operation: 'skill.inspect', skillId: 'skill:review', target: 'codex' });
+    await enteredRelease;
+    let settled = false;
+    const closing = service.close().finally(() => { settled = true; });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    failRelease(new Error('epoch release failed'));
+    await expect(closing).rejects.toMatchObject({ cause: expect.objectContaining({ message: 'epoch release failed' }) });
+    expect(rejections).toEqual([]);
+    expect(references).toEqual(['epoch-active']);
+  } finally { process.off('unhandledRejection', onUnhandled); }
+});
+
+it('rejects unavailable script execution before it mints a run, session, or epoch reference', async () => {
+  const trace = new RecordingTraceStore();
+  const references: string[] = [];
+  const service = new PlaygroundOrchestrationService({
+    coordinator: { status: currentStatus }, createRunId: () => 'run-server-owned', createSessionId: () => 'session-server-owned',
+    epochStore: epochAuthority(references), scripts: { isAvailable: () => false, run: async () => { throw new Error('must not execute'); } }, trace,
+  });
+  await expect(service.run({ operation: 'script.run', script: 'review.mjs', target: 'codex' })).rejects.toThrow('OS-contained script execution is not configured.');
+  expect(references).toEqual([]);
+  expect(trace.input).toBeUndefined();
+});
+
 it('promotes only persisted raw event references and closes admission before draining active work', async () => {
   const trace = new RecordingTraceStore();
   const service = new PlaygroundOrchestrationService({

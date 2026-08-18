@@ -9,6 +9,7 @@ import {
   type PlaygroundRun,
   type PlaygroundRouteService,
 } from '../src/dev/playground-routes.ts';
+import { ScriptPlaygroundExecutionUnavailableError } from '../src/dev/script-playground-service.ts';
 import type {
   DraftEvalCase,
   PlaygroundExport,
@@ -214,6 +215,22 @@ it('rejects forged epochs, browser evidence, outcomes, and executable fields bef
   } finally {
     await started.close();
   }
+});
+
+it('reports unavailable OS-contained script execution before service admission', async () => {
+  const service = new RecordingService();
+  service.run = async () => { throw new ScriptPlaygroundExecutionUnavailableError(); };
+  const started = await startRoutes(service);
+  try {
+    const response = await post(`${started.url}/api/playground/runs`, {
+      operation: 'script.run', script: 'review.mjs', target: 'codex',
+    });
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toEqual({
+      diagnostic: { code: 'AB8086', message: 'OS-contained script execution is not configured.' },
+    });
+    expect(service.calls).toEqual([]);
+  } finally { await started.close(); }
 });
 
 it('rejects duplicate operation, target, and nested JSON keys before admission', async () => {
