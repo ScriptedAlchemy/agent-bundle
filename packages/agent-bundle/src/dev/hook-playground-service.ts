@@ -10,6 +10,7 @@ import type { CanonicalHookEvent } from '../core/types.ts';
 import { digest } from '../core/digest.ts';
 import { HookService } from '../services/hook-service.ts';
 import { EpochStore, type EpochReference } from './epoch-store.ts';
+import type { DevLogSink } from './dev-log-service.ts';
 
 type CanonicalHookInput = Readonly<Record<string, unknown>>;
 type CanonicalHookResult = Readonly<Record<string, unknown>>;
@@ -94,6 +95,8 @@ export interface HookPlaygroundServiceOptions {
   readonly copy?: typeof cp;
   readonly epochStore: EpochStore;
   readonly hookService?: Pick<HookService, 'list' | 'simulate'>;
+  /** Optional non-throwing producer-wide diagnostics sink. */
+  readonly logger?: DevLogSink;
   readonly registry?: TargetRegistry;
 }
 const epochStagingMarkerName = '.agent-bundle-epoch-stage.json';
@@ -272,6 +275,7 @@ export class HookPlaygroundService {
   readonly #copy: typeof cp;
   readonly #epochStore: EpochStore;
   readonly #hookService: Pick<HookService, 'list' | 'simulate'>;
+  readonly #logger: DevLogSink | undefined;
   readonly #registry: TargetRegistry;
 
   constructor(options: HookPlaygroundServiceOptions) {
@@ -279,6 +283,7 @@ export class HookPlaygroundService {
     this.#epochStore = options.epochStore;
     this.#registry = options.registry ?? createDefaultRegistry();
     this.#hookService = options.hookService ?? new HookService({ registry: this.#registry });
+    this.#logger = options.logger;
   }
 
   async list(options: HookPlaygroundListOptions): Promise<readonly HookPlaygroundHook[]> {
@@ -297,7 +302,9 @@ export class HookPlaygroundService {
 
   async simulate(options: HookPlaygroundSimulationOptions): Promise<HookPlaygroundSimulation | HookPlaygroundDiagnosticResult>;
   async simulate(options: HookPlaygroundSimulationOptions): Promise<HookPlaygroundSimulation | HookPlaygroundDiagnosticResult> {
-    return this.#withEpoch(options.epochId, async (artifact, reference) => {
+    this.#log('hook.simulate.started', 'info', 'Hook playground simulation started.', options, {});
+    try {
+      const result = await this.#withEpoch(options.epochId, async (artifact, reference) => {
       const hooks = await this.#hookService.list({ allowEpochStagingMarker: true, artifact });
       const matching = hooks.filter((hook) => hook.id === options.hook || hook.name === options.hook);
       if (matching.length === 0) throw new Error(`Expected one hook matching ${JSON.stringify(options.hook)}.`);
@@ -341,7 +348,21 @@ export class HookPlaygroundService {
           replay: Object.freeze({ binding: Object.freeze({ ...binding }), input: cloneRecord(canonicalInput) }),
         });
       });
-    });
+      });
+      this.#log(
+        'hook.simulate.completed',
+        'info',
+        'Hook playground simulation completed.',
+        options,
+        'diagnostics' in result ? { diagnostics: result.diagnostics } : { outcome: result.canonicalResult },
+      );
+      return result;
+    } catch (error) {
+      this.#log('hook.simulate.failed', 'error', 'Hook playground simulation failed.', options, {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
   }
 
   async replay(
@@ -362,6 +383,25 @@ export class HookPlaygroundService {
     } finally {
       await reference.close();
     }
+  }
+
+  #log(
+    kind: string,
+    level: 'error' | 'info',
+    summary: string,
+    options: HookPlaygroundSimulationOptions,
+    details: unknown,
+  ): void {
+    try {
+      this.#logger?.log({
+        context: { epochId: options.epochId, hookId: options.hook, target: options.target },
+        details,
+        kind,
+        level,
+        producer: 'hook',
+        summary,
+      });
+    } catch { /* Diagnostics cannot affect hook execution. */ }
   }
 
   async #withSimulationArtifact<T>(

@@ -4,6 +4,7 @@ import { lstat, mkdir, open, realpath, rename, unlink } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 import { parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
+import type { DevLogSink } from '../dev/dev-log-service.ts';
 
 export type PlaygroundJsonPrimitive = boolean | null | number | string;
 export type PlaygroundJsonArray = readonly PlaygroundJsonValue[];
@@ -140,6 +141,8 @@ export interface PlaygroundSubscribeOptions {
 }
 
 export interface PlaygroundServiceOptions {
+  /** Emits only durable append metadata after the event file fsync succeeds. */
+  readonly logger?: DevLogSink;
   readonly maxSubscriberQueue?: number;
   readonly now?: () => Date;
   readonly projectId: string;
@@ -581,6 +584,7 @@ const normalizeAssertion = (value: PlaygroundSelectedAssertion): PlaygroundSelec
 export class PlaygroundService {
   readonly #admissions = new Set<Promise<void>>();
   readonly #maxSubscriberQueue: number;
+  readonly #logger: DevLogSink | undefined;
   readonly #now: () => Date;
   readonly #projectId: string;
   readonly #projectRoot: string;
@@ -601,6 +605,7 @@ export class PlaygroundService {
     this.#projectRoot = options.projectRoot;
     this.#storageRoot = options.storageRoot;
     this.#now = options.now ?? (() => new Date());
+    this.#logger = options.logger;
     const queue = options.maxSubscriberQueue ?? 64;
     if (!Number.isSafeInteger(queue) || queue < 1) {
       throw serviceError('PLAYGROUND_VALUE_INVALID', 'Playground subscriber queue limit must be a positive safe integer.');
@@ -766,6 +771,7 @@ export class PlaygroundService {
       record.events.push(stored);
       record.nextSequence = sequence + 1;
       this.#publish(record, stored);
+      this.#logDurableAppend(record, stored);
       return snapshotEvent(stored);
     });
   }
@@ -1664,6 +1670,24 @@ export class PlaygroundService {
       subscription.queue.push(event);
       this.#drainSubscription(record, subscription);
     }
+  }
+
+  /** The event has reached its fsync boundary before this observation is emitted. */
+  #logDurableAppend(record: SessionRecord, event: PlaygroundTraceEvent): void {
+    try {
+      this.#logger?.log({
+        context: {
+          epochId: record.identity.epoch.id,
+          sessionId: record.id,
+          target: record.identity.target.name,
+        },
+        details: { kind: event.kind, sequence: event.sequence, source: event.source },
+        kind: 'playground.event.appended',
+        level: 'info',
+        producer: 'playground',
+        summary: 'Durable playground trace event was recorded.',
+      });
+    } catch { /* Durable playground behavior is independent of Dev Logs. */ }
   }
 
   #drainSubscription(record: SessionRecord, subscription: SubscriptionRecord): void {
