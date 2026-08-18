@@ -12,6 +12,16 @@ const packageRoot = join(workspaceRoot, 'packages', 'agent-bundle');
 
 const releaseEnvironment = (): NodeJS.ProcessEnv => ({ ...process.env, NODE_ENV: 'production' });
 
+it('runs a release pack dry run with the CLI in its tarball', async () => {
+  const { stdout } = await execFile('npm', ['run', 'pack:dry-run'], {
+    cwd: workspaceRoot,
+    env: releaseEnvironment(),
+  });
+
+  expect(stdout).toContain('agent-bundle-0.1.0.tgz');
+  expect(stdout).toContain('dist/cli.js');
+}, 120_000);
+
 it('packs generated Workbench legal companion files', async () => {
   const tarballRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-release-audit-'));
 
