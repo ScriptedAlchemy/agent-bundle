@@ -312,6 +312,8 @@ const semanticGraderVersion = (provenance: EvalTrialProvenance | undefined): str
   const semanticGrader = provenance.semanticGrader;
   return semanticGrader === null
     ? 'none'
+    : 'state' in semanticGrader
+      ? undefined
     : `${semanticGrader.id}@${semanticGrader.model}/v${semanticGrader.schemaVersion}`;
 };
 

@@ -6,6 +6,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve, win32 } from 'n
 import { stableJson } from '../core/digest.ts';
 import { parseJsonWithoutDuplicateKeys, snapshotStrictJsonValue, type JsonValue } from '../core/strict-json.ts';
 import { defaultEvalRunsDir } from './config.ts';
+import { findCredentialConfiguration } from './credentials.ts';
 import { EvalRunStoreError } from './errors.ts';
 import type {
   EvalAssertionOutcome,
@@ -53,18 +54,28 @@ export interface EvalTrialInvocationProvenance {
   readonly skill?: string;
 }
 
-/** The configured server-owned semantic grader, or an explicit record that no semantic grader ran. */
+/** The server-owned semantic grader identity used to produce a semantic outcome. */
 export interface EvalSemanticGraderProvenance {
   readonly id: string;
   readonly model: string;
   readonly schemaVersion: number;
 }
 
+/** A semantic grader ran but its identity was not safe or complete enough to compare. */
+export interface EvalUnrecordedSemanticGraderProvenance {
+  readonly state: 'unrecorded';
+}
+
+export type EvalTrialSemanticGraderProvenance =
+  | EvalSemanticGraderProvenance
+  | EvalUnrecordedSemanticGraderProvenance
+  | null;
+
 /** Alignment data observed by a trial, limited to safe model, version, and authored identity values. */
 export interface EvalTrialProvenance {
   readonly hostCliVersion?: string;
   readonly invocation: EvalTrialInvocationProvenance;
-  readonly semanticGrader: EvalSemanticGraderProvenance | null;
+  readonly semanticGrader: EvalTrialSemanticGraderProvenance;
 }
 
 /** Normalized token counts reported by a host; absent means that host reported no usable usage. */
@@ -418,6 +429,17 @@ const requireBoundedText = (value: JsonValue, code: RunStoreValidationCode, labe
   const text = requireString(value, code, label);
   if (text.length > maximumProvenanceTextLength) {
     return validationError(code, `${label} must be at most ${maximumProvenanceTextLength} characters.`);
+  }
+  return text;
+};
+
+const safeProvenanceIdentifier = /^[A-Za-z0-9][A-Za-z0-9_.:@-]{0,127}$/u;
+
+/** Durable comparison values are labels, never paths, commands, or credential material. */
+const requireProvenanceIdentifier = (value: JsonValue, code: RunStoreValidationCode, label: string): string => {
+  const text = requireBoundedText(value, code, label);
+  if (!safeProvenanceIdentifier.test(text) || findCredentialConfiguration(text) !== undefined) {
+    return validationError(code, 'Eval trial provenance contains an unsafe identifier.');
   }
   return text;
 };
@@ -800,7 +822,7 @@ const parseInvocationProvenance = (
     requireKeys(record, ['mode', 'skill'], code, 'Eval trial invocation provenance');
     return Object.freeze({
       mode,
-      skill: requireBoundedText(property(record, 'skill', code, 'Eval trial invocation provenance'), code, 'Eval trial invocation Skill'),
+      skill: requireProvenanceIdentifier(property(record, 'skill', code, 'Eval trial invocation provenance'), code, 'Eval trial invocation Skill'),
     });
   }
   return validationError(code, 'Eval trial invocation provenance mode is invalid.');
@@ -809,12 +831,19 @@ const parseInvocationProvenance = (
 const parseSemanticGraderProvenance = (
   value: JsonValue,
   code: RunStoreValidationCode,
-): EvalSemanticGraderProvenance => {
+): Exclude<EvalTrialSemanticGraderProvenance, null> => {
   const record = strictRecord(value, code, 'Eval trial semantic grader provenance');
+  if (Object.hasOwn(record, 'state')) {
+    requireKeys(record, ['state'], code, 'Eval trial semantic grader provenance');
+    if (record.state !== 'unrecorded') {
+      return validationError(code, 'Eval trial semantic grader provenance state is invalid.');
+    }
+    return Object.freeze({ state: 'unrecorded' });
+  }
   requireKeys(record, ['id', 'model', 'schemaVersion'], code, 'Eval trial semantic grader provenance');
   return Object.freeze({
-    id: requireBoundedText(property(record, 'id', code, 'Eval trial semantic grader provenance'), code, 'Eval semantic grader id'),
-    model: requireBoundedText(property(record, 'model', code, 'Eval trial semantic grader provenance'), code, 'Eval semantic grader model'),
+    id: requireProvenanceIdentifier(property(record, 'id', code, 'Eval trial semantic grader provenance'), code, 'Eval semantic grader id'),
+    model: requireProvenanceIdentifier(property(record, 'model', code, 'Eval trial semantic grader provenance'), code, 'Eval semantic grader model'),
     schemaVersion: requireInteger(property(record, 'schemaVersion', code, 'Eval trial semantic grader provenance'), code, 'Eval semantic grader schema version', 1),
   });
 };
@@ -825,7 +854,7 @@ const parseTrialProvenance = (value: JsonValue, code: RunStoreValidationCode): E
   const semanticGrader = property(record, 'semanticGrader', code, 'Eval trial provenance');
   return Object.freeze({
     ...(Object.hasOwn(record, 'hostCliVersion')
-      ? { hostCliVersion: requireBoundedText(property(record, 'hostCliVersion', code, 'Eval trial provenance'), code, 'Eval host CLI version') }
+      ? { hostCliVersion: requireProvenanceIdentifier(property(record, 'hostCliVersion', code, 'Eval trial provenance'), code, 'Eval host CLI version') }
       : {}),
     invocation: parseInvocationProvenance(property(record, 'invocation', code, 'Eval trial provenance'), code),
     semanticGrader: semanticGrader === null ? null : parseSemanticGraderProvenance(semanticGrader, code),

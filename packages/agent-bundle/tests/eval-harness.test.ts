@@ -212,6 +212,7 @@ it('records deterministic evidence whose raw artifacts reproduce every conclusio
       expect(first.evidence.mcp).toEqual({ calls: [{ server: 'project', tool: 'status' }], level: 'observed' });
       expect(first.evidence.skillActivation).toEqual({ activated: [], level: 'unavailable' });
       expect(first.provenance).toEqual({
+        hostCliVersion: `agent-bundle@${artifact.manifest.producer.version}`,
         invocation: { mode: 'automatic' },
         semanticGrader: null,
       });

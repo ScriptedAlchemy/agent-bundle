@@ -273,6 +273,28 @@ it('awaits only safe native progress phases and reports completion after Claude 
   });
 });
 
+it('does not persist zero token usage when Claude omits usage from an otherwise complete stream', async () => {
+  await withClaudeContext(defaultAssertions, async (context) => {
+    const streamWithoutUsage = [
+      '{"type":"system","subtype":"init","plugins":[{"name":"review"}],"mcp_servers":[{"name":"project"}]}',
+      '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Skill","input":{"skill":"review:review"}}]}}',
+      '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"mcp__project__status_report","input":{}}]}}',
+      '{"type":"result","subtype":"success","is_error":false,"result":"Reviewed the change."}',
+      '',
+    ].join('\n');
+    const trial = await runTrial(context, {
+      run: (_request, index) => index === 0 ? versionResult : index === 1 ? authenticatedResult : {
+        exitCode: 0,
+        stderr: '',
+        stdout: streamWithoutUsage,
+      },
+    });
+
+    expect(trial.usage).toBeUndefined();
+    expect(trial.rawArtifacts).not.toContain('artifacts/direct-review--claude-1/usage.json');
+  });
+}, 240_000);
+
 it('turns a missing CLI into a harness-failure trial without a workspace or plugin failure', async () => {
   await withClaudeContext(defaultAssertions, async (context) => {
     const missing = Object.assign(new Error('spawn claude ENOENT'), { code: 'ENOENT' });
@@ -393,6 +415,7 @@ it('gives an optional semantic grader the task, assertions, response, trace, and
         detail: 'The response names the regression.',
         outcome: 'pass',
       });
+      expect(trial.provenance?.semanticGrader).toEqual({ state: 'unrecorded' });
       expect(trial.outcome).toBe('pass');
     },
   );

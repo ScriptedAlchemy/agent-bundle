@@ -409,7 +409,9 @@ export const runClaudeTrial = async (options: RunClaudeTrialOptions): Promise<Ev
       ? []
       : [
         await options.writer.writeArtifactFile(`${trialId}/trace.json`, `${stableJson(stream.trace)}\n`),
-        await options.writer.writeArtifactFile(`${trialId}/usage.json`, `${stableJson(stream.usage)}\n`),
+        ...(stream.usage.reported
+          ? [await options.writer.writeArtifactFile(`${trialId}/usage.json`, `${stableJson(stream.usage)}\n`)]
+          : []),
       ]),
     ...(grading?.semanticRaw === undefined
       ? []
@@ -440,19 +442,21 @@ export const runClaudeTrial = async (options: RunClaudeTrialOptions): Promise<Ev
     provenance: Object.freeze({
       ...(preflight.version === undefined ? {} : { hostCliVersion: preflight.version }),
       invocation: Object.freeze({ ...options.evalCase.invocation }),
-      semanticGrader: options.configuredSemanticGrader === undefined
-        ? null
-        : Object.freeze({
+      semanticGrader: options.configuredSemanticGrader !== undefined
+        ? Object.freeze({
           id: claudeSemanticGraderId,
           model: options.configuredSemanticGrader.model,
           schemaVersion: claudeSemanticGraderSchemaVersion,
-        }),
+        })
+        : options.semanticGrader === undefined
+          ? null
+          : Object.freeze({ state: 'unrecorded' as const }),
     }),
     rawArtifacts: Object.freeze(rawArtifacts),
     startedAt: startedAt.toISOString(),
     targetDigest,
     trialIndex: options.trialIndex,
-    ...(stream === undefined
+    ...(stream === undefined || !stream.usage.reported
       ? {}
       : { usage: Object.freeze({ inputTokens: stream.usage.inputTokens, outputTokens: stream.usage.outputTokens }) }),
   });
