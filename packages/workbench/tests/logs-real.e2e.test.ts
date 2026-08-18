@@ -41,7 +41,10 @@ e2e('shows real producer logs with replay, filters, redaction, responsive layout
   try {
     const pageErrors: Error[] = [];
     page.on('pageerror', (error) => pageErrors.push(error));
-    const replayed = page.waitForResponse((response) => response.url() === `${server.url}/api/logs/replay?after=0` && response.ok());
+    const replayed = page.waitForResponse((response) => {
+      const url = new URL(response.url());
+      return url.origin === server.url && url.pathname === '/api/logs/replay' && url.searchParams.get('after') === '0' && response.ok();
+    });
     await page.goto(`${server.url}#logs`);
     await expect(page.getByRole('heading', { name: 'Logs' })).toBeVisible({ timeout: browserTimeout });
     const replay = await (await replayed).json() as { readonly replay: Readonly<{ readonly records: readonly unknown[] }> };
@@ -60,8 +63,12 @@ e2e('shows real producer logs with replay, filters, redaction, responsive layout
     await page.goto(`${server.url}#overview`);
     await expect(page.getByRole('heading', { name: 'Project overview' })).toBeVisible({ timeout: browserTimeout });
     await page.goto(`${server.url}#logs`);
-    await expect.poll(() => page.locator('.logs-entries > li').count(), { timeout: browserTimeout })
-      .toBeGreaterThanOrEqual(replayCount);
+    await expect(page.getByRole('heading', { name: 'Logs' })).toBeVisible({ timeout: browserTimeout });
+    await expect(page.locator('.logs-entries > li')).not.toHaveCount(0, { timeout: browserTimeout });
+    const reconnectedCount = await page.locator('.logs-entries > li').count();
+    expect(reconnectedCount).toBeGreaterThanOrEqual(replayCount);
+    const sequences = await page.locator('.logs-entry-sequence').allTextContents();
+    expect(new Set(sequences).size).toBe(reconnectedCount);
 
     const unauthenticated = await page.evaluate(async () => {
       const response = await fetch('/api/logs/replay');

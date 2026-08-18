@@ -36,7 +36,7 @@ export const LogsView = ({ view }: { readonly view: LogsViewModel }) => <div cla
       </div>
       <p className="logs-entry-summary">{record.summary}</p>
       <p className="logs-entry-binding">{Object.entries(record.context).map(([key, value]) => <span className="identifier" key={key}>{key} {value}</span>)}</p>
-      <details className="logs-details"><summary>Details</summary><p>Redacted diagnostic details are retained but not displayed in this view.</p></details>
+      <details className="logs-details"><summary>Details</summary><pre>{JSON.stringify({ context: record.context, details: record.details }, null, 2)}</pre></details>
     </li>)}
   </ol>}
 </div>;
@@ -56,14 +56,44 @@ export const LogsPage = ({ client, records: suppliedRecords }: LogsPageProps) =>
     if (suppliedRecords !== undefined) return;
     let current = true;
     let latestSequence = 0;
+    let observedRecords: readonly DevLogRecord[] = [];
     let reconnect: ReturnType<typeof setTimeout> | undefined;
     let stream: ReturnType<LogClient['stream']> | undefined;
-    let replayController: AbortController | undefined;
+    let generationController: AbortController | undefined;
     let generation = 0;
     const resetCursor = (): void => {
       latestSequence = 0;
+      observedRecords = [];
       setRecords([]);
       setGap(undefined);
+    };
+    const recordLocalGap = (discardedThroughSequence: number): void => {
+      setGap((previous) => {
+        if (previous === undefined) return Object.freeze({
+          earliestAvailableSequence: discardedThroughSequence + 1,
+          latestDroppedSequence: discardedThroughSequence,
+          requestedAfterSequence: 0,
+          type: 'replay.gap' as const,
+        });
+        if (previous.latestDroppedSequence >= discardedThroughSequence) return previous;
+        return Object.freeze({
+          earliestAvailableSequence: discardedThroughSequence + 1,
+          latestDroppedSequence: discardedThroughSequence,
+          requestedAfterSequence: previous.requestedAfterSequence,
+          type: 'replay.gap' as const,
+        });
+      });
+    };
+    const observe = (incoming: readonly DevLogRecord[]): boolean => {
+      const merged = mergeDevLogRecords(observedRecords, incoming);
+      if (merged.conflictSequence !== undefined) {
+        setError('Production logs could not be read.');
+        return false;
+      }
+      observedRecords = merged.records;
+      setRecords(merged.records);
+      if (merged.discardedThroughSequence !== undefined) recordLocalGap(merged.discardedThroughSequence);
+      return true;
     };
     const reconnectLater = (): void => {
       if (!current) return;
@@ -74,23 +104,24 @@ export const LogsPage = ({ client, records: suppliedRecords }: LogsPageProps) =>
       const attempt = generation + 1;
       generation = attempt;
       stream?.close();
-      replayController?.abort();
-      replayController = new AbortController();
+      generationController?.abort();
+      generationController = new AbortController();
       try {
-        const replay = await client.replay(latestSequence, replayController.signal);
+        const replay = await client.replay(latestSequence, generationController.signal);
         if (!current || attempt !== generation) return;
         latestSequence = replay.cursor.afterSequence;
         setError(undefined);
-        setGap((previous) => replay.gap ?? previous);
-        setRecords((existing) => mergeDevLogRecords(existing, replay.records));
+        if (replay.gap !== undefined) setGap(replay.gap);
+        if (!observe(replay.records)) return;
         stream = client.stream({
           afterSequence: latestSequence,
+          signal: generationController.signal,
           onMessage: (message) => {
             if (!current || attempt !== generation) return;
             if ('type' in message) setGap(message);
             else {
               latestSequence = Math.max(latestSequence, message.sequence);
-              setRecords((existing) => mergeDevLogRecords(existing, [message]));
+              observe([message]);
             }
           },
         });
@@ -98,15 +129,23 @@ export const LogsPage = ({ client, records: suppliedRecords }: LogsPageProps) =>
           () => { if (attempt === generation) reconnectLater(); },
           (reason: unknown) => {
             if (!current || attempt !== generation) return;
-            if (isCursorAhead(reason)) resetCursor();
-            else setError(errorMessage(reason));
+            if (isCursorAhead(reason)) {
+              resetCursor();
+              void connect();
+              return;
+            }
+            setError(errorMessage(reason));
             reconnectLater();
           },
         );
       } catch (reason) {
         if (!current || attempt !== generation) return;
-        if (isCursorAhead(reason)) resetCursor();
-        else setError(errorMessage(reason));
+        if (isCursorAhead(reason)) {
+          resetCursor();
+          void connect();
+          return;
+        }
+        setError(errorMessage(reason));
         reconnectLater();
       }
     };
@@ -115,7 +154,7 @@ export const LogsPage = ({ client, records: suppliedRecords }: LogsPageProps) =>
       current = false;
       generation += 1;
       if (reconnect !== undefined) clearTimeout(reconnect);
-      replayController?.abort();
+      generationController?.abort();
       stream?.close();
     };
   }, [client, suppliedRecords]);

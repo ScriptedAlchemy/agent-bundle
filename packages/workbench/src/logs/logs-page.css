@@ -1,8 +1,8 @@
-.logs-content { margin: 0 auto; max-width: 1180px; min-width: 0; padding: 35px 34px 64px; width: 100%; }
+.logs-content { margin: 0 auto; max-width: 1180px; min-width: 0; overflow-x: clip; padding: 35px 34px 64px; width: 100%; }
 .logs-page-heading p { color: #596372; font-size: 15px; margin: 8px 0 0; }
 .logs-controls { align-items: center; border-top: 1px solid #d9dee7; display: flex; flex-wrap: wrap; gap: 10px; padding-top: 24px; }
 .logs-controls label { color: #596372; font-size: 12px; font-weight: 750; letter-spacing: .03em; text-transform: uppercase; }
-.logs-controls select { background: #fff; border: 1px solid #bfc8d5; border-radius: 4px; color: #1e2938; font-size: 14px; font-weight: 600; margin-right: 14px; min-height: 37px; padding: 0 32px 0 10px; }
+.logs-controls select { background: #fff; border: 1px solid #bfc8d5; border-radius: 4px; color: #1e2938; font-size: 14px; font-weight: 600; margin-right: 14px; max-width: min(300px, 100%); min-height: 37px; min-width: 0; overflow: hidden; padding: 0 32px 0 10px; text-overflow: ellipsis; }
 .logs-trace { margin-top: 26px; }
 .logs-summary { color: #4f5866; font-size: 15px; margin: 0 0 18px; }
 .logs-gap { color: #7a5200; font-size: 14px; font-weight: 600; }
@@ -21,9 +21,9 @@
 .logs-entry-summary { color: #1e2938; font-size: 14px; margin: 8px 0 6px; overflow-wrap: anywhere; }
 .logs-entry-binding { display: flex; flex-wrap: wrap; gap: 16px; margin: 0 0 8px; }
 .logs-entry-binding .identifier { color: #596372; font: 12px/1.5 "SFMono-Regular", Consolas, "Liberation Mono", monospace; overflow-wrap: anywhere; }
-.logs-details { color: #596372; font-size: 12px; }
+.logs-details { color: #596372; font-size: 12px; max-width: 100%; }
 .logs-details summary { cursor: pointer; font-weight: 600; }
-.logs-details p { margin: 6px 0 0; }
+.logs-details pre { background: #f6f8fb; border: 1px solid #e1e6ee; border-radius: 4px; box-sizing: border-box; color: #344054; margin: 8px 0 0; max-width: 100%; overflow-wrap: anywhere; padding: 10px; white-space: pre-wrap; word-break: break-word; }
 
 @media (max-width: 820px) {
   .logs-content { padding: 27px 20px 45px; }

@@ -5,7 +5,7 @@ import { expect, it } from '@rstest/core';
 
 import type { DevLogRecord } from '../../agent-bundle/src/dev/dev-log-service.ts';
 import { LogsPage, LogsView } from '../src/logs/logs-page.tsx';
-import { logsViewFor } from '../src/logs/logs-model.ts';
+import { logsViewFor, maximumLogViewRecords, mergeDevLogRecords } from '../src/logs/logs-model.ts';
 
 const records: readonly DevLogRecord[] = Object.freeze([
   Object.freeze({
@@ -47,7 +47,29 @@ it('renders producer-wide records newest first and filters producer, level, kind
   expect(markup).not.toContain('#1');
   expect(markup).toContain('<summary>Details</summary>');
   expect(markup).toContain('error');
+  expect(markup).toContain('Build failed.');
   expect(markup).not.toContain('Raw payload');
+  expect(markup).not.toContain('retained but not displayed');
+});
+
+it('reports record conflicts without throwing and exposes the local retention boundary', () => {
+  const first = { ...records[0], details: { alpha: ['one'], nested: { beta: true } } };
+  const reorderedFirst = { ...first, details: { nested: { beta: true }, alpha: ['one'] } };
+  const equivalent = mergeDevLogRecords([first], [reorderedFirst]);
+  expect(equivalent).toEqual({ records: [first] });
+
+  const conflict = mergeDevLogRecords([first], [{ ...first, summary: 'A conflicting duplicate.' }]);
+  expect(conflict).toEqual({ conflictSequence: 1, records: [first] });
+
+  const bounded = Array.from({ length: maximumLogViewRecords }, (_, index) => ({
+    ...records[0],
+    sequence: index + 1,
+  }));
+  const trimmed = mergeDevLogRecords(bounded, [{ ...records[1], sequence: maximumLogViewRecords + 1 }]);
+  expect(trimmed.discardedThroughSequence).toBe(1);
+  expect(trimmed.records.at(0)).toMatchObject({ sequence: 2 });
+  expect(trimmed.records.at(-1)).toMatchObject({ sequence: maximumLogViewRecords + 1 });
+  expect(trimmed.records).toHaveLength(maximumLogViewRecords);
 });
 
 it('renders independent production log filters without a playground session', () => {

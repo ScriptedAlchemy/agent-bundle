@@ -24,19 +24,59 @@ export const maximumLogViewRecords = 2_048;
 
 const sorted = (values: readonly string[]): readonly string[] => Object.freeze([...new Set(values)].sort((left, right) => left.localeCompare(right)));
 
+export interface DevLogRecordMerge {
+  readonly conflictSequence?: number;
+  readonly discardedThroughSequence?: number;
+  readonly records: readonly DevLogRecord[];
+}
+
+const jsonEquivalent = (left: unknown, right: unknown): boolean => {
+  if (left === right) return true;
+  if (left === null || right === null || typeof left !== 'object' || typeof right !== 'object') return false;
+  if (Array.isArray(left) || Array.isArray(right)) {
+    return Array.isArray(left) && Array.isArray(right) && left.length === right.length && left.every((entry, index) => jsonEquivalent(entry, right[index]));
+  }
+  const leftEntries = Object.entries(left).sort(([leftKey], [rightKey]) => leftKey.localeCompare(rightKey));
+  const rightEntries = Object.entries(right).sort(([leftKey], [rightKey]) => leftKey.localeCompare(rightKey));
+  return leftEntries.length === rightEntries.length && leftEntries.every(([key, value], index) => key === rightEntries[index]?.[0] && jsonEquivalent(value, rightEntries[index]?.[1]));
+};
+
+const recordsEquivalent = (left: DevLogRecord, right: DevLogRecord): boolean =>
+  left.sequence === right.sequence && left.schemaVersion === right.schemaVersion && left.producer === right.producer && left.level === right.level &&
+  left.kind === right.kind && left.occurredAt === right.occurredAt && left.summary === right.summary &&
+  jsonEquivalent(left.context, right.context) && jsonEquivalent(left.details, right.details);
+
 /** Replay and stream records share a global sequence; live duplicates are ignored by sequence. */
 export const mergeDevLogRecords = (
   existing: readonly DevLogRecord[],
   incoming: readonly DevLogRecord[],
-): readonly DevLogRecord[] => {
-  const records = new Map<number, DevLogRecord>();
-  for (const record of existing) records.set(record.sequence, record);
-  // A malformed duplicate is not allowed to throw from a React state updater.
-  // The validated first record wins, retaining deterministic cursor progress.
-  for (const record of incoming) if (!records.has(record.sequence)) records.set(record.sequence, record);
-  return Object.freeze([...records.values()]
-    .sort((left, right) => left.sequence - right.sequence)
-    .slice(-maximumLogViewRecords));
+): DevLogRecordMerge => {
+  const records: DevLogRecord[] = [];
+  let existingIndex = 0;
+  let incomingIndex = 0;
+  let conflictSequence: number | undefined;
+  while (existingIndex < existing.length || incomingIndex < incoming.length) {
+    const previous = existing[existingIndex];
+    const next = incoming[incomingIndex];
+    if (next === undefined || (previous !== undefined && previous.sequence < next.sequence)) {
+      records.push(previous);
+      existingIndex += 1;
+    } else if (previous === undefined || next.sequence < previous.sequence) {
+      records.push(next);
+      incomingIndex += 1;
+    } else {
+      records.push(previous);
+      if (!recordsEquivalent(previous, next)) conflictSequence ??= previous.sequence;
+      existingIndex += 1;
+      incomingIndex += 1;
+    }
+  }
+  const discardedThroughSequence = records.length > maximumLogViewRecords ? records.at(-(maximumLogViewRecords + 1))?.sequence : undefined;
+  return Object.freeze({
+    ...(conflictSequence === undefined ? {} : { conflictSequence }),
+    ...(discardedThroughSequence === undefined ? {} : { discardedThroughSequence }),
+    records: Object.freeze(records.slice(-maximumLogViewRecords)),
+  });
 };
 
 /** Derives the complete logs page from production records only; no playground session is involved. */

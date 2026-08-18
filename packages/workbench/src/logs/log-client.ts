@@ -4,7 +4,12 @@ import type {
   DevLogReplay,
   DevLogReplayGap,
 } from '../../../agent-bundle/src/dev/dev-log-service.ts';
-import { snapshotStrictJsonValue, type JsonValue } from '../../../agent-bundle/src/core/strict-json.ts';
+import {
+  parseJsonWithoutDuplicateKeys,
+  snapshotStrictJsonValue,
+  type JsonValue,
+} from '../../../agent-bundle/src/core/strict-json.ts';
+import { isCredentialKey, redactEvalCredentialText } from '../../../agent-bundle/src/eval/credentials.ts';
 import {
   ForegroundRouteClientError,
   type ForegroundRequestAuthority,
@@ -23,6 +28,8 @@ export interface LogStream {
 export interface LogStreamOptions {
   readonly afterSequence: number;
   readonly onMessage: (message: DevLogMessage) => void;
+  /** One page-generation signal owns both the initial replay and its live stream. */
+  readonly signal?: AbortSignal;
 }
 
 export class LogClientError extends Error {
@@ -35,9 +42,8 @@ export class LogClientError extends Error {
   }
 }
 
-const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value);
-
+const maximumLogFrameBytes = 64 * 1024;
+const maximumSummaryLength = 2_048;
 const safeContextKeys = new Set(['buildId', 'diagnosticCode', 'epochId', 'hookId', 'projectId', 'runId', 'sessionId', 'target']);
 const devLogProducers = Object.freeze(['project', 'build', 'diagnostic', 'mcp', 'hook', 'eval', 'playground'] as const);
 const devLogLevels = Object.freeze(['debug', 'info', 'warning', 'error'] as const);
@@ -60,50 +66,80 @@ const safeIdentifier = /^[A-Za-z0-9][A-Za-z0-9._:@+-]{0,255}$/u;
 const safeInteger = (value: unknown, minimum = 0): value is number =>
   typeof value === 'number' && Number.isSafeInteger(value) && value >= minimum;
 const isDate = (value: unknown): value is string => typeof value === 'string' && !Number.isNaN(Date.parse(value)) && new Date(value).toISOString() === value;
+const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+const hasExactKeys = (value: unknown, keys: readonly string[]): value is Readonly<Record<string, unknown>> =>
+  isRecord(value) && Object.keys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key));
+const hasControlOrSeparators = (value: string): boolean => [...value].some((character) =>
+  character === '/' || character === '\\' || character <= '\u001F' || character === '\u007F');
+const safeProjectRelativePath = /<project>(?:\/[A-Za-z0-9._@+-]+)*/gu;
+const isSafeWireText = (value: unknown, maximum = maximumLogFrameBytes): value is string => {
+  if (typeof value !== 'string' || value.length === 0 || value.length > maximum || redactEvalCredentialText(value) !== value) return false;
+  const withoutProjectPaths = value.replace(safeProjectRelativePath, '');
+  return !hasControlOrSeparators(withoutProjectPaths) && !/(?:file:|[A-Za-z]:|\\\\)/iu.test(withoutProjectPaths);
+};
+const isSafeDetailKey = (value: string): boolean =>
+  !isCredentialKey(value) && redactEvalCredentialText(value) === value && !hasControlOrSeparators(value);
+const isSafeDetail = (value: JsonValue): boolean => {
+  if (value === null || typeof value === 'boolean' || typeof value === 'number') return true;
+  if (typeof value === 'string') return isSafeWireText(value);
+  if (Array.isArray(value)) return value.every(isSafeDetail);
+  return Object.entries(value).every(([key, entry]) => isSafeDetailKey(key) && isSafeDetail(entry));
+};
 const isProducer = (value: unknown): value is keyof typeof devLogKinds =>
   typeof value === 'string' && (devLogProducers as readonly string[]).includes(value);
 const isLevel = (value: unknown): boolean => typeof value === 'string' && (devLogLevels as readonly string[]).includes(value);
 const isContext = (value: unknown): value is Readonly<Record<string, string>> => isRecord(value) && Object.entries(value).every(([key, entry]) =>
-  safeContextKeys.has(key) && typeof entry === 'string' && safeIdentifier.test(entry));
-
+  safeContextKeys.has(key) && typeof entry === 'string' && safeIdentifier.test(entry) && isSafeWireText(entry, 256));
 const isDevRecord = (value: unknown): value is DevLogRecord => {
-  if (!isRecord(value) || !isProducer(value.producer)) return false;
+  if (!hasExactKeys(value, ['context', 'details', 'kind', 'level', 'occurredAt', 'producer', 'schemaVersion', 'sequence', 'summary']) || !isProducer(value.producer)) return false;
   return value.schemaVersion === 1 && safeInteger(value.sequence, 1) && isDate(value.occurredAt) && isLevel(value.level) &&
     typeof value.kind === 'string' && (devLogKinds[value.producer] as readonly string[]).includes(value.kind) &&
-    typeof value.summary === 'string' && value.summary.length > 0 && isContext(value.context) && Object.hasOwn(value, 'details');
+    isSafeWireText(value.summary, maximumSummaryLength) && isContext(value.context) && isSafeDetail(value.details as JsonValue);
 };
-
-const isGap = (value: unknown): value is DevLogReplayGap => isRecord(value) && value.type === 'replay.gap' &&
-  safeInteger(value.requestedAfterSequence) && safeInteger(value.earliestAvailableSequence, 1) && safeInteger(value.latestDroppedSequence) &&
-  value.earliestAvailableSequence === value.latestDroppedSequence + 1 && value.requestedAfterSequence < value.earliestAvailableSequence;
-
+const isGap = (value: unknown): value is DevLogReplayGap => hasExactKeys(value, [
+  'earliestAvailableSequence', 'latestDroppedSequence', 'requestedAfterSequence', 'type',
+]) && value.type === 'replay.gap' && safeInteger(value.requestedAfterSequence) && safeInteger(value.earliestAvailableSequence, 1) &&
+  safeInteger(value.latestDroppedSequence) && value.earliestAvailableSequence === value.latestDroppedSequence + 1 &&
+  value.requestedAfterSequence < value.earliestAvailableSequence;
 const invalid = (): LogClientError => new LogClientError('AB8093', 'Dev Log route returned an invalid response.');
-
 const snapshot = (value: unknown): JsonValue => {
   try { return snapshotStrictJsonValue(value); }
   catch { throw invalid(); }
 };
-
+const parseResponseJson = (bytes: Uint8Array): JsonValue => {
+  try { return snapshot(parseJsonWithoutDuplicateKeys(new TextDecoder('utf-8', { fatal: true }).decode(bytes))); }
+  catch { throw invalid(); }
+};
+const parseMessage = (line: string): JsonValue => {
+  try { return snapshot(parseJsonWithoutDuplicateKeys(line)); }
+  catch { throw invalid(); }
+};
 const contiguous = (records: readonly DevLogRecord[], afterSequence: number): boolean => records.every((record, index) =>
   record.sequence === afterSequence + index + 1);
 
 const replayFor = (value: unknown, afterSequence: number): DevLogReplay => {
   const detached = snapshot(value);
-  if (!isRecord(detached) || !isRecord(detached.replay) || !isRecord(detached.replay.cursor) ||
-    !safeInteger(detached.replay.cursor.afterSequence) || detached.replay.cursor.afterSequence < afterSequence ||
-    !Array.isArray(detached.replay.records) || !detached.replay.records.every(isDevRecord) ||
-    (detached.replay.gap !== undefined && !isGap(detached.replay.gap))) throw invalid();
-  const replay = detached.replay as unknown as DevLogReplay;
-  const records = replay.records;
-  const gap = replay.gap;
+  if (!hasExactKeys(detached, ['replay']) || !isRecord(detached.replay)) throw invalid();
+  const rawReplay = detached.replay;
   if (
-    !contiguous(records, gap === undefined ? afterSequence : gap.earliestAvailableSequence - 1)
-    || (gap !== undefined && gap.requestedAfterSequence !== afterSequence)
-    || (records.length > 0 && replay.cursor.afterSequence !== records.at(-1)?.sequence)
-    || (records.length === 0 && replay.cursor.afterSequence !== (gap?.latestDroppedSequence ?? afterSequence))
+    !(hasExactKeys(rawReplay, ['cursor', 'records']) || hasExactKeys(rawReplay, ['cursor', 'gap', 'records'])) ||
+    !hasExactKeys(rawReplay.cursor, ['afterSequence']) || !safeInteger(rawReplay.cursor.afterSequence) ||
+    rawReplay.cursor.afterSequence < afterSequence || !Array.isArray(rawReplay.records) || !rawReplay.records.every(isDevRecord) ||
+    (Object.hasOwn(rawReplay, 'gap') && !isGap(rawReplay.gap))
+  ) throw invalid();
+  const records = rawReplay.records;
+  const gap: DevLogReplayGap | undefined = Object.hasOwn(rawReplay, 'gap') && isGap(rawReplay.gap)
+    ? rawReplay.gap as unknown as DevLogReplayGap
+    : undefined;
+  if (
+    !contiguous(records, gap === undefined ? afterSequence : gap.earliestAvailableSequence - 1) ||
+    (gap !== undefined && gap.requestedAfterSequence !== afterSequence) ||
+    (records.length > 0 && rawReplay.cursor.afterSequence !== records.at(-1)?.sequence) ||
+    (records.length === 0 && rawReplay.cursor.afterSequence !== (gap?.latestDroppedSequence ?? afterSequence))
   ) throw invalid();
   return Object.freeze({
-    cursor: Object.freeze({ afterSequence: replay.cursor.afterSequence }),
+    cursor: Object.freeze({ afterSequence: rawReplay.cursor.afterSequence }),
     ...(gap === undefined ? {} : { gap: Object.freeze({ ...gap }) }),
     records: Object.freeze(records.map((record) => Object.freeze({
       ...record,
@@ -114,14 +150,18 @@ const replayFor = (value: unknown, afterSequence: number): DevLogReplay => {
 };
 
 const messageFor = (line: string): DevLogMessage => {
-  try {
-    const parsed: unknown = snapshot(JSON.parse(line));
-    if (isDevRecord(parsed) || isGap(parsed)) return parsed;
-  } catch { /* The fixed client error below is the browser-visible boundary. */ }
+  const parsed = parseMessage(line);
+  if (isDevRecord(parsed) || isGap(parsed)) return parsed;
   throw invalid();
 };
-
 const isAbort = (error: unknown): boolean => error instanceof Error && error.name === 'AbortError';
+const knownDiagnosticCodes = new Set(['AB8090', 'AB8091', 'AB8092', 'AB8093']);
+const diagnosticFor = (value: unknown): LogClientError => {
+  if (!hasExactKeys(value, ['diagnostic']) || !hasExactKeys(value.diagnostic, ['code', 'message']) ||
+    typeof value.diagnostic.code !== 'string' || !knownDiagnosticCodes.has(value.diagnostic.code) ||
+    !isSafeWireText(value.diagnostic.message, maximumSummaryLength)) return invalid();
+  return new LogClientError(value.diagnostic.code, value.diagnostic.message);
+};
 
 /** Same-origin cursor client for redacted production logs; it has no raw attachment API. */
 export class LogClient {
@@ -133,71 +173,103 @@ export class LogClient {
 
   async replay(afterSequence = 0, signal?: AbortSignal): Promise<DevLogReplay> {
     if (!safeInteger(afterSequence)) throw invalid();
-    const response = await this.#request(`/api/logs/replay?after=${String(afterSequence)}`, { signal });
-    return replayFor(await response.json().catch(() => undefined), afterSequence);
+    const body = await this.#json(`/api/logs/replay?after=${String(afterSequence)}`, { signal });
+    return replayFor(body, afterSequence);
   }
 
   stream(options: LogStreamOptions): LogStream {
     const controller = new AbortController();
-    return Object.freeze({ close: () => controller.abort(), done: this.#stream(options, controller.signal) });
+    const forwardAbort = (): void => controller.abort();
+    options.signal?.addEventListener('abort', forwardAbort, { once: true });
+    if (options.signal?.aborted) controller.abort();
+    return Object.freeze({
+      close: () => controller.abort(),
+      done: this.#stream(options, controller.signal).finally(() => options.signal?.removeEventListener('abort', forwardAbort)),
+    });
+  }
+
+  async #json(path: string, init: RequestInit): Promise<JsonValue> {
+    try {
+      const response = await this.#response(path, init);
+      return parseResponseJson(new Uint8Array(await response.arrayBuffer()));
+    } catch (error) {
+      if (error instanceof LogClientError || isAbort(error) || init.signal?.aborted) throw error;
+      throw invalid();
+    }
+  }
+
+  async #response(path: string, init: RequestInit): Promise<Response> {
+    try {
+      const response = await this.#foreground.protectedRequest(path, init);
+      if (response.ok) return response;
+      throw diagnosticFor(parseResponseJson(new Uint8Array(await response.arrayBuffer())));
+    } catch (error) {
+      if (error instanceof LogClientError || isAbort(error) || init.signal?.aborted) throw error;
+      if (error instanceof ForegroundRouteClientError) throw new LogClientError(error.code, error.message);
+      throw invalid();
+    }
   }
 
   async #stream(options: LogStreamOptions, signal: AbortSignal): Promise<void> {
     let response: Response;
-    try {
-      response = await this.#request(`/api/logs/stream?after=${String(options.afterSequence)}`, { signal });
-    } catch (error) {
+    try { response = await this.#response(`/api/logs/stream?after=${String(options.afterSequence)}`, { signal }); }
+    catch (error) {
       if (isAbort(error) || signal.aborted) return;
       throw error;
     }
     if (response.body === null) throw invalid();
     const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffered = '';
+    const decoder = new TextDecoder('utf-8', { fatal: true });
+    const frameParts: Uint8Array[] = [];
+    let frameBytes = 0;
     let expectedSequence = options.afterSequence + 1;
+    const append = (part: Uint8Array): void => {
+      if (frameBytes + part.byteLength > maximumLogFrameBytes) throw invalid();
+      if (part.byteLength > 0) frameParts.push(part);
+      frameBytes += part.byteLength;
+    };
+    const consumeFrame = (): void => {
+      const bytes = new Uint8Array(frameBytes);
+      let offset = 0;
+      for (const part of frameParts) {
+        bytes.set(part, offset);
+        offset += part.byteLength;
+      }
+      frameParts.length = 0;
+      frameBytes = 0;
+      const line = decoder.decode(bytes).trim();
+      if (line.length === 0) return;
+      const message = messageFor(line);
+      if ('sequence' in message) {
+        if (message.sequence !== expectedSequence) throw invalid();
+        expectedSequence += 1;
+      } else {
+        if (message.requestedAfterSequence !== options.afterSequence) throw invalid();
+        expectedSequence = message.earliestAvailableSequence;
+      }
+      options.onMessage(message);
+    };
     try {
       for (;;) {
         const chunk = await reader.read();
         if (chunk.done) break;
-        buffered += decoder.decode(chunk.value, { stream: true });
-        let newline = buffered.indexOf('\n');
-        while (newline >= 0) {
-          const line = buffered.slice(0, newline).trim();
-          buffered = buffered.slice(newline + 1);
-          if (line.length > 0) {
-            const message = messageFor(line);
-            if ('sequence' in message) {
-              if (message.sequence !== expectedSequence) throw invalid();
-              expectedSequence += 1;
-            } else {
-              if (message.requestedAfterSequence !== options.afterSequence) throw invalid();
-              expectedSequence = message.earliestAvailableSequence;
-            }
-            options.onMessage(message);
-          }
-          newline = buffered.indexOf('\n');
+        let start = 0;
+        for (let index = 0; index < chunk.value.byteLength; index += 1) {
+          if (chunk.value[index] !== 0x0a) continue;
+          append(chunk.value.subarray(start, index));
+          consumeFrame();
+          start = index + 1;
         }
+        append(chunk.value.subarray(start));
       }
-      if (buffered.length > 0) throw invalid();
+      if (frameBytes > 0) throw invalid();
     } catch (error) {
-      if (!isAbort(error) && !signal.aborted) throw error;
+      if (isAbort(error) || signal.aborted) return;
+      if (error instanceof LogClientError) throw error;
+      throw invalid();
     } finally {
       await reader.cancel().catch(() => undefined);
     }
   }
 
-  async #request(path: string, init: RequestInit): Promise<Response> {
-    try {
-      const response = await this.#foreground.protectedRequest(path, init);
-      if (!response.ok) {
-        const error = ForegroundRouteClientError.fromResponse(await response.clone().json().catch(() => undefined), response.status);
-        throw new LogClientError(error.code, error.message);
-      }
-      return response;
-    } catch (error) {
-      if (error instanceof LogClientError) throw error;
-      if (error instanceof ForegroundRouteClientError) throw new LogClientError(error.code, error.message);
-      throw error;
-    }
-  }
 }
