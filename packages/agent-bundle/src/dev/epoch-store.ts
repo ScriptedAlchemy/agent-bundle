@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { lstat, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, open, readFile, readdir, realpath, rename, rm, writeFile } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 
 import { stableJson } from '../core/digest.ts';
@@ -9,6 +9,13 @@ export interface EpochStoreOptions {
   /** @internal Deterministic cleanup-failure seam. */
   readonly cleanupRemove?: typeof rm;
   readonly projectRoot: string;
+  /** @internal Deterministic staging-marker durability seam. */
+  readonly stagingMarkerStorage?: EpochStagingMarkerStorage;
+}
+
+export interface EpochStagingMarkerStorage {
+  readonly open: typeof open;
+  readonly remove: typeof rm;
 }
 
 export interface CreateStagingEpochOptions {
@@ -270,6 +277,7 @@ export class EpochStore {
   readonly #epochsPath: string;
   readonly #references = new Map<string, number>();
   readonly #staging = new Map<symbol, StagingRecord>();
+  readonly #stagingMarkerStorage: EpochStagingMarkerStorage;
   #transitionTail: Promise<void> = Promise.resolve();
 
   constructor(options: EpochStoreOptions) {
@@ -278,6 +286,7 @@ export class EpochStore {
     this.#cleanupRemove = options.cleanupRemove ?? rm;
     this.#epochsPath = join(agentBundlePath, 'epochs');
     this.#epochMetadataPath = join(this.#epochsPath, metadataDirectoryName);
+    this.#stagingMarkerStorage = options.stagingMarkerStorage ?? Object.freeze({ open, remove: rm });
   }
 
   async createStagingEpoch(options: CreateStagingEpochOptions): Promise<EpochStaging> {
@@ -497,6 +506,7 @@ export class EpochStore {
       if (beforeActivate !== undefined) {
         publication = (await beforeActivate(record.epoch)) ?? undefined;
       }
+      await this.#removeStagingMarker(record);
       await rename(record.root, epochRoot);
       moved = true;
       await this.#writeEpochMetadata(record.epoch);
@@ -517,6 +527,19 @@ export class EpochStore {
     }
     await this.#cleanup();
     return record.epoch;
+  }
+
+  async #removeStagingMarker(record: StagingRecord): Promise<void> {
+    const markerPath = join(record.root, stagingMarkerFileName);
+    await this.#syncPath(markerPath);
+    await this.#stagingMarkerStorage.remove(markerPath);
+    await this.#syncPath(record.root);
+  }
+
+  async #syncPath(path: string): Promise<void> {
+    const handle = await this.#stagingMarkerStorage.open(path, 'r');
+    try { await handle.sync(); }
+    finally { await handle.close(); }
   }
 
   async #verifyStaging(record: StagingRecord): Promise<void> {

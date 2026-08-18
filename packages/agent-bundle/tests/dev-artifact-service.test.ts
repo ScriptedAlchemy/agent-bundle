@@ -9,7 +9,10 @@ import { EpochStore, type CreateStagingEpochOptions, type EpochStaging, type Sta
 import { build } from '../src/build/build.ts';
 import { validateArtifact } from '../src/build/validate-artifact.ts';
 import { ArtifactService } from '../src/dev/index.ts';
+import { NativePlaygroundService } from '../src/dev/native-playground-service.ts';
 import { ProjectService } from '../src/dev/project-service.ts';
+import { createProjectFixture, removeProjectFixture } from './helpers/project-fixture.ts';
+import { seedEvalProject, writeEvalSuite } from './support/eval-project.ts';
 import { writeFixtureManifest } from './support/manifest.ts';
 
 const sha256 = (value: string | Uint8Array): string =>
@@ -114,6 +117,41 @@ it('publishes one validated prepared project as an immutable epoch and removes i
     await rm(root, { force: true, recursive: true });
   }
 });
+
+it('publishes a marker-free active epoch that real native catalog inspection accepts', async () => {
+  const project = await createProjectFixture();
+  const store = new EpochStore({ projectRoot: project.root });
+  try {
+    await seedEvalProject(project.root, { marketplace: true, targets: ['claude'] });
+    await writeEvalSuite(project.root, 'native-catalog.eval.ts', {
+      cases: [{ hosts: { claude: { model: 'claude-sonnet-4-5' } }, id: 'native-catalog', kind: 'pass' }],
+      name: 'native-catalog',
+    });
+    const prepared = await new ProjectService({ root: project.root }).prepare('build');
+    const result = await new ArtifactService({
+      createEpochId: () => 'epoch-native-catalog',
+      epochStore: store,
+    }).build(prepared);
+
+    expect(result.outcome).toBe('succeeded');
+    if (result.outcome !== 'succeeded') throw new Error(result.diagnostics.map((diagnostic) => diagnostic.message).join('\n'));
+    const reference = await store.acquireActiveEpochReference();
+    const native = new NativePlaygroundService({ projectRoot: project.root });
+    try {
+      await expect(readFile(join(reference.root, '.agent-bundle-epoch-stage.json'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(native.catalog(reference)).resolves.toMatchObject({
+        epochId: result.epoch.id,
+        selections: [expect.objectContaining({ host: 'claude' })],
+      });
+      await expect(store.readActiveEpoch()).resolves.toEqual(result.epoch);
+    } finally {
+      await native.close();
+      await reference.close();
+    }
+  } finally {
+    await removeProjectFixture(project.root);
+  }
+}, 30_000);
 
 it('allows only an exact epoch store marker as an extra staged artifact file', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-staged-artifact-validation-'));
