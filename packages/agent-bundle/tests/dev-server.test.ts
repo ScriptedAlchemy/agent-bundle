@@ -1248,35 +1248,36 @@ it('keeps the foreground close pending until every hook simulation has drained',
   await simulation;
 });
 
-it('keeps foreground close pending until an aborted eval run durably settles', async () => {
+it('keeps foreground close pending until its admitted Eval service durably settles', async () => {
   let admitRun!: () => void;
-  let observeAbort!: () => void;
+  let beginEvalClose!: () => void;
   let releaseRun!: () => void;
   const admitted = new Promise<void>((resolvePromise) => { admitRun = resolvePromise; });
-  const aborted = new Promise<void>((resolvePromise) => { observeAbort = resolvePromise; });
+  const evalCloseStarted = new Promise<void>((resolvePromise) => { beginEvalClose = resolvePromise; });
   const released = new Promise<void>((resolvePromise) => { releaseRun = resolvePromise; });
   const evals: EvalRouteService = {
+    async cancel() { throw new Error('Unexpected cancellation.'); },
     async compare() { throw new Error('Unexpected comparison.'); },
     async events() { throw new Error('Unexpected event replay.'); },
     async list() { throw new Error('Unexpected run listing.'); },
     async openArtifact() { throw new Error('Unexpected artifact read.'); },
     async read() { throw new Error('Unexpected run read.'); },
-    async run(request) {
+    async start() {
       admitRun();
-      await new Promise<void>((resolvePromise) => {
-        if (request.signal?.aborted === true) resolvePromise();
-        else request.signal?.addEventListener('abort', () => resolvePromise(), { once: true });
-      });
-      observeAbort();
-      await released;
-      throw request.signal?.reason;
+      return Object.freeze({ run: undefined as never });
     },
     async subscribeEvents() { throw new Error('Unexpected event subscription.'); },
     async suites() { throw new Error('Unexpected suite listing.'); },
   };
+  const evalLifecycle = {
+    close: async (): Promise<void> => {
+      beginEvalClose();
+      await released;
+    },
+  };
   const coordinator = new RecordingCoordinator();
-  const server = await startForegroundServer({ coordinator, evals, eventHub: new ProjectEventHub(), port: 0 });
-  const run = fetch(`${server.url}/api/evals/runs`, {
+  const server = await startForegroundServer({ coordinator, evalLifecycle, evals, eventHub: new ProjectEventHub(), port: 0 });
+  const run = await fetch(`${server.url}/api/evals/runs`, {
     body: JSON.stringify({}),
     headers: {
       'content-type': 'application/json',
@@ -1284,12 +1285,13 @@ it('keeps foreground close pending until an aborted eval run durably settles', a
       'x-agent-bundle-session': server.sessionToken,
     },
     method: 'POST',
-  }).catch(() => undefined);
+  });
 
   try {
     await admitted;
+    expect(run.status).toBe(202);
     const closing = server.close();
-    await aborted;
+    await evalCloseStarted;
     const state = await Promise.race([
       closing.then(() => 'closed'),
       new Promise<string>((resolvePromise) => { setTimeout(() => resolvePromise('pending'), 50); }),
@@ -1299,10 +1301,138 @@ it('keeps foreground close pending until an aborted eval run durably settles', a
     releaseRun();
     await closing;
     expect(coordinator.closeCalls).toBe(1);
-    await run;
   } finally {
     releaseRun();
-    await run;
+    await server.close().catch(() => undefined);
+  }
+});
+
+it('retains an Eval service drain failure while still releasing the foreground coordinator', async () => {
+  const coordinator = new RecordingCoordinator();
+  const evalFailure = new Error('eval cancellation cleanup failed');
+  let evalCloseCalls = 0;
+  const server = await startForegroundServer({
+    coordinator,
+    evalLifecycle: {
+      close: async () => {
+        evalCloseCalls += 1;
+        throw evalFailure;
+      },
+    },
+    eventHub: new ProjectEventHub(),
+    port: 0,
+  });
+
+  try {
+    await expect(server.close()).rejects.toMatchObject({
+      failures: [{ error: evalFailure, resource: 'eval-service' }],
+      name: 'ForegroundServerCloseError',
+    });
+    expect(evalCloseCalls).toBe(1);
+    expect(coordinator.closeCalls).toBe(1);
+  } finally {
+    await server.close().catch(() => undefined);
+  }
+});
+
+it('drains Eval routes, Agent API, and the Eval service before coordinator shutdown', async () => {
+  let releaseRouteAdmission!: () => void;
+  let releaseAgentClose!: () => void;
+  let releaseEvalClose!: () => void;
+  let signalRouteAdmission!: () => void;
+  let signalAgentClose!: () => void;
+  let signalEvalClose!: () => void;
+  let agentClosed = false;
+  let evalClosed = false;
+  let evalCloseCalls = 0;
+  let evalObservedAgentClosed = false;
+  let coordinatorCloseCalls = 0;
+  let coordinatorObservedEvalClosed = false;
+  const routeAdmissionStarted = new Promise<void>((resolvePromise) => { signalRouteAdmission = resolvePromise; });
+  const agentCloseStarted = new Promise<void>((resolvePromise) => { signalAgentClose = resolvePromise; });
+  const evalCloseStarted = new Promise<void>((resolvePromise) => { signalEvalClose = resolvePromise; });
+  const routeAdmissionRelease = new Promise<void>((resolvePromise) => { releaseRouteAdmission = resolvePromise; });
+  const agentCloseRelease = new Promise<void>((resolvePromise) => { releaseAgentClose = resolvePromise; });
+  const evalCloseRelease = new Promise<void>((resolvePromise) => { releaseEvalClose = resolvePromise; });
+  const evals: EvalRouteService = {
+    async cancel() { throw new Error('Unexpected cancellation.'); },
+    async compare() { throw new Error('Unexpected comparison.'); },
+    async events() { throw new Error('Unexpected event replay.'); },
+    async list() { throw new Error('Unexpected run listing.'); },
+    async openArtifact() { throw new Error('Unexpected artifact read.'); },
+    async read() { throw new Error('Unexpected run read.'); },
+    async start() { throw new Error('Unexpected run start.'); },
+    async subscribeEvents() {
+      signalRouteAdmission();
+      await routeAdmissionRelease;
+      return Object.freeze({
+        activate: (): void => undefined,
+        close: (): void => undefined,
+        replay: Object.freeze({ cursor: Object.freeze({ afterSequence: 0 }), events: Object.freeze([]) }),
+      });
+    },
+    async suites() { throw new Error('Unexpected suite listing.'); },
+  };
+  const coordinator = {
+    close: async (): Promise<void> => {
+      coordinatorCloseCalls += 1;
+      coordinatorObservedEvalClosed = evalClosed;
+    },
+    rebuild: async (): Promise<unknown> => undefined,
+    start: async (): Promise<void> => undefined,
+    status,
+  };
+  const server = await startForegroundServer({
+    agentApi: {
+      close: async (): Promise<void> => {
+        signalAgentClose();
+        await agentCloseRelease;
+        agentClosed = true;
+      },
+    } as never,
+    coordinator,
+    evals,
+    evalLifecycle: {
+      close: async (): Promise<void> => {
+        evalCloseCalls += 1;
+        evalObservedAgentClosed = agentClosed;
+        signalEvalClose();
+        await evalCloseRelease;
+        evalClosed = true;
+      },
+    },
+    eventHub: new ProjectEventHub(),
+    port: 0,
+  });
+  const stream = fetch(`${server.url}/api/evals/runs/run-a/stream`, {
+    headers: { origin: server.url, 'x-agent-bundle-session': server.sessionToken },
+  });
+  try {
+    await routeAdmissionStarted;
+    const closing = server.close();
+    await expect(within(agentCloseStarted, 250)).resolves.toBeUndefined();
+    expect(evalCloseCalls).toBe(0);
+    expect(coordinatorCloseCalls).toBe(0);
+
+    releaseRouteAdmission();
+    await new Promise<void>((resolvePromise) => setImmediate(resolvePromise));
+    expect(evalCloseCalls).toBe(0);
+
+    releaseAgentClose();
+    await evalCloseStarted;
+    expect(evalObservedAgentClosed).toBe(true);
+    await new Promise<void>((resolvePromise) => setImmediate(resolvePromise));
+    expect(coordinatorCloseCalls).toBe(0);
+
+    releaseEvalClose();
+    await expect(closing).resolves.toBeUndefined();
+    expect(coordinatorCloseCalls).toBe(1);
+    expect(coordinatorObservedEvalClosed).toBe(true);
+  } finally {
+    releaseRouteAdmission();
+    releaseAgentClose();
+    releaseEvalClose();
+    await stream.catch(() => undefined);
     await server.close().catch(() => undefined);
   }
 });

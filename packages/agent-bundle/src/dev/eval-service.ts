@@ -103,6 +103,11 @@ export interface EvalRunResult {
   readonly trials: readonly EvalTrialRecord[];
 }
 
+/** A durable run identity returned before its background trials settle. */
+export interface EvalRunAdmission {
+  readonly run: EvalRunRecord;
+}
+
 /** A durable event replay never includes an incomplete append record. */
 export interface EvalRunEventsReplay {
   readonly cursor: Readonly<{ readonly afterSequence: number }>;
@@ -160,6 +165,18 @@ interface PlannedEvalTrial {
   readonly host: string;
   readonly suiteDir: string;
   readonly trialIndex: number;
+}
+
+interface ActiveEvalRun {
+  cancellation: Promise<void> | undefined;
+  cancelled: boolean;
+  readonly controller: AbortController;
+  requestAbort: (() => void) | undefined;
+  readonly requestSignal: AbortSignal | undefined;
+  result: Promise<EvalRunResult> | undefined;
+  readonly runId: string;
+  terminal: boolean;
+  readonly writer: Awaited<ReturnType<typeof createEvalRun>>;
 }
 
 const maximumTrials = 100;
@@ -269,6 +286,7 @@ class PendingEvalEventSubscription implements EvalEventSubscription {
 
   publish(event: EvalRunEvent): void {
     if (this.#closed) return;
+    if (this.#replay !== undefined && event.sequence <= this.#replay.cursor.afterSequence) return;
     const listener = this.#listener;
     if (listener === undefined) this.#queued.push(event);
     else listener(event);
@@ -387,6 +405,8 @@ export class EvalService {
   readonly #registry: TargetRegistry;
   readonly #targets: readonly string[] | undefined;
   readonly #eventSubscriptions = new Map<string, Set<PendingEvalEventSubscription>>();
+  readonly #activeRuns = new Map<string, ActiveEvalRun>();
+  readonly #startingRuns = new Set<Promise<void>>();
   #closePromise: Promise<void> | undefined;
 
   constructor(options: EvalServiceOptions) {
@@ -510,11 +530,17 @@ export class EvalService {
   close(): Promise<void> {
     if (this.#closePromise !== undefined) return this.#closePromise;
     this.#closePromise = Promise.resolve().then(async () => {
-      const results = await Promise.allSettled([...this.#artifactReaders].map(async (reader) => reader.close()));
+      const starts = await Promise.allSettled([...this.#startingRuns]);
+      const active = [...this.#activeRuns.values()];
+      const results = await Promise.allSettled([
+        ...[...this.#artifactReaders].map(async (reader) => reader.close()),
+        ...active.map(async (run) => this.#requestCancellation(run)),
+        ...active.flatMap((run) => run.result === undefined ? [] : [run.result]),
+      ]);
       this.#artifactReaders.clear();
-      const failures = results.filter((result): result is PromiseRejectedResult => result.status === 'rejected');
+      const failures = [...starts, ...results].filter((result): result is PromiseRejectedResult => result.status === 'rejected');
       if (failures.length > 0) {
-        throw new AggregateError(failures.map((failure) => failure.reason), 'Eval evidence readers could not close.');
+        throw new AggregateError(failures.map((failure) => failure.reason), 'Eval service could not close.');
       }
     });
     return this.#closePromise;
@@ -532,7 +558,19 @@ export class EvalService {
     });
   }
 
-  async run(request: EvalRunRequest): Promise<EvalRunResult> {
+  start(request: EvalRunRequest): Promise<EvalRunAdmission> {
+    if (this.#closePromise !== undefined) throw new Error('Eval service is closing.');
+    let finishStart!: () => void;
+    const pending = new Promise<void>((resolvePromise) => { finishStart = resolvePromise; });
+    this.#startingRuns.add(pending);
+    return this.#admit(request).finally(() => {
+      this.#startingRuns.delete(pending);
+      finishStart();
+    });
+  }
+
+  async #admit(request: EvalRunRequest): Promise<EvalRunAdmission> {
+    if (this.#closePromise !== undefined) throw new Error('Eval service is closing.');
     const harness = this.#harness(request.harness);
     const trials = requestedTrials(request.trials);
     const config = await this.#config();
@@ -601,62 +639,168 @@ export class EvalService {
         harness: harness.name,
         trials: planned.length,
       });
-      const completed: EvalTrialRecord[] = [];
-      const wasCancelled = (): boolean => request.signal?.aborted === true;
-      let cancelled = wasCancelled();
-      for (const plan of planned) {
-        if (wasCancelled()) {
-          cancelled = true;
+    } catch (error) {
+      await writer.close().catch(() => undefined);
+      throw error;
+    }
+
+    const controller = new AbortController();
+    const active: ActiveEvalRun = {
+      cancellation: undefined,
+      cancelled: false,
+      controller,
+      requestAbort: undefined,
+      requestSignal: request.signal,
+      result: undefined,
+      runId,
+      terminal: false,
+      writer,
+    };
+    let resolveResult!: (result: EvalRunResult) => void;
+    let rejectResult!: (reason: unknown) => void;
+    active.result = new Promise<EvalRunResult>((resolvePromise, rejectPromise) => {
+      resolveResult = resolvePromise;
+      rejectResult = rejectPromise;
+    });
+    this.#activeRuns.set(runId, active);
+    if (request.signal !== undefined) {
+      active.requestAbort = () => { void this.#requestCancellation(active).catch(() => undefined); };
+      request.signal.addEventListener('abort', active.requestAbort, { once: true });
+      if (request.signal.aborted) active.requestAbort();
+    }
+    void this.#execute(active, {
+      artifact,
+      config,
+      directory,
+      harness,
+      planned,
+    }).then(resolveResult, rejectResult);
+    void active.result.catch(() => undefined);
+    return Object.freeze({ run: writer.record });
+  }
+
+  async run(request: EvalRunRequest): Promise<EvalRunResult> {
+    const admission = await this.start(request);
+    const active = this.#activeRuns.get(admission.run.id);
+    return active?.result === undefined ? this.read(admission.run.id) : active.result;
+  }
+
+  async cancel(runId: string): Promise<boolean> {
+    if (!safeRunId.test(runId)) {
+      throw serviceError('EVAL_RUN_NOT_FOUND', `Eval run ${JSON.stringify(runId)} is not a run identifier.`);
+    }
+    const active = this.#activeRuns.get(runId);
+    if (active !== undefined) {
+      const requested = active.cancellation === undefined && !active.terminal;
+      if (requested) await this.#requestCancellation(active);
+      if (active.result !== undefined) await active.result.catch(() => undefined);
+      return requested;
+    }
+    await this.read(runId);
+    return false;
+  }
+
+  async #execute(
+    active: ActiveEvalRun,
+    options: Readonly<{
+      readonly artifact: PreparedEvalArtifact;
+      readonly config: NormalizedEvalConfig;
+      readonly directory: string;
+      readonly harness: EvalHarness;
+      readonly planned: readonly PlannedEvalTrial[];
+    }>,
+  ): Promise<EvalRunResult> {
+    const completed: EvalTrialRecord[] = [];
+    try {
+      for (const plan of options.planned) {
+        if (active.cancelled || active.controller.signal.aborted) break;
+        await this.#appendEvent(active.writer, active.runId, {
+          kind: 'trial.started',
+          payload: { caseId: plan.evalCase.id, host: plan.host, trialIndex: plan.trialIndex },
+        });
+        if (active.cancelled || active.controller.signal.aborted) {
+          await this.#appendEvent(active.writer, active.runId, {
+            kind: 'trial.cancelled',
+            payload: { caseId: plan.evalCase.id, host: plan.host, trialIndex: plan.trialIndex },
+          });
           break;
         }
-        const trial = await this.#runTrial({
-          artifact,
-          config,
-          directory,
-          harness,
-          plan,
-          signal: request.signal,
-          writer,
-        });
-        completed.push(trial);
-        await this.#appendEvent(writer, runId, {
-          kind: 'trial.completed',
-          payload: { caseId: trial.caseId, id: trial.id, outcome: trial.outcome },
-        });
-        if (wasCancelled()) cancelled = true;
+        try {
+          const trial = await this.#runTrial({
+            artifact: options.artifact,
+            config: options.config,
+            directory: options.directory,
+            harness: options.harness,
+            plan,
+            signal: active.controller.signal,
+            writer: active.writer,
+          });
+          completed.push(trial);
+          await this.#appendEvent(active.writer, active.runId, {
+            kind: 'trial.completed',
+            payload: { caseId: trial.caseId, id: trial.id, outcome: trial.outcome },
+          });
+        } catch (error) {
+          if (active.cancelled || active.controller.signal.aborted) {
+            await this.#appendEvent(active.writer, active.runId, {
+              kind: 'trial.cancelled',
+              payload: { caseId: plan.evalCase.id, host: plan.host, trialIndex: plan.trialIndex },
+            });
+            break;
+          }
+          await this.#appendEvent(active.writer, active.runId, {
+            kind: 'trial.failed',
+            payload: { caseId: plan.evalCase.id, host: plan.host, trialIndex: plan.trialIndex },
+          });
+          throw error;
+        }
       }
-      if (cancelled || completed.length !== planned.length) {
-        await this.#appendEvent(writer, runId, {
-          kind: 'run.cancelled',
-          payload: { completed: completed.length, planned: planned.length },
-        });
-      } else {
-        await this.#appendEvent(writer, runId, {
-          kind: 'run.completed',
-          payload: { completed: completed.length, planned: planned.length },
-        });
-      }
+      const cancelled = active.cancelled || active.controller.signal.aborted || completed.length !== options.planned.length;
+      active.terminal = true;
+      await this.#appendEvent(active.writer, active.runId, {
+        kind: cancelled ? 'run.cancelled' : 'run.completed',
+        payload: { completed: completed.length, planned: options.planned.length },
+      });
       const aggregates = aggregateEvalTrials(completed);
       const result = Object.freeze({
         aggregates,
-        diagnostics: config.diagnostics,
-        run: await writer.finish(summarizeEvalRun(aggregates)),
+        diagnostics: options.config.diagnostics,
+        run: await active.writer.finish(summarizeEvalRun(aggregates)),
         trials: Object.freeze(completed),
       });
-      this.#log('eval.run.completed', 'info', 'Eval run completed.', runId, {
+      this.#log('eval.run.completed', 'info', 'Eval run completed.', active.runId, {
         aggregates: result.aggregates,
         trials: result.trials.length,
       });
       return result;
     } catch (error) {
-      await this.#appendEvent(writer, runId, { kind: 'run.failed', payload: {} }).catch(() => undefined);
-      this.#log('eval.run.failed', 'error', 'Eval run failed.', runId, {
-        failure: 'unavailable',
-      });
+      if (!active.terminal) {
+        active.terminal = true;
+        await this.#appendEvent(active.writer, active.runId, {
+          kind: active.cancelled || active.controller.signal.aborted ? 'run.cancelled' : 'run.failed',
+          payload: {},
+        }).catch(() => undefined);
+      }
+      await active.writer.finish(summarizeEvalRun(aggregateEvalTrials(completed))).catch(() => undefined);
+      this.#log('eval.run.failed', 'error', 'Eval run failed.', active.runId, { failure: 'unavailable' });
       throw error;
     } finally {
-      await writer.close();
+      if (active.requestAbort !== undefined) active.requestSignal?.removeEventListener('abort', active.requestAbort);
+      await active.writer.close();
+      if (this.#activeRuns.get(active.runId) === active) this.#activeRuns.delete(active.runId);
     }
+  }
+
+  #requestCancellation(active: ActiveEvalRun): Promise<void> {
+    if (active.cancellation !== undefined) return active.cancellation;
+    if (active.terminal) return Promise.resolve();
+    active.cancelled = true;
+    const cancellation = this.#appendEvent(active.writer, active.runId, {
+      kind: 'run.cancelling',
+      payload: {},
+    }).then(() => undefined).finally(() => active.controller.abort());
+    active.cancellation = cancellation;
+    return cancellation;
   }
 
   #log(kind: DevLogKindFor<'eval'>, level: 'error' | 'info', summary: string, runId: string, details: unknown): void {

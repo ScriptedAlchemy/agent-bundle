@@ -17,7 +17,7 @@ import {
   RuntimeClientSurfaceBindings,
   startDevServer,
 } from '../src/dev/workbench-server.ts';
-import type { ForegroundCoordinator } from '../src/dev/foreground-server.ts';
+import type { ForegroundCoordinator, ForegroundServerOptions } from '../src/dev/foreground-server.ts';
 import { createProjectFixture, removeProjectFixture } from './helpers/project-fixture.ts';
 
 const readToEnd = async (reader: ReadableStreamDefaultReader<Uint8Array>): Promise<string> => {
@@ -1654,6 +1654,31 @@ it('retains a playground cleanup failure alongside every other lifecycle resourc
     name: DevServerLifecycleCloseError.name,
   }));
   expect(closeOrder).toEqual(['playground', 'mcp-apps', 'mcp-sessions', 'coordinator']);
+});
+
+it('gives the foreground Eval route and lifecycle lanes the same project-owned service', async () => {
+  const project = await createProjectFixture();
+  const sandboxFailure = new Error('stop after foreground composition');
+  let foreground: ForegroundServerOptions | undefined;
+  try {
+    await expect(startDevServer({
+      open: false,
+      port: 0,
+      root: project.root,
+      testing: {
+        createSandboxProxy: async () => { throw sandboxFailure; },
+        startForegroundServer: async (options) => {
+          foreground = options;
+          await options.coordinator.start();
+          return { close: () => options.coordinator.close(), url: 'http://127.0.0.1:49127' };
+        },
+      },
+    })).rejects.toBe(sandboxFailure);
+
+    expect(foreground?.evalLifecycle).toBe(foreground?.evals);
+  } finally {
+    await removeProjectFixture(project.root);
+  }
 });
 
 it('keeps MCP and coordinator cleanup failures structural while releasing both resources', async () => {

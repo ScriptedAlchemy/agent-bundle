@@ -757,6 +757,7 @@ export const startDevServer = async (options: StartDevServerOptions): Promise<De
       detachProjectLogs,
     ),
     evals,
+    evalLifecycle: evals,
     eventHub,
     hookPlayground,
     logs,
