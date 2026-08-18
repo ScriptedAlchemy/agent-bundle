@@ -183,7 +183,11 @@ export interface McpSessionServiceOptions {
   readonly epochStore: EpochStore;
   readonly projectRoot: string;
   readonly registry?: TargetRegistry;
+  /** Optional observability sink. It receives safe trace categories, never changes session behavior. */
+  readonly traceSink?: McpSessionTraceSink;
 }
+
+export type McpSessionTraceSink = (binding: McpSessionBinding, entry: McpSessionTraceEntry) => void;
 
 export interface McpSessionServiceCloseFailure {
   readonly error: unknown;
@@ -604,6 +608,7 @@ export class McpSession {
   readonly #resolved: ResolvedSessionServer;
   readonly #launch: ResolvedLaunch;
   readonly #timeoutMs: number;
+  readonly #traceSink: McpSessionTraceSink | undefined;
   readonly #workspaceRoot: string;
   readonly #frames: McpSessionFrame[] = [];
   readonly #events: McpSessionEvent[] = [];
@@ -637,6 +642,7 @@ export class McpSession {
     readonly pluginData: string;
     readonly resolved: ResolvedSessionServer;
     readonly timeoutMs?: number;
+    readonly traceSink?: McpSessionTraceSink;
     readonly workspaceRoot: string;
   }) {
     this.#binding = Object.freeze({ ...options.binding });
@@ -650,6 +656,7 @@ export class McpSession {
     this.#pluginData = options.pluginData;
     this.#resolved = options.resolved;
     this.#timeoutMs = resolveTimeoutMs(options.timeoutMs ?? defaultTimeoutMs);
+    this.#traceSink = options.traceSink;
     this.#workspaceRoot = options.workspaceRoot;
     this.#launch = this.#resolveLaunch();
   }
@@ -1073,6 +1080,8 @@ export class McpSession {
     }
     this.#undeliveredTraceEntries.push(entry);
     this.#drainLiveTraceEntries();
+    try { this.#traceSink?.(this.#binding, entry); }
+    catch { /* Diagnostics must never alter an MCP session or expose raw frames. */ }
   }
 
   #assertTraceCursor(afterSequence: number): void {
@@ -1217,6 +1226,7 @@ export class McpSessionService {
   readonly #epochStore: EpochStore;
   readonly #projectRoot: string;
   readonly #registry: TargetRegistry;
+  readonly #traceSink: McpSessionTraceSink | undefined;
   readonly #openingSessions = new Set<OpeningSession>();
   readonly #sessions = new Map<string, ActiveSession>();
   #closePromise: Promise<void> | undefined;
@@ -1233,6 +1243,7 @@ export class McpSessionService {
     this.#epochStore = options.epochStore;
     this.#projectRoot = resolve(options.projectRoot);
     this.#registry = options.registry ?? createDefaultRegistry();
+    this.#traceSink = options.traceSink;
   }
 
   async open(options: OpenMcpSessionOptions): Promise<McpSession> {
@@ -1295,6 +1306,7 @@ export class McpSessionService {
         pluginData,
         resolved: { runtime, server, target, targetRoot },
         timeoutMs: options.timeoutMs,
+        ...(this.#traceSink === undefined ? {} : { traceSink: this.#traceSink }),
         workspaceRoot: resolve(options.workspaceRoot ?? this.#projectRoot),
       });
       await session.initialize({ signal: options.signal });

@@ -652,6 +652,8 @@ e2e('keeps runtime Inspector routing constrained after direct MCP navigation fro
 
 e2e('restarts the real Runtime MCP App session when definition or transport authority changes', { timeout: 150_000 }, async ({ page }) => {
   const fixture = await startRuntimePlaygroundFixture();
+  const serverOwnedProjectSubscriptions = fixture.eventHubState.subscriptionCount;
+  expect(serverOwnedProjectSubscriptions).toBe(1);
   const pageErrors: Error[] = [];
   const artifactMcpSessionRequests: string[] = [];
   const projectEventStreams: string[] = [];
@@ -952,10 +954,12 @@ e2e('restarts the real Runtime MCP App session when definition or transport auth
     );
     expect(changedTransport).not.toBe(configSource);
     const transportEventStart = runtimeEvents.length;
-    await expect.poll(() => fixture.eventHubState.subscriptionCount, { timeout: 15_000 }).toBe(1);
+    await expect.poll(() => fixture.eventHubState.subscriptionCount, { timeout: 15_000 })
+      .toBe(serverOwnedProjectSubscriptions + 1);
     await page.context().setOffline(true);
     fixture.disconnectProjectEventStream();
-    await expect.poll(() => fixture.eventHubState.subscriptionCount, { timeout: 15_000 }).toBe(0);
+    await expect.poll(() => fixture.eventHubState.subscriptionCount, { timeout: 15_000 })
+      .toBe(serverOwnedProjectSubscriptions);
     await writeFile(fixture.configSource, changedTransport);
     const definitionOperationPath = `/api/runtime/apps/${encodeURIComponent(definitionRun.id)}/operations`;
     await expect.poll(async () => {
@@ -985,7 +989,8 @@ e2e('restarts the real Runtime MCP App session when definition or transport auth
     fixture.publishReplayNoise();
     expect(fixture.eventHubState.latestSequence).toBe(sequenceBeforeReplayNoise + 257);
     await page.context().setOffline(false);
-    await expect.poll(() => fixture.eventHubState.subscriptionCount, { timeout: 15_000 }).toBe(1);
+    await expect.poll(() => fixture.eventHubState.subscriptionCount, { timeout: 15_000 })
+      .toBe(serverOwnedProjectSubscriptions + 1);
     await expect.poll(() => projectEventStreams, { timeout: 15_000 }).toEqual([
       'GET /api/project/events',
       'GET /api/project/events',

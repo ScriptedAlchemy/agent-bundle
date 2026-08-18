@@ -7,6 +7,8 @@ import { validateOriginHeader } from '@modelcontextprotocol/server';
 
 import { ArtifactRoutes, type ArtifactRouteService } from './artifact-routes.ts';
 import type { AgentApi } from './agent-api.ts';
+import { DevLogRoutes } from './dev-log-routes.ts';
+import type { DevLogService } from './dev-log-service.ts';
 import { EvalRoutes, type EvalRouteService } from './eval-routes.ts';
 import type { ProjectEventHub, ProjectEventSubscription } from './events.ts';
 import { HookPlaygroundRoutes, type HookPlaygroundRouteService } from './hook-playground-routes.ts';
@@ -44,7 +46,7 @@ export class ForegroundServerError extends Error {
 
 export interface ForegroundServerCloseFailure {
   readonly error: unknown;
-  readonly resource: 'agent-api' | 'coordinator' | 'hook-playground' | 'mcp-apps' | 'server';
+  readonly resource: 'agent-api' | 'coordinator' | 'hook-playground' | 'logs' | 'mcp-apps' | 'server';
 }
 
 export interface ForegroundServerStartFailure {
@@ -109,6 +111,8 @@ export interface ForegroundServerOptions {
   readonly artifacts?: ArtifactRouteService;
   readonly assets?: WorkbenchAssetSource;
   readonly coordinator: ForegroundCoordinator;
+  /** Bounded producer-wide diagnostics; routes expose only redacted snapshots. */
+  readonly logs?: DevLogService;
   /** Deterministic and native eval runs; the browser names discovered suites, never a path or command. */
   readonly evals?: EvalRouteService;
   readonly eventHub: ProjectEventHub;
@@ -418,6 +422,7 @@ export class ForegroundServer {
   readonly #artifactRoutes: ArtifactRoutes;
   readonly #assets: WorkbenchAssetSource | undefined;
   readonly #coordinator: ForegroundCoordinator;
+  readonly #devLogRoutes: DevLogRoutes;
   readonly #evalRoutes: EvalRoutes;
   readonly #eventHub: ProjectEventHub;
   readonly #hookPlaygroundRoutes: HookPlaygroundRoutes;
@@ -505,6 +510,10 @@ export class ForegroundServer {
     this.#evalRoutes = new EvalRoutes({
       authorize: (request) => this.#assertMutationSession(request),
       ...(options.evals === undefined ? {} : { service: options.evals }),
+    });
+    this.#devLogRoutes = new DevLogRoutes({
+      authorize: (request) => this.#assertMutationSession(request),
+      ...(options.logs === undefined ? {} : { service: options.logs }),
     });
     this.#server = createServer((request, response) => {
       void this.#handle(request, response).catch((error: unknown) => {
@@ -638,6 +647,11 @@ export class ForegroundServer {
     this.#playgroundRoutes.close();
     this.#artifactRoutes.close();
     this.#evalRoutes.close();
+    // Fence all authenticated log streams before the shared coordinator begins
+    // producer shutdown.  Observe an early rejection until the all-settled
+    // aggregation below can report it with its fixed resource label.
+    const releaseLogs = this.#devLogRoutes.close();
+    void releaseLogs.catch(() => undefined);
     const release = (async () => {
       // The Agent API owns admissions over every shared foreground service. It
       // must publish closure and drain active handlers before those services or
@@ -660,10 +674,11 @@ export class ForegroundServer {
         : Promise.resolve();
       // Cancelled hook simulations own wrapper processes and clones, so their
       // drain is released alongside the Runtime App lifecycle and awaited.
-      const [server, coordinator, hookPlayground] = await Promise.allSettled([
+      const [server, coordinator, hookPlayground, logs] = await Promise.allSettled([
         releaseServer,
         this.#coordinator.close(),
         releaseHookPlayground,
+        releaseLogs,
       ]);
       const failures: ForegroundServerCloseFailure[] = [];
       if (agentApi.status === 'rejected') failures.push(Object.freeze({ error: agentApi.reason, resource: 'agent-api' }));
@@ -675,6 +690,7 @@ export class ForegroundServer {
       if (hookPlayground.status === 'rejected') {
         failures.push(Object.freeze({ error: hookPlayground.reason, resource: 'hook-playground' }));
       }
+      if (logs.status === 'rejected') failures.push(Object.freeze({ error: logs.reason, resource: 'logs' }));
       return Object.freeze(failures);
     })();
     return release;
@@ -699,6 +715,7 @@ export class ForegroundServer {
     if (await this.#playgroundRoutes.handle(request, response)) return;
     if (await this.#artifactRoutes.handle(request, response)) return;
     if (await this.#evalRoutes.handle(request, response)) return;
+    if (await this.#devLogRoutes.handle(request, response)) return;
     const route = skillRoute(request.url);
     if (route !== undefined) return this.#serveSkill(route, response, method);
     if (pathname === '/api/project/status') {

@@ -33,6 +33,27 @@ it('lists authored suites and their cases without exposing absolute filesystem p
   }
 }, 120_000);
 
+it('keeps durable eval execution intact when a hostile optional Dev Log sink rejects evidence', async () => {
+  const project = await createProjectFixture();
+  try {
+    await seedEvalProject(project.root);
+    const hostile = Object.freeze({
+      [Symbol.toPrimitive]: () => { throw new Error('hostile Dev Log failure was stringified'); },
+    });
+    const evals = new EvalService({
+      logger: { log: () => { throw hostile; } },
+      projectRoot: project.root,
+      targets: ['portable'],
+    });
+
+    const result = await evals.run({ caseIds: ['reads-result'] });
+
+    expect(result.run.summary).toMatchObject({ pass: 1, trials: 1 });
+  } finally {
+    await removeProjectFixture(project.root);
+  }
+}, 120_000);
+
 it('persists complete evidence for every trial of a multi-trial run', async () => {
   const project = await createProjectFixture();
   try {

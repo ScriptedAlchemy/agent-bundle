@@ -27,6 +27,7 @@ import {
   type EvalTrialRecord,
 } from '../eval/run-store.ts';
 import type { EvalAssertionKind, EvalCase, EvalInvocation } from '../eval/types.ts';
+import type { DevLogKindFor, DevLogSink } from './dev-log-service.ts';
 
 export type EvalServiceErrorCode =
   | 'EVAL_HARNESS_UNSUPPORTED'
@@ -98,6 +99,8 @@ export interface EvalRunResult {
 export interface EvalServiceOptions {
   readonly configPath?: string;
   readonly mode?: string;
+  /** Optional non-throwing producer-wide diagnostics sink. */
+  readonly logger?: DevLogSink;
   /** Native CLI injection is deliberately limited to test runners and their child environment. */
   readonly native?: EvalServiceNativeOptions;
   /** Injectable only to make run identity deterministic in tests. */
@@ -210,6 +213,7 @@ const requestedTrials = (value: number | undefined): number | undefined => {
 export class EvalService {
   readonly #configPath: string | undefined;
   readonly #mode: string;
+  readonly #logger: DevLogSink | undefined;
   readonly #native: EvalServiceNativeOptions | undefined;
   readonly #now: () => Date;
   readonly #projectRoot: string;
@@ -219,6 +223,7 @@ export class EvalService {
   constructor(options: EvalServiceOptions) {
     this.#configPath = options.configPath;
     this.#mode = options.mode ?? 'production';
+    this.#logger = options.logger;
     this.#native = options.native;
     this.#now = options.now ?? (() => new Date());
     this.#projectRoot = resolve(options.projectRoot);
@@ -336,6 +341,11 @@ export class EvalService {
         kind: 'run.started',
         payload: { cases: new Set(planned.map((trial) => trial.evalCase.id)).size, harness: harness.name, trials: planned.length },
       });
+      this.#log('eval.run.started', 'info', 'Eval run started.', runId, {
+        cases: new Set(planned.map((trial) => trial.evalCase.id)).size,
+        harness: harness.name,
+        trials: planned.length,
+      });
       const completed: EvalTrialRecord[] = [];
       const wasCancelled = (): boolean => request.signal?.aborted === true;
       let cancelled = wasCancelled();
@@ -367,15 +377,31 @@ export class EvalService {
         });
       }
       const aggregates = aggregateEvalTrials(completed);
-      return Object.freeze({
+      const result = Object.freeze({
         aggregates,
         diagnostics: config.diagnostics,
         run: await writer.finish(summarizeEvalRun(aggregates)),
         trials: Object.freeze(completed),
       });
+      this.#log('eval.run.completed', 'info', 'Eval run completed.', runId, {
+        aggregates: result.aggregates,
+        trials: result.trials.length,
+      });
+      return result;
+    } catch (error) {
+      this.#log('eval.run.failed', 'error', 'Eval run failed.', runId, {
+        failure: 'unavailable',
+      });
+      throw error;
     } finally {
       await writer.close();
     }
+  }
+
+  #log(kind: DevLogKindFor<'eval'>, level: 'error' | 'info', summary: string, runId: string, details: unknown): void {
+    try {
+      this.#logger?.log({ context: { runId }, details, kind, level, producer: 'eval', summary });
+    } catch { /* Diagnostics cannot affect durable eval execution. */ }
   }
 
   async #config(): Promise<NormalizedEvalConfig> {

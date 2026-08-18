@@ -51,23 +51,6 @@ export interface PlaygroundView {
   readonly workspace: PlaygroundJsonValue | undefined;
 }
 
-export interface PlaygroundLogsViewOptions {
-  readonly epoch: PlaygroundEpochIdentity | undefined;
-  readonly events: readonly PlaygroundTraceEvent[];
-  readonly kind: string | undefined;
-  readonly session: PlaygroundSession | undefined;
-  readonly source: string | undefined;
-}
-
-export interface PlaygroundLogsView {
-  readonly kinds: readonly string[];
-  readonly rows: readonly PlaygroundTraceRow[];
-  readonly sources: readonly string[];
-  readonly state: PlaygroundState;
-  readonly summary: string;
-  readonly total: number;
-}
-
 /** A stream/replay collision means the server trace cannot be trusted as one ordered history. */
 export class PlaygroundTraceConflictError extends Error {
   readonly code = 'AB8043';
@@ -232,32 +215,5 @@ export const playgroundViewFor = (options: PlaygroundViewOptions): PlaygroundVie
     state,
     summary: summaryFor(state, options.epoch, session, rows.length),
     workspace: session?.outcome?.workspace,
-  });
-};
-
-const uniqueSorted = (values: readonly string[]): readonly string[] =>
-  Object.freeze([...new Set(values)].sort((left, right) => left.localeCompare(right)));
-
-/** The Logs page reads the same ordered trace, newest first, narrowed to one source and kind. */
-export const playgroundLogsViewFor = (options: PlaygroundLogsViewOptions): PlaygroundLogsView => {
-  const session = options.session;
-  const state = stateFor(options.epoch, session);
-  const boundEpoch = session?.identity.epoch ?? options.epoch;
-  const rows = boundEpoch === undefined || session === undefined
-    ? noTraceRows
-    : playgroundTraceRowsFor(boundEpoch, options.events);
-  const filtered = rows.filter((entry) =>
-    (options.source === undefined || entry.source === options.source) &&
-    (options.kind === undefined || entry.kind === options.kind));
-  const summary = session === undefined
-    ? summaryFor(state, options.epoch, session, 0)
-    : `Showing ${String(filtered.length)} of ${String(rows.length)} trace events for session ${session.id} on epoch ${session.identity.epoch.id}.`;
-  return Object.freeze({
-    kinds: rows.length === 0 ? noStrings : uniqueSorted(rows.map((entry) => entry.kind)),
-    rows: Object.freeze([...filtered].reverse()),
-    sources: rows.length === 0 ? noStrings : uniqueSorted(rows.map((entry) => entry.source)),
-    state,
-    summary,
-    total: rows.length,
   });
 };

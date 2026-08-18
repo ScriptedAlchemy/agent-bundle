@@ -1,7 +1,7 @@
 import { expect, it } from '@rstest/core';
 
 import type { PlaygroundSession, PlaygroundTraceEvent } from '../../agent-bundle/src/services/playground-service.ts';
-import { mergePlaygroundEvents, playgroundLogsViewFor, playgroundTraceRowsFor, playgroundViewFor } from '../src/playground/playground-model.ts';
+import { mergePlaygroundEvents, playgroundTraceRowsFor, playgroundViewFor } from '../src/playground/playground-model.ts';
 
 const epoch = { digest: 'sha256-epoch', id: 'epoch-1' };
 const identity = {
@@ -60,9 +60,4 @@ it('blocks promotion while a server-owned run remains open', () => {
   const view = playgroundViewFor({ epoch, events, exported: undefined, selectedRefs: ['events.jsonl#1'], session });
   expect(view.canPromote).toBe(false);
   expect(view.promotionBlocker).toContain('server-owned run');
-});
-
-it('keeps logs bound to the persisted session rather than the current epoch', () => {
-  const view = playgroundLogsViewFor({ epoch: { digest: 'new', id: 'epoch-2' }, events, kind: undefined, session, source: undefined });
-  expect(view.rows.map((row) => row.epochId)).toEqual(['epoch-1', 'epoch-1']);
 });

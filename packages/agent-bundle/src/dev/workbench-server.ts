@@ -6,6 +6,8 @@ import { createDefaultRegistry, type TargetRegistry } from '../adapters/registry
 import { AgentApi } from './agent-api.ts';
 import { ArtifactInspectionService } from './artifact-inspection-service.ts';
 import { DevCoordinator } from './coordinator.ts';
+import { DevLogService } from './dev-log-service.ts';
+import { attachProjectEventLogs, createMcpDevLogTraceSink, createProjectDevLogger } from './dev-log-producers.ts';
 import { EpochStore } from './epoch-store.ts';
 import { EvalService } from './eval-service.ts';
 import { ProjectEventHub } from './events.ts';
@@ -63,7 +65,7 @@ interface Closeable {
 
 export interface DevServerLifecycleCloseFailure {
   readonly error: unknown;
-  readonly resource: 'coordinator' | 'mcp-apps' | 'mcp-sessions' | 'playground' | 'runtime' | 'runtime-client-surfaces';
+  readonly resource: 'coordinator' | 'logs' | 'mcp-apps' | 'mcp-sessions' | 'playground' | 'runtime' | 'runtime-client-surfaces';
 }
 
 /** Reports session and coordinator cleanup failures without hiding either resource. */
@@ -390,6 +392,8 @@ export interface DevServerRuntimeLifecycleResources {
 
 export interface DevServerLifecycleOptions {
   readonly coordinator: Closeable;
+  readonly detachProjectLogs?: () => void;
+  readonly logs?: DevLogService;
   readonly mcpApps?: Closeable;
   readonly mcpSessions: Closeable;
   readonly playground?: Closeable;
@@ -399,6 +403,8 @@ export interface DevServerLifecycleOptions {
 /** Closes persistent MCP state alongside the coordinator, preserving all cleanup failures. */
 export const closeDevServerLifecycle = async ({
   coordinator,
+  detachProjectLogs,
+  logs,
   mcpApps,
   mcpSessions,
   playground,
@@ -406,6 +412,12 @@ export const closeDevServerLifecycle = async ({
 }: DevServerLifecycleOptions): Promise<void> => {
   // ForegroundServer owns the Agent API admission gate. This lifecycle owns
   // only the shared services that are released after foreground routing ends.
+  logs?.log({
+    kind: 'dev.shutdown.started',
+    level: 'info',
+    producer: 'project',
+    summary: 'Development workbench shutdown started.',
+  });
   const playgroundResults = playground === undefined ? [] : await Promise.allSettled([playground.close()]);
   const appResults = mcpApps === undefined ? [] : await Promise.allSettled([mcpApps.close()]);
   const clientSurfaceResults = runtimeResources?.clientSurfaces === undefined
@@ -416,7 +428,9 @@ export const closeDevServerLifecycle = async ({
     : await Promise.allSettled([runtimeResources.runtime.close()]);
   const sessionResults = await Promise.allSettled([mcpSessions.close()]);
   const coordinatorResults = await Promise.allSettled([coordinator.close()]);
-  const failures = [
+  try { detachProjectLogs?.(); }
+  catch { /* The subscription is observability-only and cannot hold shutdown. */ }
+  const producerFailures = [
     ...playgroundResults.flatMap((result): readonly DevServerLifecycleCloseFailure[] =>
       result.status === 'rejected'
         ? [Object.freeze({ error: result.reason, resource: 'playground' as const })]
@@ -443,9 +457,25 @@ export const closeDevServerLifecycle = async ({
         : [],
     ),
     ...coordinatorResults.flatMap((result): readonly DevServerLifecycleCloseFailure[] =>
-    result.status === 'rejected'
-      ? [Object.freeze({ error: result.reason, resource: 'coordinator' as const })]
-      : [],
+      result.status === 'rejected'
+        ? [Object.freeze({ error: result.reason, resource: 'coordinator' as const })]
+        : [],
+    ),
+  ];
+  logs?.log({
+    details: { failures: producerFailures.length },
+    kind: 'dev.shutdown.completed',
+    level: producerFailures.length === 0 ? 'info' : 'warning',
+    producer: 'project',
+    summary: producerFailures.length === 0 ? 'Development workbench shutdown completed.' : 'Development workbench shutdown completed with failures.',
+  });
+  const logsResults = logs === undefined ? [] : await Promise.allSettled([logs.close()]);
+  const failures = [
+    ...producerFailures,
+    ...logsResults.flatMap((result): readonly DevServerLifecycleCloseFailure[] =>
+      result.status === 'rejected'
+        ? [Object.freeze({ error: result.reason, resource: 'logs' as const })]
+        : [],
     ),
   ];
   if (failures.length > 0) throw new DevServerLifecycleCloseError(failures);
@@ -459,11 +489,15 @@ const withMcpSessionLifecycle = (
   clientSurfaces: RuntimeClientSurfaceBindings,
   status: () => ProjectStatus,
   playground: Closeable,
+  logs: DevLogService,
+  detachProjectLogs: () => void,
 ): ForegroundCoordinator => Object.freeze({
   close: () => {
     clientSurfaces.beginClose();
     return closeDevServerLifecycle({
       coordinator,
+      detachProjectLogs,
+      logs,
       mcpApps: mcpApps(),
       mcpSessions,
       playground,
@@ -499,8 +533,11 @@ export const startDevServer = async (options: StartDevServerOptions): Promise<De
   const openBrowser = options.openBrowser ?? openInBrowser;
   const eventHub = new ProjectEventHub();
   const epochStore = new EpochStore({ projectRoot: root });
+  const logs = new DevLogService({ projectRoot: root });
+  const detachProjectLogs = attachProjectEventLogs(logs, eventHub);
   const projectService = new ProjectService({
     includeDevRuntime: true,
+    logger: createProjectDevLogger(logs),
     mode: 'development',
     outputRoots: ['dist', '.agent-bundle/runtime', '.agent-bundle/playground'],
     registry,
@@ -660,13 +697,19 @@ export const startDevServer = async (options: StartDevServerOptions): Promise<De
     ...coordinator.status(),
     ...(runtimeTopology === undefined ? {} : { runtime: runtimeTopology }),
   });
-  const mcpSessions = new McpSessionService({ epochStore, projectRoot: root, registry });
-  const hookPlayground = new HookPlaygroundService({ epochStore, registry });
+  const mcpSessions = new McpSessionService({
+    epochStore,
+    projectRoot: root,
+    registry,
+    traceSink: createMcpDevLogTraceSink(logs),
+  });
+  const hookPlayground = new HookPlaygroundService({ epochStore, logger: logs, registry });
   const skillDocuments = new SkillDocumentService({ epochStore, projectService, root });
   const artifacts = new ArtifactInspectionService(epochStore, registry);
-  const evals = new EvalService({ projectRoot: root, registry });
+  const evals = new EvalService({ logger: logs, projectRoot: root, registry });
   // The resolved root is the project's stable identity: a store copied elsewhere must not reopen.
   const trace = new PlaygroundService({
+    logger: logs,
     projectId: root,
     projectRoot: root,
     storageRoot: join(root, '.agent-bundle', 'playground'),
@@ -710,10 +753,13 @@ export const startDevServer = async (options: StartDevServerOptions): Promise<De
       clientSurfaces,
       status,
       playground,
+      logs,
+      detachProjectLogs,
     ),
     evals,
     eventHub,
     hookPlayground,
+    logs,
     mcpAppPreviews: appPreviews,
     mcpSessions,
     playground,

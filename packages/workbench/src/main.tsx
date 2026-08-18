@@ -40,7 +40,8 @@ import {
   type RuntimeMcpHandoff,
 } from './mcp/runtime-mcp-handoff.ts';
 import { mcpProtocolTraceDownload, type McpDownload } from './mcp/mcp-protocol-trace.ts';
-import { LogsPage } from './playground/logs-page.tsx';
+import { LogClient } from './logs/log-client.ts';
+import { LogsPage } from './logs/logs-page.tsx';
 import { PlaygroundClient } from './playground/playground-client.ts';
 import { PlaygroundPage } from './playground/playground-page.tsx';
 import { overviewFor } from './overview-model.ts';
@@ -610,14 +611,12 @@ const PlaygroundScreen = ({ connectionError, onNavigate, onRunChange, playground
   />
 </WorkbenchScreen>;
 
-const LogsScreen = ({ connectionError, onNavigate, playgroundClient, sessionId, status }: {
+const LogsScreen = ({ connectionError, logClient, onNavigate }: {
   readonly connectionError?: string;
+  readonly logClient: LogClient;
   readonly onNavigate: (page: WorkbenchPage) => void;
-  readonly playgroundClient: PlaygroundClient;
-  readonly sessionId?: string;
-  readonly status: ProjectStatus;
 }) => <WorkbenchScreen connectionError={connectionError} onNavigate={onNavigate} page="logs">
-  <LogsPage client={playgroundClient} epoch={playgroundEpochFor(status)} sessionId={sessionId} />
+  <LogsPage client={logClient} />
 </WorkbenchScreen>;
 
 const HooksScreen = ({ connectionError, hookClient, onNavigate, status }: {
@@ -815,6 +814,7 @@ const Workbench = () => {
   const comparisonClient = useRef<ComparisonClient | undefined>(undefined);
   const evalClient = useRef<EvalClient | undefined>(undefined);
   const hookClient = useRef<HookClient | undefined>(undefined);
+  const logClient = useRef<LogClient | undefined>(undefined);
   const playgroundClient = useRef<PlaygroundClient | undefined>(undefined);
   const [connectionError, setConnectionError] = useState<string>();
   const [error, setError] = useState<string>();
@@ -852,6 +852,7 @@ const Workbench = () => {
   if (comparisonClient.current === undefined) comparisonClient.current = new ComparisonClient({ foreground: foreground.current! });
   if (evalClient.current === undefined) evalClient.current = new EvalClient({ foreground: foreground.current! });
   if (hookClient.current === undefined) hookClient.current = new HookClient({ foreground: foreground.current! });
+  if (logClient.current === undefined) logClient.current = new LogClient({ foreground: foreground.current! });
   if (playgroundClient.current === undefined) playgroundClient.current = new PlaygroundClient({ foreground: foreground.current! });
 
   const runtimeAvailable = runtimeCapability === 'available';
@@ -1281,10 +1282,8 @@ const Workbench = () => {
     if (page === 'logs') {
       return <LogsScreen
         connectionError={connectionError}
+        logClient={logClient.current}
         onNavigate={navigate}
-        playgroundClient={playgroundClient.current}
-        sessionId={playgroundRun?.session.id}
-        status={status}
       />;
     }
     if (page === 'evals') {
