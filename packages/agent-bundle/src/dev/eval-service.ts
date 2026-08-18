@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { constants, type Stats } from 'node:fs';
-import { lstat, open, realpath, rm, type FileHandle } from 'node:fs/promises';
+import { lstat, open, realpath, rm } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { Readable } from 'node:stream';
 
@@ -120,6 +120,13 @@ export interface EvalArtifactReader {
   readonly size: number;
   close(): Promise<void>;
   read(start?: number, end?: number): Readable;
+}
+
+/** A replay snapshot followed by durable, ordered events published after its cursor. */
+export interface EvalEventSubscription {
+  readonly replay: EvalRunEventsReplay;
+  activate(listener: (event: EvalRunEvent) => void): void;
+  close(): void;
 }
 
 export interface EvalServiceOptions {
@@ -248,6 +255,51 @@ const requestedAfterSequence = (value: number): number => {
   return value;
 };
 
+class PendingEvalEventSubscription implements EvalEventSubscription {
+  #closed = false;
+  #listener: ((event: EvalRunEvent) => void) | undefined;
+  readonly #onClose: () => void;
+  #queued: EvalRunEvent[] = [];
+  #replay: EvalRunEventsReplay | undefined;
+
+  constructor(onClose: () => void) {
+    this.#onClose = onClose;
+  }
+
+  get replay(): EvalRunEventsReplay {
+    if (this.#replay === undefined) throw new Error('Eval event subscription has not finished replaying.');
+    return this.#replay;
+  }
+
+  bind(replay: EvalRunEventsReplay): void {
+    this.#replay = replay;
+    this.#queued = this.#queued.filter((event) => event.sequence > replay.cursor.afterSequence);
+  }
+
+  publish(event: EvalRunEvent): void {
+    if (this.#closed) return;
+    const listener = this.#listener;
+    if (listener === undefined) this.#queued.push(event);
+    else listener(event);
+  }
+
+  activate(listener: (event: EvalRunEvent) => void): void {
+    if (this.#closed || this.#listener !== undefined) return;
+    this.#listener = listener;
+    const queued = this.#queued;
+    this.#queued = [];
+    for (const event of queued) listener(event);
+  }
+
+  close(): void {
+    if (this.#closed) return;
+    this.#closed = true;
+    this.#listener = undefined;
+    this.#queued = [];
+    this.#onClose();
+  }
+}
+
 const isWithin = (root: string, candidate: string): boolean => {
   const path = relative(root, candidate);
   return path.length === 0 || (!path.startsWith(`..${sep}`) && path !== '..' && !isAbsolute(path));
@@ -290,14 +342,13 @@ class OpenedEvalArtifact implements EvalArtifactReader {
   readonly filename: string;
   readonly ref: string;
   readonly size: number;
-  readonly #file: FileHandle;
+  readonly #bytes: Buffer;
   readonly #onClose: () => void;
-  readonly #streams = new Set<Readable>();
   #closePromise: Promise<void> | undefined;
 
   constructor(options: {
+    readonly bytes: Buffer;
     readonly digest: string;
-    readonly file: FileHandle;
     readonly filename: string;
     readonly onClose: () => void;
     readonly ref: string;
@@ -305,7 +356,7 @@ class OpenedEvalArtifact implements EvalArtifactReader {
   }) {
     this.digest = options.digest;
     this.filename = options.filename;
-    this.#file = options.file;
+    this.#bytes = options.bytes;
     this.#onClose = options.onClose;
     this.ref = options.ref;
     this.size = options.size;
@@ -317,35 +368,13 @@ class OpenedEvalArtifact implements EvalArtifactReader {
     if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || end < start || end >= this.size) {
       throw new RangeError('Raw evidence read range is not valid.');
     }
-    const stream = this.#file.createReadStream({ autoClose: false, end, start });
-    const release = (): void => {
-      this.#streams.delete(stream);
-      stream.off('close', release);
-      stream.off('end', release);
-      stream.off('error', release);
-    };
-    this.#streams.add(stream);
-    stream.once('close', release);
-    stream.once('end', release);
-    stream.once('error', release);
-    return stream;
+    return Readable.from([Buffer.from(this.#bytes.subarray(start, end + 1))]);
   }
 
   close(): Promise<void> {
     if (this.#closePromise !== undefined) return this.#closePromise;
     this.#closePromise = Promise.resolve().then(async () => {
-      const streams = [...this.#streams];
-      this.#streams.clear();
-      const results = await Promise.allSettled(streams.map(async (stream) => {
-        stream.destroy();
-        if (!stream.destroyed) await new Promise<void>((resolvePromise) => stream.once('close', resolvePromise));
-      }));
-      const close = await Promise.allSettled([this.#file.close()]);
       this.#onClose();
-      const failures = [...results, ...close].filter((result): result is PromiseRejectedResult => result.status === 'rejected');
-      if (failures.length > 0) {
-        throw new AggregateError(failures.map((failure) => failure.reason), 'Raw evidence reader could not close.');
-      }
     });
     return this.#closePromise;
   }
@@ -366,6 +395,7 @@ export class EvalService {
   readonly #projectRoot: string;
   readonly #registry: TargetRegistry;
   readonly #targets: readonly string[] | undefined;
+  readonly #eventSubscriptions = new Map<string, Set<PendingEvalEventSubscription>>();
   #closePromise: Promise<void> | undefined;
 
   constructor(options: EvalServiceOptions) {
@@ -431,6 +461,27 @@ export class EvalService {
       events: Object.freeze(persisted.events.filter((event) => event.sequence > after)),
       ...(persisted.incompleteTrailingRecord === undefined ? {} : { incompleteTrailingRecord: true as const }),
     });
+  }
+
+  async subscribeEvents(runId: string, afterSequence: number): Promise<EvalEventSubscription> {
+    if (!safeRunId.test(runId)) {
+      throw serviceError('EVAL_RUN_NOT_FOUND', `Eval run ${JSON.stringify(runId)} is not a run identifier.`);
+    }
+    const after = requestedAfterSequence(afterSequence);
+    const subscriptions = this.#eventSubscriptions.get(runId) ?? new Set<PendingEvalEventSubscription>();
+    const subscription = new PendingEvalEventSubscription(() => {
+      subscriptions.delete(subscription);
+      if (subscriptions.size === 0) this.#eventSubscriptions.delete(runId);
+    });
+    subscriptions.add(subscription);
+    this.#eventSubscriptions.set(runId, subscriptions);
+    try {
+      subscription.bind(await this.events(runId, after));
+      return subscription;
+    } catch (error) {
+      subscription.close();
+      throw error;
+    }
   }
 
   async openArtifact(runId: string, artifactRef: string): Promise<EvalArtifactReader> {
@@ -550,7 +601,7 @@ export class EvalService {
       runsDir: config.runsDir,
     });
     try {
-      await writer.appendEvent({
+      await this.#appendEvent(writer, runId, {
         kind: 'run.started',
         payload: { cases: new Set(planned.map((trial) => trial.evalCase.id)).size, harness: harness.name, trials: planned.length },
       });
@@ -577,15 +628,20 @@ export class EvalService {
           writer,
         });
         completed.push(trial);
-        await writer.appendEvent({
+        await this.#appendEvent(writer, runId, {
           kind: 'trial.completed',
           payload: { caseId: trial.caseId, id: trial.id, outcome: trial.outcome },
         });
         if (wasCancelled()) cancelled = true;
       }
       if (cancelled || completed.length !== planned.length) {
-        await writer.appendEvent({
+        await this.#appendEvent(writer, runId, {
           kind: 'run.cancelled',
+          payload: { completed: completed.length, planned: planned.length },
+        });
+      } else {
+        await this.#appendEvent(writer, runId, {
+          kind: 'run.completed',
           payload: { completed: completed.length, planned: planned.length },
         });
       }
@@ -602,6 +658,7 @@ export class EvalService {
       });
       return result;
     } catch (error) {
+      await this.#appendEvent(writer, runId, { kind: 'run.failed', payload: {} }).catch(() => undefined);
       this.#log('eval.run.failed', 'error', 'Eval run failed.', runId, {
         failure: 'unavailable',
       });
@@ -615,6 +672,22 @@ export class EvalService {
     try {
       this.#logger?.log({ context: { runId }, details, kind, level, producer: 'eval', summary });
     } catch { /* Diagnostics cannot affect durable eval execution. */ }
+  }
+
+  async #appendEvent(
+    writer: Awaited<ReturnType<typeof createEvalRun>>,
+    runId: string,
+    event: { readonly kind: string; readonly payload: unknown },
+  ): Promise<EvalRunEvent> {
+    const persisted = await writer.appendEvent(event);
+    const subscriptions = this.#eventSubscriptions.get(runId);
+    if (subscriptions !== undefined) {
+      for (const subscription of [...subscriptions]) {
+        try { subscription.publish(persisted); }
+        catch { subscription.close(); }
+      }
+    }
+    return persisted;
   }
 
   async #config(): Promise<NormalizedEvalConfig> {
@@ -757,10 +830,12 @@ export class EvalService {
       if (!sameFile(descriptor, final) || final.size !== descriptor.size || bytesRead !== descriptor.size || bytesRead > maximumArtifactBytes) {
         throw new Error('Raw evidence file changed while hashing.');
       }
-      const digest = createHash('sha256').update(bytes.subarray(0, bytesRead)).digest('hex');
+      const snapshot = Buffer.from(bytes.subarray(0, bytesRead));
+      const digest = createHash('sha256').update(snapshot).digest('hex');
+      await file.close();
       const reader = new OpenedEvalArtifact({
+        bytes: snapshot,
         digest,
-        file,
         filename: basename(ref),
         onClose: () => this.#artifactReaders.delete(reader),
         ref,

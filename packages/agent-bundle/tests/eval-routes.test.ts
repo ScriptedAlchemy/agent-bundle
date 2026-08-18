@@ -13,7 +13,7 @@ import {
   type EvalSuiteListing,
 } from '../src/dev/eval-service.ts';
 import type { EvalComparison } from '../src/eval/compare.ts';
-import type { EvalRunRecord, EvalTrialRecord } from '../src/eval/run-store.ts';
+import type { EvalRunEvent, EvalRunRecord, EvalTrialRecord } from '../src/eval/run-store.ts';
 
 interface StartedRoutes {
   readonly close: () => Promise<void>;
@@ -124,6 +124,11 @@ const comparisonRecord = Object.freeze({
 class RecordingService implements EvalRouteService {
   readonly calls: unknown[] = [];
   artifactCloseCalls = 0;
+  artifactCloseFailure: unknown;
+  artifactOpening = false;
+  artifactOpeningStarted: (() => void) | undefined;
+  artifactOpeningRelease: (() => void) | undefined;
+  artifactReadRelease: (() => void) | undefined;
   failure: unknown;
   holdArtifact = false;
   /** Holds a run open until its request signal aborts, so cancellation is observable. */
@@ -157,14 +162,24 @@ class RecordingService implements EvalRouteService {
   async openArtifact(runId: string, ref: string): Promise<EvalArtifactReader> {
     this.calls.push({ kind: 'artifact', ref, runId });
     if (this.failure !== undefined) throw this.failure;
+    if (this.artifactOpening) {
+      this.artifactOpeningStarted?.();
+      await new Promise<void>((resolvePromise) => { this.artifactOpeningRelease = resolvePromise; });
+    }
     const bytes = Buffer.from('{"evidence":true}\n');
     return Object.freeze({
-      close: async () => { this.artifactCloseCalls += 1; },
+      close: async () => {
+        this.artifactCloseCalls += 1;
+        if (this.artifactCloseFailure !== undefined) throw this.artifactCloseFailure;
+      },
       digest: 'f'.repeat(64),
       filename: 'evidence.json',
-      read: (start = 0, end = bytes.length - 1) => this.holdArtifact
-        ? new Readable({ read: () => undefined })
-        : Readable.from([bytes.subarray(start, end + 1)]),
+      read: (start = 0, end = bytes.length - 1) => {
+        if (!this.holdArtifact) return Readable.from([bytes.subarray(start, end + 1)]);
+        const stream = new Readable({ read: () => undefined });
+        this.artifactReadRelease = () => stream.push(null);
+        return stream;
+      },
       ref,
       size: bytes.length,
     });
@@ -174,6 +189,17 @@ class RecordingService implements EvalRouteService {
     this.calls.push({ kind: 'read', runId });
     if (this.failure !== undefined) throw this.failure;
     return runResult;
+  }
+
+  async subscribeEvents(runId: string, afterSequence: number) {
+    const replay = await this.events(runId, afterSequence);
+    return Object.freeze({
+      activate: (listener: (event: EvalRunEvent) => void): void => {
+        listener(Object.freeze({ kind: 'run.completed', payload: Object.freeze({}), schemaVersion: 1 as const, sequence: 3, timestamp: '2026-08-17T00:00:02.000Z' }));
+      },
+      close: (): void => undefined,
+      replay,
+    });
   }
 
   async run(request: EvalRunRequest): Promise<EvalRunResult> {
@@ -293,6 +319,7 @@ it('writes a bounded NDJSON replay from the requested eval event cursor', async 
     expect(stream.headers.get('content-type')).toBe('application/x-ndjson; charset=utf-8');
     await expect(stream.text()).resolves.toBe([
       JSON.stringify({ kind: 'trial.completed', payload: {}, schemaVersion: 1, sequence: 2, timestamp: '2026-08-17T00:00:01.000Z' }),
+      JSON.stringify({ kind: 'run.completed', payload: {}, schemaVersion: 1, sequence: 3, timestamp: '2026-08-17T00:00:02.000Z' }),
       '',
     ].join('\n'));
     expect(service.calls).toEqual([{ afterSequence: 1, kind: 'events', runId: 'run-a' }]);
@@ -364,6 +391,79 @@ it('drains an active artifact reader through one reentrant route close promise',
     expect(service.artifactCloseCalls).toBe(1);
   } finally {
     await started.close();
+  }
+});
+
+it('does not let route close settle while an artifact reader is still being admitted', async () => {
+  const service = new RecordingService();
+  service.artifactOpening = true;
+  service.holdArtifact = true;
+  const opening = new Promise<void>((resolvePromise) => { service.artifactOpeningStarted = resolvePromise; });
+  const started = await startRoutes(service);
+  let response: Response | undefined;
+  try {
+    const ref = 'artifacts/portable-1/evidence.json';
+    const opaque = Buffer.from(ref).toString('base64url');
+    const pending = fetch(`${started.url}/api/evals/runs/run-a/artifacts/${opaque}`, { headers });
+    await opening;
+    const closing = started.routes.close();
+    service.artifactOpeningRelease?.();
+    await closing;
+    response = await pending;
+
+    expect(service.artifactCloseCalls).toBe(1);
+    expect(response.status).toBe(503);
+  } finally {
+    service.artifactReadRelease?.();
+    await response?.text().catch(() => undefined);
+    await started.close();
+  }
+});
+
+it('closes an artifact resolved after its peer disconnects during admission', async () => {
+  const service = new RecordingService();
+  service.artifactOpening = true;
+  const opening = new Promise<void>((resolvePromise) => { service.artifactOpeningStarted = resolvePromise; });
+  const started = await startRoutes(service);
+  try {
+    const controller = new AbortController();
+    const ref = 'artifacts/portable-1/evidence.json';
+    const opaque = Buffer.from(ref).toString('base64url');
+    const pending = fetch(`${started.url}/api/evals/runs/run-a/artifacts/${opaque}`, { headers, signal: controller.signal });
+    await opening;
+    controller.abort();
+    service.artifactOpeningRelease?.();
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    await new Promise<void>((resolvePromise) => setTimeout(resolvePromise, 20));
+
+    expect(service.artifactCloseCalls).toBe(1);
+    await expect(started.routes.close()).resolves.toBeUndefined();
+  } finally {
+    await started.close().catch(() => undefined);
+  }
+});
+
+it('tracks a peer-closed artifact reader failure for the stable route close aggregate', async () => {
+  const service = new RecordingService();
+  service.artifactCloseFailure = new Error('reader close failed');
+  service.holdArtifact = true;
+  const started = await startRoutes(service);
+  const unhandled: unknown[] = [];
+  const observe = (reason: unknown): void => { unhandled.push(reason); };
+  process.on('unhandledRejection', observe);
+  try {
+    const ref = 'artifacts/portable-1/evidence.json';
+    const opaque = Buffer.from(ref).toString('base64url');
+    const response = await fetch(`${started.url}/api/evals/runs/run-a/artifacts/${opaque}`, { headers });
+    await response.body?.cancel();
+    await new Promise<void>((resolvePromise) => setTimeout(resolvePromise, 20));
+
+    await expect(started.routes.close()).rejects.toThrow('Eval route readers could not close.');
+    expect(service.artifactCloseCalls).toBe(1);
+    expect(unhandled).toEqual([]);
+  } finally {
+    process.off('unhandledRejection', observe);
+    await started.close().catch(() => undefined);
   }
 });
 

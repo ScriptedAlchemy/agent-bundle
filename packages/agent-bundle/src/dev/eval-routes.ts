@@ -50,6 +50,11 @@ export interface EvalRouteService {
   openArtifact(runId: string, artifactRef: string): Promise<EvalArtifactReader>;
   read(runId: string): Promise<EvalRunResult>;
   run(request: EvalRunRequest): Promise<EvalRunResult>;
+  subscribeEvents(runId: string, afterSequence: number): Promise<{
+    readonly replay: EvalRunEventsReplay;
+    activate(listener: (event: EvalRunEventsReplay['events'][number]) => void): void;
+    close(): void;
+  }>;
   suites(): Promise<EvalSuiteListing>;
 }
 
@@ -123,28 +128,8 @@ const responseJson = (response: ServerResponse, body: unknown): void => {
   response.end(JSON.stringify(body));
 };
 
-const responseNdjson = (response: ServerResponse, replay: EvalRunEventsReplay): void => {
-  let size = 0;
-  const frames: string[] = [];
-  for (const event of replay.events) {
-    const frame = `${JSON.stringify(event)}\n`;
-    size += Buffer.byteLength(frame, 'utf8');
-    if (size > streamByteLimit) {
-      responseDiagnostic(response, diagnostic('AB8088', 'Eval event replay exceeds the stream limit.', 413));
-      return;
-    }
-    frames.push(frame);
-  }
-  if (response.headersSent || response.writableEnded) {
-    response.destroy();
-    return;
-  }
-  response.writeHead(200, {
-    'cache-control': 'no-store',
-    'content-type': 'application/x-ndjson; charset=utf-8',
-  });
-  response.end(frames.join(''));
-};
+const terminalEvent = (event: EvalRunEventsReplay['events'][number]): boolean =>
+  event.kind === 'run.cancelled' || event.kind === 'run.completed' || event.kind === 'run.failed';
 
 const singleHeader = (value: string | readonly string[] | undefined): string | undefined =>
   typeof value === 'string' ? value : undefined;
@@ -377,7 +362,10 @@ const comparisonQuery = (
  */
 export class EvalRoutes {
   readonly #authorize: (request: IncomingMessage) => void;
+  readonly #artifactAdmissions = new Set<Promise<void>>();
+  readonly #closeFailures = new Set<unknown>();
   readonly #closeReaders = new Set<() => Promise<void>>();
+  readonly #readerCloses = new Set<Promise<void>>();
   readonly #running = new Set<AbortController>();
   readonly #service: EvalRouteService | undefined;
   #closePromise: Promise<void> | undefined;
@@ -392,11 +380,16 @@ export class EvalRoutes {
     for (const controller of this.#running) controller.abort();
     this.#running.clear();
     this.#closePromise = Promise.resolve().then(async () => {
+      await Promise.allSettled([...this.#artifactAdmissions]);
       const results = await Promise.allSettled([...this.#closeReaders].map(async (close) => close()));
+      await Promise.allSettled([...this.#readerCloses]);
       this.#closeReaders.clear();
-      const failures = results.filter((result): result is PromiseRejectedResult => result.status === 'rejected');
+      const failures = [
+        ...results.filter((result): result is PromiseRejectedResult => result.status === 'rejected').map((result) => result.reason),
+        ...this.#closeFailures,
+      ];
       if (failures.length > 0) {
-        throw new AggregateError(failures.map((failure) => failure.reason), 'Eval route readers could not close.');
+        throw new AggregateError(failures, 'Eval route readers could not close.');
       }
     });
     return this.#closePromise;
@@ -444,7 +437,7 @@ export class EvalRoutes {
       return responseJson(response, { replay: await service.events(parsed.runId, eventCursor(request.url)) });
     }
     if (parsed.kind === 'stream') {
-      return responseNdjson(response, await service.events(parsed.runId, eventCursor(request.url)));
+      return this.#stream(response, service, parsed.runId, eventCursor(request.url));
     }
     if (parsed.kind === 'artifact') {
       return this.#artifact(request, response, service, parsed);
@@ -477,6 +470,99 @@ export class EvalRoutes {
     return requestError(diagnostic('AB8071', 'Eval routes are not available.', status));
   }
 
+  #beginArtifactAdmission(): () => void {
+    let settle!: () => void;
+    const admission = new Promise<void>((resolvePromise) => { settle = resolvePromise; });
+    this.#artifactAdmissions.add(admission);
+    return (): void => {
+      this.#artifactAdmissions.delete(admission);
+      settle();
+    };
+  }
+
+  #trackReaderClose(close: Promise<void>): Promise<void> {
+    this.#readerCloses.add(close);
+    void close.then(
+      () => { this.#readerCloses.delete(close); },
+      (error: unknown) => {
+        this.#readerCloses.delete(close);
+        this.#closeFailures.add(error);
+      },
+    );
+    return close;
+  }
+
+  async #stream(
+    response: ServerResponse,
+    service: EvalRouteService,
+    runId: string,
+    afterSequence: number,
+  ): Promise<void> {
+    const subscription = await service.subscribeEvents(runId, afterSequence);
+    let buffered = 0;
+    let closed = false;
+    let closePromise: Promise<void> | undefined;
+    let terminalQueued = false;
+    const frames: string[] = [];
+    const close = (abortResponse = false): Promise<void> => {
+      if (closePromise !== undefined) return closePromise;
+      closed = true;
+      this.#closeReaders.delete(closeFromShutdown);
+      response.off('close', closeFromPeer);
+      subscription.close();
+      if (abortResponse && !response.destroyed && !response.writableEnded) response.destroy();
+      closePromise = Promise.resolve();
+      return closePromise;
+    };
+    const closeFromPeer = (): void => { void close().catch(() => undefined); };
+    const closeFromShutdown = (): Promise<void> => close(true);
+    const flush = (): void => {
+      if (closed || response.destroyed || response.writableEnded) return;
+      while (frames.length > 0) {
+        const frame = frames.shift()!;
+        buffered -= Buffer.byteLength(frame, 'utf8');
+        if (!response.write(frame)) {
+          response.once('drain', flush);
+          return;
+        }
+      }
+      if (terminalQueued) {
+        response.end();
+        void close().catch(() => undefined);
+      }
+    };
+    const enqueue = (event: EvalRunEventsReplay['events'][number]): void => {
+      if (closed || terminalQueued) return;
+      const frame = `${JSON.stringify(event)}\n`;
+      const size = Buffer.byteLength(frame, 'utf8');
+      if (buffered + size > streamByteLimit) {
+        void close(true).catch(() => undefined);
+        return;
+      }
+      frames.push(frame);
+      buffered += size;
+      terminalQueued = terminalEvent(event);
+      flush();
+    };
+    const replayBytes = subscription.replay.events.reduce((total, event) =>
+      total + Buffer.byteLength(`${JSON.stringify(event)}\n`, 'utf8'), 0);
+    if (replayBytes > streamByteLimit) {
+      subscription.close();
+      responseDiagnostic(response, diagnostic('AB8088', 'Eval event replay exceeds the stream limit.', 413));
+      return;
+    }
+    response.writeHead(200, {
+      'cache-control': 'no-store',
+      'content-type': 'application/x-ndjson; charset=utf-8',
+    });
+    this.#closeReaders.add(closeFromShutdown);
+    response.once('close', closeFromPeer);
+    for (const event of subscription.replay.events) enqueue(event);
+    if (closed || terminalQueued) return;
+    subscription.activate(enqueue);
+    flush();
+  }
+
   async #artifact(
     request: IncomingMessage,
     response: ServerResponse,
@@ -488,55 +574,69 @@ export class EvalRoutes {
       responseDiagnostic(response, diagnostic('AB8007', 'Route does not accept this method.', 405));
       return;
     }
-    const artifact = await service.openArtifact(route.runId, route.artifactRef);
-    const range = byteRange(request.headers.range, artifact.size);
-    if (range === null) {
-      try {
-        response.writeHead(416, {
-          'accept-ranges': 'bytes',
-          'cache-control': 'no-store',
-          'content-range': `bytes */${artifact.size}`,
-          'x-content-type-options': 'nosniff',
-        });
-        response.end();
-      } finally {
-        await artifact.close();
-      }
-      return;
-    }
-    response.writeHead(range === undefined ? 200 : 206, artifactHeaders(artifact, range));
-    if (method === 'HEAD') {
-      try { response.end(); }
-      finally { await artifact.close(); }
-      return;
-    }
-    response.flushHeaders();
-    let closePromise: Promise<void> | undefined;
-    let stream: Readable | undefined;
-    const close = (abortResponse = false): Promise<void> => {
-      if (closePromise !== undefined) return closePromise;
-      this.#closeReaders.delete(closeFromShutdown);
-      response.off('close', closeFromPeer);
-      stream?.destroy();
-      if (abortResponse && !response.destroyed && !response.writableEnded) response.destroy();
-      closePromise = artifact.close();
-      return closePromise;
-    };
-    const closeFromPeer = (): void => { void close(); };
-    const closeFromShutdown = (): Promise<void> => close(true);
+    const finishAdmission = this.#beginArtifactAdmission();
+    let responseClosed = response.destroyed || response.writableEnded;
+    const markResponseClosed = (): void => { responseClosed = true; };
+    response.once('close', markResponseClosed);
     try {
-      stream = range === undefined ? artifact.read() : artifact.read(range.start, range.end);
-      this.#closeReaders.add(closeFromShutdown);
-      response.once('close', closeFromPeer);
-      stream.once('error', () => {
-        void close(true);
-        response.destroy();
-      });
-      stream.once('end', closeFromPeer);
-      stream.pipe(response);
-    } catch (error) {
-      await close();
-      throw error;
+      const artifact = await service.openArtifact(route.runId, route.artifactRef);
+      if (responseClosed || this.#closePromise !== undefined) {
+        await artifact.close();
+        throw this.#unavailable(503);
+      }
+      const range = byteRange(request.headers.range, artifact.size);
+      if (range === null) {
+        try {
+          response.writeHead(416, {
+            'accept-ranges': 'bytes',
+            'cache-control': 'no-store',
+            'content-range': `bytes */${artifact.size}`,
+            'x-content-type-options': 'nosniff',
+          });
+          response.end();
+        } finally {
+          await artifact.close();
+        }
+        return;
+      }
+      response.writeHead(range === undefined ? 200 : 206, artifactHeaders(artifact, range));
+      if (method === 'HEAD') {
+        try { response.end(); }
+        finally { await artifact.close(); }
+        return;
+      }
+      response.flushHeaders();
+      let closePromise: Promise<void> | undefined;
+      let stream: Readable | undefined;
+      const close = (abortResponse = false): Promise<void> => {
+        if (closePromise !== undefined) return closePromise;
+        this.#closeReaders.delete(closeFromShutdown);
+        response.off('close', closeFromPeer);
+        response.off('close', markResponseClosed);
+        stream?.destroy();
+        if (abortResponse && !response.destroyed && !response.writableEnded) response.destroy();
+        closePromise = this.#trackReaderClose(artifact.close());
+        return closePromise;
+      };
+      const closeFromPeer = (): void => { void close().catch(() => undefined); };
+      const closeFromShutdown = (): Promise<void> => close(true);
+      try {
+        stream = range === undefined ? artifact.read() : artifact.read(range.start, range.end);
+        this.#closeReaders.add(closeFromShutdown);
+        response.once('close', closeFromPeer);
+        stream.once('error', () => {
+          void close(true).catch(() => undefined);
+          response.destroy();
+        });
+        stream.once('end', closeFromPeer);
+        stream.pipe(response);
+      } catch (error) {
+        await close();
+        throw error;
+      }
+    } finally {
+      response.off('close', markResponseClosed);
+      finishAdmission();
     }
   }
 }
