@@ -1,14 +1,21 @@
 import React, { useEffect, useRef, useState } from 'react';
 
 import type { EvalArtifact, EvalClient, EvalHarness, EvalRunAdmission, EvalRunStart } from './eval-client.ts';
-import type { EvalRunEventsReplay, EvalRunResult, EvalSuiteListing } from '../../../agent-bundle/src/dev/eval-service.ts';
+import type { EvalRunResult, EvalSuiteListing } from '../../../agent-bundle/src/dev/eval-service.ts';
 import type { EvalRunEvent, EvalRunRecord } from '../../../agent-bundle/src/eval/run-store.ts';
 import {
+  admitEvalRunLifecycle,
+  createEvalRunLifecycle,
+  evalRunLifecycleToken,
   evalOutcomeLabel,
   mergeEvalEvents,
+  replaceEvalRunLifecycle,
   evalRunSelectionFor,
   evalRunViewFor,
+  updateEvalRunLifecycle,
   type EvalCaseRow,
+  type EvalRunLifecycle,
+  type EvalRunLifecycleToken,
   type EvalRunView,
   type EvalTrialRow,
 } from './evals-model.ts';
@@ -16,6 +23,7 @@ import './evals-page.css';
 
 export interface EvalRunControlsProps {
   readonly busy: boolean;
+  readonly cancelling?: boolean;
   readonly harness: EvalHarness;
   readonly onCancelRun: () => void;
   readonly onHarnessChange: (harness: EvalHarness) => void;
@@ -45,12 +53,19 @@ const trialsError = 'Trials must be a whole number between 1 and 100.';
 const errorMessage = (reason: unknown): string =>
   reason instanceof Error ? reason.message : 'The eval request could not be completed.';
 
-/** Starts one deterministic run over the selection the browser is allowed to make. */
+/** Starts one authored run over the selection the browser is allowed to make. */
 export const startEvalRun = async (
   client: EvalClient,
   selection: EvalRunStart,
   signal?: AbortSignal,
 ): Promise<EvalRunAdmission> => client.start(selection, signal);
+
+/** Claims one cancellation flight synchronously, before React can schedule a disabled render. */
+export const beginEvalCancellation = (
+  active: EvalRunLifecycleToken | undefined,
+  next: EvalRunLifecycleToken,
+): EvalRunLifecycleToken | undefined =>
+  active?.generation === next.generation && active.runId === next.runId ? undefined : next;
 
 /** Reopens a recorded run exactly as it was persisted, without running anything again. */
 export const openEvalRun = async (client: EvalClient, runId: string): Promise<EvalRunResult> =>
@@ -60,7 +75,7 @@ const CaseTable = ({ rows }: { readonly rows: readonly EvalCaseRow[] }) => <sect
   <h2>Cases</h2>
   {rows.length === 0
     ? <p className="empty-row">This suite declares no cases.</p>
-    : <div className="eval-cases-wrap"><table className="eval-cases">
+    : <div aria-label="Cases table scroll region" className="eval-cases-wrap" tabIndex={0}><table className="eval-cases">
       <thead>
         <tr><th>Case</th><th>Invocation</th><th>Hosts</th><th>Assertions</th><th>Trials</th><th>Prompt</th></tr>
       </thead>
@@ -242,6 +257,7 @@ const TrialCard = ({ client, row, runId }: {
 /** Everything a browser may choose: an authored suite, a trial count, and a recorded run to reopen. */
 export const EvalRunControls = ({
   busy,
+  cancelling = false,
   harness,
   onCancelRun,
   onHarnessChange,
@@ -304,8 +320,8 @@ export const EvalRunControls = ({
   <div className="eval-actions">
     <button disabled={busy || !runnable} onClick={onStartRun} type="button">Run {harness} suite</button>
     <button disabled={busy || openableRun === undefined} onClick={onOpenRun} type="button">Open recorded run</button>
-    {active ? <button disabled={busy || view.runStatus === 'cancelling'} onClick={onCancelRun} type="button">
-      {view.runStatus === 'cancelling' ? 'Cancelling…' : 'Cancel run'}
+    {active ? <button disabled={busy || cancelling || view.runStatus === 'cancelling'} onClick={onCancelRun} type="button">
+      {cancelling || view.runStatus === 'cancelling' ? 'Cancelling…' : 'Cancel run'}
     </button> : undefined}
   </div>
 </section>;
@@ -323,7 +339,7 @@ const EventTimeline = ({ discardedThroughSequence, events }: {
     ? discardedThroughSequence === undefined ? <p className="empty-row">No persisted event is available for this run.</p> : undefined
     : <ol>
     {events.map((event) => <li key={event.sequence}>
-      <span className="eval-event-sequence">#{event.sequence}</span><time>{event.timestamp}</time><strong>{event.kind}</strong>
+      <span className="eval-event-sequence">#{event.sequence}</span><time dateTime={event.timestamp}>{event.timestamp}</time><strong>{event.kind}</strong>
       <pre><code>{JSON.stringify(event.payload, undefined, 2)}</code></pre>
     </li>)}
   </ol>}
@@ -442,27 +458,79 @@ export const observeEvalRunEvents = async ({
   }
 };
 
-/** Runs authored deterministic suites and shows the evidence every trial recorded. */
+/** Runs authored suites and shows the evidence every trial recorded. */
 export const EvalsPage = ({ client }: EvalsPageProps) => {
-  const [admittedRun, setAdmittedRun] = useState<EvalRunRecord>();
-  const [admitting, setAdmitting] = useState(false);
-  const [cancelling, setCancelling] = useState(false);
+  const [runLifecycle, setRunLifecycle] = useState<EvalRunLifecycle>(createEvalRunLifecycle);
+  const [admittingGeneration, setAdmittingGeneration] = useState<number>();
+  const [cancellingGeneration, setCancellingGeneration] = useState<number>();
   const [cancellationNote, setCancellationNote] = useState<string>();
-  const [discardedThroughSequence, setDiscardedThroughSequence] = useState<number>();
   const [error, setError] = useState<string>();
   const [harness, setHarness] = useState<EvalHarness>('deterministic');
   const [listing, setListing] = useState<EvalSuiteListing>();
   const [recorded, setRecorded] = useState<readonly EvalRunRecord[]>([]);
-  const [result, setResult] = useState<EvalRunResult>();
-  const [events, setEvents] = useState<readonly EvalRunEvent[]>([]);
   const [selectedRun, setSelectedRun] = useState<string>();
   const [selectedSuite, setSelectedSuite] = useState<string>();
   const [trials, setTrials] = useState('');
+  const clientRef = useRef(client);
+  const lifecycleRef = useRef(runLifecycle);
   const request = useRef<AbortController | undefined>(undefined);
-  const view = evalRunViewFor({ admittedRun, admitting, discardedThroughSequence, events, listing, result, selectedSuite });
+  const observer = useRef<AbortController | undefined>(undefined);
+  const cancellationRequest = useRef<AbortController | undefined>(undefined);
+  const cancellationFlight = useRef<EvalRunLifecycleToken | undefined>(undefined);
+  const recordedRequest = useRef(0);
+  clientRef.current = client;
+  const commitLifecycle = (next: EvalRunLifecycle): EvalRunLifecycle => {
+    lifecycleRef.current = next;
+    setRunLifecycle(next);
+    return next;
+  };
+  const isCurrent = (source: EvalClient, token: EvalRunLifecycleToken): boolean => {
+    const current = lifecycleRef.current;
+    return source === clientRef.current && current.generation === token.generation && current.runId === token.runId;
+  };
+  const updateCurrent = (
+    source: EvalClient,
+    token: EvalRunLifecycleToken,
+    update: Parameters<typeof updateEvalRunLifecycle>[2],
+  ): boolean => {
+    if (!isCurrent(source, token)) return false;
+    const next = updateEvalRunLifecycle(lifecycleRef.current, token, update);
+    if (next === lifecycleRef.current) return false;
+    commitLifecycle(next);
+    return true;
+  };
+  const replaceRun = (runId?: string, admittedRun?: EvalRunRecord): EvalRunLifecycleToken => {
+    request.current?.abort();
+    observer.current?.abort();
+    cancellationRequest.current?.abort();
+    cancellationFlight.current = undefined;
+    setAdmittingGeneration(undefined);
+    setCancellingGeneration(undefined);
+    return evalRunLifecycleToken(commitLifecycle(replaceEvalRunLifecycle(lifecycleRef.current, runId, admittedRun)));
+  };
+  const refreshRecorded = (source: EvalClient): void => {
+    const requestId = ++recordedRequest.current;
+    void source.runs().then(
+      (next) => {
+        if (source === clientRef.current && requestId === recordedRequest.current) setRecorded(next);
+      },
+      () => undefined,
+    );
+  };
+  const view = evalRunViewFor({
+    admittedRun: runLifecycle.admittedRun,
+    admitting: admittingGeneration === runLifecycle.generation,
+    cancelling: cancellingGeneration === runLifecycle.generation,
+    currentRunId: runLifecycle.runId,
+    discardedThroughSequence: runLifecycle.discardedThroughSequence,
+    events: runLifecycle.events,
+    eventsRunId: runLifecycle.runId,
+    listing,
+    result: runLifecycle.result,
+    selectedSuite,
+  });
   const selection = evalRunSelectionFor(view, trials);
   const openable = selectedRun ?? recorded[recorded.length - 1]?.id;
-  const observedRunId = admittedRun?.id ?? result?.run.id;
 
   useEffect(() => {
     let current = true;
@@ -474,42 +542,37 @@ export const EvalsPage = ({ client }: EvalsPageProps) => {
         setError(errorMessage(reason));
       },
     );
-    void client.runs().then(
-      (next) => { if (current) setRecorded(next); },
-      () => undefined,
-    );
+    if (current) refreshRecorded(client);
     return () => { current = false; };
   }, [client]);
 
-  useEffect(() => () => { request.current?.abort(); }, []);
+  useEffect(() => () => {
+    request.current?.abort();
+    observer.current?.abort();
+    cancellationRequest.current?.abort();
+  }, []);
 
   useEffect(() => {
-    const runId = observedRunId;
-    if (runId === undefined) {
-      setEvents([]);
-      setDiscardedThroughSequence(undefined);
-      return;
-    }
+    const token = evalRunLifecycleToken(runLifecycle);
+    if (token.runId === undefined) return undefined;
+    const runId = token.runId;
     const controller = new AbortController();
+    observer.current = controller;
     let refresh = 0;
-    setEvents([]);
-    setDiscardedThroughSequence(undefined);
     void observeEvalRunEvents({
       client,
       onEvents: (next, discarded) => {
-        if (controller.signal.aborted) return;
-        setEvents(next);
-        setDiscardedThroughSequence(discarded);
+        if (controller.signal.aborted || !updateCurrent(client, token, { discardedThroughSequence: discarded, events: next })) return;
         if (!next.some((event) => event.kind === 'trial.completed' || terminalEvent(event))) return;
         const requestId = ++refresh;
         void client.read(runId, controller.signal).then(
           (nextResult) => {
             if (controller.signal.aborted || requestId !== refresh) return;
-            setResult(nextResult);
-            setAdmittedRun(nextResult.run);
+            if (!updateCurrent(client, token, { admittedRun: nextResult.run, result: nextResult })) return;
+            if (next.some(terminalEvent)) refreshRecorded(client);
           },
           () => {
-            if (!controller.signal.aborted && requestId === refresh) {
+            if (!controller.signal.aborted && requestId === refresh && isCurrent(client, token)) {
               setError('Recorded eval results could not be refreshed.');
             }
           },
@@ -518,83 +581,87 @@ export const EvalsPage = ({ client }: EvalsPageProps) => {
       runId,
       signal: controller.signal,
     }).catch(() => {
-      if (!controller.signal.aborted) setError('Live eval observation stopped because persisted events could not be read.');
+      if (!controller.signal.aborted && isCurrent(client, token)) {
+        setError('Live eval observation stopped because persisted events could not be read.');
+      }
     });
     return () => {
       controller.abort();
+      if (observer.current === controller) observer.current = undefined;
     };
-  }, [client, observedRunId]);
+  }, [client, runLifecycle.generation, runLifecycle.runId]);
 
   const start = async (): Promise<void> => {
     if (selection === undefined) return;
-    request.current?.abort();
+    const token = replaceRun();
     const controller = new AbortController();
     request.current = controller;
-    setAdmitting(true);
+    setAdmittingGeneration(token.generation);
     setError(undefined);
     setCancellationNote(undefined);
     try {
       const admission = await startEvalRun(client, { ...selection, harness }, controller.signal);
-      if (controller.signal.aborted || request.current !== controller) return;
-      setResult(undefined);
-      setAdmittedRun(admission.run);
+      if (controller.signal.aborted || request.current !== controller || !isCurrent(client, token)) return;
+      commitLifecycle(admitEvalRunLifecycle(lifecycleRef.current, admission.run));
       setSelectedRun(admission.run.id);
-      void client.runs().then(
-        (next) => { if (!controller.signal.aborted) setRecorded(next); },
-        () => undefined,
-      );
+      refreshRecorded(client);
     } catch (reason) {
-      if (!controller.signal.aborted) setError(errorMessage(reason));
+      if (!controller.signal.aborted && isCurrent(client, token)) setError(errorMessage(reason));
     } finally {
-      if (request.current === controller) setAdmitting(false);
+      if (request.current === controller) request.current = undefined;
+      if (lifecycleRef.current.generation === token.generation) setAdmittingGeneration((current) => current === token.generation ? undefined : current);
     }
   };
 
   const open = async (): Promise<void> => {
     if (openable === undefined) return;
-    request.current?.abort();
+    const recordedRun = recorded.find((entry) => entry.id === openable);
+    const token = replaceRun(openable, recordedRun);
     const controller = new AbortController();
     request.current = controller;
     setError(undefined);
     setCancellationNote(undefined);
-    const recordedRun = recorded.find((entry) => entry.id === openable);
-    if (recordedRun !== undefined) {
-      setResult(undefined);
-      setAdmittedRun(recordedRun);
-    }
     try {
       const next = await openEvalRun(client, openable);
       if (controller.signal.aborted || request.current !== controller) return;
-      setResult(next);
-      setAdmittedRun(next.run);
+      updateCurrent(client, token, { admittedRun: next.run, result: next });
     } catch (reason) {
-      if (!controller.signal.aborted) setError(errorMessage(reason));
+      if (!controller.signal.aborted && isCurrent(client, token)) setError(errorMessage(reason));
+    } finally {
+      if (request.current === controller) request.current = undefined;
     }
   };
 
   const cancel = async (): Promise<void> => {
-    const runId = view.runId;
-    if (runId === undefined || view.runStatus !== 'queued' && view.runStatus !== 'running') return;
-    request.current?.abort();
+    const token = evalRunLifecycleToken(lifecycleRef.current);
+    if (token.runId === undefined || view.runStatus !== 'queued' && view.runStatus !== 'running') return;
+    const flight = beginEvalCancellation(cancellationFlight.current, token);
+    if (flight === undefined) return;
+    cancellationFlight.current = flight;
     const controller = new AbortController();
-    request.current = controller;
-    setCancelling(true);
+    cancellationRequest.current = controller;
+    setCancellingGeneration(token.generation);
     setCancellationNote(undefined);
     setError(undefined);
     try {
-      const response = await client.cancel(runId, controller.signal);
-      if (controller.signal.aborted || request.current !== controller) return;
+      const response = await client.cancel(token.runId, controller.signal);
+      if (controller.signal.aborted || cancellationFlight.current !== flight || !isCurrent(client, token)) return;
       setCancellationNote(response.cancelled
         ? 'Cancellation was recorded for this run.'
         : 'This run had already reached a terminal state; no cancellation was made.');
-      const next = await client.read(runId, controller.signal);
-      if (controller.signal.aborted || request.current !== controller) return;
-      setResult(next);
-      setAdmittedRun(next.run);
+      const next = await client.read(token.runId, controller.signal);
+      if (controller.signal.aborted || cancellationFlight.current !== flight) return;
+      if (updateCurrent(client, token, { admittedRun: next.run, result: next })) refreshRecorded(client);
     } catch (reason) {
-      if (!controller.signal.aborted) setError(errorMessage(reason));
+      if (!controller.signal.aborted && cancellationFlight.current === flight && isCurrent(client, token)) {
+        setError(errorMessage(reason));
+      }
     } finally {
-      if (request.current === controller) setCancelling(false);
+      if (cancellationRequest.current === controller) cancellationRequest.current = undefined;
+      if (cancellationFlight.current === flight) {
+        cancellationFlight.current = undefined;
+        if (isCurrent(client, token)) setCancellingGeneration((current) => current === token.generation ? undefined : current);
+      }
     }
   };
 
@@ -611,7 +678,8 @@ export const EvalsPage = ({ client }: EvalsPageProps) => {
       ? <p className="empty-row" role="status">{view.summary}</p>
       : <>
         <EvalRunControls
-          busy={admitting || cancelling}
+          busy={admittingGeneration === runLifecycle.generation || cancellingGeneration === runLifecycle.generation}
+          cancelling={cancellingGeneration === runLifecycle.generation}
           harness={harness}
           onCancelRun={() => { void cancel(); }}
           onHarnessChange={setHarness}

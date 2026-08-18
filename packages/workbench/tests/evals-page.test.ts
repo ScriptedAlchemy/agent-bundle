@@ -8,6 +8,7 @@ import type { EvalRunRecord, EvalTrialRecord } from '../../agent-bundle/src/eval
 import { EvalClient } from '../src/evals/eval-client.ts';
 import { evalRunSelectionFor, evalRunViewFor } from '../src/evals/evals-model.ts';
 import {
+  beginEvalCancellation,
   evalArtifactPresentationKey,
   EvalRunControls,
   EvalRunReport,
@@ -324,6 +325,8 @@ it('lists the cases of the selected suite before any run exists', () => {
   expect(markup).toContain('Report the highest-risk regression.');
   expect(markup).toContain('explicit · review');
   expect(markup).toContain('Select an authored suite');
+  expect(markup).toContain('aria-label="Cases table scroll region"');
+  expect(markup).toContain('tabindex="0"');
 });
 
 it('renders unsupported configuration diagnostics as a visible alert', () => {
@@ -421,6 +424,43 @@ it('renders an admitted run state and its durable replay before trial records re
   expect(markup).toContain(`Run ${runRecord.id} is queued.`);
   expect(markup).toContain('Durable event timeline');
   expect(markup).toContain('run.started');
+});
+
+it('renders recorded terminal data as replaying until a durable terminal event establishes its kind', () => {
+  const markup = renderToStaticMarkup(createElement(EvalRunReport, {
+    view: evalRunViewFor({ listing, result, selectedSuite: 'review-change' }),
+  }));
+
+  expect(markup).toContain('has recorded terminal results; loading durable events');
+  expect(markup).not.toContain('finished:');
+});
+
+it('renders reopened durable completed, failed, cancelled, and cancelling states truthfully', () => {
+  const markupFor = (kind: string | undefined): string => renderToStaticMarkup(createElement(EvalRunReport, {
+    view: evalRunViewFor({
+      admittedRun: kind === undefined ? { ...runRecord, completedAt: undefined, summary: undefined } : undefined,
+      cancelling: kind === undefined,
+      events: kind === undefined ? [] : [{ kind, payload: {}, schemaVersion: 1, sequence: 1, timestamp: '2026-08-17T00:00:00.000Z' }],
+      listing,
+      result,
+      selectedSuite: 'review-change',
+    }),
+  }));
+
+  expect(markupFor('run.completed')).toContain(`Run ${runRecord.id} finished:`);
+  expect(markupFor('run.failed')).toContain(`Run ${runRecord.id} failed after recording`);
+  expect(markupFor('run.cancelled')).toContain(`Run ${runRecord.id} was cancelled after recording`);
+  expect(markupFor(undefined)).toContain(`Run ${runRecord.id} is cancelling.`);
+});
+
+it('opens one synchronous cancellation flight and permits only a new run generation to replace it', () => {
+  const active = Object.freeze({ generation: 4, runId: runRecord.id });
+  const replacement = Object.freeze({ generation: 5, runId: '20260817t000000001z-abcdef02' });
+  const first = beginEvalCancellation(undefined, active);
+
+  expect(first).toEqual(active);
+  expect(beginEvalCancellation(first, active)).toBeUndefined();
+  expect(beginEvalCancellation(first, replacement)).toEqual(replacement);
 });
 
 it('marks an invalid trial count instead of letting the run start', () => {

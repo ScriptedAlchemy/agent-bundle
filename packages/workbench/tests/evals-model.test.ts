@@ -3,6 +3,9 @@ import { expect, it } from '@rstest/core';
 import type { EvalRunResult, EvalSuiteListing } from '../../agent-bundle/src/dev/eval-service.ts';
 import type { EvalRunRecord, EvalTrialRecord } from '../../agent-bundle/src/eval/run-store.ts';
 import {
+  admitEvalRunLifecycle,
+  createEvalRunLifecycle,
+  evalRunLifecycleToken,
   evalOutcomeLabel,
   evalRunSelectionFor,
   evalRunViewFor,
@@ -10,6 +13,8 @@ import {
   evalTrialRowsFor,
   maximumEvalTimelineBytes,
   mergeEvalEvents,
+  replaceEvalRunLifecycle,
+  updateEvalRunLifecycle,
 } from '../src/evals/evals-model.ts';
 
 const listing: EvalSuiteListing = {
@@ -203,7 +208,12 @@ it('falls back to the first suite when none is selected', () => {
 it('reports the loading, empty, and completed states', () => {
   const loading = evalRunViewFor({ listing: undefined, result: undefined, selectedSuite: undefined });
   const empty = evalRunViewFor({ listing: { diagnostics: [], suites: [] }, result: undefined, selectedSuite: undefined });
-  const ran = evalRunViewFor({ listing, result, selectedSuite: 'review-change' });
+  const ran = evalRunViewFor({
+    events: [{ kind: 'run.completed', payload: {}, schemaVersion: 1, sequence: 1, timestamp: '2026-08-17T00:00:00.000Z' }],
+    listing,
+    result,
+    selectedSuite: 'review-change',
+  });
 
   expect(loading.state).toBe('loading');
   expect(empty.state).toBe('empty');
@@ -247,6 +257,42 @@ it('derives admitting, active, and terminal run states from durable events', () 
   expect(status([event('run.completed')])).toBe('completed');
   expect(status([event('run.failed')])).toBe('failed');
   expect(status([event('run.cancelled')])).toBe('cancelled');
+});
+
+it('never infers a successful terminal state from completedAt before durable replay', () => {
+  const completed: EvalRunRecord = runRecord;
+  const state = (events: readonly { readonly kind: string; readonly sequence: number }[]) => evalRunViewFor({
+    admittedRun: completed,
+    events: events.map((event) => ({ ...event, payload: {}, schemaVersion: 1 as const, timestamp: '2026-08-17T00:00:00.000Z' })),
+    listing,
+    result: { ...result, run: completed },
+    selectedSuite: 'review-change',
+  });
+
+  expect(state([]).runStatus).toBe('replaying');
+  expect(state([]).summary).not.toContain('finished');
+  expect(state([{ kind: 'run.cancelling', sequence: 1 }]).runStatus).toBe('cancelling');
+  expect(state([{ kind: 'run.failed', sequence: 1 }]).runStatus).toBe('failed');
+  expect(state([{ kind: 'run.cancelled', sequence: 1 }]).runStatus).toBe('cancelled');
+  expect(state([{ kind: 'run.completed', sequence: 1 }]).runStatus).toBe('completed');
+});
+
+it('rejects stale observer and canonical-read updates after a replacement lifecycle begins', () => {
+  const initial = createEvalRunLifecycle();
+  const admitting = replaceEvalRunLifecycle(initial);
+  const first = admitEvalRunLifecycle(admitting, { ...runRecord, completedAt: undefined, summary: undefined });
+  const firstToken = evalRunLifecycleToken(first);
+  const replacement = replaceEvalRunLifecycle(first, '20260817t000000001z-abcdef02');
+
+  const stale = updateEvalRunLifecycle(replacement, firstToken, {
+    events: [{ kind: 'run.failed', payload: {}, schemaVersion: 1, sequence: 1, timestamp: '2026-08-17T00:00:00.000Z' }],
+    result,
+  });
+
+  expect(stale).toBe(replacement);
+  expect(replacement.events).toEqual([]);
+  expect(replacement.result).toBeUndefined();
+  expect(replacement.runId).toBe('20260817t000000001z-abcdef02');
 });
 
 it('surfaces configuration diagnostics beside the suites they came from', () => {

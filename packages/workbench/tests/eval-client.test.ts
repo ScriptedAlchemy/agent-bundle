@@ -131,6 +131,14 @@ it('requires the documented 202 admission status', async () => {
   await expect(client.start({ suites: ['review-change'] })).rejects.toMatchObject({ code: 'AB8073' });
 });
 
+it('rejects malformed detached admission and cancellation DTOs', async () => {
+  const admission = new EvalClient({ fetch: recordingFetch([], () => response({ run: runRecord, trials: [] }, 202)) });
+  const cancellation = new EvalClient({ fetch: recordingFetch([], () => response({ cancelled: true, runId: 'other-run' }, 202)) });
+
+  await expect(admission.start({ suites: ['review-change'] })).rejects.toMatchObject({ code: 'AB8073' });
+  await expect(cancellation.cancel(runRecord.id)).rejects.toMatchObject({ code: 'AB8073' });
+});
+
 it('posts an exact empty body to cancel a server-owned run and decodes the idempotent result', async () => {
   const calls: RecordedRequest[] = [];
   const client = new EvalClient({ fetch: recordingFetch(calls, () => response({ cancelled: false, runId: runRecord.id }, 202)) });

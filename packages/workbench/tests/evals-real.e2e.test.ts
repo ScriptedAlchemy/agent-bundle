@@ -1,4 +1,5 @@
 import { execFile as executeFile } from 'node:child_process';
+import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 
@@ -7,7 +8,7 @@ import { expect, test, type PlaywrightOptions } from '@rstest/playwright';
 import { createWorkbenchAssetSource } from '../../agent-bundle/src/dev/workbench-assets.ts';
 import { startDevServer } from '../../agent-bundle/src/dev/workbench-server.ts';
 import { createProjectFixture, removeProjectFixture } from '../../agent-bundle/tests/helpers/project-fixture.ts';
-import { seedEvalProject } from '../../agent-bundle/tests/support/eval-project.ts';
+import { seedEvalProject, writeEvalSuite } from '../../agent-bundle/tests/support/eval-project.ts';
 
 const execFile = promisify(executeFile);
 const workspaceRoot = process.cwd();
@@ -27,6 +28,35 @@ const buildWorkbench = async (): Promise<void> => {
     cwd: workspaceRoot,
     env: { ...environment, NODE_ENV: 'production' },
   });
+};
+
+const seedGatedEvalProject = async (root: string): Promise<{ readonly release: () => Promise<void> }> => {
+  await seedEvalProject(root);
+  const gate = join(root, 'evals', '.release-gated-run');
+  await writeEvalSuite(root, 'gated.eval.ts', {
+    cases: [{ id: 'wait-for-cancel', kind: 'pass' }],
+    name: 'gated-cancel',
+  });
+  await writeFile(join(root, 'evals', 'graders', 'reads-result.ts'), [
+    "import { access } from 'node:fs/promises';",
+    '',
+    `const gate = ${JSON.stringify(gate)};`,
+    'const wait = (milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds));',
+    '',
+    'export default async () => {',
+    '  for (let attempt = 0; attempt < 400; attempt += 1) {',
+    '    try {',
+    '      await access(gate);',
+    "      return { detail: 'The gate was released.', outcome: 'pass' as const };",
+    '    } catch {',
+    '      await wait(25);',
+    '    }',
+    '  }',
+    "  throw new Error('The deterministic cancel gate was not released.');",
+    '};',
+    '',
+  ].join('\n'));
+  return { release: async () => writeFile(gate, 'released\n') };
 };
 
 e2e('admits a deterministic Eval promptly and renders refreshed durable evidence without desktop overflow', { timeout: 120_000 }, async ({ page }) => {
@@ -96,6 +126,129 @@ e2e('admits a deterministic Eval promptly and renders refreshed durable evidence
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     expect(pageErrors).toEqual([]);
   } finally {
+    await server.close();
+    await removeProjectFixture(project.root);
+  }
+});
+
+e2e('keeps a gated deterministic run cancellable exactly once and rejects stale run-list refreshes', { timeout: 120_000 }, async ({ page }) => {
+  await buildWorkbench();
+  const project = await createProjectFixture();
+  const gate = await seedGatedEvalProject(project.root);
+  const server = await startDevServer({
+    assets: createWorkbenchAssetSource({ root: workbenchAssets }),
+    open: false,
+    port: 0,
+    root: project.root,
+  });
+  let releaseStaleList: (() => void) | undefined;
+  let releaseCancel: (() => void) | undefined;
+  try {
+    let listRequests = 0;
+    let resolveSecondList: (() => void) | undefined;
+    const secondList = new Promise<void>((resolve) => { resolveSecondList = resolve; });
+    const staleList = new Promise<void>((resolve) => { releaseStaleList = resolve; });
+    const heldCancel = new Promise<void>((resolve) => { releaseCancel = resolve; });
+    let cancellations = 0;
+    let resolveCancellation: (() => void) | undefined;
+    const cancellationSeen = new Promise<void>((resolve) => { resolveCancellation = resolve; });
+    const pageErrors: Error[] = [];
+    page.on('pageerror', (error) => pageErrors.push(error));
+    await page.route(`${server.url}/api/evals/runs`, async (route) => {
+      if (route.request().method() !== 'GET') {
+        await route.continue();
+        return;
+      }
+      listRequests += 1;
+      if (listRequests === 1) {
+        await staleList;
+        await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ runs: [] }), status: 200 });
+        return;
+      }
+      resolveSecondList?.();
+      await route.continue();
+    });
+    await page.route(`${server.url}/api/evals/runs/*/cancel`, async (route) => {
+      cancellations += 1;
+      resolveCancellation?.();
+      await heldCancel;
+      await route.continue();
+    });
+    await page.goto(`${server.url}#evals`);
+    await expect(page.getByRole('heading', { name: 'Evals' })).toBeVisible({ timeout: browserTimeout });
+    await page.getByLabel('Suite').selectOption('gated-cancel');
+    const admitted = page.waitForResponse((response) =>
+      response.url() === `${server.url}/api/evals/runs` && response.request().method() === 'POST' && response.status() === 202);
+    await page.getByRole('button', { name: 'Run deterministic suite' }).click();
+    const admission = await (await admitted).json() as { readonly run: Readonly<{ readonly id: string }> };
+    const runId = admission.run.id;
+    await secondList;
+    releaseStaleList?.();
+    await expect(page.getByLabel('Recorded run')).toHaveValue(runId, { timeout: browserTimeout });
+
+    const cancel = page.getByRole('button', { name: 'Cancel run' });
+    await expect(cancel).toBeVisible({ timeout: browserTimeout });
+    await cancel.evaluate((button) => {
+      if (button instanceof HTMLButtonElement) {
+        button.click();
+        button.click();
+      }
+    });
+    await cancellationSeen;
+    await expect(page.getByRole('button', { name: 'Cancelling…' })).toBeDisabled();
+    expect(cancellations).toBe(1);
+    releaseCancel?.();
+    await expect(page.getByText('Cancellation was recorded for this run.')).toBeVisible({ timeout: browserTimeout });
+    await gate.release();
+    await expect(page.getByText(`Run ${runId} was cancelled after recording`)).toBeVisible({ timeout: browserTimeout });
+    await expect(page.getByText('run.cancelled')).toBeVisible({ timeout: browserTimeout });
+    expect(cancellations).toBe(1);
+    expect(pageErrors).toEqual([]);
+  } finally {
+    releaseStaleList?.();
+    releaseCancel?.();
+    await gate.release();
+    await server.close();
+    await removeProjectFixture(project.root);
+  }
+});
+
+e2e('does not cancel a gated run when a newer admission replaces it or the Eval page unmounts', { timeout: 120_000 }, async ({ page }) => {
+  await buildWorkbench();
+  const project = await createProjectFixture();
+  const gate = await seedGatedEvalProject(project.root);
+  const server = await startDevServer({
+    assets: createWorkbenchAssetSource({ root: workbenchAssets }),
+    open: false,
+    port: 0,
+    root: project.root,
+  });
+  try {
+    let cancellations = 0;
+    page.on('request', (request) => {
+      if (request.method() === 'POST' && request.url().includes('/cancel')) cancellations += 1;
+    });
+    await page.goto(`${server.url}#evals`);
+    await expect(page.getByRole('heading', { name: 'Evals' })).toBeVisible({ timeout: browserTimeout });
+    await page.getByLabel('Suite').selectOption('gated-cancel');
+    const firstAdmission = page.waitForResponse((response) =>
+      response.url() === `${server.url}/api/evals/runs` && response.request().method() === 'POST' && response.status() === 202);
+    await page.getByRole('button', { name: 'Run deterministic suite' }).click();
+    const first = await (await firstAdmission).json() as { readonly run: Readonly<{ readonly id: string }> };
+    await expect(page.getByRole('button', { name: 'Cancel run' })).toBeVisible({ timeout: browserTimeout });
+
+    const replacementAdmission = page.waitForResponse((response) =>
+      response.url() === `${server.url}/api/evals/runs` && response.request().method() === 'POST' && response.status() === 202);
+    await page.getByRole('button', { name: 'Run deterministic suite' }).click();
+    const replacement = await (await replacementAdmission).json() as { readonly run: Readonly<{ readonly id: string }> };
+    await expect(page.locator('.eval-summary')).toContainText(replacement.run.id, { timeout: browserTimeout });
+    await page.waitForTimeout(150);
+    await expect(page.locator('.eval-summary')).not.toContainText(first.run.id);
+    await page.goto(`${server.url}#overview`);
+    await expect(page.getByRole('heading', { name: 'Overview' })).toBeVisible({ timeout: browserTimeout });
+    expect(cancellations).toBe(0);
+  } finally {
+    await gate.release();
     await server.close();
     await removeProjectFixture(project.root);
   }
