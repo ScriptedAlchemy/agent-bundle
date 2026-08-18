@@ -94,3 +94,26 @@ it('gives both two-option groups a complete roving-tab and labelled-tabpanel con
   expect(markup).toContain('id="skill-review-panel"');
   expect(markup).toContain('aria-labelledby="skill-review-document-tab-source skill-review-view-tab-rendered"');
 });
+
+it('keeps generated document navigation and its target available while no generated document is selected', () => {
+  const markup = renderToStaticMarkup(createElement(SkillDocumentPanel, {
+    document: 'generated',
+    onDocumentChange: () => undefined,
+    onTargetChange: () => undefined,
+    onViewChange: () => undefined,
+    selected: undefined,
+    summary: 'Loading portable from epoch epoch-01…',
+    target: 'portable',
+    targetNames: ['portable'],
+    view: 'rendered',
+  }));
+
+  expect(markup).toContain('>Document<');
+  expect(markup).toContain('>View<');
+  expect(markup).toContain('>Target<');
+  expect([...markup.matchAll(/role="tablist"/gu)]).toHaveLength(2);
+  expect(markup).toContain('Loading portable from epoch epoch-01…');
+  expect(markup).toContain('id="skill-skills-panel"');
+  expect(markup).toContain('aria-controls="skill-skills-panel"');
+  expect(markup).toContain('aria-labelledby="skill-skills-document-tab-generated skill-skills-view-tab-rendered"');
+});

@@ -519,7 +519,7 @@ e2e('lists an immutable epoch Skill tree even after the current source Skill is 
     await expect(page.locator('.skill-tree-item')).toContainText('revised', { timeout: browserTimeout });
     await page.getByRole('tab', { name: 'Generated' }).click();
     await expect(page.locator('.skill-tree-item')).toContainText('review', { timeout: browserTimeout });
-    await expect(page.getByText(/Generated base ·/)).toBeVisible({ timeout: browserTimeout });
+    await expect(page.getByText(/Generated document ·/)).toBeVisible({ timeout: browserTimeout });
     await expect(page.getByRole('heading', { name: 'review', exact: true })).toBeVisible({ timeout: browserTimeout });
   } finally {
     await server.close();
