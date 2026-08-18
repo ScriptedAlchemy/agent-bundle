@@ -723,14 +723,15 @@ export class AgentApi {
         }
       })));
     server.registerTool('hooks_list', { inputSchema: hooksListSchema }, async (arguments_, context) =>
-      this.#tool(context.mcpReq.signal, async () => this.#withEpoch(optionalStringArgument(asRecord(arguments_), 'epoch'), async (epochId) => ({
-        hooks: await this.#hooks.list({
-          epochId,
-          ...(optionalStringArgument(asRecord(arguments_), 'target') === undefined
-            ? {}
-            : { target: optionalStringArgument(asRecord(arguments_), 'target') }),
-        }),
-      }))));
+      this.#tool(context.mcpReq.signal, async () => this.#withEpoch(optionalStringArgument(asRecord(arguments_), 'epoch'), async (epochId) => {
+        const target = optionalStringArgument(asRecord(arguments_), 'target');
+        return {
+          hooks: await this.#hooks.list({
+            epochId,
+            ...(target === undefined ? {} : { target }),
+          }),
+        };
+      })));
     server.registerTool('hook_simulate', { inputSchema: hookSimulateSchema }, async (arguments_, context) =>
       this.#tool(context.mcpReq.signal, async (signal) => this.#withEpoch(optionalStringArgument(asRecord(arguments_), 'epoch'), async (epochId) => {
         const args = asRecord(arguments_);
