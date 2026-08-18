@@ -5,7 +5,6 @@ import { basename, extname, join, relative, resolve } from 'node:path';
 
 import { createDefaultRegistry, type TargetRegistry } from '../adapters/registry.ts';
 import { validateArtifactWithSnapshot } from '../build/validate-artifact.ts';
-import { digest } from '../core/digest.ts';
 import { EpochStore } from './epoch-store.ts';
 
 const defaultOutputLimit = 64 * 1024;
@@ -22,7 +21,6 @@ export interface ResolvedPlaygroundScript {
   readonly interpreter: PlaygroundScriptInterpreter;
   readonly name: string;
   readonly path: string;
-  readonly targetDigest: string;
 }
 
 export interface ScriptPlaygroundRunRequest {
@@ -37,7 +35,6 @@ export interface ScriptPlaygroundResult {
   readonly script: string;
   readonly stderr: string;
   readonly stdout: string;
-  readonly targetDigest: string;
 }
 
 export interface PlaygroundWorkspaceLease {
@@ -109,16 +106,24 @@ const environment = (cwd: string): Readonly<Record<string, string>> => Object.fr
   PATH: process.env.PATH ?? '/usr/bin:/bin',
 });
 
-const terminate = (child: ChildProcess): void => {
+const signalProcessTree = (child: ChildProcess, signal: NodeJS.Signals): boolean => {
   if (child.pid !== undefined && process.platform !== 'win32') {
     try {
-      process.kill(-child.pid, 'SIGTERM');
-      return;
+      process.kill(-child.pid, signal);
+      return true;
     } catch {
-      // The child may already be gone or unavailable as a process group.
+      return false;
     }
   }
-  child.kill('SIGTERM');
+  return child.kill(signal);
+};
+
+/** A direct child can exit before its detached descendants; drain that whole group before releasing its workspace. */
+const drainProcessTree = async (child: ChildProcess): Promise<void> => {
+  if (process.platform === 'win32' || !signalProcessTree(child, 'SIGTERM')) return;
+  await new Promise<void>((resolvePromise) => { setTimeout(resolvePromise, terminationGraceMs); });
+  signalProcessTree(child, 'SIGKILL');
+  await new Promise<void>((resolvePromise) => { setTimeout(resolvePromise, 10); });
 };
 
 /** Runs a fixed interpreter without a shell, bounded by server-selected time and output caps. */
@@ -151,18 +156,10 @@ const execute = async (options: ServerOwnedScriptExecution): Promise<ScriptExecu
   const stop = (reason: unknown): void => {
     if (termination !== undefined || settled) return;
     termination = reason;
-    terminate(child);
+    signalProcessTree(child, 'SIGTERM');
     killTimer = setTimeout(() => {
       if (settled) return;
-      if (child.pid !== undefined && process.platform !== 'win32') {
-        try {
-          process.kill(-child.pid, 'SIGKILL');
-          return;
-        } catch {
-          // Fall through to the direct child kill below.
-        }
-      }
-      child.kill('SIGKILL');
+      signalProcessTree(child, 'SIGKILL');
     }, terminationGraceMs);
   };
   const abort = (): void => stop(options.signal?.reason ?? new Error('Script playground run was cancelled.'));
@@ -173,13 +170,13 @@ const execute = async (options: ServerOwnedScriptExecution): Promise<ScriptExecu
     return next;
   };
   options.signal?.addEventListener('abort', abort, { once: true });
-  child.once('error', (error) => settle(() => rejectPromise(error)));
+  child.once('error', (error) => { void drainProcessTree(child).then(() => settle(() => rejectPromise(error))); });
   child.stdout.on('data', (chunk: Buffer) => { stdout = append(stdout, chunk); });
   child.stderr.on('data', (chunk: Buffer) => { stderr = append(stderr, chunk); });
-  child.once('close', (code) => settle(() => {
+  child.once('exit', (code) => { void drainProcessTree(child).then(() => settle(() => {
     if (termination !== undefined) rejectPromise(termination);
     else resolvePromise(Object.freeze({ exitCode: code ?? -1, stderr, stdout }));
-  }));
+  })); });
 });
 
 /**
@@ -227,7 +224,6 @@ export class ScriptPlaygroundService {
         script: resolved.name,
         stderr: result.stderr,
         stdout: result.stdout,
-        targetDigest: resolved.targetDigest,
       });
     } finally {
       await lease.close();
@@ -262,14 +258,10 @@ export class ScriptPlaygroundService {
       const relativePath = `${request.target}/${layout.directory}/${request.script}`;
       const manifestFile = validated.snapshot.manifest.files.find((file) => file.path === relativePath);
       if (manifestFile === undefined) throw new Error('Requested script is absent from the validated artifact manifest.');
-      const targetFiles = validated.snapshot.manifest.files
-        .filter((file) => file.path.startsWith(`${request.target}/`))
-        .map((file) => Object.freeze({ path: file.path, sha256: file.sha256 }));
       return Object.freeze({
         interpreter,
         name: request.script,
         path,
-        targetDigest: digest(targetFiles),
       });
     } finally {
       await reference.close();
