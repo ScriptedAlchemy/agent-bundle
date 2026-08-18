@@ -9,6 +9,11 @@ export interface EvalSemanticGraderInput {
   readonly model?: string;
 }
 
+export interface NormalizedEvalSemanticGrader {
+  readonly harness: 'claude';
+  readonly model: string;
+}
+
 export interface EvalConfigInput {
   readonly include?: readonly string[];
   readonly runsDir?: string;
@@ -19,6 +24,7 @@ export interface NormalizedEvalConfig {
   readonly diagnostics: readonly Diagnostic[];
   readonly include: readonly string[];
   readonly runsDir: string;
+  readonly semanticGrader?: NormalizedEvalSemanticGrader;
 }
 
 export const defaultEvalInclude = Object.freeze(['evals/**/*.eval.ts']);
@@ -59,16 +65,24 @@ const requireRunsDirectory = (value: unknown): string => {
   return runsDir;
 };
 
-/**
- * Native model-backed execution does not run configured semantic graders yet, so
- * one is surfaced as an unsupported diagnostic instead of silently being ignored.
- */
-const semanticGraderDiagnostic = (): Diagnostic => Object.freeze({
-  code: 'AB9000',
-  message: 'Configured eval semantic graders are not supported yet and were ignored.',
-  recovery: 'Remove evals.semanticGrader until configured semantic grading is available.',
-  severity: 'warning',
-});
+const semanticGraderKeys = Object.freeze(['harness', 'model']);
+
+const normalizeSemanticGrader = (value: unknown): NormalizedEvalSemanticGrader => {
+  if (!isRecord(value)) {
+    throw configError('EVAL_CONFIG_INVALID', 'Eval configuration semanticGrader must be an object.');
+  }
+  const unexpected = Object.keys(value).filter((key) => !semanticGraderKeys.includes(key)).sort();
+  if (unexpected.length > 0 || Object.keys(value).length !== semanticGraderKeys.length) {
+    throw configError('EVAL_CONFIG_INVALID', 'Eval configuration semanticGrader must contain exactly "harness" and "model".');
+  }
+  if (value.harness !== 'claude') {
+    throw configError('EVAL_CONFIG_INVALID', 'Eval configuration semanticGrader harness must be "claude".');
+  }
+  if (typeof value.model !== 'string' || value.model.trim().length === 0) {
+    throw configError('EVAL_CONFIG_INVALID', 'Eval configuration semanticGrader model must be a non-empty string.');
+  }
+  return Object.freeze({ harness: 'claude', model: value.model });
+};
 
 export const normalizeEvalConfig = (value: unknown): NormalizedEvalConfig => {
   if (value === undefined) {
@@ -98,13 +112,17 @@ export const normalizeEvalConfig = (value: unknown): NormalizedEvalConfig => {
   const runsDir = value.runsDir === undefined
     ? defaultEvalRunsDir
     : requireRunsDirectory(value.runsDir);
+  const semanticGrader = Object.hasOwn(value, 'semanticGrader')
+    ? normalizeSemanticGrader(value.semanticGrader)
+    : undefined;
 
   return Object.freeze({
-    diagnostics: Object.freeze(value.semanticGrader === undefined ? [] : [semanticGraderDiagnostic()]),
+    diagnostics: Object.freeze([]),
     include: include === undefined
       ? defaultEvalInclude
       : Object.freeze([...new Set(include.map((pattern) =>
         requireContainedRelativePath(pattern, 'EVAL_INCLUDE_INVALID', 'Eval configuration include pattern')))].sort()),
     runsDir,
+    ...(semanticGrader === undefined ? {} : { semanticGrader }),
   });
 };

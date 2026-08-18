@@ -328,6 +328,7 @@ it('answers each service refusal with one fixed browser-facing sentence', async 
   const expectations: readonly (readonly [EvalServiceError, string, number])[] = Object.freeze([
     [new EvalServiceError('EVAL_HARNESS_UNSUPPORTED', '/projects/demo has no claude harness'), 'AB8075', 422],
     [new EvalServiceError('EVAL_SELECTION_EMPTY', '/projects/demo/evals matched nothing'), 'AB8076', 422],
+    [new EvalServiceError('EVAL_SEMANTIC_GRADER_UNSUPPORTED', '/projects/demo has semantic grading on codex'), 'AB8083', 422],
     [new EvalServiceError('EVAL_TARGET_MISSING', '/projects/demo/dist lacks claude'), 'AB8077', 422],
     [new EvalServiceError('EVAL_TRIALS_INVALID', '/projects/demo rejected 900 trials'), 'AB8072', 400],
     [new EvalServiceError('EVAL_RUN_NOT_FOUND', '/projects/demo/.agent-bundle/runs/run-b'), 'AB8074', 404],

@@ -110,7 +110,7 @@ export const seedEvalProject = async (
       '',
       'export default defineConfig({',
       ...(options.semanticGrader === true
-        ? ["  evals: { semanticGrader: { harness: 'claude', model: 'unpinned' } },"]
+        ? ["  evals: { semanticGrader: { harness: 'claude', model: 'claude-sonnet-4-5' } },"]
         : []),
       ...(options.marketplace === true ? ['  marketplace: true,'] : []),
       "  plugin: { name: 'review', version: '1.0.0' },",

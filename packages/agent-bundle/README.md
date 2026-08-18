@@ -49,6 +49,20 @@ Assertions resolve to `pass`, `fail`, or `inconclusive`; insufficient evidence i
 passed. Fewer than three trials is smoke evidence, and comparisons label unrecorded alignment facets
 as unverified.
 
+An optional semantic grader is configured with one pinned Claude model:
+
+```ts
+evals: {
+  semanticGrader: { harness: 'claude', model: 'claude-sonnet-4-5' },
+}
+```
+
+It runs only with `agent-bundle eval --harness claude` for Claude-pinned cases. After the primary
+trace is usable and deterministic graders finish, Agent Bundle makes one server-owned, plugin-free
+Claude grading call. Its fixed result id is `claude-semantic`; its request, raw stream, stderr, and
+versioned provenance are retained with the trial artifacts. A malformed or failed semantic grader
+leaves the trial inconclusive rather than becoming plugin evidence.
+
 ## Authentication and limitations
 
 This package never accepts, requests, injects, or persists a model-provider API key. Native Claude and
@@ -71,6 +85,18 @@ The package publishes no example RSC provider, host credentials, or native-host
 evaluation integration. See the repository's
 [optional RSC Runtime topology](../../docs/architecture/rsc-runtime-workbench.md)
 for the explicit example-owned boundary.
+
+- The workbench binds to loopback only and is a foreground development session, not a hosted service.
+- Native Claude and Codex harnesses require those CLIs to be installed and signed in. A missing,
+  incompatible, or unauthenticated CLI is reported as a harness failure, distinct from a plugin
+  failure. Their live smoke tests are opt-in and are not part of an ordinary test run.
+- Codex exposes no authoritative Skill-activation event, so Codex activation evidence is `inferred`
+  and is never reported as `observed`.
+- Comparison facets that a run did not record — grader versions, host CLI version, invocation — are
+  labeled unverified rather than assumed aligned.
+- Semantic grading requires a native Claude harness and a signed-in Claude Code session; deterministic
+  and Codex selections are refused when it is configured.
+- Raw HTML, JSX/MDX, and Mermaid in Skill Markdown are inert in the workbench renderer.
 
 Third-party notices, including the vendored MCP Inspector snapshot's license and provenance, ship in
 the published package.

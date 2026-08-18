@@ -428,6 +428,10 @@ const evalDiagnostics: Readonly<Record<EvalServiceErrorCode, Readonly<{
     code: 'AB9002',
     recovery: 'Select a suite or case that "agent-bundle eval --json" reports as discovered.',
   }),
+  EVAL_SEMANTIC_GRADER_UNSUPPORTED: Object.freeze({
+    code: 'AB9008',
+    recovery: 'Run the configured semantic grader with "--harness claude" and a Claude-pinned eval case.',
+  }),
   EVAL_TARGET_MISSING: Object.freeze({
     code: 'AB9004',
     recovery: 'Select the targets the pinned eval hosts name, then evaluate again.',

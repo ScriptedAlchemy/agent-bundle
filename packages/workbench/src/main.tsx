@@ -5,10 +5,7 @@ import { MantineProvider } from '@mantine/core';
 import type { Diagnostic } from '../../agent-bundle/src/core/diagnostics.ts';
 import { MCP_APP_PROFILE_DESCRIPTORS, type McpAppProfileId } from '../../agent-bundle/src/dev/mcp-app-profile-descriptors.ts';
 import type { McpAppPreviewAppsSnapshot } from '../../agent-bundle/src/dev/mcp-app-runtime-preview-service.ts';
-import type {
-  PlaygroundEventInput,
-  PlaygroundSession,
-} from '../../agent-bundle/src/services/playground-service.ts';
+import type { PlaygroundRun } from '../../agent-bundle/src/dev/playground-contract.ts';
 import type { ProjectStatus } from '../../agent-bundle/src/dev/types.ts';
 
 import { ArtifactClient } from './artifacts/artifact-client.ts';
@@ -596,19 +593,19 @@ const ArtifactsScreen = ({ artifactClient, connectionError, onNavigate, status }
   <ArtifactsPage client={artifactClient} epochId={activeEpochId(status)} />
 </WorkbenchScreen>;
 
-const PlaygroundScreen = ({ connectionError, onNavigate, onSessionChange, playgroundClient, session, status }: {
+const PlaygroundScreen = ({ connectionError, onNavigate, onRunChange, playgroundClient, run, status }: {
   readonly connectionError?: string;
   readonly onNavigate: (page: WorkbenchPage) => void;
-  readonly onSessionChange: (session: PlaygroundSession | undefined) => void;
+  readonly onRunChange: (run: PlaygroundRun | undefined) => void;
   readonly playgroundClient: PlaygroundClient;
-  readonly session: PlaygroundSession | undefined;
+  readonly run: PlaygroundRun | undefined;
   readonly status: ProjectStatus;
 }) => <WorkbenchScreen connectionError={connectionError} onNavigate={onNavigate} page="playground">
   <PlaygroundPage
     client={playgroundClient}
     epoch={playgroundEpochFor(status)}
-    onSessionChange={onSessionChange}
-    session={session}
+    onRunChange={onRunChange}
+    run={run}
     targets={playgroundTargetsFor(status)}
   />
 </WorkbenchScreen>;
@@ -623,28 +620,22 @@ const LogsScreen = ({ connectionError, onNavigate, playgroundClient, sessionId, 
   <LogsPage client={playgroundClient} epoch={playgroundEpochFor(status)} sessionId={sessionId} />
 </WorkbenchScreen>;
 
-const HooksScreen = ({ connectionError, hookClient, onNavigate, onRecordTrace, status }: {
+const HooksScreen = ({ connectionError, hookClient, onNavigate, status }: {
   readonly connectionError?: string;
   readonly hookClient: HookClient;
   readonly onNavigate: (page: WorkbenchPage) => void;
-  readonly onRecordTrace?: (input: PlaygroundEventInput) => Promise<void>;
   readonly status: ProjectStatus;
 }) => <WorkbenchScreen connectionError={connectionError} onNavigate={onNavigate} page="hooks">
-  <HooksPage
-    client={hookClient}
-    epochId={activeEpochId(status)}
-    {...(onRecordTrace === undefined ? {} : { onRecordTrace })}
-  />
+  <HooksPage client={hookClient} epochId={activeEpochId(status)} />
 </WorkbenchScreen>;
 
-const McpScreen = ({ appPreviewClient, connectionError, controller, mcpDepartureDiagnostic, model, onNavigate, onRecordTrace, onResetSession, onRuntimeInitialPreviewConsumed, presentation, registerPreviewClose, runtimeAvailable = false, runtimeDiagnostic, runtimeHandoff, runtimePreviewDependencies, setPresentation, status }: {
+const McpScreen = ({ appPreviewClient, connectionError, controller, mcpDepartureDiagnostic, model, onNavigate, onResetSession, onRuntimeInitialPreviewConsumed, presentation, registerPreviewClose, runtimeAvailable = false, runtimeDiagnostic, runtimeHandoff, runtimePreviewDependencies, setPresentation, status }: {
   readonly appPreviewClient: McpAppClient;
   readonly connectionError?: string;
   readonly controller: ReturnType<typeof createMcpController>;
   readonly mcpDepartureDiagnostic?: string;
   readonly model: ReturnType<typeof createMcpController>['model'];
   readonly onNavigate: (page: WorkbenchPage) => void;
-  readonly onRecordTrace?: (input: PlaygroundEventInput) => Promise<void>;
   readonly onResetSession: () => void;
   readonly onRuntimeInitialPreviewConsumed: (selection: Extract<McpPagePreviewSelection, { readonly kind: 'runtime' }>) => void;
   readonly runtimeAvailable?: boolean;
@@ -750,7 +741,6 @@ const McpScreen = ({ appPreviewClient, connectionError, controller, mcpDeparture
               initialBinding={activeEpoch === undefined ? undefined : { epochId: activeEpoch.id }}
               onDownloadConfig={downloadMcpFile}
               onDownloadTrace={downloadMcpFile}
-              {...(onRecordTrace === undefined ? {} : { onRecordTrace })}
               onResetSession={onResetSession}
               registerPreviewClose={registerPreviewClose}
               targetOptions={targetOptions}
@@ -758,7 +748,6 @@ const McpScreen = ({ appPreviewClient, connectionError, controller, mcpDeparture
           : <MantineProvider><McpPage
               controller={controller}
               initialPreview={runtimeInitialPreview}
-              {...(onRecordTrace === undefined ? {} : { onRecordTrace })}
               onResetSession={onResetSession}
               registerPreviewClose={registerPreviewClose}
               runtimePreviewDependencies={runtimePreviewDependencies}
@@ -850,8 +839,8 @@ const Workbench = () => {
   const [mcpPresentation, setMcpPresentation] = useState(mcpPresentationForHash);
   const [status, setStatus] = useState<ProjectStatus>();
   const [changedFiles, setChangedFiles] = useState<readonly string[]>([]);
-  const [playgroundSession, setPlaygroundSession] = useState<PlaygroundSession>();
   const [runtimeOperationTraces, setRuntimeOperationTraces] = useState<readonly RuntimeAppBridgeOperationTrace[]>(emptyRuntimeOperationTraces);
+  const [playgroundRun, setPlaygroundRun] = useState<PlaygroundRun>();
 
   pageRef.current = page;
 
@@ -864,15 +853,6 @@ const Workbench = () => {
   if (evalClient.current === undefined) evalClient.current = new EvalClient({ foreground: foreground.current! });
   if (hookClient.current === undefined) hookClient.current = new HookClient({ foreground: foreground.current! });
   if (playgroundClient.current === undefined) playgroundClient.current = new PlaygroundClient({ foreground: foreground.current! });
-
-  /** Only an open session records; a finalized or absent session leaves other pages unchanged. */
-  const recordPlaygroundEvent = playgroundSession?.state === 'open'
-    ? async (input: PlaygroundEventInput): Promise<void> => {
-        const playground = playgroundClient.current;
-        if (playground === undefined) return;
-        await playground.append(playgroundSession.id, input);
-      }
-    : undefined;
 
   const runtimeAvailable = runtimeCapability === 'available';
 
@@ -1263,7 +1243,6 @@ const Workbench = () => {
         model={mcpModel}
         onNavigate={navigate}
         onRuntimeInitialPreviewConsumed={consumeRuntimeInitialPreview}
-        {...(recordPlaygroundEvent === undefined ? {} : { onRecordTrace: recordPlaygroundEvent })}
         onResetSession={resetMcpSession}
         registerPreviewClose={registerMcpPreviewClose}
         runtimeAvailable={runtimeAvailable}
@@ -1293,9 +1272,9 @@ const Workbench = () => {
       return <PlaygroundScreen
         connectionError={connectionError}
         onNavigate={navigate}
-        onSessionChange={setPlaygroundSession}
+        onRunChange={setPlaygroundRun}
         playgroundClient={playgroundClient.current}
-        session={playgroundSession}
+        run={playgroundRun}
         status={status}
       />;
     }
@@ -1304,7 +1283,7 @@ const Workbench = () => {
         connectionError={connectionError}
         onNavigate={navigate}
         playgroundClient={playgroundClient.current}
-        sessionId={playgroundSession?.id}
+        sessionId={playgroundRun?.session.id}
         status={status}
       />;
     }
@@ -1327,7 +1306,6 @@ const Workbench = () => {
         connectionError={connectionError}
         hookClient={hookClient.current}
         onNavigate={navigate}
-        {...(recordPlaygroundEvent === undefined ? {} : { onRecordTrace: recordPlaygroundEvent })}
         status={status}
       />;
     }

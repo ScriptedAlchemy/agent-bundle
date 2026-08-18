@@ -235,11 +235,15 @@ export class EpochReference {
   readonly #store: EpochStore;
   #close: Promise<void> | undefined;
 
-  constructor(store: EpochStore, epochId: string, root: string) {
+  constructor(store: EpochStore, epoch: ArtifactEpoch, root: string) {
     this.#store = store;
-    this.#epochId = epochId;
+    this.#epochId = epoch.id;
+    this.epoch = epoch;
     this.root = root;
   }
+
+  /** Detached immutable metadata for the exact epoch this lease pins. */
+  readonly epoch: ArtifactEpoch;
 
   /** Immutable epoch directory validated before this reference was acquired. */
   readonly root: string;
@@ -299,21 +303,27 @@ export class EpochStore {
   async acquireEpochReference(epochId: string): Promise<EpochReference> {
     return this.#withTransition(async () => {
       assertSafeEpochId(epochId);
-      const epochPath = join(this.#epochsPath, epochId);
-      try {
-        const metadata = await lstat(epochPath);
-        if (!metadata.isDirectory() || metadata.isSymbolicLink()) {
-          throw new EpochStoreError('EPOCH_NOT_FOUND', `Epoch ${JSON.stringify(epochId)} does not exist.`);
-        }
-      } catch (error) {
-        if (isErrno(error, 'ENOENT')) {
-          throw new EpochStoreError('EPOCH_NOT_FOUND', `Epoch ${JSON.stringify(epochId)} does not exist.`);
-        }
-        throw error;
-      }
-      this.#references.set(epochId, (this.#references.get(epochId) ?? 0) + 1);
-      return new EpochReference(this, epochId, epochPath);
+      await this.#assertEpochDirectory(epochId);
+      return this.#acquireEpochReference(await this.#readEpochMetadata(epochId).then((metadata) => metadata.epoch));
     });
+  }
+
+  /** Resolves and leases the current epoch without allowing a publish between those operations. */
+  async acquireActiveEpochReference(): Promise<EpochReference> {
+    return this.#withTransition(async () => {
+      const epoch = await this.#readActiveEpoch();
+      if (epoch === undefined) {
+        throw new EpochStoreError('EPOCH_NOT_FOUND', 'No active artifact epoch is available.');
+      }
+      return this.#acquireEpochReference(epoch);
+    });
+  }
+
+  /** Returns detached safe epoch identities, ordered newest first. */
+  async listEpochs(): Promise<readonly ArtifactEpoch[]> {
+    return this.#withTransition(async () => Object.freeze((await this.#readAllEpochMetadata())
+      .map((metadata) => freezeArtifactEpoch(metadata.epoch))
+      .sort(compareNewestFirst)));
   }
 
   async releaseEpochReference(epochId: string): Promise<void> {
@@ -373,6 +383,28 @@ export class EpochStore {
     }
     await this.#validateActiveEpoch(metadata.epoch);
     return metadata.epoch;
+  }
+
+  async #acquireEpochReference(epoch: ArtifactEpoch): Promise<EpochReference> {
+    const epochPath = await this.#assertEpochDirectory(epoch.id);
+    this.#references.set(epoch.id, (this.#references.get(epoch.id) ?? 0) + 1);
+    return new EpochReference(this, freezeArtifactEpoch(epoch), epochPath);
+  }
+
+  async #assertEpochDirectory(epochId: string): Promise<string> {
+    const epochPath = join(this.#epochsPath, epochId);
+    try {
+      const metadata = await lstat(epochPath);
+      if (!metadata.isDirectory() || metadata.isSymbolicLink()) {
+        throw new EpochStoreError('EPOCH_NOT_FOUND', `Epoch ${JSON.stringify(epochId)} does not exist.`);
+      }
+    } catch (error) {
+      if (isErrno(error, 'ENOENT')) {
+        throw new EpochStoreError('EPOCH_NOT_FOUND', `Epoch ${JSON.stringify(epochId)} does not exist.`);
+      }
+      throw error;
+    }
+    return epochPath;
   }
 
   async #cleanup(): Promise<void> {

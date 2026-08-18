@@ -155,7 +155,8 @@ const gradeRepository = async (
   return outcome('pass', details.length === 0 ? 'No repository check was configured.' : `The repository has ${details.join(' and ')}.`);
 };
 
-const isScriptOutcome = (value: unknown): value is EvalScriptOutcome =>
+/** Validates the result shape shared by authored and server-owned graders. */
+export const isEvalScriptOutcome = (value: unknown): value is EvalScriptOutcome =>
   typeof value === 'object' &&
   value !== null &&
   !Array.isArray(value) &&
@@ -178,7 +179,7 @@ const gradeScript = async (
     fixturePath: context.fixturePath,
     prompt: context.prompt,
   });
-  if (!isScriptOutcome(value)) {
+  if (!isEvalScriptOutcome(value)) {
     throw new TypeError(`Grader ${JSON.stringify(spec.script)} must return { detail, outcome }.`);
   }
   return outcome(value.outcome, value.detail);

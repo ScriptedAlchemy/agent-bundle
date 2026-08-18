@@ -751,7 +751,9 @@ it('shares one foreground bootstrap and EventSource across project, artifact, ho
       return Response.json({ diff: { added: [], baseEpochId: 'epoch-1', candidateEpochId: 'epoch-2', changed: [], removed: [], unchanged: [] } });
     }
     if (path.startsWith('/api/hooks?')) return Response.json({ hooks: [] });
-    if (path === '/api/playground/sessions/session-1') return Response.json({ closed: true });
+    if (path === '/api/playground/sessions/session-1') return Response.json({
+      session: { id: 'session-1', identity: {}, state: 'closed' },
+    });
     throw new Error(`Unexpected foreground route ${path}`);
   };
   const foreground = new ForegroundRouteClient({ fetch });
@@ -767,7 +769,7 @@ it('shares one foreground bootstrap and EventSource across project, artifact, ho
     project.connect(() => undefined),
     artifact.diff('epoch-1', 'epoch-2'),
     hooks.list({ epochId: 'epoch-1' }),
-    playground.closeSession('session-1'),
+    playground.session('session-1'),
   ]);
 
   expect(sessionBootstraps).toBe(1);
@@ -799,7 +801,7 @@ it('invalidates every shared foreground admission when ProjectClient closes duri
     project.connect(() => undefined),
     artifact.diff('epoch-1', 'epoch-2'),
     hooks.list({ epochId: 'epoch-1' }),
-    playground.closeSession('session-1'),
+    playground.session('session-1'),
   ];
   await new Promise<void>((resolve) => setImmediate(resolve));
   project.close();

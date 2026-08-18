@@ -1,15 +1,12 @@
 import type {
   DraftEvalCase,
-  PlaygroundDurableOutcome,
-  PlaygroundEventInput,
   PlaygroundExport,
   PlaygroundReplay,
-  PlaygroundSelectedAssertion,
   PlaygroundSession,
-  PlaygroundSessionInput,
   PlaygroundTraceEvent,
 } from '../../../agent-bundle/src/services/playground-service.ts';
 import type { ForegroundRequestAuthority } from '../mcp/mcp-route-client.ts';
+import type { PlaygroundOperationRequest, PlaygroundRun } from '../../../agent-bundle/src/dev/playground-contract.ts';
 
 export interface PlaygroundClientOptions {
   readonly foreground: ForegroundRequestAuthority;
@@ -66,6 +63,9 @@ const diagnosticError = (value: unknown, status: number): PlaygroundClientError 
 const isSession = (value: unknown): boolean =>
   isRecord(value) && typeof value.id === 'string' && typeof value.state === 'string' && isRecord(value.identity);
 
+const isRun = (value: unknown): boolean =>
+  isRecord(value) && typeof value.id === 'string' && isSession(value.session);
+
 const isTraceEvent = (value: unknown): boolean =>
   isRecord(value) && typeof value.kind === 'string' && typeof value.rawEventRef === 'string' &&
   typeof value.sequence === 'number' && typeof value.source === 'string' &&
@@ -77,10 +77,16 @@ const sessionBody = (value: unknown): PlaygroundSession => {
   return frozenJson(session) as PlaygroundSession;
 };
 
-const eventBody = (value: unknown): PlaygroundTraceEvent => {
-  const event = asRecord(value).event;
-  if (!isTraceEvent(event)) throw invalidResponse();
-  return frozenJson(event) as PlaygroundTraceEvent;
+const runBody = (value: unknown): PlaygroundRun => {
+  const run = asRecord(value).run;
+  if (!isRun(run)) throw invalidResponse();
+  return frozenJson(run) as PlaygroundRun;
+};
+
+const cancelledBody = (value: unknown): boolean => {
+  const cancelled = asRecord(value).cancelled;
+  if (typeof cancelled !== 'boolean') throw invalidResponse();
+  return cancelled;
 };
 
 const traceEvents = (value: unknown): readonly PlaygroundTraceEvent[] => {
@@ -134,8 +140,9 @@ export class PlaygroundClient {
     this.#foreground = options.foreground;
   }
 
-  async openSession(input: PlaygroundSessionInput, signal?: AbortSignal): Promise<PlaygroundSession> {
-    return sessionBody(await this.#json('/api/playground/sessions', {
+  /** Starts a server-owned operation and receives its live run and session identity promptly. */
+  async run(input: PlaygroundOperationRequest, signal?: AbortSignal): Promise<PlaygroundRun> {
+    return runBody(await this.#json('/api/playground/runs', {
       body: JSON.stringify(input),
       headers: { 'content-type': 'application/json' },
       method: 'POST',
@@ -143,43 +150,24 @@ export class PlaygroundClient {
     }));
   }
 
-  async session(sessionId: string): Promise<PlaygroundSession> {
-    return sessionBody(await this.#json(this.#path(sessionId)));
-  }
-
-  async closeSession(sessionId: string): Promise<void> {
-    const body = asRecord(await this.#json(this.#path(sessionId), { method: 'DELETE' }));
-    if (body.closed !== true) throw invalidResponse();
-  }
-
-  async reopen(sessionId: string): Promise<PlaygroundSession> {
-    return sessionBody(await this.#json(`${this.#path(sessionId)}/reopen`, {
+  /** Cancellation is an operation-level action; callers refresh the durable session afterwards. */
+  async cancel(runId: string, signal?: AbortSignal): Promise<boolean> {
+    return cancelledBody(await this.#json(`${this.#runPath(runId)}/cancel`, {
       body: '{}',
       headers: { 'content-type': 'application/json' },
       method: 'POST',
+      signal,
     }));
   }
 
-  async append(sessionId: string, input: PlaygroundEventInput): Promise<PlaygroundTraceEvent> {
-    return eventBody(await this.#json(`${this.#path(sessionId)}/events`, {
-      body: JSON.stringify({ kind: input.kind, raw: input.raw, source: input.source, summary: input.summary }),
-      headers: { 'content-type': 'application/json' },
-      method: 'POST',
-    }));
-  }
-
-  async finalize(sessionId: string, outcome: PlaygroundDurableOutcome): Promise<PlaygroundSession> {
-    return sessionBody(await this.#json(`${this.#path(sessionId)}/finalize`, {
-      body: JSON.stringify(outcome),
-      headers: { 'content-type': 'application/json' },
-      method: 'POST',
-    }));
+  async session(sessionId: string, signal?: AbortSignal): Promise<PlaygroundSession> {
+    return sessionBody(await this.#json(this.#path(sessionId), { signal }));
   }
 
   /** The cursor stays exactly where the caller left it, so replayed order and epoch binding survive. */
-  async replay(sessionId: string, afterSequence?: number): Promise<PlaygroundReplay> {
+  async replay(sessionId: string, afterSequence?: number, signal?: AbortSignal): Promise<PlaygroundReplay> {
     const query = afterSequence === undefined ? '' : `?after=${String(afterSequence)}`;
-    return replayBody(await this.#json(`${this.#path(sessionId)}/replay${query}`));
+    return replayBody(await this.#json(`${this.#path(sessionId)}/replay${query}`, { signal }));
   }
 
   async export(sessionId: string): Promise<PlaygroundExport> {
@@ -188,10 +176,10 @@ export class PlaygroundClient {
 
   async promoteToDraftEval(
     sessionId: string,
-    assertions: readonly PlaygroundSelectedAssertion[],
+    rawEventRefs: readonly string[],
   ): Promise<DraftEvalCase> {
     return draftEvalBody(await this.#json(`${this.#path(sessionId)}/draft-eval`, {
-      body: JSON.stringify({ assertions }),
+      body: JSON.stringify({ rawEventRefs }),
       headers: { 'content-type': 'application/json' },
       method: 'POST',
     }));
@@ -206,6 +194,10 @@ export class PlaygroundClient {
 
   #path(sessionId: string): string {
     return `/api/playground/sessions/${encodeURIComponent(sessionId)}`;
+  }
+
+  #runPath(runId: string): string {
+    return `/api/playground/runs/${encodeURIComponent(runId)}`;
   }
 
   async #stream(sessionId: string, options: PlaygroundStreamOptions, signal: AbortSignal): Promise<void> {

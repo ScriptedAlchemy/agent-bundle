@@ -32,6 +32,7 @@ export type EvalServiceErrorCode =
   | 'EVAL_HARNESS_UNSUPPORTED'
   | 'EVAL_RUN_NOT_FOUND'
   | 'EVAL_SELECTION_EMPTY'
+  | 'EVAL_SEMANTIC_GRADER_UNSUPPORTED'
   | 'EVAL_TARGET_MISSING'
   | 'EVAL_TRIALS_INVALID';
 
@@ -275,6 +276,12 @@ export class EvalService {
     const harness = this.#harness(request.harness);
     const trials = requestedTrials(request.trials);
     const config = await this.#config();
+    if (config.semanticGrader !== undefined && harness.kind !== 'native-claude') {
+      throw serviceError(
+        'EVAL_SEMANTIC_GRADER_UNSUPPORTED',
+        'Configured semantic grading requires the native Claude eval harness.',
+      );
+    }
     const selected = selectEvalCases(await this.#discover(config), request);
     if (selected.length === 0) {
       throw serviceError(
@@ -339,6 +346,7 @@ export class EvalService {
         }
         const trial = await this.#runTrial({
           artifact,
+          config,
           directory,
           harness,
           plan,
@@ -422,6 +430,7 @@ export class EvalService {
 
   async #runTrial(options: {
     readonly artifact: PreparedEvalArtifact;
+    readonly config: NormalizedEvalConfig;
     readonly directory: string;
     readonly harness: EvalHarness;
     readonly plan: PlannedEvalTrial;
@@ -444,6 +453,9 @@ export class EvalService {
       case 'native-claude':
         return runClaudeTrial({
           ...shared,
+          ...(options.config.semanticGrader === undefined
+            ? {}
+            : { configuredSemanticGrader: options.config.semanticGrader }),
           ...(this.#native?.environment === undefined ? {} : { environment: this.#native.environment }),
           ...(this.#native?.claudeRun === undefined ? {} : { run: this.#native.claudeRun }),
           ...(options.signal === undefined ? {} : { signal: options.signal }),

@@ -112,6 +112,44 @@ it('exposes the validated immutable epoch directory on an acquired reference', a
   }
 });
 
+it('acquires the active epoch and its immutable metadata in one transition', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent bundle active epoch reference '));
+  try {
+    const store = new EpochStore({ projectRoot: root });
+    const epoch = epochFor(root, 'epoch-active');
+    await publishEpoch(store, epoch);
+
+    const reference = await store.acquireActiveEpochReference();
+
+    expect(reference.epoch).toEqual(epoch);
+    expect(reference.root).toBe(join(root, '.agent-bundle', 'epochs', 'epoch-active'));
+    expect(Object.isFrozen(reference.epoch)).toBe(true);
+    await reference.close();
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('lists detached immutable epoch identities newest first', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent bundle listed epochs '));
+  try {
+    const store = new EpochStore({ projectRoot: root });
+    const oldest = epochFor(root, 'epoch-oldest', '2026-08-14T12:00:01.000Z');
+    const newest = epochFor(root, 'epoch-newest', '2026-08-14T12:00:02.000Z');
+    await publishEpoch(store, oldest);
+    await publishEpoch(store, newest);
+
+    const listed = await store.listEpochs();
+
+    expect(listed).toEqual([newest, oldest]);
+    expect(Object.isFrozen(listed)).toBe(true);
+    expect(Object.isFrozen(listed[0]!)).toBe(true);
+    expect(listed[0]).not.toBe(newest);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
 it('rejects an unsafe epoch id before it can create a staging directory', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent bundle unsafe epoch id '));
 
