@@ -13,16 +13,6 @@ const response = (body: unknown, status = 200): Response => new Response(JSON.st
   status,
 });
 
-const run = {
-  agentBundleVersion: '0.1.0',
-  artifact: { manifestPath: 'artifacts/target/agent-bundle.manifest.json', source: 'run-owned', targetDigests: { claude: 'a'.repeat(64) } },
-  createdAt: '2026-08-17T12:00:00.000Z',
-  harness: 'deterministic',
-  id: '20260817t120000000z-1a2b3c4d',
-  projectRevision: 'b'.repeat(64),
-  schemaVersion: 1,
-};
-
 const comparison = {
   baselineRunId: 'run-base',
   candidateRunId: 'run-candidate',
@@ -52,24 +42,6 @@ const recordingFetch = (calls: RecordedRequest[], reply: () => Response): typeof
     });
     return reply();
   };
-
-it('lists recorded eval runs over the same foreground session', async () => {
-  const calls: RecordedRequest[] = [];
-  const client = new ComparisonClient({ fetch: recordingFetch(calls, () => response({ runs: [run] })) });
-
-  await expect(client.listRuns()).resolves.toMatchObject([{ harness: 'deterministic', id: run.id }]);
-  expect(calls).toEqual([{ method: 'GET', token: 'foreground-token', url: '/api/evals/runs' }]);
-});
-
-it('reads one run with its trials and escapes the run identifier', async () => {
-  const calls: RecordedRequest[] = [];
-  const client = new ComparisonClient({
-    fetch: recordingFetch(calls, () => response({ run, trials: [{ caseId: 'direct-review', id: 'trial-0' }] })),
-  });
-
-  await expect(client.readRun('run base/1')).resolves.toMatchObject({ trials: [{ id: 'trial-0' }] });
-  expect(calls[0]?.url).toBe('/api/evals/runs/run%20base%2F1');
-});
 
 it('requests an aligned comparison for a baseline and a candidate run', async () => {
   const calls: RecordedRequest[] = [];
@@ -112,7 +84,7 @@ it('decodes a route diagnostic body into a coded client error', async () => {
 it('reports an unrecognised failure body with the transport status', async () => {
   const client = new ComparisonClient({ fetch: recordingFetch([], () => response({}, 503)) });
 
-  await expect(client.listRuns()).rejects.toMatchObject({
+  await expect(client.compare({ base: 'run-base', candidate: 'run-candidate' })).rejects.toMatchObject({
     code: 'AB8083',
     message: 'Eval comparison request failed with HTTP 503.',
   });
@@ -131,7 +103,7 @@ it('refuses a foreground session bootstrap that does not match this browser orig
     fetch: async () => response({ origin: 'http://127.0.0.1:5173/', token: 'foreground-token' }),
   });
 
-  await expect(client.listRuns()).rejects.toMatchObject({ code: 'AB8083' });
+  await expect(client.compare({ base: 'run-base', candidate: 'run-candidate' })).rejects.toMatchObject({ code: 'AB8083' });
 });
 
 it('forgets the foreground token when the owning page stops using it', async () => {
@@ -142,14 +114,14 @@ it('forgets the foreground token when the owning page stops using it', async () 
         bootstraps += 1;
         return response({ origin: 'http://127.0.0.1:5173', token: 'foreground-token' });
       }
-      return response({ runs: [] });
+      return response({ comparison });
     },
   });
 
-  await client.listRuns();
-  await client.listRuns();
+  await client.compare({ base: 'run-base', candidate: 'run-candidate' });
+  await client.compare({ base: 'run-base', candidate: 'run-candidate' });
   client.forgetAuthentication();
-  await client.listRuns();
+  await client.compare({ base: 'run-base', candidate: 'run-candidate' });
 
   expect(bootstraps).toBe(2);
 });

@@ -345,12 +345,13 @@ const EvalsScreen = ({ connectionError, evalClient, onNavigate }: {
   <EvalsPage client={evalClient} />
 </WorkbenchScreen>;
 
-const ComparisonsScreen = ({ comparisonClient, connectionError, onNavigate }: {
+const ComparisonsScreen = ({ comparisonClient, connectionError, evalClient, onNavigate }: {
   readonly comparisonClient: ComparisonClient;
   readonly connectionError?: string;
+  readonly evalClient: EvalClient;
   readonly onNavigate: (page: WorkbenchPage) => void;
 }) => <WorkbenchScreen connectionError={connectionError} onNavigate={onNavigate} page="comparisons">
-  <ComparisonsPage client={comparisonClient} />
+  <ComparisonsPage comparisonClient={comparisonClient} evalClient={evalClient} />
 </WorkbenchScreen>;
 
 const ArtifactsScreen = ({ artifactClient, connectionError, onNavigate, status }: {
@@ -643,7 +644,12 @@ const Workbench = () => {
       return <EvalsScreen connectionError={connectionError} evalClient={evalClient.current} onNavigate={navigate} />;
     }
     if (page === 'comparisons') {
-      return <ComparisonsScreen comparisonClient={comparisonClient.current} connectionError={connectionError} onNavigate={navigate} />;
+      return <ComparisonsScreen
+        comparisonClient={comparisonClient.current}
+        connectionError={connectionError}
+        evalClient={evalClient.current}
+        onNavigate={navigate}
+      />;
     }
     if (page === 'artifacts') {
       return <ArtifactsScreen artifactClient={artifactClient.current} connectionError={connectionError} onNavigate={navigate} status={status} />;

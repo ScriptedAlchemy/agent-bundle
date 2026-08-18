@@ -14,6 +14,7 @@ import {
   runComparison,
 } from '../src/comparisons/comparisons-page.tsx';
 import { comparisonsViewFor } from '../src/comparisons/comparisons-model.ts';
+import { EvalClient } from '../src/evals/eval-client.ts';
 
 const run = (id: string, createdAt: string): EvalRunRecord => ({
   agentBundleVersion: '0.1.0',
@@ -176,29 +177,26 @@ it('offers a baseline and candidate selection with a compare action', () => {
 });
 
 it('renders no comparison controls until two runs are recorded', () => {
-  const client = new ComparisonClient({ fetch: async () => { throw new Error('The page lists runs through its own effect.'); } });
-  const markup = renderToStaticMarkup(createElement(ComparisonsPage, { client }));
+  const comparisonClient = new ComparisonClient({ fetch: async () => { throw new Error('The page compares through its own effect.'); } });
+  const evalClient = new EvalClient({ fetch: async () => { throw new Error('The page lists runs through its own effect.'); } });
+  const markup = renderToStaticMarkup(createElement(ComparisonsPage, { comparisonClient, evalClient }));
 
   expect(markup).toContain('At least two recorded runs');
   expect(markup).not.toContain('id="comparison-base"');
   expect(markup).not.toContain('Compare runs');
 });
 
-it('lists recorded runs through the client', async () => {
-  const calls: string[] = [];
-  const client = new ComparisonClient({ fetch: stubFetch(calls, { runs }) });
+it('delegates run loading to EvalClient and the server comparison to ComparisonClient', async () => {
+  const comparisonCalls: string[] = [];
+  const evalCalls: string[] = [];
+  const comparisonClient = new ComparisonClient({ fetch: stubFetch(comparisonCalls, { comparison }) });
+  const evalClient = new EvalClient({ fetch: stubFetch(evalCalls, { runs }) });
 
-  await expect(loadComparisonRuns(client)).resolves.toMatchObject([{ id: 'run-base' }, { id: 'run-candidate' }]);
-  expect(calls).toEqual(['/api/evals/runs']);
-});
+  await expect(loadComparisonRuns(evalClient)).resolves.toMatchObject([{ id: 'run-base' }, { id: 'run-candidate' }]);
+  const result = await runComparison(comparisonClient, 'run-base', 'run-candidate');
 
-it('requests the aligned comparison of the selected runs', async () => {
-  const calls: string[] = [];
-  const client = new ComparisonClient({ fetch: stubFetch(calls, { comparison }) });
-
-  const result = await runComparison(client, 'run-base', 'run-candidate');
-
-  expect(calls).toEqual(['/api/evals/comparisons?base=run-base&candidate=run-candidate']);
+  expect(evalCalls).toEqual(['/api/evals/runs']);
+  expect(comparisonCalls).toEqual(['/api/evals/comparisons?base=run-base&candidate=run-candidate']);
   expect(result.rows).toHaveLength(3);
   expect(result.summary).toMatchObject({ comparable: 2, nonComparable: 1 });
 });
