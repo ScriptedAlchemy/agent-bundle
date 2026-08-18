@@ -22,7 +22,7 @@ const records: readonly DevLogRecord[] = Object.freeze([
   Object.freeze({
     context: Object.freeze({ diagnosticCode: 'BUILD_FAILED', epochId: 'epoch-1' }),
     details: Object.freeze({ message: 'Build failed.' }),
-    kind: 'build.diagnostic',
+    kind: 'build.failed.diagnostic',
     level: 'error',
     occurredAt: '2026-08-18T12:01:00.000Z',
     producer: 'diagnostic',

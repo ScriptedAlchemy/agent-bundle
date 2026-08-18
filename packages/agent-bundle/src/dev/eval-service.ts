@@ -27,7 +27,7 @@ import {
   type EvalTrialRecord,
 } from '../eval/run-store.ts';
 import type { EvalAssertionKind, EvalCase, EvalInvocation } from '../eval/types.ts';
-import type { DevLogSink } from './dev-log-service.ts';
+import type { DevLogKindFor, DevLogSink } from './dev-log-service.ts';
 
 export type EvalServiceErrorCode =
   | 'EVAL_ARTIFACT_OUTSIDE_PROJECT'
@@ -399,7 +399,7 @@ export class EvalService {
       return result;
     } catch (error) {
       this.#log('eval.run.failed', 'error', 'Eval run failed.', runId, {
-        error: error instanceof Error ? error.message : String(error),
+        failure: 'unavailable',
       });
       throw error;
     } finally {
@@ -407,7 +407,7 @@ export class EvalService {
     }
   }
 
-  #log(kind: string, level: 'error' | 'info', summary: string, runId: string, details: unknown): void {
+  #log(kind: DevLogKindFor<'eval'>, level: 'error' | 'info', summary: string, runId: string, details: unknown): void {
     try {
       this.#logger?.log({ context: { runId }, details, kind, level, producer: 'eval', summary });
     } catch { /* Diagnostics cannot affect durable eval execution. */ }

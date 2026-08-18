@@ -36,6 +36,7 @@ const startRoutes = async (service: DevLogService) => {
       await routes.close();
       await new Promise<void>((resolvePromise, rejectPromise) => server.close((error) => error === undefined ? resolvePromise() : rejectPromise(error)));
     },
+    routes,
     url: `http://127.0.0.1:${address.port}`,
   });
 };
@@ -99,6 +100,24 @@ it('replays and streams the ordered production record contract', async () => {
     const frame = await reader.read();
     expect(new TextDecoder().decode(frame.value)).toContain('"sequence":2');
     await reader.cancel();
+  } finally {
+    await started.close();
+  }
+});
+
+it('owns live stream shutdown and resolves readers without waiting for the foreground server', async () => {
+  const service = new DevLogService({ projectRoot: '/work/project' });
+  const started = await startRoutes(service);
+  try {
+    const stream = await fetch(`${started.url}/api/logs/stream?after=0`, { headers: headers() });
+    const reader = stream.body?.getReader();
+    if (reader === undefined) throw new Error('Expected an NDJSON stream body.');
+    const pending = reader.read();
+
+    await started.routes.close();
+
+    await expect(pending).resolves.toMatchObject({ done: true });
+    expect(service.subscriptionCount).toBe(0);
   } finally {
     await started.close();
   }

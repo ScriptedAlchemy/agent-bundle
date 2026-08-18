@@ -1,7 +1,7 @@
 import type { ProjectServiceLogger } from './project-service.ts';
 import type { ProjectEvent, ProjectEventMessage } from './types.ts';
 import type { ProjectEventHub } from './events.ts';
-import type { DevLogInput, DevLogSink } from './dev-log-service.ts';
+import type { DevLogInput, DevLogInputFor, DevLogKindFor, DevLogSink } from './dev-log-service.ts';
 import type { McpSessionTraceSink } from './mcp-session-service.ts';
 
 const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
@@ -27,7 +27,7 @@ const contextFor = (event: ProjectEvent): Readonly<Record<string, string>> => {
   return Object.freeze({});
 };
 
-const producerFor = (event: ProjectEvent): DevLogInput['producer'] =>
+const producerFor = (event: ProjectEvent): 'build' | 'project' =>
   event.type === 'build.started' || event.type === 'build.failed' || event.type === 'artifact.available'
     ? 'build'
     : 'project';
@@ -58,9 +58,18 @@ const write = (sink: DevLogSink, input: DevLogInput): void => {
   catch { /* Dev Logs must never alter the producer's result. */ }
 };
 
+const isProjectKind = (value: string): value is DevLogKindFor<'project'> => new Set<DevLogKindFor<'project'>>([
+  'artifact.status', 'dev.shutdown.completed', 'dev.shutdown.started', 'invalidation', 'project.events.replay-gap',
+  'project.invalid-source', 'project.load', 'project.prepared', 'runtime.event', 'source.changed', 'source.status',
+]).has(value as DevLogKindFor<'project'>);
+
+const diagnosticKindFor = (event: ProjectEvent): DevLogKindFor<'diagnostic'> =>
+  `${event.type}.diagnostic` as DevLogKindFor<'diagnostic'>;
+
 /** Converts the existing ProjectService observation seam into producer-wide records. */
 export const createProjectDevLogger = (sink: DevLogSink): ProjectServiceLogger => Object.freeze({
   log: (event: string, details: Readonly<Record<string, unknown>>) => {
+    if (!isProjectKind(event)) return;
     const target = typeof details.target === 'string' ? details.target : undefined;
     write(sink, {
       ...(target === undefined ? {} : { context: { target } }),
@@ -85,14 +94,17 @@ const recordEvent = (sink: DevLogSink, message: ProjectEventMessage): void => {
     return;
   }
   const event = message;
-  write(sink, {
+  const shared = {
     context: contextFor(event),
     details: detailsFor(event),
-    kind: event.type,
     level: levelFor(event),
-    producer: producerFor(event),
     summary: summaryFor(event),
-  });
+  } as const;
+  if (producerFor(event) === 'build') {
+    write(sink, { ...shared, kind: event.type as DevLogKindFor<'build'>, producer: 'build' });
+  } else {
+    write(sink, { ...shared, kind: event.type as DevLogKindFor<'project'>, producer: 'project' });
+  }
   for (const diagnostic of diagnosticsFor(event)) {
     const code = stringAt(diagnostic, 'code');
     const buildId = stringAt(event.payload, 'id');
@@ -102,7 +114,7 @@ const recordEvent = (sink: DevLogSink, message: ProjectEventMessage): void => {
         ...(code === undefined ? {} : { diagnosticCode: code }),
       }),
       details: diagnostic,
-      kind: `${event.type.replace(/\.failed$/u, '')}.diagnostic`,
+      kind: diagnosticKindFor(event),
       level: diagnosticLevel(diagnostic),
       producer: 'diagnostic',
       summary: 'Project diagnostic was recorded.',
@@ -124,7 +136,7 @@ export const createMcpDevLogTraceSink = (sink: DevLogSink): McpSessionTraceSink 
     write(sink, {
       context,
       details: { operation: entry.operation, phase: entry.phase },
-      kind: `mcp.operation.${entry.phase}`,
+      kind: `mcp.operation.${entry.phase}` as DevLogInputFor<'mcp'>['kind'],
       level: entry.phase === 'failed' ? 'error' : 'info',
       occurredAt: new Date(entry.occurredAt).toISOString(),
       producer: 'mcp',

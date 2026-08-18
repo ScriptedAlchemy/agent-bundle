@@ -235,6 +235,25 @@ const inputFor = (event: CanonicalHookEvent): Record<string, unknown> => ({
   transcriptPath: '/workspace/transcript.json',
 });
 
+it('preserves a hostile original simulation failure when Dev Log reporting is enabled', async () => {
+  const hostile = Object.freeze({
+    [Symbol.toPrimitive]: () => { throw new Error('hostile failure was stringified'); },
+  });
+  const service = new HookPlaygroundService({
+    epochStore: {
+      acquireEpochReference: async () => { throw hostile; },
+    } as unknown as EpochStore,
+    logger: { log: () => undefined },
+  });
+
+  await expect(service.simulate({
+    epochId: 'epoch-1',
+    hook: 'hook-1',
+    input: { inline: { source: 'startup' } },
+    target: 'claude',
+  })).rejects.toBe(hostile);
+});
+
 it('uses the injected adapter hook contract for custom manifests, mappings, matchers, and codecs', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-hook-playground-synthetic-'));
   const sourceArtifact = join(root, 'synthetic-artifact');

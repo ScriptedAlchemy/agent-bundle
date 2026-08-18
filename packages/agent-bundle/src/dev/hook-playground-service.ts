@@ -10,7 +10,7 @@ import type { CanonicalHookEvent } from '../core/types.ts';
 import { digest } from '../core/digest.ts';
 import { HookService } from '../services/hook-service.ts';
 import { EpochStore, type EpochReference } from './epoch-store.ts';
-import type { DevLogSink } from './dev-log-service.ts';
+import type { DevLogKindFor, DevLogSink } from './dev-log-service.ts';
 
 type CanonicalHookInput = Readonly<Record<string, unknown>>;
 type CanonicalHookResult = Readonly<Record<string, unknown>>;
@@ -359,7 +359,7 @@ export class HookPlaygroundService {
       return result;
     } catch (error) {
       this.#log('hook.simulate.failed', 'error', 'Hook playground simulation failed.', options, {
-        error: error instanceof Error ? error.message : String(error),
+        failure: 'unavailable',
       });
       throw error;
     }
@@ -386,7 +386,7 @@ export class HookPlaygroundService {
   }
 
   #log(
-    kind: string,
+    kind: DevLogKindFor<'hook'>,
     level: 'error' | 'info',
     summary: string,
     options: HookPlaygroundSimulationOptions,

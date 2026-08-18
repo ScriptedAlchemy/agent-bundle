@@ -46,7 +46,7 @@ it('records project service events and derives build, artifact, and diagnostic r
   expect(records.map((record) => [record.producer, record.kind, record.level])).toEqual([
     ['project', 'project.load', 'info'],
     ['build', 'build.failed', 'error'],
-    ['diagnostic', 'build.diagnostic', 'error'],
+    ['diagnostic', 'build.failed.diagnostic', 'error'],
     ['build', 'artifact.available', 'info'],
   ]);
   expect(records[1]?.details).toMatchObject({ diagnostics: [{ message: 'Broken <project>/src/index.ts' }] });

@@ -89,7 +89,7 @@ const mappedServiceError = (error: unknown): RequestDiagnostic | undefined => {
  */
 export class DevLogRoutes {
   readonly #authorize: (request: IncomingMessage) => void;
-  readonly #closeStreams = new Set<() => void>();
+  readonly #closeStreams = new Set<() => Promise<void>>();
   readonly #service: DevLogService | undefined;
   #closePromise: Promise<void> | undefined;
 
@@ -100,9 +100,11 @@ export class DevLogRoutes {
 
   close(): Promise<void> {
     if (this.#closePromise !== undefined) return this.#closePromise;
-    this.#closePromise = Promise.resolve().then(() => {
-      for (const close of this.#closeStreams) close();
+    this.#closePromise = Promise.resolve().then(async () => {
+      const results = await Promise.allSettled([...this.#closeStreams].map(async (close) => close()));
       this.#closeStreams.clear();
+      const failures = results.filter((result): result is PromiseRejectedResult => result.status === 'rejected');
+      if (failures.length > 0) throw new AggregateError(failures.map((failure) => failure.reason), 'Dev Log streams could not close.');
     });
     return this.#closePromise;
   }
@@ -143,16 +145,44 @@ export class DevLogRoutes {
     let queuedBytes = 0;
     const queued: QueuedFrame[] = [];
     const stream = { subscription: undefined as DevLogSubscription | undefined };
-    const close = (): void => {
-      if (closed) return;
+    let closePromise: Promise<void> | undefined;
+    const close = (): Promise<void> => {
+      if (closePromise !== undefined) return closePromise;
       closed = true;
       stream.subscription?.close();
       queued.length = 0;
       queuedBytes = 0;
       this.#closeStreams.delete(close);
+      response.off('close', closeFromPeer);
+      closePromise = new Promise<void>((resolvePromise, rejectPromise) => {
+        if (response.destroyed || response.writableEnded) {
+          resolvePromise();
+          return;
+        }
+        let settled = false;
+        const settle = (error?: Error): void => {
+          if (settled) return;
+          settled = true;
+          response.off('finish', onFinish);
+          response.off('close', onClose);
+          response.off('error', onError);
+          if (error === undefined) resolvePromise();
+          else rejectPromise(error);
+        };
+        const onFinish = (): void => settle();
+        const onClose = (): void => settle();
+        const onError = (error: Error): void => settle(error);
+        response.once('finish', onFinish);
+        response.once('close', onClose);
+        response.once('error', onError);
+        try { response.end(); }
+        catch (error) { settle(error instanceof Error ? error : new Error('Dev Log stream could not close.')); }
+      });
+      return closePromise;
     };
+    const closeFromPeer = (): void => { void close(); };
     const closeSlow = (): boolean => {
-      close();
+      void close();
       response.destroy();
       return false;
     };
@@ -187,7 +217,7 @@ export class DevLogRoutes {
       return true;
     };
     this.#closeStreams.add(close);
-    response.once('close', close);
+    response.once('close', closeFromPeer);
     response.writeHead(200, {
       'cache-control': 'no-cache',
       connection: 'keep-alive',
