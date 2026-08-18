@@ -420,23 +420,32 @@ THIRD_PARTY_NOTICES
 - Modify: `README.md`
 
 **Interfaces:**
-- Produces the twelve documented development MCP tools only while `dev --agent-api` runs.
+- Produces the thirteen documented development MCP tools only while `dev --agent-api` runs.
+- Uses one stable, loopback-only Streamable HTTP URL with standard bearer authentication so a preconfigured Codex session can remain connected across foreground-server restarts.
+- Keeps the agent-facing tool names and schemas stable. Rebuilds atomically replace the active artifact epoch behind those tools: new calls bind the new epoch, while in-flight calls and open product sessions retain their original epoch reference.
+- Does not depend on clients honoring MCP `notifications/tools/list_changed`; direct generated-server tool-list changes may still require an explicit host MCP reload.
 
 - [ ] **Step 1: Write a failing MCP client test for every documented development tool**
 
-  Assert the server is absent by default, present only for the foreground session, delegates to shared services, and closes with the session.
+  Assert the server is absent by default, exposes exactly thirteen tools only for the foreground session, delegates to shared services, and closes with the session.
 
 - [ ] **Step 2: Implement the Streamable HTTP MCP endpoint over application services**
 
-- [ ] **Step 3: Pack the npm package and start `agent-bundle dev --no-open` in a clean consumer**
+  Accept a server-selected or environment-provided bearer token without logging or persisting it. Support a fixed development port and stateless reconnect at the same URL. Resolve omitted operation epochs to the active epoch at call admission and include the resolved epoch identity in every artifact-backed result.
+
+- [ ] **Step 3: Prove one configured MCP client observes hot artifact rebuilds without reconnecting**
+
+  Initialize one client once, call against epoch A, rebuild to epoch B, and assert its next call observes B. Hold a separate A-bound operation open through the rebuild and assert it remains on A until completion. Restart the foreground server at the same URL and bearer token and prove a later stateless request succeeds without editing the client configuration.
+
+- [ ] **Step 4: Pack the npm package and start `agent-bundle dev --no-open` in a clean consumer**
 
   Assert prebuilt assets, all browser/API routes, live events, MCP/hook operations, deterministic evals, and complete shutdown. Then run explicit native Claude and Codex smoke trials using existing CLI sessions.
 
-- [ ] **Step 4: Document dev, playground, eval, native-auth, run-store, and Inspector provenance workflows**
+- [ ] **Step 5: Document dev, playground, eval, native-auth, run-store, and Inspector provenance workflows**
 
-- [ ] **Step 5: Run `npm run check`, every Node/Browser/process integration test, production builds, packed-consumer test, and `npm pack --dry-run`**
+- [ ] **Step 6: Run `npm run check`, every Node/Browser/process integration test, production builds, packed-consumer test, and `npm pack --dry-run`**
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
   Run: `git add packages README.md && git commit -m "test: verify workbench and evals end to end"`
 
@@ -445,6 +454,7 @@ THIRD_PARTY_NOTICES
 ## Workbench and Evals Completion Evidence
 
 - Contributor HMR and published prebuilt serving use identical service contracts.
+- A single configured Codex MCP client observes rebuilt artifacts through the stable agent API without restarting Codex; active operations remain pinned to their admitted epoch.
 - Coordinator shutdown leaves no watcher, server, MCP process, hook process, or CLI trial running.
 - Epoch and run concurrency tests cover second writers and stale recovery.
 - MCP/hook/playground operations execute emitted artifacts bound to explicit epochs.
