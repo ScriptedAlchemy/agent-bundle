@@ -73,6 +73,8 @@ interface Subscription {
 }
 
 const defaultReplayLimit = 256;
+/** Listener failures are observability-only; retain a bounded window so long-lived hubs cannot grow without limit. */
+const maxRetainedListenerErrors = 256;
 const eventTypes = new Set<ProjectEventType>([
   'source.changed',
   'source.status',
@@ -269,6 +271,7 @@ export class ProjectEventHub {
   #reportListenerFailure(error: unknown, event: ProjectEventMessage): void {
     const failure = Object.freeze({ error, event });
     this.#listenerErrors.push(failure);
+    if (this.#listenerErrors.length > maxRetainedListenerErrors) this.#listenerErrors.shift();
     try {
       this.#onListenerError?.(failure);
     } catch {

@@ -1,10 +1,11 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { mkdtemp, rm } from 'node:fs/promises';
-import { extname, join, relative, resolve } from 'node:path';
+import { extname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 
 import { createDefaultRegistry, type TargetRegistry } from '../adapters/registry.ts';
 import { validateArtifactWithSnapshot } from '../build/validate-artifact.ts';
+import { isInside } from '../core/paths.ts';
 import {
   taskkill,
   terminateProcessTree,
@@ -128,11 +129,6 @@ const safeSegment = (value: string): boolean =>
 
 const safeScriptId = (value: string): boolean =>
   /^script:[a-zA-Z0-9](?:[a-zA-Z0-9._-]*[a-zA-Z0-9])?$/u.test(value);
-
-const contained = (root: string, candidate: string): boolean => {
-  const path = relative(root, candidate);
-  return path.length > 0 && !path.startsWith('..') && !path.startsWith('/') && !path.startsWith('\\');
-};
 
 const interpreterFor = (suffix: string): PlaygroundScriptInterpreter | undefined => {
   if (suffix === '.mjs') return Object.freeze({ args: Object.freeze([]), command: process.execPath });
@@ -468,7 +464,7 @@ export class ScriptPlaygroundService {
         .find((entry) => entry.target === request.target && entry.id === request.scriptId);
       if (selected === undefined) throw new Error('Requested script is not in the validated artifact script catalog.');
       const path = resolve(reference.root, selected.file);
-      if (!contained(reference.root, path)) throw new Error('Resolved script escapes the published artifact.');
+      if (!isInside(reference.root, path)) throw new Error('Resolved script escapes the published artifact.');
       const interpreter = interpreterFor(extname(path));
       if (interpreter === undefined) throw new Error('Requested script suffix has no server allowlisted interpreter.');
       return Object.freeze({

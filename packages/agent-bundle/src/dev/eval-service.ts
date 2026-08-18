@@ -187,6 +187,8 @@ interface ActiveEvalRun {
 
 const maximumTrials = 100;
 const maximumArtifactBytes = 8 * 1024 * 1024;
+/** Background failures are surfaced once at close; retain a bounded window so long-lived services cannot grow without limit. */
+const maximumRetainedBackgroundFailures = 256;
 const safeRunId = /^[a-z0-9][a-z0-9._-]*$/u;
 const safeArtifactSegment = /^[a-z0-9][a-z0-9._-]*$/iu;
 
@@ -686,7 +688,7 @@ export class EvalService {
       harness,
       planned,
     }).then(resolveResult, (error: unknown) => {
-      this.#backgroundFailures.add(error);
+      if (this.#backgroundFailures.size < maximumRetainedBackgroundFailures) this.#backgroundFailures.add(error);
       rejectResult(error);
     });
     void active.result.catch(() => undefined);
