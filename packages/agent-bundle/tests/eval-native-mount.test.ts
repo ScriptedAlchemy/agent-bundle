@@ -380,18 +380,25 @@ it('forwards an active AbortSignal into native Codex commands', async () => {
   try {
     await seedNativeProject(project.root);
     const controller = new AbortController();
-    const seen: Array<AbortSignal | undefined> = [];
+    const seen: Array<Readonly<{ readonly abortedAfterRequest: boolean; readonly abortedBeforeRequest: boolean; readonly signal: AbortSignal | undefined }>> = [];
 
     const result = await nativeService(project.root, {
       codexRun: async (command) => {
-        seen.push(command.signal);
+        const abortedBeforeRequest = command.signal?.aborted ?? false;
         controller.abort();
+        seen.push(Object.freeze({
+          abortedAfterRequest: command.signal?.aborted ?? false,
+          abortedBeforeRequest,
+          signal: command.signal,
+        }));
         return { exitCode: 0, stderr: '', stdout: 'codex-cli 0.147.0\n' };
       },
       environment: { CODEX_HOME: await seedNormalCodexHome(project.root), PATH: process.env.PATH ?? '/usr/bin' },
     }).run({ harness: 'codex', signal: controller.signal, suites: ['native-suite'] });
 
-    expect(seen).toEqual([controller.signal]);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toMatchObject({ abortedAfterRequest: true, abortedBeforeRequest: false });
+    expect(seen[0]?.signal).toBeInstanceOf(AbortSignal);
     expect(result.trials).toHaveLength(1);
     expect(result.trials[0]?.harnessFailure).toMatchObject({ code: 'EVAL_TRACE_UNAVAILABLE', stage: 'trace' });
   } finally {

@@ -872,8 +872,9 @@ export class EvalService {
         active.uncertainty = error;
       }
       throw error;
-    }).finally(() => active.controller.abort());
+    });
     active.cancellation = cancellation;
+    active.controller.abort();
     return cancellation;
   }
 
