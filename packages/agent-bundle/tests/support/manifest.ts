@@ -29,6 +29,7 @@ export const writeFixtureManifest = async (options: {
       };
     })
     .sort((left, right) => left.name.localeCompare(right.name));
+  await writeHookIndex({ artifactRoot: options.artifactRoot, hooks: [] });
   const files = (await listArtifactFiles(options.artifactRoot))
     .map((file) => ({
       bytes: file.bytes,

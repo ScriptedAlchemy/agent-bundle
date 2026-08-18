@@ -63,7 +63,7 @@ interface Closeable {
 
 export interface DevServerLifecycleCloseFailure {
   readonly error: unknown;
-  readonly resource: 'agent-api' | 'coordinator' | 'mcp-apps' | 'mcp-sessions' | 'playground' | 'runtime' | 'runtime-client-surfaces';
+  readonly resource: 'coordinator' | 'mcp-apps' | 'mcp-sessions' | 'playground' | 'runtime' | 'runtime-client-surfaces';
 }
 
 /** Reports session and coordinator cleanup failures without hiding either resource. */
@@ -389,7 +389,6 @@ export interface DevServerRuntimeLifecycleResources {
 }
 
 export interface DevServerLifecycleOptions {
-  readonly agentApi?: Closeable;
   readonly coordinator: Closeable;
   readonly mcpApps?: Closeable;
   readonly mcpSessions: Closeable;
@@ -399,16 +398,14 @@ export interface DevServerLifecycleOptions {
 
 /** Closes persistent MCP state alongside the coordinator, preserving all cleanup failures. */
 export const closeDevServerLifecycle = async ({
-  agentApi,
   coordinator,
   mcpApps,
   mcpSessions,
   playground,
   runtimeResources,
 }: DevServerLifecycleOptions): Promise<void> => {
-  // Agent API and Playground both own admissions over shared services. Publish
-  // and drain each gate before closing those shared services or the coordinator.
-  const agentApiResults = agentApi === undefined ? [] : await Promise.allSettled([agentApi.close()]);
+  // ForegroundServer owns the Agent API admission gate. This lifecycle owns
+  // only the shared services that are released after foreground routing ends.
   const playgroundResults = playground === undefined ? [] : await Promise.allSettled([playground.close()]);
   const appResults = mcpApps === undefined ? [] : await Promise.allSettled([mcpApps.close()]);
   const clientSurfaceResults = runtimeResources?.clientSurfaces === undefined
@@ -420,11 +417,6 @@ export const closeDevServerLifecycle = async ({
   const sessionResults = await Promise.allSettled([mcpSessions.close()]);
   const coordinatorResults = await Promise.allSettled([coordinator.close()]);
   const failures = [
-    ...agentApiResults.flatMap((result): readonly DevServerLifecycleCloseFailure[] =>
-      result.status === 'rejected'
-        ? [Object.freeze({ error: result.reason, resource: 'agent-api' as const })]
-        : [],
-    ),
     ...playgroundResults.flatMap((result): readonly DevServerLifecycleCloseFailure[] =>
       result.status === 'rejected'
         ? [Object.freeze({ error: result.reason, resource: 'playground' as const })]
@@ -467,12 +459,10 @@ const withMcpSessionLifecycle = (
   clientSurfaces: RuntimeClientSurfaceBindings,
   status: () => ProjectStatus,
   playground: Closeable,
-  agentApi: () => Closeable | undefined,
 ): ForegroundCoordinator => Object.freeze({
   close: () => {
     clientSurfaces.beginClose();
     return closeDevServerLifecycle({
-      agentApi: agentApi(),
       coordinator,
       mcpApps: mcpApps(),
       mcpSessions,
@@ -720,7 +710,6 @@ export const startDevServer = async (options: StartDevServerOptions): Promise<De
       clientSurfaces,
       status,
       playground,
-      () => agentApi,
     ),
     evals,
     eventHub,

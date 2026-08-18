@@ -477,7 +477,7 @@ it('invokes a prebuilt MCP server from a clean packed consumer', async () => {
         $schema: 'https://agent-plugins.org/schemas/1.0.0/mcp.schema.json',
         mcpServers: {
           fixture: {
-            args: ['./mcp/server.mjs'],
+            args: ['mcp/server.mjs'],
             command: process.execPath,
             cwd: '${PLUGIN_ROOT}',
             type: 'stdio',

@@ -1697,8 +1697,7 @@ it('closes MCP Apps before sessions and the coordinator while retaining every cl
   expect(closeOrder).toEqual(['mcp-apps', 'mcp-sessions', 'coordinator']);
 });
 
-it('closes every named lifecycle resource in ownership order without losing failures', async () => {
-  const agentApiFailure = new Error('Agent API cleanup failed.');
+it('leaves Agent API ownership to the foreground release while closing every lifecycle resource in order', async () => {
   const clientFailure = new Error('Runtime client surface cleanup failed.');
   const appFailure = new Error('MCP App cleanup failed.');
   const runtimeFailure = new Error('Runtime cleanup failed.');
@@ -1708,7 +1707,6 @@ it('closes every named lifecycle resource in ownership order without losing fail
   const closeOrder: string[] = [];
 
   await expect(closeDevServerLifecycle({
-    agentApi: { close: async () => { closeOrder.push('agent-api'); throw agentApiFailure; } },
     coordinator: { close: async () => { closeOrder.push('coordinator'); throw coordinatorFailure; } },
     mcpApps: { close: async () => { closeOrder.push('mcp-apps'); throw appFailure; } },
     mcpSessions: { close: async () => { closeOrder.push('mcp-sessions'); throw mcpFailure; } },
@@ -1719,7 +1717,6 @@ it('closes every named lifecycle resource in ownership order without losing fail
     playground: { close: async () => { closeOrder.push('playground'); throw playgroundFailure; } },
   })).rejects.toEqual(expect.objectContaining({
     failures: [
-      { error: agentApiFailure, resource: 'agent-api' },
       { error: playgroundFailure, resource: 'playground' },
       { error: appFailure, resource: 'mcp-apps' },
       { error: clientFailure, resource: 'runtime-client-surfaces' },
@@ -1730,7 +1727,6 @@ it('closes every named lifecycle resource in ownership order without losing fail
     name: DevServerLifecycleCloseError.name,
   }));
   expect(closeOrder).toEqual([
-    'agent-api',
     'playground',
     'mcp-apps',
     'runtime-client-surfaces',
