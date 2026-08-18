@@ -828,7 +828,7 @@ it('keeps epoch metadata and contents retryable when native catalog sidecar dele
   }
 });
 
-it('removes a publication-bound catalog sidecar when pre-activation publication fails', async () => {
+it('rolls back a publisher-owned catalog sidecar when activation fails after publication', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent bundle native catalog publication rollback '));
   const epoch = epochFor(root, 'epoch-sidecar-rollback');
   try {
@@ -843,14 +843,18 @@ it('removes a publication-bound catalog sidecar when pre-activation publication 
       writeFile(join(staging.root, 'claude', 'plugin.json'), 'claude\n'),
       writeFile(join(staging.root, 'codex', 'plugin.json'), 'codex\n'),
     ]);
-    const publicationFailure = new Error('catalog publication failed');
     await expect(staging.publish(async () => undefined, async () => {
       await mkdir(dirname(nativeCatalogPathFor(root, epoch.id)), { recursive: true });
       await writeFile(nativeCatalogPathFor(root, epoch.id), '{"epochId":"epoch-sidecar-rollback","selections":[],"version":1}\n');
-      throw publicationFailure;
-    })).rejects.toBe(publicationFailure);
+      await mkdir(activeMetadataPathFor(root), { recursive: true });
+      return Object.freeze({
+        rollback: async () => rm(nativeCatalogPathFor(root, epoch.id), { force: true }),
+      });
+    })).rejects.toBeDefined();
     await expect(readFile(nativeCatalogPathFor(root, epoch.id), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
-    await expect(store.readActiveEpoch()).resolves.toBeUndefined();
+    await expect(readFile(epochMetadataPathFor(root, epoch.id), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(readFile(join(root, '.agent-bundle', 'epochs', epoch.id, 'claude', 'plugin.json'), 'utf8'))
+      .rejects.toMatchObject({ code: 'ENOENT' });
   } finally {
     await rm(root, { force: true, recursive: true });
   }

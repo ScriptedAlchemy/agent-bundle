@@ -1,5 +1,5 @@
 import { constants } from 'node:fs';
-import { link, mkdir, mkdtemp, open, rm } from 'node:fs/promises';
+import { link, mkdir, mkdtemp, open, rename, rm } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 
 import { digest, stableJson } from '../core/digest.ts';
@@ -109,6 +109,8 @@ export interface NativePlaygroundServiceOptions {
 export interface NativePlaygroundCatalogStorage {
   readonly link: typeof link;
   readonly mkdir: typeof mkdir;
+  /** @internal Deterministic rollback-race seam. */
+  readonly move?: typeof rename;
   readonly open: typeof open;
   readonly remove: typeof rm;
 }
@@ -125,6 +127,14 @@ export interface NativePlaygroundCatalogPublicationOptions {
   readonly epoch: ArtifactEpoch;
   readonly planFixture?: NativePlaygroundServiceOptions['planFixture'];
   readonly projectRoot: string;
+}
+
+export interface NativePlaygroundCatalogPublicationReceipt {
+  /** True only when this publisher installed the exact sidecar inode. */
+  readonly created: boolean;
+  /** Opaque inode-and-content identity used to make rollback ownership-safe. */
+  readonly identity: string;
+  rollback(): Promise<void>;
 }
 
 interface PersistedCatalogSelection {
@@ -163,6 +173,16 @@ interface PersistedCatalogSnapshot {
   readonly epochId: string;
   readonly selections: readonly PersistedCatalogSelection[];
   readonly version: 1;
+}
+
+interface SidecarFile {
+  readonly identity: string;
+  readonly raw: string;
+}
+
+interface PersistedCatalogPublication {
+  readonly receipt: NativePlaygroundCatalogPublicationReceipt;
+  readonly snapshot: PersistedCatalogSnapshot;
 }
 
 /** Native raw trial artifacts have no durable backing store; durable Playground events are the only exposed evidence. */
@@ -500,10 +520,14 @@ const persistedSelection = (
  */
 export class NativePlaygroundService {
   readonly #catalogDirectory: string | undefined;
+  readonly #catalogMove: typeof rename;
   readonly #catalogStorage: NativePlaygroundCatalogStorage;
   readonly #catalogs = new Map<string, Promise<CatalogSnapshot>>();
+  readonly #catalogPublications = new Map<string, NativePlaygroundCatalogPublicationReceipt>();
   readonly #cleanupFailures = new Set<unknown>();
   readonly #closeReason = new Error('Native Playground service is closed.');
+  /** Abort listeners run synchronously and cannot await the close they help complete. */
+  readonly #abortReentryCompletion = Promise.resolve();
   readonly #discover: NonNullable<NativePlaygroundServiceOptions['discover']>;
   readonly #environment: Readonly<NodeJS.ProcessEnv> | undefined;
   readonly #inspectArtifact: NonNullable<NativePlaygroundServiceOptions['inspectArtifact']>;
@@ -512,12 +536,14 @@ export class NativePlaygroundService {
   readonly #planFixture: NonNullable<NativePlaygroundServiceOptions['planFixture']>;
   readonly #projectRoot: string;
   readonly #removeWorkspace: NonNullable<NativePlaygroundServiceOptions['removeWorkspace']>;
+  #abortDispatchDepth = 0;
   #closePromise: Promise<void> | undefined;
   #closed = false;
 
   constructor(options: NativePlaygroundServiceOptions) {
     this.#catalogDirectory = options.catalogDirectory;
     this.#catalogStorage = options.catalogStorage ?? Object.freeze({ link, mkdir, open, remove: rm });
+    this.#catalogMove = options.catalogStorage?.move ?? rename;
     this.#projectRoot = options.projectRoot;
     this.#removeWorkspace = options.removeWorkspace ?? (async (root) => rm(root, { force: true, recursive: true }));
     this.#environment = options.environment;
@@ -540,6 +566,13 @@ export class NativePlaygroundService {
   async catalog(reference: NativePlaygroundEpochReference): Promise<NativePlaygroundCatalog> {
     this.#assertOpen();
     return (await this.#snapshot(reference)).catalog;
+  }
+
+  /** Captures an epoch publication receipt without exposing native catalog contents. */
+  async publishCatalogSnapshot(reference: NativePlaygroundEpochReference): Promise<NativePlaygroundCatalogPublicationReceipt> {
+    this.#assertOpen();
+    await this.#snapshot(reference);
+    return this.#catalogPublications.get(reference.epoch.id) ?? await this.#acceptedPublicationReceipt(reference);
   }
 
   async prepare(
@@ -591,7 +624,11 @@ export class NativePlaygroundService {
       settle: () => { settle(); },
     };
     this.#operations.add(operation);
-    const signal = AbortSignal.any([controller.signal, options.signal]);
+    const externalSignal = options.signal;
+    const abortFromExternal = (): void => this.#dispatchAbort(controller, externalSignal.reason);
+    if (externalSignal.aborted) abortFromExternal();
+    else externalSignal.addEventListener('abort', abortFromExternal, { once: true });
+    const signal = controller.signal;
     let nativeRoot: string | undefined;
     let completedResponse: string | undefined;
     let completedWorkspace: WorkspaceDiff | undefined;
@@ -657,6 +694,7 @@ export class NativePlaygroundService {
       try {
         if (nativeRoot !== undefined) await this.#cleanupWorkspace(nativeRoot);
       } finally {
+        externalSignal.removeEventListener('abort', abortFromExternal);
         this.#operations.delete(operation);
         operation.settle();
       }
@@ -664,20 +702,31 @@ export class NativePlaygroundService {
   }
 
   close(): Promise<void> {
-    this.#closePromise ??= this.#close();
-    return this.#closePromise;
+    const reentrantAbortListener = this.#abortDispatchDepth > 0;
+    if (this.#closePromise === undefined) {
+      let resolvePromise!: () => void;
+      let rejectPromise!: (reason: unknown) => void;
+      const closing = new Promise<void>((resolvePromiseInput, rejectPromiseInput) => {
+        resolvePromise = resolvePromiseInput;
+        rejectPromise = rejectPromiseInput;
+      });
+      this.#closePromise = closing;
+      void this.#close().then(resolvePromise, rejectPromise);
+    }
+    return reentrantAbortListener ? this.#abortReentryCompletion : this.#closePromise;
   }
 
   async #close(): Promise<void> {
     this.#closed = true;
     const operations = [...this.#operations];
     const catalogs = [...this.#catalogs.values()];
-    for (const operation of operations) operation.controller.abort(this.#closeReason);
+    for (const operation of operations) this.#dispatchAbort(operation.controller, this.#closeReason);
     const results = await Promise.allSettled([
       ...operations.map((operation) => operation.settled),
       ...catalogs,
     ]);
     this.#catalogs.clear();
+    this.#catalogPublications.clear();
     const failures = [
       ...results.flatMap((result) =>
         result.status === 'rejected' && result.reason !== this.#closeReason ? [result.reason] : []),
@@ -686,6 +735,12 @@ export class NativePlaygroundService {
     if (failures.length > 0) {
       throw new AggregateError(failures, 'Native Playground cleanup failed.', { cause: failures[0] });
     }
+  }
+
+  #dispatchAbort(controller: AbortController, reason: unknown): void {
+    this.#abortDispatchDepth += 1;
+    try { controller.abort(reason); }
+    finally { this.#abortDispatchDepth -= 1; }
   }
 
   async #cleanupWorkspace(root: string): Promise<void> {
@@ -715,9 +770,22 @@ export class NativePlaygroundService {
     this.#assertOpen();
     const discovered = persisted ?? await this.#discoverSnapshot(reference);
     this.#assertOpen();
-    const snapshot = persisted ?? await this.#persistSnapshot(reference, discovered);
-    this.#assertOpen();
-    return this.#hydrateSnapshot(artifact, snapshot);
+    const publication = persisted === undefined ? await this.#persistSnapshot(reference, discovered) : undefined;
+    const snapshot = publication?.snapshot ?? persisted;
+    if (snapshot === undefined) throw new Error('Native Playground catalog snapshot could not be persisted.');
+    const receipt = publication?.receipt ?? await this.#acceptedPublicationReceipt(reference);
+    this.#catalogPublications.set(reference.epoch.id, receipt);
+    try {
+      this.#assertOpen();
+      return this.#hydrateSnapshot(artifact, snapshot);
+    } catch (error) {
+      this.#catalogPublications.delete(reference.epoch.id);
+      return this.#rollbackPublicationAndThrow(
+        receipt,
+        error,
+        'Native Playground catalog hydration and rollback both failed.',
+      );
+    }
   }
 
   async #discoverSnapshot(reference: NativePlaygroundEpochReference): Promise<PersistedCatalogSnapshot> {
@@ -818,35 +886,10 @@ export class NativePlaygroundService {
   }
 
   async #readSnapshot(reference: NativePlaygroundEpochReference): Promise<PersistedCatalogSnapshot | undefined> {
-    const path = this.#snapshotPath(reference);
-    let raw: string;
-    try {
-      const file = await open(path, catalogOpenFlags);
-      try {
-        const metadata = await file.stat();
-        if (!metadata.isFile() || metadata.nlink !== 1 || metadata.size > maximumCatalogSnapshotBytes) {
-          throw new Error('Native Playground catalog snapshot is invalid.');
-        }
-        const buffer = Buffer.allocUnsafe(maximumCatalogSnapshotBytes + 1);
-        let offset = 0;
-        while (offset < buffer.byteLength) {
-          const { bytesRead } = await file.read(buffer, offset, buffer.byteLength - offset, offset);
-          if (bytesRead === 0) break;
-          offset += bytesRead;
-        }
-        if (offset > maximumCatalogSnapshotBytes) {
-          throw new Error('Native Playground catalog snapshot is invalid.');
-        }
-        raw = new TextDecoder('utf-8', { fatal: true }).decode(buffer.subarray(0, offset));
-      } finally { await file.close(); }
-    }
-    catch (error) {
-      if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT') return undefined;
-      if (error instanceof Error && error.message === 'Native Playground catalog snapshot is invalid.') throw error;
-      throw new Error('Native Playground catalog snapshot could not be read.', { cause: error });
-    }
+    const sidecar = await this.#readSidecar(this.#snapshotPath(reference));
+    if (sidecar === undefined) return undefined;
     let value: JsonValue;
-    try { value = snapshotStrictJsonValue(parseJsonWithoutDuplicateKeys(raw)); }
+    try { value = snapshotStrictJsonValue(parseJsonWithoutDuplicateKeys(sidecar.raw)); }
     catch { throw new Error('Native Playground catalog snapshot is invalid.'); }
     if (!isRecord(value) || !exactKeys(value, ['epochId', 'selections', 'version']) || value.version !== catalogSnapshotVersion ||
       value.epochId !== reference.epoch.id || !Array.isArray(value.selections) || value.selections.length > maximumCatalogSelections) {
@@ -902,10 +945,46 @@ export class NativePlaygroundService {
     return Object.freeze({ epochId: value.epochId, selections: Object.freeze(resolved), version: catalogSnapshotVersion });
   }
 
+  async #readSidecar(path: string, allowMultipleLinks = false): Promise<SidecarFile | undefined> {
+    try {
+      const file = await open(path, catalogOpenFlags);
+      try {
+        const metadata = await file.stat();
+        if (
+          !metadata.isFile() ||
+          metadata.nlink < 1 ||
+          (!allowMultipleLinks && metadata.nlink !== 1) ||
+          metadata.size > maximumCatalogSnapshotBytes
+        ) {
+          throw new Error('Native Playground catalog snapshot is invalid.');
+        }
+        const buffer = Buffer.allocUnsafe(maximumCatalogSnapshotBytes + 1);
+        let offset = 0;
+        while (offset < buffer.byteLength) {
+          const { bytesRead } = await file.read(buffer, offset, buffer.byteLength - offset, offset);
+          if (bytesRead === 0) break;
+          offset += bytesRead;
+        }
+        if (offset > maximumCatalogSnapshotBytes) {
+          throw new Error('Native Playground catalog snapshot is invalid.');
+        }
+        const raw = new TextDecoder('utf-8', { fatal: true }).decode(buffer.subarray(0, offset));
+        return Object.freeze({
+          identity: digest({ contents: raw, dev: metadata.dev, ino: metadata.ino }),
+          raw,
+        });
+      } finally { await file.close(); }
+    } catch (error) {
+      if (isErrno(error, 'ENOENT')) return undefined;
+      if (error instanceof Error && error.message === 'Native Playground catalog snapshot is invalid.') throw error;
+      throw new Error('Native Playground catalog snapshot could not be read.', { cause: error });
+    }
+  }
+
   async #persistSnapshot(
     reference: NativePlaygroundEpochReference,
     snapshot: PersistedCatalogSnapshot,
-  ): Promise<PersistedCatalogSnapshot> {
+  ): Promise<PersistedCatalogPublication> {
     const path = this.#snapshotPath(reference);
     const directory = dirname(path);
     const contents = `${stableJson(snapshot)}\n`;
@@ -915,15 +994,25 @@ export class NativePlaygroundService {
     await this.#catalogStorage.mkdir(directory, { recursive: true });
     const temporary = join(directory, `.${reference.epoch.id}.stage-${process.pid}-${Math.random().toString(16).slice(2)}`);
     let handle: Awaited<ReturnType<typeof open>> | undefined;
+    let created = false;
+    let publicationIdentity: string | undefined;
     let primary: unknown;
     const cleanupFailures: unknown[] = [];
     try {
       handle = await this.#catalogStorage.open(temporary, 'wx', 0o600);
       await handle.writeFile(contents, 'utf8');
       await handle.sync();
+      const staged = await handle.stat();
+      if (!staged.isFile() || staged.nlink !== 1) {
+        throw new Error('Native Playground catalog staging file is invalid.');
+      }
+      publicationIdentity = digest({ contents, dev: staged.dev, ino: staged.ino });
       await handle.close();
       handle = undefined;
-      try { await this.#catalogStorage.link(temporary, path); }
+      try {
+        await this.#catalogStorage.link(temporary, path);
+        created = true;
+      }
       catch (error) {
         if (!isErrno(error, 'EEXIST')) throw error;
       }
@@ -938,6 +1027,10 @@ export class NativePlaygroundService {
         catch (error) { cleanupFailures.push(error); }
       }
       try { await this.#catalogStorage.remove(temporary, { force: true }); }
+      catch (error) { cleanupFailures.push(error); }
+    }
+    if ((primary !== undefined || cleanupFailures.length > 0) && created && publicationIdentity !== undefined) {
+      try { await this.#publicationReceipt(path, publicationIdentity, true, true).rollback(); }
       catch (error) { cleanupFailures.push(error); }
     }
     if (primary !== undefined) {
@@ -957,9 +1050,116 @@ export class NativePlaygroundService {
         { cause: cleanupFailures[0] },
       );
     }
-    const persisted = await this.#readSnapshot(reference);
-    if (persisted === undefined) throw new Error('Native Playground catalog snapshot could not be persisted.');
-    return persisted;
+    const receipt = created && publicationIdentity !== undefined
+      ? this.#publicationReceipt(path, publicationIdentity, true)
+      : await this.#snapshotReceipt(reference, false);
+    try {
+      const persisted = await this.#readSnapshot(reference);
+      if (persisted === undefined) throw new Error('Native Playground catalog snapshot could not be persisted.');
+      return Object.freeze({ receipt, snapshot: persisted });
+    } catch (error) {
+      return this.#rollbackPublicationAndThrow(
+        receipt,
+        error,
+        'Native Playground catalog validation and rollback both failed.',
+      );
+    }
+  }
+
+  async #acceptedPublicationReceipt(reference: NativePlaygroundEpochReference): Promise<NativePlaygroundCatalogPublicationReceipt> {
+    return this.#snapshotReceipt(reference, false);
+  }
+
+  async #snapshotReceipt(
+    reference: NativePlaygroundEpochReference,
+    created: boolean,
+  ): Promise<NativePlaygroundCatalogPublicationReceipt> {
+    const path = this.#snapshotPath(reference);
+    const sidecar = await this.#readSidecar(path);
+    if (sidecar === undefined) throw new Error('Native Playground catalog snapshot could not be persisted.');
+    return this.#publicationReceipt(path, sidecar.identity, created);
+  }
+
+  #publicationReceipt(
+    path: string,
+    identity: string,
+    created: boolean,
+    allowMultipleLinks = false,
+  ): NativePlaygroundCatalogPublicationReceipt {
+    return Object.freeze({
+      created,
+      identity,
+      rollback: async () => {
+        if (!created) return;
+        await this.#rollbackPublication(path, identity, allowMultipleLinks);
+      },
+    });
+  }
+
+  async #rollbackPublication(path: string, identity: string, allowMultipleLinks: boolean): Promise<void> {
+    const quarantineRoot = await mkdtemp(join(dirname(path), '.native-playground-rollback-'));
+    const quarantined = join(quarantineRoot, 'catalog.json');
+    let quarantineOccupied = false;
+    let primary: unknown;
+    try {
+      try {
+        await this.#catalogMove(path, quarantined);
+        quarantineOccupied = true;
+      } catch (error) {
+        if (!isErrno(error, 'ENOENT')) throw error;
+      }
+      if (quarantineOccupied) {
+        let current: SidecarFile | undefined;
+        let inspectionFailure: unknown;
+        try { current = await this.#readSidecar(quarantined, allowMultipleLinks); }
+        catch (error) { inspectionFailure = error; }
+        if (inspectionFailure === undefined && current?.identity === identity) {
+          await this.#catalogStorage.remove(quarantined, { force: true });
+          quarantineOccupied = false;
+        } else {
+          try { await this.#catalogStorage.link(quarantined, path); }
+          catch (error) {
+            throw new Error('Native Playground catalog rollback could not restore a replaced sidecar.', { cause: error });
+          }
+          try {
+            await this.#catalogStorage.remove(quarantined, { force: true });
+            quarantineOccupied = false;
+          } catch (error) {
+            throw new Error('Native Playground catalog rollback could not release its restored quarantine.', { cause: error });
+          }
+          if (inspectionFailure !== undefined) throw inspectionFailure;
+        }
+      }
+    } catch (error) {
+      primary = error;
+    }
+    let cleanupFailure: unknown;
+    if (!quarantineOccupied) {
+      try { await this.#catalogStorage.remove(quarantineRoot, { force: true, recursive: true }); }
+      catch (error) { cleanupFailure = error; }
+    }
+    if (primary !== undefined && cleanupFailure !== undefined) {
+      throw new AggregateError(
+        [primary, cleanupFailure],
+        'Native Playground catalog rollback and quarantine cleanup both failed.',
+        { cause: primary },
+      );
+    }
+    if (primary !== undefined) throw primary;
+    if (cleanupFailure !== undefined) throw cleanupFailure;
+  }
+
+  async #rollbackPublicationAndThrow(
+    receipt: NativePlaygroundCatalogPublicationReceipt,
+    primary: unknown,
+    message: string,
+  ): Promise<never> {
+    if (!receipt.created) throw primary;
+    try { await receipt.rollback(); }
+    catch (rollbackFailure) {
+      throw new AggregateError([primary, rollbackFailure], message, { cause: rollbackFailure });
+    }
+    throw primary;
   }
 
   #snapshotPath(reference: NativePlaygroundEpochReference): string {
@@ -996,7 +1196,7 @@ export class NativePlaygroundService {
 /** Captures the complete native selection set while its artifact epoch publishes. */
 export const publishNativePlaygroundCatalogSnapshot = async (
   options: NativePlaygroundCatalogPublicationOptions,
-): Promise<void> => {
+): Promise<NativePlaygroundCatalogPublicationReceipt> => {
   const root = join(resolve(options.projectRoot), '.agent-bundle', 'epochs', options.epoch.id);
   const service = new NativePlaygroundService({
     ...(options.catalogDirectory === undefined ? {} : { catalogDirectory: options.catalogDirectory }),
@@ -1013,8 +1213,15 @@ export const publishNativePlaygroundCatalogSnapshot = async (
     ...(options.planFixture === undefined ? {} : { planFixture: options.planFixture }),
     projectRoot: options.projectRoot,
   });
+  let receipt: NativePlaygroundCatalogPublicationReceipt | undefined;
   let primary: unknown;
-  try { await service.catalog(Object.freeze({ close: async () => undefined, epoch: options.epoch, root })); }
+  try {
+    receipt = await service.publishCatalogSnapshot(Object.freeze({
+      close: async () => undefined,
+      epoch: options.epoch,
+      root,
+    }));
+  }
   catch (error) { primary = error; }
   let closeFailure: unknown;
   try { await service.close(); }
@@ -1027,5 +1234,19 @@ export const publishNativePlaygroundCatalogSnapshot = async (
     );
   }
   if (primary !== undefined) throw primary;
-  if (closeFailure !== undefined) throw closeFailure;
+  if (receipt === undefined) throw new Error('Native Playground catalog snapshot could not be persisted.');
+  if (closeFailure !== undefined) {
+    let rollbackFailure: unknown;
+    try { await receipt.rollback(); }
+    catch (error) { rollbackFailure = error; }
+    if (rollbackFailure !== undefined) {
+      throw new AggregateError(
+        [closeFailure, rollbackFailure],
+        'Native Playground catalog close and rollback both failed.',
+        { cause: closeFailure },
+      );
+    }
+    throw closeFailure;
+  }
+  return receipt;
 };

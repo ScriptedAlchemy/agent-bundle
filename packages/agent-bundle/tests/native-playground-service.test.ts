@@ -1,4 +1,4 @@
-import { link, mkdir, mkdtemp, open, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { link, mkdir, mkdtemp, open, readFile, readdir, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -340,6 +340,9 @@ it('rejects semantically hostile persisted catalog selections without rediscover
     readonly version: number;
   };
   const snapshots = [
+    (snapshot: { selections: Record<string, unknown>[] }) => {
+      snapshot.selections[0]!.unexpected = 'smuggled';
+    },
     (snapshot: { selections: Record<string, unknown>[] }) => {
       const evalCase = snapshot.selections[0]!.evalCase as Record<string, unknown>;
       evalCase.prompt = 'tampered authored prompt';
@@ -1137,6 +1140,8 @@ it('fsyncs durable catalog publication, validates a no-replace winner, and retai
       const service = serviceFor(failure);
       await expect(service.catalog(reference)).rejects.toThrow(failures.get(failure)!.message);
       expect((await readdir(catalogDirectory)).filter((name) => name.includes('.stage-'))).toEqual([]);
+      await expect(readFile(join(catalogDirectory, `${reference.epoch.id}.json`), 'utf8'))
+        .rejects.toMatchObject({ code: 'ENOENT' });
       await service.close();
     }
     await rm(catalogDirectory, { force: true, recursive: true });
@@ -1215,4 +1220,346 @@ it('retains a genuine admitted catalog failure in the stable close result', asyn
   rejectDiscovery(failure);
   await expect(pending).rejects.toBe(failure);
   await expect(closing).rejects.toMatchObject({ errors: [failure] });
+});
+
+it('returns ownership-safe receipts for created and accepted native catalog sidecars', async () => {
+  const catalogDirectory = testCatalogDirectory();
+  const reference = epoch('epoch-publication-receipt', '/epochs/publication-receipt');
+  const serviceFor = (): NativePlaygroundService => new NativePlaygroundService({
+    catalogDirectory,
+    discover: async () => suite(),
+    inspectArtifact: async (candidate) => Object.freeze({
+      binding: Object.freeze({
+        manifestPath: candidate.epoch.manifestPath,
+        source: 'explicit' as const,
+        targetDigests: candidate.epoch.targetDigests,
+      }),
+      root: candidate.root,
+    }),
+    planFixture: async () => fixturePlan,
+    projectRoot: '/project',
+  });
+  const owner = serviceFor();
+  const accepted = serviceFor();
+  const ownerReceipt = await owner.publishCatalogSnapshot(reference);
+  const acceptedReceipt = await accepted.publishCatalogSnapshot(reference);
+  const sidecar = join(catalogDirectory, `${reference.epoch.id}.json`);
+
+  expect(ownerReceipt).toMatchObject({ created: true });
+  expect(acceptedReceipt).toMatchObject({ created: false, identity: ownerReceipt.identity });
+  await acceptedReceipt.rollback();
+  await expect(readFile(sidecar, 'utf8')).resolves.toContain(reference.epoch.id);
+  await ownerReceipt.rollback();
+  await expect(readFile(sidecar, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  await Promise.all([owner.close(), accepted.close()]);
+});
+
+it('does not let a native catalog owner receipt remove replaced sidecar contents', async () => {
+  const catalogDirectory = testCatalogDirectory();
+  const reference = epoch('epoch-publication-replaced', '/epochs/publication-replaced');
+  const service = new NativePlaygroundService({
+    catalogDirectory,
+    discover: async () => suite(),
+    inspectArtifact: async (candidate) => Object.freeze({
+      binding: Object.freeze({
+        manifestPath: candidate.epoch.manifestPath,
+        source: 'explicit' as const,
+        targetDigests: candidate.epoch.targetDigests,
+      }),
+      root: candidate.root,
+    }),
+    planFixture: async () => fixturePlan,
+    projectRoot: '/project',
+  });
+  const receipt = await service.publishCatalogSnapshot(reference);
+  const sidecar = join(catalogDirectory, `${reference.epoch.id}.json`);
+  await writeFile(sidecar, 'replacement contents\n');
+
+  await receipt.rollback();
+  await expect(readFile(sidecar, 'utf8')).resolves.toBe('replacement contents\n');
+  await service.close();
+});
+
+it('does not delete a sidecar replaced between receipt validation and rollback removal', async () => {
+  const catalogDirectory = testCatalogDirectory();
+  const reference = epoch('epoch-publication-race', '/epochs/publication-race');
+  const sidecar = join(catalogDirectory, `${reference.epoch.id}.json`);
+  const replacement = 'replacement at removal boundary\n';
+  const storage = {
+    link,
+    mkdir,
+    move: async (source: Parameters<typeof rename>[0], destination: Parameters<typeof rename>[1]) => {
+      await rename(source, destination);
+      await writeFile(sidecar, replacement);
+    },
+    open,
+    remove: async (path: Parameters<typeof rm>[0], options: Parameters<typeof rm>[1]) => {
+      if (String(path) === sidecar) await writeFile(sidecar, replacement);
+      await rm(path, options);
+    },
+  } as NativePlaygroundCatalogStorage & { readonly move: typeof rename };
+  const service = new NativePlaygroundService({
+    catalogDirectory,
+    catalogStorage: storage,
+    discover: async () => suite(),
+    inspectArtifact: async (candidate) => Object.freeze({
+      binding: Object.freeze({
+        manifestPath: candidate.epoch.manifestPath,
+        source: 'explicit' as const,
+        targetDigests: candidate.epoch.targetDigests,
+      }),
+      root: candidate.root,
+    }),
+    planFixture: async () => fixturePlan,
+    projectRoot: '/project',
+  });
+  const receipt = await service.publishCatalogSnapshot(reference);
+
+  await receipt.rollback();
+  await expect(readFile(sidecar, 'utf8')).resolves.toBe(replacement);
+  await service.close();
+});
+
+it('rolls back an owned native catalog sidecar when staging cleanup alone fails', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-native-playground-cleanup-only-'));
+  const catalogDirectory = join(root, 'catalog');
+  const reference = epoch('epoch-cleanup-only', '/epochs/cleanup-only');
+  const cleanupFailure = new Error('stage cleanup failed');
+  const storage: NativePlaygroundCatalogStorage = {
+    link,
+    mkdir,
+    open,
+    remove: async (path, options) => {
+      if (String(path).includes('.stage-')) throw cleanupFailure;
+      await rm(path, options);
+    },
+  };
+  const service = new NativePlaygroundService({
+    catalogDirectory,
+    catalogStorage: storage,
+    discover: async () => suite(),
+    inspectArtifact: async (candidate) => Object.freeze({
+      binding: Object.freeze({
+        manifestPath: candidate.epoch.manifestPath,
+        source: 'explicit' as const,
+        targetDigests: candidate.epoch.targetDigests,
+      }),
+      root: candidate.root,
+    }),
+    planFixture: async () => fixturePlan,
+    projectRoot: '/project',
+  });
+  try {
+    await expect(service.publishCatalogSnapshot(reference)).rejects.toMatchObject({
+      errors: [cleanupFailure],
+    });
+    await expect(readFile(join(catalogDirectory, `${reference.epoch.id}.json`), 'utf8')).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+    await service.close();
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('preserves a replacement sidecar when staging cleanup fails after the owned link is replaced', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-native-playground-cleanup-replaced-'));
+  const catalogDirectory = join(root, 'catalog');
+  const reference = epoch('epoch-cleanup-replaced', '/epochs/cleanup-replaced');
+  const cleanupFailure = new Error('stage cleanup failed');
+  const replacement = 'replacement contents\n';
+  const storage: NativePlaygroundCatalogStorage = {
+    link: async (source, destination) => {
+      await link(source, destination);
+      await rm(destination);
+      await writeFile(destination, replacement);
+    },
+    mkdir,
+    open,
+    remove: async (path, options) => {
+      if (String(path).includes('.stage-')) throw cleanupFailure;
+      await rm(path, options);
+    },
+  };
+  const service = new NativePlaygroundService({
+    catalogDirectory,
+    catalogStorage: storage,
+    discover: async () => suite(),
+    inspectArtifact: async (candidate) => Object.freeze({
+      binding: Object.freeze({
+        manifestPath: candidate.epoch.manifestPath,
+        source: 'explicit' as const,
+        targetDigests: candidate.epoch.targetDigests,
+      }),
+      root: candidate.root,
+    }),
+    planFixture: async () => fixturePlan,
+    projectRoot: '/project',
+  });
+  try {
+    await expect(service.publishCatalogSnapshot(reference)).rejects.toMatchObject({
+      errors: [cleanupFailure],
+    });
+    await expect(readFile(join(catalogDirectory, `${reference.epoch.id}.json`), 'utf8')).resolves.toBe(replacement);
+    await service.close();
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('does not deadlock when a direct native Codex abort listener awaits a reentrant close', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-native-playground-direct-close-'));
+  try {
+    const artifact = join(root, 'artifact');
+    const suiteDir = join(root, 'evals');
+    const normalCodexHome = join(root, 'normal-codex-home');
+    await Promise.all([
+      mkdir(join(artifact, 'codex', '.agents', 'plugins'), { recursive: true }),
+      mkdir(join(suiteDir, 'fixture'), { recursive: true }),
+      mkdir(normalCodexHome, { recursive: true }),
+    ]);
+    await Promise.all([
+      writeFile(join(artifact, 'codex', '.agents', 'plugins', 'marketplace.json'), JSON.stringify({ name: 'native-marketplace', plugins: [{ name: 'native-review', source: { path: './', source: 'local' } }] })),
+      writeFile(join(suiteDir, 'fixture', 'input.txt'), 'baseline only\n'),
+      writeFile(join(normalCodexHome, 'auth.json'), '{"opaque":"session"}\n'),
+    ]);
+    const reference = epoch('epoch-native-direct-close', artifact, 'codex');
+    let started!: () => void;
+    const spawned = new Promise<void>((resolvePromise) => { started = resolvePromise; });
+    let reentrant: Promise<void> | undefined;
+    let abortHandlerCompleted = false;
+    const service = new NativePlaygroundService({
+      discover: async () => nativeSuite('codex', join(suiteDir, 'review.eval.ts')),
+      environment: Object.freeze({ CODEX_HOME: normalCodexHome }),
+      inspectArtifact: async (candidate) => Object.freeze({
+        binding: Object.freeze({ manifestPath: 'agent-bundle.manifest.json', source: 'explicit' as const, targetDigests: candidate.epoch.targetDigests }),
+        root: candidate.root,
+      }),
+      native: {
+        codexRun: async (command) => {
+          const step = command.args[0] === 'plugin' ? `${command.args[0]}.${command.args[1]}` : command.args[0];
+          if (step === 'plugin.list') return Object.freeze({ exitCode: 0, stderr: '', stdout: '{"installed":[{"name":"native-review","marketplaceName":"native-marketplace","installed":true,"enabled":true}]}' });
+          if (step !== 'exec') return Object.freeze({ exitCode: 0, stderr: '', stdout: 'codex-cli 0.147.0\n' });
+          started();
+          return new Promise((resolvePromise) => {
+            command.signal?.addEventListener('abort', () => {
+              void (async () => {
+                reentrant = service.close();
+                await reentrant;
+                abortHandlerCompleted = true;
+                resolvePromise(Object.freeze({ exitCode: 1, failure: 'cancelled', stderr: '', stdout: '' }));
+              })();
+            }, { once: true });
+          });
+        },
+      },
+      projectRoot: root,
+    });
+    const catalog = await service.catalog(reference);
+    const running = service.run(await service.prepare(reference, {
+      caseId: catalog.cases[0]!.id,
+      fixtureId: catalog.fixtures[0]!.id,
+      host: 'codex',
+      modelPinId: catalog.modelPins[0]!.id,
+      operation: 'native.prompt',
+      prompt: 'Review the fixture.',
+      target: 'codex',
+    }), { emit: async () => undefined, signal: new AbortController().signal });
+    await spawned;
+    const closing = service.close();
+    await Promise.resolve();
+    expect(reentrant).toBeDefined();
+    expect(service.close()).toBe(closing);
+    const settled = await Promise.race([
+      closing.then(() => true, () => true),
+      new Promise<boolean>((resolvePromise) => { setTimeout(() => resolvePromise(false), 50); }),
+    ]);
+    expect(settled).toBe(true);
+    expect(reentrant).not.toBe(closing);
+    expect(abortHandlerCompleted).toBe(true);
+    await running;
+    expect((await readdir(join(root, '.agent-bundle'))).filter((entry) => entry.startsWith('native-playground-'))).toEqual([]);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('does not deadlock when caller cancellation reaches a native Codex close listener', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-native-playground-external-close-'));
+  try {
+    const artifact = join(root, 'artifact');
+    const suiteDir = join(root, 'evals');
+    const normalCodexHome = join(root, 'normal-codex-home');
+    await Promise.all([
+      mkdir(join(artifact, 'codex', '.agents', 'plugins'), { recursive: true }),
+      mkdir(join(suiteDir, 'fixture'), { recursive: true }),
+      mkdir(normalCodexHome, { recursive: true }),
+    ]);
+    await Promise.all([
+      writeFile(join(artifact, 'codex', '.agents', 'plugins', 'marketplace.json'), JSON.stringify({ name: 'native-marketplace', plugins: [{ name: 'native-review', source: { path: './', source: 'local' } }] })),
+      writeFile(join(suiteDir, 'fixture', 'input.txt'), 'baseline only\n'),
+      writeFile(join(normalCodexHome, 'auth.json'), '{"opaque":"session"}\n'),
+    ]);
+    const reference = epoch('epoch-native-external-close', artifact, 'codex');
+    let started!: () => void;
+    const spawned = new Promise<void>((resolvePromise) => { started = resolvePromise; });
+    let reentrant: Promise<void> | undefined;
+    let abortHandlerCompleted = false;
+    const service = new NativePlaygroundService({
+      discover: async () => nativeSuite('codex', join(suiteDir, 'review.eval.ts')),
+      environment: Object.freeze({ CODEX_HOME: normalCodexHome }),
+      inspectArtifact: async (candidate) => Object.freeze({
+        binding: Object.freeze({ manifestPath: 'agent-bundle.manifest.json', source: 'explicit' as const, targetDigests: candidate.epoch.targetDigests }),
+        root: candidate.root,
+      }),
+      native: {
+        codexRun: async (command) => {
+          const step = command.args[0] === 'plugin' ? `${command.args[0]}.${command.args[1]}` : command.args[0];
+          if (step === 'plugin.list') return Object.freeze({ exitCode: 0, stderr: '', stdout: '{"installed":[{"name":"native-review","marketplaceName":"native-marketplace","installed":true,"enabled":true}]}' });
+          if (step !== 'exec') return Object.freeze({ exitCode: 0, stderr: '', stdout: 'codex-cli 0.147.0\n' });
+          started();
+          return new Promise((resolvePromise) => {
+            command.signal?.addEventListener('abort', () => {
+              void (async () => {
+                reentrant = service.close();
+                await reentrant;
+                abortHandlerCompleted = true;
+                resolvePromise(Object.freeze({ exitCode: 1, failure: 'cancelled', stderr: '', stdout: '' }));
+              })();
+            }, { once: true });
+          });
+        },
+      },
+      projectRoot: root,
+    });
+    const catalog = await service.catalog(reference);
+    const caller = new AbortController();
+    const running = service.run(await service.prepare(reference, {
+      caseId: catalog.cases[0]!.id,
+      fixtureId: catalog.fixtures[0]!.id,
+      host: 'codex',
+      modelPinId: catalog.modelPins[0]!.id,
+      operation: 'native.prompt',
+      prompt: 'Review the fixture.',
+      target: 'codex',
+    }), { emit: async () => undefined, signal: caller.signal });
+    await spawned;
+    caller.abort(new Error('caller cancelled'));
+    await Promise.resolve();
+    expect(reentrant).toBeDefined();
+    await expect(service.catalog(reference)).rejects.toThrow('closed');
+    const closing = service.close();
+    expect(service.close()).toBe(closing);
+    const settled = await Promise.race([
+      closing.then(() => true, () => true),
+      new Promise<boolean>((resolvePromise) => { setTimeout(() => resolvePromise(false), 50); }),
+    ]);
+    expect(settled).toBe(true);
+    expect(reentrant).not.toBe(closing);
+    expect(abortHandlerCompleted).toBe(true);
+    await running;
+    expect((await readdir(join(root, '.agent-bundle'))).filter((entry) => entry.startsWith('native-playground-'))).toEqual([]);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
 });
