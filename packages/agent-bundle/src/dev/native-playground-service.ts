@@ -12,6 +12,7 @@ import { normalizeEvalConfig } from '../eval/config.ts';
 import { redactEvalCredentialText } from '../eval/credentials.ts';
 import { discoverEvalSuites, type DiscoveredEvalSuite } from '../eval/discovery.ts';
 import { planEvalFixture, type EvalFixturePlan } from '../eval/fixtures.ts';
+import { provenanceIdentifierPattern } from '../eval/provenance.ts';
 import type { EvalTrialRecord, EvalTrialWriter } from '../eval/run-store.ts';
 import { normalizeEvalCase } from '../eval/suite.ts';
 import type { EvalCase } from '../eval/types.ts';
@@ -294,7 +295,7 @@ const hardcodedProgress = (phase: NativePlaygroundProgress): PlaygroundEventInpu
 
 const safeNativeProvenanceText = (value: string, projectRoot: string): string => {
   const redacted = safeDevWireText(redactEvalCredentialText(value), projectRoot);
-  return /^[A-Za-z0-9][A-Za-z0-9_.:@-]{0,127}$/u.test(redacted) ? redacted : '[REDACTED]';
+  return provenanceIdentifierPattern.test(redacted) ? redacted : '[REDACTED]';
 };
 
 const nativeTrialProvenance = (trial: EvalTrialRecord, projectRoot: string): PlaygroundJsonObject => {
@@ -468,6 +469,17 @@ const persistedAssertion = (value: JsonValue): EvalCase['assertions'][number] | 
   if (value.kind === 'mcp-call' && exactKeys(value, ['atLeast', 'id', 'kind', 'minimumEvidence', 'server', 'tool']) &&
     safeInteger(value.atLeast) && value.atLeast >= 0 && nonemptySnapshotText(value.server) && nonemptySnapshotText(value.tool)) {
     return Object.freeze({ atLeast: value.atLeast, id: value.id, kind: value.kind, minimumEvidence: value.minimumEvidence, server: value.server, tool: value.tool });
+  }
+  if (value.kind === 'no-mcp-call' && nonemptySnapshotText(value.server) &&
+    ((exactKeys(value, ['id', 'kind', 'minimumEvidence', 'server'])) ||
+      (exactKeys(value, ['id', 'kind', 'minimumEvidence', 'server', 'tool']) && nonemptySnapshotText(value.tool)))) {
+    return Object.freeze({
+      ...(value.tool === undefined ? {} : { tool: value.tool as string }),
+      id: value.id,
+      kind: value.kind,
+      minimumEvidence: value.minimumEvidence,
+      server: value.server,
+    });
   }
   if (value.kind === 'no-skill-activation' &&
     ((exactKeys(value, ['id', 'kind', 'minimumEvidence'])) || (exactKeys(value, ['id', 'kind', 'minimumEvidence', 'skill']) && nonemptySnapshotText(value.skill)))) {

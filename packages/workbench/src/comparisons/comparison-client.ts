@@ -1,7 +1,19 @@
 import { z } from 'zod';
 
 import type { EvalComparison } from '../../../agent-bundle/src/eval/compare.ts';
+import {
+  explicitInvocationProvenancePattern,
+  semanticGraderVersionPattern,
+} from '../../../agent-bundle/src/eval/provenance.ts';
 import { ForegroundTransport } from '../foreground-session.ts';
+import {
+  nonnegativeIntegerSchema,
+  nonnegativeNumberSchema,
+  probabilitySchema,
+  provenanceIdentifierSchema,
+  safeIntegerSchema,
+  safeNumberSchema,
+} from '../schema-atoms.ts';
 
 export interface ComparisonClientOptions {
   readonly fetch?: typeof fetch;
@@ -28,19 +40,13 @@ const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
 const invalidResponse = (): ComparisonClientError =>
   new ComparisonClientError('AB8083', 'Eval comparison route returned an invalid response.');
 
-const safeIntegerSchema = z.number().refine(Number.isSafeInteger);
-const nonnegativeIntegerSchema = safeIntegerSchema.refine((value) => value >= 0);
-const safeNumberSchema = z.number().refine(Number.isFinite);
-const nonnegativeNumberSchema = safeNumberSchema.refine((value) => value >= 0);
-const probabilitySchema = safeNumberSchema.refine((value) => value >= 0 && value <= 1);
-const provenanceIdentifierSchema = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.:@-]{0,127}$/u);
 const invocationProvenanceSchema = z.union([
   z.enum(['automatic', 'none']),
-  z.string().regex(/^explicit:[A-Za-z0-9][A-Za-z0-9_.:@-]{0,127}$/u),
+  z.string().regex(explicitInvocationProvenancePattern),
 ]);
 const semanticGraderVersionSchema = z.union([
   z.literal('none'),
-  z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.:@-]{0,127}@[A-Za-z0-9][A-Za-z0-9_.:@-]{0,127}\/v[1-9][0-9]*$/u),
+  z.string().regex(semanticGraderVersionPattern),
 ]);
 const conditionProvenanceSchema = z.strictObject({
   hostCliVersion: provenanceIdentifierSchema.optional(),
