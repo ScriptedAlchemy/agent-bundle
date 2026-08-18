@@ -185,6 +185,34 @@ it('rejects deterministic and Codex selections when semantic grading is configur
   }
 }, 120_000);
 
+it('rejects a service-discovered authored outcome that claims the server-owned semantic grader id', async () => {
+  const project = await createProjectFixture();
+  try {
+    await seedEvalProject(project.root);
+    await writeFile(join(project.root, 'evals', 'reserved.eval.ts'), [
+      "import { defineEvalSuite, expectOutcome } from 'agent-bundle/eval';",
+      '',
+      'export default defineEvalSuite({',
+      '  cases: [{',
+      "    assertions: [expectOutcome({ script: 'claude-semantic' })],",
+      "    fixture: './fixtures/repo',",
+      "    hosts: { portable: { model: 'deterministic' } },",
+      "    id: 'reserved-outcome',",
+      "    invocation: { mode: 'automatic' },",
+      "    prompt: 'Report the reserved grader collision.',",
+      '  }],',
+      "  name: 'reserved-semantic-id',",
+      '});',
+      '',
+    ].join('\n'));
+
+    await expect(service(project.root).suites()).rejects.toMatchObject({ code: 'EVAL_SUITE_LOAD_FAILED' });
+    await expect(access(join(project.root, '.agent-bundle', 'runs'))).rejects.toThrow();
+  } finally {
+    await removeProjectFixture(project.root);
+  }
+}, 120_000);
+
 it('rejects a selection that matches no suite or case', async () => {
   const project = await createProjectFixture();
   try {

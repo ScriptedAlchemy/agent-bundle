@@ -80,6 +80,7 @@ export interface RunClaudeTrialOptions extends ClaudeProcessOptions {
 }
 
 interface TrialGrading {
+  readonly cancelled?: boolean;
   readonly failures: readonly string[];
   readonly results: Readonly<Record<string, EvalScriptOutcome>>;
   readonly semanticRaw?: ClaudeSemanticGraderRawOutput;
@@ -129,13 +130,13 @@ const gradeTrial = async (
   environment: NodeJS.ProcessEnv,
   processOptions: ClaudeProcessOptions,
 ): Promise<TrialGrading> => {
-  const semanticId = options.configuredSemanticGrader === undefined
+  const manualSemanticId = options.configuredSemanticGrader === undefined
     ? options.semanticGrader?.id
-    : claudeSemanticGraderId;
+    : undefined;
   const specs: readonly EvalGraderSpec[] = Object.freeze([
-    ...(options.graders ?? []).filter((spec) => spec.id !== semanticId),
+    ...(options.graders ?? []).filter((spec) => spec.id !== manualSemanticId),
     ...options.evalCase.assertions.flatMap((assertion) =>
-      assertion.kind === 'outcome' && assertion.script !== semanticId
+      assertion.kind === 'outcome' && assertion.script !== manualSemanticId
         ? [evalScriptGraderSpec(assertion.script, options.suiteDir)]
         : []),
   ]);
@@ -145,6 +146,9 @@ const gradeTrial = async (
     prompt: options.evalCase.prompt,
   });
   const failures = graded.failures.map((failure) => `${failure.id}: ${failure.message}`);
+  if (processOptions.signal?.aborted === true) {
+    return Object.freeze({ cancelled: true, failures: Object.freeze(failures), results: graded.results });
+  }
   if (options.configuredSemanticGrader !== undefined) {
     try {
       const semantic = await runClaudeSemanticGrader({
@@ -253,6 +257,17 @@ export const runClaudeTrial = async (options: RunClaudeTrialOptions): Promise<Ev
       `The prepared artifact has no target ${JSON.stringify(target)} for host ${JSON.stringify(host)}.`,
     );
   }
+  if (
+    options.semanticGrader?.id === claudeSemanticGraderId ||
+    options.graders?.some((grader) => grader.id === claudeSemanticGraderId) === true ||
+    options.evalCase.assertions.some((assertion) =>
+      assertion.kind === 'outcome' && assertion.script === claudeSemanticGraderId)
+  ) {
+    throw harnessError(
+      'EVAL_HARNESS_INPUT_INVALID',
+      `Authored eval graders and outcome assertions must not use the reserved grader id ${JSON.stringify(claudeSemanticGraderId)}.`,
+    );
+  }
   const trialId = evalTrialId(options.evalCase.id, host, options.trialIndex);
   const environment = createNativeClaudeChildEnvironment(
     withoutEvalCredentialEnvironment(options.environment ?? process.env),
@@ -353,7 +368,13 @@ export const runClaudeTrial = async (options: RunClaudeTrialOptions): Promise<Ev
       }),
       skillActivation: stream.activation,
     });
-    if (grading.failures.length > 0) {
+    if (grading.cancelled === true) {
+      failure = harnessFailure(
+        'EVAL_TRACE_UNAVAILABLE',
+        'trace',
+        'The trial was cancelled before Claude completed semantic grading.',
+      );
+    } else if (grading.failures.length > 0) {
       failure = harnessFailure(
         'EVAL_GRADER_FAILED',
         'grader',

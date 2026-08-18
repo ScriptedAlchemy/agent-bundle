@@ -90,6 +90,59 @@ it('rejects every semantic grader shape other than a pinned Claude model', () =>
   }
 });
 
+it('takes one detached plain-data snapshot before validating the semantic grader', () => {
+  let rootAccessorReads = 0;
+  const rootAccessor = {};
+  Object.defineProperty(rootAccessor, 'semanticGrader', {
+    enumerable: true,
+    get: () => {
+      rootAccessorReads += 1;
+      return { harness: 'claude', model: 'claude-sonnet-4-5' };
+    },
+  });
+  let modelAccessorReads = 0;
+  const modelAccessor = { harness: 'claude' } as Record<string, unknown>;
+  Object.defineProperty(modelAccessor, 'model', {
+    enumerable: true,
+    get: () => {
+      modelAccessorReads += 1;
+      return modelAccessorReads % 2 === 0 ? 'sk-ant-0123456789abcdefghij' : 'claude-sonnet-4-5';
+    },
+  });
+  const prototypeSemantic = Object.assign(Object.create({ model: 'inherited' }), {
+    harness: 'claude',
+    model: 'claude-sonnet-4-5',
+  });
+  const proxiedSemantic = new Proxy({ harness: 'claude', model: 'claude-sonnet-4-5' }, {});
+
+  const rejected: readonly [string, unknown, 'EVAL_CONFIG_INVALID' | 'EVAL_CREDENTIAL_REJECTED'][] = [
+    ['root accessor', rootAccessor, 'EVAL_CONFIG_INVALID'],
+    ['model accessor', { semanticGrader: modelAccessor }, 'EVAL_CONFIG_INVALID'],
+    ['prototype-bearing semantic descriptor', { semanticGrader: prototypeSemantic }, 'EVAL_CONFIG_INVALID'],
+    ['absolute model path', { semanticGrader: { harness: 'claude', model: '/tmp/model' } }, 'EVAL_CONFIG_INVALID'],
+    ['relative model path', { semanticGrader: { harness: 'claude', model: '../model' } }, 'EVAL_CONFIG_INVALID'],
+    ['credential-shaped model', { semanticGrader: { harness: 'claude', model: 'sk-ant-0123456789abcdefghij' } }, 'EVAL_CREDENTIAL_REJECTED'],
+    ['authored semantic id', { semanticGrader: { harness: 'claude', id: 'claude-semantic', model: 'claude-sonnet-4-5' } }, 'EVAL_CONFIG_INVALID'],
+  ];
+  for (const [_label, input, code] of rejected) {
+    const error = (() => {
+      try {
+        normalizeEvalConfig(input);
+      } catch (caught) {
+        return caught;
+      }
+      throw new Error('Expected semantic grader configuration to be rejected.');
+    })();
+    expect(error).toMatchObject({ code });
+  }
+  expect(rootAccessorReads).toBe(0);
+  expect(modelAccessorReads).toBe(0);
+
+  const normalized = normalizeEvalConfig({ semanticGrader: proxiedSemantic });
+  expect(normalized.semanticGrader).toEqual({ harness: 'claude', model: 'claude-sonnet-4-5' });
+  expect(normalized.semanticGrader).not.toBe(proxiedSemantic);
+});
+
 it('rejects credential fields, unknown keys, and escaping run directories', () => {
   expect(() => normalizeEvalConfig({ apiKey: 'sk-ant-0123456789abcdefghij' })).toThrow(EvalConfigError);
   expect(() => normalizeEvalConfig({ unknown: true })).toThrow(EvalConfigError);

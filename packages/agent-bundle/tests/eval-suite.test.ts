@@ -134,6 +134,13 @@ it('rejects a provider credential as a configuration field', () => {
   expect(attempt).toThrow(/credential/iu);
 });
 
+it('reserves the server-owned Claude semantic grader id from authored outcome expectations', () => {
+  expect(() => expectOutcome({ script: 'claude-semantic' })).toThrow(EvalDefinitionError);
+  expect(() => expectOutcome({ script: 'claude-semantic' })).toThrow(
+    'Authored outcome graders must not use the reserved grader id "claude-semantic".',
+  );
+});
+
 it('rejects an explicit invocation without a Skill and a none invocation with one', () => {
   const withoutSkill = () => defineEvalSuite({
     cases: [{

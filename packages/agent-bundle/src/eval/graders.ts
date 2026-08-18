@@ -10,6 +10,9 @@ import type { EvalAssertionOutcome, EvalScriptOutcome } from './types.ts';
 
 const runCommand = promisify(execFile);
 
+/** Server-owned result identity; authored graders and expectations may never claim it. */
+export const claudeSemanticGraderId = 'claude-semantic';
+
 export interface EvalGraderContext {
   readonly artifactRoot: string;
   readonly fixturePath: string;
