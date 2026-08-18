@@ -125,6 +125,22 @@ it('reports recorded usage and mean duration, or states that usage was not recor
   expect(comparisonMetricCellFor(metrics()).usage).toBe('Not recorded');
 });
 
+it('distinguishes an explicitly unrecorded semantic grader from legacy omitted provenance', () => {
+  const explicit = comparisonMetricCellFor(metrics({
+    provenance: {
+      hostCliVersion: '2.1.232',
+      invocation: 'automatic',
+      semanticGrader: { state: 'unrecorded' },
+    },
+  }));
+  const legacy = comparisonMetricCellFor(metrics({
+    provenance: { hostCliVersion: '2.1.232', invocation: 'automatic' },
+  }));
+
+  expect(explicit.provenance).toBe('CLI 2.1.232 · Invocation automatic · Semantic grader Unrecorded');
+  expect(legacy.provenance).toBe('CLI 2.1.232 · Invocation automatic · Semantic grader Not recorded');
+});
+
 it('renders a signed delta only for a comparable row', () => {
   const row = comparisonMatrixRowFor(comparableRow());
 
@@ -138,6 +154,18 @@ it('renders a signed delta only for a comparable row', () => {
     usage: 'Not recorded',
   });
   expect(row.evidenceNote).toBeUndefined();
+});
+
+it('keeps recorded token coverage visible when an incomplete side makes the usage delta unavailable', () => {
+  const row = comparisonMatrixRowFor(comparableRow({
+    baseline: metrics({ usage: { inputTokens: 100, outputTokens: 0, recordedTrials: 1, totalTokens: 100 }, trials: 2 }),
+    candidate: metrics({ runId: 'run-candidate', usage: { inputTokens: 400, outputTokens: 0, recordedTrials: 2, totalTokens: 400 }, trials: 2 }),
+    delta: { meanDurationMs: 0, passRate: 0, passes: 0, trials: 0 },
+  }));
+
+  expect(row.baseline?.usage).toBe('100 tokens · 1 of 2 trials');
+  expect(row.candidate?.usage).toBe('400 tokens · 2 of 2 trials');
+  expect(row.delta?.usage).toBe('Unavailable: incomplete usage coverage');
 });
 
 it('marks a smoke row as evidence rather than a reliability claim', () => {

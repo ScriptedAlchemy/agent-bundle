@@ -214,9 +214,11 @@ it('does not compare a manually graded trial whose semantic grader identity was 
     })),
   });
 
-  expect(nonComparable(comparison.rows[0]).causes.map((cause) => cause.code)).toEqual([
+  const row = nonComparable(comparison.rows[0]);
+  expect(row.causes.map((cause) => cause.code)).toEqual([
     'grader-versions-mismatch',
   ]);
+  expect(row.candidate?.provenance.semanticGrader).toEqual({ state: 'unrecorded' });
 });
 
 it('labels a condition that only one run recorded as non-comparable', () => {
@@ -294,6 +296,24 @@ it('totals duration and recorded usage over gradable trials only', () => {
   expect(row.baseline.usage).toEqual({ inputTokens: 300, outputTokens: 50, recordedTrials: 2, totalTokens: 350 });
   expect(row.candidate.usage).toBeUndefined();
   expect(row.delta.meanDurationMs).toBe(-1000);
+  expect(row.delta.totalTokens).toBeUndefined();
+});
+
+it('withholds a token delta until both aligned sides record every gradable trial', () => {
+  const comparison = compareEvalRuns({
+    baseline: side('run-base', [
+      trial({ id: 'trial-0', trialIndex: 0, usage: { inputTokens: 100, outputTokens: 0 } }),
+      trial({ id: 'trial-1', trialIndex: 1 }),
+    ]),
+    candidate: side('run-candidate', [
+      trial({ id: 'trial-0', trialIndex: 0, usage: { inputTokens: 200, outputTokens: 0 } }),
+      trial({ id: 'trial-1', trialIndex: 1, usage: { inputTokens: 200, outputTokens: 0 } }),
+    ]),
+  });
+
+  const row = comparable(comparison.rows[0]);
+  expect(row.baseline.usage).toMatchObject({ recordedTrials: 1, totalTokens: 100 });
+  expect(row.candidate.usage).toMatchObject({ recordedTrials: 2, totalTokens: 400 });
   expect(row.delta.totalTokens).toBeUndefined();
 });
 

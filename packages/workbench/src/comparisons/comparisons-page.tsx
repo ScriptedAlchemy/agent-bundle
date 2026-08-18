@@ -50,6 +50,7 @@ type ComparisonsRequestKind = 'comparison' | 'runs';
 export interface ComparisonsRequest {
   readonly generation: number;
   readonly kind: ComparisonsRequestKind;
+  readonly owner?: object;
   readonly signal: AbortSignal;
 }
 
@@ -58,10 +59,10 @@ export class ComparisonsRequestLifecycle {
   readonly #active = new Map<ComparisonsRequestKind, { readonly controller: AbortController; readonly request: ComparisonsRequest }>();
   #generation = 0;
 
-  begin(kind: ComparisonsRequestKind): ComparisonsRequest {
+  begin(kind: ComparisonsRequestKind, owner?: object): ComparisonsRequest {
     this.#active.get(kind)?.controller.abort();
     const controller = new AbortController();
-    const request = Object.freeze({ generation: this.#generation, kind, signal: controller.signal });
+    const request = Object.freeze({ generation: this.#generation, kind, owner, signal: controller.signal });
     this.#active.set(kind, { controller, request });
     return request;
   }
@@ -76,10 +77,15 @@ export class ComparisonsRequestLifecycle {
     this.#active.clear();
   }
 
-  isCurrent(request: ComparisonsRequest): boolean {
-    return request.generation === this.#generation && !request.signal.aborted && this.#active.get(request.kind)?.request === request;
+  isCurrent(request: ComparisonsRequest, owner?: object): boolean {
+    return request.generation === this.#generation &&
+      !request.signal.aborted &&
+      this.#active.get(request.kind)?.request === request &&
+      (owner === undefined || request.owner === owner);
   }
 }
+
+const isAbortError = (reason: unknown): boolean => reason instanceof Error && reason.name === 'AbortError';
 
 const MetricCell = ({ cell }: { readonly cell: ComparisonMetricCell | undefined }) => cell === undefined
   ? <td className="comparison-cell"><p className="empty-row">Not recorded in this run.</p></td>
@@ -183,54 +189,70 @@ export const ComparisonMatrix = ({ view }: ComparisonMatrixProps) => <div classN
 /** Aligns two recorded eval runs and shows the reliability matrix of every shared condition. */
 export const ComparisonsPage = ({ comparisonClient, evalClient }: ComparisonsPageProps) => {
   const [baseRunId, setBaseRunId] = useState<string>();
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState<ComparisonsRequest>();
   const [candidateRunId, setCandidateRunId] = useState<string>();
-  const [comparison, setComparison] = useState<EvalComparison>();
-  const [error, setError] = useState<string>();
+  const [comparison, setComparison] = useState<{ readonly client: ComparisonClient; readonly result: EvalComparison }>();
+  const [error, setError] = useState<{ readonly client: ComparisonClient; readonly message: string }>();
   const [runs, setRuns] = useState<readonly EvalRunRecord[]>([]);
   const lifecycle = useRef<ComparisonsRequestLifecycle>(new ComparisonsRequestLifecycle()).current;
-  const view = comparisonsViewFor({ baseRunId, candidateRunId, comparison, runs });
+  const currentClient = useRef(comparisonClient);
+  if (currentClient.current !== comparisonClient) {
+    currentClient.current = comparisonClient;
+    lifecycle.invalidate();
+  }
+  const currentComparison = comparison?.client === comparisonClient ? comparison.result : undefined;
+  const currentError = error?.client === comparisonClient ? error.message : undefined;
+  const busyForClient = busy !== undefined && lifecycle.isCurrent(busy, comparisonClient);
+  const view = comparisonsViewFor({ baseRunId, candidateRunId, comparison: currentComparison, runs });
+
+  useEffect(() => () => lifecycle.invalidate(), [lifecycle]);
+
+  useEffect(() => {
+    setBusy(undefined);
+    setComparison(undefined);
+    setError(undefined);
+  }, [comparisonClient]);
 
   useEffect(() => {
     lifecycle.invalidate();
-    const request = lifecycle.begin('runs');
+    const request = lifecycle.begin('runs', evalClient);
     setError(undefined);
     void loadComparisonRuns(evalClient, request.signal).then(
       (next) => {
-        if (!lifecycle.isCurrent(request)) return;
+        if (!lifecycle.isCurrent(request, evalClient)) return;
         lifecycle.complete(request);
         setRuns(next);
       },
       (reason) => {
-        if (!lifecycle.isCurrent(request)) return;
+        if (!lifecycle.isCurrent(request, evalClient)) return;
         lifecycle.complete(request);
         setRuns([]);
-        setError(errorMessage(reason));
+        setError({ client: comparisonClient, message: errorMessage(reason) });
       },
     );
     return () => lifecycle.invalidate();
-  }, [evalClient, lifecycle]);
+  }, [comparisonClient, evalClient, lifecycle]);
 
   const compare = async (): Promise<void> => {
     const base = view.base?.key;
     const candidate = view.candidate?.key;
     if (base === undefined || candidate === undefined) return;
-    const request = lifecycle.begin('comparison');
-    setBusy(true);
+    const request = lifecycle.begin('comparison', comparisonClient);
+    setBusy(request);
     setError(undefined);
+    setComparison(undefined);
     try {
-      const next = await runComparison(comparisonClient, base, candidate, request.signal);
-      if (!lifecycle.isCurrent(request)) return;
-      setComparison(next);
+      const result = await runComparison(comparisonClient, base, candidate, request.signal);
+      if (!lifecycle.isCurrent(request, comparisonClient)) return;
+      setComparison({ client: comparisonClient, result });
     } catch (reason) {
-      if (lifecycle.isCurrent(request)) {
-        setComparison(undefined);
-        setError(errorMessage(reason));
+      if (lifecycle.isCurrent(request, comparisonClient) && !isAbortError(reason)) {
+        setError({ client: comparisonClient, message: errorMessage(reason) });
       }
     } finally {
-      if (lifecycle.isCurrent(request)) {
+      if (lifecycle.isCurrent(request, comparisonClient)) {
         lifecycle.complete(request);
-        setBusy(false);
+        setBusy(undefined);
       }
     }
   };
@@ -242,12 +264,12 @@ export const ComparisonsPage = ({ comparisonClient, evalClient }: ComparisonsPag
         <p>Aligned baseline and candidate runs, with the actual k/n beside pass@k and pass^k.</p>
       </div>
     </div>
-    {error === undefined ? undefined : <p className="request-error" role="alert">{error}</p>}
+    {currentError === undefined ? undefined : <p className="request-error" role="alert">{currentError}</p>}
     {view.state === 'insufficient-runs'
       ? <p className="empty-row" role="status">{view.summary}</p>
       : <>
         <ComparisonControls
-          busy={busy}
+          busy={busyForClient}
           onCompare={() => void compare()}
           onSelectBase={setBaseRunId}
           onSelectCandidate={setCandidateRunId}

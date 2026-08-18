@@ -7,31 +7,32 @@ import { SkillClient, SkillClientError } from './skill-client.ts';
 import { SkillMarkdown } from './skill-markdown.tsx';
 import { resourceUrlFor } from './skills-model.ts';
 
-export type SkillTab = 'generated' | 'rendered' | 'source';
+export type SkillDocumentKind = 'generated' | 'source';
 
-export type GeneratedDocumentState =
-  | Readonly<{ readonly document: ServedSkillDocument; readonly state: 'ready' }>
-  | Readonly<{ readonly state: 'loading'; readonly summary: string }>
-  | Readonly<{ readonly state: 'unavailable'; readonly summary: string }>;
+export type SkillView = 'markdown' | 'rendered';
 
 type GeneratedTreeState =
   | Readonly<{ readonly state: 'loading'; readonly summary: string }>
   | Readonly<{ readonly state: 'ready'; readonly tree: SkillDocumentTree }>
   | Readonly<{ readonly state: 'unavailable'; readonly summary: string }>;
 
-const skillTabs = ['rendered', 'source', 'generated'] as const;
+const documentTabs = ['source', 'generated'] as const;
+
+const viewTabs = ['rendered', 'markdown'] as const;
 
 const tabKey = (skillId: string): string => `skill-${skillId.replace(/^skill:/u, '').replaceAll(/[^a-z0-9_-]+/giu, '-').replaceAll(/^-+|-+$/gu, '')}`;
 
-const tabIdFor = (skillId: string, tab: SkillTab): string => `${tabKey(skillId)}-tab-${tab}`;
+const tabIdFor = (skillId: string, group: 'document' | 'view', tab: string): string =>
+  `${tabKey(skillId)}-${group}-tab-${tab}`;
 
 const panelIdFor = (skillId: string): string => `${tabKey(skillId)}-panel`;
 
 export interface SkillDocumentPanelProps {
-  readonly generated: GeneratedDocumentState;
-  readonly onTabChange: (tab: SkillTab) => void;
+  readonly document: SkillDocumentKind;
+  readonly onDocumentChange: (document: SkillDocumentKind) => void;
+  readonly onViewChange: (view: SkillView) => void;
   readonly selected: ServedSkillDocument;
-  readonly tab: SkillTab;
+  readonly view: SkillView;
 }
 
 export interface SkillsPageProps {
@@ -63,42 +64,81 @@ const errorMessage = (error: unknown): string =>
 const artifactEpoch = (status: ProjectStatus) =>
   status.artifact.state === 'missing' ? undefined : status.artifact.activeEpoch;
 
-const GeneratedView = ({ state }: { readonly state: GeneratedDocumentState }) => {
-  if (state.state === 'ready') {
-    return <div>
-      <p className="skill-base-label">Generated base · {state.document.base.kind === 'generated'
-        ? `${state.document.base.epochId}/${state.document.base.target}`
-        : 'Unavailable'}</p>
-      <SkillMarkdown base={state.document.base} body={state.document.body} resources={resourcePaths(state.document)} />
-      <ResourceTree document={state.document} />
-    </div>;
-  }
-  return <p className="empty-row" role="status">{state.summary}</p>;
+const nextTab = <Tab extends string>(tabs: readonly Tab[], current: Tab, event: React.KeyboardEvent<HTMLButtonElement>): Tab | undefined => {
+  const index = tabs.indexOf(current);
+  const next = event.key === 'ArrowRight' || event.key === 'ArrowDown'
+    ? tabs[(index + 1) % tabs.length]!
+    : event.key === 'ArrowLeft' || event.key === 'ArrowUp'
+      ? tabs[(index + tabs.length - 1) % tabs.length]!
+      : event.key === 'Home'
+        ? tabs[0]
+        : event.key === 'End'
+          ? tabs[tabs.length - 1]
+          : undefined;
+  if (next !== undefined) event.preventDefault();
+  return next;
 };
 
-/** The selected Skill body, its server-parsed metadata, and three synchronized views. */
-export const SkillDocumentPanel = ({ generated, onTabChange, selected, tab }: SkillDocumentPanelProps) => {
-  const tabs = useRef<Partial<Record<SkillTab, HTMLButtonElement | null>>>({});
-  const selectTab = (next: SkillTab): void => {
-    onTabChange(next);
-    tabs.current[next]?.focus();
+const documentLabel = (selected: ServedSkillDocument): string => selected.base.kind === 'generated'
+  ? `Generated document · ${selected.base.epochId}/${selected.base.target}`
+  : `Source document · ${selected.id.replace(/^skill:/u, '')}`;
+
+const provenanceLabel = (selected: ServedSkillDocument): string => selected.base.kind === 'generated'
+  ? `Generated · ${selected.base.epochId}/${selected.base.target}`
+  : selected.provenance === undefined
+    ? 'Source document'
+    : `Source · ${selected.provenance.kind}`;
+
+const SkillDocumentTabs = ({ document, onDocumentChange, panelId, skillId }: {
+  readonly document: SkillDocumentKind;
+  readonly onDocumentChange: (document: SkillDocumentKind) => void;
+  readonly panelId: string;
+  readonly skillId: string;
+}) => {
+  const buttons = useRef<Partial<Record<SkillDocumentKind, HTMLButtonElement | null>>>({});
+  const selectDocument = (next: SkillDocumentKind): void => {
+    onDocumentChange(next);
+    buttons.current[next]?.focus();
   };
-  const onTabKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>, current: SkillTab): void => {
-    const index = skillTabs.indexOf(current);
-    const next = event.key === 'ArrowRight' || event.key === 'ArrowDown'
-      ? skillTabs[(index + 1) % skillTabs.length]!
-      : event.key === 'ArrowLeft' || event.key === 'ArrowUp'
-        ? skillTabs[(index + skillTabs.length - 1) % skillTabs.length]!
-        : event.key === 'Home'
-          ? skillTabs[0]
-          : event.key === 'End'
-            ? skillTabs[skillTabs.length - 1]
-            : undefined;
-    if (next === undefined) return;
-    event.preventDefault();
-    selectTab(next);
+  const onKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>, current: SkillDocumentKind): void => {
+    const next = nextTab(documentTabs, current, event);
+    if (next !== undefined) selectDocument(next);
   };
-  const tabId = tabIdFor(selected.id, tab);
+
+  return <div aria-label="Skill document" className="skill-tabs skill-tabs--document" role="tablist">
+    {documentTabs.map((candidate) => (
+      <button
+        aria-controls={panelId}
+        aria-selected={document === candidate}
+        className={document === candidate ? 'skill-tab skill-tab--active' : 'skill-tab'}
+        id={tabIdFor(skillId, 'document', candidate)}
+        key={candidate}
+        onClick={() => selectDocument(candidate)}
+        onKeyDown={(event) => onKeyDown(event, candidate)}
+        ref={(element) => { buttons.current[candidate] = element; }}
+        role="tab"
+        tabIndex={document === candidate ? 0 : -1}
+        type="button"
+      >
+        {candidate[0]!.toUpperCase()}{candidate.slice(1)}
+      </button>
+    ))}
+  </div>;
+};
+
+/** The selected served Skill document and its rendered or raw Markdown view. */
+export const SkillDocumentPanel = ({ document, onDocumentChange, onViewChange, selected, view }: SkillDocumentPanelProps) => {
+  const viewTabButtons = useRef<Partial<Record<SkillView, HTMLButtonElement | null>>>({});
+  const selectView = (next: SkillView): void => {
+    onViewChange(next);
+    viewTabButtons.current[next]?.focus();
+  };
+  const onViewTabKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>, current: SkillView): void => {
+    const next = nextTab(viewTabs, current, event);
+    if (next !== undefined) selectView(next);
+  };
+  const documentTabId = tabIdFor(selected.id, 'document', document);
+  const viewTabId = tabIdFor(selected.id, 'view', view);
   const panelId = panelIdFor(selected.id);
 
   return <section aria-label={`${selected.name} Skill`} className="skill-detail">
@@ -108,7 +148,7 @@ export const SkillDocumentPanel = ({ generated, onTabChange, selected, tab }: Sk
         <h1>{selected.name}</h1>
         {selected.description === undefined ? undefined : <p className="skill-description">{selected.description}</p>}
       </div>
-      <span className="skill-provenance">{selected.provenance?.kind ?? 'generated'}</span>
+      <span className="skill-provenance">{provenanceLabel(selected)}</span>
     </div>
     <dl className="skill-frontmatter" aria-label="Parsed frontmatter">
       {Object.entries(selected.frontmatter).sort(([left], [right]) => left.localeCompare(right)).map(([name, value]) => (
@@ -120,47 +160,48 @@ export const SkillDocumentPanel = ({ generated, onTabChange, selected, tab }: Sk
         <strong>{diagnostic.code}</strong> {diagnostic.message}
       </p>)}
     </div>}
-    <div aria-label="Skill document views" className="skill-tabs" role="tablist">
-      {skillTabs.map((candidate) => (
+    <SkillDocumentTabs document={document} onDocumentChange={onDocumentChange} panelId={panelId} skillId={selected.id} />
+    <div aria-label="Document view" className="skill-tabs skill-tabs--view" role="tablist">
+      {viewTabs.map((candidate) => (
         <button
-          aria-controls={panelIdFor(selected.id)}
-          aria-selected={tab === candidate}
-          className={tab === candidate ? 'skill-tab skill-tab--active' : 'skill-tab'}
-          id={tabIdFor(selected.id, candidate)}
+          aria-controls={panelId}
+          aria-selected={view === candidate}
+          className={view === candidate ? 'skill-tab skill-tab--active' : 'skill-tab'}
+          id={tabIdFor(selected.id, 'view', candidate)}
           key={candidate}
-          onClick={() => selectTab(candidate)}
-          onKeyDown={(event) => onTabKeyDown(event, candidate)}
-          ref={(element) => { tabs.current[candidate] = element; }}
+          onClick={() => selectView(candidate)}
+          onKeyDown={(event) => onViewTabKeyDown(event, candidate)}
+          ref={(element) => { viewTabButtons.current[candidate] = element; }}
           role="tab"
-          tabIndex={tab === candidate ? 0 : -1}
+          tabIndex={view === candidate ? 0 : -1}
           type="button"
         >
-          {candidate[0]!.toUpperCase()}{candidate.slice(1)}
+          {candidate === 'markdown' ? 'Markdown' : 'Rendered'}
         </button>
       ))}
     </div>
     <section
-      aria-label={tab === 'rendered' ? 'Rendered Skill document' : tab === 'source' ? 'Source Skill document' : 'Generated Skill document'}
-      aria-labelledby={tabId}
+      aria-label={`${document === 'source' ? 'Source' : 'Generated'} ${view === 'rendered' ? 'rendered' : 'Markdown'} Skill document`}
+      aria-labelledby={`${documentTabId} ${viewTabId}`}
       className="skill-document-view"
       id={panelId}
       role="tabpanel"
       tabIndex={0}
     >
-      {tab === 'rendered' ? <>
-        <p className="skill-base-label">Source base · {selected.id}</p>
-        <SkillMarkdown base={selected.base} body={selected.body} resources={resourcePaths(selected)} />
-        <ResourceTree document={selected} />
-      </> : undefined}
-      {tab === 'source' ? <>
-        <p className="skill-base-label">Source base · {selected.id}</p>
-        <pre className="skill-source"><code>{selected.markdown}</code></pre>
-        <ResourceTree document={selected} />
-      </> : undefined}
-      {tab === 'generated' ? <GeneratedView state={generated} /> : undefined}
+      <p className="skill-base-label">{documentLabel(selected)}</p>
+      {view === 'rendered'
+        ? <SkillMarkdown base={selected.base} body={selected.body} resources={resourcePaths(selected)} />
+        : <pre className="skill-source"><code>{selected.markdown}</code></pre>}
+      <ResourceTree document={selected} />
     </section>
   </section>;
 };
+
+const selectedDocumentFor = (
+  tree: SkillDocumentTree | undefined,
+  selectedId: string | undefined,
+): ServedSkillDocument | undefined =>
+  tree?.skills.find((skill) => skill.id === selectedId) ?? tree?.skills[0];
 
 const SkillTree = ({ label = 'Skills', onSelect, selectedId, tree }: {
   readonly label?: string;
@@ -182,8 +223,6 @@ const SkillTree = ({ label = 'Skills', onSelect, selectedId, tree }: {
   </div>}
 </aside>;
 
-const unavailable = (summary: string): GeneratedDocumentState => Object.freeze({ state: 'unavailable', summary });
-
 const unavailableTree = (summary: string): GeneratedTreeState => Object.freeze({ state: 'unavailable', summary });
 
 const loadingTree = (summary: string): GeneratedTreeState => Object.freeze({ state: 'loading', summary });
@@ -192,33 +231,34 @@ const loadingTree = (summary: string): GeneratedTreeState => Object.freeze({ sta
 export const SkillsPage = ({ client, status }: SkillsPageProps) => {
   const [sourceTree, setSourceTree] = useState<SkillDocumentTree>();
   const [error, setError] = useState<string>();
-  const [selectedId, setSelectedId] = useState<string>();
-  const [tab, setTab] = useState<SkillTab>('rendered');
+  const [document, setDocument] = useState<SkillDocumentKind>('source');
+  const [selectedIds, setSelectedIds] = useState<Partial<Record<SkillDocumentKind, string>>>({});
+  const [view, setView] = useState<SkillView>('rendered');
   const epoch = artifactEpoch(status);
   const targetNames = useMemo(() => Object.keys(epoch?.targetDigests ?? {}).sort((left, right) => left.localeCompare(right)), [epoch]);
   const [target, setTarget] = useState<string>();
   const [generatedTree, setGeneratedTree] = useState<GeneratedTreeState>(() => unavailableTree('No artifact epoch is active.'));
-  const selectedTree = tab === 'generated' && generatedTree.state === 'ready' ? generatedTree.tree : sourceTree;
-  const selected = selectedTree?.skills.find((skill) => skill.id === selectedId) ?? selectedTree?.skills[0];
+  const selectedTree = document === 'source'
+    ? sourceTree
+    : generatedTree.state === 'ready'
+      ? generatedTree.tree
+      : undefined;
+  const selected = selectedDocumentFor(selectedTree, selectedIds[document]);
   const generatedSummary = generatedTree.state === 'ready'
     ? 'The selected artifact epoch has no generated Skills for this target.'
     : generatedTree.summary;
-  const generated: GeneratedDocumentState = generatedTree.state === 'ready' && selected !== undefined
-    ? Object.freeze({ document: selected, state: 'ready' })
-    : generatedTree.state === 'loading'
-      ? Object.freeze({ state: 'loading', summary: generatedTree.summary })
-      : unavailable(generatedSummary);
+  const selectSkill = (id: string): void => {
+    setSelectedIds((previous) => ({ ...previous, [document]: id }));
+  };
 
   useEffect(() => {
     let current = true;
     setError(undefined);
+    setSourceTree(undefined);
     void client.sourceTree().then(
       (next) => {
         if (!current) return;
         setSourceTree(next);
-        setSelectedId((previous) => next.skills.some((skill) => skill.id === previous)
-          ? previous
-          : next.skills[0]?.id);
       },
       (reason) => { if (current) setError(errorMessage(reason)); },
     );
@@ -253,33 +293,35 @@ export const SkillsPage = ({ client, status }: SkillsPageProps) => {
     return () => { current = false; };
   }, [client, epoch?.id, target]);
 
-  useEffect(() => {
-    if (selectedTree === undefined) return;
-    setSelectedId((previous) => selectedTree.skills.some((skill) => skill.id === previous)
-      ? previous
-      : selectedTree.skills[0]?.id);
-  }, [selectedTree]);
-
   return <div className="skills-layout">
-    {selectedTree === undefined ? <aside className="skill-tree-pane"><p className="empty-row">{tab === 'generated' ? generatedSummary : 'Loading Skills…'}</p></aside> : (
-      <SkillTree label={tab === 'generated' ? 'Generated Skills' : 'Skills'} onSelect={setSelectedId} selectedId={selected?.id} tree={selectedTree} />
+    {selectedTree === undefined ? <aside className="skill-tree-pane"><p className="empty-row">{document === 'generated' ? generatedSummary : 'Loading source Skills…'}</p></aside> : (
+      <SkillTree label={document === 'generated' ? 'Generated skills' : 'Source skills'} onSelect={selectSkill} selectedId={selected?.id} tree={selectedTree} />
     )}
     <div className="skills-content">
       <div className="page-heading skills-page-heading">
         <div><h1>Skills</h1><p>Server-parsed source and immutable generated documents.</p></div>
-        {targetNames.length > 0 ? <label className="skill-target">Generated target
+        {document === 'generated' && targetNames.length > 0 ? <label className="skill-target">Generated target
           <select onChange={(event) => setTarget(event.target.value)} value={target ?? ''}>
             {targetNames.map((name) => <option key={name} value={name}>{name}</option>)}
           </select>
         </label> : undefined}
       </div>
       {error === undefined ? undefined : <p className="request-error" role="alert">{error}</p>}
-      {sourceTree !== undefined && sourceTree.diagnostics.length > 0 ? <div className="skill-diagnostics" role="status">
+      {document === 'source' && sourceTree !== undefined && sourceTree.diagnostics.length > 0 ? <div className="skill-diagnostics" role="status">
         {sourceTree.diagnostics.map((diagnostic, index) => <p key={`${diagnostic.code}-${index}`}><strong>{diagnostic.code}</strong> {diagnostic.message}</p>)}
       </div> : undefined}
-      {selected === undefined ? <p className="empty-row">{tab === 'generated' ? generatedSummary : 'Select a normalized Skill to inspect its documentation.'}</p> : (
-        <SkillDocumentPanel generated={generated} onTabChange={setTab} selected={selected} tab={tab} />
-      )}
+      {selected === undefined ? <>
+        <SkillDocumentTabs document={document} onDocumentChange={setDocument} panelId="skill-empty-panel" skillId="skill:empty" />
+        <p
+          aria-labelledby={tabIdFor('skill:empty', 'document', document)}
+          className="empty-row"
+          id="skill-empty-panel"
+          role="tabpanel"
+          tabIndex={0}
+        >
+          {document === 'generated' ? generatedSummary : 'Select a normalized Skill to inspect its documentation.'}
+        </p>
+      </> : <SkillDocumentPanel document={document} onDocumentChange={setDocument} onViewChange={setView} selected={selected} view={view} />}
     </div>
   </div>;
 };

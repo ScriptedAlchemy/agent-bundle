@@ -64,7 +64,7 @@ const comparison: EvalComparison = {
     },
     {
       baseline: metrics({ evidence: 'smoke', passRate: 0.5, passes: 1, reliability: undefined, trials: 2 }),
-      candidate: metrics({ evidence: 'smoke', passRate: 1, passes: 2, reliability: undefined, runId: 'run-candidate', trials: 2 }),
+      candidate: metrics({ evidence: 'smoke', fail: 0, passRate: 1, passes: 2, reliability: undefined, runId: 'run-candidate', trials: 2 }),
       caseId: 'smoke-case',
       comparable: true,
       delta: { meanDurationMs: 0, passRate: 0.5, passes: 1, trials: 0 },

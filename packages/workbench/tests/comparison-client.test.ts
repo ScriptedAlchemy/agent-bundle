@@ -18,8 +18,38 @@ const comparison = {
   baselineRunId: 'run-base',
   candidateRunId: 'run-candidate',
   rows: [{
-    baseline: { durationMs: 3000, evidence: 'reliability', fail: 1, harnessFailures: 0, inconclusive: 0, meanDurationMs: 1000, outcome: 'fail', passRate: 0.666667, passes: 2, provenance: { hostCliVersion: 'claude@1.0.0', invocation: 'explicit:hook:fixture', semanticGrader: 'unrecorded' }, reliability: { passAtK: 1, passPowerK: 0, sampleSize: 3 }, runId: 'run-base', trials: 3 },
-    candidate: { durationMs: 3000, evidence: 'reliability', fail: 0, harnessFailures: 0, inconclusive: 0, meanDurationMs: 1000, outcome: 'pass', passRate: 1, passes: 3, provenance: { hostCliVersion: 'claude@1.0.0', invocation: 'explicit:hook:fixture', semanticGrader: 'unrecorded' }, reliability: { passAtK: 1, passPowerK: 1, sampleSize: 3 }, runId: 'run-candidate', trials: 3 },
+    baseline: {
+      durationMs: 3000,
+      evidence: 'reliability',
+      fail: 1,
+      harnessFailures: 0,
+      inconclusive: 0,
+      meanDurationMs: 1000,
+      outcome: 'fail',
+      passRate: 0.666667,
+      passes: 2,
+      provenance: { hostCliVersion: 'claude@1.0.0', invocation: 'explicit:hook:fixture', semanticGrader: 'none' },
+      reliability: { passAtK: 1, passPowerK: 0, sampleSize: 3 },
+      runId: 'run-base',
+      trials: 3,
+      usage: { inputTokens: 300, outputTokens: 25, recordedTrials: 3, totalTokens: 325 },
+    },
+    candidate: {
+      durationMs: 3000,
+      evidence: 'reliability',
+      fail: 0,
+      harnessFailures: 0,
+      inconclusive: 0,
+      meanDurationMs: 1000,
+      outcome: 'pass',
+      passRate: 1,
+      passes: 3,
+      provenance: { hostCliVersion: 'claude@1.0.0', invocation: 'explicit:hook:fixture', semanticGrader: 'none' },
+      reliability: { passAtK: 1, passPowerK: 1, sampleSize: 3 },
+      runId: 'run-candidate',
+      trials: 3,
+      usage: { inputTokens: 600, outputTokens: 25, recordedTrials: 3, totalTokens: 625 },
+    },
     caseId: 'direct-review',
     comparable: true,
     delta: { meanDurationMs: 0, passRate: 0.333333, passes: 1, reliability: { passAtK: 0, passPowerK: 1, sampleSize: 3 }, trials: 0 },
@@ -75,6 +105,39 @@ it('freezes the decoded comparison so a page cannot mutate it', async () => {
   expect(Object.isFrozen(result)).toBe(true);
   expect(Object.isFrozen(result.rows)).toBe(true);
   expect(Object.isFrozen(result.rows[0])).toBe(true);
+});
+
+it('strictly decodes nested provenance and usage while preserving unrecorded semantic grading', async () => {
+  const unrecorded = structuredClone(comparison) as {
+    rows: Array<{ baseline?: { provenance: { semanticGrader: unknown } } }>;
+  };
+  const baseline = unrecorded.rows[0]?.baseline;
+  if (baseline === undefined) throw new Error('Comparison fixture must include a baseline.');
+  baseline.provenance.semanticGrader = { state: 'unrecorded' };
+  const comparisonClient = client(recordingFetch([], () => response({ comparison: unrecorded })));
+
+  const result = await comparisonClient.compare({ base: 'run-base', candidate: 'run-candidate' });
+
+  expect(result.rows[0]).toMatchObject({ baseline: { provenance: { semanticGrader: { state: 'unrecorded' } } } });
+  expect(Object.isFrozen(result.rows[0]?.baseline?.provenance)).toBe(true);
+  expect(Object.isFrozen(result.rows[0]?.baseline?.usage)).toBe(true);
+});
+
+it('rejects extra, path-shaped, or negative nested comparison data', async () => {
+  const invalid = [
+    { provenance: { hostCliVersion: '2.1.232', invocation: 'automatic', semanticGrader: 'none', unexpected: true } },
+    { provenance: { hostCliVersion: '/private/bin/claude', invocation: 'automatic', semanticGrader: 'none' } },
+    { usage: { inputTokens: 300, outputTokens: -1, recordedTrials: 3, totalTokens: 299 } },
+  ];
+
+  for (const mutation of invalid) {
+    const malformed = structuredClone(comparison);
+    const baseline = malformed.rows[0]?.baseline;
+    if (baseline === undefined) throw new Error('Comparison fixture must include a baseline.');
+    Object.assign(baseline, mutation);
+    const comparisonClient = client(recordingFetch([], () => response({ comparison: malformed })));
+    await expect(comparisonClient.compare({ base: 'run-base', candidate: 'run-candidate' })).rejects.toMatchObject({ code: 'AB8083' });
+  }
 });
 
 it('decodes a route diagnostic body into a coded client error', async () => {

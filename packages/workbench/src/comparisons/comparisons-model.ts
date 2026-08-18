@@ -1,6 +1,7 @@
 import type {
   EvalAlignmentFacet,
   EvalComparison,
+  EvalComparisonDelta,
   EvalComparisonEvidence,
   EvalComparisonRow,
   EvalConditionMetrics,
@@ -119,7 +120,23 @@ const duration = (value: number): string =>
 
 const provenance = (metrics: EvalConditionMetrics): string => {
   const recorded = metrics.provenance;
-  return `CLI ${recorded.hostCliVersion ?? 'Not recorded'} · Invocation ${recorded.invocation ?? 'Not recorded'} · Semantic grader ${recorded.semanticGrader ?? 'Not recorded'}`;
+  const semanticGrader = recorded.semanticGrader === undefined
+    ? 'Not recorded'
+    : typeof recorded.semanticGrader === 'string'
+      ? recorded.semanticGrader
+      : 'Unrecorded';
+  return `CLI ${recorded.hostCliVersion ?? 'Not recorded'} · Invocation ${recorded.invocation ?? 'Not recorded'} · Semantic grader ${semanticGrader}`;
+};
+
+const usageDelta = (
+  baseline: EvalConditionMetrics,
+  candidate: EvalConditionMetrics,
+  delta: EvalComparisonDelta,
+): string => {
+  if (delta.totalTokens !== undefined) return `${sign(delta.totalTokens)}${delta.totalTokens} tokens`;
+  const incomplete = baseline.usage !== undefined && candidate.usage !== undefined &&
+    (baseline.usage.recordedTrials !== baseline.trials || candidate.usage.recordedTrials !== candidate.trials);
+  return incomplete ? 'Unavailable: incomplete usage coverage' : 'Not recorded';
 };
 
 export const comparisonRunOptionsFor = (runs: readonly EvalRunRecord[]): readonly ComparisonRunOption[] =>
@@ -151,20 +168,19 @@ export const comparisonMetricCellFor = (metrics: EvalConditionMetrics): Comparis
 });
 
 export const comparisonMatrixRowFor = (row: EvalComparisonRow): ComparisonMatrixRow => {
-  const delta = row.comparable ? row.delta : undefined;
   return Object.freeze({
     baseline: row.baseline === undefined ? undefined : comparisonMetricCellFor(row.baseline),
     candidate: row.candidate === undefined ? undefined : comparisonMetricCellFor(row.candidate),
     caseId: row.caseId,
     comparable: row.comparable,
-    delta: delta === undefined ? undefined : Object.freeze({
-      meanDuration: `${sign(delta.meanDurationMs)}${duration(delta.meanDurationMs)}`,
-      passAtK: delta.reliability === undefined ? smokeLabel : points(delta.reliability.passAtK),
-      passPowerK: delta.reliability === undefined ? smokeLabel : points(delta.reliability.passPowerK),
-      passRate: points(delta.passRate),
-      passes: `${sign(delta.passes)}${delta.passes}`,
-      usage: delta.totalTokens === undefined ? 'Not recorded' : `${sign(delta.totalTokens)}${delta.totalTokens} tokens`,
-    }),
+    delta: row.comparable ? Object.freeze({
+      meanDuration: `${sign(row.delta.meanDurationMs)}${duration(row.delta.meanDurationMs)}`,
+      passAtK: row.delta.reliability === undefined ? smokeLabel : points(row.delta.reliability.passAtK),
+      passPowerK: row.delta.reliability === undefined ? smokeLabel : points(row.delta.reliability.passPowerK),
+      passRate: points(row.delta.passRate),
+      passes: `${sign(row.delta.passes)}${row.delta.passes}`,
+      usage: usageDelta(row.baseline, row.candidate, row.delta),
+    }) : undefined,
     evidenceNote: row.comparable && row.evidence === 'smoke' ? smokeNote : undefined,
     host: row.host,
     key: `${row.caseId}/${row.host}`,

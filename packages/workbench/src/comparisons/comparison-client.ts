@@ -1,3 +1,5 @@
+import { z } from 'zod';
+
 import type { EvalComparison } from '../../../agent-bundle/src/eval/compare.ts';
 import type { ForegroundRequestAuthority } from '../mcp/mcp-route-client.ts';
 
@@ -27,35 +29,135 @@ const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
 const invalidResponse = (): ComparisonClientError =>
   new ComparisonClientError('AB8083', 'Eval comparison route returned an invalid response.');
 
+const safeIntegerSchema = z.number().refine(Number.isSafeInteger);
+const nonnegativeIntegerSchema = safeIntegerSchema.refine((value) => value >= 0);
+const safeNumberSchema = z.number().refine(Number.isFinite);
+const nonnegativeNumberSchema = safeNumberSchema.refine((value) => value >= 0);
+const probabilitySchema = safeNumberSchema.refine((value) => value >= 0 && value <= 1);
+const provenancePathMarker = /(?:^|[^A-Za-z0-9])(?:file:|[A-Za-z]:|\\\\)/iu;
+const provenanceIdentifierSchema = z.string()
+  .regex(/^[A-Za-z0-9][A-Za-z0-9_.:@-]{0,127}$/u)
+  .refine((value) => !provenancePathMarker.test(value));
+const invocationProvenanceSchema = z.union([
+  z.enum(['automatic', 'none']),
+  z.string()
+    .regex(/^explicit:[A-Za-z0-9][A-Za-z0-9_.:@-]{0,127}$/u)
+    .refine((value) => !provenancePathMarker.test(value)),
+]);
+const semanticGraderVersionSchema = z.union([
+  z.literal('none'),
+  z.string()
+    .regex(/^[A-Za-z0-9][A-Za-z0-9_.:@-]{0,127}@[A-Za-z0-9][A-Za-z0-9_.:@-]{0,127}\/v[1-9][0-9]*$/u)
+    .refine((value) => !provenancePathMarker.test(value)),
+]);
+const conditionProvenanceSchema = z.strictObject({
+  hostCliVersion: provenanceIdentifierSchema.optional(),
+  invocation: invocationProvenanceSchema.optional(),
+  semanticGrader: z.union([
+    semanticGraderVersionSchema,
+    z.strictObject({ state: z.literal('unrecorded') }),
+  ]).optional(),
+});
+const comparisonUsageSchema = z.strictObject({
+  inputTokens: nonnegativeIntegerSchema,
+  outputTokens: nonnegativeIntegerSchema,
+  recordedTrials: nonnegativeIntegerSchema,
+  totalTokens: nonnegativeIntegerSchema,
+}).refine((usage) => usage.totalTokens === usage.inputTokens + usage.outputTokens);
+const reliabilitySchema = z.strictObject({
+  passAtK: probabilitySchema,
+  passPowerK: probabilitySchema,
+  sampleSize: nonnegativeIntegerSchema.refine((value) => value >= 1),
+});
+const conditionMetricsSchema = z.strictObject({
+  durationMs: nonnegativeNumberSchema,
+  evidence: z.enum(['reliability', 'smoke']),
+  fail: nonnegativeIntegerSchema,
+  harnessFailures: nonnegativeIntegerSchema,
+  inconclusive: nonnegativeIntegerSchema,
+  meanDurationMs: nonnegativeNumberSchema,
+  outcome: z.enum(['fail', 'inconclusive', 'pass']),
+  passRate: probabilitySchema,
+  passes: nonnegativeIntegerSchema,
+  provenance: conditionProvenanceSchema,
+  reliability: reliabilitySchema.optional(),
+  runId: z.string(),
+  trials: nonnegativeIntegerSchema,
+  usage: comparisonUsageSchema.optional(),
+}).refine((metrics) => metrics.passes + metrics.fail + metrics.inconclusive === metrics.trials);
+const deltaSchema = z.strictObject({
+  meanDurationMs: safeNumberSchema,
+  passRate: safeNumberSchema,
+  passes: safeIntegerSchema,
+  reliability: reliabilitySchema.optional(),
+  totalTokens: safeIntegerSchema.optional(),
+  trials: safeIntegerSchema,
+});
+const nonComparableCauseSchema = z.strictObject({
+  baseline: z.string(),
+  candidate: z.string(),
+  code: z.enum([
+    'case-mismatch',
+    'fixture-mismatch',
+    'grader-versions-mismatch',
+    'harness-mismatch',
+    'host-cli-version-mismatch',
+    'invocation-mismatch',
+    'missing-baseline',
+    'missing-candidate',
+    'model-mismatch',
+    'no-gradable-trials',
+  ]),
+  message: z.string(),
+});
+const comparableRowSchema = z.strictObject({
+  baseline: conditionMetricsSchema,
+  candidate: conditionMetricsSchema,
+  caseId: z.string(),
+  comparable: z.literal(true),
+  delta: deltaSchema,
+  evidence: z.enum(['reliability', 'smoke']),
+  host: z.string(),
+  model: z.string(),
+  unverifiedFacets: z.array(z.enum([
+    'case',
+    'fixture',
+    'grader-versions',
+    'harness',
+    'host-cli-version',
+    'invocation',
+    'model',
+  ])),
+});
+const nonComparableRowSchema = z.strictObject({
+  baseline: conditionMetricsSchema.optional(),
+  candidate: conditionMetricsSchema.optional(),
+  caseId: z.string(),
+  causes: z.array(nonComparableCauseSchema),
+  comparable: z.literal(false),
+  host: z.string(),
+  model: z.string().optional(),
+});
+const comparisonSchema = z.strictObject({
+  baselineRunId: z.string(),
+  candidateRunId: z.string(),
+  rows: z.array(z.union([comparableRowSchema, nonComparableRowSchema])),
+  sampleSize: nonnegativeIntegerSchema.refine((value) => value >= 1),
+  summary: z.strictObject({
+    comparable: nonnegativeIntegerSchema,
+    nonComparable: nonnegativeIntegerSchema,
+    reliability: nonnegativeIntegerSchema,
+    smoke: nonnegativeIntegerSchema,
+  }),
+});
+const comparisonEnvelopeSchema = z.strictObject({ comparison: comparisonSchema });
+
 const frozenJson = (value: unknown): unknown => {
   if (Array.isArray(value)) return Object.freeze(value.map(frozenJson));
   if (isRecord(value)) {
     return Object.freeze(Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, frozenJson(entry)])));
   }
   return value;
-};
-
-const asRecord = (value: unknown): Readonly<Record<string, unknown>> => {
-  if (!isRecord(value)) throw invalidResponse();
-  return value;
-};
-
-const provenanceKeys = new Set(['hostCliVersion', 'invocation', 'semanticGrader']);
-const provenanceValue = /^[A-Za-z0-9][A-Za-z0-9_.:@-]{0,511}$/u;
-const provenancePathMarker = /(?:^|[^A-Za-z0-9])(?:file:|[A-Za-z]:|\\\\)/iu;
-
-const validProvenance = (value: unknown): boolean => isRecord(value) &&
-  Object.keys(value).every((key) => provenanceKeys.has(key)) &&
-  Object.values(value).every((entry) => typeof entry === 'string' &&
-    provenanceValue.test(entry) && !provenancePathMarker.test(entry));
-
-const validMetrics = (value: unknown): boolean => isRecord(value) && validProvenance(value.provenance);
-
-const validRowProvenance = (value: unknown): boolean => {
-  if (!isRecord(value) || typeof value.comparable !== 'boolean') return false;
-  if (value.comparable) return validMetrics(value.baseline) && validMetrics(value.candidate);
-  return (value.baseline === undefined || validMetrics(value.baseline)) &&
-    (value.candidate === undefined || validMetrics(value.candidate));
 };
 
 const diagnosticError = (value: unknown, status: number): ComparisonClientError => {
@@ -67,17 +169,9 @@ const diagnosticError = (value: unknown, status: number): ComparisonClientError 
 };
 
 const comparisonResult = (value: unknown): EvalComparison => {
-  const comparison = asRecord(value).comparison;
-  if (!isRecord(comparison) ||
-    typeof comparison.baselineRunId !== 'string' ||
-    typeof comparison.candidateRunId !== 'string' ||
-    typeof comparison.sampleSize !== 'number' ||
-    !isRecord(comparison.summary) ||
-    !Array.isArray(comparison.rows) ||
-    !comparison.rows.every(validRowProvenance)) {
-    throw invalidResponse();
-  }
-  return frozenJson(comparison) as EvalComparison;
+  const parsed = comparisonEnvelopeSchema.safeParse(value);
+  if (!parsed.success) throw invalidResponse();
+  return frozenJson(parsed.data.comparison) as EvalComparison;
 };
 
 /** A typed, credential-memory-only browser client for the eval comparison route. */
