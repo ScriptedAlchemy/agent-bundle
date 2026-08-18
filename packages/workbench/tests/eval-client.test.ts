@@ -127,8 +127,9 @@ it('omits an absent selection field instead of sending an empty one', async () =
 
 it('reads one recorded run and lists every recorded run', async () => {
   const calls: RecordedRequest[] = [];
+  let reply = 0;
   const client = new EvalClient({
-    fetch: recordingFetch(calls, () => response({ run: runResult, runs: [runRecord] })),
+    fetch: recordingFetch(calls, () => response(reply++ === 0 ? { run: runResult } : { runs: [runRecord] })),
   });
 
   await expect(client.read('20260817t000000000z-abcdef01')).resolves.toMatchObject({ trials: [{ id: 'portable-1' }] });
@@ -288,4 +289,18 @@ it('rejects a response that does not carry the documented shape', async () => {
   const client = new EvalClient({ fetch: recordingFetch([], () => response({ suites: 'review-change' })) });
 
   await expect(client.suites()).rejects.toMatchObject({ code: 'AB8073' });
+});
+
+it('rejects extra or nonsensical fields anywhere in suite and run DTOs', async () => {
+  const cases: readonly (readonly [unknown, (client: EvalClient) => Promise<unknown>])[] = [
+    [{ ...listing, suites: [{ ...listing.suites[0], cases: [{ ...listing.suites[0]!.cases[0], extra: true }] }] }, (client) => client.suites()],
+    [{ run: { ...runResult, run: { ...runRecord, extra: true } } }, (client) => client.read(runRecord.id)],
+    [{ extra: true, runs: [runRecord] }, (client) => client.runs()],
+    [{ runs: [{ ...runRecord, summary: { ...runRecord.summary, trials: -1 } }] }, (client) => client.runs()],
+  ];
+
+  for (const [body, operation] of cases) {
+    const client = new EvalClient({ fetch: recordingFetch([], () => response(body)) });
+    await expect(operation(client)).rejects.toMatchObject({ code: 'AB8073' });
+  }
 });

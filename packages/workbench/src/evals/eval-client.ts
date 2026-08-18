@@ -1,3 +1,5 @@
+import { z } from 'zod';
+
 import type {
   EvalRunEventsReplay,
   EvalRunResult,
@@ -60,6 +62,154 @@ const invalidResponse = (): EvalClientError =>
   new EvalClientError('AB8073', 'Eval route returned an invalid response.');
 const isAbort = (error: unknown): boolean => error instanceof Error && error.name === 'AbortError';
 
+const textSchema = z.string();
+const safeIntegerSchema = z.number().refine(Number.isSafeInteger);
+const nonnegativeIntegerSchema = safeIntegerSchema.refine((value) => value >= 0);
+const positiveIntegerSchema = safeIntegerSchema.refine((value) => value >= 1);
+const timestampSchema = z.string().refine(isIsoTimestamp);
+const digestSchema = z.string().regex(/^[a-f0-9]{64}$/u);
+const evidenceLevelSchema = z.enum(['inferred', 'observed', 'unavailable']);
+const outcomeSchema = z.enum(['fail', 'inconclusive', 'pass']);
+const assertionKindSchema = z.enum(['exit-code', 'mcp-call', 'no-skill-activation', 'outcome', 'skill-activation']);
+const diagnosticSchema = z.strictObject({
+  code: textSchema,
+  generatedPath: textSchema.optional(),
+  message: textSchema,
+  recovery: textSchema.optional(),
+  severity: z.enum(['error', 'info', 'warning']),
+  sourcePath: textSchema.optional(),
+  target: textSchema.optional(),
+});
+const assertionSummarySchema = z.strictObject({ id: textSchema, kind: assertionKindSchema });
+const invocationSchema = z.strictObject({
+  mode: z.enum(['automatic', 'explicit', 'none']),
+  skill: textSchema.optional(),
+});
+const caseSummarySchema = z.strictObject({
+  assertions: z.array(assertionSummarySchema),
+  digest: digestSchema,
+  hosts: z.array(textSchema),
+  id: textSchema,
+  invocation: invocationSchema,
+  prompt: textSchema,
+  trials: positiveIntegerSchema,
+});
+const suiteSchema = z.strictObject({
+  cases: z.array(caseSummarySchema),
+  digest: digestSchema,
+  name: textSchema,
+  sourcePath: textSchema,
+});
+const suiteListingSchema = z.strictObject({
+  diagnostics: z.array(diagnosticSchema),
+  suites: z.array(suiteSchema),
+});
+const artifactBindingSchema = z.strictObject({
+  manifestPath: textSchema,
+  source: z.enum(['explicit', 'run-owned']),
+  targetDigests: z.record(z.string(), digestSchema),
+});
+const runSummarySchema = z.strictObject({
+  cases: nonnegativeIntegerSchema,
+  fail: nonnegativeIntegerSchema,
+  inconclusive: nonnegativeIntegerSchema,
+  pass: nonnegativeIntegerSchema,
+  trials: nonnegativeIntegerSchema,
+});
+const runRecordSchema = z.strictObject({
+  agentBundleVersion: textSchema,
+  artifact: artifactBindingSchema,
+  completedAt: timestampSchema.optional(),
+  createdAt: timestampSchema,
+  harness: textSchema,
+  id: textSchema,
+  projectRevision: digestSchema,
+  schemaVersion: z.literal(1),
+  summary: runSummarySchema.optional(),
+});
+const assertionResultSchema = z.strictObject({
+  assertionId: textSchema,
+  detail: textSchema,
+  evidence: evidenceLevelSchema,
+  kind: assertionKindSchema,
+  outcome: outcomeSchema,
+});
+const trialEvidenceSchema = z.strictObject({
+  mcp: z.strictObject({
+    calls: z.array(z.strictObject({ server: textSchema, tool: textSchema })),
+    level: evidenceLevelSchema,
+  }),
+  process: z.strictObject({
+    exitCode: safeIntegerSchema.optional(),
+    level: evidenceLevelSchema,
+    timedOut: z.boolean(),
+  }),
+  scripts: z.strictObject({
+    level: evidenceLevelSchema,
+    results: z.record(z.string(), z.strictObject({ detail: textSchema, outcome: outcomeSchema })),
+  }),
+  skillActivation: z.strictObject({ activated: z.array(textSchema), level: evidenceLevelSchema }),
+});
+const harnessFailureSchema = z.strictObject({
+  code: z.enum(['EVAL_ARTIFACT_UNAVAILABLE', 'EVAL_FIXTURE_UNAVAILABLE', 'EVAL_GRADER_FAILED', 'EVAL_PROCESS_UNAVAILABLE', 'EVAL_TRACE_UNAVAILABLE']),
+  message: textSchema,
+  stage: z.enum(['artifact', 'fixture', 'grader', 'preflight', 'trace']),
+});
+const pluginFailureSchema = z.strictObject({
+  code: z.enum(['EVAL_PLUGIN_ASSERTION_FAILED', 'EVAL_PLUGIN_PROCESS_FAILED', 'EVAL_PLUGIN_TIMED_OUT']),
+  message: textSchema,
+});
+const trialRecordSchema = z.strictObject({
+  assertions: z.array(assertionResultSchema),
+  caseDigest: digestSchema,
+  caseId: textSchema,
+  completedAt: timestampSchema,
+  durationMs: nonnegativeIntegerSchema,
+  evidence: trialEvidenceSchema,
+  fixtureDigest: digestSchema,
+  harnessFailure: harnessFailureSchema.optional(),
+  host: textSchema,
+  id: textSchema,
+  model: textSchema,
+  outcome: outcomeSchema,
+  pluginFailure: pluginFailureSchema.optional(),
+  prompt: textSchema,
+  rawArtifacts: z.array(textSchema),
+  schemaVersion: z.literal(1),
+  startedAt: timestampSchema,
+  targetDigest: digestSchema,
+  trialIndex: nonnegativeIntegerSchema,
+});
+const assertionAggregateSchema = z.strictObject({
+  assertionId: textSchema,
+  fail: nonnegativeIntegerSchema,
+  inconclusive: nonnegativeIntegerSchema,
+  kind: assertionKindSchema,
+  pass: nonnegativeIntegerSchema,
+});
+const caseAggregateSchema = z.strictObject({
+  assertions: z.array(assertionAggregateSchema),
+  caseDigest: digestSchema,
+  caseId: textSchema,
+  fail: nonnegativeIntegerSchema,
+  fixtureDigest: digestSchema,
+  harnessFailures: nonnegativeIntegerSchema,
+  host: textSchema,
+  inconclusive: nonnegativeIntegerSchema,
+  model: textSchema,
+  outcome: outcomeSchema,
+  pass: nonnegativeIntegerSchema,
+  targetDigest: digestSchema,
+  trials: nonnegativeIntegerSchema,
+});
+const runResultSchema = z.strictObject({
+  aggregates: z.array(caseAggregateSchema),
+  diagnostics: z.array(diagnosticSchema),
+  run: runRecordSchema,
+  trials: z.array(trialRecordSchema),
+});
+const conforms = (schema: z.ZodType, value: unknown): boolean => schema.safeParse(value).success;
+
 const snapshot = (value: unknown): JsonValue => {
   try { return snapshotStrictJsonValue(value); }
   catch { throw invalidResponse(); }
@@ -103,27 +253,17 @@ const replayFor = (value: unknown, afterSequence: number): EvalRunEventsReplay =
 };
 
 const suiteListing = (value: unknown): EvalSuiteListing => {
-  if (!exactKeys(value, ['diagnostics', 'suites']) || !Array.isArray(value.diagnostics) || !Array.isArray(value.suites) ||
-    !value.suites.every((entry) => isRecord(entry) && typeof entry.name === 'string' && Array.isArray(entry.cases))) {
-    throw invalidResponse();
-  }
+  if (!conforms(suiteListingSchema, value)) throw invalidResponse();
   return value as unknown as EvalSuiteListing;
 };
 
 const runResult = (value: unknown): EvalRunResult => {
-  if (!isRecord(value) || !isRecord(value.run) ||
-    !exactKeys(value.run, ['aggregates', 'diagnostics', 'run', 'trials']) || !isRecord(value.run.run) ||
-    !Array.isArray(value.run.aggregates) || !Array.isArray(value.run.diagnostics) || !Array.isArray(value.run.trials)) {
-    throw invalidResponse();
-  }
+  if (!exactKeys(value, ['run']) || !conforms(runResultSchema, value.run)) throw invalidResponse();
   return value.run as unknown as EvalRunResult;
 };
 
 const runRecords = (value: unknown): readonly EvalRunRecord[] => {
-  if (!isRecord(value) || !Array.isArray(value.runs) ||
-    !value.runs.every((entry) => isRecord(entry) && typeof entry.id === 'string')) {
-    throw invalidResponse();
-  }
+  if (!exactKeys(value, ['runs']) || !Array.isArray(value.runs) || !value.runs.every((entry) => conforms(runRecordSchema, entry))) throw invalidResponse();
   return Object.freeze([...value.runs]) as readonly EvalRunRecord[];
 };
 
