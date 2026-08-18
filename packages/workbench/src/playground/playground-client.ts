@@ -1,3 +1,5 @@
+import { z } from 'zod';
+
 import type {
   DraftEvalCase,
   PlaygroundExport,
@@ -6,6 +8,7 @@ import type {
   PlaygroundTraceEvent,
 } from '../../../agent-bundle/src/services/playground-service.ts';
 import type { PlaygroundOperationRequest, PlaygroundRun } from '../../../agent-bundle/src/dev/playground-contract.ts';
+import type { NativePlaygroundCatalog } from '../../../agent-bundle/src/dev/native-playground-service.ts';
 import { ForegroundTransport } from '../foreground-session.ts';
 
 export interface PlaygroundClientOptions {
@@ -96,6 +99,57 @@ const nonemptyString = (value: unknown): value is string => typeof value === 'st
 
 const jsonObject = (value: unknown): value is Readonly<Record<string, unknown>> => isRecord(value);
 
+const textSchema = z.string().min(1);
+const nativeHostSchema = z.enum(['claude', 'codex']);
+const nativeCatalogItemSchema = z.strictObject({ id: textSchema, label: textSchema });
+const nativeModelPinSchema = nativeCatalogItemSchema.extend({ host: nativeHostSchema });
+const nativeCatalogSelectionSchema = z.strictObject({
+  caseId: textSchema,
+  fixtureId: textSchema,
+  host: nativeHostSchema,
+  modelPinId: textSchema,
+});
+const nativeCatalogSchema = z.strictObject({
+  cases: z.array(nativeCatalogItemSchema),
+  epochId: textSchema,
+  fixtures: z.array(nativeCatalogItemSchema),
+  modelPins: z.array(nativeModelPinSchema),
+  selections: z.array(nativeCatalogSelectionSchema),
+});
+
+/** Zod receives only inert plain JSON after the hostile boundary value has been detached. */
+const zodJsonSnapshot = (value: unknown): unknown | typeof invalidJson => {
+  try { return JSON.parse(JSON.stringify(value)); }
+  catch { return invalidJson; }
+};
+
+const nativeCatalogCoherent = (catalog: NativePlaygroundCatalog): boolean => {
+  const uniqueIds = (entries: readonly { readonly id: string }[]): Set<string> | undefined => {
+    const ids = new Set<string>();
+    for (const entry of entries) {
+      if (ids.has(entry.id)) return undefined;
+      ids.add(entry.id);
+    }
+    return ids;
+  };
+  const caseIds = uniqueIds(catalog.cases);
+  const fixtureIds = uniqueIds(catalog.fixtures);
+  const modelPins = new Map<string, 'claude' | 'codex'>();
+  for (const modelPin of catalog.modelPins) {
+    if (modelPins.has(modelPin.id)) return false;
+    modelPins.set(modelPin.id, modelPin.host);
+  }
+  if (caseIds === undefined || fixtureIds === undefined) return false;
+  const tuples = new Set<string>();
+  for (const selection of catalog.selections) {
+    const tuple = `${selection.caseId}\u0000${selection.fixtureId}\u0000${selection.host}\u0000${selection.modelPinId}`;
+    if (tuples.has(tuple) || !caseIds.has(selection.caseId) || !fixtureIds.has(selection.fixtureId) ||
+      modelPins.get(selection.modelPinId) !== selection.host) return false;
+    tuples.add(tuple);
+  }
+  return true;
+};
+
 const isIdentity = (value: unknown): boolean => {
   if (!isRecord(value) || !exactKeys(value, ['epoch', 'fixture', 'invocation', 'target', 'task'])) return false;
   const { epoch, fixture, invocation, target, task } = value;
@@ -166,6 +220,16 @@ const runBody = (value: unknown): PlaygroundRun => {
   if (!exactKeys(body, ['run'])) throw invalidResponse();
   if (!isRun(run)) throw invalidResponse();
   return run as PlaygroundRun;
+};
+
+const catalogBody = (value: unknown, requestedEpochId: string | undefined): NativePlaygroundCatalog => {
+  const envelope = detachedRecord(value);
+  const catalog = envelope.catalog;
+  const zodCatalog = zodJsonSnapshot(catalog);
+  if (!exactKeys(envelope, ['catalog']) || zodCatalog === invalidJson || !nativeCatalogSchema.safeParse(zodCatalog).success) throw invalidResponse();
+  const decoded = catalog as NativePlaygroundCatalog;
+  if ((requestedEpochId !== undefined && decoded.epochId !== requestedEpochId) || !nativeCatalogCoherent(decoded)) throw invalidResponse();
+  return decoded;
 };
 
 const cancelledBody = (value: unknown): boolean => {
@@ -259,12 +323,21 @@ export class PlaygroundClient {
 
   /** Starts a server-owned operation and receives its live run and session identity promptly. */
   async run(input: PlaygroundOperationRequest, signal?: AbortSignal): Promise<PlaygroundRun> {
+    const body = input.operation === 'native.prompt'
+      ? this.#nativePromptBody(input)
+      : input;
     return runBody(await this.#transport.json('/api/playground/runs', {
-      body: JSON.stringify(input),
+      body: JSON.stringify(body),
       headers: { 'content-type': 'application/json' },
       method: 'POST',
       signal,
     }));
+  }
+
+  /** Reads the immutable server-owned native choices for exactly one active or retained epoch. */
+  async catalog(epochId?: string, signal?: AbortSignal): Promise<NativePlaygroundCatalog> {
+    const query = epochId === undefined ? '' : `?epochId=${encodeURIComponent(epochId)}`;
+    return catalogBody(await this.#transport.json(`/api/playground/catalog${query}`, { signal }), epochId);
   }
 
   /** Cancellation is an operation-level action; callers refresh the durable session afterwards. */
@@ -320,6 +393,24 @@ export class PlaygroundClient {
 
   #runPath(runId: string): string {
     return `/api/playground/runs/${encodeURIComponent(runId)}`;
+  }
+
+  #nativePromptBody(input: Extract<PlaygroundOperationRequest, { readonly operation: 'native.prompt' }>): PlaygroundOperationRequest {
+    if (!nonemptyString(input.caseId) || !nonemptyString(input.epochId) || !nonemptyString(input.fixtureId) ||
+      !nonemptyString(input.modelPinId) || !nonemptyString(input.prompt) || !nonemptyString(input.target) ||
+      (input.host !== 'claude' && input.host !== 'codex')) {
+      throw new PlaygroundClientError('AB8043', 'Native Playground requires one complete catalog-backed prompt selection.');
+    }
+    return Object.freeze({
+      caseId: input.caseId,
+      epochId: input.epochId,
+      fixtureId: input.fixtureId,
+      host: input.host,
+      modelPinId: input.modelPinId,
+      operation: 'native.prompt' as const,
+      prompt: input.prompt,
+      target: input.target,
+    });
   }
 
   async #stream(sessionId: string, options: PlaygroundStreamOptions, signal: AbortSignal): Promise<void> {

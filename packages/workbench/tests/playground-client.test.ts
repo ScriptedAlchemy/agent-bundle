@@ -40,6 +40,14 @@ const identity = {
 
 const session = { cleanupFailures: [], createdAt: '2026-08-14T10:00:00.000Z', id: 'session-1', identity, state: 'open' } as const;
 
+const nativeCatalog = {
+  cases: [{ id: 'case:review', label: 'Review the fixture' }],
+  epochId: 'epoch/native',
+  fixtures: [{ id: 'fixture:clean', label: 'Clean workspace' }],
+  modelPins: [{ host: 'claude', id: 'pin:claude-sonnet', label: 'Claude Sonnet (authored pin)' }],
+  selections: [{ caseId: 'case:review', fixtureId: 'fixture:clean', host: 'claude', modelPinId: 'pin:claude-sonnet' }],
+} as const;
+
 const event = (sequence: number, summary: string): PlaygroundTraceEvent => ({
   kind: sequence === 1 ? 'epoch.bound' : 'skill.inspected',
   raw: { sequence },
@@ -94,6 +102,57 @@ it('starts only the exact hook and MCP operation shapes that the server accepts'
     { hook: 'beforeTool', input: { tool: 'read' }, operation: 'hook.simulate', target: 'portable' },
     { arguments: { city: 'Berlin' }, operation: 'mcp.call-tool', serverName: 'weather', target: 'portable', tool: 'forecast' },
   ]);
+});
+
+it('loads a detached exact native catalog for the requested epoch through the authenticated foreground lifecycle', async () => {
+  const calls: RecordedRequest[] = [];
+  const client = new PlaygroundClient({ fetch: recordingFetch(calls, () => response({ catalog: nativeCatalog })) });
+
+  const catalog = await client.catalog('epoch/native');
+
+  expect(calls).toEqual([{
+    body: undefined,
+    method: 'GET',
+    token: 'foreground-token',
+    url: '/api/playground/catalog?epochId=epoch%2Fnative',
+  }]);
+  expect(catalog).toEqual(nativeCatalog);
+  expect(Object.isFrozen(catalog)).toBe(true);
+  expect(Object.isFrozen(catalog.selections[0])).toBe(true);
+});
+
+it('sends an exact native prompt admission body without arbitrary browser execution fields', async () => {
+  const calls: RecordedRequest[] = [];
+  const client = new PlaygroundClient({ fetch: recordingFetch(calls, () => response({ run: { id: 'run-1', session } })) });
+
+  await client.run({
+    caseId: 'case:review', epochId: 'epoch-native', fixtureId: 'fixture:clean', host: 'claude', modelPinId: 'pin:claude-sonnet',
+    operation: 'native.prompt', prompt: 'Review the fixture.', target: 'claude',
+  });
+
+  expect(calls[0]?.body).toEqual({
+    caseId: 'case:review', epochId: 'epoch-native', fixtureId: 'fixture:clean', host: 'claude', modelPinId: 'pin:claude-sonnet',
+    operation: 'native.prompt', prompt: 'Review the fixture.', target: 'claude',
+  });
+  expect(Object.keys(calls[0]?.body as object).sort()).toEqual([
+    'caseId', 'epochId', 'fixtureId', 'host', 'modelPinId', 'operation', 'prompt', 'target',
+  ]);
+});
+
+it('rejects malformed native catalogs, catalog tuple incoherence, and an epoch response that does not match the request', async () => {
+  const malformed: readonly unknown[] = [
+    { catalog: { ...nativeCatalog, epochId: 'other-epoch' } },
+    { catalog: { ...nativeCatalog, unexpected: true } },
+    { catalog: { ...nativeCatalog, modelPins: [{ ...nativeCatalog.modelPins[0], host: 'other' }] } },
+    { catalog: { ...nativeCatalog, selections: [{ ...nativeCatalog.selections[0], fixtureId: 'fixture:missing' }] } },
+    { catalog: { ...nativeCatalog, selections: [...nativeCatalog.selections, nativeCatalog.selections[0]] } },
+    { catalog: { ...nativeCatalog, modelPins: [...nativeCatalog.modelPins, nativeCatalog.modelPins[0]] } },
+  ];
+
+  for (const body of malformed) {
+    const client = new PlaygroundClient({ fetch: hostileFetch(body) });
+    await expect(client.catalog('epoch/native')).rejects.toMatchObject({ code: 'AB8043' });
+  }
 });
 
 it('cancels a run then reads its server-owned session by encoded identity', async () => {

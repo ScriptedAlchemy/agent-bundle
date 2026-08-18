@@ -3,9 +3,12 @@ import type {
   PlaygroundExport,
   PlaygroundJsonValue,
   PlaygroundSession,
+  PlaygroundTarget,
   PlaygroundTraceEvent,
   PlaygroundTraceSource,
 } from '../../../agent-bundle/src/services/playground-service.ts';
+import type { PlaygroundOperationRequest } from '../../../agent-bundle/src/dev/playground-contract.ts';
+import type { NativePlaygroundCatalog, NativePlaygroundHost } from '../../../agent-bundle/src/dev/native-playground-service.ts';
 
 export type PlaygroundState = 'finalized' | 'no-epoch' | 'no-session' | 'open';
 
@@ -51,6 +54,23 @@ export interface PlaygroundView {
   readonly workspace: PlaygroundJsonValue | undefined;
 }
 
+/** Browser state for opaque native catalog identities; it never contains an executable or model value. */
+export interface NativePlaygroundSelection {
+  readonly caseId: string;
+  readonly epochId: string;
+  readonly fixtureId: string;
+  readonly host: '' | NativePlaygroundHost;
+  readonly modelPinId: string;
+}
+
+export interface NativePlaygroundRequestOptions {
+  readonly catalog: NativePlaygroundCatalog | undefined;
+  readonly prompt: string;
+  readonly selection: NativePlaygroundSelection;
+  readonly target: string;
+  readonly targets: readonly PlaygroundTarget[];
+}
+
 /** A stream/replay collision means the server trace cannot be trusted as one ordered history. */
 export class PlaygroundTraceConflictError extends Error {
   readonly code = 'AB8043';
@@ -65,6 +85,10 @@ const noRows: readonly PlaygroundDetailRow[] = Object.freeze([]);
 const noTraceRows: readonly PlaygroundTraceRow[] = Object.freeze([]);
 
 const noStrings: readonly string[] = Object.freeze([]);
+
+const emptyNativeSelection = (epochId = ''): NativePlaygroundSelection => Object.freeze({
+  caseId: '', epochId, fixtureId: '', host: '', modelPinId: '',
+});
 
 const row = (label: string, value: string): PlaygroundDetailRow => Object.freeze({ label, value });
 
@@ -135,6 +159,74 @@ const persistedRefsFor = (
   return Object.freeze(rows.filter((entry) => selected.has(entry.rawEventRef)).map((entry) => entry.rawEventRef));
 };
 
+const nativeSelectionExists = (
+  catalog: NativePlaygroundCatalog,
+  selection: Pick<NativePlaygroundSelection, 'caseId' | 'fixtureId' | 'host' | 'modelPinId'>,
+): boolean => selection.host !== '' && catalog.selections.some((candidate) =>
+  candidate.caseId === selection.caseId && candidate.fixtureId === selection.fixtureId &&
+  candidate.host === selection.host && candidate.modelPinId === selection.modelPinId,
+);
+
+/**
+ * Retains only IDs that still compose an advertised selection in the current
+ * immutable catalog. Callers can render this immediately while synchronizing
+ * their form state after a rebuild or a parent picker changes.
+ */
+export const nativeSelectionFor = (
+  catalog: NativePlaygroundCatalog | undefined,
+  selection: NativePlaygroundSelection,
+): NativePlaygroundSelection => {
+  if (catalog === undefined || selection.epochId !== catalog.epochId) return emptyNativeSelection(catalog?.epochId ?? '');
+  const caseId = catalog.cases.some((entry) => entry.id === selection.caseId) ? selection.caseId : '';
+  const host = (selection.host === 'claude' || selection.host === 'codex') &&
+    catalog.selections.some((entry) => entry.caseId === caseId && entry.host === selection.host)
+    ? selection.host
+    : '';
+  const fixtureId = catalog.fixtures.some((entry) => entry.id === selection.fixtureId) &&
+    catalog.selections.some((entry) => entry.caseId === caseId && entry.fixtureId === selection.fixtureId && entry.host === host)
+    ? selection.fixtureId
+    : '';
+  const modelPinId = catalog.modelPins.some((entry) => entry.id === selection.modelPinId && entry.host === host) &&
+    nativeSelectionExists(catalog, { caseId, fixtureId, host, modelPinId: selection.modelPinId })
+    ? selection.modelPinId
+    : '';
+  return Object.freeze({ caseId, epochId: catalog.epochId, fixtureId, host, modelPinId });
+};
+
+/** Builds the only native browser request after every selectable identity proves membership in the current catalog. */
+export const nativePlaygroundRequestFor = (options: NativePlaygroundRequestOptions): Extract<PlaygroundOperationRequest, { readonly operation: 'native.prompt' }> | undefined => {
+  const catalog = options.catalog;
+  const selection = nativeSelectionFor(catalog, options.selection);
+  if (catalog === undefined || options.prompt.trim().length === 0 || !options.targets.some((entry) => entry.name === options.target) ||
+    selection.host === '' || !nativeSelectionExists(catalog, selection)) return undefined;
+  return Object.freeze({
+    caseId: selection.caseId,
+    epochId: catalog.epochId,
+    fixtureId: selection.fixtureId,
+    host: selection.host,
+    modelPinId: selection.modelPinId,
+    operation: 'native.prompt' as const,
+    prompt: options.prompt,
+    target: options.target,
+  });
+};
+
+const nativeInvocationRowsFor = (session: PlaygroundSession): readonly PlaygroundDetailRow[] => {
+  if (session.identity.invocation.kind !== 'native.prompt') return noRows;
+  const intent = session.identity.invocation.intent;
+  const value = (key: string): string | undefined => typeof intent[key] === 'string' ? intent[key] : undefined;
+  const host = value('host');
+  const caseId = value('caseId');
+  const fixtureId = value('fixtureId');
+  const modelPinId = value('modelPinId');
+  return Object.freeze([
+    ...(host === undefined ? [] : [row('Native host', host)]),
+    ...(caseId === undefined ? [] : [row('Native case', caseId)]),
+    ...(fixtureId === undefined ? [] : [row('Requested fixture', fixtureId)]),
+    ...(modelPinId === undefined ? [] : [row('Authored model pin', modelPinId)]),
+  ]);
+};
+
 const identityRowsFor = (session: PlaygroundSession): readonly PlaygroundDetailRow[] => Object.freeze([
   row('Session', session.id),
   row('Session state', session.state),
@@ -146,6 +238,7 @@ const identityRowsFor = (session: PlaygroundSession): readonly PlaygroundDetailR
   ...(session.identity.target.digest === undefined ? [] : [row('Target digest', session.identity.target.digest)]),
   row('Task', session.identity.task.id),
   row('Invocation kind', session.identity.invocation.kind),
+  ...nativeInvocationRowsFor(session),
 ]);
 
 const outcomeRowsFor = (session: PlaygroundSession): readonly PlaygroundDetailRow[] => {
