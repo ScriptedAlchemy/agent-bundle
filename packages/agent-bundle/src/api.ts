@@ -165,10 +165,21 @@ export interface ValidateResult {
   readonly model?: NormalizedPlugin;
 }
 
+export type InspectionSkipReason = 'excluded-by-targets' | 'unsupported-capability';
+
+/** One component the plan silently omits for this target, with the intersection-rule cause. */
+export interface InspectionSkippedComponent {
+  readonly id: string;
+  readonly kind: 'hook' | 'mcp-app' | 'mcp-server' | 'script' | 'skill';
+  readonly name: string;
+  readonly reason: InspectionSkipReason;
+}
+
 export interface InspectionPlan {
   readonly diagnostics: readonly Diagnostic[];
   readonly entries: readonly TargetArtifactEntry[];
   readonly hookEntries: readonly TargetHookEntry[];
+  readonly skipped: readonly InspectionSkippedComponent[];
   readonly target: string;
 }
 
@@ -322,6 +333,39 @@ export const validate = async (options: ValidateOptions): Promise<ValidateResult
   });
 };
 
+interface InspectableComponent {
+  readonly capability?: string;
+  readonly id: string;
+  readonly kind: InspectionSkippedComponent['kind'];
+  readonly name: string;
+  readonly targets: readonly string[];
+}
+
+const inspectableComponents = (model: NormalizedPlugin): readonly InspectableComponent[] => [
+  ...model.hooks.map((hook) => ({ capability: 'hooks', id: hook.id, kind: 'hook' as const, name: hook.event, targets: hook.targets })),
+  ...(model.mcpApps ?? []).map((app) => ({ capability: 'mcp', id: app.id, kind: 'mcp-app' as const, name: app.name, targets: app.targets })),
+  ...model.mcpServers.map((server) => ({ capability: 'mcp', id: server.id, kind: 'mcp-server' as const, name: server.name, targets: server.targets })),
+  ...model.scripts.map((script) => ({ id: script.id, kind: 'script' as const, name: script.name, targets: script.targets })),
+  ...model.skills.map((skill) => ({ capability: 'skills', id: skill.id, kind: 'skill' as const, name: skill.name, targets: skill.targets })),
+];
+
+const skippedComponentsFor = (
+  components: readonly InspectableComponent[],
+  target: string,
+  capabilities: Readonly<Record<string, boolean>>,
+): readonly InspectionSkippedComponent[] => Object.freeze(components
+  .filter((component) =>
+    !component.targets.includes(target) ||
+    (component.capability !== undefined && capabilities[component.capability] !== true))
+  .map((component) => Object.freeze({
+    id: component.id,
+    kind: component.kind,
+    name: component.name,
+    reason: (component.capability !== undefined && capabilities[component.capability] !== true
+      ? 'unsupported-capability'
+      : 'excluded-by-targets') satisfies InspectionSkipReason,
+  })));
+
 export const inspect = async (options: InspectOptions): Promise<InspectResult> => {
   const prepared = await prepareProject(options, 'inspect');
   if (
@@ -344,14 +388,17 @@ export const inspect = async (options: InspectOptions): Promise<InspectResult> =
   }
   let plans: readonly InspectionPlan[];
   try {
+    const components = inspectableComponents(model);
     plans = Object.freeze(model.targets
       .filter((candidate) => options.target === undefined || candidate.name === options.target)
       .map((target) => {
-        const plan = prepared.registry.get(target.name).plan(model);
+        const adapter = prepared.registry.get(target.name);
+        const plan = adapter.plan(model);
         return Object.freeze({
           diagnostics: freezeDiagnostics(plan.diagnostics),
           entries: Object.freeze([...plan.entries]),
           hookEntries: Object.freeze([...(plan.hookEntries ?? [])]),
+          skipped: skippedComponentsFor(components, target.name, adapter.capabilities),
           target: target.name,
         });
       }));

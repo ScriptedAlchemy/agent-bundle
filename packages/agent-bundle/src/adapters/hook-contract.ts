@@ -340,7 +340,14 @@ export const planHooks = (
       ...(matcher === undefined ? {} : { matcher }),
     };
     (groups[nativeEvent] ??= []).push(group);
-    const wrapper: TargetHookWrapper = { event: hook.event, hook, nativeEvent, relativePath, target };
+    const wrapper: TargetHookWrapper = {
+      event: hook.event,
+      hook,
+      nativeEvent,
+      ...(matcher === undefined ? {} : { nativeMatcher: matcher }),
+      relativePath,
+      target,
+    };
     hookEntries.push({ ...wrapper, virtualSource: contract.wrapperSource(wrapper) });
   }
 
