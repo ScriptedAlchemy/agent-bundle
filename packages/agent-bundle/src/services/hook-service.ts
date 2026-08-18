@@ -59,7 +59,7 @@ const cancellations = new WeakSet<object>();
  * clone that could not be removed stays a real failure even when it reports the
  * same surface.
  */
-export class HookSimulationAbortError extends Error {
+class HookSimulationAbortError extends Error {
   readonly code = 'hook.simulation.aborted';
 
   constructor() {

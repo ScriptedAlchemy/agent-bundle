@@ -12,7 +12,7 @@ import { createDefaultRegistry } from '../src/adapters/registry.ts';
 import { build } from './support/build.ts';
 import { writeHookIndex } from '../src/build/emit.ts';
 import { buildWithRslib } from '../src/build/rslib.ts';
-import { HookService } from '../src/services/hook-service.ts';
+import { HookService, isHookSimulationCancellation } from '../src/services/hook-service.ts';
 import { parseArtifactHookIndex } from '../src/services/hook-index.ts';
 import { normalizeProject } from '../src/config/normalize.ts';
 import type { LoadedConfig } from '../src/config/load.ts';
@@ -25,6 +25,12 @@ const registry: NormalizationTargetRegistry = {
   has: (name) => name === 'portable' || name === 'codex' || name === 'claude',
   supports: (name, capability) => capability === 'hooks' && name !== 'portable',
 };
+
+it('keeps the hook simulation cancellation constructor private to the executor', async () => {
+  const hookServiceExports: Readonly<Record<string, unknown>> = await import('../src/services/hook-service.ts');
+
+  expect(Object.hasOwn(hookServiceExports, 'HookSimulationAbortError')).toBe(false);
+});
 
 it('accepts only canonical frozen hook index metadata', () => {
   const bytes = '{"hooks":[{"event":"sessionStart","id":"hook:start","name":"start","path":"codex/hooks/start.mjs","target":"codex"}],"version":1}\n';
@@ -539,8 +545,13 @@ it('escalates timed-out and aborted wrapper process trees from TERM to KILL befo
       target: 'codex',
     });
     setTimeout(() => controller.abort(), 25);
-    await expect(pending).rejects.toThrow('Hook simulation aborted.');
-    await expect(pending).rejects.toMatchObject({ code: 'hook.simulation.aborted', name: 'AbortError' });
+    const cancellation = await pending.catch((error: unknown) => error);
+    expect(cancellation).toMatchObject({
+      code: 'hook.simulation.aborted',
+      message: 'Hook simulation aborted.',
+      name: 'AbortError',
+    });
+    expect(isHookSimulationCancellation(cancellation)).toBe(true);
 
     let taskkillCalls = 0;
     const failedWindowsTaskkill = new HookService({

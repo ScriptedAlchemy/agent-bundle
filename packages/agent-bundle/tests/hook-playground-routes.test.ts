@@ -15,7 +15,6 @@ import type {
   HookPlaygroundSimulation,
   HookPlaygroundSimulationOptions,
 } from '../src/dev/hook-playground-service.ts';
-import { HookSimulationAbortError } from '../src/services/hook-service.ts';
 
 interface StartedRoutes {
   readonly close: () => Promise<void>;
@@ -883,9 +882,8 @@ it('retains a cleanup failure that reproduces the executor cancellation surface'
   }
 });
 
-it('keeps the executor cancellation itself silent even when shutdown races its settlement', async () => {
+it('keeps the route cancellation reason silent even when shutdown races its settlement', async () => {
   const service = new DrainingService();
-  service.failures.set('simulation', new HookSimulationAbortError());
   const started = await startRoutes(service);
   const admitted = service.admitted('simulation');
 
