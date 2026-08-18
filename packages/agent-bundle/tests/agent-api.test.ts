@@ -613,7 +613,7 @@ it('projects status, epoch, and diagnostic DTOs without leaking embedded paths o
       client.callTool({ name: 'artifacts_list' }),
       client.callTool({ name: 'diagnostics_list' }),
     ]);
-    expect(results[0].structuredContent).toMatchObject({ status: { artifact: { activeEpoch: { id: 'epoch-a' } } } });
+    expect(results[0].structuredContent).toMatchObject({ status: { artifact: { activeEpoch: { id: 'epoch-a' }, state: 'active' } } });
     expect(results[1].structuredContent).toEqual({ epochs: [{ createdAt: '2026-08-18T00:00:00.000Z', diagnostics: { errors: 0, infos: 0, warnings: 0 }, id: 'epoch-a' }] });
     expect(results[2].structuredContent).toMatchObject({
       diagnostics: [{ code: 'AB9000', recovery: expect.any(String), severity: 'error', target: 'portable' }],
@@ -663,6 +663,55 @@ it('falls back to path-free DTOs when projection receives a hostile proxy', asyn
     for (const result of results) {
       expect(result.isError).not.toBe(true);
       expect(stableJson(result.structuredContent as never)).not.toContain(secret);
+    }
+  } finally {
+    await client.close();
+    await started.close();
+  }
+});
+
+it('fails closed for diagnostic messages with paths, control characters, or secret assignments', async () => {
+  const generic = 'Diagnostic details are available in the local workbench.';
+  const cases = [
+    ['quoted-posix', 'Failed at "/private folder/posix tail.txt"; POSIX_TAIL', generic],
+    ['quoted-drive', 'Failed at "C:\\private folder\\drive tail.txt"; DRIVE_TAIL', generic],
+    ['quoted-unc', 'Failed at "\\\\server\\share name\\unc tail.txt"; UNC_TAIL', generic],
+    ['quoted-file-url', 'Failed at "file:///private folder/file tail.txt"; FILE_TAIL', generic],
+    ['bare-slashes', 'Failed at //private host/path with spaces; BARE_TAIL', generic],
+    ['control', 'Failed at invalid\u0000control text; CONTROL_TAIL', generic],
+    ['secret-assignment', 'Failed with secret = diagnostic-secret; SECRET_TAIL', generic],
+    ['normal', 'The target configuration is not valid.', 'The target configuration is not valid.'],
+  ] as const;
+  const diagnostics = cases.map(([, message]) => ({ code: 'AB9000', message, severity: 'error' as const, target: 'portable' }));
+  const expectedMessages = cases.map(([, , message]) => message);
+  const tails = ['POSIX_TAIL', 'DRIVE_TAIL', 'UNC_TAIL', 'FILE_TAIL', 'BARE_TAIL', 'CONTROL_TAIL', 'SECRET_TAIL', 'diagnostic-secret'];
+  const started = await startApi({
+    api: createApi({
+      coordinator: {
+        status: () => ({
+          artifact: { state: 'missing' },
+          build: { state: 'idle' },
+          source: { diagnostics, state: 'invalid' },
+        }),
+      },
+      diagnostics: { list: async () => ({ diagnostics }) },
+    }),
+  });
+  const client = new Client({ name: 'agent-api-diagnostic-message-client', version: '1.0.0' });
+  const transport = new StreamableHTTPClientTransport(new URL(`${started.url}/mcp`), {
+    authProvider: { token: async () => 'test-agent-api-token' },
+  });
+  try {
+    await client.connect(transport);
+    const [status, listed] = await Promise.all([
+      client.callTool({ name: 'project_status' }),
+      client.callTool({ name: 'diagnostics_list' }),
+    ]);
+    expect((status.structuredContent as { status: { source: { diagnostics: readonly { message: string }[] } } }).status.source.diagnostics.map(({ message }) => message)).toEqual(expectedMessages);
+    expect((listed.structuredContent as { diagnostics: readonly { message: string }[] }).diagnostics.map(({ message }) => message)).toEqual(expectedMessages);
+    for (const result of [status, listed]) {
+      const wire = stableJson(result.structuredContent as never);
+      for (const tail of tails) expect(wire).not.toContain(tail);
     }
   } finally {
     await client.close();

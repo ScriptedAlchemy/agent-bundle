@@ -285,8 +285,10 @@ const safeDigestPattern = /^[a-f0-9]{64}$/iu;
 const safeEpochIdPattern = /^[a-z0-9][a-z0-9._-]{0,127}$/iu;
 const safeTargetPattern = /^[a-z0-9][a-z0-9._-]{0,127}$/iu;
 const safeTimestampPattern = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u;
-const pathTextPattern = /file:\/\/\/[^\s"'`<>()\],;]+|\\\\[^\s\\/"'`<>()\],;]+\\[^\s"'`<>()\],;]+(?:\\[^\s"'`<>()\],;]+)*|[A-Za-z]:[\\/][^\s"'`<>()\],;]+|(?<![A-Za-z0-9/])\/(?!\/)[^\s"'`<>()\],;]+(?:\/[^\s"'`<>()\],;]+)*/gu;
-const secretTextPattern = /\b(?:api[_ -]?key|authorization|password|secret|token)\s*(?:=|:)\s*[^,;\s]+/giu;
+const controlCharacterPattern = /[\u0000-\u001f\u007f-\u009f]/u;
+const secretAssignmentPattern = /\b(?:api[_ -]?key|authorization|password|secret|token)\s*(?:=|:)/iu;
+const diagnosticMessageFallback = 'Diagnostic details are available in the local workbench.';
+const diagnosticRecoveryFallback = 'Recovery guidance is available in the local workbench.';
 
 const snapshotValue = (value: unknown): unknown => {
   try {
@@ -325,10 +327,13 @@ const safeTimestamp = (value: unknown): string | undefined =>
     ? value
     : undefined;
 
-const safeDiagnosticText = (value: unknown, fallback: string): string => {
-  if (typeof value !== 'string' || value.length > maximumDiagnosticTextLength) return fallback;
-  return value.replace(pathTextPattern, '[path redacted]').replace(secretTextPattern, '[secret redacted]');
-};
+/** Messages fail closed: any path-like, control, or secret-assignment text is never partially redacted. */
+const safeDiagnosticText = (value: unknown, fallback: string): string =>
+  typeof value === 'string' && value.length <= maximumDiagnosticTextLength &&
+    !value.includes('/') && !value.includes('\\') && !controlCharacterPattern.test(value) &&
+    !secretAssignmentPattern.test(value)
+    ? value
+    : fallback;
 
 /** Dedicated, detached DTO: only diagnostic fields that can be safely named reach the wire. */
 const diagnosticWireDto = (value: unknown): AgentApiDiagnostic | undefined => {
@@ -338,12 +343,12 @@ const diagnosticWireDto = (value: unknown): AgentApiDiagnostic | undefined => {
   const severity = diagnostic.severity;
   if (code === undefined || (severity !== 'error' && severity !== 'info' && severity !== 'warning')) return undefined;
   const recovery = typeof diagnostic.recovery === 'string'
-    ? safeDiagnosticText(diagnostic.recovery, 'Recovery guidance is unavailable.')
+    ? safeDiagnosticText(diagnostic.recovery, diagnosticRecoveryFallback)
     : undefined;
   const target = safeTarget(diagnostic.target);
   return Object.freeze({
     code,
-    message: safeDiagnosticText(diagnostic.message, 'Diagnostic details are unavailable.'),
+    message: safeDiagnosticText(diagnostic.message, diagnosticMessageFallback),
     ...(recovery === undefined ? {} : { recovery }),
     severity,
     ...(target === undefined ? {} : { target }),
@@ -451,8 +456,11 @@ const artifactWireDto = (value: unknown): unknown => {
   if (artifact === undefined || (state !== 'active' && state !== 'stale')) return Object.freeze({ state: 'missing' });
   const activeEpoch = epochWireIdentity(artifact.activeEpoch);
   const currentSourceRevision = safeDigest(artifact.currentSourceRevision);
-  if (activeEpoch === undefined || currentSourceRevision === undefined) return Object.freeze({ state: 'missing' });
-  return Object.freeze({ activeEpoch, currentSourceRevision, state });
+  return Object.freeze({
+    ...(activeEpoch === undefined ? {} : { activeEpoch }),
+    ...(currentSourceRevision === undefined ? {} : { currentSourceRevision }),
+    state,
+  });
 };
 
 const buildWireDto = (value: unknown): unknown => {
