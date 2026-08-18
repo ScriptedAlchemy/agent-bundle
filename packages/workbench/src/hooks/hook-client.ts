@@ -6,6 +6,7 @@ import type {
   HookPlaygroundReplay,
   HookPlaygroundSimulation,
 } from '../../../agent-bundle/src/dev/hook-playground-service.ts';
+import { ForegroundTransport } from '../foreground-session.ts';
 
 export type HookSimulationResult = HookPlaygroundDiagnosticResult | HookPlaygroundSimulation;
 
@@ -131,23 +132,27 @@ const simulationResult = (value: unknown): HookSimulationResult => {
 
 /** A typed, credential-memory-only browser client for the epoch-bound hook playground routes. */
 export class HookClient {
-  readonly #fetch: typeof fetch;
-  #authentication: Promise<ForegroundSession> | undefined;
+  readonly #transport: ForegroundTransport;
 
   constructor(options: HookClientOptions = {}) {
-    this.#fetch = options.fetch ?? globalThis.fetch.bind(globalThis);
+    this.#transport = new ForegroundTransport({
+      errorFor: (code, message) => new HookClientError(code, message),
+      fallbackCode: 'AB8033',
+      ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
+      label: 'Hook playground',
+    });
   }
 
   async list(options: HookPlaygroundListOptions, signal?: AbortSignal): Promise<readonly HookPlaygroundHook[]> {
     const query = new URLSearchParams({ epochId: options.epochId });
     if (options.target !== undefined) query.set('target', options.target);
-    return hookList(await this.#json(`/api/hooks?${query.toString()}`, {
+    return hookList(await this.#transport.json(`/api/hooks?${query.toString()}`, {
       ...(signal === undefined ? {} : { signal }),
     }));
   }
 
   async simulate(options: HookSimulationOptions, signal?: AbortSignal): Promise<HookSimulationResult> {
-    return simulationResult(await this.#json('/api/hooks/simulations', {
+    return simulationResult(await this.#transport.json('/api/hooks/simulations', {
       body: JSON.stringify({ epochId: options.epochId, hook: options.hook, input: options.input, target: options.target }),
       headers: { 'content-type': 'application/json' },
       method: 'POST',
@@ -157,7 +162,7 @@ export class HookClient {
 
   /** The saved replay travels back exactly as the service emitted it, epoch binding included. */
   async replay(replay: HookPlaygroundReplay, signal?: AbortSignal): Promise<HookSimulationResult> {
-    return simulationResult(await this.#json('/api/hooks/replays', {
+    return simulationResult(await this.#transport.json('/api/hooks/replays', {
       body: JSON.stringify({ binding: replay.binding, input: replay.input }),
       headers: { 'content-type': 'application/json' },
       method: 'POST',
@@ -167,48 +172,7 @@ export class HookClient {
 
   /** Erases the short-lived foreground token once the owning page stops using it. */
   forgetAuthentication(): void {
-    this.#authentication = undefined;
+    this.#transport.forget();
   }
 
-  async #json(path: string, init: RequestInit = {}): Promise<unknown> {
-    const authentication = await this.#authenticate();
-    const headers = new Headers(init.headers);
-    headers.set('x-agent-bundle-session', authentication.token);
-    const response = await this.#fetch(path, { ...init, headers });
-    const body: unknown = await response.json().catch(() => undefined);
-    if (!response.ok) throw diagnosticError(body, response.status);
-    return body;
-  }
-
-  async #authenticate(): Promise<ForegroundSession> {
-    if (this.#authentication === undefined) this.#authentication = this.#bootstrap();
-    try {
-      return await this.#authentication;
-    } catch (error) {
-      this.#authentication = undefined;
-      throw error;
-    }
-  }
-
-  async #bootstrap(): Promise<ForegroundSession> {
-    const response = await this.#fetch('/api/project/session', { credentials: 'same-origin' });
-    const body: unknown = await response.json().catch(() => undefined);
-    if (!response.ok) throw diagnosticError(body, response.status);
-    const session = asRecord(body);
-    if (typeof session.origin !== 'string' || typeof session.token !== 'string' || session.token.length === 0) {
-      throw new HookClientError('AB8033', 'Foreground session bootstrap returned an invalid response.');
-    }
-    let origin: URL;
-    try {
-      origin = new URL(session.origin);
-    } catch {
-      throw new HookClientError('AB8033', 'Foreground session bootstrap returned an invalid origin.');
-    }
-    if (origin.origin !== session.origin) throw new HookClientError('AB8033', 'Foreground session bootstrap returned an invalid origin.');
-    const browserOrigin = globalThis.location?.origin;
-    if (browserOrigin !== undefined && browserOrigin !== 'null' && browserOrigin !== session.origin) {
-      throw new HookClientError('AB8003', 'Foreground session bootstrap origin does not match this browser.');
-    }
-    return Object.freeze({ origin: session.origin, token: session.token });
-  }
 }

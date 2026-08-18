@@ -1,4 +1,5 @@
 import type { EvalComparison } from '../../../agent-bundle/src/eval/compare.ts';
+import { ForegroundTransport } from '../foreground-session.ts';
 import type { EvalRunRecord, EvalTrialRecord } from '../../../agent-bundle/src/eval/run-store.ts';
 
 export interface ComparisonClientOptions {
@@ -87,19 +88,23 @@ const comparisonResult = (value: unknown): EvalComparison => {
 
 /** A typed, credential-memory-only browser client for the recorded eval run and comparison routes. */
 export class ComparisonClient {
-  readonly #fetch: typeof fetch;
-  #authentication: Promise<ForegroundSession> | undefined;
+  readonly #transport: ForegroundTransport;
 
   constructor(options: ComparisonClientOptions = {}) {
-    this.#fetch = options.fetch ?? globalThis.fetch.bind(globalThis);
+    this.#transport = new ForegroundTransport({
+      errorFor: (code, message) => new ComparisonClientError(code, message),
+      fallbackCode: 'AB8083',
+      ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
+      label: 'Eval comparison',
+    });
   }
 
   async listRuns(signal?: AbortSignal): Promise<readonly EvalRunRecord[]> {
-    return runList(await this.#json('/api/evals/runs', signal === undefined ? {} : { signal }));
+    return runList(await this.#transport.json('/api/evals/runs', signal === undefined ? {} : { signal }));
   }
 
   async readRun(runId: string, signal?: AbortSignal): Promise<EvalRunDetail> {
-    return runDetail(await this.#json(
+    return runDetail(await this.#transport.json(
       `/api/evals/runs/${encodeURIComponent(runId)}`,
       signal === undefined ? {} : { signal },
     ));
@@ -108,7 +113,7 @@ export class ComparisonClient {
   /** The route aligns the two runs; the page never derives a delta of its own. */
   async compare(request: ComparisonRequest, signal?: AbortSignal): Promise<EvalComparison> {
     const query = new URLSearchParams({ base: request.base, candidate: request.candidate });
-    return comparisonResult(await this.#json(
+    return comparisonResult(await this.#transport.json(
       `/api/evals/comparisons?${query.toString()}`,
       signal === undefined ? {} : { signal },
     ));
@@ -116,50 +121,7 @@ export class ComparisonClient {
 
   /** Erases the short-lived foreground token once the owning page stops using it. */
   forgetAuthentication(): void {
-    this.#authentication = undefined;
+    this.#transport.forget();
   }
 
-  async #json(path: string, init: RequestInit = {}): Promise<unknown> {
-    const authentication = await this.#authenticate();
-    const headers = new Headers(init.headers);
-    headers.set('x-agent-bundle-session', authentication.token);
-    const response = await this.#fetch(path, { ...init, headers });
-    const body: unknown = await response.json().catch(() => undefined);
-    if (!response.ok) throw diagnosticError(body, response.status);
-    return body;
-  }
-
-  async #authenticate(): Promise<ForegroundSession> {
-    if (this.#authentication === undefined) this.#authentication = this.#bootstrap();
-    try {
-      return await this.#authentication;
-    } catch (error) {
-      this.#authentication = undefined;
-      throw error;
-    }
-  }
-
-  async #bootstrap(): Promise<ForegroundSession> {
-    const response = await this.#fetch('/api/project/session', { credentials: 'same-origin' });
-    const body: unknown = await response.json().catch(() => undefined);
-    if (!response.ok) throw diagnosticError(body, response.status);
-    const session = asRecord(body);
-    if (typeof session.origin !== 'string' || typeof session.token !== 'string' || session.token.length === 0) {
-      throw new ComparisonClientError('AB8083', 'Foreground session bootstrap returned an invalid response.');
-    }
-    let origin: URL;
-    try {
-      origin = new URL(session.origin);
-    } catch {
-      throw new ComparisonClientError('AB8083', 'Foreground session bootstrap returned an invalid origin.');
-    }
-    if (origin.origin !== session.origin) {
-      throw new ComparisonClientError('AB8083', 'Foreground session bootstrap returned an invalid origin.');
-    }
-    const browserOrigin = globalThis.location?.origin;
-    if (browserOrigin !== undefined && browserOrigin !== 'null' && browserOrigin !== session.origin) {
-      throw new ComparisonClientError('AB8003', 'Foreground session bootstrap origin does not match this browser.');
-    }
-    return Object.freeze({ origin: session.origin, token: session.token });
-  }
 }

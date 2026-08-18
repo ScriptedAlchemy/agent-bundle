@@ -9,6 +9,7 @@ import type {
   PlaygroundSessionInput,
   PlaygroundTraceEvent,
 } from '../../../agent-bundle/src/services/playground-service.ts';
+import { ForegroundTransport } from '../foreground-session.ts';
 
 export interface PlaygroundClientOptions {
   readonly fetch?: typeof fetch;
@@ -132,15 +133,19 @@ const isAbort = (error: unknown): boolean => error instanceof Error && error.nam
 
 /** A typed, credential-memory-only browser client for the durable playground trace routes. */
 export class PlaygroundClient {
-  readonly #fetch: typeof fetch;
-  #authentication: Promise<ForegroundSession> | undefined;
+  readonly #transport: ForegroundTransport;
 
   constructor(options: PlaygroundClientOptions = {}) {
-    this.#fetch = options.fetch ?? globalThis.fetch.bind(globalThis);
+    this.#transport = new ForegroundTransport({
+      errorFor: (code, message) => new PlaygroundClientError(code, message),
+      fallbackCode: 'AB8043',
+      ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
+      label: 'Playground',
+    });
   }
 
   async openSession(input: PlaygroundSessionInput, signal?: AbortSignal): Promise<PlaygroundSession> {
-    return sessionBody(await this.#json('/api/playground/sessions', {
+    return sessionBody(await this.#transport.json('/api/playground/sessions', {
       body: JSON.stringify(input),
       headers: { 'content-type': 'application/json' },
       method: 'POST',
@@ -149,16 +154,16 @@ export class PlaygroundClient {
   }
 
   async session(sessionId: string): Promise<PlaygroundSession> {
-    return sessionBody(await this.#json(this.#path(sessionId)));
+    return sessionBody(await this.#transport.json(this.#path(sessionId)));
   }
 
   async closeSession(sessionId: string): Promise<void> {
-    const body = asRecord(await this.#json(this.#path(sessionId), { method: 'DELETE' }));
+    const body = asRecord(await this.#transport.json(this.#path(sessionId), { method: 'DELETE' }));
     if (body.closed !== true) throw invalidResponse();
   }
 
   async reopen(sessionId: string): Promise<PlaygroundSession> {
-    return sessionBody(await this.#json(`${this.#path(sessionId)}/reopen`, {
+    return sessionBody(await this.#transport.json(`${this.#path(sessionId)}/reopen`, {
       body: '{}',
       headers: { 'content-type': 'application/json' },
       method: 'POST',
@@ -166,7 +171,7 @@ export class PlaygroundClient {
   }
 
   async append(sessionId: string, input: PlaygroundEventInput): Promise<PlaygroundTraceEvent> {
-    return eventBody(await this.#json(`${this.#path(sessionId)}/events`, {
+    return eventBody(await this.#transport.json(`${this.#path(sessionId)}/events`, {
       body: JSON.stringify({ kind: input.kind, raw: input.raw, source: input.source, summary: input.summary }),
       headers: { 'content-type': 'application/json' },
       method: 'POST',
@@ -174,7 +179,7 @@ export class PlaygroundClient {
   }
 
   async finalize(sessionId: string, outcome: PlaygroundDurableOutcome): Promise<PlaygroundSession> {
-    return sessionBody(await this.#json(`${this.#path(sessionId)}/finalize`, {
+    return sessionBody(await this.#transport.json(`${this.#path(sessionId)}/finalize`, {
       body: JSON.stringify(outcome),
       headers: { 'content-type': 'application/json' },
       method: 'POST',
@@ -184,18 +189,18 @@ export class PlaygroundClient {
   /** The cursor stays exactly where the caller left it, so replayed order and epoch binding survive. */
   async replay(sessionId: string, afterSequence?: number): Promise<PlaygroundReplay> {
     const query = afterSequence === undefined ? '' : `?after=${String(afterSequence)}`;
-    return replayBody(await this.#json(`${this.#path(sessionId)}/replay${query}`));
+    return replayBody(await this.#transport.json(`${this.#path(sessionId)}/replay${query}`));
   }
 
   async export(sessionId: string): Promise<PlaygroundExport> {
-    return exportBody(await this.#json(`${this.#path(sessionId)}/export`));
+    return exportBody(await this.#transport.json(`${this.#path(sessionId)}/export`));
   }
 
   async promoteToDraftEval(
     sessionId: string,
     assertions: readonly PlaygroundSelectedAssertion[],
   ): Promise<DraftEvalCase> {
-    return draftEvalBody(await this.#json(`${this.#path(sessionId)}/draft-eval`, {
+    return draftEvalBody(await this.#transport.json(`${this.#path(sessionId)}/draft-eval`, {
       body: JSON.stringify({ assertions }),
       headers: { 'content-type': 'application/json' },
       method: 'POST',
@@ -211,7 +216,7 @@ export class PlaygroundClient {
 
   /** Erases the short-lived foreground token once the owning page stops using it. */
   forgetAuthentication(): void {
-    this.#authentication = undefined;
+    this.#transport.forget();
   }
 
   #path(sessionId: string): string {
@@ -220,13 +225,9 @@ export class PlaygroundClient {
 
   async #stream(sessionId: string, options: PlaygroundStreamOptions, signal: AbortSignal): Promise<void> {
     const after = options.afterSequence ?? 0;
-    const authentication = await this.#authenticate();
     let response: Response;
     try {
-      response = await this.#fetch(`${this.#path(sessionId)}/stream?after=${String(after)}`, {
-        headers: { 'x-agent-bundle-session': authentication.token },
-        signal,
-      });
+      response = await this.#transport.request(`${this.#path(sessionId)}/stream?after=${String(after)}`, { signal });
     } catch (error) {
       if (isAbort(error) || signal.aborted) return;
       throw error;
@@ -261,47 +262,4 @@ export class PlaygroundClient {
     }
   }
 
-  async #json(path: string, init: RequestInit = {}): Promise<unknown> {
-    const authentication = await this.#authenticate();
-    const headers = new Headers(init.headers);
-    headers.set('x-agent-bundle-session', authentication.token);
-    const response = await this.#fetch(path, { ...init, headers });
-    const body: unknown = await response.json().catch(() => undefined);
-    if (!response.ok) throw diagnosticError(body, response.status);
-    return body;
-  }
-
-  async #authenticate(): Promise<ForegroundSession> {
-    if (this.#authentication === undefined) this.#authentication = this.#bootstrap();
-    try {
-      return await this.#authentication;
-    } catch (error) {
-      this.#authentication = undefined;
-      throw error;
-    }
-  }
-
-  async #bootstrap(): Promise<ForegroundSession> {
-    const response = await this.#fetch('/api/project/session', { credentials: 'same-origin' });
-    const body: unknown = await response.json().catch(() => undefined);
-    if (!response.ok) throw diagnosticError(body, response.status);
-    const session = asRecord(body);
-    if (typeof session.origin !== 'string' || typeof session.token !== 'string' || session.token.length === 0) {
-      throw new PlaygroundClientError('AB8043', 'Foreground session bootstrap returned an invalid response.');
-    }
-    let origin: URL;
-    try {
-      origin = new URL(session.origin);
-    } catch {
-      throw new PlaygroundClientError('AB8043', 'Foreground session bootstrap returned an invalid origin.');
-    }
-    if (origin.origin !== session.origin) {
-      throw new PlaygroundClientError('AB8043', 'Foreground session bootstrap returned an invalid origin.');
-    }
-    const browserOrigin = globalThis.location?.origin;
-    if (browserOrigin !== undefined && browserOrigin !== 'null' && browserOrigin !== session.origin) {
-      throw new PlaygroundClientError('AB8003', 'Foreground session bootstrap origin does not match this browser.');
-    }
-    return Object.freeze({ origin: session.origin, token: session.token });
-  }
 }

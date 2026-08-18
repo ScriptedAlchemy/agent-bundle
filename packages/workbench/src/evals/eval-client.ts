@@ -3,6 +3,7 @@ import type {
   EvalRunSelection,
   EvalSuiteListing,
 } from '../../../agent-bundle/src/dev/eval-service.ts';
+import { ForegroundTransport } from '../foreground-session.ts';
 import type { EvalRunRecord } from '../../../agent-bundle/src/eval/run-store.ts';
 
 export interface EvalClientOptions {
@@ -83,27 +84,31 @@ const runRecords = (value: unknown): readonly EvalRunRecord[] => {
 
 /** A typed, credential-memory-only browser client for the deterministic eval routes. */
 export class EvalClient {
-  readonly #fetch: typeof fetch;
-  #authentication: Promise<ForegroundSession> | undefined;
+  readonly #transport: ForegroundTransport;
 
   constructor(options: EvalClientOptions = {}) {
-    this.#fetch = options.fetch ?? globalThis.fetch.bind(globalThis);
+    this.#transport = new ForegroundTransport({
+      errorFor: (code, message) => new EvalClientError(code, message),
+      fallbackCode: 'AB8073',
+      ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
+      label: 'Eval',
+    });
   }
 
   async suites(): Promise<EvalSuiteListing> {
-    return suiteListing(await this.#json('/api/evals/suites'));
+    return suiteListing(await this.#transport.json('/api/evals/suites'));
   }
 
   async runs(): Promise<readonly EvalRunRecord[]> {
-    return runRecords(await this.#json('/api/evals/runs'));
+    return runRecords(await this.#transport.json('/api/evals/runs'));
   }
 
   async read(runId: string): Promise<EvalRunResult> {
-    return runResult(await this.#json(`/api/evals/runs/${encodeURIComponent(runId)}`));
+    return runResult(await this.#transport.json(`/api/evals/runs/${encodeURIComponent(runId)}`));
   }
 
   async start(selection: EvalRunStart, signal?: AbortSignal): Promise<EvalRunResult> {
-    return runResult(await this.#json('/api/evals/runs', {
+    return runResult(await this.#transport.json('/api/evals/runs', {
       body: JSON.stringify({
         ...(selection.caseIds === undefined ? {} : { caseIds: selection.caseIds }),
         ...(selection.suites === undefined ? {} : { suites: selection.suites }),
@@ -117,50 +122,7 @@ export class EvalClient {
 
   /** Erases the short-lived foreground token once the owning page stops using it. */
   forgetAuthentication(): void {
-    this.#authentication = undefined;
+    this.#transport.forget();
   }
 
-  async #json(path: string, init: RequestInit = {}): Promise<unknown> {
-    const authentication = await this.#authenticate();
-    const headers = new Headers(init.headers);
-    headers.set('x-agent-bundle-session', authentication.token);
-    const response = await this.#fetch(path, { ...init, headers });
-    const body: unknown = await response.json().catch(() => undefined);
-    if (!response.ok) throw diagnosticError(body, response.status);
-    return body;
-  }
-
-  async #authenticate(): Promise<ForegroundSession> {
-    if (this.#authentication === undefined) this.#authentication = this.#bootstrap();
-    try {
-      return await this.#authentication;
-    } catch (error) {
-      this.#authentication = undefined;
-      throw error;
-    }
-  }
-
-  async #bootstrap(): Promise<ForegroundSession> {
-    const response = await this.#fetch('/api/project/session', { credentials: 'same-origin' });
-    const body: unknown = await response.json().catch(() => undefined);
-    if (!response.ok) throw diagnosticError(body, response.status);
-    const session = asRecord(body);
-    if (typeof session.origin !== 'string' || typeof session.token !== 'string' || session.token.length === 0) {
-      throw new EvalClientError('AB8073', 'Foreground session bootstrap returned an invalid response.');
-    }
-    let origin: URL;
-    try {
-      origin = new URL(session.origin);
-    } catch {
-      throw new EvalClientError('AB8073', 'Foreground session bootstrap returned an invalid origin.');
-    }
-    if (origin.origin !== session.origin) {
-      throw new EvalClientError('AB8073', 'Foreground session bootstrap returned an invalid origin.');
-    }
-    const browserOrigin = globalThis.location?.origin;
-    if (browserOrigin !== undefined && browserOrigin !== 'null' && browserOrigin !== session.origin) {
-      throw new EvalClientError('AB8003', 'Foreground session bootstrap origin does not match this browser.');
-    }
-    return Object.freeze({ origin: session.origin, token: session.token });
-  }
 }

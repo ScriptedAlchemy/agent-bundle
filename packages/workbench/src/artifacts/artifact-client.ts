@@ -1,4 +1,5 @@
 import type { Diagnostic } from '../../../agent-bundle/src/core/diagnostics.ts';
+import { ForegroundTransport } from '../foreground-session.ts';
 import type { ArtifactEpochDiff, ArtifactInspection } from '../../../agent-bundle/src/dev/types.ts';
 
 export interface ArtifactClientOptions {
@@ -87,67 +88,29 @@ const diffBody = (value: unknown): ArtifactEpochDiff => {
 
 /** A typed, credential-memory-only browser client for the read-only artifact epoch routes. */
 export class ArtifactClient {
-  readonly #fetch: typeof fetch;
-  #authentication: Promise<ForegroundSession> | undefined;
+  readonly #transport: ForegroundTransport;
 
   constructor(options: ArtifactClientOptions = {}) {
-    this.#fetch = options.fetch ?? globalThis.fetch.bind(globalThis);
+    this.#transport = new ForegroundTransport({
+      errorFor: (code, message, body) => new ArtifactClientError(code, message, failureDiagnostics(body)),
+      fallbackCode: 'AB8063',
+      ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
+      label: 'Artifact inspection',
+    });
   }
 
   async inspect(epochId: string, signal?: AbortSignal): Promise<ArtifactInspection> {
-    return inspectionBody(await this.#json(`/api/artifacts/epochs/${encodeURIComponent(epochId)}`, signal));
+    return inspectionBody(await this.#transport.json(`/api/artifacts/epochs/${encodeURIComponent(epochId)}`, { signal }));
   }
 
   async diff(baseEpochId: string, candidateEpochId: string, signal?: AbortSignal): Promise<ArtifactEpochDiff> {
     const query = new URLSearchParams({ base: baseEpochId, candidate: candidateEpochId });
-    return diffBody(await this.#json(`/api/artifacts/diff?${query.toString()}`, signal));
+    return diffBody(await this.#transport.json(`/api/artifacts/diff?${query.toString()}`, { signal }));
   }
 
   /** Erases the short-lived foreground token once the owning page stops using it. */
   forgetAuthentication(): void {
-    this.#authentication = undefined;
+    this.#transport.forget();
   }
 
-  async #json(path: string, signal?: AbortSignal): Promise<unknown> {
-    const authentication = await this.#authenticate();
-    const headers = new Headers({ 'x-agent-bundle-session': authentication.token });
-    const response = await this.#fetch(path, { headers, ...(signal === undefined ? {} : { signal }) });
-    const body: unknown = await response.json().catch(() => undefined);
-    if (!response.ok) throw diagnosticError(body, response.status);
-    return body;
-  }
-
-  async #authenticate(): Promise<ForegroundSession> {
-    if (this.#authentication === undefined) this.#authentication = this.#bootstrap();
-    try {
-      return await this.#authentication;
-    } catch (error) {
-      this.#authentication = undefined;
-      throw error;
-    }
-  }
-
-  async #bootstrap(): Promise<ForegroundSession> {
-    const response = await this.#fetch('/api/project/session', { credentials: 'same-origin' });
-    const body: unknown = await response.json().catch(() => undefined);
-    if (!response.ok) throw diagnosticError(body, response.status);
-    const session = asRecord(body);
-    if (typeof session.origin !== 'string' || typeof session.token !== 'string' || session.token.length === 0) {
-      throw new ArtifactClientError('AB8063', 'Foreground session bootstrap returned an invalid response.');
-    }
-    let origin: URL;
-    try {
-      origin = new URL(session.origin);
-    } catch {
-      throw new ArtifactClientError('AB8063', 'Foreground session bootstrap returned an invalid origin.');
-    }
-    if (origin.origin !== session.origin) {
-      throw new ArtifactClientError('AB8063', 'Foreground session bootstrap returned an invalid origin.');
-    }
-    const browserOrigin = globalThis.location?.origin;
-    if (browserOrigin !== undefined && browserOrigin !== 'null' && browserOrigin !== session.origin) {
-      throw new ArtifactClientError('AB8003', 'Foreground session bootstrap origin does not match this browser.');
-    }
-    return Object.freeze({ origin: session.origin, token: session.token });
-  }
 }
