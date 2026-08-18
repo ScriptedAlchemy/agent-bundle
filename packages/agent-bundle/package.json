@@ -1,6 +1,21 @@
 {
   "name": "agent-bundle",
   "version": "0.1.0",
+  "description": "Compile a typed Agent Bundle configuration into portable, Codex, and Claude Code artifacts.",
+  "keywords": [
+    "agent",
+    "claude-code",
+    "codex",
+    "mcp"
+  ],
+  "homepage": "https://github.com/ScriptedAlchemy/agent-bundle#readme",
+  "bugs": {
+    "url": "https://github.com/ScriptedAlchemy/agent-bundle/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ScriptedAlchemy/agent-bundle.git"
+  },
   "type": "module",
   "engines": {
     "node": ">=22.19.0"

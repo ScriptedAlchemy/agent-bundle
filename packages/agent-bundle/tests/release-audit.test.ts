@@ -12,6 +12,38 @@ const packageRoot = join(workspaceRoot, 'packages', 'agent-bundle');
 
 const releaseEnvironment = (): NodeJS.ProcessEnv => ({ ...process.env, NODE_ENV: 'production' });
 
+it('ships repository and support metadata that matches the verified origin', async () => {
+  const tarballRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-package-metadata-'));
+
+  try {
+    const { stdout } = await execFile('npm', [
+      'pack',
+      '--json',
+      '--pack-destination',
+      tarballRoot,
+    ], { cwd: packageRoot, env: releaseEnvironment() });
+    const [{ filename }] = JSON.parse(stdout) as Array<{ readonly filename: string }>;
+    await execFile('tar', ['--extract', '--file', join(tarballRoot, filename), '--directory', tarballRoot]);
+    const manifest = JSON.parse(await readFile(join(tarballRoot, 'package', 'package.json'), 'utf8')) as {
+      readonly bugs?: { readonly url?: string };
+      readonly description?: string;
+      readonly homepage?: string;
+      readonly keywords?: readonly string[];
+      readonly repository?: { readonly type?: string; readonly url?: string };
+    };
+
+    expect(manifest).toMatchObject({
+      bugs: { url: 'https://github.com/ScriptedAlchemy/agent-bundle/issues' },
+      description: 'Compile a typed Agent Bundle configuration into portable, Codex, and Claude Code artifacts.',
+      homepage: 'https://github.com/ScriptedAlchemy/agent-bundle#readme',
+      repository: { type: 'git', url: 'git+https://github.com/ScriptedAlchemy/agent-bundle.git' },
+    });
+    expect(manifest.keywords).toEqual(expect.arrayContaining(['agent', 'claude-code', 'codex', 'mcp']));
+  } finally {
+    await rm(tarballRoot, { force: true, recursive: true });
+  }
+});
+
 it('runs a release pack dry run with the CLI in its tarball', async () => {
   const { stdout } = await execFile('npm', ['run', 'pack:dry-run'], {
     cwd: workspaceRoot,
