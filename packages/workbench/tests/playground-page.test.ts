@@ -6,7 +6,7 @@ import type { PlaygroundReplay, PlaygroundSession, PlaygroundTraceEvent } from '
 import type { PlaygroundRun } from '../../agent-bundle/src/dev/playground-contract.ts';
 import { PlaygroundClient } from '../src/playground/playground-client.ts';
 import { playgroundViewFor } from '../src/playground/playground-model.ts';
-import { observePlaygroundRun, PlaygroundPage, PlaygroundTraceView } from '../src/playground/playground-page.tsx';
+import { createPlaygroundObservationLifecycle, observePlaygroundRun, PlaygroundPage, PlaygroundTraceView } from '../src/playground/playground-page.tsx';
 
 const epoch = { digest: 'sha256-current', id: 'epoch-current' };
 const identity = {
@@ -105,6 +105,7 @@ it('reconnects a cleanly ended open stream from the last accepted sequence befor
 
 it('suppresses a replaced run after its abort signal resolves a stale replay', async () => {
   const firstReplay = deferred<PlaygroundReplay>();
+  const streamDone = deferred<void>();
   const staleEvents: (readonly PlaygroundTraceEvent[])[] = [];
   const staleSessions: PlaygroundSession[] = [];
   const firstController = new AbortController();
@@ -112,7 +113,7 @@ it('suppresses a replaced run after its abort signal resolves a stale replay', a
     client: {
       replay: async () => firstReplay.promise,
       session: async () => session,
-      stream: () => ({ close: () => undefined, done: new Promise<void>(() => undefined) }),
+      stream: () => ({ close: () => streamDone.resolve(), done: streamDone.promise }),
     },
     onEvents: (events) => { staleEvents.push(events); },
     onSession: (next) => { staleSessions.push(next); },
@@ -130,6 +131,7 @@ it('suppresses a replaced run after its abort signal resolves a stale replay', a
 
 it('closes the live stream and suppresses stale callbacks after Playground unmount aborts', async () => {
   const blockedReplay = deferred<PlaygroundReplay>();
+  const streamDone = deferred<void>();
   const controller = new AbortController();
   let closeCount = 0;
   const events: (readonly PlaygroundTraceEvent[])[] = [];
@@ -137,7 +139,7 @@ it('closes the live stream and suppresses stale callbacks after Playground unmou
     client: {
       replay: async () => blockedReplay.promise,
       session: async () => session,
-      stream: () => ({ close: () => { closeCount += 1; }, done: new Promise<void>(() => undefined) }),
+      stream: () => ({ close: () => { closeCount += 1; streamDone.resolve(); }, done: streamDone.promise }),
     },
     onEvents: (next) => { events.push(next); },
     onSession: () => undefined,
@@ -151,4 +153,51 @@ it('closes the live stream and suppresses stale callbacks after Playground unmou
 
   expect(closeCount).toBe(1);
   expect(events).toEqual([]);
+});
+
+it('closes and drains the stream when final replay rejects before the run can complete', async () => {
+  const terminal: PlaygroundSession = { ...session, outcome: { status: 'failed' }, state: 'finalized' };
+  const streamDone = deferred<void>();
+  let closeCount = 0;
+  let replayCount = 0;
+  let readerDrained = false;
+  const observer = observePlaygroundRun({
+    client: {
+      replay: async () => {
+        replayCount += 1;
+        if (replayCount === 1) return replay(terminal);
+        throw new Error('final replay failed');
+      },
+      session: async () => terminal,
+      stream: () => ({
+        close: () => { closeCount += 1; readerDrained = true; streamDone.resolve(); },
+        done: streamDone.promise,
+      }),
+    },
+    onEvents: () => undefined,
+    onSession: () => undefined,
+    run,
+    signal: new AbortController().signal,
+    wait: async () => undefined,
+  });
+
+  await expect(observer).rejects.toThrow('final replay failed');
+  expect(closeCount).toBe(1);
+  expect(readerDrained).toBe(true);
+});
+
+it('invalidates a queued old trace callback before replacement clears the page-owned trace', () => {
+  const lifecycle = createPlaygroundObservationLifecycle();
+  const old = lifecycle.begin();
+  let pageTrace: readonly PlaygroundTraceEvent[];
+  const queuedOldEvent = (): void => {
+    if (old.current()) pageTrace = [event(1)];
+  };
+
+  lifecycle.invalidate();
+  pageTrace = [];
+  queuedOldEvent();
+
+  expect(old.signal.aborted).toBe(true);
+  expect(pageTrace).toEqual([]);
 });

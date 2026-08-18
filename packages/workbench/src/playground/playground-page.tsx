@@ -80,6 +80,47 @@ export interface PlaygroundRunObserverOptions {
   readonly wait?: (milliseconds: number, signal: AbortSignal) => Promise<void>;
 }
 
+export interface PlaygroundObservationLease {
+  abort(): void;
+  current(): boolean;
+  readonly signal: AbortSignal;
+}
+
+export interface PlaygroundObservationLifecycle {
+  begin(): PlaygroundObservationLease;
+  invalidate(): void;
+}
+
+/** The page can retire a prior run synchronously before React commits its replacement state. */
+export const createPlaygroundObservationLifecycle = (): PlaygroundObservationLifecycle => {
+  let active: { readonly controller: AbortController; readonly generation: number } | undefined;
+  let generation = 0;
+  const invalidate = (): void => {
+    const previous = active;
+    active = undefined;
+    generation += 1;
+    previous?.controller.abort();
+  };
+  return Object.freeze({
+    begin: (): PlaygroundObservationLease => {
+      invalidate();
+      const controller = new AbortController();
+      const ownGeneration = generation + 1;
+      generation = ownGeneration;
+      active = { controller, generation: ownGeneration };
+      return Object.freeze({
+        abort: () => {
+          if (active?.controller === controller) invalidate();
+          else controller.abort();
+        },
+        current: () => active?.generation === ownGeneration && !controller.signal.aborted,
+        signal: controller.signal,
+      });
+    },
+    invalidate,
+  });
+};
+
 /** Observes one immutable run identity; callers abort it before replacing the run or unmounting the page. */
 export const observePlaygroundRun = async ({ client, onEvents, onSession, run, signal, wait = delay }: PlaygroundRunObserverOptions): Promise<void> => {
   const sessionId = run.session.id;
@@ -87,6 +128,7 @@ export const observePlaygroundRun = async ({ client, onEvents, onSession, run, s
   let lastSequence = 0;
   let reconnects = 0;
   let stream: ReturnType<PlaygroundClient['stream']> | undefined;
+  let streamClosed = false;
   const current = (): boolean => !signal.aborted;
   const accept = (incoming: readonly PlaygroundTraceEvent[]): void => {
     if (!current()) return;
@@ -105,9 +147,14 @@ export const observePlaygroundRun = async ({ client, onEvents, onSession, run, s
       onEvent: (event) => accept([event]),
     });
     stream = next;
+    streamClosed = false;
     return next;
   };
-  const close = (): void => stream?.close();
+  const close = (): void => {
+    if (stream === undefined || streamClosed) return;
+    streamClosed = true;
+    stream.close();
+  };
   signal.addEventListener('abort', close, { once: true });
   const finalReplay = async (): Promise<void> => {
     const final = await client.replay(sessionId, lastSequence, signal);
@@ -156,6 +203,12 @@ export const observePlaygroundRun = async ({ client, onEvents, onSession, run, s
     if (!signal.aborted) throw reason;
   } finally {
     signal.removeEventListener('abort', close);
+    try {
+      close();
+      await stream?.done;
+    } catch {
+      // The original stream or route failure is the caller-visible result; cleanup must not replace it.
+    }
   }
 };
 
@@ -238,7 +291,7 @@ export const PlaygroundPage = ({ client, epoch, onRunChange, run, targets }: Pla
   const [selectedRefs, setSelectedRefs] = useState<readonly string[]>([]);
   const [skillId, setSkillId] = useState('');
   const [targetName, setTargetName] = useState('');
-  const observerGeneration = useRef(0);
+  const observationLifecycle = useRef(createPlaygroundObservationLifecycle());
   const session = run?.session;
   const sessionId = session?.id;
   const runId = run?.id;
@@ -249,26 +302,22 @@ export const PlaygroundPage = ({ client, epoch, onRunChange, run, targets }: Pla
   useEffect(() => {
     if (run === undefined || runId === undefined || sessionId === undefined) return;
     const observedRun = run;
-    const controller = new AbortController();
-    const generation = observerGeneration.current + 1;
-    observerGeneration.current = generation;
-    const current = (): boolean => !controller.signal.aborted && observerGeneration.current === generation;
+    const observation = observationLifecycle.current.begin();
     void observePlaygroundRun({
       client,
       onEvents: (next) => {
-        if (current()) setEvents(next);
+        if (observation.current()) setEvents(next);
       },
       onSession: (next) => {
-        if (current()) onRunChange({ id: runId, session: next });
+        if (observation.current()) onRunChange({ id: runId, session: next });
       },
       run: observedRun,
-      signal: controller.signal,
+      signal: observation.signal,
     }).catch((reason: unknown) => {
-      if (current()) setError(errorMessage(reason));
+      if (observation.current()) setError(errorMessage(reason));
     });
     return () => {
-      controller.abort();
-      observerGeneration.current += 1;
+      observation.abort();
     };
   }, [client, onRunChange, runId, sessionId]);
 
@@ -307,6 +356,7 @@ export const PlaygroundPage = ({ client, epoch, onRunChange, run, targets }: Pla
     if (input === undefined) return;
     await runAction(async () => {
       const started = await client.run(input);
+      observationLifecycle.current.invalidate();
       setDraftEvalCase(undefined);
       setEvents([]);
       setExported(undefined);
