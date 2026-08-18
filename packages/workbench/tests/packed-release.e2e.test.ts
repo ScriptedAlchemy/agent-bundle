@@ -1,8 +1,8 @@
 import { spawn, type ChildProcess } from 'node:child_process';
-import { access, chmod, cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, chmod, cp, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { delimiter, dirname, isAbsolute, join, relative } from 'node:path';
 import { promisify } from 'node:util';
 
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
@@ -134,21 +134,51 @@ const firstRecord = (value: unknown, label: string): Record<string, unknown> => 
   return record(value[0], `${label}[0]`);
 };
 
+const isWithin = (parent: string, candidate: string): boolean => {
+  const path = relative(parent, candidate);
+  return path.length === 0 || (!isAbsolute(path) && !path.startsWith('..'));
+};
+
+const descendantProcessIds = async (parentProcessId: number): Promise<readonly number[]> => {
+  const { stdout } = await execFile('ps', ['-eo', 'pid=,ppid=']);
+  const children = new Map<number, number[]>();
+  for (const row of stdout.split('\n')) {
+    const [processIdText, ancestorProcessIdText] = row.trim().split(/\s+/u);
+    const processId = Number(processIdText);
+    const ancestorProcessId = Number(ancestorProcessIdText);
+    if (!Number.isInteger(processId) || !Number.isInteger(ancestorProcessId)) continue;
+    const descendants = children.get(ancestorProcessId) ?? [];
+    descendants.push(processId);
+    children.set(ancestorProcessId, descendants);
+  }
+  const descendants = new Set<number>();
+  const pending = [...(children.get(parentProcessId) ?? [])];
+  while (pending.length > 0) {
+    const processId = pending.pop();
+    if (processId === undefined || descendants.has(processId)) continue;
+    descendants.add(processId);
+    pending.push(...(children.get(processId) ?? []));
+  }
+  return [...descendants];
+};
+
+const isAppRoute = (url: URL): boolean =>
+  url.pathname.startsWith('/api/mcp/apps/') || /^\/api\/mcp\/sessions\/[^/]+\/apps$/u.test(url.pathname);
+
 e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 }, async ({ page }) => {
   await buildPackage();
   const consumer = await mkdtemp(join(tmpdir(), 'agent-bundle-packed-release-'));
-  const stagedPackage = join(consumer, 'staged-package');
+  const forbiddenStagedPackage = join(consumer, 'staged-package');
   const project = join(consumer, 'project');
   const agentApiToken = 'packed-release-token';
   let child: ChildProcess | undefined;
   let phase = 'package setup';
+  const trackedProcessIds = new Set<number>();
+  let cleanupFailure: AggregateError | undefined;
+  let primaryFailure: Error | undefined;
   try {
-    await cp(packageRoot, stagedPackage, { recursive: true });
-    await execFile(join(workspaceRoot, 'node_modules', '.bin', 'rslib'), [
-      'build', '--dist-path', join(stagedPackage, 'dist'),
-    ], { cwd: workspaceRoot, env: installedEnvironment() });
     const { stdout } = await execFile('npm', ['pack', '--json', '--pack-destination', consumer], {
-      cwd: stagedPackage,
+      cwd: packageRoot,
       env: installedEnvironment(),
     });
     const [packed] = JSON.parse(stdout) as Array<{ readonly filename: string }>;
@@ -158,26 +188,43 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 }
       cwd: consumer,
       env: installedEnvironment(),
     });
+    const installedPackageRoot = await realpath(join(consumer, 'node_modules', 'agent-bundle'));
+    const installedCli = await realpath(join(consumer, 'node_modules', '.bin', 'agent-bundle'));
+    expect(isWithin(consumer, installedPackageRoot)).toBe(true);
+    expect(isWithin(workspaceRoot, installedPackageRoot)).toBe(false);
+    expect(installedCli).toBe(join(installedPackageRoot, 'dist', 'cli.js'));
+    expect(isWithin(workspaceRoot, installedCli)).toBe(false);
+    const installedManifest = record(JSON.parse(await readFile(join(installedPackageRoot, 'package.json'), 'utf8')), 'installed package manifest');
+    const runtimeDependencies = record(installedManifest.dependencies, 'installed package runtime dependencies');
+    for (const dependency of Object.keys(runtimeDependencies)) {
+      const installedDependency = await realpath(join(consumer, 'node_modules', dependency));
+      expect(isWithin(consumer, installedDependency)).toBe(true);
+      expect(isWithin(workspaceRoot, installedDependency)).toBe(false);
+    }
+    await expect(access(forbiddenStagedPackage)).rejects.toMatchObject({ code: 'ENOENT' });
     await cp(fixtureRoot, project, { recursive: true });
+    await expect(access(join(project, 'node_modules'))).rejects.toMatchObject({ code: 'ENOENT' });
     const configSource = join(project, 'agent-bundle.config.ts');
     const skillSource = join(project, 'skills', 'review', 'SKILL.md');
     const [originalConfig, originalSkill] = await Promise.all([
       readFile(configSource, 'utf8'),
       readFile(skillSource, 'utf8'),
     ]);
-    await rm(stagedPackage, { force: true, recursive: true });
     const fakeClaudeDirectory = await writeFakeClaude(project);
+    const installedBinDirectory = join(consumer, 'node_modules', '.bin');
+    const childPathEntries = [fakeClaudeDirectory, installedBinDirectory, dirname(process.execPath), '/usr/bin', '/bin'];
+    expect(childPathEntries.some((entry) => isWithin(workspaceRoot, entry))).toBe(false);
 
     const port = await availablePort();
     const origin = `http://127.0.0.1:${port}`;
-    child = spawn(join(consumer, 'node_modules', '.bin', 'agent-bundle'), [
+    child = spawn(installedCli, [
       'dev', '--agent-api', '--no-open', '--port', String(port), '--root', project,
     ], {
       cwd: consumer,
       env: {
         ...installedEnvironment(),
         AGENT_BUNDLE_AGENT_API_TOKEN: agentApiToken,
-        PATH: `${fakeClaudeDirectory}:${process.env.PATH ?? '/usr/bin:/bin'}`,
+        PATH: childPathEntries.join(delimiter),
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -202,7 +249,7 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 }
     page.on('pageerror', (error) => pageErrors.push(error));
     page.on('response', (response) => {
       const url = new URL(response.url());
-      if (!url.pathname.startsWith('/api/mcp/apps/')) return;
+      if (!isAppRoute(url)) return;
       const request = response.request();
       appRouteRequests.push(Object.freeze({
         frameUrl: request.frame().url(),
@@ -211,12 +258,13 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 }
         resourceType: request.resourceType(),
         status: response.status(),
         timing: request.timing(),
+        path: url.pathname,
         url: response.url(),
       }));
     });
     page.on('requestfailed', (request) => {
       const url = new URL(request.url());
-      if (!url.pathname.startsWith('/api/mcp/apps/')) return;
+      if (!isAppRoute(url)) return;
       failedAppRouteRequests.push(Object.freeze({
         error: request.failure()?.errorText,
         frameUrl: request.frame().url(),
@@ -224,6 +272,7 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 }
         method: request.method(),
         resourceType: request.resourceType(),
         timing: request.timing(),
+        path: url.pathname,
         url: request.url(),
       }));
     });
@@ -366,8 +415,15 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 }
       const appPreviewSource = await appPreview.getAttribute('src');
       if (appPreviewSource === null) throw new Error('The packed MCP App preview does not expose a proxy source.');
       appProxyOrigin = new URL(appPreviewSource, origin).origin;
+      expect(appProxyOrigin).not.toBe(origin);
+      await expect.poll(() => page.frames().filter((frame) => frame.url() === 'about:blank').length, { timeout: browserTimeout }).toBe(1);
+      const appFrame = page.frames().find((frame) => frame.url() === 'about:blank');
+      if (appFrame === undefined) throw new Error('The packed MCP App proxy did not create an App frame.');
+      await expect(appFrame.locator('#view')).toHaveText('packed release dashboard', { timeout: browserTimeout });
       await page.getByRole('tab', { name: 'Inspector' }).click();
       await expect(page.getByRole('heading', { name: 'Inspector' })).toBeVisible({ timeout: browserTimeout });
+      const inspector = page.locator('[aria-label="MCP Inspector presentation"]');
+      await expect(inspector.getByText('show-dashboard', { exact: true })).toBeVisible({ timeout: browserTimeout });
       await page.getByRole('tab', { name: 'Playground' }).click();
       await expect(page.getByRole('heading', { name: 'MCP playground' })).toBeVisible({ timeout: browserTimeout });
 
@@ -487,6 +543,15 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 }
       await page.locator('#artifact-diff-base').fill(epochId);
       await page.getByRole('button', { name: 'Compare epochs' }).click();
       await expect(page.getByRole('heading', { name: 'Epoch diff' })).toBeVisible({ timeout: browserTimeout });
+      const changedRows = page.locator('.artifact-diff-group').filter({
+        has: page.getByRole('heading', { name: /^Changed \([1-9][0-9]*\)$/u }),
+      }).locator('tbody tr');
+      await expect(changedRows).not.toHaveCount(0, { timeout: browserTimeout });
+      const changedCells = await changedRows.first().locator('th, td').allTextContents();
+      expect(changedCells).toHaveLength(5);
+      expect(changedCells[0]).toContain('SKILL.md');
+      expect(changedCells[1]).not.toBe(changedCells[3]);
+      expect(changedCells[2]).not.toBe(changedCells[4]);
 
       phase = 'pinned epoch-A native cancellation';
       await page.getByRole('link', { name: 'Playground', exact: true }).click();
@@ -550,6 +615,20 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 }
         throw new Error(`The packed Logs replay is empty after B/C rebuilds: ${JSON.stringify(logRecords)}`);
       }
       await expect.poll(async () => page.locator('.logs-entries > li').count(), { timeout: browserTimeout }).toBeGreaterThan(0);
+      const hookLog = logRecords.map((value, index) => record(value, `packed log record ${index}`)).find((value) =>
+        value.producer === 'hook' && value.kind === 'hook.simulate.completed',
+      );
+      if (hookLog === undefined) throw new Error('The packed Logs replay did not retain a completed Hook simulation record.');
+      const hookLogText = JSON.stringify(hookLog);
+      expect(hookLogText).not.toContain('/workspace');
+      expect(hookLogText).not.toContain(agentApiToken);
+      if (typeof hookLog.sequence !== 'number') throw new Error('The completed Hook log record does not have a numeric sequence.');
+      const hookLogSequence = String(hookLog.sequence);
+      const hookLogEntry = page.locator('.logs-entries > li').filter({ hasText: `#${hookLogSequence}` });
+      await expect(hookLogEntry).toContainText('hook.simulate.completed', { timeout: browserTimeout });
+      await hookLogEntry.locator('summary').click();
+      await expect(hookLogEntry.locator('.logs-details')).toContainText('outcome');
+      await expect(hookLogEntry.locator('.logs-details')).not.toContainText('/workspace');
 
       phase = 'Agent API Eval tools';
       const listed = await call('evals_list');
@@ -601,6 +680,14 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 }
         const result = record(record(read.structuredContent, 'eval read').run, 'recorded eval result');
         return record(result.run, 'recorded eval').completedAt;
       }, { timeout: browserTimeout }).toEqual(expect.any(String));
+      const completedAgentEval = record(record((await client.callTool({ arguments: { run_id: runId }, name: 'eval_get' })).structuredContent, 'completed eval read').run, 'completed recorded eval');
+      const completedAgentRun = record(completedAgentEval.run, 'completed agent eval run');
+      expect(completedAgentRun.completedAt).toEqual(expect.any(String));
+      const completedAgentSummary = record(completedAgentRun.summary, 'completed agent eval summary');
+      expect(completedAgentSummary).toEqual({ cases: 1, fail: 0, inconclusive: 0, pass: 1, trials: 1 });
+      expect(completedAgentEval.trials).toEqual(expect.arrayContaining([
+        expect.objectContaining({ caseId: 'deterministic-review', host: 'portable', model: 'deterministic', outcome: 'pass' }),
+      ]));
       called.add('eval_get');
 
       phase = 'Evals live evidence and comparisons';
@@ -615,10 +702,28 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 }
       const uiEval = record(await (await uiEvalAdmitted).json(), 'browser eval admission').run;
       const uiEvalRunId = string(record(uiEval, 'browser eval run').id, 'browser eval run id');
       phase = 'Evals UI completion';
-      await expect(page.getByText(`Run ${uiEvalRunId} finished:`)).toBeVisible({ timeout: browserTimeout });
+      try {
+        await expect(page.getByText(`Run ${uiEvalRunId} finished:`)).toBeVisible({ timeout: browserTimeout });
+      } catch (error) {
+        throw new Error(`The packed browser eval did not render its finalized run: ${JSON.stringify({
+          errors: await page.locator('.request-error').allTextContents(),
+          summaries: await page.locator('.eval-summary').allTextContents(),
+          timeline: await page.locator('.eval-timeline strong').allTextContents(),
+        })}`, { cause: error });
+      }
       phase = 'Evals durable evidence';
       await expect(page.getByRole('heading', { name: 'Durable event timeline' })).toBeVisible({ timeout: browserTimeout });
       await expect(page.getByRole('heading', { name: 'Host / model matrix' })).toBeVisible({ timeout: browserTimeout });
+      await expect(page.locator('.eval-counts')).toHaveText('1 passed · 0 failed · 0 inconclusive', { timeout: browserTimeout });
+      await expect(page.locator('.eval-timeline .eval-event-sequence')).not.toHaveCount(0, { timeout: browserTimeout });
+      await expect(page.locator('.eval-timeline')).toContainText('run.completed');
+      await expect(page.locator('.eval-host-models')).toContainText('portable');
+      await expect(page.locator('.eval-host-models')).toContainText('deterministic');
+      await expect(page.locator('.eval-host-models')).toContainText('Pass');
+      await expect(page.locator('.eval-trial-provenance').first()).toContainText('agent-bundle@0.1.0');
+      await expect(page.locator('.eval-trial-provenance').first()).toContainText('automatic');
+      await page.getByRole('button', { name: 'Preview safe text' }).first().click();
+      await expect(page.locator('.eval-raw-result')).toContainText('The deterministic packed fixture passed.', { timeout: browserTimeout });
       phase = 'Evals comparison run availability';
       await page.getByRole('link', { name: 'Comparisons', exact: true }).click();
       await expect(page.getByRole('heading', { name: 'Comparisons' })).toBeVisible({ timeout: browserTimeout });
@@ -628,6 +733,9 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 }
       await page.locator('#comparison-candidate').selectOption(uiEvalRunId);
       await page.getByRole('button', { name: 'Compare runs' }).click();
       await expect(page.locator('.comparison-matrix table')).toBeVisible({ timeout: browserTimeout });
+      await expect(page.locator('.comparison-matrix')).toContainText(
+        'CLI agent-bundle@0.1.0 · Invocation automatic · Semantic grader none',
+      );
 
       phase = 'mobile overflow floor';
       await page.setViewportSize({ height: 844, width: 390 });
@@ -654,11 +762,21 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 }
           pageErrors: pageErrors.map((error) => error.message),
         })}`);
       }
+      expect(appRouteRequests).not.toHaveLength(0);
+      expect(appRouteRequests.every((request) => typeof request.status === 'number' && request.status < 400)).toBe(true);
+      expect(appRouteRequests.some((request) => request.method === 'POST' && /^\/api\/mcp\/sessions\/[^/]+\/apps$/u.test(string(request.path, 'App route path')) && request.status === 200)).toBe(true);
+      expect(appRouteRequests.some((request) => request.method === 'GET' && /^\/api\/mcp\/apps\/[^/]+$/u.test(string(request.path, 'App route path')))).toBe(false);
+      expect(failedAppRouteRequests).toEqual([]);
 
       phase = 'packed installed-product shutdown';
       await client.close();
       clientClosed = true;
       if (child === undefined) throw new Error('The packed dev server child was not created.');
+      if (child.pid !== undefined) {
+        trackedProcessIds.add(child.pid);
+        for (const processId of await descendantProcessIds(child.pid)) trackedProcessIds.add(processId);
+      }
+      expect(trackedProcessIds.size).toBeGreaterThan(0);
       await closeChild(child);
       expect(child.exitCode).not.toBeNull();
       for (const shutdownOrigin of new Set([origin, appProxyOrigin].filter((value): value is string => value !== undefined))) {
@@ -672,10 +790,10 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 }
         }, { timeout: browserTimeout }).toBe(true);
       }
       await expect(access(join(project, '.agent-bundle', 'dev.lock'))).rejects.toMatchObject({ code: 'ENOENT' });
-      if (child.pid !== undefined) {
+      for (const processId of trackedProcessIds) {
         await expect.poll(() => {
           try {
-            process.kill(child!.pid!, 0);
+            process.kill(processId, 0);
             return false;
           } catch {
             return true;
@@ -688,9 +806,24 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 }
       if (!clientClosed) await client.close();
     }
   } catch (error) {
-    throw new Error(`Packed dogfood phase ${phase} failed: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
+    primaryFailure = new Error(`Packed dogfood phase ${phase} failed: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
   } finally {
-    await Promise.allSettled(child === undefined ? [] : [closeChild(child)]);
-    await rm(consumer, { force: true, recursive: true });
+    const cleanupFailures: unknown[] = [];
+    if (child !== undefined) {
+      try { await closeChild(child); }
+      catch (error) { cleanupFailures.push(error); }
+    }
+    try { await rm(consumer, { force: true, recursive: true }); }
+    catch (error) { cleanupFailures.push(error); }
+    try { await access(consumer); cleanupFailures.push(new Error(`Packed consumer temporary directory still exists: ${consumer}`)); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') cleanupFailures.push(error);
+    }
+    if (cleanupFailures.length > 0) cleanupFailure = new AggregateError(cleanupFailures, 'Packed release cleanup failed.');
   }
+  if (primaryFailure !== undefined && cleanupFailure !== undefined) {
+    throw new AggregateError([primaryFailure, cleanupFailure], 'Packed release test and cleanup both failed.', { cause: primaryFailure });
+  }
+  if (primaryFailure !== undefined) throw primaryFailure;
+  if (cleanupFailure !== undefined) throw cleanupFailure;
 });

@@ -31,6 +31,7 @@ it('maps an authoritative Skill tool event to observed activation evidence', asy
     durationMs: 1200,
     inputTokens: 16,
     outputTokens: 6,
+    reported: true,
     turns: 3,
   });
   expect(normalized.trace).toEqual([
@@ -88,6 +89,7 @@ it('downgrades a truncated trace to inferred and reports one incomplete trailing
     cacheReadInputTokens: 0,
     inputTokens: 4,
     outputTokens: 2,
+    reported: true,
     turns: 0,
   });
 });

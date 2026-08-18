@@ -40,6 +40,24 @@ const asRecord = (value: unknown): Readonly<Record<string, unknown>> => {
   return value;
 };
 
+const provenanceKeys = new Set(['hostCliVersion', 'invocation', 'semanticGrader']);
+const provenanceValue = /^[A-Za-z0-9][A-Za-z0-9_.:@-]{0,511}$/u;
+const provenancePathMarker = /(?:^|[^A-Za-z0-9])(?:file:|[A-Za-z]:|\\\\)/iu;
+
+const validProvenance = (value: unknown): boolean => isRecord(value) &&
+  Object.keys(value).every((key) => provenanceKeys.has(key)) &&
+  Object.values(value).every((entry) => typeof entry === 'string' &&
+    provenanceValue.test(entry) && !provenancePathMarker.test(entry));
+
+const validMetrics = (value: unknown): boolean => isRecord(value) && validProvenance(value.provenance);
+
+const validRowProvenance = (value: unknown): boolean => {
+  if (!isRecord(value) || typeof value.comparable !== 'boolean') return false;
+  if (value.comparable) return validMetrics(value.baseline) && validMetrics(value.candidate);
+  return (value.baseline === undefined || validMetrics(value.baseline)) &&
+    (value.candidate === undefined || validMetrics(value.candidate));
+};
+
 const diagnosticError = (value: unknown, status: number): ComparisonClientError => {
   if (isRecord(value) && isRecord(value.diagnostic) &&
     typeof value.diagnostic.code === 'string' && typeof value.diagnostic.message === 'string') {
@@ -56,7 +74,7 @@ const comparisonResult = (value: unknown): EvalComparison => {
     typeof comparison.sampleSize !== 'number' ||
     !isRecord(comparison.summary) ||
     !Array.isArray(comparison.rows) ||
-    !comparison.rows.every((row) => isRecord(row) && typeof row.comparable === 'boolean')) {
+    !comparison.rows.every(validRowProvenance)) {
     throw invalidResponse();
   }
   return frozenJson(comparison) as EvalComparison;

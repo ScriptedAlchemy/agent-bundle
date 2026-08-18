@@ -1,6 +1,6 @@
 # Agent Bundle developer workbench implementation plan
 
-**Status:** Ready for execution
+**Status:** Implemented; delivery audit and packed-consumer release verification remain
 
 **Date:** 2026-08-14
 
@@ -25,11 +25,10 @@ model-provider API keys.
 2. The implementation order is phase 0, coordinator/epochs, packaged shell, Skills, basic MCP and
    hooks, deterministic evals, native Claude and Codex harnesses, host-backed playground, then
    comparison and the optional agent MCP.
-3. Natural-language playground runs arrive only after at least one real native harness. Before
-   that, the playground supports MCP and hook operations plus Skill inspect/render/validate/select.
-   `script.run` remains in the typed contract for a future host-provided OS-contained executor,
-   but is capability-gated and rejected before admission until that executor is configured;
-   Skills do not gain a fake executor.
+3. Natural-language playground runs use the installed native harnesses. `script.run` is a
+   production-mounted trusted-local operation that resolves only a manifest-owned emitted script
+   from the selected target and records bounded execution evidence. Skills remain documents; they
+   do not gain a fake executor.
 4. Codex and Claude path-token expansion is capability-gated. Agent Bundle expands only the
    tokens supported by the selected adapter and never claims unsupported native host behavior.
 5. Inspector protocol state, controlled Inspector source vendoring, hook UI, and MCP Apps

@@ -56,11 +56,17 @@ const trialRecord = {
   model: 'deterministic',
   outcome: 'pass',
   prompt: 'Report the highest-risk regression.',
+  provenance: {
+    hostCliVersion: 'agent-bundle@0.1.0',
+    invocation: { mode: 'automatic' },
+    semanticGrader: null,
+  },
   rawArtifacts: ['artifacts/portable-1/evidence.json'],
   schemaVersion: 1,
   startedAt: '2026-08-17T00:00:00.500Z',
   targetDigest: 'c'.repeat(64),
   trialIndex: 0,
+  usage: { inputTokens: 9, outputTokens: 3 },
 };
 
 const runResult = { aggregates: [], diagnostics: [], run: runRecord, trials: [trialRecord] };
@@ -189,6 +195,48 @@ it('reads one recorded run and lists every recorded run', async () => {
     '/api/evals/runs/20260817t000000000z-abcdef01',
     '/api/evals/runs',
   ]);
+});
+
+it('accepts legacy omitted trial provenance and usage but rejects unsafe or malformed additions', async () => {
+  const { provenance: _provenance, usage: _usage, ...legacyTrial } = trialRecord;
+  const cases: readonly unknown[] = [
+    { run: { ...runResult, trials: [legacyTrial] } },
+    { run: { ...runResult, trials: [{ ...trialRecord, provenance: { ...trialRecord.provenance, extra: true } }] } },
+    { run: { ...runResult, trials: [{ ...trialRecord, provenance: { ...trialRecord.provenance, hostCliVersion: '/private/cli' } }] } },
+    ...['C:private', 'C:\\private', 'C:/private', '\\\\server\\share', 'file:///private/cli'].map((hostCliVersion) => ({
+      run: { ...runResult, trials: [{ ...trialRecord, provenance: { ...trialRecord.provenance, hostCliVersion } }] },
+    })),
+    { run: { ...runResult, trials: [{ ...trialRecord, provenance: { ...trialRecord.provenance, invocation: { mode: 'explicit' } } }] } },
+    { run: { ...runResult, trials: [{ ...trialRecord, usage: { inputTokens: 9, outputTokens: -1 } }] } },
+  ];
+
+  const legacy = client(recordingFetch([], () => response(cases[0])));
+  const legacyResult = await legacy.read(runRecord.id);
+  expect(legacyResult.trials[0]).toMatchObject({ id: trialRecord.id });
+  expect(legacyResult.trials[0]).not.toHaveProperty('provenance');
+  expect(legacyResult.trials[0]).not.toHaveProperty('usage');
+
+  const unrecorded = client(recordingFetch([], () => response({
+    run: {
+      ...runResult,
+      trials: [{
+        ...trialRecord,
+        provenance: {
+          ...trialRecord.provenance,
+          invocation: { mode: 'explicit', skill: 'hook:fixture' },
+          semanticGrader: { state: 'unrecorded' },
+        },
+      }],
+    },
+  })));
+  await expect(unrecorded.read(runRecord.id)).resolves.toMatchObject({
+    trials: [{ provenance: { invocation: { mode: 'explicit', skill: 'hook:fixture' }, semanticGrader: { state: 'unrecorded' } } }],
+  });
+
+  for (const body of cases.slice(1)) {
+    const evalClient = client(recordingFetch([], () => response(body)));
+    await expect(evalClient.read(runRecord.id)).rejects.toMatchObject({ code: 'AB8073' });
+  }
 });
 
 it('replays only a detached, contiguous persisted event timeline from its cursor', async () => {

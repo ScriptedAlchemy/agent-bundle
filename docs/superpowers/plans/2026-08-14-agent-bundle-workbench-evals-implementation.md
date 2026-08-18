@@ -413,6 +413,10 @@ THIRD_PARTY_NOTICES
 
 ### Task 12: Optional agent-facing MCP and end-to-end packaged dogfood
 
+**Status (2026-08-18):** The optional Agent API and its thirteen-tool contract are implemented.
+Documentation is current; packed-consumer dogfood, native authenticated smokes, and the complete
+release gate remain the tracked delivery checks in Steps 4 and 6 below.
+
 **Files:**
 - Create: `packages/agent-bundle/src/dev/agent-api.ts`
 - Test: `packages/agent-bundle/tests/agent-api.test.ts`

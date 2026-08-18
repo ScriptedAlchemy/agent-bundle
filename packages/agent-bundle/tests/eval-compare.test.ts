@@ -202,6 +202,23 @@ it('requires a persisted value on both sides for every documented alignment face
   ]);
 });
 
+it('does not compare a manually graded trial whose semantic grader identity was unrecorded', () => {
+  const comparison = compareEvalRuns({
+    baseline: side('run-base', trials(['pass', 'pass', 'pass'])),
+    candidate: side('run-candidate', trials(['fail', 'fail', 'fail'], {
+      provenance: {
+        hostCliVersion: '2.4.0',
+        invocation: { mode: 'automatic' },
+        semanticGrader: { state: 'unrecorded' },
+      },
+    })),
+  });
+
+  expect(nonComparable(comparison.rows[0]).causes.map((cause) => cause.code)).toEqual([
+    'grader-versions-mismatch',
+  ]);
+});
+
 it('labels a condition that only one run recorded as non-comparable', () => {
   const comparison = compareEvalRuns({
     baseline: side('run-base', [

@@ -27,6 +27,8 @@ export interface ClaudeUsage {
   readonly durationMs?: number;
   readonly inputTokens: number;
   readonly outputTokens: number;
+  /** True only when the host emitted at least one usable token count. */
+  readonly reported: boolean;
   readonly turns: number;
 }
 
@@ -64,6 +66,7 @@ const emptyUsage: ClaudeUsage = Object.freeze({
   cacheReadInputTokens: 0,
   inputTokens: 0,
   outputTokens: 0,
+  reported: false,
   turns: 0,
 });
 
@@ -79,8 +82,14 @@ const isSafeLabel = (value: unknown): value is string =>
 const finiteNumber = (value: unknown): number | undefined =>
   typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 
+const tokenCountValue = (value: unknown): number | undefined =>
+  typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+
 const tokenCount = (usage: unknown, key: string): number =>
-  isRecord(usage) ? finiteNumber(usage[key]) ?? 0 : 0;
+  isRecord(usage) ? tokenCountValue(usage[key]) ?? 0 : 0;
+
+const hasTokenUsage = (usage: unknown): boolean =>
+  isRecord(usage) && (tokenCountValue(usage.input_tokens) !== undefined || tokenCountValue(usage.output_tokens) !== undefined);
 
 /**
  * A truncated final line is reported rather than thrown, mirroring the run store's
@@ -168,7 +177,7 @@ const usageFor = (
   const costUsd = finiteNumber(result.total_cost_usd);
   const durationMs = finiteNumber(result.duration_ms);
   const usage = result.usage;
-  const reported = isRecord(usage);
+  const reported = hasTokenUsage(usage);
   return Object.freeze({
     cacheCreationInputTokens: reported
       ? tokenCount(usage, 'cache_creation_input_tokens')
@@ -180,6 +189,7 @@ const usageFor = (
     ...(durationMs === undefined ? {} : { durationMs }),
     inputTokens: reported ? tokenCount(usage, 'input_tokens') : assistantUsage.inputTokens,
     outputTokens: reported ? tokenCount(usage, 'output_tokens') : assistantUsage.outputTokens,
+    reported: reported || assistantUsage.reported,
     turns: finiteNumber(result.num_turns) ?? assistantUsage.turns,
   });
 };
@@ -268,6 +278,7 @@ export const normalizeClaudeStream = (
         cacheReadInputTokens: assistantUsage.cacheReadInputTokens + tokenCount(usage, 'cache_read_input_tokens'),
         inputTokens: assistantUsage.inputTokens + tokenCount(usage, 'input_tokens'),
         outputTokens: assistantUsage.outputTokens + tokenCount(usage, 'output_tokens'),
+        reported: assistantUsage.reported || hasTokenUsage(usage),
         turns: assistantUsage.turns,
       });
     }

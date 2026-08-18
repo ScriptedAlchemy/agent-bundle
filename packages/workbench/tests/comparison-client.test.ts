@@ -18,8 +18,8 @@ const comparison = {
   baselineRunId: 'run-base',
   candidateRunId: 'run-candidate',
   rows: [{
-    baseline: { durationMs: 3000, evidence: 'reliability', fail: 1, harnessFailures: 0, inconclusive: 0, meanDurationMs: 1000, outcome: 'fail', passRate: 0.666667, passes: 2, reliability: { passAtK: 1, passPowerK: 0, sampleSize: 3 }, runId: 'run-base', trials: 3 },
-    candidate: { durationMs: 3000, evidence: 'reliability', fail: 0, harnessFailures: 0, inconclusive: 0, meanDurationMs: 1000, outcome: 'pass', passRate: 1, passes: 3, reliability: { passAtK: 1, passPowerK: 1, sampleSize: 3 }, runId: 'run-candidate', trials: 3 },
+    baseline: { durationMs: 3000, evidence: 'reliability', fail: 1, harnessFailures: 0, inconclusive: 0, meanDurationMs: 1000, outcome: 'fail', passRate: 0.666667, passes: 2, provenance: { hostCliVersion: 'claude@1.0.0', invocation: 'explicit:hook:fixture', semanticGrader: 'unrecorded' }, reliability: { passAtK: 1, passPowerK: 0, sampleSize: 3 }, runId: 'run-base', trials: 3 },
+    candidate: { durationMs: 3000, evidence: 'reliability', fail: 0, harnessFailures: 0, inconclusive: 0, meanDurationMs: 1000, outcome: 'pass', passRate: 1, passes: 3, provenance: { hostCliVersion: 'claude@1.0.0', invocation: 'explicit:hook:fixture', semanticGrader: 'unrecorded' }, reliability: { passAtK: 1, passPowerK: 1, sampleSize: 3 }, runId: 'run-candidate', trials: 3 },
     caseId: 'direct-review',
     comparable: true,
     delta: { meanDurationMs: 0, passRate: 0.333333, passes: 1, reliability: { passAtK: 0, passPowerK: 1, sampleSize: 3 }, trials: 0 },
@@ -105,6 +105,30 @@ it('rejects a response that is not a comparison', async () => {
   await expect(comparisonClient.compare({ base: 'run-base', candidate: 'run-candidate' })).rejects.toMatchObject({
     code: 'AB8083',
   });
+});
+
+it('rejects missing, path-like, or structurally extended metric provenance', async () => {
+  const row = comparison.rows[0];
+  const invalidProvenance = [
+    undefined,
+    { hostCliVersion: '/private/claude' },
+    ...['C:private', 'C:\\private', 'C:/private', '\\\\server\\share', 'file:///private/claude']
+      .map((hostCliVersion) => ({ hostCliVersion })),
+    { hostCliVersion: 'claude@1.0.0', unexpected: 'value' },
+  ];
+
+  for (const provenance of invalidProvenance) {
+    const comparisonClient = client(recordingFetch([], () => response({
+      comparison: {
+        ...comparison,
+        rows: [{ ...row, baseline: { ...row.baseline, provenance } }],
+      },
+    })));
+
+    await expect(comparisonClient.compare({ base: 'run-base', candidate: 'run-candidate' })).rejects.toMatchObject({
+      code: 'AB8083',
+    });
+  }
 });
 
 it('uses the shared foreground authority error when its authentication is invalidated', async () => {

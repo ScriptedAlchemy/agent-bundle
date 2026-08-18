@@ -38,8 +38,22 @@ when a contributor runs it, and never accepts or stores API keys.
 ## Developer workbench and Agent API
 
 `agent-bundle dev` is a loopback-only foreground session for inspecting source and published artifact
-epochs, exercising artifact-bound MCP and hook operations, and running evals. It never becomes part
-of a generated artifact.
+epochs, exercising artifact-bound MCP, hook, script, and native-host operations, and running evals.
+It never becomes part of a generated artifact.
+
+The Playground is the durable whole-plugin workflow. `script.run` is available there for trusted
+local use: it selects a manifest-owned emitted script for the selected target and records its exit,
+bounded stdout/stderr, cancellation, and epoch-bound evidence. Native prompts select a
+server-cataloged case, fixture, host, and pinned model for that epoch; they do not accept a browser
+provided command or model. Completed Playground sessions can replay or export their ordered raw
+event references and promote selected durable evidence into a draft eval case.
+
+The Hook and MCP pages also execute generated artifacts, but their independent operations do not
+silently join an open Playground session. Start the operation from Playground when it must form part
+of the ordered export or a promoted draft. Logs stay grouped by producer (build, diagnostics, MCP,
+hook, host, and grader) with raw stdout/stderr and protocol streams available as evidence. The MCP
+page opens an epoch-bound generated-server session, supports cancellation and explicit **Restart**,
+and previews a compatible MCP App through that same session.
 
 The optional Agent API exposes a fixed Streamable HTTP MCP endpoint at `/mcp` on that same foreground
 URL. It is disabled by default. Enable it with `--agent-api` (or set `dev: { agentApi: true }` in the
@@ -53,15 +67,25 @@ AGENT_BUNDLE_AGENT_API_TOKEN='replace-with-a-secret' agent-bundle dev --agent-ap
 authentication, allows Codex clients without an `Origin` header, and rejects a browser-origin request
 unless it is exactly the foreground origin. The token is read once at startup and is never logged,
 persisted, or returned. A running endpoint uses the same URL and token across foreground restarts;
-its stateless MCP transport lets an initialized client issue later requests without a tool-list reload.
+its stateless MCP transport lets an initialized client issue later requests when the foreground
+server returns.
 
-The API exposes only these stable tools: `project_status`, `skills_list`, `skill_inspect`,
+The API exposes exactly thirteen stable tools: `project_status`, `skills_list`, `skill_inspect`,
 `artifacts_list`, `artifact_inspect`, `mcp_servers_list`, `mcp_invoke`, `hooks_list`,
-`hook_simulate`, `evals_list`, `eval_run`, `eval_get`, and `diagnostics_list`. Their schemas reject
+`hook_simulate`, `evals_list`, `eval_run`, `eval_get`, and `diagnostics_list`. `eval_run` admits
+deterministic evals only; native-harness choice is never an Agent API input. Their schemas reject
 undeclared fields, so clients cannot name filesystem roots, artifact paths, commands, working
 directories, environments, harnesses, or browser-authored evidence/outcomes. Omitted artifact epochs
 bind atomically to the active publication; in-flight and explicitly selected epoch operations stay
-pinned until they complete.
+pinned until they complete. A hot rebuild sends new calls to the new active epoch, while an open
+generated MCP session remains bound to its original epoch until it is closed or explicitly restarted.
+Host MCP catalog changes can require that host to reload its MCP connection; Agent Bundle does not
+use `notifications/tools/list_changed` as a workbench HMR mechanism.
+
+Rsbuild UI HMR is contributor-only. It runs through
+`AGENT_BUNDLE_WORKBENCH_API_PROXY=<foreground-url> npm run dev --workspace agent-bundle-workbench`,
+whose `packages/workbench/scripts/dev.mjs` wrapper refuses to start without the foreground API
+proxy. Published `agent-bundle dev` serves prebuilt assets and live project events instead.
 
 ## Configuration
 
@@ -155,3 +179,15 @@ artifact/
 `agent-bundle.manifest.json` records each emitted file's path, byte length, and SHA-256 digest. This allows `validate --artifact` and artifact operations to run after the source project is no longer present.
 
 Portable artifacts contain portable plugin, skills, MCP, and App-resource files. Codex and Claude artifacts contain their respective native metadata and generated hook wrappers. Terminal hosts can use normal MCP tools and resources; visual rendering of an MCP App depends on the host supporting the standard resource metadata.
+
+## Contributor release gate
+
+From this repository, run the complete local release gate with:
+
+```sh
+npm run check:release
+```
+
+Its individual package-script checks are `npm run pack:dry-run`, `npm run audit:release`, and
+`npm run test:packed`. Publication has no repository script: selecting the npm package name/scope,
+license, and `publishConfig` remains an explicit release-owner decision.

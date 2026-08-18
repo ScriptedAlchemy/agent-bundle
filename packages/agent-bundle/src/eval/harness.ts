@@ -72,6 +72,8 @@ interface McpCallLogResult {
 
 const defaultProbeTimeoutMs = 60_000;
 export const evidenceArtifactName = 'evidence.json';
+/** The deterministic harness is server-owned, so its artifact producer version is its truthful identity. */
+const deterministicHarnessIdentity = (agentBundleVersion: string): string => `agent-bundle@${agentBundleVersion}`;
 const unavailableActivation: EvalActivationEvidence = Object.freeze({
   activated: Object.freeze([]),
   level: 'unavailable',
@@ -315,6 +317,7 @@ export const runDeterministicTrial = async (
     ...(pluginFailure === undefined ? {} : { pluginFailure }),
     prompt: options.evalCase.prompt,
     provenance: Object.freeze({
+      hostCliVersion: deterministicHarnessIdentity(options.artifact.manifest.producer.version),
       invocation: Object.freeze({ ...options.evalCase.invocation }),
       semanticGrader: null,
     }),

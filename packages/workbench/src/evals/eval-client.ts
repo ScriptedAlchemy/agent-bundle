@@ -81,6 +81,10 @@ const textSchema = z.string();
 const safeIntegerSchema = z.number().refine(Number.isSafeInteger);
 const nonnegativeIntegerSchema = safeIntegerSchema.refine((value) => value >= 0);
 const positiveIntegerSchema = safeIntegerSchema.refine((value) => value >= 1);
+const provenanceIdentifier = /^[A-Za-z0-9][A-Za-z0-9_.:@-]{0,127}$/u;
+const provenancePathMarker = /(?:^|[^A-Za-z0-9])(?:file:|[A-Za-z]:|\\\\)/iu;
+const provenanceIdentifierSchema = z.string().refine((value) =>
+  provenanceIdentifier.test(value) && !provenancePathMarker.test(value));
 const timestampSchema = z.string().refine(isIsoTimestamp);
 const digestSchema = z.string().regex(/^[a-f0-9]{64}$/u);
 const evidenceLevelSchema = z.enum(['inferred', 'observed', 'unavailable']);
@@ -174,6 +178,28 @@ const pluginFailureSchema = z.strictObject({
   code: z.enum(['EVAL_PLUGIN_ASSERTION_FAILED', 'EVAL_PLUGIN_PROCESS_FAILED', 'EVAL_PLUGIN_TIMED_OUT']),
   message: textSchema,
 });
+const trialInvocationProvenanceSchema = z.union([
+  z.strictObject({ mode: z.enum(['automatic', 'none']) }),
+  z.strictObject({ mode: z.literal('explicit'), skill: provenanceIdentifierSchema }),
+]);
+const semanticGraderProvenanceSchema = z.union([
+  z.null(),
+  z.strictObject({
+    id: provenanceIdentifierSchema,
+    model: provenanceIdentifierSchema,
+    schemaVersion: positiveIntegerSchema,
+  }),
+  z.strictObject({ state: z.literal('unrecorded') }),
+]);
+const trialProvenanceSchema = z.strictObject({
+  hostCliVersion: provenanceIdentifierSchema.optional(),
+  invocation: trialInvocationProvenanceSchema,
+  semanticGrader: semanticGraderProvenanceSchema,
+});
+const trialUsageSchema = z.strictObject({
+  inputTokens: nonnegativeIntegerSchema,
+  outputTokens: nonnegativeIntegerSchema,
+});
 const trialRecordSchema = z.strictObject({
   assertions: z.array(assertionResultSchema),
   caseDigest: digestSchema,
@@ -189,11 +215,13 @@ const trialRecordSchema = z.strictObject({
   outcome: outcomeSchema,
   pluginFailure: pluginFailureSchema.optional(),
   prompt: textSchema,
+  provenance: trialProvenanceSchema.optional(),
   rawArtifacts: z.array(textSchema),
   schemaVersion: z.literal(1),
   startedAt: timestampSchema,
   targetDigest: digestSchema,
   trialIndex: nonnegativeIntegerSchema,
+  usage: trialUsageSchema.optional(),
 });
 const assertionAggregateSchema = z.strictObject({
   assertionId: textSchema,

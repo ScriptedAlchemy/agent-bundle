@@ -94,6 +94,7 @@ const MetricCell = ({ cell }: { readonly cell: ComparisonMetricCell | undefined 
       <div><dt>pass^k</dt><dd>{cell.passPowerK}</dd></div>
       <div><dt>Mean duration</dt><dd>{cell.meanDuration}</dd></div>
       <div><dt>Recorded usage</dt><dd>{cell.usage}</dd></div>
+      <div><dt>Recorded provenance</dt><dd>{cell.provenance}</dd></div>
     </dl>
     <p className={`comparison-evidence comparison-evidence--${cell.evidence}`}>{cell.evidenceLabel}</p>
   </td>;

@@ -90,11 +90,17 @@ const trial = (overrides: Partial<EvalTrialRecord>): EvalTrialRecord => ({
   model: 'deterministic',
   outcome: 'pass',
   prompt: 'Report the highest-risk regression.',
+  provenance: {
+    hostCliVersion: '2.1.232',
+    invocation: { mode: 'automatic' },
+    semanticGrader: null,
+  },
   rawArtifacts: ['artifacts/portable-1/evidence.json'],
   schemaVersion: 1,
   startedAt: '2026-08-17T00:00:00.500Z',
   targetDigest,
   trialIndex: 0,
+  usage: { inputTokens: 9, outputTokens: 3 },
   ...overrides,
 });
 
@@ -168,6 +174,12 @@ it('renders each trial outcome with the exact target digest of the artifact it e
   expect(markup).toContain('portable-1-activation');
   expect(markup).toContain('The fixture did not record risk low.');
   expect(markup).toContain('EVAL_PLUGIN_ASSERTION_FAILED');
+  expect(markup).toContain('Host CLI version');
+  expect(markup).toContain('2.1.232');
+  expect(markup).toContain('Invocation');
+  expect(markup).toContain('automatic');
+  expect(markup).toContain('Recorded usage');
+  expect(markup).toContain('9 input tokens · 3 output tokens');
 });
 
 it('presents an inconclusive trial distinctly from a failing trial', () => {

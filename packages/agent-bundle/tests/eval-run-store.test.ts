@@ -223,6 +223,58 @@ it('round-trips bounded provenance and normalized token usage with a trial', asy
   });
 });
 
+it('rejects path-shaped or credential-shaped trial provenance without echoing it', async () => {
+  await withProject(async (root) => {
+    const writer = await createEvalRun(runOptions(root));
+    try {
+      for (const provenance of [
+        {
+          hostCliVersion: '2.1.232',
+          invocation: { mode: 'explicit' as const, skill: '../outside' },
+          semanticGrader: null,
+        },
+        {
+          hostCliVersion: 'sk-proj-0123456789abcdefghijklmnopqrstuv',
+          invocation: { mode: 'automatic' as const },
+          semanticGrader: null,
+        },
+        ...['C:private', 'C:\\private', 'C:/private', '\\\\server\\share', 'file:///private/cli'].map((hostCliVersion) => ({
+          hostCliVersion,
+          invocation: { mode: 'automatic' as const },
+          semanticGrader: null,
+        })),
+      ]) {
+        await expect(writer.writeTrial(trialInput({ provenance }))).rejects.toMatchObject({
+          code: 'EVAL_RUN_RECORD_INVALID',
+          message: 'Eval trial provenance contains an unsafe identifier.',
+        });
+      }
+    } finally {
+      await writer.close();
+    }
+  });
+});
+
+it('round-trips an explicitly unrecorded semantic grader without treating it as no grader', async () => {
+  await withProject(async (root) => {
+    const writer = await createEvalRun(runOptions(root));
+    try {
+      const written = await writer.writeTrial(trialInput({
+        provenance: {
+          hostCliVersion: 'agent-bundle@0.1.0',
+          invocation: { mode: 'explicit', skill: 'review:review' },
+          semanticGrader: { state: 'unrecorded' },
+        },
+      }));
+
+      expect(written.provenance?.semanticGrader).toEqual({ state: 'unrecorded' });
+      expect(await readEvalTrials(writer.directory)).toEqual([written]);
+    } finally {
+      await writer.close();
+    }
+  });
+});
+
 it('publishes JSON documents by rename and leaves no staging file behind', async () => {
   await withProject(async (root) => {
     const writer = await createEvalRun(runOptions(root));
