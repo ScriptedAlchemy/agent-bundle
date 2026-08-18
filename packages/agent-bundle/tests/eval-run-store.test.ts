@@ -197,6 +197,26 @@ it('retains safe generated artifact segments that begin with punctuation', async
   });
 });
 
+it('round-trips forbidden MCP-call assertion results', async () => {
+  await withProject(async (root) => {
+    const writer = await createEvalRun(runOptions(root));
+    try {
+      const assertion = {
+        assertionId: 'no-mcp-call:billing/charge',
+        detail: 'billing/charge was not called.',
+        evidence: 'observed',
+        kind: 'no-mcp-call',
+        outcome: 'pass',
+      } as const;
+      await writer.writeTrial(trialInput({ assertions: [assertion] }));
+
+      expect((await readEvalTrials(writer.directory))[0]?.assertions).toEqual([assertion]);
+    } finally {
+      await writer.close();
+    }
+  });
+});
+
 it('round-trips bounded provenance and normalized token usage with a trial', async () => {
   await withProject(async (root) => {
     const writer = await createEvalRun(runOptions(root));

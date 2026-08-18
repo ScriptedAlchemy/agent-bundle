@@ -379,9 +379,7 @@ class OpenedEvalArtifact implements EvalArtifactReader {
 
   close(): Promise<void> {
     if (this.#closePromise !== undefined) return this.#closePromise;
-    this.#closePromise = Promise.resolve().then(async () => {
-      this.#onClose();
-    });
+    this.#closePromise = Promise.resolve().then(() => { this.#onClose(); });
     return this.#closePromise;
   }
 }

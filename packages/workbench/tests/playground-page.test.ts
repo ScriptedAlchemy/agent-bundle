@@ -292,6 +292,23 @@ it('aborts and rejects a stale catalog completion before accepting a replacement
   expect(accepted).toEqual(['B']);
 });
 
+it('keeps a reentrant catalog replacement distinct from the outer lease that triggered it', () => {
+  const lifecycle = createPlaygroundCatalogLifecycle();
+  const client = {} as PlaygroundClient;
+  const first = lifecycle.begin({ client, epochId: 'epoch-A' });
+  let nested: ReturnType<typeof lifecycle.begin> | undefined;
+  first.signal.addEventListener('abort', () => {
+    nested = lifecycle.begin({ client, epochId: 'epoch-B' });
+  }, { once: true });
+
+  const outer = lifecycle.begin({ client, epochId: 'epoch-C' });
+
+  expect(nested).toBeDefined();
+  expect(nested?.key.generation).not.toBe(outer.key.generation);
+  expect(nested?.current()).toBe(false);
+  expect(outer.current()).toBe(true);
+});
+
 it('renders the pinned server epoch and persisted event references, not a rebuilt current epoch', () => {
   const markup = renderToStaticMarkup(createElement(PlaygroundTraceView, {
     view: playgroundViewFor({ epoch, events: [event(1), event(2)], exported: undefined, selectedRefs: ['events.jsonl#2'], session }),

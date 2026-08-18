@@ -12,6 +12,7 @@ import { normalizeEvalConfig } from '../eval/config.ts';
 import { redactEvalCredentialText } from '../eval/credentials.ts';
 import { discoverEvalSuites, type DiscoveredEvalSuite } from '../eval/discovery.ts';
 import { planEvalFixture, type EvalFixturePlan } from '../eval/fixtures.ts';
+import { provenanceIdentifierPattern } from '../eval/provenance.ts';
 import type { EvalTrialRecord, EvalTrialWriter } from '../eval/run-store.ts';
 import { normalizeEvalCase } from '../eval/suite.ts';
 import type { EvalCase } from '../eval/types.ts';
@@ -281,7 +282,7 @@ const hardcodedProgress = (phase: NativePlaygroundProgress): PlaygroundEventInpu
 
 const safeNativeProvenanceText = (value: string, projectRoot: string): string => {
   const redacted = safeDevWireText(redactEvalCredentialText(value), projectRoot);
-  return /^[A-Za-z0-9][A-Za-z0-9_.:@-]{0,127}$/u.test(redacted) ? redacted : '[REDACTED]';
+  return provenanceIdentifierPattern.test(redacted) ? redacted : '[REDACTED]';
 };
 
 const nativeTrialProvenance = (trial: EvalTrialRecord, projectRoot: string): PlaygroundJsonObject => {

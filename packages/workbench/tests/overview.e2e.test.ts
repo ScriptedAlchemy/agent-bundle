@@ -149,6 +149,58 @@ const expectSafeLaunchConfiguration = async (page: Page, { command, compiledEntr
   expect(await launchConfiguration.textContent()).not.toContain('fixture-secret');
 };
 
+e2e('preserves a direct Runtime deep link until capability discovery succeeds', { timeout: 120_000 }, async ({ page }) => {
+  const fixture = await startRuntimePlaygroundFixture();
+  let releaseRuntimeStatus = (): void => undefined;
+  const runtimeStatusGate = new Promise<void>((resolve) => { releaseRuntimeStatus = resolve; });
+  let runtimeStatusRequests = 0;
+  await page.route(`${fixture.url}/api/runtime/status`, async (route) => {
+    runtimeStatusRequests += 1;
+    await runtimeStatusGate;
+    await route.continue();
+  });
+  try {
+    await page.goto(`${fixture.url}#runtime`, { waitUntil: 'domcontentloaded' });
+    await expect.poll(() => runtimeStatusRequests, { timeout: browserTimeout }).toBe(1);
+    expect(new URL(page.url()).hash).toBe('#runtime');
+
+    releaseRuntimeStatus();
+    await expect(page.getByRole('heading', { name: 'Runtime Playground' })).toBeVisible({ timeout: 15_000 });
+    expect(new URL(page.url()).hash).toBe('#runtime');
+  } finally {
+    releaseRuntimeStatus();
+    await fixture.close();
+  }
+});
+
+e2e('redirects a direct Runtime deep link only after capability discovery reports unavailable', { timeout: 60_000 }, async ({ page }) => {
+  await buildWorkbench();
+  const project = await createProjectFixture();
+  const { server } = await startFrozenEpochServer(project.root);
+  let releaseProjectStatus = (): void => undefined;
+  const projectStatusGate = new Promise<void>((resolve) => { releaseProjectStatus = resolve; });
+  let projectStatusRequests = 0;
+  await page.route(`${server.url}/api/project/status`, async (route) => {
+    projectStatusRequests += 1;
+    await projectStatusGate;
+    await route.continue();
+  });
+  try {
+    await page.goto(`${server.url}#runtime`, { waitUntil: 'domcontentloaded' });
+    await expect.poll(() => projectStatusRequests, { timeout: browserTimeout }).toBe(1);
+    expect(new URL(page.url()).hash).toBe('#runtime');
+
+    releaseProjectStatus();
+    await expect(page.getByRole('heading', { name: 'Project overview' })).toBeVisible({ timeout: browserTimeout });
+    expect(new URL(page.url()).hash).toBe('#overview');
+    expect(await page.locator('a[href="#runtime"]').count()).toBe(0);
+  } finally {
+    releaseProjectStatus();
+    await server.close();
+    await removeProjectFixture(project.root);
+  }
+});
+
 e2e('offers the host-owned MCP playground handoff only after a selected Runtime App succeeds', { timeout: 120_000 }, async ({ page }) => {
   const fixture = await startRuntimePlaygroundFixture();
   let clientPage: Page | undefined;

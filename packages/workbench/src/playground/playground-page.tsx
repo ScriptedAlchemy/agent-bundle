@@ -258,8 +258,15 @@ export interface PlaygroundCatalogLifecycle {
   invalidate(): void;
 }
 
-/** Every request owns a key, so a late catalog cannot repopulate a replacement client or artifact epoch. */
-export const createPlaygroundCatalogLifecycle = (): PlaygroundCatalogLifecycle => {
+interface GenerationLease {
+  abort(): void;
+  current(): boolean;
+  readonly generation: number;
+  readonly signal: AbortSignal;
+}
+
+/** One live request at a time: beginning a lease synchronously retires and aborts the previous one. */
+const createGenerationLifecycle = (): { begin(): GenerationLease; invalidate(): void } => {
   let active: { readonly controller: AbortController; readonly generation: number } | undefined;
   let generation = 0;
   const invalidate = (): void => {
@@ -269,44 +276,13 @@ export const createPlaygroundCatalogLifecycle = (): PlaygroundCatalogLifecycle =
     previous?.controller.abort();
   };
   return Object.freeze({
-    begin: (next: Omit<PlaygroundCatalogKey, 'generation'>): PlaygroundCatalogLease => {
+    begin: (): GenerationLease => {
       const previous = active;
       active = undefined;
       previous?.controller.abort();
       generation += 1;
       const controller = new AbortController();
-      const key = Object.freeze({ ...next, generation });
-      active = { controller, generation };
-      return Object.freeze({
-        abort: () => {
-          if (active?.controller === controller) invalidate();
-          else controller.abort();
-        },
-        current: () => active?.generation === key.generation && !controller.signal.aborted,
-        key,
-        signal: controller.signal,
-      });
-    },
-    invalidate,
-  });
-};
-
-/** The page can retire a prior run synchronously before React commits its replacement state. */
-export const createPlaygroundObservationLifecycle = (): PlaygroundObservationLifecycle => {
-  let active: { readonly controller: AbortController; readonly generation: number } | undefined;
-  let generation = 0;
-  const invalidate = (): void => {
-    const previous = active;
-    active = undefined;
-    generation += 1;
-    previous?.controller.abort();
-  };
-  return Object.freeze({
-    begin: (): PlaygroundObservationLease => {
-      invalidate();
-      const controller = new AbortController();
-      const ownGeneration = generation + 1;
-      generation = ownGeneration;
+      const ownGeneration = generation;
       active = { controller, generation: ownGeneration };
       return Object.freeze({
         abort: () => {
@@ -314,6 +290,7 @@ export const createPlaygroundObservationLifecycle = (): PlaygroundObservationLif
           else controller.abort();
         },
         current: () => active?.generation === ownGeneration && !controller.signal.aborted,
+        generation: ownGeneration,
         signal: controller.signal,
       });
     },
@@ -349,6 +326,27 @@ export const cancelPlaygroundRun = async ({
     throw reason;
   }
 };
+
+/** Every request owns a key, so a late catalog cannot repopulate a replacement client or artifact epoch. */
+export const createPlaygroundCatalogLifecycle = (): PlaygroundCatalogLifecycle => {
+  const lifecycle = createGenerationLifecycle();
+  return Object.freeze({
+    begin: (next: Omit<PlaygroundCatalogKey, 'generation'>): PlaygroundCatalogLease => {
+      const lease = lifecycle.begin();
+      return Object.freeze({
+        abort: lease.abort,
+        current: lease.current,
+        key: Object.freeze({ ...next, generation: lease.generation }),
+        signal: lease.signal,
+      });
+    },
+    invalidate: lifecycle.invalidate,
+  });
+};
+
+/** The page can retire a prior run synchronously before React commits its replacement state. */
+export const createPlaygroundObservationLifecycle = (): PlaygroundObservationLifecycle =>
+  createGenerationLifecycle();
 
 /** Observes one immutable run identity; callers abort it before replacing the run or unmounting the page. */
 export const observePlaygroundRun = async ({ client, onEvents, onSession, run, signal, wait = delay }: PlaygroundRunObserverOptions): Promise<void> => {

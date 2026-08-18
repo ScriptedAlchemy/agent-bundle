@@ -9,6 +9,11 @@ import type {
 import { parseJsonWithoutDuplicateKeys, snapshotStrictJsonValue, type JsonValue } from '../../../agent-bundle/src/core/strict-json.ts';
 import type { EvalRunEvent, EvalRunRecord } from '../../../agent-bundle/src/eval/run-store.ts';
 import { awaitWithAbort, type ForegroundRequestAuthority } from '../mcp/mcp-route-client.ts';
+import {
+  nonnegativeIntegerSchema,
+  positiveIntegerSchema,
+  safeIntegerSchema,
+} from '../schema-atoms.ts';
 
 export interface EvalClientOptions {
   /** Workbench-owned memory-only session authority shared by all foreground routes. */
@@ -78,9 +83,6 @@ const invalidResponse = (): EvalClientError =>
 const isAbort = (error: unknown): boolean => error instanceof Error && error.name === 'AbortError';
 
 const textSchema = z.string();
-const safeIntegerSchema = z.number().refine(Number.isSafeInteger);
-const nonnegativeIntegerSchema = safeIntegerSchema.refine((value) => value >= 0);
-const positiveIntegerSchema = safeIntegerSchema.refine((value) => value >= 1);
 const provenanceIdentifier = /^[A-Za-z0-9][A-Za-z0-9_.:@-]{0,127}$/u;
 const provenancePathMarker = /(?:^|[^A-Za-z0-9])(?:file:|[A-Za-z]:|\\\\)/iu;
 const provenanceIdentifierSchema = z.string().refine((value) =>
@@ -89,7 +91,7 @@ const timestampSchema = z.string().refine(isIsoTimestamp);
 const digestSchema = z.string().regex(/^[a-f0-9]{64}$/u);
 const evidenceLevelSchema = z.enum(['inferred', 'observed', 'unavailable']);
 const outcomeSchema = z.enum(['fail', 'inconclusive', 'pass']);
-const assertionKindSchema = z.enum(['exit-code', 'mcp-call', 'no-skill-activation', 'outcome', 'skill-activation']);
+const assertionKindSchema = z.enum(['exit-code', 'mcp-call', 'no-mcp-call', 'no-skill-activation', 'outcome', 'skill-activation']);
 const diagnosticSchema = z.strictObject({
   code: textSchema,
   generatedPath: textSchema.optional(),

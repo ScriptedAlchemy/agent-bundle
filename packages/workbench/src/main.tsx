@@ -305,16 +305,26 @@ type WorkbenchPage = 'artifacts' | 'comparisons' | 'evals' | 'hooks' | 'logs' | 
 type RuntimeCapability = 'available' | 'unavailable' | 'unknown';
 type McpPresentation = 'inspector' | 'playground';
 
+const navigationItems: readonly Readonly<{ glyph: string; label: string; page: WorkbenchPage }>[] = [
+  { glyph: '⊞', label: 'Overview', page: 'overview' },
+  { glyph: '⌘', label: 'Skills', page: 'skills' },
+  { glyph: '⌥', label: 'Hooks', page: 'hooks' },
+  { glyph: '⌁', label: 'MCP playground', page: 'mcp' },
+  { glyph: '◫', label: 'Runtime', page: 'runtime' },
+  { glyph: '▤', label: 'Artifacts', page: 'artifacts' },
+  { glyph: '◇', label: 'Playground', page: 'playground' },
+  { glyph: '≡', label: 'Logs', page: 'logs' },
+  { glyph: '✓', label: 'Evals', page: 'evals' },
+  { glyph: '⇄', label: 'Comparisons', page: 'comparisons' },
+];
+
+const workbenchPages: ReadonlySet<string> = new Set(navigationItems.map((item) => item.page));
+
 const pageForHash = (runtimeAvailable = false): WorkbenchPage => {
-  if (window.location.hash === '#mcp' || window.location.hash === '#inspector') return 'mcp';
-  if (window.location.hash === '#runtime' && runtimeAvailable) return 'runtime';
-  if (window.location.hash === '#hooks') return 'hooks';
-  if (window.location.hash === '#artifacts') return 'artifacts';
-  if (window.location.hash === '#playground') return 'playground';
-  if (window.location.hash === '#logs') return 'logs';
-  if (window.location.hash === '#evals') return 'evals';
-  if (window.location.hash === '#comparisons') return 'comparisons';
-  return window.location.hash === '#skills' ? 'skills' : 'overview';
+  if (window.location.hash === '#inspector') return 'mcp';
+  const page = window.location.hash.slice(1);
+  if (page === 'runtime' && !runtimeAvailable) return 'overview';
+  return workbenchPages.has(page) ? page as WorkbenchPage : 'overview';
 };
 
 const mcpPresentationForHash = (): McpPresentation => window.location.hash === '#inspector' ? 'inspector' : 'playground';
@@ -326,97 +336,19 @@ const Navigation = ({ onNavigate, page, runtimeAvailable = false, runtimeDiagnos
   readonly runtimeDiagnostic?: string;
 }) => <aside className="rail" aria-label="Workbench navigation">
   <div className="brand">Agent Bundle</div>
-  <a
-    aria-current={page === 'overview' ? 'page' : undefined}
-    className={page === 'overview' ? 'nav-item nav-item--active' : 'nav-item'}
-    href="#overview"
-    onClick={(event) => { event.preventDefault(); onNavigate('overview'); }}
-  >
-    <span aria-hidden="true" className="nav-glyph">⊞</span>
-    Overview
-  </a>
-  <a
-    aria-current={page === 'skills' ? 'page' : undefined}
-    className={page === 'skills' ? 'nav-item nav-item--active' : 'nav-item'}
-    href="#skills"
-    onClick={(event) => { event.preventDefault(); onNavigate('skills'); }}
-  >
-    <span aria-hidden="true" className="nav-glyph">⌘</span>
-    Skills
-  </a>
-  <a
-    aria-current={page === 'hooks' ? 'page' : undefined}
-    className={page === 'hooks' ? 'nav-item nav-item--active' : 'nav-item'}
-    href="#hooks"
-    onClick={(event) => { event.preventDefault(); onNavigate('hooks'); }}
-  >
-    <span aria-hidden="true" className="nav-glyph">⌥</span>
-    Hooks
-  </a>
-  <a
-    aria-current={page === 'mcp' ? 'page' : undefined}
-    className={page === 'mcp' ? 'nav-item nav-item--active' : 'nav-item'}
-    href="#mcp"
-    onClick={(event) => { event.preventDefault(); onNavigate('mcp'); }}
-  >
-    <span aria-hidden="true" className="nav-glyph">⌁</span>
-    MCP playground
-  </a>
-  {runtimeAvailable ? <a
-    aria-current={page === 'runtime' ? 'page' : undefined}
-    className={page === 'runtime' ? 'nav-item nav-item--active' : 'nav-item'}
-    href="#runtime"
-    onClick={(event) => { event.preventDefault(); onNavigate('runtime'); }}
-  >
-    <span aria-hidden="true" className="nav-glyph">◫</span>
-    Runtime
-  </a> : undefined}
+  {navigationItems.filter((item) => item.page !== 'runtime' || runtimeAvailable).map((item) => (
+    <a
+      key={item.page}
+      aria-current={page === item.page ? 'page' : undefined}
+      className={page === item.page ? 'nav-item nav-item--active' : 'nav-item'}
+      href={`#${item.page}`}
+      onClick={(event) => { event.preventDefault(); onNavigate(item.page); }}
+    >
+      <span aria-hidden="true" className="nav-glyph">{item.glyph}</span>
+      {item.label}
+    </a>
+  ))}
   {runtimeDiagnostic === undefined ? undefined : <p className="runtime-capability-error" role="status">Runtime capability issue: {runtimeDiagnostic}</p>}
-  <a
-    aria-current={page === 'artifacts' ? 'page' : undefined}
-    className={page === 'artifacts' ? 'nav-item nav-item--active' : 'nav-item'}
-    href="#artifacts"
-    onClick={(event) => { event.preventDefault(); onNavigate('artifacts'); }}
-  >
-    <span aria-hidden="true" className="nav-glyph">▤</span>
-    Artifacts
-  </a>
-  <a
-    aria-current={page === 'playground' ? 'page' : undefined}
-    className={page === 'playground' ? 'nav-item nav-item--active' : 'nav-item'}
-    href="#playground"
-    onClick={(event) => { event.preventDefault(); onNavigate('playground'); }}
-  >
-    <span aria-hidden="true" className="nav-glyph">◇</span>
-    Playground
-  </a>
-  <a
-    aria-current={page === 'logs' ? 'page' : undefined}
-    className={page === 'logs' ? 'nav-item nav-item--active' : 'nav-item'}
-    href="#logs"
-    onClick={(event) => { event.preventDefault(); onNavigate('logs'); }}
-  >
-    <span aria-hidden="true" className="nav-glyph">≡</span>
-    Logs
-  </a>
-  <a
-    aria-current={page === 'evals' ? 'page' : undefined}
-    className={page === 'evals' ? 'nav-item nav-item--active' : 'nav-item'}
-    href="#evals"
-    onClick={(event) => { event.preventDefault(); onNavigate('evals'); }}
-  >
-    <span aria-hidden="true" className="nav-glyph">✓</span>
-    Evals
-  </a>
-  <a
-    aria-current={page === 'comparisons' ? 'page' : undefined}
-    className={page === 'comparisons' ? 'nav-item nav-item--active' : 'nav-item'}
-    href="#comparisons"
-    onClick={(event) => { event.preventDefault(); onNavigate('comparisons'); }}
-  >
-    <span aria-hidden="true" className="nav-glyph">⇄</span>
-    Comparisons
-  </a>
 </aside>;
 
 const Overview = ({ changedFiles, client, connectionError, onNavigate, runtimeAvailable = false, runtimeDiagnostic, status, onStatus }: {

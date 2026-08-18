@@ -22,6 +22,7 @@ export {
   evidenceRank,
   expectExitCode,
   expectMcpCall,
+  expectNoMcpCall,
   expectNoSkillActivation,
   expectOutcome,
   expectSkillActivation,
@@ -32,6 +33,7 @@ export {
 export type {
   EvalEvidenceOptions,
   ExpectMcpCallOptions,
+  ExpectNoMcpCallOptions,
   ExpectNoSkillActivationOptions,
   ExpectOutcomeOptions,
   ExpectSkillActivationOptions,
@@ -176,6 +178,7 @@ export type {
   EvalMcpCallAssertion,
   EvalMcpCallRecord,
   EvalMcpEvidence,
+  EvalNoMcpCallAssertion,
   EvalNoSkillActivationAssertion,
   EvalOutcomeAssertion,
   EvalPluginFailure,

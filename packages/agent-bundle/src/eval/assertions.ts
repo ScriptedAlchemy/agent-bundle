@@ -7,6 +7,7 @@ import type {
   EvalAssertionResult,
   EvalExitCodeAssertion,
   EvalMcpCallAssertion,
+  EvalNoMcpCallAssertion,
   EvalNoSkillActivationAssertion,
   EvalOutcomeAssertion,
   EvalSkillActivationAssertion,
@@ -21,6 +22,11 @@ export interface ExpectMcpCallOptions extends EvalEvidenceOptions {
   readonly atLeast?: number;
   readonly server: string;
   readonly tool: string;
+}
+
+export interface ExpectNoMcpCallOptions extends EvalEvidenceOptions {
+  readonly server: string;
+  readonly tool?: string;
 }
 
 export interface ExpectOutcomeOptions extends EvalEvidenceOptions {
@@ -96,6 +102,16 @@ export const expectMcpCall = (options: ExpectMcpCallOptions): EvalMcpCallAsserti
     minimumEvidence: requireMinimumEvidence(options.minimumEvidence, 'observed'),
     server: requireName(options.server, 'Expected MCP server name'),
     tool: requireName(options.tool, 'Expected MCP tool name'),
+  };
+  return Object.freeze({ ...expectation, id: assertionId(expectation.kind, expectation) });
+};
+
+export const expectNoMcpCall = (options: ExpectNoMcpCallOptions): EvalNoMcpCallAssertion => {
+  const expectation = {
+    kind: 'no-mcp-call' as const,
+    minimumEvidence: requireMinimumEvidence(options.minimumEvidence, 'observed'),
+    server: requireName(options.server, 'Forbidden MCP server name'),
+    ...(options.tool === undefined ? {} : { tool: requireName(options.tool, 'Forbidden MCP tool name') }),
   };
   return Object.freeze({ ...expectation, id: assertionId(expectation.kind, expectation) });
 };
@@ -181,6 +197,20 @@ const resolveMcpCall = (
     : result(assertion, level, 'fail', `${description}, expected at least ${assertion.atLeast}.`);
 };
 
+const resolveNoMcpCall = (
+  assertion: EvalNoMcpCallAssertion,
+  evidence: EvalTrialEvidence,
+): EvalAssertionResult => {
+  const { calls, level } = evidence.mcp;
+  if (!satisfiesEvidence(level, assertion.minimumEvidence)) return insufficient(assertion, level);
+  const matches = calls.filter((call) =>
+    call.server === assertion.server && (assertion.tool === undefined || call.tool === assertion.tool)).length;
+  const scope = assertion.tool === undefined ? assertion.server : `${assertion.server}/${assertion.tool}`;
+  return matches === 0
+    ? result(assertion, level, 'pass', `${scope} was never called.`)
+    : result(assertion, level, 'fail', `${scope} was called ${matches} time(s), expected none.`);
+};
+
 const resolveOutcomeScript = (
   assertion: EvalOutcomeAssertion,
   evidence: EvalTrialEvidence,
@@ -232,6 +262,7 @@ export const resolveEvalAssertion = (
 ): EvalAssertionResult => {
   if (assertion.kind === 'exit-code') return resolveExitCode(assertion, evidence);
   if (assertion.kind === 'mcp-call') return resolveMcpCall(assertion, evidence);
+  if (assertion.kind === 'no-mcp-call') return resolveNoMcpCall(assertion, evidence);
   if (assertion.kind === 'no-skill-activation') return resolveNoSkillActivation(assertion, evidence);
   if (assertion.kind === 'outcome') return resolveOutcomeScript(assertion, evidence);
   return resolveSkillActivation(assertion, evidence);

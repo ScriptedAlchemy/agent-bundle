@@ -2,6 +2,13 @@ import { z } from 'zod';
 
 import type { EvalComparison } from '../../../agent-bundle/src/eval/compare.ts';
 import type { ForegroundRequestAuthority } from '../mcp/mcp-route-client.ts';
+import {
+  nonnegativeIntegerSchema,
+  nonnegativeNumberSchema,
+  probabilitySchema,
+  safeIntegerSchema,
+  safeNumberSchema,
+} from '../schema-atoms.ts';
 
 export interface ComparisonClientOptions {
   /** Workbench-owned memory-only session authority shared by all foreground routes. */
@@ -29,11 +36,6 @@ const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
 const invalidResponse = (): ComparisonClientError =>
   new ComparisonClientError('AB8083', 'Eval comparison route returned an invalid response.');
 
-const safeIntegerSchema = z.number().refine(Number.isSafeInteger);
-const nonnegativeIntegerSchema = safeIntegerSchema.refine((value) => value >= 0);
-const safeNumberSchema = z.number().refine(Number.isFinite);
-const nonnegativeNumberSchema = safeNumberSchema.refine((value) => value >= 0);
-const probabilitySchema = safeNumberSchema.refine((value) => value >= 0 && value <= 1);
 const provenancePathMarker = /(?:^|[^A-Za-z0-9])(?:file:|[A-Za-z]:|\\\\)/iu;
 const provenanceIdentifierSchema = z.string()
   .regex(/^[A-Za-z0-9][A-Za-z0-9_.:@-]{0,127}$/u)

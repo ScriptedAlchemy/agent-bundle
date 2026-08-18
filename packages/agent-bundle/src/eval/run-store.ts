@@ -472,7 +472,7 @@ const requireArray = (value: JsonValue, code: RunStoreValidationCode, label: str
 
 const assertionOutcomes = new Set<EvalAssertionOutcome>(['fail', 'inconclusive', 'pass']);
 const evidenceLevels = new Set(['inferred', 'observed', 'unavailable']);
-const assertionKinds = new Set(['exit-code', 'mcp-call', 'no-skill-activation', 'outcome', 'skill-activation']);
+const assertionKinds = new Set(['exit-code', 'mcp-call', 'no-mcp-call', 'no-skill-activation', 'outcome', 'skill-activation']);
 const harnessFailureCodes = new Set(['EVAL_ARTIFACT_UNAVAILABLE', 'EVAL_FIXTURE_UNAVAILABLE', 'EVAL_GRADER_FAILED', 'EVAL_PROCESS_UNAVAILABLE', 'EVAL_TRACE_UNAVAILABLE']);
 const harnessFailureStages = new Set(['artifact', 'fixture', 'grader', 'preflight', 'trace']);
 const pluginFailureCodes = new Set(['EVAL_PLUGIN_ASSERTION_FAILED', 'EVAL_PLUGIN_PROCESS_FAILED', 'EVAL_PLUGIN_TIMED_OUT']);
