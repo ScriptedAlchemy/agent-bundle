@@ -42,7 +42,12 @@ const createApi = (overrides: TestAgentApiOptions = {}): AgentApi => new AgentAp
     evals: {
       list: async () => [],
       read: async (runId) => ({ run: { id: runId } }),
-      run: async () => ({ run: { id: 'run-a' } }),
+      start: async () => ({ run: { id: 'run-a' } }),
+      subscribeEvents: async () => ({
+        activate: () => undefined,
+        close: () => undefined,
+        replay: { cursor: { afterSequence: 0 }, events: [] },
+      }),
       suites: async () => ({ diagnostics: [], suites: [] }),
     },
     hooks: {
@@ -173,10 +178,21 @@ it('delegates every fixed tool through the official MCP transport with stable st
     },
     evals: {
       list: async () => { calls.push(['evals.list']); return [{ id: 'run-a' }]; },
-      read: async (runId) => { calls.push(['evals.read', runId]); return { id: runId }; },
-      run: async (request) => { calls.push(['evals.run', request]); return { id: 'run-b' }; },
+      read: async (runId: string) => { calls.push(['evals.read', runId]); return { id: runId }; },
+      start: async (request: Parameters<AgentApiOptions['evals']['start']>[0]) => { calls.push(['evals.start', request]); return { run: { id: 'run-b' } }; },
+      subscribeEvents: async (runId: string, afterSequence: number) => {
+        calls.push(['evals.subscribeEvents', runId, afterSequence]);
+        return {
+          activate: () => undefined,
+          close: () => undefined,
+          replay: {
+            cursor: { afterSequence: 1 },
+            events: [{ kind: 'run.completed', payload: {}, schemaVersion: 1, sequence: 1, timestamp: '2026-08-18T00:00:00.000Z' }],
+          },
+        };
+      },
       suites: async () => { calls.push(['evals.suites']); return { diagnostics: [], suites: [{ name: 'suite-a' }] }; },
-    },
+    } as unknown as AgentApiOptions['evals'],
     hooks: {
       list: async (options) => { calls.push(['hooks.list', options]); return [{ id: 'hook-a' }]; },
       simulate: async (options) => { calls.push(['hooks.simulate', options]); return { id: 'simulation-a' }; },
@@ -273,15 +289,84 @@ it('delegates every fixed tool through the official MCP transport with stable st
       })],
       ['evals.list'],
       ['evals.suites'],
-      ['evals.run', expect.objectContaining({
+      ['evals.start', expect.objectContaining({
         artifact: '/test/epoch-a',
         caseIds: ['case-a'],
+        harness: 'deterministic',
         suites: ['suite-a'],
         trials: 2,
       })],
+      ['evals.subscribeEvents', 'run-b', 0],
       ['evals.read', 'run-a'],
       ['diagnostics.list'],
     ]));
+  } finally {
+    await client.close();
+    await started.close();
+  }
+});
+
+it('admits deterministic evals against an atomically leased epoch until their terminal event', async () => {
+  const released = deferred<void>();
+  const requests: unknown[] = [];
+  let closeCalls = 0;
+  let notify!: (event: Readonly<{ readonly kind: string }>) => void;
+  const api = createApi({
+    epochs: {
+      acquireActiveEpochReference: async () => ({
+        close: async () => {
+          closeCalls += 1;
+          released.resolve();
+        },
+        epoch: { id: 'epoch-pinned' },
+        root: '/test/epoch-pinned',
+      }),
+      acquireEpochReference: async () => { throw new Error('The active epoch should be used when epoch is omitted.'); },
+      listEpochs: async () => [{ id: 'epoch-pinned' }],
+    },
+    evals: {
+      list: async () => [],
+      read: async (runId: string) => ({ run: { id: runId } }),
+      // The former synchronous path must not execute for an admitted Agent API run.
+      run: async () => { throw new Error('eval_run must use asynchronous admission.'); },
+      start: async (request: unknown) => {
+        requests.push(request);
+        return { run: { id: 'run-admitted' } };
+      },
+      subscribeEvents: async () => ({
+        activate: (listener: (event: Readonly<{ readonly kind: string }>) => void) => { notify = listener; },
+        close: () => undefined,
+        replay: { events: [] },
+      }),
+      suites: async () => ({ diagnostics: [], suites: [] }),
+    } as unknown as AgentApiOptions['evals'],
+  });
+  const started = await startApi({ api });
+  const client = new Client({ name: 'agent-api-eval-admission-client', version: '1.0.0' });
+  const transport = new StreamableHTTPClientTransport(new URL(`${started.url}/mcp`), {
+    authProvider: { token: async () => 'test-agent-api-token' },
+  });
+  try {
+    await client.connect(transport);
+    const result = await client.callTool({
+      arguments: { case_ids: ['case-a'], suites: ['suite-a'], trials: 2 },
+      name: 'eval_run',
+    });
+
+    expect(result.structuredContent).toEqual({ run: { id: 'run-admitted' } });
+    expect(requests).toEqual([expect.objectContaining({
+      artifact: '/test/epoch-pinned',
+      caseIds: ['case-a'],
+      harness: 'deterministic',
+      signal: expect.any(AbortSignal),
+      suites: ['suite-a'],
+      trials: 2,
+    })]);
+    expect(closeCalls).toBe(0);
+
+    notify({ kind: 'run.completed' });
+    await within(released.promise);
+    expect(closeCalls).toBe(1);
   } finally {
     await client.close();
     await started.close();
@@ -719,39 +804,43 @@ it('fails closed for diagnostic messages with paths, control characters, or secr
   }
 });
 
-it('combines the client disconnect signal with API shutdown for long-running tools', async () => {
+it('propagates API shutdown to an admitted eval lifecycle', async () => {
   const startedRun = deferred<void>();
   const aborted = deferred<void>();
+  let notify!: (event: Readonly<{ readonly kind: string }>) => void;
   const api = createApi({
     evals: {
       list: async () => [],
-      read: async (runId) => ({ id: runId }),
-      run: async (request) => new Promise((resolvePromise) => {
+      read: async (runId: string) => ({ id: runId }),
+      start: async (request: Parameters<AgentApiOptions['evals']['start']>[0]) => {
         startedRun.resolve();
-        (request.signal as AbortSignal).addEventListener('abort', () => {
+        request.signal?.addEventListener('abort', () => {
           aborted.resolve();
-          resolvePromise({ id: 'aborted' });
+          notify({ kind: 'run.cancelled' });
         }, { once: true });
+        return { run: { id: 'run-aborted' } };
+      },
+      subscribeEvents: async () => ({
+        activate: (listener: (event: Readonly<{ readonly kind: string }>) => void) => { notify = listener; },
+        close: () => undefined,
+        replay: { events: [] },
       }),
       suites: async () => ({ diagnostics: [], suites: [] }),
-    },
+    } as unknown as AgentApiOptions['evals'],
   });
   const started = await startApi({ api });
   const client = new Client({ name: 'agent-api-disconnect-client', version: '1.0.0' });
   const transport = new StreamableHTTPClientTransport(new URL(`${started.url}/mcp`), {
     authProvider: { token: async () => 'test-agent-api-token' },
   });
-  let pending: Promise<unknown> | undefined;
   try {
     await client.connect(transport);
-    pending = client.callTool({ name: 'eval_run' });
-    void pending.catch(() => undefined);
+    await client.callTool({ name: 'eval_run' });
     await startedRun.promise;
-    await client.close().catch(() => undefined);
+    const closing = api.close();
     await within(aborted.promise);
-    await api.close();
+    await closing;
   } finally {
-    await pending?.catch(() => undefined);
     await client.close().catch(() => undefined);
     await started.close();
   }
@@ -761,20 +850,27 @@ it('publishes one reentrant close promise before aborted operations observe shut
   const startedRun = deferred<void>();
   const holder: { api?: AgentApi } = {};
   let nestedClose: Promise<void> | undefined;
+  let notify!: (event: Readonly<{ readonly kind: string }>) => void;
   const api = createApi({
     evals: {
       list: async () => [],
-      read: async (runId) => ({ id: runId }),
-      run: async (request) => new Promise((resolvePromise) => {
+      read: async (runId: string) => ({ id: runId }),
+      start: async (request: Parameters<AgentApiOptions['evals']['start']>[0]) => {
         startedRun.resolve();
-        (request.signal as AbortSignal).addEventListener('abort', () => {
+        request.signal?.addEventListener('abort', () => {
           if (holder.api === undefined) throw new Error('Agent API is not ready.');
           nestedClose = holder.api.close();
-          resolvePromise({ id: 'closed' });
+          notify({ kind: 'run.cancelled' });
         }, { once: true });
+        return { run: { id: 'run-closed' } };
+      },
+      subscribeEvents: async () => ({
+        activate: (listener: (event: Readonly<{ readonly kind: string }>) => void) => { notify = listener; },
+        close: () => undefined,
+        replay: { events: [] },
       }),
       suites: async () => ({ diagnostics: [], suites: [] }),
-    },
+    } as unknown as AgentApiOptions['evals'],
   });
   holder.api = api;
   const started = await startApi({ api });
@@ -784,12 +880,11 @@ it('publishes one reentrant close promise before aborted operations observe shut
   });
   try {
     await client.connect(transport);
-    const pending = client.callTool({ name: 'eval_run' });
+    await client.callTool({ name: 'eval_run' });
     await startedRun.promise;
     const closing = api.close();
     await closing;
     expect(nestedClose).toBe(closing);
-    await pending;
   } finally {
     await client.close();
     await started.close();
