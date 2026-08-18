@@ -14,18 +14,21 @@ import { runClaudePreflight, type ClaudePreflight } from './claude-preflight.ts'
 import { runClaudeStreamProcess, type ClaudeProcessOptions, type ClaudeProcessOutcome } from './claude-process.ts';
 import { EvalHarnessError } from './errors.ts';
 import { materializeEvalFixture, type EvalFixturePlan } from './fixtures.ts';
-import { evalTrialId } from './harness.ts';
+import {
+  evalTrialId,
+  evidenceArtifactName,
+  pluginFailureFor,
+  trialOutcome,
+  unavailableEvidence,
+} from './harness.ts';
 import { evalScriptGraderSpec, runEvalGraders, type EvalGraderSpec } from './graders.ts';
 import type { PreparedEvalArtifact } from './artifact.ts';
 import type { EvalRunWriter, EvalTrialRecord } from './run-store.ts';
 import type {
   EvalAssertion,
-  EvalAssertionResult,
   EvalCase,
   EvalHarnessFailure,
-  EvalPluginFailure,
   EvalScriptOutcome,
-  EvalTrialEvidence,
 } from './types.ts';
 
 /** The grader sees the task, its assertions, the response, the trace, and the workspace: never a condition label. */
@@ -68,16 +71,8 @@ interface TrialGrading {
 }
 
 const claudeHost = 'claude';
-const evidenceArtifactName = 'evidence.json';
 const scriptOutcomes = Object.freeze(['fail', 'inconclusive', 'pass']);
 const pluginManifestSegments = Object.freeze(['.claude-plugin', 'plugin.json']);
-const unavailableEvidence: EvalTrialEvidence = Object.freeze({
-  mcp: Object.freeze({ calls: Object.freeze([]), level: 'unavailable' }),
-  process: Object.freeze({ level: 'unavailable', timedOut: false }),
-  scripts: Object.freeze({ level: 'unavailable', results: Object.freeze({}) }),
-  skillActivation: Object.freeze({ activated: Object.freeze([]), level: 'unavailable' }),
-});
-
 const harnessError = (
   code: ConstructorParameters<typeof EvalHarnessError>[0],
   message: string,
@@ -188,32 +183,6 @@ const traceFailureFor = (
   return stream.trace.length === 0
     ? harnessFailure('EVAL_TRACE_UNAVAILABLE', 'trace', 'Claude returned no stream-JSON events.')
     : undefined;
-};
-
-const pluginFailureFor = (
-  evidence: EvalTrialEvidence,
-  assertions: readonly EvalAssertionResult[],
-): EvalPluginFailure | undefined => {
-  if (evidence.process.timedOut) {
-    return Object.freeze({
-      code: 'EVAL_PLUGIN_TIMED_OUT',
-      message: 'The trial process did not exit before its timeout.',
-    });
-  }
-  if (evidence.process.exitCode !== undefined && evidence.process.exitCode !== 0) {
-    return Object.freeze({
-      code: 'EVAL_PLUGIN_PROCESS_FAILED',
-      message: `The trial process exited with code ${evidence.process.exitCode}.`,
-    });
-  }
-  return assertions.some((assertion) => assertion.outcome === 'fail')
-    ? Object.freeze({ code: 'EVAL_PLUGIN_ASSERTION_FAILED', message: 'At least one assertion failed.' })
-    : undefined;
-};
-
-const trialOutcome = (assertions: readonly EvalAssertionResult[]): EvalTrialRecord['outcome'] => {
-  if (assertions.some((assertion) => assertion.outcome === 'fail')) return 'fail';
-  return assertions.some((assertion) => assertion.outcome === 'inconclusive') ? 'inconclusive' : 'pass';
 };
 
 /**

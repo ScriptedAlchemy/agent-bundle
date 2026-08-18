@@ -71,10 +71,18 @@ interface McpCallLogResult {
 }
 
 const defaultProbeTimeoutMs = 60_000;
-const evidenceArtifactName = 'evidence.json';
+export const evidenceArtifactName = 'evidence.json';
 const unavailableActivation: EvalActivationEvidence = Object.freeze({
   activated: Object.freeze([]),
   level: 'unavailable',
+});
+
+/** Every channel unavailable: the shape a harness reports when it observed nothing at all. */
+export const unavailableEvidence: EvalTrialEvidence = Object.freeze({
+  mcp: Object.freeze({ calls: Object.freeze([]), level: 'unavailable' }),
+  process: Object.freeze({ level: 'unavailable', timedOut: false }),
+  scripts: Object.freeze({ level: 'unavailable', results: Object.freeze({}) }),
+  skillActivation: Object.freeze({ activated: Object.freeze([]), level: 'unavailable' }),
 });
 
 const harnessError = (
@@ -177,12 +185,12 @@ const readMcpCallLog = async (fixturePath: string, logPath: string): Promise<Mcp
   return Object.freeze({ calls: Object.freeze(calls), level: 'observed' });
 };
 
-const trialOutcome = (assertions: readonly EvalAssertionResult[]): EvalTrialRecord['outcome'] => {
+export const trialOutcome = (assertions: readonly EvalAssertionResult[]): EvalTrialRecord['outcome'] => {
   if (assertions.some((assertion) => assertion.outcome === 'fail')) return 'fail';
   return assertions.some((assertion) => assertion.outcome === 'inconclusive') ? 'inconclusive' : 'pass';
 };
 
-const pluginFailureFor = (
+export const pluginFailureFor = (
   evidence: EvalTrialEvidence,
   assertions: readonly EvalAssertionResult[],
 ): EvalPluginFailure | undefined => {

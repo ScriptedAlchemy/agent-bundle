@@ -21,7 +21,11 @@ import {
   type PlaygroundTraceSource,
 } from '../services/playground-service.ts';
 
-/** Trace events legitimately carry raw protocol frames, so this exceeds the MCP route limit. */
+/**
+ * Trace events legitimately carry raw protocol frames, so this exceeds the MCP
+ * route limit. It carries its own code because AB8010 is the wire contract for
+ * the 64 KiB limit every other route group enforces.
+ */
 const bodyLimit = 1024 * 1024;
 const maxValueDepth = 32;
 const streamQueueByteLimit = 1024 * 1024;
@@ -156,7 +160,7 @@ const readBody = async (request: IncomingMessage): Promise<string> => new Promis
   });
   request.once('end', () => {
     if (tooLarge) {
-      rejectPromise(requestError(diagnostic('AB8010', 'Request body exceeds 1 MiB.', 413)));
+      rejectPromise(requestError(diagnostic('AB8085', 'Request body exceeds 1 MiB.', 413)));
       return;
     }
     resolvePromise(Buffer.concat(chunks).toString('utf8'));
@@ -487,7 +491,11 @@ export class PlaygroundRoutes {
       if (response.write(frame)) return;
       pendingBytes += bytes;
       await new Promise<void>((resolvePromise) => {
+        // Exactly one of these fires; leaving the other registered would retain
+        // this closure for the life of the connection, one per backpressured frame.
         const settle = (): void => {
+          response.off('drain', settle);
+          response.off('close', settle);
           pendingBytes -= bytes;
           resolvePromise();
         };
@@ -544,6 +552,5 @@ export class PlaygroundRoutes {
       if (closed || response.writableEnded || response.destroyed) return;
       await write(frame);
     }
-    backlogBytes = 0;
   }
 }

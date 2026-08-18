@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto';
 import { rm } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
@@ -15,12 +14,13 @@ import { planEvalFixture, type EvalFixturePlan } from '../eval/fixtures.ts';
 import { createEvalHarness, runDeterministicTrial, type EvalHarness } from '../eval/harness.ts';
 import {
   createEvalRun,
-  listEvalRuns,
-  readEvalRun,
-  readEvalTrials,
   type EvalArtifactBinding,
   type EvalRunRecord,
   type EvalTrialRecord,
+  listEvalRuns,
+  mintRunId,
+  readEvalRun,
+  readEvalTrials,
 } from '../eval/run-store.ts';
 import type { EvalAssertionKind, EvalCase, EvalInvocation } from '../eval/types.ts';
 
@@ -120,9 +120,6 @@ const safeRunId = /^[a-z0-9][a-z0-9._-]*$/u;
 
 const serviceError = (code: EvalServiceErrorCode, message: string): EvalServiceError =>
   new EvalServiceError(code, message);
-
-const mintRunId = (createdAt: Date): string =>
-  `${createdAt.toISOString().replace(/[-:.]/gu, '').replace('T', 't').toLowerCase()}-${randomUUID().slice(0, 8)}`;
 
 const projectRelative = (projectRoot: string, path: string): string =>
   relative(projectRoot, path).replaceAll('\\', '/');

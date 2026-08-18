@@ -597,3 +597,24 @@ it('closes every open stream when the route group closes', async () => {
     await started.close();
   }
 });
+
+it('reports its own larger body limit rather than reusing the 64 KiB wire code', async () => {
+  const service = new RecordingService();
+  const started = await startRoutes(service);
+
+  try {
+    const oversized = await post(`${started.url}/api/playground/sessions/session-a/events`, {
+      kind: 'hook.simulated',
+      raw: { padding: 'x'.repeat(1024 * 1024 + 16) },
+      source: 'hook',
+      summary: 'Oversized.',
+    });
+    expect(oversized.status).toBe(413);
+    await expect(oversized.json()).resolves.toEqual({
+      diagnostic: { code: 'AB8085', message: 'Request body exceeds 1 MiB.' },
+    });
+    expect(service.calls).toEqual([]);
+  } finally {
+    await started.close();
+  }
+});

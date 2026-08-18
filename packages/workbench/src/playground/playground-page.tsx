@@ -147,7 +147,6 @@ export const PlaygroundTraceView = ({ onToggle, view }: PlaygroundTraceViewProps
  * native harness exists, every trace event arrives from an executed operation.
  */
 export const PlaygroundPage = ({ client, epoch, onSessionChange, session, targets }: PlaygroundPageProps) => {
-  const setSession = onSessionChange;
   const openedEpochId = useRef(epoch?.id);
   const [busy, setBusy] = useState(false);
   const [draftEvalCase, setDraftEvalCase] = useState<DraftEvalCase>();
@@ -179,8 +178,8 @@ export const PlaygroundPage = ({ client, epoch, onSessionChange, session, target
     setEvents([]);
     setExported(undefined);
     setSelectedRefs([]);
-    setSession(undefined);
-  }, [epoch?.id, setSession]);
+    onSessionChange(undefined);
+  }, [epoch?.id, onSessionChange]);
 
   useEffect(() => {
     if (sessionId === undefined) return;
@@ -225,7 +224,7 @@ export const PlaygroundPage = ({ client, epoch, onSessionChange, session, target
       setEvents([]);
       setExported(undefined);
       setSelectedRefs([]);
-      setSession(opened);
+      onSessionChange(opened);
     });
   };
 
@@ -234,14 +233,14 @@ export const PlaygroundPage = ({ client, epoch, onSessionChange, session, target
     await run(async () => {
       const replayed = await replayPlaygroundTrace(client, sessionId, view.cursor);
       setEvents((previous) => mergePlaygroundEvents(previous, replayed.events));
-      setSession(replayed.session);
+      onSessionChange(replayed.session);
     });
   };
 
   const finalize = async (): Promise<void> => {
     if (sessionId === undefined) return;
     await run(async () => {
-      setSession(await finalizePlaygroundOutcome(client, sessionId, {
+      onSessionChange(await finalizePlaygroundOutcome(client, sessionId, {
         ...(outcomeResponse.length === 0 ? {} : { response: outcomeResponse }),
         status: outcomeStatus,
       }));

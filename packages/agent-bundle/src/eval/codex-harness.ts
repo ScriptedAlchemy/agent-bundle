@@ -27,15 +27,19 @@ import {
 } from './codex-home.ts';
 import { codexPluginInstallPlan, codexPluginObserved, readCodexCandidatePlugin } from './codex-plugins.ts';
 import { materializeEvalFixture, type EvalFixturePlan } from './fixtures.ts';
-import { evalTrialId } from './harness.ts';
+import {
+  evalTrialId,
+  evidenceArtifactName,
+  pluginFailureFor,
+  trialOutcome,
+  unavailableEvidence,
+} from './harness.ts';
 import { evalScriptGraderSpec, runEvalGraders, type EvalGraderSpec } from './graders.ts';
 import type { PreparedEvalArtifact } from './artifact.ts';
 import type { EvalRunWriter, EvalTrialRecord } from './run-store.ts';
 import type {
-  EvalAssertionResult,
   EvalCase,
   EvalHarnessFailure,
-  EvalPluginFailure,
   EvalTrialEvidence,
 } from './types.ts';
 
@@ -93,17 +97,8 @@ const defaultHost = 'codex';
 const defaultKillGraceMs = 1_000;
 const defaultMaxOutputBytes = 4 * 1024 * 1024;
 const defaultTimeoutMs = 300_000;
-const evidenceArtifactName = 'evidence.json';
-
 const isErrno = (error: unknown, code: string): boolean =>
   typeof error === 'object' && error !== null && 'code' in error && error.code === code;
-
-const unavailableEvidence: EvalTrialEvidence = Object.freeze({
-  mcp: Object.freeze({ calls: Object.freeze([]), level: 'unavailable' }),
-  process: Object.freeze({ level: 'unavailable', timedOut: false }),
-  scripts: Object.freeze({ level: 'unavailable', results: Object.freeze({}) }),
-  skillActivation: Object.freeze({ activated: Object.freeze([]), level: 'unavailable' }),
-});
 
 const defaultCodexRunner: CodexCommandRunner = (command) => new Promise((resolvePromise, reject) => {
   const child = spawn(codexExecutable, [...command.args], {
@@ -164,32 +159,6 @@ const defaultCodexRunner: CodexCommandRunner = (command) => new Promise((resolve
   });
   child.once('close', (code) => settle(code ?? 1));
 });
-
-const trialOutcome = (assertions: readonly EvalAssertionResult[]): EvalTrialRecord['outcome'] => {
-  if (assertions.some((assertion) => assertion.outcome === 'fail')) return 'fail';
-  return assertions.some((assertion) => assertion.outcome === 'inconclusive') ? 'inconclusive' : 'pass';
-};
-
-const pluginFailureFor = (
-  evidence: EvalTrialEvidence,
-  assertions: readonly EvalAssertionResult[],
-): EvalPluginFailure | undefined => {
-  if (evidence.process.timedOut) {
-    return Object.freeze({
-      code: 'EVAL_PLUGIN_TIMED_OUT',
-      message: 'The trial process did not exit before its timeout.',
-    });
-  }
-  if (evidence.process.exitCode !== undefined && evidence.process.exitCode !== 0) {
-    return Object.freeze({
-      code: 'EVAL_PLUGIN_PROCESS_FAILED',
-      message: `The trial process exited with code ${evidence.process.exitCode}.`,
-    });
-  }
-  return assertions.some((assertion) => assertion.outcome === 'fail')
-    ? Object.freeze({ code: 'EVAL_PLUGIN_ASSERTION_FAILED', message: 'At least one assertion failed.' })
-    : undefined;
-};
 
 const activationSkills = (candidateSkills: readonly string[], evalCase: EvalCase): readonly string[] =>
   Object.freeze([...new Set([

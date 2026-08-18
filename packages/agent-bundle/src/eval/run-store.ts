@@ -378,7 +378,8 @@ const requireEvidenceLevel = (value: JsonValue, code: RunStoreValidationCode, la
   return value as 'inferred' | 'observed' | 'unavailable';
 };
 
-const mintRunId = (createdAt: Date): string =>
+/** The store validates the ids it mints, so every minting caller must share this format. */
+export const mintRunId = (createdAt: Date): string =>
   `${createdAt.toISOString().replace(/[-:.]/gu, '').replace('T', 't').toLowerCase()}-${randomUUID().slice(0, 8)}`;
 
 const parseOwner = (value: unknown): EvalRunOwner | undefined => {
