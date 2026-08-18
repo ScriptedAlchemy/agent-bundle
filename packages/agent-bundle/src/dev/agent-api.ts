@@ -18,6 +18,7 @@ import { toNodeHandler, type NodeMcpRequestHandler } from '@modelcontextprotocol
 
 import { stableJson } from '../core/digest.ts';
 import { snapshotStrictJsonValue } from '../core/strict-json.ts';
+import type { EvalService } from './eval-service.ts';
 import type { ProjectStatus } from './types.ts';
 
 export const agentApiToolNames = Object.freeze([
@@ -76,12 +77,7 @@ export interface AgentApiOptions {
   readonly coordinator: Readonly<{ readonly status: () => ProjectStatus }>;
   readonly diagnostics: Readonly<{ readonly list: () => Promise<unknown> }>;
   readonly epochs: AgentApiEpochStore;
-  readonly evals: Readonly<{
-    readonly list: () => Promise<unknown>;
-    readonly read: (runId: string) => Promise<unknown>;
-    readonly run: (request: Readonly<Record<string, unknown>>) => Promise<unknown>;
-    readonly suites: () => Promise<unknown>;
-  }>;
+  readonly evals: Pick<EvalService, 'cancel' | 'list' | 'read' | 'start' | 'subscribeEvents' | 'suites'>;
   readonly hooks: Readonly<{
     readonly list: (options: Readonly<{ readonly epochId: string; readonly target?: string }>) => Promise<unknown>;
     readonly simulate: (options: Readonly<{
@@ -104,7 +100,7 @@ export interface AgentApiOptions {
   readonly version?: string;
 }
 
-export type AgentApiCloseFailure = Readonly<{ readonly error: unknown; readonly resource: 'handler' }>;
+export type AgentApiCloseFailure = Readonly<{ readonly error: unknown; readonly resource: 'eval' | 'handler' }>;
 
 export class AgentApiCloseError extends Error {
   readonly failures: readonly AgentApiCloseFailure[];
@@ -256,10 +252,14 @@ const ownDataProperty = (value: unknown, key: string): unknown => {
 };
 
 const safeErrorCode = (error: unknown): string => {
-  const code = ownDataProperty(error, 'code');
-  return typeof code === 'string' && stableErrorCodes.has(code as never)
-    ? code
-    : 'AGENT_API_OPERATION_FAILED';
+  let current = error;
+  for (let depth = 0; depth < 2; depth += 1) {
+    const code = ownDataProperty(current, 'code');
+    if (typeof code === 'string' && stableErrorCodes.has(code as never)) return code;
+    current = ownDataProperty(current, 'cause');
+    if (current === undefined) break;
+  }
+  return 'AGENT_API_OPERATION_FAILED';
 };
 
 type AgentApiJsonRecord = Readonly<Record<string, unknown>>;
@@ -276,6 +276,12 @@ interface AgentApiProjectStatus {
   readonly artifact: unknown;
   readonly build: unknown;
   readonly source: Readonly<{ readonly diagnostics: readonly AgentApiDiagnostic[]; readonly revision?: string; readonly state: string }>;
+}
+
+/** Durable, path-free acknowledgement returned when an eval background job is admitted. */
+interface AgentApiEvalRunAdmission {
+  readonly id: string;
+  readonly status: 'admitted';
 }
 
 const maximumDiagnosticTextLength = 4_096;
@@ -332,6 +338,16 @@ const safeTimestamp = (value: unknown): string | undefined =>
   typeof value === 'string' && safeTimestampPattern.test(value) && Number.isFinite(Date.parse(value))
     ? value
     : undefined;
+
+/** Deliberately excludes run provenance, artifact bindings, and later execution results. */
+const evalRunAdmissionWireDto = (value: unknown): AgentApiEvalRunAdmission => {
+  const run = snapshotRecord(value);
+  const id = safeEpochId(run?.id);
+  if (id === undefined) {
+    throw apiError('AGENT_API_OPERATION_FAILED', 'Eval admission did not return a durable run identity.');
+  }
+  return Object.freeze({ id, status: 'admitted' });
+};
 
 /** Messages fail closed: any path-like, control, or secret-assignment text is never partially redacted. */
 const safeDiagnosticText = (value: unknown, fallback: string): string =>
@@ -556,6 +572,8 @@ export class AgentApi {
   #closing = false;
   readonly #coordinator: AgentApiOptions['coordinator'];
   readonly #diagnostics: AgentApiOptions['diagnostics'];
+  readonly #evalLifecycleFailures = new Set<unknown>();
+  readonly #evalLifecycles = new Map<AbortController, Promise<void>>();
   readonly #epochs: AgentApiEpochStore;
   readonly #evals: AgentApiOptions['evals'];
   readonly #handler: McpHttpHandler;
@@ -640,11 +658,25 @@ export class AgentApi {
     for (const operation of this.#operations.keys()) {
       operation.abort(apiError('AGENT_API_CLOSED', 'Agent API is closed.'));
     }
+    for (const lifecycle of this.#evalLifecycles.keys()) {
+      lifecycle.abort(apiError('AGENT_API_CLOSED', 'Agent API is closed.'));
+    }
     const handler = await Promise.allSettled([this.#handler.close()]);
-    await Promise.allSettled([...this.#operations.values()]);
-    const failures = handler.flatMap((result): readonly AgentApiCloseFailure[] => result.status === 'rejected'
-      ? [Object.freeze({ error: result.reason, resource: 'handler' as const })]
-      : []);
+    while (this.#operations.size > 0 || this.#evalLifecycles.size > 0) {
+      for (const operation of this.#operations.keys()) {
+        operation.abort(apiError('AGENT_API_CLOSED', 'Agent API is closed.'));
+      }
+      for (const lifecycle of this.#evalLifecycles.keys()) {
+        lifecycle.abort(apiError('AGENT_API_CLOSED', 'Agent API is closed.'));
+      }
+      await Promise.allSettled([...this.#operations.values(), ...this.#evalLifecycles.values()]);
+    }
+    const failures: AgentApiCloseFailure[] = [
+      ...handler.flatMap((result): readonly AgentApiCloseFailure[] => result.status === 'rejected'
+        ? [Object.freeze({ error: result.reason, resource: 'handler' as const })]
+        : []),
+      ...[...this.#evalLifecycleFailures].map((error) => Object.freeze({ error, resource: 'eval' as const })),
+    ];
     if (failures.length > 0) throw new AgentApiCloseError(failures);
   }
 
@@ -714,21 +746,89 @@ export class AgentApi {
     server.registerTool('evals_list', { inputSchema: noArguments }, async (_arguments, context) =>
       this.#tool(context.mcpReq.signal, async () => ({ runs: await this.#evals.list(), suites: await this.#evals.suites() })));
     server.registerTool('eval_run', { inputSchema: evalRunSchema }, async (arguments_, context) =>
-      this.#tool(context.mcpReq.signal, async (signal) => this.#withEpoch(optionalStringArgument(asRecord(arguments_), 'epoch'), async (_epochId, root) => {
+      this.#tool(context.mcpReq.signal, async (signal) => {
         const args = asRecord(arguments_);
         const caseIds = stringListArgument(args, 'case_ids');
         const suites = stringListArgument(args, 'suites');
         const trials = optionalIntegerArgument(args, 'trials');
-        return {
-          run: await this.#evals.run({
-            artifact: root,
-            ...(caseIds === undefined ? {} : { caseIds }),
-            ...(suites === undefined ? {} : { suites }),
-            ...(trials === undefined ? {} : { trials }),
-            signal,
-          }),
+        const requestedEpochId = optionalStringArgument(args, 'epoch');
+        const reference = requestedEpochId === undefined
+          ? await this.#epochs.acquireActiveEpochReference()
+          : await this.#epochs.acquireEpochReference(requestedEpochId);
+        const lifecycle = new AbortController();
+        const lifecycleSettled = settlement<void>();
+        this.#evalLifecycles.set(lifecycle, lifecycleSettled.promise);
+        let lifecycleCompleted = false;
+        const completeLifecycle = (): void => {
+          if (lifecycleCompleted) return;
+          lifecycleCompleted = true;
+          this.#evalLifecycles.delete(lifecycle);
+          lifecycleSettled.resolve();
         };
-      })));
+        const abortAdmission = (): void => lifecycle.abort(signal.reason);
+        signal.addEventListener('abort', abortAdmission, { once: true });
+        if (signal.aborted) abortAdmission();
+        let released: Promise<void> | undefined;
+        let admission: Awaited<ReturnType<AgentApiOptions['evals']['start']>> | undefined;
+        let subscription: Awaited<ReturnType<AgentApiOptions['evals']['subscribeEvents']>> | undefined;
+        const release = (options: Readonly<{ readonly cancelRun: boolean; readonly retainFailure: boolean }>): Promise<void> => {
+          released ??= Promise.resolve().then(async () => {
+            const cancellation = options.cancelRun && admission !== undefined
+              ? await Promise.allSettled([this.#evals.cancel(admission.run.id)])
+              : [];
+            const closingSubscription = subscription;
+            const resources = await Promise.allSettled([
+              ...(closingSubscription === undefined ? [] : [Promise.resolve().then(() => closingSubscription.close())]),
+              reference.close(),
+            ]);
+            const failures = [...cancellation, ...resources]
+              .flatMap((result) => result.status === 'rejected' ? [result.reason] : []);
+            if (failures.length > 0) {
+              throw new AggregateError(failures, 'Agent API eval lifecycle cleanup failed.', { cause: failures[0] });
+            }
+          }).catch((error) => {
+            if (options.retainFailure) this.#evalLifecycleFailures.add(error);
+            throw error;
+          }).finally(completeLifecycle);
+          return released;
+        };
+        try {
+          try {
+            admission = await this.#evals.start({
+              artifact: reference.root,
+              ...(caseIds === undefined ? {} : { caseIds }),
+              harness: 'deterministic',
+              ...(suites === undefined ? {} : { suites }),
+              ...(trials === undefined ? {} : { trials }),
+              signal: lifecycle.signal,
+            });
+          } finally {
+            signal.removeEventListener('abort', abortAdmission);
+          }
+          subscription = await this.#evals.subscribeEvents(admission.run.id, 0);
+          const eventSubscription = subscription;
+          const terminal = (kind: string): boolean =>
+            kind === 'run.cancelled' || kind === 'run.completed' || kind === 'run.failed';
+          if (eventSubscription.replay.events.some((event) => terminal(event.kind))) {
+            await release({ cancelRun: false, retainFailure: true });
+          }
+          else eventSubscription.activate((event) => {
+            if (terminal(event.kind)) void release({ cancelRun: false, retainFailure: true }).catch(() => undefined);
+          });
+          return { run: evalRunAdmissionWireDto(admission.run) };
+        } catch (error) {
+          signal.removeEventListener('abort', abortAdmission);
+          const cleanup = release({ cancelRun: true, retainFailure: false });
+          lifecycle.abort(error);
+          const cleanupResult = await Promise.allSettled([cleanup]);
+          const failures = cleanupResult.flatMap((result) =>
+            result.status === 'rejected' && result.reason !== error ? [result.reason] : []);
+          if (failures.length > 0) {
+            throw new AggregateError([error, ...failures], 'Agent API eval admission cleanup failed.', { cause: error });
+          }
+          throw error;
+        }
+      }));
     server.registerTool('eval_get', { inputSchema: evalGetSchema }, async (arguments_, context) =>
       this.#tool(context.mcpReq.signal, async () => ({ run: await this.#evals.read(stringArgument(asRecord(arguments_), 'run_id')) })));
     server.registerTool('diagnostics_list', { inputSchema: noArguments }, async (_arguments, context) =>
