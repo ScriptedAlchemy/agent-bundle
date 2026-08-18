@@ -58,6 +58,7 @@ const mountedComparisonsFixture = async (): Promise<{ readonly close: () => Prom
     "const mount = (comparisonClient, evalClient) => flushSync(() => root.render(React.createElement(ComparisonsPage, { comparisonClient, evalClient })));",
     'mount(comparisonClientA, evalClientA);',
     'globalThis.__comparisonsClientScopeFixture = {',
+    '  replaceEvalClientOnly: () => mount(comparisonClientA, evalClientB),',
     '  replaceWithB: () => mount(comparisonClientB, evalClientB),',
     "  resolveLateA: () => lateA.resolve(comparison('late-a')),",
     '  stats: () => ({ compareCallsA, signalAborted: signalA?.aborted === true }),',
@@ -155,6 +156,36 @@ e2e('aborts and hides a stale comparison synchronously when its client is replac
     expect(await page.locator('body').innerText()).not.toContain('late-a');
     await expect(page.locator('#comparison-base')).toHaveValue('client-b-base');
     expect(pageErrors).toEqual([]);
+  } finally {
+    await fixture.close();
+  }
+});
+
+e2e('aborts an active comparison when only its Eval client is replaced', { timeout: 45_000 }, async ({ page }) => {
+  const fixture = await mountedComparisonsFixture();
+  try {
+    await page.goto(fixture.url);
+    await page.waitForTimeout(50);
+    const compare = page.getByRole('button', { name: 'Compare runs' });
+    await expect(compare).toBeEnabled({ timeout: browserTimeout });
+    await compare.click();
+    await page.waitForTimeout(50);
+    await compare.click();
+    await page.waitForFunction(() => (globalThis as typeof globalThis & {
+      __comparisonsClientScopeFixture: { stats(): { readonly compareCallsA: number } };
+    }).__comparisonsClientScopeFixture.stats().compareCallsA === 2);
+    await page.evaluate(() => (globalThis as typeof globalThis & {
+      __comparisonsClientScopeFixture: { replaceEvalClientOnly(): void };
+    }).__comparisonsClientScopeFixture.replaceEvalClientOnly());
+    expect(await page.evaluate(() => (globalThis as typeof globalThis & {
+      __comparisonsClientScopeFixture: { stats(): { readonly signalAborted: boolean } };
+    }).__comparisonsClientScopeFixture.stats().signalAborted)).toBe(true);
+
+    await page.evaluate(() => (globalThis as typeof globalThis & {
+      __comparisonsClientScopeFixture: { resolveLateA(): void };
+    }).__comparisonsClientScopeFixture.resolveLateA());
+    await page.waitForTimeout(25);
+    expect(await page.locator('body').innerText()).not.toContain('late-a');
   } finally {
     await fixture.close();
   }
