@@ -1545,14 +1545,19 @@ e2e('retains the Overview and marks the foreground connection unavailable after 
   try {
     await page.goto(server.url);
     await expect(page.getByRole('heading', { name: 'Project overview' })).toBeVisible({ timeout: browserTimeout });
-    await page.route('**/api/project/status', (route) => route.fulfill({
-      body: JSON.stringify({ diagnostic: { code: 'AB8007', message: 'Request could not be completed.' } }),
-      contentType: 'application/json',
-      status: 500,
-    }));
+    let failedStatusRequests = 0;
+    await page.route('**/api/project/status', async (route) => {
+      failedStatusRequests += 1;
+      await route.fulfill({
+        body: JSON.stringify({ diagnostic: { code: 'AB8007', message: 'Request could not be completed.' } }),
+        contentType: 'application/json',
+        status: 500,
+      });
+    });
 
     await page.getByRole('button', { name: 'Rebuild' }).click();
 
+    await expect.poll(() => failedStatusRequests, { timeout: browserTimeout }).toBe(1);
     await expect(page.getByRole('status')).toContainText('Foreground server unavailable', { timeout: browserTimeout });
     await expect(page.getByRole('heading', { name: 'Project overview' })).toBeVisible({ timeout: browserTimeout });
     await expect(page.locator('.epoch-row--active')).toBeVisible({ timeout: browserTimeout });

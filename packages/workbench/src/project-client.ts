@@ -277,7 +277,6 @@ export class ProjectClient {
     } catch (error) {
       throw projectError(error);
     }
-    this.#listener?.(result.status);
     return result.status;
   }
 

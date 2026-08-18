@@ -587,6 +587,47 @@ it('reports one failed event refresh without an unhandled rejection and retains 
   }
 });
 
+it('does not report a successful rebuild as a recovered foreground refresh', async () => {
+  const stream = new RecordingEventSource();
+  const rebuildResponse = deferred<Response>();
+  const errors: unknown[] = [];
+  const statuses: string[] = [];
+  let statusRequests = 0;
+  const client = new ProjectClient({
+    events: () => stream,
+    fetch: withForegroundSession(async (input) => {
+      const route = String(input);
+      if (route === '/api/project/rebuild') return rebuildResponse.promise;
+      if (route === '/api/project/status') {
+        statusRequests += 1;
+        return statusRequests === 1
+          ? Response.json({ status: status() })
+          : new Response(null, { status: 500 });
+      }
+      throw new Error(`Unexpected project route ${JSON.stringify(route)}.`);
+    }),
+  });
+  await client.connect(() => statuses.push('status'), (reason) => errors.push(reason));
+  const rebuilding = client.rebuild();
+  stream.emit('source.changed', {
+    data: JSON.stringify({
+      occurredAt: '2026-08-16T12:00:00.000Z',
+      payload: { occurredAt: '2026-08-16T12:00:00.000Z', paths: ['src/rebuilt.ts'], reason: 'source-change' },
+      sequence: 26,
+      type: 'source.changed',
+    }),
+    lastEventId: '26',
+  });
+  await flushEvents();
+  expect(errors).toHaveLength(1);
+  expect(statuses).toEqual(['status']);
+
+  rebuildResponse.resolve(Response.json({ status: status('stale') }));
+  await expect(rebuilding).resolves.toMatchObject({ artifact: { state: 'stale' } });
+  expect(statuses).toEqual(['status']);
+  client.close();
+});
+
 it('suppresses a late event-refresh error after close', async () => {
   const stream = new RecordingEventSource();
   const response = deferred<Response>();
