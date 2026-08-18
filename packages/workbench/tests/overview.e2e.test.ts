@@ -655,6 +655,7 @@ e2e('restarts the real Runtime MCP App session when definition or transport auth
   const pageErrors: Error[] = [];
   const artifactMcpSessionRequests: string[] = [];
   const projectEventStreams: string[] = [];
+  const projectEventStreamCursors = new Map<number, string>();
   const runtimeMcpSessionRequests: string[] = [];
   const runtimeAppRequests: string[] = [];
   const runtimeRunRequests: string[] = [];
@@ -772,7 +773,11 @@ e2e('restarts the real Runtime MCP App session when definition or transport auth
   page.on('response', (response) => {
     const url = new URL(response.url());
     if (url.origin === fixture.url && response.request().method() === 'GET' && response.status() === 200 && url.pathname === '/api/project/events') {
+      const streamIndex = projectEventStreams.length;
       projectEventStreams.push(`${response.request().method()} ${url.pathname}`);
+      void response.request().allHeaders().then((headers) => {
+        projectEventStreamCursors.set(streamIndex, headers['last-event-id'] ?? '');
+      }).catch(() => undefined);
     }
     if (url.origin !== fixture.url || response.request().method() !== 'POST' || url.pathname !== '/api/runtime/apps') return;
     const index = runtimeAppCreates.findIndex((candidate) => candidate.response === undefined && JSON.stringify(candidate.body) === response.request().postData());
@@ -947,10 +952,6 @@ e2e('restarts the real Runtime MCP App session when definition or transport auth
     );
     expect(changedTransport).not.toBe(configSource);
     const transportEventStart = runtimeEvents.length;
-    const replayCursor = runtimeEvents.at(-1)?.lastEventId;
-    if (replayCursor === undefined || !/^(0|[1-9]\d*)$/u.test(replayCursor)) {
-      throw new Error('Runtime event stream did not expose a canonical cursor before replay disconnect.');
-    }
     await expect.poll(() => fixture.eventHubState.subscriptionCount, { timeout: 15_000 }).toBe(1);
     await page.context().setOffline(true);
     fixture.disconnectProjectEventStream();
@@ -989,14 +990,20 @@ e2e('restarts the real Runtime MCP App session when definition or transport auth
       'GET /api/project/events',
       'GET /api/project/events',
     ]);
+    await expect.poll(() => projectEventStreamCursors.size, { timeout: 15_000 }).toBe(2);
+    expect(projectEventStreamCursors.get(0)).toBe('');
+    const reconnectCursor = projectEventStreamCursors.get(1);
+    if (reconnectCursor === undefined || !/^(0|[1-9]\d*)$/u.test(reconnectCursor)) {
+      throw new Error('Native EventSource reconnect did not carry a canonical Last-Event-ID.');
+    }
     await expect.poll(() => replayGaps.length, { timeout: 15_000 }).toBe(1);
     const replayGap = replayGaps[0];
     if (replayGap === undefined) throw new Error('Project EventSource did not deliver a replay gap.');
     // An id-less SSE frame preserves the prior EventSource cursor rather than advancing it.
-    expect(replayGap.lastEventId).toBe(replayCursor);
+    expect(replayGap.lastEventId).toBe(reconnectCursor);
     expect(JSON.parse(replayGap.data)).toMatchObject({
       latestDroppedSequence: expect.any(Number),
-      requestedAfterSequence: Number(replayCursor),
+      requestedAfterSequence: Number(reconnectCursor),
       type: 'replay.gap',
     });
     await page.locator('.runtime-stage .mcp-app-preview iframe').waitFor({ state: 'detached', timeout: 15_000 });
