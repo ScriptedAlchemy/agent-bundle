@@ -752,6 +752,8 @@ it('leaves Agent API ownership to the foreground release rather than closing it 
     { close: async () => { closeOrder.push('coordinator'); } },
     { close: async () => { closeOrder.push('mcp-apps'); } },
     { close: async () => { closeOrder.push('playground'); } },
+    undefined,
+    undefined,
     { close: async () => { closeOrder.push('agent-api'); throw agentApiFailure; } },
   )).resolves.toBeUndefined();
   expect(closeOrder).toEqual(['playground', 'mcp-apps', 'mcp-sessions', 'coordinator']);
