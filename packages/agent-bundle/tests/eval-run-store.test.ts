@@ -70,6 +70,33 @@ const withProject = async (task: (root: string) => Promise<void>): Promise<void>
   }
 };
 
+type EvalRunStoreDurabilityTestHook = (
+  phase: 'after-event-write',
+  event: Readonly<{ readonly kind: string }>,
+  path: string,
+) => void;
+
+const evalRunStoreDurabilityTestHookKey = Symbol.for('agent-bundle.eval-run-store.durability-test-hook');
+
+const withEvalRunStoreDurabilityTestHook = async <T>(
+  hook: EvalRunStoreDurabilityTestHook,
+  operation: () => Promise<T>,
+): Promise<T> => {
+  const hooks = globalThis as typeof globalThis & Record<symbol, EvalRunStoreDurabilityTestHook | undefined>;
+  const previous = hooks[evalRunStoreDurabilityTestHookKey];
+  const previousNodeEnvironment = process.env.NODE_ENV;
+  hooks[evalRunStoreDurabilityTestHookKey] = hook;
+  process.env.NODE_ENV = 'test';
+  try {
+    return await operation();
+  } finally {
+    if (previous === undefined) delete hooks[evalRunStoreDurabilityTestHookKey];
+    else hooks[evalRunStoreDurabilityTestHookKey] = previous;
+    if (previousNodeEnvironment === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = previousNodeEnvironment;
+  }
+};
+
 it('publishes a schema-versioned run document with its exact target digest', async () => {
   await withProject(async (root) => {
     const writer = await createEvalRun(runOptions(root));
@@ -201,6 +228,34 @@ it('ignores and reports at most one incomplete trailing JSONL record', async () 
     expect(read.events.map((event) => event.kind)).toEqual(['trial.started', 'trial.completed']);
     expect(read.events.map((event) => event.sequence)).toEqual([1, 2]);
     expect(read.incompleteTrailingRecord).toBe('{"kind":"trial.started","payl');
+  });
+});
+
+it('retains a full event line when post-write durability fails', async () => {
+  await withProject(async (root) => {
+    const writer = await createEvalRun(runOptions(root));
+    const durabilityFailure = new Error('event sync failed after write');
+    let injected = false;
+    try {
+      await withEvalRunStoreDurabilityTestHook((phase, event) => {
+        if (phase === 'after-event-write' && event.kind === 'run.completed' && !injected) {
+          injected = true;
+          throw durabilityFailure;
+        }
+      }, async () => {
+        await expect(writer.appendEvent({ kind: 'run.completed', payload: {} })).rejects.toMatchObject({
+          event: { kind: 'run.completed' },
+          failures: [durabilityFailure],
+          name: 'EvalRunEventDurabilityError',
+        });
+      });
+
+      expect(injected).toBe(true);
+      expect((await readEvalRunEvents(writer.directory)).events.map((event) => event.kind)).toEqual(['run.completed']);
+      await expect(writer.close()).rejects.toThrow('closed with admitted write failures');
+    } finally {
+      await writer.close().catch(() => undefined);
+    }
   });
 });
 
