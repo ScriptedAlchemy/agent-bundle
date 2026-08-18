@@ -943,6 +943,85 @@ it('does not deadlock when a direct native Codex abort listener awaits a reentra
   }
 });
 
+it('does not deadlock when caller cancellation reaches a native Codex close listener', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-native-playground-external-close-'));
+  try {
+    const artifact = join(root, 'artifact');
+    const suiteDir = join(root, 'evals');
+    const normalCodexHome = join(root, 'normal-codex-home');
+    await Promise.all([
+      mkdir(join(artifact, 'codex', '.agents', 'plugins'), { recursive: true }),
+      mkdir(join(suiteDir, 'fixture'), { recursive: true }),
+      mkdir(normalCodexHome, { recursive: true }),
+    ]);
+    await Promise.all([
+      writeFile(join(artifact, 'codex', '.agents', 'plugins', 'marketplace.json'), JSON.stringify({ name: 'native-marketplace', plugins: [{ name: 'native-review', source: { path: './', source: 'local' } }] })),
+      writeFile(join(suiteDir, 'fixture', 'input.txt'), 'baseline only\n'),
+      writeFile(join(normalCodexHome, 'auth.json'), '{"opaque":"session"}\n'),
+    ]);
+    const reference = epoch('epoch-native-external-close', artifact, 'codex');
+    let started!: () => void;
+    const spawned = new Promise<void>((resolvePromise) => { started = resolvePromise; });
+    let reentrant: Promise<void> | undefined;
+    let abortHandlerCompleted = false;
+    const service = new NativePlaygroundService({
+      discover: async () => nativeSuite('codex', join(suiteDir, 'review.eval.ts')),
+      environment: Object.freeze({ CODEX_HOME: normalCodexHome }),
+      inspectArtifact: async (candidate) => Object.freeze({
+        binding: Object.freeze({ manifestPath: 'agent-bundle.manifest.json', source: 'explicit' as const, targetDigests: candidate.epoch.targetDigests }),
+        root: candidate.root,
+      }),
+      native: {
+        codexRun: async (command) => {
+          const step = command.args[0] === 'plugin' ? `${command.args[0]}.${command.args[1]}` : command.args[0];
+          if (step === 'plugin.list') return Object.freeze({ exitCode: 0, stderr: '', stdout: '{"installed":[{"name":"native-review","marketplaceName":"native-marketplace","installed":true,"enabled":true}]}' });
+          if (step !== 'exec') return Object.freeze({ exitCode: 0, stderr: '', stdout: 'codex-cli 0.147.0\n' });
+          started();
+          return new Promise((resolvePromise) => {
+            command.signal?.addEventListener('abort', () => {
+              void (async () => {
+                reentrant = service.close();
+                await reentrant;
+                abortHandlerCompleted = true;
+                resolvePromise(Object.freeze({ exitCode: 1, failure: 'cancelled', stderr: '', stdout: '' }));
+              })();
+            }, { once: true });
+          });
+        },
+      },
+      projectRoot: root,
+    });
+    const catalog = await service.catalog(reference);
+    const caller = new AbortController();
+    const running = service.run(await service.prepare(reference, {
+      caseId: catalog.cases[0]!.id,
+      fixtureId: catalog.fixtures[0]!.id,
+      host: 'codex',
+      modelPinId: catalog.modelPins[0]!.id,
+      operation: 'native.prompt',
+      prompt: 'Review the fixture.',
+      target: 'codex',
+    }), { emit: async () => undefined, signal: caller.signal });
+    await spawned;
+    caller.abort(new Error('caller cancelled'));
+    await Promise.resolve();
+    expect(reentrant).toBeDefined();
+    const closing = service.close();
+    expect(service.close()).toBe(closing);
+    const settled = await Promise.race([
+      closing.then(() => true, () => true),
+      new Promise<boolean>((resolvePromise) => { setTimeout(() => resolvePromise(false), 50); }),
+    ]);
+    expect(settled).toBe(true);
+    expect(reentrant).not.toBe(closing);
+    expect(abortHandlerCompleted).toBe(true);
+    await running;
+    expect((await readdir(join(root, '.agent-bundle'))).filter((entry) => entry.startsWith('native-playground-'))).toEqual([]);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
 it('drains a gated catalog discovery before close and never publishes it after close begins', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-native-playground-catalog-close-'));
   try {

@@ -634,7 +634,7 @@ export class NativePlaygroundService {
     this.#assertOpen();
     const controller = new AbortController();
     const externalSignal = options.signal;
-    const abortFromExternal = (): void => controller.abort(externalSignal.reason);
+    const abortFromExternal = (): void => this.#dispatchAbort(controller, externalSignal.reason);
     if (externalSignal.aborted) abortFromExternal();
     else externalSignal.addEventListener('abort', abortFromExternal, { once: true });
     this.#controllers.add(controller);
@@ -721,8 +721,8 @@ export class NativePlaygroundService {
   }
 
   close(): Promise<void> {
+    if (this.#abortDispatchDepth > 0) return this.#abortReentryCompletion;
     if (this.#closePromise !== undefined) {
-      if (this.#abortDispatchDepth > 0) return this.#abortReentryCompletion;
       return this.#closePromise;
     }
     let resolvePromise!: () => void;
@@ -739,13 +739,17 @@ export class NativePlaygroundService {
   async #close(): Promise<void> {
     this.#closed = true;
     for (const controller of this.#controllers) {
-      this.#abortDispatchDepth += 1;
-      try { controller.abort(new Error('Native Playground service is closed.')); }
-      finally { this.#abortDispatchDepth -= 1; }
+      this.#dispatchAbort(controller, new Error('Native Playground service is closed.'));
     }
     await Promise.allSettled([...this.#runs, ...this.#catalogs.values()]);
     this.#catalogs.clear();
     this.#catalogPublications.clear();
+  }
+
+  #dispatchAbort(controller: AbortController, reason: unknown): void {
+    this.#abortDispatchDepth += 1;
+    try { controller.abort(reason); }
+    finally { this.#abortDispatchDepth -= 1; }
   }
 
   async #snapshot(reference: NativePlaygroundEpochReference): Promise<CatalogSnapshot> {
