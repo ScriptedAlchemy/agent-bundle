@@ -37,6 +37,7 @@ export interface PlaygroundEpochAuthority {
 export interface PlaygroundDurableTraceStore {
   append(sessionId: string, input: PlaygroundEventInput): Promise<PlaygroundTraceEvent>;
   close(): Promise<void>;
+  closeSession(sessionId: string): Promise<void>;
   export(sessionId: string): Promise<PlaygroundExport>;
   finalize(sessionId: string, outcome: PlaygroundDurableOutcome): Promise<PlaygroundSession>;
   openSession(input: PlaygroundSessionInput): Promise<PlaygroundSession>;
@@ -134,6 +135,7 @@ export class PlaygroundOrchestrationService {
   readonly #skillDocuments: PlaygroundOrchestrationServiceOptions['skillDocuments'];
   readonly #trace: PlaygroundDurableTraceStore;
   readonly #running = new Map<string, RunningPlaygroundOperation>();
+  readonly #backgroundFailures: unknown[] = [];
   #closePromise: Promise<void> | undefined;
   #closed = false;
 
@@ -187,20 +189,29 @@ export class PlaygroundOrchestrationService {
         source: 'build',
         summary: 'Bound playground run to the current active artifact epoch.',
       }));
-      const done = this.#finish(sessionId, input, epoch.id, targetDigest, id, signal).finally(async () => {
-        this.#running.delete(id);
-        await reference.close();
-      });
+      const done = (async () => {
+        try { await this.#finish(sessionId, input, epoch.id, targetDigest, id, signal); }
+        catch (error) { this.#backgroundFailures.push(error); }
+        finally {
+          this.#running.delete(id);
+          try { await reference.close(); }
+          catch (error) { this.#backgroundFailures.push(error); }
+        }
+      })();
       this.#running.set(id, Object.freeze({ controller, done }));
       return Object.freeze({ id, session });
     } catch (error) {
-      let containment: unknown;
+      const containment: unknown[] = [];
       if (opened) {
         try { await this.#trace.finalize(sessionId, Object.freeze({ status: 'failed' })); }
-        catch (finalizeError) { containment = finalizeError; }
+        catch (finalizeError) {
+          containment.push(finalizeError);
+          try { await this.#trace.closeSession(sessionId); }
+          catch (closeError) { containment.push(closeError); }
+        }
       }
       await reference.close();
-      if (containment !== undefined) throw new AggregateError([error, containment], 'Playground admission and containment both failed.', { cause: error });
+      if (containment.length > 0) throw new AggregateError([error, ...containment], 'Playground admission and containment both failed.', { cause: error });
       throw error;
     }
   }
@@ -255,7 +266,11 @@ export class PlaygroundOrchestrationService {
     const running = [...this.#running.values()];
     for (const operation of running) operation.controller.abort(new Error('Playground orchestration service is closed.'));
     await Promise.allSettled(running.map((operation) => operation.done));
-    await this.#trace.close();
+    let traceFailure: unknown;
+    try { await this.#trace.close(); }
+    catch (error) { traceFailure = error; }
+    const failures = traceFailure === undefined ? this.#backgroundFailures : [...this.#backgroundFailures, traceFailure];
+    if (failures.length > 0) throw new AggregateError(failures, 'Playground background operations could not be contained.');
   }
 
   async #finish(
@@ -270,15 +285,23 @@ export class PlaygroundOrchestrationService {
       const result = await this.#operation(operation, epochId, targetDigest, runId, signal);
       await this.#trace.append(sessionId, result.event);
       await this.#trace.finalize(sessionId, Object.freeze({ status: result.status }));
-    } catch {
+    } catch (error) {
       const cancelled = signal.aborted;
-      await this.#trace.append(sessionId, Object.freeze({
-        kind: cancelled ? 'operation.cancelled' : 'operation.failed',
-        raw: Object.freeze({ operation: operation.operation }),
-        source: 'diagnostics',
-        summary: cancelled ? 'Server-owned playground operation was cancelled.' : 'Server-owned playground operation failed.',
-      }));
-      await this.#trace.finalize(sessionId, Object.freeze({ status: cancelled ? 'cancelled' : 'failed' }));
+      const terminalFailures: unknown[] = [];
+      try {
+        await this.#trace.append(sessionId, Object.freeze({
+          kind: cancelled ? 'operation.cancelled' : 'operation.failed',
+          raw: Object.freeze({ operation: operation.operation }),
+          source: 'diagnostics',
+          summary: cancelled ? 'Server-owned playground operation was cancelled.' : 'Server-owned playground operation failed.',
+        }));
+      } catch (appendError) { terminalFailures.push(appendError); }
+      try { await this.#trace.finalize(sessionId, Object.freeze({ status: cancelled ? 'cancelled' : 'failed' })); }
+      catch (finalizeError) { terminalFailures.push(finalizeError); }
+      if (terminalFailures.length === 0) return;
+      try { await this.#trace.closeSession(sessionId); }
+      catch (closeError) { terminalFailures.push(closeError); }
+      throw new AggregateError([error, ...terminalFailures], 'Playground operation could not reach a durable terminal state.', { cause: error });
     }
   }
 
@@ -292,25 +315,31 @@ export class PlaygroundOrchestrationService {
     if (operation.operation === 'skill.inspect') {
       const service = this.#skillDocuments ?? unavailable('Skill document');
       await service.generated(epochId, operation.target, operation.skillId);
+      signal.throwIfAborted();
       return Object.freeze({ event: Object.freeze({ kind: 'skill.inspected', raw: Object.freeze({ skillId: operation.skillId }), source: 'skill-evidence', summary: 'Inspected emitted Skill.' }), status: 'passed' });
     }
     if (operation.operation === 'hook.simulate') {
       const service = this.#hookPlayground ?? unavailable('Hook playground');
       const result = await service.simulate({ epochId, hook: operation.hook, input: { inline: operation.input }, signal, target: operation.target });
+      signal.throwIfAborted();
       return Object.freeze({ event: Object.freeze({ kind: 'hook.simulated', raw: Object.freeze({ hook: operation.hook, result: evidenceValue(result) }), source: 'hook', summary: 'Simulated emitted Hook.' }), status: 'diagnostics' in result ? 'failed' : 'passed' });
     }
     if (operation.operation === 'mcp.call-tool') {
       const service = this.#mcpSessions ?? unavailable('MCP session');
       const session = await service.open({ epochId, serverName: operation.serverName, signal, target: operation.target });
       try {
+        signal.throwIfAborted();
         const result = await session.callTool({ arguments: operation.arguments, name: operation.tool, requestId: runId, signal });
+        signal.throwIfAborted();
         return Object.freeze({ event: Object.freeze({ kind: 'mcp.tool.called', raw: Object.freeze({ result: evidenceValue(result), serverName: operation.serverName, tool: operation.tool }), source: 'mcp', summary: 'Called emitted MCP tool.' }), status: resultHasError(result) ? 'failed' : 'passed' });
       } finally {
         await service.closeSession(session.id);
+        signal.throwIfAborted();
       }
     }
     const service = this.#scripts ?? unavailable('Script');
     const result = await service.run({ epochId, script: operation.script, signal, target: operation.target });
+    signal.throwIfAborted();
     return Object.freeze({ event: Object.freeze({ kind: 'script.completed', raw: Object.freeze({ result: evidenceValue(result), targetDigest }), source: 'script', summary: 'Ran emitted script.' }), status: result.exitCode === 0 ? 'passed' : 'failed' });
   }
 }

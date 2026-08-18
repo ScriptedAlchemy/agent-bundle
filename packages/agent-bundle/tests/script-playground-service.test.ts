@@ -1,7 +1,3 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-
 import { expect, it } from '@rstest/core';
 
 import {
@@ -23,7 +19,7 @@ it('runs only a manifest-resolved script in a leased server workspace with a san
       close: async () => { released += 1; },
       path: '/server-owned/workspace',
     }),
-    execute: async (options) => {
+    executor: async (options) => {
       calls.push(options);
       return Object.freeze({ exitCode: 0, stderr: '', stdout: 'reviewed\n' });
     },
@@ -62,7 +58,7 @@ it('uses the caller AbortSignal for the real process and releases its workspace 
       close: async () => { released += 1; },
       path: '/server-owned/workspace',
     }),
-    execute: async ({ signal }) => {
+    executor: async ({ signal }) => {
       observed = signal;
       entered();
       return new Promise((_, reject) => signal?.addEventListener('abort', () => reject(signal.reason), { once: true }));
@@ -79,28 +75,7 @@ it('uses the caller AbortSignal for the real process and releases its workspace 
   expect(released).toBe(1);
 });
 
-it('drains a daemonized descendant before its workspace lease is released', async () => {
-  if (process.platform === 'win32') return;
-  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-script-tree-'));
-  const scriptPath = join(root, 'daemon.sh');
-  const pidPath = join(root, 'daemon.pid');
-  const workspace = join(root, 'workspace');
-  let released = 0;
-  try {
-    await mkdir(workspace);
-    await writeFile(scriptPath, `sleep 30 & echo $! > ${JSON.stringify(pidPath)}\nexit 0\n`);
-    const service = new ScriptPlaygroundService({
-      createWorkspace: async () => Object.freeze({
-        close: async () => {
-          released += 1;
-          const pid = Number((await readFile(pidPath, 'utf8')).trim());
-          expect(() => process.kill(pid, 0)).toThrow();
-        },
-        path: workspace,
-      }),
-      resolveScript: async () => Object.freeze({ interpreter: Object.freeze({ args: Object.freeze([]), command: '/bin/sh' }), name: 'daemon.sh', path: scriptPath }),
-    });
-    await expect(service.run({ epochId: 'epoch-server-owned', script: 'daemon.sh', target: 'codex' })).resolves.toMatchObject({ exitCode: 0 });
-    expect(released).toBe(1);
-  } finally { await rm(root, { force: true, recursive: true }); }
+it('refuses script execution without an explicit contained executor', async () => {
+  const service = new ScriptPlaygroundService({ resolveScript: async () => script });
+  await expect(service.run({ epochId: 'epoch-server-owned', script: 'review.mjs', target: 'codex' })).rejects.toThrow('contained executor');
 });

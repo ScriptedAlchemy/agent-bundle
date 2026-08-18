@@ -1,4 +1,3 @@
-import { spawn, type ChildProcess } from 'node:child_process';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, extname, join, relative, resolve } from 'node:path';
@@ -9,7 +8,6 @@ import { EpochStore } from './epoch-store.ts';
 
 const defaultOutputLimit = 64 * 1024;
 const defaultTimeoutMs = 5_000;
-const terminationGraceMs = 250;
 
 export interface PlaygroundScriptInterpreter {
   readonly args: readonly string[];
@@ -58,11 +56,18 @@ export interface ScriptExecutionOutput {
   readonly stdout: string;
 }
 
+/**
+ * Production executors must provide an OS-level containment boundary that can
+ * prove all descendants are gone before resolving. Node process groups cannot
+ * make that claim because scripts can escape through setsid or double-fork.
+ */
+export type ContainedScriptExecutor = (options: ServerOwnedScriptExecution) => Promise<ScriptExecutionOutput>;
+
 export interface ScriptPlaygroundServiceOptions {
   /** Test seam; production always creates an isolated temporary workspace. */
   readonly createWorkspace?: () => Promise<PlaygroundWorkspaceLease>;
-  /** Test seam; production executes with a fixed interpreter and no shell. */
-  readonly execute?: (options: ServerOwnedScriptExecution) => Promise<ScriptExecutionOutput>;
+  /** Explicit platform capability; without it script.run is safely unavailable. */
+  readonly executor?: ContainedScriptExecutor;
   readonly epochStore?: EpochStore;
   readonly outputLimit?: number;
   readonly registry?: TargetRegistry;
@@ -106,79 +111,6 @@ const environment = (cwd: string): Readonly<Record<string, string>> => Object.fr
   PATH: process.env.PATH ?? '/usr/bin:/bin',
 });
 
-const signalProcessTree = (child: ChildProcess, signal: NodeJS.Signals): boolean => {
-  if (child.pid !== undefined && process.platform !== 'win32') {
-    try {
-      process.kill(-child.pid, signal);
-      return true;
-    } catch {
-      return false;
-    }
-  }
-  return child.kill(signal);
-};
-
-/** A direct child can exit before its detached descendants; drain that whole group before releasing its workspace. */
-const drainProcessTree = async (child: ChildProcess): Promise<void> => {
-  if (process.platform === 'win32' || !signalProcessTree(child, 'SIGTERM')) return;
-  await new Promise<void>((resolvePromise) => { setTimeout(resolvePromise, terminationGraceMs); });
-  signalProcessTree(child, 'SIGKILL');
-  await new Promise<void>((resolvePromise) => { setTimeout(resolvePromise, 10); });
-};
-
-/** Runs a fixed interpreter without a shell, bounded by server-selected time and output caps. */
-const execute = async (options: ServerOwnedScriptExecution): Promise<ScriptExecutionOutput> => new Promise((resolvePromise, rejectPromise) => {
-  if (options.signal?.aborted) {
-    rejectPromise(options.signal.reason);
-    return;
-  }
-  const child = spawn(options.command, [...options.args], {
-    cwd: options.cwd,
-    detached: process.platform !== 'win32',
-    env: options.env,
-    shell: false,
-    stdio: ['ignore', 'pipe', 'pipe'],
-    windowsHide: true,
-  });
-  let settled = false;
-  let stdout = '';
-  let stderr = '';
-  let termination: unknown;
-  let killTimer: NodeJS.Timeout | undefined;
-  const settle = (action: () => void): void => {
-    if (settled) return;
-    settled = true;
-    clearTimeout(timeout);
-    if (killTimer !== undefined) clearTimeout(killTimer);
-    options.signal?.removeEventListener('abort', abort);
-    action();
-  };
-  const stop = (reason: unknown): void => {
-    if (termination !== undefined || settled) return;
-    termination = reason;
-    signalProcessTree(child, 'SIGTERM');
-    killTimer = setTimeout(() => {
-      if (settled) return;
-      signalProcessTree(child, 'SIGKILL');
-    }, terminationGraceMs);
-  };
-  const abort = (): void => stop(options.signal?.reason ?? new Error('Script playground run was cancelled.'));
-  const timeout = setTimeout(() => stop(new Error('Script playground run timed out.')), options.timeoutMs);
-  const append = (current: string, chunk: Buffer): string => {
-    const next = `${current}${chunk.toString('utf8')}`;
-    if (Buffer.byteLength(next) > options.outputLimit) stop(new RangeError('Script playground output exceeds its server limit.'));
-    return next;
-  };
-  options.signal?.addEventListener('abort', abort, { once: true });
-  child.once('error', (error) => { void drainProcessTree(child).then(() => settle(() => rejectPromise(error))); });
-  child.stdout.on('data', (chunk: Buffer) => { stdout = append(stdout, chunk); });
-  child.stderr.on('data', (chunk: Buffer) => { stderr = append(stderr, chunk); });
-  child.once('exit', (code) => { void drainProcessTree(child).then(() => settle(() => {
-    if (termination !== undefined) rejectPromise(termination);
-    else resolvePromise(Object.freeze({ exitCode: code ?? -1, stderr, stdout }));
-  })); });
-});
-
 /**
  * Resolves and runs compiled manifest scripts under a sealed execution surface.
  * The public request has no command, path, cwd, args, or environment field.
@@ -186,7 +118,7 @@ const execute = async (options: ServerOwnedScriptExecution): Promise<ScriptExecu
 export class ScriptPlaygroundService {
   readonly #createWorkspace: () => Promise<PlaygroundWorkspaceLease>;
   readonly #epochStore: EpochStore | undefined;
-  readonly #execute: (options: ServerOwnedScriptExecution) => Promise<ScriptExecutionOutput>;
+  readonly #executor: ContainedScriptExecutor | undefined;
   readonly #outputLimit: number;
   readonly #registry: TargetRegistry;
   readonly #resolveScriptOverride: ScriptPlaygroundServiceOptions['resolveScript'];
@@ -199,7 +131,7 @@ export class ScriptPlaygroundService {
     if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1) throw new Error('Script playground timeout must be a positive safe integer.');
     this.#createWorkspace = options.createWorkspace ?? workspace;
     this.#epochStore = options.epochStore;
-    this.#execute = options.execute ?? execute;
+    this.#executor = options.executor;
     this.#outputLimit = outputLimit;
     this.#registry = options.registry ?? createDefaultRegistry();
     this.#resolveScriptOverride = options.resolveScript;
@@ -207,10 +139,12 @@ export class ScriptPlaygroundService {
   }
 
   async run(request: ScriptPlaygroundRunRequest): Promise<ScriptPlaygroundResult> {
+    const executor = this.#executor;
+    if (executor === undefined) throw new Error('Script playground execution is unavailable without a contained executor.');
     const resolved = await this.#resolve({ epochId: request.epochId, script: request.script, target: request.target });
     const lease = await this.#createWorkspace();
     try {
-      const result = await this.#execute(Object.freeze({
+      const result = await executor(Object.freeze({
         args: Object.freeze([...resolved.interpreter.args, resolved.path]),
         command: resolved.interpreter.command,
         cwd: lease.path,

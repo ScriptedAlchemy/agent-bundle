@@ -129,6 +129,12 @@ class RecordingTraceStore implements PlaygroundDurableTraceStore {
   async close(): Promise<void> {
     this.closed += 1;
   }
+
+  async closeSession(sessionId: string): Promise<void> {
+    const session = this.#session;
+    if (session?.id !== sessionId) throw new Error('Expected the session to exist before closing it.');
+    this.#session = Object.freeze({ ...session, outcome: Object.freeze({ status: 'aborted' }), state: 'closed' });
+  }
 }
 
 const epochAuthority = (calls: string[]): PlaygroundEpochAuthority => Object.freeze({
@@ -204,6 +210,29 @@ it('admits a gated operation promptly, replays its epoch binding, and cancels th
   expect(references).toEqual(['epoch-active', 'close:epoch-active']);
 });
 
+it('gives cancellation precedence when a gated Skill ignores its AbortSignal', async () => {
+  const trace = new RecordingTraceStore();
+  let release!: () => void;
+  const gated = new Promise<void>((resolvePromise) => { release = resolvePromise; });
+  const service = new PlaygroundOrchestrationService({
+    coordinator: { status: currentStatus },
+    createRunId: () => 'run-server-owned',
+    createSessionId: () => 'session-server-owned',
+    epochStore: epochAuthority([]),
+    skillDocuments: { generated: async () => gated },
+    trace,
+  });
+  const admitted = await service.run({ operation: 'skill.inspect', skillId: 'skill:review', target: 'codex' });
+  let cancelled = false;
+  const pending = service.cancel(admitted.id).then(() => { cancelled = true; });
+  await Promise.resolve();
+  expect(cancelled).toBe(false);
+  release();
+  await pending;
+  expect(trace.finalized).toEqual({ status: 'cancelled' });
+  expect(trace.appended.some((event) => event.kind === 'skill.inspected')).toBe(false);
+});
+
 it('promotes only persisted raw event references and closes admission before draining active work', async () => {
   const trace = new RecordingTraceStore();
   const service = new PlaygroundOrchestrationService({
@@ -267,6 +296,30 @@ it('contains failed epoch binding append without retaining an open usable sessio
   const service = new PlaygroundOrchestrationService({ coordinator: { status: currentStatus }, createRunId: () => 'run-server-owned', createSessionId: () => 'session-server-owned', epochStore: epochAuthority([]), trace });
   await expect(service.run({ operation: 'skill.inspect', skillId: 'skill:review', target: 'codex' })).rejects.toThrow('epoch append failed');
   expect(trace.session('session-server-owned')).toMatchObject({ outcome: { status: 'failed' }, state: 'finalized' });
+});
+
+it('contains post-admission terminalization faults without an unhandled rejection and reports them from close', async () => {
+  const trace = new RecordingTraceStore();
+  const append = trace.append.bind(trace);
+  trace.append = async (sessionId, input) => {
+    if (input.kind === 'skill.inspected' || input.kind === 'operation.failed') throw new Error('post-admission append failed');
+    return append(sessionId, input);
+  };
+  const service = new PlaygroundOrchestrationService({
+    coordinator: { status: currentStatus }, createRunId: () => 'run-server-owned', createSessionId: () => 'session-server-owned', epochStore: epochAuthority([]),
+    skillDocuments: { generated: async () => undefined }, trace,
+  });
+  const rejections: unknown[] = [];
+  const onUnhandled = (reason: unknown): void => { rejections.push(reason); };
+  process.on('unhandledRejection', onUnhandled);
+  try {
+    const admitted = await service.run({ operation: 'skill.inspect', skillId: 'skill:review', target: 'codex' });
+    await eventually(() => expect(trace.session(admitted.session.id)?.state).toBe('closed'));
+    await new Promise<void>((resolvePromise) => { setTimeout(resolvePromise, 0); });
+    expect(rejections).toEqual([]);
+    await expect(service.close()).rejects.toThrow('background operations');
+    expect(trace.session(admitted.session.id)?.state).toBe('closed');
+  } finally { process.off('unhandledRejection', onUnhandled); }
 });
 
 it('turns hostile getter, proxy, and cyclic operation evidence into an unavailable marker without evaluating it', async () => {
