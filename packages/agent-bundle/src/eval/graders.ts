@@ -67,6 +67,9 @@ export interface EvalGraderRun {
 
 const outcomes = Object.freeze(['fail', 'inconclusive', 'pass']);
 
+/** Public failure text never retains arbitrary exception details from author-provided graders. */
+export const evalGraderFailureMessage = 'The grader could not complete.';
+
 const outcome = (
   verdict: EvalAssertionOutcome,
   detail: string,
@@ -201,10 +204,9 @@ export const runEvalGraders = async (
   for (const spec of [...specs].sort((left, right) => left.id.localeCompare(right.id))) {
     try {
       results[spec.id] = await runEvalGrader(spec, context);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      failures.push(Object.freeze({ id: spec.id, message }));
-      results[spec.id] = outcome('inconclusive', `The grader failed: ${message}`);
+    } catch {
+      failures.push(Object.freeze({ id: spec.id, message: evalGraderFailureMessage }));
+      results[spec.id] = outcome('inconclusive', evalGraderFailureMessage);
     }
   }
   return Object.freeze({ failures: Object.freeze(failures), results: Object.freeze(results) });

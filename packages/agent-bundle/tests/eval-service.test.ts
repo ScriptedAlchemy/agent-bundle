@@ -147,16 +147,16 @@ it('reports a missing or unreadable run instead of inventing an empty one', asyn
   }
 }, 120_000);
 
-it('refuses a model-backed harness instead of running a deterministic stub', async () => {
+it('rejects native harness selections with no matching authored host', async () => {
   const project = await createProjectFixture();
   try {
     await seedEvalProject(project.root);
 
     await expect(service(project.root).run({ harness: 'claude' })).rejects.toMatchObject({
-      code: 'EVAL_HARNESS_UNSUPPORTED',
+      code: 'EVAL_SELECTION_EMPTY',
     });
     await expect(service(project.root).run({ harness: 'codex' })).rejects.toMatchObject({
-      code: 'EVAL_HARNESS_UNSUPPORTED',
+      code: 'EVAL_SELECTION_EMPTY',
     });
     await expect(access(join(project.root, '.agent-bundle', 'runs'))).rejects.toThrow();
   } finally {

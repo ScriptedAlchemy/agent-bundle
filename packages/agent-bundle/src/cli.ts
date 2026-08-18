@@ -339,7 +339,7 @@ export const runCli = async (
   });
 
   const evalCommand = configureSourceOptions(
-    program.command('eval').description('Run deterministic eval suites against a built artifact'),
+    program.command('eval').description('Run deterministic or native eval suites against a built artifact'),
   )
     .option('--artifact <path>', 'Evaluate exactly this built artifact')
     .option('--case <case>', 'Eval case id to run (repeatable)', collect, [])

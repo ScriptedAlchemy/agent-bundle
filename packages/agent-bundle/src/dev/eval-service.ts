@@ -8,10 +8,13 @@ import { aggregateEvalTrials, summarizeEvalRun, type EvalCaseAggregate } from '.
 import { compareEvalRuns, type EvalComparison } from '../eval/compare.ts';
 import { prepareEvalArtifact, type PreparedEvalArtifact } from '../eval/artifact.ts';
 import { normalizeEvalConfig, type NormalizedEvalConfig } from '../eval/config.ts';
+import { runClaudeTrial } from '../eval/claude-harness.ts';
+import { runCodexEvalTrial, type CodexCommandRunner } from '../eval/codex-harness.ts';
 import { discoverEvalSuites, type DiscoveredEvalSuite } from '../eval/discovery.ts';
 import { EvalHarnessError } from '../eval/errors.ts';
 import { planEvalFixture, type EvalFixturePlan } from '../eval/fixtures.ts';
 import { createEvalHarness, runDeterministicTrial, type EvalHarness } from '../eval/harness.ts';
+import type { NativeClaudeProcessRunner } from '../host-contracts/native-claude-contract.ts';
 import {
   createEvalRun,
   listEvalRuns,
@@ -95,11 +98,19 @@ export interface EvalRunResult {
 export interface EvalServiceOptions {
   readonly configPath?: string;
   readonly mode?: string;
+  /** Native CLI injection is deliberately limited to test runners and their child environment. */
+  readonly native?: EvalServiceNativeOptions;
   /** Injectable only to make run identity deterministic in tests. */
   readonly now?: () => Date;
   readonly projectRoot: string;
   readonly registry?: TargetRegistry;
   readonly targets?: readonly string[];
+}
+
+export interface EvalServiceNativeOptions {
+  readonly claudeRun?: NativeClaudeProcessRunner;
+  readonly codexRun?: CodexCommandRunner;
+  readonly environment?: Readonly<NodeJS.ProcessEnv>;
 }
 
 interface SelectedEvalCase {
@@ -182,12 +193,11 @@ const selectEvalCases = (
     }))));
 
 const missingArtifactTargets = (
-  selected: readonly SelectedEvalCase[],
+  planned: readonly PlannedEvalTrial[],
   artifact: PreparedEvalArtifact,
-): readonly string[] => Object.freeze([...new Set(selected.flatMap((entry) =>
-  Object.keys(entry.evalCase.hosts)
-    .filter((host) => artifact.binding.targetDigests[host] === undefined)
-    .map((host) => `${entry.evalCase.id}/${host}`)))].sort((left, right) => left.localeCompare(right)));
+): readonly string[] => Object.freeze([...new Set(planned
+  .filter((trial) => artifact.binding.targetDigests[trial.host] === undefined)
+  .map((trial) => `${trial.evalCase.id}/${trial.host}`))].sort((left, right) => left.localeCompare(right)));
 
 const requestedTrials = (value: number | undefined): number | undefined => {
   if (value === undefined) return undefined;
@@ -201,13 +211,14 @@ const requestedTrials = (value: number | undefined): number | undefined => {
 };
 
 /**
- * The one deterministic eval path the CLI, the programmatic API, and the workbench
- * browser all use. It resolves every filesystem location itself: a caller names
+ * The one eval path the CLI, the programmatic API, and the workbench browser all
+ * use. It resolves every filesystem location itself: a caller names
  * suites, cases, and a trial count, never a run directory, artifact copy, or command.
  */
 export class EvalService {
   readonly #configPath: string | undefined;
   readonly #mode: string;
+  readonly #native: EvalServiceNativeOptions | undefined;
   readonly #now: () => Date;
   readonly #projectRoot: string;
   readonly #registry: TargetRegistry;
@@ -216,6 +227,7 @@ export class EvalService {
   constructor(options: EvalServiceOptions) {
     this.#configPath = options.configPath;
     this.#mode = options.mode ?? 'production';
+    this.#native = options.native;
     this.#now = options.now ?? (() => new Date());
     this.#projectRoot = resolve(options.projectRoot);
     this.#registry = options.registry ?? createDefaultRegistry();
@@ -283,7 +295,13 @@ export class EvalService {
       );
     }
 
-    const planned = await this.#plan(selected, trials);
+    const planned = await this.#plan(selected, harness, trials);
+    if (planned.length === 0) {
+      throw serviceError(
+        'EVAL_SELECTION_EMPTY',
+        `No selected eval case has a host the ${JSON.stringify(harness.name)} harness can drive.`,
+      );
+    }
     const runId = mintRunId(this.#now());
     const directory = this.#runDirectory(config, runId);
     const artifact = await prepareEvalArtifact({
@@ -294,7 +312,7 @@ export class EvalService {
       runDirectory: directory,
       ...(this.#targets === undefined ? {} : { targets: this.#targets }),
     });
-    const missing = missingArtifactTargets(selected, artifact);
+    const missing = missingArtifactTargets(planned, artifact);
     if (missing.length > 0) {
       // Nothing owns this directory yet, so the abandoned artifact copy is removed.
       await rm(directory, { force: true, recursive: true });
@@ -318,19 +336,22 @@ export class EvalService {
     try {
       await writer.appendEvent({
         kind: 'run.started',
-        payload: { cases: selected.length, harness: harness.name, trials: planned.length },
+        payload: { cases: new Set(planned.map((trial) => trial.evalCase.id)).size, harness: harness.name, trials: planned.length },
       });
       const completed: EvalTrialRecord[] = [];
+      const wasCancelled = (): boolean => request.signal?.aborted === true;
+      let cancelled = wasCancelled();
       for (const plan of planned) {
-        if (request.signal?.aborted === true) break;
-        const trial = await runDeterministicTrial({
+        if (wasCancelled()) {
+          cancelled = true;
+          break;
+        }
+        const trial = await this.#runTrial({
           artifact,
-          evalCase: plan.evalCase,
-          fixturePlan: plan.fixturePlan,
-          host: plan.host,
-          suiteDir: plan.suiteDir,
-          trialIndex: plan.trialIndex,
-          workspaceRoot: join(directory, 'workspaces'),
+          directory,
+          harness,
+          plan,
+          signal: request.signal,
           writer,
         });
         completed.push(trial);
@@ -338,8 +359,9 @@ export class EvalService {
           kind: 'trial.completed',
           payload: { caseId: trial.caseId, id: trial.id, outcome: trial.outcome },
         });
+        if (wasCancelled()) cancelled = true;
       }
-      if (completed.length !== planned.length) {
+      if (cancelled || completed.length !== planned.length) {
         await writer.appendEvent({
           kind: 'run.cancelled',
           payload: { completed: completed.length, planned: planned.length },
@@ -375,13 +397,18 @@ export class EvalService {
   /** Fixtures are planned before any run directory exists, so a broken fixture never leaves one. */
   async #plan(
     selected: readonly SelectedEvalCase[],
+    harness: EvalHarness,
     trials: number | undefined,
   ): Promise<readonly PlannedEvalTrial[]> {
     const planned: PlannedEvalTrial[] = [];
     for (const entry of selected) {
+      const hosts = Object.keys(entry.evalCase.hosts)
+        .filter((host) => this.#harnessDrivesHost(harness, host))
+        .sort((left, right) => left.localeCompare(right));
+      if (hosts.length === 0) continue;
       const fixturePlan = await planEvalFixture({ baseDir: entry.suiteDir, fixture: entry.evalCase.fixture });
       const count = trials ?? entry.evalCase.trials;
-      for (const host of Object.keys(entry.evalCase.hosts).sort((left, right) => left.localeCompare(right))) {
+      for (const host of hosts) {
         for (let trialIndex = 0; trialIndex < count; trialIndex += 1) {
           planned.push(Object.freeze({
             evalCase: entry.evalCase,
@@ -396,7 +423,51 @@ export class EvalService {
     return Object.freeze(planned);
   }
 
-  /** This service runs model-free trials only; a model-backed harness is refused, never stubbed. */
+  #harnessDrivesHost(harness: EvalHarness, host: string): boolean {
+    return harness.kind === 'deterministic'
+      || harness.kind === 'native-claude' && host === 'claude'
+      || harness.kind === 'native-codex' && host === 'codex';
+  }
+
+  async #runTrial(options: {
+    readonly artifact: PreparedEvalArtifact;
+    readonly directory: string;
+    readonly harness: EvalHarness;
+    readonly plan: PlannedEvalTrial;
+    readonly signal: AbortSignal | undefined;
+    readonly writer: Awaited<ReturnType<typeof createEvalRun>>;
+  }): Promise<EvalTrialRecord> {
+    const shared = {
+      artifact: options.artifact,
+      evalCase: options.plan.evalCase,
+      fixturePlan: options.plan.fixturePlan,
+      host: options.plan.host,
+      suiteDir: options.plan.suiteDir,
+      trialIndex: options.plan.trialIndex,
+      workspaceRoot: join(options.directory, 'workspaces'),
+      writer: options.writer,
+    };
+    switch (options.harness.kind) {
+      case 'deterministic':
+        return runDeterministicTrial(shared);
+      case 'native-claude':
+        return runClaudeTrial({
+          ...shared,
+          ...(this.#native?.environment === undefined ? {} : { environment: this.#native.environment }),
+          ...(this.#native?.claudeRun === undefined ? {} : { run: this.#native.claudeRun }),
+          ...(options.signal === undefined ? {} : { signal: options.signal }),
+        });
+      case 'native-codex':
+        return runCodexEvalTrial({
+          ...shared,
+          ...(this.#native?.environment === undefined ? {} : { environment: this.#native.environment }),
+          ...(this.#native?.codexRun === undefined ? {} : { run: this.#native.codexRun }),
+          ...(options.signal === undefined ? {} : { signal: options.signal }),
+        });
+    }
+  }
+
+  /** The descriptor rejects unknown harnesses; this service dispatches every supported kind. */
   #harness(name: string | undefined): EvalHarness {
     let harness: EvalHarness;
     try {
@@ -406,12 +477,6 @@ export class EvalService {
         throw serviceError('EVAL_HARNESS_UNSUPPORTED', error.message);
       }
       throw error;
-    }
-    if (harness.kind !== 'deterministic') {
-      throw serviceError(
-        'EVAL_HARNESS_UNSUPPORTED',
-        `Model-backed eval harness ${JSON.stringify(harness.name)} is not supported yet by deterministic eval runs.`,
-      );
     }
     return harness;
   }

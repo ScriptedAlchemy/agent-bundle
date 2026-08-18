@@ -7,10 +7,16 @@ import { promisify } from 'node:util';
 import { expect, it } from '@rstest/core';
 
 import {
+  createCodexEvalHarness,
+  createEvalHarness,
   defineConfig,
   pathTokens,
+  runClaudeTrial,
+  runCodexEvalTrial,
   type AgentBundleConfig,
   type ArtifactOutputProvenance,
+  type EvalHarness,
+  type EvalServiceNativeOptions,
   type NormalizedConfigExtension,
   type NormalizedPlugin,
 } from '../src/index.ts';
@@ -95,6 +101,17 @@ it('exposes immutable output provenance types from the root import', () => {
   };
 
   expect(output.kind).toBe('bundle');
+});
+
+it('exposes native eval descriptors, runners, and injection types from the root import', () => {
+  const descriptor: EvalHarness = createEvalHarness('claude');
+  const native: EvalServiceNativeOptions = { environment: { PATH: '/usr/bin' } };
+
+  expect(descriptor).toEqual({ kind: 'native-claude', name: 'claude' });
+  expect(createCodexEvalHarness().kind).toBe('native-codex');
+  expect(typeof runClaudeTrial).toBe('function');
+  expect(typeof runCodexEvalTrial).toBe('function');
+  expect(native.environment?.PATH).toBe('/usr/bin');
 });
 
 it('exposes advanced adapter registry and contract types only from the advanced API', () => {

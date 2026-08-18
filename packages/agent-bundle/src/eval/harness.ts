@@ -100,13 +100,13 @@ const harnessKinds: Readonly<Record<string, EvalHarness['kind']>> = Object.freez
 export const evalTrialId = (caseId: string, host: string, trialIndex: number): string =>
   `${caseId}--${host}-${trialIndex + 1}`;
 
-/** An unknown host has no harness, and asking for one is an explicit error rather than a stub. */
+/** An unknown harness is rejected explicitly rather than falling back to a stub. */
 export const createEvalHarness = (name: string): EvalHarness => {
   const kind = harnessKinds[name];
   if (kind === undefined) {
     throw harnessError(
       'EVAL_MODEL_BACKED_UNSUPPORTED',
-      `Model-backed eval harness ${JSON.stringify(name)} is not supported yet; only the deterministic, native Claude, and native Codex harnesses are available.`,
+      `Unknown or unsupported eval harness ${JSON.stringify(name)}. Available harnesses are deterministic, claude, and codex.`,
     );
   }
   return Object.freeze({ kind, name });

@@ -18,7 +18,7 @@ Top-level `scripts` is a record of stable output names to an entry path or `{ en
 | `agent-bundle inspect` | Inspect normalized targets and adapter plans from source. |
 | `agent-bundle mcp list` / `mcp invoke` | List or invoke one MCP tool from an artifact. |
 | `agent-bundle hooks list` / `hooks simulate` | List generated hooks, or run one emitted wrapper. |
-| `agent-bundle eval` | Run deterministic eval suites and record a run. |
+| `agent-bundle eval` | Run deterministic or native Claude/Codex eval suites and record a run. |
 | `agent-bundle dev` | Serve the packaged developer workbench on loopback. |
 
 `inspect` reads source configuration. `validate --artifact`, `mcp`, and `hooks` are source-free: they

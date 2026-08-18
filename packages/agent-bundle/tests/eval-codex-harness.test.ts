@@ -188,6 +188,10 @@ it('runs an ephemeral Codex trial and records inferred activation beside observe
     expect(trial.evidence.process).toEqual({ exitCode: 0, level: 'observed', timedOut: false });
     expect(trial.rawArtifacts).toContain('artifacts/release-notes--codex-1/events.jsonl');
     expect(trial.assertions.every((assertion) => assertion.outcome === 'pass')).toBe(true);
+    const execution = world.commands.find((command) => command.args[0] === 'exec');
+    if (execution === undefined) throw new Error('The native trial must execute Codex.');
+    expect(execution.args).toContain('-m');
+    expect(execution.args[execution.args.indexOf('-m') + 1]).toBe('gpt-5-codex');
   });
 });
 
