@@ -16,6 +16,7 @@ import {
   runComparison,
 } from '../src/comparisons/comparisons-page.tsx';
 import { comparisonsViewFor } from '../src/comparisons/comparisons-model.ts';
+import { EvalClient } from '../src/evals/eval-client.ts';
 
 const run = (id: string, createdAt: string): EvalRunRecord => ({
   agentBundleVersion: '0.1.0',
@@ -186,29 +187,46 @@ it('offers a baseline and candidate selection with a compare action', () => {
 });
 
 it('renders no comparison controls until two runs are recorded', () => {
-  const comparisonClient = client(async () => { throw new Error('The page lists runs through its own effect.'); });
-  const markup = renderToStaticMarkup(createElement(ComparisonsPage, { client: comparisonClient }));
+  const foreground = new ForegroundRouteClient({
+    fetch: async () => { throw new Error('The page lists runs through its own effect.'); },
+  });
+  const comparisonClient = new ComparisonClient({ foreground });
+  const evalClient = new EvalClient({ foreground });
+  const markup = renderToStaticMarkup(createElement(ComparisonsPage, { comparisonClient, evalClient }));
 
   expect(markup).toContain('At least two recorded runs');
   expect(markup).not.toContain('id="comparison-base"');
   expect(markup).not.toContain('Compare runs');
 });
 
-it('lists recorded runs through the client', async () => {
+it('delegates run loading to EvalClient and the server comparison to ComparisonClient', async () => {
   const calls: string[] = [];
-  const comparisonClient = client(stubFetch(calls, { runs }));
+  let bootstraps = 0;
+  const foreground = new ForegroundRouteClient({
+    fetch: async (input) => {
+      const path = String(input);
+      if (path === '/api/project/session') {
+        bootstraps += 1;
+        return response({
+          cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef',
+          origin: 'http://127.0.0.1:5173',
+          token: 'foreground-token',
+        });
+      }
+      calls.push(path);
+      if (path === '/api/evals/runs') return response({ runs });
+      return response({ comparison });
+    },
+  });
+  const comparisonClient = new ComparisonClient({ foreground });
+  const evalClient = new EvalClient({ foreground });
 
-  await expect(loadComparisonRuns(comparisonClient)).resolves.toMatchObject([{ id: 'run-base' }, { id: 'run-candidate' }]);
-  expect(calls).toEqual(['/api/evals/runs']);
-});
-
-it('requests the aligned comparison of the selected runs', async () => {
-  const calls: string[] = [];
-  const comparisonClient = client(stubFetch(calls, { comparison }));
+  await expect(loadComparisonRuns(evalClient)).resolves.toMatchObject([{ id: 'run-base' }, { id: 'run-candidate' }]);
 
   const result = await runComparison(comparisonClient, 'run-base', 'run-candidate');
 
-  expect(calls).toEqual(['/api/evals/comparisons?base=run-base&candidate=run-candidate']);
+  expect(calls).toEqual(['/api/evals/runs', '/api/evals/comparisons?base=run-base&candidate=run-candidate']);
+  expect(bootstraps).toBe(1);
   expect(result.rows).toHaveLength(3);
   expect(result.summary).toMatchObject({ comparable: 2, nonComparable: 1 });
 });

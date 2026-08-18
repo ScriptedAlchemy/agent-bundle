@@ -65,6 +65,14 @@ const trialRecord = {
 
 const runResult = { aggregates: [], diagnostics: [], run: runRecord, trials: [trialRecord] };
 
+const comparison = {
+  baselineRunId: runRecord.id,
+  candidateRunId: runRecord.id,
+  rows: [],
+  sampleSize: 0,
+  summary: { comparable: 0, nonComparable: 0, reliability: 0, smoke: 0 },
+};
+
 const listing = {
   diagnostics: [],
   suites: [{
@@ -202,14 +210,17 @@ it('shares one foreground bootstrap across eval and comparison routes and fences
       });
     }
     if (path === '/api/evals/suites') return holdSuite ? held : response(listing);
-    if (path === '/api/evals/runs') return response({ runs: [runRecord] });
+    if (path === '/api/evals/comparisons?base=baseline&candidate=candidate') return response({ comparison });
     throw new Error(`Unexpected route ${path}`);
   };
   const foreground = new ForegroundRouteClient({ fetch });
   const evalClient = new EvalClient({ foreground });
   const comparisonClient = new ComparisonClient({ foreground });
 
-  await Promise.all([evalClient.suites(), comparisonClient.listRuns()]);
+  await Promise.all([
+    evalClient.suites(),
+    comparisonClient.compare({ base: 'baseline', candidate: 'candidate' }),
+  ]);
   expect(bootstraps).toBe(1);
 
   holdSuite = true;
@@ -219,6 +230,8 @@ it('shares one foreground bootstrap across eval and comparison routes and fences
   resolveHeld?.(response(listing));
 
   await expect(stale).rejects.toMatchObject({ code: 'AB8019' });
-  await expect(comparisonClient.listRuns()).resolves.toMatchObject([{ id: runRecord.id }]);
+  await expect(comparisonClient.compare({ base: 'baseline', candidate: 'candidate' })).resolves.toMatchObject({
+    baselineRunId: runRecord.id,
+  });
   expect(bootstraps).toBe(2);
 });

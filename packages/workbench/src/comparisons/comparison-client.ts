@@ -1,5 +1,4 @@
 import type { EvalComparison } from '../../../agent-bundle/src/eval/compare.ts';
-import type { EvalRunRecord, EvalTrialRecord } from '../../../agent-bundle/src/eval/run-store.ts';
 import type { ForegroundRequestAuthority } from '../mcp/mcp-route-client.ts';
 
 export interface ComparisonClientOptions {
@@ -10,11 +9,6 @@ export interface ComparisonClientOptions {
 export interface ComparisonRequest {
   readonly base: string;
   readonly candidate: string;
-}
-
-export interface EvalRunDetail {
-  readonly run: EvalRunRecord;
-  readonly trials: readonly EvalTrialRecord[];
 }
 
 export class ComparisonClientError extends Error {
@@ -54,20 +48,6 @@ const diagnosticError = (value: unknown, status: number): ComparisonClientError 
   return new ComparisonClientError('AB8083', `Eval comparison request failed with HTTP ${status}.`);
 };
 
-const runList = (value: unknown): readonly EvalRunRecord[] => {
-  const runs = asRecord(value).runs;
-  if (!Array.isArray(runs) || !runs.every((entry) => isRecord(entry) && typeof entry.id === 'string')) {
-    throw invalidResponse();
-  }
-  return frozenJson(runs) as readonly EvalRunRecord[];
-};
-
-const runDetail = (value: unknown): EvalRunDetail => {
-  const body = asRecord(value);
-  if (!isRecord(body.run) || typeof body.run.id !== 'string' || !Array.isArray(body.trials)) throw invalidResponse();
-  return frozenJson({ run: body.run, trials: body.trials }) as EvalRunDetail;
-};
-
 const comparisonResult = (value: unknown): EvalComparison => {
   const comparison = asRecord(value).comparison;
   if (!isRecord(comparison) ||
@@ -82,23 +62,12 @@ const comparisonResult = (value: unknown): EvalComparison => {
   return frozenJson(comparison) as EvalComparison;
 };
 
-/** A typed, credential-memory-only browser client for the recorded eval run and comparison routes. */
+/** A typed, credential-memory-only browser client for the eval comparison route. */
 export class ComparisonClient {
   readonly #foreground: ForegroundRequestAuthority;
 
   constructor(options: ComparisonClientOptions) {
     this.#foreground = options.foreground;
-  }
-
-  async listRuns(signal?: AbortSignal): Promise<readonly EvalRunRecord[]> {
-    return runList(await this.#json('/api/evals/runs', signal === undefined ? {} : { signal }));
-  }
-
-  async readRun(runId: string, signal?: AbortSignal): Promise<EvalRunDetail> {
-    return runDetail(await this.#json(
-      `/api/evals/runs/${encodeURIComponent(runId)}`,
-      signal === undefined ? {} : { signal },
-    ));
   }
 
   /** The route aligns the two runs; the page never derives a delta of its own. */

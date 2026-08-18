@@ -9,6 +9,7 @@ import {
   type ComparisonMetricCell,
   type ComparisonsView,
 } from './comparisons-model.ts';
+import type { EvalClient } from '../evals/eval-client.ts';
 import './comparisons-page.css';
 
 export interface ComparisonControlsProps {
@@ -24,16 +25,17 @@ export interface ComparisonMatrixProps {
 }
 
 export interface ComparisonsPageProps {
-  readonly client: ComparisonClient;
+  readonly comparisonClient: ComparisonClient;
+  readonly evalClient: EvalClient;
 }
 
 const errorMessage = (reason: unknown): string =>
   reason instanceof Error ? reason.message : 'The eval comparison request could not be completed.';
 
 export const loadComparisonRuns = async (
-  client: ComparisonClient,
+  client: EvalClient,
   signal?: AbortSignal,
-): Promise<readonly EvalRunRecord[]> => client.listRuns(signal);
+): Promise<readonly EvalRunRecord[]> => client.runs(signal);
 
 /** The route aligns the two runs, so a mismatch can never be folded into a delta by the page. */
 export const runComparison = async (
@@ -178,7 +180,7 @@ export const ComparisonMatrix = ({ view }: ComparisonMatrixProps) => <div classN
 </div>;
 
 /** Aligns two recorded eval runs and shows the reliability matrix of every shared condition. */
-export const ComparisonsPage = ({ client }: ComparisonsPageProps) => {
+export const ComparisonsPage = ({ comparisonClient, evalClient }: ComparisonsPageProps) => {
   const [baseRunId, setBaseRunId] = useState<string>();
   const [busy, setBusy] = useState(false);
   const [candidateRunId, setCandidateRunId] = useState<string>();
@@ -192,7 +194,7 @@ export const ComparisonsPage = ({ client }: ComparisonsPageProps) => {
     lifecycle.invalidate();
     const request = lifecycle.begin('runs');
     setError(undefined);
-    void loadComparisonRuns(client, request.signal).then(
+    void loadComparisonRuns(evalClient, request.signal).then(
       (next) => {
         if (!lifecycle.isCurrent(request)) return;
         lifecycle.complete(request);
@@ -206,7 +208,7 @@ export const ComparisonsPage = ({ client }: ComparisonsPageProps) => {
       },
     );
     return () => lifecycle.invalidate();
-  }, [client, lifecycle]);
+  }, [evalClient, lifecycle]);
 
   const compare = async (): Promise<void> => {
     const base = view.base?.key;
@@ -216,7 +218,7 @@ export const ComparisonsPage = ({ client }: ComparisonsPageProps) => {
     setBusy(true);
     setError(undefined);
     try {
-      const next = await runComparison(client, base, candidate, request.signal);
+      const next = await runComparison(comparisonClient, base, candidate, request.signal);
       if (!lifecycle.isCurrent(request)) return;
       setComparison(next);
     } catch (reason) {
