@@ -3,12 +3,19 @@ import type { AddressInfo } from 'node:net';
 import { join } from 'node:path';
 
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
-import type { McpHttpHandler, McpServerFactory } from '@modelcontextprotocol/server';
+import { createMcpHandler, type McpHttpHandler, type McpServerFactory } from '@modelcontextprotocol/server';
 import { expect, it } from '@rstest/core';
 
 import { build } from '../src/api.ts';
 import { stableJson } from '../src/core/digest.ts';
-import { AgentApi, AgentApiCloseError, agentApiTokenEquals, agentApiToolNames, type AgentApiOptions } from '../src/dev/agent-api.ts';
+import {
+  AgentApi,
+  AgentApiCloseError,
+  agentApiTokenEquals,
+  agentApiToolNames,
+  type AgentApiEpochReference,
+  type AgentApiOptions,
+} from '../src/dev/agent-api.ts';
 import { EvalService } from '../src/dev/eval-service.ts';
 import { ForegroundServerCloseError, ProjectEventHub, startForegroundServer } from '../src/dev/index.ts';
 import type { ProjectStatus } from '../src/dev/types.ts';
@@ -88,11 +95,13 @@ const startApi = async (options: Readonly<{ readonly api?: AgentApi; readonly po
   return Object.freeze({
     api,
     close: async () => {
-      await api.close();
+      const apiClose = await Promise.allSettled([api.close()]);
       await new Promise<void>((resolvePromise, rejectPromise) => server.close((error) => {
         if (error === undefined) resolvePromise();
         else rejectPromise(error);
       }));
+      const failure = apiClose[0];
+      if (failure?.status === 'rejected') throw failure.reason;
     },
     url: `http://127.0.0.1:${address.port}`,
   });
@@ -273,7 +282,7 @@ it('delegates every fixed tool through the official MCP transport with stable st
       { hooks: [{ id: 'hook-a' }] },
       { simulation: { id: 'simulation-a' } },
       { runs: [{ id: 'run-a' }], suites: { diagnostics: [], suites: [{ name: 'suite-a' }] } },
-      { run: { id: 'run-b' } },
+      { run: { id: 'run-b', status: 'admitted' } },
       { run: { id: 'run-a' } },
       { diagnostics: [{ code: 'AB1000', message: 'Known diagnostic', severity: 'warning' }] },
     ]);
@@ -358,7 +367,7 @@ it('admits deterministic evals against an atomically leased epoch until their te
       name: 'eval_run',
     });
 
-    expect(result.structuredContent).toEqual({ run: { id: 'run-admitted' } });
+    expect(result.structuredContent).toEqual({ run: { id: 'run-admitted', status: 'admitted' } });
     expect(requests).toEqual([expect.objectContaining({
       artifact: '/test/epoch-pinned',
       caseIds: ['case-a'],
@@ -421,6 +430,62 @@ it('retains an eval admission refusal when the leased epoch also fails to releas
   }
 });
 
+it('releases both terminal eval resources before preserving a cleanup failure for shutdown', async () => {
+  const cleanupFailure = new Error('Subscription release failed.');
+  const released = deferred<void>();
+  let epochCloses = 0;
+  let subscriptionCloses = 0;
+  let notify!: (event: Readonly<{ readonly kind: string }>) => void;
+  const api = createApi({
+    epochs: {
+      acquireActiveEpochReference: async () => ({
+        close: async () => {
+          epochCloses += 1;
+          released.resolve();
+        },
+        epoch: { id: 'epoch-terminal-cleanup' },
+        root: '/test/epoch-terminal-cleanup',
+      }),
+      acquireEpochReference: async () => { throw new Error('Only the active epoch should be acquired.'); },
+      listEpochs: async () => [{ id: 'epoch-terminal-cleanup' }],
+    },
+    evals: {
+      list: async () => [],
+      read: async (runId: string) => ({ run: { id: runId } }),
+      start: async () => ({ run: { id: 'run-terminal-cleanup' } }),
+      subscribeEvents: async () => ({
+        activate: (listener: (event: Readonly<{ readonly kind: string }>) => void) => { notify = listener; },
+        close: () => {
+          subscriptionCloses += 1;
+          throw cleanupFailure;
+        },
+        replay: { events: [] },
+      }),
+      suites: async () => ({ diagnostics: [], suites: [] }),
+    } as unknown as AgentApiOptions['evals'],
+  });
+  const started = await startApi({ api });
+  const client = new Client({ name: 'agent-api-eval-terminal-cleanup-client', version: '1.0.0' });
+  const transport = new StreamableHTTPClientTransport(new URL(`${started.url}/mcp`), {
+    authProvider: { token: async () => 'test-agent-api-token' },
+  });
+  try {
+    await client.connect(transport);
+    await client.callTool({ name: 'eval_run' });
+    notify({ kind: 'run.completed' });
+    await within(released.promise);
+    expect(subscriptionCloses).toBe(1);
+    expect(epochCloses).toBe(1);
+    await expect(api.close()).rejects.toEqual(expect.objectContaining({
+      failures: [{ error: expect.objectContaining({ errors: [cleanupFailure] }), resource: 'eval' }],
+      name: AgentApiCloseError.name,
+    }));
+  } finally {
+    await client.close().catch(() => undefined);
+    await started.close().catch(() => undefined);
+  }
+});
+
 it('admits a deterministic eval against a real leased artifact epoch', async () => {
   const project = await createProjectFixture();
   const artifact = join(project.root, '.agent-bundle', 'epochs', 'epoch-real');
@@ -471,8 +536,12 @@ it('admits a deterministic eval against a real leased artifact epoch', async () 
     expect(serviceFailure).toBeUndefined();
     expect(admitted.isError).not.toBe(true);
     expect(admitted).toMatchObject({
-      structuredContent: { run: { harness: 'deterministic' } },
+      structuredContent: { run: { id: expect.any(String), status: 'admitted' } },
     });
+    expect(admitted.structuredContent).toEqual({
+      run: { id: expect.any(String), status: 'admitted' },
+    });
+    expect(stableJson(admitted.structuredContent as never)).not.toContain('.agent-bundle/epochs');
     await evals.close();
     await within(new Promise<void>((resolvePromise) => {
       const interval = setInterval(() => {
@@ -488,6 +557,74 @@ it('admits a deterministic eval against a real leased artifact epoch', async () 
     await removeProjectFixture(project.root);
   }
 }, 30_000);
+
+it('drains an eval lifecycle admitted after shutdown began acquiring its epoch', async () => {
+  const acquisitionStarted = deferred<void>();
+  const acquired = deferred<AgentApiEpochReference>();
+  const evalStarted = deferred<void>();
+  let closeCalls = 0;
+  let closeResolved = false;
+  let notify!: (event: Readonly<{ readonly kind: string }>) => void;
+  const api = createApi({
+    handlerFactory: (factory) => {
+      const handler = createMcpHandler(factory, { legacy: 'stateless' });
+      return {
+        close: async () => undefined,
+        fetch: handler.fetch.bind(handler),
+      } as unknown as McpHttpHandler;
+    },
+    epochs: {
+      acquireActiveEpochReference: async () => {
+        acquisitionStarted.resolve();
+        return acquired.promise;
+      },
+      acquireEpochReference: async () => { throw new Error('Only the active epoch should be acquired.'); },
+      listEpochs: async () => [{ id: 'epoch-racing-close' }],
+    },
+    evals: {
+      list: async () => [],
+      read: async (runId: string) => ({ run: { id: runId } }),
+      start: async () => {
+        evalStarted.resolve();
+        return { run: { id: 'run-racing-close' } };
+      },
+      subscribeEvents: async () => ({
+        activate: (listener: (event: Readonly<{ readonly kind: string }>) => void) => { notify = listener; },
+        close: () => undefined,
+        replay: { events: [] },
+      }),
+      suites: async () => ({ diagnostics: [], suites: [] }),
+    } as unknown as AgentApiOptions['evals'],
+  });
+  const started = await startApi({ api });
+  const client = new Client({ name: 'agent-api-close-race-client', version: '1.0.0' });
+  const transport = new StreamableHTTPClientTransport(new URL(`${started.url}/mcp`), {
+    authProvider: { token: async () => 'test-agent-api-token' },
+  });
+  try {
+    await client.connect(transport);
+    const pending = client.callTool({ name: 'eval_run' });
+    void pending.catch(() => undefined);
+    await acquisitionStarted.promise;
+    const closing = api.close();
+    void closing.then(() => { closeResolved = true; });
+    acquired.resolve({
+      close: async () => { closeCalls += 1; },
+      epoch: { id: 'epoch-racing-close' },
+      root: '/test/epoch-racing-close',
+    });
+    await evalStarted.promise;
+    await new Promise<void>((resolvePromise) => setTimeout(resolvePromise, 0));
+    expect(closeResolved).toBe(false);
+
+    notify({ kind: 'run.cancelled' });
+    await closing;
+    expect(closeCalls).toBe(1);
+  } finally {
+    await client.close().catch(() => undefined);
+    await started.close().catch(() => undefined);
+  }
+});
 
 it('rejects unknown and forbidden tool fields with the SDK-owned strict schemas', async () => {
   const started = await startApi();

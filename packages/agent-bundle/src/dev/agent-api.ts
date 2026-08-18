@@ -279,6 +279,12 @@ interface AgentApiProjectStatus {
   readonly source: Readonly<{ readonly diagnostics: readonly AgentApiDiagnostic[]; readonly revision?: string; readonly state: string }>;
 }
 
+/** Durable, path-free acknowledgement returned when an eval background job is admitted. */
+interface AgentApiEvalRunAdmission {
+  readonly id: string;
+  readonly status: 'admitted';
+}
+
 const maximumDiagnosticTextLength = 4_096;
 const safeDiagnosticCodePattern = /^[a-z0-9][a-z0-9._-]{0,127}$/iu;
 const safeDigestPattern = /^[a-f0-9]{64}$/iu;
@@ -333,6 +339,16 @@ const safeTimestamp = (value: unknown): string | undefined =>
   typeof value === 'string' && safeTimestampPattern.test(value) && Number.isFinite(Date.parse(value))
     ? value
     : undefined;
+
+/** Deliberately excludes run provenance, artifact bindings, and later execution results. */
+const evalRunAdmissionWireDto = (value: unknown): AgentApiEvalRunAdmission => {
+  const run = snapshotRecord(value);
+  const id = safeEpochId(run?.id);
+  if (id === undefined) {
+    throw apiError('AGENT_API_OPERATION_FAILED', 'Eval admission did not return a durable run identity.');
+  }
+  return Object.freeze({ id, status: 'admitted' });
+};
 
 /** Messages fail closed: any path-like, control, or secret-assignment text is never partially redacted. */
 const safeDiagnosticText = (value: unknown, fallback: string): string =>
@@ -647,7 +663,15 @@ export class AgentApi {
       lifecycle.abort(apiError('AGENT_API_CLOSED', 'Agent API is closed.'));
     }
     const handler = await Promise.allSettled([this.#handler.close()]);
-    await Promise.allSettled([...this.#operations.values(), ...this.#evalLifecycles.values()]);
+    while (this.#operations.size > 0 || this.#evalLifecycles.size > 0) {
+      for (const operation of this.#operations.keys()) {
+        operation.abort(apiError('AGENT_API_CLOSED', 'Agent API is closed.'));
+      }
+      for (const lifecycle of this.#evalLifecycles.keys()) {
+        lifecycle.abort(apiError('AGENT_API_CLOSED', 'Agent API is closed.'));
+      }
+      await Promise.allSettled([...this.#operations.values(), ...this.#evalLifecycles.values()]);
+    }
     const failures: AgentApiCloseFailure[] = [
       ...handler.flatMap((result): readonly AgentApiCloseFailure[] => result.status === 'rejected'
         ? [Object.freeze({ error: result.reason, resource: 'handler' as const })]
@@ -775,7 +799,7 @@ export class AgentApi {
           else eventSubscription.activate((event) => {
             if (terminal(event.kind)) void release().catch(() => undefined);
           });
-          return { run: admission.run };
+          return { run: evalRunAdmissionWireDto(admission.run) };
         } catch (error) {
           lifecycle.abort(error);
           completeLifecycle();
