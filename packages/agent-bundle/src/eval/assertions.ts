@@ -1,5 +1,6 @@
 import { digest } from '../core/digest.ts';
 import { EvalDefinitionError } from './errors.ts';
+import { claudeSemanticGraderId } from './graders.ts';
 import type {
   ActivationEvidence,
   EvalAssertion,
@@ -100,6 +101,9 @@ export const expectMcpCall = (options: ExpectMcpCallOptions): EvalMcpCallAsserti
 };
 
 export const expectOutcome = (options: ExpectOutcomeOptions): EvalOutcomeAssertion => {
+  if (options.script === claudeSemanticGraderId) {
+    throw assertionError(`Authored outcome graders must not use the reserved grader id ${JSON.stringify(claudeSemanticGraderId)}.`);
+  }
   const expectation = {
     kind: 'outcome' as const,
     minimumEvidence: requireMinimumEvidence(options.minimumEvidence, 'observed'),

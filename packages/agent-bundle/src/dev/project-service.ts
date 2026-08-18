@@ -22,6 +22,7 @@ import {
 } from '../core/project-context.ts';
 import type {
   AgentBundleConfig,
+  AgentBundleDevConfig,
   AgentBundleDevRuntimeConfig,
   NormalizedMcpApp,
   NormalizedMcpServer,
@@ -49,6 +50,8 @@ export interface ProjectServiceOptions {
 
 export interface PreparedProject {
   readonly configPath: string;
+  /** The validated development-only Agent API flag from the prepared configuration. */
+  readonly devAgentApiEnabled?: boolean;
   readonly diagnostics: readonly Diagnostic[];
   readonly devRuntime?: DevRuntimePreparedProject;
   readonly devRuntimeDiagnostic?: Diagnostic;
@@ -305,6 +308,19 @@ const runtimeDeclaration = (
   return Object.freeze({ declaration: Object.freeze({ provider: provider.value }) });
 };
 
+const agentApiEnabled = (config: AgentBundleConfig): boolean => {
+  const dev = config.dev;
+  if (dev === undefined) return false;
+  if (typeof dev !== 'object' || dev === null || Array.isArray(dev)) {
+    throw new TypeError('Configuration field "dev" must be an object when provided.');
+  }
+  const value = (dev as AgentBundleDevConfig).agentApi;
+  if (value !== undefined && typeof value !== 'boolean') {
+    throw new TypeError('Configuration field "dev.agentApi" must be a boolean when provided.');
+  }
+  return value === true;
+};
+
 const cloneJsonSnapshot = (value: unknown, ancestors = new Set<object>()): JsonValue => {
   if (value === null || typeof value === 'boolean' || typeof value === 'string') return value;
   if (typeof value === 'number') {
@@ -468,8 +484,10 @@ const preparedProject = (
   model?: NormalizedPlugin,
   devRuntime?: DevRuntimePreparedProject,
   devRuntimeDiagnostic?: Diagnostic,
+  devAgentApiEnabled?: boolean,
 ): PreparedProject => Object.freeze({
   configPath,
+  ...(devAgentApiEnabled === true ? { devAgentApiEnabled } : {}),
   diagnostics,
   ...(model === undefined ? {} : { model }),
   ...(devRuntime === undefined ? {} : { devRuntime }),
@@ -575,6 +593,7 @@ export class ProjectService {
 
     let loaded;
     let discovered;
+    let devAgentApiEnabled: boolean;
     try {
       loaded = await loadConfig({
         command,
@@ -583,6 +602,7 @@ export class ProjectService {
         root: requestedRoot,
         targets: this.#options.targets,
       });
+      devAgentApiEnabled = agentApiEnabled(loaded.config);
       // Eval runs are generated records, even when a project deliberately
       // stores them outside the conventional .agent-bundle directory.  Keep
       // the resolved configuration as the single source of that ownership.
@@ -737,6 +757,7 @@ export class ProjectService {
       model,
       devRuntime,
       devRuntimeDiagnostic,
+      devAgentApiEnabled,
     );
   }
 }

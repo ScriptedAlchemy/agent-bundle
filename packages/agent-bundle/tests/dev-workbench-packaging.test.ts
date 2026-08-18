@@ -1,5 +1,6 @@
 import { execFile as executeFile } from 'node:child_process';
 import { access, mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -13,6 +14,11 @@ const workbenchRoot = join(workspaceRoot, 'packages', 'workbench');
 const inspectorProvenanceFiles = ['UPSTREAM.json', 'LICENSE.inspector', 'PATCHES.md'] as const;
 let built: Promise<void> | undefined;
 
+const packedEnvironment = (): NodeJS.ProcessEnv => {
+  const { NODE_PATH: _nodePath, ...environment } = process.env;
+  return environment;
+};
+
 const buildPackage = async (force = false): Promise<void> => {
   if (force) {
     await execFile('npm', ['run', 'build'], { cwd: workspaceRoot });
@@ -20,6 +26,21 @@ const buildPackage = async (force = false): Promise<void> => {
   }
   built ??= execFile('npm', ['run', 'build'], { cwd: workspaceRoot }).then(() => undefined);
   await built;
+};
+
+const availablePort = async (): Promise<number> => {
+  const server = createServer();
+  await new Promise<void>((resolvePromise, rejectPromise) => {
+    server.once('error', rejectPromise);
+    server.listen({ host: '127.0.0.1', port: 0 }, resolvePromise);
+  });
+  const address = server.address();
+  if (address === null || typeof address === 'string') throw new Error('Expected a TCP address.');
+  await new Promise<void>((resolvePromise, rejectPromise) => server.close((error) => {
+    if (error === undefined) resolvePromise();
+    else rejectPromise(error);
+  }));
+  return address.port;
 };
 
 describe.sequential('workbench package build', () => {
@@ -89,6 +110,58 @@ it('serves prebuilt workbench assets from an installed tarball without the repos
     expect(JSON.parse(served.stdout)).toMatchObject({
       body: expect.stringContaining('Agent Bundle workbench'),
       status: 200,
+    });
+  } finally {
+    await rm(consumer, { force: true, recursive: true });
+  }
+}, 60_000);
+
+it('runs the Agent API from an omit-dev installed tarball with its runtime MCP dependencies', async () => {
+  await buildPackage();
+  const consumer = await mkdtemp(join(tmpdir(), 'agent-bundle-agent-api-consumer-'));
+  const project = join(consumer, 'project');
+  try {
+    const { stdout } = await execFile('npm', ['pack', '--json', '--pack-destination', consumer], { cwd: packageRoot });
+    const [packed] = JSON.parse(stdout) as Array<{ readonly filename: string }>;
+    const tarball = join(consumer, packed.filename);
+    await writeFile(join(consumer, 'package.json'), '{"type":"module"}\n');
+    await execFile('npm', [
+      'install', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund', tarball,
+    ], { cwd: consumer });
+    await mkdir(join(project, 'skills', 'review'), { recursive: true });
+    await Promise.all([
+      writeFile(join(project, 'package.json'), '{"type":"module"}\n'),
+      writeFile(join(project, 'agent-bundle.config.ts'), "export default { plugin: { name: 'packed-agent-api', version: '1.0.0' }, targets: ['portable'] };\n"),
+      writeFile(join(project, 'skills', 'review', 'SKILL.md'), '---\nname: review\ndescription: Reviews changes\n---\n# Review\n'),
+    ]);
+    const port = await availablePort();
+    const script = [
+      "import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';",
+      "import { toNodeHandler } from '@modelcontextprotocol/node';",
+      "import { McpServer, createMcpHandler } from '@modelcontextprotocol/server';",
+      "import { startDevServer } from 'agent-bundle';",
+      `const session = await startDevServer({ agentApi: true, open: false, port: ${port}, root: ${JSON.stringify(project)} });`,
+      "const client = new Client({ name: 'packed-agent-api-client', version: '1.0.0' });",
+      "const transport = new StreamableHTTPClientTransport(new URL(`${session.url}/mcp`), { authProvider: { token: async () => process.env.AGENT_BUNDLE_AGENT_API_TOKEN } });",
+      'try {',
+      '  await client.connect(transport);',
+      "  const status = await client.callTool({ name: 'project_status' });",
+      '  console.log(JSON.stringify({',
+      "    runtime: [typeof McpServer, typeof createMcpHandler, typeof toNodeHandler],",
+      '    status: status.structuredContent,',
+      '  }));',
+      '} finally {',
+      '  await client.close();',
+      '  await session.close();',
+      '}',
+    ].join('\n');
+    const result = await execFile(process.execPath, ['--input-type=module', '--eval', script], {
+      cwd: consumer,
+      env: { ...packedEnvironment(), AGENT_BUNDLE_AGENT_API_TOKEN: 'packed-agent-api-token' },
+    });
+    expect(JSON.parse(result.stdout)).toEqual({
+      runtime: ['function', 'function', 'function'],
+      status: expect.objectContaining({ status: expect.any(Object) }),
     });
   } finally {
     await rm(consumer, { force: true, recursive: true });

@@ -68,6 +68,15 @@ export interface PlaygroundLogsView {
   readonly total: number;
 }
 
+/** A stream/replay collision means the server trace cannot be trusted as one ordered history. */
+export class PlaygroundTraceConflictError extends Error {
+  readonly code = 'AB8043';
+
+  constructor() {
+    super('Conflicting playground trace event received.');
+  }
+}
+
 const noRows: readonly PlaygroundDetailRow[] = Object.freeze([]);
 
 const noTraceRows: readonly PlaygroundTraceRow[] = Object.freeze([]);
@@ -78,6 +87,23 @@ const row = (label: string, value: string): PlaygroundDetailRow => Object.freeze
 
 const bySequence = (left: PlaygroundTraceEvent, right: PlaygroundTraceEvent): number => left.sequence - right.sequence;
 
+const sameJson = (left: PlaygroundJsonValue, right: PlaygroundJsonValue): boolean => {
+  if (Object.is(left, right)) return true;
+  if (left === null || right === null || typeof left !== 'object' || typeof right !== 'object') return false;
+  if (Array.isArray(left) || Array.isArray(right)) {
+    return Array.isArray(left) && Array.isArray(right) && left.length === right.length && left.every((entry, index) => sameJson(entry, right[index]!));
+  }
+  const leftRecord = left as Readonly<Record<string, PlaygroundJsonValue>>;
+  const rightRecord = right as Readonly<Record<string, PlaygroundJsonValue>>;
+  const leftKeys = Object.keys(leftRecord).sort();
+  const rightKeys = Object.keys(rightRecord).sort();
+  return leftKeys.length === rightKeys.length && leftKeys.every((key, index) => key === rightKeys[index] && sameJson(leftRecord[key]!, rightRecord[key]!));
+};
+
+const sameTraceEvent = (left: PlaygroundTraceEvent, right: PlaygroundTraceEvent): boolean =>
+  left.kind === right.kind && left.rawEventRef === right.rawEventRef && left.sequence === right.sequence &&
+  left.source === right.source && left.summary === right.summary && left.timestamp === right.timestamp && sameJson(left.raw, right.raw);
+
 export const formatPlaygroundJson = (value: PlaygroundJsonValue): string => JSON.stringify(value, undefined, 2);
 
 /** Replay and stream frames overlap by design, so the ordered trace is keyed on the durable sequence. */
@@ -85,9 +111,19 @@ export const mergePlaygroundEvents = (
   existing: readonly PlaygroundTraceEvent[],
   incoming: readonly PlaygroundTraceEvent[],
 ): readonly PlaygroundTraceEvent[] => {
-  const merged = new Map<number, PlaygroundTraceEvent>();
-  for (const event of [...existing, ...incoming]) merged.set(event.sequence, event);
-  return Object.freeze([...merged.values()].sort(bySequence));
+  const byRawEventRef = new Map<string, PlaygroundTraceEvent>();
+  const bySequenceIndex = new Map<number, PlaygroundTraceEvent>();
+  for (const event of [...existing, ...incoming]) {
+    const sequenceMatch = bySequenceIndex.get(event.sequence);
+    const referenceMatch = byRawEventRef.get(event.rawEventRef);
+    if ((sequenceMatch !== undefined && !sameTraceEvent(sequenceMatch, event)) ||
+      (referenceMatch !== undefined && !sameTraceEvent(referenceMatch, event))) {
+      throw new PlaygroundTraceConflictError();
+    }
+    bySequenceIndex.set(event.sequence, event);
+    byRawEventRef.set(event.rawEventRef, event);
+  }
+  return Object.freeze([...bySequenceIndex.values()].sort(bySequence));
 };
 
 export const playgroundTraceRowsFor = (

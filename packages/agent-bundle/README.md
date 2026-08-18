@@ -37,6 +37,30 @@ artifact provenance, artifact-bound MCP and hook playgrounds, durable ordered pl
 eval runs and comparisons. Hook and MCP operations can record into an open playground trace for export
 or promotion into a draft eval case.
 
+### Optional Agent API
+
+The Agent API is a separate, authenticated Streamable HTTP MCP endpoint for a Codex client. It is
+off by default and is mounted only at `/mcp` on the existing loopback foreground server:
+
+```sh
+AGENT_BUNDLE_AGENT_API_TOKEN='replace-with-a-secret' agent-bundle dev --agent-api --no-open --port 3100
+```
+
+`dev: { agentApi: true }` enables it from configuration; `--no-agent-api` overrides that setting.
+Startup fails before serving if the endpoint is enabled without `AGENT_BUNDLE_AGENT_API_TOKEN`.
+The fixed token is read once, never logged/persisted/returned, and is required as standard
+`Authorization: Bearer` authentication. Clients may omit `Origin`; a supplied origin must exactly
+match the foreground URL. The endpoint is absent when disabled.
+
+It has a fixed, ordered tool list: `project_status`, `skills_list`, `skill_inspect`,
+`artifacts_list`, `artifact_inspect`, `mcp_servers_list`, `mcp_invoke`, `hooks_list`,
+`hook_simulate`, `evals_list`, `eval_run`, `eval_get`, and `diagnostics_list`. Tool schemas reject
+undeclared root/path/command/cwd/environment/harness/evidence/outcome fields. Artifact-backed calls
+may name an epoch id; otherwise they atomically lease the active epoch, so a hot rebuild sends later
+calls to the new epoch while an admitted call remains pinned to its original epoch. The stateless
+transport works at the same fixed URL after a foreground restart without reconnecting the official
+MCP client.
+
 ## Evaluation
 
 Eval suites are typed modules discovered by convention:

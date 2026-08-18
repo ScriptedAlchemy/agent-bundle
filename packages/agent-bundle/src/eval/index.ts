@@ -100,6 +100,7 @@ export {
   claudeSemanticGraderId,
   claudeSemanticGraderSchemaVersion,
   parseClaudeSemanticGraderResult,
+  parseClaudeSemanticGraderStream,
   runClaudeSemanticGrader,
 } from './claude-semantic-grader.ts';
 export type {

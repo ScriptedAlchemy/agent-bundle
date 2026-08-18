@@ -16,6 +16,13 @@ const response = (body: unknown, status = 200): Response => new Response(JSON.st
   status,
 });
 
+/** Supplies adversarial decoded JSON values that a real JSON parser cannot produce. */
+const decodedResponse = (body: unknown): Response => ({
+  json: async () => body,
+  ok: true,
+  status: 200,
+} as unknown as Response);
+
 const ndjson = (chunks: readonly string[]): Response => new Response(new ReadableStream<Uint8Array>({
   start(controller) {
     const encoder = new TextEncoder();
@@ -63,7 +70,12 @@ const recordingFetch = (calls: RecordedRequest[], reply: () => Response): typeof
 
 const foreground = (fetch: typeof globalThis.fetch): ForegroundRouteClient => new ForegroundRouteClient({ fetch });
 
-it('starts one server-owned skill inspection over the shared foreground session', async () => {
+const hostileFetch = (body: unknown): typeof fetch => async (input) =>
+  String(input) === '/api/project/session'
+    ? response({ cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef', origin: 'http://127.0.0.1:5173', token: 'foreground-token' })
+    : decodedResponse(body);
+
+it('starts one server-owned skill inspection without browser-authored identity or evidence over the shared foreground session', async () => {
   const calls: RecordedRequest[] = [];
   const client = new PlaygroundClient({
     foreground: foreground(recordingFetch(calls, () => response({ run: { id: 'run-1', session } }))),
@@ -113,14 +125,16 @@ it('replays, exports, and promotes persisted raw event references only', async (
   const calls: RecordedRequest[] = [];
   const terminal = { ...session, outcome: { status: 'passed' }, state: 'finalized' } as const;
   const client = new PlaygroundClient({
-    foreground: foreground(recordingFetch(calls, () => response({
-      draftEvalCase: {
-        assertions: [], epoch: identity.epoch, fixture: identity.fixture, invocation: identity.invocation,
-        outcome: { status: 'passed' }, schemaVersion: 1, target: identity.target, task: identity.task,
-      },
-      export: { events: [event(1, 'Bound.')], schemaVersion: 1, session: terminal },
-      replay: { cursor: { afterSequence: 2 }, events: [event(1, 'Bound.'), event(2, 'Inspected.')], session: terminal },
-    }))),
+    foreground: foreground(recordingFetch(calls, () => response(calls.length === 1
+      ? { replay: { cursor: { afterSequence: 2 }, events: [event(1, 'Bound.'), event(2, 'Inspected.')], session: terminal } }
+      : calls.length === 2
+        ? { export: { events: [event(1, 'Bound.')], schemaVersion: 1, session: terminal } }
+        : {
+            draftEvalCase: {
+              assertions: [], epoch: identity.epoch, fixture: identity.fixture, invocation: identity.invocation,
+              outcome: { status: 'passed' }, schemaVersion: 1, target: identity.target, task: identity.task,
+            },
+          }))),
   });
 
   await client.replay('session-1', 1);
@@ -200,4 +214,96 @@ it('reports an unrecognised failure body with the transport status', async () =>
     code: 'AB8043',
     message: 'Playground request failed with HTTP 503.',
   });
+});
+
+it('rejects malformed or hostile server envelopes through the stable foreground diagnostic', async () => {
+  const terminal = { ...session, outcome: { status: 'passed' }, state: 'finalized' };
+  const inheritedIdentity = Object.create(identity) as object;
+  const accessorSession = { ...session } as Record<string, unknown>;
+  Object.defineProperty(accessorSession, 'identity', {
+    enumerable: true,
+    get: () => { throw new Error('hostile accessor'); },
+  });
+  const proxySession = new Proxy({ ...session }, {
+    ownKeys: () => { throw new Error('hostile proxy'); },
+  });
+  const cases: readonly {
+    readonly body: unknown;
+    readonly invoke: (client: PlaygroundClient) => Promise<unknown>;
+    readonly name: string;
+  }[] = [
+    {
+      body: { run: { id: 'run-1', session: { ...session, identity: {} } } },
+      invoke: (client) => client.run({ operation: 'skill.inspect', skillId: 'review', target: 'portable' }),
+      name: 'a run with a missing identity epoch',
+    },
+    {
+      body: { session: { ...session, identity: { ...identity, target: { digest: 7, name: 'portable' } } } },
+      invoke: (client) => client.session('session-1'),
+      name: 'a session with a non-string target digest',
+    },
+    {
+      body: { session: { ...session, identity: { ...identity, fixture: { digest: 'sha256-fixture' } } } },
+      invoke: (client) => client.session('session-1'),
+      name: 'a session with an incomplete fixture identity',
+    },
+    {
+      body: { session: { ...session, state: 'still-running' } },
+      invoke: (client) => client.session('session-1'),
+      name: 'a session with an unsupported state',
+    },
+    {
+      body: { replay: { cursor: { afterSequence: -1 }, events: [], session: terminal } },
+      invoke: (client) => client.replay('session-1'),
+      name: 'a replay with a negative cursor',
+    },
+    {
+      body: { export: { events: [{ ...event(1, 'Bound.'), rawEventRef: 'forged.jsonl#1' }], schemaVersion: 1, session: terminal } },
+      invoke: (client) => client.export('session-1'),
+      name: 'an export with a forged event reference',
+    },
+    {
+      body: {
+        draftEvalCase: {
+          assertions: [], epoch: identity.epoch, fixture: identity.fixture, invocation: identity.invocation,
+          outcome: { status: 7 }, schemaVersion: 1, target: identity.target, task: identity.task,
+        },
+      },
+      invoke: (client) => client.promoteToDraftEval('session-1', ['events.jsonl#1']),
+      name: 'a draft with a malformed durable outcome',
+    },
+    {
+      body: { run: { id: 'run-1', session: accessorSession } },
+      invoke: (client) => client.run({ operation: 'skill.inspect', skillId: 'review', target: 'portable' }),
+      name: 'an accessor-backed session',
+    },
+    {
+      body: { run: { id: 'run-1', session: proxySession } },
+      invoke: (client) => client.run({ operation: 'skill.inspect', skillId: 'review', target: 'portable' }),
+      name: 'a proxy-backed session',
+    },
+    {
+      body: { run: { id: 'run-1', session: { ...session, identity: inheritedIdentity } } },
+      invoke: (client) => client.run({ operation: 'skill.inspect', skillId: 'review', target: 'portable' }),
+      name: 'a prototype-backed identity',
+    },
+  ];
+
+  for (const entry of cases) {
+    const client = new PlaygroundClient({ foreground: foreground(hostileFetch(entry.body)) });
+    await expect(entry.invoke(client), entry.name).rejects.toMatchObject({ code: 'AB8043' });
+  }
+});
+
+it('detaches and freezes every accepted nested server envelope before returning it to React', async () => {
+  const mutable = JSON.parse(JSON.stringify({ run: { id: 'run-1', session } })) as { run: { id: string; session: typeof session } };
+  const client = new PlaygroundClient({ foreground: foreground(hostileFetch(mutable)) });
+
+  const run = await client.run({ operation: 'skill.inspect', skillId: 'review', target: 'portable' });
+  mutable.run.session.identity.epoch.id = 'mutated-after-decode';
+
+  expect(run.session.identity.epoch.id).toBe('epoch-1');
+  expect(Object.isFrozen(run)).toBe(true);
+  expect(Object.isFrozen(run.session.identity.epoch)).toBe(true);
+  expect(Object.isFrozen(run.session.cleanupFailures)).toBe(true);
 });

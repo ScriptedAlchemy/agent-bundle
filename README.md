@@ -24,6 +24,7 @@ The implemented commands are:
 - `agent-bundle dev` starts the local development server and Workbench for an
   ordinary project. Runtime remains an advanced optional extension:
   `dev.runtime.provider` selects an application-owned provider when configured.
+- `agent-bundle eval` runs deterministic or native Claude/Codex eval suites and records a run.
 
 `inspect` is intentionally a source/config-plan command; run it before source removal. Artifact-only inspection is the validation contract (`validate --artifact`).
 
@@ -33,6 +34,34 @@ The optional example and Workbench architecture are documented in
 [the RSC Runtime topology](docs/architecture/rsc-runtime-workbench.md). Native
 evaluation evidence is example-owned, reuses an already signed-in host session
 when a contributor runs it, and never accepts or stores API keys.
+
+## Developer workbench and Agent API
+
+`agent-bundle dev` is a loopback-only foreground session for inspecting source and published artifact
+epochs, exercising artifact-bound MCP and hook operations, and running evals. It never becomes part
+of a generated artifact.
+
+The optional Agent API exposes a fixed Streamable HTTP MCP endpoint at `/mcp` on that same foreground
+URL. It is disabled by default. Enable it with `--agent-api` (or set `dev: { agentApi: true }` in the
+project config) only after setting a fixed bearer secret:
+
+```sh
+AGENT_BUNDLE_AGENT_API_TOKEN='replace-with-a-secret' agent-bundle dev --agent-api --no-open --port 3100
+```
+
+`--no-agent-api` overrides config enablement. The endpoint accepts standard `Authorization: Bearer`
+authentication, allows Codex clients without an `Origin` header, and rejects a browser-origin request
+unless it is exactly the foreground origin. The token is read once at startup and is never logged,
+persisted, or returned. A running endpoint uses the same URL and token across foreground restarts;
+its stateless MCP transport lets an initialized client issue later requests without a tool-list reload.
+
+The API exposes only these stable tools: `project_status`, `skills_list`, `skill_inspect`,
+`artifacts_list`, `artifact_inspect`, `mcp_servers_list`, `mcp_invoke`, `hooks_list`,
+`hook_simulate`, `evals_list`, `eval_run`, `eval_get`, and `diagnostics_list`. Their schemas reject
+undeclared fields, so clients cannot name filesystem roots, artifact paths, commands, working
+directories, environments, harnesses, or browser-authored evidence/outcomes. Omitted artifact epochs
+bind atomically to the active publication; in-flight and explicitly selected epoch operations stay
+pinned until they complete.
 
 ## Configuration
 

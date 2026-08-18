@@ -5,7 +5,7 @@ import { normalizeClaudeStream, type ClaudeTraceEvent } from './claude-stream.ts
 import { isEvalScriptOutcome } from './graders.ts';
 import type { EvalAssertion, EvalScriptOutcome } from './types.ts';
 
-export const claudeSemanticGraderId = 'claude-semantic';
+export { claudeSemanticGraderId } from './graders.ts';
 export const claudeSemanticGraderSchemaVersion = 1;
 
 export interface RunClaudeSemanticGraderOptions extends ClaudeProcessOptions {
@@ -32,6 +32,33 @@ export interface ClaudeSemanticGraderRun {
 
 const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
+
+/** The semantic response has one strict terminal stream-json result envelope, never an assistant-text fallback. */
+const terminalSemanticResult = (raw: string): string | undefined => {
+  const lines = raw.split(/\r?\n/u).filter((line) => line.trim().length > 0);
+  let terminal: string | undefined;
+  for (const [index, line] of lines.entries()) {
+    let record: unknown;
+    try {
+      record = parseJsonWithoutDuplicateKeys(line);
+    } catch {
+      return undefined;
+    }
+    if (!isRecord(record)) return undefined;
+    if (record.type !== 'result') continue;
+    if (
+      index !== lines.length - 1 ||
+      terminal !== undefined ||
+      record.subtype !== 'success' ||
+      record.is_error === true ||
+      typeof record.result !== 'string'
+    ) {
+      return undefined;
+    }
+    terminal = record.result;
+  }
+  return terminal;
+};
 
 const requestFor = (options: RunClaudeSemanticGraderOptions): string => stableJson({
   assertions: options.assertions,
@@ -74,6 +101,19 @@ export const parseClaudeSemanticGraderResult = (value: string): EvalScriptOutcom
   return Object.freeze({ detail: parsed.detail, outcome: parsed.outcome });
 };
 
+/** Parses only a complete stream with exactly one successful terminal result envelope. */
+export const parseClaudeSemanticGraderStream = (raw: string): EvalScriptOutcome | undefined => {
+  const terminal = terminalSemanticResult(raw);
+  if (terminal === undefined) return undefined;
+  try {
+    const stream = normalizeClaudeStream(raw);
+    if (stream.errorKinds.length > 0 || stream.incompleteTrailingRecord !== undefined) return undefined;
+  } catch {
+    return undefined;
+  }
+  return parseClaudeSemanticGraderResult(terminal);
+};
+
 /**
  * Uses the already-preflighted Claude CLI as a model grader. The command and request are
  * server-owned: it receives no plugin directory, hook flags, authored command, or provider credentials.
@@ -102,12 +142,6 @@ export const runClaudeSemanticGrader = async (
   if (process.failure !== undefined || process.exitCode !== 0 || process.termination !== undefined) {
     return Object.freeze({ raw });
   }
-  try {
-    const stream = normalizeClaudeStream(process.stdout);
-    if (stream.errorKinds.length > 0 || stream.incompleteTrailingRecord !== undefined) return Object.freeze({ raw });
-    const result = parseClaudeSemanticGraderResult(stream.finalResponse);
-    return Object.freeze({ raw, ...(result === undefined ? {} : { result }) });
-  } catch {
-    return Object.freeze({ raw });
-  }
+  const result = parseClaudeSemanticGraderStream(process.stdout);
+  return Object.freeze({ raw, ...(result === undefined ? {} : { result }) });
 };

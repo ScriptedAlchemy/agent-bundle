@@ -76,7 +76,7 @@ it('uses only an installed tarball after source deletion', async () => {
   const consumerRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-packed-consumer-'));
   const packedPackageRoot = join(consumerRoot, 'packed-agent-bundle');
   const projectRoot = join(consumerRoot, 'project with spaces');
-  const firstArtifact = join(projectRoot, 'first artifact');
+  const artifact = join(projectRoot, 'artifact with spaces');
 
   try {
     await cp(packageRoot, packedPackageRoot, { recursive: true });
@@ -111,21 +111,21 @@ it('uses only an installed tarball after source deletion', async () => {
     const { stdout: inspection } = await runInstalled(cli, projectRoot, ['inspect', '--json', '--root', projectRoot]);
     expect(JSON.parse(inspection)).toMatchObject({ model: { metadata: { name: 'integration-fixture' } } });
 
-    await runInstalled(cli, projectRoot, ['build', '--root', projectRoot, '--output', firstArtifact]);
-    const firstArtifactDigest = await artifactDigest(firstArtifact);
-    await runInstalled(cli, projectRoot, ['build', '--root', projectRoot, '--output', firstArtifact]);
-    expect(firstArtifactDigest).toEqual(await artifactDigest(firstArtifact));
+    await runInstalled(cli, projectRoot, ['build', '--root', projectRoot, '--output', artifact]);
+    const firstArtifactDigest = await artifactDigest(artifact);
+    await runInstalled(cli, projectRoot, ['build', '--root', projectRoot, '--output', artifact]);
+    expect(await artifactDigest(artifact)).toEqual(firstArtifactDigest);
 
-    const manifest = JSON.parse(await readFile(join(firstArtifact, 'agent-bundle.manifest.json'), 'utf8')) as {
+    const manifest = JSON.parse(await readFile(join(artifact, 'agent-bundle.manifest.json'), 'utf8')) as {
       readonly files: readonly (ManifestDigest & {
         readonly kind: 'bundle' | 'copy' | 'generated';
         readonly sourceInputs: readonly string[];
       })[];
     };
-    const files = (await artifactDigest(firstArtifact)).filter((entry) => entry.path !== 'agent-bundle.manifest.json');
+    const files = (await artifactDigest(artifact)).filter((entry) => entry.path !== 'agent-bundle.manifest.json');
     const manifestFiles = await Promise.all(files.map(async (file): Promise<ManifestDigest> => {
       if (!/(?:^|\/)scripts\/[^/]+\.(?:sh|bash|py)$/iu.test(file.path)) return file;
-      const mode = (await stat(join(firstArtifact, file.path))).mode & 0o777;
+      const mode = (await stat(join(artifact, file.path))).mode & 0o777;
       return (mode & 0o111) === 0 ? file : { ...file, mode };
     }));
     expect(
@@ -138,14 +138,14 @@ it('uses only an installed tarball after source deletion', async () => {
       expect(file.sourceInputs).toEqual([...file.sourceInputs].sort((left, right) => left.localeCompare(right)));
     }
     for (const file of files.filter((entry) => entry.path.endsWith('.mjs'))) {
-      await expect(readFile(join(firstArtifact, file.path), 'utf8')).resolves.not.toMatch(
+      await expect(readFile(join(artifact, file.path), 'utf8')).resolves.not.toMatch(
         agentBundleImport,
       );
     }
-    const localServer = JSON.parse(await readFile(join(firstArtifact, 'portable', 'mcp.json'), 'utf8')) as {
+    const localServer = JSON.parse(await readFile(join(artifact, 'portable', 'mcp.json'), 'utf8')) as {
       readonly mcpServers: { readonly local: { readonly args: readonly [string, ...string[]] } };
     };
-    const localServerBundle = join(firstArtifact, 'portable', localServer.mcpServers.local.args[0]);
+    const localServerBundle = join(artifact, 'portable', localServer.mcpServers.local.args[0]);
 
     await Promise.all([
       rm(join(projectRoot, 'agent-bundle.config.ts')),
@@ -158,34 +158,34 @@ it('uses only an installed tarball after source deletion', async () => {
     await expect(access(join(projectRoot, 'agent-bundle.config.ts'))).rejects.toThrow();
 
     const { stdout: validation } = await runInstalled(cli, projectRoot, [
-      'validate', '--json', '--root', projectRoot, '--artifact', firstArtifact,
+      'validate', '--json', '--root', projectRoot, '--artifact', artifact,
     ]);
     expect(validation).toBe('{"diagnostics":[]}\n');
 
-    const bundlePath = join(firstArtifact, 'portable', 'scripts', 'bundle.mjs');
+    const bundlePath = join(artifact, 'portable', 'scripts', 'bundle.mjs');
     await expect(execFile(process.execPath, [
       '--input-type=module',
       '--eval',
       "const module = await import(process.argv[1]); console.log(module.bundleMessage);",
       pathToFileURL(bundlePath).href,
     ], { cwd: projectRoot, env: installedEnvironment() })).resolves.toMatchObject({ stdout: 'bundled fixture\n' });
-    await expect(execFile(join(firstArtifact, 'portable', 'scripts', 'shell.sh'), [], {
+    await expect(execFile(join(artifact, 'portable', 'scripts', 'shell.sh'), [], {
       cwd: projectRoot,
       env: installedEnvironment(),
     })).resolves.toMatchObject({ stdout: 'shell fixture\n' });
-    await expect(execFile('python3', [join(firstArtifact, 'portable', 'scripts', 'python.py')], {
+    await expect(execFile('python3', [join(artifact, 'portable', 'scripts', 'python.py')], {
       cwd: projectRoot,
       env: installedEnvironment(),
     })).resolves.toMatchObject({ stdout: 'python fixture\n' });
-    expect((await stat(join(firstArtifact, 'portable', 'scripts', 'shell.sh'))).mode & 0o777).toBe(sourceShellMode);
-    expect((await stat(join(firstArtifact, 'portable', 'scripts', 'python.py'))).mode & 0o777).toBe(sourcePythonMode);
+    expect((await stat(join(artifact, 'portable', 'scripts', 'shell.sh'))).mode & 0o777).toBe(sourceShellMode);
+    expect((await stat(join(artifact, 'portable', 'scripts', 'python.py'))).mode & 0o777).toBe(sourcePythonMode);
 
     const { stdout: hooks } = await runInstalled(cli, projectRoot, [
-      'hooks', 'list', '--json', '--root', projectRoot, '--artifact', firstArtifact, '--target', 'codex',
+      'hooks', 'list', '--json', '--root', projectRoot, '--artifact', artifact, '--target', 'codex',
     ]);
     const hook = (JSON.parse(hooks) as Array<{ id: string }>)[0]!;
     const { stdout: simulation } = await runInstalled(cli, projectRoot, [
-      'hooks', 'simulate', '--json', '--root', projectRoot, '--artifact', firstArtifact, '--target', 'codex',
+      'hooks', 'simulate', '--json', '--root', projectRoot, '--artifact', artifact, '--target', 'codex',
       '--hook', hook.id, '--input', JSON.stringify({
         cwd: projectRoot,
         sessionId: 'packed-consumer',
@@ -196,7 +196,7 @@ it('uses only an installed tarball after source deletion', async () => {
     expect(JSON.parse(simulation)).toEqual({ additionalContext: 'hook:packed-consumer', outcome: 'continue' });
 
     const { stdout: listedTools } = await runInstalled(cli, projectRoot, [
-      'mcp', 'list', '--json', '--root', projectRoot, '--artifact', firstArtifact, '--target', 'portable', '--server', 'local',
+      'mcp', 'list', '--json', '--root', projectRoot, '--artifact', artifact, '--target', 'portable', '--server', 'local',
     ]);
     expect(JSON.parse(listedTools)).toMatchObject({
       tools: [{
@@ -205,7 +205,7 @@ it('uses only an installed tarball after source deletion', async () => {
       }],
     });
     const { stdout: invokedTool } = await runInstalled(cli, projectRoot, [
-      'mcp', 'invoke', '--json', '--root', projectRoot, '--artifact', firstArtifact, '--target', 'portable', '--server', 'local',
+      'mcp', 'invoke', '--json', '--root', projectRoot, '--artifact', artifact, '--target', 'portable', '--server', 'local',
       '--tool', 'show-dashboard', '--input', '{}',
     ]);
     expect(JSON.parse(invokedTool)).toMatchObject({

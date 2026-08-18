@@ -1,6 +1,7 @@
 import { isAbsolute } from 'node:path';
 
 import type { Diagnostic } from '../core/diagnostics.ts';
+import { snapshotStrictJsonValue } from '../core/strict-json.ts';
 import { findCredentialConfiguration } from './credentials.ts';
 import { EvalConfigError } from './errors.ts';
 
@@ -31,9 +32,13 @@ export const defaultEvalInclude = Object.freeze(['evals/**/*.eval.ts']);
 export const defaultEvalRunsDir = '.agent-bundle/runs';
 
 const configKeys = Object.freeze(['include', 'runsDir', 'semanticGrader']);
+const semanticModel = /^[A-Za-z][A-Za-z0-9._:-]{0,127}$/u;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
+
+const isPlainRecord = (value: unknown): value is Record<string, unknown> =>
+  isRecord(value) && (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null);
 
 const configError = (
   code: ConstructorParameters<typeof EvalConfigError>[0],
@@ -68,7 +73,7 @@ const requireRunsDirectory = (value: unknown): string => {
 const semanticGraderKeys = Object.freeze(['harness', 'model']);
 
 const normalizeSemanticGrader = (value: unknown): NormalizedEvalSemanticGrader => {
-  if (!isRecord(value)) {
+  if (!isPlainRecord(value)) {
     throw configError('EVAL_CONFIG_INVALID', 'Eval configuration semanticGrader must be an object.');
   }
   const unexpected = Object.keys(value).filter((key) => !semanticGraderKeys.includes(key)).sort();
@@ -78,8 +83,11 @@ const normalizeSemanticGrader = (value: unknown): NormalizedEvalSemanticGrader =
   if (value.harness !== 'claude') {
     throw configError('EVAL_CONFIG_INVALID', 'Eval configuration semanticGrader harness must be "claude".');
   }
-  if (typeof value.model !== 'string' || value.model.trim().length === 0) {
-    throw configError('EVAL_CONFIG_INVALID', 'Eval configuration semanticGrader model must be a non-empty string.');
+  if (typeof value.model !== 'string' || !semanticModel.test(value.model)) {
+    throw configError(
+      'EVAL_CONFIG_INVALID',
+      'Eval configuration semanticGrader model must be a non-empty safe model identifier, not a path.',
+    );
   }
   return Object.freeze({ harness: 'claude', model: value.model });
 };
@@ -92,28 +100,34 @@ export const normalizeEvalConfig = (value: unknown): NormalizedEvalConfig => {
       runsDir: defaultEvalRunsDir,
     });
   }
-  const found = findCredentialConfiguration(value);
+  let snapshot: unknown;
+  try {
+    snapshot = snapshotStrictJsonValue(value);
+  } catch {
+    throw configError('EVAL_CONFIG_INVALID', 'Eval configuration must be a detached plain JSON object.');
+  }
+  if (!isPlainRecord(snapshot)) throw configError('EVAL_CONFIG_INVALID', 'Eval configuration must be a plain object.');
+  const found = findCredentialConfiguration(snapshot);
   if (found !== undefined) {
     throw configError(
       'EVAL_CREDENTIAL_REJECTED',
       `Eval configuration must not carry provider credential material (${found}). Agent Bundle reuses the host CLI's existing signed-in session.`,
     );
   }
-  if (!isRecord(value)) throw configError('EVAL_CONFIG_INVALID', 'Eval configuration must be a plain object.');
-  const unexpected = Object.keys(value).filter((key) => !configKeys.includes(key)).sort();
+  const unexpected = Object.keys(snapshot).filter((key) => !configKeys.includes(key)).sort();
   if (unexpected.length > 0) {
     throw configError('EVAL_CONFIG_INVALID', `Eval configuration does not accept ${JSON.stringify(unexpected)}.`);
   }
 
-  const include = value.include;
+  const include = snapshot.include;
   if (include !== undefined && (!Array.isArray(include) || include.length === 0)) {
     throw configError('EVAL_INCLUDE_INVALID', 'Eval configuration include must be a non-empty array of patterns.');
   }
-  const runsDir = value.runsDir === undefined
+  const runsDir = snapshot.runsDir === undefined
     ? defaultEvalRunsDir
-    : requireRunsDirectory(value.runsDir);
-  const semanticGrader = Object.hasOwn(value, 'semanticGrader')
-    ? normalizeSemanticGrader(value.semanticGrader)
+    : requireRunsDirectory(snapshot.runsDir);
+  const semanticGrader = Object.hasOwn(snapshot, 'semanticGrader')
+    ? normalizeSemanticGrader(snapshot.semanticGrader)
     : undefined;
 
   return Object.freeze({

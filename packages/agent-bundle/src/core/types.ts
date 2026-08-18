@@ -48,6 +48,12 @@ export interface AgentBundleHostConfig {
   nativeHooks?: string;
 }
 
+/** Development-only settings that never become part of a built artifact. */
+export interface AgentBundleDevConfig {
+  /** Exposes the authenticated, loopback-only Agent API from `agent-bundle dev`. */
+  agentApi?: boolean;
+}
+
 /** Adapter-owned config is contributed by declaration merging, not compiler core. */
 // rslint-disable-next-line @typescript-eslint/no-empty-object-type -- declaration-merge extension point
 export interface AgentBundleConfigExtensions {}

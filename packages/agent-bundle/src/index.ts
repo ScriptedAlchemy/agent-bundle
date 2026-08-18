@@ -69,6 +69,7 @@ export type AgentBundleConfig = CoreAgentBundleConfig
 
 export type {
   AgentBundleConfigExtensions,
+  AgentBundleDevConfig,
   AgentBundleHostConfig,
   AgentBundleMcpApp,
   AgentBundleMcpConfig,

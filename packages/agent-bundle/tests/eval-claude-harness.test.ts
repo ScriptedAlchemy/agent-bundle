@@ -148,9 +148,11 @@ const runTrial = async (
   context: ClaudeTestContext,
   overrides: {
     readonly configuredSemanticGrader?: Parameters<typeof runClaudeTrial>[0]['configuredSemanticGrader'];
+    readonly graders?: Parameters<typeof runClaudeTrial>[0]['graders'];
     readonly recorded?: NativeClaudeProcessRequest[];
     readonly run: (request: NativeClaudeProcessRequest, index: number) => NativeClaudeProcessResult;
     readonly semanticGrader?: Parameters<typeof runClaudeTrial>[0]['semanticGrader'];
+    readonly signal?: AbortSignal;
   },
 ): Promise<EvalTrialRecord> => {
   const recorded = overrides.recorded ?? [];
@@ -166,7 +168,9 @@ const runTrial = async (
     ...(overrides.configuredSemanticGrader === undefined
       ? {}
       : { configuredSemanticGrader: overrides.configuredSemanticGrader }),
+    ...(overrides.graders === undefined ? {} : { graders: overrides.graders }),
     ...(overrides.semanticGrader === undefined ? {} : { semanticGrader: overrides.semanticGrader }),
+    ...(overrides.signal === undefined ? {} : { signal: overrides.signal }),
     suiteDir: context.suiteDir,
     trialIndex: 0,
     workspaceRoot: join(context.root, 'workspaces'),
@@ -461,6 +465,94 @@ it('contains a malformed configured semantic grader as a path-free inconclusive 
       outcome: 'inconclusive',
     });
     expect(JSON.stringify(trial)).not.toContain(context.root);
+  });
+}, 240_000);
+
+it('requires exactly one terminal strict result envelope from configured semantic grading', async () => {
+  const validResult = JSON.stringify({ detail: 'valid', outcome: 'pass', schemaVersion: 1 });
+  const invalidResult = JSON.stringify({ detail: 'invalid', outcome: 'maybe', schemaVersion: 1 });
+  const valid = JSON.stringify({ result: validResult, subtype: 'success', type: 'result' });
+  const invalid = JSON.stringify({ result: invalidResult, subtype: 'success', type: 'result' });
+  const assistantOnly = JSON.stringify({
+    message: { content: [{ text: validResult, type: 'text' }] },
+    type: 'assistant',
+  });
+  const duplicateResult = `{"type":"result","subtype":"success","result":${JSON.stringify(invalidResult)},"result":${JSON.stringify(validResult)}}`;
+  const afterTerminal = JSON.stringify({ message: { content: [{ text: 'later', type: 'text' }] }, type: 'assistant' });
+  for (const stdout of [
+    `${assistantOnly}\n`,
+    `${duplicateResult}\n`,
+    `${invalid}\n${valid}\n`,
+    `${valid}\n${valid}\n`,
+    `${valid}\n${afterTerminal}\n`,
+  ]) {
+    await withClaudeContext([expectExitCode(0)], async (context) => {
+      const trial = await runTrial(context, {
+        configuredSemanticGrader: { harness: 'claude', model: 'claude-opus-4-6' },
+        run: (_request, index) => index === 0
+          ? versionResult
+          : index === 1
+            ? authenticatedResult
+            : index === 2
+              ? { exitCode: 0, stderr: '', stdout: activatedStream }
+              : { exitCode: 0, stderr: '', stdout },
+      });
+
+      expect(trial.harnessFailure).toEqual({
+        code: 'EVAL_GRADER_FAILED',
+        message: 'Grading is incomplete: claude-semantic: The grader could not complete.',
+        stage: 'grader',
+      });
+      expect(trial.evidence.scripts.results['claude-semantic']).toEqual({
+        detail: 'The grader could not complete.',
+        outcome: 'inconclusive',
+      });
+    });
+  }
+}, 240_000);
+
+it('refuses an authored grader that claims the server-owned semantic result id', async () => {
+  await withClaudeContext([expectExitCode(0)], async (context) => {
+    const recorded: NativeClaudeProcessRequest[] = [];
+    await expect(runTrial(context, {
+      configuredSemanticGrader: { harness: 'claude', model: 'claude-opus-4-6' },
+      graders: [{ exists: true, id: 'claude-semantic', kind: 'file', path: 'result.json' }],
+      recorded,
+      run: () => { throw new Error('No Claude command should run for an invalid authored grader id.'); },
+    })).rejects.toMatchObject({
+      code: 'EVAL_HARNESS_INPUT_INVALID',
+      message: 'Authored eval graders and outcome assertions must not use the reserved grader id "claude-semantic".',
+    });
+    expect(recorded).toEqual([]);
+  });
+}, 240_000);
+
+it('does not invoke configured semantic grading after the primary trial is cancelled', async () => {
+  await withClaudeContext([expectExitCode(0)], async (context) => {
+    const controller = new AbortController();
+    const recorded: NativeClaudeProcessRequest[] = [];
+    const trial = await runTrial(context, {
+      configuredSemanticGrader: { harness: 'claude', model: 'claude-opus-4-6' },
+      recorded,
+      run: (_request, index) => {
+        if (index === 0) return versionResult;
+        if (index === 1) return authenticatedResult;
+        if (index === 2) {
+          controller.abort();
+          return { exitCode: 0, stderr: '', stdout: activatedStream };
+        }
+        throw new Error('The semantic runner must not be invoked after cancellation.');
+      },
+      signal: controller.signal,
+    });
+
+    expect(recorded).toHaveLength(3);
+    expect(trial.harnessFailure).toEqual({
+      code: 'EVAL_TRACE_UNAVAILABLE',
+      message: 'The trial was cancelled before Claude completed semantic grading.',
+      stage: 'trace',
+    });
+    expect(trial.outcome).toBe('inconclusive');
   });
 }, 240_000);
 

@@ -26,6 +26,8 @@ export default defineConfig({
     externals: [
       '@modelcontextprotocol/client',
       '@modelcontextprotocol/client/stdio',
+      '@modelcontextprotocol/node',
+      '@modelcontextprotocol/server',
       '@rsbuild/core',
       '@rsbuild/plugin-react',
       '@rslib/core',
