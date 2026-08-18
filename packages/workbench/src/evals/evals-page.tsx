@@ -397,6 +397,8 @@ const terminalEvent = (event: EvalRunEvent): boolean =>
 
 const reconnectDelayMilliseconds = 250;
 
+const maximumTerminalResultReads = 8;
+
 const waitForReconnect = (milliseconds: number, signal: AbortSignal): Promise<void> => new Promise((resolvePromise) => {
   if (signal.aborted) {
     resolvePromise();
@@ -410,6 +412,28 @@ const waitForReconnect = (milliseconds: number, signal: AbortSignal): Promise<vo
   }
   signal.addEventListener('abort', finish, { once: true });
 });
+
+export interface EvalFinalizedRunReadOptions {
+  readonly client: Pick<EvalClient, 'read'>;
+  readonly runId: string;
+  readonly signal: AbortSignal;
+  readonly wait?: (milliseconds: number, signal: AbortSignal) => Promise<void>;
+}
+
+/** A terminal event may arrive just before its writer finalizes the canonical run record. */
+export const readFinalizedEvalRun = async ({
+  client,
+  runId,
+  signal,
+  wait = waitForReconnect,
+}: EvalFinalizedRunReadOptions): Promise<EvalRunResult> => {
+  for (let attempt = 0; attempt < maximumTerminalResultReads; attempt += 1) {
+    const result = await client.read(runId, signal);
+    if (result.run.completedAt !== undefined || signal.aborted) return result;
+    if (attempt + 1 < maximumTerminalResultReads) await wait(reconnectDelayMilliseconds, signal);
+  }
+  throw new Error('Recorded eval results were not finalized in time.');
+};
 
 interface EvalObservationClient {
   events(runId: string, afterSequence: number, signal?: AbortSignal): ReturnType<EvalClient['events']>;
@@ -577,13 +601,17 @@ const EvalsClientPage = ({ client }: EvalsPageProps) => {
       client,
       onEvents: (next, discarded) => {
         if (controller.signal.aborted || !updateCurrent(client, token, { discardedThroughSequence: discarded, events: next })) return;
-        if (!next.some((event) => event.kind === 'trial.completed' || terminalEvent(event))) return;
+        const terminal = next.some(terminalEvent);
+        if (!terminal && !next.some((event) => event.kind === 'trial.completed')) return;
         const requestId = ++refresh;
-        void client.read(runId, controller.signal).then(
+        const canonical = terminal
+          ? readFinalizedEvalRun({ client, runId, signal: controller.signal })
+          : client.read(runId, controller.signal);
+        void canonical.then(
           (nextResult) => {
             if (controller.signal.aborted || requestId !== refresh) return;
             if (!updateCurrent(client, token, { admittedRun: nextResult.run, result: nextResult })) return;
-            if (next.some(terminalEvent)) refreshRecorded(client);
+            if (terminal) refreshRecorded(client);
           },
           () => {
             if (!controller.signal.aborted && requestId === refresh && isCurrent(client, token)) {
