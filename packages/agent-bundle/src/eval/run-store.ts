@@ -978,7 +978,10 @@ export const readEvalRunEvents = async (directory: string): Promise<EvalRunEvent
   }
   const lines = contents.split('\n');
   const trailing = lines.pop() ?? '';
-  const events = lines.filter((line) => line.length > 0).map((line) => {
+  const events = lines.map((line) => {
+    if (line.length === 0) {
+      throw storeError('EVAL_RUN_CORRUPT', 'Eval run event log contains an empty complete record.');
+    }
     let parsed: unknown;
     try {
       parsed = parseJsonWithoutDuplicateKeys(line);
@@ -991,6 +994,11 @@ export const readEvalRunEvents = async (directory: string): Promise<EvalRunEvent
     }
     return event;
   });
+  for (const [index, event] of events.entries()) {
+    if (event.sequence !== index + 1) {
+      throw storeError('EVAL_RUN_CORRUPT', 'Eval run event log sequences must be exactly 1 through N.');
+    }
+  }
   return Object.freeze({
     events: Object.freeze(events),
     ...(trailing.length === 0 ? {} : { incompleteTrailingRecord: trailing }),

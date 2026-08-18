@@ -181,6 +181,32 @@ it('reports a malformed complete JSONL record as a corrupt run', async () => {
   });
 });
 
+it('rejects any complete event log whose sequence is not exactly 1 through N', async () => {
+  await withProject(async (root) => {
+    const writer = await createEvalRun(runOptions(root));
+    await writer.close();
+    const eventsPath = join(writer.directory, 'events.jsonl');
+    const event = (sequence: number): string => JSON.stringify({
+      kind: 'trial.started',
+      payload: {},
+      schemaVersion: 1,
+      sequence,
+      timestamp: '2026-08-17T12:00:00.000Z',
+    });
+
+    for (const records of [
+      [event(2)],
+      [event(1), event(3)],
+      [event(1), event(1)],
+      [event(2), event(1)],
+      [event(1), '', event(2)],
+    ]) {
+      await writeFile(eventsPath, `${records.join('\n')}\n`);
+      await expect(readEvalRunEvents(writer.directory)).rejects.toMatchObject({ code: 'EVAL_RUN_CORRUPT' });
+    }
+  });
+});
+
 it('rejects writes after the run is closed and unknown run directories', async () => {
   await withProject(async (root) => {
     const writer = await createEvalRun(runOptions(root));

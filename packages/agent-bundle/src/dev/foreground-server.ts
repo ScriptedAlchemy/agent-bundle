@@ -43,7 +43,7 @@ export class ForegroundServerError extends Error {
 
 export interface ForegroundServerCloseFailure {
   readonly error: unknown;
-  readonly resource: 'agent-api' | 'coordinator' | 'hook-playground' | 'logs' | 'server';
+  readonly resource: 'agent-api' | 'coordinator' | 'eval-routes' | 'hook-playground' | 'logs' | 'server';
 }
 
 export interface ForegroundServerStartFailure {
@@ -585,7 +585,7 @@ export class ForegroundServer {
     const releaseHookPlayground = this.#hookPlaygroundRoutes.close();
     this.#playgroundRoutes.close();
     this.#artifactRoutes.close();
-    this.#evalRoutes.close();
+    const releaseEvals = this.#evalRoutes.close();
     const releaseLogs = this.#devLogRoutes.close();
     // The Agent API owns admissions over every shared foreground service. It
     // must publish closure and drain active handlers before those services or
@@ -600,9 +600,10 @@ export class ForegroundServer {
           return closeServer(this.#server);
         })()
       : Promise.resolve();
-    const [server, coordinator, hookPlayground, logs] = await Promise.allSettled([
+    const [server, coordinator, evalRoutes, hookPlayground, logs] = await Promise.allSettled([
       releaseServer,
       this.#coordinator.close(),
+      releaseEvals,
       releaseHookPlayground,
       releaseLogs,
     ]);
@@ -610,6 +611,7 @@ export class ForegroundServer {
     if (agentApi.status === 'rejected') failures.push(Object.freeze({ error: agentApi.reason, resource: 'agent-api' }));
     if (server.status === 'rejected') failures.push(Object.freeze({ error: server.reason, resource: 'server' }));
     if (coordinator.status === 'rejected') failures.push(Object.freeze({ error: coordinator.reason, resource: 'coordinator' }));
+    if (evalRoutes.status === 'rejected') failures.push(Object.freeze({ error: evalRoutes.reason, resource: 'eval-routes' }));
     if (hookPlayground.status === 'rejected') {
       failures.push(Object.freeze({ error: hookPlayground.reason, resource: 'hook-playground' }));
     }
