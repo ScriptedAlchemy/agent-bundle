@@ -1493,6 +1493,14 @@ it('records a durable playground trace and promotes it through the packaged fore
     const headers = { origin: server.url, 'x-agent-bundle-session': token };
     const jsonHeaders = { ...headers, 'content-type': 'application/json' };
 
+    const unauthenticatedCatalog = await fetch(`${server.url}/api/playground/catalog?epochId=${epoch.id}`, {
+      headers: { origin: server.url },
+    });
+    expect(unauthenticatedCatalog.status).toBe(403);
+    const nativeCatalog = await fetch(`${server.url}/api/playground/catalog?epochId=${epoch.id}`, { headers });
+    expect(nativeCatalog.status).toBe(200);
+    await expect(nativeCatalog.json()).resolves.toMatchObject({ catalog: { epochId: epoch.id } });
+
     const hooks = await fetch(`${server.url}/api/hooks?epochId=${epoch.id}&target=claude`, { headers });
     expect(hooks.status).toBe(200);
     const listed = await hooks.json() as {

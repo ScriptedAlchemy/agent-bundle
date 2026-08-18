@@ -29,6 +29,7 @@ import {
   type McpAppSandboxProxy,
 } from './mcp-app-sandbox.ts';
 import { McpSessionService } from './mcp-session-service.ts';
+import { NativePlaygroundService } from './native-playground-service.ts';
 import { PlaygroundOrchestrationService } from './playground-orchestration-service.ts';
 import { PlaygroundService } from '../services/playground-service.ts';
 import { ProjectService } from './project-service.ts';
@@ -719,6 +720,7 @@ export const startDevServer = async (options: StartDevServerOptions): Promise<De
     epochStore,
     hookPlayground,
     mcpSessions,
+    native: new NativePlaygroundService({ projectRoot: root }),
     scripts: new ScriptPlaygroundService({ epochStore, registry }),
     skillDocuments,
     trace,

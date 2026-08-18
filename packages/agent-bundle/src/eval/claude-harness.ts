@@ -35,7 +35,7 @@ import {
   type EvalGraderSpec,
 } from './graders.ts';
 import type { PreparedEvalArtifact } from './artifact.ts';
-import type { EvalRunWriter, EvalTrialRecord } from './run-store.ts';
+import type { EvalTrialRecord, EvalTrialWriter } from './run-store.ts';
 import type {
   EvalAssertion,
   EvalCase,
@@ -76,7 +76,7 @@ export interface RunClaudeTrialOptions extends ClaudeProcessOptions {
   readonly target?: string;
   readonly trialIndex: number;
   readonly workspaceRoot: string;
-  readonly writer: EvalRunWriter;
+  readonly writer: EvalTrialWriter;
 }
 
 interface TrialGrading {

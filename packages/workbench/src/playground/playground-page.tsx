@@ -389,6 +389,7 @@ export const PlaygroundPage = ({ client, epoch, onRunChange, run, scripts, targe
     if (operation === 'script.run') {
       return selectedScriptId.length === 0 ? undefined : { operation, scriptId: selectedScriptId, target: targetName };
     }
+    if (operation !== 'mcp.call-tool') return undefined;
     return mcpServerName.length === 0 || mcpTool.length === 0 || mcpArgumentsObject === null
       ? undefined
       : {
