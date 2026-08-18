@@ -2,10 +2,7 @@ import { type KeyboardEvent, type ReactNode, useEffect, useRef, useState } from 
 import { createRoot } from 'react-dom/client';
 
 import type { Diagnostic } from '../../agent-bundle/src/core/diagnostics.ts';
-import type {
-  PlaygroundEventInput,
-  PlaygroundSession,
-} from '../../agent-bundle/src/services/playground-service.ts';
+import type { PlaygroundRun } from '../../agent-bundle/src/dev/playground-contract.ts';
 import type { ProjectStatus } from '../../agent-bundle/src/dev/types.ts';
 
 import { ArtifactClient } from './artifacts/artifact-client.ts';
@@ -363,19 +360,19 @@ const ArtifactsScreen = ({ artifactClient, connectionError, onNavigate, status }
   <ArtifactsPage client={artifactClient} epochId={activeEpochId(status)} />
 </WorkbenchScreen>;
 
-const PlaygroundScreen = ({ connectionError, onNavigate, onSessionChange, playgroundClient, session, status }: {
+const PlaygroundScreen = ({ connectionError, onNavigate, onRunChange, playgroundClient, run, status }: {
   readonly connectionError?: string;
   readonly onNavigate: (page: WorkbenchPage) => void;
-  readonly onSessionChange: (session: PlaygroundSession | undefined) => void;
+  readonly onRunChange: (run: PlaygroundRun | undefined) => void;
   readonly playgroundClient: PlaygroundClient;
-  readonly session: PlaygroundSession | undefined;
+  readonly run: PlaygroundRun | undefined;
   readonly status: ProjectStatus;
 }) => <WorkbenchScreen connectionError={connectionError} onNavigate={onNavigate} page="playground">
   <PlaygroundPage
     client={playgroundClient}
     epoch={playgroundEpochFor(status)}
-    onSessionChange={onSessionChange}
-    session={session}
+    onRunChange={onRunChange}
+    run={run}
     targets={playgroundTargetsFor(status)}
   />
 </WorkbenchScreen>;
@@ -390,27 +387,21 @@ const LogsScreen = ({ connectionError, onNavigate, playgroundClient, sessionId, 
   <LogsPage client={playgroundClient} epoch={playgroundEpochFor(status)} sessionId={sessionId} />
 </WorkbenchScreen>;
 
-const HooksScreen = ({ connectionError, hookClient, onNavigate, onRecordTrace, status }: {
+const HooksScreen = ({ connectionError, hookClient, onNavigate, status }: {
   readonly connectionError?: string;
   readonly hookClient: HookClient;
   readonly onNavigate: (page: WorkbenchPage) => void;
-  readonly onRecordTrace?: (input: PlaygroundEventInput) => Promise<void>;
   readonly status: ProjectStatus;
 }) => <WorkbenchScreen connectionError={connectionError} onNavigate={onNavigate} page="hooks">
-  <HooksPage
-    client={hookClient}
-    epochId={activeEpochId(status)}
-    {...(onRecordTrace === undefined ? {} : { onRecordTrace })}
-  />
+  <HooksPage client={hookClient} epochId={activeEpochId(status)} />
 </WorkbenchScreen>;
 
-const McpScreen = ({ appPreviewClient, connectionError, controller, model, onNavigate, onRecordTrace, onResetSession, presentation, setPresentation, status }: {
+const McpScreen = ({ appPreviewClient, connectionError, controller, model, onNavigate, onResetSession, presentation, setPresentation, status }: {
   readonly appPreviewClient: McpAppClient;
   readonly connectionError?: string;
   readonly controller: ReturnType<typeof createMcpController>;
   readonly model: ReturnType<typeof createMcpController>['model'];
   readonly onNavigate: (page: WorkbenchPage) => void;
-  readonly onRecordTrace?: (input: PlaygroundEventInput) => Promise<void>;
   readonly onResetSession: () => void;
   readonly presentation: McpPresentation;
   readonly setPresentation: (presentation: McpPresentation) => void;
@@ -485,7 +476,6 @@ const McpScreen = ({ appPreviewClient, connectionError, controller, model, onNav
           initialBinding={activeEpoch === undefined ? undefined : { epochId: activeEpoch.id }}
           onDownloadConfig={downloadMcpFile}
           onDownloadTrace={downloadMcpFile}
-          {...(onRecordTrace === undefined ? {} : { onRecordTrace })}
           onResetSession={onResetSession}
           targetOptions={targetOptions}
         />
@@ -521,7 +511,7 @@ const Workbench = () => {
   const [page, setPage] = useState<WorkbenchPage>(pageForHash);
   const [status, setStatus] = useState<ProjectStatus>();
   const [changedFiles, setChangedFiles] = useState<readonly string[]>([]);
-  const [playgroundSession, setPlaygroundSession] = useState<PlaygroundSession>();
+  const [playgroundRun, setPlaygroundRun] = useState<PlaygroundRun>();
 
   if (artifactClient.current === undefined) artifactClient.current = new ArtifactClient();
   if (comparisonClient.current === undefined) comparisonClient.current = new ComparisonClient();
@@ -529,15 +519,6 @@ const Workbench = () => {
   if (hookClient.current === undefined) hookClient.current = new HookClient();
   if (playgroundClient.current === undefined) playgroundClient.current = new PlaygroundClient();
   if (mcpAppClient.current === undefined) mcpAppClient.current = new McpAppClient();
-
-  /** Only an open session records; a finalized or absent session leaves other pages unchanged. */
-  const recordPlaygroundEvent = playgroundSession?.state === 'open'
-    ? async (input: PlaygroundEventInput): Promise<void> => {
-        const client = playgroundClient.current;
-        if (client === undefined) return;
-        await client.append(playgroundSession.id, input);
-      }
-    : undefined;
 
   const navigate = (next: WorkbenchPage): void => {
     const hash = next === 'artifacts' ? '#artifacts'
@@ -614,7 +595,6 @@ const Workbench = () => {
         controller={mcpController}
         model={mcpModel}
         onNavigate={navigate}
-        {...(recordPlaygroundEvent === undefined ? {} : { onRecordTrace: recordPlaygroundEvent })}
         onResetSession={resetMcpSession}
         presentation={mcpPresentation}
         setPresentation={setMcpPresentation}
@@ -625,9 +605,9 @@ const Workbench = () => {
       return <PlaygroundScreen
         connectionError={connectionError}
         onNavigate={navigate}
-        onSessionChange={setPlaygroundSession}
+        onRunChange={setPlaygroundRun}
         playgroundClient={playgroundClient.current}
-        session={playgroundSession}
+        run={playgroundRun}
         status={status}
       />;
     }
@@ -636,7 +616,7 @@ const Workbench = () => {
         connectionError={connectionError}
         onNavigate={navigate}
         playgroundClient={playgroundClient.current}
-        sessionId={playgroundSession?.id}
+        sessionId={playgroundRun?.session.id}
         status={status}
       />;
     }
@@ -659,7 +639,6 @@ const Workbench = () => {
         connectionError={connectionError}
         hookClient={hookClient.current}
         onNavigate={navigate}
-        {...(recordPlaygroundEvent === undefined ? {} : { onRecordTrace: recordPlaygroundEvent })}
         status={status}
       />;
     }

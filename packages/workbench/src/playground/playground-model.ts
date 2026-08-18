@@ -2,7 +2,6 @@ import type {
   PlaygroundEpochIdentity,
   PlaygroundExport,
   PlaygroundJsonValue,
-  PlaygroundSelectedAssertion,
   PlaygroundSession,
   PlaygroundTraceEvent,
   PlaygroundTraceSource,
@@ -37,13 +36,14 @@ export interface PlaygroundViewOptions {
 }
 
 export interface PlaygroundView {
-  readonly assertions: readonly PlaygroundSelectedAssertion[];
   readonly canPromote: boolean;
   readonly cursor: number;
   readonly exported: PlaygroundExport | undefined;
   readonly identity: readonly PlaygroundDetailRow[];
   readonly outcome: readonly PlaygroundDetailRow[];
   readonly promotionBlocker: string | undefined;
+  /** References are accepted only when they were observed in the persisted server trace. */
+  readonly rawEventRefs: readonly string[];
   readonly rows: readonly PlaygroundTraceRow[];
   readonly selectedRefs: readonly string[];
   readonly state: PlaygroundState;
@@ -71,8 +71,6 @@ export interface PlaygroundLogsView {
 const noRows: readonly PlaygroundDetailRow[] = Object.freeze([]);
 
 const noTraceRows: readonly PlaygroundTraceRow[] = Object.freeze([]);
-
-const noAssertions: readonly PlaygroundSelectedAssertion[] = Object.freeze([]);
 
 const noStrings: readonly string[] = Object.freeze([]);
 
@@ -110,26 +108,13 @@ export const playgroundTraceRowsFor = (
   })),
 );
 
-/** Every promoted assertion cites the exact epoch and raw event reference it was selected from. */
-export const playgroundAssertionsFor = (
+const persistedRefsFor = (
   rows: readonly PlaygroundTraceRow[],
   selectedRefs: readonly string[],
-): readonly PlaygroundSelectedAssertion[] => Object.freeze(
-  rows
-    .filter((entry) => selectedRefs.includes(entry.rawEventRef))
-    .map((entry): PlaygroundSelectedAssertion => Object.freeze({
-      evidence: Object.freeze({
-        epochDigest: entry.epochDigest,
-        epochId: entry.epochId,
-        rawEventRef: entry.rawEventRef,
-        sequence: entry.sequence,
-        timestamp: entry.timestamp,
-      }),
-      expectation: Object.freeze({ kind: entry.kind, source: entry.source, summary: entry.summary }),
-      id: entry.rawEventRef,
-      kind: 'trace-event',
-    })),
-);
+): readonly string[] => {
+  const selected = new Set(selectedRefs);
+  return Object.freeze(rows.filter((entry) => selected.has(entry.rawEventRef)).map((entry) => entry.rawEventRef));
+};
 
 const identityRowsFor = (session: PlaygroundSession): readonly PlaygroundDetailRow[] => Object.freeze([
   row('Session', session.id),
@@ -170,7 +155,7 @@ const summaryFor = (
 ): string => {
   if (state === 'no-epoch') return 'No artifact epoch is active, so no playground session can be bound to one.';
   if (state === 'no-session' || session === undefined) {
-    return `Open a playground session bound to epoch ${epoch?.id ?? 'unknown'} to record an ordered trace.`;
+    return `Start a server-owned playground run against epoch ${epoch?.id ?? 'unknown'} to record an ordered trace.`;
   }
   const suffix = `epoch ${session.identity.epoch.id} with ${String(count)} recorded ${count === 1 ? 'event' : 'events'}.`;
   if (state === 'finalized') {
@@ -181,12 +166,12 @@ const summaryFor = (
 
 const promotionBlockerFor = (
   state: PlaygroundState,
-  assertions: readonly PlaygroundSelectedAssertion[],
+  rawEventRefs: readonly string[],
 ): string | undefined => {
   if (state !== 'finalized') {
-    return 'Finalize a durable outcome before promoting this trace to a draft eval case.';
+    return 'Wait for the server-owned run to reach a durable terminal state before promoting this trace.';
   }
-  if (assertions.length === 0) return 'Select at least one trace event as an assertion.';
+  if (rawEventRefs.length === 0) return 'Select at least one persisted trace event for the draft eval case.';
   return undefined;
 };
 
@@ -196,18 +181,18 @@ export const playgroundViewFor = (options: PlaygroundViewOptions): PlaygroundVie
   const state = stateFor(options.epoch, session);
   const boundEpoch = session?.identity.epoch ?? options.epoch;
   const rows = boundEpoch === undefined ? noTraceRows : playgroundTraceRowsFor(boundEpoch, options.events);
-  const assertions = session === undefined ? noAssertions : playgroundAssertionsFor(rows, options.selectedRefs);
-  const promotionBlocker = promotionBlockerFor(state, assertions);
+  const rawEventRefs = session === undefined ? noStrings : persistedRefsFor(rows, options.selectedRefs);
+  const promotionBlocker = promotionBlockerFor(state, rawEventRefs);
   return Object.freeze({
-    assertions,
     canPromote: promotionBlocker === undefined,
     cursor: rows.reduce((highest, entry) => Math.max(highest, entry.sequence), 0),
     exported: options.exported,
     identity: session === undefined ? noRows : identityRowsFor(session),
     outcome: session === undefined ? noRows : outcomeRowsFor(session),
     promotionBlocker,
+    rawEventRefs,
     rows,
-    selectedRefs: Object.freeze([...options.selectedRefs]),
+    selectedRefs: rawEventRefs,
     state,
     summary: summaryFor(state, options.epoch, session, rows.length),
     workspace: session?.outcome?.workspace,

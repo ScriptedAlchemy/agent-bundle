@@ -11,8 +11,6 @@ import {
   serializeJsonRecord,
   type ImmutableJsonRecord,
 } from '../mcp/mcp-json-input.tsx';
-import type { PlaygroundEventInput } from '../../../agent-bundle/src/services/playground-service.ts';
-import { playgroundJsonObject } from '../playground/playground-json.ts';
 import type { HookClient, HookSimulationResult } from './hook-client.ts';
 import {
   hookPlaygroundViewFor,
@@ -29,8 +27,6 @@ export interface HookSimulationViewProps {
 export interface HooksPageProps {
   readonly client: HookClient;
   readonly epochId: string | undefined;
-  /** Records the run into the shared ordered trace when a playground session is open. */
-  readonly onRecordTrace?: (input: PlaygroundEventInput) => Promise<void>;
 }
 
 const draftError = 'Canonical hook input must be a JSON object.';
@@ -99,24 +95,6 @@ export const runHookReplay = async (
   signal?: AbortSignal,
 ): Promise<HookSimulationResult> => client.replay(replay, signal);
 
-/** One hook run becomes one ordered trace event citing the epoch it was bound to. */
-export const hookTraceEvent = (
-  binding: HookPlaygroundBinding,
-  result: HookSimulationResult,
-): PlaygroundEventInput => 'diagnostics' in result
-  ? Object.freeze({
-      kind: 'hook.diagnostics',
-      raw: playgroundJsonObject({ binding: { ...binding }, diagnostics: result.diagnostics }),
-      source: 'hook' as const,
-      summary: `${binding.hook} produced ${result.diagnostics.length} diagnostic(s) on ${binding.target}.`,
-    })
-  : Object.freeze({
-      kind: 'hook.simulated',
-      raw: playgroundJsonObject({ ...result }),
-      source: 'hook' as const,
-      summary: `Simulated ${binding.hook} on ${binding.target} from epoch ${binding.epochId}.`,
-    });
-
 const DetailRows = ({ label, rows }: {
   readonly label: string;
   readonly rows: readonly HookDetailRow[];
@@ -159,7 +137,7 @@ export const HookSimulationView = ({ view }: HookSimulationViewProps) => <div cl
 </div>;
 
 /** Lists the hooks of one immutable epoch and runs the emitted wrapper against authored canonical input. */
-export const HooksPage = ({ client, epochId, onRecordTrace }: HooksPageProps) => {
+export const HooksPage = ({ client, epochId }: HooksPageProps) => {
   const [busy, setBusy] = useState(false);
   const [draft, setDraft] = useState(() => serializeJsonRecord({}));
   const [error, setError] = useState<string>();
@@ -217,7 +195,6 @@ export const HooksPage = ({ client, epochId, onRecordTrace }: HooksPageProps) =>
 
   const run = async (
     action: (signal: AbortSignal) => Promise<HookSimulationResult>,
-    binding: HookPlaygroundBinding,
   ): Promise<void> => {
     const request = lifecycle.begin('run');
     setBusy(true);
@@ -226,15 +203,6 @@ export const HooksPage = ({ client, epochId, onRecordTrace }: HooksPageProps) =>
       const next = await action(request.signal);
       if (!lifecycle.isCurrent(request)) return;
       setResult(next);
-      // A failed recording must not discard the run the user just saw.
-      if (onRecordTrace !== undefined) {
-        try {
-          if (!lifecycle.isCurrent(request)) return;
-          await onRecordTrace(hookTraceEvent(binding, next));
-        } catch (reason) {
-          if (lifecycle.isCurrent(request) && !isAbortError(reason)) setError(errorMessage(reason));
-        }
-      }
     } catch (reason) {
       if (lifecycle.isCurrent(request) && !isAbortError(reason)) setError(errorMessage(reason));
     } finally {
@@ -248,13 +216,13 @@ export const HooksPage = ({ client, epochId, onRecordTrace }: HooksPageProps) =>
   const simulate = async (): Promise<void> => {
     const binding = view.selected?.binding;
     if (binding === undefined || parsed === null) return;
-    await run((signal) => runHookSimulation(client, binding, parsed, inputMode, signal), binding);
+    await run((signal) => runHookSimulation(client, binding, parsed, inputMode, signal));
   };
 
   const replay = async (): Promise<void> => {
     const saved = view.replay;
     if (saved === undefined) return;
-    await run((signal) => runHookReplay(client, saved, signal), saved.binding);
+    await run((signal) => runHookReplay(client, saved, signal));
   };
 
   return <main className="hooks-content">

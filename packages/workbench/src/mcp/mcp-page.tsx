@@ -2,8 +2,6 @@ import React, { useCallback, useEffect, useRef, useState, type KeyboardEvent } f
 
 import type { McpSessionBinding, McpSessionInspectorConfig, McpSessionOperation } from '../../../agent-bundle/src/dev/mcp-session-protocol.ts';
 
-import type { PlaygroundEventInput } from '../../../agent-bundle/src/services/playground-service.ts';
-import { playgroundJsonObject } from '../playground/playground-json.ts';
 import { McpJsonInput, type ImmutableJsonRecord } from './mcp-json-input.tsx';
 import {
   createMcpAppPreviewController,
@@ -52,8 +50,6 @@ export interface McpPageProps {
   readonly epochOptions: readonly string[];
   readonly initialBinding?: Partial<McpSessionBinding>;
   readonly onDownloadConfig?: (download: McpConfigDownload) => void;
-  /** Records the invocation into the shared ordered trace when a playground session is open. */
-  readonly onRecordTrace?: (input: PlaygroundEventInput) => Promise<void>;
   readonly onDownloadTrace?: (download: McpDownload) => void;
   /** Replaces the terminal controller with a fresh idle controller in the parent. */
   readonly onResetSession?: () => void;
@@ -392,36 +388,7 @@ const McpPageAppPreview = ({ client, host, onControllerChange, previewProfile, s
   </section>;
 };
 
-/** One completed MCP operation becomes one ordered trace event citing its epoch-bound session. */
-export const mcpTraceEvent = (input: {
-  readonly binding?: McpSessionBinding;
-  readonly error?: unknown;
-  readonly operation: string;
-  readonly request: Readonly<Record<string, unknown>>;
-  readonly requestId: string;
-  readonly result?: unknown;
-  readonly sessionId: string;
-}): PlaygroundEventInput => {
-  const failed = input.error !== undefined;
-  const where = input.binding === undefined
-    ? input.sessionId
-    : `${input.binding.serverName} on ${input.binding.target} from epoch ${input.binding.epochId}`;
-  return Object.freeze({
-    kind: failed ? 'mcp.failed' : `mcp.${input.operation}`,
-    raw: playgroundJsonObject({
-      ...(input.binding === undefined ? {} : { binding: { ...input.binding } }),
-      ...(failed ? { error: errorMessage(input.error) } : { result: input.result }),
-      operation: input.operation,
-      request: input.request,
-      requestId: input.requestId,
-      sessionId: input.sessionId,
-    }),
-    source: 'mcp' as const,
-    summary: `${failed ? 'Failed' : 'Completed'} ${input.operation} against ${where}.`,
-  });
-};
-
-export const McpPage = ({ appPreviewClient, controller, epochOptions, initialBinding, onDownloadConfig, onDownloadTrace, onRecordTrace, onResetSession, targetOptions }: McpPageProps) => {
+export const McpPage = ({ appPreviewClient, controller, epochOptions, initialBinding, onDownloadConfig, onDownloadTrace, onResetSession, targetOptions }: McpPageProps) => {
   const [model, setModel] = useState(() => controller.model);
   const [epochId, setEpochId] = useState(initialBinding?.epochId ?? '');
   const [target, setTarget] = useState(initialBinding?.target ?? '');
@@ -523,29 +490,7 @@ export const McpPage = ({ appPreviewClient, controller, epochOptions, initialBin
   };
   const invoke = (operation: Exclude<McpSessionOperation, 'cancel' | 'close' | 'restart'>, request: Readonly<Record<string, unknown>>): void => {
     const requestId = nextRequestId();
-    run(`invoke:${operation}`, async () => {
-      const record = async (outcome: { readonly error?: unknown; readonly result?: unknown }): Promise<void> => {
-        if (onRecordTrace === undefined) return;
-        await onRecordTrace(mcpTraceEvent({
-          ...(model.binding === undefined ? {} : { binding: model.binding }),
-          ...outcome,
-          operation,
-          request,
-          requestId,
-          sessionId: model.sessionId,
-        }));
-      };
-      let result: unknown;
-      try {
-        result = await controller.invoke({ id: requestId, operation, request });
-      } catch (reason) {
-        // A recording failure must not replace the operation failure the user needs to see.
-        await record({ error: reason }).catch(() => undefined);
-        throw reason;
-      }
-      await record({ result });
-      return result;
-    });
+    run(`invoke:${operation}`, () => controller.invoke({ id: requestId, operation, request }));
   };
 
   const tools = catalogItems(model.catalogs.tools, 'Tool');

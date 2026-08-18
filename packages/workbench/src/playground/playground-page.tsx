@@ -1,18 +1,15 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 
 import type {
   DraftEvalCase,
-  PlaygroundDurableOutcome,
   PlaygroundEpochIdentity,
   PlaygroundExport,
   PlaygroundJsonObject,
-  PlaygroundReplay,
-  PlaygroundSelectedAssertion,
   PlaygroundSession,
-  PlaygroundSessionInput,
   PlaygroundTarget,
   PlaygroundTraceEvent,
 } from '../../../agent-bundle/src/services/playground-service.ts';
+import type { PlaygroundOperationRequest, PlaygroundRun } from '../../../agent-bundle/src/dev/playground-contract.ts';
 
 import { parseRawJsonRecord, serializeJsonRecord } from '../mcp/mcp-json-input.tsx';
 import type { PlaygroundClient } from './playground-client.ts';
@@ -32,52 +29,28 @@ export interface PlaygroundTraceViewProps {
 
 export interface PlaygroundPageProps {
   readonly client: PlaygroundClient;
+  /** The active epoch is only used for admitting a new run; persisted sessions pin their own epoch. */
   readonly epoch: PlaygroundEpochIdentity | undefined;
-  /**
-   * The shell owns the session so one ordered trace survives navigation and other
-   * pages can record into it. The page never keeps a private copy.
-   */
-  readonly onSessionChange: (session: PlaygroundSession | undefined) => void;
-  readonly session: PlaygroundSession | undefined;
+  /** The shell retains the run/session identity across navigation and project rebuilds. */
+  readonly onRunChange: (run: PlaygroundRun | undefined) => void;
+  readonly run: PlaygroundRun | undefined;
   readonly targets: readonly PlaygroundTarget[];
 }
+
+type PlaygroundOperation = Exclude<PlaygroundOperationRequest['operation'], 'script.run'>;
 
 const jsonDraftError = 'This field must contain a JSON object.';
 
 const errorMessage = (reason: unknown): string =>
   reason instanceof Error ? reason.message : 'The playground request could not be completed.';
 
-/** JSON.parse only ever yields JSON values, so the parsed record is a playground JSON object. */
 const asJsonObject = (value: Readonly<Record<string, unknown>>): PlaygroundJsonObject => value as PlaygroundJsonObject;
 
-export const openPlaygroundSession = async (
-  client: PlaygroundClient,
-  input: PlaygroundSessionInput,
-): Promise<PlaygroundSession> => client.openSession(input);
+const terminal = (session: PlaygroundSession): boolean => session.state === 'closed' || session.state === 'finalized';
 
-/** Replaying from the recorded cursor keeps the ordering and the epoch binding of the stored trace. */
-export const replayPlaygroundTrace = async (
-  client: PlaygroundClient,
-  sessionId: string,
-  afterSequence?: number,
-): Promise<PlaygroundReplay> => client.replay(sessionId, afterSequence);
-
-export const finalizePlaygroundOutcome = async (
-  client: PlaygroundClient,
-  sessionId: string,
-  outcome: PlaygroundDurableOutcome,
-): Promise<PlaygroundSession> => client.finalize(sessionId, outcome);
-
-export const exportPlaygroundTrace = async (
-  client: PlaygroundClient,
-  sessionId: string,
-): Promise<PlaygroundExport> => client.export(sessionId);
-
-export const promotePlaygroundDraftEval = async (
-  client: PlaygroundClient,
-  sessionId: string,
-  assertions: readonly PlaygroundSelectedAssertion[],
-): Promise<DraftEvalCase> => client.promoteToDraftEval(sessionId, assertions);
+const delay = async (milliseconds: number): Promise<void> => new Promise((resolvePromise) => {
+  setTimeout(resolvePromise, milliseconds);
+});
 
 const DetailRows = ({ label, rows }: {
   readonly label: string;
@@ -89,14 +62,14 @@ const DetailRows = ({ label, rows }: {
   </dl>
 </section>;
 
-/** The ordered trace, where every row cites the epoch it is bound to and its raw event reference. */
+/** The ordered server trace, where every selected assertion remains a persisted raw event reference. */
 export const PlaygroundTraceView = ({ onToggle, view }: PlaygroundTraceViewProps) => <div className="playground-trace">
   <p className="playground-summary" role="status">{view.summary}</p>
   {view.promotionBlocker === undefined
     ? undefined
     : <p className="playground-blocker" role="status">{view.promotionBlocker}</p>}
-  {view.identity.length === 0 ? undefined : <DetailRows label="Session identity" rows={view.identity} />}
-  {view.outcome.length === 0 ? undefined : <DetailRows label="Durable outcome" rows={view.outcome} />}
+  {view.identity.length === 0 ? undefined : <DetailRows label="Server-owned session identity" rows={view.identity} />}
+  {view.outcome.length === 0 ? undefined : <DetailRows label="Server-owned outcome" rows={view.outcome} />}
   {view.workspace === undefined ? undefined : <section className="playground-detail">
     <h2>Recorded workspace</h2>
     <pre className="playground-json"><code>{formatPlaygroundJson(view.workspace)}</code></pre>
@@ -108,26 +81,24 @@ export const PlaygroundTraceView = ({ onToggle, view }: PlaygroundTraceViewProps
       : <table className="playground-table">
         <thead>
           <tr>
-            <th scope="col">Assert</th>
+            <th scope="col">Select</th>
             <th scope="col">Seq</th>
             <th scope="col">Timestamp</th>
             <th scope="col">Source</th>
             <th scope="col">Kind</th>
             <th scope="col">Summary</th>
             <th scope="col">Epoch</th>
-            <th scope="col">Raw event</th>
+            <th scope="col">Persisted event</th>
           </tr>
         </thead>
         <tbody>
           {view.rows.map((entry) => <tr key={entry.key}>
-            <td>
-              <input
-                aria-label={`Select ${entry.rawEventRef} as an assertion`}
-                checked={view.selectedRefs.includes(entry.rawEventRef)}
-                onChange={() => onToggle?.(entry.rawEventRef)}
-                type="checkbox"
-              />
-            </td>
+            <td><input
+              aria-label={`Select ${entry.rawEventRef} for the draft eval case`}
+              checked={view.selectedRefs.includes(entry.rawEventRef)}
+              onChange={() => onToggle?.(entry.rawEventRef)}
+              type="checkbox"
+            /></td>
             <td>{entry.sequence}</td>
             <td>{entry.timestamp}</td>
             <td>{entry.source}</td>
@@ -142,53 +113,71 @@ export const PlaygroundTraceView = ({ onToggle, view }: PlaygroundTraceViewProps
 </div>;
 
 /**
- * Records and replays the durable trace of one epoch-bound playground session.
- * The page never dispatches a natural-language action to a host: until the
- * native harness exists, every trace event arrives from an executed operation.
+ * Starts typed server-owned operations, then observes their durable session by
+ * replay, live NDJSON stream, polling, and a final replay before stream close.
  */
-export const PlaygroundPage = ({ client, epoch, onSessionChange, session, targets }: PlaygroundPageProps) => {
-  const openedEpochId = useRef(epoch?.id);
+export const PlaygroundPage = ({ client, epoch, onRunChange, run, targets }: PlaygroundPageProps) => {
   const [busy, setBusy] = useState(false);
   const [draftEvalCase, setDraftEvalCase] = useState<DraftEvalCase>();
   const [error, setError] = useState<string>();
   const [events, setEvents] = useState<readonly PlaygroundTraceEvent[]>([]);
   const [exported, setExported] = useState<PlaygroundExport>();
-  const [fixtureDigest, setFixtureDigest] = useState('');
-  const [fixtureId, setFixtureId] = useState('');
-  const [intentDraft, setIntentDraft] = useState(() => serializeJsonRecord({}));
-  const [invocationKind, setInvocationKind] = useState('whole-plugin');
-  const [outcomeResponse, setOutcomeResponse] = useState('');
-  const [outcomeStatus, setOutcomeStatus] = useState('succeeded');
+  const [hook, setHook] = useState('');
+  const [hookInput, setHookInput] = useState(() => serializeJsonRecord({}));
+  const [mcpArguments, setMcpArguments] = useState(() => serializeJsonRecord({}));
+  const [mcpServerName, setMcpServerName] = useState('');
+  const [mcpTool, setMcpTool] = useState('');
+  const [operation, setOperation] = useState<PlaygroundOperation>('skill.inspect');
   const [selectedRefs, setSelectedRefs] = useState<readonly string[]>([]);
+  const [skillId, setSkillId] = useState('');
   const [targetName, setTargetName] = useState('');
-  const [taskId, setTaskId] = useState('');
-  const [taskText, setTaskText] = useState('');
-  const view = playgroundViewFor({ epoch, events, exported, selectedRefs, session });
-  const intent = parseRawJsonRecord(intentDraft);
+  const session = run?.session;
   const sessionId = session?.id;
-
-  // A session belongs to the epoch it was opened against, so only a genuine epoch
-  // change starts over. Resetting on mount would discard the shell's session every
-  // time the user navigates back to this page.
-  useEffect(() => {
-    if (openedEpochId.current === epoch?.id) return;
-    openedEpochId.current = epoch?.id;
-    setDraftEvalCase(undefined);
-    setError(undefined);
-    setEvents([]);
-    setExported(undefined);
-    setSelectedRefs([]);
-    onSessionChange(undefined);
-  }, [epoch?.id, onSessionChange]);
+  const runId = run?.id;
+  const hookInputObject = parseRawJsonRecord(hookInput);
+  const mcpArgumentsObject = parseRawJsonRecord(mcpArguments);
+  const view = playgroundViewFor({ epoch, events, exported, selectedRefs, session });
 
   useEffect(() => {
-    if (sessionId === undefined) return;
+    if (runId === undefined || sessionId === undefined) return;
     let current = true;
+    const merge = (incoming: readonly PlaygroundTraceEvent[]): void => {
+      if (current) setEvents((previous) => mergePlaygroundEvents(previous, incoming));
+    };
+    const updateSession = (next: PlaygroundSession): void => {
+      if (current) onRunChange({ id: runId, session: next });
+    };
     const stream = client.stream(sessionId, {
-      onEvent: (event) => {
-        if (current) setEvents((previous) => mergePlaygroundEvents(previous, [event]));
-      },
+      afterSequence: 0,
+      onEvent: (event) => merge([event]),
     });
+    const observe = async (): Promise<void> => {
+      try {
+        const replayed = await client.replay(sessionId, 0);
+        if (!current) return;
+        merge(replayed.events);
+        updateSession(replayed.session);
+        for (;;) {
+          const refreshed = await client.session(sessionId);
+          if (!current) return;
+          updateSession(refreshed);
+          if (terminal(refreshed)) {
+            const finalReplay = await client.replay(sessionId, 0);
+            if (!current) return;
+            merge(finalReplay.events);
+            updateSession(finalReplay.session);
+            stream.close();
+            await stream.done;
+            return;
+          }
+          await delay(250);
+          if (!current) return;
+        }
+      } catch (reason) {
+        if (current) setError(errorMessage(reason));
+      }
+    };
+    void observe();
     stream.done.catch((reason: unknown) => {
       if (current) setError(errorMessage(reason));
     });
@@ -196,9 +185,9 @@ export const PlaygroundPage = ({ client, epoch, onSessionChange, session, target
       current = false;
       stream.close();
     };
-  }, [client, sessionId]);
+  }, [client, onRunChange, runId, sessionId]);
 
-  const run = async (action: () => Promise<void>): Promise<void> => {
+  const runAction = async (action: () => Promise<void>): Promise<void> => {
     setBusy(true);
     setError(undefined);
     try {
@@ -210,55 +199,53 @@ export const PlaygroundPage = ({ client, epoch, onSessionChange, session, target
     }
   };
 
-  const open = async (): Promise<void> => {
-    if (epoch === undefined || intent === null) return;
-    await run(async () => {
-      const opened = await openPlaygroundSession(client, {
-        epoch,
-        fixture: { digest: fixtureDigest, id: fixtureId },
-        invocation: { intent: asJsonObject(intent), kind: invocationKind },
-        target: targets.find((entry) => entry.name === targetName) ?? { name: targetName },
-        task: { id: taskId, text: taskText },
-      });
+  const operationInput = (): PlaygroundOperationRequest | undefined => {
+    if (targetName.length === 0) return undefined;
+    if (operation === 'skill.inspect') {
+      return skillId.length === 0 ? undefined : { operation, skillId, target: targetName };
+    }
+    if (operation === 'hook.simulate') {
+      return hook.length === 0 || hookInputObject === null
+        ? undefined
+        : { hook, input: asJsonObject(hookInputObject), operation, target: targetName };
+    }
+    return mcpServerName.length === 0 || mcpTool.length === 0 || mcpArgumentsObject === null
+      ? undefined
+      : {
+          arguments: asJsonObject(mcpArgumentsObject), operation, serverName: mcpServerName,
+          target: targetName, tool: mcpTool,
+        };
+  };
+
+  const start = async (): Promise<void> => {
+    const input = operationInput();
+    if (input === undefined) return;
+    await runAction(async () => {
+      const started = await client.run(input);
       setDraftEvalCase(undefined);
       setEvents([]);
       setExported(undefined);
       setSelectedRefs([]);
-      onSessionChange(opened);
+      onRunChange(started);
     });
   };
 
-  const replay = async (): Promise<void> => {
-    if (sessionId === undefined) return;
-    await run(async () => {
-      const replayed = await replayPlaygroundTrace(client, sessionId, view.cursor);
-      setEvents((previous) => mergePlaygroundEvents(previous, replayed.events));
-      onSessionChange(replayed.session);
-    });
-  };
-
-  const finalize = async (): Promise<void> => {
-    if (sessionId === undefined) return;
-    await run(async () => {
-      onSessionChange(await finalizePlaygroundOutcome(client, sessionId, {
-        ...(outcomeResponse.length === 0 ? {} : { response: outcomeResponse }),
-        status: outcomeStatus,
-      }));
+  const cancel = async (): Promise<void> => {
+    if (runId === undefined || sessionId === undefined) return;
+    await runAction(async () => {
+      await client.cancel(runId);
+      onRunChange({ id: runId, session: await client.session(sessionId) });
     });
   };
 
   const exportTrace = async (): Promise<void> => {
     if (sessionId === undefined) return;
-    await run(async () => {
-      setExported(await exportPlaygroundTrace(client, sessionId));
-    });
+    await runAction(async () => { setExported(await client.export(sessionId)); });
   };
 
   const promote = async (): Promise<void> => {
     if (sessionId === undefined || !view.canPromote) return;
-    await run(async () => {
-      setDraftEvalCase(await promotePlaygroundDraftEval(client, sessionId, view.assertions));
-    });
+    await runAction(async () => { setDraftEvalCase(await client.promoteToDraftEval(sessionId, view.rawEventRefs)); });
   };
 
   const toggle = (rawEventRef: string): void => {
@@ -267,121 +254,63 @@ export const PlaygroundPage = ({ client, epoch, onSessionChange, session, target
       : [...previous, rawEventRef]);
   };
 
+  const startDisabled = busy || epoch === undefined || (session !== undefined && !terminal(session)) || operationInput() === undefined;
+
   return <div className="playground-content">
     <div className="page-heading playground-page-heading">
       <div>
         <h1>Playground</h1>
-        <p>One durable, ordered trace per epoch-bound session, replayable and promotable to a draft eval case.</p>
+        <p>Run a typed operation against the current artifact epoch; the server owns identity, evidence, outcome, and durable trace.</p>
       </div>
     </div>
     {error === undefined ? undefined : <p className="request-error" role="alert">{error}</p>}
-    {view.state === 'no-epoch'
+    {epoch === undefined && session === undefined
       ? <p className="empty-row" role="status">{view.summary}</p>
       : <>
-        <section aria-label="Session identity" className="playground-controls">
-          <p className="playground-note">
-            Identity recorded with the trace. The workbench executes no host action here; a native harness lands later.
-          </p>
-          <label htmlFor="playground-epoch">Epoch</label>
-          <input disabled id="playground-epoch" readOnly value={epoch === undefined ? '' : epoch.id} />
-          <label htmlFor="playground-fixture-id">Fixture id</label>
-          <input
-            disabled={busy || session !== undefined}
-            id="playground-fixture-id"
-            onChange={(event) => setFixtureId(event.currentTarget.value)}
-            value={fixtureId}
-          />
-          <label htmlFor="playground-fixture-digest">Fixture digest</label>
-          <input
-            disabled={busy || session !== undefined}
-            id="playground-fixture-digest"
-            onChange={(event) => setFixtureDigest(event.currentTarget.value)}
-            value={fixtureDigest}
-          />
+        <section aria-label="Server-owned operation" className="playground-controls">
+          <p className="playground-note">A new run binds the current server epoch. An admitted run stays pinned to the epoch in its persisted session identity.</p>
+          <label htmlFor="playground-operation">Operation</label>
+          <select disabled={busy || (session !== undefined && !terminal(session))} id="playground-operation" onChange={(event) => setOperation(event.currentTarget.value as PlaygroundOperation)} value={operation}>
+            <option value="skill.inspect">Skill inspection</option>
+            <option value="hook.simulate">Hook simulation</option>
+            <option value="mcp.call-tool">MCP tool call</option>
+          </select>
           <label htmlFor="playground-target">Target</label>
-          <select
-            disabled={busy || session !== undefined || targets.length === 0}
-            id="playground-target"
-            onChange={(event) => setTargetName(event.currentTarget.value)}
-            value={targetName}
-          >
+          <select disabled={busy || (session !== undefined && !terminal(session)) || targets.length === 0} id="playground-target" onChange={(event) => setTargetName(event.currentTarget.value)} value={targetName}>
             <option value="">Select a built target</option>
             {targets.map((target) => <option key={target.name} value={target.name}>{target.name}</option>)}
           </select>
-          <label htmlFor="playground-task-id">Task id</label>
-          <input
-            disabled={busy || session !== undefined}
-            id="playground-task-id"
-            onChange={(event) => setTaskId(event.currentTarget.value)}
-            value={taskId}
-          />
-          <label htmlFor="playground-task-text">Task description</label>
-          <textarea
-            disabled={busy || session !== undefined}
-            id="playground-task-text"
-            onChange={(event) => setTaskText(event.currentTarget.value)}
-            value={taskText}
-          />
-          <label htmlFor="playground-invocation-kind">Invocation kind</label>
-          <input
-            disabled={busy || session !== undefined}
-            id="playground-invocation-kind"
-            onChange={(event) => setInvocationKind(event.currentTarget.value)}
-            value={invocationKind}
-          />
-          <label htmlFor="playground-invocation-intent">Invocation intent (JSON)</label>
-          <textarea
-            aria-describedby={intent === null ? 'playground-invocation-intent-error' : undefined}
-            aria-invalid={intent === null ? true : undefined}
-            disabled={busy || session !== undefined}
-            id="playground-invocation-intent"
-            onChange={(event) => setIntentDraft(event.currentTarget.value)}
-            spellCheck={false}
-            value={intentDraft}
-          />
-          {intent === null
-            ? <p id="playground-invocation-intent-error" role="alert">{jsonDraftError}</p>
-            : undefined}
+          {operation !== 'skill.inspect' ? undefined : <>
+            <label htmlFor="playground-skill-id">Skill id</label>
+            <input disabled={busy || (session !== undefined && !terminal(session))} id="playground-skill-id" onChange={(event) => setSkillId(event.currentTarget.value)} value={skillId} />
+          </>}
+          {operation !== 'hook.simulate' ? undefined : <>
+            <label htmlFor="playground-hook">Hook</label>
+            <input disabled={busy || (session !== undefined && !terminal(session))} id="playground-hook" onChange={(event) => setHook(event.currentTarget.value)} value={hook} />
+            <label htmlFor="playground-hook-input">Hook input (JSON)</label>
+            <textarea aria-describedby={hookInputObject === null ? 'playground-hook-input-error' : undefined} aria-invalid={hookInputObject === null ? true : undefined} disabled={busy || (session !== undefined && !terminal(session))} id="playground-hook-input" onChange={(event) => setHookInput(event.currentTarget.value)} spellCheck={false} value={hookInput} />
+            {hookInputObject === null ? <p id="playground-hook-input-error" role="alert">{jsonDraftError}</p> : undefined}
+          </>}
+          {operation !== 'mcp.call-tool' ? undefined : <>
+            <label htmlFor="playground-mcp-server">MCP server</label>
+            <input disabled={busy || (session !== undefined && !terminal(session))} id="playground-mcp-server" onChange={(event) => setMcpServerName(event.currentTarget.value)} value={mcpServerName} />
+            <label htmlFor="playground-mcp-tool">MCP tool</label>
+            <input disabled={busy || (session !== undefined && !terminal(session))} id="playground-mcp-tool" onChange={(event) => setMcpTool(event.currentTarget.value)} value={mcpTool} />
+            <label htmlFor="playground-mcp-arguments">MCP arguments (JSON)</label>
+            <textarea aria-describedby={mcpArgumentsObject === null ? 'playground-mcp-arguments-error' : undefined} aria-invalid={mcpArgumentsObject === null ? true : undefined} disabled={busy || (session !== undefined && !terminal(session))} id="playground-mcp-arguments" onChange={(event) => setMcpArguments(event.currentTarget.value)} spellCheck={false} value={mcpArguments} />
+            {mcpArgumentsObject === null ? <p id="playground-mcp-arguments-error" role="alert">{jsonDraftError}</p> : undefined}
+          </>}
           <div className="playground-actions">
-            <button
-              disabled={busy || intent === null || session !== undefined ||
-                fixtureDigest.length === 0 || fixtureId.length === 0 ||
-                targetName.length === 0 || taskId.length === 0 || taskText.length === 0}
-              onClick={() => void open()}
-              type="button"
-            >
-              Open session
-            </button>
-            <button disabled={busy || sessionId === undefined} onClick={() => void replay()} type="button">
-              Replay from cursor {view.cursor}
-            </button>
-            <button disabled={busy || sessionId === undefined} onClick={() => void exportTrace()} type="button">
-              Export trace
-            </button>
+            <button disabled={startDisabled} onClick={() => void start()} type="button">Start run</button>
+            <button disabled type="button">Run script (unavailable)</button>
           </div>
+          <p className="playground-note">Script execution is unavailable because this foreground server has not advertised the contained execution capability.</p>
         </section>
-        {sessionId === undefined ? undefined : <section aria-label="Durable outcome" className="playground-controls">
-          <label htmlFor="playground-outcome-status">Outcome status</label>
-          <input
-            disabled={busy}
-            id="playground-outcome-status"
-            onChange={(event) => setOutcomeStatus(event.currentTarget.value)}
-            value={outcomeStatus}
-          />
-          <label htmlFor="playground-outcome-response">Recorded response</label>
-          <textarea
-            disabled={busy}
-            id="playground-outcome-response"
-            onChange={(event) => setOutcomeResponse(event.currentTarget.value)}
-            value={outcomeResponse}
-          />
+        {session === undefined ? undefined : <section aria-label="Server-owned run controls" className="playground-controls">
           <div className="playground-actions">
-            <button disabled={busy || outcomeStatus.length === 0} onClick={() => void finalize()} type="button">
-              Finalize outcome
-            </button>
-            <button disabled={busy || !view.canPromote} onClick={() => void promote()} type="button">
-              Promote to draft eval case
-            </button>
+            <button disabled={busy || terminal(session)} onClick={() => void cancel()} type="button">Cancel run</button>
+            <button disabled={busy} onClick={() => void exportTrace()} type="button">Export trace</button>
+            <button disabled={busy || !view.canPromote} onClick={() => void promote()} type="button">Promote to draft eval case</button>
           </div>
         </section>}
         <PlaygroundTraceView onToggle={toggle} view={view} />
