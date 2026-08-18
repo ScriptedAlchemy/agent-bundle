@@ -50,20 +50,34 @@ const replay = (nextSession: PlaygroundSession, events: readonly PlaygroundTrace
   cursor: { afterSequence: events.at(-1)?.sequence ?? 0 }, events, session: nextSession,
 });
 
-it('renders only typed server-owned operation drafts and a visibly unavailable script capability', () => {
+it('renders typed server-owned operation drafts including a catalog-selected script capability', () => {
   const client = new PlaygroundClient({ foreground: foreground(async () => { throw new Error('Static rendering issues no request.'); }) });
   const markup = renderToStaticMarkup(createElement(PlaygroundPage, {
     client, epoch, onRunChange: () => undefined, run: undefined, targets: [{ digest: 'portable', name: 'portable' }],
-  }));
+    scripts: [{ id: 'script:review', name: 'review', target: 'portable' }],
+  } as unknown as Parameters<typeof PlaygroundPage>[0]));
 
   expect(markup).toContain('Start run');
   expect(markup).toContain('Skill inspection');
   expect(markup).toContain('Hook simulation');
   expect(markup).toContain('MCP tool call');
-  expect(markup).toContain('Script execution is unavailable');
+  expect(markup).toContain('Script execution');
+  expect(markup).not.toContain('Script execution is unavailable');
   for (const forbidden of ['playground-fixture', 'playground-task', 'playground-invocation', 'playground-outcome', 'playground-epoch']) {
     expect(markup).not.toContain(forbidden);
   }
+});
+
+it('filters the server catalog to the selected target in stable script-id order', async () => {
+  const { playgroundScriptsForTarget } = await import('../src/playground/playground-page.tsx');
+  expect(playgroundScriptsForTarget([
+    { id: 'script:zeta', name: 'zeta', target: 'portable' },
+    { id: 'script:alpha', name: 'alpha', target: 'portable' },
+    { id: 'script:other', name: 'other', target: 'claude' },
+  ], 'portable')).toEqual([
+    { id: 'script:alpha', name: 'alpha', target: 'portable' },
+    { id: 'script:zeta', name: 'zeta', target: 'portable' },
+  ]);
 });
 
 it('renders the pinned server epoch and persisted event references, not a rebuilt current epoch', () => {

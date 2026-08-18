@@ -9,7 +9,6 @@ import {
   type PlaygroundRun,
   type PlaygroundRouteService,
 } from '../src/dev/playground-routes.ts';
-import { ScriptPlaygroundExecutionUnavailableError } from '../src/dev/script-playground-service.ts';
 import type {
   DraftEvalCase,
   PlaygroundExport,
@@ -203,10 +202,12 @@ it('rejects forged epochs, browser evidence, outcomes, and executable fields bef
       { epochId: 'another-epoch', operation: 'skill.inspect', skillId: 'skill:review', target: 'codex' },
       { operation: 'skill.inspect', raw: { forged: true }, skillId: 'skill:review', target: 'codex' },
       { operation: 'skill.inspect', outcome: { status: 'passed' }, skillId: 'skill:review', target: 'codex' },
-      { command: '/bin/sh', operation: 'script.run', script: 'review.sh', target: 'codex' },
-      { cwd: '/tmp', operation: 'script.run', script: 'review.sh', target: 'codex' },
-      { env: { PATH: '/tmp' }, operation: 'script.run', script: 'review.sh', target: 'codex' },
-      { operation: 'script.run', path: '../../escape.sh', script: 'review.sh', target: 'codex' },
+      { command: '/bin/sh', operation: 'script.run', scriptId: 'script:review', target: 'codex' },
+      { cwd: '/tmp', operation: 'script.run', scriptId: 'script:review', target: 'codex' },
+      { env: { PATH: '/tmp' }, operation: 'script.run', scriptId: 'script:review', target: 'codex' },
+      { operation: 'script.run', path: '../../escape.sh', scriptId: 'script:review', target: 'codex' },
+      { args: ['--unsafe'], operation: 'script.run', scriptId: 'script:review', target: 'codex' },
+      { operation: 'script.run', script: 'review.mjs', scriptId: 'script:review', target: 'codex' },
     ]) {
       const response = await post(`${started.url}/api/playground/runs`, body);
       expect(response.status).toBe(400);
@@ -217,18 +218,31 @@ it('rejects forged epochs, browser evidence, outcomes, and executable fields bef
   }
 });
 
-it('reports unavailable OS-contained script execution before service admission', async () => {
+it('admits only a target-scoped script id and never forwards a raw script path', async () => {
   const service = new RecordingService();
-  service.run = async () => { throw new ScriptPlaygroundExecutionUnavailableError(); };
   const started = await startRoutes(service);
   try {
     const response = await post(`${started.url}/api/playground/runs`, {
-      operation: 'script.run', script: 'review.mjs', target: 'codex',
+      operation: 'script.run', scriptId: 'script:review', target: 'codex',
     });
-    expect(response.status).toBe(503);
-    await expect(response.json()).resolves.toEqual({
-      diagnostic: { code: 'AB8086', message: 'OS-contained script execution is not configured.' },
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ run: { id: 'run-server-owned', session: sessionFixture } });
+    expect(service.calls).toEqual([expect.objectContaining({
+      input: { operation: 'script.run', scriptId: 'script:review', target: 'codex' },
+      kind: 'run',
+      signal: undefined,
+    })]);
+  } finally { await started.close(); }
+});
+
+it('rejects a legacy raw script field before it can alter the selected script id', async () => {
+  const service = new RecordingService();
+  const started = await startRoutes(service);
+  try {
+    const response = await post(`${started.url}/api/playground/runs`, {
+      operation: 'script.run', script: 'review.mjs', scriptId: 'script:review', target: 'codex',
     });
+    expect(response.status).toBe(400);
     expect(service.calls).toEqual([]);
   } finally { await started.close(); }
 });

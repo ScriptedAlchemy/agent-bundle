@@ -285,6 +285,7 @@ export {
   type ArtifactInspectionFileNode,
   type ArtifactInspectionHook,
   type ArtifactInspectionMcpServer,
+  type ArtifactInspectionScript,
   type ArtifactInspectionProvenance,
   type ArtifactInspectionRuntime,
   type ArtifactInspectionSourceInput,

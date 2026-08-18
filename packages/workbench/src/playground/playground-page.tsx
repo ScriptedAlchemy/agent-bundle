@@ -11,6 +11,7 @@ import type {
   PlaygroundTraceEvent,
 } from '../../../agent-bundle/src/services/playground-service.ts';
 import type { PlaygroundOperationRequest, PlaygroundRun } from '../../../agent-bundle/src/dev/playground-contract.ts';
+import type { ArtifactInspectionScript } from '../../../agent-bundle/src/dev/types.ts';
 
 import { parseRawJsonRecord, serializeJsonRecord } from '../mcp/mcp-json-input.tsx';
 import { PlaygroundClientError, type PlaygroundClient } from './playground-client.ts';
@@ -35,10 +36,11 @@ export interface PlaygroundPageProps {
   /** The shell retains the run/session identity across navigation and project rebuilds. */
   readonly onRunChange: (run: PlaygroundRun | undefined) => void;
   readonly run: PlaygroundRun | undefined;
+  readonly scripts: readonly Pick<ArtifactInspectionScript, 'id' | 'name' | 'target'>[];
   readonly targets: readonly PlaygroundTarget[];
 }
 
-type PlaygroundOperation = Exclude<PlaygroundOperationRequest['operation'], 'script.run'>;
+type PlaygroundOperation = PlaygroundOperationRequest['operation'];
 
 const jsonDraftError = 'This field must contain a JSON object.';
 
@@ -70,6 +72,14 @@ const delay = async (milliseconds: number, signal: AbortSignal): Promise<void> =
 const maxStreamReconnects = 3;
 const pollDelayMilliseconds = 250;
 const reconnectDelayMilliseconds = 100;
+
+/** The server catalog is authoritative; this only limits the desktop picker to the selected target. */
+export const playgroundScriptsForTarget = (
+  scripts: readonly Pick<ArtifactInspectionScript, 'id' | 'name' | 'target'>[],
+  target: string,
+): readonly Pick<ArtifactInspectionScript, 'id' | 'name' | 'target'>[] => Object.freeze(
+  scripts.filter((script) => script.target === target).sort((left, right) => left.id.localeCompare(right.id)),
+);
 
 export interface PlaygroundRunObserverOptions {
   readonly client: Pick<PlaygroundClient, 'replay' | 'session' | 'stream'>;
@@ -276,7 +286,7 @@ export const PlaygroundTraceView = ({ onToggle, view }: PlaygroundTraceViewProps
  * Starts typed server-owned operations, then observes their durable session by
  * replay, live NDJSON stream, polling, and a final replay before stream close.
  */
-export const PlaygroundPage = ({ client, epoch, onRunChange, run, targets }: PlaygroundPageProps) => {
+export const PlaygroundPage = ({ client, epoch, onRunChange, run, scripts, targets }: PlaygroundPageProps) => {
   const [busy, setBusy] = useState(false);
   const [draftEvalCase, setDraftEvalCase] = useState<DraftEvalCase>();
   const [error, setError] = useState<string>();
@@ -288,6 +298,7 @@ export const PlaygroundPage = ({ client, epoch, onRunChange, run, targets }: Pla
   const [mcpServerName, setMcpServerName] = useState('');
   const [mcpTool, setMcpTool] = useState('');
   const [operation, setOperation] = useState<PlaygroundOperation>('skill.inspect');
+  const [scriptId, setScriptId] = useState('');
   const [selectedRefs, setSelectedRefs] = useState<readonly string[]>([]);
   const [skillId, setSkillId] = useState('');
   const [targetName, setTargetName] = useState('');
@@ -298,6 +309,7 @@ export const PlaygroundPage = ({ client, epoch, onRunChange, run, targets }: Pla
   const hookInputObject = parseRawJsonRecord(hookInput);
   const mcpArgumentsObject = parseRawJsonRecord(mcpArguments);
   const view = playgroundViewFor({ epoch, events, exported, selectedRefs, session });
+  const targetScripts = playgroundScriptsForTarget(scripts, targetName);
 
   useEffect(() => {
     if (run === undefined || runId === undefined || sessionId === undefined) return;
@@ -342,6 +354,9 @@ export const PlaygroundPage = ({ client, epoch, onRunChange, run, targets }: Pla
       return hook.length === 0 || hookInputObject === null
         ? undefined
         : { hook, input: asJsonObject(hookInputObject), operation, target: targetName };
+    }
+    if (operation === 'script.run') {
+      return scriptId.length === 0 ? undefined : { operation, scriptId, target: targetName };
     }
     return mcpServerName.length === 0 || mcpTool.length === 0 || mcpArgumentsObject === null
       ? undefined
@@ -409,6 +424,7 @@ export const PlaygroundPage = ({ client, epoch, onRunChange, run, targets }: Pla
             <option value="skill.inspect">Skill inspection</option>
             <option value="hook.simulate">Hook simulation</option>
             <option value="mcp.call-tool">MCP tool call</option>
+            <option value="script.run">Script execution</option>
           </select>
           <label htmlFor="playground-target">Target</label>
           <select disabled={busy || (session !== undefined && !terminal(session)) || targets.length === 0} id="playground-target" onChange={(event) => setTargetName(event.currentTarget.value)} value={targetName}>
@@ -435,11 +451,21 @@ export const PlaygroundPage = ({ client, epoch, onRunChange, run, targets }: Pla
             <textarea aria-describedby={mcpArgumentsObject === null ? 'playground-mcp-arguments-error' : undefined} aria-invalid={mcpArgumentsObject === null ? true : undefined} disabled={busy || (session !== undefined && !terminal(session))} id="playground-mcp-arguments" onChange={(event) => setMcpArguments(event.currentTarget.value)} spellCheck={false} value={mcpArguments} />
             {mcpArgumentsObject === null ? <p id="playground-mcp-arguments-error" role="alert">{jsonDraftError}</p> : undefined}
           </>}
+          {operation !== 'script.run' ? undefined : <>
+            <label htmlFor="playground-script-id">Emitted script</label>
+            <select
+              disabled={busy || (session !== undefined && !terminal(session)) || targetScripts.length === 0}
+              id="playground-script-id"
+              onChange={(event) => setScriptId(event.currentTarget.value)}
+              value={scriptId}
+            >
+              <option value="">Select a script</option>
+              {targetScripts.map((script) => <option key={script.id} value={script.id}>{script.name}</option>)}
+            </select>
+          </>}
           <div className="playground-actions">
-            <button disabled={startDisabled} onClick={() => void start()} type="button">Start run</button>
-            <button disabled type="button">Run script (unavailable)</button>
+            <button disabled={startDisabled} onClick={() => void start()} type="button">{operation === 'script.run' ? 'Run script' : 'Start run'}</button>
           </div>
-          <p className="playground-note">Script execution is unavailable because this foreground server has not advertised the contained execution capability.</p>
         </section>
         {session === undefined ? undefined : <section aria-label="Server-owned run controls" className="playground-controls">
           <div className="playground-actions">

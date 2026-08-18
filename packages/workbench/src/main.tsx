@@ -6,7 +6,7 @@ import type { Diagnostic } from '../../agent-bundle/src/core/diagnostics.ts';
 import { MCP_APP_PROFILE_DESCRIPTORS, type McpAppProfileId } from '../../agent-bundle/src/dev/mcp-app-profile-descriptors.ts';
 import type { McpAppPreviewAppsSnapshot } from '../../agent-bundle/src/dev/mcp-app-runtime-preview-service.ts';
 import type { PlaygroundRun } from '../../agent-bundle/src/dev/playground-contract.ts';
-import type { ProjectStatus } from '../../agent-bundle/src/dev/types.ts';
+import type { ArtifactInspectionScript, ProjectStatus } from '../../agent-bundle/src/dev/types.ts';
 
 import { ArtifactClient } from './artifacts/artifact-client.ts';
 import { ComparisonClient } from './comparisons/comparison-client.ts';
@@ -594,22 +594,43 @@ const ArtifactsScreen = ({ artifactClient, connectionError, onNavigate, status }
   <ArtifactsPage client={artifactClient} epochId={activeEpochId(status)} />
 </WorkbenchScreen>;
 
-const PlaygroundScreen = ({ connectionError, onNavigate, onRunChange, playgroundClient, run, status }: {
+const PlaygroundScreen = ({ artifactClient, connectionError, onNavigate, onRunChange, playgroundClient, run, status }: {
+  readonly artifactClient: ArtifactClient;
   readonly connectionError?: string;
   readonly onNavigate: (page: WorkbenchPage) => void;
   readonly onRunChange: (run: PlaygroundRun | undefined) => void;
   readonly playgroundClient: PlaygroundClient;
   readonly run: PlaygroundRun | undefined;
   readonly status: ProjectStatus;
-}) => <WorkbenchScreen connectionError={connectionError} onNavigate={onNavigate} page="playground">
-  <PlaygroundPage
-    client={playgroundClient}
-    epoch={playgroundEpochFor(status)}
-    onRunChange={onRunChange}
-    run={run}
-    targets={playgroundTargetsFor(status)}
-  />
-</WorkbenchScreen>;
+}) => {
+  const epoch = activeEpochFor(status);
+  const [scripts, setScripts] = useState<readonly ArtifactInspectionScript[]>([]);
+
+  useEffect(() => {
+    let current = true;
+    if (epoch === undefined) {
+      setScripts([]);
+      return () => { current = false; };
+    }
+    void artifactClient.inspect(epoch.id).then((inspection) => {
+      if (current) setScripts(inspection.runtime.scripts);
+    }).catch(() => {
+      if (current) setScripts([]);
+    });
+    return () => { current = false; };
+  }, [artifactClient, epoch?.id]);
+
+  return <WorkbenchScreen connectionError={connectionError} onNavigate={onNavigate} page="playground">
+    <PlaygroundPage
+      client={playgroundClient}
+      epoch={playgroundEpochFor(status)}
+      onRunChange={onRunChange}
+      run={run}
+      scripts={scripts}
+      targets={playgroundTargetsFor(status)}
+    />
+  </WorkbenchScreen>;
+};
 
 const LogsScreen = ({ connectionError, logClient, onNavigate }: {
   readonly connectionError?: string;
@@ -1271,6 +1292,7 @@ const Workbench = () => {
     }
     if (page === 'playground') {
       return <PlaygroundScreen
+        artifactClient={artifactClient.current}
         connectionError={connectionError}
         onNavigate={navigate}
         onRunChange={setPlaygroundRun}

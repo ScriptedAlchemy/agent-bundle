@@ -1,13 +1,18 @@
+import { spawn, type ChildProcess } from 'node:child_process';
 import { mkdtemp, rm } from 'node:fs/promises';
+import { extname, join, relative, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
-import { basename, extname, join, relative, resolve } from 'node:path';
 
 import { createDefaultRegistry, type TargetRegistry } from '../adapters/registry.ts';
 import { validateArtifactWithSnapshot } from '../build/validate-artifact.ts';
-import { EpochStore } from './epoch-store.ts';
+import { taskkill, terminateProcessTree } from '../services/process-tree.ts';
+import { artifactScriptCatalog } from './artifact-script-catalog.ts';
+import { EpochStore, type EpochReference } from './epoch-store.ts';
 
 const defaultOutputLimit = 64 * 1024;
 const defaultTimeoutMs = 5_000;
+const terminationGraceMs = 250;
+const terminationSettlementMs = 250;
 
 export interface PlaygroundScriptInterpreter {
   readonly args: readonly string[];
@@ -23,7 +28,7 @@ export interface ResolvedPlaygroundScript {
 
 export interface ScriptPlaygroundRunRequest {
   readonly epochId: string;
-  readonly script: string;
+  readonly scriptId: string;
   readonly signal?: AbortSignal;
   readonly target: string;
 }
@@ -40,42 +45,9 @@ export interface PlaygroundWorkspaceLease {
   readonly path: string;
 }
 
-export interface ServerOwnedScriptExecution {
-  readonly args: readonly string[];
-  readonly command: string;
-  readonly cwd: string;
-  readonly env: Readonly<Record<string, string>>;
-  readonly outputLimit: number;
-  readonly signal?: AbortSignal;
-  readonly timeoutMs: number;
-}
-
-export interface ScriptExecutionOutput {
-  readonly exitCode: number;
-  readonly stderr: string;
-  readonly stdout: string;
-}
-
-/** Stable pre-admission failure: this host has not configured an OS-contained executor. */
-export class ScriptPlaygroundExecutionUnavailableError extends Error {
-  constructor() {
-    super('OS-contained script execution is not configured.');
-    this.name = 'ScriptPlaygroundExecutionUnavailableError';
-  }
-}
-
-/**
- * Production executors must provide an OS-level containment boundary that can
- * prove all descendants are gone before resolving. Node process groups cannot
- * make that claim because scripts can escape through setsid or double-fork.
- */
-export type ContainedScriptExecutor = (options: ServerOwnedScriptExecution) => Promise<ScriptExecutionOutput>;
-
 export interface ScriptPlaygroundServiceOptions {
   /** Test seam; production always creates an isolated temporary workspace. */
   readonly createWorkspace?: () => Promise<PlaygroundWorkspaceLease>;
-  /** Explicit platform capability; without it script.run is safely unavailable. */
-  readonly executor?: ContainedScriptExecutor;
   readonly epochStore?: EpochStore;
   readonly outputLimit?: number;
   readonly registry?: TargetRegistry;
@@ -84,8 +56,18 @@ export interface ScriptPlaygroundServiceOptions {
   readonly timeoutMs?: number;
 }
 
+class ScriptPlaygroundAbortError extends Error {
+  constructor() {
+    super('Script execution was cancelled.');
+    this.name = 'AbortError';
+  }
+}
+
 const safeSegment = (value: string): boolean =>
   /^[a-z0-9][a-z0-9._-]*$/iu.test(value) && value !== '.' && value !== '..';
+
+const safeScriptId = (value: string): boolean =>
+  /^script:[a-zA-Z0-9](?:[a-zA-Z0-9._-]*[a-zA-Z0-9])?$/u.test(value);
 
 const contained = (root: string, candidate: string): boolean => {
   const path = relative(root, candidate);
@@ -119,14 +101,130 @@ const environment = (cwd: string): Readonly<Record<string, string>> => Object.fr
   PATH: process.env.PATH ?? '/usr/bin:/bin',
 });
 
-/**
- * Resolves and runs compiled manifest scripts under a sealed execution surface.
- * The public request has no command, path, cwd, args, or environment field.
- */
+const spawnFailure = (error: unknown): Error => {
+  if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT') {
+    return new Error('Script interpreter is not available.');
+  }
+  return new Error('Script execution could not be spawned.');
+};
+
+const execute = async (options: {
+  readonly cwd: string;
+  readonly outputLimit: number;
+  readonly resolved: ResolvedPlaygroundScript;
+  readonly signal?: AbortSignal;
+  readonly timeoutMs: number;
+}): Promise<Readonly<{ readonly exitCode: number; readonly stderr: string; readonly stdout: string }>> => new Promise((resolvePromise, rejectPromise) => {
+  if (options.signal?.aborted) {
+    rejectPromise(new ScriptPlaygroundAbortError());
+    return;
+  }
+  let child: ChildProcess;
+  try {
+    child = spawn(options.resolved.interpreter.command, [...options.resolved.interpreter.args, options.resolved.path], {
+      cwd: options.cwd,
+      detached: process.platform !== 'win32',
+      env: environment(options.cwd),
+      shell: false,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+  } catch (error) {
+    rejectPromise(spawnFailure(error));
+    return;
+  }
+
+  let closed = false;
+  let settled = false;
+  let spawnError: Error | undefined;
+  let termination: Error | undefined;
+  let forceKillTimer: NodeJS.Timeout | undefined;
+  let terminationSettlementTimer: NodeJS.Timeout | undefined;
+  const stdout: Buffer[] = [];
+  const stderr: Buffer[] = [];
+  let outputBytes = 0;
+  const cleanup = () => {
+    clearTimeout(timeoutTimer);
+    if (forceKillTimer !== undefined) clearTimeout(forceKillTimer);
+    if (terminationSettlementTimer !== undefined) clearTimeout(terminationSettlementTimer);
+    options.signal?.removeEventListener('abort', onAbort);
+  };
+  const settle = (action: () => void): void => {
+    if (settled) return;
+    settled = true;
+    cleanup();
+    action();
+  };
+  const terminate = (error: Error): void => {
+    if (closed || termination !== undefined) return;
+    termination = error;
+    const terminateTree = (signal: NodeJS.Signals): void => terminateProcessTree(child, signal, {
+      onTreeTerminationFailure: () => undefined,
+      platform: process.platform,
+      taskkill,
+    });
+    terminateTree('SIGTERM');
+    forceKillTimer = setTimeout(() => {
+      if (closed) return;
+      terminateTree('SIGKILL');
+      terminationSettlementTimer = setTimeout(() => {
+        if (closed) return;
+        child.stdin?.destroy();
+        child.stdout?.destroy();
+        child.stderr?.destroy();
+        settle(() => rejectPromise(new Error('Script process tree did not settle after termination.')));
+      }, terminationSettlementMs);
+    }, terminationGraceMs);
+  };
+  const onAbort = (): void => terminate(new ScriptPlaygroundAbortError());
+  const timeoutTimer = setTimeout(() => terminate(new Error('Script execution timed out.')), options.timeoutMs);
+  const append = (destination: Buffer[], chunk: Buffer): void => {
+    const remaining = options.outputLimit - outputBytes;
+    if (remaining <= 0) return;
+    if (chunk.length > remaining) {
+      destination.push(chunk.subarray(0, remaining));
+      outputBytes += remaining;
+      terminate(new Error('Script execution output exceeded the configured limit.'));
+      return;
+    }
+    destination.push(chunk);
+    outputBytes += chunk.length;
+  };
+
+  options.signal?.addEventListener('abort', onAbort, { once: true });
+  child.once('error', (error) => { spawnError = spawnFailure(error); });
+  child.stdout?.on('data', (chunk: Buffer) => append(stdout, chunk));
+  child.stderr?.on('data', (chunk: Buffer) => append(stderr, chunk));
+  child.once('close', (exitCode) => {
+    closed = true;
+    if (termination !== undefined) {
+      settle(() => rejectPromise(termination!));
+      return;
+    }
+    if (spawnError !== undefined) {
+      settle(() => rejectPromise(spawnError!));
+      return;
+    }
+    if (exitCode === null) {
+      settle(() => rejectPromise(new Error('Script process exited without an exit code.')));
+      return;
+    }
+    settle(() => resolvePromise(Object.freeze({
+      exitCode,
+      stderr: Buffer.concat(stderr).toString('utf8'),
+      stdout: Buffer.concat(stdout).toString('utf8'),
+    })));
+  });
+});
+
+interface ResolvedEpochScript {
+  readonly reference: EpochReference;
+  readonly script: ResolvedPlaygroundScript;
+}
+
+/** Runs a selected emitted script with a server-owned command, environment, workspace, and epoch lease. */
 export class ScriptPlaygroundService {
   readonly #createWorkspace: () => Promise<PlaygroundWorkspaceLease>;
   readonly #epochStore: EpochStore | undefined;
-  readonly #executor: ContainedScriptExecutor | undefined;
   readonly #outputLimit: number;
   readonly #registry: TargetRegistry;
   readonly #resolveScriptOverride: ScriptPlaygroundServiceOptions['resolveScript'];
@@ -139,56 +237,43 @@ export class ScriptPlaygroundService {
     if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1) throw new Error('Script playground timeout must be a positive safe integer.');
     this.#createWorkspace = options.createWorkspace ?? workspace;
     this.#epochStore = options.epochStore;
-    this.#executor = options.executor;
     this.#outputLimit = outputLimit;
     this.#registry = options.registry ?? createDefaultRegistry();
     this.#resolveScriptOverride = options.resolveScript;
     this.#timeoutMs = timeoutMs;
   }
 
-  isAvailable(): boolean {
-    return this.#executor !== undefined;
+  async run(request: ScriptPlaygroundRunRequest): Promise<ScriptPlaygroundResult> {
+    this.#assertRequest(request);
+    const override = this.#resolveScriptOverride;
+    if (override !== undefined) return this.#runResolved(await override(request), request.signal);
+    const resolved = await this.#resolve(request);
+    try {
+      return await this.#runResolved(resolved.script, request.signal);
+    } finally {
+      await resolved.reference.close();
+    }
   }
 
-  async run(request: ScriptPlaygroundRunRequest): Promise<ScriptPlaygroundResult> {
-    const executor = this.#executor;
-    if (executor === undefined) throw new ScriptPlaygroundExecutionUnavailableError();
-    const resolved = await this.#resolve({ epochId: request.epochId, script: request.script, target: request.target });
+  async #runResolved(resolved: ResolvedPlaygroundScript, signal?: AbortSignal): Promise<ScriptPlaygroundResult> {
     const lease = await this.#createWorkspace();
     try {
-      const result = await executor(Object.freeze({
-        args: Object.freeze([...resolved.interpreter.args, resolved.path]),
-        command: resolved.interpreter.command,
+      const result = await execute({
         cwd: lease.path,
-        env: environment(lease.path),
         outputLimit: this.#outputLimit,
-        signal: request.signal,
+        resolved,
+        signal,
         timeoutMs: this.#timeoutMs,
-      }));
-      return Object.freeze({
-        exitCode: result.exitCode,
-        script: resolved.name,
-        stderr: result.stderr,
-        stdout: result.stdout,
       });
+      return Object.freeze({ script: resolved.name, ...result });
     } finally {
       await lease.close();
     }
   }
 
-  async #resolve(request: Omit<ScriptPlaygroundRunRequest, 'signal'>): Promise<ResolvedPlaygroundScript> {
-    if (!safeSegment(request.epochId) || !safeSegment(request.target) || !safeSegment(request.script) || basename(request.script) !== request.script) {
-      throw new Error('Script playground request must name safe compiled artifact identifiers.');
-    }
-    if (this.#resolveScriptOverride !== undefined) return this.#resolveScriptOverride(request);
+  async #resolve(request: Omit<ScriptPlaygroundRunRequest, 'signal'>): Promise<ResolvedEpochScript> {
     const store = this.#epochStore;
     if (store === undefined) throw new Error('Script playground requires an epoch store.');
-    const layout = this.#registry.artifactLayout(request.target).scripts;
-    if (layout === undefined) throw new Error(`Target ${JSON.stringify(request.target)} does not declare a script artifact layout.`);
-    const suffix = extname(request.script);
-    if (!layout.allowedSuffixes.includes(suffix)) throw new Error('Requested script is not an allowlisted compiled script.');
-    const interpreter = interpreterFor(suffix);
-    if (interpreter === undefined) throw new Error('Requested script suffix has no server allowlisted interpreter.');
     const reference = await store.acquireEpochReference(request.epochId);
     try {
       const validated = await validateArtifactWithSnapshot({
@@ -199,18 +284,26 @@ export class ScriptPlaygroundService {
       if (validated.snapshot === undefined || validated.diagnostics.some((entry) => entry.severity === 'error')) {
         throw new Error('Script playground requires a strictly validated artifact.');
       }
-      const path = resolve(reference.root, request.target, layout.directory, request.script);
+      const selected = artifactScriptCatalog(validated.snapshot.manifest, this.#registry)
+        .find((entry) => entry.target === request.target && entry.id === request.scriptId);
+      if (selected === undefined) throw new Error('Requested script is not in the validated artifact script catalog.');
+      const path = resolve(reference.root, selected.file);
       if (!contained(reference.root, path)) throw new Error('Resolved script escapes the published artifact.');
-      const relativePath = `${request.target}/${layout.directory}/${request.script}`;
-      const manifestFile = validated.snapshot.manifest.files.find((file) => file.path === relativePath);
-      if (manifestFile === undefined) throw new Error('Requested script is absent from the validated artifact manifest.');
+      const interpreter = interpreterFor(extname(path));
+      if (interpreter === undefined) throw new Error('Requested script suffix has no server allowlisted interpreter.');
       return Object.freeze({
-        interpreter,
-        name: request.script,
-        path,
+        reference,
+        script: Object.freeze({ interpreter, name: selected.name, path }),
       });
-    } finally {
+    } catch (error) {
       await reference.close();
+      throw error;
+    }
+  }
+
+  #assertRequest(request: ScriptPlaygroundRunRequest): void {
+    if (!safeSegment(request.epochId) || !safeSegment(request.target) || !safeScriptId(request.scriptId)) {
+      throw new Error('Script playground request must name safe compiled artifact identifiers.');
     }
   }
 }

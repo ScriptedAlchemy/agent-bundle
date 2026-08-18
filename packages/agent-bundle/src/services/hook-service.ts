@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
@@ -11,13 +11,12 @@ import {
 } from '../build/emit.ts';
 import { validateArtifact } from '../build/validate-artifact.ts';
 import { parseArtifactHookIndex } from './hook-index.ts';
+import { taskkill, terminateProcessTree, type ProcessTreeTaskkill } from './process-tree.ts';
 
 const defaultTimeoutMs = 5_000;
 const maxStreamBytes = 1_000_000;
 const terminationGraceMs = 250;
 const terminationSettlementMs = 250;
-
-type Taskkill = (arguments_: readonly string[]) => ChildProcess;
 
 export interface HookListOptions {
   /** Internal epoch callers may allow the store-owned staging marker. */
@@ -42,7 +41,7 @@ export interface HookServiceOptions {
   /** Target contracts that own and validate the artifact. */
   readonly registry?: TargetRegistry;
   /** Internal test seam; production runs Windows taskkill directly. */
-  readonly taskkill?: Taskkill;
+  readonly taskkill?: ProcessTreeTaskkill;
 }
 
 /**
@@ -82,58 +81,12 @@ class HookSimulationTerminationError extends Error {
   }
 }
 
-const taskkill: Taskkill = (arguments_) => spawn('taskkill', [...arguments_], {
-  stdio: 'ignore',
-  windowsHide: true,
-});
-
-const terminateProcessTree = (
-  child: ChildProcess,
-  signal: NodeJS.Signals,
-  options: { readonly onTreeTerminationFailure: () => void; readonly platform: NodeJS.Platform; readonly taskkill: Taskkill },
-): void => {
-  if (child.pid === undefined) {
-    child.kill(signal);
-    return;
-  }
-  if (options.platform === 'win32') {
-    let fallbackUsed = false;
-    const fallback = () => {
-      if (fallbackUsed) return;
-      fallbackUsed = true;
-      options.onTreeTerminationFailure();
-      child.kill(signal);
-    };
-    try {
-      const taskkillProcess = options.taskkill([
-        '/pid',
-        String(child.pid),
-        '/t',
-        ...(signal === 'SIGKILL' ? ['/f'] : []),
-      ]);
-      taskkillProcess.once('error', fallback);
-      taskkillProcess.once('close', (code) => {
-        if (code !== 0) fallback();
-      });
-    } catch {
-      fallback();
-    }
-    return;
-  }
-  try {
-    process.kill(-child.pid, signal);
-  } catch (error) {
-    if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ESRCH') return;
-    child.kill(signal);
-  }
-};
-
 const runWrapper = async (options: {
   readonly cwd: string;
   readonly input: Record<string, unknown>;
   readonly platform: NodeJS.Platform;
   readonly signal?: AbortSignal;
-  readonly taskkill: Taskkill;
+  readonly taskkill: ProcessTreeTaskkill;
   readonly timeoutMs: number;
   readonly wrapper: string;
 }): Promise<unknown> => new Promise((resolvePromise, reject) => {
@@ -256,7 +209,7 @@ const runWrapper = async (options: {
 export class HookService {
   readonly #platform: NodeJS.Platform;
   readonly #registry: TargetRegistry;
-  readonly #taskkill: Taskkill;
+  readonly #taskkill: ProcessTreeTaskkill;
 
   constructor(options: HookServiceOptions = {}) {
     this.#platform = options.platform ?? process.platform;

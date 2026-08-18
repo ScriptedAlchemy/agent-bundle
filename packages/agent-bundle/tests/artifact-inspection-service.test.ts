@@ -61,6 +61,7 @@ const runtimeRegistry = (
   artifactLayout: {
     hookWrappers: { allowedSuffixes: ['.mjs'], directory: 'hooks' },
     mcpEntries: { allowedSuffixes: ['.mjs'], directory: 'mcp' },
+    scripts: { allowedSuffixes: ['.mjs'], directory: 'scripts' },
   },
   capabilities: { hooks: true, mcp: true },
   hookContract: {
@@ -263,6 +264,8 @@ const runtimeFiles = (): readonly FixtureFile[] => [
   { contents: 'export const runner = true;\n', kind: 'bundle', mode: 0o755, path: 'synthetic/mcp/runner.mjs', sourceInputs: [runnerSourcePath] },
   { contents: '{}\n', kind: 'generated', path: 'synthetic/hooks/hooks.json' },
   { contents: 'export const check = true;\n', kind: 'bundle', mode: 0o755, path: 'synthetic/hooks/run.mjs', sourceInputs: [runnerSourcePath] },
+  { contents: 'export const alpha = true;\n', kind: 'bundle', path: 'synthetic/scripts/alpha.mjs' },
+  { contents: 'export const zeta = true;\n', kind: 'copy', path: 'synthetic/scripts/zeta.mjs' },
 ];
 
 const diffFiles = (variant: 'base' | 'candidate'): readonly FixtureFile[] => {
@@ -349,6 +352,8 @@ it('inspects one validated epoch as sorted, source-free artifact facts', async (
       'synthetic/hooks/run.mjs',
       'synthetic/mcp.json',
       'synthetic/mcp/runner.mjs',
+      'synthetic/scripts/alpha.mjs',
+      'synthetic/scripts/zeta.mjs',
     ]);
     expect(inspection.targets).toEqual([
       expect.objectContaining({ name: fixtureTarget, tree: expect.objectContaining({ path: fixtureTarget }) }),
@@ -371,6 +376,10 @@ it('inspects one validated epoch as sorted, source-free artifact facts', async (
       name: 'runner',
       target: fixtureTarget,
     }]);
+    expect(inspection.runtime.scripts).toEqual([
+      expect.objectContaining({ id: 'script:alpha', name: 'alpha', target: fixtureTarget, file: expect.objectContaining({ path: 'synthetic/scripts/alpha.mjs' }) }),
+      expect.objectContaining({ id: 'script:zeta', name: 'zeta', target: fixtureTarget, file: expect.objectContaining({ path: 'synthetic/scripts/zeta.mjs' }) }),
+    ]);
     expect(JSON.stringify(inspection)).not.toContain('do-not-expose');
   } finally {
     await rm(root, { force: true, recursive: true });

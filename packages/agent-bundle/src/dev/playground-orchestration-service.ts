@@ -5,10 +5,7 @@ import { snapshotStrictJsonValue } from '../core/strict-json.ts';
 import type { HookPlaygroundRouteService } from './hook-playground-routes.ts';
 import type { McpSession } from './mcp-session-service.ts';
 import type { PlaygroundOperationRequest, PlaygroundRun } from './playground-contract.ts';
-import {
-  ScriptPlaygroundExecutionUnavailableError,
-  type ScriptPlaygroundService,
-} from './script-playground-service.ts';
+import type { ScriptPlaygroundService } from './script-playground-service.ts';
 import type { ProjectStatus } from './types.ts';
 import type {
   DraftEvalCase,
@@ -67,7 +64,7 @@ export interface PlaygroundOrchestrationServiceOptions {
   readonly epochStore: PlaygroundEpochAuthority;
   readonly hookPlayground?: Pick<HookPlaygroundRouteService, 'simulate'>;
   readonly mcpSessions?: PlaygroundMcpSessionService;
-  readonly scripts?: Pick<ScriptPlaygroundService, 'run'> & Readonly<{ isAvailable?(): boolean }>;
+  readonly scripts?: Pick<ScriptPlaygroundService, 'run'>;
   readonly skillDocuments?: Readonly<{
     generated(epochId: string, target: string, skillId: string): Promise<unknown>;
   }>;
@@ -109,7 +106,7 @@ const operationIntent = (operation: PlaygroundOperationRequest): PlaygroundSessi
   if (operation.operation === 'mcp.call-tool') {
     return Object.freeze({ intent: Object.freeze({ serverName: operation.serverName, tool: operation.tool }), kind: operation.operation });
   }
-  return Object.freeze({ intent: Object.freeze({ script: operation.script }), kind: operation.operation });
+  return Object.freeze({ intent: Object.freeze({ scriptId: operation.scriptId }), kind: operation.operation });
 };
 
 const taskText = (operation: PlaygroundOperationRequest): string => {
@@ -157,9 +154,6 @@ export class PlaygroundOrchestrationService {
 
   async run(input: PlaygroundOperationRequest, options: { readonly signal?: AbortSignal } = {}): Promise<PlaygroundRun> {
     if (this.#closed) throw new Error('Playground orchestration service is closed.');
-    if (input.operation === 'script.run' && (this.#scripts === undefined || this.#scripts.isAvailable?.() === false)) {
-      throw new ScriptPlaygroundExecutionUnavailableError();
-    }
     const id = this.#createRunId();
     const controller = new AbortController();
     const signal = options.signal === undefined ? controller.signal : AbortSignal.any([options.signal, controller.signal]);
@@ -384,7 +378,7 @@ export class PlaygroundOrchestrationService {
       }
     }
     const service = this.#scripts ?? unavailable('Script');
-    const result = await service.run({ epochId, script: operation.script, signal, target: operation.target });
+    const result = await service.run({ epochId, scriptId: operation.scriptId, signal, target: operation.target });
     signal.throwIfAborted();
     return Object.freeze({ event: Object.freeze({ kind: 'script.completed', raw: Object.freeze({ result: evidenceValue(result), targetDigest }), source: 'script', summary: 'Ran emitted script.' }), status: result.exitCode === 0 ? 'passed' : 'failed' });
   }

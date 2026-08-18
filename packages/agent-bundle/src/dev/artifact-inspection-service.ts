@@ -8,6 +8,7 @@ import {
 import type { Diagnostic } from '../core/diagnostics.ts';
 import type { ProjectContext } from '../core/project-context.ts';
 import { EpochReference, EpochStore } from './epoch-store.ts';
+import { artifactScriptCatalog } from './artifact-script-catalog.ts';
 import type {
   ArtifactEpochAddedFile,
   ArtifactEpochChangedFile,
@@ -20,6 +21,7 @@ import type {
   ArtifactInspectionFileNode,
   ArtifactInspectionHook,
   ArtifactInspectionMcpServer,
+  ArtifactInspectionScript,
   ArtifactInspectionProvenance,
   ArtifactInspectionRuntime,
   ArtifactInspectionSourceInput,
@@ -175,7 +177,7 @@ export class ArtifactInspectionService {
       .sort(comparePaths));
     const filesByPath = new Map(files.map((file) => [file.path, file]));
     const project = this.#project(manifest.project, sourceInputs);
-    const runtime = this.#runtime(filesByPath, validated.runtime);
+    const runtime = this.#runtime(filesByPath, manifest, validated.runtime);
 
     return Object.freeze({
       epochId,
@@ -287,6 +289,7 @@ export class ArtifactInspectionService {
 
   #runtime(
     filesByPath: ReadonlyMap<string, ArtifactInspectionFile>,
+    manifest: ArtifactManifestV2,
     runtime: ValidatedArtifactSnapshot['runtime'],
   ): ArtifactInspectionRuntime {
     const hooks = this.#hooks(filesByPath, runtime);
@@ -294,7 +297,24 @@ export class ArtifactInspectionService {
     const executables = Object.freeze([...filesByPath.values()]
       .filter((file) => file.mode !== undefined && (file.mode & 0o111) !== 0)
       .sort(comparePaths));
-    return Object.freeze({ executables, hooks, mcpServers });
+    const scripts = this.#scripts(filesByPath, manifest);
+    return Object.freeze({ executables, hooks, mcpServers, scripts });
+  }
+
+  #scripts(
+    filesByPath: ReadonlyMap<string, ArtifactInspectionFile>,
+    manifest: ArtifactManifestV2,
+  ): readonly ArtifactInspectionScript[] {
+    try {
+      return Object.freeze(artifactScriptCatalog(manifest, this.#registry).map((script) => {
+        const file = filesByPath.get(script.file);
+        if (file === undefined) throw this.#runtimeError('Validated script catalog references an unmanifested file.', script.file, script.target);
+        return Object.freeze({ file, id: script.id, name: script.name, target: script.target });
+      }));
+    } catch (error) {
+      if (error instanceof ArtifactInspectionServiceError) throw error;
+      throw this.#runtimeError('Artifact inspection could not derive the validated script catalog.', artifactManifestName);
+    }
   }
 
   #hooks(
