@@ -271,7 +271,7 @@ const usageFor = (gradable: readonly EvalTrialRecord[]): EvalComparisonUsage | u
 const invocationIdentity = (provenance: EvalTrialProvenance | undefined): string | undefined => {
   const invocation = provenance?.invocation;
   if (invocation === undefined) return undefined;
-  return invocation.mode === 'explicit' ? `explicit:${invocation.skill}` : invocation.mode;
+  return invocation.skill === undefined ? invocation.mode : `${invocation.mode}:${invocation.skill}`;
 };
 
 const semanticGraderVersion = (provenance: EvalTrialProvenance | undefined): string | undefined => {

@@ -166,6 +166,17 @@ it('labels a host CLI version, invocation, semantic grader version, or harness m
     provenance: { hostCliVersion: '2.4.0', invocation: { mode: 'explicit', skill: 'review' }, semanticGrader: null },
   }))).toEqual(['invocation-mismatch']);
   expect(causeCodes(trials(['pass', 'pass', 'pass'], {
+    provenance: { hostCliVersion: '2.4.0', invocation: { mode: 'automatic', skill: 'review' }, semanticGrader: null },
+  }))).toEqual(['invocation-mismatch']);
+  expect(nonComparable(compareEvalRuns({
+    baseline: side('run-base', trials(['pass', 'pass', 'pass'], {
+      provenance: { hostCliVersion: '2.4.0', invocation: { mode: 'automatic', skill: 'review' }, semanticGrader: null },
+    })),
+    candidate: side('run-candidate', trials(['pass', 'pass', 'pass'], {
+      provenance: { hostCliVersion: '2.4.0', invocation: { mode: 'automatic', skill: 'release-notes' }, semanticGrader: null },
+    })),
+  }).rows[0]).causes.map((cause) => cause.code)).toEqual(['invocation-mismatch']);
+  expect(causeCodes(trials(['pass', 'pass', 'pass'], {
     provenance: {
       hostCliVersion: '2.4.0',
       invocation: { mode: 'automatic' },
