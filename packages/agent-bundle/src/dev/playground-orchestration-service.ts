@@ -137,6 +137,7 @@ export class PlaygroundOrchestrationService {
   readonly #scripts: PlaygroundOrchestrationServiceOptions['scripts'];
   readonly #skillDocuments: PlaygroundOrchestrationServiceOptions['skillDocuments'];
   readonly #trace: PlaygroundDurableTraceStore;
+  readonly #admitting = new Set<RunningPlaygroundOperation>();
   readonly #running = new Map<string, RunningPlaygroundOperation>();
   readonly #backgroundFailures: unknown[] = [];
   #closePromise: Promise<void> | undefined;
@@ -167,7 +168,20 @@ export class PlaygroundOrchestrationService {
     const epoch = artifact.activeEpoch;
     const targetDigest = epoch.targetDigests[input.target];
     if (typeof targetDigest !== 'string') throw new Error('Playground operation target is not in the active artifact epoch.');
-    const reference = await this.#epochStore.acquireEpochReference(epoch.id);
+    let rejectAdmission!: (reason: unknown) => void;
+    let settleAdmission!: () => void;
+    const admission = Object.freeze({
+      controller,
+      done: new Promise<void>((resolvePromise, rejectPromise) => {
+        rejectAdmission = rejectPromise;
+        settleAdmission = resolvePromise;
+      }),
+    });
+    // A failed admission may reach its caller before shutdown starts. Keep this
+    // internal ownership promise observed until close() joins it later.
+    void admission.done.catch(() => undefined);
+    this.#admitting.add(admission);
+    let reference: PlaygroundEpochReference | undefined;
     const sessionId = this.#createSessionId();
     const epochDigest = digest({
       configDigest: epoch.configDigest,
@@ -177,9 +191,13 @@ export class PlaygroundOrchestrationService {
       targetDigests: epoch.targetDigests,
     });
     const fixtureDigest = digest({ epochDigest, kind: 'server-owned-workspace', target: input.target });
+    let admissionFailure: unknown;
+    let admissionFailed = false;
     let opened = false;
     try {
-      if (this.#closed) throw new Error('Playground orchestration service is closed.');
+      reference = await this.#epochStore.acquireEpochReference(epoch.id);
+      const acquiredReference = reference;
+      signal.throwIfAborted();
       const session = await this.#trace.openSession(Object.freeze({
         epoch: Object.freeze({ digest: epochDigest, id: epoch.id }),
         fixture: Object.freeze({ digest: fixtureDigest, id: 'server-owned-workspace' }),
@@ -189,22 +207,29 @@ export class PlaygroundOrchestrationService {
         task: Object.freeze({ id, text: taskText(input) }),
       }));
       opened = true;
+      signal.throwIfAborted();
       await this.#trace.append(sessionId, Object.freeze({
         kind: 'epoch.bound',
         raw: Object.freeze({ epochId: epoch.id, target: input.target, targetDigest }),
         source: 'build',
         summary: 'Bound playground run to the current active artifact epoch.',
       }));
-      const done = (async () => {
-        try { await this.#finish(sessionId, input, epoch.id, targetDigest, id, signal); }
+      signal.throwIfAborted();
+      const done = Promise.resolve().then(async () => {
+        try {
+          signal.throwIfAborted();
+          await this.#finish(sessionId, input, epoch.id, targetDigest, id, signal);
+        }
         catch (error) { this.#backgroundFailures.push(error); }
         finally {
-          try { await reference.close(); }
+          try { await acquiredReference.close(); }
           catch (error) { this.#backgroundFailures.push(error); }
           finally { this.#running.delete(id); }
         }
-      })();
+      });
       this.#running.set(id, Object.freeze({ controller, done }));
+      this.#admitting.delete(admission);
+      settleAdmission();
       return Object.freeze({ id, session });
     } catch (error) {
       const containment: unknown[] = [];
@@ -216,9 +241,21 @@ export class PlaygroundOrchestrationService {
           catch (closeError) { containment.push(closeError); }
         }
       }
-      await reference.close();
-      if (containment.length > 0) throw new AggregateError([error, ...containment], 'Playground admission and containment both failed.', { cause: error });
+      if (reference !== undefined) {
+        try { await reference.close(); }
+        catch (closeError) { containment.push(closeError); }
+      }
+      if (containment.length > 0) {
+        admissionFailure = new AggregateError([error, ...containment], 'Playground admission and containment both failed.', { cause: error });
+        admissionFailed = true;
+        throw admissionFailure;
+      }
       throw error;
+    } finally {
+      if (this.#admitting.delete(admission)) {
+        if (admissionFailed) rejectAdmission(admissionFailure);
+        else settleAdmission();
+      }
     }
   }
 
@@ -269,13 +306,16 @@ export class PlaygroundOrchestrationService {
 
   async #close(): Promise<void> {
     this.#closed = true;
-    const running = [...this.#running.values()];
-    for (const operation of running) operation.controller.abort(new Error('Playground orchestration service is closed.'));
-    await Promise.allSettled(running.map((operation) => operation.done));
+    const operations = [...this.#admitting, ...this.#running.values()];
+    for (const operation of new Set(operations)) operation.controller.abort(new Error('Playground orchestration service is closed.'));
+    const operationResults = await Promise.allSettled(operations.map((operation) => operation.done));
     let traceFailure: unknown;
     try { await this.#trace.close(); }
     catch (error) { traceFailure = error; }
-    const failures = traceFailure === undefined ? this.#backgroundFailures : [...this.#backgroundFailures, traceFailure];
+    const operationFailures = operationResults.flatMap((result) => result.status === 'rejected' ? [result.reason] : []);
+    const failures = traceFailure === undefined
+      ? [...this.#backgroundFailures, ...operationFailures]
+      : [...this.#backgroundFailures, ...operationFailures, traceFailure];
     if (failures.length > 0) throw new AggregateError(failures, 'Playground background operations could not be contained.', { cause: failures[0] });
   }
 

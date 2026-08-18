@@ -1,5 +1,6 @@
 import { expect, it } from '@rstest/core';
 
+import { ProjectEventHub, startForegroundServer } from '../src/dev/index.ts';
 import {
   PlaygroundOrchestrationService,
   type PlaygroundDurableTraceStore,
@@ -47,9 +48,21 @@ const eventually = async (assertion: () => void): Promise<void> => {
   throw failure;
 };
 
+const deferred = <Value,>() => {
+  let reject!: (reason: unknown) => void;
+  let resolve!: (value: Value | PromiseLike<Value>) => void;
+  const promise = new Promise<Value>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return Object.freeze({ promise, reject, resolve });
+};
+
 class RecordingTraceStore implements PlaygroundDurableTraceStore {
   readonly appended: PlaygroundEventInput[] = [];
   closed = 0;
+  closeSessionCalls = 0;
+  finalizeCalls = 0;
   finalized: PlaygroundDurableOutcome | undefined;
   input: PlaygroundSessionInput | undefined;
   readonly promoted: PlaygroundSelectedAssertion[][] = [];
@@ -79,6 +92,7 @@ class RecordingTraceStore implements PlaygroundDurableTraceStore {
   }
 
   async finalize(sessionId: string, outcome: PlaygroundDurableOutcome): Promise<PlaygroundSession> {
+    this.finalizeCalls += 1;
     this.finalized = outcome;
     const session = this.#session;
     if (session === undefined) throw new Error('Expected the run to open a session first.');
@@ -131,6 +145,7 @@ class RecordingTraceStore implements PlaygroundDurableTraceStore {
   }
 
   async closeSession(sessionId: string): Promise<void> {
+    this.closeSessionCalls += 1;
     const session = this.#session;
     if (session?.id !== sessionId) throw new Error('Expected the session to exist before closing it.');
     this.#session = Object.freeze({ ...session, outcome: Object.freeze({ status: 'aborted' }), state: 'closed' });
@@ -265,6 +280,183 @@ it('keeps close pending through epoch-reference release and reports its containe
     expect(rejections).toEqual([]);
     expect(references).toEqual(['epoch-active']);
   } finally { process.off('unhandledRejection', onUnhandled); }
+});
+
+it('drains every admitted setup stage before closing durable playground ownership', async () => {
+  for (const held of ['acquire', 'open', 'append'] as const) {
+    const trace = new RecordingTraceStore();
+    const entered = deferred<void>();
+    const release = deferred<void>();
+    let referenceCloses = 0;
+    let skillCalls = 0;
+    const originalOpen = trace.openSession.bind(trace);
+    const originalAppend = trace.append.bind(trace);
+    if (held === 'open') {
+      trace.openSession = async (input) => {
+        entered.resolve();
+        await release.promise;
+        return originalOpen(input);
+      };
+    }
+    if (held === 'append') {
+      trace.append = async (sessionId, input) => {
+        if (input.kind === 'epoch.bound') {
+          entered.resolve();
+          await release.promise;
+        }
+        return originalAppend(sessionId, input);
+      };
+    }
+    const service = new PlaygroundOrchestrationService({
+      coordinator: { status: currentStatus },
+      createRunId: () => `run-${held}`,
+      createSessionId: () => `session-${held}`,
+      epochStore: {
+        acquireEpochReference: async (epochId) => {
+          if (held === 'acquire') {
+            entered.resolve();
+            await release.promise;
+          }
+          return Object.freeze({
+            close: async () => { referenceCloses += 1; },
+            root: `/epochs/${epochId}`,
+          });
+        },
+      },
+      skillDocuments: { generated: async () => { skillCalls += 1; return undefined; } },
+      trace,
+    });
+
+    const admitted = service.run({ operation: 'skill.inspect', skillId: 'skill:review', target: 'codex' });
+    await entered.promise;
+    let closeSettled = false;
+    const closing = service.close().finally(() => { closeSettled = true; });
+    await Promise.resolve();
+    const settledBeforeSetupReleased = closeSettled;
+    release.resolve();
+    await expect(admitted).rejects.toThrow('closed');
+    await expect(closing).resolves.toBeUndefined();
+
+    expect(settledBeforeSetupReleased).toBe(false);
+    expect(referenceCloses).toBe(1);
+    expect(trace.closed).toBe(1);
+    expect(skillCalls).toBe(0);
+    expect(trace.finalizeCalls).toBe(held === 'acquire' ? 0 : 1);
+    expect(trace.closeSessionCalls).toBe(0);
+  }
+});
+
+it('keeps foreground close pending behind a POST admitted during epoch acquisition', async () => {
+  const trace = new RecordingTraceStore();
+  const entered = deferred<void>();
+  const release = deferred<void>();
+  let referenceCloses = 0;
+  let skillCalls = 0;
+  const coordinator = {
+    close: async () => service.close(),
+    rebuild: async () => undefined,
+    start: async () => undefined,
+    status: currentStatus,
+  };
+  const service = new PlaygroundOrchestrationService({
+    coordinator,
+    createRunId: () => 'run-foreground-close',
+    createSessionId: () => 'session-foreground-close',
+    epochStore: {
+      acquireEpochReference: async (epochId) => {
+        entered.resolve();
+        await release.promise;
+        return Object.freeze({
+          close: async () => { referenceCloses += 1; },
+          root: `/epochs/${epochId}`,
+        });
+      },
+    },
+    skillDocuments: { generated: async () => { skillCalls += 1; return undefined; } },
+    trace,
+  });
+  const foreground = await startForegroundServer({
+    coordinator,
+    eventHub: new ProjectEventHub(),
+    playground: service,
+    port: 0,
+    sessionToken: 'test-session-token',
+  });
+
+  try {
+    const posted = fetch(`${foreground.url}/api/playground/runs`, {
+      body: JSON.stringify({ operation: 'skill.inspect', skillId: 'skill:review', target: 'codex' }),
+      headers: {
+        'content-type': 'application/json',
+        origin: foreground.url,
+        'x-agent-bundle-session': foreground.sessionToken,
+      },
+      method: 'POST',
+    }).catch(() => undefined);
+    await entered.promise;
+
+    const closing = foreground.close();
+    const settledBeforeAcquireReleased = await Promise.race([
+      closing.then(() => true),
+      new Promise<boolean>((resolvePromise) => { setTimeout(() => resolvePromise(false), 20); }),
+    ]);
+    expect(settledBeforeAcquireReleased).toBe(false);
+
+    release.resolve();
+    await Promise.all([closing, posted]);
+    expect(referenceCloses).toBe(1);
+    expect(trace.closed).toBe(1);
+    expect(trace.input).toBeUndefined();
+    expect(skillCalls).toBe(0);
+  } finally {
+    release.resolve();
+    await foreground.close().catch(() => undefined);
+  }
+});
+
+it('retains an admitted containment failure in the same close result', async () => {
+  const trace = new RecordingTraceStore();
+  const entered = deferred<void>();
+  const release = deferred<void>();
+  const containmentFailure = new Error('epoch release failed during close');
+  let referenceCloses = 0;
+  const service = new PlaygroundOrchestrationService({
+    coordinator: { status: currentStatus },
+    createRunId: () => 'run-admission-containment',
+    createSessionId: () => 'session-admission-containment',
+    epochStore: {
+      acquireEpochReference: async (epochId) => {
+        entered.resolve();
+        await release.promise;
+        return Object.freeze({
+          close: async () => {
+            referenceCloses += 1;
+            throw containmentFailure;
+          },
+          root: `/epochs/${epochId}`,
+        });
+      },
+    },
+    skillDocuments: { generated: async () => undefined },
+    trace,
+  });
+  const admitted = service.run({ operation: 'skill.inspect', skillId: 'skill:review', target: 'codex' });
+  await entered.promise;
+
+  const firstClose = service.close();
+  expect(service.close()).toBe(firstClose);
+  release.resolve();
+
+  await expect(admitted).rejects.toMatchObject({
+    errors: [expect.any(Error), containmentFailure],
+    message: 'Playground admission and containment both failed.',
+  });
+  await expect(firstClose).rejects.toMatchObject({
+    errors: [expect.objectContaining({ message: 'Playground admission and containment both failed.' })],
+    message: 'Playground background operations could not be contained.',
+  });
+  expect(referenceCloses).toBe(1);
+  expect(trace.closed).toBe(1);
 });
 
 it('rejects unavailable script execution before it mints a run, session, or epoch reference', async () => {
