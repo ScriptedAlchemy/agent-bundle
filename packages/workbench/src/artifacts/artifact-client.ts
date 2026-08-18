@@ -55,14 +55,6 @@ const failureDiagnostics = (value: unknown): readonly Diagnostic[] => {
   return frozenJson(value.diagnostics) as readonly Diagnostic[];
 };
 
-const diagnosticError = (value: unknown, status: number): ArtifactClientError => {
-  if (isRecord(value) && isRecord(value.diagnostic) &&
-    typeof value.diagnostic.code === 'string' && typeof value.diagnostic.message === 'string') {
-    return new ArtifactClientError(value.diagnostic.code, value.diagnostic.message, failureDiagnostics(value));
-  }
-  return new ArtifactClientError('AB8063', `Artifact inspection request failed with HTTP ${status}.`);
-};
-
 const inspectionBody = (value: unknown): ArtifactInspection => {
   const inspection = asRecord(value).inspection;
   if (!isRecord(inspection)) throw invalidResponse();

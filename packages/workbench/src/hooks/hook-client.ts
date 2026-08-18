@@ -106,14 +106,6 @@ const asRecord = (value: unknown): Readonly<Record<string, unknown>> => {
   return value;
 };
 
-const diagnosticError = (value: unknown, status: number): HookClientError => {
-  if (isRecord(value) && isRecord(value.diagnostic) &&
-    typeof value.diagnostic.code === 'string' && typeof value.diagnostic.message === 'string') {
-    return new HookClientError(value.diagnostic.code, value.diagnostic.message);
-  }
-  return new HookClientError('AB8033', `Hook playground request failed with HTTP ${status}.`);
-};
-
 const hookList = (value: unknown): readonly HookPlaygroundHook[] => {
   const hooks = asRecord(value).hooks;
   if (!Array.isArray(hooks)) throw invalidResponse();

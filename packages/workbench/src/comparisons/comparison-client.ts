@@ -154,14 +154,6 @@ const frozenJson = (value: unknown): unknown => {
   return value;
 };
 
-const diagnosticError = (value: unknown, status: number): ComparisonClientError => {
-  if (isRecord(value) && isRecord(value.diagnostic) &&
-    typeof value.diagnostic.code === 'string' && typeof value.diagnostic.message === 'string') {
-    return new ComparisonClientError(value.diagnostic.code, value.diagnostic.message);
-  }
-  return new ComparisonClientError('AB8083', `Eval comparison request failed with HTTP ${status}.`);
-};
-
 const comparisonResult = (value: unknown): EvalComparison => {
   const parsed = comparisonEnvelopeSchema.safeParse(value);
   if (!parsed.success) throw invalidResponse();
