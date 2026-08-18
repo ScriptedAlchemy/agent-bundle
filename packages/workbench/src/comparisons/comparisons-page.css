@@ -1,0 +1,41 @@
+.comparisons-content { margin: 0 auto; max-width: 1180px; min-width: 0; padding: 35px 34px 64px; width: 100%; }
+.comparisons-page-heading p { color: #596372; font-size: 15px; margin: 8px 0 0; }
+.comparison-controls { border-top: 1px solid #d9dee7; display: grid; gap: 8px; justify-items: start; padding-top: 24px; }
+.comparison-controls label { color: #596372; font-size: 12px; font-weight: 750; letter-spacing: .03em; margin-top: 12px; text-transform: uppercase; }
+.comparison-controls select { background: #fff; border: 1px solid #bfc8d5; border-radius: 4px; color: #1e2938; font-size: 14px; font-weight: 600; max-width: 100%; min-height: 37px; padding: 0 32px 0 10px; }
+.comparison-actions { display: flex; gap: 12px; margin-top: 16px; }
+.comparison-actions button { background: #0b5bd3; border: 1px solid #06459e; border-radius: 4px; color: #fff; cursor: pointer; font-weight: 700; min-height: 43px; padding: 0 22px; }
+.comparison-actions button:hover:not(:disabled) { background: #084eb9; }
+.comparison-actions button:disabled { background: #7f95b8; border-color: #7f95b8; cursor: not-allowed; }
+.comparison-matrix { margin-top: 30px; overflow-x: auto; }
+.comparison-summary { color: #4f5866; font-size: 15px; margin: 0 0 22px; }
+.comparison-matrix table { border-collapse: collapse; min-width: 900px; width: 100%; }
+.comparison-matrix th, .comparison-matrix td { border-bottom: 1px solid #d9dee7; padding: 14px 16px 14px 0; text-align: left; vertical-align: top; }
+.comparison-matrix thead th { border-bottom: 2px solid #bfc8d5; color: #596372; font-size: 12px; font-weight: 750; letter-spacing: .03em; text-transform: uppercase; }
+.comparison-matrix tbody th { max-width: 250px; }
+.comparison-case { display: block; font-size: 14px; font-weight: 700; }
+.comparison-condition { color: #596372; display: block; font-size: 12px; font-weight: 500; margin-top: 4px; }
+.comparison-note { color: #6b4a04; display: block; font-size: 12px; font-weight: 500; margin-top: 8px; }
+.comparison-row--smoke { background: #fffaf0; }
+.comparison-row--non-comparable { background: #f5f6f8; }
+.comparison-cell-head { align-items: center; display: flex; gap: 10px; margin: 0 0 10px; }
+.comparison-k-over-n { font: 15px/1 "SFMono-Regular", Consolas, "Liberation Mono", monospace; font-weight: 700; }
+.comparison-pass-rate { color: #596372; font-size: 13px; }
+.comparison-outcome { border-radius: 3px; font-size: 11px; font-weight: 750; letter-spacing: .03em; padding: 3px 8px; text-transform: uppercase; }
+.comparison-outcome--pass { background: #e2f4e6; border: 1px solid #1d7a33; color: #14541f; }
+.comparison-outcome--fail { background: #fdeaea; border: 1px solid #c01d26; color: #8f1219; }
+/* Inconclusive is not a failure: it reads as a distinct, unresolved state. */
+.comparison-outcome--inconclusive { background: #fff4d6; border: 1px dashed #96660a; color: #6b4a04; }
+.comparison-cell-rows { display: grid; gap: 4px; margin: 0; }
+.comparison-cell-rows div { display: flex; gap: 8px; justify-content: space-between; min-width: 0; }
+.comparison-cell-rows dt { color: #596372; font-size: 12px; font-weight: 700; margin: 0; }
+.comparison-cell-rows dd { font-size: 12px; font-weight: 500; margin: 0; overflow-wrap: anywhere; text-align: right; }
+.comparison-evidence { font-size: 11px; font-weight: 700; letter-spacing: .03em; margin: 10px 0 0; text-transform: uppercase; }
+.comparison-evidence--reliability { color: #1d7a33; }
+.comparison-evidence--smoke { color: #96660a; }
+.comparison-not-comparable { color: #4f5866; font-size: 12px; font-weight: 750; letter-spacing: .03em; margin: 0 0 8px; text-transform: uppercase; }
+
+@media (max-width: 820px) {
+  .comparisons-content { padding: 27px 20px 45px; }
+  .comparison-controls select { width: 100%; }
+}

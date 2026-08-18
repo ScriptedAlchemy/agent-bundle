@@ -651,6 +651,40 @@ it('excludes configured output trees from project identity and reports unsafe ou
   }
 });
 
+it('treats a configured eval run directory as generated output, not project source', async () => {
+  const root = await createProject([
+    '---',
+    'name: review',
+    'description: Reviews changes',
+    '---',
+    'Review the changed files.',
+    '',
+  ].join('\n'));
+  const runs = join(root, 'recorded-evals');
+  try {
+    await writeFile(join(root, 'agent-bundle.config.ts'), [
+      'export default {',
+      "  evals: { runsDir: 'recorded-evals' },",
+      "  plugin: { name: 'review', version: '1.0.0' },",
+      "  targets: ['portable'],",
+      '};',
+      '',
+    ].join('\n'));
+    await mkdir(runs, { recursive: true });
+    await writeFile(join(runs, 'run.json'), '{"state":"first"}\n');
+
+    const initial = await new ProjectService({ root }).prepare('dev');
+    await writeFile(join(runs, 'run.json'), '{"state":"second"}\n');
+    const changed = await new ProjectService({ root }).prepare('dev');
+
+    expect(initial.outputRoots).toContain(runs);
+    expect(changed.projectContext).toEqual(initial.projectContext);
+    expect(changed.projectContext?.sourceInputs.map((input) => input.path)).not.toContain('recorded-evals/run.json');
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
 it('reports external configuration symlinks without exposing the underlying path error', async () => {
   const root = await createProject([
     '---',

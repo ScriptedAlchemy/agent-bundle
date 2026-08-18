@@ -1,0 +1,6 @@
+{"type":"system","subtype":"init","session_id":"<redacted>","cwd":"<redacted>","apiKeySource":"none","plugins":[{"name":"review-tools","version":"1.0.0"}],"mcp_servers":[{"name":"project","status":"connected"}],"tools":["Bash","Read","Skill"]}
+{"type":"assistant","message":{"id":"<redacted>","content":[{"type":"text","text":"I will use the review guidance."},{"type":"tool_use","id":"<redacted>","name":"Skill","input":{"skill":"review-tools:review-change"}}],"usage":{"input_tokens":10,"output_tokens":4}}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"<redacted>","content":"<redacted>"}]}}
+{"type":"system","subtype":"hook_completed","hook_event_name":"PreToolUse","tool_name":"Bash"}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"<redacted>","name":"mcp__project__status_report","input":{}}],"usage":{"input_tokens":6,"output_tokens":2}}}
+{"type":"result","subtype":"success","is_error":false,"duration_ms":1200,"num_turns":3,"result":"The highest-risk regression is the unguarded cache eviction.","total_cost_usd":0.0125,"usage":{"cache_creation_input_tokens":2,"cache_read_input_tokens":3,"input_tokens":16,"output_tokens":6}}

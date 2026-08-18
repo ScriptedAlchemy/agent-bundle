@@ -41,6 +41,7 @@ export interface AffectedFileDiagnostics {
 }
 
 export interface DevelopmentWatcher {
+  addOutputPaths?(paths: readonly string[]): void;
   close(): Promise<void>;
   ready?(): Promise<void>;
 }
@@ -240,7 +241,10 @@ export class DevCoordinator {
     this.#now = options.now ?? (() => new Date());
     this.#nextPreparedProject = options.initialPreparedProject;
     this.#onPreparedProject = options.onPreparedProject;
-    this.#outputPaths = Object.freeze([...(options.outputPaths ?? ['dist'])]);
+    this.#outputPaths = Object.freeze([...new Set([
+      ...(options.outputPaths ?? ['dist']),
+      ...(options.initialPreparedProject?.outputRoots ?? []),
+    ])]);
     this.#prepareCommand = options.prepareCommand ?? 'build';
     this.#projectService = options.projectService ?? new ProjectService({
       outputRoots: this.#outputPaths,
@@ -454,6 +458,7 @@ export class DevCoordinator {
       return this.#completeFailure(this.#beginBuild(invalidation, source), source, source.diagnostics);
     }
 
+    this.#watcher?.addOutputPaths?.(prepared.outputRoots);
     const running = this.#beginBuild(invalidation, prepared.source);
     try {
       await this.#onPreparedProject?.(prepared);

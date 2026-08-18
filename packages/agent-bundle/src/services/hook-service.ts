@@ -45,6 +45,34 @@ export interface HookServiceOptions {
   readonly taskkill?: Taskkill;
 }
 
+/**
+ * Membership is granted only by this executor, at construction, and cannot be
+ * reached from outside this module, so no error can join it by copying a name,
+ * message, or code.
+ */
+const cancellations = new WeakSet<object>();
+
+/**
+ * Cancellation is an outcome callers act on, not a name or a message they parse:
+ * the route drain that aborted the simulation identifies it by the brand this
+ * executor granted, so a wrapper failure, a termination failure, or a simulation
+ * clone that could not be removed stays a real failure even when it reports the
+ * same surface.
+ */
+class HookSimulationAbortError extends Error {
+  readonly code = 'hook.simulation.aborted';
+
+  constructor() {
+    super('Hook simulation aborted.');
+    this.name = 'AbortError';
+    cancellations.add(this);
+  }
+}
+
+/** True only for a cancellation this executor itself raised. */
+export const isHookSimulationCancellation = (error: unknown): boolean =>
+  typeof error === 'object' && error !== null && cancellations.has(error);
+
 class HookSimulationTerminationError extends Error {
   readonly code = 'hook.simulation.termination.unsettled';
 
@@ -121,7 +149,7 @@ const runWrapper = async (options: {
     return;
   }
   if (options.signal?.aborted) {
-    reject(new Error('Hook simulation aborted.'));
+    reject(new HookSimulationAbortError());
     return;
   }
 
@@ -174,7 +202,7 @@ const runWrapper = async (options: {
       }, terminationSettlementMs);
     }, terminationGraceMs);
   };
-  const onAbort = () => terminate(new Error('Hook simulation aborted.'));
+  const onAbort = () => terminate(new HookSimulationAbortError());
   const timeoutTimer = setTimeout(() => terminate(new Error('Hook simulation timed out.')), options.timeoutMs);
   options.signal?.addEventListener('abort', onAbort, { once: true });
   const append = (current: string, chunk: Buffer): string => {

@@ -3,6 +3,8 @@ import React, { useCallback, useEffect, useRef, useState, type KeyboardEvent } f
 import type { McpSessionBinding, McpSessionInspectorConfig, McpSessionOperation } from '../../../agent-bundle/src/dev/mcp-session-protocol.ts';
 import type { DevRuntimeMcpAppRunBinding } from '../../../agent-bundle/src/dev/runtime-protocol.ts';
 
+import type { PlaygroundEventInput } from '../../../agent-bundle/src/services/playground-service.ts';
+import { playgroundJsonObject } from '../playground/playground-json.ts';
 import { McpJsonInput, type ImmutableJsonRecord } from './mcp-json-input.tsx';
 import {
   createMcpAppPreviewController,
@@ -21,6 +23,7 @@ import type {
 } from './mcp-app-client.ts';
 import { createMcpAppFrameRelay } from './mcp-app-frame.tsx';
 import type {
+  McpBrowserSessionBinding,
   McpBrowserSessionInvocation,
   McpBrowserSessionModel,
   McpBrowserSessionTimelineEntry,
@@ -53,6 +56,8 @@ interface McpPageCommonProps {
   readonly controller: McpPageController;
   readonly initialBinding?: Partial<McpSessionBinding>;
   readonly onDownloadConfig?: (download: McpConfigDownload) => void;
+  /** Records the invocation into the shared ordered trace when a playground session is open. */
+  readonly onRecordTrace?: (input: PlaygroundEventInput) => Promise<void>;
   readonly onDownloadTrace?: (download: McpDownload) => void;
   /** Replaces the terminal controller with a fresh idle controller in the parent. */
   readonly onResetSession?: () => void;
@@ -920,8 +925,69 @@ const McpPageAppPreview = ({ artifactClient, host, onLifecycleChange, previewPro
   />;
 };
 
+/** One completed MCP operation becomes one ordered trace event citing its epoch-bound session. */
+export const mcpTraceEvent = (input: {
+  readonly binding?: McpBrowserSessionBinding;
+  readonly error?: unknown;
+  readonly operation: string;
+  readonly request: Readonly<Record<string, unknown>>;
+  readonly requestId: string;
+  readonly result?: unknown;
+  readonly sessionId: string;
+}): PlaygroundEventInput => {
+  const failed = input.error !== undefined;
+  const where = input.binding === undefined
+    ? input.sessionId
+    : 'kind' in input.binding
+      ? `${input.binding.binding.serverName} on ${input.binding.binding.target} from the Runtime`
+      : `${input.binding.serverName} on ${input.binding.target} from epoch ${input.binding.epochId}`;
+  return Object.freeze({
+    kind: failed ? 'mcp.failed' : `mcp.${input.operation}`,
+    raw: playgroundJsonObject({
+      ...(input.binding === undefined ? {} : { binding: { ...input.binding } }),
+      ...(failed ? { error: errorMessage(input.error) } : { result: input.result }),
+      operation: input.operation,
+      request: input.request,
+      requestId: input.requestId,
+      sessionId: input.sessionId,
+    }),
+    source: 'mcp' as const,
+    summary: `${failed ? 'Failed' : 'Completed'} ${input.operation} against ${where}.`,
+  });
+};
+
+const traceFailureDiagnostic = 'The MCP operation completed, but its shared trace could not be recorded.';
+
+/**
+ * The MCP operation remains the authority for its own success or failure. Trace
+ * recording is supplementary: a rejected append is visible but never invites a
+ * second execution of a completed side effect.
+ */
+export const invokeMcpOperationWithTrace = async <Result,>(
+  invoke: () => Promise<Result>,
+  record?: (outcome: { readonly error?: unknown; readonly result?: Result }) => Promise<void>,
+): Promise<Readonly<{ readonly result: Result; readonly traceDiagnostic?: string }>> => {
+  let result: Result;
+  try {
+    result = await invoke();
+  } catch (error) {
+    try {
+      await record?.({ error });
+    } catch {
+      // The operation failure remains authoritative when supplementary trace storage also fails.
+    }
+    throw error;
+  }
+  try {
+    await record?.({ result });
+    return Object.freeze({ result });
+  } catch {
+    return Object.freeze({ result, traceDiagnostic: traceFailureDiagnostic });
+  }
+};
+
 export const McpPage = (props: McpPageProps) => {
-  const { controller, initialBinding, initialPreview, onDownloadConfig, onDownloadTrace, onResetSession, registerPreviewClose } = props;
+  const { controller, initialBinding, initialPreview, onDownloadConfig, onDownloadTrace, onRecordTrace, onResetSession, registerPreviewClose } = props;
   const runtimeProps: McpPageRuntimeProps | undefined = 'runtimePreviewDependencies' in props ? props : undefined;
   const artifactProps: McpPageArtifactProps | undefined = 'runtimePreviewDependencies' in props ? undefined : props;
   const [runtimeAdmission] = useState<RuntimePageAdmission | undefined>(() => runtimeProps === undefined
@@ -1064,7 +1130,25 @@ export const McpPage = (props: McpPageProps) => {
     });
   };
   const invoke = (operation: Exclude<McpSessionOperation, 'cancel' | 'close' | 'restart'>, request: Readonly<Record<string, unknown>>): void => {
-    run(`invoke:${operation}`, () => controller.invoke({ id: nextRequestId(), operation, request }));
+    const requestId = nextRequestId();
+    run(`invoke:${operation}`, async () => {
+      const outcome = await invokeMcpOperationWithTrace(
+        () => controller.invoke({ id: requestId, operation, request }),
+        async (traceOutcome) => {
+        if (onRecordTrace === undefined) return;
+        await onRecordTrace(mcpTraceEvent({
+          ...(model.binding === undefined ? {} : { binding: model.binding }),
+          ...traceOutcome,
+          operation,
+          request,
+          requestId,
+          sessionId: model.sessionId,
+        }));
+        },
+      );
+      if (outcome.traceDiagnostic !== undefined) setActionError(outcome.traceDiagnostic);
+      return outcome.result;
+    });
   };
 
   const tools = catalogItems(model.catalogs.tools, 'Tool');

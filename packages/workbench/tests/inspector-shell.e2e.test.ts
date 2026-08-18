@@ -170,6 +170,11 @@ e2e('shares one real session between the MCP Playground and Inspector presentati
     await page.keyboard.press('End');
     await expect(inspectorTab).toBeFocused({ timeout: browserTimeout });
     expect(await page.evaluate(() => window.history.length)).toBe(presentationHistoryLength);
+    await page.keyboard.press('Home');
+    await expect(playgroundTab).toBeFocused({ timeout: browserTimeout });
+    await expect(playgroundTab).toHaveAttribute('aria-selected', 'true');
+    await expect(page.locator('#mcp-playground-presentation')).toBeVisible({ timeout: browserTimeout });
+    await expect(page.locator('#mcp-inspector-presentation')).not.toBeVisible({ timeout: browserTimeout });
     await page.locator('#mcp-target').selectOption('portable');
     await page.locator('#mcp-server-name').fill('fixture');
     await page.getByRole('button', { name: 'Open MCP session' }).click();

@@ -9,6 +9,7 @@ import {
   invokeMcp,
   listHooks,
   listMcp,
+  runEvals,
   simulateHook,
   startDevServer,
   validate,
@@ -51,6 +52,14 @@ interface BuildCommandOptions extends SourceCommandOptions {
   readonly output?: string;
 }
 
+interface EvalCommandOptions extends SourceCommandOptions {
+  readonly artifact?: string;
+  readonly case?: readonly string[];
+  readonly harness?: string;
+  readonly suite?: readonly string[];
+  readonly trials?: number;
+}
+
 interface InspectCommandOptions {
   readonly config?: string;
   readonly hooks?: boolean;
@@ -87,6 +96,13 @@ const port = (value: string): number => {
   if (!/^(0|[1-9]\d{0,4})$/u.test(value)) throw new TypeError('Port must be a TCP port number.');
   const number = Number(value);
   if (number > 65_535) throw new TypeError('Port must be a TCP port number.');
+  return number;
+};
+
+const trialCount = (value: string): number => {
+  if (!/^[1-9]\d{0,2}$/u.test(value)) throw new TypeError('Trials must be a positive integer.');
+  const number = Number(value);
+  if (number > 100) throw new TypeError('Trials must be at most 100.');
   return number;
 };
 
@@ -186,6 +202,21 @@ const writeHumanInspect = (output: Output, result: Awaited<ReturnType<typeof ins
   output.write(`Inspected ${result.model.metadata.name}: ${result.plans.map((plan) => plan.target).join(', ')}\n`);
 };
 
+const emptyEvalSummary = Object.freeze({ cases: 0, fail: 0, inconclusive: 0, pass: 0, trials: 0 });
+
+/** Inconclusive trials are counted on their own line; they are never reported as failures. */
+const writeHumanEval = (output: Output, result: Awaited<ReturnType<typeof runEvals>>): void => {
+  for (const diagnostic of result.diagnostics) {
+    output.write(`${diagnostic.code}: ${diagnostic.message}\n`);
+  }
+  const summary = result.run.summary ?? emptyEvalSummary;
+  output.write([
+    `Evaluated ${summary.cases} case(s) in run ${result.run.id}: `,
+    `${summary.pass} passed, ${summary.fail} failed, ${summary.inconclusive} inconclusive `,
+    `across ${summary.trials} trial(s)\n`,
+  ].join(''));
+};
+
 const writeHumanValidate = (output: Output, result: Awaited<ReturnType<typeof validate>>): void => {
   output.write(result.diagnostics.some((diagnostic) => diagnostic.severity === 'error')
     ? `Validation reported ${result.diagnostics.length} diagnostic(s)\n`
@@ -262,6 +293,30 @@ export const runCli = async (
     }
     if (options.json === true) writeMachine(stdout, result);
     else writeHumanValidate(stdout, result);
+  });
+
+  const evalCommand = configureSourceOptions(
+    program.command('eval').description('Run deterministic eval suites against a built artifact'),
+  )
+    .option('--artifact <path>', 'Evaluate exactly this built artifact')
+    .option('--case <case>', 'Eval case id to run (repeatable)', collect, [])
+    .option('--harness <harness>', 'Eval harness to run', 'deterministic')
+    .option('--suite <suite>', 'Eval suite name to run (repeatable)', collect, [])
+    .option('--trials <count>', 'Run this many trials of every selected case', trialCount);
+  evalCommand.action(async (options: EvalCommandOptions) => {
+    const result = await runEvals({
+      ...projectOptions(options),
+      ...(options.artifact === undefined ? {} : { artifact: options.artifact }),
+      ...(options.case === undefined || options.case.length === 0 ? {} : { caseIds: options.case }),
+      ...(options.harness === undefined ? {} : { harness: options.harness }),
+      ...(options.suite === undefined || options.suite.length === 0 ? {} : { suites: options.suite }),
+      ...(options.trials === undefined ? {} : { trials: options.trials }),
+    });
+    if (options.json === true) writeMachine(stdout, result);
+    else writeHumanEval(stdout, result);
+    const summary = result.run.summary ?? emptyEvalSummary;
+    // Inconclusive trials produced no evidence, so they cannot report success either.
+    if (summary.fail > 0 || summary.inconclusive > 0) exitCode = 1;
   });
 
   const inspectCommand = configureInspectOptions(

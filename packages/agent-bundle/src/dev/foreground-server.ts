@@ -4,6 +4,7 @@ import type { AddressInfo, Socket } from 'node:net';
 import { basename } from 'node:path';
 
 import { ArtifactRoutes, type ArtifactRouteService } from './artifact-routes.ts';
+import { EvalRoutes, type EvalRouteService } from './eval-routes.ts';
 import type { ProjectEventHub, ProjectEventSubscription } from './events.ts';
 import { HookPlaygroundRoutes, type HookPlaygroundRouteService } from './hook-playground-routes.ts';
 import { McpAppRoutes, type McpAppRoutePreviewService } from './mcp-app-routes.ts';
@@ -40,7 +41,7 @@ export class ForegroundServerError extends Error {
 
 export interface ForegroundServerCloseFailure {
   readonly error: unknown;
-  readonly resource: 'coordinator' | 'mcp-apps' | 'server';
+  readonly resource: 'coordinator' | 'hook-playground' | 'mcp-apps' | 'server';
 }
 
 export interface ForegroundServerStartFailure {
@@ -103,6 +104,8 @@ export interface ForegroundServerOptions {
   readonly artifacts?: ArtifactRouteService;
   readonly assets?: WorkbenchAssetSource;
   readonly coordinator: ForegroundCoordinator;
+  /** Deterministic eval runs; the browser names discovered suites, never a path or command. */
+  readonly evals?: EvalRouteService;
   readonly eventHub: ProjectEventHub;
   readonly host?: string;
   /** Already-bound MCP App previews, never executable data supplied by a browser request. */
@@ -138,6 +141,23 @@ type SkillRoute =
   | Readonly<{ readonly epochId: string; readonly kind: 'generated-tree'; readonly target: string }>
   | Readonly<{ readonly epochId: string; readonly kind: 'generated-document'; readonly skillId: string; readonly target: string }>
   | Readonly<{ readonly epochId: string; readonly kind: 'generated-resource'; readonly resource: readonly string[]; readonly skillId: string; readonly target: string }>;
+
+interface Settlement<T> {
+  readonly promise: Promise<T>;
+  readonly reject: (error: unknown) => void;
+  readonly resolve: (value: T) => void;
+}
+
+/** Publishes a result a caller can hand out before the work that settles it begins. */
+const settlement = <T>(): Settlement<T> => {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return Object.freeze({ promise, reject, resolve });
+};
 
 const diagnostic = (code: string, message: string, status: number): RequestDiagnostic => ({ code, message, status });
 
@@ -392,6 +412,7 @@ export class ForegroundServer {
   readonly #artifactRoutes: ArtifactRoutes;
   readonly #assets: WorkbenchAssetSource | undefined;
   readonly #coordinator: ForegroundCoordinator;
+  readonly #evalRoutes: EvalRoutes;
   readonly #eventHub: ProjectEventHub;
   readonly #hookPlaygroundRoutes: HookPlaygroundRoutes;
   readonly #host: string;
@@ -474,6 +495,10 @@ export class ForegroundServer {
       authorize: (request) => this.#assertMutationSession(request),
       ...(options.artifacts === undefined ? {} : { service: options.artifacts }),
     });
+    this.#evalRoutes = new EvalRoutes({
+      authorize: (request) => this.#assertMutationSession(request),
+      ...(options.evals === undefined ? {} : { service: options.evals }),
+    });
     this.#server = createServer((request, response) => {
       void this.#handle(request, response).catch((error: unknown) => {
         responseDiagnostic(
@@ -505,11 +530,25 @@ export class ForegroundServer {
     return this.#startPromise;
   }
 
+  /**
+   * Releasing a resource can re-enter shutdown: a cancelled hook simulation runs
+   * its abort callback synchronously, and that callback may close this server. The
+   * single outcome is therefore published before any resource is asked to release,
+   * so every nested, concurrent, and repeated caller receives the identical promise
+   * and no resource is released twice.
+   */
   close(): Promise<void> {
-    if (this.#closePromise !== undefined) return this.#closePromise;
+    const closing = this.#closePromise;
+    if (closing !== undefined) return closing;
     this.#closing = true;
-    this.#closePromise = this.#close();
-    return this.#closePromise;
+    const published = settlement<void>();
+    this.#closePromise = published.promise;
+    try {
+      this.#close().then(published.resolve, published.reject);
+    } catch (error) {
+      published.reject(error);
+    }
+    return published.promise;
   }
 
   async #start(): Promise<void> {
@@ -561,13 +600,38 @@ export class ForegroundServer {
     if (failures.length > 0) throw new ForegroundServerCloseError(failures);
   }
 
+  /** Published before the first release for the same reason close() is. */
   #releaseResources(): Promise<readonly ForegroundServerCloseFailure[]> {
-    if (this.#releasePromise !== undefined) return this.#releasePromise;
+    const releasing = this.#releasePromise;
+    if (releasing !== undefined) return releasing;
+    const published = settlement<readonly ForegroundServerCloseFailure[]>();
+    this.#releasePromise = published.promise;
+    try {
+      this.#release().then(published.resolve, published.reject);
+    } catch (error) {
+      published.reject(error);
+    }
+    return published.promise;
+  }
+
+  #release(): Promise<readonly ForegroundServerCloseFailure[]> {
     this.#mcpAppRoutes.close();
     this.#mcpSessionRoutes.close();
     this.#runtimeMcpRoutes.close();
     this.#runtimeRoutes.close();
-    this.#releasePromise = (async () => {
+    // Publish the hook playground drain before awaiting App tombstones. Its
+    // abort callbacks may synchronously re-enter foreground shutdown, and
+    // must observe the already-published close outcome.
+    const releaseHookPlayground = this.#hookPlaygroundRoutes.close();
+    // App tombstone publication below deliberately yields once before joining
+    // resource drains. Observe this promise now so a fast drain failure cannot
+    // become an unhandled rejection during that handoff; allSettled below still
+    // records and reports the same rejection.
+    void releaseHookPlayground.catch(() => undefined);
+    this.#playgroundRoutes.close();
+    this.#artifactRoutes.close();
+    this.#evalRoutes.close();
+    const release = (async () => {
       // Publish runtime App tombstones while authenticated event streams are
       // still subscribed. Lifecycle close below owns proxies and sandboxes.
       const appPreparation = await Promise.allSettled([this.#mcpAppPreviews?.prepareClose?.() ?? Promise.resolve()]);
@@ -583,19 +647,25 @@ export class ForegroundServer {
             return closeServer(this.#server);
           })()
         : Promise.resolve();
-    this.#hookPlaygroundRoutes.close();
-    this.#playgroundRoutes.close();
-    this.#artifactRoutes.close();
-      const [server, coordinator] = await Promise.allSettled([releaseServer, this.#coordinator.close()]);
+      // Cancelled hook simulations own wrapper processes and clones, so their
+      // drain is released alongside the Runtime App lifecycle and awaited.
+      const [server, coordinator, hookPlayground] = await Promise.allSettled([
+        releaseServer,
+        this.#coordinator.close(),
+        releaseHookPlayground,
+      ]);
       const failures: ForegroundServerCloseFailure[] = [];
       for (const result of appPreparation) {
         if (result.status === 'rejected') failures.push(Object.freeze({ error: result.reason, resource: 'mcp-apps' }));
       }
       if (server.status === 'rejected') failures.push(Object.freeze({ error: server.reason, resource: 'server' }));
       if (coordinator.status === 'rejected') failures.push(Object.freeze({ error: coordinator.reason, resource: 'coordinator' }));
+      if (hookPlayground.status === 'rejected') {
+        failures.push(Object.freeze({ error: hookPlayground.reason, resource: 'hook-playground' }));
+      }
       return Object.freeze(failures);
     })();
-    return this.#releasePromise;
+    return release;
   }
 
   async #handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
@@ -611,6 +681,7 @@ export class ForegroundServer {
     if (await this.#hookPlaygroundRoutes.handle(request, response)) return;
     if (await this.#playgroundRoutes.handle(request, response)) return;
     if (await this.#artifactRoutes.handle(request, response)) return;
+    if (await this.#evalRoutes.handle(request, response)) return;
     const route = skillRoute(request.url);
     if (route !== undefined) return this.#serveSkill(route, response, method);
     if (pathname === '/api/project/status') {

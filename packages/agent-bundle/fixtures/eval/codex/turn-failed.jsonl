@@ -1,0 +1,4 @@
+{"type":"thread.started","thread_id":"00000000-0000-4000-8000-000000000003"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"command_execution","command":"npm test","aggregated_output":"1 failing\n","exit_code":1,"status":"completed"}}
+{"type":"turn.failed","error":{"message":"The turn ended before the model produced a final message."}}

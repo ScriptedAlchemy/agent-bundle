@@ -491,6 +491,87 @@ it('does not build until its watcher is ready and forwards project watcher exclu
   }
 });
 
+it('forwards a prepared generated eval root to its watcher', async () => {
+  const root = await createProject();
+  let watcherOptions: import('../src/dev/watcher.ts').ProjectWatcherOptions | undefined;
+  const prepared = await new ProjectService({ root }).prepare('dev');
+  const evalRuns = join(root, 'recorded-evals');
+  const withEvalRuns = Object.freeze({ ...prepared, outputRoots: Object.freeze([...prepared.outputRoots, evalRuns]) });
+  try {
+    const coordinator = new DevCoordinator({
+      acquireLock: async () => ({ close: async () => undefined }),
+      artifactService: { build: async (current) => succeeded(epochFor(root, 'eval-output', current.source.revision ?? 'missing')) },
+      createWatcher: (options) => {
+        watcherOptions = options;
+        return { close: async () => undefined };
+      },
+      diagnosticService: { close: async () => undefined, lint: async (paths) => ({ diagnostics: [], paths }) },
+      epochStore: new EpochStore({ projectRoot: root }),
+      initialPreparedProject: withEvalRuns,
+      projectService: { prepare: async () => withEvalRuns },
+      root,
+    });
+
+    await coordinator.start();
+    expect(watcherOptions?.outputPaths).toContain(evalRuns);
+    await coordinator.close();
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('adds a recovered eval runs root to the live watcher before generated run writes arrive', async () => {
+  const root = await createProject();
+  const sourceWatcher = new EventSourceWatcher();
+  const evalRuns = join(root, 'recorded-evals');
+  let projectWatcher: ProjectWatcher | undefined;
+  let builds = 0;
+  try {
+    await writeFile(join(root, 'agent-bundle.config.ts'), 'export default {\n');
+    const coordinator = new DevCoordinator({
+      acquireLock: async () => ({ close: async () => undefined }),
+      artifactService: {
+        build: async (prepared) => {
+          builds += 1;
+          return succeeded(epochFor(root, `eval-root-${builds}`, prepared.source.revision ?? 'missing'));
+        },
+      },
+      createWatcher: (options) => {
+        projectWatcher = new ProjectWatcher({
+          ...options,
+          createWatcher: () => sourceWatcher,
+          debounceMs: 60_000,
+        });
+        return projectWatcher;
+      },
+      diagnosticService: { close: async () => undefined, lint: async (paths) => ({ diagnostics: [], paths }) },
+      epochStore: new EpochStore({ projectRoot: root }),
+      projectService: new ProjectService({ root }),
+      root,
+    });
+
+    await coordinator.start();
+    await writeFile(join(root, 'agent-bundle.config.ts'), [
+      'export default {',
+      "  evals: { runsDir: 'recorded-evals' },",
+      "  plugin: { name: 'dev-coordinator-fixture', version: '1.0.0' },",
+      "  targets: ['portable'],",
+      '};',
+      '',
+    ].join('\n'));
+    sourceWatcher.emit('change', join(root, 'agent-bundle.config.ts'));
+    await projectWatcher?.flush();
+    expect(builds).toBe(2);
+
+    sourceWatcher.emit('change', join(evalRuns, 'run.json'));
+    await projectWatcher?.flush();
+    expect(builds).toBe(2);
+    await coordinator.close();
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
 it('rejects public rebuild requests before startup without preparing or publishing', async () => {
   const root = await createProject();
   let builds = 0;

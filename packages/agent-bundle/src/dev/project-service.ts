@@ -6,6 +6,7 @@ import { createDefaultRegistry, type TargetRegistry } from '../adapters/registry
 import { discoverProject } from '../config/discover.ts';
 import { isProjectPathIgnored, readProjectIgnoreRules } from '../config/ignore.ts';
 import { loadConfig } from '../config/load.ts';
+import { normalizeEvalConfig } from '../eval/config.ts';
 import {
   configExtensionFiniteJsonDiagnosticMessage,
   isConfigExtensionFiniteJsonError,
@@ -582,6 +583,25 @@ export class ProjectService {
         root: requestedRoot,
         targets: this.#options.targets,
       });
+      // Eval runs are generated records, even when a project deliberately
+      // stores them outside the conventional .agent-bundle directory.  Keep
+      // the resolved configuration as the single source of that ownership.
+      let evalRunsDir: string | undefined;
+      try {
+        evalRunsDir = normalizeEvalConfig(loaded.config.evals).runsDir;
+      } catch {
+        // EvalService owns malformed eval configuration diagnostics.  Do not
+        // replace the established project-source error contract with one.
+      }
+      if (evalRunsDir !== undefined) {
+        const evalOutputRoots = await resolveOutputRoots(
+          requestedRoot,
+          root,
+          [evalRunsDir],
+        );
+        outputRoots = Object.freeze([...new Set([...outputRoots, ...evalOutputRoots])]
+          .sort((left, right) => left.localeCompare(right)));
+      }
       discovered = await discoverProject(root, loaded.config);
     } catch {
       const snapshot = await snapshotForLoadFailure(root, configPath, outputRoots);

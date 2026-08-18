@@ -634,6 +634,7 @@ it('settles route cancellation and cleans the per-simulation clone before releas
     setTimeout(() => controller.abort(), 25);
 
     await expect(pending).rejects.toThrow('Hook simulation aborted.');
+    await expect(pending).rejects.toMatchObject({ code: 'hook.simulation.aborted', name: 'AbortError' });
     if (runnableArtifact === undefined) throw new Error('Expected a runnable simulation artifact.');
     expect(runnableArtifact).not.toBe(join(root, '.agent-bundle', 'epochs', 'epoch-1'));
     await expect(access(runnableArtifact)).rejects.toMatchObject({ code: 'ENOENT' });

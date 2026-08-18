@@ -34,6 +34,25 @@ export type { Diagnostic, DiagnosticSeverity } from './core/diagnostics.ts';
 import type { ProjectContext } from './core/project-context.ts';
 import type { NormalizedPlugin } from './core/types.ts';
 import {
+  EvalService,
+  EvalServiceError,
+  type EvalRunResult,
+  type EvalRunSelection,
+  type EvalServiceErrorCode,
+} from './dev/eval-service.ts';
+export { EvalService, EvalServiceError } from './dev/eval-service.ts';
+export type {
+  EvalAssertionSummary,
+  EvalCaseSummary,
+  EvalRunRequest,
+  EvalRunResult,
+  EvalRunSelection,
+  EvalServiceErrorCode,
+  EvalServiceOptions,
+  EvalSuiteListing,
+  EvalSuiteSummary,
+} from './dev/eval-service.ts';
+import {
   ProjectService,
   projectDiagnostic,
   type PreparedProject,
@@ -208,6 +227,12 @@ export interface InvokeMcpOptions extends ListMcpOptions {
   readonly tool: string;
 }
 
+export interface RunEvalsOptions extends ArtifactOperationOptions, EvalRunSelection {
+  readonly harness?: string;
+  readonly signal?: AbortSignal;
+  readonly trials?: number;
+}
+
 export interface ListHooksOptions extends ArtifactOperationOptions {
   readonly target?: string;
 }
@@ -371,6 +396,69 @@ export const build = async (options: BuildOptions): Promise<BuildProjectResult> 
     registry: prepared.registry,
   });
   return Object.freeze({ build: result, diagnostics: prepared.diagnostics, model, projectContext });
+};
+
+/** Every eval refusal reaches a caller as one actionable diagnostic, never a raw service error. */
+const evalDiagnostics: Readonly<Record<EvalServiceErrorCode, Readonly<{
+  readonly code: string;
+  readonly recovery: string;
+}>>> = Object.freeze({
+  EVAL_HARNESS_UNSUPPORTED: Object.freeze({
+    code: 'AB9001',
+    recovery: 'Run the deterministic harness until a native Claude or Codex harness is available.',
+  }),
+  EVAL_RUN_NOT_FOUND: Object.freeze({
+    code: 'AB9003',
+    recovery: 'Read a run that this project recorded, or start a new one.',
+  }),
+  EVAL_SELECTION_EMPTY: Object.freeze({
+    code: 'AB9002',
+    recovery: 'Select a suite or case that "agent-bundle eval --json" reports as discovered.',
+  }),
+  EVAL_TARGET_MISSING: Object.freeze({
+    code: 'AB9004',
+    recovery: 'Select the targets the pinned eval hosts name, then evaluate again.',
+  }),
+  EVAL_TRIALS_INVALID: Object.freeze({
+    code: 'AB9005',
+    recovery: 'Request an integer trial count between 1 and 100.',
+  }),
+});
+
+const evalDiagnostic = (error: EvalServiceError): Diagnostic => {
+  const mapped = evalDiagnostics[error.code];
+  return Object.freeze({
+    code: mapped.code,
+    message: error.message,
+    recovery: mapped.recovery,
+    severity: 'error',
+  });
+};
+
+const evalService = (options: RunEvalsOptions): EvalService => new EvalService({
+  ...(options.configPath === undefined ? {} : { configPath: options.configPath }),
+  ...(options.mode === undefined ? {} : { mode: options.mode }),
+  projectRoot: resolve(options.root),
+  registry: registryFor(options),
+  ...(options.targets === undefined ? {} : { targets: options.targets }),
+});
+
+/** Runs deterministic eval suites through the service the CLI and workbench browser also use. */
+export const runEvals = async (options: RunEvalsOptions): Promise<EvalRunResult> => {
+  log(options.logger, 'eval.run', { root: resolve(options.root) });
+  try {
+    return await evalService(options).run({
+      ...(options.artifact === undefined ? {} : { artifact: options.artifact }),
+      ...(options.caseIds === undefined ? {} : { caseIds: options.caseIds }),
+      ...(options.harness === undefined ? {} : { harness: options.harness }),
+      ...(options.signal === undefined ? {} : { signal: options.signal }),
+      ...(options.suites === undefined ? {} : { suites: options.suites }),
+      ...(options.trials === undefined ? {} : { trials: options.trials }),
+    });
+  } catch (error) {
+    if (error instanceof EvalServiceError) throw new DiagnosticError([evalDiagnostic(error)]);
+    throw error;
+  }
 };
 
 export const listMcp = async (options: ListMcpOptions): Promise<McpListResult> => {

@@ -12,6 +12,10 @@ import type {
 import type { ProjectStatus } from '../../agent-bundle/src/dev/types.ts';
 
 import { ArtifactClient } from './artifacts/artifact-client.ts';
+import { ComparisonClient } from './comparisons/comparison-client.ts';
+import { ComparisonsPage } from './comparisons/comparisons-page.tsx';
+import { EvalClient } from './evals/eval-client.ts';
+import { EvalsPage } from './evals/evals-page.tsx';
 import { ArtifactsPage } from './artifacts/artifacts-page.tsx';
 import { HookClient } from './hooks/hook-client.ts';
 import { HooksPage } from './hooks/hooks-page.tsx';
@@ -293,7 +297,7 @@ const StateMark = ({ state }: { readonly state: string }) => (
   }</span>
 );
 
-type WorkbenchPage = 'artifacts' | 'hooks' | 'logs' | 'mcp' | 'overview' | 'playground' | 'runtime' | 'skills';
+type WorkbenchPage = 'artifacts' | 'comparisons' | 'evals' | 'hooks' | 'logs' | 'mcp' | 'overview' | 'playground' | 'runtime' | 'skills';
 type RuntimeCapability = 'available' | 'unavailable' | 'unknown';
 type McpPresentation = 'inspector' | 'playground';
 
@@ -304,7 +308,8 @@ const pageForHash = (runtimeAvailable = false): WorkbenchPage => {
   if (window.location.hash === '#artifacts') return 'artifacts';
   if (window.location.hash === '#playground') return 'playground';
   if (window.location.hash === '#logs') return 'logs';
-  if (window.location.hash === '#runtime' && runtimeAvailable) return 'runtime';
+  if (window.location.hash === '#evals') return 'evals';
+  if (window.location.hash === '#comparisons') return 'comparisons';
   return window.location.hash === '#skills' ? 'skills' : 'overview';
 };
 
@@ -389,6 +394,24 @@ const Navigation = ({ onNavigate, page, runtimeAvailable = false, runtimeDiagnos
   >
     <span aria-hidden="true" className="nav-glyph">≡</span>
     Logs
+  </a>
+  <a
+    aria-current={page === 'evals' ? 'page' : undefined}
+    className={page === 'evals' ? 'nav-item nav-item--active' : 'nav-item'}
+    href="#evals"
+    onClick={(event) => { event.preventDefault(); onNavigate('evals'); }}
+  >
+    <span aria-hidden="true" className="nav-glyph">✓</span>
+    Evals
+  </a>
+  <a
+    aria-current={page === 'comparisons' ? 'page' : undefined}
+    className={page === 'comparisons' ? 'nav-item nav-item--active' : 'nav-item'}
+    href="#comparisons"
+    onClick={(event) => { event.preventDefault(); onNavigate('comparisons'); }}
+  >
+    <span aria-hidden="true" className="nav-glyph">⇄</span>
+    Comparisons
   </a>
 </aside>;
 
@@ -547,6 +570,22 @@ const WorkbenchScreen = ({ children, connectionError, inert = false, onNavigate,
   </div>
 </div>;
 
+const EvalsScreen = ({ connectionError, evalClient, onNavigate }: {
+  readonly connectionError?: string;
+  readonly evalClient: EvalClient;
+  readonly onNavigate: (page: WorkbenchPage) => void;
+}) => <WorkbenchScreen connectionError={connectionError} onNavigate={onNavigate} page="evals">
+  <EvalsPage client={evalClient} />
+</WorkbenchScreen>;
+
+const ComparisonsScreen = ({ comparisonClient, connectionError, onNavigate }: {
+  readonly comparisonClient: ComparisonClient;
+  readonly connectionError?: string;
+  readonly onNavigate: (page: WorkbenchPage) => void;
+}) => <WorkbenchScreen connectionError={connectionError} onNavigate={onNavigate} page="comparisons">
+  <ComparisonsPage client={comparisonClient} />
+</WorkbenchScreen>;
+
 const ArtifactsScreen = ({ artifactClient, connectionError, onNavigate, status }: {
   readonly artifactClient: ArtifactClient;
   readonly connectionError?: string;
@@ -597,13 +636,14 @@ const HooksScreen = ({ connectionError, hookClient, onNavigate, onRecordTrace, s
   />
 </WorkbenchScreen>;
 
-const McpScreen = ({ appPreviewClient, connectionError, controller, mcpDepartureDiagnostic, model, onNavigate, onResetSession, onRuntimeInitialPreviewConsumed, presentation, registerPreviewClose, runtimeAvailable = false, runtimeDiagnostic, runtimeHandoff, runtimePreviewDependencies, setPresentation, status }: {
+const McpScreen = ({ appPreviewClient, connectionError, controller, mcpDepartureDiagnostic, model, onNavigate, onRecordTrace, onResetSession, onRuntimeInitialPreviewConsumed, presentation, registerPreviewClose, runtimeAvailable = false, runtimeDiagnostic, runtimeHandoff, runtimePreviewDependencies, setPresentation, status }: {
   readonly appPreviewClient: McpAppClient;
   readonly connectionError?: string;
   readonly controller: ReturnType<typeof createMcpController>;
   readonly mcpDepartureDiagnostic?: string;
   readonly model: ReturnType<typeof createMcpController>['model'];
   readonly onNavigate: (page: WorkbenchPage) => void;
+  readonly onRecordTrace?: (input: PlaygroundEventInput) => Promise<void>;
   readonly onResetSession: () => void;
   readonly onRuntimeInitialPreviewConsumed: (selection: Extract<McpPagePreviewSelection, { readonly kind: 'runtime' }>) => void;
   readonly runtimeAvailable?: boolean;
@@ -709,6 +749,7 @@ const McpScreen = ({ appPreviewClient, connectionError, controller, mcpDeparture
               initialBinding={activeEpoch === undefined ? undefined : { epochId: activeEpoch.id }}
               onDownloadConfig={downloadMcpFile}
               onDownloadTrace={downloadMcpFile}
+              {...(onRecordTrace === undefined ? {} : { onRecordTrace })}
               onResetSession={onResetSession}
               registerPreviewClose={registerPreviewClose}
               targetOptions={targetOptions}
@@ -716,6 +757,7 @@ const McpScreen = ({ appPreviewClient, connectionError, controller, mcpDeparture
           : <MantineProvider><McpPage
               controller={controller}
               initialPreview={runtimeInitialPreview}
+              {...(onRecordTrace === undefined ? {} : { onRecordTrace })}
               onResetSession={onResetSession}
               registerPreviewClose={registerPreviewClose}
               runtimePreviewDependencies={runtimePreviewDependencies}
@@ -780,6 +822,8 @@ const Workbench = () => {
   const mcpPreviewDeparture = useRef<McpPreviewDepartureCoordinator | undefined>(undefined);
   const runtimeOperationTraceAuthorities = useRef(new Map<string, RuntimeOperationTraceAuthority>());
   const artifactClient = useRef<ArtifactClient | undefined>(undefined);
+  const comparisonClient = useRef<ComparisonClient | undefined>(undefined);
+  const evalClient = useRef<EvalClient | undefined>(undefined);
   const hookClient = useRef<HookClient | undefined>(undefined);
   const playgroundClient = useRef<PlaygroundClient | undefined>(undefined);
   const [connectionError, setConnectionError] = useState<string>();
@@ -815,6 +859,8 @@ const Workbench = () => {
   if (mcpControllerRef.current !== mcpController) mcpControllerRef.current = mcpController;
   if (runtimeClient.current === undefined) runtimeClient.current = new RuntimeClient(foreground.current);
   if (artifactClient.current === undefined) artifactClient.current = new ArtifactClient({ foreground: foreground.current! });
+  if (comparisonClient.current === undefined) comparisonClient.current = new ComparisonClient({ foreground: foreground.current! });
+  if (evalClient.current === undefined) evalClient.current = new EvalClient({ foreground: foreground.current! });
   if (hookClient.current === undefined) hookClient.current = new HookClient({ foreground: foreground.current! });
   if (playgroundClient.current === undefined) playgroundClient.current = new PlaygroundClient({ foreground: foreground.current! });
 
@@ -835,12 +881,14 @@ const Workbench = () => {
       mcpPreviewDeparture.current?.cancel();
     }
     const hash = next === 'artifacts' ? '#artifacts'
-      : next === 'hooks' ? '#hooks'
-        : next === 'logs' ? '#logs'
-          : next === 'mcp' ? '#mcp'
-            : next === 'playground' ? '#playground'
-              : next === 'runtime' ? '#runtime'
-                : next === 'skills' ? '#skills' : '#overview';
+      : next === 'comparisons' ? '#comparisons'
+        : next === 'evals' ? '#evals'
+          : next === 'hooks' ? '#hooks'
+            : next === 'logs' ? '#logs'
+              : next === 'mcp' ? '#mcp'
+                : next === 'playground' ? '#playground'
+                  : next === 'runtime' ? '#runtime'
+                    : next === 'skills' ? '#skills' : '#overview';
     if (window.location.hash !== hash) window.history.pushState(undefined, '', hash);
     if (next === 'mcp') setMcpPresentation('playground');
     setPage(next);
@@ -1214,6 +1262,7 @@ const Workbench = () => {
         model={mcpModel}
         onNavigate={navigate}
         onRuntimeInitialPreviewConsumed={consumeRuntimeInitialPreview}
+        {...(recordPlaygroundEvent === undefined ? {} : { onRecordTrace: recordPlaygroundEvent })}
         onResetSession={resetMcpSession}
         registerPreviewClose={registerMcpPreviewClose}
         runtimeAvailable={runtimeAvailable}
@@ -1257,6 +1306,12 @@ const Workbench = () => {
         sessionId={playgroundSession?.id}
         status={status}
       />;
+    }
+    if (page === 'evals') {
+      return <EvalsScreen connectionError={connectionError} evalClient={evalClient.current} onNavigate={navigate} />;
+    }
+    if (page === 'comparisons') {
+      return <ComparisonsScreen comparisonClient={comparisonClient.current} connectionError={connectionError} onNavigate={navigate} />;
     }
     if (page === 'artifacts') {
       return <ArtifactsScreen artifactClient={artifactClient.current} connectionError={connectionError} onNavigate={navigate} status={status} />;

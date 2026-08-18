@@ -17,10 +17,12 @@ import {
   type McpSessionControllerTransport,
 } from '../src/mcp/mcp-session-controller.ts';
 import {
+  mcpTraceEvent,
   McpPage,
   McpProtocolEvidence,
   createMcpPageActionTracker,
   createMcpPageActionSession,
+  invokeMcpOperationWithTrace,
   mcpAppConsentDetailsSummary,
   downloadCurrentMcpProtocolTrace,
   mcpConfigDownload,
@@ -798,4 +800,82 @@ describe('MCP page', () => {
     expect(actions.isCurrent(replacementOpen)).toBe(true);
     expect(mcpPageSessionControls('idle', actions.pending, false)).toMatchObject({ close: true, open: false });
   });
+});
+
+it('records a completed MCP invocation as one ordered trace event citing its epoch', () => {
+  const event = mcpTraceEvent({
+    binding: { epochId: 'epoch-a', serverName: 'weather', target: 'claude' },
+    operation: 'callTool',
+    request: { arguments: { city: 'Berlin' }, name: 'forecast' },
+    requestId: 'mcp-page-1',
+    result: { content: [{ text: 'Sunny', type: 'text' }] },
+    sessionId: 'session-a',
+  });
+
+  expect(event.source).toBe('mcp');
+  expect(event.kind).toBe('mcp.callTool');
+  expect(event.summary).toBe('Completed callTool against weather on claude from epoch epoch-a.');
+  expect(event.raw).toEqual({
+    binding: { epochId: 'epoch-a', serverName: 'weather', target: 'claude' },
+    operation: 'callTool',
+    request: { arguments: { city: 'Berlin' }, name: 'forecast' },
+    requestId: 'mcp-page-1',
+    result: { content: [{ text: 'Sunny', type: 'text' }] },
+    sessionId: 'session-a',
+  });
+  expect(Object.isFrozen(event.raw)).toBe(true);
+});
+
+it('records a failed MCP invocation without a result and without losing the reason', () => {
+  const event = mcpTraceEvent({
+    error: new Error('Tool call timed out.'),
+    operation: 'callTool',
+    request: { arguments: {}, name: 'forecast' },
+    requestId: 'mcp-page-2',
+    sessionId: 'session-a',
+  });
+
+  expect(event.kind).toBe('mcp.failed');
+  expect(event.summary).toBe('Failed callTool against session-a.');
+  expect(event.raw).toEqual({
+    error: 'Tool call timed out.',
+    operation: 'callTool',
+    request: { arguments: {}, name: 'forecast' },
+    requestId: 'mcp-page-2',
+    sessionId: 'session-a',
+  });
+});
+
+it('preserves one successful MCP invocation when ordered trace recording rejects', async () => {
+  let invocations = 0;
+  let records = 0;
+
+  const outcome = await invokeMcpOperationWithTrace(
+    async () => {
+      invocations += 1;
+      return { content: [{ text: 'Sunny', type: 'text' }] };
+    },
+    async () => {
+      records += 1;
+      throw new Error('private trace storage failure');
+    },
+  );
+
+  expect(invocations).toBe(1);
+  expect(records).toBe(1);
+  expect(outcome.result).toEqual({ content: [{ text: 'Sunny', type: 'text' }] });
+  expect(outcome.traceDiagnostic).toBe('The MCP operation completed, but its shared trace could not be recorded.');
+});
+
+it('preserves the original MCP invocation failure when ordered trace recording also rejects', async () => {
+  let records = 0;
+
+  await expect(invokeMcpOperationWithTrace(
+    async () => { throw new Error('tool transport failed'); },
+    async () => {
+      records += 1;
+      throw new Error('private trace storage failure');
+    },
+  )).rejects.toThrow('tool transport failed');
+  expect(records).toBe(1);
 });
