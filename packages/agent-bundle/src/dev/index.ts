@@ -43,6 +43,27 @@ export {
   type ProjectEventSubscriptionOptions,
 } from './events.ts';
 export {
+  DevLogService,
+  DevLogServiceError,
+  devLogLevels,
+  devLogProducers,
+  type DevLogDetails,
+  type DevLogInput,
+  type DevLogLevel,
+  type DevLogListener,
+  type DevLogMessage,
+  type DevLogProducer,
+  type DevLogRecord,
+  type DevLogReplay,
+  type DevLogReplayGap,
+  type DevLogServiceErrorCode,
+  type DevLogServiceOptions,
+  type DevLogSink,
+  type DevLogSubscribeOptions,
+  type DevLogSubscription,
+} from './dev-log-service.ts';
+export { DevLogRoutes, type DevLogRoutesOptions } from './dev-log-routes.ts';
+export {
   ForegroundServer,
   ForegroundServerCloseError,
   ForegroundServerError,

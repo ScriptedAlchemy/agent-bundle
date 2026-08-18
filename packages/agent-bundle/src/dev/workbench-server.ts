@@ -210,14 +210,19 @@ export const closeDevServerLifecycle = async (
 ): Promise<void> => {
   // ForegroundServer owns the Agent API admission gate. This lifecycle owns
   // only the shared services that are released after foreground routing ends.
+  logs?.log({
+    kind: 'dev.shutdown.started',
+    level: 'info',
+    producer: 'project',
+    summary: 'Development workbench shutdown started.',
+  });
   const playgroundResults = playground === undefined ? [] : await Promise.allSettled([playground.close()]);
   const appResults = mcpApps === undefined ? [] : await Promise.allSettled([mcpApps.close()]);
   const sessionResults = await Promise.allSettled([mcpSessions.close()]);
   const coordinatorResults = await Promise.allSettled([coordinator.close()]);
   try { detachProjectLogs?.(); }
   catch { /* The subscription is observability-only and cannot hold shutdown. */ }
-  const logsResults = logs === undefined ? [] : await Promise.allSettled([logs.close()]);
-  const failures = [
+  const producerFailures = [
     ...playgroundResults.flatMap((result): readonly DevServerLifecycleCloseFailure[] =>
       result.status === 'rejected'
         ? [Object.freeze({ error: result.reason, resource: 'playground' as const })]
@@ -234,10 +239,21 @@ export const closeDevServerLifecycle = async (
         : [],
     ),
     ...coordinatorResults.flatMap((result): readonly DevServerLifecycleCloseFailure[] =>
-    result.status === 'rejected'
-      ? [Object.freeze({ error: result.reason, resource: 'coordinator' as const })]
+      result.status === 'rejected'
+        ? [Object.freeze({ error: result.reason, resource: 'coordinator' as const })]
         : [],
     ),
+  ];
+  logs?.log({
+    details: { failures: producerFailures.length },
+    kind: 'dev.shutdown.completed',
+    level: producerFailures.length === 0 ? 'info' : 'warning',
+    producer: 'project',
+    summary: producerFailures.length === 0 ? 'Development workbench shutdown completed.' : 'Development workbench shutdown completed with failures.',
+  });
+  const logsResults = logs === undefined ? [] : await Promise.allSettled([logs.close()]);
+  const failures = [
+    ...producerFailures,
     ...logsResults.flatMap((result): readonly DevServerLifecycleCloseFailure[] =>
       result.status === 'rejected'
         ? [Object.freeze({ error: result.reason, resource: 'logs' as const })]
