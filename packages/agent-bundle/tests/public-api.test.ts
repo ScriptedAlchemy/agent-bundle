@@ -159,6 +159,14 @@ it('loads every public subpath and reports the package version', async () => {
   await expect(runCli(['--version'])).resolves.toBe(0);
 });
 
+it('exposes defineConfig from the config subpath exactly as the README documents', async () => {
+  const configEntry = await import('../src/config/index.ts');
+  const config = { plugin: { name: 'demo', version: '1.0.0' } };
+
+  expect(configEntry.defineConfig).toBe(defineConfig);
+  expect(configEntry.defineConfig(config)).toBe(config);
+});
+
 it('publishes directly executable built entrypoints with declarations', async () => {
   await buildPackage();
 
