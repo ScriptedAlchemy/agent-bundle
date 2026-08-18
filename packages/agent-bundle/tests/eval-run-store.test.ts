@@ -465,6 +465,37 @@ it('poisons every writer mutation when a partial event cannot be rolled back', a
   });
 });
 
+it('rejects a write queued behind an uncertain event append', async () => {
+  await withProject(async (root) => {
+    const writer = await createEvalRun(runOptions(root));
+    const partialWriteFailure = new Error('event journal partial write failed');
+    let injected = false;
+    try {
+      await withEvalRunStoreDurabilityTestHook(async (phase, event, _path, journal) => {
+        if (phase === 'before-event-write' && event.kind === 'run.cancelling' && !injected) {
+          if (journal === undefined) throw new Error('The partial-write hook did not receive the event journal.');
+          injected = true;
+          await journal.writeFile('{"kind":"run.cancelling"', 'utf8');
+          await journal.close();
+          throw partialWriteFailure;
+        }
+      }, async () => {
+        const cancelling = writer.appendEvent({ kind: 'run.cancelling', payload: {} });
+        const terminal = writer.appendEvent({ kind: 'run.cancelled', payload: {} });
+
+        const uncertainty = await cancelling.catch((error: unknown) => error);
+        expect(uncertainty).toMatchObject({ name: 'EvalRunEventWriteUncertainError' });
+        await expect(terminal).rejects.toBe(uncertainty);
+      });
+
+      expect(injected).toBe(true);
+      expect(await readFile(join(writer.directory, 'events.jsonl'), 'utf8')).toBe('{"kind":"run.cancelling"');
+    } finally {
+      await writer.close().catch(() => undefined);
+    }
+  });
+});
+
 it('reports a malformed complete JSONL record as a corrupt run', async () => {
   await withProject(async (root) => {
     const writer = await createEvalRun(runOptions(root));

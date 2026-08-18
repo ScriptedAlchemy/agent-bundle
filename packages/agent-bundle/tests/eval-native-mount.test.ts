@@ -380,7 +380,12 @@ it('forwards an active AbortSignal into native Codex commands', async () => {
   try {
     await seedNativeProject(project.root);
     const controller = new AbortController();
-    const seen: Array<Readonly<{ readonly abortedAfterRequest: boolean; readonly abortedBeforeRequest: boolean; readonly signal: AbortSignal | undefined }>> = [];
+    const seen: Array<Readonly<{
+      readonly abortedAfterRequest: boolean;
+      readonly abortedBeforeRequest: boolean;
+      readonly phase: string;
+      readonly signal: AbortSignal | undefined;
+    }>> = [];
 
     const result = await nativeService(project.root, {
       codexRun: async (command) => {
@@ -389,6 +394,7 @@ it('forwards an active AbortSignal into native Codex commands', async () => {
         seen.push(Object.freeze({
           abortedAfterRequest: command.signal?.aborted ?? false,
           abortedBeforeRequest,
+          phase: command.args[0] === 'plugin' ? `plugin.${command.args[1]}` : command.args[0] ?? '',
           signal: command.signal,
         }));
         return { exitCode: 0, stderr: '', stdout: 'codex-cli 0.147.0\n' };
@@ -397,6 +403,7 @@ it('forwards an active AbortSignal into native Codex commands', async () => {
     }).run({ harness: 'codex', signal: controller.signal, suites: ['native-suite'] });
 
     expect(seen).toHaveLength(1);
+    expect(seen.map((command) => command.phase)).toEqual(['--version']);
     expect(seen[0]).toMatchObject({ abortedAfterRequest: true, abortedBeforeRequest: false });
     expect(seen[0]?.signal).toBeInstanceOf(AbortSignal);
     expect(result.trials).toHaveLength(1);

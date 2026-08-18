@@ -3,6 +3,9 @@ import { closeSync, constants, fsyncSync, fstatSync, linkSync, lstatSync, mkdirS
 import { lstat, mkdir, open, realpath, rename, rm, unlink } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
+import { serialQueue, type SerialQueue } from '../core/async.ts';
+import { isErrno } from '../core/errors.ts';
+import { isInsideOrEqual } from '../core/paths.ts';
 import { parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
 import type { DevLogSink } from '../dev/dev-log-service.ts';
 
@@ -227,7 +230,7 @@ interface SessionRecord {
   readonly storageObjectId: string | undefined;
   state: PlaygroundSession['state'];
   readonly subscribers: Set<SubscriptionRecord>;
-  tail: Promise<void>;
+  readonly queue: SerialQueue;
   ownerToken: string | undefined;
 }
 
@@ -398,16 +401,8 @@ const hasPersistedOutcomeSchema = (value: unknown): boolean => {
     || hasExactOwnKeys(value, ['status', 'response', 'workspace']);
 };
 
-const contained = (root: string, candidate: string): boolean => {
-  const path = relative(root, candidate);
-  return path === '' || (!isAbsolute(path) && path !== '..' && !path.startsWith('..\\') && !path.startsWith('../'));
-};
-
 const serviceError = (code: PlaygroundServiceErrorCode, message: string): PlaygroundServiceError =>
   new PlaygroundServiceError(code, message);
-
-const isErrno = (error: unknown, code: string): boolean =>
-  typeof error === 'object' && error !== null && 'code' in error && error.code === code;
 
 const runDurabilityTestHook = (phase: DurabilityTestPhase, path: string): void => {
   if (process.env.NODE_ENV !== 'test') return;
@@ -707,7 +702,7 @@ export class PlaygroundService {
           storage: 'v2',
           storageObjectId,
           subscribers: new Set(),
-          tail: Promise.resolve(),
+          queue: serialQueue(),
           ownerToken,
         };
         await this.#assertOwnedObject(root, storageObjectId, id, ownerToken);
@@ -794,7 +789,7 @@ export class PlaygroundService {
         storage,
         storageObjectId,
         subscribers: new Set(),
-        tail: Promise.resolve(),
+        queue: serialQueue(),
         ownerToken,
       };
       try {
@@ -819,7 +814,7 @@ export class PlaygroundService {
     this.#assertAvailable();
     const record = this.#requireUsableSession(sessionId);
     const event = normalizeEventInput(input);
-    return this.#enqueue(record, async () => {
+    return record.queue.run(async () => {
       if (record.state !== 'open') {
         throw serviceError('PLAYGROUND_SESSION_FINALIZED', `Playground session ${JSON.stringify(record.id)} is finalized.`);
       }
@@ -858,7 +853,7 @@ export class PlaygroundService {
       return this.#retryUncertainFinalization(record, durable);
     }
     this.#assertRecordUsable(record);
-    await this.#enqueue(record, async () => {
+    await record.queue.run(async () => {
       if (record.state !== 'open') {
         throw serviceError('PLAYGROUND_SESSION_FINALIZED', `Playground session ${JSON.stringify(record.id)} is finalized.`);
       }
@@ -871,7 +866,7 @@ export class PlaygroundService {
     this.#assertAvailable();
     const record = this.#requireUsableSession(sessionId);
     const afterSequence = normalizeCursor(cursor);
-    return this.#enqueue(record, async () => {
+    return record.queue.run(async () => {
       const latest = record.nextSequence - 1;
       if (afterSequence > latest) {
         throw serviceError('PLAYGROUND_CURSOR_AHEAD', 'Playground replay cursor is ahead of persisted history.');
@@ -891,7 +886,7 @@ export class PlaygroundService {
       throw serviceError('PLAYGROUND_VALUE_INVALID', 'Playground subscription requires an event callback.');
     }
     const afterSequence = normalizeCursor(options.afterSequence === undefined ? undefined : { afterSequence: options.afterSequence });
-    return this.#enqueue(record, async () => {
+    return record.queue.run(async () => {
       const latest = record.nextSequence - 1;
       if (afterSequence > latest) {
         throw serviceError('PLAYGROUND_CURSOR_AHEAD', 'Playground subscription cursor is ahead of persisted history.');
@@ -926,7 +921,7 @@ export class PlaygroundService {
   async promoteToDraftEval(sessionId: string, selectedAssertions: readonly PlaygroundSelectedAssertion[]): Promise<DraftEvalCase> {
     this.#assertAvailable();
     const record = this.#requireUsableSession(sessionId);
-    return this.#enqueue(record, async () => {
+    return record.queue.run(async () => {
       if ((record.state !== 'finalized' && record.state !== 'closed') || record.outcome === undefined) {
         throw serviceError('PLAYGROUND_OUTCOME_REQUIRED', 'A durable playground outcome is required before promotion.');
       }
@@ -979,7 +974,7 @@ export class PlaygroundService {
   }
 
   async #closeRecord(record: SessionRecord): Promise<void> {
-    const subscriptions = await this.#enqueue(record, async () => {
+    const subscriptions = await record.queue.run(async () => {
       if (record.state === 'open') {
         await this.#commitState(record, 'closed', Object.freeze({ status: 'aborted' }));
       } else if (record.state === 'finalized') {
@@ -991,7 +986,7 @@ export class PlaygroundService {
       return [...record.subscribers];
     });
     await this.#drainSubscriptions(record, subscriptions);
-    await this.#enqueue(record, async () => {
+    await record.queue.run(async () => {
       for (const subscription of subscriptions) this.#deactivateSubscription(record, subscription);
       await this.#persistSession(record);
     });
@@ -1254,7 +1249,7 @@ export class PlaygroundService {
   }
 
   async #retryUncertainFinalization(record: SessionRecord, outcome: PlaygroundDurableOutcome): Promise<PlaygroundSession> {
-    await this.#enqueue(record, async () => {
+    await record.queue.run(async () => {
       if (record.durability !== 'terminal-uncertain'
         || record.state !== 'finalized'
         || record.outcome === undefined
@@ -1268,16 +1263,10 @@ export class PlaygroundService {
 
   async #completeFinalization(record: SessionRecord): Promise<PlaygroundSession> {
     await this.#drainSubscriptions(record);
-    return this.#enqueue(record, async () => {
+    return record.queue.run(async () => {
       await this.#persistSession(record);
       return snapshotSession(record);
     });
-  }
-
-  #enqueue<T>(record: SessionRecord, operation: () => Promise<T>): Promise<T> {
-    const run = record.tail.then(operation, operation);
-    record.tail = run.then(() => undefined, () => undefined);
-    return run;
   }
 
   #timestamp(): string {
@@ -1299,7 +1288,7 @@ export class PlaygroundService {
     }
     const requestedProjectRoot = resolve(this.#projectRoot);
     const requestedStorageRoot = resolve(this.#storageRoot);
-    if (!contained(requestedProjectRoot, requestedStorageRoot)) {
+    if (!isInsideOrEqual(requestedProjectRoot, requestedStorageRoot)) {
       throw serviceError('PLAYGROUND_ROOT_INVALID', 'Playground storage root must be contained by the configured project root.');
     }
     const resolvedProjectRoot = await realpath(requestedProjectRoot);
@@ -1309,19 +1298,19 @@ export class PlaygroundService {
       throw serviceError('PLAYGROUND_ROOT_INVALID', 'Playground storage root must not be a symbolic link.');
     }
     const resolvedStorageRoot = await realpath(requestedStorageRoot);
-    if (!contained(resolvedProjectRoot, resolvedStorageRoot)) {
+    if (!isInsideOrEqual(resolvedProjectRoot, resolvedStorageRoot)) {
       throw serviceError('PLAYGROUND_ROOT_INVALID', 'Playground storage root resolves outside the configured project root.');
     }
     const sessionsRoot = join(requestedStorageRoot, sessionDirectoryName);
     await this.#createLayoutDirectory(sessionsRoot, requestedStorageRoot, 'layout-sessions-entry');
     const resolvedSessionsRoot = await realpath(sessionsRoot);
-    if (!contained(resolvedStorageRoot, resolvedSessionsRoot)) {
+    if (!isInsideOrEqual(resolvedStorageRoot, resolvedSessionsRoot)) {
       throw serviceError('PLAYGROUND_ROOT_INVALID', 'Playground session root resolves outside configured storage.');
     }
     const objectRoot = join(requestedStorageRoot, objectDirectoryName);
     await this.#createLayoutDirectory(objectRoot, requestedStorageRoot, 'layout-object-entry');
     const resolvedObjectRoot = await realpath(objectRoot);
-    if (!contained(resolvedStorageRoot, resolvedObjectRoot)) {
+    if (!isInsideOrEqual(resolvedStorageRoot, resolvedObjectRoot)) {
       throw serviceError('PLAYGROUND_ROOT_INVALID', 'Playground session object root resolves outside configured storage.');
     }
     const objectRootStat = await lstat(resolvedObjectRoot);
@@ -1334,7 +1323,7 @@ export class PlaygroundService {
     await this.#createLayoutDirectory(pendingIndexRoot, indexRoot, 'layout-pending-index-entry');
     const resolvedIndexRoot = await realpath(indexRoot);
     const resolvedPendingIndexRoot = await realpath(pendingIndexRoot);
-    if (!contained(resolvedStorageRoot, resolvedIndexRoot) || !contained(resolvedIndexRoot, resolvedPendingIndexRoot)) {
+    if (!isInsideOrEqual(resolvedStorageRoot, resolvedIndexRoot) || !isInsideOrEqual(resolvedIndexRoot, resolvedPendingIndexRoot)) {
       throw serviceError('PLAYGROUND_ROOT_INVALID', 'Playground session index root resolves outside configured storage.');
     }
     this.#resolvedIndexRoot = resolvedIndexRoot;
@@ -1462,7 +1451,7 @@ export class PlaygroundService {
     }
     const resolved = await realpath(root);
     const sessionsRoot = this.#resolvedSessionsRoot;
-    if (sessionsRoot === undefined || !contained(sessionsRoot, resolved) || basename(resolved) !== sessionId) {
+    if (sessionsRoot === undefined || !isInsideOrEqual(sessionsRoot, resolved) || basename(resolved) !== sessionId) {
       throw serviceError('PLAYGROUND_ROOT_INVALID', `Playground session ${JSON.stringify(sessionId)} resolves outside configured storage.`);
     }
   }
@@ -1474,7 +1463,7 @@ export class PlaygroundService {
     }
     const resolved = await realpath(root);
     const objectRoot = this.#resolvedObjectRoot;
-    if (objectRoot === undefined || !contained(objectRoot, resolved) || basename(resolved) !== objectId) {
+    if (objectRoot === undefined || !isInsideOrEqual(objectRoot, resolved) || basename(resolved) !== objectId) {
       throw serviceError('PLAYGROUND_ROOT_INVALID', 'Playground session object resolves outside configured storage.');
     }
   }
@@ -1534,7 +1523,7 @@ export class PlaygroundService {
         || fileStat.nlink !== 2
         || pathStat.nlink !== 2
         || indexRoot === undefined
-        || !contained(indexRoot, resolved)
+        || !isInsideOrEqual(indexRoot, resolved)
         || basename(resolved) !== `${sessionId}.json`) {
         throw serviceError('PLAYGROUND_STORE_CORRUPT', `Playground session ${JSON.stringify(sessionId)} has an invalid v2 index.`);
       }
@@ -1587,7 +1576,7 @@ export class PlaygroundService {
         || pathStat.nlink !== 1
         || fileStat.dev !== pathStat.dev
         || fileStat.ino !== pathStat.ino
-        || !contained(root, resolved)
+        || !isInsideOrEqual(root, resolved)
         || basename(resolved) !== name) {
         throw serviceError('PLAYGROUND_ROOT_INVALID', `Playground ${name} must be a singly linked contained file.`);
       }
@@ -1871,7 +1860,8 @@ export class PlaygroundService {
   async #readEvents(root: string): Promise<readonly PlaygroundTraceEvent[]> {
     const contents = await this.#readMutableFile(root, eventDocumentName);
     const lines = contents.split('\n');
-    const completeLines = contents.endsWith('\n') ? lines.slice(0, -1) : lines.slice(0, -1);
+    // The final element is the empty string after a trailing newline or a torn tail append; both are dropped.
+    const completeLines = lines.slice(0, -1);
     const events: PlaygroundTraceEvent[] = [];
     for (const [index, line] of completeLines.entries()) {
       if (line.length === 0) {
@@ -1976,7 +1966,7 @@ export class PlaygroundService {
   }
 
   async #closeSubscription(record: SessionRecord, subscription: SubscriptionRecord): Promise<void> {
-    await this.#enqueue(record, async () => {
+    await record.queue.run(async () => {
       this.#deactivateSubscription(record, subscription);
     });
     await subscription.delivery;

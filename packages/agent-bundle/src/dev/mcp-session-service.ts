@@ -20,6 +20,7 @@ import type { Stream } from 'node:stream';
 
 import { createDefaultRegistry, TargetRegistry } from '../adapters/registry.ts';
 import { validateArtifact } from '../build/validate-artifact.ts';
+import { serialQueue } from '../core/async.ts';
 import { DiagnosticError } from '../core/diagnostics.ts';
 import { assertInside } from '../core/paths.ts';
 import { parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
@@ -622,7 +623,7 @@ export class McpSession {
   #closed = false;
   #connection: McpSessionConnectionState | undefined;
   #droppedThroughSequence = 0;
-  #lifecycleTail: Promise<void> = Promise.resolve();
+  readonly #lifecycle = serialQueue();
   #sequence = 0;
   #stderrOutput = '';
   #stderrOverflow = false;
@@ -714,25 +715,9 @@ export class McpSession {
   subscribeTrace(
     options: McpSessionTraceSubscriptionOptions,
     listener: McpSessionTraceListener,
-  ): McpSessionTraceSubscription;
-  subscribeTrace(
-    listener: McpSessionTraceListener,
-    options?: McpSessionTraceSubscriptionOptions,
-  ): McpSessionTraceSubscription;
-  subscribeTrace(
-    first: McpSessionTraceSubscriptionOptions | McpSessionTraceListener,
-    second?: McpSessionTraceListener | McpSessionTraceSubscriptionOptions,
   ): McpSessionTraceSubscription {
-    const listener = typeof first === 'function'
-      ? first
-      : typeof second === 'function'
-        ? second
-        : undefined;
-    const options = typeof first === 'function'
-      ? typeof second === 'function' ? undefined : second
-      : first;
     if (typeof listener !== 'function') throw new TypeError('An MCP session trace listener is required.');
-    const afterSequence = options?.afterSequence ?? 0;
+    const afterSequence = options.afterSequence ?? 0;
     this.#assertTraceCursor(afterSequence);
     const boundary = this.#traceSequence;
     const subscription: TraceSubscription = {
@@ -790,7 +775,7 @@ export class McpSession {
   }
 
   async initialize(options?: McpSessionRequestOptions): Promise<McpSessionConnectionState> {
-    return this.#operation('initialize', () => this.#withLifecycle(async () => {
+    return this.#operation('initialize', () => this.#lifecycle.run(async () => {
       this.#assertOpen();
       if (this.#connection === undefined) await this.#connect(options);
       this.#assertOpen();
@@ -800,34 +785,34 @@ export class McpSession {
 
   async listTools(options?: McpSessionRequestOptions): Promise<readonly Tool[]> {
     return this.#operation('listTools', async () => {
-      const listed = await this.#clientFor(options).listTools(undefined, requestOptions(options, this.#timeoutMs));
+      const listed = await this.#clientFor().listTools(undefined, requestOptions(options, this.#timeoutMs));
       return Object.freeze([...listed.tools]);
     });
   }
 
   async listResources(options?: McpSessionRequestOptions): Promise<readonly Resource[]> {
     return this.#operation('listResources', async () => {
-      const listed = await this.#clientFor(options).listResources(undefined, requestOptions(options, this.#timeoutMs));
+      const listed = await this.#clientFor().listResources(undefined, requestOptions(options, this.#timeoutMs));
       return Object.freeze([...listed.resources]);
     });
   }
 
   async listResourceTemplates(options?: McpSessionRequestOptions): Promise<readonly ResourceTemplateType[]> {
     return this.#operation('listResourceTemplates', async () => {
-      const listed = await this.#clientFor(options).listResourceTemplates(undefined, requestOptions(options, this.#timeoutMs));
+      const listed = await this.#clientFor().listResourceTemplates(undefined, requestOptions(options, this.#timeoutMs));
       return Object.freeze([...listed.resourceTemplates]);
     });
   }
 
   async listPrompts(options?: McpSessionRequestOptions): Promise<readonly Prompt[]> {
     return this.#operation('listPrompts', async () => {
-      const listed = await this.#clientFor(options).listPrompts(undefined, requestOptions(options, this.#timeoutMs));
+      const listed = await this.#clientFor().listPrompts(undefined, requestOptions(options, this.#timeoutMs));
       return Object.freeze([...listed.prompts]);
     });
   }
 
   async getPrompt(options: McpSessionPromptOptions): Promise<GetPromptResult> {
-    return this.#operation('getPrompt', () => this.#clientFor(options).getPrompt({
+    return this.#operation('getPrompt', () => this.#clientFor().getPrompt({
       ...(options.arguments === undefined ? {} : { arguments: options.arguments }),
       name: options.name,
     }, requestOptions(options, this.#timeoutMs)));
@@ -835,7 +820,7 @@ export class McpSession {
 
   async readResource(options: McpSessionResourceOptions): Promise<{ readonly contents: readonly unknown[] }> {
     return this.#operation('readResource', () =>
-      this.#clientFor(options).readResource({ uri: options.uri }, requestOptions(options, this.#timeoutMs)));
+      this.#clientFor().readResource({ uri: options.uri }, requestOptions(options, this.#timeoutMs)));
   }
 
   async callTool(options: McpSessionToolCallOptions): Promise<CallToolResult> {
@@ -851,7 +836,7 @@ export class McpSession {
       options.signal?.addEventListener('abort', onAbort, { once: true });
       this.#requests.set(requestId, controller);
       try {
-        const result = await this.#clientFor(options).callTool({ arguments: options.arguments, name: options.name }, {
+        const result = await this.#clientFor().callTool({ arguments: options.arguments, name: options.name }, {
           signal: controller.signal,
           timeout: requestOptions(options, this.#timeoutMs).timeout,
         });
@@ -877,7 +862,7 @@ export class McpSession {
   }
 
   async restart(options?: McpSessionRequestOptions): Promise<McpSessionConnectionState> {
-    return this.#operation('restart', () => this.#withLifecycle(async () => {
+    return this.#operation('restart', () => this.#lifecycle.run(async () => {
       this.#assertOpen();
       this.#cancelAll('MCP session restarted.');
       await this.#closeClient();
@@ -904,7 +889,7 @@ export class McpSession {
     } catch {
       // Lifecycle observers cannot prevent client, temporary-data, or epoch cleanup.
     }
-    void this.#operation('close', () => this.#withLifecycle(() => this.#close())).then(resolveClose!, rejectClose!);
+    void this.#operation('close', () => this.#lifecycle.run(() => this.#close())).then(resolveClose!, rejectClose!);
     return closePromise;
   }
 
@@ -929,20 +914,6 @@ export class McpSession {
     if (this.#closed) throw new Error('MCP session is closed.');
   }
 
-  async #withLifecycle<Result>(operation: () => Promise<Result>): Promise<Result> {
-    const previous = this.#lifecycleTail;
-    let release: (() => void) | undefined;
-    this.#lifecycleTail = new Promise<void>((resolvePromise) => {
-      release = resolvePromise;
-    });
-    await previous;
-    try {
-      return await operation();
-    } finally {
-      release?.();
-    }
-  }
-
   async #operation<Result>(operation: McpSessionOperation, run: () => Promise<Result>): Promise<Result> {
     this.#recordOperation(operation, 'started');
     try {
@@ -955,13 +926,12 @@ export class McpSession {
     }
   }
 
-  #clientFor(options?: McpSessionRequestOptions): McpClient {
+  #clientFor(): McpClient {
     this.#assertOpen();
     if (this.#connection === undefined) {
       throw new Error('MCP session must initialize before protocol operations.');
     }
     this.#throwIfStderrExceeded();
-    void options;
     return this.#client!;
   }
 
@@ -1414,10 +1384,6 @@ export class McpSessionService {
         if (typeof listener !== 'function') throw new TypeError('MCP App session close listener must be a function.');
         if (entry.closed) return Object.freeze({ closed: true, unsubscribe: () => undefined });
         entry.closeWatchers.add(listener);
-        if (entry.closed) {
-          entry.closeWatchers.delete(listener);
-          return Object.freeze({ closed: true, unsubscribe: () => undefined });
-        }
         let subscribed = true;
         return Object.freeze({
           closed: false,

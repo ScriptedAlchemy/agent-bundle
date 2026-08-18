@@ -330,7 +330,7 @@ export const SkillsPage = ({ client, status }: SkillsPageProps) => {
   }, [client, epoch?.id, target]);
 
   return <div className="skills-layout">
-    {selectedTree === undefined ? <aside className="skill-tree-pane"><p className="empty-row">{document === 'generated' ? generatedSummary : detailSummary}</p></aside> : (
+    {selectedTree === undefined ? <aside className="skill-tree-pane"><p className="empty-row">{detailSummary}</p></aside> : (
       <SkillTree label={document === 'generated' ? 'Generated skills' : 'Source skills'} onSelect={selectSkill} selectedId={selected?.id} tree={selectedTree} />
     )}
     <div className="skills-content">

@@ -30,16 +30,17 @@ import {
   type McpBrowserSessionBinding,
   type McpBrowserSessionModel,
 } from './mcp-session-model.ts';
-import type {
-  McpRouteCatalog,
-  McpRouteClient,
-  McpRouteConnection,
-  McpRouteOperation,
-  McpRouteRuntimeRestart,
-  McpRouteRuntimeSession,
-  McpRouteSession,
-  McpRouteSessionBinding,
-  McpRouteTrace,
+import {
+  McpRouteClientError,
+  type McpRouteCatalog,
+  type McpRouteClient,
+  type McpRouteConnection,
+  type McpRouteOperation,
+  type McpRouteRuntimeRestart,
+  type McpRouteRuntimeSession,
+  type McpRouteSession,
+  type McpRouteSessionBinding,
+  type McpRouteTrace,
 } from './mcp-route-client.ts';
 
 export type McpSessionControllerBinding =
@@ -150,6 +151,9 @@ const reasonMessage = (reason: unknown): string => {
     return 'Unknown error';
   }
 };
+
+const isOperationRouteFailure = (reason: unknown): boolean =>
+  reason instanceof McpRouteClientError && reason.code === 'AB8019' && reason.message === 'MCP session operation could not be completed.';
 
 const frozenCloseFailures = (
   failures: readonly McpSessionControllerCloseFailure[],
@@ -1112,7 +1116,9 @@ export class McpSessionController {
     const onclose = transport.onclose;
     const onerror = transport.onerror;
     transport.onerror = (reason) => {
+      const operationRouteFailure = isOperationRouteFailure(reason);
       onerror?.(reason);
+      if (operationRouteFailure) return;
       void this.#failSession(generation, transport === this.#transport ? this.#client : undefined, transport, 'mcp.transport.error', reason);
     };
     transport.onclose = () => {

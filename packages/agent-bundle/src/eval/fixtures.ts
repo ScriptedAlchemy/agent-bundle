@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { chmod, lstat, mkdir, readFile, realpath, writeFile } from 'node:fs/promises';
-import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 
 import fastGlob from 'fast-glob';
@@ -9,6 +9,8 @@ import fastGlob from 'fast-glob';
 import { digest } from '../core/digest.ts';
 import { EvalFixtureError } from './errors.ts';
 import type { EvalFixture } from './types.ts';
+import { isInside } from '../core/paths.ts';
+import { isErrno } from '../core/errors.ts';
 
 const runCommand = promisify(execFile);
 
@@ -47,18 +49,10 @@ const fixtureError = (
   message: string,
 ): EvalFixtureError => new EvalFixtureError(code, message);
 
-const isErrno = (error: unknown, code: string): boolean =>
-  typeof error === 'object' && error !== null && 'code' in error && error.code === code;
-
-const isContained = (root: string, candidate: string): boolean => {
-  const path = relative(root, candidate);
-  return path.length > 0 && !isAbsolute(path) && path !== '..' && !path.startsWith('..\\') && !path.startsWith('../');
-};
-
 const resolveFixtureSource = async (options: PlanEvalFixtureOptions): Promise<string> => {
   const baseDir = resolve(options.baseDir);
   const source = resolve(baseDir, options.fixture.path);
-  if (!isContained(baseDir, source)) {
+  if (!isInside(baseDir, source)) {
     throw fixtureError('EVAL_FIXTURE_SOURCE_INVALID', 'An eval fixture must live inside its suite directory.');
   }
   let metadata;
@@ -76,7 +70,7 @@ const resolveFixtureSource = async (options: PlanEvalFixtureOptions): Promise<st
       `Eval fixture ${JSON.stringify(options.fixture.path)} must be a non-symlink directory.`,
     );
   }
-  if (!isContained(await realpath(baseDir), await realpath(source))) {
+  if (!isInside(await realpath(baseDir), await realpath(source))) {
     throw fixtureError('EVAL_FIXTURE_SOURCE_INVALID', 'An eval fixture must not resolve outside its suite directory.');
   }
   return source;
@@ -98,7 +92,7 @@ export const planEvalFixture = async (options: PlanEvalFixtureOptions): Promise<
   const entries: EvalFixturePlanEntry[] = [];
   for (const match of [...new Set(matches)].sort((left, right) => left.localeCompare(right))) {
     const candidate = join(sourcePath, match);
-    if (!isContained(sourcePath, candidate)) {
+    if (!isInside(sourcePath, candidate)) {
       throw fixtureError('EVAL_FIXTURE_ENTRY_UNSUPPORTED', `Eval fixture entry ${JSON.stringify(match)} escapes the fixture.`);
     }
     const metadata = await lstat(candidate);

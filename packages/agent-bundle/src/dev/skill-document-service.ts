@@ -1,11 +1,12 @@
 import { lstat, readFile, readdir, realpath } from 'node:fs/promises';
-import { extname, isAbsolute, join, relative, resolve } from 'node:path';
+import { extname, join, resolve } from 'node:path';
 
 import { parseSkill, type SkillDocument, type SkillResource } from '../config/skill.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
 import type { NormalizedSkill, SourceProvenance } from '../core/types.ts';
 import { EpochStore } from './epoch-store.ts';
 import { ProjectService } from './project-service.ts';
+import { isInsideOrEqual } from '../core/paths.ts';
 
 export type SkillDocumentErrorCode =
   | 'SKILL_DOCUMENT_UNAVAILABLE'
@@ -105,11 +106,6 @@ const safeSegment = (value: string): boolean =>
   value.length > 0 && value !== '.' && value !== '..' &&
   !value.includes('/') && !value.includes('\\') && !value.includes('\0');
 
-const isContained = (root: string, candidate: string): boolean => {
-  const path = relative(root, candidate);
-  return path.length === 0 || (!isAbsolute(path) && path !== '..' && !path.startsWith('../') && !path.startsWith('..\\'));
-};
-
 const sourceResource = (resource: SkillResource): SkillDocumentResource => Object.freeze({
   bytes: resource.bytes,
   relativePath: resource.relativePath,
@@ -208,7 +204,7 @@ const readAllowedResource = async (
 ): Promise<ServedSkillResource> => {
   const realRoot = await assertedDirectory(root);
   const candidate = resolve(root, resource.relativePath);
-  if (!isContained(root, candidate)) {
+  if (!isInsideOrEqual(root, candidate)) {
     throw new SkillDocumentError('SKILL_RESOURCE_UNAVAILABLE', 'Skill resource escapes its document base.');
   }
   const metadata = await lstat(candidate).catch((error: unknown) => {
@@ -221,7 +217,7 @@ const readAllowedResource = async (
     throw new SkillDocumentError('SKILL_RESOURCE_UNAVAILABLE', 'Skill resource must be a regular file.');
   }
   const realCandidate = await realpath(candidate);
-  if (!isContained(realRoot, realCandidate)) {
+  if (!isInsideOrEqual(realRoot, realCandidate)) {
     throw new SkillDocumentError('SKILL_RESOURCE_UNAVAILABLE', 'Skill resource escapes its document base.');
   }
   const contentType = contentTypeFor(resource.relativePath);
@@ -356,7 +352,7 @@ export class SkillDocumentService {
         }
         throw error;
       });
-      if (!isContained(realEpochRoot, realTargetRoot)) {
+      if (!isInsideOrEqual(realEpochRoot, realTargetRoot)) {
         throw new SkillDocumentError('SKILL_TARGET_UNAVAILABLE', 'Artifact target escapes its epoch.');
       }
       return await operation(realTargetRoot);
@@ -373,7 +369,7 @@ export class SkillDocumentService {
       }
       throw error;
     });
-    if (!isContained(targetRoot, realSkillsRoot)) {
+    if (!isInsideOrEqual(targetRoot, realSkillsRoot)) {
       throw new SkillDocumentError('SKILL_DOCUMENT_UNAVAILABLE', 'Generated Skills escape their target base.');
     }
     return realSkillsRoot;
@@ -387,7 +383,7 @@ export class SkillDocumentService {
     const skillsRoot = await this.#skillsRoot(targetRoot);
     const skillRoot = join(skillsRoot, name);
     const realSkillRoot = await assertedDirectory(skillRoot);
-    if (!isContained(skillsRoot, realSkillRoot)) {
+    if (!isInsideOrEqual(skillsRoot, realSkillRoot)) {
       throw new SkillDocumentError('SKILL_DOCUMENT_UNAVAILABLE', 'Generated Skill escapes its target base.');
     }
     const document = await parseSkill(realSkillRoot, targetRoot);

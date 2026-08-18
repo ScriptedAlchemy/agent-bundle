@@ -3,7 +3,10 @@ import { constants, type Stats } from 'node:fs';
 import { lstat, mkdir, open, readFile, readdir, realpath, rename, rm, writeFile, type FileHandle } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, resolve, win32 } from 'node:path';
 
+import { serialQueue } from '../core/async.ts';
 import { stableJson } from '../core/digest.ts';
+import { isErrno } from '../core/errors.ts';
+import { isInsideOrEqual } from '../core/paths.ts';
 import { parseJsonWithoutDuplicateKeys, snapshotStrictJsonValue, type JsonValue } from '../core/strict-json.ts';
 import { defaultEvalRunsDir } from './config.ts';
 import { findCredentialConfiguration } from './credentials.ts';
@@ -204,9 +207,6 @@ const storeError = (
   message: string,
 ): EvalRunStoreError => new EvalRunStoreError(code, message);
 
-const isErrno = (error: unknown, code: string): boolean =>
-  typeof error === 'object' && error !== null && 'code' in error && error.code === code;
-
 /** Non-API test seam, unavailable unless the process explicitly runs in test mode. */
 const runEvalRunStoreDurabilityTestHook = async (
   phase: 'after-event-write' | 'before-event-open' | 'before-event-rollback' | 'before-event-write',
@@ -249,12 +249,7 @@ const requireSafeRelativePath = (value: string, label: string): string => {
   ) {
     throw storeError('EVAL_RUN_RECORD_INVALID', `${label} must be a path-safe relative path.`);
   }
-  return segments.join('/');
-};
-
-const isWithin = (root: string, candidate: string): boolean => {
-  const path = relative(root, candidate);
-  return path.length === 0 || (!path.startsWith('../') && !path.startsWith('..\\') && path !== '..' && !isAbsolute(path));
+  return value;
 };
 
 const requireRunsDir = (value: unknown): string => {
@@ -273,7 +268,7 @@ const requireRunsDir = (value: unknown): string => {
 
 const assertNoSymlinkedStorageAncestor = async (projectRoot: string, storageRoot: string): Promise<void> => {
   const relativeStorageRoot = relative(projectRoot, storageRoot);
-  if (!isWithin(projectRoot, storageRoot)) {
+  if (!isInsideOrEqual(projectRoot, storageRoot)) {
     throw storeError('EVAL_RUN_RECORD_INVALID', 'Eval run storage must remain within the configured project root.');
   }
 
@@ -301,14 +296,14 @@ const ensureStorageRoot = async (projectRoot: string, storageRoot: string): Prom
   await mkdir(storageRoot, { recursive: true });
   await assertNoSymlinkedStorageAncestor(projectRoot, storageRoot);
   const physicalStorageRoot = await realpath(storageRoot);
-  if (!isWithin(physicalProjectRoot, physicalStorageRoot)) {
+  if (!isInsideOrEqual(physicalProjectRoot, physicalStorageRoot)) {
     throw storeError('EVAL_RUN_RECORD_INVALID', 'Eval run storage resolves outside the configured project root.');
   }
   return storageRoot;
 };
 
 const ensureWritablePath = async (root: string, path: string): Promise<void> => {
-  if (!isWithin(root, path)) {
+  if (!isInsideOrEqual(root, path)) {
     throw storeError('EVAL_RUN_RECORD_INVALID', 'Eval run storage write escaped its run directory.');
   }
   try {
@@ -953,7 +948,7 @@ export class EvalRunWriter implements EvalTrialWriter {
   #eventJournalFailure: EvalRunEventWriteUncertainError | undefined;
   #record: EvalRunRecord;
   #sequence = 0;
-  #tail: Promise<void> = Promise.resolve();
+  readonly #queue = serialQueue();
 
   constructor(directory: string, record: EvalRunRecord) {
     this.#directory = directory;
@@ -1099,7 +1094,7 @@ export class EvalRunWriter implements EvalTrialWriter {
   }
 
   async #drain(): Promise<void> {
-    await this.#tail;
+    await this.#queue.run(async () => undefined);
     if (this.#closeFailures.length > 0) {
       throw new AggregateError(this.#closeFailures, `Eval run ${JSON.stringify(this.#record.id)} closed with admitted write failures.`);
     }
@@ -1114,21 +1109,15 @@ export class EvalRunWriter implements EvalTrialWriter {
 
   async #serialize<T>(operation: () => Promise<T>): Promise<T> {
     this.#assertOpen();
-    let release!: () => void;
-    const previous = this.#tail;
-    this.#tail = new Promise<void>((resolvePromise) => {
-      release = resolvePromise;
+    return this.#queue.run(async () => {
+      try {
+        if (this.#eventJournalFailure !== undefined) throw this.#eventJournalFailure;
+        return await operation();
+      } catch (error) {
+        this.#closeFailures.push(error);
+        throw error;
+      }
     });
-    await previous;
-    try {
-      if (this.#eventJournalFailure !== undefined) throw this.#eventJournalFailure;
-      return await operation();
-    } catch (error) {
-      this.#closeFailures.push(error);
-      throw error;
-    } finally {
-      release();
-    }
   }
 }
 

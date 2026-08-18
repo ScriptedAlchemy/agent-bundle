@@ -8,6 +8,7 @@ import { validateArtifact } from '../build/validate-artifact.ts';
 import { digest } from '../core/digest.ts';
 import { EvalHarnessError } from './errors.ts';
 import type { EvalArtifactBinding } from './run-store.ts';
+import { isErrno } from '../core/errors.ts';
 
 export interface PrepareEvalArtifactOptions {
   /** An explicit already-built artifact root. Nothing is ever guessed from an ambient output directory. */
@@ -32,9 +33,6 @@ const harnessError = (
   code: ConstructorParameters<typeof EvalHarnessError>[0],
   message: string,
 ): EvalHarnessError => new EvalHarnessError(code, message);
-
-const isErrno = (error: unknown, code: string): boolean =>
-  typeof error === 'object' && error !== null && 'code' in error && error.code === code;
 
 /** One digest per generated target, derived from the manifest's own recorded file hashes. */
 export const evalTargetDigests = (manifest: ArtifactManifestV2): Readonly<Record<string, string>> => {

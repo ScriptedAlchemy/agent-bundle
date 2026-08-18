@@ -115,23 +115,6 @@ export class AgentApiCloseError extends Error {
 const apiError = (code: string, message: string): Error & Readonly<{ readonly code: string }> =>
   Object.assign(new Error(message), { code });
 
-interface Settlement<T> {
-  readonly promise: Promise<T>;
-  readonly reject: (error: unknown) => void;
-  readonly resolve: (value: T) => void;
-}
-
-/** Publishes a close result before synchronous abort listeners can reenter close(). */
-const settlement = <T>(): Settlement<T> => {
-  let resolve!: (value: T) => void;
-  let reject!: (error: unknown) => void;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return Object.freeze({ promise, reject, resolve });
-};
-
 const objectSchema = (
   properties: Record<string, JsonSchemaType>,
   required: readonly string[] = [],
@@ -648,7 +631,7 @@ export class AgentApi {
     const closing = this.#closePromise;
     if (closing !== undefined) return closing;
     this.#closing = true;
-    const published = settlement<void>();
+    const published = Promise.withResolvers<void>();
     this.#closePromise = published.promise;
     void this.#close().then(published.resolve, published.reject);
     return published.promise;
@@ -722,14 +705,15 @@ export class AgentApi {
         }
       })));
     server.registerTool('hooks_list', { inputSchema: hooksListSchema }, async (arguments_, context) =>
-      this.#tool(context.mcpReq.signal, async () => this.#withEpoch(optionalStringArgument(asRecord(arguments_), 'epoch'), async (epochId) => ({
-        hooks: await this.#hooks.list({
-          epochId,
-          ...(optionalStringArgument(asRecord(arguments_), 'target') === undefined
-            ? {}
-            : { target: optionalStringArgument(asRecord(arguments_), 'target') }),
-        }),
-      }))));
+      this.#tool(context.mcpReq.signal, async () => this.#withEpoch(optionalStringArgument(asRecord(arguments_), 'epoch'), async (epochId) => {
+        const target = optionalStringArgument(asRecord(arguments_), 'target');
+        return {
+          hooks: await this.#hooks.list({
+            epochId,
+            ...(target === undefined ? {} : { target }),
+          }),
+        };
+      })));
     server.registerTool('hook_simulate', { inputSchema: hookSimulateSchema }, async (arguments_, context) =>
       this.#tool(context.mcpReq.signal, async (signal) => this.#withEpoch(optionalStringArgument(asRecord(arguments_), 'epoch'), async (epochId) => {
         const args = asRecord(arguments_);
@@ -756,7 +740,7 @@ export class AgentApi {
           ? await this.#epochs.acquireActiveEpochReference()
           : await this.#epochs.acquireEpochReference(requestedEpochId);
         const lifecycle = new AbortController();
-        const lifecycleSettled = settlement<void>();
+        const lifecycleSettled = Promise.withResolvers<void>();
         this.#evalLifecycles.set(lifecycle, lifecycleSettled.promise);
         let lifecycleCompleted = false;
         const completeLifecycle = (): void => {

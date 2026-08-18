@@ -1,8 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import { lstat, mkdir, mkdtemp, open, readFile, readdir, realpath, rename, rm, writeFile } from 'node:fs/promises';
-import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { basename, dirname, join, relative, resolve } from 'node:path';
 
+import { serialQueue } from '../core/async.ts';
 import { stableJson } from '../core/digest.ts';
+import { isErrno } from '../core/errors.ts';
+import { isInside } from '../core/paths.ts';
 import { freezeArtifactEpoch, type ArtifactEpoch } from './types.ts';
 
 export interface EpochStoreOptions {
@@ -101,9 +104,6 @@ const nativePlaygroundCatalogDirectoryName = 'native-playground';
 const stagingMarkerFileName = '.agent-bundle-epoch-stage.json';
 const stagingPrefix = '.stage-';
 
-const isErrno = (error: unknown, code: string): boolean =>
-  typeof error === 'object' && error !== null && 'code' in error && error.code === code;
-
 const pathExists = async (path: string): Promise<boolean> => {
   try {
     await lstat(path);
@@ -116,11 +116,6 @@ const pathExists = async (path: string): Promise<boolean> => {
 
 const isSafePathSegment = (value: string): boolean =>
   /^[a-z0-9][a-z0-9._-]*$/iu.test(value) && value !== '.' && value !== '..';
-
-const isContained = (root: string, candidate: string): boolean => {
-  const path = relative(root, candidate);
-  return path.length > 0 && !isAbsolute(path) && path !== '..' && !path.startsWith('..\\') && !path.startsWith('../');
-};
 
 const assertSafeEpochId = (value: string): void => {
   if (!isSafePathSegment(value)) {
@@ -281,7 +276,7 @@ export class EpochStore {
   readonly #references = new Map<string, number>();
   readonly #staging = new Map<symbol, StagingRecord>();
   readonly #stagingMarkerStorage: EpochStagingMarkerStorage;
-  #transitionTail: Promise<void> = Promise.resolve();
+  readonly #transitions = serialQueue();
 
   constructor(options: EpochStoreOptions) {
     const agentBundlePath = join(resolve(options.projectRoot), '.agent-bundle');
@@ -294,7 +289,7 @@ export class EpochStore {
   }
 
   async createStagingEpoch(options: CreateStagingEpochOptions): Promise<EpochStaging> {
-    return this.#withTransition(async () => {
+    return this.#transitions.run(async () => {
       assertSafeEpochId(options.epoch.id);
       const epoch = assertEpoch(options.epoch);
       const targets = this.#assertTargetSet(epoch, options.targets);
@@ -322,7 +317,7 @@ export class EpochStore {
   }
 
   async acquireEpochReference(epochId: string): Promise<EpochReference> {
-    return this.#withTransition(async () => {
+    return this.#transitions.run(async () => {
       assertSafeEpochId(epochId);
       await this.#assertEpochDirectory(epochId);
       return this.#acquireEpochReference(await this.#readEpochMetadata(epochId).then((metadata) => metadata.epoch));
@@ -331,7 +326,7 @@ export class EpochStore {
 
   /** Resolves and leases the current epoch without allowing a publish between those operations. */
   async acquireActiveEpochReference(): Promise<EpochReference> {
-    return this.#withTransition(async () => {
+    return this.#transitions.run(async () => {
       const epoch = await this.#readActiveEpoch();
       if (epoch === undefined) {
         throw new EpochStoreError('EPOCH_NOT_FOUND', 'No active artifact epoch is available.');
@@ -342,13 +337,13 @@ export class EpochStore {
 
   /** Returns detached safe epoch identities, ordered newest first. */
   async listEpochs(): Promise<readonly ArtifactEpoch[]> {
-    return this.#withTransition(async () => Object.freeze((await this.#readAllEpochMetadata())
+    return this.#transitions.run(async () => Object.freeze((await this.#readAllEpochMetadata())
       .map((metadata) => freezeArtifactEpoch(metadata.epoch))
       .sort(compareNewestFirst)));
   }
 
   async releaseEpochReference(epochId: string): Promise<void> {
-    await this.#withTransition(async () => {
+    await this.#transitions.run(async () => {
       const count = this.#references.get(epochId) ?? 0;
       if (count === 1) {
         this.#references.delete(epochId);
@@ -360,15 +355,15 @@ export class EpochStore {
   }
 
   async readActiveEpoch(): Promise<ArtifactEpoch | undefined> {
-    return this.#withTransition(async () => this.#readActiveEpoch());
+    return this.#transitions.run(async () => this.#readActiveEpoch());
   }
 
   async cleanup(): Promise<void> {
-    await this.#withTransition(async () => this.#cleanup());
+    await this.#transitions.run(async () => this.#cleanup());
   }
 
   async recoverStaging(): Promise<void> {
-    await this.#withTransition(async () => {
+    await this.#transitions.run(async () => {
       let entries;
       try {
         entries = await readdir(this.#epochsPath, { withFileTypes: true });
@@ -469,7 +464,7 @@ export class EpochStore {
   }
 
   async #closeStaging(token: symbol): Promise<void> {
-    await this.#withTransition(async () => {
+    await this.#transitions.run(async () => {
       const record = this.#staging.get(token);
       if (record === undefined) return;
       this.#staging.delete(token);
@@ -482,7 +477,7 @@ export class EpochStore {
     validate: StagingValidator,
     beforeActivate: EpochPreActivation | undefined,
   ): Promise<ArtifactEpoch> {
-    return this.#withTransition(async () => {
+    return this.#transitions.run(async () => {
       const record = this.#staging.get(token);
       if (record === undefined) {
         throw new EpochStoreError('EPOCH_STAGING_CLOSED', 'Epoch staging is already closed.');
@@ -584,7 +579,7 @@ export class EpochStore {
       realpath(this.#epochsPath),
       realpath(record.root),
     ]);
-    if (!isContained(epochsRoot, stagingRoot)) {
+    if (!isInside(epochsRoot, stagingRoot)) {
       throw new EpochStoreError('EPOCH_STAGING_INVALID', 'The staging root escapes the epoch store.');
     }
 
@@ -608,7 +603,7 @@ export class EpochStore {
           `Staged epoch target ${JSON.stringify(target)} must be a contained non-symlink directory.`,
         );
       }
-      if (!isContained(stagingRoot, await realpath(targetPath))) {
+      if (!isInside(stagingRoot, await realpath(targetPath))) {
         throw new EpochStoreError(
           'EPOCH_STAGING_INVALID',
           `Staged epoch target ${JSON.stringify(target)} escapes the staging root.`,
@@ -626,7 +621,7 @@ export class EpochStore {
       }
       throw error;
     }
-    if (!manifestMetadata.isFile() || manifestMetadata.isSymbolicLink() || !isContained(stagingRoot, await realpath(manifestPath))) {
+    if (!manifestMetadata.isFile() || manifestMetadata.isSymbolicLink() || !isInside(stagingRoot, await realpath(manifestPath))) {
       throw new EpochStoreError('EPOCH_MANIFEST_INVALID', 'Staged epoch manifest must be a contained non-symlink file.');
     }
   }
@@ -658,7 +653,7 @@ export class EpochStore {
       realpath(this.#epochsPath),
       realpath(epochRoot),
     ]);
-    if (!isContained(epochsRoot, activeEpochRoot)) {
+    if (!isInside(epochsRoot, activeEpochRoot)) {
       throw new EpochStoreError('EPOCH_METADATA_INVALID', 'Active epoch directory escapes the epoch store.');
     }
 
@@ -682,7 +677,7 @@ export class EpochStore {
           `Active epoch target ${JSON.stringify(target)} must be a non-symlink directory.`,
         );
       }
-      if (!isContained(activeEpochRoot, await realpath(targetPath))) {
+      if (!isInside(activeEpochRoot, await realpath(targetPath))) {
         throw new EpochStoreError(
           'EPOCH_METADATA_INVALID',
           `Active epoch target ${JSON.stringify(target)} escapes the epoch directory.`,
@@ -709,7 +704,7 @@ export class EpochStore {
     if (
       !manifestMetadata.isFile() ||
       manifestMetadata.isSymbolicLink() ||
-      !isContained(activeEpochRoot, await realpath(manifestPath))
+      !isInside(activeEpochRoot, await realpath(manifestPath))
     ) {
       throw new EpochStoreError('EPOCH_METADATA_INVALID', 'Active epoch manifest must be a contained non-symlink file.');
     }
@@ -735,7 +730,7 @@ export class EpochStore {
   #manifestRelativePath(epoch: ArtifactEpoch): string {
     const epochRoot = join(this.#epochsPath, epoch.id);
     const manifestPath = resolve(epoch.manifestPath);
-    if (!isContained(epochRoot, manifestPath)) {
+    if (!isInside(epochRoot, manifestPath)) {
       throw new EpochStoreError(
         'EPOCH_MANIFEST_INVALID',
         'Artifact epoch manifestPath must be contained by its final epoch directory.',
@@ -813,17 +808,4 @@ export class EpochStore {
       })));
   }
 
-  async #withTransition<T>(operation: () => Promise<T>): Promise<T> {
-    let release!: () => void;
-    const previous = this.#transitionTail;
-    this.#transitionTail = new Promise<void>((resolvePromise) => {
-      release = resolvePromise;
-    });
-    await previous;
-    try {
-      return await operation();
-    } finally {
-      release();
-    }
-  }
 }

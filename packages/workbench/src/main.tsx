@@ -922,15 +922,7 @@ const Workbench = () => {
       handoffCoordinator.current?.cancel();
       mcpPreviewDeparture.current?.cancel();
     }
-    const hash = next === 'artifacts' ? '#artifacts'
-      : next === 'comparisons' ? '#comparisons'
-        : next === 'evals' ? '#evals'
-          : next === 'hooks' ? '#hooks'
-            : next === 'logs' ? '#logs'
-              : next === 'mcp' ? '#mcp'
-                : next === 'playground' ? '#playground'
-                  : next === 'runtime' ? '#runtime'
-                    : next === 'skills' ? '#skills' : '#overview';
+    const hash = `#${next}`;
     if (window.location.hash !== hash) window.history.pushState(undefined, '', hash);
     if (next === 'mcp') setMcpPresentation('playground');
     setPage(next);

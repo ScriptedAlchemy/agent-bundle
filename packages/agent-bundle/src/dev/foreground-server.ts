@@ -153,23 +153,6 @@ type SkillRoute =
   | Readonly<{ readonly epochId: string; readonly kind: 'generated-document'; readonly skillId: string; readonly target: string }>
   | Readonly<{ readonly epochId: string; readonly kind: 'generated-resource'; readonly resource: readonly string[]; readonly skillId: string; readonly target: string }>;
 
-interface Settlement<T> {
-  readonly promise: Promise<T>;
-  readonly reject: (error: unknown) => void;
-  readonly resolve: (value: T) => void;
-}
-
-/** Publishes a result a caller can hand out before the work that settles it begins. */
-const settlement = <T>(): Settlement<T> => {
-  let resolve!: (value: T) => void;
-  let reject!: (error: unknown) => void;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return Object.freeze({ promise, reject, resolve });
-};
-
 const diagnostic = (code: string, message: string, status: number): RequestDiagnostic => ({ code, message, status });
 
 const requestError = (value: RequestDiagnostic): RequestDiagnostic & Error => Object.assign(
@@ -234,7 +217,7 @@ const readBody = async (request: IncomingMessage): Promise<string> => new Promis
       tooLarge = true;
       return;
     }
-    if (!tooLarge) chunks.push(chunk);
+    chunks.push(chunk);
   });
   request.once('end', () => {
     if (tooLarge) {
@@ -561,7 +544,7 @@ export class ForegroundServer {
     const closing = this.#closePromise;
     if (closing !== undefined) return closing;
     this.#closing = true;
-    const published = settlement<void>();
+    const published = Promise.withResolvers<void>();
     this.#closePromise = published.promise;
     try {
       this.#close().then(published.resolve, published.reject);
@@ -624,7 +607,7 @@ export class ForegroundServer {
   #releaseResources(): Promise<readonly ForegroundServerCloseFailure[]> {
     const releasing = this.#releasePromise;
     if (releasing !== undefined) return releasing;
-    const published = settlement<readonly ForegroundServerCloseFailure[]>();
+    const published = Promise.withResolvers<readonly ForegroundServerCloseFailure[]>();
     this.#releasePromise = published.promise;
     try {
       this.#release().then(published.resolve, published.reject);

@@ -20,6 +20,7 @@ import type { PlaygroundEventInput, PlaygroundJsonObject } from '../services/pla
 import { safeDevWireText } from './dev-log-service.ts';
 import type { ArtifactEpoch } from './types.ts';
 import { workspaceDiff, type WorkspaceDiff } from '../eval/workspace-diff.ts';
+import { isErrno } from '../core/errors.ts';
 
 export type NativePlaygroundHost = 'claude' | 'codex';
 
@@ -210,9 +211,6 @@ const sha256 = /^[a-f0-9]{64}$/u;
 const safeEpochSegment = /^[a-z0-9][a-z0-9._-]*$/iu;
 const safeIdentifier = /^[a-z0-9][a-z0-9._-]*$/iu;
 const catalogOpenFlags = constants.O_RDONLY | (process.platform === 'win32' ? 0 : constants.O_NOFOLLOW | constants.O_NONBLOCK);
-
-const isErrno = (error: unknown, code: string): boolean =>
-  typeof error === 'object' && error !== null && 'code' in error && error.code === code;
 
 const containedPath = (root: string, candidate: string, allowRoot = false): boolean => {
   const path = relative(resolve(root), resolve(candidate));
@@ -716,7 +714,7 @@ export class NativePlaygroundService {
           fixturePlan: prepared.fixturePlan,
           host: prepared.host,
           ...(this.#native?.codexRun === undefined ? {} : { run: this.#native.codexRun }),
-          onCompleted: async (result) => onCompleted(result),
+          onCompleted,
           onProgress,
           signal,
           suiteDir: prepared.suiteDir,
