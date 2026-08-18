@@ -14,13 +14,14 @@ import { planEvalFixture, type EvalFixturePlan } from '../eval/fixtures.ts';
 import { createEvalHarness, runDeterministicTrial, type EvalHarness } from '../eval/harness.ts';
 import {
   createEvalRun,
-  type EvalArtifactBinding,
-  type EvalRunRecord,
-  type EvalTrialRecord,
   listEvalRuns,
   mintRunId,
   readEvalRun,
+  readEvalRunEvents,
   readEvalTrials,
+  type EvalArtifactBinding,
+  type EvalRunRecord,
+  type EvalTrialRecord,
 } from '../eval/run-store.ts';
 import type { EvalAssertionKind, EvalCase, EvalInvocation } from '../eval/types.ts';
 
@@ -245,6 +246,7 @@ export class EvalService {
     const config = await this.#config();
     const directory = this.#runDirectory(config, runId);
     const run = await readEvalRun(directory);
+    await readEvalRunEvents(directory);
     const trials = await readEvalTrials(directory);
     return Object.freeze({
       aggregates: aggregateEvalTrials(trials),

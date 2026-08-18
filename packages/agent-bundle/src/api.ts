@@ -33,6 +33,8 @@ import { DiagnosticError, type Diagnostic } from './core/diagnostics.ts';
 export type { Diagnostic, DiagnosticSeverity } from './core/diagnostics.ts';
 import type { ProjectContext } from './core/project-context.ts';
 import type { NormalizedPlugin } from './core/types.ts';
+import type { EvalComparison } from './eval/compare.ts';
+import { EvalRunStoreError } from './eval/errors.ts';
 import {
   EvalService,
   EvalServiceError,
@@ -41,6 +43,7 @@ import {
   type EvalServiceErrorCode,
 } from './dev/eval-service.ts';
 export { EvalService, EvalServiceError } from './dev/eval-service.ts';
+export type { EvalComparison } from './eval/compare.ts';
 export type {
   EvalAssertionSummary,
   EvalCaseSummary,
@@ -223,6 +226,11 @@ export interface RunEvalsOptions extends ArtifactOperationOptions, EvalRunSelect
   readonly harness?: string;
   readonly signal?: AbortSignal;
   readonly trials?: number;
+}
+
+export interface CompareEvalsOptions extends ProjectOptions {
+  readonly baseRunId: string;
+  readonly candidateRunId: string;
 }
 
 export interface ListHooksOptions extends ArtifactOperationOptions {
@@ -431,7 +439,22 @@ const evalDiagnostic = (error: EvalServiceError): Diagnostic => {
   });
 };
 
-const evalService = (options: RunEvalsOptions): EvalService => new EvalService({
+const evalRunStoreDiagnostic = (error: EvalRunStoreError): Diagnostic | undefined => {
+  if (error.code === 'EVAL_RUN_NOT_FOUND') {
+    return evalDiagnostic(new EvalServiceError('EVAL_RUN_NOT_FOUND', error.message));
+  }
+  if (error.code === 'EVAL_RUN_CORRUPT' || error.code === 'EVAL_RUN_RECORD_INVALID') {
+    return Object.freeze({
+      code: 'AB9007',
+      message: 'A persisted eval run is corrupt and cannot be compared.',
+      recovery: 'Repair or remove the corrupt persisted eval run, then compare two completed runs.',
+      severity: 'error',
+    });
+  }
+  return undefined;
+};
+
+const evalService = (options: ProjectOptions): EvalService => new EvalService({
   ...(options.configPath === undefined ? {} : { configPath: options.configPath }),
   ...(options.mode === undefined ? {} : { mode: options.mode }),
   projectRoot: resolve(options.root),
@@ -453,6 +476,25 @@ export const runEvals = async (options: RunEvalsOptions): Promise<EvalRunResult>
     });
   } catch (error) {
     if (error instanceof EvalServiceError) throw new DiagnosticError([evalDiagnostic(error)]);
+    throw error;
+  }
+};
+
+/** Compares two persisted eval runs through the same service the CLI and workbench use. */
+export const compareEvals = async (options: CompareEvalsOptions): Promise<EvalComparison> => {
+  log(options.logger, 'eval.compare', {
+    baseRunId: options.baseRunId,
+    candidateRunId: options.candidateRunId,
+    root: resolve(options.root),
+  });
+  try {
+    return await evalService(options).compare(options.baseRunId, options.candidateRunId);
+  } catch (error) {
+    if (error instanceof EvalServiceError) throw new DiagnosticError([evalDiagnostic(error)]);
+    if (error instanceof EvalRunStoreError) {
+      const diagnostic = evalRunStoreDiagnostic(error);
+      if (diagnostic !== undefined) throw new DiagnosticError([diagnostic]);
+    }
     throw error;
   }
 };
