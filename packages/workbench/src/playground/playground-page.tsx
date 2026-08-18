@@ -29,6 +29,23 @@ export interface PlaygroundTraceViewProps {
   readonly view: PlaygroundView;
 }
 
+type PlaygroundScriptCatalogEntry = Pick<ArtifactInspectionScript, 'id' | 'name' | 'target'>;
+
+export interface PlaygroundScriptCatalog {
+  readonly epochId: string;
+  readonly scripts: readonly PlaygroundScriptCatalogEntry[];
+}
+
+const noPlaygroundScripts: readonly PlaygroundScriptCatalogEntry[] = Object.freeze([]);
+
+/** An inspection catalog never outlives the immutable epoch that supplied it. */
+export const playgroundScriptsForEpoch = (
+  catalog: PlaygroundScriptCatalog | undefined,
+  epochId: string | undefined,
+): readonly PlaygroundScriptCatalogEntry[] => catalog !== undefined && catalog.epochId === epochId
+  ? catalog.scripts
+  : noPlaygroundScripts;
+
 export interface PlaygroundPageProps {
   readonly client: PlaygroundClient;
   /** The active epoch is only used for admitting a new run; persisted sessions pin their own epoch. */
@@ -36,7 +53,7 @@ export interface PlaygroundPageProps {
   /** The shell retains the run/session identity across navigation and project rebuilds. */
   readonly onRunChange: (run: PlaygroundRun | undefined) => void;
   readonly run: PlaygroundRun | undefined;
-  readonly scripts: readonly Pick<ArtifactInspectionScript, 'id' | 'name' | 'target'>[];
+  readonly scripts: readonly PlaygroundScriptCatalogEntry[];
   readonly targets: readonly PlaygroundTarget[];
 }
 
@@ -75,16 +92,16 @@ const reconnectDelayMilliseconds = 100;
 
 /** The server catalog is authoritative; this only limits the desktop picker to the selected target. */
 export const playgroundScriptsForTarget = (
-  scripts: readonly Pick<ArtifactInspectionScript, 'id' | 'name' | 'target'>[],
+  scripts: readonly PlaygroundScriptCatalogEntry[],
   target: string,
-): readonly Pick<ArtifactInspectionScript, 'id' | 'name' | 'target'>[] => Object.freeze(
+): readonly PlaygroundScriptCatalogEntry[] => Object.freeze(
   scripts.filter((script) => script.target === target).sort((left, right) => left.id.localeCompare(right.id)),
 );
 
 /** A changed target or rebuilt catalog must never submit a stale server script id. */
 export const playgroundSelectedScriptId = (
   scriptId: string,
-  scripts: readonly Pick<ArtifactInspectionScript, 'id' | 'name' | 'target'>[],
+  scripts: readonly PlaygroundScriptCatalogEntry[],
   target: string,
 ): string => scripts.some((script) => script.id === scriptId && script.target === target) ? scriptId : '';
 

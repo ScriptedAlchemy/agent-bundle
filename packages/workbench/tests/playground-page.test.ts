@@ -1,5 +1,7 @@
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { expect, it } from '@rstest/core';
 
 import type { PlaygroundReplay, PlaygroundSession, PlaygroundTraceEvent } from '../../agent-bundle/src/services/playground-service.ts';
@@ -90,6 +92,28 @@ it('clears a stale script selection when its target catalog changes', async () =
   expect(playgroundSelectedScriptId('script:review', scripts, 'portable')).toBe('script:review');
   expect(playgroundSelectedScriptId('script:review', scripts, 'claude')).toBe('');
   expect(playgroundSelectedScriptId('script:missing', scripts, 'portable')).toBe('');
+});
+
+it('fails closed while inspection of a replacement epoch has not published its script catalog', async () => {
+  const { playgroundScriptsForEpoch } = await import('../src/playground/playground-page.tsx');
+  const catalog = {
+    epochId: 'epoch-previous',
+    scripts: [{ id: 'script:review', name: 'review', target: 'portable' }],
+  };
+
+  expect(playgroundScriptsForEpoch(catalog, 'epoch-previous')).toEqual(catalog.scripts);
+  expect(playgroundScriptsForEpoch(catalog, 'epoch-next')).toEqual([]);
+  expect(playgroundScriptsForEpoch(undefined, 'epoch-next')).toEqual([]);
+});
+
+it('constrains raw trace evidence so one capped output line cannot widen the desktop page', async () => {
+  const css = await readFile(join(process.cwd(), 'packages/workbench/src/playground/playground-page.css'), 'utf8');
+
+  expect(css).toMatch(/\.playground-json \{[^}]*box-sizing: border-box;/u);
+  expect(css).toContain('max-height: 22rem;');
+  expect(css).toContain('max-width: min(36rem, calc(100vw - 120px));');
+  expect(css).toContain('overflow: auto;');
+  expect(css).toContain('overflow-wrap: anywhere;');
 });
 
 it('renders the pinned server epoch and persisted event references, not a rebuilt current epoch', () => {

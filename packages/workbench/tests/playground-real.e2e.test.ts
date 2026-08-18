@@ -50,6 +50,7 @@ const writePlaygroundProject = async (root: string): Promise<void> => {
       'process.exitCode = 17;',
       '',
     ].join('\n')),
+    writeFile(join(root, 'src', 'large-output.ts'), "process.stdout.write('x'.repeat(64 * 1024));\n"),
     writeFile(join(root, 'src', 'server.ts'), [
       "import { McpServer } from '@modelcontextprotocol/server';",
       "import { StdioServerTransport } from '@modelcontextprotocol/server/stdio';",
@@ -70,7 +71,7 @@ const writePlaygroundProject = async (root: string): Promise<void> => {
       "  hooks: { sessionStart: './src/hooks/session-start.ts' },",
       "  mcp: { servers: { fixture: { entry: './src/server.ts' } } },",
       "  plugin: { name: 'playground-real-fixture', version: '1.0.0' },",
-      "  scripts: { review: './src/review.ts' },",
+      "  scripts: { large: './src/large-output.ts', review: './src/review.ts' },",
       "  skills: ['skills/review'],",
       "  targets: ['claude'],",
       '});',
@@ -180,6 +181,13 @@ e2e('executes server-owned Playground operations with pinned traces, export, pro
     expect(scriptTrace).toContain('17');
     await scriptStarted;
 
+    await page.locator('#playground-script-id').selectOption('script:large');
+    const largeStarted = waitForRun();
+    await page.getByRole('button', { name: 'Run script' }).click();
+    await expect(page.locator('.playground-trace .playground-json').last()).toContainText('x'.repeat(64), { timeout: browserTimeout });
+    await largeStarted;
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+
     await page.getByRole('button', { name: 'Export trace' }).click();
     await expect(page.getByRole('heading', { name: /Exported trace/u })).toBeVisible({ timeout: browserTimeout });
     const firstReference = page.getByRole('checkbox').first();
@@ -188,8 +196,9 @@ e2e('executes server-owned Playground operations with pinned traces, export, pro
     await page.getByRole('button', { name: 'Promote to draft eval case' }).click();
     await expect(page.getByRole('heading', { name: /Draft eval case/u })).toBeVisible({ timeout: browserTimeout });
 
-    expect(runBodies).toHaveLength(5);
+    expect(runBodies).toHaveLength(6);
     expect(runBodies).toContainEqual({ operation: 'script.run', scriptId: 'script:review', target: 'claude' });
+    expect(runBodies).toContainEqual({ operation: 'script.run', scriptId: 'script:large', target: 'claude' });
     for (const body of runBodies) {
       expect(body).not.toHaveProperty('epochId');
       expect(body).not.toHaveProperty('path');

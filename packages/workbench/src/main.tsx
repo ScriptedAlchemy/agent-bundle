@@ -6,7 +6,7 @@ import type { Diagnostic } from '../../agent-bundle/src/core/diagnostics.ts';
 import { MCP_APP_PROFILE_DESCRIPTORS, type McpAppProfileId } from '../../agent-bundle/src/dev/mcp-app-profile-descriptors.ts';
 import type { McpAppPreviewAppsSnapshot } from '../../agent-bundle/src/dev/mcp-app-runtime-preview-service.ts';
 import type { PlaygroundRun } from '../../agent-bundle/src/dev/playground-contract.ts';
-import type { ArtifactInspectionScript, ProjectStatus } from '../../agent-bundle/src/dev/types.ts';
+import type { ProjectStatus } from '../../agent-bundle/src/dev/types.ts';
 
 import { ArtifactClient } from './artifacts/artifact-client.ts';
 import { ComparisonClient } from './comparisons/comparison-client.ts';
@@ -43,7 +43,11 @@ import { mcpProtocolTraceDownload, type McpDownload } from './mcp/mcp-protocol-t
 import { LogClient } from './logs/log-client.ts';
 import { LogsPage } from './logs/logs-page.tsx';
 import { PlaygroundClient } from './playground/playground-client.ts';
-import { PlaygroundPage } from './playground/playground-page.tsx';
+import {
+  PlaygroundPage,
+  playgroundScriptsForEpoch,
+  type PlaygroundScriptCatalog,
+} from './playground/playground-page.tsx';
 import { overviewFor } from './overview-model.ts';
 import { ProjectClient } from './project-client.ts';
 import { SkillClient } from './skill-client.ts';
@@ -604,18 +608,20 @@ const PlaygroundScreen = ({ artifactClient, connectionError, onNavigate, onRunCh
   readonly status: ProjectStatus;
 }) => {
   const epoch = activeEpochFor(status);
-  const [scripts, setScripts] = useState<readonly ArtifactInspectionScript[]>([]);
+  const [scriptCatalog, setScriptCatalog] = useState<PlaygroundScriptCatalog>();
+  const scripts = playgroundScriptsForEpoch(scriptCatalog, epoch?.id);
 
   useEffect(() => {
     let current = true;
     if (epoch === undefined) {
-      setScripts([]);
+      setScriptCatalog(undefined);
       return () => { current = false; };
     }
+    setScriptCatalog({ epochId: epoch.id, scripts: [] });
     void artifactClient.inspect(epoch.id).then((inspection) => {
-      if (current) setScripts(inspection.runtime.scripts);
+      if (current) setScriptCatalog({ epochId: epoch.id, scripts: inspection.runtime.scripts });
     }).catch(() => {
-      if (current) setScripts([]);
+      if (current) setScriptCatalog({ epochId: epoch.id, scripts: [] });
     });
     return () => { current = false; };
   }, [artifactClient, epoch?.id]);

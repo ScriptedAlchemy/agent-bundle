@@ -6,7 +6,10 @@ import {
   type PlaygroundDurableTraceStore,
   type PlaygroundEpochAuthority,
 } from '../src/dev/playground-orchestration-service.ts';
-import { ScriptPlaygroundFailure } from '../src/dev/script-playground-service.ts';
+import {
+  ScriptPlaygroundAbortError,
+  ScriptPlaygroundFailure,
+} from '../src/dev/script-playground-service.ts';
 import type {
   DraftEvalCase,
   PlaygroundDurableOutcome,
@@ -476,6 +479,22 @@ it('records the selected script id and its nonzero exit as durable failed script
   }));
 });
 
+it('records a clean zero-exit script as passed evidence', async () => {
+  const trace = new RecordingTraceStore();
+  const service = new PlaygroundOrchestrationService({
+    coordinator: { status: currentStatus }, createRunId: () => 'run-server-owned', createSessionId: () => 'session-server-owned',
+    epochStore: epochAuthority([]), scripts: { run: async () => Object.freeze({ exitCode: 0, script: 'review', stderr: '', stdout: 'reviewed' }) }, trace,
+  });
+
+  await service.run({ operation: 'script.run', scriptId: 'script:review', target: 'codex' } as unknown as Parameters<typeof service.run>[0]);
+  await eventually(() => expect(trace.finalized).toEqual({ status: 'passed' }));
+  expect(trace.appended).toContainEqual(expect.objectContaining({
+    kind: 'script.completed',
+    raw: { result: { exitCode: 0, script: 'review', stderr: '', stdout: 'reviewed' }, targetDigest: 'target-sha256' },
+    source: 'script',
+  }));
+});
+
 it('persists stable admitted script infrastructure failures with safe partial output', async () => {
   for (const code of ['timeout', 'output-limit', 'interpreter-unavailable'] as const) {
     const trace = new RecordingTraceStore();
@@ -500,6 +519,74 @@ it('persists stable admitted script infrastructure failures with safe partial ou
       source: 'diagnostics',
     }));
   }
+});
+
+it('persists script lifecycle cleanup evidence without replacing the primary outcome', async () => {
+  const successfulTrace = new RecordingTraceStore();
+  const successful = new PlaygroundOrchestrationService({
+    coordinator: { status: currentStatus }, createRunId: () => 'run-server-owned', createSessionId: () => 'session-server-owned',
+    epochStore: epochAuthority([]),
+    scripts: { run: async () => Object.freeze({
+      cleanupFailures: Object.freeze([{ code: 'workspace-release-failed' as const }]),
+      exitCode: 0,
+      script: 'review',
+      stderr: '',
+      stdout: 'completed',
+    }) },
+    trace: successfulTrace,
+  });
+  await successful.run({ operation: 'script.run', scriptId: 'script:review', target: 'codex' } as unknown as Parameters<typeof successful.run>[0]);
+  await eventually(() => expect(successfulTrace.finalized).toEqual({ status: 'failed' }));
+  expect(successfulTrace.appended).toContainEqual(expect.objectContaining({
+    kind: 'script.completed',
+    raw: expect.objectContaining({ result: expect.objectContaining({
+      cleanupFailures: [{ code: 'workspace-release-failed' }],
+      exitCode: 0,
+    }) }),
+  }));
+
+  const failedTrace = new RecordingTraceStore();
+  const timedOut = new PlaygroundOrchestrationService({
+    coordinator: { status: currentStatus }, createRunId: () => 'run-server-owned', createSessionId: () => 'session-server-owned',
+    epochStore: epochAuthority([]),
+    scripts: { run: async () => {
+      throw new ScriptPlaygroundFailure(
+        'timeout',
+        'Script execution timed out.',
+        { stderr: '', stdout: '' },
+        [{ code: 'workspace-release-failed' }],
+      );
+    } },
+    trace: failedTrace,
+  });
+  await timedOut.run({ operation: 'script.run', scriptId: 'script:review', target: 'codex' } as unknown as Parameters<typeof timedOut.run>[0]);
+  await eventually(() => expect(failedTrace.finalized).toEqual({ status: 'failed' }));
+  expect(failedTrace.appended).toContainEqual(expect.objectContaining({
+    kind: 'operation.failed',
+    raw: {
+      cleanupFailures: [{ code: 'workspace-release-failed' }],
+      failure: { code: 'timeout', stderr: '', stdout: '' },
+      operation: 'script.run',
+    },
+  }));
+
+  const cancelledTrace = new RecordingTraceStore();
+  const cancelled = new PlaygroundOrchestrationService({
+    coordinator: { status: currentStatus }, createRunId: () => 'run-server-owned', createSessionId: () => 'session-server-owned',
+    epochStore: epochAuthority([]),
+    scripts: { run: async ({ signal }) => new Promise((_, reject) => {
+      signal?.addEventListener('abort', () => reject(new ScriptPlaygroundAbortError([
+        { code: 'workspace-release-failed' },
+      ])), { once: true });
+    }) },
+    trace: cancelledTrace,
+  });
+  const admitted = await cancelled.run({ operation: 'script.run', scriptId: 'script:review', target: 'codex' } as unknown as Parameters<typeof cancelled.run>[0]);
+  await cancelled.cancel(admitted.id);
+  expect(cancelledTrace.appended).toContainEqual(expect.objectContaining({
+    kind: 'operation.cancelled',
+    raw: { cleanupFailures: [{ code: 'workspace-release-failed' }], operation: 'script.run' },
+  }));
 });
 
 it('promotes only persisted raw event references and closes admission before draining active work', async () => {
