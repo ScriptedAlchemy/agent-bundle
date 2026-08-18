@@ -65,16 +65,29 @@ it('sorts, deduplicates, and keeps authored include patterns and runs directory'
   expect(normalized.runsDir).toBe('.agent-bundle/eval-runs');
 });
 
-it('reports model-backed grader configuration as an explicit unsupported diagnostic', () => {
+it('normalizes the exact configured Claude semantic grader without a diagnostic', () => {
   const normalized = normalizeEvalConfig({
     semanticGrader: { harness: 'claude', model: 'claude-sonnet-4-5' },
   });
 
-  expect(normalized.diagnostics).toHaveLength(1);
-  expect(normalized.diagnostics[0]?.code).toBe('AB9000');
-  expect(normalized.diagnostics[0]?.severity).toBe('warning');
-  expect(normalized.diagnostics[0]?.message).toMatch(/semantic grader/iu);
-  expect('semanticGrader' in normalized).toBe(false);
+  expect(normalized.diagnostics).toEqual([]);
+  expect(normalized.semanticGrader).toEqual({ harness: 'claude', model: 'claude-sonnet-4-5' });
+  expect(Object.isFrozen(normalized.semanticGrader)).toBe(true);
+});
+
+it('rejects every semantic grader shape other than a pinned Claude model', () => {
+  for (const semanticGrader of [
+    undefined,
+    null,
+    {},
+    { harness: 'claude' },
+    { harness: 'claude', model: '' },
+    { harness: 'claude', model: '   ' },
+    { harness: 'codex', model: 'gpt-5-codex' },
+    { harness: 'claude', model: 'claude-sonnet-4-5', unexpected: true },
+  ]) {
+    expect(() => normalizeEvalConfig({ semanticGrader })).toThrow(EvalConfigError);
+  }
 });
 
 it('rejects credential fields, unknown keys, and escaping run directories', () => {

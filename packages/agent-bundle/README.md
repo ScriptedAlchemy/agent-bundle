@@ -48,6 +48,20 @@ silently passed. Fewer than three trials is reported as smoke evidence rather th
 number, and comparison rows are only aligned when case, fixture, grader versions, harness, host CLI
 version, invocation, and model all match.
 
+An optional semantic grader is configured with one pinned Claude model:
+
+```ts
+evals: {
+  semanticGrader: { harness: 'claude', model: 'claude-sonnet-4-5' },
+}
+```
+
+It runs only with `agent-bundle eval --harness claude` for Claude-pinned cases. After the primary
+trace is usable and deterministic graders finish, Agent Bundle makes one server-owned, plugin-free
+Claude grading call. Its fixed result id is `claude-semantic`; its request, raw stream, stderr, and
+versioned provenance are retained with the trial artifacts. A malformed or failed semantic grader
+leaves the trial inconclusive rather than becoming plugin evidence.
+
 ## Authentication
 
 This package never accepts, requests, injects, or persists a model-provider API key, and there is no
@@ -65,8 +79,8 @@ variables are removed from the child environment before that CLI is launched.
   and is never reported as `observed`.
 - Comparison facets that a run did not record — grader versions, host CLI version, invocation — are
   labeled unverified rather than assumed aligned.
-- Semantic (model-backed) grading and model-backed eval configuration are refused with an explicit
-  diagnostic rather than silently skipped.
+- Semantic grading requires a native Claude harness and a signed-in Claude Code session; deterministic
+  and Codex selections are refused when it is configured.
 - Raw HTML, JSX/MDX, and Mermaid in Skill Markdown are inert in the workbench renderer.
 
 Third-party notices, including the vendored MCP Inspector snapshot's license and provenance, ship in

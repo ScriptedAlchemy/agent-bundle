@@ -147,6 +147,7 @@ const withClaudeContext = async (
 const runTrial = async (
   context: ClaudeTestContext,
   overrides: {
+    readonly configuredSemanticGrader?: Parameters<typeof runClaudeTrial>[0]['configuredSemanticGrader'];
     readonly recorded?: NativeClaudeProcessRequest[];
     readonly run: (request: NativeClaudeProcessRequest, index: number) => NativeClaudeProcessResult;
     readonly semanticGrader?: Parameters<typeof runClaudeTrial>[0]['semanticGrader'];
@@ -162,6 +163,9 @@ const runTrial = async (
       recorded.push(request);
       return overrides.run(request, recorded.length - 1);
     },
+    ...(overrides.configuredSemanticGrader === undefined
+      ? {}
+      : { configuredSemanticGrader: overrides.configuredSemanticGrader }),
     ...(overrides.semanticGrader === undefined ? {} : { semanticGrader: overrides.semanticGrader }),
     suiteDir: context.suiteDir,
     trialIndex: 0,
@@ -371,6 +375,93 @@ it('keeps a failing grader a harness failure instead of plugin evidence', async 
       expect(trial.outcome).toBe('inconclusive');
     },
   );
+}, 240_000);
+
+it('runs one server-owned configured semantic Claude grader after deterministic grading', async () => {
+  await withClaudeContext([expectExitCode(0)], async (context) => {
+    const recorded: NativeClaudeProcessRequest[] = [];
+    const trial = await runTrial(context, {
+      configuredSemanticGrader: { harness: 'claude', model: 'claude-opus-4-6' },
+      recorded,
+      run: (_request, index) => index === 0
+        ? versionResult
+        : index === 1
+          ? authenticatedResult
+          : index === 2
+            ? { exitCode: 0, stderr: '', stdout: activatedStream }
+            : {
+              exitCode: 0,
+              stderr: 'semantic notice\n',
+              stdout: '{"type":"result","subtype":"success","result":"{\\"schemaVersion\\":1,\\"outcome\\":\\"pass\\",\\"detail\\":\\"The response satisfies the task.\\"}"}\n',
+            },
+    });
+
+    expect(recorded).toHaveLength(4);
+    const grader = recorded[3]!;
+    expect(grader).toEqual({
+      args: [
+        '-p',
+        '--model',
+        'claude-opus-4-6',
+        '--output-format',
+        'stream-json',
+        '--verbose',
+        '--no-session-persistence',
+        expect.any(String),
+      ],
+      cwd: join(context.root, 'workspaces', 'direct-review--claude-1'),
+      environment: { CLAUDE_CONFIG_DIR: '/existing/claude-config', PATH: '/usr/bin' },
+      executable: 'claude',
+    });
+    expect(grader.args).not.toContain('--plugin-dir');
+    expect(grader.args).not.toContain('--include-hook-events');
+    expect(grader.args).not.toContain('--bare');
+
+    const request = JSON.parse(grader.args.at(-1)!) as Record<string, unknown>;
+    expect(Object.keys(request).sort()).toEqual(['assertions', 'response', 'task', 'trace', 'workspace']);
+    expect(request.response).toBe('Reviewed the change.');
+    expect(JSON.stringify(request)).not.toMatch(/with_skill|without_skill|invocation|baseline|candidate/iu);
+    expect(trial.evidence.scripts.results['claude-semantic']).toEqual({
+      detail: 'The response satisfies the task.',
+      outcome: 'pass',
+    });
+    expect(trial.rawArtifacts).toEqual(expect.arrayContaining([
+      'artifacts/direct-review--claude-1/semantic-provenance.json',
+      'artifacts/direct-review--claude-1/semantic-request.json',
+      'artifacts/direct-review--claude-1/semantic-stderr.log',
+      'artifacts/direct-review--claude-1/semantic-stream.jsonl',
+    ]));
+  });
+}, 240_000);
+
+it('contains a malformed configured semantic grader as a path-free inconclusive harness failure', async () => {
+  await withClaudeContext([expectExitCode(0)], async (context) => {
+    const trial = await runTrial(context, {
+      configuredSemanticGrader: { harness: 'claude', model: 'claude-opus-4-6' },
+      run: (_request, index) => index === 0
+        ? versionResult
+        : index === 1
+          ? authenticatedResult
+          : index === 2
+            ? { exitCode: 0, stderr: '', stdout: activatedStream }
+            : {
+              exitCode: 0,
+              stderr: context.root,
+              stdout: '{"type":"result","subtype":"success","result":"```json\\n{\\"schemaVersion\\":1,\\"outcome\\":\\"pass\\",\\"detail\\":\\"nope\\"}\\n```"}\n',
+            },
+    });
+
+    expect(trial.harnessFailure).toEqual({
+      code: 'EVAL_GRADER_FAILED',
+      message: 'Grading is incomplete: claude-semantic: The grader could not complete.',
+      stage: 'grader',
+    });
+    expect(trial.evidence.scripts.results['claude-semantic']).toEqual({
+      detail: 'The grader could not complete.',
+      outcome: 'inconclusive',
+    });
+    expect(JSON.stringify(trial)).not.toContain(context.root);
+  });
 }, 240_000);
 
 it('cancels a running child process and leaves no live process behind', async () => {

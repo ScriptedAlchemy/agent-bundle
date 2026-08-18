@@ -164,17 +164,22 @@ it('rejects native harness selections with no matching authored host', async () 
   }
 }, 120_000);
 
-it('surfaces a configured semantic grader as an unsupported diagnostic without hiding the run', async () => {
+it('rejects deterministic and Codex selections when semantic grading is configured', async () => {
   const project = await createProjectFixture();
   try {
     await seedEvalProject(project.root, { semanticGrader: true });
 
-    const listing = await service(project.root).suites();
-    const result = await service(project.root).run({ caseIds: ['reads-result'] });
+    const evals = service(project.root);
+    const listing = await evals.suites();
 
-    expect(listing.diagnostics).toMatchObject([{ code: 'AB9000', severity: 'warning' }]);
-    expect(result.diagnostics).toMatchObject([{ code: 'AB9000', severity: 'warning' }]);
-    expect(result.run.harness).toBe('deterministic');
+    expect(listing.diagnostics).toEqual([]);
+    await expect(evals.run({ caseIds: ['reads-result'] })).rejects.toMatchObject({
+      code: 'EVAL_SEMANTIC_GRADER_UNSUPPORTED',
+    });
+    await expect(evals.run({ caseIds: ['reads-result'], harness: 'codex' })).rejects.toMatchObject({
+      code: 'EVAL_SEMANTIC_GRADER_UNSUPPORTED',
+    });
+    await expect(access(join(project.root, '.agent-bundle', 'runs'))).rejects.toThrow();
   } finally {
     await removeProjectFixture(project.root);
   }

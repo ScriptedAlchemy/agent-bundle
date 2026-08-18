@@ -167,6 +167,66 @@ const seedNativeProject = async (root: string): Promise<void> => {
   });
 };
 
+it('runs the configured semantic grader once through the selected native Claude harness', async () => {
+  const project = await createProjectFixture();
+  try {
+    await seedEvalProject(project.root, {
+      marketplace: true,
+      semanticGrader: true,
+      targets: ['claude', 'portable'],
+    });
+    await writeEvalSuite(project.root, 'semantic.eval.ts', {
+      cases: [{ hosts: { claude: { model: claudeModel } }, id: 'semantic-review', kind: 'pass' }],
+      name: 'semantic-suite',
+    });
+    const world: ClaudeWorld = { requests: [] };
+
+    const result = await nativeService(project.root, {
+      claudeRun: async (request) => {
+        world.requests.push(request);
+        if (request.args[0] === '--version') return { exitCode: 0, stderr: '', stdout: '2.1.240 (Claude Code)\n' };
+        if (request.args[0] === 'auth') {
+          return {
+            exitCode: 0,
+            stderr: '',
+            stdout: JSON.stringify({ authMethod: 'claude.ai', loggedIn: true, subscriptionType: 'max' }),
+          };
+        }
+        return request.args.includes('--plugin-dir')
+          ? { exitCode: 0, stderr: '', stdout: claudeStream }
+          : {
+            exitCode: 0,
+            stderr: '',
+            stdout: '{"type":"result","subtype":"success","result":"{\\"schemaVersion\\":1,\\"outcome\\":\\"pass\\",\\"detail\\":\\"The response satisfies the task.\\"}"}\n',
+          };
+      },
+      environment: { PATH: process.env.PATH ?? '/usr/bin' },
+    }).run({ harness: 'claude', suites: ['semantic-suite'] });
+
+    expect(world.requests.map((request) => request.args[0])).toEqual(['--version', 'auth', '-p', '-p']);
+    const grader = world.requests[3]!;
+    expect(grader.args).toEqual([
+      '-p',
+      '--model',
+      'claude-sonnet-4-5',
+      '--output-format',
+      'stream-json',
+      '--verbose',
+      '--no-session-persistence',
+      expect.any(String),
+    ]);
+    expect(grader.args).not.toContain('--plugin-dir');
+    expect(grader.args).not.toContain('--include-hook-events');
+    expect(result.trials[0]?.evidence.scripts.results['claude-semantic']).toEqual({
+      detail: 'The response satisfies the task.',
+      outcome: 'pass',
+    });
+    expect(result.trials[0]?.rawArtifacts).toContain('artifacts/semantic-review--claude-1/semantic-provenance.json');
+  } finally {
+    await removeProjectFixture(project.root);
+  }
+}, 240_000);
+
 it('runs a native Claude trial through the service with the pinned model and no --bare', async () => {
   const project = await createProjectFixture();
   try {

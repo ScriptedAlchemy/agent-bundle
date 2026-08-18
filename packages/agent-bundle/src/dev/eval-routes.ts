@@ -70,6 +70,7 @@ const serviceDiagnostics: Readonly<Record<EvalServiceErrorCode, RequestDiagnosti
   EVAL_HARNESS_UNSUPPORTED: diagnostic('AB8075', 'The requested eval harness is unknown or unsupported.', 422),
   EVAL_RUN_NOT_FOUND: diagnostic('AB8074', 'Eval run was not found.', 404),
   EVAL_SELECTION_EMPTY: diagnostic('AB8076', 'No discovered eval suite or case matched this selection.', 422),
+  EVAL_SEMANTIC_GRADER_UNSUPPORTED: diagnostic('AB8083', 'Configured semantic grading requires the native Claude eval harness.', 422),
   EVAL_TARGET_MISSING: diagnostic('AB8077', 'The evaluated artifact has no target for a pinned eval host.', 422),
   EVAL_TRIALS_INVALID: diagnostic('AB8072', 'Eval request has an invalid shape.', 400),
 });

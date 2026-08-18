@@ -201,16 +201,18 @@ it('reports an empty selection as a recoverable diagnostic rather than an empty 
   }
 }, 120_000);
 
-it('prints a configured semantic grader as a warning beside the completed run', async () => {
+it('refuses a configured semantic grader without the native Claude harness', async () => {
   const project = await createProjectFixture();
   try {
     await seedEvalProject(project.root, { semanticGrader: true });
 
     const result = await runCliWithOutput(['eval', '--root', project.root, '--case', 'reads-result']);
 
-    expect(result.code).toBe(0);
-    expect(result.stdout).toContain('AB9000');
-    expect(result.stdout).toContain('1 passed');
+    expect(result.code).toBe(1);
+    expect(result.stdout).toBe('');
+    const diagnostics = JSON.parse(result.stderr) as readonly { readonly code: string; readonly message: string }[];
+    expect(diagnostics).toMatchObject([{ code: 'AB9008', severity: 'error' }]);
+    expect(diagnostics[0]?.message).toContain('semantic grading requires the native Claude');
   } finally {
     await removeProjectFixture(project.root);
   }

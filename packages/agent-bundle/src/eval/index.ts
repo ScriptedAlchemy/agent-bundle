@@ -41,7 +41,12 @@ export type { EvalAssertionAggregate, EvalCaseAggregate } from './aggregate.ts';
 export { evalTargetDigests, prepareEvalArtifact } from './artifact.ts';
 export type { PrepareEvalArtifactOptions, PreparedEvalArtifact } from './artifact.ts';
 export { defaultEvalInclude, defaultEvalRunsDir, normalizeEvalConfig } from './config.ts';
-export type { EvalConfigInput, EvalSemanticGraderInput, NormalizedEvalConfig } from './config.ts';
+export type {
+  EvalConfigInput,
+  EvalSemanticGraderInput,
+  NormalizedEvalConfig,
+  NormalizedEvalSemanticGrader,
+} from './config.ts';
 export { discoverEvalSuites, findEvalSuiteFiles, loadEvalSuite } from './discovery.ts';
 export type {
   DiscoverEvalSuitesOptions,
@@ -65,7 +70,7 @@ export type {
   EvalRunStoreErrorCode,
 } from './errors.ts';
 export { materializeEvalFixture, planEvalFixture } from './fixtures.ts';
-export { evalScriptGraderSpec, runEvalGrader, runEvalGraders } from './graders.ts';
+export { evalScriptGraderSpec, isEvalScriptOutcome, runEvalGrader, runEvalGraders } from './graders.ts';
 export type {
   EvalFileGraderSpec,
   EvalGraderContext,
@@ -91,6 +96,17 @@ export type {
   EvalSemanticGraderSpec,
   RunClaudeTrialOptions,
 } from './claude-harness.ts';
+export {
+  claudeSemanticGraderId,
+  claudeSemanticGraderSchemaVersion,
+  parseClaudeSemanticGraderResult,
+  runClaudeSemanticGrader,
+} from './claude-semantic-grader.ts';
+export type {
+  ClaudeSemanticGraderRawOutput,
+  ClaudeSemanticGraderRun,
+  RunClaudeSemanticGraderOptions,
+} from './claude-semantic-grader.ts';
 export { createCodexEvalHarness, runCodexEvalTrial } from './codex-harness.ts';
 export type {
   CodexCommandInput,
