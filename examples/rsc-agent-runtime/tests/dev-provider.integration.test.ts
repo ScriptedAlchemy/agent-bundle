@@ -110,6 +110,7 @@ const copyExample = async (): Promise<CopiedExample> => {
   await symlink(workspaceNodeModules, join(workspaceRoot, 'node_modules'), 'dir');
   await symlink(join(exampleRoot, '../../packages'), join(workspaceRoot, 'packages'), 'dir');
   await symlink(join(exampleRoot, '../../tsconfig.json'), join(workspaceRoot, 'tsconfig.json'));
+  await symlink(join(exampleRoot, '../../tsconfig.base.json'), join(workspaceRoot, 'tsconfig.base.json'));
   return Object.freeze({ projectRoot, workspaceRoot });
 };
 
