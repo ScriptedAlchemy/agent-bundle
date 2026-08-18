@@ -148,28 +148,34 @@ it('accepts a fragmented initial gap and rejects a gap with the wrong live curso
   expect(received).toEqual([gap, third]);
 });
 
-it('aborts replay while foreground session acquisition remains pending', async () => {
+it('aborts one replay without cancelling its peer on the shared foreground bootstrap', async () => {
   let replayRequests = 0;
+  let sessionRequests = 0;
   let resolveSession: ((response: Response) => void) | undefined;
-  const client = new LogClient({
-    foreground: foreground(async (input) => {
-      if (String(input).includes('/api/project/session')) {
+  const sharedForeground = foreground(async (input) => {
+    if (String(input).includes('/api/project/session')) {
+      sessionRequests += 1;
+      if (resolveSession === undefined) {
         return await new Promise<Response>((resolve) => { resolveSession = resolve; });
       }
-      replayRequests += 1;
-      return json({ replay: { cursor: { afterSequence: 1 }, records: [record] } });
-    }),
+      throw new Error('Foreground authentication bootstrapped more than once.');
+    }
+    replayRequests += 1;
+    return json({ replay: { cursor: { afterSequence: 1 }, records: [record] } });
   });
+  const cancelled = new LogClient({ foreground: sharedForeground });
+  const active = new LogClient({ foreground: sharedForeground });
   const controller = new AbortController();
-  const pending = client.replay(0, controller.signal);
+  const cancelledReplay = cancelled.replay(0, controller.signal);
+  const activeReplay = active.replay();
   if (resolveSession === undefined) throw new Error('Expected foreground session acquisition.');
   controller.abort();
   resolveSession(session());
 
-  await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
-  await Promise.resolve();
-  await Promise.resolve();
-  expect(replayRequests).toBe(0);
+  await expect(cancelledReplay).rejects.toMatchObject({ name: 'AbortError' });
+  await expect(activeReplay).resolves.toMatchObject({ cursor: { afterSequence: 1 }, records: [{ sequence: 1 }] });
+  expect(sessionRequests).toBe(1);
+  expect(replayRequests).toBe(1);
 });
 
 it('does not deliver a stream callback after its shared generation signal aborts', async () => {
