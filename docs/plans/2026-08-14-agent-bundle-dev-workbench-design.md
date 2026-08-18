@@ -97,8 +97,11 @@ trial belongs to its lifecycle and closes on Ctrl-C or programmatic `close()`.
 ## Rsbuild workbench build and foreground server
 
 Rsbuild builds the React workbench. While contributing to Agent Bundle, its built-in dev server
-provides React/CSS HMR and proxies the typed Agent Bundle APIs to a coordinator process. This is
-the fast frontend-development loop.
+provides React/CSS HMR and proxies typed Agent Bundle APIs to a running foreground coordinator. The
+only supported contributor entry point is
+`AGENT_BUNDLE_WORKBENCH_API_PROXY=<foreground-url> npm run dev --workspace agent-bundle-workbench`;
+`packages/workbench/scripts/dev.mjs` refuses to start without that proxy. This is the fast
+frontend-development loop.
 
 The published CLI does not recompile the workbench for every plugin author. The package ships
 prebuilt Rsbuild assets, and `agent-bundle dev` starts one lightweight foreground HTTP server
@@ -271,8 +274,10 @@ It shows a compact target matrix and the latest changed files. Raw logs remain o
 ### Plugin playground
 
 The Plugin Playground is the primary whole-product surface. The author selects an artifact epoch,
-target host, fixture, and invocation, then either enters a natural-language prompt or directly
-invokes a Skill, MCP operation, hook, or script.
+target host, fixture, and invocation, then either enters a native-host prompt through a
+server-owned catalog selection or directly invokes a Skill, MCP operation, hook, or
+manifest-owned script. Native selections pin the eligible case, fixture, host, and model for the
+chosen epoch; browser input cannot name a command or model.
 
 One ordered timeline shows:
 
@@ -287,6 +292,11 @@ One ordered timeline shows:
 Every summarized row links to its raw event. A completed playground session can be replayed,
 exported, or promoted to a draft eval case. Promotion captures the task, fixture, target, durable
 outcome, and selected assertions; it does not bake incidental tool order into the eval.
+
+`script.run` is available in the production-mounted Playground for trusted local use. It runs the
+selected emitted script from the selected target in a managed workspace and captures bounded output,
+exit, cancellation, and raw evidence. Hook and MCP page operations remain independent of an open
+Playground session; only operations started from Playground become part of its ordered trace.
 
 ### Skills
 
@@ -358,7 +368,11 @@ Creating a session binds `{ epochId, target, serverName }`, resolves its generat
 host environment once, creates a per-session plugin-data directory, and returns the negotiated
 connection state. The bidirectional stream forwards JSON-RPC frames and separate stderr/log
 events, supports request cancellation and session shutdown, and records each frame in the shared
-plugin timeline before delivery. The browser never supplies an arbitrary executable path.
+plugin timeline before delivery. The browser never supplies an arbitrary executable path. A session
+never switches epoch implicitly: **Restart MCP session** respawns the same generated-server binding,
+while a newly opened session is needed for a newly published epoch. A host can require an explicit
+MCP reload after a generated server changes its catalog; `notifications/tools/list_changed` is not
+used as workbench HMR.
 
 The official MCP Inspector is MIT licensed, and its current v2 architecture separates MCP client
 state and React hooks from presentational web components. Because those modules are deliberately
