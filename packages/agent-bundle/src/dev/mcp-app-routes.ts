@@ -444,6 +444,7 @@ export class McpAppRoutes {
   }
 
   #rememberTeardown(bindingId: string): void {
+    if (this.#closed) return;
     const receipt = setTimeout(() => {
       if (this.#teardowns.get(bindingId) === receipt) this.#teardowns.delete(bindingId);
     }, gracefulCloseReceiptTimeoutMs);
