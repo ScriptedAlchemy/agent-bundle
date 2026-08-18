@@ -10,6 +10,7 @@ import {
 import { resolveEvalAssertions } from './assertions.ts';
 import {
   claudeSemanticGraderId,
+  claudeSemanticGraderSchemaVersion,
   runClaudeSemanticGrader,
   type ClaudeSemanticGraderRawOutput,
 } from './claude-semantic-grader.ts';
@@ -436,10 +437,24 @@ export const runClaudeTrial = async (options: RunClaudeTrialOptions): Promise<Ev
     outcome: failure === undefined ? trialOutcome(assertions) : 'inconclusive',
     ...(pluginFailure === undefined ? {} : { pluginFailure }),
     prompt: options.evalCase.prompt,
+    provenance: Object.freeze({
+      ...(preflight.version === undefined ? {} : { hostCliVersion: preflight.version }),
+      invocation: Object.freeze({ ...options.evalCase.invocation }),
+      semanticGrader: options.configuredSemanticGrader === undefined
+        ? null
+        : Object.freeze({
+          id: claudeSemanticGraderId,
+          model: options.configuredSemanticGrader.model,
+          schemaVersion: claudeSemanticGraderSchemaVersion,
+        }),
+    }),
     rawArtifacts: Object.freeze(rawArtifacts),
     startedAt: startedAt.toISOString(),
     targetDigest,
     trialIndex: options.trialIndex,
+    ...(stream === undefined
+      ? {}
+      : { usage: Object.freeze({ inputTokens: stream.usage.inputTokens, outputTokens: stream.usage.outputTokens }) }),
   });
   await options.onCompleted?.(Object.freeze({
     ...(stream === undefined || stream.hookEvents.length === 0 ? {} : { hookEvents: stream.hookEvents }),

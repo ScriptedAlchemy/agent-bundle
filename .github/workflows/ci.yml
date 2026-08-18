@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Verify (Node ${{ matrix.node-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: ['22.19.0', '24', '26']
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chrome
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm run build
+      - run: npm test
+
+  release-gates:
+    name: Release gates (Node 22.19)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22.19.0'
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chrome
+      - run: npm run check:release
+
+  dependency-review:
+    if: github.event_name == 'pull_request'
+    name: Dependency review
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/dependency-review-action@v4

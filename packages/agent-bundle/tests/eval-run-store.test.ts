@@ -164,6 +164,32 @@ it('stores trials and raw artifacts under the run directory without a database',
   });
 });
 
+it('round-trips bounded provenance and normalized token usage with a trial', async () => {
+  await withProject(async (root) => {
+    const writer = await createEvalRun(runOptions(root));
+    try {
+      const written = await writer.writeTrial(trialInput({
+        provenance: {
+          hostCliVersion: '2.1.232',
+          invocation: { mode: 'explicit', skill: 'review' },
+          semanticGrader: { id: 'claude-semantic', model: 'claude-opus-4-6', schemaVersion: 1 },
+        },
+        usage: { inputTokens: 9, outputTokens: 3 },
+      }));
+
+      expect(written.provenance).toEqual({
+        hostCliVersion: '2.1.232',
+        invocation: { mode: 'explicit', skill: 'review' },
+        semanticGrader: { id: 'claude-semantic', model: 'claude-opus-4-6', schemaVersion: 1 },
+      });
+      expect(written.usage).toEqual({ inputTokens: 9, outputTokens: 3 });
+      expect(await readEvalTrials(writer.directory)).toEqual([written]);
+    } finally {
+      await writer.close();
+    }
+  });
+});
+
 it('publishes JSON documents by rename and leaves no staging file behind', async () => {
   await withProject(async (root) => {
     const writer = await createEvalRun(runOptions(root));

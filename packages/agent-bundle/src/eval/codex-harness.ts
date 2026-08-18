@@ -199,6 +199,7 @@ export const runCodexEvalTrial = async (options: RunCodexEvalTrialOptions): Prom
   let execution: CodexExecution | undefined;
   let harnessFailure: EvalHarnessFailure | undefined;
   let fixtureDigest = options.fixturePlan.digest;
+  let hostCliVersion: string | undefined;
 
   const execute = async (step: string, args: readonly string[]): Promise<CodexCommandResult> => {
     let result: CodexCommandResult;
@@ -258,6 +259,7 @@ export const runCodexEvalTrial = async (options: RunCodexEvalTrialOptions): Prom
       }
 
       const version = await execute('--version', ['--version']);
+      hostCliVersion = /\b\d+\.\d+\.\d+\b/u.exec(version.stdout)?.[0];
       await options.onProgress?.('preflight');
       if (version.exitCode !== 0 || !codexVersionCompatible(version.stdout)) {
         throw new CodexEvalHarnessError(
@@ -392,6 +394,11 @@ export const runCodexEvalTrial = async (options: RunCodexEvalTrialOptions): Prom
       outcome: failure === undefined ? trialOutcome(assertions) : 'inconclusive',
       ...(pluginFailure === undefined ? {} : { pluginFailure }),
       prompt: options.evalCase.prompt,
+      provenance: Object.freeze({
+        ...(hostCliVersion === undefined ? {} : { hostCliVersion }),
+        invocation: Object.freeze({ ...options.evalCase.invocation }),
+        semanticGrader: null,
+      }),
       rawArtifacts: Object.freeze(rawArtifacts),
       startedAt: startedAt.toISOString(),
       targetDigest,

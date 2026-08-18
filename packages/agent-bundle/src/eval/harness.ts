@@ -314,6 +314,10 @@ export const runDeterministicTrial = async (
     outcome: failure === undefined ? trialOutcome(assertions) : 'inconclusive',
     ...(pluginFailure === undefined ? {} : { pluginFailure }),
     prompt: options.evalCase.prompt,
+    provenance: Object.freeze({
+      invocation: Object.freeze({ ...options.evalCase.invocation }),
+      semanticGrader: null,
+    }),
     rawArtifacts: Object.freeze(rawArtifacts),
     startedAt: startedAt.toISOString(),
     targetDigest,

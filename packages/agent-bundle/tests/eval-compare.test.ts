@@ -46,6 +46,11 @@ const trial = (overrides: Partial<EvalTrialRecord> = {}): EvalTrialRecord => Obj
   model: 'sonnet',
   outcome: 'pass' as const,
   prompt: 'Review the staged diff.',
+  provenance: Object.freeze({
+    hostCliVersion: '2.4.0',
+    invocation: Object.freeze({ mode: 'automatic' as const }),
+    semanticGrader: null,
+  }),
   rawArtifacts: Object.freeze([]),
   schemaVersion: 1 as const,
   startedAt: '2026-08-17T12:00:00.000Z',
@@ -147,54 +152,54 @@ it.each([
   expect(comparison.summary).toEqual({ comparable: 0, nonComparable: 1, reliability: 0, smoke: 0 });
 });
 
-it('labels a host CLI version, invocation, grader version, or harness mismatch non-comparable', () => {
+it('labels a host CLI version, invocation, semantic grader version, or harness mismatch non-comparable', () => {
   const baselineTrials = trials(['pass', 'pass', 'pass']);
   const candidateTrials = trials(['pass', 'pass', 'pass']);
-  const causeCodes = (candidate: EvalComparisonSide): readonly string[] =>
-    nonComparable(compareEvalRuns({ baseline: side('run-base', baselineTrials, {
-      graderVersions: { outcome: '1.0.0' },
-      hostCliVersions: { claude: '2.4.0' },
-      invocations: { 'direct-review': 'automatic' },
-    }), candidate }).rows[0]).causes.map((cause) => cause.code);
+  const causeCodes = (candidate: readonly EvalTrialRecord[]): readonly string[] =>
+    nonComparable(compareEvalRuns({ baseline: side('run-base', baselineTrials), candidate: side('run-candidate', candidate) }).rows[0])
+      .causes.map((cause) => cause.code);
 
-  expect(causeCodes(side('run-candidate', candidateTrials, {
-    graderVersions: { outcome: '1.0.0' },
-    hostCliVersions: { claude: '2.5.0' },
-    invocations: { 'direct-review': 'automatic' },
+  expect(causeCodes(trials(['pass', 'pass', 'pass'], {
+    provenance: { hostCliVersion: '2.5.0', invocation: { mode: 'automatic' }, semanticGrader: null },
   }))).toEqual(['host-cli-version-mismatch']);
-  expect(causeCodes(side('run-candidate', candidateTrials, {
-    graderVersions: { outcome: '1.0.0' },
-    hostCliVersions: { claude: '2.4.0' },
-    invocations: { 'direct-review': 'explicit' },
+  expect(causeCodes(trials(['pass', 'pass', 'pass'], {
+    provenance: { hostCliVersion: '2.4.0', invocation: { mode: 'explicit', skill: 'review' }, semanticGrader: null },
   }))).toEqual(['invocation-mismatch']);
-  expect(causeCodes(side('run-candidate', candidateTrials, {
-    graderVersions: { outcome: '2.0.0' },
-    hostCliVersions: { claude: '2.4.0' },
-    invocations: { 'direct-review': 'automatic' },
+  expect(causeCodes(trials(['pass', 'pass', 'pass'], {
+    provenance: {
+      hostCliVersion: '2.4.0',
+      invocation: { mode: 'automatic' },
+      semanticGrader: { id: 'claude-semantic', model: 'claude-opus-4-6', schemaVersion: 1 },
+    },
   }))).toEqual(['grader-versions-mismatch']);
-  expect(causeCodes({
-    graderVersions: { outcome: '1.0.0' },
-    hostCliVersions: { claude: '2.4.0' },
-    invocations: { 'direct-review': 'automatic' },
-    run: run('run-candidate', { harness: 'claude-native' }),
-    trials: candidateTrials,
-  })).toEqual(['harness-mismatch']);
+  expect(nonComparable(compareEvalRuns({
+    baseline: side('run-base', baselineTrials),
+    candidate: side('run-candidate', candidateTrials, { run: run('run-candidate', { harness: 'claude-native' }) }),
+  }).rows[0]).causes.map((cause) => cause.code)).toEqual(['harness-mismatch']);
 });
 
-it('reports a facet neither run recorded as unverified rather than as an alignment', () => {
+it('requires a persisted value on both sides for every documented alignment facet', () => {
   const comparison = compareEvalRuns({
     baseline: side('run-base', trials(['pass', 'pass', 'pass'])),
-    candidate: side('run-candidate', trials(['pass', 'pass', 'pass']), { hostCliVersions: { claude: '2.4.0' } }),
+    candidate: side('run-candidate', trials(['pass', 'pass', 'pass'], { provenance: undefined })),
   });
 
-  expect(nonComparable(comparison.rows[0]).causes.map((cause) => cause.code)).toEqual(['host-cli-version-mismatch']);
+  expect(nonComparable(comparison.rows[0]).causes.map((cause) => cause.code)).toEqual([
+    'grader-versions-mismatch',
+    'host-cli-version-mismatch',
+    'invocation-mismatch',
+  ]);
 
-  const unverified = compareEvalRuns({
-    baseline: side('run-base', trials(['pass', 'pass', 'pass'])),
-    candidate: side('run-candidate', trials(['pass', 'pass', 'pass'])),
+  const missingBoth = compareEvalRuns({
+    baseline: side('run-base', trials(['pass', 'pass', 'pass'], { provenance: undefined })),
+    candidate: side('run-candidate', trials(['pass', 'pass', 'pass'], { provenance: undefined })),
   });
 
-  expect(comparable(unverified.rows[0]).unverifiedFacets).toEqual(['grader-versions', 'host-cli-version', 'invocation']);
+  expect(nonComparable(missingBoth.rows[0]).causes.map((cause) => cause.code)).toEqual([
+    'grader-versions-mismatch',
+    'host-cli-version-mismatch',
+    'invocation-mismatch',
+  ]);
 });
 
 it('labels a condition that only one run recorded as non-comparable', () => {
@@ -259,7 +264,11 @@ it('totals duration and recorded usage over gradable trials only', () => {
       trial({ durationMs: 1000, id: 'trial-0', trialIndex: 0 }),
       trial({ durationMs: 3000, id: 'trial-1', trialIndex: 1 }),
       trial({ durationMs: 2000, id: 'trial-2', trialIndex: 2 }),
-    ], { usage: { 'trial-0': { inputTokens: 100, outputTokens: 20 }, 'trial-1': { inputTokens: 200, outputTokens: 30 } } }),
+    ].map((entry) => entry.id === 'trial-0'
+      ? { ...entry, usage: { inputTokens: 100, outputTokens: 20 } }
+      : entry.id === 'trial-1'
+        ? { ...entry, usage: { inputTokens: 200, outputTokens: 30 } }
+        : entry)),
     candidate: side('run-candidate', trials(['pass', 'pass', 'pass'], { durationMs: 1000 })),
   });
 
@@ -280,7 +289,7 @@ it('rejects a sample size that cannot express pass@k', () => {
   expect(() => compareEvalRuns({ ...sides, sampleSize: 0 })).toThrow(EvalComparisonError);
   expect(() => compareEvalRuns({ ...sides, sampleSize: 1.5 })).toThrow(/positive integer/u);
   expect(() => compareEvalRuns({
-    baseline: side('run-base', trials(['pass']), { usage: { 'trial-0': { inputTokens: -1, outputTokens: 0 } } }),
+    baseline: side('run-base', trials(['pass'], { usage: { inputTokens: -1, outputTokens: 0 } })),
     candidate: sides.candidate,
   })).toThrow(EvalComparisonError);
 });
