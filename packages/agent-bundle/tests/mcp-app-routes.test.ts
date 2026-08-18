@@ -15,6 +15,7 @@ import type { McpAppBridgeLifecycle, McpAppBridgeMessage } from '../src/dev/mcp-
 
 interface StartedRoutes {
   readonly close: () => Promise<void>;
+  readonly routes: McpAppRoutes;
   readonly service: RecordingPreviewService;
   readonly url: string;
 }
@@ -167,6 +168,7 @@ const startRoutes = async (service = new RecordingPreviewService()): Promise<Sta
       if (error === undefined) resolvePromise();
       else rejectPromise(error);
     })),
+    routes,
     service,
     url: `http://127.0.0.1:${address.port}`,
   });
@@ -950,6 +952,36 @@ it('does not treat a rejected force close as a completed graceful close', async 
       diagnostic: { code: 'AB8023', message: 'MCP App operation could not be completed.' },
     });
   } finally {
+    await started.close();
+  }
+});
+
+it('does not retain a graceful-close receipt after routes close during an admitted request', async () => {
+  const started = await startRoutes();
+  const originalSetTimeout = globalThis.setTimeout;
+  const receiptTimers: number[] = [];
+  try {
+    started.service.blockClose = true;
+    const closing = fetch(`${started.url}/api/mcp/apps/binding-a/close`, {
+      body: JSON.stringify({ id: 'close-a' }),
+      headers: { ...headers(), 'content-type': 'application/json' },
+      method: 'POST',
+    });
+    await eventually(() => started.service.calls.some((call) => (call as { readonly kind?: string }).kind === 'close'));
+    started.routes.close();
+    globalThis.setTimeout = ((callback: TimerHandler, delay?: number, ...arguments_: unknown[]) => {
+      const timer = originalSetTimeout(callback, delay, ...arguments_);
+      if (delay === 5_000) receiptTimers.push(timer);
+      return timer;
+    }) as typeof setTimeout;
+    started.service.releaseClose();
+
+    expect((await closing).status).toBe(200);
+    expect(receiptTimers).toEqual([]);
+  } finally {
+    globalThis.setTimeout = originalSetTimeout;
+    for (const timer of receiptTimers) clearTimeout(timer);
+    started.service.releaseClose();
     await started.close();
   }
 });

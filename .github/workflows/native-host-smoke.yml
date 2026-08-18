@@ -1,0 +1,40 @@
+name: Native host smoke
+
+on:
+  workflow_dispatch:
+    inputs:
+      host:
+        description: Signed-in host CLI to exercise
+        required: true
+        default: both
+        type: choice
+        options: [both, claude, codex]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-host-smoke-${{ github.workflow }}-${{ inputs.host }}
+  cancel-in-progress: true
+
+jobs:
+  native-host-smoke:
+    # This runs only on a trusted runner with existing CLI login state; no workflow secrets are passed.
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22.19.0'
+          cache: npm
+      - run: npm ci
+      - name: Claude signed-in smoke
+        if: inputs.host == 'both' || inputs.host == 'claude'
+        env:
+          AGENT_BUNDLE_NATIVE_CLAUDE_SMOKE: '1'
+        run: npm run test -- packages/agent-bundle/tests/native-claude-contract.test.ts
+      - name: Codex signed-in smoke
+        if: inputs.host == 'both' || inputs.host == 'codex'
+        env:
+          AGENT_BUNDLE_NATIVE_CODEX_SMOKE: '1'
+        run: npm run test -- packages/agent-bundle/tests/eval-codex-home.test.ts

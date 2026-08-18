@@ -794,6 +794,7 @@ export class AgentApi {
         };
         try {
           try {
+            lifecycle.signal.throwIfAborted();
             admission = await this.#evals.start({
               artifact: reference.root,
               ...(caseIds === undefined ? {} : { caseIds }),

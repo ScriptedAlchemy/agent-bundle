@@ -806,21 +806,97 @@ it('admits a deterministic eval against a real leased artifact epoch', async () 
   }
 }, 30_000);
 
-it('drains an eval lifecycle admitted after shutdown began acquiring its epoch', async () => {
+it('does not cancel an admitted real eval when its MCP request aborts', async () => {
+  const project = await createProjectFixture();
+  const artifact = join(project.root, '.agent-bundle', 'epochs', 'epoch-request-abort');
+  const evals = new EvalService({ projectRoot: project.root, targets: ['portable'] });
+  const admitted = deferred<string>();
+  const allowSubscription = deferred<void>();
+  let referenceCloses = 0;
+  let started: Awaited<ReturnType<typeof startApi>> | undefined;
+  const client = new Client({ name: 'agent-api-real-eval-request-abort-client', version: '1.0.0' });
+  try {
+    await seedEvalProject(project.root);
+    await build({ output: artifact, root: project.root });
+    const api = createApi({
+      epochs: {
+        acquireActiveEpochReference: async () => ({
+          close: async () => { referenceCloses += 1; },
+          epoch: { id: 'epoch-request-abort' },
+          root: artifact,
+        }),
+        acquireEpochReference: async () => { throw new Error('Only the active epoch should be acquired.'); },
+        listEpochs: async () => [{ id: 'epoch-request-abort' }],
+      },
+      evals: {
+        cancel: (runId) => evals.cancel(runId),
+        list: () => evals.list(),
+        read: (runId) => evals.read(runId),
+        start: async (request) => {
+          const admission = await evals.start(request);
+          admitted.resolve(admission.run.id);
+          return admission;
+        },
+        subscribeEvents: async (runId, afterSequence) => {
+          await allowSubscription.promise;
+          return evals.subscribeEvents(runId, afterSequence);
+        },
+        suites: () => evals.suites(),
+      },
+    });
+    started = await startApi({ api });
+    const transport = new StreamableHTTPClientTransport(new URL(`${started.url}/mcp`), {
+      authProvider: { token: async () => 'test-agent-api-token' },
+    });
+    const request = new AbortController();
+
+    await client.connect(transport);
+    const pending = client.callTool({
+      arguments: { case_ids: ['reads-result'], suites: ['review-change'], trials: 1 },
+      name: 'eval_run',
+    }, { signal: request.signal });
+    void pending.catch(() => undefined);
+    const runId = await within(admitted.promise, 5_000).catch((cause: unknown) => {
+      throw new Error('Timed out waiting for the eval admission.', { cause });
+    });
+    request.abort();
+    allowSubscription.resolve();
+    await within(pending.catch(() => undefined)).catch((cause: unknown) => {
+      throw new Error('Timed out waiting for the aborted MCP request.', { cause });
+    });
+
+    let completed = await evals.read(runId);
+    for (let attempt = 0; completed.run.completedAt === undefined && attempt < 100; attempt += 1) {
+      await new Promise<void>((resolvePromise) => setTimeout(resolvePromise, 10));
+      completed = await evals.read(runId);
+    }
+    expect(completed.run.completedAt).toEqual(expect.any(String));
+    expect(completed.run.summary).toMatchObject({ cases: 1, pass: 1, trials: 1 });
+    expect(completed.trials).toEqual([expect.objectContaining({ caseId: 'reads-result', outcome: 'pass' })]);
+    await within(new Promise<void>((resolvePromise) => {
+      const interval = setInterval(() => {
+        if (referenceCloses !== 1) return;
+        clearInterval(interval);
+        resolvePromise();
+      }, 10);
+    })).catch((cause: unknown) => {
+      throw new Error('Timed out waiting for the admitted eval epoch release.', { cause });
+    });
+  } finally {
+    allowSubscription.resolve();
+    await client.close().catch(() => undefined);
+    await started?.close().catch(() => undefined);
+    await evals.close().catch(() => undefined);
+    await removeProjectFixture(project.root);
+  }
+}, 30_000);
+
+it('releases a late-acquired epoch without admitting an eval after Agent API shutdown', async () => {
   const acquisitionStarted = deferred<void>();
   const acquired = deferred<AgentApiEpochReference>();
-  const evalStarted = deferred<void>();
   let closeCalls = 0;
-  let closeResolved = false;
-  let notify!: (event: Readonly<{ readonly kind: string }>) => void;
+  let starts = 0;
   const api = createApi({
-    handlerFactory: (factory) => {
-      const handler = createMcpHandler(factory, { legacy: 'stateless' });
-      return {
-        close: async () => undefined,
-        fetch: handler.fetch.bind(handler),
-      } as unknown as McpHttpHandler;
-    },
     epochs: {
       acquireActiveEpochReference: async () => {
         acquisitionStarted.resolve();
@@ -832,15 +908,12 @@ it('drains an eval lifecycle admitted after shutdown began acquiring its epoch',
     evals: {
       list: async () => [],
       read: async (runId: string) => ({ run: { id: runId } }),
-      start: async () => {
-        evalStarted.resolve();
+      start: async (request: Parameters<AgentApiOptions['evals']['start']>[0]) => {
+        starts += 1;
+        request.signal?.throwIfAborted();
         return { run: { id: 'run-racing-close' } };
       },
-      subscribeEvents: async () => ({
-        activate: (listener: (event: Readonly<{ readonly kind: string }>) => void) => { notify = listener; },
-        close: () => undefined,
-        replay: { events: [] },
-      }),
+      subscribeEvents: async () => { throw new Error('An aborted admission must not subscribe.'); },
       suites: async () => ({ diagnostics: [], suites: [] }),
     } as unknown as AgentApiOptions['evals'],
   });
@@ -855,19 +928,15 @@ it('drains an eval lifecycle admitted after shutdown began acquiring its epoch',
     void pending.catch(() => undefined);
     await acquisitionStarted.promise;
     const closing = api.close();
-    void closing.then(() => { closeResolved = true; });
     acquired.resolve({
       close: async () => { closeCalls += 1; },
       epoch: { id: 'epoch-racing-close' },
       root: '/test/epoch-racing-close',
     });
-    await evalStarted.promise;
-    await new Promise<void>((resolvePromise) => setTimeout(resolvePromise, 0));
-    expect(closeResolved).toBe(false);
-
-    notify({ kind: 'run.cancelled' });
     await closing;
+    expect(starts).toBe(0);
     expect(closeCalls).toBe(1);
+    await within(pending.catch(() => undefined));
   } finally {
     await client.close().catch(() => undefined);
     await started.close().catch(() => undefined);

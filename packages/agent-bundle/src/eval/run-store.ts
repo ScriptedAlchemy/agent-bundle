@@ -47,6 +47,32 @@ export interface EvalRunRecord {
   readonly summary?: EvalRunSummary;
 }
 
+/** A safe, authored invocation identity; it deliberately never carries a command or path. */
+export interface EvalTrialInvocationProvenance {
+  readonly mode: 'automatic' | 'explicit' | 'none';
+  readonly skill?: string;
+}
+
+/** The configured server-owned semantic grader, or an explicit record that no semantic grader ran. */
+export interface EvalSemanticGraderProvenance {
+  readonly id: string;
+  readonly model: string;
+  readonly schemaVersion: number;
+}
+
+/** Alignment data observed by a trial, limited to safe model, version, and authored identity values. */
+export interface EvalTrialProvenance {
+  readonly hostCliVersion?: string;
+  readonly invocation: EvalTrialInvocationProvenance;
+  readonly semanticGrader: EvalSemanticGraderProvenance | null;
+}
+
+/** Normalized token counts reported by a host; absent means that host reported no usable usage. */
+export interface EvalTrialUsage {
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+}
+
 export interface EvalTrialRecord {
   readonly assertions: readonly EvalAssertionResult[];
   readonly caseDigest: string;
@@ -62,11 +88,15 @@ export interface EvalTrialRecord {
   readonly outcome: EvalAssertionOutcome;
   readonly pluginFailure?: EvalPluginFailure;
   readonly prompt: string;
+  /** Omitted only by legacy records written before provenance capture. */
+  readonly provenance?: EvalTrialProvenance;
   readonly rawArtifacts: readonly string[];
   readonly schemaVersion: 1;
   readonly startedAt: string;
   readonly targetDigest: string;
   readonly trialIndex: number;
+  /** Omitted when the host did not emit normalized token counts. */
+  readonly usage?: EvalTrialUsage;
 }
 
 export type EvalTrialRecordInput = Omit<EvalTrialRecord, 'schemaVersion'>;
@@ -149,6 +179,7 @@ const runFileName = 'run.json';
 const safeSegment = /^[a-z0-9][a-z0-9._-]*$/iu;
 const safeRelativeSegment = /^(?!\.{1,2}$)[a-z0-9._-]+$/iu;
 const maximumTrialRecordBytes = 1024 * 1024;
+const maximumProvenanceTextLength = 256;
 type EvalRunStoreDurabilityTestHook = (
   phase: 'after-event-write' | 'before-event-open' | 'before-event-rollback' | 'before-event-write',
   event: EvalRunEvent,
@@ -382,6 +413,14 @@ const requireString = (value: JsonValue, code: RunStoreValidationCode, label: st
     return validationError(code, `${label} must be a non-empty string.`);
   }
   return value;
+};
+
+const requireBoundedText = (value: JsonValue, code: RunStoreValidationCode, label: string): string => {
+  const text = requireString(value, code, label);
+  if (text.length > maximumProvenanceTextLength) {
+    return validationError(code, `${label} must be at most ${maximumProvenanceTextLength} characters.`);
+  }
+  return text;
 };
 
 const requireTimestamp = (value: JsonValue, code: RunStoreValidationCode, label: string): string => {
@@ -748,13 +787,68 @@ const parsePluginFailure = (value: JsonValue, code: RunStoreValidationCode): Eva
   });
 };
 
+const parseInvocationProvenance = (
+  value: JsonValue,
+  code: RunStoreValidationCode,
+): EvalTrialInvocationProvenance => {
+  const record = strictRecord(value, code, 'Eval trial invocation provenance');
+  const mode = property(record, 'mode', code, 'Eval trial invocation provenance');
+  if (mode === 'automatic' || mode === 'none') {
+    requireKeys(record, ['mode'], code, 'Eval trial invocation provenance');
+    return Object.freeze({ mode });
+  }
+  if (mode === 'explicit') {
+    requireKeys(record, ['mode', 'skill'], code, 'Eval trial invocation provenance');
+    return Object.freeze({
+      mode,
+      skill: requireBoundedText(property(record, 'skill', code, 'Eval trial invocation provenance'), code, 'Eval trial invocation Skill'),
+    });
+  }
+  return validationError(code, 'Eval trial invocation provenance mode is invalid.');
+};
+
+const parseSemanticGraderProvenance = (
+  value: JsonValue,
+  code: RunStoreValidationCode,
+): EvalSemanticGraderProvenance => {
+  const record = strictRecord(value, code, 'Eval trial semantic grader provenance');
+  requireKeys(record, ['id', 'model', 'schemaVersion'], code, 'Eval trial semantic grader provenance');
+  return Object.freeze({
+    id: requireBoundedText(property(record, 'id', code, 'Eval trial semantic grader provenance'), code, 'Eval semantic grader id'),
+    model: requireBoundedText(property(record, 'model', code, 'Eval trial semantic grader provenance'), code, 'Eval semantic grader model'),
+    schemaVersion: requireInteger(property(record, 'schemaVersion', code, 'Eval trial semantic grader provenance'), code, 'Eval semantic grader schema version', 1),
+  });
+};
+
+const parseTrialProvenance = (value: JsonValue, code: RunStoreValidationCode): EvalTrialProvenance => {
+  const record = strictRecord(value, code, 'Eval trial provenance');
+  requireOptionalKeys(record, ['invocation', 'semanticGrader'], ['hostCliVersion'], code, 'Eval trial provenance');
+  const semanticGrader = property(record, 'semanticGrader', code, 'Eval trial provenance');
+  return Object.freeze({
+    ...(Object.hasOwn(record, 'hostCliVersion')
+      ? { hostCliVersion: requireBoundedText(property(record, 'hostCliVersion', code, 'Eval trial provenance'), code, 'Eval host CLI version') }
+      : {}),
+    invocation: parseInvocationProvenance(property(record, 'invocation', code, 'Eval trial provenance'), code),
+    semanticGrader: semanticGrader === null ? null : parseSemanticGraderProvenance(semanticGrader, code),
+  });
+};
+
+const parseTrialUsage = (value: JsonValue, code: RunStoreValidationCode): EvalTrialUsage => {
+  const record = strictRecord(value, code, 'Eval trial usage');
+  requireKeys(record, ['inputTokens', 'outputTokens'], code, 'Eval trial usage');
+  return Object.freeze({
+    inputTokens: requireInteger(property(record, 'inputTokens', code, 'Eval trial usage'), code, 'Eval input tokens'),
+    outputTokens: requireInteger(property(record, 'outputTokens', code, 'Eval trial usage'), code, 'Eval output tokens'),
+  });
+};
+
 const trialInputKeys = ['assertions', 'caseDigest', 'caseId', 'completedAt', 'durationMs', 'evidence', 'fixtureDigest', 'host', 'id', 'model', 'outcome', 'prompt', 'rawArtifacts', 'startedAt', 'targetDigest', 'trialIndex'];
 
 const parseTrialRecordValue = (value: unknown, code: RunStoreValidationCode, input = false): EvalTrialRecord => {
   const record = strictRecord(value, code, 'Eval trial record');
   requireOptionalKeys(record,
     input ? trialInputKeys : [...trialInputKeys, 'schemaVersion'],
-    ['harnessFailure', 'pluginFailure'],
+    ['harnessFailure', 'pluginFailure', 'provenance', 'usage'],
     code,
     'Eval trial record');
   if (!input && property(record, 'schemaVersion', code, 'Eval trial record') !== 1) {
@@ -765,6 +859,12 @@ const parseTrialRecordValue = (value: unknown, code: RunStoreValidationCode, inp
     : undefined;
   const pluginFailure = Object.hasOwn(record, 'pluginFailure')
     ? parsePluginFailure(property(record, 'pluginFailure', code, 'Eval trial record'), code)
+    : undefined;
+  const provenance = Object.hasOwn(record, 'provenance')
+    ? parseTrialProvenance(property(record, 'provenance', code, 'Eval trial record'), code)
+    : undefined;
+  const usage = Object.hasOwn(record, 'usage')
+    ? parseTrialUsage(property(record, 'usage', code, 'Eval trial record'), code)
     : undefined;
   if (harnessFailure !== undefined && pluginFailure !== undefined) {
     return validationError(code, 'A trial records either a harness failure or a plugin failure, never both.');
@@ -784,12 +884,14 @@ const parseTrialRecordValue = (value: unknown, code: RunStoreValidationCode, inp
     outcome: requireOutcome(property(record, 'outcome', code, 'Eval trial record'), code, 'Eval trial outcome'),
     ...(pluginFailure === undefined ? {} : { pluginFailure }),
     prompt: requireString(property(record, 'prompt', code, 'Eval trial record'), code, 'Eval trial prompt'),
+    ...(provenance === undefined ? {} : { provenance }),
     rawArtifacts: Object.freeze(requireArray(property(record, 'rawArtifacts', code, 'Eval trial record'), code, 'Eval trial raw artifacts')
       .map((rawArtifact) => requireSafeRelativePath(requireString(rawArtifact, code, 'Eval trial raw artifact'), 'Eval trial raw artifact'))),
     schemaVersion: 1,
     startedAt: requireTimestamp(property(record, 'startedAt', code, 'Eval trial record'), code, 'Eval trial startedAt'),
     targetDigest: requireString(property(record, 'targetDigest', code, 'Eval trial record'), code, 'Eval trial target digest'),
     trialIndex: requireInteger(property(record, 'trialIndex', code, 'Eval trial record'), code, 'Eval trial index'),
+    ...(usage === undefined ? {} : { usage }),
   });
 };
 

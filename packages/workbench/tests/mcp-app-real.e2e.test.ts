@@ -126,7 +126,12 @@ const writeBundledAppProject = async (root: string): Promise<void> => {
   ]);
   await Promise.all([
     writeFile(join(root, 'package.json'), '{"type":"module"}\n'),
-    writeFile(join(root, 'views', 'dashboard.ts'), "document.querySelector('#view')!.textContent = 'packed release dashboard';\n"),
+    writeFile(join(root, 'views', 'dashboard.css'), '#view { color: rgb(18, 52, 86); font-weight: 700; }\n'),
+    writeFile(join(root, 'views', 'dashboard.ts'), [
+      "import './dashboard.css';",
+      "document.querySelector('#view')!.textContent = 'packed release dashboard';",
+      '',
+    ].join('\n')),
     writeFile(join(root, 'views', 'shell.html'), '<!doctype html><html><body><main id="view"></main></body></html>\n'),
     writeFile(join(root, 'src', 'server.ts'), [
       "import { McpServer } from '@modelcontextprotocol/server';",
@@ -1662,6 +1667,8 @@ e2e('renders a compiler-bundled App template through the canonical sandbox URL',
     const appFrame = page.frames().find((frame) => frame.url() === 'about:blank');
     if (appFrame === undefined) throw new Error('Expected the sandbox proxy to create the bundled App srcdoc frame.');
     await expect(appFrame.locator('#view')).toHaveText('packed release dashboard', { timeout: browserTimeout });
+    await expect(appFrame.locator('#view')).toHaveCSS('color', 'rgb(18, 52, 86)', { timeout: browserTimeout });
+    await expect(appFrame.locator('#view')).toHaveCSS('font-weight', '700', { timeout: browserTimeout });
     expect(appRequests.some((request) => request.method === 'GET' && /^\/api\/mcp\/apps\/[^/]+$/u.test(request.path))).toBe(false);
 
     const fallbackClosed = page.waitForResponse((response) => {

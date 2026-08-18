@@ -211,6 +211,11 @@ it('records deterministic evidence whose raw artifacts reproduce every conclusio
       expect(first.evidence.process).toEqual({ exitCode: 0, level: 'observed', timedOut: false });
       expect(first.evidence.mcp).toEqual({ calls: [{ server: 'project', tool: 'status' }], level: 'observed' });
       expect(first.evidence.skillActivation).toEqual({ activated: [], level: 'unavailable' });
+      expect(first.provenance).toEqual({
+        invocation: { mode: 'automatic' },
+        semanticGrader: null,
+      });
+      expect(first.usage).toBeUndefined();
       expect(first.assertions.map((assertion) => assertion.outcome)).toEqual([
         'pass',
         'pass',

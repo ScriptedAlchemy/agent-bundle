@@ -141,8 +141,12 @@ export type {
   EvalRunProvenance,
   EvalRunRecord,
   EvalRunSummary,
+  EvalSemanticGraderProvenance,
+  EvalTrialInvocationProvenance,
+  EvalTrialProvenance,
   EvalTrialRecord,
   EvalTrialRecordInput,
+  EvalTrialUsage,
   ListEvalRunsOptions,
 } from './run-store.ts';
 export { defineEvalSuite, evalCaseFromDraft, normalizeEvalCase, parseEvalSuite } from './suite.ts';

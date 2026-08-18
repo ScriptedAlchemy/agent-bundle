@@ -233,6 +233,12 @@ it('runs a signed-in trial with an explicit plugin directory, never --bare, and 
     expect(trial.evidence.skillActivation).toEqual({ activated: ['review', 'review:review'], level: 'observed' });
     expect(trial.evidence.mcp).toEqual({ calls: [{ server: 'project', tool: 'status_report' }], level: 'observed' });
     expect(trial.evidence.process).toEqual({ exitCode: 0, level: 'observed', timedOut: false });
+    expect(trial.provenance).toEqual({
+      hostCliVersion: '2.1.232',
+      invocation: { mode: 'explicit', skill: 'review' },
+      semanticGrader: null,
+    });
+    expect(trial.usage).toEqual({ inputTokens: 9, outputTokens: 3 });
     expect(trial.assertions.every((assertion) => assertion.outcome === 'pass')).toBe(true);
     expect(trial.rawArtifacts).toContain('artifacts/direct-review--claude-1/stream.jsonl');
     expect(trial.rawArtifacts).toContain('artifacts/direct-review--claude-1/usage.json');
@@ -430,6 +436,12 @@ it('runs one server-owned configured semantic Claude grader after deterministic 
               stderr: 'semantic notice\n',
               stdout: '{"type":"result","subtype":"success","result":"{\\"schemaVersion\\":1,\\"outcome\\":\\"pass\\",\\"detail\\":\\"The response satisfies the task.\\"}"}\n',
             },
+    });
+
+    expect(trial.provenance?.semanticGrader).toEqual({
+      id: 'claude-semantic',
+      model: 'claude-opus-4-6',
+      schemaVersion: 1,
     });
 
     expect(recorded).toHaveLength(4);
