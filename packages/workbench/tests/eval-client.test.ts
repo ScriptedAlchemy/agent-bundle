@@ -139,6 +139,120 @@ it('reads one recorded run and lists every recorded run', async () => {
   ]);
 });
 
+it('replays only a detached, contiguous persisted event timeline from its cursor', async () => {
+  const calls: RecordedRequest[] = [];
+  const client = new EvalClient({ fetch: recordingFetch(calls, () => response({
+    replay: {
+      cursor: { afterSequence: 2 },
+      events: [
+        { kind: 'run.started', payload: { trials: 1 }, schemaVersion: 1, sequence: 1, timestamp: '2026-08-17T00:00:00.000Z' },
+        { kind: 'trial.completed', payload: { outcome: 'pass' }, schemaVersion: 1, sequence: 2, timestamp: '2026-08-17T00:00:01.000Z' },
+      ],
+    },
+  })) });
+
+  const replay = await client.events(runRecord.id, 0);
+
+  expect(replay.cursor).toEqual({ afterSequence: 2 });
+  expect(replay.events.map((event) => event.sequence)).toEqual([1, 2]);
+  expect(Object.isFrozen(replay)).toBe(true);
+  expect(Object.isFrozen(replay.events[0]?.payload)).toBe(true);
+  expect(calls[0]?.url).toBe(`/api/evals/runs/${runRecord.id}/events?after=0`);
+});
+
+it('rejects a duplicate-key or reordered event replay instead of retaining a hostile response object', async () => {
+  const duplicate = new EvalClient({
+    fetch: async (input) => String(input) === '/api/project/session'
+      ? response({ origin: 'http://127.0.0.1:5173', token: 'foreground-token' })
+      : new Response('{"replay":{"cursor":{"afterSequence":1},"events":[{"kind":"run.started","payload":{},"schemaVersion":1,"sequence":1,"sequence":2,"timestamp":"2026-08-17T00:00:00.000Z"}]}}', {
+        headers: { 'content-type': 'application/json' },
+      }),
+  });
+  const reordered = new EvalClient({
+    fetch: async (input) => String(input) === '/api/project/session'
+      ? response({ origin: 'http://127.0.0.1:5173', token: 'foreground-token' })
+      : response({ replay: {
+        cursor: { afterSequence: 2 },
+        events: [
+          { kind: 'trial.completed', payload: {}, schemaVersion: 1, sequence: 2, timestamp: '2026-08-17T00:00:01.000Z' },
+        ],
+      } }),
+  });
+
+  await expect(duplicate.events(runRecord.id, 0)).rejects.toMatchObject({ code: 'AB8073' });
+  await expect(reordered.events(runRecord.id, 0)).rejects.toMatchObject({ code: 'AB8073' });
+});
+
+it('decodes fragmented NDJSON in sequence and aborts a replacement stream without a stale callback', async () => {
+  const encoder = new TextEncoder();
+  const frames = [
+    JSON.stringify({ kind: 'run.started', payload: {}, schemaVersion: 1, sequence: 1, timestamp: '2026-08-17T00:00:00.000Z' }),
+    JSON.stringify({ kind: 'run.completed', payload: {}, schemaVersion: 1, sequence: 2, timestamp: '2026-08-17T00:00:01.000Z' }),
+    '',
+  ].join('\n');
+  let streamCalls = 0;
+  let cancelled = false;
+  let opened!: () => void;
+  const replacementOpened = new Promise<void>((resolvePromise) => { opened = resolvePromise; });
+  const client = new EvalClient({
+    fetch: async (input) => {
+      const url = String(input);
+      if (url === '/api/project/session') return response({ origin: 'http://127.0.0.1:5173', token: 'foreground-token' });
+      streamCalls += 1;
+      if (streamCalls === 1) {
+        return new Response(new ReadableStream<Uint8Array>({
+          start: (controller) => {
+            const bytes = encoder.encode(frames);
+            controller.enqueue(bytes.subarray(0, 11));
+            controller.enqueue(bytes.subarray(11));
+            controller.close();
+          },
+        }), { headers: { 'content-type': 'application/x-ndjson; charset=utf-8' } });
+      }
+      return new Response(new ReadableStream<Uint8Array>({
+        cancel: () => { cancelled = true; },
+        pull: () => {
+          opened();
+          return new Promise<void>(() => undefined);
+        },
+      }), { headers: { 'content-type': 'application/x-ndjson; charset=utf-8' } });
+    },
+  });
+  const events: number[] = [];
+  const complete = client.stream({ afterSequence: 0, onEvent: (event) => { events.push(event.sequence); }, runId: runRecord.id });
+  await complete.done;
+  expect(events).toEqual([1, 2]);
+  const replacement = client.stream({ afterSequence: 2, onEvent: () => { throw new Error('An aborted stream must not publish.'); }, runId: runRecord.id });
+  await replacementOpened;
+  replacement.close();
+  await replacement.done;
+  expect(cancelled).toBe(true);
+});
+
+it('fetches an opaque persisted artifact through the foreground session without exposing a direct path', async () => {
+  const calls: string[] = [];
+  const client = new EvalClient({
+    fetch: async (input) => {
+      const url = String(input);
+      if (url === '/api/project/session') return response({ origin: 'http://127.0.0.1:5173', token: 'foreground-token' });
+      calls.push(url);
+      return new Response('{"evidence":true}\n', {
+        headers: {
+          'content-disposition': 'attachment; filename="evidence.json"',
+          'content-length': '18',
+          'content-type': 'application/json; charset=utf-8',
+        },
+      });
+    },
+  });
+
+  const artifact = await client.artifact(runRecord.id, 'artifacts/portable-1/evidence.json');
+
+  expect(artifact.filename).toBe('evidence.json');
+  await expect(artifact.blob.text()).resolves.toBe('{"evidence":true}\n');
+  expect(calls).toEqual([`/api/evals/runs/${runRecord.id}/artifacts/${Buffer.from('artifacts/portable-1/evidence.json').toString('base64url')}`]);
+});
+
 it('encodes a run identifier into the request path', async () => {
   const calls: RecordedRequest[] = [];
   const client = new EvalClient({ fetch: recordingFetch(calls, () => response({ run: runResult })) });

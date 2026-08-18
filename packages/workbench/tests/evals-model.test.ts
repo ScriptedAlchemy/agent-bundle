@@ -8,6 +8,8 @@ import {
   evalRunViewFor,
   evalSuiteOptionsFor,
   evalTrialRowsFor,
+  maximumEvalTimelineBytes,
+  mergeEvalEvents,
 } from '../src/evals/evals-model.ts';
 
 const listing: EvalSuiteListing = {
@@ -244,4 +246,32 @@ it('builds a run selection only from a selected suite and a valid trial count', 
     evalRunViewFor({ listing: { diagnostics: [], suites: [] }, result: undefined, selectedSuite: undefined }),
     '1',
   )).toBeUndefined();
+});
+
+it('retains a bounded exact event timeline without silently accepting a conflicting sequence', () => {
+  const one = { kind: 'run.started', payload: {}, schemaVersion: 1 as const, sequence: 1, timestamp: '2026-08-17T00:00:00.000Z' };
+  const two = { kind: 'trial.completed', payload: {}, schemaVersion: 1 as const, sequence: 2, timestamp: '2026-08-17T00:00:01.000Z' };
+
+  const merged = mergeEvalEvents([one], [one, two]);
+  const conflict = mergeEvalEvents([one], [{ ...one, kind: 'run.failed' }]);
+
+  expect(merged.events.map((event) => event.sequence)).toEqual([1, 2]);
+  expect(merged.cursor).toBe(2);
+  expect(conflict.conflictSequence).toBe(1);
+  expect(Object.isFrozen(merged.events)).toBe(true);
+});
+
+it('retains the newest durable cursor even when a hostilely large event cannot fit the view budget', () => {
+  const oversized = {
+    kind: 'trial.completed',
+    payload: 'x'.repeat(maximumEvalTimelineBytes + 1),
+    schemaVersion: 1 as const,
+    sequence: 1,
+    timestamp: '2026-08-17T00:00:00.000Z',
+  };
+
+  const merged = mergeEvalEvents([], [oversized]);
+
+  expect(merged.cursor).toBe(1);
+  expect(merged.events).toEqual([]);
 });
