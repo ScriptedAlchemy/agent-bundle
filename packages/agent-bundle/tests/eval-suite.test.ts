@@ -285,6 +285,13 @@ it('resolves forbidden MCP calls against tool-scoped and server-wide expectation
 
   const unavailable = resolveEvalAssertions([expectNoMcpCall({ server: 'billing' })], evidenceWith())[0];
   expect(unavailable?.outcome).toBe('inconclusive');
+
+  const knownViolation = resolveEvalAssertions([
+    expectNoMcpCall({ server: 'billing', tool: 'charge' }),
+  ], evidenceWith({
+    mcp: { calls: [{ server: 'billing', tool: 'charge' }], level: 'unavailable' },
+  }))[0];
+  expect(knownViolation?.outcome).toBe('fail');
 });
 
 it('validates forbidden MCP call expectations and normalizes them inside a suite', () => {

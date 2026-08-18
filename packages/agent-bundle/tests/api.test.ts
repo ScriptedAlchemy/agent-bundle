@@ -158,6 +158,9 @@ it('prepares and inspects a target owned only by the supplied advanced registry'
       synthetic: expect.objectContaining({ target: 'synthetic', value: { enabled: true } }),
     });
     expect(result.plans).toEqual([expect.objectContaining({ target: 'synthetic' })]);
+    expect(result.plans[0]?.skipped).toEqual([
+      expect.objectContaining({ kind: 'skill', name: 'review', reason: 'unsupported-capability' }),
+    ]);
     expect(registry.names()).toEqual(['synthetic']);
   } finally {
     await rm(join(root, '..'), { force: true, recursive: true });
@@ -505,6 +508,63 @@ it('returns an invalid inspection for selected targets outside the normalized pr
       expect(Object.isFrozen(invalid.diagnostics)).toBe(true);
       expect(Object.isFrozen(invalid.plans)).toBe(true);
     }
+  } finally {
+    await rm(join(root, '..'), { force: true, recursive: true });
+  }
+});
+
+it('reports skipped target/component pairs with intersection-rule reasons', async () => {
+  const root = await createProject();
+  try {
+    await writeFile(join(root, 'src', 'report.ts'), 'export const report = true;\n');
+    await writeFile(join(root, 'agent-bundle.config.ts'), [
+      'export default {',
+      "  hooks: { sessionStart: { handler: './src/hook.ts' } },",
+      "  plugin: { name: 'api-fixture', version: '1.0.0' },",
+      "  scripts: { report: { entry: './src/report.ts', targets: ['codex'] } },",
+      "  targets: ['portable', 'codex'],",
+      '};',
+      '',
+    ].join('\n'));
+
+    const result = await readyInspection({ root });
+    const planFor = (target: string) => result.plans.find((plan) => plan.target === target);
+
+    expect(planFor('portable')?.skipped).toEqual([
+      expect.objectContaining({ kind: 'hook', name: 'sessionStart', reason: 'unsupported-capability' }),
+      expect.objectContaining({ kind: 'script', name: 'report', reason: 'excluded-by-targets' }),
+    ]);
+    expect(planFor('codex')?.skipped).toEqual([]);
+    expect(Object.isFrozen(planFor('portable')?.skipped)).toBe(true);
+  } finally {
+    await rm(join(root, '..'), { force: true, recursive: true });
+  }
+});
+
+it('surfaces the computed native matcher on inspected hook entries', async () => {
+  const root = await createProject();
+  try {
+    await writeFile(join(root, 'agent-bundle.config.ts'), [
+      'export default {',
+      '  hooks: {',
+      "    beforeTool: { handler: './src/hook.ts', tools: ['shell', 'file.write'] },",
+      "    sessionStart: { handler: './src/hook.ts' },",
+      '  },',
+      "  plugin: { name: 'api-fixture', version: '1.0.0' },",
+      "  targets: ['claude'],",
+      '};',
+      '',
+    ].join('\n'));
+
+    const result = await readyInspection({ root });
+    const hookEntries = result.plans[0]?.hookEntries ?? [];
+    const beforeTool = hookEntries.find((entry) => entry.event === 'beforeTool');
+    const sessionStart = hookEntries.find((entry) => entry.event === 'sessionStart');
+
+    expect(beforeTool?.nativeMatcher).toEqual(expect.any(String));
+    expect(beforeTool?.nativeMatcher?.length).toBeGreaterThan(0);
+    expect(sessionStart).toBeDefined();
+    expect(sessionStart?.nativeMatcher).toBeUndefined();
   } finally {
     await rm(join(root, '..'), { force: true, recursive: true });
   }

@@ -32,6 +32,8 @@ export interface TargetHookWrapper {
   readonly event: CanonicalHookEvent;
   readonly hook: NormalizedHook;
   readonly nativeEvent: string;
+  /** The computed native tool matcher, absent when the host applies the hook unconditionally. */
+  readonly nativeMatcher?: string;
   readonly relativePath: string;
   readonly target: string;
 }
