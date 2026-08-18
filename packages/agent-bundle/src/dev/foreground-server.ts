@@ -3,7 +3,10 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { AddressInfo, Socket } from 'node:net';
 import { basename } from 'node:path';
 
+import { validateOriginHeader } from '@modelcontextprotocol/server';
+
 import { ArtifactRoutes, type ArtifactRouteService } from './artifact-routes.ts';
+import type { AgentApi } from './agent-api.ts';
 import { EvalRoutes, type EvalRouteService } from './eval-routes.ts';
 import type { ProjectEventHub, ProjectEventSubscription } from './events.ts';
 import { HookPlaygroundRoutes, type HookPlaygroundRouteService } from './hook-playground-routes.ts';
@@ -38,7 +41,7 @@ export class ForegroundServerError extends Error {
 
 export interface ForegroundServerCloseFailure {
   readonly error: unknown;
-  readonly resource: 'coordinator' | 'hook-playground' | 'server';
+  readonly resource: 'agent-api' | 'coordinator' | 'hook-playground' | 'server';
 }
 
 export interface ForegroundServerStartFailure {
@@ -87,6 +90,8 @@ export interface WorkbenchAssetSource {
 }
 
 export interface ForegroundServerOptions {
+  /** Optional agent-facing MCP endpoint, mounted only at /mcp. */
+  readonly agentApi?: AgentApi;
   /** Read-only inspection over published epochs; the browser names an id, never a path. */
   readonly artifacts?: ArtifactRouteService;
   readonly assets?: WorkbenchAssetSource;
@@ -381,6 +386,7 @@ const requestHostMatches = (request: IncomingMessage, origin: string): boolean =
  * browser: product work stays in the injected coordinator.
  */
 export class ForegroundServer {
+  readonly #agentApi: AgentApi | undefined;
   readonly #artifactRoutes: ArtifactRoutes;
   readonly #assets: WorkbenchAssetSource | undefined;
   readonly #coordinator: ForegroundCoordinator;
@@ -414,6 +420,7 @@ export class ForegroundServer {
       throw new ForegroundServerError('AB8000', 'Foreground server port must be a safe TCP port number.');
     }
 
+    this.#agentApi = options.agentApi;
     this.#assets = options.assets;
     this.#coordinator = options.coordinator;
     this.#eventHub = options.eventHub;
@@ -561,7 +568,7 @@ export class ForegroundServer {
     return published.promise;
   }
 
-  #release(): Promise<readonly ForegroundServerCloseFailure[]> {
+  async #release(): Promise<readonly ForegroundServerCloseFailure[]> {
     this.#mcpAppRoutes.close();
     this.#mcpSessionRoutes.close();
     // Cancelled hook simulations own wrapper processes and clones, so their
@@ -570,6 +577,10 @@ export class ForegroundServer {
     this.#playgroundRoutes.close();
     this.#artifactRoutes.close();
     this.#evalRoutes.close();
+    // The Agent API owns admissions over every shared foreground service. It
+    // must publish closure and drain active handlers before those services or
+    // the epoch-owning coordinator begin their own shutdown.
+    const [agentApi] = await Promise.allSettled([this.#agentApi?.close() ?? Promise.resolve()]);
     const releaseServer = this.#listenStarted
       ? (() => {
           this.#listenStarted = false;
@@ -579,16 +590,19 @@ export class ForegroundServer {
           return closeServer(this.#server);
         })()
       : Promise.resolve();
-    return Promise.allSettled([releaseServer, this.#coordinator.close(), releaseHookPlayground])
-      .then(([server, coordinator, hookPlayground]) => {
-        const failures: ForegroundServerCloseFailure[] = [];
-        if (server.status === 'rejected') failures.push(Object.freeze({ error: server.reason, resource: 'server' }));
-        if (coordinator.status === 'rejected') failures.push(Object.freeze({ error: coordinator.reason, resource: 'coordinator' }));
-        if (hookPlayground.status === 'rejected') {
-          failures.push(Object.freeze({ error: hookPlayground.reason, resource: 'hook-playground' }));
-        }
-        return Object.freeze(failures);
-      });
+    const [server, coordinator, hookPlayground] = await Promise.allSettled([
+      releaseServer,
+      this.#coordinator.close(),
+      releaseHookPlayground,
+    ]);
+    const failures: ForegroundServerCloseFailure[] = [];
+    if (agentApi.status === 'rejected') failures.push(Object.freeze({ error: agentApi.reason, resource: 'agent-api' }));
+    if (server.status === 'rejected') failures.push(Object.freeze({ error: server.reason, resource: 'server' }));
+    if (coordinator.status === 'rejected') failures.push(Object.freeze({ error: coordinator.reason, resource: 'coordinator' }));
+    if (hookPlayground.status === 'rejected') {
+      failures.push(Object.freeze({ error: hookPlayground.reason, resource: 'hook-playground' }));
+    }
+    return Object.freeze(failures);
   }
 
   async #handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
@@ -597,6 +611,11 @@ export class ForegroundServer {
     }
     const pathname = new URL(request.url ?? '/', this.url).pathname;
     const method = request.method ?? 'GET';
+    if (pathname === '/mcp') {
+      if (this.#agentApi === undefined) return responseDiagnostic(response, diagnostic('AB8007', 'Route was not found.', 404));
+      this.#assertAgentApiOrigin(request);
+      return this.#agentApi.handle(request, response);
+    }
     if (await this.#mcpAppRoutes.handle(request, response)) return;
     if (await this.#mcpSessionRoutes.handle(request, response)) return;
     if (await this.#hookPlaygroundRoutes.handle(request, response)) return;
@@ -674,6 +693,16 @@ export class ForegroundServer {
     if (origin === this.url) return;
     if (origin === undefined && singleHeader(request.headers['sec-fetch-site']) === 'same-origin') return;
     throw requestError(diagnostic('AB8003', 'Request origin is not this foreground server.', 403));
+  }
+
+  /** Codex MCP clients may omit Origin; browsers with one must be this exact foreground origin. */
+  #assertAgentApiOrigin(request: IncomingMessage): void {
+    const origin = singleHeader(request.headers.origin);
+    if (origin === undefined) return;
+    const allowedOrigin = new URL(this.url).hostname;
+    if (!validateOriginHeader(origin, [allowedOrigin]).ok || origin !== this.url) {
+      throw requestError(diagnostic('AB8003', 'Request origin is not this foreground server.', 403));
+    }
   }
 
   #assertMutationSession(request: IncomingMessage): void {

@@ -198,6 +198,64 @@ it('starts a loopback server with prebuilt assets, does not open on --no-open, a
   }
 }, 30_000);
 
+it('fails closed when the optional agent API is enabled without its fixed bearer token', async () => {
+  const project = await createProjectFixture();
+  const assetsRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-agent-api-token-required-'));
+  let server: Awaited<ReturnType<typeof startDevServer>> | undefined;
+  await writeFile(join(assetsRoot, 'index.html'), '<!doctype html><title>Agent Bundle workbench</title>');
+  try {
+    try {
+      server = await startDevServer({
+        agentApi: true,
+        assets: createWorkbenchAssetSource({ root: assetsRoot }),
+        open: false,
+        port: 0,
+        root: project.root,
+      });
+      throw new Error('Expected agent API startup to require a bearer token.');
+    } catch (error) {
+      expect(error).toMatchObject({ code: 'AGENT_API_TOKEN_REQUIRED' });
+    }
+  } finally {
+    await server?.close();
+    await Promise.all([removeProjectFixture(project.root), rm(assetsRoot, { force: true, recursive: true })]);
+  }
+}, 30_000);
+
+it('enables the optional agent API from dev.agentApi when no CLI override is supplied', async () => {
+  const project = await createProjectFixture();
+  const assetsRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-agent-api-config-enabled-'));
+  let server: Awaited<ReturnType<typeof startDevServer>> | undefined;
+  await Promise.all([
+    writeFile(join(assetsRoot, 'index.html'), '<!doctype html><title>Agent Bundle workbench</title>'),
+    writeFile(project.configPath, [
+      "import { defineConfig } from 'agent-bundle';",
+      '',
+      'export default defineConfig({',
+      '  dev: { agentApi: true },',
+      "  plugin: { name: 'agent-api-config-fixture', version: '1.0.0' },",
+      "  skills: ['skills/review'],",
+      "  targets: ['portable'],",
+      '});',
+      '',
+    ].join('\n')),
+  ]);
+  try {
+    server = await startDevServer({
+      agentApiToken: 'configured-agent-api-token',
+      assets: createWorkbenchAssetSource({ root: assetsRoot }),
+      open: false,
+      port: 0,
+      root: project.root,
+    });
+
+    expect((await fetch(`${server.url}/mcp`, { method: 'POST' })).status).toBe(401);
+  } finally {
+    await server?.close();
+    await Promise.all([removeProjectFixture(project.root), rm(assetsRoot, { force: true, recursive: true })]);
+  }
+}, 30_000);
+
 it('normalizes a relative project root once before constructing every dev service', async () => {
   const project = await createProjectFixture();
   const assetsRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-workbench-relative-root-'));
@@ -685,6 +743,23 @@ it('closes MCP Apps before sessions and the coordinator while retaining every cl
   expect(closeOrder).toEqual(['mcp-apps', 'mcp-sessions', 'coordinator']);
 });
 
+it('closes the Agent API admission gate before shared lifecycle resources and retains its failure', async () => {
+  const agentApiFailure = new Error('Agent API cleanup failed.');
+  const closeOrder: string[] = [];
+
+  await expect(closeDevServerLifecycle(
+    { close: async () => { closeOrder.push('mcp-sessions'); } },
+    { close: async () => { closeOrder.push('coordinator'); } },
+    { close: async () => { closeOrder.push('mcp-apps'); } },
+    { close: async () => { closeOrder.push('playground'); } },
+    { close: async () => { closeOrder.push('agent-api'); throw agentApiFailure; } },
+  )).rejects.toEqual(expect.objectContaining({
+    failures: [{ error: agentApiFailure, resource: 'agent-api' }],
+    name: DevServerLifecycleCloseError.name,
+  }));
+  expect(closeOrder).toEqual(['agent-api', 'playground', 'mcp-apps', 'mcp-sessions', 'coordinator']);
+});
+
 it('retains sandbox startup and foreground cleanup failures structurally', async () => {
   const project = await createProjectFixture();
   const sandboxFailure = new Error('Sandbox startup failed.');
@@ -735,6 +810,22 @@ it('passes --no-open and the requested port from the CLI to the public dev API',
   expect(exitCode).toBe(0);
   expect(received).toEqual([expect.objectContaining({ open: false, port: 4100, root: '/project' })]);
   expect(stdout.join('')).toBe('Development workbench at http://127.0.0.1:4100\n');
+});
+
+it('passes explicit Agent API enablement and disablement through the dev CLI', async () => {
+  const received: unknown[] = [];
+  const startDevServer = async (options: Parameters<typeof import('../src/api.ts').startDevServer>[0]) => {
+    received.push(options);
+    return { close: async () => undefined, status: () => ({}) as never, url: 'http://127.0.0.1:4100' };
+  };
+
+  await expect(runCli(['dev', '--root', '/project', '--agent-api'], {}, { startDevServer })).resolves.toBe(0);
+  await expect(runCli(['dev', '--root', '/project', '--no-agent-api'], {}, { startDevServer })).resolves.toBe(0);
+
+  expect(received).toEqual([
+    expect.objectContaining({ agentApi: true, root: '/project' }),
+    expect.objectContaining({ agentApi: false, root: '/project' }),
+  ]);
 });
 
 it('closes the foreground session once when the dev CLI receives a termination signal', async () => {

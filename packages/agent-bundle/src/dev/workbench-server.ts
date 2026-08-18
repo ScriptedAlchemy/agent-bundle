@@ -2,6 +2,9 @@ import { spawn } from 'node:child_process';
 import { join, resolve } from 'node:path';
 
 import { createDefaultRegistry, type TargetRegistry } from '../adapters/registry.ts';
+import { loadConfig } from '../config/load.ts';
+import type { AgentBundleDevConfig } from '../core/types.ts';
+import { AgentApi } from './agent-api.ts';
 import { ArtifactInspectionService } from './artifact-inspection-service.ts';
 import { DevCoordinator } from './coordinator.ts';
 import { EpochStore } from './epoch-store.ts';
@@ -45,7 +48,7 @@ interface Closeable {
 
 export interface DevServerLifecycleCloseFailure {
   readonly error: unknown;
-  readonly resource: 'coordinator' | 'mcp-apps' | 'mcp-sessions' | 'playground';
+  readonly resource: 'agent-api' | 'coordinator' | 'mcp-apps' | 'mcp-sessions' | 'playground';
 }
 
 /** Reports session and coordinator cleanup failures without hiding either resource. */
@@ -60,6 +63,10 @@ export class DevServerLifecycleCloseError extends Error {
 }
 
 export interface StartDevServerOptions {
+  /** Enables the optional agent-facing MCP endpoint for this foreground session. */
+  readonly agentApi?: boolean;
+  /** @internal Trusted test seam for the fixed Agent API bearer secret. */
+  readonly agentApiToken?: string;
   /** Supplied by integration tests; published callers use the packaged assets. */
   readonly assets?: WorkbenchAssetSource;
   /** Launch the foreground URL after it has started. Defaults to false. */
@@ -196,15 +203,21 @@ export const closeDevServerLifecycle = async (
   coordinator: Closeable,
   mcpApps?: Closeable,
   playground?: Closeable,
+  agentApi?: Closeable,
 ): Promise<void> => {
-  // Playground owns in-flight subprocesses and ephemeral MCP sessions. Publish
-  // its closed admission gate and drain those operations before releasing the
-  // shared MCP services or the epoch-owning coordinator beneath them.
+  // Agent API and Playground both own admissions over shared services. Publish
+  // and drain each gate before closing those shared services or the coordinator.
+  const agentApiResults = agentApi === undefined ? [] : await Promise.allSettled([agentApi.close()]);
   const playgroundResults = playground === undefined ? [] : await Promise.allSettled([playground.close()]);
   const appResults = mcpApps === undefined ? [] : await Promise.allSettled([mcpApps.close()]);
   const sessionResults = await Promise.allSettled([mcpSessions.close()]);
   const coordinatorResults = await Promise.allSettled([coordinator.close()]);
   const failures = [
+    ...agentApiResults.flatMap((result): readonly DevServerLifecycleCloseFailure[] =>
+      result.status === 'rejected'
+        ? [Object.freeze({ error: result.reason, resource: 'agent-api' as const })]
+        : [],
+    ),
     ...playgroundResults.flatMap((result): readonly DevServerLifecycleCloseFailure[] =>
       result.status === 'rejected'
         ? [Object.freeze({ error: result.reason, resource: 'playground' as const })]
@@ -234,12 +247,27 @@ const withMcpSessionLifecycle = (
   mcpSessions: McpSessionService,
   mcpApps: () => Closeable | undefined,
   playground: Closeable,
+  agentApi: () => Closeable | undefined,
 ): ForegroundCoordinator => Object.freeze({
-  close: () => closeDevServerLifecycle(mcpSessions, coordinator, mcpApps(), playground),
+  close: () => closeDevServerLifecycle(mcpSessions, coordinator, mcpApps(), playground, agentApi()),
   rebuild: (invalidation: Invalidation) => coordinator.rebuild(invalidation),
   start: () => coordinator.start(),
   status: () => coordinator.status(),
 });
+
+const agentApiEnabledFromConfig = async (root: string): Promise<boolean> => {
+  const { config } = await loadConfig({ command: 'dev', mode: 'development', root });
+  const dev = config.dev;
+  if (dev === undefined) return false;
+  if (typeof dev !== 'object' || dev === null || Array.isArray(dev)) {
+    throw new TypeError('Configuration field "dev" must be an object when provided.');
+  }
+  const agentApi = (dev as AgentBundleDevConfig).agentApi;
+  if (agentApi !== undefined && typeof agentApi !== 'boolean') {
+    throw new TypeError('Configuration field "dev.agentApi" must be a boolean when provided.');
+  }
+  return agentApi === true;
+};
 
 const openInBrowser: OpenBrowser = (url) => new Promise((resolvePromise, rejectPromise) => {
   const [command, args] = process.platform === 'darwin'
@@ -258,6 +286,7 @@ const openInBrowser: OpenBrowser = (url) => new Promise((resolvePromise, rejectP
 /** Starts one loopback foreground session over the current project services. */
 export const startDevServer = async (options: StartDevServerOptions): Promise<DevServerSession> => {
   const root = resolve(options.root);
+  const agentApiEnabled = options.agentApi ?? await agentApiEnabledFromConfig(root);
   const registry = options.registry ?? createDefaultRegistry();
   const eventHub = new ProjectEventHub();
   const epochStore = new EpochStore({ projectRoot: root });
@@ -266,6 +295,8 @@ export const startDevServer = async (options: StartDevServerOptions): Promise<De
   const mcpSessions = new McpSessionService({ epochStore, projectRoot: root, registry });
   const hookPlayground = new HookPlaygroundService({ epochStore, registry });
   const skillDocuments = new SkillDocumentService({ epochStore, projectService, root });
+  const artifacts = new ArtifactInspectionService(epochStore, registry);
+  const evals = new EvalService({ projectRoot: root, registry });
   const appPreviews = new DeferredMcpAppPreviewService();
   // The resolved root is the project's stable identity: a store copied elsewhere must not reopen.
   const trace = new PlaygroundService({
@@ -282,12 +313,31 @@ export const startDevServer = async (options: StartDevServerOptions): Promise<De
     skillDocuments,
     trace,
   });
+  const agentApi = agentApiEnabled
+    ? new AgentApi({
+      artifacts,
+      coordinator,
+      diagnostics: {
+        list: async () => {
+          const status = coordinator.status();
+          return Object.freeze({ build: status.build, source: status.source });
+        },
+      },
+      epochs: epochStore,
+      evals,
+      hooks: hookPlayground,
+      mcpSessions,
+      skills: skillDocuments,
+      ...(options.agentApiToken === undefined ? {} : { token: options.agentApiToken }),
+    })
+    : undefined;
   let mcpApps: McpAppLifecycle | undefined;
   const foreground = await (options.testing?.startForegroundServer ?? startForegroundServer)({
-    artifacts: new ArtifactInspectionService(epochStore, registry),
+    ...(agentApi === undefined ? {} : { agentApi }),
+    artifacts,
     assets: options.assets ?? createWorkbenchAssetSource(),
-    coordinator: withMcpSessionLifecycle(coordinator, mcpSessions, () => mcpApps, playground),
-    evals: new EvalService({ projectRoot: root, registry }),
+    coordinator: withMcpSessionLifecycle(coordinator, mcpSessions, () => mcpApps, playground, () => agentApi),
+    evals,
     eventHub,
     hookPlayground,
     mcpAppPreviews: appPreviews,

@@ -87,6 +87,7 @@ interface JsonInputOptions {
 }
 
 interface DevCommandOptions {
+  readonly agentApi?: boolean;
   readonly open?: boolean;
   readonly port?: number;
   readonly root: string;
@@ -305,10 +306,13 @@ export const runCli = async (
   const devCommand = program.command('dev').description('Serve the packaged development workbench on loopback')
     .option('--root <root>', 'Project root', process.cwd())
     .option('--port <port>', 'Loopback TCP port', port)
+    .option('--agent-api', 'Enable the authenticated Agent API on /mcp')
+    .option('--no-agent-api', 'Disable the authenticated Agent API on /mcp')
     .option('--open', 'Open the workbench after the foreground server starts')
     .option('--no-open', 'Do not open the workbench after the foreground server starts');
   devCommand.action(async (options: DevCommandOptions) => {
     const session = await (dependencies.startDevServer ?? startDevServer)({
+      ...(options.agentApi === undefined ? {} : { agentApi: options.agentApi }),
       open: options.open === true,
       ...(options.port === undefined ? {} : { port: options.port }),
       root: options.root,

@@ -38,6 +38,8 @@
   },
   "dependencies": {
     "@modelcontextprotocol/client": "2.0.0",
+    "@modelcontextprotocol/node": "2.0.0",
+    "@modelcontextprotocol/server": "2.0.0",
     "@rsbuild/core": "2.1.13",
     "@rsbuild/plugin-react": "2.1.0",
     "@rslib/core": "0.23.2",
@@ -53,8 +55,5 @@
     "ignore": "7.0.6",
     "jiti": "2.7.0",
     "yaml": "2.9.0"
-  },
-  "devDependencies": {
-    "@modelcontextprotocol/server": "2.0.0"
   }
 }
