@@ -70,6 +70,17 @@ it('rejects duplicate replay keys, extra record fields, and unsafe wire text bef
     replay: { cursor: { afterSequence: 1 }, records: [{ ...record, summary: '/private/fixture-secret' }] },
   }));
   await expect(unsafeText.replay()).rejects.toMatchObject({ code: 'AB8093', message: 'Dev Log route returned an invalid response.' });
+
+  for (const summary of [
+    'C:\\private\\fixture',
+    'C:/private/fixture',
+    'C:private',
+    '\\\\server\\share',
+    'file:///private/fixture',
+  ]) {
+    const path = clientFor(json({ replay: { cursor: { afterSequence: 1 }, records: [{ ...record, summary }] } }));
+    await expect(path.replay()).rejects.toMatchObject({ code: 'AB8093', message: 'Dev Log route returned an invalid response.' });
+  }
 });
 
 it('rejects malformed UTF-8 and a frame larger than 64 KiB before decoding NDJSON records', async () => {
@@ -142,6 +153,40 @@ it('accepts benign log text containing token, secret, and tokenizer', async () =
   }));
 
   await expect(client.replay()).resolves.toMatchObject({ records: [{ summary: 'Unexpected token in the secret named Tokenizer.' }] });
+});
+
+it('accepts a canonical hook id containing a colon in an otherwise contiguous replay', async () => {
+  const hookRecord = {
+    ...record,
+    context: { epochId: 'epoch-1', hookId: 'hook:fixture', target: 'node' },
+    details: {},
+    kind: 'hook.simulate.started',
+    producer: 'hook',
+    sequence: 17,
+    summary: 'Hook simulation started.',
+  };
+  const client = clientFor(json({
+    replay: {
+      cursor: { afterSequence: 17 },
+      records: [
+        ...Array.from({ length: 16 }, (_value, index) => ({ ...record, sequence: index + 1 })),
+        hookRecord,
+      ],
+    },
+  }));
+
+  const replay = await client.replay();
+  expect(replay.cursor).toEqual({ afterSequence: 17 });
+  expect(replay.records.map((entry) => entry.sequence)).toEqual([
+    1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17,
+  ]);
+  expect(replay.records.at(-1)).toMatchObject(hookRecord);
+
+  const streamed: unknown[] = [];
+  const stream = clientFor(ndjson([new TextEncoder().encode(`${JSON.stringify(hookRecord)}\n`)]))
+    .stream({ afterSequence: 16, onMessage: (message) => streamed.push(message) });
+  await expect(stream.done).resolves.toBeUndefined();
+  expect(streamed).toEqual([hookRecord]);
 });
 
 it('accepts a fragmented initial gap and rejects a gap with the wrong live cursor', async () => {
