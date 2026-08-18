@@ -203,7 +203,10 @@ export class PlaygroundOrchestrationService {
       epoch = reference.epoch!;
       try { preparedNative = await service.prepare(reference as NativePlaygroundEpochReference, input); }
       catch (error) {
-        await reference.close();
+        try { await reference.close(); }
+        catch (releaseError) {
+          throw new AggregateError([error, releaseError], 'Native Playground admission and epoch release both failed.', { cause: releaseError });
+        }
         throw error;
       }
     } else {
@@ -320,8 +323,16 @@ export class PlaygroundOrchestrationService {
   }
 
   close(): Promise<void> {
-    this.#closePromise ??= this.#close();
-    return this.#closePromise;
+    if (this.#closePromise !== undefined) return this.#closePromise;
+    let resolvePromise!: () => void;
+    let rejectPromise!: (reason: unknown) => void;
+    const closing = new Promise<void>((resolve, reject) => {
+      resolvePromise = resolve;
+      rejectPromise = reject;
+    });
+    this.#closePromise = closing;
+    void this.#close().then(resolvePromise, rejectPromise);
+    return closing;
   }
 
   async #close(): Promise<void> {

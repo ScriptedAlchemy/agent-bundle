@@ -15,6 +15,7 @@ import type { EvalTrialRecord, EvalTrialWriter } from '../eval/run-store.ts';
 import type { EvalCase } from '../eval/types.ts';
 import type { NativeClaudeProcessRunner } from '../host-contracts/native-claude-contract.ts';
 import type { PlaygroundEventInput, PlaygroundJsonObject } from '../services/playground-service.ts';
+import { safeDevWireText } from './dev-log-service.ts';
 import type { ArtifactEpoch } from './types.ts';
 import { workspaceDiff, type WorkspaceDiff } from '../eval/workspace-diff.ts';
 
@@ -118,7 +119,7 @@ interface CatalogSnapshot {
   readonly selections: ReadonlyMap<string, CatalogSelection>;
 }
 
-interface PersistedCatalogSelection extends CatalogSelection {}
+type PersistedCatalogSelection = CatalogSelection;
 
 interface PersistedCatalogSnapshot {
   readonly epochId: string;
@@ -126,9 +127,10 @@ interface PersistedCatalogSnapshot {
   readonly version: 1;
 }
 
-class MemoryTrialWriter implements EvalTrialWriter {
-  async writeArtifactFile(relativePath: string, contents: string): Promise<string> {
-    return `native-raw-${digest({ contents, relativePath })}`;
+/** Native raw trial artifacts have no durable backing store; durable Playground events are the only exposed evidence. */
+class DiscardingTrialWriter implements EvalTrialWriter {
+  async writeArtifactFile(relativePath: string, _contents: string): Promise<string> {
+    return relativePath;
   }
 
   async writeTrial(trial: Omit<EvalTrialRecord, 'schemaVersion'>): Promise<EvalTrialRecord> {
@@ -184,11 +186,17 @@ const workspaceEvidence = (diff: WorkspaceDiff): PlaygroundJsonObject => Object.
   ...(diff.truncated === true ? { truncated: true } : {}),
 });
 
-const normalizedTrialEvents = (trial: EvalTrialRecord, diff: WorkspaceDiff | undefined): readonly PlaygroundEventInput[] => Object.freeze([
+const normalizedTrialEvents = (
+  trial: EvalTrialRecord,
+  diff: WorkspaceDiff | undefined,
+  hookEvents: readonly string[],
+  projectRoot: string,
+  response: string | undefined,
+): readonly PlaygroundEventInput[] => Object.freeze([
   Object.freeze({
     kind: 'native.activation',
     raw: Object.freeze({
-      activated: trial.evidence.skillActivation.activated,
+      activated: Object.freeze(trial.evidence.skillActivation.activated.map((name) => safeDevWireText(name, projectRoot))),
       level: trial.evidence.skillActivation.level,
     }),
     source: 'skill-evidence',
@@ -198,8 +206,8 @@ const normalizedTrialEvents = (trial: EvalTrialRecord, diff: WorkspaceDiff | und
     kind: 'native.mcp',
     raw: Object.freeze({
       calls: Object.freeze(trial.evidence.mcp.calls.map((call) => Object.freeze({
-        server: call.server,
-        tool: call.tool,
+        server: safeDevWireText(call.server, projectRoot),
+        tool: safeDevWireText(call.tool, projectRoot),
       }))),
       level: trial.evidence.mcp.level,
     }),
@@ -211,14 +219,45 @@ const normalizedTrialEvents = (trial: EvalTrialRecord, diff: WorkspaceDiff | und
     raw: Object.freeze({
       assertions: Object.freeze(trial.assertions.map((assertion) => Object.freeze({
         evidence: assertion.evidence,
-        id: assertion.assertionId,
-        kind: assertion.kind,
+        id: safeDevWireText(assertion.assertionId, projectRoot),
+        kind: safeDevWireText(assertion.kind, projectRoot),
         outcome: assertion.outcome,
       }))),
     }),
     source: 'diagnostics',
     summary: 'Recorded normalized native assertion evidence.',
   }),
+  ...(hookEvents.length === 0
+    ? []
+    : [Object.freeze({
+      kind: 'native.hooks',
+      raw: Object.freeze({ events: Object.freeze(hookEvents.map((event) => safeDevWireText(event, projectRoot))) }),
+      source: 'hook' as const,
+      summary: 'Recorded normalized native Hook evidence.',
+    })]),
+  ...(Object.keys(trial.evidence.scripts.results).length === 0
+    ? []
+    : [Object.freeze({
+      kind: 'native.scripts',
+      raw: Object.freeze({
+        level: trial.evidence.scripts.level,
+        results: Object.freeze(Object.entries(trial.evidence.scripts.results).map(([id, result]) => Object.freeze({
+          detail: safeDevWireText(result.detail, projectRoot),
+          id: safeDevWireText(id, projectRoot),
+          outcome: result.outcome,
+        }))),
+      }),
+      source: 'script' as const,
+      summary: 'Recorded normalized native script evidence.',
+    })]),
+  ...(response === undefined
+    ? []
+    : [Object.freeze({
+      kind: 'native.response',
+      raw: Object.freeze({ text: response }),
+      source: 'response' as const,
+      summary: 'Recorded normalized native host response.',
+    })]),
   ...(trial.harnessFailure === undefined
     ? []
     : [Object.freeze({
@@ -226,14 +265,6 @@ const normalizedTrialEvents = (trial: EvalTrialRecord, diff: WorkspaceDiff | und
       raw: Object.freeze({ code: trial.harnessFailure.code, stage: trial.harnessFailure.stage }),
       source: 'host-preflight' as const,
       summary: 'Native host could not complete the requested run.',
-    })]),
-  ...(trial.rawArtifacts.length === 0
-    ? []
-    : [Object.freeze({
-      kind: 'native.raw.references',
-      raw: Object.freeze({ refs: trial.rawArtifacts }),
-      source: 'diagnostics' as const,
-      summary: 'Recorded opaque normalized native raw references.',
     })]),
   ...(diff === undefined
     ? []
@@ -407,15 +438,21 @@ export class NativePlaygroundService {
     const nativeRoot = await this.#createWorkspaceRoot();
     let completedResponse: string | undefined;
     let completedWorkspace: WorkspaceDiff | undefined;
+    let completedHooks: readonly string[] = Object.freeze([]);
     const onProgress = async (phase: NativePlaygroundProgress): Promise<void> => {
       await options.emit(hardcodedProgress(phase));
     };
-    const onCompleted = async (result: Readonly<{ readonly response?: string; readonly workspacePath?: string }>): Promise<void> => {
+    const onCompleted = async (result: Readonly<{
+      readonly hookEvents?: readonly string[];
+      readonly response?: string;
+      readonly workspacePath?: string;
+    }>): Promise<void> => {
+      if (result.hookEvents !== undefined) completedHooks = Object.freeze([...result.hookEvents]);
       if (result.response !== undefined) completedResponse = safeResponse(result.response);
       if (result.workspacePath !== undefined) completedWorkspace = await this.#workspaceDiff(result.workspacePath, prepared);
     };
     try {
-      const writer = new MemoryTrialWriter();
+      const writer = new DiscardingTrialWriter();
       let trial: EvalTrialRecord;
       if (prepared.host === 'claude') {
         trial = await runClaudeTrial({
@@ -453,7 +490,7 @@ export class NativePlaygroundService {
         });
       }
       return Object.freeze({
-        events: normalizedTrialEvents(trial, completedWorkspace),
+        events: normalizedTrialEvents(trial, completedWorkspace, completedHooks, this.#projectRoot, completedResponse),
         ...(completedResponse === undefined ? {} : { response: completedResponse }),
         status: trial.harnessFailure === undefined && trial.outcome === 'pass' ? 'passed' : 'failed',
         ...(completedWorkspace === undefined ? {} : { workspace: workspaceEvidence(completedWorkspace) }),
@@ -575,7 +612,7 @@ export class NativePlaygroundService {
     try { raw = await readFile(path, 'utf8'); }
     catch (error) {
       if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT') return undefined;
-      throw new Error('Native Playground catalog snapshot could not be read.');
+      throw new Error('Native Playground catalog snapshot could not be read.', { cause: error });
     }
     let value: JsonValue;
     try { value = snapshotStrictJsonValue(parseJsonWithoutDuplicateKeys(raw)); }

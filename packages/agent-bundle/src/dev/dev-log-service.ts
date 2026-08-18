@@ -236,6 +236,10 @@ const redactAbsolutePaths = (value: string, roots: readonly string[]): string =>
     : sanitized;
 };
 
+/** Shared browser-facing text projection: provider credentials and absolute paths never reach a wire record. */
+export const safeDevWireText = (value: string, projectRoot: string): string =>
+  redactAbsolutePaths(value, rootFormsFor(projectRoot));
+
 const sanitizeJson = (value: JsonValue, roots: readonly string[]): JsonValue => {
   if (typeof value === 'string') return redactAbsolutePaths(value, roots);
   if (value === null || typeof value === 'boolean' || typeof value === 'number') return value;

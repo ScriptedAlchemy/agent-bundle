@@ -53,8 +53,9 @@ const testCatalogDirectory = (): string => join(tmpdir(), `agent-bundle-native-p
 
 const claudeStream = [
   '{"type":"system","subtype":"init","plugins":[{"name":"review"}],"mcp_servers":[{"name":"project"}]}',
-  '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Skill","input":{"skill":"review:review"}}]}}',
+  '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Skill","input":{"skill":"sk-proj-1234567890abcdef /private/native/activation"}}]}}',
   '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"mcp__project__status","input":{}}]}}',
+  '{"type":"system","hook_event_name":"session-start"}',
   '{"type":"result","subtype":"success","is_error":false,"result":"token=sk-proj-1234567890abcdef at /private/native/response"}',
   '',
 ].join('\n');
@@ -179,8 +180,15 @@ it('retains an exact epoch catalog across service restart after fixture source c
     await writeFile(join(epochRoot, 'claude', '.claude-plugin', 'plugin.json'), '{"name":"review"}\n');
     await writeFile(fixtureFile, 'first fixture bytes\n');
     const reference = epoch('epoch-retained', epochRoot);
+    let discoveryCalls = 0;
+    let sourceChanged = false;
     const options = {
-      discover: async () => nativeSuite('claude', join(suiteDir, 'review.eval.ts')),
+      discover: async () => {
+        discoveryCalls += 1;
+        return sourceChanged
+          ? dualHostSuite(join(suiteDir, 'review.eval.ts'))
+          : nativeSuite('claude', join(suiteDir, 'review.eval.ts'));
+      },
       inspectArtifact: async (candidate: NativePlaygroundEpochReference) => Object.freeze({
         binding: Object.freeze({ manifestPath: 'agent-bundle.manifest.json', source: 'explicit' as const, targetDigests: candidate.epoch.targetDigests }),
         root: candidate.root,
@@ -196,9 +204,11 @@ it('retains an exact epoch catalog across service restart after fixture source c
     const catalogA = await first.catalog(reference);
     await first.close();
     await writeFile(fixtureFile, 'second fixture bytes after retained epoch\n');
+    sourceChanged = true;
     const restarted = new NativePlaygroundService(options);
     const catalogB = await restarted.catalog(reference);
     expect(catalogB).toEqual(catalogA);
+    expect(discoveryCalls).toBe(1);
     const prepared = await restarted.prepare(reference, {
       caseId: catalogB.cases[0]!.id,
       fixtureId: catalogB.fixtures[0]!.id,
@@ -358,6 +368,9 @@ it('turns missing, incompatible, and unauthenticated native preflight into path-
         kind: 'native.harness.failed',
         raw: { code: 'EVAL_PROCESS_UNAVAILABLE', stage: 'preflight' },
       }));
+      expect(result.events).not.toContainEqual(expect.objectContaining({ kind: 'native.hooks' }));
+      expect(result.events).not.toContainEqual(expect.objectContaining({ kind: 'native.scripts' }));
+      expect(result.events).not.toContainEqual(expect.objectContaining({ kind: 'native.response' }));
       const serialized = JSON.stringify(result);
       expect(serialized).not.toContain('/private/native');
       expect(serialized).not.toContain('sk-proj-1234567890abcdef');
@@ -377,9 +390,22 @@ it('projects only awaited normalized Claude completion evidence and removes its 
     await mkdir(join(suiteDir, 'fixture'), { recursive: true });
     await writeFile(join(artifact, 'claude', '.claude-plugin', 'plugin.json'), '{"name":"review"}\n');
     await writeFile(join(suiteDir, 'fixture', 'input.txt'), 'baseline only\n');
+    await writeFile(join(suiteDir, 'grader.mjs'), 'export default () => ({ detail: "sk-proj-1234567890abcdef /private/native/grader", outcome: "pass" });\n');
     const reference = epoch('epoch-native-run', artifact);
+    const discovered = nativeSuite('claude', join(suiteDir, 'review.eval.ts'))[0]!;
+    const evaluatedCase = discovered.suite.cases[0]!;
+    const scriptEvidenceSuite: readonly DiscoveredEvalSuite[] = Object.freeze([Object.freeze({
+      sourcePath: discovered.sourcePath,
+      suite: Object.freeze({
+        ...discovered.suite,
+        cases: Object.freeze([Object.freeze({
+          ...evaluatedCase,
+          assertions: Object.freeze([Object.freeze({ id: 'grader', kind: 'outcome' as const, minimumEvidence: 'observed' as const, script: 'grader.mjs' })]),
+        })]),
+      }),
+    })]);
     const service = new NativePlaygroundService({
-      discover: async () => nativeSuite('claude', join(suiteDir, 'review.eval.ts')),
+      discover: async () => scriptEvidenceSuite,
       inspectArtifact: async (candidate) => Object.freeze({
         binding: Object.freeze({ manifestPath: 'agent-bundle.manifest.json', source: 'explicit' as const, targetDigests: candidate.epoch.targetDigests }),
         root: candidate.root,
@@ -417,9 +443,21 @@ it('projects only awaited normalized Claude completion evidence and removes its 
       'native.activation',
       'native.mcp',
       'native.assertions',
-      'native.raw.references',
+      'native.hooks',
+      'native.scripts',
+      'native.response',
       'native.workspace',
     ]);
+    expect(result.events).toContainEqual(expect.objectContaining({
+      kind: 'native.hooks', raw: { events: ['session-start'] }, source: 'hook',
+    }));
+    expect(result.events).toContainEqual(expect.objectContaining({
+      kind: 'native.activation', raw: { activated: ['[REDACTED]'], level: 'observed' }, source: 'skill-evidence',
+    }));
+    expect(result.events).toContainEqual(expect.objectContaining({
+      kind: 'native.scripts', raw: { level: 'observed', results: [{ detail: '[REDACTED]', id: 'grader.mjs', outcome: 'pass' }] }, source: 'script',
+    }));
+    expect(result.events).not.toContainEqual(expect.objectContaining({ kind: 'native.raw.references' }));
     expect(result.response).toContain('[REDACTED]');
     expect(result.response).toContain('[path]');
     expect(result.workspace).toEqual({ changes: [expect.objectContaining({ kind: 'added' })] });
@@ -428,6 +466,75 @@ it('projects only awaited normalized Claude completion evidence and removes its 
     expect(persistedShape).not.toContain('this must not be exposed');
     expect(persistedShape).not.toContain('sk-proj-1234567890abcdef');
     expect((await readdir(join(root, '.agent-bundle'))).filter((entry) => entry.startsWith('native-playground-'))).toEqual([]);
+    await service.close();
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('redacts hostile normalized Codex MCP labels without changing observed evidence classification', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-native-playground-hostile-mcp-'));
+  try {
+    const artifact = join(root, 'artifact');
+    const suiteDir = join(root, 'evals');
+    const normalCodexHome = join(root, 'normal-codex-home');
+    await mkdir(join(artifact, 'codex', '.agents', 'plugins'), { recursive: true });
+    await mkdir(join(suiteDir, 'fixture'), { recursive: true });
+    await mkdir(normalCodexHome, { recursive: true });
+    await writeFile(join(artifact, 'codex', '.agents', 'plugins', 'marketplace.json'), JSON.stringify({
+      name: 'native-marketplace',
+      plugins: [{ name: 'native-review', source: { path: './', source: 'local' } }],
+    }));
+    await writeFile(join(suiteDir, 'fixture', 'input.txt'), 'baseline only\n');
+    await writeFile(join(normalCodexHome, 'auth.json'), '{"opaque":"session"}\n');
+    const reference = epoch('epoch-native-hostile-mcp', artifact, 'codex');
+    const service = new NativePlaygroundService({
+      discover: async () => nativeSuite('codex', join(suiteDir, 'review.eval.ts')),
+      environment: Object.freeze({ CODEX_HOME: normalCodexHome }),
+      inspectArtifact: async (candidate) => Object.freeze({
+        binding: Object.freeze({ manifestPath: 'agent-bundle.manifest.json', source: 'explicit' as const, targetDigests: candidate.epoch.targetDigests }),
+        root: candidate.root,
+      }),
+      native: {
+        codexRun: async (command) => {
+          const step = command.args[0] === 'plugin' ? `${command.args[0]}.${command.args[1]}` : command.args[0];
+          if (step === 'plugin.list') {
+            return Object.freeze({
+              exitCode: 0,
+              stderr: '',
+              stdout: '{"installed":[{"name":"native-review","marketplaceName":"native-marketplace","installed":true,"enabled":true}]}',
+            });
+          }
+          if (step !== 'exec') return Object.freeze({ exitCode: 0, stderr: '', stdout: 'codex-cli 0.147.0\n' });
+          return Object.freeze({
+            exitCode: 0,
+            stderr: '',
+            stdout: [
+              '{"type":"item.completed","item":{"id":"hostile-mcp","type":"mcp_tool_call","server":"/private/native/mcp","tool":"sk-proj-1234567890abcdef"}}',
+              '{"type":"turn.completed"}',
+            ].join('\n'),
+          });
+        },
+      },
+      projectRoot: root,
+    });
+    const catalog = await service.catalog(reference);
+    const prepared = await service.prepare(reference, {
+      caseId: catalog.cases[0]!.id,
+      fixtureId: catalog.fixtures[0]!.id,
+      host: 'codex',
+      modelPinId: catalog.modelPins[0]!.id,
+      operation: 'native.prompt',
+      prompt: 'Review the fixture.',
+      target: 'codex',
+    });
+    const result = await service.run(prepared, { emit: async () => undefined, signal: new AbortController().signal });
+    expect(result.events).toContainEqual(expect.objectContaining({
+      kind: 'native.mcp',
+      raw: { calls: [{ server: '[REDACTED]', tool: '[REDACTED]' }], level: 'observed' },
+    }));
+    expect(JSON.stringify(result)).not.toContain('/private/native/mcp');
+    expect(JSON.stringify(result)).not.toContain('sk-proj-1234567890abcdef');
     await service.close();
   } finally {
     await rm(root, { force: true, recursive: true });

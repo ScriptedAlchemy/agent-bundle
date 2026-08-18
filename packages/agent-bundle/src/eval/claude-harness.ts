@@ -72,7 +72,11 @@ export interface RunClaudeTrialOptions extends ClaudeProcessOptions {
   readonly host?: string;
   readonly now?: () => Date;
   /** Narrow server-owned native Playground seam; no raw process output crosses it. */
-  readonly onCompleted?: (result: Readonly<{ readonly response?: string; readonly workspacePath?: string }>) => Promise<void> | void;
+  readonly onCompleted?: (result: Readonly<{
+    readonly hookEvents?: readonly string[];
+    readonly response?: string;
+    readonly workspacePath?: string;
+  }>) => Promise<void> | void;
   readonly onProgress?: (phase: 'fixture.materialized' | 'host.started' | 'preflight') => Promise<void> | void;
   readonly semanticGrader?: EvalSemanticGraderSpec;
   readonly suiteDir: string;
@@ -438,6 +442,7 @@ export const runClaudeTrial = async (options: RunClaudeTrialOptions): Promise<Ev
     trialIndex: options.trialIndex,
   });
   await options.onCompleted?.(Object.freeze({
+    ...(stream === undefined || stream.hookEvents.length === 0 ? {} : { hookEvents: stream.hookEvents }),
     ...(stream === undefined ? {} : { response: stream.finalResponse }),
     ...(workspacePath === undefined ? {} : { workspacePath }),
   }));
