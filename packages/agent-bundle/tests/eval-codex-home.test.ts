@@ -24,7 +24,6 @@ import {
 
 const fixtureRoot = new URL('../fixtures/eval/codex/', import.meta.url);
 const normalCodexHome = resolveNormalCodexHome(process.env);
-const homeIt = existsSync(normalCodexHome) ? it : it.skip;
 const smokeIt = process.env.AGENT_BUNDLE_NATIVE_CODEX_SMOKE === '1' ? it : it.skip;
 
 const smokeCase = (): EvalCase => normalizeEvalCase({
@@ -46,6 +45,16 @@ const seedProject = async (): Promise<string> => {
   return root;
 };
 
+const seedNormalCodexHome = async (root: string): Promise<string> => {
+  const home = join(root, 'normal-codex-home');
+  await mkdir(join(home, 'plugins'), { recursive: true });
+  await writeFile(join(home, 'auth.json'), '{"opaque":"session"}\n');
+  await chmod(join(home, 'auth.json'), 0o600);
+  await writeFile(join(home, 'config.toml'), 'model = "gpt-5-codex"\n');
+  await writeFile(join(home, 'plugins', 'installed.json'), '{"installed":[]}\n');
+  return home;
+};
+
 const inertRunner = async (command: CodexCommandInput): Promise<CodexCommandResult> => {
   if (command.args[0] === '--version') return { exitCode: 0, stderr: '', stdout: 'codex-cli 0.147.0\n' };
   if (command.args[1] === 'list') {
@@ -61,8 +70,9 @@ const inertRunner = async (command: CodexCommandInput): Promise<CodexCommandResu
   return { exitCode: 0, stderr: '', stdout: '' };
 };
 
-const runOnRealHome = async (
+const runOnNormalHome = async (
   root: string,
+  normalHome: string,
   runner?: (command: CodexCommandInput) => Promise<CodexCommandResult>,
 ) => {
   const testCase = smokeCase();
@@ -80,6 +90,7 @@ const runOnRealHome = async (
       },
       evalCase: testCase,
       fixturePlan: await planEvalFixture({ baseDir: join(root, 'evals'), fixture: testCase.fixture }),
+      normalCodexHome: normalHome,
       ...(runner === undefined ? {} : { run: runner }),
       suiteDir: join(root, 'evals'),
       trialIndex: 0,
@@ -138,12 +149,13 @@ it('copies auth state byte for byte with its mode and never rewrites the source'
   }
 });
 
-homeIt('leaves the real Codex home digest unchanged across a trial', async () => {
+it('leaves a controlled normal Codex home digest unchanged across a trial', async () => {
   const root = await seedProject();
   try {
-    const before = await digestCodexHome(normalCodexHome);
-    const trial = await runOnRealHome(root, inertRunner);
-    const after = await digestCodexHome(normalCodexHome);
+    const controlledNormalHome = await seedNormalCodexHome(root);
+    const before = await digestCodexHome(controlledNormalHome);
+    const trial = await runOnNormalHome(root, controlledNormalHome, inertRunner);
+    const after = await digestCodexHome(controlledNormalHome);
 
     expect(after).toEqual(before);
     expect(trial.harnessFailure?.message ?? '').not.toMatch(/CODEX_HOME_MUTATED/u);
@@ -158,7 +170,7 @@ smokeIt('runs one signed-in ephemeral Codex trial without touching the normal ho
   const root = await seedProject();
   try {
     const before = await digestCodexHome(normalCodexHome);
-    const trial = await runOnRealHome(root);
+    const trial = await runOnNormalHome(root, normalCodexHome);
     const after = await digestCodexHome(normalCodexHome);
 
     expect(after).toEqual(before);
