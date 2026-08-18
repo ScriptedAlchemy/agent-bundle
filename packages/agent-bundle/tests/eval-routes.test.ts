@@ -140,6 +140,11 @@ class RecordingService implements EvalRouteService {
   streamEvents: readonly EvalRunEvent[] | undefined;
   /** Holds a run open until its request signal aborts, so cancellation is observable. */
   pending = false;
+  holdAfterAbort = false;
+  pendingRunFailure: unknown;
+  pendingRunAfterAbortStarted: (() => void) | undefined;
+  pendingRunRelease: (() => void) | undefined;
+  pendingRunStarted: (() => void) | undefined;
 
   async compare(baseRunId: string, candidateRunId: string): Promise<EvalComparison> {
     this.calls.push({ baseRunId, candidateRunId, kind: 'compare' });
@@ -231,10 +236,17 @@ class RecordingService implements EvalRouteService {
     if (this.failure !== undefined) throw this.failure;
     const signal = request.signal;
     if (this.pending && signal !== undefined) {
+      this.pendingRunStarted?.();
       await new Promise<void>((resolvePromise) => {
         if (signal.aborted) resolvePromise();
         else signal.addEventListener('abort', () => resolvePromise(), { once: true });
       });
+      if (this.holdAfterAbort) {
+        const held = new Promise<void>((resolvePromise) => { this.pendingRunRelease = resolvePromise; });
+        this.pendingRunAfterAbortStarted?.();
+        await held;
+      }
+      if (this.pendingRunFailure !== undefined) throw this.pendingRunFailure;
     }
     return runResult;
   }
@@ -447,7 +459,7 @@ it('retains a late event-subscription cleanup failure in the stable route close 
     const closing = started.routes.close();
     service.streamOpeningRelease?.();
 
-    await expect(closing).rejects.toThrow('Eval route readers could not close.');
+    await expect(closing).rejects.toThrow('Eval route operations could not close.');
     response = await pending;
     expect(response.status).toBe(502);
     expect(service.streamSubscriptionCloses).toBe(1);
@@ -614,7 +626,7 @@ it('tracks a peer-closed artifact reader failure for the stable route close aggr
     await response.body?.cancel();
     await new Promise<void>((resolvePromise) => setTimeout(resolvePromise, 20));
 
-    await expect(started.routes.close()).rejects.toThrow('Eval route readers could not close.');
+    await expect(started.routes.close()).rejects.toThrow('Eval route operations could not close.');
     expect(service.artifactCloseCalls).toBe(1);
     expect(unhandled).toEqual([]);
   } finally {
@@ -853,6 +865,61 @@ it('aborts an in-flight run when the routes close', async () => {
     await expect(pending.then((response) => response.status)).resolves.toBe(200);
   } finally {
     await started.close();
+  }
+});
+
+it('keeps route close pending until an aborted run durably settles', async () => {
+  const service = new RecordingService();
+  service.pending = true;
+  service.holdAfterAbort = true;
+  const admitted = new Promise<void>((resolvePromise) => { service.pendingRunStarted = resolvePromise; });
+  const started = await startRoutes(service);
+  let pending: Promise<Response> | undefined;
+  try {
+    pending = fetch(`${started.url}/api/evals/runs`, { body: JSON.stringify({}), headers, method: 'POST' });
+    await admitted;
+
+    let settled = false;
+    const closing = started.routes.close();
+    void closing.then(() => { settled = true; });
+    await new Promise<void>((resolvePromise) => setImmediate(resolvePromise));
+    expect(settled).toBe(false);
+
+    service.pendingRunRelease?.();
+    await closing;
+    await expect(pending.then((response) => response.status)).resolves.toBe(200);
+  } finally {
+    service.pendingRunRelease?.();
+    await pending?.catch(() => undefined);
+    await started.close().catch(() => undefined);
+  }
+});
+
+it('retains one post-abort run failure in the stable route close aggregate', async () => {
+  const service = new RecordingService();
+  service.pending = true;
+  service.holdAfterAbort = true;
+  service.pendingRunFailure = new Error('durable cancellation failed');
+  const admitted = new Promise<void>((resolvePromise) => { service.pendingRunStarted = resolvePromise; });
+  const heldAfterAbort = new Promise<void>((resolvePromise) => { service.pendingRunAfterAbortStarted = resolvePromise; });
+  const started = await startRoutes(service);
+  let pending: Promise<Response> | undefined;
+  try {
+    pending = fetch(`${started.url}/api/evals/runs`, { body: JSON.stringify({}), headers, method: 'POST' });
+    await admitted;
+    const closing = started.routes.close();
+    await heldAfterAbort;
+    service.pendingRunRelease?.();
+
+    await expect(closing).rejects.toMatchObject({
+      errors: [service.pendingRunFailure],
+      message: 'Eval route operations could not close.',
+    });
+    await expect(pending.then((response) => response.status)).resolves.toBe(502);
+  } finally {
+    service.pendingRunRelease?.();
+    await pending?.catch(() => undefined);
+    await started.close().catch(() => undefined);
   }
 });
 

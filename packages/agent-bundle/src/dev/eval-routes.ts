@@ -32,6 +32,13 @@ interface RequestDiagnostic {
   readonly status: number;
 }
 
+interface ActiveEvalOperation {
+  abortedByClose: boolean;
+  readonly controller: AbortController;
+  failure: Readonly<{ readonly error: unknown }> | undefined;
+  readonly settled: Promise<void>;
+}
+
 type Route =
   | Readonly<{ readonly artifactRef: string; readonly kind: 'artifact'; readonly runId: string }>
   | Readonly<{ readonly kind: 'comparisons' }>
@@ -365,7 +372,7 @@ export class EvalRoutes {
   readonly #closeFailures = new Set<unknown>();
   readonly #closeReaders = new Set<() => Promise<void>>();
   readonly #readerCloses = new Set<Promise<void>>();
-  readonly #running = new Set<AbortController>();
+  readonly #running = new Set<ActiveEvalOperation>();
   readonly #service: EvalRouteService | undefined;
   #closePromise: Promise<void> | undefined;
 
@@ -376,21 +383,29 @@ export class EvalRoutes {
 
   close(): Promise<void> {
     if (this.#closePromise !== undefined) return this.#closePromise;
-    for (const controller of this.#running) controller.abort();
-    this.#running.clear();
+    const running = [...this.#running];
     this.#closePromise = Promise.resolve().then(async () => {
+      await Promise.allSettled(running.map((operation) => operation.settled));
       await Promise.allSettled([...this.#admissions]);
       const results = await Promise.allSettled([...this.#closeReaders].map(async (close) => close()));
       await Promise.allSettled([...this.#readerCloses]);
       this.#closeReaders.clear();
       const failures = [
+        ...running.flatMap((operation) => operation.abortedByClose && operation.failure !== undefined &&
+          !(operation.failure.error instanceof Error && operation.failure.error.name === 'AbortError')
+          ? [operation.failure.error]
+          : []),
         ...results.filter((result): result is PromiseRejectedResult => result.status === 'rejected').map((result) => result.reason),
         ...this.#closeFailures,
       ];
       if (failures.length > 0) {
-        throw new AggregateError(failures, 'Eval route readers could not close.');
+        throw new AggregateError(failures, 'Eval route operations could not close.');
       }
     });
+    for (const operation of running) {
+      operation.abortedByClose = true;
+      operation.controller.abort();
+    }
     return this.#closePromise;
   }
 
@@ -454,14 +469,29 @@ export class EvalRoutes {
   async #cancellable<T>(response: ServerResponse, action: (signal: AbortSignal) => Promise<T>): Promise<T> {
     const controller = new AbortController();
     const abort = (): void => controller.abort();
-    this.#running.add(controller);
+    let settle!: () => void;
+    const operation: ActiveEvalOperation = {
+      abortedByClose: false,
+      controller,
+      failure: undefined,
+      settled: new Promise<void>((resolvePromise) => { settle = resolvePromise; }),
+    };
+    this.#running.add(operation);
     response.once('close', abort);
     try {
-      if (this.#closePromise !== undefined || response.destroyed || response.writableEnded) abort();
+      if (this.#closePromise !== undefined) {
+        controller.abort();
+        throw this.#unavailable(503);
+      }
+      if (response.destroyed || response.writableEnded) abort();
       return await action(controller.signal);
+    } catch (error) {
+      operation.failure = Object.freeze({ error });
+      throw error;
     } finally {
       response.off('close', abort);
-      this.#running.delete(controller);
+      this.#running.delete(operation);
+      settle();
     }
   }
 

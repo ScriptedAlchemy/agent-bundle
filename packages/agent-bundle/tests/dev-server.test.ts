@@ -16,6 +16,7 @@ import {
   type ProjectStatus,
 } from '../src/dev/index.ts';
 import { ArtifactInspectionServiceError } from '../src/dev/artifact-inspection-service.ts';
+import type { EvalRouteService } from '../src/dev/eval-routes.ts';
 import type { McpSessionService } from '../src/dev/mcp-session-service.ts';
 
 const status = (): ProjectStatus => ({
@@ -1245,6 +1246,65 @@ it('keeps the foreground close pending until every hook simulation has drained',
   expect(hookPlayground.settlements).toEqual(['simulation']);
   expect(coordinator.closeCalls).toBe(1);
   await simulation;
+});
+
+it('keeps foreground close pending until an aborted eval run durably settles', async () => {
+  let admitRun!: () => void;
+  let observeAbort!: () => void;
+  let releaseRun!: () => void;
+  const admitted = new Promise<void>((resolvePromise) => { admitRun = resolvePromise; });
+  const aborted = new Promise<void>((resolvePromise) => { observeAbort = resolvePromise; });
+  const released = new Promise<void>((resolvePromise) => { releaseRun = resolvePromise; });
+  const evals: EvalRouteService = {
+    async compare() { throw new Error('Unexpected comparison.'); },
+    async events() { throw new Error('Unexpected event replay.'); },
+    async list() { throw new Error('Unexpected run listing.'); },
+    async openArtifact() { throw new Error('Unexpected artifact read.'); },
+    async read() { throw new Error('Unexpected run read.'); },
+    async run(request) {
+      admitRun();
+      await new Promise<void>((resolvePromise) => {
+        if (request.signal?.aborted === true) resolvePromise();
+        else request.signal?.addEventListener('abort', () => resolvePromise(), { once: true });
+      });
+      observeAbort();
+      await released;
+      throw request.signal?.reason;
+    },
+    async subscribeEvents() { throw new Error('Unexpected event subscription.'); },
+    async suites() { throw new Error('Unexpected suite listing.'); },
+  };
+  const coordinator = new RecordingCoordinator();
+  const server = await startForegroundServer({ coordinator, evals, eventHub: new ProjectEventHub(), port: 0 });
+  const run = fetch(`${server.url}/api/evals/runs`, {
+    body: JSON.stringify({}),
+    headers: {
+      'content-type': 'application/json',
+      origin: server.url,
+      'x-agent-bundle-session': server.sessionToken,
+    },
+    method: 'POST',
+  }).catch(() => undefined);
+
+  try {
+    await admitted;
+    const closing = server.close();
+    await aborted;
+    const state = await Promise.race([
+      closing.then(() => 'closed'),
+      new Promise<string>((resolvePromise) => { setTimeout(() => resolvePromise('pending'), 50); }),
+    ]);
+    expect(state).toBe('pending');
+
+    releaseRun();
+    await closing;
+    expect(coordinator.closeCalls).toBe(1);
+    await run;
+  } finally {
+    releaseRun();
+    await run;
+    await server.close().catch(() => undefined);
+  }
 });
 
 it('aggregates a hook playground drain failure while still releasing the server and coordinator', async () => {
