@@ -67,7 +67,7 @@ const isRequestDiagnostic = (value: unknown): value is RequestDiagnostic =>
 /** Service messages name project paths, so each code keeps one fixed browser-facing sentence. */
 const serviceDiagnostics: Readonly<Record<EvalServiceErrorCode, RequestDiagnostic>> = Object.freeze({
   EVAL_ARTIFACT_OUTSIDE_PROJECT: diagnostic('AB8084', 'The evaluated artifact must be inside the project.', 422),
-  EVAL_HARNESS_UNSUPPORTED: diagnostic('AB8075', 'Model-backed eval harnesses are not supported yet.', 422),
+  EVAL_HARNESS_UNSUPPORTED: diagnostic('AB8075', 'The requested eval harness is unknown or unsupported.', 422),
   EVAL_RUN_NOT_FOUND: diagnostic('AB8074', 'Eval run was not found.', 404),
   EVAL_SELECTION_EMPTY: diagnostic('AB8076', 'No discovered eval suite or case matched this selection.', 422),
   EVAL_TARGET_MISSING: diagnostic('AB8077', 'The evaluated artifact has no target for a pinned eval host.', 422),
@@ -258,7 +258,7 @@ const comparisonQuery = (
 };
 
 /**
- * HTTP boundary for deterministic evals. The browser names discovered suites and
+ * HTTP boundary for evals. The browser names discovered suites and
  * cases; the service resolves the project, artifact, and run storage it uses.
  */
 export class EvalRoutes {

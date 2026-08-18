@@ -111,7 +111,7 @@ it('routes each host to its native harness and rejects an unknown one', () => {
   expect(createEvalHarness('claude').kind).toBe('native-claude');
   expect(createEvalHarness('codex').kind).toBe('native-codex');
   expect(() => createEvalHarness('gemini')).toThrow(EvalHarnessError);
-  expect(() => createEvalHarness('gemini')).toThrow(/not supported yet/iu);
+  expect(() => createEvalHarness('gemini')).toThrow(/unknown or unsupported/iu);
 });
 
 it('validates and reads an explicit artifact exactly and builds one run-owned copy otherwise', async () => {

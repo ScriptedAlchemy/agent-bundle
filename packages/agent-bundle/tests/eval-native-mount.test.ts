@@ -54,8 +54,9 @@ const codexPluginList = JSON.stringify({
 });
 
 const codexEvents = [
-  JSON.stringify({ id: '0', msg: { type: 'task_started' } }),
-  JSON.stringify({ id: '1', msg: { last_agent_message: 'Reviewed.', type: 'task_complete' } }),
+  JSON.stringify({ type: 'thread.started' }),
+  JSON.stringify({ item: { id: '0', text: 'Reviewed.', type: 'agent_message' }, type: 'item.completed' }),
+  JSON.stringify({ type: 'turn.completed' }),
   '',
 ].join('\n');
 
@@ -113,7 +114,7 @@ const nativeService = (root: string, native: EvalServiceOptions['native']): Eval
 });
 
 const seedNativeProject = async (root: string): Promise<void> => {
-  await seedEvalProject(root, { targets: ['claude', 'codex', 'portable'] });
+  await seedEvalProject(root, { marketplace: true, targets: ['claude', 'codex', 'portable'] });
   await writeEvalSuite(root, 'native.eval.ts', {
     cases: [{
       hosts: { claude: { model: claudeModel }, codex: { model: codexModel } },
@@ -140,7 +141,7 @@ it('runs a native Claude trial through the service with the pinned model and no 
     const trial = result.trials[0]!;
     expect(trial.host).toBe('claude');
     expect(trial.model).toBe(claudeModel);
-    expect(trial.id).toBe('claude-1');
+    expect(trial.id).toBe('native-review--claude-1');
     expect(trial.harnessFailure).toBeUndefined();
     expect(trial.outcome).toBe('pass');
 
@@ -160,7 +161,7 @@ it('runs a native Claude trial through the service with the pinned model and no 
     expect(execution.args.slice(0, 3)).toEqual(['-p', '--plugin-dir', pluginDirectory]);
     expect(execution.args).toContain('--model');
     expect(execution.args[execution.args.indexOf('--model') + 1]).toBe(claudeModel);
-    expect(trial.rawArtifacts).toContain('artifacts/claude-1/stream.jsonl');
+    expect(trial.rawArtifacts).toContain('artifacts/native-review--claude-1/stream.jsonl');
   } finally {
     await removeProjectFixture(project.root);
   }
@@ -197,7 +198,7 @@ it('runs a native Codex trial in a temporary CODEX_HOME with --ephemeral and the
       expect(command.environment.OPENAI_API_KEY).toBeUndefined();
     }
     expect(await readFile(join(home, 'auth.json'), 'utf8')).toBe(before);
-    expect(trial.rawArtifacts).toContain('artifacts/codex-1/events.jsonl');
+    expect(trial.rawArtifacts).toContain('artifacts/native-review--codex-1/events.jsonl');
   } finally {
     await removeProjectFixture(project.root);
   }
@@ -267,6 +268,30 @@ it('records cancellation evidence for a cancelled native run', async () => {
     );
     expect(events).toContain('"run.cancelled"');
     expect(events).toContain('"harness":"claude"');
+  } finally {
+    await removeProjectFixture(project.root);
+  }
+}, 240_000);
+
+it('forwards an active AbortSignal into native Codex commands', async () => {
+  const project = await createProjectFixture();
+  try {
+    await seedNativeProject(project.root);
+    const controller = new AbortController();
+    const seen: Array<AbortSignal | undefined> = [];
+
+    const result = await nativeService(project.root, {
+      codexRun: async (command) => {
+        seen.push(command.signal);
+        controller.abort();
+        return { exitCode: 0, stderr: '', stdout: 'codex-cli 0.147.0\n' };
+      },
+      environment: { CODEX_HOME: await seedNormalCodexHome(project.root), PATH: process.env.PATH ?? '/usr/bin' },
+    }).run({ harness: 'codex', signal: controller.signal, suites: ['native-suite'] });
+
+    expect(seen).toEqual([controller.signal]);
+    expect(result.trials).toHaveLength(1);
+    expect(result.trials[0]?.harnessFailure).toMatchObject({ code: 'EVAL_TRACE_UNAVAILABLE', stage: 'trace' });
   } finally {
     await removeProjectFixture(project.root);
   }

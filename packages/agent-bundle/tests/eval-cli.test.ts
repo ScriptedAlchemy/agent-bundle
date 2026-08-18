@@ -167,7 +167,7 @@ it('summarizes pass, fail, and inconclusive counts separately and fails the comm
   }
 }, 120_000);
 
-it('refuses a model-backed harness with one explicit unsupported diagnostic', async () => {
+it('reports a native harness with no matching authored host as an empty selection', async () => {
   const project = await createProjectFixture();
   try {
     await seedEvalProject(project.root);
@@ -177,8 +177,8 @@ it('refuses a model-backed harness with one explicit unsupported diagnostic', as
     expect(result.code).toBe(1);
     expect(result.stdout).toBe('');
     const diagnostics = JSON.parse(result.stderr) as readonly { readonly code: string; readonly message: string }[];
-    expect(diagnostics).toMatchObject([{ code: 'AB9001', severity: 'error' }]);
-    expect(diagnostics[0]?.message).toContain('not supported yet');
+    expect(diagnostics).toMatchObject([{ code: 'AB9002', severity: 'error' }]);
+    expect(diagnostics[0]?.message).toContain('No selected eval case has a host');
     await expect(access(join(project.root, '.agent-bundle', 'runs'))).rejects.toThrow();
   } finally {
     await removeProjectFixture(project.root);

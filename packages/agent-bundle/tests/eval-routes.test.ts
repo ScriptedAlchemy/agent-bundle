@@ -353,6 +353,26 @@ it('answers each service refusal with one fixed browser-facing sentence', async 
   }
 });
 
+it('describes AB8075 as an unknown or unsupported harness', async () => {
+  const service = new RecordingService();
+  service.failure = new EvalServiceError('EVAL_HARNESS_UNSUPPORTED', '/projects/demo has no gemini harness');
+  const started = await startRoutes(service);
+  try {
+    const response = await fetch(`${started.url}/api/evals/runs`, {
+      body: JSON.stringify({}),
+      headers,
+      method: 'POST',
+    });
+
+    expect(response.status).toBe(422);
+    await expect(response.json()).resolves.toEqual({
+      diagnostic: { code: 'AB8075', message: 'The requested eval harness is unknown or unsupported.' },
+    });
+  } finally {
+    await started.close();
+  }
+});
+
 it('reports an unexpected service failure without leaking it', async () => {
   const service = new RecordingService();
   service.failure = new Error('/projects/demo/.agent-bundle exploded');
