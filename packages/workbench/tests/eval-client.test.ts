@@ -145,8 +145,9 @@ it('omits an absent selection field instead of sending an empty one', async () =
 
 it('reads one recorded run and lists every recorded run', async () => {
   const calls: RecordedRequest[] = [];
+  let reply = 0;
   const evalClient = client(
-    recordingFetch(calls, () => response({ run: runResult, runs: [runRecord] })),
+    recordingFetch(calls, () => response(reply++ === 0 ? { run: runResult } : { runs: [runRecord] })),
   );
 
   await expect(evalClient.read('20260817t000000000z-abcdef01')).resolves.toMatchObject({ trials: [{ id: 'portable-1' }] });
@@ -345,4 +346,18 @@ it('shares one foreground bootstrap across eval and comparison routes and fences
     baselineRunId: runRecord.id,
   });
   expect(bootstraps).toBe(2);
+});
+
+it('rejects extra or nonsensical fields anywhere in suite and run DTOs', async () => {
+  const cases: readonly (readonly [unknown, (client: EvalClient) => Promise<unknown>])[] = [
+    [{ ...listing, suites: [{ ...listing.suites[0], cases: [{ ...listing.suites[0]!.cases[0], extra: true }] }] }, (client) => client.suites()],
+    [{ run: { ...runResult, run: { ...runRecord, extra: true } } }, (client) => client.read(runRecord.id)],
+    [{ extra: true, runs: [runRecord] }, (client) => client.runs()],
+    [{ runs: [{ ...runRecord, summary: { ...runRecord.summary, trials: -1 } }] }, (client) => client.runs()],
+  ];
+
+  for (const [body, operation] of cases) {
+    const evalClient = client(recordingFetch([], () => response(body)));
+    await expect(operation(evalClient)).rejects.toMatchObject({ code: 'AB8073' });
+  }
 });

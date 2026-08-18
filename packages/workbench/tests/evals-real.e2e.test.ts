@@ -82,6 +82,16 @@ e2e('runs deterministic Eval evidence with an ordered timeline and authenticated
     await downloadLink.click();
     await (await download).path();
 
+    const restarted = page.waitForResponse((response) =>
+      response.url().startsWith(`${server.url}/api/evals/runs`) && response.request().method() === 'POST' && response.ok());
+    await page.getByRole('button', { name: 'Run deterministic suite' }).click();
+    const replacement = await (await restarted).json() as {
+      readonly run: Readonly<{ readonly run: Readonly<{ readonly id: string }> }>;
+    };
+    expect(replacement.run.run.id).not.toBe(runId);
+    await expect(page.getByText(`Run ${replacement.run.run.id} finished:`)).toBeVisible({ timeout: browserTimeout });
+    await expect(page.getByRole('link', { name: 'Download evidence.json' })).toHaveCount(0);
+
     await expect(page.evaluate(async (path) => (await fetch(path)).status,
       artifactPath)).resolves.toBe(403);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);

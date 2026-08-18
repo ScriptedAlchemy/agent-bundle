@@ -71,6 +71,7 @@ export interface EvalOutcomeCounts {
 }
 
 export interface EvalRunViewOptions {
+  readonly discardedThroughSequence?: number;
   readonly events?: readonly EvalRunEvent[];
   readonly listing: EvalSuiteListing | undefined;
   readonly result: EvalRunResult | undefined;
@@ -80,6 +81,7 @@ export interface EvalRunViewOptions {
 export interface EvalRunView {
   readonly cases: readonly EvalCaseRow[];
   readonly diagnostics: readonly Diagnostic[];
+  readonly discardedThroughSequence: number | undefined;
   readonly events: readonly EvalRunEvent[];
   readonly hostModels: readonly EvalHostModelRow[];
   readonly outcomes: EvalOutcomeCounts;
@@ -109,6 +111,7 @@ const timelineEncoder = new TextEncoder();
 
 export interface EvalEventMerge {
   readonly conflictSequence?: number;
+  readonly discardedThroughSequence?: number;
   readonly discontinuitySequence?: number;
   readonly cursor: number;
   readonly events: readonly EvalRunEvent[];
@@ -250,8 +253,12 @@ export const mergeEvalEvents = (
     bytes += size;
   }
   const events = Object.freeze(bounded.reverse());
+  const discardedThroughSequence = events.length < ordered.length
+    ? events[0]?.sequence === undefined ? cursor : events[0].sequence - 1
+    : undefined;
   return Object.freeze({
     ...(conflictSequence === undefined ? {} : { conflictSequence }),
+    ...(discardedThroughSequence === undefined ? {} : { discardedThroughSequence }),
     ...(discontinuitySequence === undefined ? {} : { discontinuitySequence }),
     cursor,
     events,
@@ -304,6 +311,7 @@ export const evalRunViewFor = (options: EvalRunViewOptions): EvalRunView => {
       ? noCases
       : evalCaseRowsFor(options.listing.suites.find((suite) => suite.name === selected.name)?.cases ?? []),
     diagnostics: options.listing?.diagnostics ?? noDiagnostics,
+    discardedThroughSequence: options.discardedThroughSequence,
     events: options.events === undefined ? noEvents : Object.freeze([...options.events]),
     hostModels: hostModelsFor(trials),
     outcomes,

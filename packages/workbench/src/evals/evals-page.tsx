@@ -1,8 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 
-import type { EvalRunResult, EvalSuiteListing } from '../../../agent-bundle/src/dev/eval-service.ts';
+import type { EvalArtifact, EvalClient, EvalRunStart } from './eval-client.ts';
+import type { EvalRunEventsReplay, EvalRunResult, EvalSuiteListing } from '../../../agent-bundle/src/dev/eval-service.ts';
 import type { EvalRunEvent, EvalRunRecord } from '../../../agent-bundle/src/eval/run-store.ts';
-import type { EvalClient, EvalRunStart } from './eval-client.ts';
 import {
   evalOutcomeLabel,
   mergeEvalEvents,
@@ -50,6 +50,13 @@ export const eventsForActiveEvalRun = (
   sourceRunId: string | undefined,
   events: readonly EvalRunEvent[],
 ): readonly EvalRunEvent[] => activeRunId === sourceRunId ? events : noEvalEvents;
+
+/** A bounded-history notice belongs to the same run identity as its events. */
+export const discardedSequenceForActiveEvalRun = (
+  activeRunId: string | undefined,
+  sourceRunId: string | undefined,
+  discardedThroughSequence: number | undefined,
+): number | undefined => activeRunId === sourceRunId ? discardedThroughSequence : undefined;
 
 /** Starts one deterministic run over the selection the browser is allowed to make. */
 export const startEvalRun = async (
@@ -128,7 +135,7 @@ const EvidenceChannels = ({ row }: { readonly row: EvalTrialRow }) => <section c
   <dl>
     <div><dt>MCP</dt><dd>{evidenceLevel(row.evidence.mcp.level)}{row.evidence.mcp.calls.length === 0 ? '' : ` · ${row.evidence.mcp.calls.map((call) => `${call.server}/${call.tool}`).join(', ')}`}</dd></div>
     <div><dt>Process</dt><dd>{evidenceLevel(row.evidence.process.level)}{row.evidence.process.exitCode === undefined ? '' : ` · exit ${row.evidence.process.exitCode}`}{row.evidence.process.timedOut ? ' · timed out' : ''}</dd></div>
-    <div><dt>Scripts</dt><dd>{evidenceLevel(row.evidence.scripts.level)}{Object.keys(row.evidence.scripts.results).length === 0 ? '' : ` · ${Object.entries(row.evidence.scripts.results).map(([name, result]) => `${name}: ${result.outcome}`).join(', ')}`}</dd></div>
+    <div><dt>Scripts</dt><dd>{evidenceLevel(row.evidence.scripts.level)}{Object.keys(row.evidence.scripts.results).length === 0 ? '' : ` · ${Object.entries(row.evidence.scripts.results).map(([name, result]) => `${name}: ${result.outcome} — ${result.detail}`).join(', ')}`}</dd></div>
     <div><dt>Skills</dt><dd>{evidenceLevel(row.evidence.skillActivation.level)}{row.evidence.skillActivation.activated.length === 0 ? '' : ` · ${row.evidence.skillActivation.activated.join(', ')}`}</dd></div>
   </dl>
 </section>;
@@ -145,19 +152,62 @@ interface ArtifactDisplay {
   readonly url: string;
 }
 
+export const evalArtifactPresentationKey = (runId: string | undefined, reference: string): string =>
+  JSON.stringify([runId, reference]);
+
+export const prepareEvalArtifactDisplay = async (
+  artifact: EvalArtifact,
+  withPreview: boolean,
+  createObjectUrl: (blob: Blob) => string = (blob) => URL.createObjectURL(blob),
+): Promise<ArtifactDisplay> => {
+  let message: string | undefined;
+  let preview: string | undefined;
+  if (withPreview) {
+    if (!previewable(artifact.mediaType)) message = 'This artifact is download-only.';
+    else if (artifact.blob.size > maximumPreviewBytes) message = 'This text artifact is too large to preview; download it instead.';
+    else preview = new TextDecoder('utf-8', { fatal: true }).decode(await artifact.blob.arrayBuffer());
+  }
+  return Object.freeze({
+    filename: artifact.filename,
+    ...(message === undefined ? {} : { message }),
+    ...(preview === undefined ? {} : { preview }),
+    url: createObjectUrl(artifact.blob),
+  });
+};
+
 const RawArtifact = ({ client, reference, runId }: {
   readonly client: Pick<EvalClient, 'artifact'> | undefined;
   readonly reference: string;
   readonly runId: string | undefined;
 }) => {
   const active = useRef<AbortController | undefined>(undefined);
+  const displayRef = useRef<ArtifactDisplay | undefined>(undefined);
   const [busy, setBusy] = useState(false);
   const [display, setDisplay] = useState<ArtifactDisplay>();
   const [failure, setFailure] = useState<string>();
-  useEffect(() => () => {
+  const replaceDisplay = (next: ArtifactDisplay | undefined): void => {
+    const previous = displayRef.current;
+    if (previous !== undefined && previous.url !== next?.url) URL.revokeObjectURL(previous.url);
+    displayRef.current = next;
+    setDisplay(next);
+  };
+  useEffect(() => {
     active.current?.abort();
-    if (display !== undefined) URL.revokeObjectURL(display.url);
-  }, [display]);
+    active.current = undefined;
+    const previous = displayRef.current;
+    displayRef.current = undefined;
+    if (previous !== undefined) URL.revokeObjectURL(previous.url);
+    setDisplay(undefined);
+    setFailure(undefined);
+    setBusy(false);
+    return () => {
+      active.current?.abort();
+      active.current = undefined;
+      const current = displayRef.current;
+      displayRef.current = undefined;
+      if (current !== undefined) URL.revokeObjectURL(current.url);
+    };
+  }, [client, reference, runId]);
   const prepare = async (withPreview: boolean): Promise<void> => {
     if (client === undefined || runId === undefined) return;
     active.current?.abort();
@@ -168,27 +218,15 @@ const RawArtifact = ({ client, reference, runId }: {
     try {
       const artifact = await client.artifact(runId, reference, controller.signal);
       if (controller.signal.aborted) return;
-      const url = URL.createObjectURL(artifact.blob);
-      let message: string | undefined;
-      let preview: string | undefined;
-      if (withPreview) {
-        if (!previewable(artifact.mediaType)) message = 'This artifact is download-only.';
-        else if (artifact.blob.size > maximumPreviewBytes) message = 'This text artifact is too large to preview; download it instead.';
-        else preview = new TextDecoder('utf-8', { fatal: true }).decode(await artifact.blob.arrayBuffer());
-      }
+      const next = await prepareEvalArtifactDisplay(artifact, withPreview);
       if (controller.signal.aborted) {
-        URL.revokeObjectURL(url);
+        URL.revokeObjectURL(next.url);
         return;
       }
-      setDisplay(Object.freeze({
-        filename: artifact.filename,
-        ...(message === undefined ? {} : { message }),
-        ...(preview === undefined ? {} : { preview }),
-        url,
-      }));
+      replaceDisplay(next);
     } catch {
       if (!controller.signal.aborted) {
-        setDisplay(undefined);
+        replaceDisplay(undefined);
         setFailure('Recorded raw evidence could not be prepared.');
       }
     } finally {
@@ -237,7 +275,7 @@ const TrialCard = ({ client, row, runId }: {
   <EvidenceChannels row={row} />
   {row.rawArtifacts.length === 0 ? undefined : <section className="eval-raw-evidence">
     <h3>Raw evidence</h3>
-    <ul>{row.rawArtifacts.map((reference) => <RawArtifact client={client} key={reference} reference={reference} runId={runId} />)}</ul>
+    <ul>{row.rawArtifacts.map((reference) => <RawArtifact client={client} key={evalArtifactPresentationKey(runId, reference)} reference={reference} runId={runId} />)}</ul>
   </section>}
   <h3>Grader results</h3>
   <ul className="eval-assertions">
@@ -301,9 +339,17 @@ export const EvalRunControls = ({
   </div>
 </section>;
 
-const EventTimeline = ({ events }: { readonly events: readonly EvalRunEvent[] }) => <section className="eval-detail eval-timeline">
+const EventTimeline = ({ discardedThroughSequence, events }: {
+  readonly discardedThroughSequence: number | undefined;
+  readonly events: readonly EvalRunEvent[];
+}) => <section className="eval-detail eval-timeline">
   <h2>Durable event timeline</h2>
-  {events.length === 0 ? <p className="empty-row">No persisted event is available for this run.</p> : <ol>
+  {discardedThroughSequence === undefined ? undefined : <p className="eval-timeline-notice" role="status">
+    Earlier durable events through #{discardedThroughSequence} are not shown because this view is bounded.
+  </p>}
+  {events.length === 0
+    ? discardedThroughSequence === undefined ? <p className="empty-row">No persisted event is available for this run.</p> : undefined
+    : <ol>
     {events.map((event) => <li key={event.sequence}>
       <span className="eval-event-sequence">#{event.sequence}</span><time>{event.timestamp}</time><strong>{event.kind}</strong>
       <pre><code>{JSON.stringify(event.payload, undefined, 2)}</code></pre>
@@ -341,8 +387,88 @@ export const EvalRunReport = ({ client, view }: EvalRunReportProps) => <div clas
       {view.trials.map((row) => <TrialCard client={client} key={`${row.caseId}/${row.id}`} row={row} runId={view.runId} />)}
     </ul>
   </section>}
-  {view.state !== 'ran' ? undefined : <EventTimeline events={view.events} />}
+  {view.state !== 'ran' ? undefined : <EventTimeline discardedThroughSequence={view.discardedThroughSequence} events={view.events} />}
 </div>;
+
+const terminalEvent = (event: EvalRunEvent): boolean =>
+  event.kind === 'run.cancelled' || event.kind === 'run.completed' || event.kind === 'run.failed';
+
+const reconnectDelayMilliseconds = 250;
+
+const waitForReconnect = (milliseconds: number, signal: AbortSignal): Promise<void> => new Promise((resolvePromise) => {
+  if (signal.aborted) {
+    resolvePromise();
+    return;
+  }
+  const timeout = setTimeout(finish, milliseconds);
+  function finish(): void {
+    clearTimeout(timeout);
+    signal.removeEventListener('abort', finish);
+    resolvePromise();
+  }
+  signal.addEventListener('abort', finish, { once: true });
+});
+
+interface EvalObservationClient {
+  events(runId: string, afterSequence: number, signal?: AbortSignal): ReturnType<EvalClient['events']>;
+  stream(options: Parameters<EvalClient['stream']>[0]): ReturnType<EvalClient['stream']>;
+}
+
+export interface EvalRunObserverOptions {
+  readonly client: EvalObservationClient;
+  readonly onEvents: (events: readonly EvalRunEvent[], discardedThroughSequence: number | undefined) => void;
+  readonly runId: string;
+  readonly signal: AbortSignal;
+  readonly wait?: (milliseconds: number, signal: AbortSignal) => Promise<void>;
+}
+
+/** Replays then follows one durable run; only a clean, non-terminal EOF is reconnectable. */
+export const observeEvalRunEvents = async ({
+  client,
+  onEvents,
+  runId,
+  signal,
+  wait = waitForReconnect,
+}: EvalRunObserverOptions): Promise<void> => {
+  let discardedThroughSequence: number | undefined;
+  let events: readonly EvalRunEvent[] = [];
+  let latestSequence = 0;
+  const accept = (incoming: readonly EvalRunEvent[]): boolean => {
+    if (signal.aborted) return false;
+    const merged = mergeEvalEvents(events, incoming);
+    if (merged.conflictSequence !== undefined || merged.discontinuitySequence !== undefined) {
+      throw new Error('Persisted eval events could not be read.');
+    }
+    events = merged.events;
+    latestSequence = Math.max(latestSequence, merged.cursor);
+    if (merged.discardedThroughSequence !== undefined) {
+      discardedThroughSequence = Math.max(discardedThroughSequence ?? 0, merged.discardedThroughSequence);
+    }
+    onEvents(events, discardedThroughSequence);
+    return incoming.some(terminalEvent);
+  };
+  while (!signal.aborted) {
+    const replay = await client.events(runId, latestSequence, signal);
+    if (signal.aborted) return;
+    if (replay.incompleteTrailingRecord === true) throw new Error('Persisted eval events could not be read.');
+    latestSequence = replay.cursor.afterSequence;
+    if (accept(replay.events)) return;
+    let terminal = false;
+    const stream = client.stream({
+      afterSequence: latestSequence,
+      onEvent: (event) => { terminal = accept([event]) || terminal; },
+      runId,
+      signal,
+    });
+    try {
+      await stream.done;
+    } finally {
+      stream.close();
+    }
+    if (signal.aborted || terminal) return;
+    await wait(reconnectDelayMilliseconds, signal);
+  }
+};
 
 /** Runs authored deterministic suites and shows the evidence every trial recorded. */
 export const EvalsPage = ({ client }: EvalsPageProps) => {
@@ -352,6 +478,7 @@ export const EvalsPage = ({ client }: EvalsPageProps) => {
   const [recorded, setRecorded] = useState<readonly EvalRunRecord[]>([]);
   const [result, setResult] = useState<EvalRunResult>();
   const [eventTimeline, setEventTimeline] = useState(() => Object.freeze({
+    discardedThroughSequence: undefined as number | undefined,
     events: noEvalEvents,
     runId: undefined as string | undefined,
   }));
@@ -359,7 +486,13 @@ export const EvalsPage = ({ client }: EvalsPageProps) => {
   const [selectedSuite, setSelectedSuite] = useState<string>();
   const [trials, setTrials] = useState('');
   const lifecycle = useRef<EvalsRequestLifecycle>(new EvalsRequestLifecycle()).current;
+  const discardedThroughSequence = discardedSequenceForActiveEvalRun(
+    result?.run.id,
+    eventTimeline.runId,
+    eventTimeline.discardedThroughSequence,
+  );
   const view = evalRunViewFor({
+    discardedThroughSequence,
     events: eventsForActiveEvalRun(result?.run.id, eventTimeline.runId, eventTimeline.events),
     listing,
     result,
@@ -399,69 +532,36 @@ export const EvalsPage = ({ client }: EvalsPageProps) => {
   useEffect(() => {
     const runId = result?.run.id;
     if (runId === undefined) {
-      setEventTimeline(Object.freeze({ events: noEvalEvents, runId: undefined }));
+      setEventTimeline(Object.freeze({
+        discardedThroughSequence: undefined,
+        events: noEvalEvents,
+        runId: undefined,
+      }));
       return;
     }
-    let current = true;
-    let generation = 0;
-    let latestSequence = 0;
-    let observed: readonly EvalRunEvent[] = [];
-    let reconnect: ReturnType<typeof setTimeout> | undefined;
-    let controller: AbortController | undefined;
-    let stream: ReturnType<EvalClient['stream']> | undefined;
-    const observe = (incoming: readonly EvalRunEvent[]): boolean => {
-      const merged = mergeEvalEvents(observed, incoming);
-      if (merged.conflictSequence !== undefined || merged.discontinuitySequence !== undefined) {
-        setError('Persisted eval events could not be read.');
-        return false;
-      }
-      observed = merged.events;
-      latestSequence = Math.max(latestSequence, merged.cursor);
-      setEventTimeline(Object.freeze({ events: merged.events, runId }));
-      return true;
-    };
-    const reconnectLater = (): void => {
-      if (!current) return;
-      if (reconnect !== undefined) clearTimeout(reconnect);
-      reconnect = setTimeout(() => { void connect(); }, 250);
-    };
-    const connect = async (): Promise<void> => {
-      const attempt = generation + 1;
-      generation = attempt;
-      stream?.close();
-      controller?.abort();
-      controller = new AbortController();
-      let terminal = false;
-      try {
-        const replay = await client.events(runId, latestSequence, controller.signal);
-        if (!current || attempt !== generation) return;
-        latestSequence = replay.cursor.afterSequence;
-        if (!observe(replay.events)) return;
-        stream = client.stream({
-          afterSequence: latestSequence,
-          onEvent: (event) => {
-            if (!current || attempt !== generation) return;
-            terminal = event.kind === 'run.cancelled' || event.kind === 'run.completed' || event.kind === 'run.failed';
-            observe([event]);
-          },
+    const controller = new AbortController();
+    setEventTimeline(Object.freeze({
+      discardedThroughSequence: undefined,
+      events: noEvalEvents,
+      runId,
+    }));
+    void observeEvalRunEvents({
+      client,
+      onEvents: (next, discarded) => {
+        if (controller.signal.aborted) return;
+        setEventTimeline(Object.freeze({
+          discardedThroughSequence: discarded,
+          events: next,
           runId,
-          signal: controller.signal,
-        });
-        void stream.done.then(
-          () => { if (current && attempt === generation && !terminal) reconnectLater(); },
-          () => { if (current && attempt === generation) reconnectLater(); },
-        );
-      } catch {
-        if (current && attempt === generation) reconnectLater();
-      }
-    };
-    void connect();
+        }));
+      },
+      runId,
+      signal: controller.signal,
+    }).catch(() => {
+      if (!controller.signal.aborted) setError('Persisted eval events could not be read.');
+    });
     return () => {
-      current = false;
-      generation += 1;
-      if (reconnect !== undefined) clearTimeout(reconnect);
-      controller?.abort();
-      stream?.close();
+      controller.abort();
     };
   }, [client, result?.run.id]);
 

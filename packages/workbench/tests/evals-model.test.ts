@@ -257,6 +257,7 @@ it('retains a bounded exact event timeline without silently accepting a conflict
 
   expect(merged.events.map((event) => event.sequence)).toEqual([1, 2]);
   expect(merged.cursor).toBe(2);
+  expect(merged.discardedThroughSequence).toBeUndefined();
   expect(conflict.conflictSequence).toBe(1);
   expect(Object.isFrozen(merged.events)).toBe(true);
 });
@@ -274,4 +275,22 @@ it('retains the newest durable cursor even when a hostilely large event cannot f
 
   expect(merged.cursor).toBe(1);
   expect(merged.events).toEqual([]);
+  expect(merged.discardedThroughSequence).toBe(1);
+});
+
+it('reports the durable sequence discarded by the event-count bound', () => {
+  const events = Array.from({ length: 513 }, (_, index) => ({
+    kind: index === 512 ? 'run.completed' : 'trial.completed',
+    payload: {},
+    schemaVersion: 1 as const,
+    sequence: index + 1,
+    timestamp: '2026-08-17T00:00:00.000Z',
+  }));
+
+  const merged = mergeEvalEvents([], events);
+
+  expect(merged.cursor).toBe(513);
+  expect(merged.events).toHaveLength(512);
+  expect(merged.events[0]?.sequence).toBe(2);
+  expect(merged.discardedThroughSequence).toBe(1);
 });

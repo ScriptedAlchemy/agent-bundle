@@ -9,12 +9,16 @@ import { EvalClient } from '../src/evals/eval-client.ts';
 import { ForegroundRouteClient } from '../src/mcp/mcp-route-client.ts';
 import { evalRunSelectionFor, evalRunViewFor } from '../src/evals/evals-model.ts';
 import {
+  discardedSequenceForActiveEvalRun,
+  evalArtifactPresentationKey,
   EvalRunControls,
   EvalRunReport,
   EvalsPage,
   EvalsRequestLifecycle,
   eventsForActiveEvalRun,
+  observeEvalRunEvents,
   openEvalRun,
+  prepareEvalArtifactDisplay,
   startEvalRun,
 } from '../src/evals/evals-page.tsx';
 
@@ -170,13 +174,25 @@ it('summarizes passed, failed, and inconclusive counts separately', () => {
 });
 
 it('renders the persisted timeline, server evidence channels, host/model matrix, and raw evidence controls', () => {
+  const evidenceResult: EvalRunResult = {
+    ...result,
+    trials: [trial({
+      evidence: {
+        ...trial({}).evidence,
+        scripts: {
+          level: 'observed',
+          results: { review: { detail: 'Matched the expected risk.', outcome: 'pass' } },
+        },
+      },
+    })],
+  };
   const evidenceView = evalRunViewFor({
     events: [
       { kind: 'run.started', payload: { trials: 3 }, schemaVersion: 1, sequence: 1, timestamp: '2026-08-17T00:00:00.000Z' },
       { kind: 'trial.completed', payload: { outcome: 'pass' }, schemaVersion: 1, sequence: 2, timestamp: '2026-08-17T00:00:01.000Z' },
     ],
     listing,
-    result,
+    result: evidenceResult,
     selectedSuite: 'review-change',
   });
 
@@ -188,6 +204,7 @@ it('renders the persisted timeline, server evidence channels, host/model matrix,
   expect(markup).toContain('Host / model matrix');
   expect(markup).toContain('Evidence channels');
   expect(markup).toContain('unavailable evidence');
+  expect(markup).toContain('Matched the expected risk.');
   expect(markup).toContain('Raw evidence');
   expect(markup).toContain('evidence.json');
 });
@@ -199,6 +216,123 @@ it('does not paint held prior-run events while a replacement run waits for repla
 
   expect(eventsForActiveEvalRun('run-b', 'run-a', priorRunEvents)).toEqual([]);
   expect(eventsForActiveEvalRun('run-a', 'run-a', priorRunEvents)).toEqual(priorRunEvents);
+  expect(discardedSequenceForActiveEvalRun('run-b', 'run-a', 12)).toBeUndefined();
+  expect(discardedSequenceForActiveEvalRun('run-a', 'run-a', 12)).toBe(12);
+});
+
+it('labels a bounded timeline when earlier durable events are not shown', () => {
+  const bounded = evalRunViewFor({
+    discardedThroughSequence: 12,
+    events: [{ kind: 'run.completed', payload: {}, schemaVersion: 1, sequence: 13, timestamp: '2026-08-17T00:00:01.000Z' }],
+    listing,
+    result,
+    selectedSuite: 'review-change',
+  });
+
+  const markup = renderToStaticMarkup(createElement(EvalRunReport, { view: bounded }));
+
+  expect(markup).toContain('Earlier durable events through #12 are not shown');
+});
+
+it('does not claim that no persisted event exists when every event exceeded the view bound', () => {
+  const bounded = evalRunViewFor({
+    discardedThroughSequence: 1,
+    events: [],
+    listing,
+    result,
+    selectedSuite: 'review-change',
+  });
+
+  const markup = renderToStaticMarkup(createElement(EvalRunReport, { view: bounded }));
+
+  expect(markup).toContain('Earlier durable events through #1 are not shown');
+  expect(markup).not.toContain('No persisted event is available for this run.');
+});
+
+it('keys raw artifact state by run identity and creates no URL when safe-text decoding fails', async () => {
+  expect(evalArtifactPresentationKey('run-a', 'artifacts/trial/evidence.json'))
+    .not.toBe(evalArtifactPresentationKey('run-b', 'artifacts/trial/evidence.json'));
+  let createCalls = 0;
+
+  await expect(prepareEvalArtifactDisplay({
+    blob: new Blob([new Uint8Array([0xff])], { type: 'text/plain' }),
+    filename: 'evidence.txt',
+    mediaType: 'text/plain',
+  }, true, () => {
+    createCalls += 1;
+    return 'blob:should-not-exist';
+  })).rejects.toBeInstanceOf(TypeError);
+  expect(createCalls).toBe(0);
+});
+
+it('stops at a terminal replay and exposes torn or malformed observation instead of retrying forever', async () => {
+  let streamCalls = 0;
+  await observeEvalRunEvents({
+    client: {
+      events: async () => ({
+        cursor: { afterSequence: 1 },
+        events: [{ kind: 'run.completed', payload: {}, schemaVersion: 1, sequence: 1, timestamp: '2026-08-17T00:00:01.000Z' }],
+      }),
+      stream: () => {
+        streamCalls += 1;
+        return { close: () => undefined, done: Promise.resolve() };
+      },
+    },
+    onEvents: () => undefined,
+    runId: runRecord.id,
+    signal: new AbortController().signal,
+    wait: async () => undefined,
+  });
+  expect(streamCalls).toBe(0);
+
+  await expect(observeEvalRunEvents({
+    client: {
+      events: async () => ({ cursor: { afterSequence: 0 }, events: [], incompleteTrailingRecord: true }),
+      stream: () => ({ close: () => undefined, done: Promise.resolve() }),
+    },
+    onEvents: () => undefined,
+    runId: runRecord.id,
+    signal: new AbortController().signal,
+    wait: async () => undefined,
+  })).rejects.toThrow('Persisted eval events could not be read.');
+});
+
+it('reconnects a cleanly ended stream from the last cursor but treats stream rejection as fatal', async () => {
+  const replayCursors: number[] = [];
+  const streamCursors: number[] = [];
+  let replayCount = 0;
+  await observeEvalRunEvents({
+    client: {
+      events: async (_runId, afterSequence) => {
+        replayCursors.push(afterSequence);
+        replayCount += 1;
+        return replayCount === 1
+          ? { cursor: { afterSequence: 1 }, events: [{ kind: 'run.started', payload: {}, schemaVersion: 1, sequence: 1, timestamp: '2026-08-17T00:00:00.000Z' }] }
+          : { cursor: { afterSequence: 2 }, events: [{ kind: 'run.completed', payload: {}, schemaVersion: 1, sequence: 2, timestamp: '2026-08-17T00:00:01.000Z' }] };
+      },
+      stream: ({ afterSequence }) => {
+        streamCursors.push(afterSequence);
+        return { close: () => undefined, done: Promise.resolve() };
+      },
+    },
+    onEvents: () => undefined,
+    runId: runRecord.id,
+    signal: new AbortController().signal,
+    wait: async () => undefined,
+  });
+  expect(replayCursors).toEqual([0, 1]);
+  expect(streamCursors).toEqual([1]);
+
+  await expect(observeEvalRunEvents({
+    client: {
+      events: async () => ({ cursor: { afterSequence: 0 }, events: [] }),
+      stream: () => ({ close: () => undefined, done: Promise.reject(new Error('malformed frame')) }),
+    },
+    onEvents: () => undefined,
+    runId: runRecord.id,
+    signal: new AbortController().signal,
+    wait: async () => undefined,
+  })).rejects.toThrow('malformed frame');
 });
 
 it('lists the cases of the selected suite before any run exists', () => {
