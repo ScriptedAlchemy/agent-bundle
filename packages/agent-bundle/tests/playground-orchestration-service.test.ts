@@ -278,6 +278,127 @@ it('atomically pins an omitted native prompt to the active epoch and persists aw
   ]);
 });
 
+it('cancels an admitted native host after its safe start progress and releases the exact epoch once', async () => {
+  const trace = new RecordingTraceStore();
+  const calls: string[] = [];
+  const nativeEpoch = Object.freeze({
+    configDigest: 'native-config-digest',
+    createdAt: '2026-08-18T00:00:00.000Z',
+    diagnostics: Object.freeze({ errors: 0, infos: 0, warnings: 0 }),
+    id: 'epoch-native-cancel',
+    manifestPath: 'agent-bundle.manifest.json',
+    modelDigest: 'native-model-digest',
+    projectRevision: 'native-revision-digest',
+    targetDigests: Object.freeze({ claude: 'native-target-digest' }),
+  });
+  const reference = Object.freeze({ close: async () => { calls.push('release'); }, epoch: nativeEpoch, root: '/epochs/native-cancel' });
+  let spawned!: () => void;
+  const started = new Promise<void>((resolvePromise) => { spawned = resolvePromise; });
+  const service = new PlaygroundOrchestrationService({
+    coordinator: { status: currentStatus },
+    createRunId: () => 'run-native-cancel',
+    createSessionId: () => 'session-native-cancel',
+    epochStore: {
+      acquireActiveEpochReference: async () => { calls.push('acquire-active'); return reference; },
+      acquireEpochReference: async () => { throw new Error('Native cancellation must retain its active epoch reference.'); },
+    },
+    native: {
+      close: async () => undefined,
+      prepare: async () => {
+        calls.push('prepare');
+        return Object.freeze({ epochId: nativeEpoch.id, fixtureDigest: 'fixture-content-digest', host: 'claude', prompt: 'Review the fixture.', target: 'claude' });
+      },
+      run: async (_prepared: unknown, options: { readonly emit: (event: PlaygroundEventInput) => Promise<void>; readonly signal: AbortSignal }) => {
+        calls.push('run');
+        await options.emit(Object.freeze({ kind: 'native.host.started', raw: Object.freeze({ phase: 'host.started' }), source: 'host-preflight', summary: 'Native host process started.' }));
+        spawned();
+        return new Promise((_, reject) => options.signal.addEventListener('abort', () => reject(options.signal.reason), { once: true }));
+      },
+    },
+    trace,
+  } as unknown as ConstructorParameters<typeof PlaygroundOrchestrationService>[0]);
+
+  const admitted = await service.run({
+    caseId: 'opaque-case-a',
+    fixtureId: 'opaque-fixture-a',
+    host: 'claude',
+    modelPinId: 'opaque-model-a',
+    operation: 'native.prompt',
+    prompt: 'Review the fixture.',
+    target: 'claude',
+  });
+  await started;
+  await expect(service.cancel(admitted.id)).resolves.toBe(true);
+
+  expect(trace.appended.map((event) => event.kind)).toEqual(['epoch.bound', 'native.host.started', 'operation.cancelled']);
+  expect(trace.finalized).toEqual({ status: 'cancelled' });
+  expect(calls).toEqual(['acquire-active', 'prepare', 'run', 'release']);
+});
+
+it('persists normalized native completion evidence before a cancelled terminal outcome', async () => {
+  const trace = new RecordingTraceStore();
+  const nativeEpoch = Object.freeze({
+    configDigest: 'native-config-digest',
+    createdAt: '2026-08-18T00:00:00.000Z',
+    diagnostics: Object.freeze({ errors: 0, infos: 0, warnings: 0 }),
+    id: 'epoch-native-cancel-evidence',
+    manifestPath: 'agent-bundle.manifest.json',
+    modelDigest: 'native-model-digest',
+    projectRevision: 'native-revision-digest',
+    targetDigests: Object.freeze({ claude: 'native-target-digest' }),
+  });
+  const reference = Object.freeze({ close: async () => undefined, epoch: nativeEpoch, root: '/epochs/native-cancel-evidence' });
+  let spawned!: () => void;
+  const started = new Promise<void>((resolvePromise) => { spawned = resolvePromise; });
+  const service = new PlaygroundOrchestrationService({
+    coordinator: { status: currentStatus },
+    createRunId: () => 'run-native-cancel-evidence',
+    createSessionId: () => 'session-native-cancel-evidence',
+    epochStore: {
+      acquireActiveEpochReference: async () => reference,
+      acquireEpochReference: async () => { throw new Error('Expected active native epoch reference.'); },
+    },
+    native: {
+      close: async () => undefined,
+      prepare: async () => Object.freeze({ epochId: nativeEpoch.id, fixtureDigest: 'fixture-content-digest', host: 'claude', prompt: 'Review the fixture.', target: 'claude' }),
+      run: async (_prepared: unknown, options: { readonly emit: (event: PlaygroundEventInput) => Promise<void>; readonly signal: AbortSignal }) => {
+        await options.emit(Object.freeze({ kind: 'native.host.started', raw: Object.freeze({ phase: 'host.started' }), source: 'host-preflight', summary: 'Native host process started.' }));
+        spawned();
+        return new Promise((resolvePromise) => options.signal.addEventListener('abort', () => resolvePromise(Object.freeze({
+          events: Object.freeze([
+            Object.freeze({ kind: 'native.harness.failed', raw: Object.freeze({ code: 'EVAL_TRACE_UNAVAILABLE', stage: 'trace' }), source: 'host-preflight', summary: 'Native host could not complete the requested run.' }),
+            Object.freeze({ kind: 'native.workspace', raw: Object.freeze({ changes: Object.freeze([]) }), source: 'workspace-change', summary: 'Recorded bounded native workspace changes.' }),
+          ]),
+          status: 'failed' as const,
+          workspace: Object.freeze({ changes: Object.freeze([]) }),
+        })), { once: true }));
+      },
+    },
+    trace,
+  } as unknown as ConstructorParameters<typeof PlaygroundOrchestrationService>[0]);
+
+  const admitted = await service.run({
+    caseId: 'opaque-case-a',
+    fixtureId: 'opaque-fixture-a',
+    host: 'claude',
+    modelPinId: 'opaque-model-a',
+    operation: 'native.prompt',
+    prompt: 'Review the fixture.',
+    target: 'claude',
+  });
+  await started;
+  await service.cancel(admitted.id);
+
+  expect(trace.appended.map((event) => event.kind)).toEqual([
+    'epoch.bound',
+    'native.host.started',
+    'native.harness.failed',
+    'native.workspace',
+    'operation.cancelled',
+  ]);
+  expect(trace.finalized).toEqual({ status: 'cancelled', workspace: { changes: [] } });
+});
+
 it('gives cancellation precedence when a gated Skill ignores its AbortSignal', async () => {
   const trace = new RecordingTraceStore();
   let release!: () => void;
