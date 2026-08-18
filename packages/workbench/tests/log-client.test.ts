@@ -34,37 +34,22 @@ const ndjson = (chunks: readonly Uint8Array[]): Response => new Response(new Rea
   },
 }), { headers: { 'content-type': 'application/x-ndjson' } });
 
-const streamClient = (response: Response): LogClient => new LogClient({
+const clientFor = (response: Response): LogClient => new LogClient({
   foreground: foreground(async (input) => String(input).includes('/api/project/session') ? session() : response),
 });
 
-it('rejects hostile or noncontiguous replay envelopes before exposing them to the page', async () => {
-  let calls = 0;
-  const hostile = new Proxy({}, { ownKeys: () => { throw new Error('hostile envelope'); } });
-  const client = new LogClient({
-    foreground: foreground(async () => {
-      calls += 1;
-      return calls === 1 ? session() : {
-        json: async () => hostile,
-        ok: true,
-        status: 200,
-      } as unknown as Response;
-    }),
-  });
+it('rejects malformed or noncontiguous replay envelopes before exposing them to the page', async () => {
+  await expect(clientFor(new Response('{')).replay()).rejects.toBeInstanceOf(LogClientError);
 
-  await expect(client.replay()).rejects.toBeInstanceOf(LogClientError);
-
-  const noncontiguous = new LogClient({
-    foreground: foreground(async (input) => String(input).includes('/api/project/session')
-      ? session()
-      : json({ replay: { cursor: { afterSequence: 3 }, records: [{ ...record, sequence: 3 }] } })),
-  });
+  const noncontiguous = clientFor(json({
+    replay: { cursor: { afterSequence: 3 }, records: [{ ...record, sequence: 3 }] },
+  }));
   await expect(noncontiguous.replay()).rejects.toMatchObject({ code: 'AB8093' });
 });
 
 it('rejects a trailing unterminated NDJSON frame instead of accepting a partial record', async () => {
   const encoder = new TextEncoder();
-  const client = streamClient(ndjson([encoder.encode(JSON.stringify(record))]));
+  const client = clientFor(ndjson([encoder.encode(JSON.stringify(record))]));
 
   const stream = client.stream({ afterSequence: 0, onMessage: () => undefined });
   await expect(stream.done).rejects.toMatchObject({ code: 'AB8093' });
@@ -73,23 +58,17 @@ it('rejects a trailing unterminated NDJSON frame instead of accepting a partial 
 it('rejects duplicate replay keys, extra record fields, and unsafe wire text before the page receives a record', async () => {
   const replay = { replay: { cursor: { afterSequence: 1 }, records: [record] } };
   const duplicateDetails = JSON.stringify(replay).replace('"event":"safe"', '"event":"safe","event":"changed"');
-  const duplicate = new LogClient({
-    foreground: foreground(async (input) => String(input).includes('/api/project/session') ? session() : new Response(duplicateDetails)),
-  });
+  const duplicate = clientFor(new Response(duplicateDetails));
   await expect(duplicate.replay()).rejects.toMatchObject({ code: 'AB8093', message: 'Dev Log route returned an invalid response.' });
 
-  const extraField = new LogClient({
-    foreground: foreground(async (input) => String(input).includes('/api/project/session')
-      ? session()
-      : json({ replay: { cursor: { afterSequence: 1 }, records: [{ ...record, untrusted: 'extra' }] } })),
-  });
+  const extraField = clientFor(json({
+    replay: { cursor: { afterSequence: 1 }, records: [{ ...record, untrusted: 'extra' }] },
+  }));
   await expect(extraField.replay()).rejects.toMatchObject({ code: 'AB8093', message: 'Dev Log route returned an invalid response.' });
 
-  const unsafeText = new LogClient({
-    foreground: foreground(async (input) => String(input).includes('/api/project/session')
-      ? session()
-      : json({ replay: { cursor: { afterSequence: 1 }, records: [{ ...record, summary: '/private/fixture-secret' }] } })),
-  });
+  const unsafeText = clientFor(json({
+    replay: { cursor: { afterSequence: 1 }, records: [{ ...record, summary: '/private/fixture-secret' }] },
+  }));
   await expect(unsafeText.replay()).rejects.toMatchObject({ code: 'AB8093', message: 'Dev Log route returned an invalid response.' });
 });
 
@@ -101,10 +80,36 @@ it('rejects malformed UTF-8 and a frame larger than 64 KiB before decoding NDJSO
   malformed.set(malformedPrefix);
   malformed[malformedPrefix.length] = 0xff;
   malformed.set(malformedSuffix, malformedPrefix.length + 1);
-  const malformedStream = streamClient(ndjson([malformed])).stream({ afterSequence: 0, onMessage: () => undefined });
+  const malformedStream = clientFor(ndjson([malformed])).stream({ afterSequence: 0, onMessage: () => undefined });
   await expect(malformedStream.done).rejects.toMatchObject({ code: 'AB8093', message: 'Dev Log route returned an invalid response.' });
 
   const oversized = { ...record, summary: 'x'.repeat(65 * 1024) };
-  const oversizedStream = streamClient(ndjson([encoder.encode(`${JSON.stringify(oversized)}\n`)])).stream({ afterSequence: 0, onMessage: () => undefined });
+  const oversizedStream = clientFor(ndjson([encoder.encode(`${JSON.stringify(oversized)}\n`)])).stream({ afterSequence: 0, onMessage: () => undefined });
   await expect(oversizedStream.done).rejects.toMatchObject({ code: 'AB8093', message: 'Dev Log route returned an invalid response.' });
+});
+
+it('accepts a live overflow gap relative to the last delivered record', async () => {
+  const messages = [
+    { ...record, sequence: 2 },
+    { ...record, sequence: 3 },
+    { ...record, sequence: 4 },
+    {
+      earliestAvailableSequence: 8,
+      latestDroppedSequence: 7,
+      requestedAfterSequence: 4,
+      type: 'replay.gap',
+    },
+    { ...record, sequence: 8 },
+    { ...record, sequence: 9 },
+    { ...record, sequence: 10 },
+  ];
+  const bytes = new TextEncoder().encode(`${messages.map((message) => JSON.stringify(message)).join('\n')}\n`);
+  const received: Array<number | 'gap'> = [];
+  const stream = clientFor(ndjson([bytes])).stream({
+    afterSequence: 1,
+    onMessage: (message) => received.push('sequence' in message ? message.sequence : 'gap'),
+  });
+
+  await expect(stream.done).resolves.toBeUndefined();
+  expect(received).toEqual([2, 3, 4, 'gap', 8, 9, 10]);
 });

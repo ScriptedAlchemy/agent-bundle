@@ -244,7 +244,7 @@ export class LogClient {
         if (message.sequence !== expectedSequence) throw invalid();
         expectedSequence += 1;
       } else {
-        if (message.requestedAfterSequence !== options.afterSequence) throw invalid();
+        if (message.requestedAfterSequence !== expectedSequence - 1) throw invalid();
         expectedSequence = message.earliestAvailableSequence;
       }
       options.onMessage(message);
