@@ -179,7 +179,8 @@ const pluginFailureSchema = z.strictObject({
   message: textSchema,
 });
 const trialInvocationProvenanceSchema = z.union([
-  z.strictObject({ mode: z.enum(['automatic', 'none']) }),
+  z.strictObject({ mode: z.literal('automatic'), skill: provenanceIdentifierSchema.optional() }),
+  z.strictObject({ mode: z.literal('none') }),
   z.strictObject({ mode: z.literal('explicit'), skill: provenanceIdentifierSchema }),
 ]);
 const semanticGraderProvenanceSchema = z.union([

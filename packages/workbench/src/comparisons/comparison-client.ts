@@ -41,7 +41,7 @@ const provenanceIdentifierSchema = z.string()
 const invocationProvenanceSchema = z.union([
   z.enum(['automatic', 'none']),
   z.string()
-    .regex(/^explicit:[A-Za-z0-9][A-Za-z0-9_.:@-]{0,127}$/u)
+    .regex(/^(?:automatic|explicit):[A-Za-z0-9][A-Za-z0-9_.:@-]{0,127}$/u)
     .refine((value) => !provenancePathMarker.test(value)),
 ]);
 const semanticGraderVersionSchema = z.union([

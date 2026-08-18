@@ -816,7 +816,16 @@ const parseInvocationProvenance = (
 ): EvalTrialInvocationProvenance => {
   const record = strictRecord(value, code, 'Eval trial invocation provenance');
   const mode = property(record, 'mode', code, 'Eval trial invocation provenance');
-  if (mode === 'automatic' || mode === 'none') {
+  if (mode === 'automatic') {
+    requireOptionalKeys(record, ['mode'], ['skill'], code, 'Eval trial invocation provenance');
+    return Object.freeze({
+      mode,
+      ...(Object.hasOwn(record, 'skill')
+        ? { skill: requireProvenanceIdentifier(property(record, 'skill', code, 'Eval trial invocation provenance'), code, 'Eval trial invocation Skill') }
+        : {}),
+    });
+  }
+  if (mode === 'none') {
     requireKeys(record, ['mode'], code, 'Eval trial invocation provenance');
     return Object.freeze({ mode });
   }

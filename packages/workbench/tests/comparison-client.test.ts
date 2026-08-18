@@ -123,6 +123,37 @@ it('strictly decodes nested provenance and usage while preserving unrecorded sem
   expect(Object.isFrozen(result.rows[0]?.baseline?.usage)).toBe(true);
 });
 
+it('decodes automatic Skill invocation provenance without admitting path-shaped identities', async () => {
+  const withInvocation = (invocation: string) => {
+    const result = structuredClone(comparison);
+    const baseline = result.rows[0]?.baseline;
+    if (baseline === undefined) throw new Error('Comparison fixture must include a baseline.');
+    baseline.provenance.invocation = invocation;
+    return result;
+  };
+
+  await expect(client(recordingFetch([], () => response({
+    comparison: withInvocation('automatic:release-notes'),
+  }))).compare({ base: 'run-base', candidate: 'run-candidate' })).resolves.toMatchObject({
+    rows: [{ baseline: { provenance: { invocation: 'automatic:release-notes' } } }],
+  });
+
+  for (const invocation of [
+    'automatic:',
+    'automatic:../outside',
+    'automatic:C:private',
+    'automatic:C:\\private',
+    'automatic:C:/private',
+    'automatic:\\\\server\\share',
+    'automatic:file:///private/skill',
+    `automatic:${'a'.repeat(129)}`,
+  ]) {
+    await expect(client(recordingFetch([], () => response({
+      comparison: withInvocation(invocation),
+    }))).compare({ base: 'run-base', candidate: 'run-candidate' })).rejects.toMatchObject({ code: 'AB8083' });
+  }
+});
+
 it('rejects extra, path-shaped, or negative nested comparison data', async () => {
   const invalid = [
     { provenance: { hostCliVersion: '2.1.232', invocation: 'automatic', semanticGrader: 'none', unexpected: true } },

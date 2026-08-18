@@ -29,7 +29,7 @@ const smokeIt = process.env.AGENT_BUNDLE_NATIVE_CODEX_SMOKE === '1' ? it : it.sk
 const smokeCase = (): EvalCase => normalizeEvalCase({
   assertions: [expectExitCode(0), expectSkillActivation({ skill: 'agent-bundle-eval' })],
   fixture: './fixtures/workspace',
-  hosts: { codex: { model: 'unpinned' } },
+  hosts: { codex: { model: 'gpt-5.4' } },
   id: 'codex-eval-smoke',
   invocation: { mode: 'automatic', skill: 'agent-bundle-eval' },
   prompt: 'Complete the Agent Bundle eval attestation by following its Skill, then reply with its exact sentence and nothing else.',

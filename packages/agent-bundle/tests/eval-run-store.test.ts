@@ -223,6 +223,27 @@ it('round-trips bounded provenance and normalized token usage with a trial', asy
   });
 });
 
+it('reopens automatic Skill invocation provenance from the durable trial record', async () => {
+  await withProject(async (root) => {
+    const writer = await createEvalRun(runOptions(root));
+    try {
+      const written = await writer.writeTrial(trialInput({
+        provenance: {
+          hostCliVersion: 'codex-cli@0.147.0',
+          invocation: { mode: 'automatic', skill: 'release-notes' },
+          semanticGrader: null,
+        },
+      }));
+
+      expect(written.provenance?.invocation).toEqual({ mode: 'automatic', skill: 'release-notes' });
+      expect((await readEvalTrials(writer.directory))[0]?.provenance?.invocation)
+        .toEqual({ mode: 'automatic', skill: 'release-notes' });
+    } finally {
+      await writer.close();
+    }
+  });
+});
+
 it('rejects path-shaped or credential-shaped trial provenance without echoing it', async () => {
   await withProject(async (root) => {
     const writer = await createEvalRun(runOptions(root));

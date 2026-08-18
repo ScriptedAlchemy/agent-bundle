@@ -32,7 +32,8 @@ export interface SkillDocumentPanelProps {
   readonly onDocumentChange: (document: SkillDocumentKind) => void;
   readonly onTargetChange?: (target: string) => void;
   readonly onViewChange: (view: SkillView) => void;
-  readonly selected: ServedSkillDocument;
+  readonly selected?: ServedSkillDocument;
+  readonly summary?: string;
   readonly target?: string;
   readonly targetNames?: readonly string[];
   readonly view: SkillView;
@@ -136,6 +137,7 @@ export const SkillDocumentPanel = ({
   onTargetChange,
   onViewChange,
   selected,
+  summary,
   target,
   targetNames = [],
   view,
@@ -149,33 +151,36 @@ export const SkillDocumentPanel = ({
     const next = nextTab(viewTabs, current, event);
     if (next !== undefined) selectView(next);
   };
-  const documentTabId = tabIdFor(selected.id, 'document', document);
-  const viewTabId = tabIdFor(selected.id, 'view', view);
-  const panelId = panelIdFor(selected.id);
+  const selectedId = selected?.id ?? 'skills';
+  const documentTabId = tabIdFor(selectedId, 'document', document);
+  const viewTabId = tabIdFor(selectedId, 'view', view);
+  const panelId = panelIdFor(selectedId);
 
-  return <section aria-label={`${selected.name} Skill`} className="skill-detail">
-    <div className="skill-detail-heading">
-      <div>
-        <p className="skill-eyebrow">Skill document</p>
-        <h1>{selected.name}</h1>
-        {selected.description === undefined ? undefined : <p className="skill-description">{selected.description}</p>}
+  return <section aria-label={selected === undefined ? 'Skill documents' : `${selected.name} Skill`} className="skill-detail">
+    {selected === undefined ? undefined : <>
+      <div className="skill-detail-heading">
+        <div>
+          <p className="skill-eyebrow">Skill document</p>
+          <h1>{selected.name}</h1>
+          {selected.description === undefined ? undefined : <p className="skill-description">{selected.description}</p>}
+        </div>
+        <span className="skill-provenance">{provenanceLabel(selected)}</span>
       </div>
-      <span className="skill-provenance">{provenanceLabel(selected)}</span>
-    </div>
-    <dl className="skill-frontmatter" aria-label="Parsed frontmatter">
-      {Object.entries(selected.frontmatter).sort(([left], [right]) => left.localeCompare(right)).map(([name, value]) => (
-        <div key={name}><dt>{name}</dt><dd>{typeof value === 'string' ? value : JSON.stringify(value)}</dd></div>
-      ))}
-    </dl>
-    {selected.diagnostics.length === 0 ? undefined : <div className="skill-diagnostics" role="status">
-      {selected.diagnostics.map((diagnostic, index) => <p key={`${diagnostic.code}-${index}`}>
-        <strong>{diagnostic.code}</strong> {diagnostic.message}
-      </p>)}
-    </div>}
+      <dl className="skill-frontmatter" aria-label="Parsed frontmatter">
+        {Object.entries(selected.frontmatter).sort(([left], [right]) => left.localeCompare(right)).map(([name, value]) => (
+          <div key={name}><dt>{name}</dt><dd>{typeof value === 'string' ? value : JSON.stringify(value)}</dd></div>
+        ))}
+      </dl>
+      {selected.diagnostics.length === 0 ? undefined : <div className="skill-diagnostics" role="status">
+        {selected.diagnostics.map((diagnostic, index) => <p key={`${diagnostic.code}-${index}`}>
+          <strong>{diagnostic.code}</strong> {diagnostic.message}
+        </p>)}
+      </div>}
+    </>}
     <div className="skill-controls">
       <div className="skill-control-group">
         <span className="skill-control-label">Document</span>
-        <SkillDocumentTabs document={document} onDocumentChange={onDocumentChange} panelId={panelId} skillId={selected.id} />
+        <SkillDocumentTabs document={document} onDocumentChange={onDocumentChange} panelId={panelId} skillId={selectedId} />
       </div>
       <div className="skill-control-group">
         <span className="skill-control-label">View</span>
@@ -185,7 +190,7 @@ export const SkillDocumentPanel = ({
               aria-controls={panelId}
               aria-selected={view === candidate}
               className={view === candidate ? 'skill-tab skill-tab--active' : 'skill-tab'}
-              id={tabIdFor(selected.id, 'view', candidate)}
+              id={tabIdFor(selectedId, 'view', candidate)}
               key={candidate}
               onClick={() => selectView(candidate)}
               onKeyDown={(event) => onViewTabKeyDown(event, candidate)}
@@ -214,11 +219,13 @@ export const SkillDocumentPanel = ({
       role="tabpanel"
       tabIndex={0}
     >
-      <p className="skill-base-label">{documentLabel(selected)}</p>
-      {view === 'rendered'
-        ? <SkillMarkdown base={selected.base} body={selected.body} resources={resourcePaths(selected)} />
-        : <pre className="skill-source"><code>{selected.markdown}</code></pre>}
-      <ResourceTree document={selected} />
+      {selected === undefined ? <p className="empty-row" role="status">{summary ?? 'Select a Skill to inspect its documentation.'}</p> : <>
+        <p className="skill-base-label">{documentLabel(selected)}</p>
+        {view === 'rendered'
+          ? <SkillMarkdown base={selected.base} body={selected.body} resources={resourcePaths(selected)} />
+          : <pre className="skill-source"><code>{selected.markdown}</code></pre>}
+        <ResourceTree document={selected} />
+      </>}
     </section>
   </section>;
 };
@@ -273,6 +280,9 @@ export const SkillsPage = ({ client, status }: SkillsPageProps) => {
   const generatedSummary = generatedTree.state === 'ready'
     ? 'The selected artifact epoch has no generated Skills for this target.'
     : generatedTree.summary;
+  const detailSummary = document === 'generated'
+    ? generatedSummary
+    : error ?? (sourceTree === undefined ? 'Loading source Skills…' : 'Select a normalized Skill to inspect its documentation.');
   const selectSkill = (id: string): void => {
     setSelectedIds((previous) => ({ ...previous, [document]: id }));
   };
@@ -320,7 +330,7 @@ export const SkillsPage = ({ client, status }: SkillsPageProps) => {
   }, [client, epoch?.id, target]);
 
   return <div className="skills-layout">
-    {selectedTree === undefined ? <aside className="skill-tree-pane"><p className="empty-row">{document === 'generated' ? generatedSummary : 'Loading source Skills…'}</p></aside> : (
+    {selectedTree === undefined ? <aside className="skill-tree-pane"><p className="empty-row">{document === 'generated' ? generatedSummary : detailSummary}</p></aside> : (
       <SkillTree label={document === 'generated' ? 'Generated skills' : 'Source skills'} onSelect={selectSkill} selectedId={selected?.id} tree={selectedTree} />
     )}
     <div className="skills-content">
@@ -331,40 +341,17 @@ export const SkillsPage = ({ client, status }: SkillsPageProps) => {
       {document === 'source' && sourceTree !== undefined && sourceTree.diagnostics.length > 0 ? <div className="skill-diagnostics" role="status">
         {sourceTree.diagnostics.map((diagnostic, index) => <p key={`${diagnostic.code}-${index}`}><strong>{diagnostic.code}</strong> {diagnostic.message}</p>)}
       </div> : undefined}
-      {selected === undefined ? <>
-        <div className="skill-controls">
-          <div className="skill-control-group">
-            <span className="skill-control-label">Document</span>
-            <SkillDocumentTabs document={document} onDocumentChange={setDocument} panelId="skill-empty-panel" skillId="skill:empty" />
-          </div>
-          {document === 'generated' && targetNames.length > 0 ? <label className="skill-target skill-target--toolbar">
-            <span>Target</span>
-            <select onChange={(event) => setTarget(event.target.value)} value={target ?? ''}>
-              {targetNames.map((name) => <option key={name} value={name}>{name}</option>)}
-            </select>
-          </label> : undefined}
-        </div>
-        <p
-          aria-labelledby={tabIdFor('skill:empty', 'document', document)}
-          className="empty-row"
-          id="skill-empty-panel"
-          role="tabpanel"
-          tabIndex={0}
-        >
-          {document === 'generated' ? generatedSummary : 'Select a normalized Skill to inspect its documentation.'}
-        </p>
-      </> : (
-        <SkillDocumentPanel
-          document={document}
-          onDocumentChange={setDocument}
-          onTargetChange={setTarget}
-          onViewChange={setView}
-          selected={selected}
-          target={target}
-          targetNames={targetNames}
-          view={view}
-        />
-      )}
+      <SkillDocumentPanel
+        document={document}
+        onDocumentChange={setDocument}
+        onTargetChange={setTarget}
+        onViewChange={setView}
+        selected={selected}
+        summary={detailSummary}
+        target={target}
+        targetNames={targetNames}
+        view={view}
+      />
     </div>
   </div>;
 };

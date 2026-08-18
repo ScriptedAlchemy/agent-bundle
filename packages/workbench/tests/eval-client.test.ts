@@ -75,7 +75,7 @@ const comparison = {
   baselineRunId: runRecord.id,
   candidateRunId: runRecord.id,
   rows: [],
-  sampleSize: 0,
+  sampleSize: 1,
   summary: { comparable: 0, nonComparable: 0, reliability: 0, smoke: 0 },
 };
 
@@ -195,6 +195,26 @@ it('reads one recorded run and lists every recorded run', async () => {
     '/api/evals/runs/20260817t000000000z-abcdef01',
     '/api/evals/runs',
   ]);
+});
+
+it('decodes automatic invocation Skill provenance without weakening identifier safety', async () => {
+  const resultWithSkill = (skill: string) => ({
+    run: {
+      ...runResult,
+      trials: [{
+        ...trialRecord,
+        provenance: { ...trialRecord.provenance, invocation: { mode: 'automatic', skill } },
+      }],
+    },
+  });
+
+  await expect(client(recordingFetch([], () => response(resultWithSkill('release-notes')))).read(runRecord.id))
+    .resolves.toMatchObject({ trials: [{ provenance: { invocation: { mode: 'automatic', skill: 'release-notes' } } }] });
+
+  for (const skill of ['../outside', 'C:private', 'C:\\private', 'C:/private', '\\\\server\\share', 'file:///private/skill']) {
+    await expect(client(recordingFetch([], () => response(resultWithSkill(skill)))).read(runRecord.id))
+      .rejects.toMatchObject({ code: 'AB8073' });
+  }
 });
 
 it('accepts legacy omitted trial provenance and usage but rejects unsafe or malformed additions', async () => {

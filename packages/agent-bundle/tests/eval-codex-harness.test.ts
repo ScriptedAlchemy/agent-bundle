@@ -37,7 +37,7 @@ interface TrialWorld {
   readonly target: string;
 }
 
-const evalCase = (): EvalCase => normalizeEvalCase({
+const evalCase = (invocation: EvalCase['invocation'] = { mode: 'automatic' }): EvalCase => normalizeEvalCase({
   assertions: [
     expectExitCode(0),
     expectMcpCall({ server: 'project', tool: 'status' }),
@@ -46,7 +46,7 @@ const evalCase = (): EvalCase => normalizeEvalCase({
   fixture: './fixtures/repo',
   hosts: { codex: { model: 'gpt-5-codex' } },
   id: 'release-notes',
-  invocation: { mode: 'automatic' },
+  invocation,
   prompt: 'Draft the release notes for this repository.',
   trials: 1,
 });
@@ -118,12 +118,13 @@ const runTrial = async (
   world: TrialWorld,
   overrides: Readonly<Record<string, CodexCommandResult | (() => never)>> = {},
   extra: Readonly<{
+    readonly evalCase?: EvalCase;
     readonly onCompleted?: (result: Readonly<{ readonly response?: string; readonly workspacePath: string }>) => Promise<void> | void;
     readonly onProgress?: (phase: 'codex.setup' | 'fixture.materialized' | 'host.started' | 'preflight') => Promise<void> | void;
     readonly signal?: AbortSignal;
   }> = {},
 ): Promise<EvalTrialRecord> => {
-  const testCase = evalCase();
+  const testCase = extra.evalCase ?? evalCase();
   const writer = await createEvalRun({
     artifact: { manifestPath: 'pending', source: 'explicit', targetDigests: { codex: 'target-digest' } },
     projectRoot: world.root,
@@ -203,6 +204,16 @@ it('runs an ephemeral Codex trial and records inferred activation beside observe
     if (execution === undefined) throw new Error('The native trial must execute Codex.');
     expect(execution.args).toContain('-m');
     expect(execution.args[execution.args.indexOf('-m') + 1]).toBe('gpt-5-codex');
+  });
+});
+
+it('persists an automatic invocation Skill identity', async () => {
+  await withWorld(async (world) => {
+    const trial = await runTrial(world, {}, {
+      evalCase: evalCase({ mode: 'automatic', skill: 'release-notes' }),
+    });
+
+    expect(trial.provenance?.invocation).toEqual({ mode: 'automatic', skill: 'release-notes' });
   });
 });
 
