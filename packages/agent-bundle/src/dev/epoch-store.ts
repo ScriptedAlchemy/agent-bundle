@@ -2,10 +2,11 @@ import { randomUUID } from 'node:crypto';
 import { lstat, mkdir, mkdtemp, open, readFile, readdir, realpath, rename, rm, writeFile } from 'node:fs/promises';
 import { basename, dirname, join, relative, resolve } from 'node:path';
 
+import { serialQueue } from '../core/async.ts';
 import { stableJson } from '../core/digest.ts';
-import { freezeArtifactEpoch, type ArtifactEpoch } from './types.ts';
-import { isInside } from '../core/paths.ts';
 import { isErrno } from '../core/errors.ts';
+import { isInside } from '../core/paths.ts';
+import { freezeArtifactEpoch, type ArtifactEpoch } from './types.ts';
 
 export interface EpochStoreOptions {
   /** @internal Deterministic cleanup-failure seam. */
@@ -272,7 +273,7 @@ export class EpochStore {
   readonly #references = new Map<string, number>();
   readonly #staging = new Map<symbol, StagingRecord>();
   readonly #stagingMarkerStorage: EpochStagingMarkerStorage;
-  #transitionTail: Promise<void> = Promise.resolve();
+  readonly #transitions = serialQueue();
 
   constructor(options: EpochStoreOptions) {
     const agentBundlePath = join(resolve(options.projectRoot), '.agent-bundle');
@@ -284,7 +285,7 @@ export class EpochStore {
   }
 
   async createStagingEpoch(options: CreateStagingEpochOptions): Promise<EpochStaging> {
-    return this.#withTransition(async () => {
+    return this.#transitions.run(async () => {
       assertSafeEpochId(options.epoch.id);
       const epoch = assertEpoch(options.epoch);
       const targets = this.#assertTargetSet(epoch, options.targets);
@@ -312,7 +313,7 @@ export class EpochStore {
   }
 
   async acquireEpochReference(epochId: string): Promise<EpochReference> {
-    return this.#withTransition(async () => {
+    return this.#transitions.run(async () => {
       assertSafeEpochId(epochId);
       await this.#assertEpochDirectory(epochId);
       return this.#acquireEpochReference(await this.#readEpochMetadata(epochId).then((metadata) => metadata.epoch));
@@ -321,7 +322,7 @@ export class EpochStore {
 
   /** Resolves and leases the current epoch without allowing a publish between those operations. */
   async acquireActiveEpochReference(): Promise<EpochReference> {
-    return this.#withTransition(async () => {
+    return this.#transitions.run(async () => {
       const epoch = await this.#readActiveEpoch();
       if (epoch === undefined) {
         throw new EpochStoreError('EPOCH_NOT_FOUND', 'No active artifact epoch is available.');
@@ -332,13 +333,13 @@ export class EpochStore {
 
   /** Returns detached safe epoch identities, ordered newest first. */
   async listEpochs(): Promise<readonly ArtifactEpoch[]> {
-    return this.#withTransition(async () => Object.freeze((await this.#readAllEpochMetadata())
+    return this.#transitions.run(async () => Object.freeze((await this.#readAllEpochMetadata())
       .map((metadata) => freezeArtifactEpoch(metadata.epoch))
       .sort(compareNewestFirst)));
   }
 
   async releaseEpochReference(epochId: string): Promise<void> {
-    await this.#withTransition(async () => {
+    await this.#transitions.run(async () => {
       const count = this.#references.get(epochId) ?? 0;
       if (count === 1) {
         this.#references.delete(epochId);
@@ -350,15 +351,15 @@ export class EpochStore {
   }
 
   async readActiveEpoch(): Promise<ArtifactEpoch | undefined> {
-    return this.#withTransition(async () => this.#readActiveEpoch());
+    return this.#transitions.run(async () => this.#readActiveEpoch());
   }
 
   async cleanup(): Promise<void> {
-    await this.#withTransition(async () => this.#cleanup());
+    await this.#transitions.run(async () => this.#cleanup());
   }
 
   async recoverStaging(): Promise<void> {
-    await this.#withTransition(async () => {
+    await this.#transitions.run(async () => {
       let entries;
       try {
         entries = await readdir(this.#epochsPath, { withFileTypes: true });
@@ -459,7 +460,7 @@ export class EpochStore {
   }
 
   async #closeStaging(token: symbol): Promise<void> {
-    await this.#withTransition(async () => {
+    await this.#transitions.run(async () => {
       const record = this.#staging.get(token);
       if (record === undefined) return;
       this.#staging.delete(token);
@@ -472,7 +473,7 @@ export class EpochStore {
     validate: StagingValidator,
     beforeActivate: EpochPreActivation | undefined,
   ): Promise<ArtifactEpoch> {
-    return this.#withTransition(async () => {
+    return this.#transitions.run(async () => {
       const record = this.#staging.get(token);
       if (record === undefined) {
         throw new EpochStoreError('EPOCH_STAGING_CLOSED', 'Epoch staging is already closed.');
@@ -803,17 +804,4 @@ export class EpochStore {
       })));
   }
 
-  async #withTransition<T>(operation: () => Promise<T>): Promise<T> {
-    let release!: () => void;
-    const previous = this.#transitionTail;
-    this.#transitionTail = new Promise<void>((resolvePromise) => {
-      release = resolvePromise;
-    });
-    await previous;
-    try {
-      return await operation();
-    } finally {
-      release();
-    }
-  }
 }

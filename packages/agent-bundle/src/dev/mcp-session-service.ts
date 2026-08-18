@@ -20,6 +20,7 @@ import type { Stream } from 'node:stream';
 
 import { createDefaultRegistry, TargetRegistry } from '../adapters/registry.ts';
 import { validateArtifact } from '../build/validate-artifact.ts';
+import { serialQueue } from '../core/async.ts';
 import { DiagnosticError } from '../core/diagnostics.ts';
 import { assertInside } from '../core/paths.ts';
 import { parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
@@ -622,7 +623,7 @@ export class McpSession {
   #closed = false;
   #connection: McpSessionConnectionState | undefined;
   #droppedThroughSequence = 0;
-  #lifecycleTail: Promise<void> = Promise.resolve();
+  readonly #lifecycle = serialQueue();
   #sequence = 0;
   #stderrOutput = '';
   #stderrOverflow = false;
@@ -774,7 +775,7 @@ export class McpSession {
   }
 
   async initialize(options?: McpSessionRequestOptions): Promise<McpSessionConnectionState> {
-    return this.#operation('initialize', () => this.#withLifecycle(async () => {
+    return this.#operation('initialize', () => this.#lifecycle.run(async () => {
       this.#assertOpen();
       if (this.#connection === undefined) await this.#connect(options);
       this.#assertOpen();
@@ -861,7 +862,7 @@ export class McpSession {
   }
 
   async restart(options?: McpSessionRequestOptions): Promise<McpSessionConnectionState> {
-    return this.#operation('restart', () => this.#withLifecycle(async () => {
+    return this.#operation('restart', () => this.#lifecycle.run(async () => {
       this.#assertOpen();
       this.#cancelAll('MCP session restarted.');
       await this.#closeClient();
@@ -888,7 +889,7 @@ export class McpSession {
     } catch {
       // Lifecycle observers cannot prevent client, temporary-data, or epoch cleanup.
     }
-    void this.#operation('close', () => this.#withLifecycle(() => this.#close())).then(resolveClose!, rejectClose!);
+    void this.#operation('close', () => this.#lifecycle.run(() => this.#close())).then(resolveClose!, rejectClose!);
     return closePromise;
   }
 
@@ -911,20 +912,6 @@ export class McpSession {
 
   #assertOpen(): void {
     if (this.#closed) throw new Error('MCP session is closed.');
-  }
-
-  async #withLifecycle<Result>(operation: () => Promise<Result>): Promise<Result> {
-    const previous = this.#lifecycleTail;
-    let release: (() => void) | undefined;
-    this.#lifecycleTail = new Promise<void>((resolvePromise) => {
-      release = resolvePromise;
-    });
-    await previous;
-    try {
-      return await operation();
-    } finally {
-      release?.();
-    }
   }
 
   async #operation<Result>(operation: McpSessionOperation, run: () => Promise<Result>): Promise<Result> {

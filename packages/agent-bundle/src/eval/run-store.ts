@@ -3,6 +3,7 @@ import { constants, type Stats } from 'node:fs';
 import { lstat, mkdir, open, readFile, readdir, realpath, rename, rm, writeFile, type FileHandle } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, resolve, win32 } from 'node:path';
 
+import { serialQueue } from '../core/async.ts';
 import { stableJson } from '../core/digest.ts';
 import { isErrno } from '../core/errors.ts';
 import { isInsideOrEqual } from '../core/paths.ts';
@@ -10,6 +11,7 @@ import { parseJsonWithoutDuplicateKeys, snapshotStrictJsonValue, type JsonValue 
 import { defaultEvalRunsDir } from './config.ts';
 import { findCredentialConfiguration } from './credentials.ts';
 import { EvalRunStoreError } from './errors.ts';
+import { provenanceIdentifierPattern } from './provenance.ts';
 import type {
   EvalAssertionOutcome,
   EvalAssertionResult,
@@ -247,7 +249,7 @@ const requireSafeRelativePath = (value: string, label: string): string => {
   ) {
     throw storeError('EVAL_RUN_RECORD_INVALID', `${label} must be a path-safe relative path.`);
   }
-  return segments.join('/');
+  return value;
 };
 
 const requireRunsDir = (value: unknown): string => {
@@ -427,12 +429,10 @@ const requireBoundedText = (value: JsonValue, code: RunStoreValidationCode, labe
   return text;
 };
 
-const safeProvenanceIdentifier = /^[A-Za-z0-9][A-Za-z0-9_.:@-]{0,127}$/u;
-
 /** Durable comparison values are labels, never paths, commands, or credential material. */
 const requireProvenanceIdentifier = (value: JsonValue, code: RunStoreValidationCode, label: string): string => {
   const text = requireBoundedText(value, code, label);
-  if (!safeProvenanceIdentifier.test(text) || findCredentialConfiguration(text) !== undefined) {
+  if (!provenanceIdentifierPattern.test(text) || findCredentialConfiguration(text) !== undefined) {
     return validationError(code, 'Eval trial provenance contains an unsafe identifier.');
   }
   return text;
@@ -944,7 +944,7 @@ export class EvalRunWriter implements EvalTrialWriter {
   #closePromise: Promise<void> | undefined;
   #record: EvalRunRecord;
   #sequence = 0;
-  #tail: Promise<void> = Promise.resolve();
+  readonly #queue = serialQueue();
   #uncertainEventWrite = false;
 
   constructor(directory: string, record: EvalRunRecord) {
@@ -1084,7 +1084,7 @@ export class EvalRunWriter implements EvalTrialWriter {
   }
 
   async #drain(): Promise<void> {
-    await this.#tail;
+    await this.#queue.run(async () => undefined);
     if (this.#closeFailures.length > 0) {
       throw new AggregateError(this.#closeFailures, `Eval run ${JSON.stringify(this.#record.id)} closed with admitted write failures.`);
     }
@@ -1098,21 +1098,15 @@ export class EvalRunWriter implements EvalTrialWriter {
 
   async #serialize<T>(operation: () => Promise<T>): Promise<T> {
     this.#assertOpen();
-    let release!: () => void;
-    const previous = this.#tail;
-    this.#tail = new Promise<void>((resolvePromise) => {
-      release = resolvePromise;
+    return this.#queue.run(async () => {
+      try {
+        if (this.#uncertainEventWrite) this.#assertOpen();
+        return await operation();
+      } catch (error) {
+        this.#closeFailures.push(error);
+        throw error;
+      }
     });
-    await previous;
-    try {
-      if (this.#uncertainEventWrite) this.#assertOpen();
-      return await operation();
-    } catch (error) {
-      this.#closeFailures.push(error);
-      throw error;
-    } finally {
-      release();
-    }
   }
 }
 

@@ -3,10 +3,11 @@ import { closeSync, constants, fsyncSync, fstatSync, linkSync, lstatSync, mkdirS
 import { lstat, mkdir, open, realpath, rename, unlink } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
+import { serialQueue, type SerialQueue } from '../core/async.ts';
+import { isErrno } from '../core/errors.ts';
+import { isInsideOrEqual } from '../core/paths.ts';
 import { parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
 import type { DevLogSink } from '../dev/dev-log-service.ts';
-import { isInsideOrEqual } from '../core/paths.ts';
-import { isErrno } from '../core/errors.ts';
 
 export type PlaygroundJsonPrimitive = boolean | null | number | string;
 export type PlaygroundJsonArray = readonly PlaygroundJsonValue[];
@@ -229,7 +230,7 @@ interface SessionRecord {
   readonly storageObjectId: string | undefined;
   state: PlaygroundSession['state'];
   readonly subscribers: Set<SubscriptionRecord>;
-  tail: Promise<void>;
+  readonly queue: SerialQueue;
   ownerToken: string | undefined;
 }
 
@@ -643,7 +644,7 @@ export class PlaygroundService {
         storage: 'v2',
         storageObjectId,
         subscribers: new Set(),
-        tail: Promise.resolve(),
+        queue: serialQueue(),
         ownerToken,
       };
       await this.#assertOwnedObject(root, storageObjectId, id, ownerToken);
@@ -715,7 +716,7 @@ export class PlaygroundService {
         storage,
         storageObjectId,
         subscribers: new Set(),
-        tail: Promise.resolve(),
+        queue: serialQueue(),
         ownerToken,
       };
       try {
@@ -740,7 +741,7 @@ export class PlaygroundService {
     this.#assertAvailable();
     const record = this.#requireUsableSession(sessionId);
     const event = normalizeEventInput(input);
-    return this.#enqueue(record, async () => {
+    return record.queue.run(async () => {
       if (record.state !== 'open') {
         throw serviceError('PLAYGROUND_SESSION_FINALIZED', `Playground session ${JSON.stringify(record.id)} is finalized.`);
       }
@@ -779,7 +780,7 @@ export class PlaygroundService {
       return this.#retryUncertainFinalization(record, durable);
     }
     this.#assertRecordUsable(record);
-    await this.#enqueue(record, async () => {
+    await record.queue.run(async () => {
       if (record.state !== 'open') {
         throw serviceError('PLAYGROUND_SESSION_FINALIZED', `Playground session ${JSON.stringify(record.id)} is finalized.`);
       }
@@ -792,7 +793,7 @@ export class PlaygroundService {
     this.#assertAvailable();
     const record = this.#requireUsableSession(sessionId);
     const afterSequence = normalizeCursor(cursor);
-    return this.#enqueue(record, async () => {
+    return record.queue.run(async () => {
       const latest = record.nextSequence - 1;
       if (afterSequence > latest) {
         throw serviceError('PLAYGROUND_CURSOR_AHEAD', 'Playground replay cursor is ahead of persisted history.');
@@ -812,7 +813,7 @@ export class PlaygroundService {
       throw serviceError('PLAYGROUND_VALUE_INVALID', 'Playground subscription requires an event callback.');
     }
     const afterSequence = normalizeCursor(options.afterSequence === undefined ? undefined : { afterSequence: options.afterSequence });
-    return this.#enqueue(record, async () => {
+    return record.queue.run(async () => {
       const latest = record.nextSequence - 1;
       if (afterSequence > latest) {
         throw serviceError('PLAYGROUND_CURSOR_AHEAD', 'Playground subscription cursor is ahead of persisted history.');
@@ -847,7 +848,7 @@ export class PlaygroundService {
   async promoteToDraftEval(sessionId: string, selectedAssertions: readonly PlaygroundSelectedAssertion[]): Promise<DraftEvalCase> {
     this.#assertAvailable();
     const record = this.#requireUsableSession(sessionId);
-    return this.#enqueue(record, async () => {
+    return record.queue.run(async () => {
       if ((record.state !== 'finalized' && record.state !== 'closed') || record.outcome === undefined) {
         throw serviceError('PLAYGROUND_OUTCOME_REQUIRED', 'A durable playground outcome is required before promotion.');
       }
@@ -892,7 +893,7 @@ export class PlaygroundService {
   }
 
   async #closeRecord(record: SessionRecord): Promise<void> {
-    const subscriptions = await this.#enqueue(record, async () => {
+    const subscriptions = await record.queue.run(async () => {
       if (record.state === 'open') {
         await this.#commitState(record, 'closed', Object.freeze({ status: 'aborted' }));
       } else if (record.state === 'finalized') {
@@ -904,7 +905,7 @@ export class PlaygroundService {
       return [...record.subscribers];
     });
     await this.#drainSubscriptions(record, subscriptions);
-    await this.#enqueue(record, async () => {
+    await record.queue.run(async () => {
       for (const subscription of subscriptions) this.#deactivateSubscription(record, subscription);
       await this.#persistSession(record);
     });
@@ -1031,7 +1032,7 @@ export class PlaygroundService {
   }
 
   async #retryUncertainFinalization(record: SessionRecord, outcome: PlaygroundDurableOutcome): Promise<PlaygroundSession> {
-    await this.#enqueue(record, async () => {
+    await record.queue.run(async () => {
       if (record.durability !== 'terminal-uncertain'
         || record.state !== 'finalized'
         || record.outcome === undefined
@@ -1045,16 +1046,10 @@ export class PlaygroundService {
 
   async #completeFinalization(record: SessionRecord): Promise<PlaygroundSession> {
     await this.#drainSubscriptions(record);
-    return this.#enqueue(record, async () => {
+    return record.queue.run(async () => {
       await this.#persistSession(record);
       return snapshotSession(record);
     });
-  }
-
-  #enqueue<T>(record: SessionRecord, operation: () => Promise<T>): Promise<T> {
-    const run = record.tail.then(operation, operation);
-    record.tail = run.then(() => undefined, () => undefined);
-    return run;
   }
 
   #timestamp(): string {
@@ -1721,7 +1716,7 @@ export class PlaygroundService {
   }
 
   async #closeSubscription(record: SessionRecord, subscription: SubscriptionRecord): Promise<void> {
-    await this.#enqueue(record, async () => {
+    await record.queue.run(async () => {
       this.#deactivateSubscription(record, subscription);
     });
     await subscription.delivery;
