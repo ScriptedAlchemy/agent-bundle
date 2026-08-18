@@ -517,6 +517,61 @@ it('does not treat definitions as uses and reserves an external first definition
   expect(validateSource(loaded, { skills: [externalFirst] }, registry)).toEqual([]);
 });
 
+it('normalizes explicit host-native hook tool selectors alongside canonical tools', async () => {
+  const model = await normalizeProject(
+    loadedProject({
+      hooks: {
+        beforeTool: {
+          handler: './hooks/guard.ts',
+          targets: ['claude', 'codex'],
+          tools: ['shell', 'codex:view_image', 'claude:WebSearch', 'claude:WebSearch', 'portable:Nope'],
+        },
+      },
+      plugin: { name: 'review-tools', version: '1.0.0' },
+      targets: ['claude', 'codex'],
+    }),
+    { skills: [] },
+    registry,
+  );
+
+  expect(model.hooks[0]?.tools).toEqual(['shell']);
+  expect(model.hooks[0]?.nativeTools).toEqual([
+    { name: 'WebSearch', target: 'claude' },
+    { name: 'view_image', target: 'codex' },
+  ]);
+
+  const withoutSelectors = await normalizeProject(
+    loadedProject({
+      hooks: { beforeTool: { handler: './hooks/guard.ts', tools: ['shell'] } },
+      plugin: { name: 'review-tools', version: '1.0.0' },
+      targets: ['claude', 'codex'],
+    }),
+    { skills: [] },
+    registry,
+  );
+  expect(withoutSelectors.hooks[0]?.nativeTools).toBeUndefined();
+  expect(withoutSelectors.hooks[0]?.id).not.toBe(model.hooks[0]?.id);
+});
+
+it('validates host-native hook tool selectors against the registry and hook targets', () => {
+  const diagnosticsFor = (tools: readonly string[], targets?: readonly string[]): readonly string[] =>
+    validateSource(
+      loadedProject({
+        hooks: { beforeTool: { handler: './hooks/guard.ts', ...(targets === undefined ? {} : { targets: [...targets] }), tools: [...tools] } },
+        plugin: { name: 'review-tools', version: '1.0.0' },
+      }),
+      { skills: [] },
+      registry,
+    ).map(({ code }) => code);
+
+  expect(diagnosticsFor(['claude:WebSearch'])).toEqual([]);
+  expect(diagnosticsFor(['future-host:tool'])).toEqual(['AB4210']);
+  expect(diagnosticsFor(['portable:tool'])).toEqual(['AB4211']);
+  expect(diagnosticsFor(['claude:WebSearch'], ['codex'])).toEqual(['AB4212']);
+  expect(diagnosticsFor(['claude:'])).toEqual(['AB4202']);
+  expect(diagnosticsFor([':WebSearch'])).toEqual(['AB4202']);
+});
+
 it('normalizes the generated-executable runtime floor and validates raises only', async () => {
   const defaulted = await normalizeProject(
     loadedProject({ plugin: { name: 'review-tools', version: '1.0.0' } }),

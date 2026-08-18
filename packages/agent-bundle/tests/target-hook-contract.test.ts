@@ -306,3 +306,52 @@ it('continues planning valid hooks after a prior hook mapping error', () => {
   });
   expect(plan.hookEntries.map((entry) => entry.event)).toEqual(['afterTool']);
 });
+
+const nativeSelectorContract = (matchers: TargetHookContract['matchers']): TargetHookContract => ({
+  commandRoot: '${SYNTHETIC_PLUGIN_ROOT}',
+  ...playgroundCodec,
+  eventNames: {
+    afterTool: 'SyntheticAfterTool',
+    beforeTool: 'SyntheticBeforeTool',
+    sessionStart: 'SyntheticSessionStart',
+    stop: 'SyntheticStop',
+  },
+  manifestPath: 'native-events/registration.json',
+  matchers,
+  readNativeCommands: () => ({ commands: [], status: 'found' as const }),
+  wrapperPath: (hook) => `hooks/${hook.name}.mjs`,
+  wrapperSource: () => 'export default undefined;\n',
+});
+
+it('folds explicit host-native tool selectors into the target matcher with escaping', () => {
+  const hook: NormalizedHook = {
+    ...planningHook('beforeTool', ['shell']),
+    nativeTools: [
+      { name: 'WebSearch', target: 'synthetic' },
+      { name: 'weird.tool+name', target: 'synthetic' },
+      { name: 'ElsewhereOnly', target: 'other-host' },
+    ],
+  };
+
+  const plan = planHooks(planningModel([hook]), 'synthetic', nativeSelectorContract({ shell: '^Bash$' }));
+
+  expect(plan.diagnostics).toEqual([]);
+  expect(plan.hookEntries[0]?.nativeMatcher).toBe(String.raw`(?:^Bash$|^WebSearch$|^weird\.tool\+name$)`);
+});
+
+it('rejects a target left without any applicable tool selector', () => {
+  const hook: NormalizedHook = {
+    ...planningHook('beforeTool', []),
+    nativeTools: [{ name: 'ElsewhereOnly', target: 'other-host' }],
+  };
+
+  const plan = planHooks(planningModel([hook]), 'synthetic', nativeSelectorContract({}));
+
+  expect(plan.diagnostics).toEqual([{
+    code: 'synthetic.hook.tool.unselected',
+    message: expect.stringContaining('receives no tool selector'),
+    severity: 'error',
+    target: 'synthetic',
+  }]);
+  expect(plan.hookEntries).toEqual([]);
+});

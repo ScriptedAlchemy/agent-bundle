@@ -272,27 +272,43 @@ const error = (target: string, code: string, message: string): Diagnostic => ({
   target,
 });
 
+const escapeRegExp = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/gu, String.raw`\$&`);
+
 const matcherFor = (
   target: string,
   contract: TargetHookContract,
-  tools: readonly CanonicalHookTool[],
-  hookName: string,
+  hook: NormalizedHook,
   diagnostics: Diagnostic[],
 ): string | undefined => {
+  const diagnosticCount = diagnostics.length;
   const patterns: string[] = [];
-  for (const tool of tools) {
+  for (const tool of hook.tools) {
     const matcher = contract.matchers[tool];
     if (matcher === undefined) {
       diagnostics.push(error(
         target,
         `${target}.hook.tool.${tool.replaceAll('.', '-')}`,
-        `${target} cannot map canonical hook tool ${JSON.stringify(tool)} for ${JSON.stringify(hookName)}.`,
+        `${target} cannot map canonical hook tool ${JSON.stringify(tool)} for ${JSON.stringify(hook.name)}.`,
       ));
       continue;
     }
     patterns.push(matcher);
   }
-  if (patterns.length === 0) return undefined;
+  const nativeTools = hook.nativeTools ?? [];
+  for (const nativeTool of nativeTools) {
+    if (nativeTool.target !== target) continue;
+    patterns.push(`^${escapeRegExp(nativeTool.name)}$`);
+  }
+  if (patterns.length === 0) {
+    if (nativeTools.length > 0 && diagnostics.length === diagnosticCount) {
+      diagnostics.push(error(
+        target,
+        `${target}.hook.tool.unselected`,
+        `${target} receives no tool selector from hook ${JSON.stringify(hook.name)}; add a canonical or ${target}-scoped native selector, or restrict the hook's targets.`,
+      ));
+    }
+    return undefined;
+  }
   return patterns.length === 1 ? patterns[0] : `(?:${patterns.join('|')})`;
 };
 
@@ -326,7 +342,7 @@ export const planHooks = (
       continue;
     }
     const diagnosticCount = diagnostics.length;
-    const matcher = matcherFor(target, contract, hook.tools, hook.name, diagnostics);
+    const matcher = matcherFor(target, contract, hook, diagnostics);
     if (diagnostics.length > diagnosticCount) continue;
     const relativePath = contract.wrapperPath(hook);
     const command = generatedHookCommand(contract, relativePath);

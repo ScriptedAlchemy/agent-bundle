@@ -9,7 +9,7 @@ import {
   parseRuntimeVersion,
   satisfiesGeneratedRuntimeFloor,
 } from '../core/runtime.ts';
-import { pathTokens } from '../core/types.ts';
+import { parseNativeHookToolSelector, pathTokens } from '../core/types.ts';
 import type {
   AgentBundleHookEntry,
   AgentBundleHookInput,
@@ -18,6 +18,7 @@ import type {
   AgentBundleScriptInput,
   CanonicalHookEvent,
   CanonicalHookTool,
+  NativeHookToolSelector,
   NormalizationTargetRegistry,
   NormalizedConfigExtension,
   NormalizedHook,
@@ -76,6 +77,25 @@ const isHookEntryList = (
 const asEntries = (input: AgentBundleHookInput): readonly (string | AgentBundleHookEntry)[] =>
   isHookEntryList(input) ? input : [input];
 
+const normalizeNativeHookTools = (
+  selectors: readonly string[],
+  targets: readonly string[],
+): NativeHookToolSelector[] => {
+  const seen = new Set<string>();
+  const nativeTools: NativeHookToolSelector[] = [];
+  for (const selector of selectors) {
+    if (knownHookTools.has(selector as CanonicalHookTool)) continue;
+    const parsed = parseNativeHookToolSelector(selector);
+    if (parsed === undefined || !targets.includes(parsed.target)) continue;
+    const key = `${parsed.target}:${parsed.name}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    nativeTools.push(parsed);
+  }
+  return nativeTools.sort((left, right) =>
+    left.target.localeCompare(right.target) || left.name.localeCompare(right.name));
+};
+
 const normalizeHook = (
   event: CanonicalHookEvent,
   input: string | AgentBundleHookEntry,
@@ -90,10 +110,12 @@ const normalizeHook = (
     (tool): tool is CanonicalHookTool => knownHookTools.has(tool as CanonicalHookTool),
   );
   const targets = sortedUnique(entry.targets ?? defaultTargets);
+  const nativeTools = normalizeNativeHookTools(entry.tools ?? [], targets);
   const timeout = entry.timeout;
   const identity = {
     event,
     handler,
+    ...(nativeTools.length === 0 ? {} : { nativeTools }),
     targets,
     timeout: timeout ?? 'host-default',
     tools,
@@ -107,6 +129,7 @@ const normalizeHook = (
     event,
     id: `hook:${eventName}:${handlerName}:${hash}`,
     name,
+    ...(nativeTools.length === 0 ? {} : { nativeTools }),
     provenance: { ...provenance },
     source,
     targets,

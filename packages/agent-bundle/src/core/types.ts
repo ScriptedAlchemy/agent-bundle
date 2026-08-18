@@ -9,6 +9,21 @@ export type CanonicalHookEvent = 'sessionStart' | 'beforeTool' | 'afterTool' | '
 
 export type CanonicalHookTool = 'shell' | 'file.read' | 'file.write' | 'mcp' | 'agent';
 
+/** A host-native tool named through the explicit `<target>:<native-name>` selector escape hatch. */
+export interface NativeHookToolSelector {
+  readonly name: string;
+  readonly target: string;
+}
+
+/** Parses one `<target>:<native-name>` hook tool selector; canonical selectors return undefined. */
+export const parseNativeHookToolSelector = (value: string): NativeHookToolSelector | undefined => {
+  const separator = value.indexOf(':');
+  if (separator === -1) return undefined;
+  const target = value.slice(0, separator).trim();
+  const name = value.slice(separator + 1).trim();
+  return target.length === 0 || name.length === 0 ? undefined : { name, target };
+};
+
 export interface AgentBundleHookEntry {
   handler: string;
   targets?: readonly string[];
@@ -178,6 +193,8 @@ export interface NormalizedHook {
   readonly event: CanonicalHookEvent;
   readonly id: string;
   readonly name: string;
+  /** Host-native tools selected explicitly per target, alongside the canonical selectors. */
+  readonly nativeTools?: readonly NativeHookToolSelector[];
   readonly provenance: SourceProvenance;
   readonly source: string;
   readonly targets: readonly string[];

@@ -8,6 +8,7 @@ import {
   parseRuntimeVersion,
   satisfiesGeneratedRuntimeFloor,
 } from '../core/runtime.ts';
+import { parseNativeHookToolSelector } from '../core/types.ts';
 import type {
   AgentBundleHookEntry,
   AgentBundleHookInput,
@@ -74,10 +75,30 @@ const validateHooks = (
         ));
       }
       for (const tool of entry.tools ?? []) {
-        if (!hookTools.has(tool)) {
+        if (hookTools.has(tool)) continue;
+        const selector = parseNativeHookToolSelector(tool);
+        if (selector === undefined) {
           diagnostics.push(sourceDiagnostic(
             'AB4202',
             `Hook ${event} selects unknown tool ${JSON.stringify(tool)}.`,
+            loaded.configPath,
+          ));
+        } else if (!registry.has(selector.target)) {
+          diagnostics.push(sourceDiagnostic(
+            'AB4210',
+            `Hook ${event} native tool selector ${JSON.stringify(tool)} names unknown target ${JSON.stringify(selector.target)}.`,
+            loaded.configPath,
+          ));
+        } else if (!registry.supports(selector.target, 'hooks')) {
+          diagnostics.push(sourceDiagnostic(
+            'AB4211',
+            `Hook ${event} native tool selector ${JSON.stringify(tool)} names target ${JSON.stringify(selector.target)}, which cannot emit hooks.`,
+            loaded.configPath,
+          ));
+        } else if (entry.targets !== undefined && !entry.targets.includes(selector.target)) {
+          diagnostics.push(sourceDiagnostic(
+            'AB4212',
+            `Hook ${event} native tool selector ${JSON.stringify(tool)} names target ${JSON.stringify(selector.target)} outside the hook's selected targets.`,
             loaded.configPath,
           ));
         }
