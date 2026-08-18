@@ -5,13 +5,18 @@ import { snapshotStrictJsonValue } from '../core/strict-json.ts';
 import type { HookPlaygroundRouteService } from './hook-playground-routes.ts';
 import type { McpSession } from './mcp-session-service.ts';
 import type { PlaygroundOperationRequest, PlaygroundRun } from './playground-contract.ts';
-import { ScriptPlaygroundFailure, type ScriptPlaygroundService } from './script-playground-service.ts';
+import {
+  ScriptPlaygroundFailure,
+  scriptPlaygroundCleanupFailures,
+  type ScriptPlaygroundService,
+} from './script-playground-service.ts';
 import type { ProjectStatus } from './types.ts';
 import type {
   DraftEvalCase,
   PlaygroundDurableOutcome,
   PlaygroundEventInput,
   PlaygroundExport,
+  PlaygroundJsonObject,
   PlaygroundJsonValue,
   PlaygroundReplay,
   PlaygroundReplayCursor,
@@ -103,6 +108,10 @@ const scriptFailureEvidence = (operation: PlaygroundOperationRequest, error: unk
 }> | undefined => operation.operation === 'script.run' && error instanceof ScriptPlaygroundFailure
   ? Object.freeze({ code: error.code, stderr: error.stderr, stdout: error.stdout })
   : undefined;
+
+const scriptCleanupEvidence = (error: unknown): readonly PlaygroundJsonObject[] => Object.freeze(
+  scriptPlaygroundCleanupFailures(error).map(({ code }): PlaygroundJsonObject => Object.freeze({ code })),
+);
 
 const operationIntent = (operation: PlaygroundOperationRequest): PlaygroundSessionInput['invocation'] => {
   if (operation.operation === 'skill.inspect') {
@@ -296,11 +305,13 @@ export class PlaygroundOrchestrationService {
     } catch (error) {
       const cancelled = signal.aborted;
       const failure = scriptFailureEvidence(operation, error);
+      const cleanupFailures = scriptCleanupEvidence(error);
       const terminalFailures: unknown[] = [];
       try {
         await this.#trace.append(sessionId, Object.freeze({
           kind: cancelled ? 'operation.cancelled' : 'operation.failed',
           raw: Object.freeze({
+            ...(cleanupFailures.length === 0 ? {} : { cleanupFailures }),
             ...(failure === undefined ? {} : { failure }),
             operation: operation.operation,
           }),
@@ -352,6 +363,9 @@ export class PlaygroundOrchestrationService {
     const service = this.#scripts ?? unavailable('Script');
     const result = await service.run({ epochId, scriptId: operation.scriptId, signal, target: operation.target });
     signal.throwIfAborted();
-    return Object.freeze({ event: Object.freeze({ kind: 'script.completed', raw: Object.freeze({ result: evidenceValue(result), targetDigest }), source: 'script', summary: 'Ran emitted script.' }), status: result.exitCode === 0 ? 'passed' : 'failed' });
+    return Object.freeze({
+      event: Object.freeze({ kind: 'script.completed', raw: Object.freeze({ result: evidenceValue(result), targetDigest }), source: 'script', summary: 'Ran emitted script.' }),
+      status: result.exitCode === 0 && result.cleanupFailures?.length === 0 ? 'passed' : 'failed',
+    });
   }
 }
