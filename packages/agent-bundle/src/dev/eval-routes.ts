@@ -2,6 +2,7 @@ import { Buffer } from 'node:buffer';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { Readable } from 'node:stream';
 
+import { parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
 import {
   EvalConfigError,
   EvalDefinitionError,
@@ -267,7 +268,7 @@ const jsonBody = async (request: IncomingMessage): Promise<JsonObject> => {
   }
   let parsed: unknown;
   try {
-    parsed = JSON.parse(await readBody(request));
+    parsed = parseJsonWithoutDuplicateKeys(await readBody(request));
   } catch (error) {
     if (isRequestDiagnostic(error)) throw error;
     throw requestError(diagnostic('AB8001', 'Request body must be valid JSON.', 400));
@@ -432,9 +433,10 @@ export class EvalRoutes {
   ): Promise<void> {
     const method = request.method ?? 'GET';
     if (parsed.kind === 'runs' && method === 'POST') {
-      const selection = runRequest(await jsonBody(request));
       const finishAdmission = this.#beginAdmission();
       try {
+        const selection = runRequest(await jsonBody(request));
+        if (this.#closePromise !== undefined) throw this.#unavailable(503);
         const admission = await service.start(selection);
         return responseJson(response, { run: admission.run }, 202);
       } finally {
@@ -442,10 +444,16 @@ export class EvalRoutes {
       }
     }
     if (parsed.kind === 'cancel' && method === 'POST') {
-      noQuery(request.url);
-      await cancelRequest(request);
-      const cancelled = await service.cancel(parsed.runId);
-      return responseJson(response, { cancelled, runId: parsed.runId }, 202);
+      const finishAdmission = this.#beginAdmission();
+      try {
+        noQuery(request.url);
+        await cancelRequest(request);
+        if (this.#closePromise !== undefined) throw this.#unavailable(503);
+        const cancelled = await service.cancel(parsed.runId);
+        return responseJson(response, { cancelled, runId: parsed.runId }, 202);
+      } finally {
+        finishAdmission();
+      }
     }
     if (method !== 'GET' && !(parsed.kind === 'artifact' && method === 'HEAD')) {
       return responseDiagnostic(response, diagnostic('AB8007', 'Route does not accept this method.', 405));

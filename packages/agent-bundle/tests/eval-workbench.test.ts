@@ -33,6 +33,16 @@ it('runs a real deterministic eval through the packaged foreground server', asyn
     });
     const { token } = await bootstrap.json() as { readonly token: string };
     const headers = { origin: server.url, 'x-agent-bundle-session': token };
+    const completedRun = async (runId: string): Promise<EvalRunResult> => {
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        const response = await fetch(`${server!.url}/api/evals/runs/${runId}`, { headers });
+        if (response.status !== 200) throw new Error(`Expected recorded eval run ${JSON.stringify(runId)} to be readable.`);
+        const { run } = await response.json() as { readonly run: EvalRunResult };
+        if (run.run.completedAt !== undefined) return run;
+        await new Promise<void>((resolvePromise) => setTimeout(resolvePromise, 10));
+      }
+      throw new Error(`Timed out waiting for recorded eval run ${JSON.stringify(runId)}.`);
+    };
 
     const unauthorized = await fetch(`${server.url}/api/evals/suites`, { headers: { origin: server.url } });
     expect(unauthorized.status).toBe(403);
@@ -59,8 +69,10 @@ it('runs a real deterministic eval through the packaged foreground server', asyn
       headers: { ...headers, 'content-type': 'application/json' },
       method: 'POST',
     });
-    expect(started.status).toBe(200);
-    const { run } = await started.json() as { readonly run: EvalRunResult };
+    expect(started.status).toBe(202);
+    const { run: admitted } = await started.json() as { readonly run: EvalRunRecord };
+    expect(admitted.completedAt).toBeUndefined();
+    const run = await completedRun(admitted.id);
     expect(run.run.harness).toBe('deterministic');
     expect(run.run.summary).toMatchObject({ cases: 3, fail: 1, inconclusive: 1, pass: 1, trials: 3 });
     expect(run.trials.map((trial) => `${trial.caseId}:${trial.outcome}`)).toEqual([
@@ -80,18 +92,19 @@ it('runs a real deterministic eval through the packaged foreground server', asyn
       headers: { ...headers, 'content-type': 'application/json' },
       method: 'POST',
     });
-    expect(multiTrial.status).toBe(200);
-    const second = await multiTrial.json() as { readonly run: EvalRunResult };
-    expect(second.run.trials.map((trial) => trial.id)).toEqual([
+    expect(multiTrial.status).toBe(202);
+    const { run: secondAdmission } = await multiTrial.json() as { readonly run: EvalRunRecord };
+    const second = await completedRun(secondAdmission.id);
+    expect(second.trials.map((trial) => trial.id)).toEqual([
       'reads-result--portable-1',
       'reads-result--portable-2',
     ]);
-    expect(second.run.aggregates[0]).toMatchObject({ caseId: 'reads-result', pass: 2, trials: 2 });
+    expect(second.aggregates[0]).toMatchObject({ caseId: 'reads-result', pass: 2, trials: 2 });
 
     const runs = await fetch(`${server.url}/api/evals/runs`, { headers });
     expect(runs.status).toBe(200);
     const recorded = await runs.json() as { readonly runs: readonly EvalRunRecord[] };
-    expect(recorded.runs.map((entry) => entry.id).sort()).toEqual([run.run.id, second.run.run.id].sort());
+    expect(recorded.runs.map((entry) => entry.id).sort()).toEqual([run.run.id, second.run.id].sort());
 
     const reread = await fetch(`${server.url}/api/evals/runs/${run.run.id}`, { headers });
     expect(reread.status).toBe(200);

@@ -43,7 +43,7 @@ export class ForegroundServerError extends Error {
 
 export interface ForegroundServerCloseFailure {
   readonly error: unknown;
-  readonly resource: 'agent-api' | 'coordinator' | 'eval-routes' | 'hook-playground' | 'logs' | 'server';
+  readonly resource: 'agent-api' | 'coordinator' | 'eval-routes' | 'eval-service' | 'hook-playground' | 'logs' | 'server';
 }
 
 export interface ForegroundServerStartFailure {
@@ -102,6 +102,8 @@ export interface ForegroundServerOptions {
   readonly logs?: DevLogService;
   /** Deterministic and native eval runs; the browser names discovered suites, never a path or command. */
   readonly evals?: EvalRouteService;
+  /** The project-owned Eval service is closed only after foreground Eval routes have drained. */
+  readonly evalLifecycle?: Readonly<{ close(): Promise<void> }>;
   readonly eventHub: ProjectEventHub;
   readonly host?: string;
   /** Already-bound MCP App previews, never executable data supplied by a browser request. */
@@ -395,6 +397,7 @@ export class ForegroundServer {
   readonly #assets: WorkbenchAssetSource | undefined;
   readonly #coordinator: ForegroundCoordinator;
   readonly #devLogRoutes: DevLogRoutes;
+  readonly #evalLifecycle: Readonly<{ close(): Promise<void> }> | undefined;
   readonly #evalRoutes: EvalRoutes;
   readonly #eventHub: ProjectEventHub;
   readonly #hookPlaygroundRoutes: HookPlaygroundRoutes;
@@ -428,6 +431,7 @@ export class ForegroundServer {
     this.#agentApi = options.agentApi;
     this.#assets = options.assets;
     this.#coordinator = options.coordinator;
+    this.#evalLifecycle = options.evalLifecycle;
     this.#eventHub = options.eventHub;
     this.#host = host;
     this.#now = options.now ?? (() => new Date());
@@ -586,6 +590,10 @@ export class ForegroundServer {
     this.#playgroundRoutes.close();
     this.#artifactRoutes.close();
     const releaseEvals = this.#evalRoutes.close();
+    const releaseEvalService = releaseEvals.then(
+      () => this.#evalLifecycle?.close(),
+      () => this.#evalLifecycle?.close(),
+    );
     const releaseLogs = this.#devLogRoutes.close();
     // The Agent API owns admissions over every shared foreground service. It
     // must publish closure and drain active handlers before those services or
@@ -600,10 +608,11 @@ export class ForegroundServer {
           return closeServer(this.#server);
         })()
       : Promise.resolve();
-    const [server, coordinator, evalRoutes, hookPlayground, logs] = await Promise.allSettled([
+    const [server, coordinator, evalRoutes, evalService, hookPlayground, logs] = await Promise.allSettled([
       releaseServer,
       this.#coordinator.close(),
       releaseEvals,
+      releaseEvalService,
       releaseHookPlayground,
       releaseLogs,
     ]);
@@ -612,6 +621,7 @@ export class ForegroundServer {
     if (server.status === 'rejected') failures.push(Object.freeze({ error: server.reason, resource: 'server' }));
     if (coordinator.status === 'rejected') failures.push(Object.freeze({ error: coordinator.reason, resource: 'coordinator' }));
     if (evalRoutes.status === 'rejected') failures.push(Object.freeze({ error: evalRoutes.reason, resource: 'eval-routes' }));
+    if (evalService.status === 'rejected') failures.push(Object.freeze({ error: evalService.reason, resource: 'eval-service' }));
     if (hookPlayground.status === 'rejected') {
       failures.push(Object.freeze({ error: hookPlayground.reason, resource: 'hook-playground' }));
     }

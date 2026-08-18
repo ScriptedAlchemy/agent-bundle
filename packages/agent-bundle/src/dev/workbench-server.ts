@@ -363,6 +363,7 @@ export const startDevServer = async (options: StartDevServerOptions): Promise<De
     assets: options.assets ?? createWorkbenchAssetSource(),
     coordinator: withMcpSessionLifecycle(coordinator, mcpSessions, () => mcpApps, playground, logs, detachProjectLogs),
     evals,
+    evalLifecycle: evals,
     eventHub,
     hookPlayground,
     logs,
