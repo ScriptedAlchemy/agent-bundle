@@ -5,6 +5,10 @@ import {
   type EventSourceFactory,
   type EventSourceLike,
 } from '../src/project-client.ts';
+import { ArtifactClient } from '../src/artifacts/artifact-client.ts';
+import { HookClient } from '../src/hooks/hook-client.ts';
+import { ForegroundRouteClient } from '../src/mcp/mcp-route-client.ts';
+import { PlaygroundClient } from '../src/playground/playground-client.ts';
 
 interface Listener {
   readonly listener: (event: { readonly data: string; readonly lastEventId: string }) => void;
@@ -728,4 +732,85 @@ it('advances its replay cursor, unsubscribes snapshot listeners, and blocks late
   expect(received).toEqual(['gap', 'runtime.event:4']);
   expect(client.lastEventId).toBe(5);
   expect(stream.closed).toBe(true);
+});
+
+it('shares one foreground bootstrap and EventSource across project, artifact, hook, and playground requests', async () => {
+  const stream = new RecordingEventSource();
+  let eventSources = 0;
+  let sessionBootstraps = 0;
+  const protectedTokens: string[] = [];
+  const fetch: typeof globalThis.fetch = async (input, init) => {
+    const path = String(input);
+    if (path === '/api/project/session') {
+      sessionBootstraps += 1;
+      return Response.json(foregroundSession);
+    }
+    protectedTokens.push(new Headers(init?.headers).get('x-agent-bundle-session') ?? '');
+    if (path === '/api/project/status') return Response.json({ status: status() });
+    if (path.startsWith('/api/artifacts/diff?')) {
+      return Response.json({ diff: { added: [], baseEpochId: 'epoch-1', candidateEpochId: 'epoch-2', changed: [], removed: [], unchanged: [] } });
+    }
+    if (path.startsWith('/api/hooks?')) return Response.json({ hooks: [] });
+    if (path === '/api/playground/sessions/session-1') return Response.json({ closed: true });
+    throw new Error(`Unexpected foreground route ${path}`);
+  };
+  const foreground = new ForegroundRouteClient({ fetch });
+  const project = new ProjectClient({
+    events: () => { eventSources += 1; return stream; },
+    foreground,
+  });
+  const artifact = new ArtifactClient({ foreground });
+  const hooks = new HookClient({ foreground });
+  const playground = new PlaygroundClient({ foreground });
+
+  await Promise.all([
+    project.connect(() => undefined),
+    artifact.diff('epoch-1', 'epoch-2'),
+    hooks.list({ epochId: 'epoch-1' }),
+    playground.closeSession('session-1'),
+  ]);
+
+  expect(sessionBootstraps).toBe(1);
+  expect(eventSources).toBe(1);
+  expect(protectedTokens.filter((token) => token === 'foreground-token')).toHaveLength(3);
+  expect(protectedTokens.filter((token) => token === '')).toHaveLength(1);
+});
+
+it('invalidates every shared foreground admission when ProjectClient closes during the held bootstrap', async () => {
+  const session = deferred<Response>();
+  const stream = new RecordingEventSource();
+  let eventSources = 0;
+  let protectedRequests = 0;
+  const fetch: typeof globalThis.fetch = async (input) => {
+    if (String(input) === '/api/project/session') return session.promise;
+    protectedRequests += 1;
+    return Response.json({ status: status() });
+  };
+  const foreground = new ForegroundRouteClient({ fetch });
+  const project = new ProjectClient({
+    events: () => { eventSources += 1; return stream; },
+    foreground,
+  });
+  const artifact = new ArtifactClient({ foreground });
+  const hooks = new HookClient({ foreground });
+  const playground = new PlaygroundClient({ foreground });
+
+  const operations = [
+    project.connect(() => undefined),
+    artifact.diff('epoch-1', 'epoch-2'),
+    hooks.list({ epochId: 'epoch-1' }),
+    playground.closeSession('session-1'),
+  ];
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  project.close();
+  session.resolve(Response.json(foregroundSession));
+
+  const settled = await Promise.allSettled(operations);
+  expect(settled).toHaveLength(4);
+  for (const result of settled) {
+    expect(result).toMatchObject({ reason: { code: 'AB8019' }, status: 'rejected' });
+  }
+  expect(protectedRequests).toBe(0);
+  expect(eventSources).toBe(0);
+  expect(stream.closed).toBe(false);
 });

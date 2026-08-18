@@ -340,4 +340,16 @@ describe('Inspector session adapter', () => {
     ]) expect(resetEffect).toContain(resetter);
   });
 
+   it('sends the complete underlying timeline to Protocol and Logging export callbacks', () => {
+    const controller = { cancel: rs.fn(), invoke: rs.fn(async () => ({ content: [] })) };
+    const exports: (readonly unknown[])[] = [];
+    const onExportTrace = (entries: readonly unknown[]): void => { exports.push(entries); };
+
+    renderToStaticMarkup(createElement(InspectorSessionAdapter, { controller, initialTab: 'protocol', model, onExportTrace }));
+    (screens.protocol!.onExport as () => void)();
+    renderToStaticMarkup(createElement(InspectorSessionAdapter, { controller, initialTab: 'logging', model, onExportTrace }));
+    (screens.logging!.onExport as () => void)();
+
+    expect(exports).toEqual([model.timeline.entries, model.timeline.entries]);
+   });
 });

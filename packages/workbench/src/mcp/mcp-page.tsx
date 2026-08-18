@@ -25,9 +25,14 @@ import type {
   McpBrowserSessionModel,
   McpBrowserSessionTimelineEntry,
 } from './mcp-session-model.ts';
-import type { McpSessionControllerReplay, McpSessionControllerRequest } from './mcp-session-controller.ts';
+import type { McpSessionControllerBinding, McpSessionControllerReplay, McpSessionControllerRequest } from './mcp-session-controller.ts';
 import type { RuntimeAppPreviewProps } from '../runtime-stage.tsx';
 import type { RuntimeAppPreviewLifecycle } from '../runtime-playground.tsx';
+import {
+  mcpProtocolTraceDownload,
+  type McpDownload,
+  type McpProtocolTraceSource,
+} from './mcp-protocol-trace.ts';
 
 import './mcp-page.css';
 
@@ -38,7 +43,7 @@ export interface McpPageController {
   cancel(id: string): boolean;
   close(): Promise<void>;
   invoke(input: McpSessionControllerRequest): Promise<unknown>;
-  open(binding: McpSessionBinding, timeoutMs?: number): Promise<McpBrowserSessionModel>;
+  open(binding: McpSessionBinding | McpSessionControllerBinding, timeoutMs?: number): Promise<McpBrowserSessionModel>;
   replay(input: McpSessionControllerReplay): Promise<unknown>;
   restart(): Promise<McpBrowserSessionModel>;
   subscribe(listener: (model: McpBrowserSessionModel) => void): () => void;
@@ -48,6 +53,7 @@ interface McpPageCommonProps {
   readonly controller: McpPageController;
   readonly initialBinding?: Partial<McpSessionBinding>;
   readonly onDownloadConfig?: (download: McpConfigDownload) => void;
+  readonly onDownloadTrace?: (download: McpDownload) => void;
   /** Replaces the terminal controller with a fresh idle controller in the parent. */
   readonly onResetSession?: () => void;
   /** Lets the host serialize a Runtime departure through this Page's existing preview lifecycle. */
@@ -88,10 +94,7 @@ export interface McpPageRuntimeProps extends McpPageCommonProps {
 /** Legacy artifact props remain source-compatible; runtime callers supply only the discriminated source. */
 export type McpPageProps = McpPageArtifactProps | McpPageRuntimeProps;
 
-export interface McpConfigDownload {
-  readonly blob: Blob;
-  readonly filename: string;
-}
+export type McpConfigDownload = McpDownload;
 
 export interface McpProtocolEvidenceProps {
   readonly ariaLabel: string;
@@ -683,6 +686,13 @@ export const mcpConfigDownload = (config: McpSessionInspectorConfig, sessionId: 
   filename: `mcp-${sessionId}-inspector.json`,
 });
 
+export const downloadCurrentMcpProtocolTrace = (
+  onDownload: ((download: McpDownload) => void) | undefined,
+  source: McpProtocolTraceSource,
+): void => {
+  if (onDownload !== undefined) onDownload(mcpProtocolTraceDownload(source));
+};
+
 const environmentEntries = (environment: Readonly<Record<string, string>>): ReadonlyArray<readonly [string, string]> =>
   Object.entries(environment).sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0);
 
@@ -911,7 +921,7 @@ const McpPageAppPreview = ({ artifactClient, host, onLifecycleChange, previewPro
 };
 
 export const McpPage = (props: McpPageProps) => {
-  const { controller, initialBinding, initialPreview, onDownloadConfig, onResetSession, registerPreviewClose } = props;
+  const { controller, initialBinding, initialPreview, onDownloadConfig, onDownloadTrace, onResetSession, registerPreviewClose } = props;
   const runtimeProps: McpPageRuntimeProps | undefined = 'runtimePreviewDependencies' in props ? props : undefined;
   const artifactProps: McpPageArtifactProps | undefined = 'runtimePreviewDependencies' in props ? undefined : props;
   const [runtimeAdmission] = useState<RuntimePageAdmission | undefined>(() => runtimeProps === undefined
@@ -1319,6 +1329,8 @@ export const McpPage = (props: McpPageProps) => {
 
     <section className="mcp-page-section" aria-labelledby="mcp-trace-heading">
       <h2 id="mcp-trace-heading">Trace</h2>
+      <p>Download the current browser MCP trace, not a durable Playground session export.</p>
+      <button disabled={onDownloadTrace === undefined} onClick={() => downloadCurrentMcpProtocolTrace(onDownloadTrace, { history: controller.history, model })} type="button">Download current protocol trace</button>
       <div aria-label="Trace-derived views" className="mcp-page-tabs" role="tablist">
         {traceTabs.map((candidate) => <button
           aria-controls={tracePanelId}

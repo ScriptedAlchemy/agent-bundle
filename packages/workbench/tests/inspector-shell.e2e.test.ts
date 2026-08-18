@@ -94,6 +94,14 @@ e2e('canonicalizes the legacy Inspector hash into the internal MCP Inspector pre
     await expect(page).toHaveURL(/#mcp$/u, { timeout: browserTimeout });
     await expect(page.getByRole('link', { name: 'Inspector' })).toHaveCount(0);
     await expect(page.getByRole('tab', { name: 'Inspector' })).toHaveAttribute('aria-selected', 'true');
+    const playgroundPresentation = page.locator('#mcp-playground-presentation');
+    const inspectorPresentation = page.locator('#mcp-inspector-presentation');
+    await expect(playgroundPresentation).toHaveCount(1);
+    await expect(inspectorPresentation).toHaveCount(1);
+    expect(await playgroundPresentation.evaluate((element) => ({ hidden: element.hasAttribute('hidden'), inert: element.hasAttribute('inert') })))
+      .toEqual({ hidden: true, inert: true });
+    expect(await inspectorPresentation.evaluate((element) => ({ hidden: element.hasAttribute('hidden'), inert: element.hasAttribute('inert') })))
+      .toEqual({ hidden: false, inert: false });
     await expect(page.getByRole('heading', { name: 'Inspector' })).toBeVisible({ timeout: browserTimeout });
     await expect(page.getByText('Negotiated protocol: Not negotiated')).toBeVisible({ timeout: browserTimeout });
     await expect(page.getByRole('navigation', { name: 'Inspector screens' })).toHaveText(/Tools.*Resources.*Prompts.*Protocol.*Logging/u);
@@ -138,6 +146,7 @@ e2e('shares one real session between the MCP Playground and Inspector presentati
     await page.goto(`${server.url}#mcp`);
     const playgroundTab = page.getByRole('tab', { name: 'Playground' });
     const inspectorTab = page.getByRole('tab', { name: 'Inspector' });
+    const presentationHistoryLength = await page.evaluate(() => window.history.length);
     await expect(playgroundTab).toHaveAttribute('aria-selected', 'true');
     await expect(playgroundTab).toHaveAttribute('tabindex', '0');
     await expect(inspectorTab).toHaveAttribute('tabindex', '-1');
@@ -156,13 +165,18 @@ e2e('shares one real session between the MCP Playground and Inspector presentati
     await expect(playgroundTab).toBeFocused({ timeout: browserTimeout });
     await expect(playgroundTab).toHaveAttribute('aria-selected', 'true');
     expect(sessionPosts).toBe(0);
+    await page.keyboard.press('Home');
+    await expect(playgroundTab).toBeFocused({ timeout: browserTimeout });
+    await page.keyboard.press('End');
+    await expect(inspectorTab).toBeFocused({ timeout: browserTimeout });
+    expect(await page.evaluate(() => window.history.length)).toBe(presentationHistoryLength);
     await page.locator('#mcp-target').selectOption('portable');
     await page.locator('#mcp-server-name').fill('fixture');
     await page.getByRole('button', { name: 'Open MCP session' }).click();
     await expect(page.locator('.mcp-page-phase')).toContainText('Session ready', { timeout: browserTimeout });
-    await page.getByRole('tab', { name: 'Inspector' }).click();
+    await inspectorTab.click();
     await expect(page).toHaveURL(/#mcp$/u);
-    await expect(page.getByRole('tab', { name: 'Inspector' })).toHaveAttribute('aria-selected', 'true');
+    await expect(inspectorTab).toHaveAttribute('aria-selected', 'true');
 
     const inspector = page.locator('#mcp-inspector-presentation');
     await expect(inspector.getByText(/Negotiated protocol: \d{4}-\d{2}-\d{2}/u)).toBeVisible({ timeout: browserTimeout });
@@ -186,18 +200,57 @@ e2e('shares one real session between the MCP Playground and Inspector presentati
     await expect(protocolHistory).toContainText('tools/call');
     await expect(protocolHistory).toContainText('inspector');
 
+    await playgroundTab.click();
+    const playgroundDownload = page.waitForEvent('download');
+    await page.getByRole('button', { name: 'Download current protocol trace' }).click();
+    const playgroundDownloadPath = await (await playgroundDownload).path();
+    if (playgroundDownloadPath === null) throw new Error('The MCP trace download did not provide a local file.');
+    const playgroundTrace = JSON.parse(await readFile(playgroundDownloadPath, 'utf8')) as {
+      readonly kind: string;
+      readonly schemaVersion: number;
+      readonly session: Readonly<{ readonly binding: unknown; readonly id: string | null }>;
+      readonly timeline: Readonly<{ readonly entries: readonly unknown[] }>;
+    };
+    expect(playgroundTrace).toMatchObject({
+      kind: 'agent-bundle.mcp-protocol-trace',
+      schemaVersion: 1,
+      session: { binding: { epochId: expect.any(String), serverName: 'fixture', target: 'portable' }, id: expect.any(String) },
+    });
+    expect(JSON.stringify(playgroundTrace.timeline.entries)).toContain('tools/call');
+    expect(JSON.stringify(playgroundTrace.timeline.entries)).toContain('inspector');
+
+    await inspectorTab.click();
+    await screens.getByRole('button', { name: 'Protocol' }).click();
+    const protocolDownload = page.waitForEvent('download');
+    await inspector.getByRole('button', { name: 'Export' }).click();
+    const protocolDownloadPath = await (await protocolDownload).path();
+    if (protocolDownloadPath === null) throw new Error('The Inspector Protocol download did not provide a local file.');
+    expect(JSON.parse(await readFile(protocolDownloadPath, 'utf8'))).toEqual(playgroundTrace);
+
     await screens.getByRole('button', { name: 'Logging' }).click();
     await expect(inspector.getByRole('region', { name: 'Logging inspector' })).toContainText('echo inspector', { timeout: browserTimeout });
-    await page.getByRole('tab', { name: 'Playground' }).click();
-    await expect(page.getByRole('tab', { name: 'Playground' })).toHaveAttribute('aria-selected', 'true');
+    const loggingDownload = page.waitForEvent('download');
+    await inspector.getByRole('button', { name: 'Export' }).click();
+    const loggingDownloadPath = await (await loggingDownload).path();
+    if (loggingDownloadPath === null) throw new Error('The Inspector Logging download did not provide a local file.');
+    expect(JSON.parse(await readFile(loggingDownloadPath, 'utf8'))).toEqual(playgroundTrace);
+    await playgroundTab.click();
+    await expect(playgroundTab).toHaveAttribute('aria-selected', 'true');
     await expect(page.locator('#mcp-server-name')).toHaveValue('fixture');
-    await page.getByRole('button', { name: 'Close MCP session' }).click();
-    await page.getByRole('button', { name: 'Reset MCP session' }).click();
-    await page.getByRole('tab', { name: 'Inspector' }).click();
-    await expect(page.getByText('Negotiated protocol: Not negotiated')).toBeVisible({ timeout: browserTimeout });
-    expect(sessionPosts).toBe(1);
+    await inspectorTab.click();
+    await expect(inspector.getByRole('region', { name: 'Logging inspector' })).toContainText('echo inspector');
+    await playgroundTab.click();
     await page.setViewportSize({ height: 844, width: 390 });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    await inspectorTab.click();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    await playgroundTab.click();
+    await page.getByRole('button', { name: 'Close MCP session' }).click();
+    await page.getByRole('button', { name: 'Reset MCP session' }).click();
+    await inspectorTab.click();
+    await expect(page.getByText('Negotiated protocol: Not negotiated')).toBeVisible({ timeout: browserTimeout });
+    expect(sessionPosts).toBe(1);
+    expect(await page.evaluate(() => window.history.length)).toBe(presentationHistoryLength);
     expect(pageErrors).toEqual([]);
   } finally {
     await server.close();

@@ -1253,6 +1253,47 @@ it('turns a replay overflow into the inclusive replay-gap marker before applying
   await controller.close();
 });
 
+it('accepts the largest representable replay gap and rejects an overflow before deriving its earliest cursor', async () => {
+  const acceptedStream = traceStream();
+  const accepted = createMcpSessionController({
+    clientFactory: fakeClient,
+    routes: {
+      catalog: async () => ({ prompts: [], resourceTemplates: [], resources: [], tools: [] }),
+      config: async () => ({ launch: { args: [], command: 'node', env: {}, kind: 'stdio' }, origin: 'artifact' }),
+      restart: async () => connection,
+      stream: async () => acceptedStream.response,
+      trace: async () => ({ entries: [], overflow: { afterSequence: 0, droppedThroughSequence: Number.MAX_SAFE_INTEGER - 1 } }),
+    },
+    transportFactory: fakeTransport,
+  });
+  await accepted.open(binding);
+  expect(accepted.model.timeline.entries).toContainEqual({
+    earliestAvailableSequence: Number.MAX_SAFE_INTEGER,
+    latestDroppedSequence: Number.MAX_SAFE_INTEGER - 1,
+    requestedAfterSequence: 0,
+    type: 'replay.gap',
+  });
+  acceptedStream.close();
+  await accepted.close();
+
+  const rejectedStream = traceStream();
+  const rejected = createMcpSessionController({
+    clientFactory: fakeClient,
+    routes: {
+      catalog: async () => ({ prompts: [], resourceTemplates: [], resources: [], tools: [] }),
+      config: async () => ({ launch: { args: [], command: 'node', env: {}, kind: 'stdio' }, origin: 'artifact' }),
+      restart: async () => connection,
+      stream: async () => rejectedStream.response,
+      trace: async () => ({ entries: [], overflow: { afterSequence: 0, droppedThroughSequence: Number.MAX_SAFE_INTEGER } }),
+    },
+    transportFactory: fakeTransport,
+  });
+  await expect(rejected.open(binding)).rejects.toThrow('Foreground MCP trace stream contained an invalid entry.');
+  expect(rejected.model.timeline.entries).toEqual([]);
+  rejectedStream.close();
+  await expect(rejected.close()).rejects.toThrow('Foreground MCP trace stream contained an invalid entry.');
+});
+
 it('leaves the controller retryable when the transport factory throws before opening', async () => {
   const factoryFailure = new Error('transport factory failed');
   const stream = traceStream();

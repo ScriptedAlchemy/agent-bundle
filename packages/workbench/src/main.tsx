@@ -5,8 +5,16 @@ import { MantineProvider } from '@mantine/core';
 import type { Diagnostic } from '../../agent-bundle/src/core/diagnostics.ts';
 import { MCP_APP_PROFILE_DESCRIPTORS, type McpAppProfileId } from '../../agent-bundle/src/dev/mcp-app-profile-descriptors.ts';
 import type { McpAppPreviewAppsSnapshot } from '../../agent-bundle/src/dev/mcp-app-runtime-preview-service.ts';
+import type {
+  PlaygroundEventInput,
+  PlaygroundSession,
+} from '../../agent-bundle/src/services/playground-service.ts';
 import type { ProjectStatus } from '../../agent-bundle/src/dev/types.ts';
 
+import { ArtifactClient } from './artifacts/artifact-client.ts';
+import { ArtifactsPage } from './artifacts/artifacts-page.tsx';
+import { HookClient } from './hooks/hook-client.ts';
+import { HooksPage } from './hooks/hooks-page.tsx';
 import { InspectorSessionAdapter } from './inspector/adapter/inspector-session-adapter-entry.ts';
 import {
   createRuntimeAppBridgeFactory,
@@ -15,6 +23,7 @@ import {
   type RuntimeAppBridgeTrace,
 } from './inspector/adapter/runtime-app-bridge.ts';
 import { McpAppClient, type McpAppConsentChallenge } from './mcp/mcp-app-client.ts';
+import type { McpAppConsentChallenge as RuntimeMcpAppConsentChallenge } from '../../agent-bundle/src/dev/mcp-app-sandbox.ts';
 import { RuntimeConsentDialog } from './mcp/runtime-consent-dialog.tsx';
 import { createRuntimeConsentQueue, type RuntimeConsentQueue, type RuntimeConsentQueueCurrent } from './mcp/runtime-consent-queue.ts';
 import { McpAppPreview } from './mcp/mcp-app-preview.tsx';
@@ -29,6 +38,10 @@ import {
   type RuntimeHandoffAuthority,
   type RuntimeMcpHandoff,
 } from './mcp/runtime-mcp-handoff.ts';
+import { mcpProtocolTraceDownload, type McpDownload } from './mcp/mcp-protocol-trace.ts';
+import { LogsPage } from './playground/logs-page.tsx';
+import { PlaygroundClient } from './playground/playground-client.ts';
+import { PlaygroundPage } from './playground/playground-page.tsx';
 import { overviewFor } from './overview-model.ts';
 import { ProjectClient } from './project-client.ts';
 import { SkillClient } from './skill-client.ts';
@@ -60,6 +73,24 @@ const sourceFor = (diagnostic: Diagnostic): string =>
 const errorMessage = (reason: unknown): string =>
   reason instanceof Error ? reason.message : 'Foreground project state could not be refreshed.';
 
+const activeEpochFor = (status: ProjectStatus) =>
+  status.artifact.state === 'missing' ? undefined : status.artifact.activeEpoch;
+
+const activeEpochId = (status: ProjectStatus): string | undefined => activeEpochFor(status)?.id;
+
+/** The normalized model digest identifies the epoch's content for durable playground identity. */
+const playgroundEpochFor = (status: ProjectStatus) => {
+  const epoch = activeEpochFor(status);
+  return epoch === undefined ? undefined : { digest: epoch.modelDigest, id: epoch.id };
+};
+
+const playgroundTargetsFor = (status: ProjectStatus) => {
+  const epoch = activeEpochFor(status);
+  return epoch === undefined
+    ? []
+    : Object.entries(epoch.targetDigests).map(([name, digest]) => ({ digest, name }));
+};
+
 const mcpTargets = ['portable', 'claude', 'codex'] as const;
 
 const runtimeProfiles = Object.values(MCP_APP_PROFILE_DESCRIPTORS) satisfies readonly RuntimeProfileOption[];
@@ -85,9 +116,14 @@ const createMcpController = (routes: WorkbenchMcpRouteClient) => createMcpSessio
 
 type WorkbenchMcpController = ReturnType<typeof createMcpController>;
 
+const isRuntimeModelBinding = (
+  binding: WorkbenchMcpController['model']['binding'],
+): binding is Extract<NonNullable<WorkbenchMcpController['model']['binding']>, { readonly kind: 'runtime' }> =>
+  binding !== undefined && 'kind' in binding && binding.kind === 'runtime';
+
 const controllerMatchesRuntimePreview = (controller: WorkbenchMcpController, preview: McpAppPreviewAppsSnapshot): boolean => {
   const binding = controller.model.binding;
-  return controller.model.phase === 'ready' && binding?.kind === 'runtime' && sameRuntimeMcpAppBinding(binding.binding, preview.session.binding);
+  return controller.model.phase === 'ready' && isRuntimeModelBinding(binding) && sameRuntimeMcpAppBinding(binding.binding, preview.session.binding);
 };
 
 type RuntimeOperationTraceAuthority = Readonly<{
@@ -123,10 +159,23 @@ const sameRuntimeOperationTraceAuthority = (left: RuntimeOperationTraceAuthority
   left.vector.sourceRevision === right.vector.sourceRevision &&
   left.vector.stateVersion === right.vector.stateVersion;
 
+const runtimeConsentQueueChallenge = (challenge: RuntimeMcpAppConsentChallenge): McpAppConsentChallenge => Object.freeze({
+  expiresAt: challenge.expiresAt,
+  id: challenge.id,
+  request: Object.freeze({
+    actionFingerprint: challenge.request.actionFingerprint,
+    capability: challenge.request.capability,
+    details: challenge.request.details,
+    scope: challenge.request.scope,
+    summary: challenge.request.summary,
+  }) as unknown as McpAppConsentChallenge['request'],
+});
+
 const isRuntimeOperationTrace = (entry: RuntimeAppBridgeTrace): entry is RuntimeAppBridgeOperationTrace => {
   if (entry === null || typeof entry !== 'object') return false;
-  const candidate = entry as Readonly<Record<string, unknown>>;
+  const candidate = entry as unknown as Readonly<Record<string, unknown>>;
   const vector = candidate.vector;
+  const vectorRecord = vector as Readonly<Record<string, unknown>>;
   return typeof candidate.bindingId === 'string' && candidate.bindingId.length > 0 &&
     (candidate.kind === 'resources/list' || candidate.kind === 'resources/read' || candidate.kind === 'tools/call' || candidate.kind === 'tools/list') &&
     (candidate.name === undefined || typeof candidate.name === 'string') &&
@@ -135,12 +184,12 @@ const isRuntimeOperationTrace = (entry: RuntimeAppBridgeTrace): entry is Runtime
     typeof candidate.sessionId === 'string' && candidate.sessionId.length > 0 &&
     typeof candidate.sessionRevision === 'number' && Number.isSafeInteger(candidate.sessionRevision) && candidate.sessionRevision > 0 &&
     vector !== null && typeof vector === 'object' && !Array.isArray(vector) &&
-    ((vector as Readonly<Record<string, unknown>>).artifactEpochId === undefined || typeof (vector as Readonly<Record<string, unknown>>).artifactEpochId === 'string') &&
-    typeof (vector as Readonly<Record<string, unknown>>).runtimeGenerationId === 'string' &&
-    typeof (vector as Readonly<Record<string, unknown>>).sourceRevision === 'string' &&
-    typeof (vector as Readonly<Record<string, unknown>>).stateVersion === 'number' &&
-    Number.isSafeInteger((vector as Readonly<Record<string, unknown>>).stateVersion) &&
-    (vector as Readonly<Record<string, unknown>>).stateVersion >= 0;
+    (vectorRecord.artifactEpochId === undefined || typeof vectorRecord.artifactEpochId === 'string') &&
+    typeof vectorRecord.runtimeGenerationId === 'string' &&
+    typeof vectorRecord.sourceRevision === 'string' &&
+    typeof vectorRecord.stateVersion === 'number' &&
+    Number.isSafeInteger(vectorRecord.stateVersion) &&
+    vectorRecord.stateVersion >= 0;
 };
 
 const traceMatchesAuthority = (trace: RuntimeAppBridgeOperationTrace, authority: RuntimeOperationTraceAuthority): boolean =>
@@ -159,7 +208,7 @@ const createWorkbenchRuntimeBridgeFactory = (
   controllerRef: MutableRefObject<WorkbenchMcpController>,
   onClosed: (binding: McpAppPreviewAppsSnapshot['binding']) => void,
   onTrace: (binding: McpAppPreviewAppsSnapshot['binding'], entry: RuntimeAppBridgeTrace) => void,
-  requestConsent: (challenge: McpAppConsentChallenge, signal?: AbortSignal) => Promise<'allow-once' | 'deny'>,
+  requestConsent: (challenge: RuntimeMcpAppConsentChallenge, signal?: AbortSignal) => Promise<'allow-once' | 'deny'>,
 ): ((preview: McpAppPreviewAppsSnapshot) => RuntimeAppBridgeFactory) => (preview) => {
   const controller = controllerRef.current;
   let admission: Promise<void> | undefined;
@@ -227,7 +276,7 @@ const RuntimeMcpHandoffButton = ({ authority, host }: { readonly authority: Runt
   return <button disabled={!host.canOpen(authority)} onClick={() => { host.open(authority); }} type="button">Open in MCP playground</button>;
 };
 
-const downloadMcpConfig = ({ blob, filename }: McpConfigDownload): void => {
+const downloadMcpFile = ({ blob, filename }: McpDownload): void => {
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.download = filename;
@@ -244,12 +293,17 @@ const StateMark = ({ state }: { readonly state: string }) => (
   }</span>
 );
 
-type WorkbenchPage = 'mcp' | 'overview' | 'runtime' | 'skills';
+type WorkbenchPage = 'artifacts' | 'hooks' | 'logs' | 'mcp' | 'overview' | 'playground' | 'runtime' | 'skills';
 type RuntimeCapability = 'available' | 'unavailable' | 'unknown';
 type McpPresentation = 'inspector' | 'playground';
 
 const pageForHash = (runtimeAvailable = false): WorkbenchPage => {
   if (window.location.hash === '#mcp' || window.location.hash === '#inspector') return 'mcp';
+  if (window.location.hash === '#runtime' && runtimeAvailable) return 'runtime';
+  if (window.location.hash === '#hooks') return 'hooks';
+  if (window.location.hash === '#artifacts') return 'artifacts';
+  if (window.location.hash === '#playground') return 'playground';
+  if (window.location.hash === '#logs') return 'logs';
   if (window.location.hash === '#runtime' && runtimeAvailable) return 'runtime';
   return window.location.hash === '#skills' ? 'skills' : 'overview';
 };
@@ -282,6 +336,15 @@ const Navigation = ({ onNavigate, page, runtimeAvailable = false, runtimeDiagnos
     Skills
   </a>
   <a
+    aria-current={page === 'hooks' ? 'page' : undefined}
+    className={page === 'hooks' ? 'nav-item nav-item--active' : 'nav-item'}
+    href="#hooks"
+    onClick={(event) => { event.preventDefault(); onNavigate('hooks'); }}
+  >
+    <span aria-hidden="true" className="nav-glyph">⌥</span>
+    Hooks
+  </a>
+  <a
     aria-current={page === 'mcp' ? 'page' : undefined}
     className={page === 'mcp' ? 'nav-item nav-item--active' : 'nav-item'}
     href="#mcp"
@@ -300,6 +363,33 @@ const Navigation = ({ onNavigate, page, runtimeAvailable = false, runtimeDiagnos
     Runtime
   </a> : undefined}
   {runtimeDiagnostic === undefined ? undefined : <p className="runtime-capability-error" role="status">Runtime capability issue: {runtimeDiagnostic}</p>}
+  <a
+    aria-current={page === 'artifacts' ? 'page' : undefined}
+    className={page === 'artifacts' ? 'nav-item nav-item--active' : 'nav-item'}
+    href="#artifacts"
+    onClick={(event) => { event.preventDefault(); onNavigate('artifacts'); }}
+  >
+    <span aria-hidden="true" className="nav-glyph">▤</span>
+    Artifacts
+  </a>
+  <a
+    aria-current={page === 'playground' ? 'page' : undefined}
+    className={page === 'playground' ? 'nav-item nav-item--active' : 'nav-item'}
+    href="#playground"
+    onClick={(event) => { event.preventDefault(); onNavigate('playground'); }}
+  >
+    <span aria-hidden="true" className="nav-glyph">◇</span>
+    Playground
+  </a>
+  <a
+    aria-current={page === 'logs' ? 'page' : undefined}
+    className={page === 'logs' ? 'nav-item nav-item--active' : 'nav-item'}
+    href="#logs"
+    onClick={(event) => { event.preventDefault(); onNavigate('logs'); }}
+  >
+    <span aria-hidden="true" className="nav-glyph">≡</span>
+    Logs
+  </a>
 </aside>;
 
 const Overview = ({ changedFiles, client, connectionError, onNavigate, runtimeAvailable = false, runtimeDiagnostic, status, onStatus }: {
@@ -457,6 +547,56 @@ const WorkbenchScreen = ({ children, connectionError, inert = false, onNavigate,
   </div>
 </div>;
 
+const ArtifactsScreen = ({ artifactClient, connectionError, onNavigate, status }: {
+  readonly artifactClient: ArtifactClient;
+  readonly connectionError?: string;
+  readonly onNavigate: (page: WorkbenchPage) => void;
+  readonly status: ProjectStatus;
+}) => <WorkbenchScreen connectionError={connectionError} onNavigate={onNavigate} page="artifacts">
+  <ArtifactsPage client={artifactClient} epochId={activeEpochId(status)} />
+</WorkbenchScreen>;
+
+const PlaygroundScreen = ({ connectionError, onNavigate, onSessionChange, playgroundClient, session, status }: {
+  readonly connectionError?: string;
+  readonly onNavigate: (page: WorkbenchPage) => void;
+  readonly onSessionChange: (session: PlaygroundSession | undefined) => void;
+  readonly playgroundClient: PlaygroundClient;
+  readonly session: PlaygroundSession | undefined;
+  readonly status: ProjectStatus;
+}) => <WorkbenchScreen connectionError={connectionError} onNavigate={onNavigate} page="playground">
+  <PlaygroundPage
+    client={playgroundClient}
+    epoch={playgroundEpochFor(status)}
+    onSessionChange={onSessionChange}
+    session={session}
+    targets={playgroundTargetsFor(status)}
+  />
+</WorkbenchScreen>;
+
+const LogsScreen = ({ connectionError, onNavigate, playgroundClient, sessionId, status }: {
+  readonly connectionError?: string;
+  readonly onNavigate: (page: WorkbenchPage) => void;
+  readonly playgroundClient: PlaygroundClient;
+  readonly sessionId?: string;
+  readonly status: ProjectStatus;
+}) => <WorkbenchScreen connectionError={connectionError} onNavigate={onNavigate} page="logs">
+  <LogsPage client={playgroundClient} epoch={playgroundEpochFor(status)} sessionId={sessionId} />
+</WorkbenchScreen>;
+
+const HooksScreen = ({ connectionError, hookClient, onNavigate, onRecordTrace, status }: {
+  readonly connectionError?: string;
+  readonly hookClient: HookClient;
+  readonly onNavigate: (page: WorkbenchPage) => void;
+  readonly onRecordTrace?: (input: PlaygroundEventInput) => Promise<void>;
+  readonly status: ProjectStatus;
+}) => <WorkbenchScreen connectionError={connectionError} onNavigate={onNavigate} page="hooks">
+  <HooksPage
+    client={hookClient}
+    epochId={activeEpochId(status)}
+    {...(onRecordTrace === undefined ? {} : { onRecordTrace })}
+  />
+</WorkbenchScreen>;
+
 const McpScreen = ({ appPreviewClient, connectionError, controller, mcpDepartureDiagnostic, model, onNavigate, onResetSession, onRuntimeInitialPreviewConsumed, presentation, registerPreviewClose, runtimeAvailable = false, runtimeDiagnostic, runtimeHandoff, runtimePreviewDependencies, setPresentation, status }: {
   readonly appPreviewClient: McpAppClient;
   readonly connectionError?: string;
@@ -481,14 +621,14 @@ const McpScreen = ({ appPreviewClient, connectionError, controller, mcpDeparture
   }, [onRuntimeInitialPreviewConsumed, runtimeHandoff]);
   const activeEpoch = status.artifact.state === 'missing' ? undefined : status.artifact.activeEpoch;
   const targetOptions = mcpTargets.filter((target) => activeEpoch !== undefined && target in activeEpoch.targetDigests);
-  const runtimeSource = model.binding?.kind === 'runtime'
+  const runtimeSource = isRuntimeModelBinding(model.binding)
     ? Object.freeze({ binding: model.binding.binding, kind: 'runtime' as const })
     : undefined;
   const runtimeInitialPreview = runtimeSource !== undefined && runtimeHandoff?.initialPreview !== undefined &&
     sameRuntimeMcpAppBinding(runtimeHandoff.source.binding, runtimeSource.binding)
     ? runtimeHandoff.initialPreview
     : undefined;
-  const runtimeAvailability = model.binding?.kind !== 'runtime' ? undefined : Object.freeze({
+  const runtimeAvailability = !isRuntimeModelBinding(model.binding) ? undefined : Object.freeze({
     prompts: 'not-routed' as const,
     resourceTemplates: 'not-routed' as const,
     resources: 'available' as const,
@@ -514,6 +654,12 @@ const McpScreen = ({ appPreviewClient, connectionError, controller, mcpDeparture
     if (next === undefined) return;
     event.preventDefault();
     selectPresentation(next);
+  };
+  const exportInspectorTrace = (entries: typeof model.timeline.entries): void => {
+    downloadMcpFile(mcpProtocolTraceDownload({
+      history: controller.history,
+      model: { ...model, timeline: { ...model.timeline, entries } },
+    }));
   };
   return <WorkbenchScreen connectionError={connectionError} onNavigate={onNavigate} page="mcp" runtimeAvailable={runtimeAvailable} runtimeDiagnostic={runtimeDiagnostic}>
     <div className="mcp-content">
@@ -561,7 +707,8 @@ const McpScreen = ({ appPreviewClient, connectionError, controller, mcpDeparture
               controller={controller}
               epochOptions={activeEpoch === undefined ? [] : [activeEpoch.id]}
               initialBinding={activeEpoch === undefined ? undefined : { epochId: activeEpoch.id }}
-              onDownloadConfig={downloadMcpConfig}
+              onDownloadConfig={downloadMcpFile}
+              onDownloadTrace={downloadMcpFile}
               onResetSession={onResetSession}
               registerPreviewClose={registerPreviewClose}
               targetOptions={targetOptions}
@@ -583,7 +730,7 @@ const McpScreen = ({ appPreviewClient, connectionError, controller, mcpDeparture
         inert={presentation !== 'inspector'}
         role="tabpanel"
       >
-        <InspectorSessionAdapter availability={runtimeAvailability} controller={controller} model={model} />
+        <InspectorSessionAdapter availability={runtimeAvailability} controller={controller} model={model} onExportTrace={exportInspectorTrace} />
       </section>
     </div>
   </WorkbenchScreen>;
@@ -620,18 +767,21 @@ const RuntimeScreen = ({ connectionError, controller, handoffDiagnostic, liveMcp
 };
 
 const Workbench = () => {
-  const client = useRef<ProjectClient>();
-  const foreground = useRef<ForegroundRouteClient>();
-  const mcpRoutes = useRef<WorkbenchMcpRouteClient>();
-  const mcpControllerRef = useRef<WorkbenchMcpController>();
-  const mcpAppClient = useRef<McpAppClient>();
-  const runtimeClient = useRef<RuntimeClient>();
-  const runtimeController = useRef<RuntimePlaygroundController>();
-  const skillClient = useRef<SkillClient>();
+  const client = useRef<ProjectClient | undefined>(undefined);
+  const foreground = useRef<ForegroundRouteClient | undefined>(undefined);
+  const mcpRoutes = useRef<WorkbenchMcpRouteClient | undefined>(undefined);
+  const mcpControllerRef = useRef<WorkbenchMcpController | undefined>(undefined);
+  const mcpAppClient = useRef<McpAppClient | undefined>(undefined);
+  const runtimeClient = useRef<RuntimeClient | undefined>(undefined);
+  const runtimeController = useRef<RuntimePlaygroundController | undefined>(undefined);
+  const skillClient = useRef<SkillClient | undefined>(undefined);
   const lifecycleAuthorities = useRef(new WeakMap<Readonly<{ close(): Promise<void> }>, RuntimeHandoffAuthority>());
-  const handoffCoordinator = useRef<RuntimeMcpHandoffCoordinator>();
-  const mcpPreviewDeparture = useRef<McpPreviewDepartureCoordinator>();
+  const handoffCoordinator = useRef<RuntimeMcpHandoffCoordinator | undefined>(undefined);
+  const mcpPreviewDeparture = useRef<McpPreviewDepartureCoordinator | undefined>(undefined);
   const runtimeOperationTraceAuthorities = useRef(new Map<string, RuntimeOperationTraceAuthority>());
+  const artifactClient = useRef<ArtifactClient | undefined>(undefined);
+  const hookClient = useRef<HookClient | undefined>(undefined);
+  const playgroundClient = useRef<PlaygroundClient | undefined>(undefined);
   const [connectionError, setConnectionError] = useState<string>();
   const [error, setError] = useState<string>();
   if (foreground.current === undefined) foreground.current = new ForegroundRouteClient();
@@ -648,13 +798,14 @@ const Workbench = () => {
   const [runtimeHandoffError, setRuntimeHandoffError] = useState<string>();
   const [mcpDepartureError, setMcpDepartureError] = useState<string>();
   const [runtimeConsent, setRuntimeConsent] = useState<RuntimeConsentQueueCurrent>();
-  const runtimeConsentQueue = useRef<RuntimeConsentQueue>();
+  const runtimeConsentQueue = useRef<RuntimeConsentQueue | undefined>(undefined);
   if (runtimeConsentQueue.current === undefined) {
     runtimeConsentQueue.current = createRuntimeConsentQueue(setRuntimeConsent);
   }
   const [mcpPresentation, setMcpPresentation] = useState(mcpPresentationForHash);
   const [status, setStatus] = useState<ProjectStatus>();
   const [changedFiles, setChangedFiles] = useState<readonly string[]>([]);
+  const [playgroundSession, setPlaygroundSession] = useState<PlaygroundSession>();
   const [runtimeOperationTraces, setRuntimeOperationTraces] = useState<readonly RuntimeAppBridgeOperationTrace[]>(emptyRuntimeOperationTraces);
 
   pageRef.current = page;
@@ -663,6 +814,18 @@ const Workbench = () => {
   if (mcpAppClient.current === undefined) mcpAppClient.current = new McpAppClient({ projectClient: client.current });
   if (mcpControllerRef.current !== mcpController) mcpControllerRef.current = mcpController;
   if (runtimeClient.current === undefined) runtimeClient.current = new RuntimeClient(foreground.current);
+  if (artifactClient.current === undefined) artifactClient.current = new ArtifactClient({ foreground: foreground.current! });
+  if (hookClient.current === undefined) hookClient.current = new HookClient({ foreground: foreground.current! });
+  if (playgroundClient.current === undefined) playgroundClient.current = new PlaygroundClient({ foreground: foreground.current! });
+
+  /** Only an open session records; a finalized or absent session leaves other pages unchanged. */
+  const recordPlaygroundEvent = playgroundSession?.state === 'open'
+    ? async (input: PlaygroundEventInput): Promise<void> => {
+        const playground = playgroundClient.current;
+        if (playground === undefined) return;
+        await playground.append(playgroundSession.id, input);
+      }
+    : undefined;
 
   const runtimeAvailable = runtimeCapability === 'available';
 
@@ -671,7 +834,13 @@ const Workbench = () => {
       handoffCoordinator.current?.cancel();
       mcpPreviewDeparture.current?.cancel();
     }
-    const hash = next === 'mcp' ? '#mcp' : next === 'runtime' ? '#runtime' : next === 'skills' ? '#skills' : '#overview';
+    const hash = next === 'artifacts' ? '#artifacts'
+      : next === 'hooks' ? '#hooks'
+        : next === 'logs' ? '#logs'
+          : next === 'mcp' ? '#mcp'
+            : next === 'playground' ? '#playground'
+              : next === 'runtime' ? '#runtime'
+                : next === 'skills' ? '#skills' : '#overview';
     if (window.location.hash !== hash) window.history.pushState(undefined, '', hash);
     if (next === 'mcp') setMcpPresentation('playground');
     setPage(next);
@@ -803,11 +972,11 @@ const Workbench = () => {
   const handoffHost = useMemo<RuntimeHandoffHost>(() => Object.freeze({
     canOpen: canOpenRuntimeHandoff,
     open: openRuntimeHandoff,
-    subscribe: (listener) => handoffCoordinator.current!.subscribe(listener),
+    subscribe: (listener: () => void) => handoffCoordinator.current!.subscribe(listener),
   }), [canOpenRuntimeHandoff, openRuntimeHandoff]);
 
-  const requestRuntimeConsent = useCallback((challenge: McpAppConsentChallenge, signal?: AbortSignal): Promise<'allow-once' | 'deny'> =>
-    runtimeConsentQueue.current!.request(challenge, signal), []);
+  const requestRuntimeConsent = useCallback((challenge: RuntimeMcpAppConsentChallenge, signal?: AbortSignal): Promise<'allow-once' | 'deny'> =>
+    runtimeConsentQueue.current!.request(runtimeConsentQueueChallenge(challenge), signal), []);
 
   const resolveRuntimeConsent = useCallback((current: RuntimeConsentQueueCurrent, decision: 'allow-once' | 'deny'): boolean => {
     return runtimeConsentQueue.current!.resolve(current, decision);
@@ -1068,6 +1237,37 @@ const Workbench = () => {
         resolveRuntimeConsent={resolveRuntimeConsent}
         runtimeConsent={runtimeConsent}
         runtimeDiagnostic={runtimeError}
+      />;
+    }
+    if (page === 'playground') {
+      return <PlaygroundScreen
+        connectionError={connectionError}
+        onNavigate={navigate}
+        onSessionChange={setPlaygroundSession}
+        playgroundClient={playgroundClient.current}
+        session={playgroundSession}
+        status={status}
+      />;
+    }
+    if (page === 'logs') {
+      return <LogsScreen
+        connectionError={connectionError}
+        onNavigate={navigate}
+        playgroundClient={playgroundClient.current}
+        sessionId={playgroundSession?.id}
+        status={status}
+      />;
+    }
+    if (page === 'artifacts') {
+      return <ArtifactsScreen artifactClient={artifactClient.current} connectionError={connectionError} onNavigate={navigate} status={status} />;
+    }
+    if (page === 'hooks') {
+      return <HooksScreen
+        connectionError={connectionError}
+        hookClient={hookClient.current}
+        onNavigate={navigate}
+        {...(recordPlaygroundEvent === undefined ? {} : { onRecordTrace: recordPlaygroundEvent })}
+        status={status}
       />;
     }
     return page === 'skills'

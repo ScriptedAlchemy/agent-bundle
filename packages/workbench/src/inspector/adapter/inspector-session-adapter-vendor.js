@@ -1,3 +1,5 @@
+import './vendor-react-runtime.jsx';
+
 export {
   LoggingScreen,
   PromptsScreen,

@@ -12,7 +12,8 @@ const summaryFor = (current: RuntimeConsentQueueCurrent): string => {
   if (request === null || typeof request !== 'object' || Array.isArray(request) || !Object.hasOwn(request, 'summary')) {
     return 'Allow this Runtime App action?';
   }
-  return typeof request.summary === 'string' ? request.summary : 'Allow this Runtime App action?';
+  const summary = (request as Readonly<Record<string, unknown>>).summary;
+  return typeof summary === 'string' ? summary : 'Allow this Runtime App action?';
 };
 
 /** Workbench-owned modal boundary for one visible action-consent queue entry. */
@@ -21,7 +22,7 @@ export const RuntimeConsentDialog = ({ current, onResolve }: RuntimeConsentDialo
   const deny = useRef<HTMLButtonElement>(null);
   const decisionCurrent = useRef(current);
   const decisionLatched = useRef(false);
-  const restoreFocus = useRef<HTMLElement>();
+  const restoreFocus = useRef<HTMLElement | undefined>(undefined);
   const [decisionPending, setDecisionPending] = useState(false);
 
   if (decisionCurrent.current !== current) {

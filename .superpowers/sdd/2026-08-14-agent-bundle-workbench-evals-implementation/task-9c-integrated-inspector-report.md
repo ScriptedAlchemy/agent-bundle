@@ -26,3 +26,10 @@
 ## Scope guard
 
 No Inspector vendor/adapter source, export wiring, MCP launch/timeout/App logic, backend routes, or evaluator files changed.
+
+## Fix round 1: complete tab semantics
+
+- RED: the expanded real Chrome session contract failed because the selected Playground tab had no `tabindex="0"`; ArrowRight therefore did not move focus or select Inspector.
+- GREEN: the two internal tabs now use roving `tabIndex` and select/focus through ArrowLeft, ArrowRight, Home, and End without mutating browser history.
+- The existing Chrome fixture now also proves exactly one mounted panel of each kind, inactive `hidden` + `inert` state, selected-panel exposure, stable history through keyboard and pointer switches, retained Inspector Logging state after a Playground roundtrip, and no horizontal overflow for either presentation at 390 px.
+- Verification: Inspector Chrome fixture 3/3; focused Inspector adapter/controller/page suite 47/47; Workbench typecheck, scoped Rslint, production Rsbuild, and `git diff --check` all passed. Code-simplifier/deslop found no cleanup needed.

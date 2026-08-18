@@ -46,9 +46,12 @@ interface QueuedProjectEvent {
 }
 
 export class ProjectClientError extends Error {
-  constructor(message: string) {
+  readonly code: string | undefined;
+
+  constructor(message: string, code?: string) {
     super(message);
     this.name = 'ProjectClientError';
+    this.code = code;
   }
 }
 
@@ -80,7 +83,7 @@ const projectStatusResponse = (value: unknown): ProjectStatusResponse => {
 
 const projectError = (error: unknown): ProjectClientError | unknown =>
   error instanceof ForegroundRouteClientError
-    ? new ProjectClientError(`Workbench request failed with HTTP ${error.status}.`)
+    ? new ProjectClientError(`Workbench request failed with HTTP ${error.status}.`, error.code)
     : error;
 
 const isSequence = (value: unknown): value is number =>

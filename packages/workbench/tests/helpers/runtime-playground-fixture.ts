@@ -63,7 +63,10 @@ export const startRuntimePlaygroundFixture = async (
     await Promise.all([
       symlink(join(workspaceRoot, 'node_modules'), join(fixtureWorkspace, 'node_modules'), 'dir'),
       symlink(join(workspaceRoot, 'packages'), join(fixtureWorkspace, 'packages'), 'dir'),
-      symlink(join(workspaceRoot, 'tsconfig.json'), join(fixtureWorkspace, 'tsconfig.json')),
+      // Copy the inheriting root configs: the RSC build resolves their relative extends
+      // from the disposable workspace rather than through a symlink target.
+      cp(join(workspaceRoot, 'tsconfig.base.json'), join(fixtureWorkspace, 'tsconfig.base.json')),
+      cp(join(workspaceRoot, 'tsconfig.json'), join(fixtureWorkspace, 'tsconfig.json')),
     ]);
     await options.prepare?.(Object.freeze({ configSource: join(root, 'agent-bundle.config.ts'), root }));
     server = await startDevServer({

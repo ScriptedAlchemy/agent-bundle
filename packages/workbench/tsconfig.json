@@ -1,49 +1,26 @@
 {
-  "extends": "../../tsconfig.json",
+  "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "noEmit": true
+    "lib": [
+      "DOM",
+      "DOM.Iterable",
+      "ES2024"
+    ],
+    "types": [
+      "node"
+    ]
   },
   "files": [
     "src/workbench.d.ts"
   ],
   "include": [
-    "src/main.tsx",
-    "src/mcp/mcp-route-client.ts",
-    "src/inspector-closure.tsx",
-    "src/inspector/adapter/runtime-app-bridge.ts",
-    "src/inspector/adapter/inspector-session-adapter-fixture.tsx",
-    "src/inspector/adapter/inspector-session-adapter-model.ts",
-    "src/inspector/adapter/inspector-session-adapter.tsx",
-    "src/mcp/mcp-json-input.tsx",
-    "src/mcp/mcp-page.tsx",
-    "src/overview-model.ts",
-    "src/project-client.ts",
-    "src/runtime-client.ts",
-    "src/runtime-inspector.tsx",
-    "src/runtime-model.ts",
-    "src/runtime-playground.tsx",
-    "src/runtime-stage.tsx",
-    "src/shiki-code.tsx",
-    "src/skill-client.ts",
-    "src/skill-markdown.tsx",
-    "src/skills-model.ts",
-    "src/skills-page.tsx",
-    "tests/overview-model.test.ts",
-    "tests/project-client.test.ts",
-    "tests/runtime-client.test.ts",
-    "tests/runtime-contract-compile.test.ts",
-    "tests/runtime-inspector.test.ts",
-    "tests/runtime-model.test.ts",
-    "tests/runtime-playground.test.ts",
-    "tests/runtime-playground.e2e.test.ts",
-    "tests/runtime-playground-hmr.e2e.test.ts",
-    "tests/helpers/runtime-playground-fixture.ts",
-    "tests/runtime-stage.test.ts",
-    "tests/rsbuild-workbench.test.ts",
-    "tests/skill-client.test.ts",
-    "tests/skill-markdown.test.ts",
-    "tests/skills-model.test.ts",
-    "tests/skills-page.test.ts",
-    "tests/workbench-dev-command.test.ts"
+    "*.ts",
+    "src/**/*.ts",
+    "src/**/*.tsx",
+    "tests/**/*.ts",
+    "tests/**/*.tsx"
+  ],
+  "exclude": [
+    "src/inspector/vendor/**"
   ]
 }

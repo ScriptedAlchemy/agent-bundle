@@ -3,14 +3,26 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from '@rstest/core';
 
 import type { McpSessionInspectorConfig } from '../../agent-bundle/src/dev/mcp-session-protocol.ts';
-import { createMcpBrowserSessionModel, reduceMcpBrowserSession, type McpBrowserSessionModel } from '../src/mcp/mcp-session-model.ts';
+import {
+  createMcpBrowserSessionModel,
+  reduceMcpBrowserSession,
+  type McpBrowserSessionInvocation,
+  type McpBrowserSessionModel,
+} from '../src/mcp/mcp-session-model.ts';
 import type { McpAppPreviewClient, McpAppRuntimePreviewProps } from '../src/mcp/mcp-app-preview.tsx';
+import {
+  createMcpSessionController,
+  type McpSessionControllerClient,
+  type McpSessionControllerRoutes,
+  type McpSessionControllerTransport,
+} from '../src/mcp/mcp-session-controller.ts';
 import {
   McpPage,
   McpProtocolEvidence,
   createMcpPageActionTracker,
   createMcpPageActionSession,
   mcpAppConsentDetailsSummary,
+  downloadCurrentMcpProtocolTrace,
   mcpConfigDownload,
   mcpAppPreviewSourceFor,
   mcpPageControllerReplacementState,
@@ -20,6 +32,44 @@ import {
   type McpPageController,
   type McpPageRuntimeProps,
 } from '../src/mcp/mcp-page.tsx';
+import { mcpProtocolTraceDownload } from '../src/mcp/mcp-protocol-trace.ts';
+
+const traceBinding = Object.freeze({ epochId: 'epoch-trace', serverName: 'weather', target: 'portable' as const });
+const traceConnection = Object.freeze({ capabilities: { tools: {} }, protocolVersion: '2025-06-18', server: { name: 'weather', version: '1.0.0' } });
+
+const traceController = (connect: () => Promise<void> = async () => undefined) => createMcpSessionController({
+  clientFactory: (): McpSessionControllerClient => ({
+    close: async () => undefined,
+    connect: async () => connect(),
+    request: async () => undefined,
+  }),
+  routes: {
+    catalog: async () => ({ prompts: [], resourceTemplates: [], resources: [], tools: [] }),
+    config: async () => ({ launch: { args: [], command: 'node', env: {}, kind: 'stdio' }, origin: 'artifact' }),
+    restart: async () => traceConnection,
+    stream: async (_id, _after, signal) => new Response(new ReadableStream<Uint8Array>({
+      start: (stream) => signal?.addEventListener('abort', () => stream.close(), { once: true }),
+    }), { headers: { 'content-type': 'application/x-ndjson' } }),
+    trace: async () => ({ entries: [] }),
+  } satisfies McpSessionControllerRoutes,
+  transportFactory: (): McpSessionControllerTransport => ({
+    close: async () => undefined,
+    send: async () => undefined,
+    session: Object.freeze({ binding: traceBinding, connection: traceConnection, id: 'real-trace-session', timeoutMs: 5_000 }),
+    start: async () => undefined,
+  }),
+});
+
+const downloadedProtocolTrace = async (session: ReturnType<typeof traceController>) => {
+  const downloads: { readonly blob: Blob; readonly filename: string }[] = [];
+  downloadCurrentMcpProtocolTrace((download) => { downloads.push(download); }, {
+    history: session.history,
+    model: session.model,
+  });
+  const [download] = downloads;
+  if (download === undefined) throw new Error('Expected a current protocol trace download.');
+  return { filename: download.filename, trace: JSON.parse(await download.blob.text()) };
+};
 
 const model = {
   activeRequests: {
@@ -292,8 +342,144 @@ describe('MCP page', () => {
     expect(markup).toContain('Progress');
     expect(markup).toContain('role="tablist"');
     expect(markup).toContain('role="tabpanel"');
+    expect(markup).toContain('Download current protocol trace');
+    expect(markup).toContain('current browser MCP trace, not a durable Playground session export');
     expect(markup).toContain('Download Inspector config');
     expect(markup).toContain('Trace delivery is delayed.');
+  });
+
+  it('builds a detached, versioned export of the complete current protocol trace without launch credentials', async () => {
+    const mutableHistory = [{
+      binding: { epochId: 'epoch-1', serverName: 'weather', target: 'codex' },
+      id: 'tool-1',
+      operation: 'callTool',
+      request: { arguments: { city: 'Berlin' }, name: 'weather' },
+      result: { content: [{ text: 'Sunny', type: 'text' }] },
+      timing: { completedAt: 1_700_000_000_020, durationMs: 10, startedAt: 1_700_000_000_010 },
+    }];
+    const mutableModel = {
+      ...model,
+      config: {
+        launch: { args: ['private-server.mjs'], command: 'node', env: { API_TOKEN: 'foreground-secret' }, kind: 'stdio' },
+        origin: 'artifact',
+      },
+      sessionId: 'opaque-session-1',
+      sessionToken: 'browser-session-token',
+      timeline: {
+        droppedThroughSequence: 2,
+        entries: [
+          { earliestAvailableSequence: 3, latestDroppedSequence: 2, requestedAfterSequence: 0, type: 'replay.gap' },
+          { direction: 'server', kind: 'frame', message: { jsonrpc: '2.0', method: 'notifications/progress', params: { progress: 1 } }, occurredAt: 1_700_000_000_003, sequence: 3 },
+          { invocation: mutableHistory[0], type: 'invocation' },
+          { direction: 'client', kind: 'frame', message: { id: 2, jsonrpc: '2.0', method: 'tools/call', params: { arguments: { city: 'Berlin' }, name: 'weather' } }, occurredAt: 1_700_000_000_004, sequence: 4 },
+        ],
+        lastSequence: 4,
+      },
+    } as unknown as McpBrowserSessionModel;
+
+    const download = mcpProtocolTraceDownload({
+      history: mutableHistory as unknown as readonly McpBrowserSessionInvocation[],
+      model: mutableModel,
+    });
+    mutableHistory[0]!.request.arguments.city = 'Mutated';
+    (mutableModel.timeline.entries[3] as { message: { params: { arguments: { city: string } } } }).message.params.arguments.city = 'Mutated';
+    const trace = JSON.parse(await download.blob.text());
+
+    expect(download.filename).toBe('mcp-opaque-session-1-protocol-trace.json');
+    expect(download.blob.type).toBe('application/json');
+    expect(await download.blob.text()).toMatch(/\n$/u);
+    expect(trace).toEqual({
+      history: [{
+        binding: { epochId: 'epoch-1', serverName: 'weather', target: 'codex' },
+        id: 'tool-1',
+        operation: 'callTool',
+        request: { arguments: { city: 'Berlin' }, name: 'weather' },
+        result: { content: [{ text: 'Sunny', type: 'text' }] },
+        timing: { completedAt: 1_700_000_000_020, durationMs: 10, startedAt: 1_700_000_000_010 },
+      }],
+      kind: 'agent-bundle.mcp-protocol-trace',
+      schemaVersion: 1,
+      session: {
+        binding: { epochId: 'epoch-1', serverName: 'weather', target: 'codex' },
+        connection: { protocolVersion: '2025-06-18', serverCapabilities: { tools: {} }, serverInfo: { name: 'Weather Server' } },
+        id: 'opaque-session-1',
+        phase: 'idle',
+      },
+      timeline: {
+        droppedThroughSequence: 2,
+        entries: [
+          { earliestAvailableSequence: 3, latestDroppedSequence: 2, requestedAfterSequence: 0, type: 'replay.gap' },
+          { direction: 'server', kind: 'frame', message: { jsonrpc: '2.0', method: 'notifications/progress', params: { progress: 1 } }, occurredAt: 1_700_000_000_003, sequence: 3 },
+          { invocation: {
+            binding: { epochId: 'epoch-1', serverName: 'weather', target: 'codex' },
+            id: 'tool-1',
+            operation: 'callTool',
+            request: { arguments: { city: 'Berlin' }, name: 'weather' },
+            result: { content: [{ text: 'Sunny', type: 'text' }] },
+            timing: { completedAt: 1_700_000_000_020, durationMs: 10, startedAt: 1_700_000_000_010 },
+          }, type: 'invocation' },
+          { direction: 'client', kind: 'frame', message: { id: 2, jsonrpc: '2.0', method: 'tools/call', params: { arguments: { city: 'Berlin' }, name: 'weather' } }, occurredAt: 1_700_000_000_004, sequence: 4 },
+        ],
+        lastSequence: 4,
+      },
+    });
+    expect(JSON.stringify(trace)).not.toContain('private-server.mjs');
+    expect(JSON.stringify(trace)).not.toContain('foreground-secret');
+    expect(JSON.stringify(trace)).not.toContain('browser-session-token');
+  });
+
+  it('uses explicit null session facts and an idle filename when no session is present', async () => {
+    const download = mcpProtocolTraceDownload({
+      history: [],
+      model: { ...model, binding: undefined, connection: undefined, sessionId: '' },
+    });
+
+    expect(download.filename).toBe('mcp-idle-protocol-trace.json');
+    await expect(download.blob.text()).resolves.toContain('"binding": null');
+    await expect(download.blob.text()).resolves.toContain('"connection": null');
+    await expect(download.blob.text()).resolves.toContain('"id": null');
+  });
+
+  it('exports an unnegotiated fresh controller through the download callback without a fabricated session identity', async () => {
+    const fresh = traceController();
+    const download = await downloadedProtocolTrace(fresh);
+
+    expect(download.filename).toBe('mcp-idle-protocol-trace.json');
+    expect(download.trace.session).toEqual({ binding: null, connection: null, id: null, phase: 'idle' });
+  });
+
+  it('returns to an identity-less idle export after replacing a real controller on reset', async () => {
+    const active = traceController();
+    await active.open(traceBinding);
+    const activeDownload = await downloadedProtocolTrace(active);
+    await active.close();
+    const resetDownload = await downloadedProtocolTrace(traceController());
+
+    expect(activeDownload.filename).toBe('mcp-real-trace-session-protocol-trace.json');
+    expect(activeDownload.trace.session).toMatchObject({ binding: traceBinding, id: 'real-trace-session' });
+    expect(resetDownload.filename).toBe('mcp-idle-protocol-trace.json');
+    expect(resetDownload.trace.session).toEqual({ binding: null, connection: null, id: null, phase: 'idle' });
+  });
+
+  it('keeps a connect failure before session negotiation identity-less in its download callback', async () => {
+    const failed = traceController(async () => { throw new Error('connection refused'); });
+    await expect(failed.open(traceBinding)).rejects.toThrow('connection refused');
+    const download = await downloadedProtocolTrace(failed);
+
+    expect(download.filename).toBe('mcp-idle-protocol-trace.json');
+    expect(download.trace.session).toEqual({ binding: null, connection: null, id: null, phase: 'error' });
+  });
+
+  it('passes the canonical full trace through the supplied download sink', async () => {
+    const downloads: Blob[] = [];
+
+    downloadCurrentMcpProtocolTrace((download) => { downloads.push(download.blob); }, {
+      history: controller().history,
+      model,
+    });
+
+    expect(downloads).toHaveLength(1);
+    await expect(downloads[0]!.text()).resolves.toContain('"kind": "agent-bundle.mcp-protocol-trace"');
   });
 
   it('renders one labeled session timeout control beside the immutable open binding', () => {

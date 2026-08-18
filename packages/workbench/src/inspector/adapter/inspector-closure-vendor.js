@@ -1,5 +1,7 @@
 import { lazy } from 'react';
 
+import './vendor-react-runtime.jsx';
+
 const screen = (load, name) => lazy(async () => ({ default: (await load())[name] }));
 
 export const AppsScreen = screen(() => import('../vendor/clients/web/src/components/screens/AppsScreen/AppsScreen.tsx'), 'AppsScreen');

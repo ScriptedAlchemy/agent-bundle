@@ -1,6 +1,7 @@
 import { Client, type JSONRPCMessage, type Transport, type TransportSendOptions } from '@modelcontextprotocol/client';
 
 import type {
+  McpSessionBinding,
   McpSessionInspectorConfig,
   McpSessionOperation,
   McpSessionTraceEntry,
@@ -413,7 +414,8 @@ const traceEntry = (value: unknown): McpSessionTraceEntry | McpSessionTraceRepla
 
 const traceOverflow = (value: unknown): McpSessionTraceReplayGap | undefined => {
   if (value === undefined) return undefined;
-  if (!isRecord(value) || !validSequence(value.afterSequence) || !validSequence(value.droppedThroughSequence)) {
+  if (!isRecord(value) || !validSequence(value.afterSequence) || !validSequence(value.droppedThroughSequence) ||
+    value.droppedThroughSequence >= Number.MAX_SAFE_INTEGER) {
     throw invalidTrace();
   }
   if (value.afterSequence < 0 || value.droppedThroughSequence < value.afterSequence) throw invalidTrace();
@@ -685,7 +687,7 @@ export class McpSessionController {
   }
 
   async open(
-    binding: McpSessionControllerBinding | McpRouteSessionBinding,
+    binding: McpSessionBinding | McpSessionControllerBinding | McpRouteSessionBinding,
     timeoutMs?: number,
   ): Promise<McpBrowserSessionModel> {
     const requested = controllerBinding(binding);
@@ -730,7 +732,7 @@ export class McpSessionController {
     }
     try {
       if (constructionFailed) throw await this.#failConstruction(client, transport, constructionReason);
-      if (this.#state !== 'idle' || this.#closing) throw await this.#failConstruction(
+      if (this.#state !== 'idle' || this.#closing || client === undefined || transport === undefined) throw await this.#failConstruction(
         client,
         transport,
         new McpSessionControllerError('MCP session controller was closed while opening'),

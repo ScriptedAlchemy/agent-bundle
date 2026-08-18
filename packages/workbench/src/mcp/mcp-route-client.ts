@@ -65,6 +65,11 @@ export interface ForegroundRouteClientOptions {
   readonly fetch?: typeof fetch;
 }
 
+/** Closed authority shared by every foreground browser route client. */
+export interface ForegroundRequestAuthority {
+  protectedRequest(path: string, init?: RequestInit): Promise<Response>;
+}
+
 export interface McpRouteClientOptions extends ForegroundRouteClientOptions {
   /** Reuses Workbench's memory-only foreground authentication authority. */
   readonly foreground?: ForegroundRouteClient;
@@ -351,7 +356,7 @@ const foregroundRoute = (path: string): string => {
 };
 
 /** Memory-only authentication shared by foreground browser route clients. */
-export class ForegroundRouteClient {
+export class ForegroundRouteClient implements ForegroundRequestAuthority {
   readonly #fetch: typeof fetch;
   #authentication: ForegroundAuthentication | undefined;
   #authenticationGeneration = 0;
@@ -377,7 +382,7 @@ export class ForegroundRouteClient {
     }
   }
 
-  async protectedResponse(path: string, init: RequestInit = {}): Promise<Response> {
+  async protectedRequest(path: string, init: RequestInit = {}): Promise<Response> {
     const route = foregroundRoute(path);
     const authentication = this.#authenticate();
     const session = await authentication.promise;
@@ -387,6 +392,14 @@ export class ForegroundRouteClient {
     const headers = new Headers(init.headers);
     headers.set('x-agent-bundle-session', session.token);
     const response = await this.#fetch(route, { ...init, headers });
+    if (!this.#isAuthenticationCurrent(authentication)) {
+      throw new ForegroundRouteClientError('AB8019', 'Foreground authentication was invalidated.', 401);
+    }
+    return response;
+  }
+
+  async protectedResponse(path: string, init: RequestInit = {}): Promise<Response> {
+    const response = await this.protectedRequest(path, init);
     if (!response.ok) throw ForegroundRouteClientError.fromResponse(await response.clone().json().catch(() => undefined), response.status);
     return response;
   }

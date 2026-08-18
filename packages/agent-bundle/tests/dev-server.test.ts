@@ -9,6 +9,7 @@ import {
   type Invalidation,
   type ProjectStatus,
 } from '../src/dev/index.ts';
+import { ArtifactInspectionServiceError } from '../src/dev/artifact-inspection-service.ts';
 import type { McpSessionService } from '../src/dev/mcp-session-service.ts';
 
 const status = (): ProjectStatus => ({
@@ -723,6 +724,50 @@ it('accepts headerless browser same-origin fetch provenance with the exact token
     expect(streamSubscriptions).toBe(1);
   } finally {
     await reader?.cancel();
+    await server.close();
+  }
+});
+
+it('forwards structured artifact validation diagnostics through the foreground error boundary', async () => {
+  const diagnostics = Object.freeze([Object.freeze({
+    code: 'AB4300',
+    generatedPath: 'claude/hooks/guard.mjs',
+    message: 'Emitted hook wrapper is not executable.',
+    severity: 'error' as const,
+  })]);
+  const server = await startForegroundServer({
+    artifacts: {
+      diff: () => Promise.reject(new Error('unused')),
+      inspect: () => Promise.reject(new ArtifactInspectionServiceError(
+        'ARTIFACT_INSPECTION_INVALID',
+        '/private/epochs/epoch-a failed validation',
+        diagnostics,
+      )),
+    },
+    coordinator: new RecordingCoordinator(),
+    eventHub: new ProjectEventHub(),
+    port: 0,
+    sessionToken: 'test-session-token',
+  });
+
+  try {
+    const headers = { origin: server.url, 'x-agent-bundle-session': server.sessionToken };
+    const failed = await fetch(`${server.url}/api/artifacts/epochs/epoch-a`, { headers });
+    expect(failed.status).toBe(422);
+    const body = await failed.json() as {
+      readonly diagnostic: { readonly code: string; readonly message: string };
+      readonly diagnostics?: readonly unknown[];
+    };
+    expect(body.diagnostic).toEqual({ code: 'AB8064', message: 'Artifact epoch failed validation.' });
+    expect(body.diagnostics).toEqual(diagnostics);
+    expect(JSON.stringify(body)).not.toContain('/private/epochs');
+
+    const opaque = await fetch(`${server.url}/api/artifacts/diff?base=epoch-a&candidate=epoch-b`, { headers });
+    expect(opaque.status).toBe(502);
+    await expect(opaque.json()).resolves.toEqual({
+      diagnostic: { code: 'AB8063', message: 'Artifact inspection could not be completed.' },
+    });
+  } finally {
     await server.close();
   }
 });

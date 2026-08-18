@@ -15,7 +15,7 @@
     "test": "rstest --config rstest.config.ts",
     "test:watch": "rstest --config rstest.config.ts --watch",
     "lint": "rslint .",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc --project packages/workbench/tsconfig.json",
     "check": "npm run build && npm test && npm run lint && npm run typecheck",
     "docs:runtime-topology": "node scripts/rsc-runtime-topology.mjs --root . --output docs/architecture/rsc-runtime-workbench.md",
     "check:runtime-topology": "node scripts/rsc-runtime-topology.mjs --root . --output docs/architecture/rsc-runtime-workbench.md --check",

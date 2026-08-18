@@ -3,13 +3,16 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { AddressInfo, Socket } from 'node:net';
 import { basename } from 'node:path';
 
+import { ArtifactRoutes, type ArtifactRouteService } from './artifact-routes.ts';
 import type { ProjectEventHub, ProjectEventSubscription } from './events.ts';
+import { HookPlaygroundRoutes, type HookPlaygroundRouteService } from './hook-playground-routes.ts';
 import { McpAppRoutes, type McpAppRoutePreviewService } from './mcp-app-routes.ts';
 import { McpSessionRoutes } from './mcp-session-routes.ts';
 import type { McpSessionService } from './mcp-session-service.ts';
 import { RuntimeMcpRoutes } from './runtime-mcp-routes.ts';
 import { RuntimeRoutes } from './runtime-routes.ts';
 import type { DevRuntimeSession } from './runtime-provider.ts';
+import { PlaygroundRoutes, type PlaygroundRouteService } from './playground-routes.ts';
 import { SkillDocumentError, type SkillDocumentService } from './skill-document-service.ts';
 import type { Invalidation, ProjectEventMessage, ProjectStatus } from './types.ts';
 
@@ -96,15 +99,21 @@ export interface WorkbenchAssetSource {
 }
 
 export interface ForegroundServerOptions {
+  /** Read-only inspection over published epochs; the browser names an id, never a path. */
+  readonly artifacts?: ArtifactRouteService;
   readonly assets?: WorkbenchAssetSource;
   readonly coordinator: ForegroundCoordinator;
   readonly eventHub: ProjectEventHub;
   readonly host?: string;
   /** Already-bound MCP App previews, never executable data supplied by a browser request. */
   readonly mcpAppPreviews?: McpAppRoutePreviewService;
+  /** Epoch-bound hook playground service; the browser never selects a wrapper or artifact path. */
+  readonly hookPlayground?: HookPlaygroundRouteService;
   /** Persistent MCP sessions are supplied by the workbench service, never by browser input. */
   readonly mcpSessions?: McpSessionService;
   readonly now?: () => Date;
+  /** Durable playground trace store; the browser never selects its storage root or project identity. */
+  readonly playground?: PlaygroundRouteService;
   readonly port?: number;
   /** Optional runtime session; its lifecycle remains Workbench-owned. */
   readonly runtime?: DevRuntimeSession;
@@ -143,13 +152,23 @@ const isRequestDiagnostic = (value: unknown): value is RequestDiagnostic =>
   typeof (value as Partial<RequestDiagnostic>).message === 'string' &&
   typeof (value as Partial<RequestDiagnostic>).status === 'number';
 
+/** Route groups may attach structured diagnostics that are the answer, not an internal detail. */
+const attachedDiagnostics = (value: RequestDiagnostic): readonly unknown[] | undefined => {
+  const diagnostics = (value as Partial<{ readonly diagnostics: unknown }>).diagnostics;
+  return Array.isArray(diagnostics) ? diagnostics : undefined;
+};
+
 const responseDiagnostic = (response: ServerResponse, value: RequestDiagnostic): void => {
   if (response.headersSent || response.writableEnded) {
     response.destroy();
     return;
   }
+  const diagnostics = attachedDiagnostics(value);
   response.writeHead(value.status, { 'content-type': 'application/json; charset=utf-8' });
-  response.end(JSON.stringify({ diagnostic: { code: value.code, message: value.message } }));
+  response.end(JSON.stringify({
+    diagnostic: { code: value.code, message: value.message },
+    ...(diagnostics === undefined ? {} : { diagnostics }),
+  }));
 };
 
 const responseJson = (response: ServerResponse, body: unknown): void => {
@@ -370,9 +389,11 @@ const requestHostMatches = (request: IncomingMessage, origin: string): boolean =
  * browser: product work stays in the injected coordinator.
  */
 export class ForegroundServer {
+  readonly #artifactRoutes: ArtifactRoutes;
   readonly #assets: WorkbenchAssetSource | undefined;
   readonly #coordinator: ForegroundCoordinator;
   readonly #eventHub: ProjectEventHub;
+  readonly #hookPlaygroundRoutes: HookPlaygroundRoutes;
   readonly #host: string;
   readonly #mcpAppPreviews: McpAppRoutePreviewService | undefined;
   readonly #mcpAppRoutes: McpAppRoutes;
@@ -380,6 +401,7 @@ export class ForegroundServer {
   readonly #mcpSessionRoutes: McpSessionRoutes;
   readonly #runtimeRoutes: RuntimeRoutes;
   readonly #now: () => Date;
+  readonly #playgroundRoutes: PlaygroundRoutes;
   readonly #port: number;
   /** Per-listener cookie names prevent two loopback workbenches sharing a host cookie jar. */
   readonly #sessionCookieName: string;
@@ -439,6 +461,18 @@ export class ForegroundServer {
     this.#runtimeRoutes = new RuntimeRoutes({
       authorize: (request) => this.#assertMutationSession(request),
       ...(options.runtime === undefined ? {} : { runtime: options.runtime }),
+    });
+    this.#hookPlaygroundRoutes = new HookPlaygroundRoutes({
+      authorize: (request) => this.#assertMutationSession(request),
+      ...(options.hookPlayground === undefined ? {} : { service: options.hookPlayground }),
+    });
+    this.#playgroundRoutes = new PlaygroundRoutes({
+      authorize: (request) => this.#assertMutationSession(request),
+      ...(options.playground === undefined ? {} : { service: options.playground }),
+    });
+    this.#artifactRoutes = new ArtifactRoutes({
+      authorize: (request) => this.#assertMutationSession(request),
+      ...(options.artifacts === undefined ? {} : { service: options.artifacts }),
     });
     this.#server = createServer((request, response) => {
       void this.#handle(request, response).catch((error: unknown) => {
@@ -549,6 +583,9 @@ export class ForegroundServer {
             return closeServer(this.#server);
           })()
         : Promise.resolve();
+    this.#hookPlaygroundRoutes.close();
+    this.#playgroundRoutes.close();
+    this.#artifactRoutes.close();
       const [server, coordinator] = await Promise.allSettled([releaseServer, this.#coordinator.close()]);
       const failures: ForegroundServerCloseFailure[] = [];
       for (const result of appPreparation) {
@@ -571,6 +608,9 @@ export class ForegroundServer {
     if (await this.#mcpSessionRoutes.handle(request, response)) return;
     if (await this.#runtimeMcpRoutes.handle(request, response)) return;
     if (await this.#runtimeRoutes.handle(request, response)) return;
+    if (await this.#hookPlaygroundRoutes.handle(request, response)) return;
+    if (await this.#playgroundRoutes.handle(request, response)) return;
+    if (await this.#artifactRoutes.handle(request, response)) return;
     const route = skillRoute(request.url);
     if (route !== undefined) return this.#serveSkill(route, response, method);
     if (pathname === '/api/project/status') {

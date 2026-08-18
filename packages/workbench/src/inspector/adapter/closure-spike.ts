@@ -6,7 +6,7 @@ import {
   ProtocolScreen,
   ResourcesScreen,
   ToolsScreen,
-} from './inspector-closure-vendor.js';
+} from './closure-screens.jsx';
 
 export { AppRenderer, snapshotHostContext } from './inspector-closure-vendor.js';
 export type {

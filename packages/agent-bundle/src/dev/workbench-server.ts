@@ -3,9 +3,11 @@ import { randomUUID } from 'node:crypto';
 import { join, resolve } from 'node:path';
 
 import { createDefaultRegistry, type TargetRegistry } from '../adapters/registry.ts';
+import { ArtifactInspectionService } from './artifact-inspection-service.ts';
 import { DevCoordinator } from './coordinator.ts';
 import { EpochStore } from './epoch-store.ts';
 import { ProjectEventHub } from './events.ts';
+import { HookPlaygroundService } from './hook-playground-service.ts';
 import {
   startForegroundServer,
   type ForegroundCoordinator,
@@ -23,6 +25,7 @@ import {
   type McpAppSandboxProxy,
 } from './mcp-app-sandbox.ts';
 import { McpSessionService } from './mcp-session-service.ts';
+import { PlaygroundService } from '../services/playground-service.ts';
 import { ProjectService } from './project-service.ts';
 import { DevRuntimeController } from './runtime-controller.ts';
 import {
@@ -56,7 +59,7 @@ interface Closeable {
 
 export interface DevServerLifecycleCloseFailure {
   readonly error: unknown;
-  readonly resource: 'coordinator' | 'mcp-apps' | 'mcp-sessions' | 'runtime' | 'runtime-client-surfaces';
+  readonly resource: 'coordinator' | 'mcp-apps' | 'mcp-sessions' | 'playground' | 'runtime' | 'runtime-client-surfaces';
 }
 
 /** Reports session and coordinator cleanup failures without hiding either resource. */
@@ -379,10 +382,11 @@ export interface DevServerRuntimeLifecycleResources {
 
 /** Closes persistent MCP state alongside the coordinator, preserving all cleanup failures. */
 export const closeDevServerLifecycle = async (
-  mcpSessions: Closeable,
   coordinator: Closeable,
-  mcpApps?: Closeable,
+  mcpApps: Closeable | undefined,
+  mcpSessions: Closeable,
   runtimeResources?: DevServerRuntimeLifecycleResources,
+  playground?: Closeable,
 ): Promise<void> => {
   const appResults = mcpApps === undefined ? [] : await Promise.allSettled([mcpApps.close()]);
   const clientSurfaceResults = runtimeResources?.clientSurfaces === undefined
@@ -392,6 +396,7 @@ export const closeDevServerLifecycle = async (
     ? []
     : await Promise.allSettled([runtimeResources.runtime.close()]);
   const sessionResults = await Promise.allSettled([mcpSessions.close()]);
+  const playgroundResults = playground === undefined ? [] : await Promise.allSettled([playground.close()]);
   const coordinatorResults = await Promise.allSettled([coordinator.close()]);
   const failures = [
     ...appResults.flatMap((result): readonly DevServerLifecycleCloseFailure[] =>
@@ -414,6 +419,11 @@ export const closeDevServerLifecycle = async (
         ? [Object.freeze({ error: result.reason, resource: 'mcp-sessions' as const })]
         : [],
     ),
+    ...playgroundResults.flatMap((result): readonly DevServerLifecycleCloseFailure[] =>
+      result.status === 'rejected'
+        ? [Object.freeze({ error: result.reason, resource: 'playground' as const })]
+        : [],
+    ),
     ...coordinatorResults.flatMap((result): readonly DevServerLifecycleCloseFailure[] =>
     result.status === 'rejected'
       ? [Object.freeze({ error: result.reason, resource: 'coordinator' as const })]
@@ -430,10 +440,11 @@ const withMcpSessionLifecycle = (
   runtime: DevRuntimeController | undefined,
   clientSurfaces: RuntimeClientSurfaceBindings,
   status: () => ProjectStatus,
+  playground: Closeable,
 ): ForegroundCoordinator => Object.freeze({
   close: () => {
     clientSurfaces.beginClose();
-    return closeDevServerLifecycle(mcpSessions, coordinator, mcpApps(), { clientSurfaces, runtime });
+    return closeDevServerLifecycle(coordinator, mcpApps(), mcpSessions, { clientSurfaces, runtime }, playground);
   },
   rebuild: (invalidation: Invalidation) => coordinator.rebuild(invalidation),
   start: async () => {
@@ -526,6 +537,12 @@ export const startDevServer = async (options: StartDevServerOptions): Promise<De
     : Object.freeze({ state: 'configured' as const });
   let foregroundClosing = false;
   let installingRuntimePreviews = false;
+  // The resolved root is the project's stable identity: a store copied elsewhere must not reopen.
+  const playground = new PlaygroundService({
+    projectId: root,
+    projectRoot: root,
+    storageRoot: join(root, '.agent-bundle', 'playground'),
+  });
   let mcpApps: McpAppLifecycle | undefined;
   let previews: McpAppPreviewService | undefined;
   /**
@@ -609,7 +626,7 @@ export const startDevServer = async (options: StartDevServerOptions): Promise<De
         });
       }
     },
-    outputPaths: ['dist', '.agent-bundle/runtime'],
+    outputPaths: ['dist', '.agent-bundle/runtime', '.agent-bundle/playground'],
     prepareCommand: 'dev',
     projectService,
     root,
@@ -620,11 +637,14 @@ export const startDevServer = async (options: StartDevServerOptions): Promise<De
   });
   const mcpSessions = new McpSessionService({ epochStore, projectRoot: root, registry });
   const foreground = await (options.testing?.startForegroundServer ?? startForegroundServer)({
+    artifacts: new ArtifactInspectionService(epochStore, registry),
     assets: options.assets ?? createWorkbenchAssetSource(),
-    coordinator: withMcpSessionLifecycle(coordinator, mcpSessions, () => mcpApps, runtime, clientSurfaces, status),
+    coordinator: withMcpSessionLifecycle(coordinator, mcpSessions, () => mcpApps, runtime, clientSurfaces, status, playground),
     eventHub,
+    hookPlayground: new HookPlaygroundService({ epochStore, registry }),
     mcpAppPreviews: appPreviews,
     mcpSessions,
+    playground,
     port: options.port,
     ...(runtime === undefined ? {} : { runtime }),
     skillDocuments: new SkillDocumentService({ epochStore, projectService, root }),
