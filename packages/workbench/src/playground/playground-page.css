@@ -13,6 +13,13 @@
 .playground-actions button { background: #0b5bd3; border: 1px solid #06459e; border-radius: 4px; color: #fff; cursor: pointer; font-weight: 700; min-height: 43px; padding: 0 22px; }
 .playground-actions button:hover:not(:disabled) { background: #084eb9; }
 .playground-actions button:disabled { background: #7f95b8; border-color: #7f95b8; cursor: not-allowed; }
+.playground-native-workbench { background: #f7f9fc; border: 1px solid #d9dee7; border-radius: 8px; margin-top: 12px; padding: 17px; width: min(100%, 1040px); }
+.playground-native-status { color: #4f5866; font-size: 13px; margin: 0 0 13px; }
+.playground-native-grid { display: grid; gap: 13px 16px; grid-template-columns: repeat(5, minmax(0, 1fr)); }
+.playground-native-grid label { color: #596372; display: grid; font-size: 12px; font-weight: 750; gap: 6px; letter-spacing: .03em; margin: 0; min-width: 0; text-transform: uppercase; }
+.playground-native-grid select, .playground-native-grid textarea { box-sizing: border-box; max-width: 100%; min-width: 0; width: 100%; }
+.playground-native-prompt { grid-column: 1 / -1; }
+.playground-native-prompt textarea { min-height: 116px; resize: vertical; }
 .playground-trace { margin-top: 30px; }
 .playground-summary { color: #4f5866; font-size: 15px; margin: 0 0 12px; }
 .playground-blocker { background: #fffaf0; border-left: 3px solid #b7791f; color: #74531a; font-size: 13px; margin: 0 0 22px; padding: 9px 14px; }
@@ -22,18 +29,26 @@
 .playground-detail-rows div:last-child { border-right: 0; }
 .playground-detail-rows dt { color: #596372; font-size: 12px; font-weight: 750; margin: 0 0 6px; }
 .playground-detail-rows dd { font-size: 13px; font-weight: 500; overflow-wrap: anywhere; }
-.playground-table { border-collapse: collapse; font-size: 13px; min-width: 0; width: 100%; }
-.playground-table th { border-bottom: 1px solid #bfc8d5; color: #596372; font-size: 12px; font-weight: 750; letter-spacing: .03em; padding: 8px 10px 8px 0; text-align: left; text-transform: uppercase; }
-.playground-table td { border-bottom: 1px solid #e6eaf1; overflow-wrap: anywhere; padding: 9px 10px 9px 0; vertical-align: top; }
-.playground-table .identifier { font: 12px/1.5 "SFMono-Regular", Consolas, "Liberation Mono", monospace; }
+.playground-event-cards { display: grid; gap: 10px; max-width: 920px; }
+.playground-event-card { background: #fff; border: 1px solid #d9dee7; border-radius: 6px; min-width: 0; overflow: hidden; }
+.playground-event-card summary { align-items: baseline; color: #243142; cursor: pointer; display: grid; gap: 8px; grid-template-columns: auto auto minmax(0, 1fr); list-style: none; padding: 12px 14px; }
+.playground-event-card summary::-webkit-details-marker { display: none; }
+.playground-event-sequence { color: #596372; font: 12px/1.4 "SFMono-Regular", Consolas, "Liberation Mono", monospace; }
+.playground-event-card summary > span:last-child { color: #4f5866; overflow-wrap: anywhere; }
+.playground-event-meta { border-top: 1px solid #e6eaf1; color: #596372; display: flex; flex-wrap: wrap; font-size: 12px; gap: 6px 15px; padding: 10px 14px; }
+.playground-event-meta .identifier { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; overflow-wrap: anywhere; }
+.playground-event-meta label { align-items: center; color: #1e2938; display: inline-flex; font-weight: 650; gap: 5px; }
+.playground-event-card .playground-json { border: 0; border-radius: 0; max-width: 100%; }
 .playground-json { background: #101822; border: 1px solid #25364b; box-sizing: border-box; color: #edf3fb; font: 13px/1.55 "SFMono-Regular", Consolas, "Liberation Mono", monospace; margin: 0; max-height: 22rem; max-width: min(36rem, calc(100vw - 120px)); overflow: auto; overflow-wrap: anywhere; padding: 18px; white-space: pre-wrap; width: 100%; }
 
 @media (max-width: 820px) {
   .playground-content { padding: 27px 20px 45px; }
   .playground-controls input, .playground-controls textarea { width: 100%; }
+  .playground-native-grid { grid-template-columns: 1fr; }
+  .playground-native-prompt { grid-column: auto; }
   .playground-detail-rows { grid-template-columns: 1fr; }
   .playground-detail-rows div { border-bottom: 1px solid #d9dee7; border-right: 0; }
   .playground-detail-rows div:last-child { border-bottom: 0; }
-  .playground-table, .playground-table tbody, .playground-table td, .playground-table tr { display: block; }
-  .playground-table thead { display: none; }
+  .playground-event-card summary { grid-template-columns: auto minmax(0, 1fr); }
+  .playground-event-card summary > span:last-child { grid-column: 1 / -1; }
 }
