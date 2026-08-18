@@ -241,7 +241,10 @@ e2e('opens one real epoch MCP session and keeps its playground operations respon
     await cancel.click();
     await expect(cancel).toBeHidden({ timeout: browserTimeout });
 
-    await page.getByRole('button', { name: 'Close MCP session' }).click();
+    await expect(page.locator('.mcp-page-phase')).toContainText('Session ready', { timeout: browserTimeout });
+    const close = page.getByRole('button', { name: 'Close MCP session' });
+    await expect(close).toBeEnabled({ timeout: browserTimeout });
+    await close.click();
     await expect(page.locator('.mcp-page-phase')).toContainText('Session closed', { timeout: browserTimeout });
     await page.getByRole('button', { name: 'Reset MCP session' }).click();
     await expect(page.locator('.mcp-page-phase')).toContainText('Session idle', { timeout: browserTimeout });

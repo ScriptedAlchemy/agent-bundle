@@ -6,7 +6,7 @@ import {
   type McpSessionControllerRoutes,
   type McpSessionControllerTransport,
 } from '../src/mcp/mcp-session-controller.ts';
-import type { McpRouteCatalog } from '../src/mcp/mcp-route-client.ts';
+import { McpRouteClientError, type McpRouteCatalog } from '../src/mcp/mcp-route-client.ts';
 
 const binding = Object.freeze({ epochId: 'epoch-a', serverName: 'weather', target: 'portable' as const });
 const connection = Object.freeze({
@@ -823,6 +823,76 @@ it('cancels active SDK work through its transport signal and closes trace before
   await controller.close();
   expect(events).toEqual(['request.abort', 'trace.abort', 'client.close', 'transport.close']);
   expect(controller.model).toMatchObject({ activeRequests: {}, phase: 'closed' });
+});
+
+it('keeps the session ready when a cancelled request later reports its operation route failure', async () => {
+  const stream = traceStream();
+  let requests = 0;
+  const transport = fakeTransport();
+  const client: McpSessionControllerClient = {
+    close: async () => undefined,
+    connect: async (next) => next.start(),
+    request: async (_request, options) => {
+      requests += 1;
+      if (requests > 1) return { content: [] };
+      return new Promise<unknown>((_resolve, reject) => {
+        options?.signal?.addEventListener('abort', () => {
+          reject(new DOMException('Aborted', 'AbortError'));
+        }, { once: true });
+      });
+    },
+  };
+  const controller = createMcpSessionController({
+    clientFactory: () => client,
+    routes: {
+      catalog: async () => ({ prompts: [], resourceTemplates: [], resources: [], tools: [] }),
+      config: async () => ({ launch: { args: [], command: 'node', env: {}, kind: 'stdio' }, origin: 'artifact' }),
+      restart: async () => connection,
+      stream: async () => stream.response,
+      trace: async () => ({ entries: [] }),
+    },
+    transportFactory: () => transport,
+  });
+  await controller.open(binding);
+  const pending = controller.invoke({ id: 'cancelled-1', operation: 'callTool', request: { name: 'wait' } });
+  await eventually(() => controller.model.activeRequests['cancelled-1'] !== undefined);
+
+  expect(controller.cancel('cancelled-1')).toBe(true);
+  await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+  transport.onerror?.(new McpRouteClientError('AB8019', 'MCP session operation could not be completed.'));
+
+  expect(controller.model.phase).toBe('ready');
+  await expect(controller.invoke({ id: 'after-cancel', operation: 'listTools', request: {} })).resolves.toEqual({ content: [] });
+  stream.close();
+  await controller.close();
+});
+
+it('keeps generic and non-operation route transport failures terminal', async () => {
+  const failures = [
+    new Error('connection lost'),
+    new McpRouteClientError('AB8018', 'MCP session is not available.'),
+    new McpRouteClientError('AB8019', 'Foreground MCP request failed with HTTP 502.'),
+  ];
+  for (const failure of failures) {
+    const stream = traceStream();
+    const transport = fakeTransport();
+    const controller = createMcpSessionController({
+      clientFactory: fakeClient,
+      routes: {
+        ...emptyRoutes,
+        stream: async () => stream.response,
+      },
+      transportFactory: () => transport,
+    });
+    await controller.open(binding);
+
+    transport.onerror?.(failure);
+    stream.close();
+    await eventually(() => controller.model.phase === 'error');
+
+    expect(controller.model.diagnostics).toContainEqual(expect.objectContaining({ code: 'mcp.transport.error' }));
+    await expect(controller.close()).rejects.toMatchObject({ primary: failure });
+  }
 });
 
 it('preserves binding, trace, and history through restart while refreshing connection and catalogs', async () => {
