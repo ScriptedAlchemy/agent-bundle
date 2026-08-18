@@ -85,6 +85,13 @@ it('rejects duplicate replay keys, extra record fields, and unsafe wire text bef
       : json({ replay: { cursor: { afterSequence: 1 }, records: [{ ...record, summary: '/private/fixture-secret' }] } }),
   });
   await expect(unsafeText.replay()).rejects.toMatchObject({ code: 'AB8093', message: 'Dev Log route returned an invalid response.' });
+
+  const windowsPath = new LogClient({
+    fetch: async (input) => String(input).includes('/api/project/session')
+      ? session()
+      : json({ replay: { cursor: { afterSequence: 1 }, records: [{ ...record, summary: 'C:\\private\\fixture' }] } }),
+  });
+  await expect(windowsPath.replay()).rejects.toMatchObject({ code: 'AB8093', message: 'Dev Log route returned an invalid response.' });
 });
 
 it('rejects malformed UTF-8 and a frame larger than 64 KiB before decoding NDJSON records', async () => {
@@ -143,6 +150,38 @@ it('accepts benign log text containing token, secret, and tokenizer', async () =
   });
 
   await expect(client.replay()).resolves.toMatchObject({ records: [{ summary: 'Unexpected token in the secret named Tokenizer.' }] });
+});
+
+it('accepts a canonical hook id containing a colon in an otherwise contiguous replay', async () => {
+  const hookRecord = {
+    ...record,
+    context: { epochId: 'epoch-1', hookId: 'hook:fixture', target: 'node' },
+    details: {},
+    kind: 'hook.simulate.started',
+    producer: 'hook',
+    sequence: 17,
+    summary: 'Hook simulation started.',
+  };
+  const client = new LogClient({
+    fetch: async (input) => String(input).includes('/api/project/session')
+      ? session()
+      : json({
+        replay: {
+          cursor: { afterSequence: 17 },
+          records: [
+            ...Array.from({ length: 16 }, (_value, index) => ({ ...record, sequence: index + 1 })),
+            hookRecord,
+          ],
+        },
+      }),
+  });
+
+  const replay = await client.replay();
+  expect(replay.cursor).toEqual({ afterSequence: 17 });
+  expect(replay.records.map((entry) => entry.sequence)).toEqual([
+    1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17,
+  ]);
+  expect(replay.records.at(-1)).toMatchObject(hookRecord);
 });
 
 it('accepts only an initial fragmented gap frame and rejects a gap after a record', async () => {

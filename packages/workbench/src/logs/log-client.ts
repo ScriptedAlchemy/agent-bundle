@@ -68,7 +68,7 @@ const safeProjectRelativePath = /<project>(?:\/[A-Za-z0-9._@+-]+)*/gu;
 const isSafeWireText = (value: unknown, maximum = maximumLogFrameBytes): value is string => {
   if (typeof value !== 'string' || value.length === 0 || value.length > maximum || redactEvalCredentialText(value) !== value) return false;
   const withoutProjectPaths = value.replace(safeProjectRelativePath, '');
-  return !hasControlOrSeparators(withoutProjectPaths) && !/(?:file:|[A-Za-z]:|\\\\)/iu.test(withoutProjectPaths);
+  return !hasControlOrSeparators(withoutProjectPaths) && !/(?:file:|[A-Za-z]:[\\/]|\\\\)/iu.test(withoutProjectPaths);
 };
 const isSafeDetailKey = (value: string): boolean =>
   !isCredentialKey(value) && !hasControlOrSeparators(value);
