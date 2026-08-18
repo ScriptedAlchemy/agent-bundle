@@ -71,6 +71,12 @@ export interface EvalTrialRecord {
 
 export type EvalTrialRecordInput = Omit<EvalTrialRecord, 'schemaVersion'>;
 
+/** The harness only needs durable artifact and normalized trial writes. */
+export interface EvalTrialWriter {
+  writeArtifactFile(relativePath: string, contents: string): Promise<string>;
+  writeTrial(trial: EvalTrialRecordInput): Promise<EvalTrialRecord>;
+}
+
 export interface EvalRunEventInput {
   readonly kind: string;
   readonly payload: unknown;
@@ -797,7 +803,7 @@ const parseTrialRecord = (value: unknown, sourcePath: string): EvalTrialRecord =
 };
 
 /** One writer owns one run directory; every other process creates its own run. */
-export class EvalRunWriter {
+export class EvalRunWriter implements EvalTrialWriter {
   readonly #directory: string;
   #closed = false;
   #closeFailures: unknown[] = [];

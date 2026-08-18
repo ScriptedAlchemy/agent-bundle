@@ -214,6 +214,70 @@ it('admits a gated operation promptly, replays its epoch binding, and cancels th
   expect(references).toEqual(['epoch-active', 'close:epoch-active']);
 });
 
+it('atomically pins an omitted native prompt to the active epoch and persists awaited progress before normalized host evidence', async () => {
+  const trace = new RecordingTraceStore();
+  const calls: string[] = [];
+  const nativeEpoch = Object.freeze({
+    configDigest: 'native-config-digest',
+    createdAt: '2026-08-18T00:00:00.000Z',
+    diagnostics: Object.freeze({ errors: 0, infos: 0, warnings: 0 }),
+    id: 'epoch-native-a',
+    manifestPath: 'agent-bundle.manifest.json',
+    modelDigest: 'native-model-digest',
+    projectRevision: 'native-revision-digest',
+    targetDigests: Object.freeze({ claude: 'native-target-digest' }),
+  });
+  const reference = Object.freeze({ close: async () => { calls.push('release'); }, epoch: nativeEpoch, root: '/epochs/native-a' });
+  const service = new PlaygroundOrchestrationService({
+    coordinator: { status: currentStatus },
+    createRunId: () => 'run-native',
+    createSessionId: () => 'session-native',
+    epochStore: {
+      acquireActiveEpochReference: async () => { calls.push('acquire-active'); return reference; },
+      acquireEpochReference: async () => { throw new Error('Native omission must not read coordinator then acquire by id.'); },
+    },
+    native: {
+      close: async () => { calls.push('native-close'); },
+      prepare: async (receivedReference: unknown, request: unknown) => {
+        calls.push('prepare');
+        expect(receivedReference).toBe(reference);
+        expect(request).toMatchObject({ operation: 'native.prompt', prompt: 'Review the fixture.', target: 'claude' });
+        return Object.freeze({ epochId: nativeEpoch.id, fixtureDigest: 'fixture-content-digest', host: 'claude', prompt: 'Review the fixture.', target: 'claude' });
+      },
+      run: async (_prepared: unknown, options: { readonly emit: (event: PlaygroundEventInput) => Promise<void>; readonly signal: AbortSignal }) => {
+        await options.emit(Object.freeze({ kind: 'native.preflight', raw: Object.freeze({ phase: 'preflight' }), source: 'host-preflight', summary: 'Native host preflight completed.' }));
+        await options.emit(Object.freeze({ kind: 'native.fixture.materialized', raw: Object.freeze({ phase: 'fixture.materialized' }), source: 'host-preflight', summary: 'Native fixture materialized.' }));
+        return Object.freeze({
+          events: Object.freeze([Object.freeze({ kind: 'native.activation', raw: Object.freeze({ activated: Object.freeze([]), level: 'unavailable' }), source: 'skill-evidence', summary: 'Recorded normalized native Skill activation evidence.' })]),
+          response: 'Safe normalized response.',
+          status: 'passed' as const,
+          workspace: Object.freeze({ changes: Object.freeze([]) }),
+        });
+      },
+    },
+    trace,
+  } as unknown as ConstructorParameters<typeof PlaygroundOrchestrationService>[0]);
+
+  const admitted = await service.run({
+    caseId: 'opaque-case-a',
+    fixtureId: 'opaque-fixture-a',
+    host: 'claude',
+    modelPinId: 'opaque-model-a',
+    operation: 'native.prompt',
+    prompt: 'Review the fixture.',
+    target: 'claude',
+  });
+  expect(admitted.session.identity).toMatchObject({ epoch: { id: 'epoch-native-a' }, fixture: { digest: 'fixture-content-digest', id: 'opaque-fixture-a' } });
+  await eventually(() => expect(trace.finalized).toEqual({ response: 'Safe normalized response.', status: 'passed', workspace: { changes: [] } }));
+  expect(calls).toEqual(['acquire-active', 'prepare', 'release']);
+  expect(trace.appended.map((event) => event.kind)).toEqual([
+    'epoch.bound',
+    'native.preflight',
+    'native.fixture.materialized',
+    'native.activation',
+  ]);
+});
+
 it('gives cancellation precedence when a gated Skill ignores its AbortSignal', async () => {
   const trace = new RecordingTraceStore();
   let release!: () => void;

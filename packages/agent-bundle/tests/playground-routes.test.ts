@@ -194,6 +194,92 @@ it('admits only a typed server-owned operation and mints its run identity', asyn
   }
 });
 
+it('lists a server-owned native catalog and admits only its opaque native prompt selection', async () => {
+  const service = new RecordingService() as RecordingService & {
+    catalog(options?: { readonly epochId?: string }): Promise<unknown>;
+  };
+  service.catalog = async (options) => {
+    service.calls.push({ kind: 'catalog', options });
+    return Object.freeze({
+      cases: Object.freeze([Object.freeze({ id: 'case-opaque-a', label: 'Review fixture' })]),
+      epochId: 'epoch-server-owned',
+      fixtures: Object.freeze([Object.freeze({ id: 'fixture-opaque-a', label: 'Review fixture' })]),
+      modelPins: Object.freeze([Object.freeze({ host: 'claude', id: 'model-opaque-a', label: 'Pinned Claude model' })]),
+    });
+  };
+  const started = await startRoutes(service as unknown as PlaygroundRouteService);
+  try {
+    const catalog = await fetch(`${started.url}/api/playground/catalog?epochId=epoch-server-owned`, { headers: headers() });
+    expect(catalog.status).toBe(200);
+    await expect(catalog.json()).resolves.toEqual({ catalog: {
+      cases: [{ id: 'case-opaque-a', label: 'Review fixture' }],
+      epochId: 'epoch-server-owned',
+      fixtures: [{ id: 'fixture-opaque-a', label: 'Review fixture' }],
+      modelPins: [{ host: 'claude', id: 'model-opaque-a', label: 'Pinned Claude model' }],
+    } });
+
+    const response = await post(`${started.url}/api/playground/runs`, {
+      caseId: 'case-opaque-a',
+      epochId: 'epoch-server-owned',
+      fixtureId: 'fixture-opaque-a',
+      host: 'claude',
+      modelPinId: 'model-opaque-a',
+      operation: 'native.prompt',
+      prompt: 'Review this fixture.',
+      target: 'claude',
+    });
+    expect(response.status).toBe(200);
+    expect(service.calls).toEqual([
+      { kind: 'catalog', options: { epochId: 'epoch-server-owned' } },
+      expect.objectContaining({
+        input: {
+          caseId: 'case-opaque-a',
+          epochId: 'epoch-server-owned',
+          fixtureId: 'fixture-opaque-a',
+          host: 'claude',
+          modelPinId: 'model-opaque-a',
+          operation: 'native.prompt',
+          prompt: 'Review this fixture.',
+          target: 'claude',
+        },
+        kind: 'run',
+      }),
+    ]);
+  } finally { await started.close(); }
+});
+
+it('rejects native prompt smuggling and duplicate browser fields before service admission', async () => {
+  const service = new RecordingService();
+  const started = await startRoutes(service);
+  const valid = {
+    caseId: 'case-opaque-a',
+    fixtureId: 'fixture-opaque-a',
+    host: 'codex',
+    modelPinId: 'model-opaque-a',
+    operation: 'native.prompt',
+    prompt: 'Review this fixture.',
+    target: 'codex',
+  };
+  try {
+    for (const body of [
+      { ...valid, command: 'codex exec --dangerous' },
+      { ...valid, cwd: '/private/secret' },
+      { ...valid, env: { API_KEY: 'secret' } },
+      { ...valid, evidence: { outcome: 'passed' } },
+      { ...valid, model: 'browser-picked-model' },
+      { ...valid, outcome: 'passed' },
+      { ...valid, path: '../../fixture' },
+      '{"operation":"native.prompt","prompt":"Review this fixture.","caseId":"case-opaque-a","caseId":"case-opaque-b","fixtureId":"fixture-opaque-a","target":"codex","host":"codex","modelPinId":"model-opaque-a"}',
+    ]) {
+      const response = typeof body === 'string'
+        ? await fetch(`${started.url}/api/playground/runs`, { body, headers: jsonHeaders(), method: 'POST' })
+        : await post(`${started.url}/api/playground/runs`, body);
+      expect(response.status).toBe(400);
+    }
+    expect(service.calls).toEqual([]);
+  } finally { await started.close(); }
+});
+
 it('rejects forged epochs, browser evidence, outcomes, and executable fields before orchestration', async () => {
   const service = new RecordingService();
   const started = await startRoutes(service);

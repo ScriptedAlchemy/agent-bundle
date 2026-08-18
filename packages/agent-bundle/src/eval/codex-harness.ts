@@ -36,7 +36,7 @@ import {
 } from './harness.ts';
 import { evalScriptGraderSpec, runEvalGraders, type EvalGraderSpec } from './graders.ts';
 import type { PreparedEvalArtifact } from './artifact.ts';
-import type { EvalRunWriter, EvalTrialRecord } from './run-store.ts';
+import type { EvalTrialRecord, EvalTrialWriter } from './run-store.ts';
 import type {
   EvalCase,
   EvalHarnessFailure,
@@ -76,7 +76,7 @@ export interface RunCodexEvalTrialOptions {
   readonly timeoutMs?: number;
   readonly trialIndex: number;
   readonly workspaceRoot: string;
-  readonly writer: EvalRunWriter;
+  readonly writer: EvalTrialWriter;
 }
 
 export interface CodexEvalHarness {

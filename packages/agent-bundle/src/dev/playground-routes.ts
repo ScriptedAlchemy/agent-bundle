@@ -40,6 +40,7 @@ type SessionRouteKind =
   | 'stream';
 
 type Route =
+  | Readonly<{ readonly kind: 'catalog' }>
   | Readonly<{ readonly kind: 'runs' }>
   | Readonly<{ readonly id: string; readonly kind: 'cancel' }>
   | Readonly<{ readonly id: string; readonly kind: 'session' }>
@@ -49,6 +50,7 @@ type JsonObject = Record<string, unknown>;
 
 export interface PlaygroundRouteService {
   cancel(runId: string): Promise<boolean>;
+  catalog?(options?: { readonly epochId?: string }): Promise<unknown>;
   export(sessionId: string): Promise<PlaygroundExport>;
   promoteToDraftEval(sessionId: string, rawEventRefs: readonly string[]): Promise<DraftEvalCase>;
   replay(sessionId: string, cursor?: PlaygroundReplayCursor): Promise<PlaygroundReplay>;
@@ -197,6 +199,7 @@ const route = (requestTarget: string | undefined): Route | undefined => {
   const parts = pathname.split('/');
   if (parts[0] !== '' || parts[1] !== 'api' || parts[2] !== 'playground') return pathError();
   const segments = parts.slice(3).map(decodedSegment);
+  if (segments[0] === 'catalog' && segments.length === 1) return Object.freeze({ kind: 'catalog' });
   if (segments[0] === 'runs') {
     if (segments.length === 1) return Object.freeze({ kind: 'runs' });
     if (segments.length === 3 && segments[2] === 'cancel') return Object.freeze({ id: segments[1]!, kind: 'cancel' });
@@ -270,6 +273,29 @@ const operationInput = (value: JsonObject): PlaygroundOperationRequest => {
       !nonemptyString(value.serverName) || !nonemptyString(value.tool) || !Object.hasOwn(value, 'arguments')) return invalidShape();
     return Object.freeze({ arguments: jsonObject(value.arguments), operation, serverName: value.serverName, target, tool: value.tool });
   }
+  if (operation === 'native.prompt') {
+    const epochId = value.epochId;
+    if (
+      !hasOnly(value, ['caseId', 'epochId', 'fixtureId', 'host', 'modelPinId', 'operation', 'prompt', 'target']) ||
+      !nonemptyString(value.caseId) ||
+      !nonemptyString(value.fixtureId) ||
+      !nonemptyString(value.modelPinId) ||
+      !nonemptyString(value.prompt) ||
+      (value.host !== 'claude' && value.host !== 'codex') ||
+      (Object.hasOwn(value, 'epochId') && !nonemptyString(epochId))
+    ) return invalidShape();
+    const resolvedEpochId = typeof epochId === 'string' ? epochId : undefined;
+    return Object.freeze({
+      caseId: value.caseId,
+      ...(resolvedEpochId === undefined ? {} : { epochId: resolvedEpochId }),
+      fixtureId: value.fixtureId,
+      host: value.host,
+      modelPinId: value.modelPinId,
+      operation,
+      prompt: value.prompt,
+      target,
+    });
+  }
   if (operation === 'script.run') {
     if (!hasOnly(value, ['operation', 'scriptId', 'target']) || !nonemptyString(value.scriptId)) return invalidShape();
     return Object.freeze({ operation, scriptId: value.scriptId, target });
@@ -303,6 +329,14 @@ const queryCursor = (requestTarget: string | undefined): number => {
 
 const noQuery = (requestTarget: string | undefined): void => {
   if (new URL(requestTarget ?? '/', 'http://localhost').searchParams.size > 0) invalidShape();
+};
+
+const catalogEpoch = (requestTarget: string | undefined): string | undefined => {
+  const query = new URL(requestTarget ?? '/', 'http://localhost').searchParams;
+  if ([...query.keys()].some((key) => key !== 'epochId') || query.getAll('epochId').length > 1) invalidShape();
+  const epochId = query.get('epochId');
+  if (epochId !== null && !nonemptyString(epochId)) invalidShape();
+  return epochId ?? undefined;
 };
 
 /**
@@ -353,6 +387,13 @@ export class PlaygroundRoutes {
     service: PlaygroundRouteService,
   ): Promise<void> {
     const method = request.method ?? 'GET';
+    if (parsed.kind === 'catalog') {
+      if (method !== 'GET') return this.#methodNotAllowed(response);
+      const catalog = service.catalog;
+      if (catalog === undefined) throw this.#unavailable(404);
+      const epochId = catalogEpoch(request.url);
+      return responseJson(response, { catalog: await catalog.call(service, epochId === undefined ? undefined : { epochId }) });
+    }
     if (parsed.kind === 'runs') {
       if (method !== 'POST') return this.#methodNotAllowed(response);
       return responseJson(response, { run: await service.run(operationInput(await jsonBody(request))) });
