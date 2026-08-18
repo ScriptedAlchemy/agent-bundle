@@ -81,6 +81,13 @@ export const playgroundScriptsForTarget = (
   scripts.filter((script) => script.target === target).sort((left, right) => left.id.localeCompare(right.id)),
 );
 
+/** A changed target or rebuilt catalog must never submit a stale server script id. */
+export const playgroundSelectedScriptId = (
+  scriptId: string,
+  scripts: readonly Pick<ArtifactInspectionScript, 'id' | 'name' | 'target'>[],
+  target: string,
+): string => scripts.some((script) => script.id === scriptId && script.target === target) ? scriptId : '';
+
 export interface PlaygroundRunObserverOptions {
   readonly client: Pick<PlaygroundClient, 'replay' | 'session' | 'stream'>;
   readonly onEvents: (events: readonly PlaygroundTraceEvent[]) => void;
@@ -257,6 +264,7 @@ export const PlaygroundTraceView = ({ onToggle, view }: PlaygroundTraceViewProps
             <th scope="col">Source</th>
             <th scope="col">Kind</th>
             <th scope="col">Summary</th>
+            <th scope="col">Evidence</th>
             <th scope="col">Epoch</th>
             <th scope="col">Persisted event</th>
           </tr>
@@ -274,6 +282,7 @@ export const PlaygroundTraceView = ({ onToggle, view }: PlaygroundTraceViewProps
             <td>{entry.source}</td>
             <td>{entry.kind}</td>
             <td>{entry.summary}</td>
+            <td><pre className="playground-json"><code>{formatPlaygroundJson(entry.raw)}</code></pre></td>
             <td className="identifier" title={entry.epochDigest}>{entry.epochId}</td>
             <td className="identifier">{entry.rawEventRef}</td>
           </tr>)}
@@ -310,6 +319,11 @@ export const PlaygroundPage = ({ client, epoch, onRunChange, run, scripts, targe
   const mcpArgumentsObject = parseRawJsonRecord(mcpArguments);
   const view = playgroundViewFor({ epoch, events, exported, selectedRefs, session });
   const targetScripts = playgroundScriptsForTarget(scripts, targetName);
+  const selectedScriptId = playgroundSelectedScriptId(scriptId, scripts, targetName);
+
+  useEffect(() => {
+    if (selectedScriptId !== scriptId) setScriptId(selectedScriptId);
+  }, [scriptId, selectedScriptId]);
 
   useEffect(() => {
     if (run === undefined || runId === undefined || sessionId === undefined) return;
@@ -356,7 +370,7 @@ export const PlaygroundPage = ({ client, epoch, onRunChange, run, scripts, targe
         : { hook, input: asJsonObject(hookInputObject), operation, target: targetName };
     }
     if (operation === 'script.run') {
-      return scriptId.length === 0 ? undefined : { operation, scriptId, target: targetName };
+      return selectedScriptId.length === 0 ? undefined : { operation, scriptId: selectedScriptId, target: targetName };
     }
     return mcpServerName.length === 0 || mcpTool.length === 0 || mcpArgumentsObject === null
       ? undefined
@@ -457,7 +471,7 @@ export const PlaygroundPage = ({ client, epoch, onRunChange, run, scripts, targe
               disabled={busy || (session !== undefined && !terminal(session)) || targetScripts.length === 0}
               id="playground-script-id"
               onChange={(event) => setScriptId(event.currentTarget.value)}
-              value={scriptId}
+              value={selectedScriptId}
             >
               <option value="">Select a script</option>
               {targetScripts.map((script) => <option key={script.id} value={script.id}>{script.name}</option>)}
