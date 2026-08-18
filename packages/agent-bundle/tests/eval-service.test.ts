@@ -12,6 +12,33 @@ import { seedEvalProject, writeEvalSuite } from './support/eval-project.ts';
 
 const service = (root: string): EvalService => new EvalService({ projectRoot: root, targets: ['portable'] });
 
+type EvalRunStoreDurabilityTestHook = (
+  phase: 'after-event-write',
+  event: Readonly<{ readonly kind: string }>,
+  path: string,
+) => void;
+
+const evalRunStoreDurabilityTestHookKey = Symbol.for('agent-bundle.eval-run-store.durability-test-hook');
+
+const withEvalRunStoreDurabilityTestHook = async <T>(
+  hook: EvalRunStoreDurabilityTestHook,
+  operation: () => Promise<T>,
+): Promise<T> => {
+  const hooks = globalThis as typeof globalThis & Record<symbol, EvalRunStoreDurabilityTestHook | undefined>;
+  const previous = hooks[evalRunStoreDurabilityTestHookKey];
+  const previousNodeEnvironment = process.env.NODE_ENV;
+  hooks[evalRunStoreDurabilityTestHookKey] = hook;
+  process.env.NODE_ENV = 'test';
+  try {
+    return await operation();
+  } finally {
+    if (previous === undefined) delete hooks[evalRunStoreDurabilityTestHookKey];
+    else hooks[evalRunStoreDurabilityTestHookKey] = previous;
+    if (previousNodeEnvironment === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = previousNodeEnvironment;
+  }
+};
+
 it('lists authored suites and their cases without exposing absolute filesystem paths', async () => {
   const project = await createProjectFixture();
   try {
@@ -867,6 +894,45 @@ it('recovers a failed terminal append with one durable failed terminal event', a
     await expect(service.close()).rejects.toThrow('Eval service could not close.');
   } finally {
     EvalRunWriter.prototype.appendEvent = appendEvent;
+    await evals?.close().catch(() => undefined);
+    await removeProjectFixture(project.root);
+  }
+}, 120_000);
+
+it('does not append a fallback terminal after a full terminal line reports a sync failure', async () => {
+  const project = await createProjectFixture();
+  const durabilityFailure = new Error('run.completed sync failed after write');
+  let evals: EvalService | undefined;
+  let injected = false;
+  try {
+    await seedEvalProject(project.root);
+    await withEvalRunStoreDurabilityTestHook((phase, event) => {
+      if (phase === 'after-event-write' && event.kind === 'run.completed' && !injected) {
+        injected = true;
+        throw durabilityFailure;
+      }
+    }, async () => {
+      const service = new EvalService({ projectRoot: project.root, targets: ['portable'] });
+      evals = service;
+      const admission = await service.start({ caseIds: ['reads-result'] });
+
+      let completed = false;
+      for (let attempt = 0; attempt < 100 && !completed; attempt += 1) {
+        completed = (await service.read(admission.run.id)).run.completedAt !== undefined;
+        if (!completed) await new Promise<void>((resolvePromise) => setTimeout(resolvePromise, 10));
+      }
+      if (!completed) throw new Error('The full-line terminal run was not finalized.');
+
+      const events = await service.events(admission.run.id, 0);
+      expect(events.events.filter((event) => event.kind.startsWith('run.')).map((event) => event.kind)).toEqual([
+        'run.started',
+        'run.completed',
+      ]);
+      expect((await service.read(admission.run.id)).run.summary).toEqual({ cases: 1, fail: 0, inconclusive: 0, pass: 1, trials: 1 });
+      await expect(service.close()).rejects.toThrow('Eval service could not close.');
+    });
+    expect(injected).toBe(true);
+  } finally {
     await evals?.close().catch(() => undefined);
     await removeProjectFixture(project.root);
   }

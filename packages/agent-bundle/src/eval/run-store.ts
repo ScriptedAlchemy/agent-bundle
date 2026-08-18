@@ -84,6 +84,19 @@ export interface EvalRunEvent {
   readonly timestamp: string;
 }
 
+/** The full JSONL event line exists, but fsync or descriptor close could not confirm its durability. */
+export class EvalRunEventDurabilityError extends Error {
+  readonly event: EvalRunEvent;
+  readonly failures: readonly unknown[];
+
+  constructor(event: EvalRunEvent, failures: readonly unknown[]) {
+    super(`Eval run event ${JSON.stringify(event.kind)} was written but could not be durably confirmed.`, { cause: failures[0] });
+    this.name = 'EvalRunEventDurabilityError';
+    this.event = event;
+    this.failures = Object.freeze([...failures]);
+  }
+}
+
 export interface EvalRunEventsRead {
   readonly events: readonly EvalRunEvent[];
   readonly incompleteTrailingRecord?: string;
@@ -116,6 +129,8 @@ const ownerFileName = 'owner.json';
 const runFileName = 'run.json';
 const safeSegment = /^[a-z0-9][a-z0-9._-]*$/iu;
 const maximumTrialRecordBytes = 1024 * 1024;
+type EvalRunStoreDurabilityTestHook = (phase: 'after-event-write', event: EvalRunEvent, path: string) => void;
+const evalRunStoreDurabilityTestHookKey = Symbol.for('agent-bundle.eval-run-store.durability-test-hook');
 
 const storeError = (
   code: ConstructorParameters<typeof EvalRunStoreError>[0],
@@ -124,6 +139,13 @@ const storeError = (
 
 const isErrno = (error: unknown, code: string): boolean =>
   typeof error === 'object' && error !== null && 'code' in error && error.code === code;
+
+/** Non-API test seam, unavailable unless the process explicitly runs in test mode. */
+const runEvalRunStoreDurabilityTestHook = (phase: 'after-event-write', event: EvalRunEvent, path: string): void => {
+  if (process.env.NODE_ENV !== 'test') return;
+  const hooks = globalThis as typeof globalThis & Record<symbol, EvalRunStoreDurabilityTestHook | undefined>;
+  hooks[evalRunStoreDurabilityTestHookKey]?.(phase, event, path);
+};
 
 const sameFile = (left: Stats, right: Stats): boolean => left.dev === right.dev && left.ino === right.ino;
 
@@ -796,11 +818,21 @@ export class EvalRunWriter {
       const eventPath = join(this.#directory, eventsFileName);
       await ensureWritablePath(this.#directory, eventPath);
       const journal = await open(eventPath, constants.O_APPEND | constants.O_NOFOLLOW | constants.O_WRONLY);
+      const failures: unknown[] = [];
+      let written = false;
       try {
         await journal.writeFile(`${stableJson(record)}\n`, 'utf8');
+        written = true;
+        runEvalRunStoreDurabilityTestHook('after-event-write', record, eventPath);
         await journal.sync();
-      } finally {
-        await journal.close();
+      }
+      catch (error) { failures.push(error); }
+      try { await journal.close(); }
+      catch (error) { failures.push(error); }
+      if (failures.length > 0) {
+        if (written) throw new EvalRunEventDurabilityError(record, failures);
+        if (failures.length === 1) throw failures[0];
+        throw new AggregateError(failures, `Eval run event ${JSON.stringify(record.kind)} could not be written.`);
       }
       return record;
     });

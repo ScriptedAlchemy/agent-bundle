@@ -20,6 +20,7 @@ import { createEvalHarness, runDeterministicTrial, type EvalHarness } from '../e
 import type { NativeClaudeProcessRunner } from '../host-contracts/native-claude-contract.ts';
 import {
   createEvalRun,
+  EvalRunEventDurabilityError,
   listEvalRuns,
   mintRunId,
   readEvalRun,
@@ -176,7 +177,7 @@ interface ActiveEvalRun {
   readonly requestSignal: AbortSignal | undefined;
   result: Promise<EvalRunResult> | undefined;
   readonly runId: string;
-  terminal: 'finishing' | 'open' | 'persisted';
+  terminal: 'finishing' | 'open' | 'persisted' | 'written';
   readonly writer: Awaited<ReturnType<typeof createEvalRun>>;
 }
 
@@ -731,6 +732,7 @@ export class EvalService {
     const completed: EvalTrialRecord[] = [];
     let executionFailure: unknown;
     let executionFailed = false;
+    let finalizationAttempted = false;
     let result: EvalRunResult | undefined;
     try {
       for (const plan of options.planned) {
@@ -784,6 +786,7 @@ export class EvalService {
       });
       active.terminal = 'persisted';
       const aggregates = aggregateEvalTrials(completed);
+      finalizationAttempted = true;
       const completedResult = Object.freeze({
         aggregates,
         diagnostics: options.config.diagnostics,
@@ -798,14 +801,37 @@ export class EvalService {
     } catch (error) {
       executionFailure = error;
       executionFailed = true;
-      if (active.terminal !== 'persisted') {
-        active.terminal = 'finishing';
-        await this.#appendEvent(active.writer, active.runId, {
-          kind: active.cancelled || active.controller.signal.aborted ? 'run.cancelled' : 'run.failed',
-          payload: {},
-        }).then(() => { active.terminal = 'persisted'; }).catch(() => undefined);
+      if (
+        error instanceof EvalRunEventDurabilityError
+        && (error.event.kind === 'run.cancelled' || error.event.kind === 'run.completed' || error.event.kind === 'run.failed')
+      ) {
+        active.terminal = 'written';
       }
-      await active.writer.finish(summarizeEvalRun(aggregateEvalTrials(completed))).catch(() => undefined);
+      if (active.terminal !== 'persisted' && active.terminal !== 'written') {
+        active.terminal = 'finishing';
+        try {
+          await this.#appendEvent(active.writer, active.runId, {
+            kind: active.cancelled || active.controller.signal.aborted ? 'run.cancelled' : 'run.failed',
+            payload: {},
+          });
+          active.terminal = 'persisted';
+        } catch (terminalFailure) {
+          if (
+            terminalFailure instanceof EvalRunEventDurabilityError
+            && (terminalFailure.event.kind === 'run.cancelled' || terminalFailure.event.kind === 'run.failed')
+          ) {
+            active.terminal = 'written';
+          }
+          executionFailure = new AggregateError([executionFailure, terminalFailure], 'Eval run execution and terminal persistence both failed.', { cause: executionFailure });
+        }
+      }
+      if (!finalizationAttempted) {
+        try {
+          await active.writer.finish(summarizeEvalRun(aggregateEvalTrials(completed)));
+        } catch (finalizationFailure) {
+          executionFailure = new AggregateError([executionFailure, finalizationFailure], 'Eval run execution and finalization both failed.', { cause: executionFailure });
+        }
+      }
       this.#log('eval.run.failed', 'error', 'Eval run failed.', active.runId, { failure: 'unavailable' });
     }
 
