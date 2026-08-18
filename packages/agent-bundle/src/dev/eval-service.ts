@@ -872,6 +872,7 @@ export class EvalService {
     if (active.cancellation !== undefined) return active.cancellation;
     if (active.terminal !== 'open') return Promise.resolve();
     active.cancelled = true;
+    active.controller.abort();
     const cancellation = this.#appendEvent(active.writer, active.runId, {
       kind: 'run.cancelling',
       payload: {},
@@ -881,7 +882,7 @@ export class EvalService {
         active.uncertainty = error;
       }
       throw error;
-    }).finally(() => active.controller.abort());
+    });
     active.cancellation = cancellation;
     return cancellation;
   }
