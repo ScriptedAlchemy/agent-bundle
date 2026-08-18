@@ -1,19 +1,26 @@
 import React, { useEffect, useState } from 'react';
 
 import type { DevLogRecord, DevLogReplayGap } from '../../../agent-bundle/src/dev/dev-log-service.ts';
-import { LogClient } from './log-client.ts';
+import { LogClient, LogClientError } from './log-client.ts';
 import { logsViewFor, mergeDevLogRecords, type LogsView as LogsViewModel } from './logs-model.ts';
 import './logs-page.css';
 
 export interface LogsPageProps {
-  readonly client: Pick<LogClient, 'replay' | 'stream'>;
+  readonly client: Pick<LogClient, 'replay' | 'stream'> & Partial<Pick<LogClient, 'forget'>>;
   /** A supplied snapshot keeps server/static rendering deterministic. */
   readonly records?: readonly DevLogRecord[];
 }
 
-const all = 'all';
+const all = '';
 const filter = (value: string): string | undefined => value === all ? undefined : value;
-const errorMessage = (reason: unknown): string => reason instanceof Error ? reason.message : 'Production logs could not be read.';
+const errorMessage = (reason: unknown): string => {
+  try { return reason instanceof Error && typeof reason.message === 'string' ? reason.message : 'Production logs could not be read.'; }
+  catch { return 'Production logs could not be read.'; }
+};
+const isCursorAhead = (reason: unknown): boolean => {
+  try { return reason instanceof LogClientError && reason.code === 'AB8092'; }
+  catch { return false; }
+};
 
 export const LogsView = ({ view }: { readonly view: LogsViewModel }) => <div className="logs-trace">
   {view.gap === undefined ? undefined : <p className="logs-gap" role="status">Earlier records are no longer retained.</p>}
@@ -24,11 +31,12 @@ export const LogsView = ({ view }: { readonly view: LogsViewModel }) => <div cla
         <span className="logs-entry-sequence">#{record.sequence}</span>
         <time className="logs-entry-timestamp">{record.occurredAt}</time>
         <span className="logs-entry-source">{record.producer}</span>
+        <span className={`logs-entry-level logs-entry-level--${record.level}`}>{record.level}</span>
         <span className="logs-entry-kind">{record.kind}</span>
       </div>
       <p className="logs-entry-summary">{record.summary}</p>
       <p className="logs-entry-binding">{Object.entries(record.context).map(([key, value]) => <span className="identifier" key={key}>{key} {value}</span>)}</p>
-      <span className="logs-details-label">Details available</span>
+      <details className="logs-details"><summary>Details</summary><p>Redacted diagnostic details are retained but not displayed in this view.</p></details>
     </li>)}
   </ol>}
 </div>;
@@ -50,17 +58,35 @@ export const LogsPage = ({ client, records: suppliedRecords }: LogsPageProps) =>
     let latestSequence = 0;
     let reconnect: ReturnType<typeof setTimeout> | undefined;
     let stream: ReturnType<LogClient['stream']> | undefined;
+    let replayController: AbortController | undefined;
+    let generation = 0;
+    const resetCursor = (): void => {
+      latestSequence = 0;
+      setRecords([]);
+      setGap(undefined);
+    };
+    const reconnectLater = (): void => {
+      if (!current) return;
+      if (reconnect !== undefined) clearTimeout(reconnect);
+      reconnect = setTimeout(() => { void connect(); }, 250);
+    };
     const connect = async (): Promise<void> => {
+      const attempt = generation + 1;
+      generation = attempt;
+      stream?.close();
+      replayController?.abort();
+      replayController = new AbortController();
       try {
-        const replay = await client.replay(latestSequence);
-        if (!current) return;
+        const replay = await client.replay(latestSequence, replayController.signal);
+        if (!current || attempt !== generation) return;
         latestSequence = replay.cursor.afterSequence;
-        setGap(replay.gap);
+        setError(undefined);
+        setGap((previous) => replay.gap ?? previous);
         setRecords((existing) => mergeDevLogRecords(existing, replay.records));
         stream = client.stream({
           afterSequence: latestSequence,
           onMessage: (message) => {
-            if (!current) return;
+            if (!current || attempt !== generation) return;
             if ('type' in message) setGap(message);
             else {
               latestSequence = Math.max(latestSequence, message.sequence);
@@ -69,21 +95,30 @@ export const LogsPage = ({ client, records: suppliedRecords }: LogsPageProps) =>
           },
         });
         void stream.done.then(
-          () => { if (current) reconnect = setTimeout(() => { void connect(); }, 250); },
+          () => { if (attempt === generation) reconnectLater(); },
           (reason: unknown) => {
-            if (!current) return;
-            setError(errorMessage(reason));
-            reconnect = setTimeout(() => { void connect(); }, 250);
+            if (!current || attempt !== generation) return;
+            if (isCursorAhead(reason)) resetCursor();
+            else setError(errorMessage(reason));
+            reconnectLater();
           },
         );
       } catch (reason) {
-        if (!current) return;
-        setError(errorMessage(reason));
-        reconnect = setTimeout(() => { void connect(); }, 250);
+        if (!current || attempt !== generation) return;
+        if (isCursorAhead(reason)) resetCursor();
+        else setError(errorMessage(reason));
+        reconnectLater();
       }
     };
     void connect();
-    return () => { current = false; if (reconnect !== undefined) clearTimeout(reconnect); stream?.close(); };
+    return () => {
+      current = false;
+      generation += 1;
+      if (reconnect !== undefined) clearTimeout(reconnect);
+      replayController?.abort();
+      stream?.close();
+      client.forget?.();
+    };
   }, [client, suppliedRecords]);
 
   return <div className="logs-content">

@@ -36,7 +36,7 @@ it('renders producer-wide records newest first and filters producer, level, kind
   const view = logsViewFor({
     context: 'epoch-1',
     gap: undefined,
-    kind: 'build.diagnostic',
+    kind: 'build.failed.diagnostic',
     level: 'error',
     producer: 'diagnostic',
     records,
@@ -45,7 +45,8 @@ it('renders producer-wide records newest first and filters producer, level, kind
 
   expect(markup).toContain('#2');
   expect(markup).not.toContain('#1');
-  expect(markup).toContain('Details available');
+  expect(markup).toContain('<summary>Details</summary>');
+  expect(markup).toContain('error');
   expect(markup).not.toContain('Raw payload');
 });
 

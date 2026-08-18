@@ -12,11 +12,18 @@
 .logs-entry-sequence { color: #1e2938; font-weight: 750; }
 .logs-entry-timestamp { color: #596372; font: 12px/1.5 "SFMono-Regular", Consolas, "Liberation Mono", monospace; }
 .logs-entry-source { background: #eef2f9; border-radius: 3px; color: #2b3646; font-size: 12px; font-weight: 700; padding: 2px 8px; }
+.logs-entry-level { border-radius: 3px; font-size: 12px; font-weight: 700; padding: 2px 8px; text-transform: uppercase; }
+.logs-entry-level--debug { background: #edf0f4; color: #4f5866; }
+.logs-entry-level--info { background: #e7f4ec; color: #245a39; }
+.logs-entry-level--warning { background: #fff3d6; color: #7a5200; }
+.logs-entry-level--error { background: #fde9e7; color: #8b2923; }
 .logs-entry-kind { color: #4f5866; font-size: 13px; font-weight: 600; }
 .logs-entry-summary { color: #1e2938; font-size: 14px; margin: 8px 0 6px; overflow-wrap: anywhere; }
 .logs-entry-binding { display: flex; flex-wrap: wrap; gap: 16px; margin: 0 0 8px; }
 .logs-entry-binding .identifier { color: #596372; font: 12px/1.5 "SFMono-Regular", Consolas, "Liberation Mono", monospace; overflow-wrap: anywhere; }
-.logs-details-label { color: #596372; font-size: 12px; font-weight: 600; }
+.logs-details { color: #596372; font-size: 12px; }
+.logs-details summary { cursor: pointer; font-weight: 600; }
+.logs-details p { margin: 6px 0 0; }
 
 @media (max-width: 820px) {
   .logs-content { padding: 27px 20px 45px; }

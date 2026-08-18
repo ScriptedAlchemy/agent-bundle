@@ -20,6 +20,8 @@ export interface LogsView {
   readonly total: number;
 }
 
+export const maximumLogViewRecords = 2_048;
+
 const sorted = (values: readonly string[]): readonly string[] => Object.freeze([...new Set(values)].sort((left, right) => left.localeCompare(right)));
 
 /** Replay and stream records share a global sequence; live duplicates are ignored by sequence. */
@@ -28,14 +30,13 @@ export const mergeDevLogRecords = (
   incoming: readonly DevLogRecord[],
 ): readonly DevLogRecord[] => {
   const records = new Map<number, DevLogRecord>();
-  for (const record of [...existing, ...incoming]) {
-    const prior = records.get(record.sequence);
-    if (prior !== undefined && JSON.stringify(prior) !== JSON.stringify(record)) {
-      throw new Error('Conflicting Dev Log record received.');
-    }
-    records.set(record.sequence, record);
-  }
-  return Object.freeze([...records.values()].sort((left, right) => left.sequence - right.sequence));
+  for (const record of existing) records.set(record.sequence, record);
+  // A malformed duplicate is not allowed to throw from a React state updater.
+  // The validated first record wins, retaining deterministic cursor progress.
+  for (const record of incoming) if (!records.has(record.sequence)) records.set(record.sequence, record);
+  return Object.freeze([...records.values()]
+    .sort((left, right) => left.sequence - right.sequence)
+    .slice(-maximumLogViewRecords));
 };
 
 /** Derives the complete logs page from production records only; no playground session is involved. */
