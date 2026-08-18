@@ -599,10 +599,11 @@ it('filters host components and builds portable, Codex, and Claude target roots'
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-host-adapter-'));
   const outputRoot = join(root, 'dist');
   const skillRoot = join(root, 'skills', 'review');
+  const skillMarkdown = '---\nname: review\ndescription: Review code and explain findings.\n---\n# Review\n';
   await mkdir(join(skillRoot, 'references'), { recursive: true });
   await Promise.all([
     writeFile(join(root, 'agent-bundle.config.ts'), 'export default {};\n'),
-    writeFile(join(skillRoot, 'SKILL.md'), '# Review\n'),
+    writeFile(join(skillRoot, 'SKILL.md'), skillMarkdown),
     writeFile(join(skillRoot, 'references', 'guide.md'), '# Guide\n'),
   ]);
   const model: NormalizedPlugin = {
@@ -617,7 +618,7 @@ it('filters host components and builds portable, Codex, and Claude target roots'
       dir: skillRoot,
       provenance: { kind: 'conventional', sourcePath: join(skillRoot, 'SKILL.md') },
       resources: [
-        { bytes: 9, relativePath: 'SKILL.md', source: join(skillRoot, 'SKILL.md') },
+        { bytes: Buffer.byteLength(skillMarkdown), relativePath: 'SKILL.md', source: join(skillRoot, 'SKILL.md') },
         { bytes: 8, relativePath: 'references/guide.md', source: join(skillRoot, 'references', 'guide.md') },
       ],
       source: join(skillRoot, 'SKILL.md'),
