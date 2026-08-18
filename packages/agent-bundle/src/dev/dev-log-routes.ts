@@ -142,11 +142,11 @@ export class DevLogRoutes {
     let closed = false;
     let queuedBytes = 0;
     const queued: QueuedFrame[] = [];
-    let subscription: DevLogSubscription | undefined;
+    const stream = { subscription: undefined as DevLogSubscription | undefined };
     const close = (): void => {
       if (closed) return;
       closed = true;
-      subscription?.close();
+      stream.subscription?.close();
       queued.length = 0;
       queuedBytes = 0;
       this.#closeStreams.delete(close);
@@ -194,8 +194,8 @@ export class DevLogRoutes {
       'content-type': 'application/x-ndjson; charset=utf-8',
     });
     response.flushHeaders();
-    subscription = service.subscribe({ afterSequence }, deliver);
-    if (closed) subscription.close();
+    stream.subscription = service.subscribe({ afterSequence }, deliver);
+    if (closed) stream.subscription.close();
   }
 }
 

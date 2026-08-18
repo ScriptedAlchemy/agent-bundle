@@ -1,7 +1,7 @@
 import type { ProjectServiceLogger } from './project-service.ts';
 import type { ProjectEvent, ProjectEventMessage } from './types.ts';
-import type { ProjectEventHub, ProjectEventSubscription } from './events.ts';
-import type { DevLogInput, DevLogService, DevLogSink } from './dev-log-service.ts';
+import type { ProjectEventHub } from './events.ts';
+import type { DevLogInput, DevLogSink } from './dev-log-service.ts';
 import type { McpSessionTraceSink } from './mcp-session-service.ts';
 
 const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
@@ -112,9 +112,8 @@ const recordEvent = (sink: DevLogSink, message: ProjectEventMessage): void => {
 
 /** Attaches exactly one ordered ProjectEventHub observer; callers release it during server shutdown. */
 export const attachProjectEventLogs = (sink: DevLogSink, events: ProjectEventHub): (() => void) => {
-  let subscription: ProjectEventSubscription | undefined;
-  subscription = events.subscribe({ afterSequence: events.latestSequence }, (event) => recordEvent(sink, event));
-  return () => subscription?.unsubscribe();
+  const subscription = events.subscribe({ afterSequence: events.latestSequence }, (event) => recordEvent(sink, event));
+  return () => subscription.unsubscribe();
 };
 
 /** Drops raw protocol frames and progress notifications; only high-level trace data reaches Dev Logs. */

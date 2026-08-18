@@ -163,7 +163,7 @@ const redactAbsolutePaths = (value: string, roots: readonly string[]): string =>
       .replace(new RegExp(`file://${escaped}(?=$|[\\/])`, 'gu'), '<project>')
       .replace(new RegExp(`${escaped}(?=$|[\\/])`, 'gu'), '<project>');
   }
-  const absolutePath = /file:\/\/[^\s"'`<>]+|\\\\[^\s"'`<>]+|(?:^|[\s"'`(=:\[])[A-Za-z]:[\\/][^\s"'`<>]*|(?:^|[\s"'`(=:\[])[/](?![/])[^\s"'`<>]*/u;
+  const absolutePath = /file:\/\/[^\s"'`<>]+|\\\\[^\s"'`<>]+|(?:^|[\s"'`(=:[\]])[A-Za-z]:[\\/][^\s"'`<>]*|(?:^|[\s"'`(=:[\]])[/](?![/])[^\s"'`<>]*/u;
   return absolutePath.test(sanitized) ? redacted : sanitized;
 };
 
@@ -221,7 +221,6 @@ export class DevLogService {
   readonly #undelivered: DevLogRecord[] = [];
   #closePromise: Promise<void> | undefined;
   #closed = false;
-  #droppedThroughSequence = 0;
   #historyBytes = 0;
   #sequence = 0;
   #dispatching = false;
@@ -343,7 +342,6 @@ export class DevLogService {
       const dropped = this.#history.shift();
       if (dropped === undefined) break;
       this.#historyBytes -= byteLength(dropped);
-      this.#droppedThroughSequence = dropped.sequence;
     }
     for (const subscription of this.#subscriptions) {
       if (subscription.replaying) this.#enqueueReplay(subscription, record);
