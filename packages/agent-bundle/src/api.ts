@@ -435,6 +435,21 @@ const evalDiagnostic = (error: EvalServiceError): Diagnostic => {
   });
 };
 
+const evalRunStoreDiagnostic = (error: EvalRunStoreError): Diagnostic | undefined => {
+  if (error.code === 'EVAL_RUN_NOT_FOUND') {
+    return evalDiagnostic(new EvalServiceError('EVAL_RUN_NOT_FOUND', error.message));
+  }
+  if (error.code === 'EVAL_RUN_CORRUPT' || error.code === 'EVAL_RUN_RECORD_INVALID') {
+    return Object.freeze({
+      code: 'AB9007',
+      message: 'A persisted eval run is corrupt and cannot be compared.',
+      recovery: 'Repair or remove the corrupt persisted eval run, then compare two completed runs.',
+      severity: 'error',
+    });
+  }
+  return undefined;
+};
+
 const evalService = (options: ProjectOptions): EvalService => new EvalService({
   ...(options.configPath === undefined ? {} : { configPath: options.configPath }),
   ...(options.mode === undefined ? {} : { mode: options.mode }),
@@ -472,8 +487,9 @@ export const compareEvals = async (options: CompareEvalsOptions): Promise<EvalCo
     return await evalService(options).compare(options.baseRunId, options.candidateRunId);
   } catch (error) {
     if (error instanceof EvalServiceError) throw new DiagnosticError([evalDiagnostic(error)]);
-    if (error instanceof EvalRunStoreError && error.code === 'EVAL_RUN_NOT_FOUND') {
-      throw new DiagnosticError([evalDiagnostic(new EvalServiceError('EVAL_RUN_NOT_FOUND', error.message))]);
+    if (error instanceof EvalRunStoreError) {
+      const diagnostic = evalRunStoreDiagnostic(error);
+      if (diagnostic !== undefined) throw new DiagnosticError([diagnostic]);
     }
     throw error;
   }

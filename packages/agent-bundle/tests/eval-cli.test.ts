@@ -1,4 +1,4 @@
-import { access } from 'node:fs/promises';
+import { access, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { expect, it } from '@rstest/core';
@@ -25,7 +25,16 @@ const runCliWithOutput = async (args: readonly string[]): Promise<{
   return { code, stderr: stderr.join(''), stdout: stdout.join('') };
 };
 
-const persistComparisonRun = async (projectRoot: string, runId: string): Promise<string> => {
+interface PersistComparisonRunOptions {
+  readonly caseDigest?: string;
+  readonly outcomes?: readonly EvalTrialRecordInput['outcome'][];
+}
+
+const persistComparisonRun = async (
+  projectRoot: string,
+  runId: string,
+  options: PersistComparisonRunOptions = {},
+): Promise<string> => {
   const writer = await createEvalRun({
     artifact: {
       manifestPath: 'artifacts/target/agent-bundle.manifest.json',
@@ -46,28 +55,35 @@ const persistComparisonRun = async (projectRoot: string, runId: string): Promise
     scripts: { level: 'unavailable' as const, results: {} },
     skillActivation: { activated: [], level: 'unavailable' as const },
   };
+  const outcomes = options.outcomes ?? ['pass', 'pass', 'pass'];
   try {
-    for (let index = 1; index <= 3; index += 1) {
+    for (const [index, outcome] of outcomes.entries()) {
       await writer.writeTrial({
         assertions: [],
-        caseDigest: 'c'.repeat(64),
+        caseDigest: options.caseDigest ?? 'c'.repeat(64),
         caseId: 'reads-result',
         completedAt: '2026-08-17T12:00:01.000Z',
         durationMs: 1000,
         evidence,
         fixtureDigest: 'd'.repeat(64),
         host: 'portable',
-        id: `portable-${index}`,
+        id: `portable-${index + 1}`,
         model: 'deterministic',
-        outcome: 'pass',
+        outcome,
         prompt: 'Read the result.',
         rawArtifacts: [],
         startedAt: '2026-08-17T12:00:00.000Z',
         targetDigest: 'a'.repeat(64),
-        trialIndex: index - 1,
+        trialIndex: index,
       } satisfies EvalTrialRecordInput);
     }
-    await writer.finish({ cases: 1, fail: 0, inconclusive: 0, pass: 3, trials: 3 });
+    await writer.finish({
+      cases: 1,
+      fail: outcomes.filter((outcome) => outcome === 'fail').length,
+      inconclusive: outcomes.filter((outcome) => outcome === 'inconclusive').length,
+      pass: outcomes.filter((outcome) => outcome === 'pass').length,
+      trials: outcomes.length,
+    });
     return writer.record.id;
   } finally {
     await writer.close();
@@ -200,7 +216,7 @@ it('prints a configured semantic grader as a warning beside the completed run', 
   }
 }, 120_000);
 
-it('compares persisted runs through the public API and both CLI output modes', async () => {
+it('compares persisted runs with exactly two positional IDs through the public API and both CLI output modes', async () => {
   const project = await createProjectFixture();
   try {
     await seedEvalProject(project.root);
@@ -221,12 +237,10 @@ it('compares persisted runs through the public API and both CLI output modes', a
     const machine = await runCliWithOutput([
       'eval',
       'compare',
+      baselineRunId,
+      candidateRunId,
       '--root',
       project.root,
-      '--base',
-      baselineRunId,
-      '--candidate',
-      candidateRunId,
       '--json',
     ]);
     expect(machine.code).toBe(0);
@@ -239,16 +253,100 @@ it('compares persisted runs through the public API and both CLI output modes', a
     const human = await runCliWithOutput([
       'eval',
       'compare',
+      baselineRunId,
+      candidateRunId,
       '--root',
       project.root,
-      '--base',
-      baselineRunId,
-      '--candidate',
-      candidateRunId,
     ]);
     expect(human.code).toBe(0);
     expect(human.stdout).toContain(`Compared ${baselineRunId} to ${candidateRunId}`);
     expect(human.stdout).toContain('1 comparable, 0 non-comparable');
+
+    for (const args of [
+      ['eval', 'compare', baselineRunId, '--root', project.root],
+      ['eval', 'compare', baselineRunId, candidateRunId, 'extra', '--root', project.root],
+      ['eval', 'compare', '--base', baselineRunId, '--candidate', candidateRunId, '--root', project.root],
+    ]) {
+      const invalid = await runCliWithOutput(args);
+      expect(invalid.code).toBe(2);
+      expect(invalid.stdout).toBe('');
+      expect(invalid.stderr).toContain('error:');
+    }
+  } finally {
+    await removeProjectFixture(project.root);
+  }
+}, 120_000);
+
+it('renders server-produced comparison rows and mismatch causes in human output', async () => {
+  const project = await createProjectFixture();
+  try {
+    await seedEvalProject(project.root);
+    const pass = ['pass', 'pass', 'pass'] as const;
+    const fail = ['fail', 'fail', 'fail'] as const;
+    const passingBaseline = await persistComparisonRun(project.root, 'passing-baseline', { outcomes: pass });
+    const failingCandidate = await persistComparisonRun(project.root, 'failing-candidate', { outcomes: fail });
+    const failingBaseline = await persistComparisonRun(project.root, 'failing-baseline', { outcomes: fail });
+    const passingCandidate = await persistComparisonRun(project.root, 'passing-candidate', { outcomes: pass });
+    const mismatchedCandidate = await persistComparisonRun(project.root, 'mismatched-candidate', {
+      caseDigest: 'e'.repeat(64),
+      outcomes: pass,
+    });
+
+    const regression = await runCliWithOutput([
+      'eval', 'compare', passingBaseline, failingCandidate, '--root', project.root,
+    ]);
+    const improvement = await runCliWithOutput([
+      'eval', 'compare', failingBaseline, passingCandidate, '--root', project.root,
+    ]);
+    const mismatch = await runCliWithOutput([
+      'eval', 'compare', passingBaseline, mismatchedCandidate, '--root', project.root,
+    ]);
+
+    expect(regression.code).toBe(0);
+    expect(improvement.code).toBe(0);
+    expect(mismatch.code).toBe(0);
+    expect(regression.stdout).toContain('case reads-result / host portable / model deterministic');
+    expect(regression.stdout).toContain('baseline: pass; 3/3 passed, 0 failed, 0 inconclusive');
+    expect(regression.stdout).toContain('candidate: fail; 0/3 passed, 3 failed, 0 inconclusive');
+    expect(regression.stdout).toContain('delta: pass rate -1');
+    expect(improvement.stdout).toContain('delta: pass rate +1');
+    expect(regression.stdout).not.toBe(improvement.stdout);
+    expect(regression.stdout).toContain('1 comparable, 0 non-comparable');
+    expect(improvement.stdout).toContain('1 comparable, 0 non-comparable');
+    expect(mismatch.stdout).toContain('case reads-result / host portable / model deterministic');
+    expect(mismatch.stdout).toContain('not comparable: case-mismatch');
+    expect(mismatch.stdout).toContain('case definition');
+  } finally {
+    await removeProjectFixture(project.root);
+  }
+}, 120_000);
+
+it('maps corrupt persisted comparison runs to one actionable API and CLI diagnostic', async () => {
+  const project = await createProjectFixture();
+  try {
+    await seedEvalProject(project.root);
+    const candidateRunId = await persistComparisonRun(project.root, 'candidate');
+
+    for (const corruption of [
+      { contents: 'not JSON\n', file: 'run.json', runId: 'corrupt-run-document' },
+      { contents: 'not JSON\n', file: 'events.jsonl', runId: 'corrupt-event-log' },
+    ]) {
+      const baseRunId = await persistComparisonRun(project.root, corruption.runId);
+      await writeFile(join(project.root, '.agent-bundle', 'runs', baseRunId, corruption.file), corruption.contents);
+
+      await expect(compareEvals({ baseRunId, candidateRunId, root: project.root })).rejects.toMatchObject({
+        diagnostics: [{ code: 'AB9007', recovery: expect.any(String), severity: 'error' }],
+      });
+
+      const result = await runCliWithOutput([
+        'eval', 'compare', baseRunId, candidateRunId, '--root', project.root,
+      ]);
+      expect(result.code).toBe(1);
+      const diagnostics = JSON.parse(result.stderr) as readonly { readonly code: string; readonly recovery?: string }[];
+      expect(diagnostics).toMatchObject([{ code: 'AB9007', severity: 'error' }]);
+      expect(diagnostics[0]?.recovery).toContain('Repair');
+      expect(diagnostics[0]?.code).not.toBe('AB5000');
+    }
   } finally {
     await removeProjectFixture(project.root);
   }
@@ -264,12 +362,10 @@ it('reports invalid or missing comparison run ids with the existing eval diagnos
       const result = await runCliWithOutput([
         'eval',
         'compare',
+        baseRunId,
+        candidateRunId,
         '--root',
         project.root,
-        '--base',
-        baseRunId,
-        '--candidate',
-        candidateRunId,
       ]);
 
       expect(result.code).toBe(1);

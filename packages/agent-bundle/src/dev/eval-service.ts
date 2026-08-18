@@ -17,6 +17,7 @@ import {
   createEvalRun,
   listEvalRuns,
   readEvalRun,
+  readEvalRunEvents,
   readEvalTrials,
   type EvalRunRecord,
   type EvalTrialRecord,
@@ -221,6 +222,7 @@ export class EvalService {
     const config = await this.#config();
     const directory = this.#runDirectory(config, runId);
     const run = await readEvalRun(directory);
+    await readEvalRunEvents(directory);
     const trials = await readEvalTrials(directory);
     return Object.freeze({
       aggregates: aggregateEvalTrials(trials),

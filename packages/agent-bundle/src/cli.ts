@@ -18,6 +18,7 @@ import {
 } from './api.ts';
 import { DiagnosticError, type Diagnostic } from './core/diagnostics.ts';
 import { stableJson } from './core/digest.ts';
+import type { EvalComparisonDelta, EvalConditionMetrics } from './eval/compare.ts';
 
 declare const __AGENT_BUNDLE_VERSION__: string;
 
@@ -59,11 +60,6 @@ interface EvalCommandOptions extends SourceCommandOptions {
   readonly harness?: string;
   readonly suite?: readonly string[];
   readonly trials?: number;
-}
-
-interface EvalCompareCommandOptions extends SourceCommandOptions {
-  readonly base: string;
-  readonly candidate: string;
 }
 
 interface InspectCommandOptions {
@@ -223,6 +219,28 @@ const writeHumanEval = (output: Output, result: Awaited<ReturnType<typeof runEva
   ].join(''));
 };
 
+const signed = (value: number): string => `${value > 0 ? '+' : ''}${value}`;
+
+const formatComparisonMetrics = (metrics: EvalConditionMetrics): string => [
+  `${metrics.outcome}; ${metrics.passes}/${metrics.trials} passed`,
+  `${metrics.fail} failed`,
+  `${metrics.inconclusive} inconclusive`,
+  `${metrics.harnessFailures} harness failures`,
+  `${metrics.meanDurationMs}ms mean`,
+  ...(metrics.usage === undefined ? [] : [`${metrics.usage.totalTokens} tokens`]),
+].join(', ');
+
+const formatComparisonDelta = (delta: EvalComparisonDelta): string => [
+  `pass rate ${signed(delta.passRate)}`,
+  `passes ${signed(delta.passes)}`,
+  `mean duration ${signed(delta.meanDurationMs)}ms`,
+  `trials ${signed(delta.trials)}`,
+  ...(delta.reliability === undefined
+    ? []
+    : [`pass@k ${signed(delta.reliability.passAtK)}`, `pass^k ${signed(delta.reliability.passPowerK)}`]),
+  ...(delta.totalTokens === undefined ? [] : [`tokens ${signed(delta.totalTokens)}`]),
+].join(', ');
+
 const writeHumanEvalComparison = (output: Output, result: Awaited<ReturnType<typeof compareEvals>>): void => {
   const { summary } = result;
   output.write([
@@ -230,6 +248,16 @@ const writeHumanEvalComparison = (output: Output, result: Awaited<ReturnType<typ
     `${summary.comparable} comparable, ${summary.nonComparable} non-comparable `,
     `(${summary.reliability} reliability, ${summary.smoke} smoke)\n`,
   ].join(''));
+  for (const row of result.rows) {
+    output.write(`case ${row.caseId} / host ${row.host} / model ${row.model ?? 'unverified'}\n`);
+    if (row.baseline !== undefined) output.write(`  baseline: ${formatComparisonMetrics(row.baseline)}\n`);
+    if (row.candidate !== undefined) output.write(`  candidate: ${formatComparisonMetrics(row.candidate)}\n`);
+    if (row.comparable) {
+      output.write(`  delta: ${formatComparisonDelta(row.delta)}\n`);
+      continue;
+    }
+    for (const cause of row.causes) output.write(`  not comparable: ${cause.code}: ${cause.message}\n`);
+  }
 };
 
 const writeHumanValidate = (output: Output, result: Awaited<ReturnType<typeof validate>>): void => {
@@ -337,14 +365,14 @@ export const runCli = async (
   const evalCompareCommand = configureSourceOptions(
     evalCommand.command('compare').description('Compare two persisted eval runs'),
   )
-    .requiredOption('--base <runId>', 'Baseline eval run id')
-    .requiredOption('--candidate <runId>', 'Candidate eval run id');
-  evalCompareCommand.action(async (options: EvalCompareCommandOptions) => {
+    .argument('<baseline>', 'Baseline eval run id')
+    .argument('<candidate>', 'Candidate eval run id');
+  evalCompareCommand.action(async (baseline: string, candidate: string) => {
     const sourceOptions = evalCommand.opts<EvalCommandOptions>();
     const result = await compareEvals({
       ...projectOptions(sourceOptions),
-      baseRunId: options.base,
-      candidateRunId: options.candidate,
+      baseRunId: baseline,
+      candidateRunId: candidate,
     });
     if (sourceOptions.json === true) writeMachine(stdout, result);
     else writeHumanEvalComparison(stdout, result);
