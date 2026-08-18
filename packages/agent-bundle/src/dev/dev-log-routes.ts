@@ -225,7 +225,7 @@ export class DevLogRoutes {
     });
     response.flushHeaders();
     stream.subscription = service.subscribe({ afterSequence }, deliver);
-    if (closed) stream.subscription.close();
+    if (closed || stream.subscription.closed) void close();
   }
 }
 

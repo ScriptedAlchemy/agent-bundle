@@ -175,7 +175,7 @@ const isProducer = (value: unknown): value is DevLogProducer =>
 const isLevel = (value: unknown): value is DevLogLevel =>
   typeof value === 'string' && (devLogLevels as readonly string[]).includes(value);
 
-const devLogKinds = Object.freeze({
+export const devLogKinds = Object.freeze({
   build: Object.freeze(['artifact.available', 'build.failed', 'build.started'] as const),
   diagnostic: Object.freeze([
     'artifact.available.diagnostic', 'artifact.status.diagnostic', 'build.failed.diagnostic', 'build.started.diagnostic',
@@ -241,7 +241,7 @@ const sanitizeJson = (value: JsonValue, roots: readonly string[]): JsonValue => 
   if (value === null || typeof value === 'boolean' || typeof value === 'number') return value;
   if (Array.isArray(value)) return Object.freeze(value.map((entry) => sanitizeJson(entry, roots)));
   const entries = Object.entries(value);
-  if (entries.some(([key]) => isCredentialKey(key) || hasControlOrSeparators(key))) {
+  if (entries.some(([key]) => isCredentialKey(key) || redactEvalCredentialText(key) !== key || hasControlOrSeparators(key))) {
     throw new TypeError('Dev Log detail keys must be safe non-credential names.');
   }
   return Object.freeze(Object.fromEntries(entries.map(([key, entry]) => [key, sanitizeJson(entry, roots)])));
@@ -488,10 +488,11 @@ export class DevLogService {
         this.#undeliveredOverflowed = false;
         // The producer that overflowed the bounded reentrant queue is gone;
         // healthy subscribers catch up from retained immutable history.
-        for (const record of this.#history) {
-          for (const subscription of this.#subscriptions) {
-            if (!subscription.replaying) this.#deliver(subscription, record);
-          }
+        for (const subscription of this.#subscriptions) {
+          if (subscription.replaying) continue;
+          const gap = this.#gapFor(subscription.lastDeliveredSequence);
+          if (gap !== undefined) this.#deliver(subscription, gap);
+          for (const record of this.#history) this.#deliver(subscription, record);
         }
       }
     } finally {

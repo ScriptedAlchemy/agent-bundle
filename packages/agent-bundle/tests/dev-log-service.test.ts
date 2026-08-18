@@ -232,3 +232,43 @@ it('bounds a reentrant live flood by releasing only its offending subscriber', (
   expect(bad.closed).toBe(true);
   expect(healthy).toEqual([2, 3, 4, 5, 6, 7, 8, 9, 10]);
 });
+
+it('rejects nested credential-shaped detail keys before they reach the wire record', () => {
+  const service = new DevLogService({ projectRoot: '/work/project' });
+  const record = service.log({
+    details: { nested: { 'sk-proj-abcdefghijklmnopqrstuvwxyz': 'safe-looking value' } },
+    kind: 'project.load',
+    level: 'info',
+    producer: 'project',
+    summary: 'Loaded project.',
+  });
+  if (record === undefined) throw new Error('Expected a safe record.');
+
+  expect(record.details).toBe('[UNAVAILABLE]');
+  expect(JSON.stringify(record)).not.toContain('sk-proj-abcdefghijklmnopqrstuvwxyz');
+});
+
+it('reports a truthful recovery gap to healthy subscribers after a flood exceeds retained history', () => {
+  const service = new DevLogService({
+    projectRoot: '/work/project',
+    recordLimit: 3,
+    subscriberByteLimit: 4_096,
+    subscriberRecordLimit: 2,
+  });
+  service.log({ kind: 'project.load', level: 'info', producer: 'project', summary: 'one' });
+  service.subscribe({ afterSequence: 1 }, (message) => {
+    if ('sequence' in message && message.sequence === 2) {
+      for (let index = 0; index < 8; index += 1) {
+        service.log({ kind: 'project.prepared', level: 'info', producer: 'project', summary: `flood-${index}` });
+      }
+    }
+  });
+  const healthy: Array<number | 'gap'> = [];
+  service.subscribe({ afterSequence: 1 }, (message) => {
+    healthy.push('type' in message ? 'gap' : message.sequence);
+  });
+
+  service.log({ kind: 'project.invalid-source', level: 'error', producer: 'project', summary: 'two' });
+
+  expect(healthy).toEqual([2, 3, 4, 'gap', 8, 9, 10]);
+});

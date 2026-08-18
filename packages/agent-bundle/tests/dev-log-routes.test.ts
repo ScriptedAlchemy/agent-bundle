@@ -122,3 +122,19 @@ it('owns live stream shutdown and resolves readers without waiting for the foreg
     await started.close();
   }
 });
+
+it('terminates a stream promptly when an initial replay exceeds its bounded subscriber queue', async () => {
+  const service = new DevLogService({ projectRoot: '/work/project', subscriberRecordLimit: 1 });
+  service.log({ kind: 'project.load', level: 'info', producer: 'project', summary: 'one' });
+  service.log({ kind: 'project.prepared', level: 'info', producer: 'project', summary: 'two' });
+  const started = await startRoutes(service);
+  try {
+    const stream = await fetch(`${started.url}/api/logs/stream?after=0`, { headers: headers() });
+    const reader = stream.body?.getReader();
+    if (reader === undefined) throw new Error('Expected an NDJSON stream body.');
+    await expect(reader.read()).resolves.toMatchObject({ done: true });
+    expect(service.subscriptionCount).toBe(0);
+  } finally {
+    await started.close();
+  }
+});
