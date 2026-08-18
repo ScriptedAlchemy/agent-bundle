@@ -3,6 +3,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 
 import { parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
 import type { PlaygroundOperationRequest, PlaygroundRun } from './playground-contract.ts';
+import type { NativePlaygroundCatalog } from './native-playground-service.ts';
 import {
   PlaygroundServiceError,
   type DraftEvalCase,
@@ -50,7 +51,7 @@ type JsonObject = Record<string, unknown>;
 
 export interface PlaygroundRouteService {
   cancel(runId: string): Promise<boolean>;
-  catalog?(options?: { readonly epochId?: string }): Promise<unknown>;
+  catalog?(options?: { readonly epochId?: string }): Promise<NativePlaygroundCatalog>;
   export(sessionId: string): Promise<PlaygroundExport>;
   promoteToDraftEval(sessionId: string, rawEventRefs: readonly string[]): Promise<DraftEvalCase>;
   replay(sessionId: string, cursor?: PlaygroundReplayCursor): Promise<PlaygroundReplay>;

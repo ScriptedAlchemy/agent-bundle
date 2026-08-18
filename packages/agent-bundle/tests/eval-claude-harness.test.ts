@@ -58,6 +58,7 @@ const activatedStream = [
   '{"type":"system","subtype":"init","session_id":"<redacted>","apiKeySource":"none","plugins":[{"name":"review"}],"mcp_servers":[{"name":"project"}]}',
   '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Skill","input":{"skill":"review:review"}}],"usage":{"input_tokens":9,"output_tokens":3}}}',
   '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"mcp__project__status_report","input":{}}]}}',
+  '{"type":"system","hook_event_name":"SessionStart"}',
   '{"type":"result","subtype":"success","is_error":false,"duration_ms":42,"num_turns":2,"result":"Reviewed the change.","usage":{"input_tokens":9,"output_tokens":3}}',
   '',
 ].join('\n');
@@ -150,7 +151,11 @@ const runTrial = async (
     readonly configuredSemanticGrader?: Parameters<typeof runClaudeTrial>[0]['configuredSemanticGrader'];
     readonly graders?: Parameters<typeof runClaudeTrial>[0]['graders'];
     readonly recorded?: NativeClaudeProcessRequest[];
-    readonly onCompleted?: (result: Readonly<{ readonly response?: string; readonly workspacePath?: string }>) => Promise<void> | void;
+    readonly onCompleted?: (result: Readonly<{
+      readonly hookEvents?: readonly string[];
+      readonly response?: string;
+      readonly workspacePath?: string;
+    }>) => Promise<void> | void;
     readonly onProgress?: (phase: 'fixture.materialized' | 'host.started' | 'preflight') => Promise<void> | void;
     readonly run: (request: NativeClaudeProcessRequest, index: number) => NativeClaudeProcessResult;
     readonly semanticGrader?: Parameters<typeof runClaudeTrial>[0]['semanticGrader'];
@@ -242,7 +247,11 @@ it('runs a signed-in trial with an explicit plugin directory, never --bare, and 
 it('awaits only safe native progress phases and reports completion after Claude normalization', async () => {
   await withClaudeContext(defaultAssertions, async (context) => {
     const phases: string[] = [];
-    const completed: Readonly<{ readonly response?: string; readonly workspacePath?: string }>[] = [];
+    const completed: Readonly<{
+      readonly hookEvents?: readonly string[];
+      readonly response?: string;
+      readonly workspacePath?: string;
+    }>[] = [];
     await runTrial(context, {
       onCompleted: async (result) => { completed.push(result); },
       onProgress: async (phase) => { phases.push(phase); },
@@ -253,7 +262,7 @@ it('awaits only safe native progress phases and reports completion after Claude 
       },
     });
     expect(phases).toEqual(['preflight', 'fixture.materialized', 'host.started']);
-    expect(completed).toEqual([expect.objectContaining({ response: 'Reviewed the change.' })]);
+    expect(completed).toEqual([expect.objectContaining({ hookEvents: ['SessionStart'], response: 'Reviewed the change.' })]);
     expect(JSON.stringify(completed)).not.toContain('/private/host-stderr-not-progress');
   });
 });

@@ -35,6 +35,8 @@ const publishEpoch = async (store: EpochStore, epoch: ArtifactEpoch): Promise<vo
 const activeMetadataPathFor = (root: string): string => join(root, '.agent-bundle', 'active-epoch.json');
 const epochMetadataPathFor = (root: string, epochId: string): string =>
   join(root, '.agent-bundle', 'epochs', '.metadata', `${epochId}.json`);
+const nativeCatalogPathFor = (root: string, epochId: string): string =>
+  join(root, '.agent-bundle', 'epochs', '.metadata', 'native-playground', `${epochId}.json`);
 
 const settleMicrotasks = async (): Promise<void> => {
   for (let step = 0; step < 16; step += 1) await Promise.resolve();
@@ -460,8 +462,10 @@ it('aggregates sorted cleanup failures and retries retained metadata after a met
   const root = await mkdtemp(join(tmpdir(), 'agent bundle epoch cleanup aggregate '));
   const epochOneRoot = join(root, '.agent-bundle', 'epochs', 'epoch-1');
   const epochTwoMetadata = epochMetadataPathFor(root, 'epoch-2');
+  const epochThreeCatalog = nativeCatalogPathFor(root, 'epoch-3');
   const directoryFailure = new Error('epoch-1 directory removal failed');
   const metadataFailure = new Error('epoch-2 metadata removal failed');
+  const catalogFailure = new Error('epoch-3 native catalog removal failed');
   let preserveDuringPublication = true;
   let failuresEnabled = true;
 
@@ -470,13 +474,17 @@ it('aggregates sorted cleanup failures and retries retained metadata after a met
       preserveDuringPublication &&
       (path === epochOneRoot ||
         path === join(root, '.agent-bundle', 'epochs', 'epoch-2') ||
+        path === join(root, '.agent-bundle', 'epochs', 'epoch-3') ||
         path === epochMetadataPathFor(root, 'epoch-1') ||
-        path === epochTwoMetadata)
+        path === epochTwoMetadata ||
+        path === epochMetadataPathFor(root, 'epoch-3') ||
+        path === epochThreeCatalog)
     ) {
       return;
     }
     if (failuresEnabled && path === epochOneRoot) throw directoryFailure;
     if (failuresEnabled && path === epochTwoMetadata) throw metadataFailure;
+    if (failuresEnabled && path === epochThreeCatalog) throw catalogFailure;
     await rm(path, options);
   };
 
@@ -485,17 +493,21 @@ it('aggregates sorted cleanup failures and retries retained metadata after a met
     for (let sequence = 1; sequence <= 9; sequence += 1) {
       await publishEpoch(store, epochFor(root, `epoch-${sequence}`, `2026-08-14T12:00:0${sequence}.000Z`));
     }
+    await mkdir(join(root, '.agent-bundle', 'epochs', '.metadata', 'native-playground'), { recursive: true });
+    await writeFile(epochThreeCatalog, '{"epochId":"epoch-3"}\n');
     preserveDuringPublication = false;
 
     await expect(store.cleanup()).rejects.toMatchObject({
       failures: [
         { epochId: 'epoch-1', reason: directoryFailure, resource: 'directory' },
         { epochId: 'epoch-2', reason: metadataFailure, resource: 'metadata' },
+        { epochId: 'epoch-3', reason: catalogFailure, resource: 'native-playground-catalog' },
       ],
     });
     await expect(readFile(epochMetadataPathFor(root, 'epoch-1'), 'utf8')).resolves.toContain('epoch-1');
     await expect(readFile(join(root, '.agent-bundle', 'epochs', 'epoch-1', 'claude', 'plugin.json'), 'utf8')).resolves.toBe('epoch-1\n');
     await expect(readFile(epochTwoMetadata, 'utf8')).resolves.toContain('epoch-2');
+    await expect(readFile(epochThreeCatalog, 'utf8')).resolves.toContain('epoch-3');
     await expect(
       readFile(join(root, '.agent-bundle', 'epochs', 'epoch-2', 'claude', 'plugin.json'), 'utf8'),
     ).rejects.toMatchObject({ code: 'ENOENT' });
@@ -504,6 +516,7 @@ it('aggregates sorted cleanup failures and retries retained metadata after a met
     await store.cleanup();
     await expect(readFile(epochMetadataPathFor(root, 'epoch-1'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
     await expect(readFile(epochTwoMetadata, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(readFile(epochThreeCatalog, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
   } finally {
     await rm(root, { force: true, recursive: true });
   }

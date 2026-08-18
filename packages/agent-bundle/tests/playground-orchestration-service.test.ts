@@ -1,3 +1,7 @@
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import { expect, it } from '@rstest/core';
 
 import { ProjectEventHub, startForegroundServer } from '../src/dev/index.ts';
@@ -24,6 +28,7 @@ import type {
   PlaygroundSubscription,
   PlaygroundTraceEvent,
 } from '../src/services/playground-service.ts';
+import { PlaygroundService } from '../src/services/playground-service.ts';
 import type { ProjectStatus } from '../src/dev/types.ts';
 
 const activeEpoch = Object.freeze({
@@ -320,7 +325,13 @@ it('drains an admitted native catalog lookup before closing native and trace own
     native: {
       catalog: async () => {
         calls.push('catalog');
-        return Object.freeze({ cases: Object.freeze([]), epochId: nativeEpoch.id, fixtures: Object.freeze([]), modelPins: Object.freeze([]) });
+        return Object.freeze({
+          cases: Object.freeze([]),
+          epochId: nativeEpoch.id,
+          fixtures: Object.freeze([]),
+          modelPins: Object.freeze([]),
+          selections: Object.freeze([]),
+        });
       },
       close: async () => { calls.push('native-close'); },
       prepare: async () => { throw new Error('Unexpected native preparation.'); },
@@ -540,6 +551,155 @@ it('persists normalized native completion evidence before a cancelled terminal o
     'operation.cancelled',
   ]);
   expect(trace.finalized).toEqual({ status: 'cancelled', workspace: { changes: [] } });
+});
+
+it('exports and promotes the real durable response event reference from a native run', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-native-playground-durable-'));
+  const projectRoot = join(root, 'project');
+  await mkdir(projectRoot, { recursive: true });
+  const trace = new PlaygroundService({
+    projectId: 'native-durable-project',
+    projectRoot,
+    storageRoot: join(projectRoot, '.agent-bundle', 'playground'),
+  });
+  const nativeEpoch = Object.freeze({
+    configDigest: 'native-config-digest',
+    createdAt: '2026-08-18T00:00:00.000Z',
+    diagnostics: Object.freeze({ errors: 0, infos: 0, warnings: 0 }),
+    id: 'epoch-native-durable',
+    manifestPath: 'agent-bundle.manifest.json',
+    modelDigest: 'native-model-digest',
+    projectRevision: 'native-revision-digest',
+    targetDigests: Object.freeze({ codex: 'native-target-digest' }),
+  });
+  const reference = Object.freeze({ close: async () => undefined, epoch: nativeEpoch, root: '/epochs/native-durable' });
+  const service = new PlaygroundOrchestrationService({
+    coordinator: { status: currentStatus },
+    createRunId: () => 'run-native-durable',
+    createSessionId: () => 'session-native-durable',
+    epochStore: {
+      acquireActiveEpochReference: async () => reference,
+      acquireEpochReference: async () => { throw new Error('Expected active native epoch reference.'); },
+    },
+    native: {
+      close: async () => undefined,
+      prepare: async () => Object.freeze({ epochId: nativeEpoch.id, fixtureDigest: 'fixture-content-digest', host: 'codex', prompt: 'Review the fixture.', target: 'codex' }),
+      run: async () => Object.freeze({
+        events: Object.freeze([
+          Object.freeze({ kind: 'native.response', raw: Object.freeze({ text: 'Safe native response.' }), source: 'response' as const, summary: 'Recorded normalized native host response.' }),
+        ]),
+        response: 'Safe native response.',
+        status: 'passed' as const,
+      }),
+    },
+    trace,
+  } as unknown as ConstructorParameters<typeof PlaygroundOrchestrationService>[0]);
+  try {
+    const admitted = await service.run({
+      caseId: 'opaque-case-a', fixtureId: 'opaque-fixture-a', host: 'codex', modelPinId: 'opaque-model-a',
+      operation: 'native.prompt', prompt: 'Review the fixture.', target: 'codex',
+    });
+    await eventually(() => expect(trace.session(admitted.session.id)?.state).toBe('finalized'));
+    const exported = await service.export(admitted.session.id);
+    const response = exported.events.find((event) => event.kind === 'native.response');
+    expect(response).toMatchObject({ raw: { text: 'Safe native response.' }, rawEventRef: 'events.jsonl#2' });
+    expect(response?.rawEventRef).not.toContain('native-raw-');
+    await expect(service.promoteToDraftEval(admitted.session.id, [response!.rawEventRef])).resolves.toMatchObject({
+      assertions: [expect.objectContaining({ evidence: { rawEventRef: 'events.jsonl#2' } })],
+    });
+  } finally {
+    await service.close().catch(() => undefined);
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('publishes the Playground close promise before a native abort handler re-enters close', async () => {
+  const trace = new RecordingTraceStore();
+  const nativeEpoch = Object.freeze({
+    configDigest: 'native-config-digest',
+    createdAt: '2026-08-18T00:00:00.000Z',
+    diagnostics: Object.freeze({ errors: 0, infos: 0, warnings: 0 }),
+    id: 'epoch-native-reentrant-close',
+    manifestPath: 'agent-bundle.manifest.json',
+    modelDigest: 'native-model-digest',
+    projectRevision: 'native-revision-digest',
+    targetDigests: Object.freeze({ claude: 'native-target-digest' }),
+  });
+  const reference = Object.freeze({ close: async () => undefined, epoch: nativeEpoch, root: '/epochs/native-reentrant-close' });
+  let reentrant: Promise<void> | undefined;
+  const serviceOptions = {
+    coordinator: { status: currentStatus },
+    createRunId: () => 'run-native-reentrant-close',
+    createSessionId: () => 'session-native-reentrant-close',
+    epochStore: {
+      acquireActiveEpochReference: async () => reference,
+      acquireEpochReference: async () => { throw new Error('Expected active native epoch reference.'); },
+    },
+    native: {
+      close: async () => undefined,
+      prepare: async () => Object.freeze({ epochId: nativeEpoch.id, fixtureDigest: 'fixture-content-digest', host: 'claude', prompt: 'Review the fixture.', target: 'claude' }),
+      run: async (_prepared: unknown, options: { readonly signal: AbortSignal }) => new Promise((resolvePromise) => {
+        options.signal.addEventListener('abort', () => {
+          reentrant = service.close();
+          resolvePromise(Object.freeze({ events: Object.freeze([]), status: 'failed' as const }));
+        }, { once: true });
+      }),
+    },
+    trace,
+  } as unknown as ConstructorParameters<typeof PlaygroundOrchestrationService>[0];
+  const service = new PlaygroundOrchestrationService(serviceOptions);
+  await service.run({
+    caseId: 'opaque-case-a', fixtureId: 'opaque-fixture-a', host: 'claude', modelPinId: 'opaque-model-a',
+    operation: 'native.prompt', prompt: 'Review the fixture.', target: 'claude',
+  });
+  const closing = service.close();
+  const settled = await Promise.race([
+    closing.then(() => true, () => true),
+    new Promise<boolean>((resolvePromise) => { setTimeout(() => resolvePromise(false), 50); }),
+  ]);
+  expect(settled).toBe(true);
+  expect(reentrant).toBe(closing);
+});
+
+it('keeps a native prepare failure primary when releasing its epoch lease also fails', async () => {
+  const trace = new RecordingTraceStore();
+  const prepareFailure = new Error('native prepare failed');
+  const releaseFailure = new Error('epoch release failed');
+  const nativeEpoch = Object.freeze({
+    configDigest: 'native-config-digest',
+    createdAt: '2026-08-18T00:00:00.000Z',
+    diagnostics: Object.freeze({ errors: 0, infos: 0, warnings: 0 }),
+    id: 'epoch-native-prepare-failure',
+    manifestPath: 'agent-bundle.manifest.json',
+    modelDigest: 'native-model-digest',
+    projectRevision: 'native-revision-digest',
+    targetDigests: Object.freeze({ claude: 'native-target-digest' }),
+  });
+  const service = new PlaygroundOrchestrationService({
+    coordinator: { status: currentStatus },
+    createRunId: () => 'run-native-prepare-failure',
+    createSessionId: () => 'session-native-prepare-failure',
+    epochStore: {
+      acquireActiveEpochReference: async () => Object.freeze({ close: async () => { throw releaseFailure; }, epoch: nativeEpoch, root: '/epochs/native-prepare-failure' }),
+      acquireEpochReference: async () => { throw new Error('Expected active native epoch reference.'); },
+    },
+    native: {
+      close: async () => undefined,
+      prepare: async () => { throw prepareFailure; },
+      run: async () => Object.freeze({ events: Object.freeze([]), status: 'failed' as const }),
+    },
+    trace,
+  } as unknown as ConstructorParameters<typeof PlaygroundOrchestrationService>[0]);
+
+  let received: unknown;
+  try {
+    await service.run({
+      caseId: 'opaque-case-a', fixtureId: 'opaque-fixture-a', host: 'claude', modelPinId: 'opaque-model-a',
+      operation: 'native.prompt', prompt: 'Review the fixture.', target: 'claude',
+    });
+  } catch (error) { received = error; }
+  expect(received).toBeInstanceOf(AggregateError);
+  expect((received as AggregateError).errors).toEqual([prepareFailure, releaseFailure]);
 });
 
 it('gives cancellation precedence when a gated Skill ignores its AbortSignal', async () => {
