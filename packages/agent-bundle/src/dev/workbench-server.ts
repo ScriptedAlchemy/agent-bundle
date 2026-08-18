@@ -381,14 +381,22 @@ export interface DevServerRuntimeLifecycleResources {
   readonly runtime?: Closeable;
 }
 
+export interface DevServerLifecycleOptions {
+  readonly coordinator: Closeable;
+  readonly mcpApps?: Closeable;
+  readonly mcpSessions: Closeable;
+  readonly playground?: Closeable;
+  readonly runtimeResources?: DevServerRuntimeLifecycleResources;
+}
+
 /** Closes persistent MCP state alongside the coordinator, preserving all cleanup failures. */
-export const closeDevServerLifecycle = async (
-  coordinator: Closeable,
-  mcpApps: Closeable | undefined,
-  mcpSessions: Closeable,
-  runtimeResources?: DevServerRuntimeLifecycleResources,
-  playground?: Closeable,
-): Promise<void> => {
+export const closeDevServerLifecycle = async ({
+  coordinator,
+  mcpApps,
+  mcpSessions,
+  playground,
+  runtimeResources,
+}: DevServerLifecycleOptions): Promise<void> => {
   const appResults = mcpApps === undefined ? [] : await Promise.allSettled([mcpApps.close()]);
   const clientSurfaceResults = runtimeResources?.clientSurfaces === undefined
     ? []
@@ -445,7 +453,13 @@ const withMcpSessionLifecycle = (
 ): ForegroundCoordinator => Object.freeze({
   close: () => {
     clientSurfaces.beginClose();
-    return closeDevServerLifecycle(coordinator, mcpApps(), mcpSessions, { clientSurfaces, runtime }, playground);
+    return closeDevServerLifecycle({
+      coordinator,
+      mcpApps: mcpApps(),
+      mcpSessions,
+      playground,
+      runtimeResources: { clientSurfaces, runtime },
+    });
   },
   rebuild: (invalidation: Invalidation) => coordinator.rebuild(invalidation),
   start: async () => {

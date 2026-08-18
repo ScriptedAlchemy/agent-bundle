@@ -1583,13 +1583,12 @@ it('retains a playground cleanup failure alongside every other lifecycle resourc
   const playgroundFailure = new Error('Playground cleanup failed.');
   const closeOrder: string[] = [];
 
-  await expect(closeDevServerLifecycle(
-    { close: async () => { closeOrder.push('coordinator'); } },
-    { close: async () => { closeOrder.push('mcp-apps'); } },
-    { close: async () => { closeOrder.push('mcp-sessions'); } },
-    undefined,
-    { close: async () => { closeOrder.push('playground'); throw playgroundFailure; } },
-  )).rejects.toEqual(expect.objectContaining({
+  await expect(closeDevServerLifecycle({
+    coordinator: { close: async () => { closeOrder.push('coordinator'); } },
+    mcpApps: { close: async () => { closeOrder.push('mcp-apps'); } },
+    mcpSessions: { close: async () => { closeOrder.push('mcp-sessions'); } },
+    playground: { close: async () => { closeOrder.push('playground'); throw playgroundFailure; } },
+  })).rejects.toEqual(expect.objectContaining({
     failures: [{ error: playgroundFailure, resource: 'playground' }],
     name: DevServerLifecycleCloseError.name,
   }));
@@ -1602,11 +1601,10 @@ it('keeps MCP and coordinator cleanup failures structural while releasing both r
   let mcpCloseCalls = 0;
   let coordinatorCloseCalls = 0;
 
-  await expect(closeDevServerLifecycle(
-    { close: async () => { coordinatorCloseCalls += 1; throw coordinatorFailure; } },
-    undefined,
-    { close: async () => { mcpCloseCalls += 1; throw mcpFailure; } },
-  )).rejects.toEqual(expect.objectContaining({
+  await expect(closeDevServerLifecycle({
+    coordinator: { close: async () => { coordinatorCloseCalls += 1; throw coordinatorFailure; } },
+    mcpSessions: { close: async () => { mcpCloseCalls += 1; throw mcpFailure; } },
+  })).rejects.toEqual(expect.objectContaining({
     failures: [
       { error: mcpFailure, resource: 'mcp-sessions' },
       { error: coordinatorFailure, resource: 'coordinator' },
@@ -1623,11 +1621,11 @@ it('closes MCP Apps before sessions and the coordinator while retaining every cl
   const coordinatorFailure = new Error('Coordinator cleanup failed.');
   const closeOrder: string[] = [];
 
-  await expect(closeDevServerLifecycle(
-    { close: async () => { closeOrder.push('coordinator'); throw coordinatorFailure; } },
-    { close: async () => { closeOrder.push('mcp-apps'); throw appFailure; } },
-    { close: async () => { closeOrder.push('mcp-sessions'); throw mcpFailure; } },
-  )).rejects.toEqual(expect.objectContaining({
+  await expect(closeDevServerLifecycle({
+    coordinator: { close: async () => { closeOrder.push('coordinator'); throw coordinatorFailure; } },
+    mcpApps: { close: async () => { closeOrder.push('mcp-apps'); throw appFailure; } },
+    mcpSessions: { close: async () => { closeOrder.push('mcp-sessions'); throw mcpFailure; } },
+  })).rejects.toEqual(expect.objectContaining({
     failures: [
       { error: appFailure, resource: 'mcp-apps' },
       { error: mcpFailure, resource: 'mcp-sessions' },
@@ -1638,7 +1636,7 @@ it('closes MCP Apps before sessions and the coordinator while retaining every cl
   expect(closeOrder).toEqual(['mcp-apps', 'mcp-sessions', 'coordinator']);
 });
 
-it('closes both App lanes before runtime client surfaces without losing failures', async () => {
+it('closes every named lifecycle resource in ownership order without losing failures', async () => {
   const clientFailure = new Error('Runtime client surface cleanup failed.');
   const appFailure = new Error('MCP App cleanup failed.');
   const runtimeFailure = new Error('Runtime cleanup failed.');
@@ -1647,16 +1645,16 @@ it('closes both App lanes before runtime client surfaces without losing failures
   const coordinatorFailure = new Error('Coordinator cleanup failed.');
   const closeOrder: string[] = [];
 
-  await expect(closeDevServerLifecycle(
-    { close: async () => { closeOrder.push('coordinator'); throw coordinatorFailure; } },
-    { close: async () => { closeOrder.push('mcp-apps'); throw appFailure; } },
-    { close: async () => { closeOrder.push('mcp-sessions'); throw mcpFailure; } },
-    {
+  await expect(closeDevServerLifecycle({
+    coordinator: { close: async () => { closeOrder.push('coordinator'); throw coordinatorFailure; } },
+    mcpApps: { close: async () => { closeOrder.push('mcp-apps'); throw appFailure; } },
+    mcpSessions: { close: async () => { closeOrder.push('mcp-sessions'); throw mcpFailure; } },
+    runtimeResources: {
       clientSurfaces: { close: async () => { closeOrder.push('runtime-client-surfaces'); throw clientFailure; } },
       runtime: { close: async () => { closeOrder.push('runtime'); throw runtimeFailure; } },
     },
-    { close: async () => { closeOrder.push('playground'); throw playgroundFailure; } },
-  )).rejects.toEqual(expect.objectContaining({
+    playground: { close: async () => { closeOrder.push('playground'); throw playgroundFailure; } },
+  })).rejects.toEqual(expect.objectContaining({
     failures: [
       { error: appFailure, resource: 'mcp-apps' },
       { error: clientFailure, resource: 'runtime-client-surfaces' },

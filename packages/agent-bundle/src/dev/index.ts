@@ -102,6 +102,7 @@ export {
   DevServerLifecycleCloseError,
   DevServerStartError,
   type DevServerLifecycleCloseFailure,
+  type DevServerLifecycleOptions,
   type DevServerRuntimeLifecycleResources,
   type DevServerStartFailure,
   type DevServerSession,
