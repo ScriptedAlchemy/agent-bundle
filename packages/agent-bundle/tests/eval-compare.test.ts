@@ -317,6 +317,25 @@ it('withholds a token delta until both aligned sides record every gradable trial
   expect(row.delta.totalTokens).toBeUndefined();
 });
 
+it('withholds a token delta when complete aligned sides recorded different trial counts', () => {
+  const comparison = compareEvalRuns({
+    baseline: side('run-base', [
+      trial({ id: 'trial-0', trialIndex: 0, usage: { inputTokens: 100, outputTokens: 0 } }),
+      trial({ id: 'trial-1', trialIndex: 1, usage: { inputTokens: 100, outputTokens: 0 } }),
+    ]),
+    candidate: side('run-candidate', [
+      trial({ id: 'trial-0', trialIndex: 0, usage: { inputTokens: 200, outputTokens: 0 } }),
+      trial({ id: 'trial-1', trialIndex: 1, usage: { inputTokens: 200, outputTokens: 0 } }),
+      trial({ id: 'trial-2', trialIndex: 2, usage: { inputTokens: 200, outputTokens: 0 } }),
+    ]),
+  });
+
+  const row = comparable(comparison.rows[0]);
+  expect(row.baseline.usage).toMatchObject({ recordedTrials: 2, totalTokens: 200 });
+  expect(row.candidate.usage).toMatchObject({ recordedTrials: 3, totalTokens: 600 });
+  expect(row.delta.totalTokens).toBeUndefined();
+});
+
 it('rejects a sample size that cannot express pass@k', () => {
   const sides = {
     baseline: side('run-base', trials(['pass'])),

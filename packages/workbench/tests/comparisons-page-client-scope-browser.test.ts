@@ -49,17 +49,19 @@ const mountedComparisonsFixture = async (): Promise<{ readonly close: () => Prom
     "const metrics = (runId) => ({ durationMs: 1, evidence: 'smoke', fail: 0, harnessFailures: 0, inconclusive: 0, meanDurationMs: 1, outcome: 'pass', passRate: 1, passes: 1, provenance: { hostCliVersion: identifier, invocation: `explicit:${identifier}`, semanticGrader: `${identifier}@${identifier}/v1` }, runId, trials: 1, usage: { inputTokens: 1, outputTokens: 1, recordedTrials: 1, totalTokens: 2 } });",
     "const comparison = (id) => ({ baselineRunId: `${id}-base`, candidateRunId: `${id}-candidate`, rows: [{ baseline: metrics(`${id}-base`), candidate: metrics(`${id}-candidate`), caseId: id, comparable: true, delta: { meanDurationMs: 0, passRate: 0, passes: 0, totalTokens: 0, trials: 0 }, evidence: 'smoke', host: 'portable', model: 'deterministic', unverifiedFacets: [] }], sampleSize: 1, summary: { comparable: 1, nonComparable: 0, reliability: 0, smoke: 1 } });",
     "const runs = (id) => [run(`${id}-base`), run(`${id}-candidate`)];",
-    "let compareCallsA = 0; let lateA = deferred(); let signalA;",
+    "let compareCallsA = 0; let lateA = deferred(); let lateRunsB = deferred(); let signalA;",
     "const comparisonClientA = { compare: (_request, signal) => { compareCallsA += 1; signalA = signal; return compareCallsA === 1 ? Promise.resolve(comparison('settled-a')) : lateA.promise; }, forgetAuthentication: () => undefined };",
     "const evalClientA = { runs: () => Promise.resolve(runs('settled-a')) };",
     "const comparisonClientB = { compare: () => Promise.resolve(comparison('client-b')), forgetAuthentication: () => undefined };",
-    "const evalClientB = { runs: () => Promise.resolve(runs('client-b')) };",
+    "const evalClientB = { runs: () => lateRunsB.promise };",
     "const root = createRoot(document.getElementById('root'));",
     "const mount = (comparisonClient, evalClient) => flushSync(() => root.render(React.createElement(ComparisonsPage, { comparisonClient, evalClient })));",
     'mount(comparisonClientA, evalClientA);',
     'globalThis.__comparisonsClientScopeFixture = {',
+    '  replaceEvalClientOnly: () => mount(comparisonClientA, evalClientB),',
     '  replaceWithB: () => mount(comparisonClientB, evalClientB),',
     "  resolveLateA: () => lateA.resolve(comparison('late-a')),",
+    "  resolveRunsB: () => lateRunsB.resolve(runs('client-b')),",
     '  stats: () => ({ compareCallsA, signalAborted: signalA?.aborted === true }),',
     '};',
   ].join('\n'));
@@ -144,6 +146,7 @@ e2e('aborts and hides a stale comparison synchronously when its client is replac
       __comparisonsClientScopeFixture: { replaceWithB(): void };
     }).__comparisonsClientScopeFixture.replaceWithB());
     expect(await page.locator('body').innerText()).not.toContain('settled-a');
+    expect(await page.locator('option[value="settled-a-base"]').count()).toBe(0);
     expect(await page.evaluate(() => (globalThis as typeof globalThis & {
       __comparisonsClientScopeFixture: { stats(): { readonly signalAborted: boolean } };
     }).__comparisonsClientScopeFixture.stats().signalAborted)).toBe(true);
@@ -153,8 +156,46 @@ e2e('aborts and hides a stale comparison synchronously when its client is replac
     }).__comparisonsClientScopeFixture.resolveLateA());
     await page.waitForTimeout(25);
     expect(await page.locator('body').innerText()).not.toContain('late-a');
+    await page.evaluate(() => (globalThis as typeof globalThis & {
+      __comparisonsClientScopeFixture: { resolveRunsB(): void };
+    }).__comparisonsClientScopeFixture.resolveRunsB());
     await expect(page.locator('#comparison-base')).toHaveValue('client-b-base');
     expect(pageErrors).toEqual([]);
+  } finally {
+    await fixture.close();
+  }
+});
+
+e2e('aborts an active comparison when only its Eval client is replaced', { timeout: 45_000 }, async ({ page }) => {
+  const fixture = await mountedComparisonsFixture();
+  try {
+    await page.goto(fixture.url);
+    await page.waitForTimeout(50);
+    const compare = page.getByRole('button', { name: 'Compare runs' });
+    await expect(compare).toBeEnabled({ timeout: browserTimeout });
+    await compare.click();
+    await page.waitForTimeout(50);
+    await compare.click();
+    await page.waitForFunction(() => (globalThis as typeof globalThis & {
+      __comparisonsClientScopeFixture: { stats(): { readonly compareCallsA: number } };
+    }).__comparisonsClientScopeFixture.stats().compareCallsA === 2);
+    await page.evaluate(() => (globalThis as typeof globalThis & {
+      __comparisonsClientScopeFixture: { replaceEvalClientOnly(): void };
+    }).__comparisonsClientScopeFixture.replaceEvalClientOnly());
+    expect(await page.locator('option[value="settled-a-base"]').count()).toBe(0);
+    expect(await page.evaluate(() => (globalThis as typeof globalThis & {
+      __comparisonsClientScopeFixture: { stats(): { readonly signalAborted: boolean } };
+    }).__comparisonsClientScopeFixture.stats().signalAborted)).toBe(true);
+
+    await page.evaluate(() => (globalThis as typeof globalThis & {
+      __comparisonsClientScopeFixture: { resolveLateA(): void };
+    }).__comparisonsClientScopeFixture.resolveLateA());
+    await page.waitForTimeout(25);
+    expect(await page.locator('body').innerText()).not.toContain('late-a');
+    await page.evaluate(() => (globalThis as typeof globalThis & {
+      __comparisonsClientScopeFixture: { resolveRunsB(): void };
+    }).__comparisonsClientScopeFixture.resolveRunsB());
+    await expect(page.locator('#comparison-base')).toHaveValue('client-b-base');
   } finally {
     await fixture.close();
   }

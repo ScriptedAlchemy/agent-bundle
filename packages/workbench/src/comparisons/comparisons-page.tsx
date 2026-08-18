@@ -47,10 +47,15 @@ export const runComparison = async (
 
 type ComparisonsRequestKind = 'comparison' | 'runs';
 
+interface ComparisonsRequestOwner {
+  readonly comparisonClient: ComparisonClient;
+  readonly evalClient: EvalClient;
+}
+
 export interface ComparisonsRequest {
   readonly generation: number;
   readonly kind: ComparisonsRequestKind;
-  readonly owner?: object;
+  readonly owner?: ComparisonsRequestOwner;
   readonly signal: AbortSignal;
 }
 
@@ -59,7 +64,7 @@ export class ComparisonsRequestLifecycle {
   readonly #active = new Map<ComparisonsRequestKind, { readonly controller: AbortController; readonly request: ComparisonsRequest }>();
   #generation = 0;
 
-  begin(kind: ComparisonsRequestKind, owner?: object): ComparisonsRequest {
+  begin(kind: ComparisonsRequestKind, owner?: ComparisonsRequestOwner): ComparisonsRequest {
     this.#active.get(kind)?.controller.abort();
     const controller = new AbortController();
     const request = Object.freeze({ generation: this.#generation, kind, owner, signal: controller.signal });
@@ -77,11 +82,11 @@ export class ComparisonsRequestLifecycle {
     this.#active.clear();
   }
 
-  isCurrent(request: ComparisonsRequest, owner?: object): boolean {
+  isCurrent(request: ComparisonsRequest, owner?: ComparisonsRequestOwner): boolean {
     return request.generation === this.#generation &&
       !request.signal.aborted &&
       this.#active.get(request.kind)?.request === request &&
-      (owner === undefined || request.owner === owner);
+      (owner === undefined || request.owner?.comparisonClient === owner.comparisonClient && request.owner.evalClient === owner.evalClient);
   }
 }
 
@@ -191,19 +196,21 @@ export const ComparisonsPage = ({ comparisonClient, evalClient }: ComparisonsPag
   const [baseRunId, setBaseRunId] = useState<string>();
   const [busy, setBusy] = useState<ComparisonsRequest>();
   const [candidateRunId, setCandidateRunId] = useState<string>();
-  const [comparison, setComparison] = useState<{ readonly client: ComparisonClient; readonly result: EvalComparison }>();
-  const [error, setError] = useState<{ readonly client: ComparisonClient; readonly message: string }>();
-  const [runs, setRuns] = useState<readonly EvalRunRecord[]>([]);
+  const [comparison, setComparison] = useState<{ readonly comparisonClient: ComparisonClient; readonly evalClient: EvalClient; readonly result: EvalComparison }>();
+  const [error, setError] = useState<{ readonly comparisonClient: ComparisonClient; readonly evalClient: EvalClient; readonly message: string }>();
+  const [runs, setRuns] = useState<{ readonly evalClient: EvalClient; readonly records: readonly EvalRunRecord[] }>();
   const lifecycle = useRef<ComparisonsRequestLifecycle>(new ComparisonsRequestLifecycle()).current;
-  const currentClient = useRef(comparisonClient);
-  if (currentClient.current !== comparisonClient) {
-    currentClient.current = comparisonClient;
+  const currentClients = useRef({ comparisonClient, evalClient });
+  if (currentClients.current.comparisonClient !== comparisonClient || currentClients.current.evalClient !== evalClient) {
+    currentClients.current = { comparisonClient, evalClient };
     lifecycle.invalidate();
   }
-  const currentComparison = comparison?.client === comparisonClient ? comparison.result : undefined;
-  const currentError = error?.client === comparisonClient ? error.message : undefined;
-  const busyForClient = busy !== undefined && lifecycle.isCurrent(busy, comparisonClient);
-  const view = comparisonsViewFor({ baseRunId, candidateRunId, comparison: currentComparison, runs });
+  const currentComparison = comparison?.comparisonClient === comparisonClient && comparison.evalClient === evalClient ? comparison.result : undefined;
+  const currentError = error?.comparisonClient === comparisonClient && error.evalClient === evalClient ? error.message : undefined;
+  const currentRuns = runs?.evalClient === evalClient ? runs.records : [];
+  const currentOwner = { comparisonClient, evalClient };
+  const busyForClient = busy !== undefined && lifecycle.isCurrent(busy, currentOwner);
+  const view = comparisonsViewFor({ baseRunId, candidateRunId, comparison: currentComparison, runs: currentRuns });
 
   useEffect(() => () => lifecycle.invalidate(), [lifecycle]);
 
@@ -211,23 +218,24 @@ export const ComparisonsPage = ({ comparisonClient, evalClient }: ComparisonsPag
     setBusy(undefined);
     setComparison(undefined);
     setError(undefined);
-  }, [comparisonClient]);
+  }, [comparisonClient, evalClient]);
 
   useEffect(() => {
     lifecycle.invalidate();
-    const request = lifecycle.begin('runs', evalClient);
+    const owner = { comparisonClient, evalClient };
+    const request = lifecycle.begin('runs', owner);
     setError(undefined);
     void loadComparisonRuns(evalClient, request.signal).then(
       (next) => {
-        if (!lifecycle.isCurrent(request, evalClient)) return;
+        if (!lifecycle.isCurrent(request, owner)) return;
         lifecycle.complete(request);
-        setRuns(next);
+        setRuns({ evalClient, records: next });
       },
       (reason) => {
-        if (!lifecycle.isCurrent(request, evalClient)) return;
+        if (!lifecycle.isCurrent(request, owner)) return;
         lifecycle.complete(request);
-        setRuns([]);
-        setError({ client: comparisonClient, message: errorMessage(reason) });
+        setRuns(undefined);
+        setError({ comparisonClient, evalClient, message: errorMessage(reason) });
       },
     );
     return () => lifecycle.invalidate();
@@ -237,20 +245,21 @@ export const ComparisonsPage = ({ comparisonClient, evalClient }: ComparisonsPag
     const base = view.base?.key;
     const candidate = view.candidate?.key;
     if (base === undefined || candidate === undefined) return;
-    const request = lifecycle.begin('comparison', comparisonClient);
+    const owner = { comparisonClient, evalClient };
+    const request = lifecycle.begin('comparison', owner);
     setBusy(request);
     setError(undefined);
     setComparison(undefined);
     try {
       const result = await runComparison(comparisonClient, base, candidate, request.signal);
-      if (!lifecycle.isCurrent(request, comparisonClient)) return;
-      setComparison({ client: comparisonClient, result });
+      if (!lifecycle.isCurrent(request, owner)) return;
+      setComparison({ comparisonClient, evalClient, result });
     } catch (reason) {
-      if (lifecycle.isCurrent(request, comparisonClient) && !isAbortError(reason)) {
-        setError({ client: comparisonClient, message: errorMessage(reason) });
+      if (lifecycle.isCurrent(request, owner) && !isAbortError(reason)) {
+        setError({ comparisonClient, evalClient, message: errorMessage(reason) });
       }
     } finally {
-      if (lifecycle.isCurrent(request, comparisonClient)) {
+      if (lifecycle.isCurrent(request, owner)) {
         lifecycle.complete(request);
         setBusy(undefined);
       }

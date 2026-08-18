@@ -61,7 +61,7 @@ const conditionProvenanceSchema = z.strictObject({
 const comparisonUsageSchema = z.strictObject({
   inputTokens: nonnegativeIntegerSchema,
   outputTokens: nonnegativeIntegerSchema,
-  recordedTrials: nonnegativeIntegerSchema,
+  recordedTrials: nonnegativeIntegerSchema.refine((value) => value >= 1),
   totalTokens: nonnegativeIntegerSchema,
 }).refine((usage) => usage.totalTokens === usage.inputTokens + usage.outputTokens);
 const reliabilitySchema = z.strictObject({
@@ -84,7 +84,9 @@ const conditionMetricsSchema = z.strictObject({
   runId: z.string(),
   trials: nonnegativeIntegerSchema,
   usage: comparisonUsageSchema.optional(),
-}).refine((metrics) => metrics.passes + metrics.fail + metrics.inconclusive === metrics.trials);
+})
+  .refine((metrics) => metrics.passes + metrics.fail + metrics.inconclusive === metrics.trials)
+  .refine((metrics) => metrics.usage === undefined || metrics.usage.recordedTrials <= metrics.trials);
 const deltaSchema = z.strictObject({
   meanDurationMs: safeNumberSchema,
   passRate: safeNumberSchema,

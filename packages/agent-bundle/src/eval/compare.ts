@@ -395,7 +395,8 @@ const ungradableCause = (
 const deltaFor = (baseline: EvalConditionMetrics, candidate: EvalConditionMetrics): EvalComparisonDelta => {
   const baselineTotal = baseline.usage?.totalTokens;
   const candidateTotal = candidate.usage?.totalTokens;
-  const completeUsage = baseline.usage?.recordedTrials === baseline.trials && candidate.usage?.recordedTrials === candidate.trials;
+  const completeUsage = baseline.trials === candidate.trials &&
+    baseline.usage?.recordedTrials === baseline.trials && candidate.usage?.recordedTrials === candidate.trials;
   const reliability = baseline.reliability === undefined || candidate.reliability === undefined
     ? undefined
     : Object.freeze({
