@@ -82,7 +82,10 @@ it('runs a real deterministic eval through the packaged foreground server', asyn
     });
     expect(multiTrial.status).toBe(200);
     const second = await multiTrial.json() as { readonly run: EvalRunResult };
-    expect(second.run.trials.map((trial) => trial.id)).toEqual(['portable-1', 'portable-2']);
+    expect(second.run.trials.map((trial) => trial.id)).toEqual([
+      'reads-result--portable-1',
+      'reads-result--portable-2',
+    ]);
     expect(second.run.aggregates[0]).toMatchObject({ caseId: 'reads-result', pass: 2, trials: 2 });
 
     const runs = await fetch(`${server.url}/api/evals/runs`, { headers });

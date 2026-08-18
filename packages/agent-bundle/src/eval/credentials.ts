@@ -4,6 +4,10 @@ const providerCredentialPatterns = Object.freeze([
   /\bbearer[ \t]+[a-z0-9._~+/=-]{20,}\b/iu,
 ]);
 
+const credentialAssignmentPattern = /((?:["']?)(?:api[-_ ]?key|api[-_ ]?token|access[-_ ]?token|authorization|credential|password|secret|token)(?:["']?)\s*[:=]\s*)("[^"\r\n]*"|'[^'\r\n]*'|[^\s,;\r\n]+)/giu;
+
+const structuralEnvironmentKeys = new Set(['codex_home', 'home', 'path']);
+
 const credentialKeywords = Object.freeze([
   'authorization',
   'credential',
@@ -48,4 +52,25 @@ export const findCredentialConfiguration = (value: unknown, path = ''): string |
     }
   }
   return undefined;
+};
+
+/** Native eval children reuse signed-in CLI state, never credential-shaped environment variables. */
+export const withoutEvalCredentialEnvironment = (
+  environment: Readonly<NodeJS.ProcessEnv>,
+): NodeJS.ProcessEnv => Object.freeze(Object.fromEntries(
+  Object.entries(environment).filter(([name, value]) =>
+    structuralEnvironmentKeys.has(name.toLocaleLowerCase('en-US'))
+    || (!isCredentialKey(name) && (value === undefined || findCredentialConfiguration(value) === undefined))),
+));
+
+/** Raw process output remains useful evidence after known credential material is irreversibly removed. */
+export const redactEvalCredentialText = (value: string): string => {
+  let redacted = value.replace(credentialAssignmentPattern, (_match, prefix: string, assigned: string) => {
+    const quote = assigned[0] === '"' || assigned[0] === "'" ? assigned[0] : '';
+    return `${prefix}${quote}[REDACTED]${quote}`;
+  });
+  for (const pattern of providerCredentialPatterns) {
+    redacted = redacted.replace(new RegExp(pattern.source, `${pattern.flags}g`), '[REDACTED]');
+  }
+  return redacted;
 };

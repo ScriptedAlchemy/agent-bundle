@@ -66,6 +66,7 @@ const isRequestDiagnostic = (value: unknown): value is RequestDiagnostic =>
 
 /** Service messages name project paths, so each code keeps one fixed browser-facing sentence. */
 const serviceDiagnostics: Readonly<Record<EvalServiceErrorCode, RequestDiagnostic>> = Object.freeze({
+  EVAL_ARTIFACT_OUTSIDE_PROJECT: diagnostic('AB8084', 'The evaluated artifact must be inside the project.', 422),
   EVAL_HARNESS_UNSUPPORTED: diagnostic('AB8075', 'Model-backed eval harnesses are not supported yet.', 422),
   EVAL_RUN_NOT_FOUND: diagnostic('AB8074', 'Eval run was not found.', 404),
   EVAL_SELECTION_EMPTY: diagnostic('AB8076', 'No discovered eval suite or case matched this selection.', 422),

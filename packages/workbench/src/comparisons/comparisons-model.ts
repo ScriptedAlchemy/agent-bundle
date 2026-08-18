@@ -161,7 +161,7 @@ export const comparisonMatrixRowFor = (row: EvalComparisonRow): ComparisonMatrix
     evidenceNote: row.comparable && row.evidence === 'smoke' ? smokeNote : undefined,
     host: row.host,
     key: `${row.caseId}/${row.host}`,
-    model: row.comparable ? row.model : row.model ?? 'Not aligned',
+    model: row.model ?? 'Not aligned',
     reasons: row.comparable ? noReasons : Object.freeze(row.causes.map((cause) => Object.freeze({
       code: cause.code,
       detail: `${cause.baseline} → ${cause.candidate}`,

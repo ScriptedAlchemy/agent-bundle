@@ -204,7 +204,7 @@ it('runs a signed-in trial with an explicit plugin directory, never --bare, and 
       '--no-session-persistence',
       context.evalCase.prompt,
     ]);
-    expect(execution?.cwd).toBe(join(context.root, 'workspaces', 'direct-review', 'claude-1'));
+    expect(execution?.cwd).toBe(join(context.root, 'workspaces', 'direct-review--claude-1'));
 
     expect(trial.harnessFailure).toBeUndefined();
     expect(trial.pluginFailure).toBeUndefined();
@@ -215,11 +215,11 @@ it('runs a signed-in trial with an explicit plugin directory, never --bare, and 
     expect(trial.evidence.mcp).toEqual({ calls: [{ server: 'project', tool: 'status_report' }], level: 'observed' });
     expect(trial.evidence.process).toEqual({ exitCode: 0, level: 'observed', timedOut: false });
     expect(trial.assertions.every((assertion) => assertion.outcome === 'pass')).toBe(true);
-    expect(trial.rawArtifacts).toContain('artifacts/claude-1/stream.jsonl');
-    expect(trial.rawArtifacts).toContain('artifacts/claude-1/usage.json');
+    expect(trial.rawArtifacts).toContain('artifacts/direct-review--claude-1/stream.jsonl');
+    expect(trial.rawArtifacts).toContain('artifacts/direct-review--claude-1/usage.json');
 
     const usage = JSON.parse(
-      await readFile(join(context.writer.directory, 'artifacts', 'claude-1', 'usage.json'), 'utf8'),
+      await readFile(join(context.writer.directory, 'artifacts', 'direct-review--claude-1', 'usage.json'), 'utf8'),
     ) as Record<string, unknown>;
     expect(usage).toMatchObject({ inputTokens: 9, outputTokens: 3, turns: 2 });
   });

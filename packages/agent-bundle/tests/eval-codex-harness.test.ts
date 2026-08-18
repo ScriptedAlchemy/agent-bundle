@@ -186,7 +186,7 @@ it('runs an ephemeral Codex trial and records inferred activation beside observe
     expect(trial.evidence.skillActivation).toEqual({ activated: ['release-notes'], level: 'inferred' });
     expect(trial.evidence.mcp).toEqual({ calls: [{ server: 'project', tool: 'status' }], level: 'observed' });
     expect(trial.evidence.process).toEqual({ exitCode: 0, level: 'observed', timedOut: false });
-    expect(trial.rawArtifacts).toContain('artifacts/codex-1/events.jsonl');
+    expect(trial.rawArtifacts).toContain('artifacts/release-notes--codex-1/events.jsonl');
     expect(trial.assertions.every((assertion) => assertion.outcome === 'pass')).toBe(true);
   });
 });

@@ -4,7 +4,7 @@ import type { PortableConfigExtension } from './adapters/portable.ts';
 import type { AgentBundleConfig as CoreAgentBundleConfig } from './core/types.ts';
 
 export { defineConfig, pathTokens } from './core/types.ts';
-export { runEvals, startDevServer } from './api.ts';
+export { compareEvals, runEvals, startDevServer } from './api.ts';
 export {
   assembleArtifactManifest,
   parseArtifactManifest,
@@ -13,10 +13,12 @@ export {
 export type {
   EvalAssertionSummary,
   EvalCaseSummary,
+  EvalComparison,
   EvalRunResult,
   EvalRunSelection,
   EvalSuiteListing,
   EvalSuiteSummary,
+  CompareEvalsOptions,
   RunEvalsOptions,
 } from './api.ts';
 export type {

@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto';
 import { rm } from 'node:fs/promises';
 import { dirname, join, relative, resolve } from 'node:path';
 
@@ -17,7 +16,9 @@ import { createEvalHarness, runDeterministicTrial, type EvalHarness } from '../e
 import {
   createEvalRun,
   listEvalRuns,
+  mintRunId,
   readEvalRun,
+  readEvalRunEvents,
   readEvalTrials,
   type EvalRunRecord,
   type EvalTrialRecord,
@@ -120,15 +121,17 @@ const safeRunId = /^[a-z0-9][a-z0-9._-]*$/u;
 const serviceError = (code: EvalServiceErrorCode, message: string): EvalServiceError =>
   new EvalServiceError(code, message);
 
-const mintRunId = (createdAt: Date): string =>
-  `${createdAt.toISOString().replace(/[-:.]/gu, '').replace('T', 't').toLowerCase()}-${randomUUID().slice(0, 8)}`;
-
 const projectRelative = (projectRoot: string, path: string): string =>
   relative(projectRoot, path).replaceAll('\\', '/');
 
 /** Persist artifact identity without leaking or trusting an absolute host path. */
-const storedArtifactBinding = (projectRoot: string, artifact: PreparedEvalArtifact) => {
-  const manifestPath = projectRelative(projectRoot, artifact.binding.manifestPath);
+const storedArtifactBinding = (
+  projectRoot: string,
+  runDirectory: string,
+  artifact: PreparedEvalArtifact,
+) => {
+  const base = artifact.binding.source === 'run-owned' ? runDirectory : projectRoot;
+  const manifestPath = projectRelative(base, artifact.binding.manifestPath);
   const storedManifestPath = manifestPath !== '..' && !manifestPath.startsWith('../')
     ? manifestPath
     : `external/${digest({ targetDigests: artifact.binding.targetDigests })}.json`;
@@ -234,6 +237,7 @@ export class EvalService {
     const config = await this.#config();
     const directory = this.#runDirectory(config, runId);
     const run = await readEvalRun(directory);
+    await readEvalRunEvents(directory);
     const trials = await readEvalTrials(directory);
     return Object.freeze({
       aggregates: aggregateEvalTrials(trials),
@@ -292,7 +296,7 @@ export class EvalService {
     }
 
     const writer = await createEvalRun({
-      artifact: storedArtifactBinding(this.#projectRoot, artifact),
+      artifact: storedArtifactBinding(this.#projectRoot, directory, artifact),
       projectRoot: this.#projectRoot,
       provenance: Object.freeze({
         agentBundleVersion: artifact.manifest.producer.version,

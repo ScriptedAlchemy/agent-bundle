@@ -8,22 +8,27 @@ import {
   createNativeClaudeCommand,
 } from '../host-contracts/native-claude-contract.ts';
 import { resolveEvalAssertions } from './assertions.ts';
+import { redactEvalCredentialText, withoutEvalCredentialEnvironment } from './credentials.ts';
 import { normalizeClaudeStream, type ClaudeTraceEvent, type NormalizedClaudeStream } from './claude-stream.ts';
 import { runClaudePreflight, type ClaudePreflight } from './claude-preflight.ts';
 import { runClaudeStreamProcess, type ClaudeProcessOptions, type ClaudeProcessOutcome } from './claude-process.ts';
 import { EvalHarnessError } from './errors.ts';
 import { materializeEvalFixture, type EvalFixturePlan } from './fixtures.ts';
+import {
+  evalTrialId,
+  evidenceArtifactName,
+  pluginFailureFor,
+  trialOutcome,
+  unavailableEvidence,
+} from './harness.ts';
 import { evalScriptGraderSpec, runEvalGraders, type EvalGraderSpec } from './graders.ts';
 import type { PreparedEvalArtifact } from './artifact.ts';
 import type { EvalRunWriter, EvalTrialRecord } from './run-store.ts';
 import type {
   EvalAssertion,
-  EvalAssertionResult,
   EvalCase,
   EvalHarnessFailure,
-  EvalPluginFailure,
   EvalScriptOutcome,
-  EvalTrialEvidence,
 } from './types.ts';
 
 /** The grader sees the task, its assertions, the response, the trace, and the workspace: never a condition label. */
@@ -66,16 +71,8 @@ interface TrialGrading {
 }
 
 const claudeHost = 'claude';
-const evidenceArtifactName = 'evidence.json';
 const scriptOutcomes = Object.freeze(['fail', 'inconclusive', 'pass']);
 const pluginManifestSegments = Object.freeze(['.claude-plugin', 'plugin.json']);
-const unavailableEvidence: EvalTrialEvidence = Object.freeze({
-  mcp: Object.freeze({ calls: Object.freeze([]), level: 'unavailable' }),
-  process: Object.freeze({ level: 'unavailable', timedOut: false }),
-  scripts: Object.freeze({ level: 'unavailable', results: Object.freeze({}) }),
-  skillActivation: Object.freeze({ activated: Object.freeze([]), level: 'unavailable' }),
-});
-
 const harnessError = (
   code: ConstructorParameters<typeof EvalHarnessError>[0],
   message: string,
@@ -188,32 +185,6 @@ const traceFailureFor = (
     : undefined;
 };
 
-const pluginFailureFor = (
-  evidence: EvalTrialEvidence,
-  assertions: readonly EvalAssertionResult[],
-): EvalPluginFailure | undefined => {
-  if (evidence.process.timedOut) {
-    return Object.freeze({
-      code: 'EVAL_PLUGIN_TIMED_OUT',
-      message: 'The trial process did not exit before its timeout.',
-    });
-  }
-  if (evidence.process.exitCode !== undefined && evidence.process.exitCode !== 0) {
-    return Object.freeze({
-      code: 'EVAL_PLUGIN_PROCESS_FAILED',
-      message: `The trial process exited with code ${evidence.process.exitCode}.`,
-    });
-  }
-  return assertions.some((assertion) => assertion.outcome === 'fail')
-    ? Object.freeze({ code: 'EVAL_PLUGIN_ASSERTION_FAILED', message: 'At least one assertion failed.' })
-    : undefined;
-};
-
-const trialOutcome = (assertions: readonly EvalAssertionResult[]): EvalTrialRecord['outcome'] => {
-  if (assertions.some((assertion) => assertion.outcome === 'fail')) return 'fail';
-  return assertions.some((assertion) => assertion.outcome === 'inconclusive') ? 'inconclusive' : 'pass';
-};
-
 /**
  * Runs one model-backed trial through the installed, signed-in Claude Code CLI with an
  * explicit generated plugin directory. No provider API key is ever accepted or injected,
@@ -231,8 +202,10 @@ export const runClaudeTrial = async (options: RunClaudeTrialOptions): Promise<Ev
       `The prepared artifact has no target ${JSON.stringify(target)} for host ${JSON.stringify(host)}.`,
     );
   }
-  const trialId = `${host}-${options.trialIndex + 1}`;
-  const environment = createNativeClaudeChildEnvironment(options.environment ?? process.env);
+  const trialId = evalTrialId(options.evalCase.id, host, options.trialIndex);
+  const environment = createNativeClaudeChildEnvironment(
+    withoutEvalCredentialEnvironment(options.environment ?? process.env),
+  );
   const pluginDirectory = join(options.artifact.root, target);
   const processOptions: ClaudeProcessOptions = Object.freeze({
     ...(options.gracePeriodMs === undefined ? {} : { gracePeriodMs: options.gracePeriodMs }),
@@ -265,7 +238,7 @@ export const runClaudeTrial = async (options: RunClaudeTrialOptions): Promise<Ev
       );
     } else {
       const fixture = await materializeEvalFixture({
-        destination: join(options.workspaceRoot, options.evalCase.id, trialId),
+        destination: join(options.workspaceRoot, trialId),
         plan: options.fixturePlan,
       });
       workspacePath = fixture.path;
@@ -330,8 +303,8 @@ export const runClaudeTrial = async (options: RunClaudeTrialOptions): Promise<Ev
     ...(outcome === undefined
       ? []
       : [
-        await options.writer.writeArtifactFile(`${trialId}/stream.jsonl`, outcome.stdout),
-        await options.writer.writeArtifactFile(`${trialId}/stderr.log`, outcome.stderr),
+        await options.writer.writeArtifactFile(`${trialId}/stream.jsonl`, redactEvalCredentialText(outcome.stdout)),
+        await options.writer.writeArtifactFile(`${trialId}/stderr.log`, redactEvalCredentialText(outcome.stderr)),
       ]),
     ...(stream === undefined
       ? []
