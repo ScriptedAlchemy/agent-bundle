@@ -306,6 +306,57 @@ it('reports a stable cleanup failure when Windows taskkill cannot finish', async
   } finally { await emitted.close(); }
 }, 10_000);
 
+it('accepts an already-absent final Windows taskkill after successful TERM cleanup', async () => {
+  const emitted = await temporaryScript('setInterval(() => undefined, 1_000);\n');
+  let taskkillCalls = 0;
+  try {
+    const service = new ScriptPlaygroundService({
+      platform: 'win32',
+      resolveScript: async () => Object.freeze({
+        interpreter: Object.freeze({ args: Object.freeze([]), command: process.execPath }), name: 'review', path: emitted.path,
+      }),
+      taskkill: (arguments_) => {
+        taskkillCalls += 1;
+        if (taskkillCalls === 1) process.kill(Number(arguments_[1]), 'SIGTERM');
+        const command = new EventEmitter() as ChildProcess;
+        setImmediate(() => { command.emit('close', taskkillCalls === 1 ? 0 : 1); });
+        return command;
+      },
+      timeoutMs: 25,
+    });
+
+    await expect(service.run({
+      epochId: 'epoch-server-owned', scriptId: 'script:review', target: 'codex',
+    } as unknown as Parameters<typeof service.run>[0])).rejects.toMatchObject({ code: 'timeout' });
+    expect(taskkillCalls).toBe(2);
+  } finally { await emitted.close(); }
+}, 10_000);
+
+it('accepts forced Windows cleanup after a failed TERM taskkill', async () => {
+  const emitted = await temporaryScript('setInterval(() => undefined, 1_000);\n');
+  let taskkillCalls = 0;
+  try {
+    const service = new ScriptPlaygroundService({
+      platform: 'win32',
+      resolveScript: async () => Object.freeze({
+        interpreter: Object.freeze({ args: Object.freeze([]), command: process.execPath }), name: 'review', path: emitted.path,
+      }),
+      taskkill: () => {
+        taskkillCalls += 1;
+        const command = new EventEmitter() as ChildProcess;
+        setImmediate(() => { command.emit('close', taskkillCalls === 1 ? 1 : 0); });
+        return command;
+      },
+      timeoutMs: 25,
+    });
+
+    await expect(service.run({
+      epochId: 'epoch-server-owned', scriptId: 'script:review', target: 'codex',
+    } as unknown as Parameters<typeof service.run>[0])).rejects.toMatchObject({ code: 'timeout' });
+    expect(taskkillCalls).toBe(2);
+  } finally { await emitted.close(); }
+}, 10_000);
+
 it('bounds a stalled Windows taskkill attempt as a stable cleanup failure', async () => {
   const emitted = await temporaryScript('setInterval(() => undefined, 1_000);\n');
   try {

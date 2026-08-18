@@ -306,8 +306,8 @@ const execute = async (options: {
   const startFinalCleanup = (termCompleted: boolean): void => {
     void (async () => {
       const killCompleted = await options.processTree.terminate(child, 'SIGKILL');
-      const drained = killCompleted && await options.processTree.waitForExit(child);
-      finishFinalCleanup(termCompleted && killCompleted && drained);
+      const drained = await options.processTree.waitForExit(child);
+      finishFinalCleanup(drained && (termCompleted || killCompleted));
     })().catch(() => finishFinalCleanup(false));
   };
   const terminate = (failure: typeof termination): void => {
