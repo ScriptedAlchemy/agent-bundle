@@ -203,6 +203,31 @@ const nonempty = (value: unknown): value is string => typeof value === 'string' 
 const positive = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
 const nonnegative = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
 
+const foregroundAbortError = (): Error => Object.assign(new Error('The operation was aborted.'), { name: 'AbortError' });
+
+const awaitForegroundAuthentication = <Value>(
+  operation: Promise<Value>,
+  signal: AbortSignal | undefined,
+): Promise<Value> => {
+  if (signal === undefined) return operation;
+  if (signal.aborted) return Promise.reject(foregroundAbortError());
+  return new Promise<Value>((resolve, reject) => {
+    let settled = false;
+    const settle = (callback: () => void): void => {
+      if (settled) return;
+      settled = true;
+      signal.removeEventListener('abort', onAbort);
+      callback();
+    };
+    const onAbort = (): void => settle(() => reject(foregroundAbortError()));
+    signal.addEventListener('abort', onAbort, { once: true });
+    void operation.then(
+      (value) => settle(() => resolve(value)),
+      (error: unknown) => settle(() => reject(error)),
+    );
+  });
+};
+
 const runtimeVector = (value: unknown): RuntimeVector => {
   const vector = asRecord(value);
   if (
@@ -385,7 +410,9 @@ export class ForegroundRouteClient implements ForegroundRequestAuthority {
   async protectedRequest(path: string, init: RequestInit = {}): Promise<Response> {
     const route = foregroundRoute(path);
     const authentication = this.#authenticate();
-    const session = await authentication.promise;
+    const signal = init.signal ?? undefined;
+    const session = await awaitForegroundAuthentication(authentication.promise, signal);
+    if (signal?.aborted) throw foregroundAbortError();
     if (!this.#isAuthenticationCurrent(authentication)) {
       throw new ForegroundRouteClientError('AB8019', 'Foreground authentication was invalidated.', 401);
     }

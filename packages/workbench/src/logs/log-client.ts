@@ -9,7 +9,6 @@ import {
   snapshotStrictJsonValue,
   type JsonValue,
 } from '../../../agent-bundle/src/core/strict-json.ts';
-import { isCredentialKey, redactEvalCredentialText } from '../../../agent-bundle/src/eval/credentials.ts';
 import {
   ForegroundRouteClientError,
   type ForegroundRequestAuthority,
@@ -73,13 +72,14 @@ const hasExactKeys = (value: unknown, keys: readonly string[]): value is Readonl
 const hasControlOrSeparators = (value: string): boolean => [...value].some((character) =>
   character === '/' || character === '\\' || character <= '\u001F' || character === '\u007F');
 const safeProjectRelativePath = /<project>(?:\/[A-Za-z0-9._@+-]+)*/gu;
+const credentialLikeText = /(?:api[-_ ]?(?:key|token)|access[-_ ]?token|authorization|credential(?:s)?|password|secret|token)/iu;
 const isSafeWireText = (value: unknown, maximum = maximumLogFrameBytes): value is string => {
-  if (typeof value !== 'string' || value.length === 0 || value.length > maximum || redactEvalCredentialText(value) !== value) return false;
+  if (typeof value !== 'string' || value.length === 0 || value.length > maximum || credentialLikeText.test(value)) return false;
   const withoutProjectPaths = value.replace(safeProjectRelativePath, '');
   return !hasControlOrSeparators(withoutProjectPaths) && !/(?:file:|[A-Za-z]:|\\\\)/iu.test(withoutProjectPaths);
 };
 const isSafeDetailKey = (value: string): boolean =>
-  !isCredentialKey(value) && redactEvalCredentialText(value) === value && !hasControlOrSeparators(value);
+  !credentialLikeText.test(value) && !hasControlOrSeparators(value);
 const isSafeDetail = (value: JsonValue): boolean => {
   if (value === null || typeof value === 'boolean' || typeof value === 'number') return true;
   if (typeof value === 'string') return isSafeWireText(value);
@@ -155,12 +155,17 @@ const messageFor = (line: string): DevLogMessage => {
   throw invalid();
 };
 const isAbort = (error: unknown): boolean => error instanceof Error && error.name === 'AbortError';
-const knownDiagnosticCodes = new Set(['AB8090', 'AB8091', 'AB8092', 'AB8093']);
+const diagnosticMessages = new Map<string, string>([
+  ['AB8090', 'Dev Log route path is not valid.'],
+  ['AB8091', 'Dev Log cursor is not valid.'],
+  ['AB8092', 'Dev Log cursor is ahead of retained history.'],
+  ['AB8093', 'Dev Log route returned an invalid response.'],
+]);
 const diagnosticFor = (value: unknown): LogClientError => {
   if (!hasExactKeys(value, ['diagnostic']) || !hasExactKeys(value.diagnostic, ['code', 'message']) ||
-    typeof value.diagnostic.code !== 'string' || !knownDiagnosticCodes.has(value.diagnostic.code) ||
-    !isSafeWireText(value.diagnostic.message, maximumSummaryLength)) return invalid();
-  return new LogClientError(value.diagnostic.code, value.diagnostic.message);
+    typeof value.diagnostic.code !== 'string' || typeof value.diagnostic.message !== 'string') return invalid();
+  const message = diagnosticMessages.get(value.diagnostic.code);
+  return message === undefined ? invalid() : new LogClientError(value.diagnostic.code, message);
 };
 
 /** Same-origin cursor client for redacted production logs; it has no raw attachment API. */
@@ -253,6 +258,7 @@ export class LogClient {
       for (;;) {
         const chunk = await reader.read();
         if (chunk.done) break;
+        if (signal.aborted) return;
         let start = 0;
         for (let index = 0; index < chunk.value.byteLength; index += 1) {
           if (chunk.value[index] !== 0x0a) continue;

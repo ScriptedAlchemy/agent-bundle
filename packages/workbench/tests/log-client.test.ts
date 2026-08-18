@@ -113,3 +113,88 @@ it('accepts a live overflow gap relative to the last delivered record', async ()
   await expect(stream.done).resolves.toBeUndefined();
   expect(received).toEqual([2, 3, 4, 'gap', 8, 9, 10]);
 });
+
+it('maps hostile diagnostics and secret-shaped record text to the stable local error', async () => {
+  const hostileDiagnostic = clientFor(json({ diagnostic: { code: 'AB8093', message: 'fixture-secret' } }, 503));
+  await expect(hostileDiagnostic.replay()).rejects.toMatchObject({ code: 'AB8093', message: 'Dev Log route returned an invalid response.' });
+
+  for (const unsafe of [
+    { ...record, summary: 'fixture-secret' },
+    { ...record, context: { target: 'fixture-secret' } },
+    { ...record, details: { event: 'fixture-secret' } },
+    { ...record, kind: 'fixture-secret' },
+  ]) {
+    const client = clientFor(json({ replay: { cursor: { afterSequence: 1 }, records: [unsafe] } }));
+    await expect(client.replay()).rejects.toMatchObject({ code: 'AB8093', message: 'Dev Log route returned an invalid response.' });
+  }
+});
+
+it('accepts a fragmented initial gap and rejects a gap with the wrong live cursor', async () => {
+  const encoder = new TextEncoder();
+  const gap = Object.freeze({
+    earliestAvailableSequence: 3,
+    latestDroppedSequence: 2,
+    requestedAfterSequence: 0,
+    type: 'replay.gap' as const,
+  });
+  const third = Object.freeze({ ...record, sequence: 3 });
+  const illegal = clientFor(ndjson([encoder.encode(`${JSON.stringify(record)}\n${JSON.stringify(gap)}\n${JSON.stringify(third)}\n`)]));
+  await expect(illegal.stream({ afterSequence: 0, onMessage: () => undefined }).done).rejects.toMatchObject({ code: 'AB8093' });
+
+  const expected = `${JSON.stringify(gap)}\n${JSON.stringify(third)}\n`;
+  const received: unknown[] = [];
+  const fragmented = clientFor(ndjson([encoder.encode(expected.slice(0, 17)), encoder.encode(expected.slice(17))]));
+  await expect(fragmented.stream({ afterSequence: 0, onMessage: (message) => received.push(message) }).done).resolves.toBeUndefined();
+  expect(received).toEqual([gap, third]);
+});
+
+it('aborts replay while foreground session acquisition remains pending', async () => {
+  let replayRequests = 0;
+  let resolveSession: ((response: Response) => void) | undefined;
+  const client = new LogClient({
+    foreground: foreground(async (input) => {
+      if (String(input).includes('/api/project/session')) {
+        return await new Promise<Response>((resolve) => { resolveSession = resolve; });
+      }
+      replayRequests += 1;
+      return json({ replay: { cursor: { afterSequence: 1 }, records: [record] } });
+    }),
+  });
+  const controller = new AbortController();
+  const pending = client.replay(0, controller.signal);
+  if (resolveSession === undefined) throw new Error('Expected foreground session acquisition.');
+  controller.abort();
+  resolveSession(session());
+
+  await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+  await Promise.resolve();
+  await Promise.resolve();
+  expect(replayRequests).toBe(0);
+});
+
+it('does not deliver a stream callback after its shared generation signal aborts', async () => {
+  const encoder = new TextEncoder();
+  let markReading: (() => void) | undefined;
+  let release: (() => void) | undefined;
+  const reading = new Promise<void>((resolve) => { markReading = resolve; });
+  const response = new Response(new ReadableStream<Uint8Array>({
+    pull: () => markReading?.(),
+    start: (controller) => {
+      release = () => {
+        controller.enqueue(encoder.encode(`${JSON.stringify(record)}\n`));
+        controller.close();
+      };
+    },
+  }, { highWaterMark: 0 }));
+  const client = clientFor(response);
+  const controller = new AbortController();
+  const received: unknown[] = [];
+  const stream = client.stream({ afterSequence: 0, onMessage: (message) => received.push(message), signal: controller.signal });
+  await reading;
+  controller.abort();
+  if (release === undefined) throw new Error('Expected an open stream.');
+  release();
+
+  await expect(stream.done).resolves.toBeUndefined();
+  expect(received).toEqual([]);
+});
