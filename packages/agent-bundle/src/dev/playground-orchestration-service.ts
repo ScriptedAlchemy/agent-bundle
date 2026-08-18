@@ -365,7 +365,7 @@ export class PlaygroundOrchestrationService {
     signal.throwIfAborted();
     return Object.freeze({
       event: Object.freeze({ kind: 'script.completed', raw: Object.freeze({ result: evidenceValue(result), targetDigest }), source: 'script', summary: 'Ran emitted script.' }),
-      status: result.exitCode === 0 && result.cleanupFailures?.length === 0 ? 'passed' : 'failed',
+      status: result.exitCode === 0 && (result.cleanupFailures?.length ?? 0) === 0 ? 'passed' : 'failed',
     });
   }
 }

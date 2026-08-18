@@ -287,6 +287,22 @@ it('records the selected script id and its nonzero exit as durable failed script
   }));
 });
 
+it('records a clean zero-exit script as passed evidence', async () => {
+  const trace = new RecordingTraceStore();
+  const service = new PlaygroundOrchestrationService({
+    coordinator: { status: currentStatus }, createRunId: () => 'run-server-owned', createSessionId: () => 'session-server-owned',
+    epochStore: epochAuthority([]), scripts: { run: async () => Object.freeze({ exitCode: 0, script: 'review', stderr: '', stdout: 'reviewed' }) }, trace,
+  });
+
+  await service.run({ operation: 'script.run', scriptId: 'script:review', target: 'codex' } as unknown as Parameters<typeof service.run>[0]);
+  await eventually(() => expect(trace.finalized).toEqual({ status: 'passed' }));
+  expect(trace.appended).toContainEqual(expect.objectContaining({
+    kind: 'script.completed',
+    raw: { result: { exitCode: 0, script: 'review', stderr: '', stdout: 'reviewed' }, targetDigest: 'target-sha256' },
+    source: 'script',
+  }));
+});
+
 it('persists stable admitted script infrastructure failures with safe partial output', async () => {
   for (const code of ['timeout', 'output-limit', 'interpreter-unavailable'] as const) {
     const trace = new RecordingTraceStore();
