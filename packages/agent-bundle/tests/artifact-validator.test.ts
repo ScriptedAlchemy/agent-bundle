@@ -70,6 +70,7 @@ const manifestFor = (
       revision: digest({ inputs: sourceInputs }),
       sourceInputs,
     },
+    runtime: { node: '22.12.0' },
     targets,
     validation: {
       artifact: { status: 'passed' },

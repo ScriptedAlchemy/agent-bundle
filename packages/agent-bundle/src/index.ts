@@ -48,6 +48,7 @@ export type {
   ArtifactManifestFileKind,
   ArtifactManifestProducer,
   ArtifactManifestProject,
+  ArtifactManifestRuntime,
   ArtifactManifestSourceInput,
   ArtifactManifestTarget,
   ArtifactManifestTargetSchema,
@@ -74,6 +75,7 @@ export type {
   AgentBundleMcpApp,
   AgentBundleMcpConfig,
   AgentBundleMcpServer,
+  AgentBundleRuntimeConfig,
   ConfigFactory,
   ConfigFactoryContext,
   McpTransport,
@@ -81,6 +83,7 @@ export type {
   NormalizationTargetRegistry,
   NormalizedConfigExtension,
   NormalizedPlugin,
+  NormalizedRuntime,
 } from './core/types.ts';
 export type {
   ActiveArtifactStatus,

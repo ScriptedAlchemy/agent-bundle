@@ -13,6 +13,7 @@ export type {
   ArtifactManifestFileKind,
   ArtifactManifestProducer,
   ArtifactManifestProject,
+  ArtifactManifestRuntime,
   ArtifactManifestSourceInput,
   ArtifactManifestTarget,
   ArtifactManifestTargetSchema,

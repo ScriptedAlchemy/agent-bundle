@@ -1,5 +1,10 @@
 export { defineConfig } from '../core/types.ts';
-export type { AgentBundleConfig, ConfigFactory, ConfigFactoryContext } from '../core/types.ts';
+export type {
+  AgentBundleConfig,
+  AgentBundleRuntimeConfig,
+  ConfigFactory,
+  ConfigFactoryContext,
+} from '../core/types.ts';
 export { discoverProject } from './discover.ts';
 export type { DiscoveredProject } from './discover.ts';
 export { loadConfig } from './load.ts';
@@ -23,6 +28,7 @@ export type {
   NormalizedMcpApp,
   NormalizedMcpServer,
   NormalizedPlugin,
+  NormalizedRuntime,
   NormalizedScript,
   NormalizedSkill,
   NormalizedSkillResource,

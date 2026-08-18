@@ -61,6 +61,7 @@ const validManifest = (): ArtifactManifestV2 => ({
     revision: digest({ inputs: sourceInputs }),
     sourceInputs,
   },
+  runtime: { node: '22.12.0' },
   targets: [
     {
       adapterRevision: 'codex-adapter-v1',
@@ -169,6 +170,8 @@ it('rejects versions, object shapes, JSON containers, and duplicate JSON keys st
     ['missing producer key', (manifest) => { delete (manifest.producer as Record<string, unknown>).version; }],
     ['extra project key', (manifest) => { (manifest.project as Record<string, unknown>).extra = true; }],
     ['missing project key', (manifest) => { delete (manifest.project as Record<string, unknown>).modelDigest; }],
+    ['extra runtime key', (manifest) => { (manifest.runtime as Record<string, unknown>).extra = true; }],
+    ['missing runtime key', (manifest) => { delete (manifest.runtime as Record<string, unknown>).node; }],
     ['extra target key', (manifest) => { ((manifest.targets as Record<string, unknown>[])[0]!).extra = true; }],
     ['missing target key', (manifest) => { delete ((manifest.targets as Record<string, unknown>[])[0]!).observedVersion; }],
     ['extra schema key', (manifest) => { ((((manifest.targets as Record<string, unknown>[])[0]!).schemas as Record<string, unknown>[])[0]!).extra = true; }],
@@ -215,6 +218,10 @@ it('rejects malformed scalar fields, unsafe paths, and manifest self-listing', (
     [(manifest) => { manifest.files[0]!.path = '../file'; }, /path/i],
     [(manifest) => { manifest.files[0]!.path = 'folder\\file'; }, /path/i],
     [(manifest) => { manifest.files[0]!.path = 'agent-bundle.manifest.json'; }, /manifest/i],
+    [(manifest) => { manifest.runtime.node = ''; }, /non-empty string/i],
+    [(manifest) => { manifest.runtime.node = '22.12'; }, /major\.minor\.patch/i],
+    [(manifest) => { manifest.runtime.node = 'v22.12.0'; }, /major\.minor\.patch/i],
+    [(manifest) => { manifest.runtime.node = '22.012.0'; }, /major\.minor\.patch/i],
   ];
 
   for (const [mutate, message] of mutations) {
@@ -222,6 +229,15 @@ it('rejects malformed scalar fields, unsafe paths, and manifest self-listing', (
     mutate(manifest);
     expectInvalid(manifest, message);
   }
+});
+
+it('records a raised generated-executable runtime floor exactly as selected', () => {
+  const raised = clone();
+  raised.runtime.node = '24.3.1';
+
+  const manifest = parseArtifactManifest(canonicalBytes(raised));
+  expect(manifest.runtime).toEqual({ node: '24.3.1' });
+  expect(Object.isFrozen(manifest.runtime)).toBe(true);
 });
 
 it('rejects duplicate or unsorted arrays and cross-record inconsistencies', () => {

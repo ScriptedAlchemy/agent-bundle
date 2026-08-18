@@ -9,6 +9,10 @@ agent-bundle build --root . --output artifact
 
 Top-level `scripts` is a record of stable output names to an entry path or `{ entry, targets? }`. JavaScript/TypeScript entries bundle to `scripts/<name>.mjs`; `.sh`, `.bash`, and `.py` entries copy byte-for-byte while preserving source modes. The generated `agent-bundle.manifest.json` records file digests for stable artifact validation.
 
+Generated executables target Node.js 22.12 or newer by default. `runtime: { node: '24.0' }` raises
+that floor (it can never be lowered), and the selected floor is recorded as `runtime.node` in the
+artifact manifest.
+
 ## Commands
 
 | Command | Purpose |

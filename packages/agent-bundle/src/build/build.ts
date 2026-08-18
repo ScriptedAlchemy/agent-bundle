@@ -222,6 +222,7 @@ const manifestTargets = (
 
 const manifestFor = (options: {
   readonly files: ArtifactManifestV2['files'];
+  readonly model: NormalizedPlugin;
   readonly projectContext: ProjectContext;
   readonly registry: TargetRegistry;
   readonly targets: readonly StagedTarget[];
@@ -232,6 +233,7 @@ const manifestFor = (options: {
     files: options.files,
     producer: { name: 'agent-bundle', version: __AGENT_BUNDLE_VERSION__ },
     project: options.projectContext,
+    runtime: { ...options.model.runtime },
     targets,
     validation: {
       artifact: { status: 'passed' },
@@ -334,6 +336,7 @@ export const build = async (options: BuildOptions): Promise<BuildResult> => {
       artifactRoot: stageRoot,
       manifest: manifestFor({
         files,
+        model: options.model,
         projectContext: options.projectContext,
         registry: options.registry,
         targets: stagedTargets,

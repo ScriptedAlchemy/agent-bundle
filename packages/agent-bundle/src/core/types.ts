@@ -54,6 +54,12 @@ export interface AgentBundleDevConfig {
   agentApi?: boolean;
 }
 
+/** Runtime requirements for generated executable artifacts. */
+export interface AgentBundleRuntimeConfig {
+  /** Minimum supported Node.js version in `major.minor[.patch]` form. */
+  node: string;
+}
+
 /** Adapter-owned config is contributed by declaration merging, not compiler core. */
 // rslint-disable-next-line @typescript-eslint/no-empty-object-type -- declaration-merge extension point
 export interface AgentBundleConfigExtensions {}
@@ -81,6 +87,7 @@ export interface AgentBundleConfig extends AgentBundleConfigExtensions {
   marketplace?: boolean;
   mcp?: AgentBundleMcpConfig;
   plugin: AgentBundlePluginConfig;
+  runtime?: AgentBundleRuntimeConfig;
   scripts?: Readonly<Record<string, AgentBundleScriptInput>>;
   skills?: string[];
   targets?: string[];
@@ -195,6 +202,11 @@ export interface NormalizedConfigExtension {
   readonly value: unknown;
 }
 
+/** The selected runtime floor for generated executables, written to artifact metadata. */
+export interface NormalizedRuntime {
+  readonly node: string;
+}
+
 export interface NormalizedPlugin {
   readonly extensions: Readonly<Record<string, NormalizedConfigExtension>>;
   readonly hooks: readonly NormalizedHook[];
@@ -208,6 +220,8 @@ export interface NormalizedPlugin {
    */
   readonly mcpApps?: readonly NormalizedMcpApp[];
   readonly nativeHooks?: readonly NormalizedNativeHook[];
+  /** The generated-executable runtime floor selected during normalization. */
+  readonly runtime: NormalizedRuntime;
   readonly scripts: readonly NormalizedScript[];
   readonly skills: readonly NormalizedSkill[];
   readonly targets: readonly NormalizedTarget[];

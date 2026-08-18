@@ -52,6 +52,7 @@ export const writeFixtureManifest = async (options: {
         revision: digest({ inputs: fixtureSourceInputs }),
         sourceInputs: fixtureSourceInputs,
       },
+      runtime: { node: '22.12.0' },
       targets,
       validation: {
         artifact: { status: 'passed' },

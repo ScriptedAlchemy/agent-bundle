@@ -3,6 +3,12 @@ import { readFile } from 'node:fs/promises';
 import { basename, extname, relative, resolve } from 'node:path';
 
 import { digest } from '../core/digest.ts';
+import {
+  defaultGeneratedRuntime,
+  formatRuntimeVersion,
+  parseRuntimeVersion,
+  satisfiesGeneratedRuntimeFloor,
+} from '../core/runtime.ts';
 import { pathTokens } from '../core/types.ts';
 import type {
   AgentBundleHookEntry,
@@ -19,6 +25,7 @@ import type {
   NormalizedMcpServer,
   NormalizedNativeHook,
   NormalizedPlugin,
+  NormalizedRuntime,
   NormalizedScript,
   NormalizedSkill,
   SourceProvenance,
@@ -420,6 +427,15 @@ const skillProvenance = (
   sourcePath,
 });
 
+/** Selects the generated-executable floor; invalid raises fall back to the default the validator rejected. */
+const normalizeRuntime = (loaded: LoadedConfig): NormalizedRuntime => {
+  const node = loaded.config.runtime?.node;
+  const version = typeof node === 'string' ? parseRuntimeVersion(node) : undefined;
+  return version !== undefined && satisfiesGeneratedRuntimeFloor(version)
+    ? { node: formatRuntimeVersion(version) }
+    : defaultGeneratedRuntime;
+};
+
 export const normalizeProject = async (
   loaded: LoadedConfig,
   discovered: DiscoveredProject,
@@ -470,6 +486,7 @@ export const normalizeProject = async (
     mcpServers,
     hooks: normalizeHooks(loaded, targetNames, registry),
     ...(nativeHooks.length === 0 ? {} : { nativeHooks }),
+    runtime: normalizeRuntime(loaded),
     scripts,
     skills,
     targets: targetNames.map((name) => ({

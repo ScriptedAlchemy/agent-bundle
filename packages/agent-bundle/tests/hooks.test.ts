@@ -887,6 +887,7 @@ const hookModel = (root: string): NormalizedPlugin => ({
       tools: [],
     },
   ],
+  runtime: { node: '22.12.0' },
   mcpServers: [],
   metadata: {
     id: 'plugin:review-tools',

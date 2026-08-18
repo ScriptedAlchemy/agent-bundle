@@ -517,6 +517,44 @@ it('does not treat definitions as uses and reserves an external first definition
   expect(validateSource(loaded, { skills: [externalFirst] }, registry)).toEqual([]);
 });
 
+it('normalizes the generated-executable runtime floor and validates raises only', async () => {
+  const defaulted = await normalizeProject(
+    loadedProject({ plugin: { name: 'review-tools', version: '1.0.0' } }),
+    { skills: [] },
+    registry,
+  );
+  expect(defaulted.runtime).toEqual({ node: '22.12.0' });
+
+  const raised = await normalizeProject(
+    loadedProject({
+      plugin: { name: 'review-tools', version: '1.0.0' },
+      runtime: { node: '24.1' },
+    }),
+    { skills: [] },
+    registry,
+  );
+  expect(raised.runtime).toEqual({ node: '24.1.0' });
+
+  const diagnosticsFor = (runtime: unknown): readonly string[] =>
+    validateSource(
+      loadedProject({ plugin: { name: 'review-tools', version: '1.0.0' }, runtime } as AgentBundleConfig),
+      { skills: [] },
+      registry,
+    ).map(({ code }) => code);
+
+  expect(diagnosticsFor(undefined)).toEqual([]);
+  expect(diagnosticsFor({ node: '22.12' })).toEqual([]);
+  expect(diagnosticsFor({ node: '24.0.0' })).toEqual([]);
+  expect(diagnosticsFor('22.16')).toEqual(['AB4500']);
+  expect(diagnosticsFor({})).toEqual(['AB4500']);
+  expect(diagnosticsFor({ node: '24.0', extra: true })).toEqual(['AB4500']);
+  expect(diagnosticsFor({ node: 'v22.16' })).toEqual(['AB4501']);
+  expect(diagnosticsFor({ node: 'latest' })).toEqual(['AB4501']);
+  expect(diagnosticsFor({ node: `${'9'.repeat(400)}.0` })).toEqual(['AB4501']);
+  expect(diagnosticsFor({ node: '22.11.9' })).toEqual(['AB4502']);
+  expect(diagnosticsFor({ node: '20.19.0' })).toEqual(['AB4502']);
+});
+
 it('reports unknown targets, duplicate IDs, and portable output collisions', async () => {
   const root = '/workspace/project';
   const loaded = loadedProject({

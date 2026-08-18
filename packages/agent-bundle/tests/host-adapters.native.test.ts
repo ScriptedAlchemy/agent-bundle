@@ -34,6 +34,7 @@ nativeIt('accepts the emitted Claude marketplace under strict native validation'
       provenance: { kind: 'config', sourcePath: '/workspace/agent-bundle.config.ts' },
       version: '1.2.3',
     },
+    runtime: { node: '22.12.0' },
     scripts: [],
     skills: [],
     targets: [{

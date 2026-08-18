@@ -29,6 +29,11 @@ export interface ArtifactManifestProducer {
   readonly version: string;
 }
 
+/** The selected generated-executable runtime floor recorded with the artifact. */
+export interface ArtifactManifestRuntime {
+  readonly node: string;
+}
+
 export interface ArtifactManifestProject {
   readonly configDigest: string;
   readonly configPath: string;
@@ -71,6 +76,7 @@ export interface ArtifactManifestV2 {
   readonly files: readonly ArtifactManifestFile[];
   readonly producer: ArtifactManifestProducer;
   readonly project: ArtifactManifestProject;
+  readonly runtime: ArtifactManifestRuntime;
   readonly targets: readonly ArtifactManifestTarget[];
   readonly validation: ArtifactManifestValidation;
   readonly version: 2;
@@ -85,6 +91,7 @@ type JsonRecord = Record<string, unknown>;
 
 const manifestFileName = 'agent-bundle.manifest.json';
 const sha256Pattern = /^[a-f0-9]{64}$/u;
+const runtimeVersionPattern = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u;
 
 const fail = (message: string): never => {
   throw new TypeError(`Artifact manifest v2 ${message}`);
@@ -268,9 +275,19 @@ const parseValidation = (value: unknown): ArtifactManifestValidation => {
   };
 };
 
+const parseRuntime = (value: unknown): ArtifactManifestRuntime => {
+  const runtime = requireRecord(value, 'runtime');
+  requireExactKeys(runtime, 'runtime', ['node']);
+  const node = requireString(runtime.node, 'runtime.node');
+  if (!runtimeVersionPattern.test(node)) {
+    fail('runtime.node must be a canonical major.minor.patch version.');
+  }
+  return { node };
+};
+
 const validateManifest = (value: unknown): ArtifactManifestV2 => {
   const manifest = requireRecord(value, 'root');
-  requireExactKeys(manifest, 'root', ['agentSkills', 'files', 'producer', 'project', 'targets', 'validation', 'version']);
+  requireExactKeys(manifest, 'root', ['agentSkills', 'files', 'producer', 'project', 'runtime', 'targets', 'validation', 'version']);
   if (manifest.version !== 2) fail('version must be 2.');
 
   const agentSkills = requireRecord(manifest.agentSkills, 'agentSkills');
@@ -331,6 +348,7 @@ const validateManifest = (value: unknown): ArtifactManifestV2 => {
       revision,
       sourceInputs,
     },
+    runtime: parseRuntime(manifest.runtime),
     targets,
     validation,
     version: 2,

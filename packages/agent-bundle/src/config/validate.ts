@@ -3,6 +3,11 @@ import { basename, extname, isAbsolute, posix, relative, resolve, sep } from 'no
 
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { unsupportedMcpTransportDiagnostic } from '../core/mcp-transport.ts';
+import {
+  defaultGeneratedRuntime,
+  parseRuntimeVersion,
+  satisfiesGeneratedRuntimeFloor,
+} from '../core/runtime.ts';
 import type {
   AgentBundleHookEntry,
   AgentBundleHookInput,
@@ -550,6 +555,39 @@ const validateMcpServer = (
   return diagnostics;
 };
 
+const validateRuntime = (loaded: LoadedConfig): Diagnostic[] => {
+  const runtime = loaded.config.runtime;
+  if (runtime === undefined) return [];
+  if (!isRecord(runtime) || !isPlainRecord(runtime)) {
+    return [sourceDiagnostic('AB4500', 'Runtime configuration must be an object.', loaded.configPath)];
+  }
+  const keys = Object.keys(runtime);
+  if (keys.length !== 1 || keys[0] !== 'node') {
+    return [sourceDiagnostic(
+      'AB4500',
+      'Runtime configuration must contain exactly one node version.',
+      loaded.configPath,
+    )];
+  }
+  const node = runtime.node;
+  const version = typeof node === 'string' ? parseRuntimeVersion(node) : undefined;
+  if (version === undefined) {
+    return [sourceDiagnostic(
+      'AB4501',
+      'Runtime node floor must be a version string such as "22.16" or "24.0.0".',
+      loaded.configPath,
+    )];
+  }
+  if (!satisfiesGeneratedRuntimeFloor(version)) {
+    return [sourceDiagnostic(
+      'AB4502',
+      `Runtime node floor ${JSON.stringify(node)} cannot lower the Node.js ${defaultGeneratedRuntime.node} default.`,
+      loaded.configPath,
+    )];
+  }
+  return [];
+};
+
 const validateMcp = (loaded: LoadedConfig): Diagnostic[] => {
   const mcp = loaded.config.mcp;
   if (mcp === undefined) return [];
@@ -662,6 +700,7 @@ export const validateSource = (
 
   diagnostics.push(...validateHooks(loaded, registry));
   diagnostics.push(...validateMcp(loaded));
+  diagnostics.push(...validateRuntime(loaded));
   diagnostics.push(...validateScripts(loaded, registry));
 
   return diagnostics;

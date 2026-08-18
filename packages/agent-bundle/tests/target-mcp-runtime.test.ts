@@ -39,6 +39,7 @@ const model = (source: string): NormalizedPlugin => ({
     provenance: { kind: 'config', sourcePath: source },
     version: '1.0.0',
   },
+  runtime: { node: '22.12.0' },
   scripts: [],
   skills: [],
   targets: [{

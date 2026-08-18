@@ -39,6 +39,7 @@ const planningModel = (hooks: readonly NormalizedHook[]): NormalizedPlugin => ({
     provenance: { kind: 'config', sourcePath: '/workspace/agent-bundle.config.ts' },
     version: '1.0.0',
   },
+  runtime: { node: '22.12.0' },
   scripts: [],
   skills: [],
   targets: [{
@@ -146,6 +147,7 @@ it('builds adapter-owned native hook event, layout, and wrapper source', async (
       provenance: { kind: 'config', sourcePath: configPath },
       version: '1.0.0',
     },
+    runtime: { node: '22.12.0' },
     scripts: [],
     skills: [],
     targets: [{
