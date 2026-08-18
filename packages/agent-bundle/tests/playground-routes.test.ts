@@ -5,22 +5,19 @@ import { expect, it } from '@rstest/core';
 
 import {
   PlaygroundRoutes,
+  type PlaygroundOperationRequest,
+  type PlaygroundRun,
   type PlaygroundRouteService,
 } from '../src/dev/playground-routes.ts';
-import {
-  PlaygroundServiceError,
-  type DraftEvalCase,
-  type PlaygroundDurableOutcome,
-  type PlaygroundEventInput,
-  type PlaygroundExport,
-  type PlaygroundReplay,
-  type PlaygroundReplayCursor,
-  type PlaygroundSelectedAssertion,
-  type PlaygroundSession,
-  type PlaygroundSessionInput,
-  type PlaygroundSubscribeOptions,
-  type PlaygroundSubscription,
-  type PlaygroundTraceEvent,
+import type {
+  DraftEvalCase,
+  PlaygroundExport,
+  PlaygroundReplay,
+  PlaygroundReplayCursor,
+  PlaygroundSession,
+  PlaygroundSubscribeOptions,
+  PlaygroundSubscription,
+  PlaygroundTraceEvent,
 } from '../src/services/playground-service.ts';
 
 interface StartedRoutes {
@@ -48,10 +45,6 @@ const startRoutes = async (service?: PlaygroundRouteService): Promise<StartedRou
       if (!handled) response.writeHead(404).end();
     }).catch((error: unknown) => {
       const diagnostic = error as Partial<{ code: string; message: string; status: number }>;
-      if (response.headersSent || response.writableEnded) {
-        response.destroy();
-        return;
-      }
       response.writeHead(diagnostic.status ?? 500, { 'content-type': 'application/json; charset=utf-8' });
       response.end(JSON.stringify({ diagnostic: {
         code: diagnostic.code ?? 'AB8007',
@@ -74,41 +67,28 @@ const startRoutes = async (service?: PlaygroundRouteService): Promise<StartedRou
   });
 };
 
-const identity = Object.freeze({
-  epoch: Object.freeze({ digest: 'sha256-epoch', id: 'epoch-a' }),
-  fixture: Object.freeze({ digest: 'sha256-fixture', id: 'fixture-a' }),
-  invocation: Object.freeze({ intent: Object.freeze({ hook: 'hook-a' }), kind: 'hook' }),
-  target: Object.freeze({ digest: 'sha256-target', name: 'claude' }),
-  task: Object.freeze({ id: 'task-a', text: 'Run the session start hook.' }),
-});
-
 const sessionFixture: PlaygroundSession = Object.freeze({
   cleanupFailures: Object.freeze([]),
-  createdAt: '2026-08-15T00:00:00.000Z',
-  id: 'session-a',
-  identity,
-  state: 'open',
+  createdAt: '2026-08-18T00:00:00.000Z',
+  id: 'session-server-owned',
+  identity: Object.freeze({
+    epoch: Object.freeze({ digest: 'epoch-sha256', id: 'epoch-server-owned' }),
+    fixture: Object.freeze({ digest: 'fixture-sha256', id: 'workspace-server-owned' }),
+    invocation: Object.freeze({ intent: Object.freeze({ skillId: 'skill:review' }), kind: 'skill.inspect' }),
+    target: Object.freeze({ digest: 'target-sha256', name: 'codex' }),
+    task: Object.freeze({ id: 'run-server-owned', text: 'Inspect an emitted Skill.' }),
+  }),
+  state: 'finalized',
 });
 
 const eventFixture: PlaygroundTraceEvent = Object.freeze({
-  kind: 'hook.simulated',
-  raw: Object.freeze({ outcome: 'continue' }),
-  rawEventRef: 'session-a/1',
+  kind: 'skill.inspected',
+  raw: Object.freeze({ skillId: 'skill:review' }),
+  rawEventRef: 'events.jsonl#1',
   sequence: 1,
-  source: 'hook',
-  summary: 'Simulated the session start hook.',
-  timestamp: '2026-08-15T00:00:01.000Z',
-});
-
-const outcomeFixture: PlaygroundDurableOutcome = Object.freeze({
-  response: 'continued',
-  status: 'passed',
-});
-
-const finalizedFixture: PlaygroundSession = Object.freeze({
-  ...sessionFixture,
-  outcome: outcomeFixture,
-  state: 'finalized',
+  source: 'skill-evidence',
+  summary: 'Inspected emitted Skill.',
+  timestamp: '2026-08-18T00:00:01.000Z',
 });
 
 const replayFixture: PlaygroundReplay = Object.freeze({
@@ -120,274 +100,114 @@ const replayFixture: PlaygroundReplay = Object.freeze({
 const exportFixture: PlaygroundExport = Object.freeze({
   events: Object.freeze([eventFixture]),
   schemaVersion: 1,
-  session: finalizedFixture,
+  session: sessionFixture,
 });
 
 const draftFixture: DraftEvalCase = Object.freeze({
   assertions: Object.freeze([Object.freeze({
-    evidence: 'session-a/1',
-    expectation: 'continue',
-    id: 'assertion-a',
-    kind: 'hook-outcome',
+    evidence: Object.freeze({ rawEventRef: 'events.jsonl#1' }),
+    expectation: Object.freeze({ kind: 'skill.inspected', source: 'skill-evidence' }),
+    id: 'events.jsonl#1',
+    kind: 'playground-event',
   })]),
-  epoch: identity.epoch,
-  fixture: identity.fixture,
-  invocation: identity.invocation,
-  outcome: outcomeFixture,
+  epoch: sessionFixture.identity.epoch,
+  fixture: sessionFixture.identity.fixture,
+  invocation: sessionFixture.identity.invocation,
+  outcome: Object.freeze({ status: 'passed' }),
   schemaVersion: 1,
-  target: identity.target,
-  task: identity.task,
+  target: sessionFixture.identity.target,
+  task: sessionFixture.identity.task,
 });
 
 class RecordingService implements PlaygroundRouteService {
   readonly calls: unknown[] = [];
-  /** Persisted history the real service replays from inside subscribe(). */
-  backlog: readonly PlaygroundTraceEvent[] = [];
   readonly listeners = new Set<(event: PlaygroundTraceEvent) => void | Promise<void>>();
-  failure: Error | undefined;
-  missing = false;
-  subscriptionsClosed = 0;
 
-  async openSession(input: PlaygroundSessionInput): Promise<PlaygroundSession> {
-    this.calls.push({ input, kind: 'openSession' });
-    if (this.failure !== undefined) throw this.failure;
-    return sessionFixture;
+  async run(input: PlaygroundOperationRequest, options?: { readonly signal?: AbortSignal }): Promise<PlaygroundRun> {
+    this.calls.push({ input, kind: 'run', signal: options?.signal });
+    return Object.freeze({ id: 'run-server-owned', session: sessionFixture });
   }
 
-  async reopen(sessionId: string): Promise<PlaygroundSession> {
-    this.calls.push({ kind: 'reopen', sessionId });
-    if (this.failure !== undefined) throw this.failure;
-    return sessionFixture;
+  async cancel(runId: string): Promise<boolean> {
+    this.calls.push({ kind: 'cancel', runId });
+    return runId === 'run-server-owned';
   }
 
   session(sessionId: string): PlaygroundSession | undefined {
     this.calls.push({ kind: 'session', sessionId });
-    return this.missing ? undefined : sessionFixture;
-  }
-
-  async append(sessionId: string, input: PlaygroundEventInput): Promise<PlaygroundTraceEvent> {
-    this.calls.push({ input, kind: 'append', sessionId });
-    if (this.failure !== undefined) throw this.failure;
-    return eventFixture;
-  }
-
-  async finalize(sessionId: string, outcome: PlaygroundDurableOutcome): Promise<PlaygroundSession> {
-    this.calls.push({ kind: 'finalize', outcome, sessionId });
-    if (this.failure !== undefined) throw this.failure;
-    return finalizedFixture;
+    return sessionId === sessionFixture.id ? sessionFixture : undefined;
   }
 
   async replay(sessionId: string, cursor?: PlaygroundReplayCursor): Promise<PlaygroundReplay> {
     this.calls.push({ cursor, kind: 'replay', sessionId });
-    if (this.failure !== undefined) throw this.failure;
     return replayFixture;
   }
 
   async subscribe(sessionId: string, options: PlaygroundSubscribeOptions): Promise<PlaygroundSubscription> {
     this.calls.push({ afterSequence: options.afterSequence, kind: 'subscribe', sessionId });
-    if (this.failure !== undefined) throw this.failure;
-    for (const event of this.backlog) await options.onEvent(event);
     this.listeners.add(options.onEvent);
-    const record = { closed: false };
+    let closed = false;
     return Object.freeze({
-      close: async () => {
-        record.closed = true;
-        this.subscriptionsClosed += 1;
-        this.listeners.delete(options.onEvent);
-      },
-      get closed(): boolean {
-        return record.closed;
-      },
+      close: async () => { closed = true; this.listeners.delete(options.onEvent); },
+      get closed(): boolean { return closed; },
     });
   }
 
   async export(sessionId: string): Promise<PlaygroundExport> {
     this.calls.push({ kind: 'export', sessionId });
-    if (this.failure !== undefined) throw this.failure;
     return exportFixture;
   }
 
-  async promoteToDraftEval(sessionId: string, selectedAssertions: readonly PlaygroundSelectedAssertion[]): Promise<DraftEvalCase> {
-    this.calls.push({ kind: 'promoteToDraftEval', selectedAssertions, sessionId });
-    if (this.failure !== undefined) throw this.failure;
+  async promoteToDraftEval(sessionId: string, rawEventRefs: readonly string[]): Promise<DraftEvalCase> {
+    this.calls.push({ kind: 'promoteToDraftEval', rawEventRefs, sessionId });
     return draftFixture;
-  }
-
-  async closeSession(sessionId: string): Promise<void> {
-    this.calls.push({ kind: 'closeSession', sessionId });
-    if (this.failure !== undefined) throw this.failure;
-  }
-
-  emit(event: PlaygroundTraceEvent): void {
-    for (const listener of this.listeners) void listener(event);
   }
 }
 
 const headers = (): Readonly<Record<string, string>> => ({ 'x-agent-bundle-session': 'test-session-token' });
-
 const jsonHeaders = (): Readonly<Record<string, string>> => ({ ...headers(), 'content-type': 'application/json' });
-
 const post = (url: string, body: unknown): Promise<Response> => fetch(url, {
   body: JSON.stringify(body),
   headers: jsonHeaders(),
   method: 'POST',
 });
 
-const sessionBody = () => ({
-  epoch: { digest: 'sha256-epoch', id: 'epoch-a' },
-  fixture: { digest: 'sha256-fixture', id: 'fixture-a' },
-  invocation: { intent: { hook: 'hook-a' }, kind: 'hook' },
-  target: { digest: 'sha256-target', name: 'claude' },
-  task: { id: 'task-a', text: 'Run the session start hook.' },
-});
-
-const readLines = async (response: Response, count: number): Promise<readonly unknown[]> => {
-  const reader = response.body?.getReader();
-  if (reader === undefined) throw new Error('Expected a playground stream body.');
-  const decoder = new TextDecoder();
-  let buffered = '';
-  const lines: unknown[] = [];
-  while (lines.length < count) {
-    const next = await reader.read();
-    if (next.done) break;
-    buffered += decoder.decode(next.value, { stream: true });
-    const split = buffered.split('\n');
-    buffered = split.pop() ?? '';
-    for (const line of split) if (line.length > 0) lines.push(JSON.parse(line));
-  }
-  await reader.cancel();
-  return lines;
-};
-
-const eventually = async (predicate: () => boolean, milliseconds: number): Promise<void> => {
-  const deadline = Date.now() + milliseconds;
-  while (!predicate()) {
-    if (Date.now() >= deadline) throw new Error(`Timed out after ${milliseconds}ms.`);
-    await new Promise<void>((resolvePromise) => setTimeout(resolvePromise, 5));
-  }
-};
-
-it('opens, reads, reopens, and closes a playground session', async () => {
+it('admits only a typed server-owned operation and mints its run identity', async () => {
   const service = new RecordingService();
   const started = await startRoutes(service);
-
   try {
-    const opened = await post(`${started.url}/api/playground/sessions`, sessionBody());
-    expect(opened.status).toBe(200);
-    await expect(opened.json()).resolves.toEqual({ session: sessionFixture });
-
-    const read = await fetch(`${started.url}/api/playground/sessions/session-a`, { headers: headers() });
-    expect(read.status).toBe(200);
-    await expect(read.json()).resolves.toEqual({ session: sessionFixture });
-
-    const reopened = await post(`${started.url}/api/playground/sessions/session-a/reopen`, {});
-    expect(reopened.status).toBe(200);
-    await expect(reopened.json()).resolves.toEqual({ session: sessionFixture });
-
-    const closed = await fetch(`${started.url}/api/playground/sessions/session-a`, {
-      headers: headers(),
-      method: 'DELETE',
+    const response = await post(`${started.url}/api/playground/runs`, {
+      operation: 'skill.inspect',
+      skillId: 'skill:review',
+      target: 'codex',
     });
-    expect(closed.status).toBe(200);
-    await expect(closed.json()).resolves.toEqual({ closed: true });
-
-    expect(service.calls).toEqual([
-      { input: sessionBody(), kind: 'openSession' },
-      { kind: 'session', sessionId: 'session-a' },
-      { kind: 'reopen', sessionId: 'session-a' },
-      { kind: 'closeSession', sessionId: 'session-a' },
-    ]);
-  } finally {
-    await started.close();
-  }
-});
-
-it('accepts an explicit session id but never an unknown identity field', async () => {
-  const service = new RecordingService();
-  const started = await startRoutes(service);
-
-  try {
-    const opened = await post(`${started.url}/api/playground/sessions`, { ...sessionBody(), sessionId: 'session-a' });
-    expect(opened.status).toBe(200);
-    expect(service.calls).toEqual([{ input: { ...sessionBody(), sessionId: 'session-a' }, kind: 'openSession' }]);
-
-    const smuggled = [
-      { ...sessionBody(), command: '/tmp/untrusted' },
-      { ...sessionBody(), storageRoot: '/tmp/untrusted' },
-      { ...sessionBody(), projectId: 'other-project' },
-      { ...sessionBody(), target: { command: '/tmp/untrusted', name: 'claude' } },
-      { ...sessionBody(), invocation: { intent: { hook: 'hook-a' }, kind: 'hook', command: '/tmp/untrusted' } },
-    ];
-    for (const body of smuggled) {
-      const rejected = await post(`${started.url}/api/playground/sessions`, body);
-      expect(rejected.status).toBe(400);
-      await expect(rejected.json()).resolves.toEqual({
-        diagnostic: { code: 'AB8042', message: 'Playground request has an invalid shape.' },
-      });
-    }
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ run: { id: 'run-server-owned', session: sessionFixture } });
     expect(service.calls).toHaveLength(1);
+    expect(service.calls[0]).toMatchObject({
+      input: { operation: 'skill.inspect', skillId: 'skill:review', target: 'codex' },
+      kind: 'run',
+    });
   } finally {
     await started.close();
   }
 });
 
-it('appends trace events and finalizes a durable outcome', async () => {
+it('rejects forged epochs, browser evidence, outcomes, and executable fields before orchestration', async () => {
   const service = new RecordingService();
   const started = await startRoutes(service);
-
   try {
-    const appended = await post(`${started.url}/api/playground/sessions/session-a/events`, {
-      kind: 'hook.simulated',
-      raw: { outcome: 'continue' },
-      source: 'hook',
-      summary: 'Simulated the session start hook.',
-    });
-    expect(appended.status).toBe(200);
-    await expect(appended.json()).resolves.toEqual({ event: eventFixture });
-
-    const finalized = await post(`${started.url}/api/playground/sessions/session-a/finalize`, {
-      response: 'continued',
-      status: 'passed',
-    });
-    expect(finalized.status).toBe(200);
-    await expect(finalized.json()).resolves.toEqual({ session: finalizedFixture });
-
-    expect(service.calls).toEqual([
-      {
-        input: {
-          kind: 'hook.simulated',
-          raw: { outcome: 'continue' },
-          source: 'hook',
-          summary: 'Simulated the session start hook.',
-        },
-        kind: 'append',
-        sessionId: 'session-a',
-      },
-      { kind: 'finalize', outcome: { response: 'continued', status: 'passed' }, sessionId: 'session-a' },
-    ]);
-  } finally {
-    await started.close();
-  }
-});
-
-it('rejects trace events with an unknown source or a non-JSON payload', async () => {
-  const service = new RecordingService();
-  const started = await startRoutes(service);
-
-  try {
-    const bodies = [
-      { kind: 'hook.simulated', raw: {}, source: 'shell', summary: 'ok' },
-      { kind: 'hook.simulated', raw: {}, summary: 'ok' },
-      { kind: 'hook.simulated', source: 'hook', summary: 'ok' },
-      { kind: '', raw: {}, source: 'hook', summary: 'ok' },
-      { kind: 'hook.simulated', path: '/tmp/untrusted', raw: {}, source: 'hook', summary: 'ok' },
-    ];
-    for (const body of bodies) {
-      const rejected = await post(`${started.url}/api/playground/sessions/session-a/events`, body);
-      expect(rejected.status).toBe(400);
-      await expect(rejected.json()).resolves.toEqual({
-        diagnostic: { code: 'AB8042', message: 'Playground request has an invalid shape.' },
-      });
+    for (const body of [
+      { epochId: 'another-epoch', operation: 'skill.inspect', skillId: 'skill:review', target: 'codex' },
+      { operation: 'skill.inspect', raw: { forged: true }, skillId: 'skill:review', target: 'codex' },
+      { operation: 'skill.inspect', outcome: { status: 'passed' }, skillId: 'skill:review', target: 'codex' },
+      { command: '/bin/sh', operation: 'script.run', script: 'review.sh', target: 'codex' },
+      { cwd: '/tmp', operation: 'script.run', script: 'review.sh', target: 'codex' },
+      { env: { PATH: '/tmp' }, operation: 'script.run', script: 'review.sh', target: 'codex' },
+      { operation: 'script.run', path: '../../escape.sh', script: 'review.sh', target: 'codex' },
+    ]) {
+      const response = await post(`${started.url}/api/playground/runs`, body);
+      expect(response.status).toBe(400);
     }
     expect(service.calls).toEqual([]);
   } finally {
@@ -395,204 +215,74 @@ it('rejects trace events with an unknown source or a non-JSON payload', async ()
   }
 });
 
-it('replays from a cursor and exports the ordered trace', async () => {
+it('rejects retired browser-authored event, finalize, reopen, and session creation endpoints', async () => {
   const service = new RecordingService();
   const started = await startRoutes(service);
-
   try {
-    const replayed = await fetch(`${started.url}/api/playground/sessions/session-a/replay?after=0`, { headers: headers() });
-    expect(replayed.status).toBe(200);
-    await expect(replayed.json()).resolves.toEqual({ replay: replayFixture });
-
-    const exported = await fetch(`${started.url}/api/playground/sessions/session-a/export`, { headers: headers() });
-    expect(exported.status).toBe(200);
-    await expect(exported.json()).resolves.toEqual({ export: exportFixture });
-
-    const invalidCursor = await fetch(`${started.url}/api/playground/sessions/session-a/replay?after=-1`, { headers: headers() });
-    expect(invalidCursor.status).toBe(400);
-
-    expect(service.calls).toEqual([
-      { cursor: { afterSequence: 0 }, kind: 'replay', sessionId: 'session-a' },
-      { kind: 'export', sessionId: 'session-a' },
-    ]);
+    for (const [url, body] of [
+      [`${started.url}/api/playground/sessions`, { epoch: {}, fixture: {}, invocation: {}, target: {}, task: {} }],
+      [`${started.url}/api/playground/sessions/session-server-owned/events`, { kind: 'forged', raw: {}, source: 'response', summary: 'forged' }],
+      [`${started.url}/api/playground/sessions/session-server-owned/finalize`, { response: 'forged', status: 'passed' }],
+      [`${started.url}/api/playground/sessions/session-server-owned/reopen`, {}],
+    ] as const) {
+      const response = await post(url, body);
+      expect(response.status).toBe(404);
+    }
+    expect(service.calls).toEqual([]);
   } finally {
     await started.close();
   }
 });
 
-it('streams appended events and releases the subscription when the reader leaves', async () => {
+it('cancels the real server-owned run and only promotes persisted raw event references', async () => {
   const service = new RecordingService();
   const started = await startRoutes(service);
-
   try {
-    const stream = await fetch(`${started.url}/api/playground/sessions/session-a/stream?after=0`, { headers: headers() });
-    expect(stream.status).toBe(200);
-    await eventually(() => service.listeners.size === 1, 1_000);
-    service.emit(eventFixture);
-    await expect(readLines(stream, 1)).resolves.toEqual([eventFixture]);
-    await eventually(() => service.subscriptionsClosed === 1, 1_000);
-    expect(service.calls).toEqual([{ afterSequence: 0, kind: 'subscribe', sessionId: 'session-a' }]);
-  } finally {
-    await started.close();
-  }
-});
+    const cancelled = await post(`${started.url}/api/playground/runs/run-server-owned/cancel`, {});
+    expect(cancelled.status).toBe(200);
+    await expect(cancelled.json()).resolves.toEqual({ cancelled: true });
 
-it('delivers a persisted backlog before live events on a reconnecting stream', async () => {
-  const service = new RecordingService();
-  // The service replays history from inside subscribe(), before headers are committed.
-  service.backlog = [eventFixture];
-  const started = await startRoutes(service);
-
-  try {
-    const stream = await fetch(`${started.url}/api/playground/sessions/session-a/stream?after=0`, { headers: headers() });
-    expect(stream.status).toBe(200);
-    expect(stream.headers.get('content-type')).toBe('application/x-ndjson; charset=utf-8');
-    const later = Object.freeze({ ...eventFixture, rawEventRef: 'session-a/2', sequence: 2 });
-    await eventually(() => service.listeners.size === 1, 1_000);
-    service.emit(later);
-    await expect(readLines(stream, 2)).resolves.toEqual([eventFixture, later]);
-  } finally {
-    await started.close();
-  }
-});
-
-it('promotes a finalized session into the frozen draft eval shape', async () => {
-  const service = new RecordingService();
-  const started = await startRoutes(service);
-
-  try {
-    const promoted = await post(`${started.url}/api/playground/sessions/session-a/draft-eval`, {
-      assertions: [{ evidence: 'session-a/1', expectation: 'continue', id: 'assertion-a', kind: 'hook-outcome' }],
+    const promoted = await post(`${started.url}/api/playground/sessions/session-server-owned/draft-eval`, {
+      rawEventRefs: ['events.jsonl#1'],
     });
     expect(promoted.status).toBe(200);
     await expect(promoted.json()).resolves.toEqual({ draftEvalCase: draftFixture });
-    expect(service.calls).toEqual([{
-      kind: 'promoteToDraftEval',
-      selectedAssertions: [{ evidence: 'session-a/1', expectation: 'continue', id: 'assertion-a', kind: 'hook-outcome' }],
-      sessionId: 'session-a',
-    }]);
 
-    const rejected = await post(`${started.url}/api/playground/sessions/session-a/draft-eval`, {
-      assertions: [{ expectation: 'continue', id: 'assertion-a', kind: 'hook-outcome' }],
+    const forged = await post(`${started.url}/api/playground/sessions/session-server-owned/draft-eval`, {
+      assertions: [{ evidence: 'forged', expectation: 'passed', id: 'forged', kind: 'forged' }],
     });
-    expect(rejected.status).toBe(400);
+    expect(forged.status).toBe(400);
+    expect(service.calls).toEqual([
+      { kind: 'cancel', runId: 'run-server-owned' },
+      { kind: 'promoteToDraftEval', rawEventRefs: ['events.jsonl#1'], sessionId: 'session-server-owned' },
+    ]);
   } finally {
     await started.close();
   }
 });
 
-it('maps every playground service failure to its own actionable diagnostic', async () => {
-  const cases = [
-    { code: 'PLAYGROUND_SESSION_NOT_FOUND', diagnostic: 'AB8044', status: 404 },
-    { code: 'PLAYGROUND_SESSION_CONFLICT', diagnostic: 'AB8045', status: 409 },
-    { code: 'PLAYGROUND_SESSION_FINALIZED', diagnostic: 'AB8046', status: 409 },
-    { code: 'PLAYGROUND_SESSION_OWNED', diagnostic: 'AB8047', status: 409 },
-    { code: 'PLAYGROUND_CURSOR_AHEAD', diagnostic: 'AB8048', status: 409 },
-    { code: 'PLAYGROUND_CURSOR_INVALID', diagnostic: 'AB8049', status: 400 },
-    { code: 'PLAYGROUND_VALUE_INVALID', diagnostic: 'AB8050', status: 400 },
-    { code: 'PLAYGROUND_SESSION_ID_INVALID', diagnostic: 'AB8051', status: 400 },
-    { code: 'PLAYGROUND_OUTCOME_REQUIRED', diagnostic: 'AB8052', status: 400 },
-    { code: 'PLAYGROUND_CREDENTIAL_REJECTED', diagnostic: 'AB8053', status: 400 },
-    { code: 'PLAYGROUND_SERVICE_CLOSED', diagnostic: 'AB8054', status: 503 },
-    { code: 'PLAYGROUND_STORE_CORRUPT', diagnostic: 'AB8055', status: 500 },
-    { code: 'PLAYGROUND_ROOT_INVALID', diagnostic: 'AB8056', status: 500 },
-    { code: 'PLAYGROUND_PROJECT_MISMATCH', diagnostic: 'AB8057', status: 409 },
-  ] as const;
-
-  for (const entry of cases) {
-    const service = new RecordingService();
-    service.failure = new PlaygroundServiceError(entry.code, `/private/store/path leaked ${entry.code}`);
-    const started = await startRoutes(service);
-    try {
-      const failed = await post(`${started.url}/api/playground/sessions`, sessionBody());
-      expect(failed.status).toBe(entry.status);
-      const body = await failed.json() as { readonly diagnostic: { readonly code: string; readonly message: string } };
-      expect(body.diagnostic.code).toBe(entry.diagnostic);
-      expect(body.diagnostic.message).not.toContain('/private/store/path');
-    } finally {
-      await started.close();
-    }
-  }
-});
-
-it('reports an unknown session, an absent service, and a closed route group', async () => {
-  const absent = await startRoutes();
-  try {
-    const unavailable = await fetch(`${absent.url}/api/playground/sessions/session-a`, { headers: headers() });
-    expect(unavailable.status).toBe(404);
-    await expect(unavailable.json()).resolves.toEqual({
-      diagnostic: { code: 'AB8041', message: 'Playground routes are not available.' },
-    });
-  } finally {
-    await absent.close();
-  }
-
-  const service = new RecordingService();
-  service.missing = true;
-  const started = await startRoutes(service);
-  try {
-    const unknown = await fetch(`${started.url}/api/playground/sessions/session-a`, { headers: headers() });
-    expect(unknown.status).toBe(404);
-    await expect(unknown.json()).resolves.toEqual({
-      diagnostic: { code: 'AB8044', message: 'Playground session was not found.' },
-    });
-
-    started.routes.close();
-    const closed = await fetch(`${started.url}/api/playground/sessions/session-a`, { headers: headers() });
-    expect(closed.status).toBe(503);
-    await expect(closed.json()).resolves.toEqual({
-      diagnostic: { code: 'AB8041', message: 'Playground routes are not available.' },
-    });
-  } finally {
-    await started.close();
-  }
-});
-
-it('rejects unsupported playground methods, media types, and paths', async () => {
+it('replays, exports, and streams only server-owned trace evidence', async () => {
   const service = new RecordingService();
   const started = await startRoutes(service);
-
   try {
-    const method = await fetch(`${started.url}/api/playground/sessions`, { headers: headers() });
-    expect(method.status).toBe(405);
+    const replay = await fetch(`${started.url}/api/playground/sessions/session-server-owned/replay?after=0`, { headers: headers() });
+    expect(replay.status).toBe(200);
+    await expect(replay.json()).resolves.toEqual({ replay: replayFixture });
 
-    const media = await fetch(`${started.url}/api/playground/sessions`, {
-      body: 'epochId=epoch-a',
-      headers: { ...headers(), 'content-type': 'application/x-www-form-urlencoded' },
-      method: 'POST',
-    });
-    expect(media.status).toBe(415);
+    const exported = await fetch(`${started.url}/api/playground/sessions/session-server-owned/export`, { headers: headers() });
+    expect(exported.status).toBe(200);
+    await expect(exported.json()).resolves.toEqual({ export: exportFixture });
 
-    const unknownPath = await fetch(`${started.url}/api/playground/sessions/session-a/unknown`, { headers: headers() });
-    expect(unknownPath.status).toBe(400);
-    await expect(unknownPath.json()).resolves.toEqual({
-      diagnostic: { code: 'AB8040', message: 'Playground route path is not valid.' },
-    });
-
-    const traversal = await fetch(`${started.url}/api/playground/sessions/..%2Fescape`, { headers: headers() });
-    expect(traversal.status).toBe(400);
-
-    const unauthorized = await fetch(`${started.url}/api/playground/sessions/session-a`);
-    expect(unauthorized.status).toBe(403);
-
-    expect(service.calls).toEqual([]);
-  } finally {
-    await started.close();
-  }
-});
-
-it('closes every open stream when the route group closes', async () => {
-  const service = new RecordingService();
-  const started = await startRoutes(service);
-
-  try {
-    const stream = await fetch(`${started.url}/api/playground/sessions/session-a/stream?after=0`, { headers: headers() });
+    const stream = await fetch(`${started.url}/api/playground/sessions/session-server-owned/stream?after=0`, { headers: headers() });
     expect(stream.status).toBe(200);
-    await eventually(() => service.listeners.size === 1, 1_000);
-
-    started.routes.close();
-    await eventually(() => service.subscriptionsClosed === 1, 1_000);
-    await stream.body?.cancel();
+    const listener = [...service.listeners][0];
+    if (listener === undefined) throw new Error('Expected the route to register a trace listener.');
+    await listener(eventFixture);
+    const reader = stream.body?.getReader();
+    if (reader === undefined) throw new Error('Expected a trace stream body.');
+    const frame = await reader.read();
+    expect(new TextDecoder().decode(frame.value)).toBe(`${JSON.stringify(eventFixture)}\n`);
+    await reader.cancel();
   } finally {
     await started.close();
   }
@@ -603,11 +293,11 @@ it('reports its own larger body limit rather than reusing the 64 KiB wire code',
   const started = await startRoutes(service);
 
   try {
-    const oversized = await post(`${started.url}/api/playground/sessions/session-a/events`, {
-      kind: 'hook.simulated',
-      raw: { padding: 'x'.repeat(1024 * 1024 + 16) },
-      source: 'hook',
-      summary: 'Oversized.',
+    const oversized = await post(`${started.url}/api/playground/runs`, {
+      hook: 'session-start',
+      input: { padding: 'x'.repeat(1024 * 1024 + 16) },
+      operation: 'hook.simulate',
+      target: 'codex',
     });
     expect(oversized.status).toBe(413);
     await expect(oversized.json()).resolves.toEqual({

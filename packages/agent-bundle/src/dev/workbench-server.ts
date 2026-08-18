@@ -23,8 +23,10 @@ import {
   type McpAppSandboxProxy,
 } from './mcp-app-sandbox.ts';
 import { McpSessionService } from './mcp-session-service.ts';
+import { PlaygroundOrchestrationService } from './playground-orchestration-service.ts';
 import { PlaygroundService } from '../services/playground-service.ts';
 import { ProjectService } from './project-service.ts';
+import { ScriptPlaygroundService } from './script-playground-service.ts';
 import { SkillDocumentService } from './skill-document-service.ts';
 import { createWorkbenchAssetSource } from './workbench-assets.ts';
 import type { Invalidation, ProjectStatus } from './types.ts';
@@ -195,11 +197,19 @@ export const closeDevServerLifecycle = async (
   mcpApps?: Closeable,
   playground?: Closeable,
 ): Promise<void> => {
+  // Playground owns in-flight subprocesses and ephemeral MCP sessions. Publish
+  // its closed admission gate and drain those operations before releasing the
+  // shared MCP services or the epoch-owning coordinator beneath them.
+  const playgroundResults = playground === undefined ? [] : await Promise.allSettled([playground.close()]);
   const appResults = mcpApps === undefined ? [] : await Promise.allSettled([mcpApps.close()]);
   const sessionResults = await Promise.allSettled([mcpSessions.close()]);
-  const playgroundResults = playground === undefined ? [] : await Promise.allSettled([playground.close()]);
   const coordinatorResults = await Promise.allSettled([coordinator.close()]);
   const failures = [
+    ...playgroundResults.flatMap((result): readonly DevServerLifecycleCloseFailure[] =>
+      result.status === 'rejected'
+        ? [Object.freeze({ error: result.reason, resource: 'playground' as const })]
+        : [],
+    ),
     ...appResults.flatMap((result): readonly DevServerLifecycleCloseFailure[] =>
       result.status === 'rejected'
         ? [Object.freeze({ error: result.reason, resource: 'mcp-apps' as const })]
@@ -208,11 +218,6 @@ export const closeDevServerLifecycle = async (
     ...sessionResults.flatMap((result): readonly DevServerLifecycleCloseFailure[] =>
       result.status === 'rejected'
         ? [Object.freeze({ error: result.reason, resource: 'mcp-sessions' as const })]
-        : [],
-    ),
-    ...playgroundResults.flatMap((result): readonly DevServerLifecycleCloseFailure[] =>
-      result.status === 'rejected'
-        ? [Object.freeze({ error: result.reason, resource: 'playground' as const })]
         : [],
     ),
     ...coordinatorResults.flatMap((result): readonly DevServerLifecycleCloseFailure[] =>
@@ -259,12 +264,23 @@ export const startDevServer = async (options: StartDevServerOptions): Promise<De
   const projectService = new ProjectService({ registry, root });
   const coordinator = new DevCoordinator({ epochStore, eventHub, projectService, root });
   const mcpSessions = new McpSessionService({ epochStore, projectRoot: root, registry });
+  const hookPlayground = new HookPlaygroundService({ epochStore, registry });
+  const skillDocuments = new SkillDocumentService({ epochStore, projectService, root });
   const appPreviews = new DeferredMcpAppPreviewService();
   // The resolved root is the project's stable identity: a store copied elsewhere must not reopen.
-  const playground = new PlaygroundService({
+  const trace = new PlaygroundService({
     projectId: root,
     projectRoot: root,
     storageRoot: join(root, '.agent-bundle', 'playground'),
+  });
+  const playground = new PlaygroundOrchestrationService({
+    coordinator,
+    epochStore,
+    hookPlayground,
+    mcpSessions,
+    scripts: new ScriptPlaygroundService({ epochStore, registry }),
+    skillDocuments,
+    trace,
   });
   let mcpApps: McpAppLifecycle | undefined;
   const foreground = await (options.testing?.startForegroundServer ?? startForegroundServer)({
@@ -273,12 +289,12 @@ export const startDevServer = async (options: StartDevServerOptions): Promise<De
     coordinator: withMcpSessionLifecycle(coordinator, mcpSessions, () => mcpApps, playground),
     evals: new EvalService({ projectRoot: root, registry }),
     eventHub,
-    hookPlayground: new HookPlaygroundService({ epochStore, registry }),
+    hookPlayground,
     mcpAppPreviews: appPreviews,
     mcpSessions,
     playground,
     port: options.port,
-    skillDocuments: new SkillDocumentService({ epochStore, projectService, root }),
+    skillDocuments,
   });
   try {
     const sandbox = await (options.testing?.createSandboxProxy ?? createMcpAppSandboxProxy)({ hostOrigin: foreground.url });
