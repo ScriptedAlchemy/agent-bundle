@@ -171,6 +171,23 @@ it('rejects malformed native catalogs, catalog tuple incoherence, and an epoch r
   }
 });
 
+it('rejects native catalog arrays with enumerable non-index own properties before Zod snapshots them', async () => {
+  const withExtraArrayKey = <Entry,>(entries: readonly Entry[]): Entry[] => {
+    const hostile = [...entries];
+    Object.defineProperty(hostile, '4294967295', { enumerable: true, value: 'not-an-array-index' });
+    return hostile;
+  };
+  const malformed: readonly unknown[] = [
+    { catalog: { ...nativeCatalog, selections: withExtraArrayKey(nativeCatalog.selections) } },
+    { catalog: { ...nativeCatalog, modelPins: withExtraArrayKey(nativeCatalog.modelPins) } },
+  ];
+
+  for (const body of malformed) {
+    const client = new PlaygroundClient({ fetch: hostileFetch(body) });
+    await expect(client.catalog('epoch/native')).rejects.toMatchObject({ code: 'AB8043' });
+  }
+});
+
 it('cancels a run then reads its server-owned session by encoded identity', async () => {
   const calls: RecordedRequest[] = [];
   const client = new PlaygroundClient({ fetch: recordingFetch(calls, () => response(calls.length === 1 ? { cancelled: true } : { session })) });

@@ -57,7 +57,7 @@ const detachedJson = (value: unknown, seen = new WeakSet<object>()): unknown | t
       const keys = Reflect.ownKeys(value);
       const length = Object.getOwnPropertyDescriptor(value, 'length');
       if (length === undefined || !('value' in length) || !Number.isSafeInteger(length.value) || length.value < 0 ||
-        keys.some((key) => typeof key !== 'string' || (key !== 'length' && !/^(0|[1-9]\d*)$/u.test(key)))) return invalidJson;
+        keys.length !== length.value + 1 || keys.some((key) => typeof key !== 'string' || (key !== 'length' && !/^(0|[1-9]\d*)$/u.test(key)))) return invalidJson;
       const detached: unknown[] = [];
       for (let index = 0; index < length.value; index += 1) {
         const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
@@ -360,18 +360,20 @@ export class PlaygroundClient {
     return replayBody(await this.#transport.json(`${this.#path(sessionId)}/replay${query}`, { signal }));
   }
 
-  async export(sessionId: string): Promise<PlaygroundExport> {
-    return exportBody(await this.#transport.json(`${this.#path(sessionId)}/export`));
+  async export(sessionId: string, signal?: AbortSignal): Promise<PlaygroundExport> {
+    return exportBody(await this.#transport.json(`${this.#path(sessionId)}/export`, { signal }));
   }
 
   async promoteToDraftEval(
     sessionId: string,
     rawEventRefs: readonly string[],
+    signal?: AbortSignal,
   ): Promise<DraftEvalCase> {
     return draftEvalBody(await this.#transport.json(`${this.#path(sessionId)}/draft-eval`, {
       body: JSON.stringify({ rawEventRefs }),
       headers: { 'content-type': 'application/json' },
       method: 'POST',
+      signal,
     }));
   }
 
