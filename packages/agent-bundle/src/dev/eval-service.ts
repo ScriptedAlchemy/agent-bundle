@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { rm } from 'node:fs/promises';
-import { dirname, join, relative, resolve } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 import { createDefaultRegistry, type TargetRegistry } from '../adapters/registry.ts';
 import { loadConfig } from '../config/load.ts';
@@ -18,12 +18,14 @@ import {
   listEvalRuns,
   readEvalRun,
   readEvalTrials,
+  type EvalArtifactBinding,
   type EvalRunRecord,
   type EvalTrialRecord,
 } from '../eval/run-store.ts';
 import type { EvalAssertionKind, EvalCase, EvalInvocation } from '../eval/types.ts';
 
 export type EvalServiceErrorCode =
+  | 'EVAL_ARTIFACT_OUTSIDE_PROJECT'
   | 'EVAL_HARNESS_UNSUPPORTED'
   | 'EVAL_RUN_NOT_FOUND'
   | 'EVAL_SELECTION_EMPTY'
@@ -124,6 +126,31 @@ const mintRunId = (createdAt: Date): string =>
 
 const projectRelative = (projectRoot: string, path: string): string =>
   relative(projectRoot, path).replaceAll('\\', '/');
+
+const persistedArtifactBinding = (
+  projectRoot: string,
+  runDirectory: string,
+  binding: EvalArtifactBinding,
+): EvalArtifactBinding => {
+  const base = binding.source === 'run-owned' ? runDirectory : projectRoot;
+  const manifestPath = relative(base, binding.manifestPath);
+  if (
+    manifestPath.length === 0 ||
+    isAbsolute(manifestPath) ||
+    manifestPath === '..' ||
+    manifestPath.startsWith(`..${sep}`)
+  ) {
+    throw serviceError(
+      'EVAL_ARTIFACT_OUTSIDE_PROJECT',
+      'The evaluated artifact must be inside the project so its durable run record never exposes an absolute path.',
+    );
+  }
+  return Object.freeze({
+    manifestPath: manifestPath.replaceAll('\\', '/'),
+    source: binding.source,
+    targetDigests: binding.targetDigests,
+  });
+};
 
 const caseSummary = (evalCase: EvalCase): EvalCaseSummary => Object.freeze({
   assertions: Object.freeze(evalCase.assertions.map((assertion) =>
@@ -279,7 +306,7 @@ export class EvalService {
     }
 
     const writer = await createEvalRun({
-      artifact: artifact.binding,
+      artifact: persistedArtifactBinding(this.#projectRoot, directory, artifact.binding),
       projectRoot: this.#projectRoot,
       provenance: Object.freeze({
         agentBundleVersion: artifact.manifest.producer.version,

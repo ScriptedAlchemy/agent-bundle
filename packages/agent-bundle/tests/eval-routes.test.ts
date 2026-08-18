@@ -37,7 +37,7 @@ const headers = Object.freeze({
 const runRecord: EvalRunRecord = Object.freeze({
   agentBundleVersion: '0.1.0',
   artifact: Object.freeze({
-    manifestPath: '/projects/demo/.agent-bundle/runs/run-a/artifacts/target/agent-bundle.manifest.json',
+    manifestPath: '.agent-bundle/runs/run-a/artifacts/target/agent-bundle.manifest.json',
     source: 'run-owned',
     targetDigests: Object.freeze({ portable: 'c'.repeat(64) }),
   }),

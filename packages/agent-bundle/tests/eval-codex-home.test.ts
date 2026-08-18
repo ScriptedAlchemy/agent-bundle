@@ -70,7 +70,7 @@ const runOnRealHome = async (
     artifact: { manifestPath: 'pending', source: 'explicit', targetDigests: { codex: 'target-digest' } },
     projectRoot: root,
     provenance: { agentBundleVersion: '0.1.0', harness: 'codex', projectRevision: 'unknown' },
-    runsDir: join(root, 'runs'),
+    runsDir: 'runs',
   });
   try {
     return await runCodexEvalTrial({

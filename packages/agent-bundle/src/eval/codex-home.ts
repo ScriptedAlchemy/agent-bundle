@@ -4,6 +4,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 import { copyOpaqueCodexAuthState, withoutProviderApiKeys } from '../host-contracts/native-codex-contract.ts';
+import { withoutEvalCredentialEnvironment } from './credentials.ts';
 import { CodexEvalHarnessError } from './codex-errors.ts';
 
 /** Mirrors the W1 Codex contract minimum; older CLIs are rejected instead of adapted to. */
@@ -85,7 +86,7 @@ export const codexChildEnvironment = (
   environment: Readonly<NodeJS.ProcessEnv>,
   temporaryHome: string,
 ): NodeJS.ProcessEnv => Object.freeze({
-  ...withoutProviderApiKeys(environment),
+  ...withoutProviderApiKeys(withoutEvalCredentialEnvironment(environment)),
   CODEX_HOME: temporaryHome,
 });
 

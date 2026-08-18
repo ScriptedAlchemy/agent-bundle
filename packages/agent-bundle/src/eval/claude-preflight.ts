@@ -1,4 +1,5 @@
 import { createNativeClaudeChildEnvironment } from '../host-contracts/native-claude-contract.ts';
+import { withoutEvalCredentialEnvironment } from './credentials.ts';
 import {
   claudeProcessFailure,
   minimumClaudeEvalVersion,
@@ -90,7 +91,9 @@ const failed = (status: ClaudePreflightStatus, message: string, version?: string
  * Every negative answer is harness evidence: the plugin under test has not been exercised.
  */
 export const runClaudePreflight = async (options: RunClaudePreflightOptions): Promise<ClaudePreflight> => {
-  const environment = createNativeClaudeChildEnvironment(options.environment ?? process.env);
+  const environment = createNativeClaudeChildEnvironment(
+    withoutEvalCredentialEnvironment(options.environment ?? process.env),
+  );
   const processOptions: ClaudeProcessOptions = Object.freeze({
     ...(options.gracePeriodMs === undefined ? {} : { gracePeriodMs: options.gracePeriodMs }),
     ...(options.run === undefined ? {} : { run: options.run }),

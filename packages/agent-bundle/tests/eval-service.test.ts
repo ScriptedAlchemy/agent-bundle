@@ -3,6 +3,7 @@ import { join } from 'node:path';
 
 import { expect, it } from '@rstest/core';
 
+import { build } from '../src/api.ts';
 import { EvalService, EvalServiceError } from '../src/dev/eval-service.ts';
 import { evalCaseFromDraft } from '../src/eval/index.ts';
 import { createProjectFixture, removeProjectFixture } from './helpers/project-fixture.ts';
@@ -40,7 +41,11 @@ it('persists complete evidence for every trial of a multi-trial run', async () =
     const result = await service(project.root).run({ caseIds: ['reads-result'], trials: 3 });
 
     expect(result.trials).toHaveLength(3);
-    expect(result.trials.map((trial) => trial.id)).toEqual(['portable-1', 'portable-2', 'portable-3']);
+    expect(result.trials.map((trial) => trial.id)).toEqual([
+      'reads-result--portable-1',
+      'reads-result--portable-2',
+      'reads-result--portable-3',
+    ]);
     expect(result.trials.every((trial) => trial.outcome === 'pass')).toBe(true);
     expect(result.run.summary).toEqual({ cases: 1, fail: 0, inconclusive: 0, pass: 3, trials: 3 });
     expect(result.aggregates).toHaveLength(1);
@@ -48,6 +53,7 @@ it('persists complete evidence for every trial of a multi-trial run', async () =
     const digests = new Set(result.trials.map((trial) => trial.targetDigest));
     expect(digests.size).toBe(1);
     expect(result.run.artifact.targetDigests.portable).toBe(result.trials[0]?.targetDigest);
+    expect(result.run.artifact.manifestPath).toBe('artifacts/target/agent-bundle.manifest.json');
 
     const runDirectory = join(project.root, '.agent-bundle', 'runs', result.run.id);
     for (const trial of result.trials) {
@@ -62,6 +68,25 @@ it('persists complete evidence for every trial of a multi-trial run', async () =
     expect(persisted.summary.pass).toBe(3);
   } finally {
     await removeProjectFixture(project.root);
+  }
+}, 120_000);
+
+it('rejects an explicit artifact outside the project instead of persisting an absolute path', async () => {
+  const project = await createProjectFixture();
+  const artifactProject = await createProjectFixture();
+  try {
+    await seedEvalProject(project.root);
+    const artifact = join(artifactProject.root, 'prebuilt');
+    await build({ output: artifact, root: artifactProject.root, targets: ['portable'] });
+
+    await expect(service(project.root).run({ artifact, caseIds: ['reads-result'] })).rejects.toMatchObject({
+      code: 'EVAL_ARTIFACT_OUTSIDE_PROJECT',
+    });
+  } finally {
+    await Promise.all([
+      removeProjectFixture(project.root),
+      removeProjectFixture(artifactProject.root),
+    ]);
   }
 }, 120_000);
 

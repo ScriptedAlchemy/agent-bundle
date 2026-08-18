@@ -51,7 +51,7 @@ it('evaluates exactly the artifact the caller named instead of building a new on
     const result = await runEvals({ artifact, caseIds: ['reads-result'], root: project.root });
 
     expect(result.run.artifact.source).toBe('explicit');
-    expect(result.run.artifact.manifestPath).toBe(join(artifact, 'agent-bundle.manifest.json'));
+    expect(result.run.artifact.manifestPath).toBe('prebuilt/agent-bundle.manifest.json');
     await expect(access(join(project.root, '.agent-bundle', 'runs', result.run.id, 'artifacts', 'target')))
       .rejects.toThrow();
   } finally {

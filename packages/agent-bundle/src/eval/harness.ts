@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { stableJson } from '../core/digest.ts';
 import { parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
 import { resolveEvalAssertions } from './assertions.ts';
+import { redactEvalCredentialText, withoutEvalCredentialEnvironment } from './credentials.ts';
 import { EvalHarnessError } from './errors.ts';
 import { materializeEvalFixture, type EvalFixturePlan } from './fixtures.ts';
 import { evalScriptGraderSpec, runEvalGraders, type EvalGraderSpec } from './graders.ts';
@@ -64,6 +65,11 @@ interface ProbeResult {
   readonly timedOut: boolean;
 }
 
+interface McpCallLogResult {
+  readonly calls: readonly EvalMcpCallRecord[];
+  readonly level: 'observed' | 'unavailable';
+}
+
 const defaultProbeTimeoutMs = 60_000;
 const evidenceArtifactName = 'evidence.json';
 const unavailableActivation: EvalActivationEvidence = Object.freeze({
@@ -82,6 +88,10 @@ const harnessKinds: Readonly<Record<string, EvalHarness['kind']>> = Object.freez
   deterministic: 'deterministic',
 });
 
+/** Case-qualified trial ids keep records and raw evidence unique across one multi-case run. */
+export const evalTrialId = (caseId: string, host: string, trialIndex: number): string =>
+  `${caseId}--${host}-${trialIndex + 1}`;
+
 /** An unknown host has no harness, and asking for one is an explicit error rather than a stub. */
 export const createEvalHarness = (name: string): EvalHarness => {
   const kind = harnessKinds[name];
@@ -96,7 +106,11 @@ export const createEvalHarness = (name: string): EvalHarness => {
 
 const runProbe = async (probe: EvalProcessProbe, cwd: string): Promise<ProbeResult> =>
   new Promise<ProbeResult>((resolvePromise) => {
-    const child = spawn(probe.command, [...probe.args], { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(probe.command, [...probe.args], {
+      cwd,
+      env: withoutEvalCredentialEnvironment(process.env),
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
     const chunks: { stderr: string[]; stdout: string[] } = { stderr: [], stdout: [] };
     let timedOut = false;
     const timer = setTimeout(() => {
@@ -127,32 +141,40 @@ const runProbe = async (probe: EvalProcessProbe, cwd: string): Promise<ProbeResu
     });
   });
 
-const readMcpCallLog = async (fixturePath: string, logPath: string): Promise<readonly EvalMcpCallRecord[]> => {
+const readMcpCallLog = async (fixturePath: string, logPath: string): Promise<McpCallLogResult> => {
   let contents: string;
   try {
     contents = await readFile(join(fixturePath, logPath), 'utf8');
   } catch {
-    return Object.freeze([]);
+    return Object.freeze({ calls: Object.freeze([]), level: 'unavailable' });
   }
-  const lines = contents.split('\n');
-  lines.pop();
-  return Object.freeze(lines.filter((line) => line.length > 0).flatMap((line) => {
+  const lines = contents.length === 0 ? [] : contents.endsWith('\n') ? contents.slice(0, -1).split('\n') : undefined;
+  if (lines === undefined || lines.some((line) => line.length === 0)) {
+    return Object.freeze({ calls: Object.freeze([]), level: 'unavailable' });
+  }
+  const calls: EvalMcpCallRecord[] = [];
+  for (const line of lines) {
     let parsed: unknown;
     try {
       parsed = parseJsonWithoutDuplicateKeys(line);
     } catch {
-      return [];
+      return Object.freeze({ calls: Object.freeze([]), level: 'unavailable' });
     }
     if (
       typeof parsed !== 'object' ||
       parsed === null ||
+      Array.isArray(parsed) ||
+      Object.keys(parsed).length !== 2 ||
+      !Object.hasOwn(parsed, 'server') ||
+      !Object.hasOwn(parsed, 'tool') ||
       typeof (parsed as EvalMcpCallRecord).server !== 'string' ||
       typeof (parsed as EvalMcpCallRecord).tool !== 'string'
     ) {
-      return [];
+      return Object.freeze({ calls: Object.freeze([]), level: 'unavailable' });
     }
-    return [Object.freeze({ server: (parsed as EvalMcpCallRecord).server, tool: (parsed as EvalMcpCallRecord).tool })];
-  }));
+    calls.push(Object.freeze({ server: (parsed as EvalMcpCallRecord).server, tool: (parsed as EvalMcpCallRecord).tool }));
+  }
+  return Object.freeze({ calls: Object.freeze(calls), level: 'observed' });
 };
 
 const trialOutcome = (assertions: readonly EvalAssertionResult[]): EvalTrialRecord['outcome'] => {
@@ -198,9 +220,9 @@ export const runDeterministicTrial = async (
       `The prepared artifact has no target ${JSON.stringify(target)} for host ${JSON.stringify(options.host)}.`,
     );
   }
-  const trialId = `${options.host}-${options.trialIndex + 1}`;
+  const trialId = evalTrialId(options.evalCase.id, options.host, options.trialIndex);
   const fixture = await materializeEvalFixture({
-    destination: join(options.workspaceRoot, options.evalCase.id, trialId),
+    destination: join(options.workspaceRoot, trialId),
     plan: options.fixturePlan,
   });
 
@@ -227,13 +249,13 @@ export const runDeterministicTrial = async (
     prompt: options.evalCase.prompt,
   });
 
-  const mcpCalls = probe === undefined || harnessFailure !== undefined || options.probe?.mcpCallLog === undefined
+  const mcpLog = probe === undefined || harnessFailure !== undefined || options.probe?.mcpCallLog === undefined
     ? undefined
     : await readMcpCallLog(fixture.path, options.probe.mcpCallLog);
   const evidence: EvalTrialEvidence = Object.freeze({
     mcp: Object.freeze({
-      calls: mcpCalls ?? Object.freeze([]),
-      level: mcpCalls === undefined ? 'unavailable' : 'observed',
+      calls: mcpLog?.calls ?? Object.freeze([]),
+      level: mcpLog?.level ?? 'unavailable',
     }),
     process: Object.freeze({
       ...(probe?.exitCode === undefined ? {} : { exitCode: probe.exitCode }),
@@ -263,8 +285,8 @@ export const runDeterministicTrial = async (
     ...(probe === undefined
       ? []
       : [
-        await options.writer.writeArtifactFile(`${trialId}/stdout.log`, probe.stdout),
-        await options.writer.writeArtifactFile(`${trialId}/stderr.log`, probe.stderr),
+        await options.writer.writeArtifactFile(`${trialId}/stdout.log`, redactEvalCredentialText(probe.stdout)),
+        await options.writer.writeArtifactFile(`${trialId}/stderr.log`, redactEvalCredentialText(probe.stderr)),
       ]),
   ];
 

@@ -3,6 +3,7 @@ import { cp } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { stableJson } from '../core/digest.ts';
+import { redactEvalCredentialText } from './credentials.ts';
 import { resolveEvalAssertions } from './assertions.ts';
 import {
   codexMcpEvidence,
@@ -26,6 +27,7 @@ import {
 } from './codex-home.ts';
 import { codexPluginInstallPlan, codexPluginObserved, readCodexCandidatePlugin } from './codex-plugins.ts';
 import { materializeEvalFixture, type EvalFixturePlan } from './fixtures.ts';
+import { evalTrialId } from './harness.ts';
 import { evalScriptGraderSpec, runEvalGraders, type EvalGraderSpec } from './graders.ts';
 import type { PreparedEvalArtifact } from './artifact.ts';
 import type { EvalRunWriter, EvalTrialRecord } from './run-store.ts';
@@ -216,7 +218,7 @@ export const runCodexEvalTrial = async (options: RunCodexEvalTrialOptions): Prom
   const normalCodexHome = options.normalCodexHome ?? resolveNormalCodexHome(environment);
   const runner = options.run ?? defaultCodexRunner;
   const timeoutMs = options.timeoutMs ?? defaultTimeoutMs;
-  const trialId = `${host}-${options.trialIndex + 1}`;
+  const trialId = evalTrialId(options.evalCase.id, host, options.trialIndex);
 
   const before: CodexHomeDigest = await digestCodexHome(normalCodexHome);
   const temporary = await createTemporaryCodexTrialHome(options.workspaceRoot);
@@ -380,8 +382,8 @@ export const runCodexEvalTrial = async (options: RunCodexEvalTrialOptions): Prom
             `${trialId}/events.jsonl`,
             execution.run.envelopes.map((envelope) => `${stableJson(envelope)}\n`).join(''),
           ),
-          await options.writer.writeArtifactFile(`${trialId}/stdout.log`, execution.result.stdout),
-          await options.writer.writeArtifactFile(`${trialId}/stderr.log`, execution.result.stderr),
+          await options.writer.writeArtifactFile(`${trialId}/stdout.log`, redactEvalCredentialText(execution.result.stdout)),
+          await options.writer.writeArtifactFile(`${trialId}/stderr.log`, redactEvalCredentialText(execution.result.stderr)),
         ]),
     ];
 
