@@ -4,6 +4,8 @@ import { lstat, mkdir, open, readFile, readdir, realpath, rename, rm, writeFile,
 import { basename, dirname, isAbsolute, join, relative, resolve, win32 } from 'node:path';
 
 import { stableJson } from '../core/digest.ts';
+import { isErrno } from '../core/errors.ts';
+import { isInsideOrEqual } from '../core/paths.ts';
 import { parseJsonWithoutDuplicateKeys, snapshotStrictJsonValue, type JsonValue } from '../core/strict-json.ts';
 import { defaultEvalRunsDir } from './config.ts';
 import { findCredentialConfiguration } from './credentials.ts';
@@ -203,9 +205,6 @@ const storeError = (
   message: string,
 ): EvalRunStoreError => new EvalRunStoreError(code, message);
 
-const isErrno = (error: unknown, code: string): boolean =>
-  typeof error === 'object' && error !== null && 'code' in error && error.code === code;
-
 /** Non-API test seam, unavailable unless the process explicitly runs in test mode. */
 const runEvalRunStoreDurabilityTestHook = async (
   phase: 'after-event-write' | 'before-event-open' | 'before-event-write',
@@ -251,11 +250,6 @@ const requireSafeRelativePath = (value: string, label: string): string => {
   return segments.join('/');
 };
 
-const isWithin = (root: string, candidate: string): boolean => {
-  const path = relative(root, candidate);
-  return path.length === 0 || (!path.startsWith('../') && !path.startsWith('..\\') && path !== '..' && !isAbsolute(path));
-};
-
 const requireRunsDir = (value: unknown): string => {
   if (
     typeof value !== 'string' ||
@@ -272,7 +266,7 @@ const requireRunsDir = (value: unknown): string => {
 
 const assertNoSymlinkedStorageAncestor = async (projectRoot: string, storageRoot: string): Promise<void> => {
   const relativeStorageRoot = relative(projectRoot, storageRoot);
-  if (!isWithin(projectRoot, storageRoot)) {
+  if (!isInsideOrEqual(projectRoot, storageRoot)) {
     throw storeError('EVAL_RUN_RECORD_INVALID', 'Eval run storage must remain within the configured project root.');
   }
 
@@ -300,14 +294,14 @@ const ensureStorageRoot = async (projectRoot: string, storageRoot: string): Prom
   await mkdir(storageRoot, { recursive: true });
   await assertNoSymlinkedStorageAncestor(projectRoot, storageRoot);
   const physicalStorageRoot = await realpath(storageRoot);
-  if (!isWithin(physicalProjectRoot, physicalStorageRoot)) {
+  if (!isInsideOrEqual(physicalProjectRoot, physicalStorageRoot)) {
     throw storeError('EVAL_RUN_RECORD_INVALID', 'Eval run storage resolves outside the configured project root.');
   }
   return storageRoot;
 };
 
 const ensureWritablePath = async (root: string, path: string): Promise<void> => {
-  if (!isWithin(root, path)) {
+  if (!isInsideOrEqual(root, path)) {
     throw storeError('EVAL_RUN_RECORD_INVALID', 'Eval run storage write escaped its run directory.');
   }
   try {

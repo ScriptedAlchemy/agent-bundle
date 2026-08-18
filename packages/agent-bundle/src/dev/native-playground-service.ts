@@ -20,6 +20,8 @@ import type { PlaygroundEventInput, PlaygroundJsonObject } from '../services/pla
 import { safeDevWireText } from './dev-log-service.ts';
 import type { ArtifactEpoch } from './types.ts';
 import { workspaceDiff, type WorkspaceDiff } from '../eval/workspace-diff.ts';
+import { isInsideOrEqual } from '../core/paths.ts';
+import { isErrno } from '../core/errors.ts';
 
 export type NativePlaygroundHost = 'claude' | 'codex';
 
@@ -210,14 +212,6 @@ const maximumSnapshotStringLength = 16_384;
 const safeEpochSegment = /^[a-z0-9][a-z0-9._-]*$/iu;
 const safeDigestText = /^[a-z0-9._:-]+$/iu;
 
-const isErrno = (error: unknown, code: string): boolean =>
-  typeof error === 'object' && error !== null && 'code' in error && error.code === code;
-
-const isContainedOrEqual = (root: string, candidate: string): boolean => {
-  const path = relative(root, candidate);
-  return path === '' || (!isAbsolute(path) && path !== '..' && !path.startsWith('..\\') && !path.startsWith('../'));
-};
-
 const isSafeRelativePath = (value: JsonValue | undefined, allowCurrentDirectory = false): value is string =>
   nonemptySnapshotText(value) &&
   !isAbsolute(value) &&
@@ -228,7 +222,7 @@ const isSafeRelativePath = (value: JsonValue | undefined, allowCurrentDirectory 
 const relativePathInside = (root: string, path: string, allowCurrentDirectory = false): string => {
   const normalizedRoot = resolve(root);
   const candidate = resolve(path);
-  if (!isContainedOrEqual(normalizedRoot, candidate)) {
+  if (!isInsideOrEqual(normalizedRoot, candidate)) {
     throw new Error('Native Playground catalog snapshot contains an invalid path.');
   }
   const value = relative(normalizedRoot, candidate) || '.';
@@ -243,7 +237,7 @@ const resolveContainedPath = (root: string, value: string, allowCurrentDirectory
     throw new Error('Native Playground catalog snapshot is invalid.');
   }
   const candidate = resolve(root, value);
-  if (!isContainedOrEqual(resolve(root), candidate)) {
+  if (!isInsideOrEqual(resolve(root), candidate)) {
     throw new Error('Native Playground catalog snapshot is invalid.');
   }
   return candidate;
@@ -963,7 +957,7 @@ export class NativePlaygroundService {
       throw new Error('Native Playground catalog snapshot is invalid.');
     }
     try {
-      if (!isContainedOrEqual(await realpath(root), await realpath(path))) {
+      if (!isInsideOrEqual(await realpath(root), await realpath(path))) {
         throw new Error('Native Playground catalog snapshot is invalid.');
       }
     } catch (error) {

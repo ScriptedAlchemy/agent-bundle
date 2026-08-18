@@ -5,6 +5,8 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'nod
 
 import { parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
 import type { DevLogSink } from '../dev/dev-log-service.ts';
+import { isInsideOrEqual } from '../core/paths.ts';
+import { isErrno } from '../core/errors.ts';
 
 export type PlaygroundJsonPrimitive = boolean | null | number | string;
 export type PlaygroundJsonArray = readonly PlaygroundJsonValue[];
@@ -382,16 +384,8 @@ const hasPersistedOutcomeSchema = (value: unknown): boolean => {
     || hasExactOwnKeys(value, ['status', 'response', 'workspace']);
 };
 
-const contained = (root: string, candidate: string): boolean => {
-  const path = relative(root, candidate);
-  return path === '' || (!isAbsolute(path) && path !== '..' && !path.startsWith('..\\') && !path.startsWith('../'));
-};
-
 const serviceError = (code: PlaygroundServiceErrorCode, message: string): PlaygroundServiceError =>
   new PlaygroundServiceError(code, message);
-
-const isErrno = (error: unknown, code: string): boolean =>
-  typeof error === 'object' && error !== null && 'code' in error && error.code === code;
 
 const runDurabilityTestHook = (phase: DurabilityTestPhase, path: string): void => {
   if (process.env.NODE_ENV !== 'test') return;
@@ -1082,7 +1076,7 @@ export class PlaygroundService {
     }
     const requestedProjectRoot = resolve(this.#projectRoot);
     const requestedStorageRoot = resolve(this.#storageRoot);
-    if (!contained(requestedProjectRoot, requestedStorageRoot)) {
+    if (!isInsideOrEqual(requestedProjectRoot, requestedStorageRoot)) {
       throw serviceError('PLAYGROUND_ROOT_INVALID', 'Playground storage root must be contained by the configured project root.');
     }
     const resolvedProjectRoot = await realpath(requestedProjectRoot);
@@ -1092,19 +1086,19 @@ export class PlaygroundService {
       throw serviceError('PLAYGROUND_ROOT_INVALID', 'Playground storage root must not be a symbolic link.');
     }
     const resolvedStorageRoot = await realpath(requestedStorageRoot);
-    if (!contained(resolvedProjectRoot, resolvedStorageRoot)) {
+    if (!isInsideOrEqual(resolvedProjectRoot, resolvedStorageRoot)) {
       throw serviceError('PLAYGROUND_ROOT_INVALID', 'Playground storage root resolves outside the configured project root.');
     }
     const sessionsRoot = join(requestedStorageRoot, sessionDirectoryName);
     await this.#createLayoutDirectory(sessionsRoot, requestedStorageRoot, 'layout-sessions-entry');
     const resolvedSessionsRoot = await realpath(sessionsRoot);
-    if (!contained(resolvedStorageRoot, resolvedSessionsRoot)) {
+    if (!isInsideOrEqual(resolvedStorageRoot, resolvedSessionsRoot)) {
       throw serviceError('PLAYGROUND_ROOT_INVALID', 'Playground session root resolves outside configured storage.');
     }
     const objectRoot = join(requestedStorageRoot, objectDirectoryName);
     await this.#createLayoutDirectory(objectRoot, requestedStorageRoot, 'layout-object-entry');
     const resolvedObjectRoot = await realpath(objectRoot);
-    if (!contained(resolvedStorageRoot, resolvedObjectRoot)) {
+    if (!isInsideOrEqual(resolvedStorageRoot, resolvedObjectRoot)) {
       throw serviceError('PLAYGROUND_ROOT_INVALID', 'Playground session object root resolves outside configured storage.');
     }
     const indexRoot = join(requestedStorageRoot, indexDirectoryName);
@@ -1113,7 +1107,7 @@ export class PlaygroundService {
     await this.#createLayoutDirectory(pendingIndexRoot, indexRoot, 'layout-pending-index-entry');
     const resolvedIndexRoot = await realpath(indexRoot);
     const resolvedPendingIndexRoot = await realpath(pendingIndexRoot);
-    if (!contained(resolvedStorageRoot, resolvedIndexRoot) || !contained(resolvedIndexRoot, resolvedPendingIndexRoot)) {
+    if (!isInsideOrEqual(resolvedStorageRoot, resolvedIndexRoot) || !isInsideOrEqual(resolvedIndexRoot, resolvedPendingIndexRoot)) {
       throw serviceError('PLAYGROUND_ROOT_INVALID', 'Playground session index root resolves outside configured storage.');
     }
     this.#resolvedIndexRoot = resolvedIndexRoot;
@@ -1217,7 +1211,7 @@ export class PlaygroundService {
     }
     const resolved = await realpath(root);
     const sessionsRoot = this.#resolvedSessionsRoot;
-    if (sessionsRoot === undefined || !contained(sessionsRoot, resolved) || basename(resolved) !== sessionId) {
+    if (sessionsRoot === undefined || !isInsideOrEqual(sessionsRoot, resolved) || basename(resolved) !== sessionId) {
       throw serviceError('PLAYGROUND_ROOT_INVALID', `Playground session ${JSON.stringify(sessionId)} resolves outside configured storage.`);
     }
   }
@@ -1229,7 +1223,7 @@ export class PlaygroundService {
     }
     const resolved = await realpath(root);
     const objectRoot = this.#resolvedObjectRoot;
-    if (objectRoot === undefined || !contained(objectRoot, resolved) || basename(resolved) !== objectId) {
+    if (objectRoot === undefined || !isInsideOrEqual(objectRoot, resolved) || basename(resolved) !== objectId) {
       throw serviceError('PLAYGROUND_ROOT_INVALID', 'Playground session object resolves outside configured storage.');
     }
   }
@@ -1289,7 +1283,7 @@ export class PlaygroundService {
         || fileStat.nlink !== 2
         || pathStat.nlink !== 2
         || indexRoot === undefined
-        || !contained(indexRoot, resolved)
+        || !isInsideOrEqual(indexRoot, resolved)
         || basename(resolved) !== `${sessionId}.json`) {
         throw serviceError('PLAYGROUND_STORE_CORRUPT', `Playground session ${JSON.stringify(sessionId)} has an invalid v2 index.`);
       }
@@ -1342,7 +1336,7 @@ export class PlaygroundService {
         || pathStat.nlink !== 1
         || fileStat.dev !== pathStat.dev
         || fileStat.ino !== pathStat.ino
-        || !contained(root, resolved)
+        || !isInsideOrEqual(root, resolved)
         || basename(resolved) !== name) {
         throw serviceError('PLAYGROUND_ROOT_INVALID', `Playground ${name} must be a singly linked contained file.`);
       }

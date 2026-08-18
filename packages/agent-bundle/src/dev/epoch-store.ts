@@ -1,9 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import { lstat, mkdir, mkdtemp, open, readFile, readdir, realpath, rename, rm, writeFile } from 'node:fs/promises';
-import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { basename, dirname, join, relative, resolve } from 'node:path';
 
 import { stableJson } from '../core/digest.ts';
 import { freezeArtifactEpoch, type ArtifactEpoch } from './types.ts';
+import { isInside } from '../core/paths.ts';
+import { isErrno } from '../core/errors.ts';
 
 export interface EpochStoreOptions {
   /** @internal Deterministic cleanup-failure seam. */
@@ -99,9 +101,6 @@ const nativePlaygroundCatalogDirectoryName = 'native-playground';
 const stagingMarkerFileName = '.agent-bundle-epoch-stage.json';
 const stagingPrefix = '.stage-';
 
-const isErrno = (error: unknown, code: string): boolean =>
-  typeof error === 'object' && error !== null && 'code' in error && error.code === code;
-
 const pathExists = async (path: string): Promise<boolean> => {
   try {
     await lstat(path);
@@ -114,11 +113,6 @@ const pathExists = async (path: string): Promise<boolean> => {
 
 const isSafePathSegment = (value: string): boolean =>
   /^[a-z0-9][a-z0-9._-]*$/iu.test(value) && value !== '.' && value !== '..';
-
-const isContained = (root: string, candidate: string): boolean => {
-  const path = relative(root, candidate);
-  return path.length > 0 && !isAbsolute(path) && path !== '..' && !path.startsWith('..\\') && !path.startsWith('../');
-};
 
 const assertSafeEpochId = (value: string): void => {
   if (!isSafePathSegment(value)) {
@@ -580,7 +574,7 @@ export class EpochStore {
       realpath(this.#epochsPath),
       realpath(record.root),
     ]);
-    if (!isContained(epochsRoot, stagingRoot)) {
+    if (!isInside(epochsRoot, stagingRoot)) {
       throw new EpochStoreError('EPOCH_STAGING_INVALID', 'The staging root escapes the epoch store.');
     }
 
@@ -604,7 +598,7 @@ export class EpochStore {
           `Staged epoch target ${JSON.stringify(target)} must be a contained non-symlink directory.`,
         );
       }
-      if (!isContained(stagingRoot, await realpath(targetPath))) {
+      if (!isInside(stagingRoot, await realpath(targetPath))) {
         throw new EpochStoreError(
           'EPOCH_STAGING_INVALID',
           `Staged epoch target ${JSON.stringify(target)} escapes the staging root.`,
@@ -622,7 +616,7 @@ export class EpochStore {
       }
       throw error;
     }
-    if (!manifestMetadata.isFile() || manifestMetadata.isSymbolicLink() || !isContained(stagingRoot, await realpath(manifestPath))) {
+    if (!manifestMetadata.isFile() || manifestMetadata.isSymbolicLink() || !isInside(stagingRoot, await realpath(manifestPath))) {
       throw new EpochStoreError('EPOCH_MANIFEST_INVALID', 'Staged epoch manifest must be a contained non-symlink file.');
     }
   }
@@ -654,7 +648,7 @@ export class EpochStore {
       realpath(this.#epochsPath),
       realpath(epochRoot),
     ]);
-    if (!isContained(epochsRoot, activeEpochRoot)) {
+    if (!isInside(epochsRoot, activeEpochRoot)) {
       throw new EpochStoreError('EPOCH_METADATA_INVALID', 'Active epoch directory escapes the epoch store.');
     }
 
@@ -678,7 +672,7 @@ export class EpochStore {
           `Active epoch target ${JSON.stringify(target)} must be a non-symlink directory.`,
         );
       }
-      if (!isContained(activeEpochRoot, await realpath(targetPath))) {
+      if (!isInside(activeEpochRoot, await realpath(targetPath))) {
         throw new EpochStoreError(
           'EPOCH_METADATA_INVALID',
           `Active epoch target ${JSON.stringify(target)} escapes the epoch directory.`,
@@ -705,7 +699,7 @@ export class EpochStore {
     if (
       !manifestMetadata.isFile() ||
       manifestMetadata.isSymbolicLink() ||
-      !isContained(activeEpochRoot, await realpath(manifestPath))
+      !isInside(activeEpochRoot, await realpath(manifestPath))
     ) {
       throw new EpochStoreError('EPOCH_METADATA_INVALID', 'Active epoch manifest must be a contained non-symlink file.');
     }
@@ -731,7 +725,7 @@ export class EpochStore {
   #manifestRelativePath(epoch: ArtifactEpoch): string {
     const epochRoot = join(this.#epochsPath, epoch.id);
     const manifestPath = resolve(epoch.manifestPath);
-    if (!isContained(epochRoot, manifestPath)) {
+    if (!isInside(epochRoot, manifestPath)) {
       throw new EpochStoreError(
         'EPOCH_MANIFEST_INVALID',
         'Artifact epoch manifestPath must be contained by its final epoch directory.',

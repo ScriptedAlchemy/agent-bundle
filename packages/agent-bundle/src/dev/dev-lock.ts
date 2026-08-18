@@ -3,6 +3,7 @@ import { link, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 
 import { stableJson } from '../core/digest.ts';
+import { isErrno } from '../core/errors.ts';
 
 export interface DevLockOwner {
   readonly createdAt: string;
@@ -39,9 +40,6 @@ interface RecoveryRecord {
   readonly owner: DevLockOwner;
   readonly version: 1;
 }
-
-const isErrno = (error: unknown, code: string): boolean =>
-  typeof error === 'object' && error !== null && 'code' in error && error.code === code;
 
 const isProcessRunning = (pid: number): boolean => {
   try {

@@ -36,6 +36,7 @@ import {
 } from './harness.ts';
 import { evalScriptGraderSpec, runEvalGraders, type EvalGraderSpec } from './graders.ts';
 import type { PreparedEvalArtifact } from './artifact.ts';
+import { isErrno } from '../core/errors.ts';
 import type { EvalTrialRecord, EvalTrialWriter } from './run-store.ts';
 import type {
   EvalCase,
@@ -100,9 +101,6 @@ const defaultHost = 'codex';
 const defaultKillGraceMs = 1_000;
 const defaultMaxOutputBytes = 4 * 1024 * 1024;
 const defaultTimeoutMs = 300_000;
-const isErrno = (error: unknown, code: string): boolean =>
-  typeof error === 'object' && error !== null && 'code' in error && error.code === code;
-
 const defaultCodexRunner: CodexCommandRunner = (command) => new Promise((resolvePromise, reject) => {
   const child = spawn(codexExecutable, [...command.args], {
     cwd: command.cwd,

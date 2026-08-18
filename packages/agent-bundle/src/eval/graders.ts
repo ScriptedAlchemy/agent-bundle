@@ -7,6 +7,7 @@ import { Ajv2020 } from 'ajv/dist/2020.js';
 
 import { parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
 import type { EvalAssertionOutcome, EvalScriptOutcome } from './types.ts';
+import { isErrno } from '../core/errors.ts';
 
 const runCommand = promisify(execFile);
 
@@ -77,9 +78,6 @@ const outcome = (
   verdict: EvalAssertionOutcome,
   detail: string,
 ): EvalScriptOutcome => Object.freeze({ detail, outcome: verdict });
-
-const isErrno = (error: unknown, code: string): boolean =>
-  typeof error === 'object' && error !== null && 'code' in error && error.code === code;
 
 const containedPath = (root: string, candidate: string): string => {
   const target = resolve(root, candidate);

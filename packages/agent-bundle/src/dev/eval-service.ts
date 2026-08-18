@@ -34,6 +34,8 @@ import {
 } from '../eval/run-store.ts';
 import type { EvalAssertionKind, EvalCase, EvalInvocation } from '../eval/types.ts';
 import type { DevLogKindFor, DevLogSink } from './dev-log-service.ts';
+import { isInsideOrEqual } from '../core/paths.ts';
+import { isErrno } from '../core/errors.ts';
 
 export type EvalServiceErrorCode =
   | 'EVAL_ARTIFACT_NOT_FOUND'
@@ -321,11 +323,6 @@ class PendingEvalEventSubscription implements EvalEventSubscription {
   }
 }
 
-const isWithin = (root: string, candidate: string): boolean => {
-  const path = relative(root, candidate);
-  return path.length === 0 || (!path.startsWith(`..${sep}`) && path !== '..' && !isAbsolute(path));
-};
-
 const artifactSegments = (value: unknown): readonly string[] | undefined => {
   if (typeof value !== 'string' || /%(?:2f|5c)/iu.test(value) || value.includes('\\') || value.includes('\0')) {
     return undefined;
@@ -340,13 +337,10 @@ const artifactSegments = (value: unknown): readonly string[] | undefined => {
 
 const sameFile = (left: Stats, right: Stats): boolean => left.dev === right.dev && left.ino === right.ino;
 
-const isErrno = (error: unknown, code: string): boolean =>
-  typeof error === 'object' && error !== null && 'code' in error && error.code === code;
-
 const assertNoSymlinkedArtifactPath = async (projectRoot: string, target: string): Promise<void> => {
   const root = resolve(projectRoot);
   const resolvedTarget = resolve(target);
-  if (!isWithin(root, resolvedTarget)) throw new Error('Raw evidence path escaped the project.');
+  if (!isInsideOrEqual(root, resolvedTarget)) throw new Error('Raw evidence path escaped the project.');
   const segments = relative(root, resolvedTarget).split(/[/\\]/u);
   let current = root;
   for (const [index, segment] of segments.entries()) {
@@ -1032,7 +1026,7 @@ export class EvalService {
       throw new Error('Raw evidence file metadata is not safe.');
     }
     const [physicalRoot, physicalTarget] = await Promise.all([realpath(artifactRoot), realpath(target)]);
-    if (!isWithin(physicalRoot, physicalTarget)) throw new Error('Raw evidence file escaped its run artifacts directory.');
+    if (!isInsideOrEqual(physicalRoot, physicalTarget)) throw new Error('Raw evidence file escaped its run artifacts directory.');
     const file = await open(target, constants.O_RDONLY | constants.O_NOFOLLOW);
     try {
       const [after, descriptor] = await Promise.all([lstat(target), file.stat()]);
