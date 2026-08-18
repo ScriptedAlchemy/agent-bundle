@@ -197,6 +197,8 @@ it('runs a signed-in trial with an explicit plugin directory, never --bare, and 
       '-p',
       '--plugin-dir',
       join(context.artifact.root, 'claude'),
+      '--model',
+      'claude-sonnet-4-5',
       '--output-format',
       'stream-json',
       '--verbose',

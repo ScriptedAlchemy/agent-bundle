@@ -16,6 +16,7 @@ it('builds a subscription-authenticated Claude command with the explicit candida
   expect(harness).toBeDefined();
 
   expect(harness!.createNativeClaudeCommand({
+    model: 'claude-sonnet-4-5',
     pluginDirectory: '/candidate/plugin',
     prompt: 'Use the agent-bundle-native-smoke Skill and reply exactly: CLAUDE_NATIVE_SMOKE_OK.',
   })).toEqual({
@@ -23,6 +24,8 @@ it('builds a subscription-authenticated Claude command with the explicit candida
       '-p',
       '--plugin-dir',
       '/candidate/plugin',
+      '--model',
+      'claude-sonnet-4-5',
       '--output-format',
       'stream-json',
       '--verbose',

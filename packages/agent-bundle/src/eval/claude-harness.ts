@@ -243,7 +243,11 @@ export const runClaudeTrial = async (options: RunClaudeTrialOptions): Promise<Ev
       });
       workspacePath = fixture.path;
       fixtureDigest = fixture.digest;
-      const command = createNativeClaudeCommand({ pluginDirectory, prompt: options.evalCase.prompt });
+      const command = createNativeClaudeCommand({
+        model: options.evalCase.hosts[host]?.model ?? 'unpinned',
+        pluginDirectory,
+        prompt: options.evalCase.prompt,
+      });
       if (command.args.includes('--bare')) {
         throw harnessError(
           'EVAL_HARNESS_INPUT_INVALID',
