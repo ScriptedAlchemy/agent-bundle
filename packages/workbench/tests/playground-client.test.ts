@@ -121,6 +121,22 @@ it('loads a detached exact native catalog for the requested epoch through the au
   expect(Object.isFrozen(catalog.selections[0])).toBe(true);
 });
 
+it('forwards catalog cancellation through the authenticated foreground transport', async () => {
+  const controller = new AbortController();
+  let catalogSignal: AbortSignal | null | undefined;
+  const client = new PlaygroundClient({
+    fetch: async (input, init) => {
+      if (String(input) === '/api/project/session') return response({ origin: 'http://127.0.0.1:5173', token: 'foreground-token' });
+      expect(String(input)).toBe('/api/playground/catalog?epochId=epoch%2Fnative');
+      catalogSignal = init?.signal;
+      return response({ catalog: nativeCatalog });
+    },
+  });
+
+  await expect(client.catalog('epoch/native', controller.signal)).resolves.toEqual(nativeCatalog);
+  expect(catalogSignal).toBe(controller.signal);
+});
+
 it('sends an exact native prompt admission body without arbitrary browser execution fields', async () => {
   const calls: RecordedRequest[] = [];
   const client = new PlaygroundClient({ fetch: recordingFetch(calls, () => response({ run: { id: 'run-1', session } })) });
