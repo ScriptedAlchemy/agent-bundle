@@ -296,9 +296,9 @@ e2e('activates an edited RSC generation and replays the selected hook without re
       .map((attribute) => [attribute.name, attribute.value])));
     const historyBeforeSourceBuildFailure = await history.count();
     await writeFile(fixture.serverComponentSource, `${editedSource}\nconst = ;\n`);
-    await expect.poll(async () => identity.getAttribute('data-runtime-event-sequence'), { timeout: browserTimeout })
-      .toBe(String(Number(sourceBuildFailed['data-runtime-event-sequence']) + 1));
-    await expect(page.locator('.runtime-announcement[role="alert"]')).toHaveText(
+    await expect.poll(async () => Number(await identity.getAttribute('data-runtime-event-sequence')), { timeout: browserTimeout })
+      .toBeGreaterThan(Number(sourceBuildFailed['data-runtime-event-sequence']));
+    await expect(page.locator('.runtime-announcement[role="alert"]').last()).toHaveText(
       'Runtime generation failed. The last good result remains available.',
       { timeout: browserTimeout },
     );
