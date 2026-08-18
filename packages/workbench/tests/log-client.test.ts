@@ -114,19 +114,34 @@ it('accepts a live overflow gap relative to the last delivered record', async ()
   expect(received).toEqual([2, 3, 4, 'gap', 8, 9, 10]);
 });
 
-it('maps hostile diagnostics and secret-shaped record text to the stable local error', async () => {
+it('maps hostile diagnostics and provider credential values to the stable local error', async () => {
   const hostileDiagnostic = clientFor(json({ diagnostic: { code: 'AB8093', message: 'fixture-secret' } }, 503));
   await expect(hostileDiagnostic.replay()).rejects.toMatchObject({ code: 'AB8093', message: 'Dev Log route returned an invalid response.' });
 
   for (const unsafe of [
-    { ...record, summary: 'fixture-secret' },
-    { ...record, context: { target: 'fixture-secret' } },
-    { ...record, details: { event: 'fixture-secret' } },
-    { ...record, kind: 'fixture-secret' },
+    { ...record, summary: 'sk-proj-abcdefghijklmnopqrst' },
+    { ...record, context: { target: 'ghp_abcdefghijklmnopqrst' } },
+    { ...record, details: { event: 'sk-proj-abcdefghijklmnopqrst' } },
   ]) {
     const client = clientFor(json({ replay: { cursor: { afterSequence: 1 }, records: [unsafe] } }));
     await expect(client.replay()).rejects.toMatchObject({ code: 'AB8093', message: 'Dev Log route returned an invalid response.' });
   }
+});
+
+it('accepts benign log text containing token, secret, and tokenizer', async () => {
+  const client = clientFor(json({
+    replay: {
+      cursor: { afterSequence: 1 },
+      records: [{
+        ...record,
+        context: { target: 'Tokenizer' },
+        details: { event: 'Unexpected token' },
+        summary: 'Unexpected token in the secret named Tokenizer.',
+      }],
+    },
+  }));
+
+  await expect(client.replay()).resolves.toMatchObject({ records: [{ summary: 'Unexpected token in the secret named Tokenizer.' }] });
 });
 
 it('accepts a fragmented initial gap and rejects a gap with the wrong live cursor', async () => {
@@ -178,19 +193,48 @@ it('aborts one replay without cancelling its peer on the shared foreground boots
   expect(replayRequests).toBe(1);
 });
 
+it('does not finish replay body parsing after its signal aborts', async () => {
+  let beginBodyRead: (() => void) | undefined;
+  let resolveBody: ((body: ArrayBuffer) => void) | undefined;
+  const bodyReading = new Promise<void>((resolve) => { beginBodyRead = resolve; });
+  const body = new Promise<ArrayBuffer>((resolve) => { resolveBody = resolve; });
+  const replayResponse = {
+    arrayBuffer: async () => {
+      beginBodyRead?.();
+      return await body;
+    },
+    ok: true,
+    status: 200,
+  } as unknown as Response;
+  const client = new LogClient({ foreground: foreground(async (input) =>
+    String(input).includes('/api/project/session') ? session() : replayResponse) });
+  const controller = new AbortController();
+  const pending = client.replay(0, controller.signal);
+  await bodyReading;
+  controller.abort();
+  if (resolveBody === undefined) throw new Error('Expected replay body read.');
+  const encoded = new TextEncoder().encode(JSON.stringify({ replay: { cursor: { afterSequence: 1 }, records: [record] } }));
+  resolveBody(encoded.buffer);
+
+  await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+});
+
 it('does not deliver a stream callback after its shared generation signal aborts', async () => {
   const encoder = new TextEncoder();
   let markReading: (() => void) | undefined;
   let release: (() => void) | undefined;
+  let cancelled = false;
   const reading = new Promise<void>((resolve) => { markReading = resolve; });
   const response = new Response(new ReadableStream<Uint8Array>({
     pull: () => markReading?.(),
     start: (controller) => {
       release = () => {
+        if (cancelled) return;
         controller.enqueue(encoder.encode(`${JSON.stringify(record)}\n`));
         controller.close();
       };
     },
+    cancel: () => { cancelled = true; },
   }, { highWaterMark: 0 }));
   const client = clientFor(response);
   const controller = new AbortController();
@@ -205,7 +249,30 @@ it('does not deliver a stream callback after its shared generation signal aborts
   expect(received).toEqual([]);
 });
 
-it('stops before the next frame when a callback aborts within one buffered chunk', async () => {
+it('settles a pending stream read when its shared generation signal aborts', async () => {
+  let markReading: (() => void) | undefined;
+  const reading = new Promise<void>((resolve) => { markReading = resolve; });
+  const response = new Response(new ReadableStream<Uint8Array>({
+    pull: () => markReading?.(),
+  }, { highWaterMark: 0 }));
+  const client = clientFor(response);
+  const controller = new AbortController();
+  const stream = client.stream({ afterSequence: 0, onMessage: () => undefined, signal: controller.signal });
+  await reading;
+  controller.abort();
+
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await expect(Promise.race([
+      stream.done.then(() => 'settled'),
+      new Promise<'timed out'>((resolve) => { timeout = setTimeout(() => resolve('timed out'), 50); }),
+    ])).resolves.toBe('settled');
+  } finally {
+    if (timeout !== undefined) clearTimeout(timeout);
+  }
+});
+
+it('stops processing later records from the same chunk after its callback aborts', async () => {
   const bytes = new TextEncoder().encode(`${JSON.stringify(record)}\n${JSON.stringify({ ...record, sequence: 2 })}\n`);
   const client = clientFor(ndjson([bytes]));
   const controller = new AbortController();

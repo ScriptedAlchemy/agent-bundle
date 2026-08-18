@@ -205,11 +205,12 @@ const nonnegative = (value: unknown): value is number => typeof value === 'numbe
 
 const foregroundAbortError = (): Error => Object.assign(new Error('The operation was aborted.'), { name: 'AbortError' });
 
-const awaitForegroundAuthentication = <Value>(
-  operation: Promise<Value>,
-  signal: AbortSignal | undefined,
+/** Waits for an operation without allowing one caller's signal to cancel shared work. */
+export const awaitWithAbort = <Value>(
+  signal: AbortSignal | null | undefined,
+  operation: () => Promise<Value>,
 ): Promise<Value> => {
-  if (signal === undefined) return operation;
+  if (signal === undefined || signal === null) return operation();
   if (signal.aborted) return Promise.reject(foregroundAbortError());
   return new Promise<Value>((resolve, reject) => {
     let settled = false;
@@ -221,7 +222,11 @@ const awaitForegroundAuthentication = <Value>(
     };
     const onAbort = (): void => settle(() => reject(foregroundAbortError()));
     signal.addEventListener('abort', onAbort, { once: true });
-    void operation.then(
+    if (signal.aborted) {
+      onAbort();
+      return;
+    }
+    void operation().then(
       (value) => settle(() => resolve(value)),
       (error: unknown) => settle(() => reject(error)),
     );
@@ -411,7 +416,7 @@ export class ForegroundRouteClient implements ForegroundRequestAuthority {
     const route = foregroundRoute(path);
     const authentication = this.#authenticate();
     const signal = init.signal ?? undefined;
-    const session = await awaitForegroundAuthentication(authentication.promise, signal);
+    const session = await awaitWithAbort(signal, () => authentication.promise);
     if (signal?.aborted) throw foregroundAbortError();
     if (!this.#isAuthenticationCurrent(authentication)) {
       throw new ForegroundRouteClientError('AB8019', 'Foreground authentication was invalidated.', 401);
