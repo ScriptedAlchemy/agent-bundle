@@ -752,7 +752,19 @@ it('shares one foreground bootstrap and EventSource across project, artifact, ho
     }
     if (path.startsWith('/api/hooks?')) return Response.json({ hooks: [] });
     if (path === '/api/playground/sessions/session-1') return Response.json({
-      session: { id: 'session-1', identity: {}, state: 'closed' },
+      session: {
+        cleanupFailures: [],
+        createdAt: '2026-08-14T12:00:00.000Z',
+        id: 'session-1',
+        identity: {
+          epoch: { digest: 'sha256-epoch', id: 'epoch-1' },
+          fixture: { digest: 'sha256-fixture', id: 'fixture-1' },
+          invocation: { intent: {}, kind: 'skill.inspect' },
+          target: { name: 'portable' },
+          task: { id: 'task-1', text: 'Inspect an emitted Skill.' },
+        },
+        state: 'closed',
+      },
     });
     throw new Error(`Unexpected foreground route ${path}`);
   };
