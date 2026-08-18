@@ -6,6 +6,7 @@ import {
   EvalDefinitionError,
   expectExitCode,
   expectMcpCall,
+  expectNoMcpCall,
   expectNoSkillActivation,
   expectOutcome,
   expectSkillActivation,
@@ -256,6 +257,55 @@ it('resolves every assertion to pass, fail, or inconclusive without silently pas
     'fail',
     'pass',
   ]);
+});
+
+it('resolves forbidden MCP calls against tool-scoped and server-wide expectations', () => {
+  const observed = evidenceWith({
+    mcp: {
+      calls: [
+        { server: 'project', tool: 'status' },
+        { server: 'billing', tool: 'charge' },
+      ],
+      level: 'observed',
+    },
+  });
+
+  const toolScoped = resolveEvalAssertions([expectNoMcpCall({ server: 'billing', tool: 'charge' })], observed)[0];
+  expect(toolScoped?.outcome).toBe('fail');
+  expect(toolScoped?.detail).toContain('billing/charge was called 1 time(s)');
+
+  const serverWide = resolveEvalAssertions([expectNoMcpCall({ server: 'billing' })], observed)[0];
+  expect(serverWide?.outcome).toBe('fail');
+
+  const untouched = resolveEvalAssertions([
+    expectNoMcpCall({ server: 'billing', tool: 'refund' }),
+    expectNoMcpCall({ server: 'payments' }),
+  ], observed);
+  expect(untouched.map((result) => result.outcome)).toEqual(['pass', 'pass']);
+
+  const unavailable = resolveEvalAssertions([expectNoMcpCall({ server: 'billing' })], evidenceWith())[0];
+  expect(unavailable?.outcome).toBe('inconclusive');
+});
+
+it('validates forbidden MCP call expectations and normalizes them inside a suite', () => {
+  expect(() => expectNoMcpCall({ server: '' })).toThrow(EvalDefinitionError);
+  expect(() => expectNoMcpCall({ server: 'project', tool: ' ' })).toThrow(EvalDefinitionError);
+  expect(expectNoMcpCall({ server: 'project' }).minimumEvidence).toBe('observed');
+
+  const suite = defineEvalSuite({
+    cases: [{
+      assertions: [expectNoMcpCall({ server: 'billing', tool: 'charge' })],
+      fixture: './fixtures/repo',
+      hosts,
+      id: 'forbidden-call',
+      invocation: { mode: 'automatic' },
+      prompt: 'Do the task without charging anyone.',
+    }],
+    name: 'suite',
+  });
+  const assertion = suite.cases[0]?.assertions[0];
+  expect(assertion?.kind).toBe('no-mcp-call');
+  expect(assertion).toEqual(expectNoMcpCall({ server: 'billing', tool: 'charge' }));
 });
 
 it('never upgrades inferred activation evidence to an observed expectation', () => {

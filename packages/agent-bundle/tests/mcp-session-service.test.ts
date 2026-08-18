@@ -13,7 +13,7 @@ import { normalizeProject } from '../src/config/normalize.ts';
 import type { LoadedConfig } from '../src/config/load.ts';
 import { EpochStore } from '../src/dev/epoch-store.ts';
 import { McpAppBindingService, type McpAppSessionAuthority } from '../src/dev/mcp-app-binding-service.ts';
-import { McpSession, McpSessionService } from '../src/dev/mcp-session-service.ts';
+import { mcpAppClientCapabilities, McpSession, McpSessionService } from '../src/dev/mcp-session-service.ts';
 import type { ArtifactEpoch } from '../src/dev/types.ts';
 import { pathTokens, type AgentBundleConfig, type NormalizationTargetRegistry } from '../src/core/types.ts';
 
@@ -1786,3 +1786,13 @@ it('shares one close promise when a synchronous close observer re-enters shutdow
     await rm(pluginData, { force: true, recursive: true });
   }
 }, 30_000);
+
+it('advertises the pinned MCP Apps UI extension and MIME type on session initialize', () => {
+  expect(mcpAppClientCapabilities).toEqual({
+    extensions: {
+      'io.modelcontextprotocol/ui': {
+        mimeTypes: ['text/html;profile=mcp-app'],
+      },
+    },
+  });
+});

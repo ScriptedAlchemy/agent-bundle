@@ -12,6 +12,12 @@ import type {
 
 export const MCP_APP_PROTOCOL_VERSION = '2026-01-26';
 
+/** The pinned MCP Apps extension identifier the workbench advertises on session initialize. */
+export const MCP_APP_UI_EXTENSION = 'io.modelcontextprotocol/ui';
+
+/** The only resource MIME type the workbench renders as an MCP App. */
+export const MCP_APP_MIME_TYPE = 'text/html;profile=mcp-app';
+
 export type McpAppBridgeRequestId = string | number | null;
 export type McpAppBridgeDisplayMode = 'inline' | 'fullscreen' | 'pip';
 export type McpAppBridgeLifecycle = 'created' | 'initializing' | 'initialized' | 'closing' | 'closed';
@@ -576,7 +582,7 @@ const parsedResource = (value: McpAppJsonValue, resourceUri: string): ParsedReso
   if (response === undefined) return undefined;
   for (const candidate of response.contents) {
     const content = validResourceContent(candidate);
-    if (content === undefined || content.uri !== resourceUri || content.mimeType !== 'text/html;profile=mcp-app') continue;
+    if (content === undefined || content.uri !== resourceUri || content.mimeType !== MCP_APP_MIME_TYPE) continue;
     const hasText = typeof content.text === 'string';
     const hasBlob = typeof content.blob === 'string';
     if (hasText === hasBlob) return undefined;

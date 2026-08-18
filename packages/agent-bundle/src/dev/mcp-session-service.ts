@@ -2,6 +2,7 @@ import {
   Client,
   StreamableHTTPClientTransport,
   type CallToolResult,
+  type ClientCapabilities,
   type GetPromptResult,
   type Implementation,
   type Prompt,
@@ -31,6 +32,10 @@ import {
   type TargetMcpRuntimeContract,
 } from '../services/mcp-runtime.ts';
 import { EpochStore, type EpochReference } from './epoch-store.ts';
+import {
+  MCP_APP_MIME_TYPE,
+  MCP_APP_UI_EXTENSION,
+} from './mcp-app-bridge.ts';
 import type {
   McpAppBridgeResource,
   McpAppBridgeSession,
@@ -69,6 +74,15 @@ export type {
   McpSessionTraceSubscription,
   McpSessionTraceSubscriptionOptions,
 } from './mcp-session-protocol.ts';
+
+/** Advertised on initialize so servers can discover the workbench's MCP Apps support. */
+export const mcpAppClientCapabilities = {
+  extensions: {
+    [MCP_APP_UI_EXTENSION]: {
+      mimeTypes: [MCP_APP_MIME_TYPE],
+    },
+  },
+} satisfies ClientCapabilities;
 
 const defaultTimeoutMs = 5_000;
 const maxStderrBytes = 1_000_000;

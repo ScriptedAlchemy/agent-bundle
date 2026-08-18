@@ -10,6 +10,7 @@ export type EvalInvocationMode = 'automatic' | 'explicit' | 'none';
 export type EvalAssertionKind =
   | 'exit-code'
   | 'mcp-call'
+  | 'no-mcp-call'
   | 'no-skill-activation'
   | 'outcome'
   | 'skill-activation';
@@ -28,6 +29,14 @@ export interface EvalMcpCallAssertion {
   readonly minimumEvidence: ActivationEvidence;
   readonly server: string;
   readonly tool: string;
+}
+
+export interface EvalNoMcpCallAssertion {
+  readonly id: string;
+  readonly kind: 'no-mcp-call';
+  readonly minimumEvidence: ActivationEvidence;
+  readonly server: string;
+  readonly tool?: string;
 }
 
 export interface EvalNoSkillActivationAssertion {
@@ -54,6 +63,7 @@ export interface EvalSkillActivationAssertion {
 export type EvalAssertion =
   | EvalExitCodeAssertion
   | EvalMcpCallAssertion
+  | EvalNoMcpCallAssertion
   | EvalNoSkillActivationAssertion
   | EvalOutcomeAssertion
   | EvalSkillActivationAssertion;

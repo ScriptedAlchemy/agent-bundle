@@ -5,6 +5,7 @@ import type { DraftEvalCase, PlaygroundSelectedAssertion } from '../services/pla
 import {
   expectExitCode,
   expectMcpCall,
+  expectNoMcpCall,
   expectNoSkillActivation,
   expectOutcome,
   expectSkillActivation,
@@ -165,6 +166,13 @@ const normalizeAssertion = (value: EvalAssertion): EvalAssertion => {
       minimumEvidence,
       server: record.server as string,
       tool: record.tool as string,
+    });
+  }
+  if (record.kind === 'no-mcp-call') {
+    return expectNoMcpCall({
+      minimumEvidence,
+      server: record.server as string,
+      tool: record.tool as string | undefined,
     });
   }
   if (record.kind === 'no-skill-activation') {
