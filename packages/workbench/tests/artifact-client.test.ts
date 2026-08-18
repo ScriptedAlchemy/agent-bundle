@@ -34,7 +34,7 @@ const inspection = {
     outputPath: 'claude/hooks/session-start.mjs',
     sourceInputs: [{ path: 'hooks/session-start.ts', sha256: 'b'.repeat(64) }],
   }],
-  runtime: { executables: [], hooks: [], mcpServers: [] },
+  runtime: { executables: [], hooks: [], mcpServers: [], scripts: [] },
   targets: [{
     name: 'claude',
     tree: { children: [], kind: 'directory', name: 'claude', path: 'claude' },

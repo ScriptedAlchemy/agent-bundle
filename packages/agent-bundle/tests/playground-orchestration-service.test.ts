@@ -199,7 +199,7 @@ it('admits a gated operation promptly, replays its epoch binding, and cancels th
     } },
     trace,
   });
-  const admitted = await service.run({ operation: 'script.run', script: 'review.mjs', target: 'codex' });
+  const admitted = await service.run({ operation: 'script.run', scriptId: 'script:review', target: 'codex' } as unknown as Parameters<typeof service.run>[0]);
   expect(admitted.session.state).toBe('open');
   await expect(service.replay(admitted.session.id)).resolves.toMatchObject({ events: [expect.objectContaining({ kind: 'epoch.bound' })] });
   await enteredScript;
@@ -267,16 +267,20 @@ it('keeps close pending through epoch-reference release and reports its containe
   } finally { process.off('unhandledRejection', onUnhandled); }
 });
 
-it('rejects unavailable script execution before it mints a run, session, or epoch reference', async () => {
+it('records the selected script id and its nonzero exit as durable failed script evidence', async () => {
   const trace = new RecordingTraceStore();
-  const references: string[] = [];
   const service = new PlaygroundOrchestrationService({
     coordinator: { status: currentStatus }, createRunId: () => 'run-server-owned', createSessionId: () => 'session-server-owned',
-    epochStore: epochAuthority(references), scripts: { isAvailable: () => false, run: async () => { throw new Error('must not execute'); } }, trace,
+    epochStore: epochAuthority([]), scripts: { run: async () => Object.freeze({ exitCode: 17, script: 'review', stderr: 'failed', stdout: 'reviewed' }) }, trace,
   });
-  await expect(service.run({ operation: 'script.run', script: 'review.mjs', target: 'codex' })).rejects.toThrow('OS-contained script execution is not configured.');
-  expect(references).toEqual([]);
-  expect(trace.input).toBeUndefined();
+  await service.run({ operation: 'script.run', scriptId: 'script:review', target: 'codex' } as unknown as Parameters<typeof service.run>[0]);
+  await eventually(() => expect(trace.finalized).toEqual({ status: 'failed' }));
+  expect(trace.input?.invocation).toEqual({ intent: { scriptId: 'script:review' }, kind: 'script.run' });
+  expect(trace.appended).toContainEqual(expect.objectContaining({
+    kind: 'script.completed',
+    raw: { result: { exitCode: 17, script: 'review', stderr: 'failed', stdout: 'reviewed' }, targetDigest: 'target-sha256' },
+    source: 'script',
+  }));
 });
 
 it('promotes only persisted raw event references and closes admission before draining active work', async () => {
@@ -309,7 +313,7 @@ it('promotes only persisted raw event references and closes admission before dra
 it('derives failed outcomes from script exits, hook diagnostics, and MCP error results while preserving the canonical epoch target digest', async () => {
   const cases = [
     {
-      operation: { operation: 'script.run' as const, script: 'review.mjs', target: 'codex' },
+      operation: { operation: 'script.run' as const, scriptId: 'script:review', target: 'codex' } as unknown as Parameters<PlaygroundOrchestrationService['run']>[0],
       services: { scripts: { run: async () => Object.freeze({ exitCode: 17, script: 'review.mjs', stderr: 'failed', stdout: '' }) } },
     },
     {

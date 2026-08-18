@@ -87,10 +87,18 @@ export interface ArtifactInspectionMcpServer {
   readonly target: string;
 }
 
+export interface ArtifactInspectionScript {
+  readonly file: ArtifactInspectionFile;
+  readonly id: string;
+  readonly name: string;
+  readonly target: string;
+}
+
 export interface ArtifactInspectionRuntime {
   readonly executables: readonly ArtifactInspectionFile[];
   readonly hooks: readonly ArtifactInspectionHook[];
   readonly mcpServers: readonly ArtifactInspectionMcpServer[];
+  readonly scripts: readonly ArtifactInspectionScript[];
 }
 
 /** Detached facts from one strictly validated, published Artifact Manifest v2 epoch. */

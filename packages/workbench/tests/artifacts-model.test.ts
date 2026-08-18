@@ -84,6 +84,7 @@ const inspection: ArtifactInspection = {
       name: 'review',
       target: 'claude',
     }],
+    scripts: [],
   },
   targets: [target],
 };
