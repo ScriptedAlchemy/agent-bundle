@@ -54,6 +54,13 @@ export interface EvalComparisonUsage {
   readonly totalTokens: number;
 }
 
+/** Literal persisted alignment details for one condition side, without commands or filesystem paths. */
+export interface EvalConditionProvenance {
+  readonly hostCliVersion?: string;
+  readonly invocation?: string;
+  readonly semanticGrader?: string;
+}
+
 /** One side of a comparison, derived solely from its durable run and trial records. */
 export interface EvalComparisonSide {
   readonly run: EvalRunRecord;
@@ -83,6 +90,7 @@ export interface EvalConditionMetrics {
   readonly outcome: EvalAssertionOutcome;
   readonly passRate: number;
   readonly passes: number;
+  readonly provenance: EvalConditionProvenance;
   readonly reliability?: EvalReliability;
   readonly runId: string;
   readonly trials: number;
@@ -255,6 +263,38 @@ const usageFor = (gradable: readonly EvalTrialRecord[]): EvalComparisonUsage | u
   });
 };
 
+const invocationIdentity = (provenance: EvalTrialProvenance | undefined): string | undefined => {
+  const invocation = provenance?.invocation;
+  if (invocation === undefined) return undefined;
+  return invocation.mode === 'explicit' ? `explicit:${invocation.skill}` : invocation.mode;
+};
+
+const semanticGraderVersion = (provenance: EvalTrialProvenance | undefined): string | undefined => {
+  if (provenance === undefined) return undefined;
+  const semanticGrader = provenance.semanticGrader;
+  return semanticGrader === null
+    ? 'none'
+    : 'state' in semanticGrader
+      ? undefined
+      : `${semanticGrader.id}@${semanticGrader.model}/v${semanticGrader.schemaVersion}`;
+};
+
+const recordedConditionValue = (values: readonly (string | undefined)[]): string | undefined => {
+  if (values.length === 0 || values.some((value) => value === undefined)) return undefined;
+  return [...new Set(values as readonly string[])].sort((left, right) => left.localeCompare(right)).join(', ');
+};
+
+const conditionProvenanceFor = (condition: Condition): EvalConditionProvenance => {
+  const hostCliVersion = recordedConditionValue(condition.trials.map((trial) => trial.provenance?.hostCliVersion));
+  const invocation = recordedConditionValue(condition.trials.map((trial) => invocationIdentity(trial.provenance)));
+  const semanticGrader = recordedConditionValue(condition.trials.map((trial) => semanticGraderVersion(trial.provenance)));
+  return Object.freeze({
+    ...(hostCliVersion === undefined ? {} : { hostCliVersion }),
+    ...(invocation === undefined ? {} : { invocation }),
+    ...(semanticGrader === undefined ? {} : { semanticGrader }),
+  });
+};
+
 /** A harness failure is a defect in Agent Bundle, so it never enters the plugin's own k/n. */
 const metricsFor = (condition: Condition, sampleSize: number): EvalConditionMetrics => {
   const gradable = condition.trials.filter((trial) => trial.harnessFailure === undefined);
@@ -277,6 +317,7 @@ const metricsFor = (condition: Condition, sampleSize: number): EvalConditionMetr
     outcome: outcomeFor(fail, inconclusive),
     passRate: trials === 0 ? 0 : round(passes / trials, 6),
     passes,
+    provenance: conditionProvenanceFor(condition),
     ...(evidence === 'smoke' ? {} : {
       reliability: Object.freeze({
         passAtK: round(1 - combinationRatio(trials - passes, trials, effectiveSize), 6),
@@ -299,22 +340,6 @@ const facetValue = (values: readonly (string | undefined)[]): FacetValue => {
     recorded,
     value: first === undefined ? unrecorded : distinct.join(', '),
   });
-};
-
-const invocationIdentity = (provenance: EvalTrialProvenance | undefined): string | undefined => {
-  const invocation = provenance?.invocation;
-  if (invocation === undefined) return undefined;
-  return invocation.mode === 'explicit' ? `explicit:${invocation.skill}` : invocation.mode;
-};
-
-const semanticGraderVersion = (provenance: EvalTrialProvenance | undefined): string | undefined => {
-  if (provenance === undefined) return undefined;
-  const semanticGrader = provenance.semanticGrader;
-  return semanticGrader === null
-    ? 'none'
-    : 'state' in semanticGrader
-      ? undefined
-    : `${semanticGrader.id}@${semanticGrader.model}/v${semanticGrader.schemaVersion}`;
 };
 
 const facetsOf = (condition: Condition): Readonly<Record<EvalAlignmentFacet, FacetValue>> => Object.freeze({

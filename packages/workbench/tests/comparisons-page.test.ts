@@ -38,6 +38,7 @@ const metrics = (overrides: Partial<EvalConditionMetrics> = {}): EvalConditionMe
   outcome: 'fail',
   passRate: 0.75,
   passes: 3,
+  provenance: { hostCliVersion: '2.1.232', invocation: 'automatic', semanticGrader: 'none' },
   reliability: { passAtK: 1, passPowerK: 0.25, sampleSize: 3 },
   runId: 'run-base',
   trials: 4,
@@ -112,6 +113,8 @@ it('shows the actual k/n beside pass@k and pass^k in the matrix', () => {
   expect(markup).toContain('25.0% (k=3)');
   expect(markup).toContain('direct-review');
   expect(markup).toContain('sonnet');
+  expect(markup).toContain('Recorded provenance');
+  expect(markup).toContain('CLI 2.1.232 · Invocation automatic · Semantic grader none');
 });
 
 it('keeps an inconclusive condition visually distinct from a failing one', () => {

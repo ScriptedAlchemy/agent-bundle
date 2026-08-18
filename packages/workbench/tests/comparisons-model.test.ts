@@ -34,6 +34,11 @@ const metrics = (overrides: Partial<EvalConditionMetrics> = {}): EvalConditionMe
   outcome: 'fail',
   passRate: 0.75,
   passes: 3,
+  provenance: {
+    hostCliVersion: '2.1.232',
+    invocation: 'automatic',
+    semanticGrader: 'none',
+  },
   reliability: { passAtK: 1, passPowerK: 0.25, sampleSize: 3 },
   runId: 'run-base',
   trials: 4,
@@ -93,6 +98,7 @@ it('shows the actual k/n beside pass@k and pass^k', () => {
   expect(cell.passAtK).toBe('100.0% (k=3)');
   expect(cell.passPowerK).toBe('25.0% (k=3)');
   expect(cell.evidenceLabel).toBe('Reliability · 4 trials');
+  expect(cell.provenance).toBe('CLI 2.1.232 · Invocation automatic · Semantic grader none');
 });
 
 it('states smoke evidence in place of a reliability number', () => {

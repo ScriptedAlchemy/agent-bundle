@@ -298,6 +298,43 @@ const hardcodedProgress = (phase: NativePlaygroundProgress): PlaygroundEventInpu
         : 'Native host process started.',
 });
 
+const safeNativeProvenanceText = (value: string, projectRoot: string): string => {
+  const redacted = safeDevWireText(redactEvalCredentialText(value), projectRoot);
+  return /^[A-Za-z0-9][A-Za-z0-9_.:@-]{0,127}$/u.test(redacted) ? redacted : '[REDACTED]';
+};
+
+const nativeTrialProvenance = (trial: EvalTrialRecord, projectRoot: string): PlaygroundJsonObject => {
+  const provenance = trial.provenance;
+  const semanticGrader = provenance?.semanticGrader;
+  return Object.freeze({
+    ...(provenance?.hostCliVersion === undefined
+      ? {}
+      : { hostCliVersion: safeNativeProvenanceText(provenance.hostCliVersion, projectRoot) }),
+    ...(provenance === undefined
+      ? {}
+      : {
+        invocation: Object.freeze({
+          mode: provenance.invocation.mode,
+          ...(provenance.invocation.skill === undefined
+            ? {}
+            : { skill: safeNativeProvenanceText(provenance.invocation.skill, projectRoot) }),
+        }),
+        ...(semanticGrader === undefined
+          ? {}
+          : { semanticGrader: semanticGrader === null
+            ? null
+            : 'state' in semanticGrader
+              ? Object.freeze({ state: 'unrecorded' })
+              : Object.freeze({
+                id: safeNativeProvenanceText(semanticGrader.id, projectRoot),
+                model: safeNativeProvenanceText(semanticGrader.model, projectRoot),
+                schemaVersion: semanticGrader.schemaVersion,
+              }) }),
+      }),
+    model: safeNativeProvenanceText(trial.model, projectRoot),
+  });
+};
+
 /** A completed response is user-facing evidence, but never a raw host stream. */
 const safeResponse = (value: string): string => redactEvalCredentialText(value)
   .replace(/(?:[A-Za-z]:)?(?:[/\\][^\s`'"<>|]*)+/gu, '[path]')
@@ -319,6 +356,12 @@ const normalizedTrialEvents = (
   projectRoot: string,
   response: string | undefined,
 ): readonly PlaygroundEventInput[] => Object.freeze([
+  Object.freeze({
+    kind: 'native.provenance',
+    raw: nativeTrialProvenance(trial, projectRoot),
+    source: 'host-preflight',
+    summary: 'Recorded safe native model and host provenance.',
+  }),
   Object.freeze({
     kind: 'native.activation',
     raw: Object.freeze({

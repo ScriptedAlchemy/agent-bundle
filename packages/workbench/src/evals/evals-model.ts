@@ -5,7 +5,13 @@ import type {
   EvalSuiteListing,
   EvalSuiteSummary,
 } from '../../../agent-bundle/src/dev/eval-service.ts';
-import type { EvalRunEvent, EvalRunRecord, EvalTrialRecord } from '../../../agent-bundle/src/eval/run-store.ts';
+import type {
+  EvalRunEvent,
+  EvalRunRecord,
+  EvalTrialProvenance,
+  EvalTrialRecord,
+  EvalTrialUsage,
+} from '../../../agent-bundle/src/eval/run-store.ts';
 import type {
   ActivationEvidence,
   EvalAssertionKind,
@@ -54,8 +60,10 @@ export interface EvalTrialRow {
   readonly id: string;
   readonly model: string;
   readonly outcome: EvalAssertionOutcome;
+  readonly provenance?: EvalTrialProvenance;
   readonly rawArtifacts: readonly string[];
   readonly targetDigest: string;
+  readonly usage?: EvalTrialUsage;
 }
 
 export interface EvalHostModelRow {
@@ -257,6 +265,16 @@ const evidenceFor = (evidence: EvalTrialEvidence): EvalTrialEvidence => Object.f
   }),
 });
 
+const provenanceFor = (provenance: EvalTrialProvenance): EvalTrialProvenance => Object.freeze({
+  ...(provenance.hostCliVersion === undefined ? {} : { hostCliVersion: provenance.hostCliVersion }),
+  invocation: Object.freeze({ ...provenance.invocation }),
+  semanticGrader: provenance.semanticGrader === null
+    ? null
+    : 'state' in provenance.semanticGrader
+      ? Object.freeze({ state: 'unrecorded' as const })
+      : Object.freeze({ ...provenance.semanticGrader }),
+});
+
 export const evalTrialRowsFor = (
   trials: readonly EvalTrialRecord[],
 ): readonly EvalTrialRow[] => Object.freeze(trials.map((trial): EvalTrialRow => Object.freeze({
@@ -275,8 +293,10 @@ export const evalTrialRowsFor = (
   id: trial.id,
   model: trial.model,
   outcome: trial.outcome,
+  ...(trial.provenance === undefined ? {} : { provenance: provenanceFor(trial.provenance) }),
   rawArtifacts: Object.freeze([...trial.rawArtifacts]),
   targetDigest: trial.targetDigest,
+  ...(trial.usage === undefined ? {} : { usage: Object.freeze({ ...trial.usage }) }),
 })));
 
 const jsonEquivalent = (left: unknown, right: unknown): boolean => {

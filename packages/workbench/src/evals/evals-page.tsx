@@ -110,6 +110,24 @@ const maximumPreviewBytes = 256 * 1024;
 
 const evidenceLevel = (value: string): string => `${value} evidence`;
 
+const invocationProvenance = (row: EvalTrialRow): string => {
+  const invocation = row.provenance?.invocation;
+  if (invocation === undefined) return 'Not recorded';
+  return invocation.mode === 'explicit' ? `explicit · ${invocation.skill}` : invocation.mode;
+};
+
+const semanticGraderProvenance = (row: EvalTrialRow): string => {
+  const semanticGrader = row.provenance?.semanticGrader;
+  if (semanticGrader === undefined) return 'Not recorded';
+  if (semanticGrader === null) return 'None';
+  if ('state' in semanticGrader) return 'Unrecorded';
+  return `${semanticGrader.id} · ${semanticGrader.model} · schema v${semanticGrader.schemaVersion}`;
+};
+
+const usageProvenance = (row: EvalTrialRow): string => row.usage === undefined
+  ? 'Not recorded'
+  : `${row.usage.inputTokens} input tokens · ${row.usage.outputTokens} output tokens`;
+
 const EvidenceChannels = ({ row }: { readonly row: EvalTrialRow }) => <section className="eval-evidence-channels">
   <h3>Evidence channels</h3>
   <dl>
@@ -247,6 +265,15 @@ const TrialCard = ({ client, row, runId }: {
     <div><dt>Duration</dt><dd>{row.durationMs} ms</dd></div>
     <div><dt>Target digest</dt><dd className="eval-digest">{row.targetDigest}</dd></div>
   </dl>
+  <section className="eval-trial-provenance">
+    <h3>Recorded provenance</h3>
+    <dl>
+      <div><dt>Host CLI version</dt><dd>{row.provenance?.hostCliVersion ?? 'Not recorded'}</dd></div>
+      <div><dt>Invocation</dt><dd>{invocationProvenance(row)}</dd></div>
+      <div><dt>Semantic grader</dt><dd>{semanticGraderProvenance(row)}</dd></div>
+      <div><dt>Recorded usage</dt><dd>{usageProvenance(row)}</dd></div>
+    </dl>
+  </section>
   {row.failure === undefined
     ? (row.outcome === 'inconclusive'
       ? <p className="eval-trial-note">This trial recorded no defect; its evidence was insufficient to conclude.</p>

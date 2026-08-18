@@ -27,6 +27,7 @@ export interface ComparisonMetricCell {
   readonly passAtK: string;
   readonly passPowerK: string;
   readonly passRate: string;
+  readonly provenance: string;
   readonly runId: string;
   readonly usage: string;
 }
@@ -116,6 +117,11 @@ const points = (value: number): string => `${sign(value)}${(value * 100).toFixed
 const duration = (value: number): string =>
   `${value < 0 ? '-' : ''}${Math.round(Math.abs(value))} ms`;
 
+const provenance = (metrics: EvalConditionMetrics): string => {
+  const recorded = metrics.provenance;
+  return `CLI ${recorded.hostCliVersion ?? 'Not recorded'} · Invocation ${recorded.invocation ?? 'Not recorded'} · Semantic grader ${recorded.semanticGrader ?? 'Not recorded'}`;
+};
+
 export const comparisonRunOptionsFor = (runs: readonly EvalRunRecord[]): readonly ComparisonRunOption[] =>
   Object.freeze(runs.map((run) => Object.freeze({
     key: run.id,
@@ -137,6 +143,7 @@ export const comparisonMetricCellFor = (metrics: EvalConditionMetrics): Comparis
     ? smokeLabel
     : `${percent(metrics.reliability.passPowerK)} (k=${metrics.reliability.sampleSize})`,
   passRate: percent(metrics.passRate),
+  provenance: provenance(metrics),
   runId: metrics.runId,
   usage: metrics.usage === undefined
     ? 'Not recorded'

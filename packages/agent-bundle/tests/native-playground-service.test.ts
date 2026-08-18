@@ -679,6 +679,7 @@ it('projects only awaited normalized Claude completion evidence and removes its 
 
     expect(emitted).toEqual(['native.preflight', 'native.fixture.materialized', 'native.host.started']);
     expect(result.events.map((event) => event.kind)).toEqual([
+      'native.provenance',
       'native.activation',
       'native.mcp',
       'native.assertions',
@@ -687,6 +688,16 @@ it('projects only awaited normalized Claude completion evidence and removes its 
       'native.response',
       'native.workspace',
     ]);
+    expect(result.events).toContainEqual(expect.objectContaining({
+      kind: 'native.provenance',
+      raw: {
+        hostCliVersion: '2.1.232',
+        invocation: { mode: 'automatic' },
+        model: 'pinned-claude-model',
+        semanticGrader: null,
+      },
+      source: 'host-preflight',
+    }));
     expect(result.events).toContainEqual(expect.objectContaining({
       kind: 'native.hooks', raw: { events: ['session-start'] }, source: 'hook',
     }));
