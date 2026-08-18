@@ -115,7 +115,7 @@ export interface ForegroundServerOptions {
   readonly logs?: DevLogService;
   /** Deterministic and native eval runs; the browser names discovered suites, never a path or command. */
   readonly evals?: EvalRouteService;
-  /** The project-owned Eval service closes only after foreground Eval route admission has drained. */
+  /** The project-owned Eval service closes after foreground Eval routes and Agent API admissions drain. */
   readonly evalLifecycle?: Readonly<{ close(): Promise<void> }>;
   readonly eventHub: ProjectEventHub;
   readonly host?: string;

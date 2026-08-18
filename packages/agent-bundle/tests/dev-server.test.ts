@@ -1466,6 +1466,33 @@ it('aggregates a hook playground drain failure while still releasing the server 
   await simulation;
 });
 
+it('drains the Eval service after routes close and retains its shutdown failure', async () => {
+  const coordinator = new RecordingCoordinator();
+  const evalFailure = new Error('eval cancellation cleanup failed');
+  let evalCloseCalls = 0;
+  const server = await startForegroundServer({
+    coordinator,
+    evalLifecycle: {
+      close: async () => {
+        evalCloseCalls += 1;
+        throw evalFailure;
+      },
+    },
+    eventHub: new ProjectEventHub(),
+    port: 0,
+  });
+  try {
+    await expect(server.close()).rejects.toMatchObject({
+      failures: [{ error: evalFailure, resource: 'eval-service' }],
+      name: 'ForegroundServerCloseError',
+    });
+    expect(evalCloseCalls).toBe(1);
+    expect(coordinator.closeCalls).toBe(1);
+  } finally {
+    await server.close().catch(() => undefined);
+  }
+});
+
 /** Re-enters the foreground close from its own abort callback, as a cleanup listener would. */
 class ReentrantHookPlayground implements HookPlaygroundRouteService {
   nested: Promise<void> | undefined;

@@ -127,6 +127,9 @@ class RecordingService implements EvalRouteService {
   artifactCloseCalls = 0;
   artifactCloseFailure: unknown;
   cancelCalls = 0;
+  cancelOpening = false;
+  cancelOpeningRelease: (() => void) | undefined;
+  cancelOpeningStarted: (() => void) | undefined;
   artifactOpening = false;
   artifactOpeningStarted: (() => void) | undefined;
   artifactOpeningRelease: (() => void) | undefined;
@@ -213,6 +216,10 @@ class RecordingService implements EvalRouteService {
   async cancel(runId: string): Promise<boolean> {
     this.calls.push({ kind: 'cancel', runId });
     if (this.failure !== undefined) throw this.failure;
+    if (this.cancelOpening) {
+      this.cancelOpeningStarted?.();
+      await new Promise<void>((resolvePromise) => { this.cancelOpeningRelease = resolvePromise; });
+    }
     this.cancelCalls += 1;
     return this.cancelCalls === 1;
   }
@@ -460,6 +467,35 @@ it('retains a late event-subscription cleanup failure in the stable route close 
   }
 });
 
+it('keeps route close pending for an admitted cancellation without aborting it', async () => {
+  const service = new RecordingService();
+  service.cancelOpening = true;
+  const cancelling = new Promise<void>((resolvePromise) => { service.cancelOpeningStarted = resolvePromise; });
+  const started = await startRoutes(service);
+  let pending: Promise<Response> | undefined;
+  try {
+    pending = fetch(`${started.url}/api/evals/runs/run-a/cancel`, { body: '{}', headers, method: 'POST' });
+    await cancelling;
+
+    let settled = false;
+    const closing = started.routes.close();
+    void closing.then(() => { settled = true; });
+    await new Promise<void>((resolvePromise) => setImmediate(resolvePromise));
+    expect(settled).toBe(false);
+
+    service.cancelOpeningRelease?.();
+    await closing;
+    const response = await pending;
+    expect(response.status).toBe(202);
+    await expect(response.json()).resolves.toEqual({ cancelled: true, runId: 'run-a' });
+    expect(service.calls).toEqual([{ kind: 'cancel', runId: 'run-a' }]);
+  } finally {
+    service.cancelOpeningRelease?.();
+    await pending?.catch(() => undefined);
+    await started.close().catch(() => undefined);
+  }
+});
+
 it('keeps one bounded stream writer while a blocked response receives reentrant live events', async () => {
   const service = new RecordingService();
   service.streamEvents = Object.freeze(Array.from({ length: 300 }, (_, index) => Object.freeze({
@@ -696,6 +732,24 @@ it('accepts only the three browser harnesses and rejects every smuggled executio
       expect(response.status).toBe(400);
       await expect(response.json()).resolves.toMatchObject({ diagnostic: { code: 'AB8072' } });
     }
+    expect(service.calls).toEqual([]);
+  } finally {
+    await started.close();
+  }
+});
+
+it('rejects duplicate JSON keys before run admission', async () => {
+  const service = new RecordingService();
+  const started = await startRoutes(service);
+  try {
+    const response = await fetch(`${started.url}/api/evals/runs`, {
+      body: '{"harness":"deterministic","harness":"claude"}',
+      headers,
+      method: 'POST',
+    });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({ diagnostic: { code: 'AB8001' } });
     expect(service.calls).toEqual([]);
   } finally {
     await started.close();

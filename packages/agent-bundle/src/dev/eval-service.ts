@@ -175,7 +175,7 @@ interface ActiveEvalRun {
   readonly requestSignal: AbortSignal | undefined;
   result: Promise<EvalRunResult> | undefined;
   readonly runId: string;
-  terminal: boolean;
+  terminal: 'finishing' | 'open' | 'persisted';
   readonly writer: Awaited<ReturnType<typeof createEvalRun>>;
 }
 
@@ -396,6 +396,7 @@ class OpenedEvalArtifact implements EvalArtifactReader {
  */
 export class EvalService {
   readonly #artifactReaders = new Set<OpenedEvalArtifact>();
+  readonly #backgroundFailures = new Set<unknown>();
   readonly #configPath: string | undefined;
   readonly #mode: string;
   readonly #logger: DevLogSink | undefined;
@@ -538,9 +539,14 @@ export class EvalService {
         ...active.flatMap((run) => run.result === undefined ? [] : [run.result]),
       ]);
       this.#artifactReaders.clear();
-      const failures = [...starts, ...results].filter((result): result is PromiseRejectedResult => result.status === 'rejected');
+      const failures = [
+        ...[...starts, ...results]
+          .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
+          .map((result) => result.reason),
+        ...this.#backgroundFailures,
+      ];
       if (failures.length > 0) {
-        throw new AggregateError(failures.map((failure) => failure.reason), 'Eval service could not close.');
+        throw new AggregateError([...new Set(failures)], 'Eval service could not close.');
       }
     });
     return this.#closePromise;
@@ -653,7 +659,7 @@ export class EvalService {
       requestSignal: request.signal,
       result: undefined,
       runId,
-      terminal: false,
+      terminal: 'open',
       writer,
     };
     let resolveResult!: (result: EvalRunResult) => void;
@@ -674,7 +680,10 @@ export class EvalService {
       directory,
       harness,
       planned,
-    }).then(resolveResult, rejectResult);
+    }).then(resolveResult, (error: unknown) => {
+      this.#backgroundFailures.add(error);
+      rejectResult(error);
+    });
     void active.result.catch(() => undefined);
     return Object.freeze({ run: writer.record });
   }
@@ -691,7 +700,7 @@ export class EvalService {
     }
     const active = this.#activeRuns.get(runId);
     if (active !== undefined) {
-      const requested = active.cancellation === undefined && !active.terminal;
+      const requested = active.cancellation === undefined && active.terminal === 'open';
       if (requested) await this.#requestCancellation(active);
       if (active.result !== undefined) await active.result.catch(() => undefined);
       return requested;
@@ -711,6 +720,9 @@ export class EvalService {
     }>,
   ): Promise<EvalRunResult> {
     const completed: EvalTrialRecord[] = [];
+    let executionFailure: unknown;
+    let executionFailed = false;
+    let result: EvalRunResult | undefined;
     try {
       for (const plan of options.planned) {
         if (active.cancelled || active.controller.signal.aborted) break;
@@ -756,44 +768,61 @@ export class EvalService {
         }
       }
       const cancelled = active.cancelled || active.controller.signal.aborted || completed.length !== options.planned.length;
-      active.terminal = true;
+      active.terminal = 'finishing';
       await this.#appendEvent(active.writer, active.runId, {
         kind: cancelled ? 'run.cancelled' : 'run.completed',
         payload: { completed: completed.length, planned: options.planned.length },
       });
+      active.terminal = 'persisted';
       const aggregates = aggregateEvalTrials(completed);
-      const result = Object.freeze({
+      const completedResult = Object.freeze({
         aggregates,
         diagnostics: options.config.diagnostics,
         run: await active.writer.finish(summarizeEvalRun(aggregates)),
         trials: Object.freeze(completed),
       });
+      result = completedResult;
       this.#log('eval.run.completed', 'info', 'Eval run completed.', active.runId, {
-        aggregates: result.aggregates,
-        trials: result.trials.length,
+        aggregates: completedResult.aggregates,
+        trials: completedResult.trials.length,
       });
-      return result;
     } catch (error) {
-      if (!active.terminal) {
-        active.terminal = true;
+      executionFailure = error;
+      executionFailed = true;
+      if (active.terminal !== 'persisted') {
+        active.terminal = 'finishing';
         await this.#appendEvent(active.writer, active.runId, {
           kind: active.cancelled || active.controller.signal.aborted ? 'run.cancelled' : 'run.failed',
           payload: {},
-        }).catch(() => undefined);
+        }).then(() => { active.terminal = 'persisted'; }).catch(() => undefined);
       }
       await active.writer.finish(summarizeEvalRun(aggregateEvalTrials(completed))).catch(() => undefined);
       this.#log('eval.run.failed', 'error', 'Eval run failed.', active.runId, { failure: 'unavailable' });
-      throw error;
-    } finally {
+    }
+
+    let cleanupFailure: unknown;
+    let cleanupFailed = false;
+    try {
       if (active.requestAbort !== undefined) active.requestSignal?.removeEventListener('abort', active.requestAbort);
       await active.writer.close();
+    } catch (error) {
+      cleanupFailure = error;
+      cleanupFailed = true;
+    } finally {
       if (this.#activeRuns.get(active.runId) === active) this.#activeRuns.delete(active.runId);
     }
+    if (executionFailed && cleanupFailed) {
+      throw new AggregateError([executionFailure, cleanupFailure], 'Eval run execution and cleanup failed.');
+    }
+    if (cleanupFailed) throw cleanupFailure;
+    if (executionFailed) throw executionFailure;
+    if (result === undefined) throw new Error('Eval run completed without a result.');
+    return result;
   }
 
   #requestCancellation(active: ActiveEvalRun): Promise<void> {
     if (active.cancellation !== undefined) return active.cancellation;
-    if (active.terminal) return Promise.resolve();
+    if (active.terminal !== 'open') return Promise.resolve();
     active.cancelled = true;
     const cancellation = this.#appendEvent(active.writer, active.runId, {
       kind: 'run.cancelling',

@@ -6,6 +6,7 @@ import { expect, it } from '@rstest/core';
 import { build } from '../src/api.ts';
 import { EvalService, EvalServiceError } from '../src/dev/eval-service.ts';
 import { evalCaseFromDraft } from '../src/eval/index.ts';
+import { EvalRunWriter } from '../src/eval/run-store.ts';
 import { createProjectFixture, removeProjectFixture } from './helpers/project-fixture.ts';
 import { seedEvalProject, writeEvalSuite } from './support/eval-project.ts';
 
@@ -837,6 +838,79 @@ it('finishes a failed background run so its partial summary remains readable', a
     await expect(service.close()).rejects.toThrow('Eval service could not close.');
   } finally {
     releaseTrial?.();
+    await evals?.close().catch(() => undefined);
+    await removeProjectFixture(project.root);
+  }
+}, 120_000);
+
+it('recovers a failed terminal append with one durable failed terminal event', async () => {
+  const project = await createProjectFixture();
+  const terminalFailure = new Error('run.completed journal write failed');
+  const appendEvent = EvalRunWriter.prototype.appendEvent;
+  let failedTerminalAppend = false;
+  EvalRunWriter.prototype.appendEvent = async function (event) {
+    if (event.kind === 'run.completed' && !failedTerminalAppend) {
+      failedTerminalAppend = true;
+      throw terminalFailure;
+    }
+    return appendEvent.call(this, event);
+  };
+  let evals: EvalService | undefined;
+  try {
+    await seedEvalProject(project.root);
+    const service = new EvalService({ projectRoot: project.root, targets: ['portable'] });
+    evals = service;
+
+    const admission = await service.start({ caseIds: ['reads-result'] });
+    let completed = false;
+    for (let attempt = 0; attempt < 100 && !completed; attempt += 1) {
+      completed = (await service.read(admission.run.id)).run.completedAt !== undefined;
+      if (!completed) await new Promise<void>((resolvePromise) => setTimeout(resolvePromise, 10));
+    }
+    if (!completed) throw new Error('The recovered failed run was not finalized.');
+
+    const events = await service.events(admission.run.id, 0);
+    expect(events.events.filter((event) => event.kind === 'run.failed')).toHaveLength(1);
+    expect(events.events.filter((event) => event.kind === 'run.completed')).toHaveLength(0);
+    await expect(service.close()).rejects.toThrow('Eval service could not close.');
+  } finally {
+    EvalRunWriter.prototype.appendEvent = appendEvent;
+    await evals?.close().catch(() => undefined);
+    await removeProjectFixture(project.root);
+  }
+}, 120_000);
+
+it('retains execution and writer cleanup failures while removing the failed run from shutdown tracking', async () => {
+  const project = await createProjectFixture();
+  const executionFailure = new Error('trial persistence failed');
+  const cleanupFailure = new Error('writer close failed');
+  const writeTrial = EvalRunWriter.prototype.writeTrial;
+  const close = EvalRunWriter.prototype.close;
+  let failedTrialWrite = false;
+  EvalRunWriter.prototype.writeTrial = async function (trial) {
+    if (!failedTrialWrite) {
+      failedTrialWrite = true;
+      throw executionFailure;
+    }
+    return writeTrial.call(this, trial);
+  };
+  EvalRunWriter.prototype.close = function () {
+    return close.call(this).then(() => { throw cleanupFailure; });
+  };
+  let evals: EvalService | undefined;
+  try {
+    await seedEvalProject(project.root);
+    const service = new EvalService({ projectRoot: project.root, targets: ['portable'] });
+    evals = service;
+
+    await expect(service.run({ caseIds: ['reads-result'] })).rejects.toMatchObject({
+      errors: [executionFailure, cleanupFailure],
+      name: 'AggregateError',
+    });
+    await expect(service.close()).rejects.toThrow('Eval service could not close.');
+  } finally {
+    EvalRunWriter.prototype.close = close;
+    EvalRunWriter.prototype.writeTrial = writeTrial;
     await evals?.close().catch(() => undefined);
     await removeProjectFixture(project.root);
   }

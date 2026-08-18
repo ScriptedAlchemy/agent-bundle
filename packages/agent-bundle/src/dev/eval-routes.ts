@@ -2,6 +2,7 @@ import { Buffer } from 'node:buffer';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { Readable } from 'node:stream';
 
+import { parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
 import {
   EvalConfigError,
   EvalDefinitionError,
@@ -266,7 +267,7 @@ const jsonBody = async (request: IncomingMessage): Promise<JsonObject> => {
   }
   let parsed: unknown;
   try {
-    parsed = JSON.parse(await readBody(request));
+    parsed = parseJsonWithoutDuplicateKeys(await readBody(request));
   } catch (error) {
     if (isRequestDiagnostic(error)) throw error;
     throw requestError(diagnostic('AB8001', 'Request body must be valid JSON.', 400));
