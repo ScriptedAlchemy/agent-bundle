@@ -414,7 +414,7 @@ THIRD_PARTY_NOTICES
 ### Task 12: Optional agent-facing MCP and end-to-end packaged dogfood
 
 **Files:**
-- Create: `packages/agent-bundle/src/services/agent-api.ts`
+- Create: `packages/agent-bundle/src/dev/agent-api.ts`
 - Test: `packages/agent-bundle/tests/agent-api.test.ts`
 - Test: `packages/agent-bundle/tests/workbench-packed.test.ts`
 - Modify: `README.md`
@@ -425,15 +425,15 @@ THIRD_PARTY_NOTICES
 - Keeps the agent-facing tool names and schemas stable. Rebuilds atomically replace the active artifact epoch behind those tools: new calls bind the new epoch, while in-flight calls and open product sessions retain their original epoch reference.
 - Does not depend on clients honoring MCP `notifications/tools/list_changed`; direct generated-server tool-list changes may still require an explicit host MCP reload.
 
-- [ ] **Step 1: Write a failing MCP client test for every documented development tool**
+- [x] **Step 1: Write a failing MCP client test for every documented development tool**
 
   Assert the server is absent by default, exposes exactly thirteen tools only for the foreground session, delegates to shared services, and closes with the session.
 
-- [ ] **Step 2: Implement the Streamable HTTP MCP endpoint over application services**
+- [x] **Step 2: Implement the Streamable HTTP MCP endpoint over application services**
 
   Accept a server-selected or environment-provided bearer token without logging or persisting it. Support a fixed development port and stateless reconnect at the same URL. Resolve omitted operation epochs to the active epoch at call admission and include the resolved epoch identity in every artifact-backed result.
 
-- [ ] **Step 3: Prove one configured MCP client observes hot artifact rebuilds without reconnecting**
+- [x] **Step 3: Prove one configured MCP client observes hot artifact rebuilds without reconnecting**
 
   Initialize one client once, call against epoch A, rebuild to epoch B, and assert its next call observes B. Hold a separate A-bound operation open through the rebuild and assert it remains on A until completion. Restart the foreground server at the same URL and bearer token and prove a later stateless request succeeds without editing the client configuration.
 
@@ -441,7 +441,7 @@ THIRD_PARTY_NOTICES
 
   Assert prebuilt assets, all browser/API routes, live events, MCP/hook operations, deterministic evals, and complete shutdown. Then run explicit native Claude and Codex smoke trials using existing CLI sessions.
 
-- [ ] **Step 5: Document dev, playground, eval, native-auth, run-store, and Inspector provenance workflows**
+- [x] **Step 5: Document dev, playground, eval, native-auth, run-store, and Inspector provenance workflows**
 
 - [ ] **Step 6: Run `npm run check`, every Node/Browser/process integration test, production builds, packed-consumer test, and `npm pack --dry-run`**
 

@@ -104,6 +104,17 @@ it('uses only an installed tarball after source deletion', async () => {
     const installedPackage = await realpath(join(projectRoot, 'node_modules', 'agent-bundle'));
     expect(installedPackage.startsWith(workspaceRoot)).toBe(false);
     expect(installedEnvironment().NODE_PATH).toBeUndefined();
+    const installedManifest = JSON.parse(await readFile(join(installedPackage, 'package.json'), 'utf8')) as {
+      readonly dependencies: Readonly<Record<string, string>>;
+    };
+    expect(installedManifest.dependencies).toMatchObject({
+      '@modelcontextprotocol/node': '2.0.0',
+      '@modelcontextprotocol/server': '2.0.0',
+    });
+    await Promise.all([
+      access(join(projectRoot, 'node_modules', '@modelcontextprotocol', 'node', 'package.json')),
+      access(join(projectRoot, 'node_modules', '@modelcontextprotocol', 'server', 'package.json')),
+    ]);
 
     const { stdout: inspection } = await runInstalled(cli, projectRoot, ['inspect', '--json', '--root', projectRoot]);
     expect(JSON.parse(inspection)).toMatchObject({ model: { metadata: { name: 'integration-fixture' } } });
