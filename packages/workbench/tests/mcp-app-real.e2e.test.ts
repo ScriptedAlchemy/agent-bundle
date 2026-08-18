@@ -390,6 +390,15 @@ e2e('renders a compiler-bundled App template through the canonical sandbox URL',
     if (appFrame === undefined) throw new Error('Expected the sandbox proxy to create the bundled App srcdoc frame.');
     await expect(appFrame.locator('#view')).toHaveText('packed release dashboard', { timeout: browserTimeout });
     expect(appRequests.some((request) => request.method === 'GET' && /^\/api\/mcp\/apps\/[^/]+$/u.test(request.path))).toBe(false);
+
+    const fallbackClosed = page.waitForResponse((response) => {
+      const request = response.request();
+      const url = new URL(response.url());
+      return request.method() === 'DELETE' && url.origin === foregroundOrigin && /^\/api\/mcp\/apps\/[^/]+$/u.test(url.pathname);
+    });
+    await page.getByRole('button', { name: 'Close App preview' }).click();
+    expect((await fallbackClosed).status()).toBe(200);
+    await expect(outerFrame).toBeHidden({ timeout: browserTimeout });
     expect(consoleErrors).toEqual([]);
     expect(pageErrors).toEqual([]);
   } catch (error) {

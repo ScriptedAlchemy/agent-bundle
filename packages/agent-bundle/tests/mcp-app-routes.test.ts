@@ -56,6 +56,7 @@ class RecordingPreviewService implements McpAppRoutePreviewService {
     params: Object.freeze({ canonical: true }),
   });
   closeResult: McpAppBridgeMessage | true = this.closeFrame;
+  forceCloseResult = true;
   previewAvailable = true;
   #releaseFirstReceive: (() => void) | undefined;
 
@@ -103,6 +104,7 @@ class RecordingPreviewService implements McpAppRoutePreviewService {
 
   async forceClose(bindingId: string): Promise<boolean> {
     this.calls.push({ bindingId, kind: 'force-close' });
+    if (!this.forceCloseResult) return false;
     this.bridge.lifecycle = 'closed';
     return true;
   }
@@ -453,6 +455,42 @@ it('force closes an App preview on DELETE', async () => {
     expect(closed.status).toBe(200);
     await expect(closed.json()).resolves.toEqual({ closed: true, lifecycle: 'closed' });
     expect(started.service.calls).toContainEqual({ bindingId: 'binding-a', kind: 'force-close' });
+  } finally {
+    await started.close();
+  }
+});
+
+it('treats a fallback DELETE as closed after graceful close releases its binding', async () => {
+  const started = await startRoutes();
+  try {
+    const closing = await fetch(`${started.url}/api/mcp/apps/binding-a/close`, {
+      body: JSON.stringify({ id: 'close-a' }),
+      headers: { ...headers(), 'content-type': 'application/json' },
+      method: 'POST',
+    });
+    expect(closing.status).toBe(200);
+
+    started.service.forceCloseResult = false;
+    const fallback = await fetch(`${started.url}/api/mcp/apps/binding-a`, {
+      headers: headers(),
+      method: 'DELETE',
+    });
+    expect(fallback.status).toBe(200);
+    await expect(fallback.json()).resolves.toEqual({ closed: true, lifecycle: 'closed' });
+
+    const retry = await fetch(`${started.url}/api/mcp/apps/binding-a`, {
+      headers: headers(),
+      method: 'DELETE',
+    });
+    expect(retry.status).toBe(200);
+    await expect(retry.json()).resolves.toEqual({ closed: true, lifecycle: 'closed' });
+    expect(started.service.calls.filter((call) => (call as { readonly kind?: string }).kind === 'force-close')).toHaveLength(1);
+
+    const unknown = await fetch(`${started.url}/api/mcp/apps/forged-binding`, {
+      headers: headers(),
+      method: 'DELETE',
+    });
+    expect(unknown.status).toBe(404);
   } finally {
     await started.close();
   }

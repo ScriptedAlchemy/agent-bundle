@@ -331,6 +331,7 @@ export class McpAppRoutes {
   readonly #service: McpAppRoutePreviewService | undefined;
   readonly #tails = new Map<string, Promise<void>>();
   readonly #teardowns = new Set<string>();
+  readonly #closedBindings = new Set<string>();
   #closed = false;
 
   constructor(options: McpAppRoutesOptions) {
@@ -342,6 +343,7 @@ export class McpAppRoutes {
     this.#closed = true;
     this.#tails.clear();
     this.#teardowns.clear();
+    this.#closedBindings.clear();
   }
 
   async handle(request: IncomingMessage, response: ServerResponse): Promise<boolean> {
@@ -374,10 +376,12 @@ export class McpAppRoutes {
     }
     if (parsed.kind === 'force-close') {
       if (method !== 'DELETE') return responseDiagnostic(response, diagnostic('AB8007', 'Route does not accept this method.', 405));
-      const closed = await service.forceClose(parsed.bindingId);
-      if (!closed) this.#unavailable();
+      const gracefulCloseAccepted = this.#teardowns.has(parsed.bindingId);
+      const closed = this.#closedBindings.has(parsed.bindingId) || await service.forceClose(parsed.bindingId);
+      if (!closed && !gracefulCloseAccepted) this.#unavailable();
       this.#tails.delete(parsed.bindingId);
       this.#teardowns.delete(parsed.bindingId);
+      this.#closedBindings.add(parsed.bindingId);
       return responseJson(response, { closed: true, lifecycle: 'closed' });
     }
     if (method !== 'POST') return responseDiagnostic(response, diagnostic('AB8007', 'Route does not accept this method.', 405));
@@ -389,8 +393,10 @@ export class McpAppRoutes {
         const close = await service.close(parsed.bindingId, options);
         if (close === false) this.#unavailable();
         this.#teardowns.add(parsed.bindingId);
+        const lifecycle = preview.bridge.lifecycle === 'closed' ? 'closed' : 'closing';
+        if (lifecycle === 'closed') this.#closedBindings.add(parsed.bindingId);
         return Object.freeze({
-          lifecycle: preview.bridge.lifecycle === 'closed' ? 'closed' : 'closing',
+          lifecycle,
           ...(close === true ? {} : { message: close }),
           started: true,
         });
@@ -406,7 +412,10 @@ export class McpAppRoutes {
       const preview = this.#preview(service, parsed.bindingId);
       const accepted = await service.receive(parsed.bindingId, messageRequest(await jsonBody(request)));
       const messages = await service.takeOutbound(parsed.bindingId);
-      if (preview.bridge.lifecycle === 'closed') this.#teardowns.delete(parsed.bindingId);
+      if (preview.bridge.lifecycle === 'closed') {
+        this.#teardowns.delete(parsed.bindingId);
+        this.#closedBindings.add(parsed.bindingId);
+      }
       return Object.freeze({ accepted, actions: Object.freeze([]), lifecycle: preview.bridge.lifecycle, messages });
       });
       return responseJson(response, result);
