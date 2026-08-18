@@ -43,7 +43,7 @@ export class ForegroundServerError extends Error {
 
 export interface ForegroundServerCloseFailure {
   readonly error: unknown;
-  readonly resource: 'agent-api' | 'coordinator' | 'eval-routes' | 'eval-service' | 'hook-playground' | 'logs' | 'server';
+  readonly resource: 'agent-api' | 'coordinator' | 'eval-routes' | 'eval-service' | 'hook-playground' | 'logs' | 'playground' | 'server';
 }
 
 export interface ForegroundServerStartFailure {
@@ -115,6 +115,8 @@ export interface ForegroundServerOptions {
   readonly now?: () => Date;
   /** Durable playground trace store; the browser never selects its storage root or project identity. */
   readonly playground?: PlaygroundRouteService;
+  /** Native Playground runs drain after their routes close and before Eval or epochs are released. */
+  readonly playgroundLifecycle?: Readonly<{ close(): Promise<void> }>;
   readonly port?: number;
   /** Read-only Skill document/resource service for the workbench. */
   readonly skillDocuments?: SkillDocumentService;
@@ -405,6 +407,7 @@ export class ForegroundServer {
   readonly #mcpAppRoutes: McpAppRoutes;
   readonly #mcpSessionRoutes: McpSessionRoutes;
   readonly #now: () => Date;
+  readonly #playgroundLifecycle: Readonly<{ close(): Promise<void> }> | undefined;
   readonly #playgroundRoutes: PlaygroundRoutes;
   readonly #port: number;
   readonly #server: Server;
@@ -435,6 +438,7 @@ export class ForegroundServer {
     this.#eventHub = options.eventHub;
     this.#host = host;
     this.#now = options.now ?? (() => new Date());
+    this.#playgroundLifecycle = options.playgroundLifecycle;
     this.#port = port;
     this.#skillDocuments = options.skillDocuments;
     this.sessionToken = options.sessionToken ?? randomUUID();
@@ -588,12 +592,12 @@ export class ForegroundServer {
     // drain is released alongside the other resources and awaited with them.
     const releaseHookPlayground = this.#hookPlaygroundRoutes.close();
     this.#playgroundRoutes.close();
+    // The route admission gate is closed before native work starts draining.
+    // Its runner can retain an epoch reference while final evidence is written,
+    // so Eval and the coordinator must remain available until it settles.
+    const releasePlayground = this.#playgroundLifecycle?.close() ?? Promise.resolve();
     this.#artifactRoutes.close();
     const releaseEvals = this.#evalRoutes.close();
-    const releaseEvalService = releaseEvals.then(
-      () => this.#evalLifecycle?.close(),
-      () => this.#evalLifecycle?.close(),
-    );
     const releaseLogs = this.#devLogRoutes.close();
     // The Agent API owns admissions over every shared foreground service. It
     // must publish closure and drain active handlers before those services or
@@ -608,11 +612,12 @@ export class ForegroundServer {
           return closeServer(this.#server);
         })()
       : Promise.resolve();
-    const [server, coordinator, evalRoutes, evalService, hookPlayground, logs] = await Promise.allSettled([
+    const [playground] = await Promise.allSettled([releasePlayground]);
+    const [evalRoutes] = await Promise.allSettled([releaseEvals]);
+    const [evalService] = await Promise.allSettled([this.#evalLifecycle?.close() ?? Promise.resolve()]);
+    const [server, coordinator, hookPlayground, logs] = await Promise.allSettled([
       releaseServer,
       this.#coordinator.close(),
-      releaseEvals,
-      releaseEvalService,
       releaseHookPlayground,
       releaseLogs,
     ]);
@@ -622,6 +627,7 @@ export class ForegroundServer {
     if (coordinator.status === 'rejected') failures.push(Object.freeze({ error: coordinator.reason, resource: 'coordinator' }));
     if (evalRoutes.status === 'rejected') failures.push(Object.freeze({ error: evalRoutes.reason, resource: 'eval-routes' }));
     if (evalService.status === 'rejected') failures.push(Object.freeze({ error: evalService.reason, resource: 'eval-service' }));
+    if (playground.status === 'rejected') failures.push(Object.freeze({ error: playground.reason, resource: 'playground' }));
     if (hookPlayground.status === 'rejected') {
       failures.push(Object.freeze({ error: hookPlayground.reason, resource: 'hook-playground' }));
     }

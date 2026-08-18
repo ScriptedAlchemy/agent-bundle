@@ -150,6 +150,8 @@ const runTrial = async (
     readonly configuredSemanticGrader?: Parameters<typeof runClaudeTrial>[0]['configuredSemanticGrader'];
     readonly graders?: Parameters<typeof runClaudeTrial>[0]['graders'];
     readonly recorded?: NativeClaudeProcessRequest[];
+    readonly onCompleted?: (result: Readonly<{ readonly response?: string; readonly workspacePath?: string }>) => Promise<void> | void;
+    readonly onProgress?: (phase: 'fixture.materialized' | 'host.started' | 'preflight') => Promise<void> | void;
     readonly run: (request: NativeClaudeProcessRequest, index: number) => NativeClaudeProcessResult;
     readonly semanticGrader?: Parameters<typeof runClaudeTrial>[0]['semanticGrader'];
     readonly signal?: AbortSignal;
@@ -171,6 +173,8 @@ const runTrial = async (
     ...(overrides.graders === undefined ? {} : { graders: overrides.graders }),
     ...(overrides.semanticGrader === undefined ? {} : { semanticGrader: overrides.semanticGrader }),
     ...(overrides.signal === undefined ? {} : { signal: overrides.signal }),
+    ...(overrides.onCompleted === undefined ? {} : { onCompleted: overrides.onCompleted }),
+    ...(overrides.onProgress === undefined ? {} : { onProgress: overrides.onProgress }),
     suiteDir: context.suiteDir,
     trialIndex: 0,
     workspaceRoot: join(context.root, 'workspaces'),
@@ -234,6 +238,25 @@ it('runs a signed-in trial with an explicit plugin directory, never --bare, and 
     expect(usage).toMatchObject({ inputTokens: 9, outputTokens: 3, turns: 2 });
   });
 }, 240_000);
+
+it('awaits only safe native progress phases and reports completion after Claude normalization', async () => {
+  await withClaudeContext(defaultAssertions, async (context) => {
+    const phases: string[] = [];
+    const completed: Readonly<{ readonly response?: string; readonly workspacePath?: string }>[] = [];
+    await runTrial(context, {
+      onCompleted: async (result) => { completed.push(result); },
+      onProgress: async (phase) => { phases.push(phase); },
+      run: (_request, index) => index === 0 ? versionResult : index === 1 ? authenticatedResult : {
+        exitCode: 0,
+        stderr: '/private/host-stderr-not-progress',
+        stdout: activatedStream,
+      },
+    });
+    expect(phases).toEqual(['preflight', 'fixture.materialized', 'host.started']);
+    expect(completed).toEqual([expect.objectContaining({ response: 'Reviewed the change.' })]);
+    expect(JSON.stringify(completed)).not.toContain('/private/host-stderr-not-progress');
+  });
+});
 
 it('turns a missing CLI into a harness-failure trial without a workspace or plugin failure', async () => {
   await withClaudeContext(defaultAssertions, async (context) => {

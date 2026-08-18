@@ -1,10 +1,14 @@
+import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import { expect, it } from '@rstest/core';
 
 import { NativePlaygroundService } from '../src/dev/native-playground-service.ts';
 import type { DiscoveredEvalSuite } from '../src/eval/discovery.ts';
 import type { EvalFixturePlan } from '../src/eval/fixtures.ts';
 
-const epoch = (id: string, root: string) => Object.freeze({
+const epoch = (id: string, root: string, target = 'claude') => Object.freeze({
   close: async () => undefined,
   epoch: Object.freeze({
     configDigest: `config-${id}`,
@@ -14,7 +18,7 @@ const epoch = (id: string, root: string) => Object.freeze({
     manifestPath: 'agent-bundle.manifest.json',
     modelDigest: `model-${id}`,
     projectRevision: `revision-${id}`,
-    targetDigests: Object.freeze({ claude: `target-${id}` }),
+    targetDigests: Object.freeze({ [target]: `target-${id}` }),
   }),
   root,
 });
@@ -43,6 +47,32 @@ const fixturePlan: EvalFixturePlan = Object.freeze({
   git: false,
   sourcePath: '/project/evals/fixture',
 });
+
+const claudeStream = [
+  '{"type":"system","subtype":"init","plugins":[{"name":"review"}],"mcp_servers":[{"name":"project"}]}',
+  '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Skill","input":{"skill":"review:review"}}]}}',
+  '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"mcp__project__status","input":{}}]}}',
+  '{"type":"result","subtype":"success","is_error":false,"result":"token=sk-proj-1234567890abcdef at /private/native/response"}',
+  '',
+].join('\n');
+
+const nativeSuite = (host: 'claude' | 'codex', sourcePath: string): readonly DiscoveredEvalSuite[] => Object.freeze([Object.freeze({
+  sourcePath,
+  suite: Object.freeze({
+    cases: Object.freeze([Object.freeze({
+      assertions: Object.freeze([]),
+      digest: `authored-${host}-case`,
+      fixture: Object.freeze({ git: false, include: Object.freeze(['**/*']), path: './fixture' }),
+      hosts: Object.freeze({ [host]: Object.freeze({ model: `pinned-${host}-model` }) }),
+      id: `${host}-case`,
+      invocation: Object.freeze({ mode: 'automatic' as const }),
+      prompt: 'Original authored prompt.',
+      trials: 1,
+    })]),
+    digest: `suite-${host}-digest`,
+    name: `${host}-review`,
+  }),
+})]);
 
 it('pins opaque native catalog selections to their catalog epoch and never resolves them across epochs', async () => {
   const service = new NativePlaygroundService({
@@ -103,4 +133,156 @@ it('uses the catalog fixture plan unchanged so changed authored fixture bytes fa
   });
   expect(planCalls).toBe(1);
   await service.close();
+});
+
+it('projects only awaited normalized Claude completion evidence and removes its isolated workspace', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-native-playground-'));
+  try {
+    const artifact = join(root, 'artifact');
+    const suiteDir = join(root, 'evals');
+    await mkdir(join(artifact, 'claude', '.claude-plugin'), { recursive: true });
+    await mkdir(join(suiteDir, 'fixture'), { recursive: true });
+    await writeFile(join(artifact, 'claude', '.claude-plugin', 'plugin.json'), '{"name":"review"}\n');
+    await writeFile(join(suiteDir, 'fixture', 'input.txt'), 'baseline only\n');
+    const reference = epoch('epoch-native-run', artifact);
+    const service = new NativePlaygroundService({
+      discover: async () => nativeSuite('claude', join(suiteDir, 'review.eval.ts')),
+      inspectArtifact: async (candidate) => Object.freeze({
+        binding: Object.freeze({ manifestPath: 'agent-bundle.manifest.json', source: 'explicit' as const, targetDigests: candidate.epoch.targetDigests }),
+        root: candidate.root,
+      }),
+      native: {
+        claudeRun: async (request) => {
+          if (request.args[0] === '--version') return Object.freeze({ exitCode: 0, stderr: '', stdout: '2.1.232\n' });
+          if (request.args[0] === 'auth') {
+            return Object.freeze({ exitCode: 0, stderr: '', stdout: '{"loggedIn":true,"authMethod":"claude.ai","apiProvider":"firstParty","subscriptionType":"max"}\n' });
+          }
+          await writeFile(join(request.cwd, 'host-change.txt'), 'this must not be exposed\n');
+          return Object.freeze({ exitCode: 0, stderr: 'credential=sk-proj-1234567890abcdef /private/native/stderr', stdout: claudeStream });
+        },
+      },
+      projectRoot: root,
+    });
+    const catalog = await service.catalog(reference);
+    const prepared = await service.prepare(reference, {
+      caseId: catalog.cases[0]!.id,
+      fixtureId: catalog.fixtures[0]!.id,
+      host: 'claude',
+      modelPinId: catalog.modelPins[0]!.id,
+      operation: 'native.prompt',
+      prompt: 'Review the fixture.',
+      target: 'claude',
+    });
+    const emitted: string[] = [];
+    const result = await service.run(prepared, {
+      emit: async (event) => { emitted.push(event.kind); },
+      signal: new AbortController().signal,
+    });
+
+    expect(emitted).toEqual(['native.preflight', 'native.fixture.materialized', 'native.host.started']);
+    expect(result.events.map((event) => event.kind)).toEqual([
+      'native.activation',
+      'native.mcp',
+      'native.assertions',
+      'native.raw.references',
+      'native.workspace',
+    ]);
+    expect(result.response).toContain('[REDACTED]');
+    expect(result.response).toContain('[path]');
+    expect(result.workspace).toEqual({ changes: [expect.objectContaining({ kind: 'added' })] });
+    const persistedShape = JSON.stringify(result);
+    expect(persistedShape).not.toContain(root);
+    expect(persistedShape).not.toContain('this must not be exposed');
+    expect(persistedShape).not.toContain('sk-proj-1234567890abcdef');
+    expect((await readdir(join(root, '.agent-bundle'))).filter((entry) => entry.startsWith('native-playground-'))).toEqual([]);
+    await service.close();
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('awaits a cancelled Codex child, preserves its harness failure, and removes all temporary state', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-native-playground-codex-'));
+  try {
+    const artifact = join(root, 'artifact');
+    const suiteDir = join(root, 'evals');
+    const normalCodexHome = join(root, 'normal-codex-home');
+    await mkdir(join(artifact, 'codex', '.agents', 'plugins'), { recursive: true });
+    await mkdir(join(suiteDir, 'fixture'), { recursive: true });
+    await mkdir(normalCodexHome, { recursive: true });
+    await writeFile(join(artifact, 'codex', '.agents', 'plugins', 'marketplace.json'), JSON.stringify({
+      name: 'native-marketplace',
+      plugins: [{ name: 'native-review', source: { path: './', source: 'local' } }],
+    }));
+    await writeFile(join(suiteDir, 'fixture', 'input.txt'), 'baseline only\n');
+    await writeFile(join(normalCodexHome, 'auth.json'), '{"opaque":"session"}\n');
+    const reference = epoch('epoch-native-codex', artifact, 'codex');
+    let started!: () => void;
+    const spawned = new Promise<void>((resolvePromise) => { started = resolvePromise; });
+    let observedAbort = false;
+    const service = new NativePlaygroundService({
+      discover: async () => nativeSuite('codex', join(suiteDir, 'review.eval.ts')),
+      environment: Object.freeze({ CODEX_HOME: normalCodexHome }),
+      inspectArtifact: async (candidate) => Object.freeze({
+        binding: Object.freeze({ manifestPath: 'agent-bundle.manifest.json', source: 'explicit' as const, targetDigests: candidate.epoch.targetDigests }),
+        root: candidate.root,
+      }),
+      native: {
+        codexRun: async (command) => {
+          const step = command.args[0] === 'plugin'
+            ? `${command.args[0]}.${command.args[1]}`
+            : command.args[0];
+          if (step === 'plugin.list') {
+            return Object.freeze({
+              exitCode: 0,
+              stderr: '',
+              stdout: '{"installed":[{"name":"native-review","marketplaceName":"native-marketplace","installed":true,"enabled":true}]}',
+            });
+          }
+          if (step !== 'exec') return Object.freeze({ exitCode: 0, stderr: '', stdout: 'codex-cli 0.147.0\n' });
+          started();
+          return new Promise((resolvePromise) => {
+            command.signal?.addEventListener('abort', () => {
+              observedAbort = true;
+              resolvePromise(Object.freeze({ exitCode: 1, failure: 'cancelled', stderr: 'sk-proj-1234567890abcdef /private/native/stderr', stdout: '' }));
+            }, { once: true });
+          });
+        },
+      },
+      projectRoot: root,
+    });
+    const catalog = await service.catalog(reference);
+    const prepared = await service.prepare(reference, {
+      caseId: catalog.cases[0]!.id,
+      fixtureId: catalog.fixtures[0]!.id,
+      host: 'codex',
+      modelPinId: catalog.modelPins[0]!.id,
+      operation: 'native.prompt',
+      prompt: 'Review the fixture.',
+      target: 'codex',
+    });
+    const controller = new AbortController();
+    const emitted: string[] = [];
+    const running = service.run(prepared, {
+      emit: async (event) => { emitted.push(event.kind); },
+      signal: controller.signal,
+    });
+    await spawned;
+    controller.abort(new Error('test cancellation'));
+    const result = await running;
+
+    expect(observedAbort).toBe(true);
+    expect(emitted).toEqual(['native.fixture.materialized', 'native.preflight', 'native.codex.setup', 'native.host.started']);
+    expect(result.status).toBe('failed');
+    expect(result.events).toContainEqual(expect.objectContaining({
+      kind: 'native.harness.failed',
+      raw: { code: 'EVAL_TRACE_UNAVAILABLE', stage: 'trace' },
+    }));
+    expect(result.events).toContainEqual(expect.objectContaining({ kind: 'native.workspace' }));
+    expect(JSON.stringify(result)).not.toContain('sk-proj-1234567890abcdef');
+    expect((await readdir(join(root, '.agent-bundle'))).filter((entry) => entry.startsWith('native-playground-'))).toEqual([]);
+    await service.close();
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
 });

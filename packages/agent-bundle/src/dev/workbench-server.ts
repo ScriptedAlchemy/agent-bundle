@@ -28,6 +28,7 @@ import {
   type McpAppSandboxProxy,
 } from './mcp-app-sandbox.ts';
 import { McpSessionService } from './mcp-session-service.ts';
+import { NativePlaygroundService } from './native-playground-service.ts';
 import { PlaygroundOrchestrationService } from './playground-orchestration-service.ts';
 import { PlaygroundService } from '../services/playground-service.ts';
 import { ProjectService } from './project-service.ts';
@@ -267,11 +268,10 @@ const withMcpSessionLifecycle = (
   coordinator: DevCoordinator,
   mcpSessions: McpSessionService,
   mcpApps: () => Closeable | undefined,
-  playground: Closeable,
   logs: DevLogService,
   detachProjectLogs: () => void,
 ): ForegroundCoordinator => Object.freeze({
-  close: () => closeDevServerLifecycle(mcpSessions, coordinator, mcpApps(), playground, logs, detachProjectLogs),
+  close: () => closeDevServerLifecycle(mcpSessions, coordinator, mcpApps(), undefined, logs, detachProjectLogs),
   rebuild: (invalidation: Invalidation) => coordinator.rebuild(invalidation),
   start: () => coordinator.start(),
   status: () => coordinator.status(),
@@ -329,11 +329,13 @@ export const startDevServer = async (options: StartDevServerOptions): Promise<De
     projectRoot: root,
     storageRoot: join(root, '.agent-bundle', 'playground'),
   });
+  const nativePlayground = new NativePlaygroundService({ projectRoot: root });
   const playground = new PlaygroundOrchestrationService({
     coordinator,
     epochStore,
     hookPlayground,
     mcpSessions,
+    native: nativePlayground,
     scripts: new ScriptPlaygroundService({ epochStore, registry }),
     skillDocuments,
     trace,
@@ -361,7 +363,7 @@ export const startDevServer = async (options: StartDevServerOptions): Promise<De
     ...(agentApi === undefined ? {} : { agentApi }),
     artifacts,
     assets: options.assets ?? createWorkbenchAssetSource(),
-    coordinator: withMcpSessionLifecycle(coordinator, mcpSessions, () => mcpApps, playground, logs, detachProjectLogs),
+    coordinator: withMcpSessionLifecycle(coordinator, mcpSessions, () => mcpApps, logs, detachProjectLogs),
     evals,
     evalLifecycle: evals,
     eventHub,
@@ -370,6 +372,7 @@ export const startDevServer = async (options: StartDevServerOptions): Promise<De
     mcpAppPreviews: appPreviews,
     mcpSessions,
     playground,
+    playgroundLifecycle: playground,
     port: options.port,
     skillDocuments,
   });

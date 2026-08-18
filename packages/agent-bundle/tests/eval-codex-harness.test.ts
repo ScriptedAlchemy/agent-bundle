@@ -117,7 +117,11 @@ const stubRunner = (
 const runTrial = async (
   world: TrialWorld,
   overrides: Readonly<Record<string, CodexCommandResult | (() => never)>> = {},
-  extra: Readonly<{ readonly signal?: AbortSignal }> = {},
+  extra: Readonly<{
+    readonly onCompleted?: (result: Readonly<{ readonly response?: string; readonly workspacePath: string }>) => Promise<void> | void;
+    readonly onProgress?: (phase: 'codex.setup' | 'fixture.materialized' | 'host.started' | 'preflight') => Promise<void> | void;
+    readonly signal?: AbortSignal;
+  }> = {},
 ): Promise<EvalTrialRecord> => {
   const testCase = evalCase();
   const writer = await createEvalRun({
@@ -143,6 +147,8 @@ const runTrial = async (
       normalCodexHome: world.normalCodexHome,
       run: stubRunner(world, await stubResponses(), overrides),
       ...(extra.signal === undefined ? {} : { signal: extra.signal }),
+      ...(extra.onCompleted === undefined ? {} : { onCompleted: extra.onCompleted }),
+      ...(extra.onProgress === undefined ? {} : { onProgress: extra.onProgress }),
       suiteDir: world.suiteDir,
       trialIndex: 0,
       workspaceRoot: join(world.root, 'workspaces'),
@@ -192,6 +198,20 @@ it('runs an ephemeral Codex trial and records inferred activation beside observe
     if (execution === undefined) throw new Error('The native trial must execute Codex.');
     expect(execution.args).toContain('-m');
     expect(execution.args[execution.args.indexOf('-m') + 1]).toBe('gpt-5-codex');
+  });
+});
+
+it('awaits safe Codex setup progress and reports normalized completion before temporary cleanup', async () => {
+  await withWorld(async (world) => {
+    const phases: string[] = [];
+    const completed: Readonly<{ readonly response?: string; readonly workspacePath: string }>[] = [];
+    await runTrial(world, {}, {
+      onCompleted: async (result) => { completed.push(result); },
+      onProgress: async (phase) => { phases.push(phase); },
+    });
+    expect(phases).toEqual(['fixture.materialized', 'preflight', 'codex.setup', 'host.started']);
+    expect(completed).toHaveLength(1);
+    expect(completed[0]?.workspacePath.startsWith(join(world.root, 'workspaces'))).toBe(true);
   });
 });
 
