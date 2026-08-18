@@ -86,22 +86,22 @@ it('observes plugin availability only when the temporary home reports it install
 it('maps every Codex harness error onto a structural harness failure, never a plugin failure', () => {
   expect(codexHarnessFailure(new CodexEvalHarnessError('CODEX_CLI_MISSING', 'The codex executable is not installed.'))).toEqual({
     code: 'EVAL_PROCESS_UNAVAILABLE',
-    message: 'CODEX_CLI_MISSING: The codex executable is not installed.',
+    message: 'CODEX_CLI_MISSING: The Codex CLI is not installed.',
     stage: 'preflight',
   });
   expect(codexHarnessFailure(new CodexEvalHarnessError('CODEX_TRACE_INVALID', 'The event stream was unreadable.'))).toEqual({
     code: 'EVAL_TRACE_UNAVAILABLE',
-    message: 'CODEX_TRACE_INVALID: The event stream was unreadable.',
+    message: 'CODEX_TRACE_INVALID: The Codex event stream could not be verified.',
     stage: 'trace',
   });
   expect(codexHarnessFailure(new CodexEvalHarnessError('CODEX_ARTIFACT_INVALID', 'The candidate has no marketplace.'))).toEqual({
     code: 'EVAL_ARTIFACT_UNAVAILABLE',
-    message: 'CODEX_ARTIFACT_INVALID: The candidate has no marketplace.',
+    message: 'CODEX_ARTIFACT_INVALID: The Codex candidate artifact is unavailable.',
     stage: 'artifact',
   });
   expect(codexHarnessFailure(new Error('unexpected'))).toEqual({
     code: 'EVAL_PROCESS_UNAVAILABLE',
-    message: 'CODEX_TRIAL_FAILED: unexpected',
+    message: 'CODEX_TRIAL_FAILED: The native Codex trial could not be completed.',
     stage: 'preflight',
   });
 });

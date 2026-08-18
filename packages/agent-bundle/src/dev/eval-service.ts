@@ -336,11 +336,16 @@ export class EvalService {
     try {
       await writer.appendEvent({
         kind: 'run.started',
-        payload: { cases: selected.length, harness: harness.name, trials: planned.length },
+        payload: { cases: new Set(planned.map((trial) => trial.evalCase.id)).size, harness: harness.name, trials: planned.length },
       });
       const completed: EvalTrialRecord[] = [];
+      const wasCancelled = (): boolean => request.signal?.aborted === true;
+      let cancelled = wasCancelled();
       for (const plan of planned) {
-        if (request.signal?.aborted === true) break;
+        if (wasCancelled()) {
+          cancelled = true;
+          break;
+        }
         const trial = await this.#runTrial({
           artifact,
           directory,
@@ -354,8 +359,9 @@ export class EvalService {
           kind: 'trial.completed',
           payload: { caseId: trial.caseId, id: trial.id, outcome: trial.outcome },
         });
+        if (wasCancelled()) cancelled = true;
       }
-      if (completed.length !== planned.length) {
+      if (cancelled || completed.length !== planned.length) {
         await writer.appendEvent({
           kind: 'run.cancelled',
           payload: { completed: completed.length, planned: planned.length },

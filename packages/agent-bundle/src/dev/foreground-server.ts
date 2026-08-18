@@ -91,7 +91,7 @@ export interface ForegroundServerOptions {
   readonly artifacts?: ArtifactRouteService;
   readonly assets?: WorkbenchAssetSource;
   readonly coordinator: ForegroundCoordinator;
-  /** Deterministic eval runs; the browser names discovered suites, never a path or command. */
+  /** Deterministic and native eval runs; the browser names discovered suites, never a path or command. */
   readonly evals?: EvalRouteService;
   readonly eventHub: ProjectEventHub;
   readonly host?: string;

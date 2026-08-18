@@ -1,8 +1,11 @@
-import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { join } from 'node:path';
 
 import { expect, it } from '@rstest/core';
 
+import { EvalRoutes } from '../src/dev/eval-routes.ts';
 import { EvalService, type EvalServiceOptions } from '../src/dev/eval-service.ts';
 import type { CodexCommandInput, CodexCommandResult } from '../src/eval/codex-harness.ts';
 import type {
@@ -112,6 +115,45 @@ const nativeService = (root: string, native: EvalServiceOptions['native']): Eval
   projectRoot: root,
   targets: ['claude', 'codex', 'portable'],
 });
+
+const readRunEvents = async (root: string, runId: string): Promise<readonly Record<string, unknown>[]> =>
+  (await readFile(join(root, '.agent-bundle', 'runs', runId, 'events.jsonl'), 'utf8'))
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line) as Record<string, unknown>);
+
+const readBrowserRun = async (service: EvalService, runId: string): Promise<string> => {
+  const routes = new EvalRoutes({ authorize: () => undefined, service });
+  const server = createServer((request, response) => {
+    void routes.handle(request, response).then((handled) => {
+      if (!handled) response.writeHead(404).end();
+    }).catch((error: unknown) => {
+      response.writeHead(500, { 'content-type': 'application/json; charset=utf-8' });
+      response.end(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }));
+    });
+  });
+  await new Promise<void>((resolvePromise) => server.listen({ host: '127.0.0.1', port: 0 }, resolvePromise));
+  try {
+    const address = server.address() as AddressInfo;
+    const response = await fetch(`http://127.0.0.1:${address.port}/api/evals/runs/${runId}`);
+    expect(response.status).toBe(200);
+    return JSON.stringify(await response.json());
+  } finally {
+    routes.close();
+    await new Promise<void>((resolvePromise, rejectPromise) => server.close((error) => {
+      if (error === undefined) resolvePromise();
+      else rejectPromise(error);
+    }));
+  }
+};
+
+const expectPathFreeNativeOutput = (serialized: readonly string[], forbiddenPaths: readonly string[]): void => {
+  for (const output of serialized) {
+    for (const path of forbiddenPaths) expect(output).not.toContain(path);
+    expect(output).not.toContain('auth.json');
+    expect(output).not.toContain('plugins');
+  }
+};
 
 const seedNativeProject = async (root: string): Promise<void> => {
   await seedEvalProject(root, { marketplace: true, targets: ['claude', 'codex', 'portable'] });
@@ -292,6 +334,204 @@ it('forwards an active AbortSignal into native Codex commands', async () => {
     expect(seen).toEqual([controller.signal]);
     expect(result.trials).toHaveLength(1);
     expect(result.trials[0]?.harnessFailure).toMatchObject({ code: 'EVAL_TRACE_UNAVAILABLE', stage: 'trace' });
+  } finally {
+    await removeProjectFixture(project.root);
+  }
+}, 240_000);
+
+it('records durable cancellation when the only native Claude trial aborts in flight', async () => {
+  const project = await createProjectFixture();
+  try {
+    await seedNativeProject(project.root);
+    const controller = new AbortController();
+    const world: ClaudeWorld = { requests: [] };
+
+    const result = await nativeService(project.root, {
+      claudeRun: async (request) => {
+        world.requests.push(request);
+        if (request.args[0] === '--version') return { exitCode: 0, stderr: '', stdout: '2.1.240 (Claude Code)\n' };
+        if (request.args[0] === 'auth') {
+          return {
+            exitCode: 0,
+            stderr: '',
+            stdout: JSON.stringify({ authMethod: 'claude.ai', loggedIn: true, subscriptionType: 'max' }),
+          };
+        }
+        controller.abort();
+        return { exitCode: null, stderr: '', stdout: '', termination: 'aborted' };
+      },
+      environment: { PATH: process.env.PATH ?? '/usr/bin' },
+    }).run({ harness: 'claude', signal: controller.signal, suites: ['native-suite'] });
+
+    expect(world.requests.map((request) => request.args[0])).toEqual(['--version', 'auth', '-p']);
+    expect(result.trials).toHaveLength(1);
+    expect(result.trials[0]?.harnessFailure).toMatchObject({ code: 'EVAL_TRACE_UNAVAILABLE', stage: 'trace' });
+    await expect(readRunEvents(project.root, result.run.id)).resolves.toContainEqual(expect.objectContaining({
+      kind: 'run.cancelled',
+      payload: { completed: 1, planned: 1 },
+    }));
+  } finally {
+    await removeProjectFixture(project.root);
+  }
+}, 240_000);
+
+it('records durable cancellation when the only native Codex trial aborts in flight', async () => {
+  const project = await createProjectFixture();
+  try {
+    await seedNativeProject(project.root);
+    const controller = new AbortController();
+    const world: CodexWorld = { commands: [], home: await seedNormalCodexHome(project.root) };
+    const run = codexRunner(world);
+
+    const result = await nativeService(project.root, {
+      codexRun: async (command) => {
+        if (command.args[0] !== 'exec') return run(command);
+        await run(command);
+        controller.abort();
+        return { exitCode: 1, failure: 'cancelled', stderr: '', stdout: '' };
+      },
+      environment: { CODEX_HOME: world.home, PATH: process.env.PATH ?? '/usr/bin' },
+    }).run({ harness: 'codex', signal: controller.signal, suites: ['native-suite'] });
+
+    expect(world.commands.some((command) => command.args[0] === 'exec')).toBe(true);
+    expect(result.trials).toHaveLength(1);
+    expect(result.trials[0]?.harnessFailure).toMatchObject({ code: 'EVAL_TRACE_UNAVAILABLE', stage: 'trace' });
+    await expect(readRunEvents(project.root, result.run.id)).resolves.toContainEqual(expect.objectContaining({
+      kind: 'run.cancelled',
+      payload: { completed: 1, planned: 1 },
+    }));
+  } finally {
+    await removeProjectFixture(project.root);
+  }
+}, 240_000);
+
+it('counts only unique host-filtered cases in the durable run-start event', async () => {
+  const project = await createProjectFixture();
+  try {
+    await seedNativeProject(project.root);
+    await writeEvalSuite(project.root, 'mixed-hosts.eval.ts', {
+      cases: [
+        { hosts: { claude: { model: claudeModel } }, id: 'claude-only', kind: 'pass' },
+        { hosts: { codex: { model: codexModel } }, id: 'codex-only', kind: 'pass' },
+      ],
+      name: 'mixed-hosts',
+    });
+
+    const result = await nativeService(project.root, {
+      claudeRun: claudeRunner({ requests: [] }),
+      environment: { PATH: process.env.PATH ?? '/usr/bin' },
+    }).run({ harness: 'claude', suites: ['mixed-hosts'] });
+
+    expect(result.trials).toHaveLength(1);
+    await expect(readRunEvents(project.root, result.run.id)).resolves.toContainEqual(expect.objectContaining({
+      kind: 'run.started',
+      payload: { cases: 1, harness: 'claude', trials: 1 },
+    }));
+  } finally {
+    await removeProjectFixture(project.root);
+  }
+}, 240_000);
+
+it('keeps an unsigned temporary CODEX_HOME out of mounted, persisted, and browser-visible failures', async () => {
+  const project = await createProjectFixture();
+  try {
+    await seedNativeProject(project.root);
+    const home = join(project.root, 'unsigned-codex-home');
+    await mkdir(home);
+    const service = nativeService(project.root, {
+      codexRun: codexRunner({ commands: [], home }),
+      environment: { CODEX_HOME: home, PATH: process.env.PATH ?? '/usr/bin' },
+    });
+
+    const result = await service.run({ harness: 'codex', suites: ['native-suite'] });
+    expect(result.trials[0]?.harnessFailure).toMatchObject({
+      code: 'EVAL_PROCESS_UNAVAILABLE',
+      stage: 'preflight',
+    });
+    const persisted = await readFile(
+      join(project.root, '.agent-bundle', 'runs', result.run.id, 'cases', 'native-review', 'native-review--codex-1.json'),
+      'utf8',
+    );
+    const reread = JSON.stringify(await service.read(result.run.id));
+    const browser = await readBrowserRun(service, result.run.id);
+
+    expectPathFreeNativeOutput([JSON.stringify(result), persisted, reread, browser], [project.root, home]);
+  } finally {
+    await removeProjectFixture(project.root);
+  }
+}, 240_000);
+
+it('keeps native Claude plugin and fixture failures path-free after they are mounted', async () => {
+  const project = await createProjectFixture();
+  try {
+    await seedNativeProject(project.root);
+    const service = nativeService(project.root, {
+      claudeRun: async (request) => {
+        if (request.args[0] === '--version') return { exitCode: 0, stderr: '', stdout: '2.1.240 (Claude Code)\n' };
+        if (request.args[0] === 'auth') {
+          await rm(join(request.cwd, 'claude'), { force: true, recursive: true });
+          return {
+            exitCode: 0,
+            stderr: '',
+            stdout: JSON.stringify({ authMethod: 'claude.ai', loggedIn: true, subscriptionType: 'max' }),
+          };
+        }
+        throw new Error('The candidate plugin should be rejected before execution.');
+      },
+      environment: { PATH: process.env.PATH ?? '/usr/bin' },
+    });
+
+    const result = await service.run({ harness: 'claude', suites: ['native-suite'] });
+    expect(result.trials[0]?.harnessFailure).toMatchObject({
+      code: 'EVAL_ARTIFACT_UNAVAILABLE',
+      stage: 'artifact',
+    });
+    const persisted = await readFile(
+      join(project.root, '.agent-bundle', 'runs', result.run.id, 'cases', 'native-review', 'native-review--claude-1.json'),
+      'utf8',
+    );
+    const reread = JSON.stringify(await service.read(result.run.id));
+    const browser = await readBrowserRun(service, result.run.id);
+
+    expectPathFreeNativeOutput([JSON.stringify(result), persisted, reread, browser], [project.root]);
+  } finally {
+    await removeProjectFixture(project.root);
+  }
+}, 240_000);
+
+it('persists an inconclusive, path-free Claude fixture failure instead of rejecting the mounted run', async () => {
+  const project = await createProjectFixture();
+  try {
+    await seedNativeProject(project.root);
+    const service = nativeService(project.root, {
+      claudeRun: async (request) => {
+        if (request.args[0] === '--version') return { exitCode: 0, stderr: '', stdout: '2.1.240 (Claude Code)\n' };
+        if (request.args[0] === 'auth') {
+          await rm(join(project.root, 'evals', 'fixtures', 'repo', 'result.json'));
+          return {
+            exitCode: 0,
+            stderr: '',
+            stdout: JSON.stringify({ authMethod: 'claude.ai', loggedIn: true, subscriptionType: 'max' }),
+          };
+        }
+        throw new Error('The fixture should be rejected before execution.');
+      },
+      environment: { PATH: process.env.PATH ?? '/usr/bin' },
+    });
+
+    const result = await service.run({ harness: 'claude', suites: ['native-suite'] });
+    expect(result.trials[0]?.harnessFailure).toMatchObject({
+      code: 'EVAL_FIXTURE_UNAVAILABLE',
+      stage: 'fixture',
+    });
+    const persisted = await readFile(
+      join(project.root, '.agent-bundle', 'runs', result.run.id, 'cases', 'native-review', 'native-review--claude-1.json'),
+      'utf8',
+    );
+    const reread = JSON.stringify(await service.read(result.run.id));
+    const browser = await readBrowserRun(service, result.run.id);
+
+    expectPathFreeNativeOutput([JSON.stringify(result), persisted, reread, browser], [project.root]);
   } finally {
     await removeProjectFixture(project.root);
   }

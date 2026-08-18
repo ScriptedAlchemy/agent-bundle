@@ -234,44 +234,54 @@ export const runClaudeTrial = async (options: RunClaudeTrialOptions): Promise<Ev
       failure = harnessFailure(
         'EVAL_ARTIFACT_UNAVAILABLE',
         'artifact',
-        `The generated Claude plugin directory ${JSON.stringify(pluginDirectory)} has no readable plugin manifest.`,
+        'The generated Claude candidate has no readable manifest.',
       );
     } else {
-      const fixture = await materializeEvalFixture({
-        destination: join(options.workspaceRoot, trialId),
-        plan: options.fixturePlan,
-      });
-      workspacePath = fixture.path;
-      fixtureDigest = fixture.digest;
-      const command = createNativeClaudeCommand({
-        model: options.evalCase.hosts[host]?.model ?? 'unpinned',
-        pluginDirectory,
-        prompt: options.evalCase.prompt,
-      });
-      if (command.args.includes('--bare')) {
-        throw harnessError(
-          'EVAL_HARNESS_INPUT_INVALID',
-          'The Claude eval command must never pass --bare, which bypasses saved subscription authentication.',
-        );
-      }
-      outcome = await runClaudeStreamProcess(
-        Object.freeze({ ...command, cwd: fixture.path, environment }),
-        processOptions,
-      );
-      if (outcome.failure === undefined) {
-        try {
-          stream = normalizeClaudeStream(outcome.stdout, { skills: candidateSkills(options.evalCase) });
-        } catch {
-          stream = undefined;
-        }
-      }
-      failure = outcome.failure ?? traceFailureFor(outcome, stream);
-      if (failure === undefined && stream?.pluginsReported === true && !stream.plugins.includes(pluginName)) {
+      try {
+        const fixture = await materializeEvalFixture({
+          destination: join(options.workspaceRoot, trialId),
+          plan: options.fixturePlan,
+        });
+        workspacePath = fixture.path;
+        fixtureDigest = fixture.digest;
+      } catch {
         failure = harnessFailure(
-          'EVAL_ARTIFACT_UNAVAILABLE',
-          'artifact',
-          `Claude did not load the candidate plugin ${JSON.stringify(pluginName)} from its explicit plugin directory.`,
+          'EVAL_FIXTURE_UNAVAILABLE',
+          'fixture',
+          'The trial fixture could not be materialized.',
         );
+      }
+      if (failure === undefined && workspacePath !== undefined) {
+        const command = createNativeClaudeCommand({
+          model: options.evalCase.hosts[host]?.model ?? 'unpinned',
+          pluginDirectory,
+          prompt: options.evalCase.prompt,
+        });
+        if (command.args.includes('--bare')) {
+          throw harnessError(
+            'EVAL_HARNESS_INPUT_INVALID',
+            'The Claude eval command must never pass --bare, which bypasses saved subscription authentication.',
+          );
+        }
+        outcome = await runClaudeStreamProcess(
+          Object.freeze({ ...command, cwd: workspacePath, environment }),
+          processOptions,
+        );
+        if (outcome.failure === undefined) {
+          try {
+            stream = normalizeClaudeStream(outcome.stdout, { skills: candidateSkills(options.evalCase) });
+          } catch {
+            stream = undefined;
+          }
+        }
+        failure = outcome.failure ?? traceFailureFor(outcome, stream);
+        if (failure === undefined && stream?.pluginsReported === true && !stream.plugins.includes(pluginName)) {
+          failure = harnessFailure(
+            'EVAL_ARTIFACT_UNAVAILABLE',
+            'artifact',
+            'Claude did not load the generated candidate.',
+          );
+        }
       }
     }
   }
