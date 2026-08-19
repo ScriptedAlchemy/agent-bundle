@@ -307,7 +307,7 @@ it('eagerly captures every epoch catalog before a later build can replace author
   }
 });
 
-it('rejects forged, escaping, extra-key, and symlinked durable catalog sidecars without exposing them', async () => {
+it('publishes one versionless catalog sidecar shape and rejects forged, escaping, extra-key, versioned, and symlinked sidecars', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-native-playground-sidecar-'));
   try {
     const epochRoot = join(root, '.agent-bundle', 'epochs', 'epoch-sidecar');
@@ -344,6 +344,10 @@ it('rejects forged, escaping, extra-key, and symlinked durable catalog sidecars 
       await expect(restarted.catalog(reference)).rejects.toThrow('catalog snapshot is invalid');
       await restarted.close();
     };
+    await assertRejected((snapshot) => {
+      snapshot.version = 1;
+    });
+    expect(JSON.parse(baseline)).not.toHaveProperty('version');
     await assertRejected((snapshot) => {
       (((snapshot.selections as Record<string, unknown>[])[0]!.fixturePlan as Record<string, unknown>).sourcePath) = '/private/escape';
     });
