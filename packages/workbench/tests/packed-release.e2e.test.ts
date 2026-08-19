@@ -637,6 +637,7 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 }
       expect(record(await (await nativeCAdmitted).json(), 'native epoch C admission').run).toEqual(expect.any(Object));
       await expect(page.getByText('native.response')).toBeVisible({ timeout: browserTimeout });
       await expect(page.getByText('Packed native fixture completed.', { exact: true })).toBeVisible({ timeout: browserTimeout });
+      await expect(page.getByRole('button', { name: 'Cancel run', exact: true })).toBeDisabled({ timeout: browserTimeout });
       const nativeRequestC = nativeRequests.at(-1);
       if (nativeRequestC === undefined) throw new Error('The packed epoch-C native operation did not issue a request.');
       expect(string(nativeRequestC.epochId, 'epoch-C native request epoch id')).toBe(epochC);
