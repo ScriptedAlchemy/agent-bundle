@@ -160,4 +160,3 @@ export const validateHookCoherence = async (options: {
   }
   return Object.freeze(diagnostics);
 };
-

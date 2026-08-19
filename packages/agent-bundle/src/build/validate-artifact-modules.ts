@@ -159,4 +159,3 @@ export const validateJavaScriptModules = async (options: {
   }
   return Object.freeze(diagnostics);
 };
-
