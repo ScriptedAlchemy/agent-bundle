@@ -156,7 +156,7 @@ const targetRecord = (registry: TargetRegistry): ArtifactManifest['targets'][num
 };
 
 const hookIndex = (hooks: readonly Record<string, unknown>[] = []): FixtureFile => ({
-  contents: `${JSON.stringify({ hooks, version: 1 })}\n`,
+  contents: `${JSON.stringify({ hooks })}\n`,
   kind: 'generated',
   path: 'agent-bundle.hooks.json',
   sourceInputs: [],
