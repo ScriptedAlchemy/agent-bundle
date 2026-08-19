@@ -1300,7 +1300,7 @@ it('fails closed when projecting adversarial generated launch configuration for 
   });
   const stdioProjection = stdio.inspectorConfig();
   const stdioJson = JSON.stringify(stdioProjection);
-    
+
   expect(stdioJson).not.toContain('header-secret');
   expect(stdioJson).not.toContain('cookie-secret');
   expect(stdioJson).not.toContain('token-secret');
