@@ -179,8 +179,19 @@ Each Codex trial sets a temporary `CODEX_HOME` and copies only the installed CLI
 `auth.json` into it. Your normal Codex home, configuration, and installed-plugin state are not used
 as trial state and are left unchanged.
 
-These are local authenticated checks, not ordinary CI work. Do not add provider API keys to the
-project configuration or use them as a fallback for either harness.
+Native authenticated smokes are excluded from default and ordinary local test runs. After normal
+interactive sign-in, the manually dispatched trusted self-hosted CI workflow runs the corresponding
+installed-tarball smoke with its existing subscription session and no workflow secrets:
+
+```sh
+npm run test:packed:native:claude
+npm run test:packed:native:codex
+```
+
+Each command builds and installs one production-only tarball, removes provider API-key and
+credential-shaped environment values, and fails if the selected host's normal home state changes.
+Do not add provider API keys to the project configuration or use them as a fallback for either
+harness.
 
 ## Limitations
 
