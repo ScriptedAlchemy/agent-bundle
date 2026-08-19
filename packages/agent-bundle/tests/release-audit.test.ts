@@ -12,6 +12,69 @@ const packageRoot = join(workspaceRoot, 'packages', 'agent-bundle');
 
 const releaseEnvironment = (): NodeJS.ProcessEnv => ({ ...process.env, NODE_ENV: 'production' });
 
+it('generates a CycloneDX SBOM from an externally installed production tarball', async () => {
+  const { stdout } = await execFile(process.execPath, ['scripts/audit-packed-sbom.mjs'], {
+    cwd: workspaceRoot,
+    env: releaseEnvironment(),
+  });
+  const sbom = JSON.parse(stdout) as {
+    readonly bomFormat?: string;
+    readonly components?: readonly {
+      readonly 'bom-ref'?: string;
+      readonly name?: string;
+      readonly scope?: string;
+      readonly version?: string;
+      readonly properties?: readonly { readonly name?: string; readonly value?: string }[];
+    }[];
+    readonly dependencies?: readonly { readonly dependsOn?: readonly string[]; readonly ref?: string }[];
+    readonly metadata?: {
+      readonly component?: { readonly 'bom-ref'?: string; readonly name?: string; readonly version?: string };
+    };
+    readonly specVersion?: string;
+  };
+  const sourceManifest = JSON.parse(await readFile(join(packageRoot, 'package.json'), 'utf8')) as {
+    readonly name: string;
+    readonly version: string;
+  };
+  const components = sbom.components ?? [];
+  const root = sbom.metadata?.component;
+  const product = components.find((component) => (
+    component.name === sourceManifest.name && component.version === sourceManifest.version
+  ));
+  const componentReferences = new Set(components.flatMap((component) => (
+    component['bom-ref'] === undefined ? [] : [component['bom-ref']]
+  )));
+  const dependencyReferences = new Set([root?.['bom-ref'], ...componentReferences]);
+  const declaredDependencyReferences = new Set((sbom.dependencies ?? []).flatMap((dependency) => (
+    dependency.ref === undefined ? [] : [dependency.ref]
+  )));
+  const rootDependencies = (sbom.dependencies ?? []).find((dependency) => dependency.ref === root?.['bom-ref']);
+  const productDependencies = (sbom.dependencies ?? []).find((dependency) => dependency.ref === product?.['bom-ref']);
+
+  expect(sbom.bomFormat).toBe('CycloneDX');
+  expect(sbom.specVersion).toMatch(/^1\./u);
+  expect(root).toMatchObject({ version: '1.0.0' });
+  expect(root?.name).not.toBe(sourceManifest.name);
+  expect(product).toBeDefined();
+  expect(rootDependencies?.dependsOn).toContain(product?.['bom-ref']);
+  expect(productDependencies?.dependsOn?.length).toBeGreaterThan(0);
+  expect([...dependencyReferences]).not.toContain(undefined);
+  expect([...dependencyReferences].filter((reference): reference is string => reference !== undefined)
+    .every((reference) => declaredDependencyReferences.has(reference))).toBe(true);
+  expect((sbom.dependencies ?? []).every((dependency) => (
+    dependency.ref !== undefined
+      && dependencyReferences.has(dependency.ref)
+      && (dependency.dependsOn ?? []).every((reference) => dependencyReferences.has(reference))
+  ))).toBe(true);
+  expect(components.some((component) => component.scope === 'development')).toBe(false);
+  expect(components.every((component) => {
+    const path = component.properties?.find((property) => property.name === 'cdx:npm:package:path')?.value;
+    return path?.startsWith('node_modules/') === true
+      && !path.includes('node_modules/.pnpm/')
+      && !path.includes('/packages/');
+  })).toBe(true);
+}, 120_000);
+
 it('ships repository and support metadata that matches the verified origin', async () => {
   const tarballRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-package-metadata-'));
 
