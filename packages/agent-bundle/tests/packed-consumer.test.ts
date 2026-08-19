@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { execFile as executeFile } from 'node:child_process';
 import {
   access,
+  chmod,
   cp,
   mkdir,
   mkdtemp,
@@ -96,6 +97,10 @@ it('uses only an installed tarball after source deletion', async () => {
     });
     const tarball = join(consumerRoot, (JSON.parse(packed) as Array<{ filename: string }>)[0]!.filename);
     await cp(fixtureRoot, projectRoot, { recursive: true });
+    // Git preserves only the executable bit, so a fresh clone checks these out as 0o755.
+    // Restore the exact source modes the copied-script contract asserts below.
+    await chmod(join(projectRoot, 'src', 'shell.sh'), 0o751);
+    await chmod(join(projectRoot, 'src', 'python.py'), 0o711);
     await execFile('npm', ['install', '--ignore-scripts', '--no-audit', '--no-fund', tarball], {
       cwd: projectRoot,
       env: installedEnvironment(),

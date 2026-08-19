@@ -36,7 +36,9 @@ const writeFakeClaude = async (directory: string): Promise<void> => {
   const executable = join(directory, 'claude');
   const implementation = join(directory, 'claude.mjs');
   await Promise.all([
-    writeFile(executable, '#!/bin/sh\nexec node "$(dirname "$0")/claude.mjs" "$@"\n'),
+    // The dev server spawns the host on a clamped PATH, so resolve the exact running
+    // Node binary instead of relying on a `node` living in /usr/bin or /bin.
+    writeFile(executable, `#!/bin/sh\nexec "${process.execPath}" "$(dirname "$0")/claude.mjs" "$@"\n`),
     writeFile(implementation, [
       "import { writeFileSync } from 'node:fs';",
       '',

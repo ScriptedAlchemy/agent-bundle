@@ -140,7 +140,9 @@ const writeFakeClaude = async (root: string): Promise<string> => {
   const executable = join(directory, 'claude');
   await mkdir(directory, { recursive: true });
   await Promise.all([
-    writeFile(executable, '#!/bin/sh\nexec node "$(dirname "$0")/claude.mjs" "$@"\n'),
+    // The packed dev server spawns the host on a clamped PATH, so resolve the exact
+    // running Node binary instead of relying on a `node` living in /usr/bin or /bin.
+    writeFile(executable, `#!/bin/sh\nexec "${process.execPath}" "$(dirname "$0")/claude.mjs" "$@"\n`),
     writeFile(join(directory, 'claude.mjs'), [
       "import { writeFileSync } from 'node:fs';",
       '',
@@ -236,7 +238,8 @@ interface OutageLedger {
   readonly outageStartedAt: number;
   readonly postRecovery?: Readonly<{
     readonly freshMcpSession: Readonly<{ readonly closeCompletedAt: number; readonly closeStartedAt: number; readonly id: string; readonly openedAt: number }>;
-    readonly navigation: readonly Readonly<{ readonly leftAt: number; readonly openedAt: number; readonly url: string }>[];
+    /** Windows in which the test itself navigated between routes, cancelling in-flight page requests. */
+    readonly navigation: readonly Readonly<{ readonly leftAt: number; readonly openedAt: number }>[];
   }>;
   readonly recoveredAt: number;
   readonly requests: readonly NetworkLedgerEntry[];
@@ -284,7 +287,7 @@ const postRecoveryCancellationFixture = (): OutageLedger => {
     postRecovery: Object.freeze({
       freshMcpSession: Object.freeze({ closeCompletedAt: 1_321, closeStartedAt: 1_320, id: freshMcpSessionId, openedAt: 1_310 }),
       navigation: Object.freeze([
-        Object.freeze({ leftAt: 1_340, openedAt: 1_330, url: hooksUrl }),
+        Object.freeze({ leftAt: 1_345, openedAt: 1_330 }),
       ]),
     }),
     requests: Object.freeze([
@@ -380,7 +383,8 @@ const validateOutageLedger = (ledger: OutageLedger): void => {
   if (ledger.postRecovery === undefined) {
     assertLedger(postRecoveryFailures.length === 0, `post-recovery failures: ${JSON.stringify(postRecoveryFailures)}`);
   } else {
-    const freshMcpSession = ledger.postRecovery.freshMcpSession;
+    const postRecovery = ledger.postRecovery;
+    const freshMcpSession = postRecovery.freshMcpSession;
     const freshMcpStreamPath = `/api/mcp/sessions/${encodeURIComponent(freshMcpSession.id)}/stream`;
     const freshMcpStreamFailures = postRecoveryFailures.filter((request) => request.path === freshMcpStreamPath);
     assertLedger(freshMcpStreamFailures.length >= 1 && freshMcpStreamFailures.length <= 2,
@@ -398,20 +402,26 @@ const validateOutageLedger = (ledger: OutageLedger): void => {
         `fresh B MCP stream cancellation is not action-induced: ${JSON.stringify(failure)}`,
       );
     }
-    const navigationFailures: NetworkLedgerEntry[] = [];
-    for (const navigation of ledger.postRecovery.navigation) {
-      const failures = postRecoveryFailures.filter((request) =>
-        request.url === navigation.url && request.at >= navigation.openedAt && request.at < navigation.leftAt && ledgerFailureAt(request) >= navigation.leftAt,
+    // Route changes cancel whatever the departing page still had in flight: pending API
+    // reads and open live streams. Within a recorded navigation window those aborts are
+    // action-induced; their shape is still validated and every other failure still rejects.
+    const navigationFailures = postRecoveryFailures.filter((request) =>
+      !freshMcpStreamFailures.includes(request) &&
+      postRecovery.navigation.some((navigation) => {
+        const failedAt = ledgerFailureAt(request);
+        return failedAt >= navigation.openedAt && failedAt <= navigation.leftAt;
+      }),
+    );
+    for (const failure of navigationFailures) {
+      assertLedger(
+        failure.origin === ledger.origin && failure.method === 'GET' && failure.error === 'net::ERR_ABORTED' &&
+        failure.path.startsWith('/api/') && (
+          (failure.respondedAt === undefined && failure.status === undefined) ||
+          (failure.respondedAt !== undefined && failure.respondedAt <= ledgerFailureAt(failure) &&
+            failure.status !== undefined && failure.status >= 200 && failure.status < 300)
+        ),
+        `navigation cancellation is not an action-induced pending request or live stream: ${JSON.stringify(failure)}`,
       );
-      assertLedger(failures.length <= 1, `multiple action-induced navigation cancellations: ${JSON.stringify({ failures, navigation })}`);
-      for (const failure of failures) {
-        assertLedger(
-          failure.origin === ledger.origin && failure.method === 'GET' && failure.error === 'net::ERR_ABORTED' &&
-          failure.respondedAt === undefined && failure.status === undefined,
-          `navigation cancellation did not remain a pending exact request: ${JSON.stringify({ failure, navigation })}`,
-        );
-      }
-      navigationFailures.push(...failures);
     }
     const recognizedPostRecoveryFailures = [...freshMcpStreamFailures, ...navigationFailures];
     assertLedger(recognizedPostRecoveryFailures.length === postRecoveryFailures.length,
@@ -661,6 +671,23 @@ test('outage ledger rejects the legacy duplicate, cross-origin, and missing-clea
       ledgerRequest({ at: 1_350, completedAt: 1_351, error: 'net::ERR_ABORTED', method: 'GET', path: '/api/unknown/stream' }),
     ]),
   });
+  const navigationLiveStreamCancellation = Object.freeze({
+    ...validPostRecovery,
+    requests: Object.freeze([
+      ...validPostRecovery.requests,
+      ledgerRequest({
+        at: 1_331, completedAt: 1_340, error: 'net::ERR_ABORTED', method: 'GET', path: '/api/logs/stream',
+        respondedAt: 1_332, status: 200, url: `${valid.origin}/api/logs/stream?after=32`,
+      }),
+    ]),
+  });
+  const navigationNonGetCancellation = Object.freeze({
+    ...validPostRecovery,
+    requests: Object.freeze([
+      ...validPostRecovery.requests,
+      ledgerRequest({ at: 1_335, completedAt: 1_336, error: 'net::ERR_ABORTED', method: 'POST', path: '/api/playground/runs' }),
+    ]),
+  });
   const malformedLedgers = [duplicateConsole, crossOriginConsole, missingCleanup];
 
   expect(malformedLedgers.map(legacyOutageLedgerPasses)).toEqual([true, true, true]);
@@ -669,6 +696,7 @@ test('outage ledger rejects the legacy duplicate, cross-origin, and missing-clea
   expect(() => validateOutageLedger(preStartedOutageStreamTermination)).not.toThrow();
   expect(() => validateOutageLedger(knownPreOutageLogsReplayCancellation)).not.toThrow();
   expect(() => validateOutageLedger(validPostRecovery)).not.toThrow();
+  expect(() => validateOutageLedger(navigationLiveStreamCancellation)).not.toThrow();
   for (const malformed of malformedLedgers) expect(() => validateOutageLedger(malformed)).toThrow(/Foreground outage ledger rejected/u);
   for (const malformed of [
     resetWithAlteredQuery, resetWithResponse, resetWithUnknownSession, resetWithForeignOrigin, resetWithMismatchedConsoleUrl,
@@ -678,6 +706,7 @@ test('outage ledger rejects the legacy duplicate, cross-origin, and missing-clea
   expect(() => validateOutageLedger(preOutageCancelAbort)).toThrow(/Foreground outage ledger rejected/u);
   expect(() => validateOutageLedger(unknownOutageStreamTermination)).toThrow(/Foreground outage ledger rejected/u);
   expect(() => validateOutageLedger(unknownPostRecoveryCancellation)).toThrow(/Foreground outage ledger rejected/u);
+  expect(() => validateOutageLedger(navigationNonGetCancellation)).toThrow(/Foreground outage ledger rejected/u);
 });
 
 e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 }, async ({ page }) => {
@@ -1512,28 +1541,22 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 }
         { heading: 'MCP playground', label: 'MCP playground' }, { heading: 'Artifacts', label: 'Artifacts' }, { heading: 'Playground', label: 'Playground' },
         { heading: 'Logs', label: 'Logs' }, { heading: 'Evals', label: 'Evals' }, { heading: 'Comparisons', label: 'Comparisons' },
       ];
-      const postRecoveryNavigationUrls = new Map<string, string>([
-        ['Hooks', `${origin}/api/hooks?epochId=${encodeURIComponent(recoveredEpochId)}`],
-        ['Playground', `${origin}/api/playground/catalog?epochId=${encodeURIComponent(recoveredEpochId)}`],
-        ['Logs', `${origin}/api/logs/replay?after=0`],
-      ]);
-      const postRecoveryNavigation: Array<Readonly<{ leftAt: number; openedAt: number; url: string }>> = [];
-      let activeMobileRoute: Readonly<{ openedAt: number; url?: string }> | undefined;
+      // Every route change in this pass cancels the departing page's in-flight requests,
+      // so the whole pass is recorded as one navigation window for the outage ledger.
+      const routePassStartedAt = Date.now();
       for (const route of mobileRoutes) {
-        const openedAt = Date.now();
-        if (activeMobileRoute?.url !== undefined) postRecoveryNavigation.push(Object.freeze({
-          leftAt: openedAt, openedAt: activeMobileRoute.openedAt, url: activeMobileRoute.url,
-        }));
         await page.getByRole('link', { name: route.label, exact: true }).click();
         await expect(page.getByRole('heading', { name: route.heading })).toBeVisible({ timeout: browserTimeout });
         expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-        activeMobileRoute = Object.freeze({ openedAt, url: postRecoveryNavigationUrls.get(route.label) });
       }
       await page.getByRole('link', { name: 'Overview', exact: true }).focus();
       await page.keyboard.press('Enter');
       await expect(page.getByRole('heading', { name: 'Project overview' })).toBeVisible({ timeout: browserTimeout });
 
       phase = 'foreground outage ledger quiet fence';
+      const postRecoveryNavigation = Object.freeze([
+        Object.freeze({ leftAt: Date.now(), openedAt: routePassStartedAt }),
+      ]);
       const quietFenceBaseline = Object.freeze({
         consoleErrors: consoleErrorRecords.length,
         pageErrors: pageErrors.length,
