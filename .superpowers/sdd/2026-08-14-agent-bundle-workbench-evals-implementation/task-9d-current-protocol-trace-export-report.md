@@ -16,11 +16,11 @@ Before production code, ran:
 npx rstest run packages/workbench/tests/mcp-page.test.ts packages/workbench/tests/inspector-session-adapter.test.ts
 ```
 
-Expected RED: `packages/workbench/tests/mcp-page.test.ts` failed because `../src/mcp/mcp-protocol-trace.ts` did not exist. The new contracts covered the missing versioned builder/page trace action; the real Inspector Chrome flow was then extended to require the absent browser download wiring.
+Expected RED: `packages/workbench/tests/mcp-page.test.ts` failed because `../src/mcp/mcp-protocol-trace.ts` did not exist. The new contracts covered the missing canonical builder/page trace action; the real Inspector Chrome flow was then extended to require the absent browser download wiring.
 
 ## GREEN
 
-- Added `mcp-protocol-trace.ts`, a pure canonical builder with `kind: "agent-bundle.mcp-protocol-trace"`, `schemaVersion: 1`, explicit null session facts, full cursor/timeline/history, immediate detached JSON Blob serialization, trailing newline, JSON MIME type, and deterministic opaque-session/idle filename.
+- Added `mcp-protocol-trace.ts`, a pure canonical, versionless builder with `kind: "agent-bundle.mcp-protocol-trace"`, explicit null session facts, full cursor/timeline/history, immediate detached JSON Blob serialization, trailing newline, JSON MIME type, and deterministic opaque-session/idle filename.
 - Added the labeled MCP Trace action and explanatory copy: it exports the current browser MCP trace, not a durable Playground session export.
 - Reused one generic browser Blob/download sink for Inspector config, MCP trace, and Inspector Protocol/Logging trace downloads.
 - Added unit coverage for exact export shape, raw ordered entries including replay gaps/invocations, cursor/history preservation, nulls, MIME/newline/filename, detached bytes after caller mutation, sensitive launch/config/session-capability omission, page sink handoff, and complete Inspector Protocol/Logging timeline handoff.
