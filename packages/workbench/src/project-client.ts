@@ -1,4 +1,20 @@
-import type { Invalidation, ProjectEventOf, ProjectStatus } from '../../agent-bundle/src/dev/types.ts';
+import { z } from 'zod';
+
+import type { Diagnostic } from '../../agent-bundle/src/core/diagnostics.ts';
+import type {
+  ArtifactEpoch,
+  ArtifactStatus,
+  BuildAttempt,
+  BuildStatus,
+  Invalidation,
+  JsonObject,
+  JsonValue,
+  ProjectEventMessage,
+  ProjectEventOf,
+  ProjectStatus,
+  SourceStatus,
+} from '../../agent-bundle/src/dev/types.ts';
+import { nonnegativeIntegerSchema, positiveIntegerSchema } from './schema-atoms.ts';
 
 export interface EventSourceMessage {
   readonly data: string;
@@ -22,10 +38,6 @@ export type ProjectActivityListener = (activity: ProjectActivitySnapshot) => voi
 export interface ProjectClientOptions {
   readonly events?: EventSourceFactory;
   readonly fetch?: typeof fetch;
-}
-
-interface ProjectStatusResponse {
-  readonly status: ProjectStatus;
 }
 
 interface ProjectSessionResponse {
@@ -54,29 +66,196 @@ const projectEventTypes = [
 
 const browserEvents: EventSourceFactory = (url) => new EventSource(url);
 
-const readResponse = async <Result>(response: Response): Promise<Result> => {
-  if (!response.ok) throw new ProjectClientError(`Workbench request failed with HTTP ${response.status}.`);
-  return response.json() as Promise<Result>;
+const diagnosticSchema: z.ZodType<Diagnostic> = z.strictObject({
+  code: z.string(),
+  generatedPath: z.string().optional(),
+  message: z.string(),
+  recovery: z.string().optional(),
+  severity: z.enum(['error', 'info', 'warning']),
+  sourcePath: z.string().optional(),
+  target: z.string().optional(),
+});
+
+const diagnosticSummarySchema = z.strictObject({
+  errors: nonnegativeIntegerSchema,
+  infos: nonnegativeIntegerSchema,
+  warnings: nonnegativeIntegerSchema,
+});
+
+const artifactEpochSchema: z.ZodType<ArtifactEpoch> = z.strictObject({
+  configDigest: z.string(),
+  createdAt: z.string(),
+  diagnostics: diagnosticSummarySchema,
+  id: z.string(),
+  manifestPath: z.string(),
+  modelDigest: z.string(),
+  projectRevision: z.string(),
+  targetDigests: z.record(z.string(), z.string()),
+});
+
+const sourceStatusSchema: z.ZodType<SourceStatus> = z.strictObject({
+  diagnostics: z.array(diagnosticSchema),
+  revision: z.string().optional(),
+  state: z.enum(['invalid', 'ready', 'unknown']),
+});
+
+const runningBuildAttemptSchema = z.strictObject({
+  diagnostics: z.array(diagnosticSchema),
+  id: z.string(),
+  outcome: z.literal('running'),
+  sourceRevision: z.string(),
+  startedAt: z.string(),
+});
+
+const succeededBuildAttemptSchema = z.strictObject({
+  completedAt: z.string(),
+  diagnostics: z.array(diagnosticSchema),
+  id: z.string(),
+  outcome: z.literal('succeeded'),
+  result: z.strictObject({ epoch: artifactEpochSchema }),
+  sourceRevision: z.string(),
+  startedAt: z.string(),
+});
+
+const failedBuildAttemptSchema = z.strictObject({
+  completedAt: z.string(),
+  diagnostics: z.tuple([diagnosticSchema]).rest(diagnosticSchema),
+  id: z.string(),
+  outcome: z.literal('failed'),
+  sourceRevision: z.string(),
+  startedAt: z.string(),
+});
+
+const completedBuildAttemptSchema = z.discriminatedUnion('outcome', [
+  failedBuildAttemptSchema,
+  succeededBuildAttemptSchema,
+]);
+
+const buildAttemptSchema: z.ZodType<BuildAttempt> = z.discriminatedUnion('outcome', [
+  failedBuildAttemptSchema,
+  runningBuildAttemptSchema,
+  succeededBuildAttemptSchema,
+]);
+
+const buildStatusSchema: z.ZodType<BuildStatus> = z.discriminatedUnion('state', [
+  z.strictObject({
+    lastAttempt: completedBuildAttemptSchema.optional(),
+    state: z.literal('idle'),
+  }),
+  z.strictObject({
+    activeAttempt: runningBuildAttemptSchema,
+    lastAttempt: completedBuildAttemptSchema.optional(),
+    state: z.literal('building'),
+  }),
+  z.strictObject({
+    lastAttempt: failedBuildAttemptSchema,
+    state: z.literal('failed'),
+  }),
+]);
+
+const missingArtifactSchema = z.strictObject({
+  currentSourceRevision: z.string().optional(),
+  state: z.literal('missing'),
+});
+
+const activeArtifactSchema = z.strictObject({
+  activeEpoch: artifactEpochSchema,
+  currentSourceRevision: z.string(),
+  state: z.literal('active'),
+});
+
+const staleArtifactSchema = z.strictObject({
+  activeEpoch: artifactEpochSchema,
+  currentSourceRevision: z.string(),
+  state: z.literal('stale'),
+});
+
+const artifactStatusSchema: z.ZodType<ArtifactStatus> = z.discriminatedUnion('state', [
+  activeArtifactSchema,
+  missingArtifactSchema,
+  staleArtifactSchema,
+]);
+
+const invalidationSchema: z.ZodType<Invalidation> = z.strictObject({
+  occurredAt: z.string(),
+  paths: z.array(z.string()),
+  reason: z.enum(['initial', 'manual', 'source-change']),
+});
+
+const jsonValueSchema: z.ZodType<JsonValue> = z.lazy(() => z.union([
+  z.boolean(),
+  z.null(),
+  z.number().finite(),
+  z.string(),
+  z.array(jsonValueSchema),
+  z.record(z.string(), jsonValueSchema),
+]));
+
+const jsonObjectSchema: z.ZodType<JsonObject> = z.record(z.string(), jsonValueSchema);
+
+const runtimeEventSchema = z.strictObject({
+  details: jsonObjectSchema.optional(),
+  sessionId: z.string(),
+  type: z.string(),
+});
+
+const eventEnvelopeSchema = z.strictObject({
+  epochId: z.string().optional(),
+  occurredAt: z.string(),
+  sequence: positiveIntegerSchema,
+});
+
+const projectEventMessageSchema: z.ZodType<ProjectEventMessage> = z.discriminatedUnion('type', [
+  eventEnvelopeSchema.extend({ payload: activeArtifactSchema, type: z.literal('artifact.available') }).extend({ epochId: z.string() }),
+  eventEnvelopeSchema.extend({ payload: artifactStatusSchema, type: z.literal('artifact.status') }),
+  eventEnvelopeSchema.extend({ payload: failedBuildAttemptSchema, type: z.literal('build.failed') }),
+  eventEnvelopeSchema.extend({ payload: runningBuildAttemptSchema, type: z.literal('build.started') }),
+  eventEnvelopeSchema.extend({ payload: invalidationSchema, type: z.literal('invalidation') }),
+  eventEnvelopeSchema.extend({ payload: runtimeEventSchema, type: z.literal('runtime.event') }).extend({ epochId: z.string() }),
+  eventEnvelopeSchema.extend({ payload: invalidationSchema, type: z.literal('source.changed') }),
+  eventEnvelopeSchema.extend({ payload: sourceStatusSchema, type: z.literal('source.status') }),
+  z.strictObject({
+    earliestAvailableSequence: positiveIntegerSchema,
+    latestDroppedSequence: nonnegativeIntegerSchema,
+    requestedAfterSequence: nonnegativeIntegerSchema,
+    type: z.literal('replay.gap'),
+  }),
+]);
+
+const projectStatusSchema: z.ZodType<ProjectStatus> = z.strictObject({
+  artifact: artifactStatusSchema,
+  build: buildStatusSchema,
+  source: sourceStatusSchema,
+});
+
+const projectStatusResponseSchema = z.strictObject({ status: projectStatusSchema });
+const projectSessionResponseSchema: z.ZodType<ProjectSessionResponse> = z.strictObject({ origin: z.string(), token: z.string() });
+
+const invalidProjectResponse = (): never => {
+  throw new ProjectClientError('Workbench received an invalid foreground project response.');
 };
 
-const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value);
+const decode = <Result>(schema: z.ZodType<Result>, value: unknown): Result => {
+  const result = schema.safeParse(value);
+  return result.success ? result.data : invalidProjectResponse();
+};
 
-const isInvalidationReason = (value: unknown): value is Invalidation['reason'] =>
-  value === 'initial' || value === 'manual' || value === 'source-change';
+const readResponse = async (response: Response): Promise<unknown> => {
+  if (!response.ok) throw new ProjectClientError(`Workbench request failed with HTTP ${response.status}.`);
+  return response.json();
+};
 
-const parseEventData = (event: EventSourceMessage): unknown => {
+const parseEventData = (event: EventSourceMessage): ProjectEventMessage | undefined => {
   try {
-    return JSON.parse(event.data);
+    const result = projectEventMessageSchema.safeParse(JSON.parse(event.data));
+    return result.success ? result.data : undefined;
   } catch {
     return undefined;
   }
 };
 
-const parseSequence = (event: EventSourceMessage, data: unknown): number | undefined => {
-  if (!isRecord(data) || typeof data.sequence !== 'number' || !Number.isSafeInteger(data.sequence) || data.sequence < 0) {
-    return undefined;
-  }
+const parseSequence = (event: EventSourceMessage, data: ProjectEventMessage): number | undefined => {
+  if (!('sequence' in data)) return undefined;
   if (!/^(0|[1-9]\d*)$/u.test(event.lastEventId)) return undefined;
   const lastEventId = Number(event.lastEventId);
   return Number.isSafeInteger(lastEventId) && lastEventId === data.sequence ? lastEventId : undefined;
@@ -86,27 +265,8 @@ const normalizePaths = (paths: readonly string[]): readonly string[] => Object.f
   [...new Set(paths)].sort((left, right) => left.localeCompare(right)),
 );
 
-const parseSourceChangedEvent = (data: unknown): ProjectEventOf<'source.changed'> | undefined => {
-  if (!isRecord(data) || data.type !== 'source.changed' || typeof data.sequence !== 'number' ||
-    !Number.isSafeInteger(data.sequence) || data.sequence < 0 || typeof data.occurredAt !== 'string' || !isRecord(data.payload)) {
-    return undefined;
-  }
-  const { payload } = data;
-  if (!Array.isArray(payload.paths) || !payload.paths.every((path) => typeof path === 'string') ||
-    !isInvalidationReason(payload.reason) || typeof payload.occurredAt !== 'string') {
-    return undefined;
-  }
-  return {
-    occurredAt: data.occurredAt,
-    payload: {
-      occurredAt: payload.occurredAt,
-      paths: payload.paths,
-      reason: payload.reason,
-    },
-    sequence: data.sequence,
-    type: 'source.changed',
-  };
-};
+const parseSourceChangedEvent = (data: ProjectEventMessage): ProjectEventOf<'source.changed'> | undefined =>
+  data.type === 'source.changed' ? data : undefined;
 
 const activityFor = (paths: readonly string[]): ProjectActivitySnapshot => Object.freeze({
   changedFiles: normalizePaths(paths),
@@ -191,9 +351,9 @@ export class ProjectClient {
       },
       method: 'POST',
     });
-    const result = await readResponse<ProjectStatusResponse>(response);
-    this.#listener?.(result.status);
-    return result.status;
+    const status = decode(projectStatusResponseSchema, await readResponse(response)).status;
+    this.#listener?.(status);
+    return status;
   }
 
   close(): void {
@@ -208,13 +368,13 @@ export class ProjectClient {
 
   async #readStatus(): Promise<ProjectStatus> {
     const response = await this.#fetch('/api/project/status');
-    return (await readResponse<ProjectStatusResponse>(response)).status;
+    return decode(projectStatusResponseSchema, await readResponse(response)).status;
   }
 
   async #sessionForMutation(): Promise<ProjectSessionResponse> {
     if (this.#session !== undefined) return this.#session;
     const response = await this.#fetch('/api/project/session');
-    const session = await readResponse<ProjectSessionResponse>(response);
+    const session = decode(projectSessionResponseSchema, await readResponse(response));
     this.#session = Object.freeze({ origin: session.origin, token: session.token });
     return this.#session;
   }
@@ -222,6 +382,7 @@ export class ProjectClient {
   #onEvent(event: EventSourceMessage): void {
     if (this.#closed) return;
     const data = parseEventData(event);
+    if (data === undefined) return;
     const sequence = parseSequence(event, data);
     const sourceChanged = parseSourceChangedEvent(data);
     if (sequence !== undefined && sourceChanged !== undefined && sourceChanged.sequence === sequence && sourceChanged.sequence > this.#lastSourceChangeSequence) {

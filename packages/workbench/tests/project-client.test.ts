@@ -2,6 +2,7 @@ import { expect, it } from '@rstest/core';
 
 import {
   ProjectClient,
+  ProjectClientError,
   type EventSourceFactory,
   type EventSourceLike,
 } from '../src/project-client.ts';
@@ -80,6 +81,28 @@ it('calls the default browser fetch with its global receiver', async () => {
   }
 });
 
+it('rejects noncanonical project status envelopes and nested status DTOs', async () => {
+  const invalidResponses = [
+    { schemaVersion: 1, status: status() },
+    { status: { ...status(), version: '1' } },
+    {
+      status: {
+        ...status(),
+        source: {
+          ...status().source,
+          diagnostics: [{ code: 'AB8001', message: 'Invalid source.', severity: 'error', version: '1' }],
+        },
+      },
+    },
+    { status: { ...status(), build: { state: 'building' } } },
+  ];
+
+  for (const response of invalidResponses) {
+    const client = new ProjectClient({ fetch: async () => Response.json(response) });
+    await expect(client.refresh()).rejects.toBeInstanceOf(ProjectClientError);
+  }
+});
+
 it('does not publish initial status or retain an event stream when closed during the initial fetch', async () => {
   const response = deferred<Response>();
   const stream = new RecordingEventSource();
@@ -133,7 +156,7 @@ it('refreshes Overview state after live named events and keeps the browser Event
 
   await client.connect((next) => observed.push(next.artifact.state));
   stream.emit('artifact.status', {
-    data: JSON.stringify({ payload: status('active').artifact, sequence: 7, type: 'artifact.status' }),
+    data: JSON.stringify({ occurredAt: '2026-08-16T12:00:00.000Z', payload: status('active').artifact, sequence: 7, type: 'artifact.status' }),
     lastEventId: '7',
   });
   await new Promise((resolvePromise) => setTimeout(resolvePromise, 0));
@@ -163,7 +186,7 @@ it('rejects project SSE records with missing, invalid, or mismatched sequence id
     lastEventId: '7',
   });
   stream.emit('artifact.status', {
-    data: JSON.stringify({ payload: status().artifact, type: 'artifact.status' }),
+    data: JSON.stringify({ occurredAt: '2026-08-16T12:01:00.000Z', payload: status().artifact, type: 'artifact.status' }),
     lastEventId: '8',
   });
   stream.emit('source.changed', {
@@ -194,12 +217,61 @@ it('rejects project SSE records with missing, invalid, or mismatched sequence id
     lastEventId: '11',
   });
   stream.emit('artifact.status', {
-    data: JSON.stringify({ payload: status().artifact, sequence: 13.5, type: 'artifact.status' }),
+    data: JSON.stringify({ occurredAt: '2026-08-16T12:04:00.000Z', payload: status().artifact, sequence: 13.5, type: 'artifact.status' }),
     lastEventId: '13',
   });
 
   expect(client.lastEventId).toBe(7);
   expect(client.activity.changedFiles).toEqual(['src/kept.ts']);
+});
+
+it('rejects versioned, extra, and malformed SSE project event messages', async () => {
+  const stream = new RecordingEventSource();
+  const requests: string[] = [];
+  const client = new ProjectClient({
+    events: () => stream,
+    fetch: async (input) => {
+      requests.push(String(input));
+      return Response.json({ status: status() });
+    },
+  });
+  await client.connect(() => undefined);
+
+  for (const [lastEventId, data] of [
+    ['7', {
+      occurredAt: '2026-08-16T12:00:00.000Z',
+      payload: { occurredAt: '2026-08-16T12:00:00.000Z', paths: ['src/versioned.ts'], reason: 'source-change' },
+      schemaVersion: 1,
+      sequence: 7,
+      type: 'source.changed',
+    }],
+    ['8', {
+      occurredAt: '2026-08-16T12:01:00.000Z',
+      payload: { occurredAt: '2026-08-16T12:01:00.000Z', paths: ['src/aliased.ts'], reason: 'source-change' },
+      sequence: 8,
+      type: 'source.changed',
+      version: '1',
+    }],
+    ['9', {
+      occurredAt: '2026-08-16T12:02:00.000Z',
+      payload: { occurredAt: '2026-08-16T12:02:00.000Z', paths: ['src/extra.ts'], reason: 'source-change', version: '1' },
+      sequence: 9,
+      type: 'source.changed',
+    }],
+    ['10', {
+      occurredAt: '2026-08-16T12:03:00.000Z',
+      payload: { occurredAt: '2026-08-16T12:03:00.000Z', paths: [10], reason: 'source-change' },
+      sequence: 10,
+      type: 'source.changed',
+    }],
+  ] as const) {
+    stream.emit('source.changed', { data: JSON.stringify(data), lastEventId });
+  }
+
+  await new Promise((resolvePromise) => setImmediate(resolvePromise));
+  expect(client.lastEventId).toBe(0);
+  expect(client.activity.changedFiles).toEqual([]);
+  expect(requests).toEqual(['/api/project/status']);
 });
 
 it('captures the latest valid source-change paths in an immutable browser activity snapshot', async () => {
@@ -365,11 +437,16 @@ it('reports one failed event refresh without an unhandled rejection and retains 
 
     await client.connect((next) => observed.push(next.artifact.state), (reason) => errors.push(reason));
     stream.emit('artifact.status', {
-      data: JSON.stringify({ payload: status().artifact, sequence: 7, type: 'artifact.status' }),
+      data: JSON.stringify({ occurredAt: '2026-08-16T12:00:00.000Z', payload: status().artifact, sequence: 7, type: 'artifact.status' }),
       lastEventId: '7',
     });
     stream.emit('source.changed', {
-      data: JSON.stringify({ payload: status().source, sequence: 8, type: 'source.changed' }),
+      data: JSON.stringify({
+        occurredAt: '2026-08-16T12:00:01.000Z',
+        payload: { occurredAt: '2026-08-16T12:00:01.000Z', paths: [], reason: 'source-change' },
+        sequence: 8,
+        type: 'source.changed',
+      }),
       lastEventId: '8',
     });
     await new Promise((resolvePromise) => setImmediate(resolvePromise));
@@ -403,7 +480,7 @@ it('suppresses a late event-refresh error after close', async () => {
 
     await client.connect(() => undefined, (reason) => errors.push(reason));
     stream.emit('artifact.status', {
-      data: JSON.stringify({ payload: status().artifact, sequence: 7, type: 'artifact.status' }),
+      data: JSON.stringify({ occurredAt: '2026-08-16T12:00:00.000Z', payload: status().artifact, sequence: 7, type: 'artifact.status' }),
       lastEventId: '7',
     });
     client.close();
