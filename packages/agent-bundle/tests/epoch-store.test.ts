@@ -1,4 +1,4 @@
-import { chmod, mkdtemp, mkdir, open, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, mkdir, open, readFile, readdir, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 
@@ -110,6 +110,36 @@ it('persists one canonical versionless staging and epoch metadata shape', async 
     await expect(
       readFile(activeMetadataPathFor(root), 'utf8').then((value) => JSON.parse(value)),
     ).resolves.toEqual({ epoch });
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('revalidates active metadata after a same-size in-place rewrite with a restored mtime', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent bundle active epoch cache invalidation '));
+  const epoch = epochFor(root, 'epoch-cache-invalidation');
+  const metadataPath = activeMetadataPathFor(root);
+
+  try {
+    const store = new EpochStore({ projectRoot: root });
+    await publishEpoch(store, epoch);
+    const canonicalTime = new Date(Math.floor(Date.now() / 1_000) * 1_000 - 10_000);
+    await utimes(metadataPath, canonicalTime, canonicalTime);
+    await expect(store.readActiveEpoch()).resolves.toEqual(epoch);
+    const before = await stat(metadataPath);
+    const original = await readFile(metadataPath, 'utf8');
+    const corrupted = original.replace('project-revision', 'project-revisioX');
+    expect(corrupted).not.toBe(original);
+    expect(Buffer.byteLength(corrupted)).toBe(Buffer.byteLength(original));
+
+    await writeFile(metadataPath, corrupted);
+    await utimes(metadataPath, before.atime, before.mtime);
+    const rewritten = await stat(metadataPath);
+    expect(rewritten.ino).toBe(before.ino);
+    expect(rewritten.mtimeMs).toBe(before.mtimeMs);
+    expect(rewritten.size).toBe(before.size);
+
+    await expect(store.readActiveEpoch()).rejects.toMatchObject({ code: 'EPOCH_METADATA_INVALID' });
   } finally {
     await rm(root, { force: true, recursive: true });
   }

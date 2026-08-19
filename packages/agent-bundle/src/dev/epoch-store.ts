@@ -91,6 +91,7 @@ export class EpochStoreError extends CodedError<EpochStoreErrorCode> {
 }
 
 interface ActiveEpochPointerStat {
+  readonly ctimeMs: number;
   readonly ino: number;
   readonly mtimeMs: number;
   readonly size: number;
@@ -139,7 +140,7 @@ const hasExactOwnKeys = (value: object, keys: readonly string[]): boolean => {
 };
 
 const sameActiveEpochPointer = (left: ActiveEpochPointerStat, right: ActiveEpochPointerStat): boolean =>
-  left.ino === right.ino && left.mtimeMs === right.mtimeMs && left.size === right.size;
+  left.ctimeMs === right.ctimeMs && left.ino === right.ino && left.mtimeMs === right.mtimeMs && left.size === right.size;
 
 const mapBounded = async <T>(
   items: readonly T[],
@@ -496,7 +497,12 @@ export class EpochStore {
   async #statActiveEpochPointer(): Promise<ActiveEpochPointerStat | undefined> {
     try {
       const metadata = await lstat(this.#activeEpochPath);
-      return { ino: metadata.ino, mtimeMs: metadata.mtimeMs, size: metadata.size };
+      return {
+        ctimeMs: metadata.ctimeMs,
+        ino: metadata.ino,
+        mtimeMs: metadata.mtimeMs,
+        size: metadata.size,
+      };
     } catch (error) {
       if (isErrno(error, 'ENOENT')) return undefined;
       throw error;
