@@ -1221,6 +1221,15 @@ export class McpAppClient implements McpAppRuntimeClient {
     this.#invalidateAll('runtime-shutdown');
   }
 
+  /** Revokes instance-bound runtime authority while keeping the shared project subscription reusable. */
+  resetRuntimeForForegroundReplacement(): void {
+    if (this.#runtimeDisposed) return;
+    this.#lastRuntimeEventSequence = -1;
+    this.#invalidateAll('session-restarted');
+    this.#runtimeBindingGenerations.clear();
+    this.#runtimeBindingInvalidationEpoch = 0;
+  }
+
   async create(sessionId: string, request: McpAppPreviewCreateRequest): Promise<McpAppPreview> {
     const foregroundOrigin = await this.#foregroundOrigin();
     return preview(asRecord(await this.#json(`/api/mcp/sessions/${opaqueSegment(sessionId, 'MCP session')}/apps`, {

@@ -1432,6 +1432,126 @@ describe('MCP App browser client', () => {
     project.close();
   });
 
+  it('invalidates runtime authority nonterminally for a replacement foreground instance', async () => {
+    let projectListener: Parameters<ProjectClient['subscribeEvents']>[0] | undefined;
+    const projectEvents: Pick<ProjectClient, 'subscribeEvents'> = {
+      subscribeEvents(listener) {
+        projectListener = listener;
+        return () => {
+          if (projectListener === listener) projectListener = undefined;
+        };
+      },
+    };
+    const heldGet = deferred<Response>();
+    const heldClose = deferred<Response>();
+    let getRequests = 0;
+    let closeRequests = 0;
+    let consentDecisions = 0;
+    const fetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+      const path = String(input);
+      if (path === '/api/project/session') {
+        return json({
+          cookieName: foregroundCookieName,
+          instanceId: 'foreground-instance-a',
+          origin: 'http://127.0.0.1:43123',
+          token: 'foreground-secret',
+        });
+      }
+      if (path === '/api/runtime/apps') return json({ preview: runtimePreview });
+      if (path === '/api/runtime/apps/runtime-binding' && init?.method === 'DELETE') {
+        closeRequests += 1;
+        return heldClose.promise;
+      }
+      if (path === '/api/runtime/apps/runtime-binding') {
+        getRequests += 1;
+        return heldGet.promise;
+      }
+      if (path === '/api/runtime/apps/runtime-binding/consents') {
+        return json({
+          challenge: {
+            expiresAt: 31_000,
+            id: 'consent-before-replacement',
+            request: {
+              actionFingerprint: 'fingerprint-a',
+              capability: 'camera',
+              details: {},
+              scope: 'document',
+              summary: 'Use camera',
+            },
+          },
+          documentPolicy: runtimePolicy,
+        });
+      }
+      if (path === '/api/runtime/apps/runtime-binding/consents/consent-before-replacement') {
+        consentDecisions += 1;
+        return json({ documentPolicy: runtimePolicy });
+      }
+      throw new Error(`Unexpected request ${path}.`);
+    };
+    const foreground = new ForegroundRouteClient({ fetch: fetch as typeof globalThis.fetch });
+    const runtime = new McpAppClient({ fetch: fetch as typeof globalThis.fetch, foreground, projectClient: projectEvents });
+    const invalidations: unknown[] = [];
+    runtime.subscribeInvalidations((details) => invalidations.push(details));
+
+    await runtime.createRuntime({ expectedGenerationId: 'generation-a', profileId: 'portable', runId: 'run-a' });
+    const stalePolicy = runtime.currentDocumentPolicy('runtime-binding');
+    await runtime.createRuntimeConsent('runtime-binding', {
+      actionFingerprint: 'fingerprint-a',
+      capability: 'camera',
+      details: {},
+      scope: 'document',
+      summary: 'Use camera',
+    });
+    projectListener?.({
+      occurredAt: '2026-08-19T10:00:00.000Z',
+      payload: runtimeAppUpdated({
+        bindingId: 'foreign-binding',
+        reason: 'session-restarted',
+        sessionId: 'foreign-session',
+        sessionRevision: 1,
+        state: 'revoked',
+      }),
+      sequence: 20,
+      type: 'runtime.event',
+    });
+    const staleGet = runtime.getRuntime('runtime-binding');
+    const staleClose = runtime.closeRuntime('runtime-binding');
+    void staleGet.catch(() => undefined);
+    void staleClose.catch(() => undefined);
+    await eventually(() => getRequests === 1 && closeRequests === 1);
+
+    runtime.resetRuntimeForForegroundReplacement();
+
+    expect(isCurrentMcpAppDocumentPolicy(runtime, stalePolicy)).toBe(false);
+    expect(() => runtime.currentDocumentPolicy('runtime-binding')).toThrow('Runtime MCP App document policy is not available.');
+    heldGet.resolve(json({ preview: runtimePreview }));
+    heldClose.resolve(json({ closed: true }));
+    await expect(staleGet).rejects.toMatchObject({ code: 'AB8015' });
+    await expect(staleClose).rejects.toMatchObject({ code: 'AB8015' });
+
+    await runtime.createRuntime({ expectedGenerationId: 'generation-a', profileId: 'portable', runId: 'run-b' });
+    await expect(runtime.decideRuntimeConsent('runtime-binding', 'consent-before-replacement', 'deny'))
+      .rejects.toMatchObject({ code: 'AB8015' });
+    expect(consentDecisions).toBe(0);
+    projectListener?.({
+      occurredAt: '2026-08-19T10:00:01.000Z',
+      payload: runtimeAppUpdated({
+        bindingId: 'runtime-binding',
+        reason: 'session-restarted',
+        sessionId: 'runtime-session-a',
+        sessionRevision: 2,
+        state: 'revoked',
+      }),
+      sequence: 1,
+      type: 'runtime.event',
+    });
+    expect(invalidations).toHaveLength(2);
+    expect(() => runtime.currentDocumentPolicy('runtime-binding')).toThrow('Runtime MCP App document policy is not available.');
+    await expect(runtime.createRuntime({ expectedGenerationId: 'generation-a', profileId: 'portable', runId: 'run-c' }))
+      .resolves.toMatchObject({ binding: { id: 'runtime-binding' } });
+    runtime.disposeRuntime();
+  });
+
   it('rejects every late runtime response after its authority is invalidated or disposed', async () => {
     const stream = new RuntimeEventSource();
     let mode: 'create' | 'get' | 'consent' | 'decision' | 'ready' = 'ready';

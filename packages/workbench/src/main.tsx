@@ -860,6 +860,7 @@ const Workbench = () => {
         ]);
         const failure = results.find((result) => result.status === 'rejected');
         if (failure?.status === 'rejected') setConnectionError(errorMessage(failure.reason));
+        mcpAppClient.current?.resetRuntimeForForegroundReplacement();
         handoffCoordinator.current = undefined;
         mcpPreviewDeparture.current = undefined;
         resetRuntimeInstance.current();
