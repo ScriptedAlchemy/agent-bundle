@@ -2,7 +2,16 @@ import { expect, it } from '@rstest/core';
 
 import { skillEvalCoverageFor } from '../src/skills-eval-coverage.ts';
 
-const suites = [
+interface FixtureSuite {
+  readonly cases: readonly {
+    readonly assertions: readonly { readonly id: string; readonly kind: string; readonly skill?: string }[];
+    readonly id: string;
+    readonly invocation: { readonly mode: string; readonly skill?: string };
+  }[];
+  readonly name: string;
+}
+
+const suites: readonly FixtureSuite[] = [
   {
     cases: [
       {
