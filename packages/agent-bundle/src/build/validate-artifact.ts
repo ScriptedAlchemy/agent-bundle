@@ -22,7 +22,7 @@ import { DiagnosticError, type Diagnostic } from '../core/diagnostics.ts';
 import { isRecord, parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
 import { agentSkillsSchemaRevision, validateAgentSkillsFrontmatter } from '../schemas/agent-skills/contract.ts';
 import { classifyMcpArtifactArgument } from '../services/mcp-artifact-reference.ts';
-import { parseArtifactHookIndex } from '../services/hook-index.ts';
+import { parseArtifactHookIndex } from './hook-index.ts';
 import { resolveMcpPathTokens } from '../services/mcp-path-tokens.ts';
 import { readTargetMcpServers } from '../services/mcp-runtime.ts';
 import {

@@ -2,12 +2,12 @@ import type { Diagnostic } from '../core/diagnostics.ts';
 import { snapshotStrictJsonValue } from '../core/strict-json.ts';
 import type {
   AgentBundleConfig,
-  CanonicalHookEvent,
-  NormalizedHook,
   NormalizedPlugin,
 } from '../core/types.ts';
-import type { TargetHookContract } from './hook-contract.ts';
+import type { TargetHookContract, TargetHookEntry } from './hook-contract.ts';
 import type { TargetMcpRuntimeContract } from '../services/mcp-runtime.ts';
+
+export type { TargetHookEntry, TargetHookWrapper } from './hook-contract.ts';
 
 export interface TargetArtifactWrite {
   readonly content: string;
@@ -27,20 +27,6 @@ export interface TargetArtifactCopy {
 }
 
 export type TargetArtifactEntry = TargetArtifactWrite | TargetArtifactCopy;
-
-export interface TargetHookWrapper {
-  readonly event: CanonicalHookEvent;
-  readonly hook: NormalizedHook;
-  readonly nativeEvent: string;
-  /** The computed native tool matcher, absent when the host applies the hook unconditionally. */
-  readonly nativeMatcher?: string;
-  readonly relativePath: string;
-  readonly target: string;
-}
-
-export interface TargetHookEntry extends TargetHookWrapper {
-  readonly virtualSource: string;
-}
 
 export interface TargetArtifactPlan {
   readonly diagnostics: readonly Diagnostic[];

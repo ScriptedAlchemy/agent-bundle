@@ -1,8 +1,23 @@
 import { posix } from 'node:path';
 
-import type { ArtifactHook, ArtifactHookIndex } from '../build/emit.ts';
 import { stableJson } from '../core/digest.ts';
 import { parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
+
+export interface ArtifactHook {
+  readonly event: string;
+  readonly id: string;
+  readonly name: string;
+  readonly path: string;
+  readonly target: string;
+  /** Native hook timeout in seconds. Omit it to use the host default. */
+  readonly timeout?: number;
+}
+
+export interface ArtifactHookIndex {
+  readonly hooks: readonly ArtifactHook[];
+}
+
+export const artifactHookIndexName = 'agent-bundle.hooks.json';
 
 /** Orders hook metadata by its explicit `(target, id)` tuple. */
 export const compareArtifactHooks = (

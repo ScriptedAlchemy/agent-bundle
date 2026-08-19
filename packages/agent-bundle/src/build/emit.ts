@@ -13,9 +13,14 @@ import { basename, dirname, join, resolve } from 'node:path';
 
 import { sha256Hex, stableJson } from '../core/digest.ts';
 import { isErrno } from '../core/errors.ts';
-import { compareArtifactHooks } from '../services/hook-index.ts';
 import { assertInside } from '../core/paths.ts';
 import type { TargetArtifactEntry } from '../adapters/types.ts';
+import {
+  artifactHookIndexName,
+  compareArtifactHooks,
+  type ArtifactHook,
+  type ArtifactHookIndex,
+} from './hook-index.ts';
 import {
   assembleArtifactManifest,
   parseArtifactManifest,
@@ -45,21 +50,8 @@ export interface ArtifactFilesystemSnapshot {
   readonly files: readonly ArtifactFile[];
 }
 
-export interface ArtifactHook {
-  readonly event: string;
-  readonly id: string;
-  readonly name: string;
-  readonly path: string;
-  readonly target: string;
-  /** Native hook timeout in seconds. Omit it to use the host default. */
-  readonly timeout?: number;
-}
-
-export interface ArtifactHookIndex {
-  readonly hooks: readonly ArtifactHook[];
-}
-
-export const artifactHookIndexName = 'agent-bundle.hooks.json';
+export { artifactHookIndexName } from './hook-index.ts';
+export type { ArtifactHook, ArtifactHookIndex } from './hook-index.ts';
 export const artifactManifestName = 'agent-bundle.manifest.json';
 
 const normalizeRelativePath = (path: string): string => path.replaceAll('\\', '/');

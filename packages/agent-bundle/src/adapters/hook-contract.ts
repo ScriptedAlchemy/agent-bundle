@@ -7,7 +7,20 @@ import type {
   NormalizedNativeHook,
   NormalizedPlugin,
 } from '../core/types.ts';
-import type { TargetHookEntry, TargetHookWrapper } from './types.ts';
+
+export interface TargetHookWrapper {
+  readonly event: CanonicalHookEvent;
+  readonly hook: NormalizedHook;
+  readonly nativeEvent: string;
+  /** The computed native tool matcher, absent when the host applies the hook unconditionally. */
+  readonly nativeMatcher?: string;
+  readonly relativePath: string;
+  readonly target: string;
+}
+
+export interface TargetHookEntry extends TargetHookWrapper {
+  readonly virtualSource: string;
+}
 
 export interface TargetNativeHookCommand {
   readonly command: string;

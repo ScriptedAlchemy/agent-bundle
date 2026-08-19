@@ -4,7 +4,7 @@ import { basename, dirname, join } from 'node:path';
 
 import { canonicalHookEventFor, type TargetHookContract } from '../adapters/hook-contract.ts';
 import { createDefaultRegistry, TargetRegistry } from '../adapters/registry.ts';
-import type { ArtifactHook } from '../build/emit.ts';
+import type { ArtifactHook } from '../build/hook-index.ts';
 import { listArtifactFiles } from '../build/emit.ts';
 import type { CanonicalHookEvent } from '../core/types.ts';
 import { digest } from '../core/digest.ts';

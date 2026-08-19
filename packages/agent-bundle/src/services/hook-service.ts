@@ -8,9 +8,9 @@ import { assertInside } from '../core/paths.ts';
 import {
   artifactHookIndexName,
   type ArtifactHook,
-} from '../build/emit.ts';
+} from '../build/hook-index.ts';
 import { validateArtifact } from '../build/validate-artifact.ts';
-import { parseArtifactHookIndex } from './hook-index.ts';
+import { parseArtifactHookIndex } from '../build/hook-index.ts';
 import { taskkill, terminateProcessTree, type ProcessTreeTaskkill } from './process-tree.ts';
 
 const defaultTimeoutMs = 5_000;
