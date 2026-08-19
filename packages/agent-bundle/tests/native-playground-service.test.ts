@@ -367,6 +367,10 @@ it('publishes one versionless catalog sidecar shape and rejects forged, escaping
     await assertRejected((snapshot) => {
       ((((snapshot.selections as Record<string, unknown>[])[0]!.evalCase as Record<string, unknown>).hosts as Record<string, Record<string, unknown>>).claude!).model = 'unreviewed-model';
     });
+    await writeFile(sidecar, `${baseline}${' '.repeat(9 * 1_024 * 1_024)}`);
+    const oversized = new NativePlaygroundService(options);
+    await expect(oversized.catalog(reference)).rejects.toThrow('catalog snapshot is invalid');
+    await oversized.close();
     await writeFile(sidecar, baseline);
     const outside = join(root, 'outside');
     await mkdir(outside);
@@ -453,6 +457,64 @@ it('requires every persisted fixture sha256 to be exactly 64 lowercase hexadecim
     } finally {
       await rm(root, { force: true, recursive: true });
     }
+  }
+});
+
+it('rejects a catalog whose cumulative nested values exceed the whole-sidecar budget', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-native-playground-cumulative-budget-'));
+  try {
+    const suiteDir = join(root, 'evals');
+    const fixtureDir = join(suiteDir, 'fixture');
+    await mkdir(fixtureDir, { recursive: true });
+    const entries = Object.freeze(Array.from({ length: 4_096 }, (_, index) => Object.freeze({
+      executable: false,
+      path: `file-${index}.txt`,
+      sha256: 'a'.repeat(64),
+    })));
+    const discovered = Object.freeze([Object.freeze({
+      sourcePath: join(suiteDir, 'review.eval.ts'),
+      suite: defineEvalSuite({
+        cases: [0, 1].map((index) => ({
+          assertions: [expectExitCode(0)],
+          fixture: { git: false, include: ['**/*'], path: './fixture' },
+          hosts: {
+            claude: { model: 'pinned-claude-model' },
+            codex: { model: 'pinned-codex-model' },
+          },
+          id: `budget-case-${index}`,
+          invocation: { mode: 'automatic' as const },
+          prompt: 'Review the fixture.',
+          trials: 1,
+        })),
+        name: 'cumulative-budget',
+      }),
+    })]);
+    const service = new NativePlaygroundService({
+      catalogDirectory: join(root, 'catalog'),
+      discover: async () => discovered,
+      inspectArtifact: async (candidate) => Object.freeze({
+        binding: Object.freeze({ manifestPath: 'agent-bundle.manifest.json', source: 'explicit' as const, targetDigests: candidate.epoch.targetDigests }),
+        root: candidate.root,
+      }),
+      planFixture: async () => Object.freeze({
+        digest: digest({ entries, git: false }),
+        entries,
+        git: false,
+        sourcePath: fixtureDir,
+      }),
+      projectRoot: root,
+    });
+    const reference = Object.freeze({
+      ...epoch('epoch-cumulative-budget', join(root, 'artifact')),
+      epoch: Object.freeze({
+        ...epoch('epoch-cumulative-budget', join(root, 'artifact')).epoch,
+        targetDigests: Object.freeze({ claude: 'target-claude', codex: 'target-codex' }),
+      }),
+    });
+    await expect(service.catalog(reference)).rejects.toThrow('catalog snapshot is invalid');
+    await service.close();
+  } finally {
+    await rm(root, { force: true, recursive: true });
   }
 });
 

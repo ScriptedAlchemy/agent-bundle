@@ -208,6 +208,8 @@ class DiscardingTrialWriter implements EvalTrialWriter {
 const nativeHosts = new Set<NativePlaygroundHost>(['claude', 'codex']);
 const catalogDurabilityPlatformKey = Symbol.for('agent-bundle.native-playground-service.catalog-durability-platform');
 const maximumCatalogSelections = 256;
+const maximumCatalogSnapshotBytes = 8 * 1_024 * 1_024;
+const maximumCatalogSnapshotNodes = 65_536;
 const maximumFixtureEntries = 4_096;
 const maximumSnapshotStringLength = 16_384;
 const safeEpochSegment = /^[a-z0-9][a-z0-9._-]*$/iu;
@@ -458,6 +460,22 @@ const exactKeys = (value: Readonly<Record<string, JsonValue>>, keys: readonly st
   const actual = Object.keys(value).sort();
   const expected = [...keys].sort();
   return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
+};
+
+const withinCatalogSnapshotNodeBudget = (root: unknown): boolean => {
+  let remaining = maximumCatalogSnapshotNodes;
+  const pending: unknown[] = [root];
+  while (pending.length > 0) {
+    remaining -= 1;
+    if (remaining < 0) return false;
+    const value = pending.pop();
+    if (Array.isArray(value)) {
+      for (const entry of value) pending.push(entry);
+    } else if (typeof value === 'object' && value !== null) {
+      for (const entry of Object.values(value)) pending.push(entry);
+    }
+  }
+  return true;
 };
 
 const activationEvidence = (value: JsonValue | undefined): value is 'inferred' | 'observed' | 'unavailable' =>
@@ -988,7 +1006,11 @@ export class NativePlaygroundService {
     const sidecar = await this.#readSidecar(path);
     if (sidecar === undefined) return undefined;
     let value: JsonValue;
-    try { value = snapshotStrictJsonValue(parseJsonWithoutDuplicateKeys(sidecar.raw)); }
+    try {
+      const parsed = parseJsonWithoutDuplicateKeys(sidecar.raw);
+      if (!withinCatalogSnapshotNodeBudget(parsed)) throw new Error('Native Playground catalog snapshot exceeds its cumulative value budget.');
+      value = snapshotStrictJsonValue(parsed);
+    }
     catch { throw new Error('Native Playground catalog snapshot is invalid.'); }
     if (!isRecord(value) || !exactKeys(value, ['epochId', 'selections']) ||
       value.epochId !== reference.epoch.id || !Array.isArray(value.selections) || value.selections.length > maximumCatalogSelections) {
@@ -1018,7 +1040,19 @@ export class NativePlaygroundService {
       if (opened.dev !== before.dev || opened.ino !== before.ino) {
         throw new Error('Native Playground catalog snapshot is invalid.');
       }
-      const raw = await handle.readFile({ encoding: 'utf8' });
+      if (opened.size > maximumCatalogSnapshotBytes) throw new Error('Native Playground catalog snapshot is invalid.');
+      const bytes = Buffer.allocUnsafe(Math.min(maximumCatalogSnapshotBytes + 1, opened.size + 1));
+      let bytesRead = 0;
+      while (bytesRead < bytes.length) {
+        const read = await handle.read(bytes, bytesRead, bytes.length - bytesRead, bytesRead);
+        if (read.bytesRead === 0) break;
+        bytesRead += read.bytesRead;
+      }
+      const after = await handle.stat();
+      if (bytesRead > maximumCatalogSnapshotBytes || after.size !== bytesRead) {
+        throw new Error('Native Playground catalog snapshot is invalid.');
+      }
+      const raw = bytes.subarray(0, bytesRead).toString('utf8');
       return Object.freeze({ identity: digest({ contents: raw, dev: opened.dev, ino: opened.ino }), raw });
     } catch (error) {
       if (error instanceof Error && error.message === 'Native Playground catalog snapshot is invalid.') throw error;
