@@ -388,6 +388,37 @@ it('publishes one versionless catalog sidecar shape and rejects forged, escaping
   }
 });
 
+it('rejects catalog directories that escape epoch metadata through a symlinked directory or ancestor', async () => {
+  for (const symlinkLocation of ['catalog', 'metadata'] as const) {
+    const root = await mkdtemp(join(tmpdir(), `agent-bundle-native-playground-${symlinkLocation}-escape-`));
+    try {
+      const epochsRoot = join(root, '.agent-bundle', 'epochs');
+      const reference = epoch(`epoch-${symlinkLocation}-escape`, join(epochsRoot, `epoch-${symlinkLocation}-escape`));
+      const outside = join(root, 'outside');
+      await Promise.all([mkdir(reference.root, { recursive: true }), mkdir(outside)]);
+      if (symlinkLocation === 'metadata') {
+        await symlink(outside, join(epochsRoot, '.metadata'), 'dir');
+      } else {
+        const metadata = join(epochsRoot, '.metadata');
+        await mkdir(metadata);
+        await symlink(outside, join(metadata, 'native-playground'), 'dir');
+      }
+      const service = new NativePlaygroundService({
+        discover: async () => Object.freeze([]),
+        inspectArtifact: async (candidate) => Object.freeze({
+          binding: Object.freeze({ manifestPath: 'agent-bundle.manifest.json', source: 'explicit' as const, targetDigests: candidate.epoch.targetDigests }),
+          root: candidate.root,
+        }),
+        projectRoot: root,
+      });
+      await expect(service.catalog(reference)).rejects.toThrow('catalog directory is invalid');
+      await service.close();
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  }
+});
+
 it('fsyncs durable catalog publication, validates a no-replace winner, and retains every staging cleanup failure', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-native-playground-durable-'));
   const catalogDirectory = join(root, 'catalog');

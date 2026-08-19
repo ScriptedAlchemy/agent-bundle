@@ -976,6 +976,7 @@ export class NativePlaygroundService {
 
   async #readSnapshot(reference: NativePlaygroundEpochReference): Promise<PersistedCatalogSnapshot | undefined> {
     const path = this.#snapshotPath(reference);
+    await this.#assertCatalogDirectory(reference, dirname(path), true);
     const sidecar = await this.#readSidecar(path);
     if (sidecar === undefined) return undefined;
     let value: JsonValue;
@@ -1026,6 +1027,7 @@ export class NativePlaygroundService {
     const path = this.#snapshotPath(reference);
     const directory = dirname(path);
     await this.#catalogStorage.mkdir(directory, { recursive: true });
+    await this.#assertCatalogDirectory(reference, directory, false);
     const temporary = join(directory, `.${reference.epoch.id}.stage-${process.pid}-${Math.random().toString(16).slice(2)}`);
     let handle: Awaited<ReturnType<typeof open>> | undefined;
     let created = false;
@@ -1088,6 +1090,7 @@ export class NativePlaygroundService {
     created: boolean,
   ): Promise<NativePlaygroundCatalogPublicationReceipt> {
     const path = this.#snapshotPath(reference);
+    await this.#assertCatalogDirectory(reference, dirname(path), false);
     const sidecar = await this.#readSidecar(path);
     if (sidecar === undefined) throw new Error('Native Playground catalog snapshot could not be persisted.');
     return this.#publicationReceipt(path, sidecar.identity, created);
@@ -1125,6 +1128,33 @@ export class NativePlaygroundService {
     if (!safeEpochSegment.test(reference.epoch.id)) throw new Error('Native Playground epoch id is not safe for catalog storage.');
     const directory = this.#catalogDirectory ?? join(dirname(reference.root), '.metadata', 'native-playground');
     return join(directory, `${reference.epoch.id}.json`);
+  }
+
+  async #assertCatalogDirectory(
+    reference: NativePlaygroundEpochReference,
+    directory: string,
+    allowMissing: boolean,
+  ): Promise<void> {
+    let metadata;
+    try { metadata = await lstat(directory); }
+    catch (error) {
+      if (allowMissing && isErrno(error, 'ENOENT')) return;
+      throw new Error('Native Playground catalog directory is invalid.', { cause: error });
+    }
+    if (!metadata.isDirectory() || metadata.isSymbolicLink()) {
+      throw new Error('Native Playground catalog directory is invalid.');
+    }
+    if (this.#catalogDirectory !== undefined) return;
+    try {
+      const resolvedEpochRoot = await realpath(dirname(reference.root));
+      const resolvedDirectory = await realpath(directory);
+      if (!isInsideOrEqual(resolvedEpochRoot, resolvedDirectory)) {
+        throw new Error('Native Playground catalog directory is invalid.');
+      }
+    } catch (error) {
+      if (error instanceof Error && error.message === 'Native Playground catalog directory is invalid.') throw error;
+      throw new Error('Native Playground catalog directory is invalid.', { cause: error });
+    }
   }
 
   async #createWorkspaceRoot(): Promise<string> {
