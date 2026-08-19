@@ -158,3 +158,38 @@ it('rejects a success body that is not an artifact inspection or diff', async ()
     message: 'Artifact route returned an invalid response.',
   });
 });
+
+it.each([
+  {
+    body: { inspection, schemaVersion: 1 },
+    name: 'an inspection envelope schemaVersion',
+    read: (client: ArtifactClient): Promise<unknown> => client.inspect('epoch-1'),
+  },
+  {
+    body: { inspection: { ...inspection, version: 1 } },
+    name: 'an inspection version',
+    read: (client: ArtifactClient): Promise<unknown> => client.inspect('epoch-1'),
+  },
+  {
+    body: { diff: { ...diff, version: 1 } },
+    name: 'a diff version',
+    read: (client: ArtifactClient): Promise<unknown> => client.diff('epoch-1', 'epoch-2'),
+  },
+  {
+    body: {
+      diff: {
+        ...diff,
+        added: [{ ...diff.added[0]!, after: { ...diff.added[0]!.after, schemaVersion: 1 } }],
+      },
+    },
+    name: 'a nested diff file schemaVersion',
+    read: (client: ArtifactClient): Promise<unknown> => client.diff('epoch-1', 'epoch-2'),
+  },
+])('rejects $name that is not part of the canonical artifact wire DTO', async ({ body, read }) => {
+  const client = new ArtifactClient({ fetch: recordingFetch([], () => response(body)) });
+
+  await expect(read(client)).rejects.toMatchObject({
+    code: 'AB8063',
+    message: 'Artifact route returned an invalid response.',
+  });
+});
