@@ -13,6 +13,7 @@ const workspaceRoot = process.cwd();
 const packageRoot = join(workspaceRoot, 'packages', 'agent-bundle');
 const fixtureRoot = join(workspaceRoot, 'fixtures', 'integration', 'packed-release');
 const browserTimeout = 12_000;
+const packedServerStartupBudget = 45_000;
 const productTemporaryRootPrefixes = [
   'agent-bundle-hook-playground-',
   'agent-bundle-mcp-',
@@ -72,8 +73,11 @@ const buildPackage = (): Promise<void> => builtPackage ??= (async (): Promise<vo
 })();
 
 const awaitReady = async (origin: string, child: ChildProcess, output: () => string): Promise<void> => {
-  for (let attempt = 0; attempt < 120; attempt += 1) {
-    if (child.exitCode !== null) throw new Error(`The packed dev server exited before readiness: ${output()}`);
+  const startedAt = Date.now();
+  const diagnostics = (): string =>
+    `after ${String(Date.now() - startedAt)}ms (PID ${String(child.pid ?? 'unknown')}): ${output()}`;
+  while (Date.now() - startedAt < packedServerStartupBudget) {
+    if (child.exitCode !== null) throw new Error(`The packed dev server exited before readiness ${diagnostics()}`);
     try {
       if ((await fetch(origin)).ok) return;
     } catch {
@@ -81,7 +85,7 @@ const awaitReady = async (origin: string, child: ChildProcess, output: () => str
     }
     await new Promise<void>((resolvePromise) => { setTimeout(resolvePromise, 50); });
   }
-  throw new Error(`Timed out waiting for the packed dev server: ${output()}`);
+  throw new Error(`Timed out waiting for the packed dev server ${diagnostics()}`);
 };
 
 const childExitedWithin = (child: ChildProcess, timeoutMs: number): Promise<boolean> => {
@@ -293,12 +297,14 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 }
     const appRouteRequests: Array<Record<string, unknown>> = [];
     const failedAppRouteRequests: Array<Record<string, unknown>> = [];
     const nativeRequests: Array<Record<string, unknown>> = [];
+    let logsReplayResponses = 0;
     page.on('console', (message) => {
       if (message.type() === 'error') consoleErrors.push(`${message.text()} (${message.location().url})`);
     });
     page.on('pageerror', (error) => pageErrors.push(error));
     page.on('response', (response) => {
       const url = new URL(response.url());
+      if (url.pathname === '/api/logs/replay') logsReplayResponses += 1;
       if (!isAppRoute(url)) return;
       const request = response.request();
       appRouteRequests.push(Object.freeze({
@@ -538,9 +544,55 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 }
       await page.locator('#playground-target').selectOption('portable');
       await expect(page.locator('#playground-script-id option[value="script:review"]')).toBeAttached({ timeout: browserTimeout });
       await page.locator('#playground-script-id').selectOption('script:review');
+      const scriptAdmitted = page.waitForResponse((response) =>
+        response.url() === `${origin}/api/playground/runs` && response.request().method() === 'POST' && response.ok(),
+      );
       await page.getByRole('button', { name: 'Run script' }).click();
+      const scriptRun = record(record(await (await scriptAdmitted).json(), 'direct script admission').run, 'direct script run');
+      const scriptSession = record(scriptRun.session, 'direct script session');
+      const scriptSessionId = string(scriptSession.id, 'direct script session id');
       await expect(page.getByText('script.completed')).toBeVisible({ timeout: browserTimeout });
       await expect(page.locator('.playground-trace')).toContainText('packed release script stdout', { timeout: browserTimeout });
+      const scriptCompletedCard = page.locator('details.playground-event-card').filter({
+        has: page.getByText('script.completed', { exact: true }),
+      }).last();
+      await expect(scriptCompletedCard).toBeVisible({ timeout: browserTimeout });
+      const scriptCompletedCheckbox = scriptCompletedCard.getByRole('checkbox');
+      const scriptCompletedLabel = await scriptCompletedCheckbox.getAttribute('aria-label');
+      const scriptCompletedReference = /^Select (events\.jsonl#\d+) for the draft eval case$/u.exec(scriptCompletedLabel ?? '')?.[1];
+      if (scriptCompletedReference === undefined) throw new Error('The completed direct script trace did not expose a persisted raw event reference.');
+      const exportedScriptResponse = page.waitForResponse((response) =>
+        response.url() === `${origin}/api/playground/sessions/${encodeURIComponent(scriptSessionId)}/export` &&
+        response.request().method() === 'GET' && response.ok(),
+      );
+      await page.getByRole('button', { name: 'Export trace' }).click();
+      const exportedScriptTrace = record(record(await (await exportedScriptResponse).json(), 'direct script export response').export, 'direct script export');
+      expect(string(record(exportedScriptTrace.session, 'direct script exported session').id, 'direct script exported session id')).toBe(scriptSessionId);
+      expect(exportedScriptTrace.events).toEqual(expect.arrayContaining([
+        expect.objectContaining({ kind: 'script.completed', rawEventRef: scriptCompletedReference }),
+      ]));
+      await expect(page.getByRole('heading', { name: 'Exported trace' })).toBeVisible({ timeout: browserTimeout });
+      const exportedScriptSection = page.getByRole('heading', { name: 'Exported trace' }).locator('..');
+      await expect(exportedScriptSection).toContainText(scriptSessionId);
+      await expect(exportedScriptSection).toContainText(scriptCompletedReference);
+      const scriptSelectedCheckbox = scriptCompletedCheckbox;
+      await scriptSelectedCheckbox.check();
+      await expect(page.getByRole('button', { name: 'Promote to draft eval case' })).toBeEnabled({ timeout: browserTimeout });
+      const promotedScriptResponse = page.waitForResponse((response) =>
+        response.url() === `${origin}/api/playground/sessions/${encodeURIComponent(scriptSessionId)}/draft-eval` &&
+        response.request().method() === 'POST' && response.ok(),
+      );
+      await page.getByRole('button', { name: 'Promote to draft eval case' }).click();
+      const promotedScriptResult = await promotedScriptResponse;
+      expect(promotedScriptResult.request().postDataJSON()).toEqual({ rawEventRefs: [scriptCompletedReference] });
+      const promotedScriptDraft = record(record(await promotedScriptResult.json(), 'direct script draft response').draftEvalCase, 'direct script draft');
+      const promotedScriptAssertion = firstRecord(promotedScriptDraft.assertions, 'direct script draft assertions');
+      expect(record(promotedScriptAssertion.evidence, 'direct script draft evidence').rawEventRef).toBe(scriptCompletedReference);
+      expect(record(promotedScriptAssertion.expectation, 'direct script draft expectation').kind).toBe('script.completed');
+      await expect(page.getByRole('heading', { name: 'Draft eval case' })).toBeVisible({ timeout: browserTimeout });
+      const promotedScriptSection = page.getByRole('heading', { name: 'Draft eval case' }).locator('..');
+      await expect(promotedScriptSection).toContainText(scriptCompletedReference);
+      await expect(promotedScriptSection).toContainText('script.completed');
 
       const activeEpochFrom = (toolResult: Awaited<ReturnType<typeof client.callTool>>, label: string) => {
         const resultStatus = record(record(toolResult.structuredContent, `${label} result`).status, `${label} status`);
@@ -708,6 +760,44 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 }
       await hookLogEntry.locator('summary').click();
       await expect(hookLogEntry.locator('.logs-details')).toContainText('outcome');
       await expect(hookLogEntry.locator('.logs-details')).not.toContainText('/workspace');
+
+      phase = 'Logs live Agent API update and filters';
+      const logsUrlBeforeLiveUpdate = page.url();
+      const logEntriesBeforeLiveUpdate = await page.locator('.logs-entries > li').count();
+      const logReplaysBeforeLiveUpdate = logsReplayResponses;
+      const liveHookSimulation = await call('hook_simulate', {
+        epoch: epochC,
+        hook: hookId,
+        input: {
+          cwd: '/workspace',
+          sessionId: 'packed-live-logs',
+          source: 'packed-live-logs',
+          transcriptPath: '/workspace/packed-live-logs.json',
+        },
+        target: 'claude',
+      });
+      expect(record(record(liveHookSimulation.structuredContent, 'live Hook simulation').simulation, 'live Hook simulation result').canonicalResult)
+        .toEqual(expect.objectContaining({ outcome: 'continue' }));
+      await expect.poll(async () => page.locator('.logs-entries > li').count(), { timeout: browserTimeout })
+        .toBeGreaterThan(logEntriesBeforeLiveUpdate);
+      expect(page.url()).toBe(logsUrlBeforeLiveUpdate);
+      expect(logsReplayResponses).toBe(logReplaysBeforeLiveUpdate);
+
+      const expectedLiveLogProducer = 'hook';
+      await page.locator('#logs-producer').selectOption(expectedLiveLogProducer);
+      await page.locator('#logs-level').selectOption('info');
+      await page.locator('#logs-kind').selectOption('hook.simulate.completed');
+      await page.locator('#logs-context').selectOption(hookId);
+      const matchingLiveHookEntries = page.locator('.logs-entries > li');
+      await expect.poll(async () => matchingLiveHookEntries.count(), { timeout: browserTimeout }).toBeGreaterThan(0);
+      expect([...new Set(await matchingLiveHookEntries.locator('.logs-entry-source').allTextContents())]).toEqual(['hook']);
+      expect([...new Set(await matchingLiveHookEntries.locator('.logs-entry-level').allTextContents())]).toEqual(['info']);
+      expect([...new Set(await matchingLiveHookEntries.locator('.logs-entry-kind').allTextContents())]).toEqual(['hook.simulate.completed']);
+      await expect(matchingLiveHookEntries.first()).toContainText(`hookId ${hookId}`);
+      await expect(matchingLiveHookEntries.first().locator('.logs-details')).toContainText('outcome');
+      await page.locator('#logs-level').selectOption('error');
+      await expect.poll(async () => matchingLiveHookEntries.count(), { timeout: browserTimeout }).toBe(0);
+      await expect(page.getByText('No production log record matches this filter.')).toBeVisible({ timeout: browserTimeout });
 
       phase = 'Agent API Eval tools';
       const listed = await call('evals_list');

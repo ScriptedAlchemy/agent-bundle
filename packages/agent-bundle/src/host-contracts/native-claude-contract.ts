@@ -241,6 +241,7 @@ export interface NativeClaudeSmokeReport {
 }
 
 interface ClaudeNormalHomeSnapshot {
+  readonly claudeJson: string;
   readonly config: string;
   readonly localSettings: string;
   readonly plugins: string;
@@ -313,15 +314,31 @@ const digestClaudeFileTree = async (path: string, includeContents = true): Promi
   }
 };
 
-const snapshotClaudeNormalHome = async (home: string): Promise<ClaudeNormalHomeSnapshot> => Object.freeze({
-  config: await digestClaudeFileTree(join(home, 'config.json')),
-  localSettings: await digestClaudeFileTree(join(home, 'settings.local.json')),
-  plugins: await digestClaudeFileTree(join(home, 'plugins')),
-  settings: await digestClaudeFileTree(join(home, 'settings.json')),
+interface ClaudeNormalHomePaths {
+  readonly directory: string;
+  readonly stateFile: string;
+}
+
+const resolveClaudeNormalHome = (environment: Readonly<NodeJS.ProcessEnv>): ClaudeNormalHomePaths => {
+  const configuredDirectory = environment.CLAUDE_CONFIG_DIR;
+  if (configuredDirectory !== undefined) {
+    return Object.freeze({ directory: configuredDirectory, stateFile: join(configuredDirectory, '.claude.json') });
+  }
+  const homeDirectory = homedir();
+  return Object.freeze({ directory: join(homeDirectory, '.claude'), stateFile: join(homeDirectory, '.claude.json') });
+};
+
+const snapshotClaudeNormalHome = async (paths: ClaudeNormalHomePaths): Promise<ClaudeNormalHomeSnapshot> => Object.freeze({
+  claudeJson: await digestClaudeFileTree(paths.stateFile),
+  config: await digestClaudeFileTree(join(paths.directory, 'config.json')),
+  localSettings: await digestClaudeFileTree(join(paths.directory, 'settings.local.json')),
+  plugins: await digestClaudeFileTree(join(paths.directory, 'plugins')),
+  settings: await digestClaudeFileTree(join(paths.directory, 'settings.json')),
 });
 
 const sameClaudeNormalHome = (left: ClaudeNormalHomeSnapshot, right: ClaudeNormalHomeSnapshot): boolean =>
-  left.config === right.config
+  left.claudeJson === right.claudeJson
+  && left.config === right.config
   && left.localSettings === right.localSettings
   && left.plugins === right.plugins
   && left.settings === right.settings;
@@ -333,7 +350,7 @@ const normalHomeFailure = (code: string, message: string): NativeClaudeSmokeRepo
 
 const normalHomeChangedDiagnostic = Object.freeze({
   code: 'claude-native.normal-home.changed',
-  message: 'Claude normal config/settings/plugins changed; inspect local state without retaining its output.',
+  message: 'Claude normal config/settings/plugins state changed; inspect local state without retaining its output.',
 });
 
 const isMissingExecutableError = (error: unknown): boolean =>
@@ -735,7 +752,7 @@ export const runNativeClaudeSmoke = async (options: NativeClaudeSmokeOptions): P
   if (!options.enabled) return runNativeClaudeSmokeUnchecked(options);
 
   const environment = options.environment ?? process.env;
-  const normalClaudeHome = environment.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude');
+  const normalClaudeHome = resolveClaudeNormalHome(environment);
   let before: ClaudeNormalHomeSnapshot;
   try {
     before = await snapshotClaudeNormalHome(normalClaudeHome);

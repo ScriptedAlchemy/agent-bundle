@@ -134,13 +134,18 @@ const digestNormalCodexState = async (codexHome: string) => Object.freeze({
   plugins: await digestTree(join(codexHome, 'plugins'), false),
 });
 
-const digestNormalClaudeState = async (environment: Readonly<NodeJS.ProcessEnv>) => {
-  const claudeHome = environment.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude');
+const digestNormalClaudeState = async (
+  environment: Readonly<NodeJS.ProcessEnv>,
+  options: Readonly<{ readonly homeDirectory: string }>,
+) => {
+  const customHome = environment.CLAUDE_CONFIG_DIR;
+  const claudeHome = customHome ?? join(options.homeDirectory, '.claude');
   return Object.freeze({
     config: await digestTree(join(claudeHome, 'config.json'), true),
     localSettings: await digestTree(join(claudeHome, 'settings.local.json'), true),
     plugins: await digestTree(join(claudeHome, 'plugins'), true),
     settings: await digestTree(join(claudeHome, 'settings.json'), true),
+    state: await digestTree(join(customHome ?? options.homeDirectory, '.claude.json'), true),
   });
 };
 
@@ -150,15 +155,17 @@ const sameClaudeState = (
 ): boolean => left.config === right.config
   && left.localSettings === right.localSettings
   && left.plugins === right.plugins
-  && left.settings === right.settings;
+  && left.settings === right.settings
+  && left.state === right.state;
 
 export const normalClaudeHomeUnchanged = async (
   environment: Readonly<NodeJS.ProcessEnv>,
   operation: () => Promise<void>,
+  options: Readonly<{ readonly homeDirectory: string }> = { homeDirectory: homedir() },
 ): Promise<boolean> => {
-  const before = await digestNormalClaudeState(environment);
+  const before = await digestNormalClaudeState(environment, options);
   await operation();
-  return sameClaudeState(before, await digestNormalClaudeState(environment));
+  return sameClaudeState(before, await digestNormalClaudeState(environment, options));
 };
 
 const summarizeEval = (host: PackedNativeHost, command: CommandResult) => {

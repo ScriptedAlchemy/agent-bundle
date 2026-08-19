@@ -292,6 +292,56 @@ it('proves the normal Claude config, settings, and plugins stay unchanged withou
   }
 });
 
+it('protects the default sibling Claude state file without retaining its opaque contents', async () => {
+  const harness = await loadNativeClaudeContract();
+  expect(harness).toBeDefined();
+
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-claude-default-home-contract-'));
+  const defaultHome = join(root, 'home');
+  const normalClaudeHome = join(defaultHome, '.claude');
+  const previousHome = process.env.HOME;
+  process.env.HOME = defaultHome;
+  try {
+    await mkdir(normalClaudeHome, { recursive: true });
+    await writeFile(join(defaultHome, '.claude.json'), '{"marker":"normal-sibling-marker"}\n');
+    const result = await harness!.runNativeClaudeSmoke({
+      candidatePluginName,
+      candidateSkillName,
+      cwd: root,
+      enabled: true,
+      environment: { AGENT_BUNDLE_NATIVE_CLAUDE_SMOKE: '1', PATH: '/usr/bin' },
+      pluginDirectory: '/candidate/plugin',
+      prompt: 'Use the candidate Skill and reply with the sentinel.',
+      run: async (request: { readonly args: readonly string[] }) => {
+        if (request.args[0] === '--version') return { exitCode: 0, stderr: '', stdout: '2.1.232 (Claude Code)\n' };
+        if (request.args[0] === 'auth') {
+          return { exitCode: 0, stderr: '', stdout: '{"loggedIn":true,"authMethod":"claude.ai","subscriptionType":"pro"}\n' };
+        }
+        if (request.args[0] === 'plugin') return { exitCode: 0, stderr: '', stdout: 'Plugin is valid.\n' };
+        await writeFile(join(defaultHome, '.claude.json'), '{"marker":"normal-sibling-changed-marker"}\n');
+        return {
+          exitCode: 0,
+          stderr: '',
+          stdout: [
+            '{"type":"system","subtype":"init","apiKeySource":"none","plugins":[{"name":"agent-bundle-native-smoke"}]}',
+            '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Skill","input":{"skill":"agent-bundle-native-smoke:agent-bundle-native-smoke"}}]}}',
+            '{"type":"result","subtype":"success"}',
+          ].join('\n'),
+        };
+      },
+    });
+
+    expect(result.status).toBe('harness-failure');
+    expect((result as unknown as { readonly normalHome?: unknown }).normalHome).not.toBe('unchanged');
+    expect(JSON.stringify(result)).not.toContain(root);
+    expect(JSON.stringify(result)).not.toMatch(/normal-sibling-(?:changed-)?marker/iu);
+  } finally {
+    if (previousHome === undefined) delete process.env.HOME;
+    else process.env.HOME = previousHome;
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
 it('reports an incompatible Claude version as a harness failure before candidate validation', async () => {
   const harness = await loadNativeClaudeContract();
   expect(harness).toBeDefined();
