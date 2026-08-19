@@ -1,6 +1,6 @@
 # Agent Bundle developer workbench design
 
-**Status:** Implemented extension to the approved Agent Bundle architecture; delivery verification is in progress
+**Status:** Implemented extension to the approved Agent Bundle architecture; delivery is verified by the repository CI gates
 
 **Date:** 2026-08-14
 
