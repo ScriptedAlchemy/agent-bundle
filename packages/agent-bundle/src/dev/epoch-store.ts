@@ -12,12 +12,12 @@ import { freezeArtifactEpoch, type ArtifactEpoch } from './types.ts';
 export interface EpochStoreOptions {
   /** @internal Deterministic cleanup-failure seam. */
   readonly cleanupRemove?: typeof rm;
+  /** @internal Deterministic durability-failure seam. */
+  readonly durabilityStorage?: EpochDurabilityStorage;
   readonly projectRoot: string;
-  /** @internal Deterministic staging-marker durability seam. */
-  readonly stagingMarkerStorage?: EpochStagingMarkerStorage;
 }
 
-export interface EpochStagingMarkerStorage {
+export interface EpochDurabilityStorage {
   readonly open: typeof open;
   readonly remove: typeof rm;
 }
@@ -311,21 +311,21 @@ export class EpochReference {
 export class EpochStore {
   readonly #activeEpochPath: string;
   readonly #cleanupRemove: typeof rm;
+  readonly #durabilityStorage: EpochDurabilityStorage;
   readonly #epochMetadataPath: string;
   readonly #epochsPath: string;
   readonly #leaseTransitions: ReturnType<typeof serialQueue>;
   readonly #staging = new Map<symbol, StagingRecord>();
-  readonly #stagingMarkerStorage: EpochStagingMarkerStorage;
   readonly #transitions = serialQueue();
 
   constructor(options: EpochStoreOptions) {
     const agentBundlePath = join(resolve(options.projectRoot), '.agent-bundle');
     this.#activeEpochPath = join(agentBundlePath, activeEpochFileName);
     this.#cleanupRemove = options.cleanupRemove ?? rm;
+    this.#durabilityStorage = options.durabilityStorage ?? Object.freeze({ open, remove: rm });
     this.#epochsPath = join(agentBundlePath, 'epochs');
     this.#epochMetadataPath = join(this.#epochsPath, metadataDirectoryName);
     this.#leaseTransitions = leaseQueueFor(agentBundlePath);
-    this.#stagingMarkerStorage = options.stagingMarkerStorage ?? Object.freeze({ open, remove: rm });
   }
 
   async createStagingEpoch(options: CreateStagingEpochOptions): Promise<EpochStaging> {
@@ -558,9 +558,11 @@ export class EpochStore {
         if (await pathExists(epochRoot)) {
           throw new EpochStoreError('EPOCH_ALREADY_EXISTS', `Epoch ${JSON.stringify(record.epoch.id)} already exists.`);
         }
+        await this.#syncTree(record.root);
         await this.#removeStagingMarker(record);
         await rename(record.root, epochRoot);
         moved = true;
+        await this.#syncPath(this.#epochsPath, true);
         await this.#writeEpochMetadata(record.epoch);
         await this.#writeActiveMetadata(record.epoch);
       } catch (error) {
@@ -589,14 +591,38 @@ export class EpochStore {
   async #removeStagingMarker(record: StagingRecord): Promise<void> {
     const markerPath = join(record.root, stagingMarkerFileName);
     await this.#syncPath(markerPath);
-    await this.#stagingMarkerStorage.remove(markerPath);
-    await this.#syncPath(record.root);
+    await this.#durabilityStorage.remove(markerPath);
+    await this.#syncPath(record.root, true);
   }
 
-  async #syncPath(path: string): Promise<void> {
-    const handle = await this.#stagingMarkerStorage.open(path, 'r');
-    try { await handle.sync(); }
+  async #syncPath(path: string, directory = false): Promise<void> {
+    const handle = await this.#durabilityStorage.open(path, 'r');
+    try {
+      await handle.sync();
+    } catch (error) {
+      if (directory && process.platform === 'win32' && (isErrno(error, 'EACCES') || isErrno(error, 'EINVAL'))) return;
+      throw error;
+    }
     finally { await handle.close(); }
+  }
+
+  async #syncTree(path: string): Promise<void> {
+    const metadata = await lstat(path);
+    if (metadata.isSymbolicLink()) {
+      throw new EpochStoreError('EPOCH_STAGING_INVALID', 'Staged epoch contents must not contain symbolic links.');
+    }
+    if (metadata.isFile()) {
+      await this.#syncPath(path);
+      return;
+    }
+    if (!metadata.isDirectory()) {
+      throw new EpochStoreError('EPOCH_STAGING_INVALID', 'Staged epoch contents must be regular files or directories.');
+    }
+    const entries = await readdir(path, { withFileTypes: true });
+    for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
+      await this.#syncTree(join(path, entry.name));
+    }
+    await this.#syncPath(path, true);
   }
 
   async #verifyStaging(record: StagingRecord): Promise<void> {
@@ -814,14 +840,18 @@ export class EpochStore {
   }
 
   async #writeJsonAtomically(path: string, value: EpochMetadata): Promise<void> {
-    await mkdir(dirname(path), { recursive: true });
+    const directory = dirname(path);
+    await mkdir(directory, { recursive: true });
+    await this.#syncPath(dirname(directory), true);
     const temporaryPath = join(
-      dirname(path),
+      directory,
       `.${basename(path)}.stage-${process.pid}-${Math.random().toString(16).slice(2)}`,
     );
     try {
       await writeFile(temporaryPath, `${stableJson(value)}\n`, 'utf8');
+      await this.#syncPath(temporaryPath);
       await rename(temporaryPath, path);
+      await this.#syncPath(directory, true);
     } finally {
       await rm(temporaryPath, { force: true });
     }

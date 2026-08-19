@@ -1,6 +1,6 @@
 import { chmod, mkdtemp, mkdir, open, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 
 import { expect, it } from '@rstest/core';
 
@@ -220,7 +220,7 @@ it.each(['marker removal', 'marker file sync', 'marker directory sync'] as const
     };
     const store = new EpochStore({
       projectRoot: root,
-      stagingMarkerStorage: Object.freeze({ open: controlledOpen as typeof open, remove: controlledRemove }),
+      durabilityStorage: Object.freeze({ open: controlledOpen as typeof open, remove: controlledRemove }),
     });
     const stage = async (epoch: ArtifactEpoch): Promise<EpochStaging> => {
       const staging = await store.createStagingEpoch({ epoch, targets: Object.keys(epoch.targetDigests) });
@@ -250,6 +250,70 @@ it.each(['marker removal', 'marker file sync', 'marker directory sync'] as const
     }
   },
 );
+
+it('fsyncs staged artifacts and each durable publication rename in commit order', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent bundle durable epoch publication '));
+  const syncedPaths: string[] = [];
+  const recordingOpen: typeof open = async (path, flags, mode) => {
+    const handle = await open(path, flags, mode);
+    return new Proxy(handle, {
+      get(target, property) {
+        if (property === 'sync') return async () => {
+          syncedPaths.push(String(path));
+          await target.sync();
+        };
+        const value = Reflect.get(target, property, target);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+  };
+
+  try {
+    const epoch = epochFor(root, 'epoch-durable');
+    const store = new EpochStore({
+      projectRoot: root,
+      durabilityStorage: Object.freeze({ open: recordingOpen, remove: rm }),
+    });
+    const staging = await store.createStagingEpoch({ epoch, targets: ['claude', 'codex'] });
+    const manifestPath = join(staging.root, 'agent-bundle.manifest.json');
+    const pluginPath = join(staging.root, 'claude', 'plugin.json');
+    await Promise.all([
+      mkdir(join(staging.root, 'claude'), { recursive: true }),
+      mkdir(join(staging.root, 'codex'), { recursive: true }),
+      writeFile(manifestPath, '{}\n'),
+    ]);
+    await Promise.all([
+      writeFile(pluginPath, 'claude\n'),
+      writeFile(join(staging.root, 'codex', 'plugin.json'), 'codex\n'),
+    ]);
+
+    await staging.publish(async () => undefined);
+
+    const epochsRoot = join(root, '.agent-bundle', 'epochs');
+    const metadataRoot = dirname(epochMetadataPathFor(root, epoch.id));
+    const agentBundleRoot = dirname(activeMetadataPathFor(root));
+    const pluginSync = syncedPaths.indexOf(pluginPath);
+    const manifestSync = syncedPaths.indexOf(manifestPath);
+    const epochRenameSync = syncedPaths.indexOf(epochsRoot);
+    const epochMetadataFileSync = syncedPaths.findIndex((path) =>
+      dirname(path) === metadataRoot && basename(path).startsWith(`.${epoch.id}.json.stage-`));
+    const epochMetadataRenameSync = syncedPaths.indexOf(metadataRoot);
+    const activeMetadataFileSync = syncedPaths.findIndex((path) =>
+      dirname(path) === agentBundleRoot && basename(path).startsWith('.active-epoch.json.stage-'));
+    const activeMetadataRenameSync = syncedPaths.indexOf(agentBundleRoot);
+
+    expect(pluginSync).toBeGreaterThanOrEqual(0);
+    expect(manifestSync).toBeGreaterThanOrEqual(0);
+    expect(epochRenameSync).toBeGreaterThan(pluginSync);
+    expect(epochRenameSync).toBeGreaterThan(manifestSync);
+    expect(epochMetadataFileSync).toBeGreaterThan(epochRenameSync);
+    expect(epochMetadataRenameSync).toBeGreaterThan(epochMetadataFileSync);
+    expect(activeMetadataFileSync).toBeGreaterThan(epochMetadataRenameSync);
+    expect(activeMetadataRenameSync).toBeGreaterThan(activeMetadataFileSync);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
 
 it('exposes the validated immutable epoch directory on an acquired reference', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent bundle epoch reference root '));
