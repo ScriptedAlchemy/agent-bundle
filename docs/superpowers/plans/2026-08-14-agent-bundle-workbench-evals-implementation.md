@@ -138,7 +138,7 @@ THIRD_PARTY_NOTICES
 
 - [ ] **Step 3: Write a failing concurrency test proving one writer per run directory and complete JSONL records**
 
-- [ ] **Step 4: Implement the DSL, fixture copier, graders, aggregation, and schema-versioned store**
+- [ ] **Step 4: Implement the DSL, fixture copier, graders, aggregation, and strict canonical store**
 
 - [ ] **Step 5: Run focused tests and inspect the persisted run tree**
 
