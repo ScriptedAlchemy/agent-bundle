@@ -22,6 +22,7 @@
     "test:packed:native": "rstest --config rstest.config.ts packages/agent-bundle/tests/packed-native-smoke.test.ts",
     "test:packed:native:claude": "npm run build && AGENT_BUNDLE_PACKED_NATIVE_CLAUDE_SMOKE=1 npm run test:packed:native",
     "test:packed:native:codex": "npm run build && AGENT_BUNDLE_PACKED_NATIVE_CODEX_SMOKE=1 npm run test:packed:native",
+    "preview:publish": "pkg-pr-new publish --previewVersion --no-compact --no-template './packages/agent-bundle'",
     "pack:dry-run": "npm run build && npm pack --workspace agent-bundle --dry-run --json",
     "audit:release:sbom": "node scripts/audit-packed-sbom.mjs",
     "audit:release": "publint packages/agent-bundle && attw --pack --profile esm-only packages/agent-bundle && npm ls --omit=dev --workspace agent-bundle && npm audit --omit=dev --workspace agent-bundle && npm audit signatures --workspace agent-bundle && npm run audit:release:sbom",
@@ -40,6 +41,7 @@
     "@rstest/playwright": "0.11.8",
     "@types/node": "26.2.0",
     "commander": "15.0.0",
+    "pkg-pr-new": "0.0.88",
     "playwright": "1.62.1",
     "publint": "0.3.23",
     "typescript": "7.0.2"
