@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { link, lstat, mkdtemp, mkdir, open, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -357,6 +357,106 @@ it('rejects duplicate keys in a recovery gate record', async () => {
       probeProcess: () => false,
       projectRoot: root,
     })).rejects.toMatchObject({ code: 'DEV_LOCK_INVALID' });
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('syncs candidate contents and the containing directory before acquisition resolves', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent bundle durable lock publication '));
+  const directory = join(root, '.agent-bundle');
+  const syncBoundaries: string[] = [];
+  const controlledOpen = async (path: string, flags: string | number, mode?: number) => {
+    const handle = await open(path, flags as Parameters<typeof open>[1], mode);
+    return new Proxy(handle, {
+      get(target, property) {
+        if (property === 'sync') return async () => {
+          syncBoundaries.push(path === directory ? 'directory' : 'candidate');
+          await target.sync();
+        };
+        const value = Reflect.get(target, property, target);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+  };
+
+  try {
+    const lock = await acquireDevLock({
+      projectRoot: root,
+      storage: {
+        link,
+        lstat,
+        mkdir,
+        open: controlledOpen as typeof open,
+        readFile,
+        remove: rm,
+      },
+    } as Parameters<typeof acquireDevLock>[0]);
+
+    expect(syncBoundaries).toEqual(['candidate', 'directory']);
+    await lock.close();
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('returns a live lock handle when candidate cleanup fails after publication', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent bundle lock candidate cleanup '));
+  const cleanupFailure = new Error('candidate cleanup failed');
+  let candidatePath: string | undefined;
+  let injectCleanupFailure = true;
+  const controlledRemove: typeof rm = async (path, options) => {
+    if (injectCleanupFailure && String(path).includes('.candidate-')) {
+      injectCleanupFailure = false;
+      candidatePath = String(path);
+      throw cleanupFailure;
+    }
+    await rm(path, options);
+  };
+
+  try {
+    const lock = await acquireDevLock({
+      projectRoot: root,
+      storage: {
+        link,
+        lstat,
+        mkdir,
+        open,
+        readFile,
+        remove: controlledRemove,
+      },
+    } as Parameters<typeof acquireDevLock>[0]);
+
+    await expect(readFile(lockPathFor(root), 'utf8')).resolves.toContain(lock.owner.nonce);
+    expect(candidatePath).toContain('.candidate-');
+    await lock.close();
+    await expect(readFile(lockPathFor(root), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(readFile(candidatePath!, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('removes an abandoned candidate hardlink while recovering its stale owner', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent bundle abandoned lock candidate '));
+  const staleNonce = 'abandoned-candidate-owner';
+  const candidatePath = join(root, '.agent-bundle', `.dev.lock.candidate-${staleNonce}`);
+
+  try {
+    await mkdir(join(root, '.agent-bundle'), { recursive: true });
+    await writeFile(
+      lockPathFor(root),
+      `{"createdAt":"2026-08-14T11:59:00.000Z","nonce":"${staleNonce}","pid":2147483647,"projectRoot":${JSON.stringify(root)}}\n`,
+    );
+    await link(lockPathFor(root), candidatePath);
+
+    const recovered = await acquireDevLock({
+      probeProcess: () => false,
+      projectRoot: root,
+    });
+
+    await expect(readFile(candidatePath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    await recovered.close();
   } finally {
     await rm(root, { force: true, recursive: true });
   }
