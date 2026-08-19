@@ -783,19 +783,20 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 }
       expect(page.url()).toBe(logsUrlBeforeLiveUpdate);
       expect(logsReplayResponses).toBe(logReplaysBeforeLiveUpdate);
 
-      const expectedLiveLogProducer = 'mcp';
+      const expectedLiveLogProducer = 'hook';
       await page.locator('#logs-producer').selectOption(expectedLiveLogProducer);
       await page.locator('#logs-level').selectOption('info');
       await page.locator('#logs-kind').selectOption('hook.simulate.completed');
       await page.locator('#logs-context').selectOption(hookId);
       const matchingLiveHookEntries = page.locator('.logs-entries > li');
-      await expect(matchingLiveHookEntries).not.toHaveCount(0, { timeout: browserTimeout });
-      await expect(matchingLiveHookEntries.locator('.logs-entry-source')).toHaveText('hook');
-      await expect(matchingLiveHookEntries.locator('.logs-entry-level')).toHaveText('info');
-      await expect(matchingLiveHookEntries.locator('.logs-entry-kind')).toHaveText('hook.simulate.completed');
+      await expect.poll(async () => matchingLiveHookEntries.count(), { timeout: browserTimeout }).toBeGreaterThan(0);
+      expect([...new Set(await matchingLiveHookEntries.locator('.logs-entry-source').allTextContents())]).toEqual(['hook']);
+      expect([...new Set(await matchingLiveHookEntries.locator('.logs-entry-level').allTextContents())]).toEqual(['info']);
+      expect([...new Set(await matchingLiveHookEntries.locator('.logs-entry-kind').allTextContents())]).toEqual(['hook.simulate.completed']);
+      await expect(matchingLiveHookEntries.first()).toContainText(`hookId ${hookId}`);
       await expect(matchingLiveHookEntries.first().locator('.logs-details')).toContainText('outcome');
       await page.locator('#logs-level').selectOption('error');
-      await expect(matchingLiveHookEntries).toHaveCount(0, { timeout: browserTimeout });
+      await expect.poll(async () => matchingLiveHookEntries.count(), { timeout: browserTimeout }).toBe(0);
       await expect(page.getByText('No production log record matches this filter.')).toBeVisible({ timeout: browserTimeout });
 
       phase = 'Agent API Eval tools';
