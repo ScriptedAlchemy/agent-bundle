@@ -159,6 +159,7 @@ it('runs strict validation before the subscription-backed stream command and ret
       validation: { exitCode: 0 },
       version: '2.1.232',
     },
+    normalHome: 'unchanged',
     status: 'passed',
   });
   expect(calls).toEqual([
@@ -291,6 +292,7 @@ it('reports an incompatible Claude version as a harness failure before candidate
       code: 'claude-native.version.incompatible',
       message: 'Claude Code 2.1.231 is older than the required 2.1.232 native contract; upgrade the CLI.',
     }],
+    normalHome: 'unchanged',
     status: 'harness-failure',
   });
   expect(calls).toEqual([{

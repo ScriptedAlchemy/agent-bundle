@@ -1,4 +1,8 @@
+import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
+import { lstat, readFile, readdir } from 'node:fs/promises';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 
 export interface NativeClaudeCommandOptions {
   readonly model?: string;
@@ -232,7 +236,15 @@ export interface NativeClaudeSmokeEvidence {
 export interface NativeClaudeSmokeReport {
   readonly diagnostics: readonly NativeClaudeSmokeDiagnostic[];
   readonly evidence?: NativeClaudeSmokeEvidence;
+  readonly normalHome?: 'unchanged';
   readonly status: 'harness-failure' | 'passed' | 'skipped';
+}
+
+interface ClaudeNormalHomeSnapshot {
+  readonly config: string;
+  readonly localSettings: string;
+  readonly plugins: string;
+  readonly settings: string;
 }
 
 const candidateSkillEventName = (pluginName: string, skillName: string): string => `${pluginName}:${skillName}`;
@@ -273,6 +285,55 @@ const evidenceFor = (
   stream,
   validation: Object.freeze({ exitCode: validation.exitCode }),
   version,
+});
+
+const digestClaudeFileTree = async (path: string, includeContents = true): Promise<string> => {
+  try {
+    const entry = await lstat(path);
+    const digest = createHash('sha256');
+    if (entry.isFile()) {
+      digest.update(`file\0${entry.mode}\0${entry.size}\0`);
+      if (includeContents) digest.update(await readFile(path));
+      else digest.update(`${entry.mtimeMs}\0`);
+      return digest.digest('hex');
+    }
+    if (entry.isDirectory()) {
+      digest.update('directory\0');
+      const children = await readdir(path, { withFileTypes: true });
+      for (const child of children.sort((left, right) => left.name.localeCompare(right.name))) {
+        digest.update(`${child.name}\0${await digestClaudeFileTree(join(path, child.name), includeContents)}\0`);
+      }
+      return digest.digest('hex');
+    }
+    digest.update(`other\0${entry.mode}\0`);
+    return digest.digest('hex');
+  } catch (error) {
+    if (isRecord(error) && error.code === 'ENOENT') return 'absent';
+    throw error;
+  }
+};
+
+const snapshotClaudeNormalHome = async (home: string): Promise<ClaudeNormalHomeSnapshot> => Object.freeze({
+  config: await digestClaudeFileTree(join(home, 'config.json')),
+  localSettings: await digestClaudeFileTree(join(home, 'settings.local.json')),
+  plugins: await digestClaudeFileTree(join(home, 'plugins'), false),
+  settings: await digestClaudeFileTree(join(home, 'settings.json')),
+});
+
+const sameClaudeNormalHome = (left: ClaudeNormalHomeSnapshot, right: ClaudeNormalHomeSnapshot): boolean =>
+  left.config === right.config
+  && left.localSettings === right.localSettings
+  && left.plugins === right.plugins
+  && left.settings === right.settings;
+
+const normalHomeFailure = (code: string, message: string): NativeClaudeSmokeReport => Object.freeze({
+  diagnostics: diagnostic(code, message),
+  status: 'harness-failure',
+});
+
+const normalHomeChangedDiagnostic = Object.freeze({
+  code: 'claude-native.normal-home.changed',
+  message: 'Claude normal config/settings/plugins changed; inspect local state without retaining its output.',
 });
 
 const isMissingExecutableError = (error: unknown): boolean =>
@@ -433,7 +494,7 @@ export const runNativeClaudeProcess = (
   else options.signal?.addEventListener('abort', abort, { once: true });
 });
 
-export const runNativeClaudeSmoke = async (options: NativeClaudeSmokeOptions): Promise<NativeClaudeSmokeReport> => {
+const runNativeClaudeSmokeUnchecked = async (options: NativeClaudeSmokeOptions): Promise<NativeClaudeSmokeReport> => {
   if (!options.enabled) {
     return Object.freeze({
       diagnostics: diagnostic(
@@ -668,4 +729,43 @@ export const runNativeClaudeSmoke = async (options: NativeClaudeSmokeOptions): P
   }
 
   return Object.freeze({ diagnostics: Object.freeze([]), evidence, status: 'passed' });
+};
+
+export const runNativeClaudeSmoke = async (options: NativeClaudeSmokeOptions): Promise<NativeClaudeSmokeReport> => {
+  if (!options.enabled) return runNativeClaudeSmokeUnchecked(options);
+
+  const environment = options.environment ?? process.env;
+  const normalClaudeHome = environment.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude');
+  let before: ClaudeNormalHomeSnapshot;
+  try {
+    before = await snapshotClaudeNormalHome(normalClaudeHome);
+  } catch {
+    return normalHomeFailure(
+      'claude-native.normal-home.unavailable',
+      'Claude normal config/settings/plugins could not be inspected; inspect local state without retaining its output.',
+    );
+  }
+
+  const result = await runNativeClaudeSmokeUnchecked(options);
+  let after: ClaudeNormalHomeSnapshot;
+  try {
+    after = await snapshotClaudeNormalHome(normalClaudeHome);
+  } catch {
+    return Object.freeze({
+      ...result,
+      diagnostics: diagnostic(
+        'claude-native.normal-home.unavailable',
+        'Claude normal config/settings/plugins could not be inspected after the smoke; inspect local state without retaining its output.',
+      ),
+      status: 'harness-failure',
+    });
+  }
+  if (!sameClaudeNormalHome(before, after)) {
+    return Object.freeze({
+      ...result,
+      diagnostics: Object.freeze([normalHomeChangedDiagnostic]),
+      status: 'harness-failure',
+    });
+  }
+  return Object.freeze({ ...result, normalHome: 'unchanged' as const });
 };
