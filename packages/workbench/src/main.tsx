@@ -107,12 +107,9 @@ const navigationItems: readonly Readonly<{ glyph: string; label: string; page: W
 const workbenchPages: ReadonlySet<string> = new Set(navigationItems.map((item) => item.page));
 
 const pageForHash = (): WorkbenchPage => {
-  if (window.location.hash === '#inspector') return 'mcp';
   const page = window.location.hash.slice(1);
   return workbenchPages.has(page) ? page as WorkbenchPage : 'overview';
 };
-
-const mcpPresentationForHash = (): McpPresentation => window.location.hash === '#inspector' ? 'inspector' : 'playground';
 
 const Navigation = ({ onNavigate, page }: {
   readonly onNavigate: (page: WorkbenchPage) => void;
@@ -512,7 +509,7 @@ const Workbench = () => {
   const [error, setError] = useState<string>();
   const [mcpController, setMcpController] = useState(createMcpController);
   const [mcpModel, setMcpModel] = useState(() => mcpController.model);
-  const [mcpPresentation, setMcpPresentation] = useState(mcpPresentationForHash);
+  const [mcpPresentation, setMcpPresentation] = useState<McpPresentation>('playground');
   const [page, setPage] = useState<WorkbenchPage>(pageForHash);
   const [status, setStatus] = useState<ProjectStatus>();
   const [changedFiles, setChangedFiles] = useState<readonly string[]>([]);
@@ -569,12 +566,6 @@ const Workbench = () => {
 
   useEffect(() => {
     const updatePage = () => {
-      if (window.location.hash === '#inspector') {
-        window.history.replaceState(undefined, '', '#mcp');
-        setMcpPresentation('inspector');
-        setPage('mcp');
-        return;
-      }
       setPage(pageForHash());
       if (window.location.hash === '#mcp') setMcpPresentation('playground');
     };

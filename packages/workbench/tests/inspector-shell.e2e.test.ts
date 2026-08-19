@@ -73,7 +73,7 @@ const writeInspectorProject = async (root: string): Promise<void> => {
   ]);
 };
 
-e2e('canonicalizes the legacy Inspector hash into the internal MCP Inspector presentation without opening a session', { timeout: 60_000 }, async ({ page }) => {
+e2e('treats an unsupported Inspector hash as the overview without opening an MCP session', { timeout: 60_000 }, async ({ page }) => {
   await buildWorkbench();
   const project = await createProjectFixture();
   const server = await startDevServer({
@@ -91,20 +91,10 @@ e2e('canonicalizes the legacy Inspector hash into the internal MCP Inspector pre
     });
 
     await page.goto(`${server.url}#inspector`);
-    await expect(page).toHaveURL(/#mcp$/u, { timeout: browserTimeout });
-    await expect(page.getByRole('link', { name: 'Inspector' })).toHaveCount(0);
-    await expect(page.getByRole('tab', { name: 'Inspector' })).toHaveAttribute('aria-selected', 'true');
-    const playgroundPresentation = page.locator('#mcp-playground-presentation');
-    const inspectorPresentation = page.locator('#mcp-inspector-presentation');
-    await expect(playgroundPresentation).toHaveCount(1);
-    await expect(inspectorPresentation).toHaveCount(1);
-    expect(await playgroundPresentation.evaluate((element) => ({ hidden: element.hasAttribute('hidden'), inert: element.hasAttribute('inert') })))
-      .toEqual({ hidden: true, inert: true });
-    expect(await inspectorPresentation.evaluate((element) => ({ hidden: element.hasAttribute('hidden'), inert: element.hasAttribute('inert') })))
-      .toEqual({ hidden: false, inert: false });
-    await expect(page.getByRole('heading', { name: 'Inspector' })).toBeVisible({ timeout: browserTimeout });
-    await expect(page.getByText('Negotiated protocol: Not negotiated')).toBeVisible({ timeout: browserTimeout });
-    await expect(page.getByRole('navigation', { name: 'Inspector screens' })).toHaveText(/Tools.*Resources.*Prompts.*Protocol.*Logging/u);
+    await expect(page).toHaveURL(/#inspector$/u, { timeout: browserTimeout });
+    await expect(page.getByRole('heading', { name: 'Project overview' })).toBeVisible({ timeout: browserTimeout });
+    await expect(page.getByRole('link', { name: 'Overview' })).toHaveAttribute('aria-current', 'page');
+    await expect(page.getByRole('tab', { name: 'Inspector' })).toHaveCount(0);
     expect(sessionPosts).toBe(0);
     expect(pageErrors).toEqual([]);
   } finally {
@@ -251,9 +241,10 @@ e2e('mounts the internal Inspector presentation from an explicit development-mod
   try {
     const pageErrors: Error[] = [];
     page.on('pageerror', (error) => pageErrors.push(error));
-    await page.goto(`${server.url}#inspector`);
-    await expect(page).toHaveURL(/#mcp$/u, { timeout: browserTimeout });
-    await expect(page.getByRole('tab', { name: 'Inspector' })).toHaveAttribute('aria-selected', 'true');
+    await page.goto(`${server.url}#mcp`);
+    const inspectorTab = page.getByRole('tab', { name: 'Inspector' });
+    await inspectorTab.click();
+    await expect(inspectorTab).toHaveAttribute('aria-selected', 'true');
     await expect(page.getByRole('heading', { name: 'Inspector' })).toBeVisible({ timeout: browserTimeout });
     await expect(page.getByText('Negotiated protocol: Not negotiated')).toBeVisible({ timeout: browserTimeout });
     await expect(await readFile(join(workbenchAssets, 'static', 'js', 'lib-react.js'), 'utf8')).toContain('react.development.js');
