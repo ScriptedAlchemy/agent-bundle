@@ -67,19 +67,20 @@ export const packedNativeSmokePlan = (environment: Readonly<NodeJS.ProcessEnv>) 
   ]),
 });
 
-const withoutProviderCredentials = (environment: Readonly<NodeJS.ProcessEnv>): NodeJS.ProcessEnv => {
-  const {
-    ANTHROPIC_API_KEY: _anthropicApiKey,
-    ANTHROPIC_AUTH_TOKEN: _anthropicAuthToken,
-    ANTHROPIC_BASE_URL: _anthropicBaseUrl,
-    CLAUDE_CODE_USE_BEDROCK: _bedrock,
-    CLAUDE_CODE_USE_FOUNDRY: _foundry,
-    CLAUDE_CODE_USE_VERTEX: _vertex,
-    OPENAI_API_KEY: _openaiApiKey,
-    ...subscriptionEnvironment
-  } = environment;
-  return subscriptionEnvironment;
+const alternateProviderKeys = new Set([
+  'ANTHROPIC_BASE_URL',
+  'CLAUDE_CODE_USE_BEDROCK',
+  'CLAUDE_CODE_USE_FOUNDRY',
+  'CLAUDE_CODE_USE_VERTEX',
+]);
+const credentialEnvironmentKey = (name: string): boolean => {
+  const compact = name.toLocaleLowerCase('en-US').replace(/[^a-z0-9]/gu, '');
+  return /(?:apikey|apitoken|authtoken|accesstoken|authorization|credential|password|secret|token)/u.test(compact);
 };
+
+export const packedNativeEnvironment = (environment: Readonly<NodeJS.ProcessEnv>): NodeJS.ProcessEnv =>
+  Object.freeze(Object.fromEntries(Object.entries(environment).filter(([name]) =>
+    name !== 'NODE_PATH' && !alternateProviderKeys.has(name) && !credentialEnvironmentKey(name))));
 
 const run = async (
   executable: string,
@@ -133,6 +134,33 @@ const digestNormalCodexState = async (codexHome: string) => Object.freeze({
   plugins: await digestTree(join(codexHome, 'plugins'), false),
 });
 
+const digestNormalClaudeState = async (environment: Readonly<NodeJS.ProcessEnv>) => {
+  const claudeHome = environment.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude');
+  return Object.freeze({
+    config: await digestTree(join(claudeHome, 'config.json'), true),
+    localSettings: await digestTree(join(claudeHome, 'settings.local.json'), true),
+    plugins: await digestTree(join(claudeHome, 'plugins'), false),
+    settings: await digestTree(join(claudeHome, 'settings.json'), true),
+  });
+};
+
+const sameClaudeState = (
+  left: Awaited<ReturnType<typeof digestNormalClaudeState>>,
+  right: Awaited<ReturnType<typeof digestNormalClaudeState>>,
+): boolean => left.config === right.config
+  && left.localSettings === right.localSettings
+  && left.plugins === right.plugins
+  && left.settings === right.settings;
+
+export const normalClaudeHomeUnchanged = async (
+  environment: Readonly<NodeJS.ProcessEnv>,
+  operation: () => Promise<void>,
+): Promise<boolean> => {
+  const before = await digestNormalClaudeState(environment);
+  await operation();
+  return sameClaudeState(before, await digestNormalClaudeState(environment));
+};
+
 const summarizeEval = (host: PackedNativeHost, command: CommandResult) => {
   let document: EvalDocument | undefined;
   try {
@@ -159,7 +187,7 @@ export const runPackedNativeSmoke = async (options: {
   const consumer = join(root, 'consumer');
   const project = join(consumer, 'project');
   const tarballs = join(root, 'tarballs');
-  const environment = withoutProviderCredentials(options.environment);
+  const environment = packedNativeEnvironment(options.environment);
 
   try {
     await Promise.all([mkdir(consumer, { recursive: true }), mkdir(tarballs, { recursive: true })]);
@@ -195,25 +223,36 @@ export const runPackedNativeSmoke = async (options: {
       const host = selected.host;
       const normalCodexHome = options.environment.CODEX_HOME ?? join(homedir(), '.codex');
       const before = host === 'codex' ? await digestNormalCodexState(normalCodexHome) : undefined;
-      const command = await run(cli, [
-        'eval',
-        '--root',
-        project,
-        '--suite',
-        'packed-native-smoke',
-        '--case',
-        `packed-native-${host}`,
-        '--harness',
-        host,
-        '--trials',
-        '1',
-        '--json',
-      ], { cwd: project, environment });
+      let command: CommandResult | undefined;
+      const executeEval = async (): Promise<void> => {
+        command = await run(cli, [
+          'eval',
+          '--root',
+          project,
+          '--suite',
+          'packed-native-smoke',
+          '--case',
+          `packed-native-${host}`,
+          '--harness',
+          host,
+          '--trials',
+          '1',
+          '--json',
+        ], { cwd: project, environment });
+      };
+      const claudeHomeUnchanged = host === 'claude'
+        ? await normalClaudeHomeUnchanged(options.environment, executeEval)
+        : undefined;
+      if (host === 'codex') await executeEval();
+      if (command === undefined) throw new Error('Packed native smoke did not execute the selected Eval host.');
       const summary = summarizeEval(host, command);
-      if (before === undefined) reports.push(summary);
-      else {
+      if (host === 'claude') {
+        reports.push(claudeHomeUnchanged === true
+          ? Object.freeze({ ...summary, normalHome: 'unchanged' })
+          : Object.freeze({ host, status: 'failed', trials: summary.trials }));
+      } else if (before !== undefined) {
         const after = await digestNormalCodexState(normalCodexHome);
-        if (JSON.stringify(before) !== JSON.stringify(after)) {
+        if (before.auth !== after.auth || before.config !== after.config || before.plugins !== after.plugins) {
           reports.push(Object.freeze({ host, status: 'failed', trials: summary.trials }));
         } else {
           reports.push(Object.freeze({ ...summary, normalHome: 'unchanged' }));
