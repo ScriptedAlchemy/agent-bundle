@@ -111,14 +111,12 @@ const maximumPreviewBytes = 256 * 1024;
 const evidenceLevel = (value: string): string => `${value} evidence`;
 
 const invocationProvenance = (row: EvalTrialRow): string => {
-  const invocation = row.provenance?.invocation;
-  if (invocation === undefined) return 'Not recorded';
+  const invocation = row.provenance.invocation;
   return invocation.mode === 'explicit' ? `explicit · ${invocation.skill}` : invocation.mode;
 };
 
 const semanticGraderProvenance = (row: EvalTrialRow): string => {
-  const semanticGrader = row.provenance?.semanticGrader;
-  if (semanticGrader === undefined) return 'Not recorded';
+  const semanticGrader = row.provenance.semanticGrader;
   if (semanticGrader === null) return 'None';
   if ('state' in semanticGrader) return 'Unrecorded';
   return `${semanticGrader.id} · ${semanticGrader.model} · schema v${semanticGrader.schemaVersion}`;
@@ -268,7 +266,7 @@ const TrialCard = ({ client, row, runId }: {
   <section className="eval-trial-provenance">
     <h3>Recorded provenance</h3>
     <dl>
-      <div><dt>Host CLI version</dt><dd>{row.provenance?.hostCliVersion ?? 'Not recorded'}</dd></div>
+      <div><dt>Host CLI version</dt><dd>{row.provenance.hostCliVersion ?? 'Not recorded'}</dd></div>
       <div><dt>Invocation</dt><dd>{invocationProvenance(row)}</dd></div>
       <div><dt>Semantic grader</dt><dd>{semanticGraderProvenance(row)}</dd></div>
       <div><dt>Recorded usage</dt><dd>{usageProvenance(row)}</dd></div>

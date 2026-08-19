@@ -181,21 +181,23 @@ it('reads one recorded run and lists every recorded run', async () => {
   ]);
 });
 
-it('accepts legacy omitted trial provenance and usage but rejects unsafe or malformed additions', async () => {
-  const { provenance: _provenance, usage: _usage, ...legacyTrial } = trialRecord;
+it('requires canonical trial provenance while allowing omitted usage', async () => {
+  const { provenance: _provenance, ...withoutProvenance } = trialRecord;
+  const { usage: _usage, ...withoutUsage } = trialRecord;
   const cases: readonly unknown[] = [
-    { run: { ...runResult, trials: [legacyTrial] } },
+    { run: { ...runResult, trials: [withoutProvenance] } },
     { run: { ...runResult, trials: [{ ...trialRecord, provenance: { ...trialRecord.provenance, extra: true } }] } },
     { run: { ...runResult, trials: [{ ...trialRecord, provenance: { ...trialRecord.provenance, hostCliVersion: '/private/cli' } }] } },
     { run: { ...runResult, trials: [{ ...trialRecord, provenance: { ...trialRecord.provenance, invocation: { mode: 'explicit' } } }] } },
     { run: { ...runResult, trials: [{ ...trialRecord, usage: { inputTokens: 9, outputTokens: -1 } }] } },
   ];
 
-  const legacy = new EvalClient({ fetch: recordingFetch([], () => response(cases[0])) });
-  const legacyResult = await legacy.read(runRecord.id);
-  expect(legacyResult.trials[0]).toMatchObject({ id: trialRecord.id });
-  expect(legacyResult.trials[0]).not.toHaveProperty('provenance');
-  expect(legacyResult.trials[0]).not.toHaveProperty('usage');
+  const usageOptional = new EvalClient({ fetch: recordingFetch([], () => response({
+    run: { ...runResult, trials: [withoutUsage] },
+  })) });
+  const resultWithoutUsage = await usageOptional.read(runRecord.id);
+  expect(resultWithoutUsage.trials[0]).toMatchObject({ id: trialRecord.id, provenance: trialRecord.provenance });
+  expect(resultWithoutUsage.trials[0]).not.toHaveProperty('usage');
 
   const unrecorded = new EvalClient({ fetch: recordingFetch([], () => response({
     run: {
@@ -210,7 +212,7 @@ it('accepts legacy omitted trial provenance and usage but rejects unsafe or malf
     trials: [{ provenance: { semanticGrader: { state: 'unrecorded' } } }],
   });
 
-  for (const body of cases.slice(1)) {
+  for (const body of cases) {
     const client = new EvalClient({ fetch: recordingFetch([], () => response(body)) });
     await expect(client.read(runRecord.id)).rejects.toMatchObject({ code: 'AB8073' });
   }

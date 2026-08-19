@@ -60,7 +60,7 @@ export interface EvalTrialRow {
   readonly id: string;
   readonly model: string;
   readonly outcome: EvalAssertionOutcome;
-  readonly provenance?: EvalTrialProvenance;
+  readonly provenance: EvalTrialProvenance;
   readonly rawArtifacts: readonly string[];
   readonly targetDigest: string;
   readonly usage?: EvalTrialUsage;
@@ -293,7 +293,7 @@ export const evalTrialRowsFor = (
   id: trial.id,
   model: trial.model,
   outcome: trial.outcome,
-  ...(trial.provenance === undefined ? {} : { provenance: provenanceFor(trial.provenance) }),
+  provenance: provenanceFor(trial.provenance),
   rawArtifacts: Object.freeze([...trial.rawArtifacts]),
   targetDigest: trial.targetDigest,
   ...(trial.usage === undefined ? {} : { usage: Object.freeze({ ...trial.usage }) }),

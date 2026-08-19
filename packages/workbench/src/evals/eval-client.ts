@@ -214,7 +214,7 @@ const trialRecordSchema = z.strictObject({
   outcome: outcomeSchema,
   pluginFailure: pluginFailureSchema.optional(),
   prompt: textSchema,
-  provenance: trialProvenanceSchema.optional(),
+  provenance: trialProvenanceSchema,
   rawArtifacts: z.array(textSchema),
   schemaVersion: z.literal(1),
   startedAt: timestampSchema,
