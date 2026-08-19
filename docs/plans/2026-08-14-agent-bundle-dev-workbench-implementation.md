@@ -406,7 +406,8 @@ usage, non-comparable labeling, and the comparison UI.
 
 Acceptance:
 
-- case, host, model, CLI version, fixture digest, invocation, and grader versions must align;
+- case, host, model, CLI version, fixture digest, invocation, and semantic grader identities must
+  align;
 - mismatches never contribute to a delta;
 - one or two trials are labeled smoke evidence, not reliability claims.
 
