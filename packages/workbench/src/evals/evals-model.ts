@@ -312,7 +312,7 @@ const jsonEquivalent = (left: unknown, right: unknown): boolean => {
 };
 
 const eventsEquivalent = (left: EvalRunEvent, right: EvalRunEvent): boolean =>
-  left.sequence === right.sequence && left.kind === right.kind && left.schemaVersion === right.schemaVersion &&
+  left.sequence === right.sequence && left.kind === right.kind &&
   left.timestamp === right.timestamp && jsonEquivalent(left.payload, right.payload);
 
 /** Keeps a bounded ordered durable timeline; equal replay duplicates are harmless, conflicts are not. */

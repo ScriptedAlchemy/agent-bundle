@@ -48,7 +48,6 @@ export interface EvalRunRecord {
   readonly harness: string;
   readonly id: string;
   readonly projectRevision: string;
-  readonly schemaVersion: 1;
   readonly summary?: EvalRunSummary;
 }
 
@@ -62,7 +61,6 @@ export interface EvalTrialInvocationProvenance {
 export interface EvalSemanticGraderProvenance {
   readonly id: string;
   readonly model: string;
-  readonly schemaVersion: number;
 }
 
 /** A semantic grader ran but its identity was not safe or complete enough to compare. */
@@ -105,7 +103,6 @@ export interface EvalTrialRecord {
   readonly prompt: string;
   readonly provenance: EvalTrialProvenance;
   readonly rawArtifacts: readonly string[];
-  readonly schemaVersion: 1;
   readonly startedAt: string;
   readonly targetDigest: string;
   readonly trialIndex: number;
@@ -113,7 +110,7 @@ export interface EvalTrialRecord {
   readonly usage?: EvalTrialUsage;
 }
 
-export type EvalTrialRecordInput = Omit<EvalTrialRecord, 'schemaVersion'>;
+export type EvalTrialRecordInput = EvalTrialRecord;
 
 /** The harness only needs durable artifact and normalized trial writes. */
 export interface EvalTrialWriter {
@@ -129,7 +126,6 @@ export interface EvalRunEventInput {
 export interface EvalRunEvent {
   readonly kind: string;
   readonly payload: JsonValue;
-  readonly schemaVersion: 1;
   readonly sequence: number;
   readonly timestamp: string;
 }
@@ -169,7 +165,6 @@ export interface EvalRunOwner {
   readonly createdAt: string;
   readonly nonce: string;
   readonly pid: number;
-  readonly schemaVersion: 1;
 }
 
 export interface CreateEvalRunOptions {
@@ -495,7 +490,6 @@ const parseOwner = (value: unknown): EvalRunOwner | undefined => {
   if (!isRecord(value)) return undefined;
   const pid = value.pid;
   if (
-    value.schemaVersion !== 1 ||
     typeof value.createdAt !== 'string' ||
     typeof value.nonce !== 'string' ||
     typeof pid !== 'number' ||
@@ -504,7 +498,7 @@ const parseOwner = (value: unknown): EvalRunOwner | undefined => {
   ) {
     return undefined;
   }
-  return Object.freeze({ createdAt: value.createdAt, nonce: value.nonce, pid, schemaVersion: 1 });
+  return Object.freeze({ createdAt: value.createdAt, nonce: value.nonce, pid });
 };
 
 const readOwner = async (directory: string): Promise<EvalRunOwner | undefined> => {
@@ -655,13 +649,10 @@ const parseSummary = (value: unknown, code: RunStoreValidationCode): EvalRunSumm
 const parseRunRecordValue = (value: unknown, code: RunStoreValidationCode): EvalRunRecord => {
   const record = strictRecord(value, code, 'Eval run document');
   requireOptionalKeys(record,
-    ['agentBundleVersion', 'artifact', 'createdAt', 'harness', 'id', 'projectRevision', 'schemaVersion'],
+    ['agentBundleVersion', 'artifact', 'createdAt', 'harness', 'id', 'projectRevision'],
     ['completedAt', 'summary'],
     code,
     'Eval run document');
-  if (property(record, 'schemaVersion', code, 'Eval run document') !== 1) {
-    return validationError(code, 'Eval run document is not schema version 1.');
-  }
   const completedAt = Object.hasOwn(record, 'completedAt')
     ? requireTimestamp(property(record, 'completedAt', code, 'Eval run document'), code, 'Eval run completedAt')
     : undefined;
@@ -679,7 +670,6 @@ const parseRunRecordValue = (value: unknown, code: RunStoreValidationCode): Eval
     harness: requireString(property(record, 'harness', code, 'Eval run document'), code, 'Eval run harness'),
     id: requireSafeSegment(requireString(property(record, 'id', code, 'Eval run document'), code, 'Eval run id'), 'Eval run id'),
     projectRevision: requireString(property(record, 'projectRevision', code, 'Eval run document'), code, 'Eval run project revision'),
-    schemaVersion: 1,
     ...(summary === undefined ? {} : { summary }),
   });
 };
@@ -694,14 +684,10 @@ const parseRunRecord = (value: unknown): EvalRunRecord | undefined => {
 
 const parseEventRecordValue = (value: unknown, code: RunStoreValidationCode): EvalRunEvent => {
   const record = strictRecord(value, code, 'Eval run event');
-  requireKeys(record, ['kind', 'payload', 'schemaVersion', 'sequence', 'timestamp'], code, 'Eval run event');
-  if (property(record, 'schemaVersion', code, 'Eval run event') !== 1) {
-    return validationError(code, 'Eval run event is not schema version 1.');
-  }
+  requireKeys(record, ['kind', 'payload', 'sequence', 'timestamp'], code, 'Eval run event');
   return Object.freeze({
     kind: requireString(property(record, 'kind', code, 'Eval run event'), code, 'Eval run event kind'),
     payload: property(record, 'payload', code, 'Eval run event'),
-    schemaVersion: 1,
     sequence: requireInteger(property(record, 'sequence', code, 'Eval run event'), code, 'Eval run event sequence', 1),
     timestamp: requireTimestamp(property(record, 'timestamp', code, 'Eval run event'), code, 'Eval run event timestamp'),
   });
@@ -842,11 +828,10 @@ const parseSemanticGraderProvenance = (
     }
     return Object.freeze({ state: 'unrecorded' });
   }
-  requireKeys(record, ['id', 'model', 'schemaVersion'], code, 'Eval trial semantic grader provenance');
+  requireKeys(record, ['id', 'model'], code, 'Eval trial semantic grader provenance');
   return Object.freeze({
     id: requireProvenanceIdentifier(property(record, 'id', code, 'Eval trial semantic grader provenance'), code, 'Eval semantic grader id'),
     model: requireProvenanceIdentifier(property(record, 'model', code, 'Eval trial semantic grader provenance'), code, 'Eval semantic grader model'),
-    schemaVersion: requireInteger(property(record, 'schemaVersion', code, 'Eval trial semantic grader provenance'), code, 'Eval semantic grader schema version', 1),
   });
 };
 
@@ -874,16 +859,13 @@ const parseTrialUsage = (value: JsonValue, code: RunStoreValidationCode): EvalTr
 
 const trialInputKeys = ['assertions', 'caseDigest', 'caseId', 'completedAt', 'durationMs', 'evidence', 'fixtureDigest', 'host', 'id', 'model', 'outcome', 'prompt', 'provenance', 'rawArtifacts', 'startedAt', 'targetDigest', 'trialIndex'];
 
-const parseTrialRecordValue = (value: unknown, code: RunStoreValidationCode, input = false): EvalTrialRecord => {
+const parseTrialRecordValue = (value: unknown, code: RunStoreValidationCode): EvalTrialRecord => {
   const record = strictRecord(value, code, 'Eval trial record');
   requireOptionalKeys(record,
-    input ? trialInputKeys : [...trialInputKeys, 'schemaVersion'],
+    trialInputKeys,
     ['harnessFailure', 'pluginFailure', 'usage'],
     code,
     'Eval trial record');
-  if (!input && property(record, 'schemaVersion', code, 'Eval trial record') !== 1) {
-    return validationError(code, 'Eval trial record is not schema version 1.');
-  }
   const harnessFailure = Object.hasOwn(record, 'harnessFailure')
     ? parseHarnessFailure(property(record, 'harnessFailure', code, 'Eval trial record'), code)
     : undefined;
@@ -915,7 +897,6 @@ const parseTrialRecordValue = (value: unknown, code: RunStoreValidationCode, inp
     provenance,
     rawArtifacts: Object.freeze(requireArray(property(record, 'rawArtifacts', code, 'Eval trial record'), code, 'Eval trial raw artifacts')
       .map((rawArtifact) => requireSafeRelativePath(requireString(rawArtifact, code, 'Eval trial raw artifact'), 'Eval trial raw artifact'))),
-    schemaVersion: 1,
     startedAt: requireTimestamp(property(record, 'startedAt', code, 'Eval trial record'), code, 'Eval trial startedAt'),
     targetDigest: requireString(property(record, 'targetDigest', code, 'Eval trial record'), code, 'Eval trial target digest'),
     trialIndex: requireInteger(property(record, 'trialIndex', code, 'Eval trial record'), code, 'Eval trial index'),
@@ -923,13 +904,13 @@ const parseTrialRecordValue = (value: unknown, code: RunStoreValidationCode, inp
   });
 };
 
-const parseTrialInput = (value: unknown): EvalTrialRecord => parseTrialRecordValue(value, 'EVAL_RUN_RECORD_INVALID', true);
+const parseTrialInput = (value: unknown): EvalTrialRecord => parseTrialRecordValue(value, 'EVAL_RUN_RECORD_INVALID');
 
 const parseTrialRecord = (value: unknown, sourcePath: string): EvalTrialRecord => {
   try {
     return parseTrialRecordValue(value, 'EVAL_RUN_CORRUPT');
   } catch {
-    throw storeError('EVAL_RUN_CORRUPT', `Eval trial record ${JSON.stringify(sourcePath)} does not match trial schema version 1.`);
+    throw storeError('EVAL_RUN_CORRUPT', `Eval trial record ${JSON.stringify(sourcePath)} does not match the trial schema.`);
   }
 };
 
@@ -964,7 +945,6 @@ export class EvalRunWriter implements EvalTrialWriter {
     const input = parseEventRecordValue({
       kind: property(inputRecord, 'kind', 'EVAL_RUN_RECORD_INVALID', 'Eval run event input'),
       payload: property(inputRecord, 'payload', 'EVAL_RUN_RECORD_INVALID', 'Eval run event input'),
-      schemaVersion: 1,
       sequence: 1,
       timestamp: new Date().toISOString(),
     }, 'EVAL_RUN_RECORD_INVALID');
@@ -972,7 +952,6 @@ export class EvalRunWriter implements EvalTrialWriter {
       const sequence = this.#sequence + 1;
       const record: EvalRunEvent = Object.freeze({
         ...input,
-        schemaVersion: 1,
         sequence,
         timestamp: new Date().toISOString(),
       });
@@ -1134,7 +1113,6 @@ export const createEvalRun = async (options: CreateEvalRunOptions): Promise<Eval
     createdAt: createdAt.toISOString(),
     nonce: randomUUID(),
     pid: process.pid,
-    schemaVersion: 1,
   });
   try {
     await ensureWritablePath(directory, join(directory, ownerFileName));
@@ -1161,7 +1139,6 @@ export const createEvalRun = async (options: CreateEvalRunOptions): Promise<Eval
     harness: input.provenance.harness,
     id,
     projectRevision: input.provenance.projectRevision,
-    schemaVersion: 1,
   });
   await writeJsonAtomically(directory, join(directory, runFileName), record);
   await ensureWritablePath(directory, join(directory, eventsFileName));
@@ -1189,7 +1166,7 @@ export const readEvalRun = async (directory: string): Promise<EvalRunRecord> => 
   }
   const record = parseRunRecord(parsed);
   if (record === undefined) {
-    throw storeError('EVAL_RUN_CORRUPT', 'Eval run document does not match run schema version 1.');
+    throw storeError('EVAL_RUN_CORRUPT', 'Eval run document does not match the run schema.');
   }
   return record;
 };
@@ -1222,7 +1199,7 @@ export const readEvalRunEvents = async (directory: string): Promise<EvalRunEvent
     }
     const event = parseEventRecord(parsed);
     if (event === undefined) {
-      throw storeError('EVAL_RUN_CORRUPT', 'Eval run event log contains a record that is not event schema version 1.');
+      throw storeError('EVAL_RUN_CORRUPT', 'Eval run event log contains a record that does not match the event schema.');
     }
     return event;
   });

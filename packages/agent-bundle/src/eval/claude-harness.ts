@@ -10,7 +10,6 @@ import {
 import { resolveEvalAssertions } from './assertions.ts';
 import {
   claudeSemanticGraderId,
-  claudeSemanticGraderSchemaVersion,
   runClaudeSemanticGrader,
   type ClaudeSemanticGraderRawOutput,
 } from './claude-semantic-grader.ts';
@@ -448,7 +447,6 @@ export const runClaudeTrial = async (options: RunClaudeTrialOptions): Promise<Ev
         ? Object.freeze({
           id: claudeSemanticGraderId,
           model: options.configuredSemanticGrader.model,
-          schemaVersion: claudeSemanticGraderSchemaVersion,
         })
         : options.semanticGrader === undefined
           ? null

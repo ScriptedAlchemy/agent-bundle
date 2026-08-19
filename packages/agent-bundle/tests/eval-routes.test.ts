@@ -54,7 +54,6 @@ const runRecord: EvalRunRecord = Object.freeze({
   harness: 'deterministic',
   id: 'run-a',
   projectRevision: 'd'.repeat(64),
-  schemaVersion: 1,
   summary: Object.freeze({ cases: 1, fail: 0, inconclusive: 1, pass: 1, trials: 2 }),
 });
 
@@ -88,7 +87,6 @@ const trialRecord: EvalTrialRecord = Object.freeze({
     semanticGrader: null,
   }),
   rawArtifacts: Object.freeze(['artifacts/portable-1/evidence.json']),
-  schemaVersion: 1,
   startedAt: '2026-08-17T00:00:00.500Z',
   targetDigest: 'c'.repeat(64),
   trialIndex: 0,
@@ -157,8 +155,8 @@ class RecordingService implements EvalRouteService {
     this.calls.push({ afterSequence, kind: 'events', runId });
     if (this.failure !== undefined) throw this.failure;
     const events = Object.freeze([
-      Object.freeze({ kind: 'run.started', payload: Object.freeze({}), schemaVersion: 1 as const, sequence: 1, timestamp: '2026-08-17T00:00:00.000Z' }),
-      Object.freeze({ kind: 'trial.completed', payload: Object.freeze({}), schemaVersion: 1 as const, sequence: 2, timestamp: '2026-08-17T00:00:01.000Z' }),
+      Object.freeze({ kind: 'run.started', payload: Object.freeze({}), sequence: 1, timestamp: '2026-08-17T00:00:00.000Z' }),
+      Object.freeze({ kind: 'trial.completed', payload: Object.freeze({}), sequence: 2, timestamp: '2026-08-17T00:00:01.000Z' }),
     ]);
     return Object.freeze({
       cursor: Object.freeze({ afterSequence: 2 }),
@@ -240,7 +238,7 @@ class RecordingService implements EvalRouteService {
           for (const event of this.streamEvents) listener(event);
           return;
         }
-        listener(Object.freeze({ kind: 'run.completed', payload: Object.freeze({}), schemaVersion: 1 as const, sequence: 3, timestamp: '2026-08-17T00:00:02.000Z' }));
+        listener(Object.freeze({ kind: 'run.completed', payload: Object.freeze({}), sequence: 3, timestamp: '2026-08-17T00:00:02.000Z' }));
       },
       close: (): void => { this.streamSubscriptionCloses += 1; },
       replay,
@@ -404,8 +402,8 @@ it('writes a bounded NDJSON replay from the requested eval event cursor', async 
     expect(stream.headers.get('cache-control')).toBe('no-store');
     expect(stream.headers.get('content-type')).toBe('application/x-ndjson; charset=utf-8');
     await expect(stream.text()).resolves.toBe([
-      JSON.stringify({ kind: 'trial.completed', payload: {}, schemaVersion: 1, sequence: 2, timestamp: '2026-08-17T00:00:01.000Z' }),
-      JSON.stringify({ kind: 'run.completed', payload: {}, schemaVersion: 1, sequence: 3, timestamp: '2026-08-17T00:00:02.000Z' }),
+      JSON.stringify({ kind: 'trial.completed', payload: {}, sequence: 2, timestamp: '2026-08-17T00:00:01.000Z' }),
+      JSON.stringify({ kind: 'run.completed', payload: {}, sequence: 3, timestamp: '2026-08-17T00:00:02.000Z' }),
       '',
     ].join('\n'));
     expect(service.calls).toEqual([{ afterSequence: 1, kind: 'events', runId: 'run-a' }]);
@@ -506,7 +504,6 @@ it('keeps one bounded stream writer while a blocked response receives reentrant 
   service.streamEvents = Object.freeze(Array.from({ length: 300 }, (_, index) => Object.freeze({
     kind: 'trial.progress',
     payload: Object.freeze({ detail: 'x'.repeat(2048) }),
-    schemaVersion: 1 as const,
     sequence: index + 3,
     timestamp: '2026-08-17T00:00:02.000Z',
   })));

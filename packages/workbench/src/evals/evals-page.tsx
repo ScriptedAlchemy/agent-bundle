@@ -119,7 +119,7 @@ const semanticGraderProvenance = (row: EvalTrialRow): string => {
   const semanticGrader = row.provenance.semanticGrader;
   if (semanticGrader === null) return 'None';
   if ('state' in semanticGrader) return 'Unrecorded';
-  return `${semanticGrader.id} · ${semanticGrader.model} · schema v${semanticGrader.schemaVersion}`;
+  return `${semanticGrader.id} · ${semanticGrader.model}`;
 };
 
 const usageProvenance = (row: EvalTrialRow): string => row.usage === undefined

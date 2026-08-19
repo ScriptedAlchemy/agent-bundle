@@ -23,7 +23,6 @@ const run = (id: string, createdAt: string): EvalRunRecord => ({
   harness: 'deterministic',
   id,
   projectRevision: 'b'.repeat(64),
-  schemaVersion: 1,
 });
 
 const runs = [run('run-base', '2026-08-17T12:00:00.000Z'), run('run-candidate', '2026-08-17T13:00:00.000Z')];

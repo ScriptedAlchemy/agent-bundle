@@ -29,7 +29,6 @@ const run = (id: string, overrides: Partial<EvalRunRecord> = {}): EvalRunRecord 
   harness: 'deterministic',
   id,
   projectRevision: 'b'.repeat(64),
-  schemaVersion: 1 as const,
   ...overrides,
 });
 
@@ -52,7 +51,6 @@ const trial = (overrides: Partial<EvalTrialRecord> = {}): EvalTrialRecord => Obj
     semanticGrader: null,
   }),
   rawArtifacts: Object.freeze([]),
-  schemaVersion: 1 as const,
   startedAt: '2026-08-17T12:00:00.000Z',
   targetDigest: 'target-baseline',
   trialIndex: 0,
@@ -180,7 +178,7 @@ it('labels a host CLI version, invocation, semantic grader version, or harness m
     provenance: {
       hostCliVersion: '2.4.0',
       invocation: { mode: 'automatic' },
-      semanticGrader: { id: 'claude-semantic', model: 'claude-opus-4-6', schemaVersion: 1 },
+      semanticGrader: { id: 'claude-semantic', model: 'claude-opus-4-6' },
     },
   }))).toEqual(['grader-versions-mismatch']);
   expect(nonComparable(compareEvalRuns({

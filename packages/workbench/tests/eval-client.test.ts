@@ -26,7 +26,6 @@ const runRecord = {
   harness: 'deterministic',
   id: '20260817t000000000z-abcdef01',
   projectRevision: 'd'.repeat(64),
-  schemaVersion: 1,
   summary: { cases: 1, fail: 0, inconclusive: 0, pass: 1, trials: 1 },
 };
 
@@ -60,7 +59,6 @@ const trialRecord = {
     semanticGrader: null,
   },
   rawArtifacts: ['artifacts/portable-1/evidence.json'],
-  schemaVersion: 1,
   startedAt: '2026-08-17T00:00:00.500Z',
   targetDigest: 'c'.repeat(64),
   trialIndex: 0,
@@ -224,8 +222,8 @@ it('replays only a detached, contiguous persisted event timeline from its cursor
     replay: {
       cursor: { afterSequence: 2 },
       events: [
-        { kind: 'run.started', payload: { trials: 1 }, schemaVersion: 1, sequence: 1, timestamp: '2026-08-17T00:00:00.000Z' },
-        { kind: 'trial.completed', payload: { outcome: 'pass' }, schemaVersion: 1, sequence: 2, timestamp: '2026-08-17T00:00:01.000Z' },
+        { kind: 'run.started', payload: { trials: 1 }, sequence: 1, timestamp: '2026-08-17T00:00:00.000Z' },
+        { kind: 'trial.completed', payload: { outcome: 'pass' }, sequence: 2, timestamp: '2026-08-17T00:00:01.000Z' },
       ],
     },
   })) });
@@ -243,7 +241,7 @@ it('rejects a duplicate-key or reordered event replay instead of retaining a hos
   const duplicate = new EvalClient({
     fetch: async (input) => String(input) === '/api/project/session'
       ? response({ origin: 'http://127.0.0.1:5173', token: 'foreground-token' })
-      : new Response('{"replay":{"cursor":{"afterSequence":1},"events":[{"kind":"run.started","payload":{},"schemaVersion":1,"sequence":1,"sequence":2,"timestamp":"2026-08-17T00:00:00.000Z"}]}}', {
+      : new Response('{"replay":{"cursor":{"afterSequence":1},"events":[{"kind":"run.started","payload":{},"sequence":1,"sequence":2,"timestamp":"2026-08-17T00:00:00.000Z"}]}}', {
         headers: { 'content-type': 'application/json' },
       }),
   });
@@ -253,7 +251,7 @@ it('rejects a duplicate-key or reordered event replay instead of retaining a hos
       : response({ replay: {
         cursor: { afterSequence: 2 },
         events: [
-          { kind: 'trial.completed', payload: {}, schemaVersion: 1, sequence: 2, timestamp: '2026-08-17T00:00:01.000Z' },
+          { kind: 'trial.completed', payload: {}, sequence: 2, timestamp: '2026-08-17T00:00:01.000Z' },
         ],
       } }),
   });
@@ -265,8 +263,8 @@ it('rejects a duplicate-key or reordered event replay instead of retaining a hos
 it('decodes fragmented NDJSON in sequence and aborts a replacement stream without a stale callback', async () => {
   const encoder = new TextEncoder();
   const frames = [
-    JSON.stringify({ kind: 'run.started', payload: {}, schemaVersion: 1, sequence: 1, timestamp: '2026-08-17T00:00:00.000Z' }),
-    JSON.stringify({ kind: 'run.completed', payload: {}, schemaVersion: 1, sequence: 2, timestamp: '2026-08-17T00:00:01.000Z' }),
+    JSON.stringify({ kind: 'run.started', payload: {}, sequence: 1, timestamp: '2026-08-17T00:00:00.000Z' }),
+    JSON.stringify({ kind: 'run.completed', payload: {}, sequence: 2, timestamp: '2026-08-17T00:00:01.000Z' }),
     '',
   ].join('\n');
   let streamCalls = 0;

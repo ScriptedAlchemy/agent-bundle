@@ -277,7 +277,7 @@ const semanticGraderVersion = (provenance: EvalTrialProvenance): string | undefi
     ? 'none'
     : 'state' in semanticGrader
       ? undefined
-      : `${semanticGrader.id}@${semanticGrader.model}/v${semanticGrader.schemaVersion}`;
+      : `${semanticGrader.id}@${semanticGrader.model}`;
 };
 
 const recordedConditionValue = (values: readonly (string | undefined)[]): string | undefined => {

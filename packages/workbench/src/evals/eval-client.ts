@@ -142,7 +142,6 @@ const runRecordSchema = z.strictObject({
   harness: textSchema,
   id: textSchema,
   projectRevision: digestSchema,
-  schemaVersion: z.literal(1),
   summary: runSummarySchema.optional(),
 });
 const assertionResultSchema = z.strictObject({
@@ -186,7 +185,6 @@ const semanticGraderProvenanceSchema = z.union([
   z.strictObject({
     id: provenanceIdentifierSchema,
     model: provenanceIdentifierSchema,
-    schemaVersion: positiveIntegerSchema,
   }),
   z.strictObject({ state: z.literal('unrecorded') }),
 ]);
@@ -216,7 +214,6 @@ const trialRecordSchema = z.strictObject({
   prompt: textSchema,
   provenance: trialProvenanceSchema,
   rawArtifacts: z.array(textSchema),
-  schemaVersion: z.literal(1),
   startedAt: timestampSchema,
   targetDigest: digestSchema,
   trialIndex: nonnegativeIntegerSchema,
@@ -263,9 +260,9 @@ const parseResponseJson = (bytes: Uint8Array): JsonValue => {
 };
 
 const eventFor = (value: unknown): EvalRunEvent => {
-  if (!exactKeys(value, ['kind', 'payload', 'schemaVersion', 'sequence', 'timestamp']) ||
+  if (!exactKeys(value, ['kind', 'payload', 'sequence', 'timestamp']) ||
     typeof value.kind !== 'string' || value.kind.length === 0 || value.kind.length > 512 ||
-    value.schemaVersion !== 1 || !safeInteger(value.sequence, 1) || !isIsoTimestamp(value.timestamp)) {
+    !safeInteger(value.sequence, 1) || !isIsoTimestamp(value.timestamp)) {
     throw invalidResponse();
   }
   return value as unknown as EvalRunEvent;

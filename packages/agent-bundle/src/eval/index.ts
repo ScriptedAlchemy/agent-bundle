@@ -100,7 +100,6 @@ export type {
 } from './claude-harness.ts';
 export {
   claudeSemanticGraderId,
-  claudeSemanticGraderSchemaVersion,
   parseClaudeSemanticGraderResult,
   parseClaudeSemanticGraderStream,
   runClaudeSemanticGrader,

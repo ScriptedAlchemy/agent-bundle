@@ -381,7 +381,6 @@ it('aggregates multiple trials reproducibly and never folds misaligned trials to
       semanticGrader: null,
     },
     rawArtifacts: [],
-    schemaVersion: 1,
     startedAt: '2026-08-17T12:00:00.000Z',
     targetDigest: 'a'.repeat(64),
     trialIndex: 0,

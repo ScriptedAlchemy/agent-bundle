@@ -21,7 +21,6 @@ const run = (id: string, createdAt: string): EvalRunRecord => ({
   harness: 'deterministic',
   id,
   projectRevision: 'b'.repeat(64),
-  schemaVersion: 1,
 });
 
 const metrics = (overrides: Partial<EvalConditionMetrics> = {}): EvalConditionMetrics => ({

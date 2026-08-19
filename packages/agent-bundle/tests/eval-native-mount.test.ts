@@ -197,7 +197,7 @@ it('runs the configured semantic grader once through the selected native Claude 
           : {
             exitCode: 0,
             stderr: '',
-            stdout: '{"type":"result","subtype":"success","result":"{\\"schemaVersion\\":1,\\"outcome\\":\\"pass\\",\\"detail\\":\\"The response satisfies the task.\\"}"}\n',
+            stdout: '{"type":"result","subtype":"success","result":"{\\"outcome\\":\\"pass\\",\\"detail\\":\\"The response satisfies the task.\\"}"}\n',
           };
       },
       environment: { PATH: process.env.PATH ?? '/usr/bin' },

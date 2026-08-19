@@ -77,7 +77,6 @@ const runRecord: EvalRunRecord = {
   harness: 'deterministic',
   id: '20260817t000000000z-abcdef01',
   projectRevision: 'd'.repeat(64),
-  schemaVersion: 1,
   summary: { cases: 2, fail: 1, inconclusive: 1, pass: 1, trials: 3 },
 };
 
@@ -111,7 +110,6 @@ const trial = (overrides: Partial<EvalTrialRecord>): EvalTrialRecord => ({
     semanticGrader: null,
   },
   rawArtifacts: ['artifacts/portable-1/evidence.json'],
-  schemaVersion: 1,
   startedAt: '2026-08-17T00:00:00.500Z',
   targetDigest: 'c'.repeat(64),
   trialIndex: 0,
@@ -214,7 +212,7 @@ it('reports the loading, empty, and completed states', () => {
   const loading = evalRunViewFor({ listing: undefined, result: undefined, selectedSuite: undefined });
   const empty = evalRunViewFor({ listing: { diagnostics: [], suites: [] }, result: undefined, selectedSuite: undefined });
   const ran = evalRunViewFor({
-    events: [{ kind: 'run.completed', payload: {}, schemaVersion: 1, sequence: 1, timestamp: '2026-08-17T00:00:00.000Z' }],
+    events: [{ kind: 'run.completed', payload: {}, sequence: 1, timestamp: '2026-08-17T00:00:00.000Z' }],
     listing,
     result,
     selectedSuite: 'review-change',
@@ -241,7 +239,6 @@ it('derives admitting, active, and terminal run states from durable events', () 
   const event = (kind: string) => ({
     kind,
     payload: {},
-    schemaVersion: 1 as const,
     sequence: 1,
     timestamp: '2026-08-17T00:00:00.000Z',
   });
@@ -268,7 +265,7 @@ it('never infers a successful terminal state from completedAt before durable rep
   const completed: EvalRunRecord = runRecord;
   const state = (events: readonly { readonly kind: string; readonly sequence: number }[]) => evalRunViewFor({
     admittedRun: completed,
-    events: events.map((event) => ({ ...event, payload: {}, schemaVersion: 1 as const, timestamp: '2026-08-17T00:00:00.000Z' })),
+    events: events.map((event) => ({ ...event, payload: {}, timestamp: '2026-08-17T00:00:00.000Z' })),
     listing,
     result: { ...result, run: completed },
     selectedSuite: 'review-change',
@@ -290,7 +287,7 @@ it('rejects stale observer and canonical-read updates after a replacement lifecy
   const replacement = replaceEvalRunLifecycle(first, '20260817t000000001z-abcdef02');
 
   const stale = updateEvalRunLifecycle(replacement, firstToken, {
-    events: [{ kind: 'run.failed', payload: {}, schemaVersion: 1, sequence: 1, timestamp: '2026-08-17T00:00:00.000Z' }],
+    events: [{ kind: 'run.failed', payload: {}, sequence: 1, timestamp: '2026-08-17T00:00:00.000Z' }],
     result,
   });
 
@@ -332,8 +329,8 @@ it('builds a run selection only from a selected suite and a valid trial count', 
 });
 
 it('retains a bounded exact event timeline without silently accepting a conflicting sequence', () => {
-  const one = { kind: 'run.started', payload: {}, schemaVersion: 1 as const, sequence: 1, timestamp: '2026-08-17T00:00:00.000Z' };
-  const two = { kind: 'trial.completed', payload: {}, schemaVersion: 1 as const, sequence: 2, timestamp: '2026-08-17T00:00:01.000Z' };
+  const one = { kind: 'run.started', payload: {}, sequence: 1, timestamp: '2026-08-17T00:00:00.000Z' };
+  const two = { kind: 'trial.completed', payload: {}, sequence: 2, timestamp: '2026-08-17T00:00:01.000Z' };
 
   const merged = mergeEvalEvents([one], [one, two]);
   const conflict = mergeEvalEvents([one], [{ ...one, kind: 'run.failed' }]);
@@ -349,7 +346,6 @@ it('retains the newest durable cursor even when a hostilely large event cannot f
   const oversized = {
     kind: 'trial.completed',
     payload: 'x'.repeat(maximumEvalTimelineBytes + 1),
-    schemaVersion: 1 as const,
     sequence: 1,
     timestamp: '2026-08-17T00:00:00.000Z',
   };
@@ -365,7 +361,6 @@ it('reports the durable sequence discarded by the event-count bound', () => {
   const events = Array.from({ length: 513 }, (_, index) => ({
     kind: index === 512 ? 'run.completed' : 'trial.completed',
     payload: {},
-    schemaVersion: 1 as const,
     sequence: index + 1,
     timestamp: '2026-08-17T00:00:00.000Z',
   }));
