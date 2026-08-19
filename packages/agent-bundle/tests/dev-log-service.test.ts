@@ -30,10 +30,10 @@ it('records detached redacted details and replaces its own project root', () => 
     details: '[UNAVAILABLE]',
     occurredAt: '2026-08-18T12:00:00.000Z',
     producer: 'build',
-    schemaVersion: 1,
     sequence: 1,
     summary: 'Building <project>/src/index.ts',
   });
+  expect(record).not.toHaveProperty('schemaVersion');
   expect(Object.isFrozen(record)).toBe(true);
   expect(Object.isFrozen(record.details)).toBe(true);
 });

@@ -42,7 +42,7 @@ const jsonEquivalent = (left: unknown, right: unknown): boolean => {
 };
 
 const recordsEquivalent = (left: DevLogRecord, right: DevLogRecord): boolean =>
-  left.sequence === right.sequence && left.schemaVersion === right.schemaVersion && left.producer === right.producer && left.level === right.level &&
+  left.sequence === right.sequence && left.producer === right.producer && left.level === right.level &&
   left.kind === right.kind && left.occurredAt === right.occurredAt && left.summary === right.summary &&
   jsonEquivalent(left.context, right.context) && jsonEquivalent(left.details, right.details);
 

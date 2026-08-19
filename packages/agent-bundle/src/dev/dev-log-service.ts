@@ -59,7 +59,6 @@ export interface DevLogRecord {
   readonly level: DevLogLevel;
   readonly occurredAt: string;
   readonly producer: DevLogProducer;
-  readonly schemaVersion: 1;
   readonly sequence: number;
   readonly summary: string;
 }
@@ -424,7 +423,6 @@ export class DevLogService {
       level: input.level,
       occurredAt,
       producer: input.producer,
-      schemaVersion: 1 as const,
       sequence: this.#sequence + 1,
       summary: summaryFor(input.summary, this.#roots),
     } satisfies DevLogRecord;
