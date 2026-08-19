@@ -2,7 +2,6 @@ import {
   Client,
   StreamableHTTPClientTransport,
   type CallToolResult,
-  type ClientCapabilities,
   type GetPromptResult,
   type Prompt,
   type Resource,
@@ -29,19 +28,13 @@ import {
   type TargetMcpRuntimeContract,
 } from '../services/mcp-runtime.ts';
 import { EpochStore, type EpochReference } from './epoch-store.ts';
-import {
-  MCP_APP_MIME_TYPE,
-  MCP_APP_UI_EXTENSION,
-} from './mcp-app-bridge.ts';
 import type {
   McpAppBridgeResource,
   McpAppBridgeSession,
   McpAppBridgeTool,
   McpAppJsonValue,
   McpAppSessionLease,
-  McpAppToolDefinition,
 } from './mcp-app-binding-service.ts';
-import { requireMcpAppJson } from './mcp-app-json.ts';
 import type {
   McpSessionBinding,
   McpSessionId,
@@ -61,6 +54,12 @@ import {
 } from './mcp-session-launch.ts';
 import { McpSessionTraceLog, type McpSessionTraceSink } from './mcp-session-trace.ts';
 import { RecordingTransport } from './mcp-recording-transport.ts';
+import {
+  canonicalMcpAppJson,
+  canonicalMcpAppResource,
+  canonicalMcpAppTool,
+  mcpAppClientCapabilities,
+} from './mcp-session-apps.ts';
 
 import {
   McpSessionServiceCloseError,
@@ -82,8 +81,21 @@ import {
   type StdioTransport,
 } from './mcp-session-types.ts';
 
-export type * from './mcp-session-types.ts';
 export { McpSessionServiceCloseError };
+export { mcpAppClientCapabilities };
+export type {
+  McpSessionConnectionState,
+  McpSessionEvent,
+  McpSessionFrame,
+  McpSessionPromptOptions,
+  McpSessionReplay,
+  McpSessionRequestOptions,
+  McpSessionResourceOptions,
+  McpSessionServiceCloseFailure,
+  McpSessionServiceOptions,
+  McpSessionToolCallOptions,
+  OpenMcpSessionOptions,
+} from './mcp-session-types.ts';
 export type { McpSessionTraceSink } from './mcp-session-trace.ts';
 
 export type {
@@ -101,23 +113,12 @@ export type {
   McpSessionTraceSubscriptionOptions,
 } from './mcp-session-protocol.ts';
 
-/** Advertised on initialize so servers can discover the workbench's MCP Apps support. */
-export const mcpAppClientCapabilities = {
-  extensions: {
-    [MCP_APP_UI_EXTENSION]: {
-      mimeTypes: [MCP_APP_MIME_TYPE],
-    },
-  },
-} satisfies ClientCapabilities;
-
 const defaultTimeoutMs = 5_000;
 const maxStderrBytes = 1_000_000;
 const maxRetainedEvents = 512;
 const maxRetainedFrames = 512;
 
 type RawMcpFrame = Parameters<Transport['send']>[0];
-
-
 
 interface StderrCapture {
   readonly exceeded: () => boolean;
@@ -145,43 +146,7 @@ type McpAppLeaseIdentity = McpAppBridgeSession['identity'] & Readonly<{
   readonly sessionId: McpSessionId;
 }>;
 
-
 const detachedJsonSnapshot = snapshotStrictJsonValue;
-
-const canonicalMcpAppJson = (value: unknown, label: string): McpAppJsonValue => {
-  return requireMcpAppJson(value, `${label} must contain only ordinary finite JSON values.`);
-};
-
-const appVisible = (definition: McpAppJsonValue): boolean => {
-  if (!isRecord(definition)) return true;
-  const metadata = definition._meta;
-  if (!isRecord(metadata)) return true;
-  const ui = metadata.ui;
-  if (!isRecord(ui) || !Object.hasOwn(ui, 'visibility')) return true;
-  const visibility = ui.visibility;
-  return Array.isArray(visibility) && visibility.every((capability) => typeof capability === 'string') &&
-    visibility.some((capability) => capability === 'app');
-};
-
-const canonicalMcpAppTool = (tool: Tool): McpAppBridgeTool => {
-  const definition = canonicalMcpAppJson(tool, 'MCP App tool definition');
-  if (!isRecord(definition) || typeof definition.name !== 'string' || definition.name.trim().length === 0) {
-    throw new TypeError('MCP App tool definition must have a nonempty name.');
-  }
-  return Object.freeze({
-    appVisible: appVisible(definition),
-    definition: definition as McpAppToolDefinition,
-    name: definition.name,
-  });
-};
-
-const canonicalMcpAppResource = (resource: Resource): McpAppBridgeResource => {
-  const definition = canonicalMcpAppJson(resource, 'MCP App resource definition');
-  if (!isRecord(definition) || typeof definition.uri !== 'string' || definition.uri.trim().length === 0) {
-    throw new TypeError('MCP App resource definition must have a nonempty URI.');
-  }
-  return Object.freeze({ appVisible: appVisible(definition), uri: definition.uri });
-};
 
 const mcpAppLeaseIdentity = (session: McpSession): McpAppLeaseIdentity => {
   const identity: { readonly binding: McpSessionBinding; readonly sessionId: McpSessionId } = {
