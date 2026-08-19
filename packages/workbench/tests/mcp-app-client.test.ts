@@ -49,7 +49,29 @@ const json = (body: unknown, status = 200): Response => new Response(JSON.string
   status,
 });
 
+const invalidSessionBodies: readonly [string, unknown][] = [
+  ['a versioned payload', { origin: 'http://127.0.0.1:43123', schemaVersion: 1, token: 'foreground-secret' }],
+  ['an unexpected payload field', { origin: 'http://127.0.0.1:43123', scope: 'workbench', token: 'foreground-secret' }],
+  ['a malformed payload', { origin: 'http://127.0.0.1:43123' }],
+];
+
 describe('MCP App browser client', () => {
+  for (const [description, body] of invalidSessionBodies) {
+    it(`rejects ${description} from the foreground session bootstrap`, async () => {
+      const routePaths: string[] = [];
+      const client = new McpAppClient({
+        fetch: (async (input) => {
+          if (String(input) === '/api/project/session') return json(body);
+          routePaths.push(String(input));
+          return json({ accepted: true, lifecycle: 'initialized', messages: [] });
+        }) as typeof globalThis.fetch,
+      });
+
+      await expect(client.message('binding-weather', { id: 'session-body', jsonrpc: '2.0', method: 'ping' })).rejects.toMatchObject({ code: 'AB8019' });
+      expect(routePaths).toEqual([]);
+    });
+  }
+
   it('creates a binding-scoped preview without putting the foreground credential in its URL or request payload', async () => {
     const calls: readonly [string, RequestInit | undefined][] = [];
     const fetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {

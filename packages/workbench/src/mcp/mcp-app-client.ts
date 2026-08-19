@@ -1,3 +1,5 @@
+import { decodeForegroundSession } from '../foreground-session.ts';
+
 export type McpAppJsonPrimitive = null | boolean | number | string;
 
 export type McpAppJsonArray = readonly McpAppJsonValue[];
@@ -339,8 +341,8 @@ export class McpAppClient {
       const detail = diagnostic(body, response.status);
       throw new McpAppClientError(detail.code, detail.message);
     }
-    const session = asRecord(body);
-    if (typeof session.token !== 'string' || session.token.length === 0) {
+    const session = decodeForegroundSession(body);
+    if (session === undefined || session.token.length === 0) {
       throw new McpAppClientError('AB8019', 'Foreground session bootstrap returned an invalid response.');
     }
     const sessionOrigin = origin(session.origin);

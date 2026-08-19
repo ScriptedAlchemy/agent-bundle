@@ -1,3 +1,5 @@
+import { decodeForegroundSession } from '../foreground-session.ts';
+
 export type McpRouteTarget = 'claude' | 'codex' | 'portable';
 
 export interface McpRouteSessionBinding {
@@ -277,8 +279,8 @@ export class McpRouteClient {
       const detail = diagnostic(body, response.status);
       throw new McpRouteClientError(detail.code, detail.message);
     }
-    const session = asRecord(body);
-    if (typeof session.origin !== 'string' || typeof session.token !== 'string' || session.token.length === 0) {
+    const session = decodeForegroundSession(body);
+    if (session === undefined || session.token.length === 0) {
       throw new McpRouteClientError('AB8019', 'Foreground session bootstrap returned an invalid response.');
     }
     let origin: URL;

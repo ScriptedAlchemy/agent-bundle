@@ -3,6 +3,15 @@ export interface ForegroundSession {
   readonly token: string;
 }
 
+/** Decodes the exact credential envelope returned by `/api/project/session`. */
+export const decodeForegroundSession = (value: unknown): ForegroundSession | undefined => {
+  if (!isRecord(value) || Object.keys(value).length !== 2 || !Object.hasOwn(value, 'origin') || !Object.hasOwn(value, 'token')) {
+    return undefined;
+  }
+  if (typeof value.origin !== 'string' || typeof value.token !== 'string') return undefined;
+  return Object.freeze({ origin: value.origin, token: value.token });
+};
+
 export interface ForegroundTransportOptions {
   /**
    * Each client keeps its own error type and diagnostic band; only the shape is
@@ -115,11 +124,11 @@ export class ForegroundTransport {
     const response = await this.#fetch('/api/project/session', { credentials: 'same-origin' });
     const body: unknown = await response.json().catch(() => undefined);
     if (!response.ok) throw this.diagnosticError(body, response.status);
-    if (!isRecord(body)) throw this.invalidResponse();
-    const { origin: declared, token } = body;
-    if (typeof declared !== 'string' || typeof token !== 'string' || token.length === 0) {
+    const session = decodeForegroundSession(body);
+    if (session === undefined || session.token.length === 0) {
       throw this.#errorFor(this.#fallbackCode, 'Foreground session bootstrap returned an invalid response.');
     }
+    const { origin: declared, token } = session;
     let origin: URL;
     try {
       origin = new URL(declared);
