@@ -857,6 +857,28 @@ it('refuses every non-loopback bind address before starting a coordinator', asyn
   expect(coordinator.startCalls).toBe(0);
 });
 
+for (const [description, instanceId] of [
+  ['empty', ''],
+  ['blank', '   '],
+  ['leading-whitespace', ' instance-id'],
+  ['trailing-whitespace', 'instance-id '],
+  ['overlong', 'x'.repeat(129)],
+] as const) {
+  it(`refuses a ${description} injected foreground instance ID before starting a coordinator`, async () => {
+    const coordinator = new RecordingCoordinator();
+
+    await expect(startForegroundServer({
+      coordinator,
+      eventHub: new ProjectEventHub(),
+      instanceId,
+    })).rejects.toMatchObject({
+      code: 'AB8000',
+      message: 'Foreground server instance ID must be a trimmed string between 1 and 128 characters.',
+    });
+    expect(coordinator.startCalls).toBe(0);
+  });
+}
+
 it('closes the HTTP server and coordinator once while retaining both release failures structurally', async () => {
   const coordinator = new RecordingCoordinator();
   coordinator.failClose = true;

@@ -20,6 +20,7 @@ import { SkillDocumentError, type SkillDocumentService } from './skill-document-
 import type { Invalidation, ProjectEventMessage, ProjectStatus } from './types.ts';
 
 const bodyLimit = 64 * 1024;
+const instanceIdLengthLimit = 128;
 const loopbackHosts = new Set(['127.0.0.1', '::1']);
 const sseQueueByteLimit = 256 * 1024;
 
@@ -415,6 +416,13 @@ export class ForegroundServer {
     if (!Number.isSafeInteger(port) || port < 0 || port > 65535) {
       throw new ForegroundServerError('AB8000', 'Foreground server port must be a safe TCP port number.');
     }
+    const instanceId = options.instanceId ?? randomUUID();
+    if (
+      instanceId.length === 0 || instanceId.length > instanceIdLengthLimit ||
+      instanceId.trim() !== instanceId
+    ) {
+      throw new ForegroundServerError('AB8000', 'Foreground server instance ID must be a trimmed string between 1 and 128 characters.');
+    }
 
     this.#agentApi = options.agentApi;
     this.#assets = options.assets;
@@ -422,7 +430,7 @@ export class ForegroundServer {
     this.#evalLifecycle = options.evalLifecycle;
     this.#eventHub = options.eventHub;
     this.#host = host;
-    this.instanceId = options.instanceId ?? randomUUID();
+    this.instanceId = instanceId;
     this.#now = options.now ?? (() => new Date());
     this.#playgroundLifecycle = options.playgroundLifecycle;
     this.#port = port;
