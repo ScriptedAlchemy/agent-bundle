@@ -325,6 +325,8 @@ export class ProjectClient {
     this.#eventSource?.close();
     this.#eventSource = eventSource;
     for (const type of projectEventTypes) eventSource.addEventListener(type, (event) => this.#onEvent(event));
+    eventSource.addEventListener('error', () => this.#reportError(new ProjectClientError('Foreground project event stream disconnected.')));
+    eventSource.addEventListener('open', () => this.#queueEventRefresh());
     return status;
   }
 

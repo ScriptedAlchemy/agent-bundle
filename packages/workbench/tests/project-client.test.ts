@@ -169,6 +169,39 @@ it('refreshes Overview state after live named events and keeps the browser Event
   expect(stream.closed).toBe(true);
 });
 
+it('reports an EventSource outage and clears it after reconnection refreshes project status', async () => {
+  const stream = new RecordingEventSource();
+  const errors: unknown[] = [];
+  let connection: 'connected' | 'unavailable' = 'connected';
+  let requests = 0;
+  const client = new ProjectClient({
+    events: () => stream,
+    fetch: async () => {
+      requests += 1;
+      return Response.json({ status: status() });
+    },
+  });
+
+  await client.connect(
+    () => { connection = 'connected'; },
+    (reason) => {
+      errors.push(reason);
+      connection = 'unavailable';
+    },
+  );
+  stream.emit('error', { data: '', lastEventId: '' });
+
+  expect(connection).toBe('unavailable');
+  expect(errors).toHaveLength(1);
+  expect(errors[0]).toMatchObject({ message: 'Foreground project event stream disconnected.' });
+
+  stream.emit('open', { data: '', lastEventId: '' });
+  await new Promise((resolvePromise) => setImmediate(resolvePromise));
+
+  expect(connection).toBe('connected');
+  expect(requests).toBe(2);
+});
+
 it('rejects project SSE records with missing, invalid, or mismatched sequence identities', async () => {
   const stream = new RecordingEventSource();
   const client = new ProjectClient({
