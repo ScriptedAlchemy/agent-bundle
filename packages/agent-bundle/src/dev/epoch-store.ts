@@ -73,6 +73,17 @@ export class EpochCleanupError extends Error {
   }
 }
 
+export class EpochPostCommitCleanupError extends Error {
+  readonly committedEpoch: ArtifactEpoch;
+
+  constructor(committedEpoch: ArtifactEpoch, cleanupError: unknown) {
+    super('Epoch publication committed, but retention cleanup failed.', { cause: cleanupError });
+    this.name = 'EpochPostCommitCleanupError';
+    this.committedEpoch = freezeArtifactEpoch(committedEpoch);
+    Object.freeze(this);
+  }
+}
+
 export class EpochStoreError extends Error {
   readonly code: EpochStoreErrorCode;
 
@@ -566,7 +577,11 @@ export class EpochStore {
         }
         throw error;
       }
-      await this.#cleanupUnderLease();
+      try {
+        await this.#cleanupUnderLease();
+      } catch (error) {
+        throw new EpochPostCommitCleanupError(record.epoch, error);
+      }
       return record.epoch;
     });
   }

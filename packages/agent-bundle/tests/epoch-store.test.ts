@@ -1005,6 +1005,42 @@ it('continues processing later state transitions after a failed cleanup', async 
   }
 });
 
+it('reports a cleanup failure as post-commit when the new epoch is already active', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent bundle post commit cleanup '));
+  const cleanupFailure = new Error('retired epoch cleanup failed');
+  let failCleanup = false;
+
+  try {
+    const store = new EpochStore({
+      cleanupRemove: async (path, options) => {
+        if (failCleanup && path === nativeCatalogPathFor(root, 'epoch-1')) throw cleanupFailure;
+        await rm(path, options);
+      },
+      projectRoot: root,
+    });
+    for (let sequence = 1; sequence <= 6; sequence += 1) {
+      await publishEpoch(store, epochFor(root, `epoch-${sequence}`, `2026-08-14T12:00:0${sequence}.000Z`));
+    }
+    const committed = epochFor(root, 'epoch-7', '2026-08-14T12:00:07.000Z');
+    failCleanup = true;
+
+    await expect(publishEpoch(store, committed)).rejects.toMatchObject({
+      cause: expect.objectContaining({
+        failures: [expect.objectContaining({
+          epochId: 'epoch-1',
+          reason: cleanupFailure,
+          resource: 'native-playground-catalog',
+        })],
+      }),
+      committedEpoch: committed,
+      name: 'EpochPostCommitCleanupError',
+    });
+    await expect(store.readActiveEpoch()).resolves.toEqual(committed);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
 it('keeps epoch metadata and contents retryable when native catalog sidecar deletion fails', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent bundle native catalog cleanup retry '));
   let failSidecarRemoval = true;
@@ -1026,7 +1062,11 @@ it('keeps epoch metadata and contents retryable when native catalog sidecar dele
       catch (error) { cleanupError = error; }
     }
     expect(cleanupError).toMatchObject({
-      failures: [expect.objectContaining({ epochId: 'epoch-1', reason: sidecarFailure, resource: 'native-playground-catalog' })],
+      cause: expect.objectContaining({
+        failures: [expect.objectContaining({ epochId: 'epoch-1', reason: sidecarFailure, resource: 'native-playground-catalog' })],
+      }),
+      committedEpoch: expect.objectContaining({ id: 'epoch-7' }),
+      name: 'EpochPostCommitCleanupError',
     });
     await expect(readFile(nativeCatalogPathFor(root, 'epoch-1'), 'utf8')).resolves.toContain('epoch-1');
     await expect(readFile(epochMetadataPathFor(root, 'epoch-1'), 'utf8')).resolves.toContain('epoch-1');
