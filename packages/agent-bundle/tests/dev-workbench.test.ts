@@ -581,11 +581,10 @@ it('records a durable playground trace and promotes it through the packaged fore
     const exportBody = await exported.json() as {
       readonly export: {
         readonly events: readonly { readonly rawEventRef: string }[];
-        readonly schemaVersion: number;
         readonly session: { readonly identity: { readonly epoch: { readonly id: string } } };
       };
     };
-    expect(exportBody.export.schemaVersion).toBe(1);
+    expect(exportBody.export).not.toHaveProperty('schemaVersion');
     expect(exportBody.export.session.identity.epoch.id).toBe(epoch.id);
     expect(exportBody.export.events).toHaveLength(2);
     const evidence = exportBody.export.events[1]?.rawEventRef;
@@ -603,14 +602,13 @@ it('records a durable playground trace and promotes it through the packaged fore
       readonly draftEvalCase: {
         readonly epoch: { readonly id: string };
         readonly outcome: { readonly status: string };
-        readonly schemaVersion: number;
       };
     };
     expect(draftEvalCase).toMatchObject({
       epoch: { id: epoch.id },
       outcome: { status: 'passed' },
-      schemaVersion: 1,
     });
+    expect(draftEvalCase).not.toHaveProperty('schemaVersion');
 
     await expect(server.close()).resolves.toBeUndefined();
     await expect(fetch(`${server.url}/api/playground/sessions/${run.session.id}`, { headers })).rejects.toThrow();
