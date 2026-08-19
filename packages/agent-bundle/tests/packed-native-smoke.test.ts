@@ -98,6 +98,7 @@ it('opaquely detects default ~/.claude.json mutation without extending custom co
       mkdir(join(userHome, '.claude'), { recursive: true }),
       mkdir(customHome, { recursive: true }),
       writeFile(join(userHome, '.claude.json'), `${privateValue}\n`),
+      writeFile(join(customHome, '.claude.json'), `${privateValue}-custom\n`),
       writeFile(join(customHome, 'settings.json'), '{"model":"subscription"}\n'),
     ]);
 
@@ -113,6 +114,14 @@ it('opaquely detects default ~/.claude.json mutation without extending custom co
       await writeFile(join(userHome, '.claude.json'), `${privateValue}-changed-again\n`);
     }, { homeDirectory: userHome });
     expect(customUnchanged).toBe(true);
+
+    const customChanged = await harness!.normalClaudeHomeUnchanged!({ CLAUDE_CONFIG_DIR: customHome }, async () => {
+      await writeFile(join(customHome, '.claude.json'), `${privateValue}-custom-changed\n`);
+    }, { homeDirectory: userHome });
+    expect(customChanged).toBe(false);
+    expect(JSON.stringify(customChanged)).toBe('false');
+    expect(JSON.stringify(customChanged)).not.toContain(privateValue);
+    expect(JSON.stringify(customChanged)).not.toContain(customHome);
   } finally {
     await Promise.all([
       rm(userHome, { force: true, recursive: true }),

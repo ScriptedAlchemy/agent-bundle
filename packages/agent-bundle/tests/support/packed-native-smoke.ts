@@ -142,12 +142,10 @@ const digestNormalClaudeState = async (
   const claudeHome = customHome ?? join(options.homeDirectory, '.claude');
   return Object.freeze({
     config: await digestTree(join(claudeHome, 'config.json'), true),
-    defaultConfig: customHome === undefined
-      ? await digestTree(join(options.homeDirectory, '.claude.json'), true)
-      : 'not-applicable',
     localSettings: await digestTree(join(claudeHome, 'settings.local.json'), true),
     plugins: await digestTree(join(claudeHome, 'plugins'), false),
     settings: await digestTree(join(claudeHome, 'settings.json'), true),
+    state: await digestTree(join(customHome ?? options.homeDirectory, '.claude.json'), true),
   });
 };
 
@@ -155,10 +153,10 @@ const sameClaudeState = (
   left: Awaited<ReturnType<typeof digestNormalClaudeState>>,
   right: Awaited<ReturnType<typeof digestNormalClaudeState>>,
 ): boolean => left.config === right.config
-  && left.defaultConfig === right.defaultConfig
   && left.localSettings === right.localSettings
   && left.plugins === right.plugins
-  && left.settings === right.settings;
+  && left.settings === right.settings
+  && left.state === right.state;
 
 export const normalClaudeHomeUnchanged = async (
   environment: Readonly<NodeJS.ProcessEnv>,
