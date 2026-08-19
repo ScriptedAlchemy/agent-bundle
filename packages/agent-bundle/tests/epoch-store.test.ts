@@ -388,6 +388,52 @@ it('retains an epoch leased through another store for the same project', async (
   }
 });
 
+it('does not admit a cross-store reference while final-release cleanup removes its epoch', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent bundle shared epoch transition '));
+  let markDeletionStarted: (() => void) | undefined;
+  let permitDeletion: (() => void) | undefined;
+  const deletionStarted = new Promise<void>((resolve) => { markDeletionStarted = resolve; });
+  const deletionPermitted = new Promise<void>((resolve) => { permitDeletion = resolve; });
+
+  try {
+    const leaseStore = new EpochStore({
+      cleanupRemove: async (path, options) => {
+        if (path === nativeCatalogPathFor(root, 'epoch-1')) {
+          markDeletionStarted?.();
+          await deletionPermitted;
+        }
+        await rm(path, options);
+      },
+      projectRoot: root,
+    });
+    const acquiringStore = new EpochStore({ projectRoot: root });
+    await publishEpoch(leaseStore, epochFor(root, 'epoch-1', '2026-08-14T12:00:01.000Z'));
+    const retained = await leaseStore.acquireEpochReference('epoch-1');
+    for (let sequence = 2; sequence <= 8; sequence += 1) {
+      await publishEpoch(
+        acquiringStore,
+        epochFor(root, `epoch-${sequence}`, `2026-08-14T12:00:0${sequence}.000Z`),
+      );
+    }
+
+    const closing = retained.close();
+    await deletionStarted;
+    const acquisition = acquiringStore.acquireEpochReference('epoch-1');
+    permitDeletion?.();
+    const [closeOutcome, acquireOutcome] = await Promise.allSettled([closing, acquisition]);
+    if (acquireOutcome.status === 'fulfilled') await acquireOutcome.value.close();
+
+    expect(closeOutcome).toEqual({ status: 'fulfilled', value: undefined });
+    expect(acquireOutcome).toEqual({
+      reason: expect.objectContaining({ code: 'EPOCH_NOT_FOUND' }),
+      status: 'rejected',
+    });
+  } finally {
+    permitDeletion?.();
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
 it('keeps a retired epoch until the final of multiple references closes', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent bundle epoch final reference '));
 

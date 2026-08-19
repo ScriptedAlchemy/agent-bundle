@@ -113,10 +113,19 @@ const artifactEpochKeys = [
 ] as const;
 const epochDiagnosticsKeys = ['errors', 'infos', 'warnings'] as const;
 const epochReferenceCounts = new Map<string, number>();
+const epochLeaseQueues = new Map<string, ReturnType<typeof serialQueue>>();
 
 const hasExactOwnKeys = (value: object, keys: readonly string[]): boolean => {
   const actual = Object.keys(value);
   return actual.length === keys.length && keys.every((key) => Object.hasOwn(value, key));
+};
+
+const leaseQueueFor = (agentBundlePath: string): ReturnType<typeof serialQueue> => {
+  const existing = epochLeaseQueues.get(agentBundlePath);
+  if (existing !== undefined) return existing;
+  const created = serialQueue();
+  epochLeaseQueues.set(agentBundlePath, created);
+  return created;
 };
 
 const pathExists = async (path: string): Promise<boolean> => {
@@ -293,6 +302,7 @@ export class EpochStore {
   readonly #cleanupRemove: typeof rm;
   readonly #epochMetadataPath: string;
   readonly #epochsPath: string;
+  readonly #leaseTransitions: ReturnType<typeof serialQueue>;
   readonly #staging = new Map<symbol, StagingRecord>();
   readonly #stagingMarkerStorage: EpochStagingMarkerStorage;
   readonly #transitions = serialQueue();
@@ -303,6 +313,7 @@ export class EpochStore {
     this.#cleanupRemove = options.cleanupRemove ?? rm;
     this.#epochsPath = join(agentBundlePath, 'epochs');
     this.#epochMetadataPath = join(this.#epochsPath, metadataDirectoryName);
+    this.#leaseTransitions = leaseQueueFor(agentBundlePath);
     this.#stagingMarkerStorage = options.stagingMarkerStorage ?? Object.freeze({ open, remove: rm });
   }
 
@@ -335,22 +346,22 @@ export class EpochStore {
   }
 
   async acquireEpochReference(epochId: string): Promise<EpochReference> {
-    return this.#transitions.run(async () => {
+    return this.#transitions.run(async () => this.#leaseTransitions.run(async () => {
       assertSafeEpochId(epochId);
       await this.#assertEpochDirectory(epochId);
       return this.#acquireEpochReference(await this.#readEpochMetadata(epochId).then((metadata) => metadata.epoch));
-    });
+    }));
   }
 
   /** Resolves and leases the current epoch without allowing a publish between those operations. */
   async acquireActiveEpochReference(): Promise<EpochReference> {
-    return this.#transitions.run(async () => {
+    return this.#transitions.run(async () => this.#leaseTransitions.run(async () => {
       const epoch = await this.#readActiveEpoch();
       if (epoch === undefined) {
         throw new EpochStoreError('EPOCH_NOT_FOUND', 'No active artifact epoch is available.');
       }
       return this.#acquireEpochReference(epoch);
-    });
+    }));
   }
 
   /** Returns detached safe epoch identities, ordered newest first. */
@@ -361,16 +372,16 @@ export class EpochStore {
   }
 
   async releaseEpochReference(epochId: string): Promise<void> {
-    await this.#transitions.run(async () => {
+    await this.#transitions.run(async () => this.#leaseTransitions.run(async () => {
       const referenceKey = join(this.#epochsPath, epochId);
       const count = epochReferenceCounts.get(referenceKey) ?? 0;
       if (count === 1) {
         epochReferenceCounts.delete(referenceKey);
-        await this.#cleanup();
+        await this.#cleanupUnderLease();
         return;
       }
       if (count > 1) epochReferenceCounts.set(referenceKey, count - 1);
-    });
+    }));
   }
 
   async readActiveEpoch(): Promise<ArtifactEpoch | undefined> {
@@ -443,6 +454,10 @@ export class EpochStore {
   }
 
   async #cleanup(): Promise<void> {
+    await this.#leaseTransitions.run(async () => this.#cleanupUnderLease());
+  }
+
+  async #cleanupUnderLease(): Promise<void> {
     const active = await this.#readActiveEpoch();
     const metadata = await this.#readAllEpochMetadata();
     const protectedIds = new Set<string>(active === undefined ? [] : [active.id]);
@@ -522,33 +537,38 @@ export class EpochStore {
       throw new EpochStoreError('EPOCH_ALREADY_EXISTS', `Epoch ${JSON.stringify(record.epoch.id)} already exists.`);
     }
 
-    let moved = false;
     let publication: EpochPublicationReceipt | undefined;
-    try {
-      if (beforeActivate !== undefined) {
-        publication = (await beforeActivate(record.epoch)) ?? undefined;
-      }
-      await this.#removeStagingMarker(record);
-      await rename(record.root, epochRoot);
-      moved = true;
-      await this.#writeEpochMetadata(record.epoch);
-      await this.#writeActiveMetadata(record.epoch);
-    } catch (error) {
-      const cleanupResults = await Promise.allSettled([
-        ...(moved ? [
-          rm(epochRoot, { force: true, recursive: true }),
-          rm(this.#metadataPathFor(record.epoch.id), { force: true }),
-        ] : []),
-        ...(publication === undefined ? [] : [publication.rollback()]),
-      ]);
-      const cleanupFailures = cleanupResults.flatMap((result) => result.status === 'rejected' ? [result.reason] : []);
-      if (cleanupFailures.length > 0) {
-        throw new AggregateError([error, ...cleanupFailures], 'Epoch publication and rollback both failed.', { cause: error });
-      }
-      throw error;
+    if (beforeActivate !== undefined) {
+      publication = (await beforeActivate(record.epoch)) ?? undefined;
     }
-    await this.#cleanup();
-    return record.epoch;
+    return this.#leaseTransitions.run(async () => {
+      let moved = false;
+      try {
+        if (await pathExists(epochRoot)) {
+          throw new EpochStoreError('EPOCH_ALREADY_EXISTS', `Epoch ${JSON.stringify(record.epoch.id)} already exists.`);
+        }
+        await this.#removeStagingMarker(record);
+        await rename(record.root, epochRoot);
+        moved = true;
+        await this.#writeEpochMetadata(record.epoch);
+        await this.#writeActiveMetadata(record.epoch);
+      } catch (error) {
+        const cleanupResults = await Promise.allSettled([
+          ...(moved ? [
+            rm(epochRoot, { force: true, recursive: true }),
+            rm(this.#metadataPathFor(record.epoch.id), { force: true }),
+          ] : []),
+          ...(publication === undefined ? [] : [publication.rollback()]),
+        ]);
+        const cleanupFailures = cleanupResults.flatMap((result) => result.status === 'rejected' ? [result.reason] : []);
+        if (cleanupFailures.length > 0) {
+          throw new AggregateError([error, ...cleanupFailures], 'Epoch publication and rollback both failed.', { cause: error });
+        }
+        throw error;
+      }
+      await this.#cleanupUnderLease();
+      return record.epoch;
+    });
   }
 
   async #removeStagingMarker(record: StagingRecord): Promise<void> {
