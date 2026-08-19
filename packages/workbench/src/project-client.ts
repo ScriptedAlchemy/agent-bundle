@@ -390,7 +390,10 @@ export class ProjectClient {
       method: 'POST',
     });
     const status = decode(projectStatusResponseSchema, await readResponse(response)).status;
-    this.#listener?.(status);
+    if (!this.#closed && !this.#isSnapshotCurrent(snapshot)) {
+      throw new ProjectClientError('Foreground project operation was superseded.');
+    }
+    if (!this.#closed) this.#listener?.(status);
     return status;
   }
 
@@ -413,6 +416,9 @@ export class ProjectClient {
 
   async #readAndPublish(snapshot: ForegroundSessionSnapshot, version?: number): Promise<ProjectStatus> {
     const status = await this.#readStatus(snapshot);
+    if (!this.#closed && !this.#isSnapshotCurrent(snapshot)) {
+      throw new ProjectClientError('Foreground project status was superseded.');
+    }
     if (!this.#closed && (version === undefined || this.#isLifecycleCurrent(version))) this.#listener?.(status);
     return status;
   }
@@ -558,6 +564,11 @@ export class ProjectClient {
 
   #isLifecycleCurrent(version: number): boolean {
     return !this.#closed && (this.#eventSourceVersion === version || this.#eventSourceVersion + 1 === version);
+  }
+
+  #isSnapshotCurrent(snapshot: ForegroundSessionSnapshot): boolean {
+    return this.#connection.generation === undefined ||
+      this.#connection.generation === snapshot.generation && this.#connection.instanceId === snapshot.instanceId;
   }
 
   #resetInstanceState(): void {

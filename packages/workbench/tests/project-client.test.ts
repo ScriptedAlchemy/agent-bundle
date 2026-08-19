@@ -381,6 +381,100 @@ it('ignores a late old-stream refresh without blocking the recovered source open
   expect(client.connection).toEqual({ generation: 1, instanceId: 'foreground-b', state: 'connected' });
 });
 
+it('rejects a rebuild response from a superseded foreground generation without publishing its stale status', async () => {
+  const rebuildResponse = deferred<Response>();
+  const rebuildStarted = deferred<void>();
+  const streams: RecordingEventSource[] = [];
+  const sessions = [
+    { instanceId: 'foreground-a', origin: 'http://foreground.test', token: 'token-a' },
+    { instanceId: 'foreground-b', origin: 'http://foreground.test', token: 'token-b' },
+  ];
+  const authority = new ForegroundSessionAuthority({ fetch: async () => Response.json(sessions.shift()) });
+  const observed: string[] = [];
+  let rebuildRequests = 0;
+  const client = projectClient({
+    authority,
+    events: () => {
+      const stream = new RecordingEventSource();
+      streams.push(stream);
+      return stream;
+    },
+    fetch: async (input) => {
+      if (String(input) === '/api/project/rebuild') {
+        rebuildRequests += 1;
+        rebuildStarted.resolve();
+        return rebuildResponse.promise;
+      }
+      return Response.json({ status: status() });
+    },
+  });
+
+  await client.connect((next) => observed.push(next.artifact.state));
+  const rebuilding = client.rebuild();
+  await rebuildStarted.promise;
+  const first = streams[0];
+  if (first === undefined) throw new Error('Expected the initial foreground event source.');
+  first.emit('error', { data: '', lastEventId: '' });
+  await new Promise((resolvePromise) => setImmediate(resolvePromise));
+  const second = streams[1];
+  if (second === undefined) throw new Error('Expected a replacement foreground event source.');
+  second.emit('open', { data: '', lastEventId: '' });
+  await new Promise((resolvePromise) => setImmediate(resolvePromise));
+
+  rebuildResponse.resolve(Response.json({ status: status('missing') }));
+
+  await expect(rebuilding).rejects.toMatchObject({ message: 'Foreground project operation was superseded.' });
+  expect(rebuildRequests).toBe(1);
+  expect(observed).toEqual(['active', 'active', 'active']);
+  expect(client.connection).toEqual({ generation: 1, instanceId: 'foreground-b', state: 'connected' });
+});
+
+it('rejects a status refresh response from a superseded foreground generation without publishing it', async () => {
+  const refreshResponse = deferred<Response>();
+  const refreshStarted = deferred<void>();
+  const streams: RecordingEventSource[] = [];
+  const sessions = [
+    { instanceId: 'foreground-a', origin: 'http://foreground.test', token: 'token-a' },
+    { instanceId: 'foreground-b', origin: 'http://foreground.test', token: 'token-b' },
+  ];
+  const authority = new ForegroundSessionAuthority({ fetch: async () => Response.json(sessions.shift()) });
+  const observed: string[] = [];
+  let requests = 0;
+  const client = projectClient({
+    authority,
+    events: () => {
+      const stream = new RecordingEventSource();
+      streams.push(stream);
+      return stream;
+    },
+    fetch: async () => {
+      requests += 1;
+      if (requests === 2) {
+        refreshStarted.resolve();
+        return refreshResponse.promise;
+      }
+      return Response.json({ status: status() });
+    },
+  });
+
+  await client.connect((next) => observed.push(next.artifact.state));
+  const refreshing = client.refresh();
+  await refreshStarted.promise;
+  const first = streams[0];
+  if (first === undefined) throw new Error('Expected the initial foreground event source.');
+  first.emit('error', { data: '', lastEventId: '' });
+  await new Promise((resolvePromise) => setImmediate(resolvePromise));
+  const second = streams[1];
+  if (second === undefined) throw new Error('Expected a replacement foreground event source.');
+  second.emit('open', { data: '', lastEventId: '' });
+  await new Promise((resolvePromise) => setImmediate(resolvePromise));
+
+  refreshResponse.resolve(Response.json({ status: status('missing') }));
+
+  await expect(refreshing).rejects.toMatchObject({ message: 'Foreground project status was superseded.' });
+  expect(observed).toEqual(['active', 'active', 'active']);
+});
+
 it('rejects project SSE records with missing, invalid, or mismatched sequence identities', async () => {
   const stream = new RecordingEventSource();
   const client = projectClient({
