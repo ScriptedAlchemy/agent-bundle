@@ -256,7 +256,7 @@ const outageLedgerFixture = (): OutageLedger => {
   return Object.freeze({
     consoleErrors: Object.freeze([
       Object.freeze({ at: 1_003, text: 'Failed to load resource: net::ERR_INCOMPLETE_CHUNKED_ENCODING', url: `${origin}/api/project/events` }),
-      Object.freeze({ at: 1_005, text: 'Failed to load resource: net::ERR_CONNECTION_REFUSED', url: `${origin}${oldSessionPath}/stream` }),
+      Object.freeze({ at: 1_005, text: 'Failed to load resource: net::ERR_CONNECTION_REFUSED', url: `${origin}${oldSessionPath}/stream?after=0` }),
       Object.freeze({ at: 1_012, text: 'Failed to load resource: net::ERR_CONNECTION_REFUSED', url: `${origin}/api/project/session` }),
       Object.freeze({ at: 1_016, text: 'Failed to load resource: net::ERR_CONNECTION_REFUSED', url: `${origin}${oldSessionPath}` }),
     ]),
@@ -266,7 +266,7 @@ const outageLedgerFixture = (): OutageLedger => {
     recoveredAt: 1_301,
     requests: Object.freeze([
       failure(1_001, 'GET', '/api/project/events', 'net::ERR_INCOMPLETE_CHUNKED_ENCODING'),
-      failure(1_003, 'GET', `${oldSessionPath}/stream`, 'net::ERR_CONNECTION_REFUSED'),
+      ledgerRequest({ at: 1_003, completedAt: 1_004, error: 'net::ERR_CONNECTION_REFUSED', method: 'GET', path: `${oldSessionPath}/stream`, url: `${origin}${oldSessionPath}/stream?after=0` }),
       failure(1_010, 'GET', '/api/project/session', 'net::ERR_CONNECTION_REFUSED'),
       ledgerRequest({ at: 1_300, completedAt: 1_301, method: 'GET', path: '/api/project/session', status: 200 }),
       failure(1_014, 'DELETE', oldSessionPath, 'net::ERR_CONNECTION_REFUSED'),
@@ -339,11 +339,26 @@ const isKnownPreOutageStreamCancellation = (request: NetworkLedgerEntry): boolea
   );
 
 const hasCanonicalAfterCursor = (url: URL): boolean => {
-  const values = url.searchParams.getAll('after');
-  if (url.searchParams.size !== 1 || values.length !== 1) return false;
-  const after = values[0]!;
+  const parameters = [...url.searchParams.entries()];
+  if (parameters.length !== 1 || parameters[0]![0] !== 'after') return false;
+  const after = parameters[0]![1];
   const parsed = Number(after);
-  return Number.isSafeInteger(parsed) && parsed >= 0 && String(parsed) === after;
+  return Number.isSafeInteger(parsed) && parsed >= 0 && String(parsed) === after && url.search === `?after=${after}`;
+};
+
+const isExactOldMcpStreamReset = (request: NetworkLedgerEntry, ledger: OutageLedger, oldSessionPath: string): boolean => {
+  const oldStreamPath = `${oldSessionPath}/stream`;
+  if (
+    request.error !== 'net::ERR_CONNECTION_RESET' || request.method !== 'GET' || request.origin !== ledger.origin ||
+    request.path !== oldStreamPath || request.completedAt === undefined || request.at > request.completedAt ||
+    request.completedAt < ledger.outageStartedAt || request.completedAt >= ledger.recoveredAt ||
+    request.respondedAt !== undefined || request.status !== undefined
+  ) return false;
+  let url: URL;
+  try { url = new URL(request.url); }
+  catch { return false; }
+  if (url.origin !== ledger.origin || url.pathname !== oldStreamPath || url.hash.length > 0 || !hasCanonicalAfterCursor(url)) return false;
+  return url.href === `${ledger.origin}${oldStreamPath}${url.search}`;
 };
 
 const assertLedger: (condition: unknown, message: string) => asserts condition = (condition, message) => {
@@ -354,7 +369,9 @@ const assertLedger: (condition: unknown, message: string) => asserts condition =
 const validateOutageLedger = (ledger: OutageLedger): void => {
   const oldSessionPath = `/api/mcp/sessions/${encodeURIComponent(ledger.oldSessionId)}`;
   const sameOriginRequests = ledger.requests.filter((request) => request.origin === ledger.origin);
-  const requestFailed = sameOriginRequests.filter((request) => request.error !== undefined);
+  const requestFailed = ledger.requests.filter((request) => request.error !== undefined);
+  const foreignFailures = requestFailed.filter((request) => request.origin !== ledger.origin);
+  assertLedger(foreignFailures.length === 0, `cross-origin request failures: ${JSON.stringify(foreignFailures)}`);
   const preOutageFailures = requestFailed.filter((request) =>
     ledgerFailureAt(request) < ledger.outageStartedAt && !isKnownPreOutageStreamCancellation(request),
   );
@@ -416,7 +433,13 @@ const validateOutageLedger = (ledger: OutageLedger): void => {
     `old MCP stream has duplicate refused failures: ${JSON.stringify(oldStreams)}`);
   assertLedger(oldStreams.filter((request) => request.method === 'GET' && request.error === 'net::ERR_ABORTED').length <= 2,
     `old MCP stream has too many abort failures: ${JSON.stringify(oldStreams)}`);
-  assertLedger(oldStreams.every((request) => request.method === 'GET' && (request.error === 'net::ERR_CONNECTION_REFUSED' || request.error === 'net::ERR_ABORTED')),
+  const oldStreamResets = oldStreams.filter((request) => request.error === 'net::ERR_CONNECTION_RESET');
+  assertLedger(oldStreamResets.length <= 1 && oldStreamResets.every((request) => isExactOldMcpStreamReset(request, ledger, oldSessionPath)),
+    `old MCP stream has an invalid reset termination: ${JSON.stringify(oldStreamResets)}`);
+  assertLedger(oldStreams.every((request) => request.method === 'GET' && (
+    request.error === 'net::ERR_CONNECTION_REFUSED' || request.error === 'net::ERR_ABORTED' ||
+    isExactOldMcpStreamReset(request, ledger, oldSessionPath)
+  )),
     `old MCP stream has an unrecognized failure: ${JSON.stringify(oldStreams)}`);
 
   const streamClasses: readonly KnownStreamClass[] = ['playground', 'logs', 'evals'];
@@ -483,7 +506,10 @@ const validateOutageLedger = (ledger: OutageLedger): void => {
     const recognized =
       (pathClass === 'project-events' && failure.method === 'GET' && failure.error === 'net::ERR_INCOMPLETE_CHUNKED_ENCODING') ||
       (pathClass === 'project-session' && failure.method === 'GET' && failure.error === 'net::ERR_CONNECTION_REFUSED') ||
-      (pathClass === 'old-mcp-stream' && failure.method === 'GET' && (failure.error === 'net::ERR_CONNECTION_REFUSED' || failure.error === 'net::ERR_ABORTED')) ||
+      (pathClass === 'old-mcp-stream' && failure.method === 'GET' && (
+        failure.error === 'net::ERR_CONNECTION_REFUSED' || failure.error === 'net::ERR_ABORTED' ||
+        isExactOldMcpStreamReset(failure, ledger, oldSessionPath)
+      )) ||
       (pathClass === 'old-mcp-session' && failure.method === 'DELETE' && failure.error === 'net::ERR_CONNECTION_REFUSED') ||
       (knownStreamClass(failure.path) !== undefined && failure.method === 'GET' && failure.error === 'net::ERR_ABORTED');
     assertLedger(recognized, `unknown outage failure: ${JSON.stringify(failure)}`);
@@ -503,6 +529,7 @@ const validateOutageLedger = (ledger: OutageLedger): void => {
       `unknown outage console error: ${JSON.stringify(consoleError)}`);
     const matchingFailureIndex = pendingConsoleBackedFailures.findIndex((failure) =>
       failure.error === code && outagePathClass(failure.path, oldSessionPath) === pathClass &&
+      failure.url === consoleUrl.href &&
       Math.abs(ledgerFailureAt(failure) - consoleError.at) <= 1_000,
     );
     assertLedger(matchingFailureIndex >= 0, `console error does not uniquely pair with an outage request failure: ${JSON.stringify(consoleError)}`);
@@ -516,6 +543,59 @@ const validateOutageLedger = (ledger: OutageLedger): void => {
 
 test('outage ledger rejects the legacy duplicate, cross-origin, and missing-cleanup false positives', () => {
   const valid = outageLedgerFixture();
+  const oldStreamPath = `/api/mcp/sessions/${encodeURIComponent(valid.oldSessionId)}/stream`;
+  const resetRequest = ledgerRequest({
+    at: 999,
+    completedAt: 1_008,
+    error: 'net::ERR_CONNECTION_RESET',
+    method: 'GET',
+    path: oldStreamPath,
+    url: `${valid.origin}${oldStreamPath}?after=1`,
+  });
+  const resetConsole = Object.freeze({ at: 1_008, text: 'Failed to load resource: net::ERR_CONNECTION_RESET', url: resetRequest.url });
+  const withOldStreamReset = (request: NetworkLedgerEntry, consoleError: ConsoleErrorRecord): OutageLedger => Object.freeze({
+    ...valid,
+    consoleErrors: Object.freeze([...valid.consoleErrors, consoleError]),
+    requests: Object.freeze([...valid.requests, request]),
+  });
+  const validOldStreamReset = withOldStreamReset(resetRequest, resetConsole);
+  const resetWithAlteredQuery = withOldStreamReset(
+    ledgerRequest({ ...resetRequest, url: `${valid.origin}${oldStreamPath}?after=01` }),
+    Object.freeze({ ...resetConsole, url: `${valid.origin}${oldStreamPath}?after=01` }),
+  );
+  const resetWithResponse = withOldStreamReset(
+    ledgerRequest({ ...resetRequest, respondedAt: 1_000, status: 200 }),
+    resetConsole,
+  );
+  const resetWithUnknownSession = withOldStreamReset(
+    ledgerRequest({
+      ...resetRequest,
+      path: '/api/mcp/sessions/unknown-browser-mcp-session/stream',
+      url: `${valid.origin}/api/mcp/sessions/unknown-browser-mcp-session/stream?after=1`,
+    }),
+    Object.freeze({ ...resetConsole, url: `${valid.origin}/api/mcp/sessions/unknown-browser-mcp-session/stream?after=1` }),
+  );
+  const resetWithForeignOrigin = withOldStreamReset(
+    ledgerRequest({ ...resetRequest, origin: 'http://127.0.0.2:4100', url: `http://127.0.0.2:4100${oldStreamPath}?after=1` }),
+    Object.freeze({ ...resetConsole, url: `http://127.0.0.2:4100${oldStreamPath}?after=1` }),
+  );
+  const resetWithMismatchedConsoleUrl = withOldStreamReset(
+    resetRequest,
+    Object.freeze({ ...resetConsole, url: `${valid.origin}${oldStreamPath}?after=2` }),
+  );
+  const resetWithoutConsole = Object.freeze({
+    ...validOldStreamReset,
+    consoleErrors: Object.freeze(validOldStreamReset.consoleErrors.slice(0, -1)),
+  });
+  const duplicateOldStreamReset = Object.freeze({
+    ...validOldStreamReset,
+    consoleErrors: Object.freeze([...validOldStreamReset.consoleErrors, Object.freeze({ ...resetConsole, at: 1_009, url: `${valid.origin}${oldStreamPath}?after=2` })]),
+    requests: Object.freeze([...validOldStreamReset.requests, ledgerRequest({ ...resetRequest, at: 998, completedAt: 1_009, url: `${valid.origin}${oldStreamPath}?after=2` })]),
+  });
+  const postRecoveryReset = withOldStreamReset(
+    ledgerRequest({ ...resetRequest, at: 1_301, completedAt: 1_302 }),
+    Object.freeze({ ...resetConsole, at: 1_302 }),
+  );
   const validPostRecovery = postRecoveryCancellationFixture();
   const duplicateConsole = Object.freeze({
     ...valid,
@@ -542,6 +622,13 @@ test('outage ledger rejects the legacy duplicate, cross-origin, and missing-clea
     ...valid,
     requests: Object.freeze([
       ledgerRequest({ at: 900, completedAt: 901, error: 'net::ERR_ABORTED', method: 'GET', path: '/api/unknown/stream', status: 200 }),
+      ...valid.requests,
+    ]),
+  });
+  const preOutageCancelAbort = Object.freeze({
+    ...valid,
+    requests: Object.freeze([
+      ledgerRequest({ at: 900, completedAt: 901, error: 'net::ERR_ABORTED', method: 'POST', path: '/api/playground/runs/native-a/cancel' }),
       ...valid.requests,
     ]),
   });
@@ -578,11 +665,17 @@ test('outage ledger rejects the legacy duplicate, cross-origin, and missing-clea
 
   expect(malformedLedgers.map(legacyOutageLedgerPasses)).toEqual([true, true, true]);
   expect(() => validateOutageLedger(valid)).not.toThrow();
+  expect(() => validateOutageLedger(validOldStreamReset)).not.toThrow();
   expect(() => validateOutageLedger(preStartedOutageStreamTermination)).not.toThrow();
   expect(() => validateOutageLedger(knownPreOutageLogsReplayCancellation)).not.toThrow();
   expect(() => validateOutageLedger(validPostRecovery)).not.toThrow();
   for (const malformed of malformedLedgers) expect(() => validateOutageLedger(malformed)).toThrow(/Foreground outage ledger rejected/u);
+  for (const malformed of [
+    resetWithAlteredQuery, resetWithResponse, resetWithUnknownSession, resetWithForeignOrigin, resetWithMismatchedConsoleUrl,
+    resetWithoutConsole, duplicateOldStreamReset, postRecoveryReset,
+  ]) expect(() => validateOutageLedger(malformed)).toThrow(/Foreground outage ledger rejected/u);
   expect(() => validateOutageLedger(unknownPreOutageCancellation)).toThrow(/Foreground outage ledger rejected/u);
+  expect(() => validateOutageLedger(preOutageCancelAbort)).toThrow(/Foreground outage ledger rejected/u);
   expect(() => validateOutageLedger(unknownOutageStreamTermination)).toThrow(/Foreground outage ledger rejected/u);
   expect(() => validateOutageLedger(unknownPostRecoveryCancellation)).toThrow(/Foreground outage ledger rejected/u);
 });
@@ -1051,7 +1144,8 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 }
         response.url() === `${origin}/api/playground/runs` && response.request().method() === 'POST' && response.ok(),
       );
       await page.getByRole('button', { name: 'Start native prompt' }).click();
-      expect(record(await (await nativeAAdmitted).json(), 'native epoch A admission').run).toEqual(expect.any(Object));
+      const nativeAAdmission = record(await (await nativeAAdmitted).json(), 'native epoch A admission');
+      const nativeARunId = string(record(nativeAAdmission.run, 'native epoch A run').id, 'native epoch A run id');
       await expect(page.getByText('native.host.started')).toBeVisible({ timeout: browserTimeout });
       if (child?.pid === undefined) throw new Error('The packed dev server process did not expose a PID.');
       const nativeOperationDescendants = await descendantProcessIds(child.pid);
@@ -1101,7 +1195,17 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 }
       await page.getByRole('link', { name: 'Playground', exact: true }).click();
       await expect(page.getByText(nativeEpochA, { exact: true })).toBeVisible({ timeout: browserTimeout });
       await expect(page.getByText(nativePinA, { exact: true })).toBeVisible({ timeout: browserTimeout });
-      await page.getByRole('button', { name: 'Cancel run' }).click();
+      const nativeACancelled = page.waitForResponse((response) => {
+        const url = new URL(response.url());
+        return url.origin === origin && url.pathname === `/api/playground/runs/${encodeURIComponent(nativeARunId)}/cancel` &&
+          url.search.length === 0 && response.request().method() === 'POST' && response.status() === 200;
+      });
+      const cancelRun = page.getByRole('button', { name: 'Cancel run', exact: true });
+      await cancelRun.click();
+      await expect(page.getByRole('button', { name: 'Cancelling…', exact: true })).toBeVisible({ timeout: browserTimeout });
+      expect(await (await nativeACancelled).json()).toEqual({ cancelled: true });
+      await expect(page.getByRole('button', { name: 'Cancelling…', exact: true })).toBeHidden({ timeout: browserTimeout });
+      await expect(cancelRun).toBeDisabled({ timeout: browserTimeout });
       await expect(page.getByText('operation.cancelled')).toBeVisible({ timeout: browserTimeout });
       await expect(page.getByText('epoch.bound')).toBeVisible({ timeout: browserTimeout });
 

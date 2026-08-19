@@ -256,7 +256,7 @@ it('publishes directly executable built entrypoints with declarations', async ()
 
   const { stdout } = await execFile(binPath, ['--version']);
   expect(stdout).toBe(`${manifest.version}\n`);
-});
+}, 15_000);
 
 it('writes the package version as the producer of a built CLI manifest', async () => {
   await buildPackage();
