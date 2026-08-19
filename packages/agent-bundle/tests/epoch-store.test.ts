@@ -893,7 +893,7 @@ it('keeps epoch metadata and contents retryable when native catalog sidecar dele
     });
     await publishEpoch(store, epochFor(root, 'epoch-1', '2026-08-14T12:00:01.000Z'));
     await mkdir(dirname(nativeCatalogPathFor(root, 'epoch-1')), { recursive: true });
-    await writeFile(nativeCatalogPathFor(root, 'epoch-1'), '{"epochId":"epoch-1","selections":[],"version":1}\n');
+    await writeFile(nativeCatalogPathFor(root, 'epoch-1'), '{"epochId":"epoch-1","selections":[]}\n');
     let cleanupError: unknown;
     for (let sequence = 2; sequence <= 7; sequence += 1) {
       try { await publishEpoch(store, epochFor(root, `epoch-${sequence}`, `2026-08-14T12:00:0${sequence}.000Z`)); }
@@ -933,7 +933,7 @@ it('rolls back a publisher-owned catalog sidecar when activation fails after pub
     ]);
     await expect(staging.publish(async () => undefined, async () => {
       await mkdir(dirname(nativeCatalogPathFor(root, epoch.id)), { recursive: true });
-      await writeFile(nativeCatalogPathFor(root, epoch.id), '{"epochId":"epoch-sidecar-rollback","selections":[],"version":1}\n');
+      await writeFile(nativeCatalogPathFor(root, epoch.id), '{"epochId":"epoch-sidecar-rollback","selections":[]}\n');
       await rm(staging.root, { force: true, recursive: true });
       return Object.freeze({ rollback: async () => rm(nativeCatalogPathFor(root, epoch.id), { force: true }) });
     })).rejects.toMatchObject({ code: 'ENOENT' });
