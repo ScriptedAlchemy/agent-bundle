@@ -3,9 +3,11 @@ import { expect, it } from '@rstest/core';
 import {
   ProjectClient,
   ProjectClientError,
+  type ProjectClientOptions,
   type EventSourceFactory,
   type EventSourceLike,
 } from '../src/project-client.ts';
+import { ForegroundSessionAuthority } from '../src/foreground-session.ts';
 
 interface Listener {
   readonly listener: (event: { readonly data: string; readonly lastEventId: string }) => void;
@@ -66,6 +68,19 @@ const deferred = <Value>(): Deferred<Value> => {
   return { promise, reject, resolve };
 };
 
+const foregroundAuthority = (): ForegroundSessionAuthority => new ForegroundSessionAuthority({
+  fetch: async () => Response.json({
+    instanceId: 'foreground-instance-a',
+    origin: 'http://foreground.test',
+    token: 'foreground-token',
+  }),
+});
+
+const projectClient = (options: ProjectClientOptions = {}): ProjectClient => new ProjectClient({
+  authority: foregroundAuthority(),
+  ...options,
+});
+
 it('calls the default browser fetch with its global receiver', async () => {
   const originalFetch = globalThis.fetch;
   const browserFetch = async function (this: typeof globalThis, input: RequestInfo | URL): Promise<Response> {
@@ -75,7 +90,7 @@ it('calls the default browser fetch with its global receiver', async () => {
   };
   Object.defineProperty(globalThis, 'fetch', { configurable: true, value: browserFetch });
   try {
-    await expect(new ProjectClient().refresh()).resolves.toMatchObject({ artifact: { state: 'active' } });
+    await expect(projectClient().refresh()).resolves.toMatchObject({ artifact: { state: 'active' } });
   } finally {
     Object.defineProperty(globalThis, 'fetch', { configurable: true, value: originalFetch });
   }
@@ -98,7 +113,7 @@ it('rejects noncanonical project status envelopes and nested status DTOs', async
   ];
 
   for (const response of invalidResponses) {
-    const client = new ProjectClient({ fetch: async () => Response.json(response) });
+    const client = projectClient({ fetch: async () => Response.json(response) });
     await expect(client.refresh()).rejects.toBeInstanceOf(ProjectClientError);
   }
 });
@@ -108,7 +123,7 @@ it('does not publish initial status or retain an event stream when closed during
   const stream = new RecordingEventSource();
   const observed: string[] = [];
   let eventStreams = 0;
-  const client = new ProjectClient({
+  const client = projectClient({
     events: () => {
       eventStreams += 1;
       return stream;
@@ -128,7 +143,7 @@ it('does not publish initial status or retain an event stream when closed during
 
 it('closes an event stream constructed concurrently with client shutdown', async () => {
   const stream = new RecordingEventSource();
-  const client = new ProjectClient({
+  const client = projectClient({
     events: () => {
       client.close();
       return stream;
@@ -144,7 +159,7 @@ it('refreshes Overview state after live named events and keeps the browser Event
   const stream = new RecordingEventSource();
   const requests: string[] = [];
   let sequence = 0;
-  const client = new ProjectClient({
+  const client = projectClient({
     events: (() => stream) satisfies EventSourceFactory,
     fetch: async (input) => {
       requests.push(String(input));
@@ -174,7 +189,7 @@ it('reports an EventSource outage and clears it after reconnection refreshes pro
   const errors: unknown[] = [];
   let connection: 'connected' | 'unavailable' = 'connected';
   let requests = 0;
-  const client = new ProjectClient({
+  const client = projectClient({
     events: () => stream,
     fetch: async () => {
       requests += 1;
@@ -202,9 +217,173 @@ it('reports an EventSource outage and clears it after reconnection refreshes pro
   expect(requests).toBe(2);
 });
 
+it('recovers a replaced foreground authority through a new event source without accepting stale source callbacks', async () => {
+  const streams: RecordingEventSource[] = [];
+  const sessions = [
+    { instanceId: 'foreground-a', origin: 'http://foreground.test', token: 'token-a' },
+    { instanceId: 'foreground-b', origin: 'http://foreground.test', token: 'token-b' },
+  ];
+  const authority = new ForegroundSessionAuthority({
+    fetch: async () => Response.json(sessions.shift()),
+  });
+  const errors: unknown[] = [];
+  const observed: string[] = [];
+  const client = new ProjectClient({
+    authority,
+    events: () => {
+      const stream = new RecordingEventSource();
+      streams.push(stream);
+      return stream;
+    },
+    fetch: async () => Response.json({ status: status() }),
+  });
+
+  await client.connect((next) => observed.push(next.artifact.state), (reason) => errors.push(reason));
+  const first = streams[0];
+  if (first === undefined) throw new Error('Expected the initial foreground event source.');
+  first.emit('source.changed', {
+    data: JSON.stringify({
+      occurredAt: '2026-08-16T12:00:00.000Z',
+      payload: { occurredAt: '2026-08-16T12:00:00.000Z', paths: ['src/stale.ts'], reason: 'source-change' },
+      sequence: 999,
+      type: 'source.changed',
+    }),
+    lastEventId: '999',
+  });
+  await new Promise((resolvePromise) => setImmediate(resolvePromise));
+
+  first.emit('error', { data: '', lastEventId: '' });
+
+  expect(first.closed).toBe(true);
+  expect(errors).toHaveLength(1);
+  expect(client.connection).toEqual({ generation: 0, instanceId: 'foreground-a', state: 'unavailable' });
+
+  await new Promise((resolvePromise) => setImmediate(resolvePromise));
+  const second = streams[1];
+  if (second === undefined) throw new Error('Expected a replacement foreground event source.');
+  expect(client.activity.changedFiles).toEqual([]);
+  expect(client.lastEventId).toBe(0);
+
+  first.emit('source.changed', {
+    data: JSON.stringify({
+      occurredAt: '2026-08-16T12:01:00.000Z',
+      payload: { occurredAt: '2026-08-16T12:01:00.000Z', paths: ['src/late.ts'], reason: 'source-change' },
+      sequence: 1_000,
+      type: 'source.changed',
+    }),
+    lastEventId: '1000',
+  });
+  second.emit('open', { data: '', lastEventId: '' });
+  await new Promise((resolvePromise) => setImmediate(resolvePromise));
+
+  expect(client.activity.changedFiles).toEqual([]);
+  expect(client.connection).toEqual({ generation: 1, instanceId: 'foreground-b', state: 'connected' });
+  expect(observed).toEqual(['active', 'active', 'active', 'active']);
+});
+
+it('coalesces repeated stream errors while retrying a failed authoritative bootstrap', async () => {
+  const retry = deferred<void>();
+  const streams: RecordingEventSource[] = [];
+  let bootstraps = 0;
+  const authority = new ForegroundSessionAuthority({
+    fetch: async () => {
+      bootstraps += 1;
+      if (bootstraps === 2) throw new Error('Foreground server is still restarting.');
+      return Response.json({
+        instanceId: bootstraps === 1 ? 'foreground-a' : 'foreground-b',
+        origin: 'http://foreground.test',
+        token: `token-${bootstraps}`,
+      });
+    },
+  });
+  const errors: unknown[] = [];
+  let retryCount = 0;
+  const client = new ProjectClient({
+    authority,
+    events: () => {
+      const stream = new RecordingEventSource();
+      streams.push(stream);
+      return stream;
+    },
+    fetch: async () => Response.json({ status: status() }),
+    retryDelay: () => {
+      retryCount += 1;
+      return retry.promise;
+    },
+  });
+
+  await client.connect(() => undefined, (reason) => errors.push(reason));
+  const first = streams[0];
+  if (first === undefined) throw new Error('Expected the initial foreground event source.');
+  first.emit('error', { data: '', lastEventId: '' });
+  first.emit('error', { data: '', lastEventId: '' });
+  await new Promise((resolvePromise) => setImmediate(resolvePromise));
+
+  expect(first.closed).toBe(true);
+  expect(errors).toHaveLength(1);
+  expect(retryCount).toBe(1);
+  expect(streams).toHaveLength(1);
+
+  retry.resolve();
+  await new Promise((resolvePromise) => setImmediate(resolvePromise));
+  await new Promise((resolvePromise) => setImmediate(resolvePromise));
+
+  expect(streams).toHaveLength(2);
+  expect(client.connection).toEqual({ generation: 1, instanceId: 'foreground-b', state: 'unavailable' });
+  const second = streams[1];
+  if (second === undefined) throw new Error('Expected the recovered foreground event source.');
+  second.emit('open', { data: '', lastEventId: '' });
+  await new Promise((resolvePromise) => setImmediate(resolvePromise));
+  expect(client.connection).toEqual({ generation: 1, instanceId: 'foreground-b', state: 'connected' });
+});
+
+it('ignores a late old-stream refresh without blocking the recovered source open refresh', async () => {
+  const lateStatus = deferred<Response>();
+  const streams: RecordingEventSource[] = [];
+  const sessions = [
+    { instanceId: 'foreground-a', origin: 'http://foreground.test', token: 'token-a' },
+    { instanceId: 'foreground-b', origin: 'http://foreground.test', token: 'token-b' },
+  ];
+  const authority = new ForegroundSessionAuthority({ fetch: async () => Response.json(sessions.shift()) });
+  const observed: string[] = [];
+  let requests = 0;
+  const client = projectClient({
+    authority,
+    events: () => {
+      const stream = new RecordingEventSource();
+      streams.push(stream);
+      return stream;
+    },
+    fetch: async () => {
+      requests += 1;
+      return requests === 2 ? lateStatus.promise : Response.json({ status: status() });
+    },
+  });
+
+  await client.connect((next) => observed.push(next.artifact.state));
+  const first = streams[0];
+  if (first === undefined) throw new Error('Expected the initial foreground event source.');
+  first.emit('artifact.status', {
+    data: JSON.stringify({ occurredAt: '2026-08-16T12:00:00.000Z', payload: status().artifact, sequence: 7, type: 'artifact.status' }),
+    lastEventId: '7',
+  });
+  await new Promise((resolvePromise) => setImmediate(resolvePromise));
+  first.emit('error', { data: '', lastEventId: '' });
+  await new Promise((resolvePromise) => setImmediate(resolvePromise));
+  const second = streams[1];
+  if (second === undefined) throw new Error('Expected a replacement foreground event source.');
+  second.emit('open', { data: '', lastEventId: '' });
+  lateStatus.resolve(Response.json({ status: status('missing') }));
+  await new Promise((resolvePromise) => setImmediate(resolvePromise));
+  await new Promise((resolvePromise) => setImmediate(resolvePromise));
+
+  expect(observed).toEqual(['active', 'active', 'active']);
+  expect(client.connection).toEqual({ generation: 1, instanceId: 'foreground-b', state: 'connected' });
+});
+
 it('rejects project SSE records with missing, invalid, or mismatched sequence identities', async () => {
   const stream = new RecordingEventSource();
-  const client = new ProjectClient({
+  const client = projectClient({
     events: () => stream,
     fetch: async () => Response.json({ status: status() }),
   });
@@ -261,7 +440,7 @@ it('rejects project SSE records with missing, invalid, or mismatched sequence id
 it('rejects versioned, extra, and malformed SSE project event messages', async () => {
   const stream = new RecordingEventSource();
   const requests: string[] = [];
-  const client = new ProjectClient({
+  const client = projectClient({
     events: () => stream,
     fetch: async (input) => {
       requests.push(String(input));
@@ -309,7 +488,7 @@ it('rejects versioned, extra, and malformed SSE project event messages', async (
 
 it('captures the latest valid source-change paths in an immutable browser activity snapshot', async () => {
   const stream = new RecordingEventSource();
-  const client = new ProjectClient({
+  const client = projectClient({
     events: () => stream,
     fetch: async () => Response.json({ status: status() }),
   });
@@ -342,7 +521,7 @@ it('captures the latest valid source-change paths in an immutable browser activi
 
 it('replaces changed-file activity only when a higher valid source-change sequence arrives', async () => {
   const stream = new RecordingEventSource();
-  const client = new ProjectClient({
+  const client = projectClient({
     events: () => stream,
     fetch: async () => Response.json({ status: status() }),
   });
@@ -370,7 +549,7 @@ it('replaces changed-file activity only when a higher valid source-change sequen
 
 it('retains the latest changed-file activity when a source-change envelope is malformed', async () => {
   const stream = new RecordingEventSource();
-  const client = new ProjectClient({
+  const client = projectClient({
     events: () => stream,
     fetch: async () => Response.json({ status: status() }),
   });
@@ -405,7 +584,7 @@ it('retains activity across a failed event refresh and ignores post-close event 
   const stream = new RecordingEventSource();
   const errors: unknown[] = [];
   let requests = 0;
-  const client = new ProjectClient({
+  const client = projectClient({
     events: () => stream,
     fetch: async () => {
       requests += 1;
@@ -458,7 +637,7 @@ it('reports one failed event refresh without an unhandled rejection and retains 
   let requests = 0;
   process.on('unhandledRejection', onUnhandled);
   try {
-    const client = new ProjectClient({
+    const client = projectClient({
       events: () => stream,
       fetch: async () => {
         requests += 1;
@@ -503,7 +682,7 @@ it('suppresses a late event-refresh error after close', async () => {
   let requests = 0;
   process.on('unhandledRejection', onUnhandled);
   try {
-    const client = new ProjectClient({
+    const client = projectClient({
       events: () => stream,
       fetch: async () => {
         requests += 1;
@@ -533,7 +712,9 @@ it('bootstraps a same-session token before posting an explicit rebuild through t
   const client = new ProjectClient({
     fetch: async (input, init) => {
       requests.push({ body: init?.body?.toString(), headers: init?.headers, input: String(input) });
-      if (String(input) === '/api/project/session') return Response.json({ origin: 'http://127.0.0.1:3100', token: 'token-1' });
+      if (String(input) === '/api/project/session') {
+        return Response.json({ instanceId: 'foreground-instance-a', origin: 'http://127.0.0.1:3100', token: 'token-1' });
+      }
       return Response.json({ status: status('stale') });
     },
   });

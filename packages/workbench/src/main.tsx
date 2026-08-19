@@ -542,7 +542,7 @@ const Workbench = () => {
   };
 
   useEffect(() => {
-    const next = new ProjectClient();
+    const next = new ProjectClient({ authority });
     const nextSkillClient = new SkillClient();
     let mounted = true;
     client.current = next;
