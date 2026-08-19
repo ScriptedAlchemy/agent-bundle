@@ -103,6 +103,27 @@ const readReplay = async (url: string, lastEventId: string, expectedSequence = 2
   });
 };
 
+const readReplayAfter = async (url: string, after: string, expectedSequence = 2): Promise<string> => {
+  const cookie = await foregroundCookie(url);
+  return new Promise((resolvePromise, rejectPromise) => {
+    const request = httpGet(`${url}/api/project/events?after=${encodeURIComponent(after)}`, {
+      headers: { cookie, origin: url },
+    }, (response) => {
+      let received = '';
+      response.setEncoding('utf8');
+      response.on('data', (chunk: string) => {
+        received += chunk;
+        if (received.includes(`id: ${expectedSequence}\n`)) {
+          response.destroy();
+          resolvePromise(received);
+        }
+      });
+      response.on('error', rejectPromise);
+    });
+    request.on('error', rejectPromise);
+  });
+};
+
 const readRaw = (
   url: string,
   path: string,
@@ -256,6 +277,28 @@ it('replays project events after Last-Event-ID without re-sending the acknowledg
     expect(replay).toContain('id: 2\n');
     expect(replay).toContain('"paths":["second.ts"]');
     expect(replay).not.toContain('"paths":["first.ts"]');
+  } finally {
+    await server.close();
+  }
+});
+
+it('seeds a fresh authenticated project event stream from a canonical query cursor', async () => {
+  const eventHub = new ProjectEventHub({ now: () => new Date('2026-08-14T12:00:00.000Z') });
+  eventHub.publish({
+    payload: { occurredAt: '2026-08-14T12:00:00.000Z', paths: ['first.ts'], reason: 'source-change' },
+    type: 'invalidation',
+  });
+  eventHub.publish({
+    payload: { occurredAt: '2026-08-14T12:00:01.000Z', paths: ['second.ts'], reason: 'source-change' },
+    type: 'invalidation',
+  });
+  const server = await startForegroundServer({ coordinator: new RecordingCoordinator(), eventHub, port: 0 });
+
+  try {
+    const replay = await readReplayAfter(server.url, '1');
+
+    expect(replay).toContain('id: 2\n');
+    expect(replay).not.toContain('id: 1\n');
   } finally {
     await server.close();
   }

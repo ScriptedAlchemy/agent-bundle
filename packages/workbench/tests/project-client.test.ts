@@ -339,6 +339,46 @@ it('drains the old instance before adopting a recovered foreground and opening a
   expect(secondStream.closed).toBe(true);
 });
 
+it('seeds a same-instance replacement event stream from the last acknowledged cursor', async () => {
+  const firstStream = new RecordingEventSource();
+  const secondStream = new RecordingEventSource();
+  const streams = [firstStream, secondStream];
+  const eventUrls: string[] = [];
+  let sessionRequests = 0;
+  const foreground = new ForegroundRouteClient({
+    fetch: async (input) => {
+      if (String(input) === '/api/project/session') {
+        sessionRequests += 1;
+        return Response.json({
+          ...foregroundSession,
+          token: `foreground-token-${String(sessionRequests)}`,
+        });
+      }
+      return Response.json({ status: status() });
+    },
+  });
+  const client = new ProjectClient({
+    events: (url) => {
+      eventUrls.push(url);
+      return streams.shift()!;
+    },
+    foreground,
+    retryDelay: async () => undefined,
+  });
+
+  await client.connect(() => undefined);
+  firstStream.emit('runtime.event', runtimeEvent(7));
+  await flushEvents();
+  expect(client.lastEventId).toBe(7);
+
+  firstStream.emit('error', { data: '', lastEventId: '' });
+  await flushEvents();
+  await flushEvents();
+
+  expect(eventUrls).toEqual(['/api/project/events', '/api/project/events?after=7']);
+  client.close();
+});
+
 it('delivers synchronous runtime events once in FIFO order and refreshes after an unexplained sequence gap', async () => {
   const stream = new RecordingEventSource();
   const requests: string[] = [];

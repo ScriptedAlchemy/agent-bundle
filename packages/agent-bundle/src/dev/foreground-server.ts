@@ -368,13 +368,18 @@ const eventFrame = (event: ProjectEventMessage): string => {
 
 const afterSequence = (request: IncomingMessage, latestSequence: number): number => {
   const header = singleHeader(request.headers['last-event-id']);
-  if (header === undefined || header.length === 0) return 0;
-  if (!/^(0|[1-9]\d*)$/u.test(header)) {
-    throw requestError(diagnostic('AB8006', 'Last-Event-ID must be a non-negative integer.', 400));
+  const queryValues = new URL(request.url ?? '/', 'http://foreground.invalid').searchParams.getAll('after');
+  if (queryValues.length > 1) {
+    throw requestError(diagnostic('AB8006', 'Project event cursor must be singular.', 400));
   }
-  const sequence = Number(header);
+  const cursor = header === undefined || header.length === 0 ? queryValues[0] : header;
+  if (cursor === undefined || cursor.length === 0) return 0;
+  if (!/^(0|[1-9]\d*)$/u.test(cursor)) {
+    throw requestError(diagnostic('AB8006', 'Project event cursor must be a non-negative integer.', 400));
+  }
+  const sequence = Number(cursor);
   if (!Number.isSafeInteger(sequence) || sequence > latestSequence) {
-    throw requestError(diagnostic('AB8006', 'Last-Event-ID must not be ahead of the project event stream.', 400));
+    throw requestError(diagnostic('AB8006', 'Project event cursor must not be ahead of the project event stream.', 400));
   }
   return sequence;
 };

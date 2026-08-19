@@ -298,9 +298,9 @@ const activityFor = (paths: readonly string[]): ProjectActivitySnapshot => Objec
 });
 
 /**
- * Browser-side transport for the W9 foreground routes. Native EventSource owns
- * reconnects and forwards its retained Last-Event-ID automatically; this client
- * only turns those events into fresh typed status snapshots.
+ * Browser-side transport for the W9 foreground routes. Native EventSource forwards
+ * its retained Last-Event-ID on transport reconnects; an app-level replacement seeds
+ * a fresh source from the last locally acknowledged cursor.
  */
 export class ProjectClient {
   readonly #beforeInstanceChange: () => Promise<void>;
@@ -475,7 +475,7 @@ export class ProjectClient {
         const status = await this.#readStatus();
         if (this.#closed || recoveryVersion !== this.#recoveryVersion) return;
         this.#listener?.(status);
-        const source = this.#events('/api/project/events');
+        const source = this.#events(this.#eventStreamUrl());
         if (this.#closed || recoveryVersion !== this.#recoveryVersion) { source.close(); return; }
         this.#eventSource = source;
         const version = Math.max(this.#eventSourceVersion + 1, disconnectedVersion + 1);
@@ -528,6 +528,12 @@ export class ProjectClient {
     for (const listener of this.#connectionListeners) {
       try { listener(this.#connection); } catch { /* observers cannot interrupt recovery */ }
     }
+  }
+
+  #eventStreamUrl(): string {
+    return this.#lastEventId === 0
+      ? '/api/project/events'
+      : `/api/project/events?after=${encodeURIComponent(String(this.#lastEventId))}`;
   }
 
   async #readStatus(): Promise<ProjectStatus> {

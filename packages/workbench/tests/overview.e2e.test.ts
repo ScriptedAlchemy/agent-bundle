@@ -830,7 +830,7 @@ e2e('restarts the real Runtime MCP App session when definition or transport auth
       const streamIndex = projectEventStreams.length;
       projectEventStreams.push(`${response.request().method()} ${url.pathname}`);
       void response.request().allHeaders().then((headers) => {
-        projectEventStreamCursors.set(streamIndex, headers['last-event-id'] ?? '');
+        projectEventStreamCursors.set(streamIndex, headers['last-event-id'] ?? url.searchParams.get('after') ?? '');
       }).catch(() => undefined);
     }
     if (url.origin !== fixture.url || response.request().method() !== 'POST' || url.pathname !== '/api/runtime/apps') return;
@@ -1051,7 +1051,7 @@ e2e('restarts the real Runtime MCP App session when definition or transport auth
     expect(projectEventStreamCursors.get(0)).toBe('');
     const reconnectCursor = projectEventStreamCursors.get(1);
     if (reconnectCursor === undefined || !/^(0|[1-9]\d*)$/u.test(reconnectCursor)) {
-      throw new Error('Native EventSource reconnect did not carry a canonical Last-Event-ID.');
+      throw new Error('Replacement EventSource did not carry a canonical replay cursor.');
     }
     await expect.poll(() => replayGaps.length, { timeout: 15_000 }).toBe(1);
     const replayGap = replayGaps[0];
