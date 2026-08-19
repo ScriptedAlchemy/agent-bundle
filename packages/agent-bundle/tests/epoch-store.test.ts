@@ -81,6 +81,64 @@ it('publishes a validated staging directory as the active immutable epoch', asyn
   }
 });
 
+it('persists one canonical versionless staging and epoch metadata shape', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent bundle canonical epoch storage '));
+  const epoch = epochFor(root, 'epoch-canonical');
+
+  try {
+    const store = new EpochStore({ projectRoot: root });
+    const staging = await store.createStagingEpoch({ epoch, targets: ['claude', 'codex'] });
+    const marker = JSON.parse(
+      await readFile(join(staging.root, '.agent-bundle-epoch-stage.json'), 'utf8'),
+    ) as unknown;
+    expect(marker).toEqual({ token: expect.any(String) });
+
+    await Promise.all([
+      mkdir(join(staging.root, 'claude'), { recursive: true }),
+      mkdir(join(staging.root, 'codex'), { recursive: true }),
+      writeFile(join(staging.root, 'agent-bundle.manifest.json'), '{}\n'),
+    ]);
+    await Promise.all([
+      writeFile(join(staging.root, 'claude', 'plugin.json'), 'claude\n'),
+      writeFile(join(staging.root, 'codex', 'plugin.json'), 'codex\n'),
+    ]);
+    await staging.publish(async () => undefined);
+
+    await expect(
+      readFile(epochMetadataPathFor(root, epoch.id), 'utf8').then((value) => JSON.parse(value)),
+    ).resolves.toEqual({ epoch });
+    await expect(
+      readFile(activeMetadataPathFor(root), 'utf8').then((value) => JSON.parse(value)),
+    ).resolves.toEqual({ epoch });
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it.each(['active', 'epoch'] as const)(
+  'rejects a version property added to the canonical %s metadata shape',
+  async (metadataKind) => {
+    const root = await mkdtemp(join(tmpdir(), 'agent bundle version metadata extra '));
+    const epoch = epochFor(root, 'epoch-version-extra');
+
+    try {
+      const store = new EpochStore({ projectRoot: root });
+      await publishEpoch(store, epoch);
+      const metadataPath = metadataKind === 'active'
+        ? activeMetadataPathFor(root)
+        : epochMetadataPathFor(root, epoch.id);
+      await writeFile(metadataPath, `${JSON.stringify({ epoch, version: 1 })}\n`);
+
+      const readMetadata = metadataKind === 'active'
+        ? store.readActiveEpoch()
+        : store.acquireEpochReference(epoch.id);
+      await expect(readMetadata).rejects.toMatchObject({ code: 'EPOCH_METADATA_INVALID' });
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  },
+);
+
 it.each(['marker removal', 'marker file sync', 'marker directory sync'] as const)(
   'does not activate a new epoch when %s fails and can retry from truth',
   async (failureKind) => {
@@ -356,7 +414,7 @@ it('shares final-release cleanup failure with concurrent close callers without r
     await publishEpoch(store, active);
     await writeFile(
       activeMetadataPathFor(root),
-      `${JSON.stringify({ epoch: epochFor(root, 'epoch-ghost'), version: 1 })}\n`,
+      `${JSON.stringify({ epoch: epochFor(root, 'epoch-ghost') })}\n`,
     );
 
     const outcomes = await Promise.allSettled([reference.close(), reference.close()]);
@@ -365,7 +423,7 @@ it('shares final-release cleanup failure with concurrent close callers without r
       expect.objectContaining({ status: 'rejected' }),
     ]);
 
-    await writeFile(activeMetadataPathFor(root), `${JSON.stringify({ epoch: active, version: 1 })}\n`);
+    await writeFile(activeMetadataPathFor(root), `${JSON.stringify({ epoch: active })}\n`);
     await store.cleanup();
     await expect(
       readFile(join(root, '.agent-bundle', 'epochs', 'epoch-1', 'claude', 'plugin.json'), 'utf8'),
@@ -746,7 +804,7 @@ it('fails closed when active metadata points at a ghost epoch and leaves cleanup
     const persisted = epochFor(root, 'epoch-1', undefined, { claude: 'claude-digest' });
     await publishEpoch(store, persisted);
     const ghost = epochFor(root, 'epoch-ghost', undefined, { claude: 'claude-digest' });
-    await writeFile(activeMetadataPathFor(root), `${JSON.stringify({ epoch: ghost, version: 1 })}\n`);
+    await writeFile(activeMetadataPathFor(root), `${JSON.stringify({ epoch: ghost })}\n`);
 
     await expect(store.readActiveEpoch()).rejects.toMatchObject({ code: 'EPOCH_METADATA_INVALID' });
     await expect(store.cleanup()).rejects.toMatchObject({ code: 'EPOCH_METADATA_INVALID' });
@@ -769,10 +827,10 @@ it('fails closed when active metadata differs from its epoch metadata or targets
       ...epoch,
       targetDigests: { claude: 'different-digest', codex: 'codex-digest' },
     };
-    await writeFile(activeMetadataPathFor(root), `${JSON.stringify({ epoch: mismatched, version: 1 })}\n`);
+    await writeFile(activeMetadataPathFor(root), `${JSON.stringify({ epoch: mismatched })}\n`);
 
     await expect(store.readActiveEpoch()).rejects.toMatchObject({ code: 'EPOCH_METADATA_INVALID' });
-    await writeFile(activeMetadataPathFor(root), `${JSON.stringify({ epoch, version: 1 })}\n`);
+    await writeFile(activeMetadataPathFor(root), `${JSON.stringify({ epoch })}\n`);
     await rm(join(root, '.agent-bundle', 'epochs', 'epoch-1', 'codex'), { force: true, recursive: true });
     await expect(store.cleanup()).rejects.toMatchObject({ code: 'EPOCH_METADATA_INVALID' });
     await expect(readFile(epochMetadataPathFor(root, 'epoch-1'), 'utf8')).resolves.toContain('epoch-1');
@@ -789,7 +847,7 @@ it('fails closed when matching active metadata gives its manifest an outside pat
     const epoch = epochFor(root, 'epoch-1', undefined, { claude: 'claude-digest' });
     await publishEpoch(store, epoch);
     const escaping = { ...epoch, manifestPath: join(root, 'outside.manifest.json') };
-    const metadata = `${JSON.stringify({ epoch: escaping, version: 1 })}\n`;
+    const metadata = `${JSON.stringify({ epoch: escaping })}\n`;
     await Promise.all([
       writeFile(activeMetadataPathFor(root), metadata),
       writeFile(epochMetadataPathFor(root, 'epoch-1'), metadata),
@@ -810,10 +868,10 @@ it('continues processing later state transitions after a failed cleanup', async 
     const epoch = epochFor(root, 'epoch-1', undefined, { claude: 'claude-digest' });
     await publishEpoch(store, epoch);
     const ghost = epochFor(root, 'epoch-ghost', undefined, { claude: 'claude-digest' });
-    await writeFile(activeMetadataPathFor(root), `${JSON.stringify({ epoch: ghost, version: 1 })}\n`);
+    await writeFile(activeMetadataPathFor(root), `${JSON.stringify({ epoch: ghost })}\n`);
 
     await expect(store.cleanup()).rejects.toMatchObject({ code: 'EPOCH_METADATA_INVALID' });
-    await writeFile(activeMetadataPathFor(root), `${JSON.stringify({ epoch, version: 1 })}\n`);
+    await writeFile(activeMetadataPathFor(root), `${JSON.stringify({ epoch })}\n`);
     await expect(store.cleanup()).resolves.toBeUndefined();
     await expect(store.readActiveEpoch()).resolves.toEqual(epoch);
   } finally {

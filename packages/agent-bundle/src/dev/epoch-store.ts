@@ -84,7 +84,6 @@ export class EpochStoreError extends Error {
 
 interface EpochMetadata {
   readonly epoch: ArtifactEpoch;
-  readonly version: 1;
 }
 
 interface StagingRecord {
@@ -293,7 +292,7 @@ export class EpochStore {
       await mkdir(this.#epochsPath, { recursive: true });
       const root = await mkdtemp(join(this.#epochsPath, stagingPrefix));
       const metadata = await lstat(root);
-      const markerContents = `${stableJson({ token: randomUUID(), version: 1 })}\n`;
+      const markerContents = `${stableJson({ token: randomUUID() })}\n`;
       await writeFile(join(root, stagingMarkerFileName), markerContents, 'utf8');
       const token = Symbol('epoch-staging');
       this.#staging.set(token, {
@@ -744,11 +743,11 @@ export class EpochStore {
   }
 
   async #writeEpochMetadata(epoch: ArtifactEpoch): Promise<void> {
-    await this.#writeJsonAtomically(this.#metadataPathFor(epoch.id), { epoch, version: 1 });
+    await this.#writeJsonAtomically(this.#metadataPathFor(epoch.id), { epoch });
   }
 
   async #writeActiveMetadata(epoch: ArtifactEpoch): Promise<void> {
-    await this.#writeJsonAtomically(this.#activeEpochPath, { epoch, version: 1 });
+    await this.#writeJsonAtomically(this.#activeEpochPath, { epoch });
   }
 
   async #writeJsonAtomically(path: string, value: EpochMetadata): Promise<void> {
@@ -767,9 +766,11 @@ export class EpochStore {
 
   #parseMetadata(value: unknown): EpochMetadata | undefined {
     if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
+    const keys = Object.keys(value);
+    if (keys.length !== 1 || keys[0] !== 'epoch') return undefined;
     const metadata = value as Partial<EpochMetadata>;
     const epoch = normalizeEpoch(metadata.epoch);
-    return metadata.version === 1 && epoch !== undefined ? Object.freeze({ epoch, version: 1 }) : undefined;
+    return epoch === undefined ? undefined : Object.freeze({ epoch });
   }
 
   async #readEpochMetadata(epochId: string): Promise<EpochMetadata> {
