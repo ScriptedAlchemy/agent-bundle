@@ -17,8 +17,9 @@ import {
 import { toNodeHandler, type NodeMcpRequestHandler } from '@modelcontextprotocol/node';
 
 import { stableJson } from '../core/digest.ts';
-import { snapshotStrictJsonValue } from '../core/strict-json.ts';
+import { parseJsonWithoutDuplicateKeys, snapshotStrictJsonValue } from '../core/strict-json.ts';
 import type { EvalService } from './eval-service.ts';
+import { runtimeAppFiniteOrdinaryJsonByteLength } from './runtime-app-message-limits.ts';
 import type { ProjectStatus } from './types.ts';
 
 export const agentApiToolNames = Object.freeze([
@@ -121,9 +122,11 @@ const objectSchema = (
 ) => fromJsonSchema({ additionalProperties: false, properties, required: [...required], type: 'object' });
 
 const noArguments = objectSchema({});
-const epochArgument = { minLength: 1, type: 'string' };
-const targetArgument = { minLength: 1, type: 'string' };
-const identifierArgument = { minLength: 1, type: 'string' };
+const maximumArgumentItems = 256;
+const maximumIdentifierLength = 128;
+const epochArgument = { maxLength: maximumIdentifierLength, minLength: 1, type: 'string' };
+const targetArgument = { maxLength: maximumIdentifierLength, minLength: 1, type: 'string' };
+const identifierArgument = { maxLength: maximumIdentifierLength, minLength: 1, type: 'string' };
 
 const skillListSchema = objectSchema({ epoch: epochArgument, target: targetArgument }, ['target']);
 const skillInspectSchema = objectSchema({ epoch: epochArgument, skill_id: identifierArgument, target: targetArgument }, ['skill_id', 'target']);
@@ -144,9 +147,9 @@ const hookSimulateSchema = objectSchema({
   target: targetArgument,
 }, ['hook', 'input', 'target']);
 const evalRunSchema = objectSchema({
-  case_ids: { items: identifierArgument, type: 'array' },
+  case_ids: { items: identifierArgument, maxItems: maximumArgumentItems, type: 'array', uniqueItems: true },
   epoch: epochArgument,
-  suites: { items: identifierArgument, type: 'array' },
+  suites: { items: identifierArgument, maxItems: maximumArgumentItems, type: 'array', uniqueItems: true },
   trials: { maximum: 100, minimum: 1, type: 'integer' },
 });
 const evalGetSchema = objectSchema({ run_id: identifierArgument }, ['run_id']);
@@ -223,6 +226,71 @@ const stableErrorCodes = new Set([
   'EVAL_TRIALS_INVALID',
 ] as const);
 
+const maximumAgentApiRequestBytes = 64 * 1_024;
+const maximumAgentApiJsonDepth = 32;
+const maximumAgentApiJsonNodes = 4_096;
+const maximumAgentApiToolResultBytes = 1_024 * 1_024;
+
+class AgentApiRequestError extends Error {
+  readonly code: 'AGENT_API_REQUEST_INVALID' | 'AGENT_API_REQUEST_TOO_LARGE';
+  readonly status: 400 | 413;
+
+  constructor(code: AgentApiRequestError['code'], message: string, status: AgentApiRequestError['status']) {
+    super(message);
+    this.name = 'AgentApiRequestError';
+    this.code = code;
+    this.status = status;
+  }
+}
+
+const readAgentApiRequest = async (request: IncomingMessage): Promise<unknown> => new Promise((resolvePromise, rejectPromise) => {
+  let bytes = 0;
+  let settled = false;
+  const chunks: Buffer[] = [];
+  const reject = (error: unknown): void => {
+    if (settled) return;
+    settled = true;
+    chunks.length = 0;
+    rejectPromise(error);
+  };
+  request.on('data', (chunk: Buffer) => {
+    if (settled) return;
+    bytes += chunk.length;
+    if (bytes > maximumAgentApiRequestBytes) {
+      request.resume();
+      reject(new AgentApiRequestError('AGENT_API_REQUEST_TOO_LARGE', 'Agent API request exceeds 64 KiB.', 413));
+      return;
+    }
+    chunks.push(chunk);
+  });
+  request.once('error', reject);
+  request.once('end', () => {
+    if (settled) return;
+    try {
+      const body = new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks));
+      const parsed = parseJsonWithoutDuplicateKeys(body);
+      if (runtimeAppFiniteOrdinaryJsonByteLength(parsed, {
+        maximumBytes: maximumAgentApiRequestBytes,
+        maximumDepth: maximumAgentApiJsonDepth,
+        maximumNodes: maximumAgentApiJsonNodes,
+      }) === undefined) {
+        throw new AgentApiRequestError('AGENT_API_REQUEST_INVALID', 'Agent API request must contain bounded JSON.', 400);
+      }
+      settled = true;
+      resolvePromise(parsed);
+    } catch (error) {
+      reject(error instanceof AgentApiRequestError
+        ? error
+        : new AgentApiRequestError('AGENT_API_REQUEST_INVALID', 'Agent API request is not valid JSON.', 400));
+    }
+  });
+});
+
+const writeAgentApiRequestError = (response: ServerResponse, error: AgentApiRequestError): void => {
+  response.writeHead(error.status, { 'content-type': 'application/json; charset=utf-8' });
+  response.end(stableJson({ error: { code: error.code, message: error.message } }));
+};
+
 /** Reads only an own data descriptor: hostile accessors and Proxy traps are never evaluated. */
 const ownDataProperty = (value: unknown, key: string): unknown => {
   if (typeof value !== 'object' || value === null) return undefined;
@@ -287,6 +355,11 @@ const hasControlCharacter = (value: string): boolean => {
 
 const snapshotValue = (value: unknown): unknown => {
   try {
+    if (runtimeAppFiniteOrdinaryJsonByteLength(value, {
+      maximumBytes: maximumAgentApiToolResultBytes,
+      maximumDepth: maximumAgentApiJsonDepth,
+      maximumNodes: maximumAgentApiJsonNodes,
+    }) === undefined) return undefined;
     return snapshotStrictJsonValue(value);
   } catch {
     return undefined;
@@ -508,7 +581,10 @@ const diagnosticsListWireDto = (value: unknown): readonly AgentApiDiagnostic[] =
 };
 
 const safeToolResult = (value: unknown) => {
-  const snapshot = snapshotStrictJsonValue(value === undefined ? null : value);
+  const snapshot = snapshotValue(value === undefined ? null : value);
+  if (snapshot === undefined) {
+    throw apiError('AGENT_API_OPERATION_FAILED', 'Tool result exceeds the Agent API JSON limit.');
+  }
   const structured = snapshot !== null && typeof snapshot === 'object' && !Array.isArray(snapshot)
     ? snapshot
     : Object.freeze({ value: snapshot });
@@ -621,7 +697,19 @@ export class AgentApi {
     const authorized = request as IncomingMessage & { auth?: AuthInfo };
     authorized.auth = auth;
     try {
-      await this.#nodeHandler(authorized, response);
+      let parsedBody: unknown;
+      if (request.method === 'POST') {
+        try {
+          parsedBody = await readAgentApiRequest(request);
+        } catch (error) {
+          if (error instanceof AgentApiRequestError) {
+            writeAgentApiRequestError(response, error);
+            return;
+          }
+          throw error;
+        }
+      }
+      await this.#nodeHandler(authorized, response, parsedBody);
     } finally {
       delete authorized.auth;
     }

@@ -156,6 +156,18 @@ it('uses the official stateless MCP handler to expose the fixed ordered tool set
     expect(listed.tools.map((tool) => tool.inputSchema.additionalProperties)).toEqual(
       agentApiToolNames.map(() => false),
     );
+    expect(listed.tools.find((tool) => tool.name === 'skill_inspect')?.inputSchema).toMatchObject({
+      properties: {
+        skill_id: { maxLength: 128 },
+        target: { maxLength: 128 },
+      },
+    });
+    expect(listed.tools.find((tool) => tool.name === 'eval_run')?.inputSchema).toMatchObject({
+      properties: {
+        case_ids: { maxItems: 256 },
+        suites: { maxItems: 256 },
+      },
+    });
     expect(status.structuredContent).toEqual({ status: projectStatus() });
     expect(status.content).toEqual([{
       text: '{"status":{"artifact":{"state":"missing"},"build":{"state":"idle"},"source":{"diagnostics":[],"state":"unknown"}}}',
@@ -1092,6 +1104,86 @@ it('rejects a missing or changed bearer token without disclosing it', async () =
     expect(changed.status).toBe(401);
     await expect(changed.text()).resolves.not.toContain('changed-token');
   } finally {
+    await started.close();
+  }
+});
+
+it('bounds authenticated MCP request bytes and JSON structure before dispatch', async () => {
+  let openedSessions = 0;
+  const api = createApi({
+    mcpSessions: {
+      open: async () => {
+        openedSessions += 1;
+        return {
+          callTool: async () => ({ content: [{ text: 'ok', type: 'text' }] }),
+          close: async () => undefined,
+          initialize: async () => ({ capabilities: {}, server: { name: 'fixture', version: '1.0.0' } }),
+        };
+      },
+    },
+  });
+  const started = await startApi({ api });
+  const headers = {
+    accept: 'application/json, text/event-stream',
+    authorization: 'Bearer test-agent-api-token',
+    'content-type': 'application/json',
+    'mcp-protocol-version': '2025-06-18',
+  };
+  const request = (input: unknown): string => JSON.stringify({
+    id: 1,
+    jsonrpc: '2.0',
+    method: 'tools/call',
+    params: {
+      arguments: { arguments: input, server: 'fixture', target: 'portable', tool: 'inspect' },
+      name: 'mcp_invoke',
+    },
+  });
+  let deep: unknown = null;
+  for (let depth = 0; depth < 40; depth += 1) deep = { value: deep };
+  try {
+    const oversized = await fetch(`${started.url}/mcp`, {
+      body: request({ value: 'x'.repeat(65 * 1_024) }),
+      headers,
+      method: 'POST',
+    });
+    const overdeep = await fetch(`${started.url}/mcp`, {
+      body: request(deep),
+      headers,
+      method: 'POST',
+    });
+
+    expect(oversized.status).toBe(413);
+    expect(overdeep.status).toBe(400);
+    expect(openedSessions).toBe(0);
+  } finally {
+    await started.close();
+  }
+});
+
+it('turns oversized tool output into one bounded stable failure', async () => {
+  const api = createApi({
+    artifacts: { inspect: async () => ({ value: 'x'.repeat(1_024 * 1_024 + 1) }) },
+  });
+  const started = await startApi({ api });
+  const client = new Client({ name: 'agent-api-output-limit-client', version: '1.0.0' });
+  const transport = new StreamableHTTPClientTransport(new URL(`${started.url}/mcp`), {
+    authProvider: { token: async () => 'test-agent-api-token' },
+  });
+  try {
+    await client.connect(transport);
+    const result = await client.callTool({ name: 'artifact_inspect' });
+    expect(result).toMatchObject({
+      isError: true,
+      structuredContent: {
+        error: {
+          code: 'AGENT_API_OPERATION_FAILED',
+          message: 'The requested operation could not be completed.',
+        },
+      },
+    });
+    expect(stableJson(result.structuredContent as never).length).toBeLessThan(1_024);
+  } finally {
+    await client.close();
     await started.close();
   }
 });
