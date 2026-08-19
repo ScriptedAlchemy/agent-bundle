@@ -1,5 +1,5 @@
 import { constants as fsConstants } from 'node:fs';
-import { link, lstat, mkdir, mkdtemp, open, realpath, rm } from 'node:fs/promises';
+import { link, lstat, mkdir, mkdtemp, open, realpath, rename, rm } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 
 import { digest, stableJson } from '../core/digest.ts';
@@ -111,6 +111,7 @@ export interface NativePlaygroundCatalogStorage {
   readonly link: typeof link;
   readonly mkdir: typeof mkdir;
   readonly open: typeof open;
+  readonly rename: typeof rename;
   readonly remove: typeof rm;
 }
 
@@ -619,7 +620,7 @@ export class NativePlaygroundService {
 
   constructor(options: NativePlaygroundServiceOptions) {
     this.#catalogDirectory = options.catalogDirectory;
-    this.#catalogStorage = options.catalogStorage ?? Object.freeze({ link, mkdir, open, remove: rm });
+    this.#catalogStorage = options.catalogStorage ?? Object.freeze({ link, mkdir, open, rename, remove: rm });
     this.#projectRoot = options.projectRoot;
     this.#environment = options.environment;
     this.#native = options.native;
@@ -1113,7 +1114,26 @@ export class NativePlaygroundService {
         if (!created) return;
         const current = await this.#readSidecar(path);
         if (current === undefined || current.identity !== identity) return;
-        await this.#catalogStorage.remove(path, { force: true });
+        const directory = dirname(path);
+        const quarantine = join(directory, `.rollback-${process.pid}-${Math.random().toString(16).slice(2)}`);
+        try { await this.#catalogStorage.rename(path, quarantine); }
+        catch (error) {
+          if (isErrno(error, 'ENOENT')) return;
+          throw error;
+        }
+        const moved = await this.#readSidecar(quarantine);
+        if (moved === undefined) throw new Error('Native Playground catalog rollback lost its quarantined sidecar.');
+        if (moved.identity !== identity) {
+          try { await this.#catalogStorage.link(quarantine, path); }
+          catch (error) {
+            if (isErrno(error, 'EEXIST')) {
+              throw new Error('Native Playground catalog changed during rollback; the raced replacement remains quarantined.', { cause: error });
+            }
+            throw error;
+          }
+        }
+        await this.#catalogStorage.remove(quarantine, { force: true });
+        await this.#syncCatalogDirectory(directory);
       },
     });
   }

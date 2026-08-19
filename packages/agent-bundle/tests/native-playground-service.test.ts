@@ -1,4 +1,4 @@
-import { link, mkdir, mkdtemp, open, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { link, mkdir, mkdtemp, open, readFile, readdir, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -459,6 +459,7 @@ it('fsyncs durable catalog publication, validates a no-replace winner, and retai
           },
         });
       },
+      rename,
       remove: async (path, options) => {
         if (removeFailure !== undefined && String(path).includes('.stage-')) throw removeFailure;
         await rm(path, options);
@@ -480,7 +481,11 @@ it('fsyncs durable catalog publication, validates a no-replace winner, and retai
     for (const failure of ['write', 'file', 'link', 'directory'] as const) {
       await rm(catalogDirectory, { force: true, recursive: true });
       const service = serviceFor(failure);
-      await expect(service.catalog(reference)).rejects.toThrow(failures.get(failure)!.message);
+      if (failure === 'directory') {
+        await expect(service.catalog(reference)).rejects.toMatchObject({ errors: [failures.get(failure), failures.get(failure)] });
+      } else {
+        await expect(service.catalog(reference)).rejects.toThrow(failures.get(failure)!.message);
+      }
       expect((await readdir(catalogDirectory)).filter((name) => name.includes('.stage-'))).toEqual([]);
       await service.close();
     }
@@ -528,6 +533,7 @@ it('tolerates only Windows directory fsync capability failures during catalog pu
           },
         });
       },
+      rename,
       remove: rm,
     };
     return new NativePlaygroundService({
@@ -551,11 +557,75 @@ it('tolerates only Windows directory fsync capability failures during catalog pu
     }
     await rm(catalogDirectory, { force: true, recursive: true });
     const service = serviceFor('EPERM');
-    await expect(service.catalog(epoch('epoch-eperm', join(root, 'EPERM')))).rejects.toThrow('EPERM directory sync');
+    await expect(service.catalog(epoch('epoch-eperm', join(root, 'EPERM')))).rejects.toMatchObject({
+      errors: [expect.objectContaining({ code: 'EPERM' }), expect.objectContaining({ code: 'EPERM' })],
+    });
     await service.close();
   } finally {
     if (previousPlatform === undefined) delete runtime[nativeCatalogDurabilityPlatformKey];
     else runtime[nativeCatalogDurabilityPlatformKey] = previousPlatform;
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('preserves a catalog replacement raced into rollback and fsyncs the parent after cleanup', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-native-playground-rollback-race-'));
+  const catalogDirectory = join(root, 'catalog');
+  const reference = epoch('epoch-rollback-race', join(root, 'artifact'));
+  const sidecar = join(catalogDirectory, 'epoch-rollback-race.json');
+  const replacement = '{"replacement":true}\n';
+  let directorySyncs = 0;
+  let injectReplacement = false;
+  let replacementInjected = false;
+  const replaceSidecar = async (): Promise<void> => {
+    if (!injectReplacement || replacementInjected) return;
+    replacementInjected = true;
+    const replacementPath = join(catalogDirectory, '.replacement');
+    await writeFile(replacementPath, replacement);
+    await rename(replacementPath, sidecar);
+  };
+  const storage = {
+    link,
+    mkdir,
+    open: async (path: Parameters<typeof open>[0], flags: Parameters<typeof open>[1], mode?: Parameters<typeof open>[2]) => {
+      const handle = await open(path, flags, mode);
+      if (String(path) !== catalogDirectory) return handle;
+      return new Proxy(handle, {
+        get(target, property) {
+          if (property === 'sync') return async () => { directorySyncs += 1; await target.sync(); };
+          const value = Reflect.get(target, property, target);
+          return typeof value === 'function' ? value.bind(target) : value;
+        },
+      });
+    },
+    remove: async (path: Parameters<typeof rm>[0], options: Parameters<typeof rm>[1]) => {
+      if (String(path) === sidecar) await replaceSidecar();
+      await rm(path, options);
+    },
+    rename: async (oldPath: Parameters<typeof rename>[0], newPath: Parameters<typeof rename>[1]) => {
+      if (String(oldPath) === sidecar) await replaceSidecar();
+      await rename(oldPath, newPath);
+    },
+  } as NativePlaygroundCatalogStorage & { readonly rename: typeof rename };
+  try {
+    const service = new NativePlaygroundService({
+      catalogDirectory,
+      catalogStorage: storage,
+      discover: async () => Object.freeze([]),
+      inspectArtifact: async (candidate) => Object.freeze({
+        binding: Object.freeze({ manifestPath: 'agent-bundle.manifest.json', source: 'explicit' as const, targetDigests: candidate.epoch.targetDigests }),
+        root: candidate.root,
+      }),
+      projectRoot: root,
+    });
+    const receipt = await service.publishCatalogSnapshot(reference);
+    const publicationSyncs = directorySyncs;
+    injectReplacement = true;
+    await receipt.rollback();
+    expect(await readFile(sidecar, 'utf8')).toBe(replacement);
+    expect(directorySyncs).toBe(publicationSyncs + 1);
+    await service.close();
+  } finally {
     await rm(root, { force: true, recursive: true });
   }
 });
