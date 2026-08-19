@@ -283,6 +283,17 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
     }
   }
 
+  for (const asset of model.assets ?? []) {
+    if (!hasPortableTarget(asset.targets)) continue;
+    entries.push({
+      bytes: asset.bytes,
+      kind: 'copy',
+      relativePath: `assets/${asset.relativePath}`,
+      source: asset.source,
+      sourceInputs: sourceInputs(asset.source),
+    });
+  }
+
   const servers: Record<string, Record<string, unknown>> = Object.create(null) as Record<
     string,
     Record<string, unknown>
@@ -322,6 +333,7 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
 export const portableAdapter: TargetAdapter = Object.freeze({
   artifactValidation,
   artifactLayout: Object.freeze({
+    assets: 'assets',
     mcpApps: Object.freeze({ allowedSuffixes: Object.freeze(['.html']), directory: 'mcp-apps' }),
     mcpEntries: Object.freeze({ allowedSuffixes: Object.freeze(['.mjs']), directory: 'mcp' }),
     scripts: Object.freeze({ allowedSuffixes: Object.freeze(['.bash', '.mjs', '.py', '.sh']), directory: 'scripts' }),

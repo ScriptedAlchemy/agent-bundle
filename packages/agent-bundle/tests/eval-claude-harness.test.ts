@@ -509,14 +509,14 @@ it('runs one server-owned configured semantic Claude grader after deterministic 
             : {
               exitCode: 0,
               stderr: 'semantic notice\n',
-              stdout: '{"type":"result","subtype":"success","result":"{\\"schemaVersion\\":1,\\"outcome\\":\\"pass\\",\\"detail\\":\\"The response satisfies the task.\\"}"}\n',
+              stdout: '{"type":"result","subtype":"success","result":"{\\"outcome\\":\\"pass\\",\\"detail\\":\\"The response satisfies the task.\\"}"}\n',
             },
     });
 
     expect(trial.provenance?.semanticGrader).toEqual({
+      contractRevision: 'v1',
       id: 'claude-semantic',
       model: 'claude-opus-4-6',
-      schemaVersion: 1,
     });
 
     expect(recorded).toHaveLength(4);
@@ -570,7 +570,7 @@ it('contains a malformed configured semantic grader as a path-free inconclusive 
             : {
               exitCode: 0,
               stderr: context.root,
-              stdout: '{"type":"result","subtype":"success","result":"```json\\n{\\"schemaVersion\\":1,\\"outcome\\":\\"pass\\",\\"detail\\":\\"nope\\"}\\n```"}\n',
+              stdout: '{"type":"result","subtype":"success","result":"```json\\n{\\"outcome\\":\\"pass\\",\\"detail\\":\\"nope\\"}\\n```"}\n',
             },
     });
 
@@ -588,8 +588,8 @@ it('contains a malformed configured semantic grader as a path-free inconclusive 
 }, 240_000);
 
 it('requires exactly one terminal strict result envelope from configured semantic grading', async () => {
-  const validResult = JSON.stringify({ detail: 'valid', outcome: 'pass', schemaVersion: 1 });
-  const invalidResult = JSON.stringify({ detail: 'invalid', outcome: 'maybe', schemaVersion: 1 });
+  const validResult = JSON.stringify({ detail: 'valid', outcome: 'pass' });
+  const invalidResult = JSON.stringify({ detail: 'invalid', outcome: 'maybe' });
   const valid = JSON.stringify({ result: validResult, subtype: 'success', type: 'result' });
   const invalid = JSON.stringify({ result: invalidResult, subtype: 'success', type: 'result' });
   const assistantOnly = JSON.stringify({

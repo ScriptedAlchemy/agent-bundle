@@ -99,8 +99,8 @@ export type {
   RunClaudeTrialOptions,
 } from './claude-harness.ts';
 export {
+  claudeSemanticGraderContractRevision,
   claudeSemanticGraderId,
-  claudeSemanticGraderSchemaVersion,
   parseClaudeSemanticGraderResult,
   parseClaudeSemanticGraderStream,
   runClaudeSemanticGrader,

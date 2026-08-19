@@ -29,6 +29,7 @@ import type {
 } from './types.ts';
 
 const caseKeys = Object.freeze(['assertions', 'digest', 'fixture', 'hosts', 'id', 'invocation', 'prompt', 'trials']);
+const draftKeys = Object.freeze(['assertions', 'epoch', 'fixture', 'invocation', 'outcome', 'target', 'task']);
 const fixtureKeys = Object.freeze(['git', 'include', 'path']);
 const hostKeys = Object.freeze(['model']);
 const invocationKeys = Object.freeze(['mode', 'skill']);
@@ -297,7 +298,7 @@ const draftInvocation = (draft: DraftEvalCase): EvalInvocation => {
 };
 
 /**
- * Converts the frozen W17 draft shape. The recorded durable outcome is intentionally
+ * Converts the frozen Playground draft shape. The recorded durable outcome is intentionally
  * discarded so a promoted prompt can never carry a reference answer.
  */
 export const evalCaseFromDraft = (
@@ -305,7 +306,7 @@ export const evalCaseFromDraft = (
   options: EvalDraftConversionOptions,
 ): EvalDraftConversion => {
   if (!isRecord(draft)) throw draftError('A draft eval case must be a plain object.');
-  if (draft.schemaVersion !== 1) throw draftError('Only draft eval case schema version 1 is supported.');
+  requireExactKeys(draft, 'EVAL_DRAFT_INVALID', 'Draft eval case', draftKeys);
   const task = draft.task;
   if (!isRecord(task) || typeof task.text !== 'string') {
     throw draftError('A draft eval case must record a task with prompt text.');
@@ -324,7 +325,6 @@ export const evalCaseFromDraft = (
     provenance: Object.freeze({
       epoch: Object.freeze({ digest: draft.epoch.digest, id: draft.epoch.id }),
       fixtureDigest: draft.fixture.digest,
-      schemaVersion: 1,
       target: Object.freeze({
         ...(draft.target.digest === undefined ? {} : { digest: draft.target.digest }),
         name: draft.target.name,

@@ -137,7 +137,6 @@ class RecordingTraceStore implements PlaygroundDurableTraceStore {
         sequence: index + 1,
         timestamp: '2026-08-18T00:00:01.000Z',
       }))),
-      schemaVersion: 1,
       session,
     });
   }
@@ -146,7 +145,7 @@ class RecordingTraceStore implements PlaygroundDurableTraceStore {
     this.promoted.push([...assertions]);
     const session = this.#session;
     if (session?.outcome === undefined) throw new Error('Expected a finalized session.');
-    return Object.freeze({ ...session.identity, assertions, outcome: session.outcome, schemaVersion: 1 });
+    return Object.freeze({ ...session.identity, assertions, outcome: session.outcome });
   }
 
   async close(): Promise<void> {
@@ -1083,7 +1082,7 @@ it('promotes only persisted raw event references and closes admission before dra
   await service.run({ operation: 'skill.inspect', skillId: 'skill:review', target: 'codex' });
   await eventually(() => expect(trace.finalized).toEqual({ status: 'passed' }));
 
-  await expect(service.promoteToDraftEval('session-server-owned', ['events.jsonl#2'])).resolves.toMatchObject({ schemaVersion: 1 });
+  await expect(service.promoteToDraftEval('session-server-owned', ['events.jsonl#2'])).resolves.not.toHaveProperty('schemaVersion');
   expect(trace.promoted).toEqual([[{
     evidence: { rawEventRef: 'events.jsonl#2' },
     expectation: { kind: 'skill.inspected', source: 'skill-evidence' },

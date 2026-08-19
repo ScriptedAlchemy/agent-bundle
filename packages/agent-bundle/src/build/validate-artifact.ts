@@ -1133,6 +1133,12 @@ const isSkillArtifactPath = (relativePath: string, skills: string | undefined): 
   return layout === skills && name !== undefined && resource !== undefined;
 };
 
+const isRecursiveLayoutPath = (relativePath: string, directory: string | undefined): boolean => {
+  if (directory === undefined) return false;
+  const [layout, ...segments] = relativePath.split('/');
+  return layout === directory && segments.length > 0 && segments.every((segment) => segment.length > 0);
+};
+
 const isTargetArtifactPath = (
   path: string,
   target: string,
@@ -1145,7 +1151,8 @@ const isTargetArtifactPath = (
   const layout = registry.artifactLayout(target);
   const hookContract = registry.hookContract(target);
   const mcpRuntime = registry.mcpRuntime(target);
-  return isDirectLayoutPath(relativePath, layout.hookWrappers) ||
+  return isRecursiveLayoutPath(relativePath, layout.assets) ||
+    isDirectLayoutPath(relativePath, layout.hookWrappers) ||
     isDirectLayoutPath(relativePath, layout.mcpApps) ||
     isDirectLayoutPath(relativePath, layout.mcpEntries) ||
     isDirectLayoutPath(relativePath, layout.scripts) ||

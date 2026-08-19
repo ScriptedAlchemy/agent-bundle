@@ -463,8 +463,9 @@ const Overview = ({ changedFiles, client, connectionError, onNavigate, runtimeAv
   );
 };
 
-const SkillsScreen = ({ connectionError, onNavigate, runtimeAvailable = false, runtimeDiagnostic, skillClient, status }: {
+const SkillsScreen = ({ connectionError, evalClient, onNavigate, runtimeAvailable = false, runtimeDiagnostic, skillClient, status }: {
   readonly connectionError?: string;
+  readonly evalClient: EvalClient;
   readonly onNavigate: (page: WorkbenchPage) => void;
   readonly runtimeAvailable?: boolean;
   readonly runtimeDiagnostic?: string;
@@ -480,7 +481,7 @@ const SkillsScreen = ({ connectionError, onNavigate, runtimeAvailable = false, r
         <span aria-hidden="true" />{connectionError === undefined ? 'Foreground server connected' : `Foreground server unavailable: ${connectionError}`}
       </span>
     </header>
-    <SkillsPage client={skillClient} status={status} />
+    <SkillsPage client={skillClient} evalClient={evalClient} status={status} />
   </main>
 </div>;
 
@@ -1294,7 +1295,7 @@ const Workbench = () => {
       />;
     }
     return page === 'skills'
-      ? <SkillsScreen connectionError={connectionError} onNavigate={navigate} runtimeAvailable={runtimeAvailable} runtimeDiagnostic={runtimeError} skillClient={skillClient.current} status={status} />
+      ? <SkillsScreen connectionError={connectionError} evalClient={evalClient.current} onNavigate={navigate} runtimeAvailable={runtimeAvailable} runtimeDiagnostic={runtimeError} skillClient={skillClient.current} status={status} />
       : <Overview changedFiles={changedFiles} client={client.current} connectionError={connectionError} onNavigate={navigate} onStatus={setStatus} runtimeAvailable={runtimeAvailable} runtimeDiagnostic={runtimeError} status={status} />;
   }
   return <main className="loading-state" aria-live="polite"><strong>Loading project state…</strong>{error === undefined ? undefined : <p role="alert">{error}</p>}{runtimeError === undefined ? undefined : <p className="runtime-capability-error">Runtime capability issue: {runtimeError}</p>}</main>;

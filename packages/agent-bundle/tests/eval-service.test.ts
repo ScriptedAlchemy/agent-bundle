@@ -73,6 +73,8 @@ it('lists authored suites and their cases without exposing absolute filesystem p
     expect(suite.cases.map((entry) => entry.id)).toEqual(['inconclusive-activation', 'reads-result', 'wrong-result']);
     expect(suite.cases[1]).toMatchObject({ hosts: ['portable'], trials: 1 });
     expect(suite.cases[1]?.assertions.map((entry) => entry.kind)).toEqual(['outcome']);
+    expect(suite.cases[0]?.assertions[0]).toMatchObject({ kind: 'skill-activation', skill: 'review' });
+    expect(suite.cases[1]?.assertions[0]).not.toHaveProperty('skill');
     expect(Object.isFrozen(listing.suites)).toBe(true);
   } finally {
     await removeProjectFixture(project.root);
@@ -627,7 +629,6 @@ it('runs a playground draft promoted into typed suite material', async () => {
       fixture: { digest: 'b'.repeat(64), id: 'repo' },
       invocation: { intent: { mode: 'automatic' }, kind: 'automatic' },
       outcome: { response: 'The recorded answer is deliberately dropped.', status: 'completed' },
-      schemaVersion: 1,
       target: { name: 'portable' },
       task: { id: 'promoted-case', text: 'Report the highest-risk regression.' },
     }, { fixture: './fixtures/repo', hosts: { portable: { model: 'deterministic' } } });

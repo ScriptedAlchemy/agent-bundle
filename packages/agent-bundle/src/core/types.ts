@@ -105,6 +105,8 @@ export interface AgentBundleDevConfig {
 }
 
 export interface AgentBundleConfig extends AgentBundleConfigExtensions {
+  /** Project-level static files copied byte-for-byte into every target artifact under `assets/`. */
+  assets?: string[];
   dev?: AgentBundleDevConfig;
   hooks?: Partial<Record<CanonicalHookEvent, AgentBundleHookInput>>;
   marketplace?: boolean;
@@ -142,6 +144,19 @@ export interface NormalizedSkillResource {
   readonly bytes: number;
   readonly relativePath: string;
   readonly source: string;
+}
+
+/** One project-level static file copied byte-for-byte into selected target artifacts. */
+export interface NormalizedAsset {
+  readonly bytes: number;
+  readonly id: string;
+  readonly name: string;
+  readonly provenance: SourceProvenance;
+  /** The POSIX destination path under the artifact's `assets/` directory. */
+  readonly relativePath: string;
+  /** The absolute source file path. */
+  readonly source: string;
+  readonly targets: readonly string[];
 }
 
 export interface NormalizedSkill {
@@ -233,6 +248,11 @@ export interface NormalizedRuntime {
 }
 
 export interface NormalizedPlugin {
+  /**
+   * Project-level copied assets. Normalizers always provide this collection;
+   * it remains optional so hand-constructed models stay valid without assets.
+   */
+  readonly assets?: readonly NormalizedAsset[];
   readonly extensions: Readonly<Record<string, NormalizedConfigExtension>>;
   readonly hooks: readonly NormalizedHook[];
   readonly marketplace?: true;

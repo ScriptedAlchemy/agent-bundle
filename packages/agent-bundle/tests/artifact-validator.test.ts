@@ -682,6 +682,26 @@ it('rejects a canonically rehashed script with an unsupported extension', async 
   }
 });
 
+it('admits nested project assets in the target-owned recursive asset namespace', async () => {
+  const registry = createDefaultRegistry();
+  const portable = targetFromRegistry(registry, 'portable');
+  const files = [
+    {
+      contents: '{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","description":"Valid portable plugin.","name":"portable-test","version":"1.0.0"}\n',
+      kind: 'generated' as const,
+      path: 'portable/plugin.json',
+    },
+    { contents: '<svg/>\n', kind: 'copy' as const, path: 'portable/assets/branding/logo.svg' },
+  ];
+  const root = await writeArtifact(files, true, [portable]);
+
+  try {
+    await expect(validateArtifact({ artifactRoot: root, registry })).resolves.toEqual([]);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
 it.each([
   ['a missing copied resource', '[missing resource](references/missing.md)'],
   ['a percent-encoded path that escapes the Skill root', '[escape resource](..%2Fdocument.json)'],

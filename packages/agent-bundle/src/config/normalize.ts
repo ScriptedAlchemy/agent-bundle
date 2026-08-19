@@ -20,6 +20,7 @@ import type {
   CanonicalHookTool,
   NativeHookToolSelector,
   NormalizationTargetRegistry,
+  NormalizedAsset,
   NormalizedConfigExtension,
   NormalizedHook,
   NormalizedMcpApp,
@@ -466,6 +467,23 @@ const skillProvenance = (
   sourcePath,
 });
 
+const normalizeAssets = (
+  loaded: LoadedConfig,
+  discovered: DiscoveredProject,
+  targetNames: readonly string[],
+): NormalizedAsset[] => (discovered.assets ?? []).map((asset) => ({
+  bytes: asset.bytes,
+  id: `asset:${asset.relativePath}`,
+  name: asset.relativePath,
+  provenance: {
+    kind: loaded.config.assets === undefined ? 'conventional' as const : 'explicit' as const,
+    sourcePath: loaded.configPath,
+  },
+  relativePath: asset.relativePath,
+  source: asset.source,
+  targets: [...targetNames],
+}));
+
 /** Selects the generated-executable floor; invalid raises fall back to the default the validator rejected. */
 const normalizeRuntime = (loaded: LoadedConfig): NormalizedRuntime => {
   const node = loaded.config.runtime?.node;
@@ -511,7 +529,9 @@ export const normalizeProject = async (
   const nativeHooks = await normalizeNativeHooks(loaded, targetNames, registry);
   const mcpServers = normalizeMcpServers(loaded, targetNames);
   const scripts = normalizeScripts(loaded, targetNames);
+  const assets = normalizeAssets(loaded, discovered, targetNames);
   const model: NormalizedPlugin = {
+    ...(assets.length === 0 ? {} : { assets }),
     ...(loaded.config.marketplace === true ? { marketplace: true as const } : {}),
     extensions: normalizeExtensions(loaded, registry, configProvenance),
     metadata: {

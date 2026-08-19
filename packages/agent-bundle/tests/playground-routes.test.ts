@@ -99,7 +99,6 @@ const replayFixture: PlaygroundReplay = Object.freeze({
 
 const exportFixture: PlaygroundExport = Object.freeze({
   events: Object.freeze([eventFixture]),
-  schemaVersion: 1,
   session: sessionFixture,
 });
 
@@ -114,7 +113,6 @@ const draftFixture: DraftEvalCase = Object.freeze({
   fixture: sessionFixture.identity.fixture,
   invocation: sessionFixture.identity.invocation,
   outcome: Object.freeze({ status: 'passed' }),
-  schemaVersion: 1,
   target: sessionFixture.identity.target,
   task: sessionFixture.identity.task,
 });

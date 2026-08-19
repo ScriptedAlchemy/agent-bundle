@@ -117,6 +117,42 @@ it('plans a schema-valid skills-only plugin with every discovered resource', () 
   ]);
 });
 
+it('copies project assets selected for portable and skips assets scoped to other targets', () => {
+  const assetProvenance = { kind: 'conventional' as const, sourcePath: '/workspace/agent-bundle.config.ts' };
+  const plan = portableAdapter.plan({
+    ...plugin(),
+    assets: [
+      {
+        bytes: 6,
+        id: 'asset:logo.svg',
+        name: 'logo.svg',
+        provenance: assetProvenance,
+        relativePath: 'logo.svg',
+        source: '/workspace/assets/logo.svg',
+        targets: ['portable'],
+      },
+      {
+        bytes: 3,
+        id: 'asset:claude-only.png',
+        name: 'claude-only.png',
+        provenance: assetProvenance,
+        relativePath: 'claude-only.png',
+        source: '/workspace/assets/claude-only.png',
+        targets: ['claude'],
+      },
+    ],
+  });
+
+  expect(plan.diagnostics).toEqual([]);
+  expect(plan.entries.filter((entry) => entry.relativePath.startsWith('assets/'))).toEqual([{
+    bytes: 6,
+    kind: 'copy',
+    relativePath: 'assets/logo.svg',
+    source: '/workspace/assets/logo.svg',
+    sourceInputs: ['/workspace/assets/logo.svg'],
+  }]);
+});
+
 it('plans portable MCP server variants with tokens expanded only where portable supports them', () => {
   const model = plugin();
   const mcpServers = [

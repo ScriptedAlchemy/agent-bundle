@@ -579,6 +579,34 @@ const validateMcpServer = (
   return diagnostics;
 };
 
+const validateAssets = (loaded: LoadedConfig): Diagnostic[] => {
+  const assets = loaded.config.assets;
+  if (assets === undefined) return [];
+  if (!Array.isArray(assets) || assets.some((entry) => !nonemptyString(entry))) {
+    return [sourceDiagnostic('AB4600', 'Assets configuration must be an array of nonempty paths or globs.', loaded.configPath)];
+  }
+  const diagnostics: Diagnostic[] = [];
+  for (const entry of assets) {
+    const source = resolve(loaded.context.projectRoot, entry);
+    if (!isInside(loaded.context.projectRoot, source)) {
+      diagnostics.push(sourceDiagnostic(
+        'AB4601',
+        `Asset entry ${JSON.stringify(entry)} must resolve inside the project root.`,
+        loaded.configPath,
+      ));
+      continue;
+    }
+    if (!/[*?{[\]()!]/u.test(entry) && !existsSync(source)) {
+      diagnostics.push(sourceDiagnostic(
+        'AB4602',
+        `Asset entry ${JSON.stringify(entry)} must name an existing file or directory.`,
+        loaded.configPath,
+      ));
+    }
+  }
+  return diagnostics;
+};
+
 const validateRuntime = (loaded: LoadedConfig): Diagnostic[] => {
   const runtime = loaded.config.runtime;
   if (runtime === undefined) return [];
@@ -722,6 +750,7 @@ export const validateSource = (
     }
   }
 
+  diagnostics.push(...validateAssets(loaded));
   diagnostics.push(...validateHooks(loaded, registry));
   diagnostics.push(...validateMcp(loaded));
   diagnostics.push(...validateRuntime(loaded));
@@ -758,6 +787,7 @@ export const validateModel = (
     ...model.mcpServers,
     ...(model.mcpApps ?? []),
     ...model.scripts,
+    ...(model.assets ?? []),
   ];
   for (const component of components) {
     const firstSource = ids.get(component.id);
@@ -897,29 +927,34 @@ export const validateModel = (
   }
 
   const outputs = new Map<string, string>();
+  const recordOutput = (generatedPath: string, source: string, target: string): void => {
+    const firstSource = outputs.get(generatedPath);
+    if (firstSource === undefined) {
+      outputs.set(generatedPath, source);
+      return;
+    }
+    diagnostics.push({
+      code: 'AB4102',
+      generatedPath,
+      message: `Multiple inputs produce ${JSON.stringify(generatedPath)}; first source is ${firstSource}.`,
+      severity: 'error',
+      sourcePath: source,
+      target,
+    });
+  };
   for (const target of model.targets) {
     for (const skill of model.skills) {
       for (const resource of skill.resources) {
-        const generatedPath = posix.join(
+        recordOutput(
+          posix.join(target.name, 'skills', skill.name, resource.relativePath),
+          resource.source,
           target.name,
-          'skills',
-          skill.name,
-          resource.relativePath,
         );
-        const firstSource = outputs.get(generatedPath);
-        if (firstSource === undefined) {
-          outputs.set(generatedPath, resource.source);
-        } else {
-          diagnostics.push({
-            code: 'AB4102',
-            generatedPath,
-            message: `Multiple inputs produce ${JSON.stringify(generatedPath)}; first source is ${firstSource}.`,
-            severity: 'error',
-            sourcePath: resource.source,
-            target: target.name,
-          });
-        }
       }
+    }
+    for (const asset of model.assets ?? []) {
+      if (!asset.targets.includes(target.name)) continue;
+      recordOutput(posix.join(target.name, 'assets', asset.relativePath), asset.source, target.name);
     }
   }
 

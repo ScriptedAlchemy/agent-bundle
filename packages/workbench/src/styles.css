@@ -197,6 +197,16 @@ td { border-top: 1px solid #d9dee7; font-size: 14px; padding: 12px 10px; vertica
 .skill-resource-tree ul { list-style: none; margin: 0; max-width: 720px; padding: 0; }
 .skill-resource-tree li { align-items: baseline; border-top: 1px solid #d9dee7; display: flex; font: 13px "SFMono-Regular", Consolas, monospace; gap: 16px; justify-content: space-between; padding: 8px 0; }
 .skill-resource-tree li span { color: #596372; flex: none; }
+.skill-eval-coverage { border-top: 1px solid #d9dee7; margin-top: 28px; padding-top: 18px; }
+.skill-eval-coverage h2 { font-size: 13px; margin: 0 0 8px; }
+.skill-eval-coverage ul { list-style: none; margin: 0; max-width: 720px; padding: 0; }
+.skill-eval-coverage li { align-items: baseline; border-top: 1px solid #d9dee7; display: flex; gap: 16px; justify-content: space-between; padding: 8px 0; }
+.skill-eval-coverage-counts { display: flex; gap: 8px; margin: 0 0 10px; }
+.skill-coverage-badge { border: 1px solid #d6dfe9; border-radius: 4px; color: #4f5b6b; font-size: 11px; font-weight: 700; letter-spacing: .04em; margin-left: 6px; padding: 2px 7px; text-transform: uppercase; white-space: nowrap; }
+.skill-coverage-badge:first-child { margin-left: 0; }
+.skill-coverage-badge--direct { background: #eef7ef; border-color: #bcd9c0; color: #1e6b2c; }
+.skill-coverage-badge--indirect { background: #f4f7fb; border-color: #c8d5e5; color: #34506f; }
+.skill-coverage-badge--negative { background: #fdf4ec; border-color: #e3c9a8; color: #8a5700; }
 .skill-markdown { color: #1d2735; font-size: 15px; line-height: 1.65; }
 .skill-markdown > :first-child { margin-top: 0; }
 .skill-markdown p, .skill-markdown ul, .skill-markdown ol { margin: 0 0 15px; }

@@ -18,7 +18,6 @@ interface SessionIndex {
   readonly kind: 'agent-bundle-playground-session-index';
   readonly objectId: string;
   readonly projectId: string;
-  readonly schemaVersion: 2;
   readonly sessionId: string;
 }
 
@@ -28,7 +27,6 @@ type PlaygroundDirectorySyncReason =
   | 'layout-object-entry'
   | 'layout-pending-index-entry'
   | 'layout-project-entry'
-  | 'layout-sessions-entry'
   | 'layout-storage-entry'
   | 'new-file'
   | 'object-admission-cleanup'
@@ -146,7 +144,7 @@ const readIndex = async (storageRoot: string, sessionId: string): Promise<Sessio
 const objectRoot = async (storageRoot: string, sessionId: string): Promise<string> =>
   join(storageRoot, 'session-objects', (await readIndex(storageRoot, sessionId)).objectId);
 
-const writeLegacySession = async (
+const writeUnpublishedDirectorySession = async (
   storageRoot: string,
   sessionId: string,
   input = sessionInput(),
@@ -161,7 +159,6 @@ const writeLegacySession = async (
     kind: 'agent-bundle-playground-session',
     outcome: { status: 'passed' },
     projectId: 'project-1',
-    schemaVersion: 1,
     sessionId,
     state: 'finalized',
   })}\n`, 'utf8');
@@ -259,7 +256,6 @@ it('anchors every first-use layout directory with a parent sync', async () => {
     expect(observed).toEqual([
       ['before-directory-sync:layout-project-entry', fixture.projectRoot],
       ['before-directory-sync:layout-storage-entry', dirname(fixture.storageRoot)],
-      ['before-directory-sync:layout-sessions-entry', fixture.storageRoot],
       ['before-directory-sync:layout-object-entry', fixture.storageRoot],
       ['before-directory-sync:layout-index-entry', fixture.storageRoot],
       ['before-directory-sync:layout-pending-index-entry', join(fixture.storageRoot, 'session-index')],
@@ -281,13 +277,13 @@ const prepublicationFailurePhases = [
 ] as const;
 
 for (const phase of prepublicationFailurePhases) {
-  it(`rolls back its unpublished object and preserves an existing legacy session when ${phase} fails before publication`, async () => {
+  it(`rolls back its unpublished object and preserves an existing unpublished directory when ${phase} fails before publication`, async () => {
     const fixture = await createFixture();
     const sessionId = `prepublication-${phase.replaceAll(':', '-')}`;
     let reader: PlaygroundService | undefined;
     try {
-      const legacyRoot = await writeLegacySession(fixture.storageRoot, sessionId);
-      const legacyBefore = await snapshotDirectory(legacyRoot);
+      const unpublishedRoot = await writeUnpublishedDirectorySession(fixture.storageRoot, sessionId);
+      const unpublishedBefore = await snapshotDirectory(unpublishedRoot);
       let observed = false;
       await withDurabilityTestHook((candidate) => {
         if (candidate === phase) {
@@ -300,14 +296,14 @@ for (const phase of prepublicationFailurePhases) {
       expect(observed).toBe(true);
       await expect(readFile(indexPath(fixture.storageRoot, sessionId), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
       await expect(readdir(join(fixture.storageRoot, 'session-objects'))).resolves.toHaveLength(0);
-      await expect(snapshotDirectory(legacyRoot)).resolves.toEqual(legacyBefore);
+      await expect(snapshotDirectory(unpublishedRoot)).resolves.toEqual(unpublishedBefore);
       await expect(fixture.service.close()).resolves.toBeUndefined();
       reader = new PlaygroundService({
         projectId: 'project-1',
         projectRoot: fixture.projectRoot,
         storageRoot: fixture.storageRoot,
       });
-      await expect(reader.reopen(sessionId)).resolves.toMatchObject({ id: sessionId, state: 'finalized' });
+      await expect(reader.reopen(sessionId)).rejects.toMatchObject({ code: 'PLAYGROUND_SESSION_NOT_FOUND' });
     } finally {
       await reader?.close().catch(() => undefined);
       await fixture.close();
@@ -395,7 +391,6 @@ it('persists a frozen, globally ordered whole-plugin timeline with raw replay re
       fixture: { digest: 'fixture-sha256', id: 'fixture-clean' },
       invocation: { intent: { command: 'inspect', path: 'README.md' }, kind: 'script' },
       outcome: { response: 'Workspace is clean.', status: 'passed', workspace: { changedPaths: ['README.md'], digest: 'workspace-sha256' } },
-      schemaVersion: 1,
       target: { digest: 'target-sha256', name: 'codex' },
       task: { id: 'task-1', text: 'Explain the current workspace state.' },
     });
@@ -1051,7 +1046,7 @@ it('linearizes cold open and reopen admissions with close so completed cleanup c
   }
 });
 
-it('preserves legacy and v2 victims without any admission-directory move, deletion, or cleanup path', async () => {
+it('conflicts only with a published canonical session and leaves unrelated directories untouched', async () => {
   const fixture = await createFixture();
   const contender = new PlaygroundService({
     projectId: 'project-1',
@@ -1059,30 +1054,28 @@ it('preserves legacy and v2 victims without any admission-directory move, deleti
     storageRoot: fixture.storageRoot,
   });
   try {
-    await fixture.service.openSession({ ...sessionInput(), sessionId: 'v2-victim' });
-    await fixture.service.finalize('v2-victim', { status: 'passed' });
+    await fixture.service.openSession({ ...sessionInput(), sessionId: 'canonical-victim' });
+    await fixture.service.finalize('canonical-victim', { status: 'passed' });
     await fixture.service.openSession({ ...sessionInput(), sessionId: 'warmup' });
-    const legacyRoot = await writeLegacySession(fixture.storageRoot, 'legacy-victim');
-    const v2Root = await objectRoot(fixture.storageRoot, 'v2-victim');
-    const legacyBefore = await snapshotDirectory(legacyRoot);
-    const v2Before = await snapshotDirectory(v2Root);
-    const indexBefore = await readFile(indexPath(fixture.storageRoot, 'v2-victim'), 'utf8');
+    const unrelatedRoot = await writeUnpublishedDirectorySession(fixture.storageRoot, 'unpublished-victim');
+    const canonicalRoot = await objectRoot(fixture.storageRoot, 'canonical-victim');
+    const unrelatedBefore = await snapshotDirectory(unrelatedRoot);
+    const canonicalBefore = await snapshotDirectory(canonicalRoot);
+    const indexBefore = await readFile(indexPath(fixture.storageRoot, 'canonical-victim'), 'utf8');
 
-    await expect(contender.openSession({ ...sessionInput(), sessionId: 'legacy-victim' })).rejects.toMatchObject({ code: 'PLAYGROUND_SESSION_CONFLICT' });
-    await expect(contender.openSession({ ...sessionInput(), sessionId: 'v2-victim' })).rejects.toMatchObject({ code: 'PLAYGROUND_SESSION_CONFLICT' });
+    await expect(contender.openSession({ ...sessionInput(), sessionId: 'unpublished-victim' })).resolves.toMatchObject({ id: 'unpublished-victim' });
+    await expect(contender.openSession({ ...sessionInput(), sessionId: 'canonical-victim' })).rejects.toMatchObject({ code: 'PLAYGROUND_SESSION_CONFLICT' });
 
-    await expect(snapshotDirectory(legacyRoot)).resolves.toEqual(legacyBefore);
-    await expect(snapshotDirectory(v2Root)).resolves.toEqual(v2Before);
-    await expect(readFile(indexPath(fixture.storageRoot, 'v2-victim'), 'utf8')).resolves.toBe(indexBefore);
-    const sessionEntries = await readdir(join(fixture.storageRoot, 'sessions'));
-    expect(sessionEntries.some((name) => name.startsWith('.cleanup-'))).toBe(false);
+    await expect(snapshotDirectory(unrelatedRoot)).resolves.toEqual(unrelatedBefore);
+    await expect(snapshotDirectory(canonicalRoot)).resolves.toEqual(canonicalBefore);
+    await expect(readFile(indexPath(fixture.storageRoot, 'canonical-victim'), 'utf8')).resolves.toBe(indexBefore);
   } finally {
     await contender.close().catch(() => undefined);
     await fixture.close();
   }
 });
 
-it('leaves a path-swapped legacy victim untouched when close wins after v2 object creation and before publication', async () => {
+it('leaves a path-swapped unrelated directory untouched when close wins before publication', async () => {
   const fixture = await createFixture();
   const victimId = 'path-swap-victim';
   const targetId = 'path-swap-target';
@@ -1090,7 +1083,7 @@ it('leaves a path-swapped legacy victim untouched when close wins after v2 objec
   let closing: Promise<void> | undefined;
   try {
     await fixture.service.openSession({ ...sessionInput(), sessionId: 'warmup' });
-    const victimRoot = await writeLegacySession(fixture.storageRoot, victimId);
+    const victimRoot = await writeUnpublishedDirectorySession(fixture.storageRoot, victimId);
     const targetRoot = join(fixture.storageRoot, 'sessions', targetId);
     const victimBefore = await snapshotDirectory(victimRoot);
     let swapped = false;
@@ -1118,7 +1111,7 @@ it('leaves a path-swapped legacy victim untouched when close wins after v2 objec
   }
 });
 
-it('reopens and exports strict v1 sessions only when no v2 index exists, and conflicts with both formats', async () => {
+it('ignores unpublished directory sessions and admits only the canonical index-object layout', async () => {
   const fixture = await createFixture();
   const contender = new PlaygroundService({
     projectId: 'project-1',
@@ -1127,34 +1120,32 @@ it('reopens and exports strict v1 sessions only when no v2 index exists, and con
   });
   try {
     await fixture.service.openSession({ ...sessionInput(), sessionId: 'warmup' });
-    await writeLegacySession(fixture.storageRoot, 'legacy-reopen');
+    await writeUnpublishedDirectorySession(fixture.storageRoot, 'unpublished-session');
     const reader = new PlaygroundService({
       projectId: 'project-1',
       projectRoot: fixture.projectRoot,
       storageRoot: fixture.storageRoot,
     });
     try {
-      await expect(reader.reopen('legacy-reopen')).resolves.toMatchObject({ id: 'legacy-reopen', state: 'finalized' });
-      await expect(reader.replay('legacy-reopen')).resolves.toMatchObject({ events: [] });
-      await expect(reader.export('legacy-reopen')).resolves.toMatchObject({ session: { id: 'legacy-reopen' } });
+      await expect(reader.reopen('unpublished-session')).rejects.toMatchObject({ code: 'PLAYGROUND_SESSION_NOT_FOUND' });
     } finally {
       await reader.close().catch(() => undefined);
     }
-    await expect(contender.openSession({ ...sessionInput(), sessionId: 'legacy-reopen' })).rejects.toMatchObject({ code: 'PLAYGROUND_SESSION_CONFLICT' });
+    await expect(contender.openSession({ ...sessionInput(), sessionId: 'unpublished-session' })).resolves.toMatchObject({ id: 'unpublished-session' });
   } finally {
     await contender.close().catch(() => undefined);
     await fixture.close();
   }
 });
 
-it('publishes one complete v2 session index for concurrent same-ID contenders and rolls back the losing object', async () => {
+it('publishes one complete session index for concurrent same-ID contenders and rolls back the losing object', async () => {
   const fixture = await createFixture();
   const contender = new PlaygroundService({
     projectId: 'project-1',
     projectRoot: fixture.projectRoot,
     storageRoot: fixture.storageRoot,
   });
-  const sessionId = 'v2-concurrent';
+  const sessionId = 'concurrent-session';
   try {
     const results = await Promise.allSettled([
       fixture.service.openSession({ ...sessionInput(), sessionId }),
@@ -1173,7 +1164,6 @@ it('publishes one complete v2 session index for concurrent same-ID contenders an
       kind: 'agent-bundle-playground-session-index',
       objectId: expect.any(String),
       projectId: 'project-1',
-      schemaVersion: 2,
       sessionId,
     });
     const objects = await readdir(join(fixture.storageRoot, 'session-objects'));
@@ -1198,7 +1188,7 @@ it('publishes one complete v2 session index for concurrent same-ID contenders an
   }
 });
 
-it('drains and rolls back a held v2 admission when close wins before publication, then permits a retry', async () => {
+it('drains and rolls back a held admission when close wins before publication, then permits a retry', async () => {
   const lifecycle: { closeSettled: boolean; closing?: Promise<void>; observedPending: boolean; service?: PlaygroundService } = {
     closeSettled: false,
     observedPending: false,
@@ -1214,7 +1204,7 @@ it('drains and rolls back a held v2 admission when close wins before publication
     },
   });
   lifecycle.service = fixture.service;
-  const sessionId = 'v2-close-before-publication';
+  const sessionId = 'close-before-publication';
   try {
     await expect(fixture.service.openSession({ ...sessionInput(), sessionId })).rejects.toMatchObject({ code: 'PLAYGROUND_SERVICE_CLOSED' });
     await expect(lifecycle.closing).resolves.toBeUndefined();
@@ -1375,27 +1365,24 @@ it('does not descend through a parent symlink swapped after cold-admission owner
   }
 });
 
-it('rejects malformed or mismatched v2 indexes without falling back to a valid v1 session', async () => {
+it('rejects malformed or mismatched indexes and treats a missing index as absent', async () => {
   const fixture = await createFixture();
-  const sessionId = 'v2-index-fail-closed';
+  const sessionId = 'index-fail-closed';
   try {
-    await fixture.service.openSession({ ...sessionInput(), sessionId: 'warm-v2-index' });
+    await fixture.service.openSession({ ...sessionInput(), sessionId: 'warm-index' });
     await fixture.service.close();
-    await writeLegacySession(fixture.storageRoot, sessionId);
     const cases = [
       '{',
       JSON.stringify({
         kind: 'agent-bundle-playground-session-index',
         objectId: 'missing-object',
         projectId: 'other-project',
-        schemaVersion: 2,
         sessionId,
       }),
       JSON.stringify({
         kind: 'agent-bundle-playground-session-index',
         objectId: 'missing-object',
         projectId: 'project-1',
-        schemaVersion: 2,
         sessionId: 'other-session',
       }),
     ];
@@ -1452,33 +1439,30 @@ it('rejects malformed or mismatched v2 indexes without falling back to a valid v
       await objectMismatch.close().catch(() => undefined);
     }
     await rm(indexPath(fixture.storageRoot, sessionId));
-    const fallback = new PlaygroundService({
+    const absent = new PlaygroundService({
       projectId: 'project-1',
       projectRoot: fixture.projectRoot,
       storageRoot: fixture.storageRoot,
     });
     try {
-      await expect(fallback.reopen(sessionId)).resolves.toMatchObject({ id: sessionId, state: 'finalized' });
-      await expect(fallback.export(sessionId)).resolves.toMatchObject({ session: { id: sessionId } });
+      await expect(absent.reopen(sessionId)).rejects.toMatchObject({ code: 'PLAYGROUND_SESSION_NOT_FOUND' });
     } finally {
-      await fallback.close().catch(() => undefined);
+      await absent.close().catch(() => undefined);
     }
   } finally {
     await fixture.close();
   }
 });
 
-it('fails a v2 index that references no object without falling back to a legacy session', async () => {
+it('fails an index that references no object', async () => {
   const fixture = await createFixture();
-  const sessionId = 'v2-missing-object';
+  const sessionId = 'missing-object';
   try {
-    await fixture.service.openSession({ ...sessionInput(), sessionId: 'warm-v2-object' });
-    await writeLegacySession(fixture.storageRoot, sessionId);
+    await fixture.service.openSession({ ...sessionInput(), sessionId: 'warm-object' });
     await writeFile(indexPath(fixture.storageRoot, sessionId), `${JSON.stringify({
       kind: 'agent-bundle-playground-session-index',
       objectId: 'missing-object',
       projectId: 'project-1',
-      schemaVersion: 2,
       sessionId,
     })}\n`, 'utf8');
     const reader = new PlaygroundService({
@@ -1498,7 +1482,7 @@ it('fails a v2 index that references no object without falling back to a legacy 
 
 it('retains unindexed objects and pending indexes across startup while readers observe only absent or complete final indexes', async () => {
   const fixture = await createFixture();
-  const sessionId = 'v2-reader';
+  const sessionId = 'indexed-reader';
   try {
     await fixture.service.openSession({ ...sessionInput(), sessionId: 'warm-orphans' });
     const orphanRoot = join(fixture.storageRoot, 'session-objects', 'unindexed-orphan');
@@ -1531,7 +1515,6 @@ it('retains unindexed objects and pending indexes across startup while readers o
         kind: 'agent-bundle-playground-session-index',
         objectId: expect.any(String),
         projectId: 'project-1',
-        schemaVersion: 2,
         sessionId,
       });
     }
@@ -1543,13 +1526,13 @@ it('retains unindexed objects and pending indexes across startup while readers o
   }
 });
 
-it('rolls back a failed pre-publication object without changing a legacy victim', async () => {
+it('rolls back a failed pre-publication object without changing an unrelated directory', async () => {
   const fixture = await createFixture();
   const targetId = 'blocked-pending-write';
   try {
     await fixture.service.openSession({ ...sessionInput(), sessionId: 'warm-pending-write' });
-    const legacyRoot = await writeLegacySession(fixture.storageRoot, 'pending-write-victim');
-    const victimBefore = await snapshotDirectory(legacyRoot);
+    const unrelatedRoot = await writeUnpublishedDirectorySession(fixture.storageRoot, 'pending-write-victim');
+    const victimBefore = await snapshotDirectory(unrelatedRoot);
     const pendingRoot = join(fixture.storageRoot, 'session-index', '.pending');
     const blocked = new PlaygroundService({
       now: () => {
@@ -1565,7 +1548,7 @@ it('rolls back a failed pre-publication object without changing a legacy victim'
       await expect(blocked.openSession({ ...sessionInput(), sessionId: targetId })).rejects.toBeDefined();
       await expect(readFile(indexPath(fixture.storageRoot, targetId), 'utf8')).rejects.toBeDefined();
       expect(await readdir(join(fixture.storageRoot, 'session-objects'))).toHaveLength(1);
-      await expect(snapshotDirectory(legacyRoot)).resolves.toEqual(victimBefore);
+      await expect(snapshotDirectory(unrelatedRoot)).resolves.toEqual(victimBefore);
     } finally {
       await blocked.close().catch(() => undefined);
     }
@@ -1574,9 +1557,9 @@ it('rolls back a failed pre-publication object without changing a legacy victim'
   }
 });
 
-it('rejects a replaced v2 object before it can write or publish an unrelated victim', async () => {
+it('rejects a replaced session object before it can write or publish an unrelated victim', async () => {
   const fixture = await createFixture();
-  const sessionId = 'replaced-v2-object';
+  const sessionId = 'replaced-session-object';
   const objectsRoot = join(fixture.storageRoot, 'session-objects');
   const displacedRoot = join(fixture.storageRoot, 'displaced-owned-object');
   let contender: PlaygroundService | undefined;
@@ -1625,7 +1608,6 @@ it('fails closed when a pending pathname is replaced before the final hard link'
           kind: 'agent-bundle-playground-session-index',
           objectId: 'substituted-object',
           projectId: 'project-1',
-          schemaVersion: 2,
           sessionId,
         })}\n`, 'utf8');
       }
@@ -1765,7 +1747,10 @@ it('removes only a just-created owner lock when its directory sync fails during 
   const fixture = await createFixture();
   const sessionId = 'owner-lock-sync-failure';
   try {
-    const root = await writeLegacySession(fixture.storageRoot, sessionId);
+    await fixture.service.openSession({ ...sessionInput(), sessionId });
+    await fixture.service.finalize(sessionId, { status: 'passed' });
+    await fixture.service.close();
+    const root = await objectRoot(fixture.storageRoot, sessionId);
     const document = JSON.parse(await readFile(join(root, 'session.json'), 'utf8')) as Record<string, unknown>;
     delete document.outcome;
     document.state = 'open';
@@ -1859,9 +1844,9 @@ it('rejects duplicate and extra persisted envelope keys before reopening', async
     const metadataDocument = await readFile(metadataPath, 'utf8');
     const eventDocument = await readFile(eventPath, 'utf8');
     const corruptions = [
-      [indexPath(fixture.storageRoot, sessionId), indexDocument.replace('"schemaVersion":2', '"schemaVersion":2,"schemaVersion":2')],
+      [indexPath(fixture.storageRoot, sessionId), indexDocument.replace('"projectId":"project-1"', '"projectId":"project-1","projectId":"project-1"')],
       [indexPath(fixture.storageRoot, sessionId), `${JSON.stringify({ ...JSON.parse(indexDocument), extra: true })}\n`],
-      [metadataPath, metadataDocument.replace('"schemaVersion":2', '"schemaVersion":2,"schemaVersion":2')],
+      [metadataPath, metadataDocument.replace('"projectId":"project-1"', '"projectId":"project-1","projectId":"project-1"')],
       [metadataPath, `${JSON.stringify({ ...JSON.parse(metadataDocument), extra: true })}\n`],
       [eventPath, eventDocument.replace('"sequence":1', '"sequence":1,"sequence":1')],
       [eventPath, `${JSON.stringify({ ...JSON.parse(eventDocument), extra: true })}\n`],

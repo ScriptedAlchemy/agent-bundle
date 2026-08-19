@@ -126,7 +126,6 @@ export interface EvalComparableRow {
   readonly evidence: EvalComparisonEvidence;
   readonly host: string;
   readonly model: string;
-  readonly unverifiedFacets: readonly EvalAlignmentFacet[];
 }
 
 export interface EvalNonComparableRow {
@@ -199,7 +198,6 @@ const facetReasons: Readonly<Record<EvalAlignmentFacet, EvalNonComparableReason>
   'model': 'model-mismatch',
 });
 
-const noFacets: readonly EvalAlignmentFacet[] = Object.freeze([]);
 const unrecorded = 'unrecorded';
 const unrecordedSemanticGrader = Object.freeze({ state: 'unrecorded' as const });
 
@@ -268,20 +266,18 @@ const usageFor = (gradable: readonly EvalTrialRecord[]): EvalComparisonUsage | u
   });
 };
 
-const invocationIdentity = (provenance: EvalTrialProvenance | undefined): string | undefined => {
-  const invocation = provenance?.invocation;
-  if (invocation === undefined) return undefined;
+const invocationIdentity = (provenance: EvalTrialProvenance): string => {
+  const invocation = provenance.invocation;
   return invocation.skill === undefined ? invocation.mode : `${invocation.mode}:${invocation.skill}`;
 };
 
-const semanticGraderVersion = (provenance: EvalTrialProvenance | undefined): string | undefined => {
-  if (provenance === undefined) return undefined;
+const semanticGraderVersion = (provenance: EvalTrialProvenance): string | undefined => {
   const semanticGrader = provenance.semanticGrader;
   return semanticGrader === null
     ? 'none'
     : 'state' in semanticGrader
       ? undefined
-      : `${semanticGrader.id}@${semanticGrader.model}/v${semanticGrader.schemaVersion}`;
+      : `${semanticGrader.id}@${semanticGrader.model}/${semanticGrader.contractRevision}`;
 };
 
 const recordedConditionValue = (values: readonly (string | undefined)[]): string | undefined => {
@@ -290,9 +286,9 @@ const recordedConditionValue = (values: readonly (string | undefined)[]): string
 };
 
 const conditionProvenanceFor = (condition: Condition): EvalConditionProvenance => {
-  const hostCliVersion = recordedConditionValue(condition.trials.map((trial) => trial.provenance?.hostCliVersion));
+  const hostCliVersion = recordedConditionValue(condition.trials.map((trial) => trial.provenance.hostCliVersion));
   const invocation = recordedConditionValue(condition.trials.map((trial) => invocationIdentity(trial.provenance)));
-  const graders = condition.trials.map((trial) => trial.provenance?.semanticGrader);
+  const graders = condition.trials.map((trial) => trial.provenance.semanticGrader);
   const semanticGrader = graders.every((grader) => grader !== undefined && grader !== null && 'state' in grader)
     ? unrecordedSemanticGrader
     : recordedConditionValue(condition.trials.map((trial) => semanticGraderVersion(trial.provenance)));
@@ -355,7 +351,7 @@ const facetsOf = (condition: Condition): Readonly<Record<EvalAlignmentFacet, Fac
   'fixture': facetValue(condition.trials.map((trial) => trial.fixtureDigest)),
   'grader-versions': facetValue(condition.trials.map((trial) => semanticGraderVersion(trial.provenance))),
   'harness': facetValue([condition.side.run.harness]),
-  'host-cli-version': facetValue(condition.trials.map((trial) => trial.provenance?.hostCliVersion)),
+  'host-cli-version': facetValue(condition.trials.map((trial) => trial.provenance.hostCliVersion)),
   'invocation': facetValue(condition.trials.map((trial) => invocationIdentity(trial.provenance))),
   'model': facetValue(condition.trials.map((trial) => trial.model)),
 });
@@ -496,7 +492,6 @@ const rowFor = (
       : 'smoke',
     host: identity.host,
     model: baselineFacets.model.value,
-    unverifiedFacets: noFacets,
   });
 };
 

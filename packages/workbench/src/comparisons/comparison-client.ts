@@ -123,15 +123,6 @@ const comparableRowSchema = z.strictObject({
   evidence: z.enum(['reliability', 'smoke']),
   host: z.string(),
   model: z.string(),
-  unverifiedFacets: z.array(z.enum([
-    'case',
-    'fixture',
-    'grader-versions',
-    'harness',
-    'host-cli-version',
-    'invocation',
-    'model',
-  ])),
 });
 const nonComparableRowSchema = z.strictObject({
   baseline: conditionMetricsSchema.optional(),

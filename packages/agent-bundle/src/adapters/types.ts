@@ -108,6 +108,7 @@ const invalidMcpDocumentIssues: readonly TargetArtifactDocumentIssue[] = Object.
  * Every field is an emitted-layout fact rather than a target-name convention.
  */
 export interface TargetArtifactLayout {
+  readonly assets?: string;
   readonly hookWrappers?: TargetArtifactOutputLayout;
   readonly mcpApps?: TargetArtifactOutputLayout;
   readonly mcpEntries?: TargetArtifactOutputLayout;

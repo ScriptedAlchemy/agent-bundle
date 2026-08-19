@@ -2,11 +2,10 @@ import { stableJson } from '../core/digest.ts';
 import { parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
 import { runClaudeStreamProcess, type ClaudeProcessOptions } from './claude-process.ts';
 import { normalizeClaudeStream, type ClaudeTraceEvent } from './claude-stream.ts';
-import { isEvalScriptOutcome } from './graders.ts';
+import { claudeSemanticGraderContractRevision, isEvalScriptOutcome } from './graders.ts';
 import type { EvalAssertion, EvalScriptOutcome } from './types.ts';
 
-export { claudeSemanticGraderId } from './graders.ts';
-export const claudeSemanticGraderSchemaVersion = 1;
+export { claudeSemanticGraderContractRevision, claudeSemanticGraderId } from './graders.ts';
 
 export interface RunClaudeSemanticGraderOptions extends ClaudeProcessOptions {
   readonly assertions: readonly EvalAssertion[];
@@ -64,7 +63,7 @@ const requestFor = (options: RunClaudeSemanticGraderOptions): string => stableJs
   assertions: options.assertions,
   response: options.response,
   task: Object.freeze({
-    instruction: 'Assess whether the response and current workspace satisfy the assertions. Return exactly {"schemaVersion":1,"outcome":"pass"|"fail"|"inconclusive","detail":string}; do not use Markdown fences or add fields.',
+    instruction: 'Assess whether the response and current workspace satisfy the assertions. Return exactly {"outcome":"pass"|"fail"|"inconclusive","detail":string}; do not use Markdown fences or add fields.',
     prompt: options.task,
   }),
   trace: options.trace,
@@ -74,9 +73,9 @@ const requestFor = (options: RunClaudeSemanticGraderOptions): string => stableJs
 });
 
 const provenanceFor = (model: string): string => stableJson({
+  contractRevision: claudeSemanticGraderContractRevision,
   harness: 'claude',
   model,
-  schemaVersion: claudeSemanticGraderSchemaVersion,
 });
 
 /** Strictly accepts the one schema the server asks the configured Claude grader to return. */
@@ -89,13 +88,10 @@ export const parseClaudeSemanticGraderResult = (value: string): EvalScriptOutcom
   }
   if (!isRecord(parsed)) return undefined;
   const keys = Object.keys(parsed).sort((left, right) => left.localeCompare(right));
-  if (keys.length !== 3 || keys[0] !== 'detail' || keys[1] !== 'outcome' || keys[2] !== 'schemaVersion') {
+  if (keys.length !== 2 || keys[0] !== 'detail' || keys[1] !== 'outcome') {
     return undefined;
   }
-  if (
-    parsed.schemaVersion !== claudeSemanticGraderSchemaVersion ||
-    !isEvalScriptOutcome(parsed)
-  ) {
+  if (!isEvalScriptOutcome(parsed)) {
     return undefined;
   }
   return Object.freeze({ detail: parsed.detail, outcome: parsed.outcome });

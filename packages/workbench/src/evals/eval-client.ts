@@ -101,7 +101,7 @@ const diagnosticSchema = z.strictObject({
   sourcePath: textSchema.optional(),
   target: textSchema.optional(),
 });
-const assertionSummarySchema = z.strictObject({ id: textSchema, kind: assertionKindSchema });
+const assertionSummarySchema = z.strictObject({ id: textSchema, kind: assertionKindSchema, skill: textSchema.optional() });
 const invocationSchema = z.strictObject({
   mode: z.enum(['automatic', 'explicit', 'none']),
   skill: textSchema.optional(),
@@ -145,7 +145,6 @@ const runRecordSchema = z.strictObject({
   harness: textSchema,
   id: textSchema,
   projectRevision: digestSchema,
-  schemaVersion: z.literal(1),
   summary: runSummarySchema.optional(),
 });
 const assertionResultSchema = z.strictObject({
@@ -188,9 +187,9 @@ const trialInvocationProvenanceSchema = z.union([
 const semanticGraderProvenanceSchema = z.union([
   z.null(),
   z.strictObject({
+    contractRevision: provenanceIdentifierSchema,
     id: provenanceIdentifierSchema,
     model: provenanceIdentifierSchema,
-    schemaVersion: positiveIntegerSchema,
   }),
   z.strictObject({ state: z.literal('unrecorded') }),
 ]);
@@ -218,9 +217,8 @@ const trialRecordSchema = z.strictObject({
   outcome: outcomeSchema,
   pluginFailure: pluginFailureSchema.optional(),
   prompt: textSchema,
-  provenance: trialProvenanceSchema.optional(),
+  provenance: trialProvenanceSchema,
   rawArtifacts: z.array(textSchema),
-  schemaVersion: z.literal(1),
   startedAt: timestampSchema,
   targetDigest: digestSchema,
   trialIndex: nonnegativeIntegerSchema,
@@ -267,9 +265,9 @@ const parseResponseJson = (bytes: Uint8Array): JsonValue => {
 };
 
 const eventFor = (value: unknown): EvalRunEvent => {
-  if (!exactKeys(value, ['kind', 'payload', 'schemaVersion', 'sequence', 'timestamp']) ||
+  if (!exactKeys(value, ['kind', 'payload', 'sequence', 'timestamp']) ||
     typeof value.kind !== 'string' || value.kind.length === 0 || value.kind.length > 512 ||
-    value.schemaVersion !== 1 || !safeInteger(value.sequence, 1) || !isIsoTimestamp(value.timestamp)) {
+    !safeInteger(value.sequence, 1) || !isIsoTimestamp(value.timestamp)) {
     throw invalidResponse();
   }
   return value as unknown as EvalRunEvent;

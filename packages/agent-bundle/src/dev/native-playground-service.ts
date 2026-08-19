@@ -193,8 +193,8 @@ class DiscardingTrialWriter implements EvalTrialWriter {
     return relativePath;
   }
 
-  async writeTrial(trial: Omit<EvalTrialRecord, 'schemaVersion'>): Promise<EvalTrialRecord> {
-    return Object.freeze({ ...trial, schemaVersion: 1 });
+  async writeTrial(trial: EvalTrialRecord): Promise<EvalTrialRecord> {
+    return Object.freeze({ ...trial });
   }
 }
 
@@ -308,9 +308,9 @@ const nativeTrialProvenance = (trial: EvalTrialRecord, projectRoot: string): Pla
             : 'state' in semanticGrader
               ? Object.freeze({ state: 'unrecorded' })
               : Object.freeze({
+                contractRevision: safeNativeProvenanceText(semanticGrader.contractRevision, projectRoot),
                 id: safeNativeProvenanceText(semanticGrader.id, projectRoot),
                 model: safeNativeProvenanceText(semanticGrader.model, projectRoot),
-                schemaVersion: semanticGrader.schemaVersion,
               }) }),
       }),
     model: safeNativeProvenanceText(trial.model, projectRoot),

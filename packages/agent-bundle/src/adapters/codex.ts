@@ -431,6 +431,17 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
     }
   }
 
+  for (const asset of model.assets ?? []) {
+    if (!selectedForCodex(asset.targets)) continue;
+    entries.push({
+      bytes: asset.bytes,
+      kind: 'copy',
+      relativePath: `assets/${asset.relativePath}`,
+      source: asset.source,
+      sourceInputs: sourceInputs(asset.source),
+    });
+  }
+
   return Object.freeze({
     diagnostics: Object.freeze(diagnostics),
     entries: sortedEntries(entries),
@@ -443,6 +454,7 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
 export const codexAdapter: TargetAdapter = Object.freeze({
   artifactValidation,
   artifactLayout: Object.freeze({
+    assets: 'assets',
     hookWrappers: Object.freeze({ allowedSuffixes: Object.freeze(['.mjs']), directory: 'hooks' }),
     mcpApps: Object.freeze({ allowedSuffixes: Object.freeze(['.html']), directory: 'mcp-apps' }),
     mcpEntries: Object.freeze({ allowedSuffixes: Object.freeze(['.mjs']), directory: 'mcp' }),

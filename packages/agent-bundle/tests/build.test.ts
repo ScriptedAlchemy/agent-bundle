@@ -17,6 +17,7 @@ import { createProjectContext } from '../src/core/project-context.ts';
 import type { NormalizedPlugin } from '../src/core/types.ts';
 
 interface TestProject {
+  readonly assetPath: string;
   readonly localModulePath: string;
   readonly outputRoot: string;
   readonly pythonScriptPath: string;
@@ -113,9 +114,11 @@ const createProject = async (): Promise<TestProject> => {
   const localModulePath = join(skillScriptsRoot, 'local greeting module.ts');
   const shellScriptPath = join(skillScriptsRoot, 'review helper.sh');
   const pythonScriptPath = join(skillScriptsRoot, 'review helper.py');
+  const assetPath = join(root, 'assets', 'branding', 'logo.svg');
 
   await Promise.all([
     writeFile(join(root, 'agent-bundle.config.ts'), 'export default {};\n'),
+    mkdir(dirname(assetPath), { recursive: true }),
     mkdir(join(skillRoot, 'assets'), { recursive: true }),
     mkdir(join(skillRoot, 'references'), { recursive: true }),
     mkdir(skillScriptsRoot, { recursive: true }),
@@ -132,6 +135,7 @@ const createProject = async (): Promise<TestProject> => {
     writeFile(join(skillRoot, 'assets', 'icon.bin'), Buffer.from([0, 1, 2, 255])),
     writeFile(shellScriptPath, skillFixture.shell),
     writeFile(pythonScriptPath, skillFixture.python),
+    writeFile(assetPath, '<svg>project logo</svg>\n'),
   ]);
   await Promise.all([
     chmod(join(skillRoot, 'assets', 'icon.bin'), 0o751),
@@ -140,6 +144,7 @@ const createProject = async (): Promise<TestProject> => {
   ]);
 
   return {
+    assetPath,
     localModulePath,
     outputRoot: join(root, 'dist'),
     pythonScriptPath,
@@ -191,6 +196,15 @@ const buildFromSource = async (
 };
 
 const modelFor = (project: TestProject): NormalizedPlugin => ({
+  assets: [{
+    bytes: Buffer.byteLength('<svg>project logo</svg>\n'),
+    id: 'asset:branding/logo.svg',
+    name: 'branding/logo.svg',
+    provenance: { kind: 'explicit', sourcePath: project.assetPath },
+    relativePath: 'branding/logo.svg',
+    source: project.assetPath,
+    targets: ['portable'],
+  }],
   extensions: {},
   hooks: [],
   mcpServers: [],
@@ -357,6 +371,13 @@ it('low-level build writes and returns the exact canonical manifest for a config
     expect(
       (await stat(join(project.outputRoot, 'portable', 'skills', 'review', 'assets', 'icon.bin'))).mode & 0o777,
     ).toBe(0o751);
+    const emittedProjectAsset = join(project.outputRoot, 'portable', 'assets', 'branding', 'logo.svg');
+    await expect(readFile(emittedProjectAsset)).resolves.toEqual(await readFile(project.assetPath));
+    expect(manifest.files).toContainEqual(expect.objectContaining({
+      kind: 'copy',
+      path: 'portable/assets/branding/logo.svg',
+      sourceInputs: ['assets/branding/logo.svg'],
+    }));
     for (const resource of model.skills[0]!.resources) {
       await expect(
         readFile(join(project.outputRoot, 'portable', 'skills', 'review', resource.relativePath)),

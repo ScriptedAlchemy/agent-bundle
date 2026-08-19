@@ -116,6 +116,7 @@ const cloneJsonValue = (value: unknown, ancestors = new Set<object>()): JsonValu
 
 const modelPathReferences = (model: NormalizedPlugin): readonly string[] => [
   model.metadata.provenance.sourcePath,
+  ...(model.assets ?? []).flatMap((asset) => [asset.provenance.sourcePath, asset.source]),
   ...Object.values(model.extensions).map((extension) => extension.provenance.sourcePath),
   ...model.targets.map((target) => target.provenance.sourcePath),
   ...model.hooks.flatMap((hook) => [hook.provenance.sourcePath, hook.source]),
@@ -166,6 +167,15 @@ export const canonicalizeNormalizedModel = (
   const detached = cloneJsonValue(model) as unknown as NormalizedPlugin;
   return deepFreeze({
     ...detached,
+    ...(detached.assets === undefined
+      ? {}
+      : {
+        assets: detached.assets.map((asset) => ({
+          ...asset,
+          provenance: canonicalProvenance(root, asset.provenance),
+          source: canonicalCompilerPath(root, asset.source, 'Asset source path'),
+        })),
+      }),
     extensions: Object.fromEntries(Object.entries(detached.extensions)
       .sort(([left], [right]) => left.localeCompare(right))
       .map(([key, extension]) => [key, {

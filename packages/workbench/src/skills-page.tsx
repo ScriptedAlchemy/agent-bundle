@@ -3,8 +3,10 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type { ProjectStatus } from '../../agent-bundle/src/dev/types.ts';
 import type { ServedSkillDocument, SkillDocumentTree } from '../../agent-bundle/src/dev/skill-document-service.ts';
 
+import type { EvalClient } from './evals/eval-client.ts';
 import { SkillClient, SkillClientError } from './skill-client.ts';
 import { SkillMarkdown } from './skill-markdown.tsx';
+import { skillEvalCoverageFor, type SkillEvalCoverageState } from './skills-eval-coverage.ts';
 import { resourceUrlFor } from './skills-model.ts';
 
 export type SkillDocumentKind = 'generated' | 'source';
@@ -29,6 +31,7 @@ const panelIdFor = (skillId: string): string => `${tabKey(skillId)}-panel`;
 
 export interface SkillDocumentPanelProps {
   readonly document: SkillDocumentKind;
+  readonly evalCoverage?: SkillEvalCoverageState;
   readonly onDocumentChange: (document: SkillDocumentKind) => void;
   readonly onTargetChange?: (target: string) => void;
   readonly onViewChange: (view: SkillView) => void;
@@ -41,6 +44,7 @@ export interface SkillDocumentPanelProps {
 
 export interface SkillsPageProps {
   readonly client: SkillClient;
+  readonly evalClient: EvalClient;
   readonly status: ProjectStatus;
 }
 
@@ -61,6 +65,41 @@ const ResourceTree = ({ document }: { readonly document: ServedSkillDocument }) 
     </ul>}
   </section>;
 };
+
+const coverageKindLabels = { direct: 'Direct', indirect: 'Indirect', negative: 'Negative' } as const;
+
+const EvalCoverage = ({ coverage }: { readonly coverage: SkillEvalCoverageState }) => (
+  <section aria-label="Eval coverage" className="skill-eval-coverage">
+    <h2>Eval coverage</h2>
+    {coverage.state === 'loading' ? <p className="empty-row" role="status">Loading eval coverage…</p>
+      : coverage.state === 'unavailable' ? <p className="empty-row" role="status">{coverage.summary}</p>
+        : coverage.coverage.entries.length === 0
+          ? <p className="empty-row">No authored eval cases reference this Skill.</p>
+          : <>
+            <p className="skill-eval-coverage-counts">
+              {(['direct', 'indirect', 'negative'] as const).map((kind) => (
+                <span className={`skill-coverage-badge skill-coverage-badge--${kind}`} key={kind}>
+                  {coverageKindLabels[kind]} {coverage.coverage[kind]}
+                </span>
+              ))}
+            </p>
+            <ul>
+              {coverage.coverage.entries.map((entry) => (
+                <li key={`${entry.suite}/${entry.caseId}`}>
+                  <span className="identifier">{entry.suite} / {entry.caseId}</span>
+                  <span>
+                    {entry.kinds.map((kind) => (
+                      <span className={`skill-coverage-badge skill-coverage-badge--${kind}`} key={kind}>
+                        {coverageKindLabels[kind]}
+                      </span>
+                    ))}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </>}
+  </section>
+);
 
 const errorMessage = (error: unknown): string =>
   error instanceof Error ? error.message : 'Skill documents could not be loaded.';
@@ -133,6 +172,7 @@ const SkillDocumentTabs = ({ document, onDocumentChange, panelId, skillId }: {
 /** The selected served Skill document and its rendered or raw Markdown view. */
 export const SkillDocumentPanel = ({
   document,
+  evalCoverage,
   onDocumentChange,
   onTargetChange,
   onViewChange,
@@ -225,6 +265,7 @@ export const SkillDocumentPanel = ({
           ? <SkillMarkdown base={selected.base} body={selected.body} resources={resourcePaths(selected)} />
           : <pre className="skill-source"><code>{selected.markdown}</code></pre>}
         <ResourceTree document={selected} />
+        {evalCoverage === undefined ? undefined : <EvalCoverage coverage={evalCoverage} />}
       </>}
     </section>
   </section>;
@@ -260,12 +301,20 @@ const unavailableTree = (summary: string): GeneratedTreeState => Object.freeze({
 
 const loadingTree = (summary: string): GeneratedTreeState => Object.freeze({ state: 'loading', summary });
 
+type SuiteSummaries = Parameters<typeof skillEvalCoverageFor>[1];
+
+type SuitesState =
+  | Readonly<{ readonly state: 'loading' }>
+  | Readonly<{ readonly state: 'ready'; readonly suites: SuiteSummaries }>
+  | Readonly<{ readonly state: 'unavailable' }>;
+
 /** Fetches source Skills once per source revision and generated content per selected immutable epoch. */
-export const SkillsPage = ({ client, status }: SkillsPageProps) => {
+export const SkillsPage = ({ client, evalClient, status }: SkillsPageProps) => {
   const [sourceTree, setSourceTree] = useState<SkillDocumentTree>();
   const [error, setError] = useState<string>();
   const [document, setDocument] = useState<SkillDocumentKind>('source');
   const [selectedIds, setSelectedIds] = useState<Partial<Record<SkillDocumentKind, string>>>({});
+  const [suitesState, setSuitesState] = useState<SuitesState>({ state: 'loading' });
   const [view, setView] = useState<SkillView>('rendered');
   const epoch = artifactEpoch(status);
   const targetNames = useMemo(() => Object.keys(epoch?.targetDigests ?? {}).sort((left, right) => left.localeCompare(right)), [epoch]);
@@ -300,6 +349,28 @@ export const SkillsPage = ({ client, status }: SkillsPageProps) => {
     );
     return () => { current = false; };
   }, [client, status.source.revision]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    let current = true;
+    setSuitesState({ state: 'loading' });
+    void evalClient.suites(controller.signal).then(
+      (listing) => { if (current) setSuitesState(Object.freeze({ state: 'ready', suites: listing.suites })); },
+      () => { if (current) setSuitesState(Object.freeze({ state: 'unavailable' })); },
+    );
+    return () => {
+      current = false;
+      controller.abort();
+    };
+  }, [evalClient, status.source.revision]);
+
+  const evalCoverage = useMemo<SkillEvalCoverageState>(() => {
+    if (selected === undefined || suitesState.state === 'loading') return Object.freeze({ state: 'loading' });
+    if (suitesState.state === 'unavailable') {
+      return Object.freeze({ state: 'unavailable', summary: 'Eval coverage is unavailable because authored suites could not be loaded.' });
+    }
+    return Object.freeze({ coverage: skillEvalCoverageFor(selected.name, suitesState.suites), state: 'ready' });
+  }, [selected, suitesState]);
 
   useEffect(() => {
     setTarget((previous) => previous !== undefined && targetNames.includes(previous) ? previous : targetNames[0]);
@@ -343,6 +414,7 @@ export const SkillsPage = ({ client, status }: SkillsPageProps) => {
       </div> : undefined}
       <SkillDocumentPanel
         document={document}
+        evalCoverage={evalCoverage}
         onDocumentChange={setDocument}
         onTargetChange={setTarget}
         onViewChange={setView}

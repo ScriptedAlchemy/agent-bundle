@@ -29,7 +29,6 @@ const run = (id: string, overrides: Partial<EvalRunRecord> = {}): EvalRunRecord 
   harness: 'deterministic',
   id,
   projectRevision: 'b'.repeat(64),
-  schemaVersion: 1 as const,
   ...overrides,
 });
 
@@ -52,7 +51,6 @@ const trial = (overrides: Partial<EvalTrialRecord> = {}): EvalTrialRecord => Obj
     semanticGrader: null,
   }),
   rawArtifacts: Object.freeze([]),
-  schemaVersion: 1 as const,
   startedAt: '2026-08-17T12:00:00.000Z',
   targetDigest: 'target-baseline',
   trialIndex: 0,
@@ -180,37 +178,29 @@ it('labels a host CLI version, invocation, semantic grader version, or harness m
     provenance: {
       hostCliVersion: '2.4.0',
       invocation: { mode: 'automatic' },
-      semanticGrader: { id: 'claude-semantic', model: 'claude-opus-4-6', schemaVersion: 1 },
+      semanticGrader: { contractRevision: 'v1', id: 'claude-semantic', model: 'claude-opus-4-6' },
     },
   }))).toEqual(['grader-versions-mismatch']);
+  expect(nonComparable(compareEvalRuns({
+    baseline: side('run-base', trials(['pass', 'pass', 'pass'], {
+      provenance: {
+        hostCliVersion: '2.4.0',
+        invocation: { mode: 'automatic' },
+        semanticGrader: { contractRevision: 'v1', id: 'claude-semantic', model: 'claude-opus-4-5' },
+      },
+    })),
+    candidate: side('run-candidate', trials(['pass', 'pass', 'pass'], {
+      provenance: {
+        hostCliVersion: '2.4.0',
+        invocation: { mode: 'automatic' },
+        semanticGrader: { contractRevision: 'v2', id: 'claude-semantic', model: 'claude-opus-4-5' },
+      },
+    })),
+  }).rows[0]).causes.map((cause) => cause.code)).toEqual(['grader-versions-mismatch']);
   expect(nonComparable(compareEvalRuns({
     baseline: side('run-base', baselineTrials),
     candidate: side('run-candidate', candidateTrials, { run: run('run-candidate', { harness: 'claude-native' }) }),
   }).rows[0]).causes.map((cause) => cause.code)).toEqual(['harness-mismatch']);
-});
-
-it('requires a persisted value on both sides for every documented alignment facet', () => {
-  const comparison = compareEvalRuns({
-    baseline: side('run-base', trials(['pass', 'pass', 'pass'])),
-    candidate: side('run-candidate', trials(['pass', 'pass', 'pass'], { provenance: undefined })),
-  });
-
-  expect(nonComparable(comparison.rows[0]).causes.map((cause) => cause.code)).toEqual([
-    'grader-versions-mismatch',
-    'host-cli-version-mismatch',
-    'invocation-mismatch',
-  ]);
-
-  const missingBoth = compareEvalRuns({
-    baseline: side('run-base', trials(['pass', 'pass', 'pass'], { provenance: undefined })),
-    candidate: side('run-candidate', trials(['pass', 'pass', 'pass'], { provenance: undefined })),
-  });
-
-  expect(nonComparable(missingBoth.rows[0]).causes.map((cause) => cause.code)).toEqual([
-    'grader-versions-mismatch',
-    'host-cli-version-mismatch',
-    'invocation-mismatch',
-  ]);
 });
 
 it('does not compare a manually graded trial whose semantic grader identity was unrecorded', () => {

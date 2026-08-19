@@ -28,7 +28,6 @@ const runRecord = {
   harness: 'deterministic',
   id: '20260817t000000000z-abcdef01',
   projectRevision: 'd'.repeat(64),
-  schemaVersion: 1,
   summary: { cases: 1, fail: 0, inconclusive: 0, pass: 1, trials: 1 },
 };
 
@@ -62,7 +61,6 @@ const trialRecord = {
     semanticGrader: null,
   },
   rawArtifacts: ['artifacts/portable-1/evidence.json'],
-  schemaVersion: 1,
   startedAt: '2026-08-17T00:00:00.500Z',
   targetDigest: 'c'.repeat(64),
   trialIndex: 0,
@@ -83,7 +81,10 @@ const listing = {
   diagnostics: [],
   suites: [{
     cases: [{
-      assertions: [{ id: 'outcome:0123456789abcdef', kind: 'outcome' }],
+      assertions: [
+        { id: 'outcome:0123456789abcdef', kind: 'outcome' },
+        { id: 'skill-activation:0123456789abcdef', kind: 'skill-activation', skill: 'review' },
+      ],
       digest: 'a'.repeat(64),
       hosts: ['portable'],
       id: 'reads-result',
@@ -122,7 +123,12 @@ it('lists discovered suites over the same foreground session', async () => {
   const calls: RecordedRequest[] = [];
   const evalClient = client(recordingFetch(calls, () => response(listing)));
 
-  await expect(evalClient.suites()).resolves.toMatchObject({ suites: [{ name: 'review-change' }] });
+  await expect(evalClient.suites()).resolves.toMatchObject({
+    suites: [{
+      cases: [{ assertions: [{ kind: 'outcome' }, { kind: 'skill-activation', skill: 'review' }] }],
+      name: 'review-change',
+    }],
+  });
   expect(calls).toEqual([{ body: undefined, method: 'GET', token: 'foreground-token', url: '/api/evals/suites' }]);
 });
 
@@ -217,24 +223,28 @@ it('decodes automatic invocation Skill provenance without weakening identifier s
   }
 });
 
-it('accepts legacy omitted trial provenance and usage but rejects unsafe or malformed additions', async () => {
-  const { provenance: _provenance, usage: _usage, ...legacyTrial } = trialRecord;
+it('requires canonical trial provenance while allowing omitted usage', async () => {
+  const { provenance: _provenance, ...withoutProvenance } = trialRecord;
+  const { usage: _usage, ...withoutUsage } = trialRecord;
   const cases: readonly unknown[] = [
-    { run: { ...runResult, trials: [legacyTrial] } },
+    { run: { ...runResult, trials: [withoutProvenance] } },
     { run: { ...runResult, trials: [{ ...trialRecord, provenance: { ...trialRecord.provenance, extra: true } }] } },
     { run: { ...runResult, trials: [{ ...trialRecord, provenance: { ...trialRecord.provenance, hostCliVersion: '/private/cli' } }] } },
     ...['C:private', 'C:\\private', 'C:/private', '\\\\server\\share', 'file:///private/cli'].map((hostCliVersion) => ({
       run: { ...runResult, trials: [{ ...trialRecord, provenance: { ...trialRecord.provenance, hostCliVersion } }] },
     })),
     { run: { ...runResult, trials: [{ ...trialRecord, provenance: { ...trialRecord.provenance, invocation: { mode: 'explicit' } } }] } },
+    { run: { ...runResult, trials: [{ ...trialRecord, provenance: { ...trialRecord.provenance, semanticGrader: { id: 'claude-semantic', model: 'claude-opus-4-6' } } }] } },
+    { run: { ...runResult, trials: [{ ...trialRecord, provenance: { ...trialRecord.provenance, semanticGrader: { contractRevision: 'C:private', id: 'claude-semantic', model: 'claude-opus-4-6' } } }] } },
     { run: { ...runResult, trials: [{ ...trialRecord, usage: { inputTokens: 9, outputTokens: -1 } }] } },
   ];
 
-  const legacy = client(recordingFetch([], () => response(cases[0])));
-  const legacyResult = await legacy.read(runRecord.id);
-  expect(legacyResult.trials[0]).toMatchObject({ id: trialRecord.id });
-  expect(legacyResult.trials[0]).not.toHaveProperty('provenance');
-  expect(legacyResult.trials[0]).not.toHaveProperty('usage');
+  const usageOptional = client(recordingFetch([], () => response({
+    run: { ...runResult, trials: [withoutUsage] },
+  })));
+  const resultWithoutUsage = await usageOptional.read(runRecord.id);
+  expect(resultWithoutUsage.trials[0]).toMatchObject({ id: trialRecord.id, provenance: trialRecord.provenance });
+  expect(resultWithoutUsage.trials[0]).not.toHaveProperty('usage');
 
   const unrecorded = client(recordingFetch([], () => response({
     run: {
@@ -253,7 +263,23 @@ it('accepts legacy omitted trial provenance and usage but rejects unsafe or malf
     trials: [{ provenance: { invocation: { mode: 'explicit', skill: 'hook:fixture' }, semanticGrader: { state: 'unrecorded' } } }],
   });
 
-  for (const body of cases.slice(1)) {
+  const recordedGrader = client(recordingFetch([], () => response({
+    run: {
+      ...runResult,
+      trials: [{
+        ...trialRecord,
+        provenance: {
+          ...trialRecord.provenance,
+          semanticGrader: { contractRevision: 'v1', id: 'claude-semantic', model: 'claude-opus-4-6' },
+        },
+      }],
+    },
+  })));
+  await expect(recordedGrader.read(runRecord.id)).resolves.toMatchObject({
+    trials: [{ provenance: { semanticGrader: { contractRevision: 'v1' } } }],
+  });
+
+  for (const body of cases) {
     const evalClient = client(recordingFetch([], () => response(body)));
     await expect(evalClient.read(runRecord.id)).rejects.toMatchObject({ code: 'AB8073' });
   }
@@ -265,8 +291,8 @@ it('replays only a detached, contiguous persisted event timeline from its cursor
     replay: {
       cursor: { afterSequence: 2 },
       events: [
-        { kind: 'run.started', payload: { trials: 1 }, schemaVersion: 1, sequence: 1, timestamp: '2026-08-17T00:00:00.000Z' },
-        { kind: 'trial.completed', payload: { outcome: 'pass' }, schemaVersion: 1, sequence: 2, timestamp: '2026-08-17T00:00:01.000Z' },
+        { kind: 'run.started', payload: { trials: 1 }, sequence: 1, timestamp: '2026-08-17T00:00:00.000Z' },
+        { kind: 'trial.completed', payload: { outcome: 'pass' }, sequence: 2, timestamp: '2026-08-17T00:00:01.000Z' },
       ],
     },
   })));
@@ -282,13 +308,13 @@ it('replays only a detached, contiguous persisted event timeline from its cursor
 
 it('rejects a duplicate-key or reordered event replay instead of retaining a hostile response object', async () => {
   const duplicate = client(recordingFetch([], () => new Response(
-    '{"replay":{"cursor":{"afterSequence":1},"events":[{"kind":"run.started","payload":{},"schemaVersion":1,"sequence":1,"sequence":2,"timestamp":"2026-08-17T00:00:00.000Z"}]}}',
+    '{"replay":{"cursor":{"afterSequence":1},"events":[{"kind":"run.started","payload":{},"sequence":1,"sequence":2,"timestamp":"2026-08-17T00:00:00.000Z"}]}}',
     { headers: { 'content-type': 'application/json' } },
   )));
   const reordered = client(recordingFetch([], () => response({ replay: {
     cursor: { afterSequence: 2 },
     events: [
-      { kind: 'trial.completed', payload: {}, schemaVersion: 1, sequence: 2, timestamp: '2026-08-17T00:00:01.000Z' },
+      { kind: 'trial.completed', payload: {}, sequence: 2, timestamp: '2026-08-17T00:00:01.000Z' },
     ],
   } })));
 
@@ -299,8 +325,8 @@ it('rejects a duplicate-key or reordered event replay instead of retaining a hos
 it('decodes fragmented NDJSON in sequence and aborts a replacement stream without a stale callback', async () => {
   const encoder = new TextEncoder();
   const frames = [
-    JSON.stringify({ kind: 'run.started', payload: {}, schemaVersion: 1, sequence: 1, timestamp: '2026-08-17T00:00:00.000Z' }),
-    JSON.stringify({ kind: 'run.completed', payload: {}, schemaVersion: 1, sequence: 2, timestamp: '2026-08-17T00:00:01.000Z' }),
+    JSON.stringify({ kind: 'run.started', payload: {}, sequence: 1, timestamp: '2026-08-17T00:00:00.000Z' }),
+    JSON.stringify({ kind: 'run.completed', payload: {}, sequence: 2, timestamp: '2026-08-17T00:00:01.000Z' }),
     '',
   ].join('\n');
   let streamCalls = 0;

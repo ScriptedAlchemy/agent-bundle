@@ -20,6 +20,11 @@ Generated executables target Node.js 22.12 or newer by default. `runtime: { node
 that floor (it can never be lowered), and the selected floor is recorded as `runtime.node` in the
 artifact manifest.
 
+Files under a root `assets/` directory copy byte-for-byte into every target artifact's `assets/`
+directory. Top-level `assets` replaces that convention with explicit entries: literal file paths,
+whole directories, or globs, all resolved from the project root. Entries outside `assets/` keep
+their project-relative path under the artifact's `assets/` directory.
+
 Hook `tools` accept the canonical selectors (`shell`, `file.read`, `file.write`, `mcp`, `agent`)
 plus explicit host-native selectors such as `claude:WebSearch` or `codex:view_image`, which
 contribute only to that host's native matcher. A hook that selects tools must leave every selected
@@ -171,6 +176,9 @@ project configuration or use them as a fallback for either harness.
 
 ## Limitations
 
+- Development snapshots and exports written by pre-0.1 builds before the unversioned durable-record
+  cutover are not migrated. Rebuild artifacts and discard those preview Eval and Playground records
+  before upgrading; current readers reject the superseded shapes instead of guessing at compatibility.
 - The workbench binds to loopback only and is a foreground development session, not a hosted service.
 - Native Claude and Codex harnesses require those CLIs to be installed and signed in. A missing,
   incompatible, or unauthenticated CLI is reported as a harness failure, distinct from a plugin

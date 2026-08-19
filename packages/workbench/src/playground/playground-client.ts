@@ -322,8 +322,8 @@ const replayBody = (value: unknown): PlaygroundReplay => {
 const exportBody = (value: unknown): PlaygroundExport => {
   const envelope = detachedRecord(value);
   const body = envelope.export;
-  if (!exactKeys(envelope, ['export']) || !isRecord(body) || !exactKeys(body, ['events', 'schemaVersion', 'session']) ||
-    body.schemaVersion !== 1 || !isSession(body.session)) throw invalidResponse();
+  if (!exactKeys(envelope, ['export']) || !isRecord(body) || !exactKeys(body, ['events', 'session']) ||
+    !isSession(body.session)) throw invalidResponse();
   traceEvents(body.events);
   return body as unknown as PlaygroundExport;
 };
@@ -332,8 +332,8 @@ const draftEvalBody = (value: unknown): DraftEvalCase => {
   const envelope = detachedRecord(value);
   const body = envelope.draftEvalCase;
   if (!exactKeys(envelope, ['draftEvalCase']) || !isRecord(body) ||
-    !exactKeys(body, ['assertions', 'epoch', 'fixture', 'invocation', 'outcome', 'schemaVersion', 'target', 'task']) ||
-    body.schemaVersion !== 1 || !Array.isArray(body.assertions) || !isRecord(body.epoch) || !exactKeys(body.epoch, ['digest', 'id']) ||
+    !exactKeys(body, ['assertions', 'epoch', 'fixture', 'invocation', 'outcome', 'target', 'task']) ||
+    !Array.isArray(body.assertions) || !isRecord(body.epoch) || !exactKeys(body.epoch, ['digest', 'id']) ||
     !nonemptyString(body.epoch.digest) || !nonemptyString(body.epoch.id) || !isRecord(body.fixture) || !exactKeys(body.fixture, ['digest', 'id']) ||
     !nonemptyString(body.fixture.digest) || !nonemptyString(body.fixture.id) || !isRecord(body.invocation) ||
     !exactKeys(body.invocation, ['intent', 'kind']) || !jsonObject(body.invocation.intent) || !nonemptyString(body.invocation.kind) ||

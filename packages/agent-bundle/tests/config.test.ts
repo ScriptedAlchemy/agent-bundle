@@ -86,6 +86,7 @@ it('honors an explicit empty skills list instead of conventional discovery', asy
     });
 
     await expect(discoverProject(fixture.root, loaded.config)).resolves.toEqual({
+      assets: [],
       skills: [],
     });
   } finally {
@@ -298,6 +299,72 @@ it('expands glob patterns in explicit skills entries and deduplicates overlappin
     expect(discovered.skills.map((skill) => skill.dir).sort()).toEqual(
       [extraSkillDir, fixture.skillDir].sort(),
     );
+  } finally {
+    await removeProjectFixture(fixture.root);
+  }
+});
+
+it('discovers conventional root assets and strips the assets/ prefix from destinations', async () => {
+  const fixture = await createProjectFixture();
+
+  try {
+    await mkdir(join(fixture.root, 'assets/fonts'), { recursive: true });
+    await writeFile(join(fixture.root, 'assets/logo.svg'), '<svg/>');
+    await writeFile(join(fixture.root, 'assets/fonts/mono.woff'), 'font');
+
+    const discovered = await discoverProject(fixture.root, {
+      plugin: { name: 'review', version: '1.0.0' },
+    });
+
+    expect(discovered.assets).toEqual([
+      { bytes: 4, relativePath: 'fonts/mono.woff', source: join(fixture.root, 'assets/fonts/mono.woff') },
+      { bytes: 6, relativePath: 'logo.svg', source: join(fixture.root, 'assets/logo.svg') },
+    ]);
+  } finally {
+    await removeProjectFixture(fixture.root);
+  }
+});
+
+it('expands explicit asset entries as files, directories, and globs while dropping missing literals', async () => {
+  const fixture = await createProjectFixture();
+
+  try {
+    await mkdir(join(fixture.root, 'assets'), { recursive: true });
+    await mkdir(join(fixture.root, 'branding'), { recursive: true });
+    await mkdir(join(fixture.root, 'docs'), { recursive: true });
+    await writeFile(join(fixture.root, 'assets/logo.svg'), '<svg/>');
+    await writeFile(join(fixture.root, 'branding/logo.png'), 'png');
+    await writeFile(join(fixture.root, 'docs/guide.md'), '# Guide\n');
+    await writeFile(join(fixture.root, 'docs/notes.txt'), 'notes');
+
+    const discovered = await discoverProject(fixture.root, {
+      assets: ['assets/logo.svg', 'branding', 'docs/*.md', 'missing/logo.svg'],
+      plugin: { name: 'review', version: '1.0.0' },
+    });
+
+    expect(discovered.assets).toEqual([
+      { bytes: 6, relativePath: 'logo.svg', source: join(fixture.root, 'assets/logo.svg') },
+      { bytes: 3, relativePath: 'branding/logo.png', source: join(fixture.root, 'branding/logo.png') },
+      { bytes: 8, relativePath: 'docs/guide.md', source: join(fixture.root, 'docs/guide.md') },
+    ]);
+  } finally {
+    await removeProjectFixture(fixture.root);
+  }
+});
+
+it('honors an explicit empty assets list instead of conventional discovery', async () => {
+  const fixture = await createProjectFixture();
+
+  try {
+    await mkdir(join(fixture.root, 'assets'), { recursive: true });
+    await writeFile(join(fixture.root, 'assets/logo.svg'), '<svg/>');
+
+    const discovered = await discoverProject(fixture.root, {
+      assets: [],
+      plugin: { name: 'review', version: '1.0.0' },
+    });
+
+    expect(discovered.assets).toEqual([]);
   } finally {
     await removeProjectFixture(fixture.root);
   }

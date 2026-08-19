@@ -183,10 +183,16 @@ const snapshotArtifactLayout = (
     ? undefined
     : snapshotOutputLayout(layout.mcpEntries, 'MCP entries');
   const scripts = layout.scripts === undefined ? undefined : snapshotOutputLayout(layout.scripts, 'scripts');
+  const assets = layout.assets === undefined
+    ? undefined
+    : requireNonempty(layout.assets, 'artifact layout assets namespace');
   const skills = layout.skills === undefined
     ? undefined
     : requireNonempty(layout.skills, 'artifact layout skills namespace');
 
+  if (assets !== undefined && !isSafeArtifactDirectory(assets)) {
+    throw new Error('Target adapter artifact layout assets namespace must be a safe single namespace.');
+  }
   if (skills !== undefined && !isSafeArtifactDirectory(skills)) {
     throw new Error('Target adapter artifact layout skills namespace must be a safe single namespace.');
   }
@@ -200,6 +206,7 @@ const snapshotArtifactLayout = (
     throw new Error(`Target adapter "${adapter.name}" declares Skill layout without skills capability.`);
   }
   return Object.freeze({
+    ...(assets === undefined ? {} : { assets }),
     ...(hookWrappers === undefined ? {} : { hookWrappers }),
     ...(mcpApps === undefined ? {} : { mcpApps }),
     ...(mcpEntries === undefined ? {} : { mcpEntries }),

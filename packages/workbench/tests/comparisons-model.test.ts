@@ -21,7 +21,6 @@ const run = (id: string, createdAt: string): EvalRunRecord => ({
   harness: 'deterministic',
   id,
   projectRevision: 'b'.repeat(64),
-  schemaVersion: 1,
 });
 
 const metrics = (overrides: Partial<EvalConditionMetrics> = {}): EvalConditionMetrics => ({
@@ -54,7 +53,6 @@ const comparableRow = (overrides: Partial<EvalComparableRow> = {}): EvalComparab
   evidence: 'reliability',
   host: 'claude',
   model: 'sonnet',
-  unverifiedFacets: [],
   ...overrides,
 });
 
@@ -125,7 +123,7 @@ it('reports recorded usage and mean duration, or states that usage was not recor
   expect(comparisonMetricCellFor(metrics()).usage).toBe('Not recorded');
 });
 
-it('distinguishes an explicitly unrecorded semantic grader from legacy omitted provenance', () => {
+it('distinguishes an explicitly unrecorded semantic grader from unresolved condition provenance', () => {
   const explicit = comparisonMetricCellFor(metrics({
     provenance: {
       hostCliVersion: '2.1.232',
@@ -133,18 +131,18 @@ it('distinguishes an explicitly unrecorded semantic grader from legacy omitted p
       semanticGrader: { state: 'unrecorded' },
     },
   }));
-  const legacy = comparisonMetricCellFor(metrics({
+  const unresolved = comparisonMetricCellFor(metrics({
     provenance: { hostCliVersion: '2.1.232', invocation: 'automatic' },
   }));
 
   expect(explicit.provenance).toBe('CLI 2.1.232 · Invocation automatic · Semantic grader Unrecorded');
-  expect(legacy.provenance).toBe('CLI 2.1.232 · Invocation automatic · Semantic grader Not recorded');
+  expect(unresolved.provenance).toBe('CLI 2.1.232 · Invocation automatic · Semantic grader Not recorded');
 });
 
 it('renders a signed delta only for a comparable row', () => {
   const row = comparisonMatrixRowFor(comparableRow());
 
-  expect(row).toMatchObject({ comparable: true, key: 'direct-review/claude', model: 'sonnet', reasons: [], unverifiedFacets: [] });
+  expect(row).toMatchObject({ comparable: true, key: 'direct-review/claude', model: 'sonnet', reasons: [] });
   expect(row.delta).toEqual({
     meanDuration: '0 ms',
     passAtK: '0.0 pts',

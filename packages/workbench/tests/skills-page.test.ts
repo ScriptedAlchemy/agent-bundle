@@ -4,6 +4,8 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { expect, it } from '@rstest/core';
 
 import type { ProjectStatus } from '../../agent-bundle/src/dev/types.ts';
+import { EvalClient } from '../src/evals/eval-client.ts';
+import { ForegroundRouteClient } from '../src/mcp/mcp-route-client.ts';
 import { SkillClient } from '../src/skill-client.ts';
 import { SkillDocumentPanel, SkillsPage } from '../src/skills-page.tsx';
 
@@ -104,13 +106,71 @@ it('keeps the source and generated document selector available without an active
     source: { diagnostics: [], state: 'unknown' },
   };
   const client = new SkillClient({ fetch: async () => { throw new Error('Effects do not run during server rendering.'); } });
+  const evalClient = new EvalClient({
+    foreground: new ForegroundRouteClient({
+      fetch: async () => { throw new Error('Effects do not run during server rendering.'); },
+    }),
+  });
 
-  const markup = renderToStaticMarkup(createElement(SkillsPage, { client, status }));
+  const markup = renderToStaticMarkup(createElement(SkillsPage, { client, evalClient, status }));
 
   expect(markup).toContain('aria-label="Skill document"');
   expect(markup).toContain('>Source</button>');
   expect(markup).toContain('>Generated</button>');
   expect(markup).toContain('Loading source Skills…');
+});
+
+it('renders eval coverage with per-case kind badges beneath the resource tree', () => {
+  const markup = renderToStaticMarkup(createElement(SkillDocumentPanel, {
+    document: 'source',
+    evalCoverage: {
+      coverage: {
+        direct: 1,
+        entries: [
+          { caseId: 'activates-on-request', kinds: ['direct'], suite: 'review-suite' },
+          { caseId: 'stays-quiet', kinds: ['negative'], suite: 'review-suite' },
+        ],
+        indirect: 0,
+        negative: 1,
+      },
+      state: 'ready',
+    },
+    onDocumentChange: () => undefined,
+    onViewChange: () => undefined,
+    selected: document,
+    view: 'rendered',
+  }));
+
+  expect(markup).toContain('aria-label="Eval coverage"');
+  expect(markup).toContain('Direct 1');
+  expect(markup).toContain('Indirect 0');
+  expect(markup).toContain('Negative 1');
+  expect(markup).toContain('review-suite / activates-on-request');
+  expect(markup).toContain('skill-coverage-badge--direct');
+  expect(markup).toContain('skill-coverage-badge--negative');
+});
+
+it('reports eval coverage loading and unavailable states without listing cases', () => {
+  const loading = renderToStaticMarkup(createElement(SkillDocumentPanel, {
+    document: 'source',
+    evalCoverage: { state: 'loading' },
+    onDocumentChange: () => undefined,
+    onViewChange: () => undefined,
+    selected: document,
+    view: 'rendered',
+  }));
+  const unavailable = renderToStaticMarkup(createElement(SkillDocumentPanel, {
+    document: 'source',
+    evalCoverage: { state: 'unavailable', summary: 'Eval coverage is unavailable because authored suites could not be loaded.' },
+    onDocumentChange: () => undefined,
+    onViewChange: () => undefined,
+    selected: document,
+    view: 'rendered',
+  }));
+
+  expect(loading).toContain('Loading eval coverage…');
+  expect(unavailable).toContain('Eval coverage is unavailable because authored suites could not be loaded.');
+  expect(unavailable).not.toContain('skill-coverage-badge');
 });
 
 it('keeps generated document navigation and its target available while no generated document is selected', () => {

@@ -62,7 +62,6 @@ const runRecord: EvalRunRecord = {
   harness: 'deterministic',
   id: '20260817t000000000z-abcdef01',
   projectRevision: 'd'.repeat(64),
-  schemaVersion: 1,
   summary: { cases: 2, fail: 1, inconclusive: 1, pass: 1, trials: 3 },
 };
 
@@ -96,7 +95,6 @@ const trial = (overrides: Partial<EvalTrialRecord>): EvalTrialRecord => ({
     semanticGrader: null,
   },
   rawArtifacts: ['artifacts/portable-1/evidence.json'],
-  schemaVersion: 1,
   startedAt: '2026-08-17T00:00:00.500Z',
   targetDigest,
   trialIndex: 0,
@@ -215,8 +213,8 @@ it('renders the persisted timeline, server evidence channels, host/model matrix,
   };
   const evidenceView = evalRunViewFor({
     events: [
-      { kind: 'run.started', payload: { trials: 3 }, schemaVersion: 1, sequence: 1, timestamp: '2026-08-17T00:00:00.000Z' },
-      { kind: 'trial.completed', payload: { outcome: 'pass' }, schemaVersion: 1, sequence: 2, timestamp: '2026-08-17T00:00:01.000Z' },
+      { kind: 'run.started', payload: { trials: 3 }, sequence: 1, timestamp: '2026-08-17T00:00:00.000Z' },
+      { kind: 'trial.completed', payload: { outcome: 'pass' }, sequence: 2, timestamp: '2026-08-17T00:00:01.000Z' },
     ],
     listing,
     result: evidenceResult,
@@ -250,7 +248,7 @@ it('does not paint held prior-run events while a replacement run waits for repla
 it('labels a bounded timeline when earlier durable events are not shown', () => {
   const bounded = evalRunViewFor({
     discardedThroughSequence: 12,
-    events: [{ kind: 'run.completed', payload: {}, schemaVersion: 1, sequence: 13, timestamp: '2026-08-17T00:00:01.000Z' }],
+    events: [{ kind: 'run.completed', payload: {}, sequence: 13, timestamp: '2026-08-17T00:00:01.000Z' }],
     listing,
     result,
     selectedSuite: 'review-change',
@@ -298,7 +296,7 @@ it('stops at a terminal replay and exposes torn or malformed observation instead
     client: {
       events: async () => ({
         cursor: { afterSequence: 1 },
-        events: [{ kind: 'run.completed', payload: {}, schemaVersion: 1, sequence: 1, timestamp: '2026-08-17T00:00:01.000Z' }],
+        events: [{ kind: 'run.completed', payload: {}, sequence: 1, timestamp: '2026-08-17T00:00:01.000Z' }],
       }),
       stream: () => {
         streamCalls += 1;
@@ -334,8 +332,8 @@ it('reconnects a cleanly ended stream from the last cursor but treats stream rej
         replayCursors.push(afterSequence);
         replayCount += 1;
         return replayCount === 1
-          ? { cursor: { afterSequence: 1 }, events: [{ kind: 'run.started', payload: {}, schemaVersion: 1, sequence: 1, timestamp: '2026-08-17T00:00:00.000Z' }] }
-          : { cursor: { afterSequence: 2 }, events: [{ kind: 'run.completed', payload: {}, schemaVersion: 1, sequence: 2, timestamp: '2026-08-17T00:00:01.000Z' }] };
+          ? { cursor: { afterSequence: 1 }, events: [{ kind: 'run.started', payload: {}, sequence: 1, timestamp: '2026-08-17T00:00:00.000Z' }] }
+          : { cursor: { afterSequence: 2 }, events: [{ kind: 'run.completed', payload: {}, sequence: 2, timestamp: '2026-08-17T00:00:01.000Z' }] };
       },
       stream: ({ afterSequence }) => {
         streamCursors.push(afterSequence);
@@ -525,7 +523,7 @@ it('renders a closed harness selector, keeps authored model pins read-only, and 
   const admitted: EvalRunRecord = { ...runRecord, completedAt: undefined, summary: undefined };
   const activeView = evalRunViewFor({
     admittedRun: admitted,
-    events: [{ kind: 'trial.started', payload: {}, schemaVersion: 1, sequence: 1, timestamp: '2026-08-17T00:00:00.000Z' }],
+    events: [{ kind: 'trial.started', payload: {}, sequence: 1, timestamp: '2026-08-17T00:00:00.000Z' }],
     listing,
     result: undefined,
     selectedSuite: 'review-change',
@@ -559,7 +557,7 @@ it('renders an admitted run state and its durable replay before trial records re
   const admitted: EvalRunRecord = { ...runRecord, completedAt: undefined, summary: undefined };
   const activeView = evalRunViewFor({
     admittedRun: admitted,
-    events: [{ kind: 'run.started', payload: {}, schemaVersion: 1, sequence: 1, timestamp: '2026-08-17T00:00:00.000Z' }],
+    events: [{ kind: 'run.started', payload: {}, sequence: 1, timestamp: '2026-08-17T00:00:00.000Z' }],
     listing,
     result: undefined,
     selectedSuite: 'review-change',
@@ -585,7 +583,7 @@ it('renders reopened durable completed, failed, cancelled, and cancelling states
     view: evalRunViewFor({
       admittedRun: kind === undefined ? { ...runRecord, completedAt: undefined, summary: undefined } : undefined,
       cancelling: kind === undefined,
-      events: kind === undefined ? [] : [{ kind, payload: {}, schemaVersion: 1, sequence: 1, timestamp: '2026-08-17T00:00:00.000Z' }],
+      events: kind === undefined ? [] : [{ kind, payload: {}, sequence: 1, timestamp: '2026-08-17T00:00:00.000Z' }],
       listing,
       result,
       selectedSuite: 'review-change',

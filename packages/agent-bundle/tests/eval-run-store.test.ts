@@ -29,6 +29,12 @@ const provenance = Object.freeze({
   projectRevision: 'b'.repeat(64),
 });
 
+const trialProvenance = Object.freeze({
+  hostCliVersion: '2.1.0',
+  invocation: Object.freeze({ mode: 'automatic' }),
+  semanticGrader: null,
+} as const);
+
 const runOptions = (projectRoot: string, overrides: Partial<CreateEvalRunOptions> = {}): CreateEvalRunOptions => ({
   artifact,
   projectRoot,
@@ -54,6 +60,7 @@ const trialInput = (overrides: Partial<EvalTrialRecordInput> = {}): EvalTrialRec
   model: 'claude-sonnet-4-5',
   outcome: 'pass',
   prompt: 'Do the task.',
+  provenance: trialProvenance,
   rawArtifacts: ['artifacts/trial-1/evidence.json'],
   startedAt: '2026-08-17T12:00:00.000Z',
   targetDigest: 'a'.repeat(64),
@@ -98,11 +105,11 @@ const withEvalRunStoreDurabilityTestHook = async <T>(
   }
 };
 
-it('publishes a schema-versioned run document with its exact target digest', async () => {
+it('publishes one canonical run document with its exact target digest', async () => {
   await withProject(async (root) => {
     const writer = await createEvalRun(runOptions(root));
     try {
-      expect(writer.record.schemaVersion).toBe(1);
+      expect(writer.record).not.toHaveProperty('schemaVersion');
       expect(writer.record.artifact.targetDigests).toEqual({ claude: 'a'.repeat(64) });
       expect(Object.isFrozen(writer.record)).toBe(true);
 
@@ -172,7 +179,7 @@ it('stores trials and raw artifacts under the run directory without a database',
       await writer.finish({ cases: 1, fail: 0, inconclusive: 0, pass: 1, trials: 1 });
 
       expect(reference).toBe('artifacts/trial-1/evidence.json');
-      expect(trial.schemaVersion).toBe(1);
+      expect(trial).not.toHaveProperty('schemaVersion');
       expect(await readEvalTrials(writer.directory)).toEqual([trial]);
       expect((await readEvalRun(writer.directory)).summary).toEqual({ cases: 1, fail: 0, inconclusive: 0, pass: 1, trials: 1 });
       expect((await readdir(writer.directory)).sort()).toEqual(['artifacts', 'cases', 'events.jsonl', 'owner.json', 'run.json']);
@@ -225,7 +232,7 @@ it('round-trips bounded provenance and normalized token usage with a trial', asy
         provenance: {
           hostCliVersion: '2.1.232',
           invocation: { mode: 'explicit', skill: 'review' },
-          semanticGrader: { id: 'claude-semantic', model: 'claude-opus-4-6', schemaVersion: 1 },
+          semanticGrader: { contractRevision: 'v1', id: 'claude-semantic', model: 'claude-opus-4-6' },
         },
         usage: { inputTokens: 9, outputTokens: 3 },
       }));
@@ -233,7 +240,7 @@ it('round-trips bounded provenance and normalized token usage with a trial', asy
       expect(written.provenance).toEqual({
         hostCliVersion: '2.1.232',
         invocation: { mode: 'explicit', skill: 'review' },
-        semanticGrader: { id: 'claude-semantic', model: 'claude-opus-4-6', schemaVersion: 1 },
+        semanticGrader: { contractRevision: 'v1', id: 'claude-semantic', model: 'claude-opus-4-6' },
       });
       expect(written.usage).toEqual({ inputTokens: 9, outputTokens: 3 });
       expect(await readEvalTrials(writer.directory)).toEqual([written]);
@@ -255,11 +262,49 @@ it('reopens automatic Skill invocation provenance from the durable trial record'
         },
       }));
 
-      expect(written.provenance?.invocation).toEqual({ mode: 'automatic', skill: 'release-notes' });
-      expect((await readEvalTrials(writer.directory))[0]?.provenance?.invocation)
+      expect(written.provenance.invocation).toEqual({ mode: 'automatic', skill: 'release-notes' });
+      expect((await readEvalTrials(writer.directory))[0]?.provenance.invocation)
         .toEqual({ mode: 'automatic', skill: 'release-notes' });
     } finally {
       await writer.close();
+    }
+  });
+});
+
+it('rejects a trial without canonical provenance', async () => {
+  await withProject(async (root) => {
+    const writer = await createEvalRun(runOptions(root));
+    try {
+      const { provenance: _provenance, ...withoutProvenance } = trialInput();
+      await expect(writer.writeTrial(withoutProvenance as EvalTrialRecordInput))
+        .rejects.toMatchObject({ code: 'EVAL_RUN_RECORD_INVALID' });
+    } finally {
+      await writer.close();
+    }
+  });
+});
+
+it('requires a safe semantic grader contract revision', async () => {
+  await withProject(async (root) => {
+    const writer = await createEvalRun(runOptions(root));
+    try {
+      const recorded = Object.freeze({
+        contractRevision: 'v1',
+        id: 'claude-semantic',
+        model: 'claude-opus-4-6',
+      });
+      await expect(writer.writeTrial(trialInput({
+        provenance: { ...trialProvenance, semanticGrader: recorded },
+      }))).resolves.toMatchObject({ provenance: { semanticGrader: recorded } });
+      const { contractRevision: _contractRevision, ...missingRevision } = recorded;
+      for (const semanticGrader of [missingRevision, { ...recorded, contractRevision: 'C:private' }]) {
+        await expect(writer.writeTrial(trialInput({
+          id: 'invalid-grader-provenance',
+          provenance: { ...trialProvenance, semanticGrader } as EvalTrialRecordInput['provenance'],
+        }))).rejects.toMatchObject({ code: 'EVAL_RUN_RECORD_INVALID' });
+      }
+    } finally {
+      await writer.close().catch(() => undefined);
     }
   });
 });
@@ -308,7 +353,7 @@ it('round-trips an explicitly unrecorded semantic grader without treating it as 
         },
       }));
 
-      expect(written.provenance?.semanticGrader).toEqual({ state: 'unrecorded' });
+      expect(written.provenance.semanticGrader).toEqual({ state: 'unrecorded' });
       expect(await readEvalTrials(writer.directory)).toEqual([written]);
     } finally {
       await writer.close();
@@ -327,7 +372,7 @@ it('publishes JSON documents by rename and leaves no staging file behind', async
       const caseFiles = await readdir(join(writer.directory, 'cases', 'direct-review'));
       expect(caseFiles.sort()).toEqual(['trial-1.json', 'trial-2.json']);
       expect((await readdir(writer.directory)).some((entry) => entry.includes('.stage-'))).toBe(false);
-      expect(JSON.parse(await readFile(join(writer.directory, 'run.json'), 'utf8'))).toMatchObject({ schemaVersion: 1 });
+      expect(JSON.parse(await readFile(join(writer.directory, 'run.json'), 'utf8'))).not.toHaveProperty('schemaVersion');
     } finally {
       await writer.close();
     }
@@ -536,7 +581,6 @@ it('rejects any complete event log whose sequence is not exactly 1 through N', a
     const event = (sequence: number): string => JSON.stringify({
       kind: 'trial.started',
       payload: {},
-      schemaVersion: 1,
       sequence,
       timestamp: '2026-08-17T12:00:00.000Z',
     });
@@ -581,12 +625,12 @@ it('rejects a trial record whose identifiers are not path safe', async () => {
 it('enforces the persisted trial byte limit before atomically publishing the record', async () => {
   await withProject(async (root) => {
     const writer = await createEvalRun(runOptions(root));
-    const emptyPrompt = { ...trialInput(), prompt: '', schemaVersion: 1 };
+    const emptyPrompt = { ...trialInput(), prompt: '' };
     const allowedPromptBytes = 1024 * 1024 - Buffer.byteLength(`${stableJson(emptyPrompt)}\n`, 'utf8');
     const exact = trialInput({ prompt: 'x'.repeat(allowedPromptBytes) });
     const tooLarge = trialInput({ id: 'trial-2', prompt: 'x'.repeat(allowedPromptBytes + 1), trialIndex: 1 });
     try {
-      expect(Buffer.byteLength(`${stableJson({ ...exact, schemaVersion: 1 })}\n`, 'utf8')).toBe(1024 * 1024);
+      expect(Buffer.byteLength(`${stableJson(exact)}\n`, 'utf8')).toBe(1024 * 1024);
       await expect(writer.writeTrial(exact)).resolves.toMatchObject({ id: 'trial-1' });
       await expect(writer.writeTrial(tooLarge)).rejects.toMatchObject({
         code: 'EVAL_RUN_RECORD_INVALID',
@@ -811,10 +855,10 @@ it('rejects malformed persisted summary, trial, and event schemas instead of ret
     }));
     await expect(readEvalRun(writer.directory)).rejects.toMatchObject({ code: 'EVAL_RUN_CORRUPT' });
 
-    await writeFile(join(writer.directory, 'cases', 'direct-review', 'trial-1.json'), JSON.stringify({ schemaVersion: 1 }));
+    await writeFile(join(writer.directory, 'cases', 'direct-review', 'trial-1.json'), '{}');
     await expect(readEvalTrials(writer.directory)).rejects.toMatchObject({ code: 'EVAL_RUN_CORRUPT' });
 
-    await writeFile(join(writer.directory, 'events.jsonl'), `${JSON.stringify({ kind: '', payload: {}, schemaVersion: 1, sequence: 1, timestamp: '2026-08-17T12:00:00.000Z' })}\n`);
+    await writeFile(join(writer.directory, 'events.jsonl'), `${JSON.stringify({ kind: '', payload: {}, sequence: 1, timestamp: '2026-08-17T12:00:00.000Z' })}\n`);
     await expect(readEvalRunEvents(writer.directory)).rejects.toMatchObject({ code: 'EVAL_RUN_CORRUPT' });
   });
 });
