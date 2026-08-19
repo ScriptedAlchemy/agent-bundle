@@ -74,11 +74,12 @@ const parseEventData = (event: EventSourceMessage): unknown => {
 };
 
 const parseSequence = (event: EventSourceMessage, data: unknown): number | undefined => {
+  if (!isRecord(data) || typeof data.sequence !== 'number' || !Number.isSafeInteger(data.sequence) || data.sequence < 0) {
+    return undefined;
+  }
+  if (!/^(0|[1-9]\d*)$/u.test(event.lastEventId)) return undefined;
   const lastEventId = Number(event.lastEventId);
-  if (Number.isSafeInteger(lastEventId) && lastEventId >= 0) return lastEventId;
-  return isRecord(data) && typeof data.sequence === 'number' && Number.isSafeInteger(data.sequence) && data.sequence >= 0
-    ? data.sequence
-    : undefined;
+  return Number.isSafeInteger(lastEventId) && lastEventId === data.sequence ? lastEventId : undefined;
 };
 
 const normalizePaths = (paths: readonly string[]): readonly string[] => Object.freeze(
@@ -221,8 +222,9 @@ export class ProjectClient {
   #onEvent(event: EventSourceMessage): void {
     if (this.#closed) return;
     const data = parseEventData(event);
+    const sequence = parseSequence(event, data);
     const sourceChanged = parseSourceChangedEvent(data);
-    if (sourceChanged !== undefined && sourceChanged.sequence > this.#lastSourceChangeSequence) {
+    if (sequence !== undefined && sourceChanged !== undefined && sourceChanged.sequence === sequence && sourceChanged.sequence > this.#lastSourceChangeSequence) {
       this.#lastSourceChangeSequence = sourceChanged.sequence;
       this.#activity = activityFor(sourceChanged.payload.paths);
       for (const listener of this.#activityListeners) {
@@ -233,7 +235,6 @@ export class ProjectClient {
         }
       }
     }
-    const sequence = parseSequence(event, data);
     if (sequence !== undefined) this.#lastEventId = Math.max(this.#lastEventId, sequence);
     this.#queueEventRefresh();
   }

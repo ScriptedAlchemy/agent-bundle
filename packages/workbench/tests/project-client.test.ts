@@ -146,6 +146,62 @@ it('refreshes Overview state after live named events and keeps the browser Event
   expect(stream.closed).toBe(true);
 });
 
+it('rejects project SSE records with missing, invalid, or mismatched sequence identities', async () => {
+  const stream = new RecordingEventSource();
+  const client = new ProjectClient({
+    events: () => stream,
+    fetch: async () => Response.json({ status: status() }),
+  });
+  await client.connect(() => undefined);
+  stream.emit('source.changed', {
+    data: JSON.stringify({
+      occurredAt: '2026-08-16T12:00:00.000Z',
+      payload: { occurredAt: '2026-08-16T12:00:00.000Z', paths: ['src/kept.ts'], reason: 'source-change' },
+      sequence: 7,
+      type: 'source.changed',
+    }),
+    lastEventId: '7',
+  });
+  stream.emit('artifact.status', {
+    data: JSON.stringify({ payload: status().artifact, type: 'artifact.status' }),
+    lastEventId: '8',
+  });
+  stream.emit('source.changed', {
+    data: JSON.stringify({
+      occurredAt: '2026-08-16T12:01:00.000Z',
+      payload: { occurredAt: '2026-08-16T12:01:00.000Z', paths: ['src/missing-id.ts'], reason: 'source-change' },
+      sequence: 9,
+      type: 'source.changed',
+    }),
+    lastEventId: '',
+  });
+  stream.emit('source.changed', {
+    data: JSON.stringify({
+      occurredAt: '2026-08-16T12:02:00.000Z',
+      payload: { occurredAt: '2026-08-16T12:02:00.000Z', paths: ['src/invalid-id.ts'], reason: 'source-change' },
+      sequence: 10,
+      type: 'source.changed',
+    }),
+    lastEventId: 'not-a-sequence',
+  });
+  stream.emit('source.changed', {
+    data: JSON.stringify({
+      occurredAt: '2026-08-16T12:03:00.000Z',
+      payload: { occurredAt: '2026-08-16T12:03:00.000Z', paths: ['src/mismatch.ts'], reason: 'source-change' },
+      sequence: 12,
+      type: 'source.changed',
+    }),
+    lastEventId: '11',
+  });
+  stream.emit('artifact.status', {
+    data: JSON.stringify({ payload: status().artifact, sequence: 13.5, type: 'artifact.status' }),
+    lastEventId: '13',
+  });
+
+  expect(client.lastEventId).toBe(7);
+  expect(client.activity.changedFiles).toEqual(['src/kept.ts']);
+});
+
 it('captures the latest valid source-change paths in an immutable browser activity snapshot', async () => {
   const stream = new RecordingEventSource();
   const client = new ProjectClient({
