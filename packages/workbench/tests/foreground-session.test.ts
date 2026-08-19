@@ -40,6 +40,34 @@ it('decodes the exact instance-aware foreground bootstrap envelope', () => {
   expect(Object.isFrozen(decoded)).toBe(true);
 });
 
+const invalidInstanceIds: readonly [string, string][] = [
+  ['an empty identity', ''],
+  ['a blank identity', '   '],
+  ['an identity with leading whitespace', ' foreground-instance-a'],
+  ['an identity with trailing whitespace', 'foreground-instance-a '],
+  ['an identity longer than 128 characters', 'a'.repeat(129)],
+];
+
+for (const [description, instanceId] of invalidInstanceIds) {
+  it(`rejects ${description} from the central foreground session decoder`, () => {
+    expect(decodeForegroundSession({
+      instanceId,
+      origin: 'http://foreground.test',
+      token: 'test-session-token',
+    })).toBeUndefined();
+  });
+}
+
+it('accepts a 128-character opaque instance identity', () => {
+  const instanceId = 'a'.repeat(128);
+
+  expect(decodeForegroundSession({
+    instanceId,
+    origin: 'http://foreground.test',
+    token: 'test-session-token',
+  })).toMatchObject({ instanceId });
+});
+
 it('shares one initial bootstrap and freezes its generation-zero snapshot', async () => {
   let bootstrapCalls = 0;
   let resolveBootstrap: ((response: Response) => void) | undefined;
@@ -138,6 +166,72 @@ it('keeps a newer refreshed snapshot when an older bootstrap completes afterward
     instanceId: 'foreground-instance-c',
     token: 'newer-token',
   });
+});
+
+const staleFailureCompletions: readonly [string, (resolve: (response: Response) => void, reject: (error: Error) => void) => void][] = [
+  ['a network failure', (_resolve, reject) => reject(new Error('Foreground server disconnected.'))],
+  ['malformed JSON', (resolve) => resolve(new Response('{', { headers: { 'content-type': 'application/json' } }))],
+  ['an invalid origin', (resolve) => resolve(json({
+    instanceId: 'foreground-instance-b',
+    origin: 'http://foreground.test/not-an-origin',
+    token: 'older-token',
+  }))],
+  ['an invalid schema', (resolve) => resolve(json({ origin: 'http://foreground.test', token: 'older-token' }))],
+];
+
+for (const [description, completeStaleBootstrap] of staleFailureCompletions) {
+  it(`returns the newer snapshot when an older refresh completes with ${description}`, async () => {
+    let bootstrapCalls = 0;
+    let completeOlder: (() => void) | undefined;
+    const authority = new ForegroundSessionAuthority({
+      fetch: async () => {
+        bootstrapCalls++;
+        if (bootstrapCalls === 1) return session('foreground-instance-a', 'initial-token');
+        if (bootstrapCalls === 2) {
+          return await new Promise<Response>((resolve, reject) => {
+            completeOlder = () => completeStaleBootstrap(resolve, reject);
+          });
+        }
+        if (bootstrapCalls === 3) return session('foreground-instance-c', 'newer-token');
+        throw new Error('Unexpected foreground session bootstrap.');
+      },
+    });
+
+    await authority.snapshot();
+    const older = authority.refresh();
+    const newerSnapshot = await authority.refresh();
+    if (completeOlder === undefined) throw new Error('Expected an older foreground bootstrap.');
+    completeOlder();
+
+    await expect(older).resolves.toBe(newerSnapshot);
+    await expect(authority.snapshot()).resolves.toBe(newerSnapshot);
+  });
+}
+
+it('does not apply an older success after a newer refresh fails', async () => {
+  let bootstrapCalls = 0;
+  let rejectNewer: ((error: Error) => void) | undefined;
+  let resolveOlder: ((response: Response) => void) | undefined;
+  const authority = new ForegroundSessionAuthority({
+    fetch: async () => {
+      bootstrapCalls++;
+      if (bootstrapCalls === 1) return session('foreground-instance-a', 'initial-token');
+      if (bootstrapCalls === 2) return await new Promise<Response>((resolve) => { resolveOlder = resolve; });
+      if (bootstrapCalls === 3) return await new Promise<Response>((_resolve, reject) => { rejectNewer = reject; });
+      throw new Error('Unexpected foreground session bootstrap.');
+    },
+  });
+
+  const initial = await authority.snapshot();
+  const older = authority.refresh();
+  const newer = authority.refresh();
+  if (rejectNewer === undefined || resolveOlder === undefined) throw new Error('Expected concurrent foreground bootstraps.');
+  rejectNewer(new Error('Foreground server disconnected.'));
+  await expect(newer).rejects.toThrow('Foreground server disconnected.');
+  resolveOlder(session('foreground-instance-b', 'older-token'));
+
+  await expect(older).resolves.toBe(initial);
+  await expect(authority.snapshot()).resolves.toBe(initial);
 });
 
 for (const [description, body] of invalidSessionBodies) {

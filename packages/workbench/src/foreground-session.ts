@@ -16,7 +16,13 @@ export const decodeForegroundSession = (value: unknown): ForegroundSession | und
   ) {
     return undefined;
   }
-  if (typeof value.instanceId !== 'string' || typeof value.origin !== 'string' || typeof value.token !== 'string') return undefined;
+  if (
+    typeof value.instanceId !== 'string' ||
+    value.instanceId.length === 0 || value.instanceId.length > 128 || value.instanceId.trim() !== value.instanceId ||
+    typeof value.origin !== 'string' || typeof value.token !== 'string'
+  ) {
+    return undefined;
+  }
   return Object.freeze({ instanceId: value.instanceId, origin: value.origin, token: value.token });
 };
 
@@ -46,8 +52,7 @@ export class ForegroundSessionAuthority {
   readonly #browserOrigin: string | undefined;
   readonly #fetch: typeof fetch;
   #initialBootstrap: Promise<ForegroundSessionSnapshot> | undefined;
-  #lastAppliedBootstrapRequest = 0;
-  #nextBootstrapRequest = 0;
+  #latestStartedBootstrapRequest = 0;
   #snapshot: ForegroundSessionSnapshot | undefined;
 
   constructor(options: ForegroundSessionAuthorityOptions = {}) {
@@ -58,7 +63,7 @@ export class ForegroundSessionAuthority {
   snapshot(): Promise<ForegroundSessionSnapshot> {
     if (this.#snapshot !== undefined) return Promise.resolve(this.#snapshot);
     if (this.#initialBootstrap === undefined) {
-      const bootstrap = this.#bootstrap(++this.#nextBootstrapRequest);
+      const bootstrap = this.#bootstrap(++this.#latestStartedBootstrapRequest);
       this.#initialBootstrap = bootstrap;
       void bootstrap.catch(() => {
         if (this.#initialBootstrap === bootstrap) this.#initialBootstrap = undefined;
@@ -68,36 +73,47 @@ export class ForegroundSessionAuthority {
   }
 
   refresh(): Promise<ForegroundSessionSnapshot> {
-    return this.#bootstrap(++this.#nextBootstrapRequest);
+    return this.#bootstrap(++this.#latestStartedBootstrapRequest);
   }
 
   async #bootstrap(request: number): Promise<ForegroundSessionSnapshot> {
-    const response = await this.#fetch('/api/project/session', { credentials: 'same-origin' });
-    const body: unknown = await response.json().catch(() => undefined);
-    const session = decodeForegroundSession(body);
-    if (!response.ok || session === undefined || session.instanceId.length === 0 || session.token.length === 0) {
-      throw new Error('Foreground session bootstrap returned an invalid response.');
-    }
-    let origin: URL;
     try {
-      origin = new URL(session.origin);
-    } catch {
-      throw new Error('Foreground session bootstrap returned an invalid origin.');
+      const response = await this.#fetch('/api/project/session', { credentials: 'same-origin' });
+      if (request !== this.#latestStartedBootstrapRequest) {
+        if (this.#snapshot !== undefined) return this.#snapshot;
+        throw new Error('Foreground session bootstrap was superseded.');
+      }
+      const body: unknown = await response.json().catch(() => undefined);
+      if (request !== this.#latestStartedBootstrapRequest) {
+        if (this.#snapshot !== undefined) return this.#snapshot;
+        throw new Error('Foreground session bootstrap was superseded.');
+      }
+      const session = decodeForegroundSession(body);
+      if (!response.ok || session === undefined || session.token.length === 0) {
+        throw new Error('Foreground session bootstrap returned an invalid response.');
+      }
+      let origin: URL;
+      try {
+        origin = new URL(session.origin);
+      } catch {
+        throw new Error('Foreground session bootstrap returned an invalid origin.');
+      }
+      if (origin.origin !== session.origin) throw new Error('Foreground session bootstrap returned an invalid origin.');
+      if (this.#browserOrigin !== undefined && this.#browserOrigin !== 'null' && this.#browserOrigin !== session.origin) {
+        throw new Error('Foreground session bootstrap origin does not match this browser.');
+      }
+      const generation = this.#snapshot === undefined
+        ? 0
+        : this.#snapshot.instanceId === session.instanceId
+          ? this.#snapshot.generation
+          : this.#snapshot.generation + 1;
+      const snapshot = Object.freeze({ ...session, generation });
+      this.#snapshot = snapshot;
+      return snapshot;
+    } catch (error) {
+      if (request !== this.#latestStartedBootstrapRequest && this.#snapshot !== undefined) return this.#snapshot;
+      throw error;
     }
-    if (origin.origin !== session.origin) throw new Error('Foreground session bootstrap returned an invalid origin.');
-    if (this.#browserOrigin !== undefined && this.#browserOrigin !== 'null' && this.#browserOrigin !== session.origin) {
-      throw new Error('Foreground session bootstrap origin does not match this browser.');
-    }
-    if (request < this.#lastAppliedBootstrapRequest && this.#snapshot !== undefined) return this.#snapshot;
-    const generation = this.#snapshot === undefined
-      ? 0
-      : this.#snapshot.instanceId === session.instanceId
-        ? this.#snapshot.generation
-        : this.#snapshot.generation + 1;
-    const snapshot = Object.freeze({ ...session, generation });
-    this.#lastAppliedBootstrapRequest = request;
-    this.#snapshot = snapshot;
-    return snapshot;
   }
 }
 
