@@ -27,7 +27,6 @@ const runCliWithOutput = async (args: readonly string[]): Promise<{
 
 interface PersistComparisonRunOptions {
   readonly caseDigest?: string;
-  readonly legacy?: boolean;
   readonly outcomes?: readonly EvalTrialRecordInput['outcome'][];
 }
 
@@ -72,14 +71,12 @@ const persistComparisonRun = async (
         model: 'deterministic',
         outcome,
         prompt: 'Read the result.',
-        ...(options.legacy === true
-          ? {}
-          : { provenance: { hostCliVersion: 'fixture-cli-1.0.0', invocation: { mode: 'automatic' }, semanticGrader: null } }),
+        provenance: { hostCliVersion: 'fixture-cli-1.0.0', invocation: { mode: 'automatic' }, semanticGrader: null },
         rawArtifacts: [],
         startedAt: '2026-08-17T12:00:00.000Z',
         targetDigest: 'a'.repeat(64),
         trialIndex: index,
-        ...(options.legacy === true ? {} : { usage: { inputTokens: 3, outputTokens: 2 } }),
+        usage: { inputTokens: 3, outputTokens: 2 },
       } satisfies EvalTrialRecordInput);
     }
     await writer.finish({
@@ -323,29 +320,6 @@ it('renders server-produced comparison rows and mismatch causes in human output'
     expect(mismatch.stdout).toContain('case reads-result / host portable / model deterministic');
     expect(mismatch.stdout).toContain('not comparable: case-mismatch');
     expect(mismatch.stdout).toContain('case definition');
-  } finally {
-    await removeProjectFixture(project.root);
-  }
-}, 120_000);
-
-it('labels legacy persisted comparison trials non-comparable instead of assuming alignment', async () => {
-  const project = await createProjectFixture();
-  try {
-    await seedEvalProject(project.root);
-    const legacyRunId = await persistComparisonRun(project.root, 'legacy', { legacy: true });
-    const currentRunId = await persistComparisonRun(project.root, 'current');
-
-    const comparison = await compareEvals({ baseRunId: legacyRunId, candidateRunId: currentRunId, root: project.root });
-
-    expect(comparison.summary).toEqual({ comparable: 0, nonComparable: 1, reliability: 0, smoke: 0 });
-    expect(comparison.rows[0]).toMatchObject({
-      causes: expect.arrayContaining([
-        expect.objectContaining({ code: 'grader-versions-mismatch' }),
-        expect.objectContaining({ code: 'host-cli-version-mismatch' }),
-        expect.objectContaining({ code: 'invocation-mismatch' }),
-      ]),
-      comparable: false,
-    });
   } finally {
     await removeProjectFixture(project.root);
   }

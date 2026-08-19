@@ -105,6 +105,11 @@ const trial = (overrides: Partial<EvalTrialRecord>): EvalTrialRecord => ({
   model: 'deterministic',
   outcome: 'pass',
   prompt: 'Report the highest-risk regression.',
+  provenance: {
+    hostCliVersion: 'agent-bundle@0.1.0',
+    invocation: { mode: 'automatic' },
+    semanticGrader: null,
+  },
   rawArtifacts: ['artifacts/portable-1/evidence.json'],
   schemaVersion: 1,
   startedAt: '2026-08-17T00:00:00.500Z',

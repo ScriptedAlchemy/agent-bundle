@@ -82,6 +82,11 @@ const trialRecord: EvalTrialRecord = Object.freeze({
   model: 'deterministic',
   outcome: 'pass',
   prompt: 'Report the highest-risk regression.',
+  provenance: Object.freeze({
+    hostCliVersion: 'agent-bundle@0.1.0',
+    invocation: Object.freeze({ mode: 'automatic' as const }),
+    semanticGrader: null,
+  }),
   rawArtifacts: Object.freeze(['artifacts/portable-1/evidence.json']),
   schemaVersion: 1,
   startedAt: '2026-08-17T00:00:00.500Z',

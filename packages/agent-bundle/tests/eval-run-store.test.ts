@@ -29,6 +29,12 @@ const provenance = Object.freeze({
   projectRevision: 'b'.repeat(64),
 });
 
+const trialProvenance = Object.freeze({
+  hostCliVersion: '2.1.0',
+  invocation: Object.freeze({ mode: 'automatic' }),
+  semanticGrader: null,
+} as const);
+
 const runOptions = (projectRoot: string, overrides: Partial<CreateEvalRunOptions> = {}): CreateEvalRunOptions => ({
   artifact,
   projectRoot,
@@ -54,6 +60,7 @@ const trialInput = (overrides: Partial<EvalTrialRecordInput> = {}): EvalTrialRec
   model: 'claude-sonnet-4-5',
   outcome: 'pass',
   prompt: 'Do the task.',
+  provenance: trialProvenance,
   rawArtifacts: ['artifacts/trial-1/evidence.json'],
   startedAt: '2026-08-17T12:00:00.000Z',
   targetDigest: 'a'.repeat(64),
@@ -210,6 +217,19 @@ it('round-trips bounded provenance and normalized token usage with a trial', asy
   });
 });
 
+it('rejects a trial without canonical provenance', async () => {
+  await withProject(async (root) => {
+    const writer = await createEvalRun(runOptions(root));
+    try {
+      const { provenance: _provenance, ...withoutProvenance } = trialInput();
+      await expect(writer.writeTrial(withoutProvenance as EvalTrialRecordInput))
+        .rejects.toMatchObject({ code: 'EVAL_RUN_RECORD_INVALID' });
+    } finally {
+      await writer.close();
+    }
+  });
+});
+
 it('rejects path-shaped or credential-shaped trial provenance without echoing it', async () => {
   await withProject(async (root) => {
     const writer = await createEvalRun(runOptions(root));
@@ -249,7 +269,7 @@ it('round-trips an explicitly unrecorded semantic grader without treating it as 
         },
       }));
 
-      expect(written.provenance?.semanticGrader).toEqual({ state: 'unrecorded' });
+      expect(written.provenance.semanticGrader).toEqual({ state: 'unrecorded' });
       expect(await readEvalTrials(writer.directory)).toEqual([written]);
     } finally {
       await writer.close();

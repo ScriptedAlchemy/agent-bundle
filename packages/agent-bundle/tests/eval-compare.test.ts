@@ -189,30 +189,6 @@ it('labels a host CLI version, invocation, semantic grader version, or harness m
   }).rows[0]).causes.map((cause) => cause.code)).toEqual(['harness-mismatch']);
 });
 
-it('requires a persisted value on both sides for every documented alignment facet', () => {
-  const comparison = compareEvalRuns({
-    baseline: side('run-base', trials(['pass', 'pass', 'pass'])),
-    candidate: side('run-candidate', trials(['pass', 'pass', 'pass'], { provenance: undefined })),
-  });
-
-  expect(nonComparable(comparison.rows[0]).causes.map((cause) => cause.code)).toEqual([
-    'grader-versions-mismatch',
-    'host-cli-version-mismatch',
-    'invocation-mismatch',
-  ]);
-
-  const missingBoth = compareEvalRuns({
-    baseline: side('run-base', trials(['pass', 'pass', 'pass'], { provenance: undefined })),
-    candidate: side('run-candidate', trials(['pass', 'pass', 'pass'], { provenance: undefined })),
-  });
-
-  expect(nonComparable(missingBoth.rows[0]).causes.map((cause) => cause.code)).toEqual([
-    'grader-versions-mismatch',
-    'host-cli-version-mismatch',
-    'invocation-mismatch',
-  ]);
-});
-
 it('does not compare a manually graded trial whose semantic grader identity was unrecorded', () => {
   const comparison = compareEvalRuns({
     baseline: side('run-base', trials(['pass', 'pass', 'pass'])),

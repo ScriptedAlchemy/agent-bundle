@@ -103,8 +103,7 @@ export interface EvalTrialRecord {
   readonly outcome: EvalAssertionOutcome;
   readonly pluginFailure?: EvalPluginFailure;
   readonly prompt: string;
-  /** Omitted only by legacy records written before provenance capture. */
-  readonly provenance?: EvalTrialProvenance;
+  readonly provenance: EvalTrialProvenance;
   readonly rawArtifacts: readonly string[];
   readonly schemaVersion: 1;
   readonly startedAt: string;
@@ -873,13 +872,13 @@ const parseTrialUsage = (value: JsonValue, code: RunStoreValidationCode): EvalTr
   });
 };
 
-const trialInputKeys = ['assertions', 'caseDigest', 'caseId', 'completedAt', 'durationMs', 'evidence', 'fixtureDigest', 'host', 'id', 'model', 'outcome', 'prompt', 'rawArtifacts', 'startedAt', 'targetDigest', 'trialIndex'];
+const trialInputKeys = ['assertions', 'caseDigest', 'caseId', 'completedAt', 'durationMs', 'evidence', 'fixtureDigest', 'host', 'id', 'model', 'outcome', 'prompt', 'provenance', 'rawArtifacts', 'startedAt', 'targetDigest', 'trialIndex'];
 
 const parseTrialRecordValue = (value: unknown, code: RunStoreValidationCode, input = false): EvalTrialRecord => {
   const record = strictRecord(value, code, 'Eval trial record');
   requireOptionalKeys(record,
     input ? trialInputKeys : [...trialInputKeys, 'schemaVersion'],
-    ['harnessFailure', 'pluginFailure', 'provenance', 'usage'],
+    ['harnessFailure', 'pluginFailure', 'usage'],
     code,
     'Eval trial record');
   if (!input && property(record, 'schemaVersion', code, 'Eval trial record') !== 1) {
@@ -891,9 +890,7 @@ const parseTrialRecordValue = (value: unknown, code: RunStoreValidationCode, inp
   const pluginFailure = Object.hasOwn(record, 'pluginFailure')
     ? parsePluginFailure(property(record, 'pluginFailure', code, 'Eval trial record'), code)
     : undefined;
-  const provenance = Object.hasOwn(record, 'provenance')
-    ? parseTrialProvenance(property(record, 'provenance', code, 'Eval trial record'), code)
-    : undefined;
+  const provenance = parseTrialProvenance(property(record, 'provenance', code, 'Eval trial record'), code);
   const usage = Object.hasOwn(record, 'usage')
     ? parseTrialUsage(property(record, 'usage', code, 'Eval trial record'), code)
     : undefined;
@@ -915,7 +912,7 @@ const parseTrialRecordValue = (value: unknown, code: RunStoreValidationCode, inp
     outcome: requireOutcome(property(record, 'outcome', code, 'Eval trial record'), code, 'Eval trial outcome'),
     ...(pluginFailure === undefined ? {} : { pluginFailure }),
     prompt: requireString(property(record, 'prompt', code, 'Eval trial record'), code, 'Eval trial prompt'),
-    ...(provenance === undefined ? {} : { provenance }),
+    provenance,
     rawArtifacts: Object.freeze(requireArray(property(record, 'rawArtifacts', code, 'Eval trial record'), code, 'Eval trial raw artifacts')
       .map((rawArtifact) => requireSafeRelativePath(requireString(rawArtifact, code, 'Eval trial raw artifact'), 'Eval trial raw artifact'))),
     schemaVersion: 1,

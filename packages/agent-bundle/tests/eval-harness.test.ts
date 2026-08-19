@@ -375,6 +375,11 @@ it('aggregates multiple trials reproducibly and never folds misaligned trials to
     model: 'deterministic',
     outcome: 'pass',
     prompt: 'Do the task.',
+    provenance: {
+      hostCliVersion: 'agent-bundle@0.1.0',
+      invocation: { mode: 'automatic' },
+      semanticGrader: null,
+    },
     rawArtifacts: [],
     schemaVersion: 1,
     startedAt: '2026-08-17T12:00:00.000Z',
