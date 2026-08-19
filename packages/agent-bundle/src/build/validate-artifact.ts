@@ -1,30 +1,23 @@
-import { lstat, readFile, realpath } from 'node:fs/promises';
-import { isBuiltin } from 'node:module';
-import { dirname, isAbsolute, posix, relative, resolve, win32 } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
-
-import { parse as parseJavaScript } from 'acorn';
-import { init, parse } from 'es-module-lexer';
+import { lstat, readFile } from 'node:fs/promises';
+import { dirname, posix, resolve } from 'node:path';
 
 import { createDefaultRegistry, type TargetRegistry } from '../adapters/registry.ts';
-import {
-  compilerHookWrapperPath,
-  generatedHookCommand,
-  readTargetNativeHookCommands,
-} from '../adapters/hook-contract.ts';
 import type {
   TargetArtifactDocumentIssue,
   TargetArtifactDocumentValidator,
-  TargetArtifactOutputLayout,
 } from '../adapters/types.ts';
 import { parseSkillMarkdown, referencedResources } from '../config/skill-references.ts';
-import { DiagnosticError, type Diagnostic } from '../core/diagnostics.ts';
-import { isRecord, parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
+import type { Diagnostic } from '../core/diagnostics.ts';
+import { isRecord } from '../core/strict-json.ts';
 import { agentSkillsSchemaRevision, validateAgentSkillsFrontmatter } from '../schemas/agent-skills/contract.ts';
-import { classifyMcpArtifactArgument } from '../services/mcp-artifact-reference.ts';
-import { parseArtifactHookIndex } from './hook-index.ts';
-import { resolveMcpPathTokens } from '../services/mcp-path-tokens.ts';
-import { readTargetMcpServers } from '../services/mcp-runtime.ts';
+import {
+  artifactDiagnostic as diagnostic,
+  artifactDiagnosticRecoveries,
+} from './artifact-diagnostics.ts';
+import {
+  isDirectOutputLayoutPath,
+  matchesManifestFile,
+} from './artifact-layout.ts';
 import {
   artifactHookIndexName,
   artifactManifestName,
@@ -32,272 +25,25 @@ import {
   type ArtifactFile,
   type ArtifactFilesystemSnapshot,
   type ArtifactHook,
-  type ArtifactHookIndex,
   type ManifestFile,
 } from './emit.ts';
 import { parseArtifactManifest, type ArtifactManifest } from './manifest.ts';
+import type {
+  ValidateArtifactOptions,
+  ValidatedArtifactMcpServerEvidence,
+  ValidatedArtifactRuntimeEvidence,
+  ValidatedArtifactSnapshot,
+  ValidateArtifactSnapshotResult,
+} from './artifact-validation-types.ts';
+import { validateJavaScriptModules } from './validate-artifact-modules.ts';
+import { validateHookCoherence } from './validate-artifact-hooks.ts';
+import { validateMcpCoherence } from './validate-artifact-mcp.ts';
+
+export { artifactDiagnosticRecoveries, type ArtifactDiagnosticCode } from './artifact-diagnostics.ts';
+export type * from './artifact-validation-types.ts';
 
 const epochStagingMarkerName = '.agent-bundle-epoch-stage.json';
 const artifactRootMetadata = new Set([artifactHookIndexName]);
-
-export interface ValidateArtifactOptions {
-  /** Enables the one store-owned epoch staging marker after its exact schema validates. */
-  readonly allowEpochStagingMarker?: true;
-  readonly artifactRoot: string;
-  /** Target contracts that produced and must validate this artifact. */
-  readonly registry?: TargetRegistry;
-}
-
-/** Safe runtime facts derived during the same validation pass as the manifest. */
-export interface ValidatedArtifactRuntimeEvidence {
-  readonly hooks: readonly ArtifactHook[];
-  readonly mcpServers: readonly ValidatedArtifactMcpServerEvidence[];
-}
-
-/** One non-secret modern MCP server fact validated against manifested target files. */
-export interface ValidatedArtifactMcpServerEvidence {
-  readonly entryPaths: readonly string[];
-  readonly kind: 'stdio' | 'streamable-http';
-  readonly manifestPath: string;
-  readonly name: string;
-  readonly target: string;
-}
-
-/** Deeply frozen artifact evidence that passed one complete validation pass. */
-export interface ValidatedArtifactSnapshot {
-  readonly files: readonly ArtifactFile[];
-  readonly filesystem: ArtifactFilesystemSnapshot;
-  readonly manifest: ArtifactManifest;
-  readonly runtime: ValidatedArtifactRuntimeEvidence;
-}
-
-/** Validation diagnostics plus immutable evidence only when no diagnostics were found. */
-export interface ValidateArtifactSnapshotResult {
-  readonly diagnostics: readonly Diagnostic[];
-  readonly snapshot?: ValidatedArtifactSnapshot;
-}
-
-export type ArtifactDiagnosticCode =
-  | 'AB6000'
-  | 'AB6001'
-  | 'AB6002'
-  | 'AB6003'
-  | 'AB6004'
-  | 'AB6005'
-  | 'AB6006'
-  | 'AB6007'
-  | 'AB6008'
-  | 'AB6009'
-  | 'AB6010'
-  | 'AB6011'
-  | 'AB6012'
-  | 'AB6013'
-  | 'AB6014'
-  | 'AB6015'
-  | 'AB6016'
-  | 'AB6017'
-  | 'AB6018';
-
-export const artifactDiagnosticRecoveries: Readonly<Record<ArtifactDiagnosticCode, string>> = Object.freeze({
-  AB6000: 'Restore a readable artifact root and canonical manifest, then rebuild the artifact.',
-  AB6001: 'Regenerate the strict canonical manifest without concurrent writes, then rerun validation.',
-  AB6002: 'Rebuild the artifact from complete project source, then rerun validation.',
-  AB6003: 'Rebuild the artifact with canonical generated output, then rerun validation.',
-  AB6004: 'Rebuild the artifact so its file table and contents match the manifest.',
-  AB6005: 'Bundle every JavaScript dependency into the artifact, then rebuild it.',
-  AB6006: 'Regenerate the affected JSON document as valid JSON, then rebuild the artifact.',
-  AB6007: 'Repair MCP manifest references to generated servers, then rebuild the artifact.',
-  AB6008: 'Rebuild the artifact with the pinned Agent Skills contract.',
-  AB6009: 'Rebuild the artifact with a registered target.',
-  AB6010: 'Rebuild the artifact with the current target registry.',
-  AB6011: 'Generate the required target document, then rebuild the artifact.',
-  AB6012: 'Correct the target document source so it satisfies its schema, then rebuild the artifact.',
-  AB6013: 'Remove unsupported filesystem entries and rebuild the artifact.',
-  AB6014: 'Rebuild the artifact with files only in declared target namespaces.',
-  AB6015: 'Restore canonical Skill Markdown and copied resources, then rebuild the artifact.',
-  AB6016: 'Copy every referenced Skill resource inside its Skill root, then rebuild the artifact.',
-  AB6017: 'Rebuild the artifact so every target MCP manifest references its exact compiler outputs.',
-  AB6018: 'Rebuild the artifact so native hook commands and hook metadata agree.',
-});
-
-const isArtifactDiagnosticCode = (code: string): code is ArtifactDiagnosticCode =>
-  Object.hasOwn(artifactDiagnosticRecoveries, code);
-
-const recoveryForArtifactDiagnostic = (code: string): string =>
-  isArtifactDiagnosticCode(code)
-    ? artifactDiagnosticRecoveries[code]
-    : 'Repair the target MCP configuration and rebuild the artifact.';
-
-const diagnostic = (
-  code: string,
-  message: string,
-  generatedPath?: string,
-  target?: string,
-  recovery = recoveryForArtifactDiagnostic(code),
-): Diagnostic => ({
-  code,
-  generatedPath,
-  message,
-  recovery,
-  severity: 'error',
-  ...(target === undefined ? {} : { target }),
-});
-
-const javaScriptModuleSuffix = /\.(?:m?js)$/u;
-const generatedJavaScriptRecovery = artifactDiagnosticRecoveries.AB6005;
-
-const jsonModuleSuffix = /\.json$/u;
-
-const artifactPathFor = (root: string, path: string): string | undefined => {
-  const artifactPath = relative(root, path).replaceAll('\\', '/');
-  return artifactPath === '' || artifactPath === '..' || artifactPath.startsWith('../') || isAbsolute(artifactPath)
-    ? undefined
-    : artifactPath;
-};
-
-const graphDiagnostic = (importer: string, message: string): Diagnostic => diagnostic(
-  'AB6005',
-  `Generated JavaScript import from ${JSON.stringify(importer)} ${message}`,
-  importer,
-  undefined,
-  generatedJavaScriptRecovery,
-);
-
-const resolveJavaScriptImport = async (options: {
-  readonly artifactRoot: string;
-  readonly files: ReadonlyMap<string, ArtifactFile>;
-  readonly importer: string;
-  readonly specifier: string;
-  readonly validJson: ReadonlySet<string>;
-}): Promise<{ readonly diagnostic?: Diagnostic; readonly module?: string }> => {
-  if (isBuiltin(options.specifier)) return {};
-  if (!options.specifier.startsWith('.') && !options.specifier.startsWith('file:')) {
-    return { diagnostic: graphDiagnostic(options.importer, `uses unsupported specifier ${JSON.stringify(options.specifier)}.`) };
-  }
-
-  let url: URL;
-  try {
-    url = new URL(options.specifier, pathToFileURL(resolve(options.artifactRoot, options.importer)));
-  } catch {
-    return { diagnostic: graphDiagnostic(options.importer, `uses invalid specifier ${JSON.stringify(options.specifier)}.`) };
-  }
-  if (url.protocol !== 'file:' || url.search.length > 0 || url.hash.length > 0) {
-    return { diagnostic: graphDiagnostic(options.importer, `uses unsupported specifier ${JSON.stringify(options.specifier)}.`) };
-  }
-
-  let path: string;
-  try {
-    path = fileURLToPath(url);
-  } catch {
-    return { diagnostic: graphDiagnostic(options.importer, `uses invalid file URL ${JSON.stringify(options.specifier)}.`) };
-  }
-  if (artifactPathFor(options.artifactRoot, path) === undefined) {
-    return { diagnostic: graphDiagnostic(options.importer, `resolves outside the artifact root: ${JSON.stringify(options.specifier)}.`) };
-  }
-
-  let metadata: Awaited<ReturnType<typeof lstat>>;
-  try {
-    metadata = await lstat(path);
-  } catch {
-    return { diagnostic: graphDiagnostic(options.importer, `is missing ${JSON.stringify(options.specifier)}.`) };
-  }
-  if (!metadata.isFile()) {
-    return { diagnostic: graphDiagnostic(options.importer, `does not resolve to a regular file: ${JSON.stringify(options.specifier)}.`) };
-  }
-
-  let canonicalPath: string;
-  try {
-    canonicalPath = await realpath(path);
-  } catch {
-    return { diagnostic: graphDiagnostic(options.importer, `is missing ${JSON.stringify(options.specifier)}.`) };
-  }
-  const artifactPath = artifactPathFor(options.artifactRoot, canonicalPath);
-  if (artifactPath === undefined) {
-    return { diagnostic: graphDiagnostic(options.importer, `resolves outside the artifact root: ${JSON.stringify(options.specifier)}.`) };
-  }
-  if (!options.files.has(artifactPath)) {
-    return { diagnostic: graphDiagnostic(options.importer, `is not listed in the artifact manifest: ${JSON.stringify(options.specifier)}.`) };
-  }
-  if (jsonModuleSuffix.test(artifactPath)) {
-    return options.validJson.has(artifactPath)
-      ? {}
-      : { diagnostic: graphDiagnostic(options.importer, `references invalid JSON ${JSON.stringify(options.specifier)}.`) };
-  }
-  if (!javaScriptModuleSuffix.test(artifactPath)) {
-    return { diagnostic: graphDiagnostic(options.importer, `uses unsupported target ${JSON.stringify(options.specifier)}.`) };
-  }
-  return { module: artifactPath };
-};
-
-const validateJavaScriptModules = async (options: {
-  readonly artifactRoot: string;
-  readonly files: readonly ArtifactFile[];
-  readonly manifestFiles?: ReadonlySet<string>;
-  readonly validJson: ReadonlySet<string>;
-}): Promise<readonly Diagnostic[]> => {
-  await init;
-  const artifactRoot = await realpath(options.artifactRoot);
-  const files = new Map(options.files
-    .filter((file) => options.manifestFiles === undefined || options.manifestFiles.has(file.path))
-    .map((file) => [file.path, file]));
-  const diagnostics: Diagnostic[] = [];
-  const visited = new Set<string>();
-  const visiting = new Set<string>();
-
-  const validateModule = async (path: string): Promise<void> => {
-    if (visited.has(path) || visiting.has(path)) return;
-    visiting.add(path);
-    let source: string;
-    try {
-      source = await readFile(resolve(artifactRoot, path), 'utf8');
-    } catch {
-      diagnostics.push(graphDiagnostic(path, 'cannot be read.'));
-      visiting.delete(path);
-      visited.add(path);
-      return;
-    }
-
-    let imports: ReturnType<typeof parse>[0];
-    try {
-      parseJavaScript(source, { ecmaVersion: 'latest', sourceType: 'module' });
-      [imports] = parse(source);
-    } catch {
-      diagnostics.push(graphDiagnostic(path, 'has invalid syntax.'));
-      visiting.delete(path);
-      visited.add(path);
-      return;
-    }
-    for (const imported of imports) {
-      if (imported.d === -2) continue;
-      if (imported.n === undefined) {
-        diagnostics.push(graphDiagnostic(path, 'has a non-literal dynamic import.'));
-        continue;
-      }
-      const resolved = await resolveJavaScriptImport({
-        artifactRoot,
-        files,
-        importer: path,
-        specifier: imported.n,
-        validJson: options.validJson,
-      });
-      if (resolved.diagnostic !== undefined) diagnostics.push(resolved.diagnostic);
-      else if (resolved.module !== undefined) await validateModule(resolved.module);
-    }
-    visiting.delete(path);
-    visited.add(path);
-  };
-
-  for (const path of [...files.keys()].filter((path) => javaScriptModuleSuffix.test(path)).sort((left, right) => left.localeCompare(right))) {
-    await validateModule(path);
-  }
-  return Object.freeze(diagnostics);
-};
-
-const sameFile = (left: ArtifactFile, right: ManifestFile): boolean =>
-  left.bytes === right.bytes &&
-  (right.mode === undefined ? (left.mode & 0o111) === 0 : left.mode === right.mode) &&
-  left.path === right.path &&
-  left.sha256 === right.sha256;
 
 const matchesManifestFileTable = (
   files: readonly ArtifactFile[],
@@ -307,7 +53,7 @@ const matchesManifestFileTable = (
   const manifestFilesByPath = new Map(manifestFiles.map((file) => [file.path, file]));
   return files.every((file) => {
     const manifestFile = manifestFilesByPath.get(file.path);
-    return manifestFile !== undefined && sameFile(file, manifestFile);
+    return manifestFile !== undefined && matchesManifestFile(file, manifestFile);
   });
 };
 
@@ -659,432 +405,6 @@ const validateTargetContracts = async (options: {
   return Object.freeze(diagnostics);
 };
 
-const mcpArtifactPathApi = process.platform === 'win32'
-  ? Object.freeze({
-    isAbsolute: win32.isAbsolute,
-    normalize: win32.normalize,
-    relative: win32.relative,
-    resolve: win32.resolve,
-    sep: '\\' as const,
-  })
-  : Object.freeze({
-    isAbsolute: posix.isAbsolute,
-    normalize: posix.normalize,
-    relative: posix.relative,
-    resolve: posix.resolve,
-    sep: '/' as const,
-  });
-
-const targetArtifactPath = (target: string, path: string): string => `${target}/${path}`;
-
-const isTargetContainedCwd = (artifactRoot: string, targetRoot: string, value: string): boolean => {
-  const localPath = mcpArtifactPathApi.sep === '/'
-    ? value.replaceAll('\\', '/')
-    : value.replaceAll('/', '\\');
-  return value === '.' || value === './' || value === '.\\' ||
-    (mcpArtifactPathApi.isAbsolute(localPath) && mcpArtifactPathApi.resolve(localPath) === targetRoot) ||
-    classifyMcpArtifactArgument({
-      path: mcpArtifactPathApi,
-      roots: { artifactRoot, targetRoot },
-      value,
-    }).status === 'artifact-local';
-};
-
-interface McpReferenceOccurrence {
-  readonly field: 'argument' | 'command';
-  readonly server: string;
-}
-
-const recordMcpReference = (
-  references: Map<string, McpReferenceOccurrence[]>,
-  path: string,
-  occurrence: McpReferenceOccurrence,
-): void => {
-  const occurrences = references.get(path);
-  if (occurrences !== undefined) occurrences.push(occurrence);
-};
-
-const pathInOutputLayout = (
-  targetPath: string,
-  target: string,
-  layout: TargetArtifactOutputLayout | undefined,
-): boolean => isDirectLayoutPath(targetPath.slice(target.length + 1), layout);
-
-const validateMcpArtifactReference = (options: {
-  readonly artifactRoot: string;
-  readonly directExecutable: boolean;
-  readonly field: 'argument' | 'command';
-  readonly files: ReadonlyMap<string, ArtifactFile>;
-  readonly manifestFiles: ReadonlyMap<string, ManifestFile>;
-  readonly manifestPath: string;
-  readonly target: string;
-  readonly targetRoot: string;
-  readonly value: string;
-}): readonly Diagnostic[] => {
-  const reference = classifyMcpArtifactArgument({
-    path: mcpArtifactPathApi,
-    roots: { artifactRoot: options.artifactRoot, targetRoot: options.targetRoot },
-    value: options.value,
-  });
-  if (reference.status === 'external') return Object.freeze([]);
-  if (reference.status === 'escaped') {
-    return Object.freeze([diagnostic(
-      'AB6017',
-      `MCP ${options.field} ${JSON.stringify(options.value)} escapes target ${JSON.stringify(options.target)}.`,
-      options.manifestPath,
-      options.target,
-    )]);
-  }
-
-  const path = targetArtifactPath(options.target, reference.path);
-  const file = options.files.get(path);
-  const manifestFile = options.manifestFiles.get(path);
-  const diagnostics: Diagnostic[] = [];
-  if (file === undefined || manifestFile === undefined || !sameFile(file, manifestFile)) {
-    if (options.field === 'argument' && file === undefined && manifestFile !== undefined) {
-      diagnostics.push(diagnostic(
-        'AB6007',
-        `MCP manifest references missing generated server ${JSON.stringify(options.value)}.`,
-        options.manifestPath,
-      ));
-    } else {
-      diagnostics.push(diagnostic(
-        'AB6017',
-        `MCP ${options.field} ${JSON.stringify(options.value)} references missing or unmanifested artifact file ${JSON.stringify(path)}.`,
-        options.manifestPath,
-        options.target,
-      ));
-    }
-  } else if (options.directExecutable && (manifestFile.mode === undefined || (manifestFile.mode & 0o111) === 0)) {
-    diagnostics.push(diagnostic(
-      'AB6017',
-      `MCP command ${JSON.stringify(options.value)} references non-executable artifact file ${JSON.stringify(path)}.`,
-      options.manifestPath,
-      options.target,
-    ));
-  }
-
-  return Object.freeze(diagnostics);
-};
-
-const validateMcpCoherence = async (options: {
-  readonly artifactRoot: string;
-  readonly files: readonly ArtifactFile[];
-  readonly manifest: ArtifactManifest;
-  readonly registry: TargetRegistry;
-  readonly runtimeEvidence: RuntimeEvidenceBuilder;
-}): Promise<readonly Diagnostic[]> => {
-  const diagnostics: Diagnostic[] = [];
-  const files = new Map(options.files.map((file) => [file.path, file]));
-  const manifestFiles = new Map(options.manifest.files.map((file) => [file.path, file]));
-  const artifactRoot = resolve(options.artifactRoot);
-
-  for (const target of options.manifest.targets) {
-    if (!options.registry.has(target.name) || !options.registry.supports(target.name, 'mcp')) continue;
-    const runtime = options.registry.mcpRuntime(target.name);
-    if (runtime === undefined) continue;
-    const manifestPath = targetArtifactPath(target.name, runtime.manifestPath);
-    const targetRoot = resolve(artifactRoot, target.name);
-    const mcpLayout = options.registry.artifactLayout(target.name).mcpEntries;
-    const referenceCounts = new Map<string, McpReferenceOccurrence[]>();
-    const mcpEntries = options.files.filter((file) => pathInOutputLayout(file.path, target.name, mcpLayout));
-    for (const file of mcpEntries) referenceCounts.set(file.path, []);
-
-    const manifestFile = files.get(manifestPath);
-    if (manifestFile !== undefined) {
-      let document: unknown;
-      try {
-        document = parseJsonWithoutDuplicateKeys(await readFile(resolve(artifactRoot, manifestPath), 'utf8'));
-      } catch {
-        diagnostics.push(diagnostic(
-          'AB6017',
-          `MCP manifest for target ${JSON.stringify(target.name)} is not valid strict JSON.`,
-          manifestPath,
-          target.name,
-        ));
-        document = undefined;
-      }
-      if (document !== undefined) {
-        const servers = readTargetMcpServers(runtime, document);
-        if (servers.status === 'invalid') {
-          diagnostics.push(diagnostic(
-            'AB6017',
-            `MCP manifest for target ${JSON.stringify(target.name)} does not contain only modern supported servers.`,
-            manifestPath,
-            target.name,
-          ));
-        } else {
-          for (const entry of servers.servers) {
-            let server = entry.server;
-            try {
-              server = resolveMcpPathTokens({
-                roots: {
-                  pluginData: targetRoot,
-                  pluginRoot: targetRoot,
-                  workspaceRoot: dirname(artifactRoot),
-                },
-                runtime,
-                server,
-                target: target.name,
-              });
-            } catch (error) {
-              if (error instanceof DiagnosticError) {
-                diagnostics.push(...error.diagnostics.map((entry) => diagnostic(
-                  entry.code,
-                  entry.message,
-                  manifestPath,
-                  target.name,
-                  artifactDiagnosticRecoveries.AB6017,
-                )));
-              } else {
-                diagnostics.push(diagnostic(
-                  'AB6017',
-                  `MCP server ${JSON.stringify(entry.name)} could not resolve target runtime values.`,
-                  manifestPath,
-                  target.name,
-                ));
-              }
-              continue;
-            }
-            const entryPaths = new Set<string>();
-            if (server.kind !== 'stdio') {
-              options.runtimeEvidence.mcpServers.push(Object.freeze({
-                entryPaths: Object.freeze([]),
-                kind: server.kind,
-                manifestPath,
-                name: entry.name,
-                target: target.name,
-              }));
-              continue;
-            }
-
-            if (server.cwd !== undefined) {
-              if (!isTargetContainedCwd(artifactRoot, targetRoot, server.cwd)) {
-                diagnostics.push(diagnostic(
-                  'AB6017',
-                  `MCP cwd ${JSON.stringify(server.cwd)} escapes target ${JSON.stringify(target.name)}.`,
-                  manifestPath,
-                  target.name,
-                ));
-              }
-            }
-
-            if (!server.command.includes('${')) {
-              diagnostics.push(...validateMcpArtifactReference({
-                artifactRoot,
-                directExecutable: true,
-                field: 'command',
-                files,
-                manifestFiles,
-                manifestPath,
-                target: target.name,
-                targetRoot,
-                value: server.command,
-              }));
-              const commandReference = classifyMcpArtifactArgument({
-                path: mcpArtifactPathApi,
-                roots: { artifactRoot, targetRoot },
-                value: server.command,
-              });
-              if (commandReference.status === 'artifact-local') {
-                const path = targetArtifactPath(target.name, commandReference.path);
-                recordMcpReference(referenceCounts, path, { field: 'command', server: entry.name });
-                entryPaths.add(path);
-              }
-            }
-
-            for (const argument of server.args) {
-              diagnostics.push(...validateMcpArtifactReference({
-                artifactRoot,
-                directExecutable: false,
-                field: 'argument',
-                files,
-                manifestFiles,
-                manifestPath,
-                target: target.name,
-                targetRoot,
-                value: argument,
-              }));
-              const argumentReference = classifyMcpArtifactArgument({
-                path: mcpArtifactPathApi,
-                roots: { artifactRoot, targetRoot },
-                value: argument,
-              });
-              if (argumentReference.status === 'artifact-local') {
-                const path = targetArtifactPath(target.name, argumentReference.path);
-                recordMcpReference(referenceCounts, path, { field: 'argument', server: entry.name });
-                entryPaths.add(path);
-              }
-            }
-            options.runtimeEvidence.mcpServers.push(Object.freeze({
-              entryPaths: Object.freeze([...entryPaths].sort((left, right) => left.localeCompare(right))),
-              kind: server.kind,
-              manifestPath,
-              name: entry.name,
-              target: target.name,
-            }));
-          }
-        }
-      }
-    }
-
-    for (const [path, occurrences] of referenceCounts) {
-      if (occurrences.length === 1) continue;
-      diagnostics.push(diagnostic(
-        'AB6017',
-        occurrences.length === 0
-          ? `Compiler MCP entry ${JSON.stringify(path)} is not referenced by a server in target ${JSON.stringify(target.name)}.`
-          : `Compiler MCP entry ${JSON.stringify(path)} is referenced ${occurrences.length} times in target ${JSON.stringify(target.name)}.`,
-        path,
-        target.name,
-      ));
-    }
-  }
-  return Object.freeze(diagnostics);
-};
-
-const readArtifactHookIndex = async (artifactRoot: string): Promise<ArtifactHookIndex | undefined> => {
-  try {
-    return parseArtifactHookIndex(await readFile(resolve(artifactRoot, artifactHookIndexName), 'utf8'));
-  } catch {
-    return undefined;
-  }
-};
-
-const validateHookCoherence = async (options: {
-  readonly artifactRoot: string;
-  readonly files: readonly ArtifactFile[];
-  readonly manifest: ArtifactManifest;
-  readonly registry: TargetRegistry;
-  readonly runtimeEvidence: RuntimeEvidenceBuilder;
-}): Promise<readonly Diagnostic[]> => {
-  const indexFile = options.files.find((file) => file.path === artifactHookIndexName);
-  const index = indexFile === undefined ? undefined : await readArtifactHookIndex(options.artifactRoot);
-  if (index === undefined) {
-    return Object.freeze([diagnostic(
-      'AB6018',
-      'Artifact hook metadata is not strict canonical hook index data.',
-      artifactHookIndexName,
-      'artifact',
-    )]);
-  }
-
-  options.runtimeEvidence.hooks.push(...index.hooks);
-
-  const diagnostics: Diagnostic[] = [];
-  const files = new Map(options.files.map((file) => [file.path, file]));
-  const manifestFiles = new Map(options.manifest.files.map((file) => [file.path, file]));
-  const targets = new Set(options.manifest.targets.map((target) => target.name));
-  const indexedByTarget = new Map<string, typeof index.hooks>();
-  for (const hook of index.hooks) {
-    const entries = indexedByTarget.get(hook.target) ?? [];
-    indexedByTarget.set(hook.target, [...entries, hook]);
-  }
-
-  for (const hook of index.hooks) {
-    if (!targets.has(hook.target) || (options.registry.has(hook.target) && !options.registry.supports(hook.target, 'hooks'))) {
-      diagnostics.push(diagnostic(
-        'AB6018',
-        `Hook index entry ${JSON.stringify(hook.id)} selects undeclared or hook-incompatible target ${JSON.stringify(hook.target)}.`,
-        artifactHookIndexName,
-        hook.target,
-      ));
-      continue;
-    }
-    if (!options.registry.has(hook.target)) continue;
-    const contract = options.registry.hookContract(hook.target);
-    const layout = options.registry.artifactLayout(hook.target).hookWrappers;
-    const expectedPrefix = `${hook.target}/`;
-    const file = files.get(hook.path);
-    const manifestFile = manifestFiles.get(hook.path);
-    if (
-      contract === undefined ||
-      !hook.path.startsWith(expectedPrefix) ||
-      !pathInOutputLayout(hook.path, hook.target, layout) ||
-      file === undefined ||
-      manifestFile === undefined ||
-      !sameFile(file, manifestFile)
-    ) {
-      diagnostics.push(diagnostic(
-        'AB6018',
-        `Hook index entry ${JSON.stringify(hook.id)} references missing or invalid target wrapper ${JSON.stringify(hook.path)}.`,
-        hook.path,
-        hook.target,
-      ));
-    }
-  }
-
-  for (const { name: target } of options.manifest.targets) {
-    if (!options.registry.has(target) || !options.registry.supports(target, 'hooks')) continue;
-    const contract = options.registry.hookContract(target);
-    if (contract === undefined) continue;
-    const hooks = indexedByTarget.get(target) ?? [];
-    const manifestPath = targetArtifactPath(target, contract.manifestPath);
-    if (!files.has(manifestPath)) {
-      if (hooks.length === 0) continue;
-      diagnostics.push(diagnostic(
-        'AB6018',
-        `Hook index target ${JSON.stringify(target)} is missing native hook manifest ${JSON.stringify(contract.manifestPath)}.`,
-        manifestPath,
-        target,
-      ));
-      continue;
-    }
-    let document: unknown;
-    try {
-      document = JSON.parse(await readFile(resolve(options.artifactRoot, manifestPath), 'utf8'));
-    } catch {
-      diagnostics.push(diagnostic(
-        'AB6018',
-        `Hook index target ${JSON.stringify(target)} is missing native hook manifest ${JSON.stringify(contract.manifestPath)}.`,
-        manifestPath,
-        target,
-      ));
-      continue;
-    }
-    const commands = readTargetNativeHookCommands(contract, document);
-    if (commands.status === 'invalid') {
-      diagnostics.push(diagnostic(
-        'AB6018',
-        `Native hook manifest ${JSON.stringify(contract.manifestPath)} for target ${JSON.stringify(target)} is invalid for command enumeration.`,
-        manifestPath,
-        target,
-      ));
-      continue;
-    }
-    const relativePaths = new Map<string, number>();
-    for (const hook of hooks) {
-      const relativePath = hook.path.slice(target.length + 1);
-      relativePaths.set(relativePath, (relativePaths.get(relativePath) ?? 0) + 1);
-      const command = generatedHookCommand(contract, relativePath);
-      const occurrences = commands.commands.filter((candidate) => candidate.command === command).length;
-      if (occurrences !== 1) {
-        diagnostics.push(diagnostic(
-          'AB6018',
-          `Hook index entry ${JSON.stringify(hook.id)} requires exactly one native command ${JSON.stringify(command)} but found ${occurrences}.`,
-          manifestPath,
-          target,
-        ));
-      }
-    }
-    for (const command of commands.commands) {
-      const relativePath = compilerHookWrapperPath(contract, command.command);
-      if (relativePath === undefined) continue;
-      const entries = relativePaths.get(relativePath) ?? 0;
-      if (entries === 1) continue;
-      diagnostics.push(diagnostic(
-        'AB6018',
-        entries === 0
-          ? `Native hook command ${JSON.stringify(command.command)} is not indexed.`
-          : `Native hook command ${JSON.stringify(command.command)} is indexed multiple times.`,
-        manifestPath,
-        target,
-      ));
-    }
-  }
-  return Object.freeze(diagnostics);
-};
-
 const ownershipRecovery = artifactDiagnosticRecoveries.AB6014;
 
 const targetNamespaces = (manifest: ArtifactManifest): ReadonlySet<string> =>
@@ -1093,15 +413,6 @@ const targetNamespaces = (manifest: ArtifactManifest): ReadonlySet<string> =>
 const pathTarget = (path: string, targets: ReadonlySet<string>): string | undefined => {
   const [target] = path.split('/');
   return target !== undefined && targets.has(target) ? target : undefined;
-};
-
-const isDirectLayoutPath = (relativePath: string, layout: TargetArtifactOutputLayout | undefined): boolean => {
-  if (layout === undefined) return false;
-  const [directory, file, ...nested] = relativePath.split('/');
-  return directory === layout.directory &&
-    file !== undefined &&
-    nested.length === 0 &&
-    layout.allowedSuffixes.some((suffix) => file.length > suffix.length && file.endsWith(suffix));
 };
 
 const isSkillArtifactPath = (relativePath: string, skills: string | undefined): boolean => {
@@ -1122,10 +433,10 @@ const isTargetArtifactPath = (
   const layout = registry.artifactLayout(target);
   const hookContract = registry.hookContract(target);
   const mcpRuntime = registry.mcpRuntime(target);
-  return isDirectLayoutPath(relativePath, layout.hookWrappers) ||
-    isDirectLayoutPath(relativePath, layout.mcpApps) ||
-    isDirectLayoutPath(relativePath, layout.mcpEntries) ||
-    isDirectLayoutPath(relativePath, layout.scripts) ||
+  return isDirectOutputLayoutPath(relativePath, layout.hookWrappers) ||
+    isDirectOutputLayoutPath(relativePath, layout.mcpApps) ||
+    isDirectOutputLayoutPath(relativePath, layout.mcpEntries) ||
+    isDirectOutputLayoutPath(relativePath, layout.scripts) ||
     isSkillArtifactPath(relativePath, layout.skills) ||
     relativePath === hookContract?.manifestPath ||
     relativePath === mcpRuntime?.manifestPath ||
@@ -1540,14 +851,14 @@ export const validateArtifactWithSnapshot = async (
     files: inspection.files,
     manifest,
     registry,
-    runtimeEvidence,
+    mcpServers: runtimeEvidence.mcpServers,
   }));
   diagnostics.push(...await validateHookCoherence({
     artifactRoot,
     files: inspection.files,
     manifest,
     registry,
-    runtimeEvidence,
+    hooks: runtimeEvidence.hooks,
   }));
   diagnostics.push(...await validateEmittedSkills({
     artifactRoot,
