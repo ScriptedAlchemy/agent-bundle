@@ -24,7 +24,7 @@ import { validateArtifact } from '../build/validate-artifact.ts';
 import { serialQueue } from '../core/async.ts';
 import { DiagnosticError } from '../core/diagnostics.ts';
 import { assertInside } from '../core/paths.ts';
-import { isRecord, parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
+import { isRecord, parseJsonWithoutDuplicateKeys, snapshotStrictJsonValue } from '../core/strict-json.ts';
 import { resolveMcpPathTokens } from '../services/mcp-path-tokens.ts';
 import {
   readTargetMcpServer,
@@ -44,7 +44,7 @@ import type {
   McpAppSessionLease,
   McpAppToolDefinition,
 } from './mcp-app-binding-service.ts';
-import { freezeJsonValue } from './types.ts';
+import { requireMcpAppJson } from './mcp-app-json.ts';
 import type {
   McpSessionBinding,
   McpSessionId,
@@ -336,71 +336,10 @@ const inspectorUrl = (url: URL): string => {
   return sanitized.href;
 };
 
-const cloneJsonSnapshot = (value: unknown, ancestors = new WeakSet<object>()): unknown => {
-  if (value === null || typeof value === 'string' || typeof value === 'boolean') return value;
-  if (typeof value === 'number') {
-    if (Number.isFinite(value)) return value;
-    throw new TypeError('MCP protocol frames must contain only finite JSON numbers.');
-  }
-  if (typeof value !== 'object') {
-    throw new TypeError(`MCP protocol frames must contain only JSON values, not ${typeof value}.`);
-  }
-  if (ancestors.has(value)) throw new TypeError('MCP protocol frames cannot contain cyclic references.');
-
-  ancestors.add(value);
-  try {
-    if (Array.isArray(value)) {
-      for (const key of Reflect.ownKeys(value)) {
-        if (
-          typeof key !== 'string' ||
-          (key !== 'length' && (!/^(0|[1-9]\d*)$/u.test(key) || Number(key) >= value.length))
-        ) throw new TypeError('MCP protocol frame arrays cannot contain non-index properties.');
-      }
-      const copy: unknown[] = [];
-      for (let index = 0; index < value.length; index += 1) {
-        const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
-        if (descriptor === undefined || !('value' in descriptor)) {
-          throw new TypeError('MCP protocol frame arrays cannot contain holes or accessors.');
-        }
-        copy.push(cloneJsonSnapshot(descriptor.value, ancestors));
-      }
-      return copy;
-    }
-
-    const prototype = Object.getPrototypeOf(value);
-    if (prototype !== Object.prototype && prototype !== null) {
-      throw new TypeError('MCP protocol frame objects must have a plain-object prototype.');
-    }
-    const copy: Record<string, unknown> = {};
-    for (const key of Reflect.ownKeys(value)) {
-      if (typeof key !== 'string') throw new TypeError('MCP protocol frame objects cannot contain symbol properties.');
-      const descriptor = Object.getOwnPropertyDescriptor(value, key);
-      if (descriptor === undefined || !('value' in descriptor)) {
-        throw new TypeError('MCP protocol frame objects cannot contain accessors.');
-      }
-      copy[key] = cloneJsonSnapshot(descriptor.value, ancestors);
-    }
-    return copy;
-  } finally {
-    ancestors.delete(value);
-  }
-};
-
-const detachedJsonSnapshot = (value: unknown): unknown => freezeJsonValue(cloneJsonSnapshot(value));
-
-const isMcpAppJsonValue = (value: unknown): value is McpAppJsonValue => {
-  if (value === null || typeof value === 'boolean' || typeof value === 'number' || typeof value === 'string') {
-    return typeof value !== 'number' || Number.isFinite(value);
-  }
-  if (Array.isArray(value)) return value.every(isMcpAppJsonValue);
-  if (!isRecord(value) || Object.getPrototypeOf(value) !== Object.prototype) return false;
-  return Object.values(value).every(isMcpAppJsonValue);
-};
+const detachedJsonSnapshot = snapshotStrictJsonValue;
 
 const canonicalMcpAppJson = (value: unknown, label: string): McpAppJsonValue => {
-  const snapshot = detachedJsonSnapshot(value);
-  if (!isMcpAppJsonValue(snapshot)) throw new TypeError(`${label} must contain only ordinary finite JSON values.`);
-  return snapshot;
+  return requireMcpAppJson(value, `${label} must contain only ordinary finite JSON values.`);
 };
 
 const appVisible = (definition: McpAppJsonValue): boolean => {

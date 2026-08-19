@@ -1,12 +1,16 @@
 import { Buffer } from 'node:buffer';
 
 import { CodedError } from '../core/errors.ts';
-import { snapshotStrictJsonValue } from '../core/strict-json.ts';
 import {
   selectMcpAppResourceUri,
   type McpAppBinding,
-  type McpAppJsonValue,
 } from './mcp-app-binding-service.ts';
+import {
+  cloneMcpAppJson,
+  snapshotMcpAppJson,
+  snapshotMcpAppJsonRecord,
+  type McpAppJsonValue,
+} from './mcp-app-json.ts';
 import type {
   McpAppSandboxCsp,
   McpAppSandboxPermissions,
@@ -201,30 +205,11 @@ const hostStyleVariables = new Set([
 
 const hasOwn = (value: object, key: string): boolean => Object.hasOwn(value, key);
 
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype;
-
 const isRequestId = (value: unknown): value is McpAppBridgeRequestId =>
   value === null || typeof value === 'string' || (typeof value === 'number' && Number.isFinite(value));
 
-const isJsonValue = (value: unknown): value is McpAppJsonValue => {
-  if (value === null || typeof value === 'boolean' || typeof value === 'string') return true;
-  if (typeof value === 'number') return Number.isFinite(value);
-  if (Array.isArray(value)) return value.every(isJsonValue);
-  return isRecord(value) && Object.values(value).every(isJsonValue);
-};
-
-const cloneJson = (value: McpAppJsonValue): McpAppJsonValue => snapshotStrictJsonValue(value);
-
-const jsonRecord = (value: unknown): McpAppBridgeJsonRecord | undefined => {
-  if (!isRecord(value) || !isJsonValue(value)) return undefined;
-  try {
-    return snapshotStrictJsonValue(value) as McpAppBridgeJsonRecord;
-  } catch (error) {
-    if (error instanceof TypeError) return undefined;
-    throw error;
-  }
-};
+const cloneJson = cloneMcpAppJson;
+const jsonRecord = snapshotMcpAppJsonRecord;
 
 const nonempty = (value: unknown): value is string => typeof value === 'string' && value.trim().length > 0;
 
@@ -273,28 +258,25 @@ const snapshotHost = (host: McpAppBridgeHost): McpAppBridgeHost => {
 };
 
 const messageOf = (value: unknown): McpAppBridgeMessage | undefined => {
-  if (!isRecord(value) || value.jsonrpc !== '2.0') return undefined;
-  const hasMethod = hasOwn(value, 'method');
-  const hasResult = hasOwn(value, 'result');
-  const hasError = hasOwn(value, 'error');
+  const record = jsonRecord(value);
+  if (record === undefined || record.jsonrpc !== '2.0') return undefined;
+  const hasMethod = hasOwn(record, 'method');
+  const hasResult = hasOwn(record, 'result');
+  const hasError = hasOwn(record, 'error');
   if (Number(hasMethod) + Number(hasResult) + Number(hasError) !== 1) return undefined;
-  if (!hasMethod && !hasOwn(value, 'id')) return undefined;
-  if (hasOwn(value, 'id') && !isRequestId(value.id)) return undefined;
-  if (hasOwn(value, 'method') && !nonempty(value.method)) return undefined;
-  if (!hasMethod && hasOwn(value, 'params')) return undefined;
-  if (hasOwn(value, 'params') && !isJsonValue(value.params)) return undefined;
-  if (hasOwn(value, 'result') && !isJsonValue(value.result)) return undefined;
-  if (hasOwn(value, 'error')) {
-    if (!isRecord(value.error) || typeof value.error.code !== 'number' || !Number.isFinite(value.error.code) || !nonempty(value.error.message)) return undefined;
-    if (hasOwn(value.error, 'data') && !isJsonValue(value.error.data)) return undefined;
-  }
+  if (!hasMethod && !hasOwn(record, 'id')) return undefined;
+  if (hasOwn(record, 'id') && !isRequestId(record.id)) return undefined;
+  if (hasOwn(record, 'method') && !nonempty(record.method)) return undefined;
+  if (!hasMethod && hasOwn(record, 'params')) return undefined;
+  const error = hasError ? jsonRecord(record.error) : undefined;
+  if (hasError && (error === undefined || typeof error.code !== 'number' || !Number.isFinite(error.code) || !nonempty(error.message))) return undefined;
   return Object.freeze({
-    ...(hasOwn(value, 'error') ? { error: Object.freeze({ code: (value.error as Record<string, unknown>).code as number, message: (value.error as Record<string, unknown>).message as string }) } : {}),
-    ...(hasOwn(value, 'id') ? { id: value.id as McpAppBridgeRequestId } : {}),
+    ...(error === undefined ? {} : { error: Object.freeze({ code: error.code as number, message: error.message as string }) }),
+    ...(hasOwn(record, 'id') ? { id: record.id as McpAppBridgeRequestId } : {}),
     jsonrpc: '2.0' as const,
-    ...(hasOwn(value, 'method') ? { method: value.method as string } : {}),
-    ...(hasOwn(value, 'params') ? { params: cloneJson(value.params as McpAppJsonValue) } : {}),
-    ...(hasOwn(value, 'result') ? { result: cloneJson(value.result as McpAppJsonValue) } : {}),
+    ...(hasOwn(record, 'method') ? { method: record.method as string } : {}),
+    ...(hasOwn(record, 'params') ? { params: cloneJson(record.params as McpAppJsonValue) } : {}),
+    ...(hasOwn(record, 'result') ? { result: cloneJson(record.result as McpAppJsonValue) } : {}),
   });
 };
 
@@ -421,10 +403,16 @@ const contentBlock = (value: McpAppJsonValue): boolean => {
   }
 };
 
-const validContentBlocks = (value: unknown): readonly McpAppJsonValue[] | undefined =>
-  Array.isArray(value) && value.every((block) => isJsonValue(block) && contentBlock(block))
-    ? Object.freeze(value.map((block) => cloneJson(block)))
-    : undefined;
+const validContentBlocks = (value: unknown): readonly McpAppJsonValue[] | undefined => {
+  if (!Array.isArray(value)) return undefined;
+  const blocks: McpAppJsonValue[] = [];
+  for (const valueBlock of value) {
+    const block = snapshotMcpAppJson(valueBlock);
+    if (block === undefined || !contentBlock(block)) return undefined;
+    blocks.push(block);
+  }
+  return Object.freeze(blocks);
+};
 
 const validToolResult = (value: unknown): McpAppJsonValue | undefined => {
   const result = jsonRecord(value);
@@ -959,7 +947,8 @@ export const createMcpAppBridge = (options: CreateMcpAppBridgeOptions): McpAppBr
       try {
         const response = await options.operations.readResource(binding.id, { uri: binding.resourceUri });
         if (isClosed()) return fallback('bridge-closed');
-        const resource = isJsonValue(response) ? parsedResource(response, binding.resourceUri) : undefined;
+        const resourceResponse = snapshotMcpAppJson(response);
+        const resource = resourceResponse === undefined ? undefined : parsedResource(resourceResponse, binding.resourceUri);
         return resource === undefined ? fallback('invalid-resource') : Object.freeze({ ...resource, kind: 'resource' as const });
       } catch {
         return isClosed() ? fallback('bridge-closed') : fallback('resource-read-failed');

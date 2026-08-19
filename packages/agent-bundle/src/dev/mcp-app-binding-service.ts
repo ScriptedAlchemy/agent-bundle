@@ -1,14 +1,9 @@
 import { randomUUID } from 'node:crypto';
 
-import { isRecord, snapshotStrictJsonValue } from '../core/strict-json.ts';
+import { isRecord } from '../core/strict-json.ts';
+import { requireMcpAppJson, type McpAppJsonValue } from './mcp-app-json.ts';
 
-export type McpAppJsonValue =
-  | null
-  | boolean
-  | number
-  | string
-  | readonly McpAppJsonValue[]
-  | { readonly [key: string]: McpAppJsonValue };
+export type { McpAppJsonValue } from './mcp-app-json.ts';
 
 export type McpAppPreviewProfile = 'chatgpt' | 'claude' | 'portable';
 
@@ -118,22 +113,8 @@ interface BindingEntry {
 const defaultTeardownTimeoutMs = 1_000;
 const maximumTeardownTimeoutMs = 30_000;
 
-const isJsonValue = (value: unknown): value is McpAppJsonValue => {
-  if (value === null || typeof value === 'boolean' || typeof value === 'string') return true;
-  if (typeof value === 'number') return Number.isFinite(value);
-  if (Array.isArray(value)) return value.every(isJsonValue);
-  if (!isRecord(value) || Object.getPrototypeOf(value) !== Object.prototype) return false;
-  return Object.values(value).every(isJsonValue);
-};
-
 const requireJson = (value: unknown, label: string): McpAppJsonValue => {
-  if (!isJsonValue(value)) throw new TypeError(`${label} must be a finite JSON value.`);
-  try {
-    return snapshotStrictJsonValue(value);
-  } catch (error) {
-    if (error instanceof TypeError) throw new TypeError(`${label} must be a finite JSON value.`, { cause: error });
-    throw error;
-  }
+  return requireMcpAppJson(value, `${label} must be a finite JSON value.`);
 };
 
 const requireNonempty = (value: string, label: string): string => {

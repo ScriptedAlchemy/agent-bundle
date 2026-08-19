@@ -1,13 +1,11 @@
 import { sha256Hex } from '../core/digest.ts';
-import { snapshotStrictJsonValue } from '../core/strict-json.ts';
+import {
+  requireMcpAppJsonRecord,
+  snapshotMcpAppJson,
+  type McpAppJsonValue,
+} from './mcp-app-json.ts';
 
-export type McpAppJsonValue =
-  | null
-  | boolean
-  | number
-  | string
-  | readonly McpAppJsonValue[]
-  | { readonly [key: string]: McpAppJsonValue };
+export type { McpAppJsonValue } from './mcp-app-json.ts';
 
 export type McpAppHostProfile = 'chatgpt' | 'claude' | 'portable';
 
@@ -104,26 +102,8 @@ export const MCP_APP_HTML_MIME_TYPE = 'text/html;profile=mcp-app';
 
 const capabilities = new Set<McpAppCapability>(['camera', 'clipboardWrite', 'geolocation', 'microphone']);
 
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype;
-
-const isJsonValue = (value: unknown): value is McpAppJsonValue => {
-  if (value === null || typeof value === 'boolean' || typeof value === 'string') return true;
-  if (typeof value === 'number') return Number.isFinite(value);
-  if (Array.isArray(value)) return value.every(isJsonValue);
-  return isRecord(value) && Object.values(value).every(isJsonValue);
-};
-
-const cloneJson = (value: McpAppJsonValue): McpAppJsonValue => snapshotStrictJsonValue(value);
-
 const cloneRecord = (value: unknown, label: string): { readonly [key: string]: McpAppJsonValue } => {
-  if (!isRecord(value) || !isJsonValue(value)) throw new TypeError(`${label} must be a finite JSON object.`);
-  try {
-    return snapshotStrictJsonValue(value) as { readonly [key: string]: McpAppJsonValue };
-  } catch (error) {
-    if (error instanceof TypeError) throw new TypeError(`${label} must be a finite JSON object.`, { cause: error });
-    throw error;
-  }
+  return requireMcpAppJsonRecord(value, `${label} must be a finite JSON object.`);
 };
 
 const cloneStringList = (value: readonly string[], label: string): readonly string[] => {
@@ -345,13 +325,14 @@ export const resolveMcpAppHostProfile = (options: ResolveMcpAppHostProfileOption
   };
   if (options.profile === 'chatgpt') {
     if (options.chatgpt?.windowOpenAi?.widgetState === undefined) return Object.freeze(resolution);
-    if (!isJsonValue(options.chatgpt.windowOpenAi.widgetState)) {
+    const widgetState = snapshotMcpAppJson(options.chatgpt.windowOpenAi.widgetState);
+    if (widgetState === undefined) {
       throw new TypeError('ChatGPT window.openai widget state must be a finite JSON value.');
     }
     return Object.freeze({
       ...resolution,
       extensions: Object.freeze({
-        windowOpenAi: Object.freeze({ widgetState: cloneJson(options.chatgpt.windowOpenAi.widgetState) }),
+        windowOpenAi: Object.freeze({ widgetState }),
       }),
     });
   }

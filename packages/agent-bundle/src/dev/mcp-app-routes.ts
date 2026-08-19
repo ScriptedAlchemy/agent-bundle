@@ -1,7 +1,9 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
+import { isRecord } from '../core/strict-json.ts';
 import type { McpAppJsonValue, McpAppPreviewProfile } from './mcp-app-binding-service.ts';
 import type { McpAppBridgeCloseOptions, McpAppBridgeJsonRecord, McpAppBridgeLifecycle } from './mcp-app-bridge.ts';
+import { snapshotMcpAppJson, snapshotMcpAppJsonRecord } from './mcp-app-json.ts';
 import type { McpAppPreviewCloseResult, McpAppPreviewHostContext } from './mcp-app-preview-service.ts';
 import type { McpAppSandboxConsent } from './mcp-app-sandbox.ts';
 import {
@@ -31,7 +33,7 @@ interface BindingRoute {
 }
 
 type Route = CreateRoute | BindingRoute;
-type JsonObject = Record<string, unknown>;
+type JsonObject = Readonly<Record<string, unknown>>;
 type JsonRequestId = string | number | null;
 
 export interface McpAppRoutePreview {
@@ -93,24 +95,8 @@ const route = (requestTarget: string | undefined): Route | undefined => {
   throw requestError(diagnostic('AB8020', 'MCP App route path is not valid.', 400));
 };
 
-const isRecord = (value: unknown): value is JsonObject =>
-  typeof value === 'object' && value !== null && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype;
-
-const isJsonValue = (value: unknown): value is McpAppJsonValue => {
-  if (value === null || typeof value === 'boolean' || typeof value === 'string') return true;
-  if (typeof value === 'number') return Number.isFinite(value);
-  if (Array.isArray(value)) return value.every(isJsonValue);
-  return isRecord(value) && Object.values(value).every(isJsonValue);
-};
-
-const cloneJson = (value: McpAppJsonValue): McpAppJsonValue => {
-  if (value === null || typeof value === 'boolean' || typeof value === 'number' || typeof value === 'string') return value;
-  if (Array.isArray(value)) return Object.freeze(value.map(cloneJson));
-  return Object.freeze(Object.fromEntries(Object.entries(value).map(([key, child]) => [key, cloneJson(child)])));
-};
-
 const jsonRecord = (value: unknown): McpAppBridgeJsonRecord | undefined =>
-  isRecord(value) && isJsonValue(value) ? cloneJson(value) as McpAppBridgeJsonRecord : undefined;
+  snapshotMcpAppJsonRecord(value);
 
 const invalidShape = (): never => {
   throw requestError(diagnostic('AB8021', 'MCP App request has an invalid shape.', 400));
@@ -195,24 +181,27 @@ const consent = (value: unknown): McpAppSandboxConsent | undefined => {
 };
 
 const createRequest = (value: JsonObject, sessionId: string): Parameters<McpAppRoutePreviewService['create']>[0] => {
+  const input = snapshotMcpAppJson(value.input);
+  const result = snapshotMcpAppJson(value.result);
   if (!hasOnly(value, ['consent', 'host', 'input', 'previewProfile', 'result', 'toolName']) || !nonemptyString(value.toolName)
-    || !isJsonValue(value.input) || !isJsonValue(value.result) || (value.previewProfile !== 'portable' && value.previewProfile !== 'chatgpt' && value.previewProfile !== 'claude')) {
+    || input === undefined || result === undefined || (value.previewProfile !== 'portable' && value.previewProfile !== 'chatgpt' && value.previewProfile !== 'claude')) {
     return invalidShape();
   }
   return Object.freeze({
     ...(value.consent === undefined ? {} : { consent: consent(value.consent) }),
     host: hostContext(value.host),
-    input: cloneJson(value.input),
+    input,
     previewProfile: value.previewProfile,
-    result: cloneJson(value.result),
+    result,
     sessionId,
     toolName: value.toolName,
   });
 };
 
 const messageRequest = (value: JsonObject): McpAppJsonValue => {
-  if (!hasOnly(value, ['message']) || !isJsonValue(value.message)) return invalidShape();
-  return cloneJson(value.message);
+  const message = snapshotMcpAppJson(value.message);
+  if (!hasOnly(value, ['message']) || message === undefined) return invalidShape();
+  return message;
 };
 
 const closeRequest = (value: JsonObject): McpAppBridgeCloseOptions => {
