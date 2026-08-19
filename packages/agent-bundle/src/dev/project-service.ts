@@ -7,6 +7,7 @@ import { isProjectPathIgnored, readProjectIgnoreRules } from '../config/ignore.t
 import { loadConfig } from '../config/load.ts';
 import { normalizeProject } from '../config/normalize.ts';
 import { validateModel, validateSource } from '../config/validate.ts';
+import { mapConcurrent } from '../core/async.ts';
 import { deduplicateDiagnostics, type Diagnostic, withDiagnosticRecovery } from '../core/diagnostics.ts';
 import { digest, sha256File } from '../core/digest.ts';
 import { isErrno } from '../core/errors.ts';
@@ -79,25 +80,6 @@ const errorCode = (error: unknown): string =>
       : typeof error;
 
 const directoryWalkLimit = 32;
-
-const mapLimited = async <Value>(
-  items: readonly Value[],
-  limit: number,
-  mapper: (item: Value) => Promise<void>,
-): Promise<void> => {
-  if (items.length === 0) return;
-  let next = 0;
-  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
-    while (next < items.length) {
-      const index = next;
-      next += 1;
-      const item = items[index];
-      if (item === undefined) return;
-      await mapper(item);
-    }
-  });
-  await Promise.all(workers);
-};
 
 export type ProjectPathApi = Pick<typeof import('node:path').win32, 'isAbsolute' | 'relative' | 'resolve' | 'sep'>;
 
@@ -228,7 +210,7 @@ const sourcePaths = async (root: string, outputRoots: readonly string[]): Promis
       }
       if (entry.isFile()) paths.push(source);
     }
-    await mapLimited(nested, directoryWalkLimit, visit);
+    await mapConcurrent(nested, directoryWalkLimit, visit);
   };
 
   await visit(root);

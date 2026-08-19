@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { lstat, mkdir, mkdtemp, open, readFile, readdir, realpath, rename, rm, writeFile } from 'node:fs/promises';
 import { basename, dirname, join, relative, resolve } from 'node:path';
 
-import { serialQueue } from '../core/async.ts';
+import { mapConcurrent, serialQueue } from '../core/async.ts';
 import { stableJson } from '../core/digest.ts';
 import { CodedError, isErrno, isTolerableWin32SyncError } from '../core/errors.ts';
 import { isInside } from '../core/paths.ts';
@@ -141,22 +141,6 @@ const hasExactOwnKeys = (value: object, keys: readonly string[]): boolean => {
 
 const sameActiveEpochPointer = (left: ActiveEpochPointerStat, right: ActiveEpochPointerStat): boolean =>
   left.ctimeMs === right.ctimeMs && left.ino === right.ino && left.mtimeMs === right.mtimeMs && left.size === right.size;
-
-const mapBounded = async <T>(
-  items: readonly T[],
-  limit: number,
-  worker: (item: T) => Promise<void>,
-): Promise<void> => {
-  if (items.length === 0) return;
-  let next = 0;
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, async () => {
-    while (next < items.length) {
-      const index = next;
-      next += 1;
-      await worker(items[index]!);
-    }
-  }));
-};
 
 const leaseQueueFor = (agentBundlePath: string): ReturnType<typeof serialQueue> => {
   const existing = epochLeaseQueues.get(agentBundlePath);
@@ -706,8 +690,8 @@ export class EpochStore {
       else files.push(child);
     }
     await Promise.all([
-      mapBounded(directories, syncTreeConcurrency, (child) => this.#syncTree(child)),
-      mapBounded(files, syncTreeConcurrency, (child) => this.#syncTree(child)),
+      mapConcurrent(directories, syncTreeConcurrency, (child) => this.#syncTree(child)),
+      mapConcurrent(files, syncTreeConcurrency, (child) => this.#syncTree(child)),
     ]);
     await this.#syncPath(path, true);
   }
