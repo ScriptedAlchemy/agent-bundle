@@ -299,8 +299,6 @@ it('protects the default sibling Claude state file without retaining its opaque 
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-claude-default-home-contract-'));
   const defaultHome = join(root, 'home');
   const normalClaudeHome = join(defaultHome, '.claude');
-  const previousHome = process.env.HOME;
-  process.env.HOME = defaultHome;
   try {
     await mkdir(normalClaudeHome, { recursive: true });
     await writeFile(join(defaultHome, '.claude.json'), '{"marker":"normal-sibling-marker"}\n');
@@ -310,6 +308,7 @@ it('protects the default sibling Claude state file without retaining its opaque 
       cwd: root,
       enabled: true,
       environment: { AGENT_BUNDLE_NATIVE_CLAUDE_SMOKE: '1', PATH: '/usr/bin' },
+      homeDirectory: defaultHome,
       pluginDirectory: '/candidate/plugin',
       prompt: 'Use the candidate Skill and reply with the sentinel.',
       run: async (request: { readonly args: readonly string[] }) => {
@@ -336,8 +335,6 @@ it('protects the default sibling Claude state file without retaining its opaque 
     expect(JSON.stringify(result)).not.toContain(root);
     expect(JSON.stringify(result)).not.toMatch(/normal-sibling-(?:changed-)?marker/iu);
   } finally {
-    if (previousHome === undefined) delete process.env.HOME;
-    else process.env.HOME = previousHome;
     await rm(root, { force: true, recursive: true });
   }
 });

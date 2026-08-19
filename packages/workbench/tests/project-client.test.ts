@@ -282,12 +282,14 @@ it('refreshes Overview state after live named events and keeps the browser Event
 });
 
 it('reports an EventSource outage and clears it after reconnection refreshes project status', async () => {
-  const stream = new RecordingEventSource();
+  const firstStream = new RecordingEventSource();
+  const secondStream = new RecordingEventSource();
+  const streams = [firstStream, secondStream];
   const errors: unknown[] = [];
   let connection: 'connected' | 'unavailable' = 'connected';
   let requests = 0;
   const client = new ProjectClient({
-    events: () => stream,
+    events: () => streams.shift()!,
     fetch: withForegroundSession(async () => {
       requests += 1;
       return Response.json({ status: status() });
@@ -301,17 +303,39 @@ it('reports an EventSource outage and clears it after reconnection refreshes pro
       connection = 'unavailable';
     },
   );
-  stream.emit('error', { data: '', lastEventId: '' });
+  firstStream.emit('open', { data: '', lastEventId: '' });
+  await flushEvents();
+  expect(requests).toBe(1);
+
+  firstStream.emit('error', { data: '', lastEventId: '' });
+  firstStream.emit('error', { data: '', lastEventId: '' });
 
   expect(connection).toBe('unavailable');
   expect(errors).toHaveLength(1);
   expect(errors[0]).toMatchObject({ message: 'Foreground project event stream disconnected.' });
 
-  stream.emit('open', { data: '', lastEventId: '' });
-  await new Promise((resolvePromise) => setImmediate(resolvePromise));
+  firstStream.emit('open', { data: '', lastEventId: '' });
+  firstStream.emit('open', { data: '', lastEventId: '' });
+  await flushEvents();
 
   expect(connection).toBe('connected');
   expect(requests).toBe(2);
+
+  await client.connect(() => { connection = 'connected'; }, (reason) => errors.push(reason));
+  expect(requests).toBe(3);
+  expect(firstStream.closed).toBe(true);
+  firstStream.emit('error', { data: '', lastEventId: '' });
+  firstStream.emit('open', { data: '', lastEventId: '' });
+  await flushEvents();
+  expect(errors).toHaveLength(1);
+  expect(requests).toBe(3);
+
+  client.close();
+  secondStream.emit('error', { data: '', lastEventId: '' });
+  secondStream.emit('open', { data: '', lastEventId: '' });
+  await flushEvents();
+  expect(errors).toHaveLength(1);
+  expect(requests).toBe(3);
 });
 
 it('delivers synchronous runtime events once in FIFO order and refreshes after an unexplained sequence gap', async () => {

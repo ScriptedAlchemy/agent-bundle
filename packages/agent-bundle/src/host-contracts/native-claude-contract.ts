@@ -205,6 +205,8 @@ export interface NativeClaudeSmokeOptions extends NativeClaudeCommandOptions {
   readonly cwd: string;
   readonly enabled: boolean;
   readonly environment?: Readonly<NodeJS.ProcessEnv>;
+  /** Testable authority for the default Claude state directory; production uses the OS home directory. */
+  readonly homeDirectory?: string;
   readonly run?: NativeClaudeProcessRunner;
   readonly signal?: AbortSignal;
 }
@@ -319,12 +321,14 @@ interface ClaudeNormalHomePaths {
   readonly stateFile: string;
 }
 
-const resolveClaudeNormalHome = (environment: Readonly<NodeJS.ProcessEnv>): ClaudeNormalHomePaths => {
+const resolveClaudeNormalHome = (
+  environment: Readonly<NodeJS.ProcessEnv>,
+  homeDirectory = homedir(),
+): ClaudeNormalHomePaths => {
   const configuredDirectory = environment.CLAUDE_CONFIG_DIR;
   if (configuredDirectory !== undefined) {
     return Object.freeze({ directory: configuredDirectory, stateFile: join(configuredDirectory, '.claude.json') });
   }
-  const homeDirectory = homedir();
   return Object.freeze({ directory: join(homeDirectory, '.claude'), stateFile: join(homeDirectory, '.claude.json') });
 };
 
@@ -752,7 +756,7 @@ export const runNativeClaudeSmoke = async (options: NativeClaudeSmokeOptions): P
   if (!options.enabled) return runNativeClaudeSmokeUnchecked(options);
 
   const environment = options.environment ?? process.env;
-  const normalClaudeHome = resolveClaudeNormalHome(environment);
+  const normalClaudeHome = resolveClaudeNormalHome(environment, options.homeDirectory);
   let before: ClaudeNormalHomeSnapshot;
   try {
     before = await snapshotClaudeNormalHome(normalClaudeHome);
