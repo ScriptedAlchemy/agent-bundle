@@ -375,6 +375,7 @@ it('rejects structurally bogus host command shapes and preserves the Codex tempo
   expect(parser.parseHostContractManifest!(codex.contract)).toMatchObject({
     temporaryHomeEnvironment: 'CODEX_HOME',
   });
+  expect(parser.parseHostContractManifest!({ ...(codex.contract as object), schemaVersion: 1 })).toBeUndefined();
 });
 
 nativeIt('compares installed host contracts through the opt-in non-model runner', async () => {

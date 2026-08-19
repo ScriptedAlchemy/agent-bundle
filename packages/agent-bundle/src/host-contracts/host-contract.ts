@@ -23,7 +23,6 @@ export interface HostContractManifest {
     readonly status: HostContractProbe;
     readonly version: HostContractProbe;
   }>;
-  readonly schemaVersion: 1;
   readonly temporaryHomeEnvironment?: 'CODEX_HOME';
 }
 
@@ -315,15 +314,24 @@ const hasCanonicalStructure = (manifest: HostContractManifest): boolean => {
     && manifest.temporaryHomeEnvironment === structure.temporaryHomeEnvironment;
 };
 
+const hostContractManifestKeys = new Set([
+  'commandShapes',
+  'eventEnvelopeFiles',
+  'executable',
+  'host',
+  'minimumVersion',
+  'probes',
+  'temporaryHomeEnvironment',
+]);
+
 export const parseHostContractManifest = (value: unknown): HostContractManifest | undefined => {
   if (!isRecord(value)) return undefined;
+  if (Object.keys(value).some((key) => !hostContractManifestKeys.has(key))) return undefined;
   const probes = value.probes;
   const commandShapes = value.commandShapes;
-  const schemaVersion = value.schemaVersion;
   const host = value.host;
   if (
-    schemaVersion !== 1
-    || !isNativeHost(host)
+    !isNativeHost(host)
     || !isRecord(probes)
     || !isRecord(commandShapes)
     || !Array.isArray(probes.help)
@@ -363,7 +371,6 @@ export const parseHostContractManifest = (value: unknown): HostContractManifest 
       status,
       version,
     }),
-    schemaVersion,
     ...(temporaryHomeEnvironment === undefined ? {} : { temporaryHomeEnvironment }),
   });
   return hasCanonicalStructure(manifest) ? manifest : undefined;
