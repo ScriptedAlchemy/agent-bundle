@@ -1,6 +1,8 @@
+import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
+import { digest } from '../core/digest.ts';
 import { isErrno } from '../core/errors.ts';
 import { isRecord } from '../core/strict-json.ts';
 import { digestFileTree } from './native-codex-contract.ts';
@@ -304,8 +306,34 @@ const resolveClaudeNormalHome = (environment: Readonly<NodeJS.ProcessEnv>): Clau
   return Object.freeze({ directory: join(homeDirectory, '.claude'), stateFile: join(homeDirectory, '.claude.json') });
 };
 
+// Claude Code rewrites these bookkeeping keys on every headless run — observed
+// with 2.1.234 even under --no-session-persistence — so they cannot witness a
+// meaningful normal-home mutation. Everything else in the state file still can.
+const volatileClaudeStateKeys = Object.freeze(['cachedGrowthBookFeaturesAt', 'pluginUsage'] as const);
+
+const digestClaudeStateFile = async (path: string): Promise<string> => {
+  let bytes: string;
+  try {
+    bytes = await readFile(path, 'utf8');
+  } catch (error) {
+    if (isErrno(error, 'ENOENT')) return 'absent';
+    throw error;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(bytes) as unknown;
+  } catch {
+    return digest(bytes);
+  }
+  if (!isRecord(parsed)) return digest(parsed);
+  const meaningful = Object.fromEntries(
+    Object.entries(parsed).filter(([key]) => !volatileClaudeStateKeys.includes(key as (typeof volatileClaudeStateKeys)[number])),
+  );
+  return digest(meaningful);
+};
+
 const snapshotClaudeNormalHome = async (paths: ClaudeNormalHomePaths): Promise<ClaudeNormalHomeSnapshot> => Object.freeze({
-  claudeJson: await digestClaudeFileTree(paths.stateFile),
+  claudeJson: await digestClaudeStateFile(paths.stateFile),
   config: await digestClaudeFileTree(join(paths.directory, 'config.json')),
   localSettings: await digestClaudeFileTree(join(paths.directory, 'settings.local.json')),
   plugins: await digestClaudeFileTree(join(paths.directory, 'plugins'), false),
