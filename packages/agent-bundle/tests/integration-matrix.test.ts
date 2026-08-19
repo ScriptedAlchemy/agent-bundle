@@ -1,5 +1,5 @@
 import { execFile as executeFile } from 'node:child_process';
-import { cp, mkdir, mkdtemp, readFile, rm, stat, symlink } from 'node:fs/promises';
+import { chmod, cp, mkdir, mkdtemp, readFile, rm, stat, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -20,6 +20,10 @@ it('builds the checked-in fixture matrix from a path with spaces', async () => {
   const root = join(parent, 'project with spaces');
   const output = join(root, 'artifact');
   await cp(fixtureRoot, root, { recursive: true });
+  // Git preserves only the executable bit, so a fresh clone checks these out as 0o755.
+  // Restore the exact source modes the copied-script contract asserts below.
+  await chmod(join(root, 'src', 'shell.sh'), 0o751);
+  await chmod(join(root, 'src', 'python.py'), 0o711);
   await mkdir(join(root, 'node_modules'), { recursive: true });
   await symlink(
     join(process.cwd(), 'node_modules', '@modelcontextprotocol'),
