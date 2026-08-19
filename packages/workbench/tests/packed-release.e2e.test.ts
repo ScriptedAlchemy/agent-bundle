@@ -991,7 +991,19 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 }
 
       phase = 'mobile overflow floor';
       await page.setViewportSize({ height: 844, width: 390 });
-      expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+      const mobileRoutes: readonly Readonly<{ heading: string; label: string }>[] = [
+        { heading: 'Project overview', label: 'Overview' }, { heading: 'Skills', label: 'Skills' }, { heading: 'Hooks', label: 'Hooks' },
+        { heading: 'MCP playground', label: 'MCP playground' }, { heading: 'Artifacts', label: 'Artifacts' }, { heading: 'Playground', label: 'Playground' },
+        { heading: 'Logs', label: 'Logs' }, { heading: 'Evals', label: 'Evals' }, { heading: 'Comparisons', label: 'Comparisons' },
+      ];
+      for (const route of mobileRoutes) {
+        await page.getByRole('link', { name: route.label, exact: true }).click();
+        await expect(page.getByRole('heading', { name: route.heading })).toBeVisible({ timeout: browserTimeout });
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+      }
+      await page.getByRole('link', { name: 'Overview', exact: true }).focus();
+      await page.keyboard.press('Enter');
+      await expect(page.getByRole('heading', { name: 'Project overview' })).toBeVisible({ timeout: browserTimeout });
 
       phase = 'browser console and page errors';
       const diagnostics = await call('diagnostics_list');
