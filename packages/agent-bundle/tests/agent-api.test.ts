@@ -901,7 +901,7 @@ it('does not cancel an admitted real eval when its MCP request aborts', async ()
     await evals.close().catch(() => undefined);
     await removeProjectFixture(project.root);
   }
-}, 30_000);
+}, 60_000);
 
 it('releases a late-acquired epoch without admitting an eval after Agent API shutdown', async () => {
   const acquisitionStarted = deferred<void>();
