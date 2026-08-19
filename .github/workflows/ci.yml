@@ -46,6 +46,22 @@ jobs:
       - run: npx playwright install --with-deps chrome
       - run: npm run check:release
 
+  rsc-runtime-micro-eval:
+    # Deterministic end-to-end spot-check of the built RSC runtime artifacts
+    # (hook -> RSC worker -> shared kernel state -> MCP tool lowering) without
+    # any real Claude/Codex host. Real native-host smokes stay skip-gated in
+    # the manually dispatched native-host-smoke workflow on purpose.
+    name: RSC runtime micro-eval (Node 22.19)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22.19.0'
+          cache: npm
+      - run: npm ci
+      - run: npm run eval:spot
+
   dependency-review:
     if: github.event_name == 'pull_request'
     name: Dependency review

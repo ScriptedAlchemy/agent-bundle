@@ -19,6 +19,7 @@
     "typecheck": "tsc --noEmit && tsc --project packages/workbench/tsconfig.json",
     "check": "npm run build && npm test && npm run lint && npm run typecheck",
     "docs:runtime-topology": "node scripts/rsc-runtime-topology.mjs --root . --output docs/architecture/rsc-runtime-workbench.md",
+    "eval:spot": "npm run build --workspace @agent-bundle/rsc-agent-runtime-demo && npm test --workspace @agent-bundle/rsc-agent-runtime-demo -- tests/micro-eval.spot.test.ts",
     "check:runtime-topology": "node scripts/rsc-runtime-topology.mjs --root . --output docs/architecture/rsc-runtime-workbench.md --check",
     "test:packed": "rstest --config rstest.config.ts packages/agent-bundle/tests/release-audit.test.ts packages/agent-bundle/tests/packed-consumer.test.ts packages/agent-bundle/tests/dev-workbench-packaging.test.ts packages/workbench/tests/packed-release.e2e.test.ts",
     "test:packed:native": "rstest --config rstest.config.ts packages/agent-bundle/tests/packed-native-smoke.test.ts",
