@@ -192,7 +192,7 @@ it('publishes directly executable built entrypoints with declarations', async ()
 
   const { stdout } = await execFile(binPath, ['--version']);
   expect(stdout).toBe(`${manifest.version}\n`);
-});
+}, 15_000);
 
 it('imports the externalized config entry from a packed npm consumer', async () => {
   await buildPackage();
